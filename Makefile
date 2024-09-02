@@ -1,4 +1,4 @@
-PACKAGE_NAME := mantis
+PACKAGE_NAME := biahub
 
 .PHONY: setup-develop
 setup-develop:
