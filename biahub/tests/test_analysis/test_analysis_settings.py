@@ -3,7 +3,7 @@ import pytest
 
 from pydantic import ValidationError
 
-from mantis.analysis.AnalysisSettings import (
+from biahub.analysis.AnalysisSettings import (
     DeskewSettings,
     RegistrationSettings,
     StabilizationSettings,

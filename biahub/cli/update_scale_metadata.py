@@ -5,7 +5,7 @@ import click
 from iohub import open_ome_zarr
 from iohub.ngff_meta import TransformationMeta
 
-from mantis.cli.parsing import input_position_dirpaths
+from biahub.cli.parsing import input_position_dirpaths
 
 
 @click.command()

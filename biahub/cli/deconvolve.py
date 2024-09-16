@@ -8,14 +8,14 @@ import torch
 from iohub import open_ome_zarr
 from waveorder.models.isotropic_fluorescent_thick_3d import apply_inverse_transfer_function
 
-from mantis.analysis.AnalysisSettings import DeconvolveSettings
-from mantis.cli.parsing import (
+from biahub.analysis.AnalysisSettings import DeconvolveSettings
+from biahub.cli.parsing import (
     _str_to_path,
     config_filepath,
     input_position_dirpaths,
     output_dirpath,
 )
-from mantis.cli.utils import create_empty_hcs_zarr, yaml_to_model
+from biahub.cli.utils import create_empty_hcs_zarr, yaml_to_model
 
 
 def apply_deconvolve_single_position(
@@ -98,7 +98,7 @@ def deconvolve(
     """
     Deconvolve across T and C axes using a PSF and a configuration file
 
-    >> mantis deconvolve -i ./input.zarr/*/*/* -p ./psf.zarr -c ./deconvolve_params.yml -o ./output.zarr
+    >> biahub deconvolve -i ./input.zarr/*/*/* -p ./psf.zarr -c ./deconvolve_params.yml -o ./output.zarr
     """
     # Convert string paths to Path objects
     output_dirpath = Path(output_dirpath)

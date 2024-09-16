@@ -1,26 +1,26 @@
 import click
 
-from mantis.cli.characterize_psf import characterize_psf
-from mantis.cli.concatenate import concatenate
-from mantis.cli.deconvolve import deconvolve
-from mantis.cli.deskew import deskew
-from mantis.cli.estimate_bleaching import estimate_bleaching
-from mantis.cli.estimate_deskew import estimate_deskew
-from mantis.cli.estimate_psf import estimate_psf
-from mantis.cli.estimate_registration import estimate_registration
-from mantis.cli.estimate_stabilization import estimate_stabilization
-from mantis.cli.estimate_stitch import estimate_stitch
-from mantis.cli.optimize_registration import optimize_registration
-from mantis.cli.register import register
-from mantis.cli.run_acquisition import run_acquisition
-from mantis.cli.stabilize import stabilize
-from mantis.cli.stitch import stitch
-from mantis.cli.update_scale_metadata import update_scale_metadata
+from biahub.cli.characterize_psf import characterize_psf
+from biahub.cli.concatenate import concatenate
+from biahub.cli.deconvolve import deconvolve
+from biahub.cli.deskew import deskew
+from biahub.cli.estimate_bleaching import estimate_bleaching
+from biahub.cli.estimate_deskew import estimate_deskew
+from biahub.cli.estimate_psf import estimate_psf
+from biahub.cli.estimate_registration import estimate_registration
+from biahub.cli.estimate_stabilization import estimate_stabilization
+from biahub.cli.estimate_stitch import estimate_stitch
+from biahub.cli.optimize_registration import optimize_registration
+from biahub.cli.register import register
+from biahub.cli.run_acquisition import run_acquisition
+from biahub.cli.stabilize import stabilize
+from biahub.cli.stitch import stitch
+from biahub.cli.update_scale_metadata import update_scale_metadata
 
 CONTEXT = {"help_option_names": ["-h", "--help"]}
 
 
-# `mantis -h` will show subcommands in the order they are added
+# `biahub -h` will show subcommands in the order they are added
 class NaturalOrderGroup(click.Group):
     def list_commands(self, ctx):
         return self.commands.keys()
@@ -28,7 +28,7 @@ class NaturalOrderGroup(click.Group):
 
 @click.group(context_settings=CONTEXT, cls=NaturalOrderGroup)
 def cli():
-    """command-line tools for mantis"""
+    """command-line tools for biahub"""
 
 
 cli.add_command(run_acquisition)

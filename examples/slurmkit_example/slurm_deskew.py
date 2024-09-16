@@ -1,12 +1,12 @@
 import datetime
 import os
 import glob
-from mantis.cli import utils
+from biahub.cli import utils
 from slurmkit import SlurmParams, slurm_function, submit_function
 from natsort import natsorted
 import click
-from mantis.analysis.deskew import deskew_data, get_deskewed_data_shape
-from mantis.cli.deskew import deskew_params_from_file
+from biahub.analysis.deskew import deskew_data, get_deskewed_data_shape
+from biahub.cli.deskew import deskew_params_from_file
 from iohub import open_ome_zarr
 from dataclasses import asdict
 

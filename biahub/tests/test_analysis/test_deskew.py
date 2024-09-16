@@ -1,6 +1,6 @@
 import numpy as np
 
-from mantis.analysis import deskew
+from biahub.analysis import deskew
 
 
 def test_average_n_slices():

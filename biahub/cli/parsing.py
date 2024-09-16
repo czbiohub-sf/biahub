@@ -6,7 +6,7 @@ import click
 from iohub.ngff import Plate, open_ome_zarr
 from natsort import natsorted
 
-from mantis.cli.option_eat_all import OptionEatAll
+from biahub.cli.option_eat_all import OptionEatAll
 
 
 def _validate_and_process_paths(

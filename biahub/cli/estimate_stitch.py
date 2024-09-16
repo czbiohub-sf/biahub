@@ -9,16 +9,16 @@ import pandas as pd
 from iohub import open_ome_zarr
 from slurmkit import SlurmParams, slurm_function, submit_function
 
-from mantis.analysis.AnalysisSettings import ProcessingSettings, StitchSettings
-from mantis.analysis.stitch import (
+from biahub.analysis.AnalysisSettings import ProcessingSettings, StitchSettings
+from biahub.analysis.stitch import (
     cleanup_shifts,
     compute_total_translation,
     consolidate_zarr_fov_shifts,
     estimate_zarr_fov_shifts,
     get_grid_rows_cols,
 )
-from mantis.cli.parsing import input_position_dirpaths, output_filepath
-from mantis.cli.utils import model_to_yaml
+from biahub.cli.parsing import input_position_dirpaths, output_filepath
+from biahub.cli.utils import model_to_yaml
 
 
 def write_config_file(
@@ -67,7 +67,7 @@ def estimate_stitch(
     as created by the Micro-manager Tile Creator: https://micro-manager.org/Micro-Manager_User's_Guide#positioning
     Assumes all wells have the save FOV grid layout.
 
-    >>> mantis estimate-stitch -i ./input.zarr/*/*/* -o ./stitch_params.yml --channel DAPI --percent-overlap 0.05 --slurm
+    >>> biahub estimate-stitch -i ./input.zarr/*/*/* -o ./stitch_params.yml --channel DAPI --percent-overlap 0.05 --slurm
     """
     assert 0 <= percent_overlap <= 1, "Percent overlap must be between 0 and 1"
 

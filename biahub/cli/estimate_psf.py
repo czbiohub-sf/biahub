@@ -11,10 +11,10 @@ import torch
 from iohub.ngff import open_ome_zarr
 from iohub.ngff_meta import TransformationMeta
 
-from mantis.analysis.AnalysisSettings import PsfFromBeadsSettings
-from mantis.analysis.analyze_psf import detect_peaks, extract_beads
-from mantis.cli.parsing import config_filepath, input_position_dirpaths, output_dirpath
-from mantis.cli.utils import yaml_to_model
+from biahub.analysis.AnalysisSettings import PsfFromBeadsSettings
+from biahub.analysis.analyze_psf import detect_peaks, extract_beads
+from biahub.cli.parsing import config_filepath, input_position_dirpaths, output_dirpath
+from biahub.cli.utils import yaml_to_model
 
 
 @click.command()
@@ -29,7 +29,7 @@ def estimate_psf(
     """
     Estimate the point spread function (PSF) from bead images
 
-    >> mantis estimate-psf -i ./beads.zarr/*/*/* -c ./psf_params.yml -o ./psf.zarr
+    >> biahub estimate-psf -i ./beads.zarr/*/*/* -c ./psf_params.yml -o ./psf.zarr
     """
     # Convert string paths to Path objects
     output_dirpath = Path(output_dirpath)

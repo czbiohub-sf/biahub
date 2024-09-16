@@ -10,7 +10,7 @@ import scipy.ndimage as ndi
 from iohub import open_ome_zarr
 from skimage.registration import phase_cross_correlation
 
-from mantis.analysis.AnalysisSettings import ProcessingSettings
+from biahub.analysis.AnalysisSettings import ProcessingSettings
 
 
 def estimate_shift(

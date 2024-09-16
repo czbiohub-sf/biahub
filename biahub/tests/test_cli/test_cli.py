@@ -1,6 +1,6 @@
 from click.testing import CliRunner
 
-from mantis.cli.main import cli
+from biahub.cli.main import cli
 
 
 def test_main():
@@ -8,4 +8,4 @@ def test_main():
     result = runner.invoke(cli)
 
     assert result.exit_code == 0
-    assert "tools for mantis" in result.output
+    assert "tools for biahub" in result.output

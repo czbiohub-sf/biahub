@@ -13,7 +13,7 @@ from iohub.ngff import open_ome_zarr
 from scipy.optimize import curve_fit
 from tqdm import tqdm
 
-from mantis.cli.parsing import input_position_dirpaths, output_dirpath
+from biahub.cli.parsing import input_position_dirpaths, output_dirpath
 
 MSECS_PER_MINUTE = 60000
 
@@ -109,7 +109,7 @@ def estimate_bleaching(input_position_dirpaths, output_dirpath):
     """
     Estimate bleaching from raw data
 
-    >> mantis estimate-bleaching -i ./input.zarr/0/0/0 -o ./bleaching-curves/
+    >> biahub estimate-bleaching -i ./input.zarr/0/0/0 -o ./bleaching-curves/
     """
 
     # Read plate metadata if it exists

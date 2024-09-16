@@ -3,8 +3,8 @@ import numpy as np
 from click.testing import CliRunner
 from numpy import testing
 
-from mantis.cli.main import cli
-from mantis.cli.register import rescale_voxel_size
+from biahub.cli.main import cli
+from biahub.cli.register import rescale_voxel_size
 
 
 def test_register_cli(tmp_path, example_plate, example_plate_2, example_register_settings):

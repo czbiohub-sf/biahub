@@ -4,10 +4,10 @@ import numpy as np
 
 from iohub.ngff import open_ome_zarr
 
-from mantis.analysis.AnalysisSettings import StabilizationSettings
-from mantis.analysis.register import convert_transform_to_ants
-from mantis.cli.parsing import config_filepath, input_position_dirpaths, output_dirpath
-from mantis.cli.utils import (
+from biahub.analysis.AnalysisSettings import StabilizationSettings
+from biahub.analysis.register import convert_transform_to_ants
+from biahub.cli.parsing import config_filepath, input_position_dirpaths, output_dirpath
+from biahub.cli.utils import (
     copy_n_paste_czyx,
     create_empty_hcs_zarr,
     process_single_position_v2,
@@ -63,7 +63,7 @@ def stabilize(input_position_dirpaths, output_dirpath, config_filepath, num_proc
     The size of the crop in xy can be specified with the crop-size-xy option.
 
     Example usage:
-    mantis stabilize-timelapse -i ./timelapse.zarr/0/0/0 -o ./stabilized_timelapse.zarr -c ./file_w_matrices.yml -v
+    biahub stabilize-timelapse -i ./timelapse.zarr/0/0/0 -o ./stabilized_timelapse.zarr -c ./file_w_matrices.yml -v
 
     """
     assert config_filepath.suffix == ".yml", "Config file must be a yaml file"

@@ -2,7 +2,7 @@ import yaml
 
 from click.testing import CliRunner
 
-from mantis.cli.main import cli
+from biahub.cli.main import cli
 
 
 def test_concatenate_cli(example_plate, tmp_path, example_concatenate_settings):

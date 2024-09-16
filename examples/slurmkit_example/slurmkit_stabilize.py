@@ -5,14 +5,14 @@ from slurmkit import SlurmParams, slurm_function, submit_function
 from natsort import natsorted
 from iohub import open_ome_zarr
 from pathlib import Path
-from mantis.cli.utils import (
+from biahub.cli.utils import (
     yaml_to_model,
     create_empty_hcs_zarr,
     process_single_position_v2,
 )
-from mantis.cli.stabilize import apply_stabilization_transform
+from biahub.cli.stabilize import apply_stabilization_transform
 import numpy as np
-from mantis.analysis.AnalysisSettings import StabilizationSettings
+from biahub.analysis.AnalysisSettings import StabilizationSettings
 
 # NOTE: this pipeline uses the focus found on well one for all. Perhaps this should be done per FOV(?)
 

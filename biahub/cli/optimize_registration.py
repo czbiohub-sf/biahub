@@ -5,15 +5,15 @@ import numpy as np
 
 from iohub import open_ome_zarr
 
-from mantis.analysis.AnalysisSettings import RegistrationSettings
-from mantis.analysis.register import convert_transform_to_ants, convert_transform_to_numpy
-from mantis.cli.parsing import (
+from biahub.analysis.AnalysisSettings import RegistrationSettings
+from biahub.analysis.register import convert_transform_to_ants, convert_transform_to_numpy
+from biahub.cli.parsing import (
     config_filepath,
     output_filepath,
     source_position_dirpaths,
     target_position_dirpaths,
 )
-from mantis.cli.utils import model_to_yaml, yaml_to_model
+from biahub.cli.utils import model_to_yaml, yaml_to_model
 
 # TODO: maybe a CLI call?
 T_IDX = 0
@@ -49,7 +49,7 @@ def optimize_registration(
 
     Start by generating an initial affine transform with `estimate-registration`.
 
-    >> mantis optimize-registration -s ./acq_name_virtual_staining_reconstructed.zarr/0/0/0 -t ./acq_name_lightsheet_deskewed.zarr/0/0/0 -c ./transform.yml -o ./optimized_transform.yml -d -v
+    >> biahub optimize-registration -s ./acq_name_virtual_staining_reconstructed.zarr/0/0/0 -t ./acq_name_lightsheet_deskewed.zarr/0/0/0 -c ./transform.yml -o ./optimized_transform.yml -d -v
     """
 
     settings = yaml_to_model(config_filepath, RegistrationSettings)

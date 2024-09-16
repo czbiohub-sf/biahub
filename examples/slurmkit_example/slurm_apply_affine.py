@@ -11,10 +11,10 @@ from iohub import open_ome_zarr
 from natsort import natsorted
 from slurmkit import SlurmParams, slurm_function, submit_function
 
-from mantis.analysis.AnalysisSettings import RegistrationSettings
-from mantis.analysis.register import apply_affine_transform, find_overlapping_volume
-from mantis.cli.register import rescale_voxel_size
-from mantis.cli.utils import (
+from biahub.analysis.AnalysisSettings import RegistrationSettings
+from biahub.analysis.register import apply_affine_transform, find_overlapping_volume
+from biahub.cli.register import rescale_voxel_size
+from biahub.cli.utils import (
     copy_n_paste_czyx,
     create_empty_hcs_zarr,
     process_single_position_v2,
@@ -24,9 +24,7 @@ from mantis.cli.utils import (
 # io parameters
 source_position_dirpaths = '/input_source.zarr/*/*/*'
 target_position_dirpaths = '/input_target.zarr/*/*/*'
-config_filepath = (
-    '../mantis/analysis/settings/example_register_settings.yml'
-)
+config_filepath = '../mantis/analysis/settings/example_register_settings.yml'
 output_dirpath = './test_output.zarr'
 
 # sbatch and resource parameters

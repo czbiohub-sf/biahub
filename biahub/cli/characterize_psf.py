@@ -11,15 +11,15 @@ import torch
 
 from iohub.ngff import open_ome_zarr
 
-from mantis.analysis.AnalysisSettings import CharacterizeSettings
-from mantis.analysis.analyze_psf import (
+from biahub.analysis.AnalysisSettings import CharacterizeSettings
+from biahub.analysis.analyze_psf import (
     analyze_psf,
     detect_peaks,
     extract_beads,
     generate_report,
 )
-from mantis.cli.parsing import config_filepath, input_position_dirpaths, output_dirpath
-from mantis.cli.utils import yaml_to_model
+from biahub.cli.parsing import config_filepath, input_position_dirpaths, output_dirpath
+from biahub.cli.utils import yaml_to_model
 
 
 def _characterize_psf(
@@ -93,7 +93,7 @@ def characterize_psf(
     """
     Characterize the point spread function (PSF) from bead images and output an html report
 
-    >> mantis characterize-psf -i ./beads.zarr/*/*/* -c ./characterize_params.yml -o ./
+    >> biahub characterize-psf -i ./beads.zarr/*/*/* -c ./characterize_params.yml -o ./
     """
     if len(input_position_dirpaths) > 1:
         warnings.warn("Only the first position will be characterized.")

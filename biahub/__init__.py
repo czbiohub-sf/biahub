@@ -19,7 +19,7 @@ def get_console_formatter():
 
 
 # Setup logger
-logger = logging.getLogger('mantis')
+logger = logging.getLogger('biahub')
 logger.setLevel(logging.DEBUG)
 
 logger.addHandler(get_console_handler())

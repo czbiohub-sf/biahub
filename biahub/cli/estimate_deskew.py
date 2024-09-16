@@ -7,8 +7,8 @@ import yaml
 
 from iohub.ngff import open_ome_zarr
 
-from mantis.analysis.AnalysisSettings import DeskewSettings
-from mantis.cli.parsing import input_position_dirpaths, output_filepath
+from biahub.analysis.AnalysisSettings import DeskewSettings
+from biahub.cli.parsing import input_position_dirpaths, output_filepath
 
 
 @click.command()
@@ -18,7 +18,7 @@ def estimate_deskew(input_position_dirpaths, output_filepath):
     """
     Routine for estimating deskewing parameters from calibration data.
 
-    >> mantis estimate-deskew -i ./input.zarr/0/0/0 -o ./deskew_params.yml
+    >> biahub estimate-deskew -i ./input.zarr/0/0/0 -o ./deskew_params.yml
     """
     assert str(output_filepath).endswith(('.yaml', '.yml')), "Output file must be a YAML file."
 

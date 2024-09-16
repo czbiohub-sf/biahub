@@ -1,6 +1,6 @@
 from click.testing import CliRunner
 
-from mantis.cli.main import cli
+from biahub.cli.main import cli
 
 
 def test_estimate_stabilization(tmp_path, example_plate):

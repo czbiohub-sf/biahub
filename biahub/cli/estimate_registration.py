@@ -8,18 +8,18 @@ from iohub.reader import print_info
 from skimage.transform import EuclideanTransform, SimilarityTransform
 from waveorder.focus import focus_from_transverse_band
 
-from mantis.analysis.AnalysisSettings import RegistrationSettings
-from mantis.analysis.register import (
+from biahub.analysis.AnalysisSettings import RegistrationSettings
+from biahub.analysis.register import (
     convert_transform_to_numpy,
     get_3D_rescaling_matrix,
     get_3D_rotation_matrix,
 )
-from mantis.cli.parsing import (
+from biahub.cli.parsing import (
     output_filepath,
     source_position_dirpaths,
     target_position_dirpaths,
 )
-from mantis.cli.utils import model_to_yaml
+from biahub.cli.utils import model_to_yaml
 
 # TODO: see if at some point these globals should be hidden or exposed.
 NA_DETECTION_SOURCE = 1.35
@@ -48,7 +48,7 @@ def estimate_registration(
 
     The output configuration file is an input for `optimize-registration` and `register`.
 
-    >> mantis estimate-registration -s ./acq_name_labelfree_reconstructed.zarr/0/0/0 -t ./acq_name_lightsheet_deskewed.zarr/0/0/0 -o ./output.yml
+    >> biahub estimate-registration -s ./acq_name_labelfree_reconstructed.zarr/0/0/0 -t ./acq_name_lightsheet_deskewed.zarr/0/0/0 -o ./output.yml
     -x  flag to use similarity transform (rotation, translation, scaling) default:Eucledian (rotation, translation)
     """
 

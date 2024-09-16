@@ -8,9 +8,9 @@ import numpy as np
 from iohub import open_ome_zarr
 from natsort import natsorted
 
-from mantis.analysis.AnalysisSettings import ConcatenateSettings
-from mantis.cli.parsing import config_filepath, output_dirpath
-from mantis.cli.utils import (
+from biahub.analysis.AnalysisSettings import ConcatenateSettings
+from biahub.cli.parsing import config_filepath, output_dirpath
+from biahub.cli.utils import (
     copy_n_paste_czyx,
     create_empty_hcs_zarr,
     process_single_position_v2,
@@ -82,7 +82,7 @@ def concatenate(config_filepath: str, output_dirpath: str, num_processes: int):
     """
     Concatenate datasets (with optional cropping)
 
-    >> mantis concatenate -c ./concat.yml -o ./output_concat.zarr -j 8
+    >> biahub concatenate -c ./concat.yml -o ./output_concat.zarr -j 8
     """
     # Convert to Path objects
     config_filepath = Path(config_filepath)

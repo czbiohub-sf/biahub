@@ -13,9 +13,9 @@ from iohub.ngff import open_ome_zarr
 from pystackreg import StackReg
 from waveorder.focus import focus_from_transverse_band
 
-from mantis.analysis.AnalysisSettings import StabilizationSettings
-from mantis.cli.parsing import input_position_dirpaths, output_filepath
-from mantis.cli.utils import model_to_yaml
+from biahub.analysis.AnalysisSettings import StabilizationSettings
+from biahub.cli.parsing import input_position_dirpaths, output_filepath
+from biahub.cli.utils import model_to_yaml
 
 NA_DET = 1.35
 LAMBDA_ILL = 0.500
@@ -291,7 +291,7 @@ def estimate_stabilization(
     The size of the crop in xy can be specified with the crop-size-xy option.
 
     Example usage:
-    mantis stabilization -i ./timelapse.zarr/0/0/0 -o ./stabilization.yml -y -z -v --crop-size-xy 300 300
+    biahub stabilization -i ./timelapse.zarr/0/0/0 -o ./stabilization.yml -y -z -v --crop-size-xy 300 300
 
     Note: the verbose output will be saved at the same level as the output zarr.
     """

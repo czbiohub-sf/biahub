@@ -6,15 +6,15 @@ import numpy as np
 
 from iohub import open_ome_zarr
 
-from mantis.analysis.AnalysisSettings import RegistrationSettings
-from mantis.analysis.register import apply_affine_transform, find_overlapping_volume
-from mantis.cli.parsing import (
+from biahub.analysis.AnalysisSettings import RegistrationSettings
+from biahub.analysis.register import apply_affine_transform, find_overlapping_volume
+from biahub.cli.parsing import (
     config_filepath,
     output_dirpath,
     source_position_dirpaths,
     target_position_dirpaths,
 )
-from mantis.cli.utils import (
+from biahub.cli.utils import (
     copy_n_paste_czyx,
     create_empty_hcs_zarr,
     process_single_position_v2,
@@ -51,7 +51,7 @@ def register(
 
     Start by generating an initial affine transform with `estimate-register`. Optionally, refine this transform with `optimize-register`. Finally, use `register`.
 
-    >> mantis register -s source.zarr/*/*/* -t target.zarr/*/*/* -c config.yaml -o ./acq_name_registerred.zarr
+    >> biahub register -s source.zarr/*/*/* -t target.zarr/*/*/* -c config.yaml -o ./acq_name_registerred.zarr
     """
 
     # Convert string paths to Path objects
