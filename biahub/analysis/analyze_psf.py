@@ -22,6 +22,7 @@ from scipy.signal import peak_widths
 
 import biahub.analysis.templates
 
+
 def _make_plots(
     output_path: Path,
     beads: List[ArrayLike],
