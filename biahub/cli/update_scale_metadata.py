@@ -3,7 +3,7 @@ from typing import List
 import click
 
 from iohub import open_ome_zarr
-from iohub.ngff_meta import TransformationMeta
+from iohub.ngff.models import TransformationMeta
 
 from biahub.cli.parsing import input_position_dirpaths
 

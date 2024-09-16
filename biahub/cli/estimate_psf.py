@@ -9,7 +9,7 @@ import numpy as np
 import torch
 
 from iohub.ngff import open_ome_zarr
-from iohub.ngff_meta import TransformationMeta
+from iohub.ngff.models import TransformationMeta
 
 from biahub.analysis.AnalysisSettings import PsfFromBeadsSettings
 from biahub.analysis.analyze_psf import detect_peaks, extract_beads

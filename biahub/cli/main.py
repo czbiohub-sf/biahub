@@ -12,7 +12,6 @@ from biahub.cli.estimate_stabilization import estimate_stabilization
 from biahub.cli.estimate_stitch import estimate_stitch
 from biahub.cli.optimize_registration import optimize_registration
 from biahub.cli.register import register
-from biahub.cli.run_acquisition import run_acquisition
 from biahub.cli.stabilize import stabilize
 from biahub.cli.stitch import stitch
 from biahub.cli.update_scale_metadata import update_scale_metadata
@@ -31,7 +30,6 @@ def cli():
     """command-line tools for biahub"""
 
 
-cli.add_command(run_acquisition)
 cli.add_command(estimate_bleaching)
 cli.add_command(estimate_deskew)
 cli.add_command(deskew)
