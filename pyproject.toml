@@ -20,7 +20,6 @@ classifiers = [
 
 # list package dependencies here
 dependencies = [
-  "copylot @ git+https://github.com/czbiohub-sf/coPylot",
   "iohub==0.1.0",
   "matplotlib",
   "napari; 'arm64' in platform_machine",                 # without Qt5 and skimage
