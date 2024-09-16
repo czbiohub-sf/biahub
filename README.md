@@ -1,2 +1,2 @@
 # biahub
-HUB for Bio Image Analysis
+Bio-image analysis hub. 

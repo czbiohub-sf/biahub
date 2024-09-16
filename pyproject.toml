@@ -3,7 +3,7 @@ requires = ["setuptools >= 61", "setuptools_scm[toml]>=3.4", "wheel"]
 
 [project]
 name = "biahub"
-description = "Acquisition engine for collecting data on the biahub microscope"
+description = "Bioiamge analysis hub."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10, <4.0"
