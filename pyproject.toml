@@ -25,16 +25,12 @@ dependencies = [
   "napari; 'arm64' in platform_machine",                 # without Qt5 and skimage
   "napari[all]; 'arm64' not in platform_machine",        # with Qt5 and skimage
   "PyQt6; 'arm64' in platform_machine",
-  "natsort",
-  "ndtiff>=2.0",
   "numpy<2",
   "markdown",
   "monai",
   "pandas~=2.1",
-  "pydantic",
   "scipy",
   "slurmkit @ git+https://github.com/royerlab/slurmkit",
-  "tifffile",
   "torch>=2.3",
   "waveorder @ git+https://github.com/mehta-lab/waveorder",
   "largestinteriorrectangle",
@@ -54,6 +50,7 @@ dev = [
   "pylint~=2.14",
   "pytest~=7.1",
 ]
+
 build = ["build", "twine"]
 
 [project.scripts]
