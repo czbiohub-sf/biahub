@@ -22,9 +22,6 @@ classifiers = [
 dependencies = [
   "iohub==0.2.0a1",
   "matplotlib",
-  "napari; 'arm64' in platform_machine",                 # without Qt5 and skimage
-  "napari[all]; 'arm64' not in platform_machine",        # with Qt5 and skimage
-  "PyQt6; 'arm64' in platform_machine",
   "numpy<2",
   "markdown",
   "monai",
@@ -37,6 +34,7 @@ dependencies = [
   "antspyx",
   "pystackreg",
   "napari-psf-analysis",
+  "dask"
 ]
 
 
@@ -49,6 +47,12 @@ dev = [
   "pre-commit~=2.19",
   "pylint~=2.14",
   "pytest~=7.1",
+]
+visual = [
+  "PyQt6",
+  "napari",
+  "napari-animation",
+  "cmap",
 ]
 
 build = ["build", "twine"]
