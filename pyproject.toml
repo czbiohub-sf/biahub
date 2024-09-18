@@ -30,7 +30,7 @@ dependencies = [
   "markdown",
   "monai",
   "pandas~=2.1",
-  "pydantic",
+  "pydantic<3",
   "scipy",
   "slurmkit @ git+https://github.com/royerlab/slurmkit",
   "torch>=2.3",
