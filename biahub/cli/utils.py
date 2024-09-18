@@ -527,7 +527,7 @@ def model_to_yaml(model, yaml_path: Path) -> None:
     if not hasattr(model, "dict"):
         raise TypeError("The 'model' object does not have a 'dict()' method.")
 
-    model_dict = model.dict()
+    model_dict = model.model_dump()
 
     # Remove None-valued fields
     clean_model_dict = {key: value for key, value in model_dict.items() if value is not None}

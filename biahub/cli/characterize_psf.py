@@ -30,7 +30,7 @@ def _characterize_psf(
     input_dataset_path: str,
     input_dataset_name: str,
 ):
-    settings_dict = settings.dict()
+    settings_dict = settings.model_dump()
     patch_size = settings_dict.pop("patch_size")
     axis_labels = settings_dict.pop("axis_labels")
 
