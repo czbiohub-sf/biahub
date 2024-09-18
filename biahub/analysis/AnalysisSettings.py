@@ -7,7 +7,7 @@ import torch
 
 from pydantic import (
     BaseModel,
-    Extra,
+    ConfigDict,
     NonNegativeInt,
     PositiveFloat,
     PositiveInt,
@@ -16,8 +16,8 @@ from pydantic import (
 
 
 # All settings classes inherit from MyBaseModel, which forbids extra parameters to guard against typos
-class MyBaseModel(BaseModel, extra=Extra.forbid):
-    pass
+class MyBaseModel(BaseModel):
+    model_config = ConfigDict(extra='forbid')
 
 
 class ProcessingSettings(MyBaseModel):
