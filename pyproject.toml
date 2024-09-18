@@ -1,0 +1,115 @@
+[build-system]
+requires = ["setuptools >= 61", "setuptools_scm[toml]>=3.4", "wheel"]
+
+[project]
+name = "biahub"
+description = "Bioimage analysis hub."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10, <4.0"
+
+# the dynamically determined project metadata attributes
+dynamic = ["version"]
+
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+]
+
+# list package dependencies here
+dependencies = [
+  "iohub==0.2.0a1",
+  "matplotlib",
+  "napari; 'arm64' in platform_machine",                 # without Qt5 and skimage
+  "napari[all]; 'arm64' not in platform_machine",        # with Qt5 and skimage
+  "PyQt6; 'arm64' in platform_machine",
+  "natsort",
+  "numpy<2",
+  "markdown",
+  "monai",
+  "pandas~=2.1",
+  "pydantic<3",
+  "scipy",
+  "slurmkit @ git+https://github.com/royerlab/slurmkit",
+  "torch>=2.3",
+  "tqdm",
+  "waveorder @ git+https://github.com/mehta-lab/waveorder",
+  "largestinteriorrectangle",
+  "antspyx",
+  "pystackreg",
+  "napari-psf-analysis",
+]
+
+
+[project.optional-dependencies]
+# note that dev dependencies are only pinned to major versions
+dev = [
+  "black==22.3.0",
+  "flake8~=5.0",
+  "isort~=5.12",
+  "pre-commit~=2.19",
+  "pylint~=2.14",
+  "pytest~=7.1",
+]
+
+build = ["build", "twine"]
+
+[project.scripts]
+biahub = "biahub.cli.main:cli"
+
+[tool.setuptools]
+# explicitly specify the package name
+# TODO: is there a better way to do this?
+packages = ["biahub"]
+
+# allow use of __file__ to load data files included in the package
+zip-safe = false
+
+[tool.setuptools.dynamic]
+version = { attr = "biahub.__version__" }
+
+[tool.black]
+line-length = 95
+target-version = ['py310']
+include = '\.pyi?$'
+skip-string-normalization = true
+exclude = '''
+(
+  /(
+      \.eggs
+    | \.git
+    | \.hg
+    | \.mypy_cache
+    | \.tox
+    | \.venv
+    | _build
+    | build
+    | dist
+    | notebooks
+    | ignore
+    | examples
+  )/
+)
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 95
+lines_between_types = 1
+default_section = "THIRDPARTY"
+no_lines_before = ["STDLIB"]
+ensure_newline_before_comments = true
+skip_glob = ["examples/*"]
+
+[tool.pylint]
+# disable all conventions, refactors, warnings (C, R, W) and the following:
+# E0401: unable-to-import (since it is possible that no one environment has all required packages)
+# E1136: unsubscriptable-object (anecdotal false positives for numpy objects)
+disable = ["C", "R", "W", "import-error", "unsubscriptable-object"]
+msg-template = "{line},{column},{category},{symbol}:{msg}"
+reports = "n"
+
+[tool.pytest.ini_options]
+addopts = "--ignore examples/"
