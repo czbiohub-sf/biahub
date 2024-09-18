@@ -25,10 +25,12 @@ dependencies = [
   "napari; 'arm64' in platform_machine",                 # without Qt5 and skimage
   "napari[all]; 'arm64' not in platform_machine",        # with Qt5 and skimage
   "PyQt6; 'arm64' in platform_machine",
+  "natsort",
   "numpy<2",
   "markdown",
   "monai",
   "pandas~=2.1",
+  "pydantic",
   "scipy",
   "slurmkit @ git+https://github.com/royerlab/slurmkit",
   "torch>=2.3",
