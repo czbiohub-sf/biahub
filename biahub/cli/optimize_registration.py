@@ -101,7 +101,7 @@ def optimize_registration(
     # Saving the parameters
     click.echo(f"Writing registration parameters to {output_filepath}")
     # copy config settings and modify only ones that change
-    output_settings = settings.copy()
+    output_settings = settings.model_copy()
     output_settings.affine_transform_zyx = composed_matrix.tolist()
     model_to_yaml(output_settings, output_filepath)
 
