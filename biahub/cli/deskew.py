@@ -18,6 +18,8 @@ from biahub.cli.parsing import (
     input_position_dirpaths,
     output_dirpath,
     ram_multiplier,
+    sbatch_filepath,
+    sbatch_to_submitit,
 )
 from biahub.cli.utils import yaml_to_model
 
@@ -39,12 +41,14 @@ torch.multiprocessing.set_start_method('spawn', force=True)
     type=int,
 )
 @ram_multiplier()
+@sbatch_filepath()
 def deskew(
     input_position_dirpaths: List[str],
     config_filepath: str,
     output_dirpath: str,
     num_processes: int,
     ram_multiplier: float = 1.0,
+    sbatch_filepath: str = None,
 ):
     """
     Deskew a single position across T and C axes using a configuration file
@@ -100,6 +104,7 @@ def deskew(
     input_memory = T * C * Z * Y * X * gb_per_element
     gb_ram_request = np.ceil(np.max([1, ram_multiplier * input_memory])).astype(int)
 
+    # Prepare SLURM arguments
     slurm_args = {
         "slurm_mem_per_cpu": f"{gb_ram_request}G",
         "slurm_cpus_per_task": np.min([T * C, num_processes]),
@@ -107,6 +112,10 @@ def deskew(
         "slurm_time": 60,
         "slurm_partition": "gpu",
     }
+
+    # Override defaults if sbatch_filepath is provided
+    if sbatch_filepath:
+        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
     # Prepare and submit jobs
     click.echo(f"Preparing jobs: {slurm_args}")
