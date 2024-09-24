@@ -33,7 +33,7 @@ def _print_status(jobs, position_dirpaths, elapsed_list, print_indices=None):
     for i, (job, position_dirpath) in enumerate(zip(jobs, position_dirpaths)):
         try:
             node_name = job.get_info()["NodeList"]  # slowest, so do this first
-        except KeyError:
+        except Exception:
             node_name = "SUBMITTED"
 
         if job.state == "COMPLETED":
