@@ -99,25 +99,19 @@ def deskew(
     gb_per_element = 4 / 2**30  # bytes_per_float32 / bytes_per_gb
     input_memory = T * C * Z * Y * X * gb_per_element
     gb_ram_request = np.ceil(np.max([1, ram_multiplier * input_memory])).astype(int)
-    cpu_request = np.min([T * C, num_processes])
-    num_jobs = len(input_position_dirpaths)
+
+    slurm_args = {
+        "slurm_mem_per_cpu": f"{gb_ram_request}G",
+        "slurm_cpus_per_task": np.min([T * C, num_processes]),
+        "slurm_array_parallelism": len(input_position_dirpaths),
+        "slurm_time": 60,
+        "slurm_partition": "gpu",
+    }
 
     # Prepare and submit jobs
-    click.echo(
-        f"Preparing {num_jobs} job{'s, each with' if num_jobs > 1 else ' with'} "
-        f"{cpu_request} CPU{'s' if cpu_request > 1 else ''} and "
-        f"{gb_ram_request} GB of memory per CPU."
-    )
+    click.echo(f"Preparing jobs: {slurm_args}")
     executor = submitit.AutoExecutor(folder="logs")
-
-    executor.update_parameters(
-        slurm_array_parallelism=num_jobs,
-        slurm_mem_per_cpu=f"{gb_ram_request}G",
-        slurm_cpus_per_task=cpu_request,
-        slurm_time=60,
-        slurm_partition="gpu",
-        # more slurm_*** resource parameters here
-    )
+    executor.update_parameters(**slurm_args)
 
     jobs = []
     with executor.batch():
@@ -135,9 +129,6 @@ def deskew(
                 )
             )
 
-    click.echo(
-        f"{num_jobs} job{'s' if num_jobs > 1 else ''} submitted {'locally' if executor.cluster == 'local' else 'via ' + executor.cluster}."
-    )
     monitor_jobs(jobs, input_position_dirpaths)
 
 
