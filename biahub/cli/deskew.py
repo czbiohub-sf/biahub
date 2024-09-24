@@ -2,6 +2,8 @@ from pathlib import Path
 from typing import List
 
 import click
+import numpy as np
+import submitit
 import torch
 
 from iohub.ngff import open_ome_zarr
@@ -10,7 +12,13 @@ from iohub.ngff.utils import process_single_position
 from biahub.analysis.AnalysisSettings import DeskewSettings
 from biahub.analysis.deskew import deskew_data, get_deskewed_data_shape
 from biahub.cli import utils
-from biahub.cli.parsing import config_filepath, input_position_dirpaths, output_dirpath
+from biahub.cli.monitor import monitor_jobs
+from biahub.cli.parsing import (
+    config_filepath,
+    input_position_dirpaths,
+    output_dirpath,
+    ram_multiplier,
+)
 from biahub.cli.utils import yaml_to_model
 
 # Needed for multiprocessing with GPUs
@@ -30,11 +38,13 @@ torch.multiprocessing.set_start_method('spawn', force=True)
     required=False,
     type=int,
 )
+@ram_multiplier()
 def deskew(
     input_position_dirpaths: List[str],
     config_filepath: str,
     output_dirpath: str,
     num_processes: int,
+    ram_multiplier: float = 1.0,
 ):
     """
     Deskew a single position across T and C axes using a configuration file
@@ -85,17 +95,50 @@ def deskew(
         'extra_metadata': {'deskew': settings.model_dump()},
     }
 
-    # Loop over positions
-    for input_position_path, output_position_path in zip(
-        input_position_dirpaths, output_position_paths
-    ):
-        process_single_position(
-            _czyx_deskew_data,
-            input_position_path,
-            output_position_path,
-            num_processes=num_processes,
-            **deskew_args,
-        )
+    # Estimate resources
+    gb_per_element = 4 / 2**30  # bytes_per_float32 / bytes_per_gb
+    input_memory = T * C * Z * Y * X * gb_per_element
+    gb_ram_request = np.ceil(np.max([1, ram_multiplier * input_memory])).astype(int)
+    cpu_request = np.min([T * C, num_processes])
+    num_jobs = len(input_position_dirpaths)
+
+    # Prepare and submit jobs
+    click.echo(
+        f"Preparing {num_jobs} job{'s, each with' if num_jobs > 1 else ' with'} "
+        f"{cpu_request} CPU{'s' if cpu_request > 1 else ''} and "
+        f"{gb_ram_request} GB of memory per CPU."
+    )
+    executor = submitit.AutoExecutor(folder="logs")
+
+    executor.update_parameters(
+        slurm_array_parallelism=np.min([50, num_jobs]),
+        slurm_mem_per_cpu=f"{gb_ram_request}G",
+        slurm_cpus_per_task=cpu_request,
+        slurm_time=60,
+        slurm_partition="gpu",
+        # more slurm_*** resource parameters here
+    )
+
+    jobs = []
+    with executor.batch():
+        for input_position_path, output_position_path in zip(
+            input_position_dirpaths, output_position_paths
+        ):
+            jobs.append(
+                executor.submit(
+                    process_single_position,
+                    _czyx_deskew_data,
+                    input_position_path,
+                    output_position_path,
+                    num_processes=num_processes,
+                    **deskew_args,
+                )
+            )
+
+    click.echo(
+        f"{num_jobs} job{'s' if num_jobs > 1 else ''} submitted {'locally' if executor.cluster == 'local' else 'via ' + executor.cluster}."
+    )
+    monitor_jobs(jobs, input_position_dirpaths)
 
 
 # Adapt ZYX function to CZYX

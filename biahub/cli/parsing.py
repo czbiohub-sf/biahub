@@ -112,3 +112,16 @@ def output_filepath() -> Callable:
         )(f)
 
     return decorator
+
+
+def ram_multiplier() -> Callable:
+    def decorator(f: Callable) -> Callable:
+        return click.option(
+            "--ram-multiplier",
+            "-rx",
+            default=1.0,
+            type=float,
+            help="SLURM RAM multiplier.",
+        )(f)
+
+    return decorator
