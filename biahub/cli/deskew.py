@@ -111,7 +111,7 @@ def deskew(
     executor = submitit.AutoExecutor(folder="logs")
 
     executor.update_parameters(
-        slurm_array_parallelism=np.min([50, num_jobs]),
+        slurm_array_parallelism=num_jobs,
         slurm_mem_per_cpu=f"{gb_ram_request}G",
         slurm_cpus_per_task=cpu_request,
         slurm_time=60,
