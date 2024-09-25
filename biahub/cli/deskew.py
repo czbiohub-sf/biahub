@@ -17,7 +17,6 @@ from biahub.cli.parsing import (
     config_filepath,
     input_position_dirpaths,
     output_dirpath,
-    ram_multiplier,
     sbatch_filepath,
     sbatch_to_submitit,
 )
@@ -32,22 +31,11 @@ torch.multiprocessing.set_start_method('spawn', force=True)
 @input_position_dirpaths()
 @config_filepath()
 @output_dirpath()
-@click.option(
-    "--num-processes",
-    "-j",
-    default=1,
-    help="Number of cores",
-    required=False,
-    type=int,
-)
-@ram_multiplier()
 @sbatch_filepath()
 def deskew(
     input_position_dirpaths: List[str],
     config_filepath: str,
     output_dirpath: str,
-    num_processes: int,
-    ram_multiplier: float = 1.0,
     sbatch_filepath: str = None,
 ):
     """
@@ -102,12 +90,12 @@ def deskew(
     # Estimate resources
     gb_per_element = 4 / 2**30  # bytes_per_float32 / bytes_per_gb
     input_memory = T * C * Z * Y * X * gb_per_element
-    gb_ram_request = np.ceil(np.max([1, ram_multiplier * input_memory])).astype(int)
+    gb_ram_request = np.ceil(np.max([1, input_memory])).astype(int)
 
     # Prepare SLURM arguments
     slurm_args = {
         "slurm_mem_per_cpu": f"{gb_ram_request}G",
-        "slurm_cpus_per_task": np.min([T * C, num_processes]),
+        "slurm_cpus_per_task": np.min([T * C, 16]),
         "slurm_array_parallelism": len(input_position_dirpaths),
         "slurm_time": 60,
         "slurm_partition": "gpu",
@@ -133,7 +121,7 @@ def deskew(
                     _czyx_deskew_data,
                     input_position_path,
                     output_position_path,
-                    num_processes=num_processes,
+                    num_processes=slurm_args["slurm_cpus_per_task"],
                     **deskew_args,
                 )
             )

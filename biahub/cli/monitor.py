@@ -128,7 +128,7 @@ def monitor_jobs(jobs: list[submitit.Job], position_dirpaths: list[Path]):
             _move_cursor_up(num_jobs_to_print + 2)
 
         # Print final status
-        time.sleep(1)
+        time.sleep(2)
         _print_status(jobs, position_dirpaths, elapsed_list)
 
     # cancel jobs if ctrl+c
