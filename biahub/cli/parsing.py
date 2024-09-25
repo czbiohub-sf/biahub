@@ -166,3 +166,16 @@ def sbatch_to_submitit(value: Path) -> dict:
             sbatch_dict["slurm_" + key.strip()] = value.strip()
 
     return sbatch_dict
+
+
+def local() -> Callable:
+    def decorator(f: Callable) -> Callable:
+        return click.option(
+            "--local",
+            "-l",
+            is_flag=True,
+            default=False,
+            help="Run jobs locally instead of submitting to SLURM.",
+        )(f)
+
+    return decorator

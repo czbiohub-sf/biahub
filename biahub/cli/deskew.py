@@ -16,6 +16,7 @@ from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
     config_filepath,
     input_position_dirpaths,
+    local,
     output_dirpath,
     sbatch_filepath,
     sbatch_to_submitit,
@@ -32,11 +33,13 @@ torch.multiprocessing.set_start_method('spawn', force=True)
 @config_filepath()
 @output_dirpath()
 @sbatch_filepath()
+@local()
 def deskew(
     input_position_dirpaths: List[str],
     config_filepath: str,
     output_dirpath: str,
     sbatch_filepath: str = None,
+    local: bool = False,
 ):
     """
     Deskew a single position across T and C axes using a configuration file
@@ -105,9 +108,15 @@ def deskew(
     if sbatch_filepath:
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
+    # Run locally or submit to SLURM
+    if local:
+        cluster = "local"
+    else:
+        cluster = "slurm"
+
     # Prepare and submit jobs
     click.echo(f"Preparing jobs: {slurm_args}")
-    executor = submitit.AutoExecutor(folder="logs")
+    executor = submitit.AutoExecutor(folder="logs", cluster=cluster)
     executor.update_parameters(**slurm_args)
 
     jobs = []
