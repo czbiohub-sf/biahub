@@ -7,7 +7,9 @@ import numpy as np
 import scipy.ndimage
 
 
-def get_3D_rescaling_matrix(start_shape_zyx, scaling_factor_zyx=(1, 1, 1), end_shape_zyx=None):
+def get_3D_rescaling_matrix(
+    start_shape_zyx, scaling_factor_zyx=(1, 1, 1), end_shape_zyx=None
+):
     center_Y_start, center_X_start = np.array(start_shape_zyx)[-2:] / 2
     if end_shape_zyx is None:
         center_Y_end, center_X_end = (center_Y_start, center_X_start)
@@ -105,7 +107,7 @@ def convert_transform_to_ants(T_numpy: np.ndarray):
     T_ants_style = T_numpy[:, :-1].ravel()
     T_ants_style[-3:] = T_numpy[:3, -1]
     T_ants = ants.new_ants_transform(
-        transform_type='AffineTransform',
+        transform_type="AffineTransform",
     )
     T_ants.set_parameters(T_ants_style)
 
@@ -171,7 +173,8 @@ def apply_affine_transform(
     zyx_data: np.ndarray,
     matrix: np.ndarray,
     output_shape_zyx: Tuple,
-    method='ants',
+    method="ants",
+    interpolation: str = "linear",
     crop_output_slicing: bool = None,
 ) -> np.ndarray:
     """_summary_
@@ -186,6 +189,8 @@ def apply_affine_transform(
         output target zyx shape
     method : str, optional
         method to use for transformation, by default 'ants'
+    interpolation: str, optional
+        interpolation mode for ants, by default "linear"
     crop_output : bool, optional
         crop the output to the largest interior rectangle, by default False
 
@@ -210,8 +215,9 @@ def apply_affine_transform(
                 zyx_data[c],
                 matrix,
                 output_shape_zyx,
-                method,
-                crop_output_slicing,
+                method=method,
+                interpolation=interpolation,
+                crop_output_slicing=crop_output_slicing,
             )
         return registered_czyx
     else:
@@ -221,7 +227,7 @@ def apply_affine_transform(
         # NOTE: default set to ANTS apply_affine method until we decide we get a benefit from using cupy
         # The ants method on CPU is 10x faster than scipy on CPU. Cupy method has not been bencharked vs ANTs
 
-        if method == 'ants':
+        if method == "ants":
             # The output has to be a ANTImage Object
             empty_target_array = np.zeros((output_shape_zyx), dtype=np.float32)
             target_zyx_ants = ants.from_numpy(empty_target_array)
@@ -230,14 +236,16 @@ def apply_affine_transform(
 
             zyx_data_ants = ants.from_numpy(zyx_data.astype(np.float32))
             registered_zyx = T_ants.apply_to_image(
-                zyx_data_ants, reference=target_zyx_ants
+                zyx_data_ants, reference=target_zyx_ants, interpolation=interpolation
             ).numpy()
 
-        elif method == 'scipy':
-            registered_zyx = scipy.ndimage.affine_transform(zyx_data, matrix, output_shape_zyx)
+        elif method == "scipy":
+            registered_zyx = scipy.ndimage.affine_transform(
+                zyx_data, matrix, output_shape_zyx
+            )
 
         else:
-            raise ValueError(f'Unknown method {method}')
+            raise ValueError(f"Unknown method {method}")
 
         # Crop the output to the largest interior rectangle
         if crop_output_slicing is not None:
@@ -311,7 +319,7 @@ def find_overlapping_volume(
     input_zyx_shape: Tuple,
     target_zyx_shape: Tuple,
     transformation_matrix: np.ndarray,
-    method: str = 'LIR',
+    method: str = "LIR",
     plot: bool = False,
 ) -> Tuple:
     """
@@ -350,10 +358,10 @@ def find_overlapping_volume(
         zyx_data_ants, reference=target_zyx_ants
     )
 
-    if method == 'LIR':
-        print('Starting Largest interior rectangle (LIR) search')
+    if method == "LIR":
+        print("Starting Largest interior rectangle (LIR) search")
         Z_slice, Y_slice, X_slice = find_lir(registered_zyx.numpy(), plot=plot)
     else:
-        raise ValueError(f'Unknown method {method}')
+        raise ValueError(f"Unknown method {method}")
 
     return (Z_slice, Y_slice, X_slice)

@@ -17,7 +17,7 @@ from pydantic import (
 
 # All settings classes inherit from MyBaseModel, which forbids extra parameters to guard against typos
 class MyBaseModel(BaseModel):
-    model_config = ConfigDict(extra='forbid')
+    model_config = ConfigDict(extra="forbid")
 
 
 class ProcessingSettings(MyBaseModel):
@@ -64,6 +64,7 @@ class RegistrationSettings(MyBaseModel):
     target_channel_name: str
     affine_transform_zyx: list
     keep_overhang: bool = False
+    interpolation: str = "linear"
     time_indices: Union[NonNegativeInt, list[NonNegativeInt], Literal["all"]] = "all"
 
     @field_validator("affine_transform_zyx")
@@ -134,26 +135,34 @@ class ConcatenateSettings(MyBaseModel):
     @field_validator("channel_names")
     @classmethod
     def check_channel_names(cls, v):
-        if not isinstance(v, list) or not all(isinstance(name, (str, list)) for name in v):
-            raise ValueError("channel_names must be a list of strings or lists of strings.")
+        if not isinstance(v, list) or not all(
+            isinstance(name, (str, list)) for name in v
+        ):
+            raise ValueError(
+                "channel_names must be a list of strings or lists of strings."
+            )
         return v
 
     @field_validator("X_slice", "Y_slice", "Z_slice")
     @classmethod
     def check_slices(cls, v):
-        if v != 'all' and (
+        if v != "all" and (
             not isinstance(v, list)
             or len(v) != 2
             or not all(isinstance(i, int) and i >= 0 for i in v)
         ):
-            raise ValueError("Slices must be 'all' or lists of two non-negative integers.")
+            raise ValueError(
+                "Slices must be 'all' or lists of two non-negative integers."
+            )
         return v
 
     @field_validator("chunks_czyx")
     @classmethod
     def check_chunk_size(cls, v):
         if v is not None and (
-            not isinstance(v, list) or len(v) != 4 or not all(isinstance(i, int) for i in v)
+            not isinstance(v, list)
+            or len(v) != 4
+            or not all(isinstance(i, int) for i in v)
         ):
             raise ValueError("chunks_czyx must be a list of 4 integers (C, Z, Y, X)")
         return v
@@ -175,7 +184,9 @@ class StabilizationSettings(MyBaseModel):
         for arr in v:
             arr = np.array(arr)
             if arr.shape != (4, 4):
-                raise ValueError("Each element in affine_transform_list must be a 4x4 ndarray")
+                raise ValueError(
+                    "Each element in affine_transform_list must be a 4x4 ndarray"
+                )
 
         return v
 
@@ -191,7 +202,10 @@ class StitchSettings(MyBaseModel):
     def __init__(self, **data):
         if data.get("total_translation") is None:
             if any(
-                (data.get("column_translation") is None, data.get("row_translation") is None)
+                (
+                    data.get("column_translation") is None,
+                    data.get("row_translation") is None,
+                )
             ):
                 raise ValueError(
                     "If total_translation is not provided, both column_translation and row_translation must be provided"
