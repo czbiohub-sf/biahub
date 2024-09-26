@@ -79,9 +79,9 @@ def register(
         target_channel_names = target_dataset.channel_names
         target_shape_zyx = target_dataset.data.shape[-3:]
 
-    click.echo('\nREGISTRATION PARAMETERS:')
-    click.echo(f'Transformation matrix:\n{matrix}')
-    click.echo(f'Voxel size: {output_voxel_size}')
+    click.echo("\nREGISTRATION PARAMETERS:")
+    click.echo(f"Transformation matrix:\n{matrix}")
+    click.echo(f"Voxel size: {output_voxel_size}")
 
     # Logic to parse time indices
     if settings.time_indices == "all":
@@ -97,7 +97,9 @@ def register(
 
     if not keep_overhang:
         # Find the largest interior rectangle
-        click.echo('\nFinding largest overlapping volume between source and target datasets')
+        click.echo(
+            "\nFinding largest overlapping volume between source and target datasets"
+        )
         Z_slice, Y_slice, X_slice = find_overlapping_volume(
             source_shape_zyx, target_shape_zyx, matrix
         )
@@ -108,7 +110,7 @@ def register(
             Y_slice.stop - Y_slice.start,
             X_slice.stop - X_slice.start,
         )
-        click.echo(f'Shape of cropped output dataset: {cropped_shape_zyx}\n')
+        click.echo(f"Shape of cropped output dataset: {cropped_shape_zyx}\n")
     else:
         cropped_shape_zyx = target_shape_zyx
         Z_slice, Y_slice, X_slice = (
@@ -118,7 +120,8 @@ def register(
         )
 
     output_metadata = {
-        "shape": (len(time_indices), len(output_channel_names)) + tuple(cropped_shape_zyx),
+        "shape": (len(time_indices), len(output_channel_names))
+        + tuple(cropped_shape_zyx),
         "chunks": None,
         "scale": (1,) * 2 + tuple(output_voxel_size),
         "channel_names": output_channel_names,
@@ -135,16 +138,19 @@ def register(
     # Get the affine transformation matrix
     # NOTE: add any extra metadata if needed:
     extra_metadata = {
-        'affine_transformation': {
-            'transform_matrix': matrix.tolist(),
+        "affine_transformation": {
+            "transform_matrix": matrix.tolist(),
         }
     }
 
     affine_transform_args = {
-        'matrix': matrix,
-        'output_shape_zyx': target_shape_zyx,  # NOTE: this should be the shape of the original target dataset
-        'crop_output_slicing': ([Z_slice, Y_slice, X_slice] if not keep_overhang else None),
-        'extra_metadata': extra_metadata,
+        "matrix": matrix,
+        "output_shape_zyx": target_shape_zyx,  # NOTE: this should be the shape of the original target dataset
+        "crop_output_slicing": (
+            [Z_slice, Y_slice, X_slice] if not keep_overhang else None
+        ),
+        "interpolation": settings.interpolation,
+        "extra_metadata": extra_metadata,
     }
 
     copy_n_paste_kwargs = {"czyx_slicing_params": ([Z_slice, Y_slice, X_slice])}
