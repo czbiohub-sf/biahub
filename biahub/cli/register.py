@@ -97,9 +97,7 @@ def register(
 
     if not keep_overhang:
         # Find the largest interior rectangle
-        click.echo(
-            "\nFinding largest overlapping volume between source and target datasets"
-        )
+        click.echo("\nFinding largest overlapping volume between source and target datasets")
         Z_slice, Y_slice, X_slice = find_overlapping_volume(
             source_shape_zyx, target_shape_zyx, matrix
         )
@@ -120,8 +118,7 @@ def register(
         )
 
     output_metadata = {
-        "shape": (len(time_indices), len(output_channel_names))
-        + tuple(cropped_shape_zyx),
+        "shape": (len(time_indices), len(output_channel_names)) + tuple(cropped_shape_zyx),
         "chunks": None,
         "scale": (1,) * 2 + tuple(output_voxel_size),
         "channel_names": output_channel_names,
@@ -146,9 +143,7 @@ def register(
     affine_transform_args = {
         "matrix": matrix,
         "output_shape_zyx": target_shape_zyx,  # NOTE: this should be the shape of the original target dataset
-        "crop_output_slicing": (
-            [Z_slice, Y_slice, X_slice] if not keep_overhang else None
-        ),
+        "crop_output_slicing": ([Z_slice, Y_slice, X_slice] if not keep_overhang else None),
         "interpolation": settings.interpolation,
         "extra_metadata": extra_metadata,
     }

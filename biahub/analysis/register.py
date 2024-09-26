@@ -7,9 +7,7 @@ import numpy as np
 import scipy.ndimage
 
 
-def get_3D_rescaling_matrix(
-    start_shape_zyx, scaling_factor_zyx=(1, 1, 1), end_shape_zyx=None
-):
+def get_3D_rescaling_matrix(start_shape_zyx, scaling_factor_zyx=(1, 1, 1), end_shape_zyx=None):
     center_Y_start, center_X_start = np.array(start_shape_zyx)[-2:] / 2
     if end_shape_zyx is None:
         center_Y_end, center_X_end = (center_Y_start, center_X_start)
@@ -240,9 +238,7 @@ def apply_affine_transform(
             ).numpy()
 
         elif method == "scipy":
-            registered_zyx = scipy.ndimage.affine_transform(
-                zyx_data, matrix, output_shape_zyx
-            )
+            registered_zyx = scipy.ndimage.affine_transform(zyx_data, matrix, output_shape_zyx)
 
         else:
             raise ValueError(f"Unknown method {method}")
