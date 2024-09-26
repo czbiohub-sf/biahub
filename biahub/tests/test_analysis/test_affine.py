@@ -1,6 +1,8 @@
 import ants
 import numpy as np
 
+import pytest
+
 from biahub.analysis.register import (
     apply_affine_transform,
     convert_transform_to_ants,
@@ -15,21 +17,24 @@ def test_numpy_to_ants_transform_zyx():
 
 
 def test_ants_to_numpy_transform_zyx():
-    T_ants = ants.new_ants_transform(transform_type='AffineTransform')
+    T_ants = ants.new_ants_transform(transform_type="AffineTransform")
     T_ants.set_parameters(np.eye(12))
     T_numpy = convert_transform_to_numpy(T_ants)
     assert isinstance(T_numpy, np.ndarray)
     assert T_numpy.shape == (4, 4)
 
 
-def test_affine_transform():
+@pytest.mark.parametrize("interpolation", ["linear", "nearestneighbor"])
+def test_affine_transform(interpolation):
     # Create input data
     zyx_data = np.ones((10, 10, 10))
     matrix = np.eye(4)
     output_shape_zyx = (10, 10, 10)
 
     # Call the function
-    result = apply_affine_transform(zyx_data, matrix, output_shape_zyx)
+    result = apply_affine_transform(
+        zyx_data, matrix, output_shape_zyx, interpolation=interpolation
+    )
 
     # Check the result
     assert isinstance(result, np.ndarray)
