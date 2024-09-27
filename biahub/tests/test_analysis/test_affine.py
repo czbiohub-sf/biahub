@@ -1,6 +1,5 @@
 import ants
 import numpy as np
-
 import pytest
 
 from biahub.analysis.register import (
