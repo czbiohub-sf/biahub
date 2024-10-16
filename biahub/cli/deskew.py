@@ -92,16 +92,18 @@ def deskew(
 
     # Estimate resources
     gb_per_element = 4 / 2**30  # bytes_per_float32 / bytes_per_gb
-    input_memory = T * C * Z * Y * X * gb_per_element
+    num_cpus = np.min([T * C, 16])
+    input_memory = num_cpus * Z * Y * X * gb_per_element
     gb_ram_request = np.ceil(np.max([1, input_memory])).astype(int)
 
     # Prepare SLURM arguments
     slurm_args = {
+        "slurm_job_name": "deskew",
         "slurm_mem_per_cpu": f"{gb_ram_request}G",
-        "slurm_cpus_per_task": np.min([T * C, 16]),
-        "slurm_array_parallelism": len(input_position_dirpaths),
+        "slurm_cpus_per_task": num_cpus,
+        "slurm_array_parallelism": 100,  # process up to 100 positions at a time
         "slurm_time": 60,
-        "slurm_partition": "gpu",
+        "slurm_partition": "preempted",
     }
 
     # Override defaults if sbatch_filepath is provided
