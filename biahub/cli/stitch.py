@@ -1,4 +1,5 @@
 import shutil
+import time
 import warnings
 
 from pathlib import Path
@@ -9,6 +10,7 @@ import pandas as pd
 import submitit
 
 from iohub import open_ome_zarr
+from iohub.ngff import Plate
 
 from biahub.analysis.AnalysisSettings import StitchSettings
 from biahub.analysis.stitch import (
@@ -51,10 +53,15 @@ def stitch(
             "This function is intended to be used with SLURM. "
             "Running on local machine instead."
         )
-    assert not Path(output_dirpath).exists(), f'Output path: {output_dirpath} already exists'
+    # assert not Path(output_dirpath).exists(), f'Output path: {output_dirpath} already exists'
 
     slurm_out_path = Path(output_dirpath).parent / "slurm_output"
-    shifted_store_path = Path(temp_path, f"TEMP_{input_position_dirpaths[0].parts[-4]}")
+    dataset = input_position_dirpaths[0].parts[-4][:-5]
+    well0 = '_'.join(input_position_dirpaths[0].parts[-3:-1])
+    shifted_store_path = Path(
+        temp_path,
+        f"TEMP_{dataset}_{well0}.zarr"
+    )
     settings = yaml_to_model(config_filepath, StitchSettings)
 
     with open_ome_zarr(str(input_position_dirpaths[0]), mode="r") as input_dataset:
@@ -94,16 +101,34 @@ def stitch(
     stitched_shape = (T, len(settings.channels), Z) + output_shape
     stitched_chunks = chunks[:3] + (4096, 4096)
     with open_ome_zarr(
-        shifted_store_path, layout='hcs', mode='w', channel_names=settings.channels
-    ) as temp_dataset:
-        for position_path in input_position_dirpaths:
-            position = temp_dataset.create_position(*position_path.parts[-3:])
-            position.create_zeros(
-                name='0',
-                shape=stitched_shape,
-                chunks=stitched_chunks,
-                dtype=np.float32,
-            )
+        Path(temp_path, f'temp_{well0}.zarr'), layout='hcs', mode='w', channel_names=settings.channels
+    ) as temp_zarr:
+        pos = temp_zarr.create_position(*input_position_dirpaths[0].parts[-3:])
+        pos.create_zeros(
+            name='0',
+            shape=stitched_shape,
+            chunks=stitched_chunks,
+            dtype=np.float32,
+        )
+
+    slurm_args = {
+        "slurm_mem_per_cpu": "8G",
+        "slurm_cpus_per_task": 1,
+        "slurm_time": 30,
+        "slurm_job_name": "temp_store",
+        "slurm_partition": "cpu",
+    }
+
+    executor = submitit.AutoExecutor(folder=slurm_out_path)
+    executor.update_parameters(**slurm_args)
+    temp_zarr_job = executor.submit(
+        Plate.from_positions,
+        shifted_store_path,
+        dict((Path(*p.parts[-3:]).as_posix(), pos) for p in input_position_dirpaths)
+    )
+
+    while not temp_zarr_job.done():
+        time.sleep(5)
 
     slurm_args = {
         "slurm_mem_per_cpu": "24G",
@@ -196,7 +221,7 @@ def stitch(
             "slurm_cpus_per_task": 1,
             "slurm_time": "0-01:00:00",  # in [DD-]HH:MM:SS format
             "slurm_job_name": "cleanup",
-            "slurm_dependency": f"afterok:{stitch_job}",
+            "slurm_dependency": f"afterok:{stitch_job.job_id}",
         }
         executor = submitit.AutoExecutor(folder=slurm_out_path)
         executor.update_parameters(**slurm_args)
