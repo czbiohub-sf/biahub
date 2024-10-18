@@ -96,94 +96,9 @@ def stitch(
             np.ceil(df["shift-x"].max() + X).astype(int),
         )
 
-    # create temp zarr store
-    click.echo(f'Creating temporary zarr store at {shifted_store_path}')
+    # create output zarr store
     stitched_shape = (T, len(settings.channels), Z) + output_shape
     stitched_chunks = chunks[:3] + (4096, 4096)
-    with open_ome_zarr(
-        Path(temp_path, f'temp_{well0}.zarr'), layout='hcs', mode='w', channel_names=settings.channels
-    ) as temp_zarr:
-        pos = temp_zarr.create_position(*input_position_dirpaths[0].parts[-3:])
-        pos.create_zeros(
-            name='0',
-            shape=stitched_shape,
-            chunks=stitched_chunks,
-            dtype=np.float32,
-        )
-
-    slurm_args = {
-        "slurm_mem_per_cpu": "8G",
-        "slurm_cpus_per_task": 1,
-        "slurm_time": 30,
-        "slurm_job_name": "temp_store",
-        "slurm_partition": "cpu",
-    }
-
-    executor = submitit.AutoExecutor(folder=slurm_out_path)
-    executor.update_parameters(**slurm_args)
-    temp_zarr_job = executor.submit(
-        Plate.from_positions,
-        shifted_store_path,
-        dict((Path(*p.parts[-3:]).as_posix(), pos) for p in input_position_dirpaths)
-    )
-
-    while not temp_zarr_job.done():
-        time.sleep(5)
-
-    slurm_args = {
-        "slurm_mem_per_cpu": "24G",
-        "slurm_cpus_per_task": 6,
-        "slurm_array_parallelism": 100,  # only 100 jobs can run at the same time
-        "slurm_time": 30,
-        "slurm_job_name": "shift",
-        "slurm_partition": "preempted",
-    }
-
-    executor = submitit.AutoExecutor(folder=slurm_out_path)
-    executor.update_parameters(**slurm_args)
-
-    click.echo('Submitting SLURM jobs')
-    shift_jobs = []
-
-    with executor.batch():
-        for in_path in input_position_dirpaths:
-            well = Path(*in_path.parts[-3:-1])
-            col, row = (in_path.name[:3], in_path.name[3:])
-
-            if settings.total_translation is None:
-                shift = get_image_shift(
-                    int(col),
-                    int(row),
-                    settings.column_translation,
-                    settings.row_translation,
-                    global_translation,
-                )
-            else:
-                # COL+ROW order here is important
-                shift = settings.total_translation[str(well / (col + row))]
-
-            job = executor.submit(
-                process_single_position_v2,
-                preprocess_and_shift,
-                input_channel_idx=[
-                    input_dataset_channels.index(ch) for ch in settings.channels
-                ],
-                output_channel_idx=list(range(len(settings.channels))),
-                time_indices='all',
-                num_processes=6,
-                settings=settings.preprocessing,
-                output_shape=output_shape,
-                verbose=True,
-                shift_x=float(shift[-1]),
-                shift_y=float(shift[-2]),
-                input_data_path=in_path,
-                output_path=shifted_store_path,
-            )
-            shift_jobs.append(job)
-
-    shift_job_ids = [job.job_id for job in shift_jobs]
-
-    # create output zarr store
     create_empty_hcs_zarr(
         store_path=output_dirpath,
         position_keys=[Path(well, '0').parts for well in wells],
@@ -193,14 +108,102 @@ def stitch(
         scale=scale,
     )
 
+    shift_job_ids = []
+    if shifted_store_path.exists():
+        click.echo(f'WARNING: Using existing shifted zarr store at {shifted_store_path}')
+    else:
+        # create temp zarr store
+        click.echo(f'Creating temporary zarr store at {shifted_store_path}')
+        with open_ome_zarr(
+            Path(temp_path, f'temp_{well0}.zarr'), layout='hcs', mode='w', channel_names=settings.channels
+        ) as temp_zarr:
+            pos = temp_zarr.create_position(*input_position_dirpaths[0].parts[-3:])
+            pos.create_zeros(
+                name='0',
+                shape=stitched_shape,
+                chunks=stitched_chunks,
+                dtype=np.float32,
+            )
+
+        slurm_args = {
+            "slurm_mem_per_cpu": "8G",
+            "slurm_cpus_per_task": 1,
+            "slurm_time": 30,
+            "slurm_job_name": "temp_store",
+            "slurm_partition": "cpu",
+        }
+
+        executor = submitit.AutoExecutor(folder=slurm_out_path)
+        executor.update_parameters(**slurm_args)
+        temp_zarr_job = executor.submit(
+            Plate.from_positions,
+            shifted_store_path,
+            dict((Path(*p.parts[-3:]).as_posix(), pos) for p in input_position_dirpaths)
+        )
+
+        slurm_args = {
+            "slurm_mem_per_cpu": "24G",
+            "slurm_cpus_per_task": 6,
+            "slurm_array_parallelism": 100,  # only 100 jobs can run at the same time
+            "slurm_time": 30,
+            "slurm_job_name": "shift",
+            "slurm_partition": "preempted",
+            "slurm_dependency": f"afterok:{temp_zarr_job.job_id}",
+        }
+
+        executor = submitit.AutoExecutor(folder=slurm_out_path)
+        executor.update_parameters(**slurm_args)
+
+        click.echo('Submitting SLURM jobs')
+        shift_jobs = []
+        with executor.batch():
+            for in_path in input_position_dirpaths:
+                well = Path(*in_path.parts[-3:-1])
+                col, row = (in_path.name[:3], in_path.name[3:])
+
+                if settings.total_translation is None:
+                    shift = get_image_shift(
+                        int(col),
+                        int(row),
+                        settings.column_translation,
+                        settings.row_translation,
+                        global_translation,
+                    )
+                else:
+                    # COL+ROW order here is important
+                    shift = settings.total_translation[str(well / (col + row))]
+
+                job = executor.submit(
+                    process_single_position_v2,
+                    preprocess_and_shift,
+                    input_channel_idx=[
+                        input_dataset_channels.index(ch) for ch in settings.channels
+                    ],
+                    output_channel_idx=list(range(len(settings.channels))),
+                    time_indices='all',
+                    num_processes=6,
+                    settings=settings.preprocessing,
+                    output_shape=output_shape,
+                    verbose=True,
+                    shift_x=float(shift[-1]),
+                    shift_y=float(shift[-2]),
+                    input_data_path=in_path,
+                    output_path=shifted_store_path,
+                )
+                shift_jobs.append(job)
+
+        shift_job_ids = [job.job_id for job in shift_jobs]
+
     slurm_args = {
         "slurm_mem_per_cpu": "8G",
-        "slurm_cpus_per_task": 32,
-        "slurm_time": "1-00:00:00",  # in [DD-]HH:MM:SS format
+        "slurm_cpus_per_task": 64,
+        "slurm_time": "3-00:00:00",  # in [DD-]HH:MM:SS format
         "slurm_partition": "cpu",
         "slurm_job_name": "stitch",
-        "slurm_dependency": f"afterok:{shift_job_ids[0]}:{shift_job_ids[-1]}",
     }
+    if shift_job_ids:
+        slurm_args["slurm_dependency"] = f"afterok:{shift_job_ids[0]}:{shift_job_ids[-1]}"
+
 
     executor = submitit.AutoExecutor(folder=slurm_out_path)
     executor.update_parameters(**slurm_args)
