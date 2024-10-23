@@ -6,6 +6,7 @@ import numpy as np
 import submitit
 
 from iohub import open_ome_zarr
+from iohub.ngff.models import TransformationMeta
 from iohub.ngff.utils import process_single_position, create_empty_plate
 
 from biahub.analysis.AnalysisSettings import DeconvolveSettings
@@ -54,6 +55,7 @@ def deconvolve(
     output_dirpath = Path(output_dirpath)
     config_filepath = Path(config_filepath)
     slurm_out_path = output_dirpath.parent / "slurm_output"
+    transfer_function_store_path = output_dirpath.parent / "transfer_function.zarr"
     output_position_paths = get_output_paths(input_position_dirpaths, output_dirpath)
 
     # Read config file
@@ -86,12 +88,19 @@ def deconvolve(
             )
         psf_data = psf_dataset.data[0, 0]
 
-    zyx_padding = np.array(shape[-3:]) - np.array(psf_data.shape)
-    pad_width = [(x // 2, x // 2) if x % 2 == 0 else (x // 2, x // 2 + 1) for x in zyx_padding]
-    padded_average_psf = np.pad(
-        psf_data, pad_width=pad_width, mode="constant", constant_values=0
-    )
-    transfer_function = compute_tranfser_function(padded_average_psf)
+    transfer_function = compute_tranfser_function(psf_data, output_zyx_shape=shape[-3:])
+    with open_ome_zarr(
+        transfer_function_store_path,
+        layout='fov',
+        mode='w-',
+        channel_names=['PSF']
+    ) as psf_output_dataset:
+        psf_output_dataset.create_image(
+            '0',
+            transfer_function[None, None],
+            chunks=(1, 1, 256)+shape[-2:],
+            transform=[TransformationMeta(type='scale', scale=psf_dataset.scale)]
+        )
 
     # Estimate resources
     gb_per_element = 4 / 2**30  # bytes_per_float32 / bytes_per_gb
@@ -135,7 +144,7 @@ def deconvolve(
                 input_position_path,
                 output_position_path,
                 num_processes=slurm_args["slurm_cpus_per_task"],
-                transfer_function=transfer_function,
+                transfer_function_store_path=transfer_function_store_path,
                 regularization_strength=settings.regularization_strength,
             )
             jobs.append(job)
