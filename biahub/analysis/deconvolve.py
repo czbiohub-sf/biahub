@@ -26,7 +26,7 @@ def deconvolve_data(
 ) -> np.ndarray:
     if transfer_function is None:
         with open_ome_zarr(transfer_function_store_path, layout='fov', mode='r') as ds:
-            transfer_function = ds.data
+            transfer_function = torch.tensor(ds.data[0, 0])
 
     output = []
     for zyx_raw_data in czyx_raw_data:
