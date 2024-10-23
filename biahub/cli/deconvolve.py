@@ -141,11 +141,11 @@ def deconvolve(
             job = executor.submit(
                 process_single_position,
                 deconvolve_data,
-                input_position_path,
-                output_position_path,
-                num_processes=slurm_args["slurm_cpus_per_task"],
-                transfer_function_store_path=transfer_function_store_path,
-                regularization_strength=settings.regularization_strength,
+                str(input_position_path),
+                str(output_position_path),
+                num_processes=int(slurm_args["slurm_cpus_per_task"]),
+                transfer_function_store_path=str(transfer_function_store_path),
+                regularization_strength=float(settings.regularization_strength),
             )
             jobs.append(job)
 

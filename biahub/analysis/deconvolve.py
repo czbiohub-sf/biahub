@@ -22,7 +22,7 @@ def deconvolve_data(
         czyx_raw_data: np.ndarray,
         transfer_function: torch.Tensor=None,
         transfer_function_store_path: str=None,
-        regularization_strength=1e-3,
+        regularization_strength: float=1e-3,
 ) -> np.ndarray:
     if transfer_function is None:
         with open_ome_zarr(transfer_function_store_path, layout='fov', mode='r') as ds:
