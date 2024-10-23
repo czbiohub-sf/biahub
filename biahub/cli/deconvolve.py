@@ -53,6 +53,7 @@ def deconvolve(
     # Convert string paths to Path objects
     output_dirpath = Path(output_dirpath)
     config_filepath = Path(config_filepath)
+    slurm_out_path = output_dirpath.parent / "slurm_output"
     output_position_paths = get_output_paths(input_position_dirpaths, output_dirpath)
 
     # Read config file
@@ -119,7 +120,7 @@ def deconvolve(
         cluster = "slurm"
 
     # Prepare and submit jobs
-    executor = submitit.AutoExecutor(folder="logs", cluster=cluster)
+    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
 
     click.echo('Submitting SLURM jobs...')
