@@ -58,7 +58,6 @@ def deskew(
 
     # Handle single position or wildcard filepath
     output_position_paths = utils.get_output_paths(input_position_dirpaths, output_dirpath)
-    click.echo(f"input_pos: {input_position_dirpaths} " f"output_pos: {output_position_paths}")
 
     # Get the deskewing parameters
     # Load the first position to infer dataset information
