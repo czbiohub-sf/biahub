@@ -183,17 +183,17 @@ def estimate_registration(
 
     viewer.add_image(target_channel_volume, name=f"target_{target_channel_name}")
     points_target_channel = viewer.add_points(
-        ndim=3, name=f"pts_target_{target_channel_name}", size=50, face_color=COLOR_CYCLE[0]
+        ndim=3, name=f"pts_target_{target_channel_name}", size=20, face_color=COLOR_CYCLE[0]
     )
 
     source_layer = viewer.add_image(
         source_zxy_pre_reg.numpy(),
         name=f"source_{source_channel_name}",
         blending='additive',
-        colormap='bop blue',
+        colormap='green',
     )
     points_source_channel = viewer.add_points(
-        ndim=3, name=f"pts_source_{source_channel_name}", size=50, face_color=COLOR_CYCLE[0]
+        ndim=3, name=f"pts_source_{source_channel_name}", size=20, face_color=COLOR_CYCLE[0]
     )
 
     # setup viewer
