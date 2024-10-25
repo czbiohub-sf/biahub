@@ -7,9 +7,11 @@ import submitit
 
 from iohub import open_ome_zarr
 from iohub.ngff.models import TransformationMeta
-from iohub.ngff.utils import process_single_position, create_empty_plate
+from iohub.ngff.utils import create_empty_plate, process_single_position
 
 from biahub.analysis.AnalysisSettings import DeconvolveSettings
+from biahub.analysis.deconvolve import compute_tranfser_function, deconvolve_data
+from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
     _str_to_path,
     config_filepath,
@@ -19,9 +21,7 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.analysis.deconvolve import compute_tranfser_function, deconvolve_data
-from biahub.cli.monitor import monitor_jobs
-from biahub.cli.utils import yaml_to_model, get_output_paths
+from biahub.cli.utils import get_output_paths, yaml_to_model
 
 
 @click.command()
@@ -75,7 +75,7 @@ def deconvolve(
         position_keys=[p.parts[-3:] for p in input_position_dirpaths],
         channel_names=channel_names,
         shape=shape,
-        scale=scale
+        scale=scale,
     )
 
     # Compute transfer function
@@ -90,16 +90,13 @@ def deconvolve(
 
     transfer_function = compute_tranfser_function(psf_data, output_zyx_shape=shape[-3:])
     with open_ome_zarr(
-        transfer_function_store_path,
-        layout='fov',
-        mode='w-',
-        channel_names=['PSF']
+        transfer_function_store_path, layout='fov', mode='w-', channel_names=['PSF']
     ) as psf_output_dataset:
         psf_output_dataset.create_image(
             '0',
             transfer_function[None, None],
-            chunks=(1, 1, 256)+shape[-2:],
-            transform=[TransformationMeta(type='scale', scale=psf_dataset.scale)]
+            chunks=(1, 1, 256) + shape[-2:],
+            transform=[TransformationMeta(type='scale', scale=psf_dataset.scale)],
         )
 
     # Estimate resources
@@ -150,6 +147,7 @@ def deconvolve(
             jobs.append(job)
 
     monitor_jobs(jobs, input_position_dirpaths)
+
 
 if __name__ == "__main__":
     deconvolve()

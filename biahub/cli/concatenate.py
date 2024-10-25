@@ -10,14 +10,20 @@ from iohub import open_ome_zarr
 from natsort import natsorted
 
 from biahub.analysis.AnalysisSettings import ConcatenateSettings
-from biahub.cli.parsing import config_filepath, output_dirpath, local, sbatch_filepath, sbatch_to_submitit
+from biahub.cli.monitor import monitor_jobs
+from biahub.cli.parsing import (
+    config_filepath,
+    local,
+    output_dirpath,
+    sbatch_filepath,
+    sbatch_to_submitit,
+)
 from biahub.cli.utils import (
     copy_n_paste_czyx,
     create_empty_hcs_zarr,
     process_single_position_v2,
     yaml_to_model,
 )
-from biahub.cli.monitor import monitor_jobs
 
 
 def get_channel_combiner_metadata(
@@ -75,10 +81,7 @@ def get_slice(slice_param, max_value):
 @sbatch_filepath()
 @local()
 def concatenate(
-    config_filepath: str,
-    output_dirpath: str,
-    sbatch_filepath: str = None,
-    local: bool = False
+    config_filepath: str, output_dirpath: str, sbatch_filepath: str = None, local: bool = False
 ):
     """
     Concatenate datasets (with optional cropping)
@@ -151,7 +154,7 @@ def concatenate(
     )
 
     copy_n_paste_kwargs = {"czyx_slicing_params": ([Z_slice, Y_slice, X_slice])}
-    
+
     # Estimate resources
     gb_per_element = 4 / 2**30  # bytes_per_float32 / bytes_per_gb
     num_cpus = np.min([T * C, 16])
