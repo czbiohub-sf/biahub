@@ -20,7 +20,7 @@ classifiers = [
 
 # list package dependencies here
 dependencies = [
-  "iohub==0.2.0a1",
+  "iohub @ git+https://github.com/czbiohub-sf/iohub",
   "matplotlib",
   "napari; 'arm64' in platform_machine",                 # without Qt5 and skimage
   "napari[all]; 'arm64' not in platform_machine",        # with Qt5 and skimage
@@ -33,6 +33,7 @@ dependencies = [
   "pydantic<3",
   "scipy",
   "slurmkit @ git+https://github.com/royerlab/slurmkit",
+  "submitit",
   "torch>=2.3",
   "tqdm",
   "waveorder @ git+https://github.com/mehta-lab/waveorder",
