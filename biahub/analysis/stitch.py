@@ -6,6 +6,7 @@ import dask.array as da
 import numpy as np
 import pandas as pd
 import scipy.ndimage as ndi
+from skimage.transform import warp, AffineTransform
 
 from iohub import open_ome_zarr
 from skimage.registration import phase_cross_correlation
@@ -113,14 +114,14 @@ def get_stitch_output_shape(n_rows, n_cols, sizeY, sizeX, col_translation, row_t
     return xy_output_shape, global_translation
 
 
-def get_image_shift(col_idx, row_idx, col_translation, row_translation, global_translation):
+def get_image_shift(col_idx, row_idx, col_translation, row_translation, global_translation)->list:
     """
     Compute total translation when only col and row translation are given
     """
-    total_translation = (
+    total_translation = [
         col_translation[1] * col_idx + row_translation[1] * row_idx + global_translation[1],
         col_translation[0] * col_idx + row_translation[0] * row_idx + global_translation[0],
-    )
+    ]
 
     return total_translation
 
@@ -128,19 +129,28 @@ def get_image_shift(col_idx, row_idx, col_translation, row_translation, global_t
 def shift_image(
     czyx_data: np.ndarray,
     yx_output_shape: tuple[float, float],
-    yx_shift: tuple[float, float],
+    transform: list,
     verbose: bool = False,
 ) -> np.ndarray:
     assert czyx_data.ndim == 4, "Input data must be a CZYX array"
     C, Z, Y, X = czyx_data.shape
 
     if verbose:
-        print(f"Shifting image by {yx_shift}")
+        print(f"Transforming image with {transform}")
     # Create array of output_shape and put input data at (0, 0)
     output = np.zeros((C, Z) + yx_output_shape, dtype=np.float32)
     output[..., :Y, :X] = czyx_data
 
-    return ndi.shift(output, (0, 0) + tuple(yx_shift), order=0)
+    transform = np.asarray(transform)
+    if transform.shape == (2,):
+        return ndi.shift(output, (0, 0) + tuple(transform), order=0)
+    elif transform.shape == (4, 4):
+        for i, img in enumerate(output):
+            output[i] = warp(img, AffineTransform(transform).inverse, preserve_range=True)
+        return output
+    else:
+        return output
+
 
 
 def _stitch_images(
@@ -251,12 +261,11 @@ def preprocess_and_shift(
     image,
     settings: ProcessingSettings,
     output_shape: tuple[int, int],
-    shift_x: float,
-    shift_y: float,
+    transform: list,
     verbose=True,
 ):
     return shift_image(
-        process_dataset(image, settings, verbose), output_shape, (shift_y, shift_x), verbose
+        process_dataset(image, settings, verbose), output_shape, transform, verbose
     )
 
 

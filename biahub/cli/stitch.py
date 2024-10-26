@@ -77,24 +77,33 @@ def stitch(
         channel in input_dataset_channels for channel in settings.channels
     ), "Invalid channel(s) provided."
 
-    wells = list(set([Path(*p.parts[-3:-1]) for p in input_position_dirpaths]))
+    position_paths = [Path(*p.parts[-3:]).as_posix() for p in input_position_dirpaths]
+    wells = list(set([Path(*p.parts[-3:-1]).as_posix() for p in input_position_dirpaths]))
     fov_names = set([p.name for p in input_position_dirpaths])
     grid_rows, grid_cols = get_grid_rows_cols(fov_names)
     n_rows = len(grid_rows)
     n_cols = len(grid_cols)
 
-    if settings.total_translation is None:
+    if all((settings.column_translation, settings.row_translation)):
         output_shape, global_translation = get_stitch_output_shape(
             n_rows, n_cols, Y, X, settings.column_translation, settings.row_translation
         )
+    elif settings.total_translation is not None:
+        all_shifts = []
+        for _pos, _shift in settings.total_translation.items():
+            if _pos in position_paths:
+                all_shifts.append(_shift)
+        output_shape = np.ceil(np.asarray(all_shifts).max(axis=0) + np.asarray([Y, X]))
+        output_shape = tuple(output_shape.astype(int))
+    elif settings.affine_transform is not None:
+        all_shifts = []
+        for _pos, _transform in settings.affine_transform.items():
+            if _pos in position_paths:
+                all_shifts.append([_transform[1][3], _transform[2][3]])
+        output_shape = np.ceil(np.asarray(all_shifts).max(axis=0) + np.asarray([Y, X]))
+        output_shape = tuple(output_shape.astype(int))
     else:
-        df = pd.DataFrame.from_dict(
-            settings.total_translation, orient="index", columns=["shift-y", "shift-x"]
-        )
-        output_shape = (
-            np.ceil(df["shift-y"].max() + Y).astype(int),
-            np.ceil(df["shift-x"].max() + X).astype(int),
-        )
+        raise ValueError('Invalid RegistrationSettings config file')
 
     # create output zarr store
     stitched_shape = (T, len(settings.channels), Z) + output_shape
@@ -160,18 +169,21 @@ def stitch(
             for in_path in input_position_dirpaths:
                 well = Path(*in_path.parts[-3:-1])
                 col, row = (in_path.name[:3], in_path.name[3:])
+                fov = str(well / (col + row))
 
-                if settings.total_translation is None:
-                    shift = get_image_shift(
+                if settings.affine_transform is not None:
+                    # COL+ROW order here is important
+                    transform = settings.affine_transform[fov]
+                elif settings.total_translation is not None:
+                    transform = settings.total_translation[fov]
+                else:
+                    transform = get_image_shift(
                         int(col),
                         int(row),
                         settings.column_translation,
                         settings.row_translation,
                         global_translation,
                     )
-                else:
-                    # COL+ROW order here is important
-                    shift = settings.total_translation[str(well / (col + row))]
 
                 job = executor.submit(
                     process_single_position_v2,
@@ -185,8 +197,7 @@ def stitch(
                     settings=settings.preprocessing,
                     output_shape=output_shape,
                     verbose=True,
-                    shift_x=float(shift[-1]),
-                    shift_y=float(shift[-2]),
+                    transform=transform,
                     input_data_path=in_path,
                     output_path=shifted_store_path,
                 )
