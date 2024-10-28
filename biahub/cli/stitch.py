@@ -99,8 +99,9 @@ def stitch(
         all_shifts = []
         for _pos, _transform in settings.affine_transform.items():
             if _pos in position_paths:
-                all_shifts.append([_transform[1][3], _transform[2][3]])
-        output_shape = np.ceil(np.asarray(all_shifts).max(axis=0) + np.asarray([Y, X]))
+                # These are inverse transforms so here we take the negative shift
+                all_shifts.append([-_transform[1][3], -_transform[2][3]])
+        output_shape = np.ceil(np.asarray(all_shifts).max(axis=0) - np.asarray(all_shifts).min(axis=0) + np.asarray([Y, X]))
         output_shape = tuple(output_shape.astype(int))
     else:
         raise ValueError('Invalid RegistrationSettings config file')
@@ -151,7 +152,7 @@ def stitch(
         )
 
         slurm_args = {
-            "slurm_mem_per_cpu": "24G",
+            "slurm_mem_per_cpu": "48G",
             "slurm_cpus_per_task": 6,
             "slurm_array_parallelism": 100,  # only 100 jobs can run at the same time
             "slurm_time": 30,

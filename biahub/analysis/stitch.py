@@ -1,16 +1,17 @@
 from pathlib import Path
 from typing import Literal
 
+import ants
 import click
 import dask.array as da
 import numpy as np
 import pandas as pd
 import scipy.ndimage as ndi
-from skimage.transform import warp, AffineTransform
 
 from iohub import open_ome_zarr
 from skimage.registration import phase_cross_correlation
 
+from biahub.analysis.register import convert_transform_to_ants
 from biahub.analysis.AnalysisSettings import ProcessingSettings
 
 
@@ -139,14 +140,17 @@ def shift_image(
         print(f"Transforming image with {transform}")
     # Create array of output_shape and put input data at (0, 0)
     output = np.zeros((C, Z) + yx_output_shape, dtype=np.float32)
-    output[..., :Y, :X] = czyx_data
+    output[..., :Y, :X] = czyx_data.astype(np.float32)
 
     transform = np.asarray(transform)
     if transform.shape == (2,):
         return ndi.shift(output, (0, 0) + tuple(transform), order=0)
     elif transform.shape == (4, 4):
+        transform = convert_transform_to_ants(transform)
         for i, img in enumerate(output):
-            output[i] = warp(img, AffineTransform(transform).inverse, preserve_range=True)
+            output[i] = transform.apply_to_image(
+                ants.from_numpy(img)
+            ).numpy()
         return output
     else:
         return output
