@@ -152,14 +152,23 @@ def stitch(
         )
 
         slurm_args = {
-            "slurm_mem_per_cpu": "48G",
+            "slurm_mem_per_cpu": "24G",
             "slurm_cpus_per_task": 6,
             "slurm_array_parallelism": 100,  # only 100 jobs can run at the same time
             "slurm_time": 30,
             "slurm_job_name": "shift",
-            "slurm_partition": "preempted",
+            "slurm_partition": "cpu",
             "slurm_dependency": f"afterok:{temp_zarr_job.job_id}",
         }
+        # Affine transform needs more resources
+        if settings.affine_transform is not None:
+            slurm_args.update(
+                {
+                    "slurm_mem_per_cpu": "48G",
+                    "slurm_cpus_per_task": 8,
+                    "slurm_time": 60,
+                }
+            )
 
         executor = submitit.AutoExecutor(folder=slurm_out_path)
         executor.update_parameters(**slurm_args)
