@@ -151,6 +151,29 @@ def stitch(
             dict((Path(*p.parts[-3:]).as_posix(), pos) for p in input_position_dirpaths)
         )
 
+        # Collect transforms
+        transforms = []
+        for in_path in input_position_dirpaths:
+            well = Path(*in_path.parts[-3:-1])
+            col, row = (in_path.name[:3], in_path.name[3:])
+            fov = str(well / (col + row))
+
+            if settings.affine_transform is not None:
+                # COL+ROW order here is important
+                transforms.append(settings.affine_transform[fov])
+            elif settings.total_translation is not None:
+                transforms.append(settings.total_translation[fov])
+            else:
+                transforms.append(
+                    get_image_shift(
+                        int(col),
+                        int(row),
+                        settings.column_translation,
+                        settings.row_translation,
+                        global_translation,
+                    )
+                )
+
         slurm_args = {
             "slurm_mem_per_cpu": "24G",
             "slurm_cpus_per_task": 6,
@@ -172,29 +195,10 @@ def stitch(
 
         executor = submitit.AutoExecutor(folder=slurm_out_path)
         executor.update_parameters(**slurm_args)
-
         click.echo('Submitting SLURM jobs')
         shift_jobs = []
         with executor.batch():
-            for in_path in input_position_dirpaths:
-                well = Path(*in_path.parts[-3:-1])
-                col, row = (in_path.name[:3], in_path.name[3:])
-                fov = str(well / (col + row))
-
-                if settings.affine_transform is not None:
-                    # COL+ROW order here is important
-                    transform = settings.affine_transform[fov]
-                elif settings.total_translation is not None:
-                    transform = settings.total_translation[fov]
-                else:
-                    transform = get_image_shift(
-                        int(col),
-                        int(row),
-                        settings.column_translation,
-                        settings.row_translation,
-                        global_translation,
-                    )
-
+            for in_path, transform in zip(input_position_dirpaths, transforms):
                 job = executor.submit(
                     process_single_position_v2,
                     preprocess_and_shift,
@@ -203,7 +207,7 @@ def stitch(
                     ],
                     output_channel_idx=list(range(len(settings.channels))),
                     time_indices='all',
-                    num_processes=6,
+                    num_processes=slurm_args['slurm_cpus_per_task'],
                     settings=settings.preprocessing,
                     output_shape=output_shape,
                     verbose=True,
