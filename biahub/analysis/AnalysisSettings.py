@@ -17,7 +17,7 @@ from pydantic import (
 
 # All settings classes inherit from MyBaseModel, which forbids extra parameters to guard against typos
 class MyBaseModel(BaseModel):
-    model_config = ConfigDict(extra='forbid')
+    model_config = ConfigDict(extra="forbid")
 
 
 class ProcessingSettings(MyBaseModel):
@@ -64,6 +64,7 @@ class RegistrationSettings(MyBaseModel):
     target_channel_name: str
     affine_transform_zyx: list
     keep_overhang: bool = False
+    interpolation: str = "linear"
     time_indices: Union[NonNegativeInt, list[NonNegativeInt], Literal["all"]] = "all"
 
     @field_validator("affine_transform_zyx")
@@ -141,7 +142,7 @@ class ConcatenateSettings(MyBaseModel):
     @field_validator("X_slice", "Y_slice", "Z_slice")
     @classmethod
     def check_slices(cls, v):
-        if v != 'all' and (
+        if v != "all" and (
             not isinstance(v, list)
             or len(v) != 2
             or not all(isinstance(i, int) and i >= 0 for i in v)
@@ -191,7 +192,10 @@ class StitchSettings(MyBaseModel):
     def __init__(self, **data):
         if data.get("total_translation") is None:
             if any(
-                (data.get("column_translation") is None, data.get("row_translation") is None)
+                (
+                    data.get("column_translation") is None,
+                    data.get("row_translation") is None,
+                )
             ):
                 raise ValueError(
                     "If total_translation is not provided, both column_translation and row_translation must be provided"
