@@ -55,6 +55,10 @@ dev = [
   "pytest~=7.1",
 ]
 
+segmentation = [
+  "cellpose",
+]
+
 build = ["build", "twine"]
 
 [project.scripts]
