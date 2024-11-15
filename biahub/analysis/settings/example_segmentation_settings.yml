@@ -1,0 +1,31 @@
+# Segmentation settings for cellpose
+# The model's names will be used for channel names in the output store. (i.e membrane -> membrane_label)
+models:
+  # One can instantiate as many models
+  membrane:
+    path_to_model: "/path/to/nucleus/model or name of built-in cellpose model (e.g. cyto3 or nuclei)"
+    # These are the common model.CellposeModel().eval() arguments used, but one can add more.
+    # For more information, see https://cellpose.readthedocs.io/en/latest/api.html#id0
+    eval_args:
+      diameter: 65
+      channels: [2, 1] #The channel count for Cellpose starts at 1
+      cellprob_threshold: 0.4
+      invert: false
+      do_3D: false   # Optional, if false, 2D segmentation is performed.
+      anisotropy: 3.26
+      min_size: 8000
+    z_slice_2D: 10  # Optional, if null, 3D segmentation is performed and checks eval_args.do_3D=True
+
+  nucleus:
+    path_to_model: "/path/to/nucleus/model or name of built-in cellpose model (e.g. cyto3 or nuclei)"
+    # These are the common model.CellposeModel().eval() arguments used, but one can add more.
+    # For more information, see https://cellpose.readthedocs.io/en/latest/api.html#id0
+    eval_args:
+      diameter: 60
+      channels: [1, 0] #The channel count for Cellpose starts at 1
+      cellprob_threshold: 0.0
+      invert: false
+      do_3D: true
+      anisotropy: 3.26
+      min_size: 8000
+    z_slice_2D: null  # Optional, if null, 3D segmentation is performed and checks eval_args.do_3D=True
