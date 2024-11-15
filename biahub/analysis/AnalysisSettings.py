@@ -195,7 +195,7 @@ class StitchSettings(MyBaseModel):
             (
                 data.get("total_translation"),
                 data.get("affine_transform"),
-                all((data.get("column_translation"), data.get("row_translation")))
+                all((data.get("column_translation"), data.get("row_translation"))),
             )
         ):
             raise ValueError(

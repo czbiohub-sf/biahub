@@ -1,12 +1,10 @@
 import shutil
-import time
 import warnings
 
 from pathlib import Path
 
 import click
 import numpy as np
-import pandas as pd
 import submitit
 
 from iohub import open_ome_zarr
@@ -24,6 +22,7 @@ from biahub.cli.parsing import config_filepath, input_position_dirpaths, output_
 from biahub.cli.utils import create_empty_hcs_zarr, process_single_position_v2, yaml_to_model
 
 HAS_SLURM = True
+
 
 @click.command()
 @input_position_dirpaths()
@@ -58,10 +57,7 @@ def stitch(
     slurm_out_path = Path(output_dirpath).parent / "slurm_output"
     dataset = input_position_dirpaths[0].parts[-4][:-5]
     well0 = '_'.join(input_position_dirpaths[0].parts[-3:-1])
-    shifted_store_path = Path(
-        temp_path,
-        f"TEMP_{dataset}_{well0}.zarr"
-    )
+    shifted_store_path = Path(temp_path, f"TEMP_{dataset}_{well0}.zarr")
     settings = yaml_to_model(config_filepath, StitchSettings)
 
     with open_ome_zarr(str(input_position_dirpaths[0]), mode="r") as input_dataset:
@@ -101,7 +97,11 @@ def stitch(
             if _pos in position_paths:
                 # These are inverse transforms so here we take the negative shift
                 all_shifts.append([-_transform[1][3], -_transform[2][3]])
-        output_shape = np.ceil(np.asarray(all_shifts).max(axis=0) - np.asarray(all_shifts).min(axis=0) + np.asarray([Y, X]))
+        output_shape = np.ceil(
+            np.asarray(all_shifts).max(axis=0)
+            - np.asarray(all_shifts).min(axis=0)
+            + np.asarray([Y, X])
+        )
         output_shape = tuple(output_shape.astype(int))
     else:
         raise ValueError('Invalid RegistrationSettings config file')
@@ -125,7 +125,10 @@ def stitch(
         # create temp zarr store
         click.echo(f'Creating temporary zarr store at {shifted_store_path}')
         with open_ome_zarr(
-            Path(temp_path, f'temp_{well0}.zarr'), layout='hcs', mode='w', channel_names=settings.channels
+            Path(temp_path, f'temp_{well0}.zarr'),
+            layout='hcs',
+            mode='w',
+            channel_names=settings.channels,
         ) as temp_zarr:
             pos = temp_zarr.create_position(*input_position_dirpaths[0].parts[-3:])
             pos.create_zeros(
@@ -148,7 +151,7 @@ def stitch(
         temp_zarr_job = executor.submit(
             Plate.from_positions,
             shifted_store_path,
-            dict((Path(*p.parts[-3:]).as_posix(), pos) for p in input_position_dirpaths)
+            dict((Path(*p.parts[-3:]).as_posix(), pos) for p in input_position_dirpaths),
         )
 
         # Collect transforms
@@ -228,7 +231,6 @@ def stitch(
     }
     if shift_job_ids:
         slurm_args["slurm_dependency"] = f"afterok:{shift_job_ids[0]}:{shift_job_ids[-1]}"
-
 
     executor = submitit.AutoExecutor(folder=slurm_out_path)
     executor.update_parameters(**slurm_args)

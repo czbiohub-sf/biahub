@@ -1,5 +1,5 @@
 # biahub
-Bio-image analysis hub. 
+Bio-image analysis hub.
 
 ## Install
 

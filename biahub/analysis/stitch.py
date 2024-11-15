@@ -11,8 +11,8 @@ import scipy.ndimage as ndi
 from iohub import open_ome_zarr
 from skimage.registration import phase_cross_correlation
 
-from biahub.analysis.register import convert_transform_to_ants
 from biahub.analysis.AnalysisSettings import ProcessingSettings
+from biahub.analysis.register import convert_transform_to_ants
 
 
 def estimate_shift(
@@ -115,7 +115,9 @@ def get_stitch_output_shape(n_rows, n_cols, sizeY, sizeX, col_translation, row_t
     return xy_output_shape, global_translation
 
 
-def get_image_shift(col_idx, row_idx, col_translation, row_translation, global_translation)->list:
+def get_image_shift(
+    col_idx, row_idx, col_translation, row_translation, global_translation
+) -> list:
     """
     Compute total translation when only col and row translation are given
     """
@@ -148,13 +150,10 @@ def shift_image(
     elif transform.shape == (4, 4):
         transform = convert_transform_to_ants(transform)
         for i, img in enumerate(output):
-            output[i] = transform.apply_to_image(
-                ants.from_numpy(img)
-            ).numpy()
+            output[i] = transform.apply_to_image(ants.from_numpy(img)).numpy()
         return output
     else:
         return output
-
 
 
 def _stitch_images(
