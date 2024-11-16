@@ -91,7 +91,7 @@ def segment(
     local: bool = False,
 ):
     """
-    Segment a single position across T and C axes using the configuration file
+    Segment a single position across T axes using the configuration file.
 
     >> biahub segment \
         -i ./input.zarr/*/*/* \
