@@ -1,4 +1,3 @@
-import inspect
 import warnings
 
 from typing import Any, Dict, Literal, Optional, Union
@@ -12,7 +11,6 @@ from pydantic import (
     NonNegativeInt,
     PositiveFloat,
     PositiveInt,
-    create_model,
     field_validator,
     validator,
 )
@@ -208,34 +206,6 @@ class StitchSettings(MyBaseModel):
                     DeprecationWarning,
                 )
         super().__init__(**data)
-
-
-def get_cellpose_eval_args_model():
-    try:
-        # Dynamically import cellpose and inspect arguments
-        from cellpose import models
-
-        # Get the signature for CellposeModel.eval
-        eval_signature = inspect.signature(models.CellposeModel.eval)
-
-        # Prepare fields for the Pydantic model based on the signature
-        fields = {}
-        for name, param in eval_signature.parameters.items():
-            # Exclude 'self' and required positional arguments
-            if name == "self" or param.default is param.empty:
-                continue
-
-            # Set the default value and annotation
-            default = param.default if param.default is not param.empty else ...
-            annotation = param.annotation if param.annotation is not param.empty else Any
-            fields[name] = (annotation, default)
-
-        # Dynamically create CellposeEvalArgs model
-        return create_model("CellposeEvalArgs", **fields)
-    except ImportError:
-        # Cellpose is not installed; return None or raise a custom exception if needed
-        print("Warning: cellpose is not installed. Skipping eval_args validation.")
-        return None
 
 
 def get_valid_eval_args():
