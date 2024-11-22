@@ -339,12 +339,12 @@ def estimate_registration(
     with open_ome_zarr(source_position_dirpaths[0], mode="r") as source_channel_position:
         source_channels = source_channel_position.channel_names
         source_channel_name = source_channels[source_channel_index]
-        source_channel_volume = source_channel_position[0][0, source_channel_index]
+        source_channel_volume = source_channel_position[0][t_idx, source_channel_index]
         source_channel_voxel_size = source_channel_position.scale[-3:]
 
     with open_ome_zarr(target_position_dirpaths[0], mode="r") as target_channel_position:
         target_channel_name = target_channel_position.channel_names[target_channel_index]
-        target_channel_volume = target_channel_position[0][0, target_channel_index]
+        target_channel_volume = target_channel_position[0][t_idx, target_channel_index]
         target_channel_voxel_size = target_channel_position.scale[-3:]
 
     tform = user_assisted_registration(
