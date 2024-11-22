@@ -39,12 +39,7 @@ FOCUS_SLICE_ROI_WIDTH = 150  # size of central ROI used to find focal slice
     is_flag=True,
     help='Flag to use similarity transform (rotation, translation, scaling) default:Eucledian (rotation, translation)',
 )
-@click.option(
-    "--t_idx",
-    type=int,
-    required=False,
-    default=0
-)
+@click.option("--t_idx", type=int, required=False, default=0)
 def estimate_registration(
     source_position_dirpaths, target_position_dirpaths, output_filepath, similarity, t_idx
 ):
