@@ -40,8 +40,13 @@ FOCUS_SLICE_ROI_WIDTH = 150  # size of central ROI used to find focal slice
     help='Flag to use similarity transform (rotation, translation, scaling) default:Eucledian (rotation, translation)',
 )
 @click.option("--t_idx", type=int, required=False, default=0)
+@click.option(
+    "--beads",
+    is_flag=True,
+    help="Flag to estimate registration parameters based on bead images",
+)
 def estimate_registration(
-    source_position_dirpaths, target_position_dirpaths, output_filepath, similarity, t_idx
+    source_position_dirpaths, target_position_dirpaths, output_filepath, similarity, t_idx, beads
 ):
     """
     Estimate the affine transform between a source (i.e. moving) and a target (i.e.
@@ -53,6 +58,9 @@ def estimate_registration(
     -x  flag to use similarity transform (rotation, translation, scaling) default:Eucledian (rotation, translation)
     """
 
+    assert(len(source_position_dirpaths) == 1), "Only one source position is supported"
+    assert(len(target_position_dirpaths) == 1), "Only one target position is supported"
+    
     click.echo("\nTarget channel INFO:")
     print_info(target_position_dirpaths[0], verbose=False)
     click.echo("\nSource channel INFO:")
