@@ -29,6 +29,17 @@ WAVELENGTH_EMISSION_SOURCE_CHANNEL = 0.45  # in um
 WAVELENGTH_EMISSION_TARGET_CHANNEL = 0.6  # in um
 FOCUS_SLICE_ROI_WIDTH = 150  # size of central ROI used to find focal slice
 
+COLOR_CYCLE = [
+    "white",
+    "cyan",
+    "lime",
+    "orchid",
+    "blue",
+    "orange",
+    "yellow",
+    "magenta",
+]
+
 
 def user_assisted_registration(
     source_channel_volume,
@@ -120,17 +131,6 @@ def user_assisted_registration(
 
     # Get a napari viewer
     viewer = napari.Viewer()
-
-    COLOR_CYCLE = [
-        "white",
-        "cyan",
-        "lime",
-        "orchid",
-        "blue",
-        "orange",
-        "yellow",
-        "magenta",
-    ]
 
     viewer.add_image(target_channel_volume, name=f"target_{target_channel_name}")
     points_target_channel = viewer.add_points(
@@ -335,7 +335,6 @@ def estimate_registration(
         input("Rotate the source channel by 90 degrees? (0, 1, or -1): ")
     )
 
-    # Display volumes rescaled
     with open_ome_zarr(source_position_dirpaths[0], mode="r") as source_channel_position:
         source_channels = source_channel_position.channel_names
         source_channel_name = source_channels[source_channel_index]
@@ -347,16 +346,21 @@ def estimate_registration(
         target_channel_volume = target_channel_position[0][t_idx, target_channel_index]
         target_channel_voxel_size = target_channel_position.scale[-3:]
 
-    tform = user_assisted_registration(
-        source_channel_volume,
-        source_channel_name,
-        source_channel_voxel_size,
-        target_channel_volume,
-        source_channel_name,
-        target_channel_voxel_size,
-        similarity,
-        pre_affine_90degree_rotation,
-    )
+    if beads:
+        # Register using bead images
+        tform = []
+    else:
+        # Register based on user input
+        tform = user_assisted_registration(
+            source_channel_volume,
+            source_channel_name,
+            source_channel_voxel_size,
+            target_channel_volume,
+            source_channel_name,
+            target_channel_voxel_size,
+            similarity,
+            pre_affine_90degree_rotation,
+        )
 
     additional_source_channels = source_channels.copy()
     additional_source_channels.remove(source_channel_name)
