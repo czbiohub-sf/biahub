@@ -10,6 +10,7 @@ from waveorder.focus import focus_from_transverse_band
 
 from biahub.analysis.AnalysisSettings import RegistrationSettings
 from biahub.analysis.register import (
+    convert_transform_to_ants,
     convert_transform_to_numpy,
     get_3D_rescaling_matrix,
     get_3D_rotation_matrix,
@@ -29,63 +30,17 @@ WAVELENGTH_EMISSION_TARGET_CHANNEL = 0.6  # in um
 FOCUS_SLICE_ROI_WIDTH = 150  # size of central ROI used to find focal slice
 
 
-@click.command()
-@source_position_dirpaths()
-@target_position_dirpaths()
-@output_filepath()
-@click.option(
-    "--similarity",
-    '-x',
-    is_flag=True,
-    help='Flag to use similarity transform (rotation, translation, scaling) default:Eucledian (rotation, translation)',
-)
-@click.option("--t_idx", type=int, required=False, default=0)
-@click.option(
-    "--beads",
-    is_flag=True,
-    help="Flag to estimate registration parameters based on bead images",
-)
-def estimate_registration(
-    source_position_dirpaths, target_position_dirpaths, output_filepath, similarity, t_idx, beads
+def user_assisted_registration(
+    source_channel_volume,
+    source_channel_name,
+    source_channel_voxel_size,
+    target_channel_volume,
+    target_channel_name,
+    target_channel_voxel_size,
+    similarity=False,
+    pre_affine_90degree_rotation=0,
 ):
-    """
-    Estimate the affine transform between a source (i.e. moving) and a target (i.e.
-    fixed) image by selecting corresponding points in each.
-
-    The output configuration file is an input for `optimize-registration` and `register`.
-
-    >> biahub estimate-registration -s ./acq_name_labelfree_reconstructed.zarr/0/0/0 -t ./acq_name_lightsheet_deskewed.zarr/0/0/0 -o ./output.yml
-    -x  flag to use similarity transform (rotation, translation, scaling) default:Eucledian (rotation, translation)
-    """
-
-    assert(len(source_position_dirpaths) == 1), "Only one source position is supported"
-    assert(len(target_position_dirpaths) == 1), "Only one target position is supported"
-    
-    click.echo("\nTarget channel INFO:")
-    print_info(target_position_dirpaths[0], verbose=False)
-    click.echo("\nSource channel INFO:")
-    print_info(source_position_dirpaths[0], verbose=False)
-
-    click.echo()  # prints empty line
-    target_channel_index = int(input("Enter target channel index: "))
-    source_channel_index = int(input("Enter source channel index: "))
-    pre_affine_90degree_rotations_about_z = int(
-        input("Rotate the source channel by 90 degrees? (0, 1, or -1): ")
-    )
-
-    # Display volumes rescaled
-    with open_ome_zarr(source_position_dirpaths[0], mode="r") as source_channel_position:
-        source_channels = source_channel_position.channel_names
-        source_channel_name = source_channels[source_channel_index]
-        source_channel_volume = source_channel_position[0][t_idx, source_channel_index]
-        source_channel_voxel_size = source_channel_position.scale[-3:]
-
-    with open_ome_zarr(target_position_dirpaths[0], mode="r") as target_channel_position:
-        target_channel_name = target_channel_position.channel_names[target_channel_index]
-        target_channel_volume = target_channel_position[0][t_idx, target_channel_index]
-        target_channel_voxel_size = target_channel_position.scale[-3:]
-
-    # Find the infocus slice
+    # Find the in-focus slice
     source_channel_Z, source_channel_Y, source_channel_X = source_channel_volume.shape[-3:]
     target_channel_Z, target_channel_Y, target_channel_X = target_channel_volume.shape[-3:]
 
@@ -155,19 +110,12 @@ def estimate_registration(
     )
     rotate90_affine = get_3D_rotation_matrix(
         (source_channel_Z, source_channel_Y, source_channel_X),
-        90 * pre_affine_90degree_rotations_about_z,
+        90 * pre_affine_90degree_rotation,
         (target_channel_Z, target_channel_Y, target_channel_X),
     )
     compound_affine = scaling_affine @ rotate90_affine
+    tx_manual = convert_transform_to_ants(compound_affine).invert()
 
-    # NOTE: these two functions are key to pass the function properly to ANTs
-    compound_affine_ants_style = compound_affine[:, :-1].ravel()
-    compound_affine_ants_style[-3:] = compound_affine[:3, -1]
-
-    # Ants affine transforms
-    tx_manual = ants.new_ants_transform()
-    tx_manual.set_parameters(compound_affine_ants_style)
-    tx_manual = tx_manual.invert()
     source_zxy_pre_reg = tx_manual.apply_to_image(source_zyx_ants, reference=target_zyx_ants)
 
     # Get a napari viewer
@@ -317,14 +265,7 @@ def estimate_registration(
         )  # Insert 0 in the third entry of each row
         manual_estimated_transform = euclidian_transform @ compound_affine
 
-    # NOTE: these two functions are key to pass the function properly to ANTs
-    manual_estimated_transform_ants_style = manual_estimated_transform[:, :-1].ravel()
-    manual_estimated_transform_ants_style[-3:] = manual_estimated_transform[:3, -1]
-
-    # Ants affine transforms
-    tx_manual = ants.new_ants_transform()
-    tx_manual.set_parameters(manual_estimated_transform_ants_style)
-    tx_manual = tx_manual.invert()
+    tx_manual = convert_transform_to_ants(manual_estimated_transform).invert()
 
     source_zxy_manual_reg = tx_manual.apply_to_image(
         source_zyx_ants, reference=target_zyx_ants
@@ -344,8 +285,78 @@ def estimate_registration(
     source_layer.visible = False
 
     # Ants affine transforms
-    T_manual_numpy = convert_transform_to_numpy(tx_manual)
-    click.echo(f'Estimated affine transformation matrix:\n{T_manual_numpy}\n')
+    tform = convert_transform_to_numpy(tx_manual)
+    click.echo(f'Estimated affine transformation matrix:\n{tform}\n')
+
+    return tform
+
+
+@click.command()
+@source_position_dirpaths()
+@target_position_dirpaths()
+@output_filepath()
+@click.option(
+    "--similarity",
+    '-x',
+    is_flag=True,
+    help='Flag to use similarity transform (rotation, translation, scaling) default:Eucledian (rotation, translation)',
+)
+@click.option("--t_idx", type=int, required=False, default=0)
+@click.option(
+    "--beads",
+    is_flag=True,
+    help="Flag to estimate registration parameters based on bead images",
+)
+def estimate_registration(
+    source_position_dirpaths, target_position_dirpaths, output_filepath, similarity, t_idx, beads
+):
+    """
+    Estimate the affine transform between a source (i.e. moving) and a target (i.e.
+    fixed) image by selecting corresponding points in each.
+
+    The output configuration file is an input for `optimize-registration` and `register`.
+
+    >> biahub estimate-registration -s ./acq_name_labelfree_reconstructed.zarr/0/0/0 -t ./acq_name_lightsheet_deskewed.zarr/0/0/0 -o ./output.yml
+    -x  flag to use similarity transform (rotation, translation, scaling) default:Eucledian (rotation, translation)
+    """
+
+    assert len(source_position_dirpaths) == 1, "Only one source position is supported"
+    assert len(target_position_dirpaths) == 1, "Only one target position is supported"
+
+    click.echo("\nTarget channel INFO:")
+    print_info(target_position_dirpaths[0], verbose=False)
+    click.echo("\nSource channel INFO:")
+    print_info(source_position_dirpaths[0], verbose=False)
+
+    click.echo()  # prints empty line
+    target_channel_index = int(input("Enter target channel index: "))
+    source_channel_index = int(input("Enter source channel index: "))
+    pre_affine_90degree_rotation = int(
+        input("Rotate the source channel by 90 degrees? (0, 1, or -1): ")
+    )
+
+    # Display volumes rescaled
+    with open_ome_zarr(source_position_dirpaths[0], mode="r") as source_channel_position:
+        source_channels = source_channel_position.channel_names
+        source_channel_name = source_channels[source_channel_index]
+        source_channel_volume = source_channel_position[0][0, source_channel_index]
+        source_channel_voxel_size = source_channel_position.scale[-3:]
+
+    with open_ome_zarr(target_position_dirpaths[0], mode="r") as target_channel_position:
+        target_channel_name = target_channel_position.channel_names[target_channel_index]
+        target_channel_volume = target_channel_position[0][0, target_channel_index]
+        target_channel_voxel_size = target_channel_position.scale[-3:]
+
+    tform = user_assisted_registration(
+        source_channel_volume,
+        source_channel_name,
+        source_channel_voxel_size,
+        target_channel_volume,
+        source_channel_name,
+        target_channel_voxel_size,
+        similarity,
+        pre_affine_90degree_rotation,
+    )
 
     additional_source_channels = source_channels.copy()
     additional_source_channels.remove(source_channel_name)
@@ -367,7 +378,7 @@ def estimate_registration(
     model = RegistrationSettings(
         source_channel_names=source_channel_names,
         target_channel_name=target_channel_name,
-        affine_transform_zyx=T_manual_numpy.tolist(),
+        affine_transform_zyx=tform.tolist(),
     )
     click.echo(f"Writing registration parameters to {output_filepath}")
     model_to_yaml(model, output_filepath)
