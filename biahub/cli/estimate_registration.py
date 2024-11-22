@@ -2,6 +2,7 @@ import ants
 import click
 import napari
 import numpy as np
+import dask.array as da
 
 from iohub import open_ome_zarr
 from iohub.reader import print_info
@@ -291,6 +292,18 @@ def user_assisted_registration(
     return tform
 
 
+def beads_based_registration(
+    source_channel_tzyx,
+    target_channel_tzyx,
+    approx_tform,
+):
+    tform = []
+
+
+
+    return tform
+
+
 @click.command()
 @source_position_dirpaths()
 @target_position_dirpaths()
@@ -338,12 +351,12 @@ def estimate_registration(
     with open_ome_zarr(source_position_dirpaths[0], mode="r") as source_channel_position:
         source_channels = source_channel_position.channel_names
         source_channel_name = source_channels[source_channel_index]
-        source_channel_volume = source_channel_position[0][t_idx, source_channel_index]
+        source_channel_data = da.from_zarr(source_channel_position.data)[:, source_channel_index]
         source_channel_voxel_size = source_channel_position.scale[-3:]
 
     with open_ome_zarr(target_position_dirpaths[0], mode="r") as target_channel_position:
         target_channel_name = target_channel_position.channel_names[target_channel_index]
-        target_channel_volume = target_channel_position[0][t_idx, target_channel_index]
+        target_channel_data = da.from_zarr(target_channel_position.data)[:, target_channel_index]
         target_channel_voxel_size = target_channel_position.scale[-3:]
 
     if beads:
@@ -352,10 +365,10 @@ def estimate_registration(
     else:
         # Register based on user input
         tform = user_assisted_registration(
-            source_channel_volume,
+            np.asarray(source_channel_data[t_idx]),
             source_channel_name,
             source_channel_voxel_size,
-            target_channel_volume,
+            np.asarray(target_channel_data[t_idx]),
             source_channel_name,
             target_channel_voxel_size,
             similarity,
