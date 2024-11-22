@@ -301,7 +301,7 @@ def user_assisted_registration(
     is_flag=True,
     help='Flag to use similarity transform (rotation, translation, scaling) default:Eucledian (rotation, translation)',
 )
-@click.option("--t_idx", type=int, required=False, default=0)
+@click.option("--t_idx", type=int, required=False, default=0, help="Time index to use for registration estimation")
 @click.option(
     "--beads",
     is_flag=True,
