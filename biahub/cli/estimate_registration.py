@@ -6,10 +6,12 @@ import dask.array as da
 
 from iohub import open_ome_zarr
 from iohub.reader import print_info
-from skimage.transform import EuclideanTransform, SimilarityTransform
+from skimage.transform import EuclideanTransform, SimilarityTransform, AffineTransform
+from skimage.feature import match_descriptors
 from waveorder.focus import focus_from_transverse_band
 
-from biahub.analysis.AnalysisSettings import RegistrationSettings
+from biahub.analysis.AnalysisSettings import RegistrationSettings, StabilizationSettings
+from biahub.analysis.analyze_psf import detect_peaks
 from biahub.analysis.register import (
     convert_transform_to_ants,
     convert_transform_to_numpy,
@@ -39,6 +41,13 @@ COLOR_CYCLE = [
     "orange",
     "yellow",
     "magenta",
+]
+
+APPROX_TFORM = [
+    [1, 0, 0, 0],
+    [0, 0, -1.288, 1960],
+    [0, 1.288, 0, -460],
+    [0, 0, 0, 1],
 ]
 
 
@@ -288,6 +297,8 @@ def user_assisted_registration(
     # Ants affine transforms
     tform = convert_transform_to_numpy(tx_manual)
     click.echo(f'Estimated affine transformation matrix:\n{tform}\n')
+    input("Press <Enter> to close the viewer and exit...")
+    viewer.close()
 
     return tform
 
@@ -295,13 +306,62 @@ def user_assisted_registration(
 def beads_based_registration(
     source_channel_tzyx,
     target_channel_tzyx,
-    approx_tform,
+    approx_tform: list,
 ):
-    tform = []
-
-
+    t_idx = 1
+    tform = _get_tform_from_beads(
+        source_channel_tzyx[t_idx],
+        target_channel_tzyx[t_idx],
+        approx_tform,
+    )
 
     return tform
+
+
+def _get_tform_from_beads(
+    source_channel_zyx: da.Array,
+    target_channel_zyx: da.Array,
+    approx_tform: list,
+) -> list:
+    approx_tform = np.asarray(approx_tform)
+    source_data_ants = ants.from_numpy(
+        np.asarray(source_channel_zyx).astype(np.float32)
+    )
+    target_data_ants = ants.from_numpy(
+        np.asarray(target_channel_zyx).astype(np.float32)
+    )
+    source_data_reg = convert_transform_to_ants(approx_tform).apply_to_image(
+        source_data_ants, reference=target_data_ants
+    ).numpy()
+
+    source_peaks = detect_peaks(
+        source_data_reg,
+        block_size=[32, 16, 16],
+        threshold_abs=110,
+        nms_distance=16,
+        min_distance=0,
+        verbose=True,
+    )
+    target_peaks = detect_peaks(
+        target_channel_zyx,
+        block_size=[32, 16, 16],
+        threshold_abs=0.5,
+        nms_distance=16,
+        min_distance=0,
+        verbose=True,
+    )
+
+    # Match peaks, excluding top 5% of distances as outliers
+    matches = match_descriptors(source_peaks, target_peaks, metric="euclidean")
+    dist = np.linalg.norm(source_peaks[matches[:, 0]] - target_peaks[matches[:, 1]], axis=1)
+    matches = matches[dist < np.quantile(dist, 0.95), :]
+
+    # Affine transform performs better than Euclidean
+    tform = AffineTransform(dimensionality=3)
+    tform.estimate(source_peaks[matches[:, 0]], target_peaks[matches[:, 1]])
+    compount_tform = approx_tform @ tform.inverse.params
+
+    return compount_tform.tolist()
 
 
 @click.command()
@@ -359,22 +419,6 @@ def estimate_registration(
         target_channel_data = da.from_zarr(target_channel_position.data)[:, target_channel_index]
         target_channel_voxel_size = target_channel_position.scale[-3:]
 
-    if beads:
-        # Register using bead images
-        tform = []
-    else:
-        # Register based on user input
-        tform = user_assisted_registration(
-            np.asarray(source_channel_data[t_idx]),
-            source_channel_name,
-            source_channel_voxel_size,
-            np.asarray(target_channel_data[t_idx]),
-            source_channel_name,
-            target_channel_voxel_size,
-            similarity,
-            pre_affine_90degree_rotation,
-        )
-
     additional_source_channels = source_channels.copy()
     additional_source_channels.remove(source_channel_name)
     if target_channel_name in additional_source_channels:
@@ -392,15 +436,42 @@ def estimate_registration(
     if flag_apply_to_all_channels in ('Y', 'y'):
         source_channel_names += additional_source_channels
 
-    model = RegistrationSettings(
-        source_channel_names=source_channel_names,
-        target_channel_name=target_channel_name,
-        affine_transform_zyx=tform.tolist(),
-    )
+    if beads:
+        # Register using bead images
+        transforms = beads_based_registration(
+            source_channel_data,
+            target_channel_data,
+            approx_tform=APPROX_TFORM,
+        )
+
+        model = StabilizationSettings(
+            stabilization_estimation_channel='',
+            stabilization_type='xyz',
+            stabilization_channels=source_channel_names,
+            affine_transform_zyx_list=transforms,
+            time_indices='all',
+        )
+    else:
+        # Register based on user input
+        transform = user_assisted_registration(
+            np.asarray(source_channel_data[t_idx]),
+            source_channel_name,
+            source_channel_voxel_size,
+            np.asarray(target_channel_data[t_idx]),
+            source_channel_name,
+            target_channel_voxel_size,
+            similarity,
+            pre_affine_90degree_rotation,
+        )
+
+        model = RegistrationSettings(
+            source_channel_names=source_channel_names,
+            target_channel_name=target_channel_name,
+            affine_transform_zyx=transform.tolist(),
+        )
+
     click.echo(f"Writing registration parameters to {output_filepath}")
     model_to_yaml(model, output_filepath)
-
-    input("Press <enter> to close the viewer and exit...")
 
 
 if __name__ == "__main__":
