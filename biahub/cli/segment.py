@@ -113,6 +113,7 @@ def segment(
         T, C, Z, Y, X = input_dataset.data.shape
         settings = yaml_to_model(config_filepath, SegmentationSettings)
         scale = input_dataset.scale
+        channel_names = input_dataset.channel_names
 
     # Load the segmentation models with their respective configurations
 
@@ -122,6 +123,24 @@ def segment(
     for model_name, model_args in segment_args.items():
         if model_args.z_slice_2D is not None and isinstance(model_args.z_slice_2D, int):
             Z = 1
+        # Ensure channel names exist in the dataset
+        if not all(channel in channel_names for channel in model_args.eval_args["channels"]):
+            raise ValueError(
+                f"Channels {model_args.channels} not found in dataset {channel_names}"
+            )
+        # Channel strings to indices with the cellpose offset of 1
+        model_args.eval_args["channels"] = [
+            channel_names.index(channel) + 1 for channel in model_args.eval_args["channels"]
+        ]
+        # NOTE:List of channels, either of length 2 or of length number of images by 2.
+        # First element of list is the channel to segment (0=grayscale, 1=red, 2=green, 3=blue).
+        # Second element of list is the optional nuclear channel (0=none, 1=red, 2=green, 3=blue).
+        if len(model_args.eval_args["channels"]) < 2:
+            model_args.eval_args["channels"].append(0)
+
+        click.echo(
+            f"Segmenting with model {model_name} using channels {model_args.eval_args['channels']}"
+        )
     segmentation_shape = (T, C_segment, Z, Y, X)
 
     # Create a zarr store output to mirror the input
