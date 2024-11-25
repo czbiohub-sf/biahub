@@ -5,7 +5,6 @@ import numpy as np
 import submitit
 import torch
 
-from cellpose import models
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate, process_single_position
 
@@ -27,6 +26,8 @@ def segment_data(
     segmentation_models: dict,
     gpu: bool = True,
 ) -> np.ndarray:
+    from cellpose import models
+
     """
     Segment a CZYX image using a Cellpose segmentation model
 
