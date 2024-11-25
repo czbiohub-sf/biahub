@@ -22,8 +22,11 @@ from biahub.cli.parsing import (
     output_filepath,
     source_position_dirpaths,
     target_position_dirpaths,
+    num_processes,
 )
-from biahub.cli.utils import model_to_yaml
+from biahub.cli.utils import model_to_yaml, _check_nan_n_zeros
+from multiprocessing import Pool
+from functools import partial
 
 # TODO: see if at some point these globals should be hidden or exposed.
 NA_DETECTION_SOURCE = 1.35
@@ -304,32 +307,34 @@ def user_assisted_registration(
 
 
 def beads_based_registration(
-    source_channel_tzyx,
-    target_channel_tzyx,
+    source_channel_tzyx: da.Array,
+    target_channel_tzyx: da.Array,
     approx_tform: list,
+    num_processes: int,
 ):
-    t_idx = 1
-    tform = _get_tform_from_beads(
-        source_channel_tzyx[t_idx],
-        target_channel_tzyx[t_idx],
-        approx_tform,
-    )
+    with Pool(num_processes) as pool:
+        transforms = pool.starmap(
+            partial(_get_tform_from_beads, approx_tform),
+            zip(source_channel_tzyx[:10], target_channel_tzyx[:10]),
+        )
 
-    return tform
+    return transforms
 
 
 def _get_tform_from_beads(
+    approx_tform: list,
     source_channel_zyx: da.Array,
     target_channel_zyx: da.Array,
-    approx_tform: list,
-) -> list:
+) -> list | None:
     approx_tform = np.asarray(approx_tform)
-    source_data_ants = ants.from_numpy(
-        np.asarray(source_channel_zyx).astype(np.float32)
-    )
-    target_data_ants = ants.from_numpy(
-        np.asarray(target_channel_zyx).astype(np.float32)
-    )
+    source_channel_zyx = np.asarray(source_channel_zyx).astype(np.float32)
+    target_channel_zyx = np.asarray(target_channel_zyx).astype(np.float32)
+
+    if _check_nan_n_zeros(source_channel_zyx) or _check_nan_n_zeros(target_channel_zyx):
+        return
+
+    source_data_ants = ants.from_numpy(source_channel_zyx)
+    target_data_ants = ants.from_numpy(target_channel_zyx)
     source_data_reg = convert_transform_to_ants(approx_tform).apply_to_image(
         source_data_ants, reference=target_data_ants
     ).numpy()
@@ -356,6 +361,9 @@ def _get_tform_from_beads(
     dist = np.linalg.norm(source_peaks[matches[:, 0]] - target_peaks[matches[:, 1]], axis=1)
     matches = matches[dist < np.quantile(dist, 0.95), :]
 
+    if len(matches) < 3:
+        return
+
     # Affine transform performs better than Euclidean
     tform = AffineTransform(dimensionality=3)
     tform.estimate(source_peaks[matches[:, 0]], target_peaks[matches[:, 1]])
@@ -368,6 +376,7 @@ def _get_tform_from_beads(
 @source_position_dirpaths()
 @target_position_dirpaths()
 @output_filepath()
+@num_processes()
 @click.option(
     "--similarity",
     '-x',
@@ -381,7 +390,7 @@ def _get_tform_from_beads(
     help="Flag to estimate registration parameters based on bead images",
 )
 def estimate_registration(
-    source_position_dirpaths, target_position_dirpaths, output_filepath, similarity, t_idx, beads
+    source_position_dirpaths, target_position_dirpaths, output_filepath, num_processes, similarity, t_idx, beads
 ):
     """
     Estimate the affine transform between a source (i.e. moving) and a target (i.e.
@@ -442,6 +451,7 @@ def estimate_registration(
             source_channel_data,
             target_channel_data,
             approx_tform=APPROX_TFORM,
+            num_processes=num_processes,
         )
 
         model = StabilizationSettings(

@@ -592,27 +592,6 @@ def _is_nested(lst):
 
 def _check_nan_n_zeros(input_array):
     """
-    Checks if any of the channels are all zeros or nans and returns true
+    Checks if data are all zeros or nan
     """
-    if len(input_array.shape) == 3:
-        # Check if all the values are zeros or nans
-        if np.all(input_array == 0) or np.all(np.isnan(input_array)):
-            # Return true
-            return True
-    elif len(input_array.shape) == 4:
-        # Get the number of channels
-        num_channels = input_array.shape[0]
-        # Loop through the channels
-        for c in range(num_channels):
-            # Get the channel
-            zyx_array = input_array[c, :, :, :]
-
-            # Check if all the values are zeros or nans
-            if np.all(zyx_array == 0) or np.all(np.isnan(zyx_array)):
-                # Return true
-                return True
-    else:
-        raise ValueError("Input array must be 3D or 4D")
-
-    # Return false
-    return False
+    return np.all(np.isnan(input_array)) or np.all(input_array == 0)
