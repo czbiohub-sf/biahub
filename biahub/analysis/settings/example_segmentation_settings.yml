@@ -8,7 +8,7 @@ models:
     # For more information, see https://cellpose.readthedocs.io/en/latest/api.html#id0
     eval_args:
       diameter: 65
-      channels: [2, 1] #The channel count for Cellpose starts at 1
+      channels: ['mem', 'nuc'] #The channel count for Cellpose starts at 1
       cellprob_threshold: 0.4
       invert: false
       do_3D: false   # Optional, if false, 2D segmentation is performed.
@@ -22,7 +22,7 @@ models:
     # For more information, see https://cellpose.readthedocs.io/en/latest/api.html#id0
     eval_args:
       diameter: 60
-      channels: [1, 0] #The channel count for Cellpose starts at 1
+      channels: ['nuc'] #For nucleus segmentation, only one channel is required. We populate the other channel with zero.
       cellprob_threshold: 0.0
       invert: false
       do_3D: true
