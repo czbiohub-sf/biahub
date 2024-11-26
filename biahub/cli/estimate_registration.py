@@ -1,17 +1,13 @@
-from functools import partial
-from multiprocessing import Pool
-
 import ants
 import click
-import dask.array as da
 import napari
 import numpy as np
+import dask.array as da
 
 from iohub import open_ome_zarr
 from iohub.reader import print_info
-from numpy.typing import ArrayLike
+from skimage.transform import EuclideanTransform, SimilarityTransform, AffineTransform
 from skimage.feature import match_descriptors
-from skimage.transform import AffineTransform, EuclideanTransform, SimilarityTransform
 from waveorder.focus import focus_from_transverse_band
 
 from biahub.analysis.AnalysisSettings import RegistrationSettings, StabilizationSettings
@@ -23,12 +19,14 @@ from biahub.analysis.register import (
     get_3D_rotation_matrix,
 )
 from biahub.cli.parsing import (
-    num_processes,
     output_filepath,
     source_position_dirpaths,
     target_position_dirpaths,
+    num_processes,
 )
-from biahub.cli.utils import _check_nan_n_zeros, model_to_yaml
+from biahub.cli.utils import model_to_yaml, _check_nan_n_zeros
+from multiprocessing import Pool
+from functools import partial
 
 # TODO: see if at some point these globals should be hidden or exposed.
 NA_DETECTION_SOURCE = 1.35
@@ -149,23 +147,17 @@ def user_assisted_registration(
 
     viewer.add_image(target_channel_volume, name=f"target_{target_channel_name}")
     points_target_channel = viewer.add_points(
-        ndim=3,
-        name=f"pts_target_{target_channel_name}",
-        size=20,
-        face_color=COLOR_CYCLE[0],
+        ndim=3, name=f"pts_target_{target_channel_name}", size=20, face_color=COLOR_CYCLE[0]
     )
 
     source_layer = viewer.add_image(
         source_zxy_pre_reg.numpy(),
         name=f"source_{source_channel_name}",
-        blending="additive",
-        colormap="green",
+        blending='additive',
+        colormap='green',
     )
     points_source_channel = viewer.add_points(
-        ndim=3,
-        name=f"pts_source_{source_channel_name}",
-        size=20,
-        face_color=COLOR_CYCLE[0],
+        ndim=3, name=f"pts_source_{source_channel_name}", size=20, face_color=COLOR_CYCLE[0]
     )
 
     # setup viewer
@@ -298,7 +290,7 @@ def user_assisted_registration(
         source_zxy_manual_reg.numpy(),
         name=f"registered_{source_channel_name}",
         colormap="magenta",
-        blending="additive",
+        blending='additive',
     )
     # Cleanup
     viewer.layers.remove(points_source_channel)
@@ -307,7 +299,7 @@ def user_assisted_registration(
 
     # Ants affine transforms
     tform = convert_transform_to_numpy(tx_manual)
-    click.echo(f"Estimated affine transformation matrix:\n{tform}\n")
+    click.echo(f'Estimated affine transformation matrix:\n{tform}\n')
     input("Press <Enter> to close the viewer and exit...")
     viewer.close()
 
@@ -321,61 +313,19 @@ def beads_based_registration(
     num_processes: int,
 ):
     with Pool(num_processes) as pool:
-        results = pool.starmap(
+        transforms = pool.starmap(
             partial(_get_tform_from_beads, approx_tform),
-            [
-                (i, source_channel_tzyx[i].compute(), target_channel_tzyx[i].compute())
-                for i in range(10)
-            ],
-        )
-
-    flag_interpolate = False
-    successful_transforms = []
-    time_indices = []
-    for result in results:
-        if result is not None:
-            t_idx, transform, matching_matrix = result
-            successful_transforms.append(transform)
-            time_indices.append(t_idx)
-        else:
-            flag_interpolate = True
-
-    # Check if all of the registration transformations are None
-    if not successful_transforms:
-        raise RuntimeError("All registration transformations could not be estimated.")
-
-    if flag_interpolate:
-        click.echo(
-            "Some registration transformations could not be estimated, interpolating..."
-        )
-        transforms = _interpolate_registration_matrices(
-            time_indices,
-            successful_transforms,
-            source_channel_tzyx=source_channel_tzyx,
+            zip(source_channel_tzyx[:10], target_channel_tzyx[:10]),
         )
 
     return transforms
 
 
-def _interpolate_registration_matrices(
-    t_idx: ArrayLike, transforms: np.ndarray, source_channel_tzyx: da.Array
-) -> list:
-    # Interpolate the registration matrices
-    f = np.interp(t_idx, transforms, axis=0)
-
-    for t in range(t_idx[-1] + 1):
-        matrix = f(t)
-        matrix[0, 3] = np.round(matrix[0, 3])
-
-    return matrix.tolist()
-
-
 def _get_tform_from_beads(
     approx_tform: list,
-    t_idx: int,
     source_channel_zyx: da.Array,
     target_channel_zyx: da.Array,
-) -> tuple | None:
+) -> list | None:
     approx_tform = np.asarray(approx_tform)
     source_channel_zyx = np.asarray(source_channel_zyx).astype(np.float32)
     target_channel_zyx = np.asarray(target_channel_zyx).astype(np.float32)
@@ -385,11 +335,9 @@ def _get_tform_from_beads(
 
     source_data_ants = ants.from_numpy(source_channel_zyx)
     target_data_ants = ants.from_numpy(target_channel_zyx)
-    source_data_reg = (
-        convert_transform_to_ants(approx_tform)
-        .apply_to_image(source_data_ants, reference=target_data_ants)
-        .numpy()
-    )
+    source_data_reg = convert_transform_to_ants(approx_tform).apply_to_image(
+        source_data_ants, reference=target_data_ants
+    ).numpy()
 
     source_peaks = detect_peaks(
         source_data_reg,
@@ -408,9 +356,6 @@ def _get_tform_from_beads(
         verbose=True,
     )
 
-    if len(source_peaks) < 3 or len(target_peaks) < 3:
-        return
-
     # Match peaks, excluding top 5% of distances as outliers
     matches = match_descriptors(source_peaks, target_peaks, metric="euclidean")
     dist = np.linalg.norm(source_peaks[matches[:, 0]] - target_peaks[matches[:, 1]], axis=1)
@@ -424,7 +369,7 @@ def _get_tform_from_beads(
     tform.estimate(source_peaks[matches[:, 0]], target_peaks[matches[:, 1]])
     compount_tform = approx_tform @ tform.inverse.params
 
-    return t_idx, compount_tform.tolist(), matches
+    return compount_tform.tolist()
 
 
 @click.command()
@@ -434,30 +379,18 @@ def _get_tform_from_beads(
 @num_processes()
 @click.option(
     "--similarity",
-    "-x",
+    '-x',
     is_flag=True,
-    help="Flag to use similarity transform (rotation, translation, scaling) default:Eucledian (rotation, translation)",
+    help='Flag to use similarity transform (rotation, translation, scaling) default:Eucledian (rotation, translation)',
 )
-@click.option(
-    "--t_idx",
-    type=int,
-    required=False,
-    default=0,
-    help="Time index to use for registration estimation",
-)
+@click.option("--t_idx", type=int, required=False, default=0, help="Time index to use for registration estimation")
 @click.option(
     "--beads",
     is_flag=True,
     help="Flag to estimate registration parameters based on bead images",
 )
 def estimate_registration(
-    source_position_dirpaths,
-    target_position_dirpaths,
-    output_filepath,
-    num_processes,
-    similarity,
-    t_idx,
-    beads,
+    source_position_dirpaths, target_position_dirpaths, output_filepath, num_processes, similarity, t_idx, beads
 ):
     """
     Estimate the affine transform between a source (i.e. moving) and a target (i.e.
@@ -487,16 +420,12 @@ def estimate_registration(
     with open_ome_zarr(source_position_dirpaths[0], mode="r") as source_channel_position:
         source_channels = source_channel_position.channel_names
         source_channel_name = source_channels[source_channel_index]
-        source_channel_data = da.from_zarr(source_channel_position.data)[
-            :, source_channel_index
-        ].rechunk((1, -1, -1, -1))
+        source_channel_data = da.from_zarr(source_channel_position.data)[:, source_channel_index]
         source_channel_voxel_size = source_channel_position.scale[-3:]
 
     with open_ome_zarr(target_position_dirpaths[0], mode="r") as target_channel_position:
         target_channel_name = target_channel_position.channel_names[target_channel_index]
-        target_channel_data = da.from_zarr(target_channel_position.data)[
-            :, target_channel_index
-        ].rechunk((1, -1, -1, -1))
+        target_channel_data = da.from_zarr(target_channel_position.data)[:, target_channel_index]
         target_channel_voxel_size = target_channel_position.scale[-3:]
 
     additional_source_channels = source_channels.copy()
@@ -504,7 +433,7 @@ def estimate_registration(
     if target_channel_name in additional_source_channels:
         additional_source_channels.remove(target_channel_name)
 
-    flag_apply_to_all_channels = "N"
+    flag_apply_to_all_channels = 'N'
     if len(additional_source_channels) > 0:
         flag_apply_to_all_channels = str(
             input(
@@ -513,7 +442,7 @@ def estimate_registration(
         )
 
     source_channel_names = [source_channel_name]
-    if flag_apply_to_all_channels in ("Y", "y"):
+    if flag_apply_to_all_channels in ('Y', 'y'):
         source_channel_names += additional_source_channels
 
     if beads:
@@ -526,11 +455,11 @@ def estimate_registration(
         )
 
         model = StabilizationSettings(
-            stabilization_estimation_channel="",
-            stabilization_type="xyz",
+            stabilization_estimation_channel='',
+            stabilization_type='xyz',
             stabilization_channels=source_channel_names,
             affine_transform_zyx_list=transforms,
-            time_indices="all",
+            time_indices='all',
         )
     else:
         # Register based on user input
