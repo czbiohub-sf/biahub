@@ -325,27 +325,32 @@ def beads_based_registration(
             partial(_get_tform_from_beads, approx_tform),
             [
                 (i, source_channel_tzyx[i].compute(), target_channel_tzyx[i].compute())
-                for i in range(5)
+                for i in range(10)
             ],
         )
 
     flag_interpolate = False
     successful_transforms = []
-    matching_matrices = []
+    time_indices = []
     for result in results:
         if result is not None:
             t_idx, transform, matching_matrix = result
-            successful_transforms.append((t_idx, transform))
-            matching_matrices.append(matching_matrix)
+            successful_transforms.append(transform)
+            time_indices.append(t_idx)
         else:
             flag_interpolate = True
+
+    # Check if all of the registration transformations are None
+    if not successful_transforms:
+        raise RuntimeError("All registration transformations could not be estimated.")
 
     if flag_interpolate:
         click.echo(
             "Some registration transformations could not be estimated, interpolating..."
         )
         transforms = _interpolate_registration_matrices(
-            *successful_transforms,
+            time_indices,
+            successful_transforms,
             source_channel_tzyx=source_channel_tzyx,
         )
 
