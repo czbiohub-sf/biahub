@@ -127,7 +127,7 @@ def segment(
         # Ensure channel names exist in the dataset
         if not all(channel in channel_names for channel in model_args.eval_args["channels"]):
             raise ValueError(
-                f"Channels {model_args.channels} not found in dataset {channel_names}"
+                f"Channels {model_args.eval_args['channels']} not found in dataset {channel_names}"
             )
         # Channel strings to indices with the cellpose offset of 1
         model_args.eval_args["channels"] = [
