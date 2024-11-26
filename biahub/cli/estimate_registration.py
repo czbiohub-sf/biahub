@@ -8,6 +8,7 @@ from iohub import open_ome_zarr
 from iohub.reader import print_info
 from skimage.transform import EuclideanTransform, SimilarityTransform, AffineTransform
 from skimage.feature import match_descriptors
+from scipy.interpolate import interp1d
 from waveorder.focus import focus_from_transverse_band
 
 from biahub.analysis.AnalysisSettings import RegistrationSettings, StabilizationSettings
@@ -315,10 +316,15 @@ def beads_based_registration(
     with Pool(num_processes) as pool:
         transforms = pool.starmap(
             partial(_get_tform_from_beads, approx_tform),
-            zip(source_channel_tzyx[:10], target_channel_tzyx[:10]),
+            zip(source_channel_tzyx, target_channel_tzyx),
         )
 
-    return transforms
+    # Interpolate missing transforms
+    T = source_channel_tzyx.shape[0]
+    x, y = zip(*[(i, transforms[i]) for i in range(T) if transforms[i] is not None])
+    f = interp1d(x, y, axis=0, kind="linear", fill_value="extrapolate")
+    
+    return f(range(T)).tolist()
 
 
 def _get_tform_from_beads(
