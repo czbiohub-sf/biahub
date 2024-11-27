@@ -10,6 +10,7 @@ import numpy as np
 from iohub import open_ome_zarr
 from iohub.reader import print_info
 from scipy.interpolate import interp1d
+from scipy.spatial.distance import euclidean
 from skimage.feature import match_descriptors
 from skimage.transform import AffineTransform, EuclideanTransform, SimilarityTransform
 from waveorder.focus import focus_from_transverse_band
@@ -61,6 +62,10 @@ APPROX_TFORM = [
     [0, 1.29, 0, -165],
     [0, 0, 0, 1],
 ]
+
+VERBOSE = False  # Set to True to see the detected peaks verbose
+WINDOW_SIZE = 20  # Number of previous transforms to consider for filtering
+EUCLIDIAN_TOLERANCE = 45  # Euclidian distance threshold between two transforms
 
 
 def user_assisted_registration(
@@ -321,18 +326,54 @@ def beads_based_registration(
     approx_tform: list,
     num_processes: int,
 ):
+    T = source_channel_tzyx.shape[0]
     with Pool(num_processes) as pool:
         transforms = pool.starmap(
             partial(_get_tform_from_beads, approx_tform),
             zip(source_channel_tzyx, target_channel_tzyx),
         )
 
+    # Check and filter transforms
+    window_size = WINDOW_SIZE
+    valid_transforms = []
+    reference_transform = None
+    for i in range(len(transforms)):
+        if transforms[i] is not None:
+            if reference_transform is None or _check_transform_difference(
+                transforms[i], reference_transform, EUCLIDIAN_TOLERANCE
+            ):
+                valid_transforms.append(transforms[i])
+                if len(valid_transforms) > window_size:
+                    valid_transforms.pop(0)
+                reference_transform = np.mean(valid_transforms, axis=0)
+                click.echo(f"Transforms at time {i} is valid")
+            else:
+                transforms[i] = None
+
     # Interpolate missing transforms
-    T = source_channel_tzyx.shape[0]
     x, y = zip(*[(i, transforms[i]) for i in range(T) if transforms[i] is not None])
     f = interp1d(x, y, axis=0, kind="linear", fill_value="extrapolate")
 
     return f(range(T)).tolist()
+
+
+def _check_transform_difference(tform1, tform2, threshold=5.0):
+    """
+    Check if the difference between two affine transforms is within a threshold.
+
+    Parameters:
+    - tform1: First affine transform (4x4 matrix).
+    - tform2: Second affine transform (4x4 matrix).
+    - threshold: The maximum allowed difference.
+
+    Returns:
+    - bool: True if the difference is within the threshold, False otherwise.
+    """
+    tform1 = np.array(tform1)
+    tform2 = np.array(tform2)
+    diff = euclidean(tform1.ravel(), tform2.ravel())
+    click.echo(f'Difference between transforms: {diff}')
+    return diff <= threshold
 
 
 def _get_tform_from_beads(
@@ -360,7 +401,7 @@ def _get_tform_from_beads(
         threshold_abs=np.percentile(source_data_reg, 99.98),
         nms_distance=16,
         min_distance=0,
-        verbose=True,
+        verbose=VERBOSE,
     )
     target_peaks = detect_peaks(
         target_channel_zyx,
@@ -368,7 +409,7 @@ def _get_tform_from_beads(
         threshold_abs=0.5,
         nms_distance=16,
         min_distance=0,
-        verbose=True,
+        verbose=VERBOSE,
     )
 
     # Skip if there is no peak detected
