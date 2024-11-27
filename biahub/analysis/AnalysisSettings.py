@@ -166,6 +166,9 @@ class StabilizationSettings(MyBaseModel):
     stabilization_channels: list
     affine_transform_zyx_list: list
     time_indices: Union[NonNegativeInt, list[NonNegativeInt], Literal["all"]] = "all"
+    voxel_size: list[
+        PositiveFloat, PositiveFloat, PositiveFloat, PositiveFloat, PositiveFloat
+    ] = [1.0, 1.0, 1.0, 1.0, 1.0]
 
     @field_validator("affine_transform_zyx_list")
     @classmethod

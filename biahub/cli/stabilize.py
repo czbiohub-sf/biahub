@@ -109,7 +109,7 @@ def stabilize(input_position_dirpaths, output_dirpath, config_filepath, num_proc
     output_metadata = {
         "shape": (len(time_indices), len(channel_names), Z, Y, X),
         "chunks": None,
-        "scale": dataset.scale,
+        "scale": settings.voxel_size,
         "channel_names": channel_names,
         "dtype": np.float32,
     }
