@@ -3,14 +3,19 @@ from typing import List
 
 import click
 import numpy as np
+import submitit
 
 from iohub import open_ome_zarr
 
 from biahub.analysis.AnalysisSettings import RegistrationSettings
 from biahub.analysis.register import apply_affine_transform, find_overlapping_volume
+from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
     config_filepath,
+    local,
     output_dirpath,
+    sbatch_filepath,
+    sbatch_to_submitit,
     source_position_dirpaths,
     target_position_dirpaths,
 )
@@ -31,20 +36,15 @@ def rescale_voxel_size(affine_matrix, input_scale):
 @target_position_dirpaths()
 @config_filepath()
 @output_dirpath()
-@click.option(
-    "--num-processes",
-    "-j",
-    default=1,
-    help="Number of parallel processes",
-    required=False,
-    type=int,
-)
+@local()
+@sbatch_filepath()
 def register(
     source_position_dirpaths: List[str],
     target_position_dirpaths: List[str],
     config_filepath: str,
     output_dirpath: str,
-    num_processes: int,
+    local: bool,
+    sbatch_filepath: Path,
 ):
     """
     Apply an affine transformation to a single position across T and C axes based on a registration config file.
@@ -150,41 +150,91 @@ def register(
 
     copy_n_paste_kwargs = {"czyx_slicing_params": ([Z_slice, Y_slice, X_slice])}
 
+    # Estimate resources
+    num_cpus = T * C
+    input_memory = np.ceil(4 * num_cpus * Z * Y * X * 4 / 2**30)
+    gb_ram_request = np.max([1, input_memory]).astype(int)
+
+    # Prepare SLURM arguments
+
+    slurm_out_path = Path(output_dirpath).parent / "slurm_output"
+    slurm_args = {
+        "slurm_job_name": "register",
+        "slurm_mem_per_cpu": f"{gb_ram_request}G",
+        "slurm_cpus_per_task": num_cpus,
+        "slurm_array_parallelism": 64,  # process up to 100 positions at a time
+        "slurm_time": 60,
+        "slurm_partition": "cpu",
+    }
+
+    # Override defaults if sbatch_filepath is provided
+    if sbatch_filepath:
+        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
+
+    # Run locally or submit to SLURM
+    if local:
+        cluster = "local"
+    else:
+        cluster = "slurm"
+
+    # Prepare and submit jobs
+    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
+    executor.update_parameters(**slurm_args)
+
     # NOTE: channels will not be processed in parallel
     # NOTE: the the source and target datastores may be the same (e.g. Hummingbird datasets)
 
     # apply affine transform to channels in the source datastore that should be registered
     # as given in the config file (i.e. settings.source_channel_names)
-    for input_position_path in source_position_dirpaths:
-        for channel_name in source_channel_names:
-            if channel_name in settings.source_channel_names:
-                process_single_position_v2(
+    affine_jobs = []
+    affine_names = []
+    with executor.batch():
+        for input_position_path in source_position_dirpaths:
+            for channel_name in source_channel_names:
+                if channel_name not in settings.source_channel_names:
+                    continue
+                affine_job = executor.submit(
+                    process_single_position_v2,
                     apply_affine_transform,
                     input_data_path=input_position_path,  # source store
                     output_path=output_dirpath,
                     time_indices=time_indices,
                     input_channel_idx=[source_channel_names.index(channel_name)],
                     output_channel_idx=[output_channel_names.index(channel_name)],
-                    num_processes=num_processes,  # parallel processing over time
+                    num_processes=int(slurm_args["slurm_cpus_per_task"]),
                     **affine_transform_args,
                 )
+                affine_jobs.append(affine_job)
+                affine_names.append(input_position_path)
+    affine_job_ids = [j.job_id for j in affine_jobs]
+    slurm_args["slurm_dependency"] = f"afterok:{affine_job_ids[0]}:{affine_job_ids[-1]}"
 
     # crop all channels that are not being registered and save them in the output zarr store
     # Note: when target and source datastores are the same we don't process channels which
     # were already registered in the previous step
-    for input_position_path in target_position_dirpaths:
-        for channel_name in target_channel_names:
-            if channel_name not in settings.source_channel_names:
-                process_single_position_v2(
+    copy_jobs = []
+    copy_names = []
+    with executor.batch():
+        for input_position_path in target_position_dirpaths:
+            for channel_name in target_channel_names:
+                if channel_name in settings.source_channel_names:
+                    continue
+                copy_job = executor.submit(
+                    process_single_position_v2,
                     copy_n_paste_czyx,
                     input_data_path=input_position_path,  # target store
                     output_path=output_dirpath,
                     time_indices=time_indices,
                     input_channel_idx=[target_channel_names.index(channel_name)],
                     output_channel_idx=[output_channel_names.index(channel_name)],
-                    num_processes=num_processes,
+                    num_processes=int(slurm_args["slurm_cpus_per_task"]),
                     **copy_n_paste_kwargs,
                 )
+                copy_jobs.append(copy_job)
+                copy_names.append(input_position_path)
+
+    if not local:
+        monitor_jobs(affine_jobs + copy_jobs, affine_names + copy_names)
 
 
 if __name__ == "__main__":
