@@ -206,8 +206,6 @@ def register(
                 )
                 affine_jobs.append(affine_job)
                 affine_names.append(input_position_path)
-    affine_job_ids = [j.job_id for j in affine_jobs]
-    slurm_args["slurm_dependency"] = f"afterok:{affine_job_ids[0]}:{affine_job_ids[-1]}"
 
     # crop all channels that are not being registered and save them in the output zarr store
     # Note: when target and source datastores are the same we don't process channels which
