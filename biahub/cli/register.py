@@ -92,8 +92,8 @@ def register(
         time_indices = [settings.time_indices]
 
     output_channel_names = target_channel_names
-    if target_position_dirpaths != source_position_dirpaths:
-        output_channel_names += source_channel_names
+    # if target_position_dirpaths != source_position_dirpaths:
+    #     output_channel_names += source_channel_names
 
     if not keep_overhang:
         # Find the largest interior rectangle
