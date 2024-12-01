@@ -58,15 +58,26 @@ def get_channel_combiner_metadata(
         elif isinstance(per_datapath_channels, list):
             for channel in per_datapath_channels:
                 if channel in channel_names:
+                    # If the channel already exists in the list, we don't want to add it again
+                    if channel not in all_channel_names:
+                        all_channel_names.append(channel)
+                        output_channel_indices.append(out_chan_idx_counter)
+                        out_chan_idx_counter += 1
+                    else:
+                        # Set the out_chan_idx_counter to the index of the channel in the all_channel_names list
+                        out_chan_idx_counter = all_channel_names.index(channel)
+                        output_channel_indices.append(out_chan_idx_counter)
                     input_channel_indices.append(channel_names.index(channel))
-                    output_channel_indices.append(out_chan_idx_counter)
-                    out_chan_idx_counter += 1
-                    all_channel_names.append(channel)
+
         dataset.close()
 
         # Create a list of len paths
         input_channel_idx.extend([input_channel_indices for _ in parsed_paths])
         output_channel_idx.extend([output_channel_indices for _ in parsed_paths])
+
+    click.echo(f"Channel names: {all_channel_names}")
+    click.echo(f"Input channel indices: {input_channel_idx}")
+    click.echo(f"Output channel indices: {output_channel_idx}")
 
     return all_data_paths, all_channel_names, input_channel_idx, output_channel_idx
 
