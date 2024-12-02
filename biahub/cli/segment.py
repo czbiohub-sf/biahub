@@ -1,3 +1,5 @@
+import importlib
+
 from pathlib import Path
 
 import click
@@ -19,6 +21,18 @@ from biahub.cli.parsing import (
     sbatch_filepath,
 )
 from biahub.cli.utils import yaml_to_model
+
+
+def load_preprocessing_functions(preprocessing_list):
+    functions = []
+    for preproc in preprocessing_list:
+        func_str = preproc["function"]
+        module_name, func_name = func_str.rsplit('.', 1)
+        module = importlib.import_module(module_name)
+        func = getattr(module, func_name)
+        preproc["function"] = func
+        functions.append(preproc)
+    return functions
 
 
 def segment_data(
@@ -51,19 +65,39 @@ def segment_data(
         try:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         except torch.cuda.CudaError:
-            print("No GPU available. Using CPU")
+            click.echo("No GPU available. Using CPU")
             device = torch.device("cpu")
     else:
         device = torch.device("cpu")
 
+    click.echo(f"Using device: {device}")
+
     czyx_segmentation = []
     # Process each model in a loop
     for i, (model_name, model_args) in enumerate(segmentation_models.items()):
-        print(f"Segmenting with model {model_name}")
+        click.echo(f"Segmenting with model {model_name}")
         z_slice_2D = model_args.z_slice_2D
         czyx_data_to_segment = (
             czyx_data[:, z_slice_2D : z_slice_2D + 1] if z_slice_2D is not None else czyx_data
         )
+        # Apply preprocessing functions
+        preprocessing_functions = load_preprocessing_functions(model_args.preprocessing)
+        for preproc in preprocessing_functions:
+            func = preproc["function"]
+            kwargs = preproc.get("kwargs", {})
+            c_idx = preproc['channel']
+
+            # TODO: find a better way to do this
+            # Convert list to tuple for out_range
+            if "out_range" in kwargs and isinstance(kwargs["out_range"], list):
+                kwargs["out_range"] = tuple(kwargs["out_range"])
+
+            click.echo(
+                f'Processing with {func.__name__} with kwargs {kwargs} to channel {c_idx}'
+            )
+            czyx_data[c_idx] = func(czyx_data[c_idx], **kwargs)
+
+        # Apply the segmentation
         model = models.CellposeModel(
             model_type=model_args.path_to_model, gpu=gpu, device=device
         )
@@ -117,7 +151,6 @@ def segment(
         channel_names = input_dataset.channel_names
 
     # Load the segmentation models with their respective configurations
-
     # TODO: impelment logic for 2D segmentation. Have a slicing parameter
     segment_args = settings.models
     C_segment = len(segment_args)
@@ -142,6 +175,30 @@ def segment(
         click.echo(
             f"Segmenting with model {model_name} using channels {model_args.eval_args['channels']}"
         )
+        if (
+            "anisotropy" not in model_args.eval_args
+            or model_args.eval_args["anisotropy"] is None
+        ):
+            # Using dataset anisotropy
+            model_args.eval_args["anisotropy"] = scale[-3] / scale[-1]
+            click.echo(
+                f'Using anisotropy from scale metadata: {model_args.eval_args["anisotropy"]}'
+            )
+        else:
+            click.echo(
+                f'Using anisotropy from the config: {model_args.eval_args["anisotropy"]}'
+            )
+
+        # Check if preprocessing functions exist and replace channel name with channel index
+        if model_args.preprocessing is not None:
+            for preproc in model_args.preprocessing:
+                # Replace the channel name with the channel index
+                if preproc["channel"] is not None:
+                    preproc["channel"] = channel_names.index(preproc["channel"])
+                    click.echo('Testing channel index: ', preproc["channel"])
+                else:
+                    raise ValueError("Channel must be specified for preprocessing functions")
+
     segmentation_shape = (T, C_segment, Z, Y, X)
 
     # Create a zarr store output to mirror the input
