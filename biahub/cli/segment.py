@@ -27,9 +27,12 @@ def load_preprocessing_functions(preprocessing_list):
     functions = []
     for preproc in preprocessing_list:
         func_str = preproc["function"]
-        module_name, func_name = func_str.rsplit('.', 1)
-        module = importlib.import_module(module_name)
-        func = getattr(module, func_name)
+        if isinstance(func_str, str):
+            module_name, func_name = func_str.rsplit('.', 1)
+            module = importlib.import_module(module_name)
+            func = getattr(module, func_name)
+        else:
+            func = func_str
         preproc["function"] = func
         functions.append(preproc)
     return functions
@@ -252,7 +255,7 @@ def segment(
                     output_position_path,
                     input_channel_indices=[list(range(C))],
                     output_channel_indices=[list(range(C_segment))],
-                    num_processes=slurm_args["slurm_cpus_per_task"],
+                    num_processes=np.max([1, num_cpus - 3]),
                     segmentation_models=segment_args,
                 )
             )
