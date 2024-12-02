@@ -228,6 +228,7 @@ class SegmentationModel(BaseModel):
     path_to_model: str
     eval_args: Dict[str, Any]
     z_slice_2D: Optional[int] = None  # Optional integer for z_slice
+    preprocessing: list[Dict[str, Any]] = []
 
     @validator("eval_args", pre=True)
     def validate_eval_args(cls, value):
