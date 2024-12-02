@@ -197,7 +197,6 @@ def segment(
                 # Replace the channel name with the channel index
                 if preproc["channel"] is not None:
                     preproc["channel"] = channel_names.index(preproc["channel"])
-                    click.echo('Testing channel index: ', preproc["channel"])
                 else:
                     raise ValueError("Channel must be specified for preprocessing functions")
 
@@ -214,7 +213,7 @@ def segment(
     )
 
     # Estimate Resrouces
-    gb_per_element = 4 / 2**30  # bytes_per_float32 / bytes_per_gb
+    gb_per_element = 8 / 2**30  # bytes_per_float32 / bytes_per_gb
     num_cpus = np.min([T * C, 16])
     input_memory = num_cpus * Z * Y * X * gb_per_element
     gb_ram_request = np.ceil(np.max([1, input_memory])).astype(int)
