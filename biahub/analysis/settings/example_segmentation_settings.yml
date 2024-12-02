@@ -15,7 +15,13 @@ models:
       anisotropy: 3.26
       min_size: 8000
     z_slice_2D: 10  # Optional, if null, 3D segmentation is performed and checks eval_args.do_3D=True
-
+    preprocessing:
+      - function: skimage.exposure.rescale_intensity  #configurable callables like rescaling intensity
+        kwargs: {"out_range": [0, 1]}
+        channel: 'mem'
+      - function: skimage.exposure.equalize_adapthist
+        kwargs: {"clip_limit": 0.01,"kernel_size":[5, 32, 32]}
+        channel: 'mem'
   nucleus:
     path_to_model: "/path/to/nucleus/model or name of built-in cellpose model (e.g. cyto3 or nuclei)"
     # These are the common model.CellposeModel().eval() arguments used, but one can add more.
