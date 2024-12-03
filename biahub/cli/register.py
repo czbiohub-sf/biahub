@@ -90,6 +90,8 @@ def register(
         time_indices = settings.time_indices
     elif isinstance(settings.time_indices, int):
         time_indices = [settings.time_indices]
+    else:
+        raise ValueError(f"Invalid time_indices type {type(settings.time_indices)}")
 
     output_channel_names = target_channel_names
     # if target_position_dirpaths != source_position_dirpaths:
