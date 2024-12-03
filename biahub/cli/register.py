@@ -164,7 +164,8 @@ def register(
         "slurm_job_name": "register",
         "slurm_mem_per_cpu": f"{gb_ram_request}G",
         "slurm_cpus_per_task": num_cpus,
-        "slurm_array_parallelism": 64,  # process up to 100 positions at a time
+        # process up to 64 positions at a time
+        "slurm_array_parallelism": 64,
         "slurm_time": 60,
         "slurm_partition": "cpu",
     }
