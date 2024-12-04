@@ -19,6 +19,7 @@ from biahub.cli.parsing import (
     local,
     output_dirpath,
     sbatch_filepath,
+    sbatch_to_submitit,
 )
 from biahub.cli.utils import yaml_to_model
 
@@ -125,7 +126,7 @@ def segment(
     input_position_dirpaths: list[str],
     config_filepath: str,
     output_dirpath: str,
-    sbatch_filepath: str = None,
+    sbatch_filepath: str | None = None,
     local: bool = False,
 ):
     """
@@ -141,6 +142,7 @@ def segment(
     output_dirpath = Path(output_dirpath)
     config_filepath = Path(config_filepath)
     slurm_out_path = output_dirpath.parent / "slurm_output"
+    sbatch_filepath = Path(sbatch_filepath)
 
     # Handle single position or wildcard filepath
     output_position_paths = utils.get_output_paths(input_position_dirpaths, output_dirpath)
@@ -230,6 +232,8 @@ def segment(
         "slurm_time": 60,
         "slurm_partition": "gpu",
     }
+    if sbatch_filepath:
+        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
     # Run locally or submit to SLURM
     if local:
