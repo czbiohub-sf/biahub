@@ -92,6 +92,7 @@ exclude = '''
     | notebooks
     | ignore
     | examples
+    | scripts
   )/
 )
 '''
