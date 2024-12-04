@@ -41,7 +41,7 @@ dependencies = [
   "antspyx",
   "pystackreg",
   "napari-psf-analysis",
-  "dask",
+  "dask[array]",
 ]
 
 
