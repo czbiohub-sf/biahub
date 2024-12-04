@@ -39,8 +39,9 @@ FOCUS_SLICE_ROI_WIDTH = 150  # size of central ROI used to find focal slice
     is_flag=True,
     help='Flag to use similarity transform (rotation, translation, scaling) default:Eucledian (rotation, translation)',
 )
+@click.option("--t_idx", type=int, required=False, default=0)
 def estimate_registration(
-    source_position_dirpaths, target_position_dirpaths, output_filepath, similarity
+    source_position_dirpaths, target_position_dirpaths, output_filepath, similarity, t_idx
 ):
     """
     Estimate the affine transform between a source (i.e. moving) and a target (i.e.
@@ -68,12 +69,12 @@ def estimate_registration(
     with open_ome_zarr(source_position_dirpaths[0], mode="r") as source_channel_position:
         source_channels = source_channel_position.channel_names
         source_channel_name = source_channels[source_channel_index]
-        source_channel_volume = source_channel_position[0][0, source_channel_index]
+        source_channel_volume = source_channel_position[0][t_idx, source_channel_index]
         source_channel_voxel_size = source_channel_position.scale[-3:]
 
     with open_ome_zarr(target_position_dirpaths[0], mode="r") as target_channel_position:
         target_channel_name = target_channel_position.channel_names[target_channel_index]
-        target_channel_volume = target_channel_position[0][0, target_channel_index]
+        target_channel_volume = target_channel_position[0][t_idx, target_channel_index]
         target_channel_voxel_size = target_channel_position.scale[-3:]
 
     # Find the infocus slice
@@ -177,17 +178,17 @@ def estimate_registration(
 
     viewer.add_image(target_channel_volume, name=f"target_{target_channel_name}")
     points_target_channel = viewer.add_points(
-        ndim=3, name=f"pts_target_{target_channel_name}", size=50, face_color=COLOR_CYCLE[0]
+        ndim=3, name=f"pts_target_{target_channel_name}", size=20, face_color=COLOR_CYCLE[0]
     )
 
     source_layer = viewer.add_image(
         source_zxy_pre_reg.numpy(),
         name=f"source_{source_channel_name}",
         blending='additive',
-        colormap='bop blue',
+        colormap='green',
     )
     points_source_channel = viewer.add_points(
-        ndim=3, name=f"pts_source_{source_channel_name}", size=50, face_color=COLOR_CYCLE[0]
+        ndim=3, name=f"pts_source_{source_channel_name}", size=20, face_color=COLOR_CYCLE[0]
     )
 
     # setup viewer
