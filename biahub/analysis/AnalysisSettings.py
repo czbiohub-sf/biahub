@@ -1,13 +1,16 @@
 import warnings
 
-from typing import Literal, Optional, Union
+from pathlib import Path
+from typing import Annotated, Literal, NamedTuple, Optional, Union
 
 import numpy as np
 import torch
 
+from cmap import Colormap
 from pydantic import (
     BaseModel,
     ConfigDict,
+    Field,
     NonNegativeInt,
     PositiveFloat,
     PositiveInt,
@@ -206,3 +209,65 @@ class StitchSettings(MyBaseModel):
                     DeprecationWarning,
                 )
         super().__init__(**data)
+
+
+class IndexRange(NamedTuple):
+    """Index range for a single axis."""
+
+    start: NonNegativeInt
+    stop: NonNegativeInt
+
+
+class BaseChannelRender2DSettings(MyBaseModel):
+    """Settings for rendering a single channel in 2D.
+    Base model for a discriminated union."""
+
+    path: Path
+    name: str
+    multiscal_level: str = "0"
+
+
+PositiveFloatLE1 = Annotated[float, Field(gt=0.0, le=1.0)]
+
+
+class ImageChannelRender2DSettings(BaseChannelRender2DSettings):
+    """Settings for rendering an image as a bitmap in 2D."""
+
+    lut: Colormap
+    channel_type: Literal["image"]
+    clim: tuple[float, float] | None
+    clim_mode: Literal["absolute", "percentile"] | None
+    alpha: PositiveFloatLE1 = 1.0
+    gamma: PositiveFloatLE1 = 1.0
+
+    @field_validator("clim_mode")
+    @classmethod
+    def validate_clim_mode(cls, v, values):
+        if values.get("clim") is None and v is not None:
+            raise ValueError("`clim_mode` cannot be set when `clim` is None")
+        return v
+
+
+class ContourChannelRender2DSettings(BaseChannelRender2DSettings):
+    """Settings for rendering contours as vectors in 2D."""
+
+    channel_type: Literal["contour"]
+    linewidth: PositiveFloat = 2.0
+
+
+ChannelRender2DSettings = Annotated[
+    ImageChannelRender2DSettings | ContourChannelRender2DSettings,
+    Field(discriminator="channel_type"),
+]
+
+
+class Render2DSettings(MyBaseModel):
+    """Settings for rendering 2D images."""
+
+    time_index: NonNegativeInt
+    channels: list[ChannelRender2DSettings]
+    z_range: IndexRange
+    y_range: IndexRange
+    x_range: IndexRange
+    figsize: tuple[PositiveFloat, PositiveFloat] = (4, 4)
+    dpi: PositiveInt = 300
