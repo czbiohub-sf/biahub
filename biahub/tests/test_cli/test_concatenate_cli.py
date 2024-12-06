@@ -36,6 +36,7 @@ def test_concatenate_cli(example_plate, tmp_path, example_concatenate_settings):
             str(config_path),
             "-o",
             str(output_path),
+            "--local",
         ],
     )
 

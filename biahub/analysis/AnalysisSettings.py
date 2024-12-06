@@ -65,6 +65,7 @@ class RegistrationSettings(MyBaseModel):
     target_channel_name: str
     affine_transform_zyx: list
     keep_overhang: bool = False
+    interpolation: str = "linear"
     time_indices: Union[NonNegativeInt, list[NonNegativeInt], Literal["all"]] = "all"
 
     @field_validator("affine_transform_zyx")
