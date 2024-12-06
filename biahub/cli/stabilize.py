@@ -84,6 +84,7 @@ def stabilize(input_position_dirpaths, output_dirpath, config_filepath, num_proc
     with open_ome_zarr(input_position_dirpaths[0]) as dataset:
         T, C, Z, Y, X = dataset.data.shape
         channel_names = dataset.channel_names
+        scale_dataset = dataset.scale
         for channel in stabilization_channels:
             if channel not in channel_names:
                 raise ValueError(f"Channel <{channel}> not found in the input data")
@@ -106,10 +107,13 @@ def stabilize(input_position_dirpaths, output_dirpath, config_filepath, num_proc
     elif isinstance(settings.time_indices, int):
         time_indices = [settings.time_indices]
 
+    transform_t0_sy = np.abs(settings.affine_transform_zyx_list[0][2][1]).round(3)
+
+    new_scale = [scale_dataset[0],scale_dataset[1], scale_dataset[2], scale_dataset[3]*transform_t0_sy, scale_dataset[4]*transform_t0_sy]
     output_metadata = {
         "shape": (len(time_indices), len(channel_names), Z, Y, X),
         "chunks": None,
-        "scale": settings.voxel_size,
+        "scale": new_scale,
         "channel_names": channel_names,
         "dtype": np.float32,
     }
