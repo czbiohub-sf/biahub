@@ -108,7 +108,8 @@ def stabilize(input_position_dirpaths, output_dirpath, config_filepath, num_proc
         time_indices = [settings.time_indices]
 
     transform_t0_sy = np.abs(settings.affine_transform_zyx_list[0][2][1]).round(3)
-
+    
+    # Calculate scale
     new_scale = [
         scale_dataset[0],
         scale_dataset[1],
