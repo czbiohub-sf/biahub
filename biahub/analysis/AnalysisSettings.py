@@ -19,6 +19,12 @@ from pydantic import (
 class MyBaseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+class EstimateRegistrationSettings(MyBaseModel):
+    target_channel_index: int
+    source_channel_index: int
+    pre_affine_90degree_rotation: int
+    flag_apply_to_all_channels:str
+
 
 class ProcessingSettings(MyBaseModel):
     fliplr: Optional[bool] = False

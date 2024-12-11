@@ -85,6 +85,20 @@ def config_filepath() -> Callable:
 
     return decorator
 
+def config_filepath_optional() -> Callable:
+    def decorator(f: Callable) -> Callable:
+        return click.option(
+            "--config-filepath",
+            "-c",
+            required=False,
+            default=None,
+            type=click.Path(exists=True, file_okay=True, dir_okay=False),
+            help="Path to YAML configuration file.",
+        )(f)
+
+    return decorator
+
+
 
 def output_dirpath() -> Callable:
     def decorator(f: Callable) -> Callable:

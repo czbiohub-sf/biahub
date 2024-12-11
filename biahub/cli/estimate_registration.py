@@ -3,6 +3,7 @@ from multiprocessing import Pool
 
 import ants
 import click
+import dask.array as da
 import napari
 import numpy as np
 
@@ -14,7 +15,7 @@ from skimage.feature import match_descriptors
 from skimage.transform import AffineTransform, EuclideanTransform, SimilarityTransform
 from waveorder.focus import focus_from_transverse_band
 
-from biahub.analysis.AnalysisSettings import RegistrationSettings, StabilizationSettings
+from biahub.analysis.AnalysisSettings import RegistrationSettings, StabilizationSettings, EstimateRegistrationSettings
 from biahub.analysis.analyze_psf import detect_peaks
 from biahub.analysis.register import (
     convert_transform_to_ants,
@@ -27,8 +28,9 @@ from biahub.cli.parsing import (
     output_filepath,
     source_position_dirpaths,
     target_position_dirpaths,
+    config_filepath_optional
 )
-from biahub.cli.utils import _check_nan_n_zeros, model_to_yaml
+from biahub.cli.utils import _check_nan_n_zeros, model_to_yaml, yaml_to_model
 
 # TODO: see if at some point these globals should be hidden or exposed.
 NA_DETECTION_SOURCE = 1.35
@@ -437,6 +439,7 @@ def _get_tform_from_beads(
 @target_position_dirpaths()
 @output_filepath()
 @num_processes()
+@config_filepath_optional()
 @click.option(
     "--similarity",
     '-x',
@@ -460,6 +463,7 @@ def estimate_registration(
     target_position_dirpaths,
     output_filepath,
     num_processes,
+    config_filepath,
     similarity,
     t_idx,
     beads,
@@ -473,21 +477,31 @@ def estimate_registration(
     >> biahub estimate-registration -s ./acq_name_labelfree_reconstructed.zarr/0/0/0 -t ./acq_name_lightsheet_deskewed.zarr/0/0/0 -o ./output.yml
     -x  flag to use similarity transform (rotation, translation, scaling) default:Eucledian (rotation, translation)
     """
+    if config_filepath:
+        click.echo("reading config file")
+        click.echo(config_filepath)
 
-    assert len(source_position_dirpaths) == 1, "Only one source position is supported"
-    assert len(target_position_dirpaths) == 1, "Only one target position is supported"
+        settings = yaml_to_model(config_filepath, EstimateRegistrationSettings)
+        target_channel_index = settings.target_channel_index
+        source_channel_index = settings.source_channel_index
+        pre_affine_90degree_rotation = settings.pre_affine_90degree_rotation
 
-    click.echo("\nTarget channel INFO:")
-    print_info(target_position_dirpaths[0], verbose=False)
-    click.echo("\nSource channel INFO:")
-    print_info(source_position_dirpaths[0], verbose=False)
+    else:
+        assert len(source_position_dirpaths) == 1, "Only one source position is supported"
+        assert len(target_position_dirpaths) == 1, "Only one target position is supported"
 
-    click.echo()  # prints empty line
-    target_channel_index = int(input("Enter target channel index: "))
-    source_channel_index = int(input("Enter source channel index: "))
-    pre_affine_90degree_rotation = int(
-        input("Rotate the source channel by 90 degrees? (0, 1, or -1): ")
-    )
+        click.echo("\nTarget channel INFO:")
+        print_info(target_position_dirpaths[0], verbose=False)
+        click.echo("\nSource channel INFO:")
+        print_info(source_position_dirpaths[0], verbose=False)
+
+        click.echo()  # prints empty line
+        target_channel_index = int(input("Enter target channel index: "))
+        source_channel_index = int(input("Enter source channel index: "))
+        pre_affine_90degree_rotation = int(
+            input("Rotate the source channel by 90 degrees? (0, 1, or -1): ")
+        )
+
 
     with open_ome_zarr(source_position_dirpaths[0], mode="r") as source_channel_position:
         source_channels = source_channel_position.channel_names
@@ -509,14 +523,17 @@ def estimate_registration(
     additional_source_channels.remove(source_channel_name)
     if target_channel_name in additional_source_channels:
         additional_source_channels.remove(target_channel_name)
+    if config_filepath:
+        flag_apply_to_all_channels=settings.flag_apply_to_all_channels
 
-    flag_apply_to_all_channels = 'N'
-    if len(additional_source_channels) > 0:
-        flag_apply_to_all_channels = str(
-            input(
-                f"Would you like to register these additional source channels: {additional_source_channels}? (y/N): "
+    else:
+        flag_apply_to_all_channels = 'N'
+        if len(additional_source_channels) > 0:
+            flag_apply_to_all_channels = str(
+                input(
+                    f"Would you like to register these additional source channels: {additional_source_channels}? (y/N): "
+                )
             )
-        )
 
     source_channel_names = [source_channel_name]
     if flag_apply_to_all_channels in ('Y', 'y'):
