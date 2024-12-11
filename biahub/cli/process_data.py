@@ -7,7 +7,7 @@ import submitit
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate, process_single_position
 
-from biahub.analysis.AnalysisSettings import ProcessingSettings
+from biahub.analysis.AnalysisSettings import ProcessingImportFuncSettings
 from biahub.analysis.imgproc import process_czyx
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
@@ -47,7 +47,7 @@ def process_w_imports(
     Process data with functions specified in the config file.
 
     Example usage:
-    biahub process_w_imports -i ./timelapse.zarr/0/0/0 -c ./process_params.yml -o ./processed_timelapse.zarr -j 1
+    biahub process-w-imports -i ./timelapse.zarr/0/0/0 -c ./process_params.yml -o ./processed_timelapse.zarr -j 1
     """
     # Convert to Path objects
     output_dirpath = Path(output_dirpath)
@@ -61,7 +61,7 @@ def process_w_imports(
         channel_names = dataset.channel_names
         scale_dataset = dataset.scale
 
-        settings = yaml_to_model(config_filepath, ProcessingSettings)
+        settings = yaml_to_model(config_filepath, ProcessingImportFuncSettings)
 
         if settings.processing_functions is not None:
             for proc in settings.processing_functions:

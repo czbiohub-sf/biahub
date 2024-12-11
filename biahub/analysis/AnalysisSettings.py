@@ -28,8 +28,13 @@ class ProcessingFunctions(BaseModel):
     kwargs: Dict[str, Any] = {}
 
 
-class ProcessingSettings(MyBaseModel):
+class ProcessingImportFuncSettings(MyBaseModel):
     processing_functions: list[ProcessingFunctions] = []
+
+
+class ProcessingSettings(MyBaseModel):
+    fliplr: Optional[bool] = False
+    flipud: Optional[bool] = False
 
 
 class DeskewSettings(MyBaseModel):
