@@ -75,12 +75,14 @@ def process_w_imports(
 
         # FIXME: temporary for binning functions
         if any(
-            proc.function.__name__ == "binning_zyx" for proc in settings.processing_functions
+            proc.function.__name__ == "binning_czyx" for proc in settings.processing_functions
         ):
+            click.echo("Binning output shape is hard")
             # Get the binning factor from the first binning function found
             for proc in settings.processing_functions:
-                if proc.function.__name__ == "binning_zyx":
-                    binning_factor = proc.kwargs.get("binning_factor", (2, 2, 2))
+                if proc.function.__name__ == "binning_czyx":
+                    binning_factor = proc.kwargs.get("binning_factor_zyx", (1, 4, 4))
+                    click.echo(f"Binning factor: {binning_factor}")
                     break
 
             # Calculate new dimensions after binning
