@@ -1,5 +1,3 @@
-import importlib
-
 from pathlib import Path
 
 import click
@@ -22,21 +20,6 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.cli.utils import yaml_to_model
-
-
-def load_preprocessing_functions(preprocessing_list):
-    functions = []
-    for preproc in preprocessing_list:
-        func_str = preproc["function"]
-        if isinstance(func_str, str):
-            module_name, func_name = func_str.rsplit('.', 1)
-            module = importlib.import_module(module_name)
-            func = getattr(module, func_name)
-        else:
-            func = func_str
-        preproc["function"] = func
-        functions.append(preproc)
-    return functions
 
 
 def segment_data(
@@ -85,14 +68,13 @@ def segment_data(
             czyx_data[:, z_slice_2D : z_slice_2D + 1] if z_slice_2D is not None else czyx_data
         )
         # Apply preprocessing functions
-        preprocessing_functions = load_preprocessing_functions(model_args.preprocessing)
+        preprocessing_functions = model_args.preprocessing
         for preproc in preprocessing_functions:
-            func = preproc["function"]
-            kwargs = preproc.get("kwargs", {})
+            func = preproc.function
+            kwargs = preproc.kwargs
             c_idx = preproc['channel']
 
-            # TODO: find a better way to do this
-            # Convert list to tuple for out_range
+            # Convert list to tuple for out_range if needed
             if "out_range" in kwargs and isinstance(kwargs["out_range"], list):
                 kwargs["out_range"] = tuple(kwargs["out_range"])
 
