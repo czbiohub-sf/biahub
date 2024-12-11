@@ -3,7 +3,6 @@ from multiprocessing import Pool
 
 import ants
 import click
-import dask.array as da
 import napari
 import numpy as np
 
@@ -493,14 +492,14 @@ def estimate_registration(
     with open_ome_zarr(source_position_dirpaths[0], mode="r") as source_channel_position:
         source_channels = source_channel_position.channel_names
         source_channel_name = source_channels[source_channel_index]
-        source_channel_data = da.from_zarr(source_channel_position.data)[
+        source_channel_data = source_channel_position.data.dask_array()[
             :, source_channel_index
         ]
         source_channel_voxel_size = source_channel_position.scale[-3:]
 
     with open_ome_zarr(target_position_dirpaths[0], mode="r") as target_channel_position:
         target_channel_name = target_channel_position.channel_names[target_channel_index]
-        target_channel_data = da.from_zarr(target_channel_position.data)[
+        target_channel_data = target_channel_position.data.dask_array()[
             :, target_channel_index
         ]
         voxel_size = target_channel_position.scale
