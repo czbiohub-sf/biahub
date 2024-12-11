@@ -223,7 +223,7 @@ def segment(
     input_memory = num_cpus * Z * Y * X * gb_per_element
     gb_ram_request = np.ceil(np.max([1, input_memory])).astype(int)
     num_gpus = 1
-
+    slurm_time = np.ceil(np.max([60, T * 0.75])).astype(int)
     # Prepare SLURM arguments
     slurm_args = {
         "slurm_job_name": "segment",
@@ -231,7 +231,7 @@ def segment(
         "slurm_mem_per_cpu": f"{gb_ram_request}G",
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,  # process up to 100 positions at a time
-        "slurm_time": 60,
+        "slurm_time": slurm_time,
         "slurm_partition": "gpu",
     }
     if sbatch_filepath:
