@@ -1,5 +1,5 @@
 # biahub
-Bio-image analysis hub. 
+Bio-image analysis hub.
 
 ## Install
 
@@ -27,6 +27,11 @@ iohub convert \
     -o ./acq_name_lightsheet.zarr
 
 # DECONVOLVE FLUORESCENCE
+# (optional) characterize the PSF
+biahub characterize-psf
+    -i ./beads.zarr \
+    -c ./characterize_params.yml \
+    -o ./report/
 # estimate PSF parameters
 biahub estimate-psf \
     -i ./beads.zarr \
