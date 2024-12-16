@@ -119,7 +119,7 @@ def estimate_stitch(
             if fov0 in fov_names and fov1 in fov_names:
                 col_fov_pairs.append((fov0, fov1))
 
-    slurm_out_path = output_filepath.parent / "slurm_output" / "shift-%j.out"
+    slurm_out_path = output_filepath.parent / "slurm_output"
     csv_dirpath = (
         output_filepath.parent / 'raw_shifts' / input_zarr_path.name.replace('.zarr', '')
     )
