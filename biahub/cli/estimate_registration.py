@@ -351,9 +351,12 @@ def beads_based_registration(
             else:
                 transforms[i] = None
 
-    # Interpolate missing transforms
+    # Interpolate missing transforms 
+    click.echo(f"Interpolating missing transforms at time indices: {np.where(transforms == None)[0]}")
     x, y = zip(*[(i, transforms[i]) for i in range(T) if transforms[i] is not None])
     f = interp1d(x, y, axis=0, kind="linear", fill_value="extrapolate")
+
+    
 
     return f(range(T)).tolist()
 
