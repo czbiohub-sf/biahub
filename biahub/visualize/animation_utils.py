@@ -267,13 +267,12 @@ def add_scale_bar(
 
 def add_text_overlay(
     viewer: napari.Viewer,
-    show_time: bool = True,
-    show_z: bool = True,
+    time_axis: Optional[int] = 0,  # None to disable time display
+    z_axis: Optional[int] = 1,  # None to disable z display
     position: ElementPosition = ElementPosition.TOP_LEFT,
     margin_factor: float = 0.05,
     text_size: int = 20,
     color: str = "white",
-    delta_t: float = 1.0,  # minutes per timestep
     layer_name: str = "time_z_overlay",
 ) -> None:
     """
@@ -283,10 +282,10 @@ def add_text_overlay(
     ----------
     viewer : napari.Viewer
         The napari viewer instance.
-    show_time : bool, default=True
-        Whether to show the time overlay.
-    show_z : bool, default=True
-        Whether to show the z position overlay.
+    time_axis : Optional[int], default=0
+        Index of the time axis. Set to None to disable time display.
+    z_axis : Optional[int], default=1
+        Index of the z axis. Set to None to disable z display.
     position : ElementPosition, default=ElementPosition.TOP_LEFT
         Position of the text overlay.
     margin_factor : float, default=0.05
@@ -295,8 +294,6 @@ def add_text_overlay(
         Size of the text.
     color : str, default="white"
         Color of the text.
-    delta_t : float, default=1.0
-        Minutes per timestep.
     layer_name : str, default="time_z_overlay"
         Name of the overlay layer.
 
@@ -307,7 +304,14 @@ def add_text_overlay(
 
     Usage
     -----
-    text_overlay = add_text_overlay(viewer, show_time=True, show_z=True, position=ElementPosition.TOP_LEFT, margin_factor=0.05, text_size=20, color="white", delta_t=1.0, layer_name="time_z_overlay")
+    # Show both time and z
+    text_overlay = add_text_overlay(viewer, time_axis=0, z_axis=1)
+
+    # Show only time
+    text_overlay = add_text_overlay(viewer, time_axis=0, z_axis=None)
+
+    # Show only z
+    text_overlay = add_text_overlay(viewer, time_axis=None, z_axis=1)
     """
     # Clear existing overlays and callbacks
     _clear_overlays(viewer, layer_name)
@@ -316,17 +320,19 @@ def add_text_overlay(
     scale = viewer.layers[0].scale
 
     def update_overlay():
-        if not (show_time or show_z):
+        if time_axis is None and z_axis is None:
             return
 
         parts = []
-        if show_time:
-            hh = int((viewer.dims.current_step[0] * delta_t) // 60)
-            mm = int((viewer.dims.current_step[0] * delta_t) % 60)
+        if time_axis is not None:
+            # Convert time to hours:minutes using the scale
+            total_minutes = viewer.dims.current_step[time_axis] * scale[time_axis]
+            hh = int(total_minutes // 60)
+            mm = int(total_minutes % 60)
             parts.append(f"t = {hh}h{mm:02d}m")
 
-        if show_z:
-            zz = viewer.dims.current_step[1] * scale[0]
+        if z_axis is not None:
+            zz = viewer.dims.current_step[z_axis] * scale[z_axis]
             parts.append(f"z = {zz:.2f}µm")
 
         text = ", ".join(parts)

@@ -22,7 +22,7 @@ viewer = napari.Viewer()
 layer = viewer.add_image(
     data,
     name='random_image',
-    scale=(1, 0.25, 0.108, 0.108),  # (T:min, Z:µm, Y:µm, X:µm)
+    scale=(5.0, 0.25, 0.108, 0.108),  # (T:min, Z:µm, Y:µm, X:µm)
     contrast_limits=(0, 1),
 )
 
@@ -36,15 +36,14 @@ add_scale_bar(
     color='white'
 )
 
-# Add time and z position overlay
+# Add time and z position overlay using axis indices
 add_text_overlay(
     viewer,
-    show_time=True,
-    show_z=True,
+    time_axis=0,  # First dimension is time
+    z_axis=1,     # Second dimension is Z
     position=ElementPosition.TOP_LEFT,
-    text_size=20,
-    color='white',
-    delta_t=5  # 5 minutes per timestep
+    text_size=30,
+    color='black'
 )
 
 # Record animation looping through T and Z axes
