@@ -403,13 +403,24 @@ def simple_recording(
         actual_max = axis_size - 1 if max_val is None else max_val
         actual_duration = default_duration if duration is None else duration
 
-        # Set to start position and capture initial keyframe
+        # Calculate number of frames for this transition
+        n_frames = int(actual_duration * fps)
+
+        # Generate intermediate positions
+        positions = np.linspace(actual_min, actual_max, n_frames)
+
+        # Set initial position and capture
         viewer.dims.set_point(axis, actual_min)
         animation.capture_keyframe()
 
-        # Move to end position and capture keyframe with specified duration
-        viewer.dims.set_point(axis, actual_max)
-        animation.capture_keyframe(actual_duration * fps)
+        # Capture each intermediate frame
+        for pos in positions[1:]:
+            viewer.dims.set_point(axis, pos)
+            # Force update of any overlay text
+            for layer in viewer.layers:
+                if layer.name.endswith('_overlay'):
+                    viewer.dims.events.current_step(value=viewer.dims.current_step)
+            animation.capture_keyframe(1)  # capture each frame individually
 
         # Add buffer frames at end
         animation.capture_keyframe(buffer_frames)
