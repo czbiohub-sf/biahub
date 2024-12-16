@@ -1,5 +1,6 @@
+from enum import Enum, auto
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 
 import dask.array as da
 import napari
@@ -7,7 +8,13 @@ import numpy as np
 import scipy.ndimage as ndi
 
 from napari_animation import Animation
-from PIL import Image, ImageDraw, ImageFont
+
+
+class ElementPosition(Enum):
+    TOP_LEFT = auto()
+    TOP_RIGHT = auto()
+    BOTTOM_LEFT = auto()
+    BOTTOM_RIGHT = auto()
 
 
 def get_contours(labels, thickness: int, background_label: int):
@@ -60,130 +67,352 @@ def suggest_contrast_limits(intensity_array):
     return lower_limit, upper_limit
 
 
+def _clear_overlays(viewer: napari.Viewer, layer_name: str = "scale_bar") -> None:
+    """
+    Remove all overlay layers with the specified name from the viewer.
+
+    Parameters
+    ----------
+    viewer : napari.Viewer
+        The napari viewer instance.
+    layer_name : str, default="scale_bar"
+        Name of the layers to remove.
+    """
+    # Create a list of layers to remove (to avoid modifying list while iterating)
+    layers_to_remove = [layer for layer in viewer.layers if layer.name == layer_name]
+    for layer in layers_to_remove:
+        viewer.layers.remove(layer)
+
+
+def _clear_dim_callbacks(viewer: napari.Viewer) -> None:
+    """
+    Clear all custom callbacks from the viewer's dimension events.
+    Preserves napari's internal callbacks.
+
+    Parameters
+    ----------
+    viewer : napari.Viewer
+        The napari viewer instance.
+    """
+    # Get all callbacks
+    callbacks = viewer.dims.events.current_step.callbacks
+
+    # Keep only internal napari callbacks (first two callbacks)
+    internal_callbacks = list(callbacks)[:2]
+
+    # Disconnect all existing callbacks
+    for callback in callbacks:
+        viewer.dims.events.current_step.disconnect(callback)
+
+    # Restore internal callbacks
+    for callback in internal_callbacks:
+        viewer.dims.events.current_step.connect(callback)
+
+
+def _create_positioned_element(
+    viewer: napari.Viewer,
+    position: ElementPosition,
+    margin_factor: float = 0.05,
+    text_size: int = 20,
+    color: str = "white",
+    text: Optional[str] = None,
+    layer_name: str = "overlay_element",
+    edge_width: int = 0,
+    line_length: Optional[float] = None,
+) -> None:
+    """
+    Base function to create positioned elements (text overlays, scale bars, etc.) in the viewer.
+
+    Parameters
+    ----------
+    viewer : napari.Viewer
+        The napari viewer instance.
+    position : ElementPosition
+        Position of the element.
+    margin_factor : float, default=0.05
+        Margin from the edge as a fraction of image dimensions.
+    text_size : int, default=20
+        Size of the text.
+    color : str, default="white"
+        Color of the element and text.
+    text : Optional[str], default=None
+        Text to display. If None, no text is shown.
+    layer_name : str, default="overlay_element"
+        Name of the layer.
+    edge_width : int, default=0
+        Width of the line/edge. Set to 0 for invisible lines (text-only overlays).
+    line_length : Optional[float], default=None
+        Length of the line in physical units. If None, a minimal line is created.
+    """
+    # Get dimensions and scale from the first layer
+    scale = viewer.layers[0].scale
+    data_shape = viewer.layers[0].data.shape
+
+    # Calculate image dimensions in physical units
+    Y = data_shape[-2] * scale[-2]
+    X = data_shape[-1] * scale[-1]
+
+    # Calculate margins in physical units
+    margin_y = Y * margin_factor
+    margin_x = X * margin_factor
+
+    # Calculate y position
+    if position in [ElementPosition.TOP_LEFT, ElementPosition.TOP_RIGHT]:
+        y_pos = margin_y
+    else:  # BOTTOM positions
+        y_pos = Y - margin_y
+
+    # Calculate x positions for line
+    if line_length is not None:
+        if position in [ElementPosition.TOP_LEFT, ElementPosition.BOTTOM_LEFT]:
+            x_start = margin_x
+            x_end = x_start + line_length
+        else:  # RIGHT positions
+            x_end = X - margin_x
+            x_start = x_end - line_length
+        lines = np.array([[y_pos, x_start], [y_pos, x_end]])
+    else:
+        # For text-only overlays, create a minimal line at the correct position
+        if position in [ElementPosition.TOP_LEFT, ElementPosition.BOTTOM_LEFT]:
+            x_pos = margin_x
+        else:  # RIGHT positions
+            x_pos = X - margin_x
+        lines = np.array([[y_pos, x_pos], [y_pos, x_pos + 1]])
+
+    # Map position to napari's anchor values
+    anchor_map = {
+        ElementPosition.TOP_LEFT: "upper_left",
+        ElementPosition.TOP_RIGHT: "upper_right",
+        ElementPosition.BOTTOM_LEFT: "lower_left",
+        ElementPosition.BOTTOM_RIGHT: "lower_right",
+    }
+
+    # Add the shape layer
+    text_parameters = (
+        {
+            "text": "label",
+            "size": text_size,
+            "color": [color],
+            "anchor": anchor_map[position],
+        }
+        if text is not None
+        else {}
+    )
+
+    properties = {"label": [text]} if text is not None else {}
+
+    return viewer.add_shapes(
+        lines,
+        shape_type="line",
+        edge_width=edge_width,
+        edge_color=[color],
+        properties=properties,
+        text=text_parameters,
+        name=layer_name,
+    )
+
+
+def add_scale_bar(
+    viewer: napari.Viewer,
+    scale_bar_length: float,
+    position: ElementPosition = ElementPosition.BOTTOM_RIGHT,
+    margin_factor: float = 0.05,
+    line_width: int = 5,
+    text_size: Optional[int] = None,
+    color: str = "white",
+) -> napari.layers.Shapes:
+    """
+    Add a scale bar to the viewer.
+
+    Parameters
+    ----------
+    viewer : napari.Viewer
+        The napari viewer instance.
+    scale_bar_length : float
+        Length of scale bar in micrometers.
+    position : ElementPosition, default=ElementPosition.BOTTOM_RIGHT
+        Position of the scale bar.
+    margin_factor : float, default=0.05
+        Margin from the edge as a fraction of image dimensions.
+    line_width : int, default=5
+        Width of the scale bar line in pixels.
+    text_size : Optional[int], default=None
+        Size of the scale bar text. If None, no text is shown.
+    color : str, default="white"
+        Color of the scale bar and text.
+
+    Returns
+    -------
+    napari.layers.Shapes
+        The scale bar layer.
+
+    Usage
+    -----
+    scale_bar = add_scale_bar(viewer, 100, position=ElementPosition.BOTTOM_RIGHT, margin_factor=0.05, line_width=5, text_size=20, color="white")
+    """
+    text = f"{scale_bar_length}µm" if text_size is not None else None
+
+    return _create_positioned_element(
+        viewer=viewer,
+        position=position,
+        margin_factor=margin_factor,
+        text_size=text_size or 14,
+        color=color,
+        text=text,
+        layer_name="scale_bar",
+        edge_width=line_width,
+        line_length=scale_bar_length,
+    )
+
+
+def add_text_overlay(
+    viewer: napari.Viewer,
+    show_time: bool = True,
+    show_z: bool = True,
+    position: ElementPosition = ElementPosition.TOP_LEFT,
+    margin_factor: float = 0.05,
+    text_size: int = 20,
+    color: str = "white",
+    delta_t: float = 1.0,  # minutes per timestep
+    layer_name: str = "time_z_overlay",
+) -> None:
+    """
+    Add a text overlay to the viewer showing time and/or z position.
+
+    Parameters
+    ----------
+    viewer : napari.Viewer
+        The napari viewer instance.
+    show_time : bool, default=True
+        Whether to show the time overlay.
+    show_z : bool, default=True
+        Whether to show the z position overlay.
+    position : ElementPosition, default=ElementPosition.TOP_LEFT
+        Position of the text overlay.
+    margin_factor : float, default=0.05
+        Margin from the edge as a fraction of image dimensions.
+    text_size : int, default=20
+        Size of the text.
+    color : str, default="white"
+        Color of the text.
+    delta_t : float, default=1.0
+        Minutes per timestep.
+    layer_name : str, default="time_z_overlay"
+        Name of the overlay layer.
+
+    Returns
+    -------
+    napari.layers.Shapes
+        The text overlay layer.
+
+    Usage
+    -----
+    text_overlay = add_text_overlay(viewer, show_time=True, show_z=True, position=ElementPosition.TOP_LEFT, margin_factor=0.05, text_size=20, color="white", delta_t=1.0, layer_name="time_z_overlay")
+    """
+    # Clear existing overlays and callbacks
+    _clear_overlays(viewer, layer_name)
+    _clear_dim_callbacks(viewer)
+
+    scale = viewer.layers[0].scale
+
+    def update_overlay():
+        if not (show_time or show_z):
+            return
+
+        parts = []
+        if show_time:
+            hh = int((viewer.dims.current_step[0] * delta_t) // 60)
+            mm = int((viewer.dims.current_step[0] * delta_t) % 60)
+            parts.append(f"t = {hh}h{mm:02d}m")
+
+        if show_z:
+            zz = viewer.dims.current_step[1] * scale[0]
+            parts.append(f"z = {zz:.2f}µm")
+
+        text = ", ".join(parts)
+        viewer.layers[layer_name].properties = {"label": [text]}
+
+    layer = _create_positioned_element(
+        viewer=viewer,
+        position=position,
+        margin_factor=margin_factor,
+        text_size=text_size,
+        color=color,
+        text="",  # Initial empty text
+        layer_name=layer_name,
+        edge_width=0,
+    )
+
+    # Connect the update function
+    viewer.dims.events.current_step.connect(update_overlay)
+    update_overlay()  # Initial update
+
+    return layer
+
+
 def simple_recording(
     viewer: napari.Viewer,
     output_path: Path,
-    loop_axes: list[Tuple[int, Tuple[Optional[int], Optional[int]]]],
-    capture_factors: list[int],
+    loop_axes: list[tuple[int, tuple[Optional[int], Optional[int]], Optional[float]]],
     fps: int = 60,
-    buffer_frames: int = 10,
+    buffer_duration: float = 0.5,
+    default_duration: float = 5.0,
 ) -> None:
     """
     Generate a recording looping over specified axes in the given sequence.
 
-    Parameters:
-    - viewer: napari.Viewer
+    Parameters
+    ----------
+    viewer : napari.Viewer
         The napari viewer instance.
-    - output_path: Path
+    output_path : Path
         Path to save the final animation file.
-    - loop_axes: List[Tuple[int, Tuple[Optional[int], Optional[int]]]]
-        List of axes and their ranges (axis_index, (min_value, max_value)).
-        Example: [(0, (None, None))] for looping over time, [(1, (None, None))] for channels, [(2, (None, None))] for z-axis.
-        Use None for min/max values to automatically infer them based on the layer data shape.
-    - capture_factors: List[int]
-        List of time scaling factors that correspond to each axis in `loop_axes`. Must be the same length as `loop_axes`.
-    - fps: int, default=60
+    loop_axes : List[Tuple[int, Tuple[Optional[int], Optional[int]], Optional[float]]]
+        List of (axis_index, (min_value, max_value), duration).
+        Any value can be None:
+        - None for min/max: automatically use full axis range
+        - None for duration: use default_duration
+    fps : int, default=60
         Frames per second for the final output.
+    buffer_duration : float, default=0.5
+        Duration in seconds to hold at start and end of each axis transition.
+    default_duration : float, default=5.0
+        Default duration in seconds when None is provided.
 
-    Usage:
-    Record a time-lapse video looping over time, assuming the input is TCZYX:
-    - simple_recording(viewer, Path("output.mp4"), [(0, (None, None))], [1], fps=60)
+    Usage
+    -----
+    Assuming TZYX order, loop over time from t=10 to t=100 in 5 seconds
+    ```python
+    simple_recording(viewer, 'test.mp4', [(0, (10, 100), 5)])
+    ```
+    Loop over two axes t and z with 5 seconds duration each
+    ```python
+    simple_recording(viewer, 'test.mp4', [(0, (None, None), 5), (1, (None, None), 5)])
+    ```
     """
-    viewer.dims.set_point(0, 0)
-    # Check that capture_factors matches the length of loop_axes
-    if len(loop_axes) != len(capture_factors):
-        raise ValueError("The length of capture_factors must match the length of loop_axes.")
-
-    # Reset viewer to the starting point of the first axis
     animation = Animation(viewer)
-    animation.capture_keyframe()
+    buffer_frames = int(buffer_duration * fps)
 
     # Loop over specified axes in sequence
-    for (axis, (min_val, max_val)), capture_factor in zip(loop_axes, capture_factors):
-        # Automatically infer min value if None is provided
-        if min_val is None:
-            min_val = 0
+    for axis, (min_val, max_val), duration in loop_axes:
+        # Get axis size from first layer
+        axis_size = viewer.layers[0].data.shape[axis]
 
-        # Automatically infer max value if None is provided
-        if max_val is None:
-            max_val = viewer.layers[0].data.shape[axis] - 1
+        # Use full range if None is provided
+        actual_min = 0 if min_val is None else min_val
+        actual_max = axis_size - 1 if max_val is None else max_val
+        actual_duration = default_duration if duration is None else duration
 
-        # Loop over the axis and capture keyframes at each point
-        for i in range(min_val, max_val + 1):
-            viewer.dims.set_point(axis, i)
-            animation.capture_keyframe(i * capture_factor)
+        # Set to start position and capture initial keyframe
+        viewer.dims.set_point(axis, actual_min)
+        animation.capture_keyframe()
 
-        # Capture buffer frames for smooth transition
-        for _ in range(buffer_frames):
-            animation.capture_keyframe(i * capture_factor)
+        # Move to end position and capture keyframe with specified duration
+        viewer.dims.set_point(axis, actual_max)
+        animation.capture_keyframe(actual_duration * fps)
+
+        # Add buffer frames at end
+        animation.capture_keyframe(buffer_frames)
 
     # Save the animation
     animation.animate(output_path, fps=fps, canvas_only=True)
-
-
-def add_scale_bar(
-    image_path: str,
-    output_path: str,
-    pixel_size: float,
-    bar_length: float,
-    bar_height: int = 5,
-    bar_color: str = 'white',
-    label_color: str = 'white',
-    position: Tuple[int, int] = (-50, -50),
-    font_size: int = 15,
-) -> None:
-    """
-    Add a scale bar to the given image.
-
-    Parameters
-    ----------
-    image_path : str
-        Path to the input image.
-    output_path : str
-        Path to save the image with scale bar.
-    pixel_size : float
-        Size of one pixel in units (e.g., micrometers).
-    bar_length : float
-        Length of the scale bar in the same units as pixel_size.
-    bar_height : int, optional
-        Height of the scale bar in pixels. Default is 5 pixels.
-    bar_color : str, optional
-        Color of the scale bar. Default is 'white'.
-    label_color : str, optional
-        Color of the label text. Default is 'white'.
-    position : tuple of int, optional
-        Tuple (x, y) indicating the top-left position of the scale bar. Default is (10, 10).
-
-    Examples
-    --------
-    >>> add_scale_bar("input.jpg", "output_with_scale.jpg", 0.5, 100)
-    """
-
-    # Calculate the length of the scale bar in pixels
-    bar_length_pixels = int(bar_length / pixel_size)
-
-    # Load the image
-    image = Image.open(image_path)
-    draw = ImageDraw.Draw(image)
-
-    if position[0] < 0:
-        position = (image.width + position[0] - bar_length_pixels, position[1])
-
-    if position[1] < 0:
-        position = (position[0], image.height + position[1])
-
-    # Draw the scale bar
-    bar_top_left = position
-    bar_bottom_right = (position[0] + bar_length_pixels, position[1] + bar_height)
-    draw.rectangle([bar_top_left, bar_bottom_right], fill=bar_color)
-
-    # Draw the scale bar label (optional, but good to have)
-    try:
-        font = ImageFont.truetype("arial.ttf", font_size)
-    except IOError:
-        font = ImageFont.load_default()
-    label_position = (bar_top_left[0], bar_top_left[1] - 20)
-    draw.text(label_position, f"{bar_length} units", fill=label_color, font=font)
-
-    # Save the image
-    image.save(output_path)
