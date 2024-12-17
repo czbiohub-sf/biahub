@@ -15,7 +15,11 @@ from skimage.feature import match_descriptors
 from skimage.transform import AffineTransform, EuclideanTransform, SimilarityTransform
 from waveorder.focus import focus_from_transverse_band
 
-from biahub.analysis.AnalysisSettings import RegistrationSettings, StabilizationSettings, EstimateRegistrationSettings
+from biahub.analysis.AnalysisSettings import (
+    EstimateRegistrationSettings,
+    RegistrationSettings,
+    StabilizationSettings,
+)
 from biahub.analysis.analyze_psf import detect_peaks
 from biahub.analysis.register import (
     convert_transform_to_ants,
@@ -24,11 +28,11 @@ from biahub.analysis.register import (
     get_3D_rotation_matrix,
 )
 from biahub.cli.parsing import (
+    config_filepath_optional,
     num_processes,
     output_filepath,
     source_position_dirpaths,
     target_position_dirpaths,
-    config_filepath_optional
 )
 from biahub.cli.utils import _check_nan_n_zeros, model_to_yaml, yaml_to_model
 
@@ -50,19 +54,6 @@ COLOR_CYCLE = [
     "magenta",
 ]
 
-# APPROX_TFORM = [
-#     [1, 0, 0, 0],
-#     [0, 0, -1.288, 1960],
-#     [0, 1.288, 0, -460],
-#     [0, 0, 0, 1],
-# ]
-
-APPROX_TFORM = [
-    [1, 0, 0, 0],
-    [0, 0, -1.288, 1498],
-    [0, 1.29, 0, -165],
-    [0, 0, 0, 1],
-]
 
 VERBOSE = False  # Set to True to see the detected peaks verbose
 WINDOW_SIZE = 20  # Number of previous transforms to consider for filtering
@@ -351,12 +342,12 @@ def beads_based_registration(
             else:
                 transforms[i] = None
 
-    # Interpolate missing transforms 
-    click.echo(f"Interpolating missing transforms at time indices: {np.where(transforms == None)[0]}")
+    # Interpolate missing transforms
+    click.echo(
+        f"Interpolating missing transforms at time indices: {np.where(transforms == None)[0]}"
+    )
     x, y = zip(*[(i, transforms[i]) for i in range(T) if transforms[i] is not None])
     f = interp1d(x, y, axis=0, kind="linear", fill_value="extrapolate")
-
-    
 
     return f(range(T)).tolist()
 
@@ -482,12 +473,17 @@ def estimate_registration(
     """
     if config_filepath:
         click.echo("reading config file")
-        click.echo(config_filepath)
-
         settings = yaml_to_model(config_filepath, EstimateRegistrationSettings)
-        target_channel_index = settings.target_channel_index
-        source_channel_index = settings.source_channel_index
+
+        target_channel = settings.target_channel[0]
+        source_channel = settings.source_channel[0]
         pre_affine_90degree_rotation = settings.pre_affine_90degree_rotation
+        flag_apply_to_all_channels = settings.flag_apply_to_all_channels
+
+        click.echo(f"\nTarget channel: {target_channel}")
+        click.echo(f"\nSource channel: {source_channel}")
+        APPROX_TFORM = settings.aprox_initial_transform_zyx
+        click.echo(f"\nApproximate initial transform: {APPROX_TFORM}")
 
     else:
         assert len(source_position_dirpaths) == 1, "Only one source position is supported"
@@ -504,10 +500,28 @@ def estimate_registration(
         pre_affine_90degree_rotation = int(
             input("Rotate the source channel by 90 degrees? (0, 1, or -1): ")
         )
-
+        affine_transform = int(
+            input("Initial transform for Neuromast or cell? (0 for neuromast, 1 for cell): ")
+        )
+        if affine_transform:
+            APPROX_TFORM = [
+                [1, 0, 0, 0],
+                [0, 0, -1.288, 1960],
+                [0, 1.288, 0, -460],
+                [0, 0, 0, 1],
+            ]
+        else:
+            APPROX_TFORM = [
+                [1, 0, 0, 0],
+                [0, 0, -1.288, 1498],
+                [0, 1.29, 0, -165],
+                [0, 0, 0, 1],
+            ]
 
     with open_ome_zarr(source_position_dirpaths[0], mode="r") as source_channel_position:
         source_channels = source_channel_position.channel_names
+        if config_filepath:
+            source_channel_index = source_channels.index(source_channel)
         source_channel_name = source_channels[source_channel_index]
         source_channel_data = source_channel_position.data.dask_array()[
             :, source_channel_index
@@ -515,7 +529,10 @@ def estimate_registration(
         source_channel_voxel_size = source_channel_position.scale[-3:]
 
     with open_ome_zarr(target_position_dirpaths[0], mode="r") as target_channel_position:
-        target_channel_name = target_channel_position.channel_names[target_channel_index]
+        target_channels = target_channel_position.channel_names
+        if config_filepath:
+            target_channel_index = target_channels.index(target_channel)
+        target_channel_name = target_channels[target_channel_index]
         target_channel_data = target_channel_position.data.dask_array()[
             :, target_channel_index
         ]
@@ -526,10 +543,7 @@ def estimate_registration(
     additional_source_channels.remove(source_channel_name)
     if target_channel_name in additional_source_channels:
         additional_source_channels.remove(target_channel_name)
-    if config_filepath:
-        flag_apply_to_all_channels=settings.flag_apply_to_all_channels
-
-    else:
+    if not config_filepath:
         flag_apply_to_all_channels = 'N'
         if len(additional_source_channels) > 0:
             flag_apply_to_all_channels = str(

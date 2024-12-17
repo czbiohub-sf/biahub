@@ -85,6 +85,7 @@ def config_filepath() -> Callable:
 
     return decorator
 
+
 def config_filepath_optional() -> Callable:
     def decorator(f: Callable) -> Callable:
         return click.option(
@@ -97,7 +98,6 @@ def config_filepath_optional() -> Callable:
         )(f)
 
     return decorator
-
 
 
 def output_dirpath() -> Callable:
