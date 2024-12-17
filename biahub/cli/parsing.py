@@ -94,7 +94,7 @@ def config_filepath_optional() -> Callable:
             required=False,
             default=None,
             type=click.Path(exists=True, file_okay=True, dir_okay=False),
-            help="Path to YAML configuration file.",
+            help="Path to optional YAML configuration file. Use this to avoid manual input of parameters.",
         )(f)
 
     return decorator
