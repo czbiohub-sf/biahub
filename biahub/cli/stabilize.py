@@ -107,20 +107,20 @@ def stabilize(input_position_dirpaths, output_dirpath, config_filepath, num_proc
     elif isinstance(settings.time_indices, int):
         time_indices = [settings.time_indices]
 
-    transform_t0_sy = np.abs(settings.affine_transform_zyx_list[0][2][1]).round(3)
-    
-    # Calculate scale
-    new_scale = [
-        scale_dataset[0],
-        scale_dataset[1],
-        scale_dataset[2],
-        scale_dataset[3] * transform_t0_sy,
-        scale_dataset[4] * transform_t0_sy,
-    ]
+    # transform_t0_sy = np.abs(settings.affine_transform_zyx_list[0][2][1]).round(3)
+
+    # # Calculate scale
+    # new_scale = [
+    #     scale_dataset[0],
+    #     scale_dataset[1],
+    #     scale_dataset[2],
+    #     scale_dataset[3] * transform_t0_sy,
+    #     scale_dataset[4] * transform_t0_sy,
+    # ]
     output_metadata = {
         "shape": (len(time_indices), len(channel_names), Z, Y, X),
         "chunks": None,
-        "scale": new_scale,
+        "scale": settings.voxel_size,
         "channel_names": channel_names,
         "dtype": np.float32,
     }
