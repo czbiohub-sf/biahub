@@ -1,0 +1,9 @@
+block_size: [64, 64, 32]
+blur_kernel_size: 3
+nms_distance: 32
+min_distance: 50
+threshold_abs: 200.0
+max_num_peaks: 2000
+exclude_border: [5, 10, 5]
+device: "cuda"
+axis_labels: ["SCAN", "TILT", "COVERSLIP"]

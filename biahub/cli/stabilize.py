@@ -16,27 +16,33 @@ from biahub.cli.utils import (
 
 
 def apply_stabilization_transform(
-    zyx_data: np.ndarray, list_of_shifts: list[np.ndarray], t_idx: int, **kwargs
+    zyx_data: np.ndarray,
+    list_of_shifts: list[np.ndarray],
+    t_idx: int,
+    output_shape: tuple[int, int, int] = None,
 ):
     """Apply stabilization to a single zyx"""
-    click.echo(f'shifting matrix with t_idx:{t_idx} \n{list_of_shifts[t_idx]}')
-    Z, Y, X = zyx_data.shape[-3:]
+    if output_shape is None:
+        output_shape = zyx_data.shape[-3:]
 
     # Get the transformation matrix for the current time index
     tx_shifts = convert_transform_to_ants(list_of_shifts[t_idx])
 
     if zyx_data.ndim == 4:
-        stabilized_czyx = np.zeros((zyx_data.shape[0], Z, Y, X), dtype=np.float32)
+        stabilized_czyx = np.zeros((zyx_data.shape[0],) + output_shape, dtype=np.float32)
         for c in range(zyx_data.shape[0]):
             stabilized_czyx[c] = apply_stabilization_transform(
-                zyx_data[c], list_of_shifts, t_idx
+                zyx_data[c], list_of_shifts, t_idx, output_shape
             )
         return stabilized_czyx
     else:
+        click.echo(f'shifting matrix with t_idx:{t_idx} \n{list_of_shifts[t_idx]}')
+        target_zyx_ants = ants.from_numpy(np.zeros((output_shape), dtype=np.float32))
+
         zyx_data = np.nan_to_num(zyx_data, nan=0)
         zyx_data_ants = ants.from_numpy(zyx_data.astype(np.float32))
         stabilized_zyx = tx_shifts.apply_to_image(
-            zyx_data_ants, reference=zyx_data_ants
+            zyx_data_ants, reference=target_zyx_ants
         ).numpy()
 
     return stabilized_zyx

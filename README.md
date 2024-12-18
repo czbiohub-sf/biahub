@@ -1,5 +1,10 @@
 # biahub
-Bio-image analysis hub. 
+
+Bio-image analysis hub supporting high-throughput data reconstruction on HPC clusters with [Slurm](https://slurm.schedmd.com/documentation.html) workload management. 
+
+![acquisition and reconstruction schematic](https://github.com/czbiohub-sf/shrimPy/blob/main/docs/figure_3a.png)
+
+`biahub` was originally developed to reconstruct data acquired on the [mantis](https://doi.org/10.1093/pnasnexus/pgae323) microscope using the [shrimPy](https://github.com/czbiohub-sf/shrimPy) acquisition engine, and has since been extended to process diverse multimodal datasets. `biahub` reconstruction workflows rely on OME-ZARR datasets (for example, as created with [iohub](https://github.com/czbiohub-sf/iohub)) which enable efficient parallelization across compute nodes. Available reconstruction routines are listed below; more information can be obtained with `biahub --help`. 
 
 ## Install
 
@@ -13,7 +18,7 @@ pip install -e ./biahub
 
 ## Data reconstruction
 
-Data reconstruction uses a command line interface. All reconstruction calls take an input `-i` and an output `-o`, and most reconstruction calls use configuration files passed via a `-c` option.
+Data reconstruction uses a command line interface. All reconstruction calls take an input `-i` and an output `-o`, and most reconstruction calls use configuration files passed via a `-c` option. Reconstruction workflows launch multiple Slurm jobs and can also be run locally using the `-l` flag.
 
 A typical set of CLI calls to go from raw data to registered volumes looks like:
 
@@ -27,6 +32,11 @@ iohub convert \
     -o ./acq_name_lightsheet.zarr
 
 # DECONVOLVE FLUORESCENCE
+# (optional) characterize the PSF
+biahub characterize-psf
+    -i ./beads.zarr \
+    -c ./characterize_params.yml \
+    -o ./report/
 # estimate PSF parameters
 biahub estimate-psf \
     -i ./beads.zarr \
