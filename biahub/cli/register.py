@@ -24,6 +24,7 @@ from biahub.cli.utils import (
     create_empty_hcs_zarr,
     process_single_position_v2,
     yaml_to_model,
+    estimate_resources,
 )
 
 
@@ -153,21 +154,17 @@ def register(
     copy_n_paste_kwargs = {"czyx_slicing_params": ([Z_slice, Y_slice, X_slice])}
 
     # Estimate resources
-    num_cpus = T * C
-    input_memory = np.ceil(4 * num_cpus * Z * Y * X * 4 / 2**30)
-    gb_ram_request = np.max([1, input_memory]).astype(int)
+    num_cpus, gb_ram = estimate_resources(shape=(T, C, Z, Y, X), ram_multiplier=10)
 
     # Prepare SLURM arguments
-
     slurm_out_path = Path(output_dirpath).parent / "slurm_output"
     slurm_args = {
         "slurm_job_name": "register",
-        "slurm_mem_per_cpu": f"{gb_ram_request}G",
+        "slurm_mem_per_cpu": f"{gb_ram}G",
         "slurm_cpus_per_task": num_cpus,
-        # process up to 64 positions at a time
-        "slurm_array_parallelism": 64,
+        "slurm_array_parallelism": 100,
         "slurm_time": 60,
-        "slurm_partition": "cpu",
+        "slurm_partition": "preempted",
     }
 
     # Override defaults if sbatch_filepath is provided
