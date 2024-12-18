@@ -95,7 +95,6 @@ def deskew(
         shape=(T, C, Z, Y, X),
         ram_multiplier=12
     )
-    click.echo(f'Requesting {num_cpus} CPUs with {gb_ram}G RAM per CPU')
 
     # Prepare SLURM arguments
     slurm_args = {
@@ -118,7 +117,6 @@ def deskew(
         cluster = "slurm"
 
     # Prepare and submit jobs
-    click.echo(f"Preparing jobs: {slurm_args}")
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
 
