@@ -21,11 +21,22 @@ class MyBaseModel(BaseModel):
 
 
 class EstimateRegistrationSettings(MyBaseModel):
-    target_channel: list
-    source_channel: list
-    pre_affine_90degree_rotation: int
-    flag_apply_to_all_channels: str
-    aprox_initial_transform_zyx: list
+    target_channel_name: list
+    source_channel_name: list
+    stabilization_channels_names: list
+    affine_90degree_rotation: int
+    aprox_initial_transform_zyx: list[str]
+
+    @field_validator("aprox_initial_transform_zyx")
+    @classmethod
+    def check_affine_transform_zyx_list(cls, v):
+        if not isinstance(v, list):
+            raise ValueError("affine_transform_list must be a list")
+        arr = np.array(v)
+        if arr.shape != (4, 4):
+            raise ValueError("Each element in affine_transform_list must be a 3x3 ndarray")
+
+        return v
 
 
 class ProcessingSettings(MyBaseModel):
