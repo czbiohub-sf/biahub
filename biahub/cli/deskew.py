@@ -2,7 +2,6 @@ from pathlib import Path
 from typing import List
 
 import click
-import numpy as np
 import submitit
 import torch
 
@@ -21,7 +20,7 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import yaml_to_model, estimate_resources
+from biahub.cli.utils import estimate_resources, yaml_to_model
 
 # Needed for multiprocessing with GPUs
 # https://github.com/pytorch/pytorch/issues/40403#issuecomment-1422625325
@@ -91,10 +90,7 @@ def deskew(
     }
 
     # Estimate resources
-    num_cpus, gb_ram = estimate_resources(
-        shape=(T, C, Z, Y, X),
-        ram_multiplier=12
-    )
+    num_cpus, gb_ram = estimate_resources(shape=(T, C, Z, Y, X), ram_multiplier=12)
 
     # Prepare SLURM arguments
     slurm_args = {
