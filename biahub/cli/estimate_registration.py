@@ -8,7 +8,6 @@ import napari
 import numpy as np
 
 from iohub import open_ome_zarr
-from iohub.reader import print_info
 from scipy.interpolate import interp1d
 from scipy.spatial.distance import euclidean
 from skimage.feature import match_descriptors
@@ -28,7 +27,7 @@ from biahub.analysis.register import (
     get_3D_rotation_matrix,
 )
 from biahub.cli.parsing import (
-    config_filepath_optional,
+    config_filepath,
     num_processes,
     output_filepath,
     source_position_dirpaths,
@@ -433,7 +432,7 @@ def _get_tform_from_beads(
 @target_position_dirpaths()
 @output_filepath()
 @num_processes()
-@config_filepath_optional()
+@config_filepath()
 @click.option(
     "--similarity",
     '-x',
@@ -471,67 +470,33 @@ def estimate_registration(
     >> biahub estimate-registration -s ./acq_name_labelfree_reconstructed.zarr/0/0/0 -t ./acq_name_lightsheet_deskewed.zarr/0/0/0 -o ./output.yml
     -x  flag to use similarity transform (rotation, translation, scaling) default:Eucledian (rotation, translation)
     """
-    if config_filepath:
-        click.echo("reading config file")
-        settings = yaml_to_model(config_filepath, EstimateRegistrationSettings)
 
-        target_channel = settings.target_channel[0]
-        source_channel = settings.source_channel[0]
-        pre_affine_90degree_rotation = settings.pre_affine_90degree_rotation
-        flag_apply_to_all_channels = settings.flag_apply_to_all_channels
+    click.echo("reading config file")
+    settings = yaml_to_model(config_filepath, EstimateRegistrationSettings)
 
-        click.echo(f"\nTarget channel: {target_channel}")
-        click.echo(f"\nSource channel: {source_channel}")
-        APPROX_TFORM = settings.aprox_initial_transform_zyx
-        click.echo(f"\nApproximate initial transform: {APPROX_TFORM}")
+    target_channel_name = settings.target_channel_name[0]
+    source_channel_name = settings.source_channel_name[0]
+    affine_90degree_rotation = settings.affine_90degree_rotation
+    stabilization_channels_names = settings.stabilization_channels_names
 
-    else:
-        assert len(source_position_dirpaths) == 1, "Only one source position is supported"
-        assert len(target_position_dirpaths) == 1, "Only one target position is supported"
+    click.echo(f"\nTarget channel: {target_channel_name}")
+    click.echo(f"\nSource channel: {source_channel_name}")
+    click.echo(f"\nStabilization Channels: {stabilization_channels_names}")
 
-        click.echo("\nTarget channel INFO:")
-        print_info(target_position_dirpaths[0], verbose=False)
-        click.echo("\nSource channel INFO:")
-        print_info(source_position_dirpaths[0], verbose=False)
-
-        click.echo()  # prints empty line
-        target_channel_index = int(input("Enter target channel index: "))
-        source_channel_index = int(input("Enter source channel index: "))
-        pre_affine_90degree_rotation = int(
-            input("Rotate the source channel by 90 degrees? (0, 1, or -1): ")
-        )
-        affine_transform = int(
-            input("Initial transform for Neuromast or cell? (0 for neuromast, 1 for cell): ")
-        )
-        if affine_transform:
-            APPROX_TFORM = [
-                [1, 0, 0, 0],
-                [0, 0, -1.288, 1960],
-                [0, 1.288, 0, -460],
-                [0, 0, 0, 1],
-            ]
-        else:
-            APPROX_TFORM = [
-                [1, 0, 0, 0],
-                [0, 0, -1.288, 1498],
-                [0, 1.29, 0, -165],
-                [0, 0, 0, 1],
-            ]
+    approx_tform = settings.aprox_initial_transform_zyx
+    approx_tform = np.array(approx_tform)
 
     with open_ome_zarr(source_position_dirpaths[0], mode="r") as source_channel_position:
         source_channels = source_channel_position.channel_names
-        if config_filepath:
-            source_channel_index = source_channels.index(source_channel)
+        source_channel_index = source_channels.index(source_channel_name)
         source_channel_name = source_channels[source_channel_index]
         source_channel_data = source_channel_position.data.dask_array()[
             :, source_channel_index
         ]
         source_channel_voxel_size = source_channel_position.scale[-3:]
-
     with open_ome_zarr(target_position_dirpaths[0], mode="r") as target_channel_position:
         target_channels = target_channel_position.channel_names
-        if config_filepath:
-            target_channel_index = target_channels.index(target_channel)
+        target_channel_index = target_channels.index(target_channel_name)
         target_channel_name = target_channels[target_channel_index]
         target_channel_data = target_channel_position.data.dask_array()[
             :, target_channel_index
@@ -539,36 +504,19 @@ def estimate_registration(
         voxel_size = target_channel_position.scale
         target_channel_voxel_size = voxel_size[-3:]
 
-    additional_source_channels = source_channels.copy()
-    additional_source_channels.remove(source_channel_name)
-    if target_channel_name in additional_source_channels:
-        additional_source_channels.remove(target_channel_name)
-    if not config_filepath:
-        flag_apply_to_all_channels = 'N'
-        if len(additional_source_channels) > 0:
-            flag_apply_to_all_channels = str(
-                input(
-                    f"Would you like to register these additional source channels: {additional_source_channels}? (y/N): "
-                )
-            )
-
-    source_channel_names = [source_channel_name]
-    if flag_apply_to_all_channels in ('Y', 'y'):
-        source_channel_names += additional_source_channels
-
     if beads:
         # Register using bead images
         transforms = beads_based_registration(
             source_channel_data,
             target_channel_data,
-            approx_tform=APPROX_TFORM,
+            approx_tform=approx_tform,
             num_processes=num_processes,
         )
 
         model = StabilizationSettings(
             stabilization_estimation_channel='',
             stabilization_type='xyz',
-            stabilization_channels=source_channel_names,
+            stabilization_channels=stabilization_channels_names,
             affine_transform_zyx_list=transforms,
             time_indices='all',
             voxel_size=voxel_size,
@@ -583,11 +531,11 @@ def estimate_registration(
             source_channel_name,
             target_channel_voxel_size,
             similarity,
-            pre_affine_90degree_rotation,
+            affine_90degree_rotation,
         )
 
         model = RegistrationSettings(
-            source_channel_names=source_channel_names,
+            source_channel_names=stabilization_channels_names,
             target_channel_name=target_channel_name,
             affine_transform_zyx=transform.tolist(),
         )
