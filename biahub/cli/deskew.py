@@ -21,7 +21,7 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import yaml_to_model
+from biahub.cli.utils import yaml_to_model, estimate_resources
 
 # Needed for multiprocessing with GPUs
 # https://github.com/pytorch/pytorch/issues/40403#issuecomment-1422625325
@@ -91,15 +91,16 @@ def deskew(
     }
 
     # Estimate resources
-    gb_per_element = 4 / 2**30  # bytes_per_float32 / bytes_per_gb
-    num_cpus = np.min([T * C, 16])
-    input_memory = num_cpus * Z * Y * X * gb_per_element
-    gb_ram_request = np.ceil(np.max([1, input_memory])).astype(int)
+    num_cpus, gb_ram = estimate_resources(
+        shape=(T, C, Z, Y, X),
+        ram_multiplier=12
+    )
+    click.echo(f'Requesting {num_cpus} CPUs with {gb_ram}G RAM per CPU')
 
     # Prepare SLURM arguments
     slurm_args = {
         "slurm_job_name": "deskew",
-        "slurm_mem_per_cpu": f"{gb_ram_request}G",
+        "slurm_mem_per_cpu": f"{gb_ram}G",
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,  # process up to 100 positions at a time
         "slurm_time": 60,
