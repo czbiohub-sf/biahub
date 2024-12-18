@@ -21,8 +21,6 @@ from biahub.analysis.stitch import (
 from biahub.cli.parsing import config_filepath, input_position_dirpaths, output_dirpath
 from biahub.cli.utils import create_empty_hcs_zarr, process_single_position_v2, yaml_to_model
 
-HAS_SLURM = True
-
 
 @click.command()
 @input_position_dirpaths()
@@ -47,11 +45,8 @@ def stitch(
 
     >>> biahub stitch -i ./input.zarr/*/*/* -c ./stitch_params.yml -o ./output.zarr --temp-path /hpc/scratch/group.comp.micro/
     """
-    if not HAS_SLURM:
-        warnings.warn(
-            "This function is intended to be used with SLURM. "
-            "Running on local machine instead."
-        )
+    # TODO: currently stitch works on one well at a time, need to generalize to multiple wells
+
     # assert not Path(output_dirpath).exists(), f'Output path: {output_dirpath} already exists'
 
     slurm_out_path = Path(output_dirpath).parent / "slurm_output"
@@ -183,7 +178,7 @@ def stitch(
             "slurm_array_parallelism": 100,  # only 100 jobs can run at the same time
             "slurm_time": 30,
             "slurm_job_name": "shift",
-            "slurm_partition": "cpu",
+            "slurm_partition": "preempted",
             "slurm_dependency": f"afterok:{temp_zarr_job.job_id}",
         }
         # Affine transform needs more resources
