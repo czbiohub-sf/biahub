@@ -652,6 +652,6 @@ def estimate_resources(
     gb_per_element = np.dtype(dtype).itemsize / 2**30  # bytes_per_element / bytes_per_gb
     num_cpus = min(T * C, max_num_cpus)
     gb_ram_per_volume = Z * Y * X * gb_per_element
-    gb_ram_per_cpu = np.ceil(min(1, gb_ram_per_volume * ram_multiplier))
+    gb_ram_per_cpu = np.ceil(max(1, gb_ram_per_volume * ram_multiplier))
 
     return int(num_cpus), int(gb_ram_per_cpu)
