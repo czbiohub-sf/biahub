@@ -59,10 +59,6 @@ def register(
     output_dirpath = Path(output_dirpath)
     config_filepath = Path(config_filepath)
 
-    # Handle single position or wildcard filepath
-    click.echo(f"\nInput positions: {[str(path) for path in source_position_dirpaths]}")
-    click.echo(f"Output position: {output_dirpath}")
-
     # Parse from the yaml file
     settings = yaml_to_model(config_filepath, RegistrationSettings)
     matrix = np.array(settings.affine_transform_zyx)
@@ -154,7 +150,7 @@ def register(
     copy_n_paste_kwargs = {"czyx_slicing_params": ([Z_slice, Y_slice, X_slice])}
 
     # Estimate resources
-    num_cpus, gb_ram = estimate_resources(shape=(T, C, Z, Y, X), ram_multiplier=10)
+    num_cpus, gb_ram = estimate_resources(shape=(T, C, Z, Y, X), ram_multiplier=5)
 
     # Prepare SLURM arguments
     slurm_out_path = Path(output_dirpath).parent / "slurm_output"
