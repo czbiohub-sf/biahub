@@ -26,6 +26,8 @@ if TYPE_CHECKING:
 
 def render_image(image: NDArray, settings: ImageChannelRender2DSettings) -> NDArray:
     """Render an image in RGBA and scale to RGB by A."""
+    if image.ndim != 2:
+        raise ValueError(f"Image must be 2D, got shape: {image.shape}")
     image = image.astype(np.float32)
     if settings.clim is not None:
         if settings.clim_mode == "absolute":
@@ -34,9 +36,11 @@ def render_image(image: NDArray, settings: ImageChannelRender2DSettings) -> NDAr
             low, high = np.percentile(image, settings.clim)
     else:
         low, high = np.min(image), np.max(image)
+    if low >= high:
+        raise ValueError("Could not determine valid contrast limits.")
     image = rescale_intensity(image, in_range=(low, high), out_range=(0, 1))
     image = settings.lut(image, gamma=settings.gamma)
-    image[..., 3] * settings.alpha
+    image[..., 3] *= settings.alpha
     return image[..., :3] * image[..., 3:]
 
 
@@ -62,10 +66,10 @@ def render_2d(config_filepath: Path, output_filepath: Path) -> None:
     for ch_setting in settings.channels:
         with open_ome_zarr(ch_setting.path, layout="fov") as dataset:
             ch_idx = dataset.get_channel_index(ch_setting.name)
-            crop = _slice_tczyx(dataset[ch_setting.multiscal_level], ch_idx)
+            crop = _slice_tczyx(dataset[ch_setting.multiscale_level], ch_idx)
         crop_and_settings = (crop, ch_setting)
         if ch_setting.channel_type == "image":
-            rendered_images.append(render_image(crop, settings))
+            rendered_images.append(render_image(crop, ch_setting))
         elif ch_setting.channel_type == "contour":
             labels_and_settings.append(crop_and_settings)
 

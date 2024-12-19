@@ -15,6 +15,7 @@ from pydantic import (
     PositiveFloat,
     PositiveInt,
     field_validator,
+    model_validator,
 )
 
 
@@ -224,7 +225,7 @@ class BaseChannelRender2DSettings(MyBaseModel):
 
     path: Path
     name: str
-    multiscal_level: str = "0"
+    multiscale_level: str = "0"
 
 
 PositiveFloatLE1 = Annotated[float, Field(gt=0.0, le=1.0)]
@@ -240,12 +241,12 @@ class ImageChannelRender2DSettings(BaseChannelRender2DSettings):
     alpha: PositiveFloatLE1 = 1.0
     gamma: PositiveFloatLE1 = 1.0
 
-    @field_validator("clim_mode")
+    @model_validator(mode="after")
     @classmethod
-    def validate_clim_mode(cls, v, values):
-        if values.get("clim") is None and v is not None:
-            raise ValueError("`clim_mode` cannot be set when `clim` is None")
-        return v
+    def check_clim_mode(cls, data):
+        if data.clim_mode is not None and data.clim is None:
+            raise ValueError("clim_mode requires clim to be set")
+        return data
 
 
 class ContourChannelRender2DSettings(BaseChannelRender2DSettings):
