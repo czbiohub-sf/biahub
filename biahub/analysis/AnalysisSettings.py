@@ -25,7 +25,7 @@ class EstimateRegistrationSettings(MyBaseModel):
     source_channel_name: list
     stabilization_channels_names: list
     affine_90degree_rotation: int
-    aprox_initial_transform_zyx: list[str]
+    aprox_initial_transform_zyx: list
 
     @field_validator("aprox_initial_transform_zyx")
     @classmethod
