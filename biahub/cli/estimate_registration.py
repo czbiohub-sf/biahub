@@ -54,7 +54,7 @@ COLOR_CYCLE = [
 ]
 
 
-VERBOSE = False  # Set to True to see the detected peaks verbose
+VERBOSE = True  # Set to True to see the detected peaks verbose
 WINDOW_SIZE = 20  # Number of previous transforms to consider for filtering
 EUCLIDIAN_TOLERANCE = 45  # Euclidian distance threshold between two transforms
 
@@ -319,9 +319,9 @@ def beads_based_registration(
 ):
     T = source_channel_tzyx.shape[0]
     with Pool(num_processes) as pool:
-        transforms = pool.starmap(
-            partial(_get_tform_from_beads, approx_tform),
-            zip(source_channel_tzyx, target_channel_tzyx),
+        transforms = pool.map(
+            partial(_get_tform_from_beads, approx_tform, source_channel_tzyx, target_channel_tzyx),
+            range(T),
         )
 
     # Check and filter transforms
@@ -337,14 +337,13 @@ def beads_based_registration(
                 if len(valid_transforms) > window_size:
                     valid_transforms.pop(0)
                 reference_transform = np.mean(valid_transforms, axis=0)
-                click.echo(f"Transforms at time {i} is valid")
+                click.echo(f"Transform at timepoint {i} is valid")
             else:
+                click.echo(f'Transform at timepoint {i} will be interpolated')
                 transforms[i] = None
 
     # Interpolate missing transforms
-    click.echo(
-        f"Interpolating missing transforms at time indices: {np.where(transforms == None)[0]}"
-    )
+    click.echo("Interpolating missing transforms")
     x, y = zip(*[(i, transforms[i]) for i in range(T) if transforms[i] is not None])
     f = interp1d(x, y, axis=0, kind="linear", fill_value="extrapolate")
 
@@ -372,14 +371,16 @@ def _check_transform_difference(tform1, tform2, threshold=5.0):
 
 def _get_tform_from_beads(
     approx_tform: list,
-    source_channel_zyx: da.Array,
-    target_channel_zyx: da.Array,
+    source_channel_tzyx: da.Array,
+    target_channel_tzyx: da.Array,
+    t_idx: int,
 ) -> list | None:
     approx_tform = np.asarray(approx_tform)
-    source_channel_zyx = np.asarray(source_channel_zyx).astype(np.float32)
-    target_channel_zyx = np.asarray(target_channel_zyx).astype(np.float32)
+    source_channel_zyx = np.asarray(source_channel_tzyx[t_idx]).astype(np.float32)
+    target_channel_zyx = np.asarray(target_channel_tzyx[t_idx]).astype(np.float32)
 
     if _check_nan_n_zeros(source_channel_zyx) or _check_nan_n_zeros(target_channel_zyx):
+        click.echo(f'Beads data is missing at timepoint {t_idx}')
         return
 
     source_data_ants = ants.from_numpy(source_channel_zyx)
@@ -389,6 +390,9 @@ def _get_tform_from_beads(
         .apply_to_image(source_data_ants, reference=target_data_ants)
         .numpy()
     )
+    click.echo(f'Detecting beads for timepoint {t_idx}')
+    if VERBOSE:
+        click.echo('Detecting beads in source dataset:')
     source_peaks = detect_peaks(
         source_data_reg,
         block_size=[32, 16, 16],
@@ -397,6 +401,8 @@ def _get_tform_from_beads(
         min_distance=0,
         verbose=VERBOSE,
     )
+    if VERBOSE:
+        click.echo('Deteting beads in target dataset:')
     target_peaks = detect_peaks(
         target_channel_zyx,
         block_size=[32, 16, 16],
@@ -408,7 +414,7 @@ def _get_tform_from_beads(
 
     # Skip if there is no peak detected
     if len(source_peaks) < 2 or len(target_peaks) < 2:
-        click.echo('No peak detected')
+        click.echo(f'No beads were detected at timepoint {t_idx}')
         return
 
     # Match peaks, excluding top 5% of distances as outliers
@@ -417,6 +423,7 @@ def _get_tform_from_beads(
     matches = matches[dist < np.quantile(dist, 0.95), :]
 
     if len(matches) < 3:
+        click.echo(f'Source and target beads were not matches successfully for timepoint {t_idx}')
         return
 
     # Affine transform performs better than Euclidean
