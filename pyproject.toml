@@ -41,6 +41,8 @@ dependencies = [
   "antspyx",
   "pystackreg",
   "napari-psf-analysis",
+  "cmap",
+  "scikit-image",
 ]
 
 

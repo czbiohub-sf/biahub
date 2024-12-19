@@ -1,0 +1,27 @@
+# Render 2D settings
+time_index: 0
+channels:
+  - path: /path/to/plate.zarr/row/col/fov
+    name: GFP
+    # optional
+    multiscale_level: 0
+    channel_type: image
+    lut: green
+    clim: [100, 500]
+    clim_mode: absolute
+    alpha: 1.0
+    gamma: 1.0
+  - path: /path/to/plate.zarr/row/col/fov
+    name: nuclei_masks
+    channel_type: contour
+    linewidth: 2.0
+# Z index range
+z_range: [0, 1]
+# Y index range
+y_range: [0, 512]
+# X index range
+x_range: [0, 512]
+# export figsize in inches
+figsize: [4, 4]
+# export DPI
+dpi: 300
