@@ -595,3 +595,42 @@ def _check_nan_n_zeros(input_array):
     Checks if data are all zeros or nan
     """
     return np.all(np.isnan(input_array)) or np.all(input_array == 0)
+
+
+def estimate_resources(
+    shape: Tuple[int, int, int, int, int],
+    dtype: DTypeLike = np.float32,
+    ram_multiplier: float = 1.0,
+    max_num_cpus: int = 64,
+):
+    """
+    Estimate the number of CPUs and the amount of RAM required for processing a given data volume.
+
+    Parameters
+    ----------
+    shape : Tuple[int, int, int, int, int]
+        The shape of the data as a tuple (T, C, Z, Y, X).
+    dtype : DTypeLike, optional
+        The data type of the elements. Default is np.float32.
+    ram_multiplier : float, optional
+        Multiplier to scale the required memory for processing a given ZYX volume. For example,
+        if a processing pipeline makes two copies of the input data, then the ram_multiplier
+        should be at least 3. Default is 1.0.
+    max_num_cpus : int, optional
+        Maximum number of available CPUs. Default is 64.
+
+    Returns
+    -------
+    Tuple[int, int]
+        A tuple containing the estimated number of CPUs and the required amount of RAM per CPU in GB.
+        These values can be passed to the `--cpus_per_task` and `--mem_per_cpu` parameters of sbatch.
+    """
+    assert len(shape) == 5, "The shape must be a 5-tuple (T, C, Z, Y, X)."
+
+    T, C, Z, Y, X = shape
+    gb_per_element = np.dtype(dtype).itemsize / 2**30  # bytes_per_element / bytes_per_gb
+    num_cpus = min(T * C, max_num_cpus)
+    gb_ram_per_volume = Z * Y * X * gb_per_element
+    gb_ram_per_cpu = np.ceil(max(1, gb_ram_per_volume * ram_multiplier))
+
+    return int(num_cpus), int(gb_ram_per_cpu)

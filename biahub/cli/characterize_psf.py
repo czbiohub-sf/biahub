@@ -106,7 +106,7 @@ def characterize_psf(
 
     # Read settings
     settings = yaml_to_model(config_filepath, CharacterizeSettings)
-    dataset_name = Path(input_position_dirpaths[0])[-4]
+    dataset_name = Path(input_position_dirpaths[0]).parts[-4]
 
     _ = _characterize_psf(
         zyx_data, zyx_scale, settings, output_dirpath, input_position_dirpaths[0], dataset_name
