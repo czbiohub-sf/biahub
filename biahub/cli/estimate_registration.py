@@ -317,7 +317,13 @@ def beads_based_registration(
     (T, Z, Y, X) = source_channel_tzyx.shape
     with Pool(num_processes) as pool:
         transforms = pool.map(
-            partial(_get_tform_from_beads, approx_tform, source_channel_tzyx, target_channel_tzyx, verbose),
+            partial(
+                _get_tform_from_beads,
+                approx_tform,
+                source_channel_tzyx,
+                target_channel_tzyx,
+                verbose,
+            ),
             range(T),
         )
 
@@ -365,9 +371,7 @@ def _check_transform_difference(tform1, tform2, shape, threshold=5.0):
     (Z, Y, X) = shape
 
     zz, yy, xx = np.meshgrid(
-        np.linspace(0, Z-1, 10),
-        np.linspace(0, Y-1, 10),
-        np.linspace(0, X-1, 10)
+        np.linspace(0, Z - 1, 10), np.linspace(0, Y - 1, 10), np.linspace(0, X - 1, 10)
     )
 
     grid_points = np.vstack([zz.ravel(), yy.ravel(), xx.ravel(), np.ones(zz.size)]).T
@@ -437,7 +441,9 @@ def _get_tform_from_beads(
     matches = matches[dist < np.quantile(dist, 0.95), :]
 
     if len(matches) < 3:
-        click.echo(f'Source and target beads were not matches successfully for timepoint {t_idx}')
+        click.echo(
+            f'Source and target beads were not matches successfully for timepoint {t_idx}'
+        )
         return
 
     # Affine transform performs better than Euclidean
