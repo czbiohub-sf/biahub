@@ -9,7 +9,6 @@ import numpy as np
 
 from iohub import open_ome_zarr
 from scipy.interpolate import interp1d
-from scipy.spatial.distance import euclidean
 from skimage.feature import match_descriptors
 from skimage.transform import AffineTransform, EuclideanTransform, SimilarityTransform
 from waveorder.focus import focus_from_transverse_band
@@ -55,8 +54,8 @@ COLOR_CYCLE = [
 
 
 VERBOSE = True  # Set to True to see the detected peaks verbose
-WINDOW_SIZE = 20  # Number of previous transforms to consider for filtering
-EUCLIDIAN_TOLERANCE = 45  # Euclidian distance threshold between two transforms
+WINDOW_SIZE = 10  # Number of previous transforms to consider for filtering
+AFFINE_TRANSFORM_TOLERANCE = 50  # MSE distance tolerance for points transformed by two affine matrices
 
 
 def user_assisted_registration(
@@ -317,7 +316,7 @@ def beads_based_registration(
     approx_tform: list,
     num_processes: int,
 ):
-    T = source_channel_tzyx.shape[0]
+    (T, Z, Y, X) = source_channel_tzyx.shape
     with Pool(num_processes) as pool:
         transforms = pool.map(
             partial(_get_tform_from_beads, approx_tform, source_channel_tzyx, target_channel_tzyx),
@@ -331,7 +330,7 @@ def beads_based_registration(
     for i in range(len(transforms)):
         if transforms[i] is not None:
             if reference_transform is None or _check_transform_difference(
-                transforms[i], reference_transform, EUCLIDIAN_TOLERANCE
+                transforms[i], reference_transform, (Z, Y, X), AFFINE_TRANSFORM_TOLERANCE
             ):
                 valid_transforms.append(transforms[i])
                 if len(valid_transforms) > window_size:
@@ -350,23 +349,40 @@ def beads_based_registration(
     return f(range(T)).tolist()
 
 
-def _check_transform_difference(tform1, tform2, threshold=5.0):
+def _check_transform_difference(tform1, tform2, shape, threshold=5.0):
     """
-    Check if the difference between two affine transforms is within a threshold.
+    Evaluate the difference between two affine transforms by calculating the
+    Mean Squared Error (MSE) of a grid of points transformed by each matrix.
 
     Parameters:
     - tform1: First affine transform (4x4 matrix).
     - tform2: Second affine transform (4x4 matrix).
-    - threshold: The maximum allowed difference.
+    - shape: Shape of the source (i.e. moving) volume (Z, Y, X).
+    - threshold: The maximum allowed MSE difference.
 
     Returns:
-    - bool: True if the difference is within the threshold, False otherwise.
+    - bool: True if the MSE difference is within the threshold, False otherwise.
     """
     tform1 = np.array(tform1)
     tform2 = np.array(tform2)
-    diff = euclidean(tform1.ravel(), tform2.ravel())
-    click.echo(f'Difference between transforms: {diff}')
-    return diff <= threshold
+    (Z, Y, X) = shape
+
+    zz, yy, xx = np.meshgrid(
+        np.linspace(0, Z-1, 10),
+        np.linspace(0, Y-1, 10),
+        np.linspace(0, X-1, 10)
+    )
+
+    grid_points = np.vstack([zz.ravel(), yy.ravel(), xx.ravel(), np.ones(zz.size)]).T
+
+    points_tform1 = np.dot(tform1, grid_points.T).T
+    points_tform2 = np.dot(tform2, grid_points.T).T
+
+    differences = np.linalg.norm(points_tform1[:, :3] - points_tform2[:, :3], axis=1)
+    mse = np.mean(differences)
+
+    click.echo(f'Mean Squared Error of transformed points: {mse}')
+    return mse <= threshold
 
 
 def _get_tform_from_beads(
