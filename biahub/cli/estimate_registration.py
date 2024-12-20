@@ -431,7 +431,7 @@ def _get_tform_from_beads(
     target_peaks = detect_peaks(
         target_channel_zyx,
         block_size=[32, 16, 16],
-        threshold_abs=0.5,
+        threshold_abs=0.8,
         nms_distance=16,
         min_distance=0,
         verbose=verbose,

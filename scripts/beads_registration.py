@@ -11,12 +11,13 @@ from skimage.feature import match_descriptors
 from scipy.spatial.distance import cdist
 
 # %%
-dataset = '2024_11_07_A549_SEC61_ZIKV_DENV'
+dataset = '2024_11_05_A549_TOMM20_ZIKV_DENV'
 fov = 'C/1/000000'
-root_path = Path('/hpc/projects/intracellular_dashboard/organelle_dynamics/2024_11_07_A549_SEC61_ZIKV_DENV/')
+root_path = Path(f'/hpc/projects/intracellular_dashboard/organelle_dynamics/{dataset}')
+t_idx = 12
 
 lf_data_path = root_path / '1-preprocess/label-free/1-stabilize/' / f'{dataset}.zarr' / fov
-ls_data_path = root_path / '1-preprocess/light-sheet/raw/1-stabilize/' /  f'{dataset}.zarr' / fov
+ls_data_path = root_path / '1-preprocess/light-sheet/raw/0-deskew/' /  f'{dataset}.zarr' / fov
 
 approx_tform = np.asarray(
     [
@@ -29,11 +30,11 @@ approx_tform = np.asarray(
 
 # %% Load data
 with open_ome_zarr(lf_data_path) as lf_ds:
-    lf_data = np.asarray(lf_ds.data[1, 0]) # take second timepoint
+    lf_data = np.asarray(lf_ds.data[t_idx, 0]) # take second timepoint
     lf_scale = lf_ds.scale
 
 with open_ome_zarr(ls_data_path) as ls_ds:
-    ls_data = np.asarray(ls_ds.data[1, 1]) # take mCherry channel
+    ls_data = np.asarray(ls_ds.data[t_idx, 1]) # take mCherry channel
     ls_scale = ls_ds.scale
 
 # Register LS data with approx tranform
@@ -70,7 +71,7 @@ viewer.add_points(
 lf_peaks = detect_peaks(
     lf_data,
     block_size=[32, 16, 16],
-    threshold_abs=0.5,
+    threshold_abs=0.8,
     nms_distance=16,
     min_distance=0,
     verbose=True
@@ -117,7 +118,7 @@ ls_data_reg_2 = compount_tform_ants.apply_to_image(
 ).numpy()
 
 viewer = napari.Viewer()
-viewer.add_image(lf_data, name='LF', contrast_limits=(0.5, 1.0))
+viewer.add_image(lf_data, name='LF', contrast_limits=(-0.5, 1.0))
 viewer.add_image(
     ls_data_reg,
     name='LS approx registered',
