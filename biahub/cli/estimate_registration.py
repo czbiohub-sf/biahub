@@ -420,7 +420,7 @@ def _get_tform_from_beads(
         verbose=verbose,
     )
     if verbose:
-        click.echo('Deteting beads in target dataset:')
+        click.echo('Detecting beads in target dataset:')
     target_peaks = detect_peaks(
         target_channel_zyx,
         block_size=[32, 16, 16],
