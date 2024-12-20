@@ -53,11 +53,6 @@ COLOR_CYCLE = [
 ]
 
 
-VERBOSE = True  # Set to True to see the detected peaks verbose
-WINDOW_SIZE = 10  # Number of previous transforms to consider for filtering
-AFFINE_TRANSFORM_TOLERANCE = 50  # MSE distance tolerance for points transformed by two affine matrices
-
-
 def user_assisted_registration(
     source_channel_volume,
     source_channel_name,
@@ -315,22 +310,24 @@ def beads_based_registration(
     target_channel_tzyx: da.Array,
     approx_tform: list,
     num_processes: int,
+    window_size: int,
+    tolerance: float,
+    verbose: bool = False,
 ):
     (T, Z, Y, X) = source_channel_tzyx.shape
     with Pool(num_processes) as pool:
         transforms = pool.map(
-            partial(_get_tform_from_beads, approx_tform, source_channel_tzyx, target_channel_tzyx),
+            partial(_get_tform_from_beads, approx_tform, source_channel_tzyx, target_channel_tzyx, verbose),
             range(T),
         )
 
     # Check and filter transforms
-    window_size = WINDOW_SIZE
     valid_transforms = []
     reference_transform = None
     for i in range(len(transforms)):
         if transforms[i] is not None:
             if reference_transform is None or _check_transform_difference(
-                transforms[i], reference_transform, (Z, Y, X), AFFINE_TRANSFORM_TOLERANCE
+                transforms[i], reference_transform, (Z, Y, X), tolerance
             ):
                 valid_transforms.append(transforms[i])
                 if len(valid_transforms) > window_size:
@@ -389,6 +386,7 @@ def _get_tform_from_beads(
     approx_tform: list,
     source_channel_tzyx: da.Array,
     target_channel_tzyx: da.Array,
+    verbose: bool,
     t_idx: int,
 ) -> list | None:
     approx_tform = np.asarray(approx_tform)
@@ -407,7 +405,7 @@ def _get_tform_from_beads(
         .numpy()
     )
     click.echo(f'Detecting beads for timepoint {t_idx}')
-    if VERBOSE:
+    if verbose:
         click.echo('Detecting beads in source dataset:')
     source_peaks = detect_peaks(
         source_data_reg,
@@ -415,9 +413,9 @@ def _get_tform_from_beads(
         threshold_abs=np.percentile(source_data_reg, 99.98),
         nms_distance=16,
         min_distance=0,
-        verbose=VERBOSE,
+        verbose=verbose,
     )
-    if VERBOSE:
+    if verbose:
         click.echo('Deteting beads in target dataset:')
     target_peaks = detect_peaks(
         target_channel_zyx,
@@ -425,7 +423,7 @@ def _get_tform_from_beads(
         threshold_abs=0.5,
         nms_distance=16,
         min_distance=0,
-        verbose=VERBOSE,
+        verbose=verbose,
     )
 
     # Skip if there is no peak detected
@@ -494,20 +492,16 @@ def estimate_registration(
     -x  flag to use similarity transform (rotation, translation, scaling) default:Eucledian (rotation, translation)
     """
 
-    click.echo("reading config file")
     settings = yaml_to_model(config_filepath, EstimateRegistrationSettings)
 
-    target_channel_name = settings.target_channel_name[0]
-    source_channel_name = settings.source_channel_name[0]
+    target_channel_name = settings.target_channel_name
+    source_channel_name = settings.source_channel_name
     affine_90degree_rotation = settings.affine_90degree_rotation
     stabilization_channels_names = settings.stabilization_channels_names
 
-    click.echo(f"\nTarget channel: {target_channel_name}")
-    click.echo(f"\nSource channel: {source_channel_name}")
-    click.echo(f"\nStabilization Channels: {stabilization_channels_names}")
-
-    approx_tform = settings.aprox_initial_transform_zyx
-    approx_tform = np.array(approx_tform)
+    click.echo(f"Target channel: {target_channel_name}")
+    click.echo(f"Source channel: {source_channel_name}")
+    click.echo(f"Stabilization Channels: {stabilization_channels_names}")
 
     with open_ome_zarr(source_position_dirpaths[0], mode="r") as source_channel_position:
         source_channels = source_channel_position.channel_names
@@ -532,8 +526,11 @@ def estimate_registration(
         transforms = beads_based_registration(
             source_channel_data,
             target_channel_data,
-            approx_tform=approx_tform,
+            approx_tform=np.asarray(settings.approx_affine_transform),
             num_processes=num_processes,
+            window_size=settings.affine_transform_window_size,
+            tolerance=settings.affine_transform_tolerance,
+            verbose=settings.verbose_bead_detection,
         )
 
         model = StabilizationSettings(
