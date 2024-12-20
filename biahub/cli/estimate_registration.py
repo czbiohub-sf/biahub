@@ -333,26 +333,31 @@ def beads_based_registration(
     for i in range(len(transforms)):
         if transforms[i] is not None:
             if reference_transform is None or _check_transform_difference(
-                transforms[i], reference_transform, (Z, Y, X), tolerance
+                transforms[i], reference_transform, (Z, Y, X), tolerance, verbose
             ):
                 valid_transforms.append(transforms[i])
                 if len(valid_transforms) > window_size:
                     valid_transforms.pop(0)
                 reference_transform = np.mean(valid_transforms, axis=0)
-                click.echo(f"Transform at timepoint {i} is valid")
+                if verbose:
+                    click.echo(f"Transform at timepoint {i} is valid")
             else:
-                click.echo(f'Transform at timepoint {i} will be interpolated')
+                if verbose:
+                    click.echo(f'Transform at timepoint {i} will be interpolated')
                 transforms[i] = None
 
     # Interpolate missing transforms
-    click.echo("Interpolating missing transforms")
     x, y = zip(*[(i, transforms[i]) for i in range(T) if transforms[i] is not None])
-    f = interp1d(x, y, axis=0, kind="linear", fill_value="extrapolate")
+    if len(transforms) - len(x) > 0:
+        _x = [i for i in range(T) if i not in x]
+        click.echo(f"Interpolating missing transforms at timepoints: {_x}")
+        f = interp1d(x, y, axis=0, kind="linear", fill_value="extrapolate")
+        transforms = f(range(T)).tolist()
 
-    return f(range(T)).tolist()
+    return transforms
 
 
-def _check_transform_difference(tform1, tform2, shape, threshold=5.0):
+def _check_transform_difference(tform1, tform2, shape, threshold=5.0, verbose=False):
     """
     Evaluate the difference between two affine transforms by calculating the
     Mean Squared Error (MSE) of a grid of points transformed by each matrix.
@@ -362,6 +367,7 @@ def _check_transform_difference(tform1, tform2, shape, threshold=5.0):
     - tform2: Second affine transform (4x4 matrix).
     - shape: Shape of the source (i.e. moving) volume (Z, Y, X).
     - threshold: The maximum allowed MSE difference.
+    - verbose: Flag to print the MSE difference.
 
     Returns:
     - bool: True if the MSE difference is within the threshold, False otherwise.
@@ -382,7 +388,8 @@ def _check_transform_difference(tform1, tform2, shape, threshold=5.0):
     differences = np.linalg.norm(points_tform1[:, :3] - points_tform2[:, :3], axis=1)
     mse = np.mean(differences)
 
-    click.echo(f'Mean Squared Error of transformed points: {mse}')
+    if verbose:
+        click.echo(f'Mean Squared Error of transformed points: {mse}')
     return mse <= threshold
 
 
