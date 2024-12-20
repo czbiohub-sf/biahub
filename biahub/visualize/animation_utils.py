@@ -403,10 +403,11 @@ def simple_recording(
     for axis, (min_val, max_val), duration in loop_axes:
         # Get axis size from first layer
         axis_size = viewer.layers[0].data.shape[axis]
+        scale = viewer.layers[0].scale
 
         # Use full range if None is provided
         actual_min = 0 if min_val is None else min_val
-        actual_max = axis_size - 1 if max_val is None else max_val
+        actual_max = (axis_size - 1) * scale[axis] if max_val is None else max_val
         actual_duration = default_duration if duration is None else duration
 
         # Calculate number of frames for this transition
