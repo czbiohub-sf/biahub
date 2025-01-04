@@ -443,7 +443,9 @@ def _get_tform_from_beads(
         return
 
     # Match peaks, excluding top 5% of distances as outliers
-    matches = match_descriptors(source_peaks, target_peaks, metric='euclidean',max_ratio=0.6,cross_check=True)
+    matches = match_descriptors(
+        source_peaks, target_peaks, metric='euclidean', max_ratio=0.6, cross_check=True
+    )
     dist = np.linalg.norm(source_peaks[matches[:, 0]] - target_peaks[matches[:, 1]], axis=1)
     matches = matches[dist < np.quantile(dist, 0.95), :]
 
@@ -466,9 +468,7 @@ def _get_tform_from_beads(
 
     # Filter matches within ±20 degrees of the dominant direction, which may need finetuning
     threshold = 30
-    filtered_indices = np.where(
-        np.abs(angles_deg - dominant_angle) <= threshold
-    )[0]
+    filtered_indices = np.where(np.abs(angles_deg - dominant_angle) <= threshold)[0]
     matches = matches[filtered_indices]
 
     if len(matches) < 3:
