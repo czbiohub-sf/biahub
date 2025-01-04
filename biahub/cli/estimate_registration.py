@@ -447,6 +447,30 @@ def _get_tform_from_beads(
     dist = np.linalg.norm(source_peaks[matches[:, 0]] - target_peaks[matches[:, 1]], axis=1)
     matches = matches[dist < np.quantile(dist, 0.95), :]
 
+    # Calculate vectors between matches
+    vectors = target_peaks[matches[:, 1]] - source_peaks[matches[:, 0]]
+
+    # Compute angles in radians relative to the x-axis
+    angles_rad = np.arctan2(vectors[:, 1], vectors[:, 0])
+
+    # Convert to degrees for easier interpretation
+    angles_deg = np.degrees(angles_rad)
+
+    # Create a histogram of angles
+    bins = np.linspace(-180, 180, 36)  # 10-degree bins
+    hist, bin_edges = np.histogram(angles_deg, bins=bins)
+
+    # Find the dominant bin
+    dominant_bin_index = np.argmax(hist)
+    dominant_angle = (bin_edges[dominant_bin_index] + bin_edges[dominant_bin_index + 1]) / 2
+
+    # Filter matches within ±20 degrees of the dominant direction, which may need finetuning
+    threshold = 30
+    filtered_indices = np.where(
+        np.abs(angles_deg - dominant_angle) <= threshold
+    )[0]
+    matches = matches[filtered_indices]
+
     if len(matches) < 3:
         click.echo(
             f'Source and target beads were not matches successfully for timepoint {t_idx}'
