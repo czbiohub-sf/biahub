@@ -23,6 +23,7 @@ class MyBaseModel(BaseModel):
 class ProcessingSettings(MyBaseModel):
     fliplr: Optional[bool] = False
     flipud: Optional[bool] = False
+    rot90: Optional[int] = 0
 
 
 class DeskewSettings(MyBaseModel):
