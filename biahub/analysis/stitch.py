@@ -142,15 +142,18 @@ def shift_image(
         print(f"Transforming image with {transform}")
     # Create array of output_shape and put input data at (0, 0)
     output = np.zeros((C, Z) + yx_output_shape, dtype=np.float32)
-    output[..., :Y, :X] = czyx_data.astype(np.float32)
 
     transform = np.asarray(transform)
     if transform.shape == (2,):
+        output[..., :Y, :X] = czyx_data.astype(np.float32)
         return ndi.shift(output, (0, 0) + tuple(transform), order=0)
     elif transform.shape == (4, 4):
         transform = convert_transform_to_ants(transform)
-        for i, img in enumerate(output):
-            output[i] = transform.apply_to_image(ants.from_numpy(img)).numpy()
+        reference = ants.from_numpy(output[0])
+        for i, img in enumerate(czyx_data):
+            ants_input = ants.from_numpy(img)
+            ants_output = transform.apply_to_image(ants_input, reference)
+            output[i] = ants_output.numpy().astype('float32')
         return output
     else:
         return output
