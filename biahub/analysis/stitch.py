@@ -372,6 +372,7 @@ def estimate_zarr_fov_shifts(
     fliplr: bool,
     flipud: bool,
     rot90: int,
+    add_offset: bool,
     direction: Literal["row", "col"],
     output_dirname: str = None,
 ):
@@ -427,7 +428,7 @@ def estimate_zarr_fov_shifts(
         im0 = np.rot90(im0, k=rot90)
         im1 = np.rot90(im1, k=rot90)
 
-    shift = estimate_shift(im0, im1, percent_overlap, direction, add_offset=flipud)
+    shift = estimate_shift(im0, im1, percent_overlap, direction, add_offset=add_offset)
 
     df = pd.DataFrame(
         {
