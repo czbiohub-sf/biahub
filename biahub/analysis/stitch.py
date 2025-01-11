@@ -243,8 +243,10 @@ def process_dataset(
     verbose: bool = True,
 ) -> np.ndarray:
     flip = np.flip
+    rot = np.rot90
     if isinstance(data_array, da.Array):
         flip = da.flip
+        rot = da.rot90
 
     if settings:
         if settings.flipud:
@@ -256,6 +258,11 @@ def process_dataset(
             if verbose:
                 click.echo("Flipping data array left-right")
             data_array = flip(data_array, axis=-1)
+        
+        if settings.rot90 != 0:
+            if verbose:
+                click.echo(f"Rotating data array {settings.rot90} times counterclockwise")
+            data_array = rot(data_array, settings.rot90, axes=(-2, -1))
 
     return data_array
 
