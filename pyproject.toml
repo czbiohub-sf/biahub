@@ -55,7 +55,8 @@ dev = [
   "pytest~=7.1",
   
 ]
-track =["ultrack @ git+https://github.com/royerlab/ultrack-dev.git",]
+track =["ultrack @ git+https://github.com/royerlab/ultrack-dev.git",
+"toml"]
 
 build = ["build", "twine"]
 
