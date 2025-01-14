@@ -77,7 +77,7 @@ def mem_nuc_contor(nuc_arr, mem_arr):
     return contourn
 
 def ultrack_tracking(tracking_config, fg_arr: ArrayLike, top_arr: ArrayLike, scale: Tuple[float, float], databaset_path):
-    print("Tracking")
+    print("Tracking...")
     cfg = MainConfig()
 
     cfg.data_config.working_dir = databaset_path
@@ -132,16 +132,11 @@ def tracking_one_position(
     # Using this range to do projection
     z_slices = slice(z_slice[0], z_slice[1])
 
-    click.echo(f"Input LF dirpath: {input_lf_dirpath}")
-    click.echo(f"Input VS path: {input_vs_path[0]}")
-    click.echo(f"Output dirpath: {output_dirpath}")
     input_vs_path = input_vs_path[0]
     
     position_key = input_vs_path.parts[-3:]
     fov = "_".join(position_key)
     click.echo(f"Position key: {position_key}")
-
-    click.echo(f"Processing FOV: {fov}")
 
     input_im_path = input_lf_dirpath / Path(*position_key)
     im_dataset = open_ome_zarr(input_im_path)
@@ -149,7 +144,9 @@ def tracking_one_position(
 
     T, C, Z, Y, X = vs_dataset.data.shape
     channel_names = vs_dataset.channel_names
+
     click.echo(f"Channel names: {channel_names}")
+
     yx_scale = vs_dataset.scale[-2:]
     processing_channels = [f"{channel_names[0]}_labels"]
 
@@ -167,9 +164,7 @@ def tracking_one_position(
 
     im_arr = im_dataset[0][:, 0, z_slices.start, :, :]
     nuc_c_idx = channel_names.index(channel_names[0])
-    click.echo(f"Nuclei channel index:{nuc_c_idx}")
     mem_c_idx = channel_names.index(channel_names[1])
-    click.echo(f"Membrane channel index: {mem_c_idx}")
 
 
     if vs_projection == "max":
@@ -180,8 +175,6 @@ def tracking_one_position(
         nuc_arr = vs_dataset[0][:, nuc_c_idx, z_slices].mean(axis=1)
         mem_arr = vs_dataset[0][:, mem_c_idx, z_slices].mean(axis=1)
     
-    click.echo(f"Nuclei shape: {nuc_arr.shape}")
-    click.echo(f"Membrane shape: {mem_arr.shape}")
 
     # preprocess to get the the foreground and multi-level contours
     fg_arr, top_arr = data_preprocessing(im_arr,nuc_arr, mem_arr)
@@ -230,6 +223,7 @@ def track(
     Track nuclei and membranes in using virtual staining nuclei and membranes data.
     
     This function applied tracking to the virtual staining data for each position in the input.
+    To use this function, install the lib as pip install -e .["track"]
     
     Example usage:
 
@@ -238,9 +232,6 @@ def track(
     """
 
     input_dirpath = Path(input_lf_dirpaths)
-    print(input_dirpath)
-    # convert to Path
-    print(input_position_dirpaths)
 
     output_dirpath = Path(output_dirpath)
     config_filepath = Path(config_filepath)
