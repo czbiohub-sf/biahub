@@ -53,7 +53,9 @@ dev = [
   "pre-commit~=2.19",
   "pylint~=2.14",
   "pytest~=7.1",
+  
 ]
+track =["ultrack @ git+https://github.com/royerlab/ultrack-dev.git",]
 
 build = ["build", "twine"]
 
