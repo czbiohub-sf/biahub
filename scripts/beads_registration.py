@@ -11,10 +11,10 @@ from skimage.feature import match_descriptors
 from scipy.spatial.distance import cdist
 
 # %%
-dataset = '2024_11_05_A549_TOMM20_ZIKV_DENV'
+dataset = '2024_11_21_A549_TOMM20_DENV'
 fov = 'C/1/000000'
 root_path = Path(f'/hpc/projects/intracellular_dashboard/organelle_dynamics/{dataset}')
-t_idx = 12
+t_idx = 21
 
 lf_data_path = root_path / '1-preprocess/label-free/1-stabilize/' / f'{dataset}.zarr' / fov
 ls_data_path = root_path / '1-preprocess/light-sheet/raw/0-deskew/' /  f'{dataset}.zarr' / fov
@@ -60,7 +60,7 @@ ls_peaks = detect_peaks(
     min_distance=0,
     verbose=True
 )
-
+#%%
 viewer = napari.Viewer()
 viewer.add_image(ls_data_reg, name='LS')
 viewer.add_points(
@@ -76,6 +76,7 @@ lf_peaks = detect_peaks(
     min_distance=0,
     verbose=True
 )
+#%%
 viewer = napari.Viewer()
 viewer.add_image(lf_data, name='LF')
 viewer.add_points(
@@ -83,20 +84,44 @@ viewer.add_points(
 )
 
 # %% Find matching peaks in the two datasets
-matches = match_descriptors(ls_peaks, lf_peaks, metric='euclidean')
+matches = match_descriptors(ls_peaks, lf_peaks, metric='euclidean',max_ratio=0.6,cross_check=True)
 
 # Exclude top 5% of distances as outliers
 dist = np.linalg.norm(ls_peaks[matches[:, 0]] - lf_peaks[matches[:, 1]], axis=1)
 matches = matches[dist<np.quantile(dist, 0.95), :]
+# %%
+# Calculate vectors between matches
+vectors = lf_peaks[matches[:, 1]] - ls_peaks[matches[:, 0]]
 
+# Compute angles in radians relative to the x-axis
+angles = np.arctan2(vectors[:, 1], vectors[:, 0])
+
+# Convert to degrees for easier interpretation
+angles_deg = np.degrees(angles)
+
+# Create a histogram of angles
+bins = np.linspace(-180, 180, 36)  # 10-degree bins
+hist, bin_edges = np.histogram(angles_deg, bins=bins)
+
+# Find the dominant bin
+dominant_bin_index = np.argmax(hist)
+dominant_angle = (bin_edges[dominant_bin_index] + bin_edges[dominant_bin_index + 1]) / 2
+
+# Filter matches within ±45 degrees of the dominant direction
+threshold = 30
+filtered_indices = np.where(
+    np.abs(angles_deg - dominant_angle) <= threshold
+)[0]
+matches = matches[filtered_indices]
+#%%
 viewer = napari.Viewer()
-viewer.add_image(lf_data, name='LF', contrast_limits=(0.5, 1.0))
+viewer.add_image(lf_data, name='LF', contrast_limits=(0.5, 1.0),blending='additive')
 viewer.add_points(
-    lf_peaks, name='LF peaks', size=12, symbol='ring', edge_color='yellow'
+    lf_peaks, name='LF peaks', size=12, symbol='ring', edge_color='yellow',blending='additive'
 )
 viewer.add_image(ls_data_reg, name='LS', contrast_limits=(110, 230), blending='additive', colormap='green')
 viewer.add_points(
-    ls_peaks, name='LS peaks', size=12, symbol='ring', edge_color='yellow'
+    ls_peaks, name='LS peaks', size=12, symbol='ring', edge_color='yellow',blending='additive'
 )
 
 # Project in 3D to be able to view the lines
@@ -104,6 +129,7 @@ viewer.add_shapes(
     data=[np.asarray([ls_peaks[m[0]], lf_peaks[m[1]]]) for m in matches],
     shape_type='line',
     edge_width=5,
+    blending='additive',
 )
 viewer.dims.ndisplay = 3
 
