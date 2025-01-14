@@ -1,6 +1,6 @@
 import warnings
 
-from typing import Literal, Optional, Union, Tuple
+from typing import Literal, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -18,6 +18,7 @@ from pydantic import (
 # All settings classes inherit from MyBaseModel, which forbids extra parameters to guard against typos
 class MyBaseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
 
 class TrackingConfig(MyBaseModel):
     # Segmentation settings
@@ -40,11 +41,13 @@ class TrackingConfig(MyBaseModel):
     division_weight: float
     window_size: int
 
+
 class TrackSettings(MyBaseModel):
     z_slices: Tuple[int, int]
     vs_projection: str
     tracking_config: TrackingConfig
-    
+
+
 class ProcessingSettings(MyBaseModel):
     fliplr: Optional[bool] = False
     flipud: Optional[bool] = False

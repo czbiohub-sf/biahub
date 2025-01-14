@@ -14,8 +14,8 @@ from biahub.cli.optimize_registration import optimize_registration
 from biahub.cli.register import register
 from biahub.cli.stabilize import stabilize
 from biahub.cli.stitch import stitch
-from biahub.cli.update_scale_metadata import update_scale_metadata
 from biahub.cli.track import track
+from biahub.cli.update_scale_metadata import update_scale_metadata
 
 CONTEXT = {"help_option_names": ["-h", "--help"]}
 
