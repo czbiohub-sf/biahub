@@ -1,6 +1,6 @@
 import warnings
 
-from typing import Literal, Optional, Union
+from typing import Literal, Optional, Union, Tuple
 
 import numpy as np
 import torch
@@ -19,7 +19,32 @@ from pydantic import (
 class MyBaseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+class TrackingConfig(MyBaseModel):
+    # Segmentation settings
+    min_area: int
+    max_area: int
+    n_workers_segmentation: int
+    min_frontier: float
+    max_noise: float
 
+    # Linking settings
+    n_workers_linking: int
+    max_distance: int
+    distance_weight: float
+    max_neighbors: int
+
+    # Tracking settings
+    n_threads: int
+    disappear_weight: float
+    appear_weight: float
+    division_weight: float
+    window_size: int
+
+class TrackSettings(MyBaseModel):
+    z_slices: Tuple[int, int]
+    vs_projection: str
+    tracking_config: TrackingConfig
+    
 class ProcessingSettings(MyBaseModel):
     fliplr: Optional[bool] = False
     flipud: Optional[bool] = False
