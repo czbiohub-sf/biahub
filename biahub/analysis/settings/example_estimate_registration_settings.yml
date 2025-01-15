@@ -1,0 +1,25 @@
+target_channel_name: Phase3D
+source_channel_name: GFP EX488 EM525-45
+stabilization_channels_names:
+- mCherry EX561 EM600-37
+- GFP EX488 EM525-45
+affine_90degree_rotation: -1
+approx_affine_transform:
+- - 1
+  - 0
+  - 0
+  - 0
+- - 0
+  - 0
+  - -1.288
+  - 1960
+- - 0
+  - 1.288
+  - 0
+  - -460
+- - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+filtering_angle_threshold: 30
+verbose_bead_detection: True
