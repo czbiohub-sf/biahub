@@ -41,6 +41,7 @@ dependencies = [
   "antspyx",
   "pystackreg",
   "napari-psf-analysis",
+  "toml"
 ]
 
 
@@ -55,8 +56,7 @@ dev = [
   "pytest~=7.1",
   
 ]
-track =["ultrack @ git+https://github.com/royerlab/ultrack-dev.git",
-"toml"]
+track =["ultrack @ git+https://github.com/royerlab/ultrack-dev.git"]
 
 build = ["build", "twine"]
 
