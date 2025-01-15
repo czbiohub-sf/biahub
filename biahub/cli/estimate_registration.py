@@ -312,6 +312,7 @@ def beads_based_registration(
     num_processes: int,
     window_size: int,
     tolerance: float,
+    angle_threshold:int,
     verbose: bool = False,
 ):
     (T, Z, Y, X) = source_channel_tzyx.shape
@@ -322,6 +323,7 @@ def beads_based_registration(
                 approx_tform,
                 source_channel_tzyx,
                 target_channel_tzyx,
+                angle_threshold,
                 verbose,
             ),
             range(T),
@@ -397,6 +399,7 @@ def _get_tform_from_beads(
     approx_tform: list,
     source_channel_tzyx: da.Array,
     target_channel_tzyx: da.Array,
+    angle_threshold:int,
     verbose: bool,
     t_idx: int,
 ) -> list | None:
@@ -471,8 +474,8 @@ def _get_tform_from_beads(
     dominant_angle = (bin_edges[dominant_bin_index] + bin_edges[dominant_bin_index + 1]) / 2
 
     # Filter matches within ±30 degrees of the dominant direction, which may need finetuning
-    threshold = 30
-    filtered_indices = np.where(np.abs(angles_deg - dominant_angle) <= threshold)[0]
+
+    filtered_indices = np.where(np.abs(angles_deg - dominant_angle) <= angle_threshold)[0]
     matches = matches[filtered_indices]
     if verbose:
         click.echo(f'Total of matches after angle filtering at time point {t_idx}: {len(matches)}')
@@ -573,6 +576,7 @@ def estimate_registration(
             num_processes=num_processes,
             window_size=settings.affine_transform_window_size,
             tolerance=settings.affine_transform_tolerance,
+            angle_threshold=settings.filtering_angle_threshold,
             verbose=settings.verbose_bead_detection,
         )
 
