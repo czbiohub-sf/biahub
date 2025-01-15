@@ -312,7 +312,7 @@ def beads_based_registration(
     num_processes: int,
     window_size: int,
     tolerance: float,
-    angle_threshold:int,
+    angle_threshold: int,
     verbose: bool = False,
 ):
     (T, Z, Y, X) = source_channel_tzyx.shape
@@ -399,7 +399,7 @@ def _get_tform_from_beads(
     approx_tform: list,
     source_channel_tzyx: da.Array,
     target_channel_tzyx: da.Array,
-    angle_threshold:int,
+    angle_threshold: int,
     verbose: bool,
     t_idx: int,
 ) -> list | None:
@@ -454,7 +454,9 @@ def _get_tform_from_beads(
     dist = np.linalg.norm(source_peaks[matches[:, 0]] - target_peaks[matches[:, 1]], axis=1)
     matches = matches[dist < np.quantile(dist, 0.95), :]
     if verbose:
-        click.echo(f'Total of matches after distance filtering at time point {t_idx}: {len(matches)}')
+        click.echo(
+            f'Total of matches after distance filtering at time point {t_idx}: {len(matches)}'
+        )
 
     # Calculate vectors between matches
     vectors = target_peaks[matches[:, 1]] - source_peaks[matches[:, 0]]
@@ -478,7 +480,9 @@ def _get_tform_from_beads(
     filtered_indices = np.where(np.abs(angles_deg - dominant_angle) <= angle_threshold)[0]
     matches = matches[filtered_indices]
     if verbose:
-        click.echo(f'Total of matches after angle filtering at time point {t_idx}: {len(matches)}')
+        click.echo(
+            f'Total of matches after angle filtering at time point {t_idx}: {len(matches)}'
+        )
 
     if len(matches) < 3:
         click.echo(

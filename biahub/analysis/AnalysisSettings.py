@@ -28,7 +28,7 @@ class EstimateRegistrationSettings(MyBaseModel):
     approx_affine_transform: list = None
     affine_transform_window_size: int = 10
     affine_transform_tolerance: float = 50.0
-    filtering_angle_threshold:int = 30
+    filtering_angle_threshold: int = 30
     verbose_bead_detection: bool = False
 
     @field_validator("approx_affine_transform")
