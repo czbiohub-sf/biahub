@@ -424,7 +424,7 @@ def _get_tform_from_beads(
     source_peaks = detect_peaks(
         source_data_reg,
         block_size=[32, 16, 16],
-        threshold_abs=np.percentile(source_data_reg, 99.98),
+        threshold_abs=110,
         nms_distance=16,
         min_distance=0,
         verbose=verbose,
