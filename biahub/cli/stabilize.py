@@ -56,7 +56,6 @@ def apply_stabilization_transform(
             zyx_data_ants, reference=target_zyx_ants
         ).numpy()
 
-
     return stabilized_zyx
 
 
@@ -112,13 +111,13 @@ def stabilize(
         )
         Z = Z_slice.stop - Z_slice.start
 
-    if settings.affine_90degree_rotation ==-1:
+    if settings.affine_90degree_rotation == -1:
         X = Y_slice.stop - Y_slice.start
         Y = X_slice.stop - X_slice.start
     else:
         Y = Y_slice.stop - Y_slice.start
         X = X_slice.stop - X_slice.start
-        
+
     # Logic to parse time indices
     if settings.time_indices == "all":
         time_indices = list(range(T))
@@ -189,7 +188,6 @@ def stabilize(
     click.echo('Submitting SLURM jobs...')
     jobs = []
 
-
     with executor.batch():
         # apply stabilization to channels in the chosen channels and else copy the rest
         for input_position_path in input_position_dirpaths:
@@ -201,7 +199,7 @@ def stabilize(
                         input_data_path=input_position_path,  # source store
                         output_path=output_dirpath,
                         time_indices=time_indices,
-                        output_shape = (Z, Y, X),
+                        output_shape=(Z, Y, X),
                         input_channel_idx=[channel_names.index(channel_name)],
                         output_channel_idx=[channel_names.index(channel_name)],
                         num_processes=int(

@@ -591,7 +591,7 @@ def estimate_registration(
             affine_transform_zyx_list=transforms,
             time_indices='all',
             voxel_size=voxel_size,
-            affine_90degree_rotation = affine_90degree_rotation
+            affine_90degree_rotation=affine_90degree_rotation,
         )
     else:
         # Register based on user input
@@ -610,8 +610,7 @@ def estimate_registration(
             source_channel_names=stabilization_channels_names,
             target_channel_name=target_channel_name,
             affine_transform_zyx=transform.tolist(),
-            affine_90degree_rotation = affine_90degree_rotation,
-
+            affine_90degree_rotation=affine_90degree_rotation,
         )
 
     click.echo(f"Writing registration parameters to {output_filepath}")
