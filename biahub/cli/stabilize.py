@@ -7,6 +7,8 @@ import numpy as np
 import submitit
 
 from iohub.ngff import open_ome_zarr
+from scipy.linalg import svd
+from scipy.spatial.transform import Rotation as R
 
 from biahub.analysis.AnalysisSettings import StabilizationSettings
 from biahub.analysis.register import convert_transform_to_ants
@@ -111,7 +113,20 @@ def stabilize(
         )
         Z = Z_slice.stop - Z_slice.start
 
-    if settings.affine_90degree_rotation == -1:
+    # Get the rotation matrix
+
+    # Extract 3x3 rotation/scaling matrix
+    R_matrix = combined_mats[0][:3, :3]
+
+    # Remove scaling using SVD
+    U, _, Vt = svd(R_matrix)
+    R_pure = np.dot(U, Vt)
+
+    # Convert to Euler angles
+    rotation = R.from_matrix(R_pure)
+    euler_angles = rotation.as_euler('xyz', degrees=True)  # XYZ order, in degrees
+
+    if np.isclose(euler_angles[0], 90, atol=10):
         X = Y_slice.stop - Y_slice.start
         Y = X_slice.stop - X_slice.start
     else:

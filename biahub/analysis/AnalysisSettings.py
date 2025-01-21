@@ -90,7 +90,6 @@ class RegistrationSettings(MyBaseModel):
     keep_overhang: bool = False
     interpolation: str = "linear"
     time_indices: Union[NonNegativeInt, list[NonNegativeInt], Literal["all"]] = "all"
-    affine_90degree_rotation: int
 
     @field_validator("affine_transform_zyx")
     @classmethod
@@ -194,7 +193,6 @@ class StabilizationSettings(MyBaseModel):
     voxel_size: list[
         PositiveFloat, PositiveFloat, PositiveFloat, PositiveFloat, PositiveFloat
     ] = [1.0, 1.0, 1.0, 1.0, 1.0]
-    affine_90degree_rotation: int = 0
 
     @field_validator("affine_transform_zyx_list")
     @classmethod
