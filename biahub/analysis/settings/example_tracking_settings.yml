@@ -1,0 +1,19 @@
+z_slices: [20, 50]
+vs_projection: "max"
+tracking:
+  segmentation_config:
+    min_area: 2100
+    max_area: 80000
+    n_workers: 10
+    min_frontier: 0.4
+    max_noise: 0.05
+  linking_config:
+    n_workers: 10
+    max_distance: 15
+    distance_weight: -0.0001
+    max_neighbors: 3
+  tracking_config:
+    n_threads: 14
+    disappear_weight: -0.0001
+    appear_weight: -0.001
+    division_weight: -0.0001

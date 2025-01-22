@@ -11,11 +11,11 @@ import toml
 
 from iohub import open_ome_zarr
 from numpy.typing import ArrayLike
-from ultrack import MainConfig, Tracker
+from ultrack import Tracker
 from ultrack.imgproc import detect_foreground, normalize
 from ultrack.utils.array import array_apply, create_zarr
 
-from biahub.analysis.AnalysisSettings import TrackSettings
+from biahub.analysis.AnalysisSettings import TrackingSettings
 from biahub.cli.parsing import (
     config_filepath,
     input_position_dirpaths,
@@ -86,32 +86,15 @@ def ultrack_tracking(
     databaset_path,
 ):
     print("Tracking...")
-    cfg = MainConfig()
+    cfg = tracking_config
 
     cfg.data_config.working_dir = databaset_path
-    cfg.segmentation_config.min_area = tracking_config.min_area
-    cfg.segmentation_config.max_area = tracking_config.max_area
-    cfg.segmentation_config.n_workers = tracking_config.n_workers_segmentation
-    cfg.segmentation_config.min_frontier = tracking_config.min_frontier
-    cfg.segmentation_config.max_noise = tracking_config.max_noise
-
-    cfg.linking_config.n_workers = tracking_config.n_workers_linking
-    cfg.linking_config.max_distance = tracking_config.max_distance
-    cfg.linking_config.distance_weight = tracking_config.distance_weight
-    cfg.linking_config.max_neighbors = tracking_config.max_neighbors
-
-    cfg.tracking_config.n_threads = tracking_config.n_threads
-    cfg.tracking_config.disappear_weight = tracking_config.disappear_weight
-    cfg.tracking_config.appear_weight = tracking_config.appear_weight
-    cfg.tracking_config.division_weight = tracking_config.division_weight
-    # cfg.tracking_config.window_size = tracking_config.window_size
 
     tracker = Tracker(cfg)
     tracker.track(
         detection=fg_arr,
         edges=top_arr,
         scale=scale,
-        # overwrite=True,
     )
 
     tracks_df, graph = tracker.to_tracks_layer()
@@ -135,7 +118,7 @@ def tracking_one_position(
     output_dirpath: Path,
     z_slice: tuple,
     vs_projection: str,
-    tracking_config: TrackSettings,
+    tracking_config: TrackingSettings,
 ):
 
     # Using this range to do projection
@@ -241,9 +224,8 @@ def track(
     """
 
     output_dirpath = Path(output_dirpath)
-    config_filepath = Path(config_filepath)
 
-    settings = yaml_to_model(config_filepath, TrackSettings)
+    settings = yaml_to_model(config_filepath, TrackingSettings)
 
     with open_ome_zarr(input_position_dirpaths[0]) as dataset:
         T, C, Z, Y, X = dataset.data.shape
@@ -291,7 +273,7 @@ def track(
                 output_dirpath=output_dirpath,
                 z_slice=settings.z_slices,
                 vs_projection=settings.vs_projection,
-                tracking_config=settings.tracking_config,
+                tracking_config=settings.tracking_config(),
             )
             jobs.append(job)
 

@@ -1,6 +1,6 @@
 import warnings
 
-from typing import Literal, Optional, Tuple, Union
+from typing import Any, Dict, Literal, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -13,6 +13,7 @@ from pydantic import (
     PositiveInt,
     field_validator,
 )
+from ultrack import MainConfig
 
 
 # All settings classes inherit from MyBaseModel, which forbids extra parameters to guard against typos
@@ -20,32 +21,24 @@ class MyBaseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class TrackingConfig(MyBaseModel):
-    # Segmentation settings
-    min_area: int
-    max_area: int
-    n_workers_segmentation: int
-    min_frontier: float
-    max_noise: float
+class TrackingSettings(MyBaseModel):
+    """
+    Encapsulates all tracking-related settings, including MainConfig and additional settings.
+    """
 
-    # Linking settings
-    n_workers_linking: int
-    max_distance: int
-    distance_weight: float
-    max_neighbors: int
-
-    # Tracking settings
-    n_threads: int
-    disappear_weight: float
-    appear_weight: float
-    division_weight: float
-    window_size: int
-
-
-class TrackSettings(MyBaseModel):
     z_slices: Tuple[int, int]
     vs_projection: str
-    tracking_config: TrackingConfig
+    tracking: Dict[str, Any]  # Define as raw dict
+
+    def tracking_config(self) -> MainConfig:
+        """
+        Converts the 'tracking' field to a MainConfig instance if it is a dictionary.
+        """
+        if isinstance(self.tracking, MainConfig):
+            print("Tracking is already a MainConfig instance.")
+            return self.tracking
+        print("Converting tracking dictionary to MainConfig.")
+        return MainConfig.parse_obj(self.tracking)
 
 
 class ProcessingSettings(MyBaseModel):
