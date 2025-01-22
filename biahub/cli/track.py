@@ -49,25 +49,19 @@ def data_preprocessing(im_arr, nuc_arr, mem_arr):
         prev_idx = empty_frames_idx[i]
 
     # Preprocess the data
-    nuc_arr_norm = create_zarr(shape=nuc_arr.shape, dtype=float)
-    array_apply(np.array(nuc_arr), out_array=nuc_arr_norm, func=normalize, gamma=0.7)
+    nuc_arr_norm = array_apply(np.array(nuc_arr), func=normalize, gamma=0.7)
 
-    mem_arr_norm = create_zarr(shape=mem_arr.shape, dtype=float)
-    array_apply(np.array(mem_arr), out_array=mem_arr_norm, func=normalize, gamma=0.7)
-
-    fg_arr = create_zarr(shape=nuc_arr_norm.shape, dtype=bool)
+    mem_arr_norm = array_apply(np.array(mem_arr), func=normalize, gamma=0.7)
     # array_apply(np.array(nuc_arr_norm), out_array = fg_arr, func = Cellpose(model_type = 'nuclei'))
 
-    array_apply(
+    fg_arr = array_apply(
         nuc_arr_norm,
-        out_array=fg_arr,
         func=detect_foreground,
         sigma=90,
     )
-    top_arr = create_zarr(shape=nuc_arr.shape, dtype=np.float32)
     # array_apply(np.array(fg_arr), out_array=top_arr, func=inverted_edt)
-    array_apply(
-        np.array(nuc_arr_norm), np.array(mem_arr_norm), out_array=top_arr, func=mem_nuc_contor
+    top_arr = array_apply(
+        np.array(nuc_arr_norm), np.array(mem_arr_norm), func=mem_nuc_contor
     )
 
     return fg_arr, top_arr
@@ -243,7 +237,7 @@ def track(
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,  # process up to 100 positions at a time
         "slurm_time": 60,
-        "slurm_partition": "gpu",
+        "slurm_partition": "preempted",
     }
 
     # Override defaults if sbatch_filepath is provided
