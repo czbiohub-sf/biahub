@@ -106,6 +106,30 @@ def ultrack_tracking(
     )
 
 
+def apply_projection(data, projection_method, axis=1):
+    # Map projection methods to NumPy functions
+    projections = {
+        "max": np.max,
+        "mean": np.mean,
+        "sum": np.sum,
+        # Add more methods as needed
+    }
+
+    if isinstance(projection_method, str):
+        # Get the projection function from the mapping
+        projection_func = projections.get(projection_method)
+        if projection_func is None:
+            raise ValueError(f"Unknown projection method: {projection_method}")
+    elif callable(projection_method):
+        projection_func = projection_method
+    else:
+        raise TypeError("projection_method must be a string or a callable.")
+
+    # Apply the projection function
+    return projection_func(data, axis=axis)
+
+
+
 def tracking_one_position(
     input_lf_dirpath: Path,
     input_vs_path: Path,
@@ -117,8 +141,6 @@ def tracking_one_position(
 
     # Using this range to do projection
     z_slices = slice(z_slice[0], z_slice[1])
-
-    input_vs_path = input_vs_path[0]
 
     position_key = input_vs_path.parts[-3:]
     fov = "_".join(position_key)
@@ -149,16 +171,21 @@ def tracking_one_position(
     )
 
     im_arr = im_dataset[0][:, 0, z_slices.start, :, :]
-    nuc_c_idx = channel_names.index(channel_names[0])
-    mem_c_idx = channel_names.index(channel_names[1])
+    nuc_c_idx = channel_names.index("nuclei_prediction")
+    mem_c_idx = channel_names.index("membrane_prediction")
 
-    if vs_projection == "max":
-        nuc_arr = vs_dataset[0][:, nuc_c_idx, z_slices].max(axis=1)
-        mem_arr = vs_dataset[0][:, mem_c_idx, z_slices].max(axis=1)
+    if vs_projection:  
+        nuc_arr = apply_projection(
+            data=vs_dataset[0][:, nuc_c_idx, z_slices],
+            projection_method=vs_projection,
+            axis=1
+        )
+        mem_arr = apply_projection(
+            data=vs_dataset[0][:, mem_c_idx, z_slices],
+            projection_method=vs_projection,
+            axis=1
+    )
 
-    elif vs_projection == "mean":
-        nuc_arr = vs_dataset[0][:, nuc_c_idx, z_slices].mean(axis=1)
-        mem_arr = vs_dataset[0][:, mem_c_idx, z_slices].mean(axis=1)
 
     # preprocess to get the the foreground and multi-level contours
     fg_arr, top_arr = data_preprocessing(im_arr, nuc_arr, mem_arr)
@@ -259,7 +286,7 @@ def track(
     jobs = []
 
     with executor.batch():
-        for input_vs_position_path in zip(input_position_dirpaths):
+        for input_vs_position_path in input_position_dirpaths:
             job = executor.submit(
                 tracking_one_position,
                 input_lf_dirpath=input_lf_dirpaths,
