@@ -20,6 +20,14 @@ from ultrack import MainConfig
 class MyBaseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+class FunctionSettings(MyBaseModel):
+    """
+    General configuration model for preprocessing, foreground, and contour.
+    """
+    func: str
+    input_array: list[str]
+    additional_params: Optional[Dict[str, Union[int, float, str, list[str]]]] = None
+
 
 class TrackingSettings(MyBaseModel):
     """
@@ -28,17 +36,20 @@ class TrackingSettings(MyBaseModel):
 
     z_slices: Tuple[int, int]
     vs_projection: str
-    tracking: Dict[str, Any]  # Define as raw dict
+    tracking_config: Union[Dict[str, Any]]  # Define as raw dict
+    preprocessing_config: FunctionSettings
+    foreground_config: FunctionSettings
+    contour_config:FunctionSettings
 
-    def tracking_config(self) -> MainConfig:
+    def get_tracking_config(self) -> MainConfig:
         """
         Converts the 'tracking' field to a MainConfig instance if it is a dictionary.
         """
-        if isinstance(self.tracking, MainConfig):
+        if isinstance(self.tracking_config, MainConfig):
             print("Tracking is already a MainConfig instance.")
-            return self.tracking
+            return self.tracking_config
         print("Converting tracking dictionary to MainConfig.")
-        return MainConfig.parse_obj(self.tracking)
+        return MainConfig.parse_obj(self.tracking_config)
 
 
 class ProcessingSettings(MyBaseModel):

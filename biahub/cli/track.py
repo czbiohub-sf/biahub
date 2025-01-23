@@ -2,7 +2,7 @@
 import os
 
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Union
 
 import click
 import numpy as np
@@ -12,10 +12,10 @@ import toml
 from iohub import open_ome_zarr
 from numpy.typing import ArrayLike
 from ultrack import Tracker
-from ultrack.imgproc import detect_foreground, normalize
-from ultrack.utils.array import array_apply, create_zarr
+from ultrack.imgproc import detect_foreground, normalize, Cellpose, inverted_edt
+from ultrack.utils.array import array_apply
 
-from biahub.analysis.AnalysisSettings import TrackingSettings
+from biahub.analysis.AnalysisSettings import TrackingSettings, FunctionSettings
 from biahub.cli.parsing import (
     config_filepath,
     input_position_dirpaths,
@@ -24,70 +24,98 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import create_empty_hcs_zarr, yaml_to_model
+from biahub.cli.utils import create_empty_hcs_zarr, yaml_to_model, _check_nan_n_zeros
+
+def mem_nuc_contour(nuclei_prediction, membrane_prediction):
+    return (np.asarray(membrane_prediction) + (1 - np.asarray(nuclei_prediction))) / 2
+
+function_mapping = {
+    "detect_foreground": detect_foreground,
+    "normalize": normalize,
+    "Cellpose": Cellpose(model_type = 'nuclei'),
+    "inverted_edt": inverted_edt,
+    "mem_nuc": mem_nuc_contour,
+    "max": np.max,
+    "mean": np.mean,
+    "sum": np.sum,
+}
+
+def get_function(func_name):
+    if func_name in function_mapping:
+        return function_mapping[func_name]
+    raise ValueError(f"Function '{func_name}' is not registered in the function mapping.")
 
 
 def detect_empty_frames(arr):
     empty_frames_idx = []
     for f in range(arr.shape[0]):
-        if arr[f].sum() == 0.0:
+        if np.all(arr[f] == 0):
             empty_frames_idx.append(f)
     return empty_frames_idx
 
-
-def data_preprocessing(im_arr, nuc_arr, mem_arr):
-
-    empty_frames_idx = detect_empty_frames(im_arr)
+def fill_empty_frames(arr, empty_frames_idx):
     prev_idx = 0
     for i in range(len(empty_frames_idx)):
-        nuc_arr[empty_frames_idx[i]] = nuc_arr[empty_frames_idx[i] - 1]
-        mem_arr[empty_frames_idx[i]] = mem_arr[empty_frames_idx[i] - 1]
+        arr[empty_frames_idx[i]] = arr[empty_frames_idx[i] - 1]
 
         if empty_frames_idx[i] == prev_idx + 1 and i < len(empty_frames_idx) - 1 and i > 0:
-            nuc_arr[empty_frames_idx[i]] = nuc_arr[empty_frames_idx[i] + 1]
-            mem_arr[empty_frames_idx[i]] = mem_arr[empty_frames_idx[i] + 1]
+            arr[empty_frames_idx[i]] = arr[empty_frames_idx[i] + 1]
         prev_idx = empty_frames_idx[i]
-
-    # Preprocess the data
-    nuc_arr_norm = array_apply(np.array(nuc_arr), func=normalize, gamma=0.7)
-
-    mem_arr_norm = array_apply(np.array(mem_arr), func=normalize, gamma=0.7)
-    # array_apply(np.array(nuc_arr_norm), out_array = fg_arr, func = Cellpose(model_type = 'nuclei'))
-
-    fg_arr = array_apply(
-        nuc_arr_norm,
-        func=detect_foreground,
-        sigma=90,
-    )
-    # array_apply(np.array(fg_arr), out_array=top_arr, func=inverted_edt)
-    top_arr = array_apply(
-        np.array(nuc_arr_norm), np.array(mem_arr_norm), func=mem_nuc_contor
-    )
-
-    return fg_arr, top_arr
+    return arr
 
 
-def mem_nuc_contor(nuc_arr, mem_arr):
-    contourn = (np.array(mem_arr) + (1 - np.array(nuc_arr))) / 2
-    return contourn
+def data_preprocessing(
+        data_dict: dict,
+        preprocessing_config: FunctionSettings,
+        foreground_config: FunctionSettings,
+        contour_config: FunctionSettings):
 
+    # Fill empty frames
+    empty_frames_idx = detect_empty_frames(data_dict["lf_image"])
+    
+    # Drop label free image
+    data_dict.pop("lf_image")
+    
+    # Fill empty frames for tracking
+    for key in data_dict:
+        if empty_frames_idx:
+            data_dict[key] = fill_empty_frames(data_dict[key], empty_frames_idx)
 
-def ultrack_tracking(
+    # Preprocess inputs
+    for key in preprocessing_config.input_array:
+        func = get_function(preprocessing_config.func)
+        data_dict[key] = array_apply(
+            data_dict[key], func=func, **preprocessing_config.additional_params
+        )
+
+    # Generate foreground mask
+    foreground_func = get_function(foreground_config.func)
+    fg_input_arrays = [data_dict[key] for key in foreground_config.input_array]
+    foreground_mask = array_apply(*fg_input_arrays, func=foreground_func, **foreground_config.additional_params)
+
+    # Generate contour gradient map
+    contour_func = get_function(contour_config.func)
+    contour_input_arrays = [data_dict[key] for key in contour_config.input_array]
+    contour_gradient_map = array_apply(*contour_input_arrays, func=contour_func, **contour_config.additional_params)
+
+    return foreground_mask, contour_gradient_map
+
+def ultrack(
     tracking_config,
-    fg_arr: ArrayLike,
-    top_arr: ArrayLike,
-    scale: Tuple[float, float],
+    foreground_mask: ArrayLike,
+    contour_gradient_map: ArrayLike,
+    scale: Union[Tuple[float, float],Tuple[float, float, float]],
     databaset_path,
 ):
-    print("Tracking...")
+    click.echo("Tracking...")
     cfg = tracking_config
 
     cfg.data_config.working_dir = databaset_path
 
     tracker = Tracker(cfg)
     tracker.track(
-        detection=fg_arr,
-        edges=top_arr,
+        detection=foreground_mask,
+        edges=contour_gradient_map,
         scale=scale,
     )
 
@@ -105,47 +133,22 @@ def ultrack_tracking(
         graph,
     )
 
-
-def apply_projection(data, projection_method, axis=1):
-    # Map projection methods to NumPy functions
-    projections = {
-        "max": np.max,
-        "mean": np.mean,
-        "sum": np.sum,
-        # Add more methods as needed
-    }
-
-    if isinstance(projection_method, str):
-        # Get the projection function from the mapping
-        projection_func = projections.get(projection_method)
-        if projection_func is None:
-            raise ValueError(f"Unknown projection method: {projection_method}")
-    elif callable(projection_method):
-        projection_func = projection_method
-    else:
-        raise TypeError("projection_method must be a string or a callable.")
-
-    # Apply the projection function
-    return projection_func(data, axis=axis)
-
-
-
-def tracking_one_position(
+def track_one_position(
     input_lf_dirpath: Path,
     input_vs_path: Path,
     output_dirpath: Path,
+    preprocessing_config: dict,
+    foreground_config: dict,
+    contour_config: dict,
     z_slice: tuple,
     vs_projection: str,
     tracking_config: TrackingSettings,
 ):
-
-    # Using this range to do projection
-    z_slices = slice(z_slice[0], z_slice[1])
-
     position_key = input_vs_path.parts[-3:]
     fov = "_".join(position_key)
-    click.echo(f"Position key: {position_key}")
+    click.echo(f"Processing position: {fov}")
 
+    click.echo(f"Loading data from: {input_vs_path} and {input_lf_dirpath}...")
     input_im_path = input_lf_dirpath / Path(*position_key)
     im_dataset = open_ome_zarr(input_im_path)
     vs_dataset = open_ome_zarr(input_vs_path)
@@ -153,62 +156,72 @@ def tracking_one_position(
     T, C, Z, Y, X = vs_dataset.data.shape
     channel_names = vs_dataset.channel_names
 
-    click.echo(f"Channel names: {channel_names}")
+    click.echo(f"Virtual Stanining Channel names: {channel_names}")
 
     yx_scale = vs_dataset.scale[-2:]
-    processing_channels = [f"{channel_names[0]}_labels"]
 
     output_metadata = {
-        "shape": (T, len(processing_channels), 1, Y, X),
+        "shape": (T,1, 1, Y, X),
         "chunks": None,
         "scale": vs_dataset.scale,
-        "channel_names": processing_channels,
+        "channel_names": [f"{channel_names[0]}_labels"],
         "dtype": np.uint32,
     }
 
     create_empty_hcs_zarr(
         store_path=output_dirpath, position_keys=[position_key], **output_metadata
     )
+    z_slices = slice(z_slice[0], z_slice[1])
 
-    im_arr = im_dataset[0][:, 0, z_slices.start, :, :]
-    nuc_c_idx = channel_names.index("nuclei_prediction")
-    mem_c_idx = channel_names.index("membrane_prediction")
+    click.echo(f"Processing z-stack: {z_slices}")
 
-    if vs_projection:  
-        nuc_arr = apply_projection(
-            data=vs_dataset[0][:, nuc_c_idx, z_slices],
-            projection_method=vs_projection,
-            axis=1
-        )
-        mem_arr = apply_projection(
-            data=vs_dataset[0][:, mem_c_idx, z_slices],
-            projection_method=vs_projection,
-            axis=1
-    )
+    nuclei_prediction = vs_dataset[0][:, channel_names.index("nuclei_prediction"), z_slices]
+    membrane_prediction = vs_dataset[0][:, channel_names.index("membrane_prediction"), z_slices]
+    lf_image = im_dataset[0][:, 0, z_slices.start, :, :]
 
+    if vs_projection:
+        click.echo(f"Applying projection {vs_projection} to the virtual staining data...") 
+ 
+        projection = get_function(vs_projection)
 
-    # preprocess to get the the foreground and multi-level contours
-    fg_arr, top_arr = data_preprocessing(im_arr, nuc_arr, mem_arr)
+        nuclei_prediction = projection(nuclei_prediction, axis=1)
+        membrane_prediction = projection(membrane_prediction, axis=1)
 
+    # Prepare data dictionary   
+    data_dict = {
+        "lf_image": lf_image,
+        "nuclei_prediction": nuclei_prediction,
+        "membrane_prediction": membrane_prediction,
+    }
+           
+    # Preprocess to get the the foreground and multi-level contours
+    click.echo("Preprocessing...")
+    foreground_mask, contour_gradient_map = data_preprocessing(
+        data_dict = data_dict,
+        preprocessing_config = preprocessing_config,
+        foreground_config = foreground_config,
+        contour_config = contour_config)
+
+    # Define path to save the tracking database and graph
     filename = str(output_dirpath).split("/")[-1].split(".")[0]
-
     databaset_path = output_dirpath.parent / f"{filename}_config_tracking" / f"{fov}"
     os.makedirs(databaset_path, exist_ok=True)
 
     # Perform tracking
-    labels, tracks_df, _ = ultrack_tracking(
-        tracking_config, fg_arr, top_arr, yx_scale, databaset_path
+    click.echo("Tracking...")
+    trackin_labels, tracks_df, _ = ultrack(
+        tracking_config, foreground_mask, contour_gradient_map, yx_scale, databaset_path
     )
 
-    # Save the tracks
+    # Save the tracks graph to a CSV file
     csv_path = output_dirpath / Path(*position_key) / f"tracks_{fov}.csv"
     tracks_df.to_csv(csv_path, index=False)
 
     click.echo(f"Saved tracks to: {output_dirpath / Path(*position_key)}")
 
-    # Save the labels
+    # Save the tracking labels
     with open_ome_zarr(output_dirpath / Path(*position_key), mode="r+") as output_dataset:
-        output_dataset[0][:, 0, 0] = np.array(labels)
+        output_dataset[0][:, 0, 0] = np.asarray(trackin_labels)
 
 
 @click.command()
@@ -221,7 +234,7 @@ def tracking_one_position(
     "-input_lf_dirpaths",
     required=True,
     type=str,
-    help="input label free dirpath",
+    help="Label Free Image Dirpath",
 )
 def track(
     input_lf_dirpaths: str,
@@ -285,18 +298,31 @@ def track(
     click.echo('Submitting SLURM jobs...')
     jobs = []
 
-    with executor.batch():
-        for input_vs_position_path in input_position_dirpaths:
-            job = executor.submit(
-                tracking_one_position,
-                input_lf_dirpath=input_lf_dirpaths,
-                input_vs_path=input_vs_position_path,
-                output_dirpath=output_dirpath,
-                z_slice=settings.z_slices,
-                vs_projection=settings.vs_projection,
-                tracking_config=settings.tracking_config(),
-            )
-            jobs.append(job)
+    for input_vs_position_path in input_position_dirpaths:
+        track_one_position(
+        input_lf_dirpath=input_lf_dirpaths,
+        input_vs_path=input_vs_position_path,
+        output_dirpath=output_dirpath,
+        preprocessing_config = settings.preprocessing_config,
+        foreground_config = settings.foreground_config,
+        contour_config = settings.contour_config,
+        z_slice=settings.z_slices,
+        vs_projection=settings.vs_projection,
+        tracking_config=settings.get_tracking_config())
+    
+
+    # with executor.batch():
+    #     for input_vs_position_path in input_position_dirpaths:
+    #         job = executor.submit(
+    #             tracking_one_position,
+    #             input_lf_dirpath=input_lf_dirpaths,
+    #             input_vs_path=input_vs_position_path,
+    #             output_dirpath=output_dirpath,
+    #             z_slice=settings.z_slices,
+    #             vs_projection=settings.vs_projection,
+    #             tracking_config=settings.tracking_config(),
+    #         )
+    #         jobs.append(job)
 
 
 if __name__ == "__main__":
