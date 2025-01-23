@@ -142,16 +142,28 @@ def stabilize(
     elif isinstance(settings.time_indices, int):
         time_indices = [settings.time_indices]
 
+
+    # Attempted to calculate the new scale from the input affine transform,
+    # but chose to use the `output_voxel_size` instead to ensure consistency in scale.
+    # The computed scale value was close to the desired voxel size but not exact.
+
+    # transform_t0_sy calculates the scale factor for the YZ plane (shear factor) 
+    # derived from the affine transform matrix.
+    # It uses the [2][1] element of the first affine matrix (T0) and rounds it to 3 decimal places.
     # transform_t0_sy = np.abs(settings.affine_transform_zyx_list[0][2][1]).round(3)
 
-    # # Calculate scale
+    # Calculate the new scale for the dataset:
+    # The first three elements represent the spatial scaling factors for X, Y, and Z dimensions.
+    # The last two elements adjust the temporal scaling based on `transform_t0_sy`.
+    # Note: Temporal scaling is applied to dimensions 3 and 4.
     # new_scale = [
-    #     scale_dataset[0],
-    #     scale_dataset[1],
-    #     scale_dataset[2],
-    #     scale_dataset[3] * transform_t0_sy,
-    #     scale_dataset[4] * transform_t0_sy,
+    #     scale_dataset[0],  # X-dimension scaling factor (remains unchanged)
+    #     scale_dataset[1],  # Y-dimension scaling factor (remains unchanged)
+    #     scale_dataset[2],  # Z-dimension scaling factor (remains unchanged)
+    #     scale_dataset[3] * transform_t0_sy,  # Adjust temporal scaling for the 4th dimension.
+    #     scale_dataset[4] * transform_t0_sy   # Adjust temporal scaling for the 5th dimension.
     # ]
+
     output_metadata = {
         "shape": (len(time_indices), len(channel_names), Z, Y, X),
         "chunks": None,
@@ -171,7 +183,7 @@ def stabilize(
     copy_n_paste_kwargs = {"czyx_slicing_params": ([Z_slice, Y_slice, X_slice])}
 
     # Estimate resources
-    
+
     num_cpus, gb_ram_per_cpu = estimate_resources(shape=[T,C,Z,Y,X])
 
     # Prepare SLURM arguments
