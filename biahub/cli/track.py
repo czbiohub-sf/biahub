@@ -24,7 +24,7 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import _check_nan_n_zeros, create_empty_hcs_zarr, yaml_to_model
+from biahub.cli.utils import _check_nan_n_zeros, create_empty_hcs_zarr, yaml_to_model, estimate_resources
 
 
 def mem_nuc_contour(nuclei_prediction: ArrayLike, membrane_prediction: ArrayLike) -> ArrayLike:
@@ -316,15 +316,12 @@ def track(
         T, C, Z, Y, X = dataset.data.shape
 
     # Estimate resources
-    gb_per_element = 4 / 2**30  # bytes_per_float32 / bytes_per_gb
-    num_cpus = np.min([T * C, 16])
-    input_memory = num_cpus * Z * Y * X * gb_per_element
-    gb_ram_request = np.ceil(np.max([1, input_memory])).astype(int)
+    num_cpus, gb_ram_per_cpu = estimate_resources(shape=[T,C,Z,Y,X])
 
     # Prepare SLURM arguments
     slurm_args = {
         "slurm_job_name": "tracking",
-        "slurm_mem_per_cpu": f"{gb_ram_request}G",
+        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,  # process up to 100 positions at a time
         "slurm_time": 60,
