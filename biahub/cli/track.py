@@ -26,7 +26,7 @@ from biahub.cli.parsing import (
 )
 from biahub.cli.utils import create_empty_hcs_zarr, yaml_to_model, _check_nan_n_zeros
 
-def mem_nuc_contour(nuclei_prediction, membrane_prediction):
+def mem_nuc_contour(nuclei_prediction: ArrayLike, membrane_prediction: ArrayLike) -> ArrayLike:
     return (np.asarray(membrane_prediction) + (1 - np.asarray(nuclei_prediction))) / 2
 
 function_mapping = {
@@ -40,60 +40,91 @@ function_mapping = {
     "sum": np.sum,
 }
 
-def get_function(func_name):
+def get_function(func_name: str) -> callable:
     if func_name in function_mapping:
         return function_mapping[func_name]
     raise ValueError(f"Function '{func_name}' is not registered in the function mapping.")
 
+def fill_empty_frames(arr: ArrayLike, empty_frames_idx: List[int]) -> ArrayLike:
+    """
+    Fills empty frames in an array by propagating values from the nearest non-empty frames.
 
-def detect_empty_frames(arr):
-    empty_frames_idx = []
-    for f in range(arr.shape[0]):
-        if np.all(arr[f] == 0):
-            empty_frames_idx.append(f)
-    return empty_frames_idx
+    Args:
+        arr (np.ndarray): Input array (e.g., 3D: T, Y, X or 4D: T, C, Y, X).
+        empty_frames_idx (List[int]): Indices of empty frames.
 
-def fill_empty_frames(arr, empty_frames_idx):
-    prev_idx = 0
-    for i in range(len(empty_frames_idx)):
-        arr[empty_frames_idx[i]] = arr[empty_frames_idx[i] - 1]
+    Returns:
+        np.ndarray: Array with empty frames filled.
+    """
+    if not empty_frames_idx:
+        return arr  # No empty frames to fill
 
-        if empty_frames_idx[i] == prev_idx + 1 and i < len(empty_frames_idx) - 1 and i > 0:
-            arr[empty_frames_idx[i]] = arr[empty_frames_idx[i] + 1]
-        prev_idx = empty_frames_idx[i]
+    num_frames = arr.shape[0]
+
+    for idx in empty_frames_idx:
+        if idx == 0:  # First frame is empty
+            # Use the next non-empty frame to fill the first frame
+            next_non_empty = next((i for i in range(idx + 1, num_frames) if i not in empty_frames_idx), None)
+            if next_non_empty is not None:
+                arr[idx] = arr[next_non_empty]
+        elif idx == num_frames - 1:  # Last frame is empty
+            # Use the previous non-empty frame to fill the last frame
+            prev_non_empty = next((i for i in range(idx - 1, -1, -1) if i not in empty_frames_idx), None)
+            if prev_non_empty is not None:
+                arr[idx] = arr[prev_non_empty]
+        else:  # Middle frames are empty
+            # Find the nearest non-empty frame (previous or next)
+            prev_non_empty = next((i for i in range(idx - 1, -1, -1) if i not in empty_frames_idx), None)
+            next_non_empty = next((i for i in range(idx + 1, num_frames) if i not in empty_frames_idx), None)
+
+            if prev_non_empty is not None and next_non_empty is not None:
+                arr[idx] = arr[prev_non_empty]
+            elif prev_non_empty is not None:
+                # Fill with the previous non-empty frame
+                arr[idx] = arr[prev_non_empty]
+            elif next_non_empty is not None:
+                # Fill with the next non-empty frame
+                arr[idx] = arr[next_non_empty]
+
     return arr
+
 
 
 def data_preprocessing(
         data_dict: dict,
         preprocessing_config: FunctionSettings,
         foreground_config: FunctionSettings,
-        contour_config: FunctionSettings):
+        contour_config: FunctionSettings) -> Tuple[ArrayLike, ArrayLike]:
 
-    # Fill empty frames
-    empty_frames_idx = detect_empty_frames(data_dict["lf_image"])
+    # Check for empty frames
+    empty_frames = _check_nan_n_zeros(data_dict["lf_image"])
+    click.echo(f"Empty frames: {empty_frames}")
     
     # Drop label free image
     data_dict.pop("lf_image")
     
     # Fill empty frames for tracking
     for key in data_dict:
-        if empty_frames_idx:
-            data_dict[key] = fill_empty_frames(data_dict[key], empty_frames_idx)
+        click.echo(f"Filling empty frames for {key}...")
+        if empty_frames:
+            data_dict[key] = fill_empty_frames(data_dict[key], empty_frames)
 
     # Preprocess inputs
     for key in preprocessing_config.input_array:
+        click.echo(f"Preprocessing {key}...")
         func = get_function(preprocessing_config.func)
         data_dict[key] = array_apply(
             data_dict[key], func=func, **preprocessing_config.additional_params
         )
 
     # Generate foreground mask
+    click.echo("Generating foreground mask...")
     foreground_func = get_function(foreground_config.func)
     fg_input_arrays = [data_dict[key] for key in foreground_config.input_array]
     foreground_mask = array_apply(*fg_input_arrays, func=foreground_func, **foreground_config.additional_params)
 
     # Generate contour gradient map
+    click.echo("Generating contour gradient map...")
     contour_func = get_function(contour_config.func)
     contour_input_arrays = [data_dict[key] for key in contour_config.input_array]
     contour_gradient_map = array_apply(*contour_input_arrays, func=contour_func, **contour_config.additional_params)
@@ -107,7 +138,6 @@ def ultrack(
     scale: Union[Tuple[float, float],Tuple[float, float, float]],
     databaset_path,
 ):
-    click.echo("Tracking...")
     cfg = tracking_config
 
     cfg.data_config.working_dir = databaset_path
@@ -143,7 +173,7 @@ def track_one_position(
     z_slice: tuple,
     vs_projection: str,
     tracking_config: TrackingSettings,
-):
+) -> None:
     position_key = input_vs_path.parts[-3:]
     fov = "_".join(position_key)
     click.echo(f"Processing position: {fov}")
@@ -243,7 +273,7 @@ def track(
     config_filepath: str,
     sbatch_filepath: str = None,
     local: bool = None,
-):
+) -> None:
 
     """
     Track nuclei and membranes in using virtual staining nuclei and membranes data.

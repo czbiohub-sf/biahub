@@ -35,11 +35,13 @@ class TrackingSettings(MyBaseModel):
     """
 
     z_slices: Tuple[int, int]
-    vs_projection: str
+    vs_projection: str = "max"
     tracking_config: Union[Dict[str, Any]]  # Define as raw dict
-    preprocessing_config: FunctionSettings
-    foreground_config: FunctionSettings
-    contour_config:FunctionSettings
+    preprocessing_config: Optional[FunctionSettings] = None
+    foreground_config: Optional[FunctionSettings] = None
+    contour_config:Optional[FunctionSettings] = None
+    foreground_path: Optional[str] = None
+    contour_path: Optional[str] = None
 
     def get_tracking_config(self) -> MainConfig:
         """

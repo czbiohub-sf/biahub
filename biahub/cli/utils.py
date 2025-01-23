@@ -592,32 +592,43 @@ def _is_nested(lst):
 
 def _check_nan_n_zeros(input_array):
     """
-    Checks if any of the channels are all zeros or nans and returns true
+    Checks if an array is entirely zeros or NaNs and returns indices of such slices.
+
+    Args:
+        input_array: Input array (2D, 3D, or 4D).
+
+    Returns:
+        List[Tuple[int, List[int]]]: 
+            - For 2D arrays: Returns True if the array is zeros or NaNs, False otherwise.
+            - For 3D arrays: Returns a list of Z indices that are entirely zeros or NaNs.
+            - For 4D arrays: Returns a list of tuples, where each tuple contains:
+              (channel_index, list_of_empty_z_indices).
     """
-    if len(input_array.shape) == 3:
-        # Check if all the values are zeros or nans
-        if np.all(input_array == 0) or np.all(np.isnan(input_array)):
-            # Return true
-            return True
-    elif len(input_array.shape) == 4:
-        # Get the number of channels
-        num_channels = input_array.shape[0]
-        # Loop through the channels
-        for c in range(num_channels):
-            # Get the channel
-            zyx_array = input_array[c, :, :, :]
+    indices = []
 
-            # Check if all the values are zeros or nans
-            if np.all(zyx_array == 0) or np.all(np.isnan(zyx_array)):
-                # Return true
-                return True
+    if len(input_array.shape) == 2:  # 2D array (e.g., Y, X)
+        # Return True if entirely zeros or NaNs
+        return np.all(input_array == 0) or np.all(np.isnan(input_array))
+
+    elif len(input_array.shape) == 3:  # 3D array (e.g., Z, Y, X)
+        for z in range(input_array.shape[0]):
+            if np.all(input_array[z, :, :] == 0) or np.all(np.isnan(input_array[z, :, :])):
+                indices.append(z)  # Add Z index if it's empty
+        return indices
+
+    elif len(input_array.shape) == 4:  # 4D array (e.g., C, Z, Y, X)
+        for c in range(input_array.shape[0]):  # Iterate over channels
+            z_indices = _check_nan_n_zeros(input_array[c, :, :, :])  # Check Z slices in each channel
+            if z_indices:  # If there are empty Z slices, add them
+                indices.append((c, z_indices))  # Add (channel, empty_z_indices)
+        return indices
+
     else:
-        raise ValueError("Input array must be 3D or 4D")
-
-    # Return false
-    return False
+        raise ValueError("Input array must be 2D, 3D, or 4D.")
+        
 
 
+    
 def estimate_resources(
     shape: Tuple[int, int, int, int, int],
     dtype: DTypeLike = np.float32,
