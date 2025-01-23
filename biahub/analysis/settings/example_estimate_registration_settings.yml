@@ -1,25 +1,36 @@
-target_channel_name: Phase3D
-source_channel_name: GFP EX488 EM525-45
-stabilization_channels_names:
-- mCherry EX561 EM600-37
-- GFP EX488 EM525-45
-affine_90degree_rotation: -1
-approx_affine_transform:
-- - 1
+target_channel_name: Phase3D  # Target channel used for registration; specify the label-free channel for alignment.
+
+source_channel_name: GFP EX488 EM525-45  # Source channel used for initial registration. 
+                                         # If using bead registration, update this to the channel where beads are visible.
+
+stabilization_channels_names:  # List of channels to which the calculated transformation will be applied.
+- mCherry EX561 EM600-37       # Add or remove channels as required for the experiment.
+- GFP EX488 EM525-45         
+
+affine_90degree_rotation: -1   # Degree of rotation for aligning light sheet channels. 
+                               # Use -1, 0, or 1 to control direction as required; this is setup-specific.
+
+approx_affine_transform:       # Initial approximation for affine transformation matrix.
+                               # Adjust based on microscope configuration (e.g., Mantis setup for cells).
+- - 1                          
   - 0
   - 0
   - 0
-- - 0
+- - 0                         
   - 0
-  - -1.288
+  - -1.288                     
   - 1960
-- - 0
+- - 0                          
   - 1.288
   - 0
   - -460
-- - 0.0
+- - 0.0                       .
   - 0.0
   - 0.0
   - 1.0
-filtering_angle_threshold: 30
-verbose_bead_detection: True
+
+filtering_angle_threshold: 30  # Threshold for filtering matches based on angle deviations.
+                               # Lower this value if matches are noisy; increase if too restrictive.
+
+verbose_bead_detection: True   # Set to True for detailed logging of bead detection process.
+                               # Turn off (False) for faster processing when debugging is unnecessary.
