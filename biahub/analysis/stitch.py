@@ -246,8 +246,10 @@ def process_dataset(
     verbose: bool = True,
 ) -> np.ndarray:
     flip = np.flip
+    rot = np.rot90
     if isinstance(data_array, da.Array):
         flip = da.flip
+        rot = da.rot90
 
     if settings:
         if settings.flipud:
@@ -259,6 +261,11 @@ def process_dataset(
             if verbose:
                 click.echo("Flipping data array left-right")
             data_array = flip(data_array, axis=-1)
+        
+        if settings.rot90 != 0:
+            if verbose:
+                click.echo(f"Rotating data array {settings.rot90} times counterclockwise")
+            data_array = rot(data_array, settings.rot90, axes=(-2, -1))
 
     return data_array
 
@@ -367,6 +374,8 @@ def estimate_zarr_fov_shifts(
     percent_overlap: float,
     fliplr: bool,
     flipud: bool,
+    rot90: int,
+    add_offset: bool,
     direction: Literal["row", "col"],
     output_dirname: str = None,
 ):
@@ -418,8 +427,11 @@ def estimate_zarr_fov_shifts(
     if flipud:
         im0 = np.flipud(im0)
         im1 = np.flipud(im1)
+    if rot90 != 0:
+        im0 = np.rot90(im0, k=rot90)
+        im1 = np.rot90(im1, k=rot90)
 
-    shift = estimate_shift(im0, im1, percent_overlap, direction, add_offset=flipud)
+    shift = estimate_shift(im0, im1, percent_overlap, direction, add_offset=add_offset)
 
     df = pd.DataFrame(
         {
