@@ -590,7 +590,7 @@ def estimate_registration(
             stabilization_channels=stabilization_channels_names,
             affine_transform_zyx_list=transforms,
             time_indices='all',
-            voxel_size=voxel_size,
+            output_voxel_size=voxel_size,
         )
     else:
         # Register based on user input

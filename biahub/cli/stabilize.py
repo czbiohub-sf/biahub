@@ -154,7 +154,7 @@ def stabilize(
     output_metadata = {
         "shape": (len(time_indices), len(channel_names), Z, Y, X),
         "chunks": None,
-        "scale": settings.voxel_size,
+        "scale": settings.output_voxel_size,
         "channel_names": channel_names,
         "dtype": np.float32,
     }

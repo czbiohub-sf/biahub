@@ -373,7 +373,7 @@ def estimate_stabilization(
         stabilization_channels=stabilization_channel_names,
         affine_transform_zyx_list=combined_mats.tolist(),
         time_indices="all",
-        voxel_size=voxel_size,
+        output_voxel_size=voxel_size,
     )
     model_to_yaml(model, output_filepath)
 

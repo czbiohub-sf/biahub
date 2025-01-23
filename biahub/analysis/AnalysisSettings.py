@@ -24,7 +24,7 @@ class EstimateRegistrationSettings(MyBaseModel):
     target_channel_name: str
     source_channel_name: str
     stabilization_channels_names: list
-    affine_90degree_rotation: int
+    affine_90degree_rotation: int = 0
     approx_affine_transform: list = None
     affine_transform_window_size: int = 10
     affine_transform_tolerance: float = 50.0
@@ -190,7 +190,7 @@ class StabilizationSettings(MyBaseModel):
     stabilization_channels: list
     affine_transform_zyx_list: list
     time_indices: Union[NonNegativeInt, list[NonNegativeInt], Literal["all"]] = "all"
-    voxel_size: list[
+    output_voxel_size: list[
         PositiveFloat, PositiveFloat, PositiveFloat, PositiveFloat, PositiveFloat
     ] = [1.0, 1.0, 1.0, 1.0, 1.0]
 
