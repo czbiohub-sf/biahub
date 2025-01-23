@@ -4,12 +4,20 @@ from pathlib import Path
 
 import click
 import numpy as np
+import submitit
 
 from iohub import open_ome_zarr
 from natsort import natsorted
 
 from biahub.analysis.AnalysisSettings import ConcatenateSettings
-from biahub.cli.parsing import config_filepath, output_dirpath
+from biahub.cli.monitor import monitor_jobs
+from biahub.cli.parsing import (
+    config_filepath,
+    local,
+    output_dirpath,
+    sbatch_filepath,
+    sbatch_to_submitit,
+)
 from biahub.cli.utils import (
     copy_n_paste_czyx,
     create_empty_hcs_zarr,
@@ -70,15 +78,11 @@ def get_slice(slice_param, max_value):
 @click.command()
 @config_filepath()
 @output_dirpath()
-@click.option(
-    "--num-processes",
-    "-j",
-    default=1,
-    help="Number of parallel processes",
-    required=False,
-    type=int,
-)
-def concatenate(config_filepath: str, output_dirpath: str, num_processes: int):
+@sbatch_filepath()
+@local()
+def concatenate(
+    config_filepath: str, output_dirpath: str, sbatch_filepath: str = None, local: bool = False
+):
     """
     Concatenate datasets (with optional cropping)
 
@@ -87,6 +91,7 @@ def concatenate(config_filepath: str, output_dirpath: str, num_processes: int):
     # Convert to Path objects
     config_filepath = Path(config_filepath)
     output_dirpath = Path(output_dirpath)
+    slurm_out_path = output_dirpath.parent / "slurm_output"
 
     settings = yaml_to_model(config_filepath, ConcatenateSettings)
 
@@ -150,21 +155,57 @@ def concatenate(config_filepath: str, output_dirpath: str, num_processes: int):
 
     copy_n_paste_kwargs = {"czyx_slicing_params": ([Z_slice, Y_slice, X_slice])}
 
-    for input_position_path, input_channel_idx, output_channel_idx in zip(
-        all_data_paths, input_channel_idx_list, output_channel_idx_list
-    ):
-        click.echo(f'input_channel_idx: {input_channel_idx}')
+    # Estimate resources
+    gb_per_element = 4 / 2**30  # bytes_per_float32 / bytes_per_gb
+    num_cpus = np.min([T * C, 16])
+    input_memory = num_cpus * Z * Y * X * gb_per_element
+    gb_ram_request = np.ceil(np.max([1, input_memory])).astype(int)
 
-        process_single_position_v2(
-            copy_n_paste_czyx,
-            input_data_path=input_position_path,
-            output_path=output_dirpath,
-            time_indices=time_indices,
-            input_channel_idx=input_channel_idx,
-            output_channel_idx=output_channel_idx,
-            num_processes=num_processes,
-            **copy_n_paste_kwargs,
-        )
+    # Prepare SLURM arguments
+    slurm_args = {
+        "slurm_job_name": "concatenate",
+        "slurm_mem_per_cpu": f"{gb_ram_request}G",
+        "slurm_cpus_per_task": num_cpus,
+        "slurm_array_parallelism": 100,  # process up to 100 positions at a time
+        "slurm_time": 60,
+        "slurm_partition": "preempted",
+    }
+
+    # Override defaults if sbatch_filepath is provided
+    if sbatch_filepath:
+        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
+
+    # Run locally or submit to SLURM
+    if local:
+        cluster = "local"
+    else:
+        cluster = "slurm"
+
+    # Prepare and submit jobs
+    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
+    executor.update_parameters(**slurm_args)
+
+    click.echo('Submitting SLURM jobs...')
+    jobs = []
+
+    with executor.batch():
+        for input_position_path, input_channel_idx, output_channel_idx in zip(
+            all_data_paths, input_channel_idx_list, output_channel_idx_list
+        ):
+            job = executor.submit(
+                process_single_position_v2,
+                copy_n_paste_czyx,
+                input_data_path=input_position_path,
+                output_path=output_dirpath,
+                time_indices=time_indices,
+                input_channel_idx=input_channel_idx,
+                output_channel_idx=output_channel_idx,
+                num_processes=int(slurm_args["slurm_cpus_per_task"]),
+                **copy_n_paste_kwargs,
+            )
+            jobs.append(job)
+
+    monitor_jobs(jobs, all_data_paths)
 
 
 if __name__ == "__main__":
