@@ -23,9 +23,9 @@ from biahub.cli.parsing import (
 from biahub.cli.utils import (
     copy_n_paste_czyx,
     create_empty_hcs_zarr,
+    estimate_resources,
     process_single_position_v2,
     yaml_to_model,
-    estimate_resources
 )
 
 
@@ -142,12 +142,11 @@ def stabilize(
     elif isinstance(settings.time_indices, int):
         time_indices = [settings.time_indices]
 
-
     # Attempted to calculate the new scale from the input affine transform,
     # but chose to use the `output_voxel_size` instead to ensure consistency in scale.
     # The computed scale value was close to the desired voxel size but not exact.
 
-    # transform_t0_sy calculates the scale factor for the YZ plane (shear factor) 
+    # transform_t0_sy calculates the scale factor for the YZ plane (shear factor)
     # derived from the affine transform matrix.
     # It uses the [2][1] element of the first affine matrix (T0) and rounds it to 3 decimal places.
     # transform_t0_sy = np.abs(settings.affine_transform_zyx_list[0][2][1]).round(3)
@@ -184,7 +183,7 @@ def stabilize(
 
     # Estimate resources
 
-    num_cpus, gb_ram_per_cpu = estimate_resources(shape=[T,C,Z,Y,X])
+    num_cpus, gb_ram_per_cpu = estimate_resources(shape=[T, C, Z, Y, X])
 
     # Prepare SLURM arguments
     slurm_args = {
