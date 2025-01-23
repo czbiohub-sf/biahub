@@ -1,5 +1,4 @@
 import shutil
-import warnings
 
 from pathlib import Path
 
@@ -8,7 +7,7 @@ import numpy as np
 import submitit
 
 from iohub import open_ome_zarr
-from iohub.ngff import Plate
+from iohub.ngff.utils import create_empty_plate
 
 from biahub.analysis.AnalysisSettings import StitchSettings
 from biahub.analysis.stitch import (
@@ -19,7 +18,7 @@ from biahub.analysis.stitch import (
     stitch_shifted_store,
 )
 from biahub.cli.parsing import config_filepath, input_position_dirpaths, output_dirpath
-from biahub.cli.utils import create_empty_hcs_zarr, process_single_position_v2, yaml_to_model
+from biahub.cli.utils import process_single_position_v2, yaml_to_model
 
 
 @click.command()
@@ -45,14 +44,9 @@ def stitch(
 
     >>> biahub stitch -i ./input.zarr/*/*/* -c ./stitch_params.yml -o ./output.zarr --temp-path /hpc/scratch/group.comp.micro/
     """
-    # TODO: currently stitch works on one well at a time, need to generalize to multiple wells
-
-    # assert not Path(output_dirpath).exists(), f'Output path: {output_dirpath} already exists'
-
     slurm_out_path = Path(output_dirpath).parent / "slurm_output"
     dataset = input_position_dirpaths[0].parts[-4][:-5]
-    well0 = '_'.join(input_position_dirpaths[0].parts[-3:-1])
-    shifted_store_path = Path(temp_path, f"TEMP_{dataset}_{well0}.zarr")
+    shifted_store_path = Path(temp_path, f"TEMP_{dataset}.zarr").resolve()
     settings = yaml_to_model(config_filepath, StitchSettings)
 
     with open_ome_zarr(str(input_position_dirpaths[0]), mode="r") as input_dataset:
@@ -75,6 +69,7 @@ def stitch(
     n_rows = len(grid_rows)
     n_cols = len(grid_cols)
 
+    # Determine output shape
     if all((settings.column_translation, settings.row_translation)):
         output_shape, global_translation = get_stitch_output_shape(
             n_rows, n_cols, Y, X, settings.column_translation, settings.row_translation
@@ -101,10 +96,10 @@ def stitch(
     else:
         raise ValueError('Invalid RegistrationSettings config file')
 
-    # create output zarr store
+    # Create output zarr store with final stitch
     stitched_shape = (T, len(settings.channels), Z) + output_shape
     stitched_chunks = chunks[:3] + (4096, 4096)
-    create_empty_hcs_zarr(
+    create_empty_plate(
         store_path=output_dirpath,
         position_keys=[Path(well, '0').parts for well in wells],
         channel_names=settings.channels,
@@ -117,22 +112,8 @@ def stitch(
     if shifted_store_path.exists():
         click.echo(f'WARNING: Using existing shifted zarr store at {shifted_store_path}')
     else:
-        # create temp zarr store
+        # Create temp zarr store with shifted FOVs
         click.echo(f'Creating temporary zarr store at {shifted_store_path}')
-        with open_ome_zarr(
-            Path(temp_path, f'temp_{well0}.zarr'),
-            layout='hcs',
-            mode='w',
-            channel_names=settings.channels,
-        ) as temp_zarr:
-            pos = temp_zarr.create_position(*input_position_dirpaths[0].parts[-3:])
-            pos.create_zeros(
-                name='0',
-                shape=stitched_shape,
-                chunks=stitched_chunks,
-                dtype=np.float32,
-            )
-
         slurm_args = {
             "slurm_mem_per_cpu": "8G",
             "slurm_cpus_per_task": 1,
@@ -143,11 +124,22 @@ def stitch(
 
         executor = submitit.AutoExecutor(folder=slurm_out_path)
         executor.update_parameters(**slurm_args)
-        temp_zarr_job = executor.submit(
-            Plate.from_positions,
-            shifted_store_path,
-            dict((Path(*p.parts[-3:]).as_posix(), pos) for p in input_position_dirpaths),
-        )
+        temp_zarr_jobs = []
+        # this can take a while, submitting in batches per well
+        with executor.batch():
+            for well in wells:
+                job = executor.submit(
+                    create_empty_plate,
+                    store_path=shifted_store_path,
+                    position_keys=[Path(well, fov).parts for fov in fov_names],
+                    channel_names=settings.channels,
+                    shape=stitched_shape,
+                    chunks=stitched_chunks,
+                    dtype=np.float32,
+                    scale=scale,
+                )
+                temp_zarr_jobs.append(job)
+        temp_zarr_job_ids = [job.job_id for job in temp_zarr_jobs]
 
         # Collect transforms
         transforms = []
@@ -179,7 +171,7 @@ def stitch(
             "slurm_time": 30,
             "slurm_job_name": "shift",
             "slurm_partition": "preempted",
-            "slurm_dependency": f"afterok:{temp_zarr_job.job_id}",
+            "slurm_dependency": f"afterok:{temp_zarr_job_ids[0]}:{temp_zarr_job_ids[-1]}",
         }
         # Affine transform needs more resources
         if settings.affine_transform is not None:
