@@ -20,10 +20,12 @@ from ultrack import MainConfig
 class MyBaseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+
 class FunctionSettings(MyBaseModel):
     """
     General configuration model for preprocessing, foreground, and contour.
     """
+
     func: str
     input_array: list[str]
     additional_params: Optional[Dict[str, Union[int, float, str, list[str]]]] = None
@@ -39,7 +41,7 @@ class TrackingSettings(MyBaseModel):
     tracking_config: Union[Dict[str, Any]]  # Define as raw dict
     preprocessing_config: Optional[FunctionSettings] = None
     foreground_config: Optional[FunctionSettings] = None
-    contour_config:Optional[FunctionSettings] = None
+    contour_config: Optional[FunctionSettings] = None
     foreground_path: Optional[str] = None
     contour_path: Optional[str] = None
 

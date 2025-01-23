@@ -598,7 +598,7 @@ def _check_nan_n_zeros(input_array):
         input_array: Input array (2D, 3D, or 4D).
 
     Returns:
-        List[Tuple[int, List[int]]]: 
+        List[Tuple[int, List[int]]]:
             - For 2D arrays: Returns True if the array is zeros or NaNs, False otherwise.
             - For 3D arrays: Returns a list of Z indices that are entirely zeros or NaNs.
             - For 4D arrays: Returns a list of tuples, where each tuple contains:
@@ -618,17 +618,17 @@ def _check_nan_n_zeros(input_array):
 
     elif len(input_array.shape) == 4:  # 4D array (e.g., C, Z, Y, X)
         for c in range(input_array.shape[0]):  # Iterate over channels
-            z_indices = _check_nan_n_zeros(input_array[c, :, :, :])  # Check Z slices in each channel
+            z_indices = _check_nan_n_zeros(
+                input_array[c, :, :, :]
+            )  # Check Z slices in each channel
             if z_indices:  # If there are empty Z slices, add them
                 indices.append((c, z_indices))  # Add (channel, empty_z_indices)
         return indices
 
     else:
         raise ValueError("Input array must be 2D, 3D, or 4D.")
-        
 
 
-    
 def estimate_resources(
     shape: Tuple[int, int, int, int, int],
     dtype: DTypeLike = np.float32,

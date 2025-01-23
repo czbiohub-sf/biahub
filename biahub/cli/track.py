@@ -12,10 +12,10 @@ import toml
 from iohub import open_ome_zarr
 from numpy.typing import ArrayLike
 from ultrack import Tracker
-from ultrack.imgproc import detect_foreground, normalize, Cellpose, inverted_edt
+from ultrack.imgproc import Cellpose, detect_foreground, inverted_edt, normalize
 from ultrack.utils.array import array_apply
 
-from biahub.analysis.AnalysisSettings import TrackingSettings, FunctionSettings
+from biahub.analysis.AnalysisSettings import FunctionSettings, TrackingSettings
 from biahub.cli.parsing import (
     config_filepath,
     input_position_dirpaths,
@@ -24,15 +24,17 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import create_empty_hcs_zarr, yaml_to_model, _check_nan_n_zeros
+from biahub.cli.utils import _check_nan_n_zeros, create_empty_hcs_zarr, yaml_to_model
+
 
 def mem_nuc_contour(nuclei_prediction: ArrayLike, membrane_prediction: ArrayLike) -> ArrayLike:
     return (np.asarray(membrane_prediction) + (1 - np.asarray(nuclei_prediction))) / 2
 
+
 function_mapping = {
     "detect_foreground": detect_foreground,
     "normalize": normalize,
-    "Cellpose": Cellpose(model_type = 'nuclei'),
+    "Cellpose": Cellpose(model_type='nuclei'),
     "inverted_edt": inverted_edt,
     "mem_nuc": mem_nuc_contour,
     "max": np.max,
@@ -40,10 +42,12 @@ function_mapping = {
     "sum": np.sum,
 }
 
+
 def get_function(func_name: str) -> callable:
     if func_name in function_mapping:
         return function_mapping[func_name]
     raise ValueError(f"Function '{func_name}' is not registered in the function mapping.")
+
 
 def fill_empty_frames(arr: ArrayLike, empty_frames_idx: List[int]) -> ArrayLike:
     """
@@ -64,18 +68,26 @@ def fill_empty_frames(arr: ArrayLike, empty_frames_idx: List[int]) -> ArrayLike:
     for idx in empty_frames_idx:
         if idx == 0:  # First frame is empty
             # Use the next non-empty frame to fill the first frame
-            next_non_empty = next((i for i in range(idx + 1, num_frames) if i not in empty_frames_idx), None)
+            next_non_empty = next(
+                (i for i in range(idx + 1, num_frames) if i not in empty_frames_idx), None
+            )
             if next_non_empty is not None:
                 arr[idx] = arr[next_non_empty]
         elif idx == num_frames - 1:  # Last frame is empty
             # Use the previous non-empty frame to fill the last frame
-            prev_non_empty = next((i for i in range(idx - 1, -1, -1) if i not in empty_frames_idx), None)
+            prev_non_empty = next(
+                (i for i in range(idx - 1, -1, -1) if i not in empty_frames_idx), None
+            )
             if prev_non_empty is not None:
                 arr[idx] = arr[prev_non_empty]
         else:  # Middle frames are empty
             # Find the nearest non-empty frame (previous or next)
-            prev_non_empty = next((i for i in range(idx - 1, -1, -1) if i not in empty_frames_idx), None)
-            next_non_empty = next((i for i in range(idx + 1, num_frames) if i not in empty_frames_idx), None)
+            prev_non_empty = next(
+                (i for i in range(idx - 1, -1, -1) if i not in empty_frames_idx), None
+            )
+            next_non_empty = next(
+                (i for i in range(idx + 1, num_frames) if i not in empty_frames_idx), None
+            )
 
             if prev_non_empty is not None and next_non_empty is not None:
                 arr[idx] = arr[prev_non_empty]
@@ -89,20 +101,20 @@ def fill_empty_frames(arr: ArrayLike, empty_frames_idx: List[int]) -> ArrayLike:
     return arr
 
 
-
 def data_preprocessing(
-        data_dict: dict,
-        preprocessing_config: FunctionSettings,
-        foreground_config: FunctionSettings,
-        contour_config: FunctionSettings) -> Tuple[ArrayLike, ArrayLike]:
+    data_dict: dict,
+    preprocessing_config: FunctionSettings,
+    foreground_config: FunctionSettings,
+    contour_config: FunctionSettings,
+) -> Tuple[ArrayLike, ArrayLike]:
 
     # Check for empty frames
     empty_frames = _check_nan_n_zeros(data_dict["lf_image"])
     click.echo(f"Empty frames: {empty_frames}")
-    
+
     # Drop label free image
     data_dict.pop("lf_image")
-    
+
     # Fill empty frames for tracking
     for key in data_dict:
         click.echo(f"Filling empty frames for {key}...")
@@ -121,21 +133,26 @@ def data_preprocessing(
     click.echo("Generating foreground mask...")
     foreground_func = get_function(foreground_config.func)
     fg_input_arrays = [data_dict[key] for key in foreground_config.input_array]
-    foreground_mask = array_apply(*fg_input_arrays, func=foreground_func, **foreground_config.additional_params)
+    foreground_mask = array_apply(
+        *fg_input_arrays, func=foreground_func, **foreground_config.additional_params
+    )
 
     # Generate contour gradient map
     click.echo("Generating contour gradient map...")
     contour_func = get_function(contour_config.func)
     contour_input_arrays = [data_dict[key] for key in contour_config.input_array]
-    contour_gradient_map = array_apply(*contour_input_arrays, func=contour_func, **contour_config.additional_params)
+    contour_gradient_map = array_apply(
+        *contour_input_arrays, func=contour_func, **contour_config.additional_params
+    )
 
     return foreground_mask, contour_gradient_map
+
 
 def ultrack(
     tracking_config,
     foreground_mask: ArrayLike,
     contour_gradient_map: ArrayLike,
-    scale: Union[Tuple[float, float],Tuple[float, float, float]],
+    scale: Union[Tuple[float, float], Tuple[float, float, float]],
     databaset_path,
 ):
     cfg = tracking_config
@@ -162,6 +179,7 @@ def ultrack(
         tracks_df,
         graph,
     )
+
 
 def track_one_position(
     input_lf_dirpath: Path,
@@ -191,7 +209,7 @@ def track_one_position(
     yx_scale = vs_dataset.scale[-2:]
 
     output_metadata = {
-        "shape": (T,1, 1, Y, X),
+        "shape": (T, 1, 1, Y, X),
         "chunks": None,
         "scale": vs_dataset.scale,
         "channel_names": [f"{channel_names[0]}_labels"],
@@ -206,31 +224,34 @@ def track_one_position(
     click.echo(f"Processing z-stack: {z_slices}")
 
     nuclei_prediction = vs_dataset[0][:, channel_names.index("nuclei_prediction"), z_slices]
-    membrane_prediction = vs_dataset[0][:, channel_names.index("membrane_prediction"), z_slices]
+    membrane_prediction = vs_dataset[0][
+        :, channel_names.index("membrane_prediction"), z_slices
+    ]
     lf_image = im_dataset[0][:, 0, z_slices.start, :, :]
 
     if vs_projection:
-        click.echo(f"Applying projection {vs_projection} to the virtual staining data...") 
- 
+        click.echo(f"Applying projection {vs_projection} to the virtual staining data...")
+
         projection = get_function(vs_projection)
 
         nuclei_prediction = projection(nuclei_prediction, axis=1)
         membrane_prediction = projection(membrane_prediction, axis=1)
 
-    # Prepare data dictionary   
+    # Prepare data dictionary
     data_dict = {
         "lf_image": lf_image,
         "nuclei_prediction": nuclei_prediction,
         "membrane_prediction": membrane_prediction,
     }
-           
+
     # Preprocess to get the the foreground and multi-level contours
     click.echo("Preprocessing...")
     foreground_mask, contour_gradient_map = data_preprocessing(
-        data_dict = data_dict,
-        preprocessing_config = preprocessing_config,
-        foreground_config = foreground_config,
-        contour_config = contour_config)
+        data_dict=data_dict,
+        preprocessing_config=preprocessing_config,
+        foreground_config=foreground_config,
+        contour_config=contour_config,
+    )
 
     # Define path to save the tracking database and graph
     filename = str(output_dirpath).split("/")[-1].split(".")[0]
@@ -328,31 +349,21 @@ def track(
     click.echo('Submitting SLURM jobs...')
     jobs = []
 
-    for input_vs_position_path in input_position_dirpaths:
-        track_one_position(
-        input_lf_dirpath=input_lf_dirpaths,
-        input_vs_path=input_vs_position_path,
-        output_dirpath=output_dirpath,
-        preprocessing_config = settings.preprocessing_config,
-        foreground_config = settings.foreground_config,
-        contour_config = settings.contour_config,
-        z_slice=settings.z_slices,
-        vs_projection=settings.vs_projection,
-        tracking_config=settings.get_tracking_config())
-    
+    with executor.batch():
+        for input_vs_position_path in input_position_dirpaths:
+            job = executor.submit(
+                input_lf_dirpath=input_lf_dirpaths,
+                input_vs_path=input_vs_position_path,
+                output_dirpath=output_dirpath,
+                preprocessing_config=settings.preprocessing_config,
+                foreground_config=settings.foreground_config,
+                contour_config=settings.contour_config,
+                z_slice=settings.z_slices,
+                vs_projection=settings.vs_projection,
+                tracking_config=settings.get_tracking_config(),
+            )
 
-    # with executor.batch():
-    #     for input_vs_position_path in input_position_dirpaths:
-    #         job = executor.submit(
-    #             tracking_one_position,
-    #             input_lf_dirpath=input_lf_dirpaths,
-    #             input_vs_path=input_vs_position_path,
-    #             output_dirpath=output_dirpath,
-    #             z_slice=settings.z_slices,
-    #             vs_projection=settings.vs_projection,
-    #             tracking_config=settings.tracking_config(),
-    #         )
-    #         jobs.append(job)
+            jobs.append(job)
 
 
 if __name__ == "__main__":
