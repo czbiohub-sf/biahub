@@ -26,7 +26,7 @@ class FunctionSettings(MyBaseModel):
     General configuration model for preprocessing, foreground, and contour.
     """
 
-    func: str
+    function: str
     input_array: list[str]
     additional_params: Optional[Dict[str, Union[int, float, str, list[str]]]] = None
 

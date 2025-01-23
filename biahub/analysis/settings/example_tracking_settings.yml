@@ -18,20 +18,20 @@ tracking_config:
     appear_weight: -0.001
     division_weight: -0.0001
 preprocessing_config:
-  func: normalize
+  function: normalize
   input_array:
     - nuclei_prediction
     - membrane_prediction
   additional_params:
     gamma: 0.7
 foreground_config:
-  func: detect_foreground
+  function: detect_foreground
   input_array:
     - nuclei_prediction
   additional_params:
     sigma: 90
 contour_config:
-  func: mem_nuc
+  function: mem_nuc
   input_array:
     - nuclei_prediction
     - membrane_prediction
