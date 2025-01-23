@@ -1,6 +1,6 @@
 z_slices: [20, 50]
 vs_projection: "max"
-tracking:
+tracking_config:
   segmentation_config:
     min_area: 2100
     max_area: 80000
@@ -17,3 +17,22 @@ tracking:
     disappear_weight: -0.0001
     appear_weight: -0.001
     division_weight: -0.0001
+preprocessing_config:
+  func: normalize
+  input_array:
+    - nuclei_prediction
+    - membrane_prediction
+  additional_params:
+    gamma: 0.7
+foreground_config:
+  func: detect_foreground
+  input_array:
+    - nuclei_prediction
+  additional_params:
+    sigma: 90
+contour_config:
+  func: mem_nuc
+  input_array:
+    - nuclei_prediction
+    - membrane_prediction
+  additional_params: {}
