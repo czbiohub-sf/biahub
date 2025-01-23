@@ -1,4 +1,4 @@
-s# biahub
+# biahub
 
 Bio-image analysis hub supporting high-throughput data reconstruction on HPC clusters with [Slurm](https://slurm.schedmd.com/documentation.html) workload management. 
 
