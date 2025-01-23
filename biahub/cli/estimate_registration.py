@@ -63,6 +63,35 @@ def user_assisted_registration(
     similarity=False,
     pre_affine_90degree_rotation=0,
 ):
+    """
+    Perform user-assisted registration of two volumetric image channels.
+
+    This function allows users to manually annotate corresponding features between
+    a source and target channel to calculate an affine transformation matrix for registration.
+
+    Parameters:
+    - source_channel_volume (np.ndarray): 3D array (Z, Y, X) of the source channel.
+    - source_channel_name (str): Name of the source channel for display purposes.
+    - source_channel_voxel_size (tuple): Voxel size of the source channel (Z, Y, X).
+    - target_channel_volume (np.ndarray): 3D array (Z, Y, X) of the target channel.
+    - target_channel_name (str): Name of the target channel for display purposes.
+    - target_channel_voxel_size (tuple): Voxel size of the target channel (Z, Y, X).
+    - similarity (bool): If True, use a similarity transform (rotation, translation, scaling);
+                         if False, use an Euclidean transform (rotation, translation).
+    - pre_affine_90degree_rotation (int): Number of 90-degree rotations to apply to the source channel
+                                          before registration.
+
+    Returns:
+    - np.ndarray: The estimated 4x4 affine transformation matrix for registering the source channel to the target channel.
+
+    Notes:
+    - The function uses a Napari viewer for manual feature annotation.
+    - Scaling factors for voxel size differences between source and target are calculated and applied.
+    - Users must annotate at least three corresponding points in both channels for the transform calculation.
+    - Two types of transformations are supported: similarity (with scaling) and Euclidean (no scaling).
+    - The function visually displays intermediate and final results in Napari for user validation.
+    """
+
     # Find the in-focus slice
     source_channel_Z, source_channel_Y, source_channel_X = source_channel_volume.shape[-3:]
     target_channel_Z, target_channel_Y, target_channel_X = target_channel_volume.shape[-3:]
@@ -315,6 +344,34 @@ def beads_based_registration(
     angle_threshold: int,
     verbose: bool = False,
 ):
+    """
+    Perform beads-based temporal registration of 4D data using affine transformations.
+
+    This function calculates timepoint-specific affine transformations to align a source channel
+    to a target channel in 4D (T, Z, Y, X) data. It validates, smooths, and interpolates transformations
+    across timepoints for consistent registration.
+
+    Parameters:
+    - source_channel_tzyx (da.Array): 4D array (T, Z, Y, X) of the source channel (Dask array).
+    - target_channel_tzyx (da.Array): 4D array (T, Z, Y, X) of the target channel (Dask array).
+    - approx_tform (list): Initial approximate affine transform (4x4 matrix) for guiding registration.
+    - num_processes (int): Number of parallel processes for transformation computation.
+    - window_size (int): Size of the moving window for smoothing transformations.
+    - tolerance (float): Maximum allowed difference between consecutive transformations for validation.
+    - angle_threshold (int): Threshold for filtering outliers in detected bead matches (in degrees).
+    - verbose (bool): If True, prints detailed logs of the registration process.
+
+    Returns:
+    - transforms (list): List of affine transformation matrices (4x4), one for each timepoint.
+                         Invalid or missing transformations are interpolated.
+
+    Notes:
+    - Each timepoint is processed in parallel using a multiprocessing pool.
+    - Transformations are smoothed with a moving average window and validated against a reference.
+    - Missing transformations are interpolated linearly across timepoints.
+    - Use verbose=True for detailed logging during registration.
+    """
+
     (T, Z, Y, X) = source_channel_tzyx.shape
     with Pool(num_processes) as pool:
         transforms = pool.map(
@@ -403,6 +460,33 @@ def _get_tform_from_beads(
     verbose: bool,
     t_idx: int,
 ) -> list | None:
+    """
+    Calculate the affine transformation matrix between source and target channels
+    based on detected bead matches at a specific timepoint.
+
+    This function detects beads in both source and target datasets, matches them,
+    and computes an affine transformation to align the two channels. It applies
+    various filtering steps, including angle-based filtering, to improve match quality.
+
+    Parameters:
+    - approx_tform (list): Approximate initial affine transformation matrix (4x4).
+    - source_channel_tzyx (da.Array): 4D array (T, Z, Y, X) of the source channel (Dask array).
+    - target_channel_tzyx (da.Array): 4D array (T, Z, Y, X) of the target channel (Dask array).
+    - angle_threshold (int): Threshold (in degrees) to filter bead matches based on direction.
+    - verbose (bool): If True, prints detailed logs during the process.
+    - t_idx (int): Timepoint index to process.
+
+    Returns:
+    - list | None: A 4x4 affine transformation matrix as a nested list if successful,
+                   or None if no valid transformation could be calculated.
+
+    Notes:
+    - Uses ANTsPy for initial transformation application and bead detection.
+    - Peaks (beads) are detected using a block-based algorithm with thresholds for source and target datasets.
+    - Bead matches are filtered based on distance and angular deviation from the dominant direction.
+    - If fewer than three matches are found after filtering, the function returns None.
+    """
+
     approx_tform = np.asarray(approx_tform)
     source_channel_zyx = np.asarray(source_channel_tzyx[t_idx]).astype(np.float32)
     target_channel_zyx = np.asarray(target_channel_tzyx[t_idx]).astype(np.float32)
@@ -532,14 +616,44 @@ def estimate_registration(
     t_idx,
     beads,
 ):
+
     """
-    Estimate the affine transform between a source (i.e. moving) and a target (i.e.
-    fixed) image by selecting corresponding points in each.
+    Estimate the affine transformation between a source and target image for registration.
 
-    The output configuration file is an input for `optimize-registration` and `register`.
+    This command-line tool uses either bead-based or user-assisted methods to estimate registration
+    parameters for aligning source (moving) and target (fixed) images. The output is a configuration
+    file that can be used with subsequent tools (`stabilize` and `register`).
 
-    >> biahub estimate-registration -s ./acq_name_labelfree_reconstructed.zarr/0/0/0 -t ./acq_name_lightsheet_deskewed.zarr/0/0/0 -o ./output.yml
-    -x  flag to use similarity transform (rotation, translation, scaling) default:Eucledian (rotation, translation)
+    Parameters:
+    - source_position_dirpaths (list): List of file paths to the source channel data in OME-Zarr format.
+    - target_position_dirpaths (list): List of file paths to the target channel data in OME-Zarr format.
+    - output_filepath (str): Path to save the estimated registration configuration file (YAML).
+    - num_processes (int): Number of processes for parallel computations (used in bead-based registration).
+    - config_filepath (str): Path to the YAML configuration file for the registration settings.
+    - similarity (bool): If True, use a similarity transform (rotation, translation, scaling).
+                         If False, use an Euclidean transform (rotation, translation only).
+    - t_idx (int): Time index to use for registration estimation. Default is 0.
+    - beads (bool): If True, estimate registration parameters using bead images.
+                    If False, use user-assisted manual feature selection.
+
+    Returns:
+    - None: Writes the estimated registration parameters to the specified output file.
+
+    Notes:
+    - Bead-based registration uses detected bead matches across timepoints to compute affine transformations.
+    - User-assisted registration requires manual selection of corresponding features in source and target images.
+    - The output configuration is essential for downstream processing in multi-modal image registration workflows.
+
+    Example:
+    >> biahub estimate-registration
+        -s ./acq_name_labelfree_reconstructed.zarr/0/0/0   # Source channel OME-Zarr data path
+        -t ./acq_name_lightsheet_deskewed.zarr/0/0/0       # Target channel OME-Zarr data path
+        -o ./output.yml                                    # Output configuration file path
+        --config ./config.yml                              # Path to input configuration file
+        --num-processes 4                                  # Number of processes for parallel bead detection
+        --t_idx 0                                          # Time index to use for registration
+        --beads                                            # Use bead-based registration
+        -x                                                 # Use similarity transform (rotation, scaling, translation)
     """
 
     settings = yaml_to_model(config_filepath, EstimateRegistrationSettings)
