@@ -56,8 +56,8 @@ def cleanup_and_write_shifts(
 )
 @click.option("--fliplr", is_flag=True, help="Flip images left-right before stitching")
 @click.option("--flipud", is_flag=True, help="Flip images up-down before stitching")
-@click.option("--add_offset", is_flag=True, help="add the offset to estimated shifts, needed for OPS experiments")
 @click.option("--rot90", default=0, type=int, help="rotate the images 90 counterclockwise n times before stitching")
+@click.option("--add_offset", is_flag=True, help="add the offset to estimated shifts, needed for OPS experiments")
 @local()
 def estimate_stitch(
     input_position_dirpaths: list[Path],
@@ -67,8 +67,8 @@ def estimate_stitch(
     fliplr: bool,
     flipud: bool,
     rot90: int,
-    add_offset: bool = False,
-    local: bool = False,
+    add_offset: bool,
+    local: bool,
 ):
     """
     Estimate stitching parameters for positions in wells of a zarr store.
