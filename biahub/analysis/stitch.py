@@ -261,7 +261,7 @@ def process_dataset(
             if verbose:
                 click.echo("Flipping data array left-right")
             data_array = flip(data_array, axis=-1)
-        
+
         if settings.rot90 != 0:
             if verbose:
                 click.echo(f"Rotating data array {settings.rot90} times counterclockwise")

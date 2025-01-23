@@ -19,7 +19,12 @@ from biahub.cli.utils import model_to_yaml
 
 
 def write_config_file(
-    shifts: pd.DataFrame, output_filepath: str, channel: str, fliplr: bool, flipud: bool, rot90: int
+    shifts: pd.DataFrame,
+    output_filepath: str,
+    channel: str,
+    fliplr: bool,
+    flipud: bool,
+    rot90: int,
 ):
     total_translation_dict = shifts.apply(
         lambda row: [float(row['shift-y'].round(2)), float(row['shift-x'].round(2))], axis=1
@@ -56,8 +61,17 @@ def cleanup_and_write_shifts(
 )
 @click.option("--fliplr", is_flag=True, help="Flip images left-right before stitching")
 @click.option("--flipud", is_flag=True, help="Flip images up-down before stitching")
-@click.option("--rot90", default=0, type=int, help="rotate the images 90 counterclockwise n times before stitching")
-@click.option("--add_offset", is_flag=True, help="add the offset to estimated shifts, needed for OPS experiments")
+@click.option(
+    "--rot90",
+    default=0,
+    type=int,
+    help="rotate the images 90 counterclockwise n times before stitching",
+)
+@click.option(
+    "--add_offset",
+    is_flag=True,
+    help="add the offset to estimated shifts, needed for OPS experiments",
+)
 @local()
 def estimate_stitch(
     input_position_dirpaths: list[Path],
