@@ -1,0 +1,6 @@
+processing_functions:
+  - function: biahub.analysis.imgproc.binning_czyx
+    channel: "BF"
+    kwargs:
+      binning_factor_zyx: [1, 2, 2]
+      mode: "sum"

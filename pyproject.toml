@@ -58,6 +58,10 @@ dev = [
   
 ]
 
+segmentation = [
+  "cellpose",
+]
+
 build = ["build", "twine"]
 
 [project.scripts]
