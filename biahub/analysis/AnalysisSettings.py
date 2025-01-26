@@ -22,6 +22,16 @@ class MyBaseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class ProcessingFunctions(BaseModel):
+    function: ImportString
+    channel: str
+    kwargs: Dict[str, Any] = {}
+
+
+class ProcessingImportFuncSettings(MyBaseModel):
+    processing_functions: list[ProcessingFunctions] = []
+
+
 class ProcessingSettings(MyBaseModel):
     fliplr: Optional[bool] = False
     flipud: Optional[bool] = False
