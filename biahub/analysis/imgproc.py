@@ -60,7 +60,8 @@ def binning_czyx(
     -------
     np.ndarray
         Binned array with shape (C, new_Z, new_Y, new_X) with same dtype as input.
-        For sum mode, values are normalized to span [0, dtype.max].
+        For sum mode, values are normalized to span [0, dtype.max] for integer types
+        or [0, 65535] for float types.
         For mean mode, values are averaged within bins.
     """
     # Calculate new dimensions after binning
@@ -89,12 +90,15 @@ def binning_czyx(
 
         if mode == 'sum':
             output[c] = reshaped.sum(axis=(1, 3, 5))
-            # Normalize sum to [0, dtype.max]
+            # Normalize sum to [0, max_val] where max_val is dtype dependent
             if output[c].max() > 0:  # Avoid division by zero
-                dtype_info = np.iinfo(czyx_data.dtype)
+                if np.issubdtype(czyx_data.dtype, np.integer):
+                    max_val = np.iinfo(czyx_data.dtype).max
+                else:
+                    max_val = np.iinfo(np.uint16).max  # Normalize floats to uint16 range
                 output[c] = (
                     (output[c] - output[c].min())
-                    * dtype_info.max
+                    * max_val
                     / (output[c].max() - output[c].min())
                 )
         elif mode == 'mean':
