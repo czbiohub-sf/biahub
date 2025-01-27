@@ -23,30 +23,26 @@ class MyBaseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class ProcessingFunctions(BaseModel):
+    function: str  # Updated from ImportString for simplicity
+    input_arrays: list[str]
+    kwargs: Dict[str, Any] = {}
 
-class FunctionSettings(MyBaseModel):
-    """
-    General configuration model for preprocessing, foreground, and contour.
-    """
+class ProcessingImportFuncSettings(BaseModel):
+    processing_functions: Dict[str, ProcessingFunctions] = {}  # Changed to dict
 
-    function: str
-    input_array: list[str]
-    additional_params: Optional[Dict[str, Union[int, float, str, list[str]]]] = None
+
+class ProcessingImportFuncSettings(MyBaseModel):
+    processing_functions: list[ProcessingFunctions] = []
 
 
 class TrackingSettings(MyBaseModel):
     """
     Encapsulates all tracking-related settings, including MainConfig and additional settings.
     """
-
     z_slices: Tuple[int, int]
-    vs_projection: str = "max"
     tracking_config: Union[Dict[str, Any]]  # Define as raw dict
-    preprocessing_config: Optional[FunctionSettings] = None
-    foreground_config: Optional[FunctionSettings] = None
-    contour_config: Optional[FunctionSettings] = None
-    foreground_path: Optional[str] = None
-    contour_path: Optional[str] = None
+    functions: ProcessingImportFuncSettings
 
     def get_tracking_config(self) -> MainConfig:
         """
@@ -57,22 +53,12 @@ class TrackingSettings(MyBaseModel):
             return self.tracking_config
         print("Converting tracking dictionary to MainConfig.")
         return MainConfig.parse_obj(self.tracking_config)
-
-class ProcessingFunctions(BaseModel):
-    function: ImportString
-    channel: str
-    kwargs: Dict[str, Any] = {}
-
-
-class ProcessingImportFuncSettings(MyBaseModel):
-    processing_functions: list[ProcessingFunctions] = []
-
+    
 
 class ProcessingSettings(MyBaseModel):
     fliplr: Optional[bool] = False
     flipud: Optional[bool] = False
-
-
+    
 class DeskewSettings(MyBaseModel):
     pixel_size_um: PositiveFloat
     ls_angle_deg: PositiveFloat

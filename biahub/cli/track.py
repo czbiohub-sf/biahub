@@ -11,11 +11,11 @@ import toml
 
 from iohub import open_ome_zarr
 from numpy.typing import ArrayLike
-from ultrack import Tracker
+from ultrack import Tracker, MainConfig
 from ultrack.imgproc import Cellpose, detect_foreground, inverted_edt, normalize
 from ultrack.utils.array import array_apply
 
-from biahub.analysis.AnalysisSettings import FunctionSettings, TrackingSettings
+from biahub.analysis.AnalysisSettings import ProcessingImportFuncSettings, FunctionSettings, TrackingSettings
 from biahub.cli.parsing import (
     config_filepath,
     input_position_dirpaths,
@@ -29,24 +29,6 @@ from biahub.cli.utils import _check_nan_n_zeros, create_empty_hcs_zarr, yaml_to_
 
 def mem_nuc_contour(nuclei_prediction: ArrayLike, membrane_prediction: ArrayLike) -> ArrayLike:
     return (np.asarray(membrane_prediction) + (1 - np.asarray(nuclei_prediction))) / 2
-
-
-function_mapping = {
-    "detect_foreground": detect_foreground,
-    "normalize": normalize,
-    "Cellpose": Cellpose(model_type='nuclei'),
-    "inverted_edt": inverted_edt,
-    "mem_nuc": mem_nuc_contour,
-    "max": np.max,
-    "mean": np.mean,
-    "sum": np.sum,
-}
-
-
-def get_function(func_name: str) -> callable:
-    if func_name in function_mapping:
-        return function_mapping[func_name]
-    raise ValueError(f"Function '{func_name}' is not registered in the function mapping.")
 
 
 def fill_empty_frames(arr: ArrayLike, empty_frames_idx: List[int]) -> ArrayLike:
@@ -185,12 +167,9 @@ def track_one_position(
     input_lf_dirpath: Path,
     input_vs_path: Path,
     output_dirpath: Path,
-    preprocessing_config: dict,
-    foreground_config: dict,
-    contour_config: dict,
+    functions: ProcessingImportFuncSettings,
     z_slice: tuple,
-    vs_projection: str,
-    tracking_config: TrackingSettings,
+    tracking_config: MainConfig,
 ) -> None:
     position_key = input_vs_path.parts[-3:]
     fov = "_".join(position_key)
@@ -229,12 +208,13 @@ def track_one_position(
     ]
     lf_image = im_dataset[0][:, 0, z_slices.start, :, :]
 
-    if vs_projection:
-        click.echo(f"Applying projection {vs_projection} to the virtual staining data...")
+    function_names = [func.name for func in functions.processing_functions]
+    if 'vs_projection' in functions.processing_functions:
+        
+        click.echo(f"Applying projection {functions.processing_functions.} to the virtual staining data...")
 
-        projection = get_function(vs_projection)
 
-        nuclei_prediction = projection(nuclei_prediction, axis=1)
+        nuclei_prediction = projection(nuclei_prediction)
         membrane_prediction = projection(membrane_prediction, axis=1)
 
     # Prepare data dictionary
@@ -248,9 +228,7 @@ def track_one_position(
     click.echo("Preprocessing...")
     foreground_mask, contour_gradient_map = data_preprocessing(
         data_dict=data_dict,
-        preprocessing_config=preprocessing_config,
-        foreground_config=foreground_config,
-        contour_config=contour_config,
+        functions = functions
     )
 
     # Define path to save the tracking database and graph
@@ -349,15 +327,13 @@ def track(
     with executor.batch():
         for input_vs_position_path in input_position_dirpaths:
             job = executor.submit(
+                track_one_position,
                 input_lf_dirpath=input_lf_dirpaths,
                 input_vs_path=input_vs_position_path,
                 output_dirpath=output_dirpath,
-                preprocessing_config=settings.preprocessing_config,
-                foreground_config=settings.foreground_config,
-                contour_config=settings.contour_config,
                 z_slice=settings.z_slices,
-                vs_projection=settings.vs_projection,
                 tracking_config=settings.get_tracking_config(),
+                functions = settings.functions
             )
 
             jobs.append(job)

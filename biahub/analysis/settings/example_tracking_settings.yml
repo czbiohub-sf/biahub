@@ -1,5 +1,4 @@
 z_slices: [20, 50]
-vs_projection: "max"
 tracking_config:
   segmentation_config:
     min_area: 2100
@@ -17,22 +16,30 @@ tracking_config:
     disappear_weight: -0.0001
     appear_weight: -0.001
     division_weight: -0.0001
-preprocessing_config:
-  function: normalize
-  input_array:
-    - nuclei_prediction
-    - membrane_prediction
-  additional_params:
-    gamma: 0.7
-foreground_config:
-  function: detect_foreground
-  input_array:
-    - nuclei_prediction
-  additional_params:
-    sigma: 90
-contour_config:
-  function: mem_nuc
-  input_array:
-    - nuclei_prediction
-    - membrane_prediction
-  additional_params: {}
+functions:
+  vs_projection:
+    function: np.max
+    input_arrays:
+      - nuclei_prediction
+      - membrane_prediction
+    kwargs:
+      axis: 1
+  preprocessing:
+    function: ultrack.imgproc.normalize
+    input_arrays:
+      - nuclei_prediction
+      - membrane_prediction
+    kwargs:
+      gamma: 0.7
+  foreground:
+    function: ultrack.imgproc.detect_foreground
+    input_arrays:
+      - nuclei_prediction
+    kwargs:
+      sigma: 90
+  contourn:
+    function: biahub.cli.track.mem_nuc_contour
+    input_arrays:
+      - nuclei_prediction
+      - membrane_prediction
+    kwargs: {}
