@@ -122,22 +122,35 @@ def stitch(
             "slurm_partition": "cpu",
         }
 
+        def _populate_wells(well, fovs):
+            for fov in fovs:
+                pos = well.create_position(fov)
+                pos.create_zeros(
+                    name='0',
+                    shape=stitched_shape,
+                    dtype=np.float32,
+                    chunks=stitched_chunks,
+                )
+
+        # First create wells
+        _wells = []
+        with open_ome_zarr(
+            shifted_store_path,
+            layout='hcs',
+            mode='w-',
+            channel_names=settings.channels,
+        ) as ds:
+            for well in wells:
+                _wells.append(ds.create_well(*Path(well).parts))
+
+        # Then populate wells with FOVs
+        # this can take a while, so submitting in batches per well
         executor = submitit.AutoExecutor(folder=slurm_out_path)
         executor.update_parameters(**slurm_args)
         temp_zarr_jobs = []
-        # this can take a while, submitting in batches per well
         with executor.batch():
-            for well in wells:
-                job = executor.submit(
-                    create_empty_plate,
-                    store_path=shifted_store_path,
-                    position_keys=[Path(well, fov).parts for fov in fov_names],
-                    channel_names=settings.channels,
-                    shape=stitched_shape,
-                    chunks=stitched_chunks,
-                    dtype=np.float32,
-                    scale=scale,
-                )
+            for well in _wells:
+                job = executor.submit(_populate_wells, well, fov_names)
                 temp_zarr_jobs.append(job)
         temp_zarr_job_ids = [job.job_id for job in temp_zarr_jobs]
 
