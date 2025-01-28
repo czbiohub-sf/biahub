@@ -227,7 +227,7 @@ def stabilize(
 
     # Estimate resources
 
-    num_cpus, gb_ram_per_cpu = estimate_resources(shape=[T, C, Z, Y, X])
+    num_cpus, gb_ram_per_cpu = estimate_resources(shape=[T, C, Z, Y, X], ram_multiplier=16)
 
     # Prepare SLURM arguments
     slurm_args = {
@@ -290,6 +290,12 @@ def stabilize(
                     )
 
                 jobs.append(job)
+
+    job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
+
+    log_path = Path(output_dirpath.parent / "submitit_jobs_ids.log")
+    with log_path.open("w") as log_file:
+        log_file.write("\n".join(job_ids))
 
 
 if __name__ == "__main__":
