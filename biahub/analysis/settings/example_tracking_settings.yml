@@ -16,21 +16,27 @@ tracking_config:
     disappear_weight: -0.0001
     appear_weight: -0.001
     division_weight: -0.0001
-functions:
-  vs_projection:
-    function: np.max
-    input_arrays:
-      - nuclei_prediction
-      - membrane_prediction
-    kwargs:
-      axis: 1
-  preprocessing:
+vs_projection_function:
+  function: np.max
+  input_arrays:
+    - nuclei_prediction
+    - membrane_prediction
+  kwargs:
+    axis: 1
+preprocessing_functions:
+  normalize_nuclei:
     function: ultrack.imgproc.normalize
     input_arrays:
       - nuclei_prediction
+    kwargs:
+      gamma: 0.7
+  normalize_membrane:
+    function: ultrack.imgproc.normalize
+    input_arrays:
       - membrane_prediction
     kwargs:
       gamma: 0.7
+tracking_functions:
   foreground:
     function: ultrack.imgproc.detect_foreground
     input_arrays:
