@@ -13,10 +13,9 @@ from pydantic import (
     PositiveFloat,
     PositiveInt,
     field_validator,
-    validator)
-from ultrack import MainConfig
-import numpy as np
-import ultrack.imgproc
+    validator,
+)
+
 
 # All settings classes inherit from MyBaseModel, which forbids extra parameters to guard against typos
 class MyBaseModel(BaseModel):
@@ -28,31 +27,24 @@ class ProcessingFunctions(BaseModel):
     input_arrays: list[str]
     kwargs: Dict[str, Any] = {}
 
+
+class TrackingSettings(MyBaseModel):
+    z_slices: Tuple[int, int]
+    tracking_config: Dict[str, Any] = {}  # Define as raw dict
+    vs_projection_function: ProcessingFunctions = None
+    preprocessing_functions: Dict[str, ProcessingFunctions] = {}
+    tracking_functions: Dict[str, ProcessingFunctions] = {}
+
+
 class ProcessingImportFuncSettings(MyBaseModel):
     processing_functions: list[ProcessingFunctions] = []
 
 
-class TrackingSettings(MyBaseModel):
-    """
-    Encapsulates all tracking-related settings, including MainConfig and additional settings.
-    """
-    z_slices: Tuple[int, int]
-    tracking_config: Union[Dict[str, Any]]  # Define as raw dict
-    vs_projection_function: ProcessingFunctions = None
-    preprocessing_functions: Dict[str, ProcessingFunctions] = {}
-    tracking_functions: Dict[str, ProcessingFunctions] = {}
-    def get_tracking_config(self) -> MainConfig:
-        """
-        Converts the 'tracking_config' field to a MainConfig instance if it is a dictionary.
-        """
-        if isinstance(self.tracking_config, MainConfig):
-            return self.tracking_config
-        return MainConfig.parse_obj(self.tracking_config)
-
 class ProcessingSettings(MyBaseModel):
     fliplr: Optional[bool] = False
     flipud: Optional[bool] = False
-    
+
+
 class DeskewSettings(MyBaseModel):
     pixel_size_um: PositiveFloat
     ls_angle_deg: PositiveFloat

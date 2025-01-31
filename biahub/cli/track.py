@@ -2,22 +2,20 @@
 import os
 
 from pathlib import Path
-from typing import List, Tuple, Union, Dict
+from typing import Dict, List, Tuple, Union
 
 import click
 import numpy as np
 import submitit
 import toml
+import ultrack
 
 from iohub import open_ome_zarr
 from numpy.typing import ArrayLike
-from ultrack import Tracker, MainConfig
-import ultrack
-from ultrack.imgproc import Cellpose, detect_foreground, inverted_edt, normalize
+from ultrack import MainConfig, Tracker
 from ultrack.utils.array import array_apply
-import inspect
 
-from biahub.analysis.AnalysisSettings import ProcessingImportFuncSettings, TrackingSettings, ProcessingFunctions
+from biahub.analysis.AnalysisSettings import ProcessingFunctions, TrackingSettings
 from biahub.cli.parsing import (
     config_filepath,
     input_position_dirpaths,
@@ -26,38 +24,48 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import _check_nan_n_zeros, create_empty_hcs_zarr, yaml_to_model, estimate_resources
+from biahub.cli.utils import (
+    _check_nan_n_zeros,
+    create_empty_hcs_zarr,
+    estimate_resources,
+    update_model,
+    yaml_to_model,
+)
+
+
 # Custom function
 def mem_nuc_contour(nuclei_prediction: ArrayLike, membrane_prediction: ArrayLike) -> ArrayLike:
     """
-    Computes the membrane-nucleus contour by averaging the membrane signal 
+    Computes the membrane-nucleus contour by averaging the membrane signal
     and the inverse nucleus signal.
     """
     return (np.asarray(membrane_prediction) + (1 - np.asarray(nuclei_prediction))) / 2
 
+
 # List of modules to scan for functions
-VALID_MODULES = {
-    "np": np,
-    "ultrack.imgproc": ultrack.imgproc
-}
+VALID_MODULES = {"np": np, "ultrack.imgproc": ultrack.imgproc}
 
 # Dynamically populate FUNCTION_MAP with functions from VALID_MODULES
 FUNCTION_MAP = {
     f"{module_name}.{func}": getattr(module, func)
     for module_name, module in VALID_MODULES.items()
     for func in dir(module)
-    if callable(getattr(module, func)) and not func.startswith("__")  # Only include functions, not attributes
+    if callable(getattr(module, func))
+    and not func.startswith("__")  # Only include functions, not attributes
 }
 
 # Add custom functions manually
 FUNCTION_MAP["biahub.cli.track.mem_nuc_contour"] = mem_nuc_contour
+
 
 def resolve_function(function_name: str):
     """
     Resolves a function from FUNCTION_MAP. Raises an error if the function is not found.
     """
     if function_name not in FUNCTION_MAP:
-        raise ValueError(f"Invalid function '{function_name}'. Allowed functions: {list(FUNCTION_MAP.keys())}")
+        raise ValueError(
+            f"Invalid function '{function_name}'. Allowed functions: {list(FUNCTION_MAP.keys())}"
+        )
 
     return FUNCTION_MAP[function_name]
 
@@ -113,25 +121,35 @@ def fill_empty_frames(arr: ArrayLike, empty_frames_idx: List[int]) -> ArrayLike:
 
     return arr
 
+
 def data_preprocessing(
     data_dict: dict,
     preprocessing_functions: Dict[str, ProcessingFunctions],
-    tracking_functions: Dict[str, ProcessingFunctions]
+    tracking_functions: Dict[str, ProcessingFunctions],
 ) -> Tuple[ArrayLike, ArrayLike]:
-    
+
+    empty_frames_idx = _check_nan_n_zeros(data_dict["lf_image"])
+
+    # drop lf_image from data_dift
+    data_dict.pop("lf_image")
+    for key, value in data_dict.items():
+        data_dict[key] = fill_empty_frames(value, empty_frames_idx)
+
     # Apply preprocessing functions
     for key, func_details in preprocessing_functions.items():
         click.echo(f"Preprocessing {key} using {func_details.function}...")
         input_arrays_name = func_details.input_arrays[0]
         function = resolve_function(func_details.function)  # Uses function mapping
-        input_array = data_dict[input_arrays_name] 
+        input_array = data_dict[input_arrays_name]
 
         kwargs = func_details.kwargs if func_details.kwargs else {}
         data_dict[input_arrays_name] = array_apply(input_array, func=function, **kwargs)
     # Generate foreground mask
     click.echo("Generating foreground mask...")
     foreground_func_details = tracking_functions["foreground"]
-    foreground_function = resolve_function(foreground_func_details.function)  # Uses function mapping
+    foreground_function = resolve_function(
+        foreground_func_details.function
+    )  # Uses function mapping
 
     fg_input_arrays = [data_dict[name] for name in foreground_func_details.input_arrays]
     fg_kwargs = foreground_func_details.kwargs if foreground_func_details.kwargs else {}
@@ -146,7 +164,9 @@ def data_preprocessing(
     contour_input_arrays = [data_dict[name] for name in contour_func_details.input_arrays]
     contour_kwargs = contour_func_details.kwargs if contour_func_details.kwargs else {}
 
-    contour_gradient_map = array_apply(*contour_input_arrays, func=contour_function, **contour_kwargs)
+    contour_gradient_map = array_apply(
+        *contour_input_arrays, func=contour_function, **contour_kwargs
+    )
 
     return foreground_mask, contour_gradient_map
 
@@ -161,6 +181,8 @@ def ultrack(
     cfg = tracking_config
 
     cfg.data_config.working_dir = databaset_path
+
+    print(cfg)
 
     tracker = Tracker(cfg)
     tracker.track(
@@ -232,13 +254,15 @@ def track_one_position(
     lf_image = im_dataset[0][:, 0, z_slices.start, :, :]
 
     if vs_projection_function is not None:
-            click.echo(f"Applying {vs_projection_function.function} projection to the virtual staining data...")
+        click.echo(
+            f"Applying {vs_projection_function.function} projection to the virtual staining data..."
+        )
 
-            projection = eval(vs_projection_function.function)  # Convert string to function
-            kwargs = vs_projection_function.kwargs if vs_projection_function.kwargs else {}
+        projection = eval(vs_projection_function.function)  # Convert string to function
+        kwargs = vs_projection_function.kwargs if vs_projection_function.kwargs else {}
 
-            nuclei_prediction = projection(nuclei_prediction, **kwargs)
-            membrane_prediction = projection(membrane_prediction, **kwargs)
+        nuclei_prediction = projection(nuclei_prediction, **kwargs)
+        membrane_prediction = projection(membrane_prediction, **kwargs)
     # Prepare data dictionary
     data_dict = {
         "lf_image": lf_image,
@@ -251,7 +275,7 @@ def track_one_position(
     foreground_mask, contour_gradient_map = data_preprocessing(
         data_dict=data_dict,
         preprocessing_functions=preprocessing_functions,
-        tracking_functions=tracking_functions
+        tracking_functions=tracking_functions,
     )
 
     # Define path to save the tracking database and graph
@@ -261,7 +285,7 @@ def track_one_position(
 
     # Perform tracking
     click.echo("Tracking...")
-    trackin_labels, tracks_df, _ = ultrack(
+    tracking_labels, tracks_df, _ = ultrack(
         tracking_config, foreground_mask, contour_gradient_map, yx_scale, databaset_path
     )
 
@@ -273,7 +297,7 @@ def track_one_position(
 
     # Save the tracking labels
     with open_ome_zarr(output_dirpath / Path(*position_key), mode="r+") as output_dataset:
-        output_dataset[0][:, 0, 0] = np.asarray(trackin_labels)
+        output_dataset[0][:, 0, 0] = np.asarray(tracking_labels)
 
 
 @click.command()
@@ -312,12 +336,19 @@ def track(
     output_dirpath = Path(output_dirpath)
 
     settings = yaml_to_model(config_filepath, TrackingSettings)
+    tracking_data = settings.tracking_config
 
+    # Create default instance
+    default_config = MainConfig()
+
+    tracking_cfg = update_model(default_config, tracking_data)
+
+    # Get the shape of the data
     with open_ome_zarr(input_position_dirpaths[0]) as dataset:
         T, C, Z, Y, X = dataset.data.shape
 
     # Estimate resources
-    num_cpus, gb_ram_per_cpu = estimate_resources(shape=[T,C,Z,Y,X], ram_multiplier=16)
+    num_cpus, gb_ram_per_cpu = estimate_resources(shape=[T, C, Z, Y, X], ram_multiplier=16)
 
     # Prepare SLURM arguments
     slurm_args = {
@@ -348,38 +379,40 @@ def track(
     click.echo('Submitting SLURM jobs...')
     jobs = []
 
-    # for input_vs_position_path in input_position_dirpaths:
-    #         track_one_position(
-    #         input_lf_dirpath=input_lf_dirpaths,
-    #         input_vs_path=input_vs_position_path,
-    #         output_dirpath=output_dirpath,
-    #         z_slice=settings.z_slices,
-    #         tracking_config=settings.get_tracking_config(),
-    #         vs_projection_function = settings.vs_projection_function,
-    #         preprocessing_functions = settings.preprocessing_functions,
-    #         tracking_functions = settings.tracking_functions)
+    for input_vs_position_path in input_position_dirpaths:
+        track_one_position(
+            input_lf_dirpath=input_lf_dirpaths,
+            input_vs_path=input_vs_position_path,
+            output_dirpath=output_dirpath,
+            z_slice=settings.z_slices,
+            tracking_config=tracking_cfg,
+            vs_projection_function=settings.vs_projection_function,
+            preprocessing_functions=settings.preprocessing_functions,
+            tracking_functions=settings.tracking_functions,
+        )
 
-    with executor.batch():
-        for input_vs_position_path in input_position_dirpaths:
-            job = executor.submit(
-                track_one_position,
-                input_lf_dirpath=input_lf_dirpaths,
-                input_vs_path=input_vs_position_path,
-                output_dirpath=output_dirpath,
-                z_slice=settings.z_slices,
-                tracking_config=settings.get_tracking_config(),
-                vs_projection_function = settings.vs_projection_function,
-                preprocessing_functions = settings.preprocessing_functions,
-                tracking_functions = settings.tracking_functions
-            )
+    # with executor.batch():
+    #     for input_vs_position_path in input_position_dirpaths:
+    #         job = executor.submit(
+    #             track_one_position,
+    #             input_lf_dirpath=input_lf_dirpaths,
+    #             input_vs_path=input_vs_position_path,
+    #             output_dirpath=output_dirpath,
+    #             z_slice=settings.z_slices,
+    #             tracking_config=settings.get_tracking_config(),
+    #             vs_projection_function = settings.vs_projection_function,
+    #             preprocessing_functions = settings.preprocessing_functions,
+    #             tracking_functions = settings.tracking_functions
+    #         )
 
-            jobs.append(job)
+    #         jobs.append(job)
 
     job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 
     log_path = Path(output_dirpath.parent / "submitit_jobs_ids.log")
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
-                       
+
+
 if __name__ == "__main__":
     track()

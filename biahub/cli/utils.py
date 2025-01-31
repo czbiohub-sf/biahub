@@ -491,6 +491,25 @@ def append_channels(input_data_path: Path, target_data_path: Path) -> None:
     appending_dataset.close()
 
 
+def update_model(model_instance, update_dict):
+    """
+    Properly updates a Pydantic model with only the provided values while keeping the defaults.
+    This ensures that nested models retain missing values instead of getting overwritten.
+    """
+    updated_fields = {}
+    for key, value in update_dict.items():
+        if isinstance(value, dict) and hasattr(model_instance, key):
+            # If it's a nested dict, update the nested Pydantic model properly
+            nested_model = getattr(model_instance, key)
+            updated_fields[key] = nested_model.copy(update=value)
+        else:
+            # Otherwise, just update the value directly
+            updated_fields[key] = value
+
+    # Create a new instance with updated fields
+    return model_instance.copy(update=updated_fields)
+
+
 def model_to_yaml(model, yaml_path: Path) -> None:
     """
     Save a model's dictionary representation to a YAML file.
