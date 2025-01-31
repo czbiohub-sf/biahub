@@ -23,14 +23,14 @@ class MyBaseModel(BaseModel):
 
 
 class ProcessingFunctions(BaseModel):
-    function: str  # Updated from ImportString for simplicity
+    function: str
     input_arrays: list[str]
     kwargs: Dict[str, Any] = {}
 
 
 class TrackingSettings(MyBaseModel):
     z_slices: Tuple[int, int]
-    tracking_config: Dict[str, Any] = {}  # Define as raw dict
+    tracking_config: Dict[str, Any] = {}
     vs_projection_function: ProcessingFunctions = None
     preprocessing_functions: Dict[str, ProcessingFunctions] = {}
     tracking_functions: Dict[str, ProcessingFunctions] = {}

@@ -127,13 +127,14 @@ def data_preprocessing(
     preprocessing_functions: Dict[str, ProcessingFunctions],
     tracking_functions: Dict[str, ProcessingFunctions],
 ) -> Tuple[ArrayLike, ArrayLike]:
+    if "lf_image" in data_dict:
+        click.echo("Checking for empty frames in the label-free image...")
+        empty_frames_idx = _check_nan_n_zeros(data_dict["lf_image"])
 
-    empty_frames_idx = _check_nan_n_zeros(data_dict["lf_image"])
-
-    # drop lf_image from data_dift
-    data_dict.pop("lf_image")
-    for key, value in data_dict.items():
-        data_dict[key] = fill_empty_frames(value, empty_frames_idx)
+        # drop lf_image from data_dift
+        data_dict.pop("lf_image")
+        for key, value in data_dict.items():
+            data_dict[key] = fill_empty_frames(value, empty_frames_idx)
 
     # Apply preprocessing functions
     for key, func_details in preprocessing_functions.items():
@@ -218,11 +219,20 @@ def track_one_position(
 ) -> None:
     position_key = input_vs_path.parts[-3:]
     fov = "_".join(position_key)
-    click.echo(f"Processing position: {fov}")
+    z_slices = slice(z_slice[0], z_slice[1])
 
-    click.echo(f"Loading data from: {input_vs_path} and {input_lf_dirpath}...")
-    input_im_path = input_lf_dirpath / Path(*position_key)
-    im_dataset = open_ome_zarr(input_im_path)
+    click.echo(f"Processing z-stack: {z_slices}")
+
+    click.echo(f"Processing position: {fov}")
+    data_dict = {}
+    if input_lf_dirpath is not None:
+
+        click.echo(f"Loading data from: {input_lf_dirpath}...")
+        input_im_path = input_lf_dirpath / Path(*position_key)
+        im_dataset = open_ome_zarr(input_im_path)
+        data_dict["lf_image"] = im_dataset[0][:, 0, z_slices.start, :, :]
+
+    click.echo(f"Loading data from: {input_vs_path}...")
     vs_dataset = open_ome_zarr(input_vs_path)
 
     T, C, Z, Y, X = vs_dataset.data.shape
@@ -243,15 +253,11 @@ def track_one_position(
     create_empty_hcs_zarr(
         store_path=output_dirpath, position_keys=[position_key], **output_metadata
     )
-    z_slices = slice(z_slice[0], z_slice[1])
-
-    click.echo(f"Processing z-stack: {z_slices}")
 
     nuclei_prediction = vs_dataset[0][:, channel_names.index("nuclei_prediction"), z_slices]
     membrane_prediction = vs_dataset[0][
         :, channel_names.index("membrane_prediction"), z_slices
     ]
-    lf_image = im_dataset[0][:, 0, z_slices.start, :, :]
 
     if vs_projection_function is not None:
         click.echo(
@@ -263,12 +269,10 @@ def track_one_position(
 
         nuclei_prediction = projection(nuclei_prediction, **kwargs)
         membrane_prediction = projection(membrane_prediction, **kwargs)
+
     # Prepare data dictionary
-    data_dict = {
-        "lf_image": lf_image,
-        "nuclei_prediction": nuclei_prediction,
-        "membrane_prediction": membrane_prediction,
-    }
+    data_dict["nuclei_prediction"] = nuclei_prediction
+    data_dict["membrane_prediction"] = membrane_prediction
 
     # Preprocess to get the the foreground and multi-level contours
     click.echo("Preprocessing...")
@@ -308,15 +312,17 @@ def track_one_position(
 @local()
 @click.option(
     "-input_lf_dirpaths",
-    required=True,
+    "-ilf",
+    required=False,
+    default=None,
     type=str,
-    help="Label Free Image Dirpath",
+    help="Label Free Image Dirpath, if there are blanck frames in the data.",
 )
 def track(
     input_lf_dirpaths: str,
-    input_position_dirpaths: List[str],
     output_dirpath: str,
     config_filepath: str,
+    input_position_dirpaths: str,
     sbatch_filepath: str = None,
     local: bool = None,
 ) -> None:
@@ -379,33 +385,21 @@ def track(
     click.echo('Submitting SLURM jobs...')
     jobs = []
 
-    for input_vs_position_path in input_position_dirpaths:
-        track_one_position(
-            input_lf_dirpath=input_lf_dirpaths,
-            input_vs_path=input_vs_position_path,
-            output_dirpath=output_dirpath,
-            z_slice=settings.z_slices,
-            tracking_config=tracking_cfg,
-            vs_projection_function=settings.vs_projection_function,
-            preprocessing_functions=settings.preprocessing_functions,
-            tracking_functions=settings.tracking_functions,
-        )
+    with executor.batch():
+        for input_vs_position_path in input_position_dirpaths:
+            job = executor.submit(
+                track_one_position,
+                input_lf_dirpath=input_lf_dirpaths,
+                input_vs_path=input_vs_position_path,
+                output_dirpath=output_dirpath,
+                z_slice=settings.z_slices,
+                tracking_config=tracking_cfg,
+                vs_projection_function=settings.vs_projection_function,
+                preprocessing_functions=settings.preprocessing_functions,
+                tracking_functions=settings.tracking_functions,
+            )
 
-    # with executor.batch():
-    #     for input_vs_position_path in input_position_dirpaths:
-    #         job = executor.submit(
-    #             track_one_position,
-    #             input_lf_dirpath=input_lf_dirpaths,
-    #             input_vs_path=input_vs_position_path,
-    #             output_dirpath=output_dirpath,
-    #             z_slice=settings.z_slices,
-    #             tracking_config=settings.get_tracking_config(),
-    #             vs_projection_function = settings.vs_projection_function,
-    #             preprocessing_functions = settings.preprocessing_functions,
-    #             tracking_functions = settings.tracking_functions
-    #         )
-
-    #         jobs.append(job)
+            jobs.append(job)
 
     job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 
