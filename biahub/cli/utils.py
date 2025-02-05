@@ -491,6 +491,25 @@ def append_channels(input_data_path: Path, target_data_path: Path) -> None:
     appending_dataset.close()
 
 
+def update_model(model_instance, update_dict):
+    """
+    Properly updates a Pydantic model with only the provided values while keeping the defaults.
+    This ensures that nested models retain missing values instead of getting overwritten.
+    """
+    updated_fields = {}
+    for key, value in update_dict.items():
+        if isinstance(value, dict) and hasattr(model_instance, key):
+            # If it's a nested dict, update the nested Pydantic model properly
+            nested_model = getattr(model_instance, key)
+            updated_fields[key] = nested_model.copy(update=value)
+        else:
+            # Otherwise, just update the value directly
+            updated_fields[key] = value
+
+    # Create a new instance with updated fields
+    return model_instance.copy(update=updated_fields)
+
+
 def model_to_yaml(model, yaml_path: Path) -> None:
     """
     Save a model's dictionary representation to a YAML file.
@@ -592,27 +611,77 @@ def _is_nested(lst):
 
 def _check_nan_n_zeros(input_array):
     """
-    Checks if any of the channels are all zeros or nans and returns true
+    Checks if an array is entirely zeros or NaNs and returns indices of such slices.
+
+    Args:
+        input_array: Input array (2D, 3D, or 4D).
+
+    Returns:
+        List[Tuple[int, List[int]]]:
+            - For 2D arrays: Returns True if the array is zeros or NaNs, False otherwise.
+            - For 3D arrays: Returns a list of Z indices that are entirely zeros or NaNs.
+            - For 4D arrays: Returns a list of tuples, where each tuple contains:
+              (channel_index, list_of_empty_z_indices).
     """
-    if len(input_array.shape) == 3:
-        # Check if all the values are zeros or nans
-        if np.all(input_array == 0) or np.all(np.isnan(input_array)):
-            # Return true
-            return True
-    elif len(input_array.shape) == 4:
-        # Get the number of channels
-        num_channels = input_array.shape[0]
-        # Loop through the channels
-        for c in range(num_channels):
-            # Get the channel
-            zyx_array = input_array[c, :, :, :]
+    indices = []
 
-            # Check if all the values are zeros or nans
-            if np.all(zyx_array == 0) or np.all(np.isnan(zyx_array)):
-                # Return true
-                return True
+    if len(input_array.shape) == 2:  # 2D array (e.g., Y, X)
+        # Return True if entirely zeros or NaNs
+        return np.all(input_array == 0) or np.all(np.isnan(input_array))
+
+    elif len(input_array.shape) == 3:  # 3D array (e.g., Z, Y, X)
+        for z in range(input_array.shape[0]):
+            if np.all(input_array[z, :, :] == 0) or np.all(np.isnan(input_array[z, :, :])):
+                indices.append(z)  # Add Z index if it's empty
+        return indices
+
+    elif len(input_array.shape) == 4:  # 4D array (e.g., C, Z, Y, X)
+        for c in range(input_array.shape[0]):  # Iterate over channels
+            z_indices = _check_nan_n_zeros(
+                input_array[c, :, :, :]
+            )  # Check Z slices in each channel
+            if z_indices:  # If there are empty Z slices, add them
+                indices.append((c, z_indices))  # Add (channel, empty_z_indices)
+        return indices
+
     else:
-        raise ValueError("Input array must be 3D or 4D")
+        raise ValueError("Input array must be 2D, 3D, or 4D.")
 
-    # Return false
-    return False
+
+def estimate_resources(
+    shape: Tuple[int, int, int, int, int],
+    dtype: DTypeLike = np.float32,
+    ram_multiplier: float = 1.0,
+    max_num_cpus: int = 64,
+):
+    """
+    Estimate the number of CPUs and the amount of RAM required for processing a given data volume.
+
+    Parameters
+    ----------
+    shape : Tuple[int, int, int, int, int]
+        The shape of the data as a tuple (T, C, Z, Y, X).
+    dtype : DTypeLike, optional
+        The data type of the elements. Default is np.float32.
+    ram_multiplier : float, optional
+        Multiplier to scale the required memory for processing a given ZYX volume. For example,
+        if a processing pipeline makes two copies of the input data, then the ram_multiplier
+        should be at least 3. Default is 1.0.
+    max_num_cpus : int, optional
+        Maximum number of available CPUs. Default is 64.
+
+    Returns
+    -------
+    Tuple[int, int]
+        A tuple containing the estimated number of CPUs and the required amount of RAM per CPU in GB.
+        These values can be passed to the `--cpus_per_task` and `--mem_per_cpu` parameters of sbatch.
+    """
+    assert len(shape) == 5, "The shape must be a 5-tuple (T, C, Z, Y, X)."
+
+    T, C, Z, Y, X = shape
+    gb_per_element = np.dtype(dtype).itemsize / 2**30  # bytes_per_element / bytes_per_gb
+    num_cpus = min(T * C, max_num_cpus)
+    gb_ram_per_volume = Z * Y * X * gb_per_element
+    gb_ram_per_cpu = np.ceil(max(1, gb_ram_per_volume * ram_multiplier))
+
+    return int(num_cpus), int(gb_ram_per_cpu)

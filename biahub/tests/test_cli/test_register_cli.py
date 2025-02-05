@@ -26,6 +26,7 @@ def test_register_cli(tmp_path, example_plate, example_plate_2, example_register
             str(config_path),
             "-o",
             str(output_path),
+            "-l",
         ],
         catch_exceptions=False,
     )

@@ -1,6 +1,6 @@
 import warnings
 
-from typing import Any, Dict, Literal, Optional, Union
+from typing import Any, Dict, Literal, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -23,9 +23,18 @@ class MyBaseModel(BaseModel):
 
 
 class ProcessingFunctions(BaseModel):
-    function: ImportString
-    channel: str
+    function: str
+    input_arrays: list[str]
     kwargs: Dict[str, Any] = {}
+
+
+class TrackingSettings(MyBaseModel):
+    z_slices: Tuple[int, int]
+    input_channels: Dict[str, Any]
+    tracking_config: Dict[str, Any] = {}
+    vs_projection_function: ProcessingFunctions = None
+    preprocessing_functions: Dict[str, ProcessingFunctions] = {}
+    tracking_functions: Dict[str, ProcessingFunctions] = {}
 
 
 class ProcessingImportFuncSettings(MyBaseModel):

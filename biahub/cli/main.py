@@ -16,6 +16,7 @@ from biahub.cli.register import register
 from biahub.cli.segment import segment
 from biahub.cli.stabilize import stabilize
 from biahub.cli.stitch import stitch
+from biahub.cli.track import track
 from biahub.cli.update_scale_metadata import update_scale_metadata
 
 CONTEXT = {"help_option_names": ["-h", "--help"]}
@@ -47,5 +48,6 @@ cli.add_command(stabilize)
 cli.add_command(estimate_psf)
 cli.add_command(deconvolve)
 cli.add_command(characterize_psf)
+cli.add_command(track)
 cli.add_command(segment)
 cli.add_command(process_w_imports)
