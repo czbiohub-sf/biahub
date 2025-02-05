@@ -2,7 +2,7 @@
 import os
 
 from pathlib import Path
-from typing import Dict, List, Tuple, Union
+from typing import Any, Dict, List, Tuple, Union
 
 import click
 import numpy as np
@@ -36,9 +36,22 @@ from biahub.cli.utils import (
 # Custom function
 def mem_nuc_contour(nuclei_prediction: ArrayLike, membrane_prediction: ArrayLike) -> ArrayLike:
     """
-    Computes the membrane-nucleus contour by averaging the membrane signal
-    and the inverse nucleus signal.
+    Compute the membrane-nucleus contour by averaging the membrane signal and the inverse nucleus signal.
+
+    This function generates a contour map that highlights the boundary between the nucleus and
+    membrane regions in an imaging dataset.
+
+    Parameters:
+    - nuclei_prediction (ArrayLike): A NumPy array representing the predicted nucleus.
+    - membrane_prediction (ArrayLike): A NumPy array representing the predicted membrane.
+
+    Returns:
+    - ArrayLike: A NumPy array representing the computed membrane-nucleus contour.
+
+    Notes:
+    - Input arrays should have the same shape to avoid broadcasting issues.
     """
+
     return (np.asarray(membrane_prediction) + (1 - np.asarray(nuclei_prediction))) / 2
 
 
@@ -60,8 +73,26 @@ FUNCTION_MAP["biahub.cli.track.mem_nuc_contour"] = mem_nuc_contour
 
 def resolve_function(function_name: str):
     """
-    Resolves a function from FUNCTION_MAP. Raises an error if the function is not found.
+    Resolve a function by its name from a predefined function mapping.
+
+    This function retrieves a callable function from the `FUNCTION_MAP` dictionary based on
+    the provided function name. If the function name does not exist in the mapping, an
+    error is raised.
+
+    Parameters:
+    - function_name (str): The name of the function to retrieve.
+
+    Returns:
+    - Callable: The resolved function from `FUNCTION_MAP`.
+
+    Raises:
+    - ValueError: If the provided function name is not found in `FUNCTION_MAP`.
+
+    Notes:
+    - `FUNCTION_MAP` is a dictionary containing allowed functions that can be dynamically
+      resolved and applied to data.
     """
+
     if function_name not in FUNCTION_MAP:
         raise ValueError(
             f"Invalid function '{function_name}'. Allowed functions: {list(FUNCTION_MAP.keys())}"
@@ -72,15 +103,27 @@ def resolve_function(function_name: str):
 
 def fill_empty_frames(arr: ArrayLike, empty_frames_idx: List[int]) -> ArrayLike:
     """
-    Fills empty frames in an array by propagating values from the nearest non-empty frames.
+    Fill empty frames in a time-series imaging dataset by propagating values from the nearest non-empty frames.
 
-    Args:
-        arr (np.ndarray): Input array (e.g., 3D: T, Y, X or 4D: T, C, Y, X).
-        empty_frames_idx (List[int]): Indices of empty frames.
+    This function identifies empty frames in a 3D (T, Y, X) or 4D (T, C, Y, X) array and fills them
+    using the nearest available data. If an empty frame is found at the beginning or end, it is filled
+    with the closest available non-empty frame. For empty frames in the middle, the function prioritizes
+    propagation from previous frames but falls back to future frames if necessary.
+
+    Parameters:
+    - arr (ArrayLike): Input 3D (T, Y, X) or 4D (T, C, Y, X) imaging data array.
+    - empty_frames_idx (List[int]): Indices of frames that are completely empty.
 
     Returns:
-        np.ndarray: Array with empty frames filled.
+    - ArrayLike: The input array with empty frames filled.
+
+    Notes:
+    - If no empty frames are detected, the function returns the array unchanged.
+    - If the first or last frame is empty, it is filled with the nearest available frame.
+    - For middle frames, the function attempts to fill using the closest previous non-empty frame
+      but falls back to the next available frame if necessary.
     """
+
     if not empty_frames_idx:
         return arr  # No empty frames to fill
 
@@ -127,12 +170,41 @@ def data_preprocessing(
     preprocessing_functions: Dict[str, ProcessingFunctions],
     tracking_functions: Dict[str, ProcessingFunctions],
 ) -> Tuple[ArrayLike, ArrayLike]:
-    if "lf_image" in data_dict:
+
+    """
+    Preprocess imaging data for tracking by applying preprocessing functions and generating
+    required inputs for tracking.
+
+    This function applies a series of preprocessing steps to the input imaging data, including
+    handling empty frames, applying user-defined preprocessing functions, and generating
+    the necessary masks for object tracking.
+
+    Parameters:
+    - data_dict (dict): Dictionary containing imaging data with channel names as keys and
+                         corresponding NumPy arrays as values.
+    - preprocessing_functions (Dict[str, ProcessingFunctions]): Dictionary mapping preprocessing
+                                                                steps to their corresponding functions.
+    - tracking_functions (Dict[str, ProcessingFunctions]): Dictionary containing functions for
+                                                            generating foreground and contour masks.
+
+    Returns:
+    - Tuple[ArrayLike, ArrayLike]:
+        - The foreground mask used for tracking.
+        - The contour gradient map used for tracking.
+
+    Notes:
+    - If the "Phase3D" key is present in `data_dict`, the function identifies and fills empty frames
+      before processing.
+    - The preprocessing functions are dynamically resolved and applied to the corresponding
+      input arrays.
+    """
+
+    if "Phase3D" in data_dict:
         click.echo("Checking for empty frames in the label-free image...")
-        empty_frames_idx = _check_nan_n_zeros(data_dict["lf_image"])
+        empty_frames_idx = _check_nan_n_zeros(data_dict["Phase3D"])
 
         # drop lf_image from data_dift
-        data_dict.pop("lf_image")
+        data_dict.pop("Phase3D")
         for key, value in data_dict.items():
             data_dict[key] = fill_empty_frames(value, empty_frames_idx)
 
@@ -173,12 +245,39 @@ def data_preprocessing(
 
 
 def ultrack(
-    tracking_config,
+    tracking_config: MainConfig,
     foreground_mask: ArrayLike,
     contour_gradient_map: ArrayLike,
     scale: Union[Tuple[float, float], Tuple[float, float, float]],
     databaset_path,
 ):
+    """
+    Perform object tracking using the ultrack library.
+
+    This function tracks objects based on a provided foreground mask and contour gradient map
+    using the specified tracking configuration. The results include labeled tracking data,
+    a DataFrame containing track information, and a graph representation of the tracks.
+
+    Parameters:
+    - tracking_config (MainConfig): Configuration settings for the tracking process.
+    - foreground_mask (ArrayLike): Binary or probability mask indicating detected objects.
+    - contour_gradient_map (ArrayLike): Gradient-based contour map used for tracking refinement.
+    - scale (Union[Tuple[float, float], Tuple[float, float, float]]): Scale factors for spatial
+      resolution, given as (Y, X) or (Z, Y, X) depending on the dataset.
+    - databaset_path (Path): Directory where tracking results and configurations will be saved.
+
+    Returns:
+    - np.ndarray: Labeled tracking results in an OME-Zarr format.
+    - pd.DataFrame: DataFrame containing tracking information, including object IDs, positions,
+      and frame associations.
+    - networkx.Graph: Graph representation of object tracks, useful for lineage and connectivity
+      analysis.
+
+    Notes:
+    - The function modifies `tracking_config` to set the working directory for results storage.
+    - The function also saves the tracking configuration in a TOML file for reproducibility.
+    """
+
     cfg = tracking_config
 
     cfg.data_config.working_dir = databaset_path
@@ -211,42 +310,100 @@ def track_one_position(
     input_lf_dirpath: Path,
     input_vs_path: Path,
     output_dirpath: Path,
+    input_channels: Dict[str, Any],
     vs_projection_function: ProcessingFunctions,
     preprocessing_functions: Dict[str, ProcessingFunctions],
     tracking_functions: Dict[str, ProcessingFunctions],
     z_slice: tuple,
     tracking_config: MainConfig,
 ) -> None:
+    """
+    Process a single imaging position for cell tracking using virtual staining and optional label-free imaging.
+
+    This function loads imaging data from the specified input directories, applies preprocessing steps, and
+    performs object tracking using the provided configuration. It obtain the foreground and contour-based tracking
+     to generate labeled tracking outputs.
+
+    Parameters:
+    - input_lf_dirpath (Path): Path to the directory containing label-free images (optional, required
+                               if blank frames exist in the data).
+    - input_vs_path (Path): Path to the virtual staining dataset in OME-Zarr format.
+    - output_dirpath (Path): Path to save tracking results, including labels and tracks.
+    - input_channels (Dict[str, Any]): Dictionary specifying channel names for label-free, virtual staining,
+                                       and tracking inputs.
+    - vs_projection_function (ProcessingFunctions): Function used to project virtual staining data across
+                                                    the z-stack (e.g., max projection).
+    - preprocessing_functions (Dict[str, ProcessingFunctions]): Dictionary of preprocessing functions applied
+                                                                to the input images before tracking.
+    - tracking_functions (Dict[str, ProcessingFunctions]): Dictionary of functions used for foreground mask
+                                                           and contour generation.
+    - z_slice (tuple): Tuple specifying the range of z-slices to process.
+    - tracking_config (MainConfig): Configuration settings for the tracking algorithm.
+
+    Returns:
+    - None: The function also saves the tracking results, including labeled images and track data,
+            to the specified output directory.
+
+    Notes:
+    - If blank frames exist in the data, the label-free image directory must be provided.
+    - The function verifies the presence of required input channels and raises an error if any are missing.
+    - Tracking is performed using the `ultrack` library, and the results are saved in an OME-Zarr format.
+    - Tracks graphs are exported as CSV files.
+    """
+
     position_key = input_vs_path.parts[-3:]
     fov = "_".join(position_key)
     z_slices = slice(z_slice[0], z_slice[1])
 
     click.echo(f"Processing z-stack: {z_slices}")
-
     click.echo(f"Processing position: {fov}")
-    data_dict = {}
-    if input_lf_dirpath is not None:
 
-        click.echo(f"Loading data from: {input_lf_dirpath}...")
-        input_im_path = input_lf_dirpath / Path(*position_key)
-        im_dataset = open_ome_zarr(input_im_path)
-        data_dict["lf_image"] = im_dataset[0][:, 0, z_slices.start, :, :]
+    data_dict = {}
+    # Load label free data
+    if input_channels['label_free'] is not None:
+        if input_lf_dirpath is not None:
+            click.echo(f"Loading data from: {input_lf_dirpath}...")
+            input_im_path = input_lf_dirpath / Path(*position_key)
+            im_dataset = open_ome_zarr(input_im_path)
+            channel_names = im_dataset.channel_names
+            click.echo(f"Label Free Channel names: {channel_names}")
+            for channel in input_channels["label_free"]:
+                data_dict[channel] = im_dataset[0][
+                    :, channel_names.index(channel), z_slices.start, :, :
+                ]
+        else:
+            raise ValueError(
+                "Label Free Image Dirpath is required if there are blanck frames in the data."
+            )
+    # Load virtual staining data, check if the required channels are present
+    if input_channels['virtual_stain'] is None:
+        raise ValueError("Virtual Staining input channels is required.")
+
+    # Check if the tracking channel is present in the virtual staining channels
+    if input_channels['tracking'] is None:
+        raise ValueError("Tracking input channels is required.")
+    elif len(input_channels["tracking"]) != 1:
+        raise ValueError("Only one channel is allowed and required for tracking.")
+    elif input_channels["tracking"][0] not in input_channels["virtual_stain"]:
+        raise ValueError("Tracking channel not found in Virtual Stain input channels.")
 
     click.echo(f"Loading data from: {input_vs_path}...")
     vs_dataset = open_ome_zarr(input_vs_path)
-
     T, C, Z, Y, X = vs_dataset.data.shape
     channel_names = vs_dataset.channel_names
-
     click.echo(f"Virtual Stanining Channel names: {channel_names}")
-
     yx_scale = vs_dataset.scale[-2:]
+
+    # Define output metadata
+    output_channels = []
+    for channel in input_channels["tracking"]:
+        output_channels.append(f"{channel}_labels")
 
     output_metadata = {
         "shape": (T, 1, 1, Y, X),
         "chunks": None,
         "scale": vs_dataset.scale,
-        "channel_names": [f"{channel_names[0]}_labels"],
+        "channel_names": output_channels,
         "dtype": np.uint32,
     }
 
@@ -254,11 +411,11 @@ def track_one_position(
         store_path=output_dirpath, position_keys=[position_key], **output_metadata
     )
 
-    nuclei_prediction = vs_dataset[0][:, channel_names.index("nuclei_prediction"), z_slices]
-    membrane_prediction = vs_dataset[0][
-        :, channel_names.index("membrane_prediction"), z_slices
-    ]
+    # Load virtual staining data
+    for channel in input_channels["virtual_stain"]:
+        data_dict[channel] = vs_dataset[0][:, channel_names.index(channel), z_slices]
 
+    # Apply virtual staining projection function
     if vs_projection_function is not None:
         click.echo(
             f"Applying {vs_projection_function.function} projection to the virtual staining data..."
@@ -267,12 +424,8 @@ def track_one_position(
         projection = eval(vs_projection_function.function)  # Convert string to function
         kwargs = vs_projection_function.kwargs if vs_projection_function.kwargs else {}
 
-        nuclei_prediction = projection(nuclei_prediction, **kwargs)
-        membrane_prediction = projection(membrane_prediction, **kwargs)
-
-    # Prepare data dictionary
-    data_dict["nuclei_prediction"] = nuclei_prediction
-    data_dict["membrane_prediction"] = membrane_prediction
+        for input_array in vs_projection_function.input_arrays:
+            data_dict[input_array] = projection(data_dict[input_array], **kwargs)
 
     # Preprocess to get the the foreground and multi-level contours
     click.echo("Preprocessing...")
@@ -311,15 +464,15 @@ def track_one_position(
 @sbatch_filepath()
 @local()
 @click.option(
-    "-input_lf_dirpaths",
-    "-ilf",
+    "-lf_dirpaths",
+    "-l",
     required=False,
     default=None,
     type=str,
     help="Label Free Image Dirpath, if there are blanck frames in the data.",
 )
 def track(
-    input_lf_dirpaths: str,
+    lf_dirpaths: str,
     output_dirpath: str,
     config_filepath: str,
     input_position_dirpaths: str,
@@ -389,10 +542,11 @@ def track(
         for input_vs_position_path in input_position_dirpaths:
             job = executor.submit(
                 track_one_position,
-                input_lf_dirpath=input_lf_dirpaths,
+                input_lf_dirpath=lf_dirpaths,
                 input_vs_path=input_vs_position_path,
                 output_dirpath=output_dirpath,
                 z_slice=settings.z_slices,
+                input_channels=settings.input_channels,
                 tracking_config=tracking_cfg,
                 vs_projection_function=settings.vs_projection_function,
                 preprocessing_functions=settings.preprocessing_functions,

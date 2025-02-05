@@ -1,4 +1,12 @@
 z_slices: [20, 50]
+input_channels:
+  label_free:
+    - Phase3D
+  virtual_stain:
+    - nuclei_prediction
+    - membrane_prediction
+  tracking:
+    - nuclei_prediction
 tracking_config:
   segmentation_config:
     min_area: 2100

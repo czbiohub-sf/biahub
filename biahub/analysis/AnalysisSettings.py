@@ -30,6 +30,7 @@ class ProcessingFunctions(BaseModel):
 
 class TrackingSettings(MyBaseModel):
     z_slices: Tuple[int, int]
+    input_channels: Dict[str, Any]
     tracking_config: Dict[str, Any] = {}
     vs_projection_function: ProcessingFunctions = None
     preprocessing_functions: Dict[str, ProcessingFunctions] = {}
