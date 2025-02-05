@@ -3,22 +3,33 @@ import re
 import subprocess
 
 import click
+import imageio_ffmpeg
 
 
 def detect_crop_params(file_path):
     """Detect crop parameters using ffmpeg cropdetect."""
-    command = ['ffmpeg', '-i', file_path, '-vf', 'cropdetect=24:16:0', '-f', 'null', '-']
+    ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+    command = [
+        ffmpeg_exe,
+        "-i",
+        file_path,
+        "-vf",
+        "cropdetect=24:16:0",
+        "-f",
+        "null",
+        "-",
+    ]
     result = subprocess.run(command, stderr=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
 
     # Extract the crop parameters from the output
     crop_line = None
     for line in result.stderr.splitlines():
-        if 'crop=' in line:
+        if "crop=" in line:
             crop_line = line
 
     if crop_line:
         # Get the last crop= line and extract the parameters using regex
-        crop_params = re.search(r'crop=(\S+)', crop_line)
+        crop_params = re.search(r"crop=(\S+)", crop_line)
         if crop_params:
             return crop_params.group(1)
 
@@ -37,17 +48,18 @@ def process_video(file_path, output_dir):
         # Define the output path
         output_path = os.path.join(output_dir, f"{filename_no_ext}_cropped.mp4")
 
-        # Apply cropping
+        # Apply cropping using imageio-ffmpeg
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
         command = [
-            'ffmpeg',
-            '-i',
+            ffmpeg_exe,
+            "-i",
             file_path,
-            '-vf',
-            f'crop={crop_params}',
-            '-c:v',
-            'libx264',
-            '-c:a',
-            'copy',
+            "-vf",
+            f"crop={crop_params}",
+            "-c:v",
+            "libx264",
+            "-c:a",
+            "copy",
             output_path,
         ]
         subprocess.run(command)
@@ -57,8 +69,8 @@ def process_video(file_path, output_dir):
 
 
 @click.command()
-@click.argument('video_dir', type=click.Path(exists=True, file_okay=False))
-@click.argument('output_dir', type=click.Path())
+@click.argument("video_dir", type=click.Path(exists=True, file_okay=False))
+@click.argument("output_dir", type=click.Path())
 def main(video_dir, output_dir):
     """Batch process videos in VIDEO_DIR and save the output to OUTPUT_DIR."""
     # Ensure output directory exists
