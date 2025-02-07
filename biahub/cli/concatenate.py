@@ -104,8 +104,10 @@ def concatenate(
 
     # Open dummy FOV to get overall shape
     # NOTE: assumes all the zarrs will have the same shape
+    # NOTE: assume all stores have the same dtype which will match the output
     with open_ome_zarr(all_data_paths[0]) as dataset:
         T, C, Z, Y, X = dataset.data.shape
+        dtype = dataset.data.dtype
         output_voxel_size = dataset.scale[-3:]
 
     # Logic to parse time indices
@@ -143,7 +145,7 @@ def concatenate(
         "chunks": chunk_size,
         "scale": (1,) * 2 + tuple(output_voxel_size),
         "channel_names": all_channel_names,
-        "dtype": np.float32,
+        "dtype": dtype,
     }
 
     # Create the output zarr mirroring source_position_dirpaths
