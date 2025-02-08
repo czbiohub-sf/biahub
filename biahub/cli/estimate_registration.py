@@ -646,7 +646,7 @@ def estimate_registration(
         -o ./output.yml                                    # Output configuration file path
         --config ./config.yml                              # Path to input configuration file
         --num-processes 4                                  # Number of processes for parallel bead detection
-        --registration-target-channel "BG"                 # Name of the target channel
+        --registration-target-channel "Phase3D"                 # Name of the target channel
         --registration-source-channels "GFP" "mCherry"     # Names of the source channels
     """
 
