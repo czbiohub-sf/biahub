@@ -610,7 +610,7 @@ def estimate_registration(
     num_processes,
     config_filepath,
     registration_target_channel,
-    registration_source_channels,
+    registration_source_channel,
 ):
 
     """
@@ -659,8 +659,8 @@ def estimate_registration(
     affine_transform_type = settings.affine_transform_type
     if registration_target_channel is None:
         registration_target_channel = target_channel_name
-    if registration_source_channels is None:
-        registration_source_channels = [source_channel_name]
+    if registration_source_channel is None:
+        registration_source_channel = [source_channel_name]
 
     click.echo(f"Target channel: {target_channel_name}")
     click.echo(f"Source channel: {source_channel_name}")
@@ -699,7 +699,7 @@ def estimate_registration(
         model = StabilizationSettings(
             stabilization_estimation_channel='',
             stabilization_type='xyz',
-            stabilization_channels=registration_source_channels,
+            stabilization_channels=registration_source_channel,
             affine_transform_zyx_list=transforms,
             time_indices='all',
             output_voxel_size=voxel_size,
@@ -718,7 +718,7 @@ def estimate_registration(
         )
 
         model = RegistrationSettings(
-            source_channel_names=registration_source_channels,
+            source_channel_names=registration_source_channel,
             target_channel_name=registration_target_channel,
             affine_transform_zyx=transform.tolist(),
         )
