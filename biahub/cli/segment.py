@@ -52,19 +52,38 @@ def segment_data(
         try:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         except torch.cuda.CudaError:
-            print("No GPU available. Using CPU")
+            click.echo("No GPU available. Using CPU")
             device = torch.device("cpu")
     else:
         device = torch.device("cpu")
 
+    click.echo(f"Using device: {device}")
+
     czyx_segmentation = []
     # Process each model in a loop
     for i, (model_name, model_args) in enumerate(segmentation_models.items()):
-        print(f"Segmenting with model {model_name}")
+        click.echo(f"Segmenting with model {model_name}")
         z_slice_2D = model_args.z_slice_2D
         czyx_data_to_segment = (
             czyx_data[:, z_slice_2D : z_slice_2D + 1] if z_slice_2D is not None else czyx_data
         )
+        # Apply preprocessing functions
+        preprocessing_functions = model_args.preprocessing
+        for preproc in preprocessing_functions:
+            func = preproc.function
+            kwargs = preproc.kwargs
+            c_idx = preproc["channel"]
+
+            # Convert list to tuple for out_range if needed
+            if "out_range" in kwargs and isinstance(kwargs["out_range"], list):
+                kwargs["out_range"] = tuple(kwargs["out_range"])
+
+            click.echo(
+                f"Processing with {func.__name__} with kwargs {kwargs} to channel {c_idx}"
+            )
+            czyx_data[c_idx] = func(czyx_data[c_idx], **kwargs)
+
+        # Apply the segmentation
         model = models.CellposeModel(
             model_type=model_args.path_to_model, gpu=gpu, device=device
         )
@@ -106,6 +125,9 @@ def segment(
     config_filepath = Path(config_filepath)
     slurm_out_path = output_dirpath.parent / "slurm_output"
 
+    if sbatch_filepath is not None:
+        sbatch_filepath = Path(sbatch_filepath)
+
     # Handle single position or wildcard filepath
     output_position_paths = utils.get_output_paths(input_position_dirpaths, output_dirpath)
 
@@ -118,7 +140,6 @@ def segment(
         channel_names = input_dataset.channel_names
 
     # Load the segmentation models with their respective configurations
-
     # TODO: impelment logic for 2D segmentation. Have a slicing parameter
     segment_args = settings.models
     C_segment = len(segment_args)
@@ -143,6 +164,29 @@ def segment(
         click.echo(
             f"Segmenting with model {model_name} using channels {model_args.eval_args['channels']}"
         )
+        if (
+            "anisotropy" not in model_args.eval_args
+            or model_args.eval_args["anisotropy"] is None
+        ):
+            # Using dataset anisotropy
+            model_args.eval_args["anisotropy"] = scale[-3] / scale[-1]
+            click.echo(
+                f"Using anisotropy from scale metadata: {model_args.eval_args['anisotropy']}"
+            )
+        else:
+            click.echo(
+                f"Using anisotropy from the config: {model_args.eval_args['anisotropy']}"
+            )
+
+        # Check if preprocessing functions exist and replace channel name with channel index
+        if model_args.preprocessing is not None:
+            for preproc in model_args.preprocessing:
+                # Replace the channel name with the channel index
+                if preproc["channel"] is not None:
+                    preproc["channel"] = channel_names.index(preproc["channel"])
+                else:
+                    raise ValueError("Channel must be specified for preprocessing functions")
+
     segmentation_shape = (T, C_segment, Z, Y, X)
 
     # Create a zarr store output to mirror the input
@@ -156,12 +200,12 @@ def segment(
     )
 
     # Estimate Resrouces
-    gb_per_element = 4 / 2**30  # bytes_per_float32 / bytes_per_gb
+    gb_per_element = 8 / 2**30  # bytes_per_float32 / bytes_per_gb
     num_cpus = np.min([T * C, 16])
     input_memory = num_cpus * Z * Y * X * gb_per_element
     gb_ram_request = np.ceil(np.max([1, input_memory])).astype(int)
     num_gpus = 1
-
+    slurm_time = np.ceil(np.max([60, T * 0.75])).astype(int)
     # Prepare SLURM arguments
     slurm_args = {
         "slurm_job_name": "segment",
@@ -169,7 +213,7 @@ def segment(
         "slurm_mem_per_cpu": f"{gb_ram_request}G",
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,  # process up to 100 positions at a time
-        "slurm_time": 60,
+        "slurm_time": slurm_time,
         "slurm_partition": "gpu",
     }
     if sbatch_filepath:
@@ -199,7 +243,7 @@ def segment(
                     output_position_path,
                     input_channel_indices=[list(range(C))],
                     output_channel_indices=[list(range(C_segment))],
-                    num_processes=slurm_args["slurm_cpus_per_task"],
+                    num_processes=np.max([1, num_cpus - 3]),
                     segmentation_models=segment_args,
                 )
             )

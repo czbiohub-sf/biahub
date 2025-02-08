@@ -8,6 +8,7 @@ import torch
 from pydantic import (
     BaseModel,
     ConfigDict,
+    ImportString,
     NonNegativeInt,
     PositiveFloat,
     PositiveInt,
@@ -224,10 +225,17 @@ def get_valid_eval_args():
         )
 
 
+class PreprocessingFunctions(BaseModel):
+    function: ImportString
+    channel: str
+    kwargs: Dict[str, Any] = {}
+
+
 class SegmentationModel(BaseModel):
     path_to_model: str
     eval_args: Dict[str, Any]
-    z_slice_2D: Optional[int] = None  # Optional integer for z_slice
+    z_slice_2D: Optional[int] = None
+    preprocessing: list[PreprocessingFunctions] = []
 
     @validator("eval_args", pre=True)
     def validate_eval_args(cls, value):
