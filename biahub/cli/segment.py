@@ -72,14 +72,14 @@ def segment_data(
         for preproc in preprocessing_functions:
             func = preproc.function
             kwargs = preproc.kwargs
-            c_idx = preproc['channel']
+            c_idx = preproc["channel"]
 
             # Convert list to tuple for out_range if needed
             if "out_range" in kwargs and isinstance(kwargs["out_range"], list):
                 kwargs["out_range"] = tuple(kwargs["out_range"])
 
             click.echo(
-                f'Processing with {func.__name__} with kwargs {kwargs} to channel {c_idx}'
+                f"Processing with {func.__name__} with kwargs {kwargs} to channel {c_idx}"
             )
             czyx_data[c_idx] = func(czyx_data[c_idx], **kwargs)
 
@@ -171,11 +171,11 @@ def segment(
             # Using dataset anisotropy
             model_args.eval_args["anisotropy"] = scale[-3] / scale[-1]
             click.echo(
-                f'Using anisotropy from scale metadata: {model_args.eval_args["anisotropy"]}'
+                f"Using anisotropy from scale metadata: {model_args.eval_args['anisotropy']}"
             )
         else:
             click.echo(
-                f'Using anisotropy from the config: {model_args.eval_args["anisotropy"]}'
+                f"Using anisotropy from the config: {model_args.eval_args['anisotropy']}"
             )
 
         # Check if preprocessing functions exist and replace channel name with channel index
