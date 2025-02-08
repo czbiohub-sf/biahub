@@ -57,4 +57,4 @@ affine_transform_tolerance: 10
 filtering_angle_threshold: 30
 
 # Optional. Set to True for detailed logging of bead detection process.
-verbose_bead_detection: True
+verbose: True
