@@ -253,6 +253,7 @@ class SegmentationModel(BaseModel):
                 raise ValueError(
                     "If 'z_slice_2D' is provided, 'do_3D' in 'eval_args' must be set to False."
                 )
+            z_slice_2D = 0
         return z_slice_2D
 
 
