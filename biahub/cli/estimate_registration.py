@@ -596,11 +596,11 @@ def _get_tform_from_beads(
     required=False,
 )
 @click.option(
-    "--registration-source-channels",
+    "--registration-source-channel",
     "-rs",
     type=str,
     multiple=True,
-    help="Name of the source channels to be used when registration params are applied.",
+    help="Name of the source channels to be used when registration params are applied. May be passed multiple times.",
     required=False,
 )
 def estimate_registration(
@@ -646,8 +646,9 @@ def estimate_registration(
         -o ./output.yml                                    # Output configuration file path
         --config ./config.yml                              # Path to input configuration file
         --num-processes 4                                  # Number of processes for parallel bead detection
-        --registration-target-channel "Phase3D"                 # Name of the target channel
-        --registration-source-channels "GFP" "mCherry"     # Names of the source channels
+        --registration-target-channel "Phase3D"            # Name of the target channel
+        --registration-source-channel "GFP"                # Names of source channel
+        --registration-source-channel "mCherry"            # Names of another source channel
     """
 
     settings = yaml_to_model(config_filepath, EstimateRegistrationSettings)
