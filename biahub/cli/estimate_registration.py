@@ -589,22 +589,19 @@ def _get_tform_from_beads(
 @num_processes()
 @config_filepath()
 @click.option(
-    "--similarity",
-    '-x',
-    is_flag=True,
-    help='Flag to use similarity transform (rotation, translation, scaling) default:Eucledian (rotation, translation)',
-)
-@click.option(
-    "--t_idx",
-    type=int,
+    "--registration-target-channel",
+    "-rt",
+    type=str,
+    help="Name of the target channel to be used when registration params are applied.",
     required=False,
-    default=0,
-    help="Time index to use for registration estimation",
 )
 @click.option(
-    "--beads",
-    is_flag=True,
-    help="Flag to estimate registration parameters based on bead images",
+    "--registration-source-channels",
+    "-rs",
+    type=str,
+    multiple=True,
+    help="Name of the source channels to be used when registration params are applied.",
+    required=False,
 )
 def estimate_registration(
     source_position_dirpaths,
@@ -612,9 +609,8 @@ def estimate_registration(
     output_filepath,
     num_processes,
     config_filepath,
-    similarity,
-    t_idx,
-    beads,
+    registration_target_channel,
+    registration_source_channels,
 ):
 
     """
@@ -630,11 +626,8 @@ def estimate_registration(
     - output_filepath (str): Path to save the estimated registration configuration file (YAML).
     - num_processes (int): Number of processes for parallel computations (used in bead-based registration).
     - config_filepath (str): Path to the YAML configuration file for the registration settings.
-    - similarity (bool): If True, use a similarity transform (rotation, translation, scaling).
-                         If False, use an Euclidean transform (rotation, translation only).
-    - t_idx (int): Time index to use for registration estimation. Default is 0.
-    - beads (bool): If True, estimate registration parameters using bead images.
-                    If False, use user-assisted manual feature selection.
+    - registration_target_channel (str): Name of the target channel to be used when registration params are applied.
+    - registration_source_channels (list): List of source channel names to be used when registration params are applied.
 
     Returns:
     - None: Writes the estimated registration parameters to the specified output file.
@@ -642,6 +635,8 @@ def estimate_registration(
     Notes:
     - Bead-based registration uses detected bead matches across timepoints to compute affine transformations.
     - User-assisted registration requires manual selection of corresponding features in source and target images.
+    - If registration_target_channel and registration_source_channels are not provided, the target and source channels
+    used for parameter estimation will be used.
     - The output configuration is essential for downstream processing in multi-modal image registration workflows.
 
     Example:
@@ -651,9 +646,8 @@ def estimate_registration(
         -o ./output.yml                                    # Output configuration file path
         --config ./config.yml                              # Path to input configuration file
         --num-processes 4                                  # Number of processes for parallel bead detection
-        --t_idx 0                                          # Time index to use for registration
-        --beads                                            # Use bead-based registration
-        -x                                                 # Use similarity transform (rotation, scaling, translation)
+        --registration-target-channel "BG"                 # Name of the target channel
+        --registration-source-channels "GFP" "mCherry"     # Names of the source channels
     """
 
     settings = yaml_to_model(config_filepath, EstimateRegistrationSettings)
@@ -661,11 +655,14 @@ def estimate_registration(
     target_channel_name = settings.target_channel_name
     source_channel_name = settings.source_channel_name
     affine_90degree_rotation = settings.affine_90degree_rotation
-    stabilization_channels_names = settings.stabilization_channels_names
+    affine_transform_type = settings.affine_transform_type
+    if registration_target_channel is None:
+        registration_target_channel = target_channel_name
+    if registration_source_channels is None:
+        registration_source_channels = [source_channel_name]
 
     click.echo(f"Target channel: {target_channel_name}")
     click.echo(f"Source channel: {source_channel_name}")
-    click.echo(f"Stabilization Channels: {stabilization_channels_names}")
 
     with open_ome_zarr(source_position_dirpaths[0], mode="r") as source_channel_position:
         source_channels = source_channel_position.channel_names
@@ -685,7 +682,7 @@ def estimate_registration(
         voxel_size = target_channel_position.scale
         target_channel_voxel_size = voxel_size[-3:]
 
-    if beads:
+    if settings.estimation_method == "beads":
         # Register using bead images
         transforms = beads_based_registration(
             source_channel_data,
@@ -695,13 +692,13 @@ def estimate_registration(
             window_size=settings.affine_transform_window_size,
             tolerance=settings.affine_transform_tolerance,
             angle_threshold=settings.filtering_angle_threshold,
-            verbose=settings.verbose_bead_detection,
+            verbose=settings.verbose,
         )
 
         model = StabilizationSettings(
             stabilization_estimation_channel='',
             stabilization_type='xyz',
-            stabilization_channels=stabilization_channels_names,
+            stabilization_channels=registration_source_channels,
             affine_transform_zyx_list=transforms,
             time_indices='all',
             output_voxel_size=voxel_size,
@@ -709,19 +706,19 @@ def estimate_registration(
     else:
         # Register based on user input
         transform = user_assisted_registration(
-            np.asarray(source_channel_data[t_idx]),
-            source_channel_name,
-            source_channel_voxel_size,
-            np.asarray(target_channel_data[t_idx]),
-            source_channel_name,
-            target_channel_voxel_size,
-            similarity,
-            affine_90degree_rotation,
+            source_channel_volume=np.asarray(source_channel_data[settings.time_index]),
+            source_channel_name=source_channel_name,
+            source_channel_voxel_size=source_channel_voxel_size,
+            target_channel_volume=np.asarray(target_channel_data[settings.time_index]),
+            target_channel_name=target_channel_name,
+            target_channel_voxel_size=target_channel_voxel_size,
+            similarity=True if affine_transform_type == "Similarity" else False,
+            pre_affine_90degree_rotation=affine_90degree_rotation,
         )
 
         model = RegistrationSettings(
-            source_channel_names=stabilization_channels_names,
-            target_channel_name=target_channel_name,
+            source_channel_names=registration_source_channels,
+            target_channel_name=registration_target_channel,
             affine_transform_zyx=transform.tolist(),
         )
 

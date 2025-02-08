@@ -1,36 +1,60 @@
-target_channel_name: Phase3D  # Target channel used for registration; specify the label-free channel for alignment.
+# Target (i.e. fixed) channel used to estimate registration parameters.
+target_channel_name: Phase3D
 
-source_channel_name: GFP EX488 EM525-45  # Source channel used for initial registration. 
-                                         # If using bead registration, update this to the channel where beads are visible.
+# Source (i.e. moving) channel used to estimate registration parameters.
+# If using bead, update this to the channel where beads are visible.
+source_channel_name: GFP EX488 EM525-45
 
-stabilization_channels_names:  # List of channels to which the calculated transformation will be applied.
-- mCherry EX561 EM600-37       # Add or remove channels as required for the experiment.
-- GFP EX488 EM525-45         
+# Optional. Method used to estimate registration parameters, either "manual" or "beads".
+# During manual registration, the user is asked to select corresponding points in the two channels.
+# During beads-based registration, the algorithm automatically detects matching beads
+# in the source and target channels and uses them to compute the registration transform.
+estimation_method: manual
 
-affine_90degree_rotation: -1   # Degree of rotation for aligning light sheet channels. 
-                               # Use -1, 0, or 1 to control direction as required; this is setup-specific.
+# Optional. Type of transform to be estimated.
+# Currently limited to Euclidean or Similarity and only used during manual registrion.
+# Beads-based registration always uses fill Affine transform.
+affine_transform_type: Euclidean
 
-approx_affine_transform:       # Initial approximation for affine transformation matrix.
-                               # Adjust based on microscope configuration (e.g., Mantis setup for cells).
-- - 1                          
+# Optional. Index of time point to use during manual registration
+time_index: 0
+
+# Optional. Integer giving the number of 90-degree rotations applies to the source channels
+# before estimating registration parameters.
+affine_90degree_rotation: -1
+
+# Optional. Initial guess of the affine transformation matrix.
+# Adjust based on microscope configuration (e.g., Mantis setup for cells).
+approx_affine_transform:
+- - 1
   - 0
   - 0
   - 0
-- - 0                         
+- - 0
   - 0
-  - -1.288                     
+  - -1.288
   - 1960
-- - 0                          
+- - 0
   - 1.288
   - 0
   - -460
-- - 0.0                       .
+- - 0.0
   - 0.0
   - 0.0
   - 1.0
 
-filtering_angle_threshold: 30  # Threshold for filtering matches based on angle deviations.
-                               # Lower this value if matches are noisy; increase if too restrictive.
+# Optional. Size of the moving window for smoothing transformations
+# during beads-based registration.
+affine_transform_window_size: 10
 
-verbose_bead_detection: True   # Set to True for detailed logging of bead detection process.
-                               # Turn off (False) for faster processing when debugging is unnecessary.
+# Optional. Maximum allowed difference between consecutive transformations
+# during beads-based registration.
+affine_transform_tolerance: 10
+
+# Optional. Threshold for filtering outliers in detected bead matches, in degrees
+# used during beads-based registration.
+# Lower this value if matches are noisy; increase if too restrictive.
+filtering_angle_threshold: 30
+
+# Optional. Set to True for detailed logging of bead detection process.
+verbose_bead_detection: True

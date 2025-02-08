@@ -23,13 +23,15 @@ class MyBaseModel(BaseModel):
 class EstimateRegistrationSettings(MyBaseModel):
     target_channel_name: str
     source_channel_name: str
-    stabilization_channels_names: list
+    estimation_method: Literal["manual", "beads"] = "manual"
+    affine_transform_type: Literal["Euclidean", "Similarity"] = "Euclidean"
+    time_index: int = 0
     affine_90degree_rotation: int = 0
     approx_affine_transform: list = None
     affine_transform_window_size: int = 10
     affine_transform_tolerance: float = 50.0
     filtering_angle_threshold: int = 30
-    verbose_bead_detection: bool = False
+    verbose: bool = False
 
     @field_validator("approx_affine_transform")
     @classmethod
