@@ -5,9 +5,9 @@ from pydantic import ValidationError
 
 from biahub.analysis.AnalysisSettings import (
     DeskewSettings,
+    EstimateRegistrationSettings,
     RegistrationSettings,
     StabilizationSettings,
-    EstimateRegistrationSettings
 )
 
 
