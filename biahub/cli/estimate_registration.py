@@ -448,7 +448,7 @@ def _check_transform_difference(tform1, tform2, shape, threshold=5.0, verbose=Fa
     mse = np.mean(differences)
 
     if verbose:
-        click.echo(f'Mean Squared Error of transformed points: {mse}')
+        click.echo(f'MSE of transformed points: {mse:.2f}; threshold: {threshold:.2f}')
     return mse <= threshold
 
 
