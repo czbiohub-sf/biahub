@@ -205,6 +205,9 @@ def register(
     # crop all channels that are not being registered and save them in the output zarr store
     # Note: when target and source datastores are the same we don't process channels which
     # were already registered in the previous step
+
+
+
     copy_jobs = []
     copy_names = []
     with executor.batch():
@@ -228,6 +231,12 @@ def register(
 
     # if not local:
     #     monitor_jobs(affine_jobs + copy_jobs, affine_names + copy_names)
+    # concatenate affine_jobs and copy_jobs
+    job_ids = [job.job_id for job in affine_jobs + copy_jobs]
+
+    log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
+    with log_path.open("w") as log_file:
+        log_file.write("\n".join(job_ids))
 
 
 if __name__ == "__main__":

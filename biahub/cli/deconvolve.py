@@ -143,7 +143,7 @@ def deconvolve(
     # monitor_jobs(jobs, input_position_dirpaths)
     job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 
-    log_path = Path(output_dirpath.parent / "submitit_jobs_ids.log")
+    log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
 
