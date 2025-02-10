@@ -251,7 +251,7 @@ def stabilize(
 
     # Prepare and submit jobs
     click.echo(f"Preparing jobs: {slurm_args}")
-    executor = submitit.AutoExecutor(folder=, cluster=cluster)
+    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
 
     click.echo('Submitting SLURM jobs...')
