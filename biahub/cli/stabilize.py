@@ -251,7 +251,7 @@ def stabilize(
 
     # Prepare and submit jobs
     click.echo(f"Preparing jobs: {slurm_args}")
-    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
+    executor = submitit.AutoExecutor(folder=, cluster=cluster)
     executor.update_parameters(**slurm_args)
 
     click.echo('Submitting SLURM jobs...')
@@ -293,7 +293,7 @@ def stabilize(
 
     job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 
-    log_path = Path(output_dirpath.parent / "submitit_jobs_ids.log")
+    log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
 
