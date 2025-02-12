@@ -102,11 +102,27 @@ def concatenate(
         output_channel_idx_list,
     ) = get_channel_combiner_metadata(settings.concat_data_paths, settings.channel_names)
 
-    # Open dummy FOV to get overall shape
-    # NOTE: assumes all the zarrs will have the same shape
-    with open_ome_zarr(all_data_paths[0]) as dataset:
-        T, C, Z, Y, X = dataset.data.shape
-        output_voxel_size = dataset.scale[-3:]
+    all_shapes = []
+    all_dtypes = []
+    all_voxel_sizes = []
+    for path in all_data_paths:
+        with open_ome_zarr(path) as dataset:
+            all_shapes.append(dataset.data.shape)
+            all_dtypes.append(dataset.data.dtype)
+            all_voxel_sizes.append(dataset.scale[-3:])
+
+    if not all([shape == all_shapes[0] for shape in all_shapes]):
+        raise ValueError("All shapes must match")
+    if not all([voxel_size == all_voxel_sizes[0] for voxel_size in all_voxel_sizes]):
+        raise ValueError("All voxel sizes must match")
+    T, C, Z, Y, X = all_shapes[0]
+    output_voxel_size = all_voxel_sizes[0]
+
+    if all([dtype == all_dtypes[0] for dtype in all_dtypes]):
+        dtype = all_dtypes[0]
+    else:
+        click.echo("Warning: not all dtypes match. Casting data at float32.")
+        dtype = np.float32
 
     # Logic to parse time indices
     if settings.time_indices == "all":
@@ -143,7 +159,7 @@ def concatenate(
         "chunks": chunk_size,
         "scale": (1,) * 2 + tuple(output_voxel_size),
         "channel_names": all_channel_names,
-        "dtype": np.float32,
+        "dtype": dtype,
     }
 
     # Create the output zarr mirroring source_position_dirpaths

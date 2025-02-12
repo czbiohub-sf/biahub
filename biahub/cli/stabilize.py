@@ -129,8 +129,8 @@ def stabilize(
         --local                                 # Run locally instead of submitting to SLURM
 
     """
-
-    assert config_filepath.suffix == ".yml", "Config file must be a yaml file"
+    if config_filepath.suffix not in [".yml", ".yaml"]:
+        raise ValueError("Config file must be a yaml file")
 
     # Convert to Path objects
     config_filepath = Path(config_filepath)

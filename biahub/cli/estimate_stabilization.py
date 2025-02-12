@@ -295,13 +295,11 @@ def estimate_stabilization(
 
     Note: the verbose output will be saved at the same level as the output zarr.
     """
-    assert (
-        stabilize_xy or stabilize_z
-    ), "At least one of 'stabilize_xy' or 'stabilize_z' must be selected"
+    if not (stabilize_xy or stabilize_z):
+        raise ValueError("At least one of 'stabilize_xy' or 'stabilize_z' must be selected")
 
-    assert (
-        output_filepath.suffix == ".yml" or output_filepath.suffix == ".yaml"
-    ), "Output file must be a yaml file"
+    if output_filepath.suffix not in [".yml", ".yaml"]:
+        raise ValueError("Output file must be a yaml file")
 
     output_dirpath = output_filepath.parent
     output_dirpath.mkdir(parents=True, exist_ok=True)
