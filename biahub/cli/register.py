@@ -206,8 +206,6 @@ def register(
     # Note: when target and source datastores are the same we don't process channels which
     # were already registered in the previous step
 
-
-
     copy_jobs = []
     copy_names = []
     with executor.batch():
