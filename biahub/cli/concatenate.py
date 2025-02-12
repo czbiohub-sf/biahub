@@ -111,10 +111,10 @@ def concatenate(
             all_dtypes.append(dataset.data.dtype)
             all_voxel_sizes.append(dataset.scale[-3:])
 
-    assert all([shape == all_shapes[0] for shape in all_shapes]), "All shapes must match"
-    assert all(
-        [voxel_size == all_voxel_sizes[0] for voxel_size in all_voxel_sizes]
-    ), "All voxel sizes must match"
+    if not all([shape == all_shapes[0] for shape in all_shapes]):
+        raise ValueError("All shapes must match")
+    if not all([voxel_size == all_voxel_sizes[0] for voxel_size in all_voxel_sizes]):
+        raise ValueError("All voxel sizes must match")
     T, C, Z, Y, X = all_shapes[0]
     output_voxel_size = all_voxel_sizes[0]
 

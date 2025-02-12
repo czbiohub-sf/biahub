@@ -646,7 +646,8 @@ def estimate_resources(
         A tuple containing the estimated number of CPUs and the required amount of RAM per CPU in GB.
         These values can be passed to the `--cpus_per_task` and `--mem_per_cpu` parameters of sbatch.
     """
-    assert len(shape) == 5, "The shape must be a 5-tuple (T, C, Z, Y, X)."
+    if len(shape) != 5:
+        raise ValueError("The shape must be a 5-tuple (T, C, Z, Y, X).")
 
     T, C, Z, Y, X = shape
     gb_per_element = np.dtype(dtype).itemsize / 2**30  # bytes_per_element / bytes_per_gb

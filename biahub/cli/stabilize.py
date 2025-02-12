@@ -72,7 +72,8 @@ def stabilize(input_position_dirpaths, output_dirpath, config_filepath, num_proc
     biahub stabilize-timelapse -i ./timelapse.zarr/0/0/0 -o ./stabilized_timelapse.zarr -c ./file_w_matrices.yml -v
 
     """
-    assert config_filepath.suffix == ".yml", "Config file must be a yaml file"
+    if config_filepath.suffix not in [".yml", ".yaml"]:
+        raise ValueError("Config file must be a yaml file")
 
     # Load the config file
     settings = yaml_to_model(config_filepath, StabilizationSettings)
