@@ -10,7 +10,6 @@ from iohub import open_ome_zarr
 from natsort import natsorted
 
 from biahub.analysis.AnalysisSettings import ConcatenateSettings
-from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
     config_filepath,
     local,
@@ -21,6 +20,7 @@ from biahub.cli.parsing import (
 from biahub.cli.utils import (
     copy_n_paste_czyx,
     create_empty_hcs_zarr,
+    estimate_resources,
     process_single_position_v2,
     yaml_to_model,
 )
@@ -172,15 +172,11 @@ def concatenate(
     copy_n_paste_kwargs = {"czyx_slicing_params": ([Z_slice, Y_slice, X_slice])}
 
     # Estimate resources
-    gb_per_element = 4 / 2**30  # bytes_per_float32 / bytes_per_gb
-    num_cpus = np.min([T * C, 16])
-    input_memory = num_cpus * Z * Y * X * gb_per_element
-    gb_ram_request = np.ceil(np.max([1, input_memory])).astype(int)
-
+    num_cpus, gb_ram_per_cpu = estimate_resources(shape=[T, C, Z, Y, X], ram_multiplier=16)
     # Prepare SLURM arguments
     slurm_args = {
         "slurm_job_name": "concatenate",
-        "slurm_mem_per_cpu": f"{gb_ram_request}G",
+        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,  # process up to 100 positions at a time
         "slurm_time": 60,
@@ -221,7 +217,13 @@ def concatenate(
             )
             jobs.append(job)
 
-    monitor_jobs(jobs, all_data_paths)
+    # monitor_jobs(jobs, all_data_paths)
+
+    job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
+
+    log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
+    with log_path.open("w") as log_file:
+        log_file.write("\n".join(job_ids))
 
 
 if __name__ == "__main__":
