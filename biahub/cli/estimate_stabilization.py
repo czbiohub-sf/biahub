@@ -310,6 +310,7 @@ def estimate_stabilization(
     stabilization_channel_names = []
     with open_ome_zarr(input_position_dirpaths[0]) as dataset:
         channel_names = dataset.channel_names
+        voxel_size = dataset.scale
     if len(stabilization_channel_indices) < 1:
         stabilization_channel_indices = range(len(channel_names))
         stabilization_channel_names = channel_names
@@ -372,6 +373,7 @@ def estimate_stabilization(
         stabilization_channels=stabilization_channel_names,
         affine_transform_zyx_list=combined_mats.tolist(),
         time_indices="all",
+        output_voxel_size=voxel_size,
     )
     model_to_yaml(model, output_filepath)
 
