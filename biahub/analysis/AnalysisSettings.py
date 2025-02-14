@@ -5,12 +5,45 @@ from typing import Literal, Optional, Union
 import numpy as np
 import torch
 
-from pydantic import BaseModel, Extra, NonNegativeInt, PositiveFloat, PositiveInt, validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    NonNegativeInt,
+    PositiveFloat,
+    PositiveInt,
+    field_validator,
+)
 
 
 # All settings classes inherit from MyBaseModel, which forbids extra parameters to guard against typos
-class MyBaseModel(BaseModel, extra=Extra.forbid):
-    pass
+class MyBaseModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class EstimateRegistrationSettings(MyBaseModel):
+    target_channel_name: str
+    source_channel_name: str
+    estimation_method: Literal["manual", "beads"] = "manual"
+    affine_transform_type: Literal["Euclidean", "Similarity"] = "Euclidean"
+    time_index: int = 0
+    affine_90degree_rotation: int = 0
+    approx_affine_transform: list = None
+    affine_transform_window_size: int = 10
+    affine_transform_tolerance: float = 50.0
+    filtering_angle_threshold: int = 30
+    verbose: bool = False
+
+    @field_validator("approx_affine_transform")
+    @classmethod
+    def check_affine_transform_zyx_list(cls, v):
+        if v is not None:
+            if not isinstance(v, list):
+                raise ValueError("approx_affine_transform must be a list")
+            arr = np.array(v)
+            if arr.shape != (4, 4):
+                raise ValueError("approx_affine_transform must be a 4x4 array")
+
+        return v
 
 
 class ProcessingSettings(MyBaseModel):
@@ -26,13 +59,15 @@ class DeskewSettings(MyBaseModel):
     keep_overhang: bool = False
     average_n_slices: PositiveInt = 3
 
-    @validator("ls_angle_deg")
+    @field_validator("ls_angle_deg")
+    @classmethod
     def ls_angle_check(cls, v):
         if v < 0 or v > 45:
             raise ValueError("Light sheet angle must be be between 0 and 45 degrees")
         return round(float(v), 2)
 
-    @validator("px_to_scan_ratio")
+    @field_validator("px_to_scan_ratio")
+    @classmethod
     def px_to_scan_ratio_check(cls, v):
         if v is not None:
             return round(float(v), 3)
@@ -55,9 +90,11 @@ class RegistrationSettings(MyBaseModel):
     target_channel_name: str
     affine_transform_zyx: list
     keep_overhang: bool = False
+    interpolation: str = "linear"
     time_indices: Union[NonNegativeInt, list[NonNegativeInt], Literal["all"]] = "all"
 
-    @validator("affine_transform_zyx")
+    @field_validator("affine_transform_zyx")
+    @classmethod
     def check_affine_transform(cls, v):
         if not isinstance(v, list) or len(v) != 4:
             raise ValueError("The input array must be a list of length 3.")
@@ -99,7 +136,8 @@ class CharacterizeSettings(MyBaseModel):
     patch_size: tuple[PositiveFloat, PositiveFloat, PositiveFloat] | None = None
     axis_labels: list[str] = ["AXIS0", "AXIS1", "AXIS2"]
 
-    @validator("device")
+    @field_validator("device")
+    @classmethod
     def check_device(cls, v):
         return "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -113,21 +151,24 @@ class ConcatenateSettings(MyBaseModel):
     Z_slice: Union[list[int], Literal["all"]] = "all"
     chunks_czyx: Union[Literal[None], list[int]] = None
 
-    @validator("concat_data_paths")
+    @field_validator("concat_data_paths")
+    @classmethod
     def check_concat_data_paths(cls, v):
         if not isinstance(v, list) or not all(isinstance(path, str) for path in v):
             raise ValueError("concat_data_paths must be a list of positions.")
         return v
 
-    @validator("channel_names")
+    @field_validator("channel_names")
+    @classmethod
     def check_channel_names(cls, v):
         if not isinstance(v, list) or not all(isinstance(name, (str, list)) for name in v):
             raise ValueError("channel_names must be a list of strings or lists of strings.")
         return v
 
-    @validator("X_slice", "Y_slice", "Z_slice")
+    @field_validator("X_slice", "Y_slice", "Z_slice")
+    @classmethod
     def check_slices(cls, v):
-        if v != 'all' and (
+        if v != "all" and (
             not isinstance(v, list)
             or len(v) != 2
             or not all(isinstance(i, int) and i >= 0 for i in v)
@@ -135,7 +176,8 @@ class ConcatenateSettings(MyBaseModel):
             raise ValueError("Slices must be 'all' or lists of two non-negative integers.")
         return v
 
-    @validator("chunks_czyx")
+    @field_validator("chunks_czyx")
+    @classmethod
     def check_chunk_size(cls, v):
         if v is not None and (
             not isinstance(v, list) or len(v) != 4 or not all(isinstance(i, int) for i in v)
@@ -150,9 +192,13 @@ class StabilizationSettings(MyBaseModel):
     stabilization_channels: list
     affine_transform_zyx_list: list
     time_indices: Union[NonNegativeInt, list[NonNegativeInt], Literal["all"]] = "all"
+    output_voxel_size: list[
+        PositiveFloat, PositiveFloat, PositiveFloat, PositiveFloat, PositiveFloat
+    ] = [1.0, 1.0, 1.0, 1.0, 1.0]
 
-    @validator("affine_transform_zyx_list")
-    def check_affine_transform_list(cls, v):
+    @field_validator("affine_transform_zyx_list")
+    @classmethod
+    def check_affine_transform_zyx_list(cls, v):
         if not isinstance(v, list):
             raise ValueError("affine_transform_list must be a list")
 
@@ -175,7 +221,10 @@ class StitchSettings(MyBaseModel):
     def __init__(self, **data):
         if data.get("total_translation") is None:
             if any(
-                (data.get("column_translation") is None, data.get("row_translation") is None)
+                (
+                    data.get("column_translation") is None,
+                    data.get("row_translation") is None,
+                )
             ):
                 raise ValueError(
                     "If total_translation is not provided, both column_translation and row_translation must be provided"

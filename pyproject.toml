@@ -20,21 +20,28 @@ classifiers = [
 
 # list package dependencies here
 dependencies = [
-  "iohub==0.2.0a1",
+  "iohub @ git+https://github.com/czbiohub-sf/iohub",
   "matplotlib",
+  "napari; 'arm64' in platform_machine",                 # without Qt5 and skimage
+  "napari[all]; 'arm64' not in platform_machine",        # with Qt5 and skimage
+  "PyQt6; 'arm64' in platform_machine",
+  "natsort",
   "numpy<2",
   "markdown",
   "monai",
   "pandas~=2.1",
+  "pydantic<3",
   "scipy",
   "slurmkit @ git+https://github.com/royerlab/slurmkit",
+  "submitit",
   "torch>=2.3",
-  "waveorder @ git+https://github.com/mehta-lab/waveorder",
+  "tqdm",
+  "waveorder",
   "largestinteriorrectangle",
   "antspyx",
   "pystackreg",
   "napari-psf-analysis",
-  "dask"
+  "dask[array]",
 ]
 
 
@@ -91,6 +98,7 @@ exclude = '''
     | notebooks
     | ignore
     | examples
+    | scripts
   )/
 )
 '''
@@ -102,7 +110,7 @@ lines_between_types = 1
 default_section = "THIRDPARTY"
 no_lines_before = ["STDLIB"]
 ensure_newline_before_comments = true
-skip_glob = ["examples/*"]
+skip_glob = ["examples/*", "scripts/*"]
 
 [tool.pylint]
 # disable all conventions, refactors, warnings (C, R, W) and the following:

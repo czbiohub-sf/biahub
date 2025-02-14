@@ -42,9 +42,12 @@ def estimate_shift(
         If direction is not "row" or "col".
         If the shape of im0 and im1 are not the same.
     """
-    assert 0 <= percent_overlap <= 1, "percent_overlap must be between 0 and 1"
-    assert direction in ["row", "col"], "direction must be either 'row' or 'col'"
-    assert im0.shape == im1.shape, "Images must have the same shape"
+    if not (0 <= percent_overlap <= 1):
+        raise ValueError("percent_overlap must be between 0 and 1")
+    if direction not in ["row", "col"]:
+        raise ValueError("direction must be either 'row' or 'col'")
+    if im0.shape != im1.shape:
+        raise ValueError("Images must have the same shape")
 
     sizeY, sizeX = im0.shape[-2:]
 
@@ -124,7 +127,8 @@ def shift_image(
     yx_shift: tuple[float, float],
     verbose: bool = False,
 ) -> np.ndarray:
-    assert czyx_data.ndim == 4, "Input data must be a CZYX array"
+    if czyx_data.ndim != 4:
+        raise ValueError("Input data must be a CZYX array")
     C, Z, Y, X = czyx_data.shape
 
     if verbose:

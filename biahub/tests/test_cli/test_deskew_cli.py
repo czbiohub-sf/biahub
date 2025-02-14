@@ -22,6 +22,7 @@ def test_deskew_cli(tmp_path, example_plate, example_deskew_settings):
             str(config_path),
             "-o",
             str(output_path),
+            "--local",
         ],
     )
 

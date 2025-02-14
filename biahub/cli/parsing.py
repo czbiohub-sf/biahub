@@ -112,3 +112,84 @@ def output_filepath() -> Callable:
         )(f)
 
     return decorator
+
+
+def sbatch_filepath() -> Callable:
+    def decorator(f: Callable) -> Callable:
+        return click.option(
+            "--sbatch-filepath",
+            "-sb",
+            default=None,
+            type=click.Path(exists=True, file_okay=True, dir_okay=False),
+            help="SBATCH filepath that contains slurm parameters to overwrite defaults. "
+            "For example, '#SBATCH --mem-per-cpu=16G' will override the default memory per CPU.",
+        )(f)
+
+    return decorator
+
+
+def sbatch_to_submitit(value: Path) -> dict:
+    """Reads an sbatch file and returns a dictionary of slurm parameters,
+    ready for submitit.
+
+    Parameters
+    ----------
+    value : Path
+        Path to sbatch file
+
+    Returns
+    -------
+    dict
+        Dictionary of slurm parameters
+
+    Example:
+
+    --- sbatch_file.sh ---
+    #SBATCH --mem-per-cpu=16G
+    #SBATCH --time=1:00:00
+    ---
+
+    >>> dict = read_sbatch_to_submitit_args(Path("sbatch_file.sh"))
+    >>> print(dict)
+    {'slurm_mem_per_cpu': '16G', 'slurm_time': '1:00:00'}
+    """
+
+    with open(value, "r") as f:
+        sbatch_file = f.readlines()
+
+    sbatch_dict = {}
+    for line in sbatch_file:
+        if line.startswith("#SBATCH --"):
+            line = line.strip("#SBATCH --").strip()
+            key, value = line.split("=", 1)
+            key = key.replace("-", "_")
+            sbatch_dict["slurm_" + key.strip()] = value.strip()
+
+    return sbatch_dict
+
+
+def local() -> Callable:
+    def decorator(f: Callable) -> Callable:
+        return click.option(
+            "--local",
+            "-l",
+            is_flag=True,
+            default=False,
+            help="Run jobs locally instead of submitting to SLURM.",
+        )(f)
+
+    return decorator
+
+
+def num_processes() -> Callable:
+    def decorator(f: Callable) -> Callable:
+        return click.option(
+            "--num-processes",
+            "-j",
+            default=1,
+            help="Number of parallel processes",
+            required=False,
+            type=int,
+        )(f)
+
+    return decorator
