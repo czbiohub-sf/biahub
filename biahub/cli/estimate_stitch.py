@@ -69,7 +69,8 @@ def estimate_stitch(
 
     >>> biahub estimate-stitch -i ./input.zarr/*/*/* -o ./stitch_params.yml --channel DAPI --percent-overlap 0.05 --slurm
     """
-    assert 0 <= percent_overlap <= 1, "Percent overlap must be between 0 and 1"
+    if not (0 <= percent_overlap <= 1):
+        raise ValueError("Percent overlap must be between 0 and 1")
 
     input_zarr_path = Path(*input_position_dirpaths[0].parts[:-3])
     output_filepath = Path(output_filepath)
@@ -79,9 +80,8 @@ def estimate_stitch(
     )
 
     with open_ome_zarr(input_position_dirpaths[0]) as dataset:
-        assert (
-            channel in dataset.channel_names
-        ), f"Channel {channel} not found in input zarr store"
+        if channel not in dataset.channel_names:
+            raise ValueError(f"Channel {channel} not found in input zarr store")
         tcz_idx = (0, dataset.channel_names.index(channel), dataset.data.shape[-3] // 2)
         pixel_size_um = dataset.scale[-1]
     if pixel_size_um == 1.0:
