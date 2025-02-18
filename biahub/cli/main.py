@@ -12,6 +12,7 @@ from biahub.cli.estimate_stabilization import estimate_stabilization
 from biahub.cli.estimate_stitch import estimate_stitch
 from biahub.cli.optimize_registration import optimize_registration
 from biahub.cli.register import register
+from biahub.cli.segment import segment
 from biahub.cli.stabilize import stabilize
 from biahub.cli.stitch import stitch
 from biahub.cli.update_scale_metadata import update_scale_metadata
@@ -45,3 +46,4 @@ cli.add_command(stabilize)
 cli.add_command(estimate_psf)
 cli.add_command(deconvolve)
 cli.add_command(characterize_psf)
+cli.add_command(segment)
