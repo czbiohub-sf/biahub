@@ -58,9 +58,8 @@ def stitch(
     if settings.channels is None:
         settings.channels = input_dataset_channels
 
-    assert all(
-        channel in input_dataset_channels for channel in settings.channels
-    ), "Invalid channel(s) provided."
+    if not all(channel in input_dataset_channels for channel in settings.channels):
+        raise ValueError("Invalid channel(s) provided.")
 
     position_paths = [Path(*p.parts[-3:]).as_posix() for p in input_position_dirpaths]
     wells = list(set([Path(*p.parts[-3:-1]).as_posix() for p in input_position_dirpaths]))

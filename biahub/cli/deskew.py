@@ -11,7 +11,6 @@ from iohub.ngff.utils import process_single_position
 from biahub.analysis.AnalysisSettings import DeskewSettings
 from biahub.analysis.deskew import deskew_data, get_deskewed_data_shape
 from biahub.cli import utils
-from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
     config_filepath,
     input_position_dirpaths,
@@ -132,7 +131,12 @@ def deskew(
                 )
             )
 
-    monitor_jobs(jobs, input_position_dirpaths)
+    # monitor_jobs(jobs, input_position_dirpaths)
+    job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
+
+    log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
+    with log_path.open("w") as log_file:
+        log_file.write("\n".join(job_ids))
 
 
 # Adapt ZYX function to CZYX

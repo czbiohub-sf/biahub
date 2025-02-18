@@ -1,6 +1,6 @@
 import warnings
 
-from typing import Literal, Optional, Union
+from typing import Any, Dict, Literal, Optional, Union
 
 import numpy as np
 import torch
@@ -8,16 +8,44 @@ import torch
 from pydantic import (
     BaseModel,
     ConfigDict,
+    ImportString,
     NonNegativeInt,
     PositiveFloat,
     PositiveInt,
     field_validator,
+    validator,
 )
 
 
 # All settings classes inherit from MyBaseModel, which forbids extra parameters to guard against typos
 class MyBaseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class EstimateRegistrationSettings(MyBaseModel):
+    target_channel_name: str
+    source_channel_name: str
+    estimation_method: Literal["manual", "beads"] = "manual"
+    affine_transform_type: Literal["Euclidean", "Similarity"] = "Euclidean"
+    time_index: int = 0
+    affine_90degree_rotation: int = 0
+    approx_affine_transform: list = None
+    affine_transform_window_size: int = 10
+    affine_transform_tolerance: float = 50.0
+    filtering_angle_threshold: int = 30
+    verbose: bool = False
+
+    @field_validator("approx_affine_transform")
+    @classmethod
+    def check_affine_transform_zyx_list(cls, v):
+        if v is not None:
+            if not isinstance(v, list):
+                raise ValueError("approx_affine_transform must be a list")
+            arr = np.array(v)
+            if arr.shape != (4, 4):
+                raise ValueError("approx_affine_transform must be a 4x4 array")
+
+        return v
 
 
 class ProcessingSettings(MyBaseModel):
@@ -167,6 +195,9 @@ class StabilizationSettings(MyBaseModel):
     stabilization_channels: list
     affine_transform_zyx_list: list
     time_indices: Union[NonNegativeInt, list[NonNegativeInt], Literal["all"]] = "all"
+    output_voxel_size: list[
+        PositiveFloat, PositiveFloat, PositiveFloat, PositiveFloat, PositiveFloat
+    ] = [1.0, 1.0, 1.0, 1.0, 1.0]
 
     @field_validator("affine_transform_zyx_list")
     @classmethod
@@ -208,3 +239,63 @@ class StitchSettings(MyBaseModel):
                 DeprecationWarning,
             )
         super().__init__(**data)
+
+
+def get_valid_eval_args():
+    """Attempt to import cellpose and retrieve valid eval arguments."""
+    try:
+        from cellpose import models
+
+        return models.CellposeModel.eval.__code__.co_varnames[
+            : models.CellposeModel.eval.__code__.co_argcount
+        ]
+    except ImportError:
+        raise ImportError(
+            "The 'cellpose' package is required to validate 'eval_args' in cellpose model configurations. "
+            "Please install it to proceed with cellpose-related configurations."
+        )
+
+
+class PreprocessingFunctions(BaseModel):
+    function: ImportString
+    channel: str
+    kwargs: Dict[str, Any] = {}
+
+
+class SegmentationModel(BaseModel):
+    path_to_model: str
+    eval_args: Dict[str, Any]
+    z_slice_2D: Optional[int] = None
+    preprocessing: list[PreprocessingFunctions] = []
+
+    @validator("eval_args", pre=True)
+    def validate_eval_args(cls, value):
+        # Retrieve valid arguments dynamically if cellpose is required
+        valid_args = get_valid_eval_args()
+
+        # Check that all keys in eval_args are valid arguments for cellpose_eval
+        invalid_args = [arg for arg in value.keys() if arg not in valid_args]
+        if invalid_args:
+            raise ValueError(
+                f"Invalid eval arguments provided: {invalid_args}. Allowed arguments are {valid_args}"
+            )
+
+        return value
+
+    @validator("z_slice_2D")
+    def check_z_slice_with_do_3D(cls, z_slice_2D, values):
+        # Only run this check if z_slice is provided (not None) and do_3D exists in eval_args
+        if z_slice_2D is not None:
+            eval_args = values.get("eval_args", {})
+            do_3D = eval_args.get("do_3D", None)
+            if do_3D:
+                raise ValueError(
+                    "If 'z_slice_2D' is provided, 'do_3D' in 'eval_args' must be set to False."
+                )
+            z_slice_2D = 0
+        return z_slice_2D
+
+
+class SegmentationSettings(BaseModel):
+    models: Dict[str, SegmentationModel]
+    model_config = {"extra": "forbid", "protected_namespaces": ()}

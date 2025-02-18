@@ -179,3 +179,17 @@ def local() -> Callable:
         )(f)
 
     return decorator
+
+
+def num_processes() -> Callable:
+    def decorator(f: Callable) -> Callable:
+        return click.option(
+            "--num-processes",
+            "-j",
+            default=1,
+            help="Number of parallel processes",
+            required=False,
+            type=int,
+        )(f)
+
+    return decorator

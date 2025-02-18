@@ -2,7 +2,6 @@ from pathlib import Path
 from typing import List
 
 import click
-import numpy as np
 import submitit
 
 from iohub import open_ome_zarr
@@ -11,7 +10,6 @@ from iohub.ngff.utils import create_empty_plate, process_single_position
 
 from biahub.analysis.AnalysisSettings import DeconvolveSettings
 from biahub.analysis.deconvolve import compute_tranfser_function, deconvolve_data
-from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
     _str_to_path,
     config_filepath,
@@ -21,7 +19,7 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import get_output_paths, yaml_to_model
+from biahub.cli.utils import estimate_resources, get_output_paths, yaml_to_model
 
 
 @click.command()
@@ -100,15 +98,11 @@ def deconvolve(
         )
 
     # Estimate resources
-    gb_per_element = 4 / 2**30  # bytes_per_float32 / bytes_per_gb
-    num_cpus = np.min([T * C, 16])
-    input_memory = num_cpus * Z * Y * X * gb_per_element
-    gb_ram_request = np.ceil(np.max([1, input_memory])).astype(int)
-
+    num_cpus, gb_ram_per_cpu = estimate_resources(shape=[T, C, Z, Y, X], ram_multiplier=16)
     # Prepare SLURM arguments
     slurm_args = {
         "slurm_job_name": "deconvolve",
-        "slurm_mem_per_cpu": f"{gb_ram_request}G",
+        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,  # process up to 100 positions at a time
         "slurm_time": 60,
@@ -146,7 +140,12 @@ def deconvolve(
             )
             jobs.append(job)
 
-    monitor_jobs(jobs, input_position_dirpaths)
+    # monitor_jobs(jobs, input_position_dirpaths)
+    job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
+
+    log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
+    with log_path.open("w") as log_file:
+        log_file.write("\n".join(job_ids))
 
 
 if __name__ == "__main__":
