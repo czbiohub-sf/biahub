@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Literal
 
+import ants
 import click
 import dask.array as da
 import numpy as np
@@ -11,10 +12,15 @@ from iohub import open_ome_zarr
 from skimage.registration import phase_cross_correlation
 
 from biahub.analysis.AnalysisSettings import ProcessingSettings
+from biahub.analysis.register import convert_transform_to_ants
 
 
 def estimate_shift(
-    im0: np.ndarray, im1: np.ndarray, percent_overlap: float, direction: Literal["row", "col"]
+    im0: np.ndarray,
+    im1: np.ndarray,
+    percent_overlap: float,
+    direction: Literal["row", "col"],
+    add_offset: bool = False,
 ):
     """
     Estimate the shift between two images based on a given percentage overlap and direction.
@@ -29,6 +35,9 @@ def estimate_shift(
         The percentage of overlap between the two images. Must be between 0 and 1.
     direction : Literal["row", "col"]
         The direction of the shift. Can be either "row" or "col". See estimate_zarr_fov_shifts
+    add_offset : bool
+        Add offsets to shift-x and shift-y when stitching data from ISS microscope.
+        Not clear why we need to do that. By default False
 
     Returns
     -------
@@ -55,31 +64,31 @@ def estimate_shift(
     if direction == "row":
         y_roi = int(sizeY * np.minimum(percent_overlap + 0.05, 1))
         shift, _, _ = phase_cross_correlation(
-            im0[-y_roi:, :], im1[:y_roi, :], upsample_factor=10
+            im0[..., -y_roi:, :], im1[..., :y_roi, :], upsample_factor=1
         )
-        shift[0] += sizeY - y_roi
+        shift[-2] += sizeY
+        if add_offset:
+            shift[-2] -= y_roi
     elif direction == "col":
         x_roi = int(sizeX * np.minimum(percent_overlap + 0.05, 1))
         shift, _, _ = phase_cross_correlation(
-            im0[:, -x_roi:], im1[:, :x_roi], upsample_factor=10
+            im0[..., :, -x_roi:], im1[..., :, :x_roi], upsample_factor=1
         )
-        shift[1] += sizeX - x_roi
+        shift[-1] += sizeX
+        if add_offset:
+            shift[-1] -= x_roi
 
-    # TODO: we shouldn't need to flip the order
+    # TODO: we shouldn't need to flip the order, will cause problems in 3D
     return shift[::-1]
 
 
-def get_grid_rows_cols(dataset_path: str):
+def get_grid_rows_cols(fov_names: list[str]):
     grid_rows = set()
     grid_cols = set()
 
-    with open_ome_zarr(dataset_path) as dataset:
-
-        _, well = next(dataset.wells())
-        for position_name, _ in well.positions():
-            fov_name = Path(position_name).parts[-1]
-            grid_rows.add(fov_name[3:])  # 1-Pos<COL>_<ROW> syntax
-            grid_cols.add(fov_name[:3])
+    for fov_name in fov_names:
+        grid_rows.add(fov_name[3:])  # 1-Pos<COL>_<ROW> syntax
+        grid_cols.add(fov_name[:3])
 
     return sorted(grid_rows), sorted(grid_cols)
 
@@ -109,14 +118,16 @@ def get_stitch_output_shape(n_rows, n_cols, sizeY, sizeX, col_translation, row_t
     return xy_output_shape, global_translation
 
 
-def get_image_shift(col_idx, row_idx, col_translation, row_translation, global_translation):
+def get_image_shift(
+    col_idx, row_idx, col_translation, row_translation, global_translation
+) -> list:
     """
     Compute total translation when only col and row translation are given
     """
-    total_translation = (
+    total_translation = [
         col_translation[1] * col_idx + row_translation[1] * row_idx + global_translation[1],
         col_translation[0] * col_idx + row_translation[0] * row_idx + global_translation[0],
-    )
+    ]
 
     return total_translation
 
@@ -124,7 +135,7 @@ def get_image_shift(col_idx, row_idx, col_translation, row_translation, global_t
 def shift_image(
     czyx_data: np.ndarray,
     yx_output_shape: tuple[float, float],
-    yx_shift: tuple[float, float],
+    transform: list,
     verbose: bool = False,
 ) -> np.ndarray:
     if czyx_data.ndim != 4:
@@ -132,12 +143,24 @@ def shift_image(
     C, Z, Y, X = czyx_data.shape
 
     if verbose:
-        print(f"Shifting image by {yx_shift}")
+        print(f"Transforming image with {transform}")
     # Create array of output_shape and put input data at (0, 0)
     output = np.zeros((C, Z) + yx_output_shape, dtype=np.float32)
-    output[..., :Y, :X] = czyx_data
 
-    return ndi.shift(output, (0, 0) + tuple(yx_shift), order=0)
+    transform = np.asarray(transform)
+    if transform.shape == (2,):
+        output[..., :Y, :X] = czyx_data.astype(np.float32)
+        return ndi.shift(output, (0, 0) + tuple(transform), order=0)
+    elif transform.shape == (4, 4):
+        ants_transform = convert_transform_to_ants(transform)
+        ants_reference = ants.from_numpy(output[0])
+        for i, img in enumerate(czyx_data):
+            ants_input = ants.from_numpy(img)
+            ants_output = ants_transform.apply_to_image(ants_input, ants_reference)
+            output[i] = ants_output.numpy().astype('float32')
+        return output
+    else:
+        raise ValueError('Provided transform is not of shape (2,) or (4, 4).')
 
 
 def _stitch_images(
@@ -227,8 +250,10 @@ def process_dataset(
     verbose: bool = True,
 ) -> np.ndarray:
     flip = np.flip
+    rot = np.rot90
     if isinstance(data_array, da.Array):
         flip = da.flip
+        rot = da.rot90
 
     if settings:
         if settings.flipud:
@@ -241,6 +266,11 @@ def process_dataset(
                 click.echo("Flipping data array left-right")
             data_array = flip(data_array, axis=-1)
 
+        if settings.rot90 != 0:
+            if verbose:
+                click.echo(f"Rotating data array {settings.rot90} times counterclockwise")
+            data_array = rot(data_array, settings.rot90, axes=(-2, -1))
+
     return data_array
 
 
@@ -248,12 +278,11 @@ def preprocess_and_shift(
     image,
     settings: ProcessingSettings,
     output_shape: tuple[int, int],
-    shift_x: float,
-    shift_y: float,
+    transform: list,
     verbose=True,
 ):
     return shift_image(
-        process_dataset(image, settings, verbose), output_shape, (shift_y, shift_x), verbose
+        process_dataset(image, settings, verbose), output_shape, transform, verbose
     )
 
 
@@ -349,6 +378,8 @@ def estimate_zarr_fov_shifts(
     percent_overlap: float,
     fliplr: bool,
     flipud: bool,
+    rot90: int,
+    add_offset: bool,
     direction: Literal["row", "col"],
     output_dirname: str = None,
 ):
@@ -400,8 +431,11 @@ def estimate_zarr_fov_shifts(
     if flipud:
         im0 = np.flipud(im0)
         im1 = np.flipud(im1)
+    if rot90 != 0:
+        im0 = np.rot90(im0, k=rot90)
+        im1 = np.rot90(im1, k=rot90)
 
-    shift = estimate_shift(im0, im1, percent_overlap, direction)
+    shift = estimate_shift(im0, im1, percent_overlap, direction, add_offset=add_offset)
 
     df = pd.DataFrame(
         {
@@ -516,8 +550,93 @@ def compute_total_translation(csv_filepath: str) -> pd.DataFrame:
     # create 'row' and 'col' number columns and sort the dataframe by 'fov1'
     df['row'] = df['fov1'].str[-3:].astype(int)
     df['col'] = df['fov1'].str[:3].astype(int)
+    df_row = df[(df['direction'] == 'row')]
+    df_col = df[(df['direction'] == 'col')]
+    row_anchors = sorted(df_row['fov0'][~df_row['fov0'].isin(df_row['fov1'])].unique())
+    col_anchors = sorted(df_col['fov0'][~df_col['fov0'].isin(df_col['fov1'])].unique())
+    row_col_anchors = sorted(set(row_anchors).intersection(col_anchors))
+    df['fov0'] = df[['well', 'fov0']].agg('/'.join, axis=1)
+    df['fov1'] = df[['well', 'fov1']].agg('/'.join, axis=1)
     df.set_index('fov1', inplace=True)
-    df.sort_index(inplace=True)
+
+    for well in df['well'].unique():
+        # add anchors
+        df = pd.concat(
+            (
+                pd.DataFrame(
+                    {
+                        'well': well,
+                        'shift-x': 0,
+                        'shift-y': 0,
+                        'direction': 'row',
+                        'row': [int(a[3:]) for a in row_anchors],
+                        'col': [int(a[:3]) for a in row_anchors],
+                    },
+                    index=['/'.join((well, a)) for a in row_anchors],
+                ),
+                pd.DataFrame(
+                    {
+                        'well': well,
+                        'shift-x': 0,
+                        'shift-y': 0,
+                        'direction': 'col',
+                        'row': [int(a[3:]) for a in col_anchors],
+                        'col': [int(a[:3]) for a in col_anchors],
+                    },
+                    index=['/'.join((well, a)) for a in col_anchors],
+                ),
+                df,
+            )
+        )
+
+        for anchor in row_col_anchors[::-1]:
+            df_well = df[df['well'] == well]
+            df_well_col = df_well[df_well['direction'] == 'col']
+            df_well_row = df_well[df_well['direction'] == 'row']
+
+            _row = int(anchor[3:])
+            idx1 = df_well_col[df_well_col['row'] == _row].index
+            idx_out = ['/'.join((well, a)) for a in row_anchors if a[3:] == anchor[3:]]
+            idx_in = sorted(idx1[~idx1.isin(idx_out)])
+
+            if len(idx_in) > 0:  # will be zero for first row
+                shift_x = df_well_row[
+                    (df_well_row['row'] <= _row)
+                    & (df_well_row['col'] == int(idx_in[0][-6:-3]))
+                ]['shift-x'].sum()
+                shift_y = df_well_row[
+                    (df_well_row['row'] <= _row)
+                    & (df_well_row['col'] == int(idx_in[0][-6:-3]))
+                ]['shift-y'].sum()
+
+                df_well_row.loc[idx_out, ['shift-x', 'shift-y']] = (shift_x, shift_y)
+
+            df[(df['direction'] == 'row') & (df['well'] == well)] = df_well_row
+
+        for anchor in col_anchors:
+            _col = int(anchor[:3])
+
+            shift_x = (
+                df_well_col[(df_well_col['col'] <= _col) & (df_well_col['shift-x'] != 0)]
+                .groupby('col')['shift-x']
+                .median()
+                .sum()
+            )
+            shift_y = (
+                df_well_col[(df_well_col['col'] <= _col) & (df_well_col['shift-y'] != 0)]
+                .groupby('col')['shift-y']
+                .median()
+                .sum()
+            )
+
+            df_well_col.loc['/'.join((well, anchor)), ['shift-x', 'shift-y']] = (
+                shift_x,
+                shift_y,
+            )
+
+        df[(df['direction'] == 'col') & (df['well'] == well)] = df_well_col
+
+    df.sort_index(inplace=True)  # TODO: remember to sort index after any additions
 
     total_shift = []
     for well in df['well'].unique():
@@ -526,18 +645,11 @@ def compute_total_translation(csv_filepath: str) -> pd.DataFrame:
         col_shifts = _df.groupby('row')[['shift-x', 'shift-y']].cumsum()
         _df = df[(df['direction'] == 'row') & (df['well'] == well)]
         row_shifts = _df.groupby('col')[['shift-x', 'shift-y']].cumsum()
-        # total shift is the sum of row and column shifts
         _total_shift = col_shifts.add(row_shifts, fill_value=0)
-
-        # add row 000000
-        _total_shift = pd.concat(
-            [pd.DataFrame({'shift-x': 0, 'shift-y': 0}, index=['000000']), _total_shift]
-        )
 
         # add global offset to remove negative values
         _total_shift['shift-x'] += -np.minimum(_total_shift['shift-x'].min(), 0)
         _total_shift['shift-y'] += -np.minimum(_total_shift['shift-y'].min(), 0)
-        _total_shift.set_index(well + '/' + _total_shift.index, inplace=True)
         total_shift.append(_total_shift)
 
     return pd.concat(total_shift)

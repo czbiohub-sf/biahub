@@ -51,6 +51,7 @@ class EstimateRegistrationSettings(MyBaseModel):
 class ProcessingSettings(MyBaseModel):
     fliplr: Optional[bool] = False
     flipud: Optional[bool] = False
+    rot90: Optional[int] = 0
 
 
 class DeskewSettings(MyBaseModel):
@@ -219,23 +220,24 @@ class StitchSettings(MyBaseModel):
     column_translation: Optional[list[float, float]] = None
     row_translation: Optional[list[float, float]] = None
     total_translation: Optional[dict[str, list[float, float]]] = None
+    affine_transform: Optional[dict[str, list]] = None
 
     def __init__(self, **data):
-        if data.get("total_translation") is None:
-            if any(
-                (
-                    data.get("column_translation") is None,
-                    data.get("row_translation") is None,
-                )
-            ):
-                raise ValueError(
-                    "If total_translation is not provided, both column_translation and row_translation must be provided"
-                )
-            else:
-                warnings.warn(
-                    "column_translation and row_translation are deprecated. Use total_translation instead.",
-                    DeprecationWarning,
-                )
+        if not any(
+            (
+                data.get("total_translation"),
+                data.get("affine_transform"),
+                all((data.get("column_translation"), data.get("row_translation"))),
+            )
+        ):
+            raise ValueError(
+                "One of affine_transform, total_translation or (column_translation, row_translation) must be provided"
+            )
+        if any((data.get("column_translation"), data.get("row_translation"))):
+            warnings.warn(
+                "column_translation and row_translation are deprecated. Use total_translation instead.",
+                DeprecationWarning,
+            )
         super().__init__(**data)
 
 

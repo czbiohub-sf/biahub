@@ -1,13 +1,10 @@
-import datetime
-import time
-
 from pathlib import Path
 
 import click
 import pandas as pd
+import submitit
 
 from iohub import open_ome_zarr
-from slurmkit import SlurmParams, slurm_function, submit_function
 
 from biahub.analysis.AnalysisSettings import ProcessingSettings, StitchSettings
 from biahub.analysis.stitch import (
@@ -17,12 +14,17 @@ from biahub.analysis.stitch import (
     estimate_zarr_fov_shifts,
     get_grid_rows_cols,
 )
-from biahub.cli.parsing import input_position_dirpaths, output_filepath
+from biahub.cli.parsing import input_position_dirpaths, local, output_filepath
 from biahub.cli.utils import model_to_yaml
 
 
 def write_config_file(
-    shifts: pd.DataFrame, output_filepath: str, channel: str, fliplr: bool, flipud: bool
+    shifts: pd.DataFrame,
+    output_filepath: str,
+    channel: str,
+    fliplr: bool,
+    flipud: bool,
+    rot90: int,
 ):
     total_translation_dict = shifts.apply(
         lambda row: [float(row['shift-y'].round(2)), float(row['shift-x'].round(2))], axis=1
@@ -30,11 +32,19 @@ def write_config_file(
 
     settings = StitchSettings(
         channels=[channel],
-        preprocessing=ProcessingSettings(fliplr=fliplr, flipud=flipud),
+        preprocessing=ProcessingSettings(fliplr=fliplr, flipud=flipud, rot90=rot90),
         postprocessing=ProcessingSettings(),
         total_translation=total_translation_dict,
     )
     model_to_yaml(settings, output_filepath)
+
+
+def cleanup_and_write_shifts(
+    output_filepath, channel, fliplr, flipud, rot90, csv_filepath, pixel_size_um
+):
+    cleanup_shifts(csv_filepath, pixel_size_um)
+    shifts = compute_total_translation(csv_filepath)
+    write_config_file(shifts, output_filepath, channel, fliplr, flipud, rot90)
 
 
 @click.command()
@@ -51,7 +61,18 @@ def write_config_file(
 )
 @click.option("--fliplr", is_flag=True, help="Flip images left-right before stitching")
 @click.option("--flipud", is_flag=True, help="Flip images up-down before stitching")
-@click.option("--slurm", "-s", is_flag=True, help="Run stitching on SLURM")
+@click.option(
+    "--rot90",
+    default=0,
+    type=int,
+    help="rotate the images 90 counterclockwise n times before stitching",
+)
+@click.option(
+    "--add_offset",
+    is_flag=True,
+    help="add the offset to estimated shifts, needed for OPS experiments",
+)
+@local()
 def estimate_stitch(
     input_position_dirpaths: list[Path],
     output_filepath: str,
@@ -59,7 +80,9 @@ def estimate_stitch(
     percent_overlap: float,
     fliplr: bool,
     flipud: bool,
-    slurm: bool,
+    rot90: int,
+    add_offset: bool,
+    local: bool,
 ):
     """
     Estimate stitching parameters for positions in wells of a zarr store.
@@ -67,7 +90,7 @@ def estimate_stitch(
     as created by the Micro-manager Tile Creator: https://micro-manager.org/Micro-Manager_User's_Guide#positioning
     Assumes all wells have the save FOV grid layout.
 
-    >>> biahub estimate-stitch -i ./input.zarr/*/*/* -o ./stitch_params.yml --channel DAPI --percent-overlap 0.05 --slurm
+    >>> biahub estimate-stitch -i ./input.zarr/*/*/* -o ./stitch_params.yml --channel DAPI --percent-overlap 0.05
     """
     if not (0 <= percent_overlap <= 1):
         raise ValueError("Percent overlap must be between 0 and 1")
@@ -96,89 +119,115 @@ def estimate_stitch(
     # here we assume that all wells have the same fov grid
     click.echo('Indexing input zarr store')
     wells = list(set([Path(*p.parts[-3:-1]) for p in input_position_dirpaths]))
-    grid_rows, grid_cols = get_grid_rows_cols(input_zarr_path)
-    row_fov0 = [col + row for row in grid_rows[:-1] for col in grid_cols]
-    row_fov1 = [col + row for row in grid_rows[1:] for col in grid_cols]
-    col_fov0 = [col + row for col in grid_cols[:-1] for row in grid_rows]
-    col_fov1 = [col + row for col in grid_cols[1:] for row in grid_rows]
+    fov_names = set([p.name for p in input_position_dirpaths])
+    grid_rows, grid_cols = get_grid_rows_cols(fov_names)
+
+    # account for non-square grids
+    row_fov_pairs, col_fov_pairs = [], []
+    for col in grid_cols:
+        for row0, row1 in zip(grid_rows[:-1], grid_rows[1:]):
+            fov0 = col + row0
+            fov1 = col + row1
+            if fov0 in fov_names and fov1 in fov_names:
+                row_fov_pairs.append((fov0, fov1))
+    for row in grid_rows:
+        for col0, col1 in zip(grid_cols[:-1], grid_cols[1:]):
+            fov0 = col0 + row
+            fov1 = col1 + row
+            if fov0 in fov_names and fov1 in fov_names:
+                col_fov_pairs.append((fov0, fov1))
+
+    slurm_out_path = output_filepath.parent / "slurm_output"
+    csv_dirpath = (
+        output_filepath.parent / 'raw_shifts' / input_zarr_path.name.replace('.zarr', '')
+    )
+    csv_dirpath.mkdir(parents=True, exist_ok=False)
+
     estimate_shift_params = {
         "tcz_index": tcz_idx,
         "percent_overlap": percent_overlap,
         "fliplr": fliplr,
         "flipud": flipud,
+        "rot90": rot90,
+        "add_offset": add_offset,
     }
 
-    # define slurm parameters
-    if slurm:
-        slurm_out_path = output_filepath.parent / "slurm_output" / "shift-%j.out"
-        csv_dirpath = (
-            output_filepath.parent / 'raw_shifts' / input_zarr_path.name.replace('.zarr', '')
-        )
-        csv_dirpath.mkdir(parents=True, exist_ok=False)
-        params = SlurmParams(
-            partition="preempted",
-            cpus_per_task=1,
-            mem_per_cpu='8G',
-            time=datetime.timedelta(minutes=10),
-            output=slurm_out_path,
-        )
-        slurm_func = {
-            direction: slurm_function(estimate_zarr_fov_shifts)(
-                direction=direction,
-                output_dirname=csv_dirpath,
-                **estimate_shift_params,
-            )
-            for direction in ("row", "col")
-        }
+    slurm_args = {
+        "slurm_job_name": "estimate-shift",
+        "slurm_mem_per_cpu": "8G",
+        "slurm_cpus_per_task": 1,
+        "slurm_array_parallelism": 100,  # process up to 100 positions at a time
+        "slurm_time": 10,
+        "slurm_partition": "preempted",
+    }
+
+    # Run locally or submit to SLURM
+    if local:
+        cluster = "local"
+    else:
+        cluster = "slurm"
 
     click.echo('Estimating FOV shifts...')
-    shifts, jobs = [], []
-    for well_name in wells:
-        for direction, fovs in zip(
-            ("row", "col"), (zip(row_fov0, row_fov1), zip(col_fov0, col_fov1))
-        ):
-            for fov0, fov1 in fovs:
-                fov0_zarr_path = Path(input_zarr_path, well_name, fov0)
-                fov1_zarr_path = Path(input_zarr_path, well_name, fov1)
-                if slurm:
-                    job_id = submit_function(
-                        slurm_func[direction],
-                        slurm_params=params,
-                        fov0_zarr_path=fov0_zarr_path,
-                        fov1_zarr_path=fov1_zarr_path,
+    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
+    executor.update_parameters(**slurm_args)
+    estimate_jobs = []
+    with executor.batch():
+        for well_name in wells:
+            for direction, fovs in zip(("row", "col"), (row_fov_pairs, col_fov_pairs)):
+                for fov0, fov1 in fovs:
+                    fov0_zarr_path = Path(input_zarr_path, well_name, fov0)
+                    fov1_zarr_path = Path(input_zarr_path, well_name, fov1)
+                    estimate_jobs.append(
+                        executor.submit(
+                            estimate_zarr_fov_shifts,
+                            direction=direction,
+                            output_dirname=csv_dirpath,
+                            **estimate_shift_params,
+                            fov0_zarr_path=fov0_zarr_path,
+                            fov1_zarr_path=fov1_zarr_path,
+                        )
                     )
-                    jobs.append(job_id)
-                else:
-                    shift_params = estimate_zarr_fov_shifts(
-                        fov0_zarr_path=fov0_zarr_path,
-                        fov1_zarr_path=fov1_zarr_path,
-                        direction=direction,
-                        **estimate_shift_params,
-                    )
-                    shifts.append(shift_params)
+    estimate_job_ids = [job.job_id for job in estimate_jobs]
+
+    slurm_args = {
+        "slurm_job_name": "consolidate-shifts",
+        "slurm_mem_per_cpu": "8G",
+        "slurm_cpus_per_task": 1,
+        "slurm_time": 10,
+        "slurm_partition": "preempted",
+        "slurm_dependency": f"afterok:{estimate_job_ids[0]}:{estimate_job_ids[-1]}",
+    }
 
     click.echo('Consolidating FOV shifts...')
-    if slurm:
-        submit_function(
-            slurm_function(consolidate_zarr_fov_shifts)(
-                input_dirname=csv_dirpath,
-                output_filepath=csv_filepath,
-            ),
-            slurm_params=params,
-            dependencies=jobs,
-        )
+    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
+    executor.update_parameters(**slurm_args)
+    consolidate_job_id = executor.submit(
+        consolidate_zarr_fov_shifts,
+        input_dirname=csv_dirpath,
+        output_filepath=csv_filepath,
+    ).job_id
 
-        # wait for csv_filepath to be created, capped at 5 min
-        t_start = time.time()
-        while not csv_filepath.exists() and time.time() - t_start < 300:
-            time.sleep(1)
-    else:
-        df = pd.concat(shifts, ignore_index=True)
-        df.to_csv(csv_filepath, index=False)
+    slurm_args = {
+        "slurm_job_name": "cleanup-shifts",
+        "slurm_mem_per_cpu": "8G",
+        "slurm_cpus_per_task": 1,
+        "slurm_time": 10,
+        "slurm_partition": "preempted",
+        "slurm_dependency": f"afterok:{consolidate_job_id}",
+    }
 
-    cleanup_shifts(csv_filepath, pixel_size_um)
-    shifts = compute_total_translation(csv_filepath)
-    write_config_file(shifts, output_filepath, channel, fliplr, flipud)
+    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
+    executor.update_parameters(**slurm_args)
+    executor.submit(
+        cleanup_and_write_shifts,
+        output_filepath,
+        channel,
+        fliplr,
+        flipud,
+        rot90,
+        csv_filepath,
+        pixel_size_um,
+    )
 
 
 if __name__ == "__main__":
