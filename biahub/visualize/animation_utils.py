@@ -350,10 +350,10 @@ def add_text_overlay(
     )
 
     # Connect the update function
-    viewer.dims.events.current_step.connect(update_overlay)
+    event_callback = viewer.dims.events.current_step.connect(update_overlay)
     update_overlay()  # Initial update
 
-    return layer
+    return layer, event_callback  # Return both the layer and the event callback
 
 
 def simple_recording(
