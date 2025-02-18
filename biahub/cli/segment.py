@@ -140,7 +140,7 @@ def segment(
         channel_names = input_dataset.channel_names
 
     # Load the segmentation models with their respective configurations
-    # TODO: impelment logic for 2D segmentation. Have a slicing parameter
+    # TODO: implement logic for 2D segmentation. Have a slicing parameter
     segment_args = settings.models
     C_segment = len(segment_args)
     for model_name, model_args in segment_args.items():
@@ -199,7 +199,7 @@ def segment(
         scale=scale,
     )
 
-    # Estimate Resrouces
+    # Estimate resources
     gb_per_element = 8 / 2**30  # bytes_per_float32 / bytes_per_gb
     num_cpus = np.min([T * C, 16])
     input_memory = num_cpus * Z * Y * X * gb_per_element
