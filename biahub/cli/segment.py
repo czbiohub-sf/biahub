@@ -19,7 +19,7 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import yaml_to_model
+from biahub.cli.utils import yaml_to_model, estimate_resources
 
 
 def segment_data(
@@ -200,10 +200,10 @@ def segment(
     )
 
     # Estimate resources
-    gb_per_element = 8 / 2**30  # bytes_per_float32 / bytes_per_gb
-    num_cpus = np.min([T * C, 16])
-    input_memory = num_cpus * Z * Y * X * gb_per_element
-    gb_ram_request = np.ceil(np.max([1, input_memory])).astype(int)
+    num_cpus, gb_ram_request = estimate_resources(
+        shape=segmentation_shape,
+        ram_multiplier=16
+    )
     num_gpus = 1
     slurm_time = np.ceil(np.max([60, T * 0.75])).astype(int)
     # Prepare SLURM arguments
