@@ -23,7 +23,7 @@ jobs:
         python-version: ${{ matrix.python-version }}
 
     - name: Install the biahub package
-      run: pip install -e ".[dev]"
+      run: pip install --no-deps ".[dev]"
 
     - name: Check code style with Black
       run: black --check -t py310 .
