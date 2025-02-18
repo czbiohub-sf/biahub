@@ -32,7 +32,6 @@ dependencies = [
   "pandas~=2.1",
   "pydantic<3",
   "scipy",
-  "slurmkit @ git+https://github.com/royerlab/slurmkit",
   "submitit",
   "torch>=2.3",
   "tqdm",
