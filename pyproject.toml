@@ -32,15 +32,15 @@ dependencies = [
   "pandas~=2.1",
   "pydantic<3",
   "scipy",
-  "slurmkit @ git+https://github.com/royerlab/slurmkit",
   "submitit",
   "torch>=2.3",
   "tqdm",
-  "waveorder @ git+https://github.com/mehta-lab/waveorder",
+  "waveorder",
   "largestinteriorrectangle",
   "antspyx",
   "pystackreg",
   "napari-psf-analysis",
+  "dask[array]",
 ]
 
 
@@ -53,6 +53,10 @@ dev = [
   "pre-commit~=2.19",
   "pylint~=2.14",
   "pytest~=7.1",
+]
+
+segmentation = [
+  "cellpose",
 ]
 
 build = ["build", "twine"]
@@ -91,6 +95,7 @@ exclude = '''
     | notebooks
     | ignore
     | examples
+    | scripts
   )/
 )
 '''
@@ -102,7 +107,7 @@ lines_between_types = 1
 default_section = "THIRDPARTY"
 no_lines_before = ["STDLIB"]
 ensure_newline_before_comments = true
-skip_glob = ["examples/*"]
+skip_glob = ["examples/*", "scripts/*"]
 
 [tool.pylint]
 # disable all conventions, refactors, warnings (C, R, W) and the following:

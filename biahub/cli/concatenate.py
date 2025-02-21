@@ -10,7 +10,6 @@ from iohub import open_ome_zarr
 from natsort import natsorted
 
 from biahub.analysis.AnalysisSettings import ConcatenateSettings
-from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
     config_filepath,
     local,
@@ -21,6 +20,7 @@ from biahub.cli.parsing import (
 from biahub.cli.utils import (
     copy_n_paste_czyx,
     create_empty_hcs_zarr,
+    estimate_resources,
     process_single_position_v2,
     yaml_to_model,
 )
@@ -113,11 +113,27 @@ def concatenate(
         output_channel_idx_list,
     ) = get_channel_combiner_metadata(settings.concat_data_paths, settings.channel_names)
 
-    # Open dummy FOV to get overall shape
-    # NOTE: assumes all the zarrs will have the same shape
-    with open_ome_zarr(all_data_paths[0]) as dataset:
-        T, C, Z, Y, X = dataset.data.shape
-        output_voxel_size = dataset.scale[-3:]
+    all_shapes = []
+    all_dtypes = []
+    all_voxel_sizes = []
+    for path in all_data_paths:
+        with open_ome_zarr(path) as dataset:
+            all_shapes.append(dataset.data.shape)
+            all_dtypes.append(dataset.data.dtype)
+            all_voxel_sizes.append(dataset.scale[-3:])
+
+    if not all([shape == all_shapes[0] for shape in all_shapes]):
+        raise ValueError("All shapes must match")
+    if not all([voxel_size == all_voxel_sizes[0] for voxel_size in all_voxel_sizes]):
+        raise ValueError("All voxel sizes must match")
+    T, C, Z, Y, X = all_shapes[0]
+    output_voxel_size = all_voxel_sizes[0]
+
+    if all([dtype == all_dtypes[0] for dtype in all_dtypes]):
+        dtype = all_dtypes[0]
+    else:
+        click.echo("Warning: not all dtypes match. Casting data at float32.")
+        dtype = np.float32
 
     # Logic to parse time indices
     if settings.time_indices == "all":
@@ -154,7 +170,7 @@ def concatenate(
         "chunks": chunk_size,
         "scale": (1,) * 2 + tuple(output_voxel_size),
         "channel_names": all_channel_names,
-        "dtype": np.float32,
+        "dtype": dtype,
     }
 
     # Create the output zarr mirroring source_position_dirpaths
@@ -167,15 +183,11 @@ def concatenate(
     copy_n_paste_kwargs = {"czyx_slicing_params": ([Z_slice, Y_slice, X_slice])}
 
     # Estimate resources
-    gb_per_element = 4 / 2**30  # bytes_per_float32 / bytes_per_gb
-    num_cpus = np.min([T * C, 16])
-    input_memory = num_cpus * Z * Y * X * gb_per_element
-    gb_ram_request = np.ceil(np.max([1, input_memory])).astype(int)
-
+    num_cpus, gb_ram_per_cpu = estimate_resources(shape=[T, C, Z, Y, X], ram_multiplier=16)
     # Prepare SLURM arguments
     slurm_args = {
         "slurm_job_name": "concatenate",
-        "slurm_mem_per_cpu": f"{gb_ram_request}G",
+        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,  # process up to 100 positions at a time
         "slurm_time": 60,
@@ -216,7 +228,13 @@ def concatenate(
             )
             jobs.append(job)
 
-    monitor_jobs(jobs, all_data_paths)
+    # monitor_jobs(jobs, all_data_paths)
+
+    job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
+
+    log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
+    with log_path.open("w") as log_file:
+        log_file.write("\n".join(job_ids))
 
 
 if __name__ == "__main__":

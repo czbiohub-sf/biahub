@@ -2,7 +2,6 @@ from pathlib import Path
 from typing import List
 
 import click
-import numpy as np
 import submitit
 import torch
 
@@ -12,7 +11,6 @@ from iohub.ngff.utils import process_single_position
 from biahub.analysis.AnalysisSettings import DeskewSettings
 from biahub.analysis.deskew import deskew_data, get_deskewed_data_shape
 from biahub.cli import utils
-from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
     config_filepath,
     input_position_dirpaths,
@@ -21,7 +19,7 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import yaml_to_model
+from biahub.cli.utils import estimate_resources, yaml_to_model
 
 # Needed for multiprocessing with GPUs
 # https://github.com/pytorch/pytorch/issues/40403#issuecomment-1422625325
@@ -91,15 +89,12 @@ def deskew(
     }
 
     # Estimate resources
-    gb_per_element = 4 / 2**30  # bytes_per_float32 / bytes_per_gb
-    num_cpus = np.min([T * C, 16])
-    input_memory = num_cpus * Z * Y * X * gb_per_element
-    gb_ram_request = np.ceil(np.max([1, input_memory])).astype(int)
+    num_cpus, gb_ram = estimate_resources(shape=(T, C, Z, Y, X), ram_multiplier=12)
 
     # Prepare SLURM arguments
     slurm_args = {
         "slurm_job_name": "deskew",
-        "slurm_mem_per_cpu": f"{gb_ram_request}G",
+        "slurm_mem_per_cpu": f"{gb_ram}G",
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,  # process up to 100 positions at a time
         "slurm_time": 60,
@@ -117,7 +112,6 @@ def deskew(
         cluster = "slurm"
 
     # Prepare and submit jobs
-    click.echo(f"Preparing jobs: {slurm_args}")
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
 
@@ -137,7 +131,12 @@ def deskew(
                 )
             )
 
-    monitor_jobs(jobs, input_position_dirpaths)
+    # monitor_jobs(jobs, input_position_dirpaths)
+    job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
+
+    log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
+    with log_path.open("w") as log_file:
+        log_file.write("\n".join(job_ids))
 
 
 # Adapt ZYX function to CZYX
