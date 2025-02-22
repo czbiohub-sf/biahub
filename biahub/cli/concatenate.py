@@ -1,6 +1,7 @@
 import glob
 
 from pathlib import Path
+from warnings import warn
 
 import click
 import numpy as np
@@ -46,28 +47,25 @@ def get_channel_combiner_metadata(
         dataset = open_ome_zarr(parsed_paths[0])
         channel_names = dataset.channel_names
 
-        # Parse channels
-        if per_datapath_channels == 'all':
-            for i in range(len(channel_names)):
-                input_channel_indices.append(i)
-            for i in range(out_chan_idx_counter, out_chan_idx_counter + len(channel_names)):
-                output_channel_indices.append(i)
-            out_chan_idx_counter += len(channel_names)
-            all_channel_names.extend(channel_names)
+        if per_datapath_channels == "all":
+            per_datapath_channels = channel_names
 
-        elif isinstance(per_datapath_channels, list):
-            for channel in per_datapath_channels:
-                if channel in channel_names:
-                    # If the channel already exists in the list, we don't want to add it again
-                    if channel not in all_channel_names:
-                        all_channel_names.append(channel)
-                        output_channel_indices.append(out_chan_idx_counter)
-                        out_chan_idx_counter += 1
-                    else:
-                        # Set the out_chan_idx_counter to the index of the channel in the all_channel_names list
-                        out_chan_idx_counter = all_channel_names.index(channel)
-                        output_channel_indices.append(out_chan_idx_counter)
-                    input_channel_indices.append(channel_names.index(channel))
+        # Parse channels
+        for channel in per_datapath_channels:
+            if channel in channel_names:
+                # If the channel already exists in the list, we don't want to add it again
+                if channel not in all_channel_names:
+                    all_channel_names.append(channel)
+                    output_channel_indices.append(out_chan_idx_counter)
+                    out_chan_idx_counter += 1
+                else:
+                    warn(
+                        f"Channel {channel} already exists. Skipping and using index from the first entry."
+                    )
+                    # Set the out_chan_idx_counter to the index of the channel in the all_channel_names list
+                    out_chan_idx_counter = all_channel_names.index(channel)
+                    output_channel_indices.append(out_chan_idx_counter)
+                input_channel_indices.append(channel_names.index(channel))
 
         dataset.close()
 
@@ -83,7 +81,7 @@ def get_channel_combiner_metadata(
 
 
 def get_slice(slice_param, max_value):
-    return slice(0, max_value) if slice_param == 'all' else slice(*slice_param)
+    return slice(0, max_value) if slice_param == "all" else slice(*slice_param)
 
 
 @click.command()
@@ -92,7 +90,10 @@ def get_slice(slice_param, max_value):
 @sbatch_filepath()
 @local()
 def concatenate(
-    config_filepath: str, output_dirpath: str, sbatch_filepath: str = None, local: bool = False
+    config_filepath: str,
+    output_dirpath: str,
+    sbatch_filepath: str = None,
+    local: bool = False,
 ):
     """
     Concatenate datasets (with optional cropping)
@@ -208,7 +209,7 @@ def concatenate(
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
 
-    click.echo('Submitting SLURM jobs...')
+    click.echo("Submitting SLURM jobs...")
     jobs = []
 
     with executor.batch():
