@@ -352,7 +352,7 @@ def stitch_shifted_store(
     with open_ome_zarr(input_data_path, mode="r") as input_dataset:
         if not well_names:
             # Get all well names
-            well_names = [w[0] for w in input_dataset.wells()]
+            well_names = [well_name for well_name, _ in input_dataset.wells()]
 
         for well_name in well_names:
             well = input_dataset[well_name]
