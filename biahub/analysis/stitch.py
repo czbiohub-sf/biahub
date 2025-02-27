@@ -326,7 +326,7 @@ def stitch_shifted_store(
     input_data_path: str,
     output_data_path: str,
     settings: ProcessingSettings,
-    well_names: list=None,
+    well_names: list = None,
     blending="average",
     verbose=True,
 ):
@@ -356,7 +356,7 @@ def stitch_shifted_store(
 
         for well_name in well_names:
             well = input_dataset[well_name]
-            
+
             if verbose:
                 click.echo(f'Processing well {well_name}')
 
