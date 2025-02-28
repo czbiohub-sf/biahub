@@ -72,7 +72,7 @@ def segment_data(
         for preproc in preprocessing_functions:
             func = preproc.function
             kwargs = preproc.kwargs
-            c_idx = preproc["channel"]
+            c_idx = preproc.channel
 
             # Convert list to tuple for out_range if needed
             if "out_range" in kwargs and isinstance(kwargs["out_range"], list):
