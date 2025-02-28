@@ -209,7 +209,7 @@ def segment(
         "slurm_gres": f"gpu:{num_gpus}",
         "slurm_mem_per_cpu": f"{gb_ram_request}G",
         "slurm_cpus_per_task": num_cpus,
-        "slurm_array_parallelism": 100,  # process up to 100 positions at a time
+        "slurm_array_parallelism": 20,  # process up to 20 positions at a time
         "slurm_time": slurm_time,
         "slurm_partition": "gpu",
     }
