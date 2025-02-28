@@ -182,8 +182,8 @@ def segment(
         if model_args.preprocessing is not None:
             for preproc in model_args.preprocessing:
                 # Replace the channel name with the channel index
-                if preproc["channel"] is not None:
-                    preproc["channel"] = channel_names.index(preproc["channel"])
+                if preproc.channel is not None:
+                    preproc.channel = channel_names.index(preproc.channel)
                 else:
                     raise ValueError("Channel must be specified for preprocessing functions")
 
