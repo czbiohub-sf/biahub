@@ -400,7 +400,6 @@ def simple_recording(
     animation = Animation(viewer)
     buffer_frames = int(buffer_duration * fps)
 
-    
     # If fixed_z is provided, set z-axis first
     if z_focal_plane is not None:
         z_axis = loop_axes[1][0]  # Assuming second tuple corresponds to z
@@ -409,14 +408,16 @@ def simple_recording(
     # Loop over specified axes in sequence
     for axis, (min_val, max_val), duration in loop_axes:
         axis_size = viewer.layers[0].data.shape[axis]
-         # Use full range if min/max is None
+        # Use full range if min/max is None
         actual_min = 0 if min_val is None else min_val
         actual_max = (axis_size - 1) if max_val is None else max_val
         actual_duration = default_duration if duration is None else duration
 
         # Calculate frames
         n_frames = int(actual_duration * fps)
-        positions = np.linspace(actual_min, actual_max, n_frames, dtype=int)  # Ensure integer steps
+        positions = np.linspace(
+            actual_min, actual_max, n_frames, dtype=int
+        )  # Ensure integer steps
 
         # Start at initial position
         viewer.dims.set_current_step(axis, actual_min)
@@ -431,8 +432,5 @@ def simple_recording(
         # Add buffer frames at the end of each transition
         animation.capture_keyframe(buffer_frames)
 
-
     # Save the animation
     animation.animate(output_path, fps=fps, canvas_only=True)
-
-       
