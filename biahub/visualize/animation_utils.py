@@ -360,6 +360,7 @@ def simple_recording(
     viewer: napari.Viewer,
     output_path: Path,
     loop_axes: list[tuple[int, tuple[Optional[int], Optional[int]], Optional[float]]],
+    z_focal_plane: Optional[int] = None,  # New argument to specify z
     fps: int = 60,
     buffer_duration: float = 0.5,
     default_duration: float = 5.0,
@@ -399,38 +400,39 @@ def simple_recording(
     animation = Animation(viewer)
     buffer_frames = int(buffer_duration * fps)
 
+    
+    # If fixed_z is provided, set z-axis first
+    if z_focal_plane is not None:
+        z_axis = loop_axes[1][0]  # Assuming second tuple corresponds to z
+        viewer.dims.set_current_step(z_axis, z_focal_plane)  # Explicitly fix z
+
     # Loop over specified axes in sequence
     for axis, (min_val, max_val), duration in loop_axes:
-        # Get axis size from first layer
         axis_size = viewer.layers[0].data.shape[axis]
-        scale = viewer.layers[0].scale
-
-        # Use full range if None is provided
+         # Use full range if min/max is None
         actual_min = 0 if min_val is None else min_val
-        actual_max = (axis_size - 1) * scale[axis] if max_val is None else max_val
+        actual_max = (axis_size - 1) if max_val is None else max_val
         actual_duration = default_duration if duration is None else duration
 
-        # Calculate number of frames for this transition
+        # Calculate frames
         n_frames = int(actual_duration * fps)
+        positions = np.linspace(actual_min, actual_max, n_frames, dtype=int)  # Ensure integer steps
 
-        # Generate intermediate positions
-        positions = np.linspace(actual_min, actual_max, n_frames)
-
-        # Set initial position and capture
-        viewer.dims.set_point(axis, actual_min)
+        # Start at initial position
+        viewer.dims.set_current_step(axis, actual_min)
         animation.capture_keyframe()
 
-        # Capture each intermediate frame
+        # Capture intermediate frames
         for pos in positions[1:]:
-            viewer.dims.set_point(axis, pos)
-            # Force update of any overlay text
-            for layer in viewer.layers:
-                if layer.name.endswith('_overlay'):
-                    viewer.dims.events.current_step(value=viewer.dims.current_step)
-            animation.capture_keyframe(1)  # capture each frame individually
+            viewer.dims.set_current_step(axis, pos)
+            viewer.dims.events.current_step(value=viewer.dims.current_step)  # Force UI update
+            animation.capture_keyframe(1)
 
-        # Add buffer frames at end
+        # Add buffer frames at the end of each transition
         animation.capture_keyframe(buffer_frames)
+
 
     # Save the animation
     animation.animate(output_path, fps=fps, canvas_only=True)
+
+       
