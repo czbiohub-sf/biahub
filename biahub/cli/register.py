@@ -66,13 +66,19 @@ def register(
     # Calculate the output voxel size from the input scale and affine transform
     with open_ome_zarr(source_position_dirpaths[0]) as source_dataset:
         T, C, Z, Y, X = source_dataset.data.shape
-        source_channel_names = source_dataset.channel_names
+        if settings.source_channel_names == 'all':
+            source_channel_names = source_dataset.channel_names
+        else:
+            source_channel_names = settings.source_channel_names
         source_shape_zyx = source_dataset.data.shape[-3:]
         source_voxel_size = source_dataset.scale[-3:]
         output_voxel_size = rescale_voxel_size(matrix[:3, :3], source_voxel_size)
 
     with open_ome_zarr(target_position_dirpaths[0]) as target_dataset:
-        target_channel_names = target_dataset.channel_names
+        if settings.target_channel_names == 'all':
+            target_channel_names = target_dataset.channel_names
+        else:
+            target_channel_names = settings.target_channel_names
         target_shape_zyx = target_dataset.data.shape[-3:]
 
     click.echo("\nREGISTRATION PARAMETERS:")
