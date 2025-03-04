@@ -75,10 +75,7 @@ def register(
         output_voxel_size = rescale_voxel_size(matrix[:3, :3], source_voxel_size)
 
     with open_ome_zarr(target_position_dirpaths[0]) as target_dataset:
-        if settings.target_channel_names == 'all':
-            target_channel_names = target_dataset.channel_names
-        else:
-            target_channel_names = settings.target_channel_names
+        target_channel_name = settings.target_channel_name
         target_shape_zyx = target_dataset.data.shape[-3:]
 
     click.echo("\nREGISTRATION PARAMETERS:")
@@ -95,7 +92,7 @@ def register(
     else:
         raise ValueError(f"Invalid time_indices type {type(settings.time_indices)}")
 
-    output_channel_names = target_channel_names
+    output_channel_names = [target_channel_name]
     if target_position_dirpaths != source_position_dirpaths:
         output_channel_names += source_channel_names
 
@@ -215,7 +212,7 @@ def register(
     copy_names = []
     with executor.batch():
         for input_position_path in target_position_dirpaths:
-            for channel_name in target_channel_names:
+            for channel_name in target_channel_name:
                 if channel_name in settings.source_channel_names:
                     continue
                 copy_job = executor.submit(
@@ -224,7 +221,7 @@ def register(
                     input_data_path=input_position_path,  # target store
                     output_path=output_dirpath,
                     time_indices=time_indices,
-                    input_channel_idx=[target_channel_names.index(channel_name)],
+                    input_channel_idx=[target_channel_name.index(channel_name)],
                     output_channel_idx=[output_channel_names.index(channel_name)],
                     num_processes=int(slurm_args["slurm_cpus_per_task"]),
                     **copy_n_paste_kwargs,
