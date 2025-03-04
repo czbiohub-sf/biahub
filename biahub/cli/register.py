@@ -212,7 +212,7 @@ def register(
     copy_names = []
     with executor.batch():
         for input_position_path in target_position_dirpaths:
-            for channel_name in target_channel_name:
+            for channel_name in [target_channel_name]:
                 if channel_name in settings.source_channel_names:
                     continue
                 copy_job = executor.submit(
