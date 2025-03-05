@@ -160,7 +160,7 @@ def extract_beads(
 
     # extract bead patches
     bead_extractor = BeadExtractor(
-        image=Calibrated3DImage(data=zyx_data.astype(np.int32), spacing=scale),
+        image=Calibrated3DImage(data=zyx_data, spacing=scale),
         patch_size=patch_size,
     )
     beads = bead_extractor.extract_beads(points=points)
@@ -172,11 +172,42 @@ def extract_beads(
     return beads_data, bead_offset
 
 
-def analyze_psf(zyx_patches: List[ArrayLike], bead_offsets: List[tuple], scale: tuple):
+def analyze_psf(
+        zyx_patches: List[ArrayLike],
+        peak_coordinates: List[tuple],
+        scale: tuple,
+        offset: float = 0.0,
+        gain: float = 1.0,
+    ):
+    """
+    Analyze point spread function (PSF) from given 3D patches.
+
+    Parameters:
+    -----------
+    zyx_patches : List[ArrayLike]
+        List of 3D image patches to be analyzed.
+    peak_coordinates : List[tuple]
+        List of tuples representing the global ZYX coordinates of the peaks in the data.
+    scale : tuple
+        Tuple representing the scaling factors for each dimension (Z, Y, X).
+    offset : float
+        Offset value to be added to the patches.
+    gain : float
+        Gain value to be multiplied with the patches after applying offset.
+
+    Returns:
+    --------
+    df_gaussian_fit : pandas.DataFrame
+        DataFrame containing the results of the Gaussian fit analysis.
+    df_1d_peak_width : pandas.DataFrame
+        DataFrame containing the 1D peak width calculations.
+    """
     results = []
-    for patch, offset in zip(zyx_patches, bead_offsets):
-        patch = np.clip(patch, 0, None)
-        bead = Calibrated3DImage(data=patch.astype(np.int32), spacing=scale, offset=offset)
+    peak_coordinates = np.asarray(peak_coordinates)
+    for patch, peak_coords in zip(zyx_patches, peak_coordinates):
+        patch = (patch + offset) * gain
+        patch = np.clip(patch, 0, None).astype(np.int32)
+        bead = Calibrated3DImage(data=patch, spacing=scale, offset=peak_coords)
         psf = PSF(image=bead)
         try:
             psf.analyze()
@@ -186,11 +217,11 @@ def analyze_psf(zyx_patches: List[ArrayLike], bead_offsets: List[tuple], scale: 
         results.append(summary_dict)
 
     df_gaussian_fit = pd.DataFrame.from_records(results)
-    bead_offsets = np.asarray(bead_offsets)
-
-    df_gaussian_fit['z_mu'] += bead_offsets[:, 0] * scale[0]
-    df_gaussian_fit['y_mu'] += bead_offsets[:, 1] * scale[1]
-    df_gaussian_fit['x_mu'] += bead_offsets[:, 2] * scale[2]
+    df_gaussian_fit['z_mu'] += peak_coordinates[:, 0] * scale[0]
+    df_gaussian_fit['y_mu'] += peak_coordinates[:, 1] * scale[1]
+    df_gaussian_fit['x_mu'] += peak_coordinates[:, 2] * scale[2]
+    df_gaussian_fit['z_amp'] = (df_gaussian_fit['z_amp'] - offset) / gain
+    df_gaussian_fit['zyx_amp'] = (df_gaussian_fit['zyx_amp'] - offset) / gain
 
     df_1d_peak_width = pd.DataFrame(
         [calculate_peak_widths(zyx_patch, scale) for zyx_patch in zyx_patches],
@@ -256,7 +287,6 @@ def plot_psf_slices(
             cmap=cmap,
             origin='lower',
             aspect=scale_Y / scale_X,
-            vmin=0,
         )
         _ax.set_xlabel(axis_labels[-1])
         _ax.set_ylabel(axis_labels[-2])

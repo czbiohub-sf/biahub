@@ -33,6 +33,8 @@ def _characterize_psf(
     settings_dict = settings.model_dump()
     patch_size = settings_dict.pop("patch_size")
     axis_labels = settings_dict.pop("axis_labels")
+    offset = settings_dict.pop("offset")
+    gain = settings_dict.pop("gain")
 
     click.echo("Detecting peaks...")
     t1 = time.time()
@@ -47,20 +49,25 @@ def _characterize_psf(
     click.echo(f'Time to detect peaks: {t2-t1}')
 
     t1 = time.time()
-    beads, offsets = extract_beads(
+    beads, peak_coordinates = extract_beads(
         zyx_data=zyx_data,
         points=peaks,
         scale=zyx_scale,
         patch_size=patch_size,
     )
 
+    if len(beads) == 0:
+        raise RuntimeError("No beads were detected.")
+
     click.echo("Analyzing PSFs...")
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         df_gaussian_fit, df_1d_peak_width = analyze_psf(
             zyx_patches=beads,
-            bead_offsets=offsets,
+            peak_coordinates=peak_coordinates,
             scale=zyx_scale,
+            offset=offset,
+            gain=gain,
         )
     t2 = time.time()
     click.echo(f'Time to analyze PSFs: {t2-t1}')
@@ -98,16 +105,20 @@ def characterize_psf(
     if len(input_position_dirpaths) > 1:
         warnings.warn("Only the first position will be characterized.")
 
+    # Read settings
+    settings = yaml_to_model(config_filepath, CharacterizeSettings)
+    dataset_name = Path(input_position_dirpaths[0]).parts[-4]
+
     click.echo("Loading data...")
     with open_ome_zarr(str(input_position_dirpaths[0]), mode="r") as input_dataset:
         T, C, Z, Y, X = input_dataset.data.shape
         zyx_data = input_dataset["0"][0, 0]
         zyx_scale = input_dataset.scale[-3:]
-
-    # Read settings
-    settings = yaml_to_model(config_filepath, CharacterizeSettings)
-    dataset_name = Path(input_position_dirpaths[0]).parts[-4]
-
+    
     _ = _characterize_psf(
         zyx_data, zyx_scale, settings, output_dirpath, input_position_dirpaths[0], dataset_name
     )
+
+
+if __name__ == "__main__":
+    characterize_psf()

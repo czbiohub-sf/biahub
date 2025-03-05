@@ -138,6 +138,8 @@ class CharacterizeSettings(MyBaseModel):
     device: str = "cuda"
     patch_size: tuple[PositiveFloat, PositiveFloat, PositiveFloat] | None = None
     axis_labels: list[str] = ["AXIS0", "AXIS1", "AXIS2"]
+    offset: float = 0.0
+    gain: float = 1.0
 
     @field_validator("device")
     @classmethod

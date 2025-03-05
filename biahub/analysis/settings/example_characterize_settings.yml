@@ -7,3 +7,5 @@ max_num_peaks: 2000
 exclude_border: [5, 10, 5]
 device: "cuda"
 axis_labels: ["SCAN", "TILT", "COVERSLIP"]
+offset: 10 # Offset that will be added to the data
+gain: 1000 # Factor by which data will be multiplied after offsetting, useful when working with float data
