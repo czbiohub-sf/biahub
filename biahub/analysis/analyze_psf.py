@@ -35,9 +35,9 @@ def _make_plots(
 ):
     plots_dir = output_path / 'plots'
     plots_dir.mkdir(parents=True, exist_ok=True)
-    random_bead_number = sorted(np.random.choice(len(beads), 3))
+    random_bead_number = sorted(np.random.choice(len(beads), 5, replace=False))
 
-    bead_psf_slices_paths = plot_psf_slices(
+    bead_psf_slices_path = plot_psf_slices(
         plots_dir,
         [beads[i] for i in random_bead_number],
         scale,
@@ -74,7 +74,7 @@ def _make_plots(
         axis_labels,
     )
 
-    return (bead_psf_slices_paths, fwhm_vs_acq_axes_paths, psf_amp_paths)
+    return (bead_psf_slices_path, fwhm_vs_acq_axes_paths, psf_amp_paths)
 
 
 def generate_report(
@@ -96,7 +96,7 @@ def generate_report(
     num_failed = num_beads - num_successful
 
     # make plots
-    (bead_psf_slices_paths, fwhm_vs_acq_axes_paths, psf_amp_paths) = _make_plots(
+    (bead_psf_slices_path, fwhm_vs_acq_axes_paths, psf_amp_paths) = _make_plots(
         output_path, beads, df_gaussian_fit, df_1d_peak_width, scale, axis_labels, fwhm_plot_type
     )
 
@@ -128,7 +128,7 @@ def generate_report(
         fwhm_3d_mean,
         fwhm_3d_std,
         fwhm_pc_mean,
-        [str(_path.relative_to(output_path).as_posix()) for _path in bead_psf_slices_paths],
+        str(bead_psf_slices_path.relative_to(output_path).as_posix()),
         [str(_path.relative_to(output_path).as_posix()) for _path in fwhm_vs_acq_axes_paths],
         [str(_path.relative_to(output_path).as_posix()) for _path in psf_amp_paths],
         axis_labels,
@@ -322,19 +322,6 @@ def calculate_peak_widths(zyx_data: ArrayLike, zyx_scale: tuple):
     return z_fwhm * scale_Z, y_fwhm * scale_Y, x_fwhm * scale_X
 
 
-def _adjust_fig(fig, ax):
-    for _ax in ax.flatten():
-        _ax.set_xticks([])
-        _ax.set_yticks([])
-
-    plt.tight_layout()
-    plt.subplots_adjust(wspace=0.5)
-    fig_size = fig.get_size_inches()
-    fig_size_scaling = 5 / fig_size[0]  # set width to 5 inches
-    fig.set_figwidth(fig_size[0] * fig_size_scaling)
-    fig.set_figheight(fig_size[1] * fig_size_scaling)
-
-
 def plot_psf_slices(
     plots_dir: str,
     beads: List[ArrayLike],
@@ -347,9 +334,9 @@ def plot_psf_slices(
     shape_Z, shape_Y, shape_X = beads[0].shape
     cmap = 'viridis'
 
-    bead_xy_psf_path = plots_dir / 'beads_xy_psf.png'
-    fig, ax = plt.subplots(1, num_beads)
-    for _ax, bead, bead_number in zip(ax, beads, bead_numbers):
+    bead_psf_slices_path = plots_dir / 'beads_psf_slices.png'
+    fig, ax = plt.subplots(3, num_beads)
+    for _ax, bead, bead_number in zip(ax[0], beads, bead_numbers):
         _ax.imshow(
             bead[shape_Z // 2, :, :],
             cmap=cmap,
@@ -359,33 +346,35 @@ def plot_psf_slices(
         _ax.set_xlabel(axis_labels[-1])
         _ax.set_ylabel(axis_labels[-2])
         _ax.set_title(f'Bead: {bead_number}')
-    _adjust_fig(fig, ax)
-    fig.set_figheight(2)
-    fig.savefig(bead_xy_psf_path)
 
-    bead_xz_psf_path = plots_dir / 'beads_xz_psf.png'
-    fig, ax = plt.subplots(1, num_beads)
-    for _ax, bead in zip(ax, beads):
+    for _ax, bead in zip(ax[1], beads):
         _ax.imshow(
             bead[:, shape_Y // 2, :], cmap=cmap, origin='lower', aspect=scale_Z / scale_X
         )
         _ax.set_xlabel(axis_labels[-1])
         _ax.set_ylabel(axis_labels[-3])
-    _adjust_fig(fig, ax)
-    fig.savefig(bead_xz_psf_path)
 
-    bead_yz_psf_path = plots_dir / 'beads_yz_psf.png'
-    fig, ax = plt.subplots(1, num_beads)
-    for _ax, bead in zip(ax, beads):
+    for _ax, bead in zip(ax[2], beads):
         _ax.imshow(
             bead[:, :, shape_X // 2], cmap=cmap, origin='lower', aspect=scale_Z / scale_Y
         )
         _ax.set_xlabel(axis_labels[-2])
         _ax.set_ylabel(axis_labels[-3])
-    _adjust_fig(fig, ax)
-    fig.savefig(bead_yz_psf_path)
 
-    return bead_xy_psf_path, bead_xz_psf_path, bead_yz_psf_path
+    for _ax in ax.flatten():
+        _ax.set_xticks([])
+        _ax.set_yticks([])
+
+    plt.tight_layout()
+    plt.subplots_adjust(wspace=0.5)
+    fig_size = fig.get_size_inches()
+    fig_size_scaling = 8 / fig_size[0]  # set width to 8 inches
+    fig.set_figwidth(fig_size[0] * fig_size_scaling)
+    fig.set_figheight(fig_size[1] * fig_size_scaling)
+
+    fig.savefig(bead_psf_slices_path)
+
+    return bead_psf_slices_path
 
 
 def plot_fwhm_vs_acq_axes(plots_dir: str, x, y, z, fwhm_x, fwhm_y, fwhm_z, axis_labels: tuple):
@@ -447,7 +436,7 @@ def _generate_html(
     fwhm_3d_mean: tuple,
     fwhm_3d_std: tuple,
     fwhm_pc_mean: tuple,
-    bead_psf_slices_paths: list,
+    bead_psf_slices_path: str,
     fwhm_vs_acq_axes_paths: list,
     psf_amp_paths: list,
     axis_labels: tuple,
@@ -487,9 +476,7 @@ def _generate_html(
     - {'{:.3f} um, {:.3f} um, {:.3f} um'.format(*fwhm_pc_mean)}
 
 ## Representative bead PSF images
-![beads xy psf]({bead_psf_slices_paths[0]})
-![beads xz psf]({bead_psf_slices_paths[1]})
-![beads yz psf]({bead_psf_slices_paths[2]})
+![beads psf slices]({bead_psf_slices_path})
 
 ## {fwhm_plot_type} FWHM versus {axis_labels[0]} position
 ![fwhm vs z]({fwhm_vs_acq_axes_paths[0]} "fwhm vs z")
