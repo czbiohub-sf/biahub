@@ -220,8 +220,8 @@ def analyze_psf(
     df_gaussian_fit['z_mu'] += peak_coordinates[:, 0] * scale[0]
     df_gaussian_fit['y_mu'] += peak_coordinates[:, 1] * scale[1]
     df_gaussian_fit['x_mu'] += peak_coordinates[:, 2] * scale[2]
-    df_gaussian_fit['z_amp'] = (df_gaussian_fit['z_amp'] - offset) / gain
-    df_gaussian_fit['zyx_amp'] = (df_gaussian_fit['zyx_amp'] - offset) / gain
+    df_gaussian_fit['z_amp'] /= gain # amplitude is measured relative to the offset
+    df_gaussian_fit['zyx_amp'] /= gain
 
     df_1d_peak_width = pd.DataFrame(
         [calculate_peak_widths(zyx_patch, scale) for zyx_patch in zyx_patches],
