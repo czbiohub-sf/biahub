@@ -17,6 +17,7 @@ from biahub.analysis.analyze_psf import (
     detect_peaks,
     extract_beads,
     generate_report,
+    compute_snr,
 )
 from biahub.cli.parsing import config_filepath, input_position_dirpaths, output_dirpath
 from biahub.cli.utils import yaml_to_model
@@ -35,6 +36,8 @@ def _characterize_psf(
     axis_labels = settings_dict.pop("axis_labels")
     offset = settings_dict.pop("offset")
     gain = settings_dict.pop("gain")
+    use_robust_1d_fwhm = settings_dict.pop("use_robust_1d_fwhm")
+    fwhm_plot_type = settings_dict.pop("fwhm_plot_type")
 
     click.echo("Detecting peaks...")
     t1 = time.time()
@@ -68,9 +71,18 @@ def _characterize_psf(
             scale=zyx_scale,
             offset=offset,
             gain=gain,
+            use_robust_1d_fwhm=use_robust_1d_fwhm,
         )
     t2 = time.time()
     click.echo(f'Time to analyze PSFs: {t2-t1}')
+
+    patch_size_pix = np.ceil(np.array(patch_size) / np.array(zyx_scale)).astype(int)
+    snr = compute_snr(
+        zyx_data,
+        peak_coordinates,
+        patch_size_pix,
+        df_gaussian_fit['z_mu'].mean(),
+    )
 
     # Generate HTML report
     generate_report(
@@ -83,6 +95,7 @@ def _characterize_psf(
         df_1d_peak_width,
         zyx_scale,
         axis_labels,
+        fwhm_plot_type,
     )
 
     return peaks
@@ -114,7 +127,7 @@ def characterize_psf(
         T, C, Z, Y, X = input_dataset.data.shape
         zyx_data = input_dataset["0"][0, 0]
         zyx_scale = input_dataset.scale[-3:]
-    
+
     _ = _characterize_psf(
         zyx_data, zyx_scale, settings, output_dirpath, input_position_dirpaths[0], dataset_name
     )

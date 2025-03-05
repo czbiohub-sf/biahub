@@ -5,7 +5,7 @@ import shutil
 import webbrowser
 
 from pathlib import Path
-from typing import List
+from typing import List, Literal
 
 import markdown
 import matplotlib.pyplot as plt
@@ -19,6 +19,7 @@ from napari_psf_analysis.psf_analysis.image import Calibrated3DImage
 from napari_psf_analysis.psf_analysis.psf import PSF
 from numpy.typing import ArrayLike
 from scipy.signal import peak_widths
+from scipy.interpolate import interp1d
 
 import biahub.analysis.templates
 
@@ -30,7 +31,7 @@ def _make_plots(
     df_1d_peak_width: pd.DataFrame,
     scale: tuple,
     axis_labels: tuple,
-    raw: bool = False,
+    fwhm_plot_type: Literal['1D', '3D'],
 ):
     plots_dir = output_path / 'plots'
     plots_dir.mkdir(parents=True, exist_ok=True)
@@ -44,16 +45,18 @@ def _make_plots(
         random_bead_number,
     )
 
-    if raw:
+    if fwhm_plot_type == '1D':
         plot_data_x = [df_1d_peak_width[col].values for col in ('x_mu', 'y_mu', 'z_mu')]
         plot_data_y = [
             df_1d_peak_width[col].values for col in ('1d_x_fwhm', '1d_y_fwhm', '1d_z_fwhm')
         ]
-    else:
+    elif fwhm_plot_type == '3D':
         plot_data_x = [df_gaussian_fit[col].values for col in ('x_mu', 'y_mu', 'z_mu')]
         plot_data_y = [
             df_gaussian_fit[col].values for col in ('zyx_x_fwhm', 'zyx_y_fwhm', 'zyx_z_fwhm')
         ]
+    else:
+        raise ValueError(f'Invalid fwhm_plot_type: {fwhm_plot_type}')
 
     fwhm_vs_acq_axes_paths = plot_fwhm_vs_acq_axes(
         plots_dir,
@@ -84,6 +87,7 @@ def generate_report(
     df_1d_peak_width: pd.DataFrame,
     scale: tuple,
     axis_labels: tuple,
+    fwhm_plot_type: str,
 ):
     output_path.mkdir(exist_ok=True)
 
@@ -91,13 +95,9 @@ def generate_report(
     num_successful = len(df_gaussian_fit)
     num_failed = num_beads - num_successful
 
-    raw = False
-    if axis_labels == ("SCAN", "TILT", "COVERSLIP"):
-        raw = True
-
     # make plots
     (bead_psf_slices_paths, fwhm_vs_acq_axes_paths, psf_amp_paths) = _make_plots(
-        output_path, beads, df_gaussian_fit, df_1d_peak_width, scale, axis_labels, raw=raw
+        output_path, beads, df_gaussian_fit, df_1d_peak_width, scale, axis_labels, fwhm_plot_type
     )
 
     # calculate statistics
@@ -132,6 +132,7 @@ def generate_report(
         [str(_path.relative_to(output_path).as_posix()) for _path in fwhm_vs_acq_axes_paths],
         [str(_path.relative_to(output_path).as_posix()) for _path in psf_amp_paths],
         axis_labels,
+        fwhm_plot_type,
     )
 
     # save html report and other results
@@ -173,12 +174,13 @@ def extract_beads(
 
 
 def analyze_psf(
-        zyx_patches: List[ArrayLike],
-        peak_coordinates: List[tuple],
-        scale: tuple,
-        offset: float = 0.0,
-        gain: float = 1.0,
-    ):
+    zyx_patches: List[ArrayLike],
+    peak_coordinates: List[tuple],
+    scale: tuple,
+    offset: float = 0.0,
+    gain: float = 1.0,
+    use_robust_1d_fwhm: bool = False,
+):
     """
     Analyze point spread function (PSF) from given 3D patches.
 
@@ -194,6 +196,8 @@ def analyze_psf(
         Offset value to be added to the patches.
     gain : float
         Gain value to be multiplied with the patches after applying offset.
+    use_robust_1d_fwhm : bool
+        If True, use the "robust" 1D FWHM calculation method.
 
     Returns:
     --------
@@ -202,6 +206,11 @@ def analyze_psf(
     df_1d_peak_width : pandas.DataFrame
         DataFrame containing the 1D peak width calculations.
     """
+    if use_robust_1d_fwhm:
+        f_1d_peak_width = calculate_robust_peak_widths
+    else:
+        f_1d_peak_width = calculate_peak_widths
+
     results = []
     peak_coordinates = np.asarray(peak_coordinates)
     for patch, peak_coords in zip(zyx_patches, peak_coordinates):
@@ -220,11 +229,11 @@ def analyze_psf(
     df_gaussian_fit['z_mu'] += peak_coordinates[:, 0] * scale[0]
     df_gaussian_fit['y_mu'] += peak_coordinates[:, 1] * scale[1]
     df_gaussian_fit['x_mu'] += peak_coordinates[:, 2] * scale[2]
-    df_gaussian_fit['z_amp'] /= gain # amplitude is measured relative to the offset
+    df_gaussian_fit['z_amp'] /= gain  # amplitude is measured relative to the offset
     df_gaussian_fit['zyx_amp'] /= gain
 
     df_1d_peak_width = pd.DataFrame(
-        [calculate_peak_widths(zyx_patch, scale) for zyx_patch in zyx_patches],
+        [f_1d_peak_width(zyx_patch, scale) for zyx_patch in zyx_patches],
         columns=(f'1d_{i}_fwhm' for i in ('z', 'y', 'x')),
     )
     df_1d_peak_width = pd.concat(
@@ -233,11 +242,70 @@ def analyze_psf(
 
     # clean up dataframes
     df_gaussian_fit = df_gaussian_fit.dropna()
-    df_1d_peak_width = df_1d_peak_width.loc[
+    df_1d_peak_width = df_1d_peak_width.dropna().loc[
         ~(df_1d_peak_width[['1d_z_fwhm', '1d_y_fwhm', '1d_x_fwhm']] == 0).any(axis=1)
     ]
 
     return df_gaussian_fit, df_1d_peak_width
+
+
+def compute_snr(
+    zyx_data: ArrayLike, peak_coordinates: List[tuple], patch_size_pix: tuple, signal: float
+):
+    # Mask out the peaks
+    mask = np.ones_like(zyx_data, dtype=bool)
+    half_patch = [size // 2 for size in patch_size_pix]
+
+    for z, y, x in peak_coordinates:
+        patch_mask = tuple(
+            slice(max(0, coord - half_patch[i]), min(zyx_data.shape[i], coord + half_patch[i] + 1))
+            for i, coord in enumerate((z, y, x))
+        )
+        mask[patch_mask] = False
+
+    # Compute st dev of masked data
+    noise = np.std(zyx_data[mask])
+    return signal / noise
+
+
+def calculate_robust_peak_widths(zyx_data: ArrayLike, zyx_scale: tuple):
+    shape_Z, shape_Y, shape_X = zyx_data.shape
+
+    slices = (
+        (slice(None), shape_Y // 2, shape_X // 2),
+        (shape_Z // 2, slice(None), shape_X // 2),
+        (shape_Z // 2, shape_Y // 2, slice(None)),
+    )
+
+    fwhm = []
+    for _slice, _scale in zip(slices, zyx_scale):
+        try:
+            y = zyx_data[_slice]
+            x = np.arange(y.size)
+
+            # fit parabola to nearest 5 points to find peak
+            peak_index = np.argmax(y)
+            fit_range = (slice(max(0, peak_index - 2), min(peak_index + 2, y.size)),)
+            p = np.polyfit(x[fit_range], y[fit_range], 2)
+            peak_index = -p[1] / (2 * p[0])
+            peak_max = np.polyval(p, peak_index)
+            half_max = peak_max / 2
+
+            # Use linear interpolation on each side of the peak to find FWHM
+            x = x * _scale
+            indices = np.where(y >= half_max/2)[0]
+            _il = indices[indices < peak_index]
+            _ir = indices[indices > peak_index]
+            _fl = interp1d(y[_il], x[_il], kind="linear", fill_value="extrapolate")
+            _fr = interp1d(y[_ir], x[_ir], kind="linear", fill_value="extrapolate")
+            x_left = _fl(half_max)  # Left crossing
+            x_right = _fr(half_max)  # Right crossing
+
+            fwhm.append(x_right - x_left)  # Compute width
+        except Exception:
+            fwhm.append(0.0)
+
+    return fwhm
 
 
 def calculate_peak_widths(zyx_data: ArrayLike, zyx_scale: tuple):
@@ -383,6 +451,7 @@ def _generate_html(
     fwhm_vs_acq_axes_paths: list,
     psf_amp_paths: list,
     axis_labels: tuple,
+    fwhm_plot_type: str,
 ):
 
     # string indents need to be like that, otherwise this turns into a code block
@@ -422,13 +491,13 @@ def _generate_html(
 ![beads xz psf]({bead_psf_slices_paths[1]})
 ![beads yz psf]({bead_psf_slices_paths[2]})
 
-## FWHM versus {axis_labels[0]} position
+## {fwhm_plot_type} FWHM versus {axis_labels[0]} position
 ![fwhm vs z]({fwhm_vs_acq_axes_paths[0]} "fwhm vs z")
 
-## FWHM versus {axis_labels[1]} position
+## {fwhm_plot_type} FWHM versus {axis_labels[1]} position
 ![fwhm vs z]({fwhm_vs_acq_axes_paths[1]} "fwhm vs y")
 
-## FWHM versus {axis_labels[2]} position
+## {fwhm_plot_type} FWHM versus {axis_labels[2]} position
 ![fwhm vs z]({fwhm_vs_acq_axes_paths[2]} "fwhm vs x")
 
 ## PSF amplitude versus {axis_labels[-1]}-{axis_labels[-2]} position

@@ -140,6 +140,8 @@ class CharacterizeSettings(MyBaseModel):
     axis_labels: list[str] = ["AXIS0", "AXIS1", "AXIS2"]
     offset: float = 0.0
     gain: float = 1.0
+    use_robust_1d_fwhm: bool = False
+    fwhm_plot_type: Literal["1D", "3D"] = "3D"
 
     @field_validator("device")
     @classmethod
