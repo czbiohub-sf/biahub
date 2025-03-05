@@ -17,7 +17,7 @@ from biahub.analysis.analyze_psf import (
     detect_peaks,
     extract_beads,
     generate_report,
-    compute_snr,
+    compute_noise_level,
 )
 from biahub.cli.parsing import config_filepath, input_position_dirpaths, output_dirpath
 from biahub.cli.utils import yaml_to_model
@@ -62,6 +62,13 @@ def _characterize_psf(
     if len(beads) == 0:
         raise RuntimeError("No beads were detected.")
 
+    patch_size_pix = np.ceil(np.array(patch_size) / np.array(zyx_scale)).astype(int)
+    noise = compute_noise_level(
+        zyx_data,
+        peak_coordinates,
+        patch_size_pix,
+    )
+
     click.echo("Analyzing PSFs...")
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -71,18 +78,11 @@ def _characterize_psf(
             scale=zyx_scale,
             offset=offset,
             gain=gain,
+            noise=noise,
             use_robust_1d_fwhm=use_robust_1d_fwhm,
         )
     t2 = time.time()
     click.echo(f'Time to analyze PSFs: {t2-t1}')
-
-    patch_size_pix = np.ceil(np.array(patch_size) / np.array(zyx_scale)).astype(int)
-    snr = compute_snr(
-        zyx_data,
-        peak_coordinates,
-        patch_size_pix,
-        df_gaussian_fit['z_mu'].mean(),
-    )
 
     # Generate HTML report
     generate_report(

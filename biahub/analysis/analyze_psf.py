@@ -116,6 +116,8 @@ def generate_report(
     fwhm_1d_std = [
         df_1d_peak_width[col].std() for col in ('1d_z_fwhm', '1d_y_fwhm', '1d_x_fwhm')
     ]
+    snr_mean = df_gaussian_fit['zyx_snr'].mean()
+    snr_std = df_gaussian_fit['zyx_snr'].std()
 
     # generate html report
     html_report = _generate_html(
@@ -123,6 +125,8 @@ def generate_report(
         data_dir,
         scale,
         (num_beads, num_successful, num_failed),
+        snr_mean,
+        snr_std,
         fwhm_1d_mean,
         fwhm_1d_std,
         fwhm_3d_mean,
@@ -179,6 +183,7 @@ def analyze_psf(
     scale: tuple,
     offset: float = 0.0,
     gain: float = 1.0,
+    noise: float = 1.0,
     use_robust_1d_fwhm: bool = False,
 ):
     """
@@ -196,6 +201,8 @@ def analyze_psf(
         Offset value to be added to the patches.
     gain : float
         Gain value to be multiplied with the patches after applying offset.
+    noise : float
+        Noise level in the data.
     use_robust_1d_fwhm : bool
         If True, use the "robust" 1D FWHM calculation method.
 
@@ -246,11 +253,14 @@ def analyze_psf(
         ~(df_1d_peak_width[['1d_z_fwhm', '1d_y_fwhm', '1d_x_fwhm']] == 0).any(axis=1)
     ]
 
+    # compute peak SNR
+    df_gaussian_fit['zyx_snr'] = df_gaussian_fit['zyx_amp'] / noise
+
     return df_gaussian_fit, df_1d_peak_width
 
 
-def compute_snr(
-    zyx_data: ArrayLike, peak_coordinates: List[tuple], patch_size_pix: tuple, signal: float
+def compute_noise_level(
+    zyx_data: ArrayLike, peak_coordinates: List[tuple], patch_size_pix: tuple
 ):
     # Mask out the peaks
     mask = np.ones_like(zyx_data, dtype=bool)
@@ -263,9 +273,7 @@ def compute_snr(
         )
         mask[patch_mask] = False
 
-    # Compute st dev of masked data
-    noise = np.std(zyx_data[mask])
-    return signal / noise
+    return np.std(zyx_data[mask])
 
 
 def calculate_robust_peak_widths(zyx_data: ArrayLike, zyx_scale: tuple):
@@ -431,6 +439,8 @@ def _generate_html(
     data_path: str,
     dataset_scale: tuple,
     num_beads_total_good_bad: tuple,
+    snr_mean: float,
+    snr_std: float,
     fwhm_1d_mean: tuple,
     fwhm_1d_std: tuple,
     fwhm_3d_mean: tuple,
@@ -461,6 +471,7 @@ def _generate_html(
 * Detected: {num_beads_total_good_bad[0]}
 * Analyzed: {num_beads_total_good_bad[1]}
 * Skipped: {num_beads_total_good_bad[2]}
+* Signal-to-noise ratio: {round(snr_mean)} ± {round(snr_std)}
 
 ### FWHM
 
