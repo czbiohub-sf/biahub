@@ -20,6 +20,8 @@ from napari_psf_analysis.psf_analysis.psf import PSF
 from numpy.typing import ArrayLike
 from scipy.signal import peak_widths
 from scipy.interpolate import interp1d
+from multiprocessing import Pool
+from functools import partial
 
 import biahub.analysis.templates
 
@@ -177,6 +179,18 @@ def extract_beads(
     return beads_data, bead_offset
 
 
+def _fit_PSF(patch, peak_coords, scale=(1.0, 1.0, 1.0), offset=0.0, gain=1.0):
+    patch = (patch + offset) * gain
+    patch = np.clip(patch, 0, None).astype(np.int32)
+    bead = Calibrated3DImage(data=patch, spacing=scale, offset=peak_coords)
+    psf = PSF(image=bead)
+    try:
+        psf.analyze()
+        return psf.get_summary_dict()
+    except Exception:
+        return dict()
+
+
 def analyze_psf(
     zyx_patches: List[ArrayLike],
     peak_coordinates: List[tuple],
@@ -185,6 +199,7 @@ def analyze_psf(
     gain: float = 1.0,
     noise: float = 1.0,
     use_robust_1d_fwhm: bool = False,
+    num_processes: int = 8,
 ):
     """
     Analyze point spread function (PSF) from given 3D patches.
@@ -218,19 +233,12 @@ def analyze_psf(
     else:
         f_1d_peak_width = calculate_peak_widths
 
-    results = []
     peak_coordinates = np.asarray(peak_coordinates)
-    for patch, peak_coords in zip(zyx_patches, peak_coordinates):
-        patch = (patch + offset) * gain
-        patch = np.clip(patch, 0, None).astype(np.int32)
-        bead = Calibrated3DImage(data=patch, spacing=scale, offset=peak_coords)
-        psf = PSF(image=bead)
-        try:
-            psf.analyze()
-            summary_dict = psf.get_summary_dict()
-        except Exception:
-            summary_dict = {}
-        results.append(summary_dict)
+    with Pool(num_processes) as pool:
+        results = pool.starmap(
+            partial(_fit_PSF, scale=scale, offset=offset, gain=gain),
+            zip(zyx_patches,peak_coordinates),
+        )
 
     df_gaussian_fit = pd.DataFrame.from_records(results)
     df_gaussian_fit['z_mu'] += peak_coordinates[:, 0] * scale[0]
