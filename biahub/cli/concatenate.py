@@ -135,14 +135,10 @@ def concatenate(
     # Logic to parse time indices
     if settings.time_indices == "all":
         input_time_indices = list(range(T))
-        output_time_indices = list(range(T))
     elif isinstance(settings.time_indices, list):
         input_time_indices = settings.time_indices
-        # Mapping the input time indices to the output time indices
-        output_time_indices = list(range(len(input_time_indices)))
     elif isinstance(settings.time_indices, int):
         input_time_indices = [settings.time_indices]
-        output_time_indices = list(range(len(input_time_indices)))
 
     # Crop the data
     Z_slice = get_slice(settings.Z_slice, Z)
@@ -232,7 +228,6 @@ def concatenate(
                 input_channel_indices=input_channel_idx,
                 output_channel_indices=output_channel_idx,
                 input_time_indices=input_time_indices,
-                output_time_indices=output_time_indices,
                 num_processes=int(slurm_args["slurm_cpus_per_task"]),
                 **copy_n_paste_kwargs,
             )
