@@ -8,6 +8,7 @@ import numpy as np
 import submitit
 
 from iohub import open_ome_zarr
+from iohub.ngff.utils import create_empty_plate, process_single_position
 from natsort import natsorted
 
 from biahub.analysis.AnalysisSettings import ConcatenateSettings
@@ -18,13 +19,7 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import (
-    copy_n_paste_czyx,
-    create_empty_hcs_zarr,
-    estimate_resources,
-    process_single_position_v2,
-    yaml_to_model,
-)
+from biahub.cli.utils import copy_n_paste, estimate_resources, get_output_paths, yaml_to_model
 
 
 def get_channel_combiner_metadata(
@@ -113,6 +108,7 @@ def concatenate(
         input_channel_idx_list,
         output_channel_idx_list,
     ) = get_channel_combiner_metadata(settings.concat_data_paths, settings.channel_names)
+    output_position_paths_list = get_output_paths(all_data_paths, output_dirpath)
 
     all_shapes = []
     all_dtypes = []
@@ -138,11 +134,15 @@ def concatenate(
 
     # Logic to parse time indices
     if settings.time_indices == "all":
-        time_indices = list(range(T))
+        input_time_indices = list(range(T))
+        output_time_indices = list(range(T))
     elif isinstance(settings.time_indices, list):
-        time_indices = settings.time_indices
+        input_time_indices = settings.time_indices
+        # Mapping the input time indices to the output time indices
+        output_time_indices = list(range(len(input_time_indices)))
     elif isinstance(settings.time_indices, int):
-        time_indices = [settings.time_indices]
+        input_time_indices = [settings.time_indices]
+        output_time_indices = list(range(len(input_time_indices)))
 
     # Crop the data
     Z_slice = get_slice(settings.Z_slice, Z)
@@ -167,7 +167,7 @@ def concatenate(
 
     # Logic for creation of zarr and metadata
     output_metadata = {
-        "shape": (len(time_indices), len(all_channel_names)) + tuple(cropped_shape_zyx),
+        "shape": (len(input_time_indices), len(all_channel_names)) + tuple(cropped_shape_zyx),
         "chunks": chunk_size,
         "scale": (1,) * 2 + tuple(output_voxel_size),
         "channel_names": all_channel_names,
@@ -175,13 +175,13 @@ def concatenate(
     }
 
     # Create the output zarr mirroring source_position_dirpaths
-    create_empty_hcs_zarr(
+    create_empty_plate(
         store_path=output_dirpath,
         position_keys=[p.parts[-3:] for p in all_data_paths],
         **output_metadata,
     )
 
-    copy_n_paste_kwargs = {"czyx_slicing_params": ([Z_slice, Y_slice, X_slice])}
+    copy_n_paste_kwargs = {"zyx_slicing_params": ([Z_slice, Y_slice, X_slice])}
 
     # Estimate resources
     num_cpus, gb_ram_per_cpu = estimate_resources(shape=[T, C, Z, Y, X], ram_multiplier=16)
@@ -192,7 +192,7 @@ def concatenate(
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,  # process up to 100 positions at a time
         "slurm_time": 60,
-        "slurm_partition": "preempted",
+        "slurm_partition": "cpu",
     }
 
     # Override defaults if sbatch_filepath is provided
@@ -213,17 +213,26 @@ def concatenate(
     jobs = []
 
     with executor.batch():
-        for input_position_path, input_channel_idx, output_channel_idx in zip(
-            all_data_paths, input_channel_idx_list, output_channel_idx_list
+        for (
+            input_position_path,
+            output_position_path,
+            input_channel_idx,
+            output_channel_idx,
+        ) in zip(
+            all_data_paths,
+            output_position_paths_list,
+            input_channel_idx_list,
+            output_channel_idx_list,
         ):
             job = executor.submit(
-                process_single_position_v2,
-                copy_n_paste_czyx,
-                input_data_path=input_position_path,
-                output_path=output_dirpath,
-                time_indices=time_indices,
-                input_channel_idx=input_channel_idx,
-                output_channel_idx=output_channel_idx,
+                process_single_position,
+                copy_n_paste,
+                input_position_path=input_position_path,
+                output_position_path=output_position_path,
+                input_channel_indices=input_channel_idx,
+                output_channel_indices=output_channel_idx,
+                input_time_indices=input_time_indices,
+                output_time_indices=output_time_indices,
                 num_processes=int(slurm_args["slurm_cpus_per_task"]),
                 **copy_n_paste_kwargs,
             )
