@@ -22,9 +22,8 @@ classifiers = [
 dependencies = [
   "iohub @ git+https://github.com/czbiohub-sf/iohub",
   "matplotlib",
-  "napari; 'arm64' in platform_machine",                 # without Qt5 and skimage
-  "napari[all]; 'arm64' not in platform_machine",        # with Qt5 and skimage
-  "PyQt6; 'arm64' in platform_machine",
+  "napari",
+  "PyQt6",
   "natsort",
   "numpy<2",
   "markdown",
@@ -40,10 +39,12 @@ dependencies = [
   "largestinteriorrectangle",
   "antspyx",
   "pystackreg",
+  "napari-animation",
   "napari-psf-analysis",
+  "imageio-ffmpeg",
+  "cmap",
   "dask[array]",
 ]
-
 
 [project.optional-dependencies]
 # note that dev dependencies are only pinned to major versions
@@ -54,12 +55,6 @@ dev = [
   "pre-commit~=2.19",
   "pylint~=2.14",
   "pytest~=7.1",
-]
-visual = [
-  "PyQt6",
-  "napari",
-  "napari-animation",
-  "cmap",
 ]
 
 build = ["build", "twine"]
