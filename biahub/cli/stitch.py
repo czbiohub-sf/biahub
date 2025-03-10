@@ -234,14 +234,20 @@ def stitch(
     executor = submitit.AutoExecutor(folder=slurm_out_path)
     executor.update_parameters(**slurm_args)
 
-    stitch_job = executor.submit(
-        stitch_shifted_store,
-        shifted_store_path,
-        output_dirpath,
-        settings.postprocessing,
-        blending='average',
-        verbose=True,
-    )
+    stitch_jobs = []
+    with executor.batch():
+        for well in wells:
+            job = executor.submit(
+                stitch_shifted_store,
+                shifted_store_path,
+                output_dirpath,
+                settings.postprocessing,
+                well_names=[well],
+                blending='average',
+                verbose=True,
+            )
+            stitch_jobs.append(job)
+    stitch_job_ids = [job.job_id for job in stitch_jobs]
 
     if not debug:
         slurm_args = {
@@ -250,7 +256,7 @@ def stitch(
             "slurm_cpus_per_task": 1,
             "slurm_time": "0-01:00:00",  # in [DD-]HH:MM:SS format
             "slurm_job_name": "cleanup",
-            "slurm_dependency": f"afterok:{stitch_job.job_id}",
+            "slurm_dependency": f"afterok:{stitch_job_ids[0]}:{stitch_job_ids[-1]}",
         }
         executor = submitit.AutoExecutor(folder=slurm_out_path)
         executor.update_parameters(**slurm_args)

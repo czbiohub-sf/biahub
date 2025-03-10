@@ -326,6 +326,7 @@ def stitch_shifted_store(
     input_data_path: str,
     output_data_path: str,
     settings: ProcessingSettings,
+    well_names: list = None,
     blending="average",
     verbose=True,
 ):
@@ -340,6 +341,8 @@ def stitch_shifted_store(
         Path to the output zarr store.
     settings : ProcessingSettings
         Postprocessing settings.
+    well_names: list
+        Names of wells to stitch
     blending : str, optional
         Blending method. Defaults to "average".
     verbose : bool, optional
@@ -347,7 +350,13 @@ def stitch_shifted_store(
     """
     click.echo(f'Stitching zarr store: {input_data_path}')
     with open_ome_zarr(input_data_path, mode="r") as input_dataset:
-        for well_name, well in input_dataset.wells():
+        if not well_names:
+            # Get all well names
+            well_names = [well_name for well_name, _ in input_dataset.wells()]
+
+        for well_name in well_names:
+            well = input_dataset[well_name]
+
             if verbose:
                 click.echo(f'Processing well {well_name}')
 
