@@ -72,7 +72,7 @@ def segment_data(
         for preproc in preprocessing_functions:
             func = preproc.function
             kwargs = preproc.kwargs
-            c_idx = preproc["channel"]
+            c_idx = preproc.channel
 
             # Convert list to tuple for out_range if needed
             if "out_range" in kwargs and isinstance(kwargs["out_range"], list):
@@ -182,8 +182,8 @@ def segment(
         if model_args.preprocessing is not None:
             for preproc in model_args.preprocessing:
                 # Replace the channel name with the channel index
-                if preproc["channel"] is not None:
-                    preproc["channel"] = channel_names.index(preproc["channel"])
+                if preproc.channel is not None:
+                    preproc.channel = channel_names.index(preproc.channel)
                 else:
                     raise ValueError("Channel must be specified for preprocessing functions")
 
@@ -200,16 +200,17 @@ def segment(
     )
 
     # Estimate resources
-    num_cpus, gb_ram_request = estimate_resources(shape=segmentation_shape, ram_multiplier=16)
+    num_cpus, gb_ram_request = estimate_resources(shape=segmentation_shape, ram_multiplier=20)
     num_gpus = 1
-    slurm_time = np.ceil(np.max([60, T * 0.75])).astype(int)
+    slurm_time = np.ceil(np.max([80, T * 2.5])).astype(int)
+    slurm_array_parallelism = 100
     # Prepare SLURM arguments
     slurm_args = {
         "slurm_job_name": "segment",
         "slurm_gres": f"gpu:{num_gpus}",
         "slurm_mem_per_cpu": f"{gb_ram_request}G",
-        "slurm_cpus_per_task": num_cpus,
-        "slurm_array_parallelism": 100,  # process up to 100 positions at a time
+        "slurm_cpus_per_task": np.max([int(20 * 1.3), num_cpus]),
+        "slurm_array_parallelism": slurm_array_parallelism,  # process up to 20 positions at a time
         "slurm_time": slurm_time,
         "slurm_partition": "gpu",
     }
@@ -240,7 +241,7 @@ def segment(
                     output_position_path,
                     input_channel_indices=[list(range(C))],
                     output_channel_indices=[list(range(C_segment))],
-                    num_processes=np.max([1, num_cpus - 3]),
+                    num_processes=np.min([20, int(num_cpus * 0.8)]),
                     segmentation_models=segment_args,
                 )
             )
