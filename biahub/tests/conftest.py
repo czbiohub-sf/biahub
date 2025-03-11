@@ -67,6 +67,9 @@ def example_estimate_registration_settings():
 
 @pytest.fixture(scope="function")
 def example_plate(tmp_path):
+    """
+    Example HCS plate with 3 positions and 6 channels and float32 data
+    """
     plate_path = tmp_path / "plate.zarr"
 
     position_list = (
@@ -92,7 +95,10 @@ def example_plate(tmp_path):
 
 @pytest.fixture(scope="function")
 def example_plate_2(tmp_path):
-    plate_path = tmp_path / "plate.zarr"
+    """
+    Example HCS plate with 3 positions and 2 channels and uint16 data
+    """
+    plate_path = tmp_path / "plate_2.zarr"
 
     position_list = (
         ("A", "1", "0"),
@@ -111,6 +117,6 @@ def example_plate_2(tmp_path):
     for row, col, fov in position_list:
         position = plate_dataset.create_position(row, col, fov)
         position["0"] = np.random.randint(
-            0, np.iinfo(np.uint16).max, size=(3, 2, 4, 5, 6), dtype=np.uint16
+            100, np.iinfo(np.uint16).max, size=(3, 2, 4, 5, 6), dtype=np.uint16
         )
     yield plate_path, plate_dataset
