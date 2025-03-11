@@ -68,18 +68,18 @@ def process_video(file_path, output_dir):
         click.echo(f"Could not determine crop parameters for {filename_no_ext}")
 
 
-@click.command()
-@click.argument("video_dir", type=click.Path(exists=True, file_okay=False))
-@click.argument("output_dir", type=click.Path())
-def main(video_dir, output_dir):
-    """Batch process videos in VIDEO_DIR and save the output to OUTPUT_DIR."""
+@click.command("crop-background")
+@click.argument("input-dir", type=click.Path(exists=True, file_okay=False))
+@click.argument("output-dir", type=click.Path())
+def main(input_dir, output_dir):
+    """Batch process videos in VIDEO-DIR and save the output to OUTPUT-DIR."""
     # Ensure output directory exists
     os.makedirs(output_dir, exist_ok=True)
 
     # Process each mp4 file in the directory
-    for file_name in os.listdir(video_dir):
+    for file_name in os.listdir(input_dir):
         if file_name.endswith(".mp4"):
-            file_path = os.path.join(video_dir, file_name)
+            file_path = os.path.join(input_dir, file_name)
             process_video(file_path, output_dir)
 
 
