@@ -79,14 +79,9 @@ def get_slice(slice_param, max_value):
     return slice(0, max_value) if slice_param == "all" else slice(*slice_param)
 
 
-@click.command()
-@config_filepath()
-@output_dirpath()
-@sbatch_filepath()
-@local()
 def concatenate(
-    config_filepath: str,
-    output_dirpath: str,
+    settings: ConcatenateSettings,
+    output_dirpath: Path,
     sbatch_filepath: str = None,
     local: bool = False,
 ):
@@ -95,12 +90,7 @@ def concatenate(
 
     >> biahub concatenate -c ./concat.yml -o ./output_concat.zarr -j 8
     """
-    # Convert to Path objects
-    config_filepath = Path(config_filepath)
-    output_dirpath = Path(output_dirpath)
     slurm_out_path = output_dirpath.parent / "slurm_output"
-
-    settings = yaml_to_model(config_filepath, ConcatenateSettings)
 
     (
         all_data_paths,
@@ -242,5 +232,29 @@ def concatenate(
         log_file.write("\n".join(job_ids))
 
 
+@click.command("concatenate")
+@config_filepath()
+@output_dirpath()
+@sbatch_filepath()
+@local()
+def concatenate_cli(
+    config_filepath: str,
+    output_dirpath: str,
+    sbatch_filepath: str = None,
+    local: bool = False,
+):
+    """
+    Concatenate datasets (with optional cropping)
+
+    >> biahub concatenate -c ./concat.yml -o ./output_concat.zarr -j 8
+    """
+    concatenate(
+        settings=yaml_to_model(config_filepath, ConcatenateSettings),
+        output_dirpath=Path(output_dirpath),
+        sbatch_filepath=sbatch_filepath,
+        local=local,
+    )
+
+
 if __name__ == "__main__":
-    concatenate()
+    concatenate_cli()
