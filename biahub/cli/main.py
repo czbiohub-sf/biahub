@@ -15,7 +15,6 @@ from biahub.cli.register import register
 from biahub.cli.segment import segment
 from biahub.cli.stabilize import stabilize
 from biahub.cli.stitch import stitch
-from biahub.cli.update_scale_metadata import update_scale_metadata
 
 CONTEXT = {"help_option_names": ["-h", "--help"]}
 
@@ -39,7 +38,6 @@ cli.add_command(optimize_registration)
 cli.add_command(register)
 cli.add_command(estimate_stitch)
 cli.add_command(stitch)
-cli.add_command(update_scale_metadata)
 cli.add_command(concatenate)
 cli.add_command(estimate_stabilization)
 cli.add_command(stabilize)
