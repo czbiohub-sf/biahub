@@ -42,7 +42,6 @@ dependencies = [
   "napari-animation",
   "napari-psf-analysis",
   "imageio-ffmpeg",
-  "cmap",
   "dask[array]",
 ]
 
