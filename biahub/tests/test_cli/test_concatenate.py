@@ -7,6 +7,9 @@ from biahub.cli.concatenate import concatenate
 
 
 def test_concatenate_channels(example_plate_2, tmp_path):
+    """
+    Test concatenating channels across zarr stores with the same layout
+    """
     # Load example plate with three positions - A/1/0, B/1/0, B/2/0, and two channels - GFP, RFP
     plate_2_path, plate_2 = example_plate_2
     plate_2_channels = plate_2.channel_names
