@@ -23,7 +23,6 @@ def test_main():
         "register",
         "estimate-stitch",
         "stitch",
-        "update-scale-metadata",
         "concatenate",
         "estimate-stabilization",
         "stabilize",
