@@ -14,10 +14,10 @@ from iohub.ngff import open_ome_zarr
 from biahub.analysis.AnalysisSettings import CharacterizeSettings
 from biahub.analysis.analyze_psf import (
     analyze_psf,
+    compute_noise_level,
     detect_peaks,
     extract_beads,
     generate_report,
-    compute_noise_level,
 )
 from biahub.cli.parsing import config_filepath, input_position_dirpaths, output_dirpath
 from biahub.cli.utils import yaml_to_model

@@ -18,8 +18,8 @@ from napari_psf_analysis.psf_analysis.extract.BeadExtractor import BeadExtractor
 from napari_psf_analysis.psf_analysis.image import Calibrated3DImage
 from napari_psf_analysis.psf_analysis.psf import PSF
 from numpy.typing import ArrayLike
-from scipy.signal import peak_widths
 from scipy.interpolate import interp1d
+from scipy.signal import peak_widths
 
 import biahub.analysis.templates
 
@@ -97,7 +97,13 @@ def generate_report(
 
     # make plots
     (bead_psf_slices_path, fwhm_vs_acq_axes_paths, psf_amp_paths) = _make_plots(
-        output_path, beads, df_gaussian_fit, df_1d_peak_width, scale, axis_labels, fwhm_plot_type
+        output_path,
+        beads,
+        df_gaussian_fit,
+        df_1d_peak_width,
+        scale,
+        axis_labels,
+        fwhm_plot_type,
     )
 
     # calculate statistics
@@ -268,7 +274,10 @@ def compute_noise_level(
 
     for z, y, x in peak_coordinates:
         patch_mask = tuple(
-            slice(max(0, coord - half_patch[i]), min(zyx_data.shape[i], coord + half_patch[i] + 1))
+            slice(
+                max(0, coord - half_patch[i]),
+                min(zyx_data.shape[i], coord + half_patch[i] + 1),
+            )
             for i, coord in enumerate((z, y, x))
         )
         mask[patch_mask] = False
@@ -301,7 +310,7 @@ def calculate_robust_peak_widths(zyx_data: ArrayLike, zyx_scale: tuple):
 
             # Use linear interpolation on each side of the peak to find FWHM
             x = x * _scale
-            indices = np.where(y >= half_max/2)[0]
+            indices = np.where(y >= half_max / 2)[0]
             _il = indices[indices < peak_index]
             _ir = indices[indices > peak_index]
             _fl = interp1d(y[_il], x[_il], kind="linear", fill_value="extrapolate")
