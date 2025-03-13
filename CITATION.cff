@@ -49,6 +49,10 @@ authors:
     orcid: "https://orcid.org/0000-0002-2542-3582"
 repository-code: "https://github.com/czbiohub-sf/biahub"
 abstract: Bio-image analysis hub supporting high-throughput data reconstruction on HPC clusters with Slurm workload management.
-keywords: bio-image analysis, image-analysis, image-processing, image-reconstruction, image-analysis-hub
+keywords:
+  - bio-image-analysis
+  - image-processing
+  - image-reconstruction
+  - image-analysis-hub
 license: BSD-3-Clause
 date-released: "2025-03-13"
