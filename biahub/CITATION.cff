@@ -14,7 +14,7 @@ authors:
     affiliation: Chan Zuckerberg Biohub San Francisco
     orcid: 'https://orcid.org/0000-0001-6389-0213'
   - given-names: Eduardo
-    family-names: Hirata Miyasaki
+    family-names: Hirata-Miyasaki
     email: eduardo.hirata@czbiohub.org
     affiliation: Chan Zuckerberg Biohub San Francisco
     orcid: 'https://orcid.org/0000-0002-1016-2447'
@@ -33,6 +33,16 @@ authors:
     email: taylla.theodoro@czbiohub.org
     affiliation: Chan Zuckerberg Biohub San Francisco
     orcid: 'https://orcid.org/0000-0003-2651-9890'
+  - given-names: 'Alexander'
+    family-names: Hillsley
+    email: alexander.hillsley@czbiohub.org
+    affiliation: Chan Zuckerberg Biohub San Francisco
+    orcid: 'https://orcid.org/0000-0001-7920-2104'
+  - given-names: 'Allyson Q.'
+    family-names: Ryan
+    email: allyson.ryan@czbiohub.org
+    affiliation: Chan Zuckerberg Biohub San Francisco
+    orcid: 'https://orcid.org/0000-0002-3673-2874'
   - given-names: 'Shalin B.'
     family-names: Mehta
     affiliation: Chan Zuckerberg Biohub San Francisco
