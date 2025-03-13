@@ -8,47 +8,47 @@ message: >-
   metadata from this file.
 type: software
 authors:
-  - given-names: 'Ivan E.'
+  - given-names: Ivan E.
     family-names: Ivanov
     email: ivan.ivanov@czbiohub.org
     affiliation: Chan Zuckerberg Biohub San Francisco
-    orcid: 'https://orcid.org/0000-0001-6389-0213'
+    orcid: "https://orcid.org/0000-0001-6389-0213"
   - given-names: Eduardo
     family-names: Hirata-Miyasaki
     email: eduardo.hirata@czbiohub.org
     affiliation: Chan Zuckerberg Biohub San Francisco
-    orcid: 'https://orcid.org/0000-0002-1016-2447'
+    orcid: "https://orcid.org/0000-0002-1016-2447"
   - given-names: Talon
     family-names: Chandler
     email: talon.chandler@czbiohub.org
     affiliation: Chan Zuckerberg Biohub San Francisco
-    orcid: 'https://orcid.org/0000-0002-3033-674X'
+    orcid: "https://orcid.org/0000-0002-3033-674X"
   - given-names: Ziwen
     family-names: Liu
     email: ziwen.liu@czbiohub.org
     affiliation: Chan Zuckerberg Biohub San Francisco
-    orcid: 'https://orcid.org/0000-0001-7482-1299'
-  - given-names: 'Taylla M.'
+    orcid: "https://orcid.org/0000-0001-7482-1299"
+  - given-names: Taylla M.
     family-names: Theodoro
     email: taylla.theodoro@czbiohub.org
     affiliation: Chan Zuckerberg Biohub San Francisco
-    orcid: 'https://orcid.org/0000-0003-2651-9890'
-  - given-names: 'Alexander'
+    orcid: "https://orcid.org/0000-0003-2651-9890"
+  - given-names: Alexander
     family-names: Hillsley
     email: alexander.hillsley@czbiohub.org
     affiliation: Chan Zuckerberg Biohub San Francisco
-    orcid: 'https://orcid.org/0000-0001-7920-2104'
-  - given-names: 'Allyson Q.'
+    orcid: "https://orcid.org/0000-0001-7920-2104"
+  - given-names: Allyson Q.
     family-names: Ryan
     email: allyson.ryan@czbiohub.org
     affiliation: Chan Zuckerberg Biohub San Francisco
-    orcid: 'https://orcid.org/0000-0002-3673-2874'
-  - given-names: 'Shalin B.'
+    orcid: "https://orcid.org/0000-0002-3673-2874"
+  - given-names: Shalin B.
     family-names: Mehta
     affiliation: Chan Zuckerberg Biohub San Francisco
-    orcid: 'https://orcid.org/0000-0002-2542-3582'
-repository-code: 'https://github.com/czbiohub-sf/biahub'
+    orcid: "https://orcid.org/0000-0002-2542-3582"
+repository-code: "https://github.com/czbiohub-sf/biahub"
 abstract: Bio-image analysis hub supporting high-throughput data reconstruction on HPC clusters with Slurm workload management.
 keywords: bio-image analysis, image-analysis, image-processing, image-reconstruction, image-analysis-hub
 license: BSD-3-Clause
-date-released: '2025-03-13'
+date-released: "2025-03-13"
