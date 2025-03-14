@@ -112,7 +112,8 @@ def concatenate(
             all_voxel_sizes.append(dataset.scale[-3:])
 
     if not all([shape == all_shapes[0] for shape in all_shapes]):
-        raise ValueError("All shapes must match")
+        if settings.Z_slice == settings.Y_slice == settings.X_slice == 'all':
+            raise ValueError("All shapes must match or crop dimentions.")
     if not all([voxel_size == all_voxel_sizes[0] for voxel_size in all_voxel_sizes]):
         raise ValueError("All voxel sizes must match")
     T, C, Z, Y, X = all_shapes[0]
