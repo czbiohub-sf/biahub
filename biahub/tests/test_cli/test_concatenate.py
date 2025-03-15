@@ -110,6 +110,38 @@ def test_concatenate_with_time_indices(create_custom_plate, tmp_path):
     assert output_plate["A/1/0"].data.shape[0] == 2
 
 
+def test_concatenate_with_single_slice_to_all(create_custom_plate, tmp_path):
+    """
+    Test concatenating with a single slice applied to all datasets
+    """
+    plate_1_path, plate_1 = create_custom_plate(
+        tmp_path / 'zarr1', time_points=3, z_size=4, y_size=6, x_size=8
+    )
+    plate_2_path, plate_2 = create_custom_plate(
+        tmp_path / 'zarr2', time_points=3, z_size=4, y_size=6, x_size=8
+    )
+
+    settings = ConcatenateSettings(
+        concat_data_paths=[str(plate_1_path) + "/*/*/*", str(plate_2_path) + "/*/*/*"],
+        channel_names=['all', 'all'],
+        time_indices='all',
+        Z_slice=[0, 2],
+        Y_slice=[0, 3],
+        X_slice=[0, 4],
+    )
+
+    output_path = tmp_path / "output.zarr"
+    concatenate(
+        settings=settings,
+        output_dirpath=output_path,
+        local=True,
+    )
+
+    output_plate = open_ome_zarr(output_path)
+
+    assert output_plate["A/1/0"].data.shape == (3, 3, 2, 3, 4)
+
+
 def test_concatenate_with_spatial_cropping(create_custom_plate, tmp_path):
     """
     Test concatenating with spatial cropping
