@@ -13,6 +13,7 @@ from pydantic import (
     PositiveFloat,
     PositiveInt,
     field_validator,
+    model_validator,
     validator,
 )
 
@@ -149,10 +150,11 @@ class ConcatenateSettings(MyBaseModel):
     concat_data_paths: list[str]
     time_indices: Union[int, list[int], Literal["all"]] = "all"
     channel_names: list[Union[str, list[str]]]
-    X_slice: Union[list[int], Literal["all"]] = "all"
-    Y_slice: Union[list[int], Literal["all"]] = "all"
-    Z_slice: Union[list[int], Literal["all"]] = "all"
+    X_slice: Union[list, list[Union[list, Literal["all"]]], Literal["all"]] = "all"
+    Y_slice: Union[list, list[Union[list, Literal["all"]]], Literal["all"]] = "all"
+    Z_slice: Union[list, list[Union[list, Literal["all"]]], Literal["all"]] = "all"
     chunks_czyx: Union[Literal[None], list[int]] = None
+    ensure_unique_positions: Optional[bool] = None
 
     @field_validator("concat_data_paths")
     @classmethod
@@ -170,13 +172,90 @@ class ConcatenateSettings(MyBaseModel):
 
     @field_validator("X_slice", "Y_slice", "Z_slice")
     @classmethod
-    def check_slices(cls, v):
-        if v != "all" and (
-            not isinstance(v, list)
-            or len(v) != 2
-            or not all(isinstance(i, int) and i >= 0 for i in v)
+    def check_slices(cls, v, info):
+        if v == "all":
+            return v
+
+        if not isinstance(v, list):
+            raise ValueError("Slice must be 'all' or a list.")
+
+        # Check if it's a list of per-path slice specifications
+        if any(
+            isinstance(item, list) and any(isinstance(subitem, list) for subitem in item)
+            for item in v
         ):
-            raise ValueError("Slices must be 'all' or lists of two non-negative integers.")
+            # This is a list of per-path slice specifications
+            # Each item should be a valid slice specification
+            for item in v:
+                if item == "all":
+                    continue
+
+                # Check if it's a simple [start, end] format
+                if (
+                    isinstance(item, list)
+                    and len(item) == 2
+                    and all(isinstance(i, int) for i in item)
+                ):
+                    if not all(i >= 0 for i in item):
+                        raise ValueError("Slice indices must be non-negative integers.")
+                    continue
+
+                # Check if it's a list of slice ranges or mixed format
+                if isinstance(item, list):
+                    for subitem in item:
+                        # Subitem can be 'all'
+                        if subitem == "all":
+                            continue
+
+                        # Subitem can be a single slice range [start, end]
+                        if (
+                            isinstance(subitem, list)
+                            and len(subitem) == 2
+                            and all(isinstance(i, int) for i in subitem)
+                        ):
+                            if not all(i >= 0 for i in subitem):
+                                raise ValueError(
+                                    "Slice indices must be non-negative integers."
+                                )
+                            continue
+
+                        # If we get here, the subitem is invalid
+                        raise ValueError(
+                            "Each slice subitem must be 'all' or a list of two non-negative integers [start, end]."
+                        )
+                else:
+                    raise ValueError(
+                        "Each item in a per-path slice list must be 'all' or a valid slice specification."
+                    )
+            return v
+
+        # Check if it's a simple [start, end] format
+        if len(v) == 2 and all(isinstance(i, int) for i in v):
+            if not all(i >= 0 for i in v):
+                raise ValueError("Slice indices must be non-negative integers.")
+            return v
+
+        # Check if it's a list of slice ranges or mixed format
+        for item in v:
+            # Item can be 'all'
+            if item == "all":
+                continue
+
+            # Item can be a single slice range [start, end]
+            if (
+                isinstance(item, list)
+                and len(item) == 2
+                and all(isinstance(i, int) for i in item)
+            ):
+                if not all(i >= 0 for i in item):
+                    raise ValueError("Slice indices must be non-negative integers.")
+                continue
+
+            # If we get here, the item is invalid
+            raise ValueError(
+                "Each slice item must be 'all' or a list of two non-negative integers [start, end]."
+            )
+
         return v
 
     @field_validator("chunks_czyx")
@@ -187,6 +266,51 @@ class ConcatenateSettings(MyBaseModel):
         ):
             raise ValueError("chunks_czyx must be a list of 4 integers (C, Z, Y, X)")
         return v
+
+    @model_validator(mode="after")
+    def validate_slice_lengths(self):
+        # Get the length of concat_data_paths
+        data_paths = self.concat_data_paths
+        if not data_paths:
+            return self
+
+        # Check X_slice
+        x_slice = self.X_slice
+        if (
+            isinstance(x_slice, list)
+            and x_slice != "all"
+            and len(x_slice) != len(data_paths)
+            and not (len(x_slice) == 2 and all(isinstance(i, int) for i in x_slice))
+        ):
+            raise ValueError(
+                f"X_slice must be 'all', a single slice specification, or a list with the same length as concat_data_paths ({len(data_paths)})"
+            )
+
+        # Check Y_slice
+        y_slice = self.Y_slice
+        if (
+            isinstance(y_slice, list)
+            and y_slice != "all"
+            and len(y_slice) != len(data_paths)
+            and not (len(y_slice) == 2 and all(isinstance(i, int) for i in y_slice))
+        ):
+            raise ValueError(
+                f"Y_slice must be 'all', a single slice specification, or a list with the same length as concat_data_paths ({len(data_paths)})"
+            )
+
+        # Check Z_slice
+        z_slice = self.Z_slice
+        if (
+            isinstance(z_slice, list)
+            and z_slice != "all"
+            and len(z_slice) != len(data_paths)
+            and not (len(z_slice) == 2 and all(isinstance(i, int) for i in z_slice))
+        ):
+            raise ValueError(
+                f"Z_slice must be 'all', a single slice specification, or a list with the same length as concat_data_paths ({len(data_paths)})"
+            )
+
+        return self
 
 
 class StabilizationSettings(MyBaseModel):

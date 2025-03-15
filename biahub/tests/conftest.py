@@ -120,3 +120,58 @@ def example_plate_2(tmp_path):
             100, np.iinfo(np.uint16).max, size=(3, 2, 4, 5, 6), dtype=np.uint16
         )
     yield plate_path, plate_dataset
+
+
+@pytest.fixture(scope="function")
+def create_custom_plate():
+    """
+    Factory fixture that creates an HCS plate with customizable channel names
+
+    Returns a function that creates a plate with the specified channel names
+    """
+
+    def _create_plate(
+        tmp_path,
+        position_list=[("A", "1", "0"), ("B", "1", "0"), ("B", "2", "0")],
+        channel_names=["GFP", "RFP", "Phase3D"],
+        time_points=3,
+        z_size=4,
+        y_size=5,
+        x_size=6,
+    ):
+        """
+        Create a plate with custom channel names
+
+        Args:
+            tmp_path: Temporary path for the plate
+            channel_names: List of channel names
+            time_points: Number of time points (default: 3)
+            z_size: Size of Z dimension (default: 4)
+            y_size: Size of Y dimension (default: 5)
+            x_size: Size of X dimension (default: 6)
+
+        Returns:
+            Tuple of (plate_path, plate_dataset)
+        """
+        plate_path = tmp_path / f"plate_custom_{'-'.join(channel_names)}.zarr"
+
+        # Generate input dataset
+        plate_dataset = open_ome_zarr(
+            plate_path,
+            layout="hcs",
+            mode="w",
+            channel_names=channel_names,
+        )
+
+        for row, col, fov in position_list:
+            position = plate_dataset.create_position(row, col, fov)
+            position["0"] = np.random.randint(
+                100,
+                np.iinfo(np.uint16).max,
+                size=(time_points, len(channel_names), z_size, y_size, x_size),
+                dtype=np.uint16,
+            )
+
+        return plate_path, plate_dataset
+
+    return _create_plate
