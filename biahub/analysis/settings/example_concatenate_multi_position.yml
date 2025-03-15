@@ -1,0 +1,19 @@
+# Cherry-picking FOV from multiple datasets
+# This config will append channels to the respective channel names in the output store.
+concat_data_paths:
+- '../../1-preprocess/label-free/1-stabilize/2024_11_01.zarr/0/1/000003'
+- '../../1-preprocess/light-sheet/raw/2-register/2024_11_01.zarr/0/1/000003'
+- '../../1-preprocess/label-free/1-stabilize/2024_11_01.zarr/0/1/000004'
+- '../../1-preprocess/light-sheet/raw/2-register/2024_11_01.zarr/0/1/000004'
+- '../../1-preprocess/label-free/1-stabilize/2024_11_01.zarr/0/2/000000'
+- '../../1-preprocess/light-sheet/raw/2-register/2024_11_01.zarr/0/2/000000'
+- '../../1-preprocess/label-free/1-stabilize/2024_11_01.zarr/0/2/000001'
+- '../../1-preprocess/light-sheet/raw/2-register/2024_11_01.zarr/0/2/000001'
+time_indices: all  # replace "all" with e.g. "[0, 1, 2]"" for cropping
+channel_names: [['Phase3D'], ['GFP EX488 EM525-45', 'mCherry EX561 EM600-37'], ['Phase3D'],  ['GFP EX488 EM525-45', 'mCherry EX561 EM600-37'], ['Phase3D'], ['GFP EX488 EM525-45', 'mCherry EX561 EM600-37'], ['Phase3D'], ['GFP EX488 EM525-45', 'mCherry EX561 EM600-37']]
+# X_slice: all
+# Y_slice: [374, 1328]
+X_slice: [5, 695]
+Y_slice: [120, 471]
+Z_slice: [54, 123]
+chunks_czyx: [1,21,351,690]  # replace "null" with e.g. "[1, 100, 100, 100]" for desired chunking [C,Z,Y,X]

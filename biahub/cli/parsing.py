@@ -128,7 +128,7 @@ def sbatch_filepath() -> Callable:
     return decorator
 
 
-def sbatch_to_submitit(value: Path) -> dict:
+def sbatch_to_submitit(filepath: str) -> dict:
     """Reads an sbatch file and returns a dictionary of slurm parameters,
     ready for submitit.
 
@@ -154,7 +154,7 @@ def sbatch_to_submitit(value: Path) -> dict:
     {'slurm_mem_per_cpu': '16G', 'slurm_time': '1:00:00'}
     """
 
-    with open(value, "r") as f:
+    with open(filepath, "r") as f:
         sbatch_file = f.readlines()
 
     sbatch_dict = {}

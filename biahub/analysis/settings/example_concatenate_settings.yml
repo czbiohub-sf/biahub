@@ -1,7 +1,118 @@
-concat_data_paths: ["/path/to/data.zarr/*/*/*","/path/to/data2.zarr/*/*/*"]
-time_indices: all  # replace "all" with e.g. "[0, 1, 2]"" for cropping
-channel_names: [all,all]  # replace "all" with e.g. "[['Retardance', 'Orientation'], all]" for cropping
-X_slice: all  # replace "all" with e.g. "[0, 100]" for cropping
-Y_slice: all  # replace "all" with e.g. "[0, 100]" for cropping
-Z_slice: all  # replace "all" with e.g. "[0, 100]" for cropping
-chunks_czyx: null  # replace "null" with e.g. "[1, 100, 100, 100]" for desired chunking [C,Z,Y,X]
+# Example configuration file for the concatenate command
+# This file demonstrates various ways to use the concatenation functionality
+
+# List of paths to concatenate - can use glob patterns
+# Each path will be treated as a separate input dataset
+concat_data_paths:
+  - "/path/to/data1.zarr/*/*/*"  # First dataset
+  - "/path/to/data2.zarr/*/*/*"  # Second dataset
+  # - "/path/to/data3.zarr/A/1/0"  # You can also specify exact positions
+
+# Time indices to include in the output
+# Options:
+#   - "all": Include all time points (default)
+#   - [0, 1, 2]: Include only specific time points
+#   - 5: Include only a single time point
+time_indices: "all"
+
+# Channel names to include from each dataset
+# Options:
+#   - "all": Include all channels from the dataset
+#   - ["DAPI", "GFP"]: Include only specific channels
+#   - For multiple datasets, specify channels for each:
+#     [["DAPI"], ["GFP", "RFP"]] - Take DAPI from first dataset, GFP and RFP from second
+channel_names:
+  - "all"  # Include all channels from first dataset
+  - "all"  # Include all channels from second dataset
+
+# Spatial cropping options for X dimension
+# Options:
+#   - "all": Include the entire X dimension (default)
+#   - [0, 100]: Crop from X=0 to X=100 for all datasets (single slice applied to all)
+#   - Per-path slicing: Specify different slices for each dataset:
+#     [[0, 100], [50, 150]] - Crop first dataset from X=0-100, second from X=50-150
+X_slice: "all"
+
+# Spatial cropping options for Y dimension
+# Options:
+#   - "all": Include the entire Y dimension (default)
+#   - [0, 100]: Crop from Y=0 to Y=100 for all datasets (single slice applied to all)
+#   - Per-path slicing: Specify different slices for each dataset:
+#     [[0, 100], [50, 150]] - Crop first dataset from Y=0-100, second from Y=50-150
+Y_slice: "all"
+
+# Spatial cropping options for Z dimension
+# Options:
+#   - "all": Include the entire Z dimension (default)
+#   - [0, 10]: Crop from Z=0 to Z=10 for all datasets (single slice applied to all)
+#   - Per-path slicing: Specify different slices for each dataset:
+#     [[0, 5], [2, 7]] - Crop first dataset from Z=0-5, second from Z=2-7
+Z_slice: "all"
+
+# Chunking options for the output dataset [C, Z, Y, X]
+# Options:
+#   - null: Use default chunking (recommended for most cases)
+#   - [1, 10, 100, 100]: Specify custom chunk sizes
+chunks_czyx: null
+
+# Whether to ensure unique position names in the output
+# Options:
+#   - null or false: Positions with the same name will overwrite each other
+#   - true: Ensure unique position names by adding suffixes (e.g., A/1d1/0)
+ensure_unique_positions: null
+
+# EXAMPLE USE CASES:
+
+# 1. Basic concatenation of all data:
+# concat_data_paths: ["/path/to/data1.zarr/*/*/*", "/path/to/data2.zarr/*/*/*"]
+# channel_names: ["all", "all"]
+# time_indices: "all"
+# X_slice: "all"
+# Y_slice: "all"
+# Z_slice: "all"
+
+# 2. Concatenate specific channels from different datasets:
+# concat_data_paths: ["/path/to/data1.zarr/*/*/*", "/path/to/data2.zarr/*/*/*"]
+# channel_names: [["DAPI", "Cy5"], ["GFP", "RFP"]]
+# time_indices: "all"
+
+# 3. Concatenate with uniform cropping (same crop for all datasets):
+# concat_data_paths: ["/path/to/data1.zarr/*/*/*", "/path/to/data2.zarr/*/*/*"]
+# channel_names: ["all", "all"]
+# time_indices: "all"
+# X_slice: [0, 100]  # Single slice specification applied to all datasets
+# Y_slice: [0, 100]  # Single slice specification applied to all datasets
+# Z_slice: [0, 10]   # Single slice specification applied to all datasets
+
+# 4. Concatenate with per-path slicing (different crop for each dataset):
+# concat_data_paths: ["/path/to/data1.zarr/*/*/*", "/path/to/data2.zarr/*/*/*"]
+# channel_names: ["all", "all"]
+# time_indices: "all"
+# X_slice: [[0, 100], [50, 150]]  # Crop X=0-100 for first dataset, X=50-150 for second
+# Y_slice: [[0, 100], [50, 150]]  # Crop Y=0-100 for first dataset, Y=50-150 for second
+# Z_slice: [[0, 5], [2, 7]]       # Crop Z=0-5 for first dataset, Z=2-7 for second
+
+# 5. Concatenate with mixed slice formats:
+# concat_data_paths: ["/path/to/data1.zarr/*/*/*", "/path/to/data2.zarr/*/*/*"]
+# channel_names: ["all", "all"]
+# time_indices: "all"
+# X_slice: [[0, 100], "all"]  # Crop X=0-100 for first dataset, use all X for second
+# Y_slice: ["all", [50, 150]] # Use all Y for first dataset, crop Y=50-150 for second
+# Z_slice: [[0, 5], "all"]    # Crop Z=0-5 for first dataset, use all Z for second
+
+# 6. Ensure unique position names:
+# concat_data_paths: ["/path/to/data1.zarr/A/1/0", "/path/to/data2.zarr/A/1/0"]
+# channel_names: ["all", "all"]
+# time_indices: "all"
+# ensure_unique_positions: true  # Will create positions A/1/0 and A/1d1/0
+
+# 7. Single slice specification applied to all datasets:
+# concat_data_paths:
+#   - "/path/to/data1.zarr/*/*/*"
+#   - "/path/to/data2.zarr/*/*/*"
+#   - "/path/to/data3.zarr/*/*/*"
+# channel_names: ["all", "all", "all"]
+# time_indices: "all"
+# X_slice: [0, 100]  # This single slice [0, 100] will be applied to all three datasets
+# Y_slice: [0, 100]  # This single slice [0, 100] will be applied to all three datasets
+# Z_slice: [0, 10]   # This single slice [0, 10] will be applied to all three datasets

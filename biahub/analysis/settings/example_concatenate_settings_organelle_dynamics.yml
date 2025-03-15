@@ -1,0 +1,15 @@
+concat_data_paths:
+- '../1-preprocess/label-free/1-stabilize/2024_10_09_A549_TOMM20_ZIKV_DENV.zarr/*/*/*'
+- '../1-preprocess/label-free/2-virtual-stain/2024_10_09_A549_TOMM20_ZIKV_DENV.zarr/*/*/*'
+- '../1-preprocess/light-sheet/raw/2-register/2024_10_09_A549_TOMM20_ZIKV_DENV.zarr/*/*/*'
+- '../1-preprocess/light-sheet/deconvolved/2-stabilize-register/2024_10_09_A549_TOMM20_ZIKV_DENV.zarr/*/*/*'
+time_indices: all  # replace "all" with e.g. "[0, 1, 2]"" for cropping
+channel_names:
+- all
+- all
+- all
+- all
+X_slice: [200, 1300]
+Y_slice: [374, 1174]
+Z_slice: [8, 105]
+chunks_czyx: null  # replace "null" with e.g. "[1, 100, 100, 100]" for desired chunking [C,Z,Y,X]
