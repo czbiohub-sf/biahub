@@ -21,7 +21,7 @@ from numpy.typing import ArrayLike
 from scipy.interpolate import interp1d
 from scipy.signal import peak_widths
 
-import biahub.analysis.templates
+import biahub.artefacts
 
 
 def _make_plots(
@@ -152,7 +152,7 @@ def generate_report(
     df_gaussian_fit.to_csv(output_path / 'psf_gaussian_fit.csv', index=False)
     df_1d_peak_width.to_csv(output_path / 'psf_1d_peak_width.csv', index=False)
 
-    with pkg_resources.path(biahub.analysis.templates, 'github-markdown.css') as css_path:
+    with pkg_resources.path(biahub.artefacts, 'github-markdown.css') as css_path:
         shutil.copy(css_path, output_path)
     html_file_path = output_path / ('psf_analysis_report.html')
     with open(html_file_path, 'w') as file:
