@@ -14,6 +14,7 @@ from iohub.ngff import open_ome_zarr
 from biahub.analysis.AnalysisSettings import CharacterizeSettings
 from biahub.analysis.analyze_psf import (
     analyze_psf,
+    compute_noise_level,
     detect_peaks,
     extract_beads,
     generate_report,
@@ -33,6 +34,10 @@ def _characterize_psf(
     settings_dict = settings.model_dump()
     patch_size = settings_dict.pop("patch_size")
     axis_labels = settings_dict.pop("axis_labels")
+    offset = settings_dict.pop("offset")
+    gain = settings_dict.pop("gain")
+    use_robust_1d_fwhm = settings_dict.pop("use_robust_1d_fwhm")
+    fwhm_plot_type = settings_dict.pop("fwhm_plot_type")
 
     click.echo("Detecting peaks...")
     t1 = time.time()
@@ -47,11 +52,21 @@ def _characterize_psf(
     click.echo(f'Time to detect peaks: {t2-t1}')
 
     t1 = time.time()
-    beads, offsets = extract_beads(
+    beads, peak_coordinates = extract_beads(
         zyx_data=zyx_data,
         points=peaks,
         scale=zyx_scale,
         patch_size=patch_size,
+    )
+
+    if len(beads) == 0:
+        raise RuntimeError("No beads were detected.")
+
+    patch_size_pix = np.ceil(np.array(patch_size) / np.array(zyx_scale)).astype(int)
+    noise = compute_noise_level(
+        zyx_data,
+        peak_coordinates,
+        patch_size_pix,
     )
 
     click.echo("Analyzing PSFs...")
@@ -59,8 +74,12 @@ def _characterize_psf(
         warnings.simplefilter("ignore")
         df_gaussian_fit, df_1d_peak_width = analyze_psf(
             zyx_patches=beads,
-            bead_offsets=offsets,
+            peak_coordinates=peak_coordinates,
             scale=zyx_scale,
+            offset=offset,
+            gain=gain,
+            noise=noise,
+            use_robust_1d_fwhm=use_robust_1d_fwhm,
         )
     t2 = time.time()
     click.echo(f'Time to analyze PSFs: {t2-t1}')
@@ -76,6 +95,7 @@ def _characterize_psf(
         df_1d_peak_width,
         zyx_scale,
         axis_labels,
+        fwhm_plot_type,
     )
 
     return peaks
@@ -98,16 +118,20 @@ def characterize_psf(
     if len(input_position_dirpaths) > 1:
         warnings.warn("Only the first position will be characterized.")
 
+    # Read settings
+    settings = yaml_to_model(config_filepath, CharacterizeSettings)
+    dataset_name = Path(input_position_dirpaths[0]).parts[-4]
+
     click.echo("Loading data...")
     with open_ome_zarr(str(input_position_dirpaths[0]), mode="r") as input_dataset:
         T, C, Z, Y, X = input_dataset.data.shape
         zyx_data = input_dataset["0"][0, 0]
         zyx_scale = input_dataset.scale[-3:]
 
-    # Read settings
-    settings = yaml_to_model(config_filepath, CharacterizeSettings)
-    dataset_name = Path(input_position_dirpaths[0]).parts[-4]
-
     _ = _characterize_psf(
         zyx_data, zyx_scale, settings, output_dirpath, input_position_dirpaths[0], dataset_name
     )
+
+
+if __name__ == "__main__":
+    characterize_psf()
