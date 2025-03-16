@@ -154,7 +154,7 @@ class ConcatenateSettings(MyBaseModel):
     Y_slice: Union[list, list[Union[list, Literal["all"]]], Literal["all"]] = "all"
     Z_slice: Union[list, list[Union[list, Literal["all"]]], Literal["all"]] = "all"
     chunks_czyx: Union[Literal[None], list[int]] = None
-    ensure_unique_positions: Optional[bool] = None
+    ensure_unique_positions: Optional[bool] = False
 
     @field_validator("concat_data_paths")
     @classmethod

@@ -57,7 +57,7 @@ chunks_czyx: null
 
 # Whether to ensure unique position names in the output
 # Options:
-#   - null or false: Positions with the same name will overwrite each other
+#   - false or null: Positions with the same name will overwrite each other
 #   - true: Ensure unique position names by adding suffixes (e.g., A/1d1/0)
 ensure_unique_positions: null
 
