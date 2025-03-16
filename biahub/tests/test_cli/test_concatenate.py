@@ -156,9 +156,9 @@ def test_concatenate_with_single_slice_to_all(create_custom_plate, tmp_path):
     assert output_plate["A/1/0"].data.shape == (T, 4, 2, 3, 4)
 
 
-def test_concatenate_with_spatial_cropping(create_custom_plate, tmp_path):
+def test_concatenate_with_cropping(create_custom_plate, tmp_path):
     """
-    Test concatenating with spatial cropping
+    Test concatenating with cropping
     """
     Z, Y, X = 4, 6, 8
     # Create example plates
@@ -299,9 +299,10 @@ def test_concatenate_multiple_plates(create_custom_plate, tmp_path):
     assert output_plate["A/1/0"].data.shape[1] == 5  # channels
 
 
-def test_concatenate_n_crop(create_custom_plate, tmp_path):
+def test_concatenate_mismatched_with_cropping(create_custom_plate, tmp_path):
     """
-    Test concatenating and cropping
+    Test concatenating zarr stores of mismatched shapes with cropping to the
+    same output shape
     """
     plate_1_path, plate_1 = create_custom_plate(
         tmp_path / 'zarr1', time_points=3, z_size=2, y_size=3, x_size=3
