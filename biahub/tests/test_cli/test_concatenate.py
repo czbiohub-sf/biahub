@@ -388,46 +388,21 @@ def test_concatenate_with_mixed_slice_formats(create_custom_plate, tmp_path):
 
 def test_concatenate_with_unique_positions(create_custom_plate, tmp_path):
     """
-    Test concatenating with ensure_unique_positions=True to prevent overwriting
-    when multiple inputs have the same position names
+    Similar to test_concatenate_channels, but with ensure_unique_positions=True
+    to prevent overwriting when multiple inputs have the same position names
     """
-    # Create two plates with the same position names
+    # Create example plates with same layout and different channels
+    position_list = ["A/1/0", "B/1/0"]
     plate_1_path, plate_1 = create_custom_plate(
         tmp_path / 'zarr1',
-        channel_names=["DAPI", "Cy5"],
-        position_list=[("A", "1", "0"), ("B", "1", "0")],
+        position_list=[p.split("/") for p in position_list],
+        channel_names=['DAPI', 'Cy5'],
     )
-
     plate_2_path, plate_2 = create_custom_plate(
         tmp_path / 'zarr2',
+        position_list=[p.split("/") for p in position_list],
         channel_names=["GFP", "RFP"],
-        position_list=[("A", "1", "0"), ("B", "1", "0")],  # Same position names as plate_1
     )
-
-    # First test: without ensure_unique_positions (default behavior)
-    settings_default = ConcatenateSettings(
-        concat_data_paths=[
-            str(plate_1_path) + "/A/1/0",
-            str(plate_2_path) + "/A/1/0",  # Same position name
-        ],
-        channel_names=['all', 'all'],
-        time_indices='all'
-        # ensure_unique_positions not specified (defaults to None)
-    )
-
-    output_path_default = tmp_path / "output_default.zarr"
-    concatenate(
-        settings=settings_default,
-        output_dirpath=output_path_default,
-        local=True,
-    )
-
-    output_plate_default = open_ome_zarr(output_path_default)
-
-    # Check that there's only one position (the second input overwrote the first)
-    output_positions_default = [pos_name for pos_name, _ in output_plate_default.positions()]
-    assert len(output_positions_default) == 1
-    assert "A/1/0" in output_positions_default
 
     # Now test with ensure_unique_positions=True
     settings_unique = ConcatenateSettings(
