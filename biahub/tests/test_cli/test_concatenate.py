@@ -8,13 +8,18 @@ def test_concatenate_channels(create_custom_plate, tmp_path):
     """
     Test concatenating channels across zarr stores with the same layout
     """
-    # Load example plate with three positions - A/1/0, B/1/0, B/2/0, and two channels - GFP, RFP
-
+    # Create example plates with same layout and different channels
+    position_list = ["A/1/0", "B/1/0", "B/2/0"]
     plate_1_path, plate_1 = create_custom_plate(
-        tmp_path / 'zarr2', channel_names=['DAPI', 'Cy3']
+        tmp_path / 'zarr1',
+        position_list=[p.split("/") for p in position_list],
+        channel_names=['DAPI', 'Cy3'],
     )
-    plate_2_path, plate_2 = create_custom_plate(tmp_path / 'zarr1')
-    position_list = [pos_name for pos_name, _ in plate_1.positions()]
+    plate_2_path, plate_2 = create_custom_plate(
+        tmp_path / 'zarr2',
+        position_list=[p.split("/") for p in position_list],
+        channel_names=["GFP", "RFP", "Phase3D"],
+    )
 
     settings = ConcatenateSettings(
         concat_data_paths=[str(plate_1_path) + "/*/*/*", str(plate_2_path) + "/*/*/*"],
@@ -46,14 +51,12 @@ def test_concatenate_specific_channels(create_custom_plate, tmp_path):
     Test concatenating specific channels from zarr stores
     """
 
-    # Create another plate with the same structure and different set of channels
+    # Create test plates
     plate_1_path, plate_1 = create_custom_plate(
-        tmp_path / 'zarr2', channel_names=["DAPI", "Cy5"]
+        tmp_path / 'zarr1', channel_names=["DAPI", "Cy5"]
     )
-
-    # Load example plate with three positions - A/1/0, B/1/0, B/2/0, and two channels - GFP, RFP
     plate_2_path, plate_2 = create_custom_plate(
-        tmp_path / 'zarr1', channel_names=["GFP", "RFP"]
+        tmp_path / 'zarr2', channel_names=["GFP", "RFP"]
     )
 
     # Select only specific channels from each plate
@@ -85,9 +88,8 @@ def test_concatenate_with_time_indices(create_custom_plate, tmp_path):
     Test concatenating with specific time indices
     """
 
-    # Create another plate with the same structure and different set of channels
+    # Create test plates
     plate_1_path, plate_1 = create_custom_plate(tmp_path / 'zarr1', time_points=10)
-    # Load example plate with three positions - A/1/0, B/1/0, B/2/0
     plate_2_path, plate_2 = create_custom_plate(tmp_path / 'zarr2', time_points=5)
 
     # Select only specific time indices
@@ -114,11 +116,23 @@ def test_concatenate_with_single_slice_to_all(create_custom_plate, tmp_path):
     """
     Test concatenating with a single slice applied to all datasets
     """
+    # Create test plates with same shape
+    (T, Z, Y, X) = (3, 4, 6, 8)
     plate_1_path, plate_1 = create_custom_plate(
-        tmp_path / 'zarr1', time_points=3, z_size=4, y_size=6, x_size=8
+        tmp_path / 'zarr1',
+        time_points=T,
+        z_size=Z,
+        y_size=Y,
+        x_size=X,
+        channel_names=["GFP", "RFP", "Phase3D"],
     )
     plate_2_path, plate_2 = create_custom_plate(
-        tmp_path / 'zarr2', time_points=3, z_size=4, y_size=6, x_size=8
+        tmp_path / 'zarr2',
+        time_points=T,
+        z_size=Z,
+        y_size=Y,
+        x_size=X,
+        channel_names=["DAPI"],
     )
 
     settings = ConcatenateSettings(
@@ -139,27 +153,21 @@ def test_concatenate_with_single_slice_to_all(create_custom_plate, tmp_path):
 
     output_plate = open_ome_zarr(output_path)
 
-    assert output_plate["A/1/0"].data.shape == (3, 3, 2, 3, 4)
+    assert output_plate["A/1/0"].data.shape == (T, 4, 2, 3, 4)
 
 
 def test_concatenate_with_spatial_cropping(create_custom_plate, tmp_path):
     """
     Test concatenating with spatial cropping
     """
-
-    # Create another plate with the same structure and different set of channels
+    Z, Y, X = 4, 6, 8
+    # Create example plates
     plate_1_path, plate_1 = create_custom_plate(
-        tmp_path / 'zarr1', channel_names=["DAPI", "Cy5"], z_size=4, y_size=6, x_size=8
+        tmp_path / 'zarr1', channel_names=["DAPI", "Cy5"], z_size=Z, y_size=Y, x_size=X
     )
-
-    # Load example plate with three positions - A/1/0, B/1/0, B/2/0, and two channels - GFP, RFP
     plate_2_path, plate_2 = create_custom_plate(
-        tmp_path / 'zarr2', channel_names=["GFP", "RFP"], z_size=4, y_size=6, x_size=8
+        tmp_path / 'zarr2', channel_names=["GFP", "RFP"], z_size=Z, y_size=Y, x_size=X
     )
-
-    # Get original dimensions
-    data_shape = plate_2["A/1/0"].data.shape
-    T, C, Z, Y, X = data_shape
 
     # Define crop parameters
     z_start, z_end = 0, Z // 2
@@ -195,8 +203,7 @@ def test_concatenate_with_custom_chunks(create_custom_plate, tmp_path):
     """
     Test concatenating with custom chunk sizes
     """
-    # Create two plates with the same dimensions
-
+    # Create example plates
     plate_1_path, plate_1 = create_custom_plate(
         tmp_path / 'zarr1',
         channel_names=["DAPI", "Cy5"],
@@ -205,7 +212,6 @@ def test_concatenate_with_custom_chunks(create_custom_plate, tmp_path):
         y_size=8,
         x_size=6,
     )
-
     plate_2_path, plate_2 = create_custom_plate(
         tmp_path / 'zarr2',
         channel_names=["GFP", "RFP"],
