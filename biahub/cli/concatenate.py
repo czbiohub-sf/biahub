@@ -1,7 +1,6 @@
 import glob
 
 from pathlib import Path
-from warnings import warn
 
 import click
 import numpy as np
@@ -139,8 +138,8 @@ def get_channel_combiner_metadata(
                     output_channel_indices.append(out_chan_idx_counter)
                     out_chan_idx_counter += 1
                 else:
-                    warn(
-                        f"Channel {channel} already exists. Skipping and using index from the first entry."
+                    click.echo(
+                        f"Warning: Channel {channel} already exists. Skipping and using index from the first entry."
                     )
                     # Set the out_chan_idx_counter to the index of the channel in the all_channel_names list
                     out_chan_idx_counter = all_channel_names.index(channel)
@@ -227,7 +226,10 @@ def calculate_cropped_size(
     y_size = abs(slice_params_zyx[1].stop - slice_params_zyx[1].start)
     x_size = abs(slice_params_zyx[2].stop - slice_params_zyx[2].start)
 
-    return z_size, y_size, x_size
+    cropped_shape_zyx = (z_size, y_size, x_size)
+    click.echo(f"Output ZYX shape after cropping: {cropped_shape_zyx}")
+
+    return cropped_shape_zyx
 
 
 def concatenate(
@@ -285,7 +287,9 @@ def concatenate(
 
     # Check the voxel sizes
     if not all([voxel_size == all_voxel_sizes[0] for voxel_size in all_voxel_sizes]):
-        warn("Datasets have different voxel sizes. Taking the first voxel size.")
+        click.echo(
+            "Warning: Datasets have different voxel sizes. Taking the first voxel size."
+        )
 
     T, C, Z, Y, X = all_shapes[0]
     output_voxel_size = all_voxel_sizes[0]
@@ -299,8 +303,8 @@ def concatenate(
     # Logic to parse time indices
     if settings.time_indices == "all":
         if not all([shape[0] == T for shape in all_shapes]):
-            warn(
-                "Datasets have different number of time points. Taking the smallest number of time points."
+            click.echo(
+                "Warning: Datasets have different number of time points. Taking the smallest number of time points."
             )
         T = min([shape[0] for shape in all_shapes])
         input_time_indices = list(range(T))
@@ -312,14 +316,10 @@ def concatenate(
     # If input shapes are different but slicing is specified, inform the user
     if not all([shape[-3:] == all_shapes[0][-3:] for shape in all_shapes]):
         click.echo(
-            "Datasets have different shapes, but slicing parameters are specified. Will validate output shapes after cropping."
+            "Warning: Datasets have different shapes, but slicing parameters are specified. Will validate output shapes after cropping."
         )
 
     cropped_shape_zyx = calculate_cropped_size(all_slicing_params[0])
-
-    click.echo(
-        f"All paths will produce the same output ZYX shape after cropping: {cropped_shape_zyx}"
-    )
 
     # Ensure that the cropped shape is within the bounds of the original shape
     if cropped_shape_zyx[0] > Z or cropped_shape_zyx[1] > Y or cropped_shape_zyx[2] > X:
