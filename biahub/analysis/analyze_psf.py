@@ -20,6 +20,7 @@ from napari_psf_analysis.psf_analysis.psf import PSF
 from numpy.typing import ArrayLike
 from scipy.interpolate import interp1d
 from scipy.signal import peak_widths
+from tqdm import tqdm
 
 import biahub.analysis.templates
 
@@ -226,7 +227,7 @@ def analyze_psf(
 
     results = []
     peak_coordinates = np.asarray(peak_coordinates)
-    for patch, peak_coords in zip(zyx_patches, peak_coordinates):
+    for patch, peak_coords in tqdm(zip(zyx_patches, peak_coordinates), total=len(zyx_patches)):
         patch = (patch + offset) * gain
         patch = np.clip(patch, 0, None).astype(np.int32)
         bead = Calibrated3DImage(data=patch, spacing=scale, offset=peak_coords)
