@@ -10,24 +10,8 @@ from iohub.ngff import open_ome_zarr
 
 
 @pytest.fixture(scope="function")
-def demo_acquisition_settings():
-    settings_path = "./biahub/acquisition/settings/demo_acquisition_settings.yaml"
-    with open(settings_path) as file:
-        settings = yaml.safe_load(file)
-    yield settings_path, settings
-
-
-@pytest.fixture(scope="function")
-def example_acquisition_settings():
-    settings_path = "./biahub/acquisition/settings/example_acquisition_settings.yaml"
-    with open(settings_path) as file:
-        settings = yaml.safe_load(file)
-    yield settings_path, settings
-
-
-@pytest.fixture(scope="function")
 def example_deskew_settings():
-    settings_path = "./biahub/analysis/settings/example_deskew_settings.yml"
+    settings_path = "./settings/example_deskew_settings.yml"
     with open(settings_path) as file:
         settings = yaml.safe_load(file)
     yield settings_path, settings
@@ -35,7 +19,7 @@ def example_deskew_settings():
 
 @pytest.fixture(scope="function")
 def example_register_settings():
-    settings_path = "./biahub/analysis/settings/example_register_settings.yml"
+    settings_path = "./settings/example_register_settings.yml"
     with open(settings_path) as file:
         settings = yaml.safe_load(file)
     yield settings_path, settings
@@ -43,7 +27,7 @@ def example_register_settings():
 
 @pytest.fixture(scope="function")
 def example_stabilize_timelapse_settings():
-    settings_path = "./biahub/analysis/settings/example_stabilize_timelapse_settings.yml"
+    settings_path = "./settings/example_stabilize_timelapse_settings.yml"
     with open(settings_path) as file:
         settings = yaml.safe_load(file)
     yield settings_path, settings
@@ -51,7 +35,7 @@ def example_stabilize_timelapse_settings():
 
 @pytest.fixture(scope="function")
 def example_concatenate_settings():
-    settings_path = "./biahub/analysis/settings/example_concatenate_settings.yml"
+    settings_path = "./settings/example_concatenate_settings.yml"
     with open(settings_path) as file:
         settings = yaml.safe_load(file)
     yield settings_path, settings
@@ -59,7 +43,7 @@ def example_concatenate_settings():
 
 @pytest.fixture(scope="function")
 def example_estimate_registration_settings():
-    settings_path = "./biahub/analysis/settings/example_estimate_registration_settings.yml"
+    settings_path = "./settings/example_estimate_registration_settings.yml"
     with open(settings_path) as file:
         settings = yaml.safe_load(file)
     yield settings_path, settings
