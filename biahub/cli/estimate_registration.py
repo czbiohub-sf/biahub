@@ -578,28 +578,28 @@ def _get_tform_from_beads(
         click.echo(
             f'Total of matches after distance filtering at time point {t_idx}: {len(matches)}'
         )
+    if angle_threshold:
+        # Calculate vectors between matches
+        vectors = target_peaks[matches[:, 1]] - source_peaks[matches[:, 0]]
 
-    # Calculate vectors between matches
-    vectors = target_peaks[matches[:, 1]] - source_peaks[matches[:, 0]]
+        # Compute angles in radians relative to the x-axis
+        angles_rad = np.arctan2(vectors[:, 1], vectors[:, 0])
 
-    # Compute angles in radians relative to the x-axis
-    angles_rad = np.arctan2(vectors[:, 1], vectors[:, 0])
+        # Convert to degrees for easier interpretation
+        angles_deg = np.degrees(angles_rad)
 
-    # Convert to degrees for easier interpretation
-    angles_deg = np.degrees(angles_rad)
+        # Create a histogram of angles
+        bins = np.linspace(-180, 180, 36)  # 10-degree bins
+        hist, bin_edges = np.histogram(angles_deg, bins=bins)
 
-    # Create a histogram of angles
-    bins = np.linspace(-180, 180, 36)  # 10-degree bins
-    hist, bin_edges = np.histogram(angles_deg, bins=bins)
+        # Find the dominant bin
+        dominant_bin_index = np.argmax(hist)
+        dominant_angle = (bin_edges[dominant_bin_index] + bin_edges[dominant_bin_index + 1]) / 2
 
-    # Find the dominant bin
-    dominant_bin_index = np.argmax(hist)
-    dominant_angle = (bin_edges[dominant_bin_index] + bin_edges[dominant_bin_index + 1]) / 2
+        # Filter matches within ±30 degrees of the dominant direction, which may need finetuning
 
-    # Filter matches within ±30 degrees of the dominant direction, which may need finetuning
-
-    filtered_indices = np.where(np.abs(angles_deg - dominant_angle) <= angle_threshold)[0]
-    matches = matches[filtered_indices]
+        filtered_indices = np.where(np.abs(angles_deg - dominant_angle) <= angle_threshold)[0]
+        matches = matches[filtered_indices]
     if verbose:
         click.echo(
             f'Total of matches after angle filtering at time point {t_idx}: {len(matches)}'
