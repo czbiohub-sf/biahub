@@ -393,11 +393,12 @@ def beads_based_registration(
 
     return transforms
 
-def _validate_transforms(transforms, window_size,tolerance, Z, Y, X, verbose=False):
+
+def _validate_transforms(transforms, window_size, tolerance, Z, Y, X, verbose=False):
     """
     Validate a list of affine transformation matrices by smoothing and filtering.
-    
-    This function validates a list of affine transformation matrices by smoothing them 
+
+    This function validates a list of affine transformation matrices by smoothing them
     with a moving average window and filtering out invalid or inconsistent transformations based on a tolerance threshold.
 
     Parameters:
@@ -432,6 +433,7 @@ def _validate_transforms(transforms, window_size,tolerance, Z, Y, X, verbose=Fal
                 transforms[i] = None
     return transforms
 
+
 def _interpolate_transforms(transforms):
     """
     Interpolate missing transforms in a list of affine transformation matrices.
@@ -445,13 +447,16 @@ def _interpolate_transforms(transforms):
     Returns:
     - list: List of affine transformation matrices with missing values interpolated.
     """
-    x, y = zip(*[(i, transforms[i]) for i in range(len(transforms)) if transforms[i] is not None])
+    x, y = zip(
+        *[(i, transforms[i]) for i in range(len(transforms)) if transforms[i] is not None]
+    )
     if len(transforms) - len(x) > 0:
         _x = [i for i in range(len(transforms)) if i not in x]
         click.echo(f'Interpolating missing transforms at timepoints: {_x}')
         f = interp1d(x, y, axis=0, kind='linear', fill_value='extrapolate')
         transforms = f(range(len(transforms))).tolist()
     return transforms
+
 
 def _check_transform_difference(tform1, tform2, shape, threshold=5.0, verbose=False):
     """
@@ -594,16 +599,18 @@ def _get_tform_from_beads(
 
         # Find the dominant bin
         dominant_bin_index = np.argmax(hist)
-        dominant_angle = (bin_edges[dominant_bin_index] + bin_edges[dominant_bin_index + 1]) / 2
+        dominant_angle = (
+            bin_edges[dominant_bin_index] + bin_edges[dominant_bin_index + 1]
+        ) / 2
 
         # Filter matches within ±30 degrees of the dominant direction, which may need finetuning
 
         filtered_indices = np.where(np.abs(angles_deg - dominant_angle) <= angle_threshold)[0]
         matches = matches[filtered_indices]
-    if verbose:
-        click.echo(
-            f'Total of matches after angle filtering at time point {t_idx}: {len(matches)}'
-        )
+        if verbose:
+            click.echo(
+                f'Total of matches after angle filtering at time point {t_idx}: {len(matches)}'
+            )
 
     if len(matches) < 3:
         click.echo(
@@ -614,7 +621,7 @@ def _get_tform_from_beads(
     # Affine transform performs better than Euclidean
     tform = AffineTransform(dimensionality=3)
     tform.estimate(source_peaks[matches[:, 0]], target_peaks[matches[:, 1]])
-    
+
     compount_tform = approx_tform @ tform.inverse.params
 
     return compount_tform.tolist()
