@@ -386,7 +386,33 @@ def beads_based_registration(
             range(T),
         )
 
-    # Check and filter transforms
+    # Validate and filter transforms
+    transforms = _validate_transforms(transforms, window_size, tolerance, Z, Y, X, verbose)
+    # Interpolate missing transforms
+    transforms = _interpolate_transforms(transforms)
+
+    return transforms
+
+def _validate_transforms(transforms, window_size,tolerance, Z, Y, X, verbose=False):
+    """
+    Validate a list of affine transformation matrices by smoothing and filtering.
+    
+    This function validates a list of affine transformation matrices by smoothing them 
+    with a moving average window and filtering out invalid or inconsistent transformations based on a tolerance threshold.
+
+    Parameters:
+    - transforms (list): List of affine transformation matrices (4x4), one for each timepoint.
+    - window_size (int): Size of the moving window for smoothing transformations.
+    - tolerance (float): Maximum allowed difference between consecutive transformations for validation.
+    - Z (int): Number of slices in the Z dimension.
+    - Y (int): Number of pixels in the Y dimension.
+    - X (int): Number of pixels in the X dimension.
+    - verbose (bool): If True, prints detailed logs of the validation process.
+
+    Returns:
+    - list: List of affine transformation matrices with invalid or inconsistent values
+            replaced by None.
+    """
     valid_transforms = []
     reference_transform = None
     for i in range(len(transforms)):
@@ -404,17 +430,28 @@ def beads_based_registration(
                 if verbose:
                     click.echo(f'Transform at timepoint {i} will be interpolated')
                 transforms[i] = None
-
-    # Interpolate missing transforms
-    x, y = zip(*[(i, transforms[i]) for i in range(T) if transforms[i] is not None])
-    if len(transforms) - len(x) > 0:
-        _x = [i for i in range(T) if i not in x]
-        click.echo(f"Interpolating missing transforms at timepoints: {_x}")
-        f = interp1d(x, y, axis=0, kind="linear", fill_value="extrapolate")
-        transforms = f(range(T)).tolist()
-
     return transforms
 
+def _interpolate_transforms(transforms):
+    """
+    Interpolate missing transforms in a list of affine transformation matrices.
+
+    This function linearly interpolates missing transformations in a list of affine
+    transformation matrices. It replaces None values with interpolated matrices.
+
+    Parameters:
+    - transforms (list): List of affine transformation matrices (4x4), one for each timepoint.
+
+    Returns:
+    - list: List of affine transformation matrices with missing values interpolated.
+    """
+    x, y = zip(*[(i, transforms[i]) for i in range(len(transforms)) if transforms[i] is not None])
+    if len(transforms) - len(x) > 0:
+        _x = [i for i in range(len(transforms)) if i not in x]
+        click.echo(f'Interpolating missing transforms at timepoints: {_x}')
+        f = interp1d(x, y, axis=0, kind='linear', fill_value='extrapolate')
+        transforms = f(range(len(transforms))).tolist()
+    return transforms
 
 def _check_transform_difference(tform1, tform2, shape, threshold=5.0, verbose=False):
     """
@@ -577,6 +614,7 @@ def _get_tform_from_beads(
     # Affine transform performs better than Euclidean
     tform = AffineTransform(dimensionality=3)
     tform.estimate(source_peaks[matches[:, 0]], target_peaks[matches[:, 1]])
+    
     compount_tform = approx_tform @ tform.inverse.params
 
     return compount_tform.tolist()
