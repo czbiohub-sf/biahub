@@ -1,7 +1,6 @@
 import click
 
 from biahub.cli.characterize_psf import characterize_psf
-from biahub.cli.concatenate import concatenate_cli
 from biahub.cli.estimate_bleaching import estimate_bleaching
 from biahub.cli.estimate_deskew import estimate_deskew
 from biahub.cli.estimate_psf import estimate_psf
@@ -13,6 +12,7 @@ from biahub.cli.register import register
 from biahub.cli.segment import segment
 from biahub.cli.stabilize import stabilize
 from biahub.cli.stitch import stitch
+from biahub.concatenate import concatenate_cli
 from biahub.deconvolve import deconvolve_cli
 from biahub.deskew import deskew_cli
 

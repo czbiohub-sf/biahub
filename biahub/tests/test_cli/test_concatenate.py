@@ -1,7 +1,7 @@
 from iohub import open_ome_zarr
 
 from biahub.analysis.AnalysisSettings import ConcatenateSettings
-from biahub.cli.concatenate import concatenate
+from biahub.concatenate import concatenate
 
 
 def test_concatenate_channels(create_custom_plate, tmp_path):
