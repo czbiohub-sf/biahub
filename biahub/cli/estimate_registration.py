@@ -501,6 +501,14 @@ def _get_tform_from_beads(
     angle_threshold: int,
     verbose: bool,
     t_idx: int,
+    source_block_size: list = [32, 16, 16],
+    source_threshold_abs: int = 110,
+    source_nms_distance: int = 16,
+    source_min_distance: int = 0,
+    target_block_size: list = [32, 16, 16],
+    target_threshold_abs: float = 0.8,
+    target_nms_distance: int = 16,
+    target_min_distance: int = 0,
 ) -> list | None:
     """
     Calculate the affine transformation matrix between source and target channels
@@ -549,20 +557,20 @@ def _get_tform_from_beads(
         click.echo('Detecting beads in source dataset:')
     source_peaks = detect_peaks(
         source_data_reg,
-        block_size=[32, 16, 16],
-        threshold_abs=110,
-        nms_distance=16,
-        min_distance=0,
+        block_size=source_block_size,
+        threshold_abs=source_threshold_abs,
+        nms_distance=source_nms_distance,
+        min_distance=source_min_distance,
         verbose=verbose,
     )
     if verbose:
         click.echo('Detecting beads in target dataset:')
     target_peaks = detect_peaks(
         target_channel_zyx,
-        block_size=[32, 16, 16],
-        threshold_abs=0.8,
-        nms_distance=16,
-        min_distance=0,
+        block_size=target_block_size,
+        threshold_abs=target_threshold_abs,
+        nms_distance=target_nms_distance,
+        min_distance=target_min_distance,
         verbose=verbose,
     )
 
