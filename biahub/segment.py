@@ -98,13 +98,13 @@ def segment_data(
     return czyx_segmentation
 
 
-@click.command()
+@click.command("segment")
 @input_position_dirpaths()
 @config_filepath()
 @output_dirpath()
 @sbatch_filepath()
 @local()
-def segment(
+def segment_cli(
     input_position_dirpaths: list[str],
     config_filepath: str,
     output_dirpath: str,
@@ -250,4 +250,4 @@ def segment(
 
 
 if __name__ == "__main__":
-    segment()
+    segment_cli()

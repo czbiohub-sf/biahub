@@ -11,10 +11,10 @@ from biahub.analysis.AnalysisSettings import DeskewSettings
 from biahub.cli.parsing import input_position_dirpaths, output_filepath
 
 
-@click.command()
+@click.command("estimate-deskew")
 @input_position_dirpaths()
 @output_filepath()
-def estimate_deskew(input_position_dirpaths, output_filepath):
+def estimate_deskew_cli(input_position_dirpaths, output_filepath):
     """
     Routine for estimating deskewing parameters from calibration data.
 
@@ -84,4 +84,4 @@ def estimate_deskew(input_position_dirpaths, output_filepath):
 
 
 if __name__ == "__main__":
-    estimate_deskew()
+    estimate_deskew_cli()
