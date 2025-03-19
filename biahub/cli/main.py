@@ -3,7 +3,6 @@ import click
 from biahub.cli.characterize_psf import characterize_psf
 from biahub.cli.estimate_psf import estimate_psf
 from biahub.cli.estimate_registration import estimate_registration
-from biahub.cli.estimate_stabilization import estimate_stabilization
 from biahub.cli.estimate_stitch import estimate_stitch
 from biahub.cli.optimize_registration import optimize_registration
 from biahub.cli.register import register
@@ -15,6 +14,7 @@ from biahub.deconvolve import deconvolve_cli
 from biahub.deskew import deskew_cli
 from biahub.estimate_bleaching import estimate_bleaching_cli
 from biahub.estimate_deskew import estimate_deskew_cli
+from biahub.estimate_stabilization import estimate_stabilization_cli
 
 CONTEXT = {"help_option_names": ["-h", "--help"]}
 
@@ -39,7 +39,7 @@ cli.add_command(register)
 cli.add_command(estimate_stitch)
 cli.add_command(stitch)
 cli.add_command(concatenate_cli)
-cli.add_command(estimate_stabilization)
+cli.add_command(estimate_stabilization_cli)
 cli.add_command(stabilize)
 cli.add_command(estimate_psf)
 cli.add_command(deconvolve_cli)
