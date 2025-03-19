@@ -73,7 +73,7 @@ def cleanup_and_write_shifts(
     help="add the offset to estimated shifts, needed for OPS experiments",
 )
 @local()
-def estimate_stitch(
+def estimate_stitch_cli(
     input_position_dirpaths: list[Path],
     output_filepath: str,
     channel: str,
@@ -231,4 +231,4 @@ def estimate_stitch(
 
 
 if __name__ == "__main__":
-    estimate_stitch()
+    estimate_stitch_cli()
