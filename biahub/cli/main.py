@@ -1,7 +1,6 @@
 import click
 
 from biahub.cli.characterize_psf import characterize_psf
-from biahub.cli.estimate_bleaching import estimate_bleaching
 from biahub.cli.estimate_deskew import estimate_deskew
 from biahub.cli.estimate_psf import estimate_psf
 from biahub.cli.estimate_registration import estimate_registration
@@ -15,6 +14,7 @@ from biahub.cli.stitch import stitch
 from biahub.concatenate import concatenate_cli
 from biahub.deconvolve import deconvolve_cli
 from biahub.deskew import deskew_cli
+from biahub.estimate_bleaching import estimate_bleaching_cli
 
 CONTEXT = {"help_option_names": ["-h", "--help"]}
 
@@ -30,7 +30,7 @@ def cli():
     """command-line tools for biahub"""
 
 
-cli.add_command(estimate_bleaching)
+cli.add_command(estimate_bleaching_cli)
 cli.add_command(estimate_deskew)
 cli.add_command(deskew_cli)
 cli.add_command(estimate_registration)
