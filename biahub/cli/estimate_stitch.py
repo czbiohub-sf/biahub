@@ -7,14 +7,14 @@ import submitit
 from iohub import open_ome_zarr
 
 from biahub.analysis.AnalysisSettings import ProcessingSettings, StitchSettings
-from biahub.analysis.stitch import (
+from biahub.cli.parsing import input_position_dirpaths, local, output_filepath
+from biahub.cli.stitch import (
     cleanup_shifts,
     compute_total_translation,
     consolidate_zarr_fov_shifts,
     estimate_zarr_fov_shifts,
     get_grid_rows_cols,
 )
-from biahub.cli.parsing import input_position_dirpaths, local, output_filepath
 from biahub.cli.utils import model_to_yaml
 
 

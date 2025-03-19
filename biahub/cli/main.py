@@ -7,7 +7,7 @@ from biahub.cli.estimate_stitch import estimate_stitch
 from biahub.cli.optimize_registration import optimize_registration
 from biahub.cli.register import register
 from biahub.cli.stabilize import stabilize
-from biahub.cli.stitch import stitch
+from biahub.cli.stitch import stitch_cli
 from biahub.concatenate import concatenate_cli
 from biahub.deconvolve import deconvolve_cli
 from biahub.deskew import deskew_cli
@@ -37,7 +37,7 @@ cli.add_command(estimate_registration)
 cli.add_command(optimize_registration)
 cli.add_command(register)
 cli.add_command(estimate_stitch)
-cli.add_command(stitch)
+cli.add_command(stitch_cli)
 cli.add_command(concatenate_cli)
 cli.add_command(estimate_stabilization_cli)
 cli.add_command(stabilize)
