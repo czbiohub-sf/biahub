@@ -12,7 +12,7 @@ from iohub.ngff import open_ome_zarr
 from iohub.ngff.models import TransformationMeta
 
 from biahub.analysis.AnalysisSettings import PsfFromBeadsSettings
-from biahub.analysis.analyze_psf import detect_peaks, extract_beads
+from biahub.characterize_psf import detect_peaks, extract_beads
 from biahub.cli.parsing import config_filepath, input_position_dirpaths, output_dirpath
 from biahub.cli.utils import yaml_to_model
 

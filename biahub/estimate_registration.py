@@ -18,7 +18,7 @@ from biahub.analysis.AnalysisSettings import (
     RegistrationSettings,
     StabilizationSettings,
 )
-from biahub.analysis.analyze_psf import detect_peaks
+from biahub.characterize_psf import detect_peaks
 from biahub.cli.parsing import (
     config_filepath,
     num_processes,
