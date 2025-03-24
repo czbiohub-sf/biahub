@@ -28,7 +28,7 @@ from scipy.signal import peak_widths
 
 import biahub.artefacts
 
-from biahub.analysis.AnalysisSettings import CharacterizeSettings
+from biahub.AnalysisSettings import CharacterizeSettings
 from biahub.cli.parsing import config_filepath, input_position_dirpaths, output_dirpath
 from biahub.cli.utils import yaml_to_model
 

@@ -3,7 +3,7 @@ import pytest
 
 from pydantic import ValidationError
 
-from biahub.analysis.AnalysisSettings import (
+from biahub.AnalysisSettings import (
     DeskewSettings,
     EstimateRegistrationSettings,
     RegistrationSettings,

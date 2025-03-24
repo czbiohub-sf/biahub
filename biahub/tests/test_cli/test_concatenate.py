@@ -1,6 +1,6 @@
 from iohub import open_ome_zarr
 
-from biahub.analysis.AnalysisSettings import ConcatenateSettings
+from biahub.AnalysisSettings import ConcatenateSettings
 from biahub.concatenate import concatenate
 
 
