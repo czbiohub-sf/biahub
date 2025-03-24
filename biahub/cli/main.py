@@ -1,6 +1,6 @@
 import click
 
-from biahub.cli.characterize_psf import characterize_psf
+from biahub.characterize_psf import characterize_psf_cli
 from biahub.cli.estimate_psf import estimate_psf
 from biahub.concatenate import concatenate_cli
 from biahub.deconvolve import deconvolve_cli
@@ -43,5 +43,5 @@ cli.add_command(estimate_stabilization_cli)
 cli.add_command(stabilize_cli)
 cli.add_command(estimate_psf)
 cli.add_command(deconvolve_cli)
-cli.add_command(characterize_psf)
+cli.add_command(characterize_psf_cli)
 cli.add_command(segment_cli)
