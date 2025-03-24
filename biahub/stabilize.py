@@ -85,13 +85,13 @@ def apply_stabilization_transform(
     return stabilized_zyx
 
 
-@click.command()
+@click.command("stabilize")
 @input_position_dirpaths()
 @output_dirpath()
 @config_filepath()
 @sbatch_filepath()
 @local()
-def stabilize(
+def stabilize_cli(
     input_position_dirpaths: List[str],
     output_dirpath: str,
     config_filepath: str,
@@ -299,4 +299,4 @@ def stabilize(
 
 
 if __name__ == "__main__":
-    stabilize()
+    stabilize_cli()
