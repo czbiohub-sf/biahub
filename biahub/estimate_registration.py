@@ -582,7 +582,7 @@ def _get_tform_from_beads(
     return compount_tform.tolist()
 
 
-@click.command()
+@click.command("estimate-registration")
 @source_position_dirpaths()
 @target_position_dirpaths()
 @output_filepath()
@@ -603,7 +603,7 @@ def _get_tform_from_beads(
     help="Name of the source channels to be used when registration params are applied. May be passed multiple times.",
     required=False,
 )
-def estimate_registration(
+def estimate_registration_cli(
     source_position_dirpaths,
     target_position_dirpaths,
     output_filepath,
@@ -729,4 +729,4 @@ def estimate_registration(
 
 
 if __name__ == "__main__":
-    estimate_registration()
+    estimate_registration_cli()
