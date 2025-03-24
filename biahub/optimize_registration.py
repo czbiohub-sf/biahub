@@ -19,7 +19,7 @@ from biahub.register import convert_transform_to_ants, convert_transform_to_nump
 T_IDX = 0
 
 
-@click.command()
+@click.command("optimize-registration")
 @source_position_dirpaths()
 @target_position_dirpaths()
 @config_filepath()
@@ -36,7 +36,7 @@ T_IDX = 0
     is_flag=True,
     help="Show verbose output of optimizer",
 )
-def optimize_registration(
+def optimize_registration_cli(
     source_position_dirpaths,
     target_position_dirpaths,
     config_filepath,
@@ -137,4 +137,4 @@ def optimize_registration(
 
 
 if __name__ == "__main__":
-    optimize_registration()
+    optimize_registration_cli()
