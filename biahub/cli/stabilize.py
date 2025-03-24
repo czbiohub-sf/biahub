@@ -11,7 +11,6 @@ from scipy.linalg import svd
 from scipy.spatial.transform import Rotation as R
 
 from biahub.analysis.AnalysisSettings import StabilizationSettings
-from biahub.analysis.register import convert_transform_to_ants
 from biahub.cli.parsing import (
     config_filepath,
     input_position_dirpaths,
@@ -27,6 +26,7 @@ from biahub.cli.utils import (
     process_single_position_v2,
     yaml_to_model,
 )
+from biahub.register import convert_transform_to_ants
 
 
 def apply_stabilization_transform(
