@@ -16,9 +16,9 @@ from iohub.ngff.utils import create_empty_plate
 from skimage.registration import phase_cross_correlation
 
 from biahub.analysis.AnalysisSettings import ProcessingSettings, StitchSettings
-from biahub.analysis.register import convert_transform_to_ants
 from biahub.cli.parsing import config_filepath, input_position_dirpaths, output_dirpath
 from biahub.cli.utils import process_single_position_v2, yaml_to_model
+from biahub.register import convert_transform_to_ants
 
 
 def estimate_shift(

@@ -4,7 +4,7 @@ import numpy as np
 from pathlib import Path
 from iohub import open_ome_zarr
 from biahub.analysis.analyze_psf import detect_peaks
-from biahub.analysis.register import convert_transform_to_ants
+from biahub.register import convert_transform_to_ants
 import napari
 from skimage.transform import EuclideanTransform, AffineTransform, warp
 from skimage.feature import match_descriptors
