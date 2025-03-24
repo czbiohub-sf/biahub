@@ -11,7 +11,7 @@ import submitit
 
 from iohub import open_ome_zarr
 
-from biahub.analysis.AnalysisSettings import RegistrationSettings
+from biahub.AnalysisSettings import RegistrationSettings
 from biahub.cli.parsing import (
     config_filepath,
     local,

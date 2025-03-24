@@ -10,7 +10,7 @@ from iohub.ngff import open_ome_zarr
 from scipy.linalg import svd
 from scipy.spatial.transform import Rotation as R
 
-from biahub.analysis.AnalysisSettings import StabilizationSettings
+from biahub.AnalysisSettings import StabilizationSettings
 from biahub.cli.parsing import (
     config_filepath,
     input_position_dirpaths,

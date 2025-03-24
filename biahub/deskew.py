@@ -10,7 +10,7 @@ from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import process_single_position
 from monai.transforms.spatial.array import Affine
 
-from biahub.analysis.AnalysisSettings import DeskewSettings
+from biahub.AnalysisSettings import DeskewSettings
 from biahub.cli import utils
 from biahub.cli.parsing import (
     config_filepath,

@@ -7,7 +7,7 @@ import yaml
 
 from iohub.ngff import open_ome_zarr
 
-from biahub.analysis.AnalysisSettings import DeskewSettings
+from biahub.AnalysisSettings import DeskewSettings
 from biahub.cli.parsing import input_position_dirpaths, output_filepath
 
 

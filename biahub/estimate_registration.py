@@ -13,7 +13,7 @@ from skimage.feature import match_descriptors
 from skimage.transform import AffineTransform, EuclideanTransform, SimilarityTransform
 from waveorder.focus import focus_from_transverse_band
 
-from biahub.analysis.AnalysisSettings import (
+from biahub.AnalysisSettings import (
     EstimateRegistrationSettings,
     RegistrationSettings,
     StabilizationSettings,
