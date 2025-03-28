@@ -47,6 +47,18 @@ class EstimateRegistrationSettings(MyBaseModel):
                 raise ValueError("approx_affine_transform must be a 4x4 array")
 
         return v
+    
+class EstimateStabilizationSettings(MyBaseModel):
+    estimate_stabilization_channel: str
+    stabilization_channels: list
+    stabilization_type: Literal["z", "xy", "xyz"]
+    beads: bool = False
+    reference: Literal["first", "previous"]
+    crop_size_xy: list[int, int] = [300,300]
+    # affine_transform_window_size: int = None
+    # affine_transform_tolerance: float = None
+    # filtering_angle_threshold: int = None
+    verbose: bool = False
 
 
 class ProcessingSettings(MyBaseModel):
@@ -319,7 +331,7 @@ class ConcatenateSettings(MyBaseModel):
 
 class StabilizationSettings(MyBaseModel):
     stabilization_estimation_channel: str
-    stabilization_type: Literal["z", "xy", "xyz"]
+    stabilization_type: Literal["z", "xy", "xyz", "xyz-beads"]
     stabilization_channels: list
     affine_transform_zyx_list: list
     time_indices: Union[NonNegativeInt, list[NonNegativeInt], Literal["all"]] = "all"
