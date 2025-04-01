@@ -17,6 +17,9 @@ from waveorder.focus import focus_from_transverse_band
 
 from biahub.analysis.AnalysisSettings import StabilizationSettings, EstimateStabilizationSettings
 
+from biahub.cli.estimate_registration import (
+    _get_tform_from_beads, _validate_transforms, _interpolate_transforms
+)
 from biahub.cli.parsing import input_position_dirpaths, output_filepath, config_filepath
 from biahub.cli.utils import model_to_yaml, yaml_to_model
 
@@ -222,7 +225,85 @@ def estimate_xy_stabilization(
     return T_zyx_shift
 
 
+def estimate_xyz_stabilization_with_beads(
+    channel_tzyx: da.Array,
+    num_processes: int = 1,
+    window_size: int = 10,
+    tolerance: float = 100,
+    angle_threshold: int = 0,
+    referece: str = "first",
+    verbose: bool = False,
+):
+    """
+    Perform beads-based temporal registration of 4D data using affine transformations.
 
+    This function calculates timepoint-specific affine transformations to align a source channel
+    to a target channel in 4D (T, Z, Y, X) data. It validates, smooths, and interpolates transformations
+    across timepoints for consistent registration.
+
+    Parameters:
+    - channel_tzyx (da.Array): 4D array (T, Z, Y, X) of the source channel (Dask array).
+    - approx_tform (list): Initial approximate affine transform (4x4 matrix) for guiding registration.
+    - num_processes (int): Number of parallel processes for transformation computation.
+    - window_size (int): Size of the moving window for smoothing transformations.
+    - tolerance (float): Maximum allowed difference between consecutive transformations for validation.
+    - angle_threshold (int): Threshold for filtering outliers in detected bead matches (in degrees).
+    - verbose (bool): If True, prints detailed logs of the registration process.
+
+    Returns:
+    - transforms (list): List of affine transformation matrices (4x4), one for each timepoint.
+                         Invalid or missing transformations are interpolated.
+
+    Notes:
+    - Each timepoint is processed in parallel using a multiprocessing pool.
+    - Transformations are smoothed with a moving average window and validated against a reference.
+    - Missing transformations are interpolated linearly across timepoints.
+    - Use verbose=True for detailed logging during registration.
+    """
+
+    (T, Z, Y, X) = channel_tzyx.shape
+
+    approx_tform = np.eye(4)
+
+    if referece == "first":
+        target_channel_tzyx = np.broadcast_to(channel_tzyx[0], (T, Z, Y, X)).copy()
+    elif referece == "previous":
+        target_channel_tzyx = np.roll(channel_tzyx, shift=-1, axis=0)
+    else:
+        raise ValueError("Invalid reference. Please use 'first' or 'previous as reference")
+    target_channel_tzyx[0] = channel_tzyx[0]
+
+    transforms = np.zeros((T, 4, 4))
+    transforms[0] = approx_tform
+    # Compute transformations in parallel
+
+    with Pool(num_processes) as pool:
+        transforms = pool.map(
+            partial(
+                _get_tform_from_beads,
+            approx_tform,
+            channel_tzyx,
+            target_channel_tzyx,
+            angle_threshold,
+            verbose,
+            source_block_size = [32, 16, 16],
+            source_threshold_abs = 0.8,
+            source_nms_distance = 16,
+            source_min_distance = 0,
+            target_block_size = [32, 16, 16],
+            target_threshold_abs = 0.8,
+            target_nms_distance = 16,
+            target_min_distance = 0,
+            ),
+            t_idx = range(1,T,1),
+        )
+
+    # Validate and filter transforms
+    transforms = _validate_transforms(transforms, window_size, tolerance, Z, Y, X, verbose)
+    # Interpolate missing transforms
+    transforms = _interpolate_transforms(transforms)
+
+    return transforms
 
 
 @click.command()
@@ -317,6 +398,23 @@ def estimate_stabilization(
     if stabilize_z and stabilize_xy:
         if beads:
             click.echo("Estimating xyz stabilization parameters with beads")
+            with open_ome_zarr(input_position_dirpaths[0], mode="r") as beads_position:
+                source_channels = beads_position.channel_names
+                source_channel_index = source_channels.index(estimate_stabilization_channel)
+                channel_tzyx = beads_position.data.dask_array()[
+                :, source_channel_index
+                ]
+            combined_mats = estimate_xyz_stabilization_with_beads(
+                channel_tzyx=channel_tzyx,
+                num_processes=num_processes,
+                window_size=5,
+                tolerance=0.2,
+                angle_threshold=30,
+                referece=settings.reference,
+                verbose=verbose,
+            )
+            # replace nan with 0
+            combined_mats = np.nan_to_num(combined_mats)
            
   
         else:
