@@ -347,7 +347,7 @@ def beads_based_registration(
     angle_threshold: int,
     verbose: bool = False,
     transform_type: str = 'affine',
-    match_algorithm: str = 'hungarian'
+    match_algorithm: str = 'hungarian',
 ):
     """
     Perform beads-based temporal registration of 4D data using affine transformations.
@@ -387,10 +387,10 @@ def beads_based_registration(
                 target_channel_tzyx,
                 angle_threshold,
                 verbose,
-                match_algorithm = match_algorithm,
-                transform_type = transform_type
+                match_algorithm=match_algorithm,
+                transform_type=transform_type,
             ),
-            t_idx = range(T),
+            t_idx=range(T),
         )
 
     # Validate and filter transforms
@@ -440,6 +440,7 @@ def _validate_transforms(transforms, window_size, tolerance, Z, Y, X, verbose=Fa
                 transforms[i] = None
     return transforms
 
+
 def _interpolate_transforms(transforms):
     """
     Interpolate missing transforms in a list of affine transformation matrices.
@@ -462,10 +463,7 @@ def _interpolate_transforms(transforms):
         f = interp1d(x, y, axis=0, kind='linear', fill_value='extrapolate')
         transforms = f(range(len(transforms))).tolist()
 
-
     return transforms
-
-
 
 
 def _check_transform_difference(tform1, tform2, shape, threshold=5.0, verbose=False):
@@ -546,7 +544,9 @@ def _compute_cost_matrix(
             angles[(i, j)] = angles[(j, i)] = angle
         return distances, angles
 
-    def local_edge_costs(source_edges, target_edges, source_attrs, target_attrs, attr='distance', default=1e6):
+    def local_edge_costs(
+        source_edges, target_edges, source_attrs, target_attrs, attr='distance', default=1e6
+    ):
         cost_matrix = np.full((n, m), default)
         for i in range(n):
             s_neighbors = [j for a, j in source_edges if a == i]
@@ -576,8 +576,12 @@ def _compute_cost_matrix(
     target_dists, target_angles = compute_edge_attributes(target_peaks, target_edges)
 
     # Compute local consistency costs
-    C_dist_node = local_edge_costs(source_edges, target_edges, source_dists, target_dists, attr='distance', default=1e6)
-    C_angle_node = local_edge_costs(source_edges, target_edges, source_angles, target_angles, attr='angle', default=np.pi)
+    C_dist_node = local_edge_costs(
+        source_edges, target_edges, source_dists, target_dists, attr='distance', default=1e6
+    )
+    C_angle_node = local_edge_costs(
+        source_edges, target_edges, source_angles, target_angles, attr='angle', default=np.pi
+    )
 
     # Combine all costs
     C_total = (
@@ -948,8 +952,8 @@ def estimate_registration(
             tolerance=settings.affine_transform_tolerance,
             angle_threshold=settings.filtering_angle_threshold,
             verbose=settings.verbose,
-            affine_transform_type = affine_transform_type,
-            match_algorithm = settings.match_algorithm
+            affine_transform_type=affine_transform_type,
+            match_algorithm=settings.match_algorithm,
         )
 
         model = StabilizationSettings(
