@@ -1,20 +1,20 @@
 from functools import partial
 from multiprocessing import Pool
-from scipy.spatial.distance import cdist
 
 import ants
 import click
 import dask.array as da
 import napari
 import numpy as np
-from sklearn.neighbors import NearestNeighbors
-from scipy.optimize import linear_sum_assignment
+
 from iohub import open_ome_zarr
 from scipy.interpolate import interp1d
+from scipy.optimize import linear_sum_assignment
+from scipy.spatial.distance import cdist
 from skimage.feature import match_descriptors
 from skimage.transform import AffineTransform, EuclideanTransform, SimilarityTransform
+from sklearn.neighbors import NearestNeighbors
 from waveorder.focus import focus_from_transverse_band
-from skimage.registration import phase_cross_correlation
 
 from biahub.analysis.AnalysisSettings import (
     EstimateRegistrationSettings,
@@ -436,7 +436,6 @@ def _validate_transforms(transforms, window_size, tolerance, Z, Y, X, verbose=Fa
                 transforms[i] = None
     return transforms
 
-
 def _interpolate_transforms(transforms):
     """
     Interpolate missing transforms in a list of affine transformation matrices.
@@ -458,7 +457,11 @@ def _interpolate_transforms(transforms):
         click.echo(f'Interpolating missing transforms at timepoints: {_x}')
         f = interp1d(x, y, axis=0, kind='linear', fill_value='extrapolate')
         transforms = f(range(len(transforms))).tolist()
+
+
     return transforms
+
+
 
 
 def _check_transform_difference(tform1, tform2, shape, threshold=5.0, verbose=False):
@@ -496,94 +499,91 @@ def _check_transform_difference(tform1, tform2, shape, threshold=5.0, verbose=Fa
         click.echo(f'MSE of transformed points: {mse:.2f}; threshold: {threshold:.2f}')
     return mse <= threshold
 
+
 def _compute_cost_matrix(
-        source_peaks,
-        target_peaks,
-        source_edges,
-        target_edges,
-        distance_metric='euclidean',
-        distande_weight=1,
-        nodes_angle_weight=1,
-        nodes_distance_weight=1):
+    source_peaks,
+    target_peaks,
+    source_edges,
+    target_edges,
+    distance_metric='euclidean',
+    distance_weight=1.0,
+    nodes_angle_weight=1.0,
+    nodes_distance_weight=1.0,
+):
     """
-    Compute a cost matrix for matching peaks.
+    Compute a cost matrix for matching peaks between two graphs based on:
+    - Euclidean or other distance between peaks
+    - Consistency in edge distances
+    - Consistency in edge angles
 
     Parameters:
-    - source_peaks (ndarray): Array of source peaks (n, 2).
-    - target_peaks (ndarray): Array of target peaks (m, 2).
-    - match_metric (str): Distance metric for matching (euclidean, manhattan, cosine).
-    - source_edges (list): List of source edges (i, j).
-    - target_edges (list): List of target edges (i, j).
-    - distande_weight (float): Weight for distance cost between arrays.
-    - nodes_angle_weight (float): Weight for angle consistency cost withing each array.
-    - nodes_distance_weight (float): Weight for distance consistency cost withing each array.
+    - source_peaks (ndarray): (n, 2) array of source node coordinates.
+    - target_peaks (ndarray): (m, 2) array of target node coordinates.
+    - source_edges (list of tuple): List of edges (i, j) in source graph.
+    - target_edges (list of tuple): List of edges (i, j) in target graph.
+    - distance_metric (str): Metric for direct point-to-point distances.
+    - distance_weight (float): Weight for point distance cost.
+    - nodes_angle_weight (float): Weight for angular consistency cost.
+    - nodes_distance_weight (float): Weight for local edge distance cost.
 
     Returns:
     - ndarray: Cost matrix of shape (n, m).
     """
+    n, m = len(source_peaks), len(target_peaks)
 
-    # Step 1: Compute distance cost between peaks
-    C_dist = cdist(source_peaks, target_peaks, metric=distance_metric)
-
-    def compute_edge_distances(peaks, edges):
+    def compute_edge_attributes(peaks, edges):
         distances = {}
-        for i, j in edges:
-            d = np.linalg.norm(peaks[j] - peaks[i])
-            distances[(i, j)] = d
-            distances[(j, i)] = d
-        return distances
-
-    mov_distances = compute_edge_distances(source_peaks, source_edges)
-    ref_distances = compute_edge_distances(target_peaks, target_edges)
-
-    C_dist_struct = np.zeros((len(source_peaks), len(target_peaks)))
-    for i in range(len(source_peaks)):
-        for j in range(len(target_peaks)):
-            mov_neighbors = [n for a, n in source_edges if a == i]
-            ref_neighbors = [n for a, n in target_edges if a == j]
-            common_len = min(len(mov_neighbors), len(ref_neighbors))
-            dist_diffs = []
-            for k in range(common_len):
-                m_edge = (i, mov_neighbors[k])
-                r_edge = (j, ref_neighbors[k])
-                if m_edge in mov_distances and r_edge in ref_distances:
-                    d_mov = mov_distances[m_edge]
-                    d_ref = ref_distances[r_edge]
-                    dist_diffs.append(abs(d_mov - d_ref))
-            C_dist_struct[i, j] = np.mean(dist_diffs) if dist_diffs else 1e6
-
-    # Step 2: Angle  withing each array
-    def compute_angles(peaks, edges):
         angles = {}
         for i, j in edges:
             vec = peaks[j] - peaks[i]
+            d = np.linalg.norm(vec)
             angle = np.arctan2(vec[1], vec[0])
-            angles[(i, j)] = angle
-            angles[(j, i)] = angle
-        return angles
+            distances[(i, j)] = distances[(j, i)] = d
+            angles[(i, j)] = angles[(j, i)] = angle
+        return distances, angles
 
-    mov_angles = compute_angles(source_peaks, source_edges)
-    ref_angles = compute_angles(target_peaks, target_edges)
+    def local_edge_costs(source_edges, target_edges, source_attrs, target_attrs, attr='distance', default=1e6):
+        cost_matrix = np.full((n, m), default)
+        for i in range(n):
+            s_neighbors = [j for a, j in source_edges if a == i]
+            for j in range(m):
+                t_neighbors = [k for a, k in target_edges if a == j]
+                common_len = min(len(s_neighbors), len(t_neighbors))
+                diffs = []
+                for k in range(common_len):
+                    s_edge = (i, s_neighbors[k])
+                    t_edge = (j, t_neighbors[k])
+                    if s_edge in source_attrs and t_edge in target_attrs:
+                        v1 = source_attrs[s_edge]
+                        v2 = target_attrs[t_edge]
+                        if attr == 'angle':
+                            diff = np.abs(v1 - v2)
+                        else:  # distance
+                            diff = np.abs(v1 - v2)
+                        diffs.append(diff)
+                cost_matrix[i, j] = np.mean(diffs) if diffs else default
+        return cost_matrix
 
-    C_angle = np.zeros_like(C_dist)
-    for i in range(len(source_peaks)):
-        for j in range(len(target_peaks)):
-            mov_neighbors = [n for a, n in source_edges if a == i]
-            ref_neighbors = [n for a, n in target_edges if a == j]
-            common_len = min(len(mov_neighbors), len(ref_neighbors))
-            angle_diffs = []
-            for k in range(common_len):
-                m_edge = (i, mov_neighbors[k])
-                r_edge = (j, ref_neighbors[k])
-                if m_edge in mov_angles and r_edge in ref_angles:
-                    a_mov = mov_angles[m_edge]
-                    a_ref = ref_angles[r_edge]
-                    angle_diffs.append(np.abs(a_mov - a_ref))
-            C_angle[i, j] = np.mean(angle_diffs) if angle_diffs else np.pi
-    # Step 3: Combine costs with weights
+    # Compute direct point-wise distance
+    C_dist = cdist(source_peaks, target_peaks, metric=distance_metric)
 
-    C_total = distande_weight*C_dist + nodes_angle_weight* C_angle + nodes_distance_weight*C_dist_struct
-    return C_total    
+    # Compute edge distances and angles
+    source_dists, source_angles = compute_edge_attributes(source_peaks, source_edges)
+    target_dists, target_angles = compute_edge_attributes(target_peaks, target_edges)
+
+    # Compute local consistency costs
+    C_dist_node = local_edge_costs(source_edges, target_edges, source_dists, target_dists, attr='distance', default=1e6)
+    C_angle_node = local_edge_costs(source_edges, target_edges, source_angles, target_angles, attr='angle', default=np.pi)
+
+    # Combine all costs
+    C_total = (
+        distance_weight * C_dist
+        + nodes_angle_weight * C_angle_node
+        + nodes_distance_weight * C_dist_node
+    )
+
+    return C_total
+
 
 def _knn_edges(points, k=5):
     nbrs = NearestNeighbors(n_neighbors=k).fit(points)
@@ -591,15 +591,16 @@ def _knn_edges(points, k=5):
     edges = [(i, j) for i, neighbors in enumerate(indices) for j in neighbors if i != j]
     return edges
 
+
 def match_hungarian(C, cost_threshold=1e5, dummy_cost=1e6):
     """
     Runs Hungarian matching with padding for unequal-sized graphs.
-    
+
     Parameters:
         C_total (ndarray): Cost matrix of shape (n_A, n_B)
         cost_threshold (float): Maximum cost to consider a valid match
         dummy_cost (float): Cost assigned to dummy nodes (must be > cost_threshold)
-    
+
     Returns:
         matches (ndarray): Array of shape (N_matches, 2) with valid (A_idx, B_idx) pairs
     """
@@ -615,11 +616,13 @@ def match_hungarian(C, cost_threshold=1e5, dummy_cost=1e6):
 
     # Filter out dummy matches and high-cost matches
     valid_matches = [
-        (i, j) for i, j in zip(row_ind, col_ind)
+        (i, j)
+        for i, j in zip(row_ind, col_ind)
         if i < n_A and j < n_B and C[i, j] < cost_threshold
     ]
 
     return np.array(valid_matches)
+
 
 def _get_tform_from_beads(
     approx_tform: list,
@@ -636,11 +639,11 @@ def _get_tform_from_beads(
     target_threshold_abs: float = 0.8,
     target_nms_distance: int = 16,
     target_min_distance: int = 0,
-    transform_type: str = 'Affine',
     match_algorithm: str = 'hungarian',
     match_cross_check: bool = True,
     match_metric: str = 'euclidean',
     match_max_ratio: float = 0.6,
+    transform_type: str = 'Affine',
 ) -> list | None:
     """
     Calculate the affine transformation matrix between source and target channels
@@ -725,39 +728,43 @@ def _get_tform_from_beads(
     if len(source_peaks) < 2 or len(target_peaks) < 2:
         click.echo(f'No beads were detected at timepoint {t_idx}')
         return
-    
-    
+
     if match_algorithm == 'match_descriptor':
         print("Using match descriptor")
 
         # Match peaks, excluding top 5% of distances as outliers
         matches = match_descriptors(
-            source_peaks, target_peaks, metric=match_metric, max_ratio=match_max_ratio, cross_check=match_cross_check
+            source_peaks,
+            target_peaks,
+            metric=match_metric,
+            max_ratio=match_max_ratio,
+            cross_check=match_cross_check,
         )
     elif match_algorithm == 'hungarian':
-    
-        print("Using Hungarian matching")
 
         source_edges = _knn_edges(source_peaks, k=5)
         target_edges = _knn_edges(target_peaks, k=5)
 
-
         if match_cross_check:
             # Step 1: A → B
             C_ab = _compute_cost_matrix(source_peaks, target_peaks, source_edges, target_edges)
-            matches_ab = match_hungarian(C_ab,cost_threshold=np.quantile(C_ab, 0.10))
+            matches_ab = match_hungarian(C_ab, cost_threshold=np.quantile(C_ab, 0.10))
 
             # Step 2: B → A (swap arguments)
-            C_ba = _compute_cost_matrix(target_peaks, source_peaks, target_edges, source_edges, distance_metric=match_metric)
-            matches_ba = match_hungarian(C_ba,cost_threshold=np.quantile(C_ba, 0.10))
+            C_ba = _compute_cost_matrix(
+                target_peaks,
+                source_peaks,
+                target_edges,
+                source_edges,
+                distance_metric=match_metric,
+            )
+            matches_ba = match_hungarian(C_ba, cost_threshold=np.quantile(C_ba, 0.10))
 
             # Step 3: Invert matches_ba to compare
             reverse_map = {(j, i) for i, j in matches_ba}
 
             # Step 4: Keep only symmetric matches
-            matches = np.array([
-                [i, j] for i, j in matches_ab if (i, j) in reverse_map
-            ])
+            matches = np.array([[i, j] for i, j in matches_ab if (i, j) in reverse_map])
         else:
             # # Compute cost matrix
             C = _compute_cost_matrix(source_peaks, target_peaks, source_edges, target_edges)
