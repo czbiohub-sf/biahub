@@ -42,6 +42,7 @@ dependencies = [
   "napari-psf-analysis",
   "imageio-ffmpeg",
   "dask[array]",
+  "scikit-learn"
 ]
 
 [project.optional-dependencies]
