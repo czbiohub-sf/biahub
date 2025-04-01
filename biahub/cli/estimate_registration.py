@@ -346,6 +346,8 @@ def beads_based_registration(
     tolerance: float,
     angle_threshold: int,
     verbose: bool = False,
+    transform_type: str = 'affine',
+    match_algorithm: str = 'hungarian'
 ):
     """
     Perform beads-based temporal registration of 4D data using affine transformations.
@@ -385,8 +387,10 @@ def beads_based_registration(
                 target_channel_tzyx,
                 angle_threshold,
                 verbose,
+                match_algorithm = match_algorithm,
+                transform_type = transform_type
             ),
-            range(T),
+            t_idx = range(T),
         )
 
     # Validate and filter transforms
@@ -643,7 +647,7 @@ def _get_tform_from_beads(
     match_cross_check: bool = True,
     match_metric: str = 'euclidean',
     match_max_ratio: float = 0.6,
-    transform_type: str = 'Affine',
+    transform_type: str = 'affine',
 ) -> list | None:
     """
     Calculate the affine transformation matrix between source and target channels
@@ -816,11 +820,11 @@ def _get_tform_from_beads(
         return
 
     # Affine transform performs better than Euclidean
-    if transform_type == 'Affine':
+    if transform_type == 'affine':
         tform = AffineTransform(dimensionality=3)
-    elif transform_type == 'Euclidean':
+    elif transform_type == 'euclidean':
         tform = EuclideanTransform(dimensionality=3)
-    elif transform_type == 'Similarity':
+    elif transform_type == 'similarity':
         tform = SimilarityTransform(dimensionality=3)
     else:
         raise ValueError(f'Unknown transform type: {transform_type}')
@@ -944,6 +948,8 @@ def estimate_registration(
             tolerance=settings.affine_transform_tolerance,
             angle_threshold=settings.filtering_angle_threshold,
             verbose=settings.verbose,
+            affine_transform_type = affine_transform_type,
+            match_algorithm = settings.match_algorithm
         )
 
         model = StabilizationSettings(
@@ -963,7 +969,7 @@ def estimate_registration(
             target_channel_volume=np.asarray(target_channel_data[settings.time_index]),
             target_channel_name=target_channel_name,
             target_channel_voxel_size=target_channel_voxel_size,
-            similarity=True if affine_transform_type == "Similarity" else False,
+            similarity=True if affine_transform_type == "similarity" else False,
             pre_affine_90degree_rotation=affine_90degree_rotation,
         )
 

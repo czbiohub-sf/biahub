@@ -1,0 +1,13 @@
+estimate_stabilization_channel: Phase3D
+stabilization_channels: 
+  - Phase3D
+stabilization_type: "xyz"
+beads: True
+reference: "first"
+crop_size_xy: 
+  - 500
+  - 500
+# affine_transform_window_size: int = None
+# affine_transform_tolerance: float = None
+# filtering_angle_threshold: int = None
+verbose: True

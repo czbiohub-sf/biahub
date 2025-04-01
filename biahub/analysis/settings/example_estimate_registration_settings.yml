@@ -13,8 +13,13 @@ estimation_method: manual
 
 # Optional. Type of transform to be estimated.
 # Currently limited to Euclidean or Similarity and only used during manual registrion.
-# Beads-based registration always uses fill Affine transform.
-affine_transform_type: Euclidean
+# Beads-based registration always uses fill affine transform.
+affine_transform_type: euclidean
+
+# Optional. Matching algorithm used to find corresponding points in the two channels for beads registration.
+# Currently default is Hungarian algorithm
+# Other option is "match_descriptor" from scikit-image: https://scikit-image.org/docs/stable/api/skimage.feature.html#skimage.feature.match_descriptors.
+match_algorithm: hungarian
 
 # Optional. Index of time point to use during manual registration
 time_index: 0
@@ -47,14 +52,14 @@ approx_affine_transform:
 # during beads-based registration.
 affine_transform_window_size: 10
 
-# Optional. Maximum allowed difference between consecutive transformations
+# Optional. Maximum allowed difference withing the window_size of transformations
 # during beads-based registration.
 affine_transform_tolerance: 10
 
 # Optional. Threshold for filtering outliers in detected bead matches, in degrees
 # used during beads-based registration.
 # Lower this value if matches are noisy; increase if too restrictive.
-filtering_angle_threshold: 30
+filtering_angle_threshold: 0
 
 # Optional. Set to True for detailed logging of bead detection process.
 verbose: True
