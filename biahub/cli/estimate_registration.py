@@ -440,28 +440,57 @@ def _validate_transforms(transforms, window_size, tolerance, Z, Y, X, verbose=Fa
                 transforms[i] = None
     return transforms
 
-
-def _interpolate_transforms(transforms):
+def _interpolate_transforms(transforms, window=3):
     """
-    Interpolate missing transforms in a list of affine transformation matrices.
-
-    This function linearly interpolates missing transformations in a list of affine
-    transformation matrices. It replaces None values with interpolated matrices.
+    Interpolate missing transforms (None) in a list of affine transformation matrices.
 
     Parameters:
-    - transforms (list): List of affine transformation matrices (4x4), one for each timepoint.
+    - transforms (list of 4x4 arrays or None): One transform per timepoint.
+    - window (int): Local window radius for interpolation. If 0, global interpolation is used.
 
     Returns:
-    - list: List of affine transformation matrices with missing values interpolated.
+    - list: Transforms with missing values filled via linear interpolation.
     """
-    x, y = zip(
-        *[(i, transforms[i]) for i in range(len(transforms)) if transforms[i] is not None]
-    )
-    if len(transforms) - len(x) > 0:
-        _x = [i for i in range(len(transforms)) if i not in x]
-        click.echo(f'Interpolating missing transforms at timepoints: {_x}')
-        f = interp1d(x, y, axis=0, kind='linear', fill_value='extrapolate')
-        transforms = f(range(len(transforms))).tolist()
+    n = len(transforms)
+    valid_indices = [i for i, t in enumerate(transforms) if t is not None]
+    valid_transforms = [np.array(transforms[i]) for i in valid_indices]
+
+    if not valid_indices or len(valid_indices) < 2:
+        raise ValueError("At least two valid transforms are required for interpolation.")
+
+    missing_indices = [i for i in range(n) if transforms[i] is None]
+
+    if not missing_indices:
+        return transforms  # nothing to do
+
+    click.echo(f"Interpolating missing transforms at timepoints: {missing_indices}")
+
+    if window > 0:
+        for idx in missing_indices:
+            # Define local window
+            start = max(0, idx - window)
+            end = min(n, idx + window + 1)
+
+            local_x = []
+            local_y = []
+
+            for j in range(start, end):
+                if transforms[j] is not None:
+                    local_x.append(j)
+                    local_y.append(np.array(transforms[j]))
+
+            if len(local_x) < 2:
+                click.echo(f"Skipping timepoint {idx}: only {len(local_x)} neighbors found.")
+                continue
+
+            f = interp1d(local_x, local_y, axis=0, kind='linear', fill_value='extrapolate')
+            transforms[idx] = f(idx).tolist()
+            click.echo(f"Interpolated timepoint {idx} using neighbors: {local_x}")
+
+    else:
+        # Global interpolation using all valid transforms
+        f = interp1d(valid_indices, valid_transforms, axis=0, kind='linear', fill_value='extrapolate')
+        transforms = [f(i).tolist() if transforms[i] is None else transforms[i] for i in range(n)]
 
     return transforms
 
