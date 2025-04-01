@@ -2,10 +2,12 @@ import itertools
 import multiprocessing as mp
 
 from functools import partial
+from multiprocessing import Pool
 from pathlib import Path
 from typing import Tuple
 
 import click
+import dask.array as da
 import numpy as np
 import pandas as pd
 
@@ -13,13 +15,13 @@ from iohub.ngff import open_ome_zarr
 from pystackreg import StackReg
 from waveorder.focus import focus_from_transverse_band
 
-from biahub.analysis.AnalysisSettings import StabilizationSettings
-from biahub.cli.parsing import input_position_dirpaths, output_filepath
-from biahub.cli.utils import model_to_yaml
+from biahub.analysis.AnalysisSettings import StabilizationSettings, EstimateStabilizationSettings
+
+from biahub.cli.parsing import input_position_dirpaths, output_filepath, config_filepath
+from biahub.cli.utils import model_to_yaml, yaml_to_model
 
 NA_DET = 1.35
 LAMBDA_ILL = 0.500
-
 
 # TODO: Do we need to compute focus fiding on n_number of channels?
 def estimate_position_focus(
@@ -220,9 +222,13 @@ def estimate_xy_stabilization(
     return T_zyx_shift
 
 
+
+
+
 @click.command()
 @input_position_dirpaths()
 @output_filepath()
+@config_filepath()
 @click.option(
     "--num-processes",
     "-j",
@@ -231,57 +237,11 @@ def estimate_xy_stabilization(
     required=False,
     type=int,
 )
-@click.option(
-    "--channel-index",
-    "-c",
-    default=0,
-    help="Channel index used for estimating stabilization parameters. Default is 0.",
-    required=False,
-    type=int,
-)
-@click.option(
-    "--stabilize-xy",
-    "-y",
-    is_flag=True,
-    help="Estimate yx drift and apply to the input data. Default is False.",
-)
-@click.option(
-    "--stabilize-z",
-    "-z",
-    is_flag=True,
-    help="Estimate z drift and apply to the input data. Default is False.",
-)
-@click.option(
-    "--verbose",
-    "-v",
-    is_flag=True,
-    type=bool,
-    help="Stabilization verbose. Default is False.",
-)
-@click.option(
-    "--crop-size-xy",
-    nargs=2,
-    type=int,
-    default=[300, 300],
-    help="Crop size in xy. Enter two integers. Default is 300 300.",
-)
-@click.option(
-    "--stabilization-channel-indices",
-    help="Indices of channels which will be stabilized. Default is all channels.",
-    multiple=True,
-    type=int,
-    default=[],
-)
 def estimate_stabilization(
     input_position_dirpaths,
     output_filepath,
+    config_filepath,
     num_processes,
-    channel_index,
-    stabilize_xy,
-    stabilize_z,
-    verbose,
-    crop_size_xy,
-    stabilization_channel_indices,
 ):
     """
     Estimate the Z and/or XY timelapse stabilization matrices.
@@ -291,10 +251,31 @@ def estimate_stabilization(
     The size of the crop in xy can be specified with the crop-size-xy option.
 
     Example usage:
-    biahub stabilization -i ./timelapse.zarr/0/0/0 -o ./stabilization.yml -y -z -v --crop-size-xy 300 300
+    biahub stabilization -i ./timelapse.zarr/0/0/0 -o ./stabilization.yml -y -z -b -v --crop-size-xy 300 300
 
     Note: the verbose output will be saved at the same level as the output zarr.
     """
+
+    # Load the settings
+    config_filepath = Path(config_filepath)
+
+    settings = yaml_to_model(config_filepath, EstimateStabilizationSettings)
+    verbose = settings.verbose
+    crop_size_xy = settings.crop_size_xy
+    estimate_stabilization_channel = settings.estimate_stabilization_channel
+    stabilization_type = settings.stabilization_type
+    beads = settings.beads
+    if "z" in stabilization_type:
+        stabilize_z = True
+    else:
+        stabilize_z = False
+    if "xy" in stabilization_type:
+        stabilize_xy = True
+    else:
+        stabilize_xy = False
+    if "xyz" in stabilization_type:
+        stabilize_z = True
+        stabilize_xy = True
     if not (stabilize_xy or stabilize_z):
         raise ValueError("At least one of 'stabilize_xy' or 'stabilize_z' must be selected")
 
@@ -305,28 +286,13 @@ def estimate_stabilization(
     output_dirpath.mkdir(parents=True, exist_ok=True)
 
     # Channel names to process
-    stabilization_channel_names = []
     with open_ome_zarr(input_position_dirpaths[0]) as dataset:
         channel_names = dataset.channel_names
         voxel_size = dataset.scale
-    if len(stabilization_channel_indices) < 1:
-        stabilization_channel_indices = range(len(channel_names))
-        stabilization_channel_names = channel_names
-    else:
-        # Make the input a list
-        stabilization_channel_indices = list(stabilization_channel_indices)
-        stabilization_channel_names = []
-        # Check the channel indeces are valid
-        for c_idx in stabilization_channel_indices:
-            if c_idx not in range(len(channel_names)):
-                raise ValueError(
-                    f"Channel index {c_idx} is not valid. Please provide channel indeces from 0 to {len(channel_names)-1}"
-                )
-            else:
-                stabilization_channel_names.append(channel_names[c_idx])
+        channel_index = channel_names.index(estimate_stabilization_channel)
 
     # Estimate z drift
-    if stabilize_z:
+    if stabilize_z and not beads:
         click.echo("Estimating z stabilization parameters")
         T_z_drift_mats = estimate_z_stabilization(
             input_data_paths=input_position_dirpaths,
@@ -336,10 +302,9 @@ def estimate_stabilization(
             crop_size_xy=crop_size_xy,
             verbose=verbose,
         )
-        stabilization_type = "z"
 
     # Estimate yx drift
-    if stabilize_xy:
+    if stabilize_xy and not beads:
         click.echo("Estimating xy stabilization parameters")
         T_translation_mats = estimate_xy_stabilization(
             input_data_paths=input_position_dirpaths,
@@ -348,15 +313,20 @@ def estimate_stabilization(
             crop_size_xy=crop_size_xy,
             verbose=verbose,
         )
-        stabilization_type = "xy"
 
     if stabilize_z and stabilize_xy:
-        if T_translation_mats.shape[0] != T_z_drift_mats.shape[0]:
-            raise ValueError(
-                "The number of translation matrices and z drift matrices must be the same"
+        if beads:
+            click.echo("Estimating xyz stabilization parameters with beads")
+           
+  
+        else:
+            if T_translation_mats.shape[0] != T_z_drift_mats.shape[0]:
+                raise ValueError(
+                    "The number of translation matrices and z drift matrices must be the same"
+                )
+            combined_mats = np.array(
+                [a @ b for a, b in zip(T_translation_mats, T_z_drift_mats)]
             )
-        combined_mats = np.array([a @ b for a, b in zip(T_translation_mats, T_z_drift_mats)])
-        stabilization_type = "xyz"
 
     # NOTE: we've checked that one of the two conditions below is true
     elif stabilize_z:
@@ -367,8 +337,8 @@ def estimate_stabilization(
     # Save the combined matrices
     model = StabilizationSettings(
         stabilization_type=stabilization_type,
-        stabilization_estimation_channel=channel_names[channel_index],
-        stabilization_channels=stabilization_channel_names,
+        stabilization_estimation_channel=estimate_stabilization_channel,
+        stabilization_channels=settings.stabilization_channels,
         affine_transform_zyx_list=combined_mats.tolist(),
         time_indices="all",
         output_voxel_size=voxel_size,
