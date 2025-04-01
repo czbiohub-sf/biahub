@@ -342,12 +342,14 @@ def beads_based_registration(
     target_channel_tzyx: da.Array,
     approx_tform: list,
     num_processes: int,
-    window_size: int,
+    window_size_validation: int,
     tolerance: float,
+    window_size_interp: int,
     angle_threshold: int,
     verbose: bool = False,
     transform_type: str = 'affine',
     match_algorithm: str = 'hungarian',
+    interpolation_type: str = 'linear',
 ):
     """
     Perform beads-based temporal registration of 4D data using affine transformations.
@@ -390,13 +392,13 @@ def beads_based_registration(
                 match_algorithm=match_algorithm,
                 transform_type=transform_type,
             ),
-            t_idx=range(T),
+            range(T),
         )
 
     # Validate and filter transforms
-    transforms = _validate_transforms(transforms, window_size, tolerance, Z, Y, X, verbose)
+    transforms = _validate_transforms(transforms, window_size_validation, tolerance, Z, Y, X, verbose)
     # Interpolate missing transforms
-    transforms = _interpolate_transforms(transforms)
+    transforms = _interpolate_transforms(transforms, window_size_interp, interpolation_type)
 
     return transforms
 
@@ -440,7 +442,7 @@ def _validate_transforms(transforms, window_size, tolerance, Z, Y, X, verbose=Fa
                 transforms[i] = None
     return transforms
 
-def _interpolate_transforms(transforms, window=3):
+def _interpolate_transforms(transforms, window=3, interpolation_type='linear'):
     """
     Interpolate missing transforms (None) in a list of affine transformation matrices.
 
@@ -483,7 +485,7 @@ def _interpolate_transforms(transforms, window=3):
                 click.echo(f"Skipping timepoint {idx}: only {len(local_x)} neighbors found.")
                 continue
 
-            f = interp1d(local_x, local_y, axis=0, kind='linear', fill_value='extrapolate')
+            f = interp1d(local_x, local_y, axis=0, kind=interpolation_type, fill_value='extrapolate')
             transforms[idx] = f(idx).tolist()
             click.echo(f"Interpolated timepoint {idx} using neighbors: {local_x}")
 
@@ -977,12 +979,14 @@ def estimate_registration(
             target_channel_data,
             approx_tform=np.asarray(settings.approx_affine_transform),
             num_processes=num_processes,
-            window_size=settings.affine_transform_window_size,
-            tolerance=settings.affine_transform_tolerance,
+            window_size_validation=settings.affine_transform_validation_window_size,
+            tolerance=settings.affine_transform_validation_tolerance,
+            window_size_interp=settings.affine_transform_interpolation_window_size,
             angle_threshold=settings.filtering_angle_threshold,
             verbose=settings.verbose,
-            affine_transform_type=affine_transform_type,
+            transform_type=affine_transform_type,
             match_algorithm=settings.match_algorithm,
+            interpolation_type = settings.affine_transform_interpolation_type,
         )
 
         model = StabilizationSettings(

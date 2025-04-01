@@ -50,12 +50,18 @@ approx_affine_transform:
 
 # Optional. Size of the moving window for smoothing transformations
 # during beads-based registration.
-affine_transform_window_size: 10
+affine_transform_validation_window_size: 10
 
 # Optional. Maximum allowed difference withing the window_size of transformations
 # during beads-based registration.
-affine_transform_tolerance: 10
+affine_transform_validation_tolerance: 10
 
+# Optional. Size of the window for interpolation of transformations during beads-based registration for cases the transformation is not available 
+affine_transform_interpolation_window_size: 3
+
+# Optional. Type of interpolation of transformations during beads-based registration for cases the transformation is not available
+# Options are "linear" or "cubic"
+affine_transform_interpolation_type: "linear"
 # Optional. Threshold for filtering outliers in detected bead matches, in degrees
 # used during beads-based registration.
 # Lower this value if matches are noisy; increase if too restrictive.

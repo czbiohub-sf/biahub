@@ -32,8 +32,10 @@ class EstimateRegistrationSettings(MyBaseModel):
     time_index: int = 0
     affine_90degree_rotation: int = 0
     approx_affine_transform: list = None
-    affine_transform_window_size: int = 10
-    affine_transform_tolerance: float = 50.0
+    affine_transform_validation_window_size: int = 10
+    affine_transform_validation_tolerance: float = 50.0
+    affine_transform_interpolation_window_size: int = 3
+    affine_transform_interpolation_type: Literal["linear", "cubic"] = "linear"
     filtering_angle_threshold: int = 0
     verbose: bool = False
 
