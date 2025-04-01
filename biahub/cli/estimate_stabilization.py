@@ -15,16 +15,21 @@ from iohub.ngff import open_ome_zarr
 from pystackreg import StackReg
 from waveorder.focus import focus_from_transverse_band
 
-from biahub.analysis.AnalysisSettings import StabilizationSettings, EstimateStabilizationSettings
-
-from biahub.cli.estimate_registration import (
-    _get_tform_from_beads, _validate_transforms, _interpolate_transforms
+from biahub.analysis.AnalysisSettings import (
+    EstimateStabilizationSettings,
+    StabilizationSettings,
 )
-from biahub.cli.parsing import input_position_dirpaths, output_filepath, config_filepath
+from biahub.cli.estimate_registration import (
+    _get_tform_from_beads,
+    _interpolate_transforms,
+    _validate_transforms,
+)
+from biahub.cli.parsing import config_filepath, input_position_dirpaths, output_filepath
 from biahub.cli.utils import model_to_yaml, yaml_to_model
 
 NA_DET = 1.35
 LAMBDA_ILL = 0.500
+
 
 # TODO: Do we need to compute focus fiding on n_number of channels?
 def estimate_position_focus(
@@ -281,21 +286,21 @@ def estimate_xyz_stabilization_with_beads(
         transforms = pool.map(
             partial(
                 _get_tform_from_beads,
-            approx_tform,
-            channel_tzyx,
-            target_channel_tzyx,
-            angle_threshold,
-            verbose,
-            source_block_size = [32, 16, 16],
-            source_threshold_abs = 0.8,
-            source_nms_distance = 16,
-            source_min_distance = 0,
-            target_block_size = [32, 16, 16],
-            target_threshold_abs = 0.8,
-            target_nms_distance = 16,
-            target_min_distance = 0,
+                approx_tform,
+                channel_tzyx,
+                target_channel_tzyx,
+                angle_threshold,
+                verbose,
+                source_block_size=[32, 16, 16],
+                source_threshold_abs=0.8,
+                source_nms_distance=16,
+                source_min_distance=0,
+                target_block_size=[32, 16, 16],
+                target_threshold_abs=0.8,
+                target_nms_distance=16,
+                target_min_distance=0,
             ),
-            t_idx = range(1,T,1),
+            t_idx=range(1, T, 1),
         )
 
     # Validate and filter transforms
@@ -401,9 +406,7 @@ def estimate_stabilization(
             with open_ome_zarr(input_position_dirpaths[0], mode="r") as beads_position:
                 source_channels = beads_position.channel_names
                 source_channel_index = source_channels.index(estimate_stabilization_channel)
-                channel_tzyx = beads_position.data.dask_array()[
-                :, source_channel_index
-                ]
+                channel_tzyx = beads_position.data.dask_array()[:, source_channel_index]
             combined_mats = estimate_xyz_stabilization_with_beads(
                 channel_tzyx=channel_tzyx,
                 num_processes=num_processes,
@@ -415,8 +418,7 @@ def estimate_stabilization(
             )
             # replace nan with 0
             combined_mats = np.nan_to_num(combined_mats)
-           
-  
+
         else:
             if T_translation_mats.shape[0] != T_z_drift_mats.shape[0]:
                 raise ValueError(
