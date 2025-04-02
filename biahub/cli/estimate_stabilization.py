@@ -242,7 +242,6 @@ def estimate_xyz_stabilization_with_beads(
     interpolation_window_size: int = 0,
     interpolation_type: str = 'linear',
     verbose: bool = False,
-
 ):
     """
     Perform beads-based temporal registration of 4D data using affine transformations.
@@ -293,8 +292,8 @@ def estimate_xyz_stabilization_with_beads(
                 _get_tform_from_beads,
                 approx_tform=approx_tform,
                 source_channel_tzyx=channel_tzyx,
-                target_channel_tzyx = target_channel_tzyx,
-                verbose = verbose,
+                target_channel_tzyx=target_channel_tzyx,
+                verbose=verbose,
                 source_block_size=[32, 16, 16],
                 source_threshold_abs=0.8,
                 source_nms_distance=16,
@@ -303,18 +302,30 @@ def estimate_xyz_stabilization_with_beads(
                 target_threshold_abs=0.8,
                 target_nms_distance=16,
                 target_min_distance=0,
-                match_filter_angle_threshold = match_filter_angle_threshold,
+                match_filter_angle_threshold=match_filter_angle_threshold,
                 match_algorithm=match_algorithm,
                 transform_type=transform_type,
-
             ),
             range(1, T, 1),
         )
 
     # Validate and filter transforms
-    transforms = _validate_transforms(transforms = transforms, window_size = validation_window_size, tolerance= validation_tolerance, Z = Z, Y = Y, X = X, verbose = verbose)
+    transforms = _validate_transforms(
+        transforms=transforms,
+        window_size=validation_window_size,
+        tolerance=validation_tolerance,
+        Z=Z,
+        Y=Y,
+        X=X,
+        verbose=verbose,
+    )
     # Interpolate missing transforms
-    transforms = _interpolate_transforms(transforms = transforms, window_size = interpolation_window_size, interpolation_type=interpolation_type, verbose = verbose)
+    transforms = _interpolate_transforms(
+        transforms=transforms,
+        window_size=interpolation_window_size,
+        interpolation_type=interpolation_type,
+        verbose=verbose,
+    )
 
     return transforms
 
@@ -422,12 +433,11 @@ def estimate_stabilization(
                 match_algorithm=settings.match_algorithm,
                 match_filter_angle_threshold=settings.match_filter_angle_threshold,
                 transform_type=settings.affine_transform_type,
-                validation_window_size= settings.affine_transform_validation_window_size,
+                validation_window_size=settings.affine_transform_validation_window_size,
                 validation_tolerance=settings.affine_transform_validation_tolerance,
                 interpolation_window_size=settings.affine_transform_interpolation_window_size,
                 interpolation_type=settings.affine_transform_interpolation_type,
-                verbose=verbose
-
+                verbose=verbose,
             )
             # replace nan with 0
             combined_mats = np.nan_to_num(combined_mats)

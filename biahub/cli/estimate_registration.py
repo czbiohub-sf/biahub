@@ -350,7 +350,6 @@ def beads_based_registration(
     interpolation_window_size: int = 3,
     interpolation_type: str = 'linear',
     verbose: bool = False,
-
 ):
     """
     Perform beads-based temporal registration of 4D data using affine transformations.
@@ -388,8 +387,8 @@ def beads_based_registration(
                 approx_tform,
                 source_channel_tzyx=source_channel_tzyx,
                 target_channel_tzyx=target_channel_tzyx,
-                match_filter_angle_threshold = match_filter_angle_threshold,
-                verbose = verbose,
+                match_filter_angle_threshold=match_filter_angle_threshold,
+                verbose=verbose,
                 match_algorithm=match_algorithm,
                 transform_type=transform_type,
             ),
@@ -401,22 +400,23 @@ def beads_based_registration(
         transforms=transforms,
         window_size=validation_window_size,
         tolerance=validation_tolerance,
-        Z = Z,
-        Y= Y,
-        X= X,
-        verbose= verbose
+        Z=Z,
+        Y=Y,
+        X=X,
+        verbose=verbose,
     )
     # Interpolate missing transforms
     transforms = _interpolate_transforms(
         transforms=transforms,
         window_size=interpolation_window_size,
-        interpolation_type = interpolation_type,
-        verbose=verbose)
+        interpolation_type=interpolation_type,
+        verbose=verbose,
+    )
 
     return transforms
 
 
-def _validate_transforms(transforms, Z, Y, X, window_size =10, tolerance=100.0, verbose=False):
+def _validate_transforms(transforms, Z, Y, X, window_size=10, tolerance=100.0, verbose=False):
     """
     Validate a list of affine transformation matrices by smoothing and filtering.
 
@@ -456,7 +456,9 @@ def _validate_transforms(transforms, Z, Y, X, window_size =10, tolerance=100.0, 
     return transforms
 
 
-def _interpolate_transforms(transforms, window_size=3, interpolation_type='linear', verbose=False):
+def _interpolate_transforms(
+    transforms, window_size=3, interpolation_type='linear', verbose=False
+):
     """
     Interpolate missing transforms (None) in a list of affine transformation matrices.
 
@@ -497,7 +499,9 @@ def _interpolate_transforms(transforms, window_size=3, interpolation_type='linea
 
             if len(local_x) < 2:
                 if verbose:
-                    click.echo(f"Skipping timepoint {idx}: only {len(local_x)} neighbors found.")
+                    click.echo(
+                        f"Skipping timepoint {idx}: only {len(local_x)} neighbors found."
+                    )
                 continue
 
             f = interp1d(
@@ -702,10 +706,9 @@ def _get_tform_from_beads(
     match_cross_check: bool = True,
     match_metric: str = 'euclidean',
     match_max_ratio: float = 0.6,
-    match_filter_angle_threshold: float =0,
+    match_filter_angle_threshold: float = 0,
     transform_type: str = 'affine',
     verbose: bool = False,
-
 ) -> list | None:
     """
     Calculate the affine transformation matrix between source and target channels
@@ -863,9 +866,11 @@ def _get_tform_from_beads(
         ) / 2
 
         # Filter matches within ±filter_angle_threshold degrees of the dominant direction, which may need finetuning
-        filtered_indices = np.where(np.abs(angles_deg - dominant_angle) <= match_filter_angle_threshold)[0]
+        filtered_indices = np.where(
+            np.abs(angles_deg - dominant_angle) <= match_filter_angle_threshold
+        )[0]
         matches = matches[filtered_indices]
-        
+
         if verbose:
             click.echo(
                 f'Total of matches after angle filtering at time point {t_idx}: {len(matches)}'
@@ -999,7 +1004,7 @@ def estimate_registration(
         # Register using bead images
         transforms = beads_based_registration(
             source_channel_data=source_channel_data,
-            target_channel_data = target_channel_data,
+            target_channel_data=target_channel_data,
             approx_tform=np.asarray(settings.approx_affine_transform),
             num_processes=num_processes,
             match_algorithm=settings.match_algorithm,
