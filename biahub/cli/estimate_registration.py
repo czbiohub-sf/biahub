@@ -384,7 +384,7 @@ def beads_based_registration(
         transforms = pool.map(
             partial(
                 _get_tform_from_beads,
-                approx_tform = approx_tform,
+                approx_tform=approx_tform,
                 source_channel_tzyx=source_channel_tzyx,
                 target_channel_tzyx=target_channel_tzyx,
                 match_filter_angle_threshold=match_filter_angle_threshold,
