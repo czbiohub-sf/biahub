@@ -396,7 +396,9 @@ def beads_based_registration(
         )
 
     # Validate and filter transforms
-    transforms = _validate_transforms(transforms, window_size_validation, tolerance, Z, Y, X, verbose)
+    transforms = _validate_transforms(
+        transforms, window_size_validation, tolerance, Z, Y, X, verbose
+    )
     # Interpolate missing transforms
     transforms = _interpolate_transforms(transforms, window_size_interp, interpolation_type)
 
@@ -442,6 +444,7 @@ def _validate_transforms(transforms, window_size, tolerance, Z, Y, X, verbose=Fa
                 transforms[i] = None
     return transforms
 
+
 def _interpolate_transforms(transforms, window=3, interpolation_type='linear'):
     """
     Interpolate missing transforms (None) in a list of affine transformation matrices.
@@ -485,14 +488,20 @@ def _interpolate_transforms(transforms, window=3, interpolation_type='linear'):
                 click.echo(f"Skipping timepoint {idx}: only {len(local_x)} neighbors found.")
                 continue
 
-            f = interp1d(local_x, local_y, axis=0, kind=interpolation_type, fill_value='extrapolate')
+            f = interp1d(
+                local_x, local_y, axis=0, kind=interpolation_type, fill_value='extrapolate'
+            )
             transforms[idx] = f(idx).tolist()
             click.echo(f"Interpolated timepoint {idx} using neighbors: {local_x}")
 
     else:
         # Global interpolation using all valid transforms
-        f = interp1d(valid_indices, valid_transforms, axis=0, kind='linear', fill_value='extrapolate')
-        transforms = [f(i).tolist() if transforms[i] is None else transforms[i] for i in range(n)]
+        f = interp1d(
+            valid_indices, valid_transforms, axis=0, kind='linear', fill_value='extrapolate'
+        )
+        transforms = [
+            f(i).tolist() if transforms[i] is None else transforms[i] for i in range(n)
+        ]
 
     return transforms
 
@@ -986,7 +995,7 @@ def estimate_registration(
             verbose=settings.verbose,
             transform_type=affine_transform_type,
             match_algorithm=settings.match_algorithm,
-            interpolation_type = settings.affine_transform_interpolation_type,
+            interpolation_type=settings.affine_transform_interpolation_type,
         )
 
         model = StabilizationSettings(

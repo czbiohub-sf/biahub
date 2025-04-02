@@ -300,7 +300,7 @@ def estimate_xyz_stabilization_with_beads(
                 target_nms_distance=16,
                 target_min_distance=0,
             ),
-           range(1, T, 1),
+            range(1, T, 1),
         )
 
     # Validate and filter transforms
