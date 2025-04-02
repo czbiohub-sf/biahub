@@ -690,10 +690,10 @@ def match_hungarian(C, cost_threshold=1e5, dummy_cost=1e6):
 
 
 def _get_tform_from_beads(
+    t_idx: int,
     approx_tform: list,
     source_channel_tzyx: da.Array,
     target_channel_tzyx: da.Array,
-    t_idx: int,
     source_block_size: list = [32, 16, 16],
     source_threshold_abs: int = 110,
     source_nms_distance: int = 16,

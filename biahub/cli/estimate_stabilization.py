@@ -282,8 +282,6 @@ def estimate_xyz_stabilization_with_beads(
         raise ValueError("Invalid reference. Please use 'first' or 'previous as reference")
     target_channel_tzyx[0] = channel_tzyx[0]
 
-    transforms = np.zeros((T, 4, 4))
-    transforms[0] = approx_tform
     # Compute transformations in parallel
 
     with Pool(num_processes) as pool:
@@ -308,6 +306,8 @@ def estimate_xyz_stabilization_with_beads(
             ),
             range(1, T, 1),
         )
+        # add t=0 as identity transform
+        transforms = [np.eye(4)] + transforms
 
     # Validate and filter transforms
     transforms = _validate_transforms(
