@@ -8,7 +8,7 @@ stabilization_channels:
 stabilization_type: "xyz"
 
 # Optional. Flag to indicate whether to use beads for stabilization. If True, also remember to use the input path for the beads position in the plate.
-beads: True
+beads: False
 
 # Optional. Crop size in xy. Enter two integers. Default is 300 300
 crop_size_xy: 
