@@ -37,7 +37,7 @@ dependencies = [
   "waveorder",
   "largestinteriorrectangle",
   "antspyx",
-  "pysstackreg",
+  "pystackreg",
   "napari-animation",
   "napari-psf-analysis",
   "imageio-ffmpeg",
