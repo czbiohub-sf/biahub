@@ -232,12 +232,17 @@ def estimate_xy_stabilization(
 
 def estimate_xyz_stabilization_with_beads(
     channel_tzyx: da.Array,
-    num_processes: int = 1,
-    window_size: int = 10,
-    tolerance: float = 100,
-    angle_threshold: int = 0,
-    referece: str = "first",
+    num_processes: int,
+    match_referece: str = "first",
+    match_algorithm: str = 'hungarian',
+    match_filter_angle_threshold: float = 0,
+    transform_type: str = 'affine',
+    validation_window_size: int = 10,
+    validation_tolerance: float = 100.0,
+    interpolation_window_size: int = 0,
+    interpolation_type: str = 'linear',
     verbose: bool = False,
+
 ):
     """
     Perform beads-based temporal registration of 4D data using affine transformations.
@@ -270,9 +275,9 @@ def estimate_xyz_stabilization_with_beads(
 
     approx_tform = np.eye(4)
 
-    if referece == "first":
+    if match_referece == "first":
         target_channel_tzyx = np.broadcast_to(channel_tzyx[0], (T, Z, Y, X)).copy()
-    elif referece == "previous":
+    elif match_referece == "previous":
         target_channel_tzyx = np.roll(channel_tzyx, shift=-1, axis=0)
     else:
         raise ValueError("Invalid reference. Please use 'first' or 'previous as reference")
@@ -286,11 +291,10 @@ def estimate_xyz_stabilization_with_beads(
         transforms = pool.map(
             partial(
                 _get_tform_from_beads,
-                approx_tform,
-                channel_tzyx,
-                target_channel_tzyx,
-                angle_threshold,
-                verbose,
+                approx_tform=approx_tform,
+                source_channel_tzyx=channel_tzyx,
+                target_channel_tzyx = target_channel_tzyx,
+                verbose = verbose,
                 source_block_size=[32, 16, 16],
                 source_threshold_abs=0.8,
                 source_nms_distance=16,
@@ -299,14 +303,18 @@ def estimate_xyz_stabilization_with_beads(
                 target_threshold_abs=0.8,
                 target_nms_distance=16,
                 target_min_distance=0,
+                match_filter_angle_threshold = match_filter_angle_threshold,
+                match_algorithm=match_algorithm,
+                transform_type=transform_type,
+
             ),
             range(1, T, 1),
         )
 
     # Validate and filter transforms
-    transforms = _validate_transforms(transforms, window_size, tolerance, Z, Y, X, verbose)
+    transforms = _validate_transforms(transforms = transforms, window_size = validation_window_size, tolerance= validation_tolerance, Z = Z, Y = Y, X = X, verbose = verbose)
     # Interpolate missing transforms
-    transforms = _interpolate_transforms(transforms)
+    transforms = _interpolate_transforms(transforms = transforms, window_size = interpolation_window_size, interpolation_type=interpolation_type, verbose = verbose)
 
     return transforms
 
@@ -410,11 +418,16 @@ def estimate_stabilization(
             combined_mats = estimate_xyz_stabilization_with_beads(
                 channel_tzyx=channel_tzyx,
                 num_processes=num_processes,
-                window_size=5,
-                tolerance=0.2,
-                angle_threshold=30,
-                referece=settings.reference,
-                verbose=verbose,
+                match_referece=settings.match_reference,
+                match_algorithm=settings.match_algorithm,
+                match_filter_angle_threshold=settings.match_filter_angle_threshold,
+                transform_type=settings.affine_transform_type,
+                validation_window_size= settings.affine_transform_validation_window_size,
+                validation_tolerance=settings.affine_transform_validation_tolerance,
+                interpolation_window_size=settings.affine_transform_interpolation_window_size,
+                interpolation_type=settings.affine_transform_interpolation_type,
+                verbose=verbose
+
             )
             # replace nan with 0
             combined_mats = np.nan_to_num(combined_mats)

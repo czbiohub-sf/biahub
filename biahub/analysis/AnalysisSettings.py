@@ -27,16 +27,16 @@ class EstimateRegistrationSettings(MyBaseModel):
     target_channel_name: str
     source_channel_name: str
     estimation_method: Literal["manual", "beads"] = "manual"
-    affine_transform_type: Literal["euclidean", "similarity", "affine"] = "euclidean"
-    match_algorithm: Literal["hungarian", "match_descriptor"] = "hungarian"
     time_index: int = 0
     affine_90degree_rotation: int = 0
+    match_algorithm: Literal["hungarian", "match_descriptor"] = "hungarian"
+    match_filter_angle_threshold: float = 0
+    affine_transform_type: Literal["euclidean", "similarity", "affine"] = "euclidean"
     approx_affine_transform: list = None
     affine_transform_validation_window_size: int = 10
-    affine_transform_validation_tolerance: float = 50.0
+    affine_transform_validation_tolerance: float = 100.0
     affine_transform_interpolation_window_size: int = 3
     affine_transform_interpolation_type: Literal["linear", "cubic"] = "linear"
-    filtering_angle_threshold: int = 0
     verbose: bool = False
 
     @field_validator("approx_affine_transform")
@@ -57,11 +57,15 @@ class EstimateStabilizationSettings(MyBaseModel):
     stabilization_channels: list
     stabilization_type: Literal["z", "xy", "xyz"]
     beads: bool = False
-    reference: Literal["first", "previous"]
     crop_size_xy: list[int, int] = [300, 300]
-    # affine_transform_window_size: int = None
-    # affine_transform_tolerance: float = None
-    # filtering_angle_threshold: int = None
+    match_reference: Literal["first", "previous"] = "first"
+    match_algorithm: Literal["hungarian", "match_descriptor"] = "hungarian"
+    match_filter_angle_threshold: float = 0
+    affine_transform_type: Literal["euclidean", "similarity", "affine"] = "euclidean"
+    affine_transform_validation_window_size: int = 10
+    affine_transform_validation_tolerance: float = 100.0
+    affine_transform_interpolation_window_size: int = 3
+    affine_transform_interpolation_type: Literal["linear", "cubic"] = "linear"
     verbose: bool = False
 
 

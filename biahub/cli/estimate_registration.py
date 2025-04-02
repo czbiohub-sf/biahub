@@ -342,14 +342,15 @@ def beads_based_registration(
     target_channel_tzyx: da.Array,
     approx_tform: list,
     num_processes: int,
-    window_size_validation: int,
-    tolerance: float,
-    window_size_interp: int,
-    angle_threshold: int,
-    verbose: bool = False,
-    transform_type: str = 'affine',
     match_algorithm: str = 'hungarian',
+    match_filter_angle_threshold: float = 0,
+    transform_type: str = 'affine',
+    validation_window_size: int = 10,
+    validation_tolerance: float = 100.0,
+    interpolation_window_size: int = 3,
     interpolation_type: str = 'linear',
+    verbose: bool = False,
+
 ):
     """
     Perform beads-based temporal registration of 4D data using affine transformations.
@@ -385,10 +386,10 @@ def beads_based_registration(
             partial(
                 _get_tform_from_beads,
                 approx_tform,
-                source_channel_tzyx,
-                target_channel_tzyx,
-                angle_threshold,
-                verbose,
+                source_channel_tzyx=source_channel_tzyx,
+                target_channel_tzyx=target_channel_tzyx,
+                match_filter_angle_threshold = match_filter_angle_threshold,
+                verbose = verbose,
                 match_algorithm=match_algorithm,
                 transform_type=transform_type,
             ),
@@ -397,15 +398,25 @@ def beads_based_registration(
 
     # Validate and filter transforms
     transforms = _validate_transforms(
-        transforms, window_size_validation, tolerance, Z, Y, X, verbose
+        transforms=transforms,
+        window_size=validation_window_size,
+        tolerance=validation_tolerance,
+        Z = Z,
+        Y= Y,
+        X= X,
+        verbose= verbose
     )
     # Interpolate missing transforms
-    transforms = _interpolate_transforms(transforms, window_size_interp, interpolation_type)
+    transforms = _interpolate_transforms(
+        transforms=transforms,
+        window_size=interpolation_window_size,
+        interpolation_type = interpolation_type,
+        verbose=verbose)
 
     return transforms
 
 
-def _validate_transforms(transforms, window_size, tolerance, Z, Y, X, verbose=False):
+def _validate_transforms(transforms, Z, Y, X, window_size =10, tolerance=100.0, verbose=False):
     """
     Validate a list of affine transformation matrices by smoothing and filtering.
 
@@ -445,7 +456,7 @@ def _validate_transforms(transforms, window_size, tolerance, Z, Y, X, verbose=Fa
     return transforms
 
 
-def _interpolate_transforms(transforms, window=3, interpolation_type='linear'):
+def _interpolate_transforms(transforms, window_size=3, interpolation_type='linear', verbose=False):
     """
     Interpolate missing transforms (None) in a list of affine transformation matrices.
 
@@ -467,14 +478,14 @@ def _interpolate_transforms(transforms, window=3, interpolation_type='linear'):
 
     if not missing_indices:
         return transforms  # nothing to do
+    if verbose:
+        click.echo(f"Interpolating missing transforms at timepoints: {missing_indices}")
 
-    click.echo(f"Interpolating missing transforms at timepoints: {missing_indices}")
-
-    if window > 0:
+    if window_size > 0:
         for idx in missing_indices:
             # Define local window
-            start = max(0, idx - window)
-            end = min(n, idx + window + 1)
+            start = max(0, idx - window_size)
+            end = min(n, idx + window_size + 1)
 
             local_x = []
             local_y = []
@@ -485,14 +496,16 @@ def _interpolate_transforms(transforms, window=3, interpolation_type='linear'):
                     local_y.append(np.array(transforms[j]))
 
             if len(local_x) < 2:
-                click.echo(f"Skipping timepoint {idx}: only {len(local_x)} neighbors found.")
+                if verbose:
+                    click.echo(f"Skipping timepoint {idx}: only {len(local_x)} neighbors found.")
                 continue
 
             f = interp1d(
                 local_x, local_y, axis=0, kind=interpolation_type, fill_value='extrapolate'
             )
             transforms[idx] = f(idx).tolist()
-            click.echo(f"Interpolated timepoint {idx} using neighbors: {local_x}")
+            if verbose:
+                click.echo(f"Interpolated timepoint {idx} using neighbors: {local_x}")
 
     else:
         # Global interpolation using all valid transforms
@@ -676,8 +689,6 @@ def _get_tform_from_beads(
     approx_tform: list,
     source_channel_tzyx: da.Array,
     target_channel_tzyx: da.Array,
-    angle_threshold: int,
-    verbose: bool,
     t_idx: int,
     source_block_size: list = [32, 16, 16],
     source_threshold_abs: int = 110,
@@ -691,7 +702,10 @@ def _get_tform_from_beads(
     match_cross_check: bool = True,
     match_metric: str = 'euclidean',
     match_max_ratio: float = 0.6,
+    match_filter_angle_threshold: float =0,
     transform_type: str = 'affine',
+    verbose: bool = False,
+
 ) -> list | None:
     """
     Calculate the affine transformation matrix between source and target channels
@@ -827,7 +841,7 @@ def _get_tform_from_beads(
         click.echo(
             f'Total of matches after distance filtering at time point {t_idx}: {len(matches)}'
         )
-    if angle_threshold:
+    if match_filter_angle_threshold:
 
         # Calculate vectors between matches
         vectors = target_peaks[matches[:, 1]] - source_peaks[matches[:, 0]]
@@ -848,10 +862,10 @@ def _get_tform_from_beads(
             bin_edges[dominant_bin_index] + bin_edges[dominant_bin_index + 1]
         ) / 2
 
-        # Filter matches within ±30 degrees of the dominant direction, which may need finetuning
-
-        filtered_indices = np.where(np.abs(angles_deg - dominant_angle) <= angle_threshold)[0]
+        # Filter matches within ±filter_angle_threshold degrees of the dominant direction, which may need finetuning
+        filtered_indices = np.where(np.abs(angles_deg - dominant_angle) <= match_filter_angle_threshold)[0]
         matches = matches[filtered_indices]
+        
         if verbose:
             click.echo(
                 f'Total of matches after angle filtering at time point {t_idx}: {len(matches)}'
@@ -984,18 +998,18 @@ def estimate_registration(
     if settings.estimation_method == "beads":
         # Register using bead images
         transforms = beads_based_registration(
-            source_channel_data,
-            target_channel_data,
+            source_channel_data=source_channel_data,
+            target_channel_data = target_channel_data,
             approx_tform=np.asarray(settings.approx_affine_transform),
             num_processes=num_processes,
-            window_size_validation=settings.affine_transform_validation_window_size,
-            tolerance=settings.affine_transform_validation_tolerance,
-            window_size_interp=settings.affine_transform_interpolation_window_size,
-            angle_threshold=settings.filtering_angle_threshold,
-            verbose=settings.verbose,
-            transform_type=affine_transform_type,
             match_algorithm=settings.match_algorithm,
+            match_filter_angle_threshold=settings.match_filter_angle_threshold,
+            transform_type=affine_transform_type,
+            validation_window_size=settings.affine_transform_validation_window_size,
+            validation_tolerance=settings.affine_transform_validation_tolerance,
+            interpolation_window_size=settings.affine_transform_interpolation_window_size,
             interpolation_type=settings.affine_transform_interpolation_type,
+            verbose=settings.verbose,
         )
 
         model = StabilizationSettings(

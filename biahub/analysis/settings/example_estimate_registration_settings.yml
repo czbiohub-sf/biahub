@@ -11,22 +11,28 @@ source_channel_name: GFP EX488 EM525-45
 # in the source and target channels and uses them to compute the registration transform.
 estimation_method: manual
 
-# Optional. Type of transform to be estimated.
-# Currently limited to Euclidean or Similarity and only used during manual registrion.
-# Beads-based registration always uses fill affine transform.
-affine_transform_type: euclidean
-
-# Optional. Matching algorithm used to find corresponding points in the two channels for beads registration.
-# Currently default is Hungarian algorithm
-# Other option is "match_descriptor" from scikit-image: https://scikit-image.org/docs/stable/api/skimage.feature.html#skimage.feature.match_descriptors.
-match_algorithm: hungarian
-
 # Optional. Index of time point to use during manual registration
 time_index: 0
 
 # Optional. Integer giving the number of 90-degree rotations applies to the source channels
 # before estimating registration parameters.
 affine_90degree_rotation: -1
+
+# Optional. Matching algorithm used to find corresponding points in the two channels for beads registration.
+# Currently default is Hungarian algorithm
+# Other option is "match_descriptor" from scikit-image: https://scikit-image.org/docs/stable/api/skimage.feature.html#skimage.feature.match_descriptors.
+match_algorithm: hungarian
+
+# Optional. Threshold for filtering outliers in detected bead matches, in degrees
+# used during beads-based registration.
+# Lower this value if matches are noisy; increase if too restrictive.
+match_filter_angle_threshold: 0
+
+# Optional. Type of transform to be estimated.
+# Currently limited to Euclidean or Similarity and only used during manual registrion.
+# Beads-based registration always uses fill affine transform.
+affine_transform_type: euclidean
+
 
 # Optional. Initial guess of the affine transformation matrix.
 # Adjust based on microscope configuration (e.g., Mantis setup for cells).
@@ -54,7 +60,7 @@ affine_transform_validation_window_size: 10
 
 # Optional. Maximum allowed difference withing the window_size of transformations
 # during beads-based registration.
-affine_transform_validation_tolerance: 10
+affine_transform_validation_tolerance: 100
 
 # Optional. Size of the window for interpolation of transformations during beads-based registration for cases the transformation is not available 
 affine_transform_interpolation_window_size: 3
@@ -62,10 +68,6 @@ affine_transform_interpolation_window_size: 3
 # Optional. Type of interpolation of transformations during beads-based registration for cases the transformation is not available
 # Options are "linear" or "cubic"
 affine_transform_interpolation_type: "linear"
-# Optional. Threshold for filtering outliers in detected bead matches, in degrees
-# used during beads-based registration.
-# Lower this value if matches are noisy; increase if too restrictive.
-filtering_angle_threshold: 0
 
 # Optional. Set to True for detailed logging of bead detection process.
 verbose: True
