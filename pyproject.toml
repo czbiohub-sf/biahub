@@ -29,7 +29,7 @@ dependencies = [
   "markdown",
   "monai",
   "pandas~=2.1",
-  "pydantic>=2.8.2,<2.11"
+  "pydantic>=2.8.2,<2.11",
   "scipy",
   "submitit",
   "torch>=2.3,<2.6",
