@@ -968,7 +968,7 @@ def estimate_registration(
     """
 
     settings = yaml_to_model(config_filepath, EstimateRegistrationSettings)
-    print(settings)
+    click.echo(f"Settings: {settings}")
     target_channel_name = settings.target_channel_name
     source_channel_name = settings.source_channel_name
     affine_90degree_rotation = settings.affine_90degree_rotation

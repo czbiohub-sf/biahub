@@ -365,6 +365,7 @@ def estimate_stabilization(
     config_filepath = Path(config_filepath)
 
     settings = yaml_to_model(config_filepath, EstimateStabilizationSettings)
+    click.echo(f"Settings: {settings}")
     verbose = settings.verbose
     crop_size_xy = settings.crop_size_xy
     estimate_stabilization_channel = settings.estimate_stabilization_channel
