@@ -384,7 +384,7 @@ def beads_based_registration(
         transforms = pool.map(
             partial(
                 _get_tform_from_beads,
-                approx_tform,
+                approx_tform = approx_tform,
                 source_channel_tzyx=source_channel_tzyx,
                 target_channel_tzyx=target_channel_tzyx,
                 match_filter_angle_threshold=match_filter_angle_threshold,
@@ -1003,8 +1003,8 @@ def estimate_registration(
     if settings.estimation_method == "beads":
         # Register using bead images
         transforms = beads_based_registration(
-            source_channel_data=source_channel_data,
-            target_channel_data=target_channel_data,
+            source_channel_tzyx=source_channel_data,
+            target_channel_tzyx=target_channel_data,
             approx_tform=np.asarray(settings.approx_affine_transform),
             num_processes=num_processes,
             match_algorithm=settings.match_algorithm,
