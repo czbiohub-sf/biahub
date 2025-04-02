@@ -29,10 +29,10 @@ dependencies = [
   "markdown",
   "monai",
   "pandas~=2.1",
-  "pydantic>=2.8.2,<2.11",
+  "pydantic<3",
   "scipy",
   "submitit",
-  "torch>=2.3,<2.6",
+  "torch>=2.3",
   "tqdm",
   "waveorder",
   "largestinteriorrectangle",
@@ -42,7 +42,7 @@ dependencies = [
   "napari-psf-analysis",
   "imageio-ffmpeg",
   "dask[array]",
-  "scikit-learn"
+  "scikit-learn",
 ]
 
 [project.optional-dependencies]
