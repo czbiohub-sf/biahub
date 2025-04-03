@@ -27,13 +27,16 @@ class EstimateRegistrationSettings(MyBaseModel):
     target_channel_name: str
     source_channel_name: str
     estimation_method: Literal["manual", "beads"] = "manual"
-    affine_transform_type: Literal["Euclidean", "Similarity"] = "Euclidean"
     time_index: int = 0
     affine_90degree_rotation: int = 0
+    match_algorithm: Literal["hungarian", "match_descriptor"] = "hungarian"
+    match_filter_angle_threshold: float = 0
+    affine_transform_type: Literal["euclidean", "similarity", "affine"] = "euclidean"
     approx_affine_transform: list = None
-    affine_transform_window_size: int = 10
-    affine_transform_tolerance: float = 50.0
-    filtering_angle_threshold: int = 30
+    affine_transform_validation_window_size: int = 10
+    affine_transform_validation_tolerance: float = 100.0
+    affine_transform_interpolation_window_size: int = 3
+    affine_transform_interpolation_type: Literal["linear", "cubic"] = "linear"
     verbose: bool = False
 
     @field_validator("approx_affine_transform")
@@ -47,6 +50,23 @@ class EstimateRegistrationSettings(MyBaseModel):
                 raise ValueError("approx_affine_transform must be a 4x4 array")
 
         return v
+
+
+class EstimateStabilizationSettings(MyBaseModel):
+    estimate_stabilization_channel: str
+    stabilization_channels: list
+    stabilization_type: Literal["z", "xy", "xyz"]
+    beads: bool = False
+    crop_size_xy: list[int, int] = [300, 300]
+    match_reference: Literal["first", "previous"] = "first"
+    match_algorithm: Literal["hungarian", "match_descriptor"] = "hungarian"
+    match_filter_angle_threshold: float = 0
+    affine_transform_type: Literal["euclidean", "similarity", "affine"] = "euclidean"
+    affine_transform_validation_window_size: int = 10
+    affine_transform_validation_tolerance: float = 100.0
+    affine_transform_interpolation_window_size: int = 3
+    affine_transform_interpolation_type: Literal["linear", "cubic"] = "linear"
+    verbose: bool = False
 
 
 class ProcessingSettings(MyBaseModel):
@@ -319,7 +339,7 @@ class ConcatenateSettings(MyBaseModel):
 
 class StabilizationSettings(MyBaseModel):
     stabilization_estimation_channel: str
-    stabilization_type: Literal["z", "xy", "xyz"]
+    stabilization_type: Literal["z", "xy", "xyz", "xyz-beads"]
     stabilization_channels: list
     affine_transform_zyx_list: list
     time_indices: Union[NonNegativeInt, list[NonNegativeInt], Literal["all"]] = "all"
