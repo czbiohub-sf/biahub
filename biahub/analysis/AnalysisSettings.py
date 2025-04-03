@@ -57,8 +57,9 @@ class EstimateStabilizationSettings(MyBaseModel):
     stabilization_channels: list
     stabilization_type: Literal["z", "xy", "xyz"]
     beads: bool = False
+    phase_cross_corr: bool = False
     crop_size_xy: list[int, int] = [300, 300]
-    match_reference: Literal["first", "previous"] = "first"
+    t_reference: Literal["first", "previous"] = "first"
     match_algorithm: Literal["hungarian", "match_descriptor"] = "hungarian"
     match_filter_angle_threshold: float = 0
     affine_transform_type: Literal["euclidean", "similarity", "affine"] = "euclidean"
