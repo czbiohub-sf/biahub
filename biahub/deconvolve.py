@@ -139,7 +139,7 @@ def deconvolve_cli(
         )
 
     # Estimate resources
-    num_cpus, gb_ram_per_cpu = estimate_resources(shape=[T, C, Z, Y, X], ram_multiplier=16)
+    num_cpus, gb_ram_per_cpu = estimate_resources(shape=[T, C, Z, Y, X], ram_multiplier=10)
     # Prepare SLURM arguments
     slurm_args = {
         "slurm_job_name": "deconvolve",
@@ -161,6 +161,7 @@ def deconvolve_cli(
         cluster = "slurm"
 
     # Prepare and submit jobs
+    click.echo(f"Preparing jobs: {slurm_args}")
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
 
