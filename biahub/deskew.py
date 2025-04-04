@@ -307,7 +307,7 @@ def deskew_cli(
     }
 
     # Estimate resources
-    num_cpus, gb_ram = estimate_resources(shape=(T, C, Z, Y, X), ram_multiplier=5)
+    num_cpus, gb_ram = estimate_resources(shape=(T, C, Z, Y, X), ram_multiplier=10)
 
     # Prepare SLURM arguments
     slurm_args = {
@@ -315,7 +315,7 @@ def deskew_cli(
         "slurm_mem_per_cpu": f"{gb_ram}G",
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,  # process up to 100 positions at a time
-        "slurm_time": 30,
+        "slurm_time": 60,
         "slurm_partition": "preempted",
     }
 
