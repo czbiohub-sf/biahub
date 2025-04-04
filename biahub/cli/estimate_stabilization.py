@@ -232,10 +232,9 @@ def estimate_xy_stabilization(
 
     return T_zyx_shift
 
-
-
-def pad_to_shape(arr: ArrayLike, shape: Tuple[int, ...], mode: str, **kwargs) -> ArrayLike:
+def pad_to_shape(arr: ArrayLike, shape: Tuple[int, ...], mode: str, verbose:str = False, **kwargs) -> ArrayLike:
     """Pads array to shape.
+    from shimPy
 
     Parameters
     ----------
@@ -258,12 +257,15 @@ def pad_to_shape(arr: ArrayLike, shape: Tuple[int, ...], mode: str, **kwargs) ->
 
     pad_width = [[s // 2, s - s // 2] for s in dif]
 
-    click.echo(f"padding: input shape {arr.shape}, output shape {shape}, padding {pad_width}")
+    if verbose:
+        click.echo(f"padding: input shape {arr.shape}, output shape {shape}, padding {pad_width}")
 
     return np.pad(arr, pad_width=pad_width, mode=mode, **kwargs)
 
-def center_crop(arr: ArrayLike, shape: Tuple[int, ...]) -> ArrayLike:
-    """Crops the center of `arr`"""
+def center_crop(arr: ArrayLike, shape: Tuple[int, ...], verbose: str = False) -> ArrayLike:
+    """Crops the center of `arr`
+        from shimPy
+    """
     assert arr.ndim == len(shape)
 
     starts = tuple((cur_s - s) // 2 for cur_s, s in zip(arr.shape, shape))
@@ -271,14 +273,15 @@ def center_crop(arr: ArrayLike, shape: Tuple[int, ...]) -> ArrayLike:
     assert all(s >= 0 for s in starts)
 
     slicing = tuple(slice(s, s + d) for s, d in zip(starts, shape))
-
-    click.echo(
-        f"center crop: input shape {arr.shape}, output shape {shape}, slicing {slicing}"
-    )
-
+    if verbose:
+        click.echo(
+            f"center crop: input shape {arr.shape}, output shape {shape}, slicing {slicing}"
+        )
     return arr[slicing]
 def _match_shape(img: ArrayLike, shape: Tuple[int, ...]) -> ArrayLike:
-    """Pad or crop array to match provided shape."""
+    """Pad or crop array to match provided shape.
+    from shimPy
+    """
 
     if np.any(shape > img.shape):
         padded_shape = np.maximum(img.shape, shape)
@@ -292,9 +295,9 @@ def _match_shape(img: ArrayLike, shape: Tuple[int, ...]) -> ArrayLike:
 def phase_cross_corr(
     ref_img: ArrayLike,
     mov_img: ArrayLike,
-    maximum_shift: float = 1.0,
-    transform: Optional[Callable[[ArrayLike], ArrayLike]] = np.log1p,
-    normalization: bool = False,
+    maximum_shift: float = 1.2,
+    normalization: bool = True,
+    verbose: bool = False,
 ) -> Tuple[int, ...]:
     """
     Borrowing from Jordao dexpv2.crosscorr https://github.com/royerlab/dexpv2
@@ -320,17 +323,15 @@ def phase_cross_corr(
         cast(int, next_fast_len(int(max(s1, s2) * maximum_shift)))
         for s1, s2 in zip(ref_img.shape, mov_img.shape)
     )
-    click.echo(
-        f"phase cross corr. fft shape of {shape} for arrays of shape {ref_img.shape} and {mov_img.shape} "
-        f"with maximum shift of {maximum_shift}"
-    )
+
+    if verbose:
+        click.echo(
+            f"phase cross corr. fft shape of {shape} for arrays of shape {ref_img.shape} and {mov_img.shape} "
+            f"with maximum shift of {maximum_shift}"
+        )
 
     ref_img = _match_shape(ref_img, shape)
     mov_img = _match_shape(mov_img, shape)
-
-    if transform is not None:
-        ref_img = transform(ref_img)
-        mov_img = transform(mov_img)
 
     Fimg1 = np.fft.rfftn(ref_img)
     Fimg2 = np.fft.rfftn(mov_img)
@@ -353,22 +354,23 @@ def phase_cross_corr(
     peak = np.unravel_index(argmax, corr.shape)
     peak = tuple(s // 2 - p for s, p in zip(corr.shape, peak))
 
-    click.echo(f"phase cross corr. peak at {peak}")
+    if verbose: 
+        click.echo(f"phase cross corr. peak at {peak}")
 
     return peak
 
-def compute_pcc_shift(
+def get_tform_from_pcc(
     t: int,
     source_channel_tzyx: da.Array,
     target_channel_tzyx: da.Array,
     verbose: bool = False,
 ) -> Optional[np.ndarray]:
     try:
-        # ⚠️ Rechunk along Z (axis=0) before computing
-        target = target_channel_tzyx[t].rechunk({0: -1}).compute()
-        source = source_channel_tzyx[t].rechunk({0: -1}).compute()
+        # Get the target and source images
+        target = np.asarray(source_channel_tzyx[t]).astype(np.float32)
+        source = np.asarray(target_channel_tzyx[t]).astype(np.float32)
 
-        shift = phase_cross_corr(target, source)
+        shift = phase_cross_corr(target, source, verbose=verbose)
         if verbose:
             click.echo(f"Time {t}: shift = {shift}")
 
@@ -376,10 +378,11 @@ def compute_pcc_shift(
         click.echo(f"Failed PCC at time {t}: {e}")
         return None
 
+    dz, dy, dx = shift
     mat = np.eye(4)
-    mat[0, 3] = shift[0]  # X
-    mat[1, 3] = shift[1]  # Y
-    mat[2, 3] = shift[2]  # Z
+    mat[0, 3] = dx
+    mat[1, 3] = dy
+    mat[2, 3] = dz
     return mat
 
 
@@ -400,19 +403,20 @@ def estimate_xyz_stabilization_pcc(
     if t_reference == "first":
         target_channel_tzyx = np.broadcast_to(channel_tzyx[0], (T, Z, Y, X)).copy()
     elif t_reference == "previous":
-        target_channel_tzyx = np.roll(channel_tzyx, shift=-1, axis=0)
+        target_channel_tzyx = np.roll(channel_tzyx, shift=1, axis=0)
+        target_channel_tzyx[0] = channel_tzyx[0]
     else:
         raise ValueError("Invalid reference. Please use 'first' or 'previous as reference")
-    target_channel_tzyx[0] = channel_tzyx[0]
 
     source_channel_tzyx = channel_tzyx
 
     # Run in parallel
     with Pool(processes=num_processes) as pool:
         result = pool.map(
-                partial(compute_pcc_shift,
+                partial(get_tform_from_pcc,
                         source_channel_tzyx = source_channel_tzyx,
-                        target_channel_tzyx = target_channel_tzyx),
+                        target_channel_tzyx = target_channel_tzyx,
+                        verbose=verbose),
                         range(T))
     transforms = [np.eye(4)] + result
 
@@ -606,7 +610,7 @@ def estimate_stabilization(
         channel_index = channel_names.index(estimate_stabilization_channel)
 
     # Estimate z drift
-    if stabilize_z and not beads:
+    if stabilize_z and not beads and not phase_cross_corr:
         click.echo("Estimating z stabilization parameters")
         T_z_drift_mats = estimate_z_stabilization(
             input_data_paths=input_position_dirpaths,
@@ -618,7 +622,7 @@ def estimate_stabilization(
         )
 
     # Estimate yx drift
-    if stabilize_xy and not beads:
+    if stabilize_xy and not beads and not phase_cross_corr:
         click.echo("Estimating xy stabilization parameters")
         T_translation_mats = estimate_xy_stabilization(
             input_data_paths=input_position_dirpaths,
@@ -657,6 +661,7 @@ def estimate_stabilization(
                 source_channels = beads_position.channel_names
                 source_channel_index = source_channels.index(estimate_stabilization_channel)
                 channel_tzyx = beads_position.data.dask_array()[:, source_channel_index]
+
             combined_mats = estimate_xyz_stabilization_pcc(
                 channel_tzyx=channel_tzyx,
                 num_processes=num_processes,
@@ -667,6 +672,7 @@ def estimate_stabilization(
                 interpolation_type=settings.affine_transform_interpolation_type,
                 verbose=verbose,
             )
+
         elif beads and phase_cross_corr:
             raise ValueError("Both beads and phase cross correlation cannot be selected at the same time. Chose one.")
         else:
