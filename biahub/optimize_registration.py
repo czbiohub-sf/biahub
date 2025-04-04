@@ -5,8 +5,7 @@ import numpy as np
 
 from iohub import open_ome_zarr
 
-from biahub.analysis.AnalysisSettings import RegistrationSettings
-from biahub.analysis.register import convert_transform_to_ants, convert_transform_to_numpy
+from biahub.AnalysisSettings import RegistrationSettings
 from biahub.cli.parsing import (
     config_filepath,
     output_filepath,
@@ -14,12 +13,13 @@ from biahub.cli.parsing import (
     target_position_dirpaths,
 )
 from biahub.cli.utils import model_to_yaml, yaml_to_model
+from biahub.register import convert_transform_to_ants, convert_transform_to_numpy
 
 # TODO: maybe a CLI call?
 T_IDX = 0
 
 
-@click.command()
+@click.command("optimize-registration")
 @source_position_dirpaths()
 @target_position_dirpaths()
 @config_filepath()
@@ -36,7 +36,7 @@ T_IDX = 0
     is_flag=True,
     help="Show verbose output of optimizer",
 )
-def optimize_registration(
+def optimize_registration_cli(
     source_position_dirpaths,
     target_position_dirpaths,
     config_filepath,
@@ -137,4 +137,4 @@ def optimize_registration(
 
 
 if __name__ == "__main__":
-    optimize_registration()
+    optimize_registration_cli()

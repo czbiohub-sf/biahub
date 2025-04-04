@@ -10,7 +10,7 @@ from iohub import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate, process_single_position
 from natsort import natsorted
 
-from biahub.analysis.AnalysisSettings import ConcatenateSettings
+from biahub.AnalysisSettings import ConcatenateSettings
 from biahub.cli.parsing import (
     config_filepath,
     local,

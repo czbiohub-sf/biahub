@@ -13,18 +13,12 @@ from skimage.feature import match_descriptors
 from skimage.transform import AffineTransform, EuclideanTransform, SimilarityTransform
 from waveorder.focus import focus_from_transverse_band
 
-from biahub.analysis.AnalysisSettings import (
+from biahub.AnalysisSettings import (
     EstimateRegistrationSettings,
     RegistrationSettings,
     StabilizationSettings,
 )
-from biahub.analysis.analyze_psf import detect_peaks
-from biahub.analysis.register import (
-    convert_transform_to_ants,
-    convert_transform_to_numpy,
-    get_3D_rescaling_matrix,
-    get_3D_rotation_matrix,
-)
+from biahub.characterize_psf import detect_peaks
 from biahub.cli.parsing import (
     config_filepath,
     num_processes,
@@ -33,6 +27,12 @@ from biahub.cli.parsing import (
     target_position_dirpaths,
 )
 from biahub.cli.utils import _check_nan_n_zeros, model_to_yaml, yaml_to_model
+from biahub.register import (
+    convert_transform_to_ants,
+    convert_transform_to_numpy,
+    get_3D_rescaling_matrix,
+    get_3D_rotation_matrix,
+)
 
 # TODO: see if at some point these globals should be hidden or exposed.
 NA_DETECTION_SOURCE = 1.35
@@ -582,7 +582,7 @@ def _get_tform_from_beads(
     return compount_tform.tolist()
 
 
-@click.command()
+@click.command("estimate-registration")
 @source_position_dirpaths()
 @target_position_dirpaths()
 @output_filepath()
@@ -603,7 +603,7 @@ def _get_tform_from_beads(
     help="Name of the source channels to be used when registration params are applied. May be passed multiple times.",
     required=False,
 )
-def estimate_registration(
+def estimate_registration_cli(
     source_position_dirpaths,
     target_position_dirpaths,
     output_filepath,
@@ -729,4 +729,4 @@ def estimate_registration(
 
 
 if __name__ == "__main__":
-    estimate_registration()
+    estimate_registration_cli()

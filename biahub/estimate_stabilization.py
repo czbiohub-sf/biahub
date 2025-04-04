@@ -13,7 +13,7 @@ from iohub.ngff import open_ome_zarr
 from pystackreg import StackReg
 from waveorder.focus import focus_from_transverse_band
 
-from biahub.analysis.AnalysisSettings import StabilizationSettings
+from biahub.AnalysisSettings import StabilizationSettings
 from biahub.cli.parsing import input_position_dirpaths, output_filepath
 from biahub.cli.utils import model_to_yaml
 
@@ -220,7 +220,7 @@ def estimate_xy_stabilization(
     return T_zyx_shift
 
 
-@click.command()
+@click.command("estimate-stabilization")
 @input_position_dirpaths()
 @output_filepath()
 @click.option(
@@ -272,7 +272,7 @@ def estimate_xy_stabilization(
     type=int,
     default=[],
 )
-def estimate_stabilization(
+def estimate_stabilization_cli(
     input_position_dirpaths,
     output_filepath,
     num_processes,
@@ -377,4 +377,4 @@ def estimate_stabilization(
 
 
 if __name__ == "__main__":
-    estimate_stabilization()
+    estimate_stabilization_cli()

@@ -102,10 +102,10 @@ def plot_bleaching_curves(times, tczyx_data, channel_names, output_file, title='
     plt.close()
 
 
-@click.command()
+@click.command("estimate-bleaching")
 @input_position_dirpaths()
 @output_dirpath()
-def estimate_bleaching(input_position_dirpaths, output_dirpath):
+def estimate_bleaching_cli(input_position_dirpaths, output_dirpath):
     """
     Estimate bleaching from raw data
 
