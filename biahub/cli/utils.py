@@ -653,6 +653,7 @@ def estimate_resources(
     dtype: DTypeLike = np.float32,
     ram_multiplier: float = 1.0,
     max_num_cpus: int = 64,
+    min_ram_per_cpu: int = 4,
 ):
     """
     Estimate the number of CPUs and the amount of RAM required for processing a given data volume.
@@ -669,6 +670,8 @@ def estimate_resources(
         should be at least 3. Default is 1.0.
     max_num_cpus : int, optional
         Maximum number of available CPUs. Default is 64.
+    min_ram_per_cpu : int, optional
+        Minimum amount of RAM per CPU in GB. Default is 4.
 
     Returns
     -------
@@ -683,6 +686,6 @@ def estimate_resources(
     gb_per_element = np.dtype(dtype).itemsize / 2**30  # bytes_per_element / bytes_per_gb
     num_cpus = min(T * C, max_num_cpus)
     gb_ram_per_volume = Z * Y * X * gb_per_element
-    gb_ram_per_cpu = np.ceil(max(1, gb_ram_per_volume * ram_multiplier))
+    gb_ram_per_cpu = np.ceil(max(min_ram_per_cpu, gb_ram_per_volume * ram_multiplier))
 
     return int(num_cpus), int(gb_ram_per_cpu)
