@@ -79,6 +79,10 @@ def estimate_position_focus(
 def get_mean_z_positions(dataframe_path: Path, verbose: bool = False) -> None:
     df = pd.read_csv(dataframe_path)
 
+    # Add 'well' column (e.g., B/1/000000 -> B/1)
+    df["well"] = df["position"].apply(lambda x: "/".join(Path(x).parts[:2]))
+
+
     # Sort the DataFrame based on 'time_idx'
     df = df.sort_values("time_idx")
 
@@ -86,29 +90,76 @@ def get_mean_z_positions(dataframe_path: Path, verbose: bool = False) -> None:
     df["focus_idx"] = df["focus_idx"].replace(0, np.nan).ffill()
 
     # Get the mean of positions for each time point
-    average_focus_idx = df.groupby("time_idx")["focus_idx"].mean().reset_index()
+    average_focus_idx = df.groupby(["well", "time_idx"])["focus_idx"].mean().reset_index()
 
     if verbose:
         import matplotlib.pyplot as plt
-
-        # Get the moving average of the focus_idx
-        plt.plot(average_focus_idx["focus_idx"], linestyle="--", label="mean of all positions")
+        for well, group in average_focus_idx.groupby("well"):
+            plt.plot(group["time_idx"], group["focus_idx"], linestyle="--", label=well)
         plt.xlabel('Time index')
         plt.ylabel('Focus index')
         plt.legend()
-        plt.savefig(dataframe_path.parent / "z_drift.png")
+        plt.savefig(dataframe_path.parent / "z_drift_by_well.png")
 
-    return average_focus_idx["focus_idx"].values
+    z_drift_offsets_by_well = {
+        well: group["focus_idx"].values
+        for well, group in average_focus_idx.groupby("well")}
+    return z_drift_offsets_by_well
 
+# def estimate_z_stabilization(
+#     input_data_paths: Path,
+#     output_folder_path: Path,
+#     z_drift_channel_idx: int = 0,
+#     num_processes: int = 1,
+#     crop_size_xy: list[int, int] = [600, 600],
+#     verbose: bool = False,
+# ) -> np.ndarray:
+#     output_folder_path.mkdir(parents=True, exist_ok=True)
+
+#     fun = partial(
+#         estimate_position_focus,
+#         input_channel_indices=(z_drift_channel_idx,),
+#         crop_size_xy=crop_size_xy,
+#     )
+#     # TODO: do we need to natsort the input_data_paths?
+#     with mp.Pool(processes=num_processes) as pool:
+#         position_stats_stabilized = pool.map(fun, input_data_paths)
+
+#     df = pd.concat([pd.DataFrame.from_dict(stats) for stats in position_stats_stabilized])
+#     df.to_csv(output_folder_path / 'positions_focus.csv', index=False)
+
+#     # Calculate and save the output file
+#     z_drift_offsets_by_well = get_mean_z_positions(
+#     output_folder_path / 'positions_focus.csv',
+#     verbose=verbose,
+# )
+
+#     z_focus_shift_by_well = {}
+#     for well, z_drift_offsets in z_drift_offsets_by_well.items():
+#         z_val = z_drift_offsets[0]
+#         z_focus_shift = [np.eye(4)]
+#         for z_val_next in z_drift_offsets[1:]:
+#             shift = np.eye(4)
+#             shift[0, 3] = z_val_next - z_val
+#             z_focus_shift.append(shift)
+#     z_focus_shift_by_well[well] = np.array(z_focus_shift)
+
+
+#     if verbose:
+#         click.echo(f"Saving z focus shift matrices to {output_folder_path}")
+#         z_focus_shift_filepath = output_folder_path / "z_focus_shift.npy"
+#         np.save(z_focus_shift_filepath, z_focus_shift)
+
+#     return z_focus_shift
 
 def estimate_z_stabilization(
-    input_data_paths: Path,
+    input_data_paths: list[Path],
     output_folder_path: Path,
     z_drift_channel_idx: int = 0,
     num_processes: int = 1,
     crop_size_xy: list[int, int] = [600, 600],
     verbose: bool = False,
-) -> np.ndarray:
+) -> dict[str, np.ndarray]:
     output_folder_path.mkdir(parents=True, exist_ok=True)
 
     fun = partial(
@@ -116,35 +167,35 @@ def estimate_z_stabilization(
         input_channel_indices=(z_drift_channel_idx,),
         crop_size_xy=crop_size_xy,
     )
-    # TODO: do we need to natsort the input_data_paths?
+
     with mp.Pool(processes=num_processes) as pool:
         position_stats_stabilized = pool.map(fun, input_data_paths)
 
     df = pd.concat([pd.DataFrame.from_dict(stats) for stats in position_stats_stabilized])
     df.to_csv(output_folder_path / 'positions_focus.csv', index=False)
 
-    # Calculate and save the output file
-    z_drift_offsets = get_mean_z_positions(
+    z_drift_offsets_by_well = get_mean_z_positions(
         output_folder_path / 'positions_focus.csv',
         verbose=verbose,
     )
 
-    # Calculate the z focus shift matrices
-    z_focus_shift = [np.eye(4)]
-    # Find the z focus shift matrices for each time point based on the z_drift_offsets relative to the first timepoint.
-    z_val = z_drift_offsets[0]
-    for z_val_next in z_drift_offsets[1:]:
-        shift = np.eye(4)
-        shift[0, 3] = z_val_next - z_val
-        z_focus_shift.append(shift)
-    z_focus_shift = np.array(z_focus_shift)
+    z_focus_shift_by_well = {}
 
-    if verbose:
-        click.echo(f"Saving z focus shift matrices to {output_folder_path}")
-        z_focus_shift_filepath = output_folder_path / "z_focus_shift.npy"
-        np.save(z_focus_shift_filepath, z_focus_shift)
+    for well, z_drift_offsets in z_drift_offsets_by_well.items():
+        z_val = z_drift_offsets[0]
+        z_focus_shift = [np.eye(4)]
+        for z_val_next in z_drift_offsets[1:]:
+            shift = np.eye(4)
+            shift[0, 3] = z_val_next - z_val
+            z_focus_shift.append(shift)
+        z_focus_shift_by_well[well] = np.array(z_focus_shift)
 
-    return z_focus_shift
+        if verbose:
+            click.echo(f"Saving z focus shift for well {well}")
+        np.save(output_folder_path / f"z_focus_shift_{well.replace('/', '_')}.npy", z_focus_shift)
+
+    return z_focus_shift_by_well
+
 
 
 def estimate_xy_stabilization(
@@ -400,7 +451,7 @@ def estimate_stabilization(
     # Estimate z drift
     if stabilize_z and not beads:
         click.echo("Estimating z stabilization parameters")
-        T_z_drift_mats = estimate_z_stabilization(
+        T_z_drift_mats_by_well = estimate_z_stabilization(
             input_data_paths=input_position_dirpaths,
             output_folder_path=output_dirpath,
             z_drift_channel_idx=channel_index,
@@ -409,65 +460,83 @@ def estimate_stabilization(
             verbose=verbose,
         )
 
-    # Estimate yx drift
-    if stabilize_xy and not beads:
-        click.echo("Estimating xy stabilization parameters")
-        T_translation_mats = estimate_xy_stabilization(
-            input_data_paths=input_position_dirpaths,
-            output_folder_path=output_dirpath,
-            c_idx=channel_index,
-            crop_size_xy=crop_size_xy,
-            verbose=verbose,
-        )
-
-    if stabilize_z and stabilize_xy:
-        if beads:
-            click.echo("Estimating xyz stabilization parameters with beads")
-            with open_ome_zarr(input_position_dirpaths[0], mode="r") as beads_position:
-                source_channels = beads_position.channel_names
-                source_channel_index = source_channels.index(estimate_stabilization_channel)
-                channel_tzyx = beads_position.data.dask_array()[:, source_channel_index]
-            combined_mats = estimate_xyz_stabilization_with_beads(
-                channel_tzyx=channel_tzyx,
-                num_processes=num_processes,
-                match_referece=settings.match_reference,
-                match_algorithm=settings.match_algorithm,
-                match_filter_angle_threshold=settings.match_filter_angle_threshold,
-                transform_type=settings.affine_transform_type,
-                validation_window_size=settings.affine_transform_validation_window_size,
-                validation_tolerance=settings.affine_transform_validation_tolerance,
-                interpolation_window_size=settings.affine_transform_interpolation_window_size,
-                interpolation_type=settings.affine_transform_interpolation_type,
-                verbose=verbose,
+        for well, combined_mats in T_z_drift_mats_by_well.items():
+            model = StabilizationSettings(
+                stabilization_type=stabilization_type,
+                stabilization_estimation_channel=estimate_stabilization_channel,
+                stabilization_channels=settings.stabilization_channels,
+                affine_transform_zyx_list=combined_mats.tolist(),
+                time_indices="all",
+                output_voxel_size=voxel_size,
             )
-            # replace nan with 0
-            combined_mats = np.nan_to_num(combined_mats)
+            rename_well = well.replace("/", "_")
+            output_yaml_path = output_dirpath / f"{output_filepath.stem}_{rename_well}.yaml"
+            model_to_yaml(model, output_yaml_path)
+            if verbose:
+                click.echo(f"Saved stabilization YAML for well {well} at {output_yaml_path}")
 
-        else:
-            if T_translation_mats.shape[0] != T_z_drift_mats.shape[0]:
-                raise ValueError(
-                    "The number of translation matrices and z drift matrices must be the same"
-                )
-            combined_mats = np.array(
-                [a @ b for a, b in zip(T_translation_mats, T_z_drift_mats)]
-            )
 
-    # NOTE: we've checked that one of the two conditions below is true
-    elif stabilize_z:
-        combined_mats = T_z_drift_mats
-    elif stabilize_xy:
-        combined_mats = T_translation_mats
 
-    # Save the combined matrices
-    model = StabilizationSettings(
-        stabilization_type=stabilization_type,
-        stabilization_estimation_channel=estimate_stabilization_channel,
-        stabilization_channels=settings.stabilization_channels,
-        affine_transform_zyx_list=combined_mats.tolist(),
-        time_indices="all",
-        output_voxel_size=voxel_size,
-    )
-    model_to_yaml(model, output_filepath)
+    # # Estimate yx drift
+    # if stabilize_xy and not beads:
+    #     click.echo("Estimating xy stabilization parameters")
+    #     T_translation_mats = estimate_xy_stabilization(
+    #         input_data_paths=input_position_dirpaths,
+    #         output_folder_path=output_dirpath,
+    #         c_idx=channel_index,
+    #         crop_size_xy=crop_size_xy,
+    #         verbose=verbose,
+    #     )
+
+    # if stabilize_z and stabilize_xy:
+    #     if beads:
+    #         click.echo("Estimating xyz stabilization parameters with beads")
+    #         with open_ome_zarr(input_position_dirpaths[0], mode="r") as beads_position:
+    #             source_channels = beads_position.channel_names
+    #             source_channel_index = source_channels.index(estimate_stabilization_channel)
+    #             channel_tzyx = beads_position.data.dask_array()[:, source_channel_index]
+    #         combined_mats = estimate_xyz_stabilization_with_beads(
+    #             channel_tzyx=channel_tzyx,
+    #             num_processes=num_processes,
+    #             match_referece=settings.match_reference,
+    #             match_algorithm=settings.match_algorithm,
+    #             match_filter_angle_threshold=settings.match_filter_angle_threshold,
+    #             transform_type=settings.affine_transform_type,
+    #             validation_window_size=settings.affine_transform_validation_window_size,
+    #             validation_tolerance=settings.affine_transform_validation_tolerance,
+    #             interpolation_window_size=settings.affine_transform_interpolation_window_size,
+    #             interpolation_type=settings.affine_transform_interpolation_type,
+    #             verbose=verbose,
+    #         )
+    #         # replace nan with 0
+    #         combined_mats = np.nan_to_num(combined_mats)
+
+    #     else:
+    #         if T_translation_mats.shape[0] != T_z_drift_mats.shape[0]:
+    #             raise ValueError(
+    #                 "The number of translation matrices and z drift matrices must be the same"
+    #             )
+    #         combined_mats = np.array(
+    #             [a @ b for a, b in zip(T_translation_mats, T_z_drift_mats)]
+    #         )
+
+    # # NOTE: we've checked that one of the two conditions below is true
+    # elif stabilize_z:
+    #     combined_mats = T_z_drift_mats
+    # elif stabilize_xy:
+    #     combined_mats = T_translation_mats
+
+    # if 
+    # # Save the combined matrices
+    # model = StabilizationSettings(
+    #     stabilization_type=stabilization_type,
+    #     stabilization_estimation_channel=estimate_stabilization_channel,
+    #     stabilization_channels=settings.stabilization_channels,
+    #     affine_transform_zyx_list=combined_mats.tolist(),
+    #     time_indices="all",
+    #     output_voxel_size=voxel_size,
+    # )
+    # model_to_yaml(model, output_filepath)
 
 
 if __name__ == "__main__":
