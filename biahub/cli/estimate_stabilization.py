@@ -87,6 +87,7 @@ def get_mean_z_positions(dataframe_path: Path, verbose: bool = False) -> None:
 
     # TODO: this is a hack to deal with the fact that the focus finding function returns 0 if it fails
     df["focus_idx"] = df["focus_idx"].replace(0, np.nan).ffill()
+     
 
     # Get the mean of positions for each time point
     average_focus_idx = df.groupby("time_idx")["focus_idx"].mean().reset_index()
@@ -98,6 +99,7 @@ def get_mean_z_positions(dataframe_path: Path, verbose: bool = False) -> None:
         plt.plot(average_focus_idx["focus_idx"], linestyle="--", label="mean of all positions")
         plt.xlabel('Time index')
         plt.ylabel('Focus index')
+        plt.ylim(0, 100)
         plt.legend()
         plt.savefig(dataframe_path.parent / "z_drift.png")
 
@@ -120,10 +122,12 @@ def estimate_z_stabilization(
         crop_size_xy=crop_size_xy,
     )
     # TODO: do we need to natsort the input_data_paths?
+
     with mp.Pool(processes=num_processes) as pool:
         position_stats_stabilized = pool.map(fun, input_data_paths)
 
-    df = pd.concat([pd.DataFrame.from_dict(stats) for stats in position_stats_stabilized])
+    df = pd.concat([pd.DataFrame.from_dict(stats) for stats in position_stats_stabilized])    
+    
     df.to_csv(output_folder_path / 'positions_focus.csv', index=False)
 
     # Calculate and save the output file
@@ -174,6 +178,7 @@ def estimate_xy_stabilization(
     y_idx = slice(Y // 2 - crop_size_xy[1] // 2, Y // 2 + crop_size_xy[1] // 2)
 
     if (output_folder_path / "positions_focus.csv").exists():
+        click.echo("Reading focus finding from Z stabilization")
         df = pd.read_csv(output_folder_path / "positions_focus.csv")
         pos_idx = str(Path(*input_data_path.parts[-3:]))
         focus_idx = df[df["position"] == pos_idx]["focus_idx"]
@@ -182,6 +187,7 @@ def estimate_xy_stabilization(
         focus_idx = focus_idx.fillna(focus_idx.mean())
         z_idx = focus_idx.astype(int).to_list()
     else:
+        click.echo("Estimating focus finding for XY stabilization")
         z_idx = [
             focus_from_transverse_band(
                 input_position[0][
@@ -577,12 +583,14 @@ def estimate_stabilization(
 
     settings = yaml_to_model(config_filepath, EstimateStabilizationSettings)
     click.echo(f"Settings: {settings}")
+
     verbose = settings.verbose
     crop_size_xy = settings.crop_size_xy
     estimate_stabilization_channel = settings.estimate_stabilization_channel
     stabilization_type = settings.stabilization_type
-    beads = settings.beads
-    phase_cross_corr = settings.phase_cross_corr
+    stabilization_method = settings.stabilization_method
+    skip_beads_fov = settings.skip_beads_fov
+   
     if "z" in stabilization_type:
         stabilize_z = True
     else:
@@ -595,7 +603,7 @@ def estimate_stabilization(
         stabilize_z = True
         stabilize_xy = True
     if not (stabilize_xy or stabilize_z):
-        raise ValueError("At least one of 'stabilize_xy' or 'stabilize_z' must be selected")
+        raise ValueError("At least one of 'xy' or 'z' must be selected")
 
     if output_filepath.suffix not in [".yml", ".yaml"]:
         raise ValueError("Output file must be a yaml file")
@@ -609,8 +617,14 @@ def estimate_stabilization(
         voxel_size = dataset.scale
         channel_index = channel_names.index(estimate_stabilization_channel)
 
+    if skip_beads_fov != '0':
+        # Remove the beads FOV from the input data paths
+        click.echo(f"Removing beads FOV {skip_beads_fov} from input data paths")
+        input_position_dirpaths = [
+            path for path in input_position_dirpaths if skip_beads_fov not in str(path)
+        ]
     # Estimate z drift
-    if stabilize_z and not beads and not phase_cross_corr:
+    if stabilize_z and stabilization_method == "focus-finding":
         click.echo("Estimating z stabilization parameters")
         T_z_drift_mats = estimate_z_stabilization(
             input_data_paths=input_position_dirpaths,
@@ -622,7 +636,7 @@ def estimate_stabilization(
         )
 
     # Estimate yx drift
-    if stabilize_xy and not beads and not phase_cross_corr:
+    if stabilize_xy and stabilization_method == "focus-finding":
         click.echo("Estimating xy stabilization parameters")
         T_translation_mats = estimate_xy_stabilization(
             input_data_paths=input_position_dirpaths,
@@ -633,7 +647,7 @@ def estimate_stabilization(
         )
 
     if stabilize_z and stabilize_xy:
-        if beads:
+        if stabilization_method == "beads":
             click.echo("Estimating xyz stabilization parameters with beads")
             with open_ome_zarr(input_position_dirpaths[0], mode="r") as beads_position:
                 source_channels = beads_position.channel_names
@@ -655,7 +669,7 @@ def estimate_stabilization(
             # replace nan with 0
             combined_mats = np.nan_to_num(combined_mats)
 
-        elif phase_cross_corr:
+        elif stabilization_method == "phase-cross-corr":
             click.echo("Estimating xyz stabilization parameters with phase cross correlation")
             with open_ome_zarr(input_position_dirpaths[0], mode="r") as beads_position:
                 source_channels = beads_position.channel_names
@@ -672,9 +686,6 @@ def estimate_stabilization(
                 interpolation_type=settings.affine_transform_interpolation_type,
                 verbose=verbose,
             )
-
-        elif beads and phase_cross_corr:
-            raise ValueError("Both beads and phase cross correlation cannot be selected at the same time. Chose one.")
         else:
             if T_translation_mats.shape[0] != T_z_drift_mats.shape[0]:
                 raise ValueError(

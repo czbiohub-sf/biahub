@@ -56,8 +56,8 @@ class EstimateStabilizationSettings(MyBaseModel):
     estimate_stabilization_channel: str
     stabilization_channels: list
     stabilization_type: Literal["z", "xy", "xyz"]
-    beads: bool = False
-    phase_cross_corr: bool = False
+    stabilization_method: Literal["beads", "phase-cross-corr", "focus-finding"] = "focus-finding"
+    skip_beads_fov:str = "C/1/000000" # if there is none, set as '0'
     crop_size_xy: list[int, int] = [300, 300]
     t_reference: Literal["first", "previous"] = "first"
     match_algorithm: Literal["hungarian", "match_descriptor"] = "hungarian"

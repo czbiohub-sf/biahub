@@ -5,13 +5,13 @@ stabilization_channels:
   - Phase3D
 
 # Define the type of stabilization to be performed. Options are "xy", "z", or "xyz".
-stabilization_type: "xyz"
+stabilization_type: "z"
 
-# Optional. Flag to indicate whether to use beads for stabilization. If True, also remember to use the input path for the beads position in the plate.
-beads: False
-
-# Optional. Flag to indicate whether to use cross-correlation for stabilization.
-phase_cross_corr: True
+# Defuine the method used to estimate stabilization parameters. Options are "beads" or "phase-cross-corr" or "focus-finding".
+# beads and pcc only available for "xyz" stabilization
+stabilization_method: "focus-finding"
+    
+skip_beads_fov: "C/1/000000" # if there is none, set as '0'
 
 # Optional. Crop size in xy. Enter two integers. Default is 300 300
 crop_size_xy: 
