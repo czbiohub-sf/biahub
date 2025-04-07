@@ -10,12 +10,15 @@ stabilization_type: "xyz"
 # Optional. Flag to indicate whether to use beads for stabilization. If True, also remember to use the input path for the beads position in the plate.
 beads: False
 
+# Optional. Flag to indicate whether to use cross-correlation for stabilization.
+phase_cross_corr: True
+
 # Optional. Crop size in xy. Enter two integers. Default is 300 300
 crop_size_xy: 
   - 300
   - 300
 
-match_reference: "first"
+t_reference: "first"
 
 # Optional. Matching algorithm used to find corresponding points in the two channels for beads stabilization.
 # Currently default is Hungarian algorithm

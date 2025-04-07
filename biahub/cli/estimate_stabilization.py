@@ -4,12 +4,15 @@ import multiprocessing as mp
 from functools import partial
 from multiprocessing import Pool
 from pathlib import Path
-from typing import Tuple
+from typing import Callable, Optional, Tuple, cast
 
 import click
 import dask.array as da
 import numpy as np
 import pandas as pd
+
+from numpy.typing import ArrayLike
+from scipy.fftpack import next_fast_len
 
 from iohub.ngff import open_ome_zarr
 from pystackreg import StackReg
@@ -229,11 +232,219 @@ def estimate_xy_stabilization(
 
     return T_zyx_shift
 
+def pad_to_shape(arr: ArrayLike, shape: Tuple[int, ...], mode: str, verbose:str = False, **kwargs) -> ArrayLike:
+    """Pads array to shape.
+    from shimPy
+
+    Parameters
+    ----------
+    arr : ArrayLike
+        Input array.
+    shape : Tuple[int]
+        Output shape.
+    mode : str
+        Padding mode (see np.pad).
+
+    Returns
+    -------
+    ArrayLike
+        Padded array.
+    """
+    assert arr.ndim == len(shape)
+
+    dif = tuple(s - a for s, a in zip(shape, arr.shape))
+    assert all(d >= 0 for d in dif)
+
+    pad_width = [[s // 2, s - s // 2] for s in dif]
+
+    if verbose:
+        click.echo(f"padding: input shape {arr.shape}, output shape {shape}, padding {pad_width}")
+
+    return np.pad(arr, pad_width=pad_width, mode=mode, **kwargs)
+
+def center_crop(arr: ArrayLike, shape: Tuple[int, ...], verbose: str = False) -> ArrayLike:
+    """Crops the center of `arr`
+        from shimPy
+    """
+    assert arr.ndim == len(shape)
+
+    starts = tuple((cur_s - s) // 2 for cur_s, s in zip(arr.shape, shape))
+
+    assert all(s >= 0 for s in starts)
+
+    slicing = tuple(slice(s, s + d) for s, d in zip(starts, shape))
+    if verbose:
+        click.echo(
+            f"center crop: input shape {arr.shape}, output shape {shape}, slicing {slicing}"
+        )
+    return arr[slicing]
+def _match_shape(img: ArrayLike, shape: Tuple[int, ...]) -> ArrayLike:
+    """Pad or crop array to match provided shape.
+    from shimPy
+    """
+
+    if np.any(shape > img.shape):
+        padded_shape = np.maximum(img.shape, shape)
+        img = pad_to_shape(img, padded_shape, mode="reflect")
+
+    if np.any(shape < img.shape):
+        img = center_crop(img, shape)
+
+    return img
+
+def phase_cross_corr(
+    ref_img: ArrayLike,
+    mov_img: ArrayLike,
+    maximum_shift: float = 1.2,
+    normalization: bool = True,
+    verbose: bool = False,
+) -> Tuple[int, ...]:
+    """
+    Borrowing from Jordao dexpv2.crosscorr https://github.com/royerlab/dexpv2
+
+    Computes translation shift using arg. maximum of phase cross correlation.
+    Input are padded or cropped for fast FFT computation assuming a maximum translation shift.
+
+    Parameters
+    ----------
+    ref_img : ArrayLike
+        Reference image.
+    mov_img : ArrayLike
+        Moved image.
+    maximum_shift : float, optional
+        Maximum location shift normalized by axis size, by default 1.0
+
+    Returns
+    -------
+    Tuple[int, ...]
+        Shift between reference and moved image.
+    """
+    shape = tuple(
+        cast(int, next_fast_len(int(max(s1, s2) * maximum_shift)))
+        for s1, s2 in zip(ref_img.shape, mov_img.shape)
+    )
+
+    if verbose:
+        click.echo(
+            f"phase cross corr. fft shape of {shape} for arrays of shape {ref_img.shape} and {mov_img.shape} "
+            f"with maximum shift of {maximum_shift}"
+        )
+
+    ref_img = _match_shape(ref_img, shape)
+    mov_img = _match_shape(mov_img, shape)
+
+    Fimg1 = np.fft.rfftn(ref_img)
+    Fimg2 = np.fft.rfftn(mov_img)
+    eps = np.finfo(Fimg1.dtype).eps
+    del ref_img, mov_img
+
+    prod = Fimg1 * Fimg2.conj()
+    del Fimg1, Fimg2
+
+    if normalization:
+        norm = np.fmax(np.abs(prod), eps)
+    else:
+        norm = 1.0
+    corr = np.fft.irfftn(prod / norm)
+    del prod, norm
+
+    corr = np.fft.fftshift(np.abs(corr))
+
+    argmax = np.argmax(corr)
+    peak = np.unravel_index(argmax, corr.shape)
+    peak = tuple(s // 2 - p for s, p in zip(corr.shape, peak))
+
+    if verbose: 
+        click.echo(f"phase cross corr. peak at {peak}")
+
+    return peak
+
+def get_tform_from_pcc(
+    t: int,
+    source_channel_tzyx: da.Array,
+    target_channel_tzyx: da.Array,
+    verbose: bool = False,
+) -> Optional[np.ndarray]:
+    try:
+        # Get the target and source images
+        target = np.asarray(source_channel_tzyx[t]).astype(np.float32)
+        source = np.asarray(target_channel_tzyx[t]).astype(np.float32)
+
+        shift = phase_cross_corr(target, source, verbose=verbose)
+        if verbose:
+            click.echo(f"Time {t}: shift = {shift}")
+
+    except Exception as e:
+        click.echo(f"Failed PCC at time {t}: {e}")
+        return None
+
+    dz, dy, dx = shift
+    mat = np.eye(4)
+    mat[0, 3] = dx
+    mat[1, 3] = dy
+    mat[2, 3] = dz
+    return mat
+
+
+def estimate_xyz_stabilization_pcc(
+    channel_tzyx: da.Array,
+    num_processes: int,
+    t_reference: str = "first",
+    validation_window_size: int = 10,
+    validation_tolerance: float = 100.0,
+    interpolation_window_size: int = 0,
+    interpolation_type: str = 'linear',
+    verbose: bool = False,
+) -> np.ndarray:
+    (T, Z, Y, X) = channel_tzyx.shape
+
+    # Set up reference frames
+
+    if t_reference == "first":
+        target_channel_tzyx = np.broadcast_to(channel_tzyx[0], (T, Z, Y, X)).copy()
+    elif t_reference == "previous":
+        target_channel_tzyx = np.roll(channel_tzyx, shift=1, axis=0)
+        target_channel_tzyx[0] = channel_tzyx[0]
+    else:
+        raise ValueError("Invalid reference. Please use 'first' or 'previous as reference")
+
+    source_channel_tzyx = channel_tzyx
+
+    # Run in parallel
+    with Pool(processes=num_processes) as pool:
+        result = pool.map(
+                partial(get_tform_from_pcc,
+                        source_channel_tzyx = source_channel_tzyx,
+                        target_channel_tzyx = target_channel_tzyx,
+                        verbose=verbose),
+                        range(T))
+    transforms = [np.eye(4)] + result
+
+    # Validate and filter transforms
+    transforms = _validate_transforms(
+        transforms=transforms,
+        window_size=validation_window_size,
+        tolerance=validation_tolerance,
+        Z=Z,
+        Y=Y,
+        X=X,
+        verbose=verbose,
+    )
+    # Interpolate missing transforms
+    transforms = _interpolate_transforms(
+        transforms=transforms,
+        window_size=interpolation_window_size,
+        interpolation_type=interpolation_type,
+        verbose=verbose,
+    )
+
+    return np.array(transforms)
+
 
 def estimate_xyz_stabilization_with_beads(
     channel_tzyx: da.Array,
     num_processes: int,
-    match_referece: str = "first",
+    t_reference: str = "first",
     match_algorithm: str = 'hungarian',
     match_filter_angle_threshold: float = 0,
     transform_type: str = 'affine',
@@ -274,9 +485,9 @@ def estimate_xyz_stabilization_with_beads(
 
     approx_tform = np.eye(4)
 
-    if match_referece == "first":
+    if t_reference == "first":
         target_channel_tzyx = np.broadcast_to(channel_tzyx[0], (T, Z, Y, X)).copy()
-    elif match_referece == "previous":
+    elif t_reference == "previous":
         target_channel_tzyx = np.roll(channel_tzyx, shift=-1, axis=0)
     else:
         raise ValueError("Invalid reference. Please use 'first' or 'previous as reference")
@@ -371,6 +582,7 @@ def estimate_stabilization(
     estimate_stabilization_channel = settings.estimate_stabilization_channel
     stabilization_type = settings.stabilization_type
     beads = settings.beads
+    phase_cross_corr = settings.phase_cross_corr
     if "z" in stabilization_type:
         stabilize_z = True
     else:
@@ -398,7 +610,7 @@ def estimate_stabilization(
         channel_index = channel_names.index(estimate_stabilization_channel)
 
     # Estimate z drift
-    if stabilize_z and not beads:
+    if stabilize_z and not beads and not phase_cross_corr:
         click.echo("Estimating z stabilization parameters")
         T_z_drift_mats = estimate_z_stabilization(
             input_data_paths=input_position_dirpaths,
@@ -410,7 +622,7 @@ def estimate_stabilization(
         )
 
     # Estimate yx drift
-    if stabilize_xy and not beads:
+    if stabilize_xy and not beads and not phase_cross_corr:
         click.echo("Estimating xy stabilization parameters")
         T_translation_mats = estimate_xy_stabilization(
             input_data_paths=input_position_dirpaths,
@@ -430,7 +642,7 @@ def estimate_stabilization(
             combined_mats = estimate_xyz_stabilization_with_beads(
                 channel_tzyx=channel_tzyx,
                 num_processes=num_processes,
-                match_referece=settings.match_reference,
+                t_reference=settings.t_reference,
                 match_algorithm=settings.match_algorithm,
                 match_filter_angle_threshold=settings.match_filter_angle_threshold,
                 transform_type=settings.affine_transform_type,
@@ -443,6 +655,26 @@ def estimate_stabilization(
             # replace nan with 0
             combined_mats = np.nan_to_num(combined_mats)
 
+        elif phase_cross_corr:
+            click.echo("Estimating xyz stabilization parameters with phase cross correlation")
+            with open_ome_zarr(input_position_dirpaths[0], mode="r") as beads_position:
+                source_channels = beads_position.channel_names
+                source_channel_index = source_channels.index(estimate_stabilization_channel)
+                channel_tzyx = beads_position.data.dask_array()[:, source_channel_index]
+
+            combined_mats = estimate_xyz_stabilization_pcc(
+                channel_tzyx=channel_tzyx,
+                num_processes=num_processes,
+                t_reference=settings.t_reference,
+                validation_window_size=settings.affine_transform_validation_window_size,
+                validation_tolerance=settings.affine_transform_validation_tolerance,
+                interpolation_window_size=settings.affine_transform_interpolation_window_size,
+                interpolation_type=settings.affine_transform_interpolation_type,
+                verbose=verbose,
+            )
+
+        elif beads and phase_cross_corr:
+            raise ValueError("Both beads and phase cross correlation cannot be selected at the same time. Chose one.")
         else:
             if T_translation_mats.shape[0] != T_z_drift_mats.shape[0]:
                 raise ValueError(
