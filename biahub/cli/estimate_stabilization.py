@@ -458,7 +458,9 @@ def estimate_xyz_stabilization_with_beads(
     validation_tolerance: float = 100.0,
     interpolation_window_size: int = 0,
     interpolation_type: str = 'linear',
+    xy: bool = False,
     verbose: bool = False,
+
 ):
     """
     Perform beads-based temporal registration of 4D data using affine transformations.
@@ -520,12 +522,14 @@ def estimate_xyz_stabilization_with_beads(
                 match_filter_angle_threshold=match_filter_angle_threshold,
                 match_algorithm=match_algorithm,
                 transform_type=transform_type,
+                xy=xy,
             ),
             range(1, T, 1),
         )
         # add t=0 as identity transform
         transforms = [np.eye(4)] + transforms
 
+    
     # Validate and filter transforms
     transforms = _validate_transforms(
         transforms=transforms,
@@ -645,6 +649,29 @@ def estimate_stabilization(
             crop_size_xy=crop_size_xy,
             verbose=verbose,
         )
+    elif stabilize_xy and stabilization_method == "beads":
+        click.echo("Estimating xy stabilization parameters with beads")
+        
+        with open_ome_zarr(input_position_dirpaths[0], mode="r") as beads_position:
+            source_channels = beads_position.channel_names
+            source_channel_index = source_channels.index(estimate_stabilization_channel)
+            channel_tzyx = beads_position.data.dask_array()[:, source_channel_index]
+
+        T_translation_mats = estimate_xyz_stabilization_with_beads(
+            channel_tzyx=channel_tzyx,
+            num_processes=num_processes,
+            t_reference=settings.t_reference,
+            match_algorithm=settings.match_algorithm,
+            match_filter_angle_threshold=settings.match_filter_angle_threshold,
+            transform_type=settings.affine_transform_type,
+            validation_window_size=settings.affine_transform_validation_window_size,
+            validation_tolerance=settings.affine_transform_validation_tolerance,
+            interpolation_window_size=settings.affine_transform_interpolation_window_size,
+            interpolation_type=settings.affine_transform_interpolation_type,
+            xy=True,
+             # xy=True to get the translation matrices
+            verbose=verbose,
+        )
 
     if stabilize_z and stabilize_xy:
         if stabilization_method == "beads":
@@ -701,9 +728,13 @@ def estimate_stabilization(
     elif stabilize_xy:
         combined_mats = T_translation_mats
 
+    if isinstance(combined_mats, list):
+        combined_mats = np.array(combined_mats)
+
     # Save the combined matrices
     model = StabilizationSettings(
         stabilization_type=stabilization_type,
+        stabilization_method=stabilization_method,
         stabilization_estimation_channel=estimate_stabilization_channel,
         stabilization_channels=settings.stabilization_channels,
         affine_transform_zyx_list=combined_mats.tolist(),

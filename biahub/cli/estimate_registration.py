@@ -708,6 +708,7 @@ def _get_tform_from_beads(
     match_max_ratio: float = 0.6,
     match_filter_angle_threshold: float = 0,
     transform_type: str = 'affine',
+    xy: bool = False,
     verbose: bool = False,
 ) -> list | None:
     """
@@ -788,6 +789,7 @@ def _get_tform_from_beads(
         min_distance=target_min_distance,
         verbose=verbose,
     )
+
 
     # Skip if there is no peak detected
     if len(source_peaks) < 2 or len(target_peaks) < 2:
@@ -894,6 +896,13 @@ def _get_tform_from_beads(
     tform.estimate(source_peaks[matches[:, 0]], target_peaks[matches[:, 1]])
 
     compount_tform = approx_tform @ tform.inverse.params
+
+    if xy:
+        compount_tform = np.asarray(compount_tform)
+        xy_only = np.eye(4)
+        xy_only[0:2, 0:2] = compount_tform[0:2, 0:2]  # Keep XY rotation/skew
+        xy_only[0:2, 3] = compount_tform[0:2, 3]      # Keep XY translation
+        compount_tform = xy_only
 
     return compount_tform.tolist()
 
