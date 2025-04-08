@@ -4,18 +4,17 @@ import multiprocessing as mp
 from functools import partial
 from multiprocessing import Pool
 from pathlib import Path
-from typing import Callable, Optional, Tuple, cast
+from typing import Optional, Tuple, cast
 
 import click
 import dask.array as da
 import numpy as np
 import pandas as pd
 
-from numpy.typing import ArrayLike
-from scipy.fftpack import next_fast_len
-
 from iohub.ngff import open_ome_zarr
+from numpy.typing import ArrayLike
 from pystackreg import StackReg
+from scipy.fftpack import next_fast_len
 from waveorder.focus import focus_from_transverse_band
 
 from biahub.analysis.AnalysisSettings import (
@@ -87,7 +86,6 @@ def get_mean_z_positions(dataframe_path: Path, verbose: bool = False) -> None:
 
     # TODO: this is a hack to deal with the fact that the focus finding function returns 0 if it fails
     df["focus_idx"] = df["focus_idx"].replace(0, np.nan).ffill()
-     
 
     # Get the mean of positions for each time point
     average_focus_idx = df.groupby("time_idx")["focus_idx"].mean().reset_index()
@@ -126,8 +124,8 @@ def estimate_z_stabilization(
     with mp.Pool(processes=num_processes) as pool:
         position_stats_stabilized = pool.map(fun, input_data_paths)
 
-    df = pd.concat([pd.DataFrame.from_dict(stats) for stats in position_stats_stabilized])    
-    
+    df = pd.concat([pd.DataFrame.from_dict(stats) for stats in position_stats_stabilized])
+
     df.to_csv(output_folder_path / 'positions_focus.csv', index=False)
 
     # Calculate and save the output file
@@ -238,7 +236,10 @@ def estimate_xy_stabilization(
 
     return T_zyx_shift
 
-def pad_to_shape(arr: ArrayLike, shape: Tuple[int, ...], mode: str, verbose:str = False, **kwargs) -> ArrayLike:
+
+def pad_to_shape(
+    arr: ArrayLike, shape: Tuple[int, ...], mode: str, verbose: str = False, **kwargs
+) -> ArrayLike:
     """Pads array to shape.
     from shimPy
 
@@ -264,13 +265,16 @@ def pad_to_shape(arr: ArrayLike, shape: Tuple[int, ...], mode: str, verbose:str 
     pad_width = [[s // 2, s - s // 2] for s in dif]
 
     if verbose:
-        click.echo(f"padding: input shape {arr.shape}, output shape {shape}, padding {pad_width}")
+        click.echo(
+            f"padding: input shape {arr.shape}, output shape {shape}, padding {pad_width}"
+        )
 
     return np.pad(arr, pad_width=pad_width, mode=mode, **kwargs)
 
+
 def center_crop(arr: ArrayLike, shape: Tuple[int, ...], verbose: str = False) -> ArrayLike:
     """Crops the center of `arr`
-        from shimPy
+    from shimPy
     """
     assert arr.ndim == len(shape)
 
@@ -284,6 +288,8 @@ def center_crop(arr: ArrayLike, shape: Tuple[int, ...], verbose: str = False) ->
             f"center crop: input shape {arr.shape}, output shape {shape}, slicing {slicing}"
         )
     return arr[slicing]
+
+
 def _match_shape(img: ArrayLike, shape: Tuple[int, ...]) -> ArrayLike:
     """Pad or crop array to match provided shape.
     from shimPy
@@ -297,6 +303,7 @@ def _match_shape(img: ArrayLike, shape: Tuple[int, ...]) -> ArrayLike:
         img = center_crop(img, shape)
 
     return img
+
 
 def phase_cross_corr(
     ref_img: ArrayLike,
@@ -360,10 +367,11 @@ def phase_cross_corr(
     peak = np.unravel_index(argmax, corr.shape)
     peak = tuple(s // 2 - p for s, p in zip(corr.shape, peak))
 
-    if verbose: 
+    if verbose:
         click.echo(f"phase cross corr. peak at {peak}")
 
     return peak
+
 
 def get_tform_from_pcc(
     t: int,
@@ -419,11 +427,14 @@ def estimate_xyz_stabilization_pcc(
     # Run in parallel
     with Pool(processes=num_processes) as pool:
         result = pool.map(
-                partial(get_tform_from_pcc,
-                        source_channel_tzyx = source_channel_tzyx,
-                        target_channel_tzyx = target_channel_tzyx,
-                        verbose=verbose),
-                        range(T))
+            partial(
+                get_tform_from_pcc,
+                source_channel_tzyx=source_channel_tzyx,
+                target_channel_tzyx=target_channel_tzyx,
+                verbose=verbose,
+            ),
+            range(T),
+        )
     transforms = [np.eye(4)] + result
 
     # Validate and filter transforms
@@ -460,7 +471,6 @@ def estimate_xyz_stabilization_with_beads(
     interpolation_type: str = 'linear',
     xy: bool = False,
     verbose: bool = False,
-
 ):
     """
     Perform beads-based temporal registration of 4D data using affine transformations.
@@ -529,7 +539,6 @@ def estimate_xyz_stabilization_with_beads(
         # add t=0 as identity transform
         transforms = [np.eye(4)] + transforms
 
-    
     # Validate and filter transforms
     transforms = _validate_transforms(
         transforms=transforms,
@@ -594,7 +603,7 @@ def estimate_stabilization(
     stabilization_type = settings.stabilization_type
     stabilization_method = settings.stabilization_method
     skip_beads_fov = settings.skip_beads_fov
-   
+
     if "z" in stabilization_type:
         stabilize_z = True
     else:
@@ -651,7 +660,7 @@ def estimate_stabilization(
         )
     elif stabilize_xy and stabilization_method == "beads":
         click.echo("Estimating xy stabilization parameters with beads")
-        
+
         with open_ome_zarr(input_position_dirpaths[0], mode="r") as beads_position:
             source_channels = beads_position.channel_names
             source_channel_index = source_channels.index(estimate_stabilization_channel)
@@ -669,7 +678,7 @@ def estimate_stabilization(
             interpolation_window_size=settings.affine_transform_interpolation_window_size,
             interpolation_type=settings.affine_transform_interpolation_type,
             xy=True,
-             # xy=True to get the translation matrices
+            # xy=True to get the translation matrices
             verbose=verbose,
         )
 

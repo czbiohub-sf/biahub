@@ -56,8 +56,10 @@ class EstimateStabilizationSettings(MyBaseModel):
     estimate_stabilization_channel: str
     stabilization_channels: list
     stabilization_type: Literal["z", "xy", "xyz"]
-    stabilization_method: Literal["beads", "phase-cross-corr", "focus-finding"] = "focus-finding"
-    skip_beads_fov:str = "0"
+    stabilization_method: Literal[
+        "beads", "phase-cross-corr", "focus-finding"
+    ] = "focus-finding"
+    skip_beads_fov: str = "0"
     crop_size_xy: list[int, int] = [300, 300]
     t_reference: Literal["first", "previous"] = "first"
     match_algorithm: Literal["hungarian", "match_descriptor"] = "hungarian"
@@ -341,7 +343,9 @@ class ConcatenateSettings(MyBaseModel):
 class StabilizationSettings(MyBaseModel):
     stabilization_estimation_channel: str
     stabilization_type: Literal["z", "xy", "xyz"]
-    stabilization_method: Literal["beads", "phase-cross-corr", "focus-finding"] = "focus-finding"
+    stabilization_method: Literal[
+        "beads", "phase-cross-corr", "focus-finding"
+    ] = "focus-finding"
     stabilization_channels: list
     affine_transform_zyx_list: list
     time_indices: Union[NonNegativeInt, list[NonNegativeInt], Literal["all"]] = "all"
