@@ -153,89 +153,100 @@ def estimate_z_stabilization(
 
 
 def estimate_xy_stabilization(
-    input_data_paths: Path,
+    input_data_paths: list[Path],
     output_folder_path: Path,
     c_idx: int = 0,
-    crop_size_xy: list[int, int] = (400, 400),
+    crop_size_xy: list[int] = (400, 400),
     verbose: bool = False,
 ) -> np.ndarray:
-    input_data_path = input_data_paths[0]
-    input_position = open_ome_zarr(input_data_path)
     output_folder_path = Path(output_folder_path)
     output_folder_path.mkdir(parents=True, exist_ok=True)
 
+    all_transforms = []
+
+    for input_data_path in input_data_paths:
+        click.echo(f"Processing {input_data_path}")
+        with open_ome_zarr(input_data_path) as input_position:
+            T, C, Z, Y, X = input_position.data.shape
+            x_idx = slice(X // 2 - crop_size_xy[0] // 2, X // 2 + crop_size_xy[0] // 2)
+            y_idx = slice(Y // 2 - crop_size_xy[1] // 2, Y // 2 + crop_size_xy[1] // 2)
+
+            # Get focus index for each time point
+            z_idx = get_focus_idx_for_xy_stabilization(
+                input_data_path=input_data_path,
+                c_idx=c_idx,
+                output_folder_path=output_folder_path,
+                T=T,
+                crop_size_xy=crop_size_xy,
+                verbose=verbose,
+            )
+
+            tyx_data = np.stack([
+                input_position[0][t, c_idx, z, y_idx, x_idx]
+                for t, z in zip(range(T), z_idx)
+            ])
+            tyx_data = np.clip(tyx_data, a_min=0, a_max=None)
+
+        sr = StackReg(StackReg.TRANSLATION)
+        T_stackreg = sr.register_stack(tyx_data, reference="previous", axis=0)
+
+        # Swap translation directions: (x, y) -> (y, x)
+        for tform in T_stackreg:
+            tform[0, 2], tform[1, 2] = tform[1, 2], tform[0, 2]
+
+        T_zyx_shift = np.zeros((T_stackreg.shape[0], 4, 4))
+        T_zyx_shift[:, 1:4, 1:4] = T_stackreg
+        T_zyx_shift[:, 0, 0] = 1
+
+        all_transforms.append(T_zyx_shift)
+
+    # Stack transforms and average
+    all_transforms = np.stack(all_transforms, axis=0)  # shape: (N_positions, T, 4, 4)
+    averaged_transforms = np.nanmean(all_transforms, axis=0)  # shape: (T, 4, 4)
+
+    if verbose:
+        np.save(output_folder_path / "yx_shake_translation_tx_ants.npy", averaged_transforms)
+
+    return averaged_transforms
+
+def get_focus_idx_for_xy_stabilization(
+    input_data_path: Path,
+    c_idx: int,
+    output_folder_path: Path,
+    T: int,
+    crop_size_xy: list[int],
+    verbose: bool = False,
+) -> list[int]:
+    df_path = output_folder_path / "positions_focus.csv"
     focus_params = {
         "NA_det": NA_DET,
         "lambda_ill": LAMBDA_ILL,
-        "pixel_size": input_position.scale[-1],
+        "pixel_size": open_ome_zarr(input_data_path).scale[-1],
     }
 
-    # Get metadata
-    T, C, Z, Y, X = input_position.data.shape
-    x_idx = slice(X // 2 - crop_size_xy[0] // 2, X // 2 + crop_size_xy[0] // 2)
-    y_idx = slice(Y // 2 - crop_size_xy[1] // 2, Y // 2 + crop_size_xy[1] // 2)
-
-    if (output_folder_path / "positions_focus.csv").exists():
-        click.echo("Reading focus finding from Z stabilization")
-        df = pd.read_csv(output_folder_path / "positions_focus.csv")
+    if df_path.exists():
+        if verbose:
+            click.echo(f"Reading focus index from {df_path}")
+        df = pd.read_csv(df_path)
         pos_idx = str(Path(*input_data_path.parts[-3:]))
         focus_idx = df[df["position"] == pos_idx]["focus_idx"]
-        # forward fill 0 values, when replace remaining NaN with the mean
         focus_idx = focus_idx.replace(0, np.nan).ffill()
         focus_idx = focus_idx.fillna(focus_idx.mean())
-        z_idx = focus_idx.astype(int).to_list()
+        return focus_idx.astype(int).to_list()
     else:
-        click.echo("Estimating focus finding for XY stabilization")
-        z_idx = [
-            focus_from_transverse_band(
-                input_position[0][
-                    0,
-                    c_idx,
-                    :,
-                    y_idx,
-                    x_idx,
-                ],
-                **focus_params,
-            )
-        ] * T
         if verbose:
-            click.echo(f"Estimated in-focus slice: {z_idx}")
-
-    # Load timelapse and ensure negative values are not present
-    tyx_data = np.stack(
-        [
-            input_position[0][_t_idx, c_idx, _z_idx, y_idx, x_idx]
-            for _t_idx, _z_idx in zip(range(T), z_idx)
-        ]
-    )
-    tyx_data = np.clip(tyx_data, a_min=0, a_max=None)
-
-    # register each frame to the previous (already registered) one
-    # this is what the original StackReg ImageJ plugin uses
-    sr = StackReg(StackReg.TRANSLATION)
-
-    T_stackreg = sr.register_stack(tyx_data, reference="previous", axis=0)
-
-    # Swap values in the array since stackreg is xy and we need yx
-    for subarray in T_stackreg:
-        subarray[0, 2], subarray[1, 2] = subarray[1, 2], subarray[0, 2]
-
-    T_zyx_shift = np.zeros((T_stackreg.shape[0], 4, 4))
-    T_zyx_shift[:, 1:4, 1:4] = T_stackreg
-    T_zyx_shift[:, 0, 0] = 1
-
-    # Save the translation matrices
-    if verbose:
-        click.echo(f"Saving translation matrices to {output_folder_path}")
-        yx_shake_translation_tx_filepath = (
-            output_folder_path / "yx_shake_translation_tx_ants.npy"
-        )
-        np.save(yx_shake_translation_tx_filepath, T_zyx_shift)
-
-    input_position.close()
-
-    return T_zyx_shift
-
+            click.echo(f"Calculating focus index for {input_data_path}")
+        with open_ome_zarr(input_data_path) as dataset:
+            T, C, Z, Y, X = dataset[0].shape
+            x_idx = slice(X // 2 - crop_size_xy[0] // 2, X // 2 + crop_size_xy[0] // 2)
+            y_idx = slice(Y // 2 - crop_size_xy[1] // 2, Y // 2 + crop_size_xy[1] // 2)
+            return [
+                focus_from_transverse_band(
+                    dataset.data[0][t, c_idx, :, y_idx, x_idx],
+                    **focus_params,
+                )
+                for t in range(T)
+            ]
 
 def pad_to_shape(
     arr: ArrayLike, shape: Tuple[int, ...], mode: str, verbose: str = False, **kwargs
@@ -309,7 +320,7 @@ def phase_cross_corr(
     ref_img: ArrayLike,
     mov_img: ArrayLike,
     maximum_shift: float = 1.2,
-    normalization: bool = True,
+    normalization: bool = False,
     verbose: bool = False,
 ) -> Tuple[int, ...]:
     """
@@ -384,7 +395,7 @@ def get_tform_from_pcc(
         target = np.asarray(source_channel_tzyx[t]).astype(np.float32)
         source = np.asarray(target_channel_tzyx[t]).astype(np.float32)
 
-        shift = phase_cross_corr(target, source, verbose=verbose)
+        shift = phase_cross_corr(target, source)
         if verbose:
             click.echo(f"Time {t}: shift = {shift}")
 
@@ -401,61 +412,87 @@ def get_tform_from_pcc(
 
 
 def estimate_xyz_stabilization_pcc(
-    channel_tzyx: da.Array,
-    num_processes: int,
+    input_data_paths: list[Path],
+    output_folder_path: Path,
+    c_idx: int = 0,
+    crop_size_xy: list[int, int] = (400, 400),
     t_reference: str = "first",
     validation_window_size: int = 10,
     validation_tolerance: float = 100.0,
     interpolation_window_size: int = 0,
     interpolation_type: str = 'linear',
+    num_processes: int = 1,
     verbose: bool = False,
 ) -> np.ndarray:
-    (T, Z, Y, X) = channel_tzyx.shape
+    output_folder_path.mkdir(parents=True, exist_ok=True)
+    all_transforms = []
 
-    # Set up reference frames
+    for input_data_path in input_data_paths:
+        click.echo(f"Processing {input_data_path}")
+        with open_ome_zarr(input_data_path) as input_position:
+            channel_tzyx = input_position.data.dask_array()[:, c_idx]
+            T, Z, Y, X = channel_tzyx.shape
 
-    if t_reference == "first":
-        target_channel_tzyx = np.broadcast_to(channel_tzyx[0], (T, Z, Y, X)).copy()
-    elif t_reference == "previous":
-        target_channel_tzyx = np.roll(channel_tzyx, shift=1, axis=0)
-        target_channel_tzyx[0] = channel_tzyx[0]
-    else:
-        raise ValueError("Invalid reference. Please use 'first' or 'previous as reference")
+            x_idx = slice(X // 2 - crop_size_xy[0] // 2, X // 2 + crop_size_xy[0] // 2)
+            y_idx = slice(Y // 2 - crop_size_xy[1] // 2, Y // 2 + crop_size_xy[1] // 2)
 
-    source_channel_tzyx = channel_tzyx
+            # Crop to center
+            channel_tzyx_cropped = channel_tzyx[:, :, y_idx, x_idx]
+            T_cp, Z_cp, Y_cp, X_cp = channel_tzyx_cropped.shape
 
-    # Run in parallel
-    with Pool(processes=num_processes) as pool:
-        result = pool.map(
-            partial(
-                get_tform_from_pcc,
-                source_channel_tzyx=source_channel_tzyx,
-                target_channel_tzyx=target_channel_tzyx,
+            # Define reference
+            if t_reference == "first":
+                target_channel_tzyx = np.broadcast_to(channel_tzyx_cropped[0], (T_cp, Z_cp, Y_cp, X_cp)).copy()
+            elif t_reference == "previous":
+                target_channel_tzyx = np.roll(channel_tzyx_cropped, shift=1, axis=0)
+                target_channel_tzyx[0] = channel_tzyx_cropped[0]
+            else:
+                raise ValueError("Invalid reference. Use 'first' or 'previous'.")
+
+            source_channel_tzyx = channel_tzyx_cropped
+
+            # Estimate transforms in parallel
+            with Pool(processes=num_processes) as pool:
+                result = pool.map(
+                    partial(
+                        get_tform_from_pcc,
+                        source_channel_tzyx=source_channel_tzyx,
+                        target_channel_tzyx=target_channel_tzyx,
+                        verbose=verbose,
+                    ),
+                    range(T),
+                )
+
+            transforms = [np.eye(4)] + result
+
+            # Validate and interpolate
+            transforms = _validate_transforms(
+                transforms=transforms,
+                window_size=validation_window_size,
+                tolerance=validation_tolerance,
+                Z=Z,
+                Y=Y,
+                X=X,
                 verbose=verbose,
-            ),
-            range(T),
-        )
-    transforms = [np.eye(4)] + result
+            )
+            transforms = _interpolate_transforms(
+                transforms=transforms,
+                window_size=interpolation_window_size,
+                interpolation_type=interpolation_type,
+                verbose=verbose,
+            )
 
-    # Validate and filter transforms
-    transforms = _validate_transforms(
-        transforms=transforms,
-        window_size=validation_window_size,
-        tolerance=validation_tolerance,
-        Z=Z,
-        Y=Y,
-        X=X,
-        verbose=verbose,
-    )
-    # Interpolate missing transforms
-    transforms = _interpolate_transforms(
-        transforms=transforms,
-        window_size=interpolation_window_size,
-        interpolation_type=interpolation_type,
-        verbose=verbose,
-    )
+            all_transforms.append(np.array(transforms))
 
-    return np.array(transforms)
+    # Stack and average
+    all_transforms = np.stack(all_transforms, axis=0)  # shape: (N_positions, T, 4, 4)
+    averaged_transforms = np.nanmean(all_transforms, axis=0)
+
+    if verbose:
+        np.save(output_folder_path / "xyz_stabilization_pcc.npy", averaged_transforms)
+
+    return averaged_transforms
+
 
 
 def estimate_xyz_stabilization_with_beads(
@@ -707,15 +744,15 @@ def estimate_stabilization(
 
         elif stabilization_method == "phase-cross-corr":
             click.echo("Estimating xyz stabilization parameters with phase cross correlation")
-            with open_ome_zarr(input_position_dirpaths[0], mode="r") as beads_position:
-                source_channels = beads_position.channel_names
-                source_channel_index = source_channels.index(estimate_stabilization_channel)
-                channel_tzyx = beads_position.data.dask_array()[:, source_channel_index]
+
 
             combined_mats = estimate_xyz_stabilization_pcc(
-                channel_tzyx=channel_tzyx,
+                input_data_paths=input_position_dirpaths,
+                output_folder_path=output_dirpath,
+                c_idx=channel_index,
                 num_processes=num_processes,
                 t_reference=settings.t_reference,
+                crop_size_xy=crop_size_xy,
                 validation_window_size=settings.affine_transform_validation_window_size,
                 validation_tolerance=settings.affine_transform_validation_tolerance,
                 interpolation_window_size=settings.affine_transform_interpolation_window_size,
