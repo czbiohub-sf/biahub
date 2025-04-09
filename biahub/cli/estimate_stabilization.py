@@ -411,10 +411,6 @@ def estimate_xyz_stabilization_pcc(
     c_idx: int = 0,
     crop_size_xy: list[int, int] = (400, 400),
     t_reference: str = "first",
-    validation_window_size: int = 10,
-    validation_tolerance: float = 100.0,
-    interpolation_window_size: int = 0,
-    interpolation_type: str = 'linear',
     num_processes: int = 1,
     verbose: bool = False,
 ) -> np.ndarray:
@@ -459,23 +455,6 @@ def estimate_xyz_stabilization_pcc(
 
             transforms = [np.eye(4)] + result
 
-            # Validate and interpolate
-            transforms = _validate_transforms(
-                transforms=transforms,
-                window_size=validation_window_size,
-                tolerance=validation_tolerance,
-                Z=Z,
-                Y=Y,
-                X=X,
-                verbose=verbose,
-            )
-            transforms = _interpolate_transforms(
-                transforms=transforms,
-                window_size=interpolation_window_size,
-                interpolation_type=interpolation_type,
-                verbose=verbose,
-            )
-
             all_transforms.append(np.array(transforms))
 
     # Stack and average
@@ -496,10 +475,6 @@ def estimate_xyz_stabilization_with_beads(
     match_algorithm: str = 'hungarian',
     match_filter_angle_threshold: float = 0,
     transform_type: str = 'affine',
-    validation_window_size: int = 10,
-    validation_tolerance: float = 100.0,
-    interpolation_window_size: int = 0,
-    interpolation_type: str = 'linear',
     xy: bool = False,
     verbose: bool = False,
 ):
@@ -570,23 +545,7 @@ def estimate_xyz_stabilization_with_beads(
         # add t=0 as identity transform
         transforms = [np.eye(4)] + transforms
 
-    # Validate and filter transforms
-    transforms = _validate_transforms(
-        transforms=transforms,
-        window_size=validation_window_size,
-        tolerance=validation_tolerance,
-        Z=Z,
-        Y=Y,
-        X=X,
-        verbose=verbose,
-    )
-    # Interpolate missing transforms
-    transforms = _interpolate_transforms(
-        transforms=transforms,
-        window_size=interpolation_window_size,
-        interpolation_type=interpolation_type,
-        verbose=verbose,
-    )
+
 
     return transforms
 
@@ -679,8 +638,10 @@ def estimate_xy_stabilization_slurm(
     t_reference: str = "previous",
     sbatch_filepath: Optional[Path] = None,
     cluster:str = "local",
-    num_processes: int = 1,
     verbose: bool = False,
+    validation_window_size: int = 10,
+    validation_tolerance: float = 100.0,
+    interpolation_window_size: int = 0,
     ) -> np.ndarray:
 
     output_folder_path.mkdir(parents=True, exist_ok=True)
@@ -956,6 +917,7 @@ def estimate_stabilization(
         channel_names = dataset.channel_names
         voxel_size = dataset.scale
         channel_index = channel_names.index(estimate_stabilization_channel)
+        T, C, Z, Y, X = dataset.data.shape
 
 
     # Run locally or submit to SLURM
@@ -1007,10 +969,6 @@ def estimate_stabilization(
             match_algorithm=settings.match_algorithm,
             match_filter_angle_threshold=settings.match_filter_angle_threshold,
             transform_type=settings.affine_transform_type,
-            validation_window_size=settings.affine_transform_validation_window_size,
-            validation_tolerance=settings.affine_transform_validation_tolerance,
-            interpolation_window_size=settings.affine_transform_interpolation_window_size,
-            interpolation_type=settings.affine_transform_interpolation_type,
             xy=True,
             # xy=True to get the translation matrices
             verbose=verbose,
@@ -1030,10 +988,6 @@ def estimate_stabilization(
                 match_algorithm=settings.match_algorithm,
                 match_filter_angle_threshold=settings.match_filter_angle_threshold,
                 transform_type=settings.affine_transform_type,
-                validation_window_size=settings.affine_transform_validation_window_size,
-                validation_tolerance=settings.affine_transform_validation_tolerance,
-                interpolation_window_size=settings.affine_transform_interpolation_window_size,
-                interpolation_type=settings.affine_transform_interpolation_type,
                 verbose=verbose,
             )
             # replace nan with 0
@@ -1050,10 +1004,6 @@ def estimate_stabilization(
                 num_processes=num_processes,
                 t_reference=settings.t_reference,
                 crop_size_xy=crop_size_xy,
-                validation_window_size=settings.affine_transform_validation_window_size,
-                validation_tolerance=settings.affine_transform_validation_tolerance,
-                interpolation_window_size=settings.affine_transform_interpolation_window_size,
-                interpolation_type=settings.affine_transform_interpolation_type,
                 verbose=verbose,
             )
         else:
@@ -1071,8 +1021,26 @@ def estimate_stabilization(
     elif stabilize_xy:
         combined_mats = T_translation_mats
 
-    if isinstance(combined_mats, list):
-        combined_mats = np.array(combined_mats)
+    if not isinstance(combined_mats, list):
+        combined_mats = combined_mats.tolist()
+
+    # Validate and filter transforms
+    transforms = _validate_transforms(
+        transforms=combined_mats,
+        window_size=settings.affine_transform_validation_window_size,
+        tolerance=settings.affine_transform_validation_tolerance,
+        Z=Z,
+        Y=Y,
+        X=X,
+        verbose=verbose,
+    )
+    # Interpolate missing transforms
+    transforms = _interpolate_transforms(
+        transforms=transforms,
+        window_size=settings.affine_transform_interpolation_window_size,
+        interpolation_type=settings.affine_transform_interpolation_type,
+        verbose=verbose,
+    )
 
     # Save the combined matrices
     model = StabilizationSettings(
@@ -1080,7 +1048,7 @@ def estimate_stabilization(
         stabilization_method=stabilization_method,
         stabilization_estimation_channel=estimate_stabilization_channel,
         stabilization_channels=settings.stabilization_channels,
-        affine_transform_zyx_list=combined_mats.tolist(),
+        affine_transform_zyx_list=transforms,
         time_indices="all",
         output_voxel_size=voxel_size,
     )
