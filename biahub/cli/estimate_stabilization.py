@@ -60,8 +60,6 @@ def estimate_position_focus_slurm(
     input_channel_indices: Tuple[int, ...],
     crop_size_xy: list[int, int],
     output_path: Path,
-    NA_DET: float = NA_DET,
-    LAMBDA_ILL: float = LAMBDA_ILL,
     verbose: bool = False,
     num_processes: int = 1,
 ) -> None:
@@ -84,19 +82,18 @@ def estimate_position_focus_slurm(
                 "lambda_ill": LAMBDA_ILL,
                 "pixel_size": pixel_size,
             }
-
-            # Partial function to estimate focus for each timepoint
-            focus_partial = partial(
-                z_focus_at_timepoint,
-                data=dataset.data[0],  # access first view
-                c_idx=c_idx,
-                y_idx=y_idx,
-                x_idx=x_idx,
-                focus_params=focus_params,
-            )
-
-            with Pool(processes=num_processes) as pool:
-                z_idx = pool.map(focus_partial, range(T))
+            data = dataset.data[:, c_idx, :, y_idx, x_idx]
+            if verbose:
+                click.echo(f"Initiating {num_processes} processes for focus estimation")
+            with Pool(processes = num_processes) as pool:
+                z_idx = pool.map(
+                    partial(
+                        z_focus_at_timepoint,
+                        data=data,
+                        focus_params=focus_params,
+                    ),
+                    range(T),
+                )
 
             position_name = str(Path(*input_data_path.parts[-3:]))
 
@@ -593,9 +590,10 @@ def estimate_xyz_stabilization_with_beads(
 
     return transforms
 
-def z_focus_at_timepoint(t, data, c_idx, y_idx, x_idx, focus_params):
-    band = data[t, c_idx, :, y_idx, x_idx]
+def z_focus_at_timepoint(t, data, focus_params):
+    band = data[t] 
     return focus_from_transverse_band(band, **focus_params)
+
 
 def estimate_xy_stabilization_per_position(
     input_data_path: Path,
@@ -604,8 +602,6 @@ def estimate_xy_stabilization_per_position(
     crop_size_xy: list[int, int],
     t_reference: str = "previous",
     num_processes: int = 1,
-    NA_DET: float = NA_DET,
-    LAMBDA_ILL: float = LAMBDA_ILL,
     verbose: bool = False,
 ) -> np.ndarray: 
     
@@ -626,24 +622,30 @@ def estimate_xy_stabilization_per_position(
             
             z_idx = focus_idx.astype(int).to_list()
         else:
+            if verbose:
+                click.echo(f"Estimating focus index for {input_data_path}")
+                click.echo(f"Initiating {num_processes} processes for focus estimation")
+            # Get the data for the specified channel and crop
+            data = input_position.data[:, channel_index, :, y_idx, x_idx]
+            pixel_size = input_position.scale[-1]
+            
             with Pool(processes = num_processes) as pool:
                 focus_params = {
                     "NA_det": NA_DET,
                     "lambda_ill": LAMBDA_ILL,
-                    "pixel_size": input_position.scale[-1],
+                    "pixel_size": pixel_size,
                 }
                 z_idx = pool.map(
                     partial(
                         z_focus_at_timepoint,
-                        data=input_position.data,
-                        c_idx=channel_index,
-                        y_idx=y_idx,
-                        x_idx=x_idx,
+                        data=data,
                         focus_params=focus_params,
                     ),
                     range(T),
                 )
-                
+        if verbose:
+            click.echo("Calculating xy stabilization...")
+        # Get the data for the specified channel and crop        
         tyx_data = np.stack([
             input_position[0][t, channel_index, z, y_idx, x_idx]
             for t, z in zip(range(T), z_idx)
@@ -698,11 +700,10 @@ def estimate_xy_stabilization_slurm(
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,
         "slurm_time": 10,
-        "slurm_partition": "preempted",
+        "slurm_partition": "cpu",
     }
 
     if sbatch_filepath:
-        from biahub.cli.parsing import sbatch_to_submitit
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
     # Submitit executor
@@ -725,8 +726,9 @@ def estimate_xy_stabilization_slurm(
                 output_folder_path=output_transforms_path,
                 channel_index=channel_index,
                 crop_size_xy=crop_size_xy,
-                num_processes=num_processes,
+                num_processes=num_cpus,
                 t_reference= t_reference,
+                verbose=verbose,
             )
             jobs.append(job)
 
@@ -823,6 +825,7 @@ def estimate_z_stabilization_slurm(
                 input_channel_indices=(channel_index,),
                 crop_size_xy=crop_size_xy,
                 output_path=output_folder_focus_path,
+                num_processes=num_cpus,
             )
             jobs.append(job)
 
@@ -948,14 +951,9 @@ def estimate_stabilization(
     output_dirpath = output_filepath.parent
     output_dirpath.mkdir(parents=True, exist_ok=True)
 
-    #output_qc_dirpath = output_dirpath / "qc"
-    #output_qc_dirpath.mkdir(parents=True, exist_ok=True)
-    
-
     # Channel names to process
     with open_ome_zarr(input_position_dirpaths[0]) as dataset:
         channel_names = dataset.channel_names
-        T, C, Z, Y, X = dataset.data.shape
         voxel_size = dataset.scale
         channel_index = channel_names.index(estimate_stabilization_channel)
 
@@ -992,7 +990,6 @@ def estimate_stabilization(
             t_reference=settings.t_reference,
             sbatch_filepath=sbatch_filepath,
             cluster=cluster,
-            num_processes=num_processes,
             verbose=verbose,
         )
     elif stabilize_xy and stabilization_method == "beads":
