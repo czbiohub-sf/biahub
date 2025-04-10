@@ -270,13 +270,23 @@ def phase_cross_corr(
 
     return peak
 
-def get_tform_from_pcc(source: np.ndarray, target: np.ndarray, verbose: bool = False) -> Optional[np.ndarray]:
+def get_tform_from_pcc(
+    t: int,
+    source_channel_tzyx: da.Array,
+    target_channel_tzyx: da.Array,
+    verbose: bool = False,
+) -> Optional[np.ndarray]:
     try:
-        shift = phase_cross_corr(target.astype(np.float32), source.astype(np.float32))
+        # Get the target and source images
+        target = np.asarray(source_channel_tzyx[t]).astype(np.float32)
+        source = np.asarray(target_channel_tzyx[t]).astype(np.float32)
+
+        shift = phase_cross_corr(target, source)
         if verbose:
-            click.echo(f"Shift: {shift}")
+            click.echo(f"Time {t}: shift = {shift}")
+
     except Exception as e:
-        click.echo(f"Failed PCC: {e}")
+        click.echo(f"Failed PCC at time {t}: {e}")
         return None
 
     dz, dy, dx = shift
@@ -286,32 +296,6 @@ def get_tform_from_pcc(source: np.ndarray, target: np.ndarray, verbose: bool = F
     mat[2, 3] = dz
     return mat
 
-# def get_tform_from_pcc(
-#     t: int,
-#     source_channel_tzyx: da.Array,
-#     target_channel_tzyx: da.Array,
-#     verbose: bool = False,
-# ) -> Optional[np.ndarray]:
-#     try:
-#         # Get the target and source images
-#         target = np.asarray(source_channel_tzyx[t]).astype(np.float32)
-#         source = np.asarray(target_channel_tzyx[t]).astype(np.float32)
-
-#         shift = phase_cross_corr(target, source)
-#         if verbose:
-#             click.echo(f"Time {t}: shift = {shift}")
-
-#     except Exception as e:
-#         click.echo(f"Failed PCC at time {t}: {e}")
-#         return None
-
-#     dz, dy, dx = shift
-#     mat = np.eye(4)
-#     mat[0, 3] = dx
-#     mat[1, 3] = dy
-#     mat[2, 3] = dz
-#     return mat
-
 
 def estimate_xyz_stabilization_pcc_per_position(
     input_data_path: Path,
@@ -319,7 +303,6 @@ def estimate_xyz_stabilization_pcc_per_position(
     c_idx: int,
     crop_size_xy: list[int],
     t_reference: str = "first",
-    num_processes: int = 1,
     verbose: bool = False,
 ) -> None:
     with open_ome_zarr(input_data_path) as input_position:
@@ -341,11 +324,14 @@ def estimate_xyz_stabilization_pcc_per_position(
 
         source_channel_tzyx = channel_tzyx_cropped
 
-        with Pool(processes=num_processes) as pool:
-            transforms = pool.starmap(
-                partial(get_tform_from_pcc, verbose=verbose),
-                [(source_channel_tzyx[t], target_channel_tzyx[t]) for t in range(channel_tzyx.shape[0])],
-            )
+        transforms = []
+        for t in range(T):
+           transforms.append(get_tform_from_pcc(
+                t,
+                source_channel_tzyx,
+                target_channel_tzyx,
+                verbose=verbose,
+            ))
 
         transforms = [np.eye(4)] + transforms
 
@@ -379,7 +365,7 @@ def estimate_xyz_stabilization_pcc(
         "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,
-        "slurm_time": 60,
+        "slurm_time": 10,
         "slurm_partition": "preempted",
     }
 
@@ -403,7 +389,6 @@ def estimate_xyz_stabilization_pcc(
                 c_idx=c_idx,
                 crop_size_xy=crop_size_xy,
                 t_reference=t_reference,
-                num_processes=num_cpus,
                 verbose=verbose,
             )
             jobs.append(job)
@@ -413,8 +398,6 @@ def estimate_xyz_stabilization_pcc(
     with open(log_path, "w") as log_file:
         for job in jobs:
             log_file.write(f"{job.job_id}\n")
-
-    click.echo(f"Submitted {len(jobs)} jobs. Job IDs saved to {log_path}")
 
     job_ids = [str(j.job_id) for j in jobs]
     wait_for_jobs_to_finish(job_ids)
@@ -651,7 +634,6 @@ def estimate_xy_stabilization(
     with open(log_path, "w") as log_file:
         for job in jobs:
             log_file.write(f"{job.job_id}\n")
-    click.echo(f"Submitted {len(jobs)} jobs. Job IDs saved to {log_path}")
 
     # Wait for all jobs to finish
     job_ids = [str(j.job_id) for j in jobs]
@@ -787,8 +769,6 @@ def estimate_z_stabilization(
         np.save(output_folder_path / "z_focus_shift.npy", T_z_drift_mats)
 
     return T_z_drift_mats
-
-
 
 @click.command()
 @input_position_dirpaths()
