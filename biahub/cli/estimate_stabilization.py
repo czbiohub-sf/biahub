@@ -65,7 +65,6 @@ def estimate_position_focus(
     crop_size_xy: list[int, int],
     output_path: Path,
     verbose: bool = False,
-    num_processes: int = 1,
 ) -> None:
     position, time_idx, channel, focus_idx = [], [], [], []
 
@@ -375,7 +374,7 @@ def estimate_xyz_stabilization_pcc(
     with open_ome_zarr(input_data_paths[0]) as dataset:
         shape = dataset.data.shape
 
-    num_cpus, gb_ram_per_cpu = estimate_resources(shape=shape, ram_multiplier=16)
+    num_cpus, gb_ram_per_cpu = estimate_resources(shape=shape, ram_multiplier=16, max_num_cpus=16)
 
     slurm_args = {
         "slurm_job_name": "estimate_xyz_pcc",
@@ -606,7 +605,7 @@ def estimate_xy_stabilization(
             estimate_z_index=True,
         )
 
-    num_cpus, gb_ram_per_cpu = estimate_resources(shape=shape, ram_multiplier=16)
+    num_cpus, gb_ram_per_cpu = estimate_resources(shape=shape, ram_multiplier=16, max_num_cpus=16)
 
     # Prepare SLURM arguments
     slurm_args = {
@@ -702,7 +701,7 @@ def estimate_z_stabilization(
     with open_ome_zarr(input_data_paths[0]) as dataset:
         shape = dataset.data.shape  # (T, C, Z, Y, X)
 
-    num_cpus, gb_ram_per_cpu = estimate_resources(shape=shape, ram_multiplier=16)
+    num_cpus, gb_ram_per_cpu = estimate_resources(shape=shape, ram_multiplier=16, max_num_cpus=16)
 
     # Prepare SLURM arguments
     slurm_args = {
@@ -736,7 +735,6 @@ def estimate_z_stabilization(
                 input_channel_indices=(channel_index,),
                 crop_size_xy=crop_size_xy,
                 output_path=output_folder_focus_path,
-                num_processes=num_cpus,
                 verbose=verbose,
             )
             jobs.append(job)
