@@ -1,16 +1,19 @@
-import submitit
-import shutil
 import itertools
+import shutil
+import subprocess
+import time
+
 from datetime import datetime
 from functools import partial
 from multiprocessing import Pool
 from pathlib import Path
-from typing import Optional, Tuple, cast, List
+from typing import List, Optional, Tuple, cast
 
 import click
 import dask.array as da
 import numpy as np
 import pandas as pd
+import submitit
 
 from iohub.ngff import open_ome_zarr
 from numpy.typing import ArrayLike
@@ -27,13 +30,19 @@ from biahub.cli.estimate_registration import (
     _interpolate_transforms,
     _validate_transforms,
 )
-from biahub.cli.parsing import config_filepath, input_position_dirpaths, output_filepath, sbatch_filepath, sbatch_to_submitit, local
-from biahub.cli.utils import model_to_yaml, yaml_to_model, estimate_resources
-import time
-import subprocess
+from biahub.cli.parsing import (
+    config_filepath,
+    input_position_dirpaths,
+    local,
+    output_filepath,
+    sbatch_filepath,
+    sbatch_to_submitit,
+)
+from biahub.cli.utils import estimate_resources, model_to_yaml, yaml_to_model
 
 NA_DET = 1.35
 LAMBDA_ILL = 0.500
+
 
 def wait_for_jobs_to_finish(job_ids, sleep_time=60):
     """Wait for SLURM jobs to finish."""
@@ -48,7 +57,6 @@ def wait_for_jobs_to_finish(job_ids, sleep_time=60):
         else:
             print("Jobs still running...")
             time.sleep(sleep_time)  # Wait sleep_time seconds before checking again
-
 
 
 def estimate_position_focus(
@@ -83,8 +91,9 @@ def estimate_position_focus(
                     lambda_ill=LAMBDA_ILL,
                     pixel_size=pixel_size,
                 )
-                click.echo(f"Estimating focus for timepoint {tc_idx[0]} and channel {tc_idx[1]}: {z_idx}")
-
+                click.echo(
+                    f"Estimating focus for timepoint {tc_idx[0]} and channel {tc_idx[1]}: {z_idx}"
+                )
 
             position.append(str(Path(*input_data_path.parts[-3:])))
             time_idx.append(tc_idx[0])
@@ -93,12 +102,14 @@ def estimate_position_focus(
 
     output_path.mkdir(parents=True, exist_ok=True)
 
-    df = pd.DataFrame({
-        "position": position,
-        "time_idx": time_idx,
-        "channel": channel,
-        "focus_idx": focus_idx,
-    })
+    df = pd.DataFrame(
+        {
+            "position": position,
+            "time_idx": time_idx,
+            "channel": channel,
+            "focus_idx": focus_idx,
+        }
+    )
 
     if verbose:
         click.echo(f"Saving focus finding results to {output_path}")
@@ -106,7 +117,6 @@ def estimate_position_focus(
     position_filename = str(Path(*input_data_path.parts[-3:])).replace("/", "_")
     output_csv = output_path / f"{position_filename}.csv"
     df.to_csv(output_csv, index=False)
-
 
 
 def get_mean_z_positions(dataframe_path: Path, verbose: bool = False) -> None:
@@ -270,6 +280,7 @@ def phase_cross_corr(
 
     return peak
 
+
 def get_tform_from_pcc(
     t: int,
     source_channel_tzyx: da.Array,
@@ -315,7 +326,9 @@ def estimate_xyz_stabilization_pcc_per_position(
         channel_tzyx_cropped = channel_tzyx[:, :, y_idx, x_idx]
 
         if t_reference == "first":
-            target_channel_tzyx = np.broadcast_to(channel_tzyx_cropped[0], channel_tzyx_cropped.shape).copy()
+            target_channel_tzyx = np.broadcast_to(
+                channel_tzyx_cropped[0], channel_tzyx_cropped.shape
+            ).copy()
         elif t_reference == "previous":
             target_channel_tzyx = np.roll(channel_tzyx_cropped, shift=1, axis=0)
             target_channel_tzyx[0] = channel_tzyx_cropped[0]
@@ -326,18 +339,22 @@ def estimate_xyz_stabilization_pcc_per_position(
 
         transforms = []
         for t in range(T):
-           transforms.append(get_tform_from_pcc(
-                t,
-                source_channel_tzyx,
-                target_channel_tzyx,
-                verbose=verbose,
-            ))
+            transforms.append(
+                get_tform_from_pcc(
+                    t,
+                    source_channel_tzyx,
+                    target_channel_tzyx,
+                    verbose=verbose,
+                )
+            )
 
         transforms = [np.eye(4)] + transforms
 
-
         position_filename = str(Path(*input_data_path.parts[-3:])).replace("/", "_")
-        np.save(output_folder_path / f"{position_filename}.npy", np.array(transforms, dtype=np.float32))
+        np.save(
+            output_folder_path / f"{position_filename}.npy",
+            np.array(transforms, dtype=np.float32),
+        )
 
 
 def estimate_xyz_stabilization_pcc(
@@ -493,9 +510,8 @@ def estimate_xyz_stabilization_with_beads(
         # add t=0 as identity transform
         transforms = [np.eye(4)] + transforms
 
-
-
     return transforms
+
 
 def estimate_xy_stabilization_per_position(
     input_data_path: Path,
@@ -505,9 +521,9 @@ def estimate_xy_stabilization_per_position(
     crop_size_xy: list[int, int],
     t_reference: str = "previous",
     verbose: bool = False,
-) -> np.ndarray: 
-    
-    with open_ome_zarr(input_data_path) as input_position:   
+) -> np.ndarray:
+
+    with open_ome_zarr(input_data_path) as input_position:
         T, _, _, Y, X = input_position.data.shape
         x_idx = slice(X // 2 - crop_size_xy[0] // 2, X // 2 + crop_size_xy[0] // 2)
         y_idx = slice(Y // 2 - crop_size_xy[1] // 2, Y // 2 + crop_size_xy[1] // 2)
@@ -518,16 +534,18 @@ def estimate_xy_stabilization_per_position(
         pos_idx = str(Path(*input_data_path.parts[-3:]))
         focus_idx = df[df["position"] == pos_idx]["focus_idx"]
         focus_idx = focus_idx.replace(0, np.nan).ffill().fillna(focus_idx.mean())
-  
+
         z_idx = focus_idx.astype(int).to_list()
-        
+
         if verbose:
             click.echo("Calculating xy stabilization...")
-        # Get the data for the specified channel and crop        
-        tyx_data = np.stack([
-            input_position[0][t, channel_index, z, y_idx, x_idx]
-            for t, z in zip(range(T), z_idx)
-        ])
+        # Get the data for the specified channel and crop
+        tyx_data = np.stack(
+            [
+                input_position[0][t, channel_index, z, y_idx, x_idx]
+                for t, z in zip(range(T), z_idx)
+            ]
+        )
         tyx_data = np.clip(tyx_data, a_min=0, a_max=None)
 
         sr = StackReg(StackReg.TRANSLATION)
@@ -543,9 +561,11 @@ def estimate_xy_stabilization_per_position(
         # save the transforms as
         position_filename = str(Path(*input_data_path.parts[-3:]))
         position_filename = position_filename.replace("/", "_")
-        
-        np.save(output_folder_path / f"{position_filename}.npy", T_zyx_shift.astype(np.float32))
-        
+
+        np.save(
+            output_folder_path / f"{position_filename}.npy", T_zyx_shift.astype(np.float32)
+        )
+
     return T_zyx_shift
 
 
@@ -556,9 +576,9 @@ def estimate_xy_stabilization(
     crop_size_xy: list[int] = (400, 400),
     t_reference: str = "previous",
     sbatch_filepath: Optional[Path] = None,
-    cluster:str = "local",
+    cluster: str = "local",
     verbose: bool = False,
-    ) -> np.ndarray:
+) -> np.ndarray:
 
     output_folder_path.mkdir(parents=True, exist_ok=True)
     slurm_out_path = output_folder_path / "slurm_output"
@@ -567,7 +587,6 @@ def estimate_xy_stabilization(
     # Estimate resources from a sample dataset
     with open_ome_zarr(input_data_paths[0]) as dataset:
         shape = dataset.data.shape  # (T, C, Z, Y, X)
-
 
     df_focus_path = output_folder_path / "positions_focus.csv"
 
@@ -586,7 +605,6 @@ def estimate_xy_stabilization(
             verbose=verbose,
             estimate_z_index=True,
         )
-    
 
     num_cpus, gb_ram_per_cpu = estimate_resources(shape=shape, ram_multiplier=16)
 
@@ -611,7 +629,6 @@ def estimate_xy_stabilization(
     output_transforms_path = output_folder_path / "transforms_per_position"
     output_transforms_path.mkdir(parents=True, exist_ok=True)
 
-
     # Submit jobs
     jobs = []
     with executor.batch():
@@ -623,14 +640,14 @@ def estimate_xy_stabilization(
                 df_z_focus_path=df_focus_path,
                 channel_index=channel_index,
                 crop_size_xy=crop_size_xy,
-                t_reference= t_reference,
+                t_reference=t_reference,
                 verbose=verbose,
             )
             jobs.append(job)
 
-      # Save job IDs
+    # Save job IDs
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    log_path =  slurm_out_path/ f"job_ids_{timestamp}.log"
+    log_path = slurm_out_path / f"job_ids_{timestamp}.log"
     with open(log_path, "w") as log_file:
         for job in jobs:
             log_file.write(f"{job.job_id}\n")
@@ -669,7 +686,7 @@ def estimate_z_stabilization(
     channel_index: int,
     crop_size_xy: list[int],
     sbatch_filepath: Optional[Path] = None,
-    cluster:str = "local",
+    cluster: str = "local",
     verbose: bool = False,
     estimate_z_index: bool = False,
 ) -> np.ndarray:
@@ -707,11 +724,10 @@ def estimate_z_stabilization(
     click.echo(f"Submitting SLURM focus estimation jobs with resources: {slurm_args}")
     output_folder_focus_path = output_folder_path / "z_focus_positions"
     output_folder_focus_path.mkdir(parents=True, exist_ok=True)
-    
 
     # Submit jobs
     jobs = []
-    
+
     with executor.batch():
         for input_data_path in input_data_paths:
             job = executor.submit(
@@ -727,7 +743,7 @@ def estimate_z_stabilization(
 
     # Save job IDs
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    log_path =  slurm_out_path/ f"job_ids_{timestamp}.log"
+    log_path = slurm_out_path / f"job_ids_{timestamp}.log"
     with open(log_path, "w") as log_file:
         for job in jobs:
             log_file.write(f"{job.job_id}\n")
@@ -739,9 +755,8 @@ def estimate_z_stabilization(
     # Aggregate results
     focus_csvs_path = list(output_folder_focus_path.glob("*.csv"))
 
-
     df = pd.concat([pd.read_csv(f) for f in focus_csvs_path])
-    # sort by position and time_idx    
+    # sort by position and time_idx
     df = df.sort_values(["position", "time_idx"])
     # Save the results to a CSV file
     df.to_csv(output_folder_path / "positions_focus.csv", index=False)
@@ -769,6 +784,7 @@ def estimate_z_stabilization(
         np.save(output_folder_path / "z_focus_shift.npy", T_z_drift_mats)
 
     return T_z_drift_mats
+
 
 @click.command()
 @input_position_dirpaths()
@@ -819,7 +835,7 @@ def estimate_stabilization(
     skip_beads_fov = settings.skip_beads_fov
 
     if skip_beads_fov != '0':
-    # Remove the beads FOV from the input data paths
+        # Remove the beads FOV from the input data paths
         click.echo(f"Removing beads FOV {skip_beads_fov} from input data paths")
         input_position_dirpaths = [
             path for path in input_position_dirpaths if skip_beads_fov not in str(path)
@@ -852,13 +868,11 @@ def estimate_stabilization(
         channel_index = channel_names.index(estimate_stabilization_channel)
         T, C, Z, Y, X = dataset.data.shape
 
-
     # Run locally or submit to SLURM
     if local:
         cluster = "local"
     else:
         cluster = "slurm"
-
 
     # Estimate z drift
     if stabilize_z and stabilization_method == "focus-finding":
@@ -873,10 +887,9 @@ def estimate_stabilization(
             verbose=verbose,
         )
 
-
     # Estimate yx drift
     if stabilize_xy and stabilization_method == "focus-finding":
-        
+
         click.echo("Estimating xy stabilization parameters")
         T_translation_mats = estimate_xy_stabilization(
             input_data_paths=input_position_dirpaths,
