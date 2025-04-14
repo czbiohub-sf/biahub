@@ -11,7 +11,6 @@ import submitit
 
 from iohub import open_ome_zarr
 
-from biahub.AnalysisSettings import RegistrationSettings
 from biahub.cli.parsing import (
     config_filepath,
     local,
@@ -28,6 +27,7 @@ from biahub.cli.utils import (
     process_single_position_v2,
     yaml_to_model,
 )
+from biahub.settings import RegistrationSettings
 
 
 def get_3D_rescaling_matrix(start_shape_zyx, scaling_factor_zyx=(1, 1, 1), end_shape_zyx=None):

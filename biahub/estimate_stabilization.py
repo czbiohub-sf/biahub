@@ -13,9 +13,9 @@ from iohub.ngff import open_ome_zarr
 from pystackreg import StackReg
 from waveorder.focus import focus_from_transverse_band
 
-from biahub.AnalysisSettings import StabilizationSettings
 from biahub.cli.parsing import input_position_dirpaths, output_filepath
 from biahub.cli.utils import model_to_yaml
+from biahub.settings import StabilizationSettings
 
 NA_DET = 1.35
 LAMBDA_ILL = 0.500

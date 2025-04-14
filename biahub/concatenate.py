@@ -10,7 +10,6 @@ from iohub import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate, process_single_position
 from natsort import natsorted
 
-from biahub.AnalysisSettings import ConcatenateSettings
 from biahub.cli.parsing import (
     config_filepath,
     local,
@@ -19,6 +18,7 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.cli.utils import copy_n_paste, estimate_resources, get_output_paths, yaml_to_model
+from biahub.settings import ConcatenateSettings
 
 
 def get_path_slice_param(slice_param, path_index, total_paths):

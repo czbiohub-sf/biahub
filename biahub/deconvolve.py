@@ -11,7 +11,6 @@ from iohub.ngff.models import TransformationMeta
 from iohub.ngff.utils import create_empty_plate, process_single_position
 from waveorder.models.isotropic_fluorescent_thick_3d import apply_inverse_transfer_function
 
-from biahub.AnalysisSettings import DeconvolveSettings
 from biahub.cli.parsing import (
     _str_to_path,
     config_filepath,
@@ -22,6 +21,7 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.cli.utils import estimate_resources, get_output_paths, yaml_to_model
+from biahub.settings import DeconvolveSettings
 
 
 def compute_tranfser_function(

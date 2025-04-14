@@ -10,7 +10,6 @@ from iohub.ngff import open_ome_zarr
 from scipy.linalg import svd
 from scipy.spatial.transform import Rotation as R
 
-from biahub.AnalysisSettings import StabilizationSettings
 from biahub.cli.parsing import (
     config_filepath,
     input_position_dirpaths,
@@ -27,6 +26,7 @@ from biahub.cli.utils import (
     yaml_to_model,
 )
 from biahub.register import convert_transform_to_ants
+from biahub.settings import StabilizationSettings
 
 
 def apply_stabilization_transform(

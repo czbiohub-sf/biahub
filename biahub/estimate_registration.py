@@ -13,11 +13,6 @@ from skimage.feature import match_descriptors
 from skimage.transform import AffineTransform, EuclideanTransform, SimilarityTransform
 from waveorder.focus import focus_from_transverse_band
 
-from biahub.AnalysisSettings import (
-    EstimateRegistrationSettings,
-    RegistrationSettings,
-    StabilizationSettings,
-)
 from biahub.characterize_psf import detect_peaks
 from biahub.cli.parsing import (
     config_filepath,
@@ -32,6 +27,11 @@ from biahub.register import (
     convert_transform_to_numpy,
     get_3D_rescaling_matrix,
     get_3D_rotation_matrix,
+)
+from biahub.settings import (
+    EstimateRegistrationSettings,
+    RegistrationSettings,
+    StabilizationSettings,
 )
 
 # TODO: see if at some point these globals should be hidden or exposed.

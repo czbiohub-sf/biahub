@@ -7,8 +7,8 @@ import yaml
 
 from iohub.ngff import open_ome_zarr
 
-from biahub.AnalysisSettings import DeskewSettings
 from biahub.cli.parsing import input_position_dirpaths, output_filepath
+from biahub.settings import DeskewSettings
 
 
 @click.command("estimate-deskew")
