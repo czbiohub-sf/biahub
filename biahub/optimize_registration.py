@@ -5,7 +5,6 @@ import numpy as np
 
 from iohub import open_ome_zarr
 
-from biahub.AnalysisSettings import RegistrationSettings
 from biahub.cli.parsing import (
     config_filepath,
     output_filepath,
@@ -14,6 +13,7 @@ from biahub.cli.parsing import (
 )
 from biahub.cli.utils import model_to_yaml, yaml_to_model
 from biahub.register import convert_transform_to_ants, convert_transform_to_numpy
+from biahub.settings import RegistrationSettings
 
 # TODO: maybe a CLI call?
 T_IDX = 0

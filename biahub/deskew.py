@@ -10,7 +10,6 @@ from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import process_single_position
 from monai.transforms.spatial.array import Affine
 
-from biahub.AnalysisSettings import DeskewSettings
 from biahub.cli import utils
 from biahub.cli.parsing import (
     config_filepath,
@@ -21,6 +20,7 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.cli.utils import estimate_resources, yaml_to_model
+from biahub.settings import DeskewSettings
 
 # Needed for multiprocessing with GPUs
 # https://github.com/pytorch/pytorch/issues/40403#issuecomment-1422625325

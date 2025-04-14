@@ -6,9 +6,9 @@ import submitit
 
 from iohub import open_ome_zarr
 
-from biahub.AnalysisSettings import ProcessingSettings, StitchSettings
 from biahub.cli.parsing import input_position_dirpaths, local, output_filepath
 from biahub.cli.utils import model_to_yaml
+from biahub.settings import ProcessingSettings, StitchSettings
 from biahub.stitch import (
     cleanup_shifts,
     compute_total_translation,
