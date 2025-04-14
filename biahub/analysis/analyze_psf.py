@@ -20,6 +20,7 @@ from napari_psf_analysis.psf_analysis.psf import PSF
 from numpy.typing import ArrayLike
 from scipy.interpolate import interp1d
 from scipy.signal import peak_widths
+from tqdm import tqdm
 
 import biahub.analysis.templates
 
@@ -226,7 +227,7 @@ def analyze_psf(
 
     results = []
     peak_coordinates = np.asarray(peak_coordinates)
-    for patch, peak_coords in zip(zyx_patches, peak_coordinates):
+    for patch, peak_coords in tqdm(zip(zyx_patches, peak_coordinates), total=len(zyx_patches)):
         patch = (patch + offset) * gain
         patch = np.clip(patch, 0, None).astype(np.int32)
         bead = Calibrated3DImage(data=patch, spacing=scale, offset=peak_coords)
@@ -626,16 +627,21 @@ def detect_peaks(
         )
 
     # detect peaks as local maxima
+    # max_pool3d is a GPU memory hog, limiting the size of volumes.
+    # instead, compute on CPU
     peak_value, peak_idx = (
         p.flatten().clone()
         for p in F.max_pool3d(
-            smooth_image,
+            smooth_image.cpu(),
             kernel_size=block_size,
             stride=block_size,
             padding=(block_size[0] // 2, block_size[1] // 2, block_size[2] // 2),
             return_indices=True,
         )
     )
+    peak_value = peak_value.to(device)
+    peak_idx = peak_idx.to(device)
+
     num_peaks = len(peak_idx)
 
     # select only top max_num_peaks brightest peaks
