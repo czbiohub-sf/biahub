@@ -1,0 +1,55 @@
+# Chanel used to estimate stabilization parameters
+estimate_stabilization_channel: Phase3D
+# List of channels to be stabilized later
+stabilization_channels: 
+  - Phase3D
+
+# Define the type of stabilization to be performed. Options are "xy", "z", or "xyz".
+stabilization_type: "z"
+
+# Defuine the method used to estimate stabilization parameters. Options are "beads" or "phase-cross-corr" or "focus-finding".
+# beads and pcc only available for "xyz" stabilization
+stabilization_method: "focus-finding"
+    
+skip_beads_fov: "C/1/000000" # if there is none, set as '0'
+
+# Optional. Crop size in xy. Enter two integers. Default is 300 300
+crop_size_xy: 
+  - 300
+  - 300
+
+t_reference: "first"
+
+# Optional. Matching algorithm used to find corresponding points in the two channels for beads stabilization.
+# Currently default is Hungarian algorithm
+# Other option is "match_descriptor" from scikit-image: https://scikit-image.org/docs/stable/api/skimage.feature.html#skimage.feature.match_descriptors.
+match_algorithm: hungarian
+
+# Optional. Threshold for filtering outliers in detected bead matches, in degrees
+# used during beads-based stabilization.
+# Lower this value if matches are noisy; increase if too restrictive.
+match_filter_angle_threshold: 0
+
+# Optional. Type of transform to be estimated.
+# Currently limited to Euclidean or Similarity and only used during manual registrion.
+# Beads-based stabilization always uses fill affine transform.
+affine_transform_type: euclidean
+
+
+# Optional. Size of the moving window for smoothing transformations
+# during beads-based stabilization.
+affine_transform_validation_window_size: 10
+
+# Optional. Maximum allowed difference withing the window_size of transformations
+# during beads-based stabilization.
+affine_transform_validation_tolerance: 100
+
+# Optional. Size of the window for interpolation of transformations during beads-based stabilization for cases the transformation is not available 
+affine_transform_interpolation_window_size: 3
+
+# Optional. Type of interpolation of transformations during beads-based stabilization for cases the transformation is not available
+# Options are "linear" or "cubic"
+affine_transform_interpolation_type: "linear"
+
+# Optional. Set to True for detailed logging of bead detection process.
+verbose: True
