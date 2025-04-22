@@ -83,16 +83,12 @@ def estimate_stitch_cli(
 
     # Split fov_names and stage_position_array by well
     unique_well_names = set(["/".join(x.split("/")[:2]) for x in fov_names])
-    fov_names_by_well = []
     stage_position_by_well = []
     for unique_well_name in unique_well_names:
-        fov_name_list = []
         stage_position_list = []
         for fov_name, stage_position in zip(fov_names, stage_position_array):
             if unique_well_name in fov_name:
-                fov_name_list.append(fov_name)
                 stage_position_list.append(stage_position)
-        fov_names_by_well.append(fov_name_list)
         stage_position_by_well.append(stage_position_list)
 
     # Prepare final
@@ -105,6 +101,7 @@ def estimate_stitch_cli(
         # Scale to pixel coordinates
         zyx_position_array /= zyx_scale
 
+        # Write back into original
         stage_position_by_well[i] = zyx_position_array
 
     position_pixel_coordinates = np.concatenate(stage_position_by_well)
