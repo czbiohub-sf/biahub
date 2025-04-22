@@ -10,6 +10,41 @@ from biahub.cli.utils import model_to_yaml
 from biahub.settings import ProcessingSettings, StitchSettings
 
 
+def extract_stage_position(plate_dataset, position_name):
+    stage_positions = plate_dataset.zattrs["Summary"]["StagePositions"]
+    for stage_position in stage_positions:  # TODO: fail if this loop reaches the end
+        if stage_position["Label"] == position_name:
+
+            # Read XY positions
+            try:
+                xy_stage_name = stage_position["DefaultXYStage"]
+                if "DevicePositions" in stage_position.keys():
+                    for device in stage_position["DevicePositions"]:
+                        if device["Device"] == xy_stage_name:
+                            xpos, ypos = device["Position_um"]
+                            break
+                else:
+                    xpos, ypos = stage_position[xy_stage_name]
+            except KeyError:
+                xpos, ypos = 0, 0
+                pass
+
+            # Read Z positions
+            try:
+                z_stage_name = stage_position["DefaultZStage"]
+                if "DevicePositions" in stage_position.keys():
+                    for device in stage_position["DevicePositions"]:
+                        if device["Device"] == z_stage_name:
+                            zpos = device["Position_um"][0]
+                            break
+                else:
+                    zpos = stage_position[z_stage_name]
+            except KeyError:
+                zpos = 0
+                pass
+    return zpos, ypos, xpos
+
+
 @click.command("estimate-stitch")
 @input_position_dirpaths()
 @output_filepath()
@@ -41,45 +76,15 @@ def estimate_stitch_cli(
     fov_names = []
     stage_position_array = []
     for input_position_dirpath in input_position_dirpaths:
-        fov_names.append("/".join(input_position_dirpath.parts[-3:]))
+        fov_name = "/".join(input_position_dirpath.parts[-3:])
+        fov_names.append(fov_name)
         with open_ome_zarr(input_position_dirpath) as input_position_dataset:
             zyx_scale = input_position_dataset.scale[2:]
             position_name = input_position_dataset.zattrs['omero']['name']
         with open_ome_zarr(input_plate_path) as input_plate_dataset:
-            stage_positions = input_plate_dataset.zattrs["Summary"]["StagePositions"]
-            for stage_position in stage_positions:  # TODO: fail if this loop reaches the end
-                if stage_position["Label"] == position_name:
-
-                    # Read XY positions
-                    try:
-                        xy_stage_name = stage_position["DefaultXYStage"]
-                        if "DevicePositions" in stage_position.keys():
-                            for device in stage_position["DevicePositions"]:
-                                if device["Device"] == xy_stage_name:
-                                    xpos, ypos = device["Position_um"]
-                                    break
-                        else:
-                            xpos, ypos = stage_position[xy_stage_name]
-                    except KeyError:
-                        xpos, ypos = 0, 0
-                        pass
-
-                    # Read Z positions
-                    try:
-                        z_stage_name = stage_position["DefaultZStage"]
-                        if "DevicePositions" in stage_position.keys():
-                            for device in stage_position["DevicePositions"]:
-                                if device["Device"] == z_stage_name:
-                                    zpos = device["Position_um"][0]
-                                    break
-                        else:
-                            zpos = stage_position[z_stage_name]
-                    except KeyError:
-                        zpos = 0
-                        pass
-
-                    # Add to list
-                    stage_position_array.append([zpos, ypos, xpos])
+            zyx_position = extract_stage_position(input_plate_dataset, position_name)
+            stage_position_array.append(zyx_position)
+        print(f"Found metadata: {fov_name}: {zyx_position}")
 
     # Split fov_names and stage_position_array by well
     unique_well_names = set(["/".join(x.split("/")[:2]) for x in fov_names])
@@ -91,7 +96,7 @@ def estimate_stitch_cli(
                 stage_position_list.append(stage_position)
         stage_position_by_well.append(stage_position_list)
 
-    # Prepare final
+    # Prepare stage position in pixel coordinates for each well
     for i in range(len(unique_well_names)):
         zyx_position_array = np.array(stage_position_by_well[i])
 
@@ -104,9 +109,8 @@ def estimate_stitch_cli(
         # Write back into original
         stage_position_by_well[i] = zyx_position_array
 
-    position_pixel_coordinates = np.concatenate(stage_position_by_well)
-
     # Prepare final output
+    position_pixel_coordinates = np.concatenate(stage_position_by_well)
     total_translation_dict = {}
     for fov_name, position_pixel_coordinates in zip(fov_names, position_pixel_coordinates):
         total_translation_dict[fov_name] = list(np.round(position_pixel_coordinates, 2))
