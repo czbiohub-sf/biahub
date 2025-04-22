@@ -67,6 +67,13 @@ def estimate_stitch_cli(
     """
     Estimate stitching parameters for positions in wells of a zarr store.
 
+    This routine uses micro-manager stage position metadata and iohub scale
+    metadata to generate translation parameters for stitching. Translations are
+    saved in pixel units.
+
+    This function estimates translations using metadata alone. More precise
+    translations require phase cross-correlation using `optimize-stitch`.
+
     >>> biahub estimate-stitch -i ./input.zarr/*/*/* -o ./stitch_params.yml
     """
     input_plate_path = Path(*input_position_dirpaths[0].parts[:-3])
