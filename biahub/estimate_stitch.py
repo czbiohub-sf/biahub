@@ -78,16 +78,16 @@ def estimate_stitch_cli(
     for input_position_dirpath in input_position_dirpaths:
         fov_name = "/".join(input_position_dirpath.parts[-3:])
 
-        # find position name from position-level omero metadata
+        # Find position name from position-level omero metadata
         with open_ome_zarr(input_position_dirpath) as input_position_dataset:
             position_name = input_position_dataset.zattrs['omero']['name']
 
-        # use position name to index into micromanager plate-level metadata
+        # Use position name to index into micromanager plate-level metadata
         with open_ome_zarr(input_plate_path) as input_plate_dataset:
             zyx_position = extract_stage_position(input_plate_dataset, position_name)
-            translation_dict[fov_name] = zyx_position
 
         print(f"Found metadata: {fov_name}: {zyx_position}")
+        translation_dict[fov_name] = zyx_position
 
     # Group by well
     grouped_wells = defaultdict(dict)
