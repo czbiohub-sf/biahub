@@ -3,6 +3,7 @@ import shutil
 from pathlib import Path
 from typing import Literal, Callable
 from itertools import product
+from collections import defaultdict
 
 from tqdm import tqdm
 import ants
@@ -687,88 +688,100 @@ def get_output_shape(shifts: dict, tile_shape: tuple) -> tuple:
     return max_z + tile_shape[-3], max_y + tile_shape[-2], max_x + tile_shape[-1]
 
 
+# @ click.command("apply-stitch")
+# @click.argument("input_zarr_filepath", type=click.Path(exists=True, dir_okay=False))
+# @click.argument("output_dirpath", type=click.Path(exists=True, dir_okay=True))
+# @config_filepath()
 def apply_stitch(
-    config_filepath: str,
     input_zarr_filepath: str,
     output_dirpath: str,
+    config_filepath: str,
     divide_tiling_shape: tuple = (5000, 5000),
-):
+) -> None:
 
     settings = yaml_to_model(config_filepath, StitchSettings)
     input_fov_store = open_ome_zarr(input_zarr_filepath, mode="r")
     shifts = settings.total_translation
 
-    # TODO: remove
-    if len(list(shifts.values())[0]) == 2:
-        shifts = {k: [0] + v for k, v in shifts.items()}
-
-    temp_pos = next(input_fov_store.positions())[0]
-    tile_shape = input_fov_store[temp_pos].data.shape
-    final_shape_zyx = get_output_shape(shifts, tile_shape)
-
     input_store_channels = input_fov_store.channel_names
+    if settings.channels is None:
+        settings.channels = input_store_channels
     channel_idx = np.asarray([input_store_channels.index(ch) for ch in settings.channels])
 
-    final_shape = (
-        tile_shape[0],
-        len(channel_idx),
-    ) + final_shape_zyx
-
-    output_image = np.zeros(final_shape, dtype=np.float32)  # check dtype
-    divisor = np.zeros(final_shape, dtype=np.uint8)
+    if not all(channel in input_store_channels for channel in settings.channels):
+        raise ValueError("Invalid channel(s) provided.")
 
     output_store = open_ome_zarr(
         output_dirpath, layout='hcs', mode="w-", channel_names=settings.channels
     )
 
-    well_name = list(shifts.keys())[0][:3]
-    output_chunk_size = input_fov_store[temp_pos].data.chunks
-    output_scale = input_fov_store[temp_pos].scale
+    grouped_shifts = defaultdict(dict)
+    for key, value in shifts.items():
+        group = key.split("/")[1]
+        grouped_shifts[group][key] = value
 
-    for tile_name, shift in shifts.items():
-        tile = input_fov_store[tile_name].data
+    for g in grouped_shifts:
+        pos_shifts = grouped_shifts[g]
+        temp_pos = list(grouped_shifts[g].keys())[0]
+        tile_shape = input_fov_store[temp_pos].data.shape
+        final_shape_zyx = get_output_shape(pos_shifts, tile_shape)
 
-        tile = process_dataset(tile[:, channel_idx, :, :, :], settings.preprocessing)
-        shift_array = np.asarray(shift).astype(np.uint16)  # round shift to ints
+        final_shape = (
+            tile_shape[0],
+            len(channel_idx),
+        ) + final_shape_zyx
 
-        output_image[
-            :,
-            :,
-            shift_array[0] : shift_array[0] + tile_shape[-3],
-            shift_array[1] : shift_array[1] + tile_shape[-2],
-            shift_array[2] : shift_array[2] + tile_shape[-1],
-        ] += tile
+        output_image = np.zeros(final_shape, dtype=np.float32)  # check dtype
+        divisor = np.zeros(final_shape, dtype=np.uint8)
 
-        divisor[
-            :,
-            :,
-            shift_array[0] : shift_array[0] + tile_shape[-3],
-            shift_array[1] : shift_array[1] + tile_shape[-2],
-            shift_array[2] : shift_array[2] + tile_shape[-1],
-        ] += 1
+        well_name = temp_pos[:3]
+        output_chunk_size = input_fov_store[temp_pos].data.chunks
+        output_scale = input_fov_store[temp_pos].scale
 
-    stitched = np.zeros_like(output_image, dtype=np.float16)
+        for tile_name, shift in pos_shifts.items():
+            tile = input_fov_store[tile_name].data
 
-    def _divide(a, b):
-        return np.nan_to_num(a / b)
+            tile = process_dataset(tile[:, channel_idx, :, :, :], settings.preprocessing)
+            shift_array = np.asarray(shift).astype(np.uint16)  # round shift to ints
 
-    divide_tile(
-        output_image,
-        divisor,
-        func=_divide,
-        out_array=stitched,
-        tile=divide_tiling_shape,
-    )
+            output_image[
+                :,
+                :,
+                shift_array[0] : shift_array[0] + tile_shape[-3],
+                shift_array[1] : shift_array[1] + tile_shape[-2],
+                shift_array[2] : shift_array[2] + tile_shape[-1],
+            ] += tile
 
-    stitched = process_dataset(stitched, settings.postprocessing)
+            divisor[
+                :,
+                :,
+                shift_array[0] : shift_array[0] + tile_shape[-3],
+                shift_array[1] : shift_array[1] + tile_shape[-2],
+                shift_array[2] : shift_array[2] + tile_shape[-1],
+            ] += 1
 
-    stitched_pos = output_store.create_position(well_name[0], well_name[2], "0")
-    stitched_pos.create_image(
-        "0",
-        data=stitched,
-        chunks=output_chunk_size,
-        transform=[TransformationMeta(type="scale", scale=output_scale)],
-    )
+        stitched = np.zeros_like(output_image, dtype=np.float16)
+
+        def _divide(a, b):
+            return np.nan_to_num(a / b)
+
+        divide_tile(
+            output_image,
+            divisor,
+            func=_divide,
+            out_array=stitched,
+            tile=divide_tiling_shape,
+        )
+
+        stitched = process_dataset(stitched, settings.postprocessing)
+
+        stitched_pos = output_store.create_position(well_name[0], well_name[2], "0")
+        stitched_pos.create_image(
+            "0",
+            data=stitched,
+            chunks=output_chunk_size,
+            transform=[TransformationMeta(type="scale", scale=output_scale)],
+        )
 
     return
 
