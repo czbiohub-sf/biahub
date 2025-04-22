@@ -1,64 +1,54 @@
+from collections import defaultdict
 from pathlib import Path
 
 import click
-import pandas as pd
-import submitit
+import numpy as np
 
 from iohub import open_ome_zarr
 
-from biahub.cli.parsing import input_position_dirpaths, local, output_filepath
+from biahub.cli.parsing import input_position_dirpaths, output_filepath
 from biahub.cli.utils import model_to_yaml
 from biahub.settings import ProcessingSettings, StitchSettings
-from biahub.stitch import (
-    cleanup_shifts,
-    compute_total_translation,
-    consolidate_zarr_fov_shifts,
-    estimate_zarr_fov_shifts,
-    get_grid_rows_cols,
-)
 
 
-def write_config_file(
-    shifts: pd.DataFrame,
-    output_filepath: str,
-    channel: str,
-    fliplr: bool,
-    flipud: bool,
-    rot90: int,
-):
-    total_translation_dict = shifts.apply(
-        lambda row: [float(row['shift-y'].round(2)), float(row['shift-x'].round(2))], axis=1
-    ).to_dict()
+def extract_stage_position(plate_dataset, position_name):
+    stage_positions = plate_dataset.zattrs["Summary"]["StagePositions"]
+    for stage_position in stage_positions:  # TODO: fail if this loop reaches the end
+        if stage_position["Label"] == position_name:
 
-    settings = StitchSettings(
-        channels=[channel],
-        preprocessing=ProcessingSettings(fliplr=fliplr, flipud=flipud, rot90=rot90),
-        postprocessing=ProcessingSettings(),
-        total_translation=total_translation_dict,
-    )
-    model_to_yaml(settings, output_filepath)
+            # Read XY positions
+            try:
+                xy_stage_name = stage_position["DefaultXYStage"]
+                if "DevicePositions" in stage_position.keys():
+                    for device in stage_position["DevicePositions"]:
+                        if device["Device"] == xy_stage_name:
+                            xpos, ypos = device["Position_um"]
+                            break
+                else:
+                    xpos, ypos = stage_position[xy_stage_name]
+            except KeyError:
+                xpos, ypos = 0, 0
+                pass
 
-
-def cleanup_and_write_shifts(
-    output_filepath, channel, fliplr, flipud, rot90, csv_filepath, pixel_size_um
-):
-    cleanup_shifts(csv_filepath, pixel_size_um)
-    shifts = compute_total_translation(csv_filepath)
-    write_config_file(shifts, output_filepath, channel, fliplr, flipud, rot90)
+            # Read Z positions
+            try:
+                z_stage_name = stage_position["DefaultZStage"]
+                if "DevicePositions" in stage_position.keys():
+                    for device in stage_position["DevicePositions"]:
+                        if device["Device"] == z_stage_name:
+                            zpos = device["Position_um"][0]
+                            break
+                else:
+                    zpos = stage_position[z_stage_name]
+            except KeyError:
+                zpos = 0
+                pass
+    return zpos, ypos, xpos
 
 
 @click.command("estimate-stitch")
 @input_position_dirpaths()
 @output_filepath()
-@click.option(
-    "--channel",
-    required=True,
-    type=str,
-    help="Channel to use for estimating stitch parameters",
-)
-@click.option(
-    "--percent-overlap", "-p", required=True, type=float, help="Percent overlap between images"
-)
 @click.option("--fliplr", is_flag=True, help="Flip images left-right before stitching")
 @click.option("--flipud", is_flag=True, help="Flip images up-down before stitching")
 @click.option(
@@ -67,167 +57,77 @@ def cleanup_and_write_shifts(
     type=int,
     help="rotate the images 90 counterclockwise n times before stitching",
 )
-@click.option(
-    "--add_offset",
-    is_flag=True,
-    help="add the offset to estimated shifts, needed for OPS experiments",
-)
-@local()
 def estimate_stitch_cli(
     input_position_dirpaths: list[Path],
     output_filepath: str,
-    channel: str,
-    percent_overlap: float,
     fliplr: bool,
     flipud: bool,
     rot90: int,
-    add_offset: bool,
-    local: bool,
 ):
     """
     Estimate stitching parameters for positions in wells of a zarr store.
-    Position names must follow the naming format XXXYYY, e.g. 000000, 000001, 001000, etc.
-    as created by the Micro-manager Tile Creator: https://micro-manager.org/Micro-Manager_User's_Guide#positioning
-    Assumes all wells have the save FOV grid layout.
 
-    >>> biahub estimate-stitch -i ./input.zarr/*/*/* -o ./stitch_params.yml --channel DAPI --percent-overlap 0.05
+    This routine uses micro-manager stage position metadata and iohub scale
+    metadata to generate translation parameters for stitching. Translations are
+    saved in pixel units.
+
+    This function estimates translations using metadata alone. More precise
+    translations require phase cross-correlation using `optimize-stitch`.
+
+    >>> biahub estimate-stitch -i ./input.zarr/*/*/* -o ./stitch_params.yml
     """
-    if not (0 <= percent_overlap <= 1):
-        raise ValueError("Percent overlap must be between 0 and 1")
-
-    input_zarr_path = Path(*input_position_dirpaths[0].parts[:-3])
+    input_plate_path = Path(*input_position_dirpaths[0].parts[:-3])
     output_filepath = Path(output_filepath)
-    csv_filepath = (
-        output_filepath.parent
-        / f"stitch_shifts_{input_zarr_path.name.replace('.zarr', '.csv')}"
+
+    # Collect raw stage positions
+    print("Reading stage positions...")
+    translation_dict = {}
+    for input_position_dirpath in input_position_dirpaths:
+        fov_name = "/".join(input_position_dirpath.parts[-3:])
+
+        # Find position name from position-level omero metadata
+        with open_ome_zarr(input_position_dirpath) as input_position_dataset:
+            position_name = input_position_dataset.zattrs['omero']['name']
+
+        # Use position name to index into micromanager plate-level metadata
+        with open_ome_zarr(input_plate_path) as input_plate_dataset:
+            zyx_position = extract_stage_position(input_plate_dataset, position_name)
+
+        print(f"Found metadata: {fov_name}: {zyx_position}")
+        translation_dict[fov_name] = zyx_position
+
+    # Group by well
+    grouped_wells = defaultdict(dict)
+    for key, value in translation_dict.items():
+        well_name = "/".join(key.split("/")[:2])
+        grouped_wells[well_name][key] = value
+
+    # Prepare stage positions in pixel coordinates for each well
+    final_translation_dict = {}
+    for i, (key, value) in enumerate(grouped_wells.items()):
+        zyx_array = []
+        for my_value in grouped_wells[key].values():
+            zyx_array.append(my_value)
+        zyx_well_array = np.array(zyx_array)
+
+        # Shift so that (0, 0, 0) is the lowermost corner
+        zyx_well_array -= np.min(zyx_well_array, axis=0)
+
+        # Scale to pixel coordinates
+        zyx_well_array /= open_ome_zarr(input_position_dirpaths[0]).scale[2:]
+
+        # Write back into flat dictionary
+        for i, fov_name in enumerate(grouped_wells[key].keys()):
+            final_translation_dict[fov_name] = list(np.round(zyx_well_array[i], 2))
+
+    # Validate and save
+    settings = StitchSettings(
+        channels=None,
+        preprocessing=ProcessingSettings(fliplr=fliplr, flipud=flipud, rot90=rot90),
+        postprocessing=ProcessingSettings(),
+        total_translation=final_translation_dict,
     )
-
-    with open_ome_zarr(input_position_dirpaths[0]) as dataset:
-        if channel not in dataset.channel_names:
-            raise ValueError(f"Channel {channel} not found in input zarr store")
-        tcz_idx = (0, dataset.channel_names.index(channel), dataset.data.shape[-3] // 2)
-        pixel_size_um = dataset.scale[-1]
-    if pixel_size_um == 1.0:
-        response = input(
-            'The pixel size is equal to the default value of 1.0 um. ',
-            'Inaccurate pixel size will affect stitching outlier removal. ',
-            'Continue? [y/N]: ',
-        )
-        if response.lower() != 'y':
-            return
-
-    # here we assume that all wells have the same fov grid
-    click.echo('Indexing input zarr store')
-    wells = list(set([Path(*p.parts[-3:-1]) for p in input_position_dirpaths]))
-    fov_names = set([p.name for p in input_position_dirpaths])
-    grid_rows, grid_cols = get_grid_rows_cols(fov_names)
-
-    # account for non-square grids
-    row_fov_pairs, col_fov_pairs = [], []
-    for col in grid_cols:
-        for row0, row1 in zip(grid_rows[:-1], grid_rows[1:]):
-            fov0 = col + row0
-            fov1 = col + row1
-            if fov0 in fov_names and fov1 in fov_names:
-                row_fov_pairs.append((fov0, fov1))
-    for row in grid_rows:
-        for col0, col1 in zip(grid_cols[:-1], grid_cols[1:]):
-            fov0 = col0 + row
-            fov1 = col1 + row
-            if fov0 in fov_names and fov1 in fov_names:
-                col_fov_pairs.append((fov0, fov1))
-
-    slurm_out_path = output_filepath.parent / "slurm_output"
-    csv_dirpath = (
-        output_filepath.parent / 'raw_shifts' / input_zarr_path.name.replace('.zarr', '')
-    )
-    csv_dirpath.mkdir(parents=True, exist_ok=False)
-
-    estimate_shift_params = {
-        "tcz_index": tcz_idx,
-        "percent_overlap": percent_overlap,
-        "fliplr": fliplr,
-        "flipud": flipud,
-        "rot90": rot90,
-        "add_offset": add_offset,
-    }
-
-    slurm_args = {
-        "slurm_job_name": "estimate-shift",
-        "slurm_mem_per_cpu": "8G",
-        "slurm_cpus_per_task": 1,
-        "slurm_array_parallelism": 100,  # process up to 100 positions at a time
-        "slurm_time": 10,
-        "slurm_partition": "preempted",
-    }
-
-    # Run locally or submit to SLURM
-    if local:
-        cluster = "local"
-    else:
-        cluster = "slurm"
-
-    click.echo('Estimating FOV shifts...')
-    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
-    executor.update_parameters(**slurm_args)
-    estimate_jobs = []
-    with executor.batch():
-        for well_name in wells:
-            for direction, fovs in zip(("row", "col"), (row_fov_pairs, col_fov_pairs)):
-                for fov0, fov1 in fovs:
-                    fov0_zarr_path = Path(input_zarr_path, well_name, fov0)
-                    fov1_zarr_path = Path(input_zarr_path, well_name, fov1)
-                    estimate_jobs.append(
-                        executor.submit(
-                            estimate_zarr_fov_shifts,
-                            direction=direction,
-                            output_dirname=csv_dirpath,
-                            **estimate_shift_params,
-                            fov0_zarr_path=fov0_zarr_path,
-                            fov1_zarr_path=fov1_zarr_path,
-                        )
-                    )
-    estimate_job_ids = [job.job_id for job in estimate_jobs]
-
-    slurm_args = {
-        "slurm_job_name": "consolidate-shifts",
-        "slurm_mem_per_cpu": "8G",
-        "slurm_cpus_per_task": 1,
-        "slurm_time": 10,
-        "slurm_partition": "preempted",
-        "slurm_dependency": f"afterok:{estimate_job_ids[0]}:{estimate_job_ids[-1]}",
-    }
-
-    click.echo('Consolidating FOV shifts...')
-    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
-    executor.update_parameters(**slurm_args)
-    consolidate_job_id = executor.submit(
-        consolidate_zarr_fov_shifts,
-        input_dirname=csv_dirpath,
-        output_filepath=csv_filepath,
-    ).job_id
-
-    slurm_args = {
-        "slurm_job_name": "cleanup-shifts",
-        "slurm_mem_per_cpu": "8G",
-        "slurm_cpus_per_task": 1,
-        "slurm_time": 10,
-        "slurm_partition": "preempted",
-        "slurm_dependency": f"afterok:{consolidate_job_id}",
-    }
-
-    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
-    executor.update_parameters(**slurm_args)
-    executor.submit(
-        cleanup_and_write_shifts,
-        output_filepath,
-        channel,
-        fliplr,
-        flipud,
-        rot90,
-        csv_filepath,
-        pixel_size_um,
-    )
+    model_to_yaml(settings, output_filepath)
 
 
 if __name__ == "__main__":
