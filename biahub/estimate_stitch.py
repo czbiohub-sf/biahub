@@ -1,3 +1,4 @@
+from collections import defaultdict
 from pathlib import Path
 
 import click
@@ -73,11 +74,9 @@ def estimate_stitch_cli(
 
     # Collect raw stage positions
     print("Reading stage positions...")
-    fov_names = []
-    stage_position_array = []
+    translation_dict = {}
     for input_position_dirpath in input_position_dirpaths:
         fov_name = "/".join(input_position_dirpath.parts[-3:])
-        fov_names.append(fov_name)
 
         # find position name from position-level omero metadata
         with open_ome_zarr(input_position_dirpath) as input_position_dataset:
@@ -86,45 +85,40 @@ def estimate_stitch_cli(
         # use position name to index into micromanager plate-level metadata
         with open_ome_zarr(input_plate_path) as input_plate_dataset:
             zyx_position = extract_stage_position(input_plate_dataset, position_name)
-            stage_position_array.append(zyx_position)
+            translation_dict[fov_name] = zyx_position
 
         print(f"Found metadata: {fov_name}: {zyx_position}")
 
-    # Split fov_names and stage_position_array by well
-    unique_well_names = set(["/".join(x.split("/")[:2]) for x in fov_names])
-    stage_position_by_well = []
-    for unique_well_name in unique_well_names:
-        stage_position_list = []
-        for fov_name, stage_position in zip(fov_names, stage_position_array):
-            if unique_well_name in fov_name:
-                stage_position_list.append(stage_position)
-        stage_position_by_well.append(stage_position_list)
+    # Group by well
+    grouped_wells = defaultdict(dict)
+    for key, value in translation_dict.items():
+        well_name = "/".join(key.split("/")[:2])
+        grouped_wells[well_name][key] = value
 
     # Prepare stage positions in pixel coordinates for each well
-    for i in range(len(unique_well_names)):
-        zyx_well_array = np.array(stage_position_by_well[i])
+    final_translation_dict = {}
+    for i, (key, value) in enumerate(grouped_wells.items()):
+        zyx_array = []
+        for my_value in grouped_wells[key].values():
+            zyx_array.append(my_value)
+        zyx_well_array = np.array(zyx_array)
 
         # Shift so that (0, 0, 0) is the lowermost corner
         zyx_well_array -= np.min(zyx_well_array, axis=0)
 
         # Scale to pixel coordinates
-        zyx_well_array /= open_ome_zarr(input_position_dirpath[0]).scale[2:]
+        zyx_well_array /= open_ome_zarr(input_position_dirpaths[0]).scale[2:]
 
-        # Write back into original
-        stage_position_by_well[i] = zyx_well_array
-
-    # Prepare final output
-    position_pixel_coordinates = np.concatenate(stage_position_by_well)
-    total_translation_dict = {}
-    for fov_name, position_pixel_coordinates in zip(fov_names, position_pixel_coordinates):
-        total_translation_dict[fov_name] = list(np.round(position_pixel_coordinates, 2))
+        # Write back into flat dictionary
+        for i, fov_name in enumerate(grouped_wells[key].keys()):
+            final_translation_dict[fov_name] = list(np.round(zyx_well_array[i], 2))
 
     # Validate and save
     settings = StitchSettings(
         channels=None,
         preprocessing=ProcessingSettings(fliplr=fliplr, flipud=flipud, rot90=rot90),
         postprocessing=ProcessingSettings(),
-        total_translation=total_translation_dict,
+        total_translation=final_translation_dict,
     )
     model_to_yaml(settings, output_filepath)
 
