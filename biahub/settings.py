@@ -347,10 +347,16 @@ class StitchSettings(MyBaseModel):
     postprocessing: Optional[ProcessingSettings] = None
     column_translation: Optional[list[float, float]] = None
     row_translation: Optional[list[float, float]] = None
-    total_translation: Optional[dict[str, list[float, float]]] = None
+    total_translation: Optional[dict[str, list[float, float, float]]] = None
     affine_transform: Optional[dict[str, list]] = None
 
     def __init__(self, **data):
+        # Adding a leading zero for zyx translation for backwards compatibility
+        if "total_translation" in data:
+            for key, value in data["total_translation"].items():
+                if len(value) == 2:
+                    data["total_translation"][key] = [0] + value
+
         if not any(
             (
                 data.get("total_translation"),
