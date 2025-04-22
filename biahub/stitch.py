@@ -1,8 +1,10 @@
 import shutil
 
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Callable
+from itertools import product
 
+from tqdm import tqdm
 import ants
 import click
 import dask.array as da
@@ -12,6 +14,7 @@ import scipy.ndimage as ndi
 import submitit
 
 from iohub import open_ome_zarr
+from iohub.ngff import TransformationMeta
 from iohub.ngff.utils import create_empty_plate
 from skimage.registration import phase_cross_correlation
 
@@ -668,6 +671,134 @@ def compute_total_translation(csv_filepath: str) -> pd.DataFrame:
         total_shift.append(_total_shift)
 
     return pd.concat(total_shift)
+
+
+def get_output_shape(shifts: dict, tile_shape: tuple) -> tuple:
+    """Get the output shape of the stitched image from the raw shifts"""
+
+    z_shifts = [shift[0] for shift in shifts.values()]
+    y_shifts = [shift[1] for shift in shifts.values()]
+    x_shifts = [shift[2] for shift in shifts.values()]
+
+    max_z = int(np.max(np.asarray(z_shifts)))
+    max_y = int(np.max(np.asarray(y_shifts)))
+    max_x = int(np.max(np.asarray(x_shifts)))
+
+    return max_z + tile_shape[-3], max_y + tile_shape[-2], max_x + tile_shape[-1]
+
+
+def apply_stitch(
+    config_filepath: str,
+    input_zarr_filepath: str,
+    output_dirpath: str,
+    divide_tiling_shape: tuple = (5000, 5000),
+):
+
+    settings = yaml_to_model(config_filepath, StitchSettings)
+    input_fov_store = open_ome_zarr(input_zarr_filepath, mode="r")
+    shifts = settings.total_translation
+
+    # TODO: remove
+    if len(list(shifts.values())[0]) == 2:
+        shifts = {k: [0] + v for k, v in shifts.items()}
+
+    temp_pos = next(input_fov_store.positions())[0]
+    tile_shape = input_fov_store[temp_pos].data.shape
+    final_shape_zyx = get_output_shape(shifts, tile_shape)
+
+    input_store_channels = input_fov_store.channel_names
+    channel_idx = np.asarray([input_store_channels.index(ch) for ch in settings.channels])
+
+    final_shape = (
+        tile_shape[0],
+        len(channel_idx),
+    ) + final_shape_zyx
+
+    output_image = np.zeros(final_shape, dtype=np.float32)  # check dtype
+    divisor = np.zeros(final_shape, dtype=np.uint8)
+
+    output_store = open_ome_zarr(
+        output_dirpath, layout='hcs', mode="w-", channel_names=settings.channels
+    )
+
+    well_name = list(shifts.keys())[0][:3]
+    output_chunk_size = input_fov_store[temp_pos].data.chunks
+    output_scale = input_fov_store[temp_pos].scale
+
+    for tile_name, shift in shifts.items():
+        tile = input_fov_store[tile_name].data
+
+        tile = process_dataset(tile[:, channel_idx, :, :, :], settings.preprocessing)
+        shift_array = np.asarray(shift).astype(np.uint16)  # round shift to ints
+
+        output_image[
+            :,
+            :,
+            shift_array[0] : shift_array[0] + tile_shape[-3],
+            shift_array[1] : shift_array[1] + tile_shape[-2],
+            shift_array[2] : shift_array[2] + tile_shape[-1],
+        ] += tile
+
+        divisor[
+            :,
+            :,
+            shift_array[0] : shift_array[0] + tile_shape[-3],
+            shift_array[1] : shift_array[1] + tile_shape[-2],
+            shift_array[2] : shift_array[2] + tile_shape[-1],
+        ] += 1
+
+    stitched = np.zeros_like(output_image, dtype=np.float16)
+
+    def _divide(a, b):
+        return np.nan_to_num(a / b)
+
+    divide_tile(
+        output_image,
+        divisor,
+        func=_divide,
+        out_array=stitched,
+        tile=divide_tiling_shape,
+    )
+
+    stitched = process_dataset(stitched, settings.postprocessing)
+
+    stitched_pos = output_store.create_position(well_name[0], well_name[2], "0")
+    stitched_pos.create_image(
+        "0",
+        data=stitched,
+        chunks=output_chunk_size,
+        transform=[TransformationMeta(type="scale", scale=output_scale)],
+    )
+
+    return
+
+
+def divide_tile(
+    *in_arrays: np.ndarray,
+    func: Callable,
+    out_array: np.ndarray,
+    tile: tuple,
+    overlap: tuple = (0, 0),
+):
+
+    final_shape = out_array.shape[-2:]
+
+    tiling_start = list(
+        product(
+            *[
+                range(o, size + 2 * o, t + o)  # t + o step, because of blending map
+                for size, t, o in zip(final_shape, tile, overlap)
+            ]
+        )
+    )
+    for start_indices in tqdm(tiling_start):
+        slicing = (...,) + tuple(
+            slice(start - o, start + t + o)
+            for start, t, o in zip(start_indices, tile, overlap)
+        )
+        out_array[slicing] = func(*[a[slicing] for a in in_arrays])
+
+    return out_array
 
 
 @click.command("stitch")
