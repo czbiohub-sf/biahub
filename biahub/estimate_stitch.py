@@ -78,12 +78,16 @@ def estimate_stitch_cli(
     for input_position_dirpath in input_position_dirpaths:
         fov_name = "/".join(input_position_dirpath.parts[-3:])
         fov_names.append(fov_name)
+
+        # find position name from position-level omero metadata
         with open_ome_zarr(input_position_dirpath) as input_position_dataset:
-            zyx_scale = input_position_dataset.scale[2:]
             position_name = input_position_dataset.zattrs['omero']['name']
+
+        # use position name to index into micromanager plate-level metadata
         with open_ome_zarr(input_plate_path) as input_plate_dataset:
             zyx_position = extract_stage_position(input_plate_dataset, position_name)
             stage_position_array.append(zyx_position)
+
         print(f"Found metadata: {fov_name}: {zyx_position}")
 
     # Split fov_names and stage_position_array by well
@@ -96,18 +100,18 @@ def estimate_stitch_cli(
                 stage_position_list.append(stage_position)
         stage_position_by_well.append(stage_position_list)
 
-    # Prepare stage position in pixel coordinates for each well
+    # Prepare stage positions in pixel coordinates for each well
     for i in range(len(unique_well_names)):
-        zyx_position_array = np.array(stage_position_by_well[i])
+        zyx_well_array = np.array(stage_position_by_well[i])
 
         # Shift so that (0, 0, 0) is the lowermost corner
-        zyx_position_array -= np.min(zyx_position_array, axis=0)
+        zyx_well_array -= np.min(zyx_well_array, axis=0)
 
         # Scale to pixel coordinates
-        zyx_position_array /= zyx_scale
+        zyx_well_array /= open_ome_zarr(input_position_dirpath[0]).scale[2:]
 
         # Write back into original
-        stage_position_by_well[i] = zyx_position_array
+        stage_position_by_well[i] = zyx_well_array
 
     # Prepare final output
     position_pixel_coordinates = np.concatenate(stage_position_by_well)
