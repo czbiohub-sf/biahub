@@ -4,7 +4,7 @@ from click.testing import CliRunner
 from numpy import testing
 
 from biahub.cli.main import cli
-from biahub.cli.register import rescale_voxel_size
+from biahub.register import rescale_voxel_size
 
 
 def test_register_cli(tmp_path, example_plate, example_plate_2, example_register_settings):
@@ -26,6 +26,7 @@ def test_register_cli(tmp_path, example_plate, example_plate_2, example_register
             str(config_path),
             "-o",
             str(output_path),
+            "-l",
         ],
         catch_exceptions=False,
     )
