@@ -1,15 +1,14 @@
 import datetime
 import itertools
+
 from pathlib import Path
 from typing import List, Optional, Protocol, Sequence, Union
 
 import click
-import numpy as np
 
 from iohub.ngff import Position, open_ome_zarr
-from slurmkit import SlurmParams, slurm_function, submit_function
-
 from skimage.transform import downscale_local_mean
+from slurmkit import SlurmParams, slurm_function, submit_function
 
 
 class CreatePyramids(Protocol):
@@ -68,16 +67,12 @@ def create_pyramids(
     pyramid_func = pyramid(fov=fov, levels=levels)
     try:
         for i, (t, c) in enumerate(iterator):  # type: ignore[misc]
-            submit_function(
-                pyramid_func, params, t=t, c=c, dependencies=dependencies[i]
-            )
+            submit_function(pyramid_func, params, t=t, c=c, dependencies=dependencies[i])
 
     except TypeError:
         for i, t in enumerate(iterator):
             for c in range(fov.data.shape[1]):
-                submit_function(
-                    pyramid_func, params, t=t, c=c, dependencies=dependencies[i]
-                )
+                submit_function(pyramid_func, params, t=t, c=c, dependencies=dependencies[i])
 
 
 @click.command("pyramid")
@@ -97,9 +92,7 @@ def pyramid_cli(paths: Sequence[Path], levels: int) -> None:
     for path in paths:
         fov = open_ome_zarr(path, layout="fov", mode="a")
 
-        iterator = list(
-            itertools.product(range(fov.data.shape[0]), range(fov.data.shape[1]))
-        )
+        iterator = list(itertools.product(range(fov.data.shape[0]), range(fov.data.shape[1])))
 
         create_pyramids(fov, iterator, levels, dependencies=None)
 
