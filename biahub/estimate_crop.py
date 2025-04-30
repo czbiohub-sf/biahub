@@ -76,7 +76,7 @@ def estimate_crop(
     )
 
 
-@click.command()
+@click.command("estimate-crop")
 @source_position_dirpaths()
 @target_position_dirpaths()
 @output_filepath()
@@ -86,7 +86,7 @@ def estimate_crop(
     help="(Optional) Radius of the circular mask given as fraction of image width to apply to the phase channel.",
     required=False,
 )
-def esitmate_crop_cli(
+def estimate_crop_cli(
     source_position_dirpaths,
     target_position_dirpaths,
     output_filepath,
@@ -135,3 +135,6 @@ def esitmate_crop_cli(
     )
 
     model_to_yaml(model, output_filepath)
+
+if __name__ == "__main__":
+    estimate_crop_cli()
