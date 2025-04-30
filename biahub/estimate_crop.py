@@ -1,14 +1,12 @@
-import click
-import numpy as np
-import dask.array as da
-
-from iohub import open_ome_zarr
 from pathlib import Path
 
-from biahub.cli.parsing import (
-    config_filepath,
-    output_filepath,
-)
+import click
+import dask.array as da
+import numpy as np
+
+from iohub import open_ome_zarr
+
+from biahub.cli.parsing import config_filepath, output_filepath
 from biahub.cli.utils import model_to_yaml, yaml_to_model
 from biahub.register import find_lir
 from biahub.settings import ConcatenateSettings
@@ -107,7 +105,7 @@ def estimate_crop_cli(
     """
     config_filepath = Path(config_filepath)
     input_model = yaml_to_model(config_filepath, ConcatenateSettings)
-    
+
     # Assume phase dataset is first and fluor dataset is second in input_model.concat_data_paths
     _target_paths = config_filepath.parent.glob(input_model.concat_data_paths[0])
     target_position_dirpaths = [p for p in _target_paths if p.is_dir()]
@@ -120,7 +118,7 @@ def estimate_crop_cli(
 
         # Load data
         with open_ome_zarr(target_dir) as target:
-            phase_data = target.data.dask_array()[:, :1] # Pick only first channel
+            phase_data = target.data.dask_array()[:, :1]  # Pick only first channel
             phase_mask = (phase_data != 0) & (~da.isnan(phase_data))
 
         with open_ome_zarr(source_dir) as source:
@@ -128,15 +126,19 @@ def estimate_crop_cli(
             fluor_mask = (fluor_data != 0) & (~da.isnan(fluor_data))
 
         # Estimate crop region
-        all_ranges.append(estimate_crop(phase_mask.compute(), fluor_mask.compute(), phase_mask_radius))
+        all_ranges.append(
+            estimate_crop(phase_mask.compute(), fluor_mask.compute(), phase_mask_radius)
+        )
 
     # Standardize ROI across all positions
     # TODO: we should be able to use a unique ROI per FOV
     all_ranges = np.array(all_ranges)
-    standardized_ranges = np.concatenate([
+    standardized_ranges = np.concatenate(
+        [
             all_ranges[..., 0].max(axis=0, keepdims=True),
-            all_ranges[..., 1].min(axis=0, keepdims=True)
-    ])
+            all_ranges[..., 1].min(axis=0, keepdims=True),
+        ]
+    )
 
     output_model = input_model.model_copy()
     output_model.Z_slice = standardized_ranges[:, 0].tolist()
