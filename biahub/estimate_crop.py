@@ -1,17 +1,21 @@
 import click
 import numpy as np
-import dask.array as da
+
 from iohub import open_ome_zarr
-from biahub.register import find_lir
+
 from biahub.cli.parsing import (
     output_filepath,
     source_position_dirpaths,
     target_position_dirpaths,
 )
+from biahub.cli.utils import model_to_yaml
+from biahub.register import find_lir
 from biahub.settings import ConcatenateSettings
-from biahub.cli.utils import model_to_yaml, yaml_to_model
 
-def estimate_crop(phase_data: np.ndarray, fluor_data: np.ndarray, phase_mask_radius: float = None):
+
+def estimate_crop(
+    phase_data: np.ndarray, fluor_data: np.ndarray, phase_mask_radius: float = None
+):
     """
     Estimate a crop region where both phase and fluorescene volumes are non-zero.
 
@@ -22,7 +26,7 @@ def estimate_crop(phase_data: np.ndarray, fluor_data: np.ndarray, phase_mask_rad
     fluor_data : ndarray
         TCZYX fluorescence data array.
     phase_mask_radius : float
-        Radius of the circular mask which will be applied to the phase channel. If None, no masking will be applied 
+        Radius of the circular mask which will be applied to the phase channel. If None, no masking will be applied
 
     """
     if phase_data.ndim != 5 or fluor_data.ndim != 5:
@@ -30,12 +34,12 @@ def estimate_crop(phase_data: np.ndarray, fluor_data: np.ndarray, phase_mask_rad
 
     # Ensure data dimensions are the same
     _max_zyx_dims = np.asarray([phase_data.shape[-3:], fluor_data.shape[-3:]]).min(axis=0)
-    
+
     # Concatenate the data arrays along the channel axis
     data = np.concatenate(
         [
-            phase_data[..., :_max_zyx_dims[0], :_max_zyx_dims[1], :_max_zyx_dims[2]], 
-            fluor_data[..., :_max_zyx_dims[0], :_max_zyx_dims[1], :_max_zyx_dims[2]]
+            phase_data[..., : _max_zyx_dims[0], : _max_zyx_dims[1], : _max_zyx_dims[2]],
+            fluor_data[..., : _max_zyx_dims[0], : _max_zyx_dims[1], : _max_zyx_dims[2]],
         ],
         axis=1,
     )
@@ -43,29 +47,33 @@ def estimate_crop(phase_data: np.ndarray, fluor_data: np.ndarray, phase_mask_rad
     # Create a mask to find time points and channels where any data is non-zero
     valid_mask = np.any((data != 0) & (~np.isnan(data)), axis=(2, 3, 4))
     valid_T, valid_C = np.where(valid_mask)
-    
+
     if len(valid_T) == 0:
         raise ValueError("No valid data found.")
     valid_data = data[valid_T, valid_C]
-    
+
     # Compute a mask where all voxels are non-zero along time time and channel dimensions
     combined_mask = np.all((valid_data != 0) & (~np.isnan(valid_data)), axis=0)
 
     # Create a circular boolean mask of radius phase_mask_radius to apply to the phase channel
     if phase_mask_radius is not None:
         phase_mask = np.zeros(phase_data.shape[-2:], dtype=bool)
-        y, x = np.ogrid[:phase_data.shape[-2], :phase_data.shape[-1]]
+        y, x = np.ogrid[: phase_data.shape[-2], : phase_data.shape[-1]]
         center = (phase_data.shape[-2] // 2, phase_data.shape[-1] // 2)
         radius = int(phase_mask_radius * min(center))
-        phase_mask[(x - center[0])**2 + (y - center[1])**2 <= radius**2] = True
+        phase_mask[(x - center[0]) ** 2 + (y - center[1]) ** 2 <= radius**2] = True
 
-        phase_mask_cropped = phase_mask[:_max_zyx_dims[1], :_max_zyx_dims[2]]
+        phase_mask_cropped = phase_mask[: _max_zyx_dims[1], : _max_zyx_dims[2]]
         combined_mask = combined_mask * phase_mask_cropped
-    
+
     # Compute overlapping region
     z_slice, y_slice, x_slice = find_lir(combined_mask)
 
-    return (z_slice.start, z_slice.stop), (y_slice.start, y_slice.stop), (x_slice.start, x_slice.stop)
+    return (
+        (z_slice.start, z_slice.stop),
+        (y_slice.start, y_slice.stop),
+        (x_slice.start, x_slice.stop),
+    )
 
 
 @click.command()
@@ -118,12 +126,12 @@ def esitmate_crop_cli(
 
     # Save results
     model = ConcatenateSettings(
-        concat_data_paths=source_position_dirpaths+target_position_dirpaths,
+        concat_data_paths=source_position_dirpaths + target_position_dirpaths,
         time_indices='all',
         channel_names=[source_channels, target_channels],
         Z_slice=[z_range[0], z_range[1]],
         Y_slice=[y_range[0], y_range[1]],
         X_slice=[x_range[0], x_range[1]],
     )
-    
+
     model_to_yaml(model, output_filepath)
