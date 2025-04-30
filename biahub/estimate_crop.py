@@ -70,9 +70,9 @@ def estimate_crop(
     z_slice, y_slice, x_slice = find_lir(combined_mask)
 
     return (
-        (z_slice.start, z_slice.stop),
-        (y_slice.start, y_slice.stop),
-        (x_slice.start, x_slice.stop),
+        [z_slice.start, z_slice.stop],
+        [y_slice.start, y_slice.stop],
+        [x_slice.start, x_slice.stop],
     )
 
 
@@ -114,27 +114,30 @@ def estimate_crop_cli(
     """
     # Load data
     with open_ome_zarr(source_position_dirpaths[0]) as source:
-        fluor_data = source.data.dask_array()
-        source_channels = source.data.channel_names
+        fluor_data = source.data.numpy()
+        source_channels = source.channel_names
 
     with open_ome_zarr(target_position_dirpaths[0]) as target:
-        phase_data = target.data.dask_array()
-        target_channels = target.data.channel_names
+        phase_data = target.data.numpy()
+        target_channels = target.channel_names
 
     # Estimate crop region
     z_range, y_range, x_range = estimate_crop(phase_data, fluor_data, phase_mask_radius)
 
     # Save results
     model = ConcatenateSettings(
-        concat_data_paths=source_position_dirpaths + target_position_dirpaths,
+        concat_data_paths=[
+            path.as_posix() for path in source_position_dirpaths + target_position_dirpaths
+        ],
         time_indices='all',
         channel_names=[source_channels, target_channels],
-        Z_slice=[z_range[0], z_range[1]],
-        Y_slice=[y_range[0], y_range[1]],
-        X_slice=[x_range[0], x_range[1]],
+        Z_slice=z_range,
+        Y_slice=y_range,
+        X_slice=x_range,
     )
 
     model_to_yaml(model, output_filepath)
+
 
 if __name__ == "__main__":
     estimate_crop_cli()
