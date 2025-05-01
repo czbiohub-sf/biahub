@@ -26,15 +26,17 @@ class MyBaseModel(BaseModel):
 class EstimateRegistrationSettings(MyBaseModel):
     target_channel_name: str
     source_channel_name: str
-    estimation_method: Literal["manual", "beads"] = "manual"
+    estimation_method: Literal["manual", "beads", "z_shift"] = "manual"
     time_index: int = 0
     affine_90degree_rotation: int = 0
-    match_algorithm: Literal["hungarian", "match_descriptor"] = "hungarian"
+    match_algorithm: Literal["hungarian", "match_descriptor", "mutual_info_gauss", "mutual_information"] = "hungarian"
     match_filter_angle_threshold: float = 0
+    match_max_ratio: float = 0.6
+    hungarian_knn_k: int = 5 
     affine_transform_type: Literal["euclidean", "similarity", "affine"] = "euclidean"
     approx_affine_transform: list = None
     affine_transform_validation_window_size: int = 10
-    affine_transform_validation_tolerance: float = 100.0
+    affine_transform_validation_tolerance: float = 1000.0
     affine_transform_interpolation_window_size: int = 3
     affine_transform_interpolation_type: Literal["linear", "cubic"] = "linear"
     verbose: bool = False
@@ -62,11 +64,11 @@ class EstimateStabilizationSettings(MyBaseModel):
     skip_beads_fov: str = "0"
     crop_size_xy: list[int, int] = [300, 300]
     t_reference: Literal["first", "previous"] = "first"
-    match_algorithm: Literal["hungarian", "match_descriptor"] = "hungarian"
+    match_algorithm: Literal["hungarian", "match_descriptor", "mutual_info_gauss", "mutual_information"] = "hungarian"
     match_filter_angle_threshold: float = 0
     affine_transform_type: Literal["euclidean", "similarity", "affine"] = "euclidean"
     affine_transform_validation_window_size: int = 10
-    affine_transform_validation_tolerance: float = 100.0
+    affine_transform_validation_tolerance: float = 1000.0
     affine_transform_interpolation_window_size: int = 3
     affine_transform_interpolation_type: Literal["linear", "cubic"] = "linear"
     verbose: bool = False
