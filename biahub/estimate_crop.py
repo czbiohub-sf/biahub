@@ -5,6 +5,7 @@ import dask.array as da
 import numpy as np
 
 from iohub import open_ome_zarr
+from tqdm import tqdm
 
 from biahub.cli.parsing import config_filepath, output_filepath
 from biahub.cli.utils import model_to_yaml, yaml_to_model
@@ -44,8 +45,12 @@ def estimate_crop(
     )
 
     # Create a mask to find time points and channels where any data is non-zero
-    valid_mask = np.any(data, axis=(2, 3, 4))
-    valid_T, valid_C = np.where(valid_mask)
+    # valid_mask = np.any(data, axis=(2, 3, 4))
+    # valid_T, valid_C = np.where(valid_mask)
+    
+    volume = np.sum(data, axis=(2, 3, 4)) # more robust selection
+    median_volume = np.median(volume)
+    valid_T, valid_C = np.where((volume > 0.8*median_volume) & (volume < 1.2*median_volume))
 
     if len(valid_T) == 0:
         raise ValueError("No valid data found.")
@@ -113,9 +118,11 @@ def estimate_crop_cli(
     source_position_dirpaths = [p for p in _source_paths if p.is_dir()]
 
     all_ranges = []
-    for source_dir, target_dir in zip(source_position_dirpaths, target_position_dirpaths):
-        click.echo(f"Processing {source_dir} and {target_dir}")
-
+    for source_dir, target_dir in tqdm(
+        zip(source_position_dirpaths, target_position_dirpaths),
+        total=len(source_position_dirpaths),
+        desc="Processing directories:",
+    ):
         # Load data
         with open_ome_zarr(target_dir) as target:
             phase_data = target.data.dask_array()[:, :1]  # Pick only first channel
