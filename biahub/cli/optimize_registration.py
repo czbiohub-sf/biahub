@@ -22,7 +22,7 @@ T_IDX = 0
 def _optimize_registration(
     source_zyx: np.ndarray,
     target_zyx: np.ndarray,
-    approx_tform: np.ndarray,
+    initial_tform: np.ndarray,
     z_slice: slice = slice(None),
     y_slice: slice = slice(None),
     x_slice: slice = slice(None),
@@ -30,7 +30,7 @@ def _optimize_registration(
 ) -> np.ndarray:
     source_ants = ants.from_numpy(source_zyx.astype(np.float32))
     target_ants = ants.from_numpy(target_zyx.astype(np.float32))
-    t_form_ants = convert_transform_to_ants(approx_tform)
+    t_form_ants = convert_transform_to_ants(initial_tform)
 
     source_pre_optim = t_form_ants.apply_to_image(source_ants, reference=target_ants)
 
@@ -47,7 +47,7 @@ def _optimize_registration(
 
     tx_opt_mat = ants.read_transform(reg["fwdtransforms"][0])
     tx_opt_numpy = convert_transform_to_numpy(tx_opt_mat)
-    composed_matrix = approx_tform @ tx_opt_numpy
+    composed_matrix = initial_tform @ tx_opt_numpy
 
     return composed_matrix
 
@@ -93,14 +93,14 @@ def optimize_registration(
         # NOTE: using the first channel in the config to register
         source_channel_index = source_channel_names.index(settings.source_channel_names[0])
         source_channel_name = source_channel_names[source_channel_index]
-        source_data_zyx = source_position[0][T_IDX, source_channel_index]
+        source_data_zyx = source_position.data[T_IDX, source_channel_index]
 
     # Load the target volume
     with open_ome_zarr(target_position_dirpaths[0]) as target_position:
         target_channel_names = target_position.channel_names
         target_channel_index = target_channel_names.index(settings.target_channel_name)
         target_channel_name = target_channel_names[target_channel_index]
-        target_data_zyx = target_position[0][T_IDX, target_channel_index]
+        target_data_zyx = target_position.data[T_IDX, target_channel_index]
 
     click.echo(
         f"\nOptimizing registration using source channel {source_channel_name} and target channel {target_channel_name}"
