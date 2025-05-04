@@ -12,7 +12,11 @@ from biahub.cli.parsing import (
     target_position_dirpaths,
 )
 from biahub.cli.utils import model_to_yaml, yaml_to_model
-from biahub.register import convert_transform_to_ants, convert_transform_to_numpy
+from biahub.register import (
+    convert_transform_to_ants,
+    convert_transform_to_numpy,
+    find_overlapping_volume,
+)
 from biahub.settings import RegistrationSettings
 
 # TODO: maybe a CLI call?
@@ -67,10 +71,10 @@ def optimize_registration_cli(
         target_channel_names = target_position.channel_names
         target_channel_index = target_channel_names.index(settings.target_channel_name)
         target_channel_name = target_channel_names[target_channel_index]
-        target_channel_zyx = target_position[0][T_IDX, target_channel_index]
+        target_channel_zyx = target_position[0][T_IDX, target_channel_index].astype(np.float32)
 
     source_zyx_ants = ants.from_numpy(source_data_zyx)
-    target_zyx_ants = ants.from_numpy(target_channel_zyx.astype(np.float32))
+    target_zyx_ants = ants.from_numpy(target_channel_zyx)
     click.echo(
         f"\nOptimizing registration using source channel {source_channel_name} and target channel {target_channel_name}"
     )
@@ -85,12 +89,22 @@ def optimize_registration_cli(
         source_zyx_ants, reference=target_zyx_ants
     )
 
+    # Crop only to the overlapping regio, zero padding interfereces with registration
+    z_slice, y_slice, x_slice = find_overlapping_volume(
+        target_channel_zyx.shape,
+        source_data_zyx.shape,
+        T_pre_optimize_numpy,
+    )
+
     click.echo("Running ANTS optimizer...")
     # Optimization
+    _target = ants.from_numpy(target_channel_zyx[z_slice, y_slice, x_slice])
+    _source = ants.from_numpy(source_zyx_pre_optim.numpy()[z_slice, y_slice, x_slice])
     tx_opt = ants.registration(
-        fixed=target_zyx_ants,
-        moving=source_zyx_pre_optim,
+        fixed=_target,
+        moving=_source,
         type_of_transform="Similarity",
+        aff_shrink_factors=(18, 12, 6, 3),  # faster
         verbose=optimizer_verbose,
     )
 

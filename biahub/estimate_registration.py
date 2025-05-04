@@ -670,25 +670,21 @@ def estimate_registration_cli(
         source_channels = source_channel_position.channel_names
         source_channel_index = source_channels.index(source_channel_name)
         source_channel_name = source_channels[source_channel_index]
-        source_channel_data = source_channel_position.data.dask_array()[
-            :, source_channel_index
-        ]
+        source_channel_data = source_channel_position.data
         source_channel_voxel_size = source_channel_position.scale[-3:]
     with open_ome_zarr(target_position_dirpaths[0], mode="r") as target_channel_position:
         target_channels = target_channel_position.channel_names
         target_channel_index = target_channels.index(target_channel_name)
         target_channel_name = target_channels[target_channel_index]
-        target_channel_data = target_channel_position.data.dask_array()[
-            :, target_channel_index
-        ]
+        target_channel_data = target_channel_position.data
         voxel_size = target_channel_position.scale
         target_channel_voxel_size = voxel_size[-3:]
 
     if settings.estimation_method == "beads":
         # Register using bead images
         transforms = beads_based_registration(
-            source_channel_data,
-            target_channel_data,
+            source_channel_data[:, source_channel_index],
+            target_channel_data[:, target_channel_index],
             approx_tform=np.asarray(settings.approx_affine_transform),
             num_processes=num_processes,
             window_size=settings.affine_transform_window_size,
@@ -708,10 +704,10 @@ def estimate_registration_cli(
     else:
         # Register based on user input
         transform = user_assisted_registration(
-            source_channel_volume=np.asarray(source_channel_data[settings.time_index]),
+            source_channel_volume=np.asarray(source_channel_data[settings.time_index, source_channel_index]),
             source_channel_name=source_channel_name,
             source_channel_voxel_size=source_channel_voxel_size,
-            target_channel_volume=np.asarray(target_channel_data[settings.time_index]),
+            target_channel_volume=np.asarray(target_channel_data[settings.time_index, target_channel_index]),
             target_channel_name=target_channel_name,
             target_channel_voxel_size=target_channel_voxel_size,
             similarity=True if affine_transform_type == "Similarity" else False,
