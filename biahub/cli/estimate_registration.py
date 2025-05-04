@@ -26,12 +26,14 @@ from biahub.analysis.AnalysisSettings import (
     StabilizationSettings,
 )
 from biahub.analysis.analyze_psf import detect_peaks
+from biahub.cli.optimize_registration import _optimize_registration
 
 from biahub.analysis.register import (
     convert_transform_to_ants,
     convert_transform_to_numpy,
     get_3D_rescaling_matrix,
     get_3D_rotation_matrix,
+    find_overlapping_volume,
 )
 from biahub.cli.parsing import (
     config_filepath,
@@ -508,6 +510,76 @@ def beads_based_registration(
     return transforms
 
 
+def ants_registration(
+    # source_channel_tzyx: da.Array,
+    # target_channel_tzyx: da.Array,
+    source_channel_tczyx: da.Array,  # see https://github.com/czbiohub-sf/iohub/issues/296
+    target_channel_tczyx: da.Array,
+    source_channel_index: int,
+    target_channel_index: int,
+    approx_tform: np.ndarray,
+    # output_folder_path: Path,
+    validation_window_size: int = 10,
+    validation_tolerance: float = 100.0,
+    interpolation_window_size: int = 3,
+    interpolation_type: str = 'linear',
+    num_processes: int = 8,
+    verbose: bool = False,
+    # cluster: str = 'local',
+):
+    T, C, Z, Y, X = source_channel_tczyx.shape
+    # Crop only to the overlapping regio, zero padding interfereces with registration
+    z_slice, y_slice, x_slice = find_overlapping_volume(
+        target_channel_tczyx.shape[-3:], source_channel_tczyx.shape[-3:], approx_tform
+    )
+
+    fun = partial(
+        _optimize_registration,
+        initial_tform=approx_tform,
+        z_slice=z_slice,
+        y_slice=y_slice,
+        x_slice=x_slice,
+        verbose=False,
+    )
+
+    with Pool(processes=num_processes) as pool:
+        transforms = pool.starmap(
+            fun,
+            [
+                (
+                    source_channel_tczyx[t, source_channel_index],
+                    target_channel_tczyx[t, target_channel_index],
+                )
+                for t in range(3)  # DEBUG
+            ],
+        )
+
+    click.echo(f"Before validate Transforms: {transforms[0]}")
+
+    # # Validate and filter transforms
+    transforms = _validate_transforms(
+        transforms=transforms,
+        window_size=validation_window_size,
+        tolerance=validation_tolerance,
+        Z=Z,
+        Y=Y,
+        X=X,
+        verbose=verbose,
+    )
+    click.echo(f"After validation transforms: {transforms[0]}")
+
+    # Interpolate missing transforms
+    transforms = _interpolate_transforms(
+        transforms=transforms,
+        window_size=interpolation_window_size,
+        interpolation_type=interpolation_type,
+        verbose=verbose,
+    )
+    click.echo(f"After interpolation transforms: {transforms[0]}")
+
+    return transforms
+
+
 def _validate_transforms(transforms, Z, Y, X, window_size=10, tolerance=100.0, verbose=False):
     """
     Validate a list of affine transformation matrices by smoothing and filtering.
@@ -878,6 +950,8 @@ def match_mutual_information(source_peaks, target_peaks, source_vol, target_vol,
     cost_matrix = -mi_matrix
     matches = match_hungarian(cost_matrix)
     return matches
+
+
 def _get_tform_from_beads(
     t_idx: int,
     approx_tform: list,
@@ -1339,8 +1413,6 @@ def estimate_registration(
     click.echo(f"Target channel: {target_channel_name}")
     click.echo(f"Source channel: {source_channel_name}")
 
-    
-
     with open_ome_zarr(source_position_dirpaths[0], mode="r") as source_channel_position:
         source_channels = source_channel_position.channel_names
         source_channel_index = source_channels.index(source_channel_name)
@@ -1349,6 +1421,8 @@ def estimate_registration(
             :, source_channel_index
         ]
         source_channel_voxel_size = source_channel_position.scale[-3:]
+        source_ImageArray = source_channel_position.data
+
     with open_ome_zarr(target_position_dirpaths[0], mode="r") as target_channel_position:
         target_channels = target_channel_position.channel_names
         target_channel_index = target_channels.index(target_channel_name)
@@ -1358,6 +1432,7 @@ def estimate_registration(
         ]
         voxel_size = target_channel_position.scale
         target_channel_voxel_size = voxel_size[-3:]
+        target_ImageArray = target_channel_position.data
 
     # Run locally or submit to SLURM
     if local:
@@ -1384,6 +1459,28 @@ def estimate_registration(
             cluster=cluster,
             sbatch_filepath=sbatch_filepath,
             output_folder_path=output_dir,
+        )
+
+        model = StabilizationSettings(
+            stabilization_estimation_channel='',
+            stabilization_type='xyz',
+            stabilization_channels=registration_source_channels,
+            affine_transform_zyx_list=transforms,
+            time_indices='all',
+            output_voxel_size=voxel_size,
+        )
+    elif settings.estimation_method == "ants":
+        transforms = ants_registration(
+            source_channel_tczyx=source_ImageArray,  # see https://github.com/czbiohub-sf/iohub/issues/296
+            target_channel_tczyx=target_ImageArray,
+            source_channel_index=source_channel_index,
+            target_channel_index=target_channel_index,
+            approx_tform=np.asarray(settings.approx_affine_transform),
+            validation_window_size=settings.affine_transform_validation_window_size,
+            validation_tolerance=settings.affine_transform_validation_tolerance,
+            interpolation_window_size=settings.affine_transform_interpolation_window_size,
+            interpolation_type=settings.affine_transform_interpolation_type,
+            verbose=settings.verbose,
         )
 
         model = StabilizationSettings(
