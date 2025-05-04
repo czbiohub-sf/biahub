@@ -23,6 +23,9 @@ def _optimize_registration(
     source_zyx: np.ndarray,
     target_zyx: np.ndarray,
     approx_tform: np.ndarray,
+    z_slice: slice = slice(None),
+    y_slice: slice = slice(None),
+    x_slice: slice = slice(None),
     verbose: bool = False,
 ) -> np.ndarray:
     source_ants = ants.from_numpy(source_zyx.astype(np.float32))
@@ -31,11 +34,7 @@ def _optimize_registration(
 
     source_pre_optim = t_form_ants.apply_to_image(source_ants, reference=target_ants)
 
-    # Crop only to the overlapping regio, zero padding interfereces with registration
-    z_slice, y_slice, x_slice = find_overlapping_volume(
-        target_zyx.shape, source_zyx.shape, approx_tform
-    )
-
+    # Select sub-crop for registration
     _target = ants.from_numpy(target_zyx[z_slice, y_slice, x_slice])
     _source = ants.from_numpy(source_pre_optim.numpy()[z_slice, y_slice, x_slice])
     reg = ants.registration(
@@ -108,10 +107,18 @@ def optimize_registration(
     )
 
     approx_tform = np.array(settings.affine_transform_zyx)
+    # Crop only to the overlapping regio, zero padding interfereces with registration
+    z_slice, y_slice, x_slice = find_overlapping_volume(
+        target_data_zyx.shape, source_data_zyx.shape, approx_tform
+    )
+
     composed_matrix = _optimize_registration(
         source_data_zyx,
         target_data_zyx,
         approx_tform,
+        z_slice=z_slice,
+        y_slice=y_slice,
+        x_slice=x_slice,
         verbose=optimizer_verbose,
     )
 
@@ -123,6 +130,7 @@ def optimize_registration(
     model_to_yaml(output_settings, output_filepath)
 
     if display_viewer:
+        click.echo("Initializing napari viewer...")
         approx_tform_ants = convert_transform_to_ants(approx_tform)
         composed_matrix_ants = convert_transform_to_ants(composed_matrix)
         source_zyx_ants = ants.from_numpy(source_data_zyx.astype(np.float32))
