@@ -6,7 +6,7 @@ import numpy as np
 from iohub import open_ome_zarr
 
 from biahub.analysis.AnalysisSettings import RegistrationSettings
-from biahub.analysis.register import convert_transform_to_ants, convert_transform_to_numpy
+from biahub.analysis.register import convert_transform_to_ants, convert_transform_to_numpy, find_overlapping_volume
 from biahub.cli.parsing import (
     config_filepath,
     output_filepath,
@@ -17,6 +17,40 @@ from biahub.cli.utils import model_to_yaml, yaml_to_model
 
 # TODO: maybe a CLI call?
 T_IDX = 0
+
+
+def _optimize_registration(
+    source_zyx: np.ndarray,
+    target_zyx: np.ndarray,
+    approx_tform: np.ndarray,
+    verbose: bool = False,
+) -> np.ndarray:
+    source_ants = ants.from_numpy(source_zyx.astype(np.float32))
+    target_ants = ants.from_numpy(target_zyx.astype(np.float32))
+    t_form_ants = convert_transform_to_ants(approx_tform)
+
+    source_pre_optim = t_form_ants.apply_to_image(source_ants, reference=target_ants)
+
+    # Crop only to the overlapping regio, zero padding interfereces with registration
+    z_slice, y_slice, x_slice = find_overlapping_volume(
+        target_zyx.shape, source_zyx.shape, approx_tform
+    )
+
+    _target = ants.from_numpy(target_zyx[z_slice, y_slice, x_slice])
+    _source = ants.from_numpy(source_pre_optim.numpy()[z_slice, y_slice, x_slice])
+    reg = ants.registration(
+        fixed=_target,
+        moving=_source,
+        type_of_transform="Similarity",
+        aff_shrink_factors=(18, 12, 6, 3),  # faster
+        verbose=verbose,
+    )
+
+    tx_opt_mat = ants.read_transform(reg["fwdtransforms"][0])
+    tx_opt_numpy = convert_transform_to_numpy(tx_opt_mat)
+    composed_matrix = approx_tform @ tx_opt_numpy
+
+    return composed_matrix
 
 
 @click.command()
@@ -60,43 +94,26 @@ def optimize_registration(
         # NOTE: using the first channel in the config to register
         source_channel_index = source_channel_names.index(settings.source_channel_names[0])
         source_channel_name = source_channel_names[source_channel_index]
-        source_data_zyx = source_position[0][T_IDX, source_channel_index].astype(np.float32)
+        source_data_zyx = source_position[0][T_IDX, source_channel_index]
 
     # Load the target volume
     with open_ome_zarr(target_position_dirpaths[0]) as target_position:
         target_channel_names = target_position.channel_names
         target_channel_index = target_channel_names.index(settings.target_channel_name)
         target_channel_name = target_channel_names[target_channel_index]
-        target_channel_zyx = target_position[0][T_IDX, target_channel_index]
+        target_data_zyx = target_position[0][T_IDX, target_channel_index]
 
-    source_zyx_ants = ants.from_numpy(source_data_zyx)
-    target_zyx_ants = ants.from_numpy(target_channel_zyx.astype(np.float32))
     click.echo(
         f"\nOptimizing registration using source channel {source_channel_name} and target channel {target_channel_name}"
     )
 
-    # Affine Transforms
-    # numpy to ants
-    T_pre_optimize_numpy = np.array(settings.affine_transform_zyx)
-    T_pre_optimize = convert_transform_to_ants(T_pre_optimize_numpy)
-
-    # Apply transformation to source prior to optimization of the matrix
-    source_zyx_pre_optim = T_pre_optimize.apply_to_image(
-        source_zyx_ants, reference=target_zyx_ants
-    )
-
-    click.echo("Running ANTS optimizer...")
-    # Optimization
-    tx_opt = ants.registration(
-        fixed=target_zyx_ants,
-        moving=source_zyx_pre_optim,
-        type_of_transform="Similarity",
+    approx_tform = np.array(settings.affine_transform_zyx)
+    composed_matrix = _optimize_registration(
+        source_data_zyx,
+        target_data_zyx,
+        approx_tform,
         verbose=optimizer_verbose,
     )
-
-    tx_opt_mat = ants.read_transform(tx_opt["fwdtransforms"][0])
-    tx_opt_numpy = convert_transform_to_numpy(tx_opt_mat)
-    composed_matrix = T_pre_optimize_numpy @ tx_opt_numpy
 
     # Saving the parameters
     click.echo(f"Writing registration parameters to {output_filepath}")
@@ -106,14 +123,20 @@ def optimize_registration(
     model_to_yaml(output_settings, output_filepath)
 
     if display_viewer:
+        approx_tform_ants = convert_transform_to_ants(approx_tform)
         composed_matrix_ants = convert_transform_to_ants(composed_matrix)
-        source_registered = composed_matrix_ants.apply_to_image(
+        source_zyx_ants = ants.from_numpy(source_data_zyx.astype(np.float32))
+        target_zyx_ants = ants.from_numpy(target_data_zyx.astype(np.float32))
+        source_pre_optim = approx_tform_ants.apply_to_image(
+            source_zyx_ants, reference=target_zyx_ants
+        )
+        source_post_optim = composed_matrix_ants.apply_to_image(
             source_zyx_ants, reference=target_zyx_ants
         )
 
         viewer = napari.Viewer()
         source_pre_opt_layer = viewer.add_image(
-            source_zyx_pre_optim.numpy(),
+            source_pre_optim.numpy(),
             name="source_pre_optimization",
             colormap="cyan",
             opacity=0.5,
@@ -121,13 +144,13 @@ def optimize_registration(
         source_pre_opt_layer.visible = False
 
         viewer.add_image(
-            source_registered.numpy(),
+            source_post_optim.numpy(),
             name="source_post_optimization",
             colormap="cyan",
             blending="additive",
         )
         viewer.add_image(
-            target_position[0][0, target_channel_index],
+            target_data_zyx,
             name="target",
             colormap="magenta",
             blending="additive",
