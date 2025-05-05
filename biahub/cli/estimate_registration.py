@@ -526,11 +526,22 @@ def ants_registration(
     num_processes: int = 8,
     verbose: bool = False,
     # cluster: str = 'local',
-):
+) -> list:
     T, C, Z, Y, X = source_channel_tczyx.shape
-    # Crop only to the overlapping regio, zero padding interfereces with registration
+    # Crop only to the overlapping region, zero padding interfereces with registration
     z_slice, y_slice, x_slice = find_overlapping_volume(
         target_channel_tczyx.shape[-3:], source_channel_tczyx.shape[-3:], approx_tform
+    )
+
+    # Crop 10% more to account for shifts during XYZ stabilization
+    z_slice = slice(
+        max(int(z_slice.start * 1.1), int(0.1 * Z)), int(z_slice.stop * 0.9)
+    )
+    y_slice = slice(
+        max(int(y_slice.start * 1.1), int(0.1 * Y)), int(y_slice.stop * 0.9)
+    )
+    x_slice = slice(
+        max(int(x_slice.start * 1.1), int(0.1 * X)), int(x_slice.stop * 0.9)
     )
 
     fun = partial(
@@ -542,6 +553,7 @@ def ants_registration(
         verbose=False,
     )
 
+    click.echo('Computing registration transforms...')
     with Pool(processes=num_processes) as pool:
         transforms = pool.starmap(
             fun,
@@ -550,11 +562,11 @@ def ants_registration(
                     source_channel_tczyx[t, source_channel_index],
                     target_channel_tczyx[t, target_channel_index],
                 )
-                for t in range(3)  # DEBUG
+                for t in range(T)
             ],
         )
 
-    click.echo(f"Before validate Transforms: {transforms[0]}")
+    click.echo(f"Before validate Transforms:\n{transforms[0]}")
 
     # # Validate and filter transforms
     transforms = _validate_transforms(
@@ -566,7 +578,7 @@ def ants_registration(
         X=X,
         verbose=verbose,
     )
-    click.echo(f"After validation transforms: {transforms[0]}")
+    click.echo(f"After validation transforms:\n{transforms[0]}")
 
     # Interpolate missing transforms
     transforms = _interpolate_transforms(
@@ -577,7 +589,7 @@ def ants_registration(
     )
     click.echo(f"After interpolation transforms: {transforms[0]}")
 
-    return transforms
+    return np.asarray(transforms).tolist()
 
 
 def _validate_transforms(transforms, Z, Y, X, window_size=10, tolerance=100.0, verbose=False):
@@ -1480,6 +1492,7 @@ def estimate_registration(
             validation_tolerance=settings.affine_transform_validation_tolerance,
             interpolation_window_size=settings.affine_transform_interpolation_window_size,
             interpolation_type=settings.affine_transform_interpolation_type,
+            num_processes=num_processes,
             verbose=settings.verbose,
         )
 
