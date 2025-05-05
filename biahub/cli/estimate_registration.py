@@ -535,37 +535,61 @@ def ants_registration(
 
     # Crop 10% more to account for shifts during XYZ stabilization
     z_slice = slice(
-        max(int(z_slice.start * 1.1), int(0.1 * Z)), int(z_slice.stop * 0.9)
+        int(z_slice.start * 1.2), int(z_slice.stop * 0.8)
     )
     y_slice = slice(
-        max(int(y_slice.start * 1.1), int(0.1 * Y)), int(y_slice.stop * 0.9)
+        int(y_slice.start * 1.2), int(y_slice.stop * 0.8)
     )
     x_slice = slice(
-        max(int(x_slice.start * 1.1), int(0.1 * X)), int(x_slice.stop * 0.9)
+        int(x_slice.start * 1.2), int(x_slice.stop * 0.8)
     )
 
-    fun = partial(
-        _optimize_registration,
-        initial_tform=approx_tform,
-        z_slice=z_slice,
-        y_slice=y_slice,
-        x_slice=x_slice,
-        verbose=False,
+    click.echo(
+        f"Cropping channels to Z: {z_slice.start}:{z_slice.stop}, "
+        f"Y: {y_slice.start}:{y_slice.stop}, "
+        f"X: {x_slice.start}:{x_slice.stop}"
     )
 
     click.echo('Computing registration transforms...')
-    with Pool(processes=num_processes) as pool:
-        transforms = pool.starmap(
-            fun,
-            [
-                (
-                    source_channel_tczyx[t, source_channel_index],
-                    target_channel_tczyx[t, target_channel_index],
-                )
-                for t in range(T)
-            ],
-        )
+    # fun = partial(
+    #     _optimize_registration,
+    #     initial_tform=approx_tform,
+    #     z_slice=z_slice,
+    #     y_slice=y_slice,
+    #     x_slice=x_slice,
+    #     verbose=False,
+    # )
+    # with Pool(processes=num_processes) as pool:
+    #     transforms = pool.starmap(
+    #         fun,
+    #         [
+    #             (
+    #                 source_channel_tczyx[t, source_channel_index],
+    #                 target_channel_tczyx[t, target_channel_index],
+    #             )
+    #             for t in range(T)
+    #         ],
+    #     )
 
+    transforms = []
+    for t in range(T):
+        click.echo(f"Processing timepoint {t}...")
+        tform = _optimize_registration(
+            source_channel_tczyx[t, source_channel_index],
+            target_channel_tczyx[t, target_channel_index],
+            initial_tform=approx_tform,
+            z_slice=z_slice,
+            y_slice=y_slice,
+            x_slice=x_slice,
+            verbose=False,
+        )
+        transforms.append(tform)
+
+
+    # DEBUG
+    np.save(
+        "/hpc/projects/intracellular_dashboard/organelle_dynamics/rerun/2025_04_17_A549_H2B_CAAX_DENV/1-preprocess/light-sheet/raw/1-register/transforms.npy",
+        np.asarray(transforms))
     click.echo(f"Before validate Transforms:\n{transforms[0]}")
 
     # # Validate and filter transforms
