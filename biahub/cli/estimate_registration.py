@@ -651,10 +651,10 @@ def _interpolate_transforms(
     - list: Transforms with missing values filled via linear interpolation.
     """
     n = len(transforms)
-    valid_indices = [i for i, t in enumerate(transforms) if t is not None]
-    valid_transforms = [np.array(transforms[i]) for i in valid_indices]
+    valid_transform_indices = [i for i, t in enumerate(transforms) if t is not None]
+    valid_transforms = [np.array(transforms[i]) for i in valid_transform_indices]
 
-    if not valid_indices or len(valid_indices) < 2:
+    if not valid_transform_indices or len(valid_transform_indices) < 2:
         raise ValueError("At least two valid transforms are required for interpolation.")
 
     missing_indices = [i for i in range(n) if transforms[i] is None]
@@ -674,7 +674,7 @@ def _interpolate_transforms(
             local_y = []
 
             for j in range(start, end):
-                if transforms[j] is not None:
+                if j in valid_transform_indices:
                     local_x.append(j)
                     local_y.append(np.array(transforms[j]))
 
@@ -695,7 +695,7 @@ def _interpolate_transforms(
     else:
         # Global interpolation using all valid transforms
         f = interp1d(
-            valid_indices, valid_transforms, axis=0, kind='linear', fill_value='extrapolate'
+            valid_transform_indices, valid_transforms, axis=0, kind='linear', fill_value='extrapolate'
         )
         transforms = [
             f(i).tolist() if transforms[i] is None else transforms[i] for i in range(n)
