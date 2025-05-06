@@ -528,21 +528,25 @@ def ants_registration(
     # cluster: str = 'local',
 ) -> list:
     T, C, Z, Y, X = source_channel_tczyx.shape
-    # Crop only to the overlapping region, zero padding interfereces with registration
-    z_slice, y_slice, x_slice = find_overlapping_volume(
-        target_channel_tczyx.shape[-3:], source_channel_tczyx.shape[-3:], approx_tform
-    )
+    # # Crop only to the overlapping region, zero padding interfereces with registration
+    # z_slice, y_slice, x_slice = find_overlapping_volume(
+    #     target_channel_tczyx.shape[-3:], source_channel_tczyx.shape[-3:], approx_tform
+    # )
 
-    # Crop 10% more to account for shifts during XYZ stabilization
-    z_slice = slice(
-        int(z_slice.start * 1.2), int(z_slice.stop * 0.8)
-    )
-    y_slice = slice(
-        int(y_slice.start * 1.2), int(y_slice.stop * 0.8)
-    )
-    x_slice = slice(
-        int(x_slice.start * 1.2), int(x_slice.stop * 0.8)
-    )
+    # # Crop 10% more to account for shifts during XYZ stabilization
+    # z_slice = slice(
+    #     int(z_slice.start * 1.2), int(z_slice.stop * 0.8)
+    # )
+    # y_slice = slice(
+    #     int(y_slice.start * 1.2), int(y_slice.stop * 0.8)
+    # )
+    # x_slice = slice(
+    #     int(x_slice.start * 1.2), int(x_slice.stop * 0.8)
+    # )
+
+    z_slice = slice(None)  # DEBUG
+    y_slice = slice(400, 1300)
+    x_slice = slice(200, -200)
 
     click.echo(
         f"Cropping channels to Z: {z_slice.start}:{z_slice.stop}, "
@@ -590,6 +594,10 @@ def ants_registration(
     np.save(
         "/hpc/projects/intracellular_dashboard/organelle_dynamics/rerun/2025_04_17_A549_H2B_CAAX_DENV/1-preprocess/light-sheet/raw/1-register/transforms.npy",
         np.asarray(transforms))
+    # transforms = np.load(
+    #     "/hpc/projects/intracellular_dashboard/organelle_dynamics/rerun/2025_04_17_A549_H2B_CAAX_DENV/1-preprocess/light-sheet/raw/1-register/transforms.npy",
+    # )
+    # transforms = [t.tolist() if not np.isnan(t).any() else None for t in transforms]
     click.echo(f"Before validate Transforms:\n{transforms[0]}")
 
     # # Validate and filter transforms
@@ -703,9 +711,14 @@ def _interpolate_transforms(
                     local_y.append(np.array(transforms[j]))
 
             if len(local_x) < 2:
+                # Not enough neighbors for interpolation. Assign to closes valid transform
+                closest_valid_idx = valid_transform_indices[
+                    np.argmin(np.abs(np.asarray(valid_transform_indices) - idx))
+                ]
+                transforms[idx] = transforms[closest_valid_idx]
                 if verbose:
                     click.echo(
-                        f"Skipping timepoint {idx}: only {len(local_x)} neighbors found."
+                        f"Not enough interpolation neighbors were found for timepoint {idx} using closest valid transform at timepoint {closest_valid_idx}"
                     )
                 continue
 
