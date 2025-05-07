@@ -28,20 +28,25 @@ def _optimize_registration(
     x_slice: slice = slice(None),
     verbose: bool = False,
 ) -> np.ndarray:
-    source_ants = ants.from_numpy(source_zyx.astype(np.float32))
-    target_ants = ants.from_numpy(target_zyx.astype(np.float32))
+    source_zyx = np.asarray(source_zyx).astype(np.float32)
+    target_zyx = np.asarray(target_zyx).astype(np.float32)
+    source_ants = ants.from_numpy(source_zyx)
+    target_ants = ants.from_numpy(target_zyx)
     t_form_ants = convert_transform_to_ants(initial_tform)
 
     source_pre_optim = t_form_ants.apply_to_image(source_ants, reference=target_ants)
 
-    # Select sub-crop for registration
+    # Select sub-crop for registration - it's important to avoid passing any
+    # zero-padded regions to the ANTS optimizer
     _target = ants.from_numpy(target_zyx[z_slice, y_slice, x_slice])
     _source = ants.from_numpy(source_pre_optim.numpy()[z_slice, y_slice, x_slice])
     reg = ants.registration(
         fixed=_target,
         moving=_source,
-        type_of_transform="Similarity",
-        aff_shrink_factors=(18, 12, 6, 3),  # faster
+        type_of_transform="Rigid",
+        aff_shrink_factors=(6, 3, 1),
+        aff_iterations=(2100, 1200, 50),
+        aff_smoothing_sigmas=(2, 1, 0),
         verbose=verbose,
     )
 

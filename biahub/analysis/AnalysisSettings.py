@@ -26,13 +26,14 @@ class MyBaseModel(BaseModel):
 class EstimateRegistrationSettings(MyBaseModel):
     target_channel_name: str
     source_channel_name: str
-    estimation_method: Literal["manual", "beads", "z_shift", "ants"] = "manual"
+    estimation_method: Literal["manual", "beads", "z_shift", "ants", "ants"] = "manual"
     time_index: int = 0
     affine_90degree_rotation: int = 0
     match_algorithm: Literal["hungarian", "match_descriptor", "mutual_info_gauss", "mutual_information"] = "hungarian"
     match_filter_angle_threshold: float = 0
     match_max_ratio: float = 0.6
     hungarian_knn_k: int = 5
+    sobel_filter: bool = False
     affine_transform_type: Literal["euclidean", "similarity", "affine"] = "euclidean"
     approx_affine_transform: list = None
     affine_transform_validation_window_size: int = 10

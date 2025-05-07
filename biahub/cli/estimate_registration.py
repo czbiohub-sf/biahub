@@ -46,6 +46,7 @@ from biahub.cli.parsing import (
     local
 )
 from biahub.cli.utils import estimate_resources, _check_nan_n_zeros, model_to_yaml, yaml_to_model
+from skimage import filters
 
 # TODO: see if at some point these globals should be hidden or exposed.
 NA_DETECTION_SOURCE = 1.35
@@ -511,12 +512,8 @@ def beads_based_registration(
 
 
 def ants_registration(
-    # source_channel_tzyx: da.Array,
-    # target_channel_tzyx: da.Array,
-    source_channel_tczyx: da.Array,  # see https://github.com/czbiohub-sf/iohub/issues/296
-    target_channel_tczyx: da.Array,
-    source_channel_index: int,
-    target_channel_index: int,
+    source_channel_tzyx: da.Array,
+    target_channel_tzyx: da.Array,
     approx_tform: np.ndarray,
     # output_folder_path: Path,
     validation_window_size: int = 10,
@@ -527,7 +524,7 @@ def ants_registration(
     verbose: bool = False,
     # cluster: str = 'local',
 ) -> list:
-    T, C, Z, Y, X = source_channel_tczyx.shape
+    T, Z, Y, X = source_channel_tzyx.shape
     # # Crop only to the overlapping region, zero padding interfereces with registration
     # z_slice, y_slice, x_slice = find_overlapping_volume(
     #     target_channel_tczyx.shape[-3:], source_channel_tczyx.shape[-3:], approx_tform
@@ -579,8 +576,8 @@ def ants_registration(
     for t in range(T):
         click.echo(f"Processing timepoint {t}...")
         tform = _optimize_registration(
-            source_channel_tczyx[t, source_channel_index],
-            target_channel_tczyx[t, target_channel_index],
+            source_channel_tzyx[t],
+            target_channel_tzyx[t],
             initial_tform=approx_tform,
             z_slice=z_slice,
             y_slice=y_slice,
@@ -589,10 +586,9 @@ def ants_registration(
         )
         transforms.append(tform)
 
-
     # DEBUG
     np.save(
-        "/hpc/projects/intracellular_dashboard/organelle_dynamics/rerun/2025_04_17_A549_H2B_CAAX_DENV/1-preprocess/light-sheet/raw/1-register/transforms.npy",
+        "/hpc/projects/intracellular_dashboard/organelle_dynamics/rerun/2025_04_17_A549_H2B_CAAX_DENV/1-preprocess/light-sheet/raw/1-register/transforms_sobel.npy",
         np.asarray(transforms))
     # transforms = np.load(
     #     "/hpc/projects/intracellular_dashboard/organelle_dynamics/rerun/2025_04_17_A549_H2B_CAAX_DENV/1-preprocess/light-sheet/raw/1-register/transforms.npy",
@@ -1470,7 +1466,6 @@ def estimate_registration(
             :, source_channel_index
         ]
         source_channel_voxel_size = source_channel_position.scale[-3:]
-        source_ImageArray = source_channel_position.data
 
     with open_ome_zarr(target_position_dirpaths[0], mode="r") as target_channel_position:
         target_channels = target_channel_position.channel_names
@@ -1481,13 +1476,23 @@ def estimate_registration(
         ]
         voxel_size = target_channel_position.scale
         target_channel_voxel_size = voxel_size[-3:]
-        target_ImageArray = target_channel_position.data
 
     # Run locally or submit to SLURM
     if local:
         cluster = "local"
     else:
         cluster = "slurm"
+
+    if settings.sobel_filter:
+        # TODO: many hardcoded values
+        source_channel_data = da.map_blocks(
+            filters.sobel,
+            da.clip(source_channel_position.data.dask_array(), 110, None),
+        ).sum(axis=1)
+        target_channel_data = da.map_blocks(
+            filters.sobel,
+            da.clip(target_channel_data, 0, None),
+        )
 
     if settings.estimation_method == "beads":
         # Register using bead images
@@ -1520,10 +1525,8 @@ def estimate_registration(
         )
     elif settings.estimation_method == "ants":
         transforms = ants_registration(
-            source_channel_tczyx=source_ImageArray,  # see https://github.com/czbiohub-sf/iohub/issues/296
-            target_channel_tczyx=target_ImageArray,
-            source_channel_index=source_channel_index,
-            target_channel_index=target_channel_index,
+            source_channel_tzyx=source_channel_data,
+            target_channel_tzyx=target_channel_data,
             approx_tform=np.asarray(settings.approx_affine_transform),
             validation_window_size=settings.affine_transform_validation_window_size,
             validation_tolerance=settings.affine_transform_validation_tolerance,
