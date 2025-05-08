@@ -30,11 +30,6 @@ def _optimize_registration(
 ) -> np.ndarray:
     source_zyx = np.asarray(source_zyx).astype(np.float32)
     target_zyx = np.asarray(target_zyx).astype(np.float32)
-    if np.any(source_zyx==0):
-        click.echo("WARNING: Source volume contains zeros, the registration may fail.")
-    if np.any(target_zyx==0):
-        click.echo("WARNING: Target volume contains zeros, the registration may fail.")
-
     source_ants = ants.from_numpy(source_zyx)
     target_ants = ants.from_numpy(target_zyx)
     t_form_ants = convert_transform_to_ants(initial_tform)
@@ -43,11 +38,16 @@ def _optimize_registration(
 
     # Select sub-crop for registration - it's important to avoid passing any
     # zero-padded regions to the ANTS optimizer
-    _target = ants.from_numpy(target_zyx[z_slice, y_slice, x_slice])
-    _source = ants.from_numpy(source_pre_optim.numpy()[z_slice, y_slice, x_slice])
+    target_cropped = target_zyx[z_slice, y_slice, x_slice]
+    source_cropped = source_pre_optim.numpy()[z_slice, y_slice, x_slice]
+    if np.any(target_cropped==0):
+        click.echo("WARNING: Target volume contains zeros, the registration may fail.")
+    if np.any(source_cropped==0):
+        click.echo("WARNING: Source volume contains zeros, the registration may fail.")
+
     reg = ants.registration(
-        fixed=_target,
-        moving=_source,
+        fixed=ants.from_numpy(target_cropped),
+        moving=ants.from_numpy(source_cropped),
         type_of_transform="Rigid",
         aff_shrink_factors=(6, 3, 1),
         aff_iterations=(2100, 1200, 50),
