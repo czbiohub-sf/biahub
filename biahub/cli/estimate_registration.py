@@ -522,6 +522,7 @@ def ants_registration(
     interpolation_type: str = 'linear',
     num_processes: int = 8,
     verbose: bool = False,
+    output_folder_path: Path = None,
     # cluster: str = 'local',
 ) -> list:
     T, Z, Y, X = source_channel_tzyx.shape
@@ -541,7 +542,8 @@ def ants_registration(
     #     int(x_slice.start * 1.2), int(x_slice.stop * 0.8)
     # )
 
-    z_slice = slice(None)  # DEBUG
+    # Note: cropping is applied after registration with approx_tform
+    z_slice = slice(5, 90)  # DEBUG
     y_slice = slice(400, 1300)
     x_slice = slice(200, -200)
 
@@ -587,9 +589,8 @@ def ants_registration(
         transforms.append(tform)
 
     # DEBUG
-    np.save(
-        "/hpc/projects/intracellular_dashboard/organelle_dynamics/rerun/2025_04_17_A549_H2B_CAAX_DENV/1-preprocess/light-sheet/raw/1-register/transforms_sobel.npy",
-        np.asarray(transforms))
+    if output_folder_path is not None:
+        np.save(Path(output_folder_path, "transforms.npy"), np.asarray(transforms))
     # transforms = np.load(
     #     "/hpc/projects/intracellular_dashboard/organelle_dynamics/rerun/2025_04_17_A549_H2B_CAAX_DENV/1-preprocess/light-sheet/raw/1-register/transforms.npy",
     # )
@@ -1485,13 +1486,21 @@ def estimate_registration(
 
     if settings.sobel_filter:
         # TODO: many hardcoded values
-        source_channel_data = da.map_blocks(
+        data = source_channel_position.data.dask_array()
+        ch0 = data[:, 0]
+        ch0_filt = da.map_blocks(
             filters.sobel,
-            da.clip(source_channel_position.data.dask_array(), 110, None),
-        ).sum(axis=1)
+            da.clip(ch0, 110, np.quantile(ch0[5].compute(), 0.99)),
+        )
+        ch1 = data[:, 1]
+        ch1_filt = da.map_blocks(
+            filters.sobel,
+            da.clip(ch1, 110, np.quantile(ch1[5].compute(), 0.99)),
+        )
+        source_channel_data = ch0_filt + ch1_filt
         target_channel_data = da.map_blocks(
             filters.sobel,
-            da.clip(target_channel_data, 0, None),
+            da.clip(target_channel_data, 0, 0.3),
         )
 
     if settings.estimation_method == "beads":
@@ -1534,6 +1543,7 @@ def estimate_registration(
             interpolation_type=settings.affine_transform_interpolation_type,
             num_processes=num_processes,
             verbose=settings.verbose,
+            output_folder_path=output_dir,
         )
 
         model = StabilizationSettings(

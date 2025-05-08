@@ -4,7 +4,7 @@ import shutil
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Tuple, cast
+from typing import List, Optional, Tuple, Literal, cast
 import matplotlib.pyplot as plt
 import click
 import dask.array as da
@@ -120,7 +120,7 @@ def estimate_position_focus(
 
 
 
-def get_mean_z_positions(dataframe_path: Path, verbose: bool = False) -> None:
+def get_mean_z_positions(dataframe_path: Path, verbose: bool = False, method: Literal["mean", "median"] = "mean") -> None:
     df = pd.read_csv(dataframe_path)
 
     # Sort the DataFrame based on 'time_idx'
@@ -130,7 +130,12 @@ def get_mean_z_positions(dataframe_path: Path, verbose: bool = False) -> None:
     df["focus_idx"] = df["focus_idx"].replace(0, np.nan).ffill()
 
     # Get the mean of positions for each time point
-    average_focus_idx = df.groupby("time_idx")["focus_idx"].mean().reset_index()
+    if method == "mean":
+        average_focus_idx = df.groupby("time_idx")["focus_idx"].mean().reset_index()
+    elif method == "median":
+        average_focus_idx = df.groupby("time_idx")["focus_idx"].median().reset_index()
+    else:
+        raise ValueError("Unknown averaging method.")
 
     if verbose:
         import matplotlib.pyplot as plt
@@ -841,6 +846,7 @@ def estimate_z_stabilization(
     # # Compute Z drifts
         z_drift_offsets = get_mean_z_positions(
             dataframe_path=output_folder_path / "positions_focus.csv",
+            method="median",
             verbose=verbose,
         )
 
@@ -913,6 +919,7 @@ def estimate_stabilization(
     stabilization_type = settings.stabilization_type
     stabilization_method = settings.stabilization_method
     skip_beads_fov = settings.skip_beads_fov
+    average_across_wells = settings.average_across_wells
 
     if skip_beads_fov != '0':
         # Remove the beads FOV from the input data paths
@@ -1197,6 +1204,7 @@ def estimate_stabilization(
                 channel_index=channel_index,
                 crop_size_xy=crop_size_xy,
                 sbatch_filepath=sbatch_filepath,
+                average_index=average_across_wells,
                 cluster=cluster,
                 verbose=verbose,
             )

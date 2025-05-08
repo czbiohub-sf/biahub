@@ -30,6 +30,11 @@ def _optimize_registration(
 ) -> np.ndarray:
     source_zyx = np.asarray(source_zyx).astype(np.float32)
     target_zyx = np.asarray(target_zyx).astype(np.float32)
+    if np.any(source_zyx==0):
+        click.echo("WARNING: Source volume contains zeros, the registration may fail.")
+    if np.any(target_zyx==0):
+        click.echo("WARNING: Target volume contains zeros, the registration may fail.")
+
     source_ants = ants.from_numpy(source_zyx)
     target_ants = ants.from_numpy(target_zyx)
     t_form_ants = convert_transform_to_ants(initial_tform)

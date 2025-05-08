@@ -65,6 +65,7 @@ class EstimateStabilizationSettings(MyBaseModel):
     skip_beads_fov: str = "0"
     crop_size_xy: list[int, int] = [300, 300]
     t_reference: Literal["first", "previous"] = "first"
+    average_across_wells: bool = False
     match_algorithm: Literal["hungarian", "match_descriptor", "mutual_info_gauss", "mutual_information"] = "hungarian"
     match_filter_angle_threshold: float = 0
     affine_transform_type: Literal["euclidean", "similarity", "affine"] = "euclidean"
