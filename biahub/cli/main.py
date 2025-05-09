@@ -10,6 +10,7 @@ from biahub.estimate_psf import estimate_psf_cli
 from biahub.estimate_registration import estimate_registration_cli
 from biahub.estimate_stabilization import estimate_stabilization_cli
 from biahub.estimate_stitch import estimate_stitch_cli
+from biahub.flip import flip_cli
 from biahub.optimize_registration import optimize_registration_cli
 from biahub.register import register_cli
 from biahub.segment import segment_cli
@@ -34,6 +35,7 @@ cli.add_command(estimate_bleaching_cli)
 cli.add_command(estimate_deskew_cli)
 cli.add_command(deskew_cli)
 cli.add_command(estimate_registration_cli)
+cli.add_command(flip_cli)
 cli.add_command(optimize_registration_cli)
 cli.add_command(register_cli)
 cli.add_command(estimate_stitch_cli)
