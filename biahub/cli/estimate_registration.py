@@ -543,7 +543,7 @@ def ants_registration(
     # )
 
     # Note: cropping is applied after registration with approx_tform
-    z_slice = slice(5, 90)  # DEBUG
+    z_slice = slice(10, 90)  # DEBUG
     y_slice = slice(400, 1300)
     x_slice = slice(200, -200)
 
@@ -1490,12 +1490,12 @@ def estimate_registration(
         ch0 = data[:, 0]
         ch0_filt = da.map_blocks(
             filters.sobel,
-            da.clip(ch0, 110, np.quantile(ch0[5].compute(), 0.99)),
+            da.clip(ch0, 110, None),
         )
         ch1 = data[:, 1]
         ch1_filt = da.map_blocks(
             filters.sobel,
-            da.clip(ch1, 110, np.quantile(ch1[5].compute(), 0.99)),
+            da.clip(ch1, 110, None),
         )
         source_channel_data = ch0_filt + ch1_filt
         target_channel_data = da.map_blocks(

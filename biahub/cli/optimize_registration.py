@@ -48,7 +48,7 @@ def _optimize_registration(
     reg = ants.registration(
         fixed=ants.from_numpy(target_cropped),
         moving=ants.from_numpy(source_cropped),
-        type_of_transform="Rigid",
+        type_of_transform="Similarity",
         aff_shrink_factors=(6, 3, 1),
         aff_iterations=(2100, 1200, 50),
         aff_smoothing_sigmas=(2, 1, 0),
