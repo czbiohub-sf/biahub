@@ -512,9 +512,10 @@ def beads_based_registration(
 
 
 def ants_registration(
-    source_channel_tzyx: da.Array,
-    target_channel_tzyx: da.Array,
+    source_data_tczyx: da.Array,
+    target_data_tczyx: da.Array,
     approx_tform: np.ndarray,
+    sobel_filter: bool = False,
     # output_folder_path: Path,
     validation_window_size: int = 10,
     validation_tolerance: float = 100.0,
@@ -525,7 +526,7 @@ def ants_registration(
     output_folder_path: Path = None,
     # cluster: str = 'local',
 ) -> list:
-    T, Z, Y, X = source_channel_tzyx.shape
+    T, C, Z, Y, X = source_data_tczyx.shape
     # # Crop only to the overlapping region, zero padding interfereces with registration
     # z_slice, y_slice, x_slice = find_overlapping_volume(
     #     target_channel_tczyx.shape[-3:], source_channel_tczyx.shape[-3:], approx_tform
@@ -543,7 +544,7 @@ def ants_registration(
     # )
 
     # Note: cropping is applied after registration with approx_tform
-    z_slice = slice(10, 90)  # DEBUG
+    z_slice = slice(12, 85)  # DEBUG
     y_slice = slice(400, 1300)
     x_slice = slice(200, -200)
 
@@ -554,36 +555,21 @@ def ants_registration(
     )
 
     click.echo('Computing registration transforms...')
-    # fun = partial(
-    #     _optimize_registration,
-    #     initial_tform=approx_tform,
-    #     z_slice=z_slice,
-    #     y_slice=y_slice,
-    #     x_slice=x_slice,
-    #     verbose=False,
-    # )
-    # with Pool(processes=num_processes) as pool:
-    #     transforms = pool.starmap(
-    #         fun,
-    #         [
-    #             (
-    #                 source_channel_tczyx[t, source_channel_index],
-    #                 target_channel_tczyx[t, target_channel_index],
-    #             )
-    #             for t in range(T)
-    #         ],
-    #     )
-
+    # NOTE: ants is mulitthreaded so no need for multiprocessing here
     transforms = []
-    for t in range(T):
+    for t in range(T): ## DEBUG
         click.echo(f"Processing timepoint {t}...")
         tform = _optimize_registration(
-            source_channel_tzyx[t],
-            target_channel_tzyx[t],
+            source_data_tczyx[t],
+            target_data_tczyx[t],
             initial_tform=approx_tform,
+            source_channel_index=[0, 1],  # TODO: hardcoded
+            target_channel_index=0,
             z_slice=z_slice,
             y_slice=y_slice,
             x_slice=x_slice,
+            clip=True,
+            sobel_fitler=sobel_filter,
             verbose=False,
         )
         transforms.append(tform)
@@ -1463,18 +1449,16 @@ def estimate_registration(
         source_channels = source_channel_position.channel_names
         source_channel_index = source_channels.index(source_channel_name)
         source_channel_name = source_channels[source_channel_index]
-        source_channel_data = source_channel_position.data.dask_array()[
-            :, source_channel_index
-        ]
+        source_data = source_channel_position.data.dask_array()
+        source_channel_data = source_data[:, source_channel_index]
         source_channel_voxel_size = source_channel_position.scale[-3:]
 
     with open_ome_zarr(target_position_dirpaths[0], mode="r") as target_channel_position:
         target_channels = target_channel_position.channel_names
         target_channel_index = target_channels.index(target_channel_name)
         target_channel_name = target_channels[target_channel_index]
-        target_channel_data = target_channel_position.data.dask_array()[
-            :, target_channel_index
-        ]
+        target_data = target_channel_position.data.dask_array()
+        target_channel_data = target_data[:, target_channel_index]
         voxel_size = target_channel_position.scale
         target_channel_voxel_size = voxel_size[-3:]
 
@@ -1483,25 +1467,6 @@ def estimate_registration(
         cluster = "local"
     else:
         cluster = "slurm"
-
-    if settings.sobel_filter:
-        # TODO: many hardcoded values
-        data = source_channel_position.data.dask_array()
-        ch0 = data[:, 0]
-        ch0_filt = da.map_blocks(
-            filters.sobel,
-            da.clip(ch0, 110, None),
-        )
-        ch1 = data[:, 1]
-        ch1_filt = da.map_blocks(
-            filters.sobel,
-            da.clip(ch1, 110, None),
-        )
-        source_channel_data = ch0_filt + ch1_filt
-        target_channel_data = da.map_blocks(
-            filters.sobel,
-            da.clip(target_channel_data, 0, 0.3),
-        )
 
     if settings.estimation_method == "beads":
         # Register using bead images
@@ -1534,9 +1499,10 @@ def estimate_registration(
         )
     elif settings.estimation_method == "ants":
         transforms = ants_registration(
-            source_channel_tzyx=source_channel_data,
-            target_channel_tzyx=target_channel_data,
+            source_data_tczyx=source_data,
+            target_data_tczyx=target_data,
             approx_tform=np.asarray(settings.approx_affine_transform),
+            sobel_filter=settings.sobel_filter,
             validation_window_size=settings.affine_transform_validation_window_size,
             validation_tolerance=settings.affine_transform_validation_tolerance,
             interpolation_window_size=settings.affine_transform_interpolation_window_size,

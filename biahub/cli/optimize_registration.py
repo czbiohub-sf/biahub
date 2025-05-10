@@ -4,6 +4,7 @@ import napari
 import numpy as np
 
 from iohub import open_ome_zarr
+from skimage import filters
 
 from biahub.analysis.AnalysisSettings import RegistrationSettings
 from biahub.analysis.register import convert_transform_to_ants, convert_transform_to_numpy, find_overlapping_volume
@@ -20,34 +21,51 @@ T_IDX = 0
 
 
 def _optimize_registration(
-    source_zyx: np.ndarray,
-    target_zyx: np.ndarray,
+    source_czyx: np.ndarray,
+    target_czyx: np.ndarray,
     initial_tform: np.ndarray,
+    source_channel_index: int | list = 0,
+    target_channel_index: int = 0,
     z_slice: slice = slice(None),
     y_slice: slice = slice(None),
     x_slice: slice = slice(None),
+    clip: bool = False,
+    sobel_fitler: bool = False,
     verbose: bool = False,
 ) -> np.ndarray:
-    source_zyx = np.asarray(source_zyx).astype(np.float32)
-    target_zyx = np.asarray(target_zyx).astype(np.float32)
-    source_ants = ants.from_numpy(source_zyx)
-    target_ants = ants.from_numpy(target_zyx)
     t_form_ants = convert_transform_to_ants(initial_tform)
 
-    source_pre_optim = t_form_ants.apply_to_image(source_ants, reference=target_ants)
+    # TODO: hardcoded values
+    _target_channel = np.asarray(target_czyx[target_channel_index]).astype(np.float32)
+    target_ants_pre_crop = ants.from_numpy(_target_channel)
+    target_zyx = _target_channel[z_slice, y_slice, x_slice]
+    if clip:
+        target_zyx = np.clip(target_zyx, 0, 0.5)
+    if sobel_fitler:
+        target_zyx = filters.sobel(target_zyx)
+    target_ants = ants.from_numpy(target_zyx)
 
-    # Select sub-crop for registration - it's important to avoid passing any
-    # zero-padded regions to the ANTS optimizer
-    target_cropped = target_zyx[z_slice, y_slice, x_slice]
-    source_cropped = source_pre_optim.numpy()[z_slice, y_slice, x_slice]
-    if np.any(target_cropped==0):
-        click.echo("WARNING: Target volume contains zeros, the registration may fail.")
-    if np.any(source_cropped==0):
-        click.echo("WARNING: Source volume contains zeros, the registration may fail.")
+    if not isinstance(source_channel_index, list):
+        source_channel_index = [source_channel_index]
+    source_channels = []
+    for idx in source_channel_index:
+        # Cropping, clipping, and filtering are applied after registration with initial_tform
+        _source_channel = np.asarray(source_czyx[idx]).astype(np.float32)
+        source_pre_optim = t_form_ants.apply_to_image(
+            ants.from_numpy(_source_channel), reference=target_ants_pre_crop
+        )
+        source_channel = source_pre_optim.numpy()[z_slice, y_slice, x_slice]
+        if clip:
+            source_channel = np.clip(source_channel, 110, np.quantile(source_channel, 0.99))
+        if sobel_fitler:
+            source_channel = filters.sobel(source_channel)
+        source_channels.append(source_channel)
+    source_zyx = np.sum(source_channels, axis=0)
+    source_ants = ants.from_numpy(source_zyx)
 
     reg = ants.registration(
-        fixed=ants.from_numpy(target_cropped),
-        moving=ants.from_numpy(source_cropped),
+        fixed=target_ants,
+        moving=source_ants,
         type_of_transform="Similarity",
         aff_shrink_factors=(6, 3, 1),
         aff_iterations=(2100, 1200, 50),
