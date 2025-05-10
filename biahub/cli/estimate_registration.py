@@ -557,7 +557,7 @@ def ants_registration(
     click.echo('Computing registration transforms...')
     # NOTE: ants is mulitthreaded so no need for multiprocessing here
     transforms = []
-    for t in range(T): ## DEBUG
+    for t in range(T):
         click.echo(f"Processing timepoint {t}...")
         tform = _optimize_registration(
             source_data_tczyx[t],
