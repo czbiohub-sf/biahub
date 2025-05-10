@@ -53,7 +53,8 @@ def estimate_crop(
     valid_T, valid_C = np.where((volume > 0.8*median_volume) & (volume < 1.2*median_volume))
 
     if len(valid_T) == 0:
-        raise ValueError("No valid data found.")
+        click.echo("No valid data found for current position, will not crop.")
+        return tuple(zip((0, 0, 0), _max_zyx_dims))
     valid_data = data[valid_T, valid_C]
 
     # Compute a mask where all voxels are non-zero along time time and channel dimensions
