@@ -195,7 +195,9 @@ def get_slice(slice_param, max_value: int):
     raise ValueError(f"Invalid slice parameter: {slice_param}")
 
 
-def validate_slicing_params_zyx(slicing_params_zyx_list: list[list[slice, slice, slice]]):
+def validate_slicing_params_zyx(
+    slicing_params_zyx_list: list[list[slice, slice, slice]],
+):
     """
     Validate that all slicing parameters are the same for a given dimension
     """
@@ -210,7 +212,7 @@ def validate_slicing_params_zyx(slicing_params_zyx_list: list[list[slice, slice,
 
 
 def calculate_cropped_size(
-    slice_params_zyx: list[slice, slice, slice]
+    slice_params_zyx: list[slice, slice, slice],
 ) -> tuple[int, int, int]:
     """
     Calculate the size of a dimension after cropping.
@@ -403,6 +405,7 @@ def concatenate(
                 input_channel_indices=input_channel_idx,
                 output_channel_indices=output_channel_idx,
                 input_time_indices=input_time_indices,
+                output_time_indices=list(range(len(input_time_indices))),
                 num_processes=int(slurm_args["slurm_cpus_per_task"]),
                 **copy_n_paste_kwargs,
             )
