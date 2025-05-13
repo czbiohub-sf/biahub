@@ -195,9 +195,7 @@ def get_slice(slice_param, max_value: int):
     raise ValueError(f"Invalid slice parameter: {slice_param}")
 
 
-def validate_slicing_params_zyx(
-    slicing_params_zyx_list: list[list[slice, slice, slice]],
-):
+def validate_slicing_params_zyx(slicing_params_zyx_list: list[list[slice, slice, slice]]):
     """
     Validate that all slicing parameters are the same for a given dimension
     """
@@ -212,7 +210,7 @@ def validate_slicing_params_zyx(
 
 
 def calculate_cropped_size(
-    slice_params_zyx: list[slice, slice, slice],
+    slice_params_zyx: list[slice, slice, slice]
 ) -> tuple[int, int, int]:
     """
     Calculate the size of a dimension after cropping.
