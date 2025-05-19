@@ -315,6 +315,7 @@ def track_one_position(
     preprocessing_functions: Dict[str, ProcessingFunctions],
     tracking_functions: Dict[str, ProcessingFunctions],
     z_slice: tuple,
+    z_shape: int,
     tracking_config: MainConfig,
 ) -> None:
     """
@@ -353,7 +354,19 @@ def track_one_position(
 
     position_key = input_vs_path.parts[-3:]
     fov = "_".join(position_key)
-    z_slices = slice(z_slice[0], z_slice[1])
+    if z_slice[0]==0 and z_slice[1]==0:
+        n_slices = max(3, z_shape // 2) 
+        if n_slices % 2 == 0:
+            n_slices += 1  # make it odd to center cleanly
+        z_center = z_shape // 2
+        half_window = n_slices // 2
+
+        z_start = max(0, z_center - half_window)
+        z_end = min(z_shape, z_center + half_window + 1)  # +1 because slice end is exclusive
+        z_slices = slice(z_start, z_end)
+    else:
+        z_slices = slice(z_slice[0], z_slice[1])
+
 
     click.echo(f"Processing z-stack: {z_slices}")
     click.echo(f"Processing position: {fov}")
@@ -546,6 +559,7 @@ def track(
                 input_vs_path=input_vs_position_path,
                 output_dirpath=output_dirpath,
                 z_slice=settings.z_slices,
+                z_shape = Z,
                 input_channels=settings.input_channels,
                 tracking_config=tracking_cfg,
                 vs_projection_function=settings.vs_projection_function,

@@ -1,7 +1,8 @@
 # Description: Example tracking settings file for the biahub track CLI.
 z_slices: [20, 50]  
 # Define the range of z-slices to process in the volumetric imaging data.
-# Only slices from index 20 to 50 (inclusive) will be considered.
+# Only slices from index 20 to 50 (inclusive) will be considered. 
+# Automatically use half slices of virtual stain [0,0]
 
 input_channels:
 # Define the input channels used for CLI.
@@ -47,7 +48,7 @@ tracking_config:
 
 vs_projection_function:
   # Function used to project 3D virtual staining data into 2D for tracking. If none, tracking will be done in 3D
-  function: np.max
+  function: np.mean
   input_arrays:
     - nuclei_prediction
     - membrane_prediction
