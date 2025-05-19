@@ -14,6 +14,7 @@ from iohub import open_ome_zarr
 from numpy.typing import ArrayLike
 from ultrack import MainConfig, Tracker
 from ultrack.utils.array import array_apply
+from ultrack.utils import labels_to_edges
 
 from biahub.analysis.AnalysisSettings import ProcessingFunctions, TrackingSettings
 from biahub.cli.parsing import (
@@ -307,6 +308,7 @@ def ultrack(
 
 
 def track_one_position(
+    input_segmentation_dirpaths: Path,
     input_lf_dirpath: Path,
     input_vs_path: Path,
     output_dirpath: Path,
@@ -351,7 +353,7 @@ def track_one_position(
     - Tracking is performed using the `ultrack` library, and the results are saved in an OME-Zarr format.
     - Tracks graphs are exported as CSV files.
     """
-
+    
     position_key = input_vs_path.parts[-3:]
     fov = "_".join(position_key)
     if z_slice[0]==0 and z_slice[1]==0:
@@ -372,7 +374,7 @@ def track_one_position(
     click.echo(f"Processing position: {fov}")
 
     data_dict = {}
-    # Load label free data
+    # Load label free data to check for blank frames
     if input_channels['label_free'] is not None:
         if input_lf_dirpath is not None:
             click.echo(f"Loading data from: {input_lf_dirpath}...")
@@ -442,11 +444,27 @@ def track_one_position(
 
     # Preprocess to get the the foreground and multi-level contours
     click.echo("Preprocessing...")
-    foreground_mask, contour_gradient_map = data_preprocessing(
-        data_dict=data_dict,
-        preprocessing_functions=preprocessing_functions,
-        tracking_functions=tracking_functions,
-    )
+    if input_segmentation_dirpaths is not None:
+        click.echo(f"Loading segmentation from: {input_segmentation_dirpaths}...")
+        input_segmentation_path = input_segmentation_dirpaths / Path(*position_key)
+
+        label_dataset = open_ome_zarr(input_segmentation_path)
+        label_arr = label_dataset[0][:, 0, :, :, :]  # Shape (T, Z, Y, X)
+
+        # Cast to uint32 in case Cellpose saved as float32
+        label_arr = label_arr.astype(np.uint32)
+
+        click.echo("Converting labels to foreground and contour gradient map...")
+        foreground_mask, contour_gradient_map = labels_to_edges(label_arr, sigma=90)
+
+
+    else:
+
+        foreground_mask, contour_gradient_map = data_preprocessing(
+            data_dict=data_dict,
+            preprocessing_functions=preprocessing_functions,
+            tracking_functions=tracking_functions,
+        )
 
     # Define path to save the tracking database and graph
     filename = str(output_dirpath).split("/")[-1].split(".")[0]
@@ -484,8 +502,17 @@ def track_one_position(
     type=str,
     help="Label Free Image Dirpath, if there are blanck frames in the data.",
 )
+@click.option(
+    "-segmentation_dirpaths",
+    "-s",
+    required=False,
+    default=None,
+    type=str,
+    help="Segmentation Dirpath, if there are blanck frames in the data.",
+)
 def track(
     lf_dirpaths: str,
+    segmentation_dirpaths: str,
     output_dirpath: str,
     config_filepath: str,
     input_position_dirpaths: str,
@@ -501,7 +528,7 @@ def track(
 
     Example usage:
 
-    biahub track -i virtual_staining.zarr/*/*/* -input_lf_dirpaths lf_stabilize.zarr -o output.zarr -c config_tracking.yml
+    biahub track -i virtual_staining.zarr/*/*/* -l lf_stabilize.zarr -o output.zarr -c config_tracking.yml
 
     """
 
