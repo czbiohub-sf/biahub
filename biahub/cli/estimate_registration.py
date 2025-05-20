@@ -8,6 +8,7 @@ import click
 import dask.array as da
 import napari
 import numpy as np
+import shutil
 import submitit
 from datetime import datetime
 from scipy.ndimage import gaussian_filter
@@ -1343,6 +1344,9 @@ def z_shift_based_registration(
             transforms.append(None)
         else:
             transforms.append(np.load(file_path).tolist())
+
+    # remove output_transforms_path
+    shutil.rmtree(output_transforms_path)
 
     # Interpolate missing
     transforms = _interpolate_transforms(
