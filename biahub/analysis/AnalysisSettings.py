@@ -31,7 +31,7 @@ class EstimateRegistrationSettings(MyBaseModel):
     affine_90degree_rotation: int = 0
     match_algorithm: Literal["hungarian", "match_descriptor", "mutual_info_gauss", "mutual_information"] = "hungarian"
     match_filter_angle_threshold: float = 0
-    match_max_ratio: float = 0.6
+    match_max_ratio: float = 0.8
     hungarian_knn_k: int = 5
     sobel_filter: bool = False
     affine_transform_type: Literal["euclidean", "similarity", "affine"] = "euclidean"
