@@ -308,7 +308,6 @@ def ultrack(
 
 
 def track_one_position(
-    input_segmentation_dirpaths: Path,
     input_lf_dirpath: Path,
     input_vs_path: Path,
     output_dirpath: Path,
@@ -319,6 +318,7 @@ def track_one_position(
     z_slice: tuple,
     z_shape: int,
     tracking_config: MainConfig,
+    input_segmentation_dirpaths: Path = None,
 ) -> None:
     """
     Process a single imaging position for cell tracking using virtual staining and optional label-free imaging.
@@ -584,6 +584,7 @@ def track(
                 track_one_position,
                 input_lf_dirpath=lf_dirpaths,
                 input_vs_path=input_vs_position_path,
+                input_segmentation_dirpaths=segmentation_dirpaths,
                 output_dirpath=output_dirpath,
                 z_slice=settings.z_slices,
                 z_shape = Z,
@@ -598,7 +599,7 @@ def track(
 
     job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 
-    log_path = Path(output_dirpath.parent / "submitit_jobs_ids.log")
+    log_path = Path(slurm_out_path/ "submitit_jobs_ids.log")
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
 
