@@ -19,7 +19,7 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import yaml_to_model
+from biahub.cli.utils import estimate_resources, yaml_to_model
 
 
 def segment_data(
@@ -72,14 +72,14 @@ def segment_data(
         for preproc in preprocessing_functions:
             func = preproc.function
             kwargs = preproc.kwargs
-            c_idx = preproc['channel']
+            c_idx = preproc.channel
 
             # Convert list to tuple for out_range if needed
             if "out_range" in kwargs and isinstance(kwargs["out_range"], list):
                 kwargs["out_range"] = tuple(kwargs["out_range"])
 
             click.echo(
-                f'Processing with {func.__name__} with kwargs {kwargs} to channel {c_idx}'
+                f"Processing with {func.__name__} with kwargs {kwargs} to channel {c_idx}"
             )
             czyx_data[c_idx] = func(czyx_data[c_idx], **kwargs)
 
@@ -140,7 +140,7 @@ def segment(
         channel_names = input_dataset.channel_names
 
     # Load the segmentation models with their respective configurations
-    # TODO: impelment logic for 2D segmentation. Have a slicing parameter
+    # TODO: implement logic for 2D segmentation. Have a slicing parameter
     segment_args = settings.models
     C_segment = len(segment_args)
     for model_name, model_args in segment_args.items():
@@ -171,19 +171,19 @@ def segment(
             # Using dataset anisotropy
             model_args.eval_args["anisotropy"] = scale[-3] / scale[-1]
             click.echo(
-                f'Using anisotropy from scale metadata: {model_args.eval_args["anisotropy"]}'
+                f"Using anisotropy from scale metadata: {model_args.eval_args['anisotropy']}"
             )
         else:
             click.echo(
-                f'Using anisotropy from the config: {model_args.eval_args["anisotropy"]}'
+                f"Using anisotropy from the config: {model_args.eval_args['anisotropy']}"
             )
 
         # Check if preprocessing functions exist and replace channel name with channel index
         if model_args.preprocessing is not None:
             for preproc in model_args.preprocessing:
                 # Replace the channel name with the channel index
-                if preproc["channel"] is not None:
-                    preproc["channel"] = channel_names.index(preproc["channel"])
+                if preproc.channel is not None:
+                    preproc.channel = channel_names.index(preproc.channel)
                 else:
                     raise ValueError("Channel must be specified for preprocessing functions")
 
@@ -199,20 +199,18 @@ def segment(
         scale=scale,
     )
 
-    # Estimate Resrouces
-    gb_per_element = 8 / 2**30  # bytes_per_float32 / bytes_per_gb
-    num_cpus = np.min([T * C, 16])
-    input_memory = num_cpus * Z * Y * X * gb_per_element
-    gb_ram_request = np.ceil(np.max([1, input_memory])).astype(int)
+    # Estimate resources
+    num_cpus, gb_ram_request = estimate_resources(shape=segmentation_shape, ram_multiplier=20)
     num_gpus = 1
-    slurm_time = np.ceil(np.max([60, T * 0.75])).astype(int)
+    slurm_time = np.ceil(np.max([80, T * 2.5])).astype(int)
+    slurm_array_parallelism = 100
     # Prepare SLURM arguments
     slurm_args = {
         "slurm_job_name": "segment",
         "slurm_gres": f"gpu:{num_gpus}",
         "slurm_mem_per_cpu": f"{gb_ram_request}G",
-        "slurm_cpus_per_task": num_cpus,
-        "slurm_array_parallelism": 100,  # process up to 100 positions at a time
+        "slurm_cpus_per_task": np.max([int(20 * 1.3), num_cpus]),
+        "slurm_array_parallelism": slurm_array_parallelism,  # process up to 20 positions at a time
         "slurm_time": slurm_time,
         "slurm_partition": "gpu",
     }
@@ -243,7 +241,7 @@ def segment(
                     output_position_path,
                     input_channel_indices=[list(range(C))],
                     output_channel_indices=[list(range(C_segment))],
-                    num_processes=np.max([1, num_cpus - 3]),
+                    num_processes=np.min([20, int(num_cpus * 0.8)]),
                     segmentation_models=segment_args,
                 )
             )

@@ -20,11 +20,10 @@ classifiers = [
 
 # list package dependencies here
 dependencies = [
-  "iohub @ git+https://github.com/czbiohub-sf/iohub",
+  "iohub @ git+https://github.com/czbiohub-sf/iohub@v0.2.0b0",
   "matplotlib",
-  "napari; 'arm64' in platform_machine",                 # without Qt5 and skimage
-  "napari[all]; 'arm64' not in platform_machine",        # with Qt5 and skimage
-  "PyQt6; 'arm64' in platform_machine",
+  "napari",
+  "PyQt6",
   "natsort",
   "numpy<2",
   "markdown",
@@ -32,7 +31,6 @@ dependencies = [
   "pandas~=2.1",
   "pydantic<3",
   "scipy",
-  "slurmkit @ git+https://github.com/royerlab/slurmkit",
   "submitit",
   "torch>=2.3",
   "tqdm",
@@ -40,11 +38,13 @@ dependencies = [
   "largestinteriorrectangle",
   "antspyx",
   "pystackreg",
+  "napari-animation",
   "napari-psf-analysis",
+  "imageio-ffmpeg",
+  "dask[array]",
   "toml",
   "ultrack @ git+https://github.com/royerlab/ultrack.git"
 ]
-
 
 [project.optional-dependencies]
 # note that dev dependencies are only pinned to major versions
@@ -55,7 +55,6 @@ dev = [
   "pre-commit~=2.19",
   "pylint~=2.14",
   "pytest~=7.1",
-  
 ]
 
 segmentation = [
@@ -98,6 +97,7 @@ exclude = '''
     | notebooks
     | ignore
     | examples
+    | scripts
   )/
 )
 '''
@@ -109,7 +109,7 @@ lines_between_types = 1
 default_section = "THIRDPARTY"
 no_lines_before = ["STDLIB"]
 ensure_newline_before_comments = true
-skip_glob = ["examples/*"]
+skip_glob = ["examples/*", "scripts/*"]
 
 [tool.pylint]
 # disable all conventions, refactors, warnings (C, R, W) and the following:

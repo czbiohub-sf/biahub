@@ -9,7 +9,6 @@ from iohub import open_ome_zarr
 
 from biahub.analysis.AnalysisSettings import RegistrationSettings
 from biahub.analysis.register import apply_affine_transform, find_overlapping_volume
-from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
     config_filepath,
     local,
@@ -227,8 +226,14 @@ def register(
                 copy_jobs.append(copy_job)
                 copy_names.append(input_position_path)
 
-    if not local:
-        monitor_jobs(affine_jobs + copy_jobs, affine_names + copy_names)
+    # if not local:
+    #     monitor_jobs(affine_jobs + copy_jobs, affine_names + copy_names)
+    # concatenate affine_jobs and copy_jobs
+    job_ids = [job.job_id for job in affine_jobs + copy_jobs]
+
+    log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
+    with log_path.open("w") as log_file:
+        log_file.write("\n".join(job_ids))
 
 
 if __name__ == "__main__":

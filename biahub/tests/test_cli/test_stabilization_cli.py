@@ -53,8 +53,7 @@ def test_apply_stabilization(tmp_path, example_plate, example_stabilize_timelaps
             str(output_path),
             "-c",
             str(config_path),
-            "-j",
-            "1",
+            "--local",
         ],
     )
 

@@ -13,6 +13,7 @@ from pydantic import (
     PositiveFloat,
     PositiveInt,
     field_validator,
+    model_validator,
     validator,
 )
 
@@ -20,6 +21,32 @@ from pydantic import (
 # All settings classes inherit from MyBaseModel, which forbids extra parameters to guard against typos
 class MyBaseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class EstimateRegistrationSettings(MyBaseModel):
+    target_channel_name: str
+    source_channel_name: str
+    estimation_method: Literal["manual", "beads"] = "manual"
+    affine_transform_type: Literal["Euclidean", "Similarity"] = "Euclidean"
+    time_index: int = 0
+    affine_90degree_rotation: int = 0
+    approx_affine_transform: list = None
+    affine_transform_window_size: int = 10
+    affine_transform_tolerance: float = 50.0
+    filtering_angle_threshold: int = 30
+    verbose: bool = False
+
+    @field_validator("approx_affine_transform")
+    @classmethod
+    def check_affine_transform_zyx_list(cls, v):
+        if v is not None:
+            if not isinstance(v, list):
+                raise ValueError("approx_affine_transform must be a list")
+            arr = np.array(v)
+            if arr.shape != (4, 4):
+                raise ValueError("approx_affine_transform must be a 4x4 array")
+
+        return v
 
 
 class ProcessingFunctions(BaseModel):
@@ -44,6 +71,7 @@ class ProcessingImportFuncSettings(MyBaseModel):
 class ProcessingSettings(MyBaseModel):
     fliplr: Optional[bool] = False
     flipud: Optional[bool] = False
+    rot90: Optional[int] = 0
 
 
 class DeskewSettings(MyBaseModel):
@@ -130,6 +158,10 @@ class CharacterizeSettings(MyBaseModel):
     device: str = "cuda"
     patch_size: tuple[PositiveFloat, PositiveFloat, PositiveFloat] | None = None
     axis_labels: list[str] = ["AXIS0", "AXIS1", "AXIS2"]
+    offset: float = 0.0
+    gain: float = 1.0
+    use_robust_1d_fwhm: bool = False
+    fwhm_plot_type: Literal["1D", "3D"] = "3D"
 
     @field_validator("device")
     @classmethod
@@ -141,10 +173,11 @@ class ConcatenateSettings(MyBaseModel):
     concat_data_paths: list[str]
     time_indices: Union[int, list[int], Literal["all"]] = "all"
     channel_names: list[Union[str, list[str]]]
-    X_slice: Union[list[int], Literal["all"]] = "all"
-    Y_slice: Union[list[int], Literal["all"]] = "all"
-    Z_slice: Union[list[int], Literal["all"]] = "all"
+    X_slice: Union[list, list[Union[list, Literal["all"]]], Literal["all"]] = "all"
+    Y_slice: Union[list, list[Union[list, Literal["all"]]], Literal["all"]] = "all"
+    Z_slice: Union[list, list[Union[list, Literal["all"]]], Literal["all"]] = "all"
     chunks_czyx: Union[Literal[None], list[int]] = None
+    ensure_unique_positions: Optional[bool] = False
 
     @field_validator("concat_data_paths")
     @classmethod
@@ -162,13 +195,90 @@ class ConcatenateSettings(MyBaseModel):
 
     @field_validator("X_slice", "Y_slice", "Z_slice")
     @classmethod
-    def check_slices(cls, v):
-        if v != "all" and (
-            not isinstance(v, list)
-            or len(v) != 2
-            or not all(isinstance(i, int) and i >= 0 for i in v)
+    def check_slices(cls, v, info):
+        if v == "all":
+            return v
+
+        if not isinstance(v, list):
+            raise ValueError("Slice must be 'all' or a list.")
+
+        # Check if it's a list of per-path slice specifications
+        if any(
+            isinstance(item, list) and any(isinstance(subitem, list) for subitem in item)
+            for item in v
         ):
-            raise ValueError("Slices must be 'all' or lists of two non-negative integers.")
+            # This is a list of per-path slice specifications
+            # Each item should be a valid slice specification
+            for item in v:
+                if item == "all":
+                    continue
+
+                # Check if it's a simple [start, end] format
+                if (
+                    isinstance(item, list)
+                    and len(item) == 2
+                    and all(isinstance(i, int) for i in item)
+                ):
+                    if not all(i >= 0 for i in item):
+                        raise ValueError("Slice indices must be non-negative integers.")
+                    continue
+
+                # Check if it's a list of slice ranges or mixed format
+                if isinstance(item, list):
+                    for subitem in item:
+                        # Subitem can be 'all'
+                        if subitem == "all":
+                            continue
+
+                        # Subitem can be a single slice range [start, end]
+                        if (
+                            isinstance(subitem, list)
+                            and len(subitem) == 2
+                            and all(isinstance(i, int) for i in subitem)
+                        ):
+                            if not all(i >= 0 for i in subitem):
+                                raise ValueError(
+                                    "Slice indices must be non-negative integers."
+                                )
+                            continue
+
+                        # If we get here, the subitem is invalid
+                        raise ValueError(
+                            "Each slice subitem must be 'all' or a list of two non-negative integers [start, end]."
+                        )
+                else:
+                    raise ValueError(
+                        "Each item in a per-path slice list must be 'all' or a valid slice specification."
+                    )
+            return v
+
+        # Check if it's a simple [start, end] format
+        if len(v) == 2 and all(isinstance(i, int) for i in v):
+            if not all(i >= 0 for i in v):
+                raise ValueError("Slice indices must be non-negative integers.")
+            return v
+
+        # Check if it's a list of slice ranges or mixed format
+        for item in v:
+            # Item can be 'all'
+            if item == "all":
+                continue
+
+            # Item can be a single slice range [start, end]
+            if (
+                isinstance(item, list)
+                and len(item) == 2
+                and all(isinstance(i, int) for i in item)
+            ):
+                if not all(i >= 0 for i in item):
+                    raise ValueError("Slice indices must be non-negative integers.")
+                continue
+
+            # If we get here, the item is invalid
+            raise ValueError(
+                "Each slice item must be 'all' or a list of two non-negative integers [start, end]."
+            )
+
         return v
 
     @field_validator("chunks_czyx")
@@ -180,6 +290,51 @@ class ConcatenateSettings(MyBaseModel):
             raise ValueError("chunks_czyx must be a list of 4 integers (C, Z, Y, X)")
         return v
 
+    @model_validator(mode="after")
+    def validate_slice_lengths(self):
+        # Get the length of concat_data_paths
+        data_paths = self.concat_data_paths
+        if not data_paths:
+            return self
+
+        # Check X_slice
+        x_slice = self.X_slice
+        if (
+            isinstance(x_slice, list)
+            and x_slice != "all"
+            and len(x_slice) != len(data_paths)
+            and not (len(x_slice) == 2 and all(isinstance(i, int) for i in x_slice))
+        ):
+            raise ValueError(
+                f"X_slice must be 'all', a single slice specification, or a list with the same length as concat_data_paths ({len(data_paths)})"
+            )
+
+        # Check Y_slice
+        y_slice = self.Y_slice
+        if (
+            isinstance(y_slice, list)
+            and y_slice != "all"
+            and len(y_slice) != len(data_paths)
+            and not (len(y_slice) == 2 and all(isinstance(i, int) for i in y_slice))
+        ):
+            raise ValueError(
+                f"Y_slice must be 'all', a single slice specification, or a list with the same length as concat_data_paths ({len(data_paths)})"
+            )
+
+        # Check Z_slice
+        z_slice = self.Z_slice
+        if (
+            isinstance(z_slice, list)
+            and z_slice != "all"
+            and len(z_slice) != len(data_paths)
+            and not (len(z_slice) == 2 and all(isinstance(i, int) for i in z_slice))
+        ):
+            raise ValueError(
+                f"Z_slice must be 'all', a single slice specification, or a list with the same length as concat_data_paths ({len(data_paths)})"
+            )
+
+        return self
+
 
 class StabilizationSettings(MyBaseModel):
     stabilization_estimation_channel: str
@@ -187,6 +342,9 @@ class StabilizationSettings(MyBaseModel):
     stabilization_channels: list
     affine_transform_zyx_list: list
     time_indices: Union[NonNegativeInt, list[NonNegativeInt], Literal["all"]] = "all"
+    output_voxel_size: list[
+        PositiveFloat, PositiveFloat, PositiveFloat, PositiveFloat, PositiveFloat
+    ] = [1.0, 1.0, 1.0, 1.0, 1.0]
 
     @field_validator("affine_transform_zyx_list")
     @classmethod
@@ -209,23 +367,24 @@ class StitchSettings(MyBaseModel):
     column_translation: Optional[list[float, float]] = None
     row_translation: Optional[list[float, float]] = None
     total_translation: Optional[dict[str, list[float, float]]] = None
+    affine_transform: Optional[dict[str, list]] = None
 
     def __init__(self, **data):
-        if data.get("total_translation") is None:
-            if any(
-                (
-                    data.get("column_translation") is None,
-                    data.get("row_translation") is None,
-                )
-            ):
-                raise ValueError(
-                    "If total_translation is not provided, both column_translation and row_translation must be provided"
-                )
-            else:
-                warnings.warn(
-                    "column_translation and row_translation are deprecated. Use total_translation instead.",
-                    DeprecationWarning,
-                )
+        if not any(
+            (
+                data.get("total_translation"),
+                data.get("affine_transform"),
+                all((data.get("column_translation"), data.get("row_translation"))),
+            )
+        ):
+            raise ValueError(
+                "One of affine_transform, total_translation or (column_translation, row_translation) must be provided"
+            )
+        if any((data.get("column_translation"), data.get("row_translation"))):
+            warnings.warn(
+                "column_translation and row_translation are deprecated. Use total_translation instead.",
+                DeprecationWarning,
+            )
         super().__init__(**data)
 
 
@@ -280,6 +439,7 @@ class SegmentationModel(BaseModel):
                 raise ValueError(
                     "If 'z_slice_2D' is provided, 'do_3D' in 'eval_args' must be set to False."
                 )
+            z_slice_2D = 0
         return z_slice_2D
 
 

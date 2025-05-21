@@ -1,7 +1,7 @@
 import click
 
 from biahub.cli.characterize_psf import characterize_psf
-from biahub.cli.concatenate import concatenate
+from biahub.cli.concatenate import concatenate_cli
 from biahub.cli.deconvolve import deconvolve
 from biahub.cli.deskew import deskew
 from biahub.cli.estimate_bleaching import estimate_bleaching
@@ -41,8 +41,7 @@ cli.add_command(optimize_registration)
 cli.add_command(register)
 cli.add_command(estimate_stitch)
 cli.add_command(stitch)
-cli.add_command(update_scale_metadata)
-cli.add_command(concatenate)
+cli.add_command(concatenate_cli)
 cli.add_command(estimate_stabilization)
 cli.add_command(stabilize)
 cli.add_command(estimate_psf)
@@ -51,3 +50,4 @@ cli.add_command(characterize_psf)
 cli.add_command(track)
 cli.add_command(segment)
 cli.add_command(process_w_imports)
+cli.add_command(segment)
