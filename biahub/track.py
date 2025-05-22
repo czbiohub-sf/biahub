@@ -385,21 +385,23 @@ def track_one_position(
 
     position_key = input_vs_path.parts[-3:]
     fov = "_".join(position_key)
+    click.echo(f"Processing FOV: {fov.replace('_', '/')}")
+    
+    # Get the z-slice range if not provided
     if z_slice[0] == 0 and z_slice[1] == 0:
         n_slices = max(3, z_shape // 2)
         if n_slices % 2 == 0:
-            n_slices += 1  # make it odd to center cleanly
+            n_slices += 1  
         z_center = z_shape // 2
         half_window = n_slices // 2
 
         z_start = max(0, z_center - half_window)
-        z_end = min(z_shape, z_center + half_window + 1)  # +1 because slice end is exclusive
+        z_end = min(z_shape, z_center + half_window + 1) 
         z_slices = slice(z_start, z_end)
     else:
         z_slices = slice(z_slice[0], z_slice[1])
 
     click.echo(f"Processing z-stack: {z_slices}")
-    click.echo(f"Processing FOV: {fov.replace('_', '/')}")
 
     data_dict = {}
     if blank_frame_csv_path is not None or input_lf_dirpath is not None:
@@ -411,7 +413,7 @@ def track_one_position(
 
     # Load label free data to check for blank frames
     elif input_lf_dirpath is not None and blank_frame_csv_path is None:
-        click.echo(f"Loading data from: {input_lf_dirpath}...")
+        click.echo(f"Loading Label Free data from: {input_lf_dirpath}...")
         input_im_path = input_lf_dirpath / Path(*position_key)
         im_dataset = open_ome_zarr(input_im_path)
         channel_names = im_dataset.channel_names
