@@ -1,0 +1,89 @@
+# Description: Example tracking settings file for the biahub track CLI.
+z_slices: [0, 0]  
+# Define the range of z-slices to process in the volumetric imaging data.
+# Only slices from index 20 to 50 (inclusive) will be considered. 
+# Automatically use half slices of virtual stain [0,0]
+
+input_channels:
+# Define the input channels used for CLI.
+  # Label-free imaging channel(s) used in preprocessing (if applicable).
+  label_free:
+    - Phase3D
+  # Virtual staining channels used for any step.
+  virtual_stain:
+    - nuclei_prediction
+    - membrane_prediction
+  # The channel to track objects. Only one channel should be listed here.
+  tracking:
+    - nuclei_prediction
+
+tracking_config:
+# Define tracking parameters, use ultrack documentation for more information: https://royerlab.github.io/ultrack/
+  segmentation_config:
+    # Minimum and maximum allowed area (in pixels) for detected objects.
+    min_area: 2100
+    max_area: 80000
+    # Number of workers (threads) used for segmentation processing.
+    n_workers: 10
+    # Minimum frontier strength for segmentation boundaries.
+    min_frontier: 0.4
+    # Maximum allowable noise level in segmentation.
+    max_noise: 0.05
+  linking_config:
+    # Number of workers (threads) used for linking objects between frames.
+    n_workers: 10
+    # Maximum allowed distance between objects to consider them linked.
+    max_distance: 15
+    # Weight assigned to distance-based linking.
+    distance_weight: -0.0001
+    # Maximum number of neighboring objects considered for linking.
+    max_neighbors: 3
+  tracking_config:
+    # Number of threads allocated for tracking computations.
+    n_threads: 14
+    # Weighting factors for object disappearance, appearance, and division in tracking.
+    disappear_weight: -0.0001
+    appear_weight: -0.001
+    division_weight: -0.0001
+
+vs_projection_function:
+  # Function used to project 3D virtual staining data into 2D for tracking. If none, tracking will be done in 3D
+  function: np.mean
+  input_arrays:
+    - nuclei_prediction
+    - membrane_prediction
+  kwargs: # Add additional parameters as required.
+    axis: 1 
+
+preprocessing_functions:
+# Additional preprocessing functions before tracking.
+  normalize_nuclei:
+    function: ultrack.imgproc.normalize
+    input_arrays:
+      - nuclei_prediction
+    kwargs:  # Add additional parameters as required.
+      gamma: 0.7  
+  normalize_membrane:
+    function: ultrack.imgproc.normalize
+    input_arrays:
+      - membrane_prediction
+    kwargs: # Add additional parameters as required.
+      gamma: 0.7  
+
+tracking_functions:
+# functions to obtain tracking input arrays
+  foreground:
+    # Function for foreground detection.
+    function: ultrack.imgproc.detect_foreground
+    input_arrays:
+      - nuclei_prediction
+    kwargs: # Add additional parameters as required.
+      sigma: 90  # Gaussian blur standard deviation for foreground detection.
+
+  contour:
+    # Function for computing the contour.
+    function: biahub.cli.track.mem_nuc_contour
+    input_arrays:
+      - nuclei_prediction
+      - membrane_prediction
+    kwargs: {}  # Add additional parameters as required.
