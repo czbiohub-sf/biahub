@@ -1,6 +1,6 @@
 import warnings
 
-from typing import Any, Dict, Literal, Optional, Union, Tuple
+from typing import Any, Dict, Literal, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -21,6 +21,7 @@ from pydantic import (
 # All settings classes inherit from MyBaseModel, which forbids extra parameters to guard against typos
 class MyBaseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
 
 class ProcessingFunctions(BaseModel):
     function: str

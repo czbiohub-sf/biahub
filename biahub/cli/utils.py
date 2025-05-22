@@ -86,6 +86,7 @@ def create_empty_zarr(
 
     input_dataset.close()
 
+
 def update_model(model_instance, update_dict):
     """
     Properly updates a Pydantic model with only the provided values while keeping the defaults.
@@ -103,6 +104,7 @@ def update_model(model_instance, update_dict):
 
     # Create a new instance with updated fields
     return model_instance.copy(update=updated_fields)
+
 
 # TODO: convert all code to use this function from now on
 def create_empty_hcs_zarr(
@@ -693,6 +695,7 @@ def _check_nan_n_zeros(input_array):
 
     else:
         raise ValueError("Input array must be 2D, 3D, or 4D.")
+
 
 def estimate_resources(
     shape: Tuple[int, int, int, int, int],

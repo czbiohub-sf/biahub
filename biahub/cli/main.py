@@ -47,4 +47,3 @@ cli.add_command(deconvolve_cli)
 cli.add_command(characterize_psf_cli)
 cli.add_command(segment_cli)
 cli.add_command(track)
-

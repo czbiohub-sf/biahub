@@ -13,10 +13,9 @@ import ultrack
 from iohub import open_ome_zarr
 from numpy.typing import ArrayLike
 from ultrack import MainConfig, Tracker
-from ultrack.utils.array import array_apply
 from ultrack.utils import labels_to_edges
+from ultrack.utils.array import array_apply
 
-from biahub.settings import ProcessingFunctions, TrackingSettings
 from biahub.cli.parsing import (
     config_filepath,
     input_position_dirpaths,
@@ -32,6 +31,7 @@ from biahub.cli.utils import (
     update_model,
     yaml_to_model,
 )
+from biahub.settings import ProcessingFunctions, TrackingSettings
 
 
 # Custom function
@@ -353,11 +353,11 @@ def track_one_position(
     - Tracking is performed using the `ultrack` library, and the results are saved in an OME-Zarr format.
     - Tracks graphs are exported as CSV files.
     """
-    
+
     position_key = input_vs_path.parts[-3:]
     fov = "_".join(position_key)
-    if z_slice[0]==0 and z_slice[1]==0:
-        n_slices = max(3, z_shape // 2) 
+    if z_slice[0] == 0 and z_slice[1] == 0:
+        n_slices = max(3, z_shape // 2)
         if n_slices % 2 == 0:
             n_slices += 1  # make it odd to center cleanly
         z_center = z_shape // 2
@@ -368,7 +368,6 @@ def track_one_position(
         z_slices = slice(z_start, z_end)
     else:
         z_slices = slice(z_slice[0], z_slice[1])
-
 
     click.echo(f"Processing z-stack: {z_slices}")
     click.echo(f"Processing position: {fov}")
@@ -456,7 +455,6 @@ def track_one_position(
 
         click.echo("Converting labels to foreground and contour gradient map...")
         foreground_mask, contour_gradient_map = labels_to_edges(label_arr, sigma=90)
-
 
     else:
 
@@ -587,7 +585,7 @@ def track(
                 input_segmentation_dirpaths=segmentation_dirpaths,
                 output_dirpath=output_dirpath,
                 z_slice=settings.z_slices,
-                z_shape = Z,
+                z_shape=Z,
                 input_channels=settings.input_channels,
                 tracking_config=tracking_cfg,
                 vs_projection_function=settings.vs_projection_function,
@@ -599,7 +597,7 @@ def track(
 
     job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 
-    log_path = Path(slurm_out_path/ "submitit_jobs_ids.log")
+    log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
 
