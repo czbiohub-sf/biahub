@@ -1,4 +1,5 @@
 # %%
+import ast
 import os
 
 from pathlib import Path
@@ -6,11 +7,11 @@ from typing import Any, Dict, List, Tuple, Union
 
 import click
 import numpy as np
+import pandas as pd
 import submitit
 import toml
 import ultrack
-import pandas as pd
-import ast
+
 from iohub import open_ome_zarr
 from numpy.typing import ArrayLike
 from ultrack import MainConfig, Tracker
@@ -166,12 +167,15 @@ def fill_empty_frames(arr: ArrayLike, empty_frames_idx: List[int]) -> ArrayLike:
 
     return arr
 
-def get_empty_frames_idx_from_csv(blank_frame_df: pd.DataFrame, fov: str) -> Union[List[int], None]:
+
+def get_empty_frames_idx_from_csv(
+    blank_frame_df: pd.DataFrame, fov: str
+) -> Union[List[int], None]:
     """
     Extract empty frames indices from a DataFrame containing blank frame information.
     This function retrieves the indices of empty frames for a specific field of view (FOV)
     from a DataFrame containing blank frame information.
-    Parameters: 
+    Parameters:
     - blank_frame_df (pd.DataFrame): DataFrame containing blank frame information.
     - fov (str): Field of view (FOV) identifier to filter the DataFrame.
     Returns:
@@ -183,15 +187,13 @@ def get_empty_frames_idx_from_csv(blank_frame_df: pd.DataFrame, fov: str) -> Uni
     if not empty_frames_idx.empty:
         t_value = empty_frames_idx.iloc[0]
         if isinstance(t_value, str) and t_value.startswith('['):
-            try:
-                t_value = ast.literal_eval(t_value)
-            except Exception as e:
-                return None
+            t_value = ast.literal_eval(t_value)
         if isinstance(t_value, list):
             return [int(i) for i in t_value]
         elif t_value == 0:
             return []
     return None
+
 
 def data_preprocessing(
     data_dict: dict,
@@ -415,17 +417,14 @@ def track_one_position(
         channel_names = im_dataset.channel_names
         click.echo(f"Label Free Channel names: {channel_names}")
         for channel in input_channels["label_free"]:
-            im_arr = im_dataset[0][
-                :, channel_names.index(channel), z_slices.start, :, :
-            ]
+            im_arr = im_dataset[0][:, channel_names.index(channel), z_slices.start, :, :]
             empty_frames_idx = _check_nan_n_zeros(im_arr)
-    else: 
+    else:
         raise Warning(
             "Will not check for empty frames and track can fail, please provide label free data or blank frame csv path."
         )
         empty_frames_idx = None
 
-        
     click.echo(f"Empty frames found: {empty_frames_idx}")
 
     # Load virtual staining data, check if the required channels are present
@@ -500,7 +499,7 @@ def track_one_position(
             data_dict=data_dict,
             preprocessing_functions=preprocessing_functions,
             tracking_functions=tracking_functions,
-            empty_frames_idx = empty_frames_idx,
+            empty_frames_idx=empty_frames_idx,
         )
 
     # Define path to save the tracking database and graph
@@ -623,8 +622,6 @@ def track(
 
     click.echo('Submitting SLURM jobs...')
     jobs = []
-
-
 
     with executor.batch():
         for input_vs_position_path in input_position_dirpaths:
