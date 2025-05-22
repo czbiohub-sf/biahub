@@ -386,17 +386,17 @@ def track_one_position(
     position_key = input_vs_path.parts[-3:]
     fov = "_".join(position_key)
     click.echo(f"Processing FOV: {fov.replace('_', '/')}")
-    
+
     # Get the z-slice range if not provided
     if z_slice[0] == 0 and z_slice[1] == 0:
         n_slices = max(3, z_shape // 2)
         if n_slices % 2 == 0:
-            n_slices += 1  
+            n_slices += 1
         z_center = z_shape // 2
         half_window = n_slices // 2
 
         z_start = max(0, z_center - half_window)
-        z_end = min(z_shape, z_center + half_window + 1) 
+        z_end = min(z_shape, z_center + half_window + 1)
         z_slices = slice(z_start, z_end)
     else:
         z_slices = slice(z_slice[0], z_slice[1])
