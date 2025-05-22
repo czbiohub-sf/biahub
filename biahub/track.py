@@ -9,7 +9,8 @@ import numpy as np
 import submitit
 import toml
 import ultrack
-
+import pandas as pd
+import ast
 from iohub import open_ome_zarr
 from numpy.typing import ArrayLike
 from ultrack import MainConfig, Tracker
@@ -165,11 +166,38 @@ def fill_empty_frames(arr: ArrayLike, empty_frames_idx: List[int]) -> ArrayLike:
 
     return arr
 
+def get_empty_frames_idx_from_csv(blank_frame_df: pd.DataFrame, fov: str) -> Union[List[int], None]:
+    """
+    Extract empty frames indices from a DataFrame containing blank frame information.
+    This function retrieves the indices of empty frames for a specific field of view (FOV)
+    from a DataFrame containing blank frame information.
+    Parameters: 
+    - blank_frame_df (pd.DataFrame): DataFrame containing blank frame information.
+    - fov (str): Field of view (FOV) identifier to filter the DataFrame.
+    Returns:
+    - List[int]: List of indices representing empty frames for the specified FOV.
+    - None: If no empty frames are found for the specified FOV.
+    """
+
+    empty_frames_idx = blank_frame_df[blank_frame_df['FOV'] == fov]['t']
+    if not empty_frames_idx.empty:
+        t_value = empty_frames_idx.iloc[0]
+        if isinstance(t_value, str) and t_value.startswith('['):
+            try:
+                t_value = ast.literal_eval(t_value)
+            except Exception as e:
+                return None
+        if isinstance(t_value, list):
+            return [int(i) for i in t_value]
+        elif t_value == 0:
+            return []
+    return None
 
 def data_preprocessing(
     data_dict: dict,
     preprocessing_functions: Dict[str, ProcessingFunctions],
     tracking_functions: Dict[str, ProcessingFunctions],
+    empty_frames_idx: List[int] = None,
 ) -> Tuple[ArrayLike, ArrayLike]:
 
     """
@@ -200,13 +228,11 @@ def data_preprocessing(
       input arrays.
     """
 
-    if "Phase3D" in data_dict:
-        click.echo("Checking for empty frames in the label-free image...")
-        empty_frames_idx = _check_nan_n_zeros(data_dict["Phase3D"])
+    click.echo("Checking for empty frames in the label-free image...")
 
-        # drop lf_image from data_dift
-        data_dict.pop("Phase3D")
+    if empty_frames_idx:
         for key, value in data_dict.items():
+            click.echo(f"Filling empty frames in {key}...")
             data_dict[key] = fill_empty_frames(value, empty_frames_idx)
 
     # Apply preprocessing functions
@@ -319,6 +345,7 @@ def track_one_position(
     z_shape: int,
     tracking_config: MainConfig,
     input_segmentation_dirpaths: Path = None,
+    blank_frame_csv_path: Path = None,
 ) -> None:
     """
     Process a single imaging position for cell tracking using virtual staining and optional label-free imaging.
@@ -370,29 +397,40 @@ def track_one_position(
         z_slices = slice(z_slice[0], z_slice[1])
 
     click.echo(f"Processing z-stack: {z_slices}")
-    click.echo(f"Processing position: {fov}")
+    click.echo(f"Processing FOV: {fov.replace('_', '/')}")
 
     data_dict = {}
+    if blank_frame_csv_path is not None or input_lf_dirpath is not None:
+        # Load blank frame data to check for blank frames
+        click.echo(f"Loading blank frame data from: {blank_frame_csv_path}...")
+        blank_frame_df = pd.read_csv(blank_frame_csv_path)
+        fov_str = fov.replace("_", "/")
+        empty_frames_idx = get_empty_frames_idx_from_csv(blank_frame_df, fov_str)
+
     # Load label free data to check for blank frames
-    if input_channels['label_free'] is not None:
-        if input_lf_dirpath is not None:
-            click.echo(f"Loading data from: {input_lf_dirpath}...")
-            input_im_path = input_lf_dirpath / Path(*position_key)
-            im_dataset = open_ome_zarr(input_im_path)
-            channel_names = im_dataset.channel_names
-            click.echo(f"Label Free Channel names: {channel_names}")
-            for channel in input_channels["label_free"]:
-                data_dict[channel] = im_dataset[0][
-                    :, channel_names.index(channel), z_slices.start, :, :
-                ]
-        else:
-            raise ValueError(
-                "Label Free Image Dirpath is required if there are blanck frames in the data."
-            )
+    elif input_lf_dirpath is not None and blank_frame_csv_path is None:
+        click.echo(f"Loading data from: {input_lf_dirpath}...")
+        input_im_path = input_lf_dirpath / Path(*position_key)
+        im_dataset = open_ome_zarr(input_im_path)
+        channel_names = im_dataset.channel_names
+        click.echo(f"Label Free Channel names: {channel_names}")
+        for channel in input_channels["label_free"]:
+            im_arr = im_dataset[0][
+                :, channel_names.index(channel), z_slices.start, :, :
+            ]
+            empty_frames_idx = _check_nan_n_zeros(im_arr)
+    else: 
+        raise Warning(
+            "Will not check for empty frames and track can fail, please provide label free data or blank frame csv path."
+        )
+        empty_frames_idx = None
+
+        
+    click.echo(f"Empty frames found: {empty_frames_idx}")
+
     # Load virtual staining data, check if the required channels are present
     if input_channels['virtual_stain'] is None:
         raise ValueError("Virtual Staining input channels is required.")
-
     # Check if the tracking channel is present in the virtual staining channels
     if input_channels['tracking'] is None:
         raise ValueError("Tracking input channels is required.")
@@ -462,6 +500,7 @@ def track_one_position(
             data_dict=data_dict,
             preprocessing_functions=preprocessing_functions,
             tracking_functions=tracking_functions,
+            empty_frames_idx = empty_frames_idx,
         )
 
     # Define path to save the tracking database and graph
@@ -508,14 +547,23 @@ def track_one_position(
     type=str,
     help="Segmentation Dirpath, if there are blanck frames in the data.",
 )
+@click.option(
+    "-blank_frame_csv_path",
+    "-f",
+    required=False,
+    default=None,
+    type=str,
+    help=" Blank Frame CSV path, if there are blanck frames in the data and the csv was previous gerenrated.",
+)
 def track(
     lf_dirpaths: str,
-    segmentation_dirpaths: str,
     output_dirpath: str,
     config_filepath: str,
     input_position_dirpaths: str,
+    segmentation_dirpaths: str = None,
     sbatch_filepath: str = None,
     local: bool = None,
+    blank_frame_csv_path: str = None,
 ) -> None:
 
     """
@@ -576,6 +624,8 @@ def track(
     click.echo('Submitting SLURM jobs...')
     jobs = []
 
+
+
     with executor.batch():
         for input_vs_position_path in input_position_dirpaths:
             job = executor.submit(
@@ -591,6 +641,7 @@ def track(
                 vs_projection_function=settings.vs_projection_function,
                 preprocessing_functions=settings.preprocessing_functions,
                 tracking_functions=settings.tracking_functions,
+                blank_frame_csv_path=blank_frame_csv_path,
             )
 
             jobs.append(job)
