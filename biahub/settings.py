@@ -1,6 +1,6 @@
 import warnings
 
-from typing import Any, Dict, Literal, Optional, Union
+from typing import Any, Dict, Literal, Optional, Union, Tuple
 
 import numpy as np
 import torch
@@ -21,6 +21,20 @@ from pydantic import (
 # All settings classes inherit from MyBaseModel, which forbids extra parameters to guard against typos
 class MyBaseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+class ProcessingFunctions(BaseModel):
+    function: str
+    input_arrays: list[str]
+    kwargs: Dict[str, Any] = {}
+
+
+class TrackingSettings(MyBaseModel):
+    z_slices: Tuple[int, int]
+    input_channels: Dict[str, Any]
+    tracking_config: Dict[str, Any] = {}
+    vs_projection_function: ProcessingFunctions = None
+    preprocessing_functions: Dict[str, ProcessingFunctions] = {}
+    tracking_functions: Dict[str, ProcessingFunctions] = {}
 
 
 class EstimateRegistrationSettings(MyBaseModel):
