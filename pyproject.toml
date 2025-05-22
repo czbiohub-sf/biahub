@@ -42,6 +42,8 @@ dependencies = [
   "napari-psf-analysis",
   "imageio-ffmpeg",
   "dask[array]",
+  "toml",
+  "ultrack @ git+https://github.com/royerlab/ultrack.git"
 ]
 
 [project.optional-dependencies]
