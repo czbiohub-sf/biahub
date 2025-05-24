@@ -1,10 +1,10 @@
 from collections import defaultdict
 from itertools import product
-from typing import Callable
 
 import click
 import dask.array as da
 import numpy as np
+import scipy.ndimage
 
 from iohub import open_ome_zarr
 from iohub.ngff import TransformationMeta
@@ -12,6 +12,71 @@ from tqdm import tqdm
 
 from biahub.cli.utils import yaml_to_model
 from biahub.settings import ProcessingSettings, StitchSettings
+
+
+def list_of_nd_slices_from_array_shape(
+    array_shape: tuple[int, int, int], chunk_shape: tuple[int, int, int]
+) -> list[tuple[slice, slice, slice]]:
+    """
+    Return a list of slices dividing an array of shape `array_shape`
+    into chunks of shape `chunk_shape`.
+
+    Example:
+        list_of_nd_slices_from_array_shape((4, 5, 6), (2, 3, 4))
+        # [
+        #   (slice(0, 2), slice(0, 3), slice(0, 4)),
+        #   (slice(0, 2), slice(0, 3), slice(4, 6)),
+        #   (slice(0, 2), slice(3, 5), slice(0, 4)),
+        #   (slice(0, 2), slice(3, 5), slice(4, 6)),
+        #   (slice(2, 4), slice(0, 3), slice(0, 4)),
+        #   (slice(2, 4), slice(0, 3), slice(4, 6)),
+        #   (slice(2, 4), slice(3, 5), slice(0, 4)),
+        #   (slice(2, 4), slice(3, 5), slice(4, 6)),
+        # ]
+    """
+    chunk_slices: list[tuple[slice, slice, slice]] = []
+    for idx in product(*[range(0, s, c) for s, c in zip(array_shape, chunk_shape)]):
+        chunk_slices.append(
+            tuple(slice(i, min(i + c, s)) for i, c, s in zip(idx, chunk_shape, array_shape))
+        )
+    return chunk_slices
+
+
+def check_overlap(chunk, fov_shift, fov_extent):
+    for dim in range(3):
+        if (
+            chunk[dim].start >= fov_shift[dim] + fov_extent[dim]
+            or chunk[dim].stop <= fov_shift[dim]
+        ):
+            return False
+    return True
+
+
+def overlap_slices(chunk_corner, chunk_extent, fov_corner, fov_extent):
+    """Return (fixed_slice, moving_slice) for overlapping region, or (None, None) if no overlap."""
+    fixed, moving = [], []
+    for d in range(3):
+        start = max(chunk_corner[d], fov_corner[d])
+        stop = min(chunk_corner[d] + chunk_extent[d], fov_corner[d] + fov_extent[d])
+        if stop <= start:
+            return None, None
+        fixed_slice = slice(int(start - chunk_corner[d]), int(stop - chunk_corner[d]))
+        moving_slice = slice(int(start - fov_corner[d]), int(stop - fov_corner[d]))
+        # Ensure both slices are the same size
+        fixed_len = fixed_slice.stop - fixed_slice.start
+        moving_len = moving_slice.stop - moving_slice.start
+        max_len = max(fixed_len, moving_len)
+        fixed.append(slice(fixed_slice.start, fixed_slice.start + max_len))
+        moving.append(slice(moving_slice.start, moving_slice.start + max_len))
+    return tuple(fixed), tuple(moving)
+
+
+def find_contributing_fovs(chunk, fov_shifts, fov_extent):
+    contributing_fovs = []
+    for fov_key, fov_shift in fov_shifts.items():
+        if check_overlap(chunk, fov_shift, fov_extent):
+            contributing_fovs.append(fov_key)
+    return contributing_fovs
 
 
 def process_dataset(
@@ -58,34 +123,6 @@ def get_output_shape(shifts: dict, tile_shape: tuple) -> tuple:
     return max_z + tile_shape[-3], max_y + tile_shape[-2], max_x + tile_shape[-1]
 
 
-def divide_tile(
-    *in_arrays: np.ndarray,
-    func: Callable,
-    out_array: np.ndarray,
-    tile: tuple,
-    overlap: tuple = (0, 0),
-):
-
-    final_shape = out_array.shape[-2:]
-
-    tiling_start = list(
-        product(
-            *[
-                range(o, size + 2 * o, t + o)  # t + o step, because of blending map
-                for size, t, o in zip(final_shape, tile, overlap)
-            ]
-        )
-    )
-    for start_indices in tqdm(tiling_start):
-        slicing = (...,) + tuple(
-            slice(start - o, start + t + o)
-            for start, t, o in zip(start_indices, tile, overlap)
-        )
-        out_array[slicing] = func(*[a[slicing] for a in in_arrays])
-
-    return out_array
-
-
 @click.command("stitch")
 @click.option(
     "-i",
@@ -116,88 +153,137 @@ def stitch_cli(
 ) -> None:
 
     settings = yaml_to_model(config_filepath, StitchSettings)
-    input_fov_store = open_ome_zarr(input_dirpath, mode="r")
-    shifts = settings.total_translation
+    input_plate = open_ome_zarr(input_dirpath, mode="r")
+    all_shifts = settings.total_translation
 
-    input_store_channels = input_fov_store.channel_names
+    input_channels = input_plate.channel_names
     if settings.channels is None:
-        settings.channels = input_store_channels
-    channel_idx = np.asarray([input_store_channels.index(ch) for ch in settings.channels])
+        settings.channels = input_channels
+    channel_idx = np.asarray([input_channels.index(ch) for ch in settings.channels])
 
-    if not all(channel in input_store_channels for channel in settings.channels):
+    if not all(channel in input_channels for channel in settings.channels):
         raise ValueError("Invalid channel(s) provided.")
 
-    output_store = open_ome_zarr(
-        output_dirpath, layout='hcs', mode="w-", channel_names=settings.channels
+    # Create output store
+    output_plate = open_ome_zarr(
+        output_dirpath, layout='hcs', mode="w", channel_names=settings.channels
     )
 
-    grouped_shifts = defaultdict(dict)
-    for key, value in shifts.items():
-        group = key.split("/")[1]
-        grouped_shifts[group][key] = value
+    # Group shift metadata by well
+    shifts_by_well = defaultdict(dict)
+    for key, value in all_shifts.items():
+        well_name = "/".join(key.split("/")[:2])
+        shifts_by_well[well_name][key] = value
 
-    for g in grouped_shifts:
-        pos_shifts = grouped_shifts[g]
-        temp_pos = list(grouped_shifts[g].keys())[0]
-        tile_shape = input_fov_store[temp_pos].data.shape
-        final_shape_zyx = get_output_shape(pos_shifts, tile_shape)
+    # Process each well
+    for well_name, fov_shifts in shifts_by_well.items():
+        first_fov_name = list(shifts_by_well[well_name].keys())[0]
+        input_fov_shape = input_plate[first_fov_name].data.shape
+        output_chunk_size = input_plate[first_fov_name].data.chunks
+        output_shape_zyx = get_output_shape(fov_shifts, input_fov_shape)
+        output_scale = input_plate[first_fov_name].scale
 
-        final_shape = (
-            tile_shape[0],
+        output_shape = (
+            input_fov_shape[0],
             len(channel_idx),
-        ) + final_shape_zyx
+        ) + output_shape_zyx
 
-        output_image = np.zeros(final_shape, dtype=np.float32)  # check dtype
-        divisor = np.zeros(final_shape, dtype=np.uint8)
-
-        well_name = temp_pos[:3]
-        output_chunk_size = input_fov_store[temp_pos].data.chunks
-        output_scale = input_fov_store[temp_pos].scale
-
-        for tile_name, shift in pos_shifts.items():
-            tile = input_fov_store[tile_name].data
-
-            tile = process_dataset(tile[:, channel_idx, :, :, :], settings.preprocessing)
-            shift_array = np.asarray(shift).astype(np.uint16)  # round shift to ints
-
-            output_image[
-                :,
-                :,
-                shift_array[0] : shift_array[0] + tile_shape[-3],
-                shift_array[1] : shift_array[1] + tile_shape[-2],
-                shift_array[2] : shift_array[2] + tile_shape[-1],
-            ] += tile
-
-            divisor[
-                :,
-                :,
-                shift_array[0] : shift_array[0] + tile_shape[-3],
-                shift_array[1] : shift_array[1] + tile_shape[-2],
-                shift_array[2] : shift_array[2] + tile_shape[-1],
-            ] += 1
-
-        stitched = np.zeros_like(output_image, dtype=np.float16)
-
-        def _divide(a, b):
-            return np.nan_to_num(a / b)
-
-        divide_tile(
-            output_image,
-            divisor,
-            func=_divide,
-            out_array=stitched,
-            tile=divide_tiling_shape,
-        )
-
-        stitched = process_dataset(stitched, settings.postprocessing)
-
-        stitched_pos = output_store.create_position(well_name[0], well_name[2], "0")
-        stitched_pos.create_image(
+        # Create the output array
+        # note that output shape is different for each well, so we are not
+        # using iohub.ngff.utils.create_empty_plate here
+        output_position = output_plate.create_position(
+            first_fov_name.split("/")[0],
+            first_fov_name.split("/")[1],
             "0",
-            data=stitched,
+        )
+        output_array = output_position.create_zeros(
+            "0",
+            shape=output_shape,
             chunks=output_chunk_size,
+            dtype=np.float32,
             transform=[TransformationMeta(type="scale", scale=output_scale)],
         )
+
+        # Split the output array into chunks
+        chunk_list = list_of_nd_slices_from_array_shape(
+            output_shape_zyx,
+            output_chunk_size[2:],
+        )
+
+        for chunk in tqdm(chunk_list, desc=f"Processing chunks for well {well_name}"):
+
+            # For each output chunk, find the input fovs that contribute to it
+            contributing_fov_names = find_contributing_fovs(
+                chunk, fov_shifts, input_fov_shape[-3:]
+            )
+            chunk_corner = np.array([chunk[dim].start for dim in range(3)])
+            chunk_extent = np.array([chunk[dim].stop - chunk[dim].start for dim in range(3)])
+
+            idx = (slice(None), channel_idx, *chunk)
+            array_shape = output_array[idx].shape
+            output_chunk = np.zeros(array_shape)
+
+            fixed_slices = []
+            moving_slices = []
+
+            # Compute overlap slices
+            for fov_name in contributing_fov_names:
+                fov_corner = np.array([fov_shifts[fov_name][d] for d in range(3)])
+                fov_extent = np.array([input_fov_shape[d + 2] for d in range(3)])
+                fixed_slice, moving_slice = overlap_slices(
+                    chunk_corner, chunk_extent, fov_corner, fov_extent
+                )
+                if fixed_slice is None or moving_slice is None:
+                    continue
+                else:
+                    fixed_slices.append(fixed_slice)
+                    moving_slices.append(moving_slice)
+
+            # Build distance maps (this will need to change for 3D)
+            temp = np.zeros(fov_extent)
+            temp[:, 1:-1, 1:-1] = 1
+            mask = temp != 0
+
+            centered_distance_map_2d = scipy.ndimage.distance_transform_edt(mask[0])
+            centered_distance_map = np.tile(
+                centered_distance_map_2d[None, :, :], (output_chunk.shape[0], 1, 1)
+            )
+
+            # Build distance maps
+            distance_maps = np.zeros((len(contributing_fov_names),) + output_chunk.shape[-3:])
+            for i, (fixed_slice, moving_slice) in enumerate(zip(fixed_slices, moving_slices)):
+                print(f"Computing distance map for {contributing_fov_names[i]}")
+                fixed_idx = (slice(None), *fixed_slice)  # needed for black formatting
+                moving_idx = (*moving_slice,)  # needed for black formatting
+                distance_maps[fixed_idx] = centered_distance_map[moving_idx]
+
+            # Build weight maps
+            k = 1
+            w = np.power(distance_maps, k, where=(distance_maps > 0))
+            sum_w = np.sum(w, axis=0, keepdims=True)
+            weight_maps = w / (sum_w + 1e-8)
+
+            # Apply weights to each fov
+            for i, (fov_name, fixed_slice, moving_slice) in enumerate(
+                zip(contributing_fov_names, fixed_slices, moving_slices)
+            ):
+                print(f"Reading and summing {fov_name}")
+                # Get the fov data
+                fov_data = input_plate[fov_name].data
+
+                # Apply weights to the fov data
+                moving_idx = (slice(None), channel_idx, *moving_slice)
+                fixed_idx = (slice(None), *fixed_slice)
+                temp = fov_data[moving_idx] * weight_maps[fixed_idx]
+
+                # Add to the output chunk
+                idx = (slice(None), channel_idx, *fixed_slice)
+                output_chunk[idx] += temp
+
+            # Write chunk to output array
+            print("Writing chunk to output array")
+            idx = (slice(None), channel_idx, *chunk)
+            output_array[idx] = output_chunk
 
     return
 
