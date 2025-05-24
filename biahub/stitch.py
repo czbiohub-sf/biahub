@@ -246,16 +246,16 @@ def stitch_cli(
 
             centered_distance_map_2d = scipy.ndimage.distance_transform_edt(mask[0])
             centered_distance_map = np.tile(
-                centered_distance_map_2d[None, :, :], (output_chunk.shape[0], 1, 1)
+                centered_distance_map_2d[None, :, :], (output_chunk.shape[-3], 1, 1)
             )
 
             # Build distance maps
             distance_maps = np.zeros((len(contributing_fov_names),) + output_chunk.shape[-3:])
             for i, (fixed_slice, moving_slice) in enumerate(zip(fixed_slices, moving_slices)):
                 print(f"Computing distance map for {contributing_fov_names[i]}")
-                fixed_idx = (slice(None), *fixed_slice)  # needed for black formatting
-                moving_idx = (*moving_slice,)  # needed for black formatting
-                distance_maps[fixed_idx] = centered_distance_map[moving_idx]
+                fixed_idx = (i, *fixed_slice)  # needed for black formatting
+                tmp_moving_idx = (*moving_slice,)  # needed for black formatting
+                distance_maps[fixed_idx] = centered_distance_map[tmp_moving_idx]
 
             # Build weight maps
             k = 1
@@ -273,7 +273,7 @@ def stitch_cli(
 
                 # Apply weights to the fov data
                 moving_idx = (slice(None), channel_idx, *moving_slice)
-                fixed_idx = (slice(None), *fixed_slice)
+                fixed_idx = (i, *fixed_slice)
                 temp = fov_data[moving_idx] * weight_maps[fixed_idx]
 
                 # Add to the output chunk
