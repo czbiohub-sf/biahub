@@ -149,7 +149,6 @@ def stitch_cli(
     input_dirpath: str,
     output_dirpath: str,
     config_filepath: str,
-    divide_tiling_shape: tuple = (5000, 5000),
 ) -> None:
 
     settings = yaml_to_model(config_filepath, StitchSettings)
