@@ -1,5 +1,6 @@
 from collections import defaultdict
 from itertools import product
+from typing import List
 
 import click
 import dask.array as da
@@ -10,6 +11,7 @@ from iohub import open_ome_zarr
 from iohub.ngff import TransformationMeta
 from tqdm import tqdm
 
+from biahub.cli.parsing import config_filepath, input_position_dirpaths, output_dirpath
 from biahub.cli.utils import yaml_to_model
 from biahub.settings import ProcessingSettings, StitchSettings
 
@@ -124,35 +126,17 @@ def get_output_shape(shifts: dict, tile_shape: tuple) -> tuple:
 
 
 @click.command("stitch")
-@click.option(
-    "-i",
-    "--input_dirpath",
-    required=True,
-    type=click.Path(exists=True, dir_okay=True),
-    help="Path to zarr store containing individual FOVs to be stitched",
-)
-@click.option(
-    "-o",
-    "--output_dirpath",
-    required=True,
-    type=click.Path(exists=False, dir_okay=True),
-    help="Path to zarr store where stitched FOVs will be saved",
-)
-@click.option(
-    "-c",
-    "--config_filepath",
-    required=True,
-    type=click.Path(exists=True, dir_okay=False),
-    help="Path to yaml file containing stitching parameters",
-)
+@input_position_dirpaths()
+@config_filepath()
+@output_dirpath()
 def stitch_cli(
-    input_dirpath: str,
+    input_position_dirpaths: List[str],
     output_dirpath: str,
     config_filepath: str,
 ) -> None:
 
     settings = yaml_to_model(config_filepath, StitchSettings)
-    input_plate = open_ome_zarr(input_dirpath, mode="r")
+    input_plate = open_ome_zarr(input_position_dirpaths[0].parents[2], mode="r")
     all_shifts = settings.total_translation
 
     input_channels = input_plate.channel_names
