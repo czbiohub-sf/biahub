@@ -1,26 +1,20 @@
-import shutil
-
-from pathlib import Path
-from typing import Literal, Callable, List
+from collections import defaultdict
 from itertools import product
-from collections import defaultdict, OrderedDict
+from typing import Callable, Literal
 
-from tqdm import tqdm
 import ants
 import click
 import dask.array as da
 import numpy as np
 import pandas as pd
 import scipy.ndimage as ndi
-import submitit
 
 from iohub import open_ome_zarr
 from iohub.ngff import TransformationMeta
-from iohub.ngff.utils import create_empty_plate
 from skimage.registration import phase_cross_correlation
+from tqdm import tqdm
 
-from biahub.cli.parsing import config_filepath, input_position_dirpaths, output_dirpath
-from biahub.cli.utils import process_single_position_v2, yaml_to_model
+from biahub.cli.utils import yaml_to_model
 from biahub.register import convert_transform_to_ants
 from biahub.settings import ProcessingSettings, StitchSettings
 
@@ -362,7 +356,6 @@ def stitch_cli(
         output_image = np.zeros(final_shape, dtype=np.float32)  # check dtype
         divisor = np.zeros(final_shape, dtype=np.uint8)
 
-        well_name = temp_pos[:3]
         output_chunk_size = input_fov_store[temp_pos].data.chunks
         output_scale = input_fov_store[temp_pos].scale
 
@@ -403,7 +396,9 @@ def stitch_cli(
 
         stitched = process_dataset(stitched, settings.postprocessing)
 
-        stitched_pos = output_store.create_position(well_name[0], well_name[2], "0")
+        stitched_pos = output_store.create_position(
+            temp_pos.split("/")[0], temp_pos.split("/")[1], "0"
+        )
         stitched_pos.create_image(
             "0",
             data=stitched,
