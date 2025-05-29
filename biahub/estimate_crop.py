@@ -1,27 +1,47 @@
 from pathlib import Path
-
 import click
 import dask.array as da
 import numpy as np
-
+import submitit
 from iohub import open_ome_zarr
 from tqdm import tqdm
-
+import pandas as pd
+from biahub.cli.parsing import (
+    config_filepath,
+    local,
+    sbatch_filepath,
+    sbatch_to_submitit,
+)
 from biahub.cli.parsing import config_filepath, output_filepath
-from biahub.cli.utils import model_to_yaml, yaml_to_model
+from biahub.cli.utils import model_to_yaml, yaml_to_model, estimate_resources
 from biahub.register import find_lir
 from biahub.settings import ConcatenateSettings
+import subprocess
+import time
+import shutil
 
+def wait_for_jobs_to_finish(job_ids, sleep_time=60):
+    """Wait for SLURM jobs to finish."""
+    print(f"Waiting for jobs: {', '.join(job_ids)} to finish...")
+    while True:
+        result = subprocess.run(
+            ["squeue", "--job", ",".join(job_ids)], stdout=subprocess.PIPE, text=True
+        )
+        if len(result.stdout.strip().split("\n")) <= 1:  # No jobs found
+            print("All jobs completed.")
+            break
+        else:
+            print("Jobs still running...")
+            time.sleep(sleep_time)  # Wait sleep_time seconds before checking again
 
-def estimate_crop(
-    phase_mask: np.ndarray, fluor_mask: np.ndarray, phase_mask_radius: float = None
-):
+def estimate_crop_one_position(
+    lf_dir: np.ndarray, ls_dir: np.ndarray, lf_mask_radius: float = None, output_dir: Path = None):
     """
     Estimate a crop region where both phase and fluorescene volumes are non-zero.
 
     Parameters
     ----------
-    phase_data : ndarray
+    lf_mask : ndarray
         TCZYX boolean mask of phase data.
     fluor_data : ndarray
         TCZYX boolean mask of fluorescence data.
@@ -29,17 +49,28 @@ def estimate_crop(
         Radius of the circular mask which will be applied to the phase channel. If None, no masking will be applied
 
     """
-    if phase_mask.ndim != 5 or fluor_mask.ndim != 5:
+    fov = "/".join(lf_dir.parts[-3:])
+    
+    click.echo(f"Processing FOV: {fov}")
+    with open_ome_zarr(lf_dir) as lf_dataset:
+        lf_data = lf_dataset.data.dask_array()[:, :1]  # Pick only first channel
+        lf_mask = ((lf_data != 0) & (~da.isnan(lf_data))).compute()
+
+    with open_ome_zarr(ls_dir) as ls_dataset:
+        ls_data = ls_dataset.data.dask_array()[:, :1]
+        ls_mask = ((ls_data != 0) & (~da.isnan(ls_data))).compute()
+            
+    if lf_mask.ndim != 5 or ls_mask.ndim != 5:
         raise ValueError("Both phase_data and fluor_data must be 5D arrays.")
 
     # Ensure data dimensions are the same
-    _max_zyx_dims = np.asarray([phase_mask.shape[-3:], fluor_mask.shape[-3:]]).min(axis=0)
+    _max_zyx_dims = np.asarray([lf_mask.shape[-3:], ls_mask.shape[-3:]]).min(axis=0)
 
     # Concatenate the data arrays along the channel axis
     data = np.concatenate(
         [
-            phase_mask[..., : _max_zyx_dims[0], : _max_zyx_dims[1], : _max_zyx_dims[2]],
-            fluor_mask[..., : _max_zyx_dims[0], : _max_zyx_dims[1], : _max_zyx_dims[2]],
+            lf_mask[..., : _max_zyx_dims[0], : _max_zyx_dims[1], : _max_zyx_dims[2]],
+            ls_mask[..., : _max_zyx_dims[0], : _max_zyx_dims[1], : _max_zyx_dims[2]],
         ],
         axis=1,
     )
@@ -61,18 +92,44 @@ def estimate_crop(
     combined_mask = np.all(valid_data, axis=0)
 
     # Create a circular boolean mask of radius phase_mask_radius to apply to the phase channel
-    if phase_mask_radius is not None:
-        phase_mask = np.zeros(phase_mask.shape[-2:], dtype=bool)
-        y, x = np.ogrid[: phase_mask.shape[-2], : phase_mask.shape[-1]]
-        center = (phase_mask.shape[-2] // 2, phase_mask.shape[-1] // 2)
-        radius = int(phase_mask_radius * min(center))
-        phase_mask[(x - center[0]) ** 2 + (y - center[1]) ** 2 <= radius**2] = True
+    if lf_mask_radius is not None:
+        click.echo(
+            f"Applying circular mask of radius {lf_mask_radius} to phase channel."
+        )
+        if not (0 < lf_mask_radius <= 1):
+            raise ValueError(
+                "lf_mask_radius must be a fraction of image width (0 < lf_mask_radius <= 1)."
+            )
 
-        phase_mask_cropped = phase_mask[: _max_zyx_dims[1], : _max_zyx_dims[2]]
-        combined_mask = combined_mask * phase_mask_cropped
+        lf_mask = np.zeros(lf_mask.shape[-2:], dtype=bool)
+        y, x = np.ogrid[: lf_mask.shape[-2], : lf_mask.shape[-1]]
+        center = (lf_mask.shape[-2] // 2, lf_mask.shape[-1] // 2)
+        radius = int(lf_mask_radius * min(center))
+        lf_mask[(x - center[0]) ** 2 + (y - center[1]) ** 2 <= radius**2] = True
+
+        lf_mask_cropped = lf_mask[: _max_zyx_dims[1], : _max_zyx_dims[2]]
+        combined_mask = combined_mask * lf_mask_cropped
 
     # Compute overlapping region
+    
     z_slice, y_slice, x_slice = find_lir(combined_mask)
+
+    click.echo(
+        f"Estimated crop for FOV {fov}:\n"
+        f"Z: {z_slice.start} - {z_slice.stop}\n"
+        f"Y: {y_slice.start} - {y_slice.stop}\n"
+        f"X: {x_slice.start} - {x_slice.stop}"
+    )
+
+    if output_dir:
+        df = pd.DataFrame([{
+            "fov": fov,
+            "Z": [z_slice.start, z_slice.stop],
+            "Y": [y_slice.start, y_slice.stop],
+            "X": [x_slice.start, x_slice.stop],
+        }])
+        df.to_csv(output_dir / f"{fov.replace('/', '_')}.csv", index=False)
+    
 
     return (
         [z_slice.start, z_slice.stop],
@@ -84,16 +141,20 @@ def estimate_crop(
 @click.command("estimate-crop")
 @config_filepath()
 @output_filepath()
+@sbatch_filepath()
+@local()
 @click.option(
-    "--phase-mask-radius",
+    "--lf-mask-radius",
     type=float,
     help="(Optional) Radius of the circular mask given as fraction of image width to apply to the phase channel.",
     required=False,
 )
 def estimate_crop_cli(
-    config_filepath,
-    output_filepath,
-    phase_mask_radius,
+    config_filepath: str,
+    output_filepath: str,
+    lf_mask_radius: float = 0.95,
+    sbatch_filepath: str = None,
+    local: bool = False,
 ):
     """
     Estimate a crop region where both phase and fluorescene volumes are non-zero.
@@ -109,37 +170,89 @@ def estimate_crop_cli(
         Radius of the circular mask given as fraction of image width to apply to the phase channel.
         A good value if 0.95.
     """
+    if config_filepath.suffix not in [".yml", ".yaml"]:
+        raise ValueError("Config file must be a yaml file")
+    
     config_filepath = Path(config_filepath)
-    input_model = yaml_to_model(config_filepath, ConcatenateSettings)
+    settings = yaml_to_model(config_filepath, ConcatenateSettings)
+    output_dir = Path(output_filepath).parent
+    slurm_out_path = output_dir / "slurm_output"
+    output_path_csv = output_dir / "crop_estimates"
+    output_path_csv.mkdir(exist_ok=True, parents=True)
+
 
     # Assume phase dataset is first and fluor dataset is second in input_model.concat_data_paths
-    _target_paths = config_filepath.parent.glob(input_model.concat_data_paths[0])
-    target_position_dirpaths = [p for p in _target_paths if p.is_dir()]
-    _source_paths = config_filepath.parent.glob(input_model.concat_data_paths[1])
-    source_position_dirpaths = [p for p in _source_paths if p.is_dir()]
+    lf_paths = config_filepath.parent.glob(settings.concat_data_paths[0])
+    lf_position_dirpaths = [p for p in lf_paths if p.is_dir()]
+    ls_paths = config_filepath.parent.glob(settings.concat_data_paths[1])
+    ls_position_dirpaths = [p for p in ls_paths if p.is_dir()]
+    
+    # Estimate resources from a sample
+    with open_ome_zarr(lf_position_dirpaths[0]) as dataset:
+        T, C, Z, Y, X = dataset.data.shape
 
+    num_cpus, gb_ram_per_cpu = estimate_resources(shape=[T, C, Z, Y, X], ram_multiplier=16, max_num_cpus=16)
+    # Prepare SLURM arguments
+    slurm_args = {
+        "slurm_job_name": "estimate_crop",
+        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
+        "slurm_cpus_per_task": num_cpus,
+        "slurm_array_parallelism": 100,  # process up to 100 positions at a time
+        "slurm_time": 30,
+        "slurm_partition": "preempted",
+    }
+
+    # Override defaults if sbatch_filepath is provided
+    if sbatch_filepath:
+        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
+
+    # Run locally or submit to SLURM
+    if local:
+        cluster = "local"
+    else:
+        cluster = "slurm"
+
+    # Prepare and submit jobs
+    click.echo(f"Preparing jobs: {slurm_args}")
+    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
+    executor.update_parameters(**slurm_args)
+
+    click.echo('Submitting SLURM jobs...')
+    jobs = []
+
+    with executor.batch():
+        for ls_dir, lf_dir in zip(ls_position_dirpaths, lf_position_dirpaths):
+            
+            job = executor.submit(
+                estimate_crop_one_position,
+                lf_mask_radius=lf_mask_radius,
+                lf_dir=lf_dir,
+                ls_dir=ls_dir,
+                output_dir = output_path_csv,
+            )
+            jobs.append(job)
+    job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
+
+    # Wait for jobs to finish
+    wait_for_jobs_to_finish(job_ids)
+
+    
+    # Read and merge results
+    estimate_crop_csvs = list(output_path_csv.glob("*.csv"))
+    if not estimate_crop_csvs:
+        click.echo("No crop CSV files found. Exiting.")
+        return
+
+    df = pd.concat([pd.read_csv(f, dtype={"fov": str}) for f in estimate_crop_csvs], ignore_index=True)
+    df = df.drop_duplicates(subset=["fov", "Z", "Y", "X"])
+    df = df.sort_values("fov")
+    df.to_csv(output_dir / "crop_slices.csv", index=False)
+
+    # Compute standardized crop
     all_ranges = []
-    for source_dir, target_dir in tqdm(
-        zip(source_position_dirpaths, target_position_dirpaths),
-        total=len(source_position_dirpaths),
-        desc="Processing directories:",
-    ):
-        # Load data
-        with open_ome_zarr(target_dir) as target:
-            phase_data = target.data.dask_array()[:, :1]  # Pick only first channel
-            phase_mask = (phase_data != 0) & (~da.isnan(phase_data))
+    for _, row in df.iterrows():
+        all_ranges.append([eval(row["Z"]), eval(row["Y"]), eval(row["X"])])
 
-        with open_ome_zarr(source_dir) as source:
-            fluor_data = source.data.dask_array()[:, :1]
-            fluor_mask = (fluor_data != 0) & (~da.isnan(fluor_data))
-
-        # Estimate crop region
-        all_ranges.append(
-            estimate_crop(phase_mask.compute(), fluor_mask.compute(), phase_mask_radius)
-        )
-
-    # Standardize ROI across all positions
-    # TODO: we should be able to use a unique ROI per FOV
     all_ranges = np.array(all_ranges)
     standardized_ranges = np.concatenate(
         [
@@ -148,12 +261,19 @@ def estimate_crop_cli(
         ]
     )
 
-    output_model = input_model.model_copy()
+    click.echo(f"Standardized ranges:\nZ: {standardized_ranges[:, 0].tolist()}\n"
+               f"Y: {standardized_ranges[:, 1].tolist()}\n"
+               f"X: {standardized_ranges[:, 2].tolist()}")
+
+    # Save updated YAML config
+    output_model = settings.model_copy()
     output_model.Z_slice = standardized_ranges[:, 0].tolist()
     output_model.Y_slice = standardized_ranges[:, 1].tolist()
     output_model.X_slice = standardized_ranges[:, 2].tolist()
-
     model_to_yaml(output_model, output_filepath)
+
+    shutil.rmtree(output_path_csv)
+    click.echo("Done.")
 
 
 if __name__ == "__main__":
