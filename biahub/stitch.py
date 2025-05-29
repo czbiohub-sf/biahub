@@ -356,7 +356,7 @@ def stitch_cli(
     if local:
         cluster = "local"
     else:
-        cluster
+        cluster = "slurm"
 
     # Prepare and submit jobs
     click.echo(f"Preparing jobs: {slurm_args}")
