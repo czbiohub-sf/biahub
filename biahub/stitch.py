@@ -1,18 +1,27 @@
 from collections import defaultdict
 from itertools import product
+from pathlib import Path
 from typing import List
 
 import click
 import dask.array as da
 import numpy as np
 import scipy.ndimage
+import submitit
 
 from iohub import open_ome_zarr
 from iohub.ngff import TransformationMeta
-from iohub.ngff.nodes import ImageArray, Plate
+from iohub.ngff.nodes import Plate, Position
 
-from biahub.cli.parsing import config_filepath, input_position_dirpaths, output_dirpath
-from biahub.cli.utils import yaml_to_model
+from biahub.cli.parsing import (
+    config_filepath,
+    input_position_dirpaths,
+    local,
+    output_dirpath,
+    sbatch_filepath,
+    sbatch_to_submitit,
+)
+from biahub.cli.utils import estimate_resources, yaml_to_model
 from biahub.settings import ProcessingSettings, StitchSettings
 
 
@@ -131,7 +140,7 @@ def write_output_chunk(
     channel_idx: int,
     input_plate: Plate,
     input_fov_shape: tuple[int, int, int, int, int],
-    output_array: ImageArray,
+    output_position: Position,
     verbose: bool,
 ):
     # For each output chunk, find the input fovs that contribute to it
@@ -140,6 +149,7 @@ def write_output_chunk(
     chunk_extent = np.array([chunk[dim].stop - chunk[dim].start for dim in range(3)])
 
     idx = (slice(None), channel_idx, *chunk)
+    output_array = output_position["0"]
     array_shape = output_array[idx].shape
     output_chunk = np.zeros(array_shape)
 
@@ -215,6 +225,8 @@ def write_output_chunk(
 @input_position_dirpaths()
 @config_filepath()
 @output_dirpath()
+@sbatch_filepath()
+@local()
 @click.option(
     "--verbose",
     "-v",
@@ -227,6 +239,8 @@ def stitch_cli(
     output_dirpath: str,
     config_filepath: str,
     verbose: bool = False,
+    sbatch_filepath: str = None,
+    local: bool = False,
 ) -> None:
     """
     Stitch FOVs in each well together into a single FOV.
@@ -259,7 +273,8 @@ def stitch_cli(
         well_name = "/".join(key.split("/")[:2])
         shifts_by_well[well_name][key] = value
 
-    # Process each well
+    # Prepare jobs
+    job_args_list = []
     for well_name, fov_shifts in shifts_by_well.items():
         if verbose:
             click.echo(
@@ -284,7 +299,7 @@ def stitch_cli(
             first_fov_name.split("/")[1],
             "0",
         )
-        output_array = output_position.create_zeros(
+        _ = output_position.create_zeros(
             "0",
             shape=output_shape,
             chunks=output_chunk_size,
@@ -298,23 +313,72 @@ def stitch_cli(
             output_chunk_size[2:],
         )
 
-        # This can be parallelized
+        # Append job arguments for each chunk
         for chunk in chunk_list:
             if verbose:
                 click.echo(
-                    f"\tProcessing chunk {chunk_list.index(chunk)+1}/{len(chunk_list)}: {chunk}"
+                    f"\tPreparing job for chunk {chunk_list.index(chunk)+1}/{len(chunk_list)}: {chunk}"
                 )
-            write_output_chunk(
-                chunk,
-                fov_shifts,
-                channel_idx,
-                input_plate,
-                input_fov_shape,
-                output_array,
-                verbose=verbose,
+            job_args_list.append(
+                (
+                    chunk,
+                    fov_shifts,
+                    channel_idx,
+                    input_plate,
+                    input_fov_shape,
+                    output_position,
+                    verbose,
+                )
             )
 
-    return
+    # Prepare for SLURM submission
+
+    # Estimate resources
+    num_cpus, gb_ram = estimate_resources(
+        shape=input_fov_shape, ram_multiplier=8, max_num_cpus=16
+    )
+
+    # Prepare SLURM arguments
+    slurm_args = {
+        "slurm_job_name": "stitch",
+        "slurm_mem_per_cpu": f"{gb_ram}G",
+        "slurm_cpus_per_task": num_cpus,
+        "slurm_array_parallelism": 100,  # process up to 100 output chunks at a time
+        "slurm_time": 60,
+        "slurm_partition": "preempted",
+    }
+
+    # Override defaults if sbatch_filepath is provided
+    if sbatch_filepath:
+        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
+
+    # Run locally or submit to SLURM
+    if local:
+        cluster = "local"
+    else:
+        cluster
+
+    # Prepare and submit jobs
+    click.echo(f"Preparing jobs: {slurm_args}")
+    slurm_out_path = output_dirpath.parent / "slurm_output"
+    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
+    executor.update_parameters(**slurm_args)
+
+    jobs = []
+    with executor.batch():
+        for job_args in job_args_list:
+            jobs.append(
+                executor.submit(
+                    write_output_chunk,
+                    *job_args,
+                )
+            )
+
+    job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
+
+    log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
+    with log_path.open("w") as log_file:
+        log_file.write("\n".join(job_ids))
 
 
 if __name__ == '__main__':
