@@ -8,7 +8,7 @@ from iohub import open_ome_zarr
 
 from biahub.cli.parsing import input_position_dirpaths, output_filepath
 from biahub.cli.utils import model_to_yaml
-from biahub.settings import ProcessingSettings, StitchSettings
+from biahub.settings import StitchSettings
 
 
 def extract_stage_position(plate_dataset, position_name):
@@ -51,18 +51,13 @@ def extract_stage_position(plate_dataset, position_name):
 @output_filepath()
 @click.option("--fliplr", is_flag=True, help="Flip images left-right before stitching")
 @click.option("--flipud", is_flag=True, help="Flip images up-down before stitching")
-@click.option(
-    "--rot90",
-    default=0,
-    type=int,
-    help="rotate the images 90 counterclockwise n times before stitching",
-)
+@click.option("--flipxy", is_flag=True, help="Flip images along the diagonal before stitching")
 def estimate_stitch_cli(
     input_position_dirpaths: list[Path],
     output_filepath: str,
     fliplr: bool,
     flipud: bool,
-    rot90: int,
+    flipxy: bool,
 ):
     """
     Estimate stitching parameters for positions in wells of a zarr store.
@@ -116,12 +111,12 @@ def estimate_stitch_cli(
         # Scale to pixel coordinates
         zyx_well_array /= open_ome_zarr(input_position_dirpaths[0]).scale[2:]
 
-        # Flip and rotate
+        # Flip coordinates
         if fliplr:
             zyx_well_array[:, 2] *= -1
         if flipud:
             zyx_well_array[:, 1] *= -1
-        if rot90:
+        if flipxy:
             zyx_well_array[:, [1, 2]] = zyx_well_array[:, [2, 1]]
 
         # Shift all columns so that the minimum value in each column is zero
@@ -134,8 +129,6 @@ def estimate_stitch_cli(
     # Validate and save
     settings = StitchSettings(
         channels=None,
-        preprocessing=ProcessingSettings(),
-        postprocessing=ProcessingSettings(),
         total_translation=final_translation_dict,
     )
     model_to_yaml(settings, output_filepath)

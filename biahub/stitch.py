@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import List
 
 import click
-import dask.array as da
 import numpy as np
 import scipy.ndimage
 import submitit
@@ -22,7 +21,7 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.cli.utils import estimate_resources, yaml_to_model
-from biahub.settings import ProcessingSettings, StitchSettings
+from biahub.settings import StitchSettings
 
 
 def list_of_nd_slices_from_array_shape(
@@ -88,36 +87,6 @@ def find_contributing_fovs(chunk, fov_shifts, fov_extent):
         if check_overlap(chunk, fov_shift, fov_extent):
             contributing_fovs.append(fov_key)
     return contributing_fovs
-
-
-def process_dataset(
-    data_array: np.ndarray | da.Array,
-    settings: ProcessingSettings,
-    verbose: bool = True,
-) -> np.ndarray:
-    flip = np.flip
-    rot = np.rot90
-    if isinstance(data_array, da.Array):
-        flip = da.flip
-        rot = da.rot90
-
-    if settings:
-        if settings.flipud:
-            if verbose:
-                click.echo("Flipping data array up-down")
-            data_array = flip(data_array, axis=-2)
-
-        if settings.fliplr:
-            if verbose:
-                click.echo("Flipping data array left-right")
-            data_array = flip(data_array, axis=-1)
-
-        if settings.rot90 != 0:
-            if verbose:
-                click.echo(f"Rotating data array {settings.rot90} times counterclockwise")
-            data_array = rot(data_array, settings.rot90, axes=(-2, -1))
-
-    return data_array
 
 
 def get_output_shape(shifts: dict, tile_shape: tuple) -> tuple:
