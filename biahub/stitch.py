@@ -9,6 +9,7 @@ import scipy.ndimage
 
 from iohub import open_ome_zarr
 from iohub.ngff import TransformationMeta
+from iohub.ngff.nodes import ImageArray, Plate
 
 from biahub.cli.parsing import config_filepath, input_position_dirpaths, output_dirpath
 from biahub.cli.utils import yaml_to_model
@@ -124,6 +125,92 @@ def get_output_shape(shifts: dict, tile_shape: tuple) -> tuple:
     return max_z + tile_shape[-3], max_y + tile_shape[-2], max_x + tile_shape[-1]
 
 
+def write_output_chunk(
+    chunk: tuple[slice, slice, slice],
+    fov_shifts: dict,
+    channel_idx: int,
+    input_plate: Plate,
+    input_fov_shape: tuple[int, int, int, int, int],
+    output_array: ImageArray,
+    verbose: bool,
+):
+    # For each output chunk, find the input fovs that contribute to it
+    contributing_fov_names = find_contributing_fovs(chunk, fov_shifts, input_fov_shape[-3:])
+    chunk_corner = np.array([chunk[dim].start for dim in range(3)])
+    chunk_extent = np.array([chunk[dim].stop - chunk[dim].start for dim in range(3)])
+
+    idx = (slice(None), channel_idx, *chunk)
+    array_shape = output_array[idx].shape
+    output_chunk = np.zeros(array_shape)
+
+    fixed_slices = []
+    moving_slices = []
+
+    # Compute overlap slices
+    for fov_name in contributing_fov_names:
+        fov_corner = np.array([fov_shifts[fov_name][d] for d in range(3)])
+        fov_extent = np.array([input_fov_shape[d + 2] for d in range(3)])
+        fixed_slice, moving_slice = overlap_slices(
+            chunk_corner, chunk_extent, fov_corner, fov_extent
+        )
+        if fixed_slice is None or moving_slice is None:
+            continue
+        else:
+            fixed_slices.append(fixed_slice)
+            moving_slices.append(moving_slice)
+
+    # Build distance maps (this will need to change for 3D)
+    temp = np.zeros(fov_extent)
+    temp[:, 1:-1, 1:-1] = 1
+    mask = temp != 0
+
+    centered_distance_map_2d = scipy.ndimage.distance_transform_edt(mask[0])
+    centered_distance_map = np.tile(
+        centered_distance_map_2d[None, :, :], (output_chunk.shape[-3], 1, 1)
+    )
+
+    # Build distance maps
+    distance_maps = np.zeros((len(contributing_fov_names),) + output_chunk.shape[-3:])
+    for i, (fixed_slice, moving_slice) in enumerate(zip(fixed_slices, moving_slices)):
+        if verbose:
+            click.echo(f"\t\tComputing distance map for {contributing_fov_names[i]}")
+        fixed_idx = (i, *fixed_slice)  # needed for black formatting
+        tmp_moving_idx = (*moving_slice,)  # needed for black formatting
+        distance_maps[fixed_idx] = centered_distance_map[tmp_moving_idx]
+
+    # Build weight maps
+    if verbose:
+        click.echo("\t\tBuilding weight maps")
+    k = 1
+    w = np.power(distance_maps, k, where=(distance_maps > 0))
+    sum_w = np.sum(w, axis=0, keepdims=True)
+    weight_maps = w / (sum_w + 1e-8)
+
+    # Apply weights to each fov
+    for i, (fov_name, fixed_slice, moving_slice) in enumerate(
+        zip(contributing_fov_names, fixed_slices, moving_slices)
+    ):
+        if verbose:
+            click.echo(f"\t\tApplying weight maps to {fov_name}")
+        # Get the fov data
+        fov_data = input_plate[fov_name].data
+
+        # Apply weights to the fov data
+        moving_idx = (slice(None), channel_idx, *moving_slice)
+        fixed_idx = (i, *fixed_slice)
+        temp = fov_data[moving_idx] * weight_maps[fixed_idx]
+
+        # Add to the output chunk
+        idx = (slice(None), channel_idx, *fixed_slice)
+        output_chunk[idx] += temp
+
+    # Write chunk to output array
+    if verbose:
+        click.echo(f"\t\tWriting chunk to output array: {chunk}")
+    idx = (slice(None), channel_idx, *chunk)
+    output_array[idx] = output_chunk
+
+
 @click.command("stitch")
 @input_position_dirpaths()
 @config_filepath()
@@ -211,89 +298,21 @@ def stitch_cli(
             output_chunk_size[2:],
         )
 
+        # This can be parallelized
         for chunk in chunk_list:
             if verbose:
                 click.echo(
                     f"\tProcessing chunk {chunk_list.index(chunk)+1}/{len(chunk_list)}: {chunk}"
                 )
-
-            # For each output chunk, find the input fovs that contribute to it
-            contributing_fov_names = find_contributing_fovs(
-                chunk, fov_shifts, input_fov_shape[-3:]
+            write_output_chunk(
+                chunk,
+                fov_shifts,
+                channel_idx,
+                input_plate,
+                input_fov_shape,
+                output_array,
+                verbose=verbose,
             )
-            chunk_corner = np.array([chunk[dim].start for dim in range(3)])
-            chunk_extent = np.array([chunk[dim].stop - chunk[dim].start for dim in range(3)])
-
-            idx = (slice(None), channel_idx, *chunk)
-            array_shape = output_array[idx].shape
-            output_chunk = np.zeros(array_shape)
-
-            fixed_slices = []
-            moving_slices = []
-
-            # Compute overlap slices
-            for fov_name in contributing_fov_names:
-                fov_corner = np.array([fov_shifts[fov_name][d] for d in range(3)])
-                fov_extent = np.array([input_fov_shape[d + 2] for d in range(3)])
-                fixed_slice, moving_slice = overlap_slices(
-                    chunk_corner, chunk_extent, fov_corner, fov_extent
-                )
-                if fixed_slice is None or moving_slice is None:
-                    continue
-                else:
-                    fixed_slices.append(fixed_slice)
-                    moving_slices.append(moving_slice)
-
-            # Build distance maps (this will need to change for 3D)
-            temp = np.zeros(fov_extent)
-            temp[:, 1:-1, 1:-1] = 1
-            mask = temp != 0
-
-            centered_distance_map_2d = scipy.ndimage.distance_transform_edt(mask[0])
-            centered_distance_map = np.tile(
-                centered_distance_map_2d[None, :, :], (output_chunk.shape[-3], 1, 1)
-            )
-
-            # Build distance maps
-            distance_maps = np.zeros((len(contributing_fov_names),) + output_chunk.shape[-3:])
-            for i, (fixed_slice, moving_slice) in enumerate(zip(fixed_slices, moving_slices)):
-                if verbose:
-                    click.echo(f"\t\tComputing distance map for {contributing_fov_names[i]}")
-                fixed_idx = (i, *fixed_slice)  # needed for black formatting
-                tmp_moving_idx = (*moving_slice,)  # needed for black formatting
-                distance_maps[fixed_idx] = centered_distance_map[tmp_moving_idx]
-
-            # Build weight maps
-            if verbose:
-                click.echo("\t\tBuilding weight maps")
-            k = 1
-            w = np.power(distance_maps, k, where=(distance_maps > 0))
-            sum_w = np.sum(w, axis=0, keepdims=True)
-            weight_maps = w / (sum_w + 1e-8)
-
-            # Apply weights to each fov
-            for i, (fov_name, fixed_slice, moving_slice) in enumerate(
-                zip(contributing_fov_names, fixed_slices, moving_slices)
-            ):
-                if verbose:
-                    click.echo(f"\t\tApplying weight maps to {fov_name}")
-                # Get the fov data
-                fov_data = input_plate[fov_name].data
-
-                # Apply weights to the fov data
-                moving_idx = (slice(None), channel_idx, *moving_slice)
-                fixed_idx = (i, *fixed_slice)
-                temp = fov_data[moving_idx] * weight_maps[fixed_idx]
-
-                # Add to the output chunk
-                idx = (slice(None), channel_idx, *fixed_slice)
-                output_chunk[idx] += temp
-
-            # Write chunk to output array
-            if verbose:
-                click.echo(f"\t\tWriting chunk to output array: {chunk}")
-            idx = (slice(None), channel_idx, *chunk)
-            output_array[idx] = output_chunk
 
     return
 
