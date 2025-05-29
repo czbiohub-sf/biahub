@@ -9,7 +9,6 @@ import scipy.ndimage
 
 from iohub import open_ome_zarr
 from iohub.ngff import TransformationMeta
-from tqdm import tqdm
 
 from biahub.cli.parsing import config_filepath, input_position_dirpaths, output_dirpath
 from biahub.cli.utils import yaml_to_model
@@ -129,12 +128,27 @@ def get_output_shape(shifts: dict, tile_shape: tuple) -> tuple:
 @input_position_dirpaths()
 @config_filepath()
 @output_dirpath()
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    type=bool,
+    help="Verbose stitching output. Default is False.",
+)
 def stitch_cli(
     input_position_dirpaths: List[str],
     output_dirpath: str,
     config_filepath: str,
+    verbose: bool = False,
 ) -> None:
+    """
+    Stitch FOVs in each well together into a single FOV.
+    Uses shift from configuration file generated with `biahub estimate-stitch`.
 
+    >> biahub stitch -i ./input.zarr/*/*/* -c ./config.yaml -o ./output.zarr
+    """
+
+    click.echo("Starting stitching...")
     settings = yaml_to_model(config_filepath, StitchSettings)
     input_plate = open_ome_zarr(input_position_dirpaths[0].parents[2], mode="r")
     all_shifts = settings.total_translation
@@ -160,6 +174,10 @@ def stitch_cli(
 
     # Process each well
     for well_name, fov_shifts in shifts_by_well.items():
+        if verbose:
+            click.echo(
+                f"Processing well {list(shifts_by_well.keys()).index(well_name)+1}/{len(shifts_by_well)}: {well_name}"
+            )
         first_fov_name = list(shifts_by_well[well_name].keys())[0]
         input_fov_shape = input_plate[first_fov_name].data.shape
         output_chunk_size = input_plate[first_fov_name].data.chunks
@@ -193,7 +211,11 @@ def stitch_cli(
             output_chunk_size[2:],
         )
 
-        for chunk in tqdm(chunk_list, desc=f"Processing chunks for well {well_name}"):
+        for chunk in chunk_list:
+            if verbose:
+                click.echo(
+                    f"\tProcessing chunk {chunk_list.index(chunk)+1}/{len(chunk_list)}: {chunk}"
+                )
 
             # For each output chunk, find the input fovs that contribute to it
             contributing_fov_names = find_contributing_fovs(
@@ -235,12 +257,15 @@ def stitch_cli(
             # Build distance maps
             distance_maps = np.zeros((len(contributing_fov_names),) + output_chunk.shape[-3:])
             for i, (fixed_slice, moving_slice) in enumerate(zip(fixed_slices, moving_slices)):
-                print(f"Computing distance map for {contributing_fov_names[i]}")
+                if verbose:
+                    click.echo(f"\t\tComputing distance map for {contributing_fov_names[i]}")
                 fixed_idx = (i, *fixed_slice)  # needed for black formatting
                 tmp_moving_idx = (*moving_slice,)  # needed for black formatting
                 distance_maps[fixed_idx] = centered_distance_map[tmp_moving_idx]
 
             # Build weight maps
+            if verbose:
+                click.echo("\t\tBuilding weight maps")
             k = 1
             w = np.power(distance_maps, k, where=(distance_maps > 0))
             sum_w = np.sum(w, axis=0, keepdims=True)
@@ -250,7 +275,8 @@ def stitch_cli(
             for i, (fov_name, fixed_slice, moving_slice) in enumerate(
                 zip(contributing_fov_names, fixed_slices, moving_slices)
             ):
-                print(f"Reading and summing {fov_name}")
+                if verbose:
+                    click.echo(f"\t\tApplying weight maps to {fov_name}")
                 # Get the fov data
                 fov_data = input_plate[fov_name].data
 
@@ -264,7 +290,8 @@ def stitch_cli(
                 output_chunk[idx] += temp
 
             # Write chunk to output array
-            print("Writing chunk to output array")
+            if verbose:
+                click.echo(f"\t\tWriting chunk to output array: {chunk}")
             idx = (slice(None), channel_idx, *chunk)
             output_array[idx] = output_chunk
 
