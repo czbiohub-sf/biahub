@@ -116,6 +116,17 @@ def estimate_stitch_cli(
         # Scale to pixel coordinates
         zyx_well_array /= open_ome_zarr(input_position_dirpaths[0]).scale[2:]
 
+        # Flip and rotate
+        if fliplr:
+            zyx_well_array[:, 2] *= -1
+        if flipud:
+            zyx_well_array[:, 1] *= -1
+        if rot90:
+            zyx_well_array[:, [1, 2]] = zyx_well_array[:, [2, 1]]
+
+        # Shift all columns so that the minimum value in each column is zero
+        zyx_well_array -= np.minimum(zyx_well_array.min(axis=0), 0)
+
         # Write back into flat dictionary
         for i, fov_name in enumerate(grouped_wells[key].keys()):
             final_translation_dict[fov_name] = list(np.round(zyx_well_array[i], 2))
@@ -123,7 +134,7 @@ def estimate_stitch_cli(
     # Validate and save
     settings = StitchSettings(
         channels=None,
-        preprocessing=ProcessingSettings(fliplr=fliplr, flipud=flipud, rot90=rot90),
+        preprocessing=ProcessingSettings(),
         postprocessing=ProcessingSettings(),
         total_translation=final_translation_dict,
     )
