@@ -142,6 +142,7 @@ def write_output_chunk(
     input_fov_shape: tuple[int, int, int, int, int],
     output_position: Position,
     verbose: bool,
+    blending_exponent: float = 1.0,
 ):
     # For each output chunk, find the input fovs that contribute to it
     contributing_fov_names = find_contributing_fovs(chunk, fov_shifts, input_fov_shape[-3:])
@@ -191,8 +192,7 @@ def write_output_chunk(
     # Build weight maps
     if verbose:
         click.echo("\t\tBuilding weight maps")
-    k = 1
-    w = np.power(distance_maps, k, where=(distance_maps > 0))
+    w = np.power(distance_maps, blending_exponent, where=(distance_maps > 0))
     sum_w = np.sum(w, axis=0, keepdims=True)
     weight_maps = w / (sum_w + 1e-8)
 
@@ -234,6 +234,13 @@ def write_output_chunk(
     type=bool,
     help="Verbose stitching output. Default is False.",
 )
+@click.option(
+    "--blending-exponent",
+    "-b",
+    type=float,
+    default=1.0,
+    help="Exponent for blending weights. 0.0 is average blending, 1.0 is linear blending, and >1.0 is progressively sharper S-curve blending.",
+)
 def stitch_cli(
     input_position_dirpaths: List[str],
     output_dirpath: str,
@@ -241,6 +248,7 @@ def stitch_cli(
     verbose: bool = False,
     sbatch_filepath: str = None,
     local: bool = False,
+    blending_exponent: float = 1.0,
 ) -> None:
     """
     Stitch FOVs in each well together into a single FOV.
@@ -328,6 +336,7 @@ def stitch_cli(
                     input_fov_shape,
                     output_position,
                     verbose,
+                    blending_exponent,
                 )
             )
 
