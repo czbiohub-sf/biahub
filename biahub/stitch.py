@@ -280,7 +280,7 @@ def stitch_cli(
             "0",
             shape=output_shape,
             chunks=output_chunk_size,
-            dtype=np.float32,
+            dtype=np.float16,
             transform=[TransformationMeta(type="scale", scale=output_scale)],
         )
 
