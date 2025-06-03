@@ -3,6 +3,8 @@ import inspect
 import io
 import itertools
 import multiprocessing as mp
+import subprocess
+import time
 
 from functools import partial
 from pathlib import Path
@@ -17,6 +19,7 @@ from iohub.ngff.models import TransformationMeta
 from numpy.typing import DTypeLike
 from tqdm import tqdm
 
+
 def wait_for_jobs_to_finish(job_ids, sleep_time=60):
     """Wait for SLURM jobs to finish."""
     print(f"Waiting for jobs: {', '.join(job_ids)} to finish...")
@@ -30,6 +33,7 @@ def wait_for_jobs_to_finish(job_ids, sleep_time=60):
         else:
             print("Jobs still running...")
             time.sleep(sleep_time)  # Wait sleep_time seconds before checking again
+
 
 # TODO: replace this with recOrder recOrder.cli.utils.create_empty_hcs()
 def create_empty_zarr(
