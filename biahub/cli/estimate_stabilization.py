@@ -368,7 +368,7 @@ def estimate_xyz_stabilization_pcc(
     input_data_paths: list[Path],
     output_folder_path: Path,
     c_idx: int = 0,
-    crop_size_xy: list[int] = (400, 400),
+    crop_size_xy: list[int] = (800, 800),
     t_reference: str = "first",
     sbatch_filepath: Path = None,
     cluster: str = "local",
@@ -437,7 +437,7 @@ def estimate_xyz_stabilization_pcc(
     if verbose:
         np.save(output_folder_path / "xyz_stabilization_pcc.npy", averaged_transforms)
 
-    return averaged_transforms
+    return averaged_transforms.tolist()
 
 
 def estimate_xyz_stabilization_with_beads(
@@ -530,11 +530,11 @@ def estimate_xyz_stabilization_with_beads(
                 source_channel_tzyx=channel_tzyx,
                 target_channel_tzyx=target_channel_tzyx,
                 verbose=verbose,
-                source_block_size=[32, 16, 16],
+                source_block_size=[8, 8, 8],
                 source_threshold_abs=0.8,
                 source_nms_distance=16,
                 source_min_distance=0,
-                target_block_size=[32, 16, 16],
+                target_block_size=[8, 8, 8],
                 target_threshold_abs=0.8,
                 target_nms_distance=16,
                 target_min_distance=0,
