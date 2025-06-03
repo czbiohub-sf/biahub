@@ -17,6 +17,19 @@ from iohub.ngff.models import TransformationMeta
 from numpy.typing import DTypeLike
 from tqdm import tqdm
 
+def wait_for_jobs_to_finish(job_ids, sleep_time=60):
+    """Wait for SLURM jobs to finish."""
+    print(f"Waiting for jobs: {', '.join(job_ids)} to finish...")
+    while True:
+        result = subprocess.run(
+            ["squeue", "--job", ",".join(job_ids)], stdout=subprocess.PIPE, text=True
+        )
+        if len(result.stdout.strip().split("\n")) <= 1:  # No jobs found
+            print("All jobs completed.")
+            break
+        else:
+            print("Jobs still running...")
+            time.sleep(sleep_time)  # Wait sleep_time seconds before checking again
 
 # TODO: replace this with recOrder recOrder.cli.utils.create_empty_hcs()
 def create_empty_zarr(
