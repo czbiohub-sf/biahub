@@ -471,6 +471,142 @@ def estimate_xy_stabilization(
     
     return fov_transforms
 
+
+def estimate_xyz_stabilization_with_beads(
+    channel_tzyx: da.Array,
+    t_reference: str = "first",
+    match_algorithm: str = 'hungarian',
+    match_filter_angle_threshold: float = 0,
+    transform_type: str = 'euclidean',
+    xy: bool = False,
+    verbose: bool = False,
+    cluster: str = "local",
+    sbatch_filepath: Optional[Path] = None,
+    output_folder_path: Path = None,
+):
+    """
+    Perform beads-based temporal registration of 4D data using affine transformations.
+
+    This function calculates timepoint-specific affine transformations to align a source channel
+    to a target channel in 4D (T, Z, Y, X) data. It validates, smooths, and interpolates transformations
+    across timepoints for consistent registration.
+
+    Parameters:
+    - channel_tzyx (da.Array): 4D array (T, Z, Y, X) of the source channel (Dask array).
+    - approx_tform (list): Initial approximate affine transform (4x4 matrix) for guiding registration.
+    - num_processes (int): Number of parallel processes for transformation computation.
+    - window_size (int): Size of the moving window for smoothing transformations.
+    - tolerance (float): Maximum allowed difference between consecutive transformations for validation.
+    - angle_threshold (int): Threshold for filtering outliers in detected bead matches (in degrees).
+    - verbose (bool): If True, prints detailed logs of the registration process.
+
+    Returns:
+    - transforms (list): List of affine transformation matrices (4x4), one for each timepoint.
+                         Invalid or missing transformations are interpolated.
+
+    Notes:
+    - Each timepoint is processed in parallel using a multiprocessing pool.
+    - Transformations are smoothed with a moving average window and validated against a reference.
+    - Missing transformations are interpolated linearly across timepoints.
+    - Use verbose=True for detailed logging during registration.
+    """
+
+    (T, Z, Y, X) = channel_tzyx.shape
+
+    approx_tform = np.eye(4)
+
+    if t_reference == "first":
+        target_channel_tzyx = np.broadcast_to(channel_tzyx[0], (T, Z, Y, X)).copy()
+    elif t_reference == "previous":
+        target_channel_tzyx = np.roll(channel_tzyx, shift=-1, axis=0)
+        target_channel_tzyx[0] = channel_tzyx[0]
+
+    else:
+        raise ValueError("Invalid reference. Please use 'first' or 'previous as reference")
+
+    # Compute transformations in parallel
+
+    num_cpus, gb_ram_per_cpu = estimate_resources(shape=(T,1,Z,Y,X), ram_multiplier=5, max_num_cpus=16)
+
+    # Prepare SLURM arguments
+    slurm_args = {
+        "slurm_job_name": "estimate_focus_z",
+        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
+        "slurm_cpus_per_task": num_cpus,
+        "slurm_array_parallelism": 100,
+        "slurm_time": 5,
+        "slurm_partition": "preempted",
+    }
+
+    if sbatch_filepath:
+        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
+
+    output_folder_path.mkdir(parents=True, exist_ok=True)
+    slurm_out_path = output_folder_path / "slurm_output"
+    slurm_out_path.mkdir(parents=True, exist_ok=True)
+
+    # Submitit executor
+    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
+    executor.update_parameters(**slurm_args)
+
+    click.echo(f"Submitting SLURM focus estimation jobs with resources: {slurm_args}")
+    output_transforms_path = output_folder_path / "xyz_transforms"
+    output_transforms_path.mkdir(parents=True, exist_ok=True)
+
+    # Submit jobs
+    jobs = []
+    with executor.batch():
+        for t in range(1, T, 1):
+            job = executor.submit(_get_tform_from_beads,
+                approx_tform=approx_tform,
+                source_channel_tzyx=channel_tzyx,
+                target_channel_tzyx=target_channel_tzyx,
+                verbose=verbose,
+                source_block_size=[8, 8, 8],
+                source_threshold_abs=0.8,
+                source_nms_distance=16,
+                source_min_distance=0,
+                target_block_size=[8, 8, 8],
+                target_threshold_abs=0.8,
+                target_nms_distance=16,
+                target_min_distance=0,
+                match_filter_angle_threshold=match_filter_angle_threshold,
+                match_algorithm=match_algorithm,
+                transform_type=transform_type,
+                slurm = True,
+                output_folder_path=output_transforms_path,
+                t_idx=t)
+            jobs.append(job)
+
+    # Save job IDs
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_path = slurm_out_path / f"job_ids_{timestamp}.log"
+    with open(log_path, "w") as log_file:
+        for job in jobs:
+            log_file.write(f"{job.job_id}\n")
+    # Wait for all jobs to finish
+    job_ids = [str(j.job_id) for j in jobs]
+    wait_for_jobs_to_finish(job_ids)
+    # Get list of .npy transform files
+    # Load and collect all transform arrays
+    transforms = [np.eye(4).tolist()]
+    for t in range(1, T):
+        file_path = output_transforms_path/f"{t}.npy"
+        if not os.path.exists(file_path):
+            transforms.append(None)
+            click.echo(f"Transform for timepoint {t} not found. Using None.")
+        else:
+            T_zyx_shift = np.load(file_path).tolist()
+            transforms.append(T_zyx_shift)
+
+    # check if len(transforms) == T
+    if len(transforms) != T:
+        raise ValueError(
+            f"Number of transforms {len(transforms)} does not match number of timepoints {T}"
+        )
+    
+    return transforms
+
 @click.command("estimate-stabilization")
 @input_position_dirpaths()
 @output_filepath()
@@ -825,7 +961,74 @@ def estimate_stabilization_cli(
         elif stabilization_method == "phase-cross-corr":
             pass
         elif stabilization_method == "match_peaks":
-            pass
+            click.echo("Estimating xyz stabilization parameters with beads")
+            with open_ome_zarr(input_position_dirpaths[0], mode="r") as beads_position:
+                source_channels = beads_position.channel_names
+                source_channel_index = source_channels.index(estimate_stabilization_channel)
+                channel_tzyx = beads_position.data.dask_array()[:, source_channel_index]
+
+            transforms = estimate_xyz_stabilization_with_beads(
+                channel_tzyx=channel_tzyx,
+                t_reference=settings.t_reference,
+                match_algorithm=settings.match_algorithm,
+                match_filter_angle_threshold=settings.match_filter_angle_threshold,
+                transform_type=settings.affine_transform_type,
+                verbose=verbose,
+                output_folder_path=output_dirpath,
+                cluster=cluster,
+                sbatch_filepath=sbatch_filepath,
+
+            )
+
+             # Validate and filter transforms
+            transforms = _validate_transforms(
+                transforms=transforms,
+                window_size=settings.affine_transform_validation_window_size,
+                tolerance=settings.affine_transform_validation_tolerance,
+                Z=Z,
+                Y=Y,
+                X=X,
+                verbose=verbose,
+            )
+            # Interpolate missing transforms
+            transforms = _interpolate_transforms(
+                transforms=transforms,
+                window_size=settings.affine_transform_interpolation_window_size,
+                interpolation_type=settings.affine_transform_interpolation_type,
+                verbose=verbose,
+            )
+            # Save the combined matrices
+            model = StabilizationSettings(
+                stabilization_type=stabilization_type,
+                stabilization_method=stabilization_method,
+                stabilization_estimation_channel=estimate_stabilization_channel,
+                stabilization_channels=settings.stabilization_channels,
+                affine_transform_zyx_list=transforms,
+                time_indices="all",
+                output_voxel_size=voxel_size,
+            )
+            model_to_yaml(model, output_dirpath / "xyz_stabilization_settings.yml")
+
+            if verbose:
+                os.makedirs(output_dirpath / "translation_plots", exist_ok=True)
+                transforms = np.array(transforms)
+
+                z_transforms = transforms[:, 0, 3] #->ZYX
+                y_transforms = transforms[:, 1, 3] #->ZYX
+                x_transforms = transforms[:, 2, 3] #->ZYX
+
+                plt.plot(z_transforms)
+                plt.plot(x_transforms)
+                plt.plot(y_transforms)
+                plt.legend(["Z-Translation", "X-Translation", "Y-Translation"])
+                plt.xlabel("Timepoint")
+                plt.ylabel("Translations")
+                plt.title("Translations Over Time")
+                plt.grid()
+                # Save the figure
+                plt.savefig(output_dirpath/"translation_plots"/f"beads.png", dpi=300, bbox_inches='tight')
+                plt.close()
+
         else:
             raise ValueError(f"Invalid stabilization method: {stabilization_method}")
     else:
