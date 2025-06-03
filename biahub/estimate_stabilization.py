@@ -464,7 +464,7 @@ def estimate_xyz_stabilization_with_beads(
     match_algorithm: str = 'hungarian',
     match_filter_angle_threshold: float = 0,
     transform_type: str = 'euclidean',
-    xy: bool = False,
+    beads_channel: Literal["LS", "LF"] = "LF",
     verbose: bool = False,
     cluster: str = "local",
     sbatch_filepath: Optional[Path] = None,
@@ -540,6 +540,11 @@ def estimate_xyz_stabilization_with_beads(
     click.echo(f"Submitting SLURM focus estimation jobs with resources: {slurm_args}")
     output_transforms_path = output_folder_path / "xyz_transforms"
     output_transforms_path.mkdir(parents=True, exist_ok=True)
+    
+    if beads_channel == "LF":
+        threshold_abs = 0.8
+    else:
+        threshold_abs = 110
 
     # Submit jobs
     jobs = []
@@ -552,11 +557,11 @@ def estimate_xyz_stabilization_with_beads(
                 target_channel_tzyx=target_channel_tzyx,
                 verbose=verbose,
                 source_block_size=[8, 8, 8],
-                source_threshold_abs=0.8,
+                source_threshold_abs=threshold_abs,
                 source_nms_distance=16,
                 source_min_distance=0,
                 target_block_size=[8, 8, 8],
-                target_threshold_abs=0.8,
+                target_threshold_abs=threshold_abs,
                 target_nms_distance=16,
                 target_min_distance=0,
                 match_filter_angle_threshold=match_filter_angle_threshold,
@@ -937,6 +942,7 @@ def estimate_stabilization_cli(
     stabilization_method = settings.stabilization_method
     skip_beads_fov = settings.skip_beads_fov
     average_across_wells = settings.average_across_wells
+    
 
     if skip_beads_fov != '0':
         # Remove the beads FOV from the input data paths
@@ -1314,6 +1320,7 @@ def estimate_stabilization_cli(
                 output_folder_path=output_dirpath,
                 cluster=cluster,
                 sbatch_filepath=sbatch_filepath,
+                beads_channel=beads_channel,
             )
 
             # Validate and filter transforms
