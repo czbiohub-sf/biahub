@@ -12,15 +12,17 @@ from skimage import exposure, filters
 from biahub.cli.utils import model_to_yaml, yaml_to_model
 from biahub.analysis.AnalysisSettings import StabilizationSettings
 
-# os.environ['DISPLAY'] = ':1'
+os.environ['DISPLAY'] = ':1'
 
 # %%
-dataset = "2025_04_17_A549_H2B_CAAX_DENV"
-fov = "B/1/001001"
-root = Path("/hpc/projects/intracellular_dashboard/organelle_dynamics/rerun/") / dataset
-source_path = root / f"1-preprocess/light-sheet/raw/1-stabilize-z/{dataset}.zarr/" / fov
+dataset = "2025_05_01_A549_DENV_sensor_DENV"
+fov = "B/2/001001"
+root = Path("/hpc/projects/intracellular_dashboard/viral-sensor") / dataset
+source_path = root / f"1-preprocess/light-sheet/raw/0-deskew/{dataset}.zarr/" / fov
 target_path = root / f"1-preprocess/label-free/2-stabilize/phase/{dataset}.zarr/" / fov
-registration_settings_path = root / "1-preprocess/light-sheet/raw/2-register/estimate-registration-ants.yml"
+registration_settings_path = (
+    root / "1-preprocess/light-sheet/raw/1-register/estimate-registration-beads.yml"
+)
 
 # source_channel = "Cy5 EX639 EM698-70"
 # target_chahnel = "nuclei_prediction"
@@ -44,7 +46,6 @@ with open(registration_settings_path, mode='r') as fp:
 print("Loading data...")
 with open_ome_zarr(source_path) as source:
     data_source_0 = source.data[t_idx, 0]
-    data_source_1 = source.data[t_idx, 1]
 
 with open_ome_zarr(target_path) as target:
     target_channel_idx = target.channel_names.index(target_chahnel)
@@ -53,14 +54,11 @@ with open_ome_zarr(target_path) as target:
 # %%
 print("Transforming data")
 source_ants_0 = ants.from_numpy(data_source_0)
-source_ants_1 = ants.from_numpy(data_source_1)
 target_ants = ants.from_numpy(data_target)
 
 tform_ants = convert_transform_to_ants(approx_tform)
 source_pre_opt_ants_0 = tform_ants.apply_to_image(source_ants_0, reference=target_ants)
-source_pre_opt_ants_1 = tform_ants.apply_to_image(source_ants_1, reference=target_ants)
 source_pre_opt_0 = source_pre_opt_ants_0.numpy()
-source_pre_opt_1 = source_pre_opt_ants_1.numpy()
 
 # %% Try 2D registration on non-zero crop
 # z_idx = 35
@@ -69,12 +67,10 @@ y_slice = slice(400, 1300)
 x_slice = slice(200, -200)
 
 source_pre_opt_0_cropped = source_pre_opt_0[z_slice, y_slice, x_slice]
-source_pre_opt_1_cropped = source_pre_opt_1[z_slice, y_slice, x_slice]
 target_cropped = data_target[z_slice, y_slice, x_slice]
 
-print(np.sum(target_cropped==0))
-print(np.sum(source_pre_opt_0_cropped==0))
-print(np.sum(source_pre_opt_1_cropped==0))
+print(np.sum(target_cropped == 0))
+print(np.sum(source_pre_opt_0_cropped == 0))
 
 # viewer = napari.Viewer()
 # viewer.add_image(target_cropped, name="target", colormap="gray")
@@ -86,10 +82,7 @@ print("Filtering data")
 source_0_edge_filter = filters.sobel(
     np.clip(source_pre_opt_0_cropped, 110, np.quantile(source_pre_opt_0_cropped, 0.99))
 )
-source_1_edge_filter = filters.sobel(
-    np.clip(source_pre_opt_1_cropped, 110, np.quantile(source_pre_opt_1_cropped, 0.99))
-)
-source_filter_sum = source_0_edge_filter + source_1_edge_filter
+source_filter_sum = source_0_edge_filter
 
 # viewer = napari.Viewer()
 # viewer.add_image(source_pre_opt_0_cropped, name="source pre-opt 0", colormap="gray")
@@ -126,14 +119,14 @@ reg = ants.registration(
 tform_opt = ants.read_transform(reg["fwdtransforms"][0])
 
 source_opt_ants = tform_opt.apply_to_image(_source, reference=_target).numpy()
-source_ch0_opt = tform_opt.apply_to_image(ants.from_numpy(source_pre_opt_0_cropped), reference=_target).numpy()
-source_ch1_opt = tform_opt.apply_to_image(ants.from_numpy(source_pre_opt_1_cropped), reference=_target).numpy()
+source_ch0_opt = tform_opt.apply_to_image(
+    ants.from_numpy(source_pre_opt_0_cropped), reference=_target
+).numpy()
 
 print("Display results in napari")
 viewer = napari.Viewer()
 viewer.add_image(target_cropped, name="target", colormap="gray")
 viewer.add_image(source_ch0_opt, name="nuclei", colormap="bop blue", blending="additive")
-viewer.add_image(source_ch1_opt, name="membrane", colormap="bop orange", blending="additive")
 # viewer.add_image(target_edge_filter, name="target edges", colormap="green", blending="additive")
 # viewer.add_image(source_opt_ants, name="source edges", colormap="magenta", blending="additive")
 
@@ -141,12 +134,12 @@ viewer.add_image(source_ch1_opt, name="membrane", colormap="bop orange", blendin
 tform_opt_np = convert_transform_to_numpy(tform_opt)
 composed_matrix = approx_tform @ tform_opt_np
 
-settings_path = root / f"1-preprocess/light-sheet/raw/2-register/optimized_registration_settings.yml"
+settings_path = registration_settings_path
 in_model = yaml_to_model(settings_path, StabilizationSettings)
 
 out_model = in_model.model_copy()
 out_model.affine_transform_zyx_list[t_idx] = composed_matrix.tolist()
 
-model_to_yaml(out_model, settings_path)
+model_to_yaml(out_model, settings_path.with_name("sobel_registration.yml"))
 
 # %%

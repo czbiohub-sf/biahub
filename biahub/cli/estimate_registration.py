@@ -1,53 +1,61 @@
-from functools import partial
-from multiprocessing import Pool
+import os
+import shutil
 import subprocess
 import time
+
+from datetime import datetime
+from functools import partial
+from multiprocessing import Pool
 from pathlib import Path
+
 import ants
 import click
 import dask.array as da
 import napari
 import numpy as np
-import shutil
 import submitit
-from datetime import datetime
-from scipy.ndimage import gaussian_filter
+
 from iohub import open_ome_zarr
 from scipy.interpolate import interp1d
+from scipy.ndimage import gaussian_filter
 from scipy.optimize import linear_sum_assignment
 from scipy.spatial.distance import cdist
+from skimage import filters
 from skimage.feature import match_descriptors
 from skimage.transform import AffineTransform, EuclideanTransform, SimilarityTransform
 from sklearn.neighbors import NearestNeighbors
 from waveorder.focus import focus_from_transverse_band
-import os
+
 from biahub.analysis.AnalysisSettings import (
     EstimateRegistrationSettings,
     RegistrationSettings,
     StabilizationSettings,
 )
 from biahub.analysis.analyze_psf import detect_peaks
-from biahub.cli.optimize_registration import _optimize_registration
-
 from biahub.analysis.register import (
     convert_transform_to_ants,
     convert_transform_to_numpy,
+    find_overlapping_volume,
     get_3D_rescaling_matrix,
     get_3D_rotation_matrix,
-    find_overlapping_volume,
 )
+from biahub.cli.optimize_registration import _optimize_registration
 from biahub.cli.parsing import (
     config_filepath,
+    local,
     num_processes,
     output_filepath,
-    source_position_dirpaths,
-    target_position_dirpaths,
     sbatch_filepath,
     sbatch_to_submitit,
-    local
+    source_position_dirpaths,
+    target_position_dirpaths,
 )
-from biahub.cli.utils import estimate_resources, _check_nan_n_zeros, model_to_yaml, yaml_to_model
-from skimage import filters
+from biahub.cli.utils import (
+    _check_nan_n_zeros,
+    estimate_resources,
+    model_to_yaml,
+    yaml_to_model,
+)
 
 # TODO: see if at some point these globals should be hidden or exposed.
 NA_DETECTION_SOURCE = 1.35
@@ -67,6 +75,7 @@ COLOR_CYCLE = [
     "magenta",
 ]
 
+
 def wait_for_jobs_to_finish(job_ids, sleep_time=60):
     """Wait for SLURM jobs to finish."""
     print(f"Waiting for jobs: {', '.join(job_ids)} to finish...")
@@ -80,6 +89,7 @@ def wait_for_jobs_to_finish(job_ids, sleep_time=60):
         else:
             print("Jobs still running...")
             time.sleep(sleep_time)  # Wait sleep_time seconds before checking again
+
 
 def user_assisted_registration(
     source_channel_volume,
@@ -408,14 +418,13 @@ def beads_based_registration(
     - Use verbose=True for detailed logging during registration.
     """
 
-
-
     (T, Z, Y, X) = source_channel_tzyx.shape
-
 
     # Compute transformations in parallel
 
-    num_cpus, gb_ram_per_cpu = estimate_resources(shape=(T,2,Z,Y,X), ram_multiplier=5, max_num_cpus=16)
+    num_cpus, gb_ram_per_cpu = estimate_resources(
+        shape=(T, 2, Z, Y, X), ram_multiplier=5, max_num_cpus=16
+    )
 
     # Prepare SLURM arguments
     slurm_args = {
@@ -446,7 +455,8 @@ def beads_based_registration(
     jobs = []
     with executor.batch():
         for t in range(T):
-            job = executor.submit(_get_tform_from_beads,
+            job = executor.submit(
+                _get_tform_from_beads,
                 approx_tform=approx_tform,
                 source_channel_tzyx=source_channel_tzyx,
                 target_channel_tzyx=target_channel_tzyx,
@@ -455,10 +465,11 @@ def beads_based_registration(
                 verbose=verbose,
                 match_algorithm=match_algorithm,
                 transform_type=transform_type,
-                slurm = True,
+                slurm=True,
                 output_folder_path=output_transforms_path,
                 match_max_ratio=match_max_ratio,
-                t_idx=t)
+                t_idx=t,
+            )
             jobs.append(job)
 
     # Save job IDs
@@ -472,12 +483,11 @@ def beads_based_registration(
     wait_for_jobs_to_finish(job_ids)
     # Get list of .npy transform files
 
-
     # Load and collect all transform arrays
     transforms = []
 
     for t in range(T):
-        file_path = output_transforms_path/f"{t}.npy"
+        file_path = output_transforms_path / f"{t}.npy"
         if not os.path.exists(file_path):
             transforms.append(None)
         else:
@@ -498,7 +508,6 @@ def beads_based_registration(
     )
     click.echo(f"After validation transforms: {transforms[0]}")
 
-
     # Interpolate missing transforms
     transforms = _interpolate_transforms(
         transforms=transforms,
@@ -508,13 +517,14 @@ def beads_based_registration(
     )
     click.echo(f"After interpolation transforms: {transforms[0]}")
 
-
     return transforms
 
 
 def ants_registration(
     source_data_tczyx: da.Array,
     target_data_tczyx: da.Array,
+    source_channel_index: int | list[int],
+    target_channel_index: int,
     approx_tform: np.ndarray,
     sobel_filter: bool = False,
     # output_folder_path: Path,
@@ -564,8 +574,8 @@ def ants_registration(
             source_data_tczyx[t],
             target_data_tczyx[t],
             initial_tform=approx_tform,
-            source_channel_index=[0, 1],  # TODO: hardcoded
-            target_channel_index=0,
+            source_channel_index=source_channel_index,
+            target_channel_index=target_channel_index,
             z_slice=z_slice,
             y_slice=y_slice,
             x_slice=x_slice,
@@ -716,7 +726,11 @@ def _interpolate_transforms(
     else:
         # Global interpolation using all valid transforms
         f = interp1d(
-            valid_transform_indices, valid_transforms, axis=0, kind='linear', fill_value='extrapolate'
+            valid_transform_indices,
+            valid_transforms,
+            axis=0,
+            kind='linear',
+            fill_value='extrapolate',
         )
         transforms = [
             f(i).tolist() if transforms[i] is None else transforms[i] for i in range(n)
@@ -864,6 +878,7 @@ def _knn_edges(points, k=5):
     edges = [(i, j) for i, neighbors in enumerate(indices) for j in neighbors if i != j]
     return edges
 
+
 def match_hungarian(
     C,
     cost_threshold=1e5,
@@ -926,7 +941,9 @@ def peaks_to_image(peaks, shape, sigma=2.0):
     return gaussian_filter(img, sigma=sigma)
 
 
-def register_peak_clouds_ants(source_peaks, target_peaks, shape, sigma=10.0, transform_type="Affine"):
+def register_peak_clouds_ants(
+    source_peaks, target_peaks, shape, sigma=10.0, transform_type="Affine"
+):
     source_img = peaks_to_image(source_peaks, shape, sigma=sigma)
     target_img = peaks_to_image(target_peaks, shape, sigma=sigma)
 
@@ -939,21 +956,22 @@ def register_peak_clouds_ants(source_peaks, target_peaks, shape, sigma=10.0, tra
         type_of_transform="Similarity",
         aff_metric="MI",
         verbose=True,
-    
     )
 
     return reg["fwdtransforms"], reg["fwdtransforms"][0]  # ANTs filenames + object
+
 
 def extract_patch(volume, center, patch_size=11):
     """Extract a cubic patch centered at `center` from `volume`."""
     half = patch_size // 2
     z, y, x = map(int, center)
     patch = volume[
-        max(z - half, 0): z + half + 1,
-        max(y - half, 0): y + half + 1,
-        max(x - half, 0): x + half + 1
+        max(z - half, 0) : z + half + 1,
+        max(y - half, 0) : y + half + 1,
+        max(x - half, 0) : x + half + 1,
     ]
     return patch
+
 
 def compute_mi(p1, p2, bins=32):
     """Compute mutual information between two patches."""
@@ -965,7 +983,10 @@ def compute_mi(p1, p2, bins=32):
     nz = pxy > 0
     return np.sum(pxy[nz] * np.log(pxy[nz] / px_py[nz]))
 
-def match_mutual_information(source_peaks, target_peaks, source_vol, target_vol, patch_size=11):
+
+def match_mutual_information(
+    source_peaks, target_peaks, source_vol, target_vol, patch_size=11
+):
     """Match peaks using mutual information between local patches."""
     n_source, n_target = len(source_peaks), len(target_peaks)
     mi_matrix = np.zeros((n_source, n_target))
@@ -1130,13 +1151,10 @@ def _get_tform_from_beads(
 
         if match_cross_check:
             # Step 1: A → B
-            C_ab = _compute_cost_matrix(
-                source_peaks,
-                target_peaks,
-                source_edges,
-                target_edges
+            C_ab = _compute_cost_matrix(source_peaks, target_peaks, source_edges, target_edges)
+            matches_ab = match_hungarian(
+                C_ab, cost_threshold=np.quantile(C_ab, 0.10), max_ratio=match_max_ratio
             )
-            matches_ab = match_hungarian(C_ab, cost_threshold=np.quantile(C_ab, 0.10), max_ratio=match_max_ratio)
 
             # Step 2: B → A (swap arguments)
             C_ba = _compute_cost_matrix(
@@ -1146,7 +1164,9 @@ def _get_tform_from_beads(
                 source_edges,
                 distance_metric=match_metric,
             )
-            matches_ba = match_hungarian(C_ba, cost_threshold=np.quantile(C_ba, 0.10), max_ratio=match_max_ratio)
+            matches_ba = match_hungarian(
+                C_ba, cost_threshold=np.quantile(C_ba, 0.10), max_ratio=match_max_ratio
+            )
 
             # Step 3: Invert matches_ba to compare
             reverse_map = {(j, i) for i, j in matches_ba}
@@ -1158,7 +1178,7 @@ def _get_tform_from_beads(
             C = _compute_cost_matrix(source_peaks, target_peaks, source_edges, target_edges)
 
             matches = match_hungarian(C, cost_threshold=np.quantile(C, 0.10))
-            
+
     elif match_algorithm == 'mutual_info_gauss':
         click.echo('Using mutual information with Gaussian smoothing')
         shape = source_data_reg.shape  # Z, Y, X
@@ -1176,7 +1196,7 @@ def _get_tform_from_beads(
         compount_tform = approx_tform @ tform_np
         if slurm:
             output_folder_path.mkdir(parents=True, exist_ok=True)
-            np.save(output_folder_path/ f"{t_idx}.npy", compount_tform)
+            np.save(output_folder_path / f"{t_idx}.npy", compount_tform)
 
         return compount_tform.tolist()
     elif match_algorithm == 'mutual_information':
@@ -1243,8 +1263,7 @@ def _get_tform_from_beads(
         tform = SimilarityTransform(dimensionality=3)
     else:
         raise ValueError(f'Unknown transform type: {transform_type}')
-    
-  
+
     tform.estimate(source_peaks[matches[:, 0]], target_peaks[matches[:, 1]])
     compount_tform = np.asarray(approx_tform) @ tform.inverse.params
     click.echo(f'Matches: {matches}')
@@ -1254,11 +1273,18 @@ def _get_tform_from_beads(
 
     if slurm:
         output_folder_path.mkdir(parents=True, exist_ok=True)
-        np.save(output_folder_path/ f"{t_idx}.npy", compount_tform)
+        np.save(output_folder_path / f"{t_idx}.npy", compount_tform)
 
     return compount_tform.tolist()
 
-def _get_z_shift_at_t(t_idx, phase_tzyx, fluoresc_tzyx, voxel_size, output_folder_path, ):
+
+def _get_z_shift_at_t(
+    t_idx,
+    phase_tzyx,
+    fluoresc_tzyx,
+    voxel_size,
+    output_folder_path,
+):
     from waveorder.focus import focus_from_transverse_band
 
     lf_img = np.asarray(phase_tzyx[t_idx]).astype(np.float32)
@@ -1272,8 +1298,8 @@ def _get_z_shift_at_t(t_idx, phase_tzyx, fluoresc_tzyx, voxel_size, output_folde
     click.echo(f"Phase focus index: {lf_focus_idx}")
     click.echo(f"Fluorescence focus index: {ls_focus_idx}")
 
-    z_shift = (lf_focus_idx - ls_focus_idx)
-    
+    z_shift = lf_focus_idx - ls_focus_idx
+
     affine = np.eye(4)
     affine[0, 3] = z_shift  # phase is Z-first
 
@@ -1282,6 +1308,7 @@ def _get_z_shift_at_t(t_idx, phase_tzyx, fluoresc_tzyx, voxel_size, output_folde
     np.save(output_folder_path / f"{t_idx}.npy", affine)
 
     return affine.tolist()
+
 
 def z_shift_based_registration(
     phase_tzyx,
@@ -1301,10 +1328,11 @@ def z_shift_based_registration(
 
     (T, Z, Y, X) = phase_tzyx.shape
 
-
     # Compute transformations in parallel
 
-    num_cpus, gb_ram_per_cpu = estimate_resources(shape=(T,2,Z,Y,X), ram_multiplier=5, max_num_cpus=16)
+    num_cpus, gb_ram_per_cpu = estimate_resources(
+        shape=(T, 2, Z, Y, X), ram_multiplier=5, max_num_cpus=16
+    )
 
     # Prepare SLURM arguments
     slurm_args = {
@@ -1376,6 +1404,7 @@ def z_shift_based_registration(
     )
 
     return transforms
+
 
 @click.command()
 @source_position_dirpaths()
@@ -1524,6 +1553,8 @@ def estimate_registration(
         transforms = ants_registration(
             source_data_tczyx=source_data,
             target_data_tczyx=target_data,
+            source_channel_index=source_channel_index,
+            target_channel_index=target_channel_index,
             approx_tform=np.asarray(settings.approx_affine_transform),
             sobel_filter=settings.sobel_filter,
             validation_window_size=settings.affine_transform_validation_window_size,
@@ -1587,18 +1618,16 @@ def estimate_registration(
     click.echo(f"Writing registration parameters to {output_filepath}")
     model_to_yaml(model, output_filepath)
 
-   
-    
-    #plot z component of the transforms over time
+    # plot z component of the transforms over time
     if settings.estimation_method == "beads" and settings.verbose:
         click.echo("Plotting translations over time")
         import matplotlib.pyplot as plt
 
         transforms = np.array(transforms)
 
-        z_transforms = transforms[:, 0, 3] #->ZYX
-        y_transforms = transforms[:, 1, 3] #->ZYX
-        x_transforms = transforms[:, 2, 3] #->ZYX
+        z_transforms = transforms[:, 0, 3]  # ->ZYX
+        y_transforms = transforms[:, 1, 3]  # ->ZYX
+        x_transforms = transforms[:, 2, 3]  # ->ZYX
 
         plt.plot(z_transforms)
         plt.legend(["Z-Translation"])
@@ -1607,7 +1636,7 @@ def estimate_registration(
         plt.title("Translations Over Time")
         plt.grid()
         # Save the figure
-        plt.savefig(output_dir/"Z_translation_over_time.png", dpi=300, bbox_inches='tight')
+        plt.savefig(output_dir / "Z_translation_over_time.png", dpi=300, bbox_inches='tight')
         plt.close()
 
         plt.plot(y_transforms)
@@ -1617,20 +1646,19 @@ def estimate_registration(
         plt.title("Translations Over Time")
         plt.grid()
         # Save the figure
-        plt.savefig(output_dir/"Y_translation_over_time.png", dpi=300, bbox_inches='tight')
+        plt.savefig(output_dir / "Y_translation_over_time.png", dpi=300, bbox_inches='tight')
         plt.close()
 
-        plt.plot(x_transforms) 
+        plt.plot(x_transforms)
         plt.legend(["X-Translation"])
         plt.xlabel("Timepoint")
         plt.ylabel("Translations")
         plt.title("Translations Over Time")
         plt.grid()
         # Save the figure
-        plt.savefig(output_dir/"X_translation_over_time.png", dpi=300, bbox_inches='tight')
+        plt.savefig(output_dir / "X_translation_over_time.png", dpi=300, bbox_inches='tight')
         plt.close()
-        
-        
+
 
 if __name__ == "__main__":
     estimate_registration()
