@@ -540,7 +540,7 @@ def estimate_xyz_stabilization_with_beads(
     click.echo(f"Submitting SLURM focus estimation jobs with resources: {slurm_args}")
     output_transforms_path = output_folder_path / "xyz_transforms"
     output_transforms_path.mkdir(parents=True, exist_ok=True)
-    
+
     if beads_channel == "LF":
         threshold_abs = 0.8
     else:
@@ -942,7 +942,6 @@ def estimate_stabilization_cli(
     stabilization_method = settings.stabilization_method
     skip_beads_fov = settings.skip_beads_fov
     average_across_wells = settings.average_across_wells
-    
 
     if skip_beads_fov != '0':
         # Remove the beads FOV from the input data paths
@@ -1320,7 +1319,7 @@ def estimate_stabilization_cli(
                 output_folder_path=output_dirpath,
                 cluster=cluster,
                 sbatch_filepath=sbatch_filepath,
-                beads_channel=beads_channel,
+                beads_channel=settings.beads_channel,
             )
 
             # Validate and filter transforms
