@@ -571,9 +571,9 @@ def beads_based_registration(
         else:
             T_zyx_shift = np.load(file_path).tolist()
             transforms.append(T_zyx_shift)
-
-    click.echo(f"Before validate Transforms: {transforms[0]}")
-
+            
+    # Remove the output folder
+    shutil.rmtree(output_transforms_path)
     # # Validate and filter transforms
     transforms = _validate_transforms(
         transforms=transforms,
@@ -584,8 +584,6 @@ def beads_based_registration(
         X=X,
         verbose=verbose,
     )
-    click.echo(f"After validation transforms: {transforms[0]}")
-
     # Interpolate missing transforms
     transforms = _interpolate_transforms(
         transforms=transforms,
@@ -593,8 +591,6 @@ def beads_based_registration(
         interpolation_type=interpolation_type,
         verbose=verbose,
     )
-    click.echo(f"After interpolation transforms: {transforms[0]}")
-
     return transforms
 
 
