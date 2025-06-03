@@ -1074,7 +1074,6 @@ def _get_tform_from_beads(
     source_channel_zyx = np.asarray(source_channel_tzyx[t_idx]).astype(np.float32)
     target_channel_zyx = np.asarray(target_channel_tzyx[t_idx]).astype(np.float32)
 
-
     if _check_nan_n_zeros(source_channel_zyx) or _check_nan_n_zeros(target_channel_zyx):
         click.echo(f'Beads data is missing at timepoint {t_idx}')
         return
@@ -1110,7 +1109,9 @@ def _get_tform_from_beads(
         verbose=verbose,
     )
 
-    output_data_path = Path("/hpc/projects/intracellular_dashboard/viral-sensor/2025_05_01_A549_DENV_sensor_DENV/1-preprocess/light-sheet/raw/1-register/beads/lf_mask.zarr")
+    output_data_path = Path(
+        "/hpc/projects/intracellular_dashboard/viral-sensor/2025_05_01_A549_DENV_sensor_DENV/1-preprocess/light-sheet/raw/1-register/beads/lf_mask.zarr"
+    )
     position_key = ("C", "1", "000000")  # Must be a tuple of strings
     with open_ome_zarr(output_data_path / Path(*position_key)) as dirt_mask_ds:
         dirt_mask_load = np.asarray(dirt_mask_ds.data[0, 0])
@@ -1120,9 +1121,9 @@ def _get_tform_from_beads(
     for peak in target_peaks:
         z, y, x = peak.astype(int)
         if (
-            0 <= y < dirt_mask_load.shape[1] and
-            0 <= x < dirt_mask_load.shape[2] and
-            not dirt_mask_load[:, y, x].any()  # True if all Z are clean at (y, x)
+            0 <= y < dirt_mask_load.shape[1]
+            and 0 <= x < dirt_mask_load.shape[2]
+            and not dirt_mask_load[:, y, x].any()  # True if all Z are clean at (y, x)
         ):
             target_peaks_filtered.append(peak)
 
@@ -1210,8 +1211,8 @@ def _get_tform_from_beads(
 
     if verbose:
         click.echo(f'Total of matches at time point {t_idx}: {len(matches)}')
-    #dist = np.linalg.norm(source_peaks[matches[:, 0]] - target_peaks[matches[:, 1]], axis=1)
-    #matches = matches[dist < np.quantile(dist, 0.95), :]
+    # dist = np.linalg.norm(source_peaks[matches[:, 0]] - target_peaks[matches[:, 1]], axis=1)
+    # matches = matches[dist < np.quantile(dist, 0.95), :]
     if verbose:
         click.echo(
             f'Total of matches after distance filtering at time point {t_idx}: {len(matches)}'
