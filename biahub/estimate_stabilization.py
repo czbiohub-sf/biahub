@@ -13,8 +13,8 @@ from iohub.ngff import open_ome_zarr
 from pystackreg import StackReg
 from waveorder.focus import focus_from_transverse_band
 
-from biahub.cli.parsing import input_position_dirpaths, output_filepath
-from biahub.cli.utils import model_to_yaml
+from biahub.cli.parsing import input_position_dirpaths, output_filepath, config_filepath, sbatch_filepath, local
+from biahub.cli.utils import model_to_yaml, yaml_to_model
 from biahub.settings import StabilizationSettings
 
 NA_DET = 1.35
@@ -223,65 +223,15 @@ def estimate_xy_stabilization(
 @click.command("estimate-stabilization")
 @input_position_dirpaths()
 @output_filepath()
-@click.option(
-    "--num-processes",
-    "-j",
-    default=1,
-    help="Number of parallel processes. Default is 1.",
-    required=False,
-    type=int,
-)
-@click.option(
-    "--channel-index",
-    "-c",
-    default=0,
-    help="Channel index used for estimating stabilization parameters. Default is 0.",
-    required=False,
-    type=int,
-)
-@click.option(
-    "--stabilize-xy",
-    "-y",
-    is_flag=True,
-    help="Estimate yx drift and apply to the input data. Default is False.",
-)
-@click.option(
-    "--stabilize-z",
-    "-z",
-    is_flag=True,
-    help="Estimate z drift and apply to the input data. Default is False.",
-)
-@click.option(
-    "--verbose",
-    "-v",
-    is_flag=True,
-    type=bool,
-    help="Stabilization verbose. Default is False.",
-)
-@click.option(
-    "--crop-size-xy",
-    nargs=2,
-    type=int,
-    default=[300, 300],
-    help="Crop size in xy. Enter two integers. Default is 300 300.",
-)
-@click.option(
-    "--stabilization-channel-indices",
-    help="Indices of channels which will be stabilized. Default is all channels.",
-    multiple=True,
-    type=int,
-    default=[],
-)
+@config_filepath()
+@sbatch_filepath()
+@local()
 def estimate_stabilization_cli(
-    input_position_dirpaths,
-    output_filepath,
-    num_processes,
-    channel_index,
-    stabilize_xy,
-    stabilize_z,
-    verbose,
-    crop_size_xy,
-    stabilization_channel_indices,
+    input_position_dirpaths: List[str],
+    output_filepath: str,
+    config_filepath: str,
+    sbatch_filepath: str = None,
+    local: bool = False,
 ):
     """
     Estimate the Z and/or XY timelapse stabilization matrices.
@@ -295,6 +245,12 @@ def estimate_stabilization_cli(
 
     Note: the verbose output will be saved at the same level as the output zarr.
     """
+    # Load the settings
+    config_filepath = Path(config_filepath)
+
+    settings = yaml_to_model(config_filepath, EstimateStabilizationSettings)
+    click.echo(f"Settings: {settings}")
+
     if not (stabilize_xy or stabilize_z):
         raise ValueError("At least one of 'stabilize_xy' or 'stabilize_z' must be selected")
 
@@ -303,6 +259,37 @@ def estimate_stabilization_cli(
 
     output_dirpath = output_filepath.parent
     output_dirpath.mkdir(parents=True, exist_ok=True)
+
+    verbose = settings.verbose
+    crop_size_xy = settings.crop_size_xy
+    estimate_stabilization_channel = settings.estimate_stabilization_channel
+    stabilization_type = settings.stabilization_type
+    stabilization_method = settings.stabilization_method
+    skip_beads_fov = settings.skip_beads_fov
+    average_across_wells = settings.average_across_wells
+
+
+    if skip_beads_fov != '0':
+        # Remove the beads FOV from the input data paths
+        click.echo(f"Removing beads FOV {skip_beads_fov} from input data paths")
+        input_position_dirpaths = [
+            path for path in input_position_dirpaths if skip_beads_fov not in str(path)
+        ]
+
+  
+
+    # # Channel names to process
+    # with open_ome_zarr(input_position_dirpaths[0]) as dataset:
+    #     channel_names = dataset.channel_names
+    #     voxel_size = dataset.scale
+    #     channel_index = channel_names.index(estimate_stabilization_channel)
+    #     T, C, Z, Y, X = dataset.data.shape
+
+    # Run locally or submit to SLURM
+    if local:
+        cluster = "local"
+    else:
+        cluster = "slurm"
 
     # Channel names to process
     stabilization_channel_names = []

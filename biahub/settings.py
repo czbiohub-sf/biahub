@@ -22,6 +22,25 @@ from pydantic import (
 class MyBaseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+class EstimateStabilizationSettings(MyBaseModel):
+    estimate_stabilization_channel: str
+    stabilization_channels: list
+    stabilization_type: Literal["z", "xy", "xyz"]
+    stabilization_method: Literal[
+        "beads", "phase-cross-corr", "focus-finding"
+    ] = "focus-finding"
+    skip_beads_fov: str = "0"
+    crop_size_xy: list[int, int] = [800, 800]
+    t_reference: Literal["first", "previous"] = "first"
+    average_across_wells: bool = False
+    match_algorithm: Literal["hungarian", "match_descriptor", "mutual_info_gauss", "mutual_information"] = "hungarian"
+    match_filter_angle_threshold: float = 0
+    affine_transform_type: Literal["euclidean", "similarity", "affine"] = "euclidean"
+    affine_transform_validation_window_size: int = 10
+    affine_transform_validation_tolerance: float = 100.0
+    affine_transform_interpolation_window_size: int = 3
+    affine_transform_interpolation_type: Literal["linear", "cubic"] = "linear"
+    verbose: bool = False
 
 class EstimateRegistrationSettings(MyBaseModel):
     target_channel_name: str
