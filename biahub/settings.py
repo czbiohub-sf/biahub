@@ -22,19 +22,20 @@ from pydantic import (
 class MyBaseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+
 class EstimateStabilizationSettings(MyBaseModel):
     estimate_stabilization_channel: str
     stabilization_channels: list
     stabilization_type: Literal["z", "xy", "xyz"]
-    stabilization_method: Literal[
-        "beads", "phase-cross-corr", "focus-finding"
-    ] = "focus-finding"
+    stabilization_method: Literal["beads", "phase-cross-corr", "focus-finding"] = "focus-finding"
     skip_beads_fov: str = "0"
     crop_size_xy: list[int, int] = [800, 800]
     t_reference: Literal["first", "previous"] = "first"
     average_across_wells: bool = False
-    match_algorithm: Literal["hungarian", "match_descriptor", "mutual_info_gauss", "mutual_information"] = "hungarian"
+    match_algorithm: Literal["hungarian", "match_descriptor", "mutual_information"] = "hungarian"
     match_filter_angle_threshold: float = 0
+    match_max_ratio: float = 0.8
+    hungarian_knn_k: int = 5
     affine_transform_type: Literal["euclidean", "similarity", "affine"] = "euclidean"
     affine_transform_validation_window_size: int = 10
     affine_transform_validation_tolerance: float = 100.0
@@ -42,17 +43,24 @@ class EstimateStabilizationSettings(MyBaseModel):
     affine_transform_interpolation_type: Literal["linear", "cubic"] = "linear"
     verbose: bool = False
 
+
 class EstimateRegistrationSettings(MyBaseModel):
     target_channel_name: str
     source_channel_name: str
-    estimation_method: Literal["manual", "beads"] = "manual"
-    affine_transform_type: Literal["Euclidean", "Similarity"] = "Euclidean"
+    estimation_method: Literal["manual", "beads", "ants"] = "manual"
     time_index: int = 0
     affine_90degree_rotation: int = 0
+    match_algorithm: Literal["hungarian", "match_descriptor", "mutual_information"] = "hungarian"
+    match_filter_angle_threshold: float = 0
+    match_max_ratio: float = 0.8
+    hungarian_knn_k: int = 5
+    sobel_filter: bool = False
+    affine_transform_type: Literal["euclidean", "similarity", "affine"] = "euclidean"
     approx_affine_transform: list = None
-    affine_transform_window_size: int = 10
-    affine_transform_tolerance: float = 50.0
-    filtering_angle_threshold: int = 30
+    affine_transform_validation_window_size: int = 10
+    affine_transform_validation_tolerance: float = 100.0
+    affine_transform_interpolation_window_size: int = 3
+    affine_transform_interpolation_type: Literal["linear", "cubic"] = "linear"
     verbose: bool = False
 
     @field_validator("approx_affine_transform")
@@ -66,6 +74,7 @@ class EstimateRegistrationSettings(MyBaseModel):
                 raise ValueError("approx_affine_transform must be a 4x4 array")
 
         return v
+
 
 
 class ProcessingSettings(MyBaseModel):
