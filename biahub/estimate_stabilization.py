@@ -20,19 +20,21 @@ from biahub.settings import StabilizationSettings
 NA_DET = 1.35
 LAMBDA_ILL = 0.500
 
-
-# TODO: Do we need to compute focus fiding on n_number of channels?
 def estimate_position_focus(
     input_data_path: Path,
     input_channel_indices: Tuple[int, ...],
     crop_size_xy: list[int, int],
-):
+    output_path_focus_csv: Path,
+    output_path_transform: Path,
+    verbose: bool = False,
+) -> None:
+ 
     position, time_idx, channel, focus_idx = [], [], [], []
 
     with open_ome_zarr(input_data_path) as dataset:
         channel_names = dataset.channel_names
-        T, C, Z, Y, X = dataset[0].shape
-        T_scale, _, _, _, X_scale = dataset.scale
+        T, _, Z, Y, X = dataset[0].shape
+        _, _, _, _, pixel_size = dataset.scale
 
         for tc_idx in itertools.product(range(T), input_channel_indices):
             data_zyx = dataset.data[tc_idx][
@@ -43,28 +45,232 @@ def estimate_position_focus(
 
             # if the FOV is empty, set the focal plane to 0
             if np.sum(data_zyx) == 0:
-                focal_plane = 0
+                z_idx = 0
             else:
-                focal_plane = focus_from_transverse_band(
+                z_idx = focus_from_transverse_band(
                     data_zyx,
                     NA_det=NA_DET,
                     lambda_ill=LAMBDA_ILL,
-                    pixel_size=X_scale,
+                    pixel_size=pixel_size,
+                )
+                click.echo(
+                    f"Estimating focus for timepoint {tc_idx[0]} and channel {tc_idx[1]}: {z_idx}"
                 )
 
             position.append(str(Path(*input_data_path.parts[-3:])))
             time_idx.append(tc_idx[0])
             channel.append(channel_names[tc_idx[1]])
-            focus_idx.append(focal_plane)
+            focus_idx.append(z_idx)
 
-    position_stats_stabilized = {
-        "position": position,
-        "time_idx": time_idx,
-        "channel": channel,
-        "focus_idx": focus_idx,
+    df = pd.DataFrame(
+        {
+            "position": position,
+            "time_idx": time_idx,
+            "channel": channel,
+            "focus_idx": focus_idx,
+        }
+    )
+    output_path_focus_csv.mkdir(parents=True, exist_ok=True)
+    if verbose:
+        click.echo(f"Saving focus finding results to {output_path_focus_csv}")
+
+    position_filename = str(Path(*input_data_path.parts[-3:])).replace("/", "_")
+    output_csv = output_path_focus_csv / f"{position_filename}.csv"
+    df.to_csv(output_csv, index=False)
+
+    # ---- Generate and save Z transformation matrix per timepoint
+
+     # Compute Z drifts
+
+
+    z_focus_shift = [np.eye(4)]
+    z_val = focus_idx[0]
+    for z_val_next in focus_idx[1:]:
+        shift = np.eye(4)
+        shift[0, 3] = z_val_next - z_val
+        z_focus_shift.append(shift)
+    T_z_drift_mats = np.array(z_focus_shift)
+
+    
+    output_path_transform.mkdir(parents=True, exist_ok=True)
+    np.save(output_path_transform/ f"{position_filename}.npy", T_z_drift_mats)
+
+    if verbose:
+        click.echo(f"Saved Z transform matrices to {output_path_transform}")
+
+
+
+def get_mean_z_positions(dataframe_path: Path, method: Literal["mean", "median"] = "mean", verbose: bool = False) -> None:
+    """
+    Get the mean or median of the focus index for each timepoint.
+    
+    
+    """
+    df = pd.read_csv(dataframe_path)
+
+    # Sort the DataFrame based on 'time_idx'
+    df = df.sort_values("time_idx")
+
+    # TODO: this is a hack to deal with the fact that the focus finding function returns 0 if it fails
+    df["focus_idx"] = df["focus_idx"].replace(0, np.nan).ffill()
+
+    # Get the mean of positions for each time point
+    if method == "mean":
+        average_focus_idx = df.groupby("time_idx")["focus_idx"].mean().reset_index()
+    elif method == "median":
+        average_focus_idx = df.groupby("time_idx")["focus_idx"].median().reset_index()
+    else:
+        raise ValueError("Unknown averaging method.")
+
+    return average_focus_idx["focus_idx"].values
+
+
+def estimate_z_stabilization(
+    input_data_paths: list[Path],
+    output_folder_path: Path,
+    channel_index: int,
+    crop_size_xy: list[int],
+    sbatch_filepath: Optional[Path] = None,
+    cluster: str = "local",
+    estimate_z_index: bool = False,
+    z_focus_files_path: bool = False,
+    verbose: bool = False,
+
+) -> np.ndarray:
+    """
+    Submit SLURM jobs to estimate per-position Z focus and return averaged drift matrices.
+    """
+
+    output_folder_path.mkdir(parents=True, exist_ok=True)
+    slurm_out_path = output_folder_path / "slurm_output"
+    slurm_out_path.mkdir(parents=True, exist_ok=True)
+
+    output_folder_focus_path = output_folder_path / "z_focus_positions"
+    output_folder_focus_path.mkdir(parents=True, exist_ok=True)
+
+    output_transforms_path = output_folder_path / "z_transforms"
+    output_transforms_path.mkdir(parents=True, exist_ok=True)
+
+    # Estimate resources from a sample dataset
+    with open_ome_zarr(input_data_paths[0]) as dataset:
+        shape = dataset.data.shape  # (T, C, Z, Y, X)
+
+    num_cpus, gb_ram_per_cpu = estimate_resources(shape=shape, ram_multiplier=16, max_num_cpus=16)
+
+    # Prepare SLURM arguments
+    slurm_args = {
+        "slurm_job_name": "estimate_stabilization_z",
+        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
+        "slurm_cpus_per_task": num_cpus,
+        "slurm_array_parallelism": 100,
+        "slurm_time": 30,
+        "slurm_partition": "preempted",
     }
-    return position_stats_stabilized
 
+    if sbatch_filepath:
+        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
+    
+    # Prepare and submit jobs
+    click.echo(f"Preparing jobs: {slurm_args}")
+    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
+    executor.update_parameters(**slurm_args)
+
+    click.echo('Submitting SLURM jobs...')
+    jobs = []
+
+    with executor.batch():
+        for input_data_path in input_data_paths:
+            job = executor.submit(
+                estimate_position_focus,
+                input_data_path=input_data_path,
+                input_channel_indices=(channel_index,),
+                crop_size_xy=crop_size_xy,
+                output_path_focus_csv=output_folder_focus_path,
+                output_path_transform=output_transforms_path,
+                verbose=verbose,
+            )
+            jobs.append(job)
+
+    # Save job IDs
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_path = slurm_out_path / f"job_ids_{timestamp}.log"
+    with open(log_path, "w") as log_file:
+        for job in jobs:
+            log_file.write(f"{job.job_id}\n")
+
+    # Wait for all jobs to finish
+    job_ids = [str(j.job_id) for j in jobs]
+    wait_for_jobs_to_finish(job_ids)
+
+    # Aggregate results
+    z_focus_files_path = list(output_folder_focus_path.glob("*.csv"))
+    
+    # Check length of z_focus_files_path
+    if len(z_focus_files_path) == 0:
+        click.echo("No focus CSV files found. Exiting.")
+        return
+    elif len(z_focus_files_path) != len(input_data_paths):
+        click.echo(f"Warning: {len(z_focus_files_path)} focus CSV files found for {len(input_data_paths)} input data paths.")
+
+    df = pd.concat([pd.read_csv(f) for f in z_focus_files_path])
+    # sort by position and time_idx
+    if Path(output_folder_path / "positions_focus.csv").exists():
+        click.echo("Update existing focus CSV file.")
+        # read the existing CSV file
+        df_old = pd.read_csv(output_folder_path / "positions_focus.csv")
+        # concatenate the new and old dataframes
+        df = pd.concat([df, df_old])
+        # drop duplicates
+        df = df.drop_duplicates(subset=["position", "time_idx"])
+        # sort by position and time_idx
+    df = df.sort_values(["position", "time_idx"])
+    # Save the results to a CSV file
+    df.to_csv(output_folder_path / "positions_focus.csv", index=False)
+
+    shutil.rmtree(output_folder_focus_path)
+
+    if estimate_z_index:
+        shutil.rmtree(output_transforms_path)
+        return
+    
+    if global_z_focus_index:
+    # # Compute Z drifts
+        z_drift_offsets = get_mean_z_positions(
+            dataframe_path=output_folder_path / "positions_focus.csv",
+            method="median",
+            verbose=verbose,
+        )
+
+        z_focus_shift = [np.eye(4)]
+        z_val = z_drift_offsets[0]
+        transform = {}
+        for z_val_next in z_drift_offsets[1:]:
+            shift = np.eye(4)
+            shift[0, 3] = z_val_next - z_val
+            z_focus_shift.append(shift)
+        transform["z_focus_files_path"] = np.array(z_focus_shift).tolist()
+
+        if verbose:
+            click.echo(f"Saving z focus shift matrices to {output_folder_path}")
+            np.save(output_folder_path / "z_transforms.npy", transform["z_focus_files_path"])
+
+        return transform
+    else:
+        # Get list of .npy transform files
+        transforms_paths = list(output_transforms_path.glob("*.npy"))
+
+        # Load and collect all transform arrays
+        fov_transforms = {}
+
+        for file_path in transforms_paths:
+            T_zyx_shift = np.load(file_path).tolist()
+            fov_filename = file_path.stem
+            # 
+            fov_transforms[fov_filename] = T_zyx_shift
+        click.echo(f"Saved {len(fov_transforms)} z transform matrices to {output_folder_path}")
+        shutil.rmtree(output_transforms_path)
+
+    return fov_transforms
 
 def get_mean_z_positions(dataframe_path: Path, verbose: bool = False) -> None:
     df = pd.read_csv(dataframe_path)
@@ -90,51 +296,6 @@ def get_mean_z_positions(dataframe_path: Path, verbose: bool = False) -> None:
 
     return average_focus_idx["focus_idx"].values
 
-
-def estimate_z_stabilization(
-    input_data_paths: Path,
-    output_folder_path: Path,
-    z_drift_channel_idx: int = 0,
-    num_processes: int = 1,
-    crop_size_xy: list[int, int] = [600, 600],
-    verbose: bool = False,
-) -> np.ndarray:
-    output_folder_path.mkdir(parents=True, exist_ok=True)
-
-    fun = partial(
-        estimate_position_focus,
-        input_channel_indices=(z_drift_channel_idx,),
-        crop_size_xy=crop_size_xy,
-    )
-    # TODO: do we need to natsort the input_data_paths?
-    with mp.Pool(processes=num_processes) as pool:
-        position_stats_stabilized = pool.map(fun, input_data_paths)
-
-    df = pd.concat([pd.DataFrame.from_dict(stats) for stats in position_stats_stabilized])
-    df.to_csv(output_folder_path / 'positions_focus.csv', index=False)
-
-    # Calculate and save the output file
-    z_drift_offsets = get_mean_z_positions(
-        output_folder_path / 'positions_focus.csv',
-        verbose=verbose,
-    )
-
-    # Calculate the z focus shift matrices
-    z_focus_shift = [np.eye(4)]
-    # Find the z focus shift matrices for each time point based on the z_drift_offsets relative to the first timepoint.
-    z_val = z_drift_offsets[0]
-    for z_val_next in z_drift_offsets[1:]:
-        shift = np.eye(4)
-        shift[0, 3] = z_val_next - z_val
-        z_focus_shift.append(shift)
-    z_focus_shift = np.array(z_focus_shift)
-
-    if verbose:
-        click.echo(f"Saving z focus shift matrices to {output_folder_path}")
-        z_focus_shift_filepath = output_folder_path / "z_focus_shift.npy"
-        np.save(z_focus_shift_filepath, z_focus_shift)
-
-    return z_focus_shift
 
 
 def estimate_xy_stabilization(
@@ -278,12 +439,12 @@ def estimate_stabilization_cli(
 
   
 
-    # # Channel names to process
-    # with open_ome_zarr(input_position_dirpaths[0]) as dataset:
-    #     channel_names = dataset.channel_names
-    #     voxel_size = dataset.scale
-    #     channel_index = channel_names.index(estimate_stabilization_channel)
-    #     T, C, Z, Y, X = dataset.data.shape
+    # Channel names to process
+    with open_ome_zarr(input_position_dirpaths[0]) as dataset:
+        channel_names = dataset.channel_names
+        voxel_size = dataset.scale
+        channel_index = channel_names.index(estimate_stabilization_channel)
+        T, C, Z, Y, X = dataset.data.shape
 
     # Run locally or submit to SLURM
     if local:
@@ -291,28 +452,118 @@ def estimate_stabilization_cli(
     else:
         cluster = "slurm"
 
-    # Channel names to process
-    stabilization_channel_names = []
-    with open_ome_zarr(input_position_dirpaths[0]) as dataset:
-        channel_names = dataset.channel_names
-        voxel_size = dataset.scale
-    if len(stabilization_channel_indices) < 1:
-        stabilization_channel_indices = range(len(channel_names))
-        stabilization_channel_names = channel_names
-    else:
-        # Make the input a list
-        stabilization_channel_indices = list(stabilization_channel_indices)
-        stabilization_channel_names = []
-        # Check the channel indeces are valid
-        for c_idx in stabilization_channel_indices:
-            if c_idx not in range(len(channel_names)):
-                raise ValueError(
-                    f"Channel index {c_idx} is not valid. Please provide channel indeces from 0 to {len(channel_names)-1}"
-                )
-            else:
-                stabilization_channel_names.append(channel_names[c_idx])
+    # # Channel names to process
+    # stabilization_channel_names = []
+    # with open_ome_zarr(input_position_dirpaths[0]) as dataset:
+    #     channel_names = dataset.channel_names
+    #     voxel_size = dataset.scale
+    # if len(stabilization_channel_indices) < 1:
+    #     stabilization_channel_indices = range(len(channel_names))
+    #     stabilization_channel_names = channel_names
+    # else:
+    #     # Make the input a list
+    #     stabilization_channel_indices = list(stabilization_channel_indices)
+    #     stabilization_channel_names = []
+    #     # Check the channel indeces are valid
+    #     for c_idx in stabilization_channel_indices:
+    #         if c_idx not in range(len(channel_names)):
+    #             raise ValueError(
+    #                 f"Channel index {c_idx} is not valid. Please provide channel indeces from 0 to {len(channel_names)-1}"
+    #             )
+    #         else:
+    #             stabilization_channel_names.append(channel_names[c_idx])
 
-    # Estimate z drift
+    # Estimate stabilization parameters
+    if stabilization_type == "z":
+        if stabilization_method == "focus-finding":
+            click.echo("Estimating z stabilization parameters")
+
+            T_z_drift_mats_dict = estimate_z_stabilization(
+                    input_data_paths=input_position_dirpaths,
+                    output_folder_path=output_dirpath,
+                    channel_index=channel_index,
+                    crop_size_xy=crop_size_xy,
+                    sbatch_filepath=sbatch_filepath,
+                    global_z_focus_index=global_z_focus_index,
+                    cluster=cluster,
+                    verbose=verbose,
+                )
+            os.makedirs(output_dirpath / "z_stabilization_settings", exist_ok=True)
+            if verbose:
+                os.makedirs(output_dirpath / "translation_plots", exist_ok=True)
+            # save each FOV separately
+            for fov, transforms in T_z_drift_mats_dict.items():
+                # Validate and filter transforms
+                transforms = _validate_transforms(
+                    transforms=transforms,
+                    window_size=settings.affine_transform_validation_window_size,
+                    tolerance=settings.affine_transform_validation_tolerance,
+                    Z=Z,
+                    Y=Y,
+                    X=X,
+                    verbose=verbose,
+                )
+                # Interpolate missing transforms
+                transforms = _interpolate_transforms(
+                    transforms=transforms,
+                    window_size=settings.affine_transform_interpolation_window_size,
+                    interpolation_type=settings.affine_transform_interpolation_type,
+                    verbose=verbose,
+                )
+                output_filepath_fov = output_dirpath / "z_stabilization_settings" / f"{fov}.yml"
+                # Save the combined matrices
+                model = StabilizationSettings(
+                    stabilization_type=stabilization_type,
+                    stabilization_method=stabilization_method,
+                    stabilization_estimation_channel=estimate_stabilization_channel,
+                    stabilization_channels=settings.stabilization_channels,
+                    affine_transform_zyx_list=transforms,
+                    time_indices="all",
+                    output_voxel_size=voxel_size,
+                )
+                model_to_yaml(model, output_filepath_fov)
+
+                if verbose:
+                    os.makedirs(output_dirpath / "translation_plots", exist_ok=True)
+
+                    transforms = np.array(transforms)
+
+                    z_transforms = transforms[:, 0, 3] #->ZYX
+                    y_transforms = transforms[:, 1, 3] #->ZYX
+                    x_transforms = transforms[:, 2, 3] #->ZYX
+
+                    plt.plot(z_transforms)
+                    plt.plot(x_transforms)
+                    plt.plot(y_transforms)
+                    plt.legend(["Z-Translation", "X-Translation", "Y-Translation"])
+                    plt.xlabel("Timepoint")
+                    plt.ylabel("Translations")
+                    plt.title("Translations Over Time")
+                    plt.grid()
+                    # Save the figure
+                    plt.savefig(output_dirpath/"translation_plots"/f"{fov}.png", dpi=300, bbox_inches='tight')
+                    plt.close()
+
+        else:
+            raise ValueError(f"Invalid stabilization method: {stabilization_method}")
+    elif stabilization_type == "xy":
+        if stabilization_method == "focus-finding":
+            pass
+        else:
+            raise ValueError(f"Invalid stabilization method: {stabilization_method}")
+    elif stabilization_type == "xyz":
+        if stabilization_method == "focus-finding":
+        elif stabilization_method == "phase-cross-corr":
+        elif stabilization_method == "match_peaks":
+            pass
+        else:
+            raise ValueError(f"Invalid stabilization method: {stabilization_method}")
+    else:
+        raise ValueError(f"Invalid stabilization type: {stabilization_type}")
+        
+
+    
+
     if stabilize_z:
         click.echo("Estimating z stabilization parameters")
         T_z_drift_mats = estimate_z_stabilization(
