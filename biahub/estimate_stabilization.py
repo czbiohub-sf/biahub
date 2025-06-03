@@ -1,10 +1,7 @@
-import itertools
-import multiprocessing as mp
 import os
 import shutil
 
 from datetime import datetime
-from functools import partial
 from pathlib import Path
 from typing import List, Literal, Optional, Tuple, cast
 
@@ -12,6 +9,7 @@ import click
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import dask.array as da
 
 from iohub.ngff import open_ome_zarr
 from pystackreg import StackReg
@@ -30,7 +28,13 @@ from biahub.cli.utils import (
     estimate_resources,
     sbatch_to_submitit,
 )
-from biahub.settings import StabilizationSettings
+from biahub.cli.estimate_registration import (
+    _get_tform_from_beads,
+    _interpolate_transforms,
+    _validate_transforms,
+    wait_for_jobs_to_finish,
+)
+from biahub.settings import StabilizationSettings, EstimateStabilizationSettings
 from biahub.utils import _interpolate_transforms, _validate_transforms
 
 NA_DET = 1.35
@@ -607,6 +611,297 @@ def estimate_xyz_stabilization_with_beads(
     
     return transforms
 
+def pad_to_shape(
+    arr: ArrayLike, shape: Tuple[int, ...], mode: str, verbose: str = False, **kwargs
+) -> ArrayLike:
+    """Pads array to shape.
+    from shimPy
+
+    Parameters
+    ----------
+    arr : ArrayLike
+        Input array.
+    shape : Tuple[int]
+        Output shape.
+    mode : str
+        Padding mode (see np.pad).
+
+    Returns
+    -------
+    ArrayLike
+        Padded array.
+    """
+    assert arr.ndim == len(shape)
+
+    dif = tuple(s - a for s, a in zip(shape, arr.shape))
+    assert all(d >= 0 for d in dif)
+
+    pad_width = [[s // 2, s - s // 2] for s in dif]
+
+    if verbose:
+        click.echo(
+            f"padding: input shape {arr.shape}, output shape {shape}, padding {pad_width}"
+        )
+
+    return np.pad(arr, pad_width=pad_width, mode=mode, **kwargs)
+
+
+def center_crop(arr: ArrayLike, shape: Tuple[int, ...], verbose: str = False) -> ArrayLike:
+    """Crops the center of `arr`
+    from shimPy
+    """
+    assert arr.ndim == len(shape)
+
+    starts = tuple((cur_s - s) // 2 for cur_s, s in zip(arr.shape, shape))
+
+    assert all(s >= 0 for s in starts)
+
+    slicing = tuple(slice(s, s + d) for s, d in zip(starts, shape))
+    if verbose:
+        click.echo(
+            f"center crop: input shape {arr.shape}, output shape {shape}, slicing {slicing}"
+        )
+    return arr[slicing]
+
+
+def _match_shape(img: ArrayLike, shape: Tuple[int, ...]) -> ArrayLike:
+    """Pad or crop array to match provided shape.
+    from shimPy
+    """
+
+    if np.any(shape > img.shape):
+        padded_shape = np.maximum(img.shape, shape)
+        img = pad_to_shape(img, padded_shape, mode="reflect")
+
+    if np.any(shape < img.shape):
+        img = center_crop(img, shape)
+
+    return img
+
+
+def phase_cross_corr(
+    ref_img: ArrayLike,
+    mov_img: ArrayLike,
+    maximum_shift: float = 1.2,
+    normalization: bool = False,
+    verbose: bool = False,
+) -> Tuple[int, ...]:
+    """
+    Borrowing from Jordao dexpv2.crosscorr https://github.com/royerlab/dexpv2
+
+    Computes translation shift using arg. maximum of phase cross correlation.
+    Input are padded or cropped for fast FFT computation assuming a maximum translation shift.
+
+    Parameters
+    ----------
+    ref_img : ArrayLike
+        Reference image.
+    mov_img : ArrayLike
+        Moved image.
+    maximum_shift : float, optional
+        Maximum location shift normalized by axis size, by default 1.0
+
+    Returns
+    -------
+    Tuple[int, ...]
+        Shift between reference and moved image.
+    """
+    shape = tuple(
+        cast(int, next_fast_len(int(max(s1, s2) * maximum_shift)))
+        for s1, s2 in zip(ref_img.shape, mov_img.shape)
+    )
+
+    if verbose:
+        click.echo(
+            f"phase cross corr. fft shape of {shape} for arrays of shape {ref_img.shape} and {mov_img.shape} "
+            f"with maximum shift of {maximum_shift}"
+        )
+
+    ref_img = _match_shape(ref_img, shape)
+    mov_img = _match_shape(mov_img, shape)
+
+    Fimg1 = np.fft.rfftn(ref_img)
+    Fimg2 = np.fft.rfftn(mov_img)
+    eps = np.finfo(Fimg1.dtype).eps
+    del ref_img, mov_img
+
+    prod = Fimg1 * Fimg2.conj()
+    del Fimg1, Fimg2
+
+    if normalization:
+        norm = np.fmax(np.abs(prod), eps)
+    else:
+        norm = 1.0
+    corr = np.fft.irfftn(prod / norm)
+    del prod, norm
+
+    corr = np.fft.fftshift(np.abs(corr))
+
+    argmax = np.argmax(corr)
+    peak = np.unravel_index(argmax, corr.shape)
+    peak = tuple(s // 2 - p for s, p in zip(corr.shape, peak))
+
+    if verbose:
+        click.echo(f"phase cross corr. peak at {peak}")
+
+    return peak
+
+def get_tform_from_pcc(
+    t: int,
+    source_channel_tzyx: da.Array,
+    target_channel_tzyx: da.Array,
+    verbose: bool = False,
+) -> Optional[np.ndarray]:
+    try:
+        # Get the target and source images
+        target = np.asarray(source_channel_tzyx[t]).astype(np.float32)
+        source = np.asarray(target_channel_tzyx[t]).astype(np.float32)
+
+        shift = phase_cross_corr(target, source)
+        if verbose:
+            click.echo(f"Time {t}: shift = {shift}")
+
+    except Exception as e:
+        click.echo(f"Failed PCC at time {t}: {e}")
+        return None
+
+    dz, dy, dx = shift
+    mat = np.eye(4)
+    mat[0, 3] = dx
+    mat[1, 3] = dy
+    mat[2, 3] = dz
+    return mat
+
+def estimate_xyz_stabilization_pcc_per_position(
+    input_data_path: Path,
+    output_folder_path: Path,
+    c_idx: int,
+    crop_size_xy: list[int],
+    t_reference: str = "first",
+    verbose: bool = False,
+) -> None:
+    with open_ome_zarr(input_data_path) as input_position:
+        channel_tzyx = input_position.data.dask_array()[:, c_idx]
+        T, _, Y, X = channel_tzyx.shape
+
+        x_idx = slice(X // 2 - crop_size_xy[0] // 2, X // 2 + crop_size_xy[0] // 2)
+        y_idx = slice(Y // 2 - crop_size_xy[1] // 2, Y // 2 + crop_size_xy[1] // 2)
+
+        channel_tzyx_cropped = channel_tzyx[:, :, y_idx, x_idx]
+
+        if t_reference == "first":
+            target_channel_tzyx = np.broadcast_to(
+                channel_tzyx_cropped[0], channel_tzyx_cropped.shape
+            ).copy()
+        elif t_reference == "previous":
+            target_channel_tzyx = np.roll(channel_tzyx_cropped, shift=1, axis=0)
+            target_channel_tzyx[0] = channel_tzyx_cropped[0]
+        else:
+            raise ValueError("Invalid reference. Use 'first' or 'previous'.")
+
+        source_channel_tzyx = channel_tzyx_cropped
+
+        transforms = []
+        
+        for t in range(T):
+            click.echo(f"Estimating PCC for timepoint {t}")
+            if t == 0:
+                transforms.append(np.eye(4).tolist())
+            else:
+                transforms.append(
+                    get_tform_from_pcc(
+                        t,
+                        source_channel_tzyx,
+                        target_channel_tzyx,
+                        verbose=verbose,
+                    )
+                )
+            click.echo(f"Transform for timepoint {t}: {transforms[-1]}")
+
+
+        position_filename = str(Path(*input_data_path.parts[-3:])).replace("/", "_")
+        np.save(
+            output_folder_path / f"{position_filename}.npy",
+            np.array(transforms, dtype=np.float32),
+        )
+        click.echo(f"Saved transforms for {position_filename}.")
+    return transforms
+
+
+def estimate_xyz_stabilization_pcc(
+    input_data_paths: list[Path],
+    output_folder_path: Path,
+    c_idx: int = 0,
+    crop_size_xy: list[int] = (800, 800),
+    t_reference: str = "first",
+    sbatch_filepath: Path = None,
+    cluster: str = "local",
+    verbose: bool = False,
+) -> np.ndarray:
+
+    output_folder_path.mkdir(parents=True, exist_ok=True)
+    slurm_out_path = output_folder_path / "slurm_output"
+    slurm_out_path.mkdir(parents=True, exist_ok=True)
+
+    with open_ome_zarr(input_data_paths[0]) as dataset:
+        shape = dataset.data.shape
+        T, C, Y, X = shape
+
+    num_cpus, gb_ram_per_cpu = estimate_resources(shape=(T, C, Y, X), ram_multiplier=16, max_num_cpus=16)
+
+    slurm_args = {
+        "slurm_job_name": "estimate_xyz_pcc",
+        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
+        "slurm_cpus_per_task": num_cpus,
+        "slurm_array_parallelism": 100,
+        "slurm_time": 10,
+        "slurm_partition": "preempted",
+    }
+
+    if sbatch_filepath:
+        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
+
+    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
+    executor.update_parameters(**slurm_args)
+
+    click.echo(f"Submitting SLURM xyz PCC jobs with resources: {slurm_args}")
+    transforms_out_path = output_folder_path / "transforms_per_position"
+    transforms_out_path.mkdir(parents=True, exist_ok=True)
+
+    jobs = []
+    with executor.batch():
+        for input_data_path in input_data_paths:
+            job = executor.submit(
+                estimate_xyz_stabilization_pcc_per_position,
+                input_data_path=input_data_path,
+                output_folder_path=transforms_out_path,
+                c_idx=c_idx,
+                crop_size_xy=crop_size_xy,
+                t_reference=t_reference,
+                verbose=verbose,
+            )
+            jobs.append(job)
+
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_path = slurm_out_path / f"job_ids_{timestamp}.log"
+    with open(log_path, "w") as log_file:
+        for job in jobs:
+            log_file.write(f"{job.job_id}\n")
+
+    job_ids = [str(j.job_id) for j in jobs]
+    wait_for_jobs_to_finish(job_ids)
+
+    transform_files = list(transforms_out_path.glob("*.npy"))
+
+    fov_transforms = {}
+    for file_path in transform_files:
+        fov_filename = file_path.stem
+        fov_transforms[fov_filename] = np.load(file_path).tolist()
+
+    shutil.rmtree(transforms_out_path)
+
+    return fov_transforms
+
 @click.command("estimate-stabilization")
 @input_position_dirpaths()
 @output_filepath()
@@ -675,27 +970,6 @@ def estimate_stabilization_cli(
     else:
         cluster = "slurm"
 
-    # # Channel names to process
-    # stabilization_channel_names = []
-    # with open_ome_zarr(input_position_dirpaths[0]) as dataset:
-    #     channel_names = dataset.channel_names
-    #     voxel_size = dataset.scale
-    # if len(stabilization_channel_indices) < 1:
-    #     stabilization_channel_indices = range(len(channel_names))
-    #     stabilization_channel_names = channel_names
-    # else:
-    #     # Make the input a list
-    #     stabilization_channel_indices = list(stabilization_channel_indices)
-    #     stabilization_channel_names = []
-    #     # Check the channel indeces are valid
-    #     for c_idx in stabilization_channel_indices:
-    #         if c_idx not in range(len(channel_names)):
-    #             raise ValueError(
-    #                 f"Channel index {c_idx} is not valid. Please provide channel indeces from 0 to {len(channel_names)-1}"
-    #             )
-    #         else:
-    #             stabilization_channel_names.append(channel_names[c_idx])
-
     # Estimate stabilization parameters
     if stabilization_type == "z":
         if stabilization_method == "focus-finding":
@@ -741,7 +1015,7 @@ def estimate_stabilization_cli(
                     stabilization_type=stabilization_type,
                     stabilization_method=stabilization_method,
                     stabilization_estimation_channel=estimate_stabilization_channel,
-                    stabilization_channels=settings.stabilization_channels,
+                    stabilization_channels=channel_names,
                     affine_transform_zyx_list=transforms,
                     time_indices="all",
                     output_voxel_size=voxel_size,
@@ -773,8 +1047,6 @@ def estimate_stabilization_cli(
                     )
                     plt.close()
 
-        else:
-            raise ValueError(f"Invalid stabilization method: {stabilization_method}")
     elif stabilization_type == "xy":
         if stabilization_method == "focus-finding":
             click.echo("Estimating xy stabilization parameters")
@@ -817,7 +1089,7 @@ def estimate_stabilization_cli(
                     stabilization_type=stabilization_type,
                     stabilization_method=stabilization_method,
                     stabilization_estimation_channel=estimate_stabilization_channel,
-                    stabilization_channels=settings.stabilization_channels,
+                    stabilization_channels=channel_names,
                     affine_transform_zyx_list=transforms,
                     time_indices="all",
                     output_voxel_size=voxel_size,
@@ -843,8 +1115,6 @@ def estimate_stabilization_cli(
                     # Save the figure
                     plt.savefig(output_dirpath/"translation_plots"/f"{fov}.png", dpi=300, bbox_inches='tight')
                     plt.close()
-        else:
-            raise ValueError(f"Invalid stabilization method: {stabilization_method}")
     elif stabilization_type == "xyz":
         if stabilization_method == "focus-finding":
             click.echo("Estimating z stabilization parameters")
@@ -913,7 +1183,7 @@ def estimate_stabilization_cli(
                     stabilization_type=stabilization_type,
                     stabilization_method=stabilization_method,
                     stabilization_estimation_channel=estimate_stabilization_channel,
-                    stabilization_channels=settings.stabilization_channels,
+                    stabilization_channels=channel_names,
                     affine_transform_zyx_list=transforms,
                     time_indices="all",
                     output_voxel_size=voxel_size,
@@ -934,7 +1204,7 @@ def estimate_stabilization_cli(
                     stabilization_type="xy",
                     stabilization_method=stabilization_method,
                     stabilization_estimation_channel=estimate_stabilization_channel,
-                    stabilization_channels=settings.stabilization_channels,
+                    stabilization_channels=channel_names,
                     affine_transform_zyx_list=T_translation_mats.tolist(),
                     time_indices="all",
                     output_voxel_size=voxel_size,
@@ -959,8 +1229,67 @@ def estimate_stabilization_cli(
                     plt.savefig(output_dirpath/"translation_plots"/f"{fov}.png", dpi=300, bbox_inches='tight')
                     plt.close()
         elif stabilization_method == "phase-cross-corr":
-            pass
-        elif stabilization_method == "match_peaks":
+            click.echo("Estimating xyz stabilization parameters with phase cross correlation")
+            transforms = estimate_xyz_stabilization_pcc(
+                input_data_paths=input_position_dirpaths,
+                output_folder_path=output_dirpath,
+                c_idx=channel_index,
+                crop_size_xy=crop_size_xy,
+                t_reference=settings.t_reference,
+                sbatch_filepath=sbatch_filepath,
+                cluster=cluster,
+                verbose=verbose,
+            )
+             # Validate and filter transforms
+            transforms = _validate_transforms(
+                transforms=transforms,
+                window_size=settings.affine_transform_validation_window_size,
+                tolerance=settings.affine_transform_validation_tolerance,
+                Z=Z,
+                Y=Y,
+                X=X,
+                verbose=verbose,
+            )
+            # Interpolate missing transforms
+            transforms = _interpolate_transforms(
+                transforms=transforms,
+                window_size=settings.affine_transform_interpolation_window_size,
+                interpolation_type=settings.affine_transform_interpolation_type,
+                verbose=verbose,
+            )
+            output_filepath_fov = output_dirpath / "xyz_stabilization_settings.yml"
+            # Save the combined matrices
+            model = StabilizationSettings(
+                stabilization_type=stabilization_type,
+                stabilization_method=stabilization_method,
+                stabilization_estimation_channel=estimate_stabilization_channel,
+                stabilization_channels=channel_names,
+                affine_transform_zyx_list=transforms,
+                time_indices="all",
+                output_voxel_size=voxel_size,
+            )
+            model_to_yaml(model, output_filepath_fov)
+
+            if verbose:
+                os.makedirs(output_dirpath / "translation_plots", exist_ok=True)
+                transforms = np.array(transforms)
+
+                z_transforms = transforms[:, 0, 3] #->ZYX
+                y_transforms = transforms[:, 1, 3] #->ZYX
+                x_transforms = transforms[:, 2, 3] #->ZYX
+
+                plt.plot(z_transforms)
+                plt.plot(x_transforms)
+                plt.plot(y_transforms)
+                plt.legend(["Z-Translation", "X-Translation", "Y-Translation"])
+                plt.xlabel("Timepoint")
+                plt.ylabel("Translations")
+                plt.title("Translations Over Time")
+                plt.grid()
+                # Save the figure
+                plt.savefig(output_dirpath/"translation_plots"/f"average_fovs.png", dpi=300, bbox_inches='tight')
+                plt.close()
+        elif stabilization_method == "beads":
             click.echo("Estimating xyz stabilization parameters with beads")
             with open_ome_zarr(input_position_dirpaths[0], mode="r") as beads_position:
                 source_channels = beads_position.channel_names
@@ -1002,7 +1331,7 @@ def estimate_stabilization_cli(
                 stabilization_type=stabilization_type,
                 stabilization_method=stabilization_method,
                 stabilization_estimation_channel=estimate_stabilization_channel,
-                stabilization_channels=settings.stabilization_channels,
+                stabilization_channels=channel_names,
                 affine_transform_zyx_list=transforms,
                 time_indices="all",
                 output_voxel_size=voxel_size,
@@ -1029,54 +1358,12 @@ def estimate_stabilization_cli(
                 plt.savefig(output_dirpath/"translation_plots"/f"beads.png", dpi=300, bbox_inches='tight')
                 plt.close()
 
-        else:
-            raise ValueError(f"Invalid stabilization method: {stabilization_method}")
-    else:
-        raise ValueError(f"Invalid stabilization type: {stabilization_type}")
-
-    if stabilize_z:
-        click.echo("Estimating z stabilization parameters")
-        T_z_drift_mats = estimate_z_stabilization(
-            input_data_paths=input_position_dirpaths,
-            output_folder_path=output_dirpath,
-            z_drift_channel_idx=channel_index,
-            num_processes=num_processes,
-            crop_size_xy=crop_size_xy,
-            verbose=verbose,
-        )
-        stabilization_type = "z"
-
-    # Estimate yx drift
-    if stabilize_xy:
-        click.echo("Estimating xy stabilization parameters")
-        T_translation_mats = estimate_xy_stabilization(
-            input_data_paths=input_position_dirpaths,
-            output_folder_path=output_dirpath,
-            c_idx=channel_index,
-            crop_size_xy=crop_size_xy,
-            verbose=verbose,
-        )
-        stabilization_type = "xy"
-
-    if stabilize_z and stabilize_xy:
-        if T_translation_mats.shape[0] != T_z_drift_mats.shape[0]:
-            raise ValueError(
-                "The number of translation matrices and z drift matrices must be the same"
-            )
-        combined_mats = np.array([a @ b for a, b in zip(T_translation_mats, T_z_drift_mats)])
-        stabilization_type = "xyz"
-
-    # NOTE: we've checked that one of the two conditions below is true
-    elif stabilize_z:
-        combined_mats = T_z_drift_mats
-    elif stabilize_xy:
-        combined_mats = T_translation_mats
 
     # Save the combined matrices
     model = StabilizationSettings(
         stabilization_type=stabilization_type,
         stabilization_estimation_channel=channel_names[channel_index],
-        stabilization_channels=stabilization_channel_names,
+        stabilization_channels=channel_names,
         affine_transform_zyx_list=combined_mats.tolist(),
         time_indices="all",
         output_voxel_size=voxel_size,
