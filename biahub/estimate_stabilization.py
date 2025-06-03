@@ -23,7 +23,6 @@ from biahub.cli.estimate_registration import (
     _get_tform_from_beads,
     _interpolate_transforms,
     _validate_transforms,
-    wait_for_jobs_to_finish,
 )
 from biahub.cli.parsing import (
     config_filepath,
@@ -36,10 +35,10 @@ from biahub.cli.utils import (
     estimate_resources,
     model_to_yaml,
     sbatch_to_submitit,
+    wait_for_jobs_to_finish,
     yaml_to_model,
 )
 from biahub.settings import EstimateStabilizationSettings, StabilizationSettings
-from biahub.utils import _interpolate_transforms, _validate_transforms
 
 NA_DET = 1.35
 LAMBDA_ILL = 0.500
