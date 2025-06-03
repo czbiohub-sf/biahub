@@ -419,11 +419,11 @@ def beads_based_registration(
 
     # Prepare SLURM arguments
     slurm_args = {
-        "slurm_job_name": "estimate_focus_z",
+        "slurm_job_name": "estimate_registration",
         "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,
-        "slurm_time": 5,
+        "slurm_time": 30,
         "slurm_partition": "preempted",
     }
 
@@ -990,11 +990,11 @@ def _get_tform_from_beads(
     approx_tform: list,
     source_channel_tzyx: da.Array,
     target_channel_tzyx: da.Array,
-    source_block_size: list = [32, 16, 16],
+    source_block_size: list = [8, 8, 8],
     source_threshold_abs: int = 110,
     source_nms_distance: int = 16,
     source_min_distance: int = 0,
-    target_block_size: list = [32, 16, 16],
+    target_block_size: list = [8, 8, 8],
     target_threshold_abs: float = 0.8,
     target_nms_distance: int = 16,
     target_min_distance: int = 0,
@@ -1053,6 +1053,7 @@ def _get_tform_from_beads(
     source_channel_zyx = np.asarray(source_channel_tzyx[t_idx]).astype(np.float32)
     target_channel_zyx = np.asarray(target_channel_tzyx[t_idx]).astype(np.float32)
 
+
     if _check_nan_n_zeros(source_channel_zyx) or _check_nan_n_zeros(target_channel_zyx):
         click.echo(f'Beads data is missing at timepoint {t_idx}')
         return
@@ -1087,6 +1088,24 @@ def _get_tform_from_beads(
         min_distance=target_min_distance,
         verbose=verbose,
     )
+
+    output_data_path = Path("/hpc/projects/intracellular_dashboard/viral-sensor/2025_05_01_A549_DENV_sensor_DENV/1-preprocess/light-sheet/raw/1-register/beads/lf_mask.zarr")
+    position_key = ("C", "1", "000000")  # Must be a tuple of strings
+    with open_ome_zarr(output_data_path / Path(*position_key)) as dirt_mask_ds:
+        dirt_mask_load = np.asarray(dirt_mask_ds.data[0, 0])
+
+    # Keep only peaks whose (y, x) column is clean across all Z slices
+    target_peaks_filtered = []
+    for peak in target_peaks:
+        z, y, x = peak.astype(int)
+        if (
+            0 <= y < dirt_mask_load.shape[1] and
+            0 <= x < dirt_mask_load.shape[2] and
+            not dirt_mask_load[:, y, x].any()  # True if all Z are clean at (y, x)
+        ):
+            target_peaks_filtered.append(peak)
+
+    target_peaks = np.array(target_peaks_filtered)
 
     # Skip if there is no peak detected
     if len(source_peaks) < 2 or len(target_peaks) < 2:
@@ -1171,8 +1190,8 @@ def _get_tform_from_beads(
 
     if verbose:
         click.echo(f'Total of matches at time point {t_idx}: {len(matches)}')
-    dist = np.linalg.norm(source_peaks[matches[:, 0]] - target_peaks[matches[:, 1]], axis=1)
-    matches = matches[dist < np.quantile(dist, 0.95), :]
+    #dist = np.linalg.norm(source_peaks[matches[:, 0]] - target_peaks[matches[:, 1]], axis=1)
+    #matches = matches[dist < np.quantile(dist, 0.95), :]
     if verbose:
         click.echo(
             f'Total of matches after distance filtering at time point {t_idx}: {len(matches)}'
