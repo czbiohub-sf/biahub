@@ -14,7 +14,7 @@ from biahub.cli.parsing import (
     source_position_dirpaths,
     target_position_dirpaths,
 )
-from biahub.cli.utils import model_to_yaml, yaml_to_model
+from biahub.cli.utils import model_to_yaml, yaml_to_model, _check_nan_n_zeros
 
 # TODO: maybe a CLI call?
 T_IDX = 0
@@ -32,7 +32,10 @@ def _optimize_registration(
     clip: bool = False,
     sobel_fitler: bool = False,
     verbose: bool = False,
-) -> np.ndarray:
+) -> np.ndarray | None:
+    if _check_nan_n_zeros(source_czyx) or _check_nan_n_zeros(target_czyx):
+        return None
+    
     t_form_ants = convert_transform_to_ants(initial_tform)
 
     # TODO: hardcoded values
