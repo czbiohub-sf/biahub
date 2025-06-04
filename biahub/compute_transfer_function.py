@@ -11,7 +11,7 @@ from biahub.cli.parsing import config_filepath, input_position_dirpaths, output_
 @input_position_dirpaths()
 @config_filepath()
 @output_dirpath()
-def compute_transfer_function(
+def compute_tf_cli(
     input_position_dirpaths: list[Path],
     config_filepath: Path,
     output_dirpath: Path,
@@ -31,4 +31,4 @@ def compute_transfer_function(
 
 
 if __name__ == "__main__":
-    compute_transfer_function()
+    compute_tf_cli()

@@ -50,7 +50,7 @@ def reconstruct_cli(
     )
 
     # Compute transfer function
-    compute_transfer_function_cli(
+    compute_tf_cli(
         input_position_dirpaths[0],
         config_filepath,
         transfer_function_path,
