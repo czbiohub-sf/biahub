@@ -2,33 +2,32 @@ from pathlib import Path
 
 import click
 
-from waveorder.cli.apply_inverse_transfer_function import (
-    apply_inverse_transfer_function_cli,
-)
-from waveorder.cli.compute_transfer_function import (
-    compute_transfer_function_cli,
-)
-from waveorder.cli.parsing import (
+from biahub.apply_inverse_transfer_function import apply_inverse_transfer_function_slurm_cli
+from biahub.compute_transfer_function import compute_transfer_function_cli
+from biahub.cli.parsing import (
     config_filepath,
     input_position_dirpaths,
     output_dirpath,
-    processes_option,
-    ram_multiplier,
-    unique_id,
+    sbatch_filepath,
+    local,
+    num_processes,
 )
 
 
 @click.command()
 @input_position_dirpaths()
 @config_filepath()
-@output_dirpath()
-@processes_option(default=1)
-def reconstruct(
+@output_dirpath() 
+@num_processes()
+@sbatch_filepath()
+@local()
+def reconstruct_cli(
     input_position_dirpaths,
     config_filepath,
     output_dirpath,
     num_processes,
-
+    sbatch_filepath,
+    local,
 ):
     """
     Reconstruct a dataset using a configuration file. This is a
@@ -42,7 +41,7 @@ def reconstruct(
 
     See /examples for example configuration files.
 
-    >> waveorder reconstruct -i ./input.zarr/*/*/* -c ./examples/birefringence.yml -o ./output.zarr
+    >> biahub reconstruct -i ./input.zarr/*/*/* -c ./examples/birefringence.yml -o ./output.zarr
     """
 
     # Handle transfer function path
@@ -58,10 +57,15 @@ def reconstruct(
     )
 
     # Apply inverse transfer function
-    apply_inverse_transfer_function_cli(
+    apply_inverse_transfer_function_slurm_cli(
         input_position_dirpaths,
         transfer_function_path,
         config_filepath,
         output_dirpath,
         num_processes,
+        sbatch_filepath,
+        local,
     )
+    
+if __name__ == "__main__":
+    reconstruct_cli()

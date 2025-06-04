@@ -18,6 +18,9 @@ from biahub.cli.parsing import (
     config_filepath,
     input_position_dirpaths,
     output_dirpath,
+    sbatch_filepath,
+    local,
+    num_processes,
 )
 from waveorder.cli.parsing import transfer_function_dirpath
 from waveorder.cli.apply_inverse_transfer_function import apply_inverse_transfer_function_single_position
@@ -29,12 +32,17 @@ from biahub.cli.utils import yaml_to_model, create_empty_hcs_zarr
 @transfer_function_dirpath()
 @config_filepath()
 @output_dirpath()
-def apply_inverse_transfer_function_cli(
+@num_processes()
+@sbatch_filepath()
+@local()
+def apply_inverse_transfer_function_slurm_cli(
     input_position_dirpaths: list[Path],
     transfer_function_dirpath: Path,
     config_filepath: Path,
     output_dirpath: Path,
-    num_processes,
+    num_processes: int,
+    sbatch_filepath: Path,
+    local: bool,
 ) -> None:
     """
     Apply an inverse transfer function to a dataset using a configuration file.
@@ -46,7 +54,7 @@ def apply_inverse_transfer_function_cli(
 
     See /examples for example configuration files.
 
-    >> waveorder apply-inv-tf -i ./input.zarr/*/*/* -t ./transfer-function.zarr -c /examples/birefringence.yml -o ./output.zarr
+    >> biahub apply-inv-tf -i ./input.zarr/*/*/* -t ./transfer-function.zarr -c /examples/birefringence.yml -o ./output.zarr
     """
     output_metadata = get_reconstruction_output_metadata(
         input_position_dirpaths[0], config_filepath
@@ -93,21 +101,35 @@ def apply_inverse_transfer_function_cli(
     )
 
     name_without_ext = os.path.splitext(Path(output_dirpath).name)[0]
+    slurm_out_path = output_dirpath.parent / "slurm_output"
+
     executor_folder = os.path.join(
         Path(output_dirpath).parent.absolute(), name_without_ext + "_logs"
     )
     executor = submitit.AutoExecutor(folder=Path(executor_folder))
 
-    executor.update_parameters(
-        slurm_array_parallelism=np.min([50, num_jobs]),
-        slurm_mem_per_cpu=f"{gb_ram_request}G",
-        slurm_cpus_per_task=cpu_request,
-        slurm_time=60,
-        slurm_partition="cpu",
-        timeout_min=jobs_mgmt.JOBS_TIMEOUT,
-        # more slurm_*** resource parameters here
-    )
+    slurm_args = {
+        "slurm_job_name": "apply-inverse-transfer-function",
+        "slurm_mem_per_cpu": f"{gb_ram_request}G",
+        "slurm_cpus_per_task": cpu_request,
+        "slurm_time": 60,
+        "slurm_partition": "preempted",   
+    }
 
+    if sbatch_filepath:
+        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
+
+    if local:
+        cluster = "local"
+    else:
+        cluster = "slurm"
+        
+    # Prepare and submit jobs
+    click.echo(f"Preparing jobs: {slurm_args}")
+    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
+    executor.update_parameters(**slurm_args)
+
+    click.echo('Submitting SLURM jobs...')
     jobs = []
     with executor.batch():
         for input_position_dirpath in input_position_dirpaths:
@@ -122,11 +144,13 @@ def apply_inverse_transfer_function_cli(
             )
             jobs.append(job)
     
-    click.echo(
-        f"{num_jobs} job{'s' if num_jobs > 1 else ''} submitted {'locally' if executor.cluster == 'local' else 'via ' + executor.cluster}."
-    )
-    
+    job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 
-    monitor_jobs(jobs, input_position_dirpaths, doPrint)
+    log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
+    with log_path.open("w") as log_file:
+        log_file.write("\n".join(job_ids))
 
+
+if __name__ == "__main__":
+    apply_inverse_transfer_function_slurm_cli()
 
