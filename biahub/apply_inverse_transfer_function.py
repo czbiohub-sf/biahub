@@ -1,31 +1,30 @@
-import itertools
 import os
-import warnings
-from functools import partial
+
 from pathlib import Path
-from typing import Final
 
 import click
 import numpy as np
 import submitit
 import torch
-import torch.multiprocessing as mp
-from iohub import open_ome_zarr
 
-from waveorder.cli import apply_inverse_models, jobs_mgmt
-from waveorder.cli.monitor import monitor_jobs
+from iohub import open_ome_zarr
+from waveorder.cli.apply_inverse_transfer_function import (
+    apply_inverse_transfer_function_single_position,
+)
+from waveorder.cli.parsing import transfer_function_dirpath
+from waveorder.io.utils import get_reconstruction_output_metadata
+from waveorder.settings import ReconstructionSettings
+
 from biahub.cli.parsing import (
     config_filepath,
     input_position_dirpaths,
-    output_dirpath,
-    sbatch_filepath,
     local,
     num_processes,
+    output_dirpath,
+    sbatch_filepath,
 )
-from waveorder.cli.parsing import transfer_function_dirpath
-from waveorder.cli.apply_inverse_transfer_function import apply_inverse_transfer_function_single_position
-from waveorder.settings import ReconstructionSettings
-from biahub.cli.utils import yaml_to_model, create_empty_hcs_zarr
+from biahub.cli.utils import create_empty_hcs_zarr, sbatch_to_submitit, yaml_to_model
+
 
 @click.command()
 @input_position_dirpaths()
@@ -86,10 +85,8 @@ def apply_inverse_transfer_function_slurm_cli(
         gb_ram_request += input_memory * fourier_resource_multiplier
     if settings.fluorescence is not None:
         gb_ram_request += input_memory * fourier_resource_multiplier
-
-    gb_ram_request = np.ceil(
-        np.max([1, ram_multiplier * gb_ram_request])
-    ).astype(int)
+    ram_multiplier = 16
+    gb_ram_request = np.ceil(np.max([1, ram_multiplier * gb_ram_request])).astype(int)
     cpu_request = np.min([32, num_processes])
     num_jobs = len(input_position_dirpaths)
 
@@ -113,7 +110,7 @@ def apply_inverse_transfer_function_slurm_cli(
         "slurm_mem_per_cpu": f"{gb_ram_request}G",
         "slurm_cpus_per_task": cpu_request,
         "slurm_time": 60,
-        "slurm_partition": "preempted",   
+        "slurm_partition": "preempted",
     }
 
     if sbatch_filepath:
@@ -123,7 +120,7 @@ def apply_inverse_transfer_function_slurm_cli(
         cluster = "local"
     else:
         cluster = "slurm"
-        
+
     # Prepare and submit jobs
     click.echo(f"Preparing jobs: {slurm_args}")
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
@@ -143,7 +140,7 @@ def apply_inverse_transfer_function_slurm_cli(
                 output_metadata["channel_names"],
             )
             jobs.append(job)
-    
+
     job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 
     log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
@@ -153,4 +150,3 @@ def apply_inverse_transfer_function_slurm_cli(
 
 if __name__ == "__main__":
     apply_inverse_transfer_function_slurm_cli()
-

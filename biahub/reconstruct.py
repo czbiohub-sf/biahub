@@ -3,21 +3,21 @@ from pathlib import Path
 import click
 
 from biahub.apply_inverse_transfer_function import apply_inverse_transfer_function_slurm_cli
-from biahub.compute_transfer_function import compute_transfer_function_cli
 from biahub.cli.parsing import (
     config_filepath,
     input_position_dirpaths,
-    output_dirpath,
-    sbatch_filepath,
     local,
     num_processes,
+    output_dirpath,
+    sbatch_filepath,
 )
+from biahub.compute_transfer_function import compute_transfer_function_cli
 
 
 @click.command()
 @input_position_dirpaths()
 @config_filepath()
-@output_dirpath() 
+@output_dirpath()
 @num_processes()
 @sbatch_filepath()
 @local()
@@ -66,6 +66,7 @@ def reconstruct_cli(
         sbatch_filepath,
         local,
     )
-    
+
+
 if __name__ == "__main__":
     reconstruct_cli()
