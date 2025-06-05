@@ -14,6 +14,7 @@ import dask.array as da
 import napari
 import numpy as np
 import submitit
+import pickle
 
 from iohub import open_ome_zarr
 from scipy.interpolate import interp1d
@@ -555,7 +556,7 @@ def ants_registration(
     # )
 
     # Note: cropping is applied after registration with approx_tform
-    z_slice = slice(12, 85)  # DEBUG
+    z_slice = slice(9, 85)  # DEBUG
     y_slice = slice(400, 1300)
     x_slice = slice(200, -200)
 
@@ -587,7 +588,8 @@ def ants_registration(
 
     # DEBUG
     if output_folder_path is not None:
-        np.save(Path(output_folder_path, "transforms.npy"), np.asarray(transforms))
+        with open(Path(output_folder_path, "transforms.pkl"), "wb") as f:
+            pickle.dump(transforms, f)
     # transforms = np.load(
     #     "/hpc/projects/intracellular_dashboard/organelle_dynamics/rerun/2025_04_17_A549_H2B_CAAX_DENV/1-preprocess/light-sheet/raw/1-register/transforms.npy",
     # )
