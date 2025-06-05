@@ -24,6 +24,13 @@ def example_register_settings():
         settings = yaml.safe_load(file)
     yield settings_path, settings
 
+@pytest.fixture(scope="function")
+def example_estimate_stabilization_settings():
+    settings_path = "./biahub/settings/example_estimate_stabilization_settings.yml"
+    with open(settings_path) as file:
+        settings = yaml.safe_load(file)
+    yield settings_path, settings
+
 
 @pytest.fixture(scope="function")
 def example_stabilize_timelapse_settings():

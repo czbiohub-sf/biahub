@@ -7,6 +7,7 @@ from biahub.settings import (
     DeskewSettings,
     EstimateRegistrationSettings,
     RegistrationSettings,
+    EstimateStabilizationSettings,
     StabilizationSettings,
 )
 
@@ -79,3 +80,8 @@ def test_example_stabilize_timelapse_settings(example_stabilize_timelapse_settin
 def test_example_estimate_registration_settings(example_estimate_registration_settings):
     _, settings = example_estimate_registration_settings
     EstimateRegistrationSettings(**settings)
+
+
+def test_example_estimate_stabilization_settings(example_estimate_stabilization_settings):
+    _, settings = example_estimate_stabilization_settings
+    EstimateStabilizationSettings(**settings)
