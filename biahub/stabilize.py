@@ -132,12 +132,28 @@ def stabilize_cli(
     if config_filepath.suffix not in [".yml", ".yaml"]:
         raise ValueError("Config file must be a yaml file")
 
+    if config_filepath.is_dir():
+        # Directory with one config file per FOV
+        print(f"Config filepath is a directory: {config_filepath}")
+        per_position_settings = {}
+        for input_path in input_position_dirpaths:
+            fov_key = "_".join(input_path.parts[-3:])  # Adjust based on your folder naming
+            config_file = config_filepath / f"{fov_key}.yml"
+            if not config_file.exists():
+                raise FileNotFoundError(f"Expected config file for {fov_key} at {config_file}")
+            per_position_settings[input_path] = yaml_to_model(config_file, StabilizationSettings)
+        # Use the first position's settings for output metadata
+        settings = per_position_settings[input_position_dirpaths[0]]
+    elif config_filepath.suffix in [".yml", ".yaml"]:
+        # Single config file for all FOVs
+        settings = yaml_to_model(config_filepath, StabilizationSettings)
+    else:
+        raise ValueError("Config file must be a yaml file or a directory")
+
     # Convert to Path objects
     config_filepath = Path(config_filepath)
     output_dirpath = Path(output_dirpath)
     slurm_out_path = output_dirpath.parent / "slurm_output"
-    # Load the config file
-    settings = yaml_to_model(config_filepath, StabilizationSettings)
 
     combined_mats = settings.affine_transform_zyx_list
     combined_mats = np.array(combined_mats)
@@ -227,7 +243,7 @@ def stabilize_cli(
 
     # Estimate resources
 
-    num_cpus, gb_ram_per_cpu = estimate_resources(shape=[T, C, Z, Y, X], ram_multiplier=16)
+    num_cpus, gb_ram_per_cpu = estimate_resources(shape=[T, C, Z, Y, X], ram_multiplier=16, max_cpus=16)
 
     # Prepare SLURM arguments
     slurm_args = {
@@ -260,6 +276,11 @@ def stabilize_cli(
     with executor.batch():
         # apply stabilization to channels in the chosen channels and else copy the rest
         for input_position_path in input_position_dirpaths:
+            if config_filepath.is_dir():
+                settings = per_position_settings[input_position_path]
+                # Use settings for this FOV
+            combined_mats = np.array(settings.affine_transform_zyx_list)
+            stabilize_zyx_args = {"list_of_shifts": combined_mats}
             for channel_name in channel_names:
                 if channel_name in stabilization_channels:
                     job = executor.submit(
