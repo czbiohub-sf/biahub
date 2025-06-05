@@ -1239,7 +1239,7 @@ def estimate_stabilization_cli(
                     plt.close()
         elif stabilization_method == "phase-cross-corr":
             click.echo("Estimating xyz stabilization parameters with phase cross correlation")
-            transforms = estimate_xyz_stabilization_pcc(
+            transform_dict = estimate_xyz_stabilization_pcc(
                 input_data_paths=input_position_dirpaths,
                 output_folder_path=output_dirpath,
                 c_idx=channel_index,
@@ -1249,59 +1249,61 @@ def estimate_stabilization_cli(
                 cluster=cluster,
                 verbose=verbose,
             )
-            # Validate and filter transforms
-            transforms = _validate_transforms(
-                transforms=transforms,
-                window_size=settings.affine_transform_validation_window_size,
-                tolerance=settings.affine_transform_validation_tolerance,
-                Z=Z,
-                Y=Y,
-                X=X,
-                verbose=verbose,
-            )
-            # Interpolate missing transforms
-            transforms = _interpolate_transforms(
-                transforms=transforms,
-                window_size=settings.affine_transform_interpolation_window_size,
-                interpolation_type=settings.affine_transform_interpolation_type,
-                verbose=verbose,
-            )
-            output_filepath_fov = output_dirpath / "xyz_stabilization_settings.yml"
-            # Save the combined matrices
-            model = StabilizationSettings(
-                stabilization_type=stabilization_type,
-                stabilization_method=stabilization_method,
-                stabilization_estimation_channel=estimate_stabilization_channel,
-                stabilization_channels=channel_names,
-                affine_transform_zyx_list=transforms,
-                time_indices="all",
-                output_voxel_size=voxel_size,
-            )
-            model_to_yaml(model, output_filepath_fov)
-
-            if verbose:
-                os.makedirs(output_dirpath / "translation_plots", exist_ok=True)
-                transforms = np.array(transforms)
-
-                z_transforms = transforms[:, 0, 3]  # ->ZYX
-                y_transforms = transforms[:, 1, 3]  # ->ZYX
-                x_transforms = transforms[:, 2, 3]  # ->ZYX
-
-                plt.plot(z_transforms)
-                plt.plot(x_transforms)
-                plt.plot(y_transforms)
-                plt.legend(["Z-Translation", "X-Translation", "Y-Translation"])
-                plt.xlabel("Timepoint")
-                plt.ylabel("Translations")
-                plt.title("Translations Over Time")
-                plt.grid()
-                # Save the figure
-                plt.savefig(
-                    output_dirpath / "translation_plots" / "average_fovs.png",
-                    dpi=300,
-                    bbox_inches='tight',
+            os.makedirs(output_dirpath / "xyz_stabilization_settings", exist_ok=True)
+            for fov, transforms in transform_dict.items():
+                click.echo(f"Processing FOV {fov}")
+                # Validate and filter transforms
+                transforms = _validate_transforms(
+                    transforms=transforms,
+                    window_size=settings.affine_transform_validation_window_size,
+                    tolerance=settings.affine_transform_validation_tolerance,
+                    Z=Z,
+                    Y=Y,
+                    X=X,
+                    verbose=verbose,
                 )
-                plt.close()
+                # Interpolate missing transforms
+                transforms = _interpolate_transforms(
+                    transforms=transforms,
+                    window_size=settings.affine_transform_interpolation_window_size,
+                    interpolation_type=settings.affine_transform_interpolation_type,
+                    verbose=verbose,
+                )
+                output_filepath_fov = output_dirpath / "xyz_stabilization_settings" / f"{fov}.yml"
+                # Save the combined matrices
+                model = StabilizationSettings(
+                    stabilization_type=stabilization_type,
+                    stabilization_method=stabilization_method,
+                    stabilization_estimation_channel=estimate_stabilization_channel,
+                    stabilization_channels=channel_names,   
+                    affine_transform_zyx_list=transforms,
+                    time_indices="all",
+                    output_voxel_size=voxel_size,
+                )
+                model_to_yaml(model, output_filepath_fov)
+                if verbose:
+                    os.makedirs(output_dirpath / "translation_plots", exist_ok=True)
+                    transforms = np.array(transforms)
+
+                    z_transforms = transforms[:, 0, 3]  # ->ZYX
+                    y_transforms = transforms[:, 1, 3]  # ->ZYX
+                    x_transforms = transforms[:, 2, 3]  # ->ZYX
+                    plt.plot(z_transforms)
+                    plt.plot(x_transforms)
+                    plt.plot(y_transforms)
+                    plt.legend(["Z-Translation", "X-Translation", "Y-Translation"])
+                    plt.xlabel("Timepoint")
+                    plt.ylabel("Translations")
+                    plt.title("Translations Over Time")
+                    plt.grid()
+                    # Save the figure
+                    plt.savefig(
+                        output_dirpath / "translation_plots" / f"{fov}.png",
+                        dpi=300,
+                        bbox_inches='tight',
+                    )
+                    plt.close()
+
         elif stabilization_method == "beads":
             click.echo("Estimating xyz stabilization parameters with beads")
             with open_ome_zarr(input_position_dirpaths[0], mode="r") as beads_position:
