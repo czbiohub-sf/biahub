@@ -750,8 +750,9 @@ def _interpolate_transforms(
 
     return transforms
 
+################
 
-def _compute_cost_matrix(
+def cost_matrix(
     source_peaks,
     target_peaks,
     source_edges,
@@ -863,6 +864,7 @@ def _knn_edges(points, k=5):
 
     edges = [(i, j) for i, neighbors in enumerate(indices) for j in neighbors if i != j]
     return edges
+    
 
 
 def match_hungarian(
@@ -961,6 +963,138 @@ def match_mutual_information(
     return matches
 
 
+
+def match_peaks(
+    source_peaks,
+    target_peaks,
+    match_algorithm,
+    match_metric,
+    match_max_ratio,
+    match_cross_check,
+    hungarian_knn_k,
+):
+    if match_algorithm == 'match_descriptor':
+
+        # Match peaks, excluding top 5% of distances as outliers
+        matches = match_descriptors(
+            source_peaks,
+            target_peaks,
+            metric=match_metric,
+            max_ratio=match_max_ratio,
+            cross_check=match_cross_check,
+        )
+    elif match_algorithm == 'hungarian':
+
+        source_edges = _knn_edges(source_peaks, k=hungarian_knn_k)
+        target_edges = _knn_edges(target_peaks, k=hungarian_knn_k)
+
+        if match_cross_check:
+            # Step 1: A → B
+            C_ab = _compute_cost_matrix(source_peaks, target_peaks, source_edges, target_edges)
+            matches_ab = match_hungarian(
+                C_ab, cost_threshold=np.quantile(C_ab, 0.10), max_ratio=match_max_ratio
+            )
+
+            # Step 2: B → A (swap arguments)
+            C_ba = _compute_cost_matrix(
+                target_peaks,
+                source_peaks,
+                target_edges,
+                source_edges,
+                distance_metric=match_metric,
+            )
+            matches_ba = match_hungarian(
+                C_ba, cost_threshold=np.quantile(C_ba, 0.10), max_ratio=match_max_ratio
+            )
+
+            # Step 3: Invert matches_ba to compare
+            reverse_map = {(j, i) for i, j in matches_ba}
+
+            # Step 4: Keep only symmetric matches
+            matches = np.array([[i, j] for i, j in matches_ab if (i, j) in reverse_map])
+        else:
+            # # Compute cost matrix
+            C = _compute_cost_matrix(source_peaks, target_peaks, source_edges, target_edges)
+
+            matches = match_hungarian(C, cost_threshold=np.quantile(C, 0.10))
+
+    elif match_algorithm == 'mutual_information':
+        matches = match_mutual_information(
+            source_peaks=source_peaks,
+            target_peaks=target_peaks,
+            source_vol=source_data_reg,
+            target_vol=target_channel_zyx,
+            patch_size=11,
+        )
+return matches
+
+def filter_matches(
+    matches: np.ndarray,
+    source_peaks: np.ndarray,
+    target_peaks: np.ndarray,
+    match_filter_angle_threshold: float = 0,
+    match_distance_filter: float =0.95,
+    verbose: bool = False,
+):
+    if match_distance_filter:
+        dist = np.linalg.norm(source_peaks[matches[:, 0]] - target_peaks[matches[:, 1]], axis=1)
+        matches = matches[dist < np.quantile(dist, match_distance_filter), :]
+        if verbose:
+            click.echo(
+                f'Total of matches after distance filtering: {len(matches)}'
+            )
+    
+    if match_filter_angle_threshold:
+
+        # Calculate vectors between matches
+        vectors = target_peaks[matches[:, 1]] - source_peaks[matches[:, 0]]
+
+        # Compute angles in radians relative to the x-axis
+        angles_rad = np.arctan2(vectors[:, 1], vectors[:, 0])
+
+        # Convert to degrees for easier interpretation
+        angles_deg = np.degrees(angles_rad)
+
+        # Create a histogram of angles
+        bins = np.linspace(-180, 180, 36)  # 10-degree bins
+        hist, bin_edges = np.histogram(angles_deg, bins=bins)
+
+        # Find the dominant bin
+        dominant_bin_index = np.argmax(hist)
+        dominant_angle = (
+            bin_edges[dominant_bin_index] + bin_edges[dominant_bin_index + 1]
+        ) / 2
+
+        # Filter matches within ±filter_angle_threshold degrees of the dominant direction, which may need finetuning
+        filtered_indices = np.where(
+            np.abs(angles_deg - dominant_angle) <= match_filter_angle_threshold
+        )[0]
+        matches = matches[filtered_indices]
+
+        if verbose:
+            click.echo(f'Total of matches after angle filtering: {len(matches)}')
+
+    return matches
+
+def estimate_tform_from_matches(
+    source_peaks: np.ndarray,
+    target_peaks: np.ndarray,
+    transform_type: str = 'affine',
+    matches: np.ndarray,
+):
+    if transform_type == 'affine':
+        tform = AffineTransform(dimensionality=3)  
+    elif transform_type == 'euclidean':
+        tform = EuclideanTransform(dimensionality=3)
+    elif transform_type == 'similarity':
+        tform = SimilarityTransform(dimensionality=3)
+    else:
+        raise ValueError(f'Unknown transform type: {transform_type}')
+    tform.estimate(source_peaks[matches[:, 0]], target_peaks[matches[:, 1]])
+    return tform
+
+
+
 def _get_tform_from_beads(
     t_idx: int,
     approx_tform: list,
@@ -1040,7 +1174,7 @@ def _get_tform_from_beads(
         .apply_to_image(source_data_ants, reference=target_data_ants)
         .numpy()
     )
-    click.echo(f'Detecting beads for timepoint {t_idx}')
+    
     if verbose:
         click.echo('Detecting beads in source dataset:')
 
@@ -1071,99 +1205,27 @@ def _get_tform_from_beads(
 
     click.echo(f"Using {match_algorithm} algorithm to match beads")
 
-    if match_algorithm == 'match_descriptor':
-
-        # Match peaks, excluding top 5% of distances as outliers
-        matches = match_descriptors(
-            source_peaks,
-            target_peaks,
-            metric=match_metric,
-            max_ratio=match_max_ratio,
-            cross_check=match_cross_check,
-        )
-    elif match_algorithm == 'hungarian':
-
-        source_edges = _knn_edges(source_peaks, k=hungarian_knn_k)
-        target_edges = _knn_edges(target_peaks, k=hungarian_knn_k)
-
-        if match_cross_check:
-            # Step 1: A → B
-            C_ab = _compute_cost_matrix(source_peaks, target_peaks, source_edges, target_edges)
-            matches_ab = match_hungarian(
-                C_ab, cost_threshold=np.quantile(C_ab, 0.10), max_ratio=match_max_ratio
-            )
-
-            # Step 2: B → A (swap arguments)
-            C_ba = _compute_cost_matrix(
-                target_peaks,
-                source_peaks,
-                target_edges,
-                source_edges,
-                distance_metric=match_metric,
-            )
-            matches_ba = match_hungarian(
-                C_ba, cost_threshold=np.quantile(C_ba, 0.10), max_ratio=match_max_ratio
-            )
-
-            # Step 3: Invert matches_ba to compare
-            reverse_map = {(j, i) for i, j in matches_ba}
-
-            # Step 4: Keep only symmetric matches
-            matches = np.array([[i, j] for i, j in matches_ab if (i, j) in reverse_map])
-        else:
-            # # Compute cost matrix
-            C = _compute_cost_matrix(source_peaks, target_peaks, source_edges, target_edges)
-
-            matches = match_hungarian(C, cost_threshold=np.quantile(C, 0.10))
-
-    elif match_algorithm == 'mutual_information':
-        matches = match_mutual_information(
-            source_peaks=source_peaks,
-            target_peaks=target_peaks,
-            source_vol=source_data_reg,
-            target_vol=target_channel_zyx,
-            patch_size=11,
-        )
+    matches = match_peaks(
+        source_peaks,
+        target_peaks,
+        match_algorithm,
+        match_metric,
+        match_max_ratio,
+        match_cross_check,
+        hungarian_knn_k,
+    )
 
     if verbose:
         click.echo(f'Total of matches at time point {t_idx}: {len(matches)}')
-    dist = np.linalg.norm(source_peaks[matches[:, 0]] - target_peaks[matches[:, 1]], axis=1)
-    matches = matches[dist < np.quantile(dist, 0.95), :]
-    if verbose:
-        click.echo(
-            f'Total of matches after distance filtering at time point {t_idx}: {len(matches)}'
-        )
-    if match_filter_angle_threshold:
-
-        # Calculate vectors between matches
-        vectors = target_peaks[matches[:, 1]] - source_peaks[matches[:, 0]]
-
-        # Compute angles in radians relative to the x-axis
-        angles_rad = np.arctan2(vectors[:, 1], vectors[:, 0])
-
-        # Convert to degrees for easier interpretation
-        angles_deg = np.degrees(angles_rad)
-
-        # Create a histogram of angles
-        bins = np.linspace(-180, 180, 36)  # 10-degree bins
-        hist, bin_edges = np.histogram(angles_deg, bins=bins)
-
-        # Find the dominant bin
-        dominant_bin_index = np.argmax(hist)
-        dominant_angle = (
-            bin_edges[dominant_bin_index] + bin_edges[dominant_bin_index + 1]
-        ) / 2
-
-        # Filter matches within ±filter_angle_threshold degrees of the dominant direction, which may need finetuning
-        filtered_indices = np.where(
-            np.abs(angles_deg - dominant_angle) <= match_filter_angle_threshold
-        )[0]
-        matches = matches[filtered_indices]
-
-        if verbose:
-            click.echo(
-                f'Total of matches after angle filtering at time point {t_idx}: {len(matches)}'
-            )
+    
+    matches = filter_matches(
+        matches,
+        source_peaks,
+        target_peaks,
+        match_filter_angle_threshold,
+        match_distance_filter,
+        verbose,
+    )
 
     if len(matches) < 3:
         click.echo(
@@ -1171,22 +1233,18 @@ def _get_tform_from_beads(
         )
         return
 
-    # Affine transform performs better than Euclidean
-    if transform_type == 'affine':
-        tform = AffineTransform(dimensionality=3)
-    elif transform_type == 'euclidean':
-        tform = EuclideanTransform(dimensionality=3)
-    elif transform_type == 'similarity':
-        tform = SimilarityTransform(dimensionality=3)
-    else:
-        raise ValueError(f'Unknown transform type: {transform_type}')
-
-    tform.estimate(source_peaks[matches[:, 0]], target_peaks[matches[:, 1]])
+    tform = estimate_tform_from_matches(
+        source_peaks,
+        target_peaks,
+        transform_type,
+        matches,
+    )
     compount_tform = np.asarray(approx_tform) @ tform.inverse.params
-    click.echo(f'Matches: {matches}')
-    click.echo(f"tform.params: {tform.params}")
-    click.echo(f" tform.inverse.params: { tform.inverse.params}")
-    click.echo(f"compount_tform: {compount_tform}")
+    if verbose:
+        click.echo(f'matches: {matches}')
+        click.echo(f"tform.params: {tform.params}")
+        click.echo(f"tform.inverse.params: { tform.inverse.params}")
+        click.echo(f"compount_tform: {compount_tform}")
 
     if slurm:
         output_folder_path.mkdir(parents=True, exist_ok=True)

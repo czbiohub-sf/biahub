@@ -32,6 +32,7 @@ approx_tform = np.asarray(
 with open_ome_zarr(lf_data_path) as lf_ds:
     lf_data = np.asarray(lf_ds.data[t_idx, 0]) # take second timepoint
     lf_scale = lf_ds.scale
+    Z, Y, X = lf_data.shape
 
 with open_ome_zarr(ls_data_path) as ls_ds:
     ls_data = np.asarray(ls_ds.data[t_idx, 1]) # take mCherry channel
@@ -54,7 +55,7 @@ viewer.add_image(ls_data_reg, name='LS')
 # %% Detect peaks in LS data
 ls_peaks = detect_peaks(
     ls_data_reg,
-    block_size=[32, 16, 16],
+    block_size=[8, 8, 8],
     threshold_abs=110,
     nms_distance=16,
     min_distance=0,
@@ -70,7 +71,7 @@ viewer.add_points(
 # %% Detect peaks in LF data
 lf_peaks = detect_peaks(
     lf_data,
-    block_size=[32, 16, 16],
+    block_size=[8, 8, 8],
     threshold_abs=0.8,
     nms_distance=16,
     min_distance=0,
@@ -134,7 +135,7 @@ viewer.add_shapes(
 viewer.dims.ndisplay = 3
 
 # %% Register LS data using compount transform
-tform = AffineTransform(dimensionality=3) # Affine transform performs better than Euclidean
+tform = SimilarityTransform(dimensionality=3) # Affine transform performs better than Euclidean
 tform.estimate(ls_peaks[matches[:, 0]], lf_peaks[matches[:, 1]])
 
 compount_tform = approx_tform @ tform.inverse.params
@@ -159,5 +160,7 @@ viewer.add_image(
     blending='additive',
     colormap='magenta'
 )
+
+
 
 # %%
