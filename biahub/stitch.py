@@ -259,8 +259,13 @@ def stitch_cli(
             )
         first_fov_name = list(shifts_by_well[well_name].keys())[0]
         input_fov_shape = input_plate[first_fov_name].data.shape
-        output_chunk_size = input_plate[first_fov_name].data.chunks
         output_shape_zyx = get_output_shape(fov_shifts, input_fov_shape)
+        output_chunk_size = (
+            1,
+            1,
+            output_shape_zyx[0],
+            *input_plate[first_fov_name].data.chunks[-2:],
+        )
         output_scale = input_plate[first_fov_name].scale
 
         output_shape = (
