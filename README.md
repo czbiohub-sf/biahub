@@ -9,7 +9,7 @@ Bio-image analysis hub supporting high-throughput data reconstruction on HPC clu
 ## Install
 
 ```
-conda create -n biahub python==3.10
+conda create -n biahub python==3.11
 conda activate biahub
 
 git clone https://github.com/czbiohub-sf/biahub.git
