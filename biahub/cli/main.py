@@ -5,6 +5,7 @@ from biahub.concatenate import concatenate_cli
 from biahub.deconvolve import deconvolve_cli
 from biahub.deskew import deskew_cli
 from biahub.estimate_bleaching import estimate_bleaching_cli
+from biahub.estimate_crop import estimate_crop_cli
 from biahub.estimate_deskew import estimate_deskew_cli
 from biahub.estimate_psf import estimate_psf_cli
 from biahub.estimate_registration import estimate_registration_cli
@@ -41,6 +42,7 @@ cli.add_command(stitch_cli)
 cli.add_command(concatenate_cli)
 cli.add_command(estimate_stabilization_cli)
 cli.add_command(stabilize_cli)
+cli.add_command(estimate_crop_cli)
 cli.add_command(estimate_psf_cli)
 cli.add_command(deconvolve_cli)
 cli.add_command(characterize_psf_cli)

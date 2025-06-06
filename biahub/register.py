@@ -265,8 +265,8 @@ def find_lir(registered_zyx: np.ndarray, plot: bool = False) -> Tuple:
     corner3_xy = (x + width, y + height)  # Top-right corner
     corner4_xy = (x, y + height)  # Top-left corner
     rectangle_xy = np.array((corner1_xy, corner2_xy, corner3_xy, corner4_xy))
-    X_slice = slice(rectangle_xy.min(axis=0)[0], rectangle_xy.max(axis=0)[0])
-    Y_slice = slice(rectangle_xy.min(axis=0)[1], rectangle_xy.max(axis=0)[1])
+    X_slice = slice(int(rectangle_xy.min(axis=0)[0]), int(rectangle_xy.max(axis=0)[0]))
+    Y_slice = slice(int(rectangle_xy.min(axis=0)[1]), int(rectangle_xy.max(axis=0)[1]))
 
     # NOTE: this method assumes the center of the image is representative of the center of the object to estimate the LIR in Z
     # Find the lir Z using ZX
@@ -284,7 +284,7 @@ def find_lir(registered_zyx: np.ndarray, plot: bool = False) -> Tuple:
     corner3_zx = (x + width, z + height)  # Top-right corner
     corner4_zx = (x, z + height)  # Top-left corner
     rectangle_zx = np.array((corner1_zx, corner2_zx, corner3_zx, corner4_zx))
-    Z_slice = slice(rectangle_zx.min(axis=0)[1], rectangle_zx.max(axis=0)[1])
+    Z_slice = slice(int(rectangle_zx.min(axis=0)[1]), int(rectangle_zx.max(axis=0)[1]))
 
     if plot:
         rectangle_yx = plt.Polygon(
