@@ -15,9 +15,9 @@ from biahub.register import register_cli
 from biahub.segment import segment_cli
 from biahub.stabilize import stabilize_cli
 from biahub.stitch import stitch_cli
-from biahub.compute_transfer_function import compute_tf_cli
-from biahub.apply_inverse_transfer_function import apply_inverse_transfer_function_cli
-from biahub.reconstruct import reconstruct_cli
+from biahub.compute_transfer_function import _compute_transfer_function_cli
+from biahub.apply_inverse_transfer_function import _apply_inverse_transfer_function_cli
+from biahub.reconstruct import _reconstruct_cli
 
 CONTEXT = {"help_option_names": ["-h", "--help"]}
 
@@ -44,10 +44,10 @@ cli.add_command(stitch_cli)
 cli.add_command(concatenate_cli)
 cli.add_command(estimate_stabilization_cli)
 cli.add_command(stabilize_cli)
+cli.add_command(_compute_transfer_function_cli)
+cli.add_command(_apply_inverse_transfer_function_cli)
+cli.add_command(_reconstruct_cli)
 cli.add_command(estimate_psf_cli)
 cli.add_command(deconvolve_cli)
 cli.add_command(characterize_psf_cli)
 cli.add_command(segment_cli)
-cli.add_command(compute_tf_cli)
-cli.add_command(apply_inverse_transfer_function_cli)
-cli.add_command(reconstruct_cli)

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import click
 
-from biahub.apply_inverse_transfer_function import apply_inverse_transfer_function_slurm_cli
+from biahub.apply_inverse_transfer_function import apply_inverse_transfer_function_cli
 from biahub.cli.parsing import (
     config_filepath,
     input_position_dirpaths,
@@ -11,23 +11,23 @@ from biahub.cli.parsing import (
     output_dirpath,
     sbatch_filepath,
 )
-from biahub.compute_transfer_function import compute_transfer_function_cli
+from waveorder.cli.compute_transfer_function import compute_transfer_function_cli
 
 
-@click.command()
+@click.command("reconstruct")
 @input_position_dirpaths()
 @config_filepath()
 @output_dirpath()
 @num_processes()
 @sbatch_filepath()
 @local()
-def reconstruct_cli(
-    input_position_dirpaths,
-    config_filepath,
-    output_dirpath,
-    num_processes,
-    sbatch_filepath,
-    local,
+def _reconstruct_cli(
+    input_position_dirpaths: list[Path],
+    config_filepath: Path,
+    output_dirpath: Path,
+    num_processes: int,
+    sbatch_filepath: Path,
+    local: bool = False,
 ):
     """
     Reconstruct a dataset using a configuration file. This is a
@@ -43,6 +43,7 @@ def reconstruct_cli(
 
     >> biahub reconstruct -i ./input.zarr/*/*/* -c ./examples/birefringence.yml -o ./output.zarr
     """
+    # glob all positions in input_position_dirpaths
 
     # Handle transfer function path
     transfer_function_path = output_dirpath.parent / Path(
@@ -50,14 +51,15 @@ def reconstruct_cli(
     )
 
     # Compute transfer function
-    compute_tf_cli(
+    # call cli function directly
+    compute_transfer_function_cli(
         input_position_dirpaths[0],
         config_filepath,
         transfer_function_path,
     )
 
     # Apply inverse transfer function
-    apply_inverse_transfer_function_slurm_cli(
+    apply_inverse_transfer_function_cli(
         input_position_dirpaths,
         transfer_function_path,
         config_filepath,
@@ -69,4 +71,4 @@ def reconstruct_cli(
 
 
 if __name__ == "__main__":
-    reconstruct_cli()
+    _reconstruct_cli()

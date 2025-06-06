@@ -12,8 +12,8 @@ from waveorder.cli.apply_inverse_transfer_function import (
     apply_inverse_transfer_function_single_position,
 )
 from waveorder.cli.parsing import transfer_function_dirpath
-from waveorder.io.utils import get_reconstruction_output_metadata
-from waveorder.settings import ReconstructionSettings
+from waveorder.cli.apply_inverse_transfer_function import get_reconstruction_output_metadata
+from waveorder.cli.settings import ReconstructionSettings
 
 from biahub.cli.parsing import (
     config_filepath,
@@ -23,18 +23,13 @@ from biahub.cli.parsing import (
     output_dirpath,
     sbatch_filepath,
 )
-from biahub.cli.utils import create_empty_hcs_zarr, sbatch_to_submitit, yaml_to_model
+from waveorder.cli.utils import create_empty_hcs_zarr
+from biahub.cli.utils import yaml_to_model
+from biahub.cli.parsing import sbatch_to_submitit
 
 
-@click.command()
-@input_position_dirpaths()
-@transfer_function_dirpath()
-@config_filepath()
-@output_dirpath()
-@num_processes()
-@sbatch_filepath()
-@local()
-def apply_inverse_transfer_function_slurm_cli(
+
+def apply_inverse_transfer_function_cli(
     input_position_dirpaths: list[Path],
     transfer_function_dirpath: Path,
     config_filepath: Path,
@@ -43,21 +38,11 @@ def apply_inverse_transfer_function_slurm_cli(
     sbatch_filepath: Path,
     local: bool,
 ) -> None:
-    """
-    Apply an inverse transfer function to a dataset using a configuration file.
 
-    Applies a transfer function to all positions in the list `input-position-dirpaths`,
-    so all positions must have the same TCZYX shape.
-
-    Appends channels to ./output.zarr, so multiple reconstructions can fill a single store.
-
-    See /examples for example configuration files.
-
-    >> biahub apply-inv-tf -i ./input.zarr/*/*/* -t ./transfer-function.zarr -c /examples/birefringence.yml -o ./output.zarr
-    """
     output_metadata = get_reconstruction_output_metadata(
         input_position_dirpaths[0], config_filepath
     )
+    
     create_empty_hcs_zarr(
         store_path=output_dirpath,
         position_keys=[p.parts[-3:] for p in input_position_dirpaths],
@@ -85,7 +70,7 @@ def apply_inverse_transfer_function_slurm_cli(
         gb_ram_request += input_memory * fourier_resource_multiplier
     if settings.fluorescence is not None:
         gb_ram_request += input_memory * fourier_resource_multiplier
-    ram_multiplier = 16
+    ram_multiplier = 1
     gb_ram_request = np.ceil(np.max([1, ram_multiplier * gb_ram_request])).astype(int)
     cpu_request = np.min([32, num_processes])
     num_jobs = len(input_position_dirpaths)
@@ -147,6 +132,36 @@ def apply_inverse_transfer_function_slurm_cli(
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
 
+@click.command("apply-inv-tf")
+@input_position_dirpaths()
+@transfer_function_dirpath()
+@config_filepath()
+@output_dirpath()
+@num_processes()
+@sbatch_filepath()
+@local()
+def _apply_inverse_transfer_function_cli(
+    input_position_dirpaths: list[Path],
+    transfer_function_dirpath: Path,
+    config_filepath: Path,
+    output_dirpath: Path,
+    num_processes: int,
+    sbatch_filepath: Path,
+    local: bool = False,
+):
+    """
+    Apply an inverse transfer function to a dataset using a configuration file.
+
+    Applies a transfer function to all positions in the list `input-position-dirpaths`,
+    so all positions must have the same TCZYX shape.
+
+    Appends channels to ./output.zarr, so multiple reconstructions can fill a single store.
+
+    See /examples for example configuration files.
+
+    >> biahub apply-inv-tf -i ./input.zarr/*/*/* -t ./transfer-function.zarr -c /examples/birefringence.yml -o ./output.zarr
+    """ 
+    apply_inverse_transfer_function_cli(input_position_dirpaths, transfer_function_dirpath, config_filepath, output_dirpath, num_processes, sbatch_filepath, local)
 
 if __name__ == "__main__":
-    apply_inverse_transfer_function_slurm_cli()
+    _apply_inverse_transfer_function_cli()

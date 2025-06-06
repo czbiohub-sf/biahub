@@ -7,11 +7,11 @@ from waveorder.cli.compute_transfer_function import compute_transfer_function_cl
 from biahub.cli.parsing import config_filepath, input_position_dirpaths, output_dirpath
 
 
-@click.command()
+@click.command("compute-tf")
 @input_position_dirpaths()
 @config_filepath()
 @output_dirpath()
-def compute_tf_cli(
+def _compute_transfer_function_cli(
     input_position_dirpaths: list[Path],
     config_filepath: Path,
     output_dirpath: Path,
@@ -31,4 +31,4 @@ def compute_tf_cli(
 
 
 if __name__ == "__main__":
-    compute_tf_cli()
+    _compute_transfer_function_cli()
