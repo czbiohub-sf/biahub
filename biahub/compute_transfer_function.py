@@ -22,7 +22,7 @@ def _compute_transfer_function_cli(
     Calculates the transfer function based on the shape of the first position
     in the list `input-position-dirpaths`.
 
-    See /examples for example configuration files.
+    See https://github.com/mehta-lab/waveorder/tree/main/docs/examples for example configuration files.
 
     >> biahub compute-tf -i ./input.zarr/0/0/0 -c ./examples/birefringence.yml -o ./transfer_function.zarr
     """

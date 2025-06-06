@@ -39,7 +39,7 @@ def _reconstruct_cli(
     to all positions in the list `input-position-dirpaths`, so all positions
     must have the same TCZYX shape.
 
-    See /examples for example configuration files.
+    See https://github.com/mehta-lab/waveorder/tree/main/docs/examples for example configuration files.
 
     >> biahub reconstruct -i ./input.zarr/*/*/* -c ./examples/birefringence.yml -o ./output.zarr
     """

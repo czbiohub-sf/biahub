@@ -157,7 +157,7 @@ def _apply_inverse_transfer_function_cli(
 
     Appends channels to ./output.zarr, so multiple reconstructions can fill a single store.
 
-    See /examples for example configuration files.
+    See https://github.com/mehta-lab/waveorder/tree/main/docs/examples for example configuration files.
 
     >> biahub apply-inv-tf -i ./input.zarr/*/*/* -t ./transfer-function.zarr -c /examples/birefringence.yml -o ./output.zarr
     """ 
