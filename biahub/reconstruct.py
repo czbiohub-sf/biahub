@@ -2,6 +2,8 @@ from pathlib import Path
 
 import click
 
+from waveorder.cli.compute_transfer_function import compute_transfer_function_cli
+
 from biahub.apply_inverse_transfer_function import apply_inverse_transfer_function_cli
 from biahub.cli.parsing import (
     config_filepath,
@@ -11,7 +13,6 @@ from biahub.cli.parsing import (
     output_dirpath,
     sbatch_filepath,
 )
-from waveorder.cli.compute_transfer_function import compute_transfer_function_cli
 
 
 @click.command("reconstruct")

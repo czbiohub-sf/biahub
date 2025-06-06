@@ -10,10 +10,11 @@ import torch
 from iohub import open_ome_zarr
 from waveorder.cli.apply_inverse_transfer_function import (
     apply_inverse_transfer_function_single_position,
+    get_reconstruction_output_metadata,
 )
 from waveorder.cli.parsing import transfer_function_dirpath
-from waveorder.cli.apply_inverse_transfer_function import get_reconstruction_output_metadata
 from waveorder.cli.settings import ReconstructionSettings
+from waveorder.cli.utils import create_empty_hcs_zarr
 
 from biahub.cli.parsing import (
     config_filepath,
@@ -22,11 +23,9 @@ from biahub.cli.parsing import (
     num_processes,
     output_dirpath,
     sbatch_filepath,
+    sbatch_to_submitit,
 )
-from waveorder.cli.utils import create_empty_hcs_zarr
 from biahub.cli.utils import yaml_to_model
-from biahub.cli.parsing import sbatch_to_submitit
-
 
 
 def apply_inverse_transfer_function_cli(
@@ -42,7 +41,7 @@ def apply_inverse_transfer_function_cli(
     output_metadata = get_reconstruction_output_metadata(
         input_position_dirpaths[0], config_filepath
     )
-    
+
     create_empty_hcs_zarr(
         store_path=output_dirpath,
         position_keys=[p.parts[-3:] for p in input_position_dirpaths],
@@ -132,6 +131,7 @@ def apply_inverse_transfer_function_cli(
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
 
+
 @click.command("apply-inv-tf")
 @input_position_dirpaths()
 @transfer_function_dirpath()
@@ -160,8 +160,17 @@ def _apply_inverse_transfer_function_cli(
     See https://github.com/mehta-lab/waveorder/tree/main/docs/examples for example configuration files.
 
     >> biahub apply-inv-tf -i ./input.zarr/*/*/* -t ./transfer-function.zarr -c /examples/birefringence.yml -o ./output.zarr
-    """ 
-    apply_inverse_transfer_function_cli(input_position_dirpaths, transfer_function_dirpath, config_filepath, output_dirpath, num_processes, sbatch_filepath, local)
+    """
+    apply_inverse_transfer_function_cli(
+        input_position_dirpaths,
+        transfer_function_dirpath,
+        config_filepath,
+        output_dirpath,
+        num_processes,
+        sbatch_filepath,
+        local,
+    )
+
 
 if __name__ == "__main__":
     _apply_inverse_transfer_function_cli()
