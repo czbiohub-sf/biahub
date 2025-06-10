@@ -1111,25 +1111,25 @@ def _get_tform_from_beads(
         verbose=verbose,
     )
 
-    output_data_path = Path(
-        "/hpc/projects/intracellular_dashboard/viral-sensor/2025_05_01_A549_DENV_sensor_DENV/1-preprocess/light-sheet/raw/1-register/beads/lf_mask.zarr"
-    )
-    position_key = ("C", "1", "000000")  # Must be a tuple of strings
-    with open_ome_zarr(output_data_path / Path(*position_key)) as dirt_mask_ds:
-        dirt_mask_load = np.asarray(dirt_mask_ds.data[0, 0])
+    # output_data_path = Path(
+    #     "/hpc/projects/intracellular_dashboard/viral-sensor/2025_05_01_A549_DENV_sensor_DENV/1-preprocess/light-sheet/raw/1-register/beads/lf_mask.zarr"
+    # )
+    # position_key = ("C", "1", "000000")  # Must be a tuple of strings
+    # with open_ome_zarr(output_data_path / Path(*position_key)) as dirt_mask_ds:
+    #     dirt_mask_load = np.asarray(dirt_mask_ds.data[0, 0])
 
-    # Keep only peaks whose (y, x) column is clean across all Z slices
-    target_peaks_filtered = []
-    for peak in target_peaks:
-        z, y, x = peak.astype(int)
-        if (
-            0 <= y < dirt_mask_load.shape[1]
-            and 0 <= x < dirt_mask_load.shape[2]
-            and not dirt_mask_load[:, y, x].any()  # True if all Z are clean at (y, x)
-        ):
-            target_peaks_filtered.append(peak)
+    # # Keep only peaks whose (y, x) column is clean across all Z slices
+    # target_peaks_filtered = []
+    # for peak in target_peaks:
+    #     z, y, x = peak.astype(int)
+    #     if (
+    #         0 <= y < dirt_mask_load.shape[1]
+    #         and 0 <= x < dirt_mask_load.shape[2]
+    #         and not dirt_mask_load[:, y, x].any()  # True if all Z are clean at (y, x)
+    #     ):
+    #         target_peaks_filtered.append(peak)
 
-    target_peaks = np.array(target_peaks_filtered)
+    # target_peaks = np.array(target_peaks_filtered)
 
     # Skip if there is no peak detected
     if len(source_peaks) < 2 or len(target_peaks) < 2:
