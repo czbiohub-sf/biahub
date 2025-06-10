@@ -91,20 +91,12 @@ def apply_stabilization_transform(
 @config_filepath()
 @sbatch_filepath()
 @local()
-@click.option(
-    "--sbv",
-    "skip_beads_fov",
-    type=str,
-    default=None,
-    help="Beads FOV to skip during stabilization (e.g., control or reference FOV).",
-)
 def stabilize(
     input_position_dirpaths: List[str],
     output_dirpath: str,
     config_filepath: str,
     sbatch_filepath: str = None,
     local: bool = False,
-    skip_beads_fov: str = None,
 ):
     """
     Stabilize a timelapse dataset by applying spatial transformations.
@@ -138,11 +130,6 @@ def stabilize(
 
     """
     config_filepath = Path(config_filepath)
-    if skip_beads_fov:
-        input_position_dirpaths = [
-            path for path in input_position_dirpaths if skip_beads_fov not in str(path)
-        ]
-        click.echo(f"Skipping FOV: {skip_beads_fov}")
     if config_filepath.is_dir():
         # Directory with one config file per FOV
         print(f"Config filepath is a directory: {config_filepath}")
