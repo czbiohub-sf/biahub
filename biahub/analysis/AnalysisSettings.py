@@ -26,11 +26,11 @@ class MyBaseModel(BaseModel):
 class EstimateRegistrationSettings(MyBaseModel):
     target_channel_name: str
     source_channel_name: str
-    estimation_method: Literal["manual", "beads", "z_shift", "ants"] = "manual"
+    estimation_method: Literal["manual", "beads",  "ants"] = "manual"
     time_index: int = 0
     affine_90degree_rotation: int = 0
     match_algorithm: Literal[
-        "hungarian", "match_descriptor", "mutual_info_gauss", "mutual_information"
+        "hungarian", "match_descriptor", "mutual_information"
     ] = "hungarian"
     match_filter_angle_threshold: float = 0
     match_max_ratio: float = 0.8
@@ -69,7 +69,7 @@ class EstimateStabilizationSettings(MyBaseModel):
     t_reference: Literal["first", "previous"] = "first"
     average_across_wells: bool = False
     match_algorithm: Literal[
-        "hungarian", "match_descriptor", "mutual_info_gauss", "mutual_information"
+        "hungarian", "match_descriptor", "mutual_information"
     ] = "hungarian"
     match_filter_angle_threshold: float = 0
     affine_transform_type: Literal["euclidean", "similarity", "affine"] = "euclidean"
