@@ -1,17 +1,17 @@
 import itertools
+import os
 import shutil
 
-import os
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Tuple, Literal, cast
-import matplotlib.pyplot as plt
+from typing import List, Literal, Optional, Tuple, cast
+
 import click
 import dask.array as da
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import submitit
-from biahub.cli.estimate_registration import wait_for_jobs_to_finish
 
 from iohub.ngff import open_ome_zarr
 from numpy.typing import ArrayLike
@@ -27,6 +27,7 @@ from biahub.cli.estimate_registration import (
     _get_tform_from_beads,
     _interpolate_transforms,
     _validate_transforms,
+    wait_for_jobs_to_finish,
 )
 from biahub.cli.parsing import (
     config_filepath,
@@ -40,6 +41,7 @@ from biahub.cli.utils import estimate_resources, model_to_yaml, yaml_to_model
 
 NA_DET = 1.35
 LAMBDA_ILL = 0.500
+
 
 def estimate_position_focus(
     input_data_path: Path,
@@ -100,8 +102,7 @@ def estimate_position_focus(
 
     # ---- Generate and save Z transformation matrix per timepoint
 
-     # Compute Z drifts
-
+    # Compute Z drifts
 
     z_focus_shift = [np.eye(4)]
     z_val = focus_idx[0]
@@ -111,16 +112,16 @@ def estimate_position_focus(
         z_focus_shift.append(shift)
     T_z_drift_mats = np.array(z_focus_shift)
 
-    
     output_path_transform.mkdir(parents=True, exist_ok=True)
-    np.save(output_path_transform/ f"{position_filename}.npy", T_z_drift_mats)
+    np.save(output_path_transform / f"{position_filename}.npy", T_z_drift_mats)
 
     if verbose:
         click.echo(f"Saved Z transform matrices to {output_path_transform}")
 
 
-
-def get_mean_z_positions(dataframe_path: Path, verbose: bool = False, method: Literal["mean", "median"] = "mean") -> None:
+def get_mean_z_positions(
+    dataframe_path: Path, verbose: bool = False, method: Literal["mean", "median"] = "mean"
+) -> None:
     df = pd.read_csv(dataframe_path)
 
     # Sort the DataFrame based on 'time_idx'
@@ -147,7 +148,6 @@ def get_mean_z_positions(dataframe_path: Path, verbose: bool = False, method: Li
         plt.ylim(0, 100)
         plt.legend()
         plt.savefig(dataframe_path.parent / "z_drift.png")
-
 
     return average_focus_idx["focus_idx"].values
 
@@ -501,7 +501,9 @@ def estimate_xyz_stabilization_with_beads(
 
     # Compute transformations in parallel
 
-    num_cpus, gb_ram_per_cpu = estimate_resources(shape=(T,1,Z,Y,X), ram_multiplier=5, max_num_cpus=16)
+    num_cpus, gb_ram_per_cpu = estimate_resources(
+        shape=(T, 1, Z, Y, X), ram_multiplier=5, max_num_cpus=16
+    )
 
     # Prepare SLURM arguments
     slurm_args = {
@@ -532,7 +534,8 @@ def estimate_xyz_stabilization_with_beads(
     jobs = []
     with executor.batch():
         for t in range(1, T, 1):
-            job = executor.submit(_get_tform_from_beads,
+            job = executor.submit(
+                _get_tform_from_beads,
                 approx_tform=approx_tform,
                 source_channel_tzyx=channel_tzyx,
                 target_channel_tzyx=target_channel_tzyx,
@@ -548,9 +551,10 @@ def estimate_xyz_stabilization_with_beads(
                 match_filter_angle_threshold=match_filter_angle_threshold,
                 match_algorithm=match_algorithm,
                 transform_type=transform_type,
-                slurm = True,
+                slurm=True,
                 output_folder_path=output_transforms_path,
-                t_idx=t)
+                t_idx=t,
+            )
             jobs.append(job)
 
     # Save job IDs
@@ -566,7 +570,7 @@ def estimate_xyz_stabilization_with_beads(
     # Load and collect all transform arrays
     transforms = [np.eye(4).tolist()]
     for t in range(1, T):
-        file_path = output_transforms_path/f"{t}.npy"
+        file_path = output_transforms_path / f"{t}.npy"
         if not os.path.exists(file_path):
             transforms.append(None)
             click.echo(f"Transform for timepoint {t} not found. Using None.")
@@ -579,9 +583,8 @@ def estimate_xyz_stabilization_with_beads(
         raise ValueError(
             f"Number of transforms {len(transforms)} does not match number of timepoints {T}"
         )
-    
-    return transforms
 
+    return transforms
 
 
 def estimate_xy_stabilization_per_position(
@@ -677,7 +680,9 @@ def estimate_xy_stabilization(
             estimate_z_index=True,
         )
 
-    num_cpus, gb_ram_per_cpu = estimate_resources(shape=shape, ram_multiplier=16, max_num_cpus=16)
+    num_cpus, gb_ram_per_cpu = estimate_resources(
+        shape=shape, ram_multiplier=16, max_num_cpus=16
+    )
 
     # Prepare SLURM arguments
     slurm_args = {
@@ -737,7 +742,7 @@ def estimate_xy_stabilization(
         fov_transforms[fov_filename] = np.load(file_path).tolist()
 
     shutil.rmtree(output_transforms_path)
-    
+
     return fov_transforms
 
 
@@ -764,7 +769,9 @@ def estimate_z_stabilization(
     with open_ome_zarr(input_data_paths[0]) as dataset:
         shape = dataset.data.shape  # (T, C, Z, Y, X)
 
-    num_cpus, gb_ram_per_cpu = estimate_resources(shape=shape, ram_multiplier=16, max_num_cpus=16)
+    num_cpus, gb_ram_per_cpu = estimate_resources(
+        shape=shape, ram_multiplier=16, max_num_cpus=16
+    )
 
     # Prepare SLURM arguments
     slurm_args = {
@@ -819,14 +826,15 @@ def estimate_z_stabilization(
 
     # Aggregate results
     focus_csvs_path = list(output_folder_focus_path.glob("*.csv"))
-    
+
     # Check length of focus_csvs_path
     if len(focus_csvs_path) == 0:
         click.echo("No focus CSV files found. Exiting.")
         return
     elif len(focus_csvs_path) != len(input_data_paths):
-        click.echo(f"Warning: {len(focus_csvs_path)} focus CSV files found for {len(input_data_paths)} input data paths.")
-
+        click.echo(
+            f"Warning: {len(focus_csvs_path)} focus CSV files found for {len(input_data_paths)} input data paths."
+        )
 
     df = pd.concat([pd.read_csv(f) for f in focus_csvs_path])
     # sort by position and time_idx
@@ -848,9 +856,9 @@ def estimate_z_stabilization(
     if estimate_z_index:
         shutil.rmtree(output_transforms_path)
         return
-    
+
     if average_index:
-    # # Compute Z drifts
+        # # Compute Z drifts
         z_drift_offsets = get_mean_z_positions(
             dataframe_path=output_folder_path / "positions_focus.csv",
             method="median",
@@ -881,12 +889,13 @@ def estimate_z_stabilization(
         for file_path in transforms_paths:
             T_zyx_shift = np.load(file_path).tolist()
             fov_filename = file_path.stem
-            # 
+            #
             fov_transforms[fov_filename] = T_zyx_shift
 
         shutil.rmtree(output_transforms_path)
 
     return fov_transforms
+
 
 @click.command()
 @input_position_dirpaths()
@@ -995,7 +1004,7 @@ def estimate_stabilization(
                     raise ValueError(
                         "The number of translation matrices and z drift matrices must be the same"
                     )
-                
+
                 transforms = np.asarray(
                     [a @ b for a, b in zip(T_translation_mats, T_z_drift_mats)]
                 ).tolist()
@@ -1016,7 +1025,9 @@ def estimate_stabilization(
                     interpolation_type=settings.affine_transform_interpolation_type,
                     verbose=verbose,
                 )
-                output_filepath_fov = output_dirpath / "xyz_stabilization_settings" / f"{fov}.yml"
+                output_filepath_fov = (
+                    output_dirpath / "xyz_stabilization_settings" / f"{fov}.yml"
+                )
                 # Save the combined matrices
                 model = StabilizationSettings(
                     stabilization_type=stabilization_type,
@@ -1038,7 +1049,9 @@ def estimate_stabilization(
                     time_indices="all",
                     output_voxel_size=voxel_size,
                 )
-                model_to_yaml(model, output_dirpath / "z_stabilization_settings" / f"{fov}.yml")
+                model_to_yaml(
+                    model, output_dirpath / "z_stabilization_settings" / f"{fov}.yml"
+                )
                 model = StabilizationSettings(
                     stabilization_type="xy",
                     stabilization_method=stabilization_method,
@@ -1048,13 +1061,15 @@ def estimate_stabilization(
                     time_indices="all",
                     output_voxel_size=voxel_size,
                 )
-                model_to_yaml(model, output_dirpath / "xy_stabilization_settings" / f"{fov}.yml")
+                model_to_yaml(
+                    model, output_dirpath / "xy_stabilization_settings" / f"{fov}.yml"
+                )
                 if verbose:
                     transforms = np.array(transforms)
 
-                    z_transforms = transforms[:, 0, 3] #->ZYX
-                    y_transforms = transforms[:, 1, 3] #->ZYX
-                    x_transforms = transforms[:, 2, 3] #->ZYX
+                    z_transforms = transforms[:, 0, 3]  # ->ZYX
+                    y_transforms = transforms[:, 1, 3]  # ->ZYX
+                    x_transforms = transforms[:, 2, 3]  # ->ZYX
 
                     plt.plot(z_transforms)
                     plt.plot(x_transforms)
@@ -1065,11 +1080,15 @@ def estimate_stabilization(
                     plt.title("Translations Over Time")
                     plt.grid()
                     # Save the figure
-                    plt.savefig(output_dirpath/"translation_plots"/f"{fov}.png", dpi=300, bbox_inches='tight')
+                    plt.savefig(
+                        output_dirpath / "translation_plots" / f"{fov}.png",
+                        dpi=300,
+                        bbox_inches='tight',
+                    )
                     plt.close()
 
         elif stabilization_method == "beads":
-            
+
             click.echo("Estimating xyz stabilization parameters with beads")
             with open_ome_zarr(input_position_dirpaths[0], mode="r") as beads_position:
                 source_channels = beads_position.channel_names
@@ -1086,10 +1105,9 @@ def estimate_stabilization(
                 output_folder_path=output_dirpath,
                 cluster=cluster,
                 sbatch_filepath=sbatch_filepath,
-
             )
 
-             # Validate and filter transforms
+            # Validate and filter transforms
             transforms = _validate_transforms(
                 transforms=transforms,
                 window_size=settings.affine_transform_validation_window_size,
@@ -1122,9 +1140,9 @@ def estimate_stabilization(
                 os.makedirs(output_dirpath / "translation_plots", exist_ok=True)
                 transforms = np.array(transforms)
 
-                z_transforms = transforms[:, 0, 3] #->ZYX
-                y_transforms = transforms[:, 1, 3] #->ZYX
-                x_transforms = transforms[:, 2, 3] #->ZYX
+                z_transforms = transforms[:, 0, 3]  # ->ZYX
+                y_transforms = transforms[:, 1, 3]  # ->ZYX
+                x_transforms = transforms[:, 2, 3]  # ->ZYX
 
                 plt.plot(z_transforms)
                 plt.plot(x_transforms)
@@ -1135,7 +1153,11 @@ def estimate_stabilization(
                 plt.title("Translations Over Time")
                 plt.grid()
                 # Save the figure
-                plt.savefig(output_dirpath/"translation_plots"/f"beads.png", dpi=300, bbox_inches='tight')
+                plt.savefig(
+                    output_dirpath / "translation_plots" / "beads.png",
+                    dpi=300,
+                    bbox_inches='tight',
+                )
                 plt.close()
 
         elif stabilization_method == "phase-cross-corr":
@@ -1170,13 +1192,15 @@ def estimate_stabilization(
                     interpolation_type=settings.affine_transform_interpolation_type,
                     verbose=verbose,
                 )
-                output_filepath_fov = output_dirpath / "xyz_stabilization_settings" / f"{fov}.yml"
+                output_filepath_fov = (
+                    output_dirpath / "xyz_stabilization_settings" / f"{fov}.yml"
+                )
                 # Save the combined matrices
                 model = StabilizationSettings(
                     stabilization_type=stabilization_type,
                     stabilization_method=stabilization_method,
                     stabilization_estimation_channel=estimate_stabilization_channel,
-                    stabilization_channels=channel_names,   
+                    stabilization_channels=channel_names,
                     affine_transform_zyx_list=transforms,
                     time_indices="all",
                     output_voxel_size=voxel_size,
@@ -1204,24 +1228,22 @@ def estimate_stabilization(
                         bbox_inches='tight',
                     )
                     plt.close()
-            
 
     # Estimate z drift
     if "z" == stabilization_type and stabilization_method == "focus-finding":
         click.echo("Estimating z stabilization parameters")
 
         T_z_drift_mats_dict = estimate_z_stabilization(
-                input_data_paths=input_position_dirpaths,
-                output_folder_path=output_dirpath,
-                channel_index=channel_index,
-                crop_size_xy=crop_size_xy,
-                sbatch_filepath=sbatch_filepath,
-                average_index=average_across_wells,
-                cluster=cluster,
-                verbose=verbose,
-            )
+            input_data_paths=input_position_dirpaths,
+            output_folder_path=output_dirpath,
+            channel_index=channel_index,
+            crop_size_xy=crop_size_xy,
+            sbatch_filepath=sbatch_filepath,
+            average_index=average_across_wells,
+            cluster=cluster,
+            verbose=verbose,
+        )
 
-           
         os.makedirs(output_dirpath / "z_stabilization_settings", exist_ok=True)
         if verbose:
             os.makedirs(output_dirpath / "translation_plots", exist_ok=True)
@@ -1262,9 +1284,9 @@ def estimate_stabilization(
 
                 transforms = np.array(transforms)
 
-                z_transforms = transforms[:, 0, 3] #->ZYX
-                y_transforms = transforms[:, 1, 3] #->ZYX
-                x_transforms = transforms[:, 2, 3] #->ZYX
+                z_transforms = transforms[:, 0, 3]  # ->ZYX
+                y_transforms = transforms[:, 1, 3]  # ->ZYX
+                x_transforms = transforms[:, 2, 3]  # ->ZYX
 
                 plt.plot(z_transforms)
                 plt.plot(x_transforms)
@@ -1275,7 +1297,11 @@ def estimate_stabilization(
                 plt.title("Translations Over Time")
                 plt.grid()
                 # Save the figure
-                plt.savefig(output_dirpath/"translation_plots"/f"{fov}.png", dpi=300, bbox_inches='tight')
+                plt.savefig(
+                    output_dirpath / "translation_plots" / f"{fov}.png",
+                    dpi=300,
+                    bbox_inches='tight',
+                )
                 plt.close()
 
     # Estimate yx drift
@@ -1294,7 +1320,7 @@ def estimate_stabilization(
                 verbose=verbose,
             )
             os.makedirs(output_dirpath / "xy_stabilization_settings", exist_ok=True)
-    
+
             # save each FOV separately
             for fov, transforms in T_translation_mats_dict.items():
                 # save the transforms as
@@ -1316,7 +1342,9 @@ def estimate_stabilization(
                     interpolation_type=settings.affine_transform_interpolation_type,
                     verbose=verbose,
                 )
-                output_filepath_fov = output_dirpath /"xy_stabilization_settings"/ f"{fov}.yml"
+                output_filepath_fov = (
+                    output_dirpath / "xy_stabilization_settings" / f"{fov}.yml"
+                )
                 # Save the combined matrices
                 model = StabilizationSettings(
                     stabilization_type=stabilization_type,
@@ -1333,9 +1361,9 @@ def estimate_stabilization(
                     os.makedirs(output_dirpath / "translation_plots", exist_ok=True)
                     transforms = np.array(transforms)
 
-                    z_transforms = transforms[:, 0, 3] #->ZYX
-                    y_transforms = transforms[:, 1, 3] #->ZYX
-                    x_transforms = transforms[:, 2, 3] #->ZYX
+                    z_transforms = transforms[:, 0, 3]  # ->ZYX
+                    y_transforms = transforms[:, 1, 3]  # ->ZYX
+                    x_transforms = transforms[:, 2, 3]  # ->ZYX
 
                     plt.plot(z_transforms)
                     plt.plot(x_transforms)
@@ -1346,8 +1374,13 @@ def estimate_stabilization(
                     plt.title("Translations Over Time")
                     plt.grid()
                     # Save the figure
-                    plt.savefig(output_dirpath/"translation_plots"/f"{fov}.png", dpi=300, bbox_inches='tight')
+                    plt.savefig(
+                        output_dirpath / "translation_plots" / f"{fov}.png",
+                        dpi=300,
+                        bbox_inches='tight',
+                    )
                     plt.close()
+
 
 if __name__ == "__main__":
     estimate_stabilization()

@@ -7,14 +7,18 @@ from iohub import open_ome_zarr
 from skimage import filters
 
 from biahub.analysis.AnalysisSettings import RegistrationSettings
-from biahub.analysis.register import convert_transform_to_ants, convert_transform_to_numpy, find_overlapping_volume
+from biahub.analysis.register import (
+    convert_transform_to_ants,
+    convert_transform_to_numpy,
+    find_overlapping_volume,
+)
 from biahub.cli.parsing import (
     config_filepath,
     output_filepath,
     source_position_dirpaths,
     target_position_dirpaths,
 )
-from biahub.cli.utils import model_to_yaml, yaml_to_model, _check_nan_n_zeros
+from biahub.cli.utils import _check_nan_n_zeros, model_to_yaml, yaml_to_model
 
 # TODO: maybe a CLI call?
 T_IDX = 0
@@ -35,7 +39,7 @@ def _optimize_registration(
 ) -> np.ndarray | None:
     if _check_nan_n_zeros(source_czyx) or _check_nan_n_zeros(target_czyx):
         return None
-    
+
     t_form_ants = convert_transform_to_ants(initial_tform)
 
     # TODO: hardcoded values

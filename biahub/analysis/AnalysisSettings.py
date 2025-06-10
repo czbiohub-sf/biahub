@@ -29,7 +29,9 @@ class EstimateRegistrationSettings(MyBaseModel):
     estimation_method: Literal["manual", "beads", "z_shift", "ants"] = "manual"
     time_index: int = 0
     affine_90degree_rotation: int = 0
-    match_algorithm: Literal["hungarian", "match_descriptor", "mutual_info_gauss", "mutual_information"] = "hungarian"
+    match_algorithm: Literal[
+        "hungarian", "match_descriptor", "mutual_info_gauss", "mutual_information"
+    ] = "hungarian"
     match_filter_angle_threshold: float = 0
     match_max_ratio: float = 0.8
     hungarian_knn_k: int = 5
@@ -66,7 +68,9 @@ class EstimateStabilizationSettings(MyBaseModel):
     crop_size_xy: list[int, int] = [300, 300]
     t_reference: Literal["first", "previous"] = "first"
     average_across_wells: bool = False
-    match_algorithm: Literal["hungarian", "match_descriptor", "mutual_info_gauss", "mutual_information"] = "hungarian"
+    match_algorithm: Literal[
+        "hungarian", "match_descriptor", "mutual_info_gauss", "mutual_information"
+    ] = "hungarian"
     match_filter_angle_threshold: float = 0
     affine_transform_type: Literal["euclidean", "similarity", "affine"] = "euclidean"
     affine_transform_validation_window_size: int = 10

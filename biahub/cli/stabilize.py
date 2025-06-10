@@ -82,7 +82,6 @@ def apply_stabilization_transform(
             zyx_data_ants, reference=target_zyx_ants
         ).numpy()
 
-
     return stabilized_zyx
 
 
@@ -93,7 +92,8 @@ def apply_stabilization_transform(
 @sbatch_filepath()
 @local()
 @click.option(
-    "--sbv", "skip_beads_fov",
+    "--sbv",
+    "skip_beads_fov",
     type=str,
     default=None,
     help="Beads FOV to skip during stabilization (e.g., control or reference FOV).",
@@ -152,7 +152,9 @@ def stabilize(
             config_file = config_filepath / f"{fov_key}.yml"
             if not config_file.exists():
                 raise FileNotFoundError(f"Expected config file for {fov_key} at {config_file}")
-            per_position_settings[input_path] = yaml_to_model(config_file, StabilizationSettings)
+            per_position_settings[input_path] = yaml_to_model(
+                config_file, StabilizationSettings
+            )
         # Use the first position's settings for output metadata
         settings = per_position_settings[input_position_dirpaths[0]]
     else:
@@ -165,17 +167,15 @@ def stabilize(
 
     combined_mats = settings.affine_transform_zyx_list
     combined_mats = np.array(combined_mats)
-   # stabilization_channels = settings.stabilization_channels
-
-
+    # stabilization_channels = settings.stabilization_channels
 
     with open_ome_zarr(input_position_dirpaths[0]) as dataset:
         T, C, Z, Y, X = dataset.data.shape
         channel_names = dataset.channel_names
         stabilization_channels = channel_names
-       # for stabilization_channels in stabilization_channels:
-            # if channel not in channel_names:
-            #     raise ValueError(f"Channel <{channel}> not found in the input data")
+        # for stabilization_channels in stabilization_channels:
+        # if channel not in channel_names:
+        #     raise ValueError(f"Channel <{channel}> not found in the input data")
 
         # NOTE: these can be modified to crop the output
         Z_slice, Y_slice, X_slice = (
@@ -205,8 +205,6 @@ def stabilize(
         Y = Y_slice.stop - Y_slice.start
         X = X_slice.stop - X_slice.start
 
-    
-    
     if settings.time_indices == "all":
         time_indices = list(range(T))
     elif isinstance(settings.time_indices, list):
@@ -255,7 +253,9 @@ def stabilize(
 
     # Estimate resources
 
-    num_cpus, gb_ram_per_cpu = estimate_resources(shape=[T, C, Z, Y, X], ram_multiplier=16, max_num_cpus=16)
+    num_cpus, gb_ram_per_cpu = estimate_resources(
+        shape=[T, C, Z, Y, X], ram_multiplier=16, max_num_cpus=16
+    )
 
     # Prepare SLURM arguments
     slurm_args = {

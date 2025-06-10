@@ -1,11 +1,10 @@
 import os
+import pickle
 import shutil
 import subprocess
 import time
 
 from datetime import datetime
-from functools import partial
-from multiprocessing import Pool
 from pathlib import Path
 
 import ants
@@ -14,14 +13,12 @@ import dask.array as da
 import napari
 import numpy as np
 import submitit
-import pickle
 
 from iohub import open_ome_zarr
 from scipy.interpolate import interp1d
 from scipy.ndimage import gaussian_filter
 from scipy.optimize import linear_sum_assignment
 from scipy.spatial.distance import cdist
-from skimage import filters
 from skimage.feature import match_descriptors
 from skimage.transform import AffineTransform, EuclideanTransform, SimilarityTransform
 from sklearn.neighbors import NearestNeighbors
@@ -36,7 +33,6 @@ from biahub.analysis.analyze_psf import detect_peaks
 from biahub.analysis.register import (
     convert_transform_to_ants,
     convert_transform_to_numpy,
-    find_overlapping_volume,
     get_3D_rescaling_matrix,
     get_3D_rotation_matrix,
 )
@@ -1288,7 +1284,6 @@ def _get_z_shift_at_t(
     voxel_size,
     output_folder_path,
 ):
-    from waveorder.focus import focus_from_transverse_band
 
     lf_img = np.asarray(phase_tzyx[t_idx]).astype(np.float32)
     ls_img = np.asarray(fluoresc_tzyx[t_idx]).astype(np.float32)
