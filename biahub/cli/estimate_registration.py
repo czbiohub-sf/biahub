@@ -928,37 +928,6 @@ def match_hungarian(
 
     return np.array(matches)
 
-
-def peaks_to_image(peaks, shape, sigma=2.0):
-    """Convert peak coordinates to a blurred image."""
-    img = np.zeros(shape, dtype=np.float32)
-    for z, y, x in peaks:
-        z, y, x = map(int, [z, y, x])
-        if 0 <= z < shape[0] and 0 <= y < shape[1] and 0 <= x < shape[2]:
-            img[z, y, x] = 1.0
-    return gaussian_filter(img, sigma=sigma)
-
-
-def register_peak_clouds_ants(
-    source_peaks, target_peaks, shape, sigma=10.0, transform_type="Affine"
-):
-    source_img = peaks_to_image(source_peaks, shape, sigma=sigma)
-    target_img = peaks_to_image(target_peaks, shape, sigma=sigma)
-
-    ants_source = ants.from_numpy(source_img)
-    ants_target = ants.from_numpy(target_img)
-
-    reg = ants.registration(
-        fixed=ants_target,
-        moving=ants_source,
-        type_of_transform="Similarity",
-        aff_metric="MI",
-        verbose=True,
-    )
-
-    return reg["fwdtransforms"], reg["fwdtransforms"][0]  # ANTs filenames + object
-
-
 def extract_patch(volume, center, patch_size=11):
     """Extract a cubic patch centered at `center` from `volume`."""
     half = patch_size // 2
@@ -1178,26 +1147,6 @@ def _get_tform_from_beads(
 
             matches = match_hungarian(C, cost_threshold=np.quantile(C, 0.10))
 
-    elif match_algorithm == 'mutual_info_gauss':
-        click.echo('Using mutual information with Gaussian smoothing')
-        shape = source_data_reg.shape  # Z, Y, X
-        ants_tforms, ants_affine_path = register_peak_clouds_ants(
-            source_peaks=source_peaks,
-            target_peaks=target_peaks,
-            shape=shape,
-            sigma=2.0,
-            transform_type='Similarity',
-        )
-
-        ants_tform = ants.read_transform(ants_affine_path)
-        tform_np = convert_transform_to_numpy(ants_tform)
-
-        compount_tform = approx_tform @ tform_np
-        if slurm:
-            output_folder_path.mkdir(parents=True, exist_ok=True)
-            np.save(output_folder_path / f"{t_idx}.npy", compount_tform)
-
-        return compount_tform.tolist()
     elif match_algorithm == 'mutual_information':
         matches = match_mutual_information(
             source_peaks=source_peaks,
@@ -1275,133 +1224,6 @@ def _get_tform_from_beads(
         np.save(output_folder_path / f"{t_idx}.npy", compount_tform)
 
     return compount_tform.tolist()
-
-
-def _get_z_shift_at_t(
-    t_idx,
-    phase_tzyx,
-    fluoresc_tzyx,
-    voxel_size,
-    output_folder_path,
-):
-
-    lf_img = np.asarray(phase_tzyx[t_idx]).astype(np.float32)
-    ls_img = np.asarray(fluoresc_tzyx[t_idx]).astype(np.float32)
-
-    (Z, Y, X) = lf_img.shape
-    click.echo(f"Timepoint {t_idx}: LF shape: {lf_img.shape}, LS shape: {ls_img.shape}")
-    # Focus detection
-    lf_focus_idx = 22
-    ls_focus_idx = 25
-    click.echo(f"Phase focus index: {lf_focus_idx}")
-    click.echo(f"Fluorescence focus index: {ls_focus_idx}")
-
-    z_shift = lf_focus_idx - ls_focus_idx
-
-    affine = np.eye(4)
-    affine[0, 3] = z_shift  # phase is Z-first
-
-    # Save output
-    output_folder_path.mkdir(parents=True, exist_ok=True)
-    np.save(output_folder_path / f"{t_idx}.npy", affine)
-
-    return affine.tolist()
-
-
-def z_shift_based_registration(
-    phase_tzyx,
-    fluoresc_tzyx,
-    voxel_size,
-    cluster,
-    output_folder_path: Path,
-    interpolation_window_size=3,
-    interpolation_type='linear',
-    verbose=False,
-    sbatch_filepath=None,
-):
-    """
-    Estimate per-timepoint Z shifts between Phase and Fluorescence volumes.
-    Supports local or SLURM+Submitit parallelization.
-    """
-
-    (T, Z, Y, X) = phase_tzyx.shape
-
-    # Compute transformations in parallel
-
-    num_cpus, gb_ram_per_cpu = estimate_resources(
-        shape=(T, 2, Z, Y, X), ram_multiplier=5, max_num_cpus=16
-    )
-
-    # Prepare SLURM arguments
-    slurm_args = {
-        "slurm_job_name": "estimate_focus_z",
-        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
-        "slurm_cpus_per_task": num_cpus,
-        "slurm_array_parallelism": 100,
-        "slurm_time": 5,
-        "slurm_partition": "preempted",
-    }
-
-    if sbatch_filepath:
-        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
-
-    output_folder_path.mkdir(parents=True, exist_ok=True)
-    slurm_out_path = output_folder_path / "slurm_output"
-    slurm_out_path.mkdir(parents=True, exist_ok=True)
-
-    # Submitit executor
-    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
-    executor.update_parameters(**slurm_args)
-
-    click.echo(f"Submitting SLURM focus estimation jobs with resources: {slurm_args}")
-    output_transforms_path = output_folder_path / "z_transforms"
-    output_transforms_path.mkdir(parents=True, exist_ok=True)
-
-    jobs = []
-    with executor.batch():
-        for t in range(T):
-            job = executor.submit(
-                _get_z_shift_at_t,
-                t_idx=t,
-                phase_tzyx=phase_tzyx,
-                fluoresc_tzyx=fluoresc_tzyx,
-                voxel_size=voxel_size,
-                output_folder_path=output_transforms_path,
-            )
-            jobs.append(job)
-
-    # Save job IDs
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    log_path = slurm_out_path / f"job_ids_{timestamp}.log"
-    with open(log_path, "w") as log_file:
-        for job in jobs:
-            log_file.write(f"{job.job_id}\n")
-
-    # Wait for jobs
-    job_ids = [str(j.job_id) for j in jobs]
-    wait_for_jobs_to_finish(job_ids)
-
-    # Load transforms
-    transforms = []
-    for t in range(T):
-        file_path = output_transforms_path / f"{t}.npy"
-        if not os.path.exists(file_path):
-            transforms.append(None)
-        else:
-            transforms.append(np.load(file_path).tolist())
-
-    # remove output_transforms_path
-    shutil.rmtree(output_transforms_path)
-
-    # Interpolate missing
-    transforms = _interpolate_transforms(
-        transforms=transforms,
-        window_size=interpolation_window_size,
-        interpolation_type=interpolation_type,
-        verbose=verbose,
-    )
-
-    return transforms
 
 
 @click.command()
@@ -1547,6 +1369,46 @@ def estimate_registration(
             time_indices='all',
             output_voxel_size=voxel_size,
         )
+
+        if settings.verbose:
+            click.echo("Plotting translations over time")
+            import matplotlib.pyplot as plt
+
+            transforms = np.array(transforms)
+
+            z_transforms = transforms[:, 0, 3]  # ->ZYX
+            y_transforms = transforms[:, 1, 3]  # ->ZYX
+            x_transforms = transforms[:, 2, 3]  # ->ZYX
+
+            plt.plot(z_transforms)
+            plt.legend(["Z-Translation"])
+            plt.xlabel("Timepoint")
+            plt.ylabel("Translations")
+            plt.title("Translations Over Time")
+            plt.grid()
+            # Save the figure
+            plt.savefig(output_dir / "Z_translation_over_time.png", dpi=300, bbox_inches='tight')
+            plt.close()
+
+            plt.plot(y_transforms)
+            plt.legend(["Y-Translation"])
+            plt.xlabel("Timepoint")
+            plt.ylabel("Translations")
+            plt.title("Translations Over Time")
+            plt.grid()
+            # Save the figure
+            plt.savefig(output_dir / "Y_translation_over_time.png", dpi=300, bbox_inches='tight')
+            plt.close()
+
+            plt.plot(x_transforms)
+            plt.legend(["X-Translation"])
+            plt.xlabel("Timepoint")
+            plt.ylabel("Translations")
+            plt.title("Translations Over Time")
+            plt.grid()
+            # Save the figure
+            plt.savefig(output_dir / "X_translation_over_time.png", dpi=300, bbox_inches='tight')
+            plt.close()
     elif settings.estimation_method == "ants":
         transforms = ants_registration(
             source_data_tczyx=source_data,
@@ -1572,28 +1434,6 @@ def estimate_registration(
             time_indices='all',
             output_voxel_size=voxel_size,
         )
-    elif settings.estimation_method == "z_shift":
-        # Register using Z-focus shift only
-        transforms = z_shift_based_registration(
-            phase_tzyx=source_channel_data,
-            fluoresc_tzyx=target_channel_data,
-            voxel_size=voxel_size,
-            cluster=cluster,
-            output_folder_path=output_dir,
-            interpolation_window_size=settings.affine_transform_interpolation_window_size,
-            interpolation_type=settings.affine_transform_interpolation_type,
-            verbose=settings.verbose,
-            sbatch_filepath=sbatch_filepath,
-        )
-        model = StabilizationSettings(
-            stabilization_estimation_channel='',
-            stabilization_type='z',  # NOTE: different from 'xyz'
-            stabilization_channels=registration_source_channels,
-            affine_transform_zyx_list=transforms,
-            time_indices='all',
-            output_voxel_size=voxel_size,
-        )
-
     else:
         # Register based on user input
         transform = user_assisted_registration(
@@ -1615,47 +1455,6 @@ def estimate_registration(
 
     click.echo(f"Writing registration parameters to {output_filepath}")
     model_to_yaml(model, output_filepath)
-
-    # plot z component of the transforms over time
-    if settings.estimation_method == "beads" and settings.verbose:
-        click.echo("Plotting translations over time")
-        import matplotlib.pyplot as plt
-
-        transforms = np.array(transforms)
-
-        z_transforms = transforms[:, 0, 3]  # ->ZYX
-        y_transforms = transforms[:, 1, 3]  # ->ZYX
-        x_transforms = transforms[:, 2, 3]  # ->ZYX
-
-        plt.plot(z_transforms)
-        plt.legend(["Z-Translation"])
-        plt.xlabel("Timepoint")
-        plt.ylabel("Translations")
-        plt.title("Translations Over Time")
-        plt.grid()
-        # Save the figure
-        plt.savefig(output_dir / "Z_translation_over_time.png", dpi=300, bbox_inches='tight')
-        plt.close()
-
-        plt.plot(y_transforms)
-        plt.legend(["Y-Translation"])
-        plt.xlabel("Timepoint")
-        plt.ylabel("Translations")
-        plt.title("Translations Over Time")
-        plt.grid()
-        # Save the figure
-        plt.savefig(output_dir / "Y_translation_over_time.png", dpi=300, bbox_inches='tight')
-        plt.close()
-
-        plt.plot(x_transforms)
-        plt.legend(["X-Translation"])
-        plt.xlabel("Timepoint")
-        plt.ylabel("Translations")
-        plt.title("Translations Over Time")
-        plt.grid()
-        # Save the figure
-        plt.savefig(output_dir / "X_translation_over_time.png", dpi=300, bbox_inches='tight')
-        plt.close()
 
 
 if __name__ == "__main__":
