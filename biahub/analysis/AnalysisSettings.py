@@ -26,7 +26,7 @@ class MyBaseModel(BaseModel):
 class EstimateRegistrationSettings(MyBaseModel):
     target_channel_name: str
     source_channel_name: str
-    estimation_method: Literal["manual", "beads",  "ants"] = "manual"
+    estimation_method: Literal["manual", "beads", "ants"] = "manual"
     time_index: int = 0
     affine_90degree_rotation: int = 0
     match_algorithm: Literal[

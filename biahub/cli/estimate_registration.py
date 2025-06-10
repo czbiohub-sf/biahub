@@ -16,7 +16,6 @@ import submitit
 
 from iohub import open_ome_zarr
 from scipy.interpolate import interp1d
-from scipy.ndimage import gaussian_filter
 from scipy.optimize import linear_sum_assignment
 from scipy.spatial.distance import cdist
 from skimage.feature import match_descriptors
@@ -491,6 +490,8 @@ def beads_based_registration(
             T_zyx_shift = np.load(file_path).tolist()
             transforms.append(T_zyx_shift)
 
+    shutil.rmtree(output_transforms_path)
+
     click.echo(f"Before validate Transforms: {transforms[0]}")
 
     # # Validate and filter transforms
@@ -927,6 +928,7 @@ def match_hungarian(
         matches.append((i, j))
 
     return np.array(matches)
+
 
 def extract_patch(volume, center, patch_size=11):
     """Extract a cubic patch centered at `center` from `volume`."""
@@ -1387,7 +1389,9 @@ def estimate_registration(
             plt.title("Translations Over Time")
             plt.grid()
             # Save the figure
-            plt.savefig(output_dir / "Z_translation_over_time.png", dpi=300, bbox_inches='tight')
+            plt.savefig(
+                output_dir / "Z_translation_over_time.png", dpi=300, bbox_inches='tight'
+            )
             plt.close()
 
             plt.plot(y_transforms)
@@ -1397,7 +1401,9 @@ def estimate_registration(
             plt.title("Translations Over Time")
             plt.grid()
             # Save the figure
-            plt.savefig(output_dir / "Y_translation_over_time.png", dpi=300, bbox_inches='tight')
+            plt.savefig(
+                output_dir / "Y_translation_over_time.png", dpi=300, bbox_inches='tight'
+            )
             plt.close()
 
             plt.plot(x_transforms)
@@ -1407,7 +1413,9 @@ def estimate_registration(
             plt.title("Translations Over Time")
             plt.grid()
             # Save the figure
-            plt.savefig(output_dir / "X_translation_over_time.png", dpi=300, bbox_inches='tight')
+            plt.savefig(
+                output_dir / "X_translation_over_time.png", dpi=300, bbox_inches='tight'
+            )
             plt.close()
     elif settings.estimation_method == "ants":
         transforms = ants_registration(
