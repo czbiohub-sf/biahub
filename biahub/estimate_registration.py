@@ -23,19 +23,19 @@ from skimage.transform import AffineTransform, EuclideanTransform, SimilarityTra
 from sklearn.neighbors import NearestNeighbors
 from waveorder.focus import focus_from_transverse_band
 
-from biahub.analysis.AnalysisSettings import (
+from biahub.settings import (
     EstimateRegistrationSettings,
     RegistrationSettings,
     StabilizationSettings,
 )
-from biahub.analysis.analyze_psf import detect_peaks
-from biahub.analysis.register import (
+from biahub.characterize_psf import detect_peaks
+from biahub.register import (
     convert_transform_to_ants,
     convert_transform_to_numpy,
     get_3D_rescaling_matrix,
     get_3D_rotation_matrix,
 )
-from biahub.cli.optimize_registration import _optimize_registration
+from biahub.optimize_registration import _optimize_registration
 from biahub.cli.parsing import (
     config_filepath,
     local,
@@ -1251,7 +1251,7 @@ def _get_tform_from_beads(
     help="Name of the source channels to be used when registration params are applied. May be passed multiple times.",
     required=False,
 )
-def estimate_registration(
+def estimate_registration_cli(
     source_position_dirpaths,
     target_position_dirpaths,
     output_filepath,

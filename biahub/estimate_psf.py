@@ -11,17 +11,17 @@ import torch
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.models import TransformationMeta
 
-from biahub.analysis.AnalysisSettings import PsfFromBeadsSettings
-from biahub.analysis.analyze_psf import detect_peaks, extract_beads
+from biahub.characterize_psf import detect_peaks, extract_beads
 from biahub.cli.parsing import config_filepath, input_position_dirpaths, output_dirpath
 from biahub.cli.utils import yaml_to_model
+from biahub.settings import PsfFromBeadsSettings
 
 
-@click.command()
+@click.command("estimate-psf")
 @input_position_dirpaths()
 @config_filepath()
 @output_dirpath()
-def estimate_psf(
+def estimate_psf_cli(
     input_position_dirpaths: List[str],
     config_filepath: str,
     output_dirpath: str,

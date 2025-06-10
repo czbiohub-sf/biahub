@@ -2,14 +2,15 @@ from pathlib import Path
 from typing import List
 
 import click
+import numpy as np
 import submitit
+import torch
 
 from iohub import open_ome_zarr
 from iohub.ngff.models import TransformationMeta
 from iohub.ngff.utils import create_empty_plate, process_single_position
+from waveorder.models.isotropic_fluorescent_thick_3d import apply_inverse_transfer_function
 
-from biahub.analysis.AnalysisSettings import DeconvolveSettings
-from biahub.analysis.deconvolve import compute_tranfser_function, deconvolve_data
 from biahub.cli.parsing import (
     _str_to_path,
     config_filepath,
@@ -20,9 +21,49 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.cli.utils import estimate_resources, get_output_paths, yaml_to_model
+from biahub.settings import DeconvolveSettings
 
 
-@click.command()
+def compute_tranfser_function(
+    psf_zyx_data: np.ndarray,
+    output_zyx_shape: tuple,
+) -> np.ndarray:
+    zyx_padding = np.array(output_zyx_shape) - np.array(psf_zyx_data.shape)
+    pad_width = [(x // 2, x // 2) if x % 2 == 0 else (x // 2, x // 2 + 1) for x in zyx_padding]
+    padded_psf_data = np.pad(
+        psf_zyx_data, pad_width=pad_width, mode="constant", constant_values=0
+    )
+
+    transfer_function = torch.abs(torch.fft.fftn(torch.tensor(padded_psf_data)))
+    transfer_function /= torch.max(transfer_function)
+
+    return transfer_function.numpy()
+
+
+def deconvolve(
+    czyx_raw_data: np.ndarray,
+    transfer_function: torch.Tensor = None,
+    transfer_function_store_path: str = None,
+    regularization_strength: float = 1e-3,
+) -> np.ndarray:
+    if transfer_function is None:
+        with open_ome_zarr(transfer_function_store_path, layout='fov', mode='r') as ds:
+            transfer_function = torch.tensor(ds.data[0, 0])
+
+    output = []
+    for zyx_raw_data in czyx_raw_data:
+        zyx_decon_data = apply_inverse_transfer_function(
+            torch.tensor(zyx_raw_data),
+            transfer_function,
+            z_padding=0,
+            regularization_strength=regularization_strength,
+        )
+        output.append(zyx_decon_data.numpy())
+
+    return np.stack(output)
+
+
+@click.command("deconvolve")
 @input_position_dirpaths()
 @click.option(
     "--psf-dirpath",
@@ -36,7 +77,7 @@ from biahub.cli.utils import estimate_resources, get_output_paths, yaml_to_model
 @output_dirpath()
 @sbatch_filepath()
 @local()
-def deconvolve(
+def deconvolve_cli(
     input_position_dirpaths: List[str],
     psf_dirpath: str,
     config_filepath: str,
@@ -98,7 +139,9 @@ def deconvolve(
         )
 
     # Estimate resources
-    num_cpus, gb_ram_per_cpu = estimate_resources(shape=[T, C, Z, Y, X], ram_multiplier=16)
+    num_cpus, gb_ram_per_cpu = estimate_resources(
+        shape=[T, C, Z, Y, X], ram_multiplier=10, max_num_cpus=16
+    )
     # Prepare SLURM arguments
     slurm_args = {
         "slurm_job_name": "deconvolve",
@@ -120,6 +163,7 @@ def deconvolve(
         cluster = "slurm"
 
     # Prepare and submit jobs
+    click.echo(f"Preparing jobs: {slurm_args}")
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
 
@@ -131,7 +175,7 @@ def deconvolve(
         ):
             job = executor.submit(
                 process_single_position,
-                deconvolve_data,
+                deconvolve,
                 str(input_position_path),
                 str(output_position_path),
                 num_processes=int(slurm_args["slurm_cpus_per_task"]),
@@ -149,4 +193,4 @@ def deconvolve(
 
 
 if __name__ == "__main__":
-    deconvolve()
+    deconvolve_cli()

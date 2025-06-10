@@ -14,12 +14,11 @@ def _validate_and_process_paths(
 ) -> list[Path]:
     # Sort and validate the input paths
     input_paths = [Path(path) for path in natsorted(value)]
-    for path in input_paths:
-        with open_ome_zarr(path, mode='r') as dataset:
-            if isinstance(dataset, Plate):
-                raise ValueError(
-                    "Please supply a single position instead of an HCS plate. Likely fix: replace 'input.zarr' with 'input.zarr/0/0/0'"
-                )
+    with open_ome_zarr(input_paths[0], mode='r') as dataset:
+        if isinstance(dataset, Plate):
+            raise ValueError(
+                "Please supply a single position instead of an HCS plate. Likely fix: replace 'input.zarr' with 'input.zarr/0/0/0'"
+            )
     return input_paths
 
 

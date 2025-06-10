@@ -897,13 +897,13 @@ def estimate_z_stabilization(
     return fov_transforms
 
 
-@click.command()
+@click.command("estimate-stabilization")
 @input_position_dirpaths()
 @output_filepath()
 @config_filepath()
 @sbatch_filepath()
 @local()
-def estimate_stabilization(
+def estimate_stabilization_cli(
     input_position_dirpaths: List[str],
     output_filepath: str,
     config_filepath: str,
@@ -1383,4 +1383,4 @@ def estimate_stabilization(
 
 
 if __name__ == "__main__":
-    estimate_stabilization()
+    estimate_stabilization_cli()

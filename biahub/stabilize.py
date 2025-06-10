@@ -10,8 +10,6 @@ from iohub.ngff import open_ome_zarr
 from scipy.linalg import svd
 from scipy.spatial.transform import Rotation as R
 
-from biahub.analysis.AnalysisSettings import StabilizationSettings
-from biahub.analysis.register import convert_transform_to_ants
 from biahub.cli.parsing import (
     config_filepath,
     input_position_dirpaths,
@@ -27,6 +25,8 @@ from biahub.cli.utils import (
     process_single_position_v2,
     yaml_to_model,
 )
+from biahub.register import convert_transform_to_ants
+from biahub.settings import StabilizationSettings
 
 
 def apply_stabilization_transform(
@@ -85,13 +85,13 @@ def apply_stabilization_transform(
     return stabilized_zyx
 
 
-@click.command()
+@click.command("stabilize")
 @input_position_dirpaths()
 @output_dirpath()
 @config_filepath()
 @sbatch_filepath()
 @local()
-def stabilize(
+def stabilize_cli(
     input_position_dirpaths: List[str],
     output_dirpath: str,
     config_filepath: str,
@@ -319,4 +319,4 @@ def stabilize(
 
 
 if __name__ == "__main__":
-    stabilize()
+    stabilize_cli()

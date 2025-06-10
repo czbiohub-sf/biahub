@@ -6,16 +6,16 @@ import submitit
 
 from iohub import open_ome_zarr
 
-from biahub.analysis.AnalysisSettings import ProcessingSettings, StitchSettings
-from biahub.analysis.stitch import (
+from biahub.cli.parsing import input_position_dirpaths, local, output_filepath
+from biahub.cli.utils import model_to_yaml
+from biahub.settings import ProcessingSettings, StitchSettings
+from biahub.stitch import (
     cleanup_shifts,
     compute_total_translation,
     consolidate_zarr_fov_shifts,
     estimate_zarr_fov_shifts,
     get_grid_rows_cols,
 )
-from biahub.cli.parsing import input_position_dirpaths, local, output_filepath
-from biahub.cli.utils import model_to_yaml
 
 
 def write_config_file(
@@ -47,7 +47,7 @@ def cleanup_and_write_shifts(
     write_config_file(shifts, output_filepath, channel, fliplr, flipud, rot90)
 
 
-@click.command()
+@click.command("estimate-stitch")
 @input_position_dirpaths()
 @output_filepath()
 @click.option(
@@ -73,7 +73,7 @@ def cleanup_and_write_shifts(
     help="add the offset to estimated shifts, needed for OPS experiments",
 )
 @local()
-def estimate_stitch(
+def estimate_stitch_cli(
     input_position_dirpaths: list[Path],
     output_filepath: str,
     channel: str,
@@ -231,4 +231,4 @@ def estimate_stitch(
 
 
 if __name__ == "__main__":
-    estimate_stitch()
+    estimate_stitch_cli()

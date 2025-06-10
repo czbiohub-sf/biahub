@@ -20,7 +20,7 @@ classifiers = [
 
 # list package dependencies here
 dependencies = [
-  "iohub @ git+https://github.com/czbiohub-sf/iohub",
+  "iohub @ git+https://github.com/czbiohub-sf/iohub@v0.2.0b0",
   "matplotlib",
   "napari",
   "PyQt6",

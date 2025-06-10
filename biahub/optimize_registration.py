@@ -104,7 +104,7 @@ def _optimize_registration(
     is_flag=True,
     help="Show verbose output of optimizer",
 )
-def optimize_registration(
+def optimize_registration_cli(
     source_position_dirpaths,
     target_position_dirpaths,
     config_filepath,
@@ -203,4 +203,4 @@ def optimize_registration(
 
 
 if __name__ == "__main__":
-    optimize_registration()
+    optimize_registration_cli()
