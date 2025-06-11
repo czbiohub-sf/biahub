@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 import yaml
+
 from iohub.ngff import open_ome_zarr
 
 # These fixtures return paired
@@ -70,8 +71,8 @@ def example_plate(tmp_path):
     )
 
     # Generate input dataset
-    
-    from iohub.ngff.models import TimeAxisMeta, ChannelAxisMeta, SpaceAxisMeta
+
+    from iohub.ngff.models import ChannelAxisMeta, SpaceAxisMeta, TimeAxisMeta
 
     axes = [
         TimeAxisMeta(name="t", unit="second"),
@@ -81,16 +82,12 @@ def example_plate(tmp_path):
         SpaceAxisMeta(name="x", unit="micrometer"),
     ]
 
-
-
-
     plate_dataset = open_ome_zarr(
         plate_path,
         layout="hcs",
         mode="w",
         channel_names=["GFP", "RFP", "Phase3D", "Orientation", "Retardance", "Birefringence"],
         axes=axes,
-
     )
 
     for row, col, fov in position_list:

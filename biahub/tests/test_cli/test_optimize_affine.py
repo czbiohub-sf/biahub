@@ -2,11 +2,11 @@ from click.testing import CliRunner
 
 from biahub.cli.main import cli
 
+
 def test_optimize_affine_cli(tmp_path, example_plate, example_register_settings):
     plate_path, _ = example_plate
     config_path, _ = example_register_settings
     output_path = tmp_path / "config.yaml"
-
 
     runner = CliRunner()
     result = runner.invoke(
@@ -15,7 +15,7 @@ def test_optimize_affine_cli(tmp_path, example_plate, example_register_settings)
             "optimize-registration",
             "-s",
             str(plate_path) + "/A/1/0",
-            "-t",   
+            "-t",
             str(plate_path) + "/B/1/0",  # test could be improved with different stores
             "-c",
             str(config_path),
@@ -29,4 +29,3 @@ def test_optimize_affine_cli(tmp_path, example_plate, example_register_settings)
     # assert "Getting dataset info" in result.output
     assert result.exit_code == 0
     assert output_path.exists()
-

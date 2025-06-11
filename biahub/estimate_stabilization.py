@@ -941,7 +941,6 @@ def estimate_stabilization_cli(
             path for path in input_position_dirpaths if skip_beads_fov not in str(path)
         ]
 
-        
     output_dirpath = output_filepath.parent
     output_dirpath.mkdir(parents=True, exist_ok=True)
 
@@ -1262,7 +1261,9 @@ def estimate_stabilization_cli(
                     interpolation_type=settings.affine_transform_interpolation_type,
                     verbose=verbose,
                 )
-                output_filepath_fov = output_dirpath / "z_stabilization_settings" / f"{fov}.yml"
+                output_filepath_fov = (
+                    output_dirpath / "z_stabilization_settings" / f"{fov}.yml"
+                )
                 # Save the combined matrices
                 model = StabilizationSettings(
                     stabilization_type=stabilization_type,
@@ -1301,7 +1302,6 @@ def estimate_stabilization_cli(
                     plt.close()
         except Exception as e:
             click.echo(f"Error estimating {stabilization_type} stabilization parameters: {e}")
-            
 
     # Estimate yx drift
     if "xy" == stabilization_type:

@@ -2,6 +2,7 @@ from click.testing import CliRunner
 
 from biahub.cli.main import cli
 
+
 def test_estimate_stabilization(
     tmp_path, example_plate, example_estimate_stabilization_settings
 ):

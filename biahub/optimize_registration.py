@@ -56,7 +56,6 @@ def _optimize_registration(
         target_zyx = filters.sobel(target_zyx)
     target_ants = ants.from_numpy(target_zyx)
 
-
     if not isinstance(source_channel_index, list):
         source_channel_index = [source_channel_index]
     source_channels = []
@@ -137,10 +136,12 @@ def optimize_registration_cli(
     """
 
     settings = yaml_to_model(config_filepath, RegistrationSettings)
-    t_idx = settings.time_indices 
+    t_idx = settings.time_indices
     # if time_indices not int type
     if not isinstance(t_idx, int):
-        print("Time index 'all' is not supported for optimize-registration, using first time index") 
+        print(
+            "Time index 'all' is not supported for optimize-registration, using first time index"
+        )
         t_idx = 0
 
     # Load the source volume
@@ -160,9 +161,9 @@ def optimize_registration_cli(
     click.echo(
         f"\nOptimizing registration using source channel {source_channel_names[source_channel_index]} and target channel {target_channel_names[target_channel_index]}"
     )
-    
+
     approx_tform = np.asarray(settings.affine_transform_zyx, dtype=np.float32)
-    
+
     source_data_zyx = source_data_czyx[source_channel_index]
     target_data_zyx = target_data_czyx[target_channel_index]
 
@@ -189,8 +190,6 @@ def optimize_registration_cli(
     output_settings = settings.model_copy()
     output_settings.affine_transform_zyx = composed_matrix.tolist()
     model_to_yaml(output_settings, output_filepath)
-
-
 
     if display_viewer:
         click.echo("Initializing napari viewer...")
