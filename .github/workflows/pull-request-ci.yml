@@ -12,10 +12,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: psf/black@22.3.0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: psf/black@stable
         with:
           src: "biahub"
           options: "--check --verbose"
+          version: "22.3.0"
+          use_pyproject: true
 
   # style:
   #   name: Style Check
