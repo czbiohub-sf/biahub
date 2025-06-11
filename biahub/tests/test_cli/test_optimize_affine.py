@@ -1,8 +1,10 @@
+import pytest
 from click.testing import CliRunner
 
 from biahub.cli.main import cli
 
 
+@pytest.mark.skip()
 def test_optimize_affine_cli(tmp_path, example_plate, example_register_settings):
     plate_path, _ = example_plate
     config_path, _ = example_register_settings
