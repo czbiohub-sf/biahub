@@ -168,14 +168,62 @@ def create_empty_hcs_zarr(
             position.append_channel(channel_name, resize_arrays=True)
 
 
-def get_output_paths(input_paths: list[Path], output_zarr_path: Path) -> list[Path]:
-    """Generates a mirrored output path list given an input list of positions"""
+def get_output_paths(
+    input_paths: list[Path], output_zarr_path: Path, ensure_unique_positions: bool = None
+) -> list[Path]:
+    """
+    Generates a mirrored output path list given an input list of positions
+
+    Parameters
+    ----------
+    input_paths : list[Path]
+        List of input position paths
+    output_zarr_path : Path
+        Base output zarr path
+    ensure_unique_positions : bool, optional
+        If True, ensures unique output position paths by appending a suffix to the column part
+        when duplicate position names are detected.
+        For example, if "A/1/0" is duplicated, it becomes "A/1d0/0", "A/1d1/0", etc.
+
+    Returns
+    -------
+    list[Path]
+        List of output position paths
+    """
     list_output_path = []
+
+    # Track position names to ensure uniqueness if required
+    position_name_counts = {}
+
     for path in input_paths:
         # Select the Row/Column/FOV parts of input path
         path_strings = Path(path).parts[-3:]
-        # Append the same Row/Column/FOV to the output zarr path
-        list_output_path.append(Path(output_zarr_path, *path_strings))
+        position_name = "/".join(path_strings)
+
+        # If we need to ensure uniqueness and this position name has been seen before
+        if ensure_unique_positions and position_name in position_name_counts:
+            # Increment the count for this position name
+            position_name_counts[position_name] += 1
+
+            # Create a new position name by appending a suffix to the column part
+            # For example, "A/1/0" becomes "A/1d0/0", "A/1d1/0", etc.
+            modified_path_strings = list(path_strings)
+
+            # Append the suffix to the column part
+            modified_path_strings[
+                1
+            ] = f"{modified_path_strings[1]}d{position_name_counts[position_name]}"
+
+            # Append the modified position path
+            list_output_path.append(Path(output_zarr_path, *modified_path_strings))
+        else:
+            # First time seeing this position name or uniqueness not required
+            if ensure_unique_positions:
+                position_name_counts[position_name] = 0
+
+            # Append the original position path
+            list_output_path.append(Path(output_zarr_path, *path_strings))
+
     return list_output_path
 
 
@@ -423,12 +471,14 @@ def copy_n_paste(zyx_data: np.ndarray, zyx_slicing_params: list) -> np.ndarray:
         data to copy
     zyx_slicing_params : list
         list of slicing parameters for z,y,x
+        Each element is a single slice object [z_slice, y_slice, x_slice]
 
     Returns
     -------
     np.ndarray
         crop of the input zyx_data given the slicing parameters
     """
+    # Replace NaN values with zeros
     zyx_data = np.nan_to_num(zyx_data, nan=0)
     zyx_data_sliced = zyx_data[
         zyx_slicing_params[0],
@@ -448,6 +498,7 @@ def copy_n_paste_czyx(czyx_data: np.ndarray, czyx_slicing_params: list) -> np.nd
         data to copy
     czyx_slicing_params : list
         list of slicing parameters for z,y,x
+        Each element is a single slice object [z_slice, y_slice, x_slice]
 
     Returns
     -------
@@ -592,27 +643,49 @@ def _is_nested(lst):
 
 def _check_nan_n_zeros(input_array):
     """
-    Checks if any of the channels are all zeros or nans and returns true
+    Checks if data are all zeros or nan
     """
-    if len(input_array.shape) == 3:
-        # Check if all the values are zeros or nans
-        if np.all(input_array == 0) or np.all(np.isnan(input_array)):
-            # Return true
-            return True
-    elif len(input_array.shape) == 4:
-        # Get the number of channels
-        num_channels = input_array.shape[0]
-        # Loop through the channels
-        for c in range(num_channels):
-            # Get the channel
-            zyx_array = input_array[c, :, :, :]
+    return np.all(np.isnan(input_array)) or np.all(input_array == 0)
 
-            # Check if all the values are zeros or nans
-            if np.all(zyx_array == 0) or np.all(np.isnan(zyx_array)):
-                # Return true
-                return True
-    else:
-        raise ValueError("Input array must be 3D or 4D")
 
-    # Return false
-    return False
+def estimate_resources(
+    shape: Tuple[int, int, int, int, int],
+    dtype: DTypeLike = np.float32,
+    ram_multiplier: float = 1.0,
+    max_num_cpus: int = 64,
+    min_ram_per_cpu: int = 4,
+):
+    """
+    Estimate the number of CPUs and the amount of RAM required for processing a given data volume.
+
+    Parameters
+    ----------
+    shape : Tuple[int, int, int, int, int]
+        The shape of the data as a tuple (T, C, Z, Y, X).
+    dtype : DTypeLike, optional
+        The data type of the elements. Default is np.float32.
+    ram_multiplier : float, optional
+        Multiplier to scale the required memory for processing a given ZYX volume. For example,
+        if a processing pipeline makes two copies of the input data, then the ram_multiplier
+        should be at least 3. Default is 1.0.
+    max_num_cpus : int, optional
+        Maximum number of available CPUs. Default is 64.
+    min_ram_per_cpu : int, optional
+        Minimum amount of RAM per CPU in GB. Default is 4.
+
+    Returns
+    -------
+    Tuple[int, int]
+        A tuple containing the estimated number of CPUs and the required amount of RAM per CPU in GB.
+        These values can be passed to the `--cpus_per_task` and `--mem_per_cpu` parameters of sbatch.
+    """
+    if len(shape) != 5:
+        raise ValueError("The shape must be a 5-tuple (T, C, Z, Y, X).")
+
+    T, C, Z, Y, X = shape
+    gb_per_element = np.dtype(dtype).itemsize / 2**30  # bytes_per_element / bytes_per_gb
+    num_cpus = min(T * C, max_num_cpus)
+    gb_ram_per_volume = Z * Y * X * gb_per_element
+    gb_ram_per_cpu = np.ceil(max(min_ram_per_cpu, gb_ram_per_volume * ram_multiplier))
+
+    return int(num_cpus), int(gb_ram_per_cpu)

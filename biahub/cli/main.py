@@ -1,22 +1,21 @@
 import click
 
-from biahub.cli.characterize_psf import characterize_psf
-from biahub.cli.concatenate import concatenate
-from biahub.cli.deconvolve import deconvolve
-from biahub.cli.deskew import deskew
-from biahub.cli.estimate_bleaching import estimate_bleaching
-from biahub.cli.estimate_deskew import estimate_deskew
-from biahub.cli.estimate_psf import estimate_psf
-from biahub.cli.estimate_registration import estimate_registration
-from biahub.cli.estimate_stabilization import estimate_stabilization
-from biahub.cli.estimate_stitch import estimate_stitch
-from biahub.cli.optimize_registration import optimize_registration
-from biahub.cli.process_data import process_w_imports
-from biahub.cli.register import register
-from biahub.cli.segment import segment
-from biahub.cli.stabilize import stabilize
-from biahub.cli.stitch import stitch
-from biahub.cli.update_scale_metadata import update_scale_metadata
+from biahub.characterize_psf import characterize_psf_cli
+from biahub.concatenate import concatenate_cli
+from biahub.deconvolve import deconvolve_cli
+from biahub.deskew import deskew_cli
+from biahub.estimate_bleaching import estimate_bleaching_cli
+from biahub.estimate_deskew import estimate_deskew_cli
+from biahub.estimate_psf import estimate_psf_cli
+from biahub.estimate_registration import estimate_registration_cli
+from biahub.estimate_stabilization import estimate_stabilization_cli
+from biahub.estimate_stitch import estimate_stitch_cli
+from biahub.optimize_registration import optimize_registration_cli
+from biahub.process_data import process_w_imports
+from biahub.register import register_cli
+from biahub.segment import segment_cli
+from biahub.stabilize import stabilize_cli
+from biahub.stitch import stitch_cli
 
 CONTEXT = {"help_option_names": ["-h", "--help"]}
 
@@ -32,20 +31,19 @@ def cli():
     """command-line tools for biahub"""
 
 
-cli.add_command(estimate_bleaching)
-cli.add_command(estimate_deskew)
-cli.add_command(deskew)
-cli.add_command(estimate_registration)
-cli.add_command(optimize_registration)
-cli.add_command(register)
-cli.add_command(estimate_stitch)
-cli.add_command(stitch)
-cli.add_command(update_scale_metadata)
-cli.add_command(concatenate)
-cli.add_command(estimate_stabilization)
-cli.add_command(stabilize)
-cli.add_command(estimate_psf)
-cli.add_command(deconvolve)
-cli.add_command(characterize_psf)
-cli.add_command(segment)
-cli.add_command(process_w_imports)
+cli.add_command(estimate_bleaching_cli)
+cli.add_command(estimate_deskew_cli)
+cli.add_command(deskew_cli)
+cli.add_command(estimate_registration_cli)
+cli.add_command(optimize_registration_cli)
+cli.add_command(register_cli)
+cli.add_command(estimate_stitch_cli)
+cli.add_command(stitch_cli)
+cli.add_command(concatenate_cli)
+cli.add_command(estimate_stabilization_cli)
+cli.add_command(stabilize_cli)
+cli.add_command(estimate_psf_cli)
+cli.add_command(deconvolve_cli)
+cli.add_command(characterize_psf_cli)
+cli.add_command(segment_cli)
+cli.add_command(process_w_imports_cli)

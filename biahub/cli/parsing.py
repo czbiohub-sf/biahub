@@ -14,12 +14,11 @@ def _validate_and_process_paths(
 ) -> list[Path]:
     # Sort and validate the input paths
     input_paths = [Path(path) for path in natsorted(value)]
-    for path in input_paths:
-        with open_ome_zarr(path, mode='r') as dataset:
-            if isinstance(dataset, Plate):
-                raise ValueError(
-                    "Please supply a single position instead of an HCS plate. Likely fix: replace 'input.zarr' with 'input.zarr/0/0/0'"
-                )
+    with open_ome_zarr(input_paths[0], mode='r') as dataset:
+        if isinstance(dataset, Plate):
+            raise ValueError(
+                "Please supply a single position instead of an HCS plate. Likely fix: replace 'input.zarr' with 'input.zarr/0/0/0'"
+            )
     return input_paths
 
 
@@ -128,7 +127,7 @@ def sbatch_filepath() -> Callable:
     return decorator
 
 
-def sbatch_to_submitit(value: Path) -> dict:
+def sbatch_to_submitit(filepath: str) -> dict:
     """Reads an sbatch file and returns a dictionary of slurm parameters,
     ready for submitit.
 
@@ -154,7 +153,7 @@ def sbatch_to_submitit(value: Path) -> dict:
     {'slurm_mem_per_cpu': '16G', 'slurm_time': '1:00:00'}
     """
 
-    with open(value, "r") as f:
+    with open(filepath, "r") as f:
         sbatch_file = f.readlines()
 
     sbatch_dict = {}
@@ -176,6 +175,20 @@ def local() -> Callable:
             is_flag=True,
             default=False,
             help="Run jobs locally instead of submitting to SLURM.",
+        )(f)
+
+    return decorator
+
+
+def num_processes() -> Callable:
+    def decorator(f: Callable) -> Callable:
+        return click.option(
+            "--num-processes",
+            "-j",
+            default=1,
+            help="Number of parallel processes",
+            required=False,
+            type=int,
         )(f)
 
     return decorator
