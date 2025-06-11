@@ -23,19 +23,7 @@ from skimage.transform import AffineTransform, EuclideanTransform, SimilarityTra
 from sklearn.neighbors import NearestNeighbors
 from waveorder.focus import focus_from_transverse_band
 
-from biahub.settings import (
-    EstimateRegistrationSettings,
-    RegistrationSettings,
-    StabilizationSettings,
-)
 from biahub.characterize_psf import detect_peaks
-from biahub.register import (
-    convert_transform_to_ants,
-    convert_transform_to_numpy,
-    get_3D_rescaling_matrix,
-    get_3D_rotation_matrix,
-)
-from biahub.optimize_registration import _optimize_registration
 from biahub.cli.parsing import (
     config_filepath,
     local,
@@ -51,6 +39,18 @@ from biahub.cli.utils import (
     estimate_resources,
     model_to_yaml,
     yaml_to_model,
+)
+from biahub.optimize_registration import _optimize_registration
+from biahub.register import (
+    convert_transform_to_ants,
+    convert_transform_to_numpy,
+    get_3D_rescaling_matrix,
+    get_3D_rotation_matrix,
+)
+from biahub.settings import (
+    EstimateRegistrationSettings,
+    RegistrationSettings,
+    StabilizationSettings,
 )
 
 # TODO: see if at some point these globals should be hidden or exposed.
@@ -1228,7 +1228,7 @@ def _get_tform_from_beads(
     return compount_tform.tolist()
 
 
-@click.command()
+@click.command("estimate-registration")
 @source_position_dirpaths()
 @target_position_dirpaths()
 @output_filepath()
@@ -1466,4 +1466,4 @@ def estimate_registration_cli(
 
 
 if __name__ == "__main__":
-    estimate_registration()
+    estimate_registration_cli()

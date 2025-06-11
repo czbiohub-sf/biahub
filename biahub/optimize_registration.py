@@ -6,12 +6,6 @@ import numpy as np
 from iohub import open_ome_zarr
 from skimage import filters
 
-from biahub.analysis.AnalysisSettings import RegistrationSettings
-from biahub.analysis.register import (
-    convert_transform_to_ants,
-    convert_transform_to_numpy,
-    find_overlapping_volume,
-)
 from biahub.cli.parsing import (
     config_filepath,
     output_filepath,
@@ -19,6 +13,12 @@ from biahub.cli.parsing import (
     target_position_dirpaths,
 )
 from biahub.cli.utils import _check_nan_n_zeros, model_to_yaml, yaml_to_model
+from biahub.register import (
+    convert_transform_to_ants,
+    convert_transform_to_numpy,
+    find_overlapping_volume,
+)
+from biahub.settings import RegistrationSettings
 
 # TODO: maybe a CLI call?
 T_IDX = 0
