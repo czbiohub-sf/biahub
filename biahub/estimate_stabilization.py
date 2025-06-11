@@ -909,6 +909,26 @@ def plot_translations(transforms_zyx: np.ndarray, output_filepath: Path):
     plt.close()
 
 
+def save_stabilization_settings(
+    stabilization_type: str,
+    stabilization_method: str,
+    stabilization_estimation_channel: str,
+    stabilization_channels: list[str],
+    transforms: np.ndarray,
+    voxel_size: list[float],
+    output_filepath: Path):
+    model = StabilizationSettings(
+        stabilization_type=stabilization_type,
+        stabilization_method=stabilization_method,
+        stabilization_estimation_channel=stabilization_estimation_channel,
+        stabilization_channels=stabilization_channels,
+        affine_transform_zyx_list=transforms,
+        time_indices="all",
+        output_voxel_size=voxel_size,
+    )
+    model_to_yaml(model, output_filepath)
+
+
 @click.command("estimate-stabilization")
 @input_position_dirpaths()
 @output_filepath()
@@ -975,7 +995,7 @@ def estimate_stabilization_cli(
     if "xyz" == stabilization_type:
         if stabilization_method == "focus-finding":
             click.echo("Estimating z stabilization parameters")
-            T_z_drift_mats_dict = estimate_z_stabilization(
+            z_transforms_dict = estimate_z_stabilization(
                 input_data_paths=input_position_dirpaths,
                 output_folder_path=output_dirpath,
                 channel_index=channel_index,
@@ -986,7 +1006,7 @@ def estimate_stabilization_cli(
             )
 
             click.echo("Estimating xy stabilization parameters")
-            T_translation_mats_dict = estimate_xy_stabilization(
+            xy_transforms_dict = estimate_xy_stabilization(
                 input_data_paths=input_position_dirpaths,
                 output_folder_path=output_dirpath,
                 channel_index=channel_index,
@@ -1001,19 +1021,19 @@ def estimate_stabilization_cli(
             os.makedirs(output_dirpath / "xy_stabilization_settings", exist_ok=True)
         
             # save each FOV separately
-            for fov, T_translation_mats in T_translation_mats_dict.items():
+            for fov, xy_transforms in xy_transforms_dict.items():
                 click.echo(f"Processing FOV {fov}")
                 # Get the z drift matrices for the current FOV
-                T_z_drift_mats = np.asarray(T_z_drift_mats_dict[fov])
-                T_translation_mats = np.asarray(T_translation_mats)
+                z_transforms = np.asarray(z_transforms_dict[fov])
+                xy_transforms = np.asarray(xy_transforms)
 
-                if T_translation_mats.shape[0] != T_z_drift_mats.shape[0]:
+                if xy_transforms.shape[0] != z_transforms.shape[0]:
                     raise ValueError(
                         "The number of translation matrices and z drift matrices must be the same"
                     )
 
                 transforms = np.asarray(
-                    [a @ b for a, b in zip(T_translation_mats, T_z_drift_mats)]
+                    [a @ b for a, b in zip(xy_transforms, z_transforms)]
                 ).tolist()
                 # Validate and filter transforms
                 transforms = _validate_transforms(
@@ -1052,7 +1072,7 @@ def estimate_stabilization_cli(
                     stabilization_method=stabilization_method,
                     stabilization_estimation_channel=estimate_stabilization_channel,
                     stabilization_channels=settings.stabilization_channels,
-                    affine_transform_zyx_list=T_z_drift_mats.tolist(),
+                    affine_transform_zyx_list=z_transforms.tolist(),
                     time_indices="all",
                     output_voxel_size=voxel_size,
                 )
@@ -1064,7 +1084,7 @@ def estimate_stabilization_cli(
                     stabilization_method=stabilization_method,
                     stabilization_estimation_channel=estimate_stabilization_channel,
                     stabilization_channels=settings.stabilization_channels,
-                    affine_transform_zyx_list=T_translation_mats.tolist(),
+                    affine_transform_zyx_list=xy_transforms.tolist(),
                     time_indices="all",
                     output_voxel_size=voxel_size,
                 )
@@ -1083,7 +1103,7 @@ def estimate_stabilization_cli(
                 source_channel_index = source_channels.index(estimate_stabilization_channel)
                 channel_tzyx = beads_position.data.dask_array()[:, source_channel_index]
 
-            transforms = estimate_xyz_stabilization_with_beads(
+            xyz_transforms = estimate_xyz_stabilization_with_beads(
                 channel_tzyx=channel_tzyx,
                 t_reference=settings.t_reference,
                 match_algorithm=settings.match_algorithm,
@@ -1097,7 +1117,7 @@ def estimate_stabilization_cli(
 
             # Validate and filter transforms
             transforms = _validate_transforms(
-                transforms=transforms,
+                transforms=xyz_transforms,
                 window_size=settings.affine_transform_validation_window_size,
                 tolerance=settings.affine_transform_validation_tolerance,
                 Z=Z,
@@ -1107,7 +1127,7 @@ def estimate_stabilization_cli(
             )
             # Interpolate missing transforms
             transforms = _interpolate_transforms(
-                transforms=transforms,
+                transforms=xyz_transforms,
                 window_size=settings.affine_transform_interpolation_window_size,
                 interpolation_type=settings.affine_transform_interpolation_type,
                 verbose=verbose,
@@ -1118,7 +1138,7 @@ def estimate_stabilization_cli(
                 stabilization_method=stabilization_method,
                 stabilization_estimation_channel=estimate_stabilization_channel,
                 stabilization_channels=settings.stabilization_channels,
-                affine_transform_zyx_list=transforms,
+                affine_transform_zyx_list=xyz_transforms,
                 time_indices="all",
                 output_voxel_size=voxel_size,
             )
@@ -1126,11 +1146,11 @@ def estimate_stabilization_cli(
 
             if verbose:
                 os.makedirs(output_dirpath / "translation_plots", exist_ok=True)
-                plot_translations(np.array(transforms) , output_dirpath / "translation_plots" / "beads.png")
+                plot_translations(np.array(xyz_transforms) , output_dirpath / "translation_plots" / "beads.png")
 
         elif stabilization_method == "phase-cross-corr":
             click.echo("Estimating xyz stabilization parameters with phase cross correlation")
-            transform_dict = estimate_xyz_stabilization_pcc(
+            xyz_transforms_dict = estimate_xyz_stabilization_pcc(
                 input_data_paths=input_position_dirpaths,
                 output_folder_path=output_dirpath,
                 c_idx=channel_index,
@@ -1142,11 +1162,11 @@ def estimate_stabilization_cli(
             )
             
             os.makedirs(output_dirpath / "xyz_stabilization_settings", exist_ok=True)
-            for fov, transforms in transform_dict.items():
+            for fov, xyz_transforms in xyz_transforms_dict.items():
                 click.echo(f"Processing FOV {fov}")
                 # Validate and filter transforms
                 transforms = _validate_transforms(
-                    transforms=transforms,
+                    transforms=xyz_transforms,
                     window_size=settings.affine_transform_validation_window_size,
                     tolerance=settings.affine_transform_validation_tolerance,
                     Z=Z,
@@ -1156,7 +1176,7 @@ def estimate_stabilization_cli(
                 )
                 # Interpolate missing transforms
                 transforms = _interpolate_transforms(
-                    transforms=transforms,
+                    transforms=xyz_transforms,
                     window_size=settings.affine_transform_interpolation_window_size,
                     interpolation_type=settings.affine_transform_interpolation_type,
                     verbose=verbose,
@@ -1170,20 +1190,20 @@ def estimate_stabilization_cli(
                     stabilization_method=stabilization_method,
                     stabilization_estimation_channel=estimate_stabilization_channel,
                     stabilization_channels=channel_names,
-                    affine_transform_zyx_list=transforms,
+                    affine_transform_zyx_list=xyz_transforms,
                     time_indices="all",
                     output_voxel_size=voxel_size,
                 )
                 model_to_yaml(model, output_filepath_fov)
                 if verbose:
                     os.makedirs(output_dirpath / "translation_plots", exist_ok=True)
-                    plot_translations(np.array(transforms) , output_dirpath / "translation_plots" / f"{fov}.png")
+                    plot_translations(np.array(xyz_transforms) , output_dirpath / "translation_plots" / f"{fov}.png")
 
     # Estimate z drift
     if "z" == stabilization_type and stabilization_method == "focus-finding":
         click.echo("Estimating z stabilization parameters")
 
-        T_z_drift_mats_dict = estimate_z_stabilization(
+        z_transforms_dict = estimate_z_stabilization(
             input_data_paths=input_position_dirpaths,
             output_folder_path=output_dirpath,
             channel_index=channel_index,
@@ -1197,10 +1217,10 @@ def estimate_stabilization_cli(
         os.makedirs(output_dirpath / "z_stabilization_settings", exist_ok=True)
         # save each FOV separately
         try:
-            for fov, transforms in T_z_drift_mats_dict.items():
+            for fov, z_transforms in z_transforms_dict.items():
                 # Validate and filter transforms
-                transforms = _validate_transforms(
-                    transforms=transforms,
+                z_transforms = _validate_transforms(
+                    transforms=z_transforms,
                     window_size=settings.affine_transform_validation_window_size,
                     tolerance=settings.affine_transform_validation_tolerance,
                     Z=Z,
@@ -1210,7 +1230,7 @@ def estimate_stabilization_cli(
                 )
                 # Interpolate missing transforms
                 transforms = _interpolate_transforms(
-                    transforms=transforms,
+                    transforms=z_transforms,
                     window_size=settings.affine_transform_interpolation_window_size,
                     interpolation_type=settings.affine_transform_interpolation_type,
                     verbose=verbose,
@@ -1224,7 +1244,7 @@ def estimate_stabilization_cli(
                     stabilization_method=stabilization_method,
                     stabilization_estimation_channel=estimate_stabilization_channel,
                     stabilization_channels=settings.stabilization_channels,
-                    affine_transform_zyx_list=transforms,
+                    affine_transform_zyx_list=z_transforms,
                     time_indices="all",
                     output_voxel_size=voxel_size,
                 )
@@ -1232,7 +1252,7 @@ def estimate_stabilization_cli(
 
                 if verbose:
                     os.makedirs(output_dirpath / "translation_plots", exist_ok=True)
-                    plot_translations(np.array(transforms) , output_dirpath / "translation_plots" / f"{fov}.png")
+                    plot_translations(np.array(z_transforms) , output_dirpath / "translation_plots" / f"{fov}.png")
 
         except Exception as e:
             click.echo(f"Error estimating {stabilization_type} stabilization parameters: {e}")
@@ -1242,7 +1262,7 @@ def estimate_stabilization_cli(
         if stabilization_method == "focus-finding":
 
             click.echo("Estimating xy stabilization parameters")
-            T_translation_mats_dict = estimate_xy_stabilization(
+            xy_transforms_dict = estimate_xy_stabilization(
                 input_data_paths=input_position_dirpaths,
                 output_folder_path=output_dirpath,
                 channel_index=channel_index,
@@ -1255,12 +1275,10 @@ def estimate_stabilization_cli(
             os.makedirs(output_dirpath / "xy_stabilization_settings", exist_ok=True)
 
             # save each FOV separately
-            for fov, transforms in T_translation_mats_dict.items():
-                # save the transforms as
-
+            for fov, xy_transforms in xy_transforms_dict.items():
                 # Validate and filter transforms
-                transforms = _validate_transforms(
-                    transforms=transforms,
+                xy_transforms = _validate_transforms(
+                    transforms=xy_transforms,
                     window_size=settings.affine_transform_validation_window_size,
                     tolerance=settings.affine_transform_validation_tolerance,
                     Z=Z,
@@ -1269,8 +1287,8 @@ def estimate_stabilization_cli(
                     verbose=verbose,
                 )
                 # Interpolate missing transforms
-                transforms = _interpolate_transforms(
-                    transforms=transforms,
+                xy_transforms = _interpolate_transforms(
+                    transforms=xy_transforms,
                     window_size=settings.affine_transform_interpolation_window_size,
                     interpolation_type=settings.affine_transform_interpolation_type,
                     verbose=verbose,
@@ -1284,7 +1302,7 @@ def estimate_stabilization_cli(
                     stabilization_method=stabilization_method,
                     stabilization_estimation_channel=estimate_stabilization_channel,
                     stabilization_channels=settings.stabilization_channels,
-                    affine_transform_zyx_list=transforms,
+                    affine_transform_zyx_list=xy_transforms,
                     time_indices="all",
                     output_voxel_size=voxel_size,
                 )
@@ -1292,7 +1310,8 @@ def estimate_stabilization_cli(
 
                 if verbose:
                     os.makedirs(output_dirpath / "translation_plots", exist_ok=True)
-                    plot_translations(np.array(transforms) , output_dirpath / "translation_plots" / f"{fov}.png")
+                    plot_translations(np.array(xy_transforms) , output_dirpath / "translation_plots" / f"{fov}.png")
+
 
 
 if __name__ == "__main__":
