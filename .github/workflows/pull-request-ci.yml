@@ -19,7 +19,10 @@ jobs:
         with:
           src: "biahub"
           options: "--check --verbose"
-          use_pyproject: true
+          use_pyproject: true # Requires python >3.11
+      - uses: py-actions/flake8@v2
+        with:
+          path: "biahub"
 
   # style:
   #   name: Style Check
