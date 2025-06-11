@@ -25,6 +25,8 @@ jobs:
           path: "biahub"
           flake8-version: "5.0" # Duplicates the version in pyproject.toml
       - uses: isort/isort-action@v1
+        with:
+          isort-version: "5.12" # Duplicates the version in pyproject.toml
 
   # style:
   #   name: Style Check
