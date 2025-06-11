@@ -1032,12 +1032,12 @@ def estimate_stabilization_cli(
                         "The number of translation matrices and z drift matrices must be the same"
                     )
 
-                transforms = np.asarray(
+                xyz_transforms = np.asarray(
                     [a @ b for a, b in zip(xy_transforms, z_transforms)]
                 ).tolist()
                 # Validate and filter transforms
-                transforms = _validate_transforms(
-                    transforms=transforms,
+                xyz_transforms = _validate_transforms(
+                    transforms=xyz_transforms,
                     window_size=settings.affine_transform_validation_window_size,
                     tolerance=settings.affine_transform_validation_tolerance,
                     Z=Z,
@@ -1046,8 +1046,8 @@ def estimate_stabilization_cli(
                     verbose=verbose,
                 )
                 # Interpolate missing transforms
-                transforms = _interpolate_transforms(
-                    transforms=transforms,
+                xyz_transforms = _interpolate_transforms(
+                    transforms=xyz_transforms,
                     window_size=settings.affine_transform_interpolation_window_size,
                     interpolation_type=settings.affine_transform_interpolation_type,
                     verbose=verbose,
@@ -1061,7 +1061,7 @@ def estimate_stabilization_cli(
                     stabilization_method=stabilization_method,
                     stabilization_estimation_channel=estimate_stabilization_channel,
                     stabilization_channels=settings.stabilization_channels,
-                    affine_transform_zyx_list=transforms,
+                    affine_transform_zyx_list=xyz_transforms,
                     time_indices="all",
                     output_voxel_size=voxel_size,
                 )
@@ -1093,7 +1093,7 @@ def estimate_stabilization_cli(
                 )
                 if verbose:
                     os.makedirs(output_dirpath / "translation_plots", exist_ok=True)
-                    plot_translations(np.array(transforms) , output_dirpath / "translation_plots" / f"{fov}.png")
+                    plot_translations(np.array(xyz_transforms) , output_dirpath / "translation_plots" / f"{fov}.png")
 
         elif stabilization_method == "beads":
 
@@ -1116,7 +1116,7 @@ def estimate_stabilization_cli(
             )
 
             # Validate and filter transforms
-            transforms = _validate_transforms(
+            xyz_transforms = _validate_transforms(
                 transforms=xyz_transforms,
                 window_size=settings.affine_transform_validation_window_size,
                 tolerance=settings.affine_transform_validation_tolerance,
@@ -1126,7 +1126,7 @@ def estimate_stabilization_cli(
                 verbose=verbose,
             )
             # Interpolate missing transforms
-            transforms = _interpolate_transforms(
+            xyz_transforms = _interpolate_transforms(
                 transforms=xyz_transforms,
                 window_size=settings.affine_transform_interpolation_window_size,
                 interpolation_type=settings.affine_transform_interpolation_type,
@@ -1165,7 +1165,7 @@ def estimate_stabilization_cli(
             for fov, xyz_transforms in xyz_transforms_dict.items():
                 click.echo(f"Processing FOV {fov}")
                 # Validate and filter transforms
-                transforms = _validate_transforms(
+                xyz_transforms = _validate_transforms(
                     transforms=xyz_transforms,
                     window_size=settings.affine_transform_validation_window_size,
                     tolerance=settings.affine_transform_validation_tolerance,
@@ -1175,7 +1175,7 @@ def estimate_stabilization_cli(
                     verbose=verbose,
                 )
                 # Interpolate missing transforms
-                transforms = _interpolate_transforms(
+                xyz_transforms = _interpolate_transforms(
                     transforms=xyz_transforms,
                     window_size=settings.affine_transform_interpolation_window_size,
                     interpolation_type=settings.affine_transform_interpolation_type,
@@ -1229,7 +1229,7 @@ def estimate_stabilization_cli(
                     verbose=verbose,
                 )
                 # Interpolate missing transforms
-                transforms = _interpolate_transforms(
+                z_transforms = _interpolate_transforms(
                     transforms=z_transforms,
                     window_size=settings.affine_transform_interpolation_window_size,
                     interpolation_type=settings.affine_transform_interpolation_type,
