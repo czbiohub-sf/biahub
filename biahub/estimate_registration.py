@@ -612,7 +612,6 @@ def estimate_registration_cli(
     registration_target_channel,
     registration_source_channel,
 ):
-
     """
     Estimate the affine transformation between a source and target image for registration.
 
