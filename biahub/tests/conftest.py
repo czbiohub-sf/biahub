@@ -1,7 +1,6 @@
 import numpy as np
 import pytest
 import yaml
-
 from iohub.ngff import open_ome_zarr
 
 # These fixtures return paired
@@ -27,7 +26,7 @@ def example_register_settings():
 
 @pytest.fixture(scope="function")
 def example_estimate_stabilization_settings():
-    settings_path = "./biahub/analysis/settings/example_estimate_stabilization_settings.yml"
+    settings_path = "./settings/example_estimate_stabilization_settings.yml"
     with open(settings_path) as file:
         settings = yaml.safe_load(file)
     yield settings_path, settings
@@ -71,16 +70,33 @@ def example_plate(tmp_path):
     )
 
     # Generate input dataset
+    
+    from iohub.ngff.models import TimeAxisMeta, ChannelAxisMeta, SpaceAxisMeta
+
+    axes = [
+        TimeAxisMeta(name="t", unit="second"),
+        ChannelAxisMeta(name="c"),
+        SpaceAxisMeta(name="z", unit="micrometer"),
+        SpaceAxisMeta(name="y", unit="micrometer"),
+        SpaceAxisMeta(name="x", unit="micrometer"),
+    ]
+
+
+
+
     plate_dataset = open_ome_zarr(
         plate_path,
         layout="hcs",
         mode="w",
         channel_names=["GFP", "RFP", "Phase3D", "Orientation", "Retardance", "Birefringence"],
+        axes=axes,
+
     )
 
     for row, col, fov in position_list:
         position = plate_dataset.create_position(row, col, fov)
         position["0"] = np.random.uniform(0.0, 255.0, size=(3, 6, 4, 5, 6)).astype(np.float32)
+        print(position["0"].shape)
 
     yield plate_path, plate_dataset
 

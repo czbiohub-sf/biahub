@@ -11,7 +11,7 @@ stabilization_type: "z"
 # beads and pcc only available for "xyz" stabilization
 stabilization_method: "focus-finding"
     
-skip_beads_fov: "C/1/000000" # if there is none, set as '0'
+skip_beads_fov: "0" # if there is none, set as '0'
 
 # Optional. Crop size in xy. Enter two integers. Default is 300 300
 crop_size_xy: 

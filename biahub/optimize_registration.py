@@ -44,13 +44,18 @@ def _optimize_registration(
 
     # TODO: hardcoded values
     _target_channel = np.asarray(target_czyx[target_channel_index]).astype(np.float32)
+    if _target_channel.ndim != 3:
+        raise ValueError(f"Expected 3D target channel, got shape {_target_channel.shape}")
     target_ants_pre_crop = ants.from_numpy(_target_channel)
     target_zyx = _target_channel[z_slice, y_slice, x_slice]
+    if target_zyx.ndim != 3:
+        raise ValueError(f"target_zyx is not 3D after slicing: {target_zyx.shape}")
     if clip:
         target_zyx = np.clip(target_zyx, 0, 0.5)
     if sobel_fitler:
         target_zyx = filters.sobel(target_zyx)
     target_ants = ants.from_numpy(target_zyx)
+
 
     if not isinstance(source_channel_index, list):
         source_channel_index = [source_channel_index]
@@ -58,10 +63,21 @@ def _optimize_registration(
     for idx in source_channel_index:
         # Cropping, clipping, and filtering are applied after registration with initial_tform
         _source_channel = np.asarray(source_czyx[idx]).astype(np.float32)
+        if _source_channel.ndim != 3:
+            raise ValueError(f"Expected 3D source channel, got shape {_source_channel.shape}")
         source_pre_optim = t_form_ants.apply_to_image(
             ants.from_numpy(_source_channel), reference=target_ants_pre_crop
         )
-        source_channel = source_pre_optim.numpy()[z_slice, y_slice, x_slice]
+
+        source_array = source_pre_optim.numpy()
+        if source_array.ndim != 3:
+            raise ValueError(
+                f"apply_to_image returned non-3D array: {source_array.shape}.\n"
+                "This is likely caused by mismatched input shape or invalid transform/reference."
+            )
+
+        source_channel = source_array[z_slice, y_slice, x_slice]
+
         if clip:
             source_channel = np.clip(source_channel, 110, np.quantile(source_channel, 0.99))
         if sobel_fitler:
@@ -87,7 +103,7 @@ def _optimize_registration(
     return composed_matrix
 
 
-@click.command()
+@click.command("optimize-registration")
 @source_position_dirpaths()
 @target_position_dirpaths()
 @config_filepath()
@@ -121,36 +137,46 @@ def optimize_registration_cli(
     """
 
     settings = yaml_to_model(config_filepath, RegistrationSettings)
+    t_idx = settings.time_indices 
+    # if time_indices not int type
+    if not isinstance(t_idx, int):
+        print("Time index 'all' is not supported for optimize-registration, using first time index") 
+        t_idx = 0
 
     # Load the source volume
     with open_ome_zarr(source_position_dirpaths[0]) as source_position:
-        source_channel_names = source_position.channel_names
         # NOTE: using the first channel in the config to register
+        source_channel_names = source_position.channel_names
         source_channel_index = source_channel_names.index(settings.source_channel_names[0])
-        source_channel_name = source_channel_names[source_channel_index]
-        source_data_zyx = source_position.data[T_IDX, source_channel_index]
+        source_data_czyx = np.asarray(source_position.data[t_idx])
+        print("Source data shape:", source_data_czyx.shape)
 
     # Load the target volume
     with open_ome_zarr(target_position_dirpaths[0]) as target_position:
         target_channel_names = target_position.channel_names
         target_channel_index = target_channel_names.index(settings.target_channel_name)
-        target_channel_name = target_channel_names[target_channel_index]
-        target_data_zyx = target_position.data[T_IDX, target_channel_index]
-
+        target_data_czyx = np.asarray(target_position.data[t_idx])
+        print("Target data shape:", target_data_czyx.shape)
     click.echo(
-        f"\nOptimizing registration using source channel {source_channel_name} and target channel {target_channel_name}"
+        f"\nOptimizing registration using source channel {source_channel_names[source_channel_index]} and target channel {target_channel_names[target_channel_index]}"
     )
+    
+    approx_tform = np.asarray(settings.affine_transform_zyx, dtype=np.float32)
+    
+    source_data_zyx = source_data_czyx[source_channel_index]
+    target_data_zyx = target_data_czyx[target_channel_index]
 
-    approx_tform = np.array(settings.affine_transform_zyx)
     # Crop only to the overlapping regio, zero padding interfereces with registration
     z_slice, y_slice, x_slice = find_overlapping_volume(
         target_data_zyx.shape, source_data_zyx.shape, approx_tform
     )
 
     composed_matrix = _optimize_registration(
-        source_data_zyx,
-        target_data_zyx,
-        approx_tform,
+        source_czyx=source_data_czyx,
+        target_czyx=target_data_czyx,
+        initial_tform=approx_tform,
+        source_channel_index=source_channel_index,
+        target_channel_index=target_channel_index,
         z_slice=z_slice,
         y_slice=y_slice,
         x_slice=x_slice,
@@ -163,6 +189,8 @@ def optimize_registration_cli(
     output_settings = settings.model_copy()
     output_settings.affine_transform_zyx = composed_matrix.tolist()
     model_to_yaml(output_settings, output_filepath)
+
+
 
     if display_viewer:
         click.echo("Initializing napari viewer...")
