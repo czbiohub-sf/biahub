@@ -23,6 +23,7 @@ jobs:
       - uses: py-actions/flake8@v2
         with:
           path: "biahub"
+          flake8-version: "5.0"
 
   # style:
   #   name: Style Check
