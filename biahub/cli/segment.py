@@ -8,7 +8,6 @@ import torch
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate, process_single_position
 
-from biahub.analysis.AnalysisSettings import SegmentationSettings
 from biahub.cli import utils
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
@@ -20,6 +19,7 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.cli.utils import yaml_to_model
+from biahub.settings import SegmentationSettings
 
 
 def segment_data(
@@ -89,7 +89,7 @@ def segment_data(
         )
         segmentation, _, _ = model.eval(
             czyx_data_to_segment, channel_axis=0, z_axis=1, **model_args.eval_args
-        )  # noqa: python-no-eval
+        )
         if z_slice_2D is not None and isinstance(z_slice_2D, int):
             segmentation = segmentation[np.newaxis, ...]
         czyx_segmentation.append(segmentation)
@@ -147,10 +147,12 @@ def segment(
         if model_args.z_slice_2D is not None and isinstance(model_args.z_slice_2D, int):
             Z = 1
         # Ensure channel names exist in the dataset
-        if not all(channel in channel_names for channel in model_args.eval_args["channels"]):
-            raise ValueError(
-                f"Channels {model_args.eval_args['channels']} not found in dataset {channel_names}"
-            )
+        for channel in model_args.eval_args["channels"]:
+            if channel not in channel_names:
+                raise ValueError(
+                    f"Channels {model_args.eval_args['channels']} "
+                    f"must be a subset of {channel_names}"
+                )
         # Channel strings to indices with the cellpose offset of 1
         model_args.eval_args["channels"] = [
             channel_names.index(channel) + 1 for channel in model_args.eval_args["channels"]
@@ -209,7 +211,7 @@ def segment(
     # Prepare SLURM arguments
     slurm_args = {
         "slurm_job_name": "segment",
-        "slurm_gres": f"gpu:{num_gpus}",
+        "slurm_gres": f"gpu:{num_gpus}",  # noqa: E231
         "slurm_mem_per_cpu": f"{gb_ram_request}G",
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,  # process up to 100 positions at a time

@@ -3,7 +3,7 @@ from typing import Literal, Sequence
 import click
 import numpy as np
 
-from biahub.analysis.AnalysisSettings import ProcessingFunctions
+from biahub.settings import ProcessingFunctions
 
 
 def process_czyx(
