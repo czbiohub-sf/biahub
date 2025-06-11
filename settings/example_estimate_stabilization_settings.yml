@@ -1,7 +1,7 @@
 # Chanel used to estimate stabilization parameters
 estimate_stabilization_channel: Phase3D
 # List of channels to be stabilized later
-stabilization_channels: 
+stabilization_channels:
   - Phase3D
 
 # Define the type of stabilization to be performed. Options are "xy", "z", or "xyz".
@@ -10,11 +10,11 @@ stabilization_type: "z"
 # Defuine the method used to estimate stabilization parameters. Options are "beads" or "phase-cross-corr" or "focus-finding".
 # beads and pcc only available for "xyz" stabilization
 stabilization_method: "focus-finding"
-    
+
 skip_beads_fov: "C/1/000000" # if there is none, set as '0'
 
 # Optional. Crop size in xy. Enter two integers. Default is 300 300
-crop_size_xy: 
+crop_size_xy:
   - 300
   - 300
 
@@ -44,7 +44,7 @@ affine_transform_validation_window_size: 10
 # during beads-based stabilization.
 affine_transform_validation_tolerance: 100
 
-# Optional. Size of the window for interpolation of transformations during beads-based stabilization for cases the transformation is not available 
+# Optional. Size of the window for interpolation of transformations during beads-based stabilization for cases the transformation is not available
 affine_transform_interpolation_window_size: 3
 
 # Optional. Type of interpolation of transformations during beads-based stabilization for cases the transformation is not available

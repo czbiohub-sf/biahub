@@ -62,7 +62,7 @@ affine_transform_validation_window_size: 10
 # during beads-based registration.
 affine_transform_validation_tolerance: 100
 
-# Optional. Size of the window for interpolation of transformations during beads-based registration for cases the transformation is not available 
+# Optional. Size of the window for interpolation of transformations during beads-based registration for cases the transformation is not available
 affine_transform_interpolation_window_size: 3
 
 # Optional. Type of interpolation of transformations during beads-based registration for cases the transformation is not available
