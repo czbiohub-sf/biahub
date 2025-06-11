@@ -8,7 +8,6 @@ def test_optimize_affine_cli(tmp_path, example_plate, example_register_settings)
     output_path = tmp_path / "config.yaml"
 
 
-
     runner = CliRunner()
     result = runner.invoke(
         cli,
