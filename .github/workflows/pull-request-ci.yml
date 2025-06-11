@@ -19,7 +19,6 @@ jobs:
         with:
           src: "biahub"
           options: "--check --verbose"
-          version: "22.3.0"
           use_pyproject: true
 
   # style:
