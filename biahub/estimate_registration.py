@@ -23,6 +23,7 @@ from skimage.transform import AffineTransform, EuclideanTransform, SimilarityTra
 from sklearn.neighbors import NearestNeighbors
 from waveorder.focus import focus_from_transverse_band
 
+from biahub.estimate_stabilization import plot_translations
 from biahub.characterize_psf import detect_peaks
 from biahub.cli.parsing import (
     config_filepath,
@@ -1374,49 +1375,8 @@ def estimate_registration_cli(
 
         if settings.verbose:
             click.echo("Plotting translations over time")
-            import matplotlib.pyplot as plt
+            plot_translations(np.array(transforms), output_dir / "translation_plots" / "beads_registration.png")
 
-            transforms = np.array(transforms)
-
-            z_transforms = transforms[:, 0, 3]  # ->ZYX
-            y_transforms = transforms[:, 1, 3]  # ->ZYX
-            x_transforms = transforms[:, 2, 3]  # ->ZYX
-
-            plt.plot(z_transforms)
-            plt.legend(["Z-Translation"])
-            plt.xlabel("Timepoint")
-            plt.ylabel("Translations")
-            plt.title("Translations Over Time")
-            plt.grid()
-            # Save the figure
-            plt.savefig(
-                output_dir / "Z_translation_over_time.png", dpi=300, bbox_inches='tight'
-            )
-            plt.close()
-
-            plt.plot(y_transforms)
-            plt.legend(["Y-Translation"])
-            plt.xlabel("Timepoint")
-            plt.ylabel("Translations")
-            plt.title("Translations Over Time")
-            plt.grid()
-            # Save the figure
-            plt.savefig(
-                output_dir / "Y_translation_over_time.png", dpi=300, bbox_inches='tight'
-            )
-            plt.close()
-
-            plt.plot(x_transforms)
-            plt.legend(["X-Translation"])
-            plt.xlabel("Timepoint")
-            plt.ylabel("Translations")
-            plt.title("Translations Over Time")
-            plt.grid()
-            # Save the figure
-            plt.savefig(
-                output_dir / "X_translation_over_time.png", dpi=300, bbox_inches='tight'
-            )
-            plt.close()
     elif settings.estimation_method == "ants":
         transforms = ants_registration(
             source_data_tczyx=source_data,
