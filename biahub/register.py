@@ -1,13 +1,14 @@
 from pathlib import Path
 from typing import List, Tuple
 
-import ants
 import click
+import ants
 import largestinteriorrectangle as lir
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy.ndimage
 import submitit
+import numpy as np
 
 from iohub import open_ome_zarr
 
