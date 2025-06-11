@@ -87,7 +87,7 @@ def _optimize_registration(
     return composed_matrix
 
 
-@click.command()
+@click.command("optimize-registration")
 @source_position_dirpaths()
 @target_position_dirpaths()
 @config_filepath()
