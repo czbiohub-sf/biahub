@@ -47,12 +47,11 @@ dependencies = [
 [project.optional-dependencies]
 # note that dev dependencies are only pinned to major versions
 dev = [
-  "black==22.3.0",
-  "flake8~=5.0",
-  "isort~=5.12",
-  "pre-commit~=2.19",
-  "pylint~=2.14",
-  "pytest~=7.1",
+  "black==25.1",
+  "flake8==7.2",
+  "isort==6.0",
+  "pytest==8.4",
+  "pre-commit~=4.2",
 ]
 
 segmentation = [

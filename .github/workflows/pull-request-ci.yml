@@ -8,7 +8,7 @@ on:
 
 jobs:
   style:
-    name: Test new style check
+    name: Check Style
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -23,10 +23,10 @@ jobs:
       - uses: py-actions/flake8@v2
         with:
           path: "biahub"
-          flake8-version: "5.0" # Duplicates the version in pyproject.toml
+          flake8-version: "7.2.0" # Duplicates the version in pyproject.toml
       - uses: isort/isort-action@v1
         with:
-          isort-version: "5.12" # Duplicates the version in pyproject.toml
+          isort-version: "6.0.1" # Duplicates the version in pyproject.toml
 
   test:
     name: Run Tests
