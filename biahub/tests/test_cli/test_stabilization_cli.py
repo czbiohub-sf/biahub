@@ -7,7 +7,7 @@ def test_estimate_stabilization(
     tmp_path, example_plate, example_estimate_stabilization_settings
 ):
     plate_path, _ = example_plate
-    output_path = tmp_path / "config.yml"
+    output_path = tmp_path / "z_stabilization_settings"
     config_path, _ = example_estimate_stabilization_settings
     runner = CliRunner()
     result = runner.invoke(
@@ -18,15 +18,13 @@ def test_estimate_stabilization(
             str(plate_path) + "/A/1/0",
             "-o",
             str(output_path),
-            "-j",
-            "1",
             "-c",
             str(config_path),
         ],
     )
 
     # Weak test
-    assert "Estimating z stabilization parameters" in result.output
+    assert "stabilization_type='z" in result.output
     assert output_path.exists()
     assert result.exit_code == 0
 

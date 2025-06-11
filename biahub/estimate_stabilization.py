@@ -941,9 +941,7 @@ def estimate_stabilization_cli(
             path for path in input_position_dirpaths if skip_beads_fov not in str(path)
         ]
 
-    if output_filepath.suffix not in [".yml", ".yaml"]:
-        raise ValueError("Output file must be a yaml file")
-
+        
     output_dirpath = output_filepath.parent
     output_dirpath.mkdir(parents=True, exist_ok=True)
 
@@ -1245,61 +1243,65 @@ def estimate_stabilization_cli(
         if verbose:
             os.makedirs(output_dirpath / "translation_plots", exist_ok=True)
         # save each FOV separately
-        for fov, transforms in T_z_drift_mats_dict.items():
-            # Validate and filter transforms
-            transforms = _validate_transforms(
-                transforms=transforms,
-                window_size=settings.affine_transform_validation_window_size,
-                tolerance=settings.affine_transform_validation_tolerance,
-                Z=Z,
-                Y=Y,
-                X=X,
-                verbose=verbose,
-            )
-            # Interpolate missing transforms
-            transforms = _interpolate_transforms(
-                transforms=transforms,
-                window_size=settings.affine_transform_interpolation_window_size,
-                interpolation_type=settings.affine_transform_interpolation_type,
-                verbose=verbose,
-            )
-            output_filepath_fov = output_dirpath / "z_stabilization_settings" / f"{fov}.yml"
-            # Save the combined matrices
-            model = StabilizationSettings(
-                stabilization_type=stabilization_type,
-                stabilization_method=stabilization_method,
-                stabilization_estimation_channel=estimate_stabilization_channel,
-                stabilization_channels=settings.stabilization_channels,
-                affine_transform_zyx_list=transforms,
-                time_indices="all",
-                output_voxel_size=voxel_size,
-            )
-            model_to_yaml(model, output_filepath_fov)
-
-            if verbose:
-                os.makedirs(output_dirpath / "translation_plots", exist_ok=True)
-
-                transforms = np.array(transforms)
-
-                z_transforms = transforms[:, 0, 3]  # ->ZYX
-                y_transforms = transforms[:, 1, 3]  # ->ZYX
-                x_transforms = transforms[:, 2, 3]  # ->ZYX
-
-                plt.plot(z_transforms)
-                plt.plot(x_transforms)
-                plt.plot(y_transforms)
-                plt.legend(["Z-Translation", "X-Translation", "Y-Translation"])
-                plt.xlabel("Timepoint")
-                plt.ylabel("Translations")
-                plt.title("Translations Over Time")
-                plt.grid()
-                # Save the figure
-                plt.savefig(
-                    output_dirpath / "translation_plots" / f"{fov}.png",
-                    dpi=300,
-                    bbox_inches='tight',
+        try:
+            for fov, transforms in T_z_drift_mats_dict.items():
+                # Validate and filter transforms
+                transforms = _validate_transforms(
+                    transforms=transforms,
+                    window_size=settings.affine_transform_validation_window_size,
+                    tolerance=settings.affine_transform_validation_tolerance,
+                    Z=Z,
+                    Y=Y,
+                    X=X,
+                    verbose=verbose,
                 )
-                plt.close()
+                # Interpolate missing transforms
+                transforms = _interpolate_transforms(
+                    transforms=transforms,
+                    window_size=settings.affine_transform_interpolation_window_size,
+                    interpolation_type=settings.affine_transform_interpolation_type,
+                    verbose=verbose,
+                )
+                output_filepath_fov = output_dirpath / "z_stabilization_settings" / f"{fov}.yml"
+                # Save the combined matrices
+                model = StabilizationSettings(
+                    stabilization_type=stabilization_type,
+                    stabilization_method=stabilization_method,
+                    stabilization_estimation_channel=estimate_stabilization_channel,
+                    stabilization_channels=settings.stabilization_channels,
+                    affine_transform_zyx_list=transforms,
+                    time_indices="all",
+                    output_voxel_size=voxel_size,
+                )
+                model_to_yaml(model, output_filepath_fov)
+
+                if verbose:
+                    os.makedirs(output_dirpath / "translation_plots", exist_ok=True)
+
+                    transforms = np.array(transforms)
+
+                    z_transforms = transforms[:, 0, 3]  # ->ZYX
+                    y_transforms = transforms[:, 1, 3]  # ->ZYX
+                    x_transforms = transforms[:, 2, 3]  # ->ZYX
+
+                    plt.plot(z_transforms)
+                    plt.plot(x_transforms)
+                    plt.plot(y_transforms)
+                    plt.legend(["Z-Translation", "X-Translation", "Y-Translation"])
+                    plt.xlabel("Timepoint")
+                    plt.ylabel("Translations")
+                    plt.title("Translations Over Time")
+                    plt.grid()
+                    # Save the figure
+                    plt.savefig(
+                        output_dirpath / "translation_plots" / f"{fov}.png",
+                        dpi=300,
+                        bbox_inches='tight',
+                    )
+                    plt.close()
+        except Exception as e:
+            click.echo(f"Error estimating {stabilization_type} stabilization parameters: {e}")
+            
 
     # Estimate yx drift
     if "xy" == stabilization_type:
