@@ -893,6 +893,21 @@ def estimate_z_stabilization(
 
     return fov_transforms
 
+def plot_translations(transforms_zyx: np.ndarray, output_filepath: Path):
+    z_transforms = transforms_zyx[:, 0, 3]  
+    y_transforms = transforms_zyx[:, 1, 3] 
+    x_transforms = transforms_zyx[:, 2, 3]
+    plt.plot(z_transforms)
+    plt.plot(x_transforms)
+    plt.plot(y_transforms)
+    plt.legend(["Z-Translation", "X-Translation", "Y-Translation"])
+    plt.xlabel("Timepoint")
+    plt.ylabel("Translations")
+    plt.title("Translations Over Time")
+    plt.grid()
+    plt.savefig(output_filepath, dpi=300, bbox_inches='tight')
+    plt.close()
+
 
 @click.command("estimate-stabilization")
 @input_position_dirpaths()
@@ -984,9 +999,7 @@ def estimate_stabilization_cli(
             os.makedirs(output_dirpath / "xyz_stabilization_settings", exist_ok=True)
             os.makedirs(output_dirpath / "z_stabilization_settings", exist_ok=True)
             os.makedirs(output_dirpath / "xy_stabilization_settings", exist_ok=True)
-            if verbose:
-                os.makedirs(output_dirpath / "translation_plots", exist_ok=True)
-
+        
             # save each FOV separately
             for fov, T_translation_mats in T_translation_mats_dict.items():
                 click.echo(f"Processing FOV {fov}")
@@ -1059,27 +1072,8 @@ def estimate_stabilization_cli(
                     model, output_dirpath / "xy_stabilization_settings" / f"{fov}.yml"
                 )
                 if verbose:
-                    transforms = np.array(transforms)
-
-                    z_transforms = transforms[:, 0, 3]  # ->ZYX
-                    y_transforms = transforms[:, 1, 3]  # ->ZYX
-                    x_transforms = transforms[:, 2, 3]  # ->ZYX
-
-                    plt.plot(z_transforms)
-                    plt.plot(x_transforms)
-                    plt.plot(y_transforms)
-                    plt.legend(["Z-Translation", "X-Translation", "Y-Translation"])
-                    plt.xlabel("Timepoint")
-                    plt.ylabel("Translations")
-                    plt.title("Translations Over Time")
-                    plt.grid()
-                    # Save the figure
-                    plt.savefig(
-                        output_dirpath / "translation_plots" / f"{fov}.png",
-                        dpi=300,
-                        bbox_inches='tight',
-                    )
-                    plt.close()
+                    os.makedirs(output_dirpath / "translation_plots", exist_ok=True)
+                    plot_translations(np.array(transforms) , output_dirpath / "translation_plots" / f"{fov}.png")
 
         elif stabilization_method == "beads":
 
@@ -1132,27 +1126,7 @@ def estimate_stabilization_cli(
 
             if verbose:
                 os.makedirs(output_dirpath / "translation_plots", exist_ok=True)
-                transforms = np.array(transforms)
-
-                z_transforms = transforms[:, 0, 3]  # ->ZYX
-                y_transforms = transforms[:, 1, 3]  # ->ZYX
-                x_transforms = transforms[:, 2, 3]  # ->ZYX
-
-                plt.plot(z_transforms)
-                plt.plot(x_transforms)
-                plt.plot(y_transforms)
-                plt.legend(["Z-Translation", "X-Translation", "Y-Translation"])
-                plt.xlabel("Timepoint")
-                plt.ylabel("Translations")
-                plt.title("Translations Over Time")
-                plt.grid()
-                # Save the figure
-                plt.savefig(
-                    output_dirpath / "translation_plots" / "beads.png",
-                    dpi=300,
-                    bbox_inches='tight',
-                )
-                plt.close()
+                plot_translations(np.array(transforms) , output_dirpath / "translation_plots" / "beads.png")
 
         elif stabilization_method == "phase-cross-corr":
             click.echo("Estimating xyz stabilization parameters with phase cross correlation")
@@ -1166,6 +1140,7 @@ def estimate_stabilization_cli(
                 cluster=cluster,
                 verbose=verbose,
             )
+            
             os.makedirs(output_dirpath / "xyz_stabilization_settings", exist_ok=True)
             for fov, transforms in transform_dict.items():
                 click.echo(f"Processing FOV {fov}")
@@ -1202,26 +1177,7 @@ def estimate_stabilization_cli(
                 model_to_yaml(model, output_filepath_fov)
                 if verbose:
                     os.makedirs(output_dirpath / "translation_plots", exist_ok=True)
-                    transforms = np.array(transforms)
-
-                    z_transforms = transforms[:, 0, 3]  # ->ZYX
-                    y_transforms = transforms[:, 1, 3]  # ->ZYX
-                    x_transforms = transforms[:, 2, 3]  # ->ZYX
-                    plt.plot(z_transforms)
-                    plt.plot(x_transforms)
-                    plt.plot(y_transforms)
-                    plt.legend(["Z-Translation", "X-Translation", "Y-Translation"])
-                    plt.xlabel("Timepoint")
-                    plt.ylabel("Translations")
-                    plt.title("Translations Over Time")
-                    plt.grid()
-                    # Save the figure
-                    plt.savefig(
-                        output_dirpath / "translation_plots" / f"{fov}.png",
-                        dpi=300,
-                        bbox_inches='tight',
-                    )
-                    plt.close()
+                    plot_translations(np.array(transforms) , output_dirpath / "translation_plots" / f"{fov}.png")
 
     # Estimate z drift
     if "z" == stabilization_type and stabilization_method == "focus-finding":
@@ -1239,8 +1195,6 @@ def estimate_stabilization_cli(
         )
 
         os.makedirs(output_dirpath / "z_stabilization_settings", exist_ok=True)
-        if verbose:
-            os.makedirs(output_dirpath / "translation_plots", exist_ok=True)
         # save each FOV separately
         try:
             for fov, transforms in T_z_drift_mats_dict.items():
@@ -1278,28 +1232,8 @@ def estimate_stabilization_cli(
 
                 if verbose:
                     os.makedirs(output_dirpath / "translation_plots", exist_ok=True)
+                    plot_translations(np.array(transforms) , output_dirpath / "translation_plots" / f"{fov}.png")
 
-                    transforms = np.array(transforms)
-
-                    z_transforms = transforms[:, 0, 3]  # ->ZYX
-                    y_transforms = transforms[:, 1, 3]  # ->ZYX
-                    x_transforms = transforms[:, 2, 3]  # ->ZYX
-
-                    plt.plot(z_transforms)
-                    plt.plot(x_transforms)
-                    plt.plot(y_transforms)
-                    plt.legend(["Z-Translation", "X-Translation", "Y-Translation"])
-                    plt.xlabel("Timepoint")
-                    plt.ylabel("Translations")
-                    plt.title("Translations Over Time")
-                    plt.grid()
-                    # Save the figure
-                    plt.savefig(
-                        output_dirpath / "translation_plots" / f"{fov}.png",
-                        dpi=300,
-                        bbox_inches='tight',
-                    )
-                    plt.close()
         except Exception as e:
             click.echo(f"Error estimating {stabilization_type} stabilization parameters: {e}")
 
@@ -1358,27 +1292,7 @@ def estimate_stabilization_cli(
 
                 if verbose:
                     os.makedirs(output_dirpath / "translation_plots", exist_ok=True)
-                    transforms = np.array(transforms)
-
-                    z_transforms = transforms[:, 0, 3]  # ->ZYX
-                    y_transforms = transforms[:, 1, 3]  # ->ZYX
-                    x_transforms = transforms[:, 2, 3]  # ->ZYX
-
-                    plt.plot(z_transforms)
-                    plt.plot(x_transforms)
-                    plt.plot(y_transforms)
-                    plt.legend(["Z-Translation", "X-Translation", "Y-Translation"])
-                    plt.xlabel("Timepoint")
-                    plt.ylabel("Translations")
-                    plt.title("Translations Over Time")
-                    plt.grid()
-                    # Save the figure
-                    plt.savefig(
-                        output_dirpath / "translation_plots" / f"{fov}.png",
-                        dpi=300,
-                        bbox_inches='tight',
-                    )
-                    plt.close()
+                    plot_translations(np.array(transforms) , output_dirpath / "translation_plots" / f"{fov}.png")
 
 
 if __name__ == "__main__":
