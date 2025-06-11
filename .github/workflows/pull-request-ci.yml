@@ -8,6 +8,7 @@ on:
 
 jobs:
   style:
+    name: Style Check
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -34,7 +35,9 @@ jobs:
     - name: Check code with isort
       run: isort --check .
 
-  pytest:
+  test:
+    name: Run Tests
+    needs: [style]
     runs-on: windows-latest
     strategy:
       matrix:
@@ -50,7 +53,11 @@ jobs:
         python-version: ${{ matrix.python-version }}
 
     - name: Install the biahub package
-      run: pip install -e ".[dev]"
+      run: |
+        python -m pip install --upgrade pip
+        # Install cpu wheels only to speed up the build
+        pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+        pip install ".[dev]"
 
-    - name: Run tests
+    - name: Test with pytest
       run: pytest -v
