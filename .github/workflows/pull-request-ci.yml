@@ -23,7 +23,8 @@ jobs:
       - uses: py-actions/flake8@v2
         with:
           path: "biahub"
-          flake8-version: "5.0"
+          flake8-version: "5.0" # Duplicates the version in pyproject.toml
+      - uses: isort/isort-action@v1
 
   # style:
   #   name: Style Check
