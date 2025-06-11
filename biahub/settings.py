@@ -13,7 +13,7 @@ from pydantic import (
     PositiveFloat,
     PositiveInt,
     field_validator,
-    validator,
+    model_validator,
 )
 
 
@@ -405,7 +405,8 @@ class SegmentationModel(BaseModel):
     z_slice_2D: Optional[int] = None
     preprocessing: list[PreprocessingFunctions] = []
 
-    @validator("eval_args", pre=True)
+    @field_validator("eval_args", mode="before")
+    @classmethod
     def validate_eval_args(cls, value):
         # Retrieve valid arguments dynamically if cellpose is required
         valid_args = get_valid_eval_args()
@@ -419,7 +420,8 @@ class SegmentationModel(BaseModel):
 
         return value
 
-    @validator("z_slice_2D")
+    @field_validator("z_slice_2D")
+    @classmethod
     def check_z_slice_with_do_3D(cls, z_slice_2D, values):
         # Only run this check if z_slice is provided (not None) and do_3D exists in eval_args
         if z_slice_2D is not None:
@@ -430,65 +432,6 @@ class SegmentationModel(BaseModel):
                     "If 'z_slice_2D' is provided, 'do_3D' in 'eval_args' must be set to False."
                 )
             z_slice_2D = 0
-        return z_slice_2D
-
-
-class SegmentationSettings(BaseModel):
-    models: Dict[str, SegmentationModel]
-    model_config = {"extra": "forbid", "protected_namespaces": ()}
-
-
-def get_valid_eval_args():
-    """Attempt to import cellpose and retrieve valid eval arguments."""
-    try:
-        from cellpose import models
-
-        return models.CellposeModel.eval.__code__.co_varnames[
-            : models.CellposeModel.eval.__code__.co_argcount
-        ]
-    except ImportError:
-        raise ImportError(
-            "The 'cellpose' package is required to validate 'eval_args' in cellpose model configurations. "
-            "Please install it to proceed with cellpose-related configurations."
-        )
-
-
-class PreprocessingFunctions(BaseModel):
-    function: ImportString
-    channel: str
-    kwargs: Dict[str, Any] = {}
-
-
-class SegmentationModel(BaseModel):
-    path_to_model: str
-    eval_args: Dict[str, Any]
-    z_slice_2D: Optional[int] = None
-    preprocessing: list[PreprocessingFunctions] = []
-
-    @validator("eval_args", pre=True)
-    def validate_eval_args(cls, value):
-        # Retrieve valid arguments dynamically if cellpose is required
-        valid_args = get_valid_eval_args()
-
-        # Check that all keys in eval_args are valid arguments for cellpose_eval
-        invalid_args = [arg for arg in value.keys() if arg not in valid_args]
-        if invalid_args:
-            raise ValueError(
-                f"Invalid eval arguments provided: {invalid_args}. Allowed arguments are {valid_args}"
-            )
-
-        return value
-
-    @validator("z_slice_2D")
-    def check_z_slice_with_do_3D(cls, z_slice_2D, values):
-        # Only run this check if z_slice is provided (not None) and do_3D exists in eval_args
-        if z_slice_2D is not None:
-            eval_args = values.get("eval_args", {})
-            do_3D = eval_args.get("do_3D", None)
-            if do_3D:
-                raise ValueError(
-                    "If 'z_slice_2D' is provided, 'do_3D' in 'eval_args' must be set to False."
-                )
         return z_slice_2D
 
 
