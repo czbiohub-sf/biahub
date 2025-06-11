@@ -27,7 +27,7 @@ def example_register_settings():
 
 @pytest.fixture(scope="function")
 def example_estimate_stabilization_settings():
-    settings_path = "./biahub/analysis/settings/example_estimate_stabilization_settings.yml"
+    settings_path = "./settings/example_estimate_stabilization_settings.yml"
     with open(settings_path) as file:
         settings = yaml.safe_load(file)
     yield settings_path, settings
