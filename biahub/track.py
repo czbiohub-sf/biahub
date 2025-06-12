@@ -525,37 +525,6 @@ def track_one_position(
     with open_ome_zarr(output_dirpath / Path(*position_key), mode="r+") as output_dataset:
         output_dataset[0][:, 0, 0] = np.asarray(tracking_labels)
 
-
-@click.command()
-@input_position_dirpaths()
-@output_dirpath()
-@config_filepath()
-@sbatch_filepath()
-@local()
-@click.option(
-    "-lf_dirpaths",
-    "-l",
-    required=False,
-    default=None,
-    type=str,
-    help="Label Free Image Dirpath, if there are blanck frames in the data.",
-)
-@click.option(
-    "-segmentation_dirpaths",
-    "-s",
-    required=False,
-    default=None,
-    type=str,
-    help="Segmentation Dirpath, if there are blanck frames in the data.",
-)
-@click.option(
-    "-blank_frame_csv_path",
-    "-f",
-    required=False,
-    default=None,
-    type=str,
-    help=" Blank Frame CSV path, if there are blanck frames in the data and the csv was previous gerenrated.",
-)
 def track(
     lf_dirpaths: str,
     output_dirpath: str,
@@ -569,14 +538,16 @@ def track(
 
     """
     Track nuclei and membranes in using virtual staining nuclei and membranes data.
-
-    This function applied tracking to the virtual staining data for each position in the input.
-    To use this function, install the lib as pip install -e .["track"]
-
-    Example usage:
-
-    biahub track -i virtual_staining.zarr/*/*/* -l lf_stabilize.zarr -o output.zarr -c config_tracking.yml
-
+    Parameters:
+    - lf_dirpaths (str): Path to the directory containing label-free images (optional, required
+                               if blank frames exist in the data).
+    - output_dirpath (str): Path to save tracking results, including labels and tracks.
+    - config_filepath (str): Path to the tracking configuration file.
+    - input_position_dirpaths (str): Path to the virtual staining dataset in OME-Zarr format.
+    - segmentation_dirpaths (str): Path to the segmentation dataset in OME-Zarr format.
+    - sbatch_filepath (str): Path to the SLURM submission script.
+    - local (bool): If True, run the tracking locally.
+    - blank_frame_csv_path (str): Path to the blank frame CSV file.
     """
 
     output_dirpath = Path(output_dirpath)
@@ -654,5 +625,67 @@ def track(
         log_file.write("\n".join(job_ids))
 
 
-if __name__ == "__main__":
-    track()
+
+@click.command("track")
+@input_position_dirpaths()
+@output_dirpath()
+@config_filepath()
+@sbatch_filepath()
+@local()
+@click.option(
+    "-lf_dirpaths",
+    "-l",
+    required=False,
+    default=None,
+    type=str,
+    help="Label Free Image Dirpath, if there are blanck frames in the data.",
+)
+@click.option(
+    "-segmentation_dirpaths",
+    "-s",
+    required=False,
+    default=None,
+    type=str,
+    help="Segmentation Dirpath, if there are blanck frames in the data.",
+)
+@click.option(
+    "-blank_frame_csv_path",
+    "-f",
+    required=False,
+    default=None,
+    type=str,
+    help=" Blank Frame CSV path, if there are blanck frames in the data and the csv was previous gerenrated.",
+)
+def track_cli(
+    lf_dirpaths: str,
+    output_dirpath: str,
+    config_filepath: str,
+    input_position_dirpaths: str,
+    segmentation_dirpaths: str = None,
+    sbatch_filepath: str = None,
+    local: bool = None,
+    blank_frame_csv_path: str = None,
+) -> None:
+
+    """
+    Track nuclei and membranes in using virtual staining nuclei and membranes data.
+
+    This function applied tracking to the virtual staining data for each position in the input.
+    To use this function, install the lib as pip install -e .["track"]
+
+    Example usage:
+
+    biahub track -i virtual_staining.zarr/*/*/* -l lf_stabilize.zarr -o output.zarr -c config_tracking.yml
+
+    """
+
+    track(
+        lf_dirpaths=lf_dirpaths,
+        output_dirpath=output_dirpath,
+        config_filepath=config_filepath,
+        input_position_dirpaths=input_position_dirpaths,
+        segmentation_dirpaths=segmentation_dirpaths,
+        sbatch_filepath=sbatch_filepath,
+        local=local,
+        blank_frame_csv_path=blank_frame_csv_path,
+    )
