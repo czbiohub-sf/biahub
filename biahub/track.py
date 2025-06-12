@@ -553,12 +553,8 @@ def track(
     output_dirpath = Path(output_dirpath)
 
     settings = yaml_to_model(config_filepath, TrackingSettings)
-    tracking_data = settings.tracking_config
+    tracking_cfg = settings.tracking_config
 
-    # Create default instance
-    default_config = MainConfig()
-
-    tracking_cfg = update_model(default_config, tracking_data)
 
     # Get the shape of the data
     with open_ome_zarr(input_position_dirpaths[0]) as dataset:
@@ -568,6 +564,13 @@ def track(
     num_cpus, gb_ram_per_cpu = estimate_resources(
         shape=[T, C, Z, Y, X], ram_multiplier=16, max_num_cpus=16
     )
+    tracking_cfg.segmentation_config.n_workers = num_cpus
+    tracking_cfg.linking_config.n_workers = num_cpus
+
+    # Create default instance
+    default_config = MainConfig()
+    tracking_cfg = update_model(default_config, tracking_cfg)
+
 
     # Prepare SLURM arguments
     slurm_args = {
