@@ -104,7 +104,7 @@ def get_output_shape(shifts: dict, tile_shape: tuple) -> tuple:
 
 
 def write_output_chunk(
-    chunk: tuple[slice, slice, slice],
+    output_chunk_slices: tuple[slice, slice, slice],
     fov_shifts: dict,
     channel_idx: int,
     input_plate: Plate,
@@ -114,18 +114,21 @@ def write_output_chunk(
     blending_exponent: float = 1.0,
 ):
     # For each output chunk, find the input fovs that contribute to it
-    contributing_fov_names = find_contributing_fovs(chunk, fov_shifts, input_fov_shape[-3:])
-    chunk_corner = np.array([chunk[dim].start for dim in range(3)])
-    chunk_extent = np.array([chunk[dim].stop - chunk[dim].start for dim in range(3)])
+    contributing_fov_names = find_contributing_fovs(
+        output_chunk_slices, fov_shifts, input_fov_shape[-3:]
+    )
+    chunk_corner = np.array([output_chunk_slices[dim].start for dim in range(3)])
+    chunk_extent = np.array(
+        [output_chunk_slices[dim].stop - output_chunk_slices[dim].start for dim in range(3)]
+    )
 
     output_array = output_position["0"]
-    array_shape = output_array[(slice(None), channel_idx, *chunk)].shape
+    array_shape = output_array[(slice(None), channel_idx, *output_chunk_slices)].shape
     output_chunk = np.zeros(array_shape)
 
+    # Compute overlap slices
     fixed_slices = []
     moving_slices = []
-
-    # Compute overlap slices
     for fov_name in contributing_fov_names:
         fov_corner = np.array([fov_shifts[fov_name][d] for d in range(3)])
         fov_extent = np.array([input_fov_shape[d + 2] for d in range(3)])
@@ -138,31 +141,32 @@ def write_output_chunk(
             fixed_slices.append(fixed_slice)
             moving_slices.append(moving_slice)
 
-    # Build distance maps (this will need to change for 3D)
-    temp = np.zeros(fov_extent)
-    temp[:, 1:-1, 1:-1] = 1
-    mask = temp != 0
-
+    # Precompute a single distance-from-edge map for a complete FOV
+    # Note: this computes distance from the XY edges, will need extension for 3D
+    fov_temp = np.zeros(fov_extent)
+    fov_temp[:, 1:-1, 1:-1] = 1
+    mask = fov_temp != 0
     centered_distance_map_2d = scipy.ndimage.distance_transform_edt(mask[0])
     centered_distance_map = np.tile(
         centered_distance_map_2d[None, :, :], (output_chunk.shape[-3], 1, 1)
     )
 
-    # Build distance maps
+    # Slice into the precomputed distance map to build the distance maps for
+    # each contributing fov
     distance_maps = np.zeros((len(contributing_fov_names),) + output_chunk.shape[-3:])
     for i, (fixed_slice, moving_slice) in enumerate(zip(fixed_slices, moving_slices)):
         if verbose:
             click.echo(f"\t\tComputing distance map for {contributing_fov_names[i]}")
         distance_maps[(i, *fixed_slice)] = centered_distance_map[(*moving_slice,)]
 
-    # Build weight maps
+    # Compute weight maps for each contributing fov
     if verbose:
         click.echo("\t\tBuilding weight maps")
     w = np.power(distance_maps, blending_exponent, where=(distance_maps > 0))
     sum_w = np.sum(w, axis=0, keepdims=True)
     weight_maps = w / (sum_w + 1e-8)
 
-    # Apply weights to each fov
+    # Apply weights to each contributing fov and sum
     for i, (fov_name, fixed_slice, moving_slice) in enumerate(
         zip(contributing_fov_names, fixed_slices, moving_slices)
     ):
@@ -172,18 +176,18 @@ def write_output_chunk(
         fov_data = input_plate[fov_name].data
 
         # Apply weights to the fov data
-        temp = (
+        weighted_output = (
             fov_data[(slice(None), channel_idx, *moving_slice)]
             * weight_maps[(i, *fixed_slice)]
         )
 
         # Add to the output chunk
-        output_chunk[(slice(None), channel_idx, *fixed_slice)] += temp
+        output_chunk[(slice(None), channel_idx, *fixed_slice)] += weighted_output
 
     # Write chunk to output array
     if verbose:
-        click.echo(f"\t\tWriting chunk to output array: {chunk}")
-    output_array[(slice(None), channel_idx, *chunk)] = output_chunk
+        click.echo(f"\t\tWriting chunk to output array: {output_chunk_slices}")
+    output_array[(slice(None), channel_idx, *output_chunk_slices)] = output_chunk
 
 
 @click.command("stitch")
