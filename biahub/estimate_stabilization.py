@@ -8,7 +8,6 @@ from typing import List, Literal, Optional, Tuple, cast
 
 import click
 import dask.array as da
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import submitit
@@ -32,6 +31,7 @@ from biahub.estimate_registration import (
     _get_tform_from_beads,
     _interpolate_transforms,
     _validate_transforms,
+    plot_translations,
     wait_for_jobs_to_finish,
 )
 from biahub.settings import EstimateStabilizationSettings, StabilizationSettings
@@ -892,21 +892,6 @@ def estimate_z_stabilization(
         shutil.rmtree(output_transforms_path)
 
     return fov_transforms
-
-
-def plot_translations(transforms_zyx: np.ndarray, output_filepath: Path):
-    z_transforms = transforms_zyx[:, 0, 3]
-    y_transforms = transforms_zyx[:, 1, 3]
-    x_transforms = transforms_zyx[:, 2, 3]
-    fig, axs = plt.subplots(3, 1, figsize=(10, 10))
-    axs[0].plot(z_transforms)
-    axs[0].set_title("Z-Translation")
-    axs[1].plot(x_transforms)
-    axs[1].set_title("X-Translation")
-    axs[2].plot(y_transforms)
-    axs[2].set_title("Y-Translation")
-    plt.savefig(output_filepath, dpi=300, bbox_inches='tight')
-    plt.close()
 
 
 def save_transforms(

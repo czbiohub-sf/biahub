@@ -15,6 +15,7 @@ import numpy as np
 import submitit
 
 from iohub import open_ome_zarr
+from matplotlib import pyplot as plt
 from scipy.interpolate import interp1d
 from scipy.optimize import linear_sum_assignment
 from scipy.spatial.distance import cdist
@@ -40,7 +41,6 @@ from biahub.cli.utils import (
     model_to_yaml,
     yaml_to_model,
 )
-from biahub.estimate_stabilization import plot_translations
 from biahub.optimize_registration import _optimize_registration
 from biahub.register import (
     convert_transform_to_ants,
@@ -71,6 +71,21 @@ COLOR_CYCLE = [
     "yellow",
     "magenta",
 ]
+
+
+def plot_translations(transforms_zyx: np.ndarray, output_filepath: Path):
+    z_transforms = transforms_zyx[:, 0, 3]
+    y_transforms = transforms_zyx[:, 1, 3]
+    x_transforms = transforms_zyx[:, 2, 3]
+    fig, axs = plt.subplots(3, 1, figsize=(10, 10))
+    axs[0].plot(z_transforms)
+    axs[0].set_title("Z-Translation")
+    axs[1].plot(x_transforms)
+    axs[1].set_title("X-Translation")
+    axs[2].plot(y_transforms)
+    axs[2].set_title("Y-Translation")
+    plt.savefig(output_filepath, dpi=300, bbox_inches='tight')
+    plt.close()
 
 
 def wait_for_jobs_to_finish(job_ids, sleep_time=60):
