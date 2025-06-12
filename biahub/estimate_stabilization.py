@@ -1068,13 +1068,17 @@ def estimate_stabilization_cli(
                         Y=Y,
                         X=X,
                         verbose=verbose,
-                        output_filepath_plot=output_dirpath / "translation_plots" / f"{fov}.png",
+                        output_filepath_plot=output_dirpath
+                        / "translation_plots"
+                        / f"{fov}.png",
                     )
                     save_transforms(
                         settings=settings,
                         transforms=z_transforms,
                         voxel_size=voxel_size,
-                        output_filepath=output_dirpath / "z_stabilization_settings" / f"{fov}.yml",
+                        output_filepath=output_dirpath
+                        / "z_stabilization_settings"
+                        / f"{fov}.yml",
                         Z=Z,
                         Y=Y,
                         X=X,
@@ -1093,7 +1097,9 @@ def estimate_stabilization_cli(
                         verbose=verbose,
                     )
             except Exception as e:
-                click.echo(f"Error estimating {stabilization_type} stabilization parameters: {e}")
+                click.echo(
+                    f"Error estimating {stabilization_type} stabilization parameters: {e}"
+                )
 
         elif stabilization_method == "beads":
 
@@ -1156,10 +1162,12 @@ def estimate_stabilization_cli(
                     Y=Y,
                     X=X,
                     verbose=verbose,
-                        output_filepath_plot=output_dirpath / "translation_plots" / f"{fov}.png",
-                    )
+                    output_filepath_plot=output_dirpath / "translation_plots" / f"{fov}.png",
+                )
             except Exception as e:
-                click.echo(f"Error estimating {stabilization_type} stabilization parameters: {e}")
+                click.echo(
+                    f"Error estimating {stabilization_type} stabilization parameters: {e}"
+                )
 
     # Estimate z drift
     if "z" == stabilization_type and stabilization_method == "focus-finding":
@@ -1225,10 +1233,14 @@ def estimate_stabilization_cli(
                         Y=Y,
                         X=X,
                         verbose=verbose,
-                        output_filepath_plot=output_dirpath / "translation_plots" / f"{fov}.png",
+                        output_filepath_plot=output_dirpath
+                        / "translation_plots"
+                        / f"{fov}.png",
                     )
             except Exception as e:
-                click.echo(f"Error estimating {stabilization_type} stabilization parameters: {e}")
+                click.echo(
+                    f"Error estimating {stabilization_type} stabilization parameters: {e}"
+                )
 
 
 if __name__ == "__main__":
