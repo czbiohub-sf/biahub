@@ -474,7 +474,7 @@ def track_one_position(
             f"Applying {vs_projection_function.function} projection to the virtual staining data..."
         )
 
-        projection = eval(vs_projection_function.function)  # Convert string to function
+        projection = getattr(np, vs_projection_function.function)  # Convert string to function
         kwargs = vs_projection_function.kwargs if vs_projection_function.kwargs else {}
 
         for input_array in vs_projection_function.input_arrays:
