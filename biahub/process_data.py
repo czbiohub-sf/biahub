@@ -7,8 +7,6 @@ import submitit
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate, process_single_position
 
-from biahub.analysis.AnalysisSettings import ProcessingImportFuncSettings
-from biahub.analysis.imgproc import process_czyx
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
     config_filepath,
@@ -19,6 +17,8 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.cli.utils import get_output_paths, yaml_to_model
+from biahub.imgproc import process_czyx
+from biahub.settings import ProcessingImportFuncSettings
 
 
 @click.command()
@@ -35,7 +35,7 @@ from biahub.cli.utils import get_output_paths, yaml_to_model
     required=False,
     type=int,
 )
-def process_w_imports(
+def process_w_imports_cli(
     input_position_dirpaths,
     config_filepath,
     output_dirpath,
@@ -182,4 +182,4 @@ def process_w_imports(
 
 
 if __name__ == "__main__":
-    process_w_imports()
+    process_w_imports_cli()
