@@ -118,9 +118,8 @@ def write_output_chunk(
     chunk_corner = np.array([chunk[dim].start for dim in range(3)])
     chunk_extent = np.array([chunk[dim].stop - chunk[dim].start for dim in range(3)])
 
-    idx = (slice(None), channel_idx, *chunk)
     output_array = output_position["0"]
-    array_shape = output_array[idx].shape
+    array_shape = output_array[(slice(None), channel_idx, *chunk)].shape
     output_chunk = np.zeros(array_shape)
 
     fixed_slices = []
@@ -154,9 +153,7 @@ def write_output_chunk(
     for i, (fixed_slice, moving_slice) in enumerate(zip(fixed_slices, moving_slices)):
         if verbose:
             click.echo(f"\t\tComputing distance map for {contributing_fov_names[i]}")
-        fixed_idx = (i, *fixed_slice)  # needed for black formatting
-        tmp_moving_idx = (*moving_slice,)  # needed for black formatting
-        distance_maps[fixed_idx] = centered_distance_map[tmp_moving_idx]
+        distance_maps[(i, *fixed_slice)] = centered_distance_map[(*moving_slice,)]
 
     # Build weight maps
     if verbose:
@@ -175,19 +172,18 @@ def write_output_chunk(
         fov_data = input_plate[fov_name].data
 
         # Apply weights to the fov data
-        moving_idx = (slice(None), channel_idx, *moving_slice)
-        fixed_idx = (i, *fixed_slice)
-        temp = fov_data[moving_idx] * weight_maps[fixed_idx]
+        temp = (
+            fov_data[(slice(None), channel_idx, *moving_slice)]
+            * weight_maps[(i, *fixed_slice)]
+        )
 
         # Add to the output chunk
-        idx = (slice(None), channel_idx, *fixed_slice)
-        output_chunk[idx] += temp
+        output_chunk[(slice(None), channel_idx, *fixed_slice)] += temp
 
     # Write chunk to output array
     if verbose:
         click.echo(f"\t\tWriting chunk to output array: {chunk}")
-    idx = (slice(None), channel_idx, *chunk)
-    output_array[idx] = output_chunk
+    output_array[(slice(None), channel_idx, *chunk)] = output_chunk
 
 
 @click.command("stitch")
