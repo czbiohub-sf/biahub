@@ -23,7 +23,6 @@ from skimage.transform import AffineTransform, EuclideanTransform, SimilarityTra
 from sklearn.neighbors import NearestNeighbors
 from waveorder.focus import focus_from_transverse_band
 
-from biahub.estimate_stabilization import plot_translations
 from biahub.characterize_psf import detect_peaks
 from biahub.cli.parsing import (
     config_filepath,
@@ -41,6 +40,7 @@ from biahub.cli.utils import (
     model_to_yaml,
     yaml_to_model,
 )
+from biahub.estimate_stabilization import plot_translations
 from biahub.optimize_registration import _optimize_registration
 from biahub.register import (
     convert_transform_to_ants,
@@ -493,8 +493,6 @@ def beads_based_registration(
 
     shutil.rmtree(output_transforms_path)
 
-    click.echo(f"Before validate Transforms: {transforms[0]}")
-
     # # Validate and filter transforms
     transforms = _validate_transforms(
         transforms=transforms,
@@ -505,8 +503,6 @@ def beads_based_registration(
         X=X,
         verbose=verbose,
     )
-    click.echo(f"After validation transforms: {transforms[0]}")
-
     # Interpolate missing transforms
     transforms = _interpolate_transforms(
         transforms=transforms,
@@ -514,8 +510,6 @@ def beads_based_registration(
         interpolation_type=interpolation_type,
         verbose=verbose,
     )
-    click.echo(f"After interpolation transforms: {transforms[0]}")
-
     return transforms
 
 
@@ -1375,7 +1369,10 @@ def estimate_registration_cli(
 
         if settings.verbose:
             click.echo("Plotting translations over time")
-            plot_translations(np.array(transforms), output_dir / "translation_plots" / "beads_registration.png")
+            plot_translations(
+                np.array(transforms),
+                output_dir / "translation_plots" / "beads_registration.png",
+            )
 
     elif settings.estimation_method == "ants":
         transforms = ants_registration(
