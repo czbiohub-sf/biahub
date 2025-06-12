@@ -72,28 +72,16 @@ def example_plate(tmp_path):
 
     # Generate input dataset
 
-    from iohub.ngff.models import ChannelAxisMeta, SpaceAxisMeta, TimeAxisMeta
-
-    axes = [
-        TimeAxisMeta(name="t", unit="second"),
-        ChannelAxisMeta(name="c"),
-        SpaceAxisMeta(name="z", unit="micrometer"),
-        SpaceAxisMeta(name="y", unit="micrometer"),
-        SpaceAxisMeta(name="x", unit="micrometer"),
-    ]
-
     plate_dataset = open_ome_zarr(
         plate_path,
         layout="hcs",
         mode="w",
         channel_names=["GFP", "RFP", "Phase3D", "Orientation", "Retardance", "Birefringence"],
-        axes=axes,
     )
 
     for row, col, fov in position_list:
         position = plate_dataset.create_position(row, col, fov)
         position["0"] = np.random.uniform(0.0, 255.0, size=(3, 6, 4, 5, 6)).astype(np.float32)
-        print(position["0"].shape)
 
     yield plate_path, plate_dataset
 

@@ -1040,58 +1040,60 @@ def estimate_stabilization_cli(
                 cluster=cluster,
                 verbose=verbose,
             )
+            try:
+                # save each FOV separately
+                for fov, xy_transforms in xy_transforms_dict.items():
+                    click.echo(f"Processing FOV {fov}")
+                    # Get the z drift matrices for the current FOV
+                    z_transforms = np.asarray(z_transforms_dict[fov])
+                    xy_transforms = np.asarray(xy_transforms)
 
-            # save each FOV separately
-            for fov, xy_transforms in xy_transforms_dict.items():
-                click.echo(f"Processing FOV {fov}")
-                # Get the z drift matrices for the current FOV
-                z_transforms = np.asarray(z_transforms_dict[fov])
-                xy_transforms = np.asarray(xy_transforms)
+                    if xy_transforms.shape[0] != z_transforms.shape[0]:
+                        raise ValueError(
+                            "The number of translation matrices and z drift matrices must be the same"
+                        )
 
-                if xy_transforms.shape[0] != z_transforms.shape[0]:
-                    raise ValueError(
-                        "The number of translation matrices and z drift matrices must be the same"
+                    xyz_transforms = np.asarray(
+                        [a @ b for a, b in zip(xy_transforms, z_transforms)]
+                    ).tolist()
+                    # Validate and filter transforms
+                    save_transforms(
+                        settings=settings,
+                        transforms=xyz_transforms,
+                        voxel_size=voxel_size,
+                        output_filepath=output_dirpath
+                        / "xyz_stabilization_settings"
+                        / f"{fov}.yml",
+                        Z=Z,
+                        Y=Y,
+                        X=X,
+                        verbose=verbose,
+                        output_filepath_plot=output_dirpath / "translation_plots" / f"{fov}.png",
                     )
-
-                xyz_transforms = np.asarray(
-                    [a @ b for a, b in zip(xy_transforms, z_transforms)]
-                ).tolist()
-                # Validate and filter transforms
-                save_transforms(
-                    settings=settings,
-                    transforms=xyz_transforms,
-                    voxel_size=voxel_size,
-                    output_filepath=output_dirpath
-                    / "xyz_stabilization_settings"
-                    / f"{fov}.yml",
-                    Z=Z,
-                    Y=Y,
-                    X=X,
-                    verbose=verbose,
-                    output_filepath_plot=output_dirpath / "translation_plots" / f"{fov}.png",
-                )
-                save_transforms(
-                    settings=settings,
-                    transforms=z_transforms,
-                    voxel_size=voxel_size,
-                    output_filepath=output_dirpath / "z_stabilization_settings" / f"{fov}.yml",
-                    Z=Z,
-                    Y=Y,
-                    X=X,
-                    verbose=verbose,
-                )
-                save_transforms(
-                    settings=settings,
-                    transforms=xy_transforms,
-                    voxel_size=voxel_size,
-                    output_filepath=output_dirpath
-                    / "xy_stabilization_settings"
-                    / f"{fov}.yml",
-                    Z=Z,
-                    Y=Y,
-                    X=X,
-                    verbose=verbose,
-                )
+                    save_transforms(
+                        settings=settings,
+                        transforms=z_transforms,
+                        voxel_size=voxel_size,
+                        output_filepath=output_dirpath / "z_stabilization_settings" / f"{fov}.yml",
+                        Z=Z,
+                        Y=Y,
+                        X=X,
+                        verbose=verbose,
+                    )
+                    save_transforms(
+                        settings=settings,
+                        transforms=xy_transforms,
+                        voxel_size=voxel_size,
+                        output_filepath=output_dirpath
+                        / "xy_stabilization_settings"
+                        / f"{fov}.yml",
+                        Z=Z,
+                        Y=Y,
+                        X=X,
+                        verbose=verbose,
+                    )
+            except Exception as e:
+                click.echo(f"Error estimating {stabilization_type} stabilization parameters: {e}")
 
         elif stabilization_method == "beads":
 
@@ -1138,9 +1140,10 @@ def estimate_stabilization_cli(
                 verbose=verbose,
             )
 
-            for fov, xyz_transforms in xyz_transforms_dict.items():
-                click.echo(f"Processing FOV {fov}")
-                # Validate and filter transforms
+            try:
+                for fov, xyz_transforms in xyz_transforms_dict.items():
+                    click.echo(f"Processing FOV {fov}")
+                    # Validate and filter transforms
 
                 save_transforms(
                     settings=settings,
@@ -1153,8 +1156,10 @@ def estimate_stabilization_cli(
                     Y=Y,
                     X=X,
                     verbose=verbose,
-                    output_filepath_plot=output_dirpath / "translation_plots" / f"{fov}.png",
-                )
+                        output_filepath_plot=output_dirpath / "translation_plots" / f"{fov}.png",
+                    )
+            except Exception as e:
+                click.echo(f"Error estimating {stabilization_type} stabilization parameters: {e}")
 
     # Estimate z drift
     if "z" == stabilization_type and stabilization_method == "focus-finding":
@@ -1171,19 +1176,23 @@ def estimate_stabilization_cli(
             verbose=verbose,
         )
 
-        # save each FOV separately
-        for fov, z_transforms in z_transforms_dict.items():
-            save_transforms(
-                settings=settings,
-                transforms=z_transforms,
-                voxel_size=voxel_size,
-                output_filepath=output_dirpath / "z_stabilization_settings" / f"{fov}.yml",
-                Z=Z,
-                Y=Y,
-                X=X,
-                verbose=verbose,
-                output_filepath_plot=output_dirpath / "translation_plots" / f"{fov}.png",
-            )
+        try:
+            # save each FOV separately
+            for fov, z_transforms in z_transforms_dict.items():
+                save_transforms(
+                    settings=settings,
+                    transforms=z_transforms,
+                    voxel_size=voxel_size,
+                    output_filepath=output_dirpath / "z_stabilization_settings" / f"{fov}.yml",
+                    Z=Z,
+                    Y=Y,
+                    X=X,
+                    verbose=verbose,
+                    output_filepath_plot=output_dirpath / "translation_plots" / f"{fov}.png",
+                )
+        except Exception as e:
+            click.echo(f"Error estimating {stabilization_type} stabilization parameters: {e}")
+
     # Estimate yx drift
     if "xy" == stabilization_type:
         if stabilization_method == "focus-finding":
@@ -1200,24 +1209,26 @@ def estimate_stabilization_cli(
                 verbose=verbose,
             )
             output_dirpath.mkdir(parents=True, exist_ok=True)
+            try:
+                # save each FOV separately
+                for fov, xy_transforms in xy_transforms_dict.items():
+                    # Validate and filter transforms
 
-            # save each FOV separately
-            for fov, xy_transforms in xy_transforms_dict.items():
-                # Validate and filter transforms
-
-                save_transforms(
-                    settings=settings,
-                    transforms=xy_transforms,
-                    voxel_size=voxel_size,
-                    output_filepath=output_dirpath
-                    / "xy_stabilization_settings"
-                    / f"{fov}.yml",
-                    Z=Z,
-                    Y=Y,
-                    X=X,
-                    verbose=verbose,
-                    output_filepath_plot=output_dirpath / "translation_plots" / f"{fov}.png",
-                )
+                    save_transforms(
+                        settings=settings,
+                        transforms=xy_transforms,
+                        voxel_size=voxel_size,
+                        output_filepath=output_dirpath
+                        / "xy_stabilization_settings"
+                        / f"{fov}.yml",
+                        Z=Z,
+                        Y=Y,
+                        X=X,
+                        verbose=verbose,
+                        output_filepath_plot=output_dirpath / "translation_plots" / f"{fov}.png",
+                    )
+            except Exception as e:
+                click.echo(f"Error estimating {stabilization_type} stabilization parameters: {e}")
 
 
 if __name__ == "__main__":

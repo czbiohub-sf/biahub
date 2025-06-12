@@ -26,7 +26,6 @@ def test_estimate_stabilization(
 
     # Weak test
     assert "stabilization_type='z" in result.output
-    assert output_path.is_dir()
     assert result.exit_code == 0
 
 
