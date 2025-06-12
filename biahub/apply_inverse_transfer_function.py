@@ -95,6 +95,7 @@ def apply_inverse_transfer_function_cli(
         "slurm_cpus_per_task": cpu_request,
         "slurm_time": 60,
         "slurm_partition": "preempted",
+        "slurm_use_srun": False,
     }
 
     if sbatch_filepath:
