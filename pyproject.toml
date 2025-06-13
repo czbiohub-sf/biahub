@@ -43,7 +43,7 @@ dependencies = [
   "imageio-ffmpeg",
   "dask[array]",
   "toml",
-  "ultrack @ git+https://github.com/royerlab/ultrack.git"
+  "ultrack=0.1.1"
 ]
 
 [project.optional-dependencies]

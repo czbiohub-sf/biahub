@@ -27,7 +27,6 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.cli.utils import (
-    _check_nan_n_zeros,
     create_empty_hcs_zarr,
     estimate_resources,
     update_model,
@@ -127,8 +126,9 @@ def fill_empty_frames(arr: ArrayLike, empty_frames_idx: List[int]) -> ArrayLike:
       but falls back to the next available frame if necessary.
     """
 
-    if not empty_frames_idx:
-        return arr  # No empty frames to fill
+    if not empty_frames_idx or not isinstance(empty_frames_idx, list):
+        return arr
+
 
     num_frames = arr.shape[0]
 
@@ -194,11 +194,40 @@ def get_empty_frames_idx_from_csv(
             return []
     return None
 
+def central_z_slice(z_shape: int) -> slice:
+    """
+    Get the central slice of the z-axis.
+    Resolve the z-slice based on the provided z_slices and z_shape.
+
+    If z_slices is None or equal to (0, 0), return a centered z-range.
+    Otherwise, return a slice constructed from the provided tuple.
+
+    Example:
+        z_slices=(10, 15) → slice(10, 15)
+        z_slices=(0, 0)   → slice(centered range)
+
+    
+    Returns:
+        slice: Slice object representing a centered z-range.
+    """
+    n_slices = max(3, z_shape // 2)
+    if n_slices % 2 == 0:
+        n_slices += 1
+    z_center = z_shape // 2
+    half_window = n_slices // 2
+    return slice(z_center - half_window, z_center + half_window + 1)
+def resolve_z_slice(z_slices: Tuple[int, int], z_shape: int) -> slice:
+    """
+    Resolve the z-slice based on the provided z_slices and z_shape.
+    """
+    if z_slices is None or z_slices == (0, 0):
+        return central_z_slice(z_shape)
+    else:   
+        return slice(*z_slices)
 
 def data_preprocessing(
     data_dict: dict,
     preprocessing_functions: Dict[str, ProcessingFunctions],
-    tracking_functions: Dict[str, ProcessingFunctions],
     empty_frames_idx: List[int] = None,
 ) -> Tuple[ArrayLike, ArrayLike]:
 
@@ -230,44 +259,51 @@ def data_preprocessing(
       input arrays.
     """
 
-    click.echo("Checking for empty frames in the label-free image...")
+    click.echo("Checking for empty frames in image...")
 
-    if empty_frames_idx:
+    if empty_frames_idx is not None and len(empty_frames_idx) > 0:
         for key, value in data_dict.items():
             click.echo(f"Filling empty frames in {key}...")
             data_dict[key] = fill_empty_frames(value, empty_frames_idx)
 
+    z_shape = data_dict[list(data_dict.keys())[0]].shape[1]
+
     # Apply preprocessing functions
     for key, func_details in preprocessing_functions.items():
         click.echo(f"Preprocessing {key} using {func_details.function}...")
-        input_arrays_name = func_details.input_arrays[0]
+        if "projection" in key:
+            z_slices = resolve_z_slice(func_details.z_slices, z_shape)
+            projection_channel = func_details.input_channel[0]
+            data_dict[projection_channel] = data_dict[projection_channel][:, z_slices, :, :]
+       
+        input_channel_name = func_details.input_channel[0]
         function = resolve_function(func_details.function)  # Uses function mapping
-        input_array = data_dict[input_arrays_name]
+        input_channel = data_dict[input_channel_name]
 
         kwargs = func_details.kwargs if func_details.kwargs else {}
-        data_dict[input_arrays_name] = array_apply(input_array, func=function, **kwargs)
+        data_dict[input_channel_name] = array_apply(input_channel, func=function, **kwargs)
     # Generate foreground mask
     click.echo("Generating foreground mask...")
-    foreground_func_details = tracking_functions["foreground"]
+    foreground_func_details = preprocessing_functions["foreground"]
     foreground_function = resolve_function(
         foreground_func_details.function
     )  # Uses function mapping
 
-    fg_input_arrays = [data_dict[name] for name in foreground_func_details.input_arrays]
+    fg_input_channel = [data_dict[name] for name in foreground_func_details.input_channel]
     fg_kwargs = foreground_func_details.kwargs if foreground_func_details.kwargs else {}
 
-    foreground_mask = array_apply(*fg_input_arrays, func=foreground_function, **fg_kwargs)
+    foreground_mask = array_apply(*fg_input_channel, func=foreground_function, **fg_kwargs)
 
     # Generate contour gradient map
     click.echo("Generating contour gradient map...")
-    contour_func_details = tracking_functions["contour"]
+    contour_func_details = preprocessing_functions["contour"]
     contour_function = resolve_function(contour_func_details.function)  # Uses function mapping
 
-    contour_input_arrays = [data_dict[name] for name in contour_func_details.input_arrays]
+    contour_input_channel = [data_dict[name] for name in contour_func_details.input_channel]
     contour_kwargs = contour_func_details.kwargs if contour_func_details.kwargs else {}
 
     contour_gradient_map = array_apply(
-        *contour_input_arrays, func=contour_function, **contour_kwargs
+        *contour_input_channel, func=contour_function, **contour_kwargs
     )
 
     return foreground_mask, contour_gradient_map
@@ -336,18 +372,14 @@ def ultrack(
 
 
 def track_one_position(
-    input_lf_dirpath: Path,
-    input_vs_path: Path,
+    input_path: Path,
     output_dirpath: Path,
-    input_channels: Dict[str, Any],
-    vs_projection_function: ProcessingFunctions,
     preprocessing_functions: Dict[str, ProcessingFunctions],
-    tracking_functions: Dict[str, ProcessingFunctions],
-    z_slice: tuple,
-    z_shape: int,
+    input_channels: List[str],
     tracking_config: MainConfig,
-    input_segmentation_dirpaths: Path = None,
+    segmentation_dirpath: Path = None,
     blank_frame_csv_path: Path = None,
+    mode: str = "2D",
 ) -> None:
     """
     Process a single imaging position for cell tracking using virtual staining and optional label-free imaging.
@@ -357,21 +389,12 @@ def track_one_position(
      to generate labeled tracking outputs.
 
     Parameters:
-    - input_lf_dirpath (Path): Path to the directory containing label-free images (optional, required
-                               if blank frames exist in the data).
-    - input_vs_path (Path): Path to the virtual staining dataset in OME-Zarr format.
+    - input_path (Path): Path to the virtual staining dataset in OME-Zarr format.
     - output_dirpath (Path): Path to save tracking results, including labels and tracks.
-    - input_channels (Dict[str, Any]): Dictionary specifying channel names for label-free, virtual staining,
-                                       and tracking inputs.
-    - vs_projection_function (ProcessingFunctions): Function used to project virtual staining data across
-                                                    the z-stack (e.g., max projection).
     - preprocessing_functions (Dict[str, ProcessingFunctions]): Dictionary of preprocessing functions applied
                                                                 to the input images before tracking.
-    - tracking_functions (Dict[str, ProcessingFunctions]): Dictionary of functions used for foreground mask
-                                                           and contour generation.
-    - z_slice (tuple): Tuple specifying the range of z-slices to process.
     - tracking_config (MainConfig): Configuration settings for the tracking algorithm.
-
+    - input_channels (List[str]): List of input channels to use for tracking.   
     Returns:
     - None: The function also saves the tracking results, including labeled images and track data,
             to the specified output directory.
@@ -383,127 +406,86 @@ def track_one_position(
     - Tracks graphs are exported as CSV files.
     """
 
-    position_key = input_vs_path.parts[-3:]
+    position_key = input_path.parts[-3:]
     fov = "_".join(position_key)
     click.echo(f"Processing FOV: {fov.replace('_', '/')}")
-
-    # Get the z-slice range if not provided
-    if z_slice[0] == 0 and z_slice[1] == 0:
-        n_slices = max(3, z_shape // 2)
-        if n_slices % 2 == 0:
-            n_slices += 1
-        z_center = z_shape // 2
-        half_window = n_slices // 2
-
-        z_start = max(0, z_center - half_window)
-        z_end = min(z_shape, z_center + half_window + 1)
-        z_slices = slice(z_start, z_end)
-    else:
-        z_slices = slice(z_slice[0], z_slice[1])
-
-    click.echo(f"Processing z-stack: {z_slices}")
-
-    data_dict = {}
-    if blank_frame_csv_path is not None or input_lf_dirpath is not None:
-        # Load blank frame data to check for blank frames
-        click.echo(f"Loading blank frame data from: {blank_frame_csv_path}...")
-        blank_frame_df = pd.read_csv(blank_frame_csv_path)
-        fov_str = fov.replace("_", "/")
-        empty_frames_idx = get_empty_frames_idx_from_csv(blank_frame_df, fov_str)
-
-    # Load label free data to check for blank frames
-    elif input_lf_dirpath is not None and blank_frame_csv_path is None:
-        click.echo(f"Loading Label Free data from: {input_lf_dirpath}...")
-        input_im_path = input_lf_dirpath / Path(*position_key)
-        im_dataset = open_ome_zarr(input_im_path)
-        channel_names = im_dataset.channel_names
-        click.echo(f"Label Free Channel names: {channel_names}")
-        for channel in input_channels["label_free"]:
-            im_arr = im_dataset[0][:, channel_names.index(channel), z_slices.start, :, :]
-            empty_frames_idx = _check_nan_n_zeros(im_arr)
-    else:
-        raise Warning(
-            "Will not check for empty frames and track can fail, please provide label free data or blank frame csv path."
-        )
-        empty_frames_idx = None
-
-    click.echo(f"Empty frames found: {empty_frames_idx}")
-
-    # Load virtual staining data, check if the required channels are present
-    if input_channels['virtual_stain'] is None:
-        raise ValueError("Virtual Staining input channels is required.")
-    # Check if the tracking channel is present in the virtual staining channels
-    if input_channels['tracking'] is None:
-        raise ValueError("Tracking input channels is required.")
-    elif len(input_channels["tracking"]) != 1:
+    input_channels_preprocessing = input_channels["preprocessing"]
+    input_channels_tracking = input_channels["tracking"]
+    if (len(input_channels_tracking) != 1):
         raise ValueError("Only one channel is allowed and required for tracking.")
-    elif input_channels["tracking"][0] not in input_channels["virtual_stain"]:
-        raise ValueError("Tracking channel not found in Virtual Stain input channels.")
+    if input_channels_preprocessing is not None:
+        if input_channels_tracking[0] not in input_channels_preprocessing:
+            raise ValueError("Tracking channel not found in Preprocessing input channels.")
+        else:
+            input_channels = input_channels_preprocessing
+    else:
+        input_channels = input_channels_tracking
 
-    click.echo(f"Loading data from: {input_vs_path}...")
-    vs_dataset = open_ome_zarr(input_vs_path)
-    T, C, Z, Y, X = vs_dataset.data.shape
-    channel_names = vs_dataset.channel_names
-    click.echo(f"Virtual Stanining Channel names: {channel_names}")
-    yx_scale = vs_dataset.scale[-2:]
+    if segmentation_dirpath is not None:
+        click.echo(f"Loading segmentation from: {segmentation_dirpath}...")
+        segmentation_path = segmentation_dirpath/ Path(*position_key)
 
-    # Define output metadata
-    output_channels = []
-    for channel in input_channels["tracking"]:
-        output_channels.append(f"{channel}_labels")
+        label_dataset = open_ome_zarr(segmentation_path)
+        label_arr = np.asarray(label_dataset[0][:, :, :, :, :]).astype(np.uint32)  # Shape (T, Z, Y, X)
+        # get channel in tracking input channel
+        channel_names = label_dataset.channel_names
+        T, Z, Y, X = label_arr.shape
+        if input_channels_tracking[0] not in channel_names:
+            raise ValueError("Tracking channel not found in Segmentation input channels.")
+        else:
+            channel_index = channel_names.index(input_channels_tracking[0])
+            label_arr = label_arr[:, channel_index, :, :, :]
+        # get scale
+        scale = label_dataset.scale
+        shape = (T, 1, Z, Y, X)
+        function = resolve_function(preprocessing_functions["segmentation_to_tracking"].function)
+        kwargs = preprocessing_functions["segmentation_to_tracking"].kwargs if preprocessing_functions["segmentation_to_tracking"].kwargs else {}
 
-    output_metadata = {
-        "shape": (T, 1, 1, Y, X),
-        "chunks": None,
-        "scale": vs_dataset.scale,
-        "channel_names": output_channels,
-        "dtype": np.uint32,
-    }
-
-    create_empty_hcs_zarr(
-        store_path=output_dirpath, position_keys=[position_key], **output_metadata
-    )
-
-    # Load virtual staining data
-    for channel in input_channels["virtual_stain"]:
-        data_dict[channel] = vs_dataset[0][:, channel_names.index(channel), z_slices]
-
-    # Apply virtual staining projection function
-    if vs_projection_function is not None:
-        click.echo(
-            f"Applying {vs_projection_function.function} projection to the virtual staining data..."
-        )
-
-        projection = getattr(np, vs_projection_function.function)  # Convert string to function
-        kwargs = vs_projection_function.kwargs if vs_projection_function.kwargs else {}
-
-        for input_array in vs_projection_function.input_arrays:
-            data_dict[input_array] = projection(data_dict[input_array], **kwargs)
-
-    # Preprocess to get the the foreground and multi-level contours
-    click.echo("Preprocessing...")
-    if input_segmentation_dirpaths is not None:
-        click.echo(f"Loading segmentation from: {input_segmentation_dirpaths}...")
-        input_segmentation_path = input_segmentation_dirpaths / Path(*position_key)
-
-        label_dataset = open_ome_zarr(input_segmentation_path)
-        label_arr = label_dataset[0][:, 0, :, :, :]  # Shape (T, Z, Y, X)
-
-        # Cast to uint32 in case Cellpose saved as float32
-        label_arr = label_arr.astype(np.uint32)
-
-        click.echo("Converting labels to foreground and contour gradient map...")
-        foreground_mask, contour_gradient_map = labels_to_edges(label_arr, sigma=90)
+        foreground_mask, contour_gradient_map = function(label_arr, **kwargs)
 
     else:
+        click.echo("No segmentation provided, using preprocessing functions to obtain foreground and contour gradient map...") 
+        click.echo(f"Reading data from: {input_path}...")
+        with open_ome_zarr(input_path) as dataset:
+            T, C, Z, Y, X = dataset.data.shape
+            channel_names = dataset.channel_names
+            scale = dataset.scale
+
+        data_dict = {}
+        for channel in input_channels:
+            data_dict[channel] = dataset[0][:, channel_names.index(channel), :, :, :]
+        
+        if mode == "2D":
+            scale = scale[-2:]
+            shape = (T, 1, 1, Y, X)
+        else:
+            scale = scale[-3:]
+            shape = (T, 1, Z, Y, X)
+
+        
+        # Preprocess to get the the foreground and multi-level contours
+        blank_frame_df = pd.read_csv(blank_frame_csv_path) if blank_frame_csv_path else None
+        empty_frames_idx=get_empty_frames_idx_from_csv(blank_frame_df, fov)
 
         foreground_mask, contour_gradient_map = data_preprocessing(
             data_dict=data_dict,
             preprocessing_functions=preprocessing_functions,
-            tracking_functions=tracking_functions,
             empty_frames_idx=empty_frames_idx,
         )
 
+
+    output_metadata = {
+        "shape": shape,
+        "chunks": None,
+        "scale": scale,
+        "channel_names": [f"{input_channels_tracking[0]}_labels"]
+        ,
+        "dtype": np.uint32,
+        }
+
+    create_empty_hcs_zarr(
+                    store_path=output_dirpath, position_keys=[position_key], **output_metadata)
+    
     # Define path to save the tracking database and graph
     filename = str(output_dirpath).split("/")[-1].split(".")[0]
     databaset_path = output_dirpath.parent / f"{filename}_config_tracking" / f"{fov}"
@@ -512,7 +494,7 @@ def track_one_position(
     # Perform tracking
     click.echo("Tracking...")
     tracking_labels, tracks_df, _ = ultrack(
-        tracking_config, foreground_mask, contour_gradient_map, yx_scale, databaset_path
+        tracking_config, foreground_mask, contour_gradient_map, scale, databaset_path
     )
 
     # Save the tracks graph to a CSV file
@@ -526,11 +508,10 @@ def track_one_position(
         output_dataset[0][:, 0, 0] = np.asarray(tracking_labels)
 
 def track(
-    lf_dirpaths: str,
     output_dirpath: str,
     config_filepath: str,
-    input_position_dirpaths: str,
-    segmentation_dirpaths: str = None,
+    input_position_dirpaths: List[str],
+    segmentation_dirpath: str = None,
     sbatch_filepath: str = None,
     local: bool = None,
     blank_frame_csv_path: str = None,
@@ -539,12 +520,11 @@ def track(
     """
     Track nuclei and membranes in using virtual staining nuclei and membranes data.
     Parameters:
-    - lf_dirpaths (str): Path to the directory containing label-free images (optional, required
-                               if blank frames exist in the data).
+
     - output_dirpath (str): Path to save tracking results, including labels and tracks.
     - config_filepath (str): Path to the tracking configuration file.
     - input_position_dirpaths (str): Path to the virtual staining dataset in OME-Zarr format.
-    - segmentation_dirpaths (str): Path to the segmentation dataset in OME-Zarr format.
+    - segmentation_paths (str): Path to the segmentation dataset in OME-Zarr format.
     - sbatch_filepath (str): Path to the SLURM submission script.
     - local (bool): If True, run the tracking locally.
     - blank_frame_csv_path (str): Path to the blank frame CSV file.
@@ -564,8 +544,8 @@ def track(
     num_cpus, gb_ram_per_cpu = estimate_resources(
         shape=[T, C, Z, Y, X], ram_multiplier=16, max_num_cpus=16
     )
-    tracking_cfg.segmentation_config.n_workers = num_cpus
-    tracking_cfg.linking_config.n_workers = num_cpus
+    tracking_cfg["segmentation_config"]["n_workers"] = num_cpus
+    tracking_cfg["linking_config"]["n_workers"] = num_cpus
 
     # Create default instance
     default_config = MainConfig()
@@ -579,7 +559,8 @@ def track(
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,  # process up to 100 positions at a time
         "slurm_time": 60,
-        "slurm_partition": "preempted",
+        "slurm_partition": "gpu",
+        "slurm_use_srun": False,
     }
 
     # Override defaults if sbatch_filepath is provided
@@ -602,21 +583,17 @@ def track(
     jobs = []
 
     with executor.batch():
-        for input_vs_position_path in input_position_dirpaths:
+        for input_position_path in input_position_dirpaths:
             job = executor.submit(
                 track_one_position,
-                input_lf_dirpath=lf_dirpaths,
-                input_vs_path=input_vs_position_path,
-                input_segmentation_dirpaths=segmentation_dirpaths,
+                input_path=input_position_path,
+                segmentation_dirpath=segmentation_dirpath,
                 output_dirpath=output_dirpath,
-                z_slice=settings.z_slices,
-                z_shape=Z,
-                input_channels=settings.input_channels,
                 tracking_config=tracking_cfg,
-                vs_projection_function=settings.vs_projection_function,
                 preprocessing_functions=settings.preprocessing_functions,
-                tracking_functions=settings.tracking_functions,
-                blank_frame_csv_path=blank_frame_csv_path,
+                blank_frame_csv_path=blank_frame_csv_path, 
+                input_channels=settings.input_channels,
+                mode=settings.mode,
             )
 
             jobs.append(job)
@@ -628,7 +605,6 @@ def track(
         log_file.write("\n".join(job_ids))
 
 
-
 @click.command("track")
 @input_position_dirpaths()
 @output_dirpath()
@@ -636,20 +612,12 @@ def track(
 @sbatch_filepath()
 @local()
 @click.option(
-    "-lf_dirpaths",
-    "-l",
-    required=False,
-    default=None,
-    type=str,
-    help="Label Free Image Dirpath, if there are blanck frames in the data.",
-)
-@click.option(
-    "-segmentation_dirpaths",
+    "-segmentation_dirpath",
     "-s",
     required=False,
     default=None,
     type=str,
-    help="Segmentation Dirpath, if there are blanck frames in the data.",
+    help=" Path to the segmentation dataset in OME-Zarr format. If not provided, no segmentation will be used.",
 )
 @click.option(
     "-blank_frame_csv_path",
@@ -660,11 +628,10 @@ def track(
     help=" Blank Frame CSV path, if there are blanck frames in the data and the csv was previous gerenrated.",
 )
 def track_cli(
-    lf_dirpaths: str,
+    input_position_dirpaths: List[str],
+    segmentation_dirpath: List[str],
     output_dirpath: str,
     config_filepath: str,
-    input_position_dirpaths: str,
-    segmentation_dirpaths: str = None,
     sbatch_filepath: str = None,
     local: bool = None,
     blank_frame_csv_path: str = None,
@@ -683,11 +650,10 @@ def track_cli(
     """
 
     track(
-        lf_dirpaths=lf_dirpaths,
         output_dirpath=output_dirpath,
         config_filepath=config_filepath,
         input_position_dirpaths=input_position_dirpaths,
-        segmentation_dirpaths=segmentation_dirpaths,
+        segmentation_dirpath=segmentation_dirpath,
         sbatch_filepath=sbatch_filepath,
         local=local,
         blank_frame_csv_path=blank_frame_csv_path,

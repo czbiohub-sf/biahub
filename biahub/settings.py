@@ -25,17 +25,15 @@ class MyBaseModel(BaseModel):
 
 class ProcessingFunctions(BaseModel):
     function: str
-    input_arrays: list[str]
+    input_channel: list[str]
     kwargs: Dict[str, Any] = {}
-
+    z_slices: Optional[Tuple[int, int]] = None  # Used for projection functions only
 
 class TrackingSettings(MyBaseModel):
-    z_slices: Tuple[int, int]
-    input_channels: Dict[str, Any]
+    mode: Literal["2D", "3D"] = "2D"
+    input_channels: Dict[str, list[str]] = {}
     tracking_config: Dict[str, Any] = {}
-    vs_projection_function: ProcessingFunctions = None
     preprocessing_functions: Dict[str, ProcessingFunctions] = {}
-    tracking_functions: Dict[str, ProcessingFunctions] = {}
 
 
 class EstimateRegistrationSettings(MyBaseModel):
