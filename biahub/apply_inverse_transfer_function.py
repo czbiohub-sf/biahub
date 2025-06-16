@@ -28,7 +28,7 @@ from biahub.cli.parsing import (
 from biahub.cli.utils import yaml_to_model
 
 
-def apply_inverse_transfer_function_cli(
+def apply_inverse_transfer_function(
     input_position_dirpaths: list[Path],
     transfer_function_dirpath: Path,
     config_filepath: Path,
@@ -141,7 +141,7 @@ def apply_inverse_transfer_function_cli(
 @num_processes()
 @sbatch_filepath()
 @local()
-def _apply_inverse_transfer_function_cli(
+def apply_inverse_transfer_function_cli(
     input_position_dirpaths: list[Path],
     transfer_function_dirpath: Path,
     config_filepath: Path,
@@ -162,7 +162,7 @@ def _apply_inverse_transfer_function_cli(
 
     >> biahub apply-inv-tf -i ./input.zarr/*/*/* -t ./transfer-function.zarr -c /examples/birefringence.yml -o ./output.zarr
     """
-    apply_inverse_transfer_function_cli(
+    apply_inverse_transfer_function(
         input_position_dirpaths,
         transfer_function_dirpath,
         config_filepath,
@@ -174,4 +174,4 @@ def _apply_inverse_transfer_function_cli(
 
 
 if __name__ == "__main__":
-    _apply_inverse_transfer_function_cli()
+    apply_inverse_transfer_function_cli()

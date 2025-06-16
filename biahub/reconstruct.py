@@ -2,9 +2,11 @@ from pathlib import Path
 
 import click
 
-from waveorder.cli.compute_transfer_function import compute_transfer_function_cli
+from waveorder.cli.compute_transfer_function import (
+    compute_transfer_function_cli as compute_transfer_function,
+)
 
-from biahub.apply_inverse_transfer_function import apply_inverse_transfer_function_cli
+from biahub.apply_inverse_transfer_function import apply_inverse_transfer_function
 from biahub.cli.parsing import (
     config_filepath,
     input_position_dirpaths,
@@ -22,7 +24,7 @@ from biahub.cli.parsing import (
 @num_processes()
 @sbatch_filepath()
 @local()
-def _reconstruct_cli(
+def reconstruct_cli(
     input_position_dirpaths: list[Path],
     config_filepath: Path,
     output_dirpath: Path,
@@ -53,14 +55,14 @@ def _reconstruct_cli(
 
     # Compute transfer function
     # call cli function directly
-    compute_transfer_function_cli(
+    compute_transfer_function(
         input_position_dirpaths[0],
         config_filepath,
         transfer_function_path,
     )
 
     # Apply inverse transfer function
-    apply_inverse_transfer_function_cli(
+    apply_inverse_transfer_function(
         input_position_dirpaths,
         transfer_function_path,
         config_filepath,
@@ -72,4 +74,4 @@ def _reconstruct_cli(
 
 
 if __name__ == "__main__":
-    _reconstruct_cli()
+    reconstruct_cli()
