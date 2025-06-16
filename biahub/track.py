@@ -309,7 +309,7 @@ def data_preprocessing(
     return foreground_mask, contour_gradient_map
 
 
-def ultrack(
+def run_ultrack(
     tracking_config: MainConfig,
     foreground_mask: ArrayLike,
     contour_gradient_map: ArrayLike,
@@ -493,7 +493,7 @@ def track_one_position(
 
     # Perform tracking
     click.echo("Tracking...")
-    tracking_labels, tracks_df, _ = ultrack(
+    tracking_labels, tracks_df, _ = run_ultrack(
         tracking_config, foreground_mask, contour_gradient_map, scale, databaset_path
     )
 
