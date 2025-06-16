@@ -1,3 +1,5 @@
+import warnings
+
 from pathlib import Path
 
 import click
@@ -161,11 +163,16 @@ def segment_cli(
             )
         # Channel strings to indices to be used in cellpose. Hiding this from the
         model_args.channels = [channel_names.index(channel) for channel in model_args.channels]
-        # NOTE:List of channels, either of length 2 or of length number of images by 2.
-        # First element of list is the channel to segment (0=grayscale, 1=red, 2=green, 3=blue).
-        # Second element of list is the optional nuclear channel or organelle channel. Only 3 channels are supported. The rest are ignored
-        if len(model_args.channels) < 2:
-            model_args.channels.append(0)
+        # NOTE: Cellpose requires 3 channels. If the channels list is less than 3, the first channel is repeated.
+
+        if len(model_args.channels) < 3:
+            model_args.channels.extend(
+                [model_args.channels[0]] * (3 - len(model_args.channels))
+            )
+        else:
+            warnings.warn(
+                f"Model {model_name} has more than 3 channels. Only the first 3 channels will be used."
+            )
 
         click.echo(f"Segmenting with model {model_name} using channels {model_args.channels}")
         if (
