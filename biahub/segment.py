@@ -83,13 +83,21 @@ def segment_data(
             )
             czyx_data[c_idx] = func(czyx_data[c_idx], **kwargs)
 
+        # Reorder channels based on channels_for_segmentation
+        cellpose_czyx = np.zeros(
+            (3, *czyx_data_to_segment.shape[1:]), dtype=czyx_data_to_segment.dtype
+        )
+        for i, channel in enumerate(model_args.channels):
+            if channel is not None:
+                cellpose_czyx[i] = czyx_data_to_segment[channel]
+
         # Apply the segmentation
         model = models.CellposeModel(
-            model_type=model_args.path_to_model, gpu=gpu, device=device
+            gpu=gpu, device=device, pretrained_model=model_args.path_to_model
         )
         segmentation, _, _ = model.eval(
-            czyx_data_to_segment, channel_axis=0, z_axis=1, **model_args.eval_args
-        )  # noqa: python-no-eval
+            cellpose_czyx, channel_axis=0, z_axis=1, **model_args.eval_args
+        )
         if z_slice_2D is not None and isinstance(z_slice_2D, int):
             segmentation = segmentation[np.newaxis, ...]
         czyx_segmentation.append(segmentation)
@@ -147,23 +155,19 @@ def segment_cli(
         if model_args.z_slice_2D is not None and isinstance(model_args.z_slice_2D, int):
             Z = 1
         # Ensure channel names exist in the dataset
-        if not all(channel in channel_names for channel in model_args.eval_args["channels"]):
+        if not all(channel in channel_names for channel in model_args.channels):
             raise ValueError(
-                f"Channels {model_args.eval_args['channels']} not found in dataset {channel_names}"
+                f"Channels {model_args.channels} not found in dataset {channel_names}"
             )
-        # Channel strings to indices with the cellpose offset of 1
-        model_args.eval_args["channels"] = [
-            channel_names.index(channel) + 1 for channel in model_args.eval_args["channels"]
-        ]
+        # Channel strings to indices to be used in cellpose. Hiding this from the
+        model_args.channels = [channel_names.index(channel) for channel in model_args.channels]
         # NOTE:List of channels, either of length 2 or of length number of images by 2.
         # First element of list is the channel to segment (0=grayscale, 1=red, 2=green, 3=blue).
-        # Second element of list is the optional nuclear channel (0=none, 1=red, 2=green, 3=blue).
-        if len(model_args.eval_args["channels"]) < 2:
-            model_args.eval_args["channels"].append(0)
+        # Second element of list is the optional nuclear channel or organelle channel. Only 3 channels are supported. The rest are ignored
+        if len(model_args.channels) < 2:
+            model_args.channels.append(0)
 
-        click.echo(
-            f"Segmenting with model {model_name} using channels {model_args.eval_args['channels']}"
-        )
+        click.echo(f"Segmenting with model {model_name} using channels {model_args.channels}")
         if (
             "anisotropy" not in model_args.eval_args
             or model_args.eval_args["anisotropy"] is None
@@ -202,7 +206,7 @@ def segment_cli(
     # Estimate resources
     num_cpus, gb_ram_request = estimate_resources(shape=segmentation_shape, ram_multiplier=20)
     num_gpus = 1
-    slurm_time = np.ceil(np.max([80, T * 2.5])).astype(int)
+    slurm_time = np.ceil(np.max([120, T * Z * 5])).astype(int)
     slurm_array_parallelism = 100
     # Prepare SLURM arguments
     slurm_args = {
@@ -236,9 +240,9 @@ def segment_cli(
             jobs.append(
                 executor.submit(
                     process_single_position,
-                    segment_data,
-                    input_position_path,
-                    output_position_path,
+                    func=segment_data,
+                    input_position_path=input_position_path,
+                    output_position_path=output_position_path,
                     input_channel_indices=[list(range(C))],
                     output_channel_indices=[list(range(C_segment))],
                     num_processes=np.min([20, int(num_cpus * 0.8)]),
