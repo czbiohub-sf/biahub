@@ -61,7 +61,7 @@ biahub deskew \
     -o ./acq_name_lightsheet_deskewed.zarr
 
 # RECONSTRUCT PHASE/BIREFRINGENCE
-recorder reconstruct \
+biahub reconstruct \
     -i ./acq_name_labelfree.zarr/*/*/* \
     -c ./recon.yml \
     -o ./acq_name_labelfree_reconstructed.zarr
