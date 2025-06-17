@@ -36,6 +36,9 @@ def _optimize_registration(
     clip: bool = False,
     sobel_fitler: bool = False,
     verbose: bool = False,
+    slurm: bool = False,
+    t_idx: int = T_IDX,
+    output_folder_path: str | None = None,
 ) -> np.ndarray | None:
     if _check_nan_n_zeros(source_czyx) or _check_nan_n_zeros(target_czyx):
         return None
@@ -98,6 +101,10 @@ def _optimize_registration(
     tx_opt_mat = ants.read_transform(reg["fwdtransforms"][0])
     tx_opt_numpy = convert_transform_to_numpy(tx_opt_mat)
     composed_matrix = initial_tform @ tx_opt_numpy
+
+    if slurm:
+        output_folder_path.mkdir(parents=True, exist_ok=True)
+        np.save(output_folder_path / f"{t_idx}.npy", composed_matrix)
 
     return composed_matrix
 
