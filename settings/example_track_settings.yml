@@ -36,10 +36,10 @@ input_images:
           kwargs:
             gamma: 0.7
 
-  # Optional: load label masks directly with or without processing.
-  - path: /path/to/segmentation.zarr/*/*/*
-    channels:
-      nuclei_prediction_labels: []
+  # # Optional: load label masks directly with or without processing.
+  # - path: /path/to/segmentation.zarr/*/*/*
+  #   channels:
+  #     nuclei_prediction_labels: []
 
   # Virtual channel: computed dynamically using prior outputs.
   - path: null
