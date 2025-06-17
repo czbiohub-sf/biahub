@@ -1,9 +1,8 @@
-# %%
 import ast
 import os
 
 from pathlib import Path
-from typing import Any, Dict, List, Tuple, Union
+from typing import Dict, List, Tuple, Union
 
 import click
 import numpy as np
@@ -15,7 +14,6 @@ import ultrack
 from iohub import open_ome_zarr
 from numpy.typing import ArrayLike
 from ultrack import MainConfig, Tracker
-from ultrack.utils import labels_to_edges
 from ultrack.utils.array import array_apply
 
 from biahub.cli.parsing import (
@@ -32,28 +30,42 @@ from biahub.cli.utils import (
     update_model,
     yaml_to_model,
 )
-from biahub.settings import ProcessingFunctions, TrackingSettings
+from biahub.settings import ProcessingInputChannel, TrackingSettings
 
 
-# Custom function
 def mem_nuc_contour(nuclei_prediction: ArrayLike, membrane_prediction: ArrayLike) -> ArrayLike:
     """
-    Compute the membrane-nucleus contour by averaging the membrane signal and the inverse nucleus signal.
+    Compute a contour map at the boundary between nuclei and membranes.
 
-    This function generates a contour map that highlights the boundary between the nucleus and
-    membrane regions in an imaging dataset.
+    This function enhances boundary contrast by averaging the membrane signal with the
+    inverse of the nucleus signal. The result is a contour-like representation that
+    highlights the interface between nuclear and membrane regions.
 
-    Parameters:
-    - nuclei_prediction (ArrayLike): A NumPy array representing the predicted nucleus.
-    - membrane_prediction (ArrayLike): A NumPy array representing the predicted membrane.
+    Parameters
+    ----------
+    nuclei_prediction : ArrayLike
+        Array representing the predicted nuclear signal. Values are typically in [0, 1].
+    membrane_prediction : ArrayLike
+        Array representing the predicted membrane signal. Values are typically in [0, 1].
 
-    Returns:
-    - ArrayLike: A NumPy array representing the computed membrane-nucleus contour.
+    Returns
+    -------
+    ArrayLike
+        The resulting contour map, computed as the average of membrane and (1 - nucleus).
+        Output has the same shape as the input arrays.
 
-    Notes:
-    - Input arrays should have the same shape to avoid broadcasting issues.
+    Notes
+    -----
+    - Both input arrays must have the same shape.
+    - Values are not thresholded; this function assumes soft probabilities or intensities.
+    - The function is compatible with NumPy or Dask arrays (via `np.asarray` conversion).
+
+    Examples
+    --------
+    >>> contour = mem_nuc_contour(nuc, mem)
+    >>> contour.shape == nuc.shape
+    True
     """
-
     return (np.asarray(membrane_prediction) + (1 - np.asarray(nuclei_prediction))) / 2
 
 
@@ -75,26 +87,35 @@ FUNCTION_MAP["biahub.cli.track.mem_nuc_contour"] = mem_nuc_contour
 
 def resolve_function(function_name: str):
     """
-    Resolve a function by its name from a predefined function mapping.
+    Resolve a function by its name from the predefined FUNCTION_MAP.
 
-    This function retrieves a callable function from the `FUNCTION_MAP` dictionary based on
-    the provided function name. If the function name does not exist in the mapping, an
-    error is raised.
+    This function looks up a string identifier in a centralized dictionary of allowed
+    functions and returns the corresponding callable. It is used to dynamically map
+    function names (e.g., from config files) to actual Python functions.
 
-    Parameters:
-    - function_name (str): The name of the function to retrieve.
+    Parameters
+    ----------
+    function_name : str
+        The fully qualified name of the function to retrieve
+        (e.g., "np.mean", "ultrack.imgproc.gradient_magnitude").
 
-    Returns:
-    - Callable: The resolved function from `FUNCTION_MAP`.
+    Returns
+    -------
+    Callable
+        The resolved function object.
 
-    Raises:
-    - ValueError: If the provided function name is not found in `FUNCTION_MAP`.
+    Raises
+    ------
+    ValueError
+        If the function name is not found in the `FUNCTION_MAP`.
 
-    Notes:
-    - `FUNCTION_MAP` is a dictionary containing allowed functions that can be dynamically
-      resolved and applied to data.
+    Notes
+    -----
+    - `FUNCTION_MAP` is a global dictionary that includes a whitelist of safe,
+      user-approved or library-provided functions.
+    - Additional functions (e.g., custom preprocessing functions) can be manually added
+      to `FUNCTION_MAP`.
     """
-
     if function_name not in FUNCTION_MAP:
         raise ValueError(
             f"Invalid function '{function_name}'. Allowed functions: {list(FUNCTION_MAP.keys())}"
@@ -105,30 +126,41 @@ def resolve_function(function_name: str):
 
 def fill_empty_frames(arr: ArrayLike, empty_frames_idx: List[int]) -> ArrayLike:
     """
-    Fill empty frames in a time-series imaging dataset by propagating values from the nearest non-empty frames.
+    Fill empty frames in a time-series imaging array using nearest available frames.
 
-    This function identifies empty frames in a 3D (T, Y, X) or 4D (T, C, Y, X) array and fills them
-    using the nearest available data. If an empty frame is found at the beginning or end, it is filled
-    with the closest available non-empty frame. For empty frames in the middle, the function prioritizes
-    propagation from previous frames but falls back to future frames if necessary.
+    This function modifies a temporal image stack by replacing specified empty frames
+    (e.g., entirely blank or corrupted) with the nearest valid frame. For leading/trailing
+    empty frames, the nearest single neighbor is used. For interior empty frames, it
+    prioritizes previous-frame filling but can fall back to future frames if needed.
 
-    Parameters:
-    - arr (ArrayLike): Input 3D (T, Y, X) or 4D (T, C, Y, X) imaging data array.
-    - empty_frames_idx (List[int]): Indices of frames that are completely empty.
+    Parameters
+    ----------
+    arr : ArrayLike
+        Time-series imaging data of shape (T, Y, X) or (T, C, Y, X). The first dimension must be time.
+    empty_frames_idx : list of int
+        List of time indices (frame numbers) that are considered empty and should be filled.
 
-    Returns:
-    - ArrayLike: The input array with empty frames filled.
+    Returns
+    -------
+    ArrayLike
+        The modified array with empty frames replaced in-place using temporal neighbors.
 
-    Notes:
-    - If no empty frames are detected, the function returns the array unchanged.
-    - If the first or last frame is empty, it is filled with the nearest available frame.
-    - For middle frames, the function attempts to fill using the closest previous non-empty frame
-      but falls back to the next available frame if necessary.
+    Notes
+    -----
+    - This function modifies the input array in-place.
+    - If no valid neighbors are available (e.g., all frames empty), the original frame is left unchanged.
+    - For performance and reproducibility, the function uses a simple sequential search rather than interpolation.
+
+    Examples
+    --------
+    >>> arr.shape
+    (10, 1, 256, 256)  # T, C, Y, X
+    >>> empty_frames_idx = [0, 4]
+    >>> arr_filled = fill_empty_frames(arr, empty_frames_idx)
     """
 
     if not empty_frames_idx or not isinstance(empty_frames_idx, list):
         return arr
-
 
     num_frames = arr.shape[0]
 
@@ -172,15 +204,36 @@ def get_empty_frames_idx_from_csv(
     blank_frame_df: pd.DataFrame, fov: str
 ) -> Union[List[int], None]:
     """
-    Extract empty frames indices from a DataFrame containing blank frame information.
-    This function retrieves the indices of empty frames for a specific field of view (FOV)
-    from a DataFrame containing blank frame information.
-    Parameters:
-    - blank_frame_df (pd.DataFrame): DataFrame containing blank frame information.
-    - fov (str): Field of view (FOV) identifier to filter the DataFrame.
-    Returns:
-    - List[int]: List of indices representing empty frames for the specified FOV.
-    - None: If no empty frames are found for the specified FOV.
+    Extract the indices of empty timepoints for a given field of view (FOV) from a DataFrame.
+
+    This function parses a DataFrame that contains information about blank (empty) frames
+    across different FOVs and returns a list of time indices corresponding to empty frames
+    for the specified FOV.
+
+    Parameters
+    ----------
+    blank_frame_df : pandas.DataFrame
+        DataFrame containing at least two columns: 'FOV' (str) and 't' (list-like or int).
+        The 't' column may contain strings representing Python lists (e.g., "[0, 3, 5]").
+    fov : str
+        Field of view identifier used to filter the DataFrame.
+
+    Returns
+    -------
+    list of int or None
+        List of integer indices representing empty timepoints for the specified FOV.
+        Returns `None` if no matching FOV is found or if no empty frames are reported.
+
+    Notes
+    -----
+    - The function uses `ast.literal_eval` to parse stringified lists from CSV files.
+    - If `t` is the integer 0 (and not a list), it assumes no empty frames and returns `None`.
+
+    Examples
+    --------
+    >>> df = pd.DataFrame({'FOV': ['A/1/1'], 't': ['[0, 2, 4]']})
+    >>> get_empty_frames_idx_from_csv(df, 'A/1/1')
+    [0, 2, 4]
     """
 
     empty_frames_idx = blank_frame_df[blank_frame_df['FOV'] == fov]['t']
@@ -191,24 +244,42 @@ def get_empty_frames_idx_from_csv(
         if isinstance(t_value, list):
             return [int(i) for i in t_value]
         elif t_value == 0:
-            return []
+            return None
     return None
+
 
 def central_z_slice(z_shape: int) -> slice:
     """
-    Get the central slice of the z-axis.
-    Resolve the z-slice based on the provided z_slices and z_shape.
+    Compute a centered Z-slice range from a 3D or 4D image volume.
 
-    If z_slices is None or equal to (0, 0), return a centered z-range.
-    Otherwise, return a slice constructed from the provided tuple.
+    This function returns a slice object that selects a centered range of Z-planes
+    from a volumetric dataset, based on the total number of Z slices. It ensures
+    that the returned slice includes an odd number of planes (at least 3).
 
-    Example:
-        z_slices=(10, 15) → slice(10, 15)
-        z_slices=(0, 0)   → slice(centered range)
+    Parameters
+    ----------
+    z_shape : int
+        The total number of Z-planes (depth) in the dataset.
 
-    
-    Returns:
-        slice: Slice object representing a centered z-range.
+    Returns
+    -------
+    slice
+        A slice object that extracts a centered Z-range from the dataset.
+
+    Notes
+    -----
+    - Ensures that at least 3 slices are returned.
+    - If the total number of slices is even, one extra slice is included to make it odd.
+    - This function is typically used when `z_slices=(0, 0)` is provided,
+      indicating that the user wants automatic central slicing.
+
+    Examples
+    --------
+    >>> central_z_slice(21)
+    slice(10 - 1, 10 + 1 + 1)  # slice(9, 12)
+
+    >>> central_z_slice(8)
+    slice(3, 6)  # (center=4, half_window=1)
     """
     n_slices = max(3, z_shape // 2)
     if n_slices % 2 == 0:
@@ -216,97 +287,33 @@ def central_z_slice(z_shape: int) -> slice:
     z_center = z_shape // 2
     half_window = n_slices // 2
     return slice(z_center - half_window, z_center + half_window + 1)
-def resolve_z_slice(z_slices: Tuple[int, int], z_shape: int) -> slice:
+
+
+def resolve_z_slice(z_slices: Tuple[int, int], z_shape: int, mode: str = "2D") -> slice:
     """
-    Resolve the z-slice based on the provided z_slices and z_shape.
+    Resolve the z-slice range based on user-defined input and imaging mode.
+
+    Parameters
+    ----------
+    z_slices : Tuple[int, int]
+        Start and end indices of the z-range. If set to (0, 0), automatic center range is used.
+    z_shape : int
+        Total number of slices along the Z axis.
+    mode : str, optional
+        If "2D", returns a centered Z-range slice. If not "2D", returns full or specified range. Default is "2D".
+
+    Returns
+    -------
+    slice
+        A slice object representing the Z-range to extract.
     """
     if z_slices is None or z_slices == (0, 0):
-        return central_z_slice(z_shape)
-    else:   
+        if mode == "2D":
+            return central_z_slice(z_shape)
+        else:
+            return slice(None)
+    else:
         return slice(*z_slices)
-
-def data_preprocessing(
-    data_dict: dict,
-    preprocessing_functions: Dict[str, ProcessingFunctions],
-    empty_frames_idx: List[int] = None,
-) -> Tuple[ArrayLike, ArrayLike]:
-
-    """
-    Preprocess imaging data for tracking by applying preprocessing functions and generating
-    required inputs for tracking.
-
-    This function applies a series of preprocessing steps to the input imaging data, including
-    handling empty frames, applying user-defined preprocessing functions, and generating
-    the necessary masks for object tracking.
-
-    Parameters:
-    - data_dict (dict): Dictionary containing imaging data with channel names as keys and
-                         corresponding NumPy arrays as values.
-    - preprocessing_functions (Dict[str, ProcessingFunctions]): Dictionary mapping preprocessing
-                                                                steps to their corresponding functions.
-    - tracking_functions (Dict[str, ProcessingFunctions]): Dictionary containing functions for
-                                                            generating foreground and contour masks.
-
-    Returns:
-    - Tuple[ArrayLike, ArrayLike]:
-        - The foreground mask used for tracking.
-        - The contour gradient map used for tracking.
-
-    Notes:
-    - If the "Phase3D" key is present in `data_dict`, the function identifies and fills empty frames
-      before processing.
-    - The preprocessing functions are dynamically resolved and applied to the corresponding
-      input arrays.
-    """
-
-    click.echo("Checking for empty frames in image...")
-
-    if empty_frames_idx is not None and len(empty_frames_idx) > 0:
-        for key, value in data_dict.items():
-            click.echo(f"Filling empty frames in {key}...")
-            data_dict[key] = fill_empty_frames(value, empty_frames_idx)
-
-    z_shape = data_dict[list(data_dict.keys())[0]].shape[1]
-
-    # Apply preprocessing functions
-    for key, func_details in preprocessing_functions.items():
-        click.echo(f"Preprocessing {key} using {func_details.function}...")
-        if "projection" in key:
-            z_slices = resolve_z_slice(func_details.z_slices, z_shape)
-            projection_channel = func_details.input_channel[0]
-            data_dict[projection_channel] = data_dict[projection_channel][:, z_slices, :, :]
-       
-        input_channel_name = func_details.input_channel[0]
-        function = resolve_function(func_details.function)  # Uses function mapping
-        input_channel = data_dict[input_channel_name]
-
-        kwargs = func_details.kwargs if func_details.kwargs else {}
-        data_dict[input_channel_name] = array_apply(input_channel, func=function, **kwargs)
-    # Generate foreground mask
-    click.echo("Generating foreground mask...")
-    foreground_func_details = preprocessing_functions["foreground"]
-    foreground_function = resolve_function(
-        foreground_func_details.function
-    )  # Uses function mapping
-
-    fg_input_channel = [data_dict[name] for name in foreground_func_details.input_channel]
-    fg_kwargs = foreground_func_details.kwargs if foreground_func_details.kwargs else {}
-
-    foreground_mask = array_apply(*fg_input_channel, func=foreground_function, **fg_kwargs)
-
-    # Generate contour gradient map
-    click.echo("Generating contour gradient map...")
-    contour_func_details = preprocessing_functions["contour"]
-    contour_function = resolve_function(contour_func_details.function)  # Uses function mapping
-
-    contour_input_channel = [data_dict[name] for name in contour_func_details.input_channel]
-    contour_kwargs = contour_func_details.kwargs if contour_func_details.kwargs else {}
-
-    contour_gradient_map = array_apply(
-        *contour_input_channel, func=contour_function, **contour_kwargs
-    )
-
-    return foreground_mask, contour_gradient_map
 
 
 def run_ultrack(
@@ -317,32 +324,55 @@ def run_ultrack(
     databaset_path,
 ):
     """
-    Perform object tracking using the ultrack library.
+    Run object tracking using the Ultrack library.
 
-    This function tracks objects based on a provided foreground mask and contour gradient map
-    using the specified tracking configuration. The results include labeled tracking data,
-    a DataFrame containing track information, and a graph representation of the tracks.
+    This function performs object tracking on time-series image data using a binary
+    foreground mask and a contour gradient map. It outputs labeled segmentation results,
+    a track DataFrame, and a graph representing object trajectories over time.
 
-    Parameters:
-    - tracking_config (MainConfig): Configuration settings for the tracking process.
-    - foreground_mask (ArrayLike): Binary or probability mask indicating detected objects.
-    - contour_gradient_map (ArrayLike): Gradient-based contour map used for tracking refinement.
-    - scale (Union[Tuple[float, float], Tuple[float, float, float]]): Scale factors for spatial
-      resolution, given as (Y, X) or (Z, Y, X) depending on the dataset.
-    - databaset_path (Path): Directory where tracking results and configurations will be saved.
+    Parameters
+    ----------
+    tracking_config : MainConfig
+        Ultrack configuration object defining segmentation, linking, and optimization parameters.
+    foreground_mask : ArrayLike
+        Binary mask (0 or 1) indicating detected object regions over time.
+        Shape is typically (T, Z, Y, X) or (T, Y, X).
+    contour_gradient_map : ArrayLike
+        Gradient map or edge score map used to refine object boundaries and define connectivity
+        for linking detected objects between timepoints.
+    scale : tuple of float
+        Physical resolution scale in either (Y, X) or (Z, Y, X) depending on whether the data is 2D or 3D.
+    databaset_path : Path
+        Directory where tracking results, configuration files, and output data will be saved.
 
-    Returns:
-    - np.ndarray: Labeled tracking results in an OME-Zarr format.
-    - pd.DataFrame: DataFrame containing tracking information, including object IDs, positions,
-      and frame associations.
-    - networkx.Graph: Graph representation of object tracks, useful for lineage and connectivity
-      analysis.
+    Returns
+    -------
+    labels : np.ndarray
+        Labeled segmentation array of shape (T, Z, Y, X) or (T, Y, X), where each object instance
+        is assigned a unique integer label across time.
+    tracks_df : pandas.DataFrame
+        DataFrame with tracking metadata including object ID, frame index, spatial coordinates,
+        and parent-child relationships.
+    graph : networkx.Graph
+        Directed graph representing tracked object lineages. Nodes correspond to objects and
+        edges represent links between objects across frames.
 
-    Notes:
-    - The function modifies `tracking_config` to set the working directory for results storage.
-    - The function also saves the tracking configuration in a TOML file for reproducibility.
+    Notes
+    -----
+    - `foreground_mask` must be a binary mask (e.g., after thresholding a probability map).
+    - This function modifies `tracking_config` to set the working directory (`working_dir`).
+    - The configuration used is saved to `config.toml` under the `databaset_path`.
+
+    Examples
+    --------
+    >>> labels, tracks_df, graph = run_ultrack(
+    ...     tracking_config=cfg,
+    ...     foreground_mask=binary_mask,
+    ...     contour_gradient_map=gradient_map,
+    ...     scale=(0.5, 0.5, 1.0),
+    ...     databaset_path=Path("results/posA")
+    ... )
     """
-
     cfg = tracking_config
 
     cfg.data_config.working_dir = databaset_path
@@ -371,121 +401,366 @@ def run_ultrack(
     )
 
 
-def track_one_position(
-    input_path: Path,
-    output_dirpath: Path,
-    preprocessing_functions: Dict[str, ProcessingFunctions],
-    input_channels: List[str],
-    tracking_config: MainConfig,
-    segmentation_dirpath: Path = None,
-    blank_frame_csv_path: Path = None,
-    mode: str = "2D",
-) -> None:
+def run_pipeline(
+    data_dict: Dict[str, ArrayLike],
+    input_images: List[ProcessingInputChannel],
+    visualize: bool = False,
+) -> Dict[str, ArrayLike]:
     """
-    Process a single imaging position for cell tracking using virtual staining and optional label-free imaging.
+    Run a configurable preprocessing pipeline on input image channels.
 
-    This function loads imaging data from the specified input directories, applies preprocessing steps, and
-    performs object tracking using the provided configuration. It obtain the foreground and contour-based tracking
-     to generate labeled tracking outputs.
+    This function applies a sequence of user-defined functions (e.g., filters, transformations)
+    to each specified channel in the dataset. Function pipelines are defined via the
+    `ProcessingInputChannel` objects, which describe the function, its arguments, and whether
+    it should be applied per timepoint.
 
-    Parameters:
-    - input_path (Path): Path to the virtual staining dataset in OME-Zarr format.
-    - output_dirpath (Path): Path to save tracking results, including labels and tracks.
-    - preprocessing_functions (Dict[str, ProcessingFunctions]): Dictionary of preprocessing functions applied
-                                                                to the input images before tracking.
-    - tracking_config (MainConfig): Configuration settings for the tracking algorithm.
-    - input_channels (List[str]): List of input channels to use for tracking.   
-    Returns:
-    - None: The function also saves the tracking results, including labeled images and track data,
-            to the specified output directory.
+    Parameters
+    ----------
+    data_dict : dict of str to ArrayLike
+        A dictionary where each key is a channel name and each value is the corresponding
+        multi-dimensional image array (typically of shape (T, Z, Y, X) or (T, C, Z, Y, X)).
+    input_images : list of ProcessingInputChannel
+        A list of input image specifications. Each `ProcessingInputChannel` defines
+        which channels to process and the pipeline (functions + arguments) to apply.
+    visualize : bool, optional
+        If True, opens a Napari viewer to display each processed channel after its pipeline.
 
-    Notes:
-    - If blank frames exist in the data, the label-free image directory must be provided.
-    - The function verifies the presence of required input channels and raises an error if any are missing.
-    - Tracking is performed using the `ultrack` library, and the results are saved in an OME-Zarr format.
-    - Tracks graphs are exported as CSV files.
+    Returns
+    -------
+    dict of str to ArrayLike
+        Updated dictionary where the processed channel data has replaced the originals.
+
+    Notes
+    -----
+    - The `step.input_channels` field can define which channel(s) to use as inputs
+      to a function, even if different from the one being written to.
+    - If `per_timepoint` is True for a step, the function will be applied frame-by-frame
+      using `ultrack.utils.array.array_apply`.
+    - All functions must be registered in the `FUNCTION_MAP` to be resolved.
+
+    Examples
+    --------
+    >>> from biahub.settings import ProcessingInputChannel, ProcessingFunctions
+    >>> import numpy as np
+
+    >>> data_dict = {"raw": np.random.rand(10, 1, 256, 256)}  # shape (T, Z, Y, X)
+
+    >>> input_images = [
+    ...     ProcessingInputChannel(
+    ...         path=None,
+    ...         channels={
+    ...             "raw": [
+    ...                 ProcessingFunctions(
+    ...                     function="np.mean",
+    ...                     kwargs={"axis": 1},
+    ...                     per_timepoint=False,
+    ...                     input_channels=["raw"]
+    ...                 )
+    ...             ]
+    ...         }
+    ...     )
+    ... ]
+
+    >>> output = run_pipeline(data_dict, input_images)
+    >>> output["raw"].shape
+    (10, 256, 256)  # Z-averaged
     """
+    for image in input_images:
+        for channel_name, pipeline in image.channels.items():
+            for step in pipeline:
+                click.echo(f"Processing {channel_name} with {step.function}")
+                f_name = step.function
+                run_function = resolve_function(f_name)
+                f_kwargs = step.kwargs
+                per_timepoint = step.per_timepoint
+                # if there is input channel, apply the function to the input channel otherwise apply the function to the output channel
+                f_channel_name = step.input_channels
+                if f_channel_name is None:
+                    f_channel_name = [channel_name]
+                f_data = [np.asarray(data_dict[name]) for name in f_channel_name]
 
-    position_key = input_path.parts[-3:]
+                if per_timepoint:
+                    result = array_apply(*f_data, func=run_function, **f_kwargs)
+
+                else:
+                    result = run_function(*f_data, **f_kwargs)
+
+                data_dict[channel_name] = result
+                if visualize:
+                    import napari
+
+                    viewer = napari.Viewer()
+                    viewer.add_image(data_dict[channel_name], name=channel_name)
+
+    return data_dict
+
+
+def read_data(
+    zarr_path: Path,
+) -> Tuple[List[str], Tuple[int, int, int, int, int], Tuple[float, float, float]]:
+    """
+    Load metadata from an OME-Zarr dataset.
+
+    Parameters
+    ----------
+    zarr_path : Path
+        Path to the input OME-Zarr file.
+
+    Returns
+    -------
+    tuple
+        Tuple containing:
+        - dataset : iohub.Dataset
+        - channel_names : list of str
+        - shape : tuple of int
+            Shape of the dataset in (T, C, Z, Y, X) format.
+        - scale : tuple of float
+            Physical scale along each spatial axis.
+    """
+    with open_ome_zarr(zarr_path) as dataset:
+        shape = dataset.data.shape  # Expect (T, C, Z, Y, X)
+        channel_names = dataset.channel_names
+        scale = dataset.scale
+
+        return dataset, channel_names, shape, scale
+
+
+def load_data(
+    position_key: Tuple[str, str, str],
+    input_images: List[ProcessingInputChannel],
+    z_slices: slice,
+    visualize: bool = False,
+) -> Dict[str, ArrayLike]:
+    """
+    Load and extract specified channels from an OME-Zarr dataset for a given position.
+
+    This function opens the OME-Zarr dataset corresponding to a specific position key,
+    extracts the required channels and Z-slices as defined in the `input_images` configuration,
+    and stores them in a dictionary for further processing.
+
+    Parameters
+    ----------
+    position_key : tuple of str
+        A tuple of three strings representing the hierarchical path to a specific position
+        in the dataset (e.g., (plate, well, position)).
+    input_images : list of ProcessingInputChannel
+        List of input image channel configurations. Each item defines the path and channels to load.
+    z_slices : slice
+        Slice object specifying which Z-planes to extract (e.g., central slices for 2D mode).
+    visualize : bool, optional
+        If True, opens a Napari viewer and displays each loaded channel. Default is False.
+
+    Returns
+    -------
+    dict of str to ArrayLike
+        Dictionary mapping each channel name to its corresponding image data array.
+        Each array is a Dask array of shape (T, Z, Y, X), extracted from the OME-Zarr store.
+
+    Notes
+    -----
+    - Assumes that each `ProcessingInputChannel` has a valid `.path` attribute pointing to a Zarr store.
+    - Uses `read_data()` to extract metadata and index the correct channel.
+    - Channel names must match those present in the dataset.
+    """
+    data_dict = {}
+    for image in input_images:
+        for channel_name, _ in image.channels.items():
+            # load the data from the zarr path
+            click.echo(f"Loading data for channel: {channel_name}")
+            if image.path is not None:
+                image_path = image.path / Path(*position_key)
+                dataset, image_channel_names, _, _ = read_data(zarr_path=image_path)
+                data_dict[channel_name] = dataset.data.dask_array()[
+                    :, image_channel_names.index(channel_name), z_slices, :, :
+                ]
+                if visualize:
+                    import napari
+
+                    viewer = napari.Viewer()
+                    viewer.add_image(data_dict[channel_name], name=channel_name)
+    return data_dict
+
+
+def fill_empty_frames_from_csv(
+    fov: str,
+    data_dict: Dict[str, ArrayLike],
+    blank_frame_csv_path: Path,
+) -> Dict[str, ArrayLike]:
+    """
+    Fill empty timepoints in a multi-channel image dictionary using a CSV file of blank frames.
+
+    This function loads a list of empty time indices from a CSV and fills them using the
+    nearest non-empty frames in the data.
+
+    Parameters
+    ----------
+    data_dict : dict of str to ArrayLike
+        Dictionary mapping channel names to image arrays.
+    csv_path : Path
+        Path to the CSV file containing empty frame information.
+        The CSV must contain columns: 'FOV' and 't'.
+    fov : str
+        Field of view identifier used to filter the CSV rows.
+
+    Returns
+    -------
+    dict of str to ArrayLike
+        Updated dictionary with empty frames filled in-place.
+    """
+    blank_frame_df = pd.read_csv(blank_frame_csv_path) if blank_frame_csv_path else None
+    empty_frames_idx = get_empty_frames_idx_from_csv(blank_frame_df, fov)
+    for channel_name, channel_data in data_dict.items():
+        data_dict[channel_name] = fill_empty_frames(channel_data, empty_frames_idx)
+    return data_dict
+
+
+def data_preprocessing(
+    position_key: str,
+    input_images: List[ProcessingInputChannel],
+    z_slices: slice,
+    blank_frames_path: Path = None,
+    visualize: bool = False,
+) -> Dict[str, np.ndarray]:
+    """
+    Load, preprocess, and prepare image data for tracking.
+
+    This function performs the full preprocessing pipeline on a single field of view (FOV).
+    It loads Z-sliced image data, applies configured preprocessing functions, fills in any
+    empty timepoints using a blank frame CSV (if provided), and returns the two required
+    channels for tracking: the foreground mask and the contour gradient map.
+
+    Parameters
+    ----------
+    position_key : str
+        FOV key, typically formed as "Plate_Well_Position" (e.g., "A_1_3").
+    input_images : list of ProcessingInputChannel
+        Configuration defining which channels to load and how to process them.
+    z_slices : slice
+        Slice object selecting which Z-planes to load (e.g., central slices).
+    blank_frames_path : Path, optional
+        Optional path to a CSV file containing frame indices to be filled for each FOV.
+        If not provided, empty frame handling is skipped.
+    visualize : bool, optional
+        If True, opens Napari viewer to visualize each intermediate step.
+
+    Returns
+    -------
+    dict of str to np.ndarray
+        Dictionary containing two arrays:
+        - "foreground" : binary mask array for detected objects
+        - "contour"    : gradient/edge map for contour-based refinement
+
+    Raises
+    ------
+    ValueError
+        If neither 'foreground' and 'contour' nor 'foreground_contour' channels are found
+        in the processed data.
+
+    Examples
+    --------
+    >>> z_slice = slice(10, 15)
+    >>> foreground, contour = data_preprocessing(
+    ...     position_key="A_1_3",
+    ...     input_images=config.input_images,
+    ...     z_slices=z_slice,
+    ...     blank_frames_path=Path("blank_frames.csv"),
+    ...     visualize=False
+    ... )
+    >>> foreground.shape, contour.shape
+    ((10, 5, 256, 256), (10, 5, 256, 256))
+    """
     fov = "_".join(position_key)
     click.echo(f"Processing FOV: {fov.replace('_', '/')}")
-    input_channels_preprocessing = input_channels["preprocessing"]
-    input_channels_tracking = input_channels["tracking"]
-    if (len(input_channels_tracking) != 1):
-        raise ValueError("Only one channel is allowed and required for tracking.")
-    if input_channels_preprocessing is not None:
-        if input_channels_tracking[0] not in input_channels_preprocessing:
-            raise ValueError("Tracking channel not found in Preprocessing input channels.")
-        else:
-            input_channels = input_channels_preprocessing
+    data_dict = load_data(
+        position_key=position_key,
+        input_images=input_images,
+        z_slices=z_slices,
+        visualize=visualize,
+    )
+    data_dict = run_pipeline(data_dict, input_images, visualize=visualize)
+    data_dict = fill_empty_frames_from_csv(fov, data_dict, blank_frames_path)
+
+    # get foreground and contour
+    channel_names = data_dict.keys()
+    if "foreground" in channel_names and "contour" in channel_names:
+        foreground_mask, contour_gradient_map = data_dict["foreground"], data_dict["contour"]
+    elif "foreground_contour" in channel_names:
+        foreground_mask, contour_gradient_map = data_dict["foreground_contour"]
     else:
-        input_channels = input_channels_tracking
-
-    if segmentation_dirpath is not None:
-        click.echo(f"Loading segmentation from: {segmentation_dirpath}...")
-        segmentation_path = segmentation_dirpath/ Path(*position_key)
-
-        label_dataset = open_ome_zarr(segmentation_path)
-        label_arr = np.asarray(label_dataset[0][:, :, :, :, :]).astype(np.uint32)  # Shape (T, Z, Y, X)
-        # get channel in tracking input channel
-        channel_names = label_dataset.channel_names
-        T, Z, Y, X = label_arr.shape
-        if input_channels_tracking[0] not in channel_names:
-            raise ValueError("Tracking channel not found in Segmentation input channels.")
-        else:
-            channel_index = channel_names.index(input_channels_tracking[0])
-            label_arr = label_arr[:, channel_index, :, :, :]
-        # get scale
-        scale = label_dataset.scale
-        shape = (T, 1, Z, Y, X)
-        function = resolve_function(preprocessing_functions["segmentation_to_tracking"].function)
-        kwargs = preprocessing_functions["segmentation_to_tracking"].kwargs if preprocessing_functions["segmentation_to_tracking"].kwargs else {}
-
-        foreground_mask, contour_gradient_map = function(label_arr, **kwargs)
-
-    else:
-        click.echo("No segmentation provided, using preprocessing functions to obtain foreground and contour gradient map...") 
-        click.echo(f"Reading data from: {input_path}...")
-        with open_ome_zarr(input_path) as dataset:
-            T, C, Z, Y, X = dataset.data.shape
-            channel_names = dataset.channel_names
-            scale = dataset.scale
-
-        data_dict = {}
-        for channel in input_channels:
-            data_dict[channel] = dataset[0][:, channel_names.index(channel), :, :, :]
-        
-        if mode == "2D":
-            scale = scale[-2:]
-            shape = (T, 1, 1, Y, X)
-        else:
-            scale = scale[-3:]
-            shape = (T, 1, Z, Y, X)
-
-        
-        # Preprocess to get the the foreground and multi-level contours
-        blank_frame_df = pd.read_csv(blank_frame_csv_path) if blank_frame_csv_path else None
-        empty_frames_idx=get_empty_frames_idx_from_csv(blank_frame_df, fov)
-
-        foreground_mask, contour_gradient_map = data_preprocessing(
-            data_dict=data_dict,
-            preprocessing_functions=preprocessing_functions,
-            empty_frames_idx=empty_frames_idx,
-        )
+        raise ValueError("Foreground and contour channels are required for tracking.")
+    del data_dict
+    return foreground_mask, contour_gradient_map
 
 
-    output_metadata = {
-        "shape": shape,
-        "chunks": None,
-        "scale": scale,
-        "channel_names": [f"{input_channels_tracking[0]}_labels"]
-        ,
-        "dtype": np.uint32,
-        }
+def track_one_position(
+    position_key: str,
+    input_images: List[ProcessingInputChannel],
+    output_dirpath: Path,
+    tracking_config: MainConfig,
+    blank_frames_path: Path = None,
+    z_slices: Tuple[int, int] = (0, 0),
+    scale: Tuple[float, float, float, float, float] = (1, 1, 1, 1, 1),
+) -> None:
+    """
+    Run tracking on a single field of view using foreground and contour channel data.
 
-    create_empty_hcs_zarr(
-                    store_path=output_dirpath, position_keys=[position_key], **output_metadata)
-    
+    This function loads image data, applies a preprocessing pipeline, fills blank frames if needed,
+    and uses the Ultrack library to compute object tracks. It is agnostic to the imaging source —
+    as long as the pipeline produces a binary foreground mask and a corresponding contour map.
+    Parameters
+    ----------
+    position_key : str
+        A string identifier for the field of view (e.g., "A_1_3"), typically composed of
+        Plate, Well, and Position joined by underscores.
+    input_images : list of ProcessingInputChannel
+        Configuration describing which channels to load and how to preprocess them.
+    output_dirpath : Path
+        Output directory where labeled Zarr volumes and track CSVs will be stored.
+    tracking_config : MainConfig
+        Ultrack configuration containing segmentation, linking, and optimization settings.
+    blank_frames_path : Path, optional
+        Path to CSV file indicating empty frames for the current FOV. If None, blank frame
+        filling is skipped.
+    z_slices : tuple of int, optional
+        Tuple specifying the range of Z-slices to load. If (0, 0), the central slice range
+        will be auto-resolved. Default is (0, 0).
+    scale : tuple of float, optional
+        Physical scale of the dataset in (T, C, Z, Y, X) order. Tracking uses either the
+        (Z, Y, X) or (Y, X) portion depending on dimensionality. Default is (1, 1, 1, 1, 1).
+
+    Returns
+    -------
+    None
+        Outputs are saved directly to disk:
+        - Tracked object labels in Zarr format
+        - CSV file containing the track graph (IDs, positions, parents)
+
+    Notes
+    -----
+    - Output is saved to `{output_dirpath}/{position_key}/tracks_{position_key}.csv`.
+    - The Ultrack config is also saved as TOML in a `_config_tracking/{FOV}/` subdirectory.
+    - If required input channels ("foreground" and "contour") are missing, a ValueError is raised.
+
+    Examples
+    --------
+    >>> track_one_position(
+    ...     position_key="A_1_3",
+    ...     input_images=config.input_images,
+    ...     output_dirpath=Path("output.zarr"),
+    ...     tracking_config=cfg,
+    ...     blank_frames_path=Path("blank_frames.csv"),
+    ...     z_slices=(10, 15),
+    ...     scale=(1, 1, 0.5, 0.2, 0.2)
+    ... )
+    """
+
+    fov = "_".join(position_key)
+    click.echo(f"Processing FOV: {fov.replace('_', '/')}")
+    # tracking input images
+    foreground_mask, contour_gradient_map = data_preprocessing(
+        position_key, input_images, z_slices, blank_frames_path
+    )
+
     # Define path to save the tracking database and graph
     filename = str(output_dirpath).split("/")[-1].split(".")[0]
     databaset_path = output_dirpath.parent / f"{filename}_config_tracking" / f"{fov}"
@@ -499,35 +774,69 @@ def track_one_position(
 
     # Save the tracks graph to a CSV file
     csv_path = output_dirpath / Path(*position_key) / f"tracks_{fov}.csv"
+    os.makedirs(csv_path.parent, exist_ok=True)
+
     tracks_df.to_csv(csv_path, index=False)
 
     click.echo(f"Saved tracks to: {output_dirpath / Path(*position_key)}")
 
     # Save the tracking labels
     with open_ome_zarr(output_dirpath / Path(*position_key), mode="r+") as output_dataset:
-        output_dataset[0][:, 0, 0] = np.asarray(tracking_labels)
+        output_dataset[0][:, 0, 0] = np.asarray(tracking_labels, dtype=np.uint32)
+
 
 def track(
     output_dirpath: str,
     config_filepath: str,
     input_position_dirpaths: List[str],
-    segmentation_dirpath: str = None,
     sbatch_filepath: str = None,
     local: bool = None,
-    blank_frame_csv_path: str = None,
+    blank_frames_path: str = None,
 ) -> None:
-
     """
-    Track nuclei and membranes in using virtual staining nuclei and membranes data.
-    Parameters:
+    Launch tracking jobs for multiple imaging positions using foreground and contour data.
 
-    - output_dirpath (str): Path to save tracking results, including labels and tracks.
-    - config_filepath (str): Path to the tracking configuration file.
-    - input_position_dirpaths (str): Path to the virtual staining dataset in OME-Zarr format.
-    - segmentation_paths (str): Path to the segmentation dataset in OME-Zarr format.
-    - sbatch_filepath (str): Path to the SLURM submission script.
-    - local (bool): If True, run the tracking locally.
-    - blank_frame_csv_path (str): Path to the blank frame CSV file.
+    This function orchestrates the tracking of cell trajectories across multiple fields of view (FOVs).
+    It supports any imaging modality, as long as preprocessing produces the required foreground mask
+    and contour gradient map for tracking.
+        Parameters
+    ----------
+    output_dirpath : str
+        Path to the Zarr store where output labeled segmentations and track data will be saved.
+    config_filepath : str
+        Path to the YAML configuration file containing tracking and preprocessing settings.
+    input_position_dirpaths : list of str
+        List of directory paths (one per FOV) pointing to input Zarr datasets to be processed.
+    sbatch_filepath : str, optional
+        Path to a SLURM batch script to override default SLURM job parameters. If not provided,
+        defaults for CPUs, memory, and parallelism are used.
+    local : bool, optional
+        If True, runs all tracking jobs sequentially on the local machine instead of submitting via SLURM.
+    blank_frames_path : str, optional
+        Path to a CSV file specifying which frames are blank and should be filled per FOV.
+
+    Returns
+    -------
+    None
+        Results are written directly to disk in the `output_dirpath`. Also logs Submitit job IDs.
+
+    Notes
+    -----
+    - This function mirrors the input Zarr structure in the output store.
+    - Tracking is distributed per FOV using Submitit SLURM array jobs by default.
+    - Tracking configurations (`n_workers`, scale, and output shapes) are inferred from the first FOV.
+    - Output logs are saved to `output_dirpath/../slurm_output/submitit_jobs_ids.log`.
+
+    Examples
+    --------
+    >>> track(
+    ...     output_dirpath="output.zarr",
+    ...     config_filepath="config_tracking.yml",
+    ...     input_position_dirpaths=["input.zarr/A/1/1", "input.zarr/A/1/2"],
+    ...     sbatch_filepath="track_job.sbatch",
+    ...     local=False,
+    ...     blank_frames_path="blank_frames.csv"
+    ... )
     """
 
     output_dirpath = Path(output_dirpath)
@@ -535,22 +844,50 @@ def track(
     settings = yaml_to_model(config_filepath, TrackingSettings)
     tracking_cfg = settings.tracking_config
 
-
     # Get the shape of the data
     with open_ome_zarr(input_position_dirpaths[0]) as dataset:
         T, C, Z, Y, X = dataset.data.shape
+        scale = dataset.scale
+        shape = (T, C, Z, Y, X)
+
+    # Resolve z-slices
+    z_slices = resolve_z_slice(settings.z_slices, shape[2], settings.mode)
+
+    # Define output metadata
+    if settings.mode == "2D":
+        output_shape = (T, 1, 1, Y, X)
+        track_scale = scale[-2:]
+    else:
+        output_shape = (T, 1, Z, Y, X)
+        track_scale = scale[-3:]
+
+    output_metadata = {
+        "shape": output_shape,
+        "chunks": None,
+        "scale": scale,
+        "channel_names": [f"{settings.target_channel}_labels"],
+        "dtype": np.uint32,
+    }
+
+    # Create the output zarr mirroring input_position_dirpaths
+    create_empty_hcs_zarr(
+        store_path=output_dirpath,
+        position_keys=[p.parts[-3:] for p in input_position_dirpaths],
+        **output_metadata,
+    )
 
     # Estimate resources
     num_cpus, gb_ram_per_cpu = estimate_resources(
         shape=[T, C, Z, Y, X], ram_multiplier=16, max_num_cpus=16
     )
+
+    # Use the number of CPUs and RAM per CPU in the tracking configuration
     tracking_cfg["segmentation_config"]["n_workers"] = num_cpus
     tracking_cfg["linking_config"]["n_workers"] = num_cpus
 
     # Create default instance
     default_config = MainConfig()
     tracking_cfg = update_model(default_config, tracking_cfg)
-
 
     # Prepare SLURM arguments
     slurm_args = {
@@ -559,7 +896,8 @@ def track(
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,  # process up to 100 positions at a time
         "slurm_time": 60,
-        "slurm_partition": "gpu",
+        "slurm_partition": "preempted",
+        "slurm_num_gpus": 1,
         "slurm_use_srun": False,
     }
 
@@ -584,16 +922,16 @@ def track(
 
     with executor.batch():
         for input_position_path in input_position_dirpaths:
+            position_key = input_position_path.parts[-3:]
             job = executor.submit(
                 track_one_position,
-                input_path=input_position_path,
-                segmentation_dirpath=segmentation_dirpath,
+                position_key=position_key,
                 output_dirpath=output_dirpath,
                 tracking_config=tracking_cfg,
-                preprocessing_functions=settings.preprocessing_functions,
-                blank_frame_csv_path=blank_frame_csv_path, 
-                input_channels=settings.input_channels,
-                mode=settings.mode,
+                input_images=settings.input_images,
+                blank_frames_path=blank_frames_path,
+                z_slices=z_slices,
+                scale=track_scale,
             )
 
             jobs.append(job)
@@ -612,40 +950,32 @@ def track(
 @sbatch_filepath()
 @local()
 @click.option(
-    "-segmentation_dirpath",
-    "-s",
-    required=False,
-    default=None,
-    type=str,
-    help=" Path to the segmentation dataset in OME-Zarr format. If not provided, no segmentation will be used.",
-)
-@click.option(
-    "-blank_frame_csv_path",
+    "--blank_frames_path",
     "-f",
     required=False,
     default=None,
     type=str,
-    help=" Blank Frame CSV path, if there are blanck frames in the data and the csv was previous gerenrated.",
+    help="Path to blank frame CSV file, if available.",
 )
 def track_cli(
     input_position_dirpaths: List[str],
-    segmentation_dirpath: List[str],
     output_dirpath: str,
     config_filepath: str,
     sbatch_filepath: str = None,
     local: bool = None,
-    blank_frame_csv_path: str = None,
+    blank_frames_path: str = None,
 ) -> None:
 
     """
-    Track nuclei and membranes in using virtual staining nuclei and membranes data.
+    Track objects in 2D or 3D time-lapse microscopy data using configurable preprocessing.
 
-    This function applied tracking to the virtual staining data for each position in the input.
-    To use this function, install the lib as pip install -e .["track"]
+    This command applies preprocessing, handles optional blank frame filling, and performs
+    object tracking on each position using the Ultrack library. Compatible with any image
+    modality as long as it produces 'foreground' and 'contour' inputs.
 
     Example usage:
 
-    biahub track -i virtual_staining.zarr/*/*/* -l lf_stabilize.zarr -o output.zarr -c config_tracking.yml
+    biahub track -i virtual_staining.zarr/*/*/* -o output.zarr -c config_tracking.yml -f blank_frames.csv
 
     """
 
@@ -653,8 +983,11 @@ def track_cli(
         output_dirpath=output_dirpath,
         config_filepath=config_filepath,
         input_position_dirpaths=input_position_dirpaths,
-        segmentation_dirpath=segmentation_dirpath,
         sbatch_filepath=sbatch_filepath,
         local=local,
-        blank_frame_csv_path=blank_frame_csv_path,
+        blank_frames_path=blank_frames_path,
     )
+
+
+if __name__ == "__main__":
+    track_cli()  # pylint: disable=no-value-for-parameter

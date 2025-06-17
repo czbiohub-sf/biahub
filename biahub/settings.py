@@ -1,6 +1,6 @@
 import warnings
 
-from typing import Any, Dict, Literal, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -23,17 +23,24 @@ class MyBaseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class ProcessingFunctions(BaseModel):
+class ProcessingFunctions(MyBaseModel):
     function: str
-    input_channel: list[str]
+    input_channels: Optional[List[str]] = None  # Optional
     kwargs: Dict[str, Any] = {}
-    z_slices: Optional[Tuple[int, int]] = None  # Used for projection functions only
+    per_timepoint: bool = True
+
+
+class ProcessingInputChannel(MyBaseModel):
+    path: Union[str, List[str], None]
+    channels: Dict[str, List[ProcessingFunctions]]
+
 
 class TrackingSettings(MyBaseModel):
+    target_channel: str = "nuclei_prediction"
     mode: Literal["2D", "3D"] = "2D"
-    input_channels: Dict[str, list[str]] = {}
+    z_slices: Optional[Tuple[int, int]] = None
+    input_images: List[ProcessingInputChannel]
     tracking_config: Dict[str, Any] = {}
-    preprocessing_functions: Dict[str, ProcessingFunctions] = {}
 
 
 class EstimateRegistrationSettings(MyBaseModel):

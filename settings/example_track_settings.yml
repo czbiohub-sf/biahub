@@ -1,83 +1,86 @@
-# Description: Example tracking settings file for the biahub track CLI.
+# Tracking mode: either "2D" (uses projected Z-slices) or "3D" (full volumetric).
 mode: "2D"
-input_channels:
-  preprocessing:
-    - nuclei_prediction
-    - membrane_prediction
-  tracking:
-    - nuclei_prediction
+
+# Z-slice range to extract. Use [0, 0] to auto-compute a centered slice.
+z_slices: [0, 0]
+
+# Name of the target channel used to name the tracking output label channel.
+target_channel: nuclei_prediction
+
+# Input image configurations.
+# Each entry defines one dataset with its path and channels to process.
+input_images:
+
+  # First input: predicted nuclei and membrane channels.
+  - path: /path/to/virtual_staining.zarr/*/*/*
+    channels:
+      nuclei_prediction:
+        # Z-projection using mean intensity
+        - function: np.mean
+          kwargs:
+            axis: 1
+          per_timepoint: False
+
+        # Normalize intensity with gamma correction
+        - function: ultrack.imgproc.normalize
+          kwargs:
+            gamma: 0.7
+
+      membrane_prediction:
+        - function: np.mean
+          kwargs:
+            axis: 1
+          per_timepoint: False
+
+        - function: ultrack.imgproc.normalize
+          kwargs:
+            gamma: 0.7
+
+  # Optional: load label masks directly with or without processing.
+  - path: /path/to/segmentation.zarr/*/*/*
+    channels:
+      nuclei_prediction_labels: []
+
+  # Virtual channel: computed dynamically using prior outputs.
+  - path: null
+    channels:
+      foreground:
+        - function: ultrack.imgproc.detect_foreground
+          input_channels:
+            - nuclei_prediction
+          kwargs:
+            sigma: 90
+
+      contour:
+        - function: biahub.cli.track.mem_nuc_contour
+          input_channels:
+            - nuclei_prediction
+            - membrane_prediction
+          kwargs: {}
+
+# Configuration for Ultrack tracking algorithm.
+# See: https://royerlab.github.io/ultrack/
+
 tracking_config:
-# Define tracking parameters, use ultrack documentation for more information: https://royerlab.github.io/ultrack/
+
+  # Segmentation parameters: controls object detection from foreground/contour maps.
   segmentation_config:
-    # Minimum and maximum allowed area (in pixels) for detected objects.
-    min_area: 2100
-    max_area: 80000
-    # Number of workers (threads) used for segmentation processing.
-    n_workers: 10
-    # Minimum frontier strength for segmentation boundaries.
-    min_frontier: 0.4
-    # Maximum allowable noise level in segmentation.
-    max_noise: 0.05
+    min_area: 2100            # Minimum object area (pixels)
+    max_area: 80000           # Maximum object area (pixels)
+    n_workers: 10             # Number of CPU threads for segmentation
+    min_frontier: 0.4         # Minimum frontier strength for boundaries
+    max_noise: 0.05           # Maximum tolerated noise in segmentation
+
+  # Linking parameters: controls how detections are connected across timepoints.
   linking_config:
-    # Number of workers (threads) used for linking objects between frames.
-    n_workers: 10
-    # Maximum allowed distance between objects to consider them linked.
-    max_distance: 15
-    # Weight assigned to distance-based linking.
-    distance_weight: -0.0001
-    # Maximum number of neighboring objects considered for linking.
-    max_neighbors: 3
+    n_workers: 10             # Number of CPU threads for linking
+    max_distance: 15          # Max distance (in pixels) to link objects
+    distance_weight: -0.0001  # Cost penalty per pixel of distance
+    max_neighbors: 3          # Maximum number of neighbors to evaluate per object
+
+  # Global tracking parameters: controls optimization across time.
   tracking_config:
-    # Number of threads allocated for tracking computations.
-    n_threads: 14
-    # Weighting factors for object disappearance, appearance, and division in tracking.
-    disappear_weight: -0.0001
-    appear_weight: -0.001
-    division_weight: -0.0001
-
-preprocessing_functions:
-# Additional preprocessing functions before tracking.
-  projection_nuclei:
-    function: np.mean
-    input_channel:
-      - nuclei_prediction
-    kwargs:
-      axis: 1
-    z_slices: [0, 0]
-
-  projection_membrane:
-    function: np.mean
-    input_channel:
-      - membrane_prediction
-    kwargs:
-      axis: 1
-    z_slices: [0, 0]
-
-  normalize_nuclei:
-    function: ultrack.imgproc.normalize
-    input_channel:
-      - nuclei_prediction
-    kwargs:  # Add additional parameters as required.
-      gamma: 0.7  
-
-  normalize_membrane:
-    function: ultrack.imgproc.normalize
-    input_channel:
-      - membrane_prediction
-    kwargs: # Add additional parameters as required.
-      gamma: 0.7  
-  foreground:
-    # Function for foreground detection.
-    function: ultrack.imgproc.detect_foreground
-    input_channel:
-      - nuclei_prediction
-    kwargs: # Add additional parameters as required.
-      sigma: 90  # Gaussian blur standard deviation for foreground detection.
-
-  contour:
-    # Function for computing the contour.
-    function: biahub.cli.track.mem_nuc_contour
-    input_channel:
-      - nuclei_prediction
-      - membrane_prediction
-    kwargs: {}  # Add additional parameters as required.
+    n_threads: 14             # Threads used for global tracking optimization
+    disappear_weight: -0.0001  # Penalty for object disappearance
+    appear_weight: -0.001      # Penalty for new object appearance
+    division_weight: -0.0001   # Penalty (or reward) for cell division events
