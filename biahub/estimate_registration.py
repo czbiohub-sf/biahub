@@ -47,6 +47,7 @@ from biahub.register import (
     convert_transform_to_numpy,
     get_3D_rescaling_matrix,
     get_3D_rotation_matrix,
+    find_overlapping_volume,
 )
 from biahub.settings import (
     EstimateRegistrationSettings,
@@ -77,7 +78,7 @@ def plot_translations(transforms_zyx: np.ndarray, output_filepath: Path):
     z_transforms = transforms_zyx[:, 0, 3]
     y_transforms = transforms_zyx[:, 1, 3]
     x_transforms = transforms_zyx[:, 2, 3]
-    fig, axs = plt.subplots(3, 1, figsize=(10, 10))
+    _, axs = plt.subplots(3, 1, figsize=(10, 10))
     axs[0].plot(z_transforms)
     axs[0].set_title("Z-Translation")
     axs[1].plot(x_transforms)
@@ -539,28 +540,43 @@ def ants_registration(
     validation_tolerance: float = 100.0,
     interpolation_window_size: int = 3,
     interpolation_type: str = 'linear',
-    num_processes: int = 8,
     verbose: bool = False,
     output_folder_path: Path = None,
     cluster: str = 'local',
     sbatch_filepath: Path = None,
 ) -> list:
+    
+
     T, C, Z, Y, X = source_data_tczyx.shape
     # # Crop only to the overlapping region, zero padding interfereces with registration
-    # z_slice, y_slice, x_slice = find_overlapping_volume(
-    #     target_channel_tczyx.shape[-3:], source_channel_tczyx.shape[-3:], approx_tform
-    # )
+    z_slice, y_slice, x_slice = find_overlapping_volume(
+        target_data_tczyx.shape[-3:], source_data_tczyx.shape[-3:], approx_tform
+    )
 
     # # Crop 10% more to account for shifts during XYZ stabilization
-    # z_slice = slice(
-    #     int(z_slice.start * 1.2), int(z_slice.stop * 0.8)
-    # )
-    # y_slice = slice(
-    #     int(y_slice.start * 1.2), int(y_slice.stop * 0.8)
-    # )
-    # x_slice = slice(
-    #     int(x_slice.start * 1.2), int(x_slice.stop * 0.8)
-    # )
+    z_slice = slice(
+        int(z_slice.start * 1.2), int(z_slice.stop * 0.8)
+    )
+    y_slice = slice(
+        int(y_slice.start * 1.2), int(y_slice.stop * 0.8)
+    )
+    x_slice = slice(
+        int(x_slice.start * 1.2), int(x_slice.stop * 0.8)
+    )
+
+
+    click.echo(
+        f"Cropping channels to Z: {z_slice.start}:{z_slice.stop}, "
+        f"Y: {y_slice.start}:{y_slice.stop}, "
+        f"X: {x_slice.start}:{x_slice.stop}"
+    )
+    target_data_tczyx = target_data_tczyx[
+        :, target_channel_index, z_slice, y_slice, x_slice
+    ]  # Crop target channel
+    source_data_tczyx = source_data_tczyx[
+        :, source_channel_index, z_slice, y_slice, x_slice
+    ]  # Crop source channel
+
 
     # Note: cropping is applied after registration with approx_tform
 
@@ -568,7 +584,7 @@ def ants_registration(
   # Compute transformations in parallel
 
     num_cpus, gb_ram_per_cpu = estimate_resources(
-        shape=(T, 1, Z, Y, X), ram_multiplier=5, max_num_cpus=16
+        shape=(T, 2, Z, Y, X), ram_multiplier=16, max_num_cpus=16
     )
 
     # Prepare SLURM arguments
@@ -596,15 +612,6 @@ def ants_registration(
     output_transforms_path = output_folder_path / "xyz_transforms"
     output_transforms_path.mkdir(parents=True, exist_ok=True)
 
-    z_slice = slice(9, 85)  # DEBUG
-    y_slice = slice(400, 1300)
-    x_slice = slice(200, -200)
-
-    click.echo(
-        f"Cropping channels to Z: {z_slice.start}:{z_slice.stop}, "
-        f"Y: {y_slice.start}:{y_slice.stop}, "
-        f"X: {x_slice.start}:{x_slice.stop}"
-    )
 
     click.echo('Computing registration transforms...')
     # NOTE: ants is mulitthreaded so no need for multiprocessing here
@@ -1145,26 +1152,6 @@ def _get_tform_from_beads(
         min_distance=target_min_distance,
         verbose=verbose,
     )
-
-    # output_data_path = Path(
-    #     "/hpc/projects/intracellular_dashboard/viral-sensor/2025_05_01_A549_DENV_sensor_DENV/1-preprocess/light-sheet/raw/1-register/beads/lf_mask.zarr"
-    # )
-    # position_key = ("C", "1", "000000")  # Must be a tuple of strings
-    # with open_ome_zarr(output_data_path / Path(*position_key)) as dirt_mask_ds:
-    #     dirt_mask_load = np.asarray(dirt_mask_ds.data[0, 0])
-
-    # # Keep only peaks whose (y, x) column is clean across all Z slices
-    # target_peaks_filtered = []
-    # for peak in target_peaks:
-    #     z, y, x = peak.astype(int)
-    #     if (
-    #         0 <= y < dirt_mask_load.shape[1]
-    #         and 0 <= x < dirt_mask_load.shape[2]
-    #         and not dirt_mask_load[:, y, x].any()  # True if all Z are clean at (y, x)
-    #     ):
-    #         target_peaks_filtered.append(peak)
-
-    # target_peaks = np.array(target_peaks_filtered)
 
     # Skip if there is no peak detected
     if len(source_peaks) < 2 or len(target_peaks) < 2:
