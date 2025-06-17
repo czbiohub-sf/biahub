@@ -73,6 +73,66 @@ COLOR_CYCLE = [
     "magenta",
 ]
 
+def evaluate_transforms(
+    transforms: ArrayLike,
+    shape_zyx: Tuple[int, int, int],
+    validation_window_size: int,
+    validation_tolerance: float,
+    interpolation_windon_size: int,
+    interpolation_type: str = "linear",
+    verbose: bool = False,
+) -> ArrayLike:
+    Z, Y, X = shape_zyx
+    # check if transform is list or np.ndarray
+    if not isinstance(transforms, list):
+        transforms = transforms.tolist()
+
+    # Validate transforms
+    transforms = _validate_transforms(
+        transforms=transforms,
+        window_size=validation_window_size,
+        tolerance=validation_tolerance,
+        Z=Z,
+        Y=Y,
+        X=X,
+        verbose=verbose,
+    )
+    # Interpolate missing transforms
+    transforms = _interpolate_transforms(
+        transforms=transforms,
+        window_size=interpolation_windon_size,
+        interpolation_type=interpolation_type,
+        verbose=verbose,
+    )
+    return transforms
+
+
+def save_transforms(
+    model,
+    transforms: list,
+    output_filepath_settings: Path,
+    output_filepath_plot: Path = None,
+    verbose: bool = False,
+):
+    """
+    Save the transforms to a yaml file and plot the translations.
+    """
+    model.affine_transform_zyx_list = transforms
+
+    # Save the combined matrices
+    output_filepath_settings.parent.mkdir(parents=True, exist_ok=True)
+    # check if output_filepath_settings end with yml or yaml
+    if output_filepath_settings.suffix not in [".yml", ".yaml"]:
+        output_filepath_settings = output_filepath_settings.with_suffix(".yml")
+
+    model_to_yaml(model, output_filepath_settings)
+
+    if verbose and output_filepath_plot is not None:
+        if output_filepath_plot.suffix not in [".png"]:
+            output_filepath_plot = output_filepath_plot.with_suffix(".png")
+        output_filepath_plot.parent.mkdir(parents=True, exist_ok=True)
+        plot_translations(transforms, output_filepath_plot)
+
 
 def plot_translations(transforms_zyx: np.ndarray, output_filepath: Path):
     z_transforms = transforms_zyx[:, 0, 3]
@@ -394,10 +454,6 @@ def beads_based_registration(
     match_max_ratio: float = 0.6,
     transform_type: str = 'affine',
     hungarian_knn_k: int = 5,
-    validation_window_size: int = 10,
-    validation_tolerance: float = 100.0,
-    interpolation_window_size: int = 3,
-    interpolation_type: str = 'linear',
     verbose: bool = False,
     cluster: bool = False,
     sbatch_filepath: Path = None,
@@ -509,23 +565,6 @@ def beads_based_registration(
 
     shutil.rmtree(output_transforms_path)
 
-    # # Validate and filter transforms
-    transforms = _validate_transforms(
-        transforms=transforms,
-        window_size=validation_window_size,
-        tolerance=validation_tolerance,
-        Z=Z,
-        Y=Y,
-        X=X,
-        verbose=verbose,
-    )
-    # Interpolate missing transforms
-    transforms = _interpolate_transforms(
-        transforms=transforms,
-        window_size=interpolation_window_size,
-        interpolation_type=interpolation_type,
-        verbose=verbose,
-    )
     return transforms
 
 
@@ -536,10 +575,6 @@ def ants_registration(
     target_channel_index: int,
     approx_tform: np.ndarray,
     sobel_filter: bool = False,
-    validation_window_size: int = 10,
-    validation_tolerance: float = 100.0,
-    interpolation_window_size: int = 3,
-    interpolation_type: str = 'linear',
     verbose: bool = False,
     output_folder_path: Path = None,
     cluster: str = 'local',
@@ -620,7 +655,7 @@ def ants_registration(
     with executor.batch():
         for t in range(1, T, 1):
             job = executor.submit(
-                _optimize_registration
+                _optimize_registration,
                 source_data_tczyx[t],
                 target_data_tczyx[t],
                 initial_tform=approx_tform,
@@ -662,34 +697,9 @@ def ants_registration(
         raise ValueError(
             f"Number of transforms {len(transforms)} does not match number of timepoints {T}"
         )
-    if output_folder_path is not None:
-        with open(Path(output_folder_path, "transforms.pkl"), "wb") as f:
-            pickle.dump(transforms, f)
+    shutil.rmtree(output_transforms_path)
 
-    click.echo(f"Before validate Transforms:\n{transforms[0]}")
-
-    # # Validate and filter transforms
-    transforms = _validate_transforms(
-        transforms=transforms,
-        window_size=validation_window_size,
-        tolerance=validation_tolerance,
-        Z=Z,
-        Y=Y,
-        X=X,
-        verbose=verbose,
-    )
-    click.echo(f"After validation transforms:\n{transforms[0]}")
-
-    # Interpolate missing transforms
-    transforms = _interpolate_transforms(
-        transforms=transforms,
-        window_size=interpolation_window_size,
-        interpolation_type=interpolation_type,
-        verbose=verbose,
-    )
-    click.echo(f"After interpolation transforms: {transforms[0]}")
-
-    return np.asarray(transforms).tolist()
+    return transforms
 
 
 def _validate_transforms(transforms, Z, Y, X, window_size=10, tolerance=100.0, verbose=False):
@@ -1408,14 +1418,19 @@ def estimate_registration_cli(
             match_max_ratio=settings.match_max_ratio,
             hungarian_knn_k=settings.hungarian_knn_k,
             transform_type=affine_transform_type,
-            validation_window_size=settings.affine_transform_validation_window_size,
-            validation_tolerance=settings.affine_transform_validation_tolerance,
-            interpolation_window_size=settings.affine_transform_interpolation_window_size,
-            interpolation_type=settings.affine_transform_interpolation_type,
             verbose=settings.verbose,
             cluster=cluster,
             sbatch_filepath=sbatch_filepath,
             output_folder_path=output_dir,
+        )
+        transforms = evaluate_transforms(
+            transforms=transforms,
+            shape_zyx=source_channel_data.shape[-3:],
+            validation_window_size=settings.validation_window_size,
+            validation_tolerance=settings.validation_tolerance,
+            interpolation_windon_size=settings.interpolation_window_size,
+            interpolation_type=settings.interpolation_type,
+            verbose=settings.verbose,
         )
 
         model = StabilizationSettings(
@@ -1426,13 +1441,13 @@ def estimate_registration_cli(
             time_indices='all',
             output_voxel_size=voxel_size,
         )
-
-        if settings.verbose:
-            click.echo("Plotting translations over time")
-            plot_translations(
-                np.array(transforms),
-                output_dir / "translation_plots" / "beads_registration.png",
-            )
+        save_transforms(
+            model=model,
+            transforms=transforms,
+            output_filepath_settings=output_dir / "registration_settings.yml",
+            output_filepath_plot=output_dir / "translation_plots" / "beads_registration.png",
+            verbose=settings.verbose,
+        )
 
     elif settings.estimation_method == "ants":
         transforms = ants_registration(
@@ -1442,13 +1457,18 @@ def estimate_registration_cli(
             target_channel_index=target_channel_index,
             approx_tform=np.asarray(settings.approx_affine_transform),
             sobel_filter=settings.sobel_filter,
-            validation_window_size=settings.affine_transform_validation_window_size,
-            validation_tolerance=settings.affine_transform_validation_tolerance,
-            interpolation_window_size=settings.affine_transform_interpolation_window_size,
-            interpolation_type=settings.affine_transform_interpolation_type,
             num_processes=num_processes,
             verbose=settings.verbose,
             output_folder_path=output_dir,
+        )
+        transforms = evaluate_transforms(
+            transforms=transforms,
+            shape_zyx=source_channel_data.shape[-3:],
+            validation_window_size=settings.validation_window_size,
+            validation_tolerance=settings.validation_tolerance,
+            interpolation_windon_size=settings.interpolation_window_size,
+            interpolation_type=settings.interpolation_type,
+            verbose=settings.verbose,
         )
 
         model = StabilizationSettings(
@@ -1458,6 +1478,13 @@ def estimate_registration_cli(
             affine_transform_zyx_list=transforms,
             time_indices='all',
             output_voxel_size=voxel_size,
+        )
+
+        save_transforms(
+            model=model,
+            transforms=transforms,
+            output_filepath_settings=output_dir / "registration_settings.yml",
+            verbose=settings.verbose,
         )
     else:
         # Register based on user input
@@ -1471,16 +1498,30 @@ def estimate_registration_cli(
             similarity=True if affine_transform_type == "similarity" else False,
             pre_affine_90degree_rotation=affine_90degree_rotation,
         )
-
+        transforms = evaluate_transforms(
+            transforms=transform,
+            shape_zyx=source_channel_data.shape[-3:],
+            validation_window_size=settings.validation_window_size,
+            validation_tolerance=settings.validation_tolerance,
+            interpolation_windon_size=settings.interpolation_window_size,
+            interpolation_type=settings.interpolation_type,
+            verbose=settings.verbose,
+        )
+        
         model = RegistrationSettings(
             source_channel_names=registration_source_channels,
             target_channel_name=registration_target_channel,
-            affine_transform_zyx=transform.tolist(),
+            affine_transform_zyx=transforms,
+        )
+        save_transforms(
+            model=model,
+            transforms=transforms,
+            output_filepath_settings=output_dir / "registration_settings.yml",
+            output_filepath_plot=output_dir / "translation_plots" / "user_assisted_registration.png",
+            verbose=settings.verbose,
         )
 
-    click.echo(f"Writing registration parameters to {output_filepath}")
-    model_to_yaml(model, output_filepath)
-
+    click.echo(f"Registration settings saved to {output_dir}")
 
 if __name__ == "__main__":
     estimate_registration_cli()
