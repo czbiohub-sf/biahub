@@ -535,7 +535,6 @@ def ants_registration(
     target_channel_index: int,
     approx_tform: np.ndarray,
     sobel_filter: bool = False,
-    # output_folder_path: Path,
     validation_window_size: int = 10,
     validation_tolerance: float = 100.0,
     interpolation_window_size: int = 3,
@@ -543,7 +542,8 @@ def ants_registration(
     num_processes: int = 8,
     verbose: bool = False,
     output_folder_path: Path = None,
-    # cluster: str = 'local',
+    cluster: str = 'local',
+    sbatch_filepath: Path = None,
 ) -> list:
     T, C, Z, Y, X = source_data_tczyx.shape
     # # Crop only to the overlapping region, zero padding interfereces with registration
@@ -563,6 +563,39 @@ def ants_registration(
     # )
 
     # Note: cropping is applied after registration with approx_tform
+
+
+  # Compute transformations in parallel
+
+    num_cpus, gb_ram_per_cpu = estimate_resources(
+        shape=(T, 1, Z, Y, X), ram_multiplier=5, max_num_cpus=16
+    )
+
+    # Prepare SLURM arguments
+    slurm_args = {
+        "slurm_job_name": "estimate_focus_z",
+        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
+        "slurm_cpus_per_task": num_cpus,
+        "slurm_array_parallelism": 100,
+        "slurm_time": 60,
+        "slurm_partition": "preempted",
+    }
+
+    if sbatch_filepath:
+        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
+
+    output_folder_path.mkdir(parents=True, exist_ok=True)
+    slurm_out_path = output_folder_path / "slurm_output"
+    slurm_out_path.mkdir(parents=True, exist_ok=True)
+
+    # Submitit executor
+    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
+    executor.update_parameters(**slurm_args)
+
+    click.echo(f"Submitting SLURM focus estimation jobs with resources: {slurm_args}")
+    output_transforms_path = output_folder_path / "xyz_transforms"
+    output_transforms_path.mkdir(parents=True, exist_ok=True)
+
     z_slice = slice(9, 85)  # DEBUG
     y_slice = slice(400, 1300)
     x_slice = slice(200, -200)
@@ -575,32 +608,57 @@ def ants_registration(
 
     click.echo('Computing registration transforms...')
     # NOTE: ants is mulitthreaded so no need for multiprocessing here
-    transforms = []
-    for t in range(T):
-        click.echo(f"Processing timepoint {t}...")
-        tform = _optimize_registration(
-            source_data_tczyx[t],
-            target_data_tczyx[t],
-            initial_tform=approx_tform,
-            source_channel_index=source_channel_index,
-            target_channel_index=target_channel_index,
-            z_slice=z_slice,
-            y_slice=y_slice,
-            x_slice=x_slice,
-            clip=True,
-            sobel_fitler=sobel_filter,
-            verbose=False,
-        )
-        transforms.append(tform)
+  # Submit jobs
+    jobs = []
+    with executor.batch():
+        for t in range(1, T, 1):
+            job = executor.submit(
+                _optimize_registration
+                source_data_tczyx[t],
+                target_data_tczyx[t],
+                initial_tform=approx_tform,
+                source_channel_index=source_channel_index,
+                target_channel_index=target_channel_index,
+                z_slice=z_slice,
+                y_slice=y_slice,
+                x_slice=x_slice,
+                clip=True,
+                sobel_fitler=sobel_filter,
+                verbose=False,
+                slurm=True,
+                output_folder_path=output_transforms_path,
+                t_idx=t,
+            )
+            jobs.append(job)
 
-    # DEBUG
+    # Save job IDs
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_path = slurm_out_path / f"job_ids_{timestamp}.log"
+    with open(log_path, "w") as log_file:
+        for job in jobs:
+            log_file.write(f"{job.job_id}\n")
+    # Wait for all jobs to finish
+    job_ids = [str(j.job_id) for j in jobs]
+    wait_for_jobs_to_finish(job_ids)
+
+    transforms = []
+    for t in range(1, T):
+        file_path = output_transforms_path / f"{t}.npy"
+        if not os.path.exists(file_path):
+            transforms.append(None)
+            click.echo(f"Transform for timepoint {t} not found. Using None.")
+        else:
+            T_zyx_shift = np.load(file_path).tolist()
+            transforms.append(T_zyx_shift)
+
+    if len(transforms) != T:
+        raise ValueError(
+            f"Number of transforms {len(transforms)} does not match number of timepoints {T}"
+        )
     if output_folder_path is not None:
         with open(Path(output_folder_path, "transforms.pkl"), "wb") as f:
             pickle.dump(transforms, f)
-    # transforms = np.load(
-    #     "/hpc/projects/intracellular_dashboard/organelle_dynamics/rerun/2025_04_17_A549_H2B_CAAX_DENV/1-preprocess/light-sheet/raw/1-register/transforms.npy",
-    # )
-    # transforms = [t.tolist() if not np.isnan(t).any() else None for t in transforms]
+
     click.echo(f"Before validate Transforms:\n{transforms[0]}")
 
     # # Validate and filter transforms
