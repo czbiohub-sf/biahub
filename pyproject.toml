@@ -25,7 +25,7 @@ dependencies = [
   "napari",
   "PyQt6",
   "natsort",
-  "numpy<2",
+  "numpy",
   "markdown",
   "monai",
   "pandas~=2.1",
