@@ -6,7 +6,7 @@ name = "biahub"
 description = "Bioimage analysis hub."
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.10, <4.0"
+requires-python = ">=3.11, <4.0"
 
 # the dynamically determined project metadata attributes
 dynamic = ["version"]
@@ -15,12 +15,12 @@ classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Science/Research",
   "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
 ]
 
 # list package dependencies here
 dependencies = [
-  "iohub @ git+https://github.com/czbiohub-sf/iohub@v0.2.0b0",
+  "iohub>=0.2,<0.3",
   "matplotlib",
   "napari",
   "PyQt6",
@@ -34,7 +34,7 @@ dependencies = [
   "submitit",
   "torch>=2.3",
   "tqdm",
-  "waveorder",
+  "waveorder==3.0.0a0",
   "largestinteriorrectangle",
   "antspyx",
   "pystackreg",
