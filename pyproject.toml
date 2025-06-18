@@ -32,7 +32,7 @@ dependencies = [
   "pydantic<3",
   "scipy",
   "submitit",
-  "torch>=2.3",
+  "torch",
   "tqdm",
   "waveorder==3.0.0a0",
   "largestinteriorrectangle",
