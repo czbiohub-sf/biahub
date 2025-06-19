@@ -210,9 +210,9 @@ def get_output_paths(
             modified_path_strings = list(path_strings)
 
             # Append the suffix to the column part
-            modified_path_strings[
-                1
-            ] = f"{modified_path_strings[1]}d{position_name_counts[position_name]}"
+            modified_path_strings[1] = (
+                f"{modified_path_strings[1]}d{position_name_counts[position_name]}"
+            )
 
             # Append the modified position path
             list_output_path.append(Path(output_zarr_path, *modified_path_strings))

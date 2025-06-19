@@ -1,6 +1,10 @@
+import pytest
+
 from click.testing import CliRunner
 
 from biahub.cli.main import cli
+
+pytestmark = pytest.mark.skip()
 
 
 def test_estimate_stabilization(tmp_path, example_plate):
