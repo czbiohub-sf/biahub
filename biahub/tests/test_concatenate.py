@@ -1,5 +1,3 @@
-import pytest
-
 from iohub import open_ome_zarr
 
 from biahub.concatenate import concatenate
@@ -301,7 +299,6 @@ def test_concatenate_multiple_plates(create_custom_plate, tmp_path):
     assert output_plate["A/1/0"].data.shape[1] == 5  # channels
 
 
-@pytest.mark.skip()
 def test_concatenate_mismatched_with_cropping(create_custom_plate, tmp_path):
     """
     Test concatenating zarr stores of mismatched shapes with cropping to the
@@ -323,11 +320,15 @@ def test_concatenate_mismatched_with_cropping(create_custom_plate, tmp_path):
         Y_slice=['all', [0, 3]],
         X_slice=['all', [0, 3]],
     )
+    sbatch_filepath = tmp_path / "sbatch.txt"
+    with open(sbatch_filepath, "w") as f:
+        f.write("#SBATCH --cpus-per-task=4\n")
 
     output_path = tmp_path / "output.zarr"
     concatenate(
         settings=settings,
         output_dirpath=output_path,
+        sbatch_filepath=sbatch_filepath,
         local=True,
     )
 
