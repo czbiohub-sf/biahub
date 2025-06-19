@@ -135,8 +135,6 @@ class EstimateStabilizationSettings(MyBaseModel):
     stabilization_method: Literal[
         "beads", "phase-cross-corr", "focus-finding"
     ] = "focus-finding"
-    crop_size_xy: list[int, int] = [300, 300]
-    t_reference: Literal["first", "previous"] = "first"
     beads_match_settings: Optional[BeadsMatchSettings] = Field(
         default_factory=BeadsMatchSettings
     )

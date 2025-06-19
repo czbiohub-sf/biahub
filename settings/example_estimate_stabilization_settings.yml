@@ -17,11 +17,6 @@ stabilization_type: "z"
 #   - "phase-cross-corr": uses 3D phase correlation (only for xyz)
 stabilization_method: "focus-finding"
 
-# Timepoint reference used for alignment:
-#   - "first": align all timepoints to the first one
-#   - "previous": align each timepoint to the previous one
-t_reference: "first"
-
 # Settings for beads-based stabilization (only used if stabilization_method == "beads")
 beads_match_settings: 
   # Matching algorithm to use: "hungarian", "match_descriptor", or "mutual_information"
