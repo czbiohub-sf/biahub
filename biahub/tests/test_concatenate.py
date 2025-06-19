@@ -1,11 +1,7 @@
-import pytest
-
 from iohub import open_ome_zarr
 
 from biahub.concatenate import concatenate
 from biahub.settings import ConcatenateSettings
-
-pytestmark = pytest.mark.skip()
 
 
 def test_concatenate_channels(create_custom_plate, tmp_path, sbatch_file):
