@@ -4,7 +4,7 @@ from biahub.concatenate import concatenate
 from biahub.settings import ConcatenateSettings
 
 
-def test_concatenate_channels(create_custom_plate, tmp_path):
+def test_concatenate_channels(create_custom_plate, tmp_path, sbatch_file):
     """
     Test concatenating channels across zarr stores with the same layout
     """
@@ -31,6 +31,7 @@ def test_concatenate_channels(create_custom_plate, tmp_path):
     concatenate(
         settings=settings,
         output_dirpath=output_path,
+        sbatch_filepath=sbatch_file,
         local=True,
     )
 
@@ -46,7 +47,7 @@ def test_concatenate_channels(create_custom_plate, tmp_path):
     assert set(output_positions) == set(position_list)
 
 
-def test_concatenate_specific_channels(create_custom_plate, tmp_path):
+def test_concatenate_specific_channels(create_custom_plate, tmp_path, sbatch_file):
     """
     Test concatenating specific channels from zarr stores
     """
@@ -73,6 +74,7 @@ def test_concatenate_specific_channels(create_custom_plate, tmp_path):
     concatenate(
         settings=settings,
         output_dirpath=output_path,
+        sbatch_filepath=sbatch_file,
         local=True,
     )
 
@@ -83,7 +85,7 @@ def test_concatenate_specific_channels(create_custom_plate, tmp_path):
     assert set(output_channels) == {"DAPI", "GFP"}
 
 
-def test_concatenate_with_time_indices(create_custom_plate, tmp_path):
+def test_concatenate_with_time_indices(create_custom_plate, tmp_path, sbatch_file):
     """
     Test concatenating with specific time indices
     """
@@ -103,6 +105,7 @@ def test_concatenate_with_time_indices(create_custom_plate, tmp_path):
     concatenate(
         settings=settings,
         output_dirpath=output_path,
+        sbatch_filepath=sbatch_file,
         local=True,
     )
 
@@ -112,7 +115,7 @@ def test_concatenate_with_time_indices(create_custom_plate, tmp_path):
     assert output_plate["A/1/0"].data.shape[0] == 2
 
 
-def test_concatenate_with_single_slice_to_all(create_custom_plate, tmp_path):
+def test_concatenate_with_single_slice_to_all(create_custom_plate, tmp_path, sbatch_file):
     """
     Test concatenating with a single slice applied to all datasets
     """
@@ -148,6 +151,7 @@ def test_concatenate_with_single_slice_to_all(create_custom_plate, tmp_path):
     concatenate(
         settings=settings,
         output_dirpath=output_path,
+        sbatch_filepath=sbatch_file,
         local=True,
     )
 
@@ -156,7 +160,7 @@ def test_concatenate_with_single_slice_to_all(create_custom_plate, tmp_path):
     assert output_plate["A/1/0"].data.shape == (T, 4, 2, 3, 4)
 
 
-def test_concatenate_with_cropping(create_custom_plate, tmp_path):
+def test_concatenate_with_cropping(create_custom_plate, tmp_path, sbatch_file):
     """
     Test concatenating with cropping
     """
@@ -187,6 +191,7 @@ def test_concatenate_with_cropping(create_custom_plate, tmp_path):
     concatenate(
         settings=settings,
         output_dirpath=output_path,
+        sbatch_filepath=sbatch_file,
         local=True,
     )
 
@@ -199,7 +204,7 @@ def test_concatenate_with_cropping(create_custom_plate, tmp_path):
     assert output_X == x_end - x_start
 
 
-def test_concatenate_with_custom_chunks(create_custom_plate, tmp_path):
+def test_concatenate_with_custom_chunks(create_custom_plate, tmp_path, sbatch_file):
     """
     Test concatenating with custom chunk sizes
     """
@@ -235,6 +240,7 @@ def test_concatenate_with_custom_chunks(create_custom_plate, tmp_path):
     concatenate(
         settings=settings,
         output_dirpath=output_path,
+        sbatch_filepath=sbatch_file,
         local=True,
     )
 
@@ -246,7 +252,7 @@ def test_concatenate_with_custom_chunks(create_custom_plate, tmp_path):
     assert set(output_channels) == set(plate_1.channel_names + plate_2.channel_names)
 
 
-def test_concatenate_multiple_plates(create_custom_plate, tmp_path):
+def test_concatenate_multiple_plates(create_custom_plate, tmp_path, sbatch_file):
     """
     Test concatenating multiple plates
     """
@@ -281,6 +287,7 @@ def test_concatenate_multiple_plates(create_custom_plate, tmp_path):
     concatenate(
         settings=settings,
         output_dirpath=output_path,
+        sbatch_filepath=sbatch_file,
         local=True,
     )
 
@@ -299,7 +306,7 @@ def test_concatenate_multiple_plates(create_custom_plate, tmp_path):
     assert output_plate["A/1/0"].data.shape[1] == 5  # channels
 
 
-def test_concatenate_mismatched_with_cropping(create_custom_plate, tmp_path):
+def test_concatenate_mismatched_with_cropping(create_custom_plate, tmp_path, sbatch_file):
     """
     Test concatenating zarr stores of mismatched shapes with cropping to the
     same output shape
@@ -320,15 +327,12 @@ def test_concatenate_mismatched_with_cropping(create_custom_plate, tmp_path):
         Y_slice=['all', [0, 3]],
         X_slice=['all', [0, 3]],
     )
-    sbatch_filepath = tmp_path / "sbatch.txt"
-    with open(sbatch_filepath, "w") as f:
-        f.write("#SBATCH --cpus-per-task=4\n")
 
     output_path = tmp_path / "output.zarr"
     concatenate(
         settings=settings,
         output_dirpath=output_path,
-        sbatch_filepath=sbatch_filepath,
+        sbatch_filepath=sbatch_file,
         local=True,
     )
 
@@ -337,7 +341,7 @@ def test_concatenate_mismatched_with_cropping(create_custom_plate, tmp_path):
     assert output_plate["A/1/0"].data.shape == (3, 3, 2, 3, 3)
 
 
-def test_concatenate_with_mixed_slice_formats(create_custom_plate, tmp_path):
+def test_concatenate_with_mixed_slice_formats(create_custom_plate, tmp_path, sbatch_file):
     """
     Test concatenating with mixed slice formats like [[0,1], 'all']
     """
@@ -378,6 +382,7 @@ def test_concatenate_with_mixed_slice_formats(create_custom_plate, tmp_path):
     concatenate(
         settings=settings,
         output_dirpath=output_path,
+        sbatch_filepath=sbatch_file,
         local=True,
     )
 
@@ -391,7 +396,7 @@ def test_concatenate_with_mixed_slice_formats(create_custom_plate, tmp_path):
     )
 
 
-def test_concatenate_with_unique_positions(create_custom_plate, tmp_path):
+def test_concatenate_with_unique_positions(create_custom_plate, tmp_path, sbatch_file):
     """
     Similar to test_concatenate_channels, but with ensure_unique_positions=True
     to prevent overwriting when multiple inputs have the same position names
