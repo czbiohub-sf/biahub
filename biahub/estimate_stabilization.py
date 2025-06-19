@@ -26,7 +26,7 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import estimate_resources, model_to_yaml, yaml_to_model
+from biahub.cli.utils import estimate_resources, yaml_to_model
 from biahub.estimate_registration import (
     _get_tform_from_beads,
     evaluate_transforms,
@@ -34,8 +34,13 @@ from biahub.estimate_registration import (
     wait_for_jobs_to_finish,
 )
 from biahub.settings import (
+    AffineTransformSettings,
+    BeadsMatchSettings,
     EstimateStabilizationSettings,
+    FocusFindingSettings,
+    PhaseCrossCorrSettings,
     StabilizationSettings,
+    StackRegSettings,
 )
 
 NA_DET = 1.35
@@ -43,7 +48,7 @@ LAMBDA_ILL = 0.500
 
 
 def estimate_position_focus(
-    input_data_path: Path,
+    input_position_dirpath: Path,
     input_channel_indices: Tuple[int, ...],
     crop_size_xy: list[int, int],
     output_path_focus_csv: Path,
@@ -52,7 +57,7 @@ def estimate_position_focus(
 ) -> None:
     position, time_idx, channel, focus_idx = [], [], [], []
 
-    with open_ome_zarr(input_data_path) as dataset:
+    with open_ome_zarr(input_position_dirpath) as dataset:
         channel_names = dataset.channel_names
         T, _, Z, Y, X = dataset[0].shape
         _, _, _, _, pixel_size = dataset.scale
@@ -78,7 +83,7 @@ def estimate_position_focus(
                     f"Estimating focus for timepoint {tc_idx[0]} and channel {tc_idx[1]}: {z_idx}"
                 )
 
-            position.append(str(Path(*input_data_path.parts[-3:])))
+            position.append(str(Path(*input_position_dirpath.parts[-3:])))
             time_idx.append(tc_idx[0])
             channel.append(channel_names[tc_idx[1]])
             focus_idx.append(z_idx)
@@ -95,7 +100,7 @@ def estimate_position_focus(
     if verbose:
         click.echo(f"Saving focus finding results to {output_path_focus_csv}")
 
-    position_filename = str(Path(*input_data_path.parts[-3:])).replace("/", "_")
+    position_filename = str(Path(*input_position_dirpath.parts[-3:])).replace("/", "_")
     output_csv = output_path_focus_csv / f"{position_filename}.csv"
     df.to_csv(output_csv, index=False)
 
@@ -315,15 +320,15 @@ def get_tform_from_pcc(
 
 
 def estimate_xyz_stabilization_pcc_per_position(
-    input_data_path: Path,
+    input_position_dirpath: Path,
     output_folder_path: Path,
-    c_idx: int,
+    channel_index: int,
     crop_size_xy: list[int],
     t_reference: str = "first",
     verbose: bool = False,
 ) -> None:
-    with open_ome_zarr(input_data_path) as input_position:
-        channel_tzyx = input_position.data.dask_array()[:, c_idx]
+    with open_ome_zarr(input_position_dirpath) as input_position:
+        channel_tzyx = input_position.data.dask_array()[:, channel_index]
         T, _, Y, X = channel_tzyx.shape
 
         x_idx = slice(X // 2 - crop_size_xy[0] // 2, X // 2 + crop_size_xy[0] // 2)
@@ -360,7 +365,7 @@ def estimate_xyz_stabilization_pcc_per_position(
                 )
             click.echo(f"Transform for timepoint {t}: {transforms[-1]}")
 
-        position_filename = str(Path(*input_data_path.parts[-3:])).replace("/", "_")
+        position_filename = str(Path(*input_position_dirpath.parts[-3:])).replace("/", "_")
         np.save(
             output_folder_path / f"{position_filename}.npy",
             np.array(transforms, dtype=np.float32),
@@ -370,21 +375,26 @@ def estimate_xyz_stabilization_pcc_per_position(
 
 
 def estimate_xyz_stabilization_pcc(
-    input_data_paths: list[Path],
+    input_position_dirpaths: list[Path],
     output_folder_path: Path,
-    c_idx: int = 0,
-    crop_size_xy: list[int] = (800, 800),
-    t_reference: str = "first",
+    phase_cross_corr_settings: PhaseCrossCorrSettings,
+    channel_index: int = 0,
     sbatch_filepath: Path = None,
     cluster: str = "local",
     verbose: bool = False,
 ) -> np.ndarray:
 
+    skip_beads_fov = phase_cross_corr_settings.skip_beads_fov
+
+    input_position_dirpaths = remove_beads_fov_from_path_list(
+        input_position_dirpaths, skip_beads_fov
+    )
+
     output_folder_path.mkdir(parents=True, exist_ok=True)
     slurm_out_path = output_folder_path / "slurm_output"
     slurm_out_path.mkdir(parents=True, exist_ok=True)
 
-    with open_ome_zarr(input_data_paths[0]) as dataset:
+    with open_ome_zarr(input_position_dirpaths[0]) as dataset:
         shape = dataset.data.shape
         T, C, Y, X = shape
 
@@ -413,14 +423,14 @@ def estimate_xyz_stabilization_pcc(
 
     jobs = []
     with executor.batch():
-        for input_data_path in input_data_paths:
+        for input_position_dirpath in input_position_dirpaths:
             job = executor.submit(
                 estimate_xyz_stabilization_pcc_per_position,
-                input_data_path=input_data_path,
+                input_position_dirpath=input_position_dirpath,
                 output_folder_path=transforms_out_path,
-                c_idx=c_idx,
-                crop_size_xy=crop_size_xy,
-                t_reference=t_reference,
+                channel_index=channel_index,
+                crop_size_xy=phase_cross_corr_settings.crop_size_xy,
+                t_reference=phase_cross_corr_settings.t_reference,
                 verbose=verbose,
             )
             jobs.append(job)
@@ -448,11 +458,8 @@ def estimate_xyz_stabilization_pcc(
 
 def estimate_xyz_stabilization_with_beads(
     channel_tzyx: da.Array,
-    t_reference: str = "first",
-    match_algorithm: str = 'hungarian',
-    match_filter_angle_threshold: float = 0,
-    transform_type: str = 'euclidean',
-    xy: bool = False,
+    beads_match_settings: BeadsMatchSettings,
+    affine_transform_settings: AffineTransformSettings,
     verbose: bool = False,
     cluster: str = "local",
     sbatch_filepath: Optional[Path] = None,
@@ -489,9 +496,9 @@ def estimate_xyz_stabilization_with_beads(
 
     approx_tform = np.eye(4)
 
-    if t_reference == "first":
+    if beads_match_settings.t_reference == "first":
         target_channel_tzyx = np.broadcast_to(channel_tzyx[0], (T, Z, Y, X)).copy()
-    elif t_reference == "previous":
+    elif beads_match_settings.t_reference == "previous":
         target_channel_tzyx = np.roll(channel_tzyx, shift=-1, axis=0)
         target_channel_tzyx[0] = channel_tzyx[0]
 
@@ -539,11 +546,8 @@ def estimate_xyz_stabilization_with_beads(
                 source_channel_tzyx=channel_tzyx,
                 target_channel_tzyx=target_channel_tzyx,
                 verbose=verbose,
-                source_threshold_abs=0.8,
-                target_threshold_abs=0.8,
-                match_filter_angle_threshold=match_filter_angle_threshold,
-                match_algorithm=match_algorithm,
-                transform_type=transform_type,
+                beads_match_settings=beads_match_settings,
+                affine_transform_settings=affine_transform_settings,
                 slurm=True,
                 output_folder_path=output_transforms_path,
                 t_idx=t,
@@ -581,7 +585,7 @@ def estimate_xyz_stabilization_with_beads(
 
 
 def estimate_xy_stabilization_per_position(
-    input_data_path: Path,
+    input_position_dirpath: Path,
     output_folder_path: Path,
     df_z_focus_path: Path,
     channel_index: int,
@@ -590,7 +594,7 @@ def estimate_xy_stabilization_per_position(
     verbose: bool = False,
 ) -> np.ndarray:
 
-    with open_ome_zarr(input_data_path) as input_position:
+    with open_ome_zarr(input_position_dirpath) as input_position:
         T, _, _, Y, X = input_position.data.shape
         x_idx = slice(X // 2 - crop_size_xy[0] // 2, X // 2 + crop_size_xy[0] // 2)
         y_idx = slice(Y // 2 - crop_size_xy[1] // 2, Y // 2 + crop_size_xy[1] // 2)
@@ -598,7 +602,7 @@ def estimate_xy_stabilization_per_position(
         if verbose:
             click.echo(f"Reading focus index from {df_z_focus_path}")
         df = pd.read_csv(df_z_focus_path)
-        pos_idx = str(Path(*input_data_path.parts[-3:]))
+        pos_idx = str(Path(*input_position_dirpath.parts[-3:]))
         focus_idx = df[df["position"] == pos_idx]["focus_idx"]
         focus_idx = focus_idx.replace(0, np.nan).ffill().fillna(focus_idx.mean())
 
@@ -626,7 +630,7 @@ def estimate_xy_stabilization_per_position(
         T_zyx_shift[:, 1:4, 1:4] = T_stackreg
         T_zyx_shift[:, 0, 0] = 1
         # save the transforms as
-        position_filename = str(Path(*input_data_path.parts[-3:]))
+        position_filename = str(Path(*input_position_dirpath.parts[-3:]))
         position_filename = position_filename.replace("/", "_")
 
         np.save(
@@ -637,22 +641,29 @@ def estimate_xy_stabilization_per_position(
 
 
 def estimate_xy_stabilization(
-    input_data_paths: list[Path],
+    input_position_dirpaths: list[Path],
     output_folder_path: Path,
+    stack_reg_settings: StackRegSettings,
     channel_index: int = 0,
-    crop_size_xy: list[int] = (400, 400),
-    t_reference: str = "previous",
     sbatch_filepath: Optional[Path] = None,
     cluster: str = "local",
     verbose: bool = False,
 ) -> np.ndarray:
+    """
+    Estimate XY stabilization using StackReg.
+    """
+
+    skip_beads_fov = stack_reg_settings.skip_beads_fov
+    input_position_dirpaths = remove_beads_fov_from_path_list(
+        input_position_dirpaths, skip_beads_fov
+    )
 
     output_folder_path.mkdir(parents=True, exist_ok=True)
     slurm_out_path = output_folder_path / "slurm_output"
     slurm_out_path.mkdir(parents=True, exist_ok=True)
 
     # Estimate resources from a sample dataset
-    with open_ome_zarr(input_data_paths[0]) as dataset:
+    with open_ome_zarr(input_position_dirpaths[0]) as dataset:
         shape = dataset.data.shape  # (T, C, Z, Y, X)
 
     df_focus_path = output_folder_path / "positions_focus.csv"
@@ -663,14 +674,14 @@ def estimate_xy_stabilization(
         click.echo("Estimating Z focus positions...")
 
         estimate_z_stabilization(
-            input_data_paths=input_data_paths,
+            input_position_dirpaths=input_position_dirpaths,
             output_folder_path=output_folder_path,
             channel_index=channel_index,
-            crop_size_xy=crop_size_xy,
             sbatch_filepath=sbatch_filepath,
             cluster=cluster,
             verbose=verbose,
             estimate_z_index=True,
+            focus_finding_settings=stack_reg_settings.focus_finding_settings,
         )
 
     num_cpus, gb_ram_per_cpu = estimate_resources(
@@ -701,15 +712,15 @@ def estimate_xy_stabilization(
     # Submit jobs
     jobs = []
     with executor.batch():
-        for input_data_path in input_data_paths:
+        for input_position_dirpath in input_position_dirpaths:
             job = executor.submit(
                 estimate_xy_stabilization_per_position,
-                input_data_path=input_data_path,
+                input_position_dirpath=input_position_dirpath,
                 output_folder_path=output_transforms_path,
                 df_z_focus_path=df_focus_path,
                 channel_index=channel_index,
-                crop_size_xy=crop_size_xy,
-                t_reference=t_reference,
+                crop_size_xy=stack_reg_settings.crop_size_xy,
+                t_reference=stack_reg_settings.t_reference,
                 verbose=verbose,
             )
             jobs.append(job)
@@ -739,27 +750,40 @@ def estimate_xy_stabilization(
     return fov_transforms
 
 
+def remove_beads_fov_from_path_list(position_dirpaths: list[Path], skip_beads_fov: str):
+    if skip_beads_fov != '0':
+        # Remove the beads FOV from the input data paths
+        click.echo(f"Removing beads FOV {skip_beads_fov} from input data paths")
+        position_dirpaths = [
+            path for path in position_dirpaths if skip_beads_fov not in str(path)
+        ]
+    return position_dirpaths
+
+
 def estimate_z_stabilization(
-    input_data_paths: list[Path],
+    input_position_dirpaths: list[Path],
     output_folder_path: Path,
+    focus_finding_settings: FocusFindingSettings,
     channel_index: int,
-    crop_size_xy: list[int],
     sbatch_filepath: Optional[Path] = None,
     cluster: str = "local",
     verbose: bool = False,
     estimate_z_index: bool = False,
-    average_index: bool = False,
 ) -> np.ndarray:
     """
     Submit SLURM jobs to estimate per-position Z focus and return averaged drift matrices.
     """
+    skip_beads_fov = focus_finding_settings.skip_beads_fov
+    input_position_dirpaths = remove_beads_fov_from_path_list(
+        input_position_dirpaths, skip_beads_fov
+    )
 
     output_folder_path.mkdir(parents=True, exist_ok=True)
     slurm_out_path = output_folder_path / "slurm_output"
     slurm_out_path.mkdir(parents=True, exist_ok=True)
 
     # Estimate resources from a sample dataset
-    with open_ome_zarr(input_data_paths[0]) as dataset:
+    with open_ome_zarr(input_position_dirpaths[0]) as dataset:
         shape = dataset.data.shape  # (T, C, Z, Y, X)
 
     num_cpus, gb_ram_per_cpu = estimate_resources(
@@ -794,12 +818,12 @@ def estimate_z_stabilization(
     jobs = []
 
     with executor.batch():
-        for input_data_path in input_data_paths:
+        for input_position_dirpath in input_position_dirpaths:
             job = executor.submit(
                 estimate_position_focus,
-                input_data_path=input_data_path,
+                input_position_dirpath=input_position_dirpath,
                 input_channel_indices=(channel_index,),
-                crop_size_xy=crop_size_xy,
+                crop_size_xy=focus_finding_settings.crop_size_xy,
                 output_path_focus_csv=output_folder_focus_path,
                 output_path_transform=output_transforms_path,
                 verbose=verbose,
@@ -824,9 +848,9 @@ def estimate_z_stabilization(
     if len(focus_csvs_path) == 0:
         click.echo("No focus CSV files found. Exiting.")
         return
-    elif len(focus_csvs_path) != len(input_data_paths):
+    elif len(focus_csvs_path) != len(input_position_dirpaths):
         click.echo(
-            f"Warning: {len(focus_csvs_path)} focus CSV files found for {len(input_data_paths)} input data paths."
+            f"Warning: {len(focus_csvs_path)} focus CSV files found for {len(input_position_dirpaths)} input data paths."
         )
 
     df = pd.concat([pd.read_csv(f) for f in focus_csvs_path])
@@ -850,7 +874,7 @@ def estimate_z_stabilization(
         shutil.rmtree(output_transforms_path)
         return
 
-    if average_index:
+    if focus_finding_settings.average_across_wells:
         # # Compute Z drifts
         z_drift_offsets = get_mean_z_positions(
             dataframe_path=output_folder_path / "positions_focus.csv",
@@ -890,7 +914,6 @@ def estimate_z_stabilization(
     return fov_transforms
 
 
-
 @click.command("estimate-stabilization")
 @input_position_dirpaths()
 @output_filepath()
@@ -924,19 +947,9 @@ def estimate_stabilization_cli(
     click.echo(f"Settings: {settings}")
 
     verbose = settings.verbose
-    crop_size_xy = settings.crop_size_xy
-    estimate_stabilization_channel = settings.estimate_stabilization_channel
+    stabilization_estimation_channel = settings.stabilization_estimation_channel
     stabilization_type = settings.stabilization_type
     stabilization_method = settings.stabilization_method
-    skip_beads_fov = settings.skip_beads_fov
-    average_across_wells = settings.average_across_wells
-
-    if skip_beads_fov != '0':
-        # Remove the beads FOV from the input data paths
-        click.echo(f"Removing beads FOV {skip_beads_fov} from input data paths")
-        input_position_dirpaths = [
-            path for path in input_position_dirpaths if skip_beads_fov not in str(path)
-        ]
 
     output_dirpath = output_filepath.parent
     output_dirpath.mkdir(parents=True, exist_ok=True)
@@ -945,7 +958,7 @@ def estimate_stabilization_cli(
     with open_ome_zarr(input_position_dirpaths[0]) as dataset:
         channel_names = dataset.channel_names
         voxel_size = dataset.scale
-        channel_index = channel_names.index(estimate_stabilization_channel)
+        channel_index = channel_names.index(stabilization_estimation_channel)
         T, C, Z, Y, X = dataset.data.shape
 
     # Run locally or submit to SLURM
@@ -953,15 +966,17 @@ def estimate_stabilization_cli(
         cluster = "local"
     else:
         cluster = "slurm"
+    eval_transform_settings = settings.eval_transform_settings
 
     if "xyz" == stabilization_type:
         if stabilization_method == "focus-finding":
             click.echo("Estimating z stabilization parameters")
+
             z_transforms_dict = estimate_z_stabilization(
-                input_data_paths=input_position_dirpaths,
+                input_position_dirpaths=input_position_dirpaths,
                 output_folder_path=output_dirpath,
                 channel_index=channel_index,
-                crop_size_xy=crop_size_xy,
+                focus_finding_settings=settings.focus_finding_settings,
                 sbatch_filepath=sbatch_filepath,
                 cluster=cluster,
                 verbose=verbose,
@@ -969,11 +984,10 @@ def estimate_stabilization_cli(
 
             click.echo("Estimating xy stabilization parameters")
             xy_transforms_dict = estimate_xy_stabilization(
-                input_data_paths=input_position_dirpaths,
+                input_position_dirpaths=input_position_dirpaths,
                 output_folder_path=output_dirpath,
                 channel_index=channel_index,
-                crop_size_xy=crop_size_xy,
-                t_reference=settings.t_reference,
+                stack_reg_settings=settings.stack_reg_settings,
                 sbatch_filepath=sbatch_filepath,
                 cluster=cluster,
                 verbose=verbose,
@@ -1005,20 +1019,38 @@ def estimate_stabilization_cli(
                     xyz_transforms = np.asarray(
                         [a @ b for a, b in zip(xy_transforms, z_transforms)]
                     ).tolist()
-                    # Validate and filter transforms
-                    xyz_transforms = evaluate_transforms(
-                        transforms=xyz_transforms,
-                        shape_zyx=(Z, Y, X),
-                        validation_window_size=settings.validation_window_size,
-                        validation_tolerance=settings.validation_tolerance,
-                        interpolation_windon_size=settings.interpolation_window_size,
-                        interpolation_type=settings.interpolation_type,
-                        verbose=verbose,
-                    )
-
+                    if eval_transform_settings:
+                        # Validate and filter transforms
+                        xyz_transforms = evaluate_transforms(
+                            transforms=xyz_transforms,
+                            shape_zyx=(Z, Y, X),
+                            validation_window_size=eval_transform_settings.validation_window_size,
+                            validation_tolerance=eval_transform_settings.validation_tolerance,
+                            interpolation_windon_size=eval_transform_settings.interpolation_window_size,
+                            interpolation_type=eval_transform_settings.interpolation_type,
+                            verbose=verbose,
+                        )
+                        z_transforms = evaluate_transforms(
+                            transforms=z_transforms,
+                            shape_zyx=(Z, Y, X),
+                            validation_window_size=eval_transform_settings.validation_window_size,
+                            validation_tolerance=eval_transform_settings.validation_tolerance,
+                            interpolation_windon_size=eval_transform_settings.interpolation_window_size,
+                            interpolation_type=eval_transform_settings.interpolation_type,
+                            verbose=verbose,
+                        )
+                        xy_transforms = evaluate_transforms(
+                            transforms=xy_transforms,
+                            shape_zyx=(Z, Y, X),
+                            validation_window_size=eval_transform_settings.validation_window_size,
+                            validation_tolerance=eval_transform_settings.validation_tolerance,
+                            interpolation_windon_size=eval_transform_settings.interpolation_window_size,
+                            interpolation_type=eval_transform_settings.interpolation_type,
+                            verbose=verbose,
+                        )
                     save_transforms(
                         model=model,
-                        transforms=xyz_transforms,
+                        transforms=xy_transforms,
                         output_filepath=output_dirpath
                         / "xyz_stabilization_settings"
                         / f"{fov}.yml",
@@ -1027,33 +1059,11 @@ def estimate_stabilization_cli(
                         / f"{fov}.png",
                         verbose=verbose,
                     )
-
-                    z_transforms = evaluate_transforms(
-                        transforms=z_transforms,
-                        shape_zyx=(Z, Y, X),
-                        validation_window_size=settings.validation_window_size,
-                        validation_tolerance=settings.validation_tolerance,
-                        interpolation_windon_size=settings.interpolation_window_size,
-                        interpolation_type=settings.interpolation_type,
-                        verbose=verbose,
-                    )
                     save_transforms(
                         model=model,
                         transforms=z_transforms,
                         output_filepath=output_dirpath
                         / "z_stabilization_settings"
-                        / f"{fov}.yml",
-                        output_filepath_plot=output_dirpath
-                        / "translation_plots"
-                        / f"{fov}.png",
-                        verbose=verbose,
-                    )
-
-                    xy_transforms = evaluate_transforms(
-                        model=model,
-                        transforms=xy_transforms,
-                        output_filepath=output_dirpath
-                        / "xy_stabilization_settings"
                         / f"{fov}.yml",
                         output_filepath_plot=output_dirpath
                         / "translation_plots"
@@ -1082,15 +1092,13 @@ def estimate_stabilization_cli(
             click.echo("Estimating xyz stabilization parameters with beads")
             with open_ome_zarr(input_position_dirpaths[0], mode="r") as beads_position:
                 source_channels = beads_position.channel_names
-                source_channel_index = source_channels.index(estimate_stabilization_channel)
+                source_channel_index = source_channels.index(stabilization_estimation_channel)
                 channel_tzyx = beads_position.data.dask_array()[:, source_channel_index]
 
             xyz_transforms = estimate_xyz_stabilization_with_beads(
                 channel_tzyx=channel_tzyx,
-                t_reference=settings.t_reference,
-                match_algorithm=settings.match_algorithm,
-                match_filter_angle_threshold=settings.match_filter_angle_threshold,
-                transform_type=settings.affine_transform_type,
+                beads_match_settings=settings.beads_match_settings,
+                affine_transform_settings=settings.affine_transform_settings,
                 verbose=verbose,
                 output_folder_path=output_dirpath,
                 cluster=cluster,
@@ -1106,15 +1114,16 @@ def estimate_stabilization_cli(
                 time_indices="all",
                 output_voxel_size=voxel_size,
             )
-            xyz_transforms = evaluate_transforms(
-                transforms=xyz_transforms,
-                shape_zyx=(Z, Y, X),
-                validation_window_size=settings.validation_window_size,
-                validation_tolerance=settings.validation_tolerance,
-                interpolation_windon_size=settings.interpolation_window_size,
-                interpolation_type=settings.interpolation_type,
-                verbose=verbose,
-            )
+            if eval_transform_settings:
+                xyz_transforms = evaluate_transforms(
+                    transforms=xyz_transforms,
+                    shape_zyx=(Z, Y, X),
+                    validation_window_size=eval_transform_settings.validation_window_size,
+                    validation_tolerance=eval_transform_settings.validation_tolerance,
+                    interpolation_windon_size=eval_transform_settings.interpolation_window_size,
+                    interpolation_type=eval_transform_settings.interpolation_type,
+                    verbose=verbose,
+                )
             save_transforms(
                 model=model,
                 transforms=xyz_transforms,
@@ -1126,11 +1135,10 @@ def estimate_stabilization_cli(
         elif stabilization_method == "phase-cross-corr":
             click.echo("Estimating xyz stabilization parameters with phase cross correlation")
             xyz_transforms_dict = estimate_xyz_stabilization_pcc(
-                input_data_paths=input_position_dirpaths,
+                input_position_dirpaths=input_position_dirpaths,
                 output_folder_path=output_dirpath,
-                c_idx=channel_index,
-                crop_size_xy=crop_size_xy,
-                t_reference=settings.t_reference,
+                channel_index=channel_index,
+                phase_cross_corr_settings=settings.phase_cross_corr_settings,
                 sbatch_filepath=sbatch_filepath,
                 cluster=cluster,
                 verbose=verbose,
@@ -1149,15 +1157,16 @@ def estimate_stabilization_cli(
                 for fov, xyz_transforms in xyz_transforms_dict.items():
                     click.echo(f"Processing FOV {fov}")
                     # Validate and filter transforms
-                    xyz_transforms = evaluate_transforms(
-                        transforms=xyz_transforms,
-                        shape_zyx=(Z, Y, X),
-                        validation_window_size=settings.validation_window_size,
-                        validation_tolerance=settings.validation_tolerance,
-                        interpolation_windon_size=settings.interpolation_window_size,
-                        interpolation_type=settings.interpolation_type,
-                        verbose=verbose,
-                    )
+                    if eval_transform_settings:
+                        xyz_transforms = evaluate_transforms(
+                            transforms=xyz_transforms,
+                            shape_zyx=(Z, Y, X),
+                            validation_window_size=eval_transform_settings.validation_window_size,
+                            validation_tolerance=eval_transform_settings.validation_tolerance,
+                            interpolation_windon_size=eval_transform_settings.interpolation_window_size,
+                            interpolation_type=eval_transform_settings.interpolation_type,
+                            verbose=verbose,
+                        )
 
                     save_transforms(
                         model=model,
@@ -1180,12 +1189,11 @@ def estimate_stabilization_cli(
         click.echo("Estimating z stabilization parameters")
 
         z_transforms_dict = estimate_z_stabilization(
-            input_data_paths=input_position_dirpaths,
+            input_position_dirpaths=input_position_dirpaths,
             output_folder_path=output_dirpath,
             channel_index=channel_index,
-            crop_size_xy=crop_size_xy,
+            focus_finding_settings=settings.focus_finding_settings,
             sbatch_filepath=sbatch_filepath,
-            average_index=average_across_wells,
             cluster=cluster,
             verbose=verbose,
         )
@@ -1202,15 +1210,16 @@ def estimate_stabilization_cli(
         try:
             # save each FOV separately
             for fov, z_transforms in z_transforms_dict.items():
-                z_transforms = evaluate_transforms(
-                    transforms=z_transforms,
-                    shape_zyx=(Z, Y, X),
-                    validation_window_size=settings.validation_window_size,
-                    validation_tolerance=settings.validation_tolerance,
-                    interpolation_windon_size=settings.interpolation_window_size,
-                    interpolation_type=settings.interpolation_type,
-                    verbose=verbose,
-                )
+                if eval_transform_settings:
+                    z_transforms = evaluate_transforms(
+                        transforms=z_transforms,
+                        shape_zyx=(Z, Y, X),
+                        validation_window_size=eval_transform_settings.validation_window_size,
+                        validation_tolerance=eval_transform_settings.validation_tolerance,
+                        interpolation_windon_size=eval_transform_settings.interpolation_window_size,
+                        interpolation_type=eval_transform_settings.interpolation_type,
+                        verbose=verbose,
+                    )
                 save_transforms(
                     model=model,
                     transforms=z_transforms,
@@ -1229,11 +1238,10 @@ def estimate_stabilization_cli(
 
             click.echo("Estimating xy stabilization parameters")
             xy_transforms_dict = estimate_xy_stabilization(
-                input_data_paths=input_position_dirpaths,
+                input_position_dirpaths=input_position_dirpaths,
                 output_folder_path=output_dirpath,
                 channel_index=channel_index,
-                crop_size_xy=crop_size_xy,
-                t_reference=settings.t_reference,
+                stack_reg_settings=settings.stack_reg_settings,
                 sbatch_filepath=sbatch_filepath,
                 cluster=cluster,
                 verbose=verbose,
@@ -1252,15 +1260,16 @@ def estimate_stabilization_cli(
                 # save each FOV separately
                 for fov, xy_transforms in xy_transforms_dict.items():
                     # Validate and filter transforms
-                    xy_transforms = evaluate_transforms(
-                        transforms=xy_transforms,
-                        shape_zyx=(Z, Y, X),
-                        validation_window_size=settings.validation_window_size,
-                        validation_tolerance=settings.validation_tolerance,
-                        interpolation_windon_size=settings.interpolation_window_size,
-                        interpolation_type=settings.interpolation_type,
-                        verbose=verbose,
-                    )
+                    if eval_transform_settings:
+                        xy_transforms = evaluate_transforms(
+                            transforms=xy_transforms,
+                            shape_zyx=(Z, Y, X),
+                            validation_window_size=eval_transform_settings.validation_window_size,
+                            validation_tolerance=eval_transform_settings.validation_tolerance,
+                            interpolation_windon_size=eval_transform_settings.interpolation_window_size,
+                            interpolation_type=eval_transform_settings.interpolation_type,
+                            verbose=verbose,
+                        )
                     save_transforms(
                         model=model,
                         transforms=xy_transforms,

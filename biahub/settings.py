@@ -8,6 +8,7 @@ import torch
 from pydantic import (
     BaseModel,
     ConfigDict,
+    Field,
     ImportString,
     NonNegativeInt,
     PositiveFloat,
@@ -23,60 +24,135 @@ class MyBaseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class EstimateRegistrationSettings(MyBaseModel):
-    target_channel_name: str
-    source_channel_name: str
-    estimation_method: Literal["manual", "beads", "ants"] = "manual"
-    time_index: int = 0
-    affine_90degree_rotation: int = 0
-    match_algorithm: Literal[
-        "hungarian", "match_descriptor", "mutual_information"
-    ] = "hungarian"
-    match_filter_angle_threshold: float = 0
-    match_max_ratio: float = 0.8
-    hungarian_knn_k: int = 5
-    sobel_filter: bool = False
-    affine_transform_type: Literal["euclidean", "similarity", "affine"] = "euclidean"
-    approx_affine_transform: list = None
-    affine_transform_validation_window_size: int = 10
-    affine_transform_validation_tolerance: float = 1000.0
-    affine_transform_interpolation_window_size: int = 3
-    affine_transform_interpolation_type: Literal["linear", "cubic"] = "linear"
-    verbose: bool = False
+class DetectPeaksSettings(MyBaseModel):
+    threshold_abs: float = 110
+    nms_distance: int = 16
+    min_distance: int = 0
+    block_size: list[int] = [8, 8, 8]
 
-    @field_validator("approx_affine_transform")
+
+class BeadsMatchSettings(MyBaseModel):
+    algorithm: Literal["hungarian", "match_descriptor", "mutual_information"] = "hungarian"
+    filter_angle_threshold: float = 0
+    match_cost_threshold_quantile: float = 0.10
+    max_ratio: float = 0.8
+    knn_k: int = 5
+    cross_check: bool = True
+    distance_metric: Literal["euclidean", "cosine", "cityblock"] = "euclidean"
+    source_peaks_settings: Optional[DetectPeaksSettings] = Field(
+        default_factory=DetectPeaksSettings
+    )
+    target_peaks_settings: Optional[DetectPeaksSettings] = Field(
+        default_factory=DetectPeaksSettings
+    )
+    t_reference: Literal["first", "previous"] = "first"
+
+
+class PhaseCrossCorrSettings(MyBaseModel):
+    maximum_shift: float = 1.2
+    normalization: bool = False
+    t_reference: Literal["first", "previous"] = "first"
+
+
+class FocusFindingSettings(MyBaseModel):
+    average_across_wells: bool = False
+    skip_beads_fov: str = "0"
+    crop_size_xy: list[int, int] = [800, 800]
+
+
+class StackRegSettings(MyBaseModel):
+    crop_size_xy: list[int, int] = [800, 800]
+    skip_beads_fov: str = "0"
+    focus_finding_settings: Optional[FocusFindingSettings] = Field(
+        default_factory=FocusFindingSettings
+    )
+    t_reference: Literal["first", "previous"] = "first"
+
+
+class EvalTransformSettings(MyBaseModel):
+    validation_window_size: int = 10
+    validation_tolerance: float = 1000.0
+    interpolation_window_size: int = 3
+    interpolation_type: Literal["linear", "cubic"] = "linear"
+
+
+class AffineTransformSettings(MyBaseModel):
+    transform_type: Literal["euclidean", "similarity", "affine"] = "euclidean"
+    approx_transform: list = np.eye(4).tolist()
+
+    @field_validator("approx_transform")
     @classmethod
     def check_affine_transform_zyx_list(cls, v):
         if v is not None:
             if not isinstance(v, list):
-                raise ValueError("approx_affine_transform must be a list")
+                raise ValueError("approx_transform must be a list")
             arr = np.array(v)
             if arr.shape != (4, 4):
-                raise ValueError("approx_affine_transform must be a 4x4 array")
+                raise ValueError("approx_transform must be a 4x4 array")
 
         return v
 
 
+class AntsRegistrationSettings(MyBaseModel):
+    sobel_filter: bool = False
+
+
+class ManualRegistrationSettings(MyBaseModel):
+    time_index: int = 0
+    affine_90degree_rotation: int = 0
+
+
+class EstimateRegistrationSettings(MyBaseModel):
+    target_channel_name: str
+    source_channel_name: str
+    estimation_method: Literal["manual", "beads", "ants"] = "manual"
+    beads_match_settings: Optional[BeadsMatchSettings] = Field(
+        default_factory=BeadsMatchSettings
+    )
+    focus_finding_settings: Optional[FocusFindingSettings] = Field(
+        default_factory=FocusFindingSettings
+    )
+
+    affine_transform_settings: AffineTransformSettings = Field(
+        default_factory=AffineTransformSettings
+    )
+    eval_transform_settings: Optional[EvalTransformSettings] = Field(
+        default_factory=EvalTransformSettings
+    )
+    ants_registration_settings: Optional[AntsRegistrationSettings] = Field(
+        default_factory=AntsRegistrationSettings
+    )
+    manual_registration_settings: Optional[ManualRegistrationSettings] = Field(
+        default_factory=ManualRegistrationSettings
+    )
+    verbose: bool = False
+
+
 class EstimateStabilizationSettings(MyBaseModel):
-    estimate_stabilization_channel: str
+    stabilization_estimation_channel: str
     stabilization_channels: list
     stabilization_type: Literal["z", "xy", "xyz"]
     stabilization_method: Literal[
         "beads", "phase-cross-corr", "focus-finding"
     ] = "focus-finding"
-    skip_beads_fov: str = "0"
     crop_size_xy: list[int, int] = [300, 300]
     t_reference: Literal["first", "previous"] = "first"
-    average_across_wells: bool = False
-    match_algorithm: Literal[
-        "hungarian", "match_descriptor", "mutual_information"
-    ] = "hungarian"
-    match_filter_angle_threshold: float = 0
-    affine_transform_type: Literal["euclidean", "similarity", "affine"] = "euclidean"
-    affine_transform_validation_window_size: int = 10
-    affine_transform_validation_tolerance: float = 1000.0
-    affine_transform_interpolation_window_size: int = 3
-    affine_transform_interpolation_type: Literal["linear", "cubic"] = "linear"
+    beads_match_settings: Optional[BeadsMatchSettings] = Field(
+        default_factory=BeadsMatchSettings
+    )
+    phase_cross_corr_settings: Optional[PhaseCrossCorrSettings] = Field(
+        default_factory=PhaseCrossCorrSettings
+    )
+    stack_reg_settings: Optional[StackRegSettings] = Field(default_factory=StackRegSettings)
+    focus_finding_settings: Optional[FocusFindingSettings] = Field(
+        default_factory=FocusFindingSettings
+    )
+    affine_transform_settings: AffineTransformSettings = Field(
+        default_factory=AffineTransformSettings
+    )
+    eval_transform_settings: Optional[EvalTransformSettings] = Field(
+        default_factory=EvalTransformSettings
+    )
     verbose: bool = False
 
 

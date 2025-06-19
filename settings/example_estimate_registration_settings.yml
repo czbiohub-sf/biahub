@@ -1,73 +1,98 @@
-# Target (i.e. fixed) channel used to estimate registration parameters.
+# Name of the fixed (reference) image channel used for registration
 target_channel_name: Phase3D
 
-# Source (i.e. moving) channel used to estimate registration parameters.
-# If using bead, update this to the channel where beads are visible.
+# Name of the moving image channel to align with the target. If using beads, this is the channel with visible beads.
 source_channel_name: GFP EX488 EM525-45
 
-# Optional. Method used to estimate registration parameters, either "manual" or "beads".
-# During manual registration, the user is asked to select corresponding points in the two channels.
-# During beads-based registration, the algorithm automatically detects matching beads
-# in the source and target channels and uses them to compute the registration transform.
+# Method to estimate registration parameters:
+# "manual": user manually selects matching features
+# "beads": automatic detection of bead matches
+# "ants": uses ANTs registration with optimization
 estimation_method: manual
 
-# Optional. Index of time point to use during manual registration
-time_index: 0
+# Settings used when estimation_method is "beads"
+beads_match_settings:
+  # Algorithm to match beads between source and target:
+  # "hungarian", "match_descriptor", or "mutual_information"
+  algorithm: hungarian
 
-# Optional. Integer giving the number of 90-degree rotations applies to the source channels
-# before estimating registration parameters.
-affine_90degree_rotation: -1
+  # Only keep matches within this angular threshold (in degrees) of the dominant match orientation
+  filter_angle_threshold: 0
 
-# Optional. Matching algorithm used to find corresponding points in the two channels for beads registration.
-# Currently default is Hungarian algorithm
-# Other option is "match_descriptor" from scikit-image: https://scikit-image.org/docs/stable/api/skimage.feature.html#skimage.feature.match_descriptors.
-match_algorithm: hungarian
+  # Max allowed ratio between best and second-best match distances
+  max_ratio: 0.8
 
-# Optional. Threshold for filtering outliers in detected bead matches, in degrees
-# used during beads-based registration.
-# Lower this value if matches are noisy; increase if too restrictive.
-match_filter_angle_threshold: 0
+  # Number of nearest neighbors used to construct bead graphs for matching
+  knn_k: 5
 
-# Optional. Type of transform to be estimated.
-# Currently limited to Euclidean or Similarity and only used during manual registrion.
-# Beads-based registration always uses fill affine transform.
-affine_transform_type: euclidean
+  # Whether to perform cross-checking of matches
+  cross_check: True
+
+  # Distance metric to use for matching
+  distance_metric: euclidean
+
+  # Timepoint reference for matching
+  t_reference: "first"
+
+  # Source peaks settings
+  source_peaks_settings:
+    threshold_abs: 110
+    nms_distance: 16
+    min_distance: 0
+    block_size:
+      - 8
+      - 8
+      - 8
+  # Target peaks settings
+  target_peaks_settings:
+    threshold_abs: 0.8
+    nms_distance: 16
+    min_distance: 0
+    block_size:
+      - 8
+      - 8
+      - 8
+
+# Settings used when estimation_method is "ants"
+ants_registration_settings:
+  # Whether to apply a Sobel filter for edge enhancement before registration
+  sobel_filter: False
 
 
-# Optional. Initial guess of the affine transformation matrix.
-# Adjust based on microscope configuration (e.g., Mantis setup for cells).
-approx_affine_transform:
-- - 1
-  - 0
-  - 0
-  - 0
-- - 0
-  - 0
-  - -1.288
-  - 1960
-- - 0
-  - 1.288
-  - 0
-  - -460
-- - 0.0
-  - 0.0
-  - 0.0
-  - 1.0
+# Settings used when estimation_method is "manual"
+manual_registration_settings:
+  # Timepoint index to use for manual registration
+  time_index: 0
 
-# Optional. Size of the moving window for smoothing transformations
-# during beads-based registration.
-affine_transform_validation_window_size: 10
 
-# Optional. Maximum allowed difference withing the window_size of transformations
-# during beads-based registration.
-affine_transform_validation_tolerance: 100
+  # Number of 90-degree clockwise rotations to apply to source image before registration
+  affine_90degree_rotation: 0
 
-# Optional. Size of the window for interpolation of transformations during beads-based registration for cases the transformation is not available
-affine_transform_interpolation_window_size: 3
+# Settings that apply to all methods (manual, beads, ants)
+affine_transform_settings:
+  # Type of transform to estimate: "euclidean", "similarity", or "affine"
+  transform_type: euclidean
 
-# Optional. Type of interpolation of transformations during beads-based registration for cases the transformation is not available
-# Options are "linear" or "cubic"
-affine_transform_interpolation_type: "linear"
+  # Optional initial guess for the 4x4 affine transformation matrix
+  approx_transform:
+  - [1, 0, 0, 0]
+  - [0, 0, -1.288, 1960]
+  - [0, 1.288, 0, -460]
+  - [0.0, 0.0, 0.0, 1.0]
 
-# Optional. Set to True for detailed logging of bead detection process.
+# Post-estimation settings for validating and interpolating affine transforms
+eval_transform_settings:
+  # Number of timepoints to average over when checking consistency
+  validation_window_size: 10
+
+  # Maximum deviation (in pixels) allowed between transformations to be considered valid
+  validation_tolerance: 1000.0
+
+  # Number of neighboring timepoints used when interpolating missing transforms
+  interpolation_window_size: 3
+
+  # Interpolation method: "linear" or "cubic"
+  interpolation_type: "linear"
+
+# If True, print verbose logs during registration and validation
 verbose: True

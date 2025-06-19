@@ -1,55 +1,128 @@
-# Chanel used to estimate stabilization parameters
-estimate_stabilization_channel: Phase3D
-# List of channels to be stabilized later
+# Channel used to estimate stabilization parameters across timepoints.
+stabilization_estimation_channel: Phase3D
+
+# List of channels that will be stabilized using the computed transforms.
 stabilization_channels:
   - Phase3D
 
-# Define the type of stabilization to be performed. Options are "xy", "z", or "xyz".
+# Type of stabilization to perform:
+#   - "z": only stabilize in Z
+#   - "xy": only stabilize in XY
+#   - "xyz": stabilize in all 3D spatial dimensions
 stabilization_type: "z"
 
-# Defuine the method used to estimate stabilization parameters. Options are "beads" or "phase-cross-corr" or "focus-finding".
-# beads and pcc only available for "xyz" stabilization
+# Method used to estimate stabilization parameters:
+#   - "focus-finding": uses intensity-based Z focus to estimate drift
+#   - "beads": uses automatically matched beads (only for xyz)
+#   - "phase-cross-corr": uses 3D phase correlation (only for xyz)
 stabilization_method: "focus-finding"
-    
-skip_beads_fov: "0" # if there is none, set as '0'
 
-# Optional. Crop size in xy. Enter two integers. Default is 300 300
-crop_size_xy:
-  - 300
-  - 300
-
+# Timepoint reference used for alignment:
+#   - "first": align all timepoints to the first one
+#   - "previous": align each timepoint to the previous one
 t_reference: "first"
 
-# Optional. Matching algorithm used to find corresponding points in the two channels for beads stabilization.
-# Currently default is Hungarian algorithm
-# Other option is "match_descriptor" from scikit-image: https://scikit-image.org/docs/stable/api/skimage.feature.html#skimage.feature.match_descriptors.
-match_algorithm: hungarian
+# Settings for beads-based stabilization (only used if stabilization_method == "beads")
+beads_match_settings: 
+  # Matching algorithm to use: "hungarian", "match_descriptor", or "mutual_information"
+  algorithm: hungarian
 
-# Optional. Threshold for filtering outliers in detected bead matches, in degrees
-# used during beads-based stabilization.
-# Lower this value if matches are noisy; increase if too restrictive.
-match_filter_angle_threshold: 0
+  # Filter matches based on dominant angle direction (in degrees)
+  filter_angle_threshold: 0
 
-# Optional. Type of transform to be estimated.
-# Currently limited to Euclidean or Similarity and only used during manual registrion.
-# Beads-based stabilization always uses fill affine transform.
-affine_transform_type: euclidean
+  # Ratio filter between best and second-best matches (used with descriptors)
+  max_ratio: 0.8
 
+  # Number of neighbors used to form bead graphs
+  knn_k: 5
 
-# Optional. Size of the moving window for smoothing transformations
-# during beads-based stabilization.
-affine_transform_validation_window_size: 10
+  # Whether to enforce symmetric (mutual) matches from both directions
+  cross_check: True
 
-# Optional. Maximum allowed difference withing the window_size of transformations
-# during beads-based stabilization.
-affine_transform_validation_tolerance: 100
+  # Distance metric used for descriptor or geometric matching
+  distance_metric: euclidean
 
-# Optional. Size of the window for interpolation of transformations during beads-based stabilization for cases the transformation is not available
-affine_transform_interpolation_window_size: 3
+  # Peak detection settings for the source channel (moving)
+  source_peaks_settings:
+    threshold_abs: 110  # intensity threshold for peak detection
+    nms_distance: 16    # non-maximum suppression radius
+    min_distance: 0     # minimum separation between peaks
+    block_size:         # local block size used in detection
+      - 8
+      - 8
+      - 8
 
-# Optional. Type of interpolation of transformations during beads-based stabilization for cases the transformation is not available
-# Options are "linear" or "cubic"
-affine_transform_interpolation_type: "linear"
+  # Peak detection settings for the target channel (fixed)
+  target_peaks_settings:
+    threshold_abs: 110
+    nms_distance: 16
+    min_distance: 0
+    block_size:
+      - 8
+      - 8
+      - 8
 
-# Optional. Set to True for detailed logging of bead detection process.
+  # Temporal reference mode for matching: "first" or "previous"
+  t_reference: "first"
+
+# Settings for 3D phase cross-correlation stabilization (only used if stabilization_method == "phase-cross-corr")
+phase_cross_corr_settings:
+  # Maximum allowed normalized shift (relative to image size)
+  maximum_shift: 1.2
+
+  # Whether to normalize magnitude before computing phase correlation
+  normalization: False
+
+  # Temporal reference mode for alignment: "first" or "previous"
+  t_reference: "first"
+
+# Settings for XY stabilization using image registration (StackReg)
+stack_reg_settings:
+  # XY crop size (centered region of interest)
+  crop_size_xy:
+    - 800
+    - 800
+
+  # FOV index to skip (e.g., bead FOV), as a string
+  skip_beads_fov: "0"
+
+  # Temporal reference for stabilization: "first" or "previous"
+  t_reference: "first"
+
+  # Nested Z focus finding settings, used for selecting best Z slice in each timepoint
+  focus_finding_settings:
+    average_across_wells: False    # If True, average focus across all wells
+    skip_beads_fov: "0"
+    crop_size_xy:
+      - 800
+      - 800
+
+# Global settings for Z focus drift estimation
+focus_finding_settings:
+  average_across_wells: False
+  skip_beads_fov: "0"
+  crop_size_xy:
+    - 800
+    - 800
+
+# Settings for affine transformation estimation (applies to all stabilization methods)
+affine_transform_settings:
+  # Type of transform to estimate: "euclidean", "similarity", or "affine"
+  transform_type: euclidean
+
+# Validation and interpolation settings for transform smoothing
+eval_transform_settings:
+  # Number of timepoints to average over when validating transform stability
+  validation_window_size: 10
+
+  # Maximum allowed deviation (in pixels) to consider a transform valid
+  validation_tolerance: 1000.0
+
+  # Size of local window used to interpolate missing or invalid transforms
+  interpolation_window_size: 3
+
+  # Interpolation method for transform smoothing: "linear" or "cubic"
+  interpolation_type: "linear"
+
+# Set to True for verbose logging of the stabilization process
 verbose: True

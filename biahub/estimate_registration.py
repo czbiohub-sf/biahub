@@ -1,11 +1,11 @@
 import os
-import pickle
 import shutil
 import subprocess
 import time
 
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 import ants
 import click
@@ -16,6 +16,7 @@ import submitit
 
 from iohub import open_ome_zarr
 from matplotlib import pyplot as plt
+from numpy.typing import ArrayLike
 from scipy.interpolate import interp1d
 from scipy.optimize import linear_sum_assignment
 from scipy.spatial.distance import cdist
@@ -45,11 +46,14 @@ from biahub.optimize_registration import _optimize_registration
 from biahub.register import (
     convert_transform_to_ants,
     convert_transform_to_numpy,
+    find_overlapping_volume,
     get_3D_rescaling_matrix,
     get_3D_rotation_matrix,
-    find_overlapping_volume,
 )
 from biahub.settings import (
+    AffineTransformSettings,
+    AntsRegistrationSettings,
+    BeadsMatchSettings,
     EstimateRegistrationSettings,
     RegistrationSettings,
     StabilizationSettings,
@@ -73,13 +77,14 @@ COLOR_CYCLE = [
     "magenta",
 ]
 
+
 def evaluate_transforms(
     transforms: ArrayLike,
-    shape_zyx: Tuple[int, int, int],
+    shape_zyx: tuple[int, int, int],
     validation_window_size: int,
     validation_tolerance: float,
-    interpolation_windon_size: int,
-    interpolation_type: str = "linear",
+    interpolation_window_size: int,
+    interpolation_type: Literal["linear", "cubic"] = "linear",
     verbose: bool = False,
 ) -> ArrayLike:
     Z, Y, X = shape_zyx
@@ -100,7 +105,7 @@ def evaluate_transforms(
     # Interpolate missing transforms
     transforms = _interpolate_transforms(
         transforms=transforms,
-        window_size=interpolation_windon_size,
+        window_size=interpolation_window_size,
         interpolation_type=interpolation_type,
         verbose=verbose,
     )
@@ -448,12 +453,8 @@ def user_assisted_registration(
 def beads_based_registration(
     source_channel_tzyx: da.Array,
     target_channel_tzyx: da.Array,
-    approx_tform: list,
-    match_algorithm: str = 'hungarian',
-    match_filter_angle_threshold: float = 0,
-    match_max_ratio: float = 0.6,
-    transform_type: str = 'affine',
-    hungarian_knn_k: int = 5,
+    beads_match_settings: BeadsMatchSettings = None,
+    affine_transform_settings: AffineTransformSettings = None,
     verbose: bool = False,
     cluster: bool = False,
     sbatch_filepath: Path = None,
@@ -526,17 +527,13 @@ def beads_based_registration(
         for t in range(T):
             job = executor.submit(
                 _get_tform_from_beads,
-                approx_tform=approx_tform,
                 source_channel_tzyx=source_channel_tzyx,
                 target_channel_tzyx=target_channel_tzyx,
-                match_filter_angle_threshold=match_filter_angle_threshold,
-                hungarian_knn_k=hungarian_knn_k,
+                beads_match_settings=beads_match_settings,
+                affine_transform_settings=affine_transform_settings,
                 verbose=verbose,
-                match_algorithm=match_algorithm,
-                transform_type=transform_type,
                 slurm=True,
                 output_folder_path=output_transforms_path,
-                match_max_ratio=match_max_ratio,
                 t_idx=t,
             )
             jobs.append(job)
@@ -573,32 +570,26 @@ def ants_registration(
     target_data_tczyx: da.Array,
     source_channel_index: int | list[int],
     target_channel_index: int,
-    approx_tform: np.ndarray,
-    sobel_filter: bool = False,
+    ants_registration_settings: AntsRegistrationSettings,
+    affine_transform_settings: AffineTransformSettings,
     verbose: bool = False,
     output_folder_path: Path = None,
     cluster: str = 'local',
     sbatch_filepath: Path = None,
 ) -> list:
-    
 
     T, C, Z, Y, X = source_data_tczyx.shape
     # # Crop only to the overlapping region, zero padding interfereces with registration
     z_slice, y_slice, x_slice = find_overlapping_volume(
-        target_data_tczyx.shape[-3:], source_data_tczyx.shape[-3:], approx_tform
+        target_data_tczyx.shape[-3:],
+        source_data_tczyx.shape[-3:],
+        affine_transform_settings.approx_transform,
     )
 
     # # Crop 10% more to account for shifts during XYZ stabilization
-    z_slice = slice(
-        int(z_slice.start * 1.2), int(z_slice.stop * 0.8)
-    )
-    y_slice = slice(
-        int(y_slice.start * 1.2), int(y_slice.stop * 0.8)
-    )
-    x_slice = slice(
-        int(x_slice.start * 1.2), int(x_slice.stop * 0.8)
-    )
-
+    z_slice = slice(int(z_slice.start * 1.2), int(z_slice.stop * 0.8))
+    y_slice = slice(int(y_slice.start * 1.2), int(y_slice.stop * 0.8))
+    x_slice = slice(int(x_slice.start * 1.2), int(x_slice.stop * 0.8))
 
     click.echo(
         f"Cropping channels to Z: {z_slice.start}:{z_slice.stop}, "
@@ -612,11 +603,9 @@ def ants_registration(
         :, source_channel_index, z_slice, y_slice, x_slice
     ]  # Crop source channel
 
-
     # Note: cropping is applied after registration with approx_tform
 
-
-  # Compute transformations in parallel
+    # Compute transformations in parallel
 
     num_cpus, gb_ram_per_cpu = estimate_resources(
         shape=(T, 2, Z, Y, X), ram_multiplier=16, max_num_cpus=16
@@ -647,25 +636,24 @@ def ants_registration(
     output_transforms_path = output_folder_path / "xyz_transforms"
     output_transforms_path.mkdir(parents=True, exist_ok=True)
 
-
     click.echo('Computing registration transforms...')
     # NOTE: ants is mulitthreaded so no need for multiprocessing here
-  # Submit jobs
+    # Submit jobs
     jobs = []
     with executor.batch():
-        for t in range(1, T, 1):
+        for t in range(T):
             job = executor.submit(
                 _optimize_registration,
                 source_data_tczyx[t],
                 target_data_tczyx[t],
-                initial_tform=approx_tform,
+                initial_tform=affine_transform_settings.approx_transform,
                 source_channel_index=source_channel_index,
                 target_channel_index=target_channel_index,
                 z_slice=z_slice,
                 y_slice=y_slice,
                 x_slice=x_slice,
                 clip=True,
-                sobel_fitler=sobel_filter,
+                sobel_fitler=ants_registration_settings.sobel_filter,
                 verbose=False,
                 slurm=True,
                 output_folder_path=output_transforms_path,
@@ -684,7 +672,7 @@ def ants_registration(
     wait_for_jobs_to_finish(job_ids)
 
     transforms = []
-    for t in range(1, T):
+    for t in range(T):
         file_path = output_transforms_path / f"{t}.npy"
         if not os.path.exists(file_path):
             transforms.append(None)
@@ -1062,24 +1050,10 @@ def match_mutual_information(
 
 def _get_tform_from_beads(
     t_idx: int,
-    approx_tform: list,
     source_channel_tzyx: da.Array,
     target_channel_tzyx: da.Array,
-    source_block_size: list = [8, 8, 8],
-    source_threshold_abs: int = 110,
-    source_nms_distance: int = 16,
-    source_min_distance: int = 0,
-    target_block_size: list = [8, 8, 8],
-    target_threshold_abs: float = 0.8,
-    target_nms_distance: int = 16,
-    target_min_distance: int = 0,
-    match_algorithm: str = 'hungarian',
-    match_cross_check: bool = True,
-    match_metric: str = 'euclidean',
-    match_max_ratio: float = 0.6,
-    match_filter_angle_threshold: float = 0,
-    transform_type: str = 'affine',
-    hungarian_knn_k: int = 5,
+    beads_match_settings: BeadsMatchSettings,
+    affine_transform_settings: AffineTransformSettings,
     verbose: bool = False,
     slurm: bool = False,
     output_folder_path: Path = None,
@@ -1093,25 +1067,14 @@ def _get_tform_from_beads(
     various filtering steps, including angle-based filtering, to improve match quality.
 
     Parameters:
-    - approx_tform (list): Approximate initial affine transformation matrix (4x4).
     - source_channel_tzyx (da.Array): 4D array (T, Z, Y, X) of the source channel (Dask array).
     - target_channel_tzyx (da.Array): 4D array (T, Z, Y, X) of the target channel (Dask array).
-    - angle_threshold (int): Threshold (in degrees) to filter bead matches based on direction.
+    - beads_match_settings (BeadsMatchSettings): Settings for beads matching.
+    - affine_transform_settings (AffineTransformSettings): Settings for affine transformation.
     - verbose (bool): If True, prints detailed logs during the process.
     - t_idx (int): Timepoint index to process.
-    - source_block_size (list): Block size for bead detection in the source dataset.
-    - source_threshold_abs (int): Threshold for bead detection in the source dataset.
-    - source_nms_distance (int): Non-maximum suppression distance for source dataset.
-    - source_min_distance (int): Minimum distance between beads in the source dataset.
-    - target_block_size (list): Block size for bead detection in the target dataset.
-    - target_threshold_abs (float): Threshold for bead detection in the target dataset.
-    - target_nms_distance (int): Non-maximum suppression distance for target dataset.
-    - target_min_distance (int): Minimum distance between beads in the target dataset.
-    - transform_type (str): Type of transformation to apply (Affine, Similarity, Euclidean).
-    - match_algorithm (str): Matching algorithm to use (match_descriptor, hungarian).
-    - match_cross_check (bool): If True, perform cross-checking of matches.
-    - match_metric (str): Distance metric to use for matching (euclidean, manhattan, cosine).
-    - match_max_ratio (float): Maximum ratio of the second-best match to the best match, in match_descriptor.
+    - slurm (bool): If True, uses SLURM for parallel processing.
+    - output_folder_path (Path): Path to save the output.
 
     Returns:
     - list | None: A 4x4 affine transformation matrix as a nested list if successful,
@@ -1124,7 +1087,7 @@ def _get_tform_from_beads(
     - If fewer than three matches are found after filtering, the function returns None.
     """
 
-    approx_tform = np.asarray(approx_tform)
+    approx_tform = np.asarray(affine_transform_settings.approx_transform)
     source_channel_zyx = np.asarray(source_channel_tzyx[t_idx]).astype(np.float32)
     target_channel_zyx = np.asarray(target_channel_tzyx[t_idx]).astype(np.float32)
 
@@ -1145,10 +1108,10 @@ def _get_tform_from_beads(
 
     source_peaks = detect_peaks(
         source_data_reg,
-        block_size=source_block_size,
-        threshold_abs=source_threshold_abs,
-        nms_distance=source_nms_distance,
-        min_distance=source_min_distance,
+        block_size=beads_match_settings.source_peaks_settings.block_size,
+        threshold_abs=beads_match_settings.source_peaks_settings.threshold_abs,
+        nms_distance=beads_match_settings.source_peaks_settings.nms_distance,
+        min_distance=beads_match_settings.source_peaks_settings.min_distance,
         verbose=verbose,
     )
     if verbose:
@@ -1156,10 +1119,10 @@ def _get_tform_from_beads(
 
     target_peaks = detect_peaks(
         target_channel_zyx,
-        block_size=target_block_size,
-        threshold_abs=target_threshold_abs,
-        nms_distance=target_nms_distance,
-        min_distance=target_min_distance,
+        block_size=beads_match_settings.target_peaks_settings.block_size,
+        threshold_abs=beads_match_settings.target_peaks_settings.threshold_abs,
+        nms_distance=beads_match_settings.target_peaks_settings.nms_distance,
+        min_distance=beads_match_settings.target_peaks_settings.min_distance,
         verbose=verbose,
     )
 
@@ -1168,27 +1131,30 @@ def _get_tform_from_beads(
         click.echo(f'No beads were detected at timepoint {t_idx}')
         return
 
-    if match_algorithm == 'match_descriptor':
+    if beads_match_settings.algorithm == 'match_descriptor':
         print("Using match descriptor")
 
         # Match peaks, excluding top 5% of distances as outliers
         matches = match_descriptors(
             source_peaks,
             target_peaks,
-            metric=match_metric,
-            max_ratio=match_max_ratio,
-            cross_check=match_cross_check,
+            metric=beads_match_settings.distance_metric,
+            max_ratio=beads_match_settings.max_ratio,
+            cross_check=beads_match_settings.cross_check,
         )
-    elif match_algorithm == 'hungarian':
+    elif beads_match_settings.algorithm == 'hungarian':
+        source_edges = _knn_edges(source_peaks, k=beads_match_settings.knn_k)
+        target_edges = _knn_edges(target_peaks, k=beads_match_settings.knn_k)
 
-        source_edges = _knn_edges(source_peaks, k=hungarian_knn_k)
-        target_edges = _knn_edges(target_peaks, k=hungarian_knn_k)
-
-        if match_cross_check:
+        if beads_match_settings.cross_check:
             # Step 1: A → B
             C_ab = _compute_cost_matrix(source_peaks, target_peaks, source_edges, target_edges)
             matches_ab = match_hungarian(
-                C_ab, cost_threshold=np.quantile(C_ab, 0.10), max_ratio=match_max_ratio
+                C_ab,
+                cost_threshold=np.quantile(
+                    C_ab, beads_match_settings.match_cost_threshold_quantile
+                ),
+                max_ratio=beads_match_settings.max_ratio,
             )
 
             # Step 2: B → A (swap arguments)
@@ -1197,10 +1163,14 @@ def _get_tform_from_beads(
                 source_peaks,
                 target_edges,
                 source_edges,
-                distance_metric=match_metric,
+                distance_metric=beads_match_settings.distance_metric,
             )
             matches_ba = match_hungarian(
-                C_ba, cost_threshold=np.quantile(C_ba, 0.10), max_ratio=match_max_ratio
+                C_ba,
+                cost_threshold=np.quantile(
+                    C_ba, beads_match_settings.match_cost_threshold_quantile
+                ),
+                max_ratio=beads_match_settings.max_ratio,
             )
 
             # Step 3: Invert matches_ba to compare
@@ -1212,9 +1182,14 @@ def _get_tform_from_beads(
             # # Compute cost matrix
             C = _compute_cost_matrix(source_peaks, target_peaks, source_edges, target_edges)
 
-            matches = match_hungarian(C, cost_threshold=np.quantile(C, 0.10))
+            matches = match_hungarian(
+                C,
+                cost_threshold=np.quantile(
+                    C, beads_match_settings.match_cost_threshold_quantile
+                ),
+            )
 
-    elif match_algorithm == 'mutual_information':
+    elif beads_match_settings.algorithm == 'mutual_information':
         matches = match_mutual_information(
             source_peaks=source_peaks,
             target_peaks=target_peaks,
@@ -1231,7 +1206,7 @@ def _get_tform_from_beads(
         click.echo(
             f'Total of matches after distance filtering at time point {t_idx}: {len(matches)}'
         )
-    if match_filter_angle_threshold:
+    if beads_match_settings.filter_angle_threshold:
 
         # Calculate vectors between matches
         vectors = target_peaks[matches[:, 1]] - source_peaks[matches[:, 0]]
@@ -1254,7 +1229,7 @@ def _get_tform_from_beads(
 
         # Filter matches within ±filter_angle_threshold degrees of the dominant direction, which may need finetuning
         filtered_indices = np.where(
-            np.abs(angles_deg - dominant_angle) <= match_filter_angle_threshold
+            np.abs(angles_deg - dominant_angle) <= beads_match_settings.filter_angle_threshold
         )[0]
         matches = matches[filtered_indices]
 
@@ -1270,14 +1245,14 @@ def _get_tform_from_beads(
         return
 
     # Affine transform performs better than Euclidean
-    if transform_type == 'affine':
+    if affine_transform_settings.transform_type == 'affine':
         tform = AffineTransform(dimensionality=3)
-    elif transform_type == 'euclidean':
+    elif affine_transform_settings.transform_type == 'euclidean':
         tform = EuclideanTransform(dimensionality=3)
-    elif transform_type == 'similarity':
+    elif affine_transform_settings.transform_type == 'similarity':
         tform = SimilarityTransform(dimensionality=3)
     else:
-        raise ValueError(f'Unknown transform type: {transform_type}')
+        raise ValueError(f'Unknown transform type: {affine_transform_settings.transform_type}')
 
     tform.estimate(source_peaks[matches[:, 0]], target_peaks[matches[:, 1]])
     compount_tform = np.asarray(approx_tform) @ tform.inverse.params
@@ -1320,7 +1295,6 @@ def estimate_registration_cli(
     source_position_dirpaths,
     target_position_dirpaths,
     output_filepath,
-    num_processes,
     config_filepath,
     registration_target_channel,
     registration_source_channel,
@@ -1370,9 +1344,8 @@ def estimate_registration_cli(
     click.echo(f"Settings: {settings}")
     target_channel_name = settings.target_channel_name
     source_channel_name = settings.source_channel_name
-    affine_90degree_rotation = settings.affine_90degree_rotation
-    affine_transform_type = settings.affine_transform_type
-    registration_source_channels = registration_source_channel  # rename for clarity
+
+    registration_source_channels = registration_source_channel
     output_dir = output_filepath.parent
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1406,32 +1379,29 @@ def estimate_registration_cli(
         cluster = "local"
     else:
         cluster = "slurm"
-
+    eval_transform_settings = settings.eval_transform_settings
     if settings.estimation_method == "beads":
         # Register using bead images
         transforms = beads_based_registration(
             source_channel_tzyx=source_channel_data,
             target_channel_tzyx=target_channel_data,
-            approx_tform=np.asarray(settings.approx_affine_transform),
-            match_algorithm=settings.match_algorithm,
-            match_filter_angle_threshold=settings.match_filter_angle_threshold,
-            match_max_ratio=settings.match_max_ratio,
-            hungarian_knn_k=settings.hungarian_knn_k,
-            transform_type=affine_transform_type,
+            beads_match_settings=settings.beads_match_settings,
+            affine_transform_settings=settings.affine_transform_settings,
             verbose=settings.verbose,
             cluster=cluster,
             sbatch_filepath=sbatch_filepath,
             output_folder_path=output_dir,
         )
-        transforms = evaluate_transforms(
-            transforms=transforms,
-            shape_zyx=source_channel_data.shape[-3:],
-            validation_window_size=settings.validation_window_size,
-            validation_tolerance=settings.validation_tolerance,
-            interpolation_windon_size=settings.interpolation_window_size,
-            interpolation_type=settings.interpolation_type,
-            verbose=settings.verbose,
-        )
+        if eval_transform_settings:
+            transforms = evaluate_transforms(
+                transforms=transforms,
+                shape_zyx=source_channel_data.shape[-3:],
+                validation_window_size=eval_transform_settings.validation_window_size,
+                validation_tolerance=eval_transform_settings.validation_tolerance,
+                interpolation_window_size=eval_transform_settings.interpolation_window_size,
+                interpolation_type=eval_transform_settings.interpolation_type,
+                verbose=settings.verbose,
+            )
 
         model = StabilizationSettings(
             stabilization_estimation_channel='',
@@ -1455,23 +1425,25 @@ def estimate_registration_cli(
             target_data_tczyx=target_data,
             source_channel_index=source_channel_index,
             target_channel_index=target_channel_index,
-            approx_tform=np.asarray(settings.approx_affine_transform),
-            sobel_filter=settings.sobel_filter,
-            num_processes=num_processes,
+            ants_registration_settings=settings.ants_registration_settings,
+            affine_transform_settings=settings.affine_transform_settings,
+            sbatch_filepath=sbatch_filepath,
+            cluster=cluster,
             verbose=settings.verbose,
             output_folder_path=output_dir,
         )
-        transforms = evaluate_transforms(
-            transforms=transforms,
-            shape_zyx=source_channel_data.shape[-3:],
-            validation_window_size=settings.validation_window_size,
-            validation_tolerance=settings.validation_tolerance,
-            interpolation_windon_size=settings.interpolation_window_size,
-            interpolation_type=settings.interpolation_type,
-            verbose=settings.verbose,
-        )
+        if eval_transform_settings:
+            transforms = evaluate_transforms(
+                transforms=transforms,
+                shape_zyx=source_channel_data.shape[-3:],
+                validation_window_size=eval_transform_settings.validation_window_size,
+                validation_tolerance=eval_transform_settings.validation_tolerance,
+                interpolation_window_size=eval_transform_settings.interpolation_window_size,
+                interpolation_type=eval_transform_settings.interpolation_type,
+                verbose=settings.verbose,
+            )
 
-        model = StabilizationSettings(
+        model = RegistrationSettings(
             stabilization_estimation_channel='',
             stabilization_type='xyz',
             stabilization_channels=registration_source_channels,
@@ -1489,25 +1461,32 @@ def estimate_registration_cli(
     else:
         # Register based on user input
         transform = user_assisted_registration(
-            source_channel_volume=np.asarray(source_channel_data[settings.time_index]),
+            source_channel_volume=np.asarray(
+                source_channel_data[settings.manual_registration_settings.time_index]
+            ),
             source_channel_name=source_channel_name,
             source_channel_voxel_size=source_channel_voxel_size,
-            target_channel_volume=np.asarray(target_channel_data[settings.time_index]),
+            target_channel_volume=np.asarray(
+                target_channel_data[settings.manual_registration_settings.time_index]
+            ),
             target_channel_name=target_channel_name,
             target_channel_voxel_size=target_channel_voxel_size,
-            similarity=True if affine_transform_type == "similarity" else False,
-            pre_affine_90degree_rotation=affine_90degree_rotation,
+            similarity=True
+            if settings.affine_transform_settings.transform_type == "similarity"
+            else False,
+            pre_affine_90degree_rotation=settings.manual_registration_settings.affine_90degree_rotation,
         )
-        transforms = evaluate_transforms(
-            transforms=transform,
-            shape_zyx=source_channel_data.shape[-3:],
-            validation_window_size=settings.validation_window_size,
-            validation_tolerance=settings.validation_tolerance,
-            interpolation_windon_size=settings.interpolation_window_size,
-            interpolation_type=settings.interpolation_type,
-            verbose=settings.verbose,
-        )
-        
+        if eval_transform_settings:
+            transforms = evaluate_transforms(
+                transforms=transform,
+                shape_zyx=source_channel_data.shape[-3:],
+                validation_window_size=eval_transform_settings.validation_window_size,
+                validation_tolerance=eval_transform_settings.validation_tolerance,
+                interpolation_window_size=eval_transform_settings.interpolation_window_size,
+                interpolation_type=eval_transform_settings.interpolation_type,
+                verbose=settings.verbose,
+            )
+
         model = RegistrationSettings(
             source_channel_names=registration_source_channels,
             target_channel_name=registration_target_channel,
@@ -1517,11 +1496,14 @@ def estimate_registration_cli(
             model=model,
             transforms=transforms,
             output_filepath_settings=output_dir / "registration_settings.yml",
-            output_filepath_plot=output_dir / "translation_plots" / "user_assisted_registration.png",
+            output_filepath_plot=output_dir
+            / "translation_plots"
+            / "user_assisted_registration.png",
             verbose=settings.verbose,
         )
 
     click.echo(f"Registration settings saved to {output_dir}")
+
 
 if __name__ == "__main__":
     estimate_registration_cli()
