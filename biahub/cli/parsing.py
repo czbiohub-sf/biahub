@@ -77,7 +77,7 @@ def config_filepath() -> Callable:
             "--config-filepath",
             "-c",
             required=True,
-            type=click.Path(exists=True, file_okay=True, dir_okay=False),
+            type=click.Path(exists=True, file_okay=True, dir_okay=True),
             callback=_str_to_path,
             help="Path to YAML configuration file.",
         )(f)

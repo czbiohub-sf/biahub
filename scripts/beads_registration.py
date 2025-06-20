@@ -6,17 +6,20 @@ from iohub import open_ome_zarr
 from biahub.characterize_psf import detect_peaks
 from biahub.register import convert_transform_to_ants
 import napari
-from skimage.transform import EuclideanTransform, AffineTransform, warp
+from skimage.transform import AffineTransform
 from skimage.feature import match_descriptors
-from scipy.spatial.distance import cdist
+from biahub.cli.estimate_registration import _knn_edges, _compute_cost_matrix, match_hungarian
 
-# %%
-dataset = '2024_11_21_A549_TOMM20_DENV'
+import numpy as np
+
+
+dataset = '2024_10_31_A549_SEC61_ZIKV_DENV'
 fov = 'C/1/000000'
-root_path = Path(f'/hpc/projects/intracellular_dashboard/organelle_dynamics/{dataset}')
-t_idx = 21
+root_path = Path(f'/hpc/projects/intracellular_dashboard/organelle_dynamics/V2/2024_10_31_A549_SEC61_ZIKV_DENV')
+t_idx = 49
+match_algorithm = 'hungarian' # 'hungarian' or 'match_descriptors'
 
-lf_data_path = root_path / '1-preprocess/label-free/1-stabilize/' / f'{dataset}.zarr' / fov
+lf_data_path = root_path / '1-preprocess/label-free/2-stabilize/' / f'{dataset}_z.zarr' / fov
 ls_data_path = root_path / '1-preprocess/light-sheet/raw/0-deskew/' /  f'{dataset}.zarr' / fov
 
 approx_tform = np.asarray(
@@ -30,11 +33,11 @@ approx_tform = np.asarray(
 
 # %% Load data
 with open_ome_zarr(lf_data_path) as lf_ds:
-    lf_data = np.asarray(lf_ds.data[t_idx, 0]) # take second timepoint
+    lf_data = np.asarray(lf_ds.data[t_idx, 0]) # take phase channel
     lf_scale = lf_ds.scale
 
 with open_ome_zarr(ls_data_path) as ls_ds:
-    ls_data = np.asarray(ls_ds.data[t_idx, 1]) # take mCherry channel
+    ls_data = np.asarray(ls_ds.data[t_idx, 1]) # take mCherry channel or the GFP channel (depending where the beads are)
     ls_scale = ls_ds.scale
 
 # Register LS data with approx tranform
@@ -60,12 +63,6 @@ ls_peaks = detect_peaks(
     min_distance=0,
     verbose=True
 )
-#%%
-viewer = napari.Viewer()
-viewer.add_image(ls_data_reg, name='LS')
-viewer.add_points(
-    ls_peaks, name='peaks local max', size=12, symbol='ring', edge_color='yellow'
-)
 
 # %% Detect peaks in LF data
 lf_peaks = detect_peaks(
@@ -78,18 +75,54 @@ lf_peaks = detect_peaks(
 )
 #%%
 viewer = napari.Viewer()
+viewer.add_image(ls_data_reg, name='LS')
+viewer.add_points(
+    ls_peaks, name='peaks local max', size=12, symbol='ring', edge_color='yellow'
+)
+
+#%%
+viewer = napari.Viewer()
 viewer.add_image(lf_data, name='LF')
 viewer.add_points(
     lf_peaks, name='peaks local max', size=12, symbol='ring', edge_color='yellow'
 )
+#%%
+# Find matching peaks in the two datasets
+if match_algorithm == 'match_descriptor':
+    matches = match_descriptors(ls_peaks, lf_peaks, metric='euclidean',max_ratio=0.6,cross_check=True)
+else:
+    source_edges = _knn_edges(ls_peaks, k=5)
+    target_edges = _knn_edges(lf_peaks, k=5)
 
-# %% Find matching peaks in the two datasets
-matches = match_descriptors(ls_peaks, lf_peaks, metric='euclidean',max_ratio=0.6,cross_check=True)
+    # Step 1: A → B
+    C_ab = _compute_cost_matrix(ls_peaks, lf_peaks, source_edges, target_edges)
+    matches_ab = match_hungarian(C_ab, cost_threshold=np.quantile(C_ab, 0.10))
+    
+    # Step 2: B → A (swap arguments)
+    C_ba = _compute_cost_matrix(
+        lf_peaks,
+        ls_peaks,
+        target_edges,
+        source_edges,
+        distance_metric='euclidean',
+    )
+    matches_ba = match_hungarian(C_ba, cost_threshold=np.quantile(C_ba, 0.10))
+    # Step 3: Invert matches_ba to compare
 
+    reverse_map = {(j, i) for i, j in matches_ba}
+
+    # Step 4: Keep only symmetric matches
+    matches = np.array([
+        [i, j] for i, j in matches_ab if (i, j) in reverse_map
+    ])
+    len(matches)
+# %%
 # Exclude top 5% of distances as outliers
 dist = np.linalg.norm(ls_peaks[matches[:, 0]] - lf_peaks[matches[:, 1]], axis=1)
 matches = matches[dist<np.quantile(dist, 0.95), :]
-# %%
+len(matches)
+
+#%%
 # Calculate vectors between matches
 vectors = lf_peaks[matches[:, 1]] - ls_peaks[matches[:, 0]]
 
@@ -113,7 +146,8 @@ filtered_indices = np.where(
     np.abs(angles_deg - dominant_angle) <= threshold
 )[0]
 matches = matches[filtered_indices]
-#%%
+
+# %%
 viewer = napari.Viewer()
 viewer.add_image(lf_data, name='LF', contrast_limits=(0.5, 1.0),blending='additive')
 viewer.add_points(
@@ -121,7 +155,7 @@ viewer.add_points(
 )
 viewer.add_image(ls_data_reg, name='LS', contrast_limits=(110, 230), blending='additive', colormap='green')
 viewer.add_points(
-    ls_peaks, name='LS peaks', size=12, symbol='ring', edge_color='yellow',blending='additive'
+    ls_peaks, name='LS peaks', size=12, symbol='ring', edge_color='red',blending='additive'
 )
 
 # Project in 3D to be able to view the lines
@@ -132,6 +166,7 @@ viewer.add_shapes(
     blending='additive',
 )
 viewer.dims.ndisplay = 3
+
 
 # %% Register LS data using compount transform
 tform = AffineTransform(dimensionality=3) # Affine transform performs better than Euclidean
