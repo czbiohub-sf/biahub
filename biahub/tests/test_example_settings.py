@@ -8,6 +8,7 @@ from biahub.settings import (
     EstimateRegistrationSettings,
     RegistrationSettings,
     StabilizationSettings,
+    StitchSettings,
 )
 
 
@@ -79,3 +80,13 @@ def test_example_stabilize_timelapse_settings(example_stabilize_timelapse_settin
 def test_example_estimate_registration_settings(example_estimate_registration_settings):
     _, settings = example_estimate_registration_settings
     EstimateRegistrationSettings(**settings)
+
+
+def test_example_stitch_settings(example_stitch_settings):
+    _, settings = example_stitch_settings
+    validated_settings = StitchSettings(**settings)
+
+    # Check that leading z = 0 is added to total_translation
+    for value in validated_settings.total_translation.values():
+        assert len(value) == 3
+        assert value[0] == 0.0

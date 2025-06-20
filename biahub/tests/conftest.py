@@ -50,6 +50,14 @@ def example_estimate_registration_settings():
 
 
 @pytest.fixture(scope="function")
+def example_stitch_settings():
+    settings_path = "./settings/example_stitch_settings.yml"
+    with open(settings_path) as file:
+        settings = yaml.safe_load(file)
+    yield settings_path, settings
+
+
+@pytest.fixture(scope="function")
 def example_plate(tmp_path):
     """
     Example HCS plate with 3 positions and 6 channels and float32 data
