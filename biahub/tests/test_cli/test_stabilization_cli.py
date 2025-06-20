@@ -3,10 +3,12 @@ from click.testing import CliRunner
 from biahub.cli.main import cli
 
 
-def test_estimate_stabilization(tmp_path, example_plate):
+def test_estimate_stabilization(
+    tmp_path, example_plate, example_estimate_stabilization_settings
+):
     plate_path, _ = example_plate
-    output_path = tmp_path / "config.yml"
-
+    output_path = tmp_path / "z_stabilization_settings"
+    config_path, _ = example_estimate_stabilization_settings
     runner = CliRunner()
     result = runner.invoke(
         cli,
@@ -16,24 +18,14 @@ def test_estimate_stabilization(tmp_path, example_plate):
             str(plate_path) + "/A/1/0",
             "-o",
             str(output_path),
-            "-j",
-            "1",
             "-c",
-            "0",
-            "-y",
-            "-z",
-            "-v",
-            "--crop-size-xy",
-            "200",
-            "200",
-            '--stabilization-channel-indices',
-            '0',
+            str(config_path),
+            "--local",
         ],
     )
 
     # Weak test
-    assert "Estimating z stabilization parameters" in result.output
-    assert output_path.exists()
+    assert "stabilization_type='z" in result.output
     assert result.exit_code == 0
 
 

@@ -1,38 +1,66 @@
 import itertools
-import multiprocessing as mp
+import os
+import shutil
 
-from functools import partial
+from datetime import datetime
 from pathlib import Path
-from typing import Tuple
+from typing import List, Literal, Optional, Tuple, cast
 
 import click
+import dask.array as da
 import numpy as np
 import pandas as pd
+import submitit
 
 from iohub.ngff import open_ome_zarr
+from numpy.typing import ArrayLike
 from pystackreg import StackReg
+from scipy.fftpack import next_fast_len
 from waveorder.focus import focus_from_transverse_band
 
-from biahub.cli.parsing import input_position_dirpaths, output_filepath
-from biahub.cli.utils import model_to_yaml
-from biahub.settings import StabilizationSettings
+from biahub.cli.parsing import (
+    config_filepath,
+    input_position_dirpaths,
+    local,
+    output_filepath,
+    sbatch_filepath,
+    sbatch_to_submitit,
+)
+from biahub.cli.utils import estimate_resources, yaml_to_model
+from biahub.estimate_registration import (
+    _get_tform_from_beads,
+    evaluate_transforms,
+    save_transforms,
+    wait_for_jobs_to_finish,
+)
+from biahub.settings import (
+    AffineTransformSettings,
+    BeadsMatchSettings,
+    EstimateStabilizationSettings,
+    FocusFindingSettings,
+    PhaseCrossCorrSettings,
+    StabilizationSettings,
+    StackRegSettings,
+)
 
 NA_DET = 1.35
 LAMBDA_ILL = 0.500
 
 
-# TODO: Do we need to compute focus fiding on n_number of channels?
 def estimate_position_focus(
-    input_data_path: Path,
+    input_position_dirpath: Path,
     input_channel_indices: Tuple[int, ...],
     crop_size_xy: list[int, int],
-):
+    output_path_focus_csv: Path,
+    output_path_transform: Path,
+    verbose: bool = False,
+) -> None:
     position, time_idx, channel, focus_idx = [], [], [], []
 
-    with open_ome_zarr(input_data_path) as dataset:
+    with open_ome_zarr(input_position_dirpath) as dataset:
         channel_names = dataset.channel_names
-        T, C, Z, Y, X = dataset[0].shape
-        T_scale, _, _, _, X_scale = dataset.scale
+        T, _, Z, Y, X = dataset[0].shape
+        _, _, _, _, pixel_size = dataset.scale
 
         for tc_idx in itertools.product(range(T), input_channel_indices):
             data_zyx = dataset.data[tc_idx][
@@ -43,30 +71,61 @@ def estimate_position_focus(
 
             # if the FOV is empty, set the focal plane to 0
             if np.sum(data_zyx) == 0:
-                focal_plane = 0
+                z_idx = 0
             else:
-                focal_plane = focus_from_transverse_band(
+                z_idx = focus_from_transverse_band(
                     data_zyx,
                     NA_det=NA_DET,
                     lambda_ill=LAMBDA_ILL,
-                    pixel_size=X_scale,
+                    pixel_size=pixel_size,
+                )
+                click.echo(
+                    f"Estimating focus for timepoint {tc_idx[0]} and channel {tc_idx[1]}: {z_idx}"
                 )
 
-            position.append(str(Path(*input_data_path.parts[-3:])))
+            position.append(str(Path(*input_position_dirpath.parts[-3:])))
             time_idx.append(tc_idx[0])
             channel.append(channel_names[tc_idx[1]])
-            focus_idx.append(focal_plane)
+            focus_idx.append(z_idx)
 
-    position_stats_stabilized = {
-        "position": position,
-        "time_idx": time_idx,
-        "channel": channel,
-        "focus_idx": focus_idx,
-    }
-    return position_stats_stabilized
+    df = pd.DataFrame(
+        {
+            "position": position,
+            "time_idx": time_idx,
+            "channel": channel,
+            "focus_idx": focus_idx,
+        }
+    )
+    output_path_focus_csv.mkdir(parents=True, exist_ok=True)
+    if verbose:
+        click.echo(f"Saving focus finding results to {output_path_focus_csv}")
+
+    position_filename = str(Path(*input_position_dirpath.parts[-3:])).replace("/", "_")
+    output_csv = output_path_focus_csv / f"{position_filename}.csv"
+    df.to_csv(output_csv, index=False)
+
+    # ---- Generate and save Z transformation matrix per timepoint
+
+    # Compute Z drifts
+
+    z_focus_shift = [np.eye(4)]
+    z_val = focus_idx[0]
+    for z_val_next in focus_idx[1:]:
+        shift = np.eye(4)
+        shift[0, 3] = z_val_next - z_val
+        z_focus_shift.append(shift)
+    T_z_drift_mats = np.array(z_focus_shift)
+
+    output_path_transform.mkdir(parents=True, exist_ok=True)
+    np.save(output_path_transform / f"{position_filename}.npy", T_z_drift_mats)
+
+    if verbose:
+        click.echo(f"Saved Z transform matrices to {output_path_transform}")
 
 
-def get_mean_z_positions(dataframe_path: Path, verbose: bool = False) -> None:
+def get_mean_z_positions(
+    dataframe_path: Path, verbose: bool = False, method: Literal["mean", "median"] = "mean"
+) -> None:
     df = pd.read_csv(dataframe_path)
 
     # Sort the DataFrame based on 'time_idx'
@@ -76,212 +135,797 @@ def get_mean_z_positions(dataframe_path: Path, verbose: bool = False) -> None:
     df["focus_idx"] = df["focus_idx"].replace(0, np.nan).ffill()
 
     # Get the mean of positions for each time point
-    average_focus_idx = df.groupby("time_idx")["focus_idx"].mean().reset_index()
+    if method == "mean":
+        average_focus_idx = df.groupby("time_idx")["focus_idx"].mean().reset_index()
+    elif method == "median":
+        average_focus_idx = df.groupby("time_idx")["focus_idx"].median().reset_index()
+    else:
+        raise ValueError("Unknown averaging method.")
 
     if verbose:
         import matplotlib.pyplot as plt
 
-        # Get the moving average of the focus_idx
+        # # Get the moving average of the focus_idx
         plt.plot(average_focus_idx["focus_idx"], linestyle="--", label="mean of all positions")
         plt.xlabel('Time index')
         plt.ylabel('Focus index')
+        plt.ylim(0, 100)
         plt.legend()
         plt.savefig(dataframe_path.parent / "z_drift.png")
 
     return average_focus_idx["focus_idx"].values
 
 
-def estimate_z_stabilization(
-    input_data_paths: Path,
-    output_folder_path: Path,
-    z_drift_channel_idx: int = 0,
-    num_processes: int = 1,
-    crop_size_xy: list[int, int] = [600, 600],
-    verbose: bool = False,
-) -> np.ndarray:
-    output_folder_path.mkdir(parents=True, exist_ok=True)
+def pad_to_shape(
+    arr: ArrayLike, shape: Tuple[int, ...], mode: str, verbose: str = False, **kwargs
+) -> ArrayLike:
+    """Pads array to shape.
+    from shimPy
 
-    fun = partial(
-        estimate_position_focus,
-        input_channel_indices=(z_drift_channel_idx,),
-        crop_size_xy=crop_size_xy,
-    )
-    # TODO: do we need to natsort the input_data_paths?
-    with mp.Pool(processes=num_processes) as pool:
-        position_stats_stabilized = pool.map(fun, input_data_paths)
+    Parameters
+    ----------
+    arr : ArrayLike
+        Input array.
+    shape : Tuple[int]
+        Output shape.
+    mode : str
+        Padding mode (see np.pad).
 
-    df = pd.concat([pd.DataFrame.from_dict(stats) for stats in position_stats_stabilized])
-    df.to_csv(output_folder_path / 'positions_focus.csv', index=False)
+    Returns
+    -------
+    ArrayLike
+        Padded array.
+    """
+    assert arr.ndim == len(shape)
 
-    # Calculate and save the output file
-    z_drift_offsets = get_mean_z_positions(
-        output_folder_path / 'positions_focus.csv',
-        verbose=verbose,
-    )
+    dif = tuple(s - a for s, a in zip(shape, arr.shape))
+    assert all(d >= 0 for d in dif)
 
-    # Calculate the z focus shift matrices
-    z_focus_shift = [np.eye(4)]
-    # Find the z focus shift matrices for each time point based on the z_drift_offsets relative to the first timepoint.
-    z_val = z_drift_offsets[0]
-    for z_val_next in z_drift_offsets[1:]:
-        shift = np.eye(4)
-        shift[0, 3] = z_val_next - z_val
-        z_focus_shift.append(shift)
-    z_focus_shift = np.array(z_focus_shift)
+    pad_width = [[s // 2, s - s // 2] for s in dif]
 
     if verbose:
-        click.echo(f"Saving z focus shift matrices to {output_folder_path}")
-        z_focus_shift_filepath = output_folder_path / "z_focus_shift.npy"
-        np.save(z_focus_shift_filepath, z_focus_shift)
+        click.echo(
+            f"padding: input shape {arr.shape}, output shape {shape}, padding {pad_width}"
+        )
 
-    return z_focus_shift
+    return np.pad(arr, pad_width=pad_width, mode=mode, **kwargs)
+
+
+def center_crop(arr: ArrayLike, shape: Tuple[int, ...], verbose: str = False) -> ArrayLike:
+    """Crops the center of `arr`
+    from shimPy
+    """
+    assert arr.ndim == len(shape)
+
+    starts = tuple((cur_s - s) // 2 for cur_s, s in zip(arr.shape, shape))
+
+    assert all(s >= 0 for s in starts)
+
+    slicing = tuple(slice(s, s + d) for s, d in zip(starts, shape))
+    if verbose:
+        click.echo(
+            f"center crop: input shape {arr.shape}, output shape {shape}, slicing {slicing}"
+        )
+    return arr[slicing]
+
+
+def _match_shape(img: ArrayLike, shape: Tuple[int, ...]) -> ArrayLike:
+    """Pad or crop array to match provided shape.
+    from shimPy
+    """
+
+    if np.any(shape > img.shape):
+        padded_shape = np.maximum(img.shape, shape)
+        img = pad_to_shape(img, padded_shape, mode="reflect")
+
+    if np.any(shape < img.shape):
+        img = center_crop(img, shape)
+
+    return img
+
+
+def phase_cross_corr(
+    ref_img: ArrayLike,
+    mov_img: ArrayLike,
+    maximum_shift: float = 1.2,
+    normalization: bool = False,
+    verbose: bool = False,
+) -> Tuple[int, ...]:
+    """
+    Borrowing from Jordao dexpv2.crosscorr https://github.com/royerlab/dexpv2
+
+    Computes translation shift using arg. maximum of phase cross correlation.
+    Input are padded or cropped for fast FFT computation assuming a maximum translation shift.
+
+    Parameters
+    ----------
+    ref_img : ArrayLike
+        Reference image.
+    mov_img : ArrayLike
+        Moved image.
+    maximum_shift : float, optional
+        Maximum location shift normalized by axis size, by default 1.0
+
+    Returns
+    -------
+    Tuple[int, ...]
+        Shift between reference and moved image.
+    """
+    shape = tuple(
+        cast(int, next_fast_len(int(max(s1, s2) * maximum_shift)))
+        for s1, s2 in zip(ref_img.shape, mov_img.shape)
+    )
+
+    if verbose:
+        click.echo(
+            f"phase cross corr. fft shape of {shape} for arrays of shape {ref_img.shape} and {mov_img.shape} "
+            f"with maximum shift of {maximum_shift}"
+        )
+
+    ref_img = _match_shape(ref_img, shape)
+    mov_img = _match_shape(mov_img, shape)
+
+    Fimg1 = np.fft.rfftn(ref_img)
+    Fimg2 = np.fft.rfftn(mov_img)
+    eps = np.finfo(Fimg1.dtype).eps
+    del ref_img, mov_img
+
+    prod = Fimg1 * Fimg2.conj()
+    del Fimg1, Fimg2
+
+    if normalization:
+        norm = np.fmax(np.abs(prod), eps)
+    else:
+        norm = 1.0
+    corr = np.fft.irfftn(prod / norm)
+    del prod, norm
+
+    corr = np.fft.fftshift(np.abs(corr))
+
+    argmax = np.argmax(corr)
+    peak = np.unravel_index(argmax, corr.shape)
+    peak = tuple(s // 2 - p for s, p in zip(corr.shape, peak))
+
+    if verbose:
+        click.echo(f"phase cross corr. peak at {peak}")
+
+    return peak
+
+
+def get_tform_from_pcc(
+    t: int,
+    source_channel_tzyx: da.Array,
+    target_channel_tzyx: da.Array,
+    verbose: bool = False,
+) -> Optional[np.ndarray]:
+    try:
+        # Get the target and source images
+        target = np.asarray(source_channel_tzyx[t]).astype(np.float32)
+        source = np.asarray(target_channel_tzyx[t]).astype(np.float32)
+
+        shift = phase_cross_corr(target, source)
+        if verbose:
+            click.echo(f"Time {t}: shift = {shift}")
+
+    except Exception as e:
+        click.echo(f"Failed PCC at time {t}: {e}")
+        return None
+
+    dz, dy, dx = shift
+    mat = np.eye(4)
+    mat[0, 3] = dx
+    mat[1, 3] = dy
+    mat[2, 3] = dz
+    return mat
+
+
+def estimate_xyz_stabilization_pcc_per_position(
+    input_position_dirpath: Path,
+    output_folder_path: Path,
+    channel_index: int,
+    crop_size_xy: list[int],
+    t_reference: str = "first",
+    verbose: bool = False,
+) -> None:
+    with open_ome_zarr(input_position_dirpath) as input_position:
+        channel_tzyx = input_position.data.dask_array()[:, channel_index]
+        T, _, Y, X = channel_tzyx.shape
+
+        x_idx = slice(X // 2 - crop_size_xy[0] // 2, X // 2 + crop_size_xy[0] // 2)
+        y_idx = slice(Y // 2 - crop_size_xy[1] // 2, Y // 2 + crop_size_xy[1] // 2)
+
+        channel_tzyx_cropped = channel_tzyx[:, :, y_idx, x_idx]
+
+        if t_reference == "first":
+            target_channel_tzyx = np.broadcast_to(
+                channel_tzyx_cropped[0], channel_tzyx_cropped.shape
+            ).copy()
+        elif t_reference == "previous":
+            target_channel_tzyx = np.roll(channel_tzyx_cropped, shift=1, axis=0)
+            target_channel_tzyx[0] = channel_tzyx_cropped[0]
+        else:
+            raise ValueError("Invalid reference. Use 'first' or 'previous'.")
+
+        source_channel_tzyx = channel_tzyx_cropped
+
+        transforms = []
+
+        for t in range(T):
+            click.echo(f"Estimating PCC for timepoint {t}")
+            if t == 0:
+                transforms.append(np.eye(4).tolist())
+            else:
+                transforms.append(
+                    get_tform_from_pcc(
+                        t,
+                        source_channel_tzyx,
+                        target_channel_tzyx,
+                        verbose=verbose,
+                    )
+                )
+            click.echo(f"Transform for timepoint {t}: {transforms[-1]}")
+
+        position_filename = str(Path(*input_position_dirpath.parts[-3:])).replace("/", "_")
+        np.save(
+            output_folder_path / f"{position_filename}.npy",
+            np.array(transforms, dtype=np.float32),
+        )
+        click.echo(f"Saved transforms for {position_filename}.")
+    return transforms
+
+
+def estimate_xyz_stabilization_pcc(
+    input_position_dirpaths: list[Path],
+    output_folder_path: Path,
+    phase_cross_corr_settings: PhaseCrossCorrSettings,
+    channel_index: int = 0,
+    sbatch_filepath: Path = None,
+    cluster: str = "local",
+    verbose: bool = False,
+) -> np.ndarray:
+
+    skip_beads_fov = phase_cross_corr_settings.skip_beads_fov
+
+    input_position_dirpaths = remove_beads_fov_from_path_list(
+        input_position_dirpaths, skip_beads_fov
+    )
+
+    output_folder_path.mkdir(parents=True, exist_ok=True)
+    slurm_out_path = output_folder_path / "slurm_output"
+    slurm_out_path.mkdir(parents=True, exist_ok=True)
+
+    with open_ome_zarr(input_position_dirpaths[0]) as dataset:
+        shape = dataset.data.shape
+        T, C, Y, X = shape
+
+    num_cpus, gb_ram_per_cpu = estimate_resources(
+        shape=(T, C, Y, X), ram_multiplier=16, max_num_cpus=16
+    )
+
+    slurm_args = {
+        "slurm_job_name": "estimate_xyz_pcc",
+        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
+        "slurm_cpus_per_task": num_cpus,
+        "slurm_array_parallelism": 100,
+        "slurm_time": 10,
+        "slurm_partition": "preempted",
+    }
+
+    if sbatch_filepath:
+        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
+
+    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
+    executor.update_parameters(**slurm_args)
+
+    click.echo(f"Submitting SLURM xyz PCC jobs with resources: {slurm_args}")
+    transforms_out_path = output_folder_path / "transforms_per_position"
+    transforms_out_path.mkdir(parents=True, exist_ok=True)
+
+    jobs = []
+    with executor.batch():
+        for input_position_dirpath in input_position_dirpaths:
+            job = executor.submit(
+                estimate_xyz_stabilization_pcc_per_position,
+                input_position_dirpath=input_position_dirpath,
+                output_folder_path=transforms_out_path,
+                channel_index=channel_index,
+                crop_size_xy=phase_cross_corr_settings.crop_size_xy,
+                t_reference=phase_cross_corr_settings.t_reference,
+                verbose=verbose,
+            )
+            jobs.append(job)
+
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_path = slurm_out_path / f"job_ids_{timestamp}.log"
+    with open(log_path, "w") as log_file:
+        for job in jobs:
+            log_file.write(f"{job.job_id}\n")
+
+    job_ids = [str(j.job_id) for j in jobs]
+    wait_for_jobs_to_finish(job_ids)
+
+    transform_files = list(transforms_out_path.glob("*.npy"))
+
+    fov_transforms = {}
+    for file_path in transform_files:
+        fov_filename = file_path.stem
+        fov_transforms[fov_filename] = np.load(file_path).tolist()
+
+    shutil.rmtree(transforms_out_path)
+
+    return fov_transforms
+
+
+def estimate_xyz_stabilization_with_beads(
+    channel_tzyx: da.Array,
+    beads_match_settings: BeadsMatchSettings,
+    affine_transform_settings: AffineTransformSettings,
+    verbose: bool = False,
+    cluster: str = "local",
+    sbatch_filepath: Optional[Path] = None,
+    output_folder_path: Path = None,
+):
+    """
+    Perform beads-based temporal registration of 4D data using affine transformations.
+
+    This function calculates timepoint-specific affine transformations to align a source channel
+    to a target channel in 4D (T, Z, Y, X) data. It validates, smooths, and interpolates transformations
+    across timepoints for consistent registration.
+
+    Parameters:
+    - channel_tzyx (da.Array): 4D array (T, Z, Y, X) of the source channel (Dask array).
+    - approx_tform (list): Initial approximate affine transform (4x4 matrix) for guiding registration.
+    - num_processes (int): Number of parallel processes for transformation computation.
+    - window_size (int): Size of the moving window for smoothing transformations.
+    - tolerance (float): Maximum allowed difference between consecutive transformations for validation.
+    - angle_threshold (int): Threshold for filtering outliers in detected bead matches (in degrees).
+    - verbose (bool): If True, prints detailed logs of the registration process.
+
+    Returns:
+    - transforms (list): List of affine transformation matrices (4x4), one for each timepoint.
+                         Invalid or missing transformations are interpolated.
+
+    Notes:
+    - Each timepoint is processed in parallel using a multiprocessing pool.
+    - Transformations are smoothed with a moving average window and validated against a reference.
+    - Missing transformations are interpolated linearly across timepoints.
+    - Use verbose=True for detailed logging during registration.
+    """
+
+    (T, Z, Y, X) = channel_tzyx.shape
+
+    approx_tform = np.eye(4)
+
+    if beads_match_settings.t_reference == "first":
+        target_channel_tzyx = np.broadcast_to(channel_tzyx[0], (T, Z, Y, X)).copy()
+    elif beads_match_settings.t_reference == "previous":
+        target_channel_tzyx = np.roll(channel_tzyx, shift=-1, axis=0)
+        target_channel_tzyx[0] = channel_tzyx[0]
+
+    else:
+        raise ValueError("Invalid reference. Please use 'first' or 'previous as reference")
+
+    # Compute transformations in parallel
+
+    num_cpus, gb_ram_per_cpu = estimate_resources(
+        shape=(T, 1, Z, Y, X), ram_multiplier=5, max_num_cpus=16
+    )
+
+    # Prepare SLURM arguments
+    slurm_args = {
+        "slurm_job_name": "estimate_focus_z",
+        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
+        "slurm_cpus_per_task": num_cpus,
+        "slurm_array_parallelism": 100,
+        "slurm_time": 5,
+        "slurm_partition": "preempted",
+    }
+
+    if sbatch_filepath:
+        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
+
+    output_folder_path.mkdir(parents=True, exist_ok=True)
+    slurm_out_path = output_folder_path / "slurm_output"
+    slurm_out_path.mkdir(parents=True, exist_ok=True)
+
+    # Submitit executor
+    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
+    executor.update_parameters(**slurm_args)
+
+    click.echo(f"Submitting SLURM focus estimation jobs with resources: {slurm_args}")
+    output_transforms_path = output_folder_path / "xyz_transforms"
+    output_transforms_path.mkdir(parents=True, exist_ok=True)
+
+    # Submit jobs
+    jobs = []
+    with executor.batch():
+        for t in range(1, T, 1):
+            job = executor.submit(
+                _get_tform_from_beads,
+                approx_tform=approx_tform,
+                source_channel_tzyx=channel_tzyx,
+                target_channel_tzyx=target_channel_tzyx,
+                verbose=verbose,
+                beads_match_settings=beads_match_settings,
+                affine_transform_settings=affine_transform_settings,
+                slurm=True,
+                output_folder_path=output_transforms_path,
+                t_idx=t,
+            )
+            jobs.append(job)
+
+    # Save job IDs
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_path = slurm_out_path / f"job_ids_{timestamp}.log"
+    with open(log_path, "w") as log_file:
+        for job in jobs:
+            log_file.write(f"{job.job_id}\n")
+    # Wait for all jobs to finish
+    job_ids = [str(j.job_id) for j in jobs]
+    wait_for_jobs_to_finish(job_ids)
+    # Get list of .npy transform files
+    # Load and collect all transform arrays
+    transforms = [np.eye(4).tolist()]
+    for t in range(1, T):
+        file_path = output_transforms_path / f"{t}.npy"
+        if not os.path.exists(file_path):
+            transforms.append(None)
+            click.echo(f"Transform for timepoint {t} not found. Using None.")
+        else:
+            T_zyx_shift = np.load(file_path).tolist()
+            transforms.append(T_zyx_shift)
+
+    # check if len(transforms) == T
+    if len(transforms) != T:
+        raise ValueError(
+            f"Number of transforms {len(transforms)} does not match number of timepoints {T}"
+        )
+
+    return transforms
+
+
+def estimate_xy_stabilization_per_position(
+    input_position_dirpath: Path,
+    output_folder_path: Path,
+    df_z_focus_path: Path,
+    channel_index: int,
+    crop_size_xy: list[int, int],
+    t_reference: str = "previous",
+    verbose: bool = False,
+) -> np.ndarray:
+
+    with open_ome_zarr(input_position_dirpath) as input_position:
+        T, _, _, Y, X = input_position.data.shape
+        x_idx = slice(X // 2 - crop_size_xy[0] // 2, X // 2 + crop_size_xy[0] // 2)
+        y_idx = slice(Y // 2 - crop_size_xy[1] // 2, Y // 2 + crop_size_xy[1] // 2)
+
+        if verbose:
+            click.echo(f"Reading focus index from {df_z_focus_path}")
+        df = pd.read_csv(df_z_focus_path)
+        pos_idx = str(Path(*input_position_dirpath.parts[-3:]))
+        focus_idx = df[df["position"] == pos_idx]["focus_idx"]
+        focus_idx = focus_idx.replace(0, np.nan).ffill().fillna(focus_idx.mean())
+
+        z_idx = focus_idx.astype(int).to_list()
+
+        if verbose:
+            click.echo("Calculating xy stabilization...")
+        # Get the data for the specified channel and crop
+        tyx_data = np.stack(
+            [
+                input_position[0][t, channel_index, z, y_idx, x_idx]
+                for t, z in zip(range(T), z_idx)
+            ]
+        )
+        tyx_data = np.clip(tyx_data, a_min=0, a_max=None)
+
+        sr = StackReg(StackReg.TRANSLATION)
+        T_stackreg = sr.register_stack(tyx_data, reference=t_reference, axis=0)
+
+        # Swap translation directions: (x, y) -> (y, x)
+        for tform in T_stackreg:
+            tform[0, 2], tform[1, 2] = tform[1, 2], tform[0, 2]
+
+        T_zyx_shift = np.zeros((T_stackreg.shape[0], 4, 4))
+        T_zyx_shift[:, 1:4, 1:4] = T_stackreg
+        T_zyx_shift[:, 0, 0] = 1
+        # save the transforms as
+        position_filename = str(Path(*input_position_dirpath.parts[-3:]))
+        position_filename = position_filename.replace("/", "_")
+
+        np.save(
+            output_folder_path / f"{position_filename}.npy", T_zyx_shift.astype(np.float32)
+        )
+
+    return T_zyx_shift
 
 
 def estimate_xy_stabilization(
-    input_data_paths: Path,
+    input_position_dirpaths: list[Path],
     output_folder_path: Path,
-    c_idx: int = 0,
-    crop_size_xy: list[int, int] = (400, 400),
+    stack_reg_settings: StackRegSettings,
+    channel_index: int = 0,
+    sbatch_filepath: Optional[Path] = None,
+    cluster: str = "local",
     verbose: bool = False,
 ) -> np.ndarray:
-    input_data_path = input_data_paths[0]
-    input_position = open_ome_zarr(input_data_path)
-    output_folder_path = Path(output_folder_path)
-    output_folder_path.mkdir(parents=True, exist_ok=True)
+    """
+    Estimate XY stabilization using StackReg.
+    """
 
-    focus_params = {
-        "NA_det": NA_DET,
-        "lambda_ill": LAMBDA_ILL,
-        "pixel_size": input_position.scale[-1],
+    skip_beads_fov = stack_reg_settings.skip_beads_fov
+    input_position_dirpaths = remove_beads_fov_from_path_list(
+        input_position_dirpaths, skip_beads_fov
+    )
+
+    output_folder_path.mkdir(parents=True, exist_ok=True)
+    slurm_out_path = output_folder_path / "slurm_output"
+    slurm_out_path.mkdir(parents=True, exist_ok=True)
+
+    # Estimate resources from a sample dataset
+    with open_ome_zarr(input_position_dirpaths[0]) as dataset:
+        shape = dataset.data.shape  # (T, C, Z, Y, X)
+
+    df_focus_path = output_folder_path / "positions_focus.csv"
+
+    if df_focus_path.exists():
+        click.echo("Using existing Z focus index file.")
+    else:
+        click.echo("Estimating Z focus positions...")
+
+        estimate_z_stabilization(
+            input_position_dirpaths=input_position_dirpaths,
+            output_folder_path=output_folder_path,
+            channel_index=channel_index,
+            sbatch_filepath=sbatch_filepath,
+            cluster=cluster,
+            verbose=verbose,
+            estimate_z_index=True,
+            focus_finding_settings=stack_reg_settings.focus_finding_settings,
+        )
+
+    num_cpus, gb_ram_per_cpu = estimate_resources(
+        shape=shape, ram_multiplier=16, max_num_cpus=16
+    )
+
+    # Prepare SLURM arguments
+    slurm_args = {
+        "slurm_job_name": "estimate_focus_z",
+        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
+        "slurm_cpus_per_task": num_cpus,
+        "slurm_array_parallelism": 100,
+        "slurm_time": 10,
+        "slurm_partition": "preempted",
     }
 
-    # Get metadata
-    T, C, Z, Y, X = input_position.data.shape
-    x_idx = slice(X // 2 - crop_size_xy[0] // 2, X // 2 + crop_size_xy[0] // 2)
-    y_idx = slice(Y // 2 - crop_size_xy[1] // 2, Y // 2 + crop_size_xy[1] // 2)
+    if sbatch_filepath:
+        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
-    if (output_folder_path / "positions_focus.csv").exists():
-        df = pd.read_csv(output_folder_path / "positions_focus.csv")
-        pos_idx = str(Path(*input_data_path.parts[-3:]))
-        focus_idx = df[df["position"] == pos_idx]["focus_idx"]
-        # forward fill 0 values, when replace remaining NaN with the mean
-        focus_idx = focus_idx.replace(0, np.nan).ffill()
-        focus_idx = focus_idx.fillna(focus_idx.mean())
-        z_idx = focus_idx.astype(int).to_list()
-    else:
-        z_idx = [
-            focus_from_transverse_band(
-                input_position[0][
-                    0,
-                    c_idx,
-                    :,
-                    y_idx,
-                    x_idx,
-                ],
-                **focus_params,
+    # Submitit executor
+    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
+    executor.update_parameters(**slurm_args)
+
+    click.echo(f"Submitting SLURM focus estimation jobs with resources: {slurm_args}")
+    output_transforms_path = output_folder_path / "xy_transforms"
+    output_transforms_path.mkdir(parents=True, exist_ok=True)
+
+    # Submit jobs
+    jobs = []
+    with executor.batch():
+        for input_position_dirpath in input_position_dirpaths:
+            job = executor.submit(
+                estimate_xy_stabilization_per_position,
+                input_position_dirpath=input_position_dirpath,
+                output_folder_path=output_transforms_path,
+                df_z_focus_path=df_focus_path,
+                channel_index=channel_index,
+                crop_size_xy=stack_reg_settings.crop_size_xy,
+                t_reference=stack_reg_settings.t_reference,
+                verbose=verbose,
             )
-        ] * T
-        if verbose:
-            click.echo(f"Estimated in-focus slice: {z_idx}")
+            jobs.append(job)
 
-    # Load timelapse and ensure negative values are not present
-    tyx_data = np.stack(
-        [
-            input_position[0][_t_idx, c_idx, _z_idx, y_idx, x_idx]
-            for _t_idx, _z_idx in zip(range(T), z_idx)
+    # Save job IDs
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_path = slurm_out_path / f"job_ids_{timestamp}.log"
+    with open(log_path, "w") as log_file:
+        for job in jobs:
+            log_file.write(f"{job.job_id}\n")
+
+    # Wait for all jobs to finish
+    job_ids = [str(j.job_id) for j in jobs]
+    wait_for_jobs_to_finish(job_ids)
+
+    # Get list of .npy transform files
+    transforms_paths = list(output_transforms_path.glob("*.npy"))
+    # Load and collect all transform arrays
+    fov_transforms = {}
+
+    for file_path in transforms_paths:
+        fov_filename = file_path.stem
+        fov_transforms[fov_filename] = np.load(file_path).tolist()
+
+    shutil.rmtree(output_transforms_path)
+
+    return fov_transforms
+
+
+def remove_beads_fov_from_path_list(position_dirpaths: list[Path], skip_beads_fov: str):
+    if skip_beads_fov != '0':
+        # Remove the beads FOV from the input data paths
+        click.echo(f"Removing beads FOV {skip_beads_fov} from input data paths")
+        position_dirpaths = [
+            path for path in position_dirpaths if skip_beads_fov not in str(path)
         ]
+    return position_dirpaths
+
+
+def estimate_z_stabilization(
+    input_position_dirpaths: list[Path],
+    output_folder_path: Path,
+    focus_finding_settings: FocusFindingSettings,
+    channel_index: int,
+    sbatch_filepath: Optional[Path] = None,
+    cluster: str = "local",
+    verbose: bool = False,
+    estimate_z_index: bool = False,
+) -> np.ndarray:
+    """
+    Submit SLURM jobs to estimate per-position Z focus and return averaged drift matrices.
+    """
+    skip_beads_fov = focus_finding_settings.skip_beads_fov
+    input_position_dirpaths = remove_beads_fov_from_path_list(
+        input_position_dirpaths, skip_beads_fov
     )
-    tyx_data = np.clip(tyx_data, a_min=0, a_max=None)
 
-    # register each frame to the previous (already registered) one
-    # this is what the original StackReg ImageJ plugin uses
-    sr = StackReg(StackReg.TRANSLATION)
+    output_folder_path.mkdir(parents=True, exist_ok=True)
+    slurm_out_path = output_folder_path / "slurm_output"
+    slurm_out_path.mkdir(parents=True, exist_ok=True)
 
-    T_stackreg = sr.register_stack(tyx_data, reference="previous", axis=0)
+    # Estimate resources from a sample dataset
+    with open_ome_zarr(input_position_dirpaths[0]) as dataset:
+        shape = dataset.data.shape  # (T, C, Z, Y, X)
 
-    # Swap values in the array since stackreg is xy and we need yx
-    for subarray in T_stackreg:
-        subarray[0, 2], subarray[1, 2] = subarray[1, 2], subarray[0, 2]
+    num_cpus, gb_ram_per_cpu = estimate_resources(
+        shape=shape, ram_multiplier=16, max_num_cpus=16
+    )
 
-    T_zyx_shift = np.zeros((T_stackreg.shape[0], 4, 4))
-    T_zyx_shift[:, 1:4, 1:4] = T_stackreg
-    T_zyx_shift[:, 0, 0] = 1
+    # Prepare SLURM arguments
+    slurm_args = {
+        "slurm_job_name": "estimate_focus_z",
+        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
+        "slurm_cpus_per_task": num_cpus,
+        "slurm_array_parallelism": 100,
+        "slurm_time": 30,
+        "slurm_partition": "preempted",
+    }
 
-    # Save the translation matrices
-    if verbose:
-        click.echo(f"Saving translation matrices to {output_folder_path}")
-        yx_shake_translation_tx_filepath = (
-            output_folder_path / "yx_shake_translation_tx_ants.npy"
+    if sbatch_filepath:
+        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
+
+    # Submitit executor
+    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
+    executor.update_parameters(**slurm_args)
+
+    click.echo(f"Submitting SLURM focus estimation jobs with resources: {slurm_args}")
+    output_folder_focus_path = output_folder_path / "z_focus_positions"
+    output_folder_focus_path.mkdir(parents=True, exist_ok=True)
+
+    output_transforms_path = output_folder_path / "z_transforms"
+    output_transforms_path.mkdir(parents=True, exist_ok=True)
+
+    # Submit jobs
+    jobs = []
+
+    with executor.batch():
+        for input_position_dirpath in input_position_dirpaths:
+            job = executor.submit(
+                estimate_position_focus,
+                input_position_dirpath=input_position_dirpath,
+                input_channel_indices=(channel_index,),
+                crop_size_xy=focus_finding_settings.crop_size_xy,
+                output_path_focus_csv=output_folder_focus_path,
+                output_path_transform=output_transforms_path,
+                verbose=verbose,
+            )
+            jobs.append(job)
+
+    # Save job IDs
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_path = slurm_out_path / f"job_ids_{timestamp}.log"
+    with open(log_path, "w") as log_file:
+        for job in jobs:
+            log_file.write(f"{job.job_id}\n")
+
+    # Wait for all jobs to finish
+    job_ids = [str(j.job_id) for j in jobs]
+    wait_for_jobs_to_finish(job_ids)
+
+    # Aggregate results
+    focus_csvs_path = list(output_folder_focus_path.glob("*.csv"))
+
+    # Check length of focus_csvs_path
+    if len(focus_csvs_path) == 0:
+        click.echo("No focus CSV files found. Exiting.")
+        return
+    elif len(focus_csvs_path) != len(input_position_dirpaths):
+        click.echo(
+            f"Warning: {len(focus_csvs_path)} focus CSV files found for {len(input_position_dirpaths)} input data paths."
         )
-        np.save(yx_shake_translation_tx_filepath, T_zyx_shift)
 
-    input_position.close()
+    df = pd.concat([pd.read_csv(f) for f in focus_csvs_path])
+    # sort by position and time_idx
+    if Path(output_folder_path / "positions_focus.csv").exists():
+        click.echo("Using existing focus CSV file.")
+        # read the existing CSV file
+        df_old = pd.read_csv(output_folder_path / "positions_focus.csv")
+        # concatenate the new and old dataframes
+        df = pd.concat([df, df_old])
+        # drop duplicates
+        df = df.drop_duplicates(subset=["position", "time_idx"])
+        # sort by position and time_idx
+    df = df.sort_values(["position", "time_idx"])
+    # Save the results to a CSV file
+    df.to_csv(output_folder_path / "positions_focus.csv", index=False)
 
-    return T_zyx_shift
+    shutil.rmtree(output_folder_focus_path)
+
+    if estimate_z_index:
+        shutil.rmtree(output_transforms_path)
+        return
+
+    if focus_finding_settings.average_across_wells:
+        # # Compute Z drifts
+        z_drift_offsets = get_mean_z_positions(
+            dataframe_path=output_folder_path / "positions_focus.csv",
+            method="median",
+            verbose=verbose,
+        )
+
+        z_focus_shift = [np.eye(4)]
+        z_val = z_drift_offsets[0]
+        transform = {}
+        for z_val_next in z_drift_offsets[1:]:
+            shift = np.eye(4)
+            shift[0, 3] = z_val_next - z_val
+            z_focus_shift.append(shift)
+        transform["average"] = np.array(z_focus_shift).tolist()
+
+        if verbose:
+            click.echo(f"Saving z focus shift matrices to {output_folder_path}")
+            np.save(output_folder_path / "z_focus_shift.npy", transform["average"])
+
+        return transform
+    else:
+        # Get list of .npy transform files
+        transforms_paths = list(output_transforms_path.glob("*.npy"))
+
+        # Load and collect all transform arrays
+        fov_transforms = {}
+
+        for file_path in transforms_paths:
+            T_zyx_shift = np.load(file_path).tolist()
+            fov_filename = file_path.stem
+            #
+            fov_transforms[fov_filename] = T_zyx_shift
+
+        shutil.rmtree(output_transforms_path)
+
+    return fov_transforms
 
 
 @click.command("estimate-stabilization")
 @input_position_dirpaths()
 @output_filepath()
-@click.option(
-    "--num-processes",
-    "-j",
-    default=1,
-    help="Number of parallel processes. Default is 1.",
-    required=False,
-    type=int,
-)
-@click.option(
-    "--channel-index",
-    "-c",
-    default=0,
-    help="Channel index used for estimating stabilization parameters. Default is 0.",
-    required=False,
-    type=int,
-)
-@click.option(
-    "--stabilize-xy",
-    "-y",
-    is_flag=True,
-    help="Estimate yx drift and apply to the input data. Default is False.",
-)
-@click.option(
-    "--stabilize-z",
-    "-z",
-    is_flag=True,
-    help="Estimate z drift and apply to the input data. Default is False.",
-)
-@click.option(
-    "--verbose",
-    "-v",
-    is_flag=True,
-    type=bool,
-    help="Stabilization verbose. Default is False.",
-)
-@click.option(
-    "--crop-size-xy",
-    nargs=2,
-    type=int,
-    default=[300, 300],
-    help="Crop size in xy. Enter two integers. Default is 300 300.",
-)
-@click.option(
-    "--stabilization-channel-indices",
-    help="Indices of channels which will be stabilized. Default is all channels.",
-    multiple=True,
-    type=int,
-    default=[],
-)
+@config_filepath()
+@sbatch_filepath()
+@local()
 def estimate_stabilization_cli(
-    input_position_dirpaths,
-    output_filepath,
-    num_processes,
-    channel_index,
-    stabilize_xy,
-    stabilize_z,
-    verbose,
-    crop_size_xy,
-    stabilization_channel_indices,
+    input_position_dirpaths: List[str],
+    output_filepath: str,
+    config_filepath: str,
+    sbatch_filepath: str = None,
+    local: bool = False,
 ):
     """
     Estimate the Z and/or XY timelapse stabilization matrices.
@@ -291,89 +935,356 @@ def estimate_stabilization_cli(
     The size of the crop in xy can be specified with the crop-size-xy option.
 
     Example usage:
-    biahub stabilization -i ./timelapse.zarr/0/0/0 -o ./stabilization.yml -y -z -v --crop-size-xy 300 300
+    biahub stabilization -i ./timelapse.zarr/0/0/0 -o ./stabilization.yml -y -z -b -v --crop-size-xy 300 300
 
     Note: the verbose output will be saved at the same level as the output zarr.
     """
-    if not (stabilize_xy or stabilize_z):
-        raise ValueError("At least one of 'stabilize_xy' or 'stabilize_z' must be selected")
 
-    if output_filepath.suffix not in [".yml", ".yaml"]:
-        raise ValueError("Output file must be a yaml file")
+    # Load the settings
+    config_filepath = Path(config_filepath)
+
+    settings = yaml_to_model(config_filepath, EstimateStabilizationSettings)
+    click.echo(f"Settings: {settings}")
+
+    verbose = settings.verbose
+    stabilization_estimation_channel = settings.stabilization_estimation_channel
+    stabilization_type = settings.stabilization_type
+    stabilization_method = settings.stabilization_method
 
     output_dirpath = output_filepath.parent
     output_dirpath.mkdir(parents=True, exist_ok=True)
 
     # Channel names to process
-    stabilization_channel_names = []
     with open_ome_zarr(input_position_dirpaths[0]) as dataset:
         channel_names = dataset.channel_names
         voxel_size = dataset.scale
-    if len(stabilization_channel_indices) < 1:
-        stabilization_channel_indices = range(len(channel_names))
-        stabilization_channel_names = channel_names
+        channel_index = channel_names.index(stabilization_estimation_channel)
+        T, C, Z, Y, X = dataset.data.shape
+
+    # Run locally or submit to SLURM
+    if local:
+        cluster = "local"
     else:
-        # Make the input a list
-        stabilization_channel_indices = list(stabilization_channel_indices)
-        stabilization_channel_names = []
-        # Check the channel indeces are valid
-        for c_idx in stabilization_channel_indices:
-            if c_idx not in range(len(channel_names)):
-                raise ValueError(
-                    f"Channel index {c_idx} is not valid. Please provide channel indeces from 0 to {len(channel_names)-1}"
+        cluster = "slurm"
+    eval_transform_settings = settings.eval_transform_settings
+
+    if "xyz" == stabilization_type:
+        if stabilization_method == "focus-finding":
+            click.echo("Estimating z stabilization parameters")
+
+            z_transforms_dict = estimate_z_stabilization(
+                input_position_dirpaths=input_position_dirpaths,
+                output_folder_path=output_dirpath,
+                channel_index=channel_index,
+                focus_finding_settings=settings.focus_finding_settings,
+                sbatch_filepath=sbatch_filepath,
+                cluster=cluster,
+                verbose=verbose,
+            )
+
+            click.echo("Estimating xy stabilization parameters")
+            xy_transforms_dict = estimate_xy_stabilization(
+                input_position_dirpaths=input_position_dirpaths,
+                output_folder_path=output_dirpath,
+                channel_index=channel_index,
+                stack_reg_settings=settings.stack_reg_settings,
+                sbatch_filepath=sbatch_filepath,
+                cluster=cluster,
+                verbose=verbose,
+            )
+
+            model = StabilizationSettings(
+                stabilization_type=settings.stabilization_type,
+                stabilization_method=settings.stabilization_method,
+                stabilization_estimation_channel=settings.stabilization_estimation_channel,
+                stabilization_channels=settings.stabilization_channels,
+                affine_transform_zyx_list=[],
+                time_indices="all",
+                output_voxel_size=voxel_size,
+            )
+            try:
+
+                # save each FOV separately
+                for fov, xy_transforms in xy_transforms_dict.items():
+                    click.echo(f"Processing FOV {fov}")
+                    # Get the z drift matrices for the current FOV
+                    z_transforms = np.asarray(z_transforms_dict[fov])
+                    xy_transforms = np.asarray(xy_transforms)
+
+                    if xy_transforms.shape[0] != z_transforms.shape[0]:
+                        raise ValueError(
+                            "The number of translation matrices and z drift matrices must be the same"
+                        )
+
+                    xyz_transforms = np.asarray(
+                        [a @ b for a, b in zip(xy_transforms, z_transforms)]
+                    ).tolist()
+                    if eval_transform_settings:
+                        # Validate and filter transforms
+                        xyz_transforms = evaluate_transforms(
+                            transforms=xyz_transforms,
+                            shape_zyx=(Z, Y, X),
+                            validation_window_size=eval_transform_settings.validation_window_size,
+                            validation_tolerance=eval_transform_settings.validation_tolerance,
+                            interpolation_window_size=eval_transform_settings.interpolation_window_size,
+                            interpolation_type=eval_transform_settings.interpolation_type,
+                            verbose=verbose,
+                        )
+                        z_transforms = evaluate_transforms(
+                            transforms=z_transforms,
+                            shape_zyx=(Z, Y, X),
+                            validation_window_size=eval_transform_settings.validation_window_size,
+                            validation_tolerance=eval_transform_settings.validation_tolerance,
+                            interpolation_window_size=eval_transform_settings.interpolation_window_size,
+                            interpolation_type=eval_transform_settings.interpolation_type,
+                            verbose=verbose,
+                        )
+                        xy_transforms = evaluate_transforms(
+                            transforms=xy_transforms,
+                            shape_zyx=(Z, Y, X),
+                            validation_window_size=eval_transform_settings.validation_window_size,
+                            validation_tolerance=eval_transform_settings.validation_tolerance,
+                            interpolation_window_size=eval_transform_settings.interpolation_window_size,
+                            interpolation_type=eval_transform_settings.interpolation_type,
+                            verbose=verbose,
+                        )
+                    save_transforms(
+                        model=model,
+                        transforms=xy_transforms,
+                        output_filepath_settings=output_dirpath
+                        / "xyz_stabilization_settings"
+                        / f"{fov}.yml",
+                        output_filepath_plot=output_dirpath
+                        / "translation_plots"
+                        / f"{fov}.png",
+                        verbose=verbose,
+                    )
+                    save_transforms(
+                        model=model,
+                        transforms=z_transforms,
+                        output_filepath_settings=output_dirpath
+                        / "z_stabilization_settings"
+                        / f"{fov}.yml",
+                        output_filepath_plot=output_dirpath
+                        / "translation_plots"
+                        / f"{fov}.png",
+                        verbose=verbose,
+                    )
+                    save_transforms(
+                        model=model,
+                        transforms=xy_transforms,
+                        output_filepath_settings=output_dirpath
+                        / "xy_stabilization_settings"
+                        / f"{fov}.yml",
+                        output_filepath_plot=output_dirpath
+                        / "translation_plots"
+                        / f"{fov}.png",
+                        verbose=verbose,
+                    )
+
+            except Exception as e:
+                click.echo(
+                    f"Error estimating {stabilization_type} stabilization parameters: {e}"
                 )
-            else:
-                stabilization_channel_names.append(channel_names[c_idx])
+
+        elif stabilization_method == "beads":
+
+            click.echo("Estimating xyz stabilization parameters with beads")
+            with open_ome_zarr(input_position_dirpaths[0], mode="r") as beads_position:
+                source_channels = beads_position.channel_names
+                source_channel_index = source_channels.index(stabilization_estimation_channel)
+                channel_tzyx = beads_position.data.dask_array()[:, source_channel_index]
+
+            xyz_transforms = estimate_xyz_stabilization_with_beads(
+                channel_tzyx=channel_tzyx,
+                beads_match_settings=settings.beads_match_settings,
+                affine_transform_settings=settings.affine_transform_settings,
+                verbose=verbose,
+                output_folder_path=output_dirpath,
+                cluster=cluster,
+                sbatch_filepath=sbatch_filepath,
+            )
+
+            model = StabilizationSettings(
+                stabilization_type=settings.stabilization_type,
+                stabilization_method=settings.stabilization_method,
+                stabilization_estimation_channel=settings.stabilization_estimation_channel,
+                stabilization_channels=settings.stabilization_channels,
+                affine_transform_zyx_list=xyz_transforms,
+                time_indices="all",
+                output_voxel_size=voxel_size,
+            )
+            if eval_transform_settings:
+                xyz_transforms = evaluate_transforms(
+                    transforms=xyz_transforms,
+                    shape_zyx=(Z, Y, X),
+                    validation_window_size=eval_transform_settings.validation_window_size,
+                    validation_tolerance=eval_transform_settings.validation_tolerance,
+                    interpolation_window_size=eval_transform_settings.interpolation_window_size,
+                    interpolation_type=eval_transform_settings.interpolation_type,
+                    verbose=verbose,
+                )
+            save_transforms(
+                model=model,
+                transforms=xyz_transforms,
+                output_filepath_settings=output_dirpath / "xyz_stabilization_settings.yml",
+                verbose=verbose,
+                output_filepath_plot=output_dirpath / "translation_plots" / "beads.png",
+            )
+
+        elif stabilization_method == "phase-cross-corr":
+            click.echo("Estimating xyz stabilization parameters with phase cross correlation")
+            xyz_transforms_dict = estimate_xyz_stabilization_pcc(
+                input_position_dirpaths=input_position_dirpaths,
+                output_folder_path=output_dirpath,
+                channel_index=channel_index,
+                phase_cross_corr_settings=settings.phase_cross_corr_settings,
+                sbatch_filepath=sbatch_filepath,
+                cluster=cluster,
+                verbose=verbose,
+            )
+            model = StabilizationSettings(
+                stabilization_type=settings.stabilization_type,
+                stabilization_method=settings.stabilization_method,
+                stabilization_estimation_channel=settings.stabilization_estimation_channel,
+                stabilization_channels=settings.stabilization_channels,
+                affine_transform_zyx_list=[],
+                time_indices="all",
+                output_voxel_size=voxel_size,
+            )
+
+            try:
+                for fov, xyz_transforms in xyz_transforms_dict.items():
+                    click.echo(f"Processing FOV {fov}")
+                    # Validate and filter transforms
+                    if eval_transform_settings:
+                        xyz_transforms = evaluate_transforms(
+                            transforms=xyz_transforms,
+                            shape_zyx=(Z, Y, X),
+                            validation_window_size=eval_transform_settings.validation_window_size,
+                            validation_tolerance=eval_transform_settings.validation_tolerance,
+                            interpolation_window_size=eval_transform_settings.interpolation_window_size,
+                            interpolation_type=eval_transform_settings.interpolation_type,
+                            verbose=verbose,
+                        )
+
+                    save_transforms(
+                        model=model,
+                        transforms=xyz_transforms,
+                        output_filepath_settings=output_dirpath
+                        / "xyz_stabilization_settings"
+                        / f"{fov}.yml",
+                        verbose=verbose,
+                        output_filepath_plot=output_dirpath
+                        / "translation_plots"
+                        / f"{fov}.png",
+                    )
+            except Exception as e:
+                click.echo(
+                    f"Error estimating {stabilization_type} stabilization parameters: {e}"
+                )
 
     # Estimate z drift
-    if stabilize_z:
+    if "z" == stabilization_type and stabilization_method == "focus-finding":
         click.echo("Estimating z stabilization parameters")
-        T_z_drift_mats = estimate_z_stabilization(
-            input_data_paths=input_position_dirpaths,
+
+        z_transforms_dict = estimate_z_stabilization(
+            input_position_dirpaths=input_position_dirpaths,
             output_folder_path=output_dirpath,
-            z_drift_channel_idx=channel_index,
-            num_processes=num_processes,
-            crop_size_xy=crop_size_xy,
+            channel_index=channel_index,
+            focus_finding_settings=settings.focus_finding_settings,
+            sbatch_filepath=sbatch_filepath,
+            cluster=cluster,
             verbose=verbose,
         )
-        stabilization_type = "z"
+        model = StabilizationSettings(
+            stabilization_type=settings.stabilization_type,
+            stabilization_method=settings.stabilization_method,
+            stabilization_estimation_channel=settings.stabilization_estimation_channel,
+            stabilization_channels=settings.stabilization_channels,
+            affine_transform_zyx_list=[],
+            time_indices="all",
+            output_voxel_size=voxel_size,
+        )
+
+        try:
+            # save each FOV separately
+            for fov, z_transforms in z_transforms_dict.items():
+                if eval_transform_settings:
+                    z_transforms = evaluate_transforms(
+                        transforms=z_transforms,
+                        shape_zyx=(Z, Y, X),
+                        validation_window_size=eval_transform_settings.validation_window_size,
+                        validation_tolerance=eval_transform_settings.validation_tolerance,
+                        interpolation_window_size=eval_transform_settings.interpolation_window_size,
+                        interpolation_type=eval_transform_settings.interpolation_type,
+                        verbose=verbose,
+                    )
+                save_transforms(
+                    model=model,
+                    transforms=z_transforms,
+                    output_filepath_settings=output_dirpath
+                    / "z_stabilization_settings"
+                    / f"{fov}.yml",
+                    verbose=verbose,
+                    output_filepath_plot=output_dirpath / "translation_plots" / f"{fov}.png",
+                )
+        except Exception as e:
+            click.echo(f"Error estimating {stabilization_type} stabilization parameters: {e}")
 
     # Estimate yx drift
-    if stabilize_xy:
-        click.echo("Estimating xy stabilization parameters")
-        T_translation_mats = estimate_xy_stabilization(
-            input_data_paths=input_position_dirpaths,
-            output_folder_path=output_dirpath,
-            c_idx=channel_index,
-            crop_size_xy=crop_size_xy,
-            verbose=verbose,
-        )
-        stabilization_type = "xy"
+    if "xy" == stabilization_type:
+        if stabilization_method == "focus-finding":
 
-    if stabilize_z and stabilize_xy:
-        if T_translation_mats.shape[0] != T_z_drift_mats.shape[0]:
-            raise ValueError(
-                "The number of translation matrices and z drift matrices must be the same"
+            click.echo("Estimating xy stabilization parameters")
+            xy_transforms_dict = estimate_xy_stabilization(
+                input_position_dirpaths=input_position_dirpaths,
+                output_folder_path=output_dirpath,
+                channel_index=channel_index,
+                stack_reg_settings=settings.stack_reg_settings,
+                sbatch_filepath=sbatch_filepath,
+                cluster=cluster,
+                verbose=verbose,
             )
-        combined_mats = np.array([a @ b for a, b in zip(T_translation_mats, T_z_drift_mats)])
-        stabilization_type = "xyz"
-
-    # NOTE: we've checked that one of the two conditions below is true
-    elif stabilize_z:
-        combined_mats = T_z_drift_mats
-    elif stabilize_xy:
-        combined_mats = T_translation_mats
-
-    # Save the combined matrices
-    model = StabilizationSettings(
-        stabilization_type=stabilization_type,
-        stabilization_estimation_channel=channel_names[channel_index],
-        stabilization_channels=stabilization_channel_names,
-        affine_transform_zyx_list=combined_mats.tolist(),
-        time_indices="all",
-        output_voxel_size=voxel_size,
-    )
-    model_to_yaml(model, output_filepath)
+            output_dirpath.mkdir(parents=True, exist_ok=True)
+            model = StabilizationSettings(
+                stabilization_type=settings.stabilization_type,
+                stabilization_method=settings.stabilization_method,
+                stabilization_estimation_channel=settings.stabilization_estimation_channel,
+                stabilization_channels=settings.stabilization_channels,
+                affine_transform_zyx_list=[],
+                time_indices="all",
+                output_voxel_size=voxel_size,
+            )
+            try:
+                # save each FOV separately
+                for fov, xy_transforms in xy_transforms_dict.items():
+                    # Validate and filter transforms
+                    if eval_transform_settings:
+                        xy_transforms = evaluate_transforms(
+                            transforms=xy_transforms,
+                            shape_zyx=(Z, Y, X),
+                            validation_window_size=eval_transform_settings.validation_window_size,
+                            validation_tolerance=eval_transform_settings.validation_tolerance,
+                            interpolation_window_size=eval_transform_settings.interpolation_window_size,
+                            interpolation_type=eval_transform_settings.interpolation_type,
+                            verbose=verbose,
+                        )
+                    save_transforms(
+                        model=model,
+                        transforms=xy_transforms,
+                        output_filepath_settings=output_dirpath
+                        / "xy_stabilization_settings"
+                        / f"{fov}.yml",
+                        verbose=verbose,
+                        output_filepath_plot=output_dirpath
+                        / "translation_plots"
+                        / f"{fov}.png",
+                    )
+            except Exception as e:
+                click.echo(
+                    f"Error estimating {stabilization_type} stabilization parameters: {e}"
+                )
 
 
 if __name__ == "__main__":

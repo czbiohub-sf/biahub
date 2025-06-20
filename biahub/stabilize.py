@@ -129,26 +129,40 @@ def stabilize_cli(
         --local                                 # Run locally instead of submitting to SLURM
 
     """
-    if config_filepath.suffix not in [".yml", ".yaml"]:
-        raise ValueError("Config file must be a yaml file")
-
-    # Convert to Path objects
     config_filepath = Path(config_filepath)
+    if config_filepath.is_dir():
+        # Directory with one config file per FOV
+        print(f"Config filepath is a directory: {config_filepath}")
+        per_position_settings = {}
+        for input_path in input_position_dirpaths:
+            fov_key = "_".join(input_path.parts[-3:])  # Adjust based on your folder naming
+            config_file = config_filepath / f"{fov_key}.yml"
+            if not config_file.exists():
+                raise FileNotFoundError(f"Expected config file for {fov_key} at {config_file}")
+            per_position_settings[input_path] = yaml_to_model(
+                config_file, StabilizationSettings
+            )
+        # Use the first position's settings for output metadata
+        settings = per_position_settings[input_position_dirpaths[0]]
+    else:
+        # Single config file for all FOVs
+        settings = yaml_to_model(config_filepath, StabilizationSettings)
+
     output_dirpath = Path(output_dirpath)
     slurm_out_path = output_dirpath.parent / "slurm_output"
     # Load the config file
-    settings = yaml_to_model(config_filepath, StabilizationSettings)
 
     combined_mats = settings.affine_transform_zyx_list
     combined_mats = np.array(combined_mats)
-    stabilization_channels = settings.stabilization_channels
+    # stabilization_channels = settings.stabilization_channels
 
     with open_ome_zarr(input_position_dirpaths[0]) as dataset:
         T, C, Z, Y, X = dataset.data.shape
         channel_names = dataset.channel_names
-        for channel in stabilization_channels:
-            if channel not in channel_names:
-                raise ValueError(f"Channel <{channel}> not found in the input data")
+        stabilization_channels = channel_names
+        # for stabilization_channels in stabilization_channels:
+        # if channel not in channel_names:
+        #     raise ValueError(f"Channel <{channel}> not found in the input data")
 
         # NOTE: these can be modified to crop the output
         Z_slice, Y_slice, X_slice = (
@@ -178,7 +192,6 @@ def stabilize_cli(
         Y = Y_slice.stop - Y_slice.start
         X = X_slice.stop - X_slice.start
 
-    # Logic to parse time indices
     if settings.time_indices == "all":
         time_indices = list(range(T))
     elif isinstance(settings.time_indices, list):
@@ -227,7 +240,9 @@ def stabilize_cli(
 
     # Estimate resources
 
-    num_cpus, gb_ram_per_cpu = estimate_resources(shape=[T, C, Z, Y, X], ram_multiplier=16)
+    num_cpus, gb_ram_per_cpu = estimate_resources(
+        shape=[T, C, Z, Y, X], ram_multiplier=16, max_num_cpus=16
+    )
 
     # Prepare SLURM arguments
     slurm_args = {
@@ -235,7 +250,7 @@ def stabilize_cli(
         "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,  # process up to 100 positions at a time
-        "slurm_time": 60,
+        "slurm_time": 20,
         "slurm_partition": "preempted",
     }
 
@@ -260,6 +275,11 @@ def stabilize_cli(
     with executor.batch():
         # apply stabilization to channels in the chosen channels and else copy the rest
         for input_position_path in input_position_dirpaths:
+            if config_filepath.is_dir():
+                settings = per_position_settings[input_position_path]
+                # Use settings for this FOV
+            combined_mats = np.array(settings.affine_transform_zyx_list)
+            stabilize_zyx_args = {"list_of_shifts": combined_mats}
             for channel_name in channel_names:
                 if channel_name in stabilization_channels:
                     job = executor.submit(
