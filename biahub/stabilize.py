@@ -4,7 +4,6 @@ from typing import List
 import ants
 import click
 import numpy as np
-import submitit
 
 from iohub.ngff import open_ome_zarr
 from scipy.linalg import svd
@@ -16,15 +15,14 @@ from biahub.cli.parsing import (
     local,
     output_dirpath,
     sbatch_filepath,
-    sbatch_to_submitit,
 )
 from biahub.cli.utils import (
     copy_n_paste_czyx,
     create_empty_hcs_zarr,
-    estimate_resources,
     process_single_position_v2,
     yaml_to_model,
 )
+from biahub.cli.submit_jobs import submit_jobs_with_submitit
 from biahub.register import convert_transform_to_ants
 from biahub.settings import StabilizationSettings
 
@@ -238,84 +236,50 @@ def stabilize_cli(
     stabilize_zyx_args = {"list_of_shifts": combined_mats}
     copy_n_paste_kwargs = {"czyx_slicing_params": ([Z_slice, Y_slice, X_slice])}
 
-    # Estimate resources
+    args_list = []
 
-    num_cpus, gb_ram_per_cpu = estimate_resources(
-        shape=[T, C, Z, Y, X], ram_multiplier=16, max_num_cpus=16
+    # apply stabilization to channels in the chosen channels and else copy the rest
+    for input_position_path in input_position_dirpaths:
+        if config_filepath.is_dir():
+            settings = per_position_settings[input_position_path]
+            # Use settings for this FOV
+        combined_mats = np.array(settings.affine_transform_zyx_list)
+        stabilize_zyx_args = {"list_of_shifts": combined_mats}
+        for channel_name in channel_names:
+            if channel_name in stabilization_channels:
+                args_list.append((
+                    apply_stabilization_transform,
+                    input_position_path,
+                    output_dirpath,
+                    time_indices,
+                    time_indices,
+                    [channel_names.index(channel_name)],
+                    [channel_names.index(channel_name)],
+                    10,
+                    stabilize_zyx_args,
+                ))
+            else:
+                args_list.append((
+                    copy_n_paste_czyx,
+                    input_position_path,
+                    output_dirpath,
+                    time_indices,
+                    time_indices,
+                    [channel_names.index(channel_name)],
+                    [channel_names.index(channel_name)],
+                    10,
+                    copy_n_paste_kwargs,
+                ))
+
+    submit_jobs_with_submitit(
+        job_name="stabilize",
+        function=process_single_position_v2,
+        args_list=args_list,
+        output_dirpath=output_dirpath,
+        shape=(T, C, Z, Y, X),
+        sbatch_filepath=sbatch_filepath,
+        local=local,
     )
-
-    # Prepare SLURM arguments
-    slurm_args = {
-        "slurm_job_name": "stabilize",
-        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
-        "slurm_cpus_per_task": num_cpus,
-        "slurm_array_parallelism": 100,  # process up to 100 positions at a time
-        "slurm_time": 20,
-        "slurm_partition": "preempted",
-    }
-
-    # Override defaults if sbatch_filepath is provided
-    if sbatch_filepath:
-        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
-
-    # Run locally or submit to SLURM
-    if local:
-        cluster = "local"
-    else:
-        cluster = "slurm"
-
-    # Prepare and submit jobs
-    click.echo(f"Preparing jobs: {slurm_args}")
-    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
-    executor.update_parameters(**slurm_args)
-
-    click.echo('Submitting SLURM jobs...')
-    jobs = []
-
-    with executor.batch():
-        # apply stabilization to channels in the chosen channels and else copy the rest
-        for input_position_path in input_position_dirpaths:
-            if config_filepath.is_dir():
-                settings = per_position_settings[input_position_path]
-                # Use settings for this FOV
-            combined_mats = np.array(settings.affine_transform_zyx_list)
-            stabilize_zyx_args = {"list_of_shifts": combined_mats}
-            for channel_name in channel_names:
-                if channel_name in stabilization_channels:
-                    job = executor.submit(
-                        process_single_position_v2,
-                        apply_stabilization_transform,
-                        input_data_path=input_position_path,  # source store
-                        output_path=output_dirpath,
-                        time_indices=time_indices,
-                        output_shape=(Z, Y, X),
-                        input_channel_idx=[channel_names.index(channel_name)],
-                        output_channel_idx=[channel_names.index(channel_name)],
-                        num_processes=int(
-                            slurm_args["slurm_cpus_per_task"]
-                        ),  # parallel processing over time
-                        **stabilize_zyx_args,
-                    )
-                else:
-                    job = executor.submit(
-                        process_single_position_v2,
-                        copy_n_paste_czyx,
-                        input_data_path=input_position_path,  # target store
-                        output_path=output_dirpath,
-                        time_indices=time_indices,
-                        input_channel_idx=[channel_names.index(channel_name)],
-                        output_channel_idx=[channel_names.index(channel_name)],
-                        num_processes=int(slurm_args["slurm_cpus_per_task"]),
-                        **copy_n_paste_kwargs,
-                    )
-
-                jobs.append(job)
-
-    job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
-
-    log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
-    with log_path.open("w") as log_file:
-        log_file.write("\n".join(job_ids))
 
 
 if __name__ == "__main__":
