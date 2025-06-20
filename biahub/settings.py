@@ -34,7 +34,7 @@ class DetectPeaksSettings(MyBaseModel):
 class BeadsMatchSettings(MyBaseModel):
     algorithm: Literal["hungarian", "match_descriptor", "mutual_information"] = "hungarian"
     filter_angle_threshold: float = 0
-    match_cost_threshold_quantile: float = 0.10
+    cost_threshold: float = 0.10
     max_ratio: float = 0.8
     knn_k: int = 5
     cross_check: bool = True

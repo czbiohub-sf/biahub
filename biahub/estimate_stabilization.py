@@ -1026,7 +1026,7 @@ def estimate_stabilization_cli(
                             shape_zyx=(Z, Y, X),
                             validation_window_size=eval_transform_settings.validation_window_size,
                             validation_tolerance=eval_transform_settings.validation_tolerance,
-                            interpolation_windon_size=eval_transform_settings.interpolation_window_size,
+                            interpolation_window_size=eval_transform_settings.interpolation_window_size,
                             interpolation_type=eval_transform_settings.interpolation_type,
                             verbose=verbose,
                         )
@@ -1035,7 +1035,7 @@ def estimate_stabilization_cli(
                             shape_zyx=(Z, Y, X),
                             validation_window_size=eval_transform_settings.validation_window_size,
                             validation_tolerance=eval_transform_settings.validation_tolerance,
-                            interpolation_windon_size=eval_transform_settings.interpolation_window_size,
+                            interpolation_window_size=eval_transform_settings.interpolation_window_size,
                             interpolation_type=eval_transform_settings.interpolation_type,
                             verbose=verbose,
                         )
@@ -1044,14 +1044,14 @@ def estimate_stabilization_cli(
                             shape_zyx=(Z, Y, X),
                             validation_window_size=eval_transform_settings.validation_window_size,
                             validation_tolerance=eval_transform_settings.validation_tolerance,
-                            interpolation_windon_size=eval_transform_settings.interpolation_window_size,
+                            interpolation_window_size=eval_transform_settings.interpolation_window_size,
                             interpolation_type=eval_transform_settings.interpolation_type,
                             verbose=verbose,
                         )
                     save_transforms(
                         model=model,
                         transforms=xy_transforms,
-                        output_filepath=output_dirpath
+                        output_filepath_settings=output_dirpath
                         / "xyz_stabilization_settings"
                         / f"{fov}.yml",
                         output_filepath_plot=output_dirpath
@@ -1062,7 +1062,7 @@ def estimate_stabilization_cli(
                     save_transforms(
                         model=model,
                         transforms=z_transforms,
-                        output_filepath=output_dirpath
+                        output_filepath_settings=output_dirpath
                         / "z_stabilization_settings"
                         / f"{fov}.yml",
                         output_filepath_plot=output_dirpath
@@ -1073,7 +1073,7 @@ def estimate_stabilization_cli(
                     save_transforms(
                         model=model,
                         transforms=xy_transforms,
-                        output_filepath=output_dirpath
+                        output_filepath_settings=output_dirpath
                         / "xy_stabilization_settings"
                         / f"{fov}.yml",
                         output_filepath_plot=output_dirpath
@@ -1120,7 +1120,7 @@ def estimate_stabilization_cli(
                     shape_zyx=(Z, Y, X),
                     validation_window_size=eval_transform_settings.validation_window_size,
                     validation_tolerance=eval_transform_settings.validation_tolerance,
-                    interpolation_windon_size=eval_transform_settings.interpolation_window_size,
+                    interpolation_window_size=eval_transform_settings.interpolation_window_size,
                     interpolation_type=eval_transform_settings.interpolation_type,
                     verbose=verbose,
                 )
@@ -1163,7 +1163,7 @@ def estimate_stabilization_cli(
                             shape_zyx=(Z, Y, X),
                             validation_window_size=eval_transform_settings.validation_window_size,
                             validation_tolerance=eval_transform_settings.validation_tolerance,
-                            interpolation_windon_size=eval_transform_settings.interpolation_window_size,
+                            interpolation_window_size=eval_transform_settings.interpolation_window_size,
                             interpolation_type=eval_transform_settings.interpolation_type,
                             verbose=verbose,
                         )
@@ -1216,7 +1216,7 @@ def estimate_stabilization_cli(
                         shape_zyx=(Z, Y, X),
                         validation_window_size=eval_transform_settings.validation_window_size,
                         validation_tolerance=eval_transform_settings.validation_tolerance,
-                        interpolation_windon_size=eval_transform_settings.interpolation_window_size,
+                        interpolation_window_size=eval_transform_settings.interpolation_window_size,
                         interpolation_type=eval_transform_settings.interpolation_type,
                         verbose=verbose,
                     )
@@ -1266,7 +1266,7 @@ def estimate_stabilization_cli(
                             shape_zyx=(Z, Y, X),
                             validation_window_size=eval_transform_settings.validation_window_size,
                             validation_tolerance=eval_transform_settings.validation_tolerance,
-                            interpolation_windon_size=eval_transform_settings.interpolation_window_size,
+                            interpolation_window_size=eval_transform_settings.interpolation_window_size,
                             interpolation_type=eval_transform_settings.interpolation_type,
                             verbose=verbose,
                         )

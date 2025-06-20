@@ -29,7 +29,6 @@ from biahub.characterize_psf import detect_peaks
 from biahub.cli.parsing import (
     config_filepath,
     local,
-    num_processes,
     output_filepath,
     sbatch_filepath,
     sbatch_to_submitit,
@@ -1152,7 +1151,7 @@ def _get_tform_from_beads(
             matches_ab = match_hungarian(
                 C_ab,
                 cost_threshold=np.quantile(
-                    C_ab, beads_match_settings.match_cost_threshold_quantile
+                    C_ab, beads_match_settings.cost_threshold_quantile
                 ),
                 max_ratio=beads_match_settings.max_ratio,
             )
@@ -1168,7 +1167,7 @@ def _get_tform_from_beads(
             matches_ba = match_hungarian(
                 C_ba,
                 cost_threshold=np.quantile(
-                    C_ba, beads_match_settings.match_cost_threshold_quantile
+                    C_ba, beads_match_settings.cost_threshold
                 ),
                 max_ratio=beads_match_settings.max_ratio,
             )
@@ -1185,7 +1184,7 @@ def _get_tform_from_beads(
             matches = match_hungarian(
                 C,
                 cost_threshold=np.quantile(
-                    C, beads_match_settings.match_cost_threshold_quantile
+                    C, beads_match_settings.cost_threshold
                 ),
             )
 
@@ -1200,37 +1199,33 @@ def _get_tform_from_beads(
 
     if verbose:
         click.echo(f'Total of matches at time point {t_idx}: {len(matches)}')
-    # dist = np.linalg.norm(source_peaks[matches[:, 0]] - target_peaks[matches[:, 1]], axis=1)
-    # matches = matches[dist < np.quantile(dist, 0.95), :]
+    
+    dist = np.linalg.norm(source_peaks[matches[:, 0]] - target_peaks[matches[:, 1]], axis=1)
+    matches = matches[dist < np.quantile(dist, 0.95), :]
+    
     if verbose:
         click.echo(
             f'Total of matches after distance filtering at time point {t_idx}: {len(matches)}'
         )
+    
     if beads_match_settings.filter_angle_threshold:
 
-        # Calculate vectors between matches
         vectors = target_peaks[matches[:, 1]] - source_peaks[matches[:, 0]]
-
-        # Compute angles in radians relative to the x-axis
         angles_rad = np.arctan2(vectors[:, 1], vectors[:, 0])
-
-        # Convert to degrees for easier interpretation
         angles_deg = np.degrees(angles_rad)
-
-        # Create a histogram of angles
+        
         bins = np.linspace(-180, 180, 36)  # 10-degree bins
         hist, bin_edges = np.histogram(angles_deg, bins=bins)
-
-        # Find the dominant bin
+        
         dominant_bin_index = np.argmax(hist)
         dominant_angle = (
             bin_edges[dominant_bin_index] + bin_edges[dominant_bin_index + 1]
         ) / 2
 
-        # Filter matches within ±filter_angle_threshold degrees of the dominant direction, which may need finetuning
         filtered_indices = np.where(
             np.abs(angles_deg - dominant_angle) <= beads_match_settings.filter_angle_threshold
         )[0]
+    
         matches = matches[filtered_indices]
 
         if verbose:
@@ -1247,18 +1242,22 @@ def _get_tform_from_beads(
     # Affine transform performs better than Euclidean
     if affine_transform_settings.transform_type == 'affine':
         tform = AffineTransform(dimensionality=3)
+    
     elif affine_transform_settings.transform_type == 'euclidean':
         tform = EuclideanTransform(dimensionality=3)
+    
     elif affine_transform_settings.transform_type == 'similarity':
         tform = SimilarityTransform(dimensionality=3)
+    
     else:
         raise ValueError(f'Unknown transform type: {affine_transform_settings.transform_type}')
 
     tform.estimate(source_peaks[matches[:, 0]], target_peaks[matches[:, 1]])
     compount_tform = np.asarray(approx_tform) @ tform.inverse.params
+    
     click.echo(f'Matches: {matches}')
     click.echo(f"tform.params: {tform.params}")
-    click.echo(f" tform.inverse.params: { tform.inverse.params}")
+    click.echo(f"tform.inverse.params: {tform.inverse.params}")
     click.echo(f"compount_tform: {compount_tform}")
 
     if slurm:
@@ -1272,7 +1271,6 @@ def _get_tform_from_beads(
 @source_position_dirpaths()
 @target_position_dirpaths()
 @output_filepath()
-@num_processes()
 @config_filepath()
 @sbatch_filepath()
 @local()
