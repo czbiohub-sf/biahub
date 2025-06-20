@@ -494,8 +494,6 @@ def estimate_xyz_stabilization_with_beads(
 
     (T, Z, Y, X) = channel_tzyx.shape
 
-    approx_tform = np.eye(4)
-
     if beads_match_settings.t_reference == "first":
         target_channel_tzyx = np.broadcast_to(channel_tzyx[0], (T, Z, Y, X)).copy()
     elif beads_match_settings.t_reference == "previous":
@@ -542,7 +540,6 @@ def estimate_xyz_stabilization_with_beads(
         for t in range(1, T, 1):
             job = executor.submit(
                 _get_tform_from_beads,
-                approx_tform=approx_tform,
                 source_channel_tzyx=channel_tzyx,
                 target_channel_tzyx=target_channel_tzyx,
                 verbose=verbose,
@@ -580,6 +577,7 @@ def estimate_xyz_stabilization_with_beads(
         raise ValueError(
             f"Number of transforms {len(transforms)} does not match number of timepoints {T}"
         )
+    shutil.rmtree(output_transforms_path)
 
     return transforms
 
@@ -913,14 +911,7 @@ def estimate_z_stabilization(
 
     return fov_transforms
 
-
-@click.command("estimate-stabilization")
-@input_position_dirpaths()
-@output_filepath()
-@config_filepath()
-@sbatch_filepath()
-@local()
-def estimate_stabilization_cli(
+def estimate_stabilization(
     input_position_dirpaths: List[str],
     output_filepath: str,
     config_filepath: str,
@@ -966,6 +957,7 @@ def estimate_stabilization_cli(
         cluster = "local"
     else:
         cluster = "slurm"
+    click.echo(f"Eval transform settings: {settings.eval_transform_settings}")
     eval_transform_settings = settings.eval_transform_settings
 
     if "xyz" == stabilization_type:
@@ -1110,7 +1102,7 @@ def estimate_stabilization_cli(
                 stabilization_method=settings.stabilization_method,
                 stabilization_estimation_channel=settings.stabilization_estimation_channel,
                 stabilization_channels=settings.stabilization_channels,
-                affine_transform_zyx_list=xyz_transforms,
+                affine_transform_zyx_list=[],
                 time_indices="all",
                 output_voxel_size=voxel_size,
             )
@@ -1287,5 +1279,39 @@ def estimate_stabilization_cli(
                 )
 
 
+
+@click.command("estimate-stabilization")
+@input_position_dirpaths()
+@output_filepath()
+@config_filepath()
+@sbatch_filepath()
+@local()
+def estimate_stabilization_cli(
+    input_position_dirpaths: List[str],
+    output_filepath: str,
+    config_filepath: str,
+    sbatch_filepath: str = None,
+    local: bool = False,
+):
+    """
+    Estimate the Z and/or XY timelapse stabilization matrices.
+
+    This function estimates xy and z drifts and returns the affine matrices per timepoint taking t=0 as reference saved as a yaml file.
+    The level of verbosity can be controlled with the verbose flag.
+    The size of the crop in xy can be specified with the crop-size-xy option.
+
+    Example usage:
+    biahub stabilization -i ./timelapse.zarr/0/0/0 -o ./stabilization.yml -y -z -b -v --crop-size-xy 300 300
+
+    Note: the verbose output will be saved at the same level as the output zarr.
+    """
+
+    estimate_stabilization(
+        input_position_dirpaths=input_position_dirpaths,
+        output_filepath=output_filepath,
+        config_filepath=config_filepath,
+        sbatch_filepath=sbatch_filepath,
+        local=local,
+    )
 if __name__ == "__main__":
     estimate_stabilization_cli()

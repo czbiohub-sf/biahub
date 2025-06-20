@@ -121,21 +121,26 @@ def save_transforms(
     """
     Save the transforms to a yaml file and plot the translations.
     """
+    if transforms is None or len(transforms) == 0:
+        raise ValueError("Transforms are empty")
+
+    if not isinstance(transforms, list):
+        transforms = transforms.tolist()
+
     model.affine_transform_zyx_list = transforms
 
-    # Save the combined matrices
-    output_filepath_settings.parent.mkdir(parents=True, exist_ok=True)
-    # check if output_filepath_settings end with yml or yaml
     if output_filepath_settings.suffix not in [".yml", ".yaml"]:
         output_filepath_settings = output_filepath_settings.with_suffix(".yml")
-
+    
+    output_filepath_settings.parent.mkdir(parents=True, exist_ok=True)
     model_to_yaml(model, output_filepath_settings)
 
     if verbose and output_filepath_plot is not None:
         if output_filepath_plot.suffix not in [".png"]:
             output_filepath_plot = output_filepath_plot.with_suffix(".png")
         output_filepath_plot.parent.mkdir(parents=True, exist_ok=True)
-        plot_translations(transforms, output_filepath_plot)
+
+        plot_translations(np.asarray(transforms), output_filepath_plot)
 
 
 def plot_translations(transforms_zyx: np.ndarray, output_filepath: Path):
@@ -143,6 +148,7 @@ def plot_translations(transforms_zyx: np.ndarray, output_filepath: Path):
     y_transforms = transforms_zyx[:, 1, 3]
     x_transforms = transforms_zyx[:, 2, 3]
     _, axs = plt.subplots(3, 1, figsize=(10, 10))
+
     axs[0].plot(z_transforms)
     axs[0].set_title("Z-Translation")
     axs[1].plot(x_transforms)
@@ -1151,7 +1157,7 @@ def _get_tform_from_beads(
             matches_ab = match_hungarian(
                 C_ab,
                 cost_threshold=np.quantile(
-                    C_ab, beads_match_settings.cost_threshold_quantile
+                    C_ab, beads_match_settings.cost_threshold
                 ),
                 max_ratio=beads_match_settings.max_ratio,
             )
@@ -1266,30 +1272,7 @@ def _get_tform_from_beads(
 
     return compount_tform.tolist()
 
-
-@click.command("estimate-registration")
-@source_position_dirpaths()
-@target_position_dirpaths()
-@output_filepath()
-@config_filepath()
-@sbatch_filepath()
-@local()
-@click.option(
-    "--registration-target-channel",
-    "-rt",
-    type=str,
-    help="Name of the target channel to be used when registration params are applied.",
-    required=False,
-)
-@click.option(
-    "--registration-source-channel",
-    "-rs",
-    type=str,
-    multiple=True,
-    help="Name of the source channels to be used when registration params are applied. May be passed multiple times.",
-    required=False,
-)
-def estimate_registration_cli(
+def estimate_registration(
     source_position_dirpaths,
     target_position_dirpaths,
     output_filepath,
@@ -1378,6 +1361,7 @@ def estimate_registration_cli(
     else:
         cluster = "slurm"
     eval_transform_settings = settings.eval_transform_settings
+    
     if settings.estimation_method == "beads":
         # Register using bead images
         transforms = beads_based_registration(
@@ -1390,25 +1374,25 @@ def estimate_registration_cli(
             sbatch_filepath=sbatch_filepath,
             output_folder_path=output_dir,
         )
-        if eval_transform_settings:
-            transforms = evaluate_transforms(
-                transforms=transforms,
-                shape_zyx=source_channel_data.shape[-3:],
-                validation_window_size=eval_transform_settings.validation_window_size,
-                validation_tolerance=eval_transform_settings.validation_tolerance,
-                interpolation_window_size=eval_transform_settings.interpolation_window_size,
-                interpolation_type=eval_transform_settings.interpolation_type,
-                verbose=settings.verbose,
-            )
-
+        click.echo(f"Evaluating transforms: {eval_transform_settings}")
+        transforms = evaluate_transforms(
+            transforms=transforms,
+            shape_zyx=source_channel_data.shape[-3:],
+            validation_window_size=eval_transform_settings.validation_window_size,
+            validation_tolerance=eval_transform_settings.validation_tolerance,
+            interpolation_window_size=eval_transform_settings.interpolation_window_size,
+            interpolation_type=eval_transform_settings.interpolation_type,
+            verbose=settings.verbose,
+        )
         model = StabilizationSettings(
             stabilization_estimation_channel='',
             stabilization_type='xyz',
             stabilization_channels=registration_source_channels,
-            affine_transform_zyx_list=transforms,
+            affine_transform_zyx_list=[],
             time_indices='all',
             output_voxel_size=voxel_size,
         )
+
         save_transforms(
             model=model,
             transforms=transforms,
@@ -1445,7 +1429,7 @@ def estimate_registration_cli(
             stabilization_estimation_channel='',
             stabilization_type='xyz',
             stabilization_channels=registration_source_channels,
-            affine_transform_zyx_list=transforms,
+            affine_transform_zyx_list=[],
             time_indices='all',
             output_voxel_size=voxel_size,
         )
@@ -1503,5 +1487,87 @@ def estimate_registration_cli(
     click.echo(f"Registration settings saved to {output_dir}")
 
 
+@click.command("estimate-registration")
+@source_position_dirpaths()
+@target_position_dirpaths()
+@output_filepath()
+@config_filepath()
+@sbatch_filepath()
+@local()
+@click.option(
+    "--registration-target-channel",
+    "-rt",
+    type=str,
+    help="Name of the target channel to be used when registration params are applied.",
+    required=False,
+)
+@click.option(
+    "--registration-source-channel",
+    "-rs",
+    type=str,
+    multiple=True,
+    help="Name of the source channels to be used when registration params are applied. May be passed multiple times.",
+    required=False,
+)
+def estimate_registration_cli(
+    source_position_dirpaths,
+    target_position_dirpaths,
+    output_filepath,
+    config_filepath,
+    registration_target_channel,
+    registration_source_channel,
+    sbatch_filepath: str = None,
+    local: bool = False,
+):
+
+    """
+    Estimate the affine transformation between a source and target image for registration.
+
+    This command-line tool uses either bead-based or user-assisted methods to estimate registration
+    parameters for aligning source (moving) and target (fixed) images. The output is a configuration
+    file that can be used with subsequent tools (`stabilize` and `register`).
+
+    Parameters:
+    - source_position_dirpaths (list): List of file paths to the source channel data in OME-Zarr format.
+    - target_position_dirpaths (list): List of file paths to the target channel data in OME-Zarr format.
+    - output_filepath (str): Path to save the estimated registration configuration file (YAML).
+    - num_processes (int): Number of processes for parallel computations (used in bead-based registration).
+    - config_filepath (str): Path to the YAML configuration file for the registration settings.
+    - registration_target_channel (str): Name of the target channel to be used when registration params are applied.
+    - registration_source_channels (list): List of source channel names to be used when registration params are applied.
+
+    Returns:
+    - None: Writes the estimated registration parameters to the specified output file.
+
+    Notes:
+    - Bead-based registration uses detected bead matches across timepoints to compute affine transformations.
+    - User-assisted registration requires manual selection of corresponding features in source and target images.
+    - If registration_target_channel and registration_source_channels are not provided, the target and source channels
+    used for parameter estimation will be used.
+    - The output configuration is essential for downstream processing in multi-modal image registration workflows.
+
+    Example:
+    >> biahub estimate-registration
+        -s ./acq_name_labelfree_reconstructed.zarr/0/0/0   # Source channel OME-Zarr data path
+        -t ./acq_name_lightsheet_deskewed.zarr/0/0/0       # Target channel OME-Zarr data path
+        -o ./output.yml                                    # Output configuration file path
+        --config ./config.yml                              # Path to input configuration file
+        --num-processes 4                                  # Number of processes for parallel bead detection
+        --registration-target-channel "Phase3D"            # Name of the target channel
+        --registration-source-channel "GFP"                # Names of source channel
+        --registration-source-channel "mCherry"            # Names of another source channel
+    """
+
+    estimate_registration(
+        source_position_dirpaths=source_position_dirpaths,
+        target_position_dirpaths=target_position_dirpaths,
+        output_filepath=output_filepath,
+        config_filepath=config_filepath,
+        registration_target_channel=registration_target_channel,
+        registration_source_channel=registration_source_channel,
+        sbatch_filepath=sbatch_filepath,
+        local=local,
+    )
+    
 if __name__ == "__main__":
     estimate_registration_cli()

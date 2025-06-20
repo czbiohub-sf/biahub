@@ -84,14 +84,7 @@ def apply_stabilization_transform(
 
     return stabilized_zyx
 
-
-@click.command("stabilize")
-@input_position_dirpaths()
-@output_dirpath()
-@config_filepath()
-@sbatch_filepath()
-@local()
-def stabilize_cli(
+def stabilize(
     input_position_dirpaths: List[str],
     output_dirpath: str,
     config_filepath: str,
@@ -318,5 +311,56 @@ def stabilize_cli(
         log_file.write("\n".join(job_ids))
 
 
+@click.command("stabilize")
+@input_position_dirpaths()
+@output_dirpath()
+@config_filepath()
+@sbatch_filepath()
+@local()
+def stabilize_cli(
+    input_position_dirpaths: List[str],
+    output_dirpath: str,
+    config_filepath: str,
+    sbatch_filepath: str = None,
+    local: bool = False,
+):
+    """
+    Stabilize a timelapse dataset by applying spatial transformations.
+
+    This function stabilizes a timelapse dataset based on precomputed transformations or
+    configuration settings. It supports both local processing and SLURM-based distributed
+    processing and outputs a Zarr dataset with stabilized channels.
+
+    Parameters:
+    - input_position_dirpaths (List[str]): List of file paths to the input OME-Zarr datasets for each position.
+    - output_dirpath (str): Directory path to save the stabilized output dataset.
+    - config_filepath (str): Path to the YAML configuration file containing transformation settings.
+    - sbatch_filepath (str, optional): Path to a SLURM sbatch file to override default SLURM settings. Defaults to None.
+    - local (bool, optional): If True, runs the stabilization process locally instead of submitting to SLURM. Defaults to False.
+
+    Returns:
+    - None: Writes the stabilized dataset to the specified output directory.
+
+    Notes:
+    - The function applies stabilization based on affine transformations specified in the configuration file.
+    - Stabilization can estimate both YX and Z drifts and handles multi-channel data.
+    - Input and output datasets must follow the OME-Zarr format.
+
+    Example:
+    >> biahub stabilize-timelapse
+        -i ./timelapse.zarr/0/0/0               # Input timelapse dataset
+        -o ./stabilized_timelapse.zarr          # Output directory for stabilized data
+        -c ./file_w_matrices.yml                # Configuration file with transformation matrices
+        -v                                      # Verbose mode for detailed logs
+        --local                                 # Run locally instead of submitting to SLURM
+
+    """
+    stabilize(
+        input_position_dirpaths=input_position_dirpaths,
+        output_dirpath=output_dirpath,
+        config_filepath=config_filepath,
+        sbatch_filepath=sbatch_filepath,
+        local=local,
+    )
 if __name__ == "__main__":
     stabilize_cli()
