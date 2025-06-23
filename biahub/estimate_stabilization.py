@@ -26,12 +26,12 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
+from biahub.cli.slurm import wait_for_jobs_to_finish
 from biahub.cli.utils import estimate_resources, yaml_to_model
 from biahub.estimate_registration import (
     _get_tform_from_beads,
     evaluate_transforms,
     save_transforms,
-    wait_for_jobs_to_finish,
 )
 from biahub.settings import (
     AffineTransformSettings,
@@ -47,120 +47,43 @@ NA_DET = 1.35
 LAMBDA_ILL = 0.500
 
 
-def estimate_position_focus(
-    input_position_dirpath: Path,
-    input_channel_indices: Tuple[int, ...],
-    crop_size_xy: list[int, int],
-    output_path_focus_csv: Path,
-    output_path_transform: Path,
-    verbose: bool = False,
-) -> None:
-    position, time_idx, channel, focus_idx = [], [], [], []
+def remove_beads_fov_from_path_list(
+    position_dirpaths: list[Path],
+    skip_beads_fov: str,
+) -> list[Path]:
+    """
+    Remove the beads FOV from the input data paths.
 
-    with open_ome_zarr(input_position_dirpath) as dataset:
-        channel_names = dataset.channel_names
-        T, _, Z, Y, X = dataset[0].shape
-        _, _, _, _, pixel_size = dataset.scale
+    Parameters
+    ----------
+    position_dirpaths : list[Path]
+        Paths to the input position directories.
+    skip_beads_fov : str
+        Beads FOV to skip.
 
-        for tc_idx in itertools.product(range(T), input_channel_indices):
-            data_zyx = dataset.data[tc_idx][
-                :,
-                Y // 2 - crop_size_xy[1] // 2 : Y // 2 + crop_size_xy[1] // 2,
-                X // 2 - crop_size_xy[0] // 2 : X // 2 + crop_size_xy[0] // 2,
-            ]
-
-            # if the FOV is empty, set the focal plane to 0
-            if np.sum(data_zyx) == 0:
-                z_idx = 0
-            else:
-                z_idx = focus_from_transverse_band(
-                    data_zyx,
-                    NA_det=NA_DET,
-                    lambda_ill=LAMBDA_ILL,
-                    pixel_size=pixel_size,
-                )
-                click.echo(
-                    f"Estimating focus for timepoint {tc_idx[0]} and channel {tc_idx[1]}: {z_idx}"
-                )
-
-            position.append(str(Path(*input_position_dirpath.parts[-3:])))
-            time_idx.append(tc_idx[0])
-            channel.append(channel_names[tc_idx[1]])
-            focus_idx.append(z_idx)
-
-    df = pd.DataFrame(
-        {
-            "position": position,
-            "time_idx": time_idx,
-            "channel": channel,
-            "focus_idx": focus_idx,
-        }
-    )
-    output_path_focus_csv.mkdir(parents=True, exist_ok=True)
-    if verbose:
-        click.echo(f"Saving focus finding results to {output_path_focus_csv}")
-
-    position_filename = str(Path(*input_position_dirpath.parts[-3:])).replace("/", "_")
-    output_csv = output_path_focus_csv / f"{position_filename}.csv"
-    df.to_csv(output_csv, index=False)
-
-    # ---- Generate and save Z transformation matrix per timepoint
-
-    # Compute Z drifts
-
-    z_focus_shift = [np.eye(4)]
-    z_val = focus_idx[0]
-    for z_val_next in focus_idx[1:]:
-        shift = np.eye(4)
-        shift[0, 3] = z_val_next - z_val
-        z_focus_shift.append(shift)
-    T_z_drift_mats = np.array(z_focus_shift)
-
-    output_path_transform.mkdir(parents=True, exist_ok=True)
-    np.save(output_path_transform / f"{position_filename}.npy", T_z_drift_mats)
-
-    if verbose:
-        click.echo(f"Saved Z transform matrices to {output_path_transform}")
-
-
-def get_mean_z_positions(
-    dataframe_path: Path, verbose: bool = False, method: Literal["mean", "median"] = "mean"
-) -> None:
-    df = pd.read_csv(dataframe_path)
-
-    # Sort the DataFrame based on 'time_idx'
-    df = df.sort_values("time_idx")
-
-    # TODO: this is a hack to deal with the fact that the focus finding function returns 0 if it fails
-    df["focus_idx"] = df["focus_idx"].replace(0, np.nan).ffill()
-
-    # Get the mean of positions for each time point
-    if method == "mean":
-        average_focus_idx = df.groupby("time_idx")["focus_idx"].mean().reset_index()
-    elif method == "median":
-        average_focus_idx = df.groupby("time_idx")["focus_idx"].median().reset_index()
-    else:
-        raise ValueError("Unknown averaging method.")
-
-    if verbose:
-        import matplotlib.pyplot as plt
-
-        # # Get the moving average of the focus_idx
-        plt.plot(average_focus_idx["focus_idx"], linestyle="--", label="mean of all positions")
-        plt.xlabel('Time index')
-        plt.ylabel('Focus index')
-        plt.ylim(0, 100)
-        plt.legend()
-        plt.savefig(dataframe_path.parent / "z_drift.png")
-
-    return average_focus_idx["focus_idx"].values
+    Returns
+    -------
+    list[Path]
+        Paths to the input position directories without the beads FOV.
+    """
+    if skip_beads_fov != '0':
+        # Remove the beads FOV from the input data paths
+        click.echo(f"Removing beads FOV {skip_beads_fov} from input data paths")
+        position_dirpaths = [
+            path for path in position_dirpaths if skip_beads_fov not in str(path)
+        ]
+    return position_dirpaths
 
 
 def pad_to_shape(
-    arr: ArrayLike, shape: Tuple[int, ...], mode: str, verbose: str = False, **kwargs
+    arr: ArrayLike,
+    shape: Tuple[int, ...],
+    mode: str,
+    verbose: bool = False,
+    **kwargs,
 ) -> ArrayLike:
-    """Pads array to shape.
-    from shimPy
+    """
+    Pad or crop array to match provided shape.
 
     Parameters
     ----------
@@ -170,6 +93,10 @@ def pad_to_shape(
         Output shape.
     mode : str
         Padding mode (see np.pad).
+    verbose : bool
+        If True, print verbose output.
+    kwargs : dict
+        Additional keyword arguments for np.pad.
 
     Returns
     -------
@@ -191,9 +118,19 @@ def pad_to_shape(
     return np.pad(arr, pad_width=pad_width, mode=mode, **kwargs)
 
 
-def center_crop(arr: ArrayLike, shape: Tuple[int, ...], verbose: str = False) -> ArrayLike:
-    """Crops the center of `arr`
-    from shimPy
+def center_crop(
+    arr: ArrayLike,
+    shape: Tuple[int, ...],
+    verbose: bool = False,
+) -> ArrayLike:
+    """
+    Crop the center of `arr` to match provided shape.
+
+    Parameters
+    ----------
+    arr : ArrayLike
+        Input array.
+    shape : Tuple[int, ...]
     """
     assert arr.ndim == len(shape)
 
@@ -209,9 +146,26 @@ def center_crop(arr: ArrayLike, shape: Tuple[int, ...], verbose: str = False) ->
     return arr[slicing]
 
 
-def _match_shape(img: ArrayLike, shape: Tuple[int, ...]) -> ArrayLike:
-    """Pad or crop array to match provided shape.
-    from shimPy
+def match_shape(
+    img: ArrayLike,
+    shape: Tuple[int, ...],
+    verbose: bool = False,
+) -> ArrayLike:
+    """
+    Pad or crop array to match provided shape.
+
+    Parameters
+    ----------
+    img : ArrayLike
+        Input array.
+    shape : Tuple[int, ...]
+    verbose : bool
+        If True, print verbose output.
+
+    Returns
+    -------
+    ArrayLike
+        Padded or cropped array.
     """
 
     if np.any(shape > img.shape):
@@ -220,6 +174,9 @@ def _match_shape(img: ArrayLike, shape: Tuple[int, ...]) -> ArrayLike:
 
     if np.any(shape < img.shape):
         img = center_crop(img, shape)
+
+    if verbose:
+        click.echo(f"matched shape: input shape {img.shape}, output shape {shape}")
 
     return img
 
@@ -262,8 +219,8 @@ def phase_cross_corr(
             f"with maximum shift of {maximum_shift}"
         )
 
-    ref_img = _match_shape(ref_img, shape)
-    mov_img = _match_shape(mov_img, shape)
+    ref_img = match_shape(ref_img, shape)
+    mov_img = match_shape(mov_img, shape)
 
     Fimg1 = np.fft.rfftn(ref_img)
     Fimg2 = np.fft.rfftn(mov_img)
@@ -297,7 +254,26 @@ def get_tform_from_pcc(
     source_channel_tzyx: da.Array,
     target_channel_tzyx: da.Array,
     verbose: bool = False,
-) -> Optional[np.ndarray]:
+) -> ArrayLike:
+    """
+    Get the transformation matrix from phase cross correlation.
+
+    Parameters
+    ----------
+    t : int
+        Time index.
+    source_channel_tzyx : da.Array
+        Source channel data.
+    target_channel_tzyx : da.Array
+        Target channel data.
+    verbose : bool
+        If True, print verbose output.
+
+    Returns
+    -------
+    ArrayLike
+        Transformation matrix.
+    """
     try:
         # Get the target and source images
         target = np.asarray(source_channel_tzyx[t]).astype(np.float32)
@@ -326,7 +302,30 @@ def estimate_xyz_stabilization_pcc_per_position(
     crop_size_xy: list[int],
     t_reference: str = "first",
     verbose: bool = False,
-) -> None:
+) -> list[ArrayLike]:
+    """
+    Estimate the xyz stabilization for a single position.
+
+    Parameters
+    ----------
+    input_position_dirpath : Path
+        Path to the input position directory.
+    output_folder_path : Path
+        Path to the output folder.
+    channel_index : int
+        Index of the channel to process.
+    crop_size_xy : list[int]
+        Size of the crop in the XY plane.
+    t_reference : str
+        Reference timepoint.
+    verbose : bool
+        If True, print verbose output.
+
+    Returns
+    -------
+    list[ArrayLike]
+        List of the xyz stabilization for each timepoint.
+    """
     with open_ome_zarr(input_position_dirpath) as input_position:
         channel_tzyx = input_position.data.dask_array()[:, channel_index]
         T, _, Y, X = channel_tzyx.shape
@@ -382,7 +381,32 @@ def estimate_xyz_stabilization_pcc(
     sbatch_filepath: Path = None,
     cluster: str = "local",
     verbose: bool = False,
-) -> np.ndarray:
+) -> dict[str, list[ArrayLike]]:
+    """
+    Estimate the xyz stabilization for a list of positions.
+
+    Parameters
+    ----------
+    input_position_dirpaths : list[Path]
+        Paths to the input position directories.
+    output_folder_path : Path
+        Path to the output folder.
+    phase_cross_corr_settings : PhaseCrossCorrSettings
+        Settings for the phase cross correlation.
+    channel_index : int
+        Index of the channel to process.
+    sbatch_filepath : Path
+        Path to the sbatch file.
+    cluster : str
+        Cluster to use.
+    verbose : bool
+        If True, print verbose output.
+
+    Returns
+    -------
+    dict[str, list[ArrayLike]]
+        Dictionary of the xyz stabilization for each position.
+    """
 
     skip_beads_fov = phase_cross_corr_settings.skip_beads_fov
 
@@ -464,32 +488,31 @@ def estimate_xyz_stabilization_with_beads(
     cluster: str = "local",
     sbatch_filepath: Optional[Path] = None,
     output_folder_path: Path = None,
-):
+) -> list[ArrayLike]:
     """
-    Perform beads-based temporal registration of 4D data using affine transformations.
+    Estimate the xyz stabilization for a single position.
 
-    This function calculates timepoint-specific affine transformations to align a source channel
-    to a target channel in 4D (T, Z, Y, X) data. It validates, smooths, and interpolates transformations
-    across timepoints for consistent registration.
+    Parameters
+    ----------
+    channel_tzyx : da.Array
+        Source channel data.
+    beads_match_settings : BeadsMatchSettings
+        Settings for the beads match.
+    affine_transform_settings : AffineTransformSettings
+        Settings for the affine transform.
+    verbose : bool
+        If True, print verbose output.
+    cluster : str
+        Cluster to use.
+    sbatch_filepath : Path
+        Path to the sbatch file.
+    output_folder_path : Path
+        Path to the output folder.
 
-    Parameters:
-    - channel_tzyx (da.Array): 4D array (T, Z, Y, X) of the source channel (Dask array).
-    - approx_tform (list): Initial approximate affine transform (4x4 matrix) for guiding registration.
-    - num_processes (int): Number of parallel processes for transformation computation.
-    - window_size (int): Size of the moving window for smoothing transformations.
-    - tolerance (float): Maximum allowed difference between consecutive transformations for validation.
-    - angle_threshold (int): Threshold for filtering outliers in detected bead matches (in degrees).
-    - verbose (bool): If True, prints detailed logs of the registration process.
-
-    Returns:
-    - transforms (list): List of affine transformation matrices (4x4), one for each timepoint.
-                         Invalid or missing transformations are interpolated.
-
-    Notes:
-    - Each timepoint is processed in parallel using a multiprocessing pool.
-    - Transformations are smoothed with a moving average window and validated against a reference.
-    - Missing transformations are interpolated linearly across timepoints.
-    - Use verbose=True for detailed logging during registration.
+    Returns
+    -------
+    list[ArrayLike]
+        List of the xyz stabilization for each timepoint.
     """
 
     (T, Z, Y, X) = channel_tzyx.shape
@@ -590,8 +613,32 @@ def estimate_xy_stabilization_per_position(
     crop_size_xy: list[int, int],
     t_reference: str = "previous",
     verbose: bool = False,
-) -> np.ndarray:
+) -> ArrayLike:
+    """
+    Estimate the xy stabilization for a single position.
 
+    Parameters
+    ----------
+    input_position_dirpath : Path
+        Path to the input position directory.
+    output_folder_path : Path
+        Path to the output folder.
+    df_z_focus_path : Path
+        Path to the input focus CSV file.
+    channel_index : int
+        Index of the channel to process.
+    crop_size_xy : list[int, int]
+        Size of the crop in the XY plane.
+    t_reference : str
+        Reference timepoint.
+    verbose : bool
+        If True, print verbose output.
+
+    Returns
+    -------
+    ArrayLike
+        Transformation matrix.
+    """
     with open_ome_zarr(input_position_dirpath) as input_position:
         T, _, _, Y, X = input_position.data.shape
         x_idx = slice(X // 2 - crop_size_xy[0] // 2, X // 2 + crop_size_xy[0] // 2)
@@ -624,18 +671,16 @@ def estimate_xy_stabilization_per_position(
         for tform in T_stackreg:
             tform[0, 2], tform[1, 2] = tform[1, 2], tform[0, 2]
 
-        T_zyx_shift = np.zeros((T_stackreg.shape[0], 4, 4))
-        T_zyx_shift[:, 1:4, 1:4] = T_stackreg
-        T_zyx_shift[:, 0, 0] = 1
+        transform = np.zeros((T_stackreg.shape[0], 4, 4))
+        transform[:, 1:4, 1:4] = T_stackreg
+        transform[:, 0, 0] = 1
         # save the transforms as
         position_filename = str(Path(*input_position_dirpath.parts[-3:]))
         position_filename = position_filename.replace("/", "_")
 
-        np.save(
-            output_folder_path / f"{position_filename}.npy", T_zyx_shift.astype(np.float32)
-        )
+        np.save(output_folder_path / f"{position_filename}.npy", transform.astype(np.float32))
 
-    return T_zyx_shift
+    return transform
 
 
 def estimate_xy_stabilization(
@@ -646,9 +691,31 @@ def estimate_xy_stabilization(
     sbatch_filepath: Optional[Path] = None,
     cluster: str = "local",
     verbose: bool = False,
-) -> np.ndarray:
+) -> dict[str, list[ArrayLike]]:
     """
     Estimate XY stabilization using StackReg.
+
+    Parameters
+    ----------
+    input_position_dirpaths : list[Path]
+        Paths to the input position directories.
+    output_folder_path : Path
+        Path to the output folder.
+    stack_reg_settings : StackRegSettings
+        Settings for the stack registration.
+    channel_index : int
+        Index of the channel to process.
+    sbatch_filepath : Path
+        Path to the sbatch file.
+    cluster : str
+        Cluster to use.
+    verbose : bool
+        If True, print verbose output.
+
+    Returns
+    -------
+    dict[str, list[ArrayLike]]
+        Dictionary of the xy stabilization for each position.
     """
 
     skip_beads_fov = stack_reg_settings.skip_beads_fov
@@ -748,14 +815,154 @@ def estimate_xy_stabilization(
     return fov_transforms
 
 
-def remove_beads_fov_from_path_list(position_dirpaths: list[Path], skip_beads_fov: str):
-    if skip_beads_fov != '0':
-        # Remove the beads FOV from the input data paths
-        click.echo(f"Removing beads FOV {skip_beads_fov} from input data paths")
-        position_dirpaths = [
-            path for path in position_dirpaths if skip_beads_fov not in str(path)
-        ]
-    return position_dirpaths
+def estimate_z_focus_per_position(
+    input_position_dirpath: Path,
+    input_channel_indices: Tuple[int, ...],
+    crop_size_xy: list[int, int],
+    output_path_focus_csv: Path,
+    output_path_transform: Path,
+    verbose: bool = False,
+) -> None:
+    """
+    Estimate the z-focus for each timepoint and channel.
+
+    Parameters
+    ----------
+    input_position_dirpath : Path
+        Path to the input position directory.
+    input_channel_indices : Tuple[int, ...]
+        Indices of the channels to process.
+    crop_size_xy : list[int, int]
+        Size of the crop in the XY plane.
+    output_path_focus_csv : Path
+        Path to the output focus CSV file.
+    output_path_transform : Path
+        Path to the output transform file.
+    verbose : bool
+        If True, print verbose output.
+
+    Returns
+    -------
+    None
+    """
+    position, time_idx, channel, focus_idx = [], [], [], []
+
+    with open_ome_zarr(input_position_dirpath) as dataset:
+        channel_names = dataset.channel_names
+        T, _, Z, Y, X = dataset[0].shape
+        _, _, _, _, pixel_size = dataset.scale
+
+        for tc_idx in itertools.product(range(T), input_channel_indices):
+            data_zyx = dataset.data[tc_idx][
+                :,
+                Y // 2 - crop_size_xy[1] // 2 : Y // 2 + crop_size_xy[1] // 2,
+                X // 2 - crop_size_xy[0] // 2 : X // 2 + crop_size_xy[0] // 2,
+            ]
+
+            # if the FOV is empty, set the focal plane to 0
+            if np.sum(data_zyx) == 0:
+                z_idx = 0
+            else:
+                z_idx = focus_from_transverse_band(
+                    data_zyx,
+                    NA_det=NA_DET,
+                    lambda_ill=LAMBDA_ILL,
+                    pixel_size=pixel_size,
+                )
+                click.echo(
+                    f"Estimating focus for timepoint {tc_idx[0]} and channel {tc_idx[1]}: {z_idx}"
+                )
+
+            position.append(str(Path(*input_position_dirpath.parts[-3:])))
+            time_idx.append(tc_idx[0])
+            channel.append(channel_names[tc_idx[1]])
+            focus_idx.append(z_idx)
+
+    df = pd.DataFrame(
+        {
+            "position": position,
+            "time_idx": time_idx,
+            "channel": channel,
+            "focus_idx": focus_idx,
+        }
+    )
+    output_path_focus_csv.mkdir(parents=True, exist_ok=True)
+    if verbose:
+        click.echo(f"Saving focus finding results to {output_path_focus_csv}")
+
+    position_filename = str(Path(*input_position_dirpath.parts[-3:])).replace("/", "_")
+    output_csv = output_path_focus_csv / f"{position_filename}.csv"
+    df.to_csv(output_csv, index=False)
+
+    # ---- Generate and save Z transformation matrix per timepoint
+
+    # Compute Z drifts
+
+    z_focus_shift = [np.eye(4)]
+    z_val = focus_idx[0]
+    for z_val_next in focus_idx[1:]:
+        shift = np.eye(4)
+        shift[0, 3] = z_val_next - z_val
+        z_focus_shift.append(shift)
+    T_z_drift_mats = np.array(z_focus_shift)
+
+    output_path_transform.mkdir(parents=True, exist_ok=True)
+    np.save(output_path_transform / f"{position_filename}.npy", T_z_drift_mats)
+
+    if verbose:
+        click.echo(f"Saved Z transform matrices to {output_path_transform}")
+
+
+def get_mean_z_positions(
+    dataframe_path: Path,
+    verbose: bool = False,
+    method: Literal["mean", "median"] = "mean",
+) -> None:
+    """
+    Get the mean or median z-focus for each timepoint.
+
+    Parameters
+    ----------
+    dataframe_path : Path
+        Path to the input focus CSV file.
+    verbose : bool
+        If True, print verbose output.
+    method : Literal["mean", "median"]
+        Method to use for averaging the z-focus.
+
+    Returns
+    -------
+    np.ndarray
+        Array of the mean or median z-focus for each timepoint.
+    """
+    df = pd.read_csv(dataframe_path)
+
+    # Sort the DataFrame based on 'time_idx'
+    df = df.sort_values("time_idx")
+
+    # TODO: this is a hack to deal with the fact that the focus finding function returns 0 if it fails
+    df["focus_idx"] = df["focus_idx"].replace(0, np.nan).ffill()
+
+    # Get the mean of positions for each time point
+    if method == "mean":
+        average_focus_idx = df.groupby("time_idx")["focus_idx"].mean().reset_index()
+    elif method == "median":
+        average_focus_idx = df.groupby("time_idx")["focus_idx"].median().reset_index()
+    else:
+        raise ValueError("Unknown averaging method.")
+
+    if verbose:
+        import matplotlib.pyplot as plt
+
+        # # Get the moving average of the focus_idx
+        plt.plot(average_focus_idx["focus_idx"], linestyle="--", label="mean of all positions")
+        plt.xlabel('Time index')
+        plt.ylabel('Focus index')
+        plt.ylim(0, 100)
+        plt.legend()
+        plt.savefig(dataframe_path.parent / "z_drift.png")
+
+    return average_focus_idx["focus_idx"].values
 
 
 def estimate_z_stabilization(
@@ -767,9 +974,32 @@ def estimate_z_stabilization(
     cluster: str = "local",
     verbose: bool = False,
     estimate_z_index: bool = False,
-) -> np.ndarray:
+) -> dict[str, list[ArrayLike]]:
     """
-    Submit SLURM jobs to estimate per-position Z focus and return averaged drift matrices.
+    Estimate the z stabilization for a list of positions.
+    Parameters
+    ----------
+    input_position_dirpaths : list[Path]
+        Paths to the input position directories.
+    output_folder_path : Path
+        Path to the output folder.
+    focus_finding_settings : FocusFindingSettings
+        Settings for the focus finding.
+    channel_index : int
+        Index of the channel to process.
+    sbatch_filepath : Path
+        Path to the sbatch file.
+    cluster : str
+        Cluster to use.
+    verbose : bool
+        If True, print verbose output.
+    estimate_z_index : bool
+        If True, estimate the z index and save the focus csv without saving the transforms (for xy stabilization).
+
+    Returns
+    -------
+    dict[str, list[ArrayLike]]
+        Dictionary of the z stabilization for each position.
     """
     skip_beads_fov = focus_finding_settings.skip_beads_fov
     input_position_dirpaths = remove_beads_fov_from_path_list(
@@ -818,7 +1048,7 @@ def estimate_z_stabilization(
     with executor.batch():
         for input_position_dirpath in input_position_dirpaths:
             job = executor.submit(
-                estimate_position_focus,
+                estimate_z_focus_per_position,
                 input_position_dirpath=input_position_dirpath,
                 input_channel_indices=(channel_index,),
                 crop_size_xy=focus_finding_settings.crop_size_xy,
@@ -902,14 +1132,15 @@ def estimate_z_stabilization(
         fov_transforms = {}
 
         for file_path in transforms_paths:
-            T_zyx_shift = np.load(file_path).tolist()
+            transform = np.load(file_path).tolist()
             fov_filename = file_path.stem
             #
-            fov_transforms[fov_filename] = T_zyx_shift
+            fov_transforms[fov_filename] = transform
 
         shutil.rmtree(output_transforms_path)
 
     return fov_transforms
+
 
 def estimate_stabilization(
     input_position_dirpaths: List[str],
@@ -917,18 +1148,30 @@ def estimate_stabilization(
     config_filepath: str,
     sbatch_filepath: str = None,
     local: bool = False,
-):
+) -> None:
     """
-    Estimate the Z and/or XY timelapse stabilization matrices.
+    Estimate the stabilization matrices for a list of positions.
 
-    This function estimates xy and z drifts and returns the affine matrices per timepoint taking t=0 as reference saved as a yaml file.
-    The level of verbosity can be controlled with the verbose flag.
-    The size of the crop in xy can be specified with the crop-size-xy option.
+    Parameters
+    ----------
+    input_position_dirpaths : list[str]
+        Paths to the input position directories.
+    output_filepath : str
+        Path to the output file.
+    config_filepath : str
+        Path to the configuration file.
+    sbatch_filepath : str
+        Path to the sbatch file.
+    local : bool
+        If True, run locally.
 
-    Example usage:
-    biahub stabilization -i ./timelapse.zarr/0/0/0 -o ./stabilization.yml -y -z -b -v --crop-size-xy 300 300
+    Returns
+    -------
+    None
 
-    Note: the verbose output will be saved at the same level as the output zarr.
+    Notes
+    -----
+    The verbose output will be saved at the same level as the output zarr.
     """
 
     # Load the settings
@@ -1279,7 +1522,6 @@ def estimate_stabilization(
                 )
 
 
-
 @click.command("estimate-stabilization")
 @input_position_dirpaths()
 @output_filepath()
@@ -1296,14 +1538,37 @@ def estimate_stabilization_cli(
     """
     Estimate the Z and/or XY timelapse stabilization matrices.
 
-    This function estimates xy and z drifts and returns the affine matrices per timepoint taking t=0 as reference saved as a yaml file.
-    The level of verbosity can be controlled with the verbose flag.
-    The size of the crop in xy can be specified with the crop-size-xy option.
+    This function estimates xy and z drifts and returns the affine matrices computed with focus finding, beads or phase cross correlation.
+
+    Parameters
+    ----------
+    input_position_dirpaths : list[str]
+        Paths to the input position directories.
+    output_filepath : str
+        Path to the output file.
+    config_filepath : str
+        Path to the configuration file.
+    sbatch_filepath : str
+        Path to the sbatch file.
+    local : bool
+        If True, run locally.
+
+    Returns
+    -------
+    None
+
+    Notes
+    -----
+    The verbose output will be saved at the same level as the output zarr.
+    The stabilization matrices are saved as a yaml file.
+    The translation plots are saved as a png file.
+    The focus csv is saved as a csv file.
+
+    ---------
 
     Example usage:
-    biahub stabilization -i ./timelapse.zarr/0/0/0 -o ./stabilization.yml -y -z -b -v --crop-size-xy 300 300
+    biahub estimate-stabilization -i ./timelapse.zarr/0/0/0 -o ./stabilization.yml  -c ./config.yml -s ./sbatch.sh --local --verbose
 
-    Note: the verbose output will be saved at the same level as the output zarr.
     """
 
     estimate_stabilization(
@@ -1313,5 +1578,7 @@ def estimate_stabilization_cli(
         sbatch_filepath=sbatch_filepath,
         local=local,
     )
+
+
 if __name__ == "__main__":
     estimate_stabilization_cli()

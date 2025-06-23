@@ -1,11 +1,9 @@
 import os
 import shutil
-import subprocess
-import time
 
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Union
 
 import ants
 import click
@@ -35,6 +33,7 @@ from biahub.cli.parsing import (
     source_position_dirpaths,
     target_position_dirpaths,
 )
+from biahub.cli.slurm import wait_for_jobs_to_finish
 from biahub.cli.utils import (
     _check_nan_n_zeros,
     estimate_resources,
@@ -77,31 +76,242 @@ COLOR_CYCLE = [
 ]
 
 
+def _validate_transforms(
+    transforms: list[ArrayLike],
+    shape_zyx: tuple[int, int, int],
+    window_size: int = 10,
+    tolerance: float = 100.0,
+    verbose: bool = False,
+):
+    """
+    Validate a list of affine transformation matrices by smoothing and filtering.
+
+    Parameters
+    ----------
+    transforms : list[ArrayLike]
+        List of affine transformation matrices (4x4), one for each timepoint.
+    shape_zyx : tuple[int, int, int]
+        Shape of the source (i.e. moving) volume (Z, Y, X).
+    window_size : int
+        Size of the moving window for smoothing transformations.
+    tolerance : float
+        Maximum allowed difference between consecutive transformations for validation.
+    verbose : bool
+        If True, prints detailed logs of the validation process.
+
+    Returns
+    -------
+    list[ArrayLike]
+        List of affine transformation matrices with invalid or inconsistent values replaced by None.
+
+    """
+    valid_transforms = []
+    reference_transform = None
+    for i in range(len(transforms)):
+        if transforms[i] is not None:
+            if reference_transform is None or _check_transform_difference(
+                transforms[i], reference_transform, shape_zyx, tolerance, verbose
+            ):
+                valid_transforms.append(transforms[i])
+                if len(valid_transforms) > window_size:
+                    valid_transforms.pop(0)
+                reference_transform = np.mean(valid_transforms, axis=0)
+                if verbose:
+                    click.echo(f"Transform at timepoint {i} is valid")
+            else:
+                if verbose:
+                    click.echo(f'Transform at timepoint {i} will be interpolated')
+                transforms[i] = None
+
+        else:
+            if verbose:
+                click.echo(f'Transform at timepoint {i} is None, will be interpolated')
+            transforms[i] = None
+    return transforms
+
+
+def _interpolate_transforms(
+    transforms: list[ArrayLike],
+    window_size: int = 3,
+    interpolation_type: Literal["linear", "cubic"] = "linear",
+    verbose: bool = False,
+):
+    """
+    Interpolate missing transforms (None) in a list of affine transformation matrices.
+
+    Parameters
+    ----------
+    transforms : list[ArrayLike]
+        List of affine transformation matrices (4x4), one for each timepoint.
+    window_size : int
+        Local window radius for interpolation. If 0, global interpolation is used.
+    interpolation_type : Literal["linear", "cubic"]
+        Interpolation type.
+    verbose : bool
+        If True, prints detailed logs of the interpolation process.
+
+    Returns
+    -------
+    list[ArrayLike]
+        List of affine transformation matrices with missing values filled via linear interpolation.
+    """
+    n = len(transforms)
+    valid_transform_indices = [i for i, t in enumerate(transforms) if t is not None]
+    valid_transforms = [np.array(transforms[i]) for i in valid_transform_indices]
+
+    if not valid_transform_indices or len(valid_transform_indices) < 2:
+        raise ValueError("At least two valid transforms are required for interpolation.")
+
+    missing_indices = [i for i in range(n) if transforms[i] is None]
+
+    if not missing_indices:
+        return transforms  # nothing to do
+    if verbose:
+        click.echo(f"Interpolating missing transforms at timepoints: {missing_indices}")
+
+    if window_size > 0:
+        for idx in missing_indices:
+            # Define local window
+            start = max(0, idx - window_size)
+            end = min(n, idx + window_size + 1)
+
+            local_x = []
+            local_y = []
+
+            for j in range(start, end):
+                if j in valid_transform_indices:
+                    local_x.append(j)
+                    local_y.append(np.array(transforms[j]))
+
+            if len(local_x) < 2:
+                # Not enough neighbors for interpolation. Assign to closes valid transform
+                closest_valid_idx = valid_transform_indices[
+                    np.argmin(np.abs(np.asarray(valid_transform_indices) - idx))
+                ]
+                transforms[idx] = transforms[closest_valid_idx]
+                if verbose:
+                    click.echo(
+                        f"Not enough interpolation neighbors were found for timepoint {idx} using closest valid transform at timepoint {closest_valid_idx}"
+                    )
+                continue
+
+            f = interp1d(
+                local_x, local_y, axis=0, kind=interpolation_type, fill_value='extrapolate'
+            )
+            transforms[idx] = f(idx).tolist()
+            if verbose:
+                click.echo(f"Interpolated timepoint {idx} using neighbors: {local_x}")
+
+    else:
+        # Global interpolation using all valid transforms
+        f = interp1d(
+            valid_transform_indices,
+            valid_transforms,
+            axis=0,
+            kind='linear',
+            fill_value='extrapolate',
+        )
+        transforms = [
+            f(i).tolist() if transforms[i] is None else transforms[i] for i in range(n)
+        ]
+
+    return transforms
+
+
+def _check_transform_difference(
+    tform1: ArrayLike,
+    tform2: ArrayLike,
+    shape_zyx: tuple[int, int, int],
+    threshold: float = 5.0,
+    verbose: bool = False,
+):
+    """
+    Evaluate the difference between two affine transforms by calculating the
+    Mean Squared Error (MSE) of a grid of points transformed by each matrix.
+
+    Parameters
+    ----------
+    tform1 : ArrayLike
+        First affine transform (4x4 matrix).
+    tform2 : ArrayLike
+        Second affine transform (4x4 matrix).
+    shape_zyx : tuple[int, int, int]
+        Shape of the source (i.e. moving) volume (Z, Y, X).
+    threshold : float
+        The maximum allowed MSE difference.
+    verbose : bool
+        Flag to print the MSE difference.
+
+    Returns
+    -------
+    bool
+        True if the MSE difference is within the threshold, False otherwise.
+    """
+    tform1 = np.array(tform1)
+    tform2 = np.array(tform2)
+    (Z, Y, X) = shape_zyx
+
+    zz, yy, xx = np.meshgrid(
+        np.linspace(0, Z - 1, 10), np.linspace(0, Y - 1, 10), np.linspace(0, X - 1, 10)
+    )
+
+    grid_points = np.vstack([zz.ravel(), yy.ravel(), xx.ravel(), np.ones(zz.size)]).T
+
+    points_tform1 = np.dot(tform1, grid_points.T).T
+    points_tform2 = np.dot(tform2, grid_points.T).T
+
+    differences = np.linalg.norm(points_tform1[:, :3] - points_tform2[:, :3], axis=1)
+    mse = np.mean(differences)
+
+    if verbose:
+        click.echo(f'MSE of transformed points: {mse:.2f}; threshold: {threshold:.2f}')
+    return mse <= threshold
+
+
 def evaluate_transforms(
     transforms: ArrayLike,
     shape_zyx: tuple[int, int, int],
-    validation_window_size: int,
-    validation_tolerance: float,
-    interpolation_window_size: int,
+    validation_window_size: int = 10,
+    validation_tolerance: float = 100.0,
+    interpolation_window_size: int = 3,
     interpolation_type: Literal["linear", "cubic"] = "linear",
     verbose: bool = False,
 ) -> ArrayLike:
-    Z, Y, X = shape_zyx
-    # check if transform is list or np.ndarray
+    """
+    Evaluate and validate a list of affine transformation matrices.
+
+    Parameters
+    ----------
+    transforms : ArrayLike
+        List of affine transformation matrices (4x4), one for each timepoint.
+    shape_zyx : tuple[int, int, int]
+        Shape of the source (i.e. moving) volume (Z, Y, X).
+    validation_window_size : int
+        Size of the moving window for smoothing transformations.
+    validation_tolerance : float
+        Maximum allowed difference between consecutive transformations for validation.
+    interpolation_window_size : int
+        Size of the local window for interpolation.
+    interpolation_type : Literal["linear", "cubic"]
+        Interpolation type.
+    verbose : bool
+        If True, prints detailed logs of the evaluation and validation process.
+
+    Returns
+    -------
+    list[ArrayLike]
+        List of affine transformation matrices with missing values filled via linear interpolation.
+    """
     if not isinstance(transforms, list):
         transforms = transforms.tolist()
 
-    # Validate transforms
     transforms = _validate_transforms(
         transforms=transforms,
         window_size=validation_window_size,
         tolerance=validation_tolerance,
-        Z=Z,
-        Y=Y,
-        X=X,
+        shape_zyx=shape_zyx,
         verbose=verbose,
     )
-    # Interpolate missing transforms
     transforms = _interpolate_transforms(
         transforms=transforms,
         window_size=interpolation_window_size,
@@ -112,14 +322,37 @@ def evaluate_transforms(
 
 
 def save_transforms(
-    model,
-    transforms: list,
+    model: Union[AffineTransformSettings, StabilizationSettings, RegistrationSettings],
+    transforms: list[ArrayLike],
     output_filepath_settings: Path,
     output_filepath_plot: Path = None,
     verbose: bool = False,
 ):
     """
     Save the transforms to a yaml file and plot the translations.
+
+    Parameters
+    ----------
+    model : Union[AffineTransformSettings, StabilizationSettings, RegistrationSettings]
+        Model to save the transforms to.
+    transforms : list[ArrayLike]
+        List of affine transformation matrices (4x4), one for each timepoint.
+    output_filepath_settings : Path
+        Path to the output settings file.
+    output_filepath_plot : Path
+        Path to the output plot file.
+    verbose : bool
+        If True, prints detailed logs of the saving process.
+
+    Returns
+    -------
+    None
+
+    Notes
+    -----
+    The transforms are saved to a yaml file and a plot of the translations is saved to a png file.
+    The plot is saved in the same directory as the settings file and is named "translations.png".
+
     """
     if transforms is None or len(transforms) == 0:
         raise ValueError("Transforms are empty")
@@ -131,7 +364,7 @@ def save_transforms(
 
     if output_filepath_settings.suffix not in [".yml", ".yaml"]:
         output_filepath_settings = output_filepath_settings.with_suffix(".yml")
-    
+
     output_filepath_settings.parent.mkdir(parents=True, exist_ok=True)
     model_to_yaml(model, output_filepath_settings)
 
@@ -143,7 +376,29 @@ def save_transforms(
         plot_translations(np.asarray(transforms), output_filepath_plot)
 
 
-def plot_translations(transforms_zyx: np.ndarray, output_filepath: Path):
+def plot_translations(
+    transforms_zyx: ArrayLike,
+    output_filepath: Path,
+):
+    """
+    Plot the translations of a list of affine transformation matrices.
+
+    Parameters
+    ----------
+    transforms_zyx : ArrayLike
+        List of affine transformation matrices (4x4), one for each timepoint.
+    output_filepath : Path
+        Path to the output plot file.
+    Returns
+    -------
+    None
+
+    Notes
+    -----
+    The plot is saved as a png file.
+    The plot is saved in the same directory as the output file.
+    The plot is saved as a png file.
+    """
     z_transforms = transforms_zyx[:, 0, 3]
     y_transforms = transforms_zyx[:, 1, 3]
     x_transforms = transforms_zyx[:, 2, 3]
@@ -159,53 +414,49 @@ def plot_translations(transforms_zyx: np.ndarray, output_filepath: Path):
     plt.close()
 
 
-def wait_for_jobs_to_finish(job_ids, sleep_time=60):
-    """Wait for SLURM jobs to finish."""
-    print(f"Waiting for jobs: {', '.join(job_ids)} to finish...")
-    while True:
-        result = subprocess.run(
-            ["squeue", "--job", ",".join(job_ids)], stdout=subprocess.PIPE, text=True
-        )
-        if len(result.stdout.strip().split("\n")) <= 1:  # No jobs found
-            print("All jobs completed.")
-            break
-        else:
-            print("Jobs still running...")
-            time.sleep(sleep_time)  # Wait sleep_time seconds before checking again
-
-
 def user_assisted_registration(
-    source_channel_volume,
-    source_channel_name,
-    source_channel_voxel_size,
-    target_channel_volume,
-    target_channel_name,
-    target_channel_voxel_size,
-    similarity=False,
-    pre_affine_90degree_rotation=0,
-):
+    source_channel_volume: ArrayLike,
+    source_channel_name: str,
+    source_channel_voxel_size: tuple[float, float, float],
+    target_channel_volume: ArrayLike,
+    target_channel_name: str,
+    target_channel_voxel_size: tuple[float, float, float],
+    similarity: bool = False,
+    pre_affine_90degree_rotation: int = 0,
+) -> ArrayLike:
     """
     Perform user-assisted registration of two volumetric image channels.
 
     This function allows users to manually annotate corresponding features between
     a source and target channel to calculate an affine transformation matrix for registration.
 
-    Parameters:
-    - source_channel_volume (np.ndarray): 3D array (Z, Y, X) of the source channel.
-    - source_channel_name (str): Name of the source channel for display purposes.
-    - source_channel_voxel_size (tuple): Voxel size of the source channel (Z, Y, X).
-    - target_channel_volume (np.ndarray): 3D array (Z, Y, X) of the target channel.
-    - target_channel_name (str): Name of the target channel for display purposes.
-    - target_channel_voxel_size (tuple): Voxel size of the target channel (Z, Y, X).
-    - similarity (bool): If True, use a similarity transform (rotation, translation, scaling);
+    Parameters
+    ----------
+    source_channel_volume : ArrayLike
+       3D array (Z, Y, X) of the source channel.
+    source_channel_name : str
+        Name of the source channel for display purposes.
+    source_channel_voxel_size : tuple[float, float, float]
+        Voxel size of the source channel (Z, Y, X).
+    target_channel_volume : ArrayLike
+       3D array (Z, Y, X) of the target channel.
+    target_channel_name : str
+        Name of the target channel for display purposes.
+    target_channel_voxel_size : tuple[float, float, float]
+        Voxel size of the target channel (Z, Y, X).
+    similarity : bool
+        If True, use a similarity transform (rotation, translation, scaling);
                          if False, use an Euclidean transform (rotation, translation).
-    - pre_affine_90degree_rotation (int): Number of 90-degree rotations to apply to the source channel
-                                          before registration.
+    pre_affine_90degree_rotation : int
+        Number of 90-degree rotations to apply to the source channel before registration.
 
-    Returns:
-    - np.ndarray: The estimated 4x4 affine transformation matrix for registering the source channel to the target channel.
+    Returns
+    -------
+    ArrayLike
+        The estimated 4x4 affine transformation matrix for registering the source channel to the target channel.
 
-    Notes:
+    Notes
+    -----
     - The function uses a Napari viewer for manual feature annotation.
     - Scaling factors for voxel size differences between source and target are calculated and applied.
     - Users must annotate at least three corresponding points in both channels for the transform calculation.
@@ -455,121 +706,6 @@ def user_assisted_registration(
     return tform
 
 
-def beads_based_registration(
-    source_channel_tzyx: da.Array,
-    target_channel_tzyx: da.Array,
-    beads_match_settings: BeadsMatchSettings = None,
-    affine_transform_settings: AffineTransformSettings = None,
-    verbose: bool = False,
-    cluster: bool = False,
-    sbatch_filepath: Path = None,
-    output_folder_path: Path = None,
-):
-    """
-    Perform beads-based temporal registration of 4D data using affine transformations.
-
-    This function calculates timepoint-specific affine transformations to align a source channel
-    to a target channel in 4D (T, Z, Y, X) data. It validates, smooths, and interpolates transformations
-    across timepoints for consistent registration.
-
-    Parameters:
-    - source_channel_tzyx (da.Array): 4D array (T, Z, Y, X) of the source channel (Dask array).
-    - target_channel_tzyx (da.Array): 4D array (T, Z, Y, X) of the target channel (Dask array).
-    - approx_tform (list): Initial approximate affine transform (4x4 matrix) for guiding registration.
-    - num_processes (int): Number of parallel processes for transformation computation.
-    - window_size (int): Size of the moving window for smoothing transformations.
-    - tolerance (float): Maximum allowed difference between consecutive transformations for validation.
-    - angle_threshold (int): Threshold for filtering outliers in detected bead matches (in degrees).
-    - verbose (bool): If True, prints detailed logs of the registration process.
-
-    Returns:
-    - transforms (list): List of affine transformation matrices (4x4), one for each timepoint.
-                         Invalid or missing transformations are interpolated.
-
-    Notes:
-    - Each timepoint is processed in parallel using a multiprocessing pool.
-    - Transformations are smoothed with a moving average window and validated against a reference.
-    - Missing transformations are interpolated linearly across timepoints.
-    - Use verbose=True for detailed logging during registration.
-    """
-
-    (T, Z, Y, X) = source_channel_tzyx.shape
-
-    # Compute transformations in parallel
-
-    num_cpus, gb_ram_per_cpu = estimate_resources(
-        shape=(T, 2, Z, Y, X), ram_multiplier=5, max_num_cpus=16
-    )
-
-    # Prepare SLURM arguments
-    slurm_args = {
-        "slurm_job_name": "estimate_registration",
-        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
-        "slurm_cpus_per_task": num_cpus,
-        "slurm_array_parallelism": 100,
-        "slurm_time": 30,
-        "slurm_partition": "preempted",
-    }
-
-    if sbatch_filepath:
-        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
-
-    output_folder_path.mkdir(parents=True, exist_ok=True)
-    slurm_out_path = output_folder_path / "slurm_output"
-    slurm_out_path.mkdir(parents=True, exist_ok=True)
-
-    # Submitit executor
-    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
-    executor.update_parameters(**slurm_args)
-
-    click.echo(f"Submitting SLURM focus estimation jobs with resources: {slurm_args}")
-    output_transforms_path = output_folder_path / "xyz_transforms"
-    output_transforms_path.mkdir(parents=True, exist_ok=True)
-
-    # Submit jobs
-    jobs = []
-    with executor.batch():
-        for t in range(T):
-            job = executor.submit(
-                _get_tform_from_beads,
-                source_channel_tzyx=source_channel_tzyx,
-                target_channel_tzyx=target_channel_tzyx,
-                beads_match_settings=beads_match_settings,
-                affine_transform_settings=affine_transform_settings,
-                verbose=verbose,
-                slurm=True,
-                output_folder_path=output_transforms_path,
-                t_idx=t,
-            )
-            jobs.append(job)
-
-    # Save job IDs
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    log_path = slurm_out_path / f"job_ids_{timestamp}.log"
-    with open(log_path, "w") as log_file:
-        for job in jobs:
-            log_file.write(f"{job.job_id}\n")
-    # Wait for all jobs to finish
-    job_ids = [str(j.job_id) for j in jobs]
-    wait_for_jobs_to_finish(job_ids)
-    # Get list of .npy transform files
-
-    # Load and collect all transform arrays
-    transforms = []
-
-    for t in range(T):
-        file_path = output_transforms_path / f"{t}.npy"
-        if not os.path.exists(file_path):
-            transforms.append(None)
-        else:
-            T_zyx_shift = np.load(file_path).tolist()
-            transforms.append(T_zyx_shift)
-
-    shutil.rmtree(output_transforms_path)
-
-    return transforms
-
-
 def ants_registration(
     source_data_tczyx: da.Array,
     target_data_tczyx: da.Array,
@@ -581,8 +717,48 @@ def ants_registration(
     output_folder_path: Path = None,
     cluster: str = 'local',
     sbatch_filepath: Path = None,
-) -> list:
+) -> list[ArrayLike]:
+    """
+    Perform ants registration of two volumetric image channels.
 
+    This function calculates timepoint-specific affine transformations to align a source channel
+    to a target channel in 4D (T, Z, Y, X) data. It validates, smooths, and interpolates transformations
+    across timepoints for consistent registration.
+
+    Parameters
+    ----------
+    source_data_tczyx : da.Array
+       4D array (T, C, Z, Y, X) of the source channel (Dask array).
+    target_data_tczyx : da.Array
+       4D array (T, C, Z, Y, X) of the target channel (Dask array).
+    source_channel_index : int | list[int]
+        Index of the source channel.
+    target_channel_index : int
+        Index of the target channel.
+    ants_registration_settings : AntsRegistrationSettings
+        Settings for the ants registration.
+    affine_transform_settings : AffineTransformSettings
+        Settings for the affine transform.
+    verbose : bool
+        If True, prints detailed logs of the registration process.
+    output_folder_path : Path
+        Path to the output folder.
+    cluster : str
+        Cluster to use.
+    sbatch_filepath : Path
+        Path to the sbatch file.
+
+    Returns
+    -------
+    list[ArrayLike]
+        List of affine transformation matrices (4x4), one for each timepoint.
+        Invalid or missing transformations are interpolated.
+
+    Notes
+    -----
+    Each timepoint is processed in parallel using submitit executor.
+    Use verbose=True for detailed logging during registration. The verbose output will be saved at the same level as the output zarr.
+    """
     T, C, Z, Y, X = source_data_tczyx.shape
     # # Crop only to the overlapping region, zero padding interfereces with registration
     z_slice, y_slice, x_slice = find_overlapping_volume(
@@ -659,7 +835,7 @@ def ants_registration(
                 x_slice=x_slice,
                 clip=True,
                 sobel_fitler=ants_registration_settings.sobel_filter,
-                verbose=False,
+                verbose=verbose,
                 slurm=True,
                 output_folder_path=output_transforms_path,
                 t_idx=t,
@@ -695,191 +871,170 @@ def ants_registration(
     return transforms
 
 
-def _validate_transforms(transforms, Z, Y, X, window_size=10, tolerance=100.0, verbose=False):
+def beads_based_registration(
+    source_channel_tzyx: da.Array,
+    target_channel_tzyx: da.Array,
+    beads_match_settings: BeadsMatchSettings = None,
+    affine_transform_settings: AffineTransformSettings = None,
+    verbose: bool = False,
+    cluster: bool = False,
+    sbatch_filepath: Path = None,
+    output_folder_path: Path = None,
+) -> list[ArrayLike]:
     """
-    Validate a list of affine transformation matrices by smoothing and filtering.
+    Perform beads-based temporal registration of 4D data using affine transformations.
 
-    This function validates a list of affine transformation matrices by smoothing them
-    with a moving average window and filtering out invalid or inconsistent transformations based on a tolerance threshold.
+    This function calculates timepoint-specific affine transformations to align a source channel
+    to a target channel in 4D (T, Z, Y, X) data. It validates, smooths, and interpolates transformations
+    across timepoints for consistent registration.
 
-    Parameters:
-    - transforms (list): List of affine transformation matrices (4x4), one for each timepoint.
-    - window_size (int): Size of the moving window for smoothing transformations.
-    - tolerance (float): Maximum allowed difference between consecutive transformations for validation.
-    - Z (int): Number of slices in the Z dimension.
-    - Y (int): Number of pixels in the Y dimension.
-    - X (int): Number of pixels in the X dimension.
-    - verbose (bool): If True, prints detailed logs of the validation process.
+    Parameters
+    ----------
+    source_channel_tzyx : da.Array
+       4D array (T, Z, Y, X) of the source channel (Dask array).
+    target_channel_tzyx : da.Array
+       4D array (T, Z, Y, X) of the target channel (Dask array).
+    beads_match_settings : BeadsMatchSettings
+        Settings for the beads match.
+    affine_transform_settings : AffineTransformSettings
+        Settings for the affine transform.
+    verbose : bool
+        If True, prints detailed logs of the registration process.
+    cluster : bool
+        If True, uses the cluster.
+    sbatch_filepath : Path
+        Path to the sbatch file.
+    output_folder_path : Path
+        Path to the output folder.
 
-    Returns:
-    - list: List of affine transformation matrices with invalid or inconsistent values
-            replaced by None.
+    Returns
+    -------
+    list[ArrayLike]
+        List of affine transformation matrices (4x4), one for each timepoint.
+        Invalid or missing transformations are interpolated.
+
+    Notes
+    -----
+    Each timepoint is processed in parallel using submitit executor.
+    Use verbose=True for detailed logging during registration. The verbose output will be saved at the same level as the output zarr.
     """
-    valid_transforms = []
-    reference_transform = None
-    for i in range(len(transforms)):
-        if transforms[i] is not None:
-            if reference_transform is None or _check_transform_difference(
-                transforms[i], reference_transform, (Z, Y, X), tolerance, verbose
-            ):
-                valid_transforms.append(transforms[i])
-                if len(valid_transforms) > window_size:
-                    valid_transforms.pop(0)
-                reference_transform = np.mean(valid_transforms, axis=0)
-                if verbose:
-                    click.echo(f"Transform at timepoint {i} is valid")
-            else:
-                if verbose:
-                    click.echo(f'Transform at timepoint {i} will be interpolated')
-                transforms[i] = None
 
-        else:
-            if verbose:
-                click.echo(f'Transform at timepoint {i} is None, will be interpolated')
-            transforms[i] = None
-    return transforms
+    (T, Z, Y, X) = source_channel_tzyx.shape
 
+    # Compute transformations in parallel
 
-def _interpolate_transforms(
-    transforms, window_size=3, interpolation_type='linear', verbose=False
-):
-    """
-    Interpolate missing transforms (None) in a list of affine transformation matrices.
-
-    Parameters:
-    - transforms (list of 4x4 arrays or None): One transform per timepoint.
-    - window (int): Local window radius for interpolation. If 0, global interpolation is used.
-
-    Returns:
-    - list: Transforms with missing values filled via linear interpolation.
-    """
-    n = len(transforms)
-    valid_transform_indices = [i for i, t in enumerate(transforms) if t is not None]
-    valid_transforms = [np.array(transforms[i]) for i in valid_transform_indices]
-
-    if not valid_transform_indices or len(valid_transform_indices) < 2:
-        raise ValueError("At least two valid transforms are required for interpolation.")
-
-    missing_indices = [i for i in range(n) if transforms[i] is None]
-
-    if not missing_indices:
-        return transforms  # nothing to do
-    if verbose:
-        click.echo(f"Interpolating missing transforms at timepoints: {missing_indices}")
-
-    if window_size > 0:
-        for idx in missing_indices:
-            # Define local window
-            start = max(0, idx - window_size)
-            end = min(n, idx + window_size + 1)
-
-            local_x = []
-            local_y = []
-
-            for j in range(start, end):
-                if j in valid_transform_indices:
-                    local_x.append(j)
-                    local_y.append(np.array(transforms[j]))
-
-            if len(local_x) < 2:
-                # Not enough neighbors for interpolation. Assign to closes valid transform
-                closest_valid_idx = valid_transform_indices[
-                    np.argmin(np.abs(np.asarray(valid_transform_indices) - idx))
-                ]
-                transforms[idx] = transforms[closest_valid_idx]
-                if verbose:
-                    click.echo(
-                        f"Not enough interpolation neighbors were found for timepoint {idx} using closest valid transform at timepoint {closest_valid_idx}"
-                    )
-                continue
-
-            f = interp1d(
-                local_x, local_y, axis=0, kind=interpolation_type, fill_value='extrapolate'
-            )
-            transforms[idx] = f(idx).tolist()
-            if verbose:
-                click.echo(f"Interpolated timepoint {idx} using neighbors: {local_x}")
-
-    else:
-        # Global interpolation using all valid transforms
-        f = interp1d(
-            valid_transform_indices,
-            valid_transforms,
-            axis=0,
-            kind='linear',
-            fill_value='extrapolate',
-        )
-        transforms = [
-            f(i).tolist() if transforms[i] is None else transforms[i] for i in range(n)
-        ]
-
-    return transforms
-
-
-def _check_transform_difference(tform1, tform2, shape, threshold=5.0, verbose=False):
-    """
-    Evaluate the difference between two affine transforms by calculating the
-    Mean Squared Error (MSE) of a grid of points transformed by each matrix.
-
-    Parameters:
-    - tform1: First affine transform (4x4 matrix).
-    - tform2: Second affine transform (4x4 matrix).
-    - shape: Shape of the source (i.e. moving) volume (Z, Y, X).
-    - threshold: The maximum allowed MSE difference.
-    - verbose: Flag to print the MSE difference.
-
-    Returns:
-    - bool: True if the MSE difference is within the threshold, False otherwise.
-    """
-    tform1 = np.array(tform1)
-    tform2 = np.array(tform2)
-    (Z, Y, X) = shape
-
-    zz, yy, xx = np.meshgrid(
-        np.linspace(0, Z - 1, 10), np.linspace(0, Y - 1, 10), np.linspace(0, X - 1, 10)
+    num_cpus, gb_ram_per_cpu = estimate_resources(
+        shape=(T, 2, Z, Y, X), ram_multiplier=5, max_num_cpus=16
     )
 
-    grid_points = np.vstack([zz.ravel(), yy.ravel(), xx.ravel(), np.ones(zz.size)]).T
+    # Prepare SLURM arguments
+    slurm_args = {
+        "slurm_job_name": "estimate_registration",
+        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
+        "slurm_cpus_per_task": num_cpus,
+        "slurm_array_parallelism": 100,
+        "slurm_time": 30,
+        "slurm_partition": "preempted",
+        "slurm_use_srun": False,
+    }
 
-    points_tform1 = np.dot(tform1, grid_points.T).T
-    points_tform2 = np.dot(tform2, grid_points.T).T
+    if sbatch_filepath:
+        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
-    differences = np.linalg.norm(points_tform1[:, :3] - points_tform2[:, :3], axis=1)
-    mse = np.mean(differences)
+    output_folder_path.mkdir(parents=True, exist_ok=True)
+    slurm_out_path = output_folder_path / "slurm_output"
+    slurm_out_path.mkdir(parents=True, exist_ok=True)
 
-    if verbose:
-        click.echo(f'MSE of transformed points: {mse:.2f}; threshold: {threshold:.2f}')
-    return mse <= threshold
+    # Submitit executor
+    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
+    executor.update_parameters(**slurm_args)
+
+    click.echo(f"Submitting SLURM focus estimation jobs with resources: {slurm_args}")
+    output_transforms_path = output_folder_path / "xyz_transforms"
+    output_transforms_path.mkdir(parents=True, exist_ok=True)
+
+    # Submit jobs
+    jobs = []
+    with executor.batch():
+        for t in range(T):
+            job = executor.submit(
+                _get_tform_from_beads,
+                source_channel_tzyx=source_channel_tzyx,
+                target_channel_tzyx=target_channel_tzyx,
+                beads_match_settings=beads_match_settings,
+                affine_transform_settings=affine_transform_settings,
+                verbose=verbose,
+                slurm=True,
+                output_folder_path=output_transforms_path,
+                t_idx=t,
+            )
+            jobs.append(job)
+
+    # Save job IDs
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_path = slurm_out_path / f"job_ids_{timestamp}.log"
+    with open(log_path, "w") as log_file:
+        for job in jobs:
+            log_file.write(f"{job.job_id}\n")
+    # Wait for all jobs to finish
+    job_ids = [str(j.job_id) for j in jobs]
+    wait_for_jobs_to_finish(job_ids)
+    # Get list of .npy transform files
+
+    # Load and collect all transform arrays
+    transforms = []
+
+    for t in range(T):
+        file_path = output_transforms_path / f"{t}.npy"
+        if not os.path.exists(file_path):
+            transforms.append(None)
+        else:
+            T_zyx_shift = np.load(file_path).tolist()
+            transforms.append(T_zyx_shift)
+
+    shutil.rmtree(output_transforms_path)
+
+    return transforms
 
 
 def _compute_cost_matrix(
-    source_peaks,
-    target_peaks,
-    source_edges,
-    target_edges,
-    distance_metric='euclidean',
-    distance_weight=0.5,
-    nodes_angle_weight=1.0,
-    nodes_distance_weight=1.0,
-):
+    source_peaks: ArrayLike,
+    target_peaks: ArrayLike,
+    source_edges: list[tuple[int, int]],
+    target_edges: list[tuple[int, int]],
+    distance_metric: str = 'euclidean',
+    distance_weight: float = 0.5,
+    nodes_angle_weight: float = 1.0,
+    nodes_distance_weight: float = 1.0,
+) -> ArrayLike:
     """
     Compute a cost matrix for matching peaks between two graphs based on:
     - Euclidean or other distance between peaks
     - Consistency in edge distances
     - Consistency in edge angles
 
-    Parameters:
-    - source_peaks (ndarray): (n, 2) array of source node coordinates.
-    - target_peaks (ndarray): (m, 2) array of target node coordinates.
-    - source_edges (list of tuple): List of edges (i, j) in source graph.
-    - target_edges (list of tuple): List of edges (i, j) in target graph.
-    - distance_metric (str): Metric for direct point-to-point distances.
-    - distance_weight (float): Weight for point distance cost.
-    - nodes_angle_weight (float): Weight for angular consistency cost.
-    - nodes_distance_weight (float): Weight for local edge distance cost.
+    Parameters
+    ----------
+    source_peaks : ArrayLike
+        (n, 2) array of source node coordinates.
+    target_peaks : ArrayLike
+        (m, 2) array of target node coordinates.
+    source_edges : list[tuple[int, int]]
+        List of edges (i, j) in source graph.
+    target_edges : list[tuple[int, int]]
+        List of edges (i, j) in target graph.
+    distance_metric : str
+        Metric for direct point-to-point distances.
+    distance_weight : float
+        Weight for point distance cost.
+    nodes_angle_weight : float
+        Weight for angular consistency cost.
+    nodes
 
-    Returns:
-    - ndarray: Cost matrix of shape (n, m).
+    Returns
+    -------
+    ArrayLike
+        Cost matrix of shape (n, m).
     """
     n, m = len(source_peaks), len(target_peaks)
 
@@ -943,7 +1098,25 @@ def _compute_cost_matrix(
     return C_total
 
 
-def _knn_edges(points, k=5):
+def _knn_edges(
+    points: ArrayLike,
+    k: int = 5,
+) -> list[tuple[int, int]]:
+    """
+    Find k-nearest neighbors for each point in a set of points.
+
+    Parameters
+    ----------
+    points : ArrayLike
+        (n, 2) array of points.
+    k : int
+        Number of nearest neighbors to find.
+
+    Returns
+    -------
+    list[tuple[int, int]]
+        List of edges (i, j) in the graph.
+    """
     n_points = len(points)
     if n_points <= 1:
         return []
@@ -957,23 +1130,30 @@ def _knn_edges(points, k=5):
 
 
 def match_hungarian(
-    C,
-    cost_threshold=1e5,
-    dummy_cost=1e6,
-    max_ratio=None,
-):
+    C: ArrayLike,
+    cost_threshold: float = 1e5,
+    dummy_cost: float = 1e6,
+    max_ratio: float = None,
+) -> ArrayLike:
     """
     Runs Hungarian matching with padding for unequal-sized graphs,
     optionally applying max_ratio filtering similar to match_descriptors.
 
-    Parameters:
-        C (ndarray): Cost matrix of shape (n_A, n_B).
-        cost_threshold (float): Maximum cost to consider a valid match.
-        dummy_cost (float): Cost assigned to dummy nodes (must be > cost_threshold).
-        max_ratio (float, optional): Maximum allowed ratio between best and second-best cost.
+    Parameters
+    ----------
+    C : ArrayLike
+        Cost matrix of shape (n_A, n_B).
+    cost_threshold : float
+        Maximum cost to consider a valid match.
+    dummy_cost : float
+        Cost assigned to dummy nodes (must be > cost_threshold).
+    max_ratio : float, optional
+        Maximum allowed ratio between best and second-best cost.
 
-    Returns:
-        matches (ndarray): Array of shape (N_matches, 2) with valid (A_idx, B_idx) pairs.
+    Returns
+    -------
+    ArrayLike
+        Array of shape (N_matches, 2) with valid (A_idx, B_idx) pairs.
     """
     n_A, n_B = C.shape
     n = max(n_A, n_B)
@@ -1008,8 +1188,28 @@ def match_hungarian(
     return np.array(matches)
 
 
-def extract_patch(volume, center, patch_size=11):
-    """Extract a cubic patch centered at `center` from `volume`."""
+def extract_patch(
+    volume: ArrayLike,
+    center: tuple[int, int, int],
+    patch_size: int = 11,
+) -> ArrayLike:
+    """
+    Extract a cubic patch centered at `center` from `volume`.
+
+    Parameters
+    ----------
+    volume : ArrayLike
+        (Z, Y, X) array of the volume.
+    center : tuple[int, int, int]
+        Center of the patch.
+    patch_size : int
+        Size of the patch.
+
+    Returns
+    -------
+    ArrayLike
+        (Z, Y, X) array of the patch.
+    """
     half = patch_size // 2
     z, y, x = map(int, center)
     patch = volume[
@@ -1020,8 +1220,24 @@ def extract_patch(volume, center, patch_size=11):
     return patch
 
 
-def compute_mi(p1, p2, bins=32):
-    """Compute mutual information between two patches."""
+def compute_mi(p1: ArrayLike, p2: ArrayLike, bins: int = 32) -> float:
+    """
+    Compute mutual information between two patches.
+
+    Parameters
+    ----------
+    p1 : ArrayLike
+        (Z, Y, X) array of the first patch.
+    p2 : ArrayLike
+        (Z, Y, X) array of the second patch.
+    bins : int
+        Number of bins for the histogram.
+
+    Returns
+    -------
+    float
+        Mutual information between the two patches.
+    """
     hgram, _, _ = np.histogram2d(p1.ravel(), p2.ravel(), bins=bins)
     pxy = hgram / np.sum(hgram)
     px = np.sum(pxy, axis=1)  # marginal for x
@@ -1032,9 +1248,33 @@ def compute_mi(p1, p2, bins=32):
 
 
 def match_mutual_information(
-    source_peaks, target_peaks, source_vol, target_vol, patch_size=11
-):
-    """Match peaks using mutual information between local patches."""
+    source_peaks: ArrayLike,
+    target_peaks: ArrayLike,
+    source_vol: ArrayLike,
+    target_vol: ArrayLike,
+    patch_size: int = 11,
+) -> ArrayLike:
+    """
+    Match peaks using mutual information between local patches.
+
+    Parameters
+    ----------
+    source_peaks : ArrayLike
+        (n, 2) array of source peaks.
+    target_peaks : ArrayLike
+        (m, 2) array of target peaks.
+    source_vol : ArrayLike
+        (Z, Y, X) array of the source volume.
+    target_vol : ArrayLike
+        (Z, Y, X) array of the target volume.
+    patch_size : int
+        Size of the patch.
+
+    Returns
+    -------
+    ArrayLike
+        (n, 2) array of matches.
+    """
     n_source, n_target = len(source_peaks), len(target_peaks)
     mi_matrix = np.zeros((n_source, n_target))
 
@@ -1071,25 +1311,37 @@ def _get_tform_from_beads(
     and computes an affine transformation to align the two channels. It applies
     various filtering steps, including angle-based filtering, to improve match quality.
 
-    Parameters:
-    - source_channel_tzyx (da.Array): 4D array (T, Z, Y, X) of the source channel (Dask array).
-    - target_channel_tzyx (da.Array): 4D array (T, Z, Y, X) of the target channel (Dask array).
-    - beads_match_settings (BeadsMatchSettings): Settings for beads matching.
-    - affine_transform_settings (AffineTransformSettings): Settings for affine transformation.
-    - verbose (bool): If True, prints detailed logs during the process.
-    - t_idx (int): Timepoint index to process.
-    - slurm (bool): If True, uses SLURM for parallel processing.
-    - output_folder_path (Path): Path to save the output.
+    Parameters
+    ----------
+    t_idx : int
+        Timepoint index to process.
+    source_channel_tzyx : da.Array
+       4D array (T, Z, Y, X) of the source channel (Dask array).
+    target_channel_tzyx : da.Array
+       4D array (T, Z, Y, X) of the target channel (Dask array).
+    beads_match_settings : BeadsMatchSettings
+        Settings for the beads match.
+    affine_transform_settings : AffineTransformSettings
+        Settings for the affine transform.
+    verbose : bool
+        If True, prints detailed logs during the process.
+    slurm : bool
+        If True, uses SLURM for parallel processing.
+    output_folder_path : Path
+        Path to save the output.
 
-    Returns:
-    - list | None: A 4x4 affine transformation matrix as a nested list if successful,
-                   or None if no valid transformation could be calculated.
+    Returns
+    -------
+    list | None
+        A 4x4 affine transformation matrix as a nested list if successful,
+        or None if no valid transformation could be calculated.
 
-    Notes:
-    - Uses ANTsPy for initial transformation application and bead detection.
-    - Peaks (beads) are detected using a block-based algorithm with thresholds for source and target datasets.
-    - Bead matches are filtered based on distance and angular deviation from the dominant direction.
-    - If fewer than three matches are found after filtering, the function returns None.
+    Notes
+    -----
+    Uses ANTsPy for initial transformation application and bead detection.
+    Peaks (beads) are detected using a block-based algorithm with thresholds for source and target datasets.
+    Bead matches are filtered based on distance and angular deviation from the dominant direction.
+    If fewer than three matches are found after filtering, the function returns None.
     """
 
     approx_tform = np.asarray(affine_transform_settings.approx_transform)
@@ -1135,7 +1387,7 @@ def _get_tform_from_beads(
     if len(source_peaks) < 2 or len(target_peaks) < 2:
         click.echo(f'No beads were detected at timepoint {t_idx}')
         return
-
+    print(beads_match_settings.algorithm)
     if beads_match_settings.algorithm == 'match_descriptor':
         print("Using match descriptor")
 
@@ -1148,17 +1400,22 @@ def _get_tform_from_beads(
             cross_check=beads_match_settings.cross_check,
         )
     elif beads_match_settings.algorithm == 'hungarian':
+
         source_edges = _knn_edges(source_peaks, k=beads_match_settings.knn_k)
         target_edges = _knn_edges(target_peaks, k=beads_match_settings.knn_k)
 
         if beads_match_settings.cross_check:
             # Step 1: A → B
-            C_ab = _compute_cost_matrix(source_peaks, target_peaks, source_edges, target_edges)
+            C_ab = _compute_cost_matrix(
+                source_peaks,
+                target_peaks,
+                source_edges,
+                target_edges,
+                distance_metric=beads_match_settings.distance_metric,
+            )
             matches_ab = match_hungarian(
                 C_ab,
-                cost_threshold=np.quantile(
-                    C_ab, beads_match_settings.cost_threshold
-                ),
+                cost_threshold=np.quantile(C_ab, beads_match_settings.cost_threshold),
                 max_ratio=beads_match_settings.max_ratio,
             )
 
@@ -1172,9 +1429,7 @@ def _get_tform_from_beads(
             )
             matches_ba = match_hungarian(
                 C_ba,
-                cost_threshold=np.quantile(
-                    C_ba, beads_match_settings.cost_threshold
-                ),
+                cost_threshold=np.quantile(C_ba, beads_match_settings.cost_threshold),
                 max_ratio=beads_match_settings.max_ratio,
             )
 
@@ -1185,13 +1440,18 @@ def _get_tform_from_beads(
             matches = np.array([[i, j] for i, j in matches_ab if (i, j) in reverse_map])
         else:
             # # Compute cost matrix
-            C = _compute_cost_matrix(source_peaks, target_peaks, source_edges, target_edges)
+            C = _compute_cost_matrix(
+                source_peaks,
+                target_peaks,
+                source_edges,
+                target_edges,
+                distance_metric=beads_match_settings.distance_metric,
+            )
 
             matches = match_hungarian(
                 C,
-                cost_threshold=np.quantile(
-                    C, beads_match_settings.cost_threshold
-                ),
+                cost_threshold=np.quantile(C, beads_match_settings.cost_threshold),
+                max_ratio=beads_match_settings.max_ratio,
             )
 
     elif beads_match_settings.algorithm == 'mutual_information':
@@ -1205,24 +1465,24 @@ def _get_tform_from_beads(
 
     if verbose:
         click.echo(f'Total of matches at time point {t_idx}: {len(matches)}')
-    
+
     dist = np.linalg.norm(source_peaks[matches[:, 0]] - target_peaks[matches[:, 1]], axis=1)
     matches = matches[dist < np.quantile(dist, 0.95), :]
-    
+
     if verbose:
         click.echo(
             f'Total of matches after distance filtering at time point {t_idx}: {len(matches)}'
         )
-    
+
     if beads_match_settings.filter_angle_threshold:
 
         vectors = target_peaks[matches[:, 1]] - source_peaks[matches[:, 0]]
         angles_rad = np.arctan2(vectors[:, 1], vectors[:, 0])
         angles_deg = np.degrees(angles_rad)
-        
+
         bins = np.linspace(-180, 180, 36)  # 10-degree bins
         hist, bin_edges = np.histogram(angles_deg, bins=bins)
-        
+
         dominant_bin_index = np.argmax(hist)
         dominant_angle = (
             bin_edges[dominant_bin_index] + bin_edges[dominant_bin_index + 1]
@@ -1231,7 +1491,7 @@ def _get_tform_from_beads(
         filtered_indices = np.where(
             np.abs(angles_deg - dominant_angle) <= beads_match_settings.filter_angle_threshold
         )[0]
-    
+
         matches = matches[filtered_indices]
 
         if verbose:
@@ -1248,37 +1508,39 @@ def _get_tform_from_beads(
     # Affine transform performs better than Euclidean
     if affine_transform_settings.transform_type == 'affine':
         tform = AffineTransform(dimensionality=3)
-    
+
     elif affine_transform_settings.transform_type == 'euclidean':
         tform = EuclideanTransform(dimensionality=3)
-    
+
     elif affine_transform_settings.transform_type == 'similarity':
         tform = SimilarityTransform(dimensionality=3)
-    
+
     else:
         raise ValueError(f'Unknown transform type: {affine_transform_settings.transform_type}')
 
     tform.estimate(source_peaks[matches[:, 0]], target_peaks[matches[:, 1]])
     compount_tform = np.asarray(approx_tform) @ tform.inverse.params
-    
+
     click.echo(f'Matches: {matches}')
     click.echo(f"tform.params: {tform.params}")
     click.echo(f"tform.inverse.params: {tform.inverse.params}")
     click.echo(f"compount_tform: {compount_tform}")
 
     if slurm:
+        print(f"Saving transform to {output_folder_path}")
         output_folder_path.mkdir(parents=True, exist_ok=True)
         np.save(output_folder_path / f"{t_idx}.npy", compount_tform)
 
     return compount_tform.tolist()
 
+
 def estimate_registration(
-    source_position_dirpaths,
-    target_position_dirpaths,
-    output_filepath,
-    config_filepath,
-    registration_target_channel,
-    registration_source_channel,
+    source_position_dirpaths: list[str],
+    target_position_dirpaths: list[str],
+    output_filepath: str,
+    config_filepath: str,
+    registration_target_channel: str,
+    registration_source_channel: list[str],
     sbatch_filepath: str = None,
     local: bool = False,
 ):
@@ -1290,35 +1552,27 @@ def estimate_registration(
     parameters for aligning source (moving) and target (fixed) images. The output is a configuration
     file that can be used with subsequent tools (`stabilize` and `register`).
 
-    Parameters:
-    - source_position_dirpaths (list): List of file paths to the source channel data in OME-Zarr format.
-    - target_position_dirpaths (list): List of file paths to the target channel data in OME-Zarr format.
-    - output_filepath (str): Path to save the estimated registration configuration file (YAML).
-    - num_processes (int): Number of processes for parallel computations (used in bead-based registration).
-    - config_filepath (str): Path to the YAML configuration file for the registration settings.
-    - registration_target_channel (str): Name of the target channel to be used when registration params are applied.
-    - registration_source_channels (list): List of source channel names to be used when registration params are applied.
+    Parameters
+    ----------
+    source_position_dirpaths : list[str]
+        List of file paths to the source channel data in OME-Zarr format.
+    target_position_dirpaths : list[str]
+        List of file paths to the target channel data in OME-Zarr format.
+    output_filepath : str
+        Path to save the estimated registration configuration file (YAML).
+    num_processes : int
+        Number of processes for parallel computations (used in bead-based registration).
+    config_filepath : str
+        Path to the YAML configuration file for the registration settings.
+    registration_target_channel : str
+        Name of the target channel to be used when registration params are applied.
+    registration_source_channels : list[str]
+        List of source channel names to be used when registration params are applied.
 
-    Returns:
-    - None: Writes the estimated registration parameters to the specified output file.
-
-    Notes:
-    - Bead-based registration uses detected bead matches across timepoints to compute affine transformations.
-    - User-assisted registration requires manual selection of corresponding features in source and target images.
-    - If registration_target_channel and registration_source_channels are not provided, the target and source channels
-    used for parameter estimation will be used.
-    - The output configuration is essential for downstream processing in multi-modal image registration workflows.
-
-    Example:
-    >> biahub estimate-registration
-        -s ./acq_name_labelfree_reconstructed.zarr/0/0/0   # Source channel OME-Zarr data path
-        -t ./acq_name_lightsheet_deskewed.zarr/0/0/0       # Target channel OME-Zarr data path
-        -o ./output.yml                                    # Output configuration file path
-        --config ./config.yml                              # Path to input configuration file
-        --num-processes 4                                  # Number of processes for parallel bead detection
-        --registration-target-channel "Phase3D"            # Name of the target channel
-        --registration-source-channel "GFP"                # Names of source channel
-        --registration-source-channel "mCherry"            # Names of another source channel
+    Returns
+    -------
+    None
+        Writes the estimated registration parameters to the specified output file.
     """
 
     settings = yaml_to_model(config_filepath, EstimateRegistrationSettings)
@@ -1361,7 +1615,7 @@ def estimate_registration(
     else:
         cluster = "slurm"
     eval_transform_settings = settings.eval_transform_settings
-    
+
     if settings.estimation_method == "beads":
         # Register using bead images
         transforms = beads_based_registration(
@@ -1375,15 +1629,16 @@ def estimate_registration(
             output_folder_path=output_dir,
         )
         click.echo(f"Evaluating transforms: {eval_transform_settings}")
-        transforms = evaluate_transforms(
-            transforms=transforms,
-            shape_zyx=source_channel_data.shape[-3:],
-            validation_window_size=eval_transform_settings.validation_window_size,
-            validation_tolerance=eval_transform_settings.validation_tolerance,
-            interpolation_window_size=eval_transform_settings.interpolation_window_size,
-            interpolation_type=eval_transform_settings.interpolation_type,
-            verbose=settings.verbose,
-        )
+        if eval_transform_settings:
+            transforms = evaluate_transforms(
+                transforms=transforms,
+                shape_zyx=source_channel_data.shape[-3:],
+                validation_window_size=eval_transform_settings.validation_window_size,
+                validation_tolerance=eval_transform_settings.validation_tolerance,
+                interpolation_window_size=eval_transform_settings.interpolation_window_size,
+                interpolation_type=eval_transform_settings.interpolation_type,
+                verbose=settings.verbose,
+            )
         model = StabilizationSettings(
             stabilization_estimation_channel='',
             stabilization_type='xyz',
@@ -1392,7 +1647,6 @@ def estimate_registration(
             time_indices='all',
             output_voxel_size=voxel_size,
         )
-
         save_transforms(
             model=model,
             transforms=transforms,
@@ -1510,12 +1764,12 @@ def estimate_registration(
     required=False,
 )
 def estimate_registration_cli(
-    source_position_dirpaths,
-    target_position_dirpaths,
-    output_filepath,
-    config_filepath,
-    registration_target_channel,
-    registration_source_channel,
+    source_position_dirpaths: list[str],
+    target_position_dirpaths: list[str],
+    output_filepath: str,
+    config_filepath: str,
+    registration_target_channel: str,
+    registration_source_channel: list[str],
     sbatch_filepath: str = None,
     local: bool = False,
 ):
@@ -1527,24 +1781,35 @@ def estimate_registration_cli(
     parameters for aligning source (moving) and target (fixed) images. The output is a configuration
     file that can be used with subsequent tools (`stabilize` and `register`).
 
-    Parameters:
-    - source_position_dirpaths (list): List of file paths to the source channel data in OME-Zarr format.
-    - target_position_dirpaths (list): List of file paths to the target channel data in OME-Zarr format.
-    - output_filepath (str): Path to save the estimated registration configuration file (YAML).
-    - num_processes (int): Number of processes for parallel computations (used in bead-based registration).
-    - config_filepath (str): Path to the YAML configuration file for the registration settings.
-    - registration_target_channel (str): Name of the target channel to be used when registration params are applied.
-    - registration_source_channels (list): List of source channel names to be used when registration params are applied.
+    Parameters
+    ----------
+    source_position_dirpaths : list[str]
+        List of file paths to the source channel data in OME-Zarr format.
+    target_position_dirpaths : list[str]
+        List of file paths to the target channel data in OME-Zarr format.
+    output_filepath : str
+        Path to save the estimated registration configuration file (YAML).
+    num_processes : int
+        Number of processes for parallel computations (used in bead-based registration).
+    config_filepath : str
+        Path to the YAML configuration file for the registration settings.
+    registration_target_channel : str
+        Name of the target channel to be used when registration params are applied.
+    registration_source_channels : list[str]
+        List of source channel names to be used when registration params are applied.
 
-    Returns:
-    - None: Writes the estimated registration parameters to the specified output file.
+    Returns
+    -------
+    None
+        Writes the estimated registration parameters to the specified output file.
 
-    Notes:
-    - Bead-based registration uses detected bead matches across timepoints to compute affine transformations.
-    - User-assisted registration requires manual selection of corresponding features in source and target images.
-    - If registration_target_channel and registration_source_channels are not provided, the target and source channels
+    Notes
+    -----
+    Bead-based registration uses detected bead matches across timepoints to compute affine transformations.
+    User-assisted registration requires manual selection of corresponding features in source and target images.
+    If registration_target_channel and registration_source_channels are not provided, the target and source channels
     used for parameter estimation will be used.
-    - The output configuration is essential for downstream processing in multi-modal image registration workflows.
+    The output configuration is essential for downstream processing in multi-modal image registration workflows.
 
     Example:
     >> biahub estimate-registration
@@ -1568,6 +1833,7 @@ def estimate_registration_cli(
         sbatch_filepath=sbatch_filepath,
         local=local,
     )
-    
+
+
 if __name__ == "__main__":
     estimate_registration_cli()

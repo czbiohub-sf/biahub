@@ -1,8 +1,14 @@
-from tqdm import tqdm
 import subprocess
 import time
 
-def wait_for_jobs_to_finish(job_ids: list[str], sleep_time: int = 60, use_sacct: bool = True) -> None:
+from tqdm import tqdm
+
+
+def wait_for_jobs_to_finish(
+    job_ids: list[str],
+    sleep_time: int = 60,
+    use_sacct: bool = True,
+) -> None:
     """
     Wait for SLURM jobs to finish using a progress bar with tqdm.
 
@@ -21,7 +27,11 @@ def wait_for_jobs_to_finish(job_ids: list[str], sleep_time: int = 60, use_sacct:
     """
 
     unfinished = set(job_ids)
-    pbar = tqdm(total=len(unfinished), bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} Jobs Remaining', leave=True)
+    pbar = tqdm(
+        total=len(unfinished),
+        bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} Jobs Remaining',
+        leave=True,
+    )
 
     while unfinished:
         if use_sacct:
@@ -30,8 +40,16 @@ def wait_for_jobs_to_finish(job_ids: list[str], sleep_time: int = 60, use_sacct:
 
             for job_id in unfinished:
                 result = subprocess.run(
-                    ["sacct", "-j", job_id, "--format=JobID,State", "--parsable2", "--noheader"],
-                    stdout=subprocess.PIPE, text=True
+                    [
+                        "sacct",
+                        "-j",
+                        job_id,
+                        "--format=JobID,State",
+                        "--parsable2",
+                        "--noheader",
+                    ],
+                    stdout=subprocess.PIPE,
+                    text=True,
                 )
                 states = set()
                 for line in result.stdout.strip().splitlines():
@@ -40,7 +58,19 @@ def wait_for_jobs_to_finish(job_ids: list[str], sleep_time: int = 60, use_sacct:
                         _, state = parts
                         states.add(state)
 
-                if any(s in {"RUNNING", "PENDING", "COMPLETING", "CONFIGURING", "REQUEUED", "RESIZING", "SUSPENDED"} for s in states):
+                if any(
+                    s
+                    in {
+                        "RUNNING",
+                        "PENDING",
+                        "COMPLETING",
+                        "CONFIGURING",
+                        "REQUEUED",
+                        "RESIZING",
+                        "SUSPENDED",
+                    }
+                    for s in states
+                ):
                     still_running.add(job_id)
 
             newly_finished = unfinished - still_running

@@ -84,6 +84,7 @@ def apply_stabilization_transform(
 
     return stabilized_zyx
 
+
 def stabilize(
     input_position_dirpaths: List[str],
     output_dirpath: str,
@@ -362,5 +363,7 @@ def stabilize_cli(
         sbatch_filepath=sbatch_filepath,
         local=local,
     )
+
+
 if __name__ == "__main__":
     stabilize_cli()
