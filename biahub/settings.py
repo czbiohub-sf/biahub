@@ -56,6 +56,7 @@ class PhaseCrossCorrSettings(MyBaseModel):
 
 class FocusFindingSettings(MyBaseModel):
     average_across_wells: bool = False
+    average_across_wells_method: Literal["mean", "median"] = "mean"
     skip_beads_fov: str = "0"
     crop_size_xy: list[int, int] = [800, 800]
 

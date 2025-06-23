@@ -760,6 +760,7 @@ def ants_registration(
     Use verbose=True for detailed logging during registration. The verbose output will be saved at the same level as the output zarr.
     """
     T, C, Z, Y, X = source_data_tczyx.shape
+
     # # Crop only to the overlapping region, zero padding interfereces with registration
     z_slice, y_slice, x_slice = find_overlapping_volume(
         target_data_tczyx.shape[-3:],
@@ -785,8 +786,6 @@ def ants_registration(
     ]  # Crop source channel
 
     # Note: cropping is applied after registration with approx_tform
-
-    # Compute transformations in parallel
 
     num_cpus, gb_ram_per_cpu = estimate_resources(
         shape=(T, 2, Z, Y, X), ram_multiplier=16, max_num_cpus=16
@@ -848,10 +847,11 @@ def ants_registration(
     with open(log_path, "w") as log_file:
         for job in jobs:
             log_file.write(f"{job.job_id}\n")
-    # Wait for all jobs to finish
+
     job_ids = [str(j.job_id) for j in jobs]
     wait_for_jobs_to_finish(job_ids)
 
+    # Load the transforms
     transforms = []
     for t in range(T):
         file_path = output_transforms_path / f"{t}.npy"
@@ -866,6 +866,8 @@ def ants_registration(
         raise ValueError(
             f"Number of transforms {len(transforms)} does not match number of timepoints {T}"
         )
+
+    # Remove the output temporary folder
     shutil.rmtree(output_transforms_path)
 
     return transforms
@@ -921,8 +923,6 @@ def beads_based_registration(
 
     (T, Z, Y, X) = source_channel_tzyx.shape
 
-    # Compute transformations in parallel
-
     num_cpus, gb_ram_per_cpu = estimate_resources(
         shape=(T, 2, Z, Y, X), ram_multiplier=5, max_num_cpus=16
     )
@@ -976,14 +976,12 @@ def beads_based_registration(
     with open(log_path, "w") as log_file:
         for job in jobs:
             log_file.write(f"{job.job_id}\n")
-    # Wait for all jobs to finish
+
     job_ids = [str(j.job_id) for j in jobs]
     wait_for_jobs_to_finish(job_ids)
-    # Get list of .npy transform files
 
-    # Load and collect all transform arrays
+    # Load the transforms
     transforms = []
-
     for t in range(T):
         file_path = output_transforms_path / f"{t}.npy"
         if not os.path.exists(file_path):
@@ -992,6 +990,7 @@ def beads_based_registration(
             T_zyx_shift = np.load(file_path).tolist()
             transforms.append(T_zyx_shift)
 
+    # Remove the output temporary folder
     shutil.rmtree(output_transforms_path)
 
     return transforms
@@ -1505,7 +1504,6 @@ def _get_tform_from_beads(
         )
         return
 
-    # Affine transform performs better than Euclidean
     if affine_transform_settings.transform_type == 'affine':
         tform = AffineTransform(dimensionality=3)
 
@@ -1544,7 +1542,6 @@ def estimate_registration(
     sbatch_filepath: str = None,
     local: bool = False,
 ):
-
     """
     Estimate the affine transformation between a source and target image for registration.
 
@@ -1574,15 +1571,15 @@ def estimate_registration(
     None
         Writes the estimated registration parameters to the specified output file.
     """
+    output_dir = output_filepath.parent
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     settings = yaml_to_model(config_filepath, EstimateRegistrationSettings)
     click.echo(f"Settings: {settings}")
+
     target_channel_name = settings.target_channel_name
     source_channel_name = settings.source_channel_name
-
     registration_source_channels = registration_source_channel
-    output_dir = output_filepath.parent
-    output_dir.mkdir(parents=True, exist_ok=True)
 
     if registration_target_channel is None:
         registration_target_channel = target_channel_name
@@ -1617,7 +1614,6 @@ def estimate_registration(
     eval_transform_settings = settings.eval_transform_settings
 
     if settings.estimation_method == "beads":
-        # Register using bead images
         transforms = beads_based_registration(
             source_channel_tzyx=source_channel_data,
             target_channel_tzyx=target_channel_data,
@@ -1628,7 +1624,7 @@ def estimate_registration(
             sbatch_filepath=sbatch_filepath,
             output_folder_path=output_dir,
         )
-        click.echo(f"Evaluating transforms: {eval_transform_settings}")
+
         if eval_transform_settings:
             transforms = evaluate_transforms(
                 transforms=transforms,
@@ -1639,6 +1635,7 @@ def estimate_registration(
                 interpolation_type=eval_transform_settings.interpolation_type,
                 verbose=settings.verbose,
             )
+
         model = StabilizationSettings(
             stabilization_estimation_channel='',
             stabilization_type='xyz',
@@ -1668,6 +1665,7 @@ def estimate_registration(
             verbose=settings.verbose,
             output_folder_path=output_dir,
         )
+
         if eval_transform_settings:
             transforms = evaluate_transforms(
                 transforms=transforms,
@@ -1695,7 +1693,6 @@ def estimate_registration(
             verbose=settings.verbose,
         )
     else:
-        # Register based on user input
         transform = user_assisted_registration(
             source_channel_volume=np.asarray(
                 source_channel_data[settings.manual_registration_settings.time_index]
@@ -1712,6 +1709,7 @@ def estimate_registration(
             else False,
             pre_affine_90degree_rotation=settings.manual_registration_settings.affine_90degree_rotation,
         )
+
         if eval_transform_settings:
             transforms = evaluate_transforms(
                 transforms=transform,
