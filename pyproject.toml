@@ -30,7 +30,7 @@ dependencies = [
   "monai",
   "pandas~=2.1",
   "pydantic<3",
-  "scipy",
+  "scipy~=1.15",
   "submitit",
   "torch",
   "tqdm",
