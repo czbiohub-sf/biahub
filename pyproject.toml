@@ -30,7 +30,7 @@ dependencies = [
   "monai",
   "pandas~=2.1",
   "pydantic<3",
-  "scipy~=1.15",
+  "scipy<1.16",  # as of 06/23/2025 scipy 1.16.0 breaks test imports
   "submitit",
   "torch",
   "tqdm",
