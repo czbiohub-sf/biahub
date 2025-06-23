@@ -82,7 +82,7 @@ def _validate_transforms(
     window_size: int = 10,
     tolerance: float = 100.0,
     verbose: bool = False,
-):
+) -> list[ArrayLike]:
     """
     Validate a list of affine transformation matrices by smoothing and filtering.
 
@@ -103,30 +103,34 @@ def _validate_transforms(
     -------
     list[ArrayLike]
         List of affine transformation matrices with invalid or inconsistent values replaced by None.
-
     """
     valid_transforms = []
     reference_transform = None
-    for i in range(len(transforms)):
-        if transforms[i] is not None:
-            if reference_transform is None or _check_transform_difference(
-                transforms[i], reference_transform, shape_zyx, tolerance, verbose
-            ):
-                valid_transforms.append(transforms[i])
+
+    for i, transform in enumerate(transforms):
+        if transform is not None:
+            if len(valid_transforms) < window_size:
+                # Bootstrap the buffer without validating yet
+                valid_transforms.append(transform)
+                reference_transform = np.mean(valid_transforms, axis=0)
+                if verbose:
+                    click.echo(f"[Bootstrap] Accepting transform at timepoint {i} (no validation)")
+            elif _check_transform_difference(transform, reference_transform, shape_zyx, tolerance, verbose):
+                valid_transforms.append(transform)
                 if len(valid_transforms) > window_size:
                     valid_transforms.pop(0)
                 reference_transform = np.mean(valid_transforms, axis=0)
                 if verbose:
                     click.echo(f"Transform at timepoint {i} is valid")
             else:
-                if verbose:
-                    click.echo(f'Transform at timepoint {i} will be interpolated')
                 transforms[i] = None
-
+                if verbose:
+                    click.echo(f"Transform at timepoint {i} is invalid and will be interpolated")
         else:
-            if verbose:
-                click.echo(f'Transform at timepoint {i} is None, will be interpolated')
             transforms[i] = None
+            if verbose:
+                click.echo(f"Transform at timepoint {i} is None and will be interpolated")
+
     return transforms
 
 
