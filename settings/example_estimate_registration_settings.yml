@@ -47,10 +47,23 @@ manual_registration_settings:
 affine_transform_settings:
   transform_type: euclidean # Type of transform to estimate "euclidean", "similarity", or "affine"
   approx_transform: # Optional initial guess for the 4x4 affine transformation matrix (if None, will be estimated)
-  - [1, 0, 0, 0]
-  - [0, 0, -1.288, 1960]
-  - [0, 1.288, 0, -460]
-  - [0.0, 0.0, 0.0, 1.0]
+    - - 1
+      - 0
+      - 0
+      - 0
+    - - 0
+      - 0
+      - -1.288
+      - 1960
+    - - 0
+      - 1.288
+      - 0
+      - -460
+    - - 0.0
+      - 0.0
+      - 0.0
+      - 1.0
+
 
 # Validation and interpolation settings for transform smoothing
 eval_transform_settings:
