@@ -2065,7 +2065,7 @@ def estimate_registration(
         save_transforms(
             model=model,
             transforms=transforms,
-            output_filepath_settings=output_dir / "registration_settings.yml",
+            output_filepath_settings= output_filepath,
             output_filepath_plot=output_dir / "translation_plots" / "beads_registration.png",
             verbose=settings.verbose,
         )
@@ -2107,7 +2107,8 @@ def estimate_registration(
         save_transforms(
             model=model,
             transforms=transforms,
-            output_filepath_settings=output_dir / "registration_settings.yml",
+            output_filepath_settings=output_filepath,
+            output_filepath_plot=output_dir / "translation_plots" / "ants_registration.png",
             verbose=settings.verbose,
         )
     else:
@@ -2147,7 +2148,7 @@ def estimate_registration(
         save_transforms(
             model=model,
             transforms=transforms,
-            output_filepath_settings=output_dir / "registration_settings.yml",
+            output_filepath_settings=output_filepath,
             output_filepath_plot=output_dir
             / "translation_plots"
             / "user_assisted_registration.png",
