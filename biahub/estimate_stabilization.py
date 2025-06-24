@@ -23,7 +23,7 @@ from biahub.cli.parsing import (
     config_filepath,
     input_position_dirpaths,
     local,
-    output_filepath,
+    output_dirpath,
     sbatch_filepath,
     sbatch_to_submitit,
 )
@@ -1131,7 +1131,7 @@ def estimate_z_stabilization(
 
 def estimate_stabilization(
     input_position_dirpaths: List[str],
-    output_filepath: str,
+    output_dirpath: str,
     config_filepath: str,
     sbatch_filepath: str = None,
     local: bool = False,
@@ -1172,7 +1172,7 @@ def estimate_stabilization(
     stabilization_type = settings.stabilization_type
     stabilization_method = settings.stabilization_method
 
-    output_dirpath = output_filepath.parent
+    output_dirpath = Path(output_dirpath)
     output_dirpath.mkdir(parents=True, exist_ok=True)
 
     # Channel names to process
@@ -1517,13 +1517,13 @@ def estimate_stabilization(
 
 @click.command("estimate-stabilization")
 @input_position_dirpaths()
-@output_filepath()
+@output_dirpath()
 @config_filepath()
 @sbatch_filepath()
 @local()
 def estimate_stabilization_cli(
     input_position_dirpaths: List[str],
-    output_filepath: str,
+    output_dirpath: str,
     config_filepath: str,
     sbatch_filepath: str = None,
     local: bool = False,
@@ -1566,7 +1566,7 @@ def estimate_stabilization_cli(
 
     estimate_stabilization(
         input_position_dirpaths=input_position_dirpaths,
-        output_filepath=output_filepath,
+        output_dirpath=output_dirpath,
         config_filepath=config_filepath,
         sbatch_filepath=sbatch_filepath,
         local=local,
