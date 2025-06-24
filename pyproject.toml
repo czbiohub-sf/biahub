@@ -52,6 +52,7 @@ dev = [
   "isort==6.0",
   "pytest==8.4",
   "pre-commit~=4.2",
+  "pytest-repeat",
 ]
 
 segmentation = [
