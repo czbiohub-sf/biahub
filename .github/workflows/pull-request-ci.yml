@@ -44,4 +44,4 @@ jobs:
         pip install torch torchvision ".[dev]" --extra-index-url https://download.pytorch.org/whl/cpu
 
     - name: Test with pytest
-      run: pytest -v --count 5
+      run: pytest -v
