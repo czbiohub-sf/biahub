@@ -156,13 +156,23 @@ def sbatch_to_submitit(filepath: str) -> dict:
     with open(filepath, "r") as f:
         sbatch_file = f.readlines()
 
+    keywords = ["SBATCH", "LOCAL"]
     sbatch_dict = {}
     for line in sbatch_file:
-        if line.startswith("#SBATCH --"):
-            line = line.strip("#SBATCH --").strip()
-            key, value = line.split("=", 1)
-            key = key.replace("-", "_")
-            sbatch_dict["slurm_" + key.strip()] = value.strip()
+        for keyword in keywords:
+            if line.startswith(f"#{keyword} --"):
+                line = line.strip(f"#{keyword} --").strip()
+                key, value = line.split("=", 1)
+                key = key.replace("-", "_").strip()
+                try:
+                    value = int(value.strip())
+                except ValueError:
+                    # If conversion to int fails, keep it as a string
+                    value = value.strip()
+                if keyword == "SBATCH":
+                    sbatch_dict["slurm_" + key] = value
+                elif keyword == "LOCAL":
+                    sbatch_dict[key] = value
 
     return sbatch_dict
 
