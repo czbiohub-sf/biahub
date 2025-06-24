@@ -415,6 +415,9 @@ def concatenate(
 
     job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 
+    # slurm_out_path is not created for debug cluster
+    if not slurm_out_path.exists():
+        slurm_out_path.mkdir()
     log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
