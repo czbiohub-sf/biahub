@@ -1,4 +1,5 @@
 import glob
+import os
 
 from pathlib import Path
 
@@ -364,10 +365,11 @@ def concatenate(
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
     # Run locally or submit to SLURM
+    cluster = "slurm"
     if local:
         cluster = "local"
-    else:
-        cluster = "slurm"
+    if os.environ.get("CI") == "true":
+        cluster = "debug"
 
     # Prepare and submit jobs
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
