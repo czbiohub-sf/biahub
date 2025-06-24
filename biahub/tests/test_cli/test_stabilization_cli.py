@@ -4,8 +4,6 @@ from click.testing import CliRunner
 
 from biahub.cli.main import cli
 
-pytestmark = pytest.mark.skip()
-
 
 def test_estimate_stabilization(tmp_path, example_plate):
     plate_path, _ = example_plate
@@ -41,6 +39,7 @@ def test_estimate_stabilization(tmp_path, example_plate):
     assert result.exit_code == 0
 
 
+@pytest.mark.skip()
 def test_apply_stabilization(tmp_path, example_plate, example_stabilize_timelapse_settings):
     plate_path, _ = example_plate
     config_path, _ = example_stabilize_timelapse_settings
