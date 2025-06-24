@@ -7,7 +7,7 @@ from tqdm import tqdm
 def wait_for_jobs_to_finish(
     job_ids: list[str],
     sleep_time: int = 60,
-    use_sacct: bool = True,
+    use_sacct: bool = False,
 ) -> None:
     """
     Wait for SLURM jobs to finish using a progress bar with tqdm.

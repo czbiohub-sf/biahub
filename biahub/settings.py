@@ -31,21 +31,67 @@ class DetectPeaksSettings(MyBaseModel):
     block_size: list[int] = [8, 8, 8]
 
 
-class BeadsMatchSettings(MyBaseModel):
-    algorithm: Literal["hungarian", "match_descriptor", "mutual_information"] = "hungarian"
-    filter_angle_threshold: float = 0
+class EdgeGraphSettings(BaseModel):
+    method: Literal["knn", "radius", "full"] = "knn"
+    k: Optional[int] = None
+    radius: Optional[float] = None
+
+    @model_validator(mode="after")
+    def set_defaults_and_validate(self) -> "EdgeGraphSettings":
+        if self.method == "knn":
+            if self.k is None:
+                self.k = 5  # set default
+            self.radius = None  # ignore
+        elif self.method == "radius":
+            if self.radius is None:
+                self.radius = 30.0  # set default
+            self.k = None  # ignore
+        elif self.method == "full":
+            self.k = None
+            self.radius = None
+        return self
+
+
+class CostMatrixSettings(MyBaseModel):
+    weights: dict[str, float] = {
+        "dist": 0.5,
+        "edge_angle": 1.0,
+        "edge_length": 1.0,
+        "pca_dir": 0.0,
+        "pca_aniso": 0.0,
+        "edge_descriptor": 0.0,
+    }
+    normalize: bool = False
+
+
+class HungarianMatchSettings(MyBaseModel):
+    distance_metric: Literal["euclidean", "cosine", "cityblock"] = "euclidean"
     cost_threshold: float = 0.10
     max_ratio: float = 0.8
-    knn_k: int = 5
-    cross_check: bool = True
+    cross_check: bool = False
+    edge_graph_settings: EdgeGraphSettings = EdgeGraphSettings()
+    cost_matrix_settings: CostMatrixSettings = CostMatrixSettings()
+
+
+class MatchDescriptorSettings(MyBaseModel):
     distance_metric: Literal["euclidean", "cosine", "cityblock"] = "euclidean"
+    max_ratio: float = 0.8
+    cross_check: bool = False
+
+
+class BeadsMatchSettings(MyBaseModel):
+    algorithm: Literal["hungarian", "match_descriptor"] = "hungarian"
+    t_reference: Literal["first", "previous"] = "first"
     source_peaks_settings: Optional[DetectPeaksSettings] = Field(
         default_factory=DetectPeaksSettings
     )
     target_peaks_settings: Optional[DetectPeaksSettings] = Field(
         default_factory=DetectPeaksSettings
     )
-    t_reference: Literal["first", "previous"] = "first"
+    match_descriptor_settings: MatchDescriptorSettings = MatchDescriptorSettings()
+    hungarian_match_settings: HungarianMatchSettings = HungarianMatchSettings()
+    filter_distance_threshold: float = 0.95
+    filter_angle_threshold: float = 0
 
 
 class PhaseCrossCorrSettings(MyBaseModel):

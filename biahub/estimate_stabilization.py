@@ -30,7 +30,7 @@ from biahub.cli.parsing import (
 from biahub.cli.slurm import wait_for_jobs_to_finish
 from biahub.cli.utils import estimate_resources, yaml_to_model
 from biahub.estimate_registration import (
-    _get_tform_from_beads,
+    estimate_transform_from_beads,
     evaluate_transforms,
     save_transforms,
 )
@@ -537,8 +537,8 @@ def estimate_xyz_stabilization_with_beads(
         "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,
-        "slurm_time": 5,
-        "slurm_partition": "preempted",
+        "slurm_time": 30,
+        "slurm_partition": "gpu",
     }
 
     if sbatch_filepath:
@@ -561,7 +561,7 @@ def estimate_xyz_stabilization_with_beads(
     with executor.batch():
         for t in range(1, T, 1):
             job = executor.submit(
-                _get_tform_from_beads,
+                estimate_transform_from_beads,
                 source_channel_tzyx=channel_tzyx,
                 target_channel_tzyx=target_channel_tzyx,
                 verbose=verbose,
@@ -589,7 +589,7 @@ def estimate_xyz_stabilization_with_beads(
         file_path = output_transforms_path / f"{t}.npy"
         if not os.path.exists(file_path):
             transforms.append(None)
-            click.echo(f"Transform for timepoint {t} not found. Using None.")
+            click.echo(f"Transform for timepoint {t} not found.")
         else:
             T_zyx_shift = np.load(file_path).tolist()
             transforms.append(T_zyx_shift)
@@ -760,7 +760,7 @@ def estimate_xy_stabilization(
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,
         "slurm_time": 10,
-        "slurm_partition": "preempted",
+        "slurm_partition": "cpu",
     }
 
     if sbatch_filepath:
@@ -1021,7 +1021,7 @@ def estimate_z_stabilization(
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,
         "slurm_time": 30,
-        "slurm_partition": "preempted",
+        "slurm_partition": "cpu",
     }
 
     if sbatch_filepath:
@@ -1276,7 +1276,7 @@ def estimate_stabilization(
 
                     save_transforms(
                         model=model,
-                        transforms=xy_transforms,
+                        transforms=xyz_transforms,
                         output_filepath_settings=output_dirpath
                         / "xyz_stabilization_settings"
                         / f"{fov}.yml",
@@ -1291,9 +1291,6 @@ def estimate_stabilization(
                         output_filepath_settings=output_dirpath
                         / "z_stabilization_settings"
                         / f"{fov}.yml",
-                        output_filepath_plot=output_dirpath
-                        / "translation_plots"
-                        / f"{fov}.png",
                         verbose=verbose,
                     )
                     save_transforms(
@@ -1302,9 +1299,6 @@ def estimate_stabilization(
                         output_filepath_settings=output_dirpath
                         / "xy_stabilization_settings"
                         / f"{fov}.yml",
-                        output_filepath_plot=output_dirpath
-                        / "translation_plots"
-                        / f"{fov}.png",
                         verbose=verbose,
                     )
 

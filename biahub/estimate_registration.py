@@ -20,7 +20,7 @@ from scipy.optimize import linear_sum_assignment
 from scipy.spatial.distance import cdist
 from skimage.feature import match_descriptors
 from skimage.transform import AffineTransform, EuclideanTransform, SimilarityTransform
-from sklearn.neighbors import NearestNeighbors
+from sklearn.neighbors import NearestNeighbors, radius_neighbors_graph
 from waveorder.focus import focus_from_transverse_band
 
 from biahub.characterize_psf import detect_peaks
@@ -52,6 +52,7 @@ from biahub.settings import (
     AffineTransformSettings,
     AntsRegistrationSettings,
     BeadsMatchSettings,
+    DetectPeaksSettings,
     EstimateRegistrationSettings,
     RegistrationSettings,
     StabilizationSettings,
@@ -76,7 +77,7 @@ COLOR_CYCLE = [
 ]
 
 
-def _validate_transforms(
+def validate_transforms(
     transforms: list[ArrayLike],
     shape_zyx: tuple[int, int, int],
     window_size: int = 10,
@@ -114,8 +115,12 @@ def _validate_transforms(
                 valid_transforms.append(transform)
                 reference_transform = np.mean(valid_transforms, axis=0)
                 if verbose:
-                    click.echo(f"[Bootstrap] Accepting transform at timepoint {i} (no validation)")
-            elif _check_transform_difference(transform, reference_transform, shape_zyx, tolerance, verbose):
+                    click.echo(
+                        f"[Bootstrap] Accepting transform at timepoint {i} (no validation)"
+                    )
+            elif check_transforms_difference(
+                transform, reference_transform, shape_zyx, tolerance, verbose
+            ):
                 valid_transforms.append(transform)
                 if len(valid_transforms) > window_size:
                     valid_transforms.pop(0)
@@ -125,7 +130,9 @@ def _validate_transforms(
             else:
                 transforms[i] = None
                 if verbose:
-                    click.echo(f"Transform at timepoint {i} is invalid and will be interpolated")
+                    click.echo(
+                        f"Transform at timepoint {i} is invalid and will be interpolated"
+                    )
         else:
             transforms[i] = None
             if verbose:
@@ -134,7 +141,7 @@ def _validate_transforms(
     return transforms
 
 
-def _interpolate_transforms(
+def interpolate_transforms(
     transforms: list[ArrayLike],
     window_size: int = 3,
     interpolation_type: Literal["linear", "cubic"] = "linear",
@@ -222,7 +229,7 @@ def _interpolate_transforms(
     return transforms
 
 
-def _check_transform_difference(
+def check_transforms_difference(
     tform1: ArrayLike,
     tform2: ArrayLike,
     shape_zyx: tuple[int, int, int],
@@ -309,14 +316,14 @@ def evaluate_transforms(
     if not isinstance(transforms, list):
         transforms = transforms.tolist()
 
-    transforms = _validate_transforms(
+    transforms = validate_transforms(
         transforms=transforms,
         window_size=validation_window_size,
         tolerance=validation_tolerance,
         shape_zyx=shape_zyx,
         verbose=verbose,
     )
-    transforms = _interpolate_transforms(
+    transforms = interpolate_transforms(
         transforms=transforms,
         window_size=interpolation_window_size,
         interpolation_type=interpolation_type,
@@ -861,7 +868,7 @@ def ants_registration(
         file_path = output_transforms_path / f"{t}.npy"
         if not os.path.exists(file_path):
             transforms.append(None)
-            click.echo(f"Transform for timepoint {t} not found. Using None.")
+            click.echo(f"Transform for timepoint {t} not found.")
         else:
             T_zyx_shift = np.load(file_path).tolist()
             transforms.append(T_zyx_shift)
@@ -962,7 +969,7 @@ def beads_based_registration(
     with executor.batch():
         for t in range(T):
             job = executor.submit(
-                _get_tform_from_beads,
+                estimate_transform_from_beads,
                 source_channel_tzyx=source_channel_tzyx,
                 target_channel_tzyx=target_channel_tzyx,
                 beads_match_settings=beads_match_settings,
@@ -1000,21 +1007,272 @@ def beads_based_registration(
     return transforms
 
 
-def _compute_cost_matrix(
+def get_local_pca_features(
+    points: ArrayLike,
+    edges: list[tuple[int, int]],
+) -> tuple[ArrayLike, ArrayLike]:
+    """
+    Compute dominant direction and anisotropy for each point using PCA,
+    using neighborhoods defined by existing graph edges.
+
+    Parameters
+    ----------
+    points : ArrayLike
+        (n, 2) array of points.
+    edges : list[tuple[int, int]]
+        List of edges (i, j) in the graph.
+
+    Returns
+    -------
+    tuple[ArrayLike, ArrayLike]
+        - directions : (n, 3) array of dominant directions.
+        - anisotropy : (n,) array of anisotropy.
+
+    Notes
+    -----
+    The PCA features are computed as the dominant direction and anisotropy of the local neighborhood of each point.
+    The direction is the first principal component of the local neighborhood.
+    The anisotropy is the ratio of the first to third principal component of the local neighborhood.
+    """
+    n = len(points)
+    directions = np.zeros((n, 3))
+    anisotropy = np.zeros(n)
+
+    # Build neighbor list from edges
+    from collections import defaultdict
+
+    neighbor_map = defaultdict(list)
+    for i, j in edges:
+        neighbor_map[i].append(j)
+
+    for i in range(n):
+        neighbors = neighbor_map[i]
+        if not neighbors:
+            directions[i] = np.nan
+            anisotropy[i] = np.nan
+            continue
+
+        local_points = points[neighbors].astype(np.float32)
+        local_points -= local_points.mean(axis=0)
+        _, S, Vt = np.linalg.svd(local_points, full_matrices=False)
+
+        directions[i] = Vt[0] if Vt.shape[0] > 0 else np.zeros(3)
+        anisotropy[i] = S[0] / (S[2] + 1e-5) if len(S) >= 3 else 0.0
+
+    return directions, anisotropy
+
+
+def get_edge_descriptors(
+    points: ArrayLike,
+    edges: list[tuple[int, int]],
+) -> ArrayLike:
+    """
+    Compute edge descriptors for a set of points.
+
+    Parameters
+    ----------
+    points : ArrayLike
+        (n, 2) array of points.
+    edges : list[tuple[int, int]]
+        List of edges (i, j) in the graph.
+
+    Returns
+    -------
+    ArrayLike
+        (n, 4) array of edge descriptors.
+        Each row contains:
+        - mean length
+        - std length
+        - mean angle
+        - std angle
+
+    Notes
+    -----
+    The edge descriptors are computed as the mean and standard deviation of the lengths and angles of the edges.
+    """
+    n = len(points)
+    desc = np.zeros((n, 4))
+    for i in range(n):
+        neighbors = [j for a, j in edges if a == i]
+        if not neighbors:
+            continue
+        vectors = points[neighbors] - points[i]
+        lengths = np.linalg.norm(vectors, axis=1)
+        angles = np.arctan2(vectors[:, 1], vectors[:, 0])
+        desc[i, 0] = np.mean(lengths)
+        desc[i, 1] = np.std(lengths)
+        desc[i, 2] = np.mean(angles)
+        desc[i, 3] = np.std(angles)
+    return desc
+
+
+def get_edge_attrs(
+    points: ArrayLike,
+    edges: list[tuple[int, int]],
+) -> tuple[dict[tuple[int, int], float], dict[tuple[int, int], float]]:
+    """
+    Compute edge distances and angles for a set of points.
+
+    Parameters
+    ----------
+    points : ArrayLike
+        (n, 2) array of points.
+    edges : list[tuple[int, int]]
+        List of edges (i, j) in the graph.
+
+    Returns
+    -------
+    tuple[dict[tuple[int, int], float], dict[tuple[int, int], float]]
+        - distances : dict[tuple[int, int], float]
+        - angles : dict[tuple[int, int], float]
+
+    """
+    distances, angles = {}, {}
+    for i, j in edges:
+        vec = points[j] - points[i]
+        d = np.linalg.norm(vec)
+        angle = np.arctan2(vec[1], vec[0])
+        distances[(i, j)] = distances[(j, i)] = d
+        angles[(i, j)] = angles[(j, i)] = angle
+    return distances, angles
+
+
+def match_hungarian_local_cost(
+    i: int,
+    j: int,
+    s_neighbors: list[int],
+    t_neighbors: list[int],
+    source_attrs: dict[tuple[int, int], float],
+    target_attrs: dict[tuple[int, int], float],
+    default_cost: float,
+) -> float:
+    """
+    Match neighbor edges between two graphs using the Hungarian algorithm for local cost estimation.
+    The cost is the mean of the absolute differences between the source and target edge attributes.
+
+    Parameters
+    ----------
+    i : int
+        Index of the source edge.
+    j : int
+        Index of the target edge.
+    s_neighbors : list[int]
+        List of source neighbors.
+    t_neighbors : list[int]
+        List of target neighbors.
+    source_attrs : dict[tuple[int, int], float]
+        Dictionary of source edge attributes.
+    target_attrs : dict[tuple[int, int], float]
+        Dictionary of target edge attributes.
+    """
+    C = np.full((len(s_neighbors), len(t_neighbors)), default_cost)
+
+    # compute cost matrix
+    for ii, sn in enumerate(s_neighbors):
+        # get target neighbors
+        for jj, tn in enumerate(t_neighbors):
+            s_edge = (i, sn)
+            t_edge = (j, tn)
+            if s_edge in source_attrs and t_edge in target_attrs:
+                C[ii, jj] = abs(source_attrs[s_edge] - target_attrs[t_edge])
+
+    # use hungarian algorithm to find the best match
+    row_ind, col_ind = linear_sum_assignment(C)
+    # get the mean of the matched costs
+    matched_costs = C[row_ind, col_ind]
+    # return the mean of the matched costs
+
+    return matched_costs.mean() if len(matched_costs) > 0 else default_cost
+
+
+def compute_edge_consistency_cost(
+    n: int,
+    m: int,
+    source_attrs: dict[tuple[int, int], float],
+    target_attrs: dict[tuple[int, int], float],
+    source_edges: list[tuple[int, int]],
+    target_edges: list[tuple[int, int]],
+    default: float = 1e6,
+    hungarian: bool = True,
+) -> ArrayLike:
+    """
+    Compute the cost matrix for matching edges between two graphs.
+
+    Parameters
+    ----------
+    n : int
+        Number of source edges.
+    m : int
+        Number of target edges.
+    source_attrs : dict[tuple[int, int], float]
+        Dictionary of source edge attributes.
+    target_attrs : dict[tuple[int, int], float]
+        Dictionary of target edge attributes.
+    source_edges : list[tuple[int, int]]
+        List of edges (i, j) in source graph.
+    target_edges : list[tuple[int, int]]
+        List of edges (i, j) in target graph.
+    default : float
+        Default value for the cost matrix.
+    hungarian : bool
+        Whether to use the Hungarian algorithm for local cost estimation.
+        If False, the cost matrix is computed as the mean of the absolute differences between the source and target edge attributes.
+        If True, the cost matrix is computed as the mean of the absolute differences between the source and target edge attributes using the Hungarian algorithm.
+
+    Returns
+    -------
+    ArrayLike
+        Cost matrix of shape (n, m).
+
+    Notes
+    -----
+    The cost matrix is computed as the mean of the absolute differences between the source and target edge attributes.
+    """
+    cost_matrix = np.full((n, m), default)
+    for i in range(n):
+        # get source neighbors
+        s_neighbors = [j for a, j in source_edges if a == i]
+        for j in range(m):
+            # get target neighbors
+            t_neighbors = [k for a, k in target_edges if a == j]
+            if hungarian:
+                # hungarian algorithm based cost estimation
+                cost_matrix[i, j] = match_hungarian_local_cost(
+                    i, j, s_neighbors, t_neighbors, source_attrs, target_attrs, default
+                )
+            else:
+                # position based cost estimation (mean of the absolute differences between the source and target edge attributes)
+                common_len = min(len(s_neighbors), len(t_neighbors))
+                diffs = []
+                for k in range(common_len):
+                    s_edge = (i, s_neighbors[k])
+                    t_edge = (j, t_neighbors[k])
+                    if s_edge in source_attrs and t_edge in target_attrs:
+                        v1 = source_attrs[s_edge]
+                        v2 = target_attrs[t_edge]
+                        diff = np.abs(v1 - v2)
+                        diffs.append(diff)
+                cost_matrix[i, j] = np.mean(diffs) if diffs else default
+
+    return cost_matrix
+
+
+def compute_cost_matrix(
     source_peaks: ArrayLike,
     target_peaks: ArrayLike,
     source_edges: list[tuple[int, int]],
     target_edges: list[tuple[int, int]],
+    weights: dict[str, float] = None,
     distance_metric: str = 'euclidean',
-    distance_weight: float = 0.5,
-    nodes_angle_weight: float = 1.0,
-    nodes_distance_weight: float = 1.0,
+    normalize: bool = False,
 ) -> ArrayLike:
     """
     Compute a cost matrix for matching peaks between two graphs based on:
     - Euclidean or other distance between peaks
     - Consistency in edge distances
     - Consistency in edge angles
+    - PCA features
+    - Edge descriptors
 
     Parameters
     ----------
@@ -1026,13 +1284,24 @@ def _compute_cost_matrix(
         List of edges (i, j) in source graph.
     target_edges : list[tuple[int, int]]
         List of edges (i, j) in target graph.
+    weights : dict[str, float]
+        Weights for different cost components.
     distance_metric : str
         Metric for direct point-to-point distances.
-    distance_weight : float
-        Weight for point distance cost.
-    nodes_angle_weight : float
-        Weight for angular consistency cost.
-    nodes
+    normalize : bool
+        Whether to normalize the cost matrix.
+
+    Notes
+    -----
+    The cost matrix is computed as the sum of the weighted costs for each component.
+    The weights are defined in the `weights` parameter.
+    The default weights are:
+    - dist: 0.5
+    - edge_angle: 1.0
+    - edge_length: 1.0
+    - pca_dir: 0.0
+    - pca_aniso: 0.0
+    - edge_descriptor: 0.0
 
     Returns
     -------
@@ -1040,99 +1309,140 @@ def _compute_cost_matrix(
         Cost matrix of shape (n, m).
     """
     n, m = len(source_peaks), len(target_peaks)
+    C_total = np.zeros((n, m))
 
-    def compute_edge_attributes(peaks, edges):
-        distances = {}
-        angles = {}
-        for i, j in edges:
-            vec = peaks[j] - peaks[i]
-            d = np.linalg.norm(vec)
-            angle = np.arctan2(vec[1], vec[0])
-            distances[(i, j)] = distances[(j, i)] = d
-            angles[(i, j)] = angles[(j, i)] = angle
-        return distances, angles
+    # --- Default weights ---
+    default_weights = {
+        "dist": 0.5,
+        "edge_angle": 1.0,
+        "edge_length": 1.0,
+        "pca_dir": 0.0,
+        "pca_aniso": 0.0,
+        "edge_descriptor": 0.0,
+    }
+    if weights is None:
+        weights = default_weights
+    else:
+        weights = {**default_weights, **weights}  # override defaults
 
-    def local_edge_costs(
-        source_edges, target_edges, source_attrs, target_attrs, attr='distance', default=1e6
-    ):
-        cost_matrix = np.full((n, m), default)
-        for i in range(n):
-            s_neighbors = [j for a, j in source_edges if a == i]
-            for j in range(m):
-                t_neighbors = [k for a, k in target_edges if a == j]
-                common_len = min(len(s_neighbors), len(t_neighbors))
-                diffs = []
-                for k in range(common_len):
-                    s_edge = (i, s_neighbors[k])
-                    t_edge = (j, t_neighbors[k])
-                    if s_edge in source_attrs and t_edge in target_attrs:
-                        v1 = source_attrs[s_edge]
-                        v2 = target_attrs[t_edge]
-                        if attr == 'angle':
-                            diff = np.abs(v1 - v2)
-                        else:  # distance
-                            diff = np.abs(v1 - v2)
-                        diffs.append(diff)
-                cost_matrix[i, j] = np.mean(diffs) if diffs else default
-        return cost_matrix
+    # --- Base distance cost ---
+    if weights["dist"] > 0:
+        C_dist = cdist(source_peaks, target_peaks, metric=distance_metric)
+        if normalize:
+            C_dist /= C_dist.max()
+        C_total += weights["dist"] * C_dist
 
-    # Compute direct point-wise distance
-    C_dist = cdist(source_peaks, target_peaks, metric=distance_metric)
+    # --- Edge angle and length costs ---
+    source_dists, source_angles = get_edge_attrs(source_peaks, source_edges)
+    target_dists, target_angles = get_edge_attrs(target_peaks, target_edges)
 
-    # Compute edge distances and angles
-    source_dists, source_angles = compute_edge_attributes(source_peaks, source_edges)
-    target_dists, target_angles = compute_edge_attributes(target_peaks, target_edges)
+    if weights["edge_length"] > 0:
+        C_edge_len = compute_edge_consistency_cost(
+            n=n,
+            m=m,
+            source_attrs=source_dists,
+            target_attrs=target_dists,
+            source_edges=source_edges,
+            target_edges=target_edges,
+            default=1e6,
+        )
+        if normalize:
+            C_edge_len /= C_edge_len.max()
+        C_total += weights["edge_length"] * C_edge_len
 
-    # Compute local consistency costs
-    C_dist_node = local_edge_costs(
-        source_edges, target_edges, source_dists, target_dists, attr='distance', default=1e6
-    )
-    C_angle_node = local_edge_costs(
-        source_edges, target_edges, source_angles, target_angles, attr='angle', default=np.pi
-    )
+    if weights["edge_angle"] > 0:
+        C_edge_ang = compute_edge_consistency_cost(
+            n=n,
+            m=m,
+            source_attrs=source_angles,
+            target_attrs=target_angles,
+            source_edges=source_edges,
+            target_edges=target_edges,
+            default=np.pi,
+        )
+        if normalize:
+            C_edge_ang /= np.pi
+        C_total += weights["edge_angle"] * C_edge_ang
 
-    # Combine all costs
-    C_total = (
-        distance_weight * C_dist
-        + nodes_angle_weight * C_angle_node
-        + nodes_distance_weight * C_dist_node
-    )
+    # --- PCA features ---
+    if weights["pca_dir"] > 0 or weights["pca_aniso"] > 0:
+        dirs_s, aniso_s = get_local_pca_features(source_peaks, source_edges)
+        dirs_t, aniso_t = get_local_pca_features(target_peaks, target_edges)
+
+        if weights["pca_dir"] > 0:
+            dot = np.clip(np.dot(dirs_s, dirs_t.T), -1.0, 1.0)
+            C_dir = 1 - np.abs(dot)
+            if normalize:
+                C_dir /= C_dir.max()
+            C_total += weights["pca_dir"] * C_dir
+
+        if weights["pca_aniso"] > 0:
+            C_aniso = np.abs(aniso_s[:, None] - aniso_t[None, :])
+            if normalize:
+                C_aniso /= C_aniso.max()
+            C_total += weights["pca_aniso"] * C_aniso
+    # --- Edge descriptors ---
+    if weights["edge_descriptor"] > 0:
+        desc_s = get_edge_descriptors(source_peaks, source_edges)
+        desc_t = get_edge_descriptors(target_peaks, target_edges)
+        C_desc = cdist(desc_s, desc_t)
+        if normalize:
+            C_desc /= C_desc.max()
+        C_total += weights["edge_descriptor"] * C_desc
 
     return C_total
 
 
-def _knn_edges(
+def build_edge_graph(
     points: ArrayLike,
+    mode: Literal["knn", "radius", "full"] = "knn",
     k: int = 5,
+    radius: float = 30.0,
 ) -> list[tuple[int, int]]:
     """
-    Find k-nearest neighbors for each point in a set of points.
+    Build a set of edges for a graph based on a given strategy.
 
     Parameters
     ----------
     points : ArrayLike
-        (n, 2) array of points.
+        (N, 3) array of 3D point coordinates.
+    mode : Literal["knn", "radius", "full"]
+        Mode for building the edge graph.
     k : int
-        Number of nearest neighbors to find.
+        Number of neighbors if mode == "knn".
+    radius : float
+        Distance threshold if mode == "radius".
 
     Returns
     -------
     list[tuple[int, int]]
-        List of edges (i, j) in the graph.
+        List of (i, j) index pairs representing edges.
     """
-    n_points = len(points)
-    if n_points <= 1:
+    n = len(points)
+    if n <= 1:
         return []
 
-    k_eff = min(k, n_points - 1)  # Prevent k >= n
-    nbrs = NearestNeighbors(n_neighbors=k_eff + 1).fit(points)  # +1 includes self
-    _, indices = nbrs.kneighbors(points)
+    if mode == "knn":
+        k_eff = min(k + 1, n)
+        nbrs = NearestNeighbors(n_neighbors=k_eff).fit(points)
+        _, indices = nbrs.kneighbors(points)
+        edges = [(i, j) for i in range(n) for j in indices[i] if i != j]
 
-    edges = [(i, j) for i, neighbors in enumerate(indices) for j in neighbors if i != j]
+    elif mode == "radius":
+        graph = radius_neighbors_graph(
+            points, radius=radius, mode='connectivity', include_self=False
+        )
+        if graph.nnz == 0:
+            return []
+        edges = [(i, j) for i in range(n) for j in graph[i].nonzero()[1]]
+
+    elif mode == "full":
+        edges = [(i, j) for i in range(n) for j in range(n) if i != j]
+
     return edges
 
 
-def match_hungarian(
+def match_hungarian_global_cost(
     C: ArrayLike,
     cost_threshold: float = 1e5,
     dummy_cost: float = 1e6,
@@ -1191,74 +1501,169 @@ def match_hungarian(
     return np.array(matches)
 
 
-def extract_patch(
-    volume: ArrayLike,
-    center: tuple[int, int, int],
-    patch_size: int = 11,
-) -> ArrayLike:
+def detect_bead_peaks(
+    source_channel_zyx: da.Array,
+    target_channel_zyx: da.Array,
+    source_peaks_settings: DetectPeaksSettings,
+    target_peaks_settings: DetectPeaksSettings,
+    verbose: bool = False,
+) -> tuple[ArrayLike, ArrayLike]:
     """
-    Extract a cubic patch centered at `center` from `volume`.
+    Detect peaks in source and target channels using the detect_peaks function.
 
     Parameters
     ----------
-    volume : ArrayLike
-        (Z, Y, X) array of the volume.
-    center : tuple[int, int, int]
-        Center of the patch.
-    patch_size : int
-        Size of the patch.
+    source_channel_zyx : da.Array
+        (T, Z, Y, X) array of the source channel (Dask array).
+    target_channel_zyx : da.Array
+        (T, Z, Y, X) array of the target channel (Dask array).
+    source_peaks_settings : DetectPeaksSettings
+        Settings for the source peaks.
+    target_peaks_settings : DetectPeaksSettings
+        Settings for the target peaks.
+    verbose : bool
+        If True, prints detailed logs during the process.
+
+    Returns
+    -------
+    tuple[ArrayLike, ArrayLike]
+        Tuple of (source_peaks, target_peaks).
+    """
+    if verbose:
+        click.echo('Detecting beads in source dataset')
+
+    source_peaks = detect_peaks(
+        source_channel_zyx,
+        block_size=source_peaks_settings.block_size,
+        threshold_abs=source_peaks_settings.threshold_abs,
+        nms_distance=source_peaks_settings.nms_distance,
+        min_distance=source_peaks_settings.min_distance,
+        verbose=verbose,
+    )
+    if verbose:
+        click.echo('Detecting beads in target dataset')
+
+    target_peaks = detect_peaks(
+        target_channel_zyx,
+        block_size=target_peaks_settings.block_size,
+        threshold_abs=target_peaks_settings.threshold_abs,
+        nms_distance=target_peaks_settings.nms_distance,
+        min_distance=target_peaks_settings.min_distance,
+        verbose=verbose,
+    )
+    if verbose:
+        click.echo(f'Total of peaks in source dataset: {len(source_peaks)}')
+        click.echo(f'Total of peaks in target dataset: {len(target_peaks)}')
+
+    if len(source_peaks) < 2 or len(target_peaks) < 2:
+        click.echo('Not enough beads detected')
+        return
+    return source_peaks, target_peaks
+
+
+def get_matches_from_hungarian(
+    source_peaks: ArrayLike,
+    target_peaks: ArrayLike,
+    beads_match_settings: BeadsMatchSettings,
+    verbose: bool = False,
+) -> ArrayLike:
+    """
+    Get matches from beads using the hungarian algorithm.
+    Parameters
+    ----------
+    source_peaks : ArrayLike
+        (n, 2) array of source peaks.
+    target_peaks : ArrayLike
+        (m, 2) array of target peaks.
+    beads_match_settings : BeadsMatchSettings
+        Settings for the beads match.
+    verbose : bool
+        If True, prints detailed logs during the process.
 
     Returns
     -------
     ArrayLike
-        (Z, Y, X) array of the patch.
+        (n, 2) array of matches.
     """
-    half = patch_size // 2
-    z, y, x = map(int, center)
-    patch = volume[
-        max(z - half, 0) : z + half + 1,
-        max(y - half, 0) : y + half + 1,
-        max(x - half, 0) : x + half + 1,
-    ]
-    return patch
+    hungarian_settings = beads_match_settings.hungarian_match_settings
+    cost_settings = hungarian_settings.cost_matrix_settings
+    edge_settings = hungarian_settings.edge_graph_settings
+    source_edges = build_edge_graph(
+        source_peaks, mode=edge_settings.method, k=edge_settings.k, radius=edge_settings.radius
+    )
+    target_edges = build_edge_graph(
+        target_peaks, mode=edge_settings.method, k=edge_settings.k, radius=edge_settings.radius
+    )
+
+    if hungarian_settings.cross_check:
+        # Step 1: A → B
+        C_ab = compute_cost_matrix(
+            source_peaks,
+            target_peaks,
+            source_edges,
+            target_edges,
+            weights=cost_settings.weights,
+            distance_metric=hungarian_settings.distance_metric,
+            normalize=cost_settings.normalize,
+        )
+
+        matches_ab = match_hungarian_global_cost(
+            C_ab,
+            cost_threshold=np.quantile(C_ab, hungarian_settings.cost_threshold),
+            max_ratio=hungarian_settings.max_ratio,
+        )
+
+        # Step 2: B → A (swap arguments)
+        C_ba = compute_cost_matrix(
+            target_peaks,
+            source_peaks,
+            target_edges,
+            source_edges,
+            weights=cost_settings.weights,
+            distance_metric=hungarian_settings.distance_metric,
+            normalize=cost_settings.normalize,
+        )
+
+        matches_ba = match_hungarian_global_cost(
+            C_ba,
+            cost_threshold=np.quantile(C_ba, hungarian_settings.cost_threshold),
+            max_ratio=hungarian_settings.max_ratio,
+        )
+
+        # Step 3: Invert matches_ba to compare
+        reverse_map = {(j, i) for i, j in matches_ba}
+
+        # Step 4: Keep only symmetric matches
+        matches = np.array([[i, j] for i, j in matches_ab if (i, j) in reverse_map])
+    else:
+        # without cross-check
+
+        C = compute_cost_matrix(
+            source_peaks,
+            target_peaks,
+            source_edges,
+            target_edges,
+            weights=cost_settings.weights,
+            distance_metric=hungarian_settings.distance_metric,
+            normalize=cost_settings.normalize,
+        )
+
+        matches = match_hungarian_global_cost(
+            C,
+            cost_threshold=np.quantile(C, hungarian_settings.cost_threshold),
+            max_ratio=hungarian_settings.max_ratio,
+        )
+    return matches
 
 
-def compute_mi(p1: ArrayLike, p2: ArrayLike, bins: int = 32) -> float:
-    """
-    Compute mutual information between two patches.
-
-    Parameters
-    ----------
-    p1 : ArrayLike
-        (Z, Y, X) array of the first patch.
-    p2 : ArrayLike
-        (Z, Y, X) array of the second patch.
-    bins : int
-        Number of bins for the histogram.
-
-    Returns
-    -------
-    float
-        Mutual information between the two patches.
-    """
-    hgram, _, _ = np.histogram2d(p1.ravel(), p2.ravel(), bins=bins)
-    pxy = hgram / np.sum(hgram)
-    px = np.sum(pxy, axis=1)  # marginal for x
-    py = np.sum(pxy, axis=0)  # marginal for y
-    px_py = np.outer(px, py)
-    nz = pxy > 0
-    return np.sum(pxy[nz] * np.log(pxy[nz] / px_py[nz]))
-
-
-def match_mutual_information(
+def get_matches_from_beads(
     source_peaks: ArrayLike,
     target_peaks: ArrayLike,
-    source_vol: ArrayLike,
-    target_vol: ArrayLike,
-    patch_size: int = 11,
+    beads_match_settings: BeadsMatchSettings,
+    verbose: bool = False,
 ) -> ArrayLike:
     """
-    Match peaks using mutual information between local patches.
+    Get matches from beads using the hungarian algorithm.
 
     Parameters
     ----------
@@ -1266,37 +1671,165 @@ def match_mutual_information(
         (n, 2) array of source peaks.
     target_peaks : ArrayLike
         (m, 2) array of target peaks.
-    source_vol : ArrayLike
-        (Z, Y, X) array of the source volume.
-    target_vol : ArrayLike
-        (Z, Y, X) array of the target volume.
-    patch_size : int
-        Size of the patch.
+    beads_match_settings : BeadsMatchSettings
+        Settings for the beads match.
+    verbose : bool
+        If True, prints detailed logs during the process.
 
     Returns
     -------
     ArrayLike
         (n, 2) array of matches.
     """
-    n_source, n_target = len(source_peaks), len(target_peaks)
-    mi_matrix = np.zeros((n_source, n_target))
+    if verbose:
+        click.echo(f'Getting matches from beads with settings: {beads_match_settings}')
 
-    for i, s_peak in enumerate(source_peaks):
-        patch_s = extract_patch(source_vol, s_peak, patch_size=patch_size)
-        for j, t_peak in enumerate(target_peaks):
-            patch_t = extract_patch(target_vol, t_peak, patch_size=patch_size)
-            if patch_s.shape == patch_t.shape:
-                mi_matrix[i, j] = compute_mi(patch_s, patch_t)
-            else:
-                mi_matrix[i, j] = -np.inf  # incompatible shapes, ignore
+    if beads_match_settings.algorithm == 'match_descriptor':
+        match_descriptor_settings = beads_match_settings.match_descriptor_settings
+        matches = match_descriptors(
+            source_peaks,
+            target_peaks,
+            metric=match_descriptor_settings.distance_metric,
+            max_ratio=match_descriptor_settings.max_ratio,
+            cross_check=match_descriptor_settings.cross_check,
+        )
 
-    # Hungarian matching: convert similarity to cost
-    cost_matrix = -mi_matrix
-    matches = match_hungarian(cost_matrix)
+    elif beads_match_settings.algorithm == 'hungarian':
+        matches = get_matches_from_hungarian(
+            source_peaks=source_peaks,
+            target_peaks=target_peaks,
+            beads_match_settings=beads_match_settings,
+            verbose=verbose,
+        )
+
+    if verbose:
+        click.echo(f'Total of matches: {len(matches)}')
+
     return matches
 
 
-def _get_tform_from_beads(
+def filter_matches(
+    matches: ArrayLike,
+    source_peaks: ArrayLike,
+    target_peaks: ArrayLike,
+    angle_threshold: float = 30,
+    distance_threshold: float = 0.95,
+    verbose: bool = False,
+) -> ArrayLike:
+    """
+    Filter matches based on the angle and distance thresholds.
+
+    Parameters
+    ----------
+    matches : ArrayLike
+        (n, 2) array of matches.
+    source_peaks : ArrayLike
+        (n, 2) array of source peaks.
+    target_peaks : ArrayLike
+        (n, 2) array of target peaks.
+    angle_threshold : float
+        Angle threshold in degrees.
+    distance_threshold : float
+        Distance threshold.
+    verbose : bool
+        If True, prints detailed logs during the process.
+
+    Returns
+    -------
+    ArrayLike
+        (n, 2) array of filtered matches.
+
+    Notes
+    -----
+    Uses the angle and distance thresholds to filter matches.
+    The angle threshold is the maximum allowed angle between the source and target peaks.
+    The distance threshold is the maximum allowed distance between the source and target peaks.
+    The dominant angle is the angle that appears most frequently in the matches.
+    """
+    if distance_threshold:
+        click.echo(f'Filtering matches with distance threshold: {distance_threshold}')
+        dist = np.linalg.norm(
+            source_peaks[matches[:, 0]] - target_peaks[matches[:, 1]], axis=1
+        )
+        matches = matches[dist < np.quantile(dist, distance_threshold), :]
+
+    if verbose:
+        click.echo(f'Total of matches after distance filtering: {len(matches)}')
+
+    if angle_threshold:
+        click.echo(f'Filtering matches with angle threshold: {angle_threshold}')
+        vectors = target_peaks[matches[:, 1]] - source_peaks[matches[:, 0]]
+        angles_rad = np.arctan2(vectors[:, 1], vectors[:, 0])
+        angles_deg = np.degrees(angles_rad)
+
+        bins = np.linspace(-180, 180, 36)  # 10-degree bins
+        hist, bin_edges = np.histogram(angles_deg, bins=bins)
+
+        dominant_bin_index = np.argmax(hist)
+        dominant_angle = (
+            bin_edges[dominant_bin_index] + bin_edges[dominant_bin_index + 1]
+        ) / 2
+
+        filtered_indices = np.where(np.abs(angles_deg - dominant_angle) <= angle_threshold)[0]
+
+        matches = matches[filtered_indices]
+
+    if verbose:
+        click.echo(f'Total of matches after angle filtering: {len(matches)}')
+
+    return matches
+
+
+def estimate_transform(
+    matches: ArrayLike,
+    source_peaks: ArrayLike,
+    target_peaks: ArrayLike,
+    affine_transform_settings: AffineTransformSettings,
+    verbose: bool = False,
+) -> ArrayLike:
+    """
+    Estimate the affine transformation matrix between source and target channels
+    based on detected bead matches at a specific timepoint.
+
+    Parameters
+    ----------
+    matches : ArrayLike
+        (n, 2) array of matches.
+    source_peaks : ArrayLike
+        (n, 2) array of source peaks.
+    target_peaks : ArrayLike
+        (n, 2) array of target peaks.
+    affine_transform_settings : AffineTransformSettings
+        Settings for the affine transform.
+    verbose : bool
+        If True, prints detailed logs during the process.
+
+    Returns
+    -------
+    ArrayLike
+        (4, 4) array of the affine transformation matrix.
+    """
+    if verbose:
+        click.echo(f"Estimating transform with settings: {affine_transform_settings}")
+
+    if affine_transform_settings.transform_type == 'affine':
+        tform = AffineTransform(dimensionality=3)
+
+    elif affine_transform_settings.transform_type == 'euclidean':
+        tform = EuclideanTransform(dimensionality=3)
+
+    elif affine_transform_settings.transform_type == 'similarity':
+        tform = SimilarityTransform(dimensionality=3)
+
+    else:
+        raise ValueError(f'Unknown transform type: {affine_transform_settings.transform_type}')
+
+    tform.estimate(source_peaks[matches[:, 0]], target_peaks[matches[:, 1]])
+
+    return tform
+
+
+def estimate_transform_from_beads(
     t_idx: int,
     source_channel_tzyx: da.Array,
     target_channel_tzyx: da.Array,
@@ -1347,7 +1880,8 @@ def _get_tform_from_beads(
     If fewer than three matches are found after filtering, the function returns None.
     """
 
-    approx_tform = np.asarray(affine_transform_settings.approx_transform)
+    click.echo(f'Processing timepoint: {t_idx}')
+
     source_channel_zyx = np.asarray(source_channel_tzyx[t_idx]).astype(np.float32)
     target_channel_zyx = np.asarray(target_channel_tzyx[t_idx]).astype(np.float32)
 
@@ -1355,6 +1889,7 @@ def _get_tform_from_beads(
         click.echo(f'Beads data is missing at timepoint {t_idx}')
         return
 
+    approx_tform = np.asarray(affine_transform_settings.approx_transform)
     source_data_ants = ants.from_numpy(source_channel_zyx)
     target_data_ants = ants.from_numpy(target_channel_zyx)
     source_data_reg = (
@@ -1362,145 +1897,29 @@ def _get_tform_from_beads(
         .apply_to_image(source_data_ants, reference=target_data_ants)
         .numpy()
     )
-    click.echo(f'Detecting beads for timepoint {t_idx}')
-    if verbose:
-        click.echo('Detecting beads in source dataset:')
 
-    source_peaks = detect_peaks(
-        source_data_reg,
-        block_size=beads_match_settings.source_peaks_settings.block_size,
-        threshold_abs=beads_match_settings.source_peaks_settings.threshold_abs,
-        nms_distance=beads_match_settings.source_peaks_settings.nms_distance,
-        min_distance=beads_match_settings.source_peaks_settings.min_distance,
-        verbose=verbose,
-    )
-    if verbose:
-        click.echo('Detecting beads in target dataset:')
-
-    target_peaks = detect_peaks(
-        target_channel_zyx,
-        block_size=beads_match_settings.target_peaks_settings.block_size,
-        threshold_abs=beads_match_settings.target_peaks_settings.threshold_abs,
-        nms_distance=beads_match_settings.target_peaks_settings.nms_distance,
-        min_distance=beads_match_settings.target_peaks_settings.min_distance,
+    source_peaks, target_peaks = detect_bead_peaks(
+        source_channel_zyx=source_data_reg,
+        target_channel_zyx=target_channel_zyx,
+        source_peaks_settings=beads_match_settings.source_peaks_settings,
+        target_peaks_settings=beads_match_settings.target_peaks_settings,
         verbose=verbose,
     )
 
-    # Skip if there is no peak detected
-    if len(source_peaks) < 2 or len(target_peaks) < 2:
-        click.echo(f'No beads were detected at timepoint {t_idx}')
-        return
-    print(beads_match_settings.algorithm)
-    if beads_match_settings.algorithm == 'match_descriptor':
-        print("Using match descriptor")
+    matches = get_matches_from_beads(
+        source_peaks=source_peaks,
+        target_peaks=target_peaks,
+        beads_match_settings=beads_match_settings,
+        verbose=verbose,
+    )
 
-        # Match peaks, excluding top 5% of distances as outliers
-        matches = match_descriptors(
-            source_peaks,
-            target_peaks,
-            metric=beads_match_settings.distance_metric,
-            max_ratio=beads_match_settings.max_ratio,
-            cross_check=beads_match_settings.cross_check,
-        )
-    elif beads_match_settings.algorithm == 'hungarian':
-
-        source_edges = _knn_edges(source_peaks, k=beads_match_settings.knn_k)
-        target_edges = _knn_edges(target_peaks, k=beads_match_settings.knn_k)
-
-        if beads_match_settings.cross_check:
-            # Step 1: A → B
-            C_ab = _compute_cost_matrix(
-                source_peaks,
-                target_peaks,
-                source_edges,
-                target_edges,
-                distance_metric=beads_match_settings.distance_metric,
-            )
-            matches_ab = match_hungarian(
-                C_ab,
-                cost_threshold=np.quantile(C_ab, beads_match_settings.cost_threshold),
-                max_ratio=beads_match_settings.max_ratio,
-            )
-
-            # Step 2: B → A (swap arguments)
-            C_ba = _compute_cost_matrix(
-                target_peaks,
-                source_peaks,
-                target_edges,
-                source_edges,
-                distance_metric=beads_match_settings.distance_metric,
-            )
-            matches_ba = match_hungarian(
-                C_ba,
-                cost_threshold=np.quantile(C_ba, beads_match_settings.cost_threshold),
-                max_ratio=beads_match_settings.max_ratio,
-            )
-
-            # Step 3: Invert matches_ba to compare
-            reverse_map = {(j, i) for i, j in matches_ba}
-
-            # Step 4: Keep only symmetric matches
-            matches = np.array([[i, j] for i, j in matches_ab if (i, j) in reverse_map])
-        else:
-            # # Compute cost matrix
-            C = _compute_cost_matrix(
-                source_peaks,
-                target_peaks,
-                source_edges,
-                target_edges,
-                distance_metric=beads_match_settings.distance_metric,
-            )
-
-            matches = match_hungarian(
-                C,
-                cost_threshold=np.quantile(C, beads_match_settings.cost_threshold),
-                max_ratio=beads_match_settings.max_ratio,
-            )
-
-    elif beads_match_settings.algorithm == 'mutual_information':
-        matches = match_mutual_information(
-            source_peaks=source_peaks,
-            target_peaks=target_peaks,
-            source_vol=source_data_reg,
-            target_vol=target_channel_zyx,
-            patch_size=11,
-        )
-
-    if verbose:
-        click.echo(f'Total of matches at time point {t_idx}: {len(matches)}')
-
-    dist = np.linalg.norm(source_peaks[matches[:, 0]] - target_peaks[matches[:, 1]], axis=1)
-    matches = matches[dist < np.quantile(dist, 0.95), :]
-
-    if verbose:
-        click.echo(
-            f'Total of matches after distance filtering at time point {t_idx}: {len(matches)}'
-        )
-
-    if beads_match_settings.filter_angle_threshold:
-
-        vectors = target_peaks[matches[:, 1]] - source_peaks[matches[:, 0]]
-        angles_rad = np.arctan2(vectors[:, 1], vectors[:, 0])
-        angles_deg = np.degrees(angles_rad)
-
-        bins = np.linspace(-180, 180, 36)  # 10-degree bins
-        hist, bin_edges = np.histogram(angles_deg, bins=bins)
-
-        dominant_bin_index = np.argmax(hist)
-        dominant_angle = (
-            bin_edges[dominant_bin_index] + bin_edges[dominant_bin_index + 1]
-        ) / 2
-
-        filtered_indices = np.where(
-            np.abs(angles_deg - dominant_angle) <= beads_match_settings.filter_angle_threshold
-        )[0]
-
-        matches = matches[filtered_indices]
-
-        if verbose:
-            click.echo(
-                f'Total of matches after angle filtering at time point {t_idx}: {len(matches)}'
-            )
+    matches = filter_matches(
+        matches=matches,
+        source_peaks=source_peaks,
+        target_peaks=target_peaks,
+        angle_threshold=beads_match_settings.filter_angle_threshold,
+        distance_threshold=beads_match_settings.filter_distance_threshold,
+    )
 
     if len(matches) < 3:
         click.echo(
@@ -1508,25 +1927,20 @@ def _get_tform_from_beads(
         )
         return
 
-    if affine_transform_settings.transform_type == 'affine':
-        tform = AffineTransform(dimensionality=3)
-
-    elif affine_transform_settings.transform_type == 'euclidean':
-        tform = EuclideanTransform(dimensionality=3)
-
-    elif affine_transform_settings.transform_type == 'similarity':
-        tform = SimilarityTransform(dimensionality=3)
-
-    else:
-        raise ValueError(f'Unknown transform type: {affine_transform_settings.transform_type}')
-
-    tform.estimate(source_peaks[matches[:, 0]], target_peaks[matches[:, 1]])
+    tform = estimate_transform(
+        matches=matches,
+        source_peaks=source_peaks,
+        target_peaks=target_peaks,
+        affine_transform_settings=affine_transform_settings,
+        verbose=verbose,
+    )
     compount_tform = np.asarray(approx_tform) @ tform.inverse.params
 
-    click.echo(f'Matches: {matches}')
-    click.echo(f"tform.params: {tform.params}")
-    click.echo(f"tform.inverse.params: {tform.inverse.params}")
-    click.echo(f"compount_tform: {compount_tform}")
+    if verbose:
+        click.echo(f'Matches: {matches}')
+        click.echo(f"tform.params: {tform.params}")
+        click.echo(f"tform.inverse.params: {tform.inverse.params}")
+        click.echo(f"compount_tform: {compount_tform}")
 
     if slurm:
         print(f"Saving transform to {output_folder_path}")

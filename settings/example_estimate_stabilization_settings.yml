@@ -19,14 +19,8 @@ stabilization_type: "z"
 stabilization_method: "focus-finding"
 
 beads_match_settings: 
-  algorithm: hungarian # "hungarian", "match_descriptor", or "mutual_information"
-  filter_angle_threshold: 0   # Filter matches based on dominant angle direction (in degrees)
-  max_ratio: 0.8   # Ratio filter between best and second-best matches (used with descriptors)
-  knn_k: 5   # Number of neighbors used to form bead graphs
-  cost_threshold: 0.1
-  cross_check: True
-  distance_metric: euclidean
-  t_reference: "first"
+  algorithm: hungarian # "hungarian", "match_descriptor"
+  t_reference: "first" # Reference timepoint for matching
   source_peaks_settings:
     threshold_abs: 110  # intensity threshold for peak detection
     nms_distance: 16    # non-maximum suppression radius
@@ -43,6 +37,30 @@ beads_match_settings:
       - 8
       - 8
       - 8
+  match_descriptor_settings:
+    distance_metric: euclidean # Distance metric for match descriptor
+    max_ratio: 0.8 # Max ratio for match descriptor
+    cross_check: True # Cross-check matches
+  hungarian_match_settings:
+    distance_metric: euclidean # Distance metric for Hungarian algorithm
+    cost_threshold: 0.1 # Cost threshold for Hungarian algorithm
+    cross_check: True # Cross-check matches
+    max_ratio: 0.8 # Max ratio for Hungarian algorithm
+    edge_graph_settings:
+      method: knn # Method for edge graph
+      k: 5 # Number of nearest neighbors
+    cost_matrix_settings:
+      normalize: False # Normalize cost matrix
+      weights: # Weights for cost matrix
+        dist: 0.5 # Distance weight
+        edge_angle: 1.0 # Edge angle weight
+        edge_length: 1.0 # Edge length weight
+        pca_dir: 0.0 # Principal Component Analysis direction weight (0.0 means no direction)
+        pca_aniso: 0.0 # Principal Component Analysis anisotropy weight (0.0 means no anisotropy)
+        edge_descriptor: 0.0 # Edge descriptor weight (0.0 means no descriptor)
+  filter_distance_threshold: 0.95 # Filter matches based on distance threshold
+  filter_angle_threshold: 0   # Filter matches based on dominant angle direction (in degrees)
+
       
 phase_cross_corr_settings:
   maximum_shift: 1.2
