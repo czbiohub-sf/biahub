@@ -12,7 +12,7 @@ from monai.transforms.spatial.array import Affine
 
 from biahub.cli import utils
 from biahub.cli.parsing import (
-    config_filepath,
+    config_filepaths,
     input_position_dirpaths,
     local,
     output_dirpath,
@@ -246,13 +246,13 @@ def _czyx_deskew_data(data, **kwargs):
 
 @click.command("deskew")
 @input_position_dirpaths()
-@config_filepath()
+@config_filepaths()
 @output_dirpath()
 @sbatch_filepath()
 @local()
 def deskew_cli(
     input_position_dirpaths: List[str],
-    config_filepath: str,
+    config_filepaths: list[str],
     output_dirpath: str,
     sbatch_filepath: str = None,
     local: bool = False,
@@ -269,7 +269,13 @@ def deskew_cli(
 
     # Convert string paths to Path objects
     output_dirpath = Path(output_dirpath)
-    config_filepath = Path(config_filepath)
+    if len(config_filepaths) == 1:
+        config_filepath = Path(config_filepaths[0])
+    else:
+        raise ValueError(
+            "Only one configuration file is supported for deskew. Please provide a single configuration file."
+        )
+
     slurm_out_path = output_dirpath.parent / "slurm_output"
 
     # Handle single position or wildcard filepath

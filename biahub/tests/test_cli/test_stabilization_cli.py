@@ -1,6 +1,9 @@
-from click.testing import CliRunner
 import pytest
+
+from click.testing import CliRunner
+
 from biahub.cli.main import cli
+
 
 # skip this test for now
 @pytest.mark.skip(reason="Skipping test_estimate_stabilization")

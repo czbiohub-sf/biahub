@@ -12,18 +12,18 @@ from iohub.ngff import open_ome_zarr
 from iohub.ngff.models import TransformationMeta
 
 from biahub.characterize_psf import detect_peaks, extract_beads
-from biahub.cli.parsing import config_filepath, input_position_dirpaths, output_dirpath
+from biahub.cli.parsing import config_filepaths, input_position_dirpaths, output_dirpath
 from biahub.cli.utils import yaml_to_model
 from biahub.settings import PsfFromBeadsSettings
 
 
 @click.command("estimate-psf")
 @input_position_dirpaths()
-@config_filepath()
+@config_filepaths()
 @output_dirpath()
 def estimate_psf_cli(
     input_position_dirpaths: List[str],
-    config_filepath: str,
+    config_filepaths: list[str],
     output_dirpath: str,
 ):
     """
@@ -33,7 +33,12 @@ def estimate_psf_cli(
     """
     # Convert string paths to Path objects
     output_dirpath = Path(output_dirpath)
-    config_filepath = Path(config_filepath)
+    if len(config_filepaths) == 1:
+        config_filepath = Path(config_filepaths[0])
+    else:
+        raise ValueError(
+            "Only one configuration file is supported for estimate_psf. Please provide a single configuration file."
+        )
 
     # Load the first position
     click.echo("Loading data...")

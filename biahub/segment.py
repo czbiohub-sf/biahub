@@ -11,7 +11,7 @@ from iohub.ngff.utils import create_empty_plate, process_single_position
 from biahub.cli import utils
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
-    config_filepath,
+    config_filepaths,
     input_position_dirpaths,
     local,
     output_dirpath,
@@ -100,13 +100,13 @@ def segment_data(
 
 @click.command("segment")
 @input_position_dirpaths()
-@config_filepath()
+@config_filepaths()
 @output_dirpath()
 @sbatch_filepath()
 @local()
 def segment_cli(
     input_position_dirpaths: list[str],
-    config_filepath: str,
+    config_filepaths: list[str],
     output_dirpath: str,
     sbatch_filepath: str | None = None,
     local: bool = False,
@@ -119,6 +119,13 @@ def segment_cli(
         -c ./segment_params.yml \
         -o ./output.zarr
     """
+
+    if len(config_filepaths) == 1:
+        config_filepath = Path(config_filepaths[0])
+    else:
+        raise ValueError(
+            "Only one configuration file is supported for segment. Please provide a single configuration file."
+        )
 
     # Convert string paths to Path objects
     output_dirpath = Path(output_dirpath)

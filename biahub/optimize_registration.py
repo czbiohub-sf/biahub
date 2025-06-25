@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import ants
 import click
 import napari
@@ -7,7 +9,7 @@ from iohub import open_ome_zarr
 from skimage import filters
 
 from biahub.cli.parsing import (
-    config_filepath,
+    config_filepaths,
     output_filepath,
     source_position_dirpaths,
     target_position_dirpaths,
@@ -112,7 +114,7 @@ def _optimize_registration(
 @click.command("optimize-registration")
 @source_position_dirpaths()
 @target_position_dirpaths()
-@config_filepath()
+@config_filepaths()
 @output_filepath()
 @click.option(
     "--display-viewer",
@@ -129,7 +131,7 @@ def _optimize_registration(
 def optimize_registration_cli(
     source_position_dirpaths,
     target_position_dirpaths,
-    config_filepath,
+    config_filepaths,
     output_filepath,
     display_viewer,
     optimizer_verbose,
@@ -141,6 +143,13 @@ def optimize_registration_cli(
 
     >> biahub optimize-registration -s ./acq_name_virtual_staining_reconstructed.zarr/0/0/0 -t ./acq_name_lightsheet_deskewed.zarr/0/0/0 -c ./transform.yml -o ./optimized_transform.yml -d -v
     """
+
+    if len(config_filepaths) == 1:
+        config_filepath = Path(config_filepaths[0])
+    else:
+        raise ValueError(
+            "Only one configuration file is supported for optimize_registration. Please provide a single configuration file."
+        )
 
     settings = yaml_to_model(config_filepath, RegistrationSettings)
     t_idx = settings.time_indices

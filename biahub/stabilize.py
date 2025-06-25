@@ -11,7 +11,7 @@ from scipy.linalg import svd
 from scipy.spatial.transform import Rotation as R
 
 from biahub.cli.parsing import (
-    config_filepath,
+    config_filepaths,
     input_position_dirpaths,
     local,
     output_dirpath,
@@ -88,7 +88,7 @@ def apply_stabilization_transform(
 def stabilize(
     input_position_dirpaths: List[str],
     output_dirpath: str,
-    config_filepath: str,
+    config_filepaths: list[str],
     sbatch_filepath: str = None,
     local: bool = False,
 ):
@@ -102,7 +102,7 @@ def stabilize(
     Parameters:
     - input_position_dirpaths (List[str]): List of file paths to the input OME-Zarr datasets for each position.
     - output_dirpath (str): Directory path to save the stabilized output dataset.
-    - config_filepath (str): Path to the YAML configuration file containing transformation settings.
+    - config_filepaths (list[str]): Paths to the YAML configuration files containing transformation settings.
     - sbatch_filepath (str, optional): Path to a SLURM sbatch file to override default SLURM settings. Defaults to None.
     - local (bool, optional): If True, runs the stabilization process locally instead of submitting to SLURM. Defaults to False.
 
@@ -123,24 +123,12 @@ def stabilize(
         --local                                 # Run locally instead of submitting to SLURM
 
     """
-    config_filepath = Path(config_filepath)
-    if config_filepath.is_dir():
-        # Directory with one config file per FOV
-        print(f"Config filepath is a directory: {config_filepath}")
-        per_position_settings = {}
-        for input_path in input_position_dirpaths:
-            fov_key = "_".join(input_path.parts[-3:])  # Adjust based on your folder naming
-            config_file = config_filepath / f"{fov_key}.yml"
-            if not config_file.exists():
-                raise FileNotFoundError(f"Expected config file for {fov_key} at {config_file}")
-            per_position_settings[input_path] = yaml_to_model(
-                config_file, StabilizationSettings
-            )
-        # Use the first position's settings for output metadata
-        settings = per_position_settings[input_position_dirpaths[0]]
-    else:
-        # Single config file for all FOVs
-        settings = yaml_to_model(config_filepath, StabilizationSettings)
+
+    # Single config file for all FOVs
+    if len(config_filepaths) == 1:
+        config_filepath = Path(config_filepaths[0])
+
+    settings = yaml_to_model(config_filepaths[0], StabilizationSettings)
 
     output_dirpath = Path(output_dirpath)
     slurm_out_path = output_dirpath.parent / "slurm_output"
@@ -269,9 +257,12 @@ def stabilize(
     with executor.batch():
         # apply stabilization to channels in the chosen channels and else copy the rest
         for input_position_path in input_position_dirpaths:
-            if config_filepath.is_dir():
-                settings = per_position_settings[input_position_path]
-                # Use settings for this FOV
+            if not config_filepath:
+                fov = "_".join(input_position_path.parts[-3:])
+                config_filepath = [p for p in config_filepaths if fov in p.name][0]
+
+            settings = yaml_to_model(config_filepath, StabilizationSettings)
+            # Use settings for this FOV
             combined_mats = np.array(settings.affine_transform_zyx_list)
             stabilize_zyx_args = {"list_of_shifts": combined_mats}
             for channel_name in channel_names:
@@ -315,13 +306,13 @@ def stabilize(
 @click.command("stabilize")
 @input_position_dirpaths()
 @output_dirpath()
-@config_filepath()
+@config_filepaths()
 @sbatch_filepath()
 @local()
 def stabilize_cli(
     input_position_dirpaths: List[str],
     output_dirpath: str,
-    config_filepath: str,
+    config_filepaths: list[str],
     sbatch_filepath: str = None,
     local: bool = False,
 ):
@@ -335,7 +326,7 @@ def stabilize_cli(
     Parameters:
     - input_position_dirpaths (List[str]): List of file paths to the input OME-Zarr datasets for each position.
     - output_dirpath (str): Directory path to save the stabilized output dataset.
-    - config_filepath (str): Path to the YAML configuration file containing transformation settings.
+    - config_filepaths (list[str]): Paths to the YAML configuration files containing transformation settings.
     - sbatch_filepath (str, optional): Path to a SLURM sbatch file to override default SLURM settings. Defaults to None.
     - local (bool, optional): If True, runs the stabilization process locally instead of submitting to SLURM. Defaults to False.
 
@@ -359,7 +350,7 @@ def stabilize_cli(
     stabilize(
         input_position_dirpaths=input_position_dirpaths,
         output_dirpath=output_dirpath,
-        config_filepath=config_filepath,
+        config_filepaths=config_filepaths,
         sbatch_filepath=sbatch_filepath,
         local=local,
     )

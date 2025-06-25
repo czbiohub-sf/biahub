@@ -11,7 +11,7 @@ from iohub.ngff.utils import create_empty_plate, process_single_position
 from natsort import natsorted
 
 from biahub.cli.parsing import (
-    config_filepath,
+    config_filepaths,
     local,
     output_dirpath,
     sbatch_filepath,
@@ -419,12 +419,12 @@ def concatenate(
 
 
 @click.command("concatenate")
-@config_filepath()
+@config_filepaths()
 @output_dirpath()
 @sbatch_filepath()
 @local()
 def concatenate_cli(
-    config_filepath: str,
+    config_filepaths: list[str],
     output_dirpath: str,
     sbatch_filepath: str = None,
     local: bool = False,
@@ -434,6 +434,13 @@ def concatenate_cli(
 
     >> biahub concatenate -c ./concat.yml -o ./output_concat.zarr -j 8
     """
+    if len(config_filepaths) == 1:
+        config_filepath = Path(config_filepaths[0])
+    else:
+        raise ValueError(
+            "Only one configuration file is supported for concatenate. Please provide a single configuration file."
+        )
+
     concatenate(
         settings=yaml_to_model(config_filepath, ConcatenateSettings),
         output_dirpath=Path(output_dirpath),

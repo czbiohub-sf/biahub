@@ -28,7 +28,7 @@ from scipy.signal import peak_widths
 
 import biahub.artefacts
 
-from biahub.cli.parsing import config_filepath, input_position_dirpaths, output_dirpath
+from biahub.cli.parsing import config_filepaths, input_position_dirpaths, output_dirpath
 from biahub.cli.utils import yaml_to_model
 from biahub.settings import CharacterizeSettings
 
@@ -791,11 +791,11 @@ def _characterize_psf(
 
 @click.command("characterize-psf")
 @input_position_dirpaths()
-@config_filepath()
+@config_filepaths()
 @output_dirpath()
 def characterize_psf_cli(
     input_position_dirpaths: List[str],
-    config_filepath: str,
+    config_filepaths: list[str],
     output_dirpath: str,
 ):
     """
@@ -805,6 +805,13 @@ def characterize_psf_cli(
     """
     if len(input_position_dirpaths) > 1:
         warnings.warn("Only the first position will be characterized.")
+
+    if len(config_filepaths) == 1:
+        config_filepath = Path(config_filepaths[0])
+    else:
+        raise ValueError(
+            "Only one configuration file is supported for characterize_psf. Please provide a single configuration file."
+        )
 
     # Read settings
     settings = yaml_to_model(config_filepath, CharacterizeSettings)

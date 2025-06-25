@@ -25,7 +25,7 @@ from waveorder.focus import focus_from_transverse_band
 
 from biahub.characterize_psf import detect_peaks
 from biahub.cli.parsing import (
-    config_filepath,
+    config_filepaths,
     local,
     output_filepath,
     sbatch_filepath,
@@ -2065,7 +2065,7 @@ def estimate_registration(
         save_transforms(
             model=model,
             transforms=transforms,
-            output_filepath_settings= output_filepath,
+            output_filepath_settings=output_filepath,
             output_filepath_plot=output_dir / "translation_plots" / "beads_registration.png",
             verbose=settings.verbose,
         )
@@ -2162,7 +2162,7 @@ def estimate_registration(
 @source_position_dirpaths()
 @target_position_dirpaths()
 @output_filepath()
-@config_filepath()
+@config_filepaths()
 @sbatch_filepath()
 @local()
 @click.option(
@@ -2184,7 +2184,7 @@ def estimate_registration_cli(
     source_position_dirpaths: list[str],
     target_position_dirpaths: list[str],
     output_filepath: str,
-    config_filepath: str,
+    config_filepaths: list[str],
     registration_target_channel: str,
     registration_source_channel: list[str],
     sbatch_filepath: str = None,
@@ -2239,6 +2239,13 @@ def estimate_registration_cli(
         --registration-source-channel "GFP"                # Names of source channel
         --registration-source-channel "mCherry"            # Names of another source channel
     """
+
+    if len(config_filepaths) == 1:
+        config_filepath = Path(config_filepaths[0])
+    else:
+        raise ValueError(
+            "Only one configuration file is supported for estimate_registration. Please provide a single configuration file."
+        )
 
     estimate_registration(
         source_position_dirpaths=source_position_dirpaths,
