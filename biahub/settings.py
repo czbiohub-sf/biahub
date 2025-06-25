@@ -333,7 +333,7 @@ class StabilizationSettings(MyBaseModel):
         return v
 
 
-class StitchSettings(MyBaseModel):
+class StitchSettings(BaseModel):
     channels: Optional[list[str]] = None
     total_translation: Optional[dict[str, list[float, float, float]]] = None
     affine_transform: Optional[dict[str, list]] = None
