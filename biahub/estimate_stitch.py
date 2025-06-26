@@ -54,7 +54,16 @@ def extract_stage_position(plate_dataset, position_name):
 @click.option("--flipud", is_flag=True, help="Flip images up-down before stitching")
 @click.option("--flipxy", is_flag=True, help="Flip images along the diagonal before stitching")
 @click.option(
-    "--optimize", is_flag=True, help="Optimize translations using phase cross-correlation"
+    "--pcc-channel-name",
+    default=None,
+    type=str,
+    help="Channel name to use for phase cross-correlation optimization (default: None, disables optimization)",
+)
+@click.option(
+    "--pcc-z-index",
+    default=0,
+    type=int,
+    help="Z slice index to use for phase cross-correlation optimization (default: 0)",
 )
 def estimate_stitch_cli(
     input_position_dirpaths: list[Path],
@@ -62,7 +71,8 @@ def estimate_stitch_cli(
     fliplr: bool,
     flipud: bool,
     flipxy: bool,
-    optimize: bool,
+    pcc_channel_name: str,
+    pcc_z_index: int,
 ):
     """
     Estimate stitching parameters for positions in wells of a zarr store.
@@ -72,7 +82,7 @@ def estimate_stitch_cli(
     saved in pixel units.
 
     This function estimates translations using metadata alone. More precise
-    translations require phase cross-correlation using `optimize-stitch`.
+    translations require phase cross-correlation using `--pcc-channel`.
 
     >>> biahub estimate-stitch -i ./input.zarr/*/*/* -o ./stitch_params.yml
     """
@@ -116,7 +126,8 @@ def estimate_stitch_cli(
         # Scale to pixel coordinates
         zyx_well_array /= open_ome_zarr(input_position_dirpaths[0]).scale[2:]
 
-        if optimize:
+        # Optimization using phase cross-correlation if pcc_channel is provided
+        if pcc_channel_name is not None:
             well_positions = grouped_wells[key]
             tile_lut = {t.split("/")[-1]: i for i, t in enumerate(well_positions)}
             initial_guess = {
@@ -125,7 +136,7 @@ def estimate_stitch_cli(
                     "j": zyx_well_array[:, 2],
                 }
             }
-
+            channel_index = open_ome_zarr(input_plate_path).get_channel_index(pcc_channel_name)
             edge_list, confidence_dict = pairwise_shifts(
                 well_positions,
                 input_plate_path,
@@ -133,8 +144,13 @@ def estimate_stitch_cli(
                 flipud=flipud,
                 fliplr=fliplr,
                 rot90=False,
-                overlap=300,
+                overlap=300,  # good default for pcc
+                channel_index=channel_index,
+                z_index=pcc_z_index,
             )
+            print("Confidence scores:")
+            for k, v in confidence_dict.items():
+                print(f"{v[0]}: {v[-1]:.2f}")
 
             opt_shift_dict = optimal_positions(
                 edge_list, tile_lut, key, tile_size=(2048, 2048), initial_guess=initial_guess
