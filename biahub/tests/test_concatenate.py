@@ -429,6 +429,7 @@ def test_concatenate_with_unique_positions(create_custom_plate, tmp_path, sbatch
     concatenate(
         settings=settings_unique,
         output_dirpath=output_path_unique,
+        sbatch_filepath=sbatch_file,
         local=True,
     )
 
