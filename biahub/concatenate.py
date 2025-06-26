@@ -403,6 +403,7 @@ def concatenate(
                 input_channel_indices=input_channel_idx,
                 output_channel_indices=output_channel_idx,
                 input_time_indices=input_time_indices,
+                output_time_indices=list(range(len(input_time_indices))),
                 num_processes=int(slurm_args["slurm_cpus_per_task"]),
                 **copy_n_paste_kwargs,
             )
