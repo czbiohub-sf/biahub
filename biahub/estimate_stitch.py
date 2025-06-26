@@ -5,6 +5,7 @@ import click
 import numpy as np
 
 from iohub import open_ome_zarr
+from stitch.stitch.tile import optimal_positions, pairwise_shifts
 
 from biahub.cli.parsing import input_position_dirpaths, output_filepath
 from biahub.cli.utils import model_to_yaml
@@ -52,12 +53,16 @@ def extract_stage_position(plate_dataset, position_name):
 @click.option("--fliplr", is_flag=True, help="Flip images left-right before stitching")
 @click.option("--flipud", is_flag=True, help="Flip images up-down before stitching")
 @click.option("--flipxy", is_flag=True, help="Flip images along the diagonal before stitching")
+@click.option(
+    "--optimize", is_flag=True, help="Optimize translations using phase cross-correlation"
+)
 def estimate_stitch_cli(
     input_position_dirpaths: list[Path],
     output_filepath: str,
     fliplr: bool,
     flipud: bool,
     flipxy: bool,
+    optimize: bool,
 ):
     """
     Estimate stitching parameters for positions in wells of a zarr store.
@@ -110,6 +115,32 @@ def estimate_stitch_cli(
 
         # Scale to pixel coordinates
         zyx_well_array /= open_ome_zarr(input_position_dirpaths[0]).scale[2:]
+
+        if optimize:
+            well_positions = grouped_wells[key]
+            tile_lut = {t.split("/")[-1]: i for i, t in enumerate(well_positions)}
+            initial_guess = {
+                key: {
+                    "i": zyx_well_array[:, 1],
+                    "j": zyx_well_array[:, 2],
+                }
+            }
+
+            edge_list, confidence_dict = pairwise_shifts(
+                well_positions,
+                input_plate_path,
+                key,
+                flipud=flipud,
+                fliplr=fliplr,
+                rot90=False,
+                overlap=300,
+            )
+
+            opt_shift_dict = optimal_positions(
+                edge_list, tile_lut, key, tile_size=(2048, 2048), initial_guess=initial_guess
+            )
+            zyx_well_array[:, 1] = [a[0] for a in opt_shift_dict.values()]
+            zyx_well_array[:, 2] = [a[1] for a in opt_shift_dict.values()]
 
         # Flip coordinates
         if fliplr:
