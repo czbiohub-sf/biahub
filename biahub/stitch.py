@@ -284,7 +284,7 @@ def stitch_cli(
         _ = output_position.create_zeros(
             "0",
             shape=output_shape,
-            chunks=output_chunk_size,
+            chunks=(1, 1, 10, output_chunk_size[-2], output_chunk_size[-1]),
             dtype=np.float16,
             transform=[TransformationMeta(type="scale", scale=output_scale)],
         )
