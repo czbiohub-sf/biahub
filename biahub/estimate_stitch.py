@@ -32,13 +32,16 @@ def extract_stage_position(plate_dataset, position_name):
                 pass
 
             # Read Z positions
+            
             try:
-                z_stage_name = stage_position["DefaultZStage"]
+                xy_stage_name = stage_position["DefaultXYStage"]
+                z_stage_name = stage_position['DefaultZStage']
+                non_z_devices = {xy_stage_name}
                 if "DevicePositions" in stage_position.keys():
+                    zpos = 0
                     for device in stage_position["DevicePositions"]:
-                        if device["Device"] == z_stage_name:
-                            zpos = device["Position_um"][0]
-                            break
+                        if device["Device"] not in non_z_devices:
+                            zpos+= device["Position_um"][0]     
                 else:
                     zpos = stage_position[z_stage_name]
             except KeyError:
