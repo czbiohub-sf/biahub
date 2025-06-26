@@ -776,7 +776,7 @@ def ants_registration(
     z_slice, y_slice, x_slice = find_overlapping_volume(
         target_data_tczyx.shape[-3:],
         source_data_tczyx.shape[-3:],
-        affine_transform_settings.approx_transform,
+        np.asarray(affine_transform_settings.approx_transform),
     )
 
     # # Crop 10% more to account for shifts during XYZ stabilization
@@ -789,12 +789,15 @@ def ants_registration(
         f"Y: {y_slice.start}:{y_slice.stop}, "
         f"X: {x_slice.start}:{x_slice.stop}"
     )
+    
     target_data_tczyx = target_data_tczyx[
-        :, target_channel_index, z_slice, y_slice, x_slice
+        :, :, z_slice, y_slice, x_slice
     ]  # Crop target channel
     source_data_tczyx = source_data_tczyx[
-        :, source_channel_index, z_slice, y_slice, x_slice
+        :, :, z_slice, y_slice, x_slice
     ]  # Crop source channel
+    click.echo(f"Cropped target channel shape: {target_data_tczyx.shape}")
+    click.echo(f"Cropped source channel shape: {source_data_tczyx.shape}")
 
     # Note: cropping is applied after registration with approx_tform
 
@@ -837,7 +840,7 @@ def ants_registration(
                 _optimize_registration,
                 source_data_tczyx[t],
                 target_data_tczyx[t],
-                initial_tform=affine_transform_settings.approx_transform,
+                initial_tform=np.asarray(affine_transform_settings.approx_transform),
                 source_channel_index=source_channel_index,
                 target_channel_index=target_channel_index,
                 z_slice=z_slice,
@@ -1507,6 +1510,7 @@ def detect_bead_peaks(
     source_peaks_settings: DetectPeaksSettings,
     target_peaks_settings: DetectPeaksSettings,
     verbose: bool = False,
+    filter_dirty_peaks: bool = True,
 ) -> tuple[ArrayLike, ArrayLike]:
     """
     Detect peaks in source and target channels using the detect_peaks function.
@@ -1523,7 +1527,8 @@ def detect_bead_peaks(
         Settings for the target peaks.
     verbose : bool
         If True, prints detailed logs during the process.
-
+    filter_dirty_peaks : bool
+        If True, filters the dirty peaks.
     Returns
     -------
     tuple[ArrayLike, ArrayLike]
@@ -1558,6 +1563,23 @@ def detect_bead_peaks(
     if len(source_peaks) < 2 or len(target_peaks) < 2:
         click.echo('Not enough beads detected')
         return
+    if filter_dirty_peaks:
+        print("Filtering dirty peaks")
+        with open_ome_zarr(Path("/hpc/projects/intracellular_dashboard/viral-sensor/dirty_on_mantis/lf_mask_2025_05_01_A549_DENV_sensor_DENV_T_9_0.zarr/C/1/000000")) as dirty_mask_ds:
+            dirty_mask_load = np.asarray(dirty_mask_ds.data[0, 0])
+
+        # filter the dirty peaks
+        # Keep only peaks whose (y, x) column is clean across all Z slices
+        target_peaks_filtered = []
+        for peak in target_peaks:
+            z, y, x = peak.astype(int)
+            if (
+                0 <= y < dirty_mask_load.shape[1] and
+                0 <= x < dirty_mask_load.shape[2] and
+                not dirty_mask_load[:, y, x].any()  # True if all Z are clean at (y, x)
+            ):
+                target_peaks_filtered.append(peak)
+        target_peaks = np.array(target_peaks_filtered)
     return source_peaks, target_peaks
 
 
