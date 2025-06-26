@@ -772,18 +772,23 @@ def ants_registration(
     """
     T, C, Z, Y, X = source_data_tczyx.shape
 
-    # # Crop only to the overlapping region, zero padding interfereces with registration
-    z_slice, y_slice, x_slice = find_overlapping_volume(
-        target_data_tczyx.shape[-3:],
-        source_data_tczyx.shape[-3:],
-        np.asarray(affine_transform_settings.approx_transform),
-    )
+    # # # Crop only to the overlapping region, zero padding interfereces with registration
+    # z_slice, y_slice, x_slice = find_overlapping_volume(
+    #     target_data_tczyx.shape[-3:],
+    #     source_data_tczyx.shape[-3:],
+    #     np.asarray(affine_transform_settings.approx_transform),
+    # )
 
-    # # Crop 10% more to account for shifts during XYZ stabilization
-    z_slice = slice(int(z_slice.start * 1.2), int(z_slice.stop * 0.8))
-    y_slice = slice(int(y_slice.start * 1.2), int(y_slice.stop * 0.8))
-    x_slice = slice(int(x_slice.start * 1.2), int(x_slice.stop * 0.8))
+    # # # Crop 10% more to account for shifts during XYZ stabilization
+    # z_slice = slice(int(z_slice.start * 1.2), int(z_slice.stop * 0.8))
+    # y_slice = slice(int(y_slice.start * 1.2), int(y_slice.stop * 0.8))
+    # x_slice = slice(int(x_slice.start * 1.2), int(x_slice.stop * 0.8))
 
+ 
+    z_slice = slice(9, 85)  # DEBUG
+    y_slice = slice(400, 1300)
+    x_slice = slice(200, -200)
+    
     click.echo(
         f"Cropping channels to Z: {z_slice.start}:{z_slice.stop}, "
         f"Y: {y_slice.start}:{y_slice.stop}, "
@@ -2117,7 +2122,7 @@ def estimate_registration(
                 verbose=settings.verbose,
             )
 
-        model = RegistrationSettings(
+        model = StabilizationSettings(
             stabilization_estimation_channel='',
             stabilization_type='xyz',
             stabilization_channels=registration_source_channels,
