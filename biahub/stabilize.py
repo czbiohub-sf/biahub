@@ -127,6 +127,8 @@ def stabilize(
     # Single config file for all FOVs
     if len(config_filepaths) == 1:
         config_filepath = Path(config_filepaths[0])
+    else:
+        config_filepath = None
 
     settings = yaml_to_model(config_filepaths[0], StabilizationSettings)
 
