@@ -3,7 +3,6 @@ import os
 from pathlib import Path
 
 import click
-import numpy as np
 import submitit
 import torch
 
@@ -14,7 +13,7 @@ from waveorder.cli.apply_inverse_transfer_function import (
 )
 from waveorder.cli.parsing import transfer_function_dirpath
 from waveorder.cli.settings import ReconstructionSettings
-from waveorder.cli.utils import create_empty_hcs_zarr
+from waveorder.cli.utils import create_empty_hcs_zarr, estimate_resources
 
 from biahub.cli.parsing import (
     config_filepath,
@@ -57,28 +56,15 @@ def apply_inverse_transfer_function(
         T, C, Z, Y, X = input_dataset["0"].shape
 
     settings = yaml_to_model(config_filepath, ReconstructionSettings)
-    gb_ram_request = 0
-    gb_per_element = 4 / 2**30  # bytes_per_float32 / bytes_per_gb
-    voxel_resource_multiplier = 4
-    fourier_resource_multiplier = 32
-    input_memory = Z * Y * X * gb_per_element
 
-    if settings.birefringence is not None:
-        gb_ram_request += input_memory * voxel_resource_multiplier
-    if settings.phase is not None:
-        gb_ram_request += input_memory * fourier_resource_multiplier
-    if settings.fluorescence is not None:
-        gb_ram_request += input_memory * fourier_resource_multiplier
-    ram_multiplier = 1
-    gb_ram_request = np.ceil(np.max([1, ram_multiplier * gb_ram_request])).astype(int)
-    cpu_request = np.min([32, num_processes])
+    num_cpus, gb_ram_per_cpu = estimate_resources([T, C, Z, Y, X], settings, num_processes)
     num_jobs = len(input_position_dirpaths)
 
     # Prepare and submit jobs
     click.echo(
         f"Preparing {num_jobs} job{'s, each with' if num_jobs > 1 else ' with'} "
-        f"{cpu_request} CPU{'s' if cpu_request > 1 else ''} and "
-        f"{gb_ram_request} GB of memory per CPU."
+        f"{num_cpus} CPU{'s' if num_cpus > 1 else ''} and "
+        f"{gb_ram_per_cpu} GB of memory per CPU."
     )
 
     name_without_ext = os.path.splitext(Path(output_dirpath).name)[0]
@@ -91,8 +77,8 @@ def apply_inverse_transfer_function(
 
     slurm_args = {
         "slurm_job_name": "apply-inverse-transfer-function",
-        "slurm_mem_per_cpu": f"{gb_ram_request}G",
-        "slurm_cpus_per_task": cpu_request,
+        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
+        "slurm_cpus_per_task": num_cpus,
         "slurm_time": 60,
         "slurm_partition": "preempted",
         "slurm_use_srun": False,
