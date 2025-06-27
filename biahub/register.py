@@ -349,14 +349,18 @@ def find_overlapping_volume(
 
     ants_composed_matrix = convert_transform_to_ants(transformation_matrix)
 
-    # Apply affine
+    # Now apply the transform using this grid
     registered_zyx = ants_composed_matrix.apply_to_image(
         zyx_data_ants, reference=target_zyx_ants
     )
-
     if method == "LIR":
-        print("Starting Largest interior rectangle (LIR) search")
-        Z_slice, Y_slice, X_slice = find_lir(registered_zyx.numpy(), plot=plot)
+        click.echo("Starting Largest interior rectangle (LIR) search")
+        # This is the *real* overlap mask
+        mask = (registered_zyx.numpy() > 0) & (target_zyx_ants.numpy() > 0)
+
+        # Now pass the mask to LIR (or call find_largest_valid_box)
+        Z_slice, Y_slice, X_slice = find_lir(mask.astype(np.uint8), plot=plot)
+
     else:
         raise ValueError(f"Unknown method {method}")
 

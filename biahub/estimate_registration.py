@@ -717,6 +717,21 @@ def user_assisted_registration(
     return tform
 
 
+def shrink_slice(s: slice, shrink_fraction: float = 0.1, min_width: int = 5) -> slice:
+    start = s.start or 0
+    stop = s.stop or 0
+    length = stop - start
+    if length <= min_width:
+        return slice(start, stop)
+
+    shrink = int(length * shrink_fraction)
+    new_start = start + shrink
+    new_stop = stop - shrink
+    if new_stop <= new_start:
+        return slice(start, stop)
+    return slice(new_start, new_stop)
+
+
 def ants_registration(
     source_data_tczyx: da.Array,
     target_data_tczyx: da.Array,
@@ -772,29 +787,23 @@ def ants_registration(
     """
     T, C, Z, Y, X = source_data_tczyx.shape
 
-    # # # Crop only to the overlapping region, zero padding interfereces with registration
-    # z_slice, y_slice, x_slice = find_overlapping_volume(
-    #     target_data_tczyx.shape[-3:],
-    #     source_data_tczyx.shape[-3:],
-    #     np.asarray(affine_transform_settings.approx_transform),
-    # )
+    # # Crop only to the overlapping region, zero padding interfereces with registration
+    z_slice, y_slice, x_slice = find_overlapping_volume(
+        source_data_tczyx.shape[-3:],
+        target_data_tczyx.shape[-3:],
+        np.asarray(affine_transform_settings.approx_transform),
+    )
 
-    # # # Crop 10% more to account for shifts during XYZ stabilization
-    # z_slice = slice(int(z_slice.start * 1.2), int(z_slice.stop * 0.8))
-    # y_slice = slice(int(y_slice.start * 1.2), int(y_slice.stop * 0.8))
-    # x_slice = slice(int(x_slice.start * 1.2), int(x_slice.stop * 0.8))
+    z_slice = shrink_slice(z_slice)
+    y_slice = shrink_slice(y_slice)
+    x_slice = shrink_slice(x_slice)
 
- 
-    z_slice = slice(9, 85)  # DEBUG
-    y_slice = slice(400, 1300)
-    x_slice = slice(200, -200)
-    
     click.echo(
         f"Cropping channels to Z: {z_slice.start}:{z_slice.stop}, "
         f"Y: {y_slice.start}:{y_slice.stop}, "
         f"X: {x_slice.start}:{x_slice.stop}"
     )
-    
+
     target_data_tczyx = target_data_tczyx[
         :, :, z_slice, y_slice, x_slice
     ]  # Crop target channel
@@ -1515,7 +1524,7 @@ def detect_bead_peaks(
     source_peaks_settings: DetectPeaksSettings,
     target_peaks_settings: DetectPeaksSettings,
     verbose: bool = False,
-    filter_dirty_peaks: bool = True,
+    filter_dirty_peaks: bool = False,
 ) -> tuple[ArrayLike, ArrayLike]:
     """
     Detect peaks in source and target channels using the detect_peaks function.
@@ -1570,7 +1579,11 @@ def detect_bead_peaks(
         return
     if filter_dirty_peaks:
         print("Filtering dirty peaks")
-        with open_ome_zarr(Path("/hpc/projects/intracellular_dashboard/viral-sensor/dirty_on_mantis/lf_mask_2025_05_01_A549_DENV_sensor_DENV_T_9_0.zarr/C/1/000000")) as dirty_mask_ds:
+        with open_ome_zarr(
+            Path(
+                "/hpc/projects/intracellular_dashboard/viral-sensor/dirty_on_mantis/lf_mask_2025_05_01_A549_DENV_sensor_DENV_T_9_0.zarr/C/1/000000"
+            )
+        ) as dirty_mask_ds:
             dirty_mask_load = np.asarray(dirty_mask_ds.data[0, 0])
 
         # filter the dirty peaks
@@ -1579,9 +1592,9 @@ def detect_bead_peaks(
         for peak in target_peaks:
             z, y, x = peak.astype(int)
             if (
-                0 <= y < dirty_mask_load.shape[1] and
-                0 <= x < dirty_mask_load.shape[2] and
-                not dirty_mask_load[:, y, x].any()  # True if all Z are clean at (y, x)
+                0 <= y < dirty_mask_load.shape[1]
+                and 0 <= x < dirty_mask_load.shape[2]
+                and not dirty_mask_load[:, y, x].any()  # True if all Z are clean at (y, x)
             ):
                 target_peaks_filtered.append(peak)
         target_peaks = np.array(target_peaks_filtered)
