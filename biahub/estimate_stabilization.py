@@ -538,7 +538,7 @@ def estimate_xyz_stabilization_with_beads(
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,
         "slurm_time": 30,
-        "slurm_partition": "gpu",
+        "slurm_partition": "preempted",
     }
 
     if sbatch_filepath:
@@ -760,7 +760,7 @@ def estimate_xy_stabilization(
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,
         "slurm_time": 10,
-        "slurm_partition": "cpu",
+        "slurm_partition": "preempted",
     }
 
     if sbatch_filepath:
@@ -1021,7 +1021,7 @@ def estimate_z_stabilization(
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,
         "slurm_time": 30,
-        "slurm_partition": "cpu",
+        "slurm_partition": "preempted",
     }
 
     if sbatch_filepath:
