@@ -31,30 +31,7 @@ ls_data_path = root_path / f"light-sheet/raw/0-deskew/{dataset}.zarr" / fov
 
 visualize = True
 
-# %% Load data
-with open_ome_zarr(lf_data_path) as target_ds:
-    target_channel_name = target_ds.channel_names
-    target_channel_index = target_ds.channel_names.index(config['target_channel_name'])
-    target_data = np.asarray(target_ds.data[t_idx, target_channel_index]) # take phase channel
-    target_scale = target_ds.scale
-
-with open_ome_zarr(ls_data_path) as source_ds:
-    source_channel_name = source_ds.channel_names
-    source_channel_index = source_channel_name.index(config['source_channel_name'])
-    source_data = np.asarray(source_ds.data[t_idx, source_channel_index]) # take mCherry channel or the GFP channel (depending where the beads are)
-    source_scale = source_ds.scale
-
-# Register LS data with approx tranform
-source_data_ants = ants.from_numpy(source_data)
-target_data_ants = ants.from_numpy(target_data)
-
-source_data_reg_ants = convert_transform_to_ants(np.asarray(config['affine_transform_settings']['approx_transform'])).apply_to_image(
-    source_data_ants, reference=target_data_ants
-)
-source_data_reg = source_data_reg_ants.numpy()
-
-#%%
-
+# %%
 config_dict = {
     "target_channel_name": "Phase3D",
     "source_channel_name": "GFP EX488 EM525-45",
@@ -79,7 +56,7 @@ config_dict = {
         },
         "hungarian_match_settings": {
             "distance_metric": "euclidean",
-            "cost_threshold": 0.3,
+            "cost_threshold": 0.1,
             "cross_check": True,
             "max_ratio": 1,
             "edge_graph_settings": {
@@ -89,17 +66,17 @@ config_dict = {
             "cost_matrix_settings": {
                 "normalize": False,
                 "weights": {
-                    "dist": 0.5,
-                    "edge_angle": 1.0,
-                    "edge_length": 1.0,
-                    "pca_dir": 0.0,
-                    "pca_aniso": 0.0,
-                    "edge_descriptor": 0.0
+                    "dist": 0.2,
+                    "edge_angle": 0.2,
+                    "edge_length": 0.2,
+                    "pca_dir": 0.2,
+                    "pca_aniso": 0.2,
+                    "edge_descriptor": 0.2
                 }
             }
         },
         "filter_distance_threshold": 0.95,
-        "filter_angle_threshold": 30
+        "filter_angle_threshold": 0,
     },
     "affine_transform_settings": {
         "transform_type": "similarity",
@@ -114,6 +91,29 @@ config_dict = {
     "verbose": True
 }
 config = EstimateRegistrationSettings(**config_dict)
+
+# %% Load data
+with open_ome_zarr(lf_data_path) as target_ds:
+    target_channel_name = target_ds.channel_names
+    target_channel_index = target_ds.channel_names.index(config.target_channel_name)
+    target_data = np.asarray(target_ds.data[t_idx, target_channel_index]) # take phase channel
+    target_scale = target_ds.scale
+
+with open_ome_zarr(ls_data_path) as source_ds:
+    source_channel_name = source_ds.channel_names
+    source_channel_index = source_channel_name.index(config.source_channel_name)
+    source_data = np.asarray(source_ds.data[t_idx, source_channel_index]) # take mCherry channel or the GFP channel (depending where the beads are)
+    source_scale = source_ds.scale
+
+# Register LS data with approx tranform
+source_data_ants = ants.from_numpy(source_data)
+target_data_ants = ants.from_numpy(target_data)
+
+source_data_reg_ants = convert_transform_to_ants(np.asarray(config.affine_transform_settings.approx_transform)).apply_to_image(
+    source_data_ants, reference=target_data_ants
+)
+source_data_reg = source_data_reg_ants.numpy()
+
 
 
 # %%
