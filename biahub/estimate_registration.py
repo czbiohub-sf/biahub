@@ -718,6 +718,27 @@ def user_assisted_registration(
 
 
 def shrink_slice(s: slice, shrink_fraction: float = 0.1, min_width: int = 5) -> slice:
+    """
+    Shrink a slice by a fraction of its length.
+    
+    Parameters
+    ----------
+    s : slice
+        The slice to shrink.
+    shrink_fraction : float
+        The fraction of the slice to shrink.
+    min_width : int
+        The minimum width of the slice.
+    
+    Returns
+    -------
+    slice
+        The shrunk slice.
+    Notes
+    -----
+    If the slice is too small, return the original slice.
+    
+    """
     start = s.start or 0
     stop = s.stop or 0
     length = stop - start
