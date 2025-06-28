@@ -13,7 +13,7 @@ from waveorder.models.isotropic_fluorescent_thick_3d import apply_inverse_transf
 
 from biahub.cli.parsing import (
     _str_to_path,
-    config_filepath,
+    config_filepaths,
     input_position_dirpaths,
     local,
     output_dirpath,
@@ -73,14 +73,14 @@ def deconvolve(
     callback=_str_to_path,
     help="Path to psf.zarr",
 )
-@config_filepath()
+@config_filepaths()
 @output_dirpath()
 @sbatch_filepath()
 @local()
 def deconvolve_cli(
     input_position_dirpaths: List[str],
     psf_dirpath: str,
-    config_filepath: str,
+    config_filepaths: list[str],
     output_dirpath: str,
     sbatch_filepath: str = None,
     local: bool = False,
@@ -92,7 +92,12 @@ def deconvolve_cli(
     """
     # Convert string paths to Path objects
     output_dirpath = Path(output_dirpath)
-    config_filepath = Path(config_filepath)
+    if len(config_filepaths) == 1:
+        config_filepath = Path(config_filepaths[0])
+    else:
+        raise ValueError(
+            "Only one configuration file is supported for deconvolve. Please provide a single configuration file."
+        )
     slurm_out_path = output_dirpath.parent / "slurm_output"
     transfer_function_store_path = output_dirpath.parent / "transfer_function.zarr"
     output_position_paths = get_output_paths(input_position_dirpaths, output_dirpath)
@@ -140,7 +145,7 @@ def deconvolve_cli(
 
     # Estimate resources
     num_cpus, gb_ram_per_cpu = estimate_resources(
-        shape=[T, C, Z, Y, X], ram_multiplier=10, max_num_cpus=16
+        shape=[T, C, Z, Y, X], ram_multiplier=16, max_num_cpus=16
     )
     # Prepare SLURM arguments
     slurm_args = {
