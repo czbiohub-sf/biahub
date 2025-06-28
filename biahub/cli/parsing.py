@@ -42,7 +42,7 @@ def _validate_and_process_config_paths(ctx, opt, value: tuple[str, ...]) -> list
             raise click.BadParameter(f"Path does not exist: {p}")
         if not p.is_file():
             raise click.BadParameter(f"Expected a file, not a directory: {p}")
-        if p.suffix.lower() != ".yml":
+        if p.suffix.lower() not in [".yml", ".yaml"]:
             raise click.BadParameter(f"Expected a .yml file, got: {p}")
         validated.append(p)
     return validated
