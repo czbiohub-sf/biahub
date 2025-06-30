@@ -95,9 +95,10 @@ class BeadsMatchSettings(MyBaseModel):
 
 
 class PhaseCrossCorrSettings(MyBaseModel):
-    maximum_shift: float = 1.2
     normalization: bool = False
     t_reference: Literal["first", "previous"] = "first"
+    skip_beads_fov: str = "0"
+    crop_size_xy: list[int, int] = [800, 800]
 
 
 class FocusFindingSettings(MyBaseModel):
