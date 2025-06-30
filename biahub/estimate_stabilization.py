@@ -254,7 +254,7 @@ def get_tform_from_pcc(
     source_channel_tzyx: da.Array,
     target_channel_tzyx: da.Array,
     verbose: bool = False,
-) -> ArrayLike:
+) -> Tuple[ArrayLike, Tuple[int, int, int]]:
     """
     Get the transformation matrix from phase cross correlation.
 
@@ -280,14 +280,15 @@ def get_tform_from_pcc(
 
         shift = phase_cross_corr(target, source)
         if verbose:
-            click.echo(f"Time {t}: shift = {shift}")
+            click.echo(f"Time {t}: shift (dz,dy,dx) = {shift[0]}, {shift[1]}, {shift[2]}")
 
     except Exception as e:
         click.echo(f"Failed PCC at time {t}: {e}")
-        return None
+        return np.eye(4), (0.0, 0.0, 0.0)
+
 
     dz, dy, dx = shift
-
+    
     transform = np.eye(4)
     # Set the translation components of the transform
 
@@ -295,12 +296,13 @@ def get_tform_from_pcc(
     transform[1, 3] = dy
     transform[2, 3] = dz
 
-    return transform
+    return transform, shift
 
 
 def estimate_xyz_stabilization_pcc_per_position(
     input_position_dirpath: Path,
     output_folder_path: Path,
+    output_shifts_path: Path,
     channel_index: int,
     crop_size_xy: list[int],
     t_reference: str = "first",
@@ -331,12 +333,17 @@ def estimate_xyz_stabilization_pcc_per_position(
     """
     with open_ome_zarr(input_position_dirpath) as input_position:
         channel_tzyx = input_position.data.dask_array()[:, channel_index]
-        T, _, Y, X = channel_tzyx.shape
+        T, Z, Y, X = channel_tzyx.shape
 
-        x_idx = slice(X // 2 - crop_size_xy[0] // 2, X // 2 + crop_size_xy[0] // 2)
-        y_idx = slice(Y // 2 - crop_size_xy[1] // 2, Y // 2 + crop_size_xy[1] // 2)
+        if crop_size_xy:
+            x_idx = slice(X // 2 - crop_size_xy[0] // 2, X // 2 + crop_size_xy[0] // 2)
+            y_idx = slice(Y // 2 - crop_size_xy[1] // 2, Y // 2 + crop_size_xy[1] // 2)
+        else:
+            x_idx = slice(0, X)
+            y_idx = slice(0, Y)
 
         channel_tzyx_cropped = channel_tzyx[:, :, y_idx, x_idx]
+        
         if t_reference == "first":
             target_channel_tzyx = np.broadcast_to(
                 channel_tzyx_cropped[0], channel_tzyx_cropped.shape
@@ -347,19 +354,21 @@ def estimate_xyz_stabilization_pcc_per_position(
         source_channel_tzyx = channel_tzyx_cropped
 
         transforms = []
+        shifts = []
+
         for t in range(T):
             click.echo(f"Estimating PCC for timepoint {t}")
             if t == 0:
                 transforms.append(np.eye(4).tolist())
             else:
-                transforms.append(
-                    get_tform_from_pcc(
+                transform, shift = get_tform_from_pcc(
                         t,
                         source_channel_tzyx,
                         target_channel_tzyx,
-                        verbose=verbose,
-                    )
+                        verbose=verbose
                 )
+                transforms.append(transform)
+                shifts.append((t, *shift))
             click.echo(f"Transform for timepoint {t}: {transforms[-1]}")
 
         position_filename = str(Path(*input_position_dirpath.parts[-3:])).replace("/", "_")
@@ -367,6 +376,14 @@ def estimate_xyz_stabilization_pcc_per_position(
             output_folder_path / f"{position_filename}.npy",
             np.array(transforms, dtype=np.float32),
         )
+        # save the shifts as a csv
+        shifts_df = pd.DataFrame(shifts, columns=["TimepointID", "ShiftZ", "ShiftY", "ShiftX"])
+        shifts_df["TimepointID"] = shifts_df["TimepointID"].astype(int)
+        shifts_df["ShiftZ"] = shifts_df["ShiftZ"].astype(float)
+        shifts_df["ShiftY"] = shifts_df["ShiftY"].astype(float)
+        shifts_df["ShiftX"] = shifts_df["ShiftX"].astype(float)
+        shifts_df.to_csv(output_shifts_path / f"{position_filename}.csv", index=False)
+
         click.echo(f"Saved transforms for {position_filename}.")
 
     return transforms
@@ -417,10 +434,10 @@ def estimate_xyz_stabilization_pcc(
 
     with open_ome_zarr(input_position_dirpaths[0]) as dataset:
         shape = dataset.data.shape
-        T, C, Y, X = shape
+        T, C, Z, Y, X = shape
 
     num_cpus, gb_ram_per_cpu = estimate_resources(
-        shape=(T, C, Y, X), ram_multiplier=16, max_num_cpus=16
+        shape=(T, C, Z, Y, X), ram_multiplier=16, max_num_cpus=16
     )
 
     slurm_args = {
@@ -428,7 +445,7 @@ def estimate_xyz_stabilization_pcc(
         "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,
-        "slurm_time": 10,
+        "slurm_time": 60,
         "slurm_partition": "preempted",
     }
 
@@ -441,6 +458,8 @@ def estimate_xyz_stabilization_pcc(
     click.echo(f"Submitting SLURM xyz PCC jobs with resources: {slurm_args}")
     transforms_out_path = output_folder_path / "transforms_per_position"
     transforms_out_path.mkdir(parents=True, exist_ok=True)
+    shifts_out_path = output_folder_path / "shifts_per_position"
+    shifts_out_path.mkdir(parents=True, exist_ok=True)
 
     jobs = []
     with executor.batch():
@@ -449,6 +468,7 @@ def estimate_xyz_stabilization_pcc(
                 estimate_xyz_stabilization_pcc_per_position,
                 input_position_dirpath=input_position_dirpath,
                 output_folder_path=transforms_out_path,
+                output_shifts_path=shifts_out_path,
                 channel_index=channel_index,
                 crop_size_xy=phase_cross_corr_settings.crop_size_xy,
                 t_reference=phase_cross_corr_settings.t_reference,
