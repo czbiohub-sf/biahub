@@ -180,6 +180,19 @@ def local() -> Callable:
     return decorator
 
 
+def monitor() -> Callable:
+    def decorator(f: Callable) -> Callable:
+        return click.option(
+            "--monitor",
+            "-m",
+            is_flag=True,
+            default=False,
+            help="Monitor of submitted SLURM jobs.",
+        )(f)
+
+    return decorator
+
+
 def num_processes() -> Callable:
     def decorator(f: Callable) -> Callable:
         return click.option(
