@@ -15,13 +15,13 @@ from iohub import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate
 from skimage.registration import phase_cross_correlation
 
+from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
     config_filepath,
     input_position_dirpaths,
     monitor,
     output_dirpath,
 )
-from biahub.cli.monitor import monitor_jobs
 from biahub.cli.utils import process_single_position_v2, yaml_to_model
 from biahub.register import convert_transform_to_ants
 from biahub.settings import ProcessingSettings, StitchSettings
@@ -920,7 +920,9 @@ def stitch_cli(
         executor.update_parameters(**slurm_args)
         cleanup_jobs.append(executor.submit(shutil.rmtree, shifted_store_path))
 
-    job_ids = [job.job_id for job in stitch_jobs + shift_jobs + temp_zarr_job_ids + cleanup_jobs]
+    job_ids = [
+        job.job_id for job in stitch_jobs + shift_jobs + temp_zarr_job_ids + cleanup_jobs
+    ]
     log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))

@@ -6,13 +6,8 @@ import submitit
 
 from iohub import open_ome_zarr
 
-from biahub.cli.parsing import (
-    input_position_dirpaths,
-    local,
-    monitor,
-    output_filepath,
-)
 from biahub.cli.monitor import monitor_jobs
+from biahub.cli.parsing import input_position_dirpaths, local, monitor, output_filepath
 from biahub.cli.utils import model_to_yaml
 from biahub.settings import ProcessingSettings, StitchSettings
 from biahub.stitch import (
