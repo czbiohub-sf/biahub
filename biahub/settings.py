@@ -23,6 +23,8 @@ from pydantic import (
 class MyBaseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+class DatasetSettings(MyBaseModel):
+    pass
 
 class DetectPeaksSettings(MyBaseModel):
     threshold_abs: float = 110
