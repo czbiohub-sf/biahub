@@ -15,10 +15,12 @@ from waveorder.cli.parsing import transfer_function_dirpath
 from waveorder.cli.settings import ReconstructionSettings
 from waveorder.cli.utils import create_empty_hcs_zarr, estimate_resources
 
+from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
     config_filepath,
     input_position_dirpaths,
     local,
+    monitor,
     num_processes,
     output_dirpath,
     sbatch_filepath,
@@ -34,7 +36,8 @@ def apply_inverse_transfer_function(
     output_dirpath: Path,
     num_processes: int,
     sbatch_filepath: Path,
-    local: bool,
+    local: bool = False,
+    monitor: bool = True,
 ) -> None:
 
     output_metadata = get_reconstruction_output_metadata(
@@ -118,6 +121,9 @@ def apply_inverse_transfer_function(
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
 
+    if monitor:
+        monitor_jobs(jobs, input_position_dirpaths)
+
 
 @click.command("apply-inv-tf")
 @input_position_dirpaths()
@@ -127,6 +133,7 @@ def apply_inverse_transfer_function(
 @num_processes()
 @sbatch_filepath()
 @local()
+@monitor()
 def apply_inverse_transfer_function_cli(
     input_position_dirpaths: list[Path],
     transfer_function_dirpath: Path,
@@ -135,6 +142,7 @@ def apply_inverse_transfer_function_cli(
     num_processes: int,
     sbatch_filepath: Path,
     local: bool = False,
+    monitor: bool = True,
 ):
     """
     Apply an inverse transfer function to a dataset using a configuration file.
@@ -149,13 +157,14 @@ def apply_inverse_transfer_function_cli(
     >> biahub apply-inv-tf -i ./input.zarr/*/*/* -t ./transfer-function.zarr -c /examples/birefringence.yml -o ./output.zarr
     """
     apply_inverse_transfer_function(
-        input_position_dirpaths,
-        transfer_function_dirpath,
-        config_filepath,
-        output_dirpath,
-        num_processes,
-        sbatch_filepath,
-        local,
+        input_position_dirpaths=input_position_dirpaths,
+        transfer_function_dirpath=transfer_function_dirpath,
+        config_filepath=config_filepath,
+        output_dirpath=output_dirpath,
+        num_processes=num_processes,
+        sbatch_filepath=sbatch_filepath,
+        local=local,
+        monitor=monitor,
     )
 
 

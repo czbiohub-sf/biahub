@@ -11,10 +11,12 @@ from iohub.ngff.utils import process_single_position
 from monai.transforms.spatial.array import Affine
 
 from biahub.cli import utils
+from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
     config_filepath,
     input_position_dirpaths,
     local,
+    monitor,
     output_dirpath,
     sbatch_filepath,
     sbatch_to_submitit,
@@ -250,12 +252,14 @@ def _czyx_deskew_data(data, **kwargs):
 @output_dirpath()
 @sbatch_filepath()
 @local()
+@monitor()
 def deskew_cli(
     input_position_dirpaths: List[str],
     config_filepath: str,
     output_dirpath: str,
     sbatch_filepath: str = None,
     local: bool = False,
+    monitor: bool = True,
 ):
     """
     Deskew a single position across T and C axes using a configuration file
@@ -354,12 +358,14 @@ def deskew_cli(
                 )
             )
 
-    # monitor_jobs(jobs, input_position_dirpaths)
     job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 
     log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
+
+    if monitor:
+        monitor_jobs(jobs, input_position_dirpaths)
 
 
 if __name__ == "__main__":

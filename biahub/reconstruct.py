@@ -11,6 +11,7 @@ from biahub.cli.parsing import (
     config_filepath,
     input_position_dirpaths,
     local,
+    monitor,
     num_processes,
     output_dirpath,
     sbatch_filepath,
@@ -24,6 +25,7 @@ from biahub.cli.parsing import (
 @num_processes()
 @sbatch_filepath()
 @local()
+@monitor()
 def reconstruct_cli(
     input_position_dirpaths: list[Path],
     config_filepath: Path,
@@ -31,6 +33,7 @@ def reconstruct_cli(
     num_processes: int,
     sbatch_filepath: Path,
     local: bool = False,
+    monitor: bool = True,
 ):
     """
     Reconstruct a dataset using a configuration file. This is a
@@ -70,6 +73,7 @@ def reconstruct_cli(
         num_processes,
         sbatch_filepath,
         local,
+        monitor,
     )
 
 
