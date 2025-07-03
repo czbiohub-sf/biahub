@@ -1,10 +1,12 @@
 import warnings
 
+from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import torch
 
+from iohub import open_ome_zarr
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -16,9 +18,6 @@ from pydantic import (
     model_validator,
     validator,
 )
-from pathlib import Path
-from iohub import open_ome_zarr
-
 
 
 # All settings classes inherit from MyBaseModel, which forbids extra parameters to guard against typos
@@ -32,10 +31,11 @@ class ProcessingFunctions(MyBaseModel):
     kwargs: Dict[str, Any] = {}
     per_timepoint: bool = True
 
+
 class ProcessingInputChannel(MyBaseModel):
     path: Union[str, None] = None
     channels: Dict[str, List[ProcessingFunctions]]
-    
+
     @field_validator("path")
     @classmethod
     def validate_path_not_plate(cls, v):
@@ -43,12 +43,14 @@ class ProcessingInputChannel(MyBaseModel):
             return v
         try:
             v = Path(v)
-            with open_ome_zarr(v, mode='r') as dataset:
+            with open_ome_zarr(v, mode='r'):
                 pass
-        except:
+        except Exception as e:
+            print(e)
             raise ValueError(f"Path {v} is not a valid OME-Zarr path")
 
         return v
+
 
 class TrackingSettings(MyBaseModel):
     target_channel: str = "nuclei_prediction"

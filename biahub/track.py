@@ -1,6 +1,7 @@
 import ast
 import os
 
+from glob import glob
 from pathlib import Path
 from typing import Dict, List, Tuple, Union
 
@@ -15,7 +16,6 @@ from iohub import open_ome_zarr
 from numpy.typing import ArrayLike
 from ultrack import MainConfig, Tracker
 from ultrack.utils.array import array_apply
-from glob import glob
 
 from biahub.cli.parsing import (
     config_filepath,
@@ -835,13 +835,15 @@ def track(
 
     settings = yaml_to_model(config_filepath, TrackingSettings)
 
-    input_images_paths = [image.path for image in settings.input_images if image.path is not None]
+    input_images_paths = [
+        image.path for image in settings.input_images if image.path is not None
+    ]
     if len(input_images_paths) < 1:
         raise ValueError("No input_images_paths provided")
     fov = settings.fov
-    
+
     # check if all input_images_paths have the same position keys
-    input_position_dirpaths = [Path(p) for p in glob(str(input_images_paths[0] / fov))] 
+    input_position_dirpaths = [Path(p) for p in glob(str(input_images_paths[0] / fov))]
     position_keys = [p.parts[-3:] for p in input_position_dirpaths]
 
     tracking_cfg = settings.tracking_config
