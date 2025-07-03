@@ -1,18 +1,20 @@
 # Tracking mode: either "2D" (uses projected Z-slices) or "3D" (full volumetric).
 mode: "2D"
 
+fov: "*/*/*"
 # Z-slice range to extract. Use [0, 0] to auto-compute a centered slice.
 z_slices: [0, 0]
 
 # Name of the target channel used to name the tracking output label channel.
 target_channel: nuclei_prediction
+blank_frames_path: blank_frames.csv
 
 # Input image configurations.
 # Each entry defines one dataset with its path and channels to process.
 input_images:
 
   # First input: predicted nuclei and membrane channels.
-  - path: /path/to/virtual_staining.zarr/*/*/*
+  - path: /path/to/virtual_staining.zarr
     channels:
       nuclei_prediction:
         # Z-projection using mean intensity
@@ -37,7 +39,7 @@ input_images:
             gamma: 0.7
 
   # # Optional: load label masks directly with or without processing.
-  # - path: /path/to/segmentation.zarr/*/*/*
+  # - path: /path/to/segmentation.zarr
   #   channels:
   #     nuclei_prediction_labels: []
 

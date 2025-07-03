@@ -15,10 +15,10 @@ from iohub import open_ome_zarr
 from numpy.typing import ArrayLike
 from ultrack import MainConfig, Tracker
 from ultrack.utils.array import array_apply
+from glob import glob
 
 from biahub.cli.parsing import (
     config_filepath,
-    input_position_dirpaths,
     local,
     output_dirpath,
     sbatch_filepath,
@@ -566,8 +566,8 @@ def load_data(
     for image in input_images:
         for channel_name, _ in image.channels.items():
             # load the data from the zarr path
-            click.echo(f"Loading data for channel: {channel_name}")
             if image.path is not None:
+                click.echo(f"Loading data for channel {channel_name} from {image.path}")
                 image_path = image.path / Path(*position_key)
                 dataset, image_channel_names, _, _ = read_data(zarr_path=image_path)
                 data_dict[channel_name] = dataset.data.dask_array()[
@@ -788,10 +788,8 @@ def track_one_position(
 def track(
     output_dirpath: str,
     config_filepath: str,
-    input_position_dirpaths: List[str],
     sbatch_filepath: str = None,
     local: bool = None,
-    blank_frames_path: str = None,
 ) -> None:
     """
     Launch tracking jobs for multiple imaging positions using foreground and contour data.
@@ -805,15 +803,11 @@ def track(
         Path to the Zarr store where output labeled segmentations and track data will be saved.
     config_filepath : str
         Path to the YAML configuration file containing tracking and preprocessing settings.
-    input_position_dirpaths : list of str
-        List of directory paths (one per FOV) pointing to input Zarr datasets to be processed.
     sbatch_filepath : str, optional
         Path to a SLURM batch script to override default SLURM job parameters. If not provided,
         defaults for CPUs, memory, and parallelism are used.
     local : bool, optional
         If True, runs all tracking jobs sequentially on the local machine instead of submitting via SLURM.
-    blank_frames_path : str, optional
-        Path to a CSV file specifying which frames are blank and should be filled per FOV.
 
     Returns
     -------
@@ -832,16 +826,24 @@ def track(
     >>> track(
     ...     output_dirpath="output.zarr",
     ...     config_filepath="config_tracking.yml",
-    ...     input_position_dirpaths=["input.zarr/A/1/1", "input.zarr/A/1/2"],
     ...     sbatch_filepath="track_job.sbatch",
     ...     local=False,
-    ...     blank_frames_path="blank_frames.csv"
     ... )
     """
 
     output_dirpath = Path(output_dirpath)
 
     settings = yaml_to_model(config_filepath, TrackingSettings)
+
+    input_images_paths = [image.path for image in settings.input_images if image.path is not None]
+    if len(input_images_paths) < 1:
+        raise ValueError("No input_images_paths provided")
+    fov = settings.fov
+    
+    # check if all input_images_paths have the same position keys
+    input_position_dirpaths = [Path(p) for p in glob(str(input_images_paths[0] / fov))] 
+    position_keys = [p.parts[-3:] for p in input_position_dirpaths]
+
     tracking_cfg = settings.tracking_config
 
     # Get the shape of the data
@@ -872,7 +874,7 @@ def track(
     # Create the output zarr mirroring input_position_dirpaths
     create_empty_hcs_zarr(
         store_path=output_dirpath,
-        position_keys=[p.parts[-3:] for p in input_position_dirpaths],
+        position_keys=position_keys,
         **output_metadata,
     )
 
@@ -921,15 +923,14 @@ def track(
     jobs = []
 
     with executor.batch():
-        for input_position_path in input_position_dirpaths:
-            position_key = input_position_path.parts[-3:]
+        for position_key in position_keys:
             job = executor.submit(
                 track_one_position,
                 position_key=position_key,
                 output_dirpath=output_dirpath,
                 tracking_config=tracking_cfg,
                 input_images=settings.input_images,
-                blank_frames_path=blank_frames_path,
+                blank_frames_path=settings.blank_frames_path,
                 z_slices=z_slices,
                 scale=track_scale,
             )
@@ -944,26 +945,15 @@ def track(
 
 
 @click.command("track")
-@input_position_dirpaths()
 @output_dirpath()
 @config_filepath()
 @sbatch_filepath()
 @local()
-@click.option(
-    "--blank_frames_path",
-    "-f",
-    required=False,
-    default=None,
-    type=str,
-    help="Path to blank frame CSV file, if available.",
-)
 def track_cli(
-    input_position_dirpaths: List[str],
     output_dirpath: str,
     config_filepath: str,
     sbatch_filepath: str = None,
     local: bool = None,
-    blank_frames_path: str = None,
 ) -> None:
 
     """
@@ -975,17 +965,15 @@ def track_cli(
 
     Example usage:
 
-    biahub track -i virtual_staining.zarr/*/*/* -o output.zarr -c config_tracking.yml -f blank_frames.csv
+    biahub track -i virtual_staining.zarr/*/*/* -o output.zarr -c config_tracking.yml
 
     """
 
     track(
         output_dirpath=output_dirpath,
         config_filepath=config_filepath,
-        input_position_dirpaths=input_position_dirpaths,
         sbatch_filepath=sbatch_filepath,
         local=local,
-        blank_frames_path=blank_frames_path,
     )
 
 
