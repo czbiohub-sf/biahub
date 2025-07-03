@@ -338,11 +338,11 @@ def concatenate(
             import zarr
             import zarrs  # noqa: F401
 
-            zarr.config.set({"codec_pipeline.path": "zarrs.ZarrsCodecPipeline"})
-        except ImportError:
-            warnings.warning(
-                "zarrs is not installed. Writing sharded array will be very slow."
+            zarr.config.set(
+                {"codec_pipeline.path": "zarrs.ZarrsCodecPipeline", "threading.max_workers": 1}
             )
+        except ImportError:
+            warnings.warn("zarrs is not installed. Writing sharded array will be very slow.")
 
     # Logic for creation of zarr and metadata
     output_metadata = {
