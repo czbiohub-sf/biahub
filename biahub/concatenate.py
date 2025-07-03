@@ -1,5 +1,6 @@
 import glob
 import os
+import warnings
 
 from pathlib import Path
 
@@ -332,10 +333,23 @@ def concatenate(
     else:
         chunk_size = settings.chunks_czyx
 
+    if settings.shards_ratio is not None:
+        try:
+            import zarr
+            import zarrs  # noqa: F401
+
+            zarr.config.set(
+                {"codec_pipeline.path": "zarrs.ZarrsCodecPipeline", "threading.max_workers": 1}
+            )
+        except ImportError:
+            warnings.warn("zarrs is not installed. Writing sharded array will be very slow.")
+
     # Logic for creation of zarr and metadata
     output_metadata = {
         "shape": (len(input_time_indices), len(all_channel_names)) + tuple(cropped_shape_zyx),
         "chunks": chunk_size,
+        "shards_ratio": settings.shards_ratio,
+        "version": settings.output_ome_zarr_version,
         "scale": (1,) * 2 + tuple(output_voxel_size),
         "channel_names": all_channel_names,
         "dtype": dtype,
@@ -378,38 +392,39 @@ def concatenate(
     click.echo("Submitting SLURM jobs...")
     jobs = []
 
-    with executor.batch():
-        for i, (
-            input_position_path,
-            output_position_path,
-            input_channel_idx,
-            output_channel_idx,
-            zyx_slicing_params,
-        ) in enumerate(
-            zip(
-                all_data_paths,
-                output_position_paths_list,
-                input_channel_idx_list,
-                output_channel_idx_list,
-                all_slicing_params,
-            )
-        ):
-            # Create slicing parameters for this specific path
-            copy_n_paste_kwargs = {"zyx_slicing_params": zyx_slicing_params}
+    with submitit.helpers.clean_env():
+        with executor.batch():
+            for i, (
+                input_position_path,
+                output_position_path,
+                input_channel_idx,
+                output_channel_idx,
+                zyx_slicing_params,
+            ) in enumerate(
+                zip(
+                    all_data_paths,
+                    output_position_paths_list,
+                    input_channel_idx_list,
+                    output_channel_idx_list,
+                    all_slicing_params,
+                )
+            ):
+                # Create slicing parameters for this specific path
+                copy_n_paste_kwargs = {"zyx_slicing_params": zyx_slicing_params}
 
-            job = executor.submit(
-                process_single_position,
-                copy_n_paste,
-                input_position_path=input_position_path,
-                output_position_path=output_position_path,
-                input_channel_indices=input_channel_idx,
-                output_channel_indices=output_channel_idx,
-                input_time_indices=input_time_indices,
-                output_time_indices=list(range(len(input_time_indices))),
-                num_processes=int(slurm_args["slurm_cpus_per_task"]),
-                **copy_n_paste_kwargs,
-            )
-            jobs.append(job)
+                job = executor.submit(
+                    process_single_position,
+                    copy_n_paste,
+                    input_position_path=input_position_path,
+                    output_position_path=output_position_path,
+                    input_channel_indices=input_channel_idx,
+                    output_channel_indices=output_channel_idx,
+                    input_time_indices=input_time_indices,
+                    output_time_indices=list(range(len(input_time_indices))),
+                    num_processes=int(slurm_args["slurm_cpus_per_task"]),
+                    **copy_n_paste_kwargs,
+                )
+                jobs.append(job)
 
     # monitor_jobs(jobs, all_data_paths)
 

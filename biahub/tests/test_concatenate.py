@@ -1,3 +1,5 @@
+import pytest
+
 from iohub import open_ome_zarr
 
 from biahub.concatenate import concatenate
@@ -204,7 +206,8 @@ def test_concatenate_with_cropping(create_custom_plate, tmp_path, sbatch_file):
     assert output_X == x_end - x_start
 
 
-def test_concatenate_with_custom_chunks(create_custom_plate, tmp_path, sbatch_file):
+@pytest.mark.parametrize("version", ["0.4", "0.5"])
+def test_concatenate_with_custom_chunks(create_custom_plate, tmp_path, sbatch_file, version):
     """
     Test concatenating with custom chunk sizes
     """
@@ -227,13 +230,19 @@ def test_concatenate_with_custom_chunks(create_custom_plate, tmp_path, sbatch_fi
     )
 
     # Define custom chunk sizes
-    custom_chunks = [1, 2, 4, 3]  # [C, Z, Y, X]
+    chunks = [1, 1, 2, 4, 3]  # [C, Z, Y, X]
+    if version == "0.5":
+        shards_ratio = [1, 1, 1, 2, 2]
+    elif version == "0.4":
+        shards_ratio = None
 
     settings = ConcatenateSettings(
         concat_data_paths=[str(plate_1_path) + "/*/*/*", str(plate_2_path) + "/*/*/*"],
         channel_names=['all', 'all'],
         time_indices='all',
-        chunks_czyx=custom_chunks,
+        chunks_czyx=chunks[1:],
+        shards_ratio=shards_ratio,
+        output_ome_zarr_version=version,
     )
 
     output_path = tmp_path / "output.zarr"
@@ -244,8 +253,11 @@ def test_concatenate_with_custom_chunks(create_custom_plate, tmp_path, sbatch_fi
         local=True,
     )
 
-    # We can't easily check the chunks directly, but we can verify the operation completed successfully
     output_plate = open_ome_zarr(output_path)
+    for pos_name, pos in output_plate.positions():
+        assert pos.data.chunks == tuple(chunks)
+        if version == "0.5":
+            assert pos.data.shards == tuple(c * s for c, s in zip(chunks, shards_ratio))
 
     # Check that the output plate has all the channels from the input plates
     output_channels = output_plate.channel_names
