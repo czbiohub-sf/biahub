@@ -1,6 +1,4 @@
 import shutil
-import subprocess
-import time
 
 from pathlib import Path
 
@@ -19,24 +17,10 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
+from biahub.cli.slurm import wait_for_jobs_to_finish
 from biahub.cli.utils import estimate_resources, model_to_yaml, yaml_to_model
 from biahub.register import find_lir
 from biahub.settings import ConcatenateSettings
-
-
-def wait_for_jobs_to_finish(job_ids, sleep_time=60):
-    """Wait for SLURM jobs to finish."""
-    print(f"Waiting for jobs: {', '.join(job_ids)} to finish...")
-    while True:
-        result = subprocess.run(
-            ["squeue", "--job", ",".join(job_ids)], stdout=subprocess.PIPE, text=True
-        )
-        if len(result.stdout.strip().split("\n")) <= 1:  # No jobs found
-            print("All jobs completed.")
-            break
-        else:
-            print("Jobs still running...")
-            time.sleep(sleep_time)  # Wait sleep_time seconds before checking again
 
 
 def estimate_crop_one_position(
