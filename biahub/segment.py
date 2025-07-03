@@ -1,3 +1,5 @@
+import warnings
+
 from pathlib import Path
 
 import click
@@ -27,10 +29,8 @@ def segment_data(
     segmentation_models: dict,
     gpu: bool = True,
 ) -> np.ndarray:
-    from cellpose import models
-
     """
-    Segment a CZYX image using a Cellpose segmentation model
+    Segment a CZYX image using Cellpose segmentation models.
 
     Parameters
     ----------
@@ -46,8 +46,8 @@ def segment_data(
     np.ndarray
         A CZYX segmentation image
     """
+    from cellpose import models
 
-    # Segmenetation in cpu or gpu
     if gpu:
         try:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -59,19 +59,35 @@ def segment_data(
 
     click.echo(f"Using device: {device}")
 
+    # Pre-load unique models to avoid redundant loading
+    unique_models = {}
+    for model_name, model_args in segmentation_models.items():
+        model_path = model_args.path_to_model
+        if model_path not in unique_models:
+            click.echo(f"Loading model: {model_path}")
+            unique_models[model_path] = models.CellposeModel(
+                gpu=gpu, device=device, pretrained_model=model_path
+            )
+
     czyx_segmentation = []
-    # Process each model in a loop
-    for i, (model_name, model_args) in enumerate(segmentation_models.items()):
-        click.echo(f"Segmenting with model {model_name}")
+
+    # Process each model
+    for model_name, model_args in segmentation_models.items():
+        click.echo(f"Starting segmentation with model {model_name}")
+
+        # Extract the data we need for this model 2D or 3D
         z_slice_2D = model_args.z_slice_2D
-        czyx_data_to_segment = (
-            czyx_data[:, z_slice_2D : z_slice_2D + 1] if z_slice_2D is not None else czyx_data
-        )
-        # Apply preprocessing functions
-        preprocessing_functions = model_args.preprocessing
-        for preproc in preprocessing_functions:
+        if z_slice_2D is not None:
+            czyx_data_to_segment = czyx_data[:, z_slice_2D].copy()
+            z_axis = None
+        else:
+            czyx_data_to_segment = czyx_data.copy()
+            z_axis = 1
+        click.echo(f"Segmenting {model_name} with z_axis {z_axis}")
+        # Apply preprocessing specific to this model
+        for preproc in model_args.preprocessing:
             func = preproc.function
-            kwargs = preproc.kwargs
+            kwargs = preproc.kwargs.copy()
             c_idx = preproc.channel
 
             # Convert list to tuple for out_range if needed
@@ -81,21 +97,37 @@ def segment_data(
             click.echo(
                 f"Processing with {func.__name__} with kwargs {kwargs} to channel {c_idx}"
             )
-            czyx_data[c_idx] = func(czyx_data[c_idx], **kwargs)
+            czyx_data_to_segment[c_idx] = func(czyx_data_to_segment[c_idx], **kwargs)
 
-        # Apply the segmentation
-        model = models.CellposeModel(
-            model_type=model_args.path_to_model, gpu=gpu, device=device
+        # Prepare cellpose input
+        cellpose_czyx = np.zeros(
+            (3, *czyx_data_to_segment.shape[1:]), dtype=czyx_data_to_segment.dtype
         )
+        for i, channel in enumerate(model_args.channels):
+            if channel is not None:
+                cellpose_czyx[i] = czyx_data_to_segment[channel]
+
+        # Get pre-loaded model and run segmentation
+        click.echo(f"Running segmentation for {model_args.path_to_model}")
+        model = unique_models[model_args.path_to_model]
         segmentation, _, _ = model.eval(
-            czyx_data_to_segment, channel_axis=0, z_axis=1, **model_args.eval_args
-        )  # noqa: python-no-eval
+            cellpose_czyx, channel_axis=0, z_axis=z_axis, **model_args.eval_args
+        )
+
+        # Handle 2D output formatting
         if z_slice_2D is not None and isinstance(z_slice_2D, int):
             segmentation = segmentation[np.newaxis, ...]
-        czyx_segmentation.append(segmentation)
-    czyx_segmentation = np.stack(czyx_segmentation, axis=0)
 
-    return czyx_segmentation
+        czyx_segmentation.append(segmentation)
+
+        # Clean up intermediate arrays
+        del cellpose_czyx, czyx_data_to_segment
+
+    # Clean up GPU memory
+    if gpu and device.type == 'cuda':
+        torch.cuda.empty_cache()
+
+    return np.stack(czyx_segmentation, axis=0)
 
 
 @click.command("segment")
@@ -147,23 +179,24 @@ def segment_cli(
         if model_args.z_slice_2D is not None and isinstance(model_args.z_slice_2D, int):
             Z = 1
         # Ensure channel names exist in the dataset
-        if not all(channel in channel_names for channel in model_args.eval_args["channels"]):
+        if not all(channel in channel_names for channel in model_args.channels):
             raise ValueError(
-                f"Channels {model_args.eval_args['channels']} not found in dataset {channel_names}"
+                f"Channels {model_args.channels} not found in dataset {channel_names}"
             )
-        # Channel strings to indices with the cellpose offset of 1
-        model_args.eval_args["channels"] = [
-            channel_names.index(channel) + 1 for channel in model_args.eval_args["channels"]
-        ]
-        # NOTE:List of channels, either of length 2 or of length number of images by 2.
-        # First element of list is the channel to segment (0=grayscale, 1=red, 2=green, 3=blue).
-        # Second element of list is the optional nuclear channel (0=none, 1=red, 2=green, 3=blue).
-        if len(model_args.eval_args["channels"]) < 2:
-            model_args.eval_args["channels"].append(0)
+        # Channel strings to indices to be used in cellpose. Hiding this from the
+        model_args.channels = [channel_names.index(channel) for channel in model_args.channels]
+        # NOTE: Cellpose requires 3 channels. If the channels list is less than 3, the first channel is repeated.
 
-        click.echo(
-            f"Segmenting with model {model_name} using channels {model_args.eval_args['channels']}"
-        )
+        if len(model_args.channels) < 3:
+            model_args.channels.extend(
+                [model_args.channels[0]] * (3 - len(model_args.channels))
+            )
+        else:
+            warnings.warn(
+                f"Model {model_name} has more than 3 channels. Only the first 3 channels will be used."
+            )
+
+        click.echo(f"Segmenting {model_name} using channels {model_args.channels}")
         if (
             "anisotropy" not in model_args.eval_args
             or model_args.eval_args["anisotropy"] is None
@@ -200,17 +233,17 @@ def segment_cli(
     )
 
     # Estimate resources
-    num_cpus, gb_ram_request = estimate_resources(shape=segmentation_shape, ram_multiplier=20)
+    num_cpus, gb_ram_request = estimate_resources(shape=segmentation_shape, ram_multiplier=10)
     num_gpus = 1
-    slurm_time = np.ceil(np.max([80, T * 2.5])).astype(int)
-    slurm_array_parallelism = 100
+    slurm_time = np.ceil(np.max([120, T * Z * 10])).astype(int)
+    slurm_array_parallelism = 9
     # Prepare SLURM arguments
     slurm_args = {
         "slurm_job_name": "segment",
         "slurm_gres": f"gpu:{num_gpus}",
         "slurm_mem_per_cpu": f"{gb_ram_request}G",
-        "slurm_cpus_per_task": np.max([int(20 * 1.3), num_cpus]),
-        "slurm_array_parallelism": slurm_array_parallelism,  # process up to 20 positions at a time
+        "slurm_cpus_per_task": np.max([int(slurm_array_parallelism * 2), num_cpus]),
+        "slurm_array_parallelism": slurm_array_parallelism,
         "slurm_time": slurm_time,
         "slurm_partition": "gpu",
     }
@@ -236,12 +269,12 @@ def segment_cli(
             jobs.append(
                 executor.submit(
                     process_single_position,
-                    segment_data,
-                    input_position_path,
-                    output_position_path,
+                    func=segment_data,
+                    input_position_path=input_position_path,
+                    output_position_path=output_position_path,
                     input_channel_indices=[list(range(C))],
                     output_channel_indices=[list(range(C_segment))],
-                    num_processes=np.min([20, int(num_cpus * 0.8)]),
+                    num_processes=np.min([slurm_array_parallelism, int(num_cpus * 0.8)]),
                     segmentation_models=segment_args,
                 )
             )
