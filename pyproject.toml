@@ -56,7 +56,7 @@ dev = [
 ]
 
 segmentation = [
-  "cellpose>=4.0.4",
+  "cellpose>=4.0.5",
 ]
 
 build = ["build", "twine"]
