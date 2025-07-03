@@ -413,15 +413,17 @@ class SegmentationModel(BaseModel):
 
     @field_validator("z_slice_2D")
     @classmethod
-    def check_z_slice_with_do_3D(cls, z_slice_2D, values):
+    def check_z_slice_with_do_3D(cls, z_slice_2D, info):
         # Only run this check if z_slice is provided (not None) and do_3D exists in eval_args
         if z_slice_2D is not None:
-            eval_args = values.get("eval_args", {})
-            do_3D = eval_args.get("do_3D", None)
-            if do_3D:
-                raise ValueError(
-                    "If 'z_slice_2D' is provided, 'do_3D' in 'eval_args' must be set to False."
-                )
+            # In Pydantic v2, we need to access the data differently
+            if hasattr(info, 'data') and 'eval_args' in info.data:
+                eval_args = info.data['eval_args']
+                do_3D = eval_args.get("do_3D", None)
+                if do_3D:
+                    raise ValueError(
+                        "If 'z_slice_2D' is provided, 'do_3D' in 'eval_args' must be set to False."
+                    )
             z_slice_2D = 0
 
         return z_slice_2D

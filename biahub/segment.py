@@ -66,9 +66,12 @@ def segment_data(
     for i, (model_name, model_args) in enumerate(segmentation_models.items()):
         click.echo(f"Segmenting with model {model_name}")
         z_slice_2D = model_args.z_slice_2D
-        czyx_data_to_segment = (
-            czyx_data[:, z_slice_2D : z_slice_2D + 1] if z_slice_2D is not None else czyx_data
-        )
+        if z_slice_2D is not None:
+            czyx_data_to_segment = czyx_data[:, z_slice_2D]
+            z_axis = None
+        else:
+            czyx_data_to_segment = czyx_data
+            z_axis = 1
         # Apply preprocessing functions
         preprocessing_functions = model_args.preprocessing
         for preproc in preprocessing_functions:
@@ -98,7 +101,7 @@ def segment_data(
             gpu=gpu, device=device, pretrained_model=model_args.path_to_model
         )
         segmentation, _, _ = model.eval(
-            cellpose_czyx, channel_axis=0, z_axis=1, **model_args.eval_args
+            cellpose_czyx, channel_axis=0, z_axis=z_axis, **model_args.eval_args
         )
         if z_slice_2D is not None and isinstance(z_slice_2D, int):
             segmentation = segmentation[np.newaxis, ...]
