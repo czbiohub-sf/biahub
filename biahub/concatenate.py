@@ -1,5 +1,6 @@
 import glob
 import os
+import warnings
 
 from pathlib import Path
 
@@ -332,10 +333,23 @@ def concatenate(
     else:
         chunk_size = settings.chunks_czyx
 
+    if settings.shards_ratio is not None:
+        try:
+            import zarr
+            import zarrs  # noqa: F401
+
+            zarr.config.set({"codec_pipeline.path": "zarrs.ZarrsCodecPipeline"})
+        except ImportError:
+            warnings.warning(
+                "zarrs is not installed. Writing sharded array will be very slow."
+            )
+
     # Logic for creation of zarr and metadata
     output_metadata = {
         "shape": (len(input_time_indices), len(all_channel_names)) + tuple(cropped_shape_zyx),
         "chunks": chunk_size,
+        "shards_ratio": settings.shards_ratio,
+        "version": settings.output_ome_zarr_version,
         "scale": (1,) * 2 + tuple(output_voxel_size),
         "channel_names": all_channel_names,
         "dtype": dtype,
