@@ -34,12 +34,18 @@ def estimate_crop_one_position(
 
     Parameters
     ----------
-    lf_mask : ndarray
-        TCZYX boolean mask of phase data.
-    fluor_data : ndarray
-        TCZYX boolean mask of fluorescence data.
-    phase_mask_radius : float
+    lf_dir : Path
+        Path to the phase channel.
+    ls_dir : Path
+        Path to the fluorescence channel.
+    lf_mask_radius : float
         Radius of the circular mask which will be applied to the phase channel. If None, no masking will be applied
+    output_dir : Path
+        Path to save the output CSV file.
+    Returns
+    -------
+    tuple
+        Tuple of slices for Z, Y, and X dimensions.
 
     """
     fov = "/".join(lf_dir.parts[-3:])
@@ -69,9 +75,6 @@ def estimate_crop_one_position(
     )
 
     # Create a mask to find time points and channels where any data is non-zero
-    # valid_mask = np.any(data, axis=(2, 3, 4))
-    # valid_T, valid_C = np.where(valid_mask)
-
     volume = np.sum(data, axis=(2, 3, 4))  # more robust selection
     median_volume = np.median(volume)
     valid_T, valid_C = np.where(
@@ -95,11 +98,12 @@ def estimate_crop_one_position(
             )
 
         lf_mask = np.zeros(lf_mask.shape[-2:], dtype=bool)
+
         y, x = np.ogrid[: lf_mask.shape[-2], : lf_mask.shape[-1]]
         center = (lf_mask.shape[-2] // 2, lf_mask.shape[-1] // 2)
         radius = int(lf_mask_radius * min(center))
-        lf_mask[(x - center[0]) ** 2 + (y - center[1]) ** 2 <= radius**2] = True
 
+        lf_mask[(x - center[0]) ** 2 + (y - center[1]) ** 2 <= radius**2] = True
         lf_mask_cropped = lf_mask[: _max_zyx_dims[1], : _max_zyx_dims[2]]
         combined_mask = combined_mask * lf_mask_cropped
 
@@ -133,19 +137,7 @@ def estimate_crop_one_position(
         [x_slice.start, x_slice.stop],
     )
 
-
-@click.command("estimate-crop")
-@config_filepath()
-@output_filepath()
-@sbatch_filepath()
-@local()
-@click.option(
-    "--lf-mask-radius",
-    type=float,
-    help="(Optional) Radius of the circular mask given as fraction of image width to apply to the phase channel.",
-    required=False,
-)
-def estimate_crop_cli(
+def estimate_crop(
     config_filepath: str,
     output_filepath: str,
     lf_mask_radius: float = 0.95,
@@ -162,9 +154,14 @@ def estimate_crop_cli(
         This file will be replicated in the output with modified XYZ slicing parametrs.
     output_filepath : str
         Path to save the output config file.
-    phase_mask_radius : float
+    lf_mask_radius : float
         Radius of the circular mask given as fraction of image width to apply to the phase channel.
         A good value if 0.95.
+    sbatch_filepath : str
+        Path to a SLURM submission script.
+    local : bool
+        If True, run the jobs locally.
+
     """
     if config_filepath.suffix not in [".yml", ".yaml"]:
         raise ValueError("Config file must be a yaml file")
@@ -274,6 +271,52 @@ def estimate_crop_cli(
 
     shutil.rmtree(output_path_csv)
     click.echo("Done.")
+
+
+@click.command("estimate-crop")
+@config_filepath()
+@output_filepath()
+@sbatch_filepath()
+@local()
+@click.option(
+    "--lf-mask-radius",
+    type=float,
+    help="(Optional) Radius of the circular mask given as fraction of image width to apply to the phase channel.",
+    required=False,
+)
+def estimate_crop_cli(
+    config_filepath: str,
+    output_filepath: str,
+    lf_mask_radius: float = 0.95,
+    sbatch_filepath: str = None,
+    local: bool = False,
+):
+    """
+    Estimate a crop region where both phase and fluorescene volumes are non-zero.
+
+    Parameters:
+    ----------
+    config_filepath : str
+        Path to a yaml ConcatenateSettings file.
+        This file will be replicated in the output with modified XYZ slicing parametrs.
+    output_filepath : str
+        Path to save the output config file.
+    lf_mask_radius : float
+        Radius of the circular mask given as fraction of image width to apply to the phase channel.
+        A good value if 0.95.
+    sbatch_filepath : str
+        Path to a SLURM submission script.
+    local : bool
+        If True, run the jobs locally.
+
+    """
+    estimate_crop(
+        config_filepath=config_filepath,
+        output_filepath=output_filepath,
+        lf_mask_radius=lf_mask_radius,
+        sbatch_filepath=sbatch_filepath,
+        local=local,
+    )
 
 
 if __name__ == "__main__":
