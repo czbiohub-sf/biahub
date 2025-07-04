@@ -670,7 +670,6 @@ def data_preprocessing(
     ((10, 5, 256, 256), (10, 5, 256, 256))
     """
     fov = "_".join(position_key)
-    click.echo(f"Processing FOV: {fov.replace('_', '/')}")
     data_dict = load_data(
         position_key=position_key,
         input_images=input_images,
