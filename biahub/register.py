@@ -12,7 +12,7 @@ import submitit
 from iohub import open_ome_zarr
 
 from biahub.cli.parsing import (
-    config_filepath,
+    config_filepaths,
     local,
     output_dirpath,
     sbatch_filepath,
@@ -349,14 +349,18 @@ def find_overlapping_volume(
 
     ants_composed_matrix = convert_transform_to_ants(transformation_matrix)
 
-    # Apply affine
+    # Now apply the transform using this grid
     registered_zyx = ants_composed_matrix.apply_to_image(
         zyx_data_ants, reference=target_zyx_ants
     )
-
     if method == "LIR":
-        print("Starting Largest interior rectangle (LIR) search")
-        Z_slice, Y_slice, X_slice = find_lir(registered_zyx.numpy(), plot=plot)
+        click.echo("Starting Largest interior rectangle (LIR) search")
+        # This is the *real* overlap mask
+        mask = (registered_zyx.numpy() > 0) & (target_zyx_ants.numpy() > 0)
+
+        # Now pass the mask to LIR (or call find_largest_valid_box)
+        Z_slice, Y_slice, X_slice = find_lir(mask.astype(np.uint8), plot=plot)
+
     else:
         raise ValueError(f"Unknown method {method}")
 
@@ -370,14 +374,14 @@ def rescale_voxel_size(affine_matrix, input_scale):
 @click.command("register")
 @source_position_dirpaths()
 @target_position_dirpaths()
-@config_filepath()
+@config_filepaths()
 @output_dirpath()
 @local()
 @sbatch_filepath()
 def register_cli(
     source_position_dirpaths: List[str],
     target_position_dirpaths: List[str],
-    config_filepath: str,
+    config_filepaths: list[str],
     output_dirpath: str,
     local: bool,
     sbatch_filepath: Path,
@@ -392,7 +396,13 @@ def register_cli(
 
     # Convert string paths to Path objects
     output_dirpath = Path(output_dirpath)
-    config_filepath = Path(config_filepath)
+
+    if len(config_filepaths) == 1:
+        config_filepath = Path(config_filepaths[0])
+    else:
+        raise ValueError(
+            "Only one configuration file is supported for register. Please provide a single configuration file."
+        )
 
     # Parse from the yaml file
     settings = yaml_to_model(config_filepath, RegistrationSettings)

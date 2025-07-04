@@ -15,7 +15,7 @@ from iohub import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate
 from skimage.registration import phase_cross_correlation
 
-from biahub.cli.parsing import config_filepath, input_position_dirpaths, output_dirpath
+from biahub.cli.parsing import config_filepaths, input_position_dirpaths, output_dirpath
 from biahub.cli.utils import process_single_position_v2, yaml_to_model
 from biahub.register import convert_transform_to_ants
 from biahub.settings import ProcessingSettings, StitchSettings
@@ -673,7 +673,7 @@ def compute_total_translation(csv_filepath: str) -> pd.DataFrame:
 @click.command("stitch")
 @input_position_dirpaths()
 @output_dirpath()
-@config_filepath()
+@config_filepaths()
 @click.option(
     "--temp-path",
     type=click.Path(exists=True, file_okay=False, dir_okay=True),
@@ -684,7 +684,7 @@ def compute_total_translation(csv_filepath: str) -> pd.DataFrame:
 def stitch_cli(
     input_position_dirpaths: list[Path],
     output_dirpath: str,
-    config_filepath: str,
+    config_filepaths: list[str],
     temp_path: str,
     debug: bool,
 ) -> None:
@@ -693,6 +693,13 @@ def stitch_cli(
 
     >>> biahub stitch -i ./input.zarr/*/*/* -c ./stitch_params.yml -o ./output.zarr --temp-path /hpc/scratch/group.comp.micro/
     """
+    if len(config_filepaths) == 1:
+        config_filepath = Path(config_filepaths[0])
+    else:
+        raise ValueError(
+            "Only one configuration file is supported for stitch. Please provide a single configuration file."
+        )
+
     slurm_out_path = Path(output_dirpath).parent / "slurm_output"
     dataset = input_position_dirpaths[0].parts[-4][:-5]
     shifted_store_path = Path(temp_path, f"TEMP_{dataset}.zarr").resolve()
