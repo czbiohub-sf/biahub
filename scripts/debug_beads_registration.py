@@ -3,15 +3,9 @@ import ants
 import numpy as np
 from pathlib import Path
 from iohub import open_ome_zarr
-from biahub.characterize_psf import detect_peaks
 from biahub.register import convert_transform_to_ants
 import napari
-from skimage.transform import AffineTransform
-from skimage.feature import match_descriptors
 from biahub.estimate_registration import (
-    build_edge_graph,
-    compute_cost_matrix,
-    match_hungarian_global_cost,
     filter_matches,
     detect_bead_peaks,
     get_matches_from_beads, 
@@ -22,9 +16,9 @@ import numpy as np
 
 # %%%
 
-dataset = '2025_05_21_A549_MAP1LC3B_RPL36_GFP_sensor_ZIKV_DENV'
-fov = 'A/3/000000'
-root_path = Path(f'/hpc/projects/intracellular_dashboard/viral-sensor/{dataset}/1-preprocess/')
+dataset = '2025_06_26_A549_G3BP1_ZIKV'
+fov = 'C/1/000000'
+root_path = Path(f'/hpc/projects/intracellular_dashboard/organelle_dynamics/rerun/{dataset}/1-preprocess/')
 t_idx = 10
 lf_data_path = root_path / f"label-free/0-reconstruct/{dataset}.zarr" / fov
 ls_data_path = root_path / f"light-sheet/raw/0-deskew/{dataset}.zarr" / fov
@@ -66,17 +60,17 @@ config_dict = {
             "cost_matrix_settings": {
                 "normalize": False,
                 "weights": {
-                    "dist": 0.2,
-                    "edge_angle": 0.2,
-                    "edge_length": 0.2,
-                    "pca_dir": 0.2,
-                    "pca_aniso": 0.2,
-                    "edge_descriptor": 0.2
+                    "dist": 0.5,
+                    "edge_angle": 1,
+                    "edge_length": 1,
+                    "pca_dir": 0,
+                    "pca_aniso": 0,
+                    "edge_descriptor": 0
                 }
             }
         },
         "filter_distance_threshold": 0.95,
-        "filter_angle_threshold": 0,
+        "filter_angle_threshold": 30,
     },
     "affine_transform_settings": {
         "transform_type": "similarity",
