@@ -900,7 +900,7 @@ def track(
         "slurm_array_parallelism": 100,  # process up to 100 positions at a time
         "slurm_time": 60,
         "slurm_partition": "preempted",
-        "slurm_num_gpus": 1,
+        "slurm_gpus_per_node": 1,
         "slurm_use_srun": False,
     }
 
