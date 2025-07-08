@@ -176,8 +176,13 @@ def estimate_crop(
     # Assume phase dataset is first and fluor dataset is second in input_model.concat_data_paths
     lf_paths = config_filepath.parent.glob(settings.concat_data_paths[0])
     lf_position_dirpaths = [p for p in lf_paths if p.is_dir()]
+    click.echo(f"Found {len(lf_position_dirpaths)} phase channels.")
     ls_paths = config_filepath.parent.glob(settings.concat_data_paths[1])
     ls_position_dirpaths = [p for p in ls_paths if p.is_dir()]
+    click.echo(f"Found {len(ls_position_dirpaths)} fluorescence channels.")
+
+    if len(lf_position_dirpaths) != len(ls_position_dirpaths):
+        raise ValueError("Number of phase and fluorescence channels must be the same.")
 
     # Estimate resources from a sample
     with open_ome_zarr(lf_position_dirpaths[0]) as dataset:
