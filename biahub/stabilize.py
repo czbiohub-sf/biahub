@@ -10,10 +10,12 @@ from iohub.ngff import open_ome_zarr
 from scipy.linalg import svd
 from scipy.spatial.transform import Rotation as R
 
+from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
     config_filepaths,
     input_position_dirpaths,
     local,
+    monitor,
     output_dirpath,
     sbatch_filepath,
     sbatch_to_submitit,
@@ -91,6 +93,7 @@ def stabilize(
     config_filepaths: list[str],
     sbatch_filepath: str = None,
     local: bool = False,
+    monitor: bool = True,
 ):
     """
     Stabilize a timelapse dataset by applying spatial transformations.
@@ -304,6 +307,9 @@ def stabilize(
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
 
+    if monitor:
+        monitor_jobs(jobs, input_position_dirpaths)
+
 
 @click.command("stabilize")
 @input_position_dirpaths()
@@ -311,12 +317,14 @@ def stabilize(
 @config_filepaths()
 @sbatch_filepath()
 @local()
+@monitor()
 def stabilize_cli(
     input_position_dirpaths: List[str],
     output_dirpath: str,
     config_filepaths: list[str],
-    sbatch_filepath: str = None,
-    local: bool = False,
+    sbatch_filepath: str,
+    local: bool,
+    monitor: bool,
 ):
     """
     Stabilize a timelapse dataset by applying spatial transformations.
@@ -355,6 +363,7 @@ def stabilize_cli(
         config_filepaths=config_filepaths,
         sbatch_filepath=sbatch_filepath,
         local=local,
+        monitor=monitor,
     )
 
 

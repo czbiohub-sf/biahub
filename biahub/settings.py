@@ -180,9 +180,9 @@ class EstimateStabilizationSettings(MyBaseModel):
     stabilization_estimation_channel: str
     stabilization_channels: list
     stabilization_type: Literal["z", "xy", "xyz"]
-    stabilization_method: Literal[
-        "beads", "phase-cross-corr", "focus-finding"
-    ] = "focus-finding"
+    stabilization_method: Literal["beads", "phase-cross-corr", "focus-finding"] = (
+        "focus-finding"
+    )
     beads_match_settings: Optional[BeadsMatchSettings] = Field(
         default_factory=BeadsMatchSettings
     )
@@ -473,9 +473,9 @@ class ConcatenateSettings(MyBaseModel):
 class StabilizationSettings(MyBaseModel):
     stabilization_estimation_channel: str
     stabilization_type: Literal["z", "xy", "xyz"]
-    stabilization_method: Literal[
-        "beads", "phase-cross-corr", "focus-finding"
-    ] = "focus-finding"
+    stabilization_method: Literal["beads", "phase-cross-corr", "focus-finding"] = (
+        "focus-finding"
+    )
     stabilization_channels: list
     affine_transform_zyx_list: list
     time_indices: Union[NonNegativeInt, list[NonNegativeInt], Literal["all"]] = "all"

@@ -720,7 +720,7 @@ def user_assisted_registration(
 def shrink_slice(s: slice, shrink_fraction: float = 0.1, min_width: int = 5) -> slice:
     """
     Shrink a slice by a fraction of its length.
-    
+
     Parameters
     ----------
     s : slice
@@ -729,7 +729,7 @@ def shrink_slice(s: slice, shrink_fraction: float = 0.1, min_width: int = 5) -> 
         The fraction of the slice to shrink.
     min_width : int
         The minimum width of the slice.
-    
+
     Returns
     -------
     slice
@@ -737,7 +737,7 @@ def shrink_slice(s: slice, shrink_fraction: float = 0.1, min_width: int = 5) -> 
     Notes
     -----
     If the slice is too small, return the original slice.
-    
+
     """
     start = s.start or 0
     stop = s.stop or 0
@@ -2184,9 +2184,11 @@ def estimate_registration(
             ),
             target_channel_name=target_channel_name,
             target_channel_voxel_size=target_channel_voxel_size,
-            similarity=True
-            if settings.affine_transform_settings.transform_type == "similarity"
-            else False,
+            similarity=(
+                True
+                if settings.affine_transform_settings.transform_type == "similarity"
+                else False
+            ),
             pre_affine_90degree_rotation=settings.manual_registration_settings.affine_90degree_rotation,
         )
 
@@ -2251,7 +2253,6 @@ def estimate_registration_cli(
     sbatch_filepath: str = None,
     local: bool = False,
 ):
-
     """
     Estimate the affine transformation between a source and target image for registration.
 

@@ -14,6 +14,7 @@ from biahub.cli.parsing import (
     config_filepaths,
     input_position_dirpaths,
     local,
+    monitor,
     output_dirpath,
     sbatch_filepath,
     sbatch_to_submitit,
@@ -104,12 +105,14 @@ def segment_data(
 @output_dirpath()
 @sbatch_filepath()
 @local()
+@monitor()
 def segment_cli(
     input_position_dirpaths: list[str],
     config_filepaths: list[str],
     output_dirpath: str,
     sbatch_filepath: str | None = None,
     local: bool = False,
+    monitor: bool = True,
 ):
     """
     Segment a single position across T axes using the configuration file.
@@ -253,7 +256,8 @@ def segment_cli(
                 )
             )
 
-    monitor_jobs(jobs, input_position_dirpaths)
+    if monitor:
+        monitor_jobs(jobs, input_position_dirpaths)
 
 
 if __name__ == "__main__":

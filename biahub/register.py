@@ -11,9 +11,11 @@ import submitit
 
 from iohub import open_ome_zarr
 
+from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
     config_filepaths,
     local,
+    monitor,
     output_dirpath,
     sbatch_filepath,
     sbatch_to_submitit,
@@ -378,6 +380,7 @@ def rescale_voxel_size(affine_matrix, input_scale):
 @output_dirpath()
 @local()
 @sbatch_filepath()
+@monitor()
 def register_cli(
     source_position_dirpaths: List[str],
     target_position_dirpaths: List[str],
@@ -385,6 +388,7 @@ def register_cli(
     output_dirpath: str,
     local: bool,
     sbatch_filepath: Path,
+    monitor: bool = True,
 ):
     """
     Apply an affine transformation to a single position across T and C axes based on a registration config file.
@@ -572,14 +576,15 @@ def register_cli(
                 copy_jobs.append(copy_job)
                 copy_names.append(input_position_path)
 
-    # if not local:
-    #     monitor_jobs(affine_jobs + copy_jobs, affine_names + copy_names)
     # concatenate affine_jobs and copy_jobs
     job_ids = [job.job_id for job in affine_jobs + copy_jobs]
 
     log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
+
+    if monitor:
+        monitor_jobs(affine_jobs + copy_jobs, affine_names + copy_names)
 
 
 if __name__ == "__main__":

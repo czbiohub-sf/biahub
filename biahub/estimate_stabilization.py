@@ -286,9 +286,8 @@ def get_tform_from_pcc(
         click.echo(f"Failed PCC at time {t}: {e}")
         return np.eye(4), (0.0, 0.0, 0.0)
 
-
     dz, dy, dx = shift
-    
+
     transform = np.eye(4)
     # Set the translation components of the transform
 
@@ -343,7 +342,7 @@ def estimate_xyz_stabilization_pcc_per_position(
             y_idx = slice(0, Y)
 
         channel_tzyx_cropped = channel_tzyx[:, :, y_idx, x_idx]
-        
+
         if t_reference == "first":
             target_channel_tzyx = np.broadcast_to(
                 channel_tzyx_cropped[0], channel_tzyx_cropped.shape
@@ -362,10 +361,7 @@ def estimate_xyz_stabilization_pcc_per_position(
                 transforms.append(np.eye(4).tolist())
             else:
                 transform, shift = get_tform_from_pcc(
-                        t,
-                        source_channel_tzyx,
-                        target_channel_tzyx,
-                        verbose=verbose
+                    t, source_channel_tzyx, target_channel_tzyx, verbose=verbose
                 )
                 transforms.append(transform)
                 shifts.append((t, *shift))
@@ -960,8 +956,9 @@ def get_mean_z_positions(
 
     df = df.sort_values("time_idx")
 
-    # TODO: this is a hack to deal with the fact that the focus finding function returns 0 if it fails
-    df["focus_idx"] = df["focus_idx"].replace(0, np.nan).ffill()
+    # When focus finding fails, it may return 0, which here is replaced with NaN
+    # before calculating the mean focus index per position
+    df["focus_idx"] = df["focus_idx"].replace(0, np.nan)
 
     # Get the mean of positions for each time point
     if method == "mean":

@@ -18,7 +18,7 @@ stabilization_type: "z"
 #   - "ants" uses ANTs registration with optimization (only for xyz)
 stabilization_method: "focus-finding"
 
-beads_match_settings: 
+beads_match_settings:
   algorithm: hungarian # "hungarian", "match_descriptor"
   t_reference: "first" # Reference timepoint for matching
   source_peaks_settings:
@@ -61,7 +61,7 @@ beads_match_settings:
   filter_distance_threshold: 0.95 # Filter matches based on distance threshold
   filter_angle_threshold: 0   # Filter matches based on dominant angle direction (in degrees)
 
-      
+
 phase_cross_corr_settings:
   maximum_shift: 1.2
   normalization: False

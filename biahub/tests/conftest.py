@@ -57,6 +57,17 @@ def example_estimate_registration_settings():
     yield settings_path, settings
 
 
+@pytest.fixture()
+def sbatch_file(tmp_path):
+    filepath = tmp_path / "sbatch.txt"
+    with open(filepath, "w") as f:
+        f.write("#SBATCH --cpus-per-task=1\n")
+        f.write("#SBATCH --array-parallelism=2\n")
+        f.write("#LOCAL --cpus-per-task=1\n")
+        f.write("#LOCAL --timeout-min=1\n")
+    yield filepath
+
+
 @pytest.fixture(scope="function")
 def example_plate(tmp_path):
     """
