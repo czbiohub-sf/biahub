@@ -24,7 +24,21 @@ from biahub.cli.utils import create_empty_hcs_zarr
 
 
 def run_viscy_preprocess(data_path: str, num_workers: int = 32, config_file: str = None, path_viscy_env: Path = None, verbose: bool = False):
-    
+    """
+    Run VisCy preprocess on a single FOV.
+    Parameters
+    ----------
+    data_path : str
+        Path to the FOV data.
+    num_workers : int
+        Number of workers to use.
+    config_file : str
+        Path to the VisCy config file.
+    path_viscy_env : Path
+        Path to the VisCy environment.
+    verbose : bool
+        Whether to print verbose output.
+    """
     cmd = (
     "module load anaconda && "
     f"conda activate {path_viscy_env} && "
@@ -42,45 +56,26 @@ def run_viscy_preprocess(data_path: str, num_workers: int = 32, config_file: str
     subprocess.run(cmd, shell=True, check=True, executable="/bin/bash")
 
 
-
-# CURRENT_DIR=$(pwd)
-
-# INPUT_DATASET=$(pwd)/../0-reconstruct/${DATASET}.zarr
-# OUTPUT_FOLDER=$(pwd)/${DATASET}
-# CONFIG_FILE=$(pwd)/predict.yml
-
-# positions=($INPUT_DATASET/*/*/*)
-
-# mkdir -p "$OUTPUT_FOLDER"
-# ARRAY_JOB_ID=$(sbatch --parsable --array=0-$((${#positions[@]}-1))%36 predict_slurm.sh $INPUT_DATASET $OUTPUT_FOLDER $CONFIG_FILE)
-
-# # Merge after the previous job is done
-# sbatch --parsable --dependency=afterok:$ARRAY_JOB_ID ./combine.sh "$OUTPUT_FOLDER" "$INPUT_DATASET" "${OUTPUT_FOLDER}.zarr"
-
-# positions=()
-# for p in $1/*/*/*; do
-#     positions+=($p)
-# done
-
-# log_dir="$(pwd)/logs/$SLURM_ARRAY_TASK_ID"
-# mkdir -p $log_dir
-# cd $log_dir
-
-# cat $3
-
-# viscy predict \
-#     -c $3 \
-#     --data.init_args.data_path ${positions[$SLURM_ARRAY_TASK_ID]} \
-#     --trainer.callbacks+=viscy.translation.predict_writer.HCSPredictionWriter \
-#     --trainer.callbacks.output_store=$2/$SLURM_ARRAY_TASK_ID.zarr \
-#     --trainer.default_root_dir=$log_dir
-
-
 def run_viscy_predict(data_path: str, config_file: str, output_store: str, log_dir: str, path_viscy_env: Path = None, verbose: bool = False):
-    # cd to the log_dir
+    """
+    Run VisCy predict on a single FOV.
+    Parameters
+    ----------
+    data_path : str
+        Path to the FOV data.
+    config_file : str
+        Path to the VisCy config file.
+    output_store : str
+        Path to the output store.
+    log_dir : str
+        Path to the log directory.
+    path_viscy_env : Path
+        Path to the VisCy environment.
+    verbose : bool
+        Whether to print verbose output.
+    
+    """
     os.chdir(log_dir)
-
-
     # Compose the shell command
     cmd = (
         "module load anaconda && "
@@ -180,24 +175,37 @@ def virtual_stain_cli(
     preprocess_config_filepath: str = None,
     path_viscy_env: str = "/hpc/mydata/taylla.theodoro/anaconda/2022.05/x86_64/envs/viscy",
     run_mode: str = "all",
-    num_processes: int = 16,
+    num_processes: int = 32,
     sbatch_filepath_preprocess: str = None,
     sbatch_filepath_predict: str = None,
     local: bool = False,
     monitor: bool = True,
     verbose: bool = True,
 ):
+    """
+    Run VisCy virtual stain on a plate.
+
+    Parameters
+    ----------
+    input_position_dirpaths : List[str]
+        List of paths to the input position directories.
+    output_dirpath : str
+        Path to the output directory.
+    """
     output_dirpath = Path(output_dirpath)
     slurm_out_path = output_dirpath.parent / "slurm_output"
 
-   
-
-    cluster = "local" if local else "slurm"
+    if local:
+        cluster = "local"
+    else:
+        cluster = "slurm"
+    
     job_ids_preprocess = []
     slurm_dependency = None
     path_viscy_env = Path(path_viscy_env)
 
     if run_mode in ["all", "preprocess"]:
+
         slurm_args_preprocess = {
             "slurm_job_name": "VS_preprocess",
             "slurm_mem_per_cpu": "8G",
@@ -288,7 +296,6 @@ def virtual_stain_cli(
         with log_path.open("w") as log_file:
             log_file.write("\n".join(job_ids))
 
-        
 
         with open_ome_zarr(input_position_dirpaths[0]) as dataset:
             T, C, Z, Y, X = dataset.data.shape
@@ -344,11 +351,6 @@ def virtual_stain_cli(
     if monitor:
         job_ids = [job.job_id for job in job_ids_predict + job_ids_preprocess + job_ids_combine]
         monitor_jobs(job_ids, input_position_dirpaths)
-
-
-
-
-
 
 if __name__ == "__main__":
     virtual_stain_cli()
