@@ -63,7 +63,6 @@ beads_match_settings:
 
 
 phase_cross_corr_settings:
-  maximum_shift: 1.2
   normalization: False
   t_reference: "first"
 
