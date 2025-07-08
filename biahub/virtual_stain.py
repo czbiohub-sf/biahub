@@ -1,29 +1,37 @@
 import os
 import shutil
 import subprocess
+
 from pathlib import Path
 from typing import List
-import numpy as np
 
 import click
+import numpy as np
 import submitit
+
 from iohub.ngff import open_ome_zarr
 
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
     input_position_dirpaths,
-    output_dirpath,
-    sbatch_filepath_preprocess,
-    sbatch_filepath_predict,
-    sbatch_to_submitit,
-    num_processes,
     local,
     monitor,
+    num_processes,
+    output_dirpath,
+    sbatch_filepath_predict,
+    sbatch_filepath_preprocess,
+    sbatch_to_submitit,
 )
 from biahub.cli.utils import create_empty_hcs_zarr
 
 
-def run_viscy_preprocess(data_path: str, num_workers: int = 32, config_file: str = None, path_viscy_env: Path = None, verbose: bool = False):
+def run_viscy_preprocess(
+    data_path: str,
+    num_workers: int = 32,
+    config_file: str = None,
+    path_viscy_env: Path = None,
+    verbose: bool = False,
+):
     """
     Run VisCy preprocess on a single FOV.
     Parameters
@@ -40,11 +48,11 @@ def run_viscy_preprocess(data_path: str, num_workers: int = 32, config_file: str
         Whether to print verbose output.
     """
     cmd = (
-    "module load anaconda && "
-    f"conda activate {path_viscy_env} && "
-    f"viscy preprocess "
-    f"--data_path {data_path} "
-    f"--num_workers {num_workers} "
+        "module load anaconda && "
+        f"conda activate {path_viscy_env} && "
+        f"viscy preprocess "
+        f"--data_path {data_path} "
+        f"--num_workers {num_workers} "
     )
     if config_file:
         cmd += f" -c {config_file}"
@@ -56,7 +64,14 @@ def run_viscy_preprocess(data_path: str, num_workers: int = 32, config_file: str
     subprocess.run(cmd, shell=True, check=True, executable="/bin/bash")
 
 
-def run_viscy_predict(data_path: str, config_file: str, output_store: str, log_dir: str, path_viscy_env: Path = None, verbose: bool = False):
+def run_viscy_predict(
+    data_path: str,
+    config_file: str,
+    output_store: str,
+    log_dir: str,
+    path_viscy_env: Path = None,
+    verbose: bool = False,
+):
     """
     Run VisCy predict on a single FOV.
     Parameters
@@ -73,7 +88,7 @@ def run_viscy_predict(data_path: str, config_file: str, output_store: str, log_d
         Path to the VisCy environment.
     verbose : bool
         Whether to print verbose output.
-    
+
     """
     os.chdir(log_dir)
     # Compose the shell command
@@ -91,6 +106,7 @@ def run_viscy_predict(data_path: str, config_file: str, output_store: str, log_d
         click.echo(f"Predict FOV: {'/'.join(Path(data_path).parts[-3:])}")
         click.echo(f"Command: {cmd}")
     subprocess.run(cmd, shell=True, check=True, executable="/bin/bash")
+
 
 def combine_fov_zarrs_to_plate(
     fovs: list[Path],
@@ -136,6 +152,7 @@ def combine_fov_zarrs_to_plate(
                 print(f"Could not remove {temp_zarr_dir}: {e}")
 
     print(f"Combined all FOVs into {output_dirpath}")
+
 
 @click.command("virtual-stain")
 @input_position_dirpaths()
@@ -199,7 +216,7 @@ def virtual_stain_cli(
         cluster = "local"
     else:
         cluster = "slurm"
-    
+
     job_ids_preprocess = []
     slurm_dependency = None
     path_viscy_env = Path(path_viscy_env)
@@ -234,7 +251,9 @@ def virtual_stain_cli(
             )
             job_ids_preprocess.append(job)
 
-        job_ids = [job.job_id for job in job_ids_preprocess]  # Access job IDs after batch submission
+        job_ids = [
+            job.job_id for job in job_ids_preprocess
+        ]  # Access job IDs after batch submission
 
         log_path = Path(slurm_out_path / "preprocess" / "submitit_jobs_ids.log")
         with log_path.open("w") as log_file:
@@ -268,7 +287,7 @@ def virtual_stain_cli(
         executor.update_parameters(**slurm_args_predict)
         click.echo(f"Submitting predict jobs with: {slurm_args_predict}")
         config_file = str(Path(predict_config_filepath).resolve())
-        fovs =[]
+        fovs = []
         for input_position_path in input_position_dirpaths:
             fov = Path(*input_position_path.parts[-3:])
             fovs.append(fov)
@@ -290,12 +309,13 @@ def virtual_stain_cli(
             )
             job_ids_predict.append(job)
 
-        job_ids = [job.job_id for job in job_ids_predict]  # Access job IDs after batch submission
+        job_ids = [
+            job.job_id for job in job_ids_predict
+        ]  # Access job IDs after batch submission
 
         log_path = Path(slurm_out_path / "predict" / "submitit_jobs_ids.log")
         with log_path.open("w") as log_file:
             log_file.write("\n".join(job_ids))
-
 
         with open_ome_zarr(input_position_dirpaths[0]) as dataset:
             T, C, Z, Y, X = dataset.data.shape
@@ -309,13 +329,13 @@ def virtual_stain_cli(
             "channel_names": channel_names,
             "dtype": np.float32,
         }
-        
+
         create_empty_hcs_zarr(
             store_path=output_dirpath,
             position_keys=[p.parts[-3:] for p in input_position_dirpaths],
             **output_metadata,
         )
-        
+
         slurm_args_combine = {
             "slurm_job_name": "VS_combine",
             "slurm_mem_per_cpu": "8G",
@@ -336,23 +356,26 @@ def virtual_stain_cli(
             job = executor.submit(
                 combine_fov_zarrs_to_plate,
                 fovs=fovs,
-                temp_dir=output_dirpath.parent/ "temp",
+                temp_dir=output_dirpath.parent / "temp",
                 output_dirpath=output_dirpath,
                 cleanup=True,
             )
             job_ids_combine.append(job)
 
-        job_ids = [job.job_id for job in job_ids_combine]  # Access job IDs after batch submission
+        job_ids = [
+            job.job_id for job in job_ids_combine
+        ]  # Access job IDs after batch submission
 
         log_path = Path(slurm_out_path / "combine" / "submitit_jobs_ids.log")
         with log_path.open("w") as log_file:
             log_file.write("\n".join(job_ids))
 
     if monitor:
-        job_ids = [job.job_id for job in job_ids_predict + job_ids_preprocess + job_ids_combine]
+        job_ids = [
+            job.job_id for job in job_ids_predict + job_ids_preprocess + job_ids_combine
+        ]
         monitor_jobs(job_ids, input_position_dirpaths)
+
 
 if __name__ == "__main__":
     virtual_stain_cli()
-
-

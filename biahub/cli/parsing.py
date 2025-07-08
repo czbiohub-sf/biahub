@@ -126,6 +126,7 @@ def sbatch_filepath() -> Callable:
 
     return decorator
 
+
 def sbatch_filepath_preprocess() -> Callable:
     def decorator(f: Callable) -> Callable:
         return click.option(
@@ -136,7 +137,9 @@ def sbatch_filepath_preprocess() -> Callable:
             help="SBATCH filepath that contains slurm parameters to overwrite defaults. "
             "For example, '#SBATCH --mem-per-cpu=16G' will override the default memory per CPU.",
         )(f)
+
     return decorator
+
 
 def sbatch_filepath_predict() -> Callable:
     def decorator(f: Callable) -> Callable:
@@ -148,6 +151,7 @@ def sbatch_filepath_predict() -> Callable:
             help="SBATCH filepath that contains slurm parameters to overwrite defaults. "
             "For example, '#SBATCH --mem-per-cpu=16G' will override the default memory per CPU.",
         )(f)
+
     return decorator
 
 
