@@ -126,6 +126,30 @@ def sbatch_filepath() -> Callable:
 
     return decorator
 
+def sbatch_filepath_preprocess() -> Callable:
+    def decorator(f: Callable) -> Callable:
+        return click.option(
+            "--sbatch-filepath-preprocess",
+            "-sb-preprocess",
+            default=None,
+            type=click.Path(exists=True, file_okay=True, dir_okay=False),
+            help="SBATCH filepath that contains slurm parameters to overwrite defaults. "
+            "For example, '#SBATCH --mem-per-cpu=16G' will override the default memory per CPU.",
+        )(f)
+    return decorator
+
+def sbatch_filepath_predict() -> Callable:
+    def decorator(f: Callable) -> Callable:
+        return click.option(
+            "--sbatch-filepath-predict",
+            "-sb-predict",
+            default=None,
+            type=click.Path(exists=True, file_okay=True, dir_okay=False),
+            help="SBATCH filepath that contains slurm parameters to overwrite defaults. "
+            "For example, '#SBATCH --mem-per-cpu=16G' will override the default memory per CPU.",
+        )(f)
+    return decorator
+
 
 def sbatch_to_submitit(filepath: str) -> dict:
     """Reads a text configuration file and returns a dictionary of parameters
