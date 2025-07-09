@@ -206,8 +206,13 @@ def test_concatenate_with_cropping(create_custom_plate, tmp_path, sbatch_file):
     assert output_X == x_end - x_start
 
 
-@pytest.mark.parametrize("version", ["0.4", "0.5"])
-def test_concatenate_with_custom_chunks(create_custom_plate, tmp_path, sbatch_file, version):
+@pytest.mark.parametrize(
+    ["version", "shards_ratio_time"], [["0.4", 1], ["0.5", 1], ["0.5", 2], ["0.5", 5]]
+)
+@pytest.mark.parametrize("time_points", [3, 4])
+def test_concatenate_with_custom_chunks(
+    create_custom_plate, tmp_path, sbatch_file, version, time_points, shards_ratio_time
+):
     """
     Test concatenating with custom chunk sizes
     """
@@ -215,7 +220,7 @@ def test_concatenate_with_custom_chunks(create_custom_plate, tmp_path, sbatch_fi
     plate_1_path, plate_1 = create_custom_plate(
         tmp_path / 'zarr1',
         channel_names=["DAPI", "Cy5"],
-        time_points=3,
+        time_points=time_points,
         z_size=4,
         y_size=8,
         x_size=6,
@@ -223,7 +228,7 @@ def test_concatenate_with_custom_chunks(create_custom_plate, tmp_path, sbatch_fi
     plate_2_path, plate_2 = create_custom_plate(
         tmp_path / 'zarr2',
         channel_names=["GFP", "RFP"],
-        time_points=3,
+        time_points=time_points,
         z_size=4,
         y_size=8,
         x_size=6,
@@ -232,7 +237,7 @@ def test_concatenate_with_custom_chunks(create_custom_plate, tmp_path, sbatch_fi
     # Define custom chunk sizes
     chunks = [1, 1, 2, 4, 3]  # [C, Z, Y, X]
     if version == "0.5":
-        shards_ratio = [1, 1, 1, 2, 2]
+        shards_ratio = [shards_ratio_time, 1, 1, 2, 2]
     elif version == "0.4":
         shards_ratio = None
 
