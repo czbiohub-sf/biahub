@@ -389,7 +389,7 @@ def concatenate(
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
 
-    click.echo("Submitting SLURM jobs...")
+    click.echo(f"Submitting {cluster} jobs...")
     jobs = []
 
     with submitit.helpers.clean_env():
