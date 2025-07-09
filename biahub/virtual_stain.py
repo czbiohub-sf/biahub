@@ -137,19 +137,18 @@ def combine_fov_zarrs_to_plate(
             print(f"Skipping missing: {nested_fov_path}")
             continue
 
-        dest_path = output_dirpath / row / col / pos
+        dest_path = output_dirpath / row / col
         dest_path.parent.mkdir(parents=True, exist_ok=True)
 
         print(f"Moving {nested_fov_path} → {dest_path}")
         shutil.move(str(nested_fov_path), str(dest_path))
 
-        # Optionally remove the full temp zarr folder if it's now empty
-        if cleanup:
-            temp_zarr_dir = temp_dir / f"{row}_{col}_{pos}.zarr"
-            try:
-                shutil.rmtree(temp_zarr_dir)
-            except Exception as e:
-                print(f"Could not remove {temp_zarr_dir}: {e}")
+    # Optionally remove the full temp zarr folder if it's now empty
+    if cleanup:
+        try:
+            shutil.rmtree(temp_dir)
+        except Exception as e:
+            print(f"Could not remove {temp_dir}: {e}")
 
     print(f"Combined all FOVs into {output_dirpath}")
 
