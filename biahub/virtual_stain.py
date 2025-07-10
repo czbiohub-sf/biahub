@@ -137,8 +137,10 @@ def combine_fov_zarrs_to_plate(
             print(f"Skipping missing: {nested_fov_path}")
             continue
 
-        dest_path = output_dirpath / row / col
-        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        dest_path = output_dirpath / row / col / pos
+
+        if dest_path.exists():
+            shutil.rmtree(dest_path)
 
         print(f"Moving {nested_fov_path} → {dest_path}")
         shutil.move(str(nested_fov_path), str(dest_path))
