@@ -363,7 +363,10 @@ def concatenate(
     )
 
     # Estimate resources
-    num_cpus, gb_ram_per_cpu = estimate_resources(shape=(T, C, Z, Y, X), ram_multiplier=16)
+    batch_size = settings.shards_ratio[0] if settings.shards_ratio else 1
+    num_cpus, gb_ram_per_cpu = estimate_resources(
+        shape=(T // batch_size, C, Z, Y, X), ram_multiplier=4 * batch_size, max_num_cpus=48
+    )
     # Prepare SLURM arguments
     slurm_args = {
         "slurm_job_name": "concatenate",
