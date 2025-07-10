@@ -1,6 +1,5 @@
 import glob
 import os
-import warnings
 
 from pathlib import Path
 
@@ -345,18 +344,6 @@ def concatenate(
         chunk_size = [1] + list(settings.chunks_czyx)
     else:
         chunk_size = settings.chunks_czyx
-
-    if settings.shards_ratio is not None:
-        try:
-            import zarr
-            import zarrs  # noqa: F401
-
-            zarr.config.set(
-                {"codec_pipeline.path": "zarrs.ZarrsCodecPipeline", "threading.max_workers": 1}
-            )
-        except ImportError:
-            warnings.warn("zarrs is not installed. Writing sharded array will be very slow.")
-
     # Logic for creation of zarr and metadata
     output_metadata = {
         "shape": (len(input_time_indices), len(all_channel_names)) + tuple(cropped_shape_zyx),
@@ -471,13 +458,14 @@ def concatenate_cli(
     """
     Concatenate datasets (with optional cropping)
 
-    >> biahub concatenate -c ./concat.yml -o ./output_concat.zarr -j 8
+    >> biahub concatenate -c ./concat.yml -o ./output_concat.zarr
     """
     concatenate(
         settings=yaml_to_model(config_filepath, ConcatenateSettings),
         output_dirpath=Path(output_dirpath),
         sbatch_filepath=sbatch_filepath,
         local=local,
+        block=False,
         monitor=monitor,
     )
 
