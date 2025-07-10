@@ -261,6 +261,7 @@ def test_concatenate_with_custom_chunks(
         sbatch_filepath=sbatch_file,
         local=True,
         monitor=False,
+        block=True,
     )
 
     output_plate = open_ome_zarr(output_path)
