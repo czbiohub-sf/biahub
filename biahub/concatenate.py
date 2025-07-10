@@ -259,11 +259,7 @@ def concatenate(
     """
     slurm_out_path = output_dirpath.parent / "slurm_output"
 
-    slicing_params = [
-        settings.Z_slice,
-        settings.Y_slice,
-        settings.X_slice,
-    ]
+    slicing_params = [settings.Z_slice, settings.Y_slice, settings.X_slice]
     (
         all_data_paths,
         all_channel_names,
@@ -375,7 +371,7 @@ def concatenate(
     )
 
     # Estimate resources
-    num_cpus, gb_ram_per_cpu = estimate_resources(shape=[T, C, Z, Y, X], ram_multiplier=16)
+    num_cpus, gb_ram_per_cpu = estimate_resources(shape=(T, C, Z, Y, X), ram_multiplier=16)
     # Prepare SLURM arguments
     slurm_args = {
         "slurm_job_name": "concatenate",
@@ -461,7 +457,7 @@ def concatenate(
 def concatenate_cli(
     config_filepath: str,
     output_dirpath: str,
-    sbatch_filepath: str = None,
+    sbatch_filepath: str | None = None,
     local: bool = False,
 ):
     """
