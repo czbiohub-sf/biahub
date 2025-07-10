@@ -12,9 +12,11 @@ from iohub import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate, process_single_position
 from natsort import natsorted
 
+from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
     config_filepath,
     local,
+    monitor,
     output_dirpath,
     sbatch_filepath,
     sbatch_to_submitit,
@@ -240,6 +242,7 @@ def concatenate(
     sbatch_filepath: str | None = None,
     local: bool = False,
     block: bool = False,
+    monitor: bool = True,
 ):
     """Concatenate datasets (with optional cropping).
 
@@ -434,8 +437,6 @@ def concatenate(
                 )
                 jobs.append(job)
 
-    # monitor_jobs(jobs, all_data_paths)
-
     job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 
     # slurm_out_path is not created for debug cluster
@@ -448,17 +449,22 @@ def concatenate(
     if block:
         _ = [job.result() for job in jobs]
 
+    if monitor:
+        monitor_jobs(jobs, all_data_paths)
+
 
 @click.command("concatenate")
 @config_filepath()
 @output_dirpath()
 @sbatch_filepath()
 @local()
+@monitor()
 def concatenate_cli(
     config_filepath: str,
     output_dirpath: str,
     sbatch_filepath: str | None = None,
     local: bool = False,
+    monitor: bool = True,
 ):
     """
     Concatenate datasets (with optional cropping)
@@ -470,6 +476,7 @@ def concatenate_cli(
         output_dirpath=Path(output_dirpath),
         sbatch_filepath=sbatch_filepath,
         local=local,
+        monitor=monitor,
     )
 
 
