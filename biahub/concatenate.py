@@ -237,13 +237,25 @@ def calculate_cropped_size(
 def concatenate(
     settings: ConcatenateSettings,
     output_dirpath: Path,
-    sbatch_filepath: str = None,
+    sbatch_filepath: str | None = None,
     local: bool = False,
+    block: bool = False,
 ):
-    """
-    Concatenate datasets (with optional cropping)
+    """Concatenate datasets (with optional cropping).
 
-    >> biahub concatenate -c ./concat.yml -o ./output_concat.zarr -j 8
+    Parameters
+    ----------
+    settings : ConcatenateSettings
+        Configuration settings for concatenation
+    output_dirpath : Path
+        Path to the output dataset
+    sbatch_filepath : str | None, optional
+        Path to the SLURM batch file, by default None
+    local : bool, optional
+        Whether to run locally or on a cluster, by default False
+    block : bool, optional
+        Whether to block until all the jobs are complete,
+        by default False
     """
     slurm_out_path = output_dirpath.parent / "slurm_output"
 
@@ -436,6 +448,9 @@ def concatenate(
     log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
+
+    if block:
+        _ = [job.result() for job in jobs]
 
 
 @click.command("concatenate")
