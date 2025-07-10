@@ -259,6 +259,8 @@ def concatenate(
     block : bool, optional
         Whether to block until all the jobs are complete,
         by default False
+    monitor : bool, optional
+        Whether to monitor the jobs, by default True
     """
     slurm_out_path = output_dirpath.parent / "slurm_output"
 
