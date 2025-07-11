@@ -288,32 +288,64 @@ def central_z_slice(z_shape: int) -> slice:
     half_window = n_slices // 2
     return slice(z_center - half_window, z_center + half_window + 1)
 
-
-def resolve_z_slice(z_slices: Tuple[int, int], z_shape: int, mode: str = "2D") -> slice:
+def resolve_z_slice(z_range: Tuple[int, int], z_shape: int) -> Tuple[slice, int]:
     """
-    Resolve the z-slice range based on user-defined input and imaging mode.
+    Resolve the z-slice range based on user input and imaging mode.
+
+    This function determines which Z-planes to extract from a 3D or 4D volume based on:
+    - A user-specified Z-range tuple `(start, stop)`, or
+    - Automatic central slicing if `(-1, -1)` is passed.
+    - All planes are returned if `None` is passed.
+
+    Validation ensures that the resulting slice includes at least one Z-plane.
+    Odd-length slices are not required.
 
     Parameters
     ----------
-    z_slices : Tuple[int, int]
-        Start and end indices of the z-range. If set to (0, 0), automatic center range is used.
+    z_range : Tuple[int, int]
+        The (start, stop) indices for slicing Z-planes. If (-1, -1), central slicing will be used.
+        If None, all planes are returned.
     z_shape : int
-        Total number of slices along the Z axis.
-    mode : str, optional
-        If "2D", returns a centered Z-range slice. If not "2D", returns full or specified range. Default is "2D".
+        Total number of Z-planes in the dataset (e.g., `shape[2]`).
 
     Returns
     -------
     slice
-        A slice object representing the Z-range to extract.
+        A slice object selecting the requested Z-range from the dataset.
+    int
+        The number of Z-planes in the selected range.
+
+    Raises
+    ------
+    ValueError
+        If the user-provided slice range is invalid (e.g., stop <= start).
+
+    Examples
+    --------
+    >>> resolve_z_slice((5, 10), z_shape=30)
+    (slice(5, 10), 5)
+
+    >>> resolve_z_slice((-1, -1), z_shape=21)
+    (slice(9, 12), 3)  # 3 central slices
+
+    >>> resolve_z_slice((-1, -1), z_shape=21)
+    (slice(None), 21)
     """
-    if z_slices is None or z_slices == (0, 0):
-        if mode == "2D":
-            return central_z_slice(z_shape)
-        else:
-            return slice(None)
+    if  z_range == (-1, -1):
+        z_slices = central_z_slice(z_shape)        
+        Z = z_slices.stop - z_slices.start
+    elif z_range is None:
+        z_slices = slice(None)
+        Z = z_shape
     else:
-        return slice(*z_slices)
+        start, stop = z_range
+        if stop <= start:
+            raise ValueError(
+                f"Invalid Z-slice range {z_range}: must contain at least one slice (stop > start)."
+            )
+        z_slices = slice(start, stop)
+        Z = stop - start
+    return z_slices, Z
 
 
 def run_ultrack(
@@ -822,10 +854,9 @@ def track(
     with open_ome_zarr(input_position_dirpaths[0]) as dataset:
         T, C, Z, Y, X = dataset.data.shape
         scale = dataset.scale
-        shape = (T, C, Z, Y, X)
 
     # Resolve z-slices
-    z_slices = resolve_z_slice(settings.z_range, shape[2], settings.mode)
+    z_slices, Z = resolve_z_slice(settings.z_range, Z)
 
     # Define output metadata
     if settings.mode == "2D":
