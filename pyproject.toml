@@ -20,7 +20,7 @@ classifiers = [
 
 # list package dependencies here
 dependencies = [
-  "iohub[tensorstore]>=0.3,<0.4",
+  "iohub>=0.3,<0.4",
   "matplotlib",
   "napari",
   "PyQt6",
@@ -48,7 +48,7 @@ dependencies = [
 [project.optional-dependencies]
 # note that dev dependencies are only pinned to major versions
 segmentation = ["cellpose"]
-sharding = ["zarrs"]
+sharding = ["tensorstore"]
 build = ["build", "twine"]
 all = ["biahub[segmentation,sharding,build]"]
 dev = [
