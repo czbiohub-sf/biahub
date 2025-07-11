@@ -494,6 +494,7 @@ def run_preprocessing_pipeline(
 
     return data_dict
 
+
 def load_data(
     position_key: Tuple[str, str, str],
     input_images: List[ProcessingInputChannel],
@@ -926,7 +927,6 @@ def track_cli(
     sbatch_filepath: str = None,
     local: bool = None,
 ) -> None:
-
     """
     Track objects in 2D or 3D time-lapse microscopy data using configurable preprocessing.
 
