@@ -824,7 +824,7 @@ def track(
         shape = (T, C, Z, Y, X)
 
     # Resolve z-slices
-    z_slices = resolve_z_slice(settings.z_slices, shape[2], settings.mode)
+    z_slices = resolve_z_slice(settings.z_range, shape[2], settings.mode)
 
     # Define output metadata
     if settings.mode == "2D":

@@ -3,7 +3,7 @@ mode: "2D"
 
 fov: "*/*/*"
 # Z-slice range to extract. Use [0, 0] to auto-compute a centered slice.
-z_slices: [0, 0]
+z_range: [0, 0]
 
 # Name of the target channel used to name the tracking output label channel.
 target_channel: nuclei_prediction

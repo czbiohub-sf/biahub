@@ -57,7 +57,7 @@ class TrackingSettings(MyBaseModel):
     fov: str = "*/*/*"
     blank_frames_path: str = None
     mode: Literal["2D", "3D"] = "2D"
-    z_slices: Optional[Tuple[int, int]] = None
+    z_range: Optional[Tuple[int, int]] = None
     input_images: List[ProcessingInputChannel]
     tracking_config: Dict[str, Any] = {}
 
