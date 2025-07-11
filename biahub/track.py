@@ -786,7 +786,7 @@ def track_one_position(
     # Save the tracking labels
     with open_ome_zarr(output_dirpath / Path(*position_key), mode="r+") as output_dataset:
         output_dataset[0][:, 0, 0] = np.asarray(tracking_labels, dtype=np.uint32)
-
+    return tracking_labels, tracks_df
 
 def track(
     output_dirpath: str,
