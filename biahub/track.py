@@ -401,7 +401,7 @@ def run_ultrack(
     )
 
 
-def run_pipeline(
+def run_preprocessing_pipeline(
     data_dict: Dict[str, ArrayLike],
     input_images: List[ProcessingInputChannel],
     visualize: bool = False,
@@ -646,7 +646,7 @@ def data_preprocessing(
         z_slices=z_slices,
         visualize=visualize,
     )
-    data_dict = run_pipeline(data_dict, input_images, visualize=visualize)
+    data_dict = run_preprocessing_pipeline(data_dict, input_images, visualize=visualize)
     data_dict = fill_empty_frames_from_csv(fov, data_dict, blank_frames_path)
 
     # get foreground and contour
