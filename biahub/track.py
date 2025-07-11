@@ -494,37 +494,6 @@ def run_pipeline(
 
     return data_dict
 
-
-def read_data(
-    zarr_path: Path,
-) -> Tuple[List[str], Tuple[int, int, int, int, int], Tuple[float, float, float]]:
-    """
-    Load metadata from an OME-Zarr dataset.
-
-    Parameters
-    ----------
-    zarr_path : Path
-        Path to the input OME-Zarr file.
-
-    Returns
-    -------
-    tuple
-        Tuple containing:
-        - dataset : iohub.Dataset
-        - channel_names : list of str
-        - shape : tuple of int
-            Shape of the dataset in (T, C, Z, Y, X) format.
-        - scale : tuple of float
-            Physical scale along each spatial axis.
-    """
-    with open_ome_zarr(zarr_path) as dataset:
-        shape = dataset.data.shape  # Expect (T, C, Z, Y, X)
-        channel_names = dataset.channel_names
-        scale = dataset.scale
-
-        return dataset, channel_names, shape, scale
-
-
 def load_data(
     position_key: Tuple[str, str, str],
     input_images: List[ProcessingInputChannel],
@@ -569,10 +538,11 @@ def load_data(
             if image.path is not None:
                 click.echo(f"Loading data for channel {channel_name} from {image.path}")
                 image_path = image.path / Path(*position_key)
-                dataset, image_channel_names, _, _ = read_data(zarr_path=image_path)
-                data_dict[channel_name] = dataset.data.dask_array()[
-                    :, image_channel_names.index(channel_name), z_slices, :, :
-                ]
+                with open_ome_zarr(image_path) as dataset:
+                    image_channel_names = dataset.channel_names
+                    data_dict[channel_name] = dataset.data.dask_array()[
+                        :, image_channel_names.index(channel_name), z_slices, :, :
+                    ]
                 if visualize:
                     import napari
 
