@@ -137,6 +137,7 @@ def estimate_crop_one_position(
         [x_slice.start, x_slice.stop],
     )
 
+
 def estimate_crop(
     config_filepath: str,
     output_filepath: str,
