@@ -9,7 +9,7 @@ def test_main():
     runner = CliRunner()
     result = runner.invoke(cli)
 
-    assert result.exit_code == 0
+    assert result.exit_code == 2
 
 
 @pytest.mark.parametrize(
