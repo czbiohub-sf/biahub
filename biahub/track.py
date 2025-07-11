@@ -26,13 +26,11 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.cli.utils import (
-    create_empty_hcs_zarr,
     estimate_resources,
     update_model,
     yaml_to_model,
 )
 from biahub.settings import ProcessingInputChannel, TrackingSettings
-
 
 
 def mem_nuc_contour(nuclei_prediction: ArrayLike, membrane_prediction: ArrayLike) -> ArrayLike:
