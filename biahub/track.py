@@ -732,7 +732,7 @@ def track_one_position(
     )
 
     # Define path to save the tracking database and graph
-    filename = str(output_dirpath).split("/")[-1].split(".")[0]
+    filename = output_dirpath.stem
     databaset_path = output_dirpath.parent / f"{filename}_config_tracking" / f"{fov}"
     os.makedirs(databaset_path, exist_ok=True)
 
