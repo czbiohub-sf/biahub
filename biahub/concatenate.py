@@ -352,7 +352,9 @@ def concatenate(
     )
 
     # Estimate resources
-    num_cpus, gb_ram_per_cpu = estimate_resources(shape=[T, C, Z, Y, X], ram_multiplier=16)
+    num_cpus, gb_ram_per_cpu = estimate_resources(
+        shape=[T, C, Z, Y, X], ram_multiplier=16, max_num_cpus=16
+    )
     # Prepare SLURM arguments
     slurm_args = {
         "slurm_job_name": "concatenate",
@@ -360,7 +362,7 @@ def concatenate(
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,  # process up to 100 positions at a time
         "slurm_time": 60,
-        "slurm_partition": "cpu",
+        "slurm_partition": "preempted",
     }
 
     # Override defaults if sbatch_filepath is provided
