@@ -13,6 +13,7 @@ import toml
 import ultrack
 
 from iohub import open_ome_zarr
+from iohub.ngff.utils import create_empty_plate
 from numpy.typing import ArrayLike
 from ultrack import MainConfig, Tracker
 from ultrack.utils.array import array_apply
@@ -31,6 +32,7 @@ from biahub.cli.utils import (
     yaml_to_model,
 )
 from biahub.settings import ProcessingInputChannel, TrackingSettings
+
 
 
 def mem_nuc_contour(nuclei_prediction: ArrayLike, membrane_prediction: ArrayLike) -> ArrayLike:
@@ -844,7 +846,7 @@ def track(
     }
 
     # Create the output zarr mirroring input_position_dirpaths
-    create_empty_hcs_zarr(
+    create_empty_plate(
         store_path=output_dirpath,
         position_keys=position_keys,
         **output_metadata,
