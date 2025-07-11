@@ -288,6 +288,7 @@ def central_z_slice(z_shape: int) -> slice:
     half_window = n_slices // 2
     return slice(z_center - half_window, z_center + half_window + 1)
 
+
 def resolve_z_slice(z_range: Tuple[int, int], z_shape: int) -> Tuple[slice, int]:
     """
     Resolve the z-slice range based on user input and imaging mode.
@@ -331,8 +332,8 @@ def resolve_z_slice(z_range: Tuple[int, int], z_shape: int) -> Tuple[slice, int]
     >>> resolve_z_slice((-1, -1), z_shape=21)
     (slice(None), 21)
     """
-    if  z_range == (-1, -1):
-        z_slices = central_z_slice(z_shape)        
+    if z_range == (-1, -1):
+        z_slices = central_z_slice(z_shape)
         Z = z_slices.stop - z_slices.start
     elif z_range is None:
         z_slices = slice(None)
