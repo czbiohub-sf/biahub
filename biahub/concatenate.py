@@ -238,22 +238,32 @@ def calculate_cropped_size(
 def concatenate(
     settings: ConcatenateSettings,
     output_dirpath: Path,
-    sbatch_filepath: str = None,
+    sbatch_filepath: str | None = None,
     local: bool = False,
+    block: bool = False,
     monitor: bool = True,
 ):
-    """
-    Concatenate datasets (with optional cropping)
+    """Concatenate datasets (with optional cropping).
 
-    >> biahub concatenate -c ./concat.yml -o ./output_concat.zarr -j 8
+    Parameters
+    ----------
+    settings : ConcatenateSettings
+        Configuration settings for concatenation
+    output_dirpath : Path
+        Path to the output dataset
+    sbatch_filepath : str | None, optional
+        Path to the SLURM batch file, by default None
+    local : bool, optional
+        Whether to run locally or on a cluster, by default False
+    block : bool, optional
+        Whether to block until all the jobs are complete,
+        by default False
+    monitor : bool, optional
+        Whether to monitor the jobs, by default True
     """
     slurm_out_path = output_dirpath.parent / "slurm_output"
 
-    slicing_params = [
-        settings.Z_slice,
-        settings.Y_slice,
-        settings.X_slice,
-    ]
+    slicing_params = [settings.Z_slice, settings.Y_slice, settings.X_slice]
     (
         all_data_paths,
         all_channel_names,
@@ -334,11 +344,12 @@ def concatenate(
         chunk_size = [1] + list(settings.chunks_czyx)
     else:
         chunk_size = settings.chunks_czyx
-
     # Logic for creation of zarr and metadata
     output_metadata = {
         "shape": (len(input_time_indices), len(all_channel_names)) + tuple(cropped_shape_zyx),
         "chunks": chunk_size,
+        "shards_ratio": settings.shards_ratio,
+        "version": settings.output_ome_zarr_version,
         "scale": (1,) * 2 + tuple(output_voxel_size),
         "channel_names": all_channel_names,
         "dtype": dtype,
@@ -352,7 +363,10 @@ def concatenate(
     )
 
     # Estimate resources
-    num_cpus, gb_ram_per_cpu = estimate_resources(shape=[T, C, Z, Y, X], ram_multiplier=16)
+    batch_size = settings.shards_ratio[0] if settings.shards_ratio else 1
+    num_cpus, gb_ram_per_cpu = estimate_resources(
+        shape=(T // batch_size, C, Z, Y, X), ram_multiplier=4 * batch_size, max_num_cpus=48
+    )
     # Prepare SLURM arguments
     slurm_args = {
         "slurm_job_name": "concatenate",
@@ -378,41 +392,42 @@ def concatenate(
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
 
-    click.echo("Submitting SLURM jobs...")
+    click.echo(f"Submitting {cluster} jobs...")
     jobs = []
 
-    with executor.batch():
-        for i, (
-            input_position_path,
-            output_position_path,
-            input_channel_idx,
-            output_channel_idx,
-            zyx_slicing_params,
-        ) in enumerate(
-            zip(
-                all_data_paths,
-                output_position_paths_list,
-                input_channel_idx_list,
-                output_channel_idx_list,
-                all_slicing_params,
-            )
-        ):
-            # Create slicing parameters for this specific path
-            copy_n_paste_kwargs = {"zyx_slicing_params": zyx_slicing_params}
+    with submitit.helpers.clean_env():
+        with executor.batch():
+            for i, (
+                input_position_path,
+                output_position_path,
+                input_channel_idx,
+                output_channel_idx,
+                zyx_slicing_params,
+            ) in enumerate(
+                zip(
+                    all_data_paths,
+                    output_position_paths_list,
+                    input_channel_idx_list,
+                    output_channel_idx_list,
+                    all_slicing_params,
+                )
+            ):
+                # Create slicing parameters for this specific path
+                copy_n_paste_kwargs = {"zyx_slicing_params": zyx_slicing_params}
 
-            job = executor.submit(
-                process_single_position,
-                copy_n_paste,
-                input_position_path=input_position_path,
-                output_position_path=output_position_path,
-                input_channel_indices=input_channel_idx,
-                output_channel_indices=output_channel_idx,
-                input_time_indices=input_time_indices,
-                output_time_indices=list(range(len(input_time_indices))),
-                num_processes=int(slurm_args["slurm_cpus_per_task"]),
-                **copy_n_paste_kwargs,
-            )
-            jobs.append(job)
+                job = executor.submit(
+                    process_single_position,
+                    copy_n_paste,
+                    input_position_path=input_position_path,
+                    output_position_path=output_position_path,
+                    input_channel_indices=input_channel_idx,
+                    output_channel_indices=output_channel_idx,
+                    input_time_indices=input_time_indices,
+                    output_time_indices=list(range(len(input_time_indices))),
+                    num_processes=int(slurm_args["slurm_cpus_per_task"]),
+                    **copy_n_paste_kwargs,
+                )
+                jobs.append(job)
 
     job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 
@@ -422,6 +437,9 @@ def concatenate(
     log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
+
+    if block:
+        _ = [job.result() for job in jobs]
 
     if monitor:
         monitor_jobs(jobs, all_data_paths)
@@ -436,20 +454,21 @@ def concatenate(
 def concatenate_cli(
     config_filepath: str,
     output_dirpath: str,
-    sbatch_filepath: str = None,
+    sbatch_filepath: str | None = None,
     local: bool = False,
     monitor: bool = True,
 ):
     """
     Concatenate datasets (with optional cropping)
 
-    >> biahub concatenate -c ./concat.yml -o ./output_concat.zarr -j 8
+    >> biahub concatenate -c ./concat.yml -o ./output_concat.zarr
     """
     concatenate(
         settings=yaml_to_model(config_filepath, ConcatenateSettings),
         output_dirpath=Path(output_dirpath),
         sbatch_filepath=sbatch_filepath,
         local=local,
+        block=False,
         monitor=monitor,
     )
 
