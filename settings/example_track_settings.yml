@@ -44,6 +44,7 @@ input_images:
   #     nuclei_prediction_labels: []
 
   # Virtual channel: computed dynamically using prior outputs.
+  # if path is null, the channel is computed dynamically using the prior outputs.
   - path: null
     channels:
       foreground:
