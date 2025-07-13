@@ -1,0 +1,36 @@
+
+## Dynamic Imaging
+
+The microscope images of the markers were acquired using correlative confocal microscopy and quantitative phase microscopy.
+
+### Sample preparation
+150,000 of A549 cells were plated in 24 well glass bottom plate.
+Next day, nucleus was stain with Hoechst in 1:10,000 dilution in PBS for 10 mins. Cells were fixed with either 4% of PFA or cold MtOH for 20 mins. Then, imaging media was used during imaging.
+### Microscope specifications
+
+Microscope body: Leica DMi8 inverted microscope.
+
+Objective: 63X, 1.47 NA
+
+Imaging channels:
+* DAPI: (Hoechst), 358 nm excitation, 461 nm emission.
+* FITC: (nuclear translocation sensor), 495 nm excitation, 519 nm emission.
+* Label-free channels: BF (brightfield), 450 nm illumination.
+
+Multimodal 4D (C,Z,X,Y) imaging using MicroManager
+Imaging was automated using MicroManager open-source software (version ).
+
+Conditions imaged: 
+* Live, 
+* PFA fixed, 
+* Methanol fixed
+
+z resolution: z-slices at 0.2 um spacing
+
+Live cells are imaged under incubated conditions at 37 degrees Celsius and 5% CO2, 90% humidity. Fixed cells were imaged at room temperature.
+
+Laser intensity for various markers were optimized for best SNR. The intensity of the markers in live condition is ranked as follows , increasing through the list:
+
+ATP1B3 < RPL36 < NCLN < SEC61B < LAMP1 < PNPLA2 < EDC4 < ACTB < EEA1 < TOMM20 < PEX3 < CLTA < SLC3A2 < ATG101 < VSP35 < G3BP1 < MAP1LC3B < RAB11A < H2BC21 < NPM1
+
+The ranking of intensity of the markers can differ with fixation conditions.
