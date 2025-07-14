@@ -7,7 +7,9 @@ from biahub.cli.main import cli
 from biahub.register import rescale_voxel_size
 
 
-def test_register_cli(tmp_path, example_plate, example_plate_2, example_register_settings):
+def test_register_cli(
+    tmp_path, example_plate, example_plate_2, example_register_settings, sbatch_file
+):
     plate_path, _ = example_plate
     plate_path_2, _ = example_plate_2
     config_path, _ = example_register_settings
@@ -26,7 +28,9 @@ def test_register_cli(tmp_path, example_plate, example_plate_2, example_register
             str(config_path),
             "-o",
             str(output_path),
-            "-l",
+            "--local",
+            "--sbatch-filepath",
+            sbatch_file,
         ],
         catch_exceptions=False,
     )
