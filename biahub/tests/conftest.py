@@ -49,6 +49,14 @@ def example_estimate_registration_settings():
     yield settings_path, settings
 
 
+@pytest.fixture(scope="function")
+def example_process_with_config_settings():
+    settings_path = "./settings/example_process_with_config_settings.yml"
+    with open(settings_path) as file:
+        settings = yaml.safe_load(file)
+    yield settings_path, settings
+
+
 @pytest.fixture()
 def sbatch_file(tmp_path):
     filepath = tmp_path / "sbatch.txt"
