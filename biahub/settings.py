@@ -1,10 +1,12 @@
 import warnings
 
-from typing import Any, Dict, Literal, Optional, Union
+from pathlib import Path
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import torch
 
+from iohub import open_ome_zarr
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -21,6 +23,50 @@ from pydantic import (
 # All settings classes inherit from MyBaseModel, which forbids extra parameters to guard against typos
 class MyBaseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class ProcessingFunctions(MyBaseModel):
+    function: str
+    input_channels: Optional[List[str]] = None  # Optional
+    kwargs: Dict[str, Any] = {}
+    per_timepoint: bool = True
+
+
+class ProcessingInputChannel(MyBaseModel):
+    path: Union[str, None] = None
+    channels: Dict[str, List[ProcessingFunctions]]
+
+    @field_validator("path")
+    @classmethod
+    def validate_path_not_plate(cls, v):
+        if v is None:
+            return v
+        try:
+            v = Path(v)
+            with open_ome_zarr(v, mode='r'):
+                pass
+        except Exception as e:
+            print(e)
+            raise ValueError(f"Path {v} is not a valid OME-Zarr path")
+
+        return v
+
+
+class TrackingSettings(MyBaseModel):
+    target_channel: str = "nuclei_prediction"
+    fov: str = "*/*/*"
+    blank_frames_path: str = None
+    mode: Literal["2D", "3D"] = "2D"
+    z_range: Optional[Tuple[int, int]] = None
+    input_images: List[ProcessingInputChannel]
+    tracking_config: Dict[str, Any] = {}
+
+    @field_validator("blank_frames_path")
+    @classmethod
+    def validate_blank_frames_path(cls, v):
+        if v is None:
+            return v
+        return Path(v)
 
 
 class EstimateRegistrationSettings(MyBaseModel):
