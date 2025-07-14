@@ -7,7 +7,7 @@ The microscope images of the markers were acquired using correlative confocal fl
 * 150,000 of A549 cells were plated in 24 well glass bottom plate.
 * Next day, nucleus was stain with Hoechst in 1:10,000 dilution in PBS for 10 mins.
 * Cells were fixed with either 4% of PFA or cold MtOH for 20 mins. 
-* Then, imaging media was used during imaging.
+* Then, PBS was used during imaging.
 
 ## Microscope specifications
 
