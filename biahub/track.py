@@ -6,13 +6,13 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Union
 
 import click
+import dask.array as da
+import napari
 import numpy as np
 import pandas as pd
 import submitit
 import toml
 import ultrack
-import dask.array as da
-import napari
 
 from iohub import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate
@@ -513,9 +513,13 @@ def run_preprocessing_pipeline(
                 if f_channel_name is None:
                     f_channel_name = [channel_name]
                 f_data = [
-                    data_dict[name].compute() if isinstance(data_dict[name], da.Array)
-                    else np.asarray(data_dict[name])
-                    for name in f_channel_name]
+                    (
+                        data_dict[name].compute()
+                        if isinstance(data_dict[name], da.Array)
+                        else np.asarray(data_dict[name])
+                    )
+                    for name in f_channel_name
+                ]
                 if per_timepoint:
                     result = array_apply(*f_data, func=run_function, **f_kwargs)
 
