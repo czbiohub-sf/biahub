@@ -12,6 +12,8 @@ import submitit
 import toml
 import ultrack
 import dask.array as da
+import napari
+
 from iohub import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate
 from numpy.typing import ArrayLike
@@ -522,8 +524,6 @@ def run_preprocessing_pipeline(
 
                 data_dict[channel_name] = result
                 if visualize:
-                    import napari
-
                     viewer = napari.Viewer()
                     viewer.add_image(data_dict[channel_name], name=channel_name)
 
@@ -580,7 +580,6 @@ def load_data(
                         :, image_channel_names.index(channel_name), z_slices, :, :
                     ]
             if visualize:
-                import napari
                 viewer = napari.Viewer()
                 viewer.add_image(data_dict[channel_name], name=channel_name)
     return data_dict
