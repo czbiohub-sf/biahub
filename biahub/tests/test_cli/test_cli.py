@@ -23,6 +23,7 @@ from biahub.cli.main import cli
         "deconvolve",
         "characterize-psf",
         "segment",
+        "track",
     ],
 )
 def test_command_help(command: str):
