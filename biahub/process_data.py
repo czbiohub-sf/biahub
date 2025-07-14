@@ -121,7 +121,10 @@ def process_czyx(
 
         func = proc.function  # ImportString automatically resolves the function
         kwargs = proc.kwargs
-        c_idx = proc.channel
+        if len(proc.input_channels) == 1:
+            c_idx = proc.input_channels[0]
+        else:
+            raise ValueError("Only one input channel is supported for now")
 
         click.echo(f'Processing with {func.__name__} with kwargs {kwargs} to channel {c_idx}')
         # TODO should we ha

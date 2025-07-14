@@ -24,21 +24,16 @@ class MyBaseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-# class ProcessingFunctions(BaseModel):
-#     function: ImportString
-#     channel: str
-#     kwargs: Dict[str, Any] = {}
-
-
-
 class ProcessingFunctions(MyBaseModel):
     function: ImportString
     input_channels: Optional[List[str]] = None  # Optional
     kwargs: Dict[str, Any] = {}
-    per_timepoint: bool = True
-    
+    per_timepoint: Optional[bool] = True
+
+
 class ProcessingImportFuncSettings(MyBaseModel):
     processing_functions: list[ProcessingFunctions] = []
+
 
 class ProcessingInputChannel(MyBaseModel):
     path: Union[str, None] = None
