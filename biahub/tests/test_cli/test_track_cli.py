@@ -4,9 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from click.testing import CliRunner
-
-from biahub.cli.main import cli
+from biahub.track import track
 
 
 @pytest.fixture(scope="function")
@@ -104,6 +102,7 @@ def test_track_cli_local(
     plate_path, _ = example_tracking_plate
     config_path, _ = example_track_settings
     output_path = tmp_path / "tracking_output.zarr"
+
     # Create a modified config for testing
     test_config_path = tmp_path / "test_track_config.yml"
     with open(config_path) as f:
@@ -111,26 +110,14 @@ def test_track_cli_local(
     config_content = config_content.replace("/path/to/virtual_staining.zarr", str(plate_path))
     with open(test_config_path, 'w') as f:
         f.write(config_content)
-    runner = CliRunner()
-    result = runner.invoke(
-        cli,
-        [
-            "track",
-            "-o",
-            str(output_path),
-            "-c",
-            str(test_config_path),
-            "--local",
-            "--sbatch-filepath",
-            str(custom_sbatch_file),
-        ],
-        catch_exceptions=False,
-    )
-    print(f"CLI Output: {result.output}")
-    print(f"Exit Code: {result.exit_code}")
 
-    # Test that the CLI runs without crashing
-    assert result.exit_code == 0
+    # Call the track function directly instead of using CLI
+    track(
+        output_dirpath=str(output_path),
+        config_filepath=str(test_config_path),
+        sbatch_filepath=str(custom_sbatch_file),
+        local=True,
+    )
 
     # Test that the output directory is created
     assert output_path.exists()
@@ -152,7 +139,7 @@ def test_track_cli_with_blank_frames(
 ):
     monkeypatch.setenv("ULTRACK_ARRAY_MODULE", "numpy")
     """
-    Test the track CLI command with blank frames CSV
+    Test the track function with blank frames CSV
     """
     plate_path, _ = example_tracking_plate
     config_path, _ = example_track_settings
@@ -171,31 +158,22 @@ def test_track_cli_with_blank_frames(
     with open(test_config_path, 'w') as f:
         f.write(config_content)
 
-    runner = CliRunner()
-    result = runner.invoke(
-        cli,
-        [
-            "track",
-            "-o",
-            str(output_path),
-            "-c",
-            str(test_config_path),
-            "--local",
-            "--sbatch-filepath",
-            str(sbatch_file),
-        ],
-        catch_exceptions=False,
+    # Call the track function directly
+    track(
+        output_dirpath=str(output_path),
+        config_filepath=str(test_config_path),
+        sbatch_filepath=str(sbatch_file),
+        local=True,
     )
 
     # Check that the command executed successfully
-    assert result.exit_code == 0
     assert output_path.exists()
 
 
 def test_track_cli_invalid_config(tmp_path, monkeypatch):
     monkeypatch.setenv("ULTRACK_ARRAY_MODULE", "numpy")
     """
-    Test that the track command fails with invalid config
+    Test that the track function fails with invalid config
     """
     output_path = tmp_path / "output.zarr"
     invalid_config_path = tmp_path / "invalid_config.yml"
@@ -204,28 +182,19 @@ def test_track_cli_invalid_config(tmp_path, monkeypatch):
     with open(invalid_config_path, 'w') as f:
         f.write("invalid: yaml: content")
 
-    runner = CliRunner()
-    result = runner.invoke(
-        cli,
-        [
-            "track",
-            "-o",
-            str(output_path),
-            "-c",
-            str(invalid_config_path),
-            "--local",
-        ],
-        catch_exceptions=True,
-    )
-
-    # Should fail due to invalid config
-    assert result.exit_code != 0
+    # Test that the track function raises an exception with invalid config
+    with pytest.raises(Exception):
+        track(
+            output_dirpath=str(output_path),
+            config_filepath=str(invalid_config_path),
+            local=True,
+        )
 
 
 def test_track_cli_missing_input_path(tmp_path, example_track_settings, monkeypatch):
     monkeypatch.setenv("ULTRACK_ARRAY_MODULE", "numpy")
     """
-    Test that the track command fails when input path doesn't exist
+    Test that the track function fails when input path doesn't exist
     """
     config_path, _ = example_track_settings
     output_path = tmp_path / "output.zarr"
@@ -243,19 +212,10 @@ def test_track_cli_missing_input_path(tmp_path, example_track_settings, monkeypa
     with open(test_config_path, 'w') as f:
         f.write(config_content)
 
-    runner = CliRunner()
-    result = runner.invoke(
-        cli,
-        [
-            "track",
-            "-o",
-            str(output_path),
-            "-c",
-            str(test_config_path),
-            "--local",
-        ],
-        catch_exceptions=True,
-    )
-
-    # Should fail due to missing input path
-    assert result.exit_code != 0
+    # Test that the track function raises an exception with missing input path
+    with pytest.raises(Exception):
+        track(
+            output_dirpath=str(output_path),
+            config_filepath=str(test_config_path),
+            local=True,
+        )
