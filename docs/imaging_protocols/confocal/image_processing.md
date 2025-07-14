@@ -11,7 +11,11 @@ Brightfield volumes were reconstructed to get phase information using [waveorder
 The three image channels were registered using [biahub](https://github.com/czbiohub-sf/biahub). BF and fluorescence channels were misregistered due to different views of the two different cameras, and the two fluorescence channels were misregistered due to differences in optics used for filtering the specific wavelengths of light.
 
 ## Image download and visualization
-Download the complete high-resolution dataset with multiple field-of-views for all displayed conditions from the following [link](https://public.czbiohub.org/organelle_box/datasets/A549/organelle_box_v1.zarr). 800 x 800 pixel crop of one field-of-view is displayed.
+Download the complete high-resolution dataset with multiple field-of-views for all displayed conditions using following command:
+```
+wget -m -np -nH --cut-dirs=3 -R "index.html*"https://public.czbiohub.org/organelle_box/datasets/A549/organelle_box_v1.zarr"
+```
+800 x 800 pixel crop of one field-of-view is displayed.
 
 You can visualize the zarr data using [napari](https://napari.org/).
 

@@ -4,10 +4,16 @@
 The microscope images of the markers were acquired using correlative confocal fluorescence microscopy and quantitative phase microscopy.
 
 ## Sample preparation
+For fixed and live cell imaging:
 * 150,000 of A549 cells were plated in 24 well glass bottom plate.
+
+For fixation:
 * Next day, nucleus was stain with Hoechst in 1:10,000 dilution in PBS for 10 mins.
 * Cells were fixed with either 4% of PFA or cold MtOH for 20 mins. 
+
+Before imaging:
 * Then, imaging media was used during imaging.
+
 ## Microscope specifications
 
 ### Microscope body
@@ -36,7 +42,7 @@ Imaging was automated using MicroManager open-source software (version 2.0).
 * z-slices at 0.2 um spacing
 * x-y pixel at 0.103 um resolution
 
-### Live imaging conditions
+### Imaging conditions
 Live cells are imaged under incubated conditions at 37 degrees Celsius and 5% CO2, 90% humidity. Fixed cells were imaged at room temperature.
 
 Laser intensity for various markers were optimized for best SNR. The intensity of the markers in live condition is ranked as follows , increasing through the list:
