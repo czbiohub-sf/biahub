@@ -130,7 +130,7 @@ def process_czyx(
     return czyx_data
 
 
-def process_w_imports(
+def process_with_config(
     input_position_dirpaths: Sequence[Path],
     config_filepath: Path,
     output_dirpath: Path,
@@ -282,13 +282,13 @@ def process_w_imports(
     monitor_jobs(jobs, input_position_dirpaths)
 
 
-@click.command("process-w-imports")
+@click.command("process")
 @input_position_dirpaths()
 @config_filepath()
 @output_dirpath()
 @sbatch_filepath()
 @local()
-def process_w_imports_cli(
+def process_with_config_cli(
     input_position_dirpaths,
     config_filepath,
     output_dirpath,
@@ -301,7 +301,7 @@ def process_w_imports_cli(
     Example usage:
     biahub process-w-imports -i ./timelapse.zarr/0/0/0 -c ./process_params.yml -o ./processed_timelapse.zarr -j 1
     """
-    process_w_imports(
+    process_with_config(
         input_position_dirpaths=input_position_dirpaths,
         config_filepath=config_filepath,
         output_dirpath=output_dirpath,
@@ -311,4 +311,4 @@ def process_w_imports_cli(
 
 
 if __name__ == "__main__":
-    process_w_imports_cli()
+    process_with_config_cli()
