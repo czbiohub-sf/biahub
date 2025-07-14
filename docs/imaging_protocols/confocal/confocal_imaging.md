@@ -11,7 +11,7 @@ The microscope images of the markers were acquired using correlative confocal fl
 ## Microscope specifications
 
 ### Microscope body
-Leica DMi8 inverted microscope.
+Leica DMi8 inverted microscope with an Okolab cage incubator.
 
 ### Objective
 * Magnification - 63X
