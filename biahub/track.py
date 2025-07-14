@@ -11,7 +11,7 @@ import pandas as pd
 import submitit
 import toml
 import ultrack
-
+import dask.array as da
 from iohub import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate
 from numpy.typing import ArrayLike
@@ -510,8 +510,10 @@ def run_preprocessing_pipeline(
                 f_channel_name = step.input_channels
                 if f_channel_name is None:
                     f_channel_name = [channel_name]
-                f_data = [np.asarray(data_dict[name]) for name in f_channel_name]
-
+                f_data = [
+                    data_dict[name].compute() if isinstance(data_dict[name], da.Array)
+                    else np.asarray(data_dict[name])
+                    for name in f_channel_name]
                 if per_timepoint:
                     result = array_apply(*f_data, func=run_function, **f_kwargs)
 
@@ -567,21 +569,20 @@ def load_data(
     """
     data_dict = {}
     for image in input_images:
-        for channel_name, _ in image.channels.items():
-            # load the data from the zarr path
-            if image.path is not None:
-                click.echo(f"Loading data for channel {channel_name} from {image.path}")
-                image_path = image.path / Path(*position_key)
-                with open_ome_zarr(image_path) as dataset:
-                    image_channel_names = dataset.channel_names
-                    data_dict[channel_name] = dataset.data.dask_array()[
+        # load the data from the zarr path
+        if image.path is not None:
+            image_path = image.path / Path(*position_key)
+            with open_ome_zarr(image_path) as dataset:
+                image_channel_names = dataset.channel_names
+                for channel_name, _ in image.channels.items():
+                    click.echo(f"Loading data for channel {channel_name} from {image.path}")
+                    data_dict[channel_name] = dataset.data[
                         :, image_channel_names.index(channel_name), z_slices, :, :
                     ]
-                if visualize:
-                    import napari
-
-                    viewer = napari.Viewer()
-                    viewer.add_image(data_dict[channel_name], name=channel_name)
+            if visualize:
+                import napari
+                viewer = napari.Viewer()
+                viewer.add_image(data_dict[channel_name], name=channel_name)
     return data_dict
 
 
@@ -787,6 +788,7 @@ def track_one_position(
     with open_ome_zarr(output_dirpath / Path(*position_key), mode="r+") as output_dataset:
         output_dataset[0][:, 0, 0] = np.asarray(tracking_labels, dtype=np.uint32)
     return tracking_labels, tracks_df
+
 
 def track(
     output_dirpath: str,
