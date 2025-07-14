@@ -4,15 +4,15 @@
 The microscope images of the markers were acquired using correlative confocal fluorescence microscopy and quantitative phase microscopy.
 
 ## Sample preparation
-For fixed and live cell imaging:
-* 150,000 of A549 cells were plated in 24 well glass bottom plate.
+For fixed and live cell imaging 150,000 of A549 cells were plated in 24 well glass bottom plate.
 
-For fixation:
-* Next day, nucleus was stain with Hoechst in 1:10,000 dilution in PBS for 10 mins.
-* Cells were fixed with either 4% of PFA or cold MtOH for 20 mins. 
+### Fixed samples:
+* The day after plating the cells, the nucleus was stained with Hoechst in 1:10,000 dilution in PBS for 10 mins.
+* Cells were fixed with either 4% of PFA or cold MtOH for 20 mins.
+* Add imaging media (water?)
 
-Before imaging:
-* Then, imaging media was used during imaging.
+### Live samples:
+* Add imaging media
 
 ## Microscope specifications
 
