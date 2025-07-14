@@ -667,7 +667,7 @@ def _check_nan_n_zeros(input_array: np.ndarray) -> bool:
     Parameters
     ----------
     input_array : np.ndarray
-        Input array (3D).
+        Input array (N-dimensional).
 
     Returns
     -------
