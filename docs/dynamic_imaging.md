@@ -18,7 +18,7 @@ Imaging channels:
 * Label-free channels: BF (brightfield), 450 nm illumination.
 
 Multimodal 4D (C,Z,X,Y) imaging using MicroManager
-Imaging was automated using MicroManager open-source software (version ).
+Imaging was automated using MicroManager open-source software (version 2.0).
 
 Conditions imaged: 
 * Live, 
