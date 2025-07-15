@@ -18,8 +18,8 @@ from biahub.register import register_cli
 from biahub.segment import segment_cli
 from biahub.stabilize import stabilize_cli
 from biahub.stitch import stitch_cli
-from biahub.virtual_stain import virtual_stain_cli
 from biahub.track import track_cli
+from biahub.virtual_stain import virtual_stain_cli
 
 CONTEXT = {"help_option_names": ["-h", "--help"]}
 

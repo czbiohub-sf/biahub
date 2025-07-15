@@ -154,6 +154,7 @@ def combine_fov_zarrs_to_plate(
 
     print(f"Combined all FOVs into {output_dirpath}")
 
+
 def virtual_stain(
     input_position_dirpaths: List[str],
     output_dirpath: str,
@@ -363,6 +364,7 @@ def virtual_stain(
         ]
         monitor_jobs(job_ids, input_position_dirpaths)
 
+
 @click.command("virtual-stain")
 @input_position_dirpaths()
 @output_dirpath()
@@ -433,6 +435,7 @@ def virtual_stain_cli(
         monitor=monitor,
         verbose=verbose,
     )
+
 
 if __name__ == "__main__":
     virtual_stain_cli()
