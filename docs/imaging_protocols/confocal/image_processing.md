@@ -19,4 +19,4 @@ wget -m -np -nH --cut-dirs=3 -R "index.html*"https://public.czbiohub.org/organel
 
 You can visualize the zarr data using [napari](https://napari.org/).
 
-Tools for working with zarr format are available on [napari-iohub](https://github.com/czbiohub-sf/napari-iohub).
+See [napari-iohub](https://github.com/czbiohub-sf/napari-iohub) and [napari-ome-zarr](https://www.napari-hub.org/plugins/napari-ome-zarr) for napari plugins to interact with OME Zarr data.
