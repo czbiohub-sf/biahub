@@ -2020,7 +2020,7 @@ def estimate_registration(
     None
         Writes the estimated registration parameters to the specified output file.
     """
-    output_dir = output_filepath.parent
+    output_dir = Path(output_filepath).parent
     output_dir.mkdir(parents=True, exist_ok=True)
 
     settings = yaml_to_model(config_filepath, EstimateRegistrationSettings)
@@ -2188,7 +2188,7 @@ def estimate_registration(
             verbose=settings.verbose,
         )
 
-    click.echo(f"Registration settings saved to {output_dir}")
+    click.echo(f"Registration settings saved to {output_dir.resolve()}")
 
 
 @click.command("estimate-registration")

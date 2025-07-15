@@ -40,6 +40,7 @@ def _optimize_registration(
 
     source_czyx = np.asarray(source_czyx).astype(np.float32)
     target_czyx = np.asarray(target_czyx).astype(np.float32)
+
     if _check_nan_n_zeros(source_czyx) or _check_nan_n_zeros(target_czyx):
         return None
 
@@ -70,8 +71,13 @@ def _optimize_registration(
 
     _offset = np.zeros(3, dtype=np.float32)
     if crop:
+        click.echo("Estimating crop for source and target channels to overlapping region...")
         mask = np.astype((target_zyx != 0) & (source_channels[0] != 0), np.uint8)
         z_slice, y_slice, x_slice = find_lir(mask, plot=False)
+        click.echo(
+            f"Cropping to region: z={z_slice}, y={y_slice}, x={x_slice}"
+        )
+
         _offset = np.asarray(
             [_s.start for _s in (z_slice, y_slice, x_slice)], dtype=np.float32
         )
@@ -80,12 +86,14 @@ def _optimize_registration(
 
     # TODO: hardcoded clipping limits
     if clip:
+        click.echo("Clipping source and target channels to reasonable values...")
         target_zyx = np.clip(target_zyx, 0, 0.5)
         source_channels = [
             np.clip(_channel, 110, np.quantile(_channel, 0.99)) for _channel in source_channels
         ]
 
     if sobel_fitler:
+        click.echo("Applying Sobel filter to source and target channels...")
         target_zyx = filters.sobel(target_zyx)
         source_channels = [filters.sobel(_channel) for _channel in source_channels]
 
@@ -93,6 +101,7 @@ def _optimize_registration(
     target_ants = ants.from_numpy(target_zyx)
     source_ants = ants.from_numpy(source_zyx)
 
+    click.echo("Optimizing registration parameters using ANTs...")
     reg = ants.registration(
         fixed=target_ants,
         moving=source_ants,
