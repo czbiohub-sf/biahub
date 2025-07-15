@@ -44,6 +44,21 @@ def _optimize_registration(
 ) -> np.ndarray | None:
     if _check_nan_n_zeros(source_czyx) or _check_nan_n_zeros(target_czyx):
         return None
+    
+    _offset = []
+    for _s in (z_slice, y_slice, x_slice):
+        if not isinstance(_s, slice):
+            raise ValueError(
+                f"Expected slice objects for z_slice, y_slice, x_slice, got {_s} of type {type(_s)}"
+            )
+        if _s.start is None:
+            _s = slice(0, _s.stop, _s.step)
+        if not _s.start >= 0:
+            raise ValueError(
+                f"Slice start for z_slice, y_slice, x_slice must be non-negative, got {_s.start}"
+            )
+        _offset.append(_s.start)
+    _offset = np.asarray(_offset)
 
     t_form_ants = convert_transform_to_ants(initial_tform)
 
@@ -53,8 +68,6 @@ def _optimize_registration(
         raise ValueError(f"Expected 3D target channel, got shape {_target_channel.shape}")
     target_ants_pre_crop = ants.from_numpy(_target_channel)
     target_zyx = _target_channel[z_slice, y_slice, x_slice]
-    if target_zyx.ndim != 3:
-        raise ValueError(f"target_zyx is not 3D after slicing: {target_zyx.shape}")
     if clip:
         target_zyx = np.clip(target_zyx, 0, 0.5)
     if sobel_fitler:
@@ -102,7 +115,16 @@ def _optimize_registration(
 
     tx_opt_mat = ants.read_transform(reg["fwdtransforms"][0])
     tx_opt_numpy = convert_transform_to_numpy(tx_opt_mat)
-    composed_matrix = initial_tform @ tx_opt_numpy
+
+    shift_to_roi_np = np.eye(4)
+    shift_to_roi_np[:3, -1] = _offset
+
+    shift_back_np = np.eye(4)
+    shift_back_np[:3, -1] = -_offset
+
+    # Account for tx_opt being estimated at a crop rather than starting at the origin,
+    # i.e. (0, 0, 0) of the image.
+    composed_matrix = initial_tform @ shift_to_roi_np @ tx_opt_numpy @ shift_back_np
 
     if slurm:
         output_folder_path.mkdir(parents=True, exist_ok=True)
