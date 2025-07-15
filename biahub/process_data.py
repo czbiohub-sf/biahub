@@ -16,7 +16,9 @@ from biahub.cli.parsing import (
     output_dirpath,
     sbatch_filepath,
     sbatch_to_submitit,
+    monitor,
 )
+from biahub.cli.resolve_function import resolve_function
 from biahub.cli.utils import estimate_resources, get_output_paths, yaml_to_model
 from biahub.settings import ProcessingFunctions, ProcessingImportFuncSettings
 
@@ -97,6 +99,11 @@ def binning_czyx(
     return output.astype(czyx_data.dtype)
 
 
+CUSTOM_FUNCTIONS = {
+    "biahub.process_data.binning_czyx": binning_czyx,
+}
+
+
 def process_czyx(
     czyx_data: np.ndarray,
     processing_functions: list[ProcessingFunctions],
@@ -118,8 +125,9 @@ def process_czyx(
     """
     # Apply processing functions
     for proc in processing_functions:
-
-        func = proc.function  # ImportString automatically resolves the function
+        func = resolve_function(
+            proc.function, custom_functions=CUSTOM_FUNCTIONS
+        )  # Resolve function string to callable
         kwargs = proc.kwargs
         if len(proc.input_channels) == 1:
             c_idx = proc.input_channels[0]
@@ -139,6 +147,7 @@ def process_with_config(
     output_dirpath: Path,
     sbatch_filepath: Path | None = None,
     local: bool = False,
+    monitor: bool = True,
 ) -> None:
     """
     Process data with functions specified in the config file.
@@ -172,21 +181,33 @@ def process_with_config(
     settings = yaml_to_model(config_filepath, ProcessingImportFuncSettings)
 
     if settings.processing_functions is not None:
+        if not settings.processing_functions:
+            raise ValueError("Processing functions must be specified")
         for proc in settings.processing_functions:
             # Replace the channel name with the channel index
-            if proc.channel is not None:
-                proc.channel = channel_names.index(proc.channel)
+            if proc.input_channels is not None and len(proc.input_channels) == 1:
+                proc.input_channels[0] = channel_names.index(proc.input_channels[0])
             else:
                 raise ValueError("Channel must be specified for preprocessing functions")
+            # Resolve function and check if it's callable
+            try:
+                resolved_func = resolve_function(proc.function, custom_functions=CUSTOM_FUNCTIONS)
+                if not callable(resolved_func):
+                    raise ValueError(f"Function {proc.function} is not callable")
+            except ValueError as e:
+                raise ValueError(f"Function {proc.function} could not be resolved: {e}")
     else:
         raise ValueError("Processing functions must be specified")
 
     # FIXME: temporary for binning functions
-    if any(proc.function.__name__ == "binning_czyx" for proc in settings.processing_functions):
+    if any(
+        proc.function == "biahub.process_data.binning_czyx"
+        for proc in settings.processing_functions
+    ):
         click.echo("Binning output shape is hard")
         # Get the binning factor from the first binning function found
         for proc in settings.processing_functions:
-            if proc.function.__name__ == "binning_czyx":
+            if proc.function == "biahub.process_data.binning_czyx":
                 binning_factor = proc.kwargs.get("binning_factor_zyx", (1, 4, 4))
                 click.echo(f"Binning factor: {binning_factor}")
                 break
@@ -282,7 +303,8 @@ def process_with_config(
                 )
             )
 
-    monitor_jobs(jobs, input_position_dirpaths)
+    if monitor:
+        monitor_jobs(jobs, input_position_dirpaths)
 
 
 @click.command("process")
@@ -291,13 +313,15 @@ def process_with_config(
 @output_dirpath()
 @sbatch_filepath()
 @local()
+@monitor()
 def process_with_config_cli(
-    input_position_dirpaths,
-    config_filepath,
-    output_dirpath,
-    sbatch_filepath,
-    local,
-):
+    input_position_dirpaths: Sequence[Path],
+    config_filepath: Path,
+    output_dirpath: Path,
+    sbatch_filepath: Path | None = None,
+    local: bool = False,
+    monitor: bool = True,
+) -> None:
     """
     Process data with functions specified in the config file.
 
@@ -310,6 +334,7 @@ def process_with_config_cli(
         output_dirpath=output_dirpath,
         sbatch_filepath=sbatch_filepath,
         local=local,
+        monitor=monitor,
     )
 
 

@@ -25,7 +25,7 @@ class MyBaseModel(BaseModel):
 
 
 class ProcessingFunctions(MyBaseModel):
-    function: ImportString
+    function: str
     input_channels: Optional[List[str]] = None  # Optional
     kwargs: Dict[str, Any] = {}
     per_timepoint: Optional[bool] = True
