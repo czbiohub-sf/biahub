@@ -31,6 +31,7 @@ def test_main():
         "characterize-psf",
         "segment",
         "virtual-stain",
+        "track",
     ],
 )
 def test_command_help(command: str):
