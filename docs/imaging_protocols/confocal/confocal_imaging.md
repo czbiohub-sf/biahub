@@ -9,8 +9,9 @@ The microscope images of the markers were acquired using correlative confocal fl
 * Cells were fixed with either 4% of PFA or cold MtOH for 20 mins. 
 * Then, PBS was used during imaging.
 
-## Microscope specifications
+## Our microscope
 
+We use a confocal with a transmitted-light path for correlative fluorescence and label-free imaging.
 ### Microscope body
 Leica DMi8 inverted microscope with an Okolab cage incubator.
 
