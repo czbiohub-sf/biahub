@@ -242,30 +242,36 @@ def test_process_with_config_binning_and_squaring(
         print(f"Combined test - Channel names: {output_dataset.channel_names}")
 
 
-def test_binning_function_direct():
+def test_binning_function():
     """
     Test the binning function directly with simple test data
     """
-    # Create test data: 2x2x2 array
-    test_data = np.array([[[1, 2], [3, 4]], [[5, 6], [7, 8]]], dtype=np.float32)  # Z=0  # Z=1
+    # Create a larger test array with a linear ramp
+    # Shape before: (C=1, Z=1, Y=8, X=8)
+    # After 2x2 binning: (1, 1, 4, 4)
+    data = np.arange(1, 1 + 8 * 8, dtype=np.float32).reshape((1, 1, 8, 8))
 
-    # Add channel dimension: (1, 2, 2, 2)
-    test_data = test_data[np.newaxis, :, :, :]
+    # Apply binning: no binning in Z, 2x2 in Y and X
+    binned = binning_czyx(data, binning_factor_zyx=[1, 2, 2], mode="sum")
 
-    # Apply 2x2 binning
-    binned = binning_czyx(test_data, binning_factor_zyx=[1, 2, 2], mode="sum")
+    # Check shape
+    assert binned.shape == (1, 1, 4, 4)
 
-    # Expected result: (1, 2, 1, 1) with summed values
-    expected_shape = (1, 2, 1, 1)
-    assert binned.shape == expected_shape
+    # Recalculate what the unnormalized sums should be:
+    expected_sums = np.zeros((4, 4), dtype=np.float32)
+    for i in range(4):  # Y bins
+        for j in range(4):  # X bins
+            block = data[0, 0, i*2:(i+1)*2, j*2:(j+1)*2]
+            expected_sums[i, j] = block.sum()
 
-    # Check that values are summed correctly
-    # Z=0: sum of [1,2,3,4] = 10
-    # Z=1: sum of [5,6,7,8] = 26
-    assert np.allclose(binned[0, 0, 0, 0], 10.0)
-    assert np.allclose(binned[0, 1, 0, 0], 26.0)
+    # Now apply normalization (same as in binning_czyx)
+    min_val = expected_sums.min()
+    max_val = expected_sums.max()
+    expected_normalized = (expected_sums - min_val) * 65535 / (max_val - min_val)
 
-    print("Direct binning function test passed!")
+    # Compare all elements
+    assert np.allclose(binned[0, 0], expected_normalized, atol=1e-3)
+
 
 
 def test_binning_function_mean_mode():
