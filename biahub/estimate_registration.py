@@ -814,11 +814,11 @@ def ants_registration(
 
     # Prepare SLURM arguments
     slurm_args = {
-        "slurm_job_name": "estimate_focus_z",
+        "slurm_job_name": "estimate_registration",
         "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,
-        "slurm_time": 60,
+        "slurm_time": 30,
         "slurm_partition": "preempted",
     }
 
@@ -833,26 +833,9 @@ def ants_registration(
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
 
-    click.echo(f"Submitting SLURM focus estimation jobs with resources: {slurm_args}")
+    click.echo(f"Submitting SLURM estimate regstration jobs with resources: {slurm_args}")
     output_transforms_path = output_folder_path / "xyz_transforms"
     output_transforms_path.mkdir(parents=True, exist_ok=True)
-
-    # DEBUG
-    t = 0
-    _optimize_registration(
-        source_data_tczyx[t],
-        target_data_tczyx[t],
-        initial_tform=initial_tform,
-        source_channel_index=source_channel_index,
-        target_channel_index=target_channel_index,
-        crop=True,
-        clip=True,
-        sobel_fitler=ants_registration_settings.sobel_filter,
-        verbose=verbose,
-        slurm=True,
-        output_folder_path=output_transforms_path,
-        t_idx=t,
-    )
 
     click.echo('Computing registration transforms...')
     # NOTE: ants is mulitthreaded so no need for multiprocessing here
