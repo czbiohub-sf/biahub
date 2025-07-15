@@ -75,7 +75,9 @@ def _optimize_registration(
         mask = np.astype((target_zyx != 0) & (source_channels[0] != 0), np.uint8)
         z_slice, y_slice, x_slice = find_lir(mask, plot=False)
         click.echo(
-            f"Cropping to region: z={z_slice}, y={y_slice}, x={x_slice}"
+            f"Cropping to region z={z_slice.start}:{z_slice.stop}, "
+            f"y={y_slice.start}:{y_slice.stop}, "
+            f"x={x_slice.start}:{x_slice.stop}"
         )
 
         _offset = np.asarray(
