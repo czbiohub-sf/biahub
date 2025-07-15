@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from biahub.settings import (
     DeskewSettings,
     EstimateRegistrationSettings,
+    ProcessingImportFuncSettings,
     RegistrationSettings,
     StabilizationSettings,
 )
@@ -79,3 +80,8 @@ def test_example_stabilize_timelapse_settings(example_stabilize_timelapse_settin
 def test_example_estimate_registration_settings(example_estimate_registration_settings):
     _, settings = example_estimate_registration_settings
     EstimateRegistrationSettings(**settings)
+
+
+def test_example_process_with_config_settings(example_process_with_config_settings):
+    _, settings = example_process_with_config_settings
+    ProcessingImportFuncSettings(**settings)
