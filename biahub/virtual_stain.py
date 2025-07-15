@@ -154,48 +154,16 @@ def combine_fov_zarrs_to_plate(
 
     print(f"Combined all FOVs into {output_dirpath}")
 
-
-@click.command("virtual-stain")
-@input_position_dirpaths()
-@output_dirpath()
-@sbatch_filepath_preprocess()
-@sbatch_filepath_predict()
-@num_processes()
-@local()
-@monitor()
-@click.option("--verbose", is_flag=True, default=False, help="Verbose output.")
-@click.option(
-    "--path-viscy-env",
-    default="/hpc/mydata/taylla.theodoro/anaconda/2022.05/x86_64/envs/viscy",
-    show_default=True,
-    help="Conda environment with VisCy installed.",
-)
-@click.option(
-    "--preprocess-config-filepath",
-    type=str,
-    help="Path to the VisCy preprocess config file.",
-)
-@click.option(
-    "--predict-config-filepath",
-    type=str,
-    help="Path to the VisCy predict config file.",
-)
-@click.option(
-    "--run-mode",
-    type=click.Choice(["all", "preprocess", "predict"]),
-    default="all",
-    help="Which VisCy stage(s) to run.",
-)
-def virtual_stain_cli(
+def virtual_stain(
     input_position_dirpaths: List[str],
     output_dirpath: str,
     predict_config_filepath: str,
     preprocess_config_filepath: str = None,
     path_viscy_env: str = "/hpc/mydata/taylla.theodoro/anaconda/2022.05/x86_64/envs/viscy",
-    run_mode: str = "all",
-    num_processes: int = 32,
     sbatch_filepath_preprocess: str = None,
     sbatch_filepath_predict: str = None,
+    run_mode: str = "all",
+    num_processes: int = 32,
     local: bool = False,
     monitor: bool = True,
     verbose: bool = True,
@@ -209,6 +177,24 @@ def virtual_stain_cli(
         List of paths to the input position directories.
     output_dirpath : str
         Path to the output directory.
+    predict_config_filepath : str
+        Path to the VisCy predict config file.
+    preprocess_config_filepath : str
+        Path to the VisCy preprocess config file.
+    path_viscy_env : str
+        Path to the VisCy environment.
+    sbatch_filepath_preprocess : str
+        Path to the VisCy preprocess sbatch file.
+    sbatch_filepath_predict : str
+        Path to the VisCy predict sbatch file.
+    run_mode : str
+        Which VisCy stage(s) to run.
+    num_processes : int
+        Number of processes to use.
+    local : bool
+        Whether to run locally.
+    monitor : bool
+
     """
     output_dirpath = Path(output_dirpath)
     slurm_out_path = output_dirpath.parent / "slurm_output"
@@ -377,6 +363,76 @@ def virtual_stain_cli(
         ]
         monitor_jobs(job_ids, input_position_dirpaths)
 
+@click.command("virtual-stain")
+@input_position_dirpaths()
+@output_dirpath()
+@sbatch_filepath_preprocess()
+@sbatch_filepath_predict()
+@num_processes()
+@local()
+@monitor()
+@click.option("--verbose", is_flag=True, default=False, help="Verbose output.")
+@click.option(
+    "--path-viscy-env",
+    default="/hpc/mydata/taylla.theodoro/anaconda/2022.05/x86_64/envs/viscy",
+    show_default=True,
+    help="Conda environment with VisCy installed.",
+)
+@click.option(
+    "--preprocess-config-filepath",
+    type=str,
+    help="Path to the VisCy preprocess config file.",
+)
+@click.option(
+    "--predict-config-filepath",
+    type=str,
+    help="Path to the VisCy predict config file.",
+)
+@click.option(
+    "--run-mode",
+    type=click.Choice(["all", "preprocess", "predict"]),
+    default="all",
+    help="Which VisCy stage(s) to run.",
+)
+def virtual_stain_cli(
+    input_position_dirpaths: List[str],
+    output_dirpath: str,
+    predict_config_filepath: str,
+    preprocess_config_filepath: str = None,
+    path_viscy_env: str = "/hpc/mydata/taylla.theodoro/anaconda/2022.05/x86_64/envs/viscy",
+    run_mode: str = "all",
+    num_processes: int = 32,
+    sbatch_filepath_preprocess: str = None,
+    sbatch_filepath_predict: str = None,
+    local: bool = False,
+    monitor: bool = True,
+    verbose: bool = True,
+):
+    """
+    Run VisCy virtual stain on a plate.
+    Example:
+    biahub virtual-stain \
+        --input-position-dirpaths /path/to/position/1 /path/to/position/2 \
+        --output-dirpath /path/to/output \
+        --predict-config-filepath /path/to/predict.json \
+        --preprocess-config-filepath /path/to/preprocess.json \
+        --path-viscy-env /path/to/viscy/env \
+        --run-mode all \
+    """
+    virtual_stain(
+        input_position_dirpaths=input_position_dirpaths,
+        output_dirpath=output_dirpath,
+        predict_config_filepath=predict_config_filepath,
+        preprocess_config_filepath=preprocess_config_filepath,
+        sbatch_filepath_preprocess=sbatch_filepath_preprocess,
+        sbatch_filepath_predict=sbatch_filepath_predict,
+        path_viscy_env=path_viscy_env,
+        run_mode=run_mode,
+        num_processes=num_processes,
+        local=local,
+        monitor=monitor,
+        verbose=verbose,
+    )
 
 if __name__ == "__main__":
     virtual_stain_cli()
