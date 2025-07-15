@@ -44,7 +44,6 @@ from biahub.optimize_registration import _optimize_registration
 from biahub.register import (
     convert_transform_to_ants,
     convert_transform_to_numpy,
-    find_overlapping_volume,
     get_3D_rescaling_matrix,
     get_3D_rotation_matrix,
 )

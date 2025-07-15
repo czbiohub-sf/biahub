@@ -37,7 +37,7 @@ def _optimize_registration(
     t_idx: int = 0,
     output_folder_path: str | None = None,
 ) -> np.ndarray | None:
-    
+
     source_czyx = np.asarray(source_czyx).astype(np.float32)
     target_czyx = np.asarray(target_czyx).astype(np.float32)
     if _check_nan_n_zeros(source_czyx) or _check_nan_n_zeros(target_czyx):
@@ -72,14 +72,18 @@ def _optimize_registration(
     if crop:
         mask = np.astype((target_zyx != 0) & (source_channels[0] != 0), np.uint8)
         z_slice, y_slice, x_slice = find_lir(mask, plot=False)
-        _offset = np.asarray([_s.start for _s in (z_slice, y_slice, x_slice)], dtype=np.float32)
+        _offset = np.asarray(
+            [_s.start for _s in (z_slice, y_slice, x_slice)], dtype=np.float32
+        )
         target_zyx = target_zyx[z_slice, y_slice, x_slice]
         source_channels = [_channel[z_slice, y_slice, x_slice] for _channel in source_channels]
 
     # TODO: hardcoded clipping limits
     if clip:
         target_zyx = np.clip(target_zyx, 0, 0.5)
-        source_channels = [np.clip(_channel, 110, np.quantile(_channel, 0.99)) for _channel in source_channels]
+        source_channels = [
+            np.clip(_channel, 110, np.quantile(_channel, 0.99)) for _channel in source_channels
+        ]
 
     if sobel_fitler:
         target_zyx = filters.sobel(target_zyx)
@@ -128,19 +132,12 @@ def _optimize_registration(
     is_flag=True,
     help="Display the registered channels in a napari viewer",
 )
-@click.option(
-    "--optimizer-verbose",
-    "-v",
-    is_flag=True,
-    help="Show verbose output of optimizer",
-)
 def optimize_registration_cli(
     source_position_dirpaths,
     target_position_dirpaths,
     config_filepaths,
     output_filepath,
     display_viewer,
-    optimizer_verbose,
 ):
     """
     Optimize the affine transform between source and target channels using ANTs library.
@@ -189,21 +186,14 @@ def optimize_registration_cli(
     source_data_zyx = source_data_czyx[source_channel_index]
     target_data_zyx = target_data_czyx[target_channel_index]
 
-    # Crop only to the overlapping regio, zero padding interfereces with registration
-    z_slice, y_slice, x_slice = find_overlapping_volume(
-        target_data_zyx.shape, source_data_zyx.shape, approx_tform
-    )
-
     composed_matrix = _optimize_registration(
         source_czyx=source_data_czyx,
         target_czyx=target_data_czyx,
         initial_tform=approx_tform,
         source_channel_index=source_channel_index,
         target_channel_index=target_channel_index,
-        z_slice=z_slice,
-        y_slice=y_slice,
-        x_slice=x_slice,
-        verbose=optimizer_verbose,
+        crop=True,
+        verbose=settings.verbose,
     )
 
     # Saving the parameters

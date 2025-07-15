@@ -295,6 +295,7 @@ class RegistrationSettings(MyBaseModel):
     keep_overhang: bool = False
     interpolation: str = "linear"
     time_indices: Union[NonNegativeInt, list[NonNegativeInt], Literal["all"]] = "all"
+    verbose: bool = False
 
     @field_validator("affine_transform_zyx")
     @classmethod

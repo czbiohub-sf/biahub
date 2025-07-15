@@ -4,7 +4,7 @@ from click.testing import CliRunner
 from numpy import testing
 
 from biahub.cli.main import cli
-from biahub.register import rescale_voxel_size, find_lir
+from biahub.register import find_lir, rescale_voxel_size
 
 
 def test_register_cli(
@@ -70,6 +70,7 @@ def test_apply_affine_to_scale():
     )
     output4 = rescale_voxel_size(m4, input)
     testing.assert_allclose(np.array([2, 3, 3]), output4)
+
 
 def test_find_lir():
     # Test with a simple 3D array
