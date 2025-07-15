@@ -17,7 +17,7 @@ from waveorder.cli.utils import create_empty_hcs_zarr, estimate_resources
 
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
-    config_filepath,
+    config_filepaths,
     input_position_dirpaths,
     local,
     monitor,
@@ -128,7 +128,7 @@ def apply_inverse_transfer_function(
 @click.command("apply-inv-tf")
 @input_position_dirpaths()
 @transfer_function_dirpath()
-@config_filepath()
+@config_filepaths()
 @output_dirpath()
 @num_processes()
 @sbatch_filepath()
@@ -137,7 +137,7 @@ def apply_inverse_transfer_function(
 def apply_inverse_transfer_function_cli(
     input_position_dirpaths: list[Path],
     transfer_function_dirpath: Path,
-    config_filepath: Path,
+    config_filepaths: list[str],
     output_dirpath: Path,
     num_processes: int,
     sbatch_filepath: Path,
@@ -156,6 +156,13 @@ def apply_inverse_transfer_function_cli(
 
     >> biahub apply-inv-tf -i ./input.zarr/*/*/* -t ./transfer-function.zarr -c /examples/birefringence.yml -o ./output.zarr
     """
+    if len(config_filepaths) == 1:
+        config_filepath = Path(config_filepaths[0])
+    else:
+        raise ValueError(
+            "Only one configuration file is supported for apply_inverse_transfer_function. Please provide a single configuration file."
+        )
+
     apply_inverse_transfer_function(
         input_position_dirpaths=input_position_dirpaths,
         transfer_function_dirpath=transfer_function_dirpath,

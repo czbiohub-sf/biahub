@@ -23,7 +23,7 @@ def test_optimize_affine_cli(tmp_path, example_plate, example_register_settings)
             str(output_path),
         ],
     )
-
+    print(result.output)
     # Weak test
     # NOTE: we changed the output of the function so this is no longer printed. Do we need to compare with something?
     # assert "Getting dataset info" in result.output
