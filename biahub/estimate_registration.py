@@ -2268,14 +2268,14 @@ def estimate_registration_cli(
         List of file paths to the target channel data in OME-Zarr format.
     output_filepath : str
         Path to save the estimated registration configuration file (YAML).
-    num_processes : int
-        Number of processes for parallel computations (used in bead-based registration).
     config_filepath : str
         Path to the YAML configuration file for the registration settings.
-    registration_target_channel : str
+    registration_target_channel : str, Optional
         Name of the target channel to be used when registration params are applied.
-    registration_source_channels : list[str]
+        If not provided, the target channel from the config file will be used.
+    registration_source_channels : list[str], Optional
         List of source channel names to be used when registration params are applied.
+        If not provided, the source channels from the config file will be used.
 
     Returns
     -------
@@ -2287,8 +2287,7 @@ def estimate_registration_cli(
     Bead-based registration uses detected bead matches across timepoints to compute affine transformations.
     User-assisted registration requires manual selection of corresponding features in source and target images.
     If registration_target_channel and registration_source_channels are not provided, the target and source channels
-    used for parameter estimation will be used.
-    The output configuration is essential for downstream processing in multi-modal image registration workflows.
+    from the config file will be used.
 
     Example:
     >> biahub estimate-registration
@@ -2296,7 +2295,6 @@ def estimate_registration_cli(
         -t ./acq_name_lightsheet_deskewed.zarr/0/0/0       # Target channel OME-Zarr data path
         -o ./output.yml                                    # Output configuration file path
         --config ./config.yml                              # Path to input configuration file
-        --num-processes 4                                  # Number of processes for parallel bead detection
         --registration-target-channel "Phase3D"            # Name of the target channel
         --registration-source-channel "GFP"                # Names of source channel
         --registration-source-channel "mCherry"            # Names of another source channel
