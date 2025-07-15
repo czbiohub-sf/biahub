@@ -44,7 +44,7 @@ def _optimize_registration(
 ) -> np.ndarray | None:
     if _check_nan_n_zeros(source_czyx) or _check_nan_n_zeros(target_czyx):
         return None
-    
+
     _offset = []
     for _s in (z_slice, y_slice, x_slice):
         if not isinstance(_s, slice):
