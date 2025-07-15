@@ -72,8 +72,8 @@ def _optimize_registration(
     _offset = np.zeros(3, dtype=np.float32)
     if crop:
         click.echo("Estimating crop for source and target channels to overlapping region...")
-        mask = np.astype((target_zyx != 0) & (source_channels[0] != 0), np.uint8)
-        z_slice, y_slice, x_slice = find_lir(mask, plot=False)
+        mask = (target_zyx != 0) & (source_channels[0] != 0)
+        z_slice, y_slice, x_slice = find_lir(mask.astype(np.uint8), plot=False)
         click.echo(
             f"Cropping to region z={z_slice.start}:{z_slice.stop}, "
             f"y={y_slice.start}:{y_slice.stop}, "
