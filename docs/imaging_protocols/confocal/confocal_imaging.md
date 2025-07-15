@@ -25,8 +25,7 @@ Leica DMi8 inverted microscope with an Okolab cage incubator.
 * Label-free channels: BF (brightfield), 450 nm illumination.
 
 ### Imaging software
-Multimodal 4D (C,Z,X,Y) imaging using MicroManager.
-Imaging was automated using MicroManager open-source software (version 2.0).
+We used [Micro-Manager](https://micro-manager.org/) to automate the imaging. We acquired Multi-channel 3D (C, Z, Y, X ) images using [Multi-D acquisition dialog](https://micro-manager.org/Version_2.0_Users_Guide).
 
 ### Conditions imaged
 * Live, 
