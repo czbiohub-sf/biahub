@@ -261,7 +261,7 @@ def test_binning_function():
     expected_sums = np.zeros((4, 4), dtype=np.float32)
     for i in range(4):  # Y bins
         for j in range(4):  # X bins
-            block = data[0, 0, i*2:(i+1)*2, j*2:(j+1)*2]
+            block = data[0, 0, i * 2 : (i + 1) * 2, j * 2 : (j + 1) * 2]
             expected_sums[i, j] = block.sum()
 
     # Now apply normalization (same as in binning_czyx)
@@ -271,7 +271,6 @@ def test_binning_function():
 
     # Compare all elements
     assert np.allclose(binned[0, 0], expected_normalized, atol=1e-3)
-
 
 
 def test_binning_function_mean_mode():
