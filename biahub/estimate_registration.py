@@ -807,34 +807,7 @@ def ants_registration(
     Use verbose=True for detailed logging during registration. The verbose output will be saved at the same level as the output zarr.
     """
     T, C, Z, Y, X = source_data_tczyx.shape
-
-    # # Crop only to the overlapping region, zero padding interfereces with registration
-    z_slice, y_slice, x_slice = find_overlapping_volume(
-        source_data_tczyx.shape[-3:],
-        target_data_tczyx.shape[-3:],
-        np.asarray(affine_transform_settings.approx_transform),
-    )
-
-    z_slice = shrink_slice(z_slice)
-    y_slice = shrink_slice(y_slice)
-    x_slice = shrink_slice(x_slice)
-
-    click.echo(
-        f"Cropping channels to Z: {z_slice.start}:{z_slice.stop}, "
-        f"Y: {y_slice.start}:{y_slice.stop}, "
-        f"X: {x_slice.start}:{x_slice.stop}"
-    )
-
-    target_data_tczyx = target_data_tczyx[
-        :, :, z_slice, y_slice, x_slice
-    ]  # Crop target channel
-    source_data_tczyx = source_data_tczyx[
-        :, :, z_slice, y_slice, x_slice
-    ]  # Crop source channel
-    click.echo(f"Cropped target channel shape: {target_data_tczyx.shape}")
-    click.echo(f"Cropped source channel shape: {source_data_tczyx.shape}")
-
-    # Note: cropping is applied after registration with approx_tform
+    initial_tform = np.asarray(affine_transform_settings.approx_transform)
 
     num_cpus, gb_ram_per_cpu = estimate_resources(
         shape=(T, 2, Z, Y, X), ram_multiplier=16, max_num_cpus=16
@@ -865,6 +838,23 @@ def ants_registration(
     output_transforms_path = output_folder_path / "xyz_transforms"
     output_transforms_path.mkdir(parents=True, exist_ok=True)
 
+    # DEBUG
+    t = 0
+    _optimize_registration(
+        source_data_tczyx[t],
+        target_data_tczyx[t],
+        initial_tform=initial_tform,
+        source_channel_index=source_channel_index,
+        target_channel_index=target_channel_index,
+        crop=True,
+        clip=True,
+        sobel_fitler=ants_registration_settings.sobel_filter,
+        verbose=verbose,
+        slurm=True,
+        output_folder_path=output_transforms_path,
+        t_idx=t,
+    )
+
     click.echo('Computing registration transforms...')
     # NOTE: ants is mulitthreaded so no need for multiprocessing here
     # Submit jobs
@@ -875,12 +865,10 @@ def ants_registration(
                 _optimize_registration,
                 source_data_tczyx[t],
                 target_data_tczyx[t],
-                initial_tform=np.asarray(affine_transform_settings.approx_transform),
+                initial_tform=initial_tform,
                 source_channel_index=source_channel_index,
                 target_channel_index=target_channel_index,
-                z_slice=z_slice,
-                y_slice=y_slice,
-                x_slice=x_slice,
+                crop=True,
                 clip=True,
                 sobel_fitler=ants_registration_settings.sobel_filter,
                 verbose=verbose,
