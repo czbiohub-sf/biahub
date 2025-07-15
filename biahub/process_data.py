@@ -13,10 +13,10 @@ from biahub.cli.parsing import (
     config_filepath,
     input_position_dirpaths,
     local,
+    monitor,
     output_dirpath,
     sbatch_filepath,
     sbatch_to_submitit,
-    monitor,
 )
 from biahub.cli.resolve_function import resolve_function
 from biahub.cli.utils import estimate_resources, get_output_paths, yaml_to_model
@@ -191,7 +191,9 @@ def process_with_config(
                 raise ValueError("Channel must be specified for preprocessing functions")
             # Resolve function and check if it's callable
             try:
-                resolved_func = resolve_function(proc.function, custom_functions=CUSTOM_FUNCTIONS)
+                resolved_func = resolve_function(
+                    proc.function, custom_functions=CUSTOM_FUNCTIONS
+                )
                 if not callable(resolved_func):
                     raise ValueError(f"Function {proc.function} is not callable")
             except ValueError as e:

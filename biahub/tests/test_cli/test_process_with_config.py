@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from biahub.process_data import process_with_config, binning_czyx
+from biahub.process_data import binning_czyx, process_with_config
 
 
 @pytest.fixture(scope="function")
