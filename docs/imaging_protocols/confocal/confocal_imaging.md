@@ -1,8 +1,7 @@
 
 # Correlative Confocal - QPI Imaging
 
-The microscope images of the markers were acquired using correlative confocal fluorescence microscopy and quantitative phase microscopy.
-
+This protocol describes correlative fluorescence (confocal) and label-free (quantitative phase) imaging of cells tagged with one or more fluorescent reporters. The following protocol was developed for imaging cell lines from the [Organelle Box resource](https://organellebox.sf.czbiohub.org/). 
 ## Sample preparation
 * 150,000 of A549 cells were plated in 24 well glass bottom plate.
 * Next day, nucleus was stain with Hoechst in 1:10,000 dilution in PBS for 10 mins.
