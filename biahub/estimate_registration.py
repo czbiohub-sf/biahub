@@ -2251,7 +2251,6 @@ def estimate_registration_cli(
     sbatch_filepath: str = None,
     local: bool = False,
 ):
-
     """
     Estimate the affine transformation between a source and target image for registration.
 

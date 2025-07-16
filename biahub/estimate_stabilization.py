@@ -960,8 +960,9 @@ def get_mean_z_positions(
 
     df = df.sort_values("time_idx")
 
-    # TODO: this is a hack to deal with the fact that the focus finding function returns 0 if it fails
-    df["focus_idx"] = df["focus_idx"].replace(0, np.nan).ffill()
+    # When focus finding fails, it may return 0, which here is replaced with NaN
+    # before calculating the mean focus index per position
+    df["focus_idx"] = df["focus_idx"].replace(0, np.nan)
 
     # Get the mean of positions for each time point
     if method == "mean":

@@ -6,7 +6,7 @@ import multiprocessing as mp
 
 from functools import partial
 from pathlib import Path
-from typing import Tuple
+from typing import List, Tuple
 
 import click
 import numpy as np
@@ -85,6 +85,25 @@ def create_empty_zarr(
         )
 
     input_dataset.close()
+
+
+def update_model(model_instance, update_dict):
+    """
+    Properly updates a Pydantic model with only the provided values while keeping the defaults.
+    This ensures that nested models retain missing values instead of getting overwritten.
+    """
+    updated_fields = {}
+    for key, value in update_dict.items():
+        if isinstance(value, dict) and hasattr(model_instance, key):
+            # If it's a nested dict, update the nested Pydantic model properly
+            nested_model = getattr(model_instance, key)
+            updated_fields[key] = nested_model.copy(update=value)
+        else:
+            # Otherwise, just update the value directly
+            updated_fields[key] = value
+
+    # Create a new instance with updated fields
+    return model_instance.copy(update=updated_fields)
 
 
 # TODO: convert all code to use this function from now on
@@ -210,9 +229,9 @@ def get_output_paths(
             modified_path_strings = list(path_strings)
 
             # Append the suffix to the column part
-            modified_path_strings[
-                1
-            ] = f"{modified_path_strings[1]}d{position_name_counts[position_name]}"
+            modified_path_strings[1] = (
+                f"{modified_path_strings[1]}d{position_name_counts[position_name]}"
+            )
 
             # Append the modified position path
             list_output_path.append(Path(output_zarr_path, *modified_path_strings))
@@ -641,11 +660,47 @@ def _is_nested(lst):
     return any(isinstance(i, list) for i in lst) or any(isinstance(i, str) for i in lst)
 
 
-def _check_nan_n_zeros(input_array):
+def _check_nan_n_zeros(input_array: np.ndarray) -> bool:
     """
-    Checks if data are all zeros or nan
+    Checks if data are all zeros or nan.
+
+    Parameters
+    ----------
+    input_array : np.ndarray
+        Input array (N-dimensional).
+
+    Returns
+    -------
+    bool
+        True if the array is entirely zeros or NaNs, False otherwise.
     """
     return np.all(np.isnan(input_array)) or np.all(input_array == 0)
+
+
+def get_empty_frame_indices(input_array: np.ndarray) -> List[int]:
+    """
+    Get the indices of the empty frames in a 3D array.
+
+    Parameters
+    ----------
+    input_array : np.ndarray
+        Input array (3D).
+
+    Returns
+    -------
+    List[int]
+        List of Z indices that are entirely zeros or NaNs.
+    """
+    indices = []
+
+    if len(input_array.shape) == 3:  # 3D array (e.g., Z, Y, X)
+        for z in range(input_array.shape[0]):
+            if _check_nan_n_zeros(input_array[z, :, :]):
+                indices.append(z)  # Add Z index if it's empty
+        return indices
+
+    else:
+        raise ValueError("Input array must be 3D.")
 
 
 def estimate_resources(

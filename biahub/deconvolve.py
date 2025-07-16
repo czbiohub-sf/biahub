@@ -11,11 +11,13 @@ from iohub.ngff.models import TransformationMeta
 from iohub.ngff.utils import create_empty_plate, process_single_position
 from waveorder.models.isotropic_fluorescent_thick_3d import apply_inverse_transfer_function
 
+from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
     _str_to_path,
     config_filepaths,
     input_position_dirpaths,
     local,
+    monitor,
     output_dirpath,
     sbatch_filepath,
     sbatch_to_submitit,
@@ -77,6 +79,7 @@ def deconvolve(
 @output_dirpath()
 @sbatch_filepath()
 @local()
+@monitor()
 def deconvolve_cli(
     input_position_dirpaths: List[str],
     psf_dirpath: str,
@@ -84,6 +87,7 @@ def deconvolve_cli(
     output_dirpath: str,
     sbatch_filepath: str = None,
     local: bool = False,
+    monitor: bool = True,
 ):
     """
     Deconvolve across T and C axes using a PSF and a configuration file
@@ -189,12 +193,14 @@ def deconvolve_cli(
             )
             jobs.append(job)
 
-    # monitor_jobs(jobs, input_position_dirpaths)
     job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 
     log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
+
+    if monitor:
+        monitor_jobs(jobs, input_position_dirpaths)
 
 
 if __name__ == "__main__":
