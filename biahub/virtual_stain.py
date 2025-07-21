@@ -159,8 +159,8 @@ def virtual_stain(
     input_position_dirpaths: List[str],
     output_dirpath: str,
     predict_config_filepath: str,
+    path_viscy_env: str,
     preprocess_config_filepath: str = None,
-    path_viscy_env: str = "/hpc/mydata/taylla.theodoro/anaconda/2022.05/x86_64/envs/viscy",
     sbatch_filepath_preprocess: str = None,
     sbatch_filepath_predict: str = None,
     run_mode: str = "all",
@@ -376,8 +376,7 @@ def virtual_stain(
 @click.option("--verbose", is_flag=True, default=False, help="Verbose output.")
 @click.option(
     "--path-viscy-env",
-    default="/hpc/mydata/taylla.theodoro/anaconda/2022.05/x86_64/envs/viscy",
-    show_default=True,
+    required=True,
     help="Conda environment with VisCy installed.",
 )
 @click.option(
@@ -400,8 +399,8 @@ def virtual_stain_cli(
     input_position_dirpaths: List[str],
     output_dirpath: str,
     predict_config_filepath: str,
+    path_viscy_env: str,
     preprocess_config_filepath: str = None,
-    path_viscy_env: str = "/hpc/mydata/taylla.theodoro/anaconda/2022.05/x86_64/envs/viscy",
     run_mode: str = "all",
     num_processes: int = 32,
     sbatch_filepath_preprocess: str = None,
@@ -414,10 +413,10 @@ def virtual_stain_cli(
     Run VisCy virtual stain on a plate.
     Example:
     biahub virtual-stain \
-        --input-position-dirpaths /path/to/position/1 /path/to/position/2 \
-        --output-dirpath /path/to/output \
-        --predict-config-filepath /path/to/predict.json \
-        --preprocess-config-filepath /path/to/preprocess.json \
+        --input-position-dirpaths path.zarr/*/*/* \
+        --output-dirpath output.zarr \
+        --predict-config-filepath predict.yml \
+        --preprocess-config-filepath preprocess.yml \
         --path-viscy-env /path/to/viscy/env \
         --run-mode all \
     """
