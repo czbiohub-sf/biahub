@@ -127,7 +127,7 @@ def segment_data(
     if gpu and device.type == 'cuda':
         torch.cuda.empty_cache()
 
-    return np.stack(czyx_segmentation, axis=0)
+    return np.stack(czyx_segmentation, axis=0).astype(np.uint32)
 
 
 @click.command("segment")
@@ -150,6 +150,7 @@ def segment_cli(
         -i ./input.zarr/*/*/* \
         -c ./segment_params.yml \
         -o ./output.zarr
+
     """
 
     # Convert string paths to Path objects
@@ -223,6 +224,7 @@ def segment_cli(
     segmentation_shape = (T, C_segment, Z, Y, X)
 
     # Create a zarr store output to mirror the input
+    # Note, dtype is set to uint32. Change this if one envisions having more than 2^32 labels.
     create_empty_plate(
         store_path=output_dirpath,
         position_keys=[path.parts[-3:] for path in input_position_dirpaths],
@@ -230,6 +232,7 @@ def segment_cli(
         shape=segmentation_shape,
         chunks=None,
         scale=scale,
+        dtype=np.uint32,
     )
 
     # Estimate resources
@@ -274,7 +277,7 @@ def segment_cli(
                     output_position_path=output_position_path,
                     input_channel_indices=[list(range(C))],
                     output_channel_indices=[list(range(C_segment))],
-                    num_processes=np.min([slurm_array_parallelism, int(num_cpus * 0.8)]),
+                    num_processes=np.min([5, int(num_cpus * 0.8)]),
                     segmentation_models=segment_args,
                 )
             )
