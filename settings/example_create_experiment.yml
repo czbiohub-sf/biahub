@@ -1,0 +1,28 @@
+path: "/hpc/projects/intracellular_dashboard/organelle_dynamics/my-dataset"
+dataset_name: "2025_06_26_A549_G3BP1_ZIKV"
+bead_fov: "C/1/000000"
+pipeline: 
+    0-convert:
+        steps:
+            link-dataset:
+                type: local
+                dependency: None
+                args: []
+            rename-wells: {}
+            convert-DRAQ5: {}
+            convert-FLUOR: {}
+            convert-PSF: {}
+    1-preprocess/label-free/0-reconstruct: {}
+    1-preprocess/label-free/1-virtual-stain: {}
+    1-preprocess/label-free/2-stabilize/phase: {}
+    1-preprocess/label-free/2-stabilize/virtual-stain: {}
+    1-preprocess/label-free/3-track: {}
+    1-preprocess/light-sheet/raw/0-deskew: {}
+    1-preprocess/light-sheet/raw/1-stabilize: {}
+    1-preprocess/light-sheet/raw/1-stabilize/: {}
+    1-preprocess/light-sheet/raw/1-stabilize/: {}
+    1-preprocess/light-sheet/raw/2-register: {}
+    1-preprocess/light-sheet/deconvolve/0-deconvolve: {}
+    1-preprocess/light-sheet/deconvolve/1-deskew: {}
+    1-preprocess/light-sheet/deconvolve/2-stabilize-register: {}
+    2-assemble: {}

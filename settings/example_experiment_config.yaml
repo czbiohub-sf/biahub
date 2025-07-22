@@ -1,0 +1,36 @@
+name: example_experiment
+description: An example experiment demonstrating the pipeline structure with deskew, registration, and deconvolution steps
+input_data: input_data.zarr
+base_output_dir: experiments
+
+steps:
+  deskew:
+    command: biahub deskew -i input_data.zarr -c deskew_config.yaml -o output
+    config:
+      ls_angle_deg: 31.5
+      px_to_scan_ratio: 0.386
+      keep_overhang: true
+      average_n_slices: 1
+    input_path: input_data.zarr
+    output_path: output
+    dependencies: []
+
+  register:
+    command: biahub register -i ../deskew/output -c register_config.yaml -o output
+    config:
+      reference_channel: 0
+      max_displacement: 10
+      min_correlation: 0.7
+    input_path: $deskew
+    output_path: output
+    dependencies: [deskew]
+
+  deconvolve:
+    command: biahub deconvolve -i ../register/output -c deconvolve_config.yaml -o output
+    config:
+      psf_path: psf.zarr
+      iterations: 10
+      regularization: 0.1
+    input_path: $register
+    output_path: output
+    dependencies: [register] 

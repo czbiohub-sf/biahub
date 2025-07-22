@@ -25,6 +25,12 @@ class MyBaseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class ProcessingDataset(MyBaseModel):
+    path: str
+    dataset_name: str
+    bead_fov: str
+    pipeline: Dict[str, Any]
+
 class ProcessingFunctions(MyBaseModel):
     function: str
     input_channels: Optional[List[str]] = None  # Optional

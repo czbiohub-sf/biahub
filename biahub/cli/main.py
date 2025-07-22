@@ -55,3 +55,4 @@ cli.add_command(characterize_psf_cli)
 cli.add_command(segment_cli)
 cli.add_command(virtual_stain_cli)
 cli.add_command(track_cli)
+
