@@ -473,3 +473,14 @@ class SegmentationModel(BaseModel):
 class SegmentationSettings(BaseModel):
     models: Dict[str, SegmentationModel]
     model_config = {"extra": "forbid", "protected_namespaces": ()}
+
+
+class ComputeStatsSettings(BaseModel):
+    input_position_dirpaths: str
+    track_zarr_path: str
+    channel_names: list[str]
+    patch_size: list[NonNegativeInt]
+    z_range: list[NonNegativeInt] = [0, 1]
+    compute_best_focus: bool = False
+    percentile_lower_bound: PositiveFloat = 50.0
+    percentile_upper_bound: PositiveFloat = 99.0
