@@ -162,6 +162,12 @@ def get_deskewed_data_shape(
         Xp = int(np.ceil((Z / px_to_scan_ratio) + (Y * ct)))
     else:
         Xp = int(np.ceil((Z / px_to_scan_ratio) - (Y * ct)))
+        if Xp <= 0:
+            raise ValueError(
+                f"Dataset contains only overhang when keep_overhang=False. "
+                f"Computed Xp={Xp} <= 0. Either set keep_overhang=True or use a dataset "
+                f"with non-overhang content."
+            )
 
     output_shape = (Y, X, Xp)
     voxel_size = (average_n_slices * st * pixel_size_um, pixel_size_um, pixel_size_um)
