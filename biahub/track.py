@@ -12,7 +12,6 @@ import numpy as np
 import pandas as pd
 import submitit
 import toml
-import ultrack
 
 from iohub import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate
@@ -27,6 +26,7 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
+from biahub.cli.resolve_function import resolve_function
 from biahub.cli.utils import (
     estimate_resources,
     update_model,
@@ -71,59 +71,9 @@ def mem_nuc_contour(nuclei_prediction: ArrayLike, membrane_prediction: ArrayLike
     return (np.asarray(membrane_prediction) + (1 - np.asarray(nuclei_prediction))) / 2
 
 
-# List of modules to scan for functions
-VALID_MODULES = {"np": np, "ultrack.imgproc": ultrack.imgproc}
-
-# Dynamically populate FUNCTION_MAP with functions from VALID_MODULES
-FUNCTION_MAP = {
-    f"{module_name}.{func}": getattr(module, func)
-    for module_name, module in VALID_MODULES.items()
-    for func in dir(module)
-    if callable(getattr(module, func))
-    and not func.startswith("__")  # Only include functions, not attributes
+CUSTOM_FUNCTIONS = {
+    "biahub.track.mem_nuc_contour": mem_nuc_contour,
 }
-
-# Add custom functions manually
-FUNCTION_MAP["biahub.cli.track.mem_nuc_contour"] = mem_nuc_contour
-
-
-def resolve_function(function_name: str):
-    """
-    Resolve a function by its name from the predefined FUNCTION_MAP.
-
-    This function looks up a string identifier in a centralized dictionary of allowed
-    functions and returns the corresponding callable. It is used to dynamically map
-    function names (e.g., from config files) to actual Python functions.
-
-    Parameters
-    ----------
-    function_name : str
-        The fully qualified name of the function to retrieve
-        (e.g., "np.mean", "ultrack.imgproc.gradient_magnitude").
-
-    Returns
-    -------
-    Callable
-        The resolved function object.
-
-    Raises
-    ------
-    ValueError
-        If the function name is not found in the `FUNCTION_MAP`.
-
-    Notes
-    -----
-    - `FUNCTION_MAP` is a global dictionary that includes a whitelist of safe,
-      user-approved or library-provided functions.
-    - Additional functions (e.g., custom preprocessing functions) can be manually added
-      to `FUNCTION_MAP`.
-    """
-    if function_name not in FUNCTION_MAP:
-        raise ValueError(
-            f"Invalid function '{function_name}'. Allowed functions: {list(FUNCTION_MAP.keys())}"
-        )
-
-    return FUNCTION_MAP[function_name]
 
 
 def fill_empty_frames(arr: ArrayLike, empty_frames_idx: List[int]) -> ArrayLike:
@@ -505,7 +455,7 @@ def run_preprocessing_pipeline(
             for step in pipeline:
                 click.echo(f"Processing {channel_name} with {step.function}")
                 f_name = step.function
-                run_function = resolve_function(f_name)
+                run_function = resolve_function(f_name, custom_functions=CUSTOM_FUNCTIONS)
                 f_kwargs = step.kwargs
                 per_timepoint = step.per_timepoint
                 # if there is input channel, apply the function to the input channel otherwise apply the function to the output channel
