@@ -206,7 +206,6 @@ def process_with_config(
         proc.function == "biahub.process_data.binning_czyx"
         for proc in settings.processing_functions
     ):
-        click.echo("Binning output shape is hard")
         # Get the binning factor from the first binning function found
         for proc in settings.processing_functions:
             if proc.function == "biahub.process_data.binning_czyx":
@@ -328,7 +327,7 @@ def process_with_config_cli(
     Process data with functions specified in the config file.
 
     Example usage:
-    biahub process-w-imports -i ./timelapse.zarr/0/0/0 -c ./process_params.yml -o ./processed_timelapse.zarr -j 1
+    biahub process -i ./timelapse.zarr/0/0/0 -c ./process_params.yml -o ./processed_timelapse.zarr
     """
     process_with_config(
         input_position_dirpaths=input_position_dirpaths,
