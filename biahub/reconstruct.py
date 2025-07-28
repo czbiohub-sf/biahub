@@ -8,7 +8,7 @@ from waveorder.cli.compute_transfer_function import (
 
 from biahub.apply_inverse_transfer_function import apply_inverse_transfer_function
 from biahub.cli.parsing import (
-    config_filepaths,
+    config_filepath,
     input_position_dirpaths,
     local,
     monitor,
@@ -20,7 +20,7 @@ from biahub.cli.parsing import (
 
 @click.command("reconstruct")
 @input_position_dirpaths()
-@config_filepaths()
+@config_filepath()
 @output_dirpath()
 @num_processes()
 @sbatch_filepath()
@@ -28,7 +28,7 @@ from biahub.cli.parsing import (
 @monitor()
 def reconstruct_cli(
     input_position_dirpaths: list[Path],
-    config_filepaths: list[str],
+    config_filepath: Path,
     output_dirpath: Path,
     num_processes: int,
     sbatch_filepath: Path,
@@ -50,13 +50,6 @@ def reconstruct_cli(
     >> biahub reconstruct -i ./input.zarr/*/*/* -c ./examples/birefringence.yml -o ./output.zarr
     """
     # glob all positions in input_position_dirpaths
-
-    if len(config_filepaths) == 1:
-        config_filepath = Path(config_filepaths[0])
-    else:
-        raise ValueError(
-            "Only one configuration file is supported for reconstruct. Please provide a single configuration file."
-        )
 
     # Handle transfer function path
     transfer_function_path = output_dirpath.parent / Path(

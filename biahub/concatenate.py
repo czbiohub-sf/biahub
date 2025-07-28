@@ -13,7 +13,7 @@ from natsort import natsorted
 
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
-    config_filepaths,
+    config_filepath,
     local,
     monitor,
     output_dirpath,
@@ -430,13 +430,13 @@ def concatenate(
 
 
 @click.command("concatenate")
-@config_filepaths()
+@config_filepath()
 @output_dirpath()
 @sbatch_filepath()
 @local()
 @monitor()
 def concatenate_cli(
-    config_filepaths: list[str],
+    config_filepath: Path,
     output_dirpath: str,
     sbatch_filepath: str = None,
     local: bool = False,
@@ -447,12 +447,6 @@ def concatenate_cli(
 
     >> biahub concatenate -c ./concat.yml -o ./output_concat.zarr -j 8
     """
-    if len(config_filepaths) == 1:
-        config_filepath = Path(config_filepaths[0])
-    else:
-        raise ValueError(
-            "Only one configuration file is supported for concatenate. Please provide a single configuration file."
-        )
 
     concatenate(
         settings=yaml_to_model(config_filepath, ConcatenateSettings),

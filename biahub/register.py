@@ -13,7 +13,7 @@ from iohub import open_ome_zarr
 
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
-    config_filepaths,
+    config_filepath,
     local,
     monitor,
     output_dirpath,
@@ -376,7 +376,7 @@ def rescale_voxel_size(affine_matrix, input_scale):
 @click.command("register")
 @source_position_dirpaths()
 @target_position_dirpaths()
-@config_filepaths()
+@config_filepath()
 @output_dirpath()
 @local()
 @sbatch_filepath()
@@ -384,7 +384,7 @@ def rescale_voxel_size(affine_matrix, input_scale):
 def register_cli(
     source_position_dirpaths: List[str],
     target_position_dirpaths: List[str],
-    config_filepaths: list[str],
+    config_filepath: Path,
     output_dirpath: str,
     local: bool,
     sbatch_filepath: Path,
@@ -400,13 +400,6 @@ def register_cli(
 
     # Convert string paths to Path objects
     output_dirpath = Path(output_dirpath)
-
-    if len(config_filepaths) == 1:
-        config_filepath = Path(config_filepaths[0])
-    else:
-        raise ValueError(
-            "Only one configuration file is supported for register. Please provide a single configuration file."
-        )
 
     # Parse from the yaml file
     settings = yaml_to_model(config_filepath, RegistrationSettings)

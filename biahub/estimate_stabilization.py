@@ -21,7 +21,7 @@ from tqdm import tqdm
 from waveorder.focus import focus_from_transverse_band
 
 from biahub.cli.parsing import (
-    config_filepaths,
+    config_filepath,
     input_position_dirpaths,
     local,
     output_dirpath,
@@ -1900,13 +1900,13 @@ def estimate_stabilization(
 @click.command("estimate-stabilization")
 @input_position_dirpaths()
 @output_dirpath()
-@config_filepaths()
+@config_filepath()
 @sbatch_filepath()
 @local()
 def estimate_stabilization_cli(
     input_position_dirpaths: List[str],
     output_dirpath: str,
-    config_filepaths: list[str],
+    config_filepath: Path,
     sbatch_filepath: str = None,
     local: bool = False,
 ):
@@ -1921,7 +1921,7 @@ def estimate_stabilization_cli(
         Paths to the input position directories.
     output_filepath : str
         Path to the output file.
-    config_filepaths : list[str]
+    config_filepath : Path
         Path to the configuration file.
     sbatch_filepath : str
         Path to the sbatch file.
@@ -1945,13 +1945,6 @@ def estimate_stabilization_cli(
     biahub estimate-stabilization -i ./timelapse.zarr/0/0/0 -o ./stabilization.yml  -c ./config.yml -s ./sbatch.sh --local --verbose
 
     """
-    if len(config_filepaths) == 1:
-        config_filepath = Path(config_filepaths[0])
-    else:
-        raise ValueError(
-            "Only one configuration file is supported for estimate_stabilization. Please provide a single configuration file."
-        )
-
     estimate_stabilization(
         input_position_dirpaths=input_position_dirpaths,
         output_dirpath=output_dirpath,

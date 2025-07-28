@@ -21,7 +21,7 @@ from ultrack import MainConfig, Tracker
 from ultrack.utils.array import array_apply
 
 from biahub.cli.parsing import (
-    config_filepaths,
+    config_filepath,
     local,
     output_dirpath,
     sbatch_filepath,
@@ -955,12 +955,12 @@ def track(
 
 @click.command("track")
 @output_dirpath()
-@config_filepaths()
+@config_filepath()
 @sbatch_filepath()
 @local()
 def track_cli(
     output_dirpath: str,
-    config_filepaths: list[str],
+    config_filepath: Path,
     sbatch_filepath: str = None,
     local: bool = None,
 ) -> None:
@@ -976,12 +976,6 @@ def track_cli(
     biahub track -i virtual_staining.zarr/*/*/* -o output.zarr -c config_tracking.yml
 
     """
-    if len(config_filepaths) == 1:
-        config_filepath = Path(config_filepaths[0])
-    else:
-        raise ValueError(
-            "Only one configuration file is supported for deskew. Please provide a single configuration file."
-        )
 
     track(
         output_dirpath=output_dirpath,

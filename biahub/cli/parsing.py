@@ -111,18 +111,18 @@ def config_filepaths() -> Callable:
     return decorator
 
 
-# def config_filepath() -> Callable:
-#     def decorator(f: Callable) -> Callable:
-#         return click.option(
-#             "--config-filepath",
-#             "-c",
-#             required=True,
-#             type=click.Path(exists=True, file_okay=True, dir_okay=True),
-#             callback=_str_to_path,
-#             help="Path to YAML configuration file.",
-#         )(f)
+def config_filepath() -> Callable:
+    def decorator(f: Callable) -> Callable:
+        return click.option(
+            "--config-filepath",
+            "-c",
+            required=True,
+            type=click.Path(exists=True, file_okay=True, dir_okay=True),
+            callback=_str_to_path,
+            help="Path to YAML configuration file.",
+        )(f)
 
-#     return decorator
+    return decorator
 
 
 def output_dirpath() -> Callable:
