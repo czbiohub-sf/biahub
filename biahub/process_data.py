@@ -135,7 +135,6 @@ def process_czyx(
             raise ValueError("Only one input channel is supported for now")
 
         click.echo(f'Processing with {func.__name__} with kwargs {kwargs} to channel {c_idx}')
-        # TODO should we ha
         czyx_data = func(czyx_data, **kwargs)
 
     return czyx_data
@@ -308,7 +307,7 @@ def process_with_config(
         monitor_jobs(jobs, input_position_dirpaths)
 
 
-@click.command("process")
+@click.command("process-with-config")
 @input_position_dirpaths()
 @config_filepath()
 @output_dirpath()
@@ -327,7 +326,7 @@ def process_with_config_cli(
     Process data with functions specified in the config file.
 
     Example usage:
-    biahub process -i ./timelapse.zarr/0/0/0 -c ./process_params.yml -o ./processed_timelapse.zarr
+    biahub process-with-config -i ./timelapse.zarr/0/0/0 -c ./process_params.yml -o ./processed_timelapse.zarr
     """
     process_with_config(
         input_position_dirpaths=input_position_dirpaths,
