@@ -89,7 +89,7 @@ stack_reg_settings:
 focus_finding_settings:
   average_across_wells: False # If True, average focus across all wells
   skip_beads_fov: "0" # FOV index to skip (e.g., bead FOV), as a string
-  crop_size_xy: # size of the crop for focus finding
+  center_crop_xy: # size of the crop for focus finding
     - 800
     - 800
 
