@@ -141,21 +141,26 @@ class BeadsMatchSettings(MyBaseModel):
 
 
 class PhaseCrossCorrSettings(MyBaseModel):
-    normalization: bool = False
+    normalization: Optional[Literal["magnitude", "classic"]] = None
+    maximum_shift: float = 1.2
+    function_type: Literal["custom_padding", "custom"] = "custom"
     t_reference: Literal["first", "previous"] = "first"
     skip_beads_fov: str = "0"
-    crop_size_xy: list[int, int] = [800, 800]
+    center_crop_xy: list[int, int] = None
+    X_slice: Union[list, list[Union[list, Literal["all"]]], Literal["all"]] = "all"
+    Y_slice: Union[list, list[Union[list, Literal["all"]]], Literal["all"]] = "all"
+    Z_slice: Union[list, list[Union[list, Literal["all"]]], Literal["all"]] = "all"
 
 
 class FocusFindingSettings(MyBaseModel):
     average_across_wells: bool = False
     average_across_wells_method: Literal["mean", "median"] = "mean"
     skip_beads_fov: str = "0"
-    crop_size_xy: list[int, int] = [800, 800]
+    center_crop_xy: list[int, int] = [800, 800]
 
 
 class StackRegSettings(MyBaseModel):
-    crop_size_xy: list[int, int] = [800, 800]
+    center_crop_xy: list[int, int] = [800, 800]
     skip_beads_fov: str = "0"
     focus_finding_settings: Optional[FocusFindingSettings] = Field(
         default_factory=FocusFindingSettings

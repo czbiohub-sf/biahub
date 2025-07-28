@@ -63,11 +63,18 @@ beads_match_settings:
 
 
 phase_cross_corr_settings:
-  normalization: False
+  normalization: "magnitude"
   t_reference: "first"
+  function_type: "custom"
+  X_slice: "all"
+  Y_slice: "all"
+  Z_slice: "all"
+  #center_crop_xy: # center crop size for phase cross correlation
+  #  - 800
+  #  - 800
 
 stack_reg_settings:
-  crop_size_xy:
+  center_crop_xy:
     - 800
     - 800
   skip_beads_fov: "0" # FOV index to skip (e.g., bead FOV), as a string
@@ -75,7 +82,7 @@ stack_reg_settings:
   focus_finding_settings: # settings for focus finding for Z
     average_across_wells: False    # If True, average focus across all wells
     skip_beads_fov: "0" # FOV index to skip (e.g., bead FOV), as a string
-    crop_size_xy: # size of the crop for focus finding
+    center_crop_xy: # size of the crop for focus finding
       - 800
       - 800
 
