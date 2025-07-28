@@ -31,7 +31,7 @@ def test_main():
         "characterize-psf",
         "segment",
         "track",
-        "process",
+        "process-with-config",
     ],
 )
 def test_command_help(command: str):
