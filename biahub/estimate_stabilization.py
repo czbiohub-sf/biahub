@@ -789,7 +789,6 @@ def estimate_xyz_stabilization_pcc(
             log_file.write(f"{job.job_id}\n")
 
     job_ids = [str(j.job_id) for j in jobs]
-
     wait_for_jobs_to_finish(job_ids)
 
     transform_files = list(transforms_out_path.glob("*.npy"))
