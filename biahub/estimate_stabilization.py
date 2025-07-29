@@ -792,42 +792,6 @@ def estimate_xyz_stabilization_pcc(
 
     wait_for_jobs_to_finish(job_ids)
 
-    # Combine the transforms from the positions
-
-    # slurm_args = {
-    #     "slurm_job_name": "combine_transforms",
-    #     "slurm_mem_per_cpu": f"5G",
-    #     "slurm_cpus_per_task": 1,
-    #     "slurm_array_parallelism": 100,
-    #     "slurm_time": 10,
-    #     "slurm_partition": "cpu",
-    #     "slurm_dependency": f"afterok:{','.join(job_ids)}",
-    # }
-
-    # if sbatch_filepath:
-    #     slurm_args.update(sbatch_to_submitit(sbatch_filepath))
-
-    # executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
-    # executor.update_parameters(**slurm_args)
-    # jobs_combine = []
-    # with executor.batch():
-
-    #     job = executor.submit(
-    #         combine_transforms_from_positions,
-    #         transforms_out_path=transforms_out_path,
-    #     )
-    #     jobs_combine.append(job)
-
-    # # Save job IDs
-    # timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    # log_path = slurm_out_path / f"job_ids_{timestamp}.log"
-    # with open(log_path, "w") as log_file:
-    #     for job in jobs_combine:
-    #         log_file.write(f"{job.job_id}\n")
-
-    # get return value from job
-    # fov_transforms = jobs_combine[0].result()
-
     transform_files = list(transforms_out_path.glob("*.npy"))
 
     fov_transforms = {}
