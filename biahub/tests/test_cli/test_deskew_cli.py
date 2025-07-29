@@ -85,9 +85,9 @@ def test_deskew_cli(tmp_path, example_plate, example_deskew_settings, sbatch_fil
 
 def test_deskew_overhang_only_dataset_error():
     # Parameters that cause only overhang
-    shape = (10, 50, 100)
+    shape = (10, 500, 100)
     data = np.random.random(shape)
-    angle = 36
+    angle = 30
     ratio = 0.1
 
     with pytest.raises(ValueError, match="Dataset contains only overhang"):
