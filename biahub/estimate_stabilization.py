@@ -805,25 +805,6 @@ def estimate_xyz_stabilization_pcc(
     return fov_transforms
 
 
-def combine_transforms_from_positions(
-    transforms_out_path: Path,
-) -> dict[str, list[ArrayLike]]:
-    """
-    Gather the transforms from the positions.
-    """
-    # Load the transforms
-    transform_files = list(transforms_out_path.glob("*.npy"))
-
-    fov_transforms = {}
-    for file_path in transform_files:
-        fov_filename = file_path.stem
-        fov_transforms[fov_filename] = np.load(file_path).tolist()
-
-    # Remove the output folder
-    shutil.rmtree(transforms_out_path)
-    return fov_transforms
-
-
 def estimate_xyz_stabilization_with_beads(
     channel_tzyx: da.Array,
     beads_match_settings: BeadsMatchSettings,
