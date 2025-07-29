@@ -177,7 +177,7 @@ def _optimize_registration(
 
     tx_opt_mat = ants.read_transform(reg["fwdtransforms"][0])
     tx_opt_numpy = convert_transform_to_numpy(tx_opt_mat)
-    
+
     # Account for tx_opt being estimated at a crop rather than starting at the origin,
     # i.e. (0, 0, 0) of the image.
     shift_to_roi_np = np.eye(4)

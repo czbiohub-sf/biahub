@@ -267,31 +267,26 @@ def find_lir(registered_zyx: np.ndarray, plot: bool = False) -> Tuple:
 
     # Iterate over ZX and ZY slices to find optimal Z cropping params
     _coords = []
-    for _x in (x_start, x_start + (x_stop-x_start)//2, x_stop):
+    for _x in (x_start, x_start + (x_stop - x_start) // 2, x_stop):
         registered_zy = registered_zyx[:, y_slice, _x].copy()
         coords_zy = lir.lir(registered_zy)
         _, z, _, height = coords_zy
         z_start, z_stop = z, z + height
         _coords.append((z_start, z_stop))
-    for _y in (y_start, y_start + (y_stop-y_start)//2, y_stop):
+    for _y in (y_start, y_start + (y_stop - y_start) // 2, y_stop):
         registered_zx = registered_zyx[:, _y, x_slice].copy()
         coords_zx = lir.lir(registered_zx)
         _, z, _, depth = coords_zx
         z_start, z_stop = z, z + depth
         _coords.append((z_start, z_stop))
-    
+
     _coords = np.asarray(_coords)
     z_start = _coords.max(axis=0)[0]
     z_stop = _coords.min(axis=0)[1]
     z_slice = slice(z_start, z_stop)
 
     if plot:
-        xy_corners = (
-            (x, y),
-            (x + width, y),
-            (x + width, y + height),
-            (x, y + height)
-        )
+        xy_corners = ((x, y), (x + width, y), (x + width, y + height), (x, y + height))
         rectangle_yx = plt.Polygon(
             xy_corners,
             closed=True,
@@ -303,12 +298,7 @@ def find_lir(registered_zyx: np.ndarray, plot: bool = False) -> Tuple:
         ax[0].imshow(registered_yx)
         ax[0].add_patch(rectangle_yx)
 
-        zx_corners = (
-            (x, z),
-            (x + width, z),
-            (x + width, z + depth),
-            (x, z + depth)
-        )
+        zx_corners = ((x, z), (x + width, z), (x + width, z + depth), (x, z + depth))
         rectangle_zx = plt.Polygon(
             zx_corners,
             closed=True,
