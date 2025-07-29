@@ -1,14 +1,21 @@
-# Name of the fixed (reference) image channel used for registration
-target_channel_name: Phase3D
+# Channel used to estimate stabilization parameters across timepoints.
+stabilization_estimation_channel: Phase3D
 
-# Name of the moving image channel to align with the target. If using beads, this is the channel with visible beads.
-source_channel_name: GFP EX488 EM525-45
+# List of channels that will be stabilized using the computed transforms.
+stabilization_channels:
+  - Phase3D
 
-# Method to estimate registration parameters
-# "manual" user manually selects matching features
-# "beads" automatic detection of bead matches
-# "ants" uses ANTs registration with optimization
-estimation_method: manual
+# Type of stabilization to perform
+#   - "z" only stabilize in Z
+#   - "xy" only stabilize in XY
+#   - "xyz" stabilize in all 3D spatial dimensions
+stabilization_type: "xyz"
+
+# Method used to estimate stabilization parameters
+#   - "focus-finding" uses intensity-based Z focus to estimate drift in z and use stack-reg to estimate drift in xy
+#   - "beads" uses automatically matched beads (only for xyz)
+#   - "phase-cross-corr" uses 3D phase correlation (only for xyz)
+stabilization_method: "beads"
 
 beads_match_settings:
   algorithm: hungarian # "hungarian", "match_descriptor"
@@ -22,7 +29,7 @@ beads_match_settings:
       - 8
       - 8
   target_peaks_settings:
-    threshold_abs: 0.8  # intensity threshold for peak detection
+    threshold_abs: 110  # intensity threshold for peak detection
     nms_distance: 16    # non-maximum suppression radius
     min_distance: 0     # minimum separation between peaks
     block_size:         # local block size used in detection
@@ -33,7 +40,6 @@ beads_match_settings:
     distance_metric: euclidean # Distance metric for match descriptor
     max_ratio: 0.8 # Max ratio for match descriptor
     cross_check: True # Cross-check matches
-
   hungarian_match_settings:
     distance_metric: euclidean # Distance metric for Hungarian algorithm
     cost_threshold: 0.1 # Cost threshold for Hungarian algorithm
@@ -44,51 +50,27 @@ beads_match_settings:
       k: 5 # Number of nearest neighbors
     cost_matrix_settings:
       normalize: False # Normalize cost matrix
-      weights:
+      weights: # Weights for cost matrix
         dist: 0.5 # Distance weight
         edge_angle: 1.0 # Edge angle weight
         edge_length: 1.0 # Edge length weight
-        pca_dir: 0.0 # Principal Component Analysis direction weight
-        pca_aniso: 0.0 # Principal Component Analysis anisotropy weight
-        edge_descriptor: 0.0 # Edge descriptor weight
+        pca_dir: 0.0 # Principal Component Analysis direction weight (0.0 means no direction)
+        pca_aniso: 0.0 # Principal Component Analysis anisotropy weight (0.0 means no anisotropy)
+        edge_descriptor: 0.0 # Edge descriptor weight (0.0 means no descriptor)
   filter_distance_threshold: 0.95 # Filter matches based on distance threshold
-  filter_angle_threshold: 0 # Filter matches based on angle threshold
+  filter_angle_threshold: 0   # Filter matches based on dominant angle direction (in degrees)
 
-
-ants_registration_settings:
-  sobel_filter: False # Whether to apply a Sobel filter for edge enhancement before registration
-
-manual_registration_settings:
-  time_index: 0 # Timepoint index to use for manual registration
-  affine_90degree_rotation: 0  # Number of 90-degree clockwise rotations to apply to source image before registration
 
 # Settings for affine transformation estimation (applies to all stabilization methods)
 affine_transform_settings:
   transform_type: euclidean # Type of transform to estimate "euclidean", "similarity", or "affine"
-  approx_transform: # Optional initial guess for the 4x4 affine transformation matrix (if None, will be estimated)
-    - - 1
-      - 0
-      - 0
-      - 0
-    - - 0
-      - 0
-      - -1.288
-      - 1960
-    - - 0
-      - 1.288
-      - 0
-      - -460
-    - - 0.0
-      - 0.0
-      - 0.0
-      - 1.0
-
 
 # Validation and interpolation settings for transform smoothing
 eval_transform_settings:
   validation_window_size: 10 # number of timepoints to average over
-  validation_tolerance: 1000.0 # max difference between transforms
+  validation_tolerance: 100.0 # max difference between transforms
   interpolation_window_size: 3 # size of the window for interpolation
   interpolation_type: "linear" # "linear" or "cubic"
 
+# Set to True for verbose logging of the stabilization process
 verbose: True
