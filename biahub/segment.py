@@ -232,22 +232,23 @@ def segment_cli(
     executor.update_parameters(**slurm_args)
 
     jobs = []
-    with executor.batch():
-        for input_position_path, output_position_path in zip(
-            input_position_dirpaths, output_position_paths
-        ):
-            jobs.append(
-                executor.submit(
-                    process_single_position,
-                    segment_data,
-                    input_position_path,
-                    output_position_path,
-                    input_channel_indices=[list(range(C))],
-                    output_channel_indices=[list(range(C_segment))],
-                    num_processes=np.min([20, int(num_cpus * 0.8)]),
-                    segmentation_models=segment_args,
+    with submitit.helpers.clean_env():
+        with executor.batch():
+            for input_position_path, output_position_path in zip(
+                input_position_dirpaths, output_position_paths
+            ):
+                jobs.append(
+                    executor.submit(
+                        process_single_position,
+                        segment_data,
+                        input_position_path,
+                        output_position_path,
+                        input_channel_indices=[list(range(C))],
+                        output_channel_indices=[list(range(C_segment))],
+                        num_processes=np.min([20, int(num_cpus * 0.8)]),
+                        segmentation_models=segment_args,
+                    )
                 )
-            )
 
     if monitor:
         monitor_jobs(jobs, input_position_dirpaths)

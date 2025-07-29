@@ -102,18 +102,19 @@ def apply_inverse_transfer_function(
 
     click.echo('Submitting SLURM jobs...')
     jobs = []
-    with executor.batch():
-        for input_position_dirpath in input_position_dirpaths:
-            job = executor.submit(
-                apply_inverse_transfer_function_single_position,
-                input_position_dirpath,
-                transfer_function_dirpath,
-                config_filepath,
-                output_dirpath / Path(*input_position_dirpath.parts[-3:]),
-                num_processes,
-                output_metadata["channel_names"],
-            )
-            jobs.append(job)
+    with submitit.helpers.clean_env():
+        with executor.batch():
+            for input_position_dirpath in input_position_dirpaths:
+                job = executor.submit(
+                    apply_inverse_transfer_function_single_position,
+                    input_position_dirpath,
+                    transfer_function_dirpath,
+                    config_filepath,
+                    output_dirpath / Path(*input_position_dirpath.parts[-3:]),
+                    num_processes,
+                    output_metadata["channel_names"],
+                )
+                jobs.append(job)
 
     job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 

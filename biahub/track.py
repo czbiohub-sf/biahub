@@ -881,20 +881,21 @@ def track(
     click.echo('Submitting SLURM jobs...')
     jobs = []
 
-    with executor.batch():
-        for position_key in position_keys:
-            job = executor.submit(
-                track_one_position,
-                position_key=position_key,
-                output_dirpath=output_dirpath,
-                tracking_config=tracking_cfg,
-                input_images=settings.input_images,
-                blank_frames_path=settings.blank_frames_path,
-                z_slices=z_slices,
-                scale=track_scale,
-            )
+    with submitit.helpers.clean_env():
+        with executor.batch():
+            for position_key in position_keys:
+                job = executor.submit(
+                    track_one_position,
+                    position_key=position_key,
+                    output_dirpath=output_dirpath,
+                    tracking_config=tracking_cfg,
+                    input_images=settings.input_images,
+                    blank_frames_path=settings.blank_frames_path,
+                    z_slices=z_slices,
+                    scale=track_scale,
+                )
 
-            jobs.append(job)
+                jobs.append(job)
 
     job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 

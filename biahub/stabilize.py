@@ -260,40 +260,40 @@ def stabilize_cli(
 
     click.echo('Submitting SLURM jobs...')
     jobs = []
+    with submitit.helpers.clean_env():
+        with executor.batch():
+            # apply stabilization to channels in the chosen channels and else copy the rest
+            for input_position_path in input_position_dirpaths:
+                for channel_name in channel_names:
+                    if channel_name in stabilization_channels:
+                        job = executor.submit(
+                            process_single_position_v2,
+                            apply_stabilization_transform,
+                            input_data_path=input_position_path,  # source store
+                            output_path=output_dirpath,
+                            time_indices=time_indices,
+                            output_shape=(Z, Y, X),
+                            input_channel_idx=[channel_names.index(channel_name)],
+                            output_channel_idx=[channel_names.index(channel_name)],
+                            num_processes=int(
+                                slurm_args["slurm_cpus_per_task"]
+                            ),  # parallel processing over time
+                            **stabilize_zyx_args,
+                        )
+                    else:
+                        job = executor.submit(
+                            process_single_position_v2,
+                            copy_n_paste_czyx,
+                            input_data_path=input_position_path,  # target store
+                            output_path=output_dirpath,
+                            time_indices=time_indices,
+                            input_channel_idx=[channel_names.index(channel_name)],
+                            output_channel_idx=[channel_names.index(channel_name)],
+                            num_processes=int(slurm_args["slurm_cpus_per_task"]),
+                            **copy_n_paste_kwargs,
+                        )
 
-    with executor.batch():
-        # apply stabilization to channels in the chosen channels and else copy the rest
-        for input_position_path in input_position_dirpaths:
-            for channel_name in channel_names:
-                if channel_name in stabilization_channels:
-                    job = executor.submit(
-                        process_single_position_v2,
-                        apply_stabilization_transform,
-                        input_data_path=input_position_path,  # source store
-                        output_path=output_dirpath,
-                        time_indices=time_indices,
-                        output_shape=(Z, Y, X),
-                        input_channel_idx=[channel_names.index(channel_name)],
-                        output_channel_idx=[channel_names.index(channel_name)],
-                        num_processes=int(
-                            slurm_args["slurm_cpus_per_task"]
-                        ),  # parallel processing over time
-                        **stabilize_zyx_args,
-                    )
-                else:
-                    job = executor.submit(
-                        process_single_position_v2,
-                        copy_n_paste_czyx,
-                        input_data_path=input_position_path,  # target store
-                        output_path=output_dirpath,
-                        time_indices=time_indices,
-                        input_channel_idx=[channel_names.index(channel_name)],
-                        output_channel_idx=[channel_names.index(channel_name)],
-                        num_processes=int(slurm_args["slurm_cpus_per_task"]),
-                        **copy_n_paste_kwargs,
-                    )
-
-                jobs.append(job)
+                    jobs.append(job)
 
     job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 

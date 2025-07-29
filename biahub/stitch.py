@@ -804,10 +804,11 @@ def stitch_cli(
         executor = submitit.AutoExecutor(folder=slurm_out_path)
         executor.update_parameters(**slurm_args)
         temp_zarr_jobs = []
-        with executor.batch():
-            for well in _wells:
-                job = executor.submit(_populate_wells, well, fov_names)
-                temp_zarr_jobs.append(job)
+        with submitit.helpers.clean_env():
+            with executor.batch():
+                for well in _wells:
+                    job = executor.submit(_populate_wells, well, fov_names)
+                    temp_zarr_jobs.append(job)
         temp_zarr_job_ids = [job.job_id for job in temp_zarr_jobs]
 
         # Collect transforms
@@ -856,25 +857,26 @@ def stitch_cli(
         executor.update_parameters(**slurm_args)
         click.echo('Submitting SLURM jobs')
         shift_jobs = []
-        with executor.batch():
-            for in_path, transform in zip(input_position_dirpaths, transforms):
-                job = executor.submit(
-                    process_single_position_v2,
-                    preprocess_and_shift,
-                    input_channel_idx=[
-                        input_dataset_channels.index(ch) for ch in settings.channels
-                    ],
-                    output_channel_idx=list(range(len(settings.channels))),
-                    time_indices='all',
-                    num_processes=slurm_args['slurm_cpus_per_task'],
-                    settings=settings.preprocessing,
-                    output_shape=output_shape,
-                    verbose=True,
-                    transform=transform,
-                    input_data_path=in_path,
-                    output_path=shifted_store_path,
-                )
-                shift_jobs.append(job)
+        with submitit.helpers.clean_env():
+            with executor.batch():
+                for in_path, transform in zip(input_position_dirpaths, transforms):
+                    job = executor.submit(
+                        process_single_position_v2,
+                        preprocess_and_shift,
+                        input_channel_idx=[
+                            input_dataset_channels.index(ch) for ch in settings.channels
+                        ],
+                        output_channel_idx=list(range(len(settings.channels))),
+                        time_indices='all',
+                        num_processes=slurm_args['slurm_cpus_per_task'],
+                        settings=settings.preprocessing,
+                        output_shape=output_shape,
+                        verbose=True,
+                        transform=transform,
+                        input_data_path=in_path,
+                        output_path=shifted_store_path,
+                    )
+                    shift_jobs.append(job)
 
         shift_job_ids = [job.job_id for job in shift_jobs]
 
@@ -892,18 +894,19 @@ def stitch_cli(
     executor.update_parameters(**slurm_args)
 
     stitch_jobs = []
-    with executor.batch():
-        for well in wells:
-            job = executor.submit(
-                stitch_shifted_store,
-                shifted_store_path,
-                output_dirpath,
-                settings.postprocessing,
-                well_names=[well],
-                blending='average',
-                verbose=True,
-            )
-            stitch_jobs.append(job)
+    with submitit.helpers.clean_env():
+        with executor.batch():
+            for well in wells:
+                job = executor.submit(
+                    stitch_shifted_store,
+                    shifted_store_path,
+                    output_dirpath,
+                    settings.postprocessing,
+                    well_names=[well],
+                    blending='average',
+                    verbose=True,
+                )
+                stitch_jobs.append(job)
     stitch_job_ids = [job.job_id for job in stitch_jobs]
 
     cleanup_jobs = []
