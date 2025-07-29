@@ -1,11 +1,10 @@
 import numpy as np
-
+import pytest
 
 from click.testing import CliRunner
 
 from biahub import deskew
 from biahub.cli.main import cli
-import pytest
 
 
 def test_average_n_slices():
