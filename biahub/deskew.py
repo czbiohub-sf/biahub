@@ -312,7 +312,7 @@ def deskew_cli(
 
     # Estimate resources
     num_cpus, gb_ram = estimate_resources(
-        shape=(T, C, Z, Y, X), ram_multiplier=10, max_num_cpus=16
+        shape=(T, C, Z, Y, X), ram_multiplier=16, max_num_cpus=16
     )
 
     # Prepare SLURM arguments
