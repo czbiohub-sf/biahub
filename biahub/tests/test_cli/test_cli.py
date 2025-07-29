@@ -30,6 +30,8 @@ def test_main():
         "deconvolve",
         "characterize-psf",
         "segment",
+        "track",
+        "process-with-config",
     ],
 )
 def test_command_help(command: str):

@@ -1,10 +1,12 @@
 import warnings
 
-from typing import Any, Dict, Literal, Optional, Union
+from pathlib import Path
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import torch
 
+from iohub import open_ome_zarr
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -14,13 +16,60 @@ from pydantic import (
     PositiveInt,
     field_validator,
     model_validator,
-    validator,
 )
 
 
 # All settings classes inherit from MyBaseModel, which forbids extra parameters to guard against typos
 class MyBaseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class ProcessingFunctions(MyBaseModel):
+    function: str
+    input_channels: Optional[List[str]] = None  # Optional
+    kwargs: Dict[str, Any] = {}
+    per_timepoint: Optional[bool] = True
+
+
+class ProcessingImportFuncSettings(MyBaseModel):
+    processing_functions: list[ProcessingFunctions] = []
+
+
+class ProcessingInputChannel(MyBaseModel):
+    path: Union[str, None] = None
+    channels: Dict[str, List[ProcessingFunctions]]
+
+    @field_validator("path")
+    @classmethod
+    def validate_path_not_plate(cls, v):
+        if v is None:
+            return v
+        try:
+            v = Path(v)
+            with open_ome_zarr(v, mode='r'):
+                pass
+        except Exception as e:
+            print(e)
+            raise ValueError(f"Path {v} is not a valid OME-Zarr path")
+
+        return v
+
+
+class TrackingSettings(MyBaseModel):
+    target_channel: str = "nuclei_prediction"
+    fov: str = "*/*/*"
+    blank_frames_path: str = None
+    mode: Literal["2D", "3D"] = "2D"
+    z_range: Optional[Tuple[int, int]] = None
+    input_images: List[ProcessingInputChannel]
+    tracking_config: Dict[str, Any] = {}
+
+    @field_validator("blank_frames_path")
+    @classmethod
+    def validate_blank_frames_path(cls, v):
+        if v is None:
+            return v
+        return Path(v)
 
 
 class EstimateRegistrationSettings(MyBaseModel):
@@ -396,7 +445,8 @@ class SegmentationModel(BaseModel):
     z_slice_2D: Optional[int] = None
     preprocessing: list[PreprocessingFunctions] = []
 
-    @validator("eval_args", pre=True)
+    @field_validator("eval_args", mode="before")
+    @classmethod
     def validate_eval_args(cls, value):
         # Retrieve valid arguments dynamically if cellpose is required
         valid_args = get_valid_eval_args()
@@ -410,7 +460,8 @@ class SegmentationModel(BaseModel):
 
         return value
 
-    @validator("z_slice_2D")
+    @field_validator("z_slice_2D")
+    @classmethod
     def check_z_slice_with_do_3D(cls, z_slice_2D, values):
         # Only run this check if z_slice is provided (not None) and do_3D exists in eval_args
         if z_slice_2D is not None:

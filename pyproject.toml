@@ -6,7 +6,7 @@ name = "biahub"
 description = "Bioimage analysis hub."
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.10, <4.0"
+requires-python = ">=3.11, <4.0"
 
 # the dynamically determined project metadata attributes
 dynamic = ["version"]
@@ -15,26 +15,26 @@ classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Science/Research",
   "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
 ]
 
 # list package dependencies here
 dependencies = [
-  "iohub @ git+https://github.com/czbiohub-sf/iohub@v0.2.0b0",
+  "iohub>=0.2,<0.3",
   "matplotlib",
   "napari",
   "PyQt6",
   "natsort",
-  "numpy<2",
+  "numpy",
   "markdown",
   "monai",
   "pandas~=2.1",
   "pydantic<3",
-  "scipy",
+  "scipy<1.16",  # as of 06/23/2025 scipy 1.16.0 breaks test imports
   "submitit",
-  "torch>=2.3",
+  "torch",
   "tqdm",
-  "waveorder",
+  "waveorder==3.0.0a1",
   "largestinteriorrectangle",
   "antspyx",
   "pystackreg",
@@ -42,17 +42,19 @@ dependencies = [
   "napari-psf-analysis",
   "imageio-ffmpeg",
   "dask[array]",
+  "toml",
+  "ultrack @ git+https://github.com/royerlab/ultrack.git@v0.6.3",
+  "scikit-learn",
 ]
 
 [project.optional-dependencies]
 # note that dev dependencies are only pinned to major versions
 dev = [
-  "black==22.3.0",
-  "flake8~=5.0",
-  "isort~=5.12",
-  "pre-commit~=2.19",
-  "pylint~=2.14",
-  "pytest~=7.1",
+  "black==25.1",
+  "flake8==7.2",
+  "isort==6.0",
+  "pytest==8.4",
+  "pre-commit~=4.2",
 ]
 
 segmentation = [
