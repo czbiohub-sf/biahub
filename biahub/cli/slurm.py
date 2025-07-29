@@ -78,14 +78,20 @@ def wait_for_jobs_to_finish(
             unfinished = still_running
 
         else:
+            time.sleep(sleep_time)
+
             result = subprocess.run(
-                ["squeue", "--job", ",".join(unfinished)], stdout=subprocess.PIPE, text=True
+                ["squeue", "--noheader", "--format=%i"],
+                stdout=subprocess.PIPE,
+                text=True
             )
-            if len(result.stdout.strip().splitlines()) <= 1:
-                pbar.update(len(unfinished))
-                unfinished = set()
-            else:
-                time.sleep(sleep_time)
+            running_ids = set(result.stdout.strip().splitlines())
+            still_running = unfinished & running_ids
+            newly_finished = unfinished - still_running
+
+            pbar.update(len(newly_finished))
+            unfinished = still_running
+
 
         pbar.set_postfix_str(f"{len(unfinished)} remaining")
 
