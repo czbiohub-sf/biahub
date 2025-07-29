@@ -851,6 +851,7 @@ def ants_registration(
                 source_channel_index=source_channel_index,
                 target_channel_index=target_channel_index,
                 crop=True,
+                target_mask_radius=0.8,
                 clip=True,
                 sobel_fitler=ants_registration_settings.sobel_filter,
                 verbose=verbose,

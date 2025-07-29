@@ -28,6 +28,7 @@ def _optimize_registration(
     source_channel_index: int | list = 0,
     target_channel_index: int = 0,
     crop: bool = False,
+    target_mask_radius: float | None = None,
     clip: bool = False,
     sobel_fitler: bool = False,
     verbose: bool = False,
@@ -35,9 +36,59 @@ def _optimize_registration(
     t_idx: int = 0,
     output_folder_path: str | None = None,
 ) -> np.ndarray | None:
+    """
+    Optimize the affine transform between source and target channels using ANTs library.
+
+    Parameters
+    ----------
+    source_czyx : np.ndarray
+        Source channel data in CZYX format.
+    target_czyx : np.ndarray
+        Target channel data in CZYX format.
+    initial_tform : np.ndarray
+        Approximate estimate of the affine transform matrix, often obtained through manual registration, see `estimate-registration`.
+    source_channel_index : int | list, optional
+        Index or list of indices of source channels to be used for registration, by default 0.
+    target_channel_index : int, optional
+        Index of the target channel to be used for registration, by default 0.
+    crop : bool, optional
+        Whether to crop the source and target channels to the overlapping region as determined by the LIR algorithm, by default False.
+    target_mask_radius : float | None, optional
+        Radius of the circular mask which will be applied to the phase channel. By default None in which case no masking will be applied.
+    clip : bool, optional
+        Whether to clip the source and target channels to reasonable (hardcoded) values, by default False.
+    sobel_fitler : bool, optional
+        Whether to apply Sobel filter to the source and target channels, by default False.
+    verbose : bool, optional
+        Whether to print verbose output during registration, by default False.
+    slurm : bool, optional
+        Whether the function is running in a SLURM job, which will save the output to a file, by default False.
+    t_idx : int, optional
+        Time index for the registration, by default 0. Only used if `slurm` is True.
+    output_folder_path : str | None, optional
+        Path to the folder where the output transform will be saved if `slurm` is True, by default None.
+
+    Returns
+    -------
+    np.ndarray | None
+        Optimized affine transform matrix or None if the input data contains NaN or zeros.
+
+    Notes
+    -----
+    This function applies an initial affine transform to the source channels, crops them to the overlapping region with the target channel,
+    clips the values, applies Sobel filtering if specified, and then optimizes the registration parameters using ANTs library.
+
+    This function currently assumes that target channel is phase and source channels are fluorescence.
+    If multiple source channels are provided, they will be summed, after clipping, filtering, and cropping, if enabled.
+    """
 
     source_czyx = np.asarray(source_czyx).astype(np.float32)
     target_czyx = np.asarray(target_czyx).astype(np.float32)
+
+    if not (0 < target_mask_radius <= 1):
+        raise ValueError(
+            "target_mask_radius must be given as a fraction of image width, i.e. (0, 1]."
+        )
 
     if _check_nan_n_zeros(source_czyx) or _check_nan_n_zeros(target_czyx):
         return None
@@ -71,7 +122,19 @@ def _optimize_registration(
     if crop:
         click.echo("Estimating crop for source and target channels to overlapping region...")
         mask = (target_zyx != 0) & (source_channels[0] != 0)
-        z_slice, y_slice, x_slice = find_lir(mask.astype(np.uint8), plot=False)
+
+        # Can be refactored with code in cropping PR #88
+        if target_mask_radius is not None:
+            target_mask = np.zeros(target_zyx.shape[-2:], dtype=bool)
+
+            y, x = np.ogrid[: target_mask.shape[-2], : target_mask.shape[-1]]
+            center = (target_mask.shape[-2] // 2, target_mask.shape[-1] // 2)
+            radius = int(target_mask_radius * min(center))
+
+            target_mask[(x - center[0]) ** 2 + (y - center[1]) ** 2 <= radius**2] = True
+            mask *= target_mask
+
+        z_slice, y_slice, x_slice = find_lir(mask.astype(np.uint8))
         click.echo(
             f"Cropping to region z={z_slice.start}:{z_slice.stop}, "
             f"y={y_slice.start}:{y_slice.stop}, "
@@ -114,7 +177,7 @@ def _optimize_registration(
 
     tx_opt_mat = ants.read_transform(reg["fwdtransforms"][0])
     tx_opt_numpy = convert_transform_to_numpy(tx_opt_mat)
-
+    
     # Account for tx_opt being estimated at a crop rather than starting at the origin,
     # i.e. (0, 0, 0) of the image.
     shift_to_roi_np = np.eye(4)
