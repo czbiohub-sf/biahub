@@ -82,6 +82,7 @@ def test_deskew_cli(tmp_path, example_plate, example_deskew_settings, sbatch_fil
 
     assert output_path.exists()
     assert result.exit_code == 0
+
     def test_deskew_overhang_only_dataset_error():
         # Parameters that cause only overhang
         shape = (10, 50, 100)
