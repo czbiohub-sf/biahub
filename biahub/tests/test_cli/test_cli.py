@@ -24,6 +24,7 @@ from biahub.cli.main import cli
         "characterize-psf",
         "segment",
         "track",
+        "process-with-config",
     ],
 )
 def test_command_help(command: str):

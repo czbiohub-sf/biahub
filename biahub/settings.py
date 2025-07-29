@@ -17,7 +17,6 @@ from pydantic import (
     PositiveInt,
     field_validator,
     model_validator,
-    validator,
 )
 
 
@@ -37,7 +36,11 @@ class ProcessingFunctions(MyBaseModel):
     function: str
     input_channels: Optional[List[str]] = None  # Optional
     kwargs: Dict[str, Any] = {}
-    per_timepoint: bool = True
+    per_timepoint: Optional[bool] = True
+
+
+class ProcessingImportFuncSettings(MyBaseModel):
+    processing_functions: list[ProcessingFunctions] = []
 
 
 class ProcessingInputChannel(MyBaseModel):
@@ -604,7 +607,8 @@ class SegmentationModel(BaseModel):
     z_slice_2D: Optional[int] = None
     preprocessing: list[PreprocessingFunctions] = []
 
-    @validator("eval_args", pre=True)
+    @field_validator("eval_args", mode="before")
+    @classmethod
     def validate_eval_args(cls, value):
         # Retrieve valid arguments dynamically if cellpose is required
         valid_args = get_valid_eval_args()
@@ -618,7 +622,8 @@ class SegmentationModel(BaseModel):
 
         return value
 
-    @validator("z_slice_2D")
+    @field_validator("z_slice_2D")
+    @classmethod
     def check_z_slice_with_do_3D(cls, z_slice_2D, values):
         # Only run this check if z_slice is provided (not None) and do_3D exists in eval_args
         if z_slice_2D is not None:

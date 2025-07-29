@@ -7,6 +7,7 @@ from biahub.settings import (
     DeskewSettings,
     EstimateRegistrationSettings,
     EstimateStabilizationSettings,
+    ProcessingImportFuncSettings,
     RegistrationSettings,
     StabilizationSettings,
 )
@@ -85,3 +86,8 @@ def test_example_estimate_registration_settings(example_estimate_registration_se
 def test_example_estimate_stabilization_settings(example_estimate_stabilization_settings):
     _, settings = example_estimate_stabilization_settings
     EstimateStabilizationSettings(**settings)
+
+
+def test_example_process_with_config_settings(example_process_with_config_settings):
+    _, settings = example_process_with_config_settings
+    ProcessingImportFuncSettings(**settings)
