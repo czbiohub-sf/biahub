@@ -82,23 +82,20 @@ def test_deskew_cli(tmp_path, example_plate, example_deskew_settings, sbatch_fil
     assert output_path.exists()
     assert result.exit_code == 0
 
-    def test_deskew_overhang_only_dataset_error():
-        # Parameters that cause only overhang
-        shape = (10, 50, 100)
-        angle = 36
-        ratio = 0.1
 
-        with pytest.raises(ValueError, match="Dataset contains only overhang"):
-            deskew.get_deskewed_data_shape(shape, angle, ratio, keep_overhang=False)
+def test_deskew_overhang_only_dataset_error():
+    # Parameters that cause only overhang
+    shape = (10, 50, 100)
+    data = np.random.random(shape)
+    angle = 36
+    ratio = 0.1
 
-        # Should succeed with keep_overhang=True
-        out_shape, _ = deskew.get_deskewed_data_shape(shape, angle, ratio, keep_overhang=True)
-        assert out_shape[2] > 0
+    with pytest.raises(ValueError, match="Dataset contains only overhang"):
+        deskew.get_deskewed_data_shape(shape, angle, ratio, keep_overhang=False)
 
-    def test_deskew_function_overhang_only_dataset_error():
-        data = np.random.random((10, 50, 100))
-        angle = 36
-        ratio = 0.1
+    with pytest.raises(ValueError, match="Dataset contains only overhang"):
+        deskew.deskew(data, angle, ratio, keep_overhang=False)
 
-        with pytest.raises(ValueError, match="Dataset contains only overhang"):
-            deskew.deskew(data, angle, ratio, keep_overhang=False)
+    # Should succeed with keep_overhang=True
+    out_shape, _ = deskew.get_deskewed_data_shape(shape, angle, ratio, keep_overhang=True)
+    assert out_shape[2] > 0
