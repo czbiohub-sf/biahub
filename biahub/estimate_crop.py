@@ -30,7 +30,7 @@ def estimate_crop_one_position(
     output_dir: Path = None,
 ):
     """
-    Estimate a crop region where both phase and fluorescene volumes are non-zero.
+    Estimate a crop region where both phase and fluorescence volumes are non-zero.
 
     Parameters
     ----------
@@ -86,7 +86,7 @@ def estimate_crop_one_position(
         return tuple(zip((0, 0, 0), _max_zyx_dims))
     valid_data = data[valid_T, valid_C]
 
-    # Compute a mask where all voxels are non-zero along time time and channel dimensions
+    # Compute a mask where all voxels are non-zero along time and channel dimensions
     combined_mask = np.all(valid_data, axis=0)
 
     # Create a circular boolean mask of radius phase_mask_radius to apply to the phase channel
@@ -108,7 +108,6 @@ def estimate_crop_one_position(
         combined_mask = combined_mask * lf_mask_cropped
 
     # Compute overlapping region
-
     z_slice, y_slice, x_slice = find_lir(combined_mask)
 
     click.echo(
@@ -236,7 +235,8 @@ def estimate_crop(
     # Wait for jobs to finish
     wait_for_jobs_to_finish(job_ids)
 
-    # Read and merge results
+    # Read and merge results. The same ROI crop will be applied to all positions.
+    # Here we estimate the smallest common crop region across all positions.
     estimate_crop_csvs = list(output_path_csv.glob("*.csv"))
     if not estimate_crop_csvs:
         click.echo("No crop CSV files found. Exiting.")
