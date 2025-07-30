@@ -253,11 +253,12 @@ def apply_affine_transform(
 
 
 def find_lir(registered_zyx: np.ndarray, plot: bool = False) -> Tuple:
-    registered_zyx = np.asarray(registered_zyx, dtype=np.bool)
+    registered_zyx = np.asarray(registered_zyx, dtype=bool)
 
     # Find the lir in YX at Z//2
     registered_yx = registered_zyx[registered_zyx.shape[0] // 2].copy()
     coords_yx = lir.lir(registered_yx)
+    coords_yx = list(map(int, coords_yx))
 
     x, y, width, height = coords_yx
     x_start, x_stop = x, x + width
@@ -281,8 +282,8 @@ def find_lir(registered_zyx: np.ndarray, plot: bool = False) -> Tuple:
         _coords.append((z_start, z_stop))
 
     _coords = np.asarray(_coords)
-    z_start = _coords.max(axis=0)[0]
-    z_stop = _coords.min(axis=0)[1]
+    z_start = int(_coords.max(axis=0)[0])
+    z_stop = int(_coords.min(axis=0)[1])
     z_slice = slice(z_start, z_stop)
 
     if plot:
