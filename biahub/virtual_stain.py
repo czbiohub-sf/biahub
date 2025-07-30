@@ -410,7 +410,7 @@ def virtual_stain_cli(
     verbose: bool = True,
 ):
     """
-    Run VisCy virtual stain on a plate.
+    Run VisCy virtual staining on a zarr plate from dedicated python environment.
     Example:
     biahub virtual-stain \
         --input-position-dirpaths path.zarr/*/*/* \
