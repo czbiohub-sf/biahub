@@ -32,6 +32,7 @@ def test_main():
         "segment",
         "virtual-stain",
         "track",
+        "process-with-config",
     ],
 )
 def test_command_help(command: str):
