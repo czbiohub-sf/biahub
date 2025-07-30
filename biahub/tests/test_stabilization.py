@@ -2,12 +2,10 @@ import io
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from biahub.estimate_stabilization import get_mean_z_positions
 
 
-@pytest.mark.skip(reason="Skipping test_mean_z_positions")
 def test_mean_z_positions():
     # Create input data
     df = pd.DataFrame(
