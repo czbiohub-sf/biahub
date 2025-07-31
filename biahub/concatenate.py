@@ -382,39 +382,38 @@ def concatenate(
 
     click.echo("Submitting SLURM jobs...")
     jobs = []
-    with submitit.helpers.clean_env():
-        with executor.batch():
-            for i, (
-                input_position_path,
-                output_position_path,
-                input_channel_idx,
-                output_channel_idx,
-                zyx_slicing_params,
-            ) in enumerate(
-                zip(
-                    all_data_paths,
-                    output_position_paths_list,
-                    input_channel_idx_list,
-                    output_channel_idx_list,
-                    all_slicing_params,
-                )
-            ):
-                # Create slicing parameters for this specific path
-                copy_n_paste_kwargs = {"zyx_slicing_params": zyx_slicing_params}
+    with submitit.helpers.clean_env(), executor.batch():
+        for i, (
+            input_position_path,
+            output_position_path,
+            input_channel_idx,
+            output_channel_idx,
+            zyx_slicing_params,
+        ) in enumerate(
+            zip(
+                all_data_paths,
+                output_position_paths_list,
+                input_channel_idx_list,
+                output_channel_idx_list,
+                all_slicing_params,
+            )
+        ):
+            # Create slicing parameters for this specific path
+            copy_n_paste_kwargs = {"zyx_slicing_params": zyx_slicing_params}
 
-                job = executor.submit(
-                    process_single_position,
-                    copy_n_paste,
-                    input_position_path=input_position_path,
-                    output_position_path=output_position_path,
-                    input_channel_indices=input_channel_idx,
-                    output_channel_indices=output_channel_idx,
-                    input_time_indices=input_time_indices,
-                    output_time_indices=list(range(len(input_time_indices))),
-                    num_processes=int(slurm_args["slurm_cpus_per_task"]),
-                    **copy_n_paste_kwargs,
-                )
-                jobs.append(job)
+            job = executor.submit(
+                process_single_position,
+                copy_n_paste,
+                input_position_path=input_position_path,
+                output_position_path=output_position_path,
+                input_channel_indices=input_channel_idx,
+                output_channel_indices=output_channel_idx,
+                input_time_indices=input_time_indices,
+                output_time_indices=list(range(len(input_time_indices))),
+                num_processes=int(slurm_args["slurm_cpus_per_task"]),
+                **copy_n_paste_kwargs,
+            )
+            jobs.append(job)
 
     job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 

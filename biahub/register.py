@@ -523,50 +523,48 @@ def register_cli(
     # as given in the config file (i.e. settings.source_channel_names)
     affine_jobs = []
     affine_names = []
-    with submitit.helpers.clean_env():
-        with executor.batch():
-            for input_position_path in source_position_dirpaths:
-                for channel_name in source_channel_names:
-                    if channel_name not in settings.source_channel_names:
-                        continue
-                    affine_job = executor.submit(
-                        process_single_position_v2,
-                        apply_affine_transform,
-                        input_data_path=input_position_path,  # source store
-                        output_path=output_dirpath,
-                        time_indices=time_indices,
-                        input_channel_idx=[source_channel_names.index(channel_name)],
-                        output_channel_idx=[output_channel_names.index(channel_name)],
-                        num_processes=int(slurm_args["slurm_cpus_per_task"]),
-                        **affine_transform_args,
-                    )
-                    affine_jobs.append(affine_job)
-                    affine_names.append(input_position_path)
+    with submitit.helpers.clean_env(), executor.batch():
+        for input_position_path in source_position_dirpaths:
+            for channel_name in source_channel_names:
+                if channel_name not in settings.source_channel_names:
+                    continue
+                affine_job = executor.submit(
+                    process_single_position_v2,
+                    apply_affine_transform,
+                    input_data_path=input_position_path,  # source store
+                    output_path=output_dirpath,
+                    time_indices=time_indices,
+                    input_channel_idx=[source_channel_names.index(channel_name)],
+                    output_channel_idx=[output_channel_names.index(channel_name)],
+                    num_processes=int(slurm_args["slurm_cpus_per_task"]),
+                    **affine_transform_args,
+                )
+                affine_jobs.append(affine_job)
+                affine_names.append(input_position_path)
 
     # crop all channels that are not being registered and save them in the output zarr store
     # Note: when target and source datastores are the same we don't process channels which
     # were already registered in the previous step
     copy_jobs = []
     copy_names = []
-    with submitit.helpers.clean_env():
-        with executor.batch():
-            for input_position_path in target_position_dirpaths:
-                for channel_name in target_channel_names:
-                    if channel_name in settings.source_channel_names:
-                        continue
-                    copy_job = executor.submit(
-                        process_single_position_v2,
-                        copy_n_paste_czyx,
-                        input_data_path=input_position_path,  # target store
-                        output_path=output_dirpath,
-                        time_indices=time_indices,
-                        input_channel_idx=[target_channel_names.index(channel_name)],
-                        output_channel_idx=[output_channel_names.index(channel_name)],
-                        num_processes=int(slurm_args["slurm_cpus_per_task"]),
-                        **copy_n_paste_kwargs,
-                    )
-                    copy_jobs.append(copy_job)
-                    copy_names.append(input_position_path)
+    with submitit.helpers.clean_env(), executor.batch():
+        for input_position_path in target_position_dirpaths:
+            for channel_name in target_channel_names:
+                if channel_name in settings.source_channel_names:
+                    continue
+                copy_job = executor.submit(
+                    process_single_position_v2,
+                    copy_n_paste_czyx,
+                    input_data_path=input_position_path,  # target store
+                    output_path=output_dirpath,
+                    time_indices=time_indices,
+                    input_channel_idx=[target_channel_names.index(channel_name)],
+                    output_channel_idx=[output_channel_names.index(channel_name)],
+                    num_processes=int(slurm_args["slurm_cpus_per_task"]),
+                    **copy_n_paste_kwargs,
+                )
+                copy_jobs.append(copy_job)
+                copy_names.append(input_position_path)
 
     # concatenate affine_jobs and copy_jobs
     job_ids = [job.job_id for job in affine_jobs + copy_jobs]

@@ -173,21 +173,20 @@ def deconvolve_cli(
 
     click.echo('Submitting SLURM jobs...')
     jobs = []
-    with submitit.helpers.clean_env():
-        with executor.batch():
-            for input_position_path, output_position_path in zip(
-                input_position_dirpaths, output_position_paths
-            ):
-                job = executor.submit(
-                    process_single_position,
-                    deconvolve,
-                    str(input_position_path),
-                    str(output_position_path),
-                    num_processes=int(slurm_args["slurm_cpus_per_task"]),
-                    transfer_function_store_path=str(transfer_function_store_path),
-                    regularization_strength=float(settings.regularization_strength),
-                )
-                jobs.append(job)
+    with submitit.helpers.clean_env(), executor.batch():
+        for input_position_path, output_position_path in zip(
+            input_position_dirpaths, output_position_paths
+        ):
+            job = executor.submit(
+                process_single_position,
+                deconvolve,
+                str(input_position_path),
+                str(output_position_path),
+                num_processes=int(slurm_args["slurm_cpus_per_task"]),
+                transfer_function_store_path=str(transfer_function_store_path),
+                regularization_strength=float(settings.regularization_strength),
+            )
+            jobs.append(job)
 
     job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 

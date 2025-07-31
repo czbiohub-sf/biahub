@@ -343,21 +343,20 @@ def deskew_cli(
     click.echo('Submitting SLURM jobs...')
 
     jobs = []
-    with submitit.helpers.clean_env():
-        with executor.batch():
-            for input_position_path, output_position_path in zip(
-                input_position_dirpaths, output_position_paths
-            ):
-                jobs.append(
-                    executor.submit(
-                        process_single_position,
-                        _czyx_deskew_data,
-                        input_position_path,
-                        output_position_path,
-                        num_processes=slurm_args["slurm_cpus_per_task"],
-                        **deskew_args,
-                    )
+    with submitit.helpers.clean_env(), executor.batch():
+        for input_position_path, output_position_path in zip(
+            input_position_dirpaths, output_position_paths
+        ):
+            jobs.append(
+                executor.submit(
+                    process_single_position,
+                    _czyx_deskew_data,
+                    input_position_path,
+                    output_position_path,
+                    num_processes=slurm_args["slurm_cpus_per_task"],
+                    **deskew_args,
                 )
+            )
 
     job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 

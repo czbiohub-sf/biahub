@@ -285,24 +285,23 @@ def process_with_config(
 
     # TODO: perhaps T/C processing indices should be exposed as params in config
     jobs = []
-    with submitit.helpers.clean_env():
-        with executor.batch():
-            for input_position_path, output_position_path in zip(
-                input_position_dirpaths, output_position_paths
-            ):
-                jobs.append(
-                    executor.submit(
-                        process_single_position,
-                        process_czyx,
-                        input_position_path=input_position_path,
-                        output_position_path=output_position_path,
-                        input_time_indices=list(range(T)),
-                        input_channel_indices=[list(range(C))],  # Process all channels
-                        output_channel_indices=[list(range(C))],
-                        num_processes=slurm_args["slurm_cpus_per_task"],
-                        **process_args,
-                    )
+    with submitit.helpers.clean_env(), executor.batch():
+        for input_position_path, output_position_path in zip(
+            input_position_dirpaths, output_position_paths
+        ):
+            jobs.append(
+                executor.submit(
+                    process_single_position,
+                    process_czyx,
+                    input_position_path=input_position_path,
+                    output_position_path=output_position_path,
+                    input_time_indices=list(range(T)),
+                    input_channel_indices=[list(range(C))],  # Process all channels
+                    output_channel_indices=[list(range(C))],
+                    num_processes=slurm_args["slurm_cpus_per_task"],
+                    **process_args,
                 )
+            )
 
     if monitor:
         monitor_jobs(jobs, input_position_dirpaths)

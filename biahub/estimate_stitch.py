@@ -174,23 +174,22 @@ def estimate_stitch_cli(
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
     estimate_jobs = []
-    with submitit.helpers.clean_env():
-        with executor.batch():
-            for well_name in wells:
-                for direction, fovs in zip(("row", "col"), (row_fov_pairs, col_fov_pairs)):
-                    for fov0, fov1 in fovs:
-                        fov0_zarr_path = Path(input_zarr_path, well_name, fov0)
-                        fov1_zarr_path = Path(input_zarr_path, well_name, fov1)
-                        estimate_jobs.append(
-                            executor.submit(
-                                estimate_zarr_fov_shifts,
-                                direction=direction,
-                                output_dirname=csv_dirpath,
-                                **estimate_shift_params,
-                                fov0_zarr_path=fov0_zarr_path,
-                                fov1_zarr_path=fov1_zarr_path,
-                            )
+    with submitit.helpers.clean_env(), executor.batch():
+        for well_name in wells:
+            for direction, fovs in zip(("row", "col"), (row_fov_pairs, col_fov_pairs)):
+                for fov0, fov1 in fovs:
+                    fov0_zarr_path = Path(input_zarr_path, well_name, fov0)
+                    fov1_zarr_path = Path(input_zarr_path, well_name, fov1)
+                    estimate_jobs.append(
+                        executor.submit(
+                            estimate_zarr_fov_shifts,
+                            direction=direction,
+                            output_dirname=csv_dirpath,
+                            **estimate_shift_params,
+                            fov0_zarr_path=fov0_zarr_path,
+                            fov1_zarr_path=fov1_zarr_path,
                         )
+                    )
     estimate_job_ids = [job.job_id for job in estimate_jobs]
 
     slurm_args = {
