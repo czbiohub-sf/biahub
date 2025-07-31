@@ -6,7 +6,7 @@ name = "biahub"
 description = "Bioimage analysis hub."
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.11, <4.0"
+requires-python = ">=3.11, <3.13"
 
 # the dynamically determined project metadata attributes
 dynamic = ["version"]
