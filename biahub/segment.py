@@ -51,12 +51,12 @@ def segment_data(
     if gpu:
         try:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            click.echo(f"Using GPU: {device}")
         except torch.cuda.CudaError:
             click.echo("No GPU available. Using CPU")
             device = torch.device("cpu")
     else:
         device = torch.device("cpu")
-
     click.echo(f"Using device: {device}")
 
     # Pre-load unique models to avoid redundant loading
@@ -66,7 +66,9 @@ def segment_data(
         if model_path not in unique_models:
             click.echo(f"Loading model: {model_path}")
             unique_models[model_path] = models.CellposeModel(
-                gpu=gpu, device=device, pretrained_model=model_path
+                gpu=True if device.type == 'cuda' else False,
+                device=device,
+                pretrained_model=model_path,
             )
 
     czyx_segmentation = []
@@ -174,9 +176,9 @@ def segment_cli(
 
     # Load the segmentation models with their respective configurations
     # TODO: implement logic for 2D segmentation. Have a slicing parameter
-    segment_args = settings.models
-    C_segment = len(segment_args)
-    for model_name, model_args in segment_args.items():
+
+    C_segment = len(settings.models)
+    for model_name, model_args in settings.models.items():
         if model_args.z_slice_2D is not None and isinstance(model_args.z_slice_2D, int):
             Z = 1
         # Ensure channel names exist in the dataset
@@ -228,7 +230,7 @@ def segment_cli(
     create_empty_plate(
         store_path=output_dirpath,
         position_keys=[path.parts[-3:] for path in input_position_dirpaths],
-        channel_names=[model_name + "_labels" for model_name in segment_args.keys()],
+        channel_names=[model_name + "_labels" for model_name in settings.models.keys()],
         shape=segmentation_shape,
         chunks=None,
         scale=scale,
@@ -238,7 +240,7 @@ def segment_cli(
     # Estimate resources
     num_cpus, gb_ram_request = estimate_resources(shape=segmentation_shape, ram_multiplier=10)
     num_gpus = 1
-    slurm_time = np.ceil(np.max([120, T * Z * 10])).astype(int)
+    slurm_time = np.ceil(np.max([600, T * Z * 10])).astype(int)
     slurm_array_parallelism = 9
     # Prepare SLURM arguments
     slurm_args = {
@@ -278,7 +280,7 @@ def segment_cli(
                     input_channel_indices=[list(range(C))],
                     output_channel_indices=[list(range(C_segment))],
                     num_processes=np.min([5, int(num_cpus * 0.8)]),
-                    segmentation_models=segment_args,
+                    segmentation_models=settings.models,
                 )
             )
 
