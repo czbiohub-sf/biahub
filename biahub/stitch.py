@@ -918,7 +918,8 @@ def stitch_cli(
         }
         executor = submitit.AutoExecutor(folder=slurm_out_path)
         executor.update_parameters(**slurm_args)
-        cleanup_jobs.append(executor.submit(shutil.rmtree, shifted_store_path))
+        with submitit.helpers.clean_env():
+            cleanup_jobs.append(executor.submit(shutil.rmtree, shifted_store_path))
 
     job_ids = [
         job.job_id for job in stitch_jobs + shift_jobs + temp_zarr_job_ids + cleanup_jobs

@@ -204,11 +204,12 @@ def estimate_stitch_cli(
     click.echo('Consolidating FOV shifts...')
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
-    consolidate_job_id = executor.submit(
-        consolidate_zarr_fov_shifts,
-        input_dirname=csv_dirpath,
-        output_filepath=csv_filepath,
-    ).job_id
+    with submitit.helpers.clean_env():
+        consolidate_job_id = executor.submit(
+            consolidate_zarr_fov_shifts,
+            input_dirname=csv_dirpath,
+            output_filepath=csv_filepath,
+        ).job_id
 
     slurm_args = {
         "slurm_job_name": "cleanup-shifts",
@@ -221,16 +222,17 @@ def estimate_stitch_cli(
 
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
-    cleanup_job_id = executor.submit(
-        cleanup_and_write_shifts,
-        output_filepath,
-        channel,
-        fliplr,
-        flipud,
-        rot90,
-        csv_filepath,
-        pixel_size_um,
-    )
+    with submitit.helpers.clean_env():
+        cleanup_job_id = executor.submit(
+            cleanup_and_write_shifts,
+            output_filepath,
+            channel,
+            fliplr,
+            flipud,
+            rot90,
+            csv_filepath,
+            pixel_size_um,
+        )
     job_ids = [job.job_id for job in estimate_jobs + consolidate_job_id + cleanup_job_id]
 
     log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
