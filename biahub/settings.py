@@ -208,27 +208,25 @@ class EstimateRegistrationSettings(MyBaseModel):
     target_channel_name: str
     source_channel_name: str
     estimation_method: Literal["manual", "beads", "ants"] = "manual"
-    beads_match_settings: Optional[BeadsMatchSettings] = Field(
-        default_factory=BeadsMatchSettings
-    )
-    focus_finding_settings: Optional[FocusFindingSettings] = Field(
-        default_factory=FocusFindingSettings
-    )
-
+    beads_match_settings: Optional[BeadsMatchSettings] = None
+    focus_finding_settings: Optional[FocusFindingSettings] = None
     affine_transform_settings: AffineTransformSettings = Field(
         default_factory=AffineTransformSettings
     )
-    eval_transform_settings: Optional[EvalTransformSettings] = Field(
-        default_factory=EvalTransformSettings
-    )
-    ants_registration_settings: Optional[AntsRegistrationSettings] = Field(
-        default_factory=AntsRegistrationSettings
-    )
-    manual_registration_settings: Optional[ManualRegistrationSettings] = Field(
-        default_factory=ManualRegistrationSettings
-    )
+    eval_transform_settings: Optional[EvalTransformSettings] = None
+    ants_registration_settings: Optional[AntsRegistrationSettings] = None
+    manual_registration_settings: Optional[ManualRegistrationSettings] = None
     verbose: bool = False
 
+    @model_validator(mode="after")
+    def set_defaults_and_validate(self) -> "EstimateRegistrationSettings":
+        if self.estimation_method == "manual" and self.manual_registration_settings is None:
+            self.manual_registration_settings = ManualRegistrationSettings()
+        elif self.estimation_method == "beads" and self.beads_match_settings is None:
+            self.beads_match_settings = BeadsMatchSettings()
+        elif self.estimation_method == "ants" and self.ants_registration_settings is None:
+            self.ants_registration_settings = AntsRegistrationSettings()
+        return self
 
 class EstimateStabilizationSettings(MyBaseModel):
     stabilization_estimation_channel: str
@@ -237,23 +235,36 @@ class EstimateStabilizationSettings(MyBaseModel):
     stabilization_method: Literal["beads", "phase-cross-corr", "focus-finding"] = (
         "focus-finding"
     )
-    beads_match_settings: Optional[BeadsMatchSettings] = Field(
-        default_factory=BeadsMatchSettings
-    )
-    phase_cross_corr_settings: Optional[PhaseCrossCorrSettings] = Field(
-        default_factory=PhaseCrossCorrSettings
-    )
-    stack_reg_settings: Optional[StackRegSettings] = Field(default_factory=StackRegSettings)
-    focus_finding_settings: Optional[FocusFindingSettings] = Field(
-        default_factory=FocusFindingSettings
-    )
+    beads_match_settings: Optional[BeadsMatchSettings] = None
+    phase_cross_corr_settings: Optional[PhaseCrossCorrSettings] = None
+    stack_reg_settings: Optional[StackRegSettings] = None
+    focus_finding_settings: Optional[FocusFindingSettings] = None
     affine_transform_settings: AffineTransformSettings = Field(
         default_factory=AffineTransformSettings
     )
-    eval_transform_settings: Optional[EvalTransformSettings] = Field(
-        default_factory=EvalTransformSettings
-    )
+    eval_transform_settings: Optional[EvalTransformSettings] = None
     verbose: bool = False
+
+    @model_validator(mode="after")
+
+    def set_defaults_and_validate(self) -> "EstimateStabilizationSettings":
+        if self.stabilization_method == "beads" and self.beads_match_settings is None:
+            self.beads_match_settings = BeadsMatchSettings()
+        elif self.stabilization_method == "phase-cross-corr" and self.phase_cross_corr_settings is None:
+            self.phase_cross_corr_settings = PhaseCrossCorrSettings()
+        elif self.stabilization_method == "focus-finding" and self.stabilization_type == "xyz":
+            if self.focus_finding_settings is None:
+                self.focus_finding_settings = FocusFindingSettings()
+            if self.stack_reg_settings is None:
+                self.stack_reg_settings = StackRegSettings()
+        elif self.stabilization_method == "focus-finding" and self.stabilization_type == "z":
+            if self.focus_finding_settings is None:
+                self.focus_finding_settings = FocusFindingSettings()
+        elif self.stabilization_method == "focus-finding" and self.stabilization_type == "xy":
+            if self.stack_reg_settings is None:
+                self.stack_reg_settings = StackRegSettings()
+
+        return self
 
 
 class ProcessingSettings(MyBaseModel):

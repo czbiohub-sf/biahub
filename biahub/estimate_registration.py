@@ -312,22 +312,37 @@ def evaluate_transforms(
     list[ArrayLike]
         List of affine transformation matrices with missing values filled via linear interpolation.
     """
+
     if not isinstance(transforms, list):
         transforms = transforms.tolist()
+    if len(transforms) < validation_window_size:
+        raise Warning(
+            f"Not enough transforms for validation and interpolation. "
+            f"Required: {validation_window_size}, "
+            f"Provided: {len(transforms)}"
+        )
+    else:
+        transforms = validate_transforms(
+            transforms=transforms,
+            window_size=validation_window_size,
+            tolerance=validation_tolerance,
+            shape_zyx=shape_zyx,
+            verbose=verbose,
+        )
 
-    transforms = validate_transforms(
-        transforms=transforms,
-        window_size=validation_window_size,
-        tolerance=validation_tolerance,
-        shape_zyx=shape_zyx,
-        verbose=verbose,
-    )
-    transforms = interpolate_transforms(
-        transforms=transforms,
-        window_size=interpolation_window_size,
-        interpolation_type=interpolation_type,
-        verbose=verbose,
-    )
+    if len(transforms) < interpolation_window_size:
+        raise Warning(
+            f"Not enough transforms for interpolation. "
+            f"Required: {interpolation_window_size}, "
+            f"Provided: {len(transforms)}"
+        )
+    else:
+        transforms = interpolate_transforms(
+            transforms=transforms,
+            window_size=interpolation_window_size,
+            interpolation_type=interpolation_type,
+            verbose=verbose,
+        )
     return transforms
 
 
@@ -409,10 +424,14 @@ def plot_translations(
     The plot is saved in the same directory as the output file.
     The plot is saved as a png file.
     """
+    transforms_zyx = np.asarray(transforms_zyx)
+    os.makedirs(output_filepath.parent, exist_ok=True)
+    
     z_transforms = transforms_zyx[:, 0, 3]
     y_transforms = transforms_zyx[:, 1, 3]
     x_transforms = transforms_zyx[:, 2, 3]
     _, axs = plt.subplots(3, 1, figsize=(10, 10))
+    
 
     axs[0].plot(z_transforms)
     axs[0].set_title("Z-Translation")
@@ -433,7 +452,7 @@ def user_assisted_registration(
     target_channel_voxel_size: tuple[float, float, float],
     similarity: bool = False,
     pre_affine_90degree_rotation: int = 0,
-) -> ArrayLike:
+) -> list[ArrayLike]:
     """
     Perform user-assisted registration of two volumetric image channels.
 
@@ -713,7 +732,7 @@ def user_assisted_registration(
     input("Press <Enter> to close the viewer and exit...")
     viewer.close()
 
-    return tform
+    return [tform.tolist()]
 
 
 def shrink_slice(s: slice, shrink_fraction: float = 0.1, min_width: int = 5) -> slice:
@@ -2075,32 +2094,6 @@ def estimate_registration(
             output_folder_path=output_dir,
         )
 
-        if eval_transform_settings:
-            transforms = evaluate_transforms(
-                transforms=transforms,
-                shape_zyx=source_channel_data.shape[-3:],
-                validation_window_size=eval_transform_settings.validation_window_size,
-                validation_tolerance=eval_transform_settings.validation_tolerance,
-                interpolation_window_size=eval_transform_settings.interpolation_window_size,
-                interpolation_type=eval_transform_settings.interpolation_type,
-                verbose=settings.verbose,
-            )
-
-        model = StabilizationSettings(
-            stabilization_estimation_channel='',
-            stabilization_type='xyz',
-            stabilization_channels=registration_source_channels,
-            affine_transform_zyx_list=[],
-            time_indices='all',
-            output_voxel_size=voxel_size,
-        )
-        save_transforms(
-            model=model,
-            transforms=transforms,
-            output_filepath_settings=output_filepath,
-            output_filepath_plot=output_dir / "translation_plots" / "beads_registration.png",
-            verbose=settings.verbose,
-        )
 
     elif settings.estimation_method == "ants":
         transforms = ants_registration(
@@ -2116,35 +2109,9 @@ def estimate_registration(
             output_folder_path=output_dir,
         )
 
-        if eval_transform_settings:
-            transforms = evaluate_transforms(
-                transforms=transforms,
-                shape_zyx=source_channel_data.shape[-3:],
-                validation_window_size=eval_transform_settings.validation_window_size,
-                validation_tolerance=eval_transform_settings.validation_tolerance,
-                interpolation_window_size=eval_transform_settings.interpolation_window_size,
-                interpolation_type=eval_transform_settings.interpolation_type,
-                verbose=settings.verbose,
-            )
 
-        model = StabilizationSettings(
-            stabilization_estimation_channel='',
-            stabilization_type='xyz',
-            stabilization_channels=registration_source_channels,
-            affine_transform_zyx_list=[],
-            time_indices='all',
-            output_voxel_size=voxel_size,
-        )
-
-        save_transforms(
-            model=model,
-            transforms=transforms,
-            output_filepath_settings=output_filepath,
-            output_filepath_plot=output_dir / "translation_plots" / "ants_registration.png",
-            verbose=settings.verbose,
-        )
     elif settings.estimation_method == "manual":
-        transform = user_assisted_registration(
+        transforms = user_assisted_registration(
             source_channel_volume=np.asarray(
                 source_channel_data[settings.manual_registration_settings.time_index]
             ),
@@ -2163,24 +2130,49 @@ def estimate_registration(
             pre_affine_90degree_rotation=settings.manual_registration_settings.affine_90degree_rotation,
         )
 
+        
+    else:
+        raise ValueError(
+            f"Unknown estimation method: {settings.estimation_method}. "
+            "Supported methods are 'beads', 'ants', and 'manual'."
+        )
+    
+    if len(transforms) == 1:
+        if eval_transform_settings:
+            click.echo(f"One transform was estimated, no need to evaluate")
+        transform = transforms[0]
         model = RegistrationSettings(
             source_channel_names=registration_source_channels,
             target_channel_name=registration_target_channel,
             affine_transform_zyx=transform,
         )
-        save_transforms(
-            model=model,
-            transforms=transform,
-            output_filepath_settings=output_filepath,
-            output_filepath_plot=output_dir
-            / "translation_plots"
-            / "user_assisted_registration.png",
-            verbose=settings.verbose,
-        )
+
     else:
-        raise ValueError(
-            f"Unknown estimation method: {settings.estimation_method}. "
-            "Supported methods are 'beads', 'ants', and 'manual'."
+        if eval_transform_settings:
+            transforms = evaluate_transforms(
+                transforms=transforms,
+                shape_zyx=source_channel_data.shape[-3:],
+                validation_window_size=eval_transform_settings.validation_window_size,
+                validation_tolerance=eval_transform_settings.validation_tolerance,
+                interpolation_window_size=eval_transform_settings.interpolation_window_size,
+                interpolation_type=eval_transform_settings.interpolation_type,
+                verbose=settings.verbose,
+            )
+
+        model = StabilizationSettings(
+            stabilization_estimation_channel='',
+            stabilization_type='xyz',
+            stabilization_channels=registration_source_channels,
+            affine_transform_zyx_list=transforms,
+            time_indices='all',
+            output_voxel_size=voxel_size,
+        )
+    model_to_yaml(model, output_filepath)
+    
+    if settings.verbose:
+        plot_translations(
+            transforms_zyx=transforms,
+            output_filepath=output_dir / "translation_plots" / f"{settings.estimation_method}_registration.png",
         )
 
     click.echo(f"Registration settings saved to {output_dir.resolve()}")
