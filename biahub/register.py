@@ -526,7 +526,7 @@ def register_cli(
     # as given in the config file (i.e. settings.source_channel_names)
     affine_jobs = []
     affine_names = []
-    with executor.batch():
+    with submitit.helpers.clean_env(), executor.batch():
         for input_position_path in source_position_dirpaths:
             for channel_name in source_channel_names:
                 if channel_name not in settings.source_channel_names:
@@ -550,7 +550,7 @@ def register_cli(
     # were already registered in the previous step
     copy_jobs = []
     copy_names = []
-    with executor.batch():
+    with submitit.helpers.clean_env(), executor.batch():
         for input_position_path in target_position_dirpaths:
             for channel_name in target_channel_names:
                 if channel_name in settings.source_channel_names:

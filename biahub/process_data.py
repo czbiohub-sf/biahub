@@ -285,7 +285,7 @@ def process_with_config(
 
     # TODO: perhaps T/C processing indices should be exposed as params in config
     jobs = []
-    with executor.batch():
+    with submitit.helpers.clean_env(), executor.batch():
         for input_position_path, output_position_path in zip(
             input_position_dirpaths, output_position_paths
         ):

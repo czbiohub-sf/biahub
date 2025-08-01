@@ -23,6 +23,7 @@ from biahub.cli.main import cli
         "deconvolve",
         "characterize-psf",
         "segment",
+        "virtual-stain",
         "track",
         "process-with-config",
     ],

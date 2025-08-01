@@ -382,8 +382,7 @@ def concatenate(
 
     click.echo("Submitting SLURM jobs...")
     jobs = []
-
-    with executor.batch():
+    with submitit.helpers.clean_env(), executor.batch():
         for i, (
             input_position_path,
             output_position_path,

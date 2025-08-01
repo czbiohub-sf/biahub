@@ -258,8 +258,7 @@ def stabilize(
 
     click.echo('Submitting SLURM jobs...')
     jobs = []
-
-    with executor.batch():
+    with submitit.helpers.clean_env(), executor.batch():
         # apply stabilization to channels in the chosen channels and else copy the rest
         for input_position_path in input_position_dirpaths:
             if not config_filepath:

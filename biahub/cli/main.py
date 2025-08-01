@@ -20,6 +20,7 @@ from biahub.segment import segment_cli
 from biahub.stabilize import stabilize_cli
 from biahub.stitch import stitch_cli
 from biahub.track import track_cli
+from biahub.virtual_stain import virtual_stain_cli
 
 CONTEXT = {"help_option_names": ["-h", "--help"]}
 
@@ -53,5 +54,6 @@ cli.add_command(estimate_psf_cli)
 cli.add_command(deconvolve_cli)
 cli.add_command(characterize_psf_cli)
 cli.add_command(segment_cli)
+cli.add_command(virtual_stain_cli)
 cli.add_command(process_with_config_cli)
 cli.add_command(track_cli)

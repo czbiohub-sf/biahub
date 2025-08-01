@@ -881,7 +881,7 @@ def track(
     click.echo('Submitting SLURM jobs...')
     jobs = []
 
-    with executor.batch():
+    with submitit.helpers.clean_env(), executor.batch():
         for position_key in position_keys:
             job = executor.submit(
                 track_one_position,

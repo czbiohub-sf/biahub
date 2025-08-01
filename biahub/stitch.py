@@ -805,7 +805,7 @@ def stitch_cli(
         executor = submitit.AutoExecutor(folder=slurm_out_path)
         executor.update_parameters(**slurm_args)
         temp_zarr_jobs = []
-        with executor.batch():
+        with submitit.helpers.clean_env(), executor.batch():
             for well in _wells:
                 job = executor.submit(_populate_wells, well, fov_names)
                 temp_zarr_jobs.append(job)
@@ -857,7 +857,7 @@ def stitch_cli(
         executor.update_parameters(**slurm_args)
         click.echo('Submitting SLURM jobs')
         shift_jobs = []
-        with executor.batch():
+        with submitit.helpers.clean_env(), executor.batch():
             for in_path, transform in zip(input_position_dirpaths, transforms):
                 job = executor.submit(
                     process_single_position_v2,
@@ -893,7 +893,7 @@ def stitch_cli(
     executor.update_parameters(**slurm_args)
 
     stitch_jobs = []
-    with executor.batch():
+    with submitit.helpers.clean_env(), executor.batch():
         for well in wells:
             job = executor.submit(
                 stitch_shifted_store,
@@ -919,7 +919,8 @@ def stitch_cli(
         }
         executor = submitit.AutoExecutor(folder=slurm_out_path)
         executor.update_parameters(**slurm_args)
-        cleanup_jobs.append(executor.submit(shutil.rmtree, shifted_store_path))
+        with submitit.helpers.clean_env():
+            cleanup_jobs.append(executor.submit(shutil.rmtree, shifted_store_path))
 
     job_ids = [
         job.job_id for job in stitch_jobs + shift_jobs + temp_zarr_job_ids + cleanup_jobs

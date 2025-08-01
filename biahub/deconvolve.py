@@ -172,7 +172,7 @@ def deconvolve_cli(
 
     click.echo('Submitting SLURM jobs...')
     jobs = []
-    with executor.batch():
+    with submitit.helpers.clean_env(), executor.batch():
         for input_position_path, output_position_path in zip(
             input_position_dirpaths, output_position_paths
         ):
