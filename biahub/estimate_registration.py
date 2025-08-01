@@ -2163,17 +2163,6 @@ def estimate_registration(
             pre_affine_90degree_rotation=settings.manual_registration_settings.affine_90degree_rotation,
         )
 
-        if eval_transform_settings:
-            transforms = evaluate_transforms(
-                transforms=transform,
-                shape_zyx=source_channel_data.shape[-3:],
-                validation_window_size=eval_transform_settings.validation_window_size,
-                validation_tolerance=eval_transform_settings.validation_tolerance,
-                interpolation_window_size=eval_transform_settings.interpolation_window_size,
-                interpolation_type=eval_transform_settings.interpolation_type,
-                verbose=settings.verbose,
-            )
-
         model = RegistrationSettings(
             source_channel_names=registration_source_channels,
             target_channel_name=registration_target_channel,
