@@ -860,7 +860,7 @@ def ants_registration(
     # NOTE: ants is mulitthreaded so no need for multiprocessing here
     # Submit jobs
     jobs = []
-    with executor.batch():
+    with submitit.helpers.clean_env(), executor.batch():
         for t in range(T):
             job = executor.submit(
                 _optimize_registration,
