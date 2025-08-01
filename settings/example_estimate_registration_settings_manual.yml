@@ -35,12 +35,4 @@ affine_transform_settings:
       - 0.0
       - 1.0
 
-
-# Validation and interpolation settings for transform smoothing
-eval_transform_settings:
-  validation_window_size: 10 # number of timepoints to average over
-  validation_tolerance: 100.0 # max difference between transforms
-  interpolation_window_size: 3 # size of the window for interpolation
-  interpolation_type: "linear" # "linear" or "cubic"
-
 verbose: True
