@@ -2143,7 +2143,7 @@ def estimate_registration(
             output_filepath_plot=output_dir / "translation_plots" / "ants_registration.png",
             verbose=settings.verbose,
         )
-    else:
+    elif settings.estimation_method == "manual":
         transform = user_assisted_registration(
             source_channel_volume=np.asarray(
                 source_channel_data[settings.manual_registration_settings.time_index]
@@ -2166,16 +2166,21 @@ def estimate_registration(
         model = RegistrationSettings(
             source_channel_names=registration_source_channels,
             target_channel_name=registration_target_channel,
-            affine_transform_zyx=transforms,
+            affine_transform_zyx=transform,
         )
         save_transforms(
             model=model,
-            transforms=transforms,
+            transforms=transform,
             output_filepath_settings=output_filepath,
             output_filepath_plot=output_dir
             / "translation_plots"
             / "user_assisted_registration.png",
             verbose=settings.verbose,
+        )
+    else:
+        raise ValueError(
+            f"Unknown estimation method: {settings.estimation_method}. "
+            "Supported methods are 'beads', 'ants', and 'manual'."
         )
 
     click.echo(f"Registration settings saved to {output_dir.resolve()}")
