@@ -2165,15 +2165,15 @@ def estimate_registration(
             time_indices='all',
             output_voxel_size=voxel_size,
         )
-    model_to_yaml(model, output_filepath)
+        if settings.verbose:
+            plot_translations(
+                transforms_zyx=transforms,
+                output_filepath=output_dir
+                / "translation_plots"
+                / f"{settings.estimation_method}_registration.png",
+            )
 
-    if settings.verbose:
-        plot_translations(
-            transforms_zyx=transforms,
-            output_filepath=output_dir
-            / "translation_plots"
-            / f"{settings.estimation_method}_registration.png",
-        )
+    model_to_yaml(model, output_filepath)
 
     click.echo(f"Registration settings saved to {output_dir.resolve()}")
 
