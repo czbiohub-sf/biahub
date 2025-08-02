@@ -788,8 +788,7 @@ def estimate_xyz_stabilization_pcc(
         for job in jobs:
             log_file.write(f"{job.job_id}\n")
 
-    job_ids = [str(j.job_id) for j in jobs]
-    wait_for_jobs_to_finish(job_ids)
+    wait_for_jobs_to_finish(jobs)
 
     transform_files = list(transforms_out_path.glob("*.npy"))
 
@@ -905,8 +904,7 @@ def estimate_xyz_stabilization_with_beads(
         for job in jobs:
             log_file.write(f"{job.job_id}\n")
 
-    job_ids = [str(j.job_id) for j in jobs]
-    wait_for_jobs_to_finish(job_ids)
+    wait_for_jobs_to_finish(jobs)
 
     # Load the transforms
     transforms = [np.eye(4).tolist()]
@@ -1123,7 +1121,7 @@ def estimate_xy_stabilization(
             log_file.write(f"{job.job_id}\n")
 
     job_ids = [str(j.job_id) for j in jobs]
-    wait_for_jobs_to_finish(job_ids)
+    wait_for_jobs_to_finish(jobs)
 
     transforms_paths = list(output_transforms_path.glob("*.npy"))
     fov_transforms = {}
@@ -1387,8 +1385,7 @@ def estimate_z_stabilization(
         for job in jobs:
             log_file.write(f"{job.job_id}\n")
 
-    job_ids = [str(j.job_id) for j in jobs]
-    wait_for_jobs_to_finish(job_ids)
+    wait_for_jobs_to_finish(jobs)
 
     # Load the focus CSV files and concatenate them
     focus_csvs_path = list(output_folder_focus_path.glob("*.csv"))
@@ -1579,7 +1576,7 @@ def estimate_stabilization(
                             validation_tolerance=eval_transform_settings.validation_tolerance,
                             interpolation_window_size=eval_transform_settings.interpolation_window_size,
                             interpolation_type=eval_transform_settings.interpolation_type,
-                            verbose=False,
+                            verbose=verbose,
                         )
                         z_transforms = evaluate_transforms(
                             transforms=z_transforms,
@@ -1588,7 +1585,7 @@ def estimate_stabilization(
                             validation_tolerance=eval_transform_settings.validation_tolerance,
                             interpolation_window_size=eval_transform_settings.interpolation_window_size,
                             interpolation_type=eval_transform_settings.interpolation_type,
-                            verbose=False,
+                            verbose=verbose,
                         )
                         xy_transforms = evaluate_transforms(
                             transforms=xy_transforms,
@@ -1597,7 +1594,7 @@ def estimate_stabilization(
                             validation_tolerance=eval_transform_settings.validation_tolerance,
                             interpolation_window_size=eval_transform_settings.interpolation_window_size,
                             interpolation_type=eval_transform_settings.interpolation_type,
-                            verbose=False,
+                            verbose=verbose,
                         )
 
                     save_transforms(
@@ -1669,7 +1666,7 @@ def estimate_stabilization(
                     validation_tolerance=eval_transform_settings.validation_tolerance,
                     interpolation_window_size=eval_transform_settings.interpolation_window_size,
                     interpolation_type=eval_transform_settings.interpolation_type,
-                    verbose=False,
+                    verbose=verbose,
                 )
 
             save_transforms(
@@ -1715,7 +1712,7 @@ def estimate_stabilization(
                             validation_tolerance=eval_transform_settings.validation_tolerance,
                             interpolation_window_size=eval_transform_settings.interpolation_window_size,
                             interpolation_type=eval_transform_settings.interpolation_type,
-                            verbose=False,
+                            verbose=verbose,
                         )
 
                     save_transforms(
@@ -1768,7 +1765,7 @@ def estimate_stabilization(
                         validation_tolerance=eval_transform_settings.validation_tolerance,
                         interpolation_window_size=eval_transform_settings.interpolation_window_size,
                         interpolation_type=eval_transform_settings.interpolation_type,
-                        verbose=False,
+                        verbose=verbose,
                     )
 
                 save_transforms(
@@ -1821,7 +1818,7 @@ def estimate_stabilization(
                             validation_tolerance=eval_transform_settings.validation_tolerance,
                             interpolation_window_size=eval_transform_settings.interpolation_window_size,
                             interpolation_type=eval_transform_settings.interpolation_type,
-                            verbose=False,
+                            verbose=verbose,
                         )
 
                     save_transforms(

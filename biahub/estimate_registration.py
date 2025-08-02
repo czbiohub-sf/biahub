@@ -315,36 +315,34 @@ def evaluate_transforms(
 
     if not isinstance(transforms, list):
         transforms = transforms.tolist()
-
     if len(transforms) < validation_window_size:
-        raise ValueError(
+        raise Warning(
             f"Not enough transforms for validation and interpolation. "
             f"Required: {validation_window_size}, "
             f"Provided: {len(transforms)}"
         )
-
-    transforms = validate_transforms(
-        transforms=transforms,
-        window_size=validation_window_size,
-        tolerance=validation_tolerance,
-        shape_zyx=shape_zyx,
-        verbose=verbose,
-    )
+    else:
+        transforms = validate_transforms(
+            transforms=transforms,
+            window_size=validation_window_size,
+            tolerance=validation_tolerance,
+            shape_zyx=shape_zyx,
+            verbose=verbose,
+        )
 
     if len(transforms) < interpolation_window_size:
-        raise ValueError(
+        raise Warning(
             f"Not enough transforms for interpolation. "
             f"Required: {interpolation_window_size}, "
             f"Provided: {len(transforms)}"
         )
-
-    transforms = interpolate_transforms(
-        transforms=transforms,
-        window_size=interpolation_window_size,
-        interpolation_type=interpolation_type,
-        verbose=verbose,
-    )
-
+    else:
+        transforms = interpolate_transforms(
+            transforms=transforms,
+            window_size=interpolation_window_size,
+            interpolation_type=interpolation_type,
+            verbose=verbose,
+        )
     return transforms
 
 
@@ -428,11 +426,12 @@ def plot_translations(
     """
     transforms_zyx = np.asarray(transforms_zyx)
     os.makedirs(output_filepath.parent, exist_ok=True)
-
+    
     z_transforms = transforms_zyx[:, 0, 3]
     y_transforms = transforms_zyx[:, 1, 3]
     x_transforms = transforms_zyx[:, 2, 3]
     _, axs = plt.subplots(3, 1, figsize=(10, 10))
+    
 
     axs[0].plot(z_transforms)
     axs[0].set_title("Z-Translation")
@@ -888,8 +887,7 @@ def ants_registration(
         for job in jobs:
             log_file.write(f"{job.job_id}\n")
 
-    job_ids = [str(j.job_id) for j in jobs]
-    wait_for_jobs_to_finish(job_ids)
+    wait_for_jobs_to_finish(jobs)
 
     # Load the transforms
     transforms = []
@@ -1017,10 +1015,8 @@ def beads_based_registration(
         for job in jobs:
             log_file.write(f"{job.job_id}\n")
 
-    job_ids = [str(j.job_id) for j in jobs]
-    wait_for_jobs_to_finish(job_ids)
+    wait_for_jobs_to_finish(jobs)
 
-    # Load the transforms
     transforms = []
     for t in range(T):
         file_path = output_transforms_path / f"{t}.npy"
@@ -2095,6 +2091,7 @@ def estimate_registration(
             output_folder_path=output_dir,
         )
 
+
     elif settings.estimation_method == "ants":
         transforms = ants_registration(
             source_data_tczyx=source_data,
@@ -2108,6 +2105,7 @@ def estimate_registration(
             verbose=settings.verbose,
             output_folder_path=output_dir,
         )
+
 
     elif settings.estimation_method == "manual":
         transforms = user_assisted_registration(
@@ -2129,15 +2127,16 @@ def estimate_registration(
             pre_affine_90degree_rotation=settings.manual_registration_settings.affine_90degree_rotation,
         )
 
+        
     else:
         raise ValueError(
             f"Unknown estimation method: {settings.estimation_method}. "
             "Supported methods are 'beads', 'ants', and 'manual'."
         )
-
+    
     if len(transforms) == 1:
         if eval_transform_settings:
-            click.echo("One transform was estimated, no need to evaluate")
+            click.echo(f"One transform was estimated, no need to evaluate")
         transform = transforms[0]
         model = RegistrationSettings(
             source_channel_names=registration_source_channels,
@@ -2168,13 +2167,12 @@ def estimate_registration(
         if settings.verbose:
             plot_translations(
                 transforms_zyx=transforms,
-                output_filepath=output_dir
-                / "translation_plots"
-                / f"{settings.estimation_method}_registration.png",
+                output_filepath=output_dir / "translation_plots" / f"{settings.estimation_method}_registration.png",
             )
 
     model_to_yaml(model, output_filepath)
-
+    
+    
     click.echo(f"Registration settings saved to {output_dir.resolve()}")
 
 
