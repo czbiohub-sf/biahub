@@ -156,6 +156,7 @@ def apply_inverse_transfer_function_cli(
 
     >> biahub apply-inv-tf -i ./input.zarr/*/*/* -t ./transfer-function.zarr -c /examples/birefringence.yml -o ./output.zarr
     """
+
     apply_inverse_transfer_function(
         input_position_dirpaths=input_position_dirpaths,
         transfer_function_dirpath=transfer_function_dirpath,

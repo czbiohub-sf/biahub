@@ -691,7 +691,7 @@ def compute_total_translation(csv_filepath: str) -> pd.DataFrame:
 def stitch_cli(
     input_position_dirpaths: list[Path],
     output_dirpath: str,
-    config_filepath: str,
+    config_filepath: Path,
     temp_path: str,
     debug: bool,
     monitor: bool,
@@ -701,6 +701,7 @@ def stitch_cli(
 
     >>> biahub stitch -i ./input.zarr/*/*/* -c ./stitch_params.yml -o ./output.zarr --temp-path /hpc/scratch/group.comp.micro/
     """
+
     slurm_out_path = Path(output_dirpath).parent / "slurm_output"
     dataset = input_position_dirpaths[0].parts[-4][:-5]
     shifted_store_path = Path(temp_path, f"TEMP_{dataset}.zarr").resolve()

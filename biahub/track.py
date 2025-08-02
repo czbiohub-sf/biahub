@@ -910,7 +910,7 @@ def track(
 @local()
 def track_cli(
     output_dirpath: str,
-    config_filepath: str,
+    config_filepath: Path,
     sbatch_filepath: str = None,
     local: bool = None,
 ) -> None:

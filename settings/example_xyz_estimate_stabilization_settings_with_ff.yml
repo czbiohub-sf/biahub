@@ -1,0 +1,52 @@
+# Channel used to estimate stabilization parameters across timepoints.
+stabilization_estimation_channel: Phase3D
+
+# List of channels that will be stabilized using the computed transforms.
+stabilization_channels:
+  - Phase3D
+
+# Type of stabilization to perform
+#   - "z" only stabilize in Z
+#   - "xy" only stabilize in XY
+#   - "xyz" stabilize in all 3D spatial dimensions
+stabilization_type: "xyz"
+
+# Method used to estimate stabilization parameters
+#   - "focus-finding" uses intensity-based Z focus to estimate drift in z and use stack-reg to estimate drift in xy
+#   - "beads" uses automatically matched beads (only for xyz)
+#   - "phase-cross-corr" uses 3D phase correlation (only for xyz)
+stabilization_method: "focus-finding"
+
+stack_reg_settings:
+  center_crop_xy:
+    - 800
+    - 800
+  skip_beads_fov: "0" # FOV index to skip (e.g., bead FOV), as a string
+  t_reference: "first"
+  focus_finding_settings: # settings for focus finding for Z used as reference in z for stackreg
+    average_across_wells: False    # If True, average focus across all wells
+    skip_beads_fov: "0" # FOV index to skip (e.g., bead FOV), as a string
+    center_crop_xy: # size of the crop for focus finding
+      - 800
+      - 800
+
+focus_finding_settings:
+  average_across_wells: False # If True, average focus across all wells
+  skip_beads_fov: "0" # FOV index to skip (e.g., bead FOV), as a string
+  center_crop_xy: # size of the crop for focus finding
+    - 800
+    - 800
+
+# Settings for affine transformation estimation (applies to all stabilization methods)
+affine_transform_settings:
+  transform_type: euclidean # Type of transform to estimate "euclidean", "similarity", or "affine"
+
+# Validation and interpolation settings for transform smoothing
+eval_transform_settings:
+  validation_window_size: 10 # number of timepoints to average over
+  validation_tolerance: 100.0 # max difference between transforms
+  interpolation_window_size: 3 # size of the window for interpolation
+  interpolation_type: "linear" # "linear" or "cubic"
+
+# Set to True for verbose logging of the stabilization process
+verbose: True

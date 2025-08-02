@@ -1,0 +1,43 @@
+# Channel used to estimate stabilization parameters across timepoints.
+stabilization_estimation_channel: Phase3D
+
+# List of channels that will be stabilized using the computed transforms.
+stabilization_channels:
+  - Phase3D
+
+# Type of stabilization to perform
+#   - "z" only stabilize in Z
+#   - "xy" only stabilize in XY
+#   - "xyz" stabilize in all 3D spatial dimensions
+stabilization_type: "xyz"
+
+# Method used to estimate stabilization parameters
+#   - "focus-finding" uses intensity-based Z focus to estimate drift in z and use stack-reg to estimate drift in xy
+#   - "beads" uses automatically matched beads (only for xyz)
+#   - "phase-cross-corr" uses 3D phase correlation (only for xyz)
+stabilization_method: "phase-cross-corr"
+
+phase_cross_corr_settings:
+  normalization: "magnitude"
+  t_reference: "first"
+  function_type: "custom"
+  X_slice: "all"
+  Y_slice: "all"
+  Z_slice: "all"
+  #center_crop_xy: # center crop size for phase cross correlation
+  #  - 800
+  #  - 800
+
+# Settings for affine transformation estimation (applies to all stabilization methods)
+affine_transform_settings:
+  transform_type: euclidean # Type of transform to estimate "euclidean", "similarity", or "affine"
+
+# Validation and interpolation settings for transform smoothing
+eval_transform_settings:
+  validation_window_size: 10 # number of timepoints to average over
+  validation_tolerance: 100.0 # max difference between transforms
+  interpolation_window_size: 3 # size of the window for interpolation
+  interpolation_type: "linear" # "linear" or "cubic"
+
+# Set to True for verbose logging of the stabilization process
+verbose: True
