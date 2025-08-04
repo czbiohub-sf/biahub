@@ -1,5 +1,6 @@
 import ast
 import os
+import shutil
 
 from glob import glob
 from pathlib import Path
@@ -10,7 +11,6 @@ import dask.array as da
 import napari
 import numpy as np
 import pandas as pd
-import shutil
 import submitit
 import toml
 
@@ -944,4 +944,4 @@ def track_cli(
 
 
 if __name__ == "__main__":
-    track_cli() 
+    track_cli()
