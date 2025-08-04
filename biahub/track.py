@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 import submitit
 import toml
+import shutill
 
 from iohub import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate
@@ -306,7 +307,7 @@ def run_ultrack(
     foreground_mask: ArrayLike,
     contour_gradient_map: ArrayLike,
     scale: Union[Tuple[float, float], Tuple[float, float, float]],
-    databaset_path,
+    database_path,
 ):
     """
     Run object tracking using the Ultrack library.
@@ -327,7 +328,7 @@ def run_ultrack(
         for linking detected objects between timepoints.
     scale : tuple of float
         Physical resolution scale in either (Y, X) or (Z, Y, X) depending on whether the data is 2D or 3D.
-    databaset_path : Path
+    database_path : Path
         Directory where tracking results, configuration files, and output data will be saved.
 
     Returns
@@ -346,7 +347,7 @@ def run_ultrack(
     -----
     - `foreground_mask` must be a binary mask (e.g., after thresholding a probability map).
     - This function modifies `tracking_config` to set the working directory (`working_dir`).
-    - The configuration used is saved to `config.toml` under the `databaset_path`.
+    - The configuration used is saved to `config.toml` under the `database_path`.
 
     Examples
     --------
@@ -355,12 +356,12 @@ def run_ultrack(
     ...     foreground_mask=binary_mask,
     ...     contour_gradient_map=gradient_map,
     ...     scale=(0.5, 0.5, 1.0),
-    ...     databaset_path=Path("results/posA")
+    ...     database_path=Path("results/posA")
     ... )
     """
     cfg = tracking_config
 
-    cfg.data_config.working_dir = databaset_path
+    cfg.data_config.working_dir = database_path
 
     print(cfg)
 
@@ -376,7 +377,7 @@ def run_ultrack(
         tracks_df=tracks_df,
     )
 
-    with open(databaset_path / "config.toml", mode="w") as f:
+    with open(database_path / "config.toml", mode="w") as f:
         toml.dump(cfg.dict(by_alias=True), f)
 
     return (
@@ -720,13 +721,21 @@ def track_one_position(
 
     # Define path to save the tracking database and graph
     filename = output_dirpath.stem
-    databaset_path = output_dirpath.parent / f"{filename}_config_tracking" / f"{fov}"
-    os.makedirs(databaset_path, exist_ok=True)
+    database_path = output_dirpath.parent / f"{filename}_config_tracking" / f"{fov}"
+    if database_path.exists():
+        click.echo(f"Removing existing database at {database_path} to avoid SQLite conflicts.")
+        shutill.rmtree(database_path)
+    os.makedirs(database_path, exist_ok=True)
+    
 
     # Perform tracking
     click.echo("Tracking...")
     tracking_labels, tracks_df, _ = run_ultrack(
-        tracking_config, foreground_mask, contour_gradient_map, scale, databaset_path
+        tracking_config=tracking_config, 
+        foreground_mask=foreground_mask,
+        contour_gradient_map= contour_gradient_map,
+        scale= scale,
+        database_path= database_path
     )
 
     # Save the tracks graph to a CSV file
