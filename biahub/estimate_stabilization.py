@@ -1120,7 +1120,6 @@ def estimate_xy_stabilization(
         for job in jobs:
             log_file.write(f"{job.job_id}\n")
 
-    job_ids = [str(j.job_id) for j in jobs]
     wait_for_jobs_to_finish(jobs)
 
     transforms_paths = list(output_transforms_path.glob("*.npy"))

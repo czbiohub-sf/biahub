@@ -228,6 +228,7 @@ class EstimateRegistrationSettings(MyBaseModel):
             self.ants_registration_settings = AntsRegistrationSettings()
         return self
 
+
 class EstimateStabilizationSettings(MyBaseModel):
     stabilization_estimation_channel: str
     stabilization_channels: list
@@ -246,11 +247,13 @@ class EstimateStabilizationSettings(MyBaseModel):
     verbose: bool = False
 
     @model_validator(mode="after")
-
     def set_defaults_and_validate(self) -> "EstimateStabilizationSettings":
         if self.stabilization_method == "beads" and self.beads_match_settings is None:
             self.beads_match_settings = BeadsMatchSettings()
-        elif self.stabilization_method == "phase-cross-corr" and self.phase_cross_corr_settings is None:
+        elif (
+            self.stabilization_method == "phase-cross-corr"
+            and self.phase_cross_corr_settings is None
+        ):
             self.phase_cross_corr_settings = PhaseCrossCorrSettings()
         elif self.stabilization_method == "focus-finding" and self.stabilization_type == "xyz":
             if self.focus_finding_settings is None:

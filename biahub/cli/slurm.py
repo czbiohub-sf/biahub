@@ -1,9 +1,9 @@
-from tqdm import tqdm
 import submitit
 
-def wait_for_jobs_to_finish(
-    jobs: list[submitit.Job]
-) -> None:
+from tqdm import tqdm
+
+
+def wait_for_jobs_to_finish(jobs: list[submitit.Job]) -> None:
     """
     Wait for SLURM jobs to finish using a progress bar with tqdm.
 
@@ -15,7 +15,9 @@ def wait_for_jobs_to_finish(
     -------
     None
     """
-    for job in tqdm(submitit.helpers.as_completed(jobs), total=len(jobs), desc="Waiting for jobs to finish"):
+    for job in tqdm(
+        submitit.helpers.as_completed(jobs), total=len(jobs), desc="Waiting for jobs to finish"
+    ):
         try:
             pass
         except Exception as e:

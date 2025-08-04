@@ -426,12 +426,11 @@ def plot_translations(
     """
     transforms_zyx = np.asarray(transforms_zyx)
     os.makedirs(output_filepath.parent, exist_ok=True)
-    
+
     z_transforms = transforms_zyx[:, 0, 3]
     y_transforms = transforms_zyx[:, 1, 3]
     x_transforms = transforms_zyx[:, 2, 3]
     _, axs = plt.subplots(3, 1, figsize=(10, 10))
-    
 
     axs[0].plot(z_transforms)
     axs[0].set_title("Z-Translation")
@@ -2091,7 +2090,6 @@ def estimate_registration(
             output_folder_path=output_dir,
         )
 
-
     elif settings.estimation_method == "ants":
         transforms = ants_registration(
             source_data_tczyx=source_data,
@@ -2105,7 +2103,6 @@ def estimate_registration(
             verbose=settings.verbose,
             output_folder_path=output_dir,
         )
-
 
     elif settings.estimation_method == "manual":
         transforms = user_assisted_registration(
@@ -2127,16 +2124,15 @@ def estimate_registration(
             pre_affine_90degree_rotation=settings.manual_registration_settings.affine_90degree_rotation,
         )
 
-        
     else:
         raise ValueError(
             f"Unknown estimation method: {settings.estimation_method}. "
             "Supported methods are 'beads', 'ants', and 'manual'."
         )
-    
+
     if len(transforms) == 1:
         if eval_transform_settings:
-            click.echo(f"One transform was estimated, no need to evaluate")
+            click.echo("One transform was estimated, no need to evaluate")
         transform = transforms[0]
         model = RegistrationSettings(
             source_channel_names=registration_source_channels,
@@ -2167,12 +2163,13 @@ def estimate_registration(
         if settings.verbose:
             plot_translations(
                 transforms_zyx=transforms,
-                output_filepath=output_dir / "translation_plots" / f"{settings.estimation_method}_registration.png",
+                output_filepath=output_dir
+                / "translation_plots"
+                / f"{settings.estimation_method}_registration.png",
             )
 
     model_to_yaml(model, output_filepath)
-    
-    
+
     click.echo(f"Registration settings saved to {output_dir.resolve()}")
 
 
