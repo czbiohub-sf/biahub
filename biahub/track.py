@@ -10,9 +10,9 @@ import dask.array as da
 import napari
 import numpy as np
 import pandas as pd
+import shutill
 import submitit
 import toml
-import shutill
 
 from iohub import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate
@@ -726,16 +726,15 @@ def track_one_position(
         click.echo(f"Removing existing database at {database_path} to avoid SQLite conflicts.")
         shutill.rmtree(database_path)
     os.makedirs(database_path, exist_ok=True)
-    
 
     # Perform tracking
     click.echo("Tracking...")
     tracking_labels, tracks_df, _ = run_ultrack(
-        tracking_config=tracking_config, 
+        tracking_config=tracking_config,
         foreground_mask=foreground_mask,
-        contour_gradient_map= contour_gradient_map,
-        scale= scale,
-        database_path= database_path
+        contour_gradient_map=contour_gradient_map,
+        scale=scale,
+        database_path=database_path,
     )
 
     # Save the tracks graph to a CSV file
