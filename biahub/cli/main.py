@@ -18,6 +18,7 @@ from biahub.reconstruct import reconstruct_cli
 from biahub.register import register_cli
 from biahub.segment import segment_cli
 from biahub.stabilize import stabilize_cli
+from biahub.stats import compute_stats_cli
 from biahub.stitch import stitch_cli
 from biahub.track import track_cli
 from biahub.virtual_stain import virtual_stain_cli
@@ -57,3 +58,4 @@ cli.add_command(segment_cli)
 cli.add_command(virtual_stain_cli)
 cli.add_command(process_with_config_cli)
 cli.add_command(track_cli)
+cli.add_command(compute_stats_cli)
