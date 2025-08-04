@@ -10,6 +10,7 @@ from biahub.settings import (
     ConcatenateSettings,
     DeskewSettings,
     EstimateRegistrationSettings,
+    ProcessingImportFuncSettings,
     RegistrationSettings,
     StabilizationSettings,
     StitchSettings,

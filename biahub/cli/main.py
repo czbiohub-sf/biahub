@@ -14,11 +14,14 @@ from biahub.estimate_registration import estimate_registration_cli
 from biahub.estimate_stabilization import estimate_stabilization_cli
 from biahub.estimate_stitch import estimate_stitch_cli
 from biahub.optimize_registration import optimize_registration_cli
+from biahub.process_data import process_with_config_cli
 from biahub.reconstruct import reconstruct_cli
 from biahub.register import register_cli
 from biahub.segment import segment_cli
 from biahub.stabilize import stabilize_cli
 from biahub.stitch import stitch_cli
+from biahub.track import track_cli
+from biahub.virtual_stain import virtual_stain_cli
 
 CONTEXT = {"help_option_names": ["-h", "--help"]}
 
@@ -53,3 +56,6 @@ cli.add_command(estimate_psf_cli)
 cli.add_command(deconvolve_cli)
 cli.add_command(characterize_psf_cli)
 cli.add_command(segment_cli)
+cli.add_command(virtual_stain_cli)
+cli.add_command(process_with_config_cli)
+cli.add_command(track_cli)

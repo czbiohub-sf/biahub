@@ -102,7 +102,7 @@ def apply_inverse_transfer_function(
 
     click.echo('Submitting SLURM jobs...')
     jobs = []
-    with executor.batch():
+    with submitit.helpers.clean_env(), executor.batch():
         for input_position_dirpath in input_position_dirpaths:
             job = executor.submit(
                 apply_inverse_transfer_function_single_position,
