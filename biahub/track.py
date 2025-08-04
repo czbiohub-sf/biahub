@@ -10,7 +10,7 @@ import dask.array as da
 import napari
 import numpy as np
 import pandas as pd
-import shutill
+import shutil
 import submitit
 import toml
 
@@ -724,7 +724,7 @@ def track_one_position(
     database_path = output_dirpath.parent / f"{filename}_config_tracking" / f"{fov}"
     if database_path.exists():
         click.echo(f"Removing existing database at {database_path} to avoid SQLite conflicts.")
-        shutill.rmtree(database_path)
+        shutil.rmtree(database_path)
     os.makedirs(database_path, exist_ok=True)
 
     # Perform tracking
