@@ -769,7 +769,7 @@ def estimate_xyz_stabilization_pcc(
     shifts_out_path.mkdir(parents=True, exist_ok=True)
 
     jobs = []
-    with executor.batch():
+    with submitit.helpers.clean_env(), executor.batch():
         for input_position_dirpath in input_position_dirpaths:
             job = executor.submit(
                 estimate_xyz_stabilization_pcc_per_position,
@@ -882,7 +882,7 @@ def estimate_xyz_stabilization_with_beads(
 
     # Submit jobs
     jobs = []
-    with executor.batch():
+    with submitit.helpers.clean_env(), executor.batch():
         for t in range(1, T, 1):
             job = executor.submit(
                 estimate_transform_from_beads,
@@ -1099,7 +1099,7 @@ def estimate_xy_stabilization(
 
     # Submit jobs
     jobs = []
-    with executor.batch():
+    with submitit.helpers.clean_env(), executor.batch():
         for input_position_dirpath in input_position_dirpaths:
             job = executor.submit(
                 estimate_xy_stabilization_per_position,
@@ -1364,7 +1364,7 @@ def estimate_z_stabilization(
     # Submit jobs
     jobs = []
 
-    with executor.batch():
+    with submitit.helpers.clean_env(), executor.batch():
         for input_position_dirpath in input_position_dirpaths:
             job = executor.submit(
                 estimate_z_focus_per_position,

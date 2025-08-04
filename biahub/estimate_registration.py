@@ -992,7 +992,7 @@ def beads_based_registration(
 
     # Submit jobs
     jobs = []
-    with executor.batch():
+    with submitit.helpers.clean_env(),executor.batch():
         for t in range(T):
             job = executor.submit(
                 estimate_transform_from_beads,
