@@ -85,7 +85,7 @@ def _optimize_registration(
     source_czyx = np.asarray(source_czyx).astype(np.float32)
     target_czyx = np.asarray(target_czyx).astype(np.float32)
 
-    if not (0 < target_mask_radius <= 1):
+    if target_mask_radius is not None and not (0 < target_mask_radius <= 1):
         raise ValueError(
             "target_mask_radius must be given as a fraction of image width, i.e. (0, 1]."
         )
