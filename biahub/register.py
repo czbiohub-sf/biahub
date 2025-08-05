@@ -268,13 +268,13 @@ def find_lir(registered_zyx: np.ndarray, plot: bool = False) -> Tuple:
 
     # Iterate over ZX and ZY slices to find optimal Z cropping params
     _coords = []
-    for _x in (x_start, x_start + (x_stop - x_start) // 2, x_stop):
+    for _x in (x_start, x_start + (x_stop - x_start) // 2, x_stop - 1):
         registered_zy = registered_zyx[:, y_slice, _x].copy()
         coords_zy = lir.lir(registered_zy)
-        _, z, _, height = coords_zy
-        z_start, z_stop = z, z + height
+        _, z, _, depth = coords_zy
+        z_start, z_stop = z, z + depth
         _coords.append((z_start, z_stop))
-    for _y in (y_start, y_start + (y_stop - y_start) // 2, y_stop):
+    for _y in (y_start, y_start + (y_stop - y_start) // 2, y_stop - 1):
         registered_zx = registered_zyx[:, _y, x_slice].copy()
         coords_zx = lir.lir(registered_zx)
         _, z, _, depth = coords_zx
