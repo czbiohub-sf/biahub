@@ -28,6 +28,7 @@ example_settings_params = [
     # ("example_segmentation_settings.yml", SegmentationSettings),
     ("example_stabilize_timelapse_settings.yml", StabilizationSettings),
     ("example_stitch_settings.yml", StitchSettings),
+    ("example_process_with_config_settings.yml", ProcessingImportFuncSettings),
 ]
 
 
