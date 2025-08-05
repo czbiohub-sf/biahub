@@ -230,10 +230,9 @@ def estimate_crop(
                 output_dir=output_path_csv,
             )
             jobs.append(job)
-    job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 
     # Wait for jobs to finish
-    wait_for_jobs_to_finish(job_ids)
+    wait_for_jobs_to_finish(jobs)
 
     # Read and merge results. The same ROI crop will be applied to all positions.
     # Here we estimate the smallest common crop region across all positions.
