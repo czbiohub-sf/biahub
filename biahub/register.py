@@ -342,31 +342,28 @@ def find_overlapping_volume(
     """
 
     # Make dummy volumes
-    img1 = np.ones(tuple(input_zyx_shape), dtype=np.float32)
-    img2 = np.ones(tuple(target_zyx_shape), dtype=np.float32)
+    moving_volume = np.ones(tuple(input_zyx_shape), dtype=np.float32)
+    fixed_volume = np.ones(tuple(target_zyx_shape), dtype=np.float32)
 
-    # Conver to ants objects
-    target_zyx_ants = ants.from_numpy(img2.astype(np.float32))
-    zyx_data_ants = ants.from_numpy(img1.astype(np.float32))
+    # Convert to ants objects
+    fixed_volume_ants = ants.from_numpy(fixed_volume)
+    moving_volume_ants = ants.from_numpy(moving_volume)
 
-    ants_composed_matrix = convert_transform_to_ants(transformation_matrix)
+    tform_ants = convert_transform_to_ants(transformation_matrix)
 
     # Now apply the transform using this grid
-    registered_zyx = ants_composed_matrix.apply_to_image(
-        zyx_data_ants, reference=target_zyx_ants
-    )
+    registered_volume = tform_ants.apply_to_image(
+        moving_volume_ants, reference=fixed_volume_ants
+    ).numpy()
     if method == "LIR":
         click.echo("Starting Largest interior rectangle (LIR) search")
-        # This is the *real* overlap mask
-        mask = (registered_zyx.numpy() > 0) & (target_zyx_ants.numpy() > 0)
-
-        # Now pass the mask to LIR (or call find_largest_valid_box)
-        Z_slice, Y_slice, X_slice = find_lir(mask.astype(np.uint8), plot=plot)
+        mask = (registered_volume > 0) & (fixed_volume > 0)
+        z_slice, y_slice, x_slice = find_lir(mask, plot=plot)
 
     else:
         raise ValueError(f"Unknown method {method}")
 
-    return (Z_slice, Y_slice, X_slice)
+    return (z_slice, y_slice, x_slice)
 
 
 def rescale_voxel_size(affine_matrix, input_scale):
