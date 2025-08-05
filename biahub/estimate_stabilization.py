@@ -634,7 +634,7 @@ def estimate_xyz_stabilization_pcc_per_position(
         output_path_corr = output_folder_path.parent / "corr_plots" / position_filename
         output_path_corr.mkdir(parents=True, exist_ok=True)
 
-        for t in range(50):
+        for t in range(T):
             click.echo(f"Estimating PCC for timepoint {t}")
             if t == 0:
                 transforms.append(np.eye(4).tolist())
