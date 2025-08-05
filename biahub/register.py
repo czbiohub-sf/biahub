@@ -255,32 +255,29 @@ def apply_affine_transform(
 def find_lir(registered_zyx: np.ndarray, plot: bool = False) -> Tuple:
     registered_zyx = np.asarray(registered_zyx, dtype=bool)
 
+    # Find the lir in YX at Z//2
     registered_yx = registered_zyx[registered_zyx.shape[0] // 2].copy()
     coords_yx = lir.lir(registered_yx)
     coords_yx = list(map(int, coords_yx))
 
     x, y, width, height = coords_yx
-    x_start, x_stop = x, min(x + width, registered_zyx.shape[2])
-    y_start, y_stop = y, min(y + height, registered_zyx.shape[1])
+    x_start, x_stop = x, x + width
+    y_start, y_stop = y, y + height
     x_slice = slice(x_start, x_stop)
     y_slice = slice(y_start, y_stop)
 
+    # Iterate over ZX and ZY slices to find optimal Z cropping params
     _coords = []
-    for _x in (x_start, x_start + (x_stop - x_start) // 2, x_stop - 1):  # avoid out-of-bounds
-        if _x >= registered_zyx.shape[2]:
-            continue
+    for _x in (x_start, x_start + (x_stop - x_start) // 2, x_stop):
         registered_zy = registered_zyx[:, y_slice, _x].copy()
         coords_zy = lir.lir(registered_zy)
-        _, z, _, height = list(map(int, coords_zy))
+        _, z, _, height = coords_zy
         z_start, z_stop = z, z + height
         _coords.append((z_start, z_stop))
-
-    for _y in (y_start, y_start + (y_stop - y_start) // 2, y_stop - 1):  # avoid out-of-bounds
-        if _y >= registered_zyx.shape[1]:
-            continue
+    for _y in (y_start, y_start + (y_stop - y_start) // 2, y_stop):
         registered_zx = registered_zyx[:, _y, x_slice].copy()
         coords_zx = lir.lir(registered_zx)
-        _, z, _, depth = list(map(int, coords_zx))
+        _, z, _, depth = coords_zx
         z_start, z_stop = z, z + depth
         _coords.append((z_start, z_stop))
 
