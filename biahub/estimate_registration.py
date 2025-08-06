@@ -84,7 +84,8 @@ def validate_transforms(
     verbose: bool = False,
 ) -> list[ArrayLike]:
     """
-    Validate a list of affine transformation matrices by smoothing and filtering.
+    Validate that a provided list of transforms do not deviate beyond the tolerance threshold
+    relative to the average transform within a given window size.
 
     Parameters
     ----------
@@ -288,7 +289,10 @@ def evaluate_transforms(
     verbose: bool = False,
 ) -> ArrayLike:
     """
-    Evaluate and validate a list of affine transformation matrices.
+    Evaluate a list of affine transformation matrices.
+    Transform matrices are checked for deviation from the average within a given window size.
+    If a transform is found to lead to shift larger than the given tolerance,
+    that transform will be replaced by interpolation of valid transforms within a given window size.
 
     Parameters
     ----------
@@ -485,11 +489,11 @@ def user_assisted_registration(
 
     Notes
     -----
-    - The function uses a Napari viewer for manual feature annotation.
+    - The function uses a napari viewer for manual feature annotation.
     - Scaling factors for voxel size differences between source and target are calculated and applied.
     - Users must annotate at least three corresponding points in both channels for the transform calculation.
     - Two types of transformations are supported: similarity (with scaling) and Euclidean (no scaling).
-    - The function visually displays intermediate and final results in Napari for user validation.
+    - The function visually displays intermediate and final results in napari for user validation.
     """
 
     # Find the in-focus slice
