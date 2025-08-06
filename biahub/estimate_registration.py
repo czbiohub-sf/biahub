@@ -2188,7 +2188,7 @@ def estimate_registration(
     "--registration-target-channel",
     "-rt",
     type=str,
-    help="Name of the target channel to be used when registration params are applied.",
+    help="Name of the target channel to be used when registration params are applied. If not provided, the target channel from the config file will be used.",
     required=False,
 )
 @click.option(
@@ -2196,7 +2196,7 @@ def estimate_registration(
     "-rs",
     type=str,
     multiple=True,
-    help="Name of the source channels to be used when registration params are applied. May be passed multiple times.",
+    help="Name of the source channels to be used when registration params are applied. May be passed multiple times. If not provided, the source channels from the config file will be used.",
     required=False,
 )
 def estimate_registration_cli(
@@ -2212,38 +2212,14 @@ def estimate_registration_cli(
     """
     Estimate the affine transformation between a source and target image for registration.
 
-    This command-line tool uses either bead-based or user-assisted methods to estimate registration
-    parameters for aligning source (moving) and target (fixed) images. The output is a configuration
-    file that can be used with subsequent tools (`stabilize` and `register`).
+    This command-line tools estimates the registration transforms between a source (moving) and target (fixed) image
+    using either (1) user input, (2) images or registration beads, or (3) image features via the ANTS registration library.
+    The output is a configuration file that can be used with subsequent tools (`stabilize` and `register`).
 
-    Parameters
-    ----------
-    source_position_dirpaths : list[str]
-        List of file paths to the source channel data in OME-Zarr format.
-    target_position_dirpaths : list[str]
-        List of file paths to the target channel data in OME-Zarr format.
-    output_filepath : str
-        Path to save the estimated registration configuration file (YAML).
-    config_filepath : str
-        Path to the YAML configuration file for the registration settings.
-    registration_target_channel : str, Optional
-        Name of the target channel to be used when registration params are applied.
-        If not provided, the target channel from the config file will be used.
-    registration_source_channels : list[str], Optional
-        List of source channel names to be used when registration params are applied.
-        If not provided, the source channels from the config file will be used.
-
-    Returns
-    -------
-    None
-        Writes the estimated registration parameters to the specified output file.
-
-    Notes
-    -----
-    Bead-based registration uses detected bead matches across timepoints to compute affine transformations.
     User-assisted registration requires manual selection of corresponding features in source and target images.
-    If registration_target_channel and registration_source_channels are not provided, the target and source channels
-    from the config file will be used.
+    Bead-based registration uses detected bead matches across timepoints to compute affine transformations.
+    ANTs-based registration uses the ANTsPy library to estimate transformations based on image features. Optionally,
+    a Sobel filter may be applied to the data to enhance feature detection between label-free and fluorescent channels.
 
     Example:
     >> biahub estimate-registration
