@@ -63,16 +63,19 @@ def estimate_crop_one_position(
         raise ValueError("Both phase_data and fluor_data must be 5D arrays.")
 
     # Ensure data dimensions are the same
-    _max_zyx_dims = np.asarray([lf_mask.shape[-3:], ls_mask.shape[-3:]]).min(axis=0)
+    lf_shape = lf_mask.shape[-3:]
+    ls_shape = ls_mask.shape[-3:]
+    if lf_shape != ls_shape:
+        click.echo(
+            "WARNING: Phase and fluorescence datasets should have the same shape, got"
+            f" phase shape: {lf_shape}, fluorescence shape: {ls_shape}"
+        )
+        _max_zyx_dims = np.asarray([lf_shape, ls_shape]).min(axis=0)
+        lf_mask = lf_mask[..., : _max_zyx_dims[0], : _max_zyx_dims[1], : _max_zyx_dims[2]]
+        ls_mask = ls_mask[..., : _max_zyx_dims[0], : _max_zyx_dims[1], : _max_zyx_dims[2]]
 
     # Concatenate the data arrays along the channel axis
-    data = np.concatenate(
-        [
-            lf_mask[..., : _max_zyx_dims[0], : _max_zyx_dims[1], : _max_zyx_dims[2]],
-            ls_mask[..., : _max_zyx_dims[0], : _max_zyx_dims[1], : _max_zyx_dims[2]],
-        ],
-        axis=1,
-    )
+    data = np.concatenate([lf_mask, ls_mask], axis=1)
 
     # Create a mask to find time points and channels where any data is non-zero
     volume = np.sum(data, axis=(2, 3, 4))  # more robust selection
