@@ -19,6 +19,6 @@ def wait_for_jobs_to_finish(jobs: list[submitit.Job]) -> None:
         submitit.helpers.as_completed(jobs), total=len(jobs), desc="Waiting for jobs to finish"
     ):
         try:
-            pass
+            pass  # as_completed polls every 10 seconds by default, so we don't need to do anything here
         except Exception as e:
             print(f"Job {job.job_id} failed with exception: {e}")

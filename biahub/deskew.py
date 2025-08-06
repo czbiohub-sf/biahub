@@ -261,7 +261,7 @@ def _czyx_deskew_data(data, **kwargs):
 @monitor()
 def deskew_cli(
     input_position_dirpaths: List[str],
-    config_filepath: str,
+    config_filepath: Path,
     output_dirpath: str,
     sbatch_filepath: str = None,
     local: bool = False,
@@ -279,7 +279,7 @@ def deskew_cli(
 
     # Convert string paths to Path objects
     output_dirpath = Path(output_dirpath)
-    config_filepath = Path(config_filepath)
+
     slurm_out_path = output_dirpath.parent / "slurm_output"
 
     # Handle single position or wildcard filepath
