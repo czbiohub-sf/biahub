@@ -327,6 +327,13 @@ def stabilize_cli(
 ):
     """
     Stabilize a timelapse dataset by applying spatial transformations estimated by estimate-stabilization.
+
+    Example:
+    >> biahub stabilize-timelapse
+        -i ./timelapse.zarr/0/0/0               # Input timelapse dataset
+        -o ./stabilized_timelapse.zarr          # Output directory for stabilized data
+        -c ./file_w_matrices.yml                # Configuration file with transformation matrices
+        --local                                 # Run locally instead of submitting to SLURM
     """
     stabilize(
         input_position_dirpaths=input_position_dirpaths,
