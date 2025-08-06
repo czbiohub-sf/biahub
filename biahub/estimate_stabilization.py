@@ -1851,35 +1851,10 @@ def estimate_stabilization_cli(
     local: bool = False,
 ):
     """
-    Estimate the Z and/or XY timelapse stabilization matrices.
+    Estimate translation matrices for XYZ stabilization of a timelapse dataset.
 
-    This function estimates xy and z drifts and returns the affine matrices computed with focus finding, beads or phase cross correlation.
-
-    Parameters
-    ----------
-    input_position_dirpaths : list[str]
-        Paths to the input position directories.
-    output_filepath : str
-        Path to the output file.
-    config_filepath : Path
-        Path to the configuration file.
-    sbatch_filepath : str
-        Path to the sbatch file.
-    local : bool
-        If True, run locally.
-
-    Returns
-    -------
-    None
-
-    Notes
-    -----
-    The verbose output will be saved at the same level as the output zarr.
-    The stabilization matrices are saved as a yaml file.
-    The translation plots are saved as a png file.
-    The focus csv is saved as a csv file.
-
-    ---------
+    Stabilization parameters may be computed for the XY, Z, or XYZ dimensions using
+    focus finding, beads, or phase cross correlation methods.
 
     Example usage:
     biahub estimate-stabilization -i ./timelapse.zarr/0/0/0 -o ./stabilization.yml  -c ./config.yml -s ./sbatch.sh --local --verbose
