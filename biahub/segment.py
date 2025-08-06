@@ -108,7 +108,7 @@ def segment_data(
 @monitor()
 def segment_cli(
     input_position_dirpaths: list[str],
-    config_filepath: str,
+    config_filepath: Path,
     output_dirpath: str,
     sbatch_filepath: str | None = None,
     local: bool = False,

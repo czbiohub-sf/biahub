@@ -26,6 +26,14 @@ def example_register_settings():
 
 
 @pytest.fixture(scope="function")
+def example_estimate_stabilization_settings():
+    settings_path = "./settings/example_estimate_stabilization_settings.yml"
+    with open(settings_path) as file:
+        settings = yaml.safe_load(file)
+    yield settings_path, settings
+
+
+@pytest.fixture(scope="function")
 def example_stabilize_timelapse_settings():
     settings_path = "./settings/example_stabilize_timelapse_settings.yml"
     with open(settings_path) as file:
@@ -90,6 +98,7 @@ def example_plate(tmp_path):
     )
 
     # Generate input dataset
+
     plate_dataset = open_ome_zarr(
         plate_path,
         layout="hcs",

@@ -23,7 +23,7 @@ from biahub.settings import PsfFromBeadsSettings
 @output_dirpath()
 def estimate_psf_cli(
     input_position_dirpaths: List[str],
-    config_filepath: str,
+    config_filepath: Path,
     output_dirpath: str,
 ):
     """
@@ -33,7 +33,6 @@ def estimate_psf_cli(
     """
     # Convert string paths to Path objects
     output_dirpath = Path(output_dirpath)
-    config_filepath = Path(config_filepath)
 
     # Load the first position
     click.echo("Loading data...")

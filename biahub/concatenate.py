@@ -435,7 +435,7 @@ def concatenate(
 @local()
 @monitor()
 def concatenate_cli(
-    config_filepath: str,
+    config_filepath: Path,
     output_dirpath: str,
     sbatch_filepath: str = None,
     local: bool = False,
@@ -446,6 +446,7 @@ def concatenate_cli(
 
     >> biahub concatenate -c ./concat.yml -o ./output_concat.zarr -j 8
     """
+
     concatenate(
         settings=yaml_to_model(config_filepath, ConcatenateSettings),
         output_dirpath=Path(output_dirpath),

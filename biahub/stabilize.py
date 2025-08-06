@@ -12,7 +12,7 @@ from scipy.spatial.transform import Rotation as R
 
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
-    config_filepath,
+    config_filepaths,
     input_position_dirpaths,
     local,
     monitor,
@@ -87,17 +87,10 @@ def apply_stabilization_transform(
     return stabilized_zyx
 
 
-@click.command("stabilize")
-@input_position_dirpaths()
-@output_dirpath()
-@config_filepath()
-@sbatch_filepath()
-@local()
-@monitor()
-def stabilize_cli(
+def stabilize(
     input_position_dirpaths: List[str],
     output_dirpath: str,
-    config_filepath: str,
+    config_filepaths: list[str],
     sbatch_filepath: str = None,
     local: bool = False,
     monitor: bool = True,
@@ -112,7 +105,7 @@ def stabilize_cli(
     Parameters:
     - input_position_dirpaths (List[str]): List of file paths to the input OME-Zarr datasets for each position.
     - output_dirpath (str): Directory path to save the stabilized output dataset.
-    - config_filepath (str): Path to the YAML configuration file containing transformation settings.
+    - config_filepaths (list[str]): Paths to the YAML configuration files containing transformation settings.
     - sbatch_filepath (str, optional): Path to a SLURM sbatch file to override default SLURM settings. Defaults to None.
     - local (bool, optional): If True, runs the stabilization process locally instead of submitting to SLURM. Defaults to False.
 
@@ -133,26 +126,30 @@ def stabilize_cli(
         --local                                 # Run locally instead of submitting to SLURM
 
     """
-    if config_filepath.suffix not in [".yml", ".yaml"]:
-        raise ValueError("Config file must be a yaml file")
 
-    # Convert to Path objects
-    config_filepath = Path(config_filepath)
+    # Single config file for all FOVs
+    if len(config_filepaths) == 1:
+        config_filepath = Path(config_filepaths[0])
+    else:
+        config_filepath = None
+
+    settings = yaml_to_model(config_filepaths[0], StabilizationSettings)
+
     output_dirpath = Path(output_dirpath)
     slurm_out_path = output_dirpath.parent / "slurm_output"
     # Load the config file
-    settings = yaml_to_model(config_filepath, StabilizationSettings)
 
     combined_mats = settings.affine_transform_zyx_list
     combined_mats = np.array(combined_mats)
-    stabilization_channels = settings.stabilization_channels
+    # stabilization_channels = settings.stabilization_channels
 
     with open_ome_zarr(input_position_dirpaths[0]) as dataset:
         T, C, Z, Y, X = dataset.data.shape
         channel_names = dataset.channel_names
-        for channel in stabilization_channels:
-            if channel not in channel_names:
-                raise ValueError(f"Channel <{channel}> not found in the input data")
+        stabilization_channels = channel_names
+        # for stabilization_channels in stabilization_channels:
+        # if channel not in channel_names:
+        #     raise ValueError(f"Channel <{channel}> not found in the input data")
 
         # NOTE: these can be modified to crop the output
         Z_slice, Y_slice, X_slice = (
@@ -182,7 +179,6 @@ def stabilize_cli(
         Y = Y_slice.stop - Y_slice.start
         X = X_slice.stop - X_slice.start
 
-    # Logic to parse time indices
     if settings.time_indices == "all":
         time_indices = list(range(T))
     elif isinstance(settings.time_indices, list):
@@ -231,7 +227,9 @@ def stabilize_cli(
 
     # Estimate resources
 
-    num_cpus, gb_ram_per_cpu = estimate_resources(shape=[T, C, Z, Y, X], ram_multiplier=16)
+    num_cpus, gb_ram_per_cpu = estimate_resources(
+        shape=[T, C, Z, Y, X], ram_multiplier=16, max_num_cpus=16
+    )
 
     # Prepare SLURM arguments
     slurm_args = {
@@ -239,7 +237,7 @@ def stabilize_cli(
         "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,  # process up to 100 positions at a time
-        "slurm_time": 60,
+        "slurm_time": 20,
         "slurm_partition": "preempted",
     }
 
@@ -263,6 +261,14 @@ def stabilize_cli(
     with submitit.helpers.clean_env(), executor.batch():
         # apply stabilization to channels in the chosen channels and else copy the rest
         for input_position_path in input_position_dirpaths:
+            if not config_filepath:
+                fov = "_".join(input_position_path.parts[-3:])
+                config_filepath = [p for p in config_filepaths if fov in p.name][0]
+
+            settings = yaml_to_model(config_filepath, StabilizationSettings)
+            # Use settings for this FOV
+            combined_mats = np.array(settings.affine_transform_zyx_list)
+            stabilize_zyx_args = {"list_of_shifts": combined_mats}
             for channel_name in channel_names:
                 if channel_name in stabilization_channels:
                     job = executor.submit(
@@ -302,6 +308,41 @@ def stabilize_cli(
 
     if monitor:
         monitor_jobs(jobs, input_position_dirpaths)
+
+
+@click.command("stabilize")
+@input_position_dirpaths()
+@output_dirpath()
+@config_filepaths()
+@sbatch_filepath()
+@local()
+@monitor()
+def stabilize_cli(
+    input_position_dirpaths: List[str],
+    output_dirpath: str,
+    config_filepaths: list[str],
+    sbatch_filepath: str,
+    local: bool,
+    monitor: bool,
+):
+    """
+    Stabilize a timelapse dataset by applying spatial transformations estimated by estimate-stabilization.
+
+    Example:
+    >> biahub stabilize-timelapse
+        -i ./timelapse.zarr/0/0/0               # Input timelapse dataset
+        -o ./stabilized_timelapse.zarr          # Output directory for stabilized data
+        -c ./file_w_matrices.yml                # Configuration file with transformation matrices
+        --local                                 # Run locally instead of submitting to SLURM
+    """
+    stabilize(
+        input_position_dirpaths=input_position_dirpaths,
+        output_dirpath=output_dirpath,
+        config_filepaths=config_filepaths,
+        sbatch_filepath=sbatch_filepath,
+        local=local,
+        monitor=monitor,
+    )
 
 
 if __name__ == "__main__":
