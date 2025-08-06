@@ -1,5 +1,6 @@
 import shutil
 
+from ast import literal_eval
 from pathlib import Path
 
 import click
@@ -249,12 +250,14 @@ def estimate_crop(
     )
     df = df.drop_duplicates(subset=["fov", "Z", "Y", "X"])
     df = df.sort_values("fov")
+    for col in ["X", "Y", "Z"]:
+        df[col] = df[col].apply(literal_eval)
     df.to_csv(output_dir / "crop_slices.csv", index=False)
 
     # Compute standardized crop
     all_ranges = []
     for _, row in df.iterrows():
-        all_ranges.append([eval(row["Z"]), eval(row["Y"]), eval(row["X"])])
+        all_ranges.append([row["Z"], row["Y"], row["X"]])
 
     all_ranges = np.array(all_ranges)
     standardized_ranges = np.concatenate(
