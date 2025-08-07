@@ -52,6 +52,12 @@ example_settings_params = [
     ("example_track_settings.yml", TrackingSettings),
 ]
 
+try:
+    import cellpose  # noqa: F401
+    cellpose_available = True
+except ImportError:
+    cellpose_available = False
+
 
 def test_all_example_settings_tested():
     num_settings_files = len(
@@ -64,11 +70,23 @@ def test_all_example_settings_tested():
 
 
 @pytest.mark.parametrize("path,settings_cls", example_settings_params)
-def test_example_settings(path, settings_cls):
+def test_example_settings(path, settings_cls, example_plate):
+    # Skip test if cellpose isn't installed and we're testing SegmentationSettings
+    if path == "example_segmentation_settings.yml" and not cellpose_available:
+        pytest.skip("Cellpose not installed; skipping SegmentationSettings validation.")
+
     with open(settings_files_dir / path) as file:
         yaml_settings = yaml.safe_load(file)
 
+    # Patch invalid Zarr path with a temp directory
+    if settings_cls is TrackingSettings:
+        plate_path, _ = example_plate
+        for image_entry in yaml_settings.get("input_images", []):
+            if image_entry.get("path") == "/path/to/virtual_staining.zarr":
+                image_entry["path"] = str(plate_path)
+
     settings_cls(**yaml_settings)
+    
 
 
 def test_deskew_settings():

@@ -17,6 +17,7 @@ from pydantic import (
     PositiveInt,
     field_validator,
     model_validator,
+    ValidationInfo,
 )
 
 
@@ -636,19 +637,20 @@ class SegmentationModel(BaseModel):
 
         return value
 
+
     @field_validator("z_slice_2D")
     @classmethod
-    def check_z_slice_with_do_3D(cls, z_slice_2D, values):
-        # Only run this check if z_slice is provided (not None) and do_3D exists in eval_args
+    def check_z_slice_with_do_3D(cls, z_slice_2D, info: ValidationInfo):
         if z_slice_2D is not None:
-            eval_args = values.get("eval_args", {})
+            eval_args = info.data.get("eval_args", {})
             do_3D = eval_args.get("do_3D", None)
             if do_3D:
                 raise ValueError(
                     "If 'z_slice_2D' is provided, 'do_3D' in 'eval_args' must be set to False."
                 )
-            z_slice_2D = 0
+            return 0  # force it to 0 as per your logic
         return z_slice_2D
+
 
 
 class SegmentationSettings(BaseModel):
