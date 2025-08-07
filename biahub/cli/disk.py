@@ -1,9 +1,8 @@
 import subprocess
 import shutil
 import os
-
-import os
-import subprocess
+import click
+from pathlib import Path
 
 def resolve_symlink(path: str) -> str:
     """Resolve symlinks to get the actual target path."""
@@ -46,11 +45,25 @@ def check_disk_space_with_du(input_path: str, output_path: str, margin: float = 
     """
     input_size = get_dir_size_du(input_path)
     required_space = input_size * margin
-    available_space = shutil.disk_usage(os.path.abspath(output_path.parent)).free
+    available_space = shutil.disk_usage(os.path.abspath(output_path)).free
 
     if verbose:
-        print(f"[check_disk_space_with_du] Input size: {input_size / 1e9:.2f} GB")
-        print(f"[check_disk_space_with_du] Required with margin ({margin:.2f}x): {required_space / 1e9:.2f} GB")
-        print(f"[check_disk_space_with_du] Available at output: {available_space / 1e9:.2f} GB")
+        click.echo(f"...........................................")
+        click.echo(f"Input Size: {input_size / 1e12:.3f} TB")
+        click.echo(f"Estimated Ouput Size ({margin:.3f}x): {required_space / 1e12:.3f} TB")
+        click.echo(f"Available Space: {available_space / 1e12:.3f} TB")
+        click.echo(f"...........................................")
+
 
     return available_space >= required_space
+
+if __name__ == "__main__":
+    # Example usage
+    input_path = Path("/hpc/projects/intracellular_dashboard/organelle_dynamics/rerun/2025_07_22_A549_SEC61_TOMM20_G3BP1_ZIKV/1-preprocess/label-free/0-reconstruct/2025_07_22_A549_SEC61_TOMM20_G3BP1_ZIKV.zarr")
+    output_path = Path("/hpc/projects/intracellular_dashboard/organelle_dynamics/rerun/test/1-preprocess/label-free/0-reconstruct/test.zarr")
+    os.makedirs(output_path.parent, exist_ok=True)
+    
+    if check_disk_space_with_du(input_path, output_path):
+        print("Sufficient disk space available.")
+    else:
+        print("Insufficient disk space available.")
