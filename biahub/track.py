@@ -628,7 +628,7 @@ def data_preprocessing(
     >>> foreground.shape, contour.shape
     ((10, 5, 256, 256), (10, 5, 256, 256))
     """
-    fov = "_".join(position_key)
+    fov = "/".join(position_key)
     data_dict = load_data(
         position_key=position_key,
         input_images=input_images,
