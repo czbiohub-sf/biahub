@@ -691,7 +691,7 @@ def compute_total_translation(csv_filepath: str) -> pd.DataFrame:
 def stitch_cli(
     input_position_dirpaths: list[Path],
     output_dirpath: str,
-    config_filepath: str,
+    config_filepath: Path,
     temp_path: str,
     debug: bool,
     monitor: bool,
@@ -701,6 +701,7 @@ def stitch_cli(
 
     >>> biahub stitch -i ./input.zarr/*/*/* -c ./stitch_params.yml -o ./output.zarr --temp-path /hpc/scratch/group.comp.micro/
     """
+
     slurm_out_path = Path(output_dirpath).parent / "slurm_output"
     dataset = input_position_dirpaths[0].parts[-4][:-5]
     shifted_store_path = Path(temp_path, f"TEMP_{dataset}.zarr").resolve()
@@ -804,7 +805,7 @@ def stitch_cli(
         executor = submitit.AutoExecutor(folder=slurm_out_path)
         executor.update_parameters(**slurm_args)
         temp_zarr_jobs = []
-        with executor.batch():
+        with submitit.helpers.clean_env(), executor.batch():
             for well in _wells:
                 job = executor.submit(_populate_wells, well, fov_names)
                 temp_zarr_jobs.append(job)
@@ -856,7 +857,7 @@ def stitch_cli(
         executor.update_parameters(**slurm_args)
         click.echo('Submitting SLURM jobs')
         shift_jobs = []
-        with executor.batch():
+        with submitit.helpers.clean_env(), executor.batch():
             for in_path, transform in zip(input_position_dirpaths, transforms):
                 job = executor.submit(
                     process_single_position_v2,
@@ -892,7 +893,7 @@ def stitch_cli(
     executor.update_parameters(**slurm_args)
 
     stitch_jobs = []
-    with executor.batch():
+    with submitit.helpers.clean_env(), executor.batch():
         for well in wells:
             job = executor.submit(
                 stitch_shifted_store,
@@ -918,7 +919,8 @@ def stitch_cli(
         }
         executor = submitit.AutoExecutor(folder=slurm_out_path)
         executor.update_parameters(**slurm_args)
-        cleanup_jobs.append(executor.submit(shutil.rmtree, shifted_store_path))
+        with submitit.helpers.clean_env():
+            cleanup_jobs.append(executor.submit(shutil.rmtree, shifted_store_path))
 
     job_ids = [
         job.job_id for job in stitch_jobs + shift_jobs + temp_zarr_job_ids + cleanup_jobs

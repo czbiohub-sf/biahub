@@ -1,3 +1,5 @@
+import glob
+
 from pathlib import Path
 from typing import Callable
 
@@ -24,6 +26,26 @@ def _validate_and_process_paths(
 
 def _str_to_path(ctx: click.Context, opt: click.Option, value: str) -> Path:
     return Path(value)
+
+
+def _validate_and_process_config_paths(ctx, opt, value: tuple[str, ...]) -> list[Path]:
+    matched_paths = []
+    for pattern in value:
+        expanded = glob.glob(pattern)
+        if not expanded:
+            raise click.BadParameter(f"No files matched pattern: {pattern}")
+        matched_paths.extend(expanded)
+
+    validated = []
+    for p in natsorted(map(Path, matched_paths)):
+        if not p.exists():
+            raise click.BadParameter(f"Path does not exist: {p}")
+        if not p.is_file():
+            raise click.BadParameter(f"Expected a file, not a directory: {p}")
+        if p.suffix.lower() not in [".yml", ".yaml"]:
+            raise click.BadParameter(f"Expected a .yml file, got: {p}")
+        validated.append(p)
+    return validated
 
 
 def input_position_dirpaths() -> Callable:
@@ -66,6 +88,24 @@ def target_position_dirpaths() -> Callable:
             type=tuple,
             callback=_validate_and_process_paths,
             help='Paths to target positions, for example: "target.zarr/0/0/0" or "target.zarr/*/*/*"',
+        )(f)
+
+    return decorator
+
+
+def config_filepaths() -> Callable:
+    def decorator(f: Callable) -> Callable:
+        return click.option(
+            "--config-filepaths",
+            "-c",
+            required=True,
+            cls=OptionEatAll,
+            type=tuple,
+            callback=_validate_and_process_config_paths,
+            help=(
+                "Paths to YAML configuration files. "
+                "All must be existing files with .yml extension."
+            ),
         )(f)
 
     return decorator
@@ -118,6 +158,34 @@ def sbatch_filepath() -> Callable:
         return click.option(
             "--sbatch-filepath",
             "-sb",
+            default=None,
+            type=click.Path(exists=True, file_okay=True, dir_okay=False),
+            help="SBATCH filepath that contains slurm parameters to overwrite defaults. "
+            "For example, '#SBATCH --mem-per-cpu=16G' will override the default memory per CPU.",
+        )(f)
+
+    return decorator
+
+
+def sbatch_filepath_preprocess() -> Callable:
+    def decorator(f: Callable) -> Callable:
+        return click.option(
+            "--sbatch-filepath-preprocess",
+            "-sb-preprocess",
+            default=None,
+            type=click.Path(exists=True, file_okay=True, dir_okay=False),
+            help="SBATCH filepath that contains slurm parameters to overwrite defaults. "
+            "For example, '#SBATCH --mem-per-cpu=16G' will override the default memory per CPU.",
+        )(f)
+
+    return decorator
+
+
+def sbatch_filepath_predict() -> Callable:
+    def decorator(f: Callable) -> Callable:
+        return click.option(
+            "--sbatch-filepath-predict",
+            "-sb-predict",
             default=None,
             type=click.Path(exists=True, file_okay=True, dir_okay=False),
             help="SBATCH filepath that contains slurm parameters to overwrite defaults. "

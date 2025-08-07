@@ -253,64 +253,64 @@ def apply_affine_transform(
 
 
 def find_lir(registered_zyx: np.ndarray, plot: bool = False) -> Tuple:
-    # Find the lir YX
-    registered_yx_bool = registered_zyx[registered_zyx.shape[0] // 2].copy()
-    registered_yx_bool = registered_yx_bool > 0 * 1.0
-    rectangle_coords_yx = lir.lir(registered_yx_bool)
+    registered_zyx = np.asarray(registered_zyx, dtype=bool)
 
-    x = rectangle_coords_yx[0]
-    y = rectangle_coords_yx[1]
-    width = rectangle_coords_yx[2]
-    height = rectangle_coords_yx[3]
-    corner1_xy = (x, y)  # Bottom-left corner
-    corner2_xy = (x + width, y)  # Bottom-right corner
-    corner3_xy = (x + width, y + height)  # Top-right corner
-    corner4_xy = (x, y + height)  # Top-left corner
-    rectangle_xy = np.array((corner1_xy, corner2_xy, corner3_xy, corner4_xy))
-    X_slice = slice(rectangle_xy.min(axis=0)[0], rectangle_xy.max(axis=0)[0])
-    Y_slice = slice(rectangle_xy.min(axis=0)[1], rectangle_xy.max(axis=0)[1])
+    # Find the lir in YX at Z//2
+    registered_yx = registered_zyx[registered_zyx.shape[0] // 2].copy()
+    coords_yx = lir.lir(registered_yx)
+    coords_yx = list(map(int, coords_yx))
 
-    # NOTE: this method assumes the center of the image is representative of the center of the object to estimate the LIR in Z
-    # Find the lir Z using ZX
-    zyx_shape = registered_zyx.shape
-    registered_zxy_bool = registered_zyx.transpose((2, 0, 1)) > 0
-    # Take middle X-slice to find the LIR for Z.
-    registered_zx_bool = registered_zxy_bool[zyx_shape[-1] // 2].copy()
-    rectangle_coords_zx = lir.lir(registered_zx_bool)
-    x = rectangle_coords_zx[0]
-    z = rectangle_coords_zx[1]
-    width = rectangle_coords_zx[2]
-    height = rectangle_coords_zx[3]
-    corner1_zx = (x, z)  # Bottom-left corner
-    corner2_zx = (x + width, z)  # Bottom-right corner
-    corner3_zx = (x + width, z + height)  # Top-right corner
-    corner4_zx = (x, z + height)  # Top-left corner
-    rectangle_zx = np.array((corner1_zx, corner2_zx, corner3_zx, corner4_zx))
-    Z_slice = slice(rectangle_zx.min(axis=0)[1], rectangle_zx.max(axis=0)[1])
+    x, y, width, height = coords_yx
+    x_start, x_stop = x, x + width
+    y_start, y_stop = y, y + height
+    x_slice = slice(x_start, x_stop)
+    y_slice = slice(y_start, y_stop)
+
+    # Iterate over ZX and ZY slices to find optimal Z cropping params
+    _coords = []
+    for _x in (x_start, x_start + (x_stop - x_start) // 2, x_stop - 1):
+        registered_zy = registered_zyx[:, y_slice, _x].copy()
+        coords_zy = lir.lir(registered_zy)
+        _, z, _, depth = coords_zy
+        z_start, z_stop = z, z + depth
+        _coords.append((z_start, z_stop))
+    for _y in (y_start, y_start + (y_stop - y_start) // 2, y_stop - 1):
+        registered_zx = registered_zyx[:, _y, x_slice].copy()
+        coords_zx = lir.lir(registered_zx)
+        _, z, _, depth = coords_zx
+        z_start, z_stop = z, z + depth
+        _coords.append((z_start, z_stop))
+
+    _coords = np.asarray(_coords)
+    z_start = int(_coords.max(axis=0)[0])
+    z_stop = int(_coords.min(axis=0)[1])
+    z_slice = slice(z_start, z_stop)
 
     if plot:
+        xy_corners = ((x, y), (x + width, y), (x + width, y + height), (x, y + height))
         rectangle_yx = plt.Polygon(
-            (corner1_xy, corner2_xy, corner3_xy, corner4_xy),
+            xy_corners,
             closed=True,
             fill=None,
             edgecolor="r",
         )
         # Add the rectangle to the plot
-        fig, ax = plt.subplots(nrows=1, ncols=2)
-        ax[0].imshow(registered_yx_bool)
+        _, ax = plt.subplots(nrows=1, ncols=2)
+        ax[0].imshow(registered_yx)
         ax[0].add_patch(rectangle_yx)
 
+        zx_corners = ((x, z), (x + width, z), (x + width, z + depth), (x, z + depth))
         rectangle_zx = plt.Polygon(
-            (corner1_zx, corner2_zx, corner3_zx, corner4_zx),
+            zx_corners,
             closed=True,
             fill=None,
             edgecolor="r",
         )
-        ax[1].imshow(registered_zx_bool)
+        ax[1].imshow(registered_zx)
         ax[1].add_patch(rectangle_zx)
         plt.savefig("./lir.png")
 
-    return (Z_slice, Y_slice, X_slice)
+    return (z_slice, y_slice, x_slice)
 
 
 def find_overlapping_volume(
@@ -342,27 +342,28 @@ def find_overlapping_volume(
     """
 
     # Make dummy volumes
-    img1 = np.ones(tuple(input_zyx_shape), dtype=np.float32)
-    img2 = np.ones(tuple(target_zyx_shape), dtype=np.float32)
+    moving_volume = np.ones(tuple(input_zyx_shape), dtype=np.float32)
+    fixed_volume = np.ones(tuple(target_zyx_shape), dtype=np.float32)
 
-    # Conver to ants objects
-    target_zyx_ants = ants.from_numpy(img2.astype(np.float32))
-    zyx_data_ants = ants.from_numpy(img1.astype(np.float32))
+    # Convert to ants objects
+    fixed_volume_ants = ants.from_numpy(fixed_volume)
+    moving_volume_ants = ants.from_numpy(moving_volume)
 
-    ants_composed_matrix = convert_transform_to_ants(transformation_matrix)
+    tform_ants = convert_transform_to_ants(transformation_matrix)
 
-    # Apply affine
-    registered_zyx = ants_composed_matrix.apply_to_image(
-        zyx_data_ants, reference=target_zyx_ants
-    )
-
+    # Now apply the transform using this grid
+    registered_volume = tform_ants.apply_to_image(
+        moving_volume_ants, reference=fixed_volume_ants
+    ).numpy()
     if method == "LIR":
-        print("Starting Largest interior rectangle (LIR) search")
-        Z_slice, Y_slice, X_slice = find_lir(registered_zyx.numpy(), plot=plot)
+        click.echo("Starting Largest interior rectangle (LIR) search")
+        mask = (registered_volume > 0) & (fixed_volume > 0)
+        z_slice, y_slice, x_slice = find_lir(mask, plot=plot)
+
     else:
         raise ValueError(f"Unknown method {method}")
 
-    return (Z_slice, Y_slice, X_slice)
+    return (z_slice, y_slice, x_slice)
 
 
 def rescale_voxel_size(affine_matrix, input_scale):
@@ -380,7 +381,7 @@ def rescale_voxel_size(affine_matrix, input_scale):
 def register_cli(
     source_position_dirpaths: List[str],
     target_position_dirpaths: List[str],
-    config_filepath: str,
+    config_filepath: Path,
     output_dirpath: str,
     local: bool,
     sbatch_filepath: Path,
@@ -396,7 +397,6 @@ def register_cli(
 
     # Convert string paths to Path objects
     output_dirpath = Path(output_dirpath)
-    config_filepath = Path(config_filepath)
 
     # Parse from the yaml file
     settings = yaml_to_model(config_filepath, RegistrationSettings)
@@ -523,7 +523,7 @@ def register_cli(
     # as given in the config file (i.e. settings.source_channel_names)
     affine_jobs = []
     affine_names = []
-    with executor.batch():
+    with submitit.helpers.clean_env(), executor.batch():
         for input_position_path in source_position_dirpaths:
             for channel_name in source_channel_names:
                 if channel_name not in settings.source_channel_names:
@@ -547,7 +547,7 @@ def register_cli(
     # were already registered in the previous step
     copy_jobs = []
     copy_names = []
-    with executor.batch():
+    with submitit.helpers.clean_env(), executor.batch():
         for input_position_path in target_position_dirpaths:
             for channel_name in target_channel_names:
                 if channel_name in settings.source_channel_names:
