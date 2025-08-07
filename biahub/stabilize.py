@@ -10,6 +10,7 @@ from iohub.ngff import open_ome_zarr
 from scipy.linalg import svd
 from scipy.spatial.transform import Rotation as R
 
+from biahub.cli.disk import check_disk_space_with_du
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
     config_filepaths,
@@ -27,7 +28,6 @@ from biahub.cli.utils import (
     process_single_position_v2,
     yaml_to_model,
 )
-from biahub.cli.disk import check_disk_space_with_du
 from biahub.register import convert_transform_to_ants
 from biahub.settings import StabilizationSettings
 
@@ -231,10 +231,7 @@ def stabilize(
         margin=1.1,
         verbose=True,
     ):
-        raise RuntimeError(
-            f"Not enough disk space to store the output at {output_dirpath}"
-        )
-
+        raise RuntimeError(f"Not enough disk space to store the output at {output_dirpath}")
 
     stabilize_zyx_args = {"list_of_shifts": combined_mats}
     copy_n_paste_kwargs = {"czyx_slicing_params": ([Z_slice, Y_slice, X_slice])}
