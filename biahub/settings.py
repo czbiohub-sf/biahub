@@ -15,9 +15,9 @@ from pydantic import (
     NonNegativeInt,
     PositiveFloat,
     PositiveInt,
+    ValidationInfo,
     field_validator,
     model_validator,
-    ValidationInfo,
 )
 
 
@@ -637,7 +637,6 @@ class SegmentationModel(BaseModel):
 
         return value
 
-
     @field_validator("z_slice_2D")
     @classmethod
     def check_z_slice_with_do_3D(cls, z_slice_2D, info: ValidationInfo):
@@ -650,7 +649,6 @@ class SegmentationModel(BaseModel):
                 )
             return 0  # force it to 0 as per your logic
         return z_slice_2D
-
 
 
 class SegmentationSettings(BaseModel):

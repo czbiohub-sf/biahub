@@ -54,6 +54,7 @@ example_settings_params = [
 
 try:
     import cellpose  # noqa: F401
+
     cellpose_available = True
 except ImportError:
     cellpose_available = False
@@ -86,7 +87,6 @@ def test_example_settings(path, settings_cls, example_plate):
                 image_entry["path"] = str(plate_path)
 
     settings_cls(**yaml_settings)
-    
 
 
 def test_deskew_settings():
