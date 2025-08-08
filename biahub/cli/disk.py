@@ -1,6 +1,7 @@
 import os
 import shutil
 import subprocess
+from datetime import datetime
 
 from pathlib import Path
 
@@ -58,21 +59,57 @@ def check_disk_space_with_du(
         click.echo(f"Estimated Ouput Size ({margin:.3f}x): {required_space / 1e12:.3f} TB")
         click.echo(f"Available Space: {available_space / 1e12:.3f} TB")
         click.echo("...........................................")
-
+        # save as a txt file wih datetime
+        report_path = Path(output_path) / f"disk_space_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        with open(report_path, 'w') as report_file:
+            report_file.write(
+                f"Input Size: {input_size / 1e12:.3f} TB\n"
+                f"Estimated Output Size ({margin:.3f}x): {required_space / 1e12:.3f} TB\n"
+                f"Available Space: {available_space / 1e12:.3f} TB\n"
+            )
     return available_space >= required_space
 
+@click.command("check-disk-space")
+@click.option(
+    "--input-path",
+    "-i",
+    type=str,
+    required=True,
+    help="Path to SLURM log directory.",
+)
+@click.option(
+    "--output-path",
+    "-o",
+    type=str,
+    required=True,
+    help="Output directory for the report CSV file.",
+)
+@click.option(
+    "--margin",
+    type=float,
+    default=1.1,
+    help="Safety margin for disk space check (default: 1.1, i.e., 10% extra space).",
+)
+@click.option(
+    "--verbose",
+    is_flag=True,
+    default=True,
+    help="Print detailed diagnostics.",
+)
+def check_disk_space_cli(input_path: str,  output_path: str, margin: float, verbose: bool):
+    """
+    CLI command to check disk space using `du -sb`.
+    """
+    enough_space = check_disk_space_with_du(
+        input_path=input_path,
+        output_path=output_path,
+        margin=margin,
+        verbose=verbose,
+    )
+    if enough_space:
+        click.echo("Disk space check passed. Good to go!")
+    else:
+        click.echo("Disk space check failed. Not enough space available.")
 
 if __name__ == "__main__":
-    # Example usage
-    input_path = Path(
-        "/hpc/projects/intracellular_dashboard/organelle_dynamics/rerun/2025_07_22_A549_SEC61_TOMM20_G3BP1_ZIKV/1-preprocess/label-free/0-reconstruct/2025_07_22_A549_SEC61_TOMM20_G3BP1_ZIKV.zarr"
-    )
-    output_path = Path(
-        "/hpc/projects/intracellular_dashboard/organelle_dynamics/rerun/test/1-preprocess/label-free/0-reconstruct/test.zarr"
-    )
-    os.makedirs(output_path.parent, exist_ok=True)
-
-    if check_disk_space_with_du(input_path, output_path):
-        print("Sufficient disk space available.")
-    else:
-        print("Insufficient disk space available.")
+    check_disk_space_cli()
