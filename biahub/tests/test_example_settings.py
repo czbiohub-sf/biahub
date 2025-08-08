@@ -71,9 +71,9 @@ def test_all_example_settings_tested():
 
 
 @pytest.mark.parametrize("path,settings_cls", example_settings_params)
-def test_example_settings(path, settings_cls, example_plate):
+def test_example_settings(path, settings_cls):
     # Skip test if cellpose isn't installed and we're testing SegmentationSettings
-    if path == "example_segmentation_settings.yml" and not cellpose_available:
+    if not cellpose_available and settings_cls == SegmentationSettings:
         pytest.skip("Cellpose not installed; skipping SegmentationSettings validation.")
 
     with open(settings_files_dir / path) as file:
