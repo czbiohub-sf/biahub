@@ -52,7 +52,8 @@ class ProcessingInputChannel(MyBaseModel):
     def validate_path_not_plate(cls, v):
         if v is None:
             return v
-        if Path(v).suffix != ".zarr":
+        v = Path(v)
+        if v.suffix != ".zarr":
             raise ValueError("Path must be a valid OME-Zarr dataset.")
         return v
 
