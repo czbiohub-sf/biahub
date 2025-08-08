@@ -2,6 +2,7 @@ import click
 
 from biahub.apply_inverse_transfer_function import apply_inverse_transfer_function_cli
 from biahub.characterize_psf import characterize_psf_cli
+from biahub.cli.slurm import check_job_logs_cli
 from biahub.compute_transfer_function import compute_transfer_function_cli
 from biahub.concatenate import concatenate_cli
 from biahub.deconvolve import deconvolve_cli
@@ -21,7 +22,6 @@ from biahub.stabilize import stabilize_cli
 from biahub.stitch import stitch_cli
 from biahub.track import track_cli
 from biahub.virtual_stain import virtual_stain_cli
-from biahub.cli.slurm import check_job_logs_cli
 
 CONTEXT = {"help_option_names": ["-h", "--help"]}
 

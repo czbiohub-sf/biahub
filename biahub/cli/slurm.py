@@ -1,12 +1,14 @@
-import submitit
-import click
 import os
-from biahub.cli.parsing import output_dirpath
-from tqdm import tqdm
-from pathlib import Path
-import pandas as pd
-from typing import Optional, Union
+
 from datetime import datetime
+from pathlib import Path
+from typing import Optional, Union
+
+import click
+import pandas as pd
+import submitit
+
+from tqdm import tqdm
 
 
 def wait_for_jobs_to_finish(jobs: list[submitit.Job]) -> None:
@@ -31,9 +33,10 @@ def wait_for_jobs_to_finish(jobs: list[submitit.Job]) -> None:
 
 
 def check_job_logs(
-        log_dir: Union[str, Path],
-        job_ids: Optional[list[Union[str, int]]] = None,
-        output_dir: Union[str, Path] = None) -> pd.DataFrame:
+    log_dir: Union[str, Path],
+    job_ids: Optional[list[Union[str, int]]] = None,
+    output_dir: Union[str, Path] = None,
+) -> pd.DataFrame:
     """
     Check SLURM logs for specific job IDs or all jobs in a folder,
     reporting statuses and saving a filtered CSV with non-successful jobs.
@@ -54,10 +57,12 @@ def check_job_logs(
     records = []
 
     if job_ids is None:
-        job_ids = sorted([
-            fname.name.replace("_log.out", "").replace("_log.err", "")
-            for fname in log_dir.glob("*_log.out")
-        ])
+        job_ids = sorted(
+            [
+                fname.name.replace("_log.out", "").replace("_log.err", "")
+                for fname in log_dir.glob("*_log.out")
+            ]
+        )
 
     for job_id in tqdm(job_ids, desc="Analyzing SLURM logs"):
         job_id = str(job_id)
@@ -72,7 +77,6 @@ def check_job_logs(
             log_err = log_dir / file_out.replace("_log.out", "_log.err")
             id = Path(log_err).stem.replace("_0_log", "")  # safer
 
-
             if not log_out.exists() and not log_err.exists():
                 status = "LOG NOT FOUND"
             else:
@@ -83,15 +87,16 @@ def check_job_logs(
                     if log_err.exists():
                         logs_combined += log_err.read_text().lower()
 
-                    if "job completed successfully" in logs_combined or "exiting after successful completion" in logs_combined:
+                    if (
+                        "job completed successfully" in logs_combined
+                        or "exiting after successful completion" in logs_combined
+                    ):
                         status = "SUCCESS"
                     else:
                         status = "FAILED"
                 except Exception as e:
                     status = f"ERROR READING LOG: {e}"
                 records.append((id, status))
-            
-
 
     df = pd.DataFrame(records, columns=["Job_ID", "Status"])
     df.sort_values(by="Status", ascending=True, inplace=True)
@@ -107,13 +112,13 @@ def check_job_logs(
     }
     # add summary row
     summary_row = pd.DataFrame([summary])
-    df = pd.concat([summary_row,df], ignore_index=True)
+    df = pd.concat([summary_row, df], ignore_index=True)
 
     # Timestamped output filename
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_filename = f"job_status_report_{timestamp}.csv"
     output_path = Path(output_dir) / output_filename
-    
+
     # Save report
     df.to_csv(output_path, index=False)
     click.echo("...............................................")
@@ -125,6 +130,7 @@ def check_job_logs(
 
     return df
 
+
 @click.command("check-job-logs")
 @click.option(
     "--log-dir",
@@ -134,7 +140,7 @@ def check_job_logs(
 )
 @click.option(
     "--job-ids",
-    type = str,
+    type=str,
     multiple=True,
     help="Specific job IDs to check. If not provided, all jobs in the log directory will be checked.",
 )
@@ -148,9 +154,11 @@ def check_job_logs(
 def check_job_logs_cli(log_dir: Path, job_ids: tuple, output_dir: Optional[Path]):
     """
     CLI for checking SLURM job logs and saving a filtered CSV report with non-success statuses.
-    """   
+    """
     job_id_list = list(job_ids) if job_ids else None
-    check_job_logs(log_dir, job_ids=job_id_list, output_dir=output_dir if output_dir else log_dir)
+    check_job_logs(
+        log_dir, job_ids=job_id_list, output_dir=output_dir if output_dir else log_dir
+    )
 
 
 if __name__ == "__main__":
