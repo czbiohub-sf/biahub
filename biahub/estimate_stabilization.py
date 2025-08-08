@@ -27,6 +27,7 @@ from biahub.cli.parsing import (
     output_dirpath,
     sbatch_filepath,
     sbatch_to_submitit,
+    timed
 )
 from biahub.cli.slurm import wait_for_jobs_to_finish
 from biahub.cli.utils import estimate_resources, yaml_to_model
@@ -1450,7 +1451,7 @@ def estimate_z_stabilization(
 
     return fov_transforms
 
-
+@timed
 def estimate_stabilization(
     input_position_dirpaths: List[str],
     output_dirpath: str,

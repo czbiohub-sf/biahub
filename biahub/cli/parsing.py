@@ -11,6 +11,19 @@ from natsort import natsorted
 from biahub.cli.option_eat_all import OptionEatAll
 
 
+import time
+from functools import wraps
+
+def timed(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        start = time.time()
+        result = fn(*args, **kwargs)
+        end = time.time()
+        print(f"Execution Time: {end - start:.2f} seconds")
+        return result
+    return wrapper
+
 def _validate_and_process_paths(
     ctx: click.Context, opt: click.Option, value: str
 ) -> list[Path]:
