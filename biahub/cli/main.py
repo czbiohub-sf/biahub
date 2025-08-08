@@ -25,113 +25,127 @@ def lazy_import_command(import_path):
     return callback
 
 
-# Command list: (name, import_path, help)
 COMMANDS = [
-    (
-        "estimate_bleaching",
-        "biahub.estimate_bleaching.estimate_bleaching_cli",
-        "Estimate bleaching from raw data",
-    ),
-    (
-        "estimate_deskew",
-        "biahub.estimate_deskew.estimate_deskew_cli",
-        "Routine for estimating deskewing parameters",
-    ),
-    ("deskew", "biahub.deskew.deskew_cli", "Deskew a single position across T and C axes"),
-    (
-        "estimate_registration",
-        "biahub.estimate_registration.estimate_registration_cli",
-        "Estimate affine transform between timepoints or arms",
-    ),
-    (
-        "optimize_registration",
-        "biahub.optimize_registration.optimize_registration_cli",
-        "Optimize transform based on match filtering",
-    ),
-    (
-        "register",
-        "biahub.register.register_cli",
-        "Apply an affine transformation to a single position",
-    ),
-    (
-        "estimate_stitch",
-        "biahub.estimate_stitch.estimate_stitch_cli",
-        "Estimate stitching parameters for positions",
-    ),
-    ("stitch", "biahub.stitch.stitch_cli", "Stitch positions in wells of a zarr store"),
-    (
-        "concatenate",
-        "biahub.concatenate.concatenate_cli",
-        "Concatenate datasets (with optional cropping)",
-    ),
-    (
-        "estimate_stabilization",
-        "biahub.estimate_stabilization.estimate_stabilization_cli",
-        "Estimate translation matrices for XYZ stabilization",
-    ),
-    (
-        "stabilize",
-        "biahub.stabilize.stabilize_cli",
-        "Apply stabilization transforms to dataset",
-    ),
-    (
-        "estimate_crop",
-        "biahub.estimate_crop.estimate_crop_cli",
-        "Estimate crop region for dual-channel alignment",
-    ),
-    (
-        "compute_transfer_function",
-        "biahub.compute_transfer_function.compute_transfer_function_cli",
-        "Compute transfer function using PSF",
-    ),
-    (
-        "apply_inverse_transfer_function",
-        "biahub.apply_inverse_transfer_function.apply_inverse_transfer_function_cli",
-        "Apply inverse transfer function to dataset",
-    ),
-    (
-        "reconstruct",
-        "biahub.reconstruct.reconstruct_cli",
-        "Reconstruct a dataset using config",
-    ),
-    (
-        "estimate_psf",
-        "biahub.estimate_psf.estimate_psf_cli",
-        "Estimate point spread function from beads",
-    ),
-    (
-        "deconvolve",
-        "biahub.deconvolve.deconvolve_cli",
-        "Deconvolve across T and C axes using a PSF",
-    ),
-    (
-        "characterize_psf",
-        "biahub.characterize_psf.characterize_psf_cli",
-        "Characterize point spread function (PSF)",
-    ),
-    (
-        "segment",
-        "biahub.segment.segment_cli",
-        "Segment a position using pretrained model or pipeline",
-    ),
-    ("virtual_stain", "biahub.virtual_stain.virtual_stain_cli", "Run VisCy virtual staining"),
-    (
-        "process_with_config",
-        "biahub.process_data.process_with_config_cli",
-        "Process data with YAML-defined functions",
-    ),
-    ("track", "biahub.track.track_cli", "Track objects in 2D/3D time-lapse microscopy"),
+    {
+        "name": "estimate_bleaching",
+        "import_path": "biahub.estimate_bleaching.estimate_bleaching_cli",
+        "help": "Estimate bleaching from raw data",
+    },
+    {
+        "name": "estimate_deskew",
+        "import_path": "biahub.estimate_deskew.estimate_deskew_cli",
+        "help": "Routine for estimating deskewing parameters",
+    },
+    {
+        "name": "deskew",
+        "import_path": "biahub.deskew.deskew_cli",
+        "help": "Deskew a single position across T and C axes",
+    },
+    {
+        "name": "estimate_registration",
+        "import_path": "biahub.estimate_registration.estimate_registration_cli",
+        "help": "Estimate affine transform between timepoints or arms",
+    },
+    {
+        "name": "optimize_registration",
+        "import_path": "biahub.optimize_registration.optimize_registration_cli",
+        "help": "Optimize transform based on match filtering",
+    },
+    {
+        "name": "register",
+        "import_path": "biahub.register.register_cli",
+        "help": "Apply an affine transformation to a single position",
+    },
+    {
+        "name": "estimate_stitch",
+        "import_path": "biahub.estimate_stitch.estimate_stitch_cli",
+        "help": "Estimate stitching parameters for positions",
+    },
+    {
+        "name": "stitch",
+        "import_path": "biahub.stitch.stitch_cli",
+        "help": "Stitch positions in wells of a zarr store",
+    },
+    {
+        "name": "concatenate",
+        "import_path": "biahub.concatenate.concatenate_cli",
+        "help": "Concatenate datasets (with optional cropping)",
+    },
+    {
+        "name": "estimate_stabilization",
+        "import_path": "biahub.estimate_stabilization.estimate_stabilization_cli",
+        "help": "Estimate translation matrices for XYZ stabilization",
+    },
+    {
+        "name": "stabilize",
+        "import_path": "biahub.stabilize.stabilize_cli",
+        "help": "Apply stabilization transforms to dataset",
+    },
+    {
+        "name": "estimate_crop",
+        "import_path": "biahub.estimate_crop.estimate_crop_cli",
+        "help": "Estimate crop region for dual-channel alignment",
+    },
+    {
+        "name": "compute_transfer_function",
+        "import_path": "biahub.compute_transfer_function.compute_transfer_function_cli",
+        "help": "Compute transfer function using PSF",
+    },
+    {
+        "name": "apply_inverse_transfer_function",
+        "import_path": "biahub.apply_inverse_transfer_function.apply_inverse_transfer_function_cli",
+        "help": "Apply inverse transfer function to dataset",
+    },
+    {
+        "name": "reconstruct",
+        "import_path": "biahub.reconstruct.reconstruct_cli",
+        "help": "Reconstruct a dataset using config",
+    },
+    {
+        "name": "estimate_psf",
+        "import_path": "biahub.estimate_psf.estimate_psf_cli",
+        "help": "Estimate point spread function from beads",
+    },
+    {
+        "name": "deconvolve",
+        "import_path": "biahub.deconvolve.deconvolve_cli",
+        "help": "Deconvolve across T and C axes using a PSF",
+    },
+    {
+        "name": "characterize_psf",
+        "import_path": "biahub.characterize_psf.characterize_psf_cli",
+        "help": "Characterize point spread function (PSF)",
+    },
+    {
+        "name": "segment",
+        "import_path": "biahub.segment.segment_cli",
+        "help": "Segment a position using pretrained model or pipeline",
+    },
+    {
+        "name": "virtual_stain",
+        "import_path": "biahub.virtual_stain.virtual_stain_cli",
+        "help": "Run VisCy virtual staining",
+    },
+    {
+        "name": "process_with_config",
+        "import_path": "biahub.process_data.process_with_config_cli",
+        "help": "Process data with YAML-defined functions",
+    },
+    {
+        "name": "track",
+        "import_path": "biahub.track.track_cli",
+        "help": "Track objects in 2D/3D time-lapse microscopy",
+    },
 ]
 
 
-# Register lazy commands
-for name, import_path, help_text in COMMANDS:
+for cmd in COMMANDS:
     cli.add_command(
         click.Command(
-            name=name,
-            callback=lazy_import_command(import_path),
-            help=help_text,
-            short_help=help_text.split(".")[0],
+            name=cmd["name"],
+            callback=lazy_import_command(cmd["import_path"]),
+            help=cmd["help"],
+            short_help=cmd["help"].split(".")[0],
         )
     )
 
