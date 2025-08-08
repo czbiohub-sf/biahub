@@ -1,3 +1,5 @@
+import glob
+
 from pathlib import Path
 from typing import Callable
 
@@ -24,6 +26,26 @@ def _validate_and_process_paths(
 
 def _str_to_path(ctx: click.Context, opt: click.Option, value: str) -> Path:
     return Path(value)
+
+
+def _validate_and_process_config_paths(ctx, opt, value: tuple[str, ...]) -> list[Path]:
+    matched_paths = []
+    for pattern in value:
+        expanded = glob.glob(pattern)
+        if not expanded:
+            raise click.BadParameter(f"No files matched pattern: {pattern}")
+        matched_paths.extend(expanded)
+
+    validated = []
+    for p in natsorted(map(Path, matched_paths)):
+        if not p.exists():
+            raise click.BadParameter(f"Path does not exist: {p}")
+        if not p.is_file():
+            raise click.BadParameter(f"Expected a file, not a directory: {p}")
+        if p.suffix.lower() not in [".yml", ".yaml"]:
+            raise click.BadParameter(f"Expected a .yml file, got: {p}")
+        validated.append(p)
+    return validated
 
 
 def input_position_dirpaths() -> Callable:
@@ -66,6 +88,24 @@ def target_position_dirpaths() -> Callable:
             type=tuple,
             callback=_validate_and_process_paths,
             help='Paths to target positions, for example: "target.zarr/0/0/0" or "target.zarr/*/*/*"',
+        )(f)
+
+    return decorator
+
+
+def config_filepaths() -> Callable:
+    def decorator(f: Callable) -> Callable:
+        return click.option(
+            "--config-filepaths",
+            "-c",
+            required=True,
+            cls=OptionEatAll,
+            type=tuple,
+            callback=_validate_and_process_config_paths,
+            help=(
+                "Paths to YAML configuration files. "
+                "All must be existing files with .yml extension."
+            ),
         )(f)
 
     return decorator
@@ -127,9 +167,40 @@ def sbatch_filepath() -> Callable:
     return decorator
 
 
+def sbatch_filepath_preprocess() -> Callable:
+    def decorator(f: Callable) -> Callable:
+        return click.option(
+            "--sbatch-filepath-preprocess",
+            "-sb-preprocess",
+            default=None,
+            type=click.Path(exists=True, file_okay=True, dir_okay=False),
+            help="SBATCH filepath that contains slurm parameters to overwrite defaults. "
+            "For example, '#SBATCH --mem-per-cpu=16G' will override the default memory per CPU.",
+        )(f)
+
+    return decorator
+
+
+def sbatch_filepath_predict() -> Callable:
+    def decorator(f: Callable) -> Callable:
+        return click.option(
+            "--sbatch-filepath-predict",
+            "-sb-predict",
+            default=None,
+            type=click.Path(exists=True, file_okay=True, dir_okay=False),
+            help="SBATCH filepath that contains slurm parameters to overwrite defaults. "
+            "For example, '#SBATCH --mem-per-cpu=16G' will override the default memory per CPU.",
+        )(f)
+
+    return decorator
+
+
 def sbatch_to_submitit(filepath: str) -> dict:
-    """Reads an sbatch file and returns a dictionary of slurm parameters,
-    ready for submitit.
+    """Reads a text configuration file and returns a dictionary of parameters
+    which can be passed to the submitit executor. This file can contain parameters
+    starting with #SBATCH to configure SLURM jobs or parameters starting with #LOCAL
+    to configure local jobs. The submitit executor will only apply valid parameters
+    and will, for example, ignore local parameters when running on SLURM.
 
     Parameters
     ----------
@@ -146,23 +217,34 @@ def sbatch_to_submitit(filepath: str) -> dict:
     --- sbatch_file.sh ---
     #SBATCH --mem-per-cpu=16G
     #SBATCH --time=1:00:00
+    #LOCAL --cpus-per-task=1
     ---
 
-    >>> dict = read_sbatch_to_submitit_args(Path("sbatch_file.sh"))
+    >>> dict = sbatch_to_submitit(Path("sbatch_file.sh"))
     >>> print(dict)
-    {'slurm_mem_per_cpu': '16G', 'slurm_time': '1:00:00'}
+    {'slurm_mem_per_cpu': '16G', 'slurm_time': '1:00:00', 'cpus_per_task': 1}
     """
 
     with open(filepath, "r") as f:
         sbatch_file = f.readlines()
 
+    keywords = ["SBATCH", "LOCAL"]
     sbatch_dict = {}
     for line in sbatch_file:
-        if line.startswith("#SBATCH --"):
-            line = line.strip("#SBATCH --").strip()
-            key, value = line.split("=", 1)
-            key = key.replace("-", "_")
-            sbatch_dict["slurm_" + key.strip()] = value.strip()
+        for keyword in keywords:
+            if line.startswith(f"#{keyword} --"):
+                line = line.strip(f"#{keyword} --").strip()
+                key, value = line.split("=", 1)
+                key = key.replace("-", "_").strip()
+                try:
+                    value = int(value.strip())
+                except ValueError:
+                    # If conversion to int fails, keep it as a string
+                    value = value.strip()
+                if keyword == "SBATCH":
+                    sbatch_dict["slurm_" + key] = value
+                elif keyword == "LOCAL":
+                    sbatch_dict[key] = value
 
     return sbatch_dict
 
@@ -175,6 +257,19 @@ def local() -> Callable:
             is_flag=True,
             default=False,
             help="Run jobs locally instead of submitting to SLURM.",
+        )(f)
+
+    return decorator
+
+
+def monitor() -> Callable:
+    def decorator(f: Callable) -> Callable:
+        return click.option(
+            "--monitor",
+            "-m",
+            is_flag=True,
+            default=False,
+            help="Monitor of submitted SLURM jobs.",
         )(f)
 
     return decorator

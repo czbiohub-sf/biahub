@@ -6,7 +6,8 @@ import submitit
 
 from iohub import open_ome_zarr
 
-from biahub.cli.parsing import input_position_dirpaths, local, output_filepath
+from biahub.cli.monitor import monitor_jobs
+from biahub.cli.parsing import input_position_dirpaths, local, monitor, output_filepath
 from biahub.cli.utils import model_to_yaml
 from biahub.settings import ProcessingSettings, StitchSettings
 from biahub.stitch import (
@@ -73,6 +74,7 @@ def cleanup_and_write_shifts(
     help="add the offset to estimated shifts, needed for OPS experiments",
 )
 @local()
+@monitor()
 def estimate_stitch_cli(
     input_position_dirpaths: list[Path],
     output_filepath: str,
@@ -83,6 +85,7 @@ def estimate_stitch_cli(
     rot90: int,
     add_offset: bool,
     local: bool,
+    monitor: bool,
 ):
     """
     Estimate stitching parameters for positions in wells of a zarr store.
@@ -171,7 +174,7 @@ def estimate_stitch_cli(
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
     estimate_jobs = []
-    with executor.batch():
+    with submitit.helpers.clean_env(), executor.batch():
         for well_name in wells:
             for direction, fovs in zip(("row", "col"), (row_fov_pairs, col_fov_pairs)):
                 for fov0, fov1 in fovs:
@@ -201,11 +204,12 @@ def estimate_stitch_cli(
     click.echo('Consolidating FOV shifts...')
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
-    consolidate_job_id = executor.submit(
-        consolidate_zarr_fov_shifts,
-        input_dirname=csv_dirpath,
-        output_filepath=csv_filepath,
-    ).job_id
+    with submitit.helpers.clean_env():
+        consolidate_job_id = executor.submit(
+            consolidate_zarr_fov_shifts,
+            input_dirname=csv_dirpath,
+            output_filepath=csv_filepath,
+        ).job_id
 
     slurm_args = {
         "slurm_job_name": "cleanup-shifts",
@@ -218,16 +222,25 @@ def estimate_stitch_cli(
 
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
-    executor.submit(
-        cleanup_and_write_shifts,
-        output_filepath,
-        channel,
-        fliplr,
-        flipud,
-        rot90,
-        csv_filepath,
-        pixel_size_um,
-    )
+    with submitit.helpers.clean_env():
+        cleanup_job_id = executor.submit(
+            cleanup_and_write_shifts,
+            output_filepath,
+            channel,
+            fliplr,
+            flipud,
+            rot90,
+            csv_filepath,
+            pixel_size_um,
+        )
+    job_ids = [job.job_id for job in estimate_jobs + consolidate_job_id + cleanup_job_id]
+
+    log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
+    with log_path.open("w") as log_file:
+        log_file.write("\n".join(job_ids))
+
+    if monitor:
+        monitor_jobs(estimate_jobs + consolidate_job_id + cleanup_job_id, wells)
 
 
 if __name__ == "__main__":

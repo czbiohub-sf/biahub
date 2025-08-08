@@ -1,0 +1,38 @@
+# Name of the fixed (reference) image channel used for registration
+target_channel_name: Phase3D
+
+# Name of the moving image channel to align with the target. If using beads, this is the channel with visible beads.
+source_channel_name: GFP EX488 EM525-45
+
+# Method to estimate registration parameters
+# "manual" user manually selects matching features
+# "beads" automatic detection of bead matches
+# "ants" uses ANTs registration with optimization
+estimation_method: manual
+
+manual_registration_settings:
+  time_index: 0 # Timepoint index to use for manual registration
+  affine_90degree_rotation: 0  # Number of 90-degree clockwise rotations to apply to source image before registration
+
+# Settings for affine transformation estimation (applies to all stabilization methods)
+affine_transform_settings:
+  transform_type: euclidean # Type of transform to estimate "euclidean", "similarity", or "affine"
+  approx_transform: # Optional initial guess for the 4x4 affine transformation matrix (if None, will be estimated)
+    - - 1
+      - 0
+      - 0
+      - 0
+    - - 0
+      - 0
+      - -1.288
+      - 1960
+    - - 0
+      - 1.288
+      - 0
+      - -460
+    - - 0.0
+      - 0.0
+      - 0.0
+      - 1.0
+
+verbose: True

@@ -11,10 +11,12 @@ from iohub.ngff.utils import process_single_position
 from monai.transforms.spatial.array import Affine
 
 from biahub.cli import utils
+from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
     config_filepath,
     input_position_dirpaths,
     local,
+    monitor,
     output_dirpath,
     sbatch_filepath,
     sbatch_to_submitit,
@@ -160,6 +162,12 @@ def get_deskewed_data_shape(
         Xp = int(np.ceil((Z / px_to_scan_ratio) + (Y * ct)))
     else:
         Xp = int(np.ceil((Z / px_to_scan_ratio) - (Y * ct)))
+        if Xp <= 0:
+            raise ValueError(
+                f"Dataset contains only overhang when keep_overhang=False. "
+                f"Computed Xp={Xp} <= 0. Either set keep_overhang=True or use a dataset "
+                f"with non-overhang content."
+            )
 
     output_shape = (Y, X, Xp)
     voxel_size = (average_n_slices * st * pixel_size_um, pixel_size_um, pixel_size_um)
@@ -250,12 +258,14 @@ def _czyx_deskew_data(data, **kwargs):
 @output_dirpath()
 @sbatch_filepath()
 @local()
+@monitor()
 def deskew_cli(
     input_position_dirpaths: List[str],
-    config_filepath: str,
+    config_filepath: Path,
     output_dirpath: str,
     sbatch_filepath: str = None,
     local: bool = False,
+    monitor: bool = True,
 ):
     """
     Deskew a single position across T and C axes using a configuration file
@@ -269,7 +279,7 @@ def deskew_cli(
 
     # Convert string paths to Path objects
     output_dirpath = Path(output_dirpath)
-    config_filepath = Path(config_filepath)
+
     slurm_out_path = output_dirpath.parent / "slurm_output"
 
     # Handle single position or wildcard filepath
@@ -308,7 +318,7 @@ def deskew_cli(
 
     # Estimate resources
     num_cpus, gb_ram = estimate_resources(
-        shape=(T, C, Z, Y, X), ram_multiplier=10, max_num_cpus=16
+        shape=(T, C, Z, Y, X), ram_multiplier=16, max_num_cpus=16
     )
 
     # Prepare SLURM arguments
@@ -339,7 +349,7 @@ def deskew_cli(
     click.echo('Submitting SLURM jobs...')
 
     jobs = []
-    with executor.batch():
+    with submitit.helpers.clean_env(), executor.batch():
         for input_position_path, output_position_path in zip(
             input_position_dirpaths, output_position_paths
         ):
@@ -354,12 +364,14 @@ def deskew_cli(
                 )
             )
 
-    # monitor_jobs(jobs, input_position_dirpaths)
     job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 
     log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
+
+    if monitor:
+        monitor_jobs(jobs, input_position_dirpaths)
 
 
 if __name__ == "__main__":
