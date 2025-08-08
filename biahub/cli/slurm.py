@@ -1,10 +1,13 @@
 import submitit
 import click
+import os
 from biahub.cli.parsing import output_dirpath
 from tqdm import tqdm
 from pathlib import Path
 import pandas as pd
 from typing import Optional, Union
+from datetime import datetime
+
 
 def wait_for_jobs_to_finish(jobs: list[submitit.Job]) -> None:
     """
@@ -27,7 +30,10 @@ def wait_for_jobs_to_finish(jobs: list[submitit.Job]) -> None:
             print(f"Job {job.job_id} failed with exception: {e}")
 
 
-def check_job_logs(log_dir: Union[str, Path], job_ids: Optional[list[Union[str, int]]] = None, output_dir: Union[str, Path], = None) -> pd.DataFrame:
+def check_job_logs(
+        log_dir: Union[str, Path],
+        job_ids: Optional[list[Union[str, int]]] = None,
+        output_dir: Union[str, Path] = None) -> pd.DataFrame:
     """
     Check SLURM logs for specific job IDs or all jobs in a folder,
     reporting statuses and saving a filtered CSV with non-successful jobs.
@@ -55,81 +61,97 @@ def check_job_logs(log_dir: Union[str, Path], job_ids: Optional[list[Union[str, 
 
     for job_id in tqdm(job_ids, desc="Analyzing SLURM logs"):
         job_id = str(job_id)
-        log_out = log_dir / f"{job_id}_log.out"
-        log_err = log_dir / f"{job_id}_log.err"
 
-        if not log_out.exists() and not log_err.exists():
-            status = "LOG NOT FOUND"
-        else:
-            try:
-                logs_combined = ""
-                if log_out.exists():
-                    logs_combined += log_out.read_text().lower()
-                if log_err.exists():
-                    logs_combined += log_err.read_text().lower()
+        all_files = os.listdir(log_dir)
+        matching_files = [f for f in all_files if f"{job_id}" in Path(f).stem]
 
-                if "job completed successfully" in logs_combined or "exiting after successful completion" in logs_combined:
-                    status = "SUCCESS"
-                elif "error" in logs_combined or "fail" in logs_combined:
-                    status = "FAILED"
-                else:
-                    status = "UNKNOWN"
-            except Exception as e:
-                status = f"ERROR READING LOG: {e}"
+        files_with_out = [f for f in matching_files if f.endswith("_log.out")]
 
-        records.append((job_id, status))
+        for file_out in files_with_out:
+            log_out = log_dir / file_out
+            log_err = log_dir / file_out.replace("_log.out", "_log.err")
+            id = Path(log_err).stem.replace("_0_log", "")  # safer
 
-    df = pd.DataFrame(records, columns=["job_id", "status"])
+
+            if not log_out.exists() and not log_err.exists():
+                status = "LOG NOT FOUND"
+            else:
+                try:
+                    logs_combined = ""
+                    if log_out.exists():
+                        logs_combined += log_out.read_text().lower()
+                    if log_err.exists():
+                        logs_combined += log_err.read_text().lower()
+
+                    if "job completed successfully" in logs_combined or "exiting after successful completion" in logs_combined:
+                        status = "SUCCESS"
+                    else:
+                        status = "FAILED"
+                except Exception as e:
+                    status = f"ERROR READING LOG: {e}"
+                records.append((id, status))
+            
+
+
+    df = pd.DataFrame(records, columns=["Job_ID", "Status"])
+    df.sort_values(by="Status", ascending=True, inplace=True)
 
     # Count summary
     total = len(df)
-    counts = df["status"].value_counts()
+    counts = df["Status"].value_counts()
     summary = {
         "Total": total,
         "Success": counts.get("SUCCESS", 0),
         "Failed": sum(counts[s] for s in counts.index if "FAIL" in s or "ERROR" in s),
         "Not found": counts.get("LOG NOT FOUND", 0),
-        "Unknown": total - counts.get("SUCCESS", 0) - counts.get("LOG NOT FOUND", 0) - sum(counts[s] for s in counts.index if "FAIL" in s or "ERROR" in s)
     }
+    # add summary row
+    summary_row = pd.DataFrame([summary])
+    df = pd.concat([summary_row,df], ignore_index=True)
 
-    # Filter out successes
-    df_filtered = df[df["status"] != "SUCCESS"]
-
+    # Timestamped output filename
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_filename = f"job_status_report_{timestamp}.csv"
+    output_path = Path(output_dir) / output_filename
+    
     # Save report
-    output_path = output_dir / "job_status_report.csv"
-    df_filtered.to_csv(output_path, index=False)
+    df.to_csv(output_path, index=False)
+    click.echo("...............................................")
+    click.echo(f"Total: {summary['Total']}")
+    click.echo(f"Success: {summary['Success']}")
+    click.echo(f"Failed: {summary['Failed']}")
+    click.echo("...............................................")
+    click.echo(f"Summary saved to: {output_path}")
 
-    # Append summary
-    with open(output_path, "a") as f:
-        f.write("\nSummary\n")
-        for key, value in summary.items():
-            f.write(f"{key},{value}\n")
-
-    # Print
-    print(f"\nSLURM Job Report (excluding SUCCESS):")
-    print(df_filtered.to_string(index=False))
-    print(f"\nSummary: {summary}")
-    print(f"Report saved to: {output_path}")
-
-    return df_filtered
-
-
+    return df
 
 @click.command("check-job-logs")
-@click.argument("log_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
-@click.option("--job-ids", "-j", multiple=True, help="Specific job IDs to check. If not provided, all jobs in the log directory will be checked.")
-@click.opition("--output-dir", "-o", type=click.Path(exists=True, file_okay=False, path_type=Path), default=None, help="Output directory for the report CSV file.")
-def check_job_logs_cli(
-    log_dir: Path,
-    job_ids: Optional[list[Union[str, int]]] = None,
-    output_dir:Path = None) -> None:
-    
-    """Check SLURM job logs for specific job IDs or all jobs in a folder,
-    reporting statuses and saving a filtered CSV with non-successful jobs.
+@click.option(
+    "--log-dir",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    required=True,
+    help="Path to SLURM log directory.",
+)
+@click.option(
+    "--job-ids",
+    type = str,
+    multiple=True,
+    help="Specific job IDs to check. If not provided, all jobs in the log directory will be checked.",
+)
+@click.option(
+    "--output-dir",
+    "-o",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=None,
+    help="Output directory for the report CSV file.",
+)
+def check_job_logs_cli(log_dir: Path, job_ids: tuple, output_dir: Optional[Path]):
     """
-    
-    check_job_logs(log_dir, job_ids=job_ids if job_ids else None, output_dir=log_dir if not output_dir else output_dir)
-    
+    CLI for checking SLURM job logs and saving a filtered CSV report with non-success statuses.
+    """   
+    job_id_list = list(job_ids) if job_ids else None
+    check_job_logs(log_dir, job_ids=job_id_list, output_dir=output_dir if output_dir else log_dir)
+
 
 if __name__ == "__main__":
     check_job_logs_cli()

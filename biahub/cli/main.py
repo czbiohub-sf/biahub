@@ -21,6 +21,7 @@ from biahub.stabilize import stabilize_cli
 from biahub.stitch import stitch_cli
 from biahub.track import track_cli
 from biahub.virtual_stain import virtual_stain_cli
+from biahub.cli.slurm import check_job_logs_cli
 
 CONTEXT = {"help_option_names": ["-h", "--help"]}
 
@@ -57,3 +58,4 @@ cli.add_command(segment_cli)
 cli.add_command(virtual_stain_cli)
 cli.add_command(process_with_config_cli)
 cli.add_command(track_cli)
+cli.add_command(check_job_logs_cli)
