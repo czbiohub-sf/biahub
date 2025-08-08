@@ -1,6 +1,5 @@
 import ast
 import os
-import shutil
 
 from glob import glob
 from pathlib import Path
@@ -797,7 +796,7 @@ def track(
     output_dirpath = Path(output_dirpath)
     dataset_name = output_dirpath.stem
     database_path = output_dirpath.parent / f"{dataset_name}_config_tracking"
-    
+
     if output_dirpath.exists():
         raise ValueError(
             f"Output directory {output_dirpath} already exists. Please choose a  output path."
@@ -806,7 +805,6 @@ def track(
         raise ValueError(
             f"Tracking database directory {database_path} already exists. Please choose a output path."
         )
-    
 
     settings = yaml_to_model(config_filepath, TrackingSettings)
 
