@@ -1,8 +1,8 @@
 import os
 import shutil
 import subprocess
-from datetime import datetime
 
+from datetime import datetime
 from pathlib import Path
 
 import click
@@ -60,7 +60,10 @@ def check_disk_space_with_du(
         click.echo(f"Available Space: {available_space / 1e12:.3f} TB")
         click.echo("...........................................")
         # save as a txt file wih datetime
-        report_path = Path(output_path) / f"disk_space_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        report_path = (
+            Path(output_path)
+            / f"disk_space_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        )
         with open(report_path, 'w') as report_file:
             report_file.write(
                 f"Input Size: {input_size / 1e12:.3f} TB\n"
@@ -68,6 +71,7 @@ def check_disk_space_with_du(
                 f"Available Space: {available_space / 1e12:.3f} TB\n"
             )
     return available_space >= required_space
+
 
 @click.command("check-disk-space")
 @click.option(
@@ -96,7 +100,7 @@ def check_disk_space_with_du(
     default=True,
     help="Print detailed diagnostics.",
 )
-def check_disk_space_cli(input_path: str,  output_path: str, margin: float, verbose: bool):
+def check_disk_space_cli(input_path: str, output_path: str, margin: float, verbose: bool):
     """
     CLI command to check disk space using `du -sb`.
     """
@@ -110,6 +114,7 @@ def check_disk_space_cli(input_path: str,  output_path: str, margin: float, verb
         click.echo("Disk space check passed. Good to go!")
     else:
         click.echo("Disk space check failed. Not enough space available.")
+
 
 if __name__ == "__main__":
     check_disk_space_cli()
