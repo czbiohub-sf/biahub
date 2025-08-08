@@ -10,6 +10,7 @@ from iohub.ngff import open_ome_zarr
 from scipy.linalg import svd
 from scipy.spatial.transform import Rotation as R
 
+from biahub.cli.disk import check_disk_space_with_du
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
     config_filepaths,
@@ -137,6 +138,7 @@ def stabilize(
 
     output_dirpath = Path(output_dirpath)
     slurm_out_path = output_dirpath.parent / "slurm_output"
+
     # Load the config file
 
     combined_mats = settings.affine_transform_zyx_list
@@ -221,6 +223,15 @@ def stabilize(
         position_keys=[p.parts[-3:] for p in input_position_dirpaths],
         **output_metadata,
     )
+
+    # Check if there is enough disk space to store the output
+    if not check_disk_space_with_du(
+        input_path=input_position_dirpaths[0],
+        output_path=output_dirpath,
+        margin=1.1,
+        verbose=True,
+    ):
+        raise RuntimeError(f"Not enough disk space to store the output at {output_dirpath}")
 
     stabilize_zyx_args = {"list_of_shifts": combined_mats}
     copy_n_paste_kwargs = {"czyx_slicing_params": ([Z_slice, Y_slice, X_slice])}
