@@ -722,9 +722,6 @@ def track_one_position(
     # Define path to save the tracking database and graph
     filename = output_dirpath.stem
     database_path = output_dirpath.parent / f"{filename}_config_tracking" / f"{fov}"
-    if database_path.exists():
-        click.echo(f"Removing existing database at {database_path} to avoid SQLite conflicts.")
-        shutil.rmtree(database_path)
     os.makedirs(database_path, exist_ok=True)
 
     # Perform tracking
@@ -798,6 +795,18 @@ def track(
     """
 
     output_dirpath = Path(output_dirpath)
+    dataset_name = output_dirpath.stem
+    database_path = output_dirpath.parent / f"{dataset_name}_config_tracking"
+    
+    if output_dirpath.exists():
+        raise ValueError(
+            f"Output directory {output_dirpath} already exists. Please choose a  output path."
+        )
+    if database_path.exists():
+        raise ValueError(
+            f"Tracking database directory {database_path} already exists. Please choose a output path."
+        )
+    
 
     settings = yaml_to_model(config_filepath, TrackingSettings)
 
