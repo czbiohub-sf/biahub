@@ -6,7 +6,6 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 import numpy as np
 import torch
 
-from iohub import open_ome_zarr
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -53,14 +52,8 @@ class ProcessingInputChannel(MyBaseModel):
     def validate_path_not_plate(cls, v):
         if v is None:
             return v
-        try:
-            v = Path(v)
-            with open_ome_zarr(v, mode='r'):
-                pass
-        except Exception as e:
-            print(e)
-            raise ValueError(f"Path {v} is not a valid OME-Zarr path")
-
+        if Path(v).suffix != ".zarr":
+            raise ValueError("Path must be a valid OME-Zarr dataset.")
         return v
 
 

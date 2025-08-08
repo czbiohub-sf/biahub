@@ -79,13 +79,6 @@ def test_example_settings(path, settings_cls, example_plate):
     with open(settings_files_dir / path) as file:
         yaml_settings = yaml.safe_load(file)
 
-    # Patch invalid Zarr path with a temp directory
-    if settings_cls is TrackingSettings:
-        plate_path, _ = example_plate
-        for image_entry in yaml_settings.get("input_images", []):
-            if image_entry.get("path") == "/path/to/virtual_staining.zarr":
-                image_entry["path"] = str(plate_path)
-
     settings_cls(**yaml_settings)
 
 
