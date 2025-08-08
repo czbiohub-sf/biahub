@@ -7,7 +7,7 @@ import submitit
 import torch
 
 from iohub.ngff import open_ome_zarr
-from iohub.ngff.utils import process_single_position
+from iohub.ngff.utils import create_empty_plate, process_single_position
 from monai.transforms.spatial.array import Affine
 
 from biahub.cli import utils
@@ -288,25 +288,27 @@ def deskew_cli(
     # Get the deskewing parameters
     # Load the first position to infer dataset information
     with open_ome_zarr(str(input_position_dirpaths[0]), mode="r") as input_dataset:
+        channel_names = input_dataset.channel_names
         T, C, Z, Y, X = input_dataset.data.shape
-        settings = yaml_to_model(config_filepath, DeskewSettings)
-        deskewed_shape, voxel_size = get_deskewed_data_shape(
-            (Z, Y, X),
-            settings.ls_angle_deg,
-            settings.px_to_scan_ratio,
-            settings.keep_overhang,
-            settings.average_n_slices,
-            settings.pixel_size_um,
-        )
 
-        # Create a zarr store output to mirror the input
-        utils.create_empty_zarr(
-            input_position_dirpaths,
-            output_dirpath,
-            output_zyx_shape=deskewed_shape,
-            chunk_zyx_shape=None,
-            voxel_size=voxel_size,
-        )
+    settings = yaml_to_model(config_filepath, DeskewSettings)
+    deskewed_shape, voxel_size = get_deskewed_data_shape(
+        (Z, Y, X),
+        settings.ls_angle_deg,
+        settings.px_to_scan_ratio,
+        settings.keep_overhang,
+        settings.average_n_slices,
+        settings.pixel_size_um,
+    )
+
+    # Create a zarr store output to mirror the input
+    create_empty_plate(
+        store_path=output_dirpath,
+        position_keys=[p.parts[-3:] for p in input_position_dirpaths],
+        channel_names=channel_names,
+        shape=(T, C) + deskewed_shape,
+        scale=(1, 1) + voxel_size,
+    )
 
     deskew_args = {
         'ls_angle_deg': settings.ls_angle_deg,
