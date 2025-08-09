@@ -47,27 +47,21 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# note that dev dependencies are only pinned to major versions
+segment = ["cellpose"]
+
+track = ["ultrack @ git+https://github.com/royerlab/ultrack.git@v0.6.3"]
+
+build = ["build", "twine"]
+
+all = ["biahub[segment,track,build]"]
+
 dev = [
+  "biahub[all]",
   "black==25.1",
   "flake8==7.2",
   "isort==6.0",
   "pytest==8.4",
   "pre-commit~=4.2",
-]
-
-track = [
-  "ultrack @ git+https://github.com/royerlab/ultrack.git@v0.6.3"
-]
-
-segment = [
-  "cellpose",
-]
-
-build = ["build", "twine"]
-
-all = [
-  "biahub[dev,track,segment]"
 ]
 
 [project.scripts]
