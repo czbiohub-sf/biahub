@@ -2,6 +2,7 @@ import click
 
 from biahub.apply_inverse_transfer_function import apply_inverse_transfer_function_cli
 from biahub.characterize_psf import characterize_psf_cli
+from biahub.cli.slurm import check_job_logs_cli
 from biahub.compute_transfer_function import compute_transfer_function_cli
 from biahub.concatenate import concatenate_cli
 from biahub.deconvolve import deconvolve_cli
@@ -59,3 +60,4 @@ cli.add_command(segment_cli)
 cli.add_command(virtual_stain_cli)
 cli.add_command(process_with_config_cli)
 cli.add_command(track_cli)
+cli.add_command(check_job_logs_cli)
