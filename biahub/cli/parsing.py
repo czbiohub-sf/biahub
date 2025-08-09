@@ -1,5 +1,7 @@
 import glob
+import time
 
+from functools import wraps
 from pathlib import Path
 from typing import Callable
 
@@ -9,6 +11,18 @@ from iohub.ngff import Plate, open_ome_zarr
 from natsort import natsorted
 
 from biahub.cli.option_eat_all import OptionEatAll
+
+
+def timed(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        start = time.time()
+        result = fn(*args, **kwargs)
+        end = time.time()
+        print(f"Execution Time: {end - start:.2f} seconds")
+        return result
+
+    return wrapper
 
 
 def _validate_and_process_paths(
