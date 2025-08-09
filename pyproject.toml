@@ -42,15 +42,21 @@ dependencies = [
   "napari-psf-analysis",
   "imageio-ffmpeg",
   "dask[array]",
+  "toml",
   "scikit-learn",
 ]
 
 [project.optional-dependencies]
-# note that dev dependencies are only pinned to major versions
-segmentation = ["cellpose"]
-sharding = ["tensorstore"]
+segment = ["cellpose"]
+
+track = ["ultrack @ git+https://github.com/royerlab/ultrack.git@v0.6.3"]
+
+shard = ["tensorstore"]
+
 build = ["build", "twine"]
-all = ["biahub[segmentation,sharding,build]"]
+
+all = ["biahub[segment,track,shard,build]"]
+
 dev = [
   "biahub[all]",
   "black==25.1",

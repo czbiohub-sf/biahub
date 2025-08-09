@@ -108,7 +108,7 @@ def segment_data(
 @monitor()
 def segment_cli(
     input_position_dirpaths: list[str],
-    config_filepath: str,
+    config_filepath: Path,
     output_dirpath: str,
     sbatch_filepath: str | None = None,
     local: bool = False,
@@ -232,7 +232,7 @@ def segment_cli(
     executor.update_parameters(**slurm_args)
 
     jobs = []
-    with executor.batch():
+    with submitit.helpers.clean_env(), executor.batch():
         for input_position_path, output_position_path in zip(
             input_position_dirpaths, output_position_paths
         ):

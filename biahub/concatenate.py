@@ -365,7 +365,7 @@ def concatenate(
     # Estimate resources
     batch_size = settings.shards_ratio[0] if settings.shards_ratio else 1
     num_cpus, gb_ram_per_cpu = estimate_resources(
-        shape=(T // batch_size, C, Z, Y, X), ram_multiplier=4 * batch_size, max_num_cpus=48
+        shape=(T // batch_size, C, Z, Y, X), ram_multiplier=4 * batch_size, max_num_cpus=16
     )
     # Prepare SLURM arguments
     slurm_args = {
@@ -374,7 +374,7 @@ def concatenate(
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,  # process up to 100 positions at a time
         "slurm_time": 60,
-        "slurm_partition": "cpu",
+        "slurm_partition": "preempted",
     }
 
     # Override defaults if sbatch_filepath is provided
@@ -451,7 +451,7 @@ def concatenate(
 @local()
 @monitor()
 def concatenate_cli(
-    config_filepath: str,
+    config_filepath: Path,
     output_dirpath: str,
     sbatch_filepath: str | None = None,
     local: bool = False,
@@ -462,6 +462,7 @@ def concatenate_cli(
 
     >> biahub concatenate -c ./concat.yml -o ./output_concat.zarr
     """
+
     concatenate(
         settings=yaml_to_model(config_filepath, ConcatenateSettings),
         output_dirpath=Path(output_dirpath),

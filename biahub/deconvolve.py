@@ -83,7 +83,7 @@ def deconvolve(
 def deconvolve_cli(
     input_position_dirpaths: List[str],
     psf_dirpath: str,
-    config_filepath: str,
+    config_filepath: Path,
     output_dirpath: str,
     sbatch_filepath: str = None,
     local: bool = False,
@@ -96,7 +96,6 @@ def deconvolve_cli(
     """
     # Convert string paths to Path objects
     output_dirpath = Path(output_dirpath)
-    config_filepath = Path(config_filepath)
     slurm_out_path = output_dirpath.parent / "slurm_output"
     transfer_function_store_path = output_dirpath.parent / "transfer_function.zarr"
     output_position_paths = get_output_paths(input_position_dirpaths, output_dirpath)
@@ -144,7 +143,7 @@ def deconvolve_cli(
 
     # Estimate resources
     num_cpus, gb_ram_per_cpu = estimate_resources(
-        shape=[T, C, Z, Y, X], ram_multiplier=10, max_num_cpus=16
+        shape=[T, C, Z, Y, X], ram_multiplier=16, max_num_cpus=16
     )
     # Prepare SLURM arguments
     slurm_args = {
@@ -173,7 +172,7 @@ def deconvolve_cli(
 
     click.echo('Submitting SLURM jobs...')
     jobs = []
-    with executor.batch():
+    with submitit.helpers.clean_env(), executor.batch():
         for input_position_path, output_position_path in zip(
             input_position_dirpaths, output_position_paths
         ):

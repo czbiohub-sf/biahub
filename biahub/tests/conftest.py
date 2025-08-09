@@ -19,7 +19,15 @@ def example_deskew_settings():
 
 @pytest.fixture(scope="function")
 def example_register_settings():
-    settings_path = "./settings/example_register_settings.yml"
+    settings_path = "./settings/example_registration_settings.yml"
+    with open(settings_path) as file:
+        settings = yaml.safe_load(file)
+    yield settings_path, settings
+
+
+@pytest.fixture(scope="function")
+def example_estimate_stabilization_settings():
+    settings_path = "./settings/example_estimate_stabilization_settings.yml"
     with open(settings_path) as file:
         settings = yaml.safe_load(file)
     yield settings_path, settings
@@ -44,6 +52,22 @@ def example_concatenate_settings():
 @pytest.fixture(scope="function")
 def example_estimate_registration_settings():
     settings_path = "./settings/example_estimate_registration_settings.yml"
+    with open(settings_path) as file:
+        settings = yaml.safe_load(file)
+    yield settings_path, settings
+
+
+@pytest.fixture(scope="function")
+def example_track_settings():
+    settings_path = "./settings/example_track_settings.yml"
+    with open(settings_path) as file:
+        settings = yaml.safe_load(file)
+    yield settings_path, settings
+
+
+@pytest.fixture(scope="function")
+def example_process_with_config_settings():
+    settings_path = "./settings/example_process_with_config_settings.yml"
     with open(settings_path) as file:
         settings = yaml.safe_load(file)
     yield settings_path, settings
@@ -74,6 +98,7 @@ def example_plate(tmp_path):
     )
 
     # Generate input dataset
+
     plate_dataset = open_ome_zarr(
         plate_path,
         layout="hcs",
