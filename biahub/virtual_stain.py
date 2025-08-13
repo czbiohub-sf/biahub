@@ -285,7 +285,9 @@ def virtual_stain(
                 os.makedirs(log_dir, exist_ok=True)
                 data_path = str(Path(input_position_path).resolve())
 
-                output_fov_path = output_dirpath.parent / "temp" / f"{'_'.join(fov.parts)}.zarr"
+                output_fov_path = (
+                    output_dirpath.parent / "temp" / f"{'_'.join(fov.parts)}.zarr"
+                )
                 output_store = str(Path(output_fov_path).resolve())
 
                 job = executor.submit(
