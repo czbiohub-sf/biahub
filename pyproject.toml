@@ -38,6 +38,7 @@ dependencies = [
   "largestinteriorrectangle",
   "antspyx",
   "pystackreg",
+  "napari-ome-zarr",
   "napari-animation",
   "napari-psf-analysis",
   "imageio-ffmpeg",
