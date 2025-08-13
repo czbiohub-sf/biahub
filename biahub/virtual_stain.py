@@ -276,26 +276,28 @@ def virtual_stain(
         click.echo(f"Submitting predict jobs with: {slurm_args_predict}")
         config_file = str(Path(predict_config_filepath).resolve())
         fovs = []
-        for input_position_path in input_position_dirpaths:
-            fov = Path(*input_position_path.parts[-3:])
-            fovs.append(fov)
-            log_dir = (output_dirpath.parent / "logs" / "_".join(fov.parts)).resolve()
-            os.makedirs(log_dir, exist_ok=True)
-            data_path = str(Path(input_position_path).resolve())
 
-            output_fov_path = output_dirpath.parent / "temp" / f"{'_'.join(fov.parts)}.zarr"
-            output_store = str(Path(output_fov_path).resolve())
+        with executor.batch():
+            for input_position_path in input_position_dirpaths:
+                fov = Path(*input_position_path.parts[-3:])
+                fovs.append(fov)
+                log_dir = (output_dirpath.parent / "logs" / "_".join(fov.parts)).resolve()
+                os.makedirs(log_dir, exist_ok=True)
+                data_path = str(Path(input_position_path).resolve())
 
-            job = executor.submit(
-                run_viscy_predict,
-                data_path=data_path,
-                config_file=config_file,
-                output_store=output_store,
-                log_dir=log_dir,
-                path_viscy_env=path_viscy_env,
-                verbose=verbose,
-            )
-            job_ids_predict.append(job)
+                output_fov_path = output_dirpath.parent / "temp" / f"{'_'.join(fov.parts)}.zarr"
+                output_store = str(Path(output_fov_path).resolve())
+
+                job = executor.submit(
+                    run_viscy_predict,
+                    data_path=data_path,
+                    config_file=config_file,
+                    output_store=output_store,
+                    log_dir=log_dir,
+                    path_viscy_env=path_viscy_env,
+                    verbose=verbose,
+                )
+                job_ids_predict.append(job)
 
         job_ids = [
             job.job_id for job in job_ids_predict
