@@ -6,6 +6,7 @@ VALID_MODULES = {"np": np}
 # Try to import ultrack and add to VALID_MODULES if available
 try:
     import ultrack
+
     VALID_MODULES["ultrack.imgproc"] = ultrack.imgproc
 except ImportError:
     # ultrack is not installed, skip adding it to VALID_MODULES
