@@ -570,10 +570,12 @@ def fill_empty_frames_from_csv(
     dict of str to ArrayLike
         Updated dictionary with empty frames filled in-place.
     """
-    blank_frame_df = pd.read_csv(blank_frame_csv_path) if blank_frame_csv_path else None
-    empty_frames_idx = get_empty_frames_idx_from_csv(blank_frame_df, fov)
-    for channel_name, channel_data in data_dict.items():
-        data_dict[channel_name] = fill_empty_frames(channel_data, empty_frames_idx)
+    if blank_frame_csv_path:
+        blank_frame_df = pd.read_csv(blank_frame_csv_path)
+        empty_frames_idx = get_empty_frames_idx_from_csv(blank_frame_df, fov)
+        for channel_name, channel_data in data_dict.items():
+            data_dict[channel_name] = fill_empty_frames(channel_data, empty_frames_idx)
+
     return data_dict
 
 

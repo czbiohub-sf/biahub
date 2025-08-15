@@ -44,12 +44,14 @@ dependencies = [
   "dask[array]",
   "toml",
   "scikit-learn",
+  "numba>=0.58.0",
+  "llvmlite>=0.41.0",
 ]
 
 [project.optional-dependencies]
 segment = ["cellpose"]
 
-track = ["ultrack @ git+https://github.com/royerlab/ultrack.git@v0.6.3"]
+track = ["ultrack>=0.6.3"]
 
 build = ["build", "twine"]
 
