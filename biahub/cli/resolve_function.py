@@ -1,8 +1,16 @@
 import numpy as np
-import ultrack
 
-# List of modules to scan for functions
-VALID_MODULES = {"np": np, "ultrack.imgproc": ultrack.imgproc}
+# List of modules to scan for functions - ultrack imported only if available
+VALID_MODULES = {"np": np}
+
+# Try to import ultrack and add to VALID_MODULES if available
+try:
+    import ultrack
+
+    VALID_MODULES["ultrack.imgproc"] = ultrack.imgproc
+except ImportError:
+    # ultrack is not installed, skip adding it to VALID_MODULES
+    pass
 
 # Dynamically populate FUNCTION_MAP with functions from VALID_MODULES
 FUNCTION_MAP = {
