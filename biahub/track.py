@@ -16,8 +16,7 @@ import toml
 from iohub import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate
 from numpy.typing import ArrayLike
-from ultrack import MainConfig, Tracker
-from ultrack.utils.array import array_apply
+# Lazy imports for ultrack - imported only when needed in specific functions
 
 from biahub.cli.parsing import (
     config_filepath,
@@ -302,7 +301,7 @@ def resolve_z_slice(z_range: Tuple[int, int], z_shape: int) -> Tuple[slice, int]
 
 
 def run_ultrack(
-    tracking_config: MainConfig,
+    tracking_config: 'MainConfig',  # MainConfig type, imported lazily
     foreground_mask: ArrayLike,
     contour_gradient_map: ArrayLike,
     scale: Union[Tuple[float, float], Tuple[float, float, float]],
@@ -310,6 +309,8 @@ def run_ultrack(
 ):
     """
     Run object tracking using the Ultrack library.
+    
+    Note: ultrack is imported lazily within this function.
 
     This function performs object tracking on time-series image data using a binary
     foreground mask and a contour gradient map. It outputs labeled segmentation results,
@@ -358,7 +359,9 @@ def run_ultrack(
     ...     database_path=Path("results/posA")
     ... )
     """
-    cfg = tracking_config
+    from ultrack import Tracker, MainConfig
+    
+    cfg: MainConfig = tracking_config
 
     cfg.data_config.working_dir = database_path
 
@@ -450,6 +453,8 @@ def run_preprocessing_pipeline(
     >>> output["raw"].shape
     (10, 256, 256)  # Z-averaged
     """
+    from ultrack.utils.array import array_apply
+
     for image in input_images:
         for channel_name, pipeline in image.channels.items():
             for step in pipeline:
@@ -653,7 +658,7 @@ def track_one_position(
     position_key: str,
     input_images: List[ProcessingInputChannel],
     output_dirpath: Path,
-    tracking_config: MainConfig,
+    tracking_config: 'MainConfig',
     blank_frames_path: Path = None,
     z_slices: Tuple[int, int] = (0, 0),
     scale: Tuple[float, float, float, float, float] = (1, 1, 1, 1, 1),
@@ -792,6 +797,7 @@ def track(
     ...     local=False,
     ... )
     """
+    from ultrack import MainConfig
 
     output_dirpath = Path(output_dirpath)
     dataset_name = output_dirpath.stem
