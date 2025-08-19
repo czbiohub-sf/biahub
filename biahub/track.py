@@ -36,8 +36,6 @@ from biahub.cli.utils import (
 )
 from biahub.settings import ProcessingInputChannel, TrackingSettings
 
-# Lazy imports for ultrack - imported only when needed in specific functions
-
 
 def mem_nuc_contour(nuclei_prediction: ArrayLike, membrane_prediction: ArrayLike) -> ArrayLike:
     """
