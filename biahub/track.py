@@ -1,9 +1,13 @@
+from __future__ import annotations
 import ast
 import os
 
 from glob import glob
 from pathlib import Path
-from typing import Dict, List, Tuple, Union
+from typing import TYPE_CHECKING, Dict, List, Tuple, Union
+
+if TYPE_CHECKING:
+    from ultrack import MainConfig
 
 import click
 import dask.array as da
@@ -16,8 +20,6 @@ import toml
 from iohub import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate
 from numpy.typing import ArrayLike
-from ultrack import MainConfig, Tracker
-from ultrack.utils.array import array_apply
 
 from biahub.cli.parsing import (
     config_filepath,
@@ -311,6 +313,8 @@ def run_ultrack(
     """
     Run object tracking using the Ultrack library.
 
+    Note: ultrack is imported lazily within this function.
+
     This function performs object tracking on time-series image data using a binary
     foreground mask and a contour gradient map. It outputs labeled segmentation results,
     a track DataFrame, and a graph representing object trajectories over time.
@@ -358,7 +362,9 @@ def run_ultrack(
     ...     database_path=Path("results/posA")
     ... )
     """
-    cfg = tracking_config
+    from ultrack import MainConfig, Tracker
+
+    cfg: MainConfig = tracking_config
 
     cfg.data_config.working_dir = database_path
 
@@ -450,6 +456,8 @@ def run_preprocessing_pipeline(
     >>> output["raw"].shape
     (10, 256, 256)  # Z-averaged
     """
+    from ultrack.utils.array import array_apply
+
     for image in input_images:
         for channel_name, pipeline in image.channels.items():
             for step in pipeline:
@@ -794,6 +802,7 @@ def track(
     ...     local=False,
     ... )
     """
+    from ultrack import MainConfig
 
     output_dirpath = Path(output_dirpath)
     dataset_name = output_dirpath.stem
