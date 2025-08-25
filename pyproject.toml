@@ -43,25 +43,28 @@ dependencies = [
   "imageio-ffmpeg",
   "dask[array]",
   "toml",
-  "ultrack @ git+https://github.com/royerlab/ultrack.git@v0.6.3",
   "scikit-learn",
+  "numba>=0.58.0",
+  "llvmlite>=0.41.0",
 ]
 
 [project.optional-dependencies]
-# note that dev dependencies are only pinned to major versions
+segment = ["cellpose"]
+
+track = ["ultrack>=0.6.3"]
+
+build = ["build", "twine"]
+
+all = ["biahub[segment,track,build]"]
+
 dev = [
+  "biahub[all]",
   "black==25.1",
   "flake8==7.2",
   "isort==6.0",
   "pytest==8.4",
   "pre-commit~=4.2",
 ]
-
-segmentation = [
-  "cellpose",
-]
-
-build = ["build", "twine"]
 
 [project.scripts]
 biahub = "biahub.cli.main:cli"

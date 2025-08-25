@@ -19,6 +19,7 @@ from biahub.cli.main import cli
         "concatenate",
         "estimate-stabilization",
         "stabilize",
+        "estimate-crop",
         "estimate-psf",
         "deconvolve",
         "characterize-psf",
