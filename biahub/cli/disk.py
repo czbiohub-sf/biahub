@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 import click
+
 from humanize import naturalsize
 
 
@@ -16,7 +17,9 @@ def get_dir_size_du(path: str) -> int:
     """
     resolved_path = Path(path).resolve()
     if not resolved_path.exists():
-        raise FileNotFoundError(f"[get_dir_size_du] Path does not exist: {resolved_path.as_posix()}")
+        raise FileNotFoundError(
+            f"[get_dir_size_du] Path does not exist: {resolved_path.as_posix()}"
+        )
 
     try:
         result = subprocess.run(
@@ -25,7 +28,7 @@ def get_dir_size_du(path: str) -> int:
         size_bytes = int(result.stdout.strip().split()[0])
         return size_bytes
     except subprocess.CalledProcessError as e:
-        
+
         raise RuntimeError(
             f"[get_dir_size_du] Failed to run du on {resolved_path}: {e.stderr.strip()}"
         )
@@ -55,7 +58,7 @@ def check_disk_space_with_du(
         input_size_human = naturalsize(input_size, binary=True)
         required_space_human = naturalsize(required_space, binary=True)
         available_space_human = naturalsize(available_space, binary=True)
-        
+
         click.echo("...........................................")
         click.echo(f"Input Size: {input_size_human}")
         click.echo(f"Estimated Ouput Size ({margin:.3f}x): {required_space_human}")
