@@ -1,12 +1,13 @@
 import glob
-import time
 
 from functools import wraps
 from pathlib import Path
+from time import perf_counter
 from typing import Callable
 
 import click
 
+from humanize import precisedelta
 from iohub.ngff import Plate, open_ome_zarr
 from natsort import natsorted
 
@@ -16,10 +17,10 @@ from biahub.cli.option_eat_all import OptionEatAll
 def timed(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
-        start = time.time()
+        start = perf_counter()
         result = fn(*args, **kwargs)
-        end = time.time()
-        print(f"Execution Time: {end - start:.2f} seconds")
+        end = perf_counter()
+        print(f"Execution Time: {precisedelta(end - start, minimum_unit='seconds')}")
         return result
 
     return wrapper
