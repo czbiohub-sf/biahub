@@ -55,7 +55,7 @@ config_dict = {
             "max_ratio": 1,
             "edge_graph_settings": {
                 "method": "knn",
-                "k": 10
+                "k": 5
             },
             "cost_matrix_settings": {
                 "normalize": False,
