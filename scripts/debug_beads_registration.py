@@ -50,9 +50,9 @@ config_dict = {
         },
         "hungarian_match_settings": {
             "distance_metric": "euclidean",
-            "cost_threshold": 0.05,
+            "cost_threshold": 0.1,
             "cross_check": True,
-            "max_ratio": 0.95,
+            "max_ratio": 1,
             "edge_graph_settings": {
                 "method": "knn",
                 "k": 10
@@ -60,7 +60,7 @@ config_dict = {
             "cost_matrix_settings": {
                 "normalize": False,
                 "weights": {
-                    "dist": 0.2,
+                    "dist": 0.5,
                     "edge_angle": 1,
                     "edge_length": 1,
                     "pca_dir": 0,
@@ -70,7 +70,7 @@ config_dict = {
             }
         },
         "filter_distance_threshold": 0.95,
-        "filter_angle_threshold": 30,
+        "filter_angle_threshold": 0,
     },
     "affine_transform_settings": {
         "transform_type": "similarity",
