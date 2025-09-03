@@ -28,7 +28,7 @@ visualize = True
 # %%
 config_dict = {
     "target_channel_name": "Phase3D",
-    "source_channel_name": "mCherry EX561 EM600-37",
+    "source_channel_name": "GFP EX488 EM525-45",
     "beads_match_settings": {
         "algorithm": "hungarian",
         "source_peaks_settings": {
@@ -232,7 +232,7 @@ with open_ome_zarr(lf_data_sample_path) as target_ds:
 with open_ome_zarr(ls_data_sample_path) as source_ds:
     source_channel_name = source_ds.channel_names
     source_channel_index = source_channel_name.index(config.source_channel_name)
-    source_sample_data = np.asarray(source_ds.data[t_idx, 0]) # take mCherry channel or the GFP channel (depending where the beads are)
+    source_sample_data = np.asarray(source_ds.data[t_idx, source_channel_index]) # take mCherry channel or the GFP channel (depending where the beads are)
     source_scale = source_ds.scale
 
 # Register LS data with approx tranform
