@@ -35,37 +35,33 @@ def extract_stage_position(
     stage_positions = plate_dataset.zattrs["Summary"]["StagePositions"]
     for stage_position in stage_positions:  # TODO: fail if this loop reaches the end
         if stage_position["Label"] == position_name:
+            # Initialize default values
+            xpos, ypos, zpos = 0, 0, 0
 
-            # Read XY positions
-            try:
-                xy_stage_name = stage_position["DefaultXYStage"]
-                if "DevicePositions" in stage_position.keys():
-                    for device in stage_position["DevicePositions"]:
-                        if device["Device"] == xy_stage_name:
-                            xpos, ypos = device["Position_um"]
-                            break
-                else:
-                    xpos, ypos = stage_position[xy_stage_name]
-            except KeyError:
-                xpos, ypos = 0, 0
-                pass
-
-            # Read Z positions
-
-            try:
-                xy_stage_name = stage_position["DefaultXYStage"]
-                z_stage_name = stage_position['DefaultZStage']
+            if "DevicePositions" in stage_position.keys():
+                # Handle DevicePositions case
+                xy_stage_name = stage_position.get("DefaultXYStage", "")
                 non_z_devices = {xy_stage_name}
-                if "DevicePositions" in stage_position.keys():
-                    zpos = 0
-                    for device in stage_position["DevicePositions"]:
-                        if device["Device"] not in non_z_devices:
-                            zpos += device["Position_um"][0]
-                else:
+
+                for device in stage_position["DevicePositions"]:
+                    if device["Device"] == xy_stage_name and xy_stage_name:
+                        xpos, ypos = device["Position_um"]
+                    elif device["Device"] not in non_z_devices:
+                        zpos += device["Position_um"][0]
+            else:
+                # Handle direct stage keys case - separate try blocks for independent failure
+                try:
+                    xy_stage_name = stage_position["DefaultXYStage"]
+                    xpos, ypos = stage_position[xy_stage_name]
+                except KeyError:
+                    pass
+
+                try:
+                    z_stage_name = stage_position['DefaultZStage']
                     zpos = stage_position[z_stage_name]
-            except KeyError:
-                zpos = 0
-                pass
+                except KeyError:
+                    pass
+
     return zpos, ypos, xpos
 
 

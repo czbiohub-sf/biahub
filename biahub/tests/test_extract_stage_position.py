@@ -47,8 +47,8 @@ def create_mock_plate(stage_positions_data):
                 "ZStage": 75.0
                 # Missing DefaultXYStage and XY position data
             },
-            (0.0, 0.0, 0.0),
-            "missing XY stage keys - original bug: Z logic doesn't run, all default to 0",
+            (75.0, 0.0, 0.0),
+            "missing XY stage keys - Z is read, XY defaults to 0",
         ),
         (
             {
@@ -67,6 +67,19 @@ def create_mock_plate(stage_positions_data):
             },
             (0.0, 0.0, 0.0),
             "all keys missing - all default to 0",
+        ),
+        (
+            {
+                "Label": "Pos6",
+                "DefaultXYStage": "XYStage",
+                "DefaultZStage": "ZStage",
+                "DevicePositions": [
+                    {"Device": "ZStage1", "Position_um": [30.0]}
+                    # Missing XYStage device
+                ],
+            },
+            (30.0, 0.0, 0.0),
+            "partial DevicePositions - XY not found, Z is read",
         ),
     ],
 )
