@@ -1,10 +1,12 @@
 from collections import defaultdict
 from pathlib import Path
+from typing import Tuple
 
 import click
 import numpy as np
 
 from iohub import open_ome_zarr
+from iohub.ngff.nodes import Plate
 from stitch.stitch.tile import optimal_positions, pairwise_shifts
 
 from biahub.cli.parsing import input_position_dirpaths, output_filepath
@@ -12,7 +14,24 @@ from biahub.cli.utils import model_to_yaml
 from biahub.settings import StitchSettings
 
 
-def extract_stage_position(plate_dataset, position_name):
+def extract_stage_position(
+    plate_dataset: Plate, position_name: str
+) -> Tuple[float, float, float]:
+    """
+    Extract stage position coordinates from plate metadata.
+
+    Parameters
+    ----------
+    plate_dataset : Plate
+        Plate dataset containing stage position metadata.
+    position_name : str
+        Name of the position to extract coordinates for.
+
+    Returns
+    -------
+    Tuple[float, float, float]
+        Stage position coordinates in (z, y, x) order in micrometers.
+    """
     stage_positions = plate_dataset.zattrs["Summary"]["StagePositions"]
     for stage_position in stage_positions:  # TODO: fail if this loop reaches the end
         if stage_position["Label"] == position_name:
@@ -32,7 +51,7 @@ def extract_stage_position(plate_dataset, position_name):
                 pass
 
             # Read Z positions
-            
+
             try:
                 xy_stage_name = stage_position["DefaultXYStage"]
                 z_stage_name = stage_position['DefaultZStage']
@@ -41,7 +60,7 @@ def extract_stage_position(plate_dataset, position_name):
                     zpos = 0
                     for device in stage_position["DevicePositions"]:
                         if device["Device"] not in non_z_devices:
-                            zpos+= device["Position_um"][0]     
+                            zpos += device["Position_um"][0]
                 else:
                     zpos = stage_position[z_stage_name]
             except KeyError:
