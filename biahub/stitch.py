@@ -1,285 +1,178 @@
 from collections import defaultdict
 from itertools import product
-from typing import Callable, Literal
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
-import ants
 import click
-import dask.array as da
 import numpy as np
-import pandas as pd
-import scipy.ndimage as ndi
+import scipy.ndimage
+import submitit
 
 from iohub import open_ome_zarr
 from iohub.ngff import TransformationMeta
-from skimage.registration import phase_cross_correlation
-from tqdm import tqdm
+from iohub.ngff.nodes import Plate, Position
 
-from biahub.cli.utils import yaml_to_model
-from biahub.register import convert_transform_to_ants
-from biahub.settings import ProcessingSettings, StitchSettings
+from biahub.cli.parsing import (
+    config_filepath,
+    input_position_dirpaths,
+    local,
+    output_dirpath,
+    sbatch_filepath,
+    sbatch_to_submitit,
+)
+from biahub.cli.utils import estimate_resources, yaml_to_model
+from biahub.settings import StitchSettings
 
 
-def estimate_shift(
-    im0: np.ndarray,
-    im1: np.ndarray,
-    percent_overlap: float,
-    direction: Literal["row", "col"],
-    add_offset: bool = False,
-):
+def list_of_nd_slices_from_array_shape(
+    array_shape: tuple[int, int, int], chunk_shape: tuple[int, int, int]
+) -> list[tuple[slice, slice, slice]]:
     """
-    Estimate the shift between two images based on a given percentage overlap and direction.
+    Return a list of slices dividing an array of shape `array_shape`
+    into chunks of shape `chunk_shape`.
+
+    Example:
+        list_of_nd_slices_from_array_shape((4, 5, 6), (2, 3, 4))
+        # [
+        #   (slice(0, 2), slice(0, 3), slice(0, 4)),
+        #   (slice(0, 2), slice(0, 3), slice(4, 6)),
+        #   (slice(0, 2), slice(3, 5), slice(0, 4)),
+        #   (slice(0, 2), slice(3, 5), slice(4, 6)),
+        #   (slice(2, 4), slice(0, 3), slice(0, 4)),
+        #   (slice(2, 4), slice(0, 3), slice(4, 6)),
+        #   (slice(2, 4), slice(3, 5), slice(0, 4)),
+        #   (slice(2, 4), slice(3, 5), slice(4, 6)),
+        # ]
+    """
+    chunk_slices: list[tuple[slice, slice, slice]] = []
+    for idx in product(*[range(0, s, c) for s, c in zip(array_shape, chunk_shape)]):
+        chunk_slices.append(
+            tuple(slice(i, min(i + c, s)) for i, c, s in zip(idx, chunk_shape, array_shape))
+        )
+    return chunk_slices
+
+
+def check_overlap(
+    chunk: Tuple[slice, slice, slice],
+    fov_shift: Tuple[float, float, float],
+    fov_extent: Tuple[int, int, int],
+) -> bool:
+    """
+    Check if a chunk overlaps with a field of view (FOV).
 
     Parameters
     ----------
-    im0 : np.ndarray
-        The first image.
-    im1 : np.ndarray
-        The second image.
-    percent_overlap : float
-        The percentage of overlap between the two images. Must be between 0 and 1.
-    direction : Literal["row", "col"]
-        The direction of the shift. Can be either "row" or "col". See estimate_zarr_fov_shifts
-    add_offset : bool
-        Add offsets to shift-x and shift-y when stitching data from ISS microscope.
-        Not clear why we need to do that. By default False
+    chunk : Tuple[slice, slice, slice]
+        3D chunk defined by slice objects for each dimension.
+    fov_shift : Tuple[float, float, float]
+        Translation offset of the FOV in (z, y, x) order.
+    fov_extent : Tuple[int, int, int]
+        Size of the FOV in (z, y, x) order.
 
     Returns
     -------
-    np.ndarray
-        The estimated shift between the two images.
-
-    Raises
-    ------
-    AssertionError
-        If percent_overlap is not between 0 and 1.
-        If direction is not "row" or "col".
-        If the shape of im0 and im1 are not the same.
+    bool
+        True if the chunk overlaps with the FOV, False otherwise.
     """
-    if not (0 <= percent_overlap <= 1):
-        raise ValueError("percent_overlap must be between 0 and 1")
-    if direction not in ["row", "col"]:
-        raise ValueError("direction must be either 'row' or 'col'")
-    if im0.shape != im1.shape:
-        raise ValueError("Images must have the same shape")
-
-    sizeY, sizeX = im0.shape[-2:]
-
-    # TODO: there may be a one pixel error in the estimated shift
-    if direction == "row":
-        y_roi = int(sizeY * np.minimum(percent_overlap + 0.05, 1))
-        shift, _, _ = phase_cross_correlation(
-            im0[..., -y_roi:, :], im1[..., :y_roi, :], upsample_factor=1
-        )
-        shift[-2] += sizeY
-        if add_offset:
-            shift[-2] -= y_roi
-    elif direction == "col":
-        x_roi = int(sizeX * np.minimum(percent_overlap + 0.05, 1))
-        shift, _, _ = phase_cross_correlation(
-            im0[..., :, -x_roi:], im1[..., :, :x_roi], upsample_factor=1
-        )
-        shift[-1] += sizeX
-        if add_offset:
-            shift[-1] -= x_roi
-
-    # TODO: we shouldn't need to flip the order, will cause problems in 3D
-    return shift[::-1]
+    for dim in range(3):
+        if (
+            chunk[dim].start >= fov_shift[dim] + fov_extent[dim]
+            or chunk[dim].stop <= fov_shift[dim]
+        ):
+            return False
+    return True
 
 
-def get_grid_rows_cols(fov_names: list[str]):
-    grid_rows = set()
-    grid_cols = set()
-
-    for fov_name in fov_names:
-        grid_rows.add(fov_name[3:])  # 1-Pos<COL>_<ROW> syntax
-        grid_cols.add(fov_name[:3])
-
-    return sorted(grid_rows), sorted(grid_cols)
-
-
-def get_stitch_output_shape(n_rows, n_cols, sizeY, sizeX, col_translation, row_translation):
+def overlap_slices(
+    chunk_corner: Tuple[float, float, float],
+    chunk_extent: Tuple[float, float, float],
+    fov_corner: Tuple[float, float, float],
+    fov_extent: Tuple[int, int, int],
+) -> Tuple[Optional[Tuple[slice, slice, slice]], Optional[Tuple[slice, slice, slice]]]:
     """
-    Compute the output shape of the stitched image and the global translation when only col and row translation are given
-    """
-    global_translation = (
-        np.ceil(np.abs(np.minimum(row_translation[0] * (n_rows - 1), 0))).astype(int),
-        np.ceil(np.abs(np.minimum(col_translation[1] * (n_cols - 1), 0))).astype(int),
-    )
-    xy_output_shape = (
-        np.ceil(
-            sizeY
-            + col_translation[1] * (n_cols - 1)
-            + row_translation[1] * (n_rows - 1)
-            + global_translation[1]
-        ).astype(int),
-        np.ceil(
-            sizeX
-            + col_translation[0] * (n_cols - 1)
-            + row_translation[0] * (n_rows - 1)
-            + global_translation[0]
-        ).astype(int),
-    )
-    return xy_output_shape, global_translation
-
-
-def get_image_shift(
-    col_idx, row_idx, col_translation, row_translation, global_translation
-) -> list:
-    """
-    Compute total translation when only col and row translation are given
-    """
-    total_translation = [
-        col_translation[1] * col_idx + row_translation[1] * row_idx + global_translation[1],
-        col_translation[0] * col_idx + row_translation[0] * row_idx + global_translation[0],
-    ]
-
-    return total_translation
-
-
-def shift_image(
-    czyx_data: np.ndarray,
-    yx_output_shape: tuple[float, float],
-    transform: list,
-    verbose: bool = False,
-) -> np.ndarray:
-    if czyx_data.ndim != 4:
-        raise ValueError("Input data must be a CZYX array")
-    C, Z, Y, X = czyx_data.shape
-
-    if verbose:
-        print(f"Transforming image with {transform}")
-    # Create array of output_shape and put input data at (0, 0)
-    output = np.zeros((C, Z) + yx_output_shape, dtype=np.float32)
-
-    transform = np.asarray(transform)
-    if transform.shape == (2,):
-        output[..., :Y, :X] = czyx_data.astype(np.float32)
-        return ndi.shift(output, (0, 0) + tuple(transform), order=0)
-    elif transform.shape == (4, 4):
-        ants_transform = convert_transform_to_ants(transform)
-        ants_reference = ants.from_numpy(output[0])
-        for i, img in enumerate(czyx_data):
-            ants_input = ants.from_numpy(img)
-            ants_output = ants_transform.apply_to_image(ants_input, ants_reference)
-            output[i] = ants_output.numpy().astype('float32')
-        return output
-    else:
-        raise ValueError('Provided transform is not of shape (2,) or (4, 4).')
-
-
-def _stitch_images(
-    data_array: np.ndarray,
-    total_translation: dict[str : tuple[float, float]] = None,
-    percent_overlap: float = None,
-    col_translation: float | tuple[float, float] = None,
-    row_translation: float | tuple[float, float] = None,
-) -> np.ndarray:
-    """
-    Stitch an array of 2D images together to create a larger composite image.
-    This function is not actively maintained.
+    Calculate slice objects for overlapping regions between a chunk and FOV.
 
     Parameters
     ----------
-    data_array : np.ndarray
-        The data array to with shape (ROWS, COLS, Y, X) that will be stitched. Call this function multiple
-        times to stitch multiple channels, slices, or time points.
-    total_translation : dict[str: tuple[float, float]], optional
-        Shift to be applied to each fov, given as {fov: (y_shift, x_shift)}. Defaults to None.
-    percent_overlap : float, optional
-        The percentage of overlap between adjacent images. Must be between 0 and 1. Defaults to None.
-    col_translation : float | tuple[float, float], optional
-        The translation distance in pixels in the column direction. Can be a single value or a tuple
-        of (x_translation, y_translation) when moving across columns. Defaults to None.
-    row_translation : float | tuple[float, float], optional
-        See col_translation. Defaults to None.
+    chunk_corner : Tuple[float, float, float]
+        Corner position of the chunk in (z, y, x) order.
+    chunk_extent : Tuple[float, float, float]
+        Size of the chunk in (z, y, x) order.
+    fov_corner : Tuple[float, float, float]
+        Corner position of the FOV in (z, y, x) order.
+    fov_extent : Tuple[int, int, int]
+        Size of the FOV in (z, y, x) order.
 
     Returns
     -------
-    np.ndarray
-        The stitched composite 2D image
-
-    Raises
-    ------
-    AssertionError
-        If percent_overlap is not between 0 and 1.
-
+    Tuple[Optional[Tuple[slice, slice, slice]], Optional[Tuple[slice, slice, slice]]]
+        A tuple containing (fixed_slice, moving_slice) for the overlapping region,
+        or (None, None) if no overlap exists.
     """
-
-    n_rows, n_cols, sizeY, sizeX = data_array.shape
-
-    if total_translation is None:
-        if percent_overlap is not None:
-            assert 0 <= percent_overlap <= 1, "percent_overlap must be between 0 and 1"
-            col_translation = sizeX * (1 - percent_overlap)
-            row_translation = sizeY * (1 - percent_overlap)
-        if not isinstance(col_translation, tuple):
-            col_translation = (col_translation, 0)
-        if not isinstance(row_translation, tuple):
-            row_translation = (0, row_translation)
-        xy_output_shape, global_translation = get_stitch_output_shape(
-            n_rows, n_cols, sizeY, sizeX, col_translation, row_translation
-        )
-    else:
-        df = pd.DataFrame.from_dict(
-            total_translation, orient="index", columns=["shift-y", "shift-x"]
-        )
-        xy_output_shape = (
-            np.ceil(df["shift-y"].max() + sizeY).astype(int),
-            np.ceil(df["shift-x"].max() + sizeX).astype(int),
-        )
-    stitched_array = np.zeros(xy_output_shape, dtype=np.float32)
-
-    for row_idx in range(n_rows):
-        for col_idx in range(n_cols):
-            image = data_array[row_idx, col_idx]
-
-            if total_translation is None:
-                shift = get_image_shift(
-                    col_idx, row_idx, col_translation, row_translation, global_translation
-                )
-            else:
-                shift = total_translation[f"{col_idx:03d}{row_idx:03d}"]
-
-            warped_image = shift_image(image, xy_output_shape, shift)
-            overlap = np.logical_and(stitched_array, warped_image)
-            stitched_array[:, :] += warped_image
-            stitched_array[overlap] /= 2  # average blending in the overlapping region
-
-    return stitched_array
+    fixed, moving = [], []
+    for d in range(3):
+        start = max(chunk_corner[d], fov_corner[d])
+        stop = min(chunk_corner[d] + chunk_extent[d], fov_corner[d] + fov_extent[d])
+        if stop <= start:
+            return None, None
+        fixed_slice = slice(int(start - chunk_corner[d]), int(stop - chunk_corner[d]))
+        moving_slice = slice(int(start - fov_corner[d]), int(stop - fov_corner[d]))
+        # Ensure both slices are the same size
+        fixed_len = fixed_slice.stop - fixed_slice.start
+        moving_len = moving_slice.stop - moving_slice.start
+        max_len = max(fixed_len, moving_len)
+        fixed.append(slice(fixed_slice.start, fixed_slice.start + max_len))
+        moving.append(slice(moving_slice.start, moving_slice.start + max_len))
+    return tuple(fixed), tuple(moving)
 
 
-def process_dataset(
-    data_array: np.ndarray | da.Array,
-    settings: ProcessingSettings,
-    verbose: bool = True,
-) -> np.ndarray:
-    flip = np.flip
-    rot = np.rot90
-    if isinstance(data_array, da.Array):
-        flip = da.flip
-        rot = da.rot90
+def find_contributing_fovs(
+    chunk: Tuple[slice, slice, slice],
+    fov_shifts: Dict[str, Tuple[float, float, float]],
+    fov_extent: Tuple[int, int, int],
+) -> List[str]:
+    """
+    Find all FOVs that contribute data to a given chunk.
 
-    if settings:
-        if settings.flipud:
-            if verbose:
-                click.echo("Flipping data array up-down")
-            data_array = flip(data_array, axis=-2)
+    Parameters
+    ----------
+    chunk : Tuple[slice, slice, slice]
+        3D chunk defined by slice objects for each dimension.
+    fov_shifts : Dict[str, Tuple[float, float, float]]
+        Dictionary mapping FOV names to their translation offsets in (z, y, x) order.
+    fov_extent : Tuple[int, int, int]
+        Size of each FOV in (z, y, x) order.
 
-        if settings.fliplr:
-            if verbose:
-                click.echo("Flipping data array left-right")
-            data_array = flip(data_array, axis=-1)
+    Returns
+    -------
+    List[str]
+        List of FOV names that overlap with the given chunk.
+    """
+    contributing_fovs = []
+    for fov_key, fov_shift in fov_shifts.items():
+        if check_overlap(chunk, fov_shift, fov_extent):
+            contributing_fovs.append(fov_key)
+    return contributing_fovs
 
-        if settings.rot90 != 0:
-            if verbose:
-                click.echo(f"Rotating data array {settings.rot90} times counterclockwise")
-            data_array = rot(data_array, settings.rot90, axes=(-2, -1))
 
-    return data_array
+def get_output_shape(
+    shifts: Dict[str, Tuple[float, float, float]], tile_shape: Tuple[int, ...]
+) -> Tuple[int, int, int]:
+    """
+    Calculate the output shape of the stitched image from FOV shifts.
 
+    Parameters
+    ----------
+    shifts : Dict[str, Tuple[float, float, float]]
+        Dictionary mapping FOV names to their translation offsets in (z, y, x) order.
+    tile_shape : Tuple[int, ...]
+        Shape of individual tiles/FOVs.
 
-def get_output_shape(shifts: dict, tile_shape: tuple) -> tuple:
-    """Get the output shape of the stitched image from the raw shifts"""
+    Returns
+    -------
+    Tuple[int, int, int]
+        Output shape of the stitched image in (z, y, x) order.
+    """
 
     z_shifts = [shift[0] for shift in shifts.values()]
     y_shifts = [shift[1] for shift in shifts.values()]
@@ -292,149 +185,293 @@ def get_output_shape(shifts: dict, tile_shape: tuple) -> tuple:
     return max_z + tile_shape[-3], max_y + tile_shape[-2], max_x + tile_shape[-1]
 
 
-@click.command("stitch")
-@click.option(
-    "-i",
-    "--input_dirpath",
-    required=True,
-    type=click.Path(exists=True, dir_okay=True),
-    help="Path to zarr store containing individual FOVs to be stitched",
-)
-@click.option(
-    "-o",
-    "--output_dirpath",
-    required=True,
-    type=click.Path(exists=False, dir_okay=True),
-    help="Path to zarr store where stitched FOVs will be saved",
-)
-@click.option(
-    "-c",
-    "--config_filepath",
-    required=True,
-    type=click.Path(exists=True, dir_okay=False),
-    help="Path to yaml file containing stitching parameters",
-)
-def stitch_cli(
-    input_dirpath: str,
-    output_dirpath: str,
-    config_filepath: str,
-    divide_tiling_shape: tuple = (5000, 5000),
+def write_output_chunk(
+    output_chunk_slices: Tuple[slice, slice, slice],
+    fov_shifts: Dict[str, Tuple[float, float, float]],
+    channel_idx: int,
+    input_plate: Plate,
+    input_fov_shape: Tuple[int, int, int, int, int],
+    output_position: Position,
+    verbose: bool,
+    blending_exponent: float = 1.0,
 ) -> None:
+    """
+    Write a single output chunk by blending contributing FOVs with distance-based weighting.
 
-    settings = yaml_to_model(config_filepath, StitchSettings)
-    input_fov_store = open_ome_zarr(input_dirpath, mode="r")
-    shifts = settings.total_translation
+    This function processes one chunk of the final stitched image by:
+    1. Finding all FOVs that contribute to this chunk
+    2. Computing distance-based weight maps for smooth blending
+    3. Applying weights to FOV data and summing contributions
+    4. Writing the result to the output array
 
-    input_store_channels = input_fov_store.channel_names
-    if settings.channels is None:
-        settings.channels = input_store_channels
-    channel_idx = np.asarray([input_store_channels.index(ch) for ch in settings.channels])
-
-    if not all(channel in input_store_channels for channel in settings.channels):
-        raise ValueError("Invalid channel(s) provided.")
-
-    output_store = open_ome_zarr(
-        output_dirpath, layout='hcs', mode="w-", channel_names=settings.channels
+    Parameters
+    ----------
+    output_chunk_slices : Tuple[slice, slice, slice]
+        Slice objects defining the chunk region in the output image.
+    fov_shifts : Dict[str, Tuple[float, float, float]]
+        Dictionary mapping FOV names to their translation offsets in (z, y, x) order.
+    channel_idx : int
+        Index of the channel to process.
+    input_plate : Plate
+        Input plate containing all FOV data.
+    input_fov_shape : Tuple[int, int, int, int, int]
+        Shape of input FOVs in (T, C, Z, Y, X) order.
+    output_position : Position
+        Output position where the stitched data will be written.
+    verbose : bool
+        Whether to print detailed progress information.
+    blending_exponent : float, default=1.0
+        Exponent for distance-based blending weights. Higher values create sharper transitions.
+    """
+    # For each output chunk, find the input fovs that contribute to it
+    contributing_fov_names = find_contributing_fovs(
+        output_chunk_slices, fov_shifts, input_fov_shape[-3:]
+    )
+    chunk_corner = np.array([output_chunk_slices[dim].start for dim in range(3)])
+    chunk_extent = np.array(
+        [output_chunk_slices[dim].stop - output_chunk_slices[dim].start for dim in range(3)]
     )
 
-    grouped_shifts = defaultdict(dict)
-    for key, value in shifts.items():
-        group = key.split("/")[1]
-        grouped_shifts[group][key] = value
+    output_array = output_position["0"]
+    array_shape = output_array[(slice(None), channel_idx, *output_chunk_slices)].shape
+    output_chunk = np.zeros(array_shape)
 
-    for g in grouped_shifts:
-        pos_shifts = grouped_shifts[g]
-        temp_pos = list(grouped_shifts[g].keys())[0]
-        tile_shape = input_fov_store[temp_pos].data.shape
-        final_shape_zyx = get_output_shape(pos_shifts, tile_shape)
+    # Compute overlap slices
+    fixed_slices = []
+    moving_slices = []
+    for fov_name in contributing_fov_names:
+        fov_corner = np.array([fov_shifts[fov_name][d] for d in range(3)])
+        fov_extent = np.array([input_fov_shape[d + 2] for d in range(3)])
+        fixed_slice, moving_slice = overlap_slices(
+            chunk_corner, chunk_extent, fov_corner, fov_extent
+        )
+        if fixed_slice is None or moving_slice is None:
+            continue
+        else:
+            fixed_slices.append(fixed_slice)
+            moving_slices.append(moving_slice)
 
-        final_shape = (
-            tile_shape[0],
+    # Precompute a single distance-from-edge map for a complete FOV
+    # Note: this computes distance from the XY edges, will need extension for 3D
+    fov_temp = np.zeros(fov_extent)
+    fov_temp[:, 1:-1, 1:-1] = 1
+    mask = fov_temp != 0
+    centered_distance_map_2d = scipy.ndimage.distance_transform_edt(mask[0])
+    centered_distance_map = np.tile(
+        centered_distance_map_2d[None, :, :], (output_chunk.shape[-3], 1, 1)
+    )
+
+    # Slice into the precomputed distance map to build the distance maps for
+    # each contributing fov
+    distance_maps = np.zeros((len(contributing_fov_names),) + output_chunk.shape[-3:])
+    for i, (fixed_slice, moving_slice) in enumerate(zip(fixed_slices, moving_slices)):
+        if verbose:
+            click.echo(f"\t\tComputing distance map for {contributing_fov_names[i]}")
+        distance_maps[(i, *fixed_slice)] = centered_distance_map[(*moving_slice,)]
+
+    # Compute weight maps for each contributing fov
+    if verbose:
+        click.echo("\t\tBuilding weight maps")
+    w = np.power(distance_maps, blending_exponent, where=(distance_maps > 0))
+    sum_w = np.sum(w, axis=0, keepdims=True)
+    weight_maps = w / (sum_w + 1e-8)
+
+    # Apply weights to each contributing fov and sum
+    for i, (fov_name, fixed_slice, moving_slice) in enumerate(
+        zip(contributing_fov_names, fixed_slices, moving_slices)
+    ):
+        if verbose:
+            click.echo(f"\t\tApplying weight maps to {fov_name}")
+        # Get the fov data
+        fov_data = input_plate[fov_name].data
+
+        # Apply weights to the fov data
+        weighted_output = (
+            fov_data[(slice(None), channel_idx, *moving_slice)]
+            * weight_maps[(i, *fixed_slice)]
+        )
+
+        # Add to the output chunk
+        output_chunk[(slice(None), channel_idx, *fixed_slice)] += weighted_output
+
+    # Write chunk to output array
+    if verbose:
+        click.echo(f"\t\tWriting chunk to output array: {output_chunk_slices}")
+    output_array[(slice(None), channel_idx, *output_chunk_slices)] = output_chunk
+
+
+@click.command("stitch")
+@input_position_dirpaths()
+@config_filepath()
+@output_dirpath()
+@sbatch_filepath()
+@local()
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    type=bool,
+    help="Verbose stitching output. Default is False.",
+)
+@click.option(
+    "--blending-exponent",
+    "-b",
+    type=float,
+    default=1.0,
+    help="Exponent for blending weights. 0.0 is average blending, 1.0 is linear blending, and >1.0 is progressively sharper S-curve blending.",
+)
+def stitch_cli(
+    input_position_dirpaths: List[str],
+    output_dirpath: str,
+    config_filepath: str,
+    verbose: bool = False,
+    sbatch_filepath: str = None,
+    local: bool = False,
+    blending_exponent: float = 1.0,
+) -> None:
+    """
+    Stitch FOVs in each well together into a single FOV.
+    Uses shift from configuration file generated with `biahub estimate-stitch`.
+
+    >> biahub stitch -i ./input.zarr/*/*/* -c ./config.yaml -o ./output.zarr
+    """
+
+    click.echo("Starting stitching...")
+    settings = yaml_to_model(config_filepath, StitchSettings)
+    input_plate = open_ome_zarr(input_position_dirpaths[0].parents[2], mode="r")
+    all_shifts = settings.total_translation
+
+    input_channels = input_plate.channel_names
+    if settings.channels is None:
+        settings.channels = input_channels
+    channel_idx = np.asarray([input_channels.index(ch) for ch in settings.channels])
+
+    if not all(channel in input_channels for channel in settings.channels):
+        raise ValueError("Invalid channel(s) provided.")
+
+    # Create output store
+    output_plate = open_ome_zarr(
+        output_dirpath, layout='hcs', mode="w", channel_names=settings.channels
+    )
+
+    # Group shift metadata by well
+    shifts_by_well = defaultdict(dict)
+    for key, value in all_shifts.items():
+        well_name = "/".join(key.split("/")[:2])
+        shifts_by_well[well_name][key] = value
+
+    # Prepare jobs
+    job_args_list = []
+    for well_name, fov_shifts in shifts_by_well.items():
+        if verbose:
+            click.echo(
+                f"Processing well {list(shifts_by_well.keys()).index(well_name)+1}/{len(shifts_by_well)}: {well_name}"
+            )
+        first_fov_name = list(shifts_by_well[well_name].keys())[0]
+        input_fov_shape = input_plate[first_fov_name].data.shape
+        output_shape_zyx = get_output_shape(fov_shifts, input_fov_shape)
+        output_chunk_size = (
+            1,
+            1,
+            output_shape_zyx[0],
+            *input_plate[first_fov_name].data.chunks[-2:],
+        )
+        output_scale = input_plate[first_fov_name].scale
+
+        output_shape = (
+            input_fov_shape[0],
             len(channel_idx),
-        ) + final_shape_zyx
+        ) + output_shape_zyx
 
-        output_image = np.zeros(final_shape, dtype=np.float32)  # check dtype
-        divisor = np.zeros(final_shape, dtype=np.uint8)
-
-        output_chunk_size = input_fov_store[temp_pos].data.chunks
-        output_scale = input_fov_store[temp_pos].scale
-
-        for tile_name, shift in pos_shifts.items():
-            tile = input_fov_store[tile_name].data
-
-            tile = process_dataset(tile[:, channel_idx, :, :, :], settings.preprocessing)
-            shift_array = np.asarray(shift).astype(np.uint16)  # round shift to ints
-
-            output_image[
-                :,
-                :,
-                shift_array[0] : shift_array[0] + tile_shape[-3],
-                shift_array[1] : shift_array[1] + tile_shape[-2],
-                shift_array[2] : shift_array[2] + tile_shape[-1],
-            ] += tile
-
-            divisor[
-                :,
-                :,
-                shift_array[0] : shift_array[0] + tile_shape[-3],
-                shift_array[1] : shift_array[1] + tile_shape[-2],
-                shift_array[2] : shift_array[2] + tile_shape[-1],
-            ] += 1
-
-        stitched = np.zeros_like(output_image, dtype=np.float16)
-
-        def _divide(a, b):
-            return np.nan_to_num(a / b)
-
-        divide_tile(
-            output_image,
-            divisor,
-            func=_divide,
-            out_array=stitched,
-            tile=divide_tiling_shape,
-        )
-
-        stitched = process_dataset(stitched, settings.postprocessing)
-
-        stitched_pos = output_store.create_position(
-            temp_pos.split("/")[0], temp_pos.split("/")[1], "0"
-        )
-        stitched_pos.create_image(
+        # Create the output array
+        # note that output shape is different for each well, so we are not
+        # using iohub.ngff.utils.create_empty_plate here
+        output_position = output_plate.create_position(
+            first_fov_name.split("/")[0],
+            first_fov_name.split("/")[1],
             "0",
-            data=stitched,
-            chunks=output_chunk_size,
+        )
+        _ = output_position.create_zeros(
+            "0",
+            shape=output_shape,
+            chunks=(1, 1, 10, output_chunk_size[-2], output_chunk_size[-1]),
+            dtype=np.float16,
             transform=[TransformationMeta(type="scale", scale=output_scale)],
         )
 
-    return
-
-
-def divide_tile(
-    *in_arrays: np.ndarray,
-    func: Callable,
-    out_array: np.ndarray,
-    tile: tuple,
-    overlap: tuple = (0, 0),
-):
-
-    final_shape = out_array.shape[-2:]
-
-    tiling_start = list(
-        product(
-            *[
-                range(o, size + 2 * o, t + o)  # t + o step, because of blending map
-                for size, t, o in zip(final_shape, tile, overlap)
-            ]
+        # Split the output array into chunks
+        chunk_list = list_of_nd_slices_from_array_shape(
+            output_shape_zyx,
+            output_chunk_size[2:],
         )
+
+        # Append job arguments for each chunk
+        for chunk in chunk_list:
+            if verbose:
+                click.echo(
+                    f"\tPreparing job for chunk {chunk_list.index(chunk)+1}/{len(chunk_list)}: {chunk}"
+                )
+            job_args_list.append(
+                (
+                    chunk,
+                    fov_shifts,
+                    channel_idx,
+                    input_plate,
+                    input_fov_shape,
+                    output_position,
+                    verbose,
+                    blending_exponent,
+                )
+            )
+
+    # Prepare for SLURM submission
+
+    # Estimate resources
+    num_cpus, gb_ram = estimate_resources(
+        shape=input_fov_shape, ram_multiplier=25, max_num_cpus=16
     )
-    for start_indices in tqdm(tiling_start):
-        slicing = (...,) + tuple(
-            slice(start - o, start + t + o)
-            for start, t, o in zip(start_indices, tile, overlap)
-        )
-        out_array[slicing] = func(*[a[slicing] for a in in_arrays])
 
-    return out_array
+    # Prepare SLURM arguments
+    slurm_args = {
+        "slurm_job_name": "stitch",
+        "slurm_mem_per_cpu": f"{gb_ram}G",
+        "slurm_cpus_per_task": num_cpus,
+        "slurm_array_parallelism": 100,  # process up to 100 output chunks at a time
+        "slurm_time": 60,
+        "slurm_partition": "preempted",
+    }
+
+    # Override defaults if sbatch_filepath is provided
+    if sbatch_filepath:
+        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
+
+    # Run locally or submit to SLURM
+    if local:
+        cluster = "local"
+    else:
+        cluster = "slurm"
+
+    # Prepare and submit jobs
+    click.echo(f"Preparing jobs: {slurm_args}")
+    slurm_out_path = output_dirpath.parent / "slurm_output"
+    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
+    executor.update_parameters(**slurm_args)
+
+    jobs = []
+    with executor.batch():
+        for job_args in job_args_list:
+            jobs.append(
+                executor.submit(
+                    write_output_chunk,
+                    *job_args,
+                )
+            )
+
+    job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
+
+    log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
+    with log_path.open("w") as log_file:
+        log_file.write("\n".join(job_ids))
 
 
 if __name__ == '__main__':

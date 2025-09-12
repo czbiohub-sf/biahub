@@ -1,48 +1,67 @@
 from collections import defaultdict
 from pathlib import Path
+from typing import Tuple
 
 import click
 import numpy as np
 
 from iohub import open_ome_zarr
+from iohub.ngff.nodes import Plate
+from stitch.stitch.tile import optimal_positions, pairwise_shifts
 
 from biahub.cli.parsing import input_position_dirpaths, output_filepath
 from biahub.cli.utils import model_to_yaml
-from biahub.settings import ProcessingSettings, StitchSettings
+from biahub.settings import StitchSettings
 
 
-def extract_stage_position(plate_dataset, position_name):
+def extract_stage_position(
+    plate_dataset: Plate, position_name: str
+) -> Tuple[float, float, float]:
+    """
+    Extract stage position coordinates from plate metadata.
+
+    Parameters
+    ----------
+    plate_dataset : Plate
+        Plate dataset containing stage position metadata.
+    position_name : str
+        Name of the position to extract coordinates for.
+
+    Returns
+    -------
+    Tuple[float, float, float]
+        Stage position coordinates in (z, y, x) order in micrometers.
+    """
     stage_positions = plate_dataset.zattrs["Summary"]["StagePositions"]
     for stage_position in stage_positions:  # TODO: fail if this loop reaches the end
         if stage_position["Label"] == position_name:
+            # Initialize default values
+            xpos, ypos, zpos = 0, 0, 0
 
-            # Read XY positions
-            try:
-                xy_stage_name = stage_position["DefaultXYStage"]
-                if "DevicePositions" in stage_position.keys():
-                    for device in stage_position["DevicePositions"]:
-                        if device["Device"] == xy_stage_name:
-                            xpos, ypos = device["Position_um"]
-                            break
-                else:
+            if "DevicePositions" in stage_position.keys():
+                # Handle DevicePositions case
+                xy_stage_name = stage_position.get("DefaultXYStage", "")
+                non_z_devices = {xy_stage_name}
+
+                for device in stage_position["DevicePositions"]:
+                    if device["Device"] == xy_stage_name and xy_stage_name:
+                        xpos, ypos = device["Position_um"]
+                    elif device["Device"] not in non_z_devices:
+                        zpos += device["Position_um"][0]
+            else:
+                # Handle direct stage keys case - separate try blocks for independent failure
+                try:
+                    xy_stage_name = stage_position["DefaultXYStage"]
                     xpos, ypos = stage_position[xy_stage_name]
-            except KeyError:
-                xpos, ypos = 0, 0
-                pass
+                except KeyError:
+                    pass
 
-            # Read Z positions
-            try:
-                z_stage_name = stage_position["DefaultZStage"]
-                if "DevicePositions" in stage_position.keys():
-                    for device in stage_position["DevicePositions"]:
-                        if device["Device"] == z_stage_name:
-                            zpos = device["Position_um"][0]
-                            break
-                else:
+                try:
+                    z_stage_name = stage_position['DefaultZStage']
                     zpos = stage_position[z_stage_name]
-            except KeyError:
-                zpos = 0
-                pass
+                except KeyError:
+                    pass
+
     return zpos, ypos, xpos
 
 
@@ -51,18 +70,27 @@ def extract_stage_position(plate_dataset, position_name):
 @output_filepath()
 @click.option("--fliplr", is_flag=True, help="Flip images left-right before stitching")
 @click.option("--flipud", is_flag=True, help="Flip images up-down before stitching")
+@click.option("--flipxy", is_flag=True, help="Flip images along the diagonal before stitching")
 @click.option(
-    "--rot90",
+    "--pcc-channel-name",
+    default=None,
+    type=str,
+    help="Channel name to use for phase cross-correlation optimization (default: None, disables optimization)",
+)
+@click.option(
+    "--pcc-z-index",
     default=0,
     type=int,
-    help="rotate the images 90 counterclockwise n times before stitching",
+    help="Z slice index to use for phase cross-correlation optimization (default: 0)",
 )
 def estimate_stitch_cli(
     input_position_dirpaths: list[Path],
     output_filepath: str,
     fliplr: bool,
     flipud: bool,
-    rot90: int,
+    flipxy: bool,
+    pcc_channel_name: str,
+    pcc_z_index: int,
 ):
     """
     Estimate stitching parameters for positions in wells of a zarr store.
@@ -72,7 +100,7 @@ def estimate_stitch_cli(
     saved in pixel units.
 
     This function estimates translations using metadata alone. More precise
-    translations require phase cross-correlation using `optimize-stitch`.
+    translations require phase cross-correlation using `--pcc-channel`.
 
     >>> biahub estimate-stitch -i ./input.zarr/*/*/* -o ./stitch_params.yml
     """
@@ -116,6 +144,55 @@ def estimate_stitch_cli(
         # Scale to pixel coordinates
         zyx_well_array /= open_ome_zarr(input_position_dirpaths[0]).scale[2:]
 
+        # Optimization using phase cross-correlation if pcc_channel is provided
+        if pcc_channel_name is not None:
+            well_positions = grouped_wells[key]
+            tile_lut = {t.split("/")[-1]: i for i, t in enumerate(well_positions)}
+            initial_guess = {
+                key: {
+                    "i": zyx_well_array[:, 1],
+                    "j": zyx_well_array[:, 2],
+                }
+            }
+            channel_index = open_ome_zarr(input_plate_path).get_channel_index(pcc_channel_name)
+
+            edge_list, confidence_dict = pairwise_shifts(
+                well_positions,
+                input_plate_path,
+                key,
+                flipud=flipud,
+                fliplr=fliplr,
+                rot90=False,
+                overlap=300,  # good default for pcc
+                channel_index=channel_index,
+                z_index=pcc_z_index,
+            )
+            print("Confidence scores:")
+            for k, v in confidence_dict.items():
+                print(f"{v[0]}: {v[-1]:.2f}")
+
+            # Get actual tile size from the first position's data shape
+            first_position_path = list(well_positions.keys())[0]
+            with open_ome_zarr(input_plate_path / first_position_path) as first_position:
+                tile_size = first_position.data.shape[-2:]  # Get (Y, X) dimensions
+
+            opt_shift_dict = optimal_positions(
+                edge_list, tile_lut, key, tile_size=tile_size, initial_guess=initial_guess
+            )
+            zyx_well_array[:, 1] = [a[0] for a in opt_shift_dict.values()]
+            zyx_well_array[:, 2] = [a[1] for a in opt_shift_dict.values()]
+
+        # Flip coordinates
+        if fliplr:
+            zyx_well_array[:, 2] *= -1
+        if flipud:
+            zyx_well_array[:, 1] *= -1
+        if flipxy:
+            zyx_well_array[:, [1, 2]] = zyx_well_array[:, [2, 1]]
+
+        # Shift all columns so that the minimum value in each column is zero
+        zyx_well_array -= np.minimum(zyx_well_array.min(axis=0), 0)
+
         # Write back into flat dictionary
         for i, fov_name in enumerate(grouped_wells[key].keys()):
             final_translation_dict[fov_name] = list(np.round(zyx_well_array[i], 2))
@@ -123,8 +200,6 @@ def estimate_stitch_cli(
     # Validate and save
     settings = StitchSettings(
         channels=None,
-        preprocessing=ProcessingSettings(fliplr=fliplr, flipud=flipud, rot90=rot90),
-        postprocessing=ProcessingSettings(),
         total_translation=final_translation_dict,
     )
     model_to_yaml(settings, output_filepath)
