@@ -159,6 +159,7 @@ def estimate_stitch_cli(
                 }
             }
             channel_index = open_ome_zarr(input_plate_path).get_channel_index(pcc_channel_name)
+
             edge_list, confidence_dict = pairwise_shifts(
                 well_positions,
                 input_plate_path,
@@ -174,8 +175,13 @@ def estimate_stitch_cli(
             for k, v in confidence_dict.items():
                 print(f"{v[0]}: {v[-1]:.2f}")
 
+            # Get actual tile size from the first position's data shape
+            first_position_path = list(well_positions.keys())[0]
+            with open_ome_zarr(input_plate_path / first_position_path) as first_position:
+                tile_size = first_position.data.shape[-2:]  # Get (Y, X) dimensions
+
             opt_shift_dict = optimal_positions(
-                edge_list, tile_lut, key, tile_size=(2048, 2048), initial_guess=initial_guess
+                edge_list, tile_lut, key, tile_size=tile_size, initial_guess=initial_guess
             )
             zyx_well_array[:, 1] = [a[0] for a in opt_shift_dict.values()]
             zyx_well_array[:, 2] = [a[1] for a in opt_shift_dict.values()]
