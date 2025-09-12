@@ -1,7 +1,7 @@
 from collections import defaultdict
 from itertools import product
 from pathlib import Path
-from typing import List
+from typing import Dict, List, Optional, Tuple
 
 import click
 import numpy as np
@@ -52,7 +52,28 @@ def list_of_nd_slices_from_array_shape(
     return chunk_slices
 
 
-def check_overlap(chunk, fov_shift, fov_extent):
+def check_overlap(
+    chunk: Tuple[slice, slice, slice],
+    fov_shift: Tuple[float, float, float],
+    fov_extent: Tuple[int, int, int],
+) -> bool:
+    """
+    Check if a chunk overlaps with a field of view (FOV).
+
+    Parameters
+    ----------
+    chunk : Tuple[slice, slice, slice]
+        3D chunk defined by slice objects for each dimension.
+    fov_shift : Tuple[float, float, float]
+        Translation offset of the FOV in (z, y, x) order.
+    fov_extent : Tuple[int, int, int]
+        Size of the FOV in (z, y, x) order.
+
+    Returns
+    -------
+    bool
+        True if the chunk overlaps with the FOV, False otherwise.
+    """
     for dim in range(3):
         if (
             chunk[dim].start >= fov_shift[dim] + fov_extent[dim]
@@ -62,8 +83,32 @@ def check_overlap(chunk, fov_shift, fov_extent):
     return True
 
 
-def overlap_slices(chunk_corner, chunk_extent, fov_corner, fov_extent):
-    """Return (fixed_slice, moving_slice) for overlapping region, or (None, None) if no overlap."""
+def overlap_slices(
+    chunk_corner: Tuple[float, float, float],
+    chunk_extent: Tuple[float, float, float],
+    fov_corner: Tuple[float, float, float],
+    fov_extent: Tuple[int, int, int],
+) -> Tuple[Optional[Tuple[slice, slice, slice]], Optional[Tuple[slice, slice, slice]]]:
+    """
+    Calculate slice objects for overlapping regions between a chunk and FOV.
+
+    Parameters
+    ----------
+    chunk_corner : Tuple[float, float, float]
+        Corner position of the chunk in (z, y, x) order.
+    chunk_extent : Tuple[float, float, float]
+        Size of the chunk in (z, y, x) order.
+    fov_corner : Tuple[float, float, float]
+        Corner position of the FOV in (z, y, x) order.
+    fov_extent : Tuple[int, int, int]
+        Size of the FOV in (z, y, x) order.
+
+    Returns
+    -------
+    Tuple[Optional[Tuple[slice, slice, slice]], Optional[Tuple[slice, slice, slice]]]
+        A tuple containing (fixed_slice, moving_slice) for the overlapping region,
+        or (None, None) if no overlap exists.
+    """
     fixed, moving = [], []
     for d in range(3):
         start = max(chunk_corner[d], fov_corner[d])
@@ -81,7 +126,28 @@ def overlap_slices(chunk_corner, chunk_extent, fov_corner, fov_extent):
     return tuple(fixed), tuple(moving)
 
 
-def find_contributing_fovs(chunk, fov_shifts, fov_extent):
+def find_contributing_fovs(
+    chunk: Tuple[slice, slice, slice],
+    fov_shifts: Dict[str, Tuple[float, float, float]],
+    fov_extent: Tuple[int, int, int],
+) -> List[str]:
+    """
+    Find all FOVs that contribute data to a given chunk.
+
+    Parameters
+    ----------
+    chunk : Tuple[slice, slice, slice]
+        3D chunk defined by slice objects for each dimension.
+    fov_shifts : Dict[str, Tuple[float, float, float]]
+        Dictionary mapping FOV names to their translation offsets in (z, y, x) order.
+    fov_extent : Tuple[int, int, int]
+        Size of each FOV in (z, y, x) order.
+
+    Returns
+    -------
+    List[str]
+        List of FOV names that overlap with the given chunk.
+    """
     contributing_fovs = []
     for fov_key, fov_shift in fov_shifts.items():
         if check_overlap(chunk, fov_shift, fov_extent):
@@ -89,8 +155,24 @@ def find_contributing_fovs(chunk, fov_shifts, fov_extent):
     return contributing_fovs
 
 
-def get_output_shape(shifts: dict, tile_shape: tuple) -> tuple:
-    """Get the output shape of the stitched image from the raw shifts"""
+def get_output_shape(
+    shifts: Dict[str, Tuple[float, float, float]], tile_shape: Tuple[int, ...]
+) -> Tuple[int, int, int]:
+    """
+    Calculate the output shape of the stitched image from FOV shifts.
+
+    Parameters
+    ----------
+    shifts : Dict[str, Tuple[float, float, float]]
+        Dictionary mapping FOV names to their translation offsets in (z, y, x) order.
+    tile_shape : Tuple[int, ...]
+        Shape of individual tiles/FOVs.
+
+    Returns
+    -------
+    Tuple[int, int, int]
+        Output shape of the stitched image in (z, y, x) order.
+    """
 
     z_shifts = [shift[0] for shift in shifts.values()]
     y_shifts = [shift[1] for shift in shifts.values()]
@@ -104,15 +186,43 @@ def get_output_shape(shifts: dict, tile_shape: tuple) -> tuple:
 
 
 def write_output_chunk(
-    output_chunk_slices: tuple[slice, slice, slice],
-    fov_shifts: dict,
+    output_chunk_slices: Tuple[slice, slice, slice],
+    fov_shifts: Dict[str, Tuple[float, float, float]],
     channel_idx: int,
     input_plate: Plate,
-    input_fov_shape: tuple[int, int, int, int, int],
+    input_fov_shape: Tuple[int, int, int, int, int],
     output_position: Position,
     verbose: bool,
     blending_exponent: float = 1.0,
-):
+) -> None:
+    """
+    Write a single output chunk by blending contributing FOVs with distance-based weighting.
+
+    This function processes one chunk of the final stitched image by:
+    1. Finding all FOVs that contribute to this chunk
+    2. Computing distance-based weight maps for smooth blending
+    3. Applying weights to FOV data and summing contributions
+    4. Writing the result to the output array
+
+    Parameters
+    ----------
+    output_chunk_slices : Tuple[slice, slice, slice]
+        Slice objects defining the chunk region in the output image.
+    fov_shifts : Dict[str, Tuple[float, float, float]]
+        Dictionary mapping FOV names to their translation offsets in (z, y, x) order.
+    channel_idx : int
+        Index of the channel to process.
+    input_plate : Plate
+        Input plate containing all FOV data.
+    input_fov_shape : Tuple[int, int, int, int, int]
+        Shape of input FOVs in (T, C, Z, Y, X) order.
+    output_position : Position
+        Output position where the stitched data will be written.
+    verbose : bool
+        Whether to print detailed progress information.
+    blending_exponent : float, default=1.0
+        Exponent for distance-based blending weights. Higher values create sharper transitions.
+    """
     # For each output chunk, find the input fovs that contribute to it
     contributing_fov_names = find_contributing_fovs(
         output_chunk_slices, fov_shifts, input_fov_shape[-3:]
