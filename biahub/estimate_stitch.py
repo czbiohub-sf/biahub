@@ -9,7 +9,8 @@ from iohub import open_ome_zarr
 from iohub.ngff.nodes import Plate
 from stitch.stitch.tile import optimal_positions, pairwise_shifts
 
-from biahub.cli.parsing import input_position_dirpaths, output_filepath
+from biahub.cli.monitor import monitor_jobs
+from biahub.cli.parsing import input_position_dirpaths, local, monitor, output_filepath
 from biahub.cli.utils import model_to_yaml
 from biahub.settings import StitchSettings
 
@@ -83,6 +84,13 @@ def extract_stage_position(
     type=int,
     help="Z slice index to use for phase cross-correlation optimization (default: 0)",
 )
+@click.option(
+    "--add_offset",
+    is_flag=True,
+    help="add the offset to estimated shifts, needed for OPS experiments",
+)
+@local()
+@monitor()
 def estimate_stitch_cli(
     input_position_dirpaths: list[Path],
     output_filepath: str,
@@ -91,6 +99,9 @@ def estimate_stitch_cli(
     flipxy: bool,
     pcc_channel_name: str,
     pcc_z_index: int,
+    add_offset: bool,
+    local: bool,
+    monitor: bool,
 ):
     """
     Estimate stitching parameters for positions in wells of a zarr store.

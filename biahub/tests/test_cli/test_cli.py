@@ -26,10 +26,14 @@ def test_main():
         "concatenate",
         "estimate-stabilization",
         "stabilize",
+        "estimate-crop",
         "estimate-psf",
         "deconvolve",
         "characterize-psf",
         "segment",
+        "virtual-stain",
+        "track",
+        "process-with-config",
     ],
 )
 def test_command_help(command: str):

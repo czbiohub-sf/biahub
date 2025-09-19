@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from click.testing import CliRunner
 
@@ -53,7 +54,7 @@ def test_deskew_data():
     )
 
 
-def test_deskew_cli(tmp_path, example_plate, example_deskew_settings):
+def test_deskew_cli(tmp_path, example_plate, example_deskew_settings, sbatch_file):
     plate_path, _ = example_plate
     config_path, _ = example_deskew_settings
     output_path = tmp_path / "output.zarr"
@@ -73,8 +74,28 @@ def test_deskew_cli(tmp_path, example_plate, example_deskew_settings):
             "-o",
             str(output_path),
             "--local",
+            "--sbatch-filepath",
+            sbatch_file,
         ],
     )
 
     assert output_path.exists()
     assert result.exit_code == 0
+
+
+def test_deskew_overhang_only_dataset_error():
+    # Parameters that cause only overhang
+    shape = (10, 500, 100)
+    data = np.random.random(shape)
+    angle = 30
+    ratio = 0.1
+
+    with pytest.raises(ValueError, match="Dataset contains only overhang"):
+        deskew.get_deskewed_data_shape(shape, angle, ratio, keep_overhang=False)
+
+    with pytest.raises(ValueError, match="Dataset contains only overhang"):
+        deskew.deskew(data, angle, ratio, keep_overhang=False)
+
+    # Should succeed with keep_overhang=True
+    out_shape, _ = deskew.get_deskewed_data_shape(shape, angle, ratio, keep_overhang=True)
+    assert out_shape[2] > 0

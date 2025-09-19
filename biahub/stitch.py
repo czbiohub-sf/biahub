@@ -12,16 +12,19 @@ from iohub import open_ome_zarr
 from iohub.ngff import TransformationMeta
 from iohub.ngff.nodes import Plate, Position
 
+from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
     config_filepath,
     input_position_dirpaths,
     local,
+    monitor,
     output_dirpath,
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import estimate_resources, yaml_to_model
-from biahub.settings import StitchSettings
+from biahub.cli.utils import estimate_resources, process_single_position_v2, yaml_to_model
+from biahub.register import convert_transform_to_ants
+from biahub.settings import ProcessingSettings, StitchSettings
 
 
 def list_of_nd_slices_from_array_shape(
@@ -320,14 +323,18 @@ def write_output_chunk(
     default=1.0,
     help="Exponent for blending weights. 0.0 is average blending, 1.0 is linear blending, and >1.0 is progressively sharper S-curve blending.",
 )
+@click.option("--debug", is_flag=True, help="Run in debug mode")
+@monitor()
 def stitch_cli(
     input_position_dirpaths: List[str],
     output_dirpath: str,
-    config_filepath: str,
+    config_filepath: Path,
     verbose: bool = False,
     sbatch_filepath: str = None,
     local: bool = False,
     blending_exponent: float = 1.0,
+    debug: bool = False,
+    monitor: bool = False,
 ) -> None:
     """
     Stitch FOVs in each well together into a single FOV.
@@ -411,6 +418,7 @@ def stitch_cli(
                 click.echo(
                     f"\tPreparing job for chunk {chunk_list.index(chunk)+1}/{len(chunk_list)}: {chunk}"
                 )
+<<<<<<< HEAD
             job_args_list.append(
                 (
                     chunk,
@@ -423,8 +431,6 @@ def stitch_cli(
                     blending_exponent,
                 )
             )
-
-    # Prepare for SLURM submission
 
     # Estimate resources
     num_cpus, gb_ram = estimate_resources(
@@ -453,7 +459,7 @@ def stitch_cli(
 
     # Prepare and submit jobs
     click.echo(f"Preparing jobs: {slurm_args}")
-    slurm_out_path = output_dirpath.parent / "slurm_output"
+    slurm_out_path = Path(output_dirpath).parent / "slurm_output"
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
 
@@ -472,6 +478,9 @@ def stitch_cli(
     log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
+
+    if monitor:
+        monitor_jobs(jobs, [])
 
 
 if __name__ == '__main__':

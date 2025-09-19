@@ -1,4 +1,5 @@
 import glob
+import os
 
 from pathlib import Path
 
@@ -10,9 +11,11 @@ from iohub import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate, process_single_position
 from natsort import natsorted
 
+from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
     config_filepath,
     local,
+    monitor,
     output_dirpath,
     sbatch_filepath,
     sbatch_to_submitit,
@@ -210,7 +213,7 @@ def validate_slicing_params_zyx(slicing_params_zyx_list: list[list[slice, slice,
 
 
 def calculate_cropped_size(
-    slice_params_zyx: list[slice, slice, slice]
+    slice_params_zyx: list[slice, slice, slice],
 ) -> tuple[int, int, int]:
     """
     Calculate the size of a dimension after cropping.
@@ -237,6 +240,7 @@ def concatenate(
     output_dirpath: Path,
     sbatch_filepath: str = None,
     local: bool = False,
+    monitor: bool = True,
 ):
     """
     Concatenate datasets (with optional cropping)
@@ -348,7 +352,9 @@ def concatenate(
     )
 
     # Estimate resources
-    num_cpus, gb_ram_per_cpu = estimate_resources(shape=[T, C, Z, Y, X], ram_multiplier=16)
+    num_cpus, gb_ram_per_cpu = estimate_resources(
+        shape=[T, C, Z, Y, X], ram_multiplier=16, max_num_cpus=16
+    )
     # Prepare SLURM arguments
     slurm_args = {
         "slurm_job_name": "concatenate",
@@ -356,7 +362,7 @@ def concatenate(
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,  # process up to 100 positions at a time
         "slurm_time": 60,
-        "slurm_partition": "cpu",
+        "slurm_partition": "preempted",
     }
 
     # Override defaults if sbatch_filepath is provided
@@ -364,10 +370,11 @@ def concatenate(
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
     # Run locally or submit to SLURM
+    cluster = "slurm"
     if local:
         cluster = "local"
-    else:
-        cluster = "slurm"
+    if os.environ.get("CI") == "true":
+        cluster = "debug"
 
     # Prepare and submit jobs
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
@@ -375,8 +382,7 @@ def concatenate(
 
     click.echo("Submitting SLURM jobs...")
     jobs = []
-
-    with executor.batch():
+    with submitit.helpers.clean_env(), executor.batch():
         for i, (
             input_position_path,
             output_position_path,
@@ -409,13 +415,17 @@ def concatenate(
             )
             jobs.append(job)
 
-    # monitor_jobs(jobs, all_data_paths)
-
     job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 
+    # slurm_out_path is not created for debug cluster
+    if not slurm_out_path.exists():
+        slurm_out_path.mkdir()
     log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
+
+    if monitor:
+        monitor_jobs(jobs, all_data_paths)
 
 
 @click.command("concatenate")
@@ -423,22 +433,26 @@ def concatenate(
 @output_dirpath()
 @sbatch_filepath()
 @local()
+@monitor()
 def concatenate_cli(
-    config_filepath: str,
+    config_filepath: Path,
     output_dirpath: str,
     sbatch_filepath: str = None,
     local: bool = False,
+    monitor: bool = True,
 ):
     """
     Concatenate datasets (with optional cropping)
 
     >> biahub concatenate -c ./concat.yml -o ./output_concat.zarr -j 8
     """
+
     concatenate(
         settings=yaml_to_model(config_filepath, ConcatenateSettings),
         output_dirpath=Path(output_dirpath),
         sbatch_filepath=sbatch_filepath,
         local=local,
+        monitor=monitor,
     )
 
 
