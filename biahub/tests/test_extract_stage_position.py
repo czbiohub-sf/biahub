@@ -44,7 +44,7 @@ def create_mock_plate(stage_positions_data):
             {
                 "Label": "Pos3",
                 "DefaultZStage": "ZStage",
-                "ZStage": 75.0
+                "ZStage": 75.0,
                 # Missing DefaultXYStage and XY position data
             },
             (75.0, 0.0, 0.0),
@@ -54,7 +54,7 @@ def create_mock_plate(stage_positions_data):
             {
                 "Label": "Pos4",
                 "DefaultXYStage": "XYStage",
-                "XYStage": [300.0, 400.0]
+                "XYStage": [300.0, 400.0],
                 # Missing DefaultZStage and Z position data
             },
             (0.0, 400.0, 300.0),

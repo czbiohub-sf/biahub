@@ -130,6 +130,7 @@ def test_register_settings():
             typo_param="test",
         )
 
+
 def test_example_register_settings(example_register_settings):
     _, settings = example_register_settings
     RegistrationSettings(**settings)

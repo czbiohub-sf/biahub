@@ -418,7 +418,6 @@ def stitch_cli(
                 click.echo(
                     f"\tPreparing job for chunk {chunk_list.index(chunk)+1}/{len(chunk_list)}: {chunk}"
                 )
-<<<<<<< HEAD
             job_args_list.append(
                 (
                     chunk,
