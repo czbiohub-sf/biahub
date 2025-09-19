@@ -20,7 +20,7 @@ classifiers = [
 
 # list package dependencies here
 dependencies = [
-  "iohub>=0.2,<0.3",
+  "iohub>=0.3.0a2,<0.4",
   "matplotlib",
   "napari",
   "PyQt6",
@@ -54,9 +54,11 @@ segment = ["cellpose"]
 
 track = ["ultrack>=0.6.3"]
 
+shard = ["tensorstore"]
+
 build = ["build", "twine"]
 
-all = ["biahub[segment,track,build]"]
+all = ["biahub[segment,track,shard,build]"]
 
 dev = [
   "biahub[all]",
