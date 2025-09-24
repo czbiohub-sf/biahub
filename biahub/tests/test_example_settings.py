@@ -30,6 +30,7 @@ example_settings_params = [
     ("example_deskew_settings.yml", DeskewSettings),
     ("example_estimate_registration_settings_beads.yml", EstimateRegistrationSettings),
     ("example_estimate_registration_settings_manual.yml", EstimateRegistrationSettings),
+    ("example_estimate_registration_settings.yml", EstimateRegistrationSettings),
     (
         "example_estimate_stabilization_settings_xy_focus-finding.yml",
         EstimateStabilizationSettings,
