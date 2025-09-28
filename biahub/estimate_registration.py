@@ -983,7 +983,9 @@ def beads_based_registration(
                 print(f"Using approx transform for timepoint {t+1}: {approx_transform}")
                 affine_transform_settings.approx_transform = approx_transform
             else:
-                print(f"Using previous transform (t-2) for timepoint {t+1}: {approx_transform}")
+                print(
+                    f"Using previous transform (t-2) for timepoint {t+1}: {approx_transform}"
+                )
 
     else:
         num_cpus, gb_ram_per_cpu = estimate_resources(
@@ -1013,7 +1015,6 @@ def beads_based_registration(
         executor.update_parameters(**slurm_args)
 
         click.echo(f"Submitting SLURM focus estimation jobs with resources: {slurm_args}")
-   
 
         # Submit jobs
         jobs = []
