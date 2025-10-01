@@ -241,9 +241,11 @@ def write_output_chunk(
     # Compute overlap slices
     fixed_slices = []
     moving_slices = []
+
+    fov_extent = np.array([input_fov_shape[d + 2] for d in range(3)])
+    
     for fov_name in contributing_fov_names:
         fov_corner = np.array([fov_shifts[fov_name][d] for d in range(3)])
-        fov_extent = np.array([input_fov_shape[d + 2] for d in range(3)])
         fixed_slice, moving_slice = overlap_slices(
             chunk_corner, chunk_extent, fov_corner, fov_extent
         )
@@ -255,10 +257,14 @@ def write_output_chunk(
 
     # Precompute a single distance-from-edge map for a complete FOV
     # Note: this computes distance from the XY edges, will need extension for 3D
-    fov_temp = np.zeros(fov_extent)
-    fov_temp[:, 1:-1, 1:-1] = 1
-    mask = fov_temp != 0
-    centered_distance_map_2d = scipy.ndimage.distance_transform_edt(mask[0])
+    # Pad with zeros to create a virtual border, then compute distance transform
+    fov_temp = np.ones(fov_extent)
+    # Pad with 1 pixel of zeros on all sides (YX dimensions only)
+    fov_temp_padded = np.pad(fov_temp[0], pad_width=1, mode='constant', constant_values=0)
+    # Compute distance transform on padded array
+    centered_distance_map_2d_padded = scipy.ndimage.distance_transform_edt(fov_temp_padded)
+    # Remove padding to get back to original size
+    centered_distance_map_2d = centered_distance_map_2d_padded[1:-1, 1:-1]
     centered_distance_map = np.tile(
         centered_distance_map_2d[None, :, :], (output_chunk.shape[-3], 1, 1)
     )
@@ -442,7 +448,7 @@ def stitch_cli(
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,  # process up to 100 output chunks at a time
         "slurm_time": 60,
-        "slurm_partition": "preempted",
+        "slurm_partition": "cpu",
     }
 
     # Override defaults if sbatch_filepath is provided
