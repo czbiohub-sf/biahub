@@ -20,7 +20,7 @@ from biahub.settings import (
     TrackingSettings,
 )
 
-settings_files_dir = (Path(__file__) / "../../../settings").resolve()
+settings_files_dir = (Path(__file__) / "../../settings").resolve()
 
 example_settings_params = [
     ("example_characterize_settings.yml", CharacterizeSettings),

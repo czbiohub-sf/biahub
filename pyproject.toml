@@ -125,4 +125,6 @@ msg-template = "{line},{column},{category},{symbol}:{msg}"
 reports = "n"
 
 [tool.pytest.ini_options]
-addopts = "--ignore examples/"
+addopts = ["--import-mode=importlib"]
+testpaths = ["tests"]
+
