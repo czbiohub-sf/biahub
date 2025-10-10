@@ -238,12 +238,13 @@ def write_output_chunk(
     array_shape = output_array[(slice(None), channel_idx, *output_chunk_slices)].shape
     output_chunk = np.zeros(array_shape)
 
+    fov_extent = np.array([input_fov_shape[d + 2] for d in range(3)])
+
     # Compute overlap slices
     fixed_slices = []
     moving_slices = []
     for fov_name in contributing_fov_names:
         fov_corner = np.array([fov_shifts[fov_name][d] for d in range(3)])
-        fov_extent = np.array([input_fov_shape[d + 2] for d in range(3)])
         fixed_slice, moving_slice = overlap_slices(
             chunk_corner, chunk_extent, fov_corner, fov_extent
         )
@@ -440,9 +441,10 @@ def stitch_cli(
         "slurm_job_name": "stitch",
         "slurm_mem_per_cpu": f"{gb_ram}G",
         "slurm_cpus_per_task": num_cpus,
-        "slurm_array_parallelism": 100,  # process up to 100 output chunks at a time
+        "slurm_array_parallelism": 1,  # Disable array parallelism for now.
         "slurm_time": 60,
-        "slurm_partition": "preempted",
+        "slurm_partition": "cpu",
+        "slurm_gres": "0",
     }
 
     # Override defaults if sbatch_filepath is provided
