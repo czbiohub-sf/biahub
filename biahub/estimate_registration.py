@@ -965,6 +965,7 @@ def beads_based_registration(
     (T, Z, Y, X) = source_channel_tzyx.shape
     output_transforms_path = output_folder_path / "xyz_transforms"
     output_transforms_path.mkdir(parents=True, exist_ok=True)
+    initial_transform = affine_transform_settings.approx_transform
 
     if affine_transform_settings.use_prev_t_transform:
         for t in range(T):
@@ -983,8 +984,9 @@ def beads_based_registration(
                 affine_transform_settings.approx_transform = approx_transform
             else:
                 print(
-                    f"Using previous transform (t-2) for timepoint {t+1}: {approx_transform}"
+                    f"Using initial transform for timepoint {t+1}: {initial_transform}"
                 )
+                affine_transform_settings.approx_transform = initial_transform
 
     else:
         num_cpus, gb_ram_per_cpu = estimate_resources(

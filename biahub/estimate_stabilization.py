@@ -851,7 +851,7 @@ def estimate_xyz_stabilization_with_beads(
 
     output_transforms_path = output_folder_path / "xyz_transforms"
     output_transforms_path.mkdir(parents=True, exist_ok=True)
-
+    initial_transform = affine_transform_settings.approx_transform
     if affine_transform_settings.use_prev_t_transform:
         for t in range(1, T, 1):
             approx_transform = estimate_transform_from_beads(
@@ -868,8 +868,10 @@ def estimate_xyz_stabilization_with_beads(
             print(f"Using approx transform for timepoint {t+1}: {approx_transform}")
             affine_transform_settings.approx_transform = approx_transform
         else:
-            print(f"Using previous transform (t-2) for timepoint {t+1}: {approx_transform}")
+            print(f"Using initial transform for timepoint {t+1}: {initial_transform}")
+            affine_transform_settings.approx_transform = initial_transform
     else:
+        
 
         # Compute transformations in parallel
 
