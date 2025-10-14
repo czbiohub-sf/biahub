@@ -923,7 +923,6 @@ def beads_based_registration(
     cluster: bool = False,
     sbatch_filepath: Path = None,
     output_folder_path: Path = None,
-    use_previous_t_transform: bool = True,
 ) -> list[ArrayLike]:
     """
     Perform beads-based temporal registration of 4D data using affine transformations.
@@ -967,7 +966,7 @@ def beads_based_registration(
     output_transforms_path = output_folder_path / "xyz_transforms"
     output_transforms_path.mkdir(parents=True, exist_ok=True)
 
-    if use_previous_t_transform:
+    if affine_transform_settings.use_prev_t_transform:
         for t in range(T):
             approx_transform = estimate_transform_from_beads(
                 source_channel_tzyx=source_channel_tzyx,
@@ -1006,7 +1005,6 @@ def beads_based_registration(
         if sbatch_filepath:
             slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
-        output_folder_path.mkdir(parents=True, exist_ok=True)
         slurm_out_path = output_folder_path / "slurm_output"
         slurm_out_path.mkdir(parents=True, exist_ok=True)
 
