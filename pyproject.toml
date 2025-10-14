@@ -20,6 +20,7 @@ classifiers = [
 
 # list package dependencies here
 dependencies = [
+  "stitch @ git+https://github.com/ahillsley/stitching@jen",
   "iohub>=0.2,<0.3",
   "matplotlib",
   "napari",

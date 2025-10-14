@@ -1,0 +1,25 @@
+# Example configuration for estimating registration parameters
+# For method-specific examples, see:
+# - example_estimate_registration_settings_manual.yml
+# - example_estimate_registration_settings_beads.yml
+
+# Name of the fixed (reference) image channel used for registration
+target_channel_name: Phase3D
+
+# Name of the moving image channel to align with the target
+source_channel_name: GFP EX488 EM525-45
+
+# Method to estimate registration parameters: "manual", "beads", or "ants"
+estimation_method: manual
+
+# Settings for manual registration method
+manual_registration_settings:
+  time_index: 0  # Timepoint index to use for manual registration
+  affine_90degree_rotation: 0  # Number of 90-degree clockwise rotations to apply
+
+# Settings for affine transformation estimation
+affine_transform_settings:
+  transform_type: euclidean  # "euclidean", "similarity", or "affine"
+
+# Enable verbose logging
+verbose: false
