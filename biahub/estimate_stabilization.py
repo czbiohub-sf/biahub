@@ -871,7 +871,6 @@ def estimate_xyz_stabilization_with_beads(
             print(f"Using initial transform for timepoint {t+1}: {initial_transform}")
             affine_transform_settings.approx_transform = initial_transform
     else:
-        
 
         # Compute transformations in parallel
 

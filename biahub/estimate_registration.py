@@ -983,9 +983,7 @@ def beads_based_registration(
                 print(f"Using approx transform for timepoint {t+1}: {approx_transform}")
                 affine_transform_settings.approx_transform = approx_transform
             else:
-                print(
-                    f"Using initial transform for timepoint {t+1}: {initial_transform}"
-                )
+                print(f"Using initial transform for timepoint {t+1}: {initial_transform}")
                 affine_transform_settings.approx_transform = initial_transform
 
     else:
