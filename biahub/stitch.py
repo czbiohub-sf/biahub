@@ -441,10 +441,9 @@ def stitch_cli(
         "slurm_job_name": "stitch",
         "slurm_mem_per_cpu": f"{gb_ram}G",
         "slurm_cpus_per_task": num_cpus,
-        "slurm_array_parallelism": 1,  # Disable array parallelism for now.
+        "slurm_array_parallelism": 100,
         "slurm_time": 60,
         "slurm_partition": "cpu",
-        "slurm_gres": "0",
     }
 
     # Override defaults if sbatch_filepath is provided
@@ -464,7 +463,7 @@ def stitch_cli(
     executor.update_parameters(**slurm_args)
 
     jobs = []
-    with executor.batch():
+    with submitit.helpers.clean_env(), executor.batch():
         for job_args in job_args_list:
             jobs.append(
                 executor.submit(

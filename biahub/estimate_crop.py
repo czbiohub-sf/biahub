@@ -223,7 +223,7 @@ def estimate_crop(
     click.echo('Submitting SLURM jobs...')
     jobs = []
 
-    with executor.batch():
+    with submitit.helpers.clean_env(), executor.batch():
         for ls_dir, lf_dir in zip(ls_position_dirpaths, lf_position_dirpaths):
 
             job = executor.submit(
