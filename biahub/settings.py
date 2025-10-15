@@ -1,6 +1,5 @@
-import warnings
-
-from typing import Any, Dict, Literal, Optional, Union
+from pathlib import Path
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -8,13 +7,14 @@ import torch
 from pydantic import (
     BaseModel,
     ConfigDict,
+    Field,
     ImportString,
     NonNegativeInt,
     PositiveFloat,
     PositiveInt,
+    ValidationInfo,
     field_validator,
     model_validator,
-    validator,
 )
 
 
@@ -23,30 +23,244 @@ class MyBaseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class EstimateRegistrationSettings(MyBaseModel):
-    target_channel_name: str
-    source_channel_name: str
-    estimation_method: Literal["manual", "beads"] = "manual"
-    affine_transform_type: Literal["Euclidean", "Similarity"] = "Euclidean"
-    time_index: int = 0
-    affine_90degree_rotation: int = 0
-    approx_affine_transform: list = None
-    affine_transform_window_size: int = 10
-    affine_transform_tolerance: float = 50.0
-    filtering_angle_threshold: int = 30
-    verbose: bool = False
+class DetectPeaksSettings(MyBaseModel):
+    threshold_abs: float = 110
+    nms_distance: int = 16
+    min_distance: int = 0
+    block_size: list[int] = [8, 8, 8]
 
-    @field_validator("approx_affine_transform")
+
+class ProcessingFunctions(MyBaseModel):
+    function: str
+    input_channels: Optional[List[str]] = None  # Optional
+    kwargs: Dict[str, Any] = {}
+    per_timepoint: Optional[bool] = True
+
+
+class ProcessingImportFuncSettings(MyBaseModel):
+    processing_functions: list[ProcessingFunctions] = []
+
+
+class ProcessingInputChannel(MyBaseModel):
+    path: Union[str, None] = None
+    channels: Dict[str, List[ProcessingFunctions]]
+
+    @field_validator("path")
+    @classmethod
+    def validate_path_not_plate(cls, v):
+        if v is None:
+            return v
+        v = Path(v)
+        if v.suffix != ".zarr":
+            raise ValueError("Path must be a valid OME-Zarr dataset.")
+        return v
+
+
+class TrackingSettings(MyBaseModel):
+    target_channel: str = "nuclei_prediction"
+    fov: str = "*/*/*"
+    blank_frames_path: str = None
+    mode: Literal["2D", "3D"] = "2D"
+    z_range: Optional[Tuple[int, int]] = None
+    input_images: List[ProcessingInputChannel]
+    tracking_config: Dict[str, Any] = {}
+
+    @field_validator("blank_frames_path")
+    @classmethod
+    def validate_blank_frames_path(cls, v):
+        if v is None:
+            return v
+        return Path(v)
+
+
+class EdgeGraphSettings(BaseModel):
+    method: Literal["knn", "radius", "full"] = "knn"
+    k: Optional[int] = None
+    radius: Optional[float] = None
+
+    @model_validator(mode="after")
+    def set_defaults_and_validate(self) -> "EdgeGraphSettings":
+        if self.method == "knn":
+            if self.k is None:
+                self.k = 5  # set default
+            self.radius = None  # ignore
+        elif self.method == "radius":
+            if self.radius is None:
+                self.radius = 30.0  # set default
+            self.k = None  # ignore
+        elif self.method == "full":
+            self.k = None
+            self.radius = None
+        return self
+
+
+class CostMatrixSettings(MyBaseModel):
+    weights: dict[str, float] = {
+        "dist": 0.5,
+        "edge_angle": 1.0,
+        "edge_length": 1.0,
+        "pca_dir": 0.0,
+        "pca_aniso": 0.0,
+        "edge_descriptor": 0.0,
+    }
+    normalize: bool = False
+
+
+class HungarianMatchSettings(MyBaseModel):
+    distance_metric: Literal["euclidean", "cosine", "cityblock"] = "euclidean"
+    cost_threshold: float = 0.10
+    max_ratio: float = 0.8
+    cross_check: bool = False
+    edge_graph_settings: EdgeGraphSettings = EdgeGraphSettings()
+    cost_matrix_settings: CostMatrixSettings = CostMatrixSettings()
+
+
+class MatchDescriptorSettings(MyBaseModel):
+    distance_metric: Literal["euclidean", "cosine", "cityblock"] = "euclidean"
+    max_ratio: float = 0.8
+    cross_check: bool = False
+
+
+class BeadsMatchSettings(MyBaseModel):
+    algorithm: Literal["hungarian", "match_descriptor"] = "hungarian"
+    t_reference: Literal["first", "previous"] = "first"
+    source_peaks_settings: Optional[DetectPeaksSettings] = Field(
+        default_factory=DetectPeaksSettings
+    )
+    target_peaks_settings: Optional[DetectPeaksSettings] = Field(
+        default_factory=DetectPeaksSettings
+    )
+    match_descriptor_settings: MatchDescriptorSettings = MatchDescriptorSettings()
+    hungarian_match_settings: HungarianMatchSettings = HungarianMatchSettings()
+    filter_distance_threshold: float = 0.95
+    filter_angle_threshold: float = 0
+
+
+class PhaseCrossCorrSettings(MyBaseModel):
+    normalization: Optional[Literal["magnitude", "classic"]] = None
+    maximum_shift: float = 1.2
+    function_type: Literal["custom_padding", "custom"] = "custom"
+    t_reference: Literal["first", "previous"] = "first"
+    skip_beads_fov: str = "0"
+    center_crop_xy: list[int, int] = None
+    X_slice: Union[list, list[Union[list, Literal["all"]]], Literal["all"]] = "all"
+    Y_slice: Union[list, list[Union[list, Literal["all"]]], Literal["all"]] = "all"
+    Z_slice: Union[list, list[Union[list, Literal["all"]]], Literal["all"]] = "all"
+
+
+class FocusFindingSettings(MyBaseModel):
+    average_across_wells: bool = False
+    average_across_wells_method: Literal["mean", "median"] = "mean"
+    skip_beads_fov: str = "0"
+    center_crop_xy: list[int, int] = [800, 800]
+
+
+class StackRegSettings(MyBaseModel):
+    center_crop_xy: list[int, int] = [800, 800]
+    skip_beads_fov: str = "0"
+    focus_finding_settings: Optional[FocusFindingSettings] = Field(
+        default_factory=FocusFindingSettings
+    )
+    t_reference: Literal["first", "previous"] = "first"
+
+
+class EvalTransformSettings(MyBaseModel):
+    validation_window_size: int = 10
+    validation_tolerance: float = 1000.0
+    interpolation_window_size: int = 3
+    interpolation_type: Literal["linear", "cubic"] = "linear"
+
+
+class AffineTransformSettings(MyBaseModel):
+    transform_type: Literal["euclidean", "similarity", "affine"] = "euclidean"
+    approx_transform: list = np.eye(4).tolist()
+
+    @field_validator("approx_transform")
     @classmethod
     def check_affine_transform_zyx_list(cls, v):
         if v is not None:
             if not isinstance(v, list):
-                raise ValueError("approx_affine_transform must be a list")
+                raise ValueError("approx_transform must be a list")
             arr = np.array(v)
             if arr.shape != (4, 4):
-                raise ValueError("approx_affine_transform must be a 4x4 array")
+                raise ValueError("approx_transform must be a 4x4 array")
 
         return v
+
+
+class AntsRegistrationSettings(MyBaseModel):
+    sobel_filter: bool = False
+
+
+class ManualRegistrationSettings(MyBaseModel):
+    time_index: int = 0
+    affine_90degree_rotation: int = 0
+
+
+class EstimateRegistrationSettings(MyBaseModel):
+    target_channel_name: str
+    source_channel_name: str
+    estimation_method: Literal["manual", "beads", "ants"] = "manual"
+    beads_match_settings: Optional[BeadsMatchSettings] = None
+    focus_finding_settings: Optional[FocusFindingSettings] = None
+    affine_transform_settings: AffineTransformSettings = Field(
+        default_factory=AffineTransformSettings
+    )
+    eval_transform_settings: Optional[EvalTransformSettings] = None
+    ants_registration_settings: Optional[AntsRegistrationSettings] = None
+    manual_registration_settings: Optional[ManualRegistrationSettings] = None
+    verbose: bool = False
+
+    @model_validator(mode="after")
+    def set_defaults_and_validate(self) -> "EstimateRegistrationSettings":
+        if self.estimation_method == "manual" and self.manual_registration_settings is None:
+            self.manual_registration_settings = ManualRegistrationSettings()
+        elif self.estimation_method == "beads" and self.beads_match_settings is None:
+            self.beads_match_settings = BeadsMatchSettings()
+        elif self.estimation_method == "ants" and self.ants_registration_settings is None:
+            self.ants_registration_settings = AntsRegistrationSettings()
+        return self
+
+
+class EstimateStabilizationSettings(MyBaseModel):
+    stabilization_estimation_channel: str
+    stabilization_channels: list
+    stabilization_type: Literal["z", "xy", "xyz"]
+    stabilization_method: Literal["beads", "phase-cross-corr", "focus-finding"] = (
+        "focus-finding"
+    )
+    beads_match_settings: Optional[BeadsMatchSettings] = None
+    phase_cross_corr_settings: Optional[PhaseCrossCorrSettings] = None
+    stack_reg_settings: Optional[StackRegSettings] = None
+    focus_finding_settings: Optional[FocusFindingSettings] = None
+    affine_transform_settings: AffineTransformSettings = Field(
+        default_factory=AffineTransformSettings
+    )
+    eval_transform_settings: Optional[EvalTransformSettings] = None
+    verbose: bool = False
+
+    @model_validator(mode="after")
+    def set_defaults_and_validate(self) -> "EstimateStabilizationSettings":
+        if self.stabilization_method == "beads" and self.beads_match_settings is None:
+            self.beads_match_settings = BeadsMatchSettings()
+        elif (
+            self.stabilization_method == "phase-cross-corr"
+            and self.phase_cross_corr_settings is None
+        ):
+            self.phase_cross_corr_settings = PhaseCrossCorrSettings()
+        elif self.stabilization_method == "focus-finding" and self.stabilization_type == "xyz":
+            if self.focus_finding_settings is None:
+                self.focus_finding_settings = FocusFindingSettings()
+            if self.stack_reg_settings is None:
+                self.stack_reg_settings = StackRegSettings()
+        elif self.stabilization_method == "focus-finding" and self.stabilization_type == "z":
+            if self.focus_finding_settings is None:
+                self.focus_finding_settings = FocusFindingSettings()
+        elif self.stabilization_method == "focus-finding" and self.stabilization_type == "xy":
+            if self.stack_reg_settings is None:
+                self.stack_reg_settings = StackRegSettings()
+
+        return self
 
 
 class ProcessingSettings(MyBaseModel):
@@ -96,6 +310,7 @@ class RegistrationSettings(MyBaseModel):
     keep_overhang: bool = False
     interpolation: str = "linear"
     time_indices: Union[NonNegativeInt, list[NonNegativeInt], Literal["all"]] = "all"
+    verbose: bool = False
 
     @field_validator("affine_transform_zyx")
     @classmethod
@@ -320,6 +535,9 @@ class ConcatenateSettings(MyBaseModel):
 class StabilizationSettings(MyBaseModel):
     stabilization_estimation_channel: str
     stabilization_type: Literal["z", "xy", "xyz"]
+    stabilization_method: Literal["beads", "phase-cross-corr", "focus-finding"] = (
+        "focus-finding"
+    )
     stabilization_channels: list
     affine_transform_zyx_list: list
     time_indices: Union[NonNegativeInt, list[NonNegativeInt], Literal["all"]] = "all"
@@ -341,31 +559,25 @@ class StabilizationSettings(MyBaseModel):
         return v
 
 
-class StitchSettings(MyBaseModel):
+class StitchSettings(BaseModel):
     channels: Optional[list[str]] = None
-    preprocessing: Optional[ProcessingSettings] = None
-    postprocessing: Optional[ProcessingSettings] = None
-    column_translation: Optional[list[float, float]] = None
-    row_translation: Optional[list[float, float]] = None
-    total_translation: Optional[dict[str, list[float, float]]] = None
+    total_translation: Optional[dict[str, list[float, float, float]]] = None
     affine_transform: Optional[dict[str, list]] = None
 
     def __init__(self, **data):
+        # Adding a leading zero for zyx translation for backwards compatibility
+        if "total_translation" in data:
+            for key, value in data["total_translation"].items():
+                if len(value) == 2:
+                    data["total_translation"][key] = [0] + value
+
         if not any(
             (
                 data.get("total_translation"),
                 data.get("affine_transform"),
-                all((data.get("column_translation"), data.get("row_translation"))),
             )
         ):
-            raise ValueError(
-                "One of affine_transform, total_translation or (column_translation, row_translation) must be provided"
-            )
-        if any((data.get("column_translation"), data.get("row_translation"))):
-            warnings.warn(
-                "column_translation and row_translation are deprecated. Use total_translation instead.",
-                DeprecationWarning,
-            )
+            raise ValueError("Either affine_transform or total_translation must be provided")
         super().__init__(**data)
 
 
@@ -396,7 +608,8 @@ class SegmentationModel(BaseModel):
     z_slice_2D: Optional[int] = None
     preprocessing: list[PreprocessingFunctions] = []
 
-    @validator("eval_args", pre=True)
+    @field_validator("eval_args", mode="before")
+    @classmethod
     def validate_eval_args(cls, value):
         # Retrieve valid arguments dynamically if cellpose is required
         valid_args = get_valid_eval_args()
@@ -410,17 +623,17 @@ class SegmentationModel(BaseModel):
 
         return value
 
-    @validator("z_slice_2D")
-    def check_z_slice_with_do_3D(cls, z_slice_2D, values):
-        # Only run this check if z_slice is provided (not None) and do_3D exists in eval_args
+    @field_validator("z_slice_2D")
+    @classmethod
+    def check_z_slice_with_do_3D(cls, z_slice_2D, info: ValidationInfo):
         if z_slice_2D is not None:
-            eval_args = values.get("eval_args", {})
+            eval_args = info.data.get("eval_args", {})
             do_3D = eval_args.get("do_3D", None)
             if do_3D:
                 raise ValueError(
                     "If 'z_slice_2D' is provided, 'do_3D' in 'eval_args' must be set to False."
                 )
-            z_slice_2D = 0
+            return 0  # force it to 0 as per your logic
         return z_slice_2D
 
 

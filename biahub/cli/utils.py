@@ -6,7 +6,7 @@ import multiprocessing as mp
 
 from functools import partial
 from pathlib import Path
-from typing import Tuple
+from typing import List, Tuple
 
 import click
 import numpy as np
@@ -18,73 +18,23 @@ from numpy.typing import DTypeLike
 from tqdm import tqdm
 
 
-# TODO: replace this with recOrder recOrder.cli.utils.create_empty_hcs()
-def create_empty_zarr(
-    position_paths: list[Path],
-    output_path: Path,
-    output_zyx_shape: Tuple[int],
-    chunk_zyx_shape: Tuple[int] = None,
-    voxel_size: Tuple[int, float] = (1, 1, 1),
-) -> None:
-    """Create an empty zarr store mirroring another store"""
-    DTYPE = np.float32
-    MAX_CHUNK_SIZE = 500e6  # in bytes
-    bytes_per_pixel = np.dtype(DTYPE).itemsize
+def update_model(model_instance, update_dict):
+    """
+    Properly updates a Pydantic model with only the provided values while keeping the defaults.
+    This ensures that nested models retain missing values instead of getting overwritten.
+    """
+    updated_fields = {}
+    for key, value in update_dict.items():
+        if isinstance(value, dict) and hasattr(model_instance, key):
+            # If it's a nested dict, update the nested Pydantic model properly
+            nested_model = getattr(model_instance, key)
+            updated_fields[key] = nested_model.copy(update=value)
+        else:
+            # Otherwise, just update the value directly
+            updated_fields[key] = value
 
-    # Load the first position to infer dataset information
-    input_dataset = open_ome_zarr(str(position_paths[0]), mode="r")
-    T, C, Z, Y, X = input_dataset.data.shape
-
-    click.echo("Creating empty array...")
-
-    # Handle transforms and metadata
-    transform = TransformationMeta(
-        type="scale",
-        scale=2 * (1,) + voxel_size,
-    )
-
-    # Prepare output dataset
-    channel_names = input_dataset.channel_names
-
-    # Output shape based on the type of reconstruction
-    output_shape = (T, len(channel_names)) + output_zyx_shape
-    click.echo(f"Number of positions: {len(position_paths)}")
-    click.echo(f"Output shape: {output_shape}")
-
-    # Create output dataset
-    output_dataset = open_ome_zarr(
-        output_path, layout="hcs", mode="w", channel_names=channel_names
-    )
-    if chunk_zyx_shape is None:
-        chunk_zyx_shape = list(output_zyx_shape)
-        # chunk_zyx_shape[-3] > 1 ensures while loop will not stall if single
-        # XY image is larger than MAX_CHUNK_SIZE
-        while (
-            chunk_zyx_shape[-3] > 1
-            and np.prod(chunk_zyx_shape) * bytes_per_pixel > MAX_CHUNK_SIZE
-        ):
-            chunk_zyx_shape[-3] = np.ceil(chunk_zyx_shape[-3] / 2).astype(int)
-        chunk_zyx_shape = tuple(chunk_zyx_shape)
-
-    chunk_size = 2 * (1,) + chunk_zyx_shape
-    click.echo(f"Chunk size: {chunk_size}")
-
-    # This takes care of the logic for single position or multiple position by wildcards
-    for path in position_paths:
-        path_strings = Path(path).parts[-3:]
-        pos = output_dataset.create_position(
-            str(path_strings[0]), str(path_strings[1]), str(path_strings[2])
-        )
-
-        _ = pos.create_zeros(
-            name="0",
-            shape=output_shape,
-            chunks=chunk_size,
-            dtype=DTYPE,
-            transform=[transform],
-        )
-
-    input_dataset.close()
+    # Create a new instance with updated fields
+    return model_instance.copy(update=updated_fields)
 
 
 # TODO: convert all code to use this function from now on
@@ -210,9 +160,9 @@ def get_output_paths(
             modified_path_strings = list(path_strings)
 
             # Append the suffix to the column part
-            modified_path_strings[
-                1
-            ] = f"{modified_path_strings[1]}d{position_name_counts[position_name]}"
+            modified_path_strings[1] = (
+                f"{modified_path_strings[1]}d{position_name_counts[position_name]}"
+            )
 
             # Append the modified position path
             list_output_path.append(Path(output_zarr_path, *modified_path_strings))
@@ -641,11 +591,47 @@ def _is_nested(lst):
     return any(isinstance(i, list) for i in lst) or any(isinstance(i, str) for i in lst)
 
 
-def _check_nan_n_zeros(input_array):
+def _check_nan_n_zeros(input_array: np.ndarray) -> bool:
     """
-    Checks if data are all zeros or nan
+    Checks if data are all zeros or nan.
+
+    Parameters
+    ----------
+    input_array : np.ndarray
+        Input array (N-dimensional).
+
+    Returns
+    -------
+    bool
+        True if the array is entirely zeros or NaNs, False otherwise.
     """
     return np.all(np.isnan(input_array)) or np.all(input_array == 0)
+
+
+def get_empty_frame_indices(input_array: np.ndarray) -> List[int]:
+    """
+    Get the indices of the empty frames in a 3D array.
+
+    Parameters
+    ----------
+    input_array : np.ndarray
+        Input array (3D).
+
+    Returns
+    -------
+    List[int]
+        List of Z indices that are entirely zeros or NaNs.
+    """
+    indices = []
+
+    if len(input_array.shape) == 3:  # 3D array (e.g., Z, Y, X)
+        for z in range(input_array.shape[0]):
+            if _check_nan_n_zeros(input_array[z, :, :]):
+                indices.append(z)  # Add Z index if it's empty
+        return indices
+
+    else:
+        raise ValueError("Input array must be 3D.")
 
 
 def estimate_resources(

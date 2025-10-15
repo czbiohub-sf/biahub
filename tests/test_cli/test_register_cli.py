@@ -4,10 +4,12 @@ from click.testing import CliRunner
 from numpy import testing
 
 from biahub.cli.main import cli
-from biahub.register import rescale_voxel_size
+from biahub.register import find_lir, rescale_voxel_size
 
 
-def test_register_cli(tmp_path, example_plate, example_plate_2, example_register_settings):
+def test_register_cli(
+    tmp_path, example_plate, example_plate_2, example_register_settings, sbatch_file
+):
     plate_path, _ = example_plate
     plate_path_2, _ = example_plate_2
     config_path, _ = example_register_settings
@@ -26,7 +28,9 @@ def test_register_cli(tmp_path, example_plate, example_plate_2, example_register
             str(config_path),
             "-o",
             str(output_path),
-            "-l",
+            "--local",
+            "--sbatch-filepath",
+            sbatch_file,
         ],
         catch_exceptions=False,
     )
@@ -66,3 +70,17 @@ def test_apply_affine_to_scale():
     )
     output4 = rescale_voxel_size(m4, input)
     testing.assert_allclose(np.array([2, 3, 3]), output4)
+
+
+def test_find_lir():
+    # Test with a simple 3D array
+    data = np.zeros((10, 10, 10))
+    data[2:8, 0:9, 3:10] = 1  # Set a single voxel to non-zero
+    z_slice, y_slice, x_slice = find_lir(data)
+    for _s in (z_slice, y_slice, x_slice):
+        assert isinstance(_s, slice)
+        assert _s.start is not None
+        assert _s.stop is not None
+        assert _s.start >= 0
+        assert _s.stop <= 10
+    assert (z_slice, y_slice, x_slice) == (slice(2, 8), slice(0, 9), slice(3, 10))

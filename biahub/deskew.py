@@ -7,14 +7,16 @@ import submitit
 import torch
 
 from iohub.ngff import open_ome_zarr
-from iohub.ngff.utils import process_single_position
+from iohub.ngff.utils import create_empty_plate, process_single_position
 from monai.transforms.spatial.array import Affine
 
 from biahub.cli import utils
+from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
     config_filepath,
     input_position_dirpaths,
     local,
+    monitor,
     output_dirpath,
     sbatch_filepath,
     sbatch_to_submitit,
@@ -160,6 +162,12 @@ def get_deskewed_data_shape(
         Xp = int(np.ceil((Z / px_to_scan_ratio) + (Y * ct)))
     else:
         Xp = int(np.ceil((Z / px_to_scan_ratio) - (Y * ct)))
+        if Xp <= 0:
+            raise ValueError(
+                f"Dataset contains only overhang when keep_overhang=False. "
+                f"Computed Xp={Xp} <= 0. Either set keep_overhang=True or use a dataset "
+                f"with non-overhang content."
+            )
 
     output_shape = (Y, X, Xp)
     voxel_size = (average_n_slices * st * pixel_size_um, pixel_size_um, pixel_size_um)
@@ -250,12 +258,14 @@ def _czyx_deskew_data(data, **kwargs):
 @output_dirpath()
 @sbatch_filepath()
 @local()
+@monitor()
 def deskew_cli(
     input_position_dirpaths: List[str],
-    config_filepath: str,
+    config_filepath: Path,
     output_dirpath: str,
     sbatch_filepath: str = None,
     local: bool = False,
+    monitor: bool = True,
 ):
     """
     Deskew a single position across T and C axes using a configuration file
@@ -269,7 +279,7 @@ def deskew_cli(
 
     # Convert string paths to Path objects
     output_dirpath = Path(output_dirpath)
-    config_filepath = Path(config_filepath)
+
     slurm_out_path = output_dirpath.parent / "slurm_output"
 
     # Handle single position or wildcard filepath
@@ -278,25 +288,27 @@ def deskew_cli(
     # Get the deskewing parameters
     # Load the first position to infer dataset information
     with open_ome_zarr(str(input_position_dirpaths[0]), mode="r") as input_dataset:
+        channel_names = input_dataset.channel_names
         T, C, Z, Y, X = input_dataset.data.shape
-        settings = yaml_to_model(config_filepath, DeskewSettings)
-        deskewed_shape, voxel_size = get_deskewed_data_shape(
-            (Z, Y, X),
-            settings.ls_angle_deg,
-            settings.px_to_scan_ratio,
-            settings.keep_overhang,
-            settings.average_n_slices,
-            settings.pixel_size_um,
-        )
 
-        # Create a zarr store output to mirror the input
-        utils.create_empty_zarr(
-            input_position_dirpaths,
-            output_dirpath,
-            output_zyx_shape=deskewed_shape,
-            chunk_zyx_shape=None,
-            voxel_size=voxel_size,
-        )
+    settings = yaml_to_model(config_filepath, DeskewSettings)
+    deskewed_shape, voxel_size = get_deskewed_data_shape(
+        (Z, Y, X),
+        settings.ls_angle_deg,
+        settings.px_to_scan_ratio,
+        settings.keep_overhang,
+        settings.average_n_slices,
+        settings.pixel_size_um,
+    )
+
+    # Create a zarr store output to mirror the input
+    create_empty_plate(
+        store_path=output_dirpath,
+        position_keys=[p.parts[-3:] for p in input_position_dirpaths],
+        channel_names=channel_names,
+        shape=(T, C) + deskewed_shape,
+        scale=(1, 1) + voxel_size,
+    )
 
     deskew_args = {
         'ls_angle_deg': settings.ls_angle_deg,
@@ -308,7 +320,7 @@ def deskew_cli(
 
     # Estimate resources
     num_cpus, gb_ram = estimate_resources(
-        shape=(T, C, Z, Y, X), ram_multiplier=10, max_num_cpus=16
+        shape=(T, C, Z, Y, X), ram_multiplier=16, max_num_cpus=16
     )
 
     # Prepare SLURM arguments
@@ -339,7 +351,7 @@ def deskew_cli(
     click.echo('Submitting SLURM jobs...')
 
     jobs = []
-    with executor.batch():
+    with submitit.helpers.clean_env(), executor.batch():
         for input_position_path, output_position_path in zip(
             input_position_dirpaths, output_position_paths
         ):
@@ -354,12 +366,14 @@ def deskew_cli(
                 )
             )
 
-    # monitor_jobs(jobs, input_position_dirpaths)
     job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 
     log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
+
+    if monitor:
+        monitor_jobs(jobs, input_position_dirpaths)
 
 
 if __name__ == "__main__":

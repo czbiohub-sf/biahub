@@ -795,7 +795,7 @@ def _characterize_psf(
 @output_dirpath()
 def characterize_psf_cli(
     input_position_dirpaths: List[str],
-    config_filepath: str,
+    config_filepath: Path,
     output_dirpath: str,
 ):
     """
