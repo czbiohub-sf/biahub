@@ -19,9 +19,7 @@ import torch
 import torch.nn.functional as F
 
 from iohub.ngff import open_ome_zarr
-from napari_psf_analysis.psf_analysis.extract.BeadExtractor import BeadExtractor
-from napari_psf_analysis.psf_analysis.image import Calibrated3DImage
-from napari_psf_analysis.psf_analysis.psf import PSF
+from biahub.vendor.napari_psf_analysis import BeadExtractor, PSF, Calibrated3DImage
 from numpy.typing import ArrayLike
 from scipy.interpolate import interp1d
 from scipy.signal import peak_widths

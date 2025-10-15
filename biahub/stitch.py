@@ -238,12 +238,13 @@ def write_output_chunk(
     array_shape = output_array[(slice(None), channel_idx, *output_chunk_slices)].shape
     output_chunk = np.zeros(array_shape)
 
+    fov_extent = np.array([input_fov_shape[d + 2] for d in range(3)])
+
     # Compute overlap slices
     fixed_slices = []
     moving_slices = []
     for fov_name in contributing_fov_names:
         fov_corner = np.array([fov_shifts[fov_name][d] for d in range(3)])
-        fov_extent = np.array([input_fov_shape[d + 2] for d in range(3)])
         fixed_slice, moving_slice = overlap_slices(
             chunk_corner, chunk_extent, fov_corner, fov_extent
         )
@@ -440,7 +441,7 @@ def stitch_cli(
         "slurm_job_name": "stitch",
         "slurm_mem_per_cpu": f"{gb_ram}G",
         "slurm_cpus_per_task": num_cpus,
-        "slurm_array_parallelism": 100,  # process up to 100 output chunks at a time
+        "slurm_array_parallelism": 100,
         "slurm_time": 60,
         "slurm_partition": "preempted",
     }
@@ -462,7 +463,7 @@ def stitch_cli(
     executor.update_parameters(**slurm_args)
 
     jobs = []
-    with executor.batch():
+    with submitit.helpers.clean_env(), executor.batch():
         for job_args in job_args_list:
             jobs.append(
                 executor.submit(
