@@ -1,22 +1,13 @@
 from typing import Tuple
 
 import numpy as np
+
 from numpy.typing import ArrayLike
 
 from biahub.vendor.napari_psf_analysis.image import (
     Calibrated1DImage,
     Calibrated2DImage,
     Calibrated3DImage,
-)
-from biahub.vendor.napari_psf_analysis.psf_analysis.records import (
-    YXFitRecord,
-    ZFitRecord,
-    ZYXFitRecord,
-)
-from biahub.vendor.napari_psf_analysis.psf_analysis.sample import (
-    YXSample,
-    ZSample,
-    ZYXSample,
 )
 from biahub.vendor.napari_psf_analysis.psf_analysis.fit.estimator import (
     YXEstimator,
@@ -31,6 +22,16 @@ from biahub.vendor.napari_psf_analysis.psf_analysis.fit.fit_2d import (
 )
 from biahub.vendor.napari_psf_analysis.psf_analysis.fit.fit_3d import (
     evaluate_3d_gaussian,
+)
+from biahub.vendor.napari_psf_analysis.psf_analysis.records import (
+    YXFitRecord,
+    ZFitRecord,
+    ZYXFitRecord,
+)
+from biahub.vendor.napari_psf_analysis.psf_analysis.sample import (
+    YXSample,
+    ZSample,
+    ZYXSample,
 )
 from biahub.vendor.napari_psf_analysis.psf_analysis.utils import fwhm
 

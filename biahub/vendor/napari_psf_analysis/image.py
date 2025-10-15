@@ -1,7 +1,7 @@
 from typing import Tuple
 
 from numpy.typing import ArrayLike
-from pydantic import ConfigDict, BaseModel, PositiveFloat, field_validator
+from pydantic import BaseModel, ConfigDict, PositiveFloat, field_validator
 
 
 class CalibratedImage(BaseModel):

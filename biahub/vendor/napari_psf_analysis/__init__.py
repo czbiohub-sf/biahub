@@ -1,5 +1,5 @@
 from .image import Calibrated3DImage
-from .psf_analysis import BeadExtractor, PSF
+from .psf_analysis import PSF, BeadExtractor
 
 __all__ = [
     "Calibrated3DImage",

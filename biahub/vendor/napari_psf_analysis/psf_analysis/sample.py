@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 
 import numpy as np
+
 from numpy.typing import ArrayLike
 
 from biahub.vendor.napari_psf_analysis.image import (

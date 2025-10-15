@@ -1,9 +1,9 @@
+from biahub.vendor.napari_psf_analysis.image import Calibrated3DImage
 from biahub.vendor.napari_psf_analysis.psf_analysis.fit.fitter import (
     YXFitter,
     ZFitter,
     ZYXFitter,
 )
-from biahub.vendor.napari_psf_analysis.image import Calibrated3DImage
 from biahub.vendor.napari_psf_analysis.psf_analysis.records import (
     PSFRecord,
     YXFitRecord,
