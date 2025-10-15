@@ -18,6 +18,7 @@ class Calibrated3DImage(CalibratedImage):
     def check_ndims(data: ArrayLike):
         assert data.ndim == 3, "Data must be 3D."
         return data
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
@@ -28,6 +29,7 @@ class Calibrated2DImage(CalibratedImage):
     def check_ndims(data: ArrayLike):
         assert data.ndim == 2, "Data must be 2D."
         return data
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
@@ -38,4 +40,5 @@ class Calibrated1DImage(CalibratedImage):
     def check_ndims(data: ArrayLike):
         assert data.ndim == 1, "Data must be 1D."
         return data
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
