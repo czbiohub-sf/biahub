@@ -1,100 +1,150 @@
 import datetime
-import itertools
 
 from pathlib import Path
-from typing import List, Optional, Protocol, Sequence, Union
+from typing import List, Optional
 
 import click
+import submitit
+import tensorstore as ts
 
-from iohub.ngff import Position, open_ome_zarr
-from skimage.transform import downscale_local_mean
-from slurmkit import SlurmParams, slurm_function, submit_function
+from iohub.ngff import open_ome_zarr
 
-
-class CreatePyramids(Protocol):
-    def __call__(
-        self,
-        fov: Position,
-        iterator: Sequence[Union[tuple[int, int], int]],
-        levels: int,
-        dependencies: Optional[List[Optional[int]]],
-    ) -> None:
-        ...
+from biahub.cli.parsing import (
+    input_position_dirpaths,
+    local,
+    sbatch_filepath,
+    sbatch_to_submitit,
+)
 
 
-def no_pyramids(*args, **kwargs) -> None:
-    pass
+def pyramid(fov_path: Path, levels: int, method: str) -> None:
+    """
+    Create pyramid levels for a single field of view using tensorstore downsampling.
 
+    This function uses cascade downsampling, where each level is downsampled from
+    the previous level rather than from level 0. This avoids aliasing artifacts
+    and chunk boundary issues that occur with large downsample factors.
 
-@slurm_function
-def pyramid(t: int, c: int, fov: Position, levels: int) -> None:
-    factors = (2,) * (fov.data.ndim - 2)
+    Parameters
+    ----------
+    fov_path : Path
+        Path to the FOV position directory
+    levels : int
+        Number of downsampling levels to create
+    method : str
+        Downsampling method (e.g., 'mean', 'max', 'min')
+    """
+    with open_ome_zarr(fov_path, mode="r+") as dataset:
+        dataset.initialize_pyramid(levels=levels)
 
-    # Add click.echo messages
-    array = fov["0"][t, c]
-    for level in range(1, levels):
-        array = downscale_local_mean(array, factors)
-        fov[str(level)][t, c] = array
+        for level in range(1, levels):
+            previous_level = dataset[str(level - 1)].tensorstore()
 
+            current_scale = dataset.get_effective_scale(str(level))
+            previous_scale = dataset.get_effective_scale(str(level - 1))
+            downsample_factors = [
+                int(round(current_scale[i] / previous_scale[i]))
+                for i in range(len(current_scale))
+            ]
 
-def create_pyramids(
-    fov: Position,
-    iterator: Sequence[Union[tuple[int, int], int]],
-    levels: int,
-    dependencies: Optional[List[Optional[int]]],
-) -> None:
-    """Creates additional levels of multi-scales pyramid."""
+            click.echo(f"  Level {level}: factors {downsample_factors} (from level {level-1})")
 
-    if dependencies is None:
-        dependencies = [None] * len(iterator)
+            downsampled = ts.downsample(
+                previous_level, downsample_factors=downsample_factors, method=method
+            )
 
-    elif len(dependencies) != len(iterator):
-        raise ValueError(
-            f"Number of dependencies ({len(dependencies)}) must match iterator length ({len(iterator)})."
-        )
+            target_store = dataset[str(level)].tensorstore()
+            target_store[:].write(downsampled[:].read().result()).result()
 
-    params = SlurmParams(
-        partition="preempted",
-        cpus_per_task=16,
-        mem="128G",
-        time=datetime.timedelta(minutes=30),
-        output="slurm_output/pyramid-%j.out",
-    )
-
-    if "1" not in fov.array_keys():
-        fov.initialize_pyramid(levels=levels)
-
-    pyramid_func = pyramid(fov=fov, levels=levels)
-    try:
-        for i, (t, c) in enumerate(iterator):  # type: ignore[misc]
-            submit_function(pyramid_func, params, t=t, c=c, dependencies=dependencies[i])
-
-    except TypeError:
-        for i, t in enumerate(iterator):
-            for c in range(fov.data.shape[1]):
-                submit_function(pyramid_func, params, t=t, c=c, dependencies=dependencies[i])
+        click.echo(f"Completed pyramid for FOV: {fov_path}")
 
 
 @click.command("pyramid")
-# can't import from parsing due to circular import
-@click.argument("paths", type=click.Path(exists=True, path_type=Path), nargs=-1)
+@input_position_dirpaths()
+@sbatch_filepath()
+@local()
 @click.option(
     "--levels",
-    "-l",
+    "-lv",
     type=int,
     default=4,
     show_default=True,
-    help="Number of down-sampling levels.",
+    help="Number of downsampling levels to create.",
 )
-def pyramid_cli(paths: Sequence[Path], levels: int) -> None:
-    """Creates additional levels of multi-scales pyramid."""
+@click.option(
+    "--method",
+    "-m",
+    type=click.Choice(
+        [
+            "stride",
+            "median",
+            "mode",
+            "mean",
+            "min",
+            "max",
+        ]
+    ),
+    default="mean",
+    show_default=True,
+    help="Downsampling method to use.",
+)
+def pyramid_cli(
+    input_position_dirpaths: List[Path],
+    levels: int,
+    method: str,
+    sbatch_filepath: Optional[Path],
+    local: bool,
+) -> None:
+    """
+    Creates additional levels of multi-scale pyramids for OME-Zarr datasets.
 
-    for path in paths:
-        fov = open_ome_zarr(path, layout="fov", mode="a")
+    Uses efficient downsampling to create pyramid levels
+    in parallel. Each field-of-view (FOV) is processed as a separate SLURM job,
+    downsampling all timepoints and channels. The pyramids are created in-place
+    within the input zarr store using the specified downsampling method (default: 'mean').
 
-        iterator = list(itertools.product(range(fov.data.shape[0]), range(fov.data.shape[1])))
+    Example:
+        biahub pyramid -i ./data.zarr/0/0/0 -lv 4 --method max
+        biahub pyramid -i ./data.zarr/*/*/* --levels 5 --local
+    """
+    cluster = "local" if local else "slurm"
 
-        create_pyramids(fov, iterator, levels, dependencies=None)
+    slurm_args = {
+        "slurm_job_name": "pyramid",
+        "slurm_partition": "preempted",
+        "slurm_cpus_per_task": 16,
+        "slurm_mem_per_cpu": "8G",
+        "slurm_time": 30,
+        "slurm_array_parallelism": 100,
+    }
+
+    # Override with sbatch file parameters if provided
+    if sbatch_filepath:
+        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
+
+    slurm_out_path = Path("slurm_output")
+    slurm_out_path.mkdir(exist_ok=True)
+
+    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
+    executor.update_parameters(**slurm_args)
+
+    click.echo(
+        f"Submitting {len(input_position_dirpaths)} pyramid jobs with resources: {slurm_args}"
+    )
+
+    jobs = []
+    with submitit.helpers.clean_env(), executor.batch():
+        for fov_path in input_position_dirpaths:
+            job = executor.submit(pyramid, fov_path=fov_path, levels=levels, method=method)
+            jobs.append(job)
+
+    job_ids = [job.job_id for job in jobs]
+    timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_path = slurm_out_path / f"pyramid-jobs_{timestamp}.log"
+    with log_path.open("w") as log_file:
+        log_file.write("\n".join(job_ids))
+
+    # wait_for_jobs_to_finish(jobs)
 
 
 if __name__ == "__main__":
