@@ -1990,6 +1990,7 @@ def estimate_transform_from_beads(
         target_peaks=target_peaks,
         angle_threshold=beads_match_settings.filter_angle_threshold,
         distance_threshold=beads_match_settings.filter_distance_threshold,
+        verbose=verbose,
     )
 
     if len(matches) < 3:
