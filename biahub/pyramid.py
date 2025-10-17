@@ -47,8 +47,6 @@ def pyramid(fov_path: Path, levels: int, method: str) -> None:
                 for i in range(len(current_scale))
             ]
 
-            click.echo(f"  Level {level}: factors {downsample_factors} (from level {level-1})")
-
             downsampled = ts.downsample(
                 previous_level, downsample_factors=downsample_factors, method=method
             )
