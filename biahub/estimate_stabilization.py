@@ -247,7 +247,7 @@ def phase_cross_corr_padding(
 
     Computes translation shift using arg. maximum of phase cross correlation.
     Input are padded or cropped for fast FFT computation assuming a maximum translation shift.
-
+    moving -> reference
     Parameters
     ----------
     ref_img : ArrayLike
@@ -411,9 +411,9 @@ def get_tform_from_pcc(
     dz, dy, dx = shift
 
     transform = np.eye(4)
-    transform[0, 3] = dx
+    transform[2, 3] = dx
     transform[1, 3] = dy
-    transform[2, 3] = dz
+    transform[0, 3] = dz
     if verbose:
         click.echo(f"transform: {transform}")
 
