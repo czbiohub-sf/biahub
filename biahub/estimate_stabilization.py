@@ -1242,8 +1242,9 @@ def estimate_z_focus_per_position(
 
     for z_val_next in focus_idx[1:]:
         shift = np.eye(4)
+        # moving -> reference
         # Set the translation components of the transform
-        shift[0, 3] = z_val_next - z_val
+        shift[0, 3] =  z_val - z_val_next
         z_focus_shift.append(shift)
 
     transform = np.array(z_focus_shift)
