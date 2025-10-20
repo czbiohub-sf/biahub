@@ -1,13 +1,14 @@
 import datetime
 
+from itertools import batched
 from pathlib import Path
 from typing import List, Literal, Optional
 
 import click
 import submitit
 import tensorstore as ts
+
 from iohub.ngff import open_ome_zarr
-from itertools import batched
 
 from biahub.cli.parsing import (
     input_position_dirpaths,
@@ -15,7 +16,6 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.slurm import wait_for_jobs_to_finish
 
 
 def _write_ts_downsampled(
