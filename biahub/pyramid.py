@@ -70,7 +70,9 @@ def _write_ts_downsampled(
         write_batch(batch)
 
 
-def pyramid(fov_path: Path, levels: int, method: str, batch_size: int | Literal["auto"] = "auto") -> None:
+def pyramid(
+    fov_path: Path, levels: int, method: str, batch_size: int | Literal["auto"] = "auto"
+) -> None:
     """
     Create pyramid levels for a single field of view using tensorstore downsampling.
 
