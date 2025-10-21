@@ -957,6 +957,7 @@ def estimate_xy_stabilization_per_position(
     center_crop_xy: list[int, int],
     t_reference: str = "previous",
     verbose: bool = False,
+    vs_path: str = None,
 ) -> ArrayLike:
     """
     Estimate the xy stabilization for a single position.
@@ -977,7 +978,8 @@ def estimate_xy_stabilization_per_position(
         Reference timepoint.
     verbose : bool
         If True, print verbose output.
-
+    vs_path : str
+        Path to the virtual stain data.
     Returns
     -------
     ArrayLike
@@ -1035,6 +1037,7 @@ def estimate_xy_stabilization(
     sbatch_filepath: Optional[Path] = None,
     cluster: str = "local",
     verbose: bool = False,
+    vs_path: str = None,
 ) -> dict[str, list[ArrayLike]]:
     """
     Estimate XY stabilization using StackReg.
@@ -1090,6 +1093,7 @@ def estimate_xy_stabilization(
             verbose=verbose,
             estimate_z_index=True,
             focus_finding_settings=stack_reg_settings.focus_finding_settings,
+            vs_path=vs_path,
         )
 
     num_cpus, gb_ram_per_cpu = estimate_resources(
@@ -1102,7 +1106,7 @@ def estimate_xy_stabilization(
         "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,
-        "slurm_time": 10,
+        "slurm_time": 60,
         "slurm_partition": "preempted",
     }
 
@@ -1130,6 +1134,7 @@ def estimate_xy_stabilization(
                 center_crop_xy=stack_reg_settings.center_crop_xy,
                 t_reference=stack_reg_settings.t_reference,
                 verbose=verbose,
+                vs_path=vs_path,
             )
             jobs.append(job)
 
@@ -1161,6 +1166,7 @@ def estimate_z_focus_per_position(
     output_path_focus_csv: Path,
     output_path_transform: Path,
     verbose: bool = False,
+    vs_path: str = None,
 ) -> None:
     """
     Estimate the z-focus for each timepoint and channel.
@@ -1179,24 +1185,44 @@ def estimate_z_focus_per_position(
         Path to the output transform file.
     verbose : bool
         If True, print verbose output.
-
+    vs_path : str
+        Path to the virtual stain data.
     Returns
     -------
     None
     """
     position, time_idx, channel, focus_idx = [], [], [], []
-
+   
     with open_ome_zarr(input_position_dirpath) as dataset:
         channel_names = dataset.channel_names
         T, _, Z, Y, X = dataset[0].shape
         _, _, _, _, pixel_size = dataset.scale
-
+        
         for tc_idx in itertools.product(range(T), input_channel_indices):
-            data_zyx = dataset.data[tc_idx][
+            data_zyx = dataset.data[tc_idx]
+            if vs_path:
+                print(f"Applying virtual stain mask to {input_position_dirpath}")
+                print(f"vs_path: {vs_path}")
+                fov = "/".join(input_position_dirpath.parts[-3:])
+           
+                from skimage.filters import threshold_otsu
+                from scipy.ndimage import distance_transform_edt
+                with open_ome_zarr(Path(vs_path)/fov) as vs_dataset:
+                    nuc_arr = np.asarray(vs_dataset.data.dask_array()[tc_idx[0], 0, :, :, :])
+                    threshold = threshold_otsu(nuc_arr)
+                    nuc_arr_mask = nuc_arr > threshold
+                    radius_um = 2.0  # desired physical dilation radius (µm)
+                    dist = distance_transform_edt(~nuc_arr_mask, sampling=pixel_size)
+                    dilated_nuc_arr_mask = dist <= radius_um
+                    data_zyx = data_zyx * dilated_nuc_arr_mask
+                    print(f"max value: {np.max(data_zyx)}")
+                    print(f"min value: {np.min(data_zyx)}")
+            data_zyx = data_zyx[
                 :,
                 Y // 2 - center_crop_xy[1] // 2 : Y // 2 + center_crop_xy[1] // 2,
                 X // 2 - center_crop_xy[0] // 2 : X // 2 + center_crop_xy[0] // 2,
             ]
+            
 
             # if the FOV is empty, set the focal plane to 0
             if np.sum(data_zyx) == 0:
@@ -1315,6 +1341,7 @@ def estimate_z_stabilization(
     cluster: str = "local",
     verbose: bool = False,
     estimate_z_index: bool = False,
+    vs_path: str = None,
 ) -> dict[str, list[ArrayLike]]:
     """
     Estimate the z stabilization for a list of positions.
@@ -1364,7 +1391,7 @@ def estimate_z_stabilization(
         "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,
-        "slurm_time": 30,
+        "slurm_time": 60,
         "slurm_partition": "preempted",
     }
 
@@ -1395,6 +1422,7 @@ def estimate_z_stabilization(
                 output_path_focus_csv=output_folder_focus_path,
                 output_path_transform=output_transforms_path,
                 verbose=verbose,
+                vs_path=vs_path,
             )
             jobs.append(job)
 
@@ -1478,6 +1506,7 @@ def estimate_stabilization(
     config_filepath: str,
     sbatch_filepath: str = None,
     local: bool = False,
+    vs_path: str = None,
 ) -> None:
     """
     Estimate the stabilization matrices for a list of positions.
@@ -1494,7 +1523,8 @@ def estimate_stabilization(
         Path to the sbatch file.
     local : bool
         If True, run locally.
-
+    vs_path : str
+        Path to the virtual stain data.
     Returns
     -------
     None
@@ -1548,6 +1578,7 @@ def estimate_stabilization(
                 sbatch_filepath=sbatch_filepath,
                 cluster=cluster,
                 verbose=verbose,
+                vs_path=vs_path,
             )
 
             xy_transforms_dict = estimate_xy_stabilization(
@@ -1761,6 +1792,7 @@ def estimate_stabilization(
             channel_index=channel_index,
             focus_finding_settings=settings.focus_finding_settings,
             sbatch_filepath=sbatch_filepath,
+            vs_path=vs_path,
             cluster=cluster,
             verbose=verbose,
         )
@@ -1815,6 +1847,7 @@ def estimate_stabilization(
                 sbatch_filepath=sbatch_filepath,
                 cluster=cluster,
                 verbose=verbose,
+                vs_path=vs_path,
             )
 
             model = StabilizationSettings(
@@ -1864,12 +1897,17 @@ def estimate_stabilization(
 @config_filepath()
 @sbatch_filepath()
 @local()
+@click.option("--vs_path",
+type=str, 
+required=False,
+help="Path to the virtual stain data.", default=None)
 def estimate_stabilization_cli(
     input_position_dirpaths: List[str],
     output_dirpath: str,
     config_filepath: Path,
     sbatch_filepath: str = None,
     local: bool = False,
+    vs_path: str = None,
 ):
     """
     Estimate translation matrices for XYZ stabilization of a timelapse dataset.
@@ -1887,6 +1925,7 @@ def estimate_stabilization_cli(
         config_filepath=config_filepath,
         sbatch_filepath=sbatch_filepath,
         local=local,
+        vs_path=vs_path,
     )
 
 
