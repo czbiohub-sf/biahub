@@ -80,6 +80,11 @@ COMMANDS = [
         "help": "Optimize transform based on match filtering",
     },
     {
+        "name": "pyramid",
+        "import_path": "biahub.pyramid.pyramid_cli",
+        "help": "Create pyramid levels for a dataset",
+    },
+    {
         "name": "register",
         "import_path": "biahub.register.register_cli",
         "help": "Apply an affine transformation to a single position",

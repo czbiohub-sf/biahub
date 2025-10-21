@@ -15,7 +15,7 @@ def _validate_and_process_paths(
     ctx: click.Context, opt: click.Option, value: str
 ) -> list[Path]:
     # Sort and validate the input paths
-    input_paths = [Path(path) for path in natsorted(value)]
+    input_paths = [p for p in map(Path, natsorted(value)) if p.is_dir()]
     with open_ome_zarr(input_paths[0], mode='r') as dataset:
         if isinstance(dataset, Plate):
             raise ValueError(
