@@ -1,8 +1,7 @@
 import datetime
 
-from itertools import batched
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import List, Optional
 
 import click
 import submitit
@@ -16,6 +15,7 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
+from biahub.cli.utils import estimate_resources
 
 
 def _write_ts_downsampled(
@@ -24,10 +24,9 @@ def _write_ts_downsampled(
     downsample_factors: list[int],
     method: str,
     level: int,
-    batch_size: int,
 ) -> None:
     """
-    Tensorstore downsampling with transaction + chunking.
+    Tensorstore downsampling with chunking.
 
     Parameters
     ----------
@@ -41,8 +40,6 @@ def _write_ts_downsampled(
         Downsampling method (e.g., 'mean', 'max', 'min')
     level : int
         Pyramid level being processed
-    batch_size : int
-        Number of chunks per batch/transaction
     """
     downsampled = ts.downsample(
         source_ts, downsample_factors=downsample_factors, method=method
@@ -50,29 +47,15 @@ def _write_ts_downsampled(
 
     step = target_ts.chunk_layout.write_chunk.shape[0]
 
-    chunk_starts = range(0, downsampled.shape[0], step)
-
-    def write_batch(batch_starts):
-        """Write a batch of TensorStore chunks in a single transaction."""
+    for start in range(0, downsampled.shape[0], step):
         with ts.Transaction() as txn:
             target_with_txn = target_ts.with_transaction(txn)
-
-            futures = []
-            for start in batch_starts:
-                stop = min(start + step, downsampled.shape[0])
-                future = target_with_txn[start:stop].write(downsampled[start:stop])
-                futures.append((start, stop, future))
-
-            for start, stop, future in futures:
-                future.result()
-
-    for batch in batched(chunk_starts, batch_size):
-        write_batch(batch)
+            downsampled_with_txn = downsampled.with_transaction(txn)
+            stop = min(start + step, downsampled.shape[0])
+            target_with_txn[start:stop].write(downsampled_with_txn[start:stop]).result()
 
 
-def pyramid(
-    fov_path: Path, levels: int, method: str, batch_size: int | Literal["auto"] = "auto"
-) -> None:
+def pyramid(fov_path: Path, levels: int, method: str) -> None:
     """
     Create pyramid levels for a single field of view using tensorstore downsampling.
 
@@ -88,13 +71,7 @@ def pyramid(
         Number of downsampling levels to create
     method : str
         Downsampling method (e.g., 'mean', 'max', 'min')
-    batch_size : int | Literal["auto"]
-        Number of chunks per batch/transaction used by tensorstore to write downsampled data.
-        If "auto", uses the default batch size of 5.
     """
-    # Handle "auto" batch_size
-    if batch_size == "auto":
-        batch_size = 5
 
     with open_ome_zarr(fov_path, mode="r+") as dataset:
         dataset.initialize_pyramid(levels=levels + 1)
@@ -116,7 +93,6 @@ def pyramid(
                 downsample_factors=downsample_factors,
                 method=method,
                 level=level,
-                batch_size=batch_size,
             )
 
     click.echo(f"Completed pyramid for FOV: {fov_path}")
@@ -130,7 +106,7 @@ def pyramid(
     "--levels",
     "-lv",
     type=int,
-    default=4,
+    default=3,
     show_default=True,
     help="Number of downsampling levels to create.",
 )
@@ -151,19 +127,10 @@ def pyramid(
     show_default=True,
     help="Downsampling method to use.",
 )
-@click.option(
-    "--batch-size",
-    "-bs",
-    type=int,
-    default="auto",
-    show_default=True,
-    help="Number of TensorStore chunks to write downsampled data in a single transaction.",
-)
 def pyramid_cli(
     input_position_dirpaths: List[Path],
     levels: int = 3,
     method: str = "mean",
-    batch_size: int | Literal["auto"] = "auto",
     sbatch_filepath: Optional[Path] = None,
     local: bool = False,
 ) -> None:
@@ -181,13 +148,20 @@ def pyramid_cli(
     if levels == 0:
         click.echo("No pyramid levels to create.")
         return
+
+    # Estimate resources based on first FOV data shape
+    with open_ome_zarr(input_position_dirpaths[0], mode="r") as dataset:
+        T, C, Z, Y, X = dataset.data.shape
+
+    num_cpus, gb_ram = estimate_resources(shape=(T, C, Z, Y, X), ram_multiplier=5)
+
     cluster = "local" if local else "slurm"
 
     slurm_args = {
         "slurm_job_name": "pyramid",
-        "slurm_partition": "preempted",
-        "slurm_cpus_per_task": 16,
-        "slurm_mem_per_cpu": "8G",
+        "slurm_partition": "cpu",
+        "slurm_cpus_per_task": num_cpus,
+        "slurm_mem_per_cpu": f"{gb_ram}G",
         "slurm_time": 30,
         "slurm_array_parallelism": 100,
     }
@@ -209,9 +183,7 @@ def pyramid_cli(
     jobs = []
     with submitit.helpers.clean_env(), executor.batch():
         for fov_path in input_position_dirpaths:
-            job = executor.submit(
-                pyramid, fov_path=fov_path, levels=levels, method=method, batch_size=batch_size
-            )
+            job = executor.submit(pyramid, fov_path=fov_path, levels=levels, method=method)
             jobs.append(job)
 
     job_ids = [job.job_id for job in jobs]
