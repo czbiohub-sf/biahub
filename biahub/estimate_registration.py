@@ -1784,11 +1784,12 @@ def filter_matches(
     source_peaks: ArrayLike,
     target_peaks: ArrayLike,
     angle_threshold: float = 30,
-    distance_threshold: float = 0.95,
+    min_distance_threshold: float = 0.01,
+    max_distance_threshold: float = 0.95,
     verbose: bool = False,
 ) -> ArrayLike:
     """
-    Filter matches based on the angle and distance thresholds.
+    Filter matches based on angle and distance thresholds.
 
     Parameters
     ----------
@@ -1799,54 +1800,58 @@ def filter_matches(
     target_peaks : ArrayLike
         (n, 2) array of target peaks.
     angle_threshold : float
-        Angle threshold in degrees.
-    distance_threshold : float
-        Distance threshold.
+        Maximum allowed deviation from dominant angle (degrees).
+    min_distance_threshold : float
+        Lower quantile cutoff for distance filtering (e.g. 0.05 keeps matches above 5th percentile).
+    max_distance_threshold : float
+        Upper quantile cutoff for distance filtering (e.g. 0.95 keeps matches below 95th percentile).
     verbose : bool
-        If True, prints detailed logs during the process.
+        If True, prints detailed logs.
 
     Returns
     -------
     ArrayLike
         (n, 2) array of filtered matches.
-
-    Notes
-    -----
-    Uses the angle and distance thresholds to filter matches.
-    The angle threshold is the maximum allowed angle between the source and target peaks.
-    The distance threshold is the maximum allowed distance between the source and target peaks.
-    The dominant angle is the angle that appears most frequently in the matches.
     """
-    if distance_threshold:
-        click.echo(f'Filtering matches with distance threshold: {distance_threshold}')
+    # --- Distance filtering ---
+    if min_distance_threshold is not None or max_distance_threshold is not None:
         dist = np.linalg.norm(
             source_peaks[matches[:, 0]] - target_peaks[matches[:, 1]], axis=1
         )
-        matches = matches[dist < np.quantile(dist, distance_threshold), :]
 
-    if verbose:
-        click.echo(f'Total of matches after distance filtering: {len(matches)}')
+        low = np.quantile(dist, min_distance_threshold)
+        high = np.quantile(dist, max_distance_threshold)
 
+        if verbose:
+            click.echo(
+                f"Filtering matches with distance quantiles: [{min_distance_threshold}, {max_distance_threshold}]"
+            )
+            click.echo(f"Distance range: [{low:.3f}, {high:.3f}]")
+
+        keep = (dist >= low) & (dist <= high)
+        matches = matches[keep]
+
+        if verbose:
+            click.echo(f"Total matches after distance filtering: {len(matches)}")
+
+    # --- Angle filtering ---
     if angle_threshold:
-        click.echo(f'Filtering matches with angle threshold: {angle_threshold}')
         vectors = target_peaks[matches[:, 1]] - source_peaks[matches[:, 0]]
         angles_rad = np.arctan2(vectors[:, 1], vectors[:, 0])
         angles_deg = np.degrees(angles_rad)
 
-        bins = np.linspace(-180, 180, 36)  # 10-degree bins
+        bins = np.linspace(-180, 180, 36)
         hist, bin_edges = np.histogram(angles_deg, bins=bins)
-
         dominant_bin_index = np.argmax(hist)
         dominant_angle = (
             bin_edges[dominant_bin_index] + bin_edges[dominant_bin_index + 1]
         ) / 2
 
         filtered_indices = np.where(np.abs(angles_deg - dominant_angle) <= angle_threshold)[0]
-
         matches = matches[filtered_indices]
 
-    if verbose:
-        click.echo(f'Total of matches after angle filtering: {len(matches)}')
+        if verbose:
+            click.echo(f"Total matches after angle filtering: {len(matches)}")
 
     return matches
 
@@ -1989,7 +1994,8 @@ def estimate_transform_from_beads(
         source_peaks=source_peaks,
         target_peaks=target_peaks,
         angle_threshold=beads_match_settings.filter_angle_threshold,
-        distance_threshold=beads_match_settings.filter_distance_threshold,
+        min_distance_threshold=beads_match_settings.filter_min_distance_threshold,
+        max_distance_threshold=beads_match_settings.filter_max_distance_threshold,
         verbose=verbose,
     )
 

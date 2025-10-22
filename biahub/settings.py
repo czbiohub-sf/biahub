@@ -132,7 +132,8 @@ class BeadsMatchSettings(MyBaseModel):
     )
     match_descriptor_settings: MatchDescriptorSettings = MatchDescriptorSettings()
     hungarian_match_settings: HungarianMatchSettings = HungarianMatchSettings()
-    filter_distance_threshold: float = 0.95
+    filter_max_distance_threshold: float = 0.95
+    filter_min_distance_threshold: float = 0.01
     filter_angle_threshold: float = 0
 
 
