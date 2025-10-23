@@ -1,8 +1,6 @@
 # Organelle segmentation settings using Frangi filtering
 # Each channel can have its own segmentation parameters
-
-# Pixel spacing in micrometers (Z, Y, X)
-spacing: [0.3, 0.108, 0.108]
+# Note: Pixel spacing (Z, Y, X) is automatically extracted from the zarr metadata
 
 # Define channels to segment with their specific parameters
 channels:

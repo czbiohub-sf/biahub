@@ -131,7 +131,7 @@ def extract_organelle_features_cli(
     with open_ome_zarr(str(input_position_dirpaths[0]), mode="r") as input_dataset:
         T, C, Z, Y, X = input_dataset.data.shape
         channel_names = input_dataset.channel_names
-
+        spacing = input_dataset.scale[-3:]
     # Map channel names to indices
     if settings.labels_channel not in channel_names:
         raise ValueError(
@@ -196,7 +196,7 @@ def extract_organelle_features_cli(
                     labels_channel_idx,
                     intensity_channel_idx,
                     frangi_channel_idx,
-                    settings.spacing,
+                    spacing,
                     settings.properties,
                     settings.extra_properties,
                 )

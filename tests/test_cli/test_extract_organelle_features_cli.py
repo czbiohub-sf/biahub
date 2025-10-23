@@ -47,7 +47,6 @@ def test_extract_organelle_features_cli_basic(create_custom_plate, tmp_path, sba
         "intensity_channel": "mito",
         "frangi_channel": None,
         "tracking_csv_path": None,
-        "spacing": [1.0, 1.0, 1.0],
         "properties": ["label", "area", "mean_intensity"],
         "extra_properties": ["aspect_ratio", "circularity"],
         "output_csv_path": str(output_csv_path),
@@ -121,7 +120,6 @@ def test_extract_organelle_features_cli_no_extra_properties(
     config = {
         "labels_channel": "labels",
         "intensity_channel": "intensity",
-        "spacing": [1.0, 1.0, 1.0],
         "properties": ["label", "area"],
         "extra_properties": [],
         "output_csv_path": str(output_csv_path),
@@ -181,7 +179,6 @@ def test_extract_organelle_features_cli_multiple_positions(
     config = {
         "labels_channel": "labels",
         "intensity_channel": "intensity",
-        "spacing": [1.0, 1.0, 1.0],
         "properties": ["label", "area"],
         "extra_properties": [],
         "output_csv_path": str(output_csv_path),

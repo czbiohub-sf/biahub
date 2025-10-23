@@ -732,6 +732,7 @@ def segment_organelles_cli(
         settings = yaml_to_model(config_filepath, OrganelleSegmentationSettings)
         scale = input_dataset.scale
         channel_names = input_dataset.channel_names
+        spacing = scale[-3:]
 
     # Map channel names to indices
     channel_kwargs_dict = {}
@@ -812,7 +813,7 @@ def segment_organelles_cli(
                     output_channel_indices=[list(range(C_segment))],
                     num_processes=np.min([20, int(num_cpus * 0.8)]),
                     channel_kwargs_dict=channel_kwargs_dict,
-                    spacing=settings.spacing,
+                    spacing=spacing,
                 )
             )
 

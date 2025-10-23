@@ -33,7 +33,6 @@ def test_segment_organelles_cli_basic(create_custom_plate, tmp_path, sbatch_file
     # Create a temporary config file
     config_path = tmp_path / "organelle_segment_config.yml"
     config = {
-        "spacing": [1.0, 1.0, 1.0],
         "channels": {
             "mito": {
                 "segment_kwargs": {
@@ -115,7 +114,6 @@ def test_segment_organelles_cli_single_channel(create_custom_plate, tmp_path, sb
     # Create config
     config_path = tmp_path / "config.yml"
     config = {
-        "spacing": [1.0, 1.0, 1.0],
         "channels": {
             "mito": {
                 "segment_kwargs": {

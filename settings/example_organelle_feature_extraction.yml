@@ -16,8 +16,7 @@ frangi_channel: null
 # If null, features will be extracted for all objects per timepoint
 tracking_csv_path: null
 
-# Pixel spacing in micrometers (Z, Y, X)
-spacing: [0.3, 0.108, 0.108]
+# Note: Pixel spacing (Z, Y, X) is automatically extracted from the zarr metadata
 
 # Base properties to extract (standard regionprops features)
 # If null, uses default set from extract_features_zyx
