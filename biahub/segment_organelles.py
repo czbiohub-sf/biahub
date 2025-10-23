@@ -11,7 +11,7 @@ from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate, process_single_position
 from numpy.typing import ArrayLike
 from skimage import measure, morphology
-from skimage.exposure import equalize_adapthist
+from skimage.exposure import equalize_adapthist, rescale_intensity
 from skimage.feature import graycomatrix, graycoprops
 from skimage.filters import frangi, threshold_otsu, threshold_triangle
 
@@ -374,12 +374,16 @@ def segment_zyx(
     assert input_zyx.ndim == 3
     Z, Y, X = input_zyx.shape[-3:]
 
+    # Normalize input to [0, 1] range for CLAHE
+    # CLAHE expects float images to be in [-1, 1] range
+    input_zyx_normalized = rescale_intensity(input_zyx, out_range=(0, 1))
+
     if clahe_kernel_size is None:
         clahe_kernel_size = max(Z, Y, X) // 8
 
     # Apply CLAHE for contrast enhancement
     enhanced_zyx = equalize_adapthist(
-        input_zyx,
+        input_zyx_normalized,
         kernel_size=clahe_kernel_size,
         clip_limit=clahe_clip_limit,
     )
@@ -793,6 +797,13 @@ def segment_organelles_cli(
     else:
         cluster = "slurm"
 
+    # Remap channel_kwargs_dict to 0-indexed for extracted channels
+    # process_single_position extracts specific channels, creating a new CZYX array
+    # with channels starting from index 0, so we need to remap the keys
+    remapped_channel_kwargs_dict = {}
+    for new_idx, original_idx in enumerate(sorted(channel_kwargs_dict.keys())):
+        remapped_channel_kwargs_dict[new_idx] = channel_kwargs_dict[original_idx]
+
     # Prepare and submit jobs
     click.echo(f"Preparing jobs: {slurm_args}")
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
@@ -812,7 +823,7 @@ def segment_organelles_cli(
                     input_channel_indices=[list(channel_kwargs_dict.keys())],
                     output_channel_indices=[list(range(C_segment))],
                     num_processes=np.min([20, int(num_cpus * 0.8)]),
-                    channel_kwargs_dict=channel_kwargs_dict,
+                    channel_kwargs_dict=remapped_channel_kwargs_dict,
                     spacing=spacing,
                 )
             )
