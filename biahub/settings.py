@@ -640,3 +640,52 @@ class SegmentationModel(BaseModel):
 class SegmentationSettings(BaseModel):
     models: Dict[str, SegmentationModel]
     model_config = {"extra": "forbid", "protected_namespaces": ()}
+
+
+class OrganelleSegmentationSettings(MyBaseModel):
+    channels: Dict[str, Dict[str, Any]]
+    spacing: Tuple[PositiveFloat, PositiveFloat, PositiveFloat]
+
+    @field_validator("spacing", mode="before")
+    @classmethod
+    def validate_spacing(cls, v):
+        if isinstance(v, list):
+            v = tuple(v)
+        if not isinstance(v, tuple) or len(v) != 3:
+            raise ValueError(
+                "spacing must be a tuple or list of exactly 3 positive floats (Z, Y, X)"
+            )
+        if not all(isinstance(x, (int, float)) and x > 0 for x in v):
+            raise ValueError("All spacing values must be positive numbers")
+        return v
+
+
+class OrganelleFeatureExtractionSettings(MyBaseModel):
+    labels_channel: str
+    intensity_channel: str
+    frangi_channel: Optional[str] = None
+    tracking_csv_path: Optional[str] = None
+    properties: Optional[List[str]] = None
+    extra_properties: Optional[List[str]] = None
+    spacing: Tuple[PositiveFloat, PositiveFloat, PositiveFloat]
+    output_csv_path: str
+
+    @field_validator("spacing", mode="before")
+    @classmethod
+    def validate_spacing(cls, v):
+        if isinstance(v, list):
+            v = tuple(v)
+        if not isinstance(v, tuple) or len(v) != 3:
+            raise ValueError(
+                "spacing must be a tuple or list of exactly 3 positive floats (Z, Y, X)"
+            )
+        if not all(isinstance(x, (int, float)) and x > 0 for x in v):
+            raise ValueError("All spacing values must be positive numbers")
+        return v
+
+    @field_validator("tracking_csv_path", mode="before")
+    @classmethod
+    def validate_tracking_csv_path(cls, v):
+        if v is not None and not Path(v).exists():
+            raise ValueError(f"tracking_csv_path does not exist: {v}")
+        return v
