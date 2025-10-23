@@ -4,11 +4,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-`biahub` is a bioimage analysis hub for high-throughput data reconstruction on HPC clusters with Slurm workload management. It was originally developed to reconstruct data acquired on the mantis microscope using the shrimPy acquisition engine, and processes multimodal microscopy datasets stored as OME-ZARR files.
+`biahub` is a bioimage analysis hub for high-throughput data reconstruction on HPC clusters with Slurm workload management. It accelerates processing of mult`imodal microscopy datasets stored as OME-ZARR files.
 
 ## Key Development Commands
 
-### Installation and Setup
+### Usage on HPC nodes login-01, login-01, gpu-*, cpu-*
+Use pre-built biautils environment.
+
+```bash
+module load comp_micro
+conda activate biautils
+```
+
+### Fresh installation
 ```bash
 # Create conda environment and install
 conda create -n biahub python==3.11
@@ -55,7 +63,7 @@ Each processing operation has its own module with standardized structure:
 2. **Reconstruction**: deconvolve (with PSF), reconstruct (phase/birefringence)
 3. **Multi-image Operations**: concatenate, stitch  
 4. **Analysis**: segment, track, characterize-psf
-5. **Utility**: estimate-* commands for parameter optimization
+5. **Calibration**: estimate-* commands for parameter optimization
 
 ### Configuration System
 - **Settings**: Comprehensive Pydantic models in `biahub/settings.py` with validation
@@ -67,9 +75,11 @@ Each processing operation has its own module with standardized structure:
 - **Processing patterns**: Most operations work on `/*/*/* `position patterns for parallel processing
 - **Slurm integration**: Commands can launch Slurm jobs or run locally with `-l` flag
 
-### Vendor Dependencies
+### Key Dependencies
 - Contains vendored packages in `biahub/vendor/` directory
 - External stitching library: `stitch @ git+https://github.com/ahillsley/stitching@jen`
+- Uses iohub for zarr i/o: `https://github.com/czbiohub-sf/iohub/`
+- Uses PyTorch for GPU acceleration.
 
 ## Code Formatting Standards
 - **Black**: Line length 95, skip string normalization, Python 3.10+ target
@@ -82,6 +92,8 @@ Each processing operation has its own module with standardized structure:
 - Includes configuration validation tests and CLI integration tests
 
 ## Development Notes
+- Write docstrings in numpy style.
+- Prefer PyTorch for GPU acceleration over other libraries such as cupy.
 - Python 3.11+ required
 - GPU support available (CUDA) for relevant operations
 - Heavy use of scientific Python stack: numpy, scipy, torch, matplotlib
