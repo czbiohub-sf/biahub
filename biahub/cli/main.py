@@ -164,6 +164,11 @@ COMMANDS = [
         "import_path": "biahub.track.track_cli",
         "help": "Track objects in 2D/3D time-lapse microscopy",
     },
+    {
+        "name": "qc-fovs",
+        "import_path": "biahub.qc_fovs.qc_fovs_cli",
+        "help": "Analyze FOVs in OME HCS zarr stores for quality control",
+    },
 ]
 
 
