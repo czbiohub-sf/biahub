@@ -605,6 +605,7 @@ class PreprocessingFunctions(BaseModel):
 class SegmentationModel(BaseModel):
     path_to_model: str
     eval_args: Dict[str, Any]
+    channels: list[str]
     z_slice_2D: Optional[int] = None
     preprocessing: list[PreprocessingFunctions] = []
 
@@ -640,3 +641,4 @@ class SegmentationModel(BaseModel):
 class SegmentationSettings(BaseModel):
     models: Dict[str, SegmentationModel]
     model_config = {"extra": "forbid", "protected_namespaces": ()}
+    gpu: bool = True
