@@ -58,6 +58,14 @@ def example_estimate_registration_settings():
 
 
 @pytest.fixture(scope="function")
+def example_stitch_settings():
+    settings_path = "./settings/example_stitch_settings.yml"
+    with open(settings_path) as file:
+        settings = yaml.safe_load(file)
+    yield settings_path, settings
+
+
+@pytest.fixture(scope="function")
 def example_track_settings():
     settings_path = "./settings/example_track_settings.yml"
     with open(settings_path) as file:

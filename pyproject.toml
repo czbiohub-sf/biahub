@@ -20,6 +20,7 @@ classifiers = [
 
 # list package dependencies here
 dependencies = [
+  "stitch @ git+https://github.com/ahillsley/stitching@jen",
   "iohub>=0.2,<0.3",
   "matplotlib",
   "napari",
@@ -29,7 +30,7 @@ dependencies = [
   "markdown",
   "monai",
   "pandas~=2.1",
-  "pydantic<3",
+  "pydantic>2,<3",
   "scipy<1.16",  # as of 06/23/2025 scipy 1.16.0 breaks test imports
   "submitit",
   "torch",
@@ -39,35 +40,31 @@ dependencies = [
   "antspyx",
   "pystackreg",
   "napari-animation",
-  "napari-psf-analysis",
   "imageio-ffmpeg",
   "dask[array]",
   "toml",
   "scikit-learn",
+  "numba>=0.58.0",
+  "llvmlite>=0.41.0",
+  "humanize",
 ]
 
 [project.optional-dependencies]
-# note that dev dependencies are only pinned to major versions
+segment = ["cellpose>=4.0.5"]
+
+track = ["ultrack>=0.6.3"]
+
+build = ["build", "twine"]
+
+all = ["biahub[segment,track,build]"]
+
 dev = [
+  "biahub[all]",
   "black==25.1",
   "flake8==7.2",
   "isort==6.0",
   "pytest==8.4",
   "pre-commit~=4.2",
-]
-
-track = [
-  "ultrack @ git+https://github.com/royerlab/ultrack.git@v0.6.3"
-]
-
-segment = [
-  "cellpose>=4.0.5",
-]
-
-build = ["build", "twine"]
-
-all = [
-  "biahub[dev,track,segment]"
 ]
 
 [project.scripts]
@@ -127,4 +124,6 @@ msg-template = "{line},{column},{category},{symbol}:{msg}"
 reports = "n"
 
 [tool.pytest.ini_options]
-addopts = "--ignore examples/"
+addopts = ["--import-mode=importlib"]
+testpaths = ["tests"]
+

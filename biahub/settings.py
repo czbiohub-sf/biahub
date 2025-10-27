@@ -1,5 +1,3 @@
-import warnings
-
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
@@ -561,31 +559,25 @@ class StabilizationSettings(MyBaseModel):
         return v
 
 
-class StitchSettings(MyBaseModel):
+class StitchSettings(BaseModel):
     channels: Optional[list[str]] = None
-    preprocessing: Optional[ProcessingSettings] = None
-    postprocessing: Optional[ProcessingSettings] = None
-    column_translation: Optional[list[float, float]] = None
-    row_translation: Optional[list[float, float]] = None
-    total_translation: Optional[dict[str, list[float, float]]] = None
+    total_translation: Optional[dict[str, list[float, float, float]]] = None
     affine_transform: Optional[dict[str, list]] = None
 
     def __init__(self, **data):
+        # Adding a leading zero for zyx translation for backwards compatibility
+        if "total_translation" in data:
+            for key, value in data["total_translation"].items():
+                if len(value) == 2:
+                    data["total_translation"][key] = [0] + value
+
         if not any(
             (
                 data.get("total_translation"),
                 data.get("affine_transform"),
-                all((data.get("column_translation"), data.get("row_translation"))),
             )
         ):
-            raise ValueError(
-                "One of affine_transform, total_translation or (column_translation, row_translation) must be provided"
-            )
-        if any((data.get("column_translation"), data.get("row_translation"))):
-            warnings.warn(
-                "column_translation and row_translation are deprecated. Use total_translation instead.",
-                DeprecationWarning,
-            )
+            raise ValueError("Either affine_transform or total_translation must be provided")
         super().__init__(**data)
 
 

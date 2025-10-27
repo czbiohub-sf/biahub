@@ -20,7 +20,7 @@ from biahub.settings import (
     TrackingSettings,
 )
 
-settings_files_dir = (Path(__file__) / "../../../settings").resolve()
+settings_files_dir = (Path(__file__) / "../../settings").resolve()
 
 example_settings_params = [
     ("example_characterize_settings.yml", CharacterizeSettings),
@@ -30,6 +30,7 @@ example_settings_params = [
     ("example_deskew_settings.yml", DeskewSettings),
     ("example_estimate_registration_settings_beads.yml", EstimateRegistrationSettings),
     ("example_estimate_registration_settings_manual.yml", EstimateRegistrationSettings),
+    ("example_estimate_registration_settings.yml", EstimateRegistrationSettings),
     (
         "example_estimate_stabilization_settings_xy_focus-finding.yml",
         EstimateStabilizationSettings,
@@ -129,3 +130,28 @@ def test_register_settings():
             affine_transform_zyx=np.identity(5).tolist(),
             typo_param="test",
         )
+
+
+def test_example_register_settings(example_register_settings):
+    _, settings = example_register_settings
+    RegistrationSettings(**settings)
+
+
+def test_example_stabilize_timelapse_settings(example_stabilize_timelapse_settings):
+    _, settings = example_stabilize_timelapse_settings
+    StabilizationSettings(**settings)
+
+
+def test_example_estimate_registration_settings(example_estimate_registration_settings):
+    _, settings = example_estimate_registration_settings
+    EstimateRegistrationSettings(**settings)
+
+
+def test_example_stitch_settings(example_stitch_settings):
+    _, settings = example_stitch_settings
+    validated_settings = StitchSettings(**settings)
+
+    # Check that leading z = 0 is added to total_translation
+    for value in validated_settings.total_translation.values():
+        assert len(value) == 3
+        assert value[0] == 0.0
