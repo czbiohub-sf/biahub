@@ -1192,22 +1192,23 @@ def estimate_z_focus_per_position(
     None
     """
     position, time_idx, channel, focus_idx = [], [], [], []
-   
+
     with open_ome_zarr(input_position_dirpath) as dataset:
         channel_names = dataset.channel_names
         T, _, Z, Y, X = dataset[0].shape
         _, _, _, _, pixel_size = dataset.scale
-        
+
         for tc_idx in itertools.product(range(T), input_channel_indices):
             data_zyx = dataset.data[tc_idx]
             if vs_path:
                 print(f"Applying virtual stain mask to {input_position_dirpath}")
                 print(f"vs_path: {vs_path}")
                 fov = "/".join(input_position_dirpath.parts[-3:])
-           
-                from skimage.filters import threshold_otsu
+
                 from scipy.ndimage import distance_transform_edt
-                with open_ome_zarr(Path(vs_path)/fov) as vs_dataset:
+                from skimage.filters import threshold_otsu
+
+                with open_ome_zarr(Path(vs_path) / fov) as vs_dataset:
                     nuc_arr = np.asarray(vs_dataset.data.dask_array()[tc_idx[0], 0, :, :, :])
                     threshold = threshold_otsu(nuc_arr)
                     nuc_arr_mask = nuc_arr > threshold
@@ -1222,7 +1223,6 @@ def estimate_z_focus_per_position(
                 Y // 2 - center_crop_xy[1] // 2 : Y // 2 + center_crop_xy[1] // 2,
                 X // 2 - center_crop_xy[0] // 2 : X // 2 + center_crop_xy[0] // 2,
             ]
-            
 
             # if the FOV is empty, set the focal plane to 0
             if np.sum(data_zyx) == 0:
@@ -1264,13 +1264,17 @@ def estimate_z_focus_per_position(
     z_focus_shift = [np.eye(4)]
 
     # Initialize the z-value
-    z_val = focus_idx[0]
+    
+    z_val = next((v for v in focus_idx if v != 0), None)
+    click.echo(f"Z index of focus reference: {z_val}")
+    if z_val is None:
+        raise ValueError("Z index of focus reference is None, focus_idx contains only zeros")
 
     for z_val_next in focus_idx[1:]:
         shift = np.eye(4)
         # moving -> reference
         # Set the translation components of the transform
-        shift[0, 3] =  z_val_next - z_val 
+        shift[0, 3] = z_val_next - z_val
         z_focus_shift.append(shift)
 
     transform = np.array(z_focus_shift)
@@ -1897,10 +1901,9 @@ def estimate_stabilization(
 @config_filepath()
 @sbatch_filepath()
 @local()
-@click.option("--vs_path",
-type=str, 
-required=False,
-help="Path to the virtual stain data.", default=None)
+@click.option(
+    "--vs_path", type=str, required=False, help="Path to the virtual stain data.", default=None
+)
 def estimate_stabilization_cli(
     input_position_dirpaths: List[str],
     output_dirpath: str,
