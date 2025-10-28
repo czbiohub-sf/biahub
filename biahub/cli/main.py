@@ -70,6 +70,11 @@ COMMANDS = [
         "help": "Estimate affine transform between timepoints or arms",
     },
     {
+        "name": "flip",
+        "import_path": "biahub.flip.flip_cli",
+        "help": "Flip images in a dataset",
+    },
+    {
         "name": "optimize-registration",
         "import_path": "biahub.optimize_registration.optimize_registration_cli",
         "help": "Optimize transform based on match filtering",

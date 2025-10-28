@@ -540,7 +540,7 @@ def load_data(
                 image_channel_names = dataset.channel_names
                 for channel_name, _ in image.channels.items():
                     click.echo(f"Loading data for channel {channel_name} from {image.path}")
-                    data_dict[channel_name] = dataset.data[
+                    data_dict[channel_name] = dataset.data.dask_array()[
                         :, image_channel_names.index(channel_name), z_slices, :, :
                     ]
             if visualize:

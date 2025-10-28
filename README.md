@@ -105,15 +105,18 @@ biahub concatenate \
 
 # STITCH
 # estimate stitching parameters
-biahub estimate-stitching \
+biahub estimate-stitch \
     -i ./acq_name.zarr/*/*/* \
-    -o ./stitching.yml \
+    -o ./stitching.yml
+# optimize stitching parameters
+biahub optimize-stitch \
+    -i ./stitching.yml \
+    -o ./optimized-stitching.yml \
     --channel DAPI
-    --percent-overlap 0.05
 # stitch fields of view
 biahub stitch \
     -i ./acq_name.zarr/*/*/* \
-    -c ./stitching.yml \
+    -c ./optimized-stitching.yml \
     -o ./acq_name_stitched.zarr/*/*/*
 ```
 

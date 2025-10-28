@@ -21,6 +21,7 @@ classifiers = [
 # list package dependencies here
 dependencies = [
   "iohub>=0.3.0a2,<0.4",
+  "stitch @ git+https://github.com/ahillsley/stitching@jen",
   "matplotlib",
   "napari",
   "PyQt6",
@@ -29,29 +30,29 @@ dependencies = [
   "markdown",
   "monai",
   "pandas~=2.1",
-  "pydantic<3",
+  "pydantic>2,<3",
   "scipy<1.16",  # as of 06/23/2025 scipy 1.16.0 breaks test imports
   "submitit",
   "torch",
   "tqdm",
-  "waveorder==3.0.0a1",
+  "waveorder==3.0.0a2",
   "largestinteriorrectangle",
   "antspyx",
   "pystackreg",
   "napari-animation",
-  "napari-psf-analysis",
   "imageio-ffmpeg",
   "dask[array]",
   "toml",
   "scikit-learn",
   "numba>=0.58.0",
   "llvmlite>=0.41.0",
+  "humanize",
 ]
 
 [project.optional-dependencies]
 segment = ["cellpose"]
 
-track = ["ultrack>=0.6.3"]
+track = ["ultrack>=0.7.0rc2"]
 
 shard = ["tensorstore"]
 
@@ -125,4 +126,6 @@ msg-template = "{line},{column},{category},{symbol}:{msg}"
 reports = "n"
 
 [tool.pytest.ini_options]
-addopts = "--ignore examples/"
+addopts = ["--import-mode=importlib"]
+testpaths = ["tests"]
+
