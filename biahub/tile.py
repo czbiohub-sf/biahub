@@ -1,3 +1,5 @@
+import os
+
 from pathlib import Path
 from typing import Dict, List, Tuple, Union
 
@@ -5,11 +7,11 @@ import click
 import numpy as np
 import submitit
 import yaml
-from patchly import GridSampler
 
 from iohub import open_ome_zarr
 from iohub.ngff import TransformationMeta
 from iohub.ngff.nodes import Plate
+from patchly import GridSampler
 
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
@@ -25,9 +27,7 @@ from biahub.cli.utils import estimate_resources, yaml_to_model
 from biahub.settings import StitchSettings, TileSettings
 
 
-def resolve_sizes(
-    size_list: List[Union[int, str]], data_shape: Tuple[int, ...]
-) -> List[int]:
+def resolve_sizes(size_list: List[Union[int, str]], data_shape: Tuple[int, ...]) -> List[int]:
     """Convert wildcard (*) values to actual dimension sizes from data shape."""
     resolved = []
     shape_zyx = data_shape[-3:]  # Get ZYX from TCZYX
@@ -54,6 +54,22 @@ def resolve_chunks(
             resolved.append(int(size))
 
     return tuple(resolved)
+
+
+def count_inodes(path: Path) -> int:
+    """Count total inodes (files + directories) in a directory tree.
+
+    Args:
+        path: Path to directory to count inodes in
+
+    Returns:
+        Total count of inodes (directories + files)
+    """
+    count = 0
+    for _, _, files in os.walk(path):
+        count += 1  # directory itself
+        count += len(files)  # all files in directory
+    return count
 
 
 def process_position_to_patches(
@@ -84,9 +100,7 @@ def process_position_to_patches(
 
         if settings.channels:
             channel_names = settings.channels
-            channel_indices = [
-                input_position.channel_names.index(ch) for ch in channel_names
-            ]
+            channel_indices = [input_position.channel_names.index(ch) for ch in channel_names]
             data = data[:, channel_indices, :, :, :]
         else:
             channel_names = input_position.channel_names
@@ -130,6 +144,10 @@ def process_position_to_patches(
         true_patch_size = gs.patch_size_s
         patch_shape = (data.shape[0], num_channels, *true_patch_size)
 
+        # Calculate padding width based on total number of patches
+        total_patches = len(gs)
+        padding_width = len(str(total_patches - 1)) if total_patches > 0 else 1
+
         if settings.output_chunks:
             output_chunks = tuple(settings.output_chunks)
         else:
@@ -140,7 +158,7 @@ def process_position_to_patches(
 
         for patch_idx, (patch, patch_bbox) in enumerate(gs):
             # Generate position key
-            position_key = (row, col, f"{fov_idx}{patch_idx:06d}")
+            position_key = (row, col, f"{fov_idx}P{patch_idx:0{padding_width}d}")
             position_keys.append(position_key)
 
             position_name = "/".join(position_key)
@@ -148,7 +166,7 @@ def process_position_to_patches(
             translations[position_name] = translation_zyx
 
             output_position = output_plate.create_position(
-                row, col, f"{fov_idx}{patch_idx:06d}"
+                row, col, f"{fov_idx}P{patch_idx:0{padding_width}d}"
             )
             _ = output_position.create_zeros(
                 "0",
@@ -222,6 +240,11 @@ def tile_cli(
     click.echo("Starting tiling...")
     settings = yaml_to_model(config_filepath, TileSettings)
 
+    # Count input inodes
+    click.echo("Counting input inodes...")
+    input_inodes = sum(count_inodes(path) for path in input_position_dirpaths)
+    click.echo(f"Input: {input_inodes:,} inodes")
+
     # Initialize storage for stitch config
     all_translations = {}
     channel_names = None
@@ -234,10 +257,7 @@ def tile_cli(
             channel_names = first_position.channel_names
 
     output_plate = open_ome_zarr(
-        output_dirpath, 
-        layout='hcs', 
-        mode="w", 
-        channel_names=channel_names
+        output_dirpath, layout='hcs', mode="w", channel_names=channel_names
     )
 
     if not local:
@@ -322,7 +342,22 @@ def tile_cli(
         )
 
     click.echo(f"Saved stitch configuration to: {stitch_config_path}")
-    click.echo("Tiling complete!")
+
+    # Count output inodes and display comparison
+    click.echo("\nCounting output inodes...")
+    output_inodes = count_inodes(output_dirpath)
+    increase = output_inodes - input_inodes
+    multiplier = output_inodes / input_inodes if input_inodes > 0 else 0
+
+    click.echo("\nInode usage:")
+    click.echo(f"  Input:    {input_inodes:,} inodes")
+    click.echo(f"  Output:   {output_inodes:,} inodes")
+    click.echo(f"  Increase: {multiplier:.1f}x ({increase:,} additional inodes)")
+
+    click.echo("\nTiling complete!")
+    click.echo(
+        f"Remember to delete the tiled Zarr Store at {output_dirpath} after you are done with it"
+    )
 
 
 if __name__ == "__main__":

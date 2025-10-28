@@ -245,7 +245,7 @@ def write_output_chunk(
     moving_slices = []
 
     fov_extent = np.array([input_fov_shape[d + 2] for d in range(3)])
-    
+
     for fov_name in contributing_fov_names:
         fov_corner = np.array([fov_shifts[fov_name][d] for d in range(3)])
         fixed_slice, moving_slice = overlap_slices(
