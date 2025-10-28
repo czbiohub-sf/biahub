@@ -4,8 +4,8 @@
 # List of paths to concatenate - can use glob patterns
 # Each path will be treated as a separate input dataset
 concat_data_paths:
-  - "/path/to/data1.zarr/*/*/*"  # First dataset
-  - "/path/to/data2.zarr/*/*/*"  # Second dataset
+  - "/path/to/data1.zarr/*/*/*" # First dataset
+  - "/path/to/data2.zarr/*/*/*" # Second dataset
   # - "/path/to/data3.zarr/A/1/0"  # You can also specify exact positions
 
 # Time indices to include in the output
@@ -22,8 +22,8 @@ time_indices: "all"
 #   - For multiple datasets, specify channels for each:
 #     [["DAPI"], ["GFP", "RFP"]] - Take DAPI from first dataset, GFP and RFP from second
 channel_names:
-  - "all"  # Include all channels from first dataset
-  - "all"  # Include all channels from second dataset
+  - "all" # Include all channels from first dataset
+  - "all" # Include all channels from second dataset
 
 # Spatial cropping options for X dimension
 # Options:
@@ -55,12 +55,23 @@ Z_slice: "all"
 #   - [1, 10, 100, 100]: Specify custom chunk sizes
 chunks_czyx: null
 
+# Number of chunks in a shard for each dimension [T, C, Z, Y, X]
+# Options:
+#   - null: No sharding
+#   - [1, 1, 4, 8, 8]: Specify custom shards ratio
+shards_ratio: null
+
+# Version of the OME-Zarr format to use for the output
+# Options:
+#   - "0.4" (default)
+#   - "0.5"
+output_ome_zarr_version: "0.4"
+
 # Whether to ensure unique position names in the output
 # Options:
 #   - false or null: Positions with the same name will overwrite each other
 #   - true: Ensure unique position names by adding suffixes (e.g., A/1d1/0)
 ensure_unique_positions: null
-
 # EXAMPLE USE CASES:
 
 # 1. Basic concatenation of all data:
