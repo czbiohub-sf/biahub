@@ -640,3 +640,17 @@ class SegmentationModel(BaseModel):
 class SegmentationSettings(BaseModel):
     models: Dict[str, SegmentationModel]
     model_config = {"extra": "forbid", "protected_namespaces": ()}
+
+
+class ConvertSettings(MyBaseModel):
+    """Settings for converting Zarr V2 OME-NGFF v0.4 to V3 OME-NGFF v0.5."""
+
+    chunks: Optional[Tuple[int, int, int, int, int]] = None
+    shards_ratio: Optional[Tuple[int, int, int, int, int]] = None
+
+    @field_validator("chunks", "shards_ratio")
+    @classmethod
+    def validate_5tuple(cls, v):
+        if v is not None and len(v) != 5:
+            raise ValueError("Must be 5-tuple in TCZYX order")
+        return v
