@@ -22,7 +22,6 @@ from biahub.settings import ConvertSettings
 def convert_position(
     input_position_path: Path,
     output_store_path: Path,
-    settings: ConvertSettings,
 ) -> None:
     """
     Convert a single position from Zarr V2 OME-NGFF v0.4 to V3 OME-NGFF v0.5.
@@ -33,8 +32,6 @@ def convert_position(
         Path to input position in V2 store
     output_store_path : Path
         Path to output V3 store
-    settings : ConvertSettings
-        Conversion settings with optional chunks and shards_ratio
 
     Notes
     -----
