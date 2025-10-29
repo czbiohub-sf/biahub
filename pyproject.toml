@@ -20,8 +20,8 @@ classifiers = [
 
 # list package dependencies here
 dependencies = [
+  "iohub>=0.3.0a2,<0.4",
   "stitch @ git+https://github.com/ahillsley/stitching@jen",
-  "iohub>=0.2,<0.3",
   "matplotlib",
   "napari",
   "PyQt6",
@@ -35,7 +35,7 @@ dependencies = [
   "submitit",
   "torch",
   "tqdm",
-  "waveorder==3.0.0a1",
+  "waveorder==3.0.0a2",
   "largestinteriorrectangle",
   "antspyx",
   "pystackreg",
@@ -52,11 +52,13 @@ dependencies = [
 [project.optional-dependencies]
 segment = ["cellpose"]
 
-track = ["ultrack>=0.6.3"]
+track = ["ultrack>=0.7.0rc2"]
+
+shard = ["tensorstore"]
 
 build = ["build", "twine"]
 
-all = ["biahub[segment,track,build]"]
+all = ["biahub[segment,track,shard,build]"]
 
 dev = [
   "biahub[all]",
@@ -126,4 +128,3 @@ reports = "n"
 [tool.pytest.ini_options]
 addopts = ["--import-mode=importlib"]
 testpaths = ["tests"]
-
