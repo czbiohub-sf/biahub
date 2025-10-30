@@ -16,10 +16,10 @@ import numpy as np
 
 # %%%
 
-dataset = '2025_06_26_A549_G3BP1_ZIKV'
+dataset = '2024_11_21_A549_TOMM20_DENV'
 fov = 'C/1/000000'
 root_path = Path(f'/hpc/projects/intracellular_dashboard/organelle_dynamics/rerun/{dataset}/1-preprocess/')
-t_idx = 10
+t_idx = 76
 lf_data_path = root_path / f"label-free/0-reconstruct/{dataset}.zarr" / fov
 ls_data_path = root_path / f"light-sheet/raw/0-deskew/{dataset}.zarr" / fov
 
@@ -70,7 +70,7 @@ config_dict = {
             }
         },
         "filter_distance_threshold": 0.95,
-        "filter_angle_threshold": 30,
+        "filter_angle_threshold": 0,
     },
     "affine_transform_settings": {
         "transform_type": "similarity",
@@ -109,7 +109,6 @@ source_data_reg_ants = convert_transform_to_ants(np.asarray(config.affine_transf
 source_data_reg = source_data_reg_ants.numpy()
 
 
-
 # %%
 if visualize:
     viewer = napari.Viewer()
@@ -124,7 +123,7 @@ source_peaks, target_peaks = detect_bead_peaks(
     config.beads_match_settings.source_peaks_settings,
     config.beads_match_settings.target_peaks_settings,
     verbose=True,
-    filter_dirty_peaks=True
+    filter_dirty_peaks=False
 )
 
 #%%
@@ -192,6 +191,7 @@ tform = estimate_transform(
     verbose=True
 )
 
+
 compount_tform = np.asarray(config.affine_transform_settings.approx_transform) @ tform.inverse.params
 compount_tform_ants = convert_transform_to_ants(compount_tform)
 source_data_reg_2 = compount_tform_ants.apply_to_image(
@@ -210,6 +210,56 @@ if visualize:
     )
     viewer.add_image(
         source_data_reg_2,
+        name='LS registered',
+        contrast_limits=(110, 230),
+        blending='additive',
+        colormap='magenta'
+    )
+
+# %%
+
+fov_cell = 'C/2/000000'
+root_path = Path(f'/hpc/projects/intracellular_dashboard/organelle_dynamics/rerun/{dataset}/1-preprocess/')
+lf_data_sample_path = root_path / f"label-free/0-reconstruct/{dataset}.zarr" / fov_cell
+ls_data_sample_path = root_path / f"light-sheet/raw/0-deskew/{dataset}.zarr" / fov_cell
+
+with open_ome_zarr(lf_data_sample_path) as target_ds:
+    target_channel_name = target_ds.channel_names
+    target_channel_index = target_ds.channel_names.index(config.target_channel_name)
+    target_sample_data = np.asarray(target_ds.data[t_idx, target_channel_index]) # take phase channel
+    target_scale = target_ds.scale
+
+with open_ome_zarr(ls_data_sample_path) as source_ds:
+    source_channel_name = source_ds.channel_names
+    source_channel_index = source_channel_name.index(config.source_channel_name)
+    source_sample_data = np.asarray(source_ds.data[t_idx, source_channel_index]) # take mCherry channel or the GFP channel (depending where the beads are)
+    source_scale = source_ds.scale
+
+# Register LS data with approx tranform
+source_data_sample_ants = ants.from_numpy(source_sample_data)
+target_data_sample_ants = ants.from_numpy(target_sample_data)
+
+source_data_sample_reg_ants = convert_transform_to_ants(np.asarray(config.affine_transform_settings.approx_transform)).apply_to_image(
+    source_data_sample_ants, reference=target_data_sample_ants
+)
+source_data_sample_reg = source_data_sample_reg_ants.numpy()
+
+source_data_sample_reg_2 = compount_tform_ants.apply_to_image(
+    source_data_sample_ants, reference=target_data_sample_ants
+).numpy()
+
+if visualize:
+    viewer = napari.Viewer()
+    viewer.add_image(target_sample_data, name='LF', contrast_limits=(-0.5, 1.0))
+    viewer.add_image(
+    source_data_sample_reg,
+    name='LS approx registered',
+    contrast_limits=(110, 230),
+    blending='additive',
+    colormap='green'
+    )
+    viewer.add_image(
+        source_data_sample_reg_2,
         name='LS registered',
         contrast_limits=(110, 230),
         blending='additive',
