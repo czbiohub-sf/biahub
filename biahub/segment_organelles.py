@@ -393,8 +393,7 @@ def segment_zyx(
     _logger.debug(f"Z-ratio (Z/X): {z_ratio:.3f}")
 
     # Normalize input to [0, 1] range for CLAHE
-    # CLAHE expects float images to be in [-1, 1] range
-    input_zyx_normalized = rescale_intensity(input_zyx, out_range=(-1, 1))
+    input_zyx_normalized = rescale_intensity(input_zyx, out_range=(0, 1))
 
     if clahe_kernel_size is None:
         # Adjust kernel size for anisotropic voxels
