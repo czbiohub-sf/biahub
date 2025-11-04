@@ -10,6 +10,7 @@ import submitit
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate, process_single_position
 from numpy.typing import ArrayLike
+from scipy.ndimage import binary_fill_holes
 from skimage import measure, morphology
 from skimage.exposure import equalize_adapthist, rescale_intensity
 from skimage.feature import graycomatrix, graycoprops
@@ -40,6 +41,7 @@ def extract_features_zyx(
 ):
     """
     Extract morphological and intensity features from labeled organelles.
+
 
     Handles both 2D (Z=1) and 3D (Z>1) data automatically
     For 2D data, processes the single Z-slice. For 3D data, performs max projection
@@ -132,24 +134,20 @@ def extract_features_zyx(
             "convex_area",
             "eccentricity",
         ]
-        # Add intensity features if image provided
         if intensity_zyx is not None:
             properties.extend(["mean_intensity", "min_intensity", "max_intensity"])
 
     if extra_properties is None:
         extra_properties = []
 
-    # Determine 2D vs 3D mode and set appropriate spacing
-    spacing_2d = spacing if len(spacing) == 2 else spacing[-2:]
-
     if Z == 1:
         # Squeeze Z dimension for 2D processing
-        labels_processed = labels_zyx[0]  # Shape: (Y, X)
+        labels_processed = labels_zyx[0]
         intensity_processed = intensity_zyx[0] if intensity_zyx is not None else None
         frangi_processed = frangi_zyx[0] if frangi_zyx is not None else None
     else:
         # Use max projection along Z for 3D -> 2D
-        labels_processed = np.max(labels_zyx, axis=0)  # Shape: (Y, X)
+        labels_processed = np.max(labels_zyx, axis=0)
         intensity_processed = (
             np.max(intensity_zyx, axis=0) if intensity_zyx is not None else None
         )
@@ -159,7 +157,6 @@ def extract_features_zyx(
     if labels_processed.max() == 0:
         _logger.warning("No objects found")
 
-    # Compute base regionprops features (those that support spacing)
     props_with_spacing = [p for p in properties if p not in ["moments_hu"]]
 
     try:
@@ -167,17 +164,16 @@ def extract_features_zyx(
             labels_processed,
             intensity_image=intensity_processed,
             properties=tuple(props_with_spacing),
-            spacing=spacing_2d,
         )
         df = pd.DataFrame(props_dict)
     except Exception as e:
-        _logger.warning(f"Error computing base regionprops: {e}")
+        _logger.warning(f"Error computing regionprops_table: {e}")
+        df = pd.DataFrame({"label": []})
 
-    # Add Hu moments separately (without spacing)
     if "moments_hu" in properties or "moments_hu" in extra_properties:
         try:
             hu_props = measure.regionprops_table(
-                labels_processed, properties=("label", "moments_hu"), spacing=(1, 1)
+                labels_processed, properties=("label", "moments_hu")
             )
             hu_df = pd.DataFrame(hu_props)
             # Rename columns to be clearer
@@ -201,7 +197,9 @@ def extract_features_zyx(
             where=perimeter_sq != 0,
         )
 
-    # Add expensive/iterative features
+    if df.isnull().values.any():
+        raise ValueError("NaN values found in feature extraction results")
+
     if any(
         prop in extra_properties
         for prop in ["texture", "feret_diameter_max", "frangi_intensity"]
@@ -310,9 +308,10 @@ _logger = logging.getLogger("viscy")
 
 def segment_zyx(
     input_zyx: ArrayLike,
+    sigma_range: tuple[float, float],
+    spacing=(1.0, 1.0, 1.0),
     clahe_kernel_size=None,
     clahe_clip_limit=0.01,
-    sigma_range=(0.5, 3.0),
     sigma_steps=5,
     auto_optimize_sigma=True,
     frangi_alpha=0.5,
@@ -320,7 +319,9 @@ def segment_zyx(
     frangi_gamma=None,
     threshold_method="otsu",
     min_object_size=10,
-    apply_morphology=True,
+    fill_holes=True,
+    remove_noise="opening",
+    opening_iterations=1,
 ):
     """
     Segment mitochondria from a 2D or 3D input_zyx using CLAHE preprocessing,
@@ -335,6 +336,9 @@ def segment_zyx(
     input_zyx : ndarray
         Input image with shape (Z, Y, X) for 3D.
         If 2D, uses 2D Frangi filter. If 3D with Z=1, squeezes to 2D.
+    spacing : tuple of float
+        Physical spacing (Z, Y, X) in same units (e.g., µm). Default: (1.0, 1.0, 1.0).
+        Used to adjust CLAHE kernel and Frangi sigma for anisotropic voxels.
     clahe_kernel_size : int or None
         Kernel size for CLAHE (Contrast Limited Adaptive Histogram Equalization).
         If None, automatically set to max(input_zyx.shape) // 8.
@@ -349,17 +353,25 @@ def segment_zyx(
         If True, automatically finds optimal sigma by maximizing vesselness response.
         If False, uses all sigmas in range for multi-scale filtering.
     frangi_alpha : float
-        Frangi filter sensitivity to plate-j    like structures (2D) or blob-like (3D).
+        Frangi filter sensitivity to plate-like structures (2D) or blob-like (3D).
     frangi_beta : float
         Frangi filter sensitivity to blob-like structures (2D) or tube-like (3D).
     frangi_gamma : float or None
         Frangi filter sensitivity to background noise. If None, auto-computed.
     threshold_method : str
-        Thresholding method: 'otsu', 'triangle', 'percentile', 'manual_X'.
+        Thresholding method: 'otsu', 'triangle', 'nellie_min', 'nellie_max', 'percentile', 'manual_X'.
     min_object_size : int
         Minimum object size in pixels for connected components.
-    apply_morphology : bool
-        If True, applies morphological closing to connect nearby structures.
+    fill_holes : bool
+        If True, fills interior holes in 3D volumes (default: True).
+        Recommended for all organelle types.
+    remove_noise : str
+        Method for removing noise: 'opening', 'erosion', 'none' (default: 'opening').
+        - 'opening': Binary opening (erosion+dilation) - removes noise but can break thin connections
+        - 'erosion': Gentler single erosion pass - less aggressive, preserves connections better
+        - 'none': No noise removal - use for tubular structures with good Frangi response
+    opening_iterations : int
+        Number of opening iterations if remove_noise='opening' (default: 1).
 
     Returns
     -------
@@ -374,12 +386,26 @@ def segment_zyx(
     assert input_zyx.ndim == 3
     Z, Y, X = input_zyx.shape[-3:]
 
+    z_spacing, _, x_spacing = spacing
+    z_ratio = z_spacing / x_spacing  # How much larger Z spacing is than XY
+
+    _logger.debug(f"Spacing (Z,Y,X): {spacing}")
+    _logger.debug(f"Z-ratio (Z/X): {z_ratio:.3f}")
+
     # Normalize input to [0, 1] range for CLAHE
     # CLAHE expects float images to be in [-1, 1] range
-    input_zyx_normalized = rescale_intensity(input_zyx, out_range=(0, 1))
+    input_zyx_normalized = rescale_intensity(input_zyx, out_range=(-1, 1))
 
     if clahe_kernel_size is None:
-        clahe_kernel_size = max(Z, Y, X) // 8
+        # Adjust kernel size for anisotropic voxels
+        # Make kernel physically isotropic by adjusting Z dimension
+        base_kernel = max(Y, X) // 8
+        z_kernel = int(base_kernel / z_ratio) if z_ratio > 1.0 else base_kernel
+        z_kernel = max(z_kernel, 3)  # Minimum kernel size
+        clahe_kernel_size = (z_kernel, base_kernel, base_kernel)
+        _logger.debug(f"Auto CLAHE kernel (Z,Y,X): {clahe_kernel_size}")
+    elif isinstance(clahe_kernel_size, int):
+        clahe_kernel_size = (clahe_kernel_size, clahe_kernel_size, clahe_kernel_size)
 
     # Apply CLAHE for contrast enhancement
     enhanced_zyx = equalize_adapthist(
@@ -388,18 +414,18 @@ def segment_zyx(
         clip_limit=clahe_clip_limit,
     )
 
-    # Generate sigma values
     sigmas = np.linspace(sigma_range[0], sigma_range[1], sigma_steps)
 
     # Auto-optimize sigma or use multi-scale
+    # Pass z_ratio for anisotropic handling
     if auto_optimize_sigma:
         optimal_sigma, vesselness = _find_optimal_sigma(
-            enhanced_zyx, sigmas, frangi_alpha, frangi_beta, frangi_gamma
+            enhanced_zyx, sigmas, frangi_alpha, frangi_beta, frangi_gamma, z_ratio
         )
     else:
         optimal_sigma = None
         vesselness = _multiscale_frangi(
-            enhanced_zyx, sigmas, frangi_alpha, frangi_beta, frangi_gamma
+            enhanced_zyx, sigmas, frangi_alpha, frangi_beta, frangi_gamma, z_ratio
         )
 
     # Threshold the vesselness response
@@ -410,19 +436,33 @@ def segment_zyx(
         threshold = threshold_triangle(vesselness)
         _logger.debug(f"Triangle threshold: {threshold:.4f}")
     elif threshold_method == "nellie_min":
-        threshold_otsu_val = threshold_otsu(vesselness)
-        threshold_triangle_val = threshold_triangle(vesselness)
-        threshold = min(threshold_otsu_val, threshold_triangle_val)
-        _logger.debug(
-            f"Nellie-min threshold: otsu={threshold_otsu_val:.4f}, triangle={threshold_triangle_val:.4f}, using min={threshold:.4f}"
-        )
+        vesselness_positive = vesselness[vesselness > 0]
+        if len(vesselness_positive) > 0:
+            vesselness_log = np.log10(vesselness_positive)
+            threshold_otsu_log = threshold_otsu(vesselness_log)
+            threshold_triangle_log = threshold_triangle(vesselness_log)
+            threshold_log = min(threshold_otsu_log, threshold_triangle_log)
+            threshold = 10**threshold_log
+            _logger.debug(
+                f"Nellie-min threshold (log-space): otsu={10**threshold_otsu_log:.4f}, triangle={10**threshold_triangle_log:.4f}, using min={threshold:.4f}"
+            )
+        else:
+            threshold = 0
+            _logger.warning("No positive vesselness values found, using threshold=0")
     elif threshold_method == "nellie_max":
-        threshold_otsu_val = threshold_otsu(vesselness)
-        threshold_triangle_val = threshold_triangle(vesselness)
-        threshold = max(threshold_otsu_val, threshold_triangle_val)
-        _logger.debug(
-            f"Nellie-max threshold: otsu={threshold_otsu_val:.4f}, triangle={threshold_triangle_val:.4f}, using max={threshold:.4f}"
-        )
+        vesselness_positive = vesselness[vesselness > 0]
+        if len(vesselness_positive) > 0:
+            vesselness_log = np.log10(vesselness_positive)
+            threshold_otsu_log = threshold_otsu(vesselness_log)
+            threshold_triangle_log = threshold_triangle(vesselness_log)
+            threshold_log = max(threshold_otsu_log, threshold_triangle_log)
+            threshold = 10**threshold_log
+            _logger.debug(
+                f"Nellie-max threshold (log-space): otsu={10**threshold_otsu_log:.4f}, triangle={10**threshold_triangle_log:.4f}, using max={threshold:.4f}"
+            )
+        else:
+            threshold = 0
+            _logger.warning("No positive vesselness values found, using threshold=0")
     elif threshold_method == "percentile":
         # Use percentile-based threshold (good for sparse features)
         threshold = np.percentile(vesselness[vesselness > 0], 95)  # Keep top 5%
@@ -437,28 +477,48 @@ def segment_zyx(
     binary_mask = vesselness > threshold
 
     _logger.debug(
-        f"    Selected {binary_mask.sum()} / {binary_mask.size} pixels ({100*binary_mask.sum()/binary_mask.size:.2f}%)"
+        f"    Selected {binary_mask.sum()} / {binary_mask.size} pixels ({100 * binary_mask.sum() / binary_mask.size:.2f}%)"
     )
 
-    # Apply morphological operations
-    if apply_morphology:
-        binary_mask = morphology.binary_closing(binary_mask, footprint=morphology.ball(1))
-        binary_mask = morphology.remove_small_holes(binary_mask, area_threshold=64)
+    # Fill holes in 3D volumes
+    if fill_holes and Z > 1:
+        binary_mask = binary_fill_holes(binary_mask)
+
+    if Z == 1:
+        binary_mask = binary_mask[0]  # Shape: (Y, X)
+
+    # Remove noise with configurable aggressiveness
+    if remove_noise != "none":
+        # Use (2,2,2) structure for 3D or (2,2) for 2D
+        if Z > 1:
+            structure = np.ones((2, 2, 2), dtype=bool)
+        else:
+            structure = np.ones((2, 2), dtype=bool)
+
+        if remove_noise == "opening":
+            # Binary opening (erosion + dilation) - removes noise but can break connections
+            for _ in range(opening_iterations):
+                binary_mask = morphology.binary_opening(binary_mask, footprint=structure)
+        elif remove_noise == "erosion":
+            # Gentler: just one erosion pass (no dilation back)
+            binary_mask = morphology.binary_erosion(binary_mask, footprint=structure)
+        else:
+            raise ValueError(
+                f"Unknown remove_noise method: {remove_noise}. Use 'opening', 'erosion', or 'none'."
+            )
 
     # Label connected components
     labels = measure.label(binary_mask, connectivity=2)
-
-    # Remove small objects
     labels = morphology.remove_small_objects(labels, min_size=min_object_size)
 
+    # Re-expand labels to 3D if we squeezed for morphology
     if Z == 1:
         labels = labels[np.newaxis, ...]
-        vesselness = vesselness[np.newaxis, ...]
 
     return labels, vesselness, optimal_sigma
 
 
-def _find_optimal_sigma(input_zyx, sigmas, alpha, beta, gamma):
+def _find_optimal_sigma(input_zyx, sigmas, alpha, beta, gamma, z_ratio=1.0):
     """
     Find the optimal sigma that maximizes the vesselness response.
 
@@ -467,27 +527,42 @@ def _find_optimal_sigma(input_zyx, sigmas, alpha, beta, gamma):
     input_zyx : ndarray
          3D input_zyx (Z, Y, X).
     sigmas : array-like
-        Sigma values to test.
+        Sigma values to test (in XY pixels).
     alpha, beta, gamma : float
         Frangi filter parameters.
+    z_ratio : float
+        Ratio of Z spacing to XY spacing for anisotropic handling.
 
     Returns
     -------
     optimal_sigma : float
-        The sigma with the highest mean vesselness response.
+        The optimal sigma with the highest mean vesselness response.
     vesselness : ndarray
         The vesselness response using optimal sigma.
     """
+    from scipy.ndimage import zoom
+
     best_sigma = sigmas[0]
     best_score = -np.inf
     best_vesselness = None
 
-    if input_zyx.shape[0] == 1:
-        input_zyx = input_zyx[0]
+    # Rescale Z to make voxels isotropic if needed
+    needs_rescale = z_ratio != 1.0 and input_zyx.shape[0] > 1
+    if needs_rescale:
+        zoom_factors = (z_ratio, 1.0, 1.0)
+        input_rescaled = zoom(input_zyx, zoom_factors, order=1)
+        _logger.debug(
+            f"Rescaled image for isotropic Frangi: {input_zyx.shape} -> {input_rescaled.shape}"
+        )
+    else:
+        input_rescaled = input_zyx
+
+    if input_rescaled.shape[0] == 1:
+        input_rescaled = input_rescaled[0]
 
     for sigma in sigmas:
         vessel = frangi(
-            input_zyx,
+            input_rescaled,
             sigmas=[sigma],
             alpha=alpha,
             beta=beta,
@@ -505,13 +580,20 @@ def _find_optimal_sigma(input_zyx, sigmas, alpha, beta, gamma):
             best_sigma = sigma
             best_vesselness = vessel
 
+    # Rescale back to original Z sampling if needed
+    if needs_rescale:
+        zoom_back = (1.0 / z_ratio, 1.0, 1.0)
+        best_vesselness = zoom(best_vesselness, zoom_back, order=1)
+
     if input_zyx.shape[0] == 1:
         best_vesselness = best_vesselness[np.newaxis, ...]
 
     return best_sigma, best_vesselness
 
 
-def _multiscale_frangi(input_zyx, sigmas: ArrayLike, alpha: float, beta: float, gamma: float):
+def _multiscale_frangi(
+    input_zyx, sigmas: ArrayLike, alpha: float, beta: float, gamma: float, z_ratio=1.0
+):
     """
     Apply Frangi filter at multiple scales and return the maximum response.
 
@@ -520,25 +602,48 @@ def _multiscale_frangi(input_zyx, sigmas: ArrayLike, alpha: float, beta: float, 
     input_zyx : ndarray
         3D input_zyx (Z, Y, X).
     sigmas : array-like
-        Sigma values for multi-scale filtering.
+        Sigma values for multi-scale filtering (in XY pixels).
     alpha, beta, gamma : float
         Frangi filter parameters.
+    z_ratio : float
+        Ratio of Z spacing to XY spacing for anisotropic handling.
 
     Returns
     -------
     vesselness : ndarray
         Maximum vesselness response across all scales.
     """
-    if input_zyx.shape[0] == 1:
-        input_zyx = input_zyx[0]
+    from scipy.ndimage import zoom
+
+    # Rescale Z to make voxels isotropic if needed
+    needs_rescale = z_ratio != 1.0 and input_zyx.shape[0] > 1
+    if needs_rescale:
+        # Zoom factor: make Z spacing match XY
+        zoom_factors = (z_ratio, 1.0, 1.0)
+        input_rescaled = zoom(input_zyx, zoom_factors, order=1)
+        _logger.debug(
+            f"Rescaled image for isotropic Frangi: {input_zyx.shape} -> {input_rescaled.shape}"
+        )
+    else:
+        input_rescaled = input_zyx
+
+    if input_rescaled.shape[0] == 1:
+        input_rescaled = input_rescaled[0]
+
     vesselness = frangi(
-        input_zyx,
+        input_rescaled,
         sigmas=sigmas,
         alpha=alpha,
         beta=beta,
         gamma=gamma,
         black_ridges=False,
     )
+
+    # Rescale back to original Z sampling if needed
+    if needs_rescale:
+        zoom_back = (1.0 / z_ratio, 1.0, 1.0)
+        vesselness = zoom(vesselness, zoom_back, order=1)
+
     if input_zyx.shape[0] == 1:
         vesselness = vesselness[np.newaxis, ...]
     return vesselness
@@ -621,11 +726,9 @@ def segment_organelles_data(
     for c_idx, segment_kwargs in channel_kwargs_dict.items():
         _logger.info(f"Segmenting channel {c_idx} with kwargs: {segment_kwargs}")
 
-        # Extract ZYX data for this channel
         zyx_data = czyx_data[c_idx]
 
-        # Segment this channel
-        labels, vesselness, optimal_sigma = segment_zyx(zyx_data, **segment_kwargs)
+        labels, _, optimal_sigma = segment_zyx(zyx_data, spacing=spacing, **segment_kwargs)
 
         # Store labels
         labels_czyx[c_idx] = labels
@@ -703,10 +806,10 @@ def extract_organelle_features_data(
 @local()
 @monitor()
 def segment_organelles_cli(
-    input_position_dirpaths: list[str],
+    input_position_dirpaths: list[Path],
     config_filepath: Path,
-    output_dirpath: str,
-    sbatch_filepath: str | None = None,
+    output_dirpath: Path,
+    sbatch_filepath: Path | None = None,
     local: bool = False,
     monitor: bool = True,
 ):
@@ -719,7 +822,6 @@ def segment_organelles_cli(
         -o ./output.zarr
     """
 
-    # Convert string paths to Path objects
     output_dirpath = Path(output_dirpath)
     config_filepath = Path(config_filepath)
     slurm_out_path = output_dirpath.parent / "slurm_output"
@@ -727,7 +829,6 @@ def segment_organelles_cli(
     if sbatch_filepath is not None:
         sbatch_filepath = Path(sbatch_filepath)
 
-    # Handle single position or wildcard filepath
     output_position_paths = utils.get_output_paths(input_position_dirpaths, output_dirpath)
 
     # Load the first position to infer dataset information
@@ -742,18 +843,39 @@ def segment_organelles_cli(
     channel_kwargs_dict = {}
     output_channel_names = []
 
+    # Get pixel size from spacing (use XY pixel size, assuming isotropic in XY)
+    pixel_size_um = spacing[-1]  # Use X spacing
+
     for channel_name, channel_config in settings.channels.items():
         if channel_name not in channel_names:
             raise ValueError(f"Channel {channel_name} not found in dataset {channel_names}")
-
-        # Get channel index
         channel_idx = channel_names.index(channel_name)
+        segment_kwargs = channel_config.get("segment_kwargs", {}).copy()
 
-        # Extract segment_zyx kwargs from config
-        segment_kwargs = channel_config.get("segment_kwargs", {})
+        if "min_radius_um" in segment_kwargs or "max_radius_um" in segment_kwargs:
+            min_radius_um = segment_kwargs.pop(
+                "min_radius_um", 0.15
+            )  # Default: ~diffraction limit
+            max_radius_um = segment_kwargs.pop(
+                "max_radius_um", 1.0
+            )  # Default: ~1 μm organelles
+            num_sigma = segment_kwargs.get("sigma_steps", 5)
+
+            # Calculate sigma range from radius range
+            sigma_min, sigma_max = calculate_nellie_sigmas(
+                min_radius_um=min_radius_um,
+                max_radius_um=max_radius_um,
+                pixel_size_um=pixel_size_um,
+                num_sigma=num_sigma,
+            )
+            segment_kwargs["sigma_range"] = (sigma_min, sigma_max)
+
+            click.echo(
+                f"Channel {channel_name}: Calculated sigma_range ({sigma_min:.2f}, {sigma_max:.2f}) px "
+                f"from radius range ({min_radius_um:.3f}, {max_radius_um:.3f}) μm"
+            )
+
         channel_kwargs_dict[channel_idx] = segment_kwargs
-
-        # Output channel name
         output_channel_names.append(f"{channel_name}_labels")
 
         click.echo(
@@ -791,15 +913,11 @@ def segment_organelles_cli(
     if sbatch_filepath:
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
-    # Run locally or submit to SLURM
     if local:
         cluster = "local"
     else:
         cluster = "slurm"
 
-    # Remap channel_kwargs_dict to 0-indexed for extracted channels
-    # process_single_position extracts specific channels, creating a new CZYX array
-    # with channels starting from index 0, so we need to remap the keys
     remapped_channel_kwargs_dict = {}
     for new_idx, original_idx in enumerate(sorted(channel_kwargs_dict.keys())):
         remapped_channel_kwargs_dict[new_idx] = channel_kwargs_dict[original_idx]

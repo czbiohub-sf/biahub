@@ -1,48 +1,76 @@
 # Organelle segmentation settings using Frangi filtering
+# This implementation is aligned with Nellie's approach (doi: 10.1038/s41592-025-02612-7)
+# Key additions: CLAHE preprocessing for improved contrast
 # Each channel can have its own segmentation parameters
 # Note: Pixel spacing (Z, Y, X) is automatically extracted from the zarr metadata
 
 # Define channels to segment with their specific parameters
 channels:
-  # Example: Mitochondria channel
+  # Example: Mitochondria channel - TUBULAR structures (using radius-based specification - RECOMMENDED)
   mito:
     segment_kwargs:
+      # Organelle size range in micrometers (more intuitive than sigma!)
+      # This is the RECOMMENDED way to specify size
+      min_radius_um: 0.15  # Minimum organelle radius (default: 0.15 μm, ~diffraction limit)
+      max_radius_um: 1.0   # Maximum organelle radius (default: 1.0 μm)
+      # NOTE: sigma_range is calculated automatically from radius + pixel size
+
+      # Alternatively, you can specify sigma directly (backwards compatible):
+      # sigma_range: [0.5, 3.0]  # Range of sigma values in pixels
+
       # Kernel size for CLAHE preprocessing (null = auto)
       clahe_kernel_size: null
       # Clipping limit for CLAHE (0.01-0.03 range recommended)
-      clahe_clip_limit: 0.01
-      # Range of sigma values for Frangi filter (min, max) in pixels
-      sigma_range: [0.5, 3.0]
+      clahe_clip_limit: 0.02  # Slightly higher for tubular structures
       # Number of sigma values to test
       sigma_steps: 5
       # Auto-optimize sigma (true) or use multi-scale (false)
+      # For tubular structures with variable thickness: use FALSE (multi-scale)
       auto_optimize_sigma: false
       # Frangi filter sensitivity parameters
-      frangi_alpha: 0.5
-      frangi_beta: 0.5
+      # For 3D TUBULES: low alpha (less plate-like), high beta (more tube-like)
+      frangi_alpha: 0.25  # Low = less sensitive to plates
+      frangi_beta: 0.75   # High = more sensitive to tubes
       frangi_gamma: null
       # Thresholding method: 'otsu', 'triangle', 'nellie_min', 'nellie_max', 'percentile', 'manual_X'
-      threshold_method: "otsu"
-      # Minimum object size in pixels
+      # 'nellie_min' uses log-space thresholding (matches Nellie exactly)
+      threshold_method: "nellie_min"
+      # Minimum object size in pixels (start small, increase if noisy)
       min_object_size: 10
-      # Apply morphological closing
-      apply_morphology: true
+      # Morphological operations - CRITICAL for tubular structures!
+      fill_holes: true          # Fill interior holes
+      remove_noise: "none"      # Don't break tubular connections! Use 'erosion' if too noisy
+      opening_iterations: 1     # Only used if remove_noise='opening'
 
-  # Example: ER channel with different parameters
+  # Example: ER channel (tubular network, larger structures)
   er:
     segment_kwargs:
+      min_radius_um: 0.2   # Thinner ER tubules
+      max_radius_um: 1.5   # Thicker ER cisternae
       clahe_clip_limit: 0.02
-      sigma_range: [1.0, 5.0]
       sigma_steps: 3
       auto_optimize_sigma: false
-      threshold_method: "triangle"
-      min_object_size: 20
-      apply_morphology: false
+      frangi_alpha: 0.25
+      frangi_beta: 0.75
+      threshold_method: "nellie_min"
+      min_object_size: 10
+      # For tubular ER: minimal morphology
+      fill_holes: true
+      remove_noise: "none"
 
-  # Example: Lysosomes (typically smaller, rounder structures)
+  # Example: Lysosomes (typically smaller, PUNCTATE structures)
   lyso:
     segment_kwargs:
-      sigma_range: [0.3, 2.0]
-      threshold_method: "otsu"
-      min_object_size: 5
-      apply_morphology: true
+      min_radius_um: 0.15  # Small organelles
+      max_radius_um: 0.6   # Typical lysosome size
+      clahe_clip_limit: 0.01
+      auto_optimize_sigma: false
+      # For punctate structures: higher alpha (more blob-like)
+      frangi_alpha: 0.5
+      frangi_beta: 0.5
+      threshold_method: "nellie_min"
+      min_object_size: 4
+      # For punctate structures: opening helps separate touching objects
+      fill_holes: true
+      remove_noise: "opening"  # Safe for punctate structures
+      opening_iterations: 1
