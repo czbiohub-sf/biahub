@@ -22,6 +22,11 @@ from skimage.feature import match_descriptors
 from skimage.transform import AffineTransform, EuclideanTransform, SimilarityTransform
 from sklearn.neighbors import NearestNeighbors, radius_neighbors_graph
 from waveorder.focus import focus_from_transverse_band
+from sklearn.metrics import mean_squared_error, mutual_info_score
+from skimage.metrics import normalized_mutual_information
+from scipy.spatial import cKDTree
+import pandas as pd
+import yaml, glob
 
 from biahub.characterize_psf import detect_peaks
 from biahub.cli.parsing import (
@@ -912,7 +917,375 @@ def ants_registration(
     shutil.rmtree(output_transforms_path)
 
     return transforms
+def _center_crop_to_shape(arr: np.ndarray, out_shape: Tuple[int, int, int]) -> np.ndarray:
+    """Center-crop a 3D array (Z,Y,X) to out_shape (no interpolation)."""
+    z, y, x = arr.shape
+    oz, oy, ox = out_shape
+    assert oz <= z and oy <= y and ox <= x, "out_shape must be <= arr.shape in each dim"
+    z0 = (z - oz) // 2
+    y0 = (y - oy) // 2
+    x0 = (x - ox) // 2
+    return arr[z0:z0+oz, y0:y0+oy, x0:x0+ox]
 
+def _center_crop_to_common(a: np.ndarray, b: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Center-crop both arrays to their common minimum shape."""
+    min_shape = tuple(np.minimum(a.shape, b.shape))
+    return _center_crop_to_shape(a, min_shape), _center_crop_to_shape(b, min_shape)
+
+# Optional: resample instead of crop (uses scipy)
+def _resample_to_shape(arr: np.ndarray, out_shape: Tuple[int, int, int]) -> np.ndarray:
+    """Resample a 3D array to out_shape using cubic interpolation."""
+    from scipy.ndimage import zoom
+    factors = [out_shape[0]/arr.shape[0], out_shape[1]/arr.shape[1], out_shape[2]/arr.shape[2]]
+    return zoom(arr, zoom=factors, order=3)
+
+def qc_bead_overlap(
+    mov_channel_tzyx: da.Array,
+    ref_channel_tzyx: da.Array,
+    beads_match_settings: BeadsMatchSettings,
+    radius: int = 6,
+    ref_shape=None,
+    verbose: bool = False,
+    t_idx: int = None,
+    output_folder_path: Path = None,
+):
+    """
+    Compute overlap-based QC metrics (IoU, Dice) and geometric accuracy (MSE)
+    between detected bead peaks from LF (ref) and LS (mov) channels.
+
+    Args:
+        ref_peaks: (N_ref, 3) array of LF bead coordinates (z, y, x)
+        mov_peaks: (N_mov, 3) array of LS bead coordinates (z, y, x)
+        matches:   (M, 2) matched indices (optional)
+        radius:    spherical neighborhood radius (voxels)
+        ref_shape: optional 3D shape for visualization masks
+
+    Returns:
+        dict with:
+          - overlap_count, total_ref, total_mov
+          - iou, dice, mse_vox
+          - ref_mask, mov_mask, sum_mask (if ref_shape provided)
+    """
+    if t_idx is None:
+        source_channel_zyx = mov_channel_tzyx
+        target_channel_zyx = ref_channel_tzyx
+    else:
+        source_channel_zyx = np.asarray(mov_channel_tzyx[t_idx])
+        target_channel_zyx = np.asarray(ref_channel_tzyx[t_idx])
+
+    mov_peaks, ref_peaks = detect_bead_peaks(
+        source_channel_zyx=source_channel_zyx,
+        target_channel_zyx=target_channel_zyx,
+        source_peaks_settings=beads_match_settings.source_peaks_settings,
+        target_peaks_settings=beads_match_settings.target_peaks_settings,
+        verbose=verbose,
+    )
+    if len(mov_peaks) ==0 or len(ref_peaks) ==0:
+        print("No peaks found, returning nan metrics")
+        return {
+            "total_peaks_ref": 0,
+            "total_peaks_mov": 0,
+            "overlap_count": 0,
+            "overlap_fraction": 0,
+            "iou": 0,
+            "dice": 0,
+            "mse": 0,
+            "mutual_info": 0,
+            "nmi": 0,
+        }
+
+    # ---- Overlap counting using KDTree ----
+    print("Computing overlap using KDTree")
+    mov_tree = cKDTree(mov_peaks)
+
+    ref_overlap_mask = np.zeros(len(ref_peaks), dtype=bool)
+    mov_overlap_mask = np.zeros(len(mov_peaks), dtype=bool)
+
+    for i, p in enumerate(ref_peaks):
+        idx = mov_tree.query_ball_point(p, r=radius)
+        if idx:
+            ref_overlap_mask[i] = True
+            mov_overlap_mask[idx] = True
+
+    overlap_count = int(ref_overlap_mask.sum())
+    total_ref = len(ref_peaks)
+    total_mov = len(mov_peaks)
+    union = total_ref + total_mov - overlap_count
+
+    # ---- IoU and Dice ----
+    iou = overlap_count / union if union > 0 else np.nan
+    dice = (2 * overlap_count) / (total_ref + total_mov) if (total_ref + total_mov) > 0 else np.nan
+
+    # ---- Intensity-based QC metrics ----
+
+    # --- NEW: make shapes match ---
+
+    if source_channel_zyx.shape != target_channel_zyx.shape:
+        print("Shapes do not match, centering crop")
+        # Option A (recommended for QC): center-crop to common overlap (no interpolation)
+        source_channel_zyx, target_channel_zyx = _center_crop_to_common(source_channel_zyx, target_channel_zyx)
+
+    # Option B (if you prefer resizing): resample mov to ref shape (comment Option A and use this)
+    # source_channel_zyx = _resample_to_shape(source_channel_zyx, target_channel_zyx.shape)
+    print("MSE calculation")
+
+    # Flatten both volumes to 1D arrays (mutual_info_score needs 1D)
+    src_flat = source_channel_zyx.ravel().astype(np.float32)
+    tgt_flat = target_channel_zyx.ravel().astype(np.float32)
+
+    # Optionally normalize intensity distributions to make them comparable
+    src_norm = (src_flat - np.min(src_flat)) / (np.ptp(src_flat) + 1e-8)
+    tgt_norm = (tgt_flat - np.min(tgt_flat)) / (np.ptp(tgt_flat) + 1e-8)
+
+    # Mean Squared Error (sklearn)
+    mse_intensity = mean_squared_error(src_norm, tgt_norm)
+    print("Mutual Information calculation")
+    # Mutual Information (discretize intensities for MI)
+    n_bins = 64
+    src_discrete = np.floor(src_norm * (n_bins - 1)).astype(int)
+    tgt_discrete = np.floor(tgt_norm * (n_bins - 1)).astype(int)
+    mi_intensity = mutual_info_score(src_discrete, tgt_discrete)
+
+    # Normalized Mutual Information (skimage)
+    nmi_intensity = normalized_mutual_information(src_discrete, tgt_discrete)
+
+    print("QC metrics calculation")
+    qc_metrics = {
+        "total_peaks_ref": total_ref,
+        "total_peaks_mov": total_mov,
+        "overlap_count": overlap_count,
+        "overlap_fraction": overlap_count / max(total_mov, 1),
+        "iou": iou,
+        "dice": dice,
+        "mse": mse_intensity,
+        "mutual_info": mi_intensity,
+        "nmi": nmi_intensity,
+    }
+    
+
+    # ---- Optional masks for visualization ----
+    if ref_shape is not None:
+        masks = {}
+        zz, yy, xx = np.ogrid[-radius:radius+1, -radius:radius+1, -radius:radius+1]
+        sphere = (xx**2 + yy**2 + zz**2) <= radius**2
+
+        def _draw(mask, centers):
+            for c in centers:
+                z, y, x = np.round(c).astype(int)
+                z0, y0, x0 = z - radius, y - radius, x - radius
+                z1, y1, x1 = z + radius + 1, y + radius + 1, x + radius + 1
+                if z1 <= 0 or y1 <= 0 or x1 <= 0 or z0 >= mask.shape[0] or y0 >= mask.shape[1] or x0 >= mask.shape[2]:
+                    continue
+                z0_i, y0_i, x0_i = max(z0, 0), max(y0, 0), max(x0, 0)
+                z1_i, y1_i, x1_i = min(z1, mask.shape[0]), min(y1, mask.shape[1]), min(x1, mask.shape[2])
+                z0_s, y0_s, x0_s = z0_i - z0, y0_i - y0, x0_i - x0
+                z1_s, y1_s, x1_s = z1_i - z0, y1_i - y0, x1_i - x0
+                mask[z0_i:z1_i, y0_i:y1_i, x0_i:x1_i] |= sphere[z0_s:z1_s, y0_s:y1_s, x0_s:x1_s]
+            return mask
+
+        ref_mask = np.zeros(ref_shape, dtype=np.uint8)
+        mov_mask = np.zeros_like(ref_mask)
+        _draw(ref_mask, ref_peaks)
+        _draw(mov_mask, mov_peaks)
+        masks["ref_mask"] = ref_mask
+        masks["mov_mask"] = mov_mask
+        masks["sum_mask"] = ref_mask + mov_mask
+
+
+    if output_folder_path is not None:
+        # save qc_metrics as df
+        # make a 1-row dataframe and include timepoint for later aggregation
+        qc_metrics_df = pd.DataFrame([qc_metrics])
+        qc_metrics_df.insert(0, "timepoint", int(t_idx))
+        out_path = output_folder_path / f"qc_metrics_{t_idx}.csv"
+        qc_metrics_df.to_csv(out_path, index=False)
+
+
+    return qc_metrics
+
+
+def _ensure_match_array(matches) -> np.ndarray:
+    """Coerce matches to an (N,2) int array; return (0,2) if invalid."""
+    if matches is None:
+        return np.empty((0, 2), dtype=int)
+    m = np.asarray(matches)
+    if m.size == 0:
+        return np.empty((0, 2), dtype=int)
+    if m.ndim == 2 and m.shape[1] == 2:
+        return m.astype(int, copy=False)
+    if m.ndim == 1 and m.size % 2 == 0:
+        return m.reshape(-1, 2).astype(int, copy=False)
+    if m.dtype.names:
+        names = set(m.dtype.names)
+        if {"src", "tgt"} <= names:
+            return np.column_stack([m["src"], m["tgt"]]).astype(int, copy=False)
+        if {"i", "j"} <= names:
+            return np.column_stack([m["i"], m["j"]]).astype(int, copy=False)
+    if m.shape[-1] == 2:
+        return m.reshape(-1, 2).astype(int, copy=False)
+    return np.empty((0, 2), dtype=int)
+
+def _config_with_hungarian_overrides(config: EstimateRegistrationSettings,
+                                     *, cost_threshold, max_ratio, k,
+                                     dist, edge_angle, edge_length,
+                                     pca_dir, pca_aniso, edge_descriptor
+                                     ) -> EstimateRegistrationSettings:
+    """
+    Return a NEW, validated config with overrides applied to Hungarian settings.
+    Works even if nested fields are dicts, since we modify the dict dump and
+    revalidate via the Pydantic model constructor.
+    """
+    data = config.model_dump()  # deep dict
+    hs = data["beads_match_settings"]["hungarian_match_settings"]
+
+    hs["cost_threshold"] = float(cost_threshold)
+    hs["max_ratio"] = float(max_ratio)
+
+    # edge graph
+    hs.setdefault("edge_graph_settings", {})
+    hs["edge_graph_settings"]["k"] = int(k)
+    hs["edge_graph_settings"]["method"] = hs["edge_graph_settings"].get("method", "knn")
+
+    # cost matrix + weights
+    hs.setdefault("cost_matrix_settings", {})
+    cms = hs["cost_matrix_settings"]
+    cms.setdefault("weights", {})
+    w = cms["weights"]
+    w["dist"] = float(dist)
+    w["edge_angle"] = float(edge_angle)
+    w["edge_length"] = float(edge_length)
+    w["pca_dir"] = float(pca_dir)
+    w["pca_aniso"] = float(pca_aniso)
+    w["edge_descriptor"] = float(edge_descriptor)
+
+    # Rebuild validated model
+    return EstimateRegistrationSettings(**data)
+def _score(m):
+    oc   = float(m.get("overlap_count", 0) or 0)
+    iou  = float(m.get("iou", 0) or 0)
+    dice = float(m.get("dice", 0) or 0)
+    mi   = float(m.get("mutual_info", 0) or 0)
+    mse  = float(m.get("mse", np.inf))
+    return 0.40*oc + 0.20*iou + 0.20*dice + 0.15*mi - 0.05*mse
+ 
+def grid_search_registration(
+    source_channel_zyx: da.Array,
+    target_channel_zyx: da.Array,
+    config: EstimateRegistrationSettings, 
+    cost_threshold: float,
+    max_ratio: float,
+    k: int,
+    weight_dist: float,
+    weight_edge_angle: float,
+    weight_edge_length: float,
+    weight_pca_dir: float,
+    weight_pca_aniso: float,
+    weight_edge_descriptor: float,
+    source_peaks_orig: ArrayLike,
+    target_peaks_orig: ArrayLike,
+    verbose: bool = False,
+    output_folder_path: Path = None,
+) -> list[ArrayLike]:
+    key = (
+        f"ct:{cost_threshold},k:{k},mr:{max_ratio},"
+        f"wd:{weight_dist},wa:{weight_edge_angle},wl:{weight_edge_length},"
+        f"wpdir:{weight_pca_dir},wpan:{weight_pca_aniso},wed:{weight_edge_descriptor}"
+    )
+    print("[grid] trying", key)
+
+    # 1) build a NEW, validated config for this candidate
+    cfg_try = _config_with_hungarian_overrides(
+        config,
+        cost_threshold=cost_threshold,
+        max_ratio=max_ratio,
+        k=k,
+        dist=weight_dist,
+        edge_angle=weight_edge_angle,
+        edge_length=weight_edge_length,
+        pca_dir=weight_pca_dir,
+        pca_aniso=weight_pca_aniso,
+        edge_descriptor=weight_edge_descriptor,
+    )
+
+    # 2) match
+    matches_raw = get_matches_from_beads(
+        source_peaks_orig,
+        target_peaks_orig,
+        cfg_try.beads_match_settings,
+        verbose=True
+    )
+    matches = _ensure_match_array(matches_raw)
+    if matches.shape[0] < 4:
+        print("[grid] skip — too few matches:", matches.shape)
+        return None
+
+    # 3) filter
+    try:
+        matches = filter_matches(
+            matches,
+            source_peaks_orig,
+            target_peaks_orig,
+            angle_threshold=cfg_try.beads_match_settings.filter_angle_threshold,
+            max_distance_threshold=cfg_try.beads_match_settings.filter_max_distance_threshold,
+            min_distance_threshold=cfg_try.beads_match_settings.filter_min_distance_threshold,
+            verbose=True
+        )
+    except Exception as e:
+        print("[grid] skip — filter failed:", repr(e))
+        return None
+
+    matches = _ensure_match_array(matches)
+    if matches.shape[0] < 4:
+        print("[grid] skip — too few matches after filter:", matches.shape)
+        return None
+
+    # 4) estimate transform
+    try:
+        tform = estimate_transform(
+            matches,
+            source_peaks_orig,
+            target_peaks_orig,
+            cfg_try.affine_transform_settings,
+            verbose=True
+        )
+    except Exception as e:
+        print("[grid] skip — estimate_transform failed:", repr(e))
+        return None
+
+    # 5) apply compound transform & QC
+    source_data_ants = ants.from_numpy(source_channel_zyx)
+    target_data_ants = ants.from_numpy(target_channel_zyx)
+    compount_tform = np.asarray(cfg_try.affine_transform_settings.approx_transform) @ tform.inverse.params
+    compount_tform_ants = convert_transform_to_ants(compount_tform)
+    source_data_reg_2 = compount_tform_ants.apply_to_image(
+        source_data_ants, reference=target_data_ants
+    ).numpy()
+
+    qc_metrics = qc_bead_overlap(
+        source_data_reg_2,
+        target_channel_zyx,
+        cfg_try.beads_match_settings,
+        radius=6,
+        ref_shape=None,
+        verbose=True,
+        t_idx=None
+    )
+
+    sc = _score(qc_metrics)
+
+    # SAVE CONFIG, QC METRICS, AND SCORE
+    # create a folder for the candidate
+    # save qc as csv
+    output_folder_path.mkdir(parents=True, exist_ok=True)
+    qc_metrics_df = pd.DataFrame(qc_metrics)
+    qc_metrics_df.to_csv(output_folder_path / f"qc_metrics_{key}.csv", index=False)
+    # save score as txt
+    with open(output_folder_path / f"score_{key}.txt", "w") as f:
+        f.write(f"Score: {sc}")
+    # save config as yaml
+    model_to_yaml(cfg_try, output_folder_path / f"config_{key}.yml")
+
+    return cfg_try, qc_metrics, sc, output_folder_path
 
 def beads_based_registration(
     source_channel_tzyx: da.Array,
@@ -967,12 +1340,143 @@ def beads_based_registration(
     output_transforms_path.mkdir(parents=True, exist_ok=True)
     initial_transform = affine_transform_settings.approx_transform
 
+
+
+    num_cpus, gb_ram_per_cpu = estimate_resources(
+        shape=(T, 2, Z, Y, X), ram_multiplier=5, max_num_cpus=16
+    )
+
+    # Prepare SLURM arguments
+    slurm_args = {
+        "slurm_job_name": "estimate_registration",
+        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
+        "slurm_cpus_per_task": num_cpus,
+        "slurm_array_parallelism": 100,
+        "slurm_time": 30,
+        "slurm_partition": "preempted",
+        "slurm_use_srun": False,
+    }
+
+    if sbatch_filepath:
+        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
+
+    slurm_out_path = output_folder_path / "slurm_output"
+    slurm_out_path.mkdir(parents=True, exist_ok=True)
+
+    # Submitit executor
+    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
+    executor.update_parameters(**slurm_args)
+
+
+
+    click.echo(f"Submitting SLURM focus estimation jobs with resources: {slurm_args}")
+
+   # prepare T0 data and peaks once
+    source0 = np.asarray(source_channel_tzyx[0])
+    target0 = np.asarray(target_channel_tzyx[0])
+
+    source0_reg = convert_transform_to_ants(
+        np.asarray(affine_transform_settings.approx_transform)
+    ).apply_to_image(ants.from_numpy(source0), reference=ants.from_numpy(target0)).numpy()
+
+    source_peaks_orig, target_peaks_orig = detect_bead_peaks(
+        source_channel_zyx=source0_reg,
+        target_channel_zyx=target0,
+        source_peaks_settings=beads_match_settings.source_peaks_settings,
+        target_peaks_settings=beads_match_settings.target_peaks_settings,
+        verbose=verbose,
+    )
+
+    # define grids
+    cost_threshold_list        = [0.01, 0.05, 0.10]
+    k_list                     = [5, 10, 15]
+    max_ratio_list             = [0.7, 0.8, 0.95, 1.0]
+    weight_vals_small          = [0.0, 0.5, 1.0]
+    weight_dist_list           = weight_vals_small
+    weight_edge_angle_list     = weight_vals_small
+    weight_edge_length_list    = weight_vals_small
+    weight_pca_dir_list        = weight_vals_small
+    weight_pca_aniso_list      = weight_vals_small
+    weight_edge_descriptor_list= weight_vals_small
+
+    jobs = []
+    with submitit.helpers.clean_env(), executor.batch():
+        for ct in cost_threshold_list:
+            for k in k_list:
+                for mr in max_ratio_list:
+                    for wd in weight_dist_list:
+                        for wa in weight_edge_angle_list:
+                            for wl in weight_edge_length_list:
+                                for wpdir in weight_pca_dir_list:
+                                    for wpan in weight_pca_aniso_list:
+                                        for wed in weight_edge_descriptor_list:
+                                            key = f"ct{ct}_k{k}_mr{mr}_wd{wd}_wa{wa}_wl{wl}_wpdir{wpdir}_wpan{wpan}_wed{wed}"
+                                            trial_outdir = (output_folder_path / "grid" / key)
+                                            trial_outdir.mkdir(parents=True, exist_ok=True)
+                                            job = executor.submit(
+                                                grid_search_registration,
+                                                source_channel_zyx=source0,
+                                                target_channel_zyx=target0,
+                                                config=yaml_to_model(config_filepath, EstimateRegistrationSettings),
+                                                cost_threshold=ct, max_ratio=mr, k=k,
+                                                weight_dist=wd, weight_edge_angle=wa, weight_edge_length=wl,
+                                                weight_pca_dir=wpdir, weight_pca_aniso=wpan, weight_edge_descriptor=wed,
+                                                source_peaks_orig=source_peaks_orig,
+                                                target_peaks_orig=target_peaks_orig,
+                                                verbose=verbose,
+                                                output_folder_path=trial_outdir,
+                                            )
+                                            jobs.append(job)
+
+    wait_for_jobs_to_finish(jobs)
+
+    # --- aggregate results ---
+    records = []
+    for csv_path in glob.glob(str(output_folder_path / "grid" / "*" / "qc_metrics.csv")):
+        trial_dir = Path(csv_path).parent
+        # each trial writes:
+        #   - qc_metrics.csv (1 row, includes score)
+        #   - config.yml
+        #   - score.txt
+        df = pd.read_csv(csv_path)
+        df["trial_dir"] = str(trial_dir)
+        # read score (fallback if not in csv)
+        score_txt = trial_dir / "score.txt"
+        if score_txt.exists():
+            try:
+                df["score_file"] = float(score_txt.read_text().strip().split()[-1])
+            except Exception:
+                df["score_file"] = pd.NA
+        records.append(df)
+
+    if len(records) == 0:
+        click.echo("No grid results found; falling back to original settings.")
+    else:
+        all_qc = pd.concat(records, ignore_index=True)
+        # prefer 'score' column from CSV if present; else 'score_file'
+        if "score" not in all_qc.columns and "score_file" in all_qc.columns:
+            all_qc["score"] = all_qc["score_file"]
+
+        # pick best
+        best_row = all_qc.sort_values("score", ascending=False).iloc[0]
+        best_dir = Path(best_row["trial_dir"])
+        best_cfg_path = best_dir / "config.yml"
+
+        with open(best_cfg_path, "r") as f:
+            best_cfg_dict = yaml.safe_load(f)
+        best_cfg = EstimateRegistrationSettings(**best_cfg_dict)
+        beads_match_settings = best_cfg.beads_match_settings
+
+        summary_csv = output_folder_path / "grid_summary.csv"
+        all_qc.sort_values("score", ascending=False).to_csv(summary_csv, index=False)
+        print(f"Wrote grid summary to: {summary_csv}")
+
     if affine_transform_settings.use_prev_t_transform:
         for t in range(T):
             approx_transform = estimate_transform_from_beads(
                 source_channel_tzyx=source_channel_tzyx,
                 target_channel_tzyx=target_channel_tzyx,
-                beads_match_settings=beads_match_settings,
+                beads_match_settings= beads_match_settings,
                 affine_transform_settings=affine_transform_settings,
                 verbose=verbose,
                 slurm=True,
@@ -1012,6 +1516,8 @@ def beads_based_registration(
         executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
         executor.update_parameters(**slurm_args)
 
+
+
         click.echo(f"Submitting SLURM focus estimation jobs with resources: {slurm_args}")
 
         # Submit jobs
@@ -1022,7 +1528,7 @@ def beads_based_registration(
                     estimate_transform_from_beads,
                     source_channel_tzyx=source_channel_tzyx,
                     target_channel_tzyx=target_channel_tzyx,
-                    beads_match_settings=beads_match_settings,
+                    beads_match_settings= beads_match_settings,
                     affine_transform_settings=affine_transform_settings,
                     verbose=verbose,
                     slurm=True,
