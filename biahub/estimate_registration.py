@@ -1119,13 +1119,13 @@ def grid_search_registration(
     # define grids
     cost_threshold_list = [0.05]
     k_list = [10]
-    max_ratio_list = [0.95]
-    weight_dist_list = [0.5, 1.0]
+    max_ratio_list = [1]
+    weight_dist_list = [0.5,1.0]
     weight_edge_angle_list = [0, 0.5, 1.0]
     weight_edge_length_list = [0, 0.5, 1.0]
-    weight_pca_dir_list = [0, 0.2]
-    weight_pca_aniso_list = [0, 0.2]
-    weight_edge_descriptor_list = [0, 0.2]
+    weight_pca_dir_list = [0]
+    weight_pca_aniso_list = [0]
+    weight_edge_descriptor_list = [0]
 
     jobs = []
     with submitit.helpers.clean_env(), executor.batch():
@@ -1318,30 +1318,30 @@ def beads_based_registration(
     initial_transform = affine_transform_settings.approx_transform
 
     # firt t with data
-    for t in range(T):
-        source_channel_tzyx_t = source_channel_tzyx[t]
-        if source_channel_tzyx_t.sum() == 0:
+    for t_initial in range(T):
+        source_channel_tzyx_t = source_channel_tzyx[t_initial]
+        if np.sum(source_channel_tzyx_t) == 0 or np.sum(target_channel_tzyx[t_initial]) == 0:
             continue
         else:
             break
 
-    if t == T:
+    if t_initial == T:
         click.echo(f"No timepoint with data found")
         return None
 
     if grid_search:
-        output_path_test= output_folder_path / f"test_t{t}_user_config"
+        output_path_test = output_folder_path / f"test_t{t_initial}_user_config"
         output_path_test.mkdir(parents=True, exist_ok=True)
 
         approx_transform = estimate_transform_from_beads(
-                source_channel=source_channel_tzyx,
-                target_channel=target_channel_tzyx,
-                beads_match_settings=beads_match_settings,
-                affine_transform_settings=affine_transform_settings,
-                verbose=verbose,
-                output_folder_path=None,
-                t_idx=t,
-            )
+            source_channel=source_channel_tzyx,
+            target_channel=target_channel_tzyx,
+            beads_match_settings=beads_match_settings,
+            affine_transform_settings=affine_transform_settings,
+            verbose=verbose,
+            output_folder_path=None,
+            t_idx=t_initial,
+        )
 
         qc_metrics = qc_bead_overlap(
             source_channel=source_channel_tzyx,
@@ -1350,16 +1350,16 @@ def beads_based_registration(
             tform=approx_transform,
             verbose=verbose,
             output_folder_path=output_path_test,
-            t_idx=t,
+            t_idx=t_initial,
         )
 
         if qc_metrics["score"] < threshold_score:
             click.echo(f"User config is not good enough, performing grid search")
-            output_folder_path_grid_search = output_folder_path / "grid_search"
+            output_folder_path_grid_search = output_folder_path / f"grid_search/t_{t_initial}"
             output_folder_path_grid_search.mkdir(parents=True, exist_ok=True)
             cfg_grid_search = grid_search_registration(
-                source_channel_zyx=source_channel_tzyx[0],
-                target_channel_zyx=target_channel_tzyx[0],
+                source_channel_zyx=source_channel_tzyx[t_initial],
+                target_channel_zyx=target_channel_tzyx[t_initial],
                 config=config,
                 verbose=verbose,
                 output_folder_path=output_folder_path_grid_search,
@@ -1369,22 +1369,27 @@ def beads_based_registration(
 
     if affine_transform_settings.use_prev_t_transform:
         for t in range(T):
-            approx_transform = estimate_transform_from_beads(
-                source_channel=source_channel_tzyx,
-                target_channel=target_channel_tzyx,
-                beads_match_settings=beads_match_settings,
-                affine_transform_settings=affine_transform_settings,
-                verbose=verbose,
-                output_folder_path=output_transforms_path,
-                t_idx=t,
-            )
-            if approx_transform is not None:
-                print(f"Using approx transform for timepoint {t+1}: {approx_transform}")
-                affine_transform_settings.approx_transform = approx_transform
+            if np.sum(source_channel_tzyx[t]) == 0 or np.sum(target_channel_tzyx[t]) == 0:
+                click.echo(f"Timepoint {t} has no data, skipping")
             else:
-                print(f"Using initial transform for timepoint {t+1}: {initial_transform}")
-                affine_transform_settings.approx_transform = initial_transform
+                click.echo(f"Timepoint {t} has data, estimating transform")
+                approx_transform = estimate_transform_from_beads(
+                    source_channel=source_channel_tzyx,
+                    target_channel=target_channel_tzyx,
+                    beads_match_settings=beads_match_settings,
+                    affine_transform_settings=affine_transform_settings,
+                    verbose=verbose,
+                    output_folder_path=output_transforms_path,
+                    t_idx=t,
+                )
 
+                if approx_transform is not None:
+                    print(f"Using approx transform for timepoint {t+1}: {approx_transform}")
+                    affine_transform_settings.approx_transform = approx_transform
+                else:
+                    print(f"Using initial transform for timepoint {t+1}: {initial_transform}")
+                    affine_transform_settings.approx_transform = initial_transform                   
+                    
     else:
         num_cpus, gb_ram_per_cpu = estimate_resources(
             shape=(T, 2, Z, Y, X), ram_multiplier=5, max_num_cpus=16
@@ -1448,6 +1453,7 @@ def beads_based_registration(
     # Remove the output temporary folder
     # shutil.rmtree(output_transforms_path)
 
+
     if quality_control:
 
         num_cpus, gb_ram_per_cpu = estimate_resources(
@@ -1470,7 +1476,7 @@ def beads_based_registration(
 
         slurm_out_path = output_folder_path / "slurm_output"
         slurm_out_path.mkdir(parents=True, exist_ok=True)
-        output_folder_qc = output_folder_path / "qc_metrics"
+        output_folder_qc = output_folder_path / "qc_metrics_per_timepoint"
         output_folder_qc.mkdir(parents=True, exist_ok=True)
 
         # Submitit executor
@@ -1503,6 +1509,9 @@ def beads_based_registration(
 
         wait_for_jobs_to_finish(jobs)
 
+        output_folder_qc_summary = output_folder_path / "qc_summary"
+        output_folder_qc_summary.mkdir(parents=True, exist_ok=True)
+
         qc_summary_df = pd.DataFrame()
         timepoints = []
         for t in range(T):
@@ -1513,7 +1522,7 @@ def beads_based_registration(
                 qc_metrics_df["timepoint"] = t
                 qc_summary_df = pd.concat([qc_summary_df, qc_metrics_df])
 
-        qc_summary_df.to_csv(output_folder_path / "qc_summary.csv", index=False)
+        qc_summary_df.to_csv(output_folder_qc_summary / "qc_summary.csv", index=False)
 
         # AFTER (safe names + nicer CSV)
         num_cols = [
@@ -1547,9 +1556,10 @@ def beads_based_registration(
             }
         )
 
-        summary_stats_path = output_folder_path / "summary_stats.csv"
+        summary_stats_path = output_folder_qc_summary / "summary_stats.csv"
         summary_stats_df.to_csv(summary_stats_path, index=False)
 
+            
         low_score_timepoints = []
         for t in timepoints:
             score_t = qc_summary_df[qc_summary_df["timepoint"] == t]["score"].values[0]
@@ -1579,7 +1589,7 @@ def beads_based_registration(
                     plt.ylim(0, 1)
                 elif metric in ["overlap_count", "total_peaks_ref", "total_peaks_mov"]:
                     plt.ylim(0, max(qc_summary_df[metric].values) + 10)
-                plt.savefig(output_folder_path / f"{metric}.png")
+                plt.savefig(output_folder_qc_summary / f"{metric}.png")
                 plt.close()
 
     return transforms

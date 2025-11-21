@@ -1264,7 +1264,7 @@ def estimate_z_focus_per_position(
     z_focus_shift = [np.eye(4)]
 
     # Initialize the z-value
-    
+
     z_val = next((v for v in focus_idx if v != 0), None)
     click.echo(f"Z index of focus reference: {z_val}")
     if z_val is None:
