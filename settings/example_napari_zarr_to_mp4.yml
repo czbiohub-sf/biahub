@@ -1,0 +1,163 @@
+# ============================================================================
+# Napari Zarr to MP4 Video Generation Configuration
+# ============================================================================
+# This configuration file controls how microscopy data is processed and 
+# rendered into MP4 videos using napari.
+#
+# For more information, see the script documentation.
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# Output Settings
+# ----------------------------------------------------------------------------
+# Directory where generated MP4 videos will be saved
+# Videos are saved in: <output_path>/fov/<fov_name>.mp4
+output_path: "/path/to/output/directory"
+
+# ----------------------------------------------------------------------------
+# Field of View (FOV) Selection
+# ----------------------------------------------------------------------------
+# Glob pattern to select which FOVs to process
+# Examples:
+#   "/*/*/*"           - Process all FOVs (plate/well/position structure)
+#   "/A/1/*"           - Process all positions in plate A, well 1
+#   "/B/2/001000"      - Process only position 001000 in plate B, well 2
+#   "/*/2/*"           - Process all FOVs in well 2 across all plates
+fov: "/*/*/*"
+
+# ----------------------------------------------------------------------------
+# Video Settings
+# ----------------------------------------------------------------------------
+# Frame rate for the output video (frames per second)
+fps: 3
+
+# Enable detailed console output during processing
+verbose: true
+
+# ----------------------------------------------------------------------------
+# Input Data Sources
+# ----------------------------------------------------------------------------
+# List of input datasets to overlay in the video
+# Each input can be type "image" or "label"
+# Multiple inputs will be layered together in napari
+input_paths:
+
+  # ==========================================================================
+  # Example 1: Image Data (Fluorescence Channels + Virtual Staining)
+  # ==========================================================================
+  - input_path: "/path/to/your/dataset.zarr"
+    type: "image"
+    
+    # Projection/Slice Options (choose ONE or NEITHER):
+    # --------------------------------------------------------------------
+    # Option A: Extract a specific Z-slice (e.g., focal plane 29)
+    z_index: 29
+    
+    # Option B: Extract a specific timepoint (e.g., frame 0)
+    # time_index: 0
+    
+    # Option C: Use max projection across Z (comment out both z_index and time_index)
+    # (No z_index or time_index specified = max projection)
+    
+    # Channel Configuration
+    # --------------------------------------------------------------------
+    # Each channel defines:
+    #   - name: exact channel name from the Zarr dataset
+    #   - contrast_limits: [min, max] intensity values for display
+    #   - colormap: napari colormap name (e.g., "magenta", "green", "gray", "cyan")
+    channels:
+      - name: "mCherry EX561 EM600-37"
+        contrast_limits: [100, 300]
+        colormap: "magenta"
+      
+      - name: "GFP EX488 EM525-45"
+        contrast_limits: [110, 933]
+        colormap: "green"
+      
+      - name: "BF"
+        contrast_limits: [1181, 3190]
+        colormap: "gray"
+      
+      - name: "Phase3D"
+        contrast_limits: [-0.34, 0.56]
+        colormap: "gray"
+      
+      - name: "nuclei_prediction"
+        contrast_limits: [0, 30]
+        colormap: "cyan"
+      
+      - name: "membrane_prediction"
+        contrast_limits: [0, 8]
+        colormap: "orange"
+
+  # ==========================================================================
+  # Example 2: Label Data (Segmentation Masks) with Optional Tracking
+  # ==========================================================================
+  - input_path: "/path/to/segmentation/dataset.zarr"
+    type: "label"
+    
+    # Optional: Extract specific Z-slice or timepoint (same rules as image)
+    # z_index: 0
+    
+    # Channel Configuration for Labels
+    # --------------------------------------------------------------------
+    # Label channels display segmented objects as colored regions
+    channels:
+      - name: "nuclei_segmentation"
+      
+      - name: "cell_segmentation"
+    
+    # Optional: Overlay Ultrack tracking data
+    # --------------------------------------------------------------------
+    # If true, looks for CSV file: tracks_<fov_name>.csv
+    # Displays cell trajectories over time with colored tracks
+    tracks: true
+
+  # ==========================================================================
+  # Example 3: Virtual Staining Only (Single Input)
+  # ==========================================================================
+  # - input_path: "/path/to/virtual_stain.zarr"
+  #   type: "image"
+  #   z_index: 63
+  #   channels:
+  #     - name: "membrane_prediction"
+  #       contrast_limits: [0, 8]
+  #       colormap: "orange"
+
+# ============================================================================
+# Common Colormap Options
+# ============================================================================
+# napari built-in colormaps:
+#   - Fluorescence: "magenta", "green", "cyan", "red", "blue", "yellow"
+#   - Grayscale: "gray", "gray_r" (inverted)
+#   - Heat maps: "viridis", "plasma", "inferno", "turbo"
+#   - Rainbow: "hsv", "rainbow"
+#   - Scientific: "twilight", "bwr" (blue-white-red)
+#
+# For a complete list, see: https://napari.org/stable/howtos/colormaps.html
+# ============================================================================
+
+# ============================================================================
+# Tips for Optimal Results
+# ============================================================================
+# 1. Contrast Limits: Adjust to match your data's intensity range
+#    - Too narrow: washed out or clipped
+#    - Too wide: low contrast
+#    - Use napari GUI to find optimal values, then copy them here
+#
+# 2. Layer Order: Inputs are layered in the order listed
+#    - List background/structural channels first
+#    - List sparse/overlay channels last
+#
+# 3. Z-Projection vs Slices:
+#    - Max projection: Good for visualizing full 3D structures
+#    - Single slice: Better for high-resolution details at specific depth
+#
+# 4. Frame Rate: Balance smoothness vs file size
+#    - 3 FPS: Good for slow processes (cell division)
+#    - 10 FPS: Better for fast dynamics (particle tracking)
+#
+# 5. Channel Names: Must match EXACTLY as they appear in your Zarr dataset
+#    - Check available channels by opening the Zarr file in napari
+#    - Names are case-sensitive
+# ============================================================================
