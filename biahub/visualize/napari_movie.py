@@ -16,7 +16,7 @@ from ultrack.reader.napari_reader import read_csv
 
 from biahub.cli.parsing import config_filepath
 from biahub.cli.utils import yaml_to_model
-from biahub.settings import ChannelAttributes, NapariMovieSettings, ZarrAttributes
+from biahub.settings import NapariMovieSettings, ZarrAttributes
 
 
 def process_image(
@@ -110,7 +110,7 @@ def process_image(
 
             if z_index is None and time_index is None:
                 if verbose:
-                    click.echo(f"          Projection mode: Z-axis max projection")
+                    click.echo("          Projection mode: Z-axis max projection")
                 arr = dataset.data.dask_array()[:, ch_idx, :, :, :].max(axis=1)
 
             elif z_index is not None and time_index is None:
@@ -217,7 +217,7 @@ def process_label(
 
             if time_index is None and z_index is None:
                 if verbose:
-                    click.echo(f"          Projection mode: Z-axis max projection")
+                    click.echo("          Projection mode: Z-axis max projection")
                 arr = dataset.data.dask_array()[:, ch_idx, :, :, :].max(axis=1)
 
             elif time_index is not None and z_index is None:
@@ -433,7 +433,7 @@ def process_fov(
                     blending="opaque",
                 )
                 if verbose:
-                    click.echo(f"✓ Added tracks layer")
+                    click.echo("✓ Added tracks layer")
 
         # Setup for fullscreen rendering
     viewer.dims.set_point(0, 0)
