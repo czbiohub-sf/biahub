@@ -12,6 +12,7 @@ from biahub.settings import (
     DeskewSettings,
     EstimateRegistrationSettings,
     EstimateStabilizationSettings,
+    NapariMovieSettings,
     ProcessingImportFuncSettings,
     RegistrationSettings,
     SegmentationSettings,
@@ -51,6 +52,7 @@ example_settings_params = [
     ("example_stabilize_timelapse_settings.yml", StabilizationSettings),
     ("example_stitch_settings.yml", StitchSettings),
     ("example_track_settings.yml", TrackingSettings),
+    ("example_napari_movie_settings.yml", NapariMovieSettings),
 ]
 
 try:
