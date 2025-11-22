@@ -23,6 +23,29 @@ class MyBaseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class ChannelAttributes(MyBaseModel):
+    name: str
+    contrast_limits: Optional[list[float]] = None
+    colormap: Optional[str] = None
+
+
+class ZarrAttributes(MyBaseModel):
+    input_path: str
+    channels: list[ChannelAttributes]
+    type: Literal["image", "label"]
+    z_index: Optional[int] = None
+    time_index: Optional[int] = None
+    tracks: Optional[bool] = None
+
+
+class NapariMovieSettings(MyBaseModel):
+    input_paths: list[ZarrAttributes]
+    output_path: str
+    fov: str = "/*/*/*"
+    fps: int = 3
+    verbose: bool = False
+
+
 class DetectPeaksSettings(MyBaseModel):
     threshold_abs: float = 110
     nms_distance: int = 16
