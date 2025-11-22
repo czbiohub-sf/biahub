@@ -18,6 +18,7 @@ from biahub.settings import (
     StabilizationSettings,
     StitchSettings,
     TrackingSettings,
+    NapariMovieSettings,
 )
 
 settings_files_dir = (Path(__file__) / "../../settings").resolve()
@@ -51,6 +52,7 @@ example_settings_params = [
     ("example_stabilize_timelapse_settings.yml", StabilizationSettings),
     ("example_stitch_settings.yml", StitchSettings),
     ("example_track_settings.yml", TrackingSettings),
+    ("example_napari_movie_settings.yml", NapariMovieSettings),
 ]
 
 try:
