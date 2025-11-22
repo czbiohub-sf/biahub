@@ -12,13 +12,13 @@ from biahub.settings import (
     DeskewSettings,
     EstimateRegistrationSettings,
     EstimateStabilizationSettings,
+    NapariMovieSettings,
     ProcessingImportFuncSettings,
     RegistrationSettings,
     SegmentationSettings,
     StabilizationSettings,
     StitchSettings,
     TrackingSettings,
-    NapariMovieSettings,
 )
 
 settings_files_dir = (Path(__file__) / "../../settings").resolve()
