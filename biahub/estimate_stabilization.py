@@ -247,7 +247,7 @@ def phase_cross_corr_padding(
 
     Computes translation shift using arg. maximum of phase cross correlation.
     Input are padded or cropped for fast FFT computation assuming a maximum translation shift.
-
+    moving -> reference
     Parameters
     ----------
     ref_img : ArrayLike
@@ -411,9 +411,9 @@ def get_tform_from_pcc(
     dz, dy, dx = shift
 
     transform = np.eye(4)
-    transform[0, 3] = dx
+    transform[2, 3] = dx
     transform[1, 3] = dy
-    transform[2, 3] = dz
+    transform[0, 3] = dz
     if verbose:
         click.echo(f"transform: {transform}")
 
@@ -849,43 +849,12 @@ def estimate_xyz_stabilization_with_beads(
     else:
         raise ValueError("Invalid reference. Please use 'first' or 'previous as reference")
 
-    # Compute transformations in parallel
-
-    num_cpus, gb_ram_per_cpu = estimate_resources(
-        shape=(T, 1, Z, Y, X), ram_multiplier=5, max_num_cpus=16
-    )
-
-    # Prepare SLURM arguments
-    slurm_args = {
-        "slurm_job_name": "estimate_focus_z",
-        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
-        "slurm_cpus_per_task": num_cpus,
-        "slurm_array_parallelism": 100,
-        "slurm_time": 30,
-        "slurm_partition": "preempted",
-    }
-
-    if sbatch_filepath:
-        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
-
-    output_folder_path.mkdir(parents=True, exist_ok=True)
-    slurm_out_path = output_folder_path / "slurm_output"
-    slurm_out_path.mkdir(parents=True, exist_ok=True)
-
-    # Submitit executor
-    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
-    executor.update_parameters(**slurm_args)
-
-    click.echo(f"Submitting SLURM focus estimation jobs with resources: {slurm_args}")
     output_transforms_path = output_folder_path / "xyz_transforms"
     output_transforms_path.mkdir(parents=True, exist_ok=True)
-
-    # Submit jobs
-    jobs = []
-    with submitit.helpers.clean_env(), executor.batch():
+    initial_transform = affine_transform_settings.approx_transform
+    if affine_transform_settings.use_prev_t_transform:
         for t in range(1, T, 1):
-            job = executor.submit(
-                estimate_transform_from_beads,
+            approx_transform = estimate_transform_from_beads(
                 source_channel_tzyx=channel_tzyx,
                 target_channel_tzyx=target_channel_tzyx,
                 verbose=verbose,
@@ -895,16 +864,67 @@ def estimate_xyz_stabilization_with_beads(
                 output_folder_path=output_transforms_path,
                 t_idx=t,
             )
-            jobs.append(job)
+        if approx_transform is not None:
+            print(f"Using approx transform for timepoint {t+1}: {approx_transform}")
+            affine_transform_settings.approx_transform = approx_transform
+        else:
+            print(f"Using initial transform for timepoint {t+1}: {initial_transform}")
+            affine_transform_settings.approx_transform = initial_transform
+    else:
 
-    # Save job IDs
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    log_path = slurm_out_path / f"job_ids_{timestamp}.log"
-    with open(log_path, "w") as log_file:
-        for job in jobs:
-            log_file.write(f"{job.job_id}\n")
+        # Compute transformations in parallel
 
-    wait_for_jobs_to_finish(jobs)
+        num_cpus, gb_ram_per_cpu = estimate_resources(
+            shape=(T, 1, Z, Y, X), ram_multiplier=5, max_num_cpus=16
+        )
+
+        # Prepare SLURM arguments
+        slurm_args = {
+            "slurm_job_name": "estimate_focus_z",
+            "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
+            "slurm_cpus_per_task": num_cpus,
+            "slurm_array_parallelism": 100,
+            "slurm_time": 30,
+            "slurm_partition": "preempted",
+        }
+
+        if sbatch_filepath:
+            slurm_args.update(sbatch_to_submitit(sbatch_filepath))
+
+        slurm_out_path = output_folder_path / "slurm_output"
+        slurm_out_path.mkdir(parents=True, exist_ok=True)
+
+        # Submitit executor
+        executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
+        executor.update_parameters(**slurm_args)
+
+        click.echo(f"Submitting SLURM focus estimation jobs with resources: {slurm_args}")
+
+        # Submit jobs
+        jobs = []
+        with submitit.helpers.clean_env(), executor.batch():
+            for t in range(1, T, 1):
+                job = executor.submit(
+                    estimate_transform_from_beads,
+                    source_channel_tzyx=channel_tzyx,
+                    target_channel_tzyx=target_channel_tzyx,
+                    verbose=verbose,
+                    beads_match_settings=beads_match_settings,
+                    affine_transform_settings=affine_transform_settings,
+                    slurm=True,
+                    output_folder_path=output_transforms_path,
+                    t_idx=t,
+                )
+                jobs.append(job)
+
+        # Save job IDs
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        log_path = slurm_out_path / f"job_ids_{timestamp}.log"
+        with open(log_path, "w") as log_file:
+            for job in jobs:
+                log_file.write(f"{job.job_id}\n")
+
+        wait_for_jobs_to_finish(jobs)
 
     # Load the transforms
     transforms = [np.eye(4).tolist()]
@@ -937,6 +957,7 @@ def estimate_xy_stabilization_per_position(
     center_crop_xy: list[int, int],
     t_reference: str = "previous",
     verbose: bool = False,
+    vs_path: str = None,
 ) -> ArrayLike:
     """
     Estimate the xy stabilization for a single position.
@@ -957,7 +978,8 @@ def estimate_xy_stabilization_per_position(
         Reference timepoint.
     verbose : bool
         If True, print verbose output.
-
+    vs_path : str
+        Path to the virtual stain data.
     Returns
     -------
     ArrayLike
@@ -1015,6 +1037,7 @@ def estimate_xy_stabilization(
     sbatch_filepath: Optional[Path] = None,
     cluster: str = "local",
     verbose: bool = False,
+    vs_path: str = None,
 ) -> dict[str, list[ArrayLike]]:
     """
     Estimate XY stabilization using StackReg.
@@ -1070,6 +1093,7 @@ def estimate_xy_stabilization(
             verbose=verbose,
             estimate_z_index=True,
             focus_finding_settings=stack_reg_settings.focus_finding_settings,
+            vs_path=vs_path,
         )
 
     num_cpus, gb_ram_per_cpu = estimate_resources(
@@ -1082,7 +1106,7 @@ def estimate_xy_stabilization(
         "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,
-        "slurm_time": 10,
+        "slurm_time": 60,
         "slurm_partition": "preempted",
     }
 
@@ -1110,6 +1134,7 @@ def estimate_xy_stabilization(
                 center_crop_xy=stack_reg_settings.center_crop_xy,
                 t_reference=stack_reg_settings.t_reference,
                 verbose=verbose,
+                vs_path=vs_path,
             )
             jobs.append(job)
 
@@ -1141,6 +1166,7 @@ def estimate_z_focus_per_position(
     output_path_focus_csv: Path,
     output_path_transform: Path,
     verbose: bool = False,
+    vs_path: str = None,
 ) -> None:
     """
     Estimate the z-focus for each timepoint and channel.
@@ -1159,7 +1185,8 @@ def estimate_z_focus_per_position(
         Path to the output transform file.
     verbose : bool
         If True, print verbose output.
-
+    vs_path : str
+        Path to the virtual stain data.
     Returns
     -------
     None
@@ -1172,7 +1199,26 @@ def estimate_z_focus_per_position(
         _, _, _, _, pixel_size = dataset.scale
 
         for tc_idx in itertools.product(range(T), input_channel_indices):
-            data_zyx = dataset.data[tc_idx][
+            data_zyx = dataset.data[tc_idx]
+            if vs_path:
+                print(f"Applying virtual stain mask to {input_position_dirpath}")
+                print(f"vs_path: {vs_path}")
+                fov = "/".join(input_position_dirpath.parts[-3:])
+
+                from scipy.ndimage import distance_transform_edt
+                from skimage.filters import threshold_otsu
+
+                with open_ome_zarr(Path(vs_path) / fov) as vs_dataset:
+                    nuc_arr = np.asarray(vs_dataset.data.dask_array()[tc_idx[0], 0, :, :, :])
+                    threshold = threshold_otsu(nuc_arr)
+                    nuc_arr_mask = nuc_arr > threshold
+                    radius_um = 2.0  # desired physical dilation radius (µm)
+                    dist = distance_transform_edt(~nuc_arr_mask, sampling=pixel_size)
+                    dilated_nuc_arr_mask = dist <= radius_um
+                    data_zyx = data_zyx * dilated_nuc_arr_mask
+                    print(f"max value: {np.max(data_zyx)}")
+                    print(f"min value: {np.min(data_zyx)}")
+            data_zyx = data_zyx[
                 :,
                 Y // 2 - center_crop_xy[1] // 2 : Y // 2 + center_crop_xy[1] // 2,
                 X // 2 - center_crop_xy[0] // 2 : X // 2 + center_crop_xy[0] // 2,
@@ -1218,10 +1264,15 @@ def estimate_z_focus_per_position(
     z_focus_shift = [np.eye(4)]
 
     # Initialize the z-value
-    z_val = focus_idx[0]
+
+    z_val = next((v for v in focus_idx if v != 0), None)
+    click.echo(f"Z index of focus reference: {z_val}")
+    if z_val is None:
+        raise ValueError("Z index of focus reference is None, focus_idx contains only zeros")
 
     for z_val_next in focus_idx[1:]:
         shift = np.eye(4)
+        # moving -> reference
         # Set the translation components of the transform
         shift[0, 3] = z_val_next - z_val
         z_focus_shift.append(shift)
@@ -1294,6 +1345,7 @@ def estimate_z_stabilization(
     cluster: str = "local",
     verbose: bool = False,
     estimate_z_index: bool = False,
+    vs_path: str = None,
 ) -> dict[str, list[ArrayLike]]:
     """
     Estimate the z stabilization for a list of positions.
@@ -1343,7 +1395,7 @@ def estimate_z_stabilization(
         "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,
-        "slurm_time": 30,
+        "slurm_time": 60,
         "slurm_partition": "preempted",
     }
 
@@ -1374,6 +1426,7 @@ def estimate_z_stabilization(
                 output_path_focus_csv=output_folder_focus_path,
                 output_path_transform=output_transforms_path,
                 verbose=verbose,
+                vs_path=vs_path,
             )
             jobs.append(job)
 
@@ -1457,6 +1510,7 @@ def estimate_stabilization(
     config_filepath: str,
     sbatch_filepath: str = None,
     local: bool = False,
+    vs_path: str = None,
 ) -> None:
     """
     Estimate the stabilization matrices for a list of positions.
@@ -1473,7 +1527,8 @@ def estimate_stabilization(
         Path to the sbatch file.
     local : bool
         If True, run locally.
-
+    vs_path : str
+        Path to the virtual stain data.
     Returns
     -------
     None
@@ -1527,6 +1582,7 @@ def estimate_stabilization(
                 sbatch_filepath=sbatch_filepath,
                 cluster=cluster,
                 verbose=verbose,
+                vs_path=vs_path,
             )
 
             xy_transforms_dict = estimate_xy_stabilization(
@@ -1740,6 +1796,7 @@ def estimate_stabilization(
             channel_index=channel_index,
             focus_finding_settings=settings.focus_finding_settings,
             sbatch_filepath=sbatch_filepath,
+            vs_path=vs_path,
             cluster=cluster,
             verbose=verbose,
         )
@@ -1794,6 +1851,7 @@ def estimate_stabilization(
                 sbatch_filepath=sbatch_filepath,
                 cluster=cluster,
                 verbose=verbose,
+                vs_path=vs_path,
             )
 
             model = StabilizationSettings(
@@ -1843,12 +1901,16 @@ def estimate_stabilization(
 @config_filepath()
 @sbatch_filepath()
 @local()
+@click.option(
+    "--vs_path", type=str, required=False, help="Path to the virtual stain data.", default=None
+)
 def estimate_stabilization_cli(
     input_position_dirpaths: List[str],
     output_dirpath: str,
     config_filepath: Path,
     sbatch_filepath: str = None,
     local: bool = False,
+    vs_path: str = None,
 ):
     """
     Estimate translation matrices for XYZ stabilization of a timelapse dataset.
@@ -1866,6 +1928,7 @@ def estimate_stabilization_cli(
         config_filepath=config_filepath,
         sbatch_filepath=sbatch_filepath,
         local=local,
+        vs_path=vs_path,
     )
 
 

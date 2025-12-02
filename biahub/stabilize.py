@@ -129,10 +129,6 @@ def stabilize(
     """
 
     # Single config file for all FOVs
-    if len(config_filepaths) == 1:
-        config_filepath = Path(config_filepaths[0])
-    else:
-        config_filepath = None
 
     settings = yaml_to_model(config_filepaths[0], StabilizationSettings)
 
@@ -233,7 +229,6 @@ def stabilize(
     ):
         raise RuntimeError(f"Not enough disk space to store the output at {output_dirpath}")
 
-    stabilize_zyx_args = {"list_of_shifts": combined_mats}
     copy_n_paste_kwargs = {"czyx_slicing_params": ([Z_slice, Y_slice, X_slice])}
 
     # Estimate resources
@@ -250,6 +245,7 @@ def stabilize(
         "slurm_array_parallelism": 100,  # process up to 100 positions at a time
         "slurm_time": 20,
         "slurm_partition": "preempted",
+        "slurm_use_srun": False,
     }
 
     # Override defaults if sbatch_filepath is provided
@@ -272,10 +268,11 @@ def stabilize(
     with submitit.helpers.clean_env(), executor.batch():
         # apply stabilization to channels in the chosen channels and else copy the rest
         for input_position_path in input_position_dirpaths:
-            if not config_filepath:
+            if len(config_filepaths) > 1:
                 fov = "_".join(input_position_path.parts[-3:])
                 config_filepath = [p for p in config_filepaths if fov in p.name][0]
-
+            else:
+                config_filepath = config_filepaths[0]
             settings = yaml_to_model(config_filepath, StabilizationSettings)
             # Use settings for this FOV
             combined_mats = np.array(settings.affine_transform_zyx_list)

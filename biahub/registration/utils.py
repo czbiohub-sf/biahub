@@ -1,0 +1,410 @@
+import glob
+import os
+import shutil
+
+from datetime import datetime
+from pathlib import Path
+from typing import Literal, Tuple, Union
+
+import click
+import dask.array as da
+import napari
+import numpy as np
+import pandas as pd
+import submitit
+import yaml
+
+from matplotlib import pyplot as plt
+from numpy.typing import ArrayLike
+from scipy.interpolate import interp1d
+
+
+from biahub.cli.utils import (
+    model_to_yaml,
+)
+from biahub.optimize_registration import _optimize_registration
+
+from biahub.settings import (
+    AffineTransformSettings,
+
+    RegistrationSettings,
+    StabilizationSettings,
+)
+
+# TODO: see if at some point these globals should be hidden or exposed.
+NA_DETECTION_SOURCE = 1.35
+NA_DETECTION_TARGET = 1.35
+WAVELENGTH_EMISSION_SOURCE_CHANNEL = 0.45  # in um
+WAVELENGTH_EMISSION_TARGET_CHANNEL = 0.6  # in um
+FOCUS_SLICE_ROI_WIDTH = 150  # size of central ROI used to find focal slice
+
+
+def validate_transforms(
+    transforms: list[ArrayLike],
+    shape_zyx: tuple[int, int, int],
+    window_size: int = 10,
+    tolerance: float = 100.0,
+    verbose: bool = False,
+) -> list[ArrayLike]:
+    """
+    Validate that a provided list of transforms do not deviate beyond the tolerance threshold
+    relative to the average transform within a given window size.
+
+    Parameters
+    ----------
+    transforms : list[ArrayLike]
+        List of affine transformation matrices (4x4), one for each timepoint.
+    shape_zyx : tuple[int, int, int]
+        Shape of the source (i.e. moving) volume (Z, Y, X).
+    window_size : int
+        Size of the moving window for smoothing transformations.
+    tolerance : float
+        Maximum allowed difference between consecutive transformations for validation.
+    verbose : bool
+        If True, prints detailed logs of the validation process.
+
+    Returns
+    -------
+    list[ArrayLike]
+        List of affine transformation matrices with invalid or inconsistent values replaced by None.
+    """
+    valid_transforms = []
+    reference_transform = None
+
+    for i, transform in enumerate(transforms):
+        if transform is not None:
+            if len(valid_transforms) < window_size:
+                # Bootstrap the buffer without validating yet
+                valid_transforms.append(transform)
+                reference_transform = np.mean(valid_transforms, axis=0)
+                if verbose:
+                    click.echo(
+                        f"[Bootstrap] Accepting transform at timepoint {i} (no validation)"
+                    )
+            elif check_transforms_difference(
+                transform, reference_transform, shape_zyx, tolerance, verbose
+            ):
+                valid_transforms.append(transform)
+                if len(valid_transforms) > window_size:
+                    valid_transforms.pop(0)
+                reference_transform = np.mean(valid_transforms, axis=0)
+                if verbose:
+                    click.echo(f"Transform at timepoint {i} is valid")
+            else:
+                transforms[i] = None
+                if verbose:
+                    click.echo(
+                        f"Transform at timepoint {i} is invalid and will be interpolated"
+                    )
+        else:
+            transforms[i] = None
+            if verbose:
+                click.echo(f"Transform at timepoint {i} is None and will be interpolated")
+
+    return transforms
+
+
+def interpolate_transforms(
+    transforms: list[ArrayLike],
+    window_size: int = 3,
+    interpolation_type: Literal["linear", "cubic"] = "linear",
+    verbose: bool = False,
+):
+    """
+    Interpolate missing transforms (None) in a list of affine transformation matrices.
+
+    Parameters
+    ----------
+    transforms : list[ArrayLike]
+        List of affine transformation matrices (4x4), one for each timepoint.
+    window_size : int
+        Local window radius for interpolation. If 0, global interpolation is used.
+    interpolation_type : Literal["linear", "cubic"]
+        Interpolation type.
+    verbose : bool
+        If True, prints detailed logs of the interpolation process.
+
+    Returns
+    -------
+    list[ArrayLike]
+        List of affine transformation matrices with missing values filled via linear interpolation.
+    """
+    n = len(transforms)
+    valid_transform_indices = [i for i, t in enumerate(transforms) if t is not None]
+    valid_transforms = [np.array(transforms[i]) for i in valid_transform_indices]
+
+    if not valid_transform_indices or len(valid_transform_indices) < 2:
+        raise ValueError("At least two valid transforms are required for interpolation.")
+
+    missing_indices = [i for i in range(n) if transforms[i] is None]
+
+    if not missing_indices:
+        return transforms  # nothing to do
+    if verbose:
+        click.echo(f"Interpolating missing transforms at timepoints: {missing_indices}")
+
+    if window_size > 0:
+        for idx in missing_indices:
+            # Define local window
+            start = max(0, idx - window_size)
+            end = min(n, idx + window_size + 1)
+
+            local_x = []
+            local_y = []
+
+            for j in range(start, end):
+                if j in valid_transform_indices:
+                    local_x.append(j)
+                    local_y.append(np.array(transforms[j]))
+
+            if len(local_x) < 2:
+                # Not enough neighbors for interpolation. Assign to closes valid transform
+                closest_valid_idx = valid_transform_indices[
+                    np.argmin(np.abs(np.asarray(valid_transform_indices) - idx))
+                ]
+                transforms[idx] = transforms[closest_valid_idx]
+                if verbose:
+                    click.echo(
+                        f"Not enough interpolation neighbors were found for timepoint {idx} using closest valid transform at timepoint {closest_valid_idx}"
+                    )
+                continue
+
+            f = interp1d(
+                local_x, local_y, axis=0, kind=interpolation_type, fill_value='extrapolate'
+            )
+            transforms[idx] = f(idx).tolist()
+            if verbose:
+                click.echo(f"Interpolated timepoint {idx} using neighbors: {local_x}")
+
+    else:
+        # Global interpolation using all valid transforms
+        f = interp1d(
+            valid_transform_indices,
+            valid_transforms,
+            axis=0,
+            kind='linear',
+            fill_value='extrapolate',
+        )
+        transforms = [
+            f(i).tolist() if transforms[i] is None else transforms[i] for i in range(n)
+        ]
+
+    return transforms
+
+
+def check_transforms_difference(
+    tform1: ArrayLike,
+    tform2: ArrayLike,
+    shape_zyx: tuple[int, int, int],
+    threshold: float = 5.0,
+    verbose: bool = False,
+):
+    """
+    Evaluate the difference between two affine transforms by calculating the
+    Mean Squared Error (MSE) of a grid of points transformed by each matrix.
+
+    Parameters
+    ----------
+    tform1 : ArrayLike
+        First affine transform (4x4 matrix).
+    tform2 : ArrayLike
+        Second affine transform (4x4 matrix).
+    shape_zyx : tuple[int, int, int]
+        Shape of the source (i.e. moving) volume (Z, Y, X).
+    threshold : float
+        The maximum allowed MSE difference.
+    verbose : bool
+        Flag to print the MSE difference.
+
+    Returns
+    -------
+    bool
+        True if the MSE difference is within the threshold, False otherwise.
+    """
+    tform1 = np.array(tform1)
+    tform2 = np.array(tform2)
+    (Z, Y, X) = shape_zyx
+
+    zz, yy, xx = np.meshgrid(
+        np.linspace(0, Z - 1, 10), np.linspace(0, Y - 1, 10), np.linspace(0, X - 1, 10)
+    )
+
+    grid_points = np.vstack([zz.ravel(), yy.ravel(), xx.ravel(), np.ones(zz.size)]).T
+
+    points_tform1 = np.dot(tform1, grid_points.T).T
+    points_tform2 = np.dot(tform2, grid_points.T).T
+
+    differences = np.linalg.norm(points_tform1[:, :3] - points_tform2[:, :3], axis=1)
+    mse = np.mean(differences)
+
+    if verbose:
+        click.echo(f'MSE of transformed points: {mse:.2f}; threshold: {threshold:.2f}')
+    return mse <= threshold
+
+
+def evaluate_transforms(
+    transforms: ArrayLike,
+    shape_zyx: tuple[int, int, int],
+    validation_window_size: int = 10,
+    validation_tolerance: float = 100.0,
+    interpolation_window_size: int = 3,
+    interpolation_type: Literal["linear", "cubic"] = "linear",
+    verbose: bool = False,
+) -> ArrayLike:
+    """
+    Evaluate a list of affine transformation matrices.
+    Transform matrices are checked for deviation from the average within a given window size.
+    If a transform is found to lead to shift larger than the given tolerance,
+    that transform will be replaced by interpolation of valid transforms within a given window size.
+
+    Parameters
+    ----------
+    transforms : ArrayLike
+        List of affine transformation matrices (4x4), one for each timepoint.
+    shape_zyx : tuple[int, int, int]
+        Shape of the source (i.e. moving) volume (Z, Y, X).
+    validation_window_size : int
+        Size of the moving window for smoothing transformations.
+    validation_tolerance : float
+        Maximum allowed difference between consecutive transformations for validation.
+    interpolation_window_size : int
+        Size of the local window for interpolation.
+    interpolation_type : Literal["linear", "cubic"]
+        Interpolation type.
+    verbose : bool
+        If True, prints detailed logs of the evaluation and validation process.
+
+    Returns
+    -------
+    list[ArrayLike]
+        List of affine transformation matrices with missing values filled via linear interpolation.
+    """
+
+    if not isinstance(transforms, list):
+        transforms = transforms.tolist()
+    if len(transforms) < validation_window_size:
+        raise Warning(
+            f"Not enough transforms for validation and interpolation. "
+            f"Required: {validation_window_size}, "
+            f"Provided: {len(transforms)}"
+        )
+    else:
+        transforms = validate_transforms(
+            transforms=transforms,
+            window_size=validation_window_size,
+            tolerance=validation_tolerance,
+            shape_zyx=shape_zyx,
+            verbose=verbose,
+        )
+
+    if len(transforms) < interpolation_window_size:
+        raise Warning(
+            f"Not enough transforms for interpolation. "
+            f"Required: {interpolation_window_size}, "
+            f"Provided: {len(transforms)}"
+        )
+    else:
+        transforms = interpolate_transforms(
+            transforms=transforms,
+            window_size=interpolation_window_size,
+            interpolation_type=interpolation_type,
+            verbose=verbose,
+        )
+    return transforms
+
+
+def save_transforms(
+    model: Union[AffineTransformSettings, StabilizationSettings, RegistrationSettings],
+    transforms: list[ArrayLike],
+    output_filepath_settings: Path,
+    output_filepath_plot: Path = None,
+    verbose: bool = False,
+):
+    """
+    Save the transforms to a yaml file and plot the translations.
+
+    Parameters
+    ----------
+    model : Union[AffineTransformSettings, StabilizationSettings, RegistrationSettings]
+        Model to save the transforms to.
+    transforms : list[ArrayLike]
+        List of affine transformation matrices (4x4), one for each timepoint.
+    output_filepath_settings : Path
+        Path to the output settings file.
+    output_filepath_plot : Path
+        Path to the output plot file.
+    verbose : bool
+        If True, prints detailed logs of the saving process.
+
+    Returns
+    -------
+    None
+
+    Notes
+    -----
+    The transforms are saved to a yaml file and a plot of the translations is saved to a png file.
+    The plot is saved in the same directory as the settings file and is named "translations.png".
+
+    """
+    if transforms is None or len(transforms) == 0:
+        raise ValueError("Transforms are empty")
+
+    if not isinstance(transforms, list):
+        transforms = transforms.tolist()
+
+    model.affine_transform_zyx_list = transforms
+
+    if output_filepath_settings.suffix not in [".yml", ".yaml"]:
+        output_filepath_settings = output_filepath_settings.with_suffix(".yml")
+
+    output_filepath_settings.parent.mkdir(parents=True, exist_ok=True)
+    model_to_yaml(model, output_filepath_settings)
+
+    if verbose and output_filepath_plot is not None:
+        if output_filepath_plot.suffix not in [".png"]:
+            output_filepath_plot = output_filepath_plot.with_suffix(".png")
+        output_filepath_plot.parent.mkdir(parents=True, exist_ok=True)
+
+        plot_translations(np.asarray(transforms), output_filepath_plot)
+
+
+def plot_translations(
+    transforms_zyx: ArrayLike,
+    output_filepath: Path,
+):
+    """
+    Plot the translations of a list of affine transformation matrices.
+
+    Parameters
+    ----------
+    transforms_zyx : ArrayLike
+        List of affine transformation matrices (4x4), one for each timepoint.
+    output_filepath : Path
+        Path to the output plot file.
+    Returns
+    -------
+    None
+
+    Notes
+    -----
+    The plot is saved as a png file.
+    The plot is saved in the same directory as the output file.
+    The plot is saved as a png file.
+    """
+    transforms_zyx = np.asarray(transforms_zyx)
+    os.makedirs(output_filepath.parent, exist_ok=True)
+
+    z_transforms = transforms_zyx[:, 0, 3]
+    y_transforms = transforms_zyx[:, 1, 3]
+    x_transforms = transforms_zyx[:, 2, 3]
+    _, axs = plt.subplots(3, 1, figsize=(10, 10))
+
+    axs[0].plot(z_transforms)
+    axs[0].set_title("Z-Translation")
+    axs[1].plot(x_transforms)
+    axs[1].set_title("X-Translation")
+    axs[2].plot(y_transforms)
+    axs[2].set_title("Y-Translation")
+    plt.savefig(output_filepath, dpi=300, bbox_inches='tight')
+    plt.close()
+
