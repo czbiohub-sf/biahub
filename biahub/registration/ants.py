@@ -22,7 +22,7 @@ from biahub.settings import (
     AntsRegistrationSettings,
 )
 from skimage import filters
-from biahub.cli.utils import _check_nan_n_zeros, model_to_yaml, yaml_to_model
+from biahub.cli.utils import _check_nan_n_zeros
 from biahub.register import (
     convert_transform_to_ants,
     convert_transform_to_numpy,

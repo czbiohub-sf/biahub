@@ -1,66 +1,19 @@
-import glob
-import os
-import shutil
-
-from datetime import datetime
-from pathlib import Path
-from typing import Literal, Tuple, Union
-
 import ants
 import click
-import dask.array as da
 import napari
 import numpy as np
-import pandas as pd
-import submitit
-import yaml
-
-from iohub import open_ome_zarr
-from matplotlib import pyplot as plt
 from numpy.typing import ArrayLike
-from scipy.interpolate import interp1d
-from scipy.optimize import linear_sum_assignment
-from scipy.spatial import cKDTree
-from scipy.spatial.distance import cdist
-from skimage.feature import match_descriptors
-from skimage.transform import AffineTransform, EuclideanTransform, SimilarityTransform
-from sklearn.neighbors import NearestNeighbors, radius_neighbors_graph
+from skimage.transform import EuclideanTransform, SimilarityTransform
 from waveorder.focus import focus_from_transverse_band
 
-from biahub.characterize_psf import detect_peaks
-from biahub.cli.parsing import (
-    config_filepath,
-    local,
-    output_filepath,
-    sbatch_filepath,
-    sbatch_to_submitit,
-    source_position_dirpaths,
-    target_position_dirpaths,
-)
-from biahub.cli.slurm import wait_for_jobs_to_finish
-from biahub.cli.utils import (
-    _check_nan_n_zeros,
-    estimate_resources,
-    model_to_yaml,
-    yaml_to_model,
-)
-from biahub.optimize_registration import _optimize_registration
+
 from biahub.register import (
     convert_transform_to_ants,
     convert_transform_to_numpy,
     get_3D_rescaling_matrix,
     get_3D_rotation_matrix,
 )
-from biahub.settings import (
-    AffineTransformSettings,
-    AntsRegistrationSettings,
-    BeadsMatchSettings,
-    DetectPeaksSettings,
-    EstimateRegistrationSettings,
-    RegistrationSettings,
-    StabilizationSettings,
-)
-from biahub.registration.utils import plot_translations, validate_transforms, interpolate_transforms, check_transforms_difference, evaluate_transforms, save_transforms
+
 
 
 # TODO: see if at some point these globals should be hidden or exposed.

@@ -862,7 +862,7 @@ def get_matches_from_beads(
         matches = get_matches_from_hungarian(
             source_peaks=source_peaks,
             target_peaks=target_peaks,
-            beads_match_settings=beads_match_settings,
+            hungarian_settings=beads_match_settings.hungarian_match_settings,
             verbose=verbose,
         )
 
@@ -1049,3 +1049,149 @@ def estimate_transform_from_beads(
     return compount_tform.tolist()
 
 
+
+
+def estimate_xyz_stabilization_with_beads(
+    channel_tzyx: da.Array,
+    beads_match_settings: BeadsMatchSettings,
+    affine_transform_settings: AffineTransformSettings,
+    verbose: bool = False,
+    cluster: str = "local",
+    sbatch_filepath: Optional[Path] = None,
+    output_folder_path: Path = None,
+) -> list[ArrayLike]:
+    """
+    Estimate the xyz stabilization for a single position.
+
+    Parameters
+    ----------
+    channel_tzyx : da.Array
+        Source channel data.
+    beads_match_settings : BeadsMatchSettings
+        Settings for the beads match.
+    affine_transform_settings : AffineTransformSettings
+        Settings for the affine transform.
+    verbose : bool
+        If True, print verbose output.
+    cluster : str
+        Cluster to use.
+    sbatch_filepath : Path
+        Path to the sbatch file.
+    output_folder_path : Path
+        Path to the output folder.
+
+    Returns
+    -------
+    list[ArrayLike]
+        List of the xyz stabilization for each timepoint.
+    """
+
+    (T, Z, Y, X) = channel_tzyx.shape
+
+    if beads_match_settings.t_reference == "first":
+        target_channel_tzyx = np.broadcast_to(channel_tzyx[0], (T, Z, Y, X)).copy()
+    elif beads_match_settings.t_reference == "previous":
+        target_channel_tzyx = np.roll(channel_tzyx, shift=-1, axis=0)
+        target_channel_tzyx[0] = channel_tzyx[0]
+
+    else:
+        raise ValueError("Invalid reference. Please use 'first' or 'previous as reference")
+
+    output_transforms_path = output_folder_path / "xyz_transforms"
+    output_transforms_path.mkdir(parents=True, exist_ok=True)
+    initial_transform = affine_transform_settings.approx_transform
+    if affine_transform_settings.use_prev_t_transform:
+        for t in range(1, T, 1):
+            approx_transform = estimate_transform_from_beads(
+                source_channel_tzyx=channel_tzyx,
+                target_channel_tzyx=target_channel_tzyx,
+                verbose=verbose,
+                beads_match_settings=beads_match_settings,
+                affine_transform_settings=affine_transform_settings,
+                slurm=True,
+                output_folder_path=output_transforms_path,
+                t_idx=t,
+            )
+        if approx_transform is not None:
+            print(f"Using approx transform for timepoint {t+1}: {approx_transform}")
+            affine_transform_settings.approx_transform = approx_transform
+        else:
+            print(f"Using initial transform for timepoint {t+1}: {initial_transform}")
+            affine_transform_settings.approx_transform = initial_transform
+    else:
+
+        # Compute transformations in parallel
+
+        num_cpus, gb_ram_per_cpu = estimate_resources(
+            shape=(T, 1, Z, Y, X), ram_multiplier=5, max_num_cpus=16
+        )
+
+        # Prepare SLURM arguments
+        slurm_args = {
+            "slurm_job_name": "estimate_focus_z",
+            "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
+            "slurm_cpus_per_task": num_cpus,
+            "slurm_array_parallelism": 100,
+            "slurm_time": 30,
+            "slurm_partition": "preempted",
+        }
+
+        if sbatch_filepath:
+            slurm_args.update(sbatch_to_submitit(sbatch_filepath))
+
+        slurm_out_path = output_folder_path / "slurm_output"
+        slurm_out_path.mkdir(parents=True, exist_ok=True)
+
+        # Submitit executor
+        executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
+        executor.update_parameters(**slurm_args)
+
+        click.echo(f"Submitting SLURM focus estimation jobs with resources: {slurm_args}")
+
+        # Submit jobs
+        jobs = []
+        with submitit.helpers.clean_env(), executor.batch():
+            for t in range(1, T, 1):
+                job = executor.submit(
+                    estimate_transform_from_beads,
+                    source_channel_tzyx=channel_tzyx,
+                    target_channel_tzyx=target_channel_tzyx,
+                    verbose=verbose,
+                    beads_match_settings=beads_match_settings,
+                    affine_transform_settings=affine_transform_settings,
+                    slurm=True,
+                    output_folder_path=output_transforms_path,
+                    t_idx=t,
+                )
+                jobs.append(job)
+
+        # Save job IDs
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        log_path = slurm_out_path / f"job_ids_{timestamp}.log"
+        with open(log_path, "w") as log_file:
+            for job in jobs:
+                log_file.write(f"{job.job_id}\n")
+
+        wait_for_jobs_to_finish(jobs)
+
+    # Load the transforms
+    transforms = [np.eye(4).tolist()]
+    for t in range(1, T):
+        file_path = output_transforms_path / f"{t}.npy"
+        if not os.path.exists(file_path):
+            transforms.append(None)
+            click.echo(f"Transform for timepoint {t} not found.")
+        else:
+            T_zyx_shift = np.load(file_path).tolist()
+            transforms.append(T_zyx_shift)
+
+    # Check if the number of transforms matches the number of timepoints
+    if len(transforms) != T:
+        raise ValueError(
+            f"Number of transforms {len(transforms)} does not match number of timepoints {T}"
+        )
+
+    # Remove the output folder
+    shutil.rmtree(output_transforms_path)
+
+    return transforms
