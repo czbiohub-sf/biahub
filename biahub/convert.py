@@ -166,7 +166,7 @@ def convert_cli(
     # Prepare job arguments list (one job per position)
     click.echo(f"\nPreparing {len(input_position_dirpaths)} conversion jobs...")
     job_args_list = [
-        (input_path, output_dirpath, settings) for input_path in input_position_dirpaths
+        (input_path, output_dirpath) for input_path in input_position_dirpaths
     ]
 
     # Estimate resources using first position shape
