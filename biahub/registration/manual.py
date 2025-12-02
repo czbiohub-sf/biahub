@@ -7,7 +7,7 @@ from skimage.transform import EuclideanTransform, SimilarityTransform
 from waveorder.focus import focus_from_transverse_band
 
 
-from biahub.register import (
+from biahub.registration.utils import (
     convert_transform_to_ants,
     convert_transform_to_numpy,
     get_3D_rescaling_matrix,
@@ -33,6 +33,88 @@ COLOR_CYCLE = [
     "yellow",
     "magenta",
 ]
+
+def get_3D_rescaling_matrix(start_shape_zyx, scaling_factor_zyx=(1, 1, 1), end_shape_zyx=None):
+    center_Y_start, center_X_start = np.array(start_shape_zyx)[-2:] / 2
+    if end_shape_zyx is None:
+        center_Y_end, center_X_end = (center_Y_start, center_X_start)
+    else:
+        center_Y_end, center_X_end = np.array(end_shape_zyx)[-2:] / 2
+
+    scaling_matrix = np.array(
+        [
+            [scaling_factor_zyx[-3], 0, 0, 0],
+            [
+                0,
+                scaling_factor_zyx[-2],
+                0,
+                -center_Y_start * scaling_factor_zyx[-2] + center_Y_end,
+            ],
+            [
+                0,
+                0,
+                scaling_factor_zyx[-1],
+                -center_X_start * scaling_factor_zyx[-1] + center_X_end,
+            ],
+            [0, 0, 0, 1],
+        ]
+    )
+    return scaling_matrix
+
+
+def get_3D_rotation_matrix(
+    start_shape_zyx: Tuple, angle: float = 0.0, end_shape_zyx: Tuple = None
+) -> np.ndarray:
+    """
+    Rotate Transformation Matrix
+
+    Parameters
+    ----------
+    start_shape_zyx : Tuple
+        Shape of the input
+    angle : float, optional
+        Angles of rotation in degrees
+    end_shape_zyx : Tuple, optional
+       Shape of output space
+
+    Returns
+    -------
+    np.ndarray
+        Rotation matrix
+    """
+    # TODO: make this 3D?
+    center_Y_start, center_X_start = np.array(start_shape_zyx)[-2:] / 2
+    if end_shape_zyx is None:
+        center_Y_end, center_X_end = (center_Y_start, center_X_start)
+    else:
+        center_Y_end, center_X_end = np.array(end_shape_zyx)[-2:] / 2
+
+    theta = np.radians(angle)
+
+    rotation_matrix = np.array(
+        [
+            [1, 0, 0, 0],
+            [
+                0,
+                np.cos(theta),
+                -np.sin(theta),
+                -center_Y_start * np.cos(theta)
+                + np.sin(theta) * center_X_start
+                + center_Y_end,
+            ],
+            [
+                0,
+                np.sin(theta),
+                np.cos(theta),
+                -center_Y_start * np.sin(theta)
+                - center_X_start * np.cos(theta)
+                + center_X_end,
+            ],
+            [0, 0, 0, 1],
+        ]
+    )
+    return rotation_matrix
+
 
 
 def user_assisted_registration(

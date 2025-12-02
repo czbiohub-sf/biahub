@@ -4,7 +4,6 @@ import napari
 import numpy as np
 
 from iohub import open_ome_zarr
-from skimage import filters
 
 from biahub.cli.parsing import (
     config_filepath,
@@ -12,12 +11,8 @@ from biahub.cli.parsing import (
     source_position_dirpaths,
     target_position_dirpaths,
 )
-from biahub.cli.utils import _check_nan_n_zeros, model_to_yaml, yaml_to_model
-from biahub.register import (
-    convert_transform_to_ants,
-    convert_transform_to_numpy,
-    find_lir,
-)
+from biahub.cli.utils import model_to_yaml, yaml_to_model
+from biahub.registration.utils import convert_transform_to_ants, find_lir
 from biahub.settings import RegistrationSettings
 
 from biahub.registration.ants import _optimize_registration

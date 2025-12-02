@@ -23,7 +23,7 @@ from biahub.settings import (
 )
 from skimage import filters
 from biahub.cli.utils import _check_nan_n_zeros
-from biahub.register import (
+from biahub.registration.utils import (
     convert_transform_to_ants,
     convert_transform_to_numpy,
     find_lir,

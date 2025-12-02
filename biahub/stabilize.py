@@ -28,7 +28,7 @@ from biahub.cli.utils import (
     process_single_position_v2,
     yaml_to_model,
 )
-from biahub.register import convert_transform_to_ants
+from biahub.registration.utils import convert_transform_to_ants
 from biahub.settings import StabilizationSettings
 
 

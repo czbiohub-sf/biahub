@@ -20,7 +20,7 @@ from biahub.cli.parsing import (
 )
 from biahub.cli.slurm import wait_for_jobs_to_finish
 from biahub.cli.utils import estimate_resources, model_to_yaml, yaml_to_model
-from biahub.register import find_lir
+from biahub.registration.utils import find_lir
 from biahub.settings import ConcatenateSettings
 
 

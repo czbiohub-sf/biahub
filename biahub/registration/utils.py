@@ -30,6 +30,41 @@ from biahub.settings import (
     RegistrationSettings,
     StabilizationSettings,
 )
+from pathlib import Path
+from typing import List, Tuple
+
+import ants
+import click
+import largestinteriorrectangle as lir
+import matplotlib.pyplot as plt
+import numpy as np
+import scipy.ndimage
+import submitit
+
+from iohub import open_ome_zarr
+
+from biahub.cli.monitor import monitor_jobs
+from biahub.cli.parsing import (
+    config_filepath,
+    local,
+    monitor,
+    output_dirpath,
+    sbatch_filepath,
+    sbatch_to_submitit,
+    source_position_dirpaths,
+    target_position_dirpaths,
+)
+from biahub.cli.utils import (
+    copy_n_paste_czyx,
+    create_empty_hcs_zarr,
+    estimate_resources,
+    process_single_position_v2,
+    yaml_to_model,
+)
+from biahub.settings import RegistrationSettings
+
+
+
 
 # TODO: see if at some point these globals should be hidden or exposed.
 NA_DETECTION_SOURCE = 1.35
@@ -408,3 +443,174 @@ def plot_translations(
     plt.savefig(output_filepath, dpi=300, bbox_inches='tight')
     plt.close()
 
+def convert_transform_to_ants(T_numpy: np.ndarray):
+    """Homogeneous 3D transformation matrix from numpy to ants
+
+    Parameters
+    ----------
+    numpy_transform :4x4 homogenous matrix
+
+    Returns
+    -------
+    Ants transformation matrix object
+    """
+    assert T_numpy.shape == (4, 4)
+
+    T_ants_style = T_numpy[:, :-1].ravel()
+    T_ants_style[-3:] = T_numpy[:3, -1]
+    T_ants = ants.new_ants_transform(
+        transform_type="AffineTransform",
+    )
+    T_ants.set_parameters(T_ants_style)
+
+    return T_ants
+
+
+def convert_transform_to_numpy(T_ants):
+    """
+    Convert the ants transformation matrix to numpy 3D homogenous transform
+
+    Modified from Jordao's dexp code
+
+    Parameters
+    ----------
+    T_ants : Ants transfromation matrix object
+
+    Returns
+    -------
+    np.array
+        Converted Ants to numpy array
+
+    """
+
+    T_numpy = T_ants.parameters.reshape((3, 4), order="F")
+    T_numpy[:, :3] = T_numpy[:, :3].transpose()
+    T_numpy = np.vstack((T_numpy, np.array([0, 0, 0, 1])))
+
+    # Reference:
+    # https://sourceforge.net/p/advants/discussion/840261/thread/9fbbaab7/
+    # https://github.com/netstim/leaddbs/blob/a2bb3e663cf7fceb2067ac887866124be54aca7d/helpers/ea_antsmat2mat.m
+    # T = original translation offset from A
+    # T = T + (I - A) @ centering
+
+    T_numpy[:3, -1] += (np.eye(3) - T_numpy[:3, :3]) @ T_ants.fixed_parameters
+
+    return T_numpy
+
+
+def find_lir(registered_zyx: np.ndarray, plot: bool = False) -> Tuple:
+    registered_zyx = np.asarray(registered_zyx, dtype=bool)
+
+    # Find the lir in YX at Z//2
+    registered_yx = registered_zyx[registered_zyx.shape[0] // 2].copy()
+    coords_yx = lir.lir(registered_yx)
+    coords_yx = list(map(int, coords_yx))
+
+    x, y, width, height = coords_yx
+    x_start, x_stop = x, x + width
+    y_start, y_stop = y, y + height
+    x_slice = slice(x_start, x_stop)
+    y_slice = slice(y_start, y_stop)
+
+    # Iterate over ZX and ZY slices to find optimal Z cropping params
+    _coords = []
+    for _x in (x_start, x_start + (x_stop - x_start) // 2, x_stop - 1):
+        registered_zy = registered_zyx[:, y_slice, _x].copy()
+        coords_zy = lir.lir(registered_zy)
+        _, z, _, depth = coords_zy
+        z_start, z_stop = z, z + depth
+        _coords.append((z_start, z_stop))
+    for _y in (y_start, y_start + (y_stop - y_start) // 2, y_stop - 1):
+        registered_zx = registered_zyx[:, _y, x_slice].copy()
+        coords_zx = lir.lir(registered_zx)
+        _, z, _, depth = coords_zx
+        z_start, z_stop = z, z + depth
+        _coords.append((z_start, z_stop))
+
+    _coords = np.asarray(_coords)
+    z_start = int(_coords.max(axis=0)[0])
+    z_stop = int(_coords.min(axis=0)[1])
+    z_slice = slice(z_start, z_stop)
+
+    if plot:
+        xy_corners = ((x, y), (x + width, y), (x + width, y + height), (x, y + height))
+        rectangle_yx = plt.Polygon(
+            xy_corners,
+            closed=True,
+            fill=None,
+            edgecolor="r",
+        )
+        # Add the rectangle to the plot
+        _, ax = plt.subplots(nrows=1, ncols=2)
+        ax[0].imshow(registered_yx)
+        ax[0].add_patch(rectangle_yx)
+
+        zx_corners = ((x, z), (x + width, z), (x + width, z + depth), (x, z + depth))
+        rectangle_zx = plt.Polygon(
+            zx_corners,
+            closed=True,
+            fill=None,
+            edgecolor="r",
+        )
+        ax[1].imshow(registered_zx)
+        ax[1].add_patch(rectangle_zx)
+        plt.savefig("./lir.png")
+
+    return (z_slice, y_slice, x_slice)
+
+
+def find_overlapping_volume(
+    input_zyx_shape: Tuple,
+    target_zyx_shape: Tuple,
+    transformation_matrix: np.ndarray,
+    method: str = "LIR",
+    plot: bool = False,
+) -> Tuple:
+    """
+    Find the overlapping rectangular volume after registration of two 3D datasets
+
+    Parameters
+    ----------
+    input_zyx_shape : Tuple
+        shape of input array
+    target_zyx_shape : Tuple
+        shape of target array
+    transformation_matrix : np.ndarray
+        affine transformation matrix
+    method : str, optional
+        method of finding the overlapping volume, by default 'LIR'
+
+    Returns
+    -------
+    Tuple
+        ZYX slices of the overlapping volume after registration
+
+    """
+
+    # Make dummy volumes
+    moving_volume = np.ones(tuple(input_zyx_shape), dtype=np.float32)
+    fixed_volume = np.ones(tuple(target_zyx_shape), dtype=np.float32)
+
+    # Convert to ants objects
+    fixed_volume_ants = ants.from_numpy(fixed_volume)
+    moving_volume_ants = ants.from_numpy(moving_volume)
+
+    tform_ants = convert_transform_to_ants(transformation_matrix)
+
+    # Now apply the transform using this grid
+    registered_volume = tform_ants.apply_to_image(
+        moving_volume_ants, reference=fixed_volume_ants
+    ).numpy()
+    if method == "LIR":
+        click.echo("Starting Largest interior rectangle (LIR) search")
+        mask = (registered_volume > 0) & (fixed_volume > 0)
+        z_slice, y_slice, x_slice = find_lir(mask, plot=plot)
+
+    else:
+        raise ValueError(f"Unknown method {method}")
+
+    return (z_slice, y_slice, x_slice)
+
+
+def rescale_voxel_size(affine_matrix, input_scale):
+    return np.linalg.norm(affine_matrix, axis=1) * input_scale
