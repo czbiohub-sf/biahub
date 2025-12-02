@@ -4,6 +4,9 @@ Bio-image analysis hub supporting high-throughput data reconstruction on HPC clu
 
 ![acquisition and reconstruction schematic](https://github.com/czbiohub-sf/shrimPy/blob/main/docs/figure_3a.png)
 
+
+![Dynacell Figure 2](./docs/figures/dynacell_figure_2.png)
+
 `biahub` was originally developed to reconstruct data acquired on the [mantis](https://doi.org/10.1093/pnasnexus/pgae323) microscope using the [shrimPy](https://github.com/czbiohub-sf/shrimPy) acquisition engine, and has since been extended to process diverse multimodal datasets. `biahub` reconstruction workflows rely on OME-ZARR datasets (for example, as created with [iohub](https://github.com/czbiohub-sf/iohub)) which enable efficient parallelization across compute nodes. Available reconstruction routines are listed below; more information can be obtained with `biahub --help`.
 
 ## Install
