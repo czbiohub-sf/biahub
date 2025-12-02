@@ -16,21 +16,12 @@ from biahub.cli.parsing import (
 
 )
 from biahub.cli.slurm import wait_for_jobs_to_finish
-from biahub.cli.utils import (
-    estimate_resources,
-
-)
+from biahub.cli.utils import estimate_resources
 from biahub.settings import (
     AffineTransformSettings,
     AntsRegistrationSettings,
-
 )
-
-
-
 from skimage import filters
-
-
 from biahub.cli.utils import _check_nan_n_zeros, model_to_yaml, yaml_to_model
 from biahub.register import (
     convert_transform_to_ants,
