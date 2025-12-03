@@ -963,43 +963,13 @@ def beads_based_registration(
     """
 
     (T, Z, Y, X) = source_channel_tzyx.shape
-
-    num_cpus, gb_ram_per_cpu = estimate_resources(
-        shape=(T, 2, Z, Y, X), ram_multiplier=5, max_num_cpus=16
-    )
-
-    # Prepare SLURM arguments
-    slurm_args = {
-        "slurm_job_name": "estimate_registration",
-        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
-        "slurm_cpus_per_task": num_cpus,
-        "slurm_array_parallelism": 100,
-        "slurm_time": 30,
-        "slurm_partition": "preempted",
-        "slurm_use_srun": False,
-    }
-
-    if sbatch_filepath:
-        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
-
-    output_folder_path.mkdir(parents=True, exist_ok=True)
-    slurm_out_path = output_folder_path / "slurm_output"
-    slurm_out_path.mkdir(parents=True, exist_ok=True)
-
-    # Submitit executor
-    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
-    executor.update_parameters(**slurm_args)
-
-    click.echo(f"Submitting SLURM focus estimation jobs with resources: {slurm_args}")
     output_transforms_path = output_folder_path / "xyz_transforms"
     output_transforms_path.mkdir(parents=True, exist_ok=True)
+    initial_transform = affine_transform_settings.approx_transform
 
-    # Submit jobs
-    jobs = []
-    with submitit.helpers.clean_env(), executor.batch():
+    if affine_transform_settings.use_prev_t_transform:
         for t in range(T):
-            job = executor.submit(
-                estimate_transform_from_beads,
+            approx_transform = estimate_transform_from_beads(
                 source_channel_tzyx=source_channel_tzyx,
                 target_channel_tzyx=target_channel_tzyx,
                 beads_match_settings=beads_match_settings,
@@ -1009,16 +979,66 @@ def beads_based_registration(
                 output_folder_path=output_transforms_path,
                 t_idx=t,
             )
-            jobs.append(job)
+            if approx_transform is not None:
+                print(f"Using approx transform for timepoint {t+1}: {approx_transform}")
+                affine_transform_settings.approx_transform = approx_transform
+            else:
+                print(f"Using initial transform for timepoint {t+1}: {initial_transform}")
+                affine_transform_settings.approx_transform = initial_transform
 
-    # Save job IDs
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    log_path = slurm_out_path / f"job_ids_{timestamp}.log"
-    with open(log_path, "w") as log_file:
-        for job in jobs:
-            log_file.write(f"{job.job_id}\n")
+    else:
+        num_cpus, gb_ram_per_cpu = estimate_resources(
+            shape=(T, 2, Z, Y, X), ram_multiplier=5, max_num_cpus=16
+        )
 
-    wait_for_jobs_to_finish(jobs)
+        # Prepare SLURM arguments
+        slurm_args = {
+            "slurm_job_name": "estimate_registration",
+            "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
+            "slurm_cpus_per_task": num_cpus,
+            "slurm_array_parallelism": 100,
+            "slurm_time": 30,
+            "slurm_partition": "preempted",
+            "slurm_use_srun": False,
+        }
+
+        if sbatch_filepath:
+            slurm_args.update(sbatch_to_submitit(sbatch_filepath))
+
+        slurm_out_path = output_folder_path / "slurm_output"
+        slurm_out_path.mkdir(parents=True, exist_ok=True)
+
+        # Submitit executor
+        executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
+        executor.update_parameters(**slurm_args)
+
+        click.echo(f"Submitting SLURM focus estimation jobs with resources: {slurm_args}")
+
+        # Submit jobs
+        jobs = []
+        with submitit.helpers.clean_env(), executor.batch():
+            for t in range(T):
+                job = executor.submit(
+                    estimate_transform_from_beads,
+                    source_channel_tzyx=source_channel_tzyx,
+                    target_channel_tzyx=target_channel_tzyx,
+                    beads_match_settings=beads_match_settings,
+                    affine_transform_settings=affine_transform_settings,
+                    verbose=verbose,
+                    slurm=True,
+                    output_folder_path=output_transforms_path,
+                    t_idx=t,
+                )
+                jobs.append(job)
+
+        # Save job IDs
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        log_path = slurm_out_path / f"job_ids_{timestamp}.log"
+        with open(log_path, "w") as log_file:
+            for job in jobs:
+                log_file.write(f"{job.job_id}\n")
+
+        wait_for_jobs_to_finish(jobs)
 
     transforms = []
     for t in range(T):
