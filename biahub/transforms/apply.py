@@ -8,7 +8,6 @@ import scipy.ndimage
 from biahub.registration.utils import convert_transform_to_ants
 
 
-
 def apply_stabilization_transform(
     zyx_data: np.ndarray,
     list_of_shifts: list[np.ndarray],
@@ -146,4 +145,3 @@ def apply_affine_transform(
             registered_zyx = registered_zyx[Z_slice, Y_slice, X_slice]
 
     return registered_zyx
-

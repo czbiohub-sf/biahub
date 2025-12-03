@@ -1,18 +1,18 @@
+from typing import Tuple
+
 import ants
 import click
 import napari
 import numpy as np
+
 from numpy.typing import ArrayLike
 from skimage.transform import EuclideanTransform, SimilarityTransform
 from waveorder.focus import focus_from_transverse_band
 
-from typing import Tuple
 from biahub.registration.utils import (
     convert_transform_to_ants,
     convert_transform_to_numpy,
 )
-
-
 
 # TODO: see if at some point these globals should be hidden or exposed.
 NA_DETECTION_SOURCE = 1.35
@@ -31,6 +31,7 @@ COLOR_CYCLE = [
     "yellow",
     "magenta",
 ]
+
 
 def get_3D_rescaling_matrix(start_shape_zyx, scaling_factor_zyx=(1, 1, 1), end_shape_zyx=None):
     center_Y_start, center_X_start = np.array(start_shape_zyx)[-2:] / 2
@@ -112,7 +113,6 @@ def get_3D_rotation_matrix(
         ]
     )
     return rotation_matrix
-
 
 
 def user_assisted_registration(
@@ -405,4 +405,3 @@ def user_assisted_registration(
     viewer.close()
 
     return [tform.tolist()]
-

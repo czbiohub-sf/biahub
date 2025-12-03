@@ -1,7 +1,6 @@
 from pathlib import Path
 from typing import List
 
-import ants
 import click
 import numpy as np
 import submitit

@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import List
+
 import click
 import numpy as np
 import submitit
@@ -24,11 +25,10 @@ from biahub.cli.utils import (
     process_single_position_v2,
     yaml_to_model,
 )
+from biahub.registration.utils import find_overlapping_volume, rescale_voxel_size
 from biahub.settings import RegistrationSettings
-
-
-from biahub.registration.utils import rescale_voxel_size, find_overlapping_volume
 from biahub.transforms.apply import apply_affine_transform
+
 
 @click.command("register")
 @source_position_dirpaths()
@@ -235,8 +235,6 @@ def register_cli(
 
     if monitor:
         monitor_jobs(affine_jobs + copy_jobs, affine_names + copy_names)
-
-
 
 
 if __name__ == "__main__":

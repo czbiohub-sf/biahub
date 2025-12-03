@@ -1,7 +1,9 @@
 import os
 import shutil
+
 from datetime import datetime
 from pathlib import Path
+
 import ants
 import click
 import dask.array as da
@@ -9,24 +11,21 @@ import numpy as np
 import submitit
 
 from numpy.typing import ArrayLike
+from skimage import filters
 
 from biahub.cli.parsing import (
-
     sbatch_to_submitit,
-
 )
 from biahub.cli.slurm import wait_for_jobs_to_finish
-from biahub.cli.utils import estimate_resources
-from biahub.settings import (
-    AffineTransformSettings,
-    AntsRegistrationSettings,
-)
-from skimage import filters
-from biahub.cli.utils import _check_nan_n_zeros
+from biahub.cli.utils import _check_nan_n_zeros, estimate_resources
 from biahub.registration.utils import (
     convert_transform_to_ants,
     convert_transform_to_numpy,
     find_lir,
+)
+from biahub.settings import (
+    AffineTransformSettings,
+    AntsRegistrationSettings,
 )
 
 
@@ -200,7 +199,6 @@ def _optimize_registration(
         np.save(output_folder_path / f"{t_idx}.npy", composed_matrix)
 
     return composed_matrix
-
 
 
 def shrink_slice(s: slice, shrink_fraction: float = 0.1, min_width: int = 5) -> slice:

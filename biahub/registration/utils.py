@@ -1,42 +1,25 @@
-
 import os
+
 from pathlib import Path
 from typing import Literal, Tuple, Union
+
+import ants
 import click
+import largestinteriorrectangle as lir
 import numpy as np
-
-
 
 from matplotlib import pyplot as plt
 from numpy.typing import ArrayLike
 from scipy.interpolate import interp1d
 
-
 from biahub.cli.utils import (
     model_to_yaml,
 )
-
 from biahub.settings import (
     AffineTransformSettings,
-
     RegistrationSettings,
     StabilizationSettings,
 )
-from pathlib import Path
-from typing import Tuple
-
-import ants
-import click
-import largestinteriorrectangle as lir
-import matplotlib.pyplot as plt
-import numpy as np
-import submitit
-
-
-from biahub.settings import RegistrationSettings
-
-
-
 
 # TODO: see if at some point these globals should be hidden or exposed.
 NA_DETECTION_SOURCE = 1.35
@@ -414,6 +397,7 @@ def plot_translations(
     axs[2].set_title("Y-Translation")
     plt.savefig(output_filepath, dpi=300, bbox_inches='tight')
     plt.close()
+
 
 def convert_transform_to_ants(T_numpy: np.ndarray):
     """Homogeneous 3D transformation matrix from numpy to ants

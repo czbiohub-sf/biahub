@@ -1,22 +1,16 @@
-
+from typing import Literal
 
 import click
-
 import numpy as np
-import pandas as pd
-
-from typing import Literal
 
 from numpy.typing import ArrayLike
 from scipy.optimize import linear_sum_assignment
-from scipy.spatial import cKDTree
 from scipy.spatial.distance import cdist
-from skimage.feature import match_descriptors
 from sklearn.neighbors import NearestNeighbors, radius_neighbors_graph
-from biahub.settings import (
-    HungarianMatchSettings, 
-)
 
+from biahub.settings import (
+    HungarianMatchSettings,
+)
 
 
 def get_local_pca_features(
@@ -607,8 +601,6 @@ def get_matches_from_hungarian(
     return matches
 
 
-
-
 def filter_matches(
     matches: ArrayLike,
     source_peaks: ArrayLike,
@@ -684,9 +676,3 @@ def filter_matches(
             click.echo(f"Total matches after angle filtering: {len(matches)}")
 
     return matches
-
-
-
-
-
-

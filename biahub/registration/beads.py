@@ -4,12 +4,11 @@ import shutil
 
 from datetime import datetime
 from pathlib import Path
-from typing import Literal, Tuple, Union
+from typing import Optional
 
 import ants
 import click
 import dask.array as da
-import napari
 import numpy as np
 import pandas as pd
 import submitit
@@ -19,37 +18,28 @@ from iohub import open_ome_zarr
 from matplotlib import pyplot as plt
 from numpy.typing import ArrayLike
 from scipy.spatial import cKDTree
-from scipy.spatial.distance import cdist
 from skimage.feature import match_descriptors
 from skimage.transform import AffineTransform, EuclideanTransform, SimilarityTransform
 
-from typing import Literal, Tuple, Optional
 from biahub.characterize_psf import detect_peaks
 from biahub.cli.parsing import (
- 
     sbatch_to_submitit,
-
 )
 from biahub.cli.slurm import wait_for_jobs_to_finish
 from biahub.cli.utils import (
     _check_nan_n_zeros,
     estimate_resources,
     model_to_yaml,
-
 )
-from biahub.registration.utils import (
-    convert_transform_to_ants
-)
+from biahub.registration.graph_matching import filter_matches, get_matches_from_hungarian
+from biahub.registration.utils import convert_transform_to_ants
 from biahub.settings import (
     AffineTransformSettings,
-    AntsRegistrationSettings,
     BeadsMatchSettings,
     DetectPeaksSettings,
     EstimateRegistrationSettings,
-    RegistrationSettings,
-    StabilizationSettings,
 )
-from biahub.registration.graph_matching import get_matches_from_hungarian, filter_matches
+
 
 def qc_bead_overlap(
     source_channel: da.Array,
@@ -253,7 +243,7 @@ def grid_search_registration(
     cost_threshold_list = [0.05]
     k_list = [10]
     max_ratio_list = [1]
-    weight_dist_list = [0.5,1.0]
+    weight_dist_list = [0.5, 1.0]
     weight_edge_angle_list = [0, 0.5, 1.0]
     weight_edge_length_list = [0, 0.5, 1.0]
     weight_pca_dir_list = [0]
@@ -459,7 +449,7 @@ def beads_based_registration(
             break
 
     if t_initial == T:
-        click.echo(f"No timepoint with data found")
+        click.echo("No timepoint with data found")
         return None
 
     if grid_search:
@@ -487,7 +477,7 @@ def beads_based_registration(
         )
 
         if qc_metrics["score"] < threshold_score:
-            click.echo(f"User config is not good enough, performing grid search")
+            click.echo("User config is not good enough, performing grid search")
             output_folder_path_grid_search = output_folder_path / f"grid_search/t_{t_initial}"
             output_folder_path_grid_search.mkdir(parents=True, exist_ok=True)
             cfg_grid_search = grid_search_registration(
@@ -521,8 +511,8 @@ def beads_based_registration(
                     affine_transform_settings.approx_transform = approx_transform
                 else:
                     print(f"Using initial transform for timepoint {t+1}: {initial_transform}")
-                    affine_transform_settings.approx_transform = initial_transform                   
-                    
+                    affine_transform_settings.approx_transform = initial_transform
+
     else:
         num_cpus, gb_ram_per_cpu = estimate_resources(
             shape=(T, 2, Z, Y, X), ram_multiplier=5, max_num_cpus=16
@@ -585,7 +575,6 @@ def beads_based_registration(
             transforms.append(T_zyx_shift)
     # Remove the output temporary folder
     # shutil.rmtree(output_transforms_path)
-
 
     if quality_control:
 
@@ -692,7 +681,6 @@ def beads_based_registration(
         summary_stats_path = output_folder_qc_summary / "summary_stats.csv"
         summary_stats_df.to_csv(summary_stats_path, index=False)
 
-            
         low_score_timepoints = []
         for t in timepoints:
             score_t = qc_summary_df[qc_summary_df["timepoint"] == t]["score"].values[0]
@@ -726,6 +714,7 @@ def beads_based_registration(
                 plt.close()
 
     return transforms
+
 
 def detect_bead_peaks(
     source_channel_zyx: da.Array,
@@ -809,6 +798,7 @@ def detect_bead_peaks(
         target_peaks = np.array(target_peaks_filtered)
     return source_peaks, target_peaks
 
+
 def get_matches_from_beads(
     source_peaks: ArrayLike,
     target_peaks: ArrayLike,
@@ -859,6 +849,7 @@ def get_matches_from_beads(
         click.echo(f'Total of matches: {len(matches)}')
 
     return matches
+
 
 def estimate_transform(
     matches: ArrayLike,
@@ -1036,8 +1027,6 @@ def estimate_transform_from_beads(
         np.save(output_folder_path / f"{t_idx}.npy", compount_tform)
 
     return compount_tform.tolist()
-
-
 
 
 def estimate_xyz_stabilization_with_beads(

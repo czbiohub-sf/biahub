@@ -1,8 +1,7 @@
 from pathlib import Path
-import ants
+
 import click
 import numpy as np
-
 
 from iohub import open_ome_zarr
 
@@ -15,20 +14,19 @@ from biahub.cli.parsing import (
     target_position_dirpaths,
 )
 from biahub.cli.utils import (
-
     model_to_yaml,
     yaml_to_model,
 )
+from biahub.registration.ants import ants_registration
+from biahub.registration.beads import beads_based_registration
+from biahub.registration.manual import user_assisted_registration
+from biahub.registration.utils import evaluate_transforms, plot_translations
 from biahub.settings import (
     EstimateRegistrationSettings,
     RegistrationSettings,
     StabilizationSettings,
 )
 
-from biahub.registration.beads import beads_based_registration
-from biahub.registration.ants import ants_registration
-from biahub.registration.manual import user_assisted_registration
-from biahub.registration.utils import plot_translations, evaluate_transforms 
 
 def estimate_registration(
     source_position_dirpaths: list[str],
@@ -261,7 +259,6 @@ def estimate_registration_cli(
         --registration-source-channel "GFP"                # Names of source channel
         --registration-source-channel "mCherry"            # Names of another source channel
     """
-
 
     estimate_registration(
         source_position_dirpaths=source_position_dirpaths,

@@ -12,11 +12,10 @@ from biahub.cli.parsing import (
     target_position_dirpaths,
 )
 from biahub.cli.utils import model_to_yaml, yaml_to_model
+from biahub.registration.ants import _optimize_registration
 from biahub.registration.utils import convert_transform_to_ants
 from biahub.settings import RegistrationSettings
-from biahub.registration.utils import convert_transform_to_ants
 
-from biahub.registration.ants import _optimize_registration
 
 @click.command("optimize-registration")
 @source_position_dirpaths()
