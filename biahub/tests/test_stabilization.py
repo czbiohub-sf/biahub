@@ -3,7 +3,7 @@ import io
 import numpy as np
 import pandas as pd
 
-from biahub.estimate_stabilization import get_mean_z_positions
+from biahub.registration.phase_cross_correlation import get_mean_z_positions
 
 
 def test_mean_z_positions():

@@ -57,7 +57,8 @@ beads_match_settings:
         pca_dir: 0.0 # Principal Component Analysis direction weight (0.0 means no direction)
         pca_aniso: 0.0 # Principal Component Analysis anisotropy weight (0.0 means no anisotropy)
         edge_descriptor: 0.0 # Edge descriptor weight (0.0 means no descriptor)
-  filter_distance_threshold: 0.95 # Filter matches based on distance threshold
+  filter_max_distance_threshold: 0.95 # Filter matches based on distance threshold
+  filter_min_distance_threshold: 0.01 # Filter matches based on distance threshold
   filter_angle_threshold: 0   # Filter matches based on dominant angle direction (in degrees)
 
 

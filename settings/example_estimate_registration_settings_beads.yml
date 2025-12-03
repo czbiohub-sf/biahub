@@ -51,7 +51,8 @@ beads_match_settings:
         pca_dir: 0.0 # Principal Component Analysis direction weight
         pca_aniso: 0.0 # Principal Component Analysis anisotropy weight
         edge_descriptor: 0.0 # Edge descriptor weight
-  filter_distance_threshold: 0.95 # Filter matches based on distance threshold
+  filter_max_distance_threshold: 0.95 # Filter matches based on distance threshold
+  filter_min_distance_threshold: 0.01 # Filter matches based on distance threshold
   filter_angle_threshold: 0 # Filter matches based on angle threshold
 
 # Settings for affine transformation estimation (applies to all stabilization methods)

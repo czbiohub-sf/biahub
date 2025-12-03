@@ -2,8 +2,8 @@ import ants
 import numpy as np
 import pytest
 
+from biahub.transforms.apply import apply_affine_transform
 from biahub.registration.utils import (
-    apply_affine_transform,
     convert_transform_to_ants,
     convert_transform_to_numpy,
 )
