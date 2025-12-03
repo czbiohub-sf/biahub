@@ -19,6 +19,7 @@ pip install -e ./biahub
 ## Data reconstruction
 
 Data reconstruction uses a command line interface. All reconstruction calls take an input `-i` and an output `-o`, and most reconstruction calls use configuration files passed via a `-c` option. Reconstruction workflows launch multiple Slurm jobs and can also be run locally using the `-l` flag.
+![FOV reconstruction](/docs/figures/dynacell_fig2.png)
 
 A typical set of CLI calls to go from raw data to registered volumes looks like:
 
