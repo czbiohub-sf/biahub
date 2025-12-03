@@ -12,8 +12,9 @@ from biahub.cli.parsing import (
     target_position_dirpaths,
 )
 from biahub.cli.utils import model_to_yaml, yaml_to_model
-from biahub.registration.utils import convert_transform_to_ants, find_lir
+from biahub.registration.utils import convert_transform_to_ants
 from biahub.settings import RegistrationSettings
+from biahub.registration.utils import convert_transform_to_ants
 
 from biahub.registration.ants import _optimize_registration
 
@@ -42,7 +43,6 @@ def optimize_registration_cli(
 
     >> biahub optimize-registration -s ./acq_name_virtual_staining_reconstructed.zarr/0/0/0 -t ./acq_name_lightsheet_deskewed.zarr/0/0/0 -c ./transform.yml -o ./optimized_transform.yml -d -v
     """
-
     settings = yaml_to_model(config_filepath, RegistrationSettings)
     t_idx = settings.time_indices
     # if time_indices not int type

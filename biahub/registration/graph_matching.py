@@ -5,7 +5,7 @@ import click
 import numpy as np
 import pandas as pd
 
-
+from typing import Literal
 
 from numpy.typing import ArrayLike
 from scipy.optimize import linear_sum_assignment

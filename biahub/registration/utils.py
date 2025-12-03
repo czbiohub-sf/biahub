@@ -1,18 +1,11 @@
-import glob
-import os
-import shutil
 
-from datetime import datetime
+import os
 from pathlib import Path
 from typing import Literal, Tuple, Union
-
 import click
-import dask.array as da
-import napari
 import numpy as np
-import pandas as pd
-import submitit
-import yaml
+
+
 
 from matplotlib import pyplot as plt
 from numpy.typing import ArrayLike
@@ -22,7 +15,6 @@ from scipy.interpolate import interp1d
 from biahub.cli.utils import (
     model_to_yaml,
 )
-from biahub.optimize_registration import _optimize_registration
 
 from biahub.settings import (
     AffineTransformSettings,
@@ -31,36 +23,16 @@ from biahub.settings import (
     StabilizationSettings,
 )
 from pathlib import Path
-from typing import List, Tuple
+from typing import Tuple
 
 import ants
 import click
 import largestinteriorrectangle as lir
 import matplotlib.pyplot as plt
 import numpy as np
-import scipy.ndimage
 import submitit
 
-from iohub import open_ome_zarr
 
-from biahub.cli.monitor import monitor_jobs
-from biahub.cli.parsing import (
-    config_filepath,
-    local,
-    monitor,
-    output_dirpath,
-    sbatch_filepath,
-    sbatch_to_submitit,
-    source_position_dirpaths,
-    target_position_dirpaths,
-)
-from biahub.cli.utils import (
-    copy_n_paste_czyx,
-    create_empty_hcs_zarr,
-    estimate_resources,
-    process_single_position_v2,
-    yaml_to_model,
-)
 from biahub.settings import RegistrationSettings
 
 

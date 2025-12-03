@@ -6,12 +6,10 @@ from numpy.typing import ArrayLike
 from skimage.transform import EuclideanTransform, SimilarityTransform
 from waveorder.focus import focus_from_transverse_band
 
-
+from typing import Tuple
 from biahub.registration.utils import (
     convert_transform_to_ants,
     convert_transform_to_numpy,
-    get_3D_rescaling_matrix,
-    get_3D_rotation_matrix,
 )
 
 
