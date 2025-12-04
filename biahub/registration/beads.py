@@ -31,7 +31,6 @@ from biahub.cli.utils import (
     estimate_resources,
     model_to_yaml,
 )
-from biahub.registration.graph_matching import filter_matches, get_matches_from_hungarian
 from biahub.registration.utils import convert_transform_to_ants
 from biahub.settings import (
     AffineTransformSettings,
@@ -39,6 +38,7 @@ from biahub.settings import (
     DetectPeaksSettings,
     EstimateRegistrationSettings,
 )
+from biahub.registration.graph_matching import Graph, GraphMatcher
 
 
 def qc_bead_overlap(
@@ -476,19 +476,19 @@ def beads_based_registration(
             t_idx=t_initial,
         )
 
-        if qc_metrics["score"] < threshold_score:
-            click.echo("User config is not good enough, performing grid search")
-            output_folder_path_grid_search = output_folder_path / f"grid_search/t_{t_initial}"
-            output_folder_path_grid_search.mkdir(parents=True, exist_ok=True)
-            cfg_grid_search = grid_search_registration(
-                source_channel_zyx=source_channel_tzyx[t_initial],
-                target_channel_zyx=target_channel_tzyx[t_initial],
-                config=config,
-                verbose=verbose,
-                output_folder_path=output_folder_path_grid_search,
-                cluster=cluster,
-            )
-            beads_match_settings = cfg_grid_search.beads_match_settings
+        # if qc_metrics["score"] < threshold_score:
+        #     click.echo("User config is not good enough, performing grid search")
+        #     output_folder_path_grid_search = output_folder_path / f"grid_search/t_{t_initial}"
+        #     output_folder_path_grid_search.mkdir(parents=True, exist_ok=True)
+        #     cfg_grid_search = grid_search_registration(
+        #         source_channel_zyx=source_channel_tzyx[t_initial],
+        #         target_channel_zyx=target_channel_tzyx[t_initial],
+        #         config=config,
+        #         verbose=verbose,
+        #         output_folder_path=output_folder_path_grid_search,
+        #         cluster=cluster,
+        #     )
+        #     beads_match_settings = cfg_grid_search.beads_match_settings
 
     if affine_transform_settings.use_prev_t_transform:
         for t in range(T):
@@ -829,21 +829,47 @@ def get_matches_from_beads(
 
     if beads_match_settings.algorithm == 'match_descriptor':
         match_descriptor_settings = beads_match_settings.match_descriptor_settings
-        matches = match_descriptors(
-            source_peaks,
-            target_peaks,
-            metric=match_descriptor_settings.distance_metric,
-            max_ratio=match_descriptor_settings.max_ratio,
+
+        matcher = GraphMatcher(
+            algorithm='descriptor',
             cross_check=match_descriptor_settings.cross_check,
+            max_ratio=match_descriptor_settings.max_ratio,
+            metric=match_descriptor_settings.distance_metric,
+            verbose=verbose
         )
 
+        matches = matcher.match(moving, reference)
+        print(f"Descriptor: {len(matches)} matches")
+
     elif beads_match_settings.algorithm == 'hungarian':
-        matches = get_matches_from_hungarian(
-            source_peaks=source_peaks,
-            target_peaks=target_peaks,
-            hungarian_settings=beads_match_settings.hungarian_match_settings,
-            verbose=verbose,
+
+        hungarian_match_settings = beads_match_settings.hungarian_match_settings
+        moving = Graph.from_nodes(source_peaks, mode='knn', k=hungarian_match_settings.edge_graph_settings.k)
+        reference = Graph.from_nodes(target_peaks, mode='knn', k=hungarian_match_settings.edge_graph_settings.k)
+
+        matcher = GraphMatcher(
+            algorithm='hungarian',
+            weights=hungarian_match_settings.cost_matrix_settings.weights,
+            cost_threshold=hungarian_match_settings.cost_threshold,
+            cross_check=hungarian_match_settings.cross_check,
+            max_ratio=hungarian_match_settings.max_ratio,
+            verbose=verbose
         )
+
+        matches = matcher.match(moving, reference)
+        print(f"Hungarian: {len(matches)} matches")
+
+
+    # Filter as part of the pipeline
+    matches = matcher.filter_matches(
+        matches,
+        moving,
+        reference,
+        angle_threshold=beads_match_settings.filter_angle_threshold,
+        min_distance_quantile=beads_match_settings.filter_min_distance_threshold,
+        max_distance_quantile=beads_match_settings.filter_max_distance_threshold
+    )
+        
 
     if verbose:
         click.echo(f'Total of matches: {len(matches)}')
@@ -977,6 +1003,7 @@ def estimate_transform_from_beads(
         target_peaks_settings=beads_match_settings.target_peaks_settings,
         verbose=verbose,
     )
+    
 
     matches = get_matches_from_beads(
         source_peaks=source_peaks,
@@ -985,21 +1012,6 @@ def estimate_transform_from_beads(
         verbose=verbose,
     )
 
-    if len(matches) < 3:
-        click.echo(
-            f'Source and target beads were not matches successfully for timepoint {t_idx}'
-        )
-        return
-
-    matches = filter_matches(
-        matches=matches,
-        source_peaks=source_peaks,
-        target_peaks=target_peaks,
-        angle_threshold=beads_match_settings.filter_angle_threshold,
-        min_distance_threshold=beads_match_settings.filter_min_distance_threshold,
-        max_distance_threshold=beads_match_settings.filter_max_distance_threshold,
-        verbose=verbose,
-    )
 
     if len(matches) < 3:
         click.echo(
