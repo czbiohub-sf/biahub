@@ -164,6 +164,11 @@ COMMANDS = [
         "import_path": "biahub.track.track_cli",
         "help": "Track objects in 2D/3D time-lapse microscopy",
     },
+    {
+        "name": "tile",
+        "import_path": "biahub.tile.tile_cli",
+        "help": "Create tiles/patches from positions in a zarr store",
+    },
 ]
 
 
