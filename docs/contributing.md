@@ -1,31 +1,31 @@
-# Contributing guide
+# Contributing Guide
 
 Thanks for your interest in contributing to `biahub`!
 
 ## Getting started
 
-Please read the [README](./README.md) for an overview of the project,
+Please read the [Home](index.md) page for an overview of the project,
 and how you can install and use the package.
 
 ## Making changes
 
 Any change made to the `main` branch or release maintenance branches
-need to be proposed in a [pull request](https://github.com/czbiohub/biahub/pulls) (PR).
+need to be proposed in a [pull request](https://github.com/czbiohub-sf/biahub/pulls) (PR).
 
 Follow [these instructions](https://docs.github.com/en/get-started/quickstart/fork-a-repo)
-to [fork](https://github.com/czbiohub/biahub/fork) the repository.
+to [fork](https://github.com/czbiohub-sf/biahub/fork) the repository.
 
 ## Setting up a development environment
 
 1. Install the package in development mode:
 
-```
+```bash
 pip install -e ".[dev]"
 ```
 
 2. Install pre-commit hooks:
 
-```
+```bash
 pre-commit install
 ```
 
@@ -33,14 +33,14 @@ The pre-commit hooks automatically run style checks (e.g. `flake8`, `black`, `is
 
 ## Makefile
 
-A [makefile](Makefile) is included to help with a few basic development commands. Currently, the following commands are available:
+A [makefile](https://github.com/czbiohub-sf/biahub/blob/main/Makefile) is included to help with a few basic development commands. Currently, the following commands are available:
 
-```sh
+```bash
 make setup-develop # setup the package in development mode
 make uninstall # uninstall the package
 make check-format # run black and isort format check
 make format # run black and isort formatting
-make lint # run flark8 linting
+make lint # run flake8 linting
 make pre-commit # run pre-commit hooks on all files
 make test # run pytest
 ```
@@ -51,13 +51,13 @@ The documentation is built using [Zensical](https://zensical.org). To preview th
 
 1. Install Zensical:
 
-```sh
+```bash
 pip install zensical
 ```
 
 2. Serve the documentation locally:
 
-```sh
+```bash
 zensical serve
 ```
 
@@ -65,7 +65,7 @@ This will start a local server at `http://localhost:8000` with live reload enabl
 
 3. To build the static site:
 
-```sh
+```bash
 zensical build
 ```
 
