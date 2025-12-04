@@ -44,6 +44,7 @@ from biahub.optimize_registration import _optimize_registration
 from biahub.register import (
     convert_transform_to_ants,
     convert_transform_to_numpy,
+    get_3D_fliplr_matrix,
     get_3D_rescaling_matrix,
     get_3D_rotation_matrix,
 )
@@ -455,6 +456,7 @@ def user_assisted_registration(
     target_channel_voxel_size: tuple[float, float, float],
     similarity: bool = False,
     pre_affine_90degree_rotation: int = 0,
+    pre_affine_fliplr: bool = False,
 ) -> list[ArrayLike]:
     """
     Perform user-assisted registration of two volumetric image channels.
@@ -481,6 +483,9 @@ def user_assisted_registration(
                          if False, use an Euclidean transform (rotation, translation).
     pre_affine_90degree_rotation : int
         Number of 90-degree rotations to apply to the source channel before registration.
+    pre_affine_fliplr : bool
+        If True, apply left-right flip to the source channel before registration.
+        Note: Flip is applied first, then rotation.
 
     Returns
     -------
@@ -569,7 +574,17 @@ def user_assisted_registration(
         90 * pre_affine_90degree_rotation,
         (target_channel_Z, target_channel_Y, target_channel_X),
     )
-    compound_affine = scaling_affine @ rotate90_affine
+
+    # Apply flip transformation if requested (flip happens first)
+    if pre_affine_fliplr:
+        fliplr_affine = get_3D_fliplr_matrix(
+            (source_channel_Z, source_channel_Y, source_channel_X),
+            (target_channel_Z, target_channel_Y, target_channel_X),
+        )
+    else:
+        fliplr_affine = np.eye(4)
+
+    compound_affine = scaling_affine @ rotate90_affine @ fliplr_affine
     tx_manual = convert_transform_to_ants(compound_affine).invert()
 
     source_zxy_pre_reg = tx_manual.apply_to_image(source_zyx_ants, reference=target_zyx_ants)
@@ -2126,6 +2141,7 @@ def estimate_registration(
                 else False
             ),
             pre_affine_90degree_rotation=settings.manual_registration_settings.affine_90degree_rotation,
+            pre_affine_fliplr=settings.manual_registration_settings.affine_fliplr,
         )
 
     else:
