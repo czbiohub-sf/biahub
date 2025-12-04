@@ -146,41 +146,41 @@ def get_edge_attrs(
 def match_hungarian_local_cost(
     i: int,
     j: int,
-    s_neighbors: list[int],
-    t_neighbors: list[int],
-    source_attrs: dict[tuple[int, int], float],
-    target_attrs: dict[tuple[int, int], float],
+    mov_neighbors: list[int],
+    ref_neighbors: list[int],
+    mov_attrs: dict[tuple[int, int], float],
+    ref_attrs: dict[tuple[int, int], float],
     default_cost: float,
 ) -> float:
     """
     Match neighbor edges between two graphs using the Hungarian algorithm for local cost estimation.
-    The cost is the mean of the absolute differences between the source and target edge attributes.
+    The cost is the mean of the absolute differences between the moving and reference edge attributes.
 
     Parameters
     ----------
     i : int
-        Index of the source edge.
+        Index of the moving edge.
     j : int
-        Index of the target edge.
-    s_neighbors : list[int]
-        List of source neighbors.
-    t_neighbors : list[int]
-        List of target neighbors.
-    source_attrs : dict[tuple[int, int], float]
-        Dictionary of source edge attributes.
-    target_attrs : dict[tuple[int, int], float]
-        Dictionary of target edge attributes.
+        Index of the reference edge.
+    mov_neighbors : list[int]
+        List of moving neighbors.
+    ref_neighbors : list[int]
+        List of reference neighbors.
+    mov_attrs : dict[tuple[int, int], float]
+        Dictionary of moving edge attributes.
+    ref_attrs : dict[tuple[int, int], float]
+        Dictionary of reference edge attributes.
     """
-    C = np.full((len(s_neighbors), len(t_neighbors)), default_cost)
+    C = np.full((len(mov_neighbors), len(ref_neighbors)), default_cost)
 
     # compute cost matrix
-    for ii, sn in enumerate(s_neighbors):
-        # get target neighbors
-        for jj, tn in enumerate(t_neighbors):
-            s_edge = (i, sn)
-            t_edge = (j, tn)
-            if s_edge in source_attrs and t_edge in target_attrs:
-                C[ii, jj] = abs(source_attrs[s_edge] - target_attrs[t_edge])
+    for ii, mov_neighbor in enumerate(mov_neighbors):
+        # get reference neighbors
+        for jj, ref_neighbor in enumerate(ref_neighbors):
+            mov_edge = (i, mov_neighbor)
+            ref_edge = (j, ref_neighbor)
+            if mov_edge in mov_attrs and ref_edge in ref_attrs:
+                C[ii, jj] = abs(mov_attrs[mov_edge] - ref_attrs[ref_edge])
 
     # use hungarian algorithm to find the best match
     row_ind, col_ind = linear_sum_assignment(C)
@@ -194,10 +194,10 @@ def match_hungarian_local_cost(
 def compute_edge_consistency_cost(
     n: int,
     m: int,
-    source_attrs: dict[tuple[int, int], float],
-    target_attrs: dict[tuple[int, int], float],
-    source_edges: list[tuple[int, int]],
-    target_edges: list[tuple[int, int]],
+    mov_attrs: dict[tuple[int, int], float],
+    ref_attrs: dict[tuple[int, int], float],
+    mov_edges: list[tuple[int, int]],
+    ref_edges: list[tuple[int, int]],
     default: float = 1e6,
     hungarian: bool = True,
 ) -> ArrayLike:
@@ -207,23 +207,23 @@ def compute_edge_consistency_cost(
     Parameters
     ----------
     n : int
-        Number of source edges.
+        Number of moving edges.
     m : int
-        Number of target edges.
-    source_attrs : dict[tuple[int, int], float]
-        Dictionary of source edge attributes.
-    target_attrs : dict[tuple[int, int], float]
-        Dictionary of target edge attributes.
-    source_edges : list[tuple[int, int]]
-        List of edges (i, j) in source graph.
-    target_edges : list[tuple[int, int]]
-        List of edges (i, j) in target graph.
+        Number of reference edges.
+    mov_attrs : dict[tuple[int, int], float]
+        Dictionary of moving edge attributes.
+    ref_attrs : dict[tuple[int, int], float]
+        Dictionary of reference edge attributes.
+    mov_edges : list[tuple[int, int]]
+        List of edges (i, j) in moving graph.
+    ref_edges : list[tuple[int, int]]
+        List of edges (i, j) in reference graph.
     default : float
         Default value for the cost matrix.
     hungarian : bool
         Whether to use the Hungarian algorithm for local cost estimation.
-        If False, the cost matrix is computed as the mean of the absolute differences between the source and target edge attributes.
-        If True, the cost matrix is computed as the mean of the absolute differences between the source and target edge attributes using the Hungarian algorithm.
+        If False, the cost matrix is computed as the mean of the absolute differences between the moving and reference edge attributes.
+        If True, the cost matrix is computed as the mean of the absolute differences between the moving and reference edge attributes using the Hungarian algorithm.
 
     Returns
     -------
@@ -232,30 +232,30 @@ def compute_edge_consistency_cost(
 
     Notes
     -----
-    The cost matrix is computed as the mean of the absolute differences between the source and target edge attributes.
+    The cost matrix is computed as the mean of the absolute differences between the moving and reference edge attributes.
     """
     cost_matrix = np.full((n, m), default)
     for i in range(n):
-        # get source neighbors
-        s_neighbors = [j for a, j in source_edges if a == i]
+        # get moving neighbors
+        mov_neighbors = [j for a, j in mov_edges if a == i]
         for j in range(m):
-            # get target neighbors
-            t_neighbors = [k for a, k in target_edges if a == j]
+            # get reference neighbors
+            ref_neighbors = [k for a, k in ref_edges if a == j]
             if hungarian:
                 # hungarian algorithm based cost estimation
                 cost_matrix[i, j] = match_hungarian_local_cost(
-                    i, j, s_neighbors, t_neighbors, source_attrs, target_attrs, default
+                    i, j, mov_neighbors, ref_neighbors, mov_attrs, ref_attrs, default
                 )
             else:
                 # position based cost estimation (mean of the absolute differences between the source and target edge attributes)
-                common_len = min(len(s_neighbors), len(t_neighbors))
+                common_len = min(len(mov_neighbors), len(ref_neighbors))
                 diffs = []
                 for k in range(common_len):
-                    s_edge = (i, s_neighbors[k])
-                    t_edge = (j, t_neighbors[k])
-                    if s_edge in source_attrs and t_edge in target_attrs:
-                        v1 = source_attrs[s_edge]
-                        v2 = target_attrs[t_edge]
+                    mov_edge = (i, mov_neighbors[k])
+                    ref_edge = (j, ref_neighbors[k])
+                    if mov_edge in mov_attrs and ref_edge in ref_attrs:
+                        v1 = mov_attrs[mov_edge]
+                        v2 = ref_attrs[ref_edge]
                         diff = np.abs(v1 - v2)
                         diffs.append(diff)
                 cost_matrix[i, j] = np.mean(diffs) if diffs else default
@@ -264,32 +264,32 @@ def compute_edge_consistency_cost(
 
 
 def compute_cost_matrix(
-    source_peaks: ArrayLike,
-    target_peaks: ArrayLike,
-    source_edges: list[tuple[int, int]],
-    target_edges: list[tuple[int, int]],
+    mov_points: ArrayLike,
+    ref_points: ArrayLike,
+    mov_edges: list[tuple[int, int]],
+    ref_edges: list[tuple[int, int]],
     weights: dict[str, float] = None,
     distance_metric: str = 'euclidean',
     normalize: bool = False,
 ) -> ArrayLike:
     """
-    Compute a cost matrix for matching peaks between two graphs based on:
-    - Euclidean or other distance between peaks
+    Compute a cost matrix for matching two graphs based on:
+    - Euclidean or other distance between points
     - Consistency in edge distances
     - Consistency in edge angles
-    - PCA features
+    - PCA features of the edges
     - Edge descriptors
 
     Parameters
     ----------
-    source_peaks : ArrayLike
-        (n, 2) array of source node coordinates.
-    target_peaks : ArrayLike
-        (m, 2) array of target node coordinates.
-    source_edges : list[tuple[int, int]]
-        List of edges (i, j) in source graph.
-    target_edges : list[tuple[int, int]]
-        List of edges (i, j) in target graph.
+    mov_points : ArrayLike
+        (n, 2) array of moving points.
+    ref_points : ArrayLike
+        (m, 2) array of reference points.
+    mov_edges : list[tuple[int, int]]
+        List of edges (i, j) in moving graph.
+    ref_edges : list[tuple[int, int]]
+        List of edges (i, j) in reference graph.
     weights : dict[str, float]
         Weights for different cost components.
     distance_metric : str
@@ -314,7 +314,7 @@ def compute_cost_matrix(
     ArrayLike
         Cost matrix of shape (n, m).
     """
-    n, m = len(source_peaks), len(target_peaks)
+    n, m = len(mov_points), len(ref_points)
     C_total = np.zeros((n, m))
 
     # --- Default weights ---
@@ -333,23 +333,23 @@ def compute_cost_matrix(
 
     # --- Base distance cost ---
     if weights["dist"] > 0:
-        C_dist = cdist(source_peaks, target_peaks, metric=distance_metric)
+        C_dist = cdist(mov_points, ref_points, metric=distance_metric)
         if normalize:
             C_dist /= C_dist.max()
         C_total += weights["dist"] * C_dist
 
     # --- Edge angle and length costs ---
-    source_dists, source_angles = get_edge_attrs(source_peaks, source_edges)
-    target_dists, target_angles = get_edge_attrs(target_peaks, target_edges)
+    mov_dists, mov_angles = get_edge_attrs(mov_points, mov_edges)
+    ref_dists, ref_angles = get_edge_attrs(ref_points, ref_edges)
 
     if weights["edge_length"] > 0:
         C_edge_len = compute_edge_consistency_cost(
             n=n,
             m=m,
-            source_attrs=source_dists,
-            target_attrs=target_dists,
-            source_edges=source_edges,
-            target_edges=target_edges,
+            mov_attrs=mov_dists,
+            ref_attrs=ref_dists,
+            mov_edges=mov_edges,
+            ref_edges=ref_edges,
             default=1e6,
         )
         if normalize:
@@ -360,10 +360,10 @@ def compute_cost_matrix(
         C_edge_ang = compute_edge_consistency_cost(
             n=n,
             m=m,
-            source_attrs=source_angles,
-            target_attrs=target_angles,
-            source_edges=source_edges,
-            target_edges=target_edges,
+            mov_attrs=mov_angles,
+            ref_attrs=ref_angles,
+            mov_edges=mov_edges,
+            ref_edges=ref_edges,
             default=np.pi,
         )
         if normalize:
@@ -372,26 +372,26 @@ def compute_cost_matrix(
 
     # --- PCA features ---
     if weights["pca_dir"] > 0 or weights["pca_aniso"] > 0:
-        dirs_s, aniso_s = get_local_pca_features(source_peaks, source_edges)
-        dirs_t, aniso_t = get_local_pca_features(target_peaks, target_edges)
+        mov_dirs, mov_aniso = get_local_pca_features(mov_points, mov_edges)
+        ref_dirs, ref_aniso = get_local_pca_features(ref_points, ref_edges)
 
         if weights["pca_dir"] > 0:
-            dot = np.clip(np.dot(dirs_s, dirs_t.T), -1.0, 1.0)
+            dot = np.clip(np.dot(mov_dirs, ref_dirs.T), -1.0, 1.0)
             C_dir = 1 - np.abs(dot)
             if normalize:
                 C_dir /= C_dir.max()
             C_total += weights["pca_dir"] * C_dir
 
         if weights["pca_aniso"] > 0:
-            C_aniso = np.abs(aniso_s[:, None] - aniso_t[None, :])
+            C_aniso = np.abs(mov_aniso[:, None] - ref_aniso[None, :])
             if normalize:
                 C_aniso /= C_aniso.max()
             C_total += weights["pca_aniso"] * C_aniso
     # --- Edge descriptors ---
     if weights["edge_descriptor"] > 0:
-        desc_s = get_edge_descriptors(source_peaks, source_edges)
-        desc_t = get_edge_descriptors(target_peaks, target_edges)
-        C_desc = cdist(desc_s, desc_t)
+        mov_desc = get_edge_descriptors(mov_points, mov_edges)
+        ref_desc = get_edge_descriptors(ref_points, ref_edges)
+        C_desc = cdist(mov_desc, ref_desc)
         if normalize:
             C_desc /= C_desc.max()
         C_total += weights["edge_descriptor"] * C_desc
@@ -508,8 +508,8 @@ def match_hungarian_global_cost(
 
 
 def get_matches_from_hungarian(
-    source_peaks: ArrayLike,
-    target_peaks: ArrayLike,
+    mov_points: ArrayLike,
+    ref_points: ArrayLike,
     hungarian_settings: HungarianMatchSettings,
     verbose: bool = False,
 ) -> ArrayLike:
@@ -517,10 +517,10 @@ def get_matches_from_hungarian(
     Get matches from beads using the hungarian algorithm.
     Parameters
     ----------
-    source_peaks : ArrayLike
-        (n, 2) array of source peaks.
-    target_peaks : ArrayLike
-        (m, 2) array of target peaks.
+    mov_points : ArrayLike
+        (n, 2) array of moving points.
+    ref_points : ArrayLike
+        (m, 2) array of reference points.
     hungarian_settings : HungarianMatchSettings
         Settings for the hungarian match.
     verbose : bool
@@ -533,20 +533,20 @@ def get_matches_from_hungarian(
     """
     cost_settings = hungarian_settings.cost_matrix_settings
     edge_settings = hungarian_settings.edge_graph_settings
-    source_edges = build_edge_graph(
-        source_peaks, mode=edge_settings.method, k=edge_settings.k, radius=edge_settings.radius
+    mov_edges = build_edge_graph(
+        mov_points, mode=edge_settings.method, k=edge_settings.k, radius=edge_settings.radius
     )
-    target_edges = build_edge_graph(
-        target_peaks, mode=edge_settings.method, k=edge_settings.k, radius=edge_settings.radius
+    ref_edges = build_edge_graph(
+        ref_points, mode=edge_settings.method, k=edge_settings.k, radius=edge_settings.radius
     )
 
     if hungarian_settings.cross_check:
         # Step 1: A → B
         C_ab = compute_cost_matrix(
-            source_peaks,
-            target_peaks,
-            source_edges,
-            target_edges,
+            mov_points,
+            ref_points,
+            mov_edges,
+            ref_edges,
             weights=cost_settings.weights,
             distance_metric=hungarian_settings.distance_metric,
             normalize=cost_settings.normalize,
@@ -560,10 +560,10 @@ def get_matches_from_hungarian(
 
         # Step 2: B → A (swap arguments)
         C_ba = compute_cost_matrix(
-            target_peaks,
-            source_peaks,
-            target_edges,
-            source_edges,
+            ref_points,
+            mov_points,
+            ref_edges,
+            mov_edges,
             weights=cost_settings.weights,
             distance_metric=hungarian_settings.distance_metric,
             normalize=cost_settings.normalize,
@@ -584,10 +584,10 @@ def get_matches_from_hungarian(
         # without cross-check
 
         C = compute_cost_matrix(
-            source_peaks,
-            target_peaks,
-            source_edges,
-            target_edges,
+            mov_points,
+            ref_points,
+            mov_edges,
+            ref_edges,
             weights=cost_settings.weights,
             distance_metric=hungarian_settings.distance_metric,
             normalize=cost_settings.normalize,
@@ -603,8 +603,8 @@ def get_matches_from_hungarian(
 
 def filter_matches(
     matches: ArrayLike,
-    source_peaks: ArrayLike,
-    target_peaks: ArrayLike,
+    mov_points: ArrayLike,
+    ref_points: ArrayLike,
     angle_threshold: float = 30,
     min_distance_threshold: float = 0.01,
     max_distance_threshold: float = 0.95,
@@ -617,10 +617,10 @@ def filter_matches(
     ----------
     matches : ArrayLike
         (n, 2) array of matches.
-    source_peaks : ArrayLike
-        (n, 2) array of source peaks.
-    target_peaks : ArrayLike
-        (n, 2) array of target peaks.
+    mov_points : ArrayLike
+        (n, 2) array of moving points.
+    ref_points : ArrayLike
+        (n, 2) array of reference points.
     angle_threshold : float
         Maximum allowed deviation from dominant angle (degrees).
     min_distance_threshold : float
@@ -638,7 +638,7 @@ def filter_matches(
     # --- Distance filtering ---
     if min_distance_threshold is not None or max_distance_threshold is not None:
         dist = np.linalg.norm(
-            source_peaks[matches[:, 0]] - target_peaks[matches[:, 1]], axis=1
+            mov_points[matches[:, 0]] - ref_points[matches[:, 1]], axis=1
         )
 
         low = np.quantile(dist, min_distance_threshold)
@@ -658,7 +658,7 @@ def filter_matches(
 
     # --- Angle filtering ---
     if angle_threshold:
-        vectors = target_peaks[matches[:, 1]] - source_peaks[matches[:, 0]]
+        vectors = ref_points[matches[:, 1]] - mov_points[matches[:, 0]]
         angles_rad = np.arctan2(vectors[:, 1], vectors[:, 0])
         angles_deg = np.degrees(angles_rad)
 
