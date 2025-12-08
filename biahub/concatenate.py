@@ -284,6 +284,11 @@ def concatenate(
     all_voxel_sizes = []
     for path in all_data_paths:
         with open_ome_zarr(path) as dataset:
+            if len(dataset.array_keys()) > 1:
+                # TODO: https://github.com/czbiohub-sf/biahub/issues/192
+                raise ValueError(
+                    "Concatenation of datasets with multiple arrays (pyramid levels) is not supported."
+                )
             all_shapes.append(dataset.data.shape)
             all_dtypes.append(dataset.data.dtype)
             all_voxel_sizes.append(dataset.scale[-3:])
