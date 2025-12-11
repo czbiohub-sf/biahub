@@ -1,3 +1,6 @@
+import numpy as np
+import pytest
+
 from iohub import open_ome_zarr
 
 from biahub.concatenate import concatenate
@@ -204,7 +207,13 @@ def test_concatenate_with_cropping(create_custom_plate, tmp_path, sbatch_file):
     assert output_X == x_end - x_start
 
 
-def test_concatenate_with_custom_chunks(create_custom_plate, tmp_path, sbatch_file):
+@pytest.mark.parametrize(
+    ["version", "shards_ratio_time"],
+    [["0.4", 1], ["0.5", None], ["0.5", 1], ["0.5", 2], ["0.5", 5]],
+)
+def test_concatenate_with_custom_chunks(
+    create_custom_plate, tmp_path, sbatch_file, version, shards_ratio_time
+):
     """
     Test concatenating with custom chunk sizes
     """
@@ -227,13 +236,22 @@ def test_concatenate_with_custom_chunks(create_custom_plate, tmp_path, sbatch_fi
     )
 
     # Define custom chunk sizes
-    custom_chunks = [1, 2, 4, 3]  # [C, Z, Y, X]
+    chunks = [1, 1, 2, 4, 3]  # [C, Z, Y, X]
+    if version == "0.5":
+        if shards_ratio_time is None:
+            shards_ratio = None
+        else:
+            shards_ratio = [shards_ratio_time, 1, 1, 2, 2]
+    elif version == "0.4":
+        shards_ratio = None
 
     settings = ConcatenateSettings(
         concat_data_paths=[str(plate_1_path) + "/*/*/*", str(plate_2_path) + "/*/*/*"],
         channel_names=['all', 'all'],
         time_indices='all',
-        chunks_czyx=custom_chunks,
+        chunks_czyx=chunks[1:],
+        shards_ratio=shards_ratio,
+        output_ome_zarr_version=version,
     )
 
     output_path = tmp_path / "output.zarr"
@@ -242,10 +260,21 @@ def test_concatenate_with_custom_chunks(create_custom_plate, tmp_path, sbatch_fi
         output_dirpath=output_path,
         sbatch_filepath=sbatch_file,
         local=True,
+        monitor=False,
+        block=True,
     )
 
-    # We can't easily check the chunks directly, but we can verify the operation completed successfully
     output_plate = open_ome_zarr(output_path)
+    for pos_name, pos in output_plate.positions():
+        assert pos.data.chunks == tuple(chunks)
+        if version == "0.5" and shards_ratio is not None:
+            assert pos.data.shards == tuple(c * s for c, s in zip(chunks, shards_ratio))
+        np.testing.assert_array_equal(
+            pos.data.numpy(),
+            np.concatenate(
+                [plate_1[pos_name].data.numpy(), plate_2[pos_name].data.numpy()], axis=1
+            ),
+        )
 
     # Check that the output plate has all the channels from the input plates
     output_channels = output_plate.channel_names
