@@ -68,6 +68,10 @@ dev = [
   "pytest==8.4",
   "pre-commit~=4.2",
 ]
+doc = [
+    "zensical>=0.0.11",
+    "mkdocs-click>=0.8",
+]
 
 [project.scripts]
 biahub = "biahub.cli.main:cli"

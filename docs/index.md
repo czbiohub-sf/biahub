@@ -1,20 +1,12 @@
 # biahub
 
-[![Docs][docs-badge]][docs-url]
-
-<!-- Badges -->
-[docs-badge]: https://github.com/czbiohub-sf/biahub/actions/workflows/docs.yml/badge.svg
-<!-- URLs -->
-[docs-url]: https://czbiohub-sf.github.io/biahub
-
 Bio-image analysis hub supporting high-throughput data reconstruction on HPC clusters with [Slurm](https://slurm.schedmd.com/documentation.html) workload management.
 
-
-`biahub` was originally developed to reconstruct data acquired on the [mantis](https://doi.org/10.1093/pnasnexus/pgae323) microscope using the [shrimPy](https://github.com/czbiohub-sf/shrimPy) acquisition engine, and has since been extended to process diverse multimodal datasets. `biahub` reconstruction workflows rely on OME-ZARR datasets (for example, as created with [iohub](https://github.com/czbiohub-sf/iohub)) which enable efficient parallelization across compute nodes. Available reconstruction routines are listed below; more information can be obtained with `biahub --help`.
+`biahub` was originally developed to reconstruct data acquired on the [mantis](https://doi.org/10.1093/pnasnexus/pgae323) microscope using the [shrimPy](https://github.com/czbiohub-sf/shrimPy) acquisition engine, and has since been extended to process diverse multimodal datasets. `biahub` reconstruction workflows rely on OME-ZARR datasets (for example, as created with [iohub](https://github.com/czbiohub-sf/iohub)) which enable efficient parallelization across compute nodes.
 
 ## Install
 
-```
+```bash
 conda create -n biahub python==3.11
 conda activate biahub
 
@@ -25,15 +17,16 @@ pip install -e ./biahub
 ## Data reconstruction
 
 Data reconstruction uses a command line interface. All reconstruction calls take an input `-i` and an output `-o`, and most reconstruction calls use configuration files passed via a `-c` option. Reconstruction workflows launch multiple Slurm jobs and can also be run locally using the `-l` flag.
-![FOV reconstruction](/docs/figures/dynacell_fig2.png)
+
+![FOV reconstruction](figures/dynacell_fig2.png)
 
 A typical set of CLI calls to go from raw data to registered volumes looks like:
 
-```sh
+```bash
 # CONVERT TO ZARR
 iohub convert \
     -i ./acq_name/acq_name_labelfree_1 \
-    -o ./acq_name_labelfree.zarr \
+    -o ./acq_name_labelfree.zarr
 iohub convert \
     -i ./acq_name/acq_name_lightsheet_1 \
     -o ./acq_name_lightsheet.zarr
@@ -128,4 +121,5 @@ biahub stitch \
 ```
 
 ## Contributing
-We would appreciate the bug reports and code contributions if you use this package. If you would like to contribute to this package, please read the [contributing guide](CONTRIBUTING.md).
+
+We welcome bug reports and code contributions! If you would like to contribute to this package, please read the [contributing guide](https://github.com/czbiohub-sf/biahub/blob/main/CONTRIBUTING.md).
