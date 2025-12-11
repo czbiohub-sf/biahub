@@ -1,5 +1,12 @@
 # biahub
 
+[![Docs][docs-badge]][docs-url]
+
+<!-- Badges -->
+[docs-badge]: https://github.com/czbiohub-sf/biahub/actions/workflows/docs.yml/badge.svg
+<!-- URLs -->
+[docs-url]: https://czbiohub-sf.github.io/biahub
+
 Bio-image analysis hub supporting high-throughput data reconstruction on HPC clusters with [Slurm](https://slurm.schedmd.com/documentation.html) workload management.
 
 
