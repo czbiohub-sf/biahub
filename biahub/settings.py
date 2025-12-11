@@ -195,6 +195,7 @@ class AntsRegistrationSettings(MyBaseModel):
 class ManualRegistrationSettings(MyBaseModel):
     time_index: int = 0
     affine_90degree_rotation: int = 0
+    affine_fliplr: bool = False
 
 
 class EstimateRegistrationSettings(MyBaseModel):
