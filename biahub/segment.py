@@ -113,14 +113,37 @@ def segment_cli(
     sbatch_filepath: str | None = None,
     local: bool = False,
     monitor: bool = True,
-):
+) -> None:
     """
-    Segment a single position across T axes using the configuration file.
+    Segment positions across T axes using Cellpose segmentation models.
 
-    >> biahub segment \
-        -i ./input.zarr/*/*/* \
-        -c ./segment_params.yml \
-        -o ./output.zarr
+    This command applies Cellpose segmentation models to input position data according
+    to the configuration file. Segmentation is performed in parallel across positions
+    using SLURM or local execution.
+
+    Parameters
+    ----------
+    input_position_dirpaths : list[str]
+        List of paths to the input position directories (OME-Zarr format).
+    config_filepath : Path
+        Path to the YAML configuration file specifying segmentation models and settings.
+    output_dirpath : str
+        Path to the output directory where segmented data will be saved.
+    sbatch_filepath : str | None, optional
+        Path to the SLURM batch file for cluster submission, by default None.
+    local : bool, optional
+        If True, run the jobs locally instead of submitting to a SLURM cluster, by default False.
+    monitor : bool, optional
+        If True, monitor the progress of the submitted jobs, by default True.
+
+    Returns
+    -------
+    None
+        Segmented data is written to the output directory.
+
+    Examples
+    --------
+    >> biahub segment -i ./input.zarr/*/*/* -c ./segment_params.yml -o ./output.zarr
     """
 
     # Convert string paths to Path objects

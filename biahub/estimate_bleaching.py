@@ -18,19 +18,33 @@ from biahub.cli.parsing import input_position_dirpaths, output_dirpath
 MSECS_PER_MINUTE = 60000
 
 
-def plot_bleaching_curves(times, tczyx_data, channel_names, output_file, title=''):
-    """Plots bleaching curves and estimates bleaching lifetimes
+def plot_bleaching_curves(
+    times: np.ndarray,
+    tczyx_data: np.ndarray,
+    channel_names: list[str],
+    output_file: str | Path,
+    title: str = '',
+) -> None:
+    """
+    Plot bleaching curves and estimate bleaching lifetimes.
 
     Parameters
     ----------
-    tc_times : NDArray with shape (T,)
-        Times of acquisition for each time point (minutes)
-    tczyx_data : NDArray with shape (T, C, Z, Y, X)
-        Raw data
-    channel_names : list of strings with length (C)
-    output_file : str
+    times : np.ndarray
+        Times of acquisition for each time point in minutes, shape (T,).
+    tczyx_data : np.ndarray
+        Raw data with shape (T, C, Z, Y, X).
+    channel_names : list[str]
+        List of channel names with length C.
+    output_file : str | Path
+        Path where the plot will be saved.
     title : str, optional
-        plot title, by default ''
+        Plot title, by default ''
+
+    Returns
+    -------
+    None
+        Plot is saved to `output_file`.
     """
     num_times = tczyx_data.shape[0]
     num_channels = tczyx_data.shape[1]
@@ -105,10 +119,30 @@ def plot_bleaching_curves(times, tczyx_data, channel_names, output_file, title='
 @click.command("estimate-bleaching")
 @input_position_dirpaths()
 @output_dirpath()
-def estimate_bleaching_cli(input_position_dirpaths, output_dirpath):
+def estimate_bleaching_cli(
+    input_position_dirpaths: list[str],
+    output_dirpath: str,
+) -> None:
     """
-    Estimate bleaching from raw data
+    Estimate bleaching from raw data.
 
+    Analyzes time-lapse data to estimate photobleaching rates by fitting
+    exponential decay curves to mean intensity measurements over time.
+
+    Parameters
+    ----------
+    input_position_dirpaths : list[str]
+        List of input position directory paths to analyze.
+    output_dirpath : str
+        Directory path where bleaching curve plots will be saved.
+
+    Returns
+    -------
+    None
+        Plots are saved to disk in the `output_dirpath` directory.
+
+    Examples
+    --------
     >> biahub estimate-bleaching -i ./input.zarr/0/0/0 -o ./bleaching-curves/
     """
 

@@ -1,5 +1,4 @@
 from pathlib import Path
-from typing import List, Tuple
 
 import ants
 import click
@@ -32,7 +31,28 @@ from biahub.cli.utils import (
 from biahub.settings import RegistrationSettings
 
 
-def get_3D_rescaling_matrix(start_shape_zyx, scaling_factor_zyx=(1, 1, 1), end_shape_zyx=None):
+def get_3D_rescaling_matrix(
+    start_shape_zyx: tuple[int, int, int],
+    scaling_factor_zyx: tuple[float, float, float] = (1, 1, 1),
+    end_shape_zyx: tuple[int, int, int] | None = None,
+) -> np.ndarray:
+    """
+    Generate a 3D rescaling transformation matrix.
+
+    Parameters
+    ----------
+    start_shape_zyx : tuple[int, int, int]
+        Shape of the input volume (Z, Y, X).
+    scaling_factor_zyx : tuple[float, float, float], optional
+        Scaling factors for each dimension (Z, Y, X), by default (1, 1, 1).
+    end_shape_zyx : tuple[int, int, int] | None, optional
+        Shape of the output volume (Z, Y, X). If None, uses start_shape_zyx, by default None.
+
+    Returns
+    -------
+    np.ndarray
+        4x4 rescaling transformation matrix.
+    """
     center_Y_start, center_X_start = np.array(start_shape_zyx)[-2:] / 2
     if end_shape_zyx is None:
         center_Y_end, center_X_end = (center_Y_start, center_X_start)
@@ -61,24 +81,26 @@ def get_3D_rescaling_matrix(start_shape_zyx, scaling_factor_zyx=(1, 1, 1), end_s
 
 
 def get_3D_rotation_matrix(
-    start_shape_zyx: Tuple, angle: float = 0.0, end_shape_zyx: Tuple = None
+    start_shape_zyx: tuple[int, int, int],
+    angle: float = 0.0,
+    end_shape_zyx: tuple[int, int, int] | None = None,
 ) -> np.ndarray:
     """
     Rotate Transformation Matrix
 
     Parameters
     ----------
-    start_shape_zyx : Tuple
-        Shape of the input
+    start_shape_zyx : tuple[int, int, int]
+        Shape of the input volume (Z, Y, X).
     angle : float, optional
-        Angles of rotation in degrees
-    end_shape_zyx : Tuple, optional
-       Shape of output space
+        Angle of rotation in degrees, by default 0.0.
+    end_shape_zyx : tuple[int, int, int] | None, optional
+        Shape of output space (Z, Y, X). If None, uses start_shape_zyx, by default None.
 
     Returns
     -------
     np.ndarray
-        Rotation matrix
+        4x4 rotation transformation matrix.
     """
     # TODO: make this 3D?
     center_Y_start, center_X_start = np.array(start_shape_zyx)[-2:] / 2
@@ -114,7 +136,10 @@ def get_3D_rotation_matrix(
     return rotation_matrix
 
 
-def get_3D_fliplr_matrix(start_shape_zyx: tuple, end_shape_zyx: tuple = None) -> np.ndarray:
+def get_3D_fliplr_matrix(
+    start_shape_zyx: tuple[int, int, int],
+    end_shape_zyx: tuple[int, int, int] | None = None,
+) -> np.ndarray:
     """
     Get 3D left-right flip transformation matrix.
 
@@ -148,16 +173,19 @@ def get_3D_fliplr_matrix(start_shape_zyx: tuple, end_shape_zyx: tuple = None) ->
     return flip_matrix
 
 
-def convert_transform_to_ants(T_numpy: np.ndarray):
-    """Homogeneous 3D transformation matrix from numpy to ants
+def convert_transform_to_ants(T_numpy: np.ndarray) -> "ants.Transform":
+    """
+    Convert homogeneous 3D transformation matrix from numpy to ANTs format.
 
     Parameters
     ----------
-    numpy_transform :4x4 homogenous matrix
+    T_numpy : np.ndarray
+        4x4 homogeneous transformation matrix.
 
     Returns
     -------
-    Ants transformation matrix object
+    ants.Transform
+        ANTs transformation matrix object.
     """
     assert T_numpy.shape == (4, 4)
 
@@ -171,21 +199,21 @@ def convert_transform_to_ants(T_numpy: np.ndarray):
     return T_ants
 
 
-def convert_transform_to_numpy(T_ants):
+def convert_transform_to_numpy(T_ants: "ants.Transform") -> np.ndarray:
     """
-    Convert the ants transformation matrix to numpy 3D homogenous transform
+    Convert the ANTs transformation matrix to numpy 3D homogeneous transform.
 
-    Modified from Jordao's dexp code
+    Modified from Jordao's dexp code.
 
     Parameters
     ----------
-    T_ants : Ants transfromation matrix object
+    T_ants : ants.Transform
+        ANTs transformation matrix object.
 
     Returns
     -------
-    np.array
-        Converted Ants to numpy array
-
+    np.ndarray
+        4x4 homogeneous transformation matrix as numpy array.
     """
 
     T_numpy = T_ants.parameters.reshape((3, 4), order="F")
@@ -206,32 +234,33 @@ def convert_transform_to_numpy(T_ants):
 def apply_affine_transform(
     zyx_data: np.ndarray,
     matrix: np.ndarray,
-    output_shape_zyx: Tuple,
-    method="ants",
+    output_shape_zyx: tuple[int, int, int],
+    method: str = "ants",
     interpolation: str = "linear",
-    crop_output_slicing: bool = None,
+    crop_output_slicing: tuple[slice, slice, slice] | None = None,
 ) -> np.ndarray:
-    """_summary_
+    """
+    Apply an affine transformation to 3D or 4D image data.
 
     Parameters
     ----------
     zyx_data : np.ndarray
-        3D input array to be transformed
+        3D or 4D input array to be transformed (ZYX or CZYX format).
     matrix : np.ndarray
-        3D Homogenous transformation matrix
-    output_shape_zyx : Tuple
-        output target zyx shape
+        4x4 homogeneous transformation matrix.
+    output_shape_zyx : tuple[int, int, int]
+        Output target shape (Z, Y, X).
     method : str, optional
-        method to use for transformation, by default 'ants'
-    interpolation: str, optional
-        interpolation mode for ants, by default "linear"
-    crop_output : bool, optional
-        crop the output to the largest interior rectangle, by default False
+        Method to use for transformation ('ants' or 'scipy'), by default 'ants'.
+    interpolation : str, optional
+        Interpolation mode for ANTs, by default "linear".
+    crop_output_slicing : tuple[slice, slice, slice] | None, optional
+        Slices to crop the output to the largest interior rectangle, by default None.
 
     Returns
     -------
     np.ndarray
-        registered zyx data
+        Transformed image data with shape matching output_shape_zyx (or cropped if specified).
     """
 
     Z, Y, X = output_shape_zyx
@@ -286,7 +315,26 @@ def apply_affine_transform(
     return registered_zyx
 
 
-def find_lir(registered_zyx: np.ndarray, plot: bool = False) -> Tuple:
+def find_lir(registered_zyx: np.ndarray, plot: bool = False) -> tuple[slice, slice, slice]:
+    """
+    Find the largest interior rectangle (LIR) in a 3D boolean mask.
+
+    This function finds the largest rectangular region that contains only True values
+    in a 3D boolean mask. It first finds the LIR in the YX plane at the middle Z slice,
+    then iterates over ZX and ZY slices to find optimal Z cropping parameters.
+
+    Parameters
+    ----------
+    registered_zyx : np.ndarray
+        3D boolean mask array (Z, Y, X).
+    plot : bool, optional
+        If True, save a plot showing the largest interior rectangle, by default False.
+
+    Returns
+    -------
+    tuple[slice, slice, slice]
+        Tuple of slices (z_slice, y_slice, x_slice) defining the largest interior rectangle.
+    """
     registered_zyx = np.asarray(registered_zyx, dtype=bool)
 
     # Find the lir in YX at Z//2
@@ -348,31 +396,32 @@ def find_lir(registered_zyx: np.ndarray, plot: bool = False) -> Tuple:
 
 
 def find_overlapping_volume(
-    input_zyx_shape: Tuple,
-    target_zyx_shape: Tuple,
+    input_zyx_shape: tuple[int, int, int],
+    target_zyx_shape: tuple[int, int, int],
     transformation_matrix: np.ndarray,
     method: str = "LIR",
     plot: bool = False,
-) -> Tuple:
+) -> tuple[slice, slice, slice]:
     """
-    Find the overlapping rectangular volume after registration of two 3D datasets
+    Find the overlapping rectangular volume after registration of two 3D datasets.
 
     Parameters
     ----------
-    input_zyx_shape : Tuple
-        shape of input array
-    target_zyx_shape : Tuple
-        shape of target array
+    input_zyx_shape : tuple[int, int, int]
+        Shape of input array (Z, Y, X).
+    target_zyx_shape : tuple[int, int, int]
+        Shape of target array (Z, Y, X).
     transformation_matrix : np.ndarray
-        affine transformation matrix
+        4x4 affine transformation matrix.
     method : str, optional
-        method of finding the overlapping volume, by default 'LIR'
+        Method of finding the overlapping volume, by default 'LIR'.
+    plot : bool, optional
+        If True, save a plot showing the largest interior rectangle, by default False.
 
     Returns
     -------
-    Tuple
-        ZYX slices of the overlapping volume after registration
-
+    tuple[slice, slice, slice]
+        ZYX slices of the overlapping volume after registration.
     """
 
     # Make dummy volumes
@@ -400,7 +449,24 @@ def find_overlapping_volume(
     return (z_slice, y_slice, x_slice)
 
 
-def rescale_voxel_size(affine_matrix, input_scale):
+def rescale_voxel_size(
+    affine_matrix: np.ndarray, input_scale: tuple[float, float, float]
+) -> np.ndarray:
+    """
+    Rescale voxel size based on affine transformation matrix.
+
+    Parameters
+    ----------
+    affine_matrix : np.ndarray
+        3x3 or 4x4 affine transformation matrix (only 3x3 part is used).
+    input_scale : tuple[float, float, float]
+        Input voxel size (Z, Y, X).
+
+    Returns
+    -------
+    np.ndarray
+        Rescaled voxel size (Z, Y, X).
+    """
     return np.linalg.norm(affine_matrix, axis=1) * input_scale
 
 
@@ -413,20 +479,46 @@ def rescale_voxel_size(affine_matrix, input_scale):
 @sbatch_filepath()
 @monitor()
 def register_cli(
-    source_position_dirpaths: List[str],
-    target_position_dirpaths: List[str],
+    source_position_dirpaths: list[str],
+    target_position_dirpaths: list[str],
     config_filepath: Path,
     output_dirpath: str,
     local: bool,
-    sbatch_filepath: Path,
+    sbatch_filepath: Path | None,
     monitor: bool = True,
-):
+) -> None:
     """
-    Apply an affine transformation to a single position across T and C axes based on a registration config file.
+    Apply an affine transformation to positions across T and C axes based on a registration config file.
 
-    Start by generating an initial affine transform with `estimate-register`. Optionally, refine this transform with `optimize-register`. Finally, use `register`.
+    This command applies registration transforms to align source channels with target channels.
+    Start by generating an initial affine transform with `estimate-registration`. Optionally,
+    refine this transform with `optimize-registration`. Finally, use `register` to apply the transform.
 
-    >> biahub register -s source.zarr/*/*/* -t target.zarr/*/*/* -c config.yaml -o ./acq_name_registerred.zarr
+    Parameters
+    ----------
+    source_position_dirpaths : list[str]
+        List of paths to the source position directories (OME-Zarr format).
+    target_position_dirpaths : list[str]
+        List of paths to the target position directories (OME-Zarr format).
+    config_filepath : Path
+        Path to the YAML configuration file containing registration settings.
+    output_dirpath : str
+        Path to the output directory where registered data will be saved.
+    local : bool
+        If True, run the jobs locally instead of submitting to a SLURM cluster.
+    sbatch_filepath : Path | None, optional
+        Path to the SLURM batch file for cluster submission, by default None.
+    monitor : bool, optional
+        If True, monitor the progress of the submitted jobs, by default True.
+
+    Returns
+    -------
+    None
+        Registered data is written to the output directory.
+
+    Examples
+    --------
+    >> biahub register -s source.zarr/*/*/* -t target.zarr/*/*/* -c config.yaml -o ./acq_name_registered.zarr
     """
 
     # Convert string paths to Path objects

@@ -3,7 +3,6 @@ import shutil
 import subprocess
 
 from pathlib import Path
-from typing import List
 
 import click
 import numpy as np
@@ -28,24 +27,30 @@ from biahub.cli.utils import create_empty_hcs_zarr
 def run_viscy_preprocess(
     data_path: str,
     num_workers: int = 32,
-    config_file: str = None,
-    path_viscy_env: Path = None,
+    config_file: str | None = None,
+    path_viscy_env: Path | None = None,
     verbose: bool = False,
-):
+) -> None:
     """
     Run VisCy preprocess on a single FOV.
+
     Parameters
     ----------
     data_path : str
         Path to the FOV data.
-    num_workers : int
-        Number of workers to use.
-    config_file : str
-        Path to the VisCy config file.
-    path_viscy_env : Path
-        Path to the VisCy environment.
-    verbose : bool
-        Whether to print verbose output.
+    num_workers : int, optional
+        Number of workers to use, by default 32.
+    config_file : str | None, optional
+        Path to the VisCy config file. If None, default preprocessing settings are used, by default None.
+    path_viscy_env : Path | None, optional
+        Path to the VisCy conda environment, by default None.
+    verbose : bool, optional
+        Whether to print verbose output, by default False.
+
+    Returns
+    -------
+    None
+        Preprocessing is performed in-place on the FOV data.
     """
     cmd = (
         "module load anaconda && "
@@ -69,11 +74,12 @@ def run_viscy_predict(
     config_file: str,
     output_store: str,
     log_dir: str,
-    path_viscy_env: Path = None,
+    path_viscy_env: Path | None = None,
     verbose: bool = False,
-):
+) -> None:
     """
     Run VisCy predict on a single FOV.
+
     Parameters
     ----------
     data_path : str
@@ -81,14 +87,18 @@ def run_viscy_predict(
     config_file : str
         Path to the VisCy config file.
     output_store : str
-        Path to the output store.
+        Path to the output store where predictions will be saved.
     log_dir : str
-        Path to the log directory.
-    path_viscy_env : Path
-        Path to the VisCy environment.
-    verbose : bool
-        Whether to print verbose output.
+        Path to the log directory for training logs.
+    path_viscy_env : Path | None, optional
+        Path to the VisCy conda environment, by default None.
+    verbose : bool, optional
+        Whether to print verbose output, by default False.
 
+    Returns
+    -------
+    None
+        Predictions are saved to the output store.
     """
     os.chdir(log_dir)
     # Compose the shell command
@@ -113,20 +123,25 @@ def combine_fov_zarrs_to_plate(
     temp_dir: Path,
     output_dirpath: Path,
     cleanup: bool = True,
-):
+) -> None:
     """
     Combine VisCy-predicted FOV Zarrs (in temp) into a single HCS plate Zarr by moving.
 
     Parameters
     ----------
-    fovs : list of Path
-        Original FOV paths (used to extract B/1/000000).
+    fovs : list[Path]
+        Original FOV paths (used to extract plate/well/position structure).
     temp_dir : Path
         Directory containing the individual .zarr folders (each named like B_1_000000.zarr).
     output_dirpath : Path
         The plate-level HCS Zarr to merge into.
-    cleanup : bool
-        Whether to delete the moved files afterwards. Default True.
+    cleanup : bool, optional
+        Whether to delete the moved files afterwards, by default True.
+
+    Returns
+    -------
+    None
+        FOV Zarrs are moved into the output plate structure.
     """
     for fov in fovs:
 
@@ -156,46 +171,57 @@ def combine_fov_zarrs_to_plate(
 
 
 def virtual_stain(
-    input_position_dirpaths: List[str],
+    input_position_dirpaths: list[str],
     output_dirpath: str,
     predict_config_filepath: str,
     path_viscy_env: str,
-    preprocess_config_filepath: str = None,
-    sbatch_filepath_preprocess: str = None,
-    sbatch_filepath_predict: str = None,
+    preprocess_config_filepath: str | None = None,
+    sbatch_filepath_preprocess: str | None = None,
+    sbatch_filepath_predict: str | None = None,
     run_mode: str = "all",
     num_processes: int = 32,
     local: bool = False,
     monitor: bool = True,
     verbose: bool = True,
-):
+) -> None:
     """
-    Run VisCy virtual stain on a plate.
+    Run VisCy virtual staining on a plate.
+
+    This function orchestrates the VisCy virtual staining pipeline, which consists of
+    preprocessing, prediction, and combining stages. It supports parallel execution
+    via SLURM or local processing.
 
     Parameters
     ----------
-    input_position_dirpaths : List[str]
-        List of paths to the input position directories.
+    input_position_dirpaths : list[str]
+        List of paths to the input position directories (OME-Zarr format).
     output_dirpath : str
-        Path to the output directory.
+        Path to the output directory where the virtual stained dataset will be saved.
     predict_config_filepath : str
-        Path to the VisCy predict config file.
-    preprocess_config_filepath : str
-        Path to the VisCy preprocess config file.
+        Path to the VisCy predict configuration file.
     path_viscy_env : str
-        Path to the VisCy environment.
-    sbatch_filepath_preprocess : str
-        Path to the VisCy preprocess sbatch file.
-    sbatch_filepath_predict : str
-        Path to the VisCy predict sbatch file.
-    run_mode : str
-        Which VisCy stage(s) to run.
-    num_processes : int
-        Number of processes to use.
-    local : bool
-        Whether to run locally.
-    monitor : bool
+        Path to the VisCy conda environment.
+    preprocess_config_filepath : str | None, optional
+        Path to the VisCy preprocess configuration file. If None, default settings are used, by default None.
+    sbatch_filepath_preprocess : str | None, optional
+        Path to the SLURM batch file for preprocessing jobs, by default None.
+    sbatch_filepath_predict : str | None, optional
+        Path to the SLURM batch file for prediction jobs, by default None.
+    run_mode : str, optional
+        Which VisCy stage(s) to run: "all", "preprocess", or "predict", by default "all".
+    num_processes : int, optional
+        Number of processes to use for parallel execution, by default 32.
+    local : bool, optional
+        If True, run the jobs locally instead of submitting to a SLURM cluster, by default False.
+    monitor : bool, optional
+        If True, monitor the progress of the submitted jobs, by default True.
+    verbose : bool, optional
+        If True, print verbose output, by default True.
 
+    Returns
+    -------
+    None
+        The virtual stained dataset is written to the specified output directory.
     """
     output_dirpath = Path(output_dirpath)
     slurm_out_path = output_dirpath.parent / "slurm_output"
@@ -400,29 +426,67 @@ def virtual_stain(
     help="Which VisCy stage(s) to run.",
 )
 def virtual_stain_cli(
-    input_position_dirpaths: List[str],
+    input_position_dirpaths: list[str],
     output_dirpath: str,
     predict_config_filepath: str,
     path_viscy_env: str,
-    preprocess_config_filepath: str = None,
+    preprocess_config_filepath: str | None = None,
     run_mode: str = "all",
     num_processes: int = 32,
-    sbatch_filepath_preprocess: str = None,
-    sbatch_filepath_predict: str = None,
+    sbatch_filepath_preprocess: str | None = None,
+    sbatch_filepath_predict: str | None = None,
     local: bool = False,
     monitor: bool = True,
     verbose: bool = True,
-):
+) -> None:
     """
-    Run VisCy virtual staining on a zarr plate from dedicated python environment.
-    Example:
-    biahub virtual-stain \
-        --input-position-dirpaths path.zarr/*/*/* \
-        --output-dirpath output.zarr \
-        --predict-config-filepath predict.yml \
-        --preprocess-config-filepath preprocess.yml \
-        --path-viscy-env /path/to/viscy/env \
-        --run-mode all \
+    Run VisCy virtual staining on a zarr plate from a dedicated Python environment.
+
+    This command-line tool applies VisCy virtual staining to input OME-Zarr datasets.
+    It supports running preprocessing, prediction, or both stages, and can execute
+    jobs locally or via SLURM cluster submission.
+
+    Parameters
+    ----------
+    input_position_dirpaths : list[str]
+        List of paths to the input position directories (OME-Zarr format).
+    output_dirpath : str
+        Path to the output directory where the virtual stained dataset will be saved.
+    predict_config_filepath : str
+        Path to the VisCy predict configuration file.
+    path_viscy_env : str
+        Path to the VisCy conda environment.
+    preprocess_config_filepath : str | None, optional
+        Path to the VisCy preprocess configuration file, by default None.
+    run_mode : str, optional
+        Which VisCy stage(s) to run: "all", "preprocess", or "predict", by default "all".
+    num_processes : int, optional
+        Number of processes to use for parallel execution, by default 32.
+    sbatch_filepath_preprocess : str | None, optional
+        Path to the SLURM batch file for preprocessing jobs, by default None.
+    sbatch_filepath_predict : str | None, optional
+        Path to the SLURM batch file for prediction jobs, by default None.
+    local : bool, optional
+        If True, run the jobs locally instead of submitting to a SLURM cluster, by default False.
+    monitor : bool, optional
+        If True, monitor the progress of the submitted jobs, by default True.
+    verbose : bool, optional
+        If True, print verbose output, by default True.
+
+    Returns
+    -------
+    None
+        The virtual stained dataset is written to the specified output directory.
+
+    Examples
+    --------
+    >> biahub virtual-stain \\
+        --input-position-dirpaths path.zarr/*/*/* \\
+        --output-dirpath output.zarr \\
+        --predict-config-filepath predict.yml \\
+        --preprocess-config-filepath preprocess.yml \\
+        --path-viscy-env /path/to/viscy/env \\
+        --run-mode all
     """
     virtual_stain(
         input_position_dirpaths=input_position_dirpaths,

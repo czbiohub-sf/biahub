@@ -25,29 +25,38 @@ from biahub.settings import ConcatenateSettings
 
 
 def estimate_crop_one_position(
-    lf_dir: np.ndarray,
-    ls_dir: np.ndarray,
-    lf_mask_radius: float = None,
-    output_dir: Path = None,
-):
+    lf_dir: Path,
+    ls_dir: Path,
+    lf_mask_radius: float | None = None,
+    output_dir: Path | None = None,
+) -> tuple[list[int], list[int], list[int]]:
     """
     Estimate a crop region where both phase and fluorescence volumes are non-zero.
 
     Parameters
     ----------
     lf_dir : Path
-        Path to the phase channel.
+        Path to the phase channel directory.
     ls_dir : Path
-        Path to the fluorescence channel.
-    lf_mask_radius : float
-        Radius of the circular mask which will be applied to the phase channel. If None, no masking will be applied
-    output_dir : Path
-        Path to save the output CSV file.
+        Path to the fluorescence channel directory.
+    lf_mask_radius : float | None, optional
+        Radius of the circular mask which will be applied to the phase channel
+        as a fraction of image width (0 < lf_mask_radius <= 1). If None, no
+        masking will be applied, by default None
+    output_dir : Path | None, optional
+        Path to save the output CSV file, by default None
+
     Returns
     -------
-    tuple
-        Tuple of slices for Z, Y, and X dimensions.
+    tuple[list[int], list[int], list[int]]
+        Tuple containing three lists: [Z_start, Z_stop], [Y_start, Y_stop], [X_start, X_stop]
+        representing the crop region for Z, Y, and X dimensions.
 
+    Raises
+    ------
+    ValueError
+        If both phase_data and fluor_data are not 5D arrays, or if lf_mask_radius
+        is not in the valid range (0 < lf_mask_radius <= 1).
     """
     fov = "/".join(lf_dir.parts[-3:])
 
@@ -142,30 +151,45 @@ def estimate_crop_one_position(
 
 
 def estimate_crop(
-    config_filepath: str,
-    output_filepath: str,
+    config_filepath: str | Path,
+    output_filepath: str | Path,
     lf_mask_radius: float = 0.95,
-    sbatch_filepath: str = None,
+    sbatch_filepath: str | None = None,
     local: bool = False,
-):
+) -> None:
     """
-    Estimate a crop region where both phase and fluorescene volumes are non-zero.
+    Estimate a crop region where both phase and fluorescence volumes are non-zero.
 
-    Parameters:
+    Processes multiple positions to find a common crop region and updates the
+    configuration file with standardized XYZ slicing parameters.
+
+    Parameters
     ----------
-    config_filepath : str
-        Path to a yaml ConcatenateSettings file.
-        This file will be replicated in the output with modified XYZ slicing parametrs.
-    output_filepath : str
+    config_filepath : str | Path
+        Path to a YAML ConcatenateSettings file. This file will be replicated
+        in the output with modified XYZ slicing parameters.
+    output_filepath : str | Path
         Path to save the output config file.
-    lf_mask_radius : float
-        Radius of the circular mask given as fraction of image width to apply to the phase channel.
-        A good value if 0.95.
-    sbatch_filepath : str
-        Path to a SLURM submission script.
-    local : bool
-        If True, run the jobs locally.
+    lf_mask_radius : float, optional
+        Radius of the circular mask given as fraction of image width to apply
+        to the phase channel, by default 0.95
+    sbatch_filepath : str | None, optional
+        Path to a SLURM submission script, by default None
+    local : bool, optional
+        If True, run the jobs locally instead of on SLURM, by default False
 
+    Returns
+    -------
+    None
+        Results are saved to disk:
+        - Updated YAML config file at `output_filepath`
+        - CSV file with crop estimates at `output_dir / crop_slices.csv`
+
+    Raises
+    ------
+    ValueError
+        If config file is not a YAML file, or if the number of phase and
+        fluorescence channels differ.
     """
     if config_filepath.suffix not in [".yml", ".yaml"]:
         raise ValueError("Config file must be a yaml file")
@@ -296,30 +320,49 @@ def estimate_crop(
     required=False,
 )
 def estimate_crop_cli(
-    config_filepath: str,
-    output_filepath: str,
-    lf_mask_radius: float = 0.95,
-    sbatch_filepath: str = None,
+    config_filepath: Path,
+    output_filepath: Path,
+    lf_mask_radius: float | None = 0.95,
+    sbatch_filepath: str | None = None,
     local: bool = False,
-):
+) -> None:
     """
-    Estimate a crop region where both phase and fluorescene volumes are non-zero.
+    Estimate a crop region where both phase and fluorescence volumes are non-zero.
 
-    Parameters:
+    CLI command that processes multiple positions to find a common crop region
+    and updates the configuration file with standardized XYZ slicing parameters.
+
+    Parameters
     ----------
-    config_filepath : str
-        Path to a yaml ConcatenateSettings file.
-        This file will be replicated in the output with modified XYZ slicing parametrs.
-    output_filepath : str
+    config_filepath : Path
+        Path to a YAML ConcatenateSettings file. This file will be replicated
+        in the output with modified XYZ slicing parameters.
+    output_filepath : Path
         Path to save the output config file.
-    lf_mask_radius : float
-        Radius of the circular mask given as fraction of image width to apply to the phase channel.
-        A good value if 0.95.
-    sbatch_filepath : str
-        Path to a SLURM submission script.
-    local : bool
-        If True, run the jobs locally.
+    lf_mask_radius : float | None, optional
+        Radius of the circular mask given as fraction of image width to apply
+        to the phase channel. A good value is 0.95, by default 0.95
+    sbatch_filepath : str | None, optional
+        Path to a SLURM submission script, by default None
+    local : bool, optional
+        If True, run the jobs locally instead of on SLURM, by default False
 
+    Returns
+    -------
+    None
+        Results are saved to disk:
+        - Updated YAML config file at `output_filepath`
+        - CSV file with crop estimates
+
+    Raises
+    ------
+    ValueError
+        If config file is not a YAML file, or if the number of phase and
+        fluorescence channels differ.
+
+    Examples
+    --------
+    >> biahub estimate-crop -c ./concat.yml -o ./output_crop.yml
     """
     estimate_crop(
         config_filepath=config_filepath,

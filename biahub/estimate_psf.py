@@ -2,7 +2,6 @@ import gc
 import time
 
 from pathlib import Path
-from typing import List
 
 import click
 import numpy as np
@@ -22,13 +21,36 @@ from biahub.settings import PsfFromBeadsSettings
 @config_filepath()
 @output_dirpath()
 def estimate_psf_cli(
-    input_position_dirpaths: List[str],
+    input_position_dirpaths: list[str],
     config_filepath: Path,
     output_dirpath: str,
-):
+) -> None:
     """
-    Estimate the point spread function (PSF) from bead images
+    Estimate the point spread function (PSF) from bead images.
 
+    Detects beads in multiple positions, extracts bead patches, and computes
+    an average normalized PSF. The PSF is saved to a zarr store for use in
+    deconvolution or other analysis.
+
+    Parameters
+    ----------
+    input_position_dirpaths : list[str]
+        List of input position directory paths containing bead images.
+    config_filepath : Path
+        Path to the PSF estimation configuration YAML file.
+    output_dirpath : str
+        Path to the output zarr directory where the PSF will be saved.
+
+    Returns
+    -------
+    None
+
+    Notes
+    -----
+    PSF is saved to disk in the `output_dirpath` zarr store.
+
+    Examples
+    --------
     >> biahub estimate-psf -i ./beads.zarr/*/*/* -c ./psf_params.yml -o ./psf.zarr
     """
     # Convert string paths to Path objects

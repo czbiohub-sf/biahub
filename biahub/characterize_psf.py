@@ -8,7 +8,7 @@ import warnings
 import webbrowser
 
 from pathlib import Path
-from typing import List, Literal
+from typing import Literal, Optional
 
 import click
 import markdown
@@ -33,13 +33,13 @@ from biahub.vendor.napari_psf_analysis import PSF, BeadExtractor, Calibrated3DIm
 
 def _make_plots(
     output_path: Path,
-    beads: List[ArrayLike],
+    beads: list[ArrayLike],
     df_gaussian_fit: pd.DataFrame,
     df_1d_peak_width: pd.DataFrame,
-    scale: tuple,
-    axis_labels: tuple,
+    scale: tuple[float, float, float],
+    axis_labels: tuple[str, str, str],
     fwhm_plot_type: Literal['1D', '3D'],
-):
+) -> tuple[Path, list[Path], tuple[Path, Path]]:
     plots_dir = output_path / 'plots'
     plots_dir.mkdir(parents=True, exist_ok=True)
     random_bead_number = sorted(np.random.choice(len(beads), 5, replace=False))
@@ -88,14 +88,56 @@ def generate_report(
     output_path: Path,
     data_dir: Path,
     dataset: str,
-    beads: List[ArrayLike],
+    beads: list[ArrayLike],
     peaks: ArrayLike,
     df_gaussian_fit: pd.DataFrame,
     df_1d_peak_width: pd.DataFrame,
-    scale: tuple,
-    axis_labels: tuple,
+    scale: tuple[float, float, float],
+    axis_labels: tuple[str, str, str],
     fwhm_plot_type: str,
-):
+) -> None:
+    """
+    Generate a comprehensive PSF analysis report with plots, statistics, and HTML output.
+
+    Creates an HTML report containing PSF analysis results including bead statistics,
+    FWHM measurements (3D, principal components, and 1D), SNR statistics, and
+    visualization plots. Saves results to CSV files and opens the HTML report in
+    a web browser.
+
+    Parameters
+    ----------
+    output_path : Path
+        Directory path where the report and output files will be saved.
+    data_dir : Path
+        Path to the data directory containing the original dataset.
+    dataset : str
+        Name or identifier of the dataset being analyzed.
+    beads : list[ArrayLike]
+        List of bead patch arrays extracted from the dataset.
+    peaks : ArrayLike
+        Array of peak coordinates detected in the dataset.
+    df_gaussian_fit : pd.DataFrame
+        DataFrame containing Gaussian fit results for each bead.
+    df_1d_peak_width : pd.DataFrame
+        DataFrame containing 1D peak width measurements.
+    scale : tuple
+        Tuple representing the voxel scaling factors for each dimension (Z, Y, X).
+    axis_labels : tuple
+        Tuple of axis label strings for the dimensions (e.g., ('Z', 'Y', 'X')).
+    fwhm_plot_type : str
+        Type of FWHM plot to generate (e.g., 'acquisition_axes' or 'principal_components').
+
+    Returns
+    -------
+    None
+        Results are saved to disk and the HTML report is opened in a web browser.
+        Output files include:
+        - psf_analysis_report.html: Main HTML report
+        - psf_gaussian_fit.csv: Gaussian fit results
+        - psf_1d_peak_width.csv: 1D peak width measurements
+        - peaks.pkl: Pickled peak coordinates
+        - Various plot images (PSF slices, FWHM plots, amplitude plots)
+    """
     output_path.mkdir(exist_ok=True)
 
     num_beads = len(beads)
@@ -171,8 +213,11 @@ def generate_report(
 
 
 def extract_beads(
-    zyx_data: ArrayLike, points: ArrayLike, scale: tuple, patch_size: tuple = None
-):
+    zyx_data: ArrayLike,
+    points: ArrayLike,
+    scale: tuple[float, float, float],
+    patch_size: Optional[tuple[float, float, float]] = None,
+) -> tuple[list[ArrayLike], list[tuple[float, float, float]]]:
     if patch_size is None:
         patch_size = (scale[0] * 15, scale[1] * 18, scale[2] * 18)
 
@@ -191,22 +236,22 @@ def extract_beads(
 
 
 def analyze_psf(
-    zyx_patches: List[ArrayLike],
-    peak_coordinates: List[tuple],
-    scale: tuple,
+    zyx_patches: list[ArrayLike],
+    peak_coordinates: list[tuple[int, int, int]],
+    scale: tuple[float, float, float],
     offset: float = 0.0,
     gain: float = 1.0,
     noise: float = 1.0,
     use_robust_1d_fwhm: bool = False,
-):
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Analyze point spread function (PSF) from given 3D patches.
 
-    Parameters:
-    -----------
-    zyx_patches : List[ArrayLike]
+    Parameters
+    ----------
+    zyx_patches : list[ArrayLike]
         List of 3D image patches to be analyzed.
-    peak_coordinates : List[tuple]
+    peak_coordinates : list[tuple]
         List of tuples representing the global ZYX coordinates of the peaks in the data.
     scale : tuple
         Tuple representing the scaling factors for each dimension (Z, Y, X).
@@ -219,8 +264,8 @@ def analyze_psf(
     use_robust_1d_fwhm : bool
         If True, use the "robust" 1D FWHM calculation method.
 
-    Returns:
-    --------
+    Returns
+    -------
     df_gaussian_fit : pandas.DataFrame
         DataFrame containing the results of the Gaussian fit analysis.
     df_1d_peak_width : pandas.DataFrame
@@ -273,8 +318,31 @@ def analyze_psf(
 
 
 def compute_noise_level(
-    zyx_data: ArrayLike, peak_coordinates: List[tuple], patch_size_pix: tuple
-):
+    zyx_data: ArrayLike,
+    peak_coordinates: list[tuple[int, int, int]],
+    patch_size_pix: tuple[int, int, int],
+) -> float:
+    """
+    Compute the noise level in the data by masking out peak regions.
+
+    Creates a mask that excludes regions around detected peaks and calculates
+    the standard deviation of the remaining background pixels as a measure
+    of noise level.
+
+    Parameters
+    ----------
+    zyx_data : ArrayLike
+        3D array of image data with shape (Z, Y, X).
+    peak_coordinates : List[tuple]
+        List of tuples containing (z, y, x) coordinates of detected peaks.
+    patch_size_pix : tuple
+        Tuple of patch sizes in pixels for each dimension (Z, Y, X).
+
+    Returns
+    -------
+    float
+        Standard deviation of the background pixels (noise level).
+    """
     # Mask out the peaks
     mask = np.ones_like(zyx_data, dtype=bool)
     half_patch = [size // 2 for size in patch_size_pix]
@@ -292,7 +360,29 @@ def compute_noise_level(
     return np.std(zyx_data[mask])
 
 
-def calculate_robust_peak_widths(zyx_data: ArrayLike, zyx_scale: tuple):
+def calculate_robust_peak_widths(
+    zyx_data: ArrayLike, zyx_scale: tuple[float, float, float]
+) -> list[float]:
+    """
+    Calculate full width at half maximum (FWHM) using a robust method.
+
+    Uses parabola fitting to find the peak position and linear interpolation
+    to determine the FWHM along each axis. This method is more robust to noise
+    than direct peak finding methods.
+
+    Parameters
+    ----------
+    zyx_data : ArrayLike
+        3D array of image data with shape (Z, Y, X).
+    zyx_scale : tuple
+        Tuple of voxel scaling factors for each dimension (Z, Y, X).
+
+    Returns
+    -------
+    list[float]
+        List of FWHM values in physical units for each dimension [Z, Y, X].
+        Returns [0.0, 0.0, 0.0] if calculation fails for any dimension.
+    """
     shape_Z, shape_Y, shape_X = zyx_data.shape
 
     slices = (
@@ -332,7 +422,28 @@ def calculate_robust_peak_widths(zyx_data: ArrayLike, zyx_scale: tuple):
     return fwhm
 
 
-def calculate_peak_widths(zyx_data: ArrayLike, zyx_scale: tuple):
+def calculate_peak_widths(
+    zyx_data: ArrayLike, zyx_scale: tuple[float, float, float]
+) -> tuple[float, float, float]:
+    """
+    Calculate full width at half maximum (FWHM) using scipy's peak_widths function.
+
+    Extracts 1D profiles along each axis through the center of the data and
+    calculates FWHM using scipy.signal.peak_widths.
+
+    Parameters
+    ----------
+    zyx_data : ArrayLike
+        3D array of image data with shape (Z, Y, X).
+    zyx_scale : tuple
+        Tuple of voxel scaling factors for each dimension (Z, Y, X).
+
+    Returns
+    -------
+    tuple[float, float, float]
+        Tuple of FWHM values in physical units for (Z, Y, X) dimensions.
+        Returns (0.0, 0.0, 0.0) if calculation fails.
+    """
     scale_Z, scale_Y, scale_X = zyx_scale
     shape_Z, shape_Y, shape_X = zyx_data.shape
 
@@ -347,12 +458,36 @@ def calculate_peak_widths(zyx_data: ArrayLike, zyx_scale: tuple):
 
 
 def plot_psf_slices(
-    plots_dir: str,
-    beads: List[ArrayLike],
-    zyx_scale: tuple,
-    axis_labels: tuple,
-    bead_numbers: list,
-):
+    plots_dir: Path,
+    beads: list[ArrayLike],
+    zyx_scale: tuple[float, float, float],
+    axis_labels: tuple[str, str, str],
+    bead_numbers: list[int],
+) -> Path:
+    """
+    Generate a multi-panel plot showing PSF slices for multiple beads.
+
+    Creates a figure with 3 rows (XY, XZ, YZ slices) and N columns (one per bead),
+    displaying the point spread function at the center slice of each dimension.
+
+    Parameters
+    ----------
+    plots_dir : str
+        Directory path where the plot will be saved.
+    beads : List[ArrayLike]
+        List of 3D bead patch arrays, each with shape (Z, Y, X).
+    zyx_scale : tuple
+        Tuple of voxel scaling factors for each dimension (Z, Y, X).
+    axis_labels : tuple
+        Tuple of axis label strings for the dimensions (e.g., ('Z', 'Y', 'X')).
+    bead_numbers : list
+        List of bead identifiers/numbers for labeling each column.
+
+    Returns
+    -------
+    Path
+        Path to the saved plot file (beads_psf_slices.png).
+    """
     num_beads = len(beads)
     scale_Z, scale_Y, scale_X = zyx_scale
     shape_Z, shape_Y, shape_X = beads[0].shape
@@ -401,7 +536,48 @@ def plot_psf_slices(
     return bead_psf_slices_path
 
 
-def plot_fwhm_vs_acq_axes(plots_dir: str, x, y, z, fwhm_x, fwhm_y, fwhm_z, axis_labels: tuple):
+def plot_fwhm_vs_acq_axes(
+    plots_dir: Path,
+    x: ArrayLike,
+    y: ArrayLike,
+    z: ArrayLike,
+    fwhm_x: ArrayLike,
+    fwhm_y: ArrayLike,
+    fwhm_z: ArrayLike,
+    axis_labels: tuple[str, str, str],
+) -> list[Path]:
+    """
+    Plot FWHM measurements as a function of acquisition position along each axis.
+
+    Creates separate plots for each acquisition axis showing how FWHM varies
+    with position. Each plot shows FWHM for two axes on the primary y-axis
+    and FWHM for the third axis on a secondary y-axis.
+
+    Parameters
+    ----------
+    plots_dir : str
+        Directory path where plots will be saved.
+    x : ArrayLike
+        X-coordinates of measurement positions.
+    y : ArrayLike
+        Y-coordinates of measurement positions.
+    z : ArrayLike
+        Z-coordinates of measurement positions.
+    fwhm_x : ArrayLike
+        FWHM values measured along the X dimension.
+    fwhm_y : ArrayLike
+        FWHM values measured along the Y dimension.
+    fwhm_z : ArrayLike
+        FWHM values measured along the Z dimension.
+    axis_labels : tuple
+        Tuple of axis label strings for the dimensions (e.g., ('Z', 'Y', 'X')).
+
+    Returns
+    -------
+    list[Path]
+        List of paths to the saved plot files (one per axis).
+    """
+
     def plot_fwhm_vs_acq_axis(out_dir: str, x, fwhm_x, fwhm_y, fwhm_z, x_axis_label: str):
         fig, ax = plt.subplots(1, 1)
         artist1 = ax.plot(x, fwhm_x, 'o', x, fwhm_y, 'o')
@@ -422,7 +598,40 @@ def plot_fwhm_vs_acq_axes(plots_dir: str, x, y, z, fwhm_x, fwhm_y, fwhm_z, axis_
     return out_dirs
 
 
-def plot_psf_amp(plots_dir: str, x, y, z, amp, axis_labels: tuple):
+def plot_psf_amp(
+    plots_dir: Path,
+    x: ArrayLike,
+    y: ArrayLike,
+    z: ArrayLike,
+    amp: ArrayLike,
+    axis_labels: tuple[str, str, str],
+) -> tuple[Path, Path]:
+    """
+    Plot PSF amplitude as a function of spatial position.
+
+    Creates two plots: one showing amplitude in the XY plane as a scatter plot
+    with color-coded amplitude, and another showing amplitude vs Z position.
+
+    Parameters
+    ----------
+    plots_dir : str
+        Directory path where plots will be saved.
+    x : ArrayLike
+        X-coordinates of PSF measurements.
+    y : ArrayLike
+        Y-coordinates of PSF measurements.
+    z : ArrayLike
+        Z-coordinates of PSF measurements.
+    amp : ArrayLike
+        Amplitude values for each PSF measurement.
+    axis_labels : tuple
+        Tuple of axis label strings for the dimensions (e.g., ('Z', 'Y', 'X')).
+
+    Returns
+    -------
+    tuple[Path, Path]
+        Tuple of paths to the saved plot files (psf_amp_xy.png, psf_amp_z.png).
+    """
     psf_amp_xy_path = plots_dir / 'psf_amp_xy.png'
     fig, ax = plt.subplots(1, 1)
 
@@ -453,21 +662,21 @@ def plot_psf_amp(plots_dir: str, x, y, z, amp, axis_labels: tuple):
 def _generate_html(
     dataset_name: str,
     data_path: str,
-    dataset_scale: tuple,
-    num_beads_total_good_bad: tuple,
+    dataset_scale: tuple[float, float, float],
+    num_beads_total_good_bad: tuple[int, int, int],
     snr_mean: float,
     snr_std: float,
-    fwhm_1d_mean: tuple,
-    fwhm_1d_std: tuple,
-    fwhm_3d_mean: tuple,
-    fwhm_3d_std: tuple,
-    fwhm_pc_mean: tuple,
+    fwhm_1d_mean: tuple[float, float, float],
+    fwhm_1d_std: tuple[float, float, float],
+    fwhm_3d_mean: tuple[float, float, float],
+    fwhm_3d_std: tuple[float, float, float],
+    fwhm_pc_mean: tuple[float, float, float],
     bead_psf_slices_path: str,
-    fwhm_vs_acq_axes_paths: list,
-    psf_amp_paths: list,
-    axis_labels: tuple,
+    fwhm_vs_acq_axes_paths: list[str],
+    psf_amp_paths: list[str],
+    axis_labels: tuple[str, str, str],
     fwhm_plot_type: str,
-):
+) -> str:
 
     # string indents need to be like that, otherwise this turns into a code block
     report_str = f'''
@@ -716,7 +925,7 @@ def _characterize_psf(
     output_report_path: str,
     input_dataset_path: str,
     input_dataset_name: str,
-):
+) -> np.ndarray:
     settings_dict = settings.model_dump()
     patch_size = settings_dict.pop("patch_size")
     axis_labels = settings_dict.pop("axis_labels")
@@ -792,7 +1001,7 @@ def _characterize_psf(
 @config_filepath()
 @output_dirpath()
 def characterize_psf_cli(
-    input_position_dirpaths: List[str],
+    input_position_dirpaths: list[str],
     config_filepath: Path,
     output_dirpath: str,
 ):
