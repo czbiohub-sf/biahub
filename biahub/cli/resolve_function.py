@@ -1,5 +1,6 @@
-import numpy as np
 from collections.abc import Callable
+
+import numpy as np
 
 # List of modules to scan for functions - ultrack imported only if available
 VALID_MODULES = {"np": np}
