@@ -17,7 +17,6 @@ from biahub.cli.utils import (
     model_to_yaml,
     yaml_to_model,
 )
-from biahub.registration.ants import ants_registration
 from biahub.registration.beads import beads_based_registration
 from biahub.registration.manual import user_assisted_registration
 from biahub.registration.utils import evaluate_transforms, plot_translations
@@ -27,6 +26,7 @@ from biahub.settings import (
     StabilizationSettings,
 )
 
+from biahub.registration.ants import estimate_tczyx
 
 def estimate_registration(
     source_position_dirpaths: list[str],
@@ -121,13 +121,16 @@ def estimate_registration(
             sbatch_filepath=sbatch_filepath,
             output_folder_path=output_dir,
         )
+        for t in transforms:
+            print(t.matrix)
+        return
 
     elif settings.estimation_method == "ants":
-        transforms = ants_registration(
-            source_data_tczyx=source_data,
-            target_data_tczyx=target_data,
-            source_channel_index=source_channel_index,
-            target_channel_index=target_channel_index,
+        transforms = estimate_tczyx(
+            mov_tczyx=source_data,
+            ref_tczyx=target_data,
+            mov_channel_index=source_channel_index,
+            ref_channel_index=target_channel_index,
             ants_registration_settings=settings.ants_registration_settings,
             affine_transform_settings=settings.affine_transform_settings,
             sbatch_filepath=sbatch_filepath,
