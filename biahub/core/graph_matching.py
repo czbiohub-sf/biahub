@@ -617,8 +617,8 @@ class GraphMatcher:
         as the feature vectors.
         """
         # Get descriptors
-        mov_desc = moving.edge_descriptors
-        ref_desc = reference.edge_descriptors
+        mov_desc = moving.nodes
+        ref_desc = reference.nodes
 
         if verbose:
             print(
