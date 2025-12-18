@@ -191,6 +191,9 @@ class AffineTransformSettings(MyBaseModel):
 
 
 class AntsRegistrationSettings(MyBaseModel):
+    crop: bool = False
+    ref_mask_radius: float = 0.8
+    clip: bool = True
     sobel_filter: bool = False
 
 
