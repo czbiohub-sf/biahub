@@ -570,3 +570,23 @@ def find_overlapping_volume(
 
 def rescale_voxel_size(affine_matrix, input_scale):
     return np.linalg.norm(affine_matrix, axis=1) * input_scale
+
+
+def load_transforms(transforms_path: Path, T: int, verbose: bool = False) -> list[ArrayLike]:
+    # Load the transforms
+    transforms = []
+    for t in range(T):
+        file_path = transforms_path / f"{t}.npy"
+        if not os.path.exists(file_path):
+            transforms.append(None)
+            if verbose:
+                click.echo(f"Transform for timepoint {t} not found.")
+
+        else:
+            matrix = np.load(file_path)
+            transforms.append(matrix.tolist())
+
+            if verbose:
+                click.echo(f"Transform for timepoint {t}: {matrix}")
+
+    return transforms
