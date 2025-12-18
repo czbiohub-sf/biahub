@@ -16,7 +16,9 @@ from skimage import filters
 from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
+
 from biahub.cli.slurm import wait_for_jobs_to_finish
+from biahub.registration.transform import Transform
 from biahub.cli.utils import _check_nan_n_zeros, estimate_resources
 from biahub.registration.utils import (
     convert_transform_to_ants,
@@ -43,7 +45,7 @@ def _optimize_registration(
     slurm: bool = False,
     t_idx: int = 0,
     output_folder_path: str | None = None,
-) -> np.ndarray | None:
+) -> Transform | None:
     """
     Optimize the affine transform between source and target channels using ANTs library.
 
@@ -78,7 +80,7 @@ def _optimize_registration(
 
     Returns
     -------
-    np.ndarray | None
+    Transform | None
         Optimized affine transform matrix or None if the input data contains NaN or zeros.
 
     Notes
@@ -92,6 +94,7 @@ def _optimize_registration(
 
     source_czyx = np.asarray(source_czyx).astype(np.float32)
     target_czyx = np.asarray(target_czyx).astype(np.float32)
+    print(f"initial_tform: {initial_tform}")
 
     if target_mask_radius is not None and not (0 < target_mask_radius <= 1):
         raise ValueError(
@@ -100,8 +103,8 @@ def _optimize_registration(
 
     if _check_nan_n_zeros(source_czyx) or _check_nan_n_zeros(target_czyx):
         return None
-
-    t_form_ants = convert_transform_to_ants(initial_tform)
+    initial_tform = Transform(matrix=initial_tform)
+    t_form_ants = initial_tform.to_ants()
 
     target_zyx = target_czyx[target_channel_index]
     if target_zyx.ndim != 3:
@@ -185,20 +188,22 @@ def _optimize_registration(
 
     tx_opt_mat = ants.read_transform(reg["fwdtransforms"][0])
     tx_opt_numpy = convert_transform_to_numpy(tx_opt_mat)
-
+    print(f"tx_opt_numpy: {tx_opt_numpy}")
     # Account for tx_opt being estimated at a crop rather than starting at the origin,
     # i.e. (0, 0, 0) of the image.
     shift_to_roi_np = np.eye(4)
     shift_to_roi_np[:3, -1] = _offset
     shift_back_np = np.eye(4)
     shift_back_np[:3, -1] = -_offset
-    composed_matrix = initial_tform @ shift_to_roi_np @ tx_opt_numpy @ shift_back_np
+    composed_matrix = initial_tform.matrix @ shift_to_roi_np @ tx_opt_numpy @ shift_back_np
 
     if slurm:
         output_folder_path.mkdir(parents=True, exist_ok=True)
         np.save(output_folder_path / f"{t_idx}.npy", composed_matrix)
-
-    return composed_matrix
+    print("composed_matrix", composed_matrix)
+    composed_transform = Transform(matrix=composed_matrix)
+    print("composed_transform", composed_transform)
+    return composed_transform
 
 
 def shrink_slice(s: slice, shrink_fraction: float = 0.1, min_width: int = 5) -> slice:
@@ -248,7 +253,7 @@ def ants_registration(
     output_folder_path: Path = None,
     cluster: str = 'local',
     sbatch_filepath: Path = None,
-) -> list[ArrayLike]:
+) -> list[Transform]:
     """
     Perform ants registration of two volumetric image channels.
 
@@ -281,7 +286,7 @@ def ants_registration(
 
     Returns
     -------
-    list[ArrayLike]
+    list[Transform]
         List of affine transformation matrices (4x4), one for each timepoint.
         Invalid or missing transformations are interpolated.
 
@@ -317,7 +322,7 @@ def ants_registration(
     # Submitit executor
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
-
+ 
     click.echo(f"Submitting SLURM estimate regstration jobs with resources: {slurm_args}")
     output_transforms_path = output_folder_path / "xyz_transforms"
     output_transforms_path.mkdir(parents=True, exist_ok=True)
@@ -363,8 +368,9 @@ def ants_registration(
             transforms.append(None)
             click.echo(f"Transform for timepoint {t} not found.")
         else:
-            T_zyx_shift = np.load(file_path).tolist()
-            transforms.append(T_zyx_shift)
+            T_zyx_shift = np.load(file_path)
+            print("T_zyx_shift", T_zyx_shift)
+            transforms.append(T_zyx_shift.tolist())
 
     if len(transforms) != T:
         raise ValueError(
@@ -375,3 +381,5 @@ def ants_registration(
     shutil.rmtree(output_transforms_path)
 
     return transforms
+
+
