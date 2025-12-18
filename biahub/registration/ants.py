@@ -14,7 +14,7 @@ from biahub.cli.parsing import (
 )
 
 from biahub.cli.slurm import wait_for_jobs_to_finish
-from biahub.registration.transform import Transform
+from biahub.core.transform import Transform
 from biahub.cli.utils import _check_nan_n_zeros, estimate_resources
 from biahub.registration.utils import (
     find_lir,
@@ -288,7 +288,7 @@ def estimate_czyx(
         click.echo(f"Composed transform: {composed_transform}")
 
     if composed_transform is None:
-        raise ValueError(f"Failed to estimate registration transform for timepoint.")
+        raise ValueError("Failed to estimate registration transform for timepoint.")
         
     if output_folder_path:
         output_folder_path.mkdir(parents=True, exist_ok=True)
