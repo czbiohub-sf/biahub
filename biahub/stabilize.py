@@ -27,8 +27,8 @@ from biahub.cli.utils import (
     process_single_position_v2,
     yaml_to_model,
 )
+from biahub.core.transform import apply_stabilization_transform
 from biahub.settings import StabilizationSettings
-from biahub.transforms.apply import apply_stabilization_transform
 
 
 def stabilize(

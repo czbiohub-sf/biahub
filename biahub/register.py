@@ -25,9 +25,9 @@ from biahub.cli.utils import (
     process_single_position_v2,
     yaml_to_model,
 )
+from biahub.core.transform import apply_affine_transform
 from biahub.registration.utils import find_overlapping_volume, rescale_voxel_size
 from biahub.settings import RegistrationSettings
-from biahub.transforms.apply import apply_affine_transform
 
 
 @click.command("register")
