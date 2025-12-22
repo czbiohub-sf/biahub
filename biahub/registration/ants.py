@@ -12,10 +12,9 @@ from skimage import filters
 from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
-
 from biahub.cli.slurm import wait_for_jobs_to_finish
-from biahub.core.transform import Transform
 from biahub.cli.utils import _check_nan_n_zeros, estimate_resources
+from biahub.core.transform import Transform
 from biahub.registration.utils import (
     find_lir,
     load_transforms,
@@ -24,31 +23,66 @@ from biahub.settings import (
     AffineTransformSettings,
     AntsRegistrationSettings,
 )
-def estimate_zyx(
-    ref_zyx: np.ndarray,
-    mov_zyx: np.ndarray,
+
+
+def estimate(
+    ref: np.ndarray,
+    mov: np.ndarray,
     verbose: bool = False,
     ants_kwargs: dict = None,
 ) -> tuple[Transform, Transform]:
+    """
+    Estimate affine transformation using ANTs registration.
+
+    Works for both 2D (Y, X) and 3D (Z, Y, X) arrays.
+
+    Parameters
+    ----------
+    ref : np.ndarray
+        Reference image (2D or 3D)
+    mov : np.ndarray
+        Moving image (2D or 3D)
+    verbose : bool
+        Print optimization progress
+    ants_kwargs : dict, optional
+        Additional ANTs parameters
+
+    Returns
+    -------
+    fwd_transform : Transform
+        Forward transformation (mov → ref)
+    inv_transform : Transform
+        Inverse transformation (ref → mov)
+    """
+    if ref.ndim not in (2, 3) or mov.ndim not in (2, 3):
+        raise ValueError(
+            f"Images must be 2D or 3D, got ref.ndim={ref.ndim}, mov.ndim={mov.ndim}"
+        )
+
+    if ref.ndim != mov.ndim:
+        raise ValueError(f"Dimension mismatch: ref.ndim={ref.ndim}, mov.ndim={mov.ndim}")
 
     if ants_kwargs is None:
         ants_kwargs = {
             "type_of_transform": "Similarity",
             "aff_shrink_factors": (6, 3, 1),
             "aff_iterations": (2100, 1200, 50),
-            "aff_smoothing_sigmas": (2, 1, 0), 
+            "aff_smoothing_sigmas": (2, 1, 0),
         }
 
-    mov_ants = ants.from_numpy(mov_zyx)
-    ref_ants = ants.from_numpy(ref_zyx)
+    mov_ants = ants.from_numpy(mov)
+    ref_ants = ants.from_numpy(ref)
 
-    click.echo(f"Optimizing registration parameters using ANTs with kwargs: {ants_kwargs}")
+    if verbose:
+        click.echo(f"Optimizing registration parameters using ANTs with kwargs: {ants_kwargs}")
+
     reg = ants.registration(
         fixed=ref_ants,
         moving=mov_ants,
         **ants_kwargs,
         verbose=verbose,
     )
+
     fwd_transform_mat = ants.read_transform(reg["fwdtransforms"][0])
     inv_transform_mat = ants.read_transform(reg["invtransforms"][0])
 
@@ -57,8 +91,9 @@ def estimate_zyx(
 
     if fwd_transform.matrix is None or inv_transform.matrix is None:
         raise ValueError("Failed to estimate registration transform.")
-    
+
     return fwd_transform, inv_transform
+
 
 def preprocess_czyx(
     mov_czyx: np.ndarray,
@@ -69,7 +104,7 @@ def preprocess_czyx(
     crop: bool = False,
     ref_mask_radius: float | None = None,
     clip: bool = False,
-    sobel_fitler: bool = False,
+    sobel_filter: bool = False,
     verbose: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
@@ -93,7 +128,7 @@ def preprocess_czyx(
         Radius of the circular mask which will be applied to the reference channel. By default None in which case no masking will be applied.
     clip : bool, optional
         Whether to clip the moving and reference channels to reasonable (hardcoded) values, by default False.
-    sobel_fitler : bool, optional
+    sobel_filter : bool, optional
         Whether to apply Sobel filter to the moving and reference channels, by default False.
     verbose : bool, optional
         Whether to print verbose output during registration, by default False.
@@ -153,7 +188,9 @@ def preprocess_czyx(
     _offset = np.zeros(3, dtype=np.float32)
     if crop:
         if verbose:
-            click.echo("Estimating crop for moving and reference channels to overlapping region...")
+            click.echo(
+                "Estimating crop for moving and reference channels to overlapping region..."
+            )
         mask = (ref_zyx != 0) & (mov_channels[0] != 0)
 
         # Can be refactored with code in cropping PR #88
@@ -189,7 +226,7 @@ def preprocess_czyx(
             np.clip(_channel, 110, np.quantile(_channel, 0.99)) for _channel in mov_channels
         ]
 
-    if sobel_fitler:
+    if sobel_filter:
         if verbose:
             click.echo("Applying Sobel filter to moving and reference channels...")
         ref_zyx = filters.sobel(ref_zyx)
@@ -198,6 +235,7 @@ def preprocess_czyx(
     mov_zyx = np.sum(mov_channels, axis=0)
 
     return ref_zyx, mov_zyx, _offset
+
 
 def estimate_czyx(
     mov_czyx: np.ndarray,
@@ -208,7 +246,7 @@ def estimate_czyx(
     crop: bool = False,
     ref_mask_radius: float | None = None,
     clip: bool = False,
-    sobel_fitler: bool = False,
+    sobel_filter: bool = False,
     verbose: bool = False,
     t_idx: int = 0,
     output_folder_path: str | None = None,
@@ -234,7 +272,7 @@ def estimate_czyx(
         Radius of the circular mask which will be applied to the reference channel. By default None in which case no masking will be applied.
     clip : bool, optional
         Whether to clip the moving and reference channels to reasonable (hardcoded) values, by default False.
-    sobel_fitler : bool, optional
+    sobel_filter : bool, optional
         Whether to apply Sobel filter to the moving and reference channels, by default False.
     verbose : bool, optional
         Whether to print verbose output during registration, by default False.
@@ -259,22 +297,22 @@ def estimate_czyx(
     initial_tform = Transform(matrix=initial_tform)
 
     ref_zyx, mov_zyx, preprocess_offset = preprocess_czyx(
-        mov_czyx = mov_czyx,
-        ref_czyx = ref_czyx,
-        initial_tform = initial_tform,
-        mov_channel_index = mov_channel_index,
-        ref_channel_index = ref_channel_index,
-        crop = crop,
-        clip = clip,
+        mov_czyx=mov_czyx,
+        ref_czyx=ref_czyx,
+        initial_tform=initial_tform,
+        mov_channel_index=mov_channel_index,
+        ref_channel_index=ref_channel_index,
+        crop=crop,
+        clip=clip,
         ref_mask_radius=ref_mask_radius,
-        sobel_fitler=sobel_fitler,
+        sobel_filter=sobel_filter,
         verbose=verbose,
     )
 
-    fwd_transform, _ = estimate_zyx(
-        ref_zyx = ref_zyx,
-        mov_zyx = mov_zyx,
-        verbose =verbose,
+    fwd_transform, inv_transform = estimate(
+        ref_zyx=ref_zyx,
+        mov_zyx=mov_zyx,
+        verbose=verbose,
     )
 
     composed_transform = postprocess_transform(
@@ -285,15 +323,18 @@ def estimate_czyx(
     if verbose:
         click.echo(f"Initial transform: {initial_tform}")
         click.echo(f"Forward transform: {fwd_transform}")
+        click.echo(f"Inverse transform: {inv_transform}")
         click.echo(f"Composed transform: {composed_transform}")
 
     if composed_transform is None:
         raise ValueError("Failed to estimate registration transform for timepoint.")
-        
+
     if output_folder_path:
         output_folder_path.mkdir(parents=True, exist_ok=True)
         if verbose:
-            click.echo(f"Saving registration transform for timepoint {t_idx} to {output_folder_path}")
+            click.echo(
+                f"Saving registration transform for timepoint {t_idx} to {output_folder_path}"
+            )
 
         np.save(output_folder_path / f"{t_idx}.npy", composed_transform.matrix)
 
@@ -311,12 +352,14 @@ def postprocess_transform(
 
     shift_to_roi = np.eye(4)
     shift_to_roi[:3, -1] = preprocess_offset
-    
+
     shift_back = np.eye(4)
     shift_back[:3, -1] = -preprocess_offset
 
-    composed_matrix = initial_transform.matrix @ shift_to_roi @ fwd_transform.matrix @ shift_back
-    
+    composed_matrix = (
+        initial_transform.matrix @ shift_to_roi @ fwd_transform.matrix @ shift_back
+    )
+
     return Transform(matrix=composed_matrix)
 
 
@@ -398,7 +441,7 @@ def estimate_tczyx(
     # Submitit executor
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
- 
+
     click.echo(f"Submitting SLURM estimate regstration jobs with resources: {slurm_args}")
     output_transforms_path = output_folder_path / "xyz_transforms"
     output_transforms_path.mkdir(parents=True, exist_ok=True)
@@ -419,7 +462,7 @@ def estimate_tczyx(
                 crop=ants_registration_settings.crop,
                 ref_mask_radius=ants_registration_settings.ref_mask_radius,
                 clip=ants_registration_settings.clip,
-                sobel_fitler=ants_registration_settings.sobel_filter,
+                sobel_filter=ants_registration_settings.sobel_filter,
                 verbose=verbose,
                 t_idx=t,
                 output_folder_path=output_transforms_path,
@@ -441,5 +484,3 @@ def estimate_tczyx(
             f"Number of transforms {len(transforms)} does not match number of timepoints {T}"
         )
     return transforms
-
-
