@@ -15,7 +15,6 @@ from biahub.cli.parsing import (
     sbatch_filepath,
 )
 from biahub.cli.utils import yaml_to_model
-from biahub.registration.beads import estimate_xyz_stabilization_with_beads
 from biahub.registration.phase_cross_correlation import (
     estimate_xy_stabilization,
     estimate_xyz_stabilization_pcc,
@@ -213,19 +212,24 @@ def estimate_stabilization(
                 )
 
         elif stabilization_method == "beads":
+            from biahub.registration.beads import estimate_tczyx
 
             click.echo("Estimating xyz stabilization parameters with beads")
             with open_ome_zarr(input_position_dirpaths[0], mode="r") as beads_position:
                 source_channels = beads_position.channel_names
                 source_channel_index = source_channels.index(stabilization_estimation_channel)
-                channel_tzyx = beads_position.data.dask_array()[:, source_channel_index]
+                channel_tczyx = beads_position.data.dask_array()
 
-            xyz_transforms = estimate_xyz_stabilization_with_beads(
-                channel_tzyx=channel_tzyx,
+            xyz_transforms = estimate_tczyx(
+                mov_tczyx=channel_tczyx,
+                ref_tczyx=channel_tczyx,
+                mov_channel_index=source_channel_index,
+                ref_channel_index=source_channel_index,
                 beads_match_settings=settings.beads_match_settings,
                 affine_transform_settings=settings.affine_transform_settings,
                 verbose=verbose,
                 output_folder_path=output_dirpath,
+                mode="stabilization",
                 cluster=cluster,
                 sbatch_filepath=sbatch_filepath,
             )

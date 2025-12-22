@@ -17,7 +17,6 @@ from biahub.cli.utils import (
     model_to_yaml,
     yaml_to_model,
 )
-from biahub.registration.beads import beads_based_registration
 from biahub.registration.manual import user_assisted_registration
 from biahub.registration.utils import evaluate_transforms, plot_translations
 from biahub.settings import (
@@ -26,7 +25,6 @@ from biahub.settings import (
     StabilizationSettings,
 )
 
-from biahub.registration.ants import estimate_tczyx
 
 def estimate_registration(
     source_position_dirpaths: list[str],
@@ -110,10 +108,13 @@ def estimate_registration(
     eval_transform_settings = settings.eval_transform_settings
 
     if settings.estimation_method == "beads":
-        transforms = beads_based_registration(
-            config=settings,
-            source_channel_tzyx=source_channel_data,
-            target_channel_tzyx=target_channel_data,
+        from biahub.registration.methods.bead_matching import estimate_tczyx
+
+        transforms = estimate_tczyx(
+            mov_tczyx=source_data,
+            ref_tczyx=target_data,
+            mov_channel_index=source_channel_index,
+            ref_channel_index=target_channel_index,
             beads_match_settings=settings.beads_match_settings,
             affine_transform_settings=settings.affine_transform_settings,
             verbose=settings.verbose,
@@ -121,11 +122,10 @@ def estimate_registration(
             sbatch_filepath=sbatch_filepath,
             output_folder_path=output_dir,
         )
-        for t in transforms:
-            print(t.matrix)
-        return
 
     elif settings.estimation_method == "ants":
+        from biahub.registration.ants import estimate_tczyx
+
         transforms = estimate_tczyx(
             mov_tczyx=source_data,
             ref_tczyx=target_data,
