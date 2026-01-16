@@ -44,3 +44,29 @@ make lint # run flark8 linting
 make pre-commit # run pre-commit hooks on all files
 make test # run pytest
 ```
+
+## Building documentation locally
+
+The documentation is built using [Zensical](https://zensical.org). To preview the docs locally:
+
+1. Install Zensical:
+
+```sh
+pip install zensical
+```
+
+2. Serve the documentation locally:
+
+```sh
+zensical serve
+```
+
+This will start a local server at `http://localhost:8000` with live reload enabled.
+
+3. To build the static site:
+
+```sh
+zensical build
+```
+
+The built site will be in the `site/` directory.

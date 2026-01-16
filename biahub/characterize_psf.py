@@ -19,9 +19,6 @@ import torch
 import torch.nn.functional as F
 
 from iohub.ngff import open_ome_zarr
-from napari_psf_analysis.psf_analysis.extract.BeadExtractor import BeadExtractor
-from napari_psf_analysis.psf_analysis.image import Calibrated3DImage
-from napari_psf_analysis.psf_analysis.psf import PSF
 from numpy.typing import ArrayLike
 from scipy.interpolate import interp1d
 from scipy.signal import peak_widths
@@ -31,6 +28,7 @@ import biahub.artefacts
 from biahub.cli.parsing import config_filepath, input_position_dirpaths, output_dirpath
 from biahub.cli.utils import yaml_to_model
 from biahub.settings import CharacterizeSettings
+from biahub.vendor.napari_psf_analysis import PSF, BeadExtractor, Calibrated3DImage
 
 
 def _make_plots(
