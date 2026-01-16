@@ -21,7 +21,7 @@ classifiers = [
 # list package dependencies here
 dependencies = [
   "stitch @ git+https://github.com/ahillsley/stitching@jen",
-  "iohub>=0.2,<0.3",
+  "iohub[tensorstore]>=0.2,<0.3",
   "matplotlib",
   "napari",
   "PyQt6",
@@ -48,7 +48,6 @@ dependencies = [
   "numba>=0.58.0",
   "llvmlite>=0.41.0",
   "humanize",
-  "tensorstore",
 ]
 
 [project.optional-dependencies]

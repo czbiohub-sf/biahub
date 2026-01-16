@@ -1,11 +1,10 @@
 import datetime
 
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 import click
 import submitit
-import tensorstore as ts
 
 from iohub.ngff import open_ome_zarr
 
@@ -18,82 +17,26 @@ from biahub.cli.parsing import (
 from biahub.cli.utils import estimate_resources
 
 
-def _write_ts_downsampled(
-    source_ts: ts.TensorStore,
-    target_ts: ts.TensorStore,
-    downsample_factors: list[int],
-    method: str,
-    level: int,
-) -> None:
-    """
-    Tensorstore downsampling with chunking.
-
-    Parameters
-    ----------
-    source_ts : ts.TensorStore
-        Source tensorstore Zarr to downsample from
-    target_ts : ts.TensorStore
-        Target tensorstore Zarr to write downsampled data to
-    downsample_factors : list[int]
-        Downsampling factors for each dimension
-    method : str
-        Downsampling method (e.g., 'mean', 'max', 'min')
-    level : int
-        Pyramid level being processed
-    """
-    downsampled = ts.downsample(
-        source_ts, downsample_factors=downsample_factors, method=method
-    )
-
-    step = target_ts.chunk_layout.write_chunk.shape[0]
-
-    for start in range(0, downsampled.shape[0], step):
-        with ts.Transaction() as txn:
-            target_with_txn = target_ts.with_transaction(txn)
-            downsampled_with_txn = downsampled.with_transaction(txn)
-            stop = min(start + step, downsampled.shape[0])
-            target_with_txn[start:stop].write(downsampled_with_txn[start:stop]).result()
-
-
 def pyramid(fov_path: Path, levels: int, method: str) -> None:
     """
-    Create pyramid levels for a single field of view using tensorstore downsampling.
+    Create pyramid levels for a single field of view.
 
-    This function uses cascade downsampling, where each level is downsampled from
-    the previous level rather than from level 0. This avoids aliasing artifacts
-    and chunk boundary issues that occur with large downsample factors.
+    Delegates to iohub's Position.compute_pyramid() which uses cascade downsampling,
+    where each level is downsampled from the previous level rather than from level 0.
+    This avoids aliasing artifacts and chunk boundary issues.
 
     Parameters
     ----------
     fov_path : Path
         Path to the FOV position directory
     levels : int
-        Number of downsampling levels to create
+        Total number of resolution levels (including level 0).
+        E.g., levels=4 creates arrays "0", "1", "2", "3".
     method : str
         Downsampling method (e.g., 'mean', 'max', 'min')
     """
-
     with open_ome_zarr(fov_path, mode="r+") as dataset:
-        dataset.initialize_pyramid(levels=levels + 1)
-
-        for level in range(1, levels + 1):
-            previous_level = dataset[str(level - 1)].tensorstore()
-
-            current_scale = dataset.get_effective_scale(str(level))
-            previous_scale = dataset.get_effective_scale(str(level - 1))
-            downsample_factors = [
-                int(round(current_scale[i] / previous_scale[i]))
-                for i in range(len(current_scale))
-            ]
-
-            target_store = dataset[str(level)].tensorstore()
-            _write_ts_downsampled(
-                source_ts=previous_level,
-                target_ts=target_store,
-                downsample_factors=downsample_factors,
-                method=method,
-                level=level,
-            )
+        dataset.compute_pyramid(levels=levels, method=method)
 
     click.echo(f"Completed pyramid for FOV: {fov_path}")
 
@@ -106,9 +49,9 @@ def pyramid(fov_path: Path, levels: int, method: str) -> None:
     "--levels",
     "-lv",
     type=int,
-    default=3,
+    default=4,
     show_default=True,
-    help="Number of downsampling levels to create.",
+    help="Total number of resolution levels including level 0. E.g., levels=4 creates 0, 1, 2, 3.",
 )
 @click.option(
     "--method",
@@ -129,24 +72,24 @@ def pyramid(fov_path: Path, levels: int, method: str) -> None:
 )
 def pyramid_cli(
     input_position_dirpaths: List[Path],
-    levels: int = 3,
+    levels: int = 4,
     method: str = "mean",
-    sbatch_filepath: Optional[Path] = None,
+    sbatch_filepath: Path | None = None,
     local: bool = False,
 ) -> None:
     """
-    Creates additional levels of multi-scale pyramids for OME-Zarr datasets.
+    Creates multi-scale pyramids for OME-Zarr datasets.
 
-    Uses tensorstore downsampling to generate progressively downscaled pyramid levels.
-    Setting levels=0 skips pyramid creation. For levels > 0, creates n additional pyramid
-    levels with 2^i downsampling (e.g., levels=3 creates 2x, 4x, and 8x downsampled versions).
+    Uses cascade downsampling to generate progressively downscaled pyramid levels.
+    Each level is 2x downsampled from the previous (e.g., levels=4 creates the original
+    plus 2x, 4x, and 8x downsampled versions as arrays "0", "1", "2", "3").
 
     Example:
-        biahub pyramid -i ./data.zarr/*/*/* --levels 5 --local
-        biahub pyramid -i ./data.zarr/0/0/0 -lv 3 --method max
+        biahub pyramid -i ./data.zarr/*/*/* --levels 4 --local
+        biahub pyramid -i ./data.zarr/0/0/0 -lv 5 --method max
     """
-    if levels == 0:
-        click.echo("No pyramid levels to create.")
+    if levels <= 1:
+        click.echo("No pyramid levels to create (levels must be > 1).")
         return
 
     # Estimate resources based on first FOV data shape
