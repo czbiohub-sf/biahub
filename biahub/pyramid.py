@@ -35,10 +35,10 @@ def pyramid(fov_path: Path, levels: int, method: str) -> None:
     method : str
         Downsampling method (e.g., 'mean', 'max', 'min')
     """
+    click.echo(f"Computing pyramid for FOV: {fov_path}")
+
     with open_ome_zarr(fov_path, mode="r+") as dataset:
         dataset.compute_pyramid(levels=levels, method=method)
-
-    click.echo(f"Completed pyramid for FOV: {fov_path}")
 
 
 @click.command("pyramid")
