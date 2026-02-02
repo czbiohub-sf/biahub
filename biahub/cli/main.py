@@ -169,6 +169,11 @@ COMMANDS = [
         "import_path": "biahub.track.track_cli",
         "help": "Track objects in 2D/3D time-lapse microscopy",
     },
+    {
+        "name": "convert",
+        "import_path": "biahub.convert.convert_cli",
+        "help": "Convert Zarr V2 OME-NGFF v0.4 to V3 OME-NGFF v0.5",
+    },
 ]
 
 
