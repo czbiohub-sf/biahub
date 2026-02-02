@@ -114,6 +114,40 @@ def get_3D_rotation_matrix(
     return rotation_matrix
 
 
+def get_3D_fliplr_matrix(start_shape_zyx: tuple, end_shape_zyx: tuple = None) -> np.ndarray:
+    """
+    Get 3D left-right flip transformation matrix.
+
+    Parameters
+    ----------
+    start_shape_zyx : tuple
+        Shape of the source volume (Z, Y, X).
+    end_shape_zyx : tuple, optional
+        Shape of the target volume (Z, Y, X). If None, uses start_shape_zyx.
+
+    Returns
+    -------
+    np.ndarray
+        4x4 transformation matrix for left-right flip.
+    """
+    center_X_start = start_shape_zyx[-1] / 2
+    if end_shape_zyx is None:
+        center_X_end = center_X_start
+    else:
+        center_X_end = end_shape_zyx[-1] / 2
+
+    # Flip matrix: reflects across X axis and translates to maintain center
+    flip_matrix = np.array(
+        [
+            [1, 0, 0, 0],  # Z unchanged
+            [0, 1, 0, 0],  # Y unchanged
+            [0, 0, -1, 2 * center_X_end],  # X flipped and translated
+            [0, 0, 0, 1],  # Homogeneous coordinate
+        ]
+    )
+    return flip_matrix
+
+
 def convert_transform_to_ants(T_numpy: np.ndarray):
     """Homogeneous 3D transformation matrix from numpy to ants
 

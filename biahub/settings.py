@@ -195,6 +195,7 @@ class AntsRegistrationSettings(MyBaseModel):
 class ManualRegistrationSettings(MyBaseModel):
     time_index: int = 0
     affine_90degree_rotation: int = 0
+    affine_fliplr: bool = False
 
 
 class EstimateRegistrationSettings(MyBaseModel):
@@ -373,7 +374,9 @@ class ConcatenateSettings(MyBaseModel):
     Y_slice: Union[list, list[Union[list, Literal["all"]]], Literal["all"]] = "all"
     Z_slice: Union[list, list[Union[list, Literal["all"]]], Literal["all"]] = "all"
     chunks_czyx: Union[Literal[None], list[int]] = None
+    shards_ratio: list[int] | None = None
     ensure_unique_positions: Optional[bool] = False
+    output_ome_zarr_version: Literal["0.4", "0.5"] = "0.4"
 
     @field_validator("concat_data_paths")
     @classmethod
