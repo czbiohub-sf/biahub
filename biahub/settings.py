@@ -643,3 +643,24 @@ class SegmentationModel(BaseModel):
 class SegmentationSettings(BaseModel):
     models: Dict[str, SegmentationModel]
     model_config = {"extra": "forbid", "protected_namespaces": ()}
+
+
+class OrganelleSegmentationSettings(MyBaseModel):
+    channels: Dict[str, Dict[str, Any]]
+
+
+class OrganelleFeatureExtractionSettings(MyBaseModel):
+    labels_channel: str
+    intensity_channel: str
+    frangi_channel: Optional[str] = None
+    tracking_csv_path: Optional[str] = None
+    properties: Optional[List[str]] = None
+    extra_properties: Optional[List[str]] = None
+    output_csv_path: str
+
+    @field_validator("tracking_csv_path", mode="before")
+    @classmethod
+    def validate_tracking_csv_path(cls, v):
+        if v is not None and not Path(v).exists():
+            raise ValueError(f"tracking_csv_path does not exist: {v}")
+        return v
