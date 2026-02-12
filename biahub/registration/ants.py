@@ -310,8 +310,8 @@ def estimate_czyx(
     )
 
     fwd_transform, inv_transform = estimate(
-        ref_zyx=ref_zyx,
-        mov_zyx=mov_zyx,
+        ref=ref_zyx,
+        mov=mov_zyx,
         verbose=verbose,
     )
 
