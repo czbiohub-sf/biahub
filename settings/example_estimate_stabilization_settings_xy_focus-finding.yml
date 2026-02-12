@@ -32,6 +32,7 @@ stack_reg_settings:
 
 # Settings for affine transformation estimation (applies to all stabilization methods)
 affine_transform_settings:
+  t_reference: "first" # Reference timepoint for transform
   transform_type: euclidean # Type of transform to estimate "euclidean", "similarity", or "affine"
 
 # Validation and interpolation settings for transform smoothing

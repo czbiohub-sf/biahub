@@ -10,6 +10,7 @@ import submitit
 
 from iohub import open_ome_zarr
 from numpy.typing import ArrayLike
+from scipy.spatial import cKDTree
 from skimage.transform import AffineTransform, EuclideanTransform, SimilarityTransform
 
 from biahub.characterize_psf import detect_peaks
@@ -29,6 +30,55 @@ from biahub.settings import (
     BeadsMatchSettings,
     DetectPeaksSettings,
 )
+
+
+def registration_beads_score(
+    mov_peaks: ArrayLike,
+    ref_peaks: ArrayLike,
+    radius: int = 6,
+    verbose: bool = False,
+):
+    """
+    Compute the score for the beads registration based on the overlap fraction and IoU.
+    between detected bead peaks from LF (ref) and LS (mov) channels.
+
+    Args:
+        ref_peaks: (N_ref, 3) array of LF bead coordinates (z, y, x)
+        mov_peaks: (N_mov, 3) array of LS bead coordinates (z, y, x)
+        matches:   (M, 2) matched indices (optional)
+        radius:    spherical neighborhood radius (voxels)
+        ref_shape: optional 3D shape for visualization masks
+
+    Returns:
+       score: float
+
+    """
+
+    if len(mov_peaks) == 0 or len(ref_peaks) == 0:
+        print("No peaks found, returning nan metrics")
+        return np.nan
+
+    # ---- Overlap counting using KDTree ----
+    mov_tree = cKDTree(mov_peaks)
+
+    ref_peaks_mask = np.zeros(len(ref_peaks), dtype=bool)
+    mov_peaks_mask = np.zeros(len(mov_peaks), dtype=bool)
+
+    for i, p in enumerate(ref_peaks):
+        idx = mov_tree.query_ball_point(p, r=radius)
+        if idx:
+            ref_peaks_mask[i] = True
+            mov_peaks_mask[idx] = True
+
+    peaks_overlap_count = int(ref_peaks_mask.sum())
+
+    # ---- Overlap fraction ----
+    peaks_overlap_fraction = peaks_overlap_count / max(min(len(mov_peaks), len(ref_peaks)), 1)
+
+    if verbose:
+        click.echo(f"Peaks overlap fraction: {peaks_overlap_fraction}")
+
+    return peaks_overlap_fraction
 
 
 def estimate_tczyx(
@@ -201,7 +251,7 @@ def estimate_independently(
     if sbatch_filepath:
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
-    slurm_out_path = output_folder_path / "slurm_output"
+    slurm_out_path = output_folder_path.parent / "slurm_output"
     slurm_out_path.mkdir(parents=True, exist_ok=True)
 
     # Submitit executor
@@ -385,9 +435,10 @@ def matches_from_beads(
         matches,
         mov_graph,
         ref_graph,
-        angle_threshold=beads_match_settings.filter_angle_threshold,
-        min_distance_quantile=beads_match_settings.filter_min_distance_threshold,
-        max_distance_quantile=beads_match_settings.filter_max_distance_threshold,
+        angle_threshold=beads_match_settings.filter_matches_settings.angle_threshold,
+        min_distance_quantile=beads_match_settings.filter_matches_settings.min_distance_quantile,
+        max_distance_quantile=beads_match_settings.filter_matches_settings.max_distance_quantile,
+        direction_threshold=beads_match_settings.filter_matches_settings.direction_threshold,
     )
 
     if verbose:
@@ -509,14 +560,14 @@ def estimate_tzyx(
 
     if mode == "stabilization":
         click.echo("Performing stabilization, aka registration over time in the same file.")
-        if beads_match_settings.t_reference == "first":
+        if affine_transform_settings.t_reference == "first":
             ref_tzyx = np.broadcast_to(mov_tzyx[0], (T, Z, Y, X)).copy()
-        elif beads_match_settings.t_reference == "previous":
+        elif affine_transform_settings.t_reference == "previous":
             ref_tzyx = np.roll(mov_tzyx, shift=-1, axis=0)
             ref_tzyx[0] = mov_tzyx[0]
         else:
             raise ValueError(
-                "Invalid reference. Please use 'first' or 'previous as reference."
+                "Invalid reference. Please use 'first' or 'previous' as reference."
             )
     elif mode == "registration":
         click.echo("Performing registration between different files")
@@ -568,7 +619,8 @@ def estimate(
         If True, prints detailed logs during the process.
     output_filepath : Path
         Path to save the output.
-
+    qc_score_threshold : float
+        Threshold score for the quality control.
     Returns
     -------
     Transform
@@ -587,53 +639,87 @@ def estimate(
     initial_transform = Transform(
         matrix=np.asarray(affine_transform_settings.approx_transform)
     )
-    initial_transform_ants = initial_transform.to_ants()
+    transform = initial_transform
 
     mov_ants = ants.from_numpy(mov)
     ref_ants = ants.from_numpy(ref)
 
-    mov_reg_approx = initial_transform_ants.apply_to_image(
-        mov_ants, reference=ref_ants
-    ).numpy()
+    current_iterations = 0
+    qc_score_threshold = beads_match_settings.qc_settings.score_threshold
+    qc_iterations = beads_match_settings.qc_settings.iterations
 
-    mov_peaks, ref_peaks = peaks_from_beads(
-        mov=mov_reg_approx,
-        ref=ref,
-        mov_peaks_settings=beads_match_settings.source_peaks_settings,
-        ref_peaks_settings=beads_match_settings.target_peaks_settings,
-        verbose=verbose,
-    )
+    while current_iterations < qc_iterations:
+        print(f"Transform: {transform}")
+        mov_reg_approx = (
+            transform.to_ants().apply_to_image(mov_ants, reference=ref_ants).numpy()
+        )
+        mov_peaks, ref_peaks = peaks_from_beads(
+            mov=mov_reg_approx,
+            ref=ref,
+            mov_peaks_settings=beads_match_settings.source_peaks_settings,
+            ref_peaks_settings=beads_match_settings.target_peaks_settings,
+            verbose=verbose,
+        )
+        if (len(mov_peaks) is None) or (len(ref_peaks) is None):
+            click.echo("No beads found, returning the initial transform")
+            break
 
-    matches = matches_from_beads(
-        mov_peaks=mov_peaks,
-        ref_peaks=ref_peaks,
-        beads_match_settings=beads_match_settings,
-        verbose=verbose,
-    )
+        click.echo("Performing quality control")
+        quality_score = registration_beads_score(
+            mov_peaks=mov_peaks,
+            ref_peaks=ref_peaks,
+            radius=beads_match_settings.qc_settings.score_centroid_mask_radius,
+            verbose=verbose,
+        )
 
-    if len(matches) < 3:
-        click.echo('Source and target beads were not matches successfully')
-        return
+        if quality_score > qc_score_threshold:
+            click.echo("Quality score is good enough, returning it")
+            if output_filepath:
+                print(f"Saving transform to {output_filepath}")
+                np.save(output_filepath, transform.to_list())
+            return transform
+        if current_iterations == qc_iterations:
+            break
 
-    fwd_transform, inv_transform = transform_from_matches(
-        matches=matches,
-        mov_peaks=mov_peaks,
-        ref_peaks=ref_peaks,
-        affine_transform_settings=affine_transform_settings,
-        ndim=mov.ndim,
-        verbose=verbose,
-    )
+        click.echo("Performing beads matching")
+        matches = matches_from_beads(
+            mov_peaks=mov_peaks,
+            ref_peaks=ref_peaks,
+            beads_match_settings=beads_match_settings,
+            verbose=verbose,
+        )
 
-    composed_transform = initial_transform @ inv_transform
+        if len(matches) < 3:
+            click.echo('Source and target beads were not matches successfully')
+            break
 
-    if verbose:
-        click.echo(f'Bead matches: {matches}')
-        click.echo(f"Forward transform: {fwd_transform}")
-        click.echo(f"Inverse transform: {inv_transform}")
-        click.echo(f"Composed transform: {composed_transform}")
+        fwd_transform, inv_transform = transform_from_matches(
+            matches=matches,
+            mov_peaks=mov_peaks,
+            ref_peaks=ref_peaks,
+            affine_transform_settings=affine_transform_settings,
+            ndim=mov.ndim,
+            verbose=verbose,
+        )
 
+        composed_transform = transform @ inv_transform
+
+        transform = composed_transform
+        current_iterations += 1
+
+        if verbose:
+            click.echo(f'Bead matches: {matches}')
+            click.echo(f"Forward transform: {fwd_transform}")
+            click.echo(f"Inverse transform: {inv_transform}")
+            click.echo(f"Composed transform: {composed_transform}")
+
+        else:
+            click.echo("Quality control is disabled, returning the transform")
+            break
+
+    click.echo("optimization failed, returning the initial transform")
     if output_filepath:
-        print(f"Saving transform to {output_filepath}")
-        np.save(output_filepath, composed_transform.matrix)
+        click.echo(f"Saving transform to {output_filepath}")
+        np.save(output_filepath, initial_transform.to_list())
 
-    return composed_transform
+    return initial_transform

@@ -108,7 +108,7 @@ def estimate_registration(
     eval_transform_settings = settings.eval_transform_settings
 
     if settings.estimation_method == "beads":
-        from biahub.registration.methods.bead_matching import estimate_tczyx
+        from biahub.registration.beads import estimate_tczyx
 
         transforms = estimate_tczyx(
             mov_tczyx=source_data,

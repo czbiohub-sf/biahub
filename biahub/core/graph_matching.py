@@ -639,16 +639,13 @@ class GraphMatcher:
 
         return matches.astype(np.int32)
 
-    # ============================================================
-    # MATCH FILTERING
-    # ============================================================
-
     def filter_matches(
         self,
         matches: NDArray[np.integer],
         moving: Graph,
         reference: Graph,
-        angle_threshold: Optional[float] = 30.0,
+        angle_threshold: Optional[float] = None,
+        direction_threshold: Optional[float] = None,
         min_distance_quantile: float = 0.01,
         max_distance_quantile: float = 0.95,
         verbose: Optional[bool] = None,
@@ -665,8 +662,12 @@ class GraphMatcher:
         reference : Graph
             Reference graph
         angle_threshold : float, optional
-            Maximum deviation from dominant angle (degrees).
-            If None, skip angle filtering.
+            Maximum deviation from dominant angle (degrees, 2D only).
+            If None, skip 2D angle filtering.
+        direction_threshold : float, optional
+            Maximum angular deviation from dominant direction (degrees, 2D/3D).
+            Uses dot product between normalized vectors.
+            If None, skip direction filtering.
         min_distance_quantile : float
             Lower quantile cutoff for distances
         max_distance_quantile : float
@@ -705,7 +706,32 @@ class GraphMatcher:
             if verbose:
                 print(f"Matches after distance filtering: {len(matches)}")
 
-        # Angle filtering (2D only)
+        # Direction filtering (2D/3D) - NEW
+        if direction_threshold is not None:
+            vectors = reference.nodes[matches[:, 1]] - moving.nodes[matches[:, 0]]
+
+            # Normalize vectors
+            norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+            unit_vectors = vectors / (norms + 1e-10)
+
+            # Find dominant direction using circular/spherical mean
+            mean_direction = unit_vectors.mean(axis=0)
+            mean_direction = mean_direction / (np.linalg.norm(mean_direction) + 1e-10)
+
+            # Compute angular deviation from dominant direction
+            dot_products = np.clip(unit_vectors @ mean_direction, -1.0, 1.0)
+            angles_rad = np.arccos(dot_products)
+            angles_deg = np.degrees(angles_rad)
+
+            keep = angles_deg <= direction_threshold
+            matches = matches[keep]
+
+            if verbose:
+                print(f"Dominant direction: {mean_direction}")
+                print(f"Direction threshold: {direction_threshold}°")
+                print(f"Matches after direction filtering: {len(matches)}")
+
+        # Angle filtering (2D only, legacy)
         if angle_threshold is not None and moving.dim == 2:
             vectors = reference.nodes[matches[:, 1]] - moving.nodes[matches[:, 0]]
             angles_rad = np.arctan2(vectors[:, 1], vectors[:, 0])
@@ -723,6 +749,6 @@ class GraphMatcher:
 
             if verbose:
                 print(f"Dominant angle: {dominant_angle:.1f}°")
-                print(f"Matches after angle filtering: {len(matches)}")
+                print(f"Matches after 2D angle filtering: {len(matches)}")
 
         return matches
