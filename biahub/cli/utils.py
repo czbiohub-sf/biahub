@@ -47,6 +47,7 @@ def create_empty_hcs_zarr(
     scale: Tuple[float] = (1, 1, 1, 1, 1),
     dtype: DTypeLike = np.float32,
     max_chunk_size_bytes=500e6,
+    version: str = "0.4",
 ) -> None:
     """
     If the plate does not exist, create an empty zarr plate.
@@ -65,6 +66,8 @@ def create_empty_hcs_zarr(
     channel_names : list[str]
         Channel names, will append if not present in metadata.
     dtype : DTypeLike
+    version : str
+        OME-NGFF version ("0.4" or "0.5"), by default "0.4"
 
     Modifying from recOrder
     https://github.com/mehta-lab/recOrder/blob/d31ad910abf84c65ba927e34561f916651cbb3e8/recOrder/cli/utils.py#L12
@@ -88,7 +91,11 @@ def create_empty_hcs_zarr(
 
     # Create plate
     output_plate = open_ome_zarr(
-        str(store_path), layout="hcs", mode="a", channel_names=channel_names
+        str(store_path),
+        layout="hcs",
+        mode="a",
+        channel_names=channel_names,
+        version=version,
     )
     transform = [TransformationMeta(type="scale", scale=scale)]
 

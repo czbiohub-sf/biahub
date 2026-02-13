@@ -497,10 +497,21 @@ def register_cli(
         "dtype": np.float32,
     }
 
+    # Detect input zarr version to preserve it in output
+    input_version = "0.4"
+    try:
+        source_plate_path = Path(source_position_dirpaths[0]).parent.parent.parent
+        with open_ome_zarr(source_plate_path, mode="r") as input_plate:
+            input_version = input_plate.version
+    except (RuntimeError, FileNotFoundError):
+        # Position is not part of a plate, use default version
+        pass
+
     # Create the output zarr mirroring source_position_dirpaths
     create_empty_hcs_zarr(
         store_path=output_dirpath,
         position_keys=[p.parts[-3:] for p in source_position_dirpaths],
+        version=input_version,
         **output_metadata,
     )
 
