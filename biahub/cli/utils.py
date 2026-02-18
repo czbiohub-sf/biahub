@@ -75,6 +75,10 @@ def create_empty_hcs_zarr(
     MAX_CHUNK_SIZE = max_chunk_size_bytes  # in bytes
     bytes_per_pixel = np.dtype(dtype).itemsize
 
+    # Convert shape and scale to native Python types for zarr v3 compatibility
+    shape = tuple(int(x) for x in shape)
+    scale = tuple(float(x) for x in scale)
+
     # Limiting the chunking to 500MB
     if chunks is None:
         chunk_zyx_shape = list(shape[-3:])
@@ -85,9 +89,13 @@ def create_empty_hcs_zarr(
             and np.prod(chunk_zyx_shape) * bytes_per_pixel > MAX_CHUNK_SIZE
         ):
             chunk_zyx_shape[-3] = np.ceil(chunk_zyx_shape[-3] / 2).astype(int)
-        chunk_zyx_shape = tuple(chunk_zyx_shape)
+        # Convert to native Python integers for zarr v3 compatibility
+        chunk_zyx_shape = tuple(int(x) for x in chunk_zyx_shape)
 
         chunks = 2 * (1,) + chunk_zyx_shape
+    else:
+        # Convert provided chunks to native Python integers for zarr v3 compatibility
+        chunks = tuple(int(x) for x in chunks)
 
     # Create plate
     output_plate = open_ome_zarr(
@@ -103,7 +111,9 @@ def create_empty_hcs_zarr(
     for position_key in position_keys:
         position_key_string = "/".join(position_key)
         # Check if position is already in the store, if not create it
-        if position_key_string not in output_plate.zgroup:
+        try:
+            position = output_plate[position_key_string]
+        except KeyError:
             position = output_plate.create_position(*position_key)
             _ = position.create_zeros(
                 name="0",
@@ -112,17 +122,15 @@ def create_empty_hcs_zarr(
                 dtype=dtype,
                 transform=transform,
             )
-        else:
-            position = output_plate[position_key_string]
 
-    # Check if channel_names are already in the store, if not append them
-    for channel_name in channel_names:
-        # Read channel names directly from metadata to avoid race conditions
-        metadata_channel_names = [
-            channel.label for channel in position.metadata.omero.channels
-        ]
-        if channel_name not in metadata_channel_names:
-            position.append_channel(channel_name, resize_arrays=True)
+        # Check if channel_names are already in the store, if not append them
+        for channel_name in channel_names:
+            # Read channel names directly from metadata to avoid race conditions
+            metadata_channel_names = [
+                channel.label for channel in position.metadata.omero.channels
+            ]
+            if channel_name not in metadata_channel_names:
+                position.append_channel(channel_name, resize_arrays=True)
 
 
 def get_output_paths(
