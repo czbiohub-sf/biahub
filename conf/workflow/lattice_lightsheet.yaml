@@ -1,0 +1,27 @@
+# @package _global_
+
+# Lattice light-sheet processing workflow
+defaults:
+  - /registration: beads
+  - /deskew: default
+  - _self_
+
+workflow:
+  name: lattice_lightsheet
+  steps:
+    - deskew
+    - estimate_registration
+    - register
+    - deconvolve
+
+# Lattice-specific parameters
+deskew:
+  ls_angle_deg: 31.5
+  pixel_size_um: 0.104
+  average_n_slices: 5
+
+registration:
+  estimation_method: beads
+  verbose: true
+
+verbose: true

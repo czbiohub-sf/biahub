@@ -1,0 +1,26 @@
+# Hydra Configuration for Biahub
+# This is the main configuration file that can be composed with config groups
+
+defaults:
+  - _self_
+  - registration: manual  # Options: manual, beads, ants
+  - hydra/job_logging: colorlog
+
+# Global settings
+verbose: false
+output_dir: ${hydra:runtime.output_dir}
+
+# Data paths
+data:
+  input_path: ???  # Must be specified
+  output_path: ???  # Must be specified
+
+# Hydra runtime settings
+hydra:
+  run:
+    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${hydra.job.num}
+  job:
+    chdir: false  # Don't change working directory

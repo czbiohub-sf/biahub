@@ -1,0 +1,24 @@
+# @package _global_
+
+# Time-lapse stabilization workflow for tracking experiments
+defaults:
+  - _self_
+
+workflow:
+  name: timelapse_stabilization
+  steps:
+    - estimate_stabilization
+    - stabilize
+    - segment
+    - track
+
+# Stabilization settings will be added here
+stabilization:
+  stabilization_estimation_channel: "Phase3D"
+  stabilization_type: xyz
+  stabilization_method: focus-finding
+  stabilization_channels:
+    - Phase3D
+    - GFP
+
+verbose: true

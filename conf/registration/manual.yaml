@@ -1,0 +1,23 @@
+# @package _global_
+
+# Manual registration configuration
+registration:
+  target_channel_name: Phase3D
+  source_channel_name: "GFP EX488 EM525-45"
+  estimation_method: manual
+
+  manual_registration_settings:
+    time_index: 0
+    affine_90degree_rotation: 0
+
+  affine_transform_settings:
+    t_reference: first
+    transform_type: euclidean  # Options: euclidean, similarity, affine
+    approx_transform:
+      - [1.0, 0.0, 0.0, 0.0]
+      - [0.0, 1.0, 0.0, 0.0]
+      - [0.0, 0.0, 1.0, 0.0]
+      - [0.0, 0.0, 0.0, 1.0]
+    use_prev_t_transform: true
+
+  verbose: ${verbose}
