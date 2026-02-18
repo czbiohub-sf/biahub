@@ -1,0 +1,11 @@
+mov_fov_path: /path/to/videos
+output_path: /path/to/output
+grid: [2, 2]
+time_sampling_min: 5
+rotation: 90
+max_frames: null       # or 300
+frame_step: 5          # skip every 4, keep every 5th
+legend: null
+legend_font_size: 20
+timestamp_font_size: 24
+add_legend: true

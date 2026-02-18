@@ -183,5 +183,14 @@ for cmd in COMMANDS:
     )
 
 
+# Add template management commands
+try:
+    from biahub.cli.template_manager import template_cli
+    cli.add_command(template_cli)
+except ImportError:
+    # Template manager not available (optional feature)
+    pass
+
+
 if __name__ == "__main__":
     cli()
