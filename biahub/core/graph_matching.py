@@ -644,8 +644,8 @@ class GraphMatcher:
         matches: NDArray[np.integer],
         moving: Graph,
         reference: Graph,
-        angle_threshold: Optional[float] = None,
-        direction_threshold: Optional[float] = None,
+        angle_threshold: Optional[float] = 0,
+        direction_threshold: Optional[float] = 0,
         min_distance_quantile: float = 0.01,
         max_distance_quantile: float = 0.95,
         verbose: Optional[bool] = None,
@@ -686,7 +686,7 @@ class GraphMatcher:
             return matches
 
         # Distance filtering
-        if min_distance_quantile is not None or max_distance_quantile is not None:
+        if min_distance_quantile != 0 or max_distance_quantile != 0:
             dist = np.linalg.norm(
                 moving.nodes[matches[:, 0]] - reference.nodes[matches[:, 1]], axis=1
             )
@@ -707,7 +707,7 @@ class GraphMatcher:
                 print(f"Matches after distance filtering: {len(matches)}")
 
         # Direction filtering (2D/3D) - NEW
-        if direction_threshold is not None:
+        if direction_threshold != 0:
             vectors = reference.nodes[matches[:, 1]] - moving.nodes[matches[:, 0]]
 
             # Normalize vectors
@@ -732,7 +732,7 @@ class GraphMatcher:
                 print(f"Matches after direction filtering: {len(matches)}")
 
         # Angle filtering (2D only, legacy)
-        if angle_threshold is not None and moving.dim == 2:
+        if angle_threshold != 0 and moving.dim == 2:
             vectors = reference.nodes[matches[:, 1]] - moving.nodes[matches[:, 0]]
             angles_rad = np.arctan2(vectors[:, 1], vectors[:, 0])
             angles_deg = np.degrees(angles_rad)

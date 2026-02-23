@@ -76,6 +76,9 @@ def registration_beads_score(
     peaks_overlap_fraction = peaks_overlap_count / max(min(len(mov_peaks), len(ref_peaks)), 1)
 
     if verbose:
+        click.echo(f"Mov peaks: {len(mov_peaks)}")
+        click.echo(f"Ref peaks: {len(ref_peaks)}")
+        click.echo(f"Peaks overlap count: {peaks_overlap_count}")
         click.echo(f"Peaks overlap fraction: {peaks_overlap_fraction}")
 
     return peaks_overlap_fraction
@@ -193,7 +196,6 @@ def estimate_with_propagation(
         if np.sum(mov_tzyx[t]) == 0 or np.sum(ref_tzyx[t]) == 0:
             click.echo(f"Timepoint {t} has no data, skipping")
         else:
-            click.echo(f"Timepoint {t} has data, estimating transform")
             approx_transform = estimate_tzyx(
                 t_idx=t,
                 mov_tzyx=mov_tzyx,
@@ -203,13 +205,12 @@ def estimate_with_propagation(
                 verbose=verbose,
                 output_folder_path=output_folder_path,
                 mode=mode,
+                user_transform=initial_transform,
             )
 
             if approx_transform is not None:
-                print(f"Using approx transform for timepoint {t+1}: {approx_transform}")
                 affine_transform_settings.approx_transform = approx_transform.to_list()
             else:
-                print(f"Using initial transform for timepoint {t+1}: {initial_transform}")
                 affine_transform_settings.approx_transform = initial_transform
 
 
@@ -407,7 +408,6 @@ def matches_from_beads(
         )
 
         matches = matcher.match(mov_graph, ref_graph)
-        print(f"Descriptor: {len(matches)} matches")
 
     elif beads_match_settings.algorithm == 'hungarian':
         hungarian_match_settings = beads_match_settings.hungarian_match_settings
@@ -428,7 +428,6 @@ def matches_from_beads(
         )
 
         matches = matcher.match(mov_graph, ref_graph)
-        print(f"Hungarian: {len(matches)} matches")
 
     # Filter as part of the pipeline
     matches = matcher.filter_matches(
@@ -513,6 +512,7 @@ def estimate_tzyx(
     verbose: bool = False,
     output_folder_path: Path = None,
     mode: Literal["registration", "stabilization"] = "registration",
+    user_transform: Transform = None,
 ) -> Transform:
     """
     Calculate the affine transformation matrix between source and target channels
@@ -554,6 +554,7 @@ def estimate_tzyx(
     Bead matches are filtered based on distance and angular deviation from the dominant direction.
     If fewer than three matches are found after filtering, the function returns None.
     """
+    click.echo("........................................................................")
     click.echo(f'Processing timepoint: {t_idx}')
 
     (T, Z, Y, X) = mov_tzyx.shape
@@ -580,17 +581,123 @@ def estimate_tzyx(
     else:
         output_filepath = None
 
-    transform = estimate(
+    transform, quality_score = estimate(
         mov=mov_zyx,
         ref=ref_zyx,
         beads_match_settings=beads_match_settings,
         affine_transform_settings=affine_transform_settings,
         verbose=verbose,
         output_filepath=output_filepath,
+        user_transform=user_transform,
     )
+    # if quality_score < beads_match_settings.qc_settings.score_threshold:
+    #     beads_match_settings.filter_matches_settings.min_distance_quantile = 0.1
+    #     beads_match_settings.filter_matches_settings.max_distance_quantile = 0.99
+
+    #     transform, quality_score = estimate(
+    #         mov=mov_zyx,
+    #         ref=ref_zyx,
+    #         beads_match_settings=beads_match_settings,
+    #         affine_transform_settings=affine_transform_settings,
+    #         verbose=verbose,
+    #         output_filepath=output_filepath,
+    #         user_transform=user_transform,
+        # )
     return transform
 
+def optimize_transform(
+    transform: Transform,
+    mov: da.Array,
+    ref: da.Array,
+    beads_match_settings: BeadsMatchSettings,
+    affine_transform_settings: AffineTransformSettings,
+    verbose: bool = False,
+    debug: bool = False,
+) -> tuple[Transform, float, float]:
 
+    
+    mov_ants = ants.from_numpy(mov)
+    ref_ants = ants.from_numpy(ref)
+    
+    if debug: click.echo("Checking quality score before beads matching")
+    mov_reg_approx = (
+        transform.to_ants().apply_to_image(mov_ants, reference=ref_ants).numpy()
+    )
+    mov_peaks, ref_peaks = peaks_from_beads(
+        mov=mov_reg_approx,
+        ref=ref,
+        mov_peaks_settings=beads_match_settings.source_peaks_settings,
+        ref_peaks_settings=beads_match_settings.target_peaks_settings,
+        verbose=debug,
+    )
+    if (len(mov_peaks) is None) or (len(ref_peaks) is None):
+        return None, -1
+
+    
+    quality_score_approx = registration_beads_score(
+        mov_peaks=mov_peaks,
+        ref_peaks=ref_peaks,
+        radius=beads_match_settings.qc_settings.score_centroid_mask_radius,
+        verbose=debug,
+    )
+
+    if debug: click.echo("Optimizing transform with beads matching")
+    matches = matches_from_beads(
+        mov_peaks=mov_peaks,
+        ref_peaks=ref_peaks,
+        beads_match_settings=beads_match_settings,
+        verbose=debug,
+    )
+
+    if len(matches) < 3:
+        click.echo('Not enough matches found, returning the current transform')
+        return None, -1
+
+    fwd_transform, inv_transform = transform_from_matches(
+        matches=matches,
+        mov_peaks=mov_peaks,
+        ref_peaks=ref_peaks,
+        affine_transform_settings=affine_transform_settings,
+        ndim=mov.ndim,
+        verbose=debug,
+    )
+    composed_transform = transform @ inv_transform
+    
+    if debug: click.echo("Checking quality score after beads matching")
+    mov_reg_optimized = (
+        composed_transform.to_ants().apply_to_image(mov_ants, reference=ref_ants).numpy()
+    )
+    mov_peaks_optimized, ref_peaks_optimized = peaks_from_beads(
+        mov=mov_reg_optimized,
+        ref=ref,
+        mov_peaks_settings=beads_match_settings.source_peaks_settings,
+        ref_peaks_settings=beads_match_settings.target_peaks_settings,
+        verbose= debug,
+    )
+
+    quality_score_optimized = registration_beads_score(
+        mov_peaks=mov_peaks_optimized,
+        ref_peaks=ref_peaks_optimized,
+        radius=beads_match_settings.qc_settings.score_centroid_mask_radius,
+        verbose= debug,
+    )
+
+    if verbose:
+        click.echo(f"Quality score before beads matching: {quality_score_approx}")
+        click.echo(f"Quality score after beads matching: {quality_score_optimized}")
+    if debug:
+        click.echo(f'Bead matches: {matches}')
+        click.echo(f"Forward transform: {fwd_transform}")
+        click.echo(f"Inverse transform: {inv_transform}")
+        click.echo(f"Composed transform: {composed_transform}")
+
+
+    if quality_score_optimized >= quality_score_approx:
+        return composed_transform, quality_score_optimized
+    else:
+        return transform, quality_score_approx
+
+    
 def estimate(
     mov: da.Array,
     ref: da.Array,
@@ -598,7 +705,9 @@ def estimate(
     affine_transform_settings: AffineTransformSettings,
     verbose: bool = False,
     output_filepath: Path = None,
-) -> Transform:
+    user_transform: Transform = None,
+    debug: bool = False,
+) -> tuple[Transform, float]:
     """
     Estimate the affine transformation between source and target channels
     based on detected bead matches.
@@ -641,85 +750,73 @@ def estimate(
     )
     transform = initial_transform
 
-    mov_ants = ants.from_numpy(mov)
-    ref_ants = ants.from_numpy(ref)
-
     current_iterations = 0
-    qc_score_threshold = beads_match_settings.qc_settings.score_threshold
     qc_iterations = beads_match_settings.qc_settings.iterations
+    transform_iter_dict = {}
 
     while current_iterations < qc_iterations:
-        print(f"Transform: {transform}")
-        mov_reg_approx = (
-            transform.to_ants().apply_to_image(mov_ants, reference=ref_ants).numpy()
-        )
-        mov_peaks, ref_peaks = peaks_from_beads(
-            mov=mov_reg_approx,
+        print(f"Current iteration: {current_iterations}")
+        click.echo(f"Optimizing current transform")
+        optimized_transform, quality_score_optimized = optimize_transform(
+            transform=transform,
+            mov=mov,
             ref=ref,
-            mov_peaks_settings=beads_match_settings.source_peaks_settings,
-            ref_peaks_settings=beads_match_settings.target_peaks_settings,
-            verbose=verbose,
-        )
-        if (len(mov_peaks) is None) or (len(ref_peaks) is None):
-            click.echo("No beads found, returning the initial transform")
-            break
-
-        click.echo("Performing quality control")
-        quality_score = registration_beads_score(
-            mov_peaks=mov_peaks,
-            ref_peaks=ref_peaks,
-            radius=beads_match_settings.qc_settings.score_centroid_mask_radius,
-            verbose=verbose,
-        )
-
-        if quality_score > qc_score_threshold:
-            click.echo("Quality score is good enough, returning it")
-            if output_filepath:
-                print(f"Saving transform to {output_filepath}")
-                np.save(output_filepath, transform.to_list())
-            return transform
-        if current_iterations == qc_iterations:
-            break
-
-        click.echo("Performing beads matching")
-        matches = matches_from_beads(
-            mov_peaks=mov_peaks,
-            ref_peaks=ref_peaks,
             beads_match_settings=beads_match_settings,
-            verbose=verbose,
-        )
-
-        if len(matches) < 3:
-            click.echo('Source and target beads were not matches successfully')
-            break
-
-        fwd_transform, inv_transform = transform_from_matches(
-            matches=matches,
-            mov_peaks=mov_peaks,
-            ref_peaks=ref_peaks,
             affine_transform_settings=affine_transform_settings,
-            ndim=mov.ndim,
             verbose=verbose,
+            debug=debug,
         )
+        transform_iter_dict[current_iterations] = {
+            "transform": optimized_transform,
+            "quality_score": quality_score_optimized,
+        }
+        if quality_score_optimized ==1:
+            break
+        transform = optimized_transform
 
-        composed_transform = transform @ inv_transform
 
-        transform = composed_transform
+        if user_transform is not None and current_iterations == 0:
+            click.echo("Optimizing user transform:")
+            user_transform = Transform(
+                matrix=np.asarray(user_transform)
+            )
+            optimized_transform_user, quality_score_optimized_user = optimize_transform(
+                transform=user_transform,
+                mov=mov,
+                ref=ref,
+                beads_match_settings=beads_match_settings,
+                affine_transform_settings=affine_transform_settings,
+                verbose=verbose,
+                debug=debug,
+            )
+       
+            if quality_score_optimized < quality_score_optimized_user:
+                
+                transform_iter_dict[current_iterations] = {
+                    "transform": optimized_transform_user,
+                    "quality_score": quality_score_optimized_user,
+                }
+                if quality_score_optimized_user ==1:
+                    break
+                transform = optimized_transform_user
+
+
+        if transform is None:
+            break
         current_iterations += 1
 
-        if verbose:
-            click.echo(f'Bead matches: {matches}')
-            click.echo(f"Forward transform: {fwd_transform}")
-            click.echo(f"Inverse transform: {inv_transform}")
-            click.echo(f"Composed transform: {composed_transform}")
+    # get highest quality score
+    best_quality_score = max(transform_iter_dict.values(), key=lambda x: x["quality_score"])
+    best_transform = best_quality_score["transform"]
 
-        else:
-            click.echo("Quality control is disabled, returning the transform")
-            break
 
-    click.echo("optimization failed, returning the initial transform")
+    if best_transform is None:
+        best_transform = initial_transform
+    if verbose:
+        click.echo(f"Best transform: {best_transform}")
+        click.echo(f"Best quality score: {best_quality_score['quality_score']}")
     if output_filepath:
         click.echo(f"Saving transform to {output_filepath}")
-        np.save(output_filepath, initial_transform.to_list())
+        np.save(output_filepath, best_transform.to_list())
 
-    return initial_transform
+    return best_transform, best_quality_score['quality_score']

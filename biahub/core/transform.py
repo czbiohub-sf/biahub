@@ -588,7 +588,7 @@ def apply_stabilization_transform(
 
     if output_shape is None:
         output_shape = zyx_data.shape[-3:]
-    from biahub.registration.ants import convert_transform_to_ants
+    from biahub.core.transform import convert_transform_to_ants
 
     # Get the transformation matrix for the current time index
     tx_shifts = convert_transform_to_ants(list_of_shifts[t_idx])
