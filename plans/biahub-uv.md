@@ -52,7 +52,7 @@ Convert biahub to a uv workspace monorepo with two subpackages:
 
 ## Prerequisite: Create Test Dataset
 
-Use a subset of the reference dataset above for fast iteration:
+Use just one field of view (position) from the reference dataset above for fast iteration:
 
 ```bash
 conda activate biautils
@@ -254,7 +254,7 @@ biahub-pipeline dataset=test ... slurm=gpu
 
 ### Phase 1: Test Data Setup
 1. Create test zarr at `/hpc/projects/intracellular_dashboard/refactor_biahub/test_widefield.zarr`
-2. Subset of 2 FOVs from 2026_01_29 convert.zarr (channels: DAPI, TXR, BF)
+2. Subset of 1 FOV from 2026_01_29 convert.zarr (channels: DAPI, TXR, BF)
 
 ### Phase 2: Workspace Scaffolding
 1. Create `packages/` directory structure
