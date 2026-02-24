@@ -120,10 +120,21 @@ class MatchDescriptorSettings(MyBaseModel):
     max_ratio: float = 0.8
     cross_check: bool = False
 
+class FilterMatchesSettings(MyBaseModel):
+    angle_threshold: float = 0
+    direction_threshold: float = 0
+    min_distance_quantile: float = 0.01
+    max_distance_quantile: float = 0.95
+
+
+class QCBeadsRegistrationSettings(MyBaseModel):
+    iterations: int = 1
+    score_threshold: float = 0.40
+    score_centroid_mask_radius: int = 6
+
 
 class BeadsMatchSettings(MyBaseModel):
     algorithm: Literal["hungarian", "match_descriptor"] = "hungarian"
-    t_reference: Literal["first", "previous"] = "first"
     source_peaks_settings: Optional[DetectPeaksSettings] = Field(
         default_factory=DetectPeaksSettings
     )
@@ -132,8 +143,8 @@ class BeadsMatchSettings(MyBaseModel):
     )
     match_descriptor_settings: MatchDescriptorSettings = MatchDescriptorSettings()
     hungarian_match_settings: HungarianMatchSettings = HungarianMatchSettings()
-    filter_distance_threshold: float = 0.95
-    filter_angle_threshold: float = 0
+    filter_matches_settings: FilterMatchesSettings = FilterMatchesSettings()
+    qc_settings: QCBeadsRegistrationSettings = QCBeadsRegistrationSettings()
 
 
 class PhaseCrossCorrSettings(MyBaseModel):
@@ -172,8 +183,10 @@ class EvalTransformSettings(MyBaseModel):
 
 
 class AffineTransformSettings(MyBaseModel):
+    t_reference: Literal["first", "previous"] = "first"
     transform_type: Literal["euclidean", "similarity", "affine"] = "euclidean"
     approx_transform: list = np.eye(4).tolist()
+    use_prev_t_transform: bool = True
 
     @field_validator("approx_transform")
     @classmethod
