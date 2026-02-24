@@ -550,8 +550,9 @@ def estimate_tzyx(
     #         verbose=verbose,
     #         output_filepath=output_filepath,
     #         user_transform=user_transform,
-        # )
+    # )
     return transform
+
 
 def registration_beads_score(
     mov_peaks: ArrayLike,
@@ -605,7 +606,6 @@ def registration_beads_score(
     return peaks_overlap_fraction
 
 
-
 def optimize_transform(
     transform: Transform,
     mov: da.Array,
@@ -616,14 +616,12 @@ def optimize_transform(
     debug: bool = False,
 ) -> tuple[Transform, float, float]:
 
-    
     mov_ants = ants.from_numpy(mov)
     ref_ants = ants.from_numpy(ref)
-    
-    if debug: click.echo("Checking quality score before beads matching")
-    mov_reg_approx = (
-        transform.to_ants().apply_to_image(mov_ants, reference=ref_ants).numpy()
-    )
+
+    if debug:
+        click.echo("Checking quality score before beads matching")
+    mov_reg_approx = transform.to_ants().apply_to_image(mov_ants, reference=ref_ants).numpy()
     mov_peaks, ref_peaks = peaks_from_beads(
         mov=mov_reg_approx,
         ref=ref,
@@ -634,7 +632,6 @@ def optimize_transform(
     if (len(mov_peaks) is None) or (len(ref_peaks) is None):
         return None, -1
 
-    
     quality_score_approx = registration_beads_score(
         mov_peaks=mov_peaks,
         ref_peaks=ref_peaks,
@@ -642,7 +639,8 @@ def optimize_transform(
         verbose=debug,
     )
 
-    if debug: click.echo("Optimizing transform with beads matching")
+    if debug:
+        click.echo("Optimizing transform with beads matching")
     matches = matches_from_beads(
         mov_peaks=mov_peaks,
         ref_peaks=ref_peaks,
@@ -663,8 +661,9 @@ def optimize_transform(
         verbose=debug,
     )
     composed_transform = transform @ inv_transform
-    
-    if debug: click.echo("Checking quality score after beads matching")
+
+    if debug:
+        click.echo("Checking quality score after beads matching")
     mov_reg_optimized = (
         composed_transform.to_ants().apply_to_image(mov_ants, reference=ref_ants).numpy()
     )
@@ -673,14 +672,14 @@ def optimize_transform(
         ref=ref,
         mov_peaks_settings=beads_match_settings.source_peaks_settings,
         ref_peaks_settings=beads_match_settings.target_peaks_settings,
-        verbose= debug,
+        verbose=debug,
     )
 
     quality_score_optimized = registration_beads_score(
         mov_peaks=mov_peaks_optimized,
         ref_peaks=ref_peaks_optimized,
         radius=beads_match_settings.qc_settings.score_centroid_mask_radius,
-        verbose= debug,
+        verbose=debug,
     )
 
     if verbose:
@@ -692,13 +691,12 @@ def optimize_transform(
         click.echo(f"Inverse transform: {inv_transform}")
         click.echo(f"Composed transform: {composed_transform}")
 
-
     if quality_score_optimized >= quality_score_approx:
         return composed_transform, quality_score_optimized
     else:
         return transform, quality_score_approx
 
-    
+
 def estimate(
     mov: da.Array,
     ref: da.Array,
@@ -756,8 +754,8 @@ def estimate(
     transform_iter_dict = {}
 
     while current_iterations < qc_iterations:
-        print(f"Current iteration: {current_iterations}")
-        click.echo(f"Optimizing current transform")
+        click.echo(f"Current iteration: {current_iterations}")
+        click.echo("Optimizing current transform")
         optimized_transform, quality_score_optimized = optimize_transform(
             transform=transform,
             mov=mov,
@@ -771,16 +769,13 @@ def estimate(
             "transform": optimized_transform,
             "quality_score": quality_score_optimized,
         }
-        if quality_score_optimized ==1:
+        if quality_score_optimized == 1:
             break
         transform = optimized_transform
 
-
         if user_transform is not None and current_iterations == 0:
             click.echo("Optimizing user transform:")
-            user_transform = Transform(
-                matrix=np.asarray(user_transform)
-            )
+            user_transform = Transform(matrix=np.asarray(user_transform))
             optimized_transform_user, quality_score_optimized_user = optimize_transform(
                 transform=user_transform,
                 mov=mov,
@@ -790,17 +785,16 @@ def estimate(
                 verbose=verbose,
                 debug=debug,
             )
-       
+
             if quality_score_optimized < quality_score_optimized_user:
-                
+
                 transform_iter_dict[current_iterations] = {
                     "transform": optimized_transform_user,
                     "quality_score": quality_score_optimized_user,
                 }
-                if quality_score_optimized_user ==1:
+                if quality_score_optimized_user == 1:
                     break
                 transform = optimized_transform_user
-
 
         if transform is None:
             break
@@ -809,7 +803,6 @@ def estimate(
     # get highest quality score
     best_quality_score = max(transform_iter_dict.values(), key=lambda x: x["quality_score"])
     best_transform = best_quality_score["transform"]
-
 
     if best_transform is None:
         best_transform = initial_transform

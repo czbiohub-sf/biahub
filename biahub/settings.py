@@ -120,6 +120,7 @@ class MatchDescriptorSettings(MyBaseModel):
     max_ratio: float = 0.8
     cross_check: bool = False
 
+
 class FilterMatchesSettings(MyBaseModel):
     angle_threshold: float = 0
     direction_threshold: float = 0

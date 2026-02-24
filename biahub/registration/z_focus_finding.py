@@ -19,8 +19,6 @@ from biahub.cli.parsing import (
 )
 from biahub.cli.slurm import wait_for_jobs_to_finish
 from biahub.cli.utils import estimate_resources
-
-
 from biahub.settings import (
     FocusFindingSettings,
 )
@@ -116,7 +114,7 @@ def estimate_z_focus_per_position(
     z_val = next((v for v in focus_idx if v != 0), None)
     if z_val is None:
         raise ValueError("Z index of focus reference is None, focus_idx contains only zeros")
- 
+
     for z_val_next in focus_idx[1:]:
         shift = np.eye(4)
         # Set the translation components of the transform
@@ -219,7 +217,6 @@ def estimate_z_stabilization(
         Dictionary of the z stabilization for each position.
     """
 
-
     output_folder_path.mkdir(parents=True, exist_ok=True)
     slurm_out_path = output_folder_path / "slurm_output"
     slurm_out_path.mkdir(parents=True, exist_ok=True)
@@ -317,7 +314,9 @@ def estimate_z_stabilization(
         # get first non-zero focus index
         z_val = next((v for v in z_drift_offsets if v != 0), None)
         if z_val is None:
-            raise ValueError("Z index of focus reference is None, z_drift_offsets contains only zeros")
+            raise ValueError(
+                "Z index of focus reference is None, z_drift_offsets contains only zeros"
+            )
 
         transform = {}
 
@@ -338,7 +337,6 @@ def estimate_z_stabilization(
         # Load the transforms
         transforms_paths = list(output_transforms_path.glob("*.npy"))
         fov_transforms = {}
-
 
         for file_path in transforms_paths:
             transform = np.load(file_path).tolist()
