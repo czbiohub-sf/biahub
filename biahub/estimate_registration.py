@@ -66,6 +66,7 @@ def estimate_transform(
     verbose: bool = False,
 ) -> None:
 
+
     function_to_run = None
     match method:
         case "manual":
@@ -91,10 +92,10 @@ def estimate_transform(
             function_to_run = estimate_tczyx
         case "focus-finding":
             #currently slurm over positions, but can be over time too, better to allow both
-            from biahub.registration.z_focus_finding import estimate_tczyx
-            function_to_run = estimate_tczyx
+            from biahub.registration.z_focus_finding import estimate_z_focus_per_position
+            function_to_run = estimate_z_focus_per_position
         case "stackreg":
-            #currently slurm over positions, but can be over time too, better to allow both
+            #currently slurm over positions, cant be over time as stackreg works overtimepoints
             from biahub.registration.stackreg import estimate_tczyx
             function_to_run = estimate_tczyx
         case _:
@@ -151,8 +152,15 @@ def estimate_registration_parallel_fovs_and_time(
     transforms_out_path.mkdir(parents=True, exist_ok=True)
   
     jobs = []
+
+    # if mode == "stabilization":
+    #     # broadcast data to all timepoints
+    # if mode == "registration":
+    #     # load ref and mov data
+
     
     function_to_run = estimate_transform(method=settings.method)
+
 
 
     ## If you want to avoid the nested complexity entirely, you could flatten it: submit one job per (position,
@@ -163,9 +171,12 @@ def estimate_registration_parallel_fovs_and_time(
             for t in range(T):
                 job = executor.submit(
                     function_to_run,
+                    # data to process
+                    # outputdirpath
                     t, 
                     fov, 
                     **methods_kwargs
+
                 )
                 jobs.append(job)
 

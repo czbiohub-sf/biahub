@@ -34,8 +34,6 @@ def estimate_tczyx(
     beads_match_settings: BeadsMatchSettings = None,
     affine_transform_settings: AffineTransformSettings = None,
     verbose: bool = False,
-    cluster: bool = False,
-    sbatch_filepath: Path = None,
     output_folder_path: Path = None,
     mode: Literal["registration", "stabilization"] = "registration",
 ) -> list[Transform]:
