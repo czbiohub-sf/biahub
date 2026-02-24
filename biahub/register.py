@@ -32,387 +32,8 @@ from biahub.cli.utils import (
 from biahub.settings import RegistrationSettings
 
 
-def get_3D_rescaling_matrix(start_shape_zyx, scaling_factor_zyx=(1, 1, 1), end_shape_zyx=None):
-    center_Y_start, center_X_start = np.array(start_shape_zyx)[-2:] / 2
-    if end_shape_zyx is None:
-        center_Y_end, center_X_end = (center_Y_start, center_X_start)
-    else:
-        center_Y_end, center_X_end = np.array(end_shape_zyx)[-2:] / 2
 
-    scaling_matrix = np.array(
-        [
-            [scaling_factor_zyx[-3], 0, 0, 0],
-            [
-                0,
-                scaling_factor_zyx[-2],
-                0,
-                -center_Y_start * scaling_factor_zyx[-2] + center_Y_end,
-            ],
-            [
-                0,
-                0,
-                scaling_factor_zyx[-1],
-                -center_X_start * scaling_factor_zyx[-1] + center_X_end,
-            ],
-            [0, 0, 0, 1],
-        ]
-    )
-    return scaling_matrix
-
-
-def get_3D_rotation_matrix(
-    start_shape_zyx: Tuple, angle: float = 0.0, end_shape_zyx: Tuple = None
-) -> np.ndarray:
-    """
-    Rotate Transformation Matrix
-
-    Parameters
-    ----------
-    start_shape_zyx : Tuple
-        Shape of the input
-    angle : float, optional
-        Angles of rotation in degrees
-    end_shape_zyx : Tuple, optional
-       Shape of output space
-
-    Returns
-    -------
-    np.ndarray
-        Rotation matrix
-    """
-    # TODO: make this 3D?
-    center_Y_start, center_X_start = np.array(start_shape_zyx)[-2:] / 2
-    if end_shape_zyx is None:
-        center_Y_end, center_X_end = (center_Y_start, center_X_start)
-    else:
-        center_Y_end, center_X_end = np.array(end_shape_zyx)[-2:] / 2
-
-    theta = np.radians(angle)
-
-    rotation_matrix = np.array(
-        [
-            [1, 0, 0, 0],
-            [
-                0,
-                np.cos(theta),
-                -np.sin(theta),
-                -center_Y_start * np.cos(theta)
-                + np.sin(theta) * center_X_start
-                + center_Y_end,
-            ],
-            [
-                0,
-                np.sin(theta),
-                np.cos(theta),
-                -center_Y_start * np.sin(theta)
-                - center_X_start * np.cos(theta)
-                + center_X_end,
-            ],
-            [0, 0, 0, 1],
-        ]
-    )
-    return rotation_matrix
-
-
-def get_3D_fliplr_matrix(start_shape_zyx: tuple, end_shape_zyx: tuple = None) -> np.ndarray:
-    """
-    Get 3D left-right flip transformation matrix.
-
-    Parameters
-    ----------
-    start_shape_zyx : tuple
-        Shape of the source volume (Z, Y, X).
-    end_shape_zyx : tuple, optional
-        Shape of the target volume (Z, Y, X). If None, uses start_shape_zyx.
-
-    Returns
-    -------
-    np.ndarray
-        4x4 transformation matrix for left-right flip.
-    """
-    center_X_start = start_shape_zyx[-1] / 2
-    if end_shape_zyx is None:
-        center_X_end = center_X_start
-    else:
-        center_X_end = end_shape_zyx[-1] / 2
-
-    # Flip matrix: reflects across X axis and translates to maintain center
-    flip_matrix = np.array(
-        [
-            [1, 0, 0, 0],  # Z unchanged
-            [0, 1, 0, 0],  # Y unchanged
-            [0, 0, -1, 2 * center_X_end],  # X flipped and translated
-            [0, 0, 0, 1],  # Homogeneous coordinate
-        ]
-    )
-    return flip_matrix
-
-
-def convert_transform_to_ants(T_numpy: np.ndarray):
-    """Homogeneous 3D transformation matrix from numpy to ants
-
-    Parameters
-    ----------
-    numpy_transform :4x4 homogenous matrix
-
-    Returns
-    -------
-    Ants transformation matrix object
-    """
-    assert T_numpy.shape == (4, 4)
-
-    T_ants_style = T_numpy[:, :-1].ravel()
-    T_ants_style[-3:] = T_numpy[:3, -1]
-    T_ants = ants.new_ants_transform(
-        transform_type="AffineTransform",
-    )
-    T_ants.set_parameters(T_ants_style)
-
-    return T_ants
-
-
-def convert_transform_to_numpy(T_ants):
-    """
-    Convert the ants transformation matrix to numpy 3D homogenous transform
-
-    Modified from Jordao's dexp code
-
-    Parameters
-    ----------
-    T_ants : Ants transfromation matrix object
-
-    Returns
-    -------
-    np.array
-        Converted Ants to numpy array
-
-    """
-
-    T_numpy = T_ants.parameters.reshape((3, 4), order="F")
-    T_numpy[:, :3] = T_numpy[:, :3].transpose()
-    T_numpy = np.vstack((T_numpy, np.array([0, 0, 0, 1])))
-
-    # Reference:
-    # https://sourceforge.net/p/advants/discussion/840261/thread/9fbbaab7/
-    # https://github.com/netstim/leaddbs/blob/a2bb3e663cf7fceb2067ac887866124be54aca7d/helpers/ea_antsmat2mat.m
-    # T = original translation offset from A
-    # T = T + (I - A) @ centering
-
-    T_numpy[:3, -1] += (np.eye(3) - T_numpy[:3, :3]) @ T_ants.fixed_parameters
-
-    return T_numpy
-
-
-def apply_affine_transform(
-    zyx_data: np.ndarray,
-    matrix: np.ndarray,
-    output_shape_zyx: Tuple,
-    method="ants",
-    interpolation: str = "linear",
-    crop_output_slicing: bool = None,
-) -> np.ndarray:
-    """_summary_
-
-    Parameters
-    ----------
-    zyx_data : np.ndarray
-        3D input array to be transformed
-    matrix : np.ndarray
-        3D Homogenous transformation matrix
-    output_shape_zyx : Tuple
-        output target zyx shape
-    method : str, optional
-        method to use for transformation, by default 'ants'
-    interpolation: str, optional
-        interpolation mode for ants, by default "linear"
-    crop_output : bool, optional
-        crop the output to the largest interior rectangle, by default False
-
-    Returns
-    -------
-    np.ndarray
-        registered zyx data
-    """
-
-    Z, Y, X = output_shape_zyx
-    if crop_output_slicing is not None:
-        Z_slice, Y_slice, X_slice = crop_output_slicing
-        Z = Z_slice.stop - Z_slice.start
-        Y = Y_slice.stop - Y_slice.start
-        X = X_slice.stop - X_slice.start
-
-    # TODO: based on the signature of this function, it should not be called on 4D array
-    if zyx_data.ndim == 4:
-        registered_czyx = np.zeros((zyx_data.shape[0], Z, Y, X), dtype=np.float32)
-        for c in range(zyx_data.shape[0]):
-            registered_czyx[c] = apply_affine_transform(
-                zyx_data[c],
-                matrix,
-                output_shape_zyx,
-                method=method,
-                interpolation=interpolation,
-                crop_output_slicing=crop_output_slicing,
-            )
-        return registered_czyx
-    else:
-        # Convert nans to 0
-        zyx_data = np.nan_to_num(zyx_data, nan=0)
-
-        # NOTE: default set to ANTS apply_affine method until we decide we get a benefit from using cupy
-        # The ants method on CPU is 10x faster than scipy on CPU. Cupy method has not been bencharked vs ANTs
-
-        if method == "ants":
-            # The output has to be a ANTImage Object
-            empty_target_array = np.zeros((output_shape_zyx), dtype=np.float32)
-            target_zyx_ants = ants.from_numpy(empty_target_array)
-
-            T_ants = convert_transform_to_ants(matrix)
-
-            zyx_data_ants = ants.from_numpy(zyx_data.astype(np.float32))
-            registered_zyx = T_ants.apply_to_image(
-                zyx_data_ants, reference=target_zyx_ants, interpolation=interpolation
-            ).numpy()
-
-        elif method == "scipy":
-            registered_zyx = scipy.ndimage.affine_transform(zyx_data, matrix, output_shape_zyx)
-
-        else:
-            raise ValueError(f"Unknown method {method}")
-
-        # Crop the output to the largest interior rectangle
-        if crop_output_slicing is not None:
-            registered_zyx = registered_zyx[Z_slice, Y_slice, X_slice]
-
-    return registered_zyx
-
-
-def find_lir(registered_zyx: np.ndarray, plot: bool = False) -> Tuple:
-    registered_zyx = np.asarray(registered_zyx, dtype=bool)
-
-    # Find the lir in YX at Z//2
-    registered_yx = registered_zyx[registered_zyx.shape[0] // 2].copy()
-    coords_yx = lir.lir(registered_yx)
-    coords_yx = list(map(int, coords_yx))
-
-    x, y, width, height = coords_yx
-    x_start, x_stop = x, x + width
-    y_start, y_stop = y, y + height
-    x_slice = slice(x_start, x_stop)
-    y_slice = slice(y_start, y_stop)
-
-    # Iterate over ZX and ZY slices to find optimal Z cropping params
-    _coords = []
-    for _x in (x_start, x_start + (x_stop - x_start) // 2, x_stop - 1):
-        registered_zy = registered_zyx[:, y_slice, _x].copy()
-        coords_zy = lir.lir(registered_zy)
-        _, z, _, depth = coords_zy
-        z_start, z_stop = z, z + depth
-        _coords.append((z_start, z_stop))
-    for _y in (y_start, y_start + (y_stop - y_start) // 2, y_stop - 1):
-        registered_zx = registered_zyx[:, _y, x_slice].copy()
-        coords_zx = lir.lir(registered_zx)
-        _, z, _, depth = coords_zx
-        z_start, z_stop = z, z + depth
-        _coords.append((z_start, z_stop))
-
-    _coords = np.asarray(_coords)
-    z_start = int(_coords.max(axis=0)[0])
-    z_stop = int(_coords.min(axis=0)[1])
-    z_slice = slice(z_start, z_stop)
-
-    if plot:
-        xy_corners = ((x, y), (x + width, y), (x + width, y + height), (x, y + height))
-        rectangle_yx = plt.Polygon(
-            xy_corners,
-            closed=True,
-            fill=None,
-            edgecolor="r",
-        )
-        # Add the rectangle to the plot
-        _, ax = plt.subplots(nrows=1, ncols=2)
-        ax[0].imshow(registered_yx)
-        ax[0].add_patch(rectangle_yx)
-
-        zx_corners = ((x, z), (x + width, z), (x + width, z + depth), (x, z + depth))
-        rectangle_zx = plt.Polygon(
-            zx_corners,
-            closed=True,
-            fill=None,
-            edgecolor="r",
-        )
-        ax[1].imshow(registered_zx)
-        ax[1].add_patch(rectangle_zx)
-        plt.savefig("./lir.png")
-
-    return (z_slice, y_slice, x_slice)
-
-
-def find_overlapping_volume(
-    input_zyx_shape: Tuple,
-    target_zyx_shape: Tuple,
-    transformation_matrix: np.ndarray,
-    method: str = "LIR",
-    plot: bool = False,
-) -> Tuple:
-    """
-    Find the overlapping rectangular volume after registration of two 3D datasets
-
-    Parameters
-    ----------
-    input_zyx_shape : Tuple
-        shape of input array
-    target_zyx_shape : Tuple
-        shape of target array
-    transformation_matrix : np.ndarray
-        affine transformation matrix
-    method : str, optional
-        method of finding the overlapping volume, by default 'LIR'
-
-    Returns
-    -------
-    Tuple
-        ZYX slices of the overlapping volume after registration
-
-    """
-
-    # Make dummy volumes
-    moving_volume = np.ones(tuple(input_zyx_shape), dtype=np.float32)
-    fixed_volume = np.ones(tuple(target_zyx_shape), dtype=np.float32)
-
-    # Convert to ants objects
-    fixed_volume_ants = ants.from_numpy(fixed_volume)
-    moving_volume_ants = ants.from_numpy(moving_volume)
-
-    tform_ants = convert_transform_to_ants(transformation_matrix)
-
-    # Now apply the transform using this grid
-    registered_volume = tform_ants.apply_to_image(
-        moving_volume_ants, reference=fixed_volume_ants
-    ).numpy()
-    if method == "LIR":
-        click.echo("Starting Largest interior rectangle (LIR) search")
-        mask = (registered_volume > 0) & (fixed_volume > 0)
-        z_slice, y_slice, x_slice = find_lir(mask, plot=plot)
-
-    else:
-        raise ValueError(f"Unknown method {method}")
-
-    return (z_slice, y_slice, x_slice)
-
-
-def rescale_voxel_size(affine_matrix, input_scale):
-    return np.linalg.norm(affine_matrix, axis=1) * input_scale
-
-
-@click.command("register")
-@source_position_dirpaths()
-@target_position_dirpaths()
-@config_filepath()
-@output_dirpath()
-@local()
-@sbatch_filepath()
-@monitor()
-def register_cli(
+def register(
     source_position_dirpaths: List[str],
     target_position_dirpaths: List[str],
     config_filepath: Path,
@@ -422,6 +43,8 @@ def register_cli(
     monitor: bool = True,
 ):
     """
+    Register a source position to a target position using a registration config file.
+ 
     Apply an affine transformation to a single position across T and C axes based on a registration config file.
 
     Start by generating an initial affine transform with `estimate-register`. Optionally, refine this transform with `optimize-register`. Finally, use `register`.
@@ -436,6 +59,8 @@ def register_cli(
     settings = yaml_to_model(config_filepath, RegistrationSettings)
     matrix = np.array(settings.affine_transform_zyx)
     keep_overhang = settings.keep_overhang
+    from biahub.registration.utils import find_overlapping_volume
+    from biahub.registration.utils import rescale_voxel_size
 
     # Calculate the output voxel size from the input scale and affine transform
     with open_ome_zarr(source_position_dirpaths[0]) as source_dataset:
@@ -555,6 +180,7 @@ def register_cli(
 
     # apply affine transform to channels in the source datastore that should be registered
     # as given in the config file (i.e. settings.source_channel_names)
+    from biahub.registration.utils import apply_affine_transform
     affine_jobs = []
     affine_names = []
     with submitit.helpers.clean_env(), executor.batch():
@@ -611,5 +237,36 @@ def register_cli(
         monitor_jobs(affine_jobs + copy_jobs, affine_names + copy_names)
 
 
+
+@click.command("register")
+@source_position_dirpaths()
+@target_position_dirpaths()
+@config_filepath()
+@output_dirpath()
+@local()
+@sbatch_filepath()
+@monitor()
+def register_cli(
+    source_position_dirpaths: List[str],
+    target_position_dirpaths: List[str],
+    config_filepath: Path,
+    output_dirpath: str,
+    local: bool,
+    sbatch_filepath: Path,
+    monitor: bool = True,
+):
+    register(
+        source_position_dirpaths=source_position_dirpaths,
+        target_position_dirpaths=target_position_dirpaths,
+        config_filepath=config_filepath,
+        output_dirpath=output_dirpath,
+        local=local,
+        sbatch_filepath=sbatch_filepath,
+        monitor=monitor,
+    )  
+
 if __name__ == "__main__":
     register_cli()
+
+
+

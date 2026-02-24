@@ -590,3 +590,204 @@ def load_transforms(transforms_path: Path, T: int, verbose: bool = False) -> lis
                 click.echo(f"Transform for timepoint {t}: {matrix}")
 
     return transforms
+
+
+def get_3D_rescaling_matrix(start_shape_zyx, scaling_factor_zyx=(1, 1, 1), end_shape_zyx=None):
+    center_Y_start, center_X_start = np.array(start_shape_zyx)[-2:] / 2
+    if end_shape_zyx is None:
+        center_Y_end, center_X_end = (center_Y_start, center_X_start)
+    else:
+        center_Y_end, center_X_end = np.array(end_shape_zyx)[-2:] / 2
+
+    scaling_matrix = np.array(
+        [
+            [scaling_factor_zyx[-3], 0, 0, 0],
+            [
+                0,
+                scaling_factor_zyx[-2],
+                0,
+                -center_Y_start * scaling_factor_zyx[-2] + center_Y_end,
+            ],
+            [
+                0,
+                0,
+                scaling_factor_zyx[-1],
+                -center_X_start * scaling_factor_zyx[-1] + center_X_end,
+            ],
+            [0, 0, 0, 1],
+        ]
+    )
+    return scaling_matrix
+
+
+def get_3D_rotation_matrix(
+    start_shape_zyx: Tuple, angle: float = 0.0, end_shape_zyx: Tuple = None
+) -> np.ndarray:
+    """
+    Rotate Transformation Matrix
+
+    Parameters
+    ----------
+    start_shape_zyx : Tuple
+        Shape of the input
+    angle : float, optional
+        Angles of rotation in degrees
+    end_shape_zyx : Tuple, optional
+       Shape of output space
+
+    Returns
+    -------
+    np.ndarray
+        Rotation matrix
+    """
+    # TODO: make this 3D?
+    center_Y_start, center_X_start = np.array(start_shape_zyx)[-2:] / 2
+    if end_shape_zyx is None:
+        center_Y_end, center_X_end = (center_Y_start, center_X_start)
+    else:
+        center_Y_end, center_X_end = np.array(end_shape_zyx)[-2:] / 2
+
+    theta = np.radians(angle)
+
+    rotation_matrix = np.array(
+        [
+            [1, 0, 0, 0],
+            [
+                0,
+                np.cos(theta),
+                -np.sin(theta),
+                -center_Y_start * np.cos(theta)
+                + np.sin(theta) * center_X_start
+                + center_Y_end,
+            ],
+            [
+                0,
+                np.sin(theta),
+                np.cos(theta),
+                -center_Y_start * np.sin(theta)
+                - center_X_start * np.cos(theta)
+                + center_X_end,
+            ],
+            [0, 0, 0, 1],
+        ]
+    )
+    return rotation_matrix
+
+
+def get_3D_fliplr_matrix(start_shape_zyx: tuple, end_shape_zyx: tuple = None) -> np.ndarray:
+    """
+    Get 3D left-right flip transformation matrix.
+
+    Parameters
+    ----------
+    start_shape_zyx : tuple
+        Shape of the source volume (Z, Y, X).
+    end_shape_zyx : tuple, optional
+        Shape of the target volume (Z, Y, X). If None, uses start_shape_zyx.
+
+    Returns
+    -------
+    np.ndarray
+        4x4 transformation matrix for left-right flip.
+    """
+    center_X_start = start_shape_zyx[-1] / 2
+    if end_shape_zyx is None:
+        center_X_end = center_X_start
+    else:
+        center_X_end = end_shape_zyx[-1] / 2
+
+    # Flip matrix: reflects across X axis and translates to maintain center
+    flip_matrix = np.array(
+        [
+            [1, 0, 0, 0],  # Z unchanged
+            [0, 1, 0, 0],  # Y unchanged
+            [0, 0, -1, 2 * center_X_end],  # X flipped and translated
+            [0, 0, 0, 1],  # Homogeneous coordinate
+        ]
+    )
+    return flip_matrix
+
+
+
+def apply_affine_transform(
+    zyx_data: np.ndarray,
+    matrix: np.ndarray,
+    output_shape_zyx: Tuple,
+    method="ants",
+    interpolation: str = "linear",
+    crop_output_slicing: bool = None,
+) -> np.ndarray:
+    """_summary_
+
+    Parameters
+    ----------
+    zyx_data : np.ndarray
+        3D input array to be transformed
+    matrix : np.ndarray
+        3D Homogenous transformation matrix
+    output_shape_zyx : Tuple
+        output target zyx shape
+    method : str, optional
+        method to use for transformation, by default 'ants'
+    interpolation: str, optional
+        interpolation mode for ants, by default "linear"
+    crop_output : bool, optional
+        crop the output to the largest interior rectangle, by default False
+
+    Returns
+    -------
+    np.ndarray
+        registered zyx data
+    """
+
+    Z, Y, X = output_shape_zyx
+    if crop_output_slicing is not None:
+        Z_slice, Y_slice, X_slice = crop_output_slicing
+        Z = Z_slice.stop - Z_slice.start
+        Y = Y_slice.stop - Y_slice.start
+        X = X_slice.stop - X_slice.start
+
+    # TODO: based on the signature of this function, it should not be called on 4D array
+    if zyx_data.ndim == 4:
+        registered_czyx = np.zeros((zyx_data.shape[0], Z, Y, X), dtype=np.float32)
+        for c in range(zyx_data.shape[0]):
+            registered_czyx[c] = apply_affine_transform(
+                zyx_data[c],
+                matrix,
+                output_shape_zyx,
+                method=method,
+                interpolation=interpolation,
+                crop_output_slicing=crop_output_slicing,
+            )
+        return registered_czyx
+    else:
+        # Convert nans to 0
+        zyx_data = np.nan_to_num(zyx_data, nan=0)
+
+        # NOTE: default set to ANTS apply_affine method until we decide we get a benefit from using cupy
+        # The ants method on CPU is 10x faster than scipy on CPU. Cupy method has not been bencharked vs ANTs
+
+        if method == "ants":
+            # The output has to be a ANTImage Object
+            empty_target_array = np.zeros((output_shape_zyx), dtype=np.float32)
+            target_zyx_ants = ants.from_numpy(empty_target_array)
+
+            T_ants = convert_transform_to_ants(matrix)
+
+            zyx_data_ants = ants.from_numpy(zyx_data.astype(np.float32))
+            registered_zyx = T_ants.apply_to_image(
+                zyx_data_ants, reference=target_zyx_ants, interpolation=interpolation
+            ).numpy()
+
+        elif method == "scipy":
+            registered_zyx = scipy.ndimage.affine_transform(zyx_data, matrix, output_shape_zyx)
+
+        else:
+            raise ValueError(f"Unknown method {method}")
+
+        # Crop the output to the largest interior rectangle
+        if crop_output_slicing is not None:
+            registered_zyx = registered_zyx[Z_slice, Y_slice, X_slice]
+
+    return registered_zyx
+
