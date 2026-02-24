@@ -257,10 +257,13 @@ def get_crop_idx(X, Y, Z, phase_cross_corr_settings):
 
 
 def estimate_tczyx(
-    input_position_dirpath: Path,
-    output_folder_path: Path,
-    output_shifts_path: Path,
-    channel_index: int,
+    t: int,
+    fov: str,
+    mov_data: da.Array,
+    ref_data: da.Array,
+    output_dirpath: Path,
+    mov_channel_index: int,
+    ref_channel_index: int,
     phase_cross_corr_settings: PhaseCrossCorrSettings,
     verbose: bool = False,
     mode: Literal["registration", "stabilization"] = "stabilization",
@@ -288,170 +291,169 @@ def estimate_tczyx(
     list[ArrayLike]
         List of the xyz stabilization for each timepoint.
     """
-    with open_ome_zarr(input_position_dirpath) as input_position:
-        data_tzyx = input_position.data.dask_array()[:, channel_index]
-        T, Z, Y, X = data_tzyx.shape
+    T, C, Z, Y, X = mov_data.shape
 
     x_idx, y_idx, z_idx = get_crop_idx(X, Y, Z, phase_cross_corr_settings)
-    data_tzyx_cropped = data_tzyx[:, z_idx, y_idx, x_idx]
+    mov_data_cropped = mov_data[t, mov_channel_index, z_idx, y_idx, x_idx]
+    ref_data_cropped = ref_data[t, ref_channel_index, z_idx, y_idx, x_idx]
 
-    if mode == "stabilization":
-        if phase_cross_corr_settings.t_reference == "first":
-            ref_tzyx = np.broadcast_to(data_tzyx_cropped[0], data_tzyx_cropped.shape).copy()
-        elif phase_cross_corr_settings.t_reference == "previous":
-            ref_tzyx = np.roll(data_tzyx_cropped, shift=1, axis=0)
-            ref_tzyx[0] = data_tzyx_cropped[0]
-    elif mode == "registration":
-        raise ValueError("Registration mode not implemented yet")
+    # if mode == "stabilization":
+    #     if phase_cross_corr_settings.t_reference == "first":
+    #         ref_tzyx = np.broadcast_to(data_tzyx_cropped[0], data_tzyx_cropped.shape).copy()
+    #     elif phase_cross_corr_settings.t_reference == "previous":
+    #         ref_tzyx = np.roll(data_tzyx_cropped, shift=1, axis=0)
+    #         ref_tzyx[0] = data_tzyx_cropped[0]
+    # elif mode == "registration":
+    #     raise ValueError("Registration mode not implemented yet")
 
-    mov_tzyx = data_tzyx_cropped
+    # mov_tzyx = data_tzyx_cropped
 
-    position_filename = str(Path(*input_position_dirpath.parts[-3:])).replace("/", "_")
+    output_transforms_path_fov_t = output_dirpath /"transforms" / fov / t
+    output_transforms_path_fov_t.mkdir(parents=True, exist_ok=True)
+    output_shifts_path_fov_t = output_dirpath / "shifts" / fov / t
+    output_shifts_path_fov_t.mkdir(parents=True, exist_ok=True)
 
-    transforms = []
-    shifts = []
-    output_path_corr = output_folder_path.parent / "corr_plots" / position_filename
-    output_path_corr.mkdir(parents=True, exist_ok=True)
-
-    for t in range(T):
-        click.echo(f"Estimating PCC for timepoint {t}")
-        if t == 0:
-            transforms.append(np.eye(4).tolist())
-            shifts.append((t, 0, 0, 0))
-        else:
-            transform, shift = estimate(
-                mov=mov_tzyx[t],
-                ref=ref_tzyx[t],
-                function_type=phase_cross_corr_settings.function_type,
-                normalization=phase_cross_corr_settings.normalization,
-                output_path=output_path_corr / f"{t}.png",
-                verbose=verbose,
-            )
-            transforms.append(transform)
-            shifts.append((t, *shift))
-
-        click.echo(f"Transform for timepoint {t}: {transforms[-1]}")
-
-    np.save(
-        output_folder_path / f"{position_filename}.npy",
-        np.array(transforms, dtype=np.float32),
-    )
-    # save the shifts as a csv
-    if verbose:
-        shifts_df = pd.DataFrame(shifts, columns=["TimepointID", "ShiftZ", "ShiftY", "ShiftX"])
-        shifts_df["TimepointID"] = shifts_df["TimepointID"].astype(int)
-        shifts_df["ShiftZ"] = shifts_df["ShiftZ"].astype(float)
-        shifts_df["ShiftY"] = shifts_df["ShiftY"].astype(float)
-        shifts_df["ShiftX"] = shifts_df["ShiftX"].astype(float)
-        shifts_df.to_csv(output_shifts_path / f"{position_filename}.csv", index=False)
-
-        output_path_shift_plots = output_shifts_path / "plots"
-        output_path_shift_plots.mkdir(parents=True, exist_ok=True)
-        # plot_pcc_drifts(shifts_df, output_path_shift_plots, label=position_filename)
-
-    click.echo(f"Saved transforms for {position_filename}.")
-
-    return transforms
+    output_path_corr = output_dirpath / "corr_plots" / fov / f"{t}.png"
 
 
-def estimate_xyz_stabilization_pcc(
-    input_position_dirpaths: list[Path],
-    output_folder_path: Path,
-    phase_cross_corr_settings: PhaseCrossCorrSettings,
-    channel_index: int = 0,
-    sbatch_filepath: Path = None,
-    cluster: str = "local",
-    verbose: bool = False,
-) -> dict[str, list[ArrayLike]]:
-    """
-    Estimate the xyz stabilization for a list of positions.
 
-    Parameters
-    ----------
-    input_position_dirpaths : list[Path]
-        Paths to the input position directories.
-    output_folder_path : Path
-        Path to the output folder.
-    phase_cross_corr_settings : PhaseCrossCorrSettings
-        Settings for the phase cross correlation.
-    channel_index : int
-        Index of the channel to process.
-    sbatch_filepath : Path
-        Path to the sbatch file.
-    cluster : str
-        Cluster to use.
-    verbose : bool
-        If True, print verbose output.
+ 
 
-    Returns
-    -------
-    dict[str, list[ArrayLike]]
-        Dictionary of the xyz stabilization for each position.
-    """
+        # click.echo(f"Estimating PCC for timepoint {t}")
+        # if t == 0:
+        #     transforms.append(np.eye(4).tolist())
+        #     shifts.append((t, 0, 0, 0))
+        # else:
+    transform, shift = estimate(
+            mov=mov_data_cropped,
+            ref=ref_data_cropped,
+            function_type=phase_cross_corr_settings.function_type,
+            normalization=phase_cross_corr_settings.normalization,
+            output_path=output_path_corr,
+            verbose=verbose,
+        )
+        
+    # save the transform
+    np.save(output_transforms_path_fov_t / f"{t}.npy", transform)
+    np.save(output_shifts_path_fov_t / f"{t}.npy", shift)
 
-    output_folder_path.mkdir(parents=True, exist_ok=True)
-    slurm_out_path = output_folder_path / "slurm_output"
-    slurm_out_path.mkdir(parents=True, exist_ok=True)
 
-    with open_ome_zarr(input_position_dirpaths[0]) as dataset:
-        shape = dataset.data.shape
-        T, C, Z, Y, X = shape
+    # # save the shifts as a csv
+    # if verbose:
+    #     shifts_df = pd.DataFrame(shifts, columns=["TimepointID", "ShiftZ", "ShiftY", "ShiftX"])
+    #     shifts_df["TimepointID"] = shifts_df["TimepointID"].astype(int)
+    #     shifts_df["ShiftZ"] = shifts_df["ShiftZ"].astype(float)
+    #     shifts_df["ShiftY"] = shifts_df["ShiftY"].astype(float)
+    #     shifts_df["ShiftX"] = shifts_df["ShiftX"].astype(float)
+    #     shifts_df.to_csv(output_shifts_path / f"{position_filename}.csv", index=False)
 
-    num_cpus, gb_ram_per_cpu = estimate_resources(
-        shape=(T, C, Z, Y, X), ram_multiplier=16, max_num_cpus=16
-    )
+    #     output_path_shift_plots = output_shifts_path / "plots"
+    #     output_path_shift_plots.mkdir(parents=True, exist_ok=True)
+    #     # plot_pcc_drifts(shifts_df, output_path_shift_plots, label=position_filename)
 
-    slurm_args = {
-        "slurm_job_name": "estimate_xyz_pcc",
-        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
-        "slurm_cpus_per_task": num_cpus,
-        "slurm_array_parallelism": 100,
-        "slurm_time": 60,
-        "slurm_partition": "preempted",
-    }
+    # click.echo(f"Saved transforms for {position_filename}.")
 
-    if sbatch_filepath:
-        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
+    return transform
 
-    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
-    executor.update_parameters(**slurm_args)
 
-    click.echo(f"Submitting SLURM xyz PCC jobs with resources: {slurm_args}")
-    transforms_out_path = output_folder_path / "transforms_per_position"
-    transforms_out_path.mkdir(parents=True, exist_ok=True)
-    shifts_out_path = output_folder_path / "shifts_per_position"
-    shifts_out_path.mkdir(parents=True, exist_ok=True)
+# def estimate_xyz_stabilization_pcc(
+#     input_position_dirpaths: list[Path],
+#     output_folder_path: Path,
+#     phase_cross_corr_settings: PhaseCrossCorrSettings,
+#     channel_index: int = 0,
+#     sbatch_filepath: Path = None,
+#     cluster: str = "local",
+#     verbose: bool = False,
+# ) -> dict[str, list[ArrayLike]]:
+#     """
+#     Estimate the xyz stabilization for a list of positions.
 
-    jobs = []
-    with submitit.helpers.clean_env(), executor.batch():
-        for input_position_dirpath in input_position_dirpaths:
-            job = executor.submit(
-                estimate_tczyx,
-                input_position_dirpath=input_position_dirpath,
-                output_folder_path=transforms_out_path,
-                output_shifts_path=shifts_out_path,
-                channel_index=channel_index,
-                phase_cross_corr_settings=phase_cross_corr_settings,
-                verbose=verbose,
-            )
-            jobs.append(job)
+#     Parameters
+#     ----------
+#     input_position_dirpaths : list[Path]
+#         Paths to the input position directories.
+#     output_folder_path : Path
+#         Path to the output folder.
+#     phase_cross_corr_settings : PhaseCrossCorrSettings
+#         Settings for the phase cross correlation.
+#     channel_index : int
+#         Index of the channel to process.
+#     sbatch_filepath : Path
+#         Path to the sbatch file.
+#     cluster : str
+#         Cluster to use.
+#     verbose : bool
+#         If True, print verbose output.
 
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    log_path = slurm_out_path / f"job_ids_{timestamp}.log"
-    with open(log_path, "w") as log_file:
-        for job in jobs:
-            log_file.write(f"{job.job_id}\n")
+#     Returns
+#     -------
+#     dict[str, list[ArrayLike]]
+#         Dictionary of the xyz stabilization for each position.
+#     """
 
-    wait_for_jobs_to_finish(jobs)
+#     output_folder_path.mkdir(parents=True, exist_ok=True)
+#     slurm_out_path = output_folder_path / "slurm_output"
+#     slurm_out_path.mkdir(parents=True, exist_ok=True)
 
-    transform_files = list(transforms_out_path.glob("*.npy"))
+#     with open_ome_zarr(input_position_dirpaths[0]) as dataset:
+#         shape = dataset.data.shape
+#         T, C, Z, Y, X = shape
 
-    fov_transforms = {}
-    for file_path in transform_files:
-        fov_filename = file_path.stem
-        fov_transforms[fov_filename] = np.load(file_path).tolist()
+#     num_cpus, gb_ram_per_cpu = estimate_resources(
+#         shape=(T, C, Z, Y, X), ram_multiplier=16, max_num_cpus=16
+#     )
 
-    # Remove the output folder
-    shutil.rmtree(transforms_out_path)
+#     slurm_args = {
+#         "slurm_job_name": "estimate_xyz_pcc",
+#         "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
+#         "slurm_cpus_per_task": num_cpus,
+#         "slurm_array_parallelism": 100,
+#         "slurm_time": 60,
+#         "slurm_partition": "preempted",
+#     }
 
-    return fov_transforms
+#     if sbatch_filepath:
+#         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
+
+#     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
+#     executor.update_parameters(**slurm_args)
+
+#     click.echo(f"Submitting SLURM xyz PCC jobs with resources: {slurm_args}")
+#     transforms_out_path = output_folder_path / "transforms_per_position"
+#     transforms_out_path.mkdir(parents=True, exist_ok=True)
+#     shifts_out_path = output_folder_path / "shifts_per_position"
+#     shifts_out_path.mkdir(parents=True, exist_ok=True)
+
+#     jobs = []
+#     with submitit.helpers.clean_env(), executor.batch():
+#         for input_position_dirpath in input_position_dirpaths:
+#             job = executor.submit(
+#                 estimate_tczyx,
+#                 input_position_dirpath=input_position_dirpath,
+#                 output_folder_path=transforms_out_path,
+#                 output_shifts_path=shifts_out_path,
+#                 channel_index=channel_index,
+#                 phase_cross_corr_settings=phase_cross_corr_settings,
+#                 verbose=verbose,
+#             )
+#             jobs.append(job)
+
+#     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+#     log_path = slurm_out_path / f"job_ids_{timestamp}.log"
+#     with open(log_path, "w") as log_file:
+#         for job in jobs:
+#             log_file.write(f"{job.job_id}\n")
+
+#     wait_for_jobs_to_finish(jobs)
+
+#     transform_files = list(transforms_out_path.glob("*.npy"))
+
+#     fov_transforms = {}
+#     for file_path in transform_files:
+#         fov_filename = file_path.stem
+#         fov_transforms[fov_filename] = np.load(file_path).tolist()
+
+#     # Remove the output folder
+#     shutil.rmtree(transforms_out_path)
+
+#     return fov_transforms
