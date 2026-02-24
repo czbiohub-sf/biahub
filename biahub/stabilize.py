@@ -1,7 +1,6 @@
 from pathlib import Path
 from typing import List
 
-import ants
 import click
 import numpy as np
 import submitit
@@ -28,64 +27,8 @@ from biahub.cli.utils import (
     process_single_position_v2,
     yaml_to_model,
 )
-from biahub.register import convert_transform_to_ants
+from biahub.core.transform import apply_stabilization_transform
 from biahub.settings import StabilizationSettings
-
-
-def apply_stabilization_transform(
-    zyx_data: np.ndarray,
-    list_of_shifts: list[np.ndarray],
-    t_idx: int,
-    output_shape: tuple[int, int, int] = None,
-):
-    """
-    Apply stabilization transformations to 3D or 4D volumetric data.
-
-    This function applies a time-indexed stabilization transformation to a single 3D (Z, Y, X) volume
-    or a 4D (C, Z, Y, X) volume using a precomputed list of transformations.
-
-    Parameters:
-    - zyx_data (np.ndarray): Input 3D (Z, Y, X) or 4D (C, Z, Y, X) volumetric data.
-    - list_of_shifts (list[np.ndarray]): List of transformation matrices (one per time index).
-    - t_idx (int): Time index corresponding to the transformation to apply.
-    - output_shape (tuple[int, int, int], optional): Desired shape of the output stabilized volume.
-                                                     If None, the shape of `zyx_data` is used.
-                                                     Defaults to None.
-
-    Returns:
-    - np.ndarray: The stabilized 3D (Z, Y, X) or 4D (C, Z, Y, X) volume.
-
-    Notes:
-    - If `zyx_data` is 4D, the function recursively applies stabilization to each channel (C).
-    - Uses ANTsPy for applying the transformation to the input data.
-    - Handles `NaN` values in the input by replacing them with 0 before applying the transformation.
-    - Echoes the transformation matrix for debugging purposes when verbose logging is enabled.
-    """
-
-    if output_shape is None:
-        output_shape = zyx_data.shape[-3:]
-
-    # Get the transformation matrix for the current time index
-    tx_shifts = convert_transform_to_ants(list_of_shifts[t_idx])
-
-    if zyx_data.ndim == 4:
-        stabilized_czyx = np.zeros((zyx_data.shape[0],) + output_shape, dtype=np.float32)
-        for c in range(zyx_data.shape[0]):
-            stabilized_czyx[c] = apply_stabilization_transform(
-                zyx_data[c], list_of_shifts, t_idx, output_shape
-            )
-        return stabilized_czyx
-    else:
-        click.echo(f'shifting matrix with t_idx:{t_idx} \n{list_of_shifts[t_idx]}')
-        target_zyx_ants = ants.from_numpy(np.zeros((output_shape), dtype=np.float32))
-
-        zyx_data = np.nan_to_num(zyx_data, nan=0)
-        zyx_data_ants = ants.from_numpy(zyx_data.astype(np.float32))
-        stabilized_zyx = tx_shifts.apply_to_image(
-            zyx_data_ants, reference=target_zyx_ants
-        ).numpy()
-
-    return stabilized_zyx
 
 
 def stabilize(
@@ -127,6 +70,8 @@ def stabilize(
         --local                                 # Run locally instead of submitting to SLURM
 
     """
+
+    # Single config file for all FOVs
 
     settings = yaml_to_model(config_filepaths[0], StabilizationSettings)
 
