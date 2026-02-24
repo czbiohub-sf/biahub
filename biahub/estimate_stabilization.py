@@ -42,31 +42,6 @@ NA_DET = 1.35
 LAMBDA_ILL = 0.500
 
 
-def remove_beads_fov_from_path_list(
-    position_dirpaths: list[Path],
-    skip_beads_fov: str,
-) -> list[Path]:
-    """
-    Remove the beads FOV from the input data paths.
-
-    Parameters
-    ----------
-    position_dirpaths : list[Path]
-        Paths to the input position directories.
-    skip_beads_fov : str
-        Beads FOV to skip.
-
-    Returns
-    -------
-    list[Path]
-        Paths to the input position directories without the beads FOV.
-    """
-    if skip_beads_fov != '0':
-        click.echo(f"Removing beads FOV {skip_beads_fov} from input data paths")
-        position_dirpaths = [
-            path for path in position_dirpaths if skip_beads_fov not in str(path)
-        ]
-    return position_dirpaths
 
 
 def pad_to_shape(
@@ -724,10 +699,6 @@ def estimate_xyz_stabilization_pcc(
         Dictionary of the xyz stabilization for each position.
     """
 
-    input_position_dirpaths = remove_beads_fov_from_path_list(
-        input_position_dirpaths, phase_cross_corr_settings.skip_beads_fov
-    )
-
     output_folder_path.mkdir(parents=True, exist_ok=True)
     slurm_out_path = output_folder_path / "slurm_output"
     slurm_out_path.mkdir(parents=True, exist_ok=True)
@@ -908,10 +879,6 @@ def estimate_xy_stabilization(
     dict[str, list[ArrayLike]]
         Dictionary of the xy stabilization for each position.
     """
-
-    input_position_dirpaths = remove_beads_fov_from_path_list(
-        input_position_dirpaths, stack_reg_settings.skip_beads_fov
-    )
 
     output_folder_path.mkdir(parents=True, exist_ok=True)
     slurm_out_path = output_folder_path / "slurm_output"
