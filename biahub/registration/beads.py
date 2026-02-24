@@ -32,58 +32,6 @@ from biahub.settings import (
 )
 
 
-def registration_beads_score(
-    mov_peaks: ArrayLike,
-    ref_peaks: ArrayLike,
-    radius: int = 6,
-    verbose: bool = False,
-):
-    """
-    Compute the score for the beads registration based on the overlap fraction and IoU.
-    between detected bead peaks from LF (ref) and LS (mov) channels.
-
-    Args:
-        ref_peaks: (N_ref, 3) array of LF bead coordinates (z, y, x)
-        mov_peaks: (N_mov, 3) array of LS bead coordinates (z, y, x)
-        matches:   (M, 2) matched indices (optional)
-        radius:    spherical neighborhood radius (voxels)
-        ref_shape: optional 3D shape for visualization masks
-
-    Returns:
-       score: float
-
-    """
-
-    if len(mov_peaks) == 0 or len(ref_peaks) == 0:
-        print("No peaks found, returning nan metrics")
-        return np.nan
-
-    # ---- Overlap counting using KDTree ----
-    mov_tree = cKDTree(mov_peaks)
-
-    ref_peaks_mask = np.zeros(len(ref_peaks), dtype=bool)
-    mov_peaks_mask = np.zeros(len(mov_peaks), dtype=bool)
-
-    for i, p in enumerate(ref_peaks):
-        idx = mov_tree.query_ball_point(p, r=radius)
-        if idx:
-            ref_peaks_mask[i] = True
-            mov_peaks_mask[idx] = True
-
-    peaks_overlap_count = int(ref_peaks_mask.sum())
-
-    # ---- Overlap fraction ----
-    peaks_overlap_fraction = peaks_overlap_count / max(min(len(mov_peaks), len(ref_peaks)), 1)
-
-    if verbose:
-        click.echo(f"Mov peaks: {len(mov_peaks)}")
-        click.echo(f"Ref peaks: {len(ref_peaks)}")
-        click.echo(f"Peaks overlap count: {peaks_overlap_count}")
-        click.echo(f"Peaks overlap fraction: {peaks_overlap_fraction}")
-
-    return peaks_overlap_fraction
-
-
 def estimate_tczyx(
     mov_tczyx: da.Array,
     ref_tczyx: da.Array,
@@ -604,6 +552,59 @@ def estimate_tzyx(
     #         user_transform=user_transform,
         # )
     return transform
+
+def registration_beads_score(
+    mov_peaks: ArrayLike,
+    ref_peaks: ArrayLike,
+    radius: int = 6,
+    verbose: bool = False,
+):
+    """
+    Compute the score for the beads registration based on the overlap fraction and IoU.
+    between detected bead peaks from LF (ref) and LS (mov) channels.
+
+    Args:
+        ref_peaks: (N_ref, 3) array of LF bead coordinates (z, y, x)
+        mov_peaks: (N_mov, 3) array of LS bead coordinates (z, y, x)
+        matches:   (M, 2) matched indices (optional)
+        radius:    spherical neighborhood radius (voxels)
+        ref_shape: optional 3D shape for visualization masks
+
+    Returns:
+       score: float
+
+    """
+
+    if len(mov_peaks) == 0 or len(ref_peaks) == 0:
+        print("No peaks found, returning nan metrics")
+        return np.nan
+
+    # ---- Overlap counting using KDTree ----
+    mov_tree = cKDTree(mov_peaks)
+
+    ref_peaks_mask = np.zeros(len(ref_peaks), dtype=bool)
+    mov_peaks_mask = np.zeros(len(mov_peaks), dtype=bool)
+
+    for i, p in enumerate(ref_peaks):
+        idx = mov_tree.query_ball_point(p, r=radius)
+        if idx:
+            ref_peaks_mask[i] = True
+            mov_peaks_mask[idx] = True
+
+    peaks_overlap_count = int(ref_peaks_mask.sum())
+
+    # ---- Overlap fraction ----
+    peaks_overlap_fraction = peaks_overlap_count / max(min(len(mov_peaks), len(ref_peaks)), 1)
+
+    if verbose:
+        click.echo(f"Mov peaks: {len(mov_peaks)}")
+        click.echo(f"Ref peaks: {len(ref_peaks)}")
+        click.echo(f"Peaks overlap count: {peaks_overlap_count}")
+        click.echo(f"Peaks overlap fraction: {peaks_overlap_fraction}")
+
+    return peaks_overlap_fraction
+
+
 
 def optimize_transform(
     transform: Transform,
