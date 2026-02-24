@@ -317,35 +317,65 @@ class DeskewSettings(MyBaseModel):
                 )
         super().__init__(**data)
 
+# class StabilizationSettings(MyBaseModel):
+#     stabilization_estimation_channel: str
+#     stabilization_type: Literal["z", "xy", "xyz"]
+#     stabilization_method: Literal["beads", "phase-cross-corr", "focus-finding"] = (
+#         "focus-finding"
+#     )
+#     stabilization_channels: list
+#     affine_transform_zyx_list: list
+#     time_indices: Union[NonNegativeInt, list[NonNegativeInt], Literal["all"]] = "all"
+
+
+    # @field_validator("affine_transform_zyx_list")
+    # @classmethod
+    # def check_affine_transform_zyx_list(cls, v):
+    #     if not isinstance(v, list):
+    #         raise ValueError("affine_transform_list must be a list")
+
+    #     for arr in v:
+    #         arr = np.array(arr)
+    #         if arr.shape != (4, 4):
+    #             raise ValueError("Each element in affine_transform_list must be a 4x4 ndarray")
+
+    #     return v
+
 
 class RegistrationSettings(MyBaseModel):
-    source_channel_names: list[str]
-    target_channel_name: str
-    affine_transform_zyx: list
+    fov: str = "*/*/*"
+    ref_channel_name: str
+    mov_channel_names: Optional[list[str]] = None
+    mode: Literal["stabilization", "registration"] = "registration"
+    method: Literal["manual","beads","ants", "pcc", "focus-finding", "stackreg"] = "manual"
+    affine_transforms: list
     keep_overhang: bool = False
     interpolation: str = "linear"
+    output_voxel_size: list[
+        PositiveFloat, PositiveFloat, PositiveFloat, PositiveFloat, PositiveFloat
+    ] = [1.0, 1.0, 1.0, 1.0, 1.0]
     time_indices: Union[NonNegativeInt, list[NonNegativeInt], Literal["all"]] = "all"
     verbose: bool = False
 
-    @field_validator("affine_transform_zyx")
-    @classmethod
-    def check_affine_transform(cls, v):
-        if not isinstance(v, list) or len(v) != 4:
-            raise ValueError("The input array must be a list of length 3.")
+    # @field_validator("affine_transform_zyx")
+    # @classmethod
+    # def check_affine_transform(cls, v):
+    #     if not isinstance(v, list) or len(v) != 4:
+    #         raise ValueError("The input array must be a list of length 3.")
 
-        for row in v:
-            if not isinstance(row, list) or len(row) != 4:
-                raise ValueError("Each row of the array must be a list of length 3.")
+    #     for row in v:
+    #         if not isinstance(row, list) or len(row) != 4:
+    #             raise ValueError("Each row of the array must be a list of length 3.")
 
-        try:
-            # Try converting the list to a 3x3 ndarray to check for valid shape and content
-            np_array = np.array(v)
-            if np_array.shape != (4, 4):
-                raise ValueError("The array must be a 3x3 ndarray.")
-        except ValueError:
-            raise ValueError("The array must contain valid numerical values.")
+    #     try:
+    #         # Try converting the list to a 3x3 ndarray to check for valid shape and content
+    #         np_array = np.array(v)
+    #         if np_array.shape != (4, 4):
+    #             raise ValueError("The array must be a 3x3 ndarray.")
+    #     except ValueError:
+    #         raise ValueError("The array must contain valid numerical values.")
 
-        return v
+    #     return v
 
 
 class PsfFromBeadsSettings(MyBaseModel):
@@ -549,31 +579,7 @@ class ConcatenateSettings(MyBaseModel):
         return self
 
 
-class StabilizationSettings(MyBaseModel):
-    stabilization_estimation_channel: str
-    stabilization_type: Literal["z", "xy", "xyz"]
-    stabilization_method: Literal["beads", "phase-cross-corr", "focus-finding"] = (
-        "focus-finding"
-    )
-    stabilization_channels: list
-    affine_transform_zyx_list: list
-    time_indices: Union[NonNegativeInt, list[NonNegativeInt], Literal["all"]] = "all"
-    output_voxel_size: list[
-        PositiveFloat, PositiveFloat, PositiveFloat, PositiveFloat, PositiveFloat
-    ] = [1.0, 1.0, 1.0, 1.0, 1.0]
 
-    @field_validator("affine_transform_zyx_list")
-    @classmethod
-    def check_affine_transform_zyx_list(cls, v):
-        if not isinstance(v, list):
-            raise ValueError("affine_transform_list must be a list")
-
-        for arr in v:
-            arr = np.array(arr)
-            if arr.shape != (4, 4):
-                raise ValueError("Each element in affine_transform_list must be a 4x4 ndarray")
-
-        return v
 
 
 class StitchSettings(BaseModel):

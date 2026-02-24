@@ -708,7 +708,6 @@ def get_3D_fliplr_matrix(start_shape_zyx: tuple, end_shape_zyx: tuple = None) ->
     return flip_matrix
 
 
-
 def apply_affine_transform(
     zyx_data: np.ndarray,
     matrix: np.ndarray,
@@ -790,4 +789,3 @@ def apply_affine_transform(
             registered_zyx = registered_zyx[Z_slice, Y_slice, X_slice]
 
     return registered_zyx
-

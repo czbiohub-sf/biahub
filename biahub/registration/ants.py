@@ -1,29 +1,20 @@
-from datetime import datetime
 from pathlib import Path
 
 import ants
 import click
 import dask.array as da
 import numpy as np
-import submitit
 
 from skimage import filters
-
-from biahub.cli.parsing import (
-    sbatch_to_submitit,
-)
-from biahub.cli.slurm import wait_for_jobs_to_finish
-from biahub.cli.utils import _check_nan_n_zeros, estimate_resources
+from biahub.cli.utils import _check_nan_n_zeros
 from biahub.core.transform import Transform
 from biahub.registration.utils import (
     find_lir,
-    load_transforms,
 )
 from biahub.settings import (
     AffineTransformSettings,
     AntsRegistrationSettings,
 )
-
 
 def estimate(
     ref: np.ndarray,
@@ -249,7 +240,7 @@ def estimate_czyx(
     sobel_filter: bool = False,
     verbose: bool = False,
     t_idx: int = 0,
-    output_folder_path: str | None = None,
+    output_dirpath: Path = None,
 ) -> Transform:
     """
     Optimize the affine transform between source and target channels using ANTs library.
@@ -329,14 +320,14 @@ def estimate_czyx(
     if composed_transform is None:
         raise ValueError("Failed to estimate registration transform for timepoint.")
 
-    if output_folder_path:
-        output_folder_path.mkdir(parents=True, exist_ok=True)
+    if output_dirpath:
+        output_dirpath.mkdir(parents=True, exist_ok=True)
         if verbose:
             click.echo(
-                f"Saving registration transform for timepoint {t_idx} to {output_folder_path}"
+                f"Saving registration transform for timepoint {t_idx} to {output_dirpath}"
             )
 
-        np.save(output_folder_path / f"{t_idx}.npy", composed_transform.matrix)
+        np.save(output_dirpath / f"{t_idx}.npy", composed_transform.matrix)
 
     return composed_transform
 
@@ -364,6 +355,8 @@ def postprocess_transform(
 
 
 def estimate_tczyx(
+    t: int,
+    fov: str,
     mov_tczyx: da.Array,
     ref_tczyx: da.Array,
     mov_channel_index: int | list[int],
@@ -371,9 +364,7 @@ def estimate_tczyx(
     ants_registration_settings: AntsRegistrationSettings,
     affine_transform_settings: AffineTransformSettings,
     verbose: bool = False,
-    output_folder_path: Path = None,
-    cluster: str = 'local',
-    sbatch_filepath: Path = None,
+    output_dirpath: Path = None,
 ) -> list[Transform]:
     """
     Perform ants registration of two volumetric image channels.
@@ -398,7 +389,7 @@ def estimate_tczyx(
         Settings for the affine transform.
     verbose : bool, optional
         Whether to print verbose output during registration, by default False.
-    output_folder_path : str | None, optional
+    output_dirpath : Path, optional
         Path to the folder where the output transform will be saved, by default None.
     cluster : str, optional
         Cluster to use, by default 'local'.
@@ -413,50 +404,20 @@ def estimate_tczyx(
     Each timepoint is processed in parallel using submitit executor.
     Use verbose=True for detailed logging during registration. The verbose output will be saved at the same level as the output zarr.
     """
-    T, C, Z, Y, X = mov_tczyx.shape
-    initial_tform = np.asarray(affine_transform_settings.approx_transform)
-    click.echo(f"Initial transform: {initial_tform}")
-
-    num_cpus, gb_ram_per_cpu = estimate_resources(
-        shape=(T, 2, Z, Y, X), ram_multiplier=16, max_num_cpus=16
-    )
-
-    # Prepare SLURM arguments
-    slurm_args = {
-        "slurm_job_name": "estimate_registration_ants",
-        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
-        "slurm_cpus_per_task": num_cpus,
-        "slurm_array_parallelism": 100,
-        "slurm_time": 30,
-        "slurm_partition": "preempted",
-    }
-
-    if sbatch_filepath:
-        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
-
-    output_folder_path.mkdir(parents=True, exist_ok=True)
-    slurm_out_path = output_folder_path / "slurm_output"
-    slurm_out_path.mkdir(parents=True, exist_ok=True)
-
-    # Submitit executor
-    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
-    executor.update_parameters(**slurm_args)
-
-    click.echo(f"Submitting SLURM estimate regstration jobs with resources: {slurm_args}")
-    output_transforms_path = output_folder_path / "xyz_transforms"
-    output_transforms_path.mkdir(parents=True, exist_ok=True)
+   
 
     click.echo('Computing registration transforms...')
     # NOTE: ants is mulitthreaded so no need for multiprocessing here
     # Submit jobs
-    jobs = []
-    with submitit.helpers.clean_env(), executor.batch():
-        for t in range(T):
-            job = executor.submit(
-                estimate_czyx,
+
+    output_dirpath_fov_t = output_dirpath / fov / t
+    output_dirpath_fov_t.mkdir(parents=True, exist_ok=True)
+
+    
+    transform = estimate_czyx(
                 mov_czyx=mov_tczyx[t],
                 ref_czyx=ref_tczyx[t],
-                initial_tform=initial_tform,
+                initial_tform=affine_transform_settings.approx_transform,
                 mov_channel_index=mov_channel_index,
                 ref_channel_index=ref_channel_index,
                 crop=ants_registration_settings.crop,
@@ -465,22 +426,7 @@ def estimate_tczyx(
                 sobel_filter=ants_registration_settings.sobel_filter,
                 verbose=verbose,
                 t_idx=t,
-                output_folder_path=output_transforms_path,
-            )
-            jobs.append(job)
+                output_dirpath=output_dirpath_fov_t,
+                )
 
-    # Save job IDs
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    log_path = slurm_out_path / f"job_ids_{timestamp}.log"
-    with open(log_path, "w") as log_file:
-        for job in jobs:
-            log_file.write(f"{job.job_id}\n")
-
-    wait_for_jobs_to_finish(jobs)
-
-    transforms = load_transforms(output_transforms_path, T, verbose)
-    if len(transforms) != T:
-        raise ValueError(
-            f"Number of transforms {len(transforms)} does not match number of timepoints {T}"
-        )
-    return transforms
+    return transform

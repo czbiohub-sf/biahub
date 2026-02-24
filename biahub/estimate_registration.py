@@ -16,7 +16,9 @@ from biahub.cli.parsing import (
 from biahub.cli.utils import (
     model_to_yaml,
     yaml_to_model,
+    estimate_resources,
 )
+from biahub.cli.slurm import wait_for_jobs_to_finish
 from biahub.registration.manual import user_assisted_registration
 from biahub.registration.utils import evaluate_transforms, plot_translations
 from biahub.settings import (
@@ -24,13 +26,15 @@ from biahub.settings import (
     RegistrationSettings,
     StabilizationSettings,
 )
-
+from biahub.cli.parsing import (
+    sbatch_to_submitit,
+)
 from pathlib import Path
 from typing import List
 
 import click
 import numpy as np
-
+import submitit
 from iohub.ngff import open_ome_zarr
 from tqdm import tqdm
 
@@ -40,6 +44,7 @@ from biahub.cli.parsing import (
     local,
     output_dirpath,
     sbatch_filepath,
+    sbatch_to_submitit,
 )
 from biahub.cli.utils import yaml_to_model
 from biahub.registration.utils import (
@@ -50,6 +55,140 @@ from biahub.settings import (
     EstimateStabilizationSettings,
     StabilizationSettings,
 )
+
+def estimate_transform(
+    ref_position_dirpath: str,
+    mov_position_dirpath: str,
+    method: str,
+    output_dirpath: str,
+    sbatch_filepath: str = None,
+    cluster: str = "local",
+    verbose: bool = False,
+) -> None:
+
+    function_to_run = None
+    match method:
+        case "manual":
+            # currently only for one timepoint, should be like that,
+            #  or maybe allow the user to run it for different timepoints,
+            #  interp between them if needed and show the total registration
+            from biahub.registration.manual import user_assisted_registration
+            function_to_run = user_assisted_registration
+        case "ants":
+            from biahub.registration.ants import estimate_tczyx
+            #currentlyslurm over timepoints
+            # should be able to run over positions too
+            function_to_run = estimate_tczyx
+        case "beads":
+            #slurm over timepoints or sequentially (necessary for best performance).
+            #  usually used only in on the beads fov, but better to allow more flexibility
+            from biahub.registration.beads import estimate_tczyx
+            function_to_run = estimate_tczyx
+        case "pcc":
+            #currently slurm over positions, but can be over time too, better to allow both
+            from biahub.registration.phase_cross_correlation import estimate_tczyx
+            function_to_run = estimate_tczyx
+        case "focus-finding":
+            #currently slurm over positions, but can be over time too, better to allow both
+            from biahub.registration.z_focus_finding import estimate_tczyx
+            function_to_run = estimate_tczyx
+        case "stackreg":
+            #currently slurm over positions, but can be over time too, better to allow both
+            from biahub.registration.stackreg import estimate_tczyx
+            function_to_run = estimate_tczyx
+        case _:
+            raise ValueError(f"Unknown method: {method}")
+
+    return function_to_run
+
+def estimate_registration_parallel_fovs_and_time(
+    ref_position_dirpath: str,
+    output_dirpath: str,
+    config_filepath: str,
+    sbatch_filepath: str = None,
+    mov_position_dirpath: str = None,
+    cluster: str = "local",
+) -> None:
+
+    settings = yaml_to_model(config_filepath, RegistrationSettings)
+    click.echo(f"Settings: {settings}")
+
+    fov = settings.fov
+    methods_kwargs = {}
+    ref_position_dirpath = Path(ref_position_dirpath) / fov
+
+
+    output_dirpath.mkdir(parents=True, exist_ok=True)
+    slurm_out_path = output_dirpath / "slurm_output"
+    slurm_out_path.mkdir(parents=True, exist_ok=True)
+
+    with open_ome_zarr(input_position_dirpaths[0]) as dataset:
+        shape = dataset.data.shape
+        T, C, Z, Y, X = shape
+
+    num_cpus, gb_ram_per_cpu = estimate_resources(
+        shape=(T, C, Z, Y, X), ram_multiplier=16, max_num_cpus=16
+    )
+
+    slurm_args = {
+        "slurm_job_name": "estimate_registration",
+        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
+        "slurm_cpus_per_task": num_cpus,
+        "slurm_array_parallelism": 100,
+        "slurm_time": 60,
+        "slurm_partition": "preempted",
+    }
+
+    if sbatch_filepath:
+        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
+
+    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
+    executor.update_parameters(**slurm_args)
+
+    click.echo(f"Submitting SLURM xyz PCC jobs with resources: {slurm_args}")
+    transforms_out_path = output_dirpath / "transforms_per_position"
+    transforms_out_path.mkdir(parents=True, exist_ok=True)
+  
+    jobs = []
+    
+    function_to_run = estimate_transform(method=settings.method)
+
+
+    ## If you want to avoid the nested complexity entirely, you could flatten it: submit one job per (position,
+   #t) pair from the CLI, then collect and save results per position after all jobs finish. More jobs but
+  #simpler dependency graph.
+    with submitit.helpers.clean_env(), executor.batch():
+        for fov in ref_position_dirpath:
+            for t in range(T):
+                job = executor.submit(
+                    function_to_run,
+                    t, 
+                    fov, 
+                    **methods_kwargs
+                )
+                jobs.append(job)
+
+    # wait_for_jobs_to_finish(jobs)
+
+
+    # transform_files = list(transforms_out_path.glob("*.npy"))
+
+    # fov_transforms = {}
+    # for file_path in transform_files:
+    #     fov_filename = file_path.stem
+    #     fov_transforms[fov_filename] = np.load(file_path).tolist()
+
+
+    # evaluate transforms
+    # save transforms
+
+    # plots
+    # qc?
+
+    pass
+
+def estimate_registration_parallel_timepoints():
+    pass
 
 
 def estimate_stabilization(

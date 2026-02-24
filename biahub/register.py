@@ -1,19 +1,21 @@
 from pathlib import Path
 from typing import List, Tuple
 
-import ants
 import click
-import largestinteriorrectangle as lir
-import matplotlib.pyplot as plt
 import numpy as np
-import scipy.ndimage
 import submitit
 
 from iohub import open_ome_zarr
+from iohub.ngff import open_ome_zarr
+from scipy.linalg import svd
+from scipy.spatial.transform import Rotation as R
 
+from biahub.cli.disk import check_disk_space_with_du
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
     config_filepath,
+    config_filepaths,
+    input_position_dirpaths,
     local,
     monitor,
     output_dirpath,
@@ -29,39 +31,9 @@ from biahub.cli.utils import (
     process_single_position_v2,
     yaml_to_model,
 )
+from biahub.core.transform import apply_stabilization_transform
 from biahub.settings import RegistrationSettings
 
-from pathlib import Path
-from typing import List
-
-import click
-import numpy as np
-import submitit
-
-from iohub.ngff import open_ome_zarr
-from scipy.linalg import svd
-from scipy.spatial.transform import Rotation as R
-
-from biahub.cli.disk import check_disk_space_with_du
-from biahub.cli.monitor import monitor_jobs
-from biahub.cli.parsing import (
-    config_filepaths,
-    input_position_dirpaths,
-    local,
-    monitor,
-    output_dirpath,
-    sbatch_filepath,
-    sbatch_to_submitit,
-)
-from biahub.cli.utils import (
-    copy_n_paste_czyx,
-    create_empty_hcs_zarr,
-    estimate_resources,
-    process_single_position_v2,
-    yaml_to_model,
-)
-from biahub.core.transform import apply_stabilization_transform
-from biahub.settings import StabilizationSettings
 
 
 def stabilize(
@@ -106,7 +78,7 @@ def stabilize(
 
     # Single config file for all FOVs
 
-    settings = yaml_to_model(config_filepaths[0], StabilizationSettings)
+    settings = yaml_to_model(config_filepaths[0], RegistrationSettings)
 
     output_dirpath = Path(output_dirpath)
     slurm_out_path = output_dirpath.parent / "slurm_output"
@@ -294,7 +266,6 @@ def stabilize(
         monitor_jobs(jobs, input_position_dirpaths)
 
 
-
 def register(
     source_position_dirpaths: List[str],
     target_position_dirpaths: List[str],
@@ -306,7 +277,7 @@ def register(
 ):
     """
     Register a source position to a target position using a registration config file.
- 
+
     Apply an affine transformation to a single position across T and C axes based on a registration config file.
 
     Start by generating an initial affine transform with `estimate-register`. Optionally, refine this transform with `optimize-register`. Finally, use `register`.
@@ -321,8 +292,7 @@ def register(
     settings = yaml_to_model(config_filepath, RegistrationSettings)
     matrix = np.array(settings.affine_transform_zyx)
     keep_overhang = settings.keep_overhang
-    from biahub.registration.utils import find_overlapping_volume
-    from biahub.registration.utils import rescale_voxel_size
+    from biahub.registration.utils import find_overlapping_volume, rescale_voxel_size
 
     # Calculate the output voxel size from the input scale and affine transform
     with open_ome_zarr(source_position_dirpaths[0]) as source_dataset:
@@ -443,6 +413,7 @@ def register(
     # apply affine transform to channels in the source datastore that should be registered
     # as given in the config file (i.e. settings.source_channel_names)
     from biahub.registration.utils import apply_affine_transform
+
     affine_jobs = []
     affine_names = []
     with submitit.helpers.clean_env(), executor.batch():
@@ -499,7 +470,6 @@ def register(
         monitor_jobs(affine_jobs + copy_jobs, affine_names + copy_names)
 
 
-
 @click.command("register")
 @source_position_dirpaths()
 @target_position_dirpaths()
@@ -525,7 +495,7 @@ def register_cli(
         local=local,
         sbatch_filepath=sbatch_filepath,
         monitor=monitor,
-    )  
+    )
 
 
 @click.command("stabilize")
@@ -563,10 +533,5 @@ def stabilize_cli(
     )
 
 
-
-
 if __name__ == "__main__":
     register_cli()
-
-
-
