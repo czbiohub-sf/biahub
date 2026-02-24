@@ -82,8 +82,8 @@ def estimate_transform(
         case "beads":
             #slurm over timepoints or sequentially (necessary for best performance).
             #  usually used only in on the beads fov, but better to allow more flexibility
-            from biahub.registration.beads import estimate_tczyx
-            function_to_run = estimate_tczyx
+            from biahub.registration.beads import estimate_independently
+            function_to_run = estimate_independently
         case "pcc":
             #currently slurm over positions, but can be over time too, better to allow both
             from biahub.registration.phase_cross_correlation import estimate_tczyx
