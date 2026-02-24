@@ -30,8 +30,9 @@ from biahub.cli.parsing import (
 )
 from biahub.cli.slurm import wait_for_jobs_to_finish
 from biahub.cli.utils import estimate_resources, yaml_to_model
-from biahub.estimate_registration import (
-    estimate_transform_from_beads,
+
+
+from biahub.registration.utils import (
     evaluate_transforms,
     save_transforms,
 )
@@ -1631,18 +1632,24 @@ def estimate_stabilization(
 
         elif stabilization_method == "beads":
 
+            from biahub.registration.beads import estimate_tczyx
+
             click.echo("Estimating xyz stabilization parameters with beads")
             with open_ome_zarr(input_position_dirpaths[0], mode="r") as beads_position:
                 source_channels = beads_position.channel_names
                 source_channel_index = source_channels.index(stabilization_estimation_channel)
-                channel_tzyx = beads_position.data.dask_array()[:, source_channel_index]
+                channel_tczyx = beads_position.data.dask_array()
 
-            xyz_transforms = estimate_xyz_stabilization_with_beads(
-                channel_tzyx=channel_tzyx,
+            xyz_transforms = estimate_tczyx(
+                mov_tczyx=channel_tczyx,
+                ref_tczyx=channel_tczyx,
+                mov_channel_index=source_channel_index,
+                ref_channel_index=source_channel_index,
                 beads_match_settings=settings.beads_match_settings,
                 affine_transform_settings=settings.affine_transform_settings,
                 verbose=verbose,
                 output_folder_path=output_dirpath,
+                mode="stabilization",
                 cluster=cluster,
                 sbatch_filepath=sbatch_filepath,
             )
