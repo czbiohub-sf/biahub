@@ -2,7 +2,7 @@ import shutil
 
 from datetime import datetime
 from pathlib import Path
-from typing import List, Literal, Optional, Tuple, cast
+from typing import Literal, Optional, Tuple, cast
 
 import click
 import dask.array as da
@@ -13,35 +13,16 @@ import submitit
 
 from iohub.ngff import open_ome_zarr
 from numpy.typing import ArrayLike
-from pystackreg import StackReg
 from scipy.fftpack import next_fast_len
-from tqdm import tqdm
 
 from biahub.cli.parsing import (
-    config_filepath,
-    input_position_dirpaths,
-    local,
-    output_dirpath,
-    sbatch_filepath,
     sbatch_to_submitit,
 )
 from biahub.cli.slurm import wait_for_jobs_to_finish
-from biahub.cli.utils import estimate_resources, yaml_to_model
-from biahub.registration.utils import (
-    evaluate_transforms,
-    save_transforms,
-)
+from biahub.cli.utils import estimate_resources
 from biahub.settings import (
-    EstimateStabilizationSettings,
     PhaseCrossCorrSettings,
-    StabilizationSettings,
-    StackRegSettings,
 )
-
-NA_DET = 1.35
-LAMBDA_ILL = 0.500
-
-
 
 
 def pad_to_shape(
@@ -765,32 +746,6 @@ def estimate_xyz_stabilization_pcc(
     shutil.rmtree(transforms_out_path)
 
     return fov_transforms
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # import itertools

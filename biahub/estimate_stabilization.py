@@ -1,4 +1,3 @@
-
 from pathlib import Path
 from typing import List
 
@@ -262,8 +261,10 @@ def estimate_stabilization(
         elif stabilization_method == "phase-cross-corr":
             click.echo("Estimating xyz stabilization parameters with phase cross correlation")
 
-            from biahub.registration.phase_cross_correlation import estimate_xyz_stabilization_pcc
-           
+            from biahub.registration.phase_cross_correlation import (
+                estimate_xyz_stabilization_pcc,
+            )
+
             xyz_transforms_dict = estimate_xyz_stabilization_pcc(
                 input_position_dirpaths=input_position_dirpaths,
                 output_folder_path=output_dirpath,
