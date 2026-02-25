@@ -1,19 +1,21 @@
 from pathlib import Path
 from typing import List, Tuple
 
-import ants
 import click
-import largestinteriorrectangle as lir
-import matplotlib.pyplot as plt
 import numpy as np
-import scipy.ndimage
 import submitit
 
 from iohub import open_ome_zarr
+from iohub.ngff import open_ome_zarr
+from scipy.linalg import svd
+from scipy.spatial.transform import Rotation as R
 
+from biahub.cli.disk import check_disk_space_with_du
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
     config_filepath,
+    config_filepaths,
+    input_position_dirpaths,
     local,
     monitor,
     output_dirpath,
@@ -29,390 +31,242 @@ from biahub.cli.utils import (
     process_single_position_v2,
     yaml_to_model,
 )
+from biahub.core.transform import apply_stabilization_transform
 from biahub.settings import RegistrationSettings
 
 
-def get_3D_rescaling_matrix(start_shape_zyx, scaling_factor_zyx=(1, 1, 1), end_shape_zyx=None):
-    center_Y_start, center_X_start = np.array(start_shape_zyx)[-2:] / 2
-    if end_shape_zyx is None:
-        center_Y_end, center_X_end = (center_Y_start, center_X_start)
-    else:
-        center_Y_end, center_X_end = np.array(end_shape_zyx)[-2:] / 2
 
-    scaling_matrix = np.array(
-        [
-            [scaling_factor_zyx[-3], 0, 0, 0],
-            [
-                0,
-                scaling_factor_zyx[-2],
-                0,
-                -center_Y_start * scaling_factor_zyx[-2] + center_Y_end,
-            ],
-            [
-                0,
-                0,
-                scaling_factor_zyx[-1],
-                -center_X_start * scaling_factor_zyx[-1] + center_X_end,
-            ],
-            [0, 0, 0, 1],
-        ]
-    )
-    return scaling_matrix
-
-
-def get_3D_rotation_matrix(
-    start_shape_zyx: Tuple, angle: float = 0.0, end_shape_zyx: Tuple = None
-) -> np.ndarray:
+def stabilize(
+    input_position_dirpaths: List[str],
+    output_dirpath: str,
+    config_filepaths: list[str],
+    sbatch_filepath: str = None,
+    local: bool = False,
+    monitor: bool = True,
+):
     """
-    Rotate Transformation Matrix
+    Stabilize a timelapse dataset by applying spatial transformations.
 
-    Parameters
-    ----------
-    start_shape_zyx : Tuple
-        Shape of the input
-    angle : float, optional
-        Angles of rotation in degrees
-    end_shape_zyx : Tuple, optional
-       Shape of output space
+    This function stabilizes a timelapse dataset based on precomputed transformations or
+    configuration settings. It supports both local processing and SLURM-based distributed
+    processing and outputs a Zarr dataset with stabilized channels.
 
-    Returns
-    -------
-    np.ndarray
-        Rotation matrix
-    """
-    # TODO: make this 3D?
-    center_Y_start, center_X_start = np.array(start_shape_zyx)[-2:] / 2
-    if end_shape_zyx is None:
-        center_Y_end, center_X_end = (center_Y_start, center_X_start)
-    else:
-        center_Y_end, center_X_end = np.array(end_shape_zyx)[-2:] / 2
+    Parameters:
+    - input_position_dirpaths (List[str]): List of file paths to the input OME-Zarr datasets for each position.
+    - output_dirpath (str): Directory path to save the stabilized output dataset.
+    - config_filepaths (list[str]): Paths to the YAML configuration files containing transformation settings.
+    - sbatch_filepath (str, optional): Path to a SLURM sbatch file to override default SLURM settings. Defaults to None.
+    - local (bool, optional): If True, runs the stabilization process locally instead of submitting to SLURM. Defaults to False.
 
-    theta = np.radians(angle)
+    Returns:
+    - None: Writes the stabilized dataset to the specified output directory.
 
-    rotation_matrix = np.array(
-        [
-            [1, 0, 0, 0],
-            [
-                0,
-                np.cos(theta),
-                -np.sin(theta),
-                -center_Y_start * np.cos(theta)
-                + np.sin(theta) * center_X_start
-                + center_Y_end,
-            ],
-            [
-                0,
-                np.sin(theta),
-                np.cos(theta),
-                -center_Y_start * np.sin(theta)
-                - center_X_start * np.cos(theta)
-                + center_X_end,
-            ],
-            [0, 0, 0, 1],
-        ]
-    )
-    return rotation_matrix
+    Notes:
+    - The function applies stabilization based on affine transformations specified in the configuration file.
+    - Stabilization can estimate both YX and Z drifts and handles multi-channel data.
+    - Input and output datasets must follow the OME-Zarr format.
 
-
-def get_3D_fliplr_matrix(start_shape_zyx: tuple, end_shape_zyx: tuple = None) -> np.ndarray:
-    """
-    Get 3D left-right flip transformation matrix.
-
-    Parameters
-    ----------
-    start_shape_zyx : tuple
-        Shape of the source volume (Z, Y, X).
-    end_shape_zyx : tuple, optional
-        Shape of the target volume (Z, Y, X). If None, uses start_shape_zyx.
-
-    Returns
-    -------
-    np.ndarray
-        4x4 transformation matrix for left-right flip.
-    """
-    center_X_start = start_shape_zyx[-1] / 2
-    if end_shape_zyx is None:
-        center_X_end = center_X_start
-    else:
-        center_X_end = end_shape_zyx[-1] / 2
-
-    # Flip matrix: reflects across X axis and translates to maintain center
-    flip_matrix = np.array(
-        [
-            [1, 0, 0, 0],  # Z unchanged
-            [0, 1, 0, 0],  # Y unchanged
-            [0, 0, -1, 2 * center_X_end],  # X flipped and translated
-            [0, 0, 0, 1],  # Homogeneous coordinate
-        ]
-    )
-    return flip_matrix
-
-
-def convert_transform_to_ants(T_numpy: np.ndarray):
-    """Homogeneous 3D transformation matrix from numpy to ants
-
-    Parameters
-    ----------
-    numpy_transform :4x4 homogenous matrix
-
-    Returns
-    -------
-    Ants transformation matrix object
-    """
-    assert T_numpy.shape == (4, 4)
-
-    T_ants_style = T_numpy[:, :-1].ravel()
-    T_ants_style[-3:] = T_numpy[:3, -1]
-    T_ants = ants.new_ants_transform(
-        transform_type="AffineTransform",
-    )
-    T_ants.set_parameters(T_ants_style)
-
-    return T_ants
-
-
-def convert_transform_to_numpy(T_ants):
-    """
-    Convert the ants transformation matrix to numpy 3D homogenous transform
-
-    Modified from Jordao's dexp code
-
-    Parameters
-    ----------
-    T_ants : Ants transfromation matrix object
-
-    Returns
-    -------
-    np.array
-        Converted Ants to numpy array
+    Example:
+    >> biahub stabilize-timelapse
+        -i ./timelapse.zarr/0/0/0               # Input timelapse dataset
+        -o ./stabilized_timelapse.zarr          # Output directory for stabilized data
+        -c ./file_w_matrices.yml                # Configuration file with transformation matrices
+        -v                                      # Verbose mode for detailed logs
+        --local                                 # Run locally instead of submitting to SLURM
 
     """
 
-    T_numpy = T_ants.parameters.reshape((3, 4), order="F")
-    T_numpy[:, :3] = T_numpy[:, :3].transpose()
-    T_numpy = np.vstack((T_numpy, np.array([0, 0, 0, 1])))
+    # Single config file for all FOVs
 
-    # Reference:
-    # https://sourceforge.net/p/advants/discussion/840261/thread/9fbbaab7/
-    # https://github.com/netstim/leaddbs/blob/a2bb3e663cf7fceb2067ac887866124be54aca7d/helpers/ea_antsmat2mat.m
-    # T = original translation offset from A
-    # T = T + (I - A) @ centering
+    settings = yaml_to_model(config_filepaths[0], RegistrationSettings)
 
-    T_numpy[:3, -1] += (np.eye(3) - T_numpy[:3, :3]) @ T_ants.fixed_parameters
+    output_dirpath = Path(output_dirpath)
+    slurm_out_path = output_dirpath.parent / "slurm_output"
 
-    return T_numpy
+    # Load the config file
 
+    combined_mats = settings.affine_transform_zyx_list
+    combined_mats = np.array(combined_mats)
+    # stabilization_channels = settings.stabilization_channels
 
-def apply_affine_transform(
-    zyx_data: np.ndarray,
-    matrix: np.ndarray,
-    output_shape_zyx: Tuple,
-    method="ants",
-    interpolation: str = "linear",
-    crop_output_slicing: bool = None,
-) -> np.ndarray:
-    """_summary_
+    with open_ome_zarr(input_position_dirpaths[0]) as dataset:
+        T, C, Z, Y, X = dataset.data.shape
+        channel_names = dataset.channel_names
+        stabilization_channels = channel_names
+        # for stabilization_channels in stabilization_channels:
+        # if channel not in channel_names:
+        #     raise ValueError(f"Channel <{channel}> not found in the input data")
 
-    Parameters
-    ----------
-    zyx_data : np.ndarray
-        3D input array to be transformed
-    matrix : np.ndarray
-        3D Homogenous transformation matrix
-    output_shape_zyx : Tuple
-        output target zyx shape
-    method : str, optional
-        method to use for transformation, by default 'ants'
-    interpolation: str, optional
-        interpolation mode for ants, by default "linear"
-    crop_output : bool, optional
-        crop the output to the largest interior rectangle, by default False
-
-    Returns
-    -------
-    np.ndarray
-        registered zyx data
-    """
-
-    Z, Y, X = output_shape_zyx
-    if crop_output_slicing is not None:
-        Z_slice, Y_slice, X_slice = crop_output_slicing
+        # NOTE: these can be modified to crop the output
+        Z_slice, Y_slice, X_slice = (
+            slice(0, Z),
+            slice(0, Y),
+            slice(0, X),
+        )
         Z = Z_slice.stop - Z_slice.start
+
+    # Get the rotation matrix
+
+    # Extract 3x3 rotation/scaling matrix
+    R_matrix = combined_mats[0][:3, :3]
+
+    # Remove scaling using SVD
+    U, _, Vt = svd(R_matrix)
+    R_pure = np.dot(U, Vt)
+
+    # Convert to Euler angles
+    rotation = R.from_matrix(R_pure)
+    euler_angles = rotation.as_euler('xyz', degrees=True)  # XYZ order, in degrees
+
+    if np.isclose(euler_angles[0], 90, atol=10):
+        X = Y_slice.stop - Y_slice.start
+        Y = X_slice.stop - X_slice.start
+    else:
         Y = Y_slice.stop - Y_slice.start
         X = X_slice.stop - X_slice.start
 
-    # TODO: based on the signature of this function, it should not be called on 4D array
-    if zyx_data.ndim == 4:
-        registered_czyx = np.zeros((zyx_data.shape[0], Z, Y, X), dtype=np.float32)
-        for c in range(zyx_data.shape[0]):
-            registered_czyx[c] = apply_affine_transform(
-                zyx_data[c],
-                matrix,
-                output_shape_zyx,
-                method=method,
-                interpolation=interpolation,
-                crop_output_slicing=crop_output_slicing,
-            )
-        return registered_czyx
+    if settings.time_indices == "all":
+        time_indices = list(range(T))
+    elif isinstance(settings.time_indices, list):
+        time_indices = settings.time_indices
+    elif isinstance(settings.time_indices, int):
+        time_indices = [settings.time_indices]
+
+    # Attempted to calculate the new scale from the input affine transform,
+    # but chose to use the `output_voxel_size` instead to ensure consistency in scale.
+    # The computed scale value was close to the desired voxel size but not exact.
+
+    # transform_t0_sy calculates the scale factor for the YZ plane (shear factor)
+    # derived from the affine transform matrix.
+    # It uses the [2][1] element of the first affine matrix (T0) and rounds it to 3 decimal places.
+    # transform_t0_sy = np.abs(settings.affine_transform_zyx_list[0][2][1]).round(3)
+
+    # Calculate the new scale for the dataset:
+    # The first three elements represent the spatial scaling factors for X, Y, and Z dimensions.
+    # The last two elements adjust the temporal scaling based on `transform_t0_sy`.
+    # Note: Temporal scaling is applied to dimensions 3 and 4.
+    # new_scale = [
+    #     scale_dataset[0],  # X-dimension scaling factor (remains unchanged)
+    #     scale_dataset[1],  # Y-dimension scaling factor (remains unchanged)
+    #     scale_dataset[2],  # Z-dimension scaling factor (remains unchanged)
+    #     scale_dataset[3] * transform_t0_sy,  # Adjust temporal scaling for the 4th dimension.
+    #     scale_dataset[4] * transform_t0_sy   # Adjust temporal scaling for the 5th dimension.
+    # ]
+
+    output_metadata = {
+        "shape": (len(time_indices), len(channel_names), Z, Y, X),
+        "chunks": None,
+        "scale": settings.output_voxel_size,
+        "channel_names": channel_names,
+        "dtype": np.float32,
+    }
+
+    # Create the output zarr mirroring input_position_dirpaths
+    create_empty_hcs_zarr(
+        store_path=output_dirpath,
+        position_keys=[p.parts[-3:] for p in input_position_dirpaths],
+        **output_metadata,
+    )
+
+    # Check if there is enough disk space to store the output
+    if not check_disk_space_with_du(
+        input_path=input_position_dirpaths[0],
+        output_path=output_dirpath,
+        margin=1.1,
+        verbose=True,
+    ):
+        raise RuntimeError(f"Not enough disk space to store the output at {output_dirpath}")
+
+    copy_n_paste_kwargs = {"czyx_slicing_params": ([Z_slice, Y_slice, X_slice])}
+
+    # Estimate resources
+
+    num_cpus, gb_ram_per_cpu = estimate_resources(
+        shape=[T, C, Z, Y, X], ram_multiplier=16, max_num_cpus=16
+    )
+
+    # Prepare SLURM arguments
+    slurm_args = {
+        "slurm_job_name": "stabilize",
+        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
+        "slurm_cpus_per_task": num_cpus,
+        "slurm_array_parallelism": 100,  # process up to 100 positions at a time
+        "slurm_time": 20,
+        "slurm_partition": "preempted",
+        "slurm_use_srun": False,
+    }
+
+    # Override defaults if sbatch_filepath is provided
+    if sbatch_filepath:
+        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
+
+    # Run locally or submit to SLURM
+    if local:
+        cluster = "local"
     else:
-        # Convert nans to 0
-        zyx_data = np.nan_to_num(zyx_data, nan=0)
+        cluster = "slurm"
 
-        # NOTE: default set to ANTS apply_affine method until we decide we get a benefit from using cupy
-        # The ants method on CPU is 10x faster than scipy on CPU. Cupy method has not been bencharked vs ANTs
+    # Prepare and submit jobs
+    click.echo(f"Preparing jobs: {slurm_args}")
+    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
+    executor.update_parameters(**slurm_args)
 
-        if method == "ants":
-            # The output has to be a ANTImage Object
-            empty_target_array = np.zeros((output_shape_zyx), dtype=np.float32)
-            target_zyx_ants = ants.from_numpy(empty_target_array)
+    click.echo('Submitting SLURM jobs...')
+    jobs = []
+    with submitit.helpers.clean_env(), executor.batch():
+        # apply stabilization to channels in the chosen channels and else copy the rest
+        for input_position_path in input_position_dirpaths:
+            if len(config_filepaths) > 1:
+                fov = "_".join(input_position_path.parts[-3:])
+                config_filepath = [p for p in config_filepaths if fov in p.name][0]
+            else:
+                config_filepath = config_filepaths[0]
+            settings = yaml_to_model(config_filepath, StabilizationSettings)
+            # Use settings for this FOV
+            combined_mats = np.array(settings.affine_transform_zyx_list)
+            stabilize_zyx_args = {"list_of_shifts": combined_mats}
+            for channel_name in channel_names:
+                if channel_name in stabilization_channels:
+                    job = executor.submit(
+                        process_single_position_v2,
+                        apply_stabilization_transform,
+                        input_data_path=input_position_path,  # source store
+                        output_path=output_dirpath,
+                        time_indices=time_indices,
+                        output_shape=(Z, Y, X),
+                        input_channel_idx=[channel_names.index(channel_name)],
+                        output_channel_idx=[channel_names.index(channel_name)],
+                        num_processes=int(
+                            slurm_args["slurm_cpus_per_task"]
+                        ),  # parallel processing over time
+                        **stabilize_zyx_args,
+                    )
+                else:
+                    job = executor.submit(
+                        process_single_position_v2,
+                        copy_n_paste_czyx,
+                        input_data_path=input_position_path,  # target store
+                        output_path=output_dirpath,
+                        time_indices=time_indices,
+                        input_channel_idx=[channel_names.index(channel_name)],
+                        output_channel_idx=[channel_names.index(channel_name)],
+                        num_processes=int(slurm_args["slurm_cpus_per_task"]),
+                        **copy_n_paste_kwargs,
+                    )
 
-            T_ants = convert_transform_to_ants(matrix)
+                jobs.append(job)
 
-            zyx_data_ants = ants.from_numpy(zyx_data.astype(np.float32))
-            registered_zyx = T_ants.apply_to_image(
-                zyx_data_ants, reference=target_zyx_ants, interpolation=interpolation
-            ).numpy()
+    job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 
-        elif method == "scipy":
-            registered_zyx = scipy.ndimage.affine_transform(zyx_data, matrix, output_shape_zyx)
+    log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
+    with log_path.open("w") as log_file:
+        log_file.write("\n".join(job_ids))
 
-        else:
-            raise ValueError(f"Unknown method {method}")
-
-        # Crop the output to the largest interior rectangle
-        if crop_output_slicing is not None:
-            registered_zyx = registered_zyx[Z_slice, Y_slice, X_slice]
-
-    return registered_zyx
-
-
-def find_lir(registered_zyx: np.ndarray, plot: bool = False) -> Tuple:
-    registered_zyx = np.asarray(registered_zyx, dtype=bool)
-
-    # Find the lir in YX at Z//2
-    registered_yx = registered_zyx[registered_zyx.shape[0] // 2].copy()
-    coords_yx = lir.lir(registered_yx)
-    coords_yx = list(map(int, coords_yx))
-
-    x, y, width, height = coords_yx
-    x_start, x_stop = x, x + width
-    y_start, y_stop = y, y + height
-    x_slice = slice(x_start, x_stop)
-    y_slice = slice(y_start, y_stop)
-
-    # Iterate over ZX and ZY slices to find optimal Z cropping params
-    _coords = []
-    for _x in (x_start, x_start + (x_stop - x_start) // 2, x_stop - 1):
-        registered_zy = registered_zyx[:, y_slice, _x].copy()
-        coords_zy = lir.lir(registered_zy)
-        _, z, _, depth = coords_zy
-        z_start, z_stop = z, z + depth
-        _coords.append((z_start, z_stop))
-    for _y in (y_start, y_start + (y_stop - y_start) // 2, y_stop - 1):
-        registered_zx = registered_zyx[:, _y, x_slice].copy()
-        coords_zx = lir.lir(registered_zx)
-        _, z, _, depth = coords_zx
-        z_start, z_stop = z, z + depth
-        _coords.append((z_start, z_stop))
-
-    _coords = np.asarray(_coords)
-    z_start = int(_coords.max(axis=0)[0])
-    z_stop = int(_coords.min(axis=0)[1])
-    z_slice = slice(z_start, z_stop)
-
-    if plot:
-        xy_corners = ((x, y), (x + width, y), (x + width, y + height), (x, y + height))
-        rectangle_yx = plt.Polygon(
-            xy_corners,
-            closed=True,
-            fill=None,
-            edgecolor="r",
-        )
-        # Add the rectangle to the plot
-        _, ax = plt.subplots(nrows=1, ncols=2)
-        ax[0].imshow(registered_yx)
-        ax[0].add_patch(rectangle_yx)
-
-        zx_corners = ((x, z), (x + width, z), (x + width, z + depth), (x, z + depth))
-        rectangle_zx = plt.Polygon(
-            zx_corners,
-            closed=True,
-            fill=None,
-            edgecolor="r",
-        )
-        ax[1].imshow(registered_zx)
-        ax[1].add_patch(rectangle_zx)
-        plt.savefig("./lir.png")
-
-    return (z_slice, y_slice, x_slice)
+    if monitor:
+        monitor_jobs(jobs, input_position_dirpaths)
 
 
-def find_overlapping_volume(
-    input_zyx_shape: Tuple,
-    target_zyx_shape: Tuple,
-    transformation_matrix: np.ndarray,
-    method: str = "LIR",
-    plot: bool = False,
-) -> Tuple:
-    """
-    Find the overlapping rectangular volume after registration of two 3D datasets
-
-    Parameters
-    ----------
-    input_zyx_shape : Tuple
-        shape of input array
-    target_zyx_shape : Tuple
-        shape of target array
-    transformation_matrix : np.ndarray
-        affine transformation matrix
-    method : str, optional
-        method of finding the overlapping volume, by default 'LIR'
-
-    Returns
-    -------
-    Tuple
-        ZYX slices of the overlapping volume after registration
-
-    """
-
-    # Make dummy volumes
-    moving_volume = np.ones(tuple(input_zyx_shape), dtype=np.float32)
-    fixed_volume = np.ones(tuple(target_zyx_shape), dtype=np.float32)
-
-    # Convert to ants objects
-    fixed_volume_ants = ants.from_numpy(fixed_volume)
-    moving_volume_ants = ants.from_numpy(moving_volume)
-
-    tform_ants = convert_transform_to_ants(transformation_matrix)
-
-    # Now apply the transform using this grid
-    registered_volume = tform_ants.apply_to_image(
-        moving_volume_ants, reference=fixed_volume_ants
-    ).numpy()
-    if method == "LIR":
-        click.echo("Starting Largest interior rectangle (LIR) search")
-        mask = (registered_volume > 0) & (fixed_volume > 0)
-        z_slice, y_slice, x_slice = find_lir(mask, plot=plot)
-
-    else:
-        raise ValueError(f"Unknown method {method}")
-
-    return (z_slice, y_slice, x_slice)
-
-
-def rescale_voxel_size(affine_matrix, input_scale):
-    return np.linalg.norm(affine_matrix, axis=1) * input_scale
-
-
-@click.command("register")
-@source_position_dirpaths()
-@target_position_dirpaths()
-@config_filepath()
-@output_dirpath()
-@local()
-@sbatch_filepath()
-@monitor()
-def register_cli(
+def register(
     source_position_dirpaths: List[str],
     target_position_dirpaths: List[str],
     config_filepath: Path,
@@ -422,6 +276,8 @@ def register_cli(
     monitor: bool = True,
 ):
     """
+    Register a source position to a target position using a registration config file.
+
     Apply an affine transformation to a single position across T and C axes based on a registration config file.
 
     Start by generating an initial affine transform with `estimate-register`. Optionally, refine this transform with `optimize-register`. Finally, use `register`.
@@ -436,6 +292,7 @@ def register_cli(
     settings = yaml_to_model(config_filepath, RegistrationSettings)
     matrix = np.array(settings.affine_transform_zyx)
     keep_overhang = settings.keep_overhang
+    from biahub.registration.utils import find_overlapping_volume, rescale_voxel_size
 
     # Calculate the output voxel size from the input scale and affine transform
     with open_ome_zarr(source_position_dirpaths[0]) as source_dataset:
@@ -555,6 +412,8 @@ def register_cli(
 
     # apply affine transform to channels in the source datastore that should be registered
     # as given in the config file (i.e. settings.source_channel_names)
+    from biahub.registration.utils import apply_affine_transform
+
     affine_jobs = []
     affine_names = []
     with submitit.helpers.clean_env(), executor.batch():
@@ -609,6 +468,69 @@ def register_cli(
 
     if monitor:
         monitor_jobs(affine_jobs + copy_jobs, affine_names + copy_names)
+
+
+@click.command("register")
+@source_position_dirpaths()
+@target_position_dirpaths()
+@config_filepath()
+@output_dirpath()
+@local()
+@sbatch_filepath()
+@monitor()
+def register_cli(
+    source_position_dirpaths: List[str],
+    target_position_dirpaths: List[str],
+    config_filepath: Path,
+    output_dirpath: str,
+    local: bool,
+    sbatch_filepath: Path,
+    monitor: bool = True,
+):
+    register(
+        source_position_dirpaths=source_position_dirpaths,
+        target_position_dirpaths=target_position_dirpaths,
+        config_filepath=config_filepath,
+        output_dirpath=output_dirpath,
+        local=local,
+        sbatch_filepath=sbatch_filepath,
+        monitor=monitor,
+    )
+
+
+@click.command("stabilize")
+@input_position_dirpaths()
+@output_dirpath()
+@config_filepaths()
+@sbatch_filepath()
+@local()
+@monitor()
+def stabilize_cli(
+    input_position_dirpaths: List[str],
+    output_dirpath: str,
+    config_filepaths: list[str],
+    sbatch_filepath: str,
+    local: bool,
+    monitor: bool,
+):
+    """
+    Stabilize a timelapse dataset by applying spatial transformations estimated by estimate-stabilization.
+
+    Example:
+    >> biahub stabilize-timelapse
+        -i ./timelapse.zarr/0/0/0               # Input timelapse dataset
+        -o ./stabilized_timelapse.zarr          # Output directory for stabilized data
+        -c ./file_w_matrices.yml                # Configuration file with transformation matrices
+        --local                                 # Run locally instead of submitting to SLURM
+    """
+    stabilize(
+        input_position_dirpaths=input_position_dirpaths,
+        output_dirpath=output_dirpath,
+        config_filepaths=config_filepaths,
+        sbatch_filepath=sbatch_filepath,
+        local=local,
+        monitor=monitor,
+    )
 
 
 if __name__ == "__main__":

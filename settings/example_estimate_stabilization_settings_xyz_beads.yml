@@ -18,8 +18,16 @@ stabilization_type: "xyz"
 stabilization_method: "beads"
 
 beads_match_settings:
+  qc_settings:
+    iterations: 1 # Number of quality control iterations
+    score_threshold: 0.40 # Quality control score threshold
+    score_centroid_mask_radius: 6 # Radius of the centroid mask for quality control
   algorithm: hungarian # "hungarian", "match_descriptor"
-  t_reference: "first" # Reference timepoint for matching
+  filter_matches_settings:
+    min_distance_quantile: 0.01 # Filter matches based on distance threshold
+    max_distance_quantile: 0.99 # Filter matches based on distance threshold
+    angle_threshold: 0 # Filter matches based on angle threshold
+    direction_threshold: 0 # Filter matches based on direction threshold
   source_peaks_settings:
     threshold_abs: 110  # intensity threshold for peak detection
     nms_distance: 16    # non-maximum suppression radius
@@ -57,12 +65,11 @@ beads_match_settings:
         pca_dir: 0.0 # Principal Component Analysis direction weight (0.0 means no direction)
         pca_aniso: 0.0 # Principal Component Analysis anisotropy weight (0.0 means no anisotropy)
         edge_descriptor: 0.0 # Edge descriptor weight (0.0 means no descriptor)
-  filter_distance_threshold: 0.95 # Filter matches based on distance threshold
-  filter_angle_threshold: 0   # Filter matches based on dominant angle direction (in degrees)
 
 
 # Settings for affine transformation estimation (applies to all stabilization methods)
 affine_transform_settings:
+  t_reference: "first" # Reference timepoint for transform
   transform_type: euclidean # Type of transform to estimate "euclidean", "similarity", or "affine"
 
 # Validation and interpolation settings for transform smoothing
