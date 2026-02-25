@@ -1423,7 +1423,7 @@ def estimate_z_stabilization(
         z_val = next((v for v in z_drift_offsets if v != 0), None)
         if z_val is None:
             raise ValueError(
-                "Z index of focus reference is None, z_drift_offsets contains only zeros"
+                "Z index of focus reference is None; no valid (non-zero, non-NaN) z-index found in z_drift_offsets"
             )
         transform = {}
 
