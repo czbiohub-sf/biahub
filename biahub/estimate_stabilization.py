@@ -1422,7 +1422,9 @@ def estimate_z_stabilization(
         z_focus_shift = [np.eye(4)]
         z_val = next((v for v in z_drift_offsets if v != 0), None)
         if z_val is None:
-            raise ValueError("Z index of focus reference is None, z_drift_offsets contains only zeros")
+            raise ValueError(
+                "Z index of focus reference is None, z_drift_offsets contains only zeros"
+            )
         transform = {}
 
         # Compute the z-focus shift for each timepoint
