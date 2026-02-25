@@ -1,38 +1,19 @@
-import shutil
 
-from datetime import datetime
 from pathlib import Path
 from typing import Literal, Optional, Tuple, cast
 
 import click
 import dask.array as da
-import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
-import submitit
 
-from iohub.ngff import open_ome_zarr
 from numpy.typing import ArrayLike
-from pystackreg import StackReg
 from scipy.fftpack import next_fast_len
 from skimage.registration import phase_cross_correlation as sk_phase_cross_correlation
-from waveorder.focus import focus_from_transverse_band
-
-from biahub.cli.parsing import (
-    sbatch_to_submitit,
-)
-from biahub.cli.slurm import wait_for_jobs_to_finish
-from biahub.cli.utils import estimate_resources
 from biahub.core.transform import Transform
 from biahub.registration.utils import match_shape
 from biahub.settings import (
-    FocusFindingSettings,
     PhaseCrossCorrSettings,
-    StackRegSettings,
 )
-
-NA_DET = 1.35
-LAMBDA_ILL = 0.500
 
 
 def phase_cross_correlation(
@@ -297,58 +278,29 @@ def estimate_tczyx(
     mov_data_cropped = mov_data[t, mov_channel_index, z_idx, y_idx, x_idx]
     ref_data_cropped = ref_data[t, ref_channel_index, z_idx, y_idx, x_idx]
 
-    # if mode == "stabilization":
-    #     if phase_cross_corr_settings.t_reference == "first":
-    #         ref_tzyx = np.broadcast_to(data_tzyx_cropped[0], data_tzyx_cropped.shape).copy()
-    #     elif phase_cross_corr_settings.t_reference == "previous":
-    #         ref_tzyx = np.roll(data_tzyx_cropped, shift=1, axis=0)
-    #         ref_tzyx[0] = data_tzyx_cropped[0]
-    # elif mode == "registration":
-    #     raise ValueError("Registration mode not implemented yet")
-
-    # mov_tzyx = data_tzyx_cropped
-
-    output_transforms_path_fov_t = output_dirpath /"transforms" / fov / t
-    output_transforms_path_fov_t.mkdir(parents=True, exist_ok=True)
-    output_shifts_path_fov_t = output_dirpath / "shifts" / fov / t
-    output_shifts_path_fov_t.mkdir(parents=True, exist_ok=True)
-
-    output_path_corr = output_dirpath / "corr_plots" / fov / f"{t}.png"
 
 
-        # click.echo(f"Estimating PCC for timepoint {t}")
-        # if t == 0:
-        #     transforms.append(np.eye(4).tolist())
-        #     shifts.append((t, 0, 0, 0))
-        # else:
+    output_transforms_path_fov = output_dirpath /"transforms" / fov
+    output_transforms_path_fov.mkdir(parents=True, exist_ok=True)
+    output_shifts_path_fov = output_dirpath / "shifts" / fov 
+    output_shifts_path_fov.mkdir(parents=True, exist_ok=True)
+    output_path_corr = output_dirpath / "corr_plots" / fov
+    output_path_corr.mkdir(parents=True, exist_ok=True)
+
     transform, shift = estimate(
             mov=mov_data_cropped,
             ref=ref_data_cropped,
             function_type=phase_cross_corr_settings.function_type,
             normalization=phase_cross_corr_settings.normalization,
-            output_path=output_path_corr,
+            output_path=output_path_corr / f"{t}.png",
             verbose=verbose,
         )
         
     # save the transform
-    np.save(output_transforms_path_fov_t / f"{t}.npy", transform)
-    np.save(output_shifts_path_fov_t / f"{t}.npy", shift)
+    np.save(output_transforms_path_fov / f"{t}.npy", transform)
+    np.save(output_shifts_path_fov / f"{t}.npy", shift)
 
 
-    # # save the shifts as a csv
-    # if verbose:
-    #     shifts_df = pd.DataFrame(shifts, columns=["TimepointID", "ShiftZ", "ShiftY", "ShiftX"])
-    #     shifts_df["TimepointID"] = shifts_df["TimepointID"].astype(int)
-    #     shifts_df["ShiftZ"] = shifts_df["ShiftZ"].astype(float)
-    #     shifts_df["ShiftY"] = shifts_df["ShiftY"].astype(float)
-    #     shifts_df["ShiftX"] = shifts_df["ShiftX"].astype(float)
-    #     shifts_df.to_csv(output_shifts_path / f"{position_filename}.csv", index=False)
-
-    #     output_path_shift_plots = output_shifts_path / "plots"
-    #     output_path_shift_plots.mkdir(parents=True, exist_ok=True)
-    #     # plot_pcc_drifts(shifts_df, output_path_shift_plots, label=position_filename)
-
-    # click.echo(f"Saved transforms for {position_filename}.")
 
     return transform
 
