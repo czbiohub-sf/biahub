@@ -8,7 +8,6 @@ import dask.array as da
 def estimate_txy(
     data_txy: np.ndarray,
     t_reference: str = "previous",
-    verbose: bool = False,
 
 ) -> list[Transform]:
 
