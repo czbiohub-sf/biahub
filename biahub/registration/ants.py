@@ -410,8 +410,8 @@ def estimate_tczyx(
     # NOTE: ants is mulitthreaded so no need for multiprocessing here
     # Submit jobs
 
-    output_dirpath_fov_t = output_dirpath / fov / t
-    output_dirpath_fov_t.mkdir(parents=True, exist_ok=True)
+    output_dirpath_fov = output_dirpath / fov
+    output_dirpath_fov.mkdir(parents=True, exist_ok=True)
 
     
     transform = estimate_czyx(
@@ -426,7 +426,7 @@ def estimate_tczyx(
                 sobel_filter=ants_registration_settings.sobel_filter,
                 verbose=verbose,
                 t_idx=t,
-                output_dirpath=output_dirpath_fov_t,
+                output_dirpath=output_dirpath_fov,
                 )
 
     return transform
