@@ -202,38 +202,49 @@ class AffineTransformSettings(MyBaseModel):
         return v
 
 
-class AntsRegistrationSettings(MyBaseModel):
+class AntsSettings(MyBaseModel):
     sobel_filter: bool = False
 
 
-class ManualRegistrationSettings(MyBaseModel):
+class ManualSettings(MyBaseModel):
     time_index: int = 0
     affine_90degree_rotation: int = 0
     affine_fliplr: bool = False
 
 
 class EstimateRegistrationSettings(MyBaseModel):
-    target_channel_name: str
-    source_channel_name: str
-    estimation_method: Literal["manual", "beads", "ants"] = "manual"
+    ref_channel_name: str
+    mov_channel_names: str
+    mode: Literal["stabilization", "registration"] = "registration"
+    method: Literal["manual", "beads", "ants", "match-z-focus", "pcc", "stackreg"] = "manual"
+    manual_settings: Optional[ManualSettings] = None
     beads_match_settings: Optional[BeadsMatchSettings] = None
+    ants_settings: Optional[AntsSettings] = None
     focus_finding_settings: Optional[FocusFindingSettings] = None
+    phase_cross_corr_settings: Optional[PhaseCrossCorrSettings] = None
+    stack_reg_settings: Optional[StackRegSettings] = None
     affine_transform_settings: AffineTransformSettings = Field(
         default_factory=AffineTransformSettings
     )
     eval_transform_settings: Optional[EvalTransformSettings] = None
-    ants_registration_settings: Optional[AntsRegistrationSettings] = None
-    manual_registration_settings: Optional[ManualRegistrationSettings] = None
+    ants_registration_settings: Optional[AntsSettings] = None
+    manual_registration_settings: Optional[ManualSettings] = None
     verbose: bool = False
 
     @model_validator(mode="after")
     def set_defaults_and_validate(self) -> "EstimateRegistrationSettings":
-        if self.estimation_method == "manual" and self.manual_registration_settings is None:
-            self.manual_registration_settings = ManualRegistrationSettings()
-        elif self.estimation_method == "beads" and self.beads_match_settings is None:
+        if self.method == "manual" and self.manual_registration_settings is None:
+            self.manual_registration_settings = ManualSettings()
+        elif self.method == "beads" and self.beads_match_settings is None:
             self.beads_match_settings = BeadsMatchSettings()
-        elif self.estimation_method == "ants" and self.ants_registration_settings is None:
-            self.ants_registration_settings = AntsRegistrationSettings()
+        elif self.method == "ants" and self.ants_registration_settings is None:
+            self.ants_registration_settings = AntsSettings()
+        elif self.method == "match-z-focus" and self.focus_finding_settings is None:
+            self.focus_finding_settings = FocusFindingSettings()
+        elif self.method == "pcc" and self.phase_cross_corr_settings is None:
+            self.phase_cross_corr_settings = PhaseCrossCorrSettings()
+        elif self.method == "stackreg" and self.stack_reg_settings is None:
+            self.stack_reg_settings = StackRegSettings()
         return self
 
 
