@@ -1420,7 +1420,7 @@ def estimate_z_stabilization(
 
         # Initialize the z-focus shift
         z_focus_shift = [np.eye(4)]
-        z_val = next((v for v in z_drift_offsets if v != 0), None)
+        z_val = next((v for v in z_drift_offsets if v != 0 and not np.isnan(v)), None)
         if z_val is None:
             raise ValueError(
                 "Z index of focus reference is None; no valid (non-zero, non-NaN) z-index found in z_drift_offsets"
