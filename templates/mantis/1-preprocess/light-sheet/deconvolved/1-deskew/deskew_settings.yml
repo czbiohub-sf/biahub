@@ -1,0 +1,6 @@
+pixel_size_um: 0.116
+ls_angle_deg: 30.0  # can be calibrated using estimate_deskew.py
+px_to_scan_ratio:  # Optional, can be calibrated using estimate_deskew.py
+scan_step_um: 0.150  # Optional
+average_n_slices: 3  # Axial averaging applied after deskewing
+keep_overhang: False

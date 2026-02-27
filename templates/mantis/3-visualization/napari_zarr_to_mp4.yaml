@@ -1,0 +1,15 @@
+input_path: "dataset.zarr/*/*/*"
+output_path: "membrane_projection"
+fps: 3
+#z_index: 80 # use if you want to visualize a specific z index or coment if you want max projection
+
+channels:
+  - name: "mCherry EX561 EM600-37"
+    contrast_limits: [110, 300]
+    colormap: "magenta"
+ # - name: "GFP EX488 EM525-45"
+ #   contrast_limits: [110, 933]
+ #   colormap: "green"
+  #- name: "BF"
+  #  contrast_limits: [1181, 3190]
+  #  colormap: "gray"

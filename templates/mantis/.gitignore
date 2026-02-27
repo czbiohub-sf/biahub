@@ -1,0 +1,9 @@
+# Ignore .zarr files and directories
+*.zarr
+*.zarr/
+
+# Ignore .out files (often output/log files)
+*.out
+
+# Ignore .err files (often error/log files)
+*.err 
