@@ -84,7 +84,7 @@ def phase_cross_correlation(
     return peak
 
 
-def estimate(
+def _estimate(
     mov: da.Array,
     ref: da.Array,
     function_type: Literal["skimage", "custom"] = "custom",
@@ -110,6 +110,7 @@ def estimate(
     verbose : bool
         If True, print verbose output.
     """
+
     shift = shift_from_pcc(
         mov=mov,
         ref=ref,
@@ -137,7 +138,7 @@ def estimate(
 
     if verbose:
         click.echo(f"transform: {transform}")
-
+    
     return Transform(matrix=transform), shift
 
 
@@ -237,17 +238,15 @@ def get_crop_idx(X, Y, Z, phase_cross_corr_settings):
     return x_idx, y_idx, z_idx
 
 
-def estimate_tczyx(
+def estimate(
     t: int,
     fov: str,
-    mov_data: da.Array,
-    ref_data: da.Array,
+    mov: da.Array,
+    ref: da.Array,
     output_dirpath: Path,
-    mov_channel_index: int,
-    ref_channel_index: int,
-    phase_cross_corr_settings: PhaseCrossCorrSettings,
+    preprocessing: bool = False,
+    phase_cross_corr_settings: PhaseCrossCorrSettings = None,
     verbose: bool = False,
-    mode: Literal["registration", "stabilization"] = "stabilization",
 ) -> list[ArrayLike]:
     """
     Estimate the xyz stabilization for a single position.
@@ -272,12 +271,13 @@ def estimate_tczyx(
     list[ArrayLike]
         List of the xyz stabilization for each timepoint.
     """
-    T, C, Z, Y, X = mov_data.shape
+    T, C, Z, Y, X = mov.shape
 
-    x_idx, y_idx, z_idx = get_crop_idx(X, Y, Z, phase_cross_corr_settings)
-    mov_data_cropped = mov_data[t, mov_channel_index, z_idx, y_idx, x_idx]
-    ref_data_cropped = ref_data[t, ref_channel_index, z_idx, y_idx, x_idx]
-
+    # preprocessing
+    if preprocessing:
+        x_idx, y_idx, z_idx = get_crop_idx(X, Y, Z, phase_cross_corr_settings)
+        mov = mov[z_idx, y_idx, x_idx]
+        ref = ref[z_idx, y_idx, x_idx]
 
 
     output_transforms_path_fov = output_dirpath /"transforms" / fov
@@ -287,9 +287,9 @@ def estimate_tczyx(
     output_path_corr = output_dirpath / "corr_plots" / fov
     output_path_corr.mkdir(parents=True, exist_ok=True)
 
-    transform, shift = estimate(
-            mov=mov_data_cropped,
-            ref=ref_data_cropped,
+    transform, shift = _estimate(
+            mov=mov,
+            ref=ref,
             function_type=phase_cross_corr_settings.function_type,
             normalization=phase_cross_corr_settings.normalization,
             output_path=output_path_corr / f"{t}.png",

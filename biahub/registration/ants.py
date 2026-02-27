@@ -16,7 +16,7 @@ from biahub.settings import (
     AntsRegistrationSettings,
 )
 
-def estimate(
+def _estimate(
     ref: np.ndarray,
     mov: np.ndarray,
     verbose: bool = False,
@@ -228,10 +228,11 @@ def preprocess_czyx(
     return ref_zyx, mov_zyx, _offset
 
 
-def estimate_czyx(
-    mov_czyx: np.ndarray,
-    ref_czyx: np.ndarray,
-    initial_tform: np.ndarray,
+def estimate(
+    mov: np.ndarray,
+    ref: np.ndarray,
+    preprocessing: bool = False,
+    initial_tform: np.ndarray = None,
     mov_channel_index: int | list = 0,
     ref_channel_index: int = 0,
     crop: bool = False,
@@ -241,6 +242,7 @@ def estimate_czyx(
     verbose: bool = False,
     t_idx: int = 0,
     output_dirpath: Path = None,
+    debug: bool = False,
 ) -> Transform:
     """
     Optimize the affine transform between source and target channels using ANTs library.
@@ -287,38 +289,46 @@ def estimate_czyx(
     """
     initial_tform = Transform(matrix=initial_tform)
 
-    ref_zyx, mov_zyx, preprocess_offset = preprocess_czyx(
-        mov_czyx=mov_czyx,
-        ref_czyx=ref_czyx,
-        initial_tform=initial_tform,
-        mov_channel_index=mov_channel_index,
-        ref_channel_index=ref_channel_index,
-        crop=crop,
-        clip=clip,
-        ref_mask_radius=ref_mask_radius,
-        sobel_filter=sobel_filter,
+
+    if preprocessing:
+        ref, mov, preprocess_offset = preprocess_czyx(
+            mov=mov,
+            ref=ref,
+            initial_tform=initial_tform,
+            mov_channel_index=mov_channel_index,
+            ref_channel_index=ref_channel_index,
+            crop=crop,
+            clip=clip,
+            ref_mask_radius=ref_mask_radius,
+            sobel_filter=sobel_filter,
+            verbose=verbose,
+        )
+
+    fwd_transform, inv_transform = _estimate(
+        ref=ref,
+        mov=mov,
         verbose=verbose,
     )
 
-    fwd_transform, inv_transform = estimate(
-        ref=ref_zyx,
-        mov=mov_zyx,
-        verbose=verbose,
-    )
+    if preprocessing:
 
-    composed_transform = postprocess_transform(
-        initial_transform=initial_tform,
-        fwd_transform=fwd_transform,
-        preprocess_offset=preprocess_offset,
-    )
-    if verbose:
+        final_transform = postprocess_transform(
+            initial_transform=initial_tform,
+            fwd_transform=fwd_transform,
+            preprocess_offset=preprocess_offset,
+        )
+    else:
+        final_transform = fwd_transform
+    
+
+    if final_transform is None:
+        raise ValueError("Failed to estimate registration transform for timepoint.")
+
+    if debug:
         click.echo(f"Initial transform: {initial_tform}")
         click.echo(f"Forward transform: {fwd_transform}")
         click.echo(f"Inverse transform: {inv_transform}")
-        click.echo(f"Composed transform: {composed_transform}")
-
-    if composed_transform is None:
-        raise ValueError("Failed to estimate registration transform for timepoint.")
+        click.echo(f"Final transform: {final_transform}")
 
     if output_dirpath:
         output_dirpath.mkdir(parents=True, exist_ok=True)
@@ -327,9 +337,9 @@ def estimate_czyx(
                 f"Saving registration transform for timepoint {t_idx} to {output_dirpath}"
             )
 
-        np.save(output_dirpath / f"{t_idx}.npy", composed_transform.matrix)
+        np.save(output_dirpath / f"{t_idx}.npy", final_transform.matrix)
 
-    return composed_transform
+    return final_transform
 
 
 def postprocess_transform(
@@ -353,80 +363,3 @@ def postprocess_transform(
 
     return Transform(matrix=composed_matrix)
 
-
-def estimate_tczyx(
-    t: int,
-    fov: str,
-    mov_tczyx: da.Array,
-    ref_tczyx: da.Array,
-    mov_channel_index: int | list[int],
-    ref_channel_index: int,
-    ants_registration_settings: AntsRegistrationSettings,
-    affine_transform_settings: AffineTransformSettings,
-    verbose: bool = False,
-    output_dirpath: Path = None,
-) -> list[Transform]:
-    """
-    Perform ants registration of two volumetric image channels.
-
-    This function calculates timepoint-specific affine transformations to align a moving channel
-    to a target channel in 4D (T, Z, Y, X) data. It validates, smooths, and interpolates transformations
-    across timepoints for consistent registration.
-
-    Parameters
-    ----------
-    mov_tczyx : da.Array
-        4D array (T, C, Z, Y, X) of the moving channel (Dask array).
-    ref_tczyx : da.Array
-       4D array (T, C, Z, Y, X) of the reference channel (Dask array).
-    mov_channel_index : int | list[int]
-        Index of the moving channel.
-    ref_channel_index : int
-        Index of the reference channel.
-    ants_registration_settings : AntsRegistrationSettings
-        Settings for the ANTs registration.
-    affine_transform_settings : AffineTransformSettings
-        Settings for the affine transform.
-    verbose : bool, optional
-        Whether to print verbose output during registration, by default False.
-    output_dirpath : Path, optional
-        Path to the folder where the output transform will be saved, by default None.
-    cluster : str, optional
-        Cluster to use, by default 'local'.
-    Returns
-    -------
-    list[Transform]
-        List of affine transformation matrices (4x4), one for each timepoint.
-        Invalid or missing transformations are interpolated.
-
-    Notes
-    -----
-    Each timepoint is processed in parallel using submitit executor.
-    Use verbose=True for detailed logging during registration. The verbose output will be saved at the same level as the output zarr.
-    """
-   
-
-    click.echo('Computing registration transforms...')
-    # NOTE: ants is mulitthreaded so no need for multiprocessing here
-    # Submit jobs
-
-    output_dirpath_fov = output_dirpath / fov
-    output_dirpath_fov.mkdir(parents=True, exist_ok=True)
-
-    
-    transform = estimate_czyx(
-                mov_czyx=mov_tczyx[t],
-                ref_czyx=ref_tczyx[t],
-                initial_tform=affine_transform_settings.approx_transform,
-                mov_channel_index=mov_channel_index,
-                ref_channel_index=ref_channel_index,
-                crop=ants_registration_settings.crop,
-                ref_mask_radius=ants_registration_settings.ref_mask_radius,
-                clip=ants_registration_settings.clip,
-                sobel_filter=ants_registration_settings.sobel_filter,
-                verbose=verbose,
-                t_idx=t,
-                output_dirpath=output_dirpath_fov,
-                )
-
-    return transform

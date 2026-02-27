@@ -1,3 +1,4 @@
+from inspect import formatargvalues
 from pathlib import Path
 
 import click
@@ -56,12 +57,12 @@ from biahub.settings import (
     StabilizationSettings,
 )
 
-from biahub.registration.ants import estimate_tczyx as ants_estimate_tczyx
-from biahub.registration.phase_cross_correlation import estimate_tczyx as pcc_estimate_tczyx
-from biahub.registration.beads import estimate_independently as beads_estimate_independently
-from biahub.registration.beads import estimate_with_propagation as beads_estimate_with_propagation
-from biahub.registration.stackreg import estimate_tczyx as stackreg_estimate_tczyx
-from biahub.registration.match_z_focus import estimate_tzyx as match_z_focus_estimate_tzyx
+# from biahub.registration.ants import estimate as ants_estimate_tczyx\
+from biahub.registration.phase_cross_correlation import estimate as pcc
+# from biahub.registration.beads import estimate as beads_estimate_independently
+# from biahub.registration.beads import estimate_with_propagation as beads_estimate_with_propagation
+# from biahub.registration.stackreg import estimate_tczyx as stackreg_estimate_tczyx
+# from biahub.registration.match_z_focus import estimate_tzyx as match_z_focus_estimate_tzyx
 from biahub.settings import (
     AntsRegistrationSettings,
     AffineTransformSettings,
@@ -72,42 +73,8 @@ from biahub.settings import (
 )
 
 # One SLURM job per (FOV, T) — each T is independent
-PARALLEL_FOV_T_METHODS = {
-    "ants": {
-        "function": ants_estimate_tczyx,
-        "settings_class": AntsRegistrationSettings,
-    },
-    "pcc": {
-        "function": pcc_estimate_tczyx,
-        "settings_class": PhaseCrossCorrSettings,
-    },
-    "beads-independently": {
-        "function": beads_estimate_independently,
-        "settings_class": BeadsMatchSettings,
-    },
-    "match-z-focus": {
-        "function": match_z_focus_estimate_tzyx,
-        "settings_class": FocusFindingSettings,
-    },
-}
 
-# One SLURM job per FOV — T processed sequentially, each T depends on the previous
-SEQUENTIAL_T_METHODS = {
-    "beads-with-propagation": {
-        "function": beads_estimate_with_propagation,
-        "settings_class": BeadsMatchSettings,
-    },
-}
-
-# One SLURM job per FOV — T must all be processed together (e.g. stackreg register_stack)
-PARALLEL_FOV_METHODS = {
-    "stackreg": {
-        "function": stackreg_estimate_tczyx,
-        "settings_class": StackRegSettings,
-    },
-}
-
-_ALL_METHODS = {**PARALLEL_FOV_T_METHODS, **SEQUENTIAL_T_METHODS, **PARALLEL_FOV_METHODS}
+## preprocess, estimate, postprocess:  ants, pcc, 
 
 
 
@@ -116,7 +83,7 @@ def estimate_transforms(
     output_dirpath: Path,
     config_filepath: str,
     sbatch_filepath: str = None,
-    ref_position_dirpaths: list[Path] = None,  # None for stabilization mode
+    local: bool = False,
     cluster: str = "local",
 ) -> dict[str, list]:
     """
@@ -130,8 +97,10 @@ def estimate_transforms(
     """
     from datetime import datetime
 
-    settings = yaml_to_model(config_filepath, RegistrationSettings)
+    settings = yaml_to_model(config_filepath, EstimateRegistrationSettings)
     method = settings.method
+    kwargs = settings.kwargs
+
     click.echo(f"Settings: {settings}")
 
     output_dirpath = Path(output_dirpath)
@@ -161,38 +130,127 @@ def estimate_transforms(
 
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
+    
+    ref_channel_name = settings.ref_channel_name
+    mov_channel_names = settings.mov_channel_names
+    time_indices = settings.time_indices # all or int or list of ints
+
+    if time_indices == "all":
+        time_indices = list(range(T))
+    elif isinstance(time_indices, int):
+        time_indices = [time_indices]
+    elif isinstance(time_indices, list):
+        time_indices = time_indices
+    else:
+        raise ValueError(f"Invalid time_indices: {time_indices}")
+
+
     click.echo(f"Submitting jobs with resources: {slurm_args}")
 
-    method_config = _ALL_METHODS.get(method)
-    if method_config is None:
-        raise ValueError(f"Unknown method: {method}. Available: {list(_ALL_METHODS)}")
-    function_to_run = method_config["function"]
+    PARALLEL_FOV_T_METHODS = {
+        # "ants": {
+        #     "function": ants_estimate_tczyx,
+        #     "config": kwargs.get("ants_settings", None),
+        # },
+        "pcc": {}
+        # "beads": {
+        #     "function": beads_estimate_independently,
+        #     "config": kwargs.get("beads_match_settings", None),
+        # },
+        # "match-z-focus": {
+        #     "function": match_z_focus_estimate_tzyx,
+        #     "config": settings.focus_finding_settings,
+        # },
+    }
+
+    # One SLURM job per FOV — T processed sequentially, each T depends on the previous
+    SEQUENTIAL_T_METHODS = {
+        # "beads-with-propagation": {
+        #     "function": beads_estimate_with_propagation,
+        #     "config": settings.beads_match_settings,
+        # },
+    }
+
+    # One SLURM job per FOV — T must all be processed together (e.g. stackreg register_stack)
+    PARALLEL_FOV_METHODS = {
+        # "stackreg": {
+        #     "function": stackreg_estimate_tczyx,
+        #     "config": settings.stack_reg_settings,
+        # },
+    }
+
+    _ALL_METHODS = {**PARALLEL_FOV_T_METHODS, **SEQUENTIAL_T_METHODS, **PARALLEL_FOV_METHODS}
+    
+
+    # method_config = _ALL_METHODS.get(method)
+    # if method_config is None:
+    #     raise ValueError(f"Unknown method: {method}. Available: {list(_ALL_METHODS)}")
+    # method_function = method_config["function"]
+    # method_settings= method_config["config"]
+
+
 
     jobs = []
-    with submitit.helpers.clean_env(), executor.batch():
-        for fov_path in input_position_dirpaths:
-            fov_key = str(Path(*Path(fov_path).parts[-3:]))
-            fov_out_path = transforms_out_path / fov_key.replace("/", "_")
-            fov_out_path.mkdir(parents=True, exist_ok=True)
 
-            if method in PARALLEL_FOV_T_METHODS:
-                # one job per (FOV, T)
-                for t in range(T):
+    ## kwargs per method
+
+    ### read input data
+    if method in SEQUENTIAL_T_METHODS:
+        for fov_path in input_position_dirpaths:
+            with open_ome_zarr(fov_path) as dataset:
+                ref_data = dataset.data[:, ref_channel_name].dask_array()
+                mov_data = dataset.data[:, mov_channel_names].dask_array()
+                # RUN METHOD FUNCTION
+    else:
+        with submitit.helpers.clean_env(), executor.batch():
+            for fov_path in input_position_dirpaths:
+                fov_key = str(Path(*Path(fov_path).parts[-3:]))
+                with open_ome_zarr(fov_path) as dataset:
+                    if method in PARALLEL_FOV_T_METHODS:
+                        for fov_path in input_position_dirpaths:
+                            output_dirpath_fov = output_dirpath / "transforms"/ fov_key
+                            for t in time_indices:
+                                mov_data = dataset.data[t, mov_channel_names].dask_array()
+                                ref_data = dataset.data[t, ref_channel_name].dask_array()
+                            
+                    # elif method in PARALLEL_FOV_METHODS:
+                    #             ref_data = dataset.data[:, ref_channel_name].dask_array()
+                    #             mov_data = dataset.data[:, mov_channel_names].dask_array()
+                                
+                    
                     job = executor.submit(
-                        function_to_run,
-                        fov_path,
-                        t,
-                        fov_out_path,
+                        pcc, 
+                        t=t,
+                        fov=fov_path.name,
+                        mov=mov_data,
+                        ref=ref_data,
+                        output_dirpath=output_dirpath_fov,
+                        preprocessing=True,
+                        phase_cross_corr_settings=settings.phase_cross_corr_settings,
+                        verbose=settings.verbose,
+                        debug=settings.debug,
                     )
                     jobs.append(job)
-            else:
-                # one job per FOV — method handles T internally (stackreg, beads)
-                job = executor.submit(
-                    function_to_run,
-                    fov_path,
-                    fov_out_path,
-                )
-                jobs.append(job)
+                    # RUN METHOD FUNCTION
+                    # job = executor.submit(
+                    #     method_function,
+                    #     fov_path,
+                    #     ref_data,
+                    #     mov_data,
+                    #     method_settings=method_settings,
+                    # )
+                    # jobs.append(job)
+
+        wait_for_jobs_to_finish(jobs)
+
+
+    # LOAD TRANSFORMS \
+    # from biahub.registration.utils import load_transforms
+    # for fov_path in fov_paths:
+    #     fov_transforms = load_transforms(transforms_out_path, T)
+    # return fov_transforms
+
+
 
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     with open(slurm_out_path / f"job_ids_{timestamp}.log", "w") as log_f:

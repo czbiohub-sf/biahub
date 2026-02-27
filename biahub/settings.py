@@ -227,18 +227,16 @@ class EstimateRegistrationSettings(MyBaseModel):
         default_factory=AffineTransformSettings
     )
     eval_transform_settings: Optional[EvalTransformSettings] = None
-    ants_registration_settings: Optional[AntsSettings] = None
-    manual_registration_settings: Optional[ManualSettings] = None
     verbose: bool = False
 
     @model_validator(mode="after")
     def set_defaults_and_validate(self) -> "EstimateRegistrationSettings":
-        if self.method == "manual" and self.manual_registration_settings is None:
-            self.manual_registration_settings = ManualSettings()
+        if self.method == "manual" and self.manual_settings is None:
+            self.manual_settings = ManualSettings()
         elif self.method == "beads" and self.beads_match_settings is None:
             self.beads_match_settings = BeadsMatchSettings()
-        elif self.method == "ants" and self.ants_registration_settings is None:
-            self.ants_registration_settings = AntsSettings()
+        elif self.method == "ants" and self.ants_settings is None:
+            self.ants_settings = AntsSettings()
         elif self.method == "match-z-focus" and self.focus_finding_settings is None:
             self.focus_finding_settings = FocusFindingSettings()
         elif self.method == "pcc" and self.phase_cross_corr_settings is None:
@@ -247,46 +245,6 @@ class EstimateRegistrationSettings(MyBaseModel):
             self.stack_reg_settings = StackRegSettings()
         return self
 
-
-class EstimateStabilizationSettings(MyBaseModel):
-    stabilization_estimation_channel: str
-    stabilization_channels: list
-    stabilization_type: Literal["z", "xy", "xyz"]
-    stabilization_method: Literal["beads", "phase-cross-corr", "focus-finding"] = (
-        "focus-finding"
-    )
-    beads_match_settings: Optional[BeadsMatchSettings] = None
-    phase_cross_corr_settings: Optional[PhaseCrossCorrSettings] = None
-    stack_reg_settings: Optional[StackRegSettings] = None
-    focus_finding_settings: Optional[FocusFindingSettings] = None
-    affine_transform_settings: AffineTransformSettings = Field(
-        default_factory=AffineTransformSettings
-    )
-    eval_transform_settings: Optional[EvalTransformSettings] = None
-    verbose: bool = False
-
-    @model_validator(mode="after")
-    def set_defaults_and_validate(self) -> "EstimateStabilizationSettings":
-        if self.stabilization_method == "beads" and self.beads_match_settings is None:
-            self.beads_match_settings = BeadsMatchSettings()
-        elif (
-            self.stabilization_method == "phase-cross-corr"
-            and self.phase_cross_corr_settings is None
-        ):
-            self.phase_cross_corr_settings = PhaseCrossCorrSettings()
-        elif self.stabilization_method == "focus-finding" and self.stabilization_type == "xyz":
-            if self.focus_finding_settings is None:
-                self.focus_finding_settings = FocusFindingSettings()
-            if self.stack_reg_settings is None:
-                self.stack_reg_settings = StackRegSettings()
-        elif self.stabilization_method == "focus-finding" and self.stabilization_type == "z":
-            if self.focus_finding_settings is None:
-                self.focus_finding_settings = FocusFindingSettings()
-        elif self.stabilization_method == "focus-finding" and self.stabilization_type == "xy":
-            if self.stack_reg_settings is None:
-                self.stack_reg_settings = StackRegSettings()
-
-        return self
 
 
 class ProcessingSettings(MyBaseModel):

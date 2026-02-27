@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Optional
 
 import ants
 import click
@@ -26,85 +26,6 @@ from biahub.settings import (
 )
 
 
-def estimate_tczyx(
-    mov_tczyx: da.Array,
-    ref_tczyx: da.Array,
-    mov_channel_index: int,
-    ref_channel_index: int = None,
-    beads_match_settings: BeadsMatchSettings = None,
-    affine_transform_settings: AffineTransformSettings = None,
-    verbose: bool = False,
-    output_folder_path: Path = None,
-    mode: Literal["registration", "stabilization"] = "registration",
-) -> list[Transform]:
-    """
-    Perform beads-based temporal registration of 4D data using affine transformations.
-
-    This function calculates timepoint-specific affine transformations to align a source channel
-    to a target channel in 4D (T, Z, Y, X) data. It validates, smooths, and interpolates transformations
-    across timepoints for consistent registration.
-
-    Parameters
-    ----------
-    mov_tczyx : da.Array
-       4D array (T, C, Z, Y, X) of the moving channel (Dask array).
-    ref_tczyx : da.Array
-       4D array (T, C, Z, Y, X) of the target channel (Dask array).
-    beads_match_settings : BeadsMatchSettings
-        Settings for the beads match.
-    affine_transform_settings : AffineTransformSettings
-        Settings for the affine transform.
-    verbose : bool
-        If True, prints detailed logs of the registration process.
-    cluster : bool
-        If True, uses the cluster.
-    sbatch_filepath : Path
-        Path to the sbatch file.
-    output_folder_path : Path
-        Path to the output folder.
-    quality_control : bool
-        If True, performs quality control.
-    threshold_score : float
-        Threshold score for the quality control.
-    grid_search : bool
-        If True, performs grid search.
-    mode : Literal["registration", "stabilization"]
-        Mode to perform the registration(between two channels) or stabilization (between a channel over time).
-    Returns
-    -------
-    list[Transform]
-        List of affine transformation matrices (4x4), one for each timepoint.
-        Invalid or missing transformations are interpolated.
-
-    Notes
-    -----
-    Each timepoint is processed in parallel using submitit executor.
-    Use verbose=True for detailed logging during registration. The verbose output will be saved at the same level as the output zarr.
-    """
-    mov_tzyx = mov_tczyx[:, mov_channel_index]
-    ref_tzyx = ref_tczyx[:, ref_channel_index]
-
-    output_transforms_path = output_folder_path / "xyz_transforms"
-    output_transforms_path.mkdir(parents=True, exist_ok=True)
-
-    T, _, _, _ = mov_tzyx.shape
-    if affine_transform_settings.use_prev_t_transform:
-        estimate_with_propagation(
-            mov_channel_index=mov_channel_index,
-            ref_channel_index=ref_channel_index,
-            mov_tzyx=mov_tzyx,
-            ref_tzyx=ref_tzyx,
-            beads_match_settings=beads_match_settings,
-            affine_transform_settings=affine_transform_settings,
-            verbose=verbose,
-            output_folder_path=output_transforms_path,
-            mode=mode,
-        )
-    transforms = load_transforms(output_transforms_path, T, verbose)
-
-    return transforms
-
-
 def estimate_with_propagation(
     mov_tzyx: da.Array,
     ref_tzyx: da.Array,
@@ -120,10 +41,10 @@ def estimate_with_propagation(
         if np.sum(mov_tzyx[t]) == 0 or np.sum(ref_tzyx[t]) == 0:
             click.echo(f"Timepoint {t} has no data, skipping")
         else:
-            approx_transform = estimate_tzyx(
-                t_idx=t,
-                mov_tzyx=mov_tzyx,
-                ref_tzyx=ref_tzyx,
+            approx_transform = estimate(
+                t=t,
+                mov=mov_tzyx[t],
+                ref=ref_tzyx[t],
                 beads_match_settings=beads_match_settings,
                 affine_transform_settings=affine_transform_settings,
                 verbose=verbose,
@@ -136,44 +57,6 @@ def estimate_with_propagation(
                 affine_transform_settings.approx_transform = approx_transform.to_list()
             else:
                 affine_transform_settings.approx_transform = initial_transform
-
-
-def estimate_independently(
-    t: int,
-    fov: str,
-    mov_channel_index: int,
-    ref_channel_index: int,
-    mov_tczyx: da.Array,
-    ref_tczyx: da.Array,
-    beads_match_settings: BeadsMatchSettings,
-    affine_transform_settings: AffineTransformSettings,
-    verbose: bool = False,
-    output_dirpath: Path = None,
-    mode: Literal["registration", "stabilization"] = "registration",
-) -> Transform:
-    """
-    Calculate the affine transformation matrix between source and target channels
-    based on detected bead matches at a specific timepoint.
-
-    This function detects beads in both source and target datasets, matches them,
-    and computes an affine transformation to align the two channels. It applies
-    the transformation to the source channel and returns the transformed channel.
-    """
-    
-   
-    output_dirpath_fov_t = output_dirpath / fov / t
-    output_dirpath_fov_t.mkdir(parents=True, exist_ok=True)
-    transform = estimate_tzyx(
-                t_idx=t,
-                mov_tzyx=mov_tczyx[:, mov_channel_index],
-                ref_tzyx=ref_tczyx[:, ref_channel_index],
-                beads_match_settings=beads_match_settings,
-                affine_transform_settings=affine_transform_settings,
-                verbose=verbose,
-                output_folder_path=output_dirpath_fov_t,
-                mode=mode
-            )
-    return transform
 
 def peaks_from_beads(
     mov: da.Array,
@@ -391,108 +274,6 @@ def transform_from_matches(
     return fwd_transform, inv_transform
 
 
-def estimate_tzyx(
-    t_idx: int,
-    mov_tzyx: da.Array,
-    ref_tzyx: da.Array,
-    beads_match_settings: BeadsMatchSettings,
-    affine_transform_settings: AffineTransformSettings,
-    verbose: bool = False,
-    output_folder_path: Path = None,
-    mode: Literal["registration", "stabilization"] = "registration",
-    user_transform: Transform = None,
-) -> Transform:
-    """
-    Calculate the affine transformation matrix between source and target channels
-    based on detected bead matches at a specific timepoint.
-
-    This function detects beads in both source and target datasets, matches them,
-    and computes an affine transformation to align the two channels. It applies
-    various filtering steps, including angle-based filtering, to improve match quality.
-
-    Parameters
-    ----------
-    t_idx : int
-        Timepoint index to process.
-    mov_tzyx : da.Array
-       4D array (T, Z, Y, X) of the moving channel (Dask array).
-    ref_tzyx : da.Array, optional
-       4D array (T, Z, Y, X) of the reference channel (Dask array). If not provided, the first timepoint of the moving channel will be used.
-    beads_match_settings : BeadsMatchSettings
-        Settings for the beads match.
-    affine_transform_settings : AffineTransformSettings
-        Settings for the affine transform.
-    verbose : bool
-        If True, prints detailed logs during the process.
-    slurm : bool
-        If True, uses SLURM for parallel processing.
-    output_folder_path : Path
-        Path to save the output.
-
-    Returns
-    -------
-    list | None
-        A 4x4 affine transformation matrix as a nested list if successful,
-        or None if no valid transformation could be calculated.
-
-    Notes
-    -----
-    Uses ANTsPy for initial transformation application and bead detection.
-    Peaks (beads) are detected using a block-based algorithm with thresholds for source and target datasets.
-    Bead matches are filtered based on distance and angular deviation from the dominant direction.
-    If fewer than three matches are found after filtering, the function returns None.
-    """
-    click.echo("........................................................................")
-    click.echo(f'Processing timepoint: {t_idx}')
-
-    (T, Z, Y, X) = mov_tzyx.shape
-
-    if mode == "stabilization":
-        click.echo("Performing stabilization, aka registration over time in the same file.")
-        if affine_transform_settings.t_reference == "first":
-            ref_tzyx = np.broadcast_to(mov_tzyx[0], (T, Z, Y, X)).copy()
-        elif affine_transform_settings.t_reference == "previous":
-            ref_tzyx = np.roll(mov_tzyx, shift=-1, axis=0)
-            ref_tzyx[0] = mov_tzyx[0]
-        else:
-            raise ValueError(
-                "Invalid reference. Please use 'first' or 'previous' as reference."
-            )
-    elif mode == "registration":
-        click.echo("Performing registration between different files")
-    mov_zyx = np.asarray(mov_tzyx[t_idx]).astype(np.float32)
-    ref_zyx = np.asarray(ref_tzyx[t_idx]).astype(np.float32)
-
-    if output_folder_path:
-        output_folder_path.mkdir(parents=True, exist_ok=True)
-        output_filepath = output_folder_path / f"{t_idx}.npy"
-    else:
-        output_filepath = None
-
-    transform, quality_score = estimate(
-        mov=mov_zyx,
-        ref=ref_zyx,
-        beads_match_settings=beads_match_settings,
-        affine_transform_settings=affine_transform_settings,
-        verbose=verbose,
-        output_filepath=output_filepath,
-        user_transform=user_transform,
-    )
-    # if quality_score < beads_match_settings.qc_settings.score_threshold:
-    #     beads_match_settings.filter_matches_settings.min_distance_quantile = 0.1
-    #     beads_match_settings.filter_matches_settings.max_distance_quantile = 0.99
-
-    #     transform, quality_score = estimate(
-    #         mov=mov_zyx,
-    #         ref=ref_zyx,
-    #         beads_match_settings=beads_match_settings,
-    #         affine_transform_settings=affine_transform_settings,
-    #         verbose=verbose,
-    #         output_filepath=output_filepath,
-    #         user_transform=user_transform,
-    # )
-    return transform
-
 
 def registration_beads_score(
     mov_peaks: ArrayLike,
@@ -646,6 +427,8 @@ def estimate(
     output_filepath: Path = None,
     user_transform: Transform = None,
     debug: bool = False,
+    t : Optional[int] = None,
+    fov: Optional[str] = None,
 ) -> tuple[Transform, float]:
     """
     Estimate the affine transformation between source and target channels
@@ -669,6 +452,10 @@ def estimate(
         Path to save the output.
     qc_score_threshold : float
         Threshold score for the quality control.
+    t : int
+        Timepoint index.
+    fov : str
+        FOV name.
     Returns
     -------
     Transform
@@ -753,4 +540,4 @@ def estimate(
         click.echo(f"Saving transform to {output_filepath}")
         np.save(output_filepath, best_transform.to_list())
 
-    return best_transform, best_quality_score['quality_score']
+    return best_transform
