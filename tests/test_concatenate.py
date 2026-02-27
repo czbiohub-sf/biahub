@@ -476,3 +476,46 @@ def test_concatenate_with_unique_positions(create_custom_plate, tmp_path, sbatch
     for pos_name, pos in output_plate_unique.positions():
         # Both positions should have all channels
         assert set(pos.channel_names) == {"DAPI", "Cy5", "GFP", "RFP"}
+
+
+@pytest.mark.parametrize("input_version", ["0.4", "0.5"])
+def test_concatenate_preserves_zarr_version(
+    create_custom_plate, tmp_path, sbatch_file, input_version
+):
+    """
+    Test that concatenate preserves the input zarr version in the output
+    (zarr v2 input → zarr v2 output, zarr v3 input → zarr v3 output)
+    """
+    # Create input plates with specific zarr version
+    plate_1_path, plate_1 = create_custom_plate(
+        tmp_path / 'zarr1',
+        channel_names=['DAPI', 'Cy5'],
+        version=input_version,
+    )
+    plate_2_path, plate_2 = create_custom_plate(
+        tmp_path / 'zarr2',
+        channel_names=['GFP', 'RFP'],
+        version=input_version,
+    )
+
+    # Note: Not specifying output_ome_zarr_version in settings
+    # to test that version is detected from input
+    settings = ConcatenateSettings(
+        concat_data_paths=[str(plate_1_path) + "/*/*/*", str(plate_2_path) + "/*/*/*"],
+        channel_names=['all', 'all'],
+        time_indices='all',
+    )
+
+    output_path = tmp_path / "output.zarr"
+    concatenate(
+        settings=settings,
+        output_dirpath=output_path,
+        sbatch_filepath=sbatch_file,
+        local=True,
+    )
+
+    # Check that output has the same version as input
+    output_plate = open_ome_zarr(output_path)
+    assert (
+        output_plate.version == input_version
+    ), f"Expected version {input_version}, got {output_plate.version}"
