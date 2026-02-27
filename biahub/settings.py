@@ -245,8 +245,6 @@ class EstimateRegistrationSettings(MyBaseModel):
             self.stack_reg_settings = StackRegSettings()
         return self
 
-
-
 class ProcessingSettings(MyBaseModel):
     fliplr: Optional[bool] = False
     flipud: Optional[bool] = False
@@ -286,29 +284,29 @@ class DeskewSettings(MyBaseModel):
                 )
         super().__init__(**data)
 
-# class StabilizationSettings(MyBaseModel):
-#     stabilization_estimation_channel: str
-#     stabilization_type: Literal["z", "xy", "xyz"]
-#     stabilization_method: Literal["beads", "phase-cross-corr", "focus-finding"] = (
-#         "focus-finding"
-#     )
-#     stabilization_channels: list
-#     affine_transform_zyx_list: list
-#     time_indices: Union[NonNegativeInt, list[NonNegativeInt], Literal["all"]] = "all"
+class StabilizationSettings(MyBaseModel):
+    stabilization_estimation_channel: str
+    stabilization_type: Literal["z", "xy", "xyz"]
+    stabilization_method: Literal["beads", "phase-cross-corr", "focus-finding"] = (
+        "focus-finding"
+    )
+    stabilization_channels: list
+    affine_transform_zyx_list: list
+    time_indices: Union[NonNegativeInt, list[NonNegativeInt], Literal["all"]] = "all"
 
 
-    # @field_validator("affine_transform_zyx_list")
-    # @classmethod
-    # def check_affine_transform_zyx_list(cls, v):
-    #     if not isinstance(v, list):
-    #         raise ValueError("affine_transform_list must be a list")
+    @field_validator("affine_transform_zyx_list")
+    @classmethod
+    def check_affine_transform_zyx_list(cls, v):
+        if not isinstance(v, list):
+            raise ValueError("affine_transform_list must be a list")
 
-    #     for arr in v:
-    #         arr = np.array(arr)
-    #         if arr.shape != (4, 4):
-    #             raise ValueError("Each element in affine_transform_list must be a 4x4 ndarray")
+        for arr in v:
+            arr = np.array(arr)
+            if arr.shape != (4, 4):
+                raise ValueError("Each element in affine_transform_list must be a 4x4 ndarray")
 
-    #     return v
+        return v
 
 
 class RegistrationSettings(MyBaseModel):

@@ -17,8 +17,8 @@ from biahub.settings import (
 
 
 def phase_cross_correlation(
-    ref_img: ArrayLike,
-    mov_img: ArrayLike,
+    ref: ArrayLike,
+    mov: ArrayLike,
     maximum_shift: float = 1.2,
     normalization: Optional[Literal["magnitude", "classic"]] = None,
     output_path: Optional[Path] = None,
@@ -32,9 +32,9 @@ def phase_cross_correlation(
     moving -> reference
     Parameters
     ----------
-    ref_img : ArrayLike
+    ref : ArrayLike
         Reference image.
-    mov_img : ArrayLike
+    mov : ArrayLike
         Moved image.
     maximum_shift : float, optional
         Maximum location shift normalized by axis size, by default 1.0
@@ -46,21 +46,22 @@ def phase_cross_correlation(
     """
     shape = tuple(
         cast(int, next_fast_len(int(max(s1, s2) * maximum_shift)))
-        for s1, s2 in zip(ref_img.shape, mov_img.shape)
+        for s1, s2 in zip(ref.shape, mov.shape)
     )
 
     if verbose:
         click.echo(
-            f"phase cross corr. fft shape of {shape} for arrays of shape {ref_img.shape} and {mov_img.shape} "
+            f"phase cross corr. fft shape of {shape} for arrays of shape {ref.shape} and {mov.shape} "
             f"with maximum shift of {maximum_shift}"
         )
-
-    ref_img = match_shape(ref_img, shape)
-    mov_img = match_shape(mov_img, shape)
-    Fimg1 = np.fft.rfftn(ref_img)
-    Fimg2 = np.fft.rfftn(mov_img)
+    ref = np.asarray(ref)
+    mov = np.asarray(mov)
+    ref = match_shape(ref, shape)
+    mov = match_shape(mov, shape)
+    Fimg1 = np.fft.rfftn(ref)
+    Fimg2 = np.fft.rfftn(mov)
     eps = np.finfo(Fimg1.dtype).eps
-    del ref_img, mov_img
+    del ref, mov
 
     prod = Fimg1 * Fimg2.conj()
 
@@ -120,14 +121,14 @@ def _estimate(
         verbose=verbose,
     )
 
-    if shift.ndim == 2:
+    if len(shift) == 2:
         dy, dx = shift
 
         transform = np.eye(3)
         transform[1, 2] = dx
         transform[0, 2] = dy
 
-    elif shift.ndim == 3:
+    elif len(shift) == 3:
 
         dz, dy, dx = shift
 
@@ -271,7 +272,12 @@ def estimate(
     list[ArrayLike]
         List of the xyz stabilization for each timepoint.
     """
-    T, C, Z, Y, X = mov.shape
+
+    click.echo(f"Processing fov: {fov}")
+    click.echo(f"Processing t: {t}")
+
+
+    Z, Y, X = mov.shape
 
     # preprocessing
     if preprocessing:
@@ -280,11 +286,11 @@ def estimate(
         ref = ref[z_idx, y_idx, x_idx]
 
 
-    output_transforms_path_fov = output_dirpath /"transforms" / fov
+    output_transforms_path_fov = output_dirpath /"transforms" 
     output_transforms_path_fov.mkdir(parents=True, exist_ok=True)
-    output_shifts_path_fov = output_dirpath / "shifts" / fov 
+    output_shifts_path_fov = output_dirpath / "shifts" 
     output_shifts_path_fov.mkdir(parents=True, exist_ok=True)
-    output_path_corr = output_dirpath / "corr_plots" / fov
+    output_path_corr = output_dirpath / "corr_plots" 
     output_path_corr.mkdir(parents=True, exist_ok=True)
 
     transform, shift = _estimate(
@@ -292,11 +298,14 @@ def estimate(
             ref=ref,
             function_type=phase_cross_corr_settings.function_type,
             normalization=phase_cross_corr_settings.normalization,
-            output_path=output_path_corr / f"{t}.png",
+            output_path=output_path_corr/f"{fov}.png",
             verbose=verbose,
         )
+
+    print(f"transform: {transform}")
+    print(f"shift: {shift}")
         
-    # save the transform
+    # # save the transform
     np.save(output_transforms_path_fov / f"{t}.npy", transform)
     np.save(output_shifts_path_fov / f"{t}.npy", shift)
 
