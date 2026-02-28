@@ -41,7 +41,9 @@ jobs:
         python-version: "3.11"
 
     - name: Install the biahub package
-      run: uv sync --extra dev --torch-backend=cpu
+      run: uv sync --extra dev
+      env:
+        UV_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
 
     - name: Test with pytest
       run: uv run pytest -v
