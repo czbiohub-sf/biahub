@@ -1,5 +1,4 @@
 from pathlib import Path
-from typing import List
 
 import click
 import numpy as np
@@ -28,7 +27,7 @@ from biahub.settings import DeconvolveSettings
 
 def compute_tranfser_function(
     psf_zyx_data: np.ndarray,
-    output_zyx_shape: tuple,
+    output_zyx_shape: tuple[int, int, int],
 ) -> np.ndarray:
     zyx_padding = np.array(output_zyx_shape) - np.array(psf_zyx_data.shape)
     pad_width = [(x // 2, x // 2) if x % 2 == 0 else (x // 2, x // 2 + 1) for x in zyx_padding]
@@ -44,8 +43,8 @@ def compute_tranfser_function(
 
 def deconvolve(
     czyx_raw_data: np.ndarray,
-    transfer_function: torch.Tensor = None,
-    transfer_function_store_path: str = None,
+    transfer_function: torch.Tensor | None = None,
+    transfer_function_store_path: str | None = None,
     regularization_strength: float = 1e-3,
 ) -> np.ndarray:
     if transfer_function is None:
@@ -81,14 +80,14 @@ def deconvolve(
 @local()
 @monitor()
 def deconvolve_cli(
-    input_position_dirpaths: List[str],
+    input_position_dirpaths: list[str],
     psf_dirpath: str,
     config_filepath: Path,
     output_dirpath: str,
-    sbatch_filepath: str = None,
+    sbatch_filepath: str | None = None,
     local: bool = False,
     monitor: bool = True,
-):
+) -> None:
     """
     Deconvolve across T and C axes using a PSF and a configuration file
 

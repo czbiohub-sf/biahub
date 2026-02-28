@@ -31,22 +31,46 @@ def reconstruct_cli(
     config_filepath: Path,
     output_dirpath: Path,
     num_processes: int,
-    sbatch_filepath: Path,
+    sbatch_filepath: Path | None,
     local: bool = False,
     monitor: bool = True,
-):
+) -> None:
     """
-    Reconstruct a dataset using a configuration file. This is a
-    convenience function for a `compute-tf` call followed by a `apply-inv-tf`
-    call.
+    Reconstruct a dataset using a configuration file.
 
-    Calculates the transfer function based on the shape of the first position
-    in the list `input-position-dirpaths`, then applies that transfer function
-    to all positions in the list `input-position-dirpaths`, so all positions
-    must have the same TCZYX shape.
+    This is a convenience function that combines `compute-tf` and `apply-inv-tf`
+    calls. It calculates the transfer function based on the shape of the first
+    position in the list, then applies that transfer function to all positions.
+    All positions must have the same TCZYX shape.
 
+    Parameters
+    ----------
+    input_position_dirpaths : list[Path]
+        List of paths to the input position directories (OME-Zarr format).
+    config_filepath : Path
+        Path to the YAML configuration file specifying reconstruction settings.
+    output_dirpath : Path
+        Path to the output directory where the reconstructed dataset will be saved.
+    num_processes : int
+        Number of processes to use for parallel computation.
+    sbatch_filepath : Path | None, optional
+        Path to the SLURM batch file for cluster submission, by default None.
+    local : bool, optional
+        If True, run the jobs locally instead of submitting to a SLURM cluster, by default False.
+    monitor : bool, optional
+        If True, monitor the progress of the submitted jobs, by default True.
+
+    Returns
+    -------
+    None
+        The reconstructed data is written to the `output_dirpath`.
+
+    Notes
+    -----
     See https://github.com/mehta-lab/waveorder/tree/main/docs/examples for example configuration files.
 
+    Examples
+    --------
     >> biahub reconstruct -i ./input.zarr/*/*/* -c ./examples/birefringence.yml -o ./output.zarr
     """
     # glob all positions in input_position_dirpaths

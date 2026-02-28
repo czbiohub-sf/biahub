@@ -1,4 +1,5 @@
 from dataclasses import asdict
+from pathlib import Path
 
 import click
 import napari
@@ -14,10 +15,38 @@ from biahub.settings import DeskewSettings
 @click.command("estimate-deskew")
 @input_position_dirpaths()
 @output_filepath()
-def estimate_deskew_cli(input_position_dirpaths, output_filepath):
+def estimate_deskew_cli(
+    input_position_dirpaths: list[str],
+    output_filepath: Path,
+) -> None:
     """
     Routine for estimating deskewing parameters from calibration data.
 
+    Interactive routine that guides the user through estimating deskewing
+    parameters by analyzing calibration data. Uses napari for interactive
+    visualization and user input to measure pixel-to-scan ratio and light
+    sheet angle.
+
+    Parameters
+    ----------
+    input_position_dirpaths : list[str]
+        List of input position directory paths. Only the first position
+        will be used for parameter estimation.
+    output_filepath : Path
+        Path to save the estimated deskewing parameters as a YAML file.
+
+    Returns
+    -------
+    None
+        Deskewing parameters are saved to `output_filepath` as a YAML file.
+
+    Raises
+    ------
+    ValueError
+        If the output file path does not have a .yaml or .yml extension.
+
+    Examples
+    --------
     >> biahub estimate-deskew -i ./input.zarr/0/0/0 -o ./deskew_params.yml
     """
     if not str(output_filepath).endswith(('.yaml', '.yml')):

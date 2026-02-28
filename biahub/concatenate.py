@@ -24,16 +24,26 @@ from biahub.cli.utils import copy_n_paste, estimate_resources, get_output_paths,
 from biahub.settings import ConcatenateSettings
 
 
-def get_path_slice_param(slice_param, path_index, total_paths):
+def get_path_slice_param(
+    slice_param: str | list[int] | list[str | list[int]],
+    path_index: int,
+    total_paths: int,
+) -> str | list[int]:
     """
     Determine the slice parameter for a specific path.
 
-    Args:
-        slice_param: The slice parameter from settings (can be 'all', a single slice range, or per-path specifications)
-        path_index: The index of the current path
-        total_paths: The total number of paths
+    Parameters
+    ----------
+    slice_param : str | list[int] | list[str | list[int]]
+        The slice parameter from settings (can be 'all', a single slice range, or per-path specifications)
+    path_index : int
+        The index of the current path
+    total_paths : int
+        The total number of paths
 
-    Returns:
+    Returns
+    -------
+    str | list[int]
         The slice parameter for the current path
     """
     # Handle 'all' case
@@ -53,17 +63,29 @@ def get_path_slice_param(slice_param, path_index, total_paths):
     return slice_param
 
 
-def create_path_slicing_params(path_z_slice, path_y_slice, path_x_slice, dataset_shape):
+def create_path_slicing_params(
+    path_z_slice: str | list[int],
+    path_y_slice: str | list[int],
+    path_x_slice: str | list[int],
+    dataset_shape: tuple[int, ...],
+) -> list[slice]:
     """
     Create slicing parameters for a specific path.
 
-    Args:
-        path_z_slice: The Z slice parameter for the path
-        path_y_slice: The Y slice parameter for the path
-        path_x_slice: The X slice parameter for the path
-        dataset_shape: The shape of the dataset
+    Parameters
+    ----------
+    path_z_slice : str | list[int]
+        The Z slice parameter for the path
+    path_y_slice : str | list[int]
+        The Y slice parameter for the path
+    path_x_slice : str | list[int]
+        The X slice parameter for the path
+    dataset_shape : tuple[int, ...]
+        The shape of the dataset
 
-    Returns:
+    Returns
+    -------
+    list[slice]
         A list of slice objects [z_slice, y_slice, x_slice]
     """
     z_slice = get_slice(path_z_slice, dataset_shape[2])
@@ -74,18 +96,30 @@ def create_path_slicing_params(path_z_slice, path_y_slice, path_x_slice, dataset
 
 def get_channel_combiner_metadata(
     data_paths_list: list[str],
-    processing_channel_names: list[str],
-    slicing_params: list,
-):
+    processing_channel_names: list[str | list[str]],
+    slicing_params: list[str | list[int] | list[str | list[int]]],
+) -> tuple[
+    list[Path],
+    list[str],
+    list[list[int]],
+    list[list[int]],
+    list[list[slice]],
+]:
     """
     Get metadata for channel combination.
 
-    Args:
-        data_paths_list: List of data paths
-        processing_channel_names: List of channel names to process
-        slicing_params: List of slicing parameters [Z_slice, Y_slice, X_slice]
+    Parameters
+    ----------
+    data_paths_list : list[str]
+        List of data paths
+    processing_channel_names : list[str | list[str]]
+        List of channel names to process
+    slicing_params : list[str | list[int] | list[str | list[int]]]
+        List of slicing parameters [Z_slice, Y_slice, X_slice]
 
-    Returns:
+    Returns
+    -------
+    tuple[list[Path], list[str], list[list[int]], list[list[int]], list[list[slice]]]
         Tuple of (all_data_paths, all_channel_names, input_channel_idx, output_channel_idx, all_slicing_params)
     """
     all_data_paths = []
@@ -172,15 +206,20 @@ def get_channel_combiner_metadata(
     )
 
 
-def get_slice(slice_param, max_value: int):
+def get_slice(slice_param: str | list[int], max_value: int) -> slice:
     """
     Convert slice parameters to slice objects.
 
-    Args:
-        slice_param: Can be 'all' or a single slice range [start, end]
-        max_value: Maximum value for the dimension
+    Parameters
+    ----------
+    slice_param : str | list[int]
+        Can be 'all' or a single slice range [start, end]
+    max_value : int
+        Maximum value for the dimension
 
-    Returns:
+    Returns
+    -------
+    slice
         A slice object
     """
     # Handle 'all' case
@@ -198,9 +237,25 @@ def get_slice(slice_param, max_value: int):
     raise ValueError(f"Invalid slice parameter: {slice_param}")
 
 
-def validate_slicing_params_zyx(slicing_params_zyx_list: list[list[slice, slice, slice]]):
+def validate_slicing_params_zyx(
+    slicing_params_zyx_list: list[list[slice, slice, slice]],
+) -> None:
     """
     Validate that all slicing parameters are the same for a given dimension
+
+    Parameters
+    ----------
+    slicing_params_zyx_list : list[list[slice, slice, slice]]
+        List of slicing parameter lists, each containing three slice objects for Z, Y, X dimensions.
+
+    Returns
+    -------
+    None
+
+    Raises
+    ------
+    ValueError
+        If slicing parameters produce inconsistent output sizes.
     """
     first_slice_size = calculate_cropped_size(slicing_params_zyx_list[0])
     for i, slice_obj in enumerate(slicing_params_zyx_list[1:], 1):
@@ -218,10 +273,14 @@ def calculate_cropped_size(
     """
     Calculate the size of a dimension after cropping.
 
-    Args:
-        slice_params_zyx: A list of slice parameters for the Z, Y, and X dimensions
+    Parameters
+    ----------
+    slice_params_zyx : list[slice, slice, slice]
+        A list of slice parameters for the Z, Y, and X dimensions
 
-    Returns:
+    Returns
+    -------
+    tuple[int, int, int]
         A tuple of the size of the dimension after cropping for the Z, Y, and X dimensions
     """
     # Calculate the size of each dimension by taking the absolute difference between stop and start
@@ -242,7 +301,7 @@ def concatenate(
     local: bool = False,
     block: bool = False,
     monitor: bool = True,
-):
+) -> None:
     """Concatenate datasets (with optional cropping).
 
     Parameters
@@ -461,7 +520,7 @@ def concatenate_cli(
     sbatch_filepath: str | None = None,
     local: bool = False,
     monitor: bool = True,
-):
+) -> None:
     """
     Concatenate datasets (with optional cropping)
 

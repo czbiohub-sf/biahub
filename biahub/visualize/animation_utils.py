@@ -52,11 +52,15 @@ def suggest_contrast_limits(intensity_array):
     """
     Suggest contrast limits for an array of pixel intensities.
 
-    Parameters:
-    intensity_array (numpy array): A flattened array of pixel intensity values (0-255).
+    Parameters
+    ----------
+    intensity_array : numpy array
+        A flattened array of pixel intensity values (0-255).
 
-    Returns:
-    tuple: Suggested lower and upper contrast limits (1st percentile, 99th percentile).
+    Returns
+    -------
+    tuple
+        Suggested lower and upper contrast limits (1st percentile, 99th percentile).
     """
     if intensity_array.size == 0:
         raise ValueError("The intensity array is empty.")

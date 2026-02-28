@@ -1,6 +1,5 @@
 from collections import defaultdict
 from pathlib import Path
-from typing import Tuple
 
 import click
 import numpy as np
@@ -16,7 +15,7 @@ from biahub.settings import StitchSettings
 
 def extract_stage_position(
     plate_dataset: Plate, position_name: str
-) -> Tuple[float, float, float]:
+) -> tuple[float, float, float]:
     """
     Extract stage position coordinates from plate metadata.
 
@@ -29,7 +28,7 @@ def extract_stage_position(
 
     Returns
     -------
-    Tuple[float, float, float]
+    tuple[float, float, float]
         Stage position coordinates in (z, y, x) order in micrometers.
     """
     stage_positions = plate_dataset.zattrs["Summary"]["StagePositions"]
@@ -76,6 +75,7 @@ def extract_stage_position(
     default=None,
     type=str,
     help="Channel name to use for phase cross-correlation optimization (default: None, disables optimization)",
+    required=False,
 )
 @click.option(
     "--pcc-z-index",
@@ -96,12 +96,12 @@ def estimate_stitch_cli(
     fliplr: bool,
     flipud: bool,
     flipxy: bool,
-    pcc_channel_name: str,
+    pcc_channel_name: str | None,
     pcc_z_index: int,
     add_offset: bool,
     local: bool,
     monitor: bool,
-):
+) -> None:
     """
     Estimate stitching parameters for positions in wells of a zarr store.
 
@@ -110,9 +110,40 @@ def estimate_stitch_cli(
     saved in pixel units.
 
     This function estimates translations using metadata alone. More precise
-    translations require phase cross-correlation using `--pcc-channel`.
+    translations require phase cross-correlation using `--pcc-channel-name`.
 
-    >>> biahub estimate-stitch -i ./input.zarr/*/*/* -o ./stitch_params.yml
+    Parameters
+    ----------
+    input_position_dirpaths : list[Path]
+        List of paths to the input position directories (OME-Zarr format).
+    output_filepath : str
+        Path to the output YAML file where stitching settings will be saved.
+    fliplr : bool
+        If True, flip images left-right before stitching.
+    flipud : bool
+        If True, flip images up-down before stitching.
+    flipxy : bool
+        If True, flip images along the diagonal before stitching.
+    pcc_channel_name : str | None, optional
+        Channel name to use for phase cross-correlation optimization.
+        If None, optimization is disabled, by default None.
+    pcc_z_index : int, optional
+        Z slice index to use for phase cross-correlation optimization, by default 0.
+    add_offset : bool, optional
+        If True, add the offset to estimated shifts, by default False.
+    local : bool, optional
+        If True, run the jobs locally instead of submitting to a SLURM cluster, by default False.
+    monitor : bool, optional
+        If True, monitor the progress of the submitted jobs, by default True.
+
+    Returns
+    -------
+    None
+        Stitching settings are saved to the specified output file.
+
+    Examples
+    --------
+    >> biahub estimate-stitch -i ./input.zarr/*/*/* -o ./stitch_params.yml
     """
     input_plate_path = Path(*input_position_dirpaths[0].parts[:-3])
     output_filepath = Path(output_filepath)

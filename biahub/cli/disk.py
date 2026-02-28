@@ -40,14 +40,21 @@ def check_disk_space_with_du(
     """
     Check if there's enough disk space at the partition of `output_path` to store `input_path`.
 
-    Args:
-        input_path (str): File or directory to estimate size.
-        output_path (str): Directory where output will be saved.
-        margin (float): Safety factor (e.g., 1.1 = 10% extra).
-        verbose (bool): Whether to print diagnostics.
+    Parameters
+    ----------
+    input_path : str
+        File or directory to estimate size.
+    output_path : str
+        Directory where output will be saved.
+    margin : float, optional
+        Safety factor (e.g., 1.1 = 10% extra), by default 1.1
+    verbose : bool, optional
+        Whether to print diagnostics, by default True
 
-    Returns:
-        bool: True if there is enough space, False otherwise.
+    Returns
+    -------
+    bool
+        True if there is enough space, False otherwise.
     """
     input_size = get_dir_size_du(input_path)
     required_space = input_size * margin
