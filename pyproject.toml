@@ -35,7 +35,7 @@ dependencies = [
   "submitit",
   "torch",
   "tqdm",
-  "waveorder==3.0.0a2",
+  "waveorder @ git+https://github.com/mehta-lab/waveorder.git",
   "largestinteriorrectangle",
   "antspyx",
   "pystackreg",
