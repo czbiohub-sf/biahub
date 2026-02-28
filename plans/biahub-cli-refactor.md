@@ -13,6 +13,7 @@ Add a Hydra-based pipeline CLI (`biahub-pipeline`) that orchestrates multi-step 
   - `mantis_63x_1.35` — light-sheet + label-free (complex, 3 branches)
   - `hummingbird_63x_1.47` — widefield label-free (simpler, linear)
 - **Logging**: Save resolved YAML configs alongside output data
+- **Validate parameters**: In current biahub/settings.py, we have a collection of pydantic dataclasses which validate the yaml config files in the current workflow. When we transition to hydra we should preserve this config validation behavior - it's useful to know that the job will fail as soon as the CLI is called, rather than after dispatching SLURM jobs.
 
 ## Directory Structure (additions)
 
