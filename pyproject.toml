@@ -47,6 +47,9 @@ dependencies = [
   "numba>=0.58.0",
   "llvmlite>=0.41.0",
   "humanize",
+  "hydra-core>=1.3.0",
+  "hydra-colorlog>=1.2.0",
+  "omegaconf>=2.3.0",
 ]
 
 [project.optional-dependencies]
@@ -75,6 +78,7 @@ doc = [
 
 [project.scripts]
 biahub = "biahub.cli.main:cli"
+biahub-hydra = "biahub.cli_hydra:main"
 
 [tool.setuptools]
 # explicitly specify the package name

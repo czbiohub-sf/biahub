@@ -1,0 +1,26 @@
+# @package _global_
+
+# Complete lightsheet processing workflow
+defaults:
+  - /registration: beads
+  - /deskew: default
+  - _self_
+
+workflow:
+  name: lightsheet_full_pipeline
+  steps:
+    - deskew
+    - estimate_registration
+    - register
+    - stitch
+
+# Override some settings for lightsheet specific parameters
+deskew:
+  ls_angle_deg: 30.0
+  pixel_size_um: 0.115
+
+registration:
+  target_channel_name: Phase3D
+  source_channel_name: GFP
+
+verbose: true

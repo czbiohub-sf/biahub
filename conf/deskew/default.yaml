@@ -1,0 +1,10 @@
+# @package _global_
+
+# Deskew configuration
+deskew:
+  pixel_size_um: 0.115
+  ls_angle_deg: 30.0
+  px_to_scan_ratio: null
+  scan_step_um: null
+  keep_overhang: false
+  average_n_slices: 3

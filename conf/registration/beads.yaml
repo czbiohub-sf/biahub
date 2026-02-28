@@ -1,0 +1,72 @@
+# @package _global_
+
+# Beads-based registration configuration
+registration:
+  target_channel_name: Phase3D
+  source_channel_name: "GFP EX488 EM525-45"
+  estimation_method: beads
+
+  beads_match_settings:
+    algorithm: hungarian
+    t_reference: first
+
+    source_peaks_settings:
+      threshold_abs: 110
+      nms_distance: 16
+      min_distance: 0
+      block_size: [8, 8, 8]
+
+    target_peaks_settings:
+      threshold_abs: 110
+      nms_distance: 16
+      min_distance: 0
+      block_size: [8, 8, 8]
+
+    hungarian_match_settings:
+      distance_metric: euclidean
+      cost_threshold: 0.10
+      max_ratio: 0.8
+      cross_check: false
+
+      edge_graph_settings:
+        method: knn
+        k: 5
+
+      cost_matrix_settings:
+        weights:
+          dist: 0.5
+          edge_angle: 1.0
+          edge_length: 1.0
+          pca_dir: 0.0
+          pca_aniso: 0.0
+          edge_descriptor: 0.0
+        normalize: false
+
+    filter_matches_settings:
+      angle_threshold: 0
+      direction_threshold: 0
+      min_distance_quantile: 0.01
+      max_distance_quantile: 0.95
+
+    qc_settings:
+      iterations: 1
+      score_threshold: 0.40
+      score_centroid_mask_radius: 6
+
+  affine_transform_settings:
+    t_reference: first
+    transform_type: euclidean
+    approx_transform:
+      - [1.0, 0.0, 0.0, 0.0]
+      - [0.0, 1.0, 0.0, 0.0]
+      - [0.0, 0.0, 1.0, 0.0]
+      - [0.0, 0.0, 0.0, 1.0]
+    use_prev_t_transform: true
+
+  eval_transform_settings:
+    validation_window_size: 10
+    validation_tolerance: 1000.0
+    interpolation_window_size: 3
+    interpolation_type: linear
+
+  verbose: ${verbose}
