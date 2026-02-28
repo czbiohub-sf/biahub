@@ -83,7 +83,7 @@ def apply_inverse_transfer_function(
         "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
         "slurm_cpus_per_task": num_cpus,
         "slurm_time": 60,
-        "slurm_partition": "preempted",
+        "slurm_partition": "cpu",
         "slurm_use_srun": False,
     }
 
