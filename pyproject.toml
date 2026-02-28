@@ -1,15 +1,14 @@
 [build-system]
-requires = ["setuptools >= 61", "setuptools_scm[toml]>=3.4", "wheel"]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name = "biahub"
+version = "0.1.0"
 description = "Bioimage analysis hub."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11, <4.0"
-
-# the dynamically determined project metadata attributes
-dynamic = ["version"]
 
 classifiers = [
   "Development Status :: 3 - Alpha",
@@ -18,13 +17,11 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
 ]
 
-# list package dependencies here
 dependencies = [
   "iohub[tensorstore]>=0.3.0a5,<0.4",
-  "stitch @ git+https://github.com/ahillsley/stitching@jen",
+  "stitch",
   "matplotlib",
-  "napari",
-  "PyQt6",
+  "napari[all]",
   "natsort",
   "numpy",
   "markdown",
@@ -35,7 +32,7 @@ dependencies = [
   "submitit",
   "torch",
   "tqdm",
-  "waveorder @ git+https://github.com/mehta-lab/waveorder.git",
+  "waveorder",
   "largestinteriorrectangle",
   "antspyx",
   "pystackreg",
@@ -76,16 +73,9 @@ doc = [
 [project.scripts]
 biahub = "biahub.cli.main:cli"
 
-[tool.setuptools]
-# explicitly specify the package name
-# TODO: is there a better way to do this?
-packages = ["biahub"]
-
-# allow use of __file__ to load data files included in the package
-zip-safe = false
-
-[tool.setuptools.dynamic]
-version = { attr = "biahub.__version__" }
+[tool.uv.sources]
+stitch = { git = "https://github.com/ahillsley/stitching", branch = "jen" }
+waveorder = { git = "https://github.com/mehta-lab/waveorder.git" }
 
 [tool.black]
 line-length = 95
