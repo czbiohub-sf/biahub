@@ -753,7 +753,7 @@ def estimate_xyz_stabilization_pcc(
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,
         "slurm_time": 60,
-        "slurm_partition": "preempted",
+        "slurm_partition": "cpu",
     }
 
     if sbatch_filepath:
@@ -862,7 +862,7 @@ def estimate_xyz_stabilization_with_beads(
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,
         "slurm_time": 30,
-        "slurm_partition": "preempted",
+        "slurm_partition": "cpu",
     }
 
     if sbatch_filepath:
@@ -994,7 +994,7 @@ def estimate_xy_stabilization_per_position(
         # Swap translation directions: (x, y) -> (y, x)
         for tform in T_stackreg:
             tform[0, 2], tform[1, 2] = tform[1, 2], tform[0, 2]
-
+        print(f"T_stackreg: {T_stackreg}")
         transform = np.zeros((T_stackreg.shape[0], 4, 4))
         transform[:, 1:4, 1:4] = T_stackreg
         transform[:, 0, 0] = 1
@@ -1083,7 +1083,7 @@ def estimate_xy_stabilization(
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,
         "slurm_time": 10,
-        "slurm_partition": "preempted",
+        "slurm_partition": "cpu",
     }
 
     if sbatch_filepath:
@@ -1188,9 +1188,9 @@ def estimate_z_focus_per_position(
                     lambda_ill=LAMBDA_ILL,
                     pixel_size=pixel_size,
                 )
-                click.echo(
-                    f"Estimating focus for timepoint {tc_idx[0]} and channel {tc_idx[1]}: {z_idx}"
-                )
+            click.echo(
+                f"Estimating focus for timepoint {tc_idx[0]} and channel {tc_idx[1]}: {z_idx}"
+            )
 
             position.append(str(Path(*input_position_dirpath.parts[-3:])))
             time_idx.append(tc_idx[0])
@@ -1215,16 +1215,28 @@ def estimate_z_focus_per_position(
     df.to_csv(output_csv, index=False)
 
     # Compute Z drifts
-    z_focus_shift = [np.eye(4)]
+   
 
-    # Initialize the z-value
-    z_val = focus_idx[0]
-
-    for z_val_next in focus_idx[1:]:
+    # z_val = next((v for v in focus_idx if v != 0), None)
+    
+    
+    
+    z_focus_shift = []
+    z_val = None
+    print(f"focus_idx: {focus_idx}")
+    for z_val_next in focus_idx:
         shift = np.eye(4)
-        # Set the translation components of the transform
-        shift[0, 3] = z_val_next - z_val
+        if z_val_next > 0 and z_val is None:
+            z_val = z_val_next
+            print(f"z_val: {z_val}")
+        elif z_val_next > 0 and z_val is not None:
+            print(f"z_val_next: {z_val_next}")
+            # Set the translation components of the transform
+            shift[0, 3] = z_val_next - z_val
+        
         z_focus_shift.append(shift)
+
+    print(f"z_focus_shift: {z_focus_shift}")
 
     transform = np.array(z_focus_shift)
 
@@ -1344,7 +1356,7 @@ def estimate_z_stabilization(
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,
         "slurm_time": 30,
-        "slurm_partition": "preempted",
+        "slurm_partition": "cpu",
     }
 
     if sbatch_filepath:
