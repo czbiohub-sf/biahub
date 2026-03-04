@@ -50,7 +50,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-segment = ["cellpose"]
+segment = ["cellpose>=4.0.5"]
 
 track = ["ultrack>=0.7.0rc2"]
 
