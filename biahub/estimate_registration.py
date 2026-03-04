@@ -856,7 +856,7 @@ def ants_registration(
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,
         "slurm_time": 30,
-        "slurm_partition": "preempted",
+        "slurm_partition": "cpu",
     }
 
     if sbatch_filepath:
@@ -990,7 +990,7 @@ def beads_based_registration(
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,
         "slurm_time": 30,
-        "slurm_partition": "preempted",
+        "slurm_partition": "cpu",
         "slurm_use_srun": False,
     }
 

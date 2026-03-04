@@ -379,7 +379,7 @@ def concatenate(
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,  # process up to 100 positions at a time
         "slurm_time": 60,
-        "slurm_partition": "preempted",
+        "slurm_partition": "cpu",
     }
 
     # Override defaults if sbatch_filepath is provided
