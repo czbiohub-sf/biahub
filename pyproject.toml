@@ -23,8 +23,6 @@ dependencies = [
   "iohub[tensorstore]>=0.3.0a5,<0.4",
   "stitch @ git+https://github.com/ahillsley/stitching@jen",
   "matplotlib",
-  "napari",
-  "PyQt6",
   "natsort",
   "numpy",
   "markdown",
@@ -39,7 +37,6 @@ dependencies = [
   "largestinteriorrectangle",
   "antspyx",
   "pystackreg",
-  "napari-animation",
   "imageio-ffmpeg",
   "dask[array]",
   "toml",
@@ -54,11 +51,13 @@ segment = ["cellpose"]
 
 track = ["ultrack>=0.7.0rc2"]
 
+gui = ["napari", "PyQt6", "napari-animation"]
+
 shard = ["tensorstore"]
 
 build = ["build", "twine"]
 
-all = ["biahub[segment,track,shard,build]"]
+all = ["biahub[segment,track,shard,build,gui]"]
 
 dev = [
   "biahub[all]",
