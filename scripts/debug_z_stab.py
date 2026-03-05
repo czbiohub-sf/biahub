@@ -5,10 +5,76 @@ from pathlib import Path
 
 from iohub import open_ome_zarr
 from waveorder.focus import focus_from_transverse_band
+from skimage.registration import phase_cross_correlation as pcc
+
+NA_DET = 1.35
+LAMBDA_ILL = 0.500
+
+#%%
+dataset = "2024_12_03_A549_LAMP1_ZIKV_DENV"
+FOV = "C/4/000000"      
+phase_zarr_path = Path(f"/hpc/projects/intracellular_dashboard/organelle_dynamics/{dataset}/1-preprocess/label-free/0-reconstruct/{dataset}.zarr/{FOV}")
+vs_zarr_path = Path(f"/hpc/projects/intracellular_dashboard/organelle_dynamics/{dataset}/1-preprocess/label-free/1-virtual-stain/{dataset}.zarr/{FOV}")
+
+phase_channel_name = "Phase3D"
+vs_channel_name = "nuclei_prediction"  # or "membrane"
+
+
+with open_ome_zarr(phase_zarr_path) as ds:
+    phase_channel_index = ds.channel_names.index(phase_channel_name)
+    _, _, _, _, pixel_size = ds.scale
+    phase_zyx = np.asarray(ds.data[:20, 0])  # (Z, Y, X)
+    print(f"Phase shape: {phase_zyx.shape}, pixel_size: {pixel_size:.4f}")
+
+with open_ome_zarr(vs_zarr_path) as ds:
+    vs_channel_index = ds.channel_names.index(vs_channel_name)
+    vs_zyx = np.asarray(ds.data[:20, 0])  # (Z, Y, X)
+    print(f"VS shape: {vs_zyx.shape}")
+
+
+
+#%%
+from skimage.registration import phase_cross_correlation as pcc
+from scipy.ndimage import shift as shift_ndimage
+shifts = []
+# compute shifts between consecutive frames
+for t in range(1, 20):
+    s, _, _ = pcc(phase_zyx[t], phase_zyx[t-1], upsample_factor=10)
+    print(f"Shift: {s}") # s is (dy, dx) for 2D
+    shifts.append(s)
+
+#%%
+z_focus_original = []
+for t in range(20):
+    z_focus = focus_from_transverse_band(phase_zyx[t], NA_det=NA_DET, lambda_ill=LAMBDA_ILL, pixel_size=pixel_size)
+    print(f"t{t}, Z focus: {z_focus}")
+    z_focus_original.append(z_focus)
+
+#%%
+# apply the shifts (note: ndimage.shift shifts the image; to align t onto t-1 you usually shift by -s)
+shift_cum = np.zeros(3, dtype=float)  # (dz, dy, dx)
+z_focus_shifts = []
+for t in range(1, 20):
+    s = np.asarray(shifts[t - 1], dtype=float)   # pairwise shift (dz, dy, dx) for t vs t-1
+    shift_cum += s                               # cumulative shift from t to 0 (in PCC sign convention)
+
+    vol_shifted = shift_ndimage(
+        phase_zyx[t],
+        shift=-shift_cum,   # negate to align onto t=0
+        order=1,
+        mode="nearest"
+    )
+
+    zmid = z_focus
+
+    z_focus_shift = focus_from_transverse_band(
+        vol_shifted, NA_det=NA_DET, lambda_ill=LAMBDA_ILL, pixel_size=pixel_size)
+    z_focus_shifts.append(z_focus_shift)
+    print(f"t: {t}, Z focus shift: {z_focus_shift}")
 
 # %%  --- CONFIG ---
-phase_zarr_path = Path("/hpc/projects/intracellular_dashboard/organelle_dynamics/2024_12_03_A549_LAMP1_ZIKV_DENV/1-preprocess/label-free/0-reconstruct/2024_12_03_A549_LAMP1_ZIKV_DENV.zarr/B/1/000000")
-vs_zarr_path = Path("/hpc/projects/intracellular_dashboard/organelle_dynamics/2024_12_03_A549_LAMP1_ZIKV_DENV/1-preprocess/label-free/1-virtual-stain/2024_12_03_A549_LAMP1_ZIKV_DENV.zarr/B/1/000000")
+phase_zarr_path = Path("/hpc/projects/intracellular_dashboard/organelle_dynamics/{dataset}/1-preprocess/label-free/0-reconstruct/{dataset}.zarr/B/1/000000")
+vs_zarr_path = Path("/hpc/projects/intracellular_dashboard/organelle_dynamics/{dataset}/1-preprocess/label-free/1-virtual-stain/{dataset}.zarr/B/1/000000")
 
 phase_channel_name = "Phase3D"
 vs_channel_name = "nuclei_prediction"  # or "membrane"
