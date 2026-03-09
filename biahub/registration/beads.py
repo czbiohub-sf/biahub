@@ -819,4 +819,4 @@ def estimate(
         click.echo(f"Saving transform to {output_filepath}")
         np.save(output_filepath, best_transform.to_list())
 
-    return best_transform, best_quality_score['quality_score']
+    return best_transform
