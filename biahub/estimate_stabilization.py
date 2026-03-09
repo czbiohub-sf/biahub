@@ -32,6 +32,7 @@ from biahub.cli.utils import estimate_resources, yaml_to_model
 from biahub.registration.utils import (
     evaluate_transforms,
     save_transforms,
+    match_shape,
 )
 from biahub.settings import (
     EstimateStabilizationSettings,
@@ -71,111 +72,6 @@ def remove_beads_fov_from_path_list(
         ]
     return position_dirpaths
 
-
-def pad_to_shape(
-    arr: ArrayLike,
-    shape: Tuple[int, ...],
-    mode: str,
-    verbose: bool = False,
-    **kwargs,
-) -> ArrayLike:
-    """
-    Pad or crop array to match provided shape.
-
-    Parameters
-    ----------
-    arr : ArrayLike
-        Input array.
-    shape : Tuple[int]
-        Output shape.
-    mode : str
-        Padding mode (see np.pad).
-    verbose : bool
-        If True, print verbose output.
-    kwargs : dict
-        Additional keyword arguments for np.pad.
-
-    Returns
-    -------
-    ArrayLike
-        Padded array.
-    """
-    assert arr.ndim == len(shape)
-
-    dif = tuple(s - a for s, a in zip(shape, arr.shape))
-    assert all(d >= 0 for d in dif)
-
-    pad_width = [[s // 2, s - s // 2] for s in dif]
-
-    if verbose:
-        click.echo(
-            f"padding: input shape {arr.shape}, output shape {shape}, padding {pad_width}"
-        )
-
-    return np.pad(arr, pad_width=pad_width, mode=mode, **kwargs)
-
-
-def center_crop(
-    arr: ArrayLike,
-    shape: Tuple[int, ...],
-    verbose: bool = False,
-) -> ArrayLike:
-    """
-    Crop the center of `arr` to match provided shape.
-
-    Parameters
-    ----------
-    arr : ArrayLike
-        Input array.
-    shape : Tuple[int, ...]
-    """
-    assert arr.ndim == len(shape)
-
-    starts = tuple((cur_s - s) // 2 for cur_s, s in zip(arr.shape, shape))
-
-    assert all(s >= 0 for s in starts)
-
-    slicing = tuple(slice(s, s + d) for s, d in zip(starts, shape))
-    if verbose:
-        click.echo(
-            f"center crop: input shape {arr.shape}, output shape {shape}, slicing {slicing}"
-        )
-    return arr[slicing]
-
-
-def match_shape(
-    img: ArrayLike,
-    shape: Tuple[int, ...],
-    verbose: bool = False,
-) -> ArrayLike:
-    """
-    Pad or crop array to match provided shape.
-
-    Parameters
-    ----------
-    img : ArrayLike
-        Input array.
-    shape : Tuple[int, ...]
-    verbose : bool
-        If True, print verbose output.
-
-    Returns
-    -------
-    ArrayLike
-        Padded or cropped array.
-    """
-
-    if np.any(shape > img.shape):
-        padded_shape = np.maximum(img.shape, shape)
-        img = pad_to_shape(img, padded_shape, mode="reflect")
-
-    if np.any(shape < img.shape):
-        img = center_crop(img, shape)
-
-    if verbose:
-        click.echo(f"matched shape: input shape {img.shape}, output shape {shape}")
-
-    return img
 
 
 def plot_cross_correlation(
