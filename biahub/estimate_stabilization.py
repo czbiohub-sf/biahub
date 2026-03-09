@@ -1,5 +1,4 @@
 import itertools
-import os
 import shutil
 
 from datetime import datetime
@@ -798,7 +797,6 @@ def estimate_xyz_stabilization_pcc(
     shutil.rmtree(transforms_out_path)
 
     return fov_transforms
-
 
 
 def estimate_xy_stabilization_per_position(

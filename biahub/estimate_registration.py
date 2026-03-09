@@ -1,4 +1,3 @@
-
 from pathlib import Path
 
 import ants
@@ -8,7 +7,7 @@ import numpy as np
 
 from iohub import open_ome_zarr
 from numpy.typing import ArrayLike
-from skimage.transform import  EuclideanTransform, SimilarityTransform
+from skimage.transform import EuclideanTransform, SimilarityTransform
 from waveorder.focus import focus_from_transverse_band
 
 from biahub.cli.parsing import (
@@ -26,10 +25,10 @@ from biahub.cli.utils import (
 from biahub.registration.utils import (
     convert_transform_to_ants,
     convert_transform_to_numpy,
+    evaluate_transforms,
     get_3D_fliplr_matrix,
     get_3D_rescaling_matrix,
     get_3D_rotation_matrix,
-    evaluate_transforms,   
     plot_translations,
 )
 from biahub.settings import (
@@ -37,9 +36,6 @@ from biahub.settings import (
     RegistrationSettings,
     StabilizationSettings,
 )
-
-
-
 
 # TODO: see if at some point these globals should be hidden or exposed.
 NA_DETECTION_SOURCE = 1.35
@@ -58,9 +54,6 @@ COLOR_CYCLE = [
     "yellow",
     "magenta",
 ]
-
-
-
 
 
 def user_assisted_registration(
@@ -533,13 +526,12 @@ def estimate_registration(
 
         model = StabilizationSettings(
             stabilization_estimation_channel=target_channel_name,
-            stabilization_type = "affine",
-            stabilization_method = settings.estimation_method,
+            stabilization_type="affine",
+            stabilization_method=settings.estimation_method,
             stabilization_channels=[source_channel_name, target_channel_name],
             affine_transform_zyx_list=transforms,
             time_indices='all',
             output_voxel_size=voxel_size,
-
         )
         if settings.verbose:
             plot_translations(

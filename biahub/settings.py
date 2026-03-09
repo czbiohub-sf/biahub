@@ -552,9 +552,9 @@ class ConcatenateSettings(MyBaseModel):
 class StabilizationSettings(MyBaseModel):
     stabilization_estimation_channel: str
     stabilization_type: Literal["z", "xy", "xyz", "affine"]
-    stabilization_method: Literal["beads", "phase-cross-corr", "focus-finding", "manual", "ants", "beads"] = (
-        "focus-finding"
-    )
+    stabilization_method: Literal[
+        "beads", "phase-cross-corr", "focus-finding", "manual", "ants", "beads"
+    ] = "focus-finding"
     stabilization_channels: list
     affine_transform_zyx_list: list
     time_indices: Union[NonNegativeInt, list[NonNegativeInt], Literal["all"]] = "all"
