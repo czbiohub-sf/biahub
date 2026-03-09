@@ -30,14 +30,11 @@ from biahub.cli.parsing import (
 )
 from biahub.cli.slurm import wait_for_jobs_to_finish
 from biahub.cli.utils import estimate_resources, yaml_to_model
-from biahub.estimate_registration import (
-    estimate_transform_from_beads,
+from biahub.registration.utils import (
     evaluate_transforms,
-    save_transforms,
+    plot_translations,
 )
 from biahub.settings import (
-    AffineTransformSettings,
-    BeadsMatchSettings,
     EstimateStabilizationSettings,
     FocusFindingSettings,
     PhaseCrossCorrSettings,
@@ -803,130 +800,130 @@ def estimate_xyz_stabilization_pcc(
     return fov_transforms
 
 
-def estimate_xyz_stabilization_with_beads(
-    channel_tzyx: da.Array,
-    beads_match_settings: BeadsMatchSettings,
-    affine_transform_settings: AffineTransformSettings,
-    verbose: bool = False,
-    cluster: str = "local",
-    sbatch_filepath: Optional[Path] = None,
-    output_folder_path: Path = None,
-) -> list[ArrayLike]:
-    """
-    Estimate the xyz stabilization for a single position.
+# def estimate_xyz_stabilization_with_beads(
+#     channel_tzyx: da.Array,
+#     beads_match_settings: BeadsMatchSettings,
+#     affine_transform_settings: AffineTransformSettings,
+#     verbose: bool = False,
+#     cluster: str = "local",
+#     sbatch_filepath: Optional[Path] = None,
+#     output_folder_path: Path = None,
+# ) -> list[ArrayLike]:
+#     """
+#     Estimate the xyz stabilization for a single position.
 
-    Parameters
-    ----------
-    channel_tzyx : da.Array
-        Source channel data.
-    beads_match_settings : BeadsMatchSettings
-        Settings for the beads match.
-    affine_transform_settings : AffineTransformSettings
-        Settings for the affine transform.
-    verbose : bool
-        If True, print verbose output.
-    cluster : str
-        Cluster to use.
-    sbatch_filepath : Path
-        Path to the sbatch file.
-    output_folder_path : Path
-        Path to the output folder.
+#     Parameters
+#     ----------
+#     channel_tzyx : da.Array
+#         Source channel data.
+#     beads_match_settings : BeadsMatchSettings
+#         Settings for the beads match.
+#     affine_transform_settings : AffineTransformSettings
+#         Settings for the affine transform.
+#     verbose : bool
+#         If True, print verbose output.
+#     cluster : str
+#         Cluster to use.
+#     sbatch_filepath : Path
+#         Path to the sbatch file.
+#     output_folder_path : Path
+#         Path to the output folder.
 
-    Returns
-    -------
-    list[ArrayLike]
-        List of the xyz stabilization for each timepoint.
-    """
+#     Returns
+#     -------
+#     list[ArrayLike]
+#         List of the xyz stabilization for each timepoint.
+#     """
 
-    (T, Z, Y, X) = channel_tzyx.shape
+#     (T, Z, Y, X) = channel_tzyx.shape
 
-    if beads_match_settings.t_reference == "first":
-        target_channel_tzyx = np.broadcast_to(channel_tzyx[0], (T, Z, Y, X)).copy()
-    elif beads_match_settings.t_reference == "previous":
-        target_channel_tzyx = np.roll(channel_tzyx, shift=-1, axis=0)
-        target_channel_tzyx[0] = channel_tzyx[0]
+#     if beads_match_settings.t_reference == "first":
+#         target_channel_tzyx = np.broadcast_to(channel_tzyx[0], (T, Z, Y, X)).copy()
+#     elif beads_match_settings.t_reference == "previous":
+#         target_channel_tzyx = np.roll(channel_tzyx, shift=-1, axis=0)
+#         target_channel_tzyx[0] = channel_tzyx[0]
 
-    else:
-        raise ValueError("Invalid reference. Please use 'first' or 'previous as reference")
+#     else:
+#         raise ValueError("Invalid reference. Please use 'first' or 'previous as reference")
 
-    # Compute transformations in parallel
+#     # Compute transformations in parallel
 
-    num_cpus, gb_ram_per_cpu = estimate_resources(
-        shape=(T, 1, Z, Y, X), ram_multiplier=5, max_num_cpus=16
-    )
+#     num_cpus, gb_ram_per_cpu = estimate_resources(
+#         shape=(T, 1, Z, Y, X), ram_multiplier=5, max_num_cpus=16
+#     )
 
-    # Prepare SLURM arguments
-    slurm_args = {
-        "slurm_job_name": "estimate_focus_z",
-        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
-        "slurm_cpus_per_task": num_cpus,
-        "slurm_array_parallelism": 100,
-        "slurm_time": 30,
-        "slurm_partition": "preempted",
-    }
+#     # Prepare SLURM arguments
+#     slurm_args = {
+#         "slurm_job_name": "estimate_focus_z",
+#         "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
+#         "slurm_cpus_per_task": num_cpus,
+#         "slurm_array_parallelism": 100,
+#         "slurm_time": 30,
+#         "slurm_partition": "preempted",
+#     }
 
-    if sbatch_filepath:
-        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
+#     if sbatch_filepath:
+#         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
-    output_folder_path.mkdir(parents=True, exist_ok=True)
-    slurm_out_path = output_folder_path / "slurm_output"
-    slurm_out_path.mkdir(parents=True, exist_ok=True)
+#     output_folder_path.mkdir(parents=True, exist_ok=True)
+#     slurm_out_path = output_folder_path / "slurm_output"
+#     slurm_out_path.mkdir(parents=True, exist_ok=True)
 
-    # Submitit executor
-    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
-    executor.update_parameters(**slurm_args)
+#     # Submitit executor
+#     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
+#     executor.update_parameters(**slurm_args)
 
-    click.echo(f"Submitting SLURM focus estimation jobs with resources: {slurm_args}")
-    output_transforms_path = output_folder_path / "xyz_transforms"
-    output_transforms_path.mkdir(parents=True, exist_ok=True)
+#     click.echo(f"Submitting SLURM focus estimation jobs with resources: {slurm_args}")
+#     output_transforms_path = output_folder_path / "xyz_transforms"
+#     output_transforms_path.mkdir(parents=True, exist_ok=True)
 
-    # Submit jobs
-    jobs = []
-    with submitit.helpers.clean_env(), executor.batch():
-        for t in range(1, T, 1):
-            job = executor.submit(
-                estimate_transform_from_beads,
-                source_channel_tzyx=channel_tzyx,
-                target_channel_tzyx=target_channel_tzyx,
-                verbose=verbose,
-                beads_match_settings=beads_match_settings,
-                affine_transform_settings=affine_transform_settings,
-                slurm=True,
-                output_folder_path=output_transforms_path,
-                t_idx=t,
-            )
-            jobs.append(job)
+#     # Submit jobs
+#     jobs = []
+#     with submitit.helpers.clean_env(), executor.batch():
+#         for t in range(1, T, 1):
+#             job = executor.submit(
+#                 estimate_transform_from_beads,
+#                 source_channel_tzyx=channel_tzyx,
+#                 target_channel_tzyx=target_channel_tzyx,
+#                 verbose=verbose,
+#                 beads_match_settings=beads_match_settings,
+#                 affine_transform_settings=affine_transform_settings,
+#                 slurm=True,
+#                 output_folder_path=output_transforms_path,
+#                 t_idx=t,
+#             )
+#             jobs.append(job)
 
-    # Save job IDs
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    log_path = slurm_out_path / f"job_ids_{timestamp}.log"
-    with open(log_path, "w") as log_file:
-        for job in jobs:
-            log_file.write(f"{job.job_id}\n")
+#     # Save job IDs
+#     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+#     log_path = slurm_out_path / f"job_ids_{timestamp}.log"
+#     with open(log_path, "w") as log_file:
+#         for job in jobs:
+#             log_file.write(f"{job.job_id}\n")
 
-    wait_for_jobs_to_finish(jobs)
+#     wait_for_jobs_to_finish(jobs)
 
-    # Load the transforms
-    transforms = [np.eye(4).tolist()]
-    for t in range(1, T):
-        file_path = output_transforms_path / f"{t}.npy"
-        if not os.path.exists(file_path):
-            transforms.append(None)
-            click.echo(f"Transform for timepoint {t} not found.")
-        else:
-            T_zyx_shift = np.load(file_path).tolist()
-            transforms.append(T_zyx_shift)
+#     # Load the transforms
+#     transforms = [np.eye(4).tolist()]
+#     for t in range(1, T):
+#         file_path = output_transforms_path / f"{t}.npy"
+#         if not os.path.exists(file_path):
+#             transforms.append(None)
+#             click.echo(f"Transform for timepoint {t} not found.")
+#         else:
+#             T_zyx_shift = np.load(file_path).tolist()
+#             transforms.append(T_zyx_shift)
 
-    # Check if the number of transforms matches the number of timepoints
-    if len(transforms) != T:
-        raise ValueError(
-            f"Number of transforms {len(transforms)} does not match number of timepoints {T}"
-        )
+#     # Check if the number of transforms matches the number of timepoints
+#     if len(transforms) != T:
+#         raise ValueError(
+#             f"Number of transforms {len(transforms)} does not match number of timepoints {T}"
+#         )
 
-    # Remove the output folder
-    shutil.rmtree(output_transforms_path)
+#     # Remove the output folder
+#     shutil.rmtree(output_transforms_path)
 
-    return transforms
+#     return transforms
 
 
 def estimate_xy_stabilization_per_position(
@@ -1634,52 +1631,52 @@ def estimate_stabilization(
                     f"Error estimating {stabilization_type} stabilization parameters: {e}"
                 )
 
-        elif stabilization_method == "beads":
+        # elif stabilization_method == "beads":
 
-            click.echo("Estimating xyz stabilization parameters with beads")
-            with open_ome_zarr(input_position_dirpaths[0], mode="r") as beads_position:
-                source_channels = beads_position.channel_names
-                source_channel_index = source_channels.index(stabilization_estimation_channel)
-                channel_tzyx = beads_position.data.dask_array()[:, source_channel_index]
+        #     click.echo("Estimating xyz stabilization parameters with beads")
+        #     with open_ome_zarr(input_position_dirpaths[0], mode="r") as beads_position:
+        #         source_channels = beads_position.channel_names
+        #         source_channel_index = source_channels.index(stabilization_estimation_channel)
+        #         channel_tzyx = beads_position.data.dask_array()[:, source_channel_index]
 
-            xyz_transforms = estimate_xyz_stabilization_with_beads(
-                channel_tzyx=channel_tzyx,
-                beads_match_settings=settings.beads_match_settings,
-                affine_transform_settings=settings.affine_transform_settings,
-                verbose=verbose,
-                output_folder_path=output_dirpath,
-                cluster=cluster,
-                sbatch_filepath=sbatch_filepath,
-            )
+        #     xyz_transforms = estimate_xyz_stabilization_with_beads(
+        #         channel_tzyx=channel_tzyx,
+        #         beads_match_settings=settings.beads_match_settings,
+        #         affine_transform_settings=settings.affine_transform_settings,
+        #         verbose=verbose,
+        #         output_folder_path=output_dirpath,
+        #         cluster=cluster,
+        #         sbatch_filepath=sbatch_filepath,
+        #     )
 
-            model = StabilizationSettings(
-                stabilization_type=settings.stabilization_type,
-                stabilization_method=settings.stabilization_method,
-                stabilization_estimation_channel=settings.stabilization_estimation_channel,
-                stabilization_channels=settings.stabilization_channels,
-                affine_transform_zyx_list=[],
-                time_indices="all",
-                output_voxel_size=voxel_size,
-            )
+        #     model = StabilizationSettings(
+        #         stabilization_type=settings.stabilization_type,
+        #         stabilization_method=settings.stabilization_method,
+        #         stabilization_estimation_channel=settings.stabilization_estimation_channel,
+        #         stabilization_channels=settings.stabilization_channels,
+        #         affine_transform_zyx_list=[],
+        #         time_indices="all",
+        #         output_voxel_size=voxel_size,
+        #     )
 
-            if eval_transform_settings:
-                xyz_transforms = evaluate_transforms(
-                    transforms=xyz_transforms,
-                    shape_zyx=(Z, Y, X),
-                    validation_window_size=eval_transform_settings.validation_window_size,
-                    validation_tolerance=eval_transform_settings.validation_tolerance,
-                    interpolation_window_size=eval_transform_settings.interpolation_window_size,
-                    interpolation_type=eval_transform_settings.interpolation_type,
-                    verbose=verbose,
-                )
+        #     if eval_transform_settings:
+        #         xyz_transforms = evaluate_transforms(
+        #             transforms=xyz_transforms,
+        #             shape_zyx=(Z, Y, X),
+        #             validation_window_size=eval_transform_settings.validation_window_size,
+        #             validation_tolerance=eval_transform_settings.validation_tolerance,
+        #             interpolation_window_size=eval_transform_settings.interpolation_window_size,
+        #             interpolation_type=eval_transform_settings.interpolation_type,
+        #             verbose=verbose,
+        #         )
 
-            save_transforms(
-                model=model,
-                transforms=xyz_transforms,
-                output_filepath_settings=output_dirpath / "xyz_stabilization_settings.yml",
-                verbose=verbose,
-                output_filepath_plot=output_dirpath / "translation_plots" / "beads.png",
-            )
+        #     save_transforms(
+        #         model=model,
+        #         transforms=xyz_transforms,
+        #         output_filepath_settings=output_dirpath / "xyz_stabilization_settings.yml",
+        #         verbose=verbose,
+        #         output_filepath_plot=output_dirpath / "translation_plots" / "beads.png",
+        #     )
 
         elif stabilization_method == "phase-cross-corr":
             click.echo("Estimating xyz stabilization parameters with phase cross correlation")
