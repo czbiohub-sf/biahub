@@ -457,6 +457,8 @@ def estimate_registration(
             cluster=cluster,
             sbatch_filepath=sbatch_filepath,
             output_folder_path=output_dir,
+            ref_voxel_size=target_channel_voxel_size,
+            mov_voxel_size=source_channel_voxel_size,
         )
 
     elif settings.estimation_method == "ants":

@@ -24,12 +24,9 @@ from biahub.cli.utils import (
 )
 from biahub.core.graph_matching import Graph, GraphMatcher
 from biahub.core.transform import Transform
-from biahub.registration.utils import load_transforms
-from biahub.settings import (
-    AffineTransformSettings,
-    BeadsMatchSettings,
-    DetectPeaksSettings,
-)
+from biahub.registration.utils import load_transforms, get_aprox_transform
+from biahub.settings import AffineTransformSettings, BeadsMatchSettings, DetectPeaksSettings
+
 
 
 def registration_beads_score(
@@ -95,6 +92,8 @@ def estimate_tczyx(
     cluster: bool = False,
     sbatch_filepath: Path = None,
     output_folder_path: Path = None,
+    ref_voxel_size: tuple[float, float, float] = (0.174, 0.1494, 0.1494),
+    mov_voxel_size: tuple[float, float, float] = (0.174, 0.1494, 0.1494),
     mode: Literal["registration", "stabilization"] = "registration",
 ) -> list[Transform]:
     """
@@ -150,7 +149,21 @@ def estimate_tczyx(
     output_transforms_path = output_folder_path / "xyz_transforms"
     output_transforms_path.mkdir(parents=True, exist_ok=True)
 
-    T, _, _, _ = mov_tzyx.shape
+    if Transform(matrix=np.array(affine_transform_settings.approx_transform)).is_identity:
+        approx_transform = get_aprox_transform(
+            mov_shape=mov_tzyx.shape[-3:],
+            ref_shape=ref_tzyx.shape[-3:],
+            pre_affine_90degree_rotation=-1,
+            pre_affine_fliplr=False ,
+            verbose=verbose,
+            ref_voxel_size=ref_voxel_size,
+            mov_voxel_size=mov_voxel_size,
+        )
+        print("computed approx transform: ", approx_transform)
+
+        affine_transform_settings.approx_transform = approx_transform.to_list()
+
+    
     if affine_transform_settings.use_prev_t_transform:
         estimate_with_propagation(
             mov_tzyx=mov_tzyx,
@@ -174,7 +187,7 @@ def estimate_tczyx(
             mode=mode,
         )
 
-    transforms = load_transforms(output_transforms_path, T, verbose)
+    transforms = load_transforms(output_transforms_path, mov_tzyx.shape[0], verbose)
 
     return transforms
 
@@ -581,7 +594,7 @@ def estimate_tzyx(
     else:
         output_filepath = None
 
-    transform, quality_score = estimate(
+    transform = estimate(
         mov=mov_zyx,
         ref=ref_zyx,
         beads_match_settings=beads_match_settings,
@@ -681,15 +694,16 @@ def optimize_transform(
         radius=beads_match_settings.qc_settings.score_centroid_mask_radius,
         verbose=debug,
     )
-
-    if verbose:
-        click.echo(f"Quality score before beads matching: {quality_score_approx}")
-        click.echo(f"Quality score after beads matching: {quality_score_optimized}")
     if debug:
         click.echo(f'Bead matches: {matches}')
         click.echo(f"Forward transform: {fwd_transform}")
         click.echo(f"Inverse transform: {inv_transform}")
         click.echo(f"Composed transform: {composed_transform}")
+
+    if verbose:
+        click.echo(f"Quality score before beads matching: {quality_score_approx}")
+        click.echo(f"Quality score after beads matching: {quality_score_optimized}")
+    
 
     if quality_score_optimized >= quality_score_approx:
         return composed_transform, quality_score_optimized
