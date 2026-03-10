@@ -1,3 +1,29 @@
+"""
+ANTs-based intensity registration module.
+
+Provides functions for registering volumetric imaging data using the ANTsPy
+library's optimization-based registration. This complements bead-based
+registration by directly optimizing image similarity metrics.
+
+Pipeline overview
+-----------------
+1. **Preprocessing** (`preprocess_czyx`): Apply initial transform, crop to
+   overlapping region (LIR), clip intensities, and optionally apply Sobel filter.
+2. **Registration** (`estimate`): Run ANTs optimization (Similarity transform)
+   on preprocessed volumes.
+3. **Postprocessing** (`postprocess_transform`): Compose the initial transform
+   with the ANTs correction, accounting for any crop offsets.
+4. **Batch processing** (`estimate_tczyx`): Submit per-timepoint registration
+   jobs to SLURM via submitit.
+
+Key conventions
+---------------
+- Coordinates are in ZYX order for 3D data.
+- "mov" / "moving" refers to the source channel being aligned.
+- "ref" / "reference" refers to the fixed target channel.
+- Transforms are 4x4 homogeneous matrices stored as Transform objects.
+"""
+
 from datetime import datetime
 from pathlib import Path
 
@@ -347,7 +373,27 @@ def postprocess_transform(
     preprocess_offset: np.ndarray,
 ) -> Transform:
     """
-    Postprocess the transform to account for the offset.
+    Compose the initial and ANTs-estimated transforms, accounting for crop offset.
+
+    The ANTs registration operates on cropped volumes. This function shifts
+    into the cropped ROI, applies the ANTs correction, shifts back, and
+    composes the result with the initial transform:
+        composed = initial @ shift_to_roi @ fwd_transform @ shift_back
+
+    Parameters
+    ----------
+    initial_transform : Transform
+        The approximate transform applied before ANTs registration.
+    fwd_transform : Transform
+        The forward correction estimated by ANTs on the cropped volumes.
+    preprocess_offset : np.ndarray
+        (3,) ZYX offset of the crop ROI origin within the full volume.
+        Zero if no cropping was applied.
+
+    Returns
+    -------
+    Transform
+        The final composed transform mapping original moving -> reference space.
     """
 
     shift_to_roi = np.eye(4)

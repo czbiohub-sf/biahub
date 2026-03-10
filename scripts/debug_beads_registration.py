@@ -1,4 +1,20 @@
-# %%
+"""
+Debug script for beads-based registration.
+
+Interactive notebook-style script for developing and debugging the beads
+registration pipeline. Walks through each step:
+1. Load data (label-free reference + light-sheet moving volumes)
+2. Apply approximate transform and visualize alignment
+3. Detect bead peaks in both channels
+4. Match beads and visualize correspondences
+5. Estimate correction transform from matches
+6. Run the full iterative optimization pipeline (optimize_transform)
+
+Usage: Run cell-by-cell in an IDE with interactive Python support (e.g. VSCode).
+Set ``visualize = True`` to open napari viewers at each stage.
+"""
+
+# %% Imports
 import ants
 import numpy as np
 from pathlib import Path
@@ -6,11 +22,14 @@ from iohub import open_ome_zarr
 from biahub.core.transform import Transform
 import napari
 from biahub.settings import EstimateRegistrationSettings
-import numpy as np
-from biahub.registration.beads import transform_from_matches, matches_from_beads, peaks_from_beads, optimize_transform
+from biahub.registration.beads import (
+    transform_from_matches,
+    matches_from_beads,
+    peaks_from_beads,
+    optimize_transform,
+)
 
-# %%%
-
+# %% Dataset configuration
 dataset = '2024_12_11_A549_LAMP1_DENV'
 fov = 'C/1/000000'
 root_path = Path(f'/hpc/projects/intracellular_dashboard/organelle_dynamics/{dataset}/1-preprocess/')
@@ -20,8 +39,7 @@ ls_data_path = root_path / f"light-sheet/raw/0-deskew/{dataset}.zarr" / fov
 
 visualize = True
 
-
-# %%
+# %% Registration settings
 config_dict = {
     "target_channel_name": "Phase3D",
     "source_channel_name": "GFP EX488 EM525-45",
@@ -88,24 +106,24 @@ config_dict = {
 }
 config = EstimateRegistrationSettings(**config_dict)
 
-# %% Load data
+# %% Load reference (label-free) and moving (light-sheet) volumes for a single timepoint
 with open_ome_zarr(lf_data_path) as ref_ds:
     ref_channel_name = ref_ds.channel_names
     ref_channel_index = ref_ds.channel_names.index(config.target_channel_name)
-    ref_data = np.asarray(ref_ds.data[t_idx, ref_channel_index]) # take phase channel
+    ref_data = np.asarray(ref_ds.data[t_idx, ref_channel_index])
     ref_scale = ref_ds.scale
 
 with open_ome_zarr(ls_data_path) as mov_ds:
     mov_channel_name = mov_ds.channel_names
     mov_channel_index = mov_channel_name.index(config.source_channel_name)
-    mov_data = np.asarray(mov_ds.data[t_idx, mov_channel_index]) # take mCherry channel or the GFP channel (depending where the beads are)
+    mov_data = np.asarray(mov_ds.data[t_idx, mov_channel_index])
     mov_scale = mov_ds.scale
 
-# Register LS data with approx tranform
+# Convert to ANTs images (reused throughout the script)
 mov_data_ants = ants.from_numpy(mov_data)
 ref_data_ants = ants.from_numpy(ref_data)
 
-#%%
+# %% Compute approximate transform from voxel sizes (if not provided in config)
 if config.affine_transform_settings.compute_approx_transform:
     from biahub.registration.utils import get_aprox_transform
 
@@ -119,9 +137,11 @@ if config.affine_transform_settings.compute_approx_transform:
         mov_voxel_size=mov_scale,
     )
     config.affine_transform_settings.approx_transform = approx_transform.to_list()
-#%%
-
-mov_data_reg_ants = Transform(matrix=np.asarray(config.affine_transform_settings.approx_transform)).to_ants().apply_to_image(
+# %% Apply approximate transform to moving volume and visualize overlay
+initial_transform = Transform(
+    matrix=np.asarray(config.affine_transform_settings.approx_transform)
+)
+mov_data_reg_ants = initial_transform.to_ants().apply_to_image(
     mov_data_ants, reference=ref_data_ants
 )
 mov_data_reg = mov_data_reg_ants.numpy()
@@ -129,11 +149,10 @@ mov_data_reg = mov_data_reg_ants.numpy()
 # %%
 if visualize:
     viewer = napari.Viewer()
-    viewer.add_image(ref_data, name='LF')
-    viewer.add_image(mov_data_reg, name='LS')
+    viewer.add_image(ref_data, name='LF (reference)')
+    viewer.add_image(mov_data_reg, name='LS (approx registered)')
 
-# %% Detect peaks in LS data
-
+# %% Detect bead peaks in both the approximately registered moving and the reference volumes
 mov_peaks, ref_peaks = peaks_from_beads(
     mov_data_reg,
     ref_data,
@@ -143,23 +162,23 @@ mov_peaks, ref_peaks = peaks_from_beads(
 )
 
 
-#%%
+# %% Visualize detected moving peaks overlaid on the registered LS volume
 if visualize:
     viewer = napari.Viewer()
-    viewer.add_image(mov_data_reg, name='LS')
+    viewer.add_image(mov_data_reg, name='LS (approx registered)')
     viewer.add_points(
-        mov_peaks, name='peaks local max LS', size=20, symbol='disc', face_color='magenta'
+        mov_peaks, name='LS peaks', size=20, symbol='disc', face_color='magenta'
     )
-# %%
+
+# %% Visualize detected reference peaks overlaid on the LF volume
 if visualize:
     viewer = napari.Viewer()
-    viewer.add_image(ref_data, name='LF')
+    viewer.add_image(ref_data, name='LF (reference)')
     viewer.add_points(
-        ref_peaks, name='peaks local max LF', size=20, symbol='disc', face_color='green'
+        ref_peaks, name='LF peaks', size=20, symbol='disc', face_color='green'
     )
 
-# %%
-
+# %% Match beads between moving and reference peak sets
 matches = matches_from_beads(
     mov_peaks,
     ref_peaks,
@@ -167,19 +186,22 @@ matches = matches_from_beads(
     verbose=True
 )
 
-# %%
+# %% Visualize matched bead pairs as 3D lines connecting corresponding peaks
 if visualize:
-    # visualize matches
     viewer = napari.Viewer()
-    viewer.add_image(ref_data, name='LF', contrast_limits=(0.5, 1.0),blending='additive')
+    viewer.add_image(ref_data, name='LF', contrast_limits=(0.5, 1.0), blending='additive')
     viewer.add_points(
-        ref_peaks, name='LF peaks', size=12, symbol='ring', face_color='yellow',blending='additive'
+        ref_peaks, name='LF peaks', size=12, symbol='ring',
+        face_color='yellow', blending='additive'
     )
-    viewer.add_image(mov_data_reg, name='LS', contrast_limits=(110, 230), blending='additive', colormap='green')
+    viewer.add_image(
+        mov_data_reg, name='LS', contrast_limits=(110, 230),
+        blending='additive', colormap='green'
+    )
     viewer.add_points(
-        mov_peaks, name='LS peaks', size=12, symbol='ring', face_color='red',blending='additive'
+        mov_peaks, name='LS peaks', size=12, symbol='ring',
+        face_color='red', blending='additive'
     )
-    # Project in 3D to be able to view the lines
     viewer.add_shapes(
         data=[np.asarray([mov_peaks[m[0]], ref_peaks[m[1]]]) for m in matches],
         shape_type='line',
@@ -188,13 +210,7 @@ if visualize:
     )
     viewer.dims.ndisplay = 3
 
-
-# %% Register LS data using compount transform
-from biahub.core.transform import Transform
-initial_transform = Transform(
-        matrix=np.asarray(config.affine_transform_settings.approx_transform)
-    )
-
+# %% Estimate correction transform from matches and compose with approx transform
 fwd_transform, inv_transform = transform_from_matches(
     matches=matches,
     mov_peaks=mov_peaks,
@@ -203,34 +219,36 @@ fwd_transform, inv_transform = transform_from_matches(
     ndim=mov_data_reg.ndim,
 )
 
+# Compose: apply approx transform first, then the bead-based correction
 composed_transform = initial_transform @ inv_transform
 mov_data_reg_2 = composed_transform.to_ants().apply_to_image(
     mov_data_ants, reference=ref_data_ants
 ).numpy()
 
+# %% Compare approx-only vs bead-corrected registration
 if visualize:
     viewer = napari.Viewer()
-    viewer.add_image(ref_data, name='LF', contrast_limits=(-0.5, 1.0))
+    viewer.add_image(ref_data, name='LF (reference)', contrast_limits=(-0.5, 1.0))
     viewer.add_image(
-    mov_data_reg,
-    name='LS approx registered',
-    contrast_limits=(110, 230),
-    blending='additive',
-    colormap='green'
+        mov_data_reg,
+        name='LS approx registered',
+        contrast_limits=(110, 230),
+        blending='additive',
+        colormap='green'
     )
     viewer.add_image(
         mov_data_reg_2,
-        name='LS registered',
+        name='LS bead-corrected',
         contrast_limits=(110, 230),
         blending='additive',
         colormap='magenta'
     )
 
-# %%
+# %% Inspect matches and composed transform
 matches
 # %%
 composed_transform
-# %%
+# %% Run the full iterative optimization pipeline (detect -> match -> correct -> score)
 optimized_transform, quality_score_optimized = optimize_transform(
     transform=initial_transform,
     mov=mov_data,
@@ -240,4 +258,6 @@ optimized_transform, quality_score_optimized = optimize_transform(
     verbose=True,
     debug=True,
 )
+print(f"Optimized transform:\n{optimized_transform}")
+print(f"Quality score: {quality_score_optimized:.4f}")
 # %%

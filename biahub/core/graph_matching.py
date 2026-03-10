@@ -1,7 +1,27 @@
+"""
+Graph-based point matching for bead registration.
+
+Provides two classes:
+- ``Graph``: Geometric graph built from 2D/3D point clouds with local feature
+  extraction (edge distances, angles, PCA-based descriptors).
+- ``GraphMatcher``: Matches nodes between two graphs using either the Hungarian
+  algorithm (cost matrix from position + edge consistency) or scikit-image
+  descriptor matching, with geometric consistency filtering.
+
+Typical usage::
+
+    mov_graph = Graph.from_nodes(mov_peaks, mode='knn', k=5)
+    ref_graph = Graph.from_nodes(ref_peaks, mode='knn', k=5)
+    matcher = GraphMatcher(algorithm='hungarian', cross_check=True)
+    matches = matcher.match(mov_graph, ref_graph)
+    matches = matcher.filter_matches(matches, mov_graph, ref_graph, direction_threshold=50)
+"""
+
 from collections import defaultdict
 from functools import cached_property
 from typing import Literal, Optional
 
+import click
 import numpy as np
 
 from numpy.typing import NDArray
@@ -342,7 +362,7 @@ class GraphMatcher:
 
         if moving.n_nodes == 0 or reference.n_nodes == 0:
             if verbose:
-                print("Warning: One or both graphs are empty")
+                click.echo("Warning: One or both graphs are empty")
             return np.array([]).reshape(0, 2).astype(np.int32)
 
         # Dispatch to appropriate algorithm
@@ -388,20 +408,20 @@ class GraphMatcher:
     ) -> NDArray[np.integer]:
         """Hungarian matching with bidirectional consistency."""
         if verbose:
-            print("Computing forward matches (A → B)...")
+            click.echo("Computing forward matches (A → B)...")
 
         C_ab = self.compute_cost_matrix(moving, reference)
         matches_ab = self._solve_assignment(C_ab, False)
 
         if verbose:
-            print(f"Forward: {len(matches_ab)} matches")
-            print("Computing backward matches (B → A)...")
+            click.echo(f"Forward: {len(matches_ab)} matches")
+            click.echo("Computing backward matches (B → A)...")
 
         C_ba = self.compute_cost_matrix(reference, moving)
         matches_ba = self._solve_assignment(C_ba, False)
 
         if verbose:
-            print(f"Backward: {len(matches_ba)} matches")
+            click.echo(f"Backward: {len(matches_ba)} matches")
 
         # Keep only symmetric matches
         reverse_map = {(j, i) for i, j in matches_ba}
@@ -410,7 +430,7 @@ class GraphMatcher:
         )
 
         if verbose:
-            print(f"Cross-check: {len(matches)} symmetric matches")
+            click.echo(f"Cross-check: {len(matches)} symmetric matches")
 
         return matches
 
@@ -596,7 +616,7 @@ class GraphMatcher:
             matches.append((i, j))
 
         if verbose:
-            print(f"Found {len(matches)} matches (cost_threshold={cost_thresh:.3f})")
+            click.echo(f"Found {len(matches)} matches (cost_threshold={cost_thresh:.3f})")
 
         return np.array(matches, dtype=np.int32).reshape(-1, 2)
 
@@ -621,7 +641,7 @@ class GraphMatcher:
         ref_desc = reference.nodes
 
         if verbose:
-            print(
+            click.echo(
                 f"Matching {mov_desc.shape[0]} moving descriptors to {ref_desc.shape[0]} reference descriptors"
             )
 
@@ -635,7 +655,7 @@ class GraphMatcher:
         )
 
         if verbose:
-            print(f"Found {len(matches)} descriptor matches")
+            click.echo(f"Found {len(matches)} descriptor matches")
 
         return matches.astype(np.int32)
 
@@ -695,16 +715,16 @@ class GraphMatcher:
             high = np.quantile(dist, max_distance_quantile)
 
             if verbose:
-                print(
+                click.echo(
                     f"Distance filtering: quantiles [{min_distance_quantile}, {max_distance_quantile}]"
                 )
-                print(f"Distance range: [{low:.3f}, {high:.3f}]")
+                click.echo(f"Distance range: [{low:.3f}, {high:.3f}]")
 
             keep = (dist >= low) & (dist <= high)
             matches = matches[keep]
 
             if verbose:
-                print(f"Matches after distance filtering: {len(matches)}")
+                click.echo(f"Matches after distance filtering: {len(matches)}")
 
         # Direction filtering (2D/3D) - NEW
         if direction_threshold != 0:
@@ -727,9 +747,9 @@ class GraphMatcher:
             matches = matches[keep]
 
             if verbose:
-                print(f"Dominant direction: {mean_direction}")
-                print(f"Direction threshold: {direction_threshold}°")
-                print(f"Matches after direction filtering: {len(matches)}")
+                click.echo(f"Dominant direction: {mean_direction}")
+                click.echo(f"Direction threshold: {direction_threshold}°")
+                click.echo(f"Matches after direction filtering: {len(matches)}")
 
         # Angle filtering (2D only, legacy)
         if angle_threshold != 0 and moving.dim == 2:
@@ -748,7 +768,7 @@ class GraphMatcher:
             matches = matches[keep]
 
             if verbose:
-                print(f"Dominant angle: {dominant_angle:.1f}°")
-                print(f"Matches after 2D angle filtering: {len(matches)}")
+                click.echo(f"Dominant angle: {dominant_angle:.1f}°")
+                click.echo(f"Matches after 2D angle filtering: {len(matches)}")
 
         return matches

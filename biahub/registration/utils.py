@@ -1,3 +1,19 @@
+"""
+Registration utility functions.
+
+Helper functions shared across registration methods (beads, ANTs, phase correlation).
+Includes:
+- Transform validation and interpolation across timepoints.
+- Approximate transform computation from voxel sizes and rotation/flip parameters.
+- Transform I/O (save/load from disk, convert between numpy and ANTs formats).
+- Volume utilities: LIR cropping, affine application, padding, and shape matching.
+
+Key conventions
+---------------
+- Coordinates and shapes are in ZYX order for 3D data.
+- Transforms are 4x4 homogeneous matrices.
+"""
+
 import os
 
 from pathlib import Path

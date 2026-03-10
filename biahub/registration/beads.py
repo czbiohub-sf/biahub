@@ -1,3 +1,30 @@
+"""
+Beads-based registration module.
+
+Provides functions for registering volumetric imaging data by detecting fluorescent
+bead landmarks in moving and reference channels, matching them using graph-based
+algorithms, and estimating affine transformations.
+
+Pipeline overview
+-----------------
+1. **Peak detection** (`peaks_from_beads`): Detect bead positions in both channels.
+2. **Matching** (`matches_from_beads`): Find bead correspondences via graph matching
+   (Hungarian or descriptor-based) with geometric consistency filtering.
+3. **Transform estimation** (`transform_from_matches`): Fit an affine/euclidean/similarity
+   transform from matched bead pairs.
+4. **Iterative refinement** (`optimize_transform`, `estimate`): Compose the approximate
+   transform with bead-based corrections, re-detect peaks, and score until convergence.
+5. **Parameter tuning** (`optimize_matches`): Grid search over matching settings to find
+   the combination that maximizes registration quality.
+
+Key conventions
+---------------
+- Coordinates are in ZYX order for 3D data.
+- "mov" / "moving" refers to the source channel being aligned.
+- "ref" / "reference" refers to the fixed target channel.
+- Transforms map from moving space to reference space (forward direction).
+"""
+
 from datetime import datetime
 from itertools import product
 from pathlib import Path
@@ -80,10 +107,14 @@ def optimize_matches(
         }
 
     score_radius = beads_match_settings.qc_settings.score_centroid_mask_radius
+
+    # Convert volumes to ANTs images once (reused across all trials)
     mov_ants = ants.from_numpy(mov.astype(np.float32))
     ref_ants = ants.from_numpy(ref.astype(np.float32))
 
-    # Detect peaks once in approximately registered space
+    # Apply approximate transform to moving volume and detect peaks once.
+    # These peaks are reused for all parameter combinations in the grid search.
+    click.echo("Detecting peaks in approximately registered space for grid search...")
     mov_reg_approx = (
         approx_transform.to_ants().apply_to_image(mov_ants, reference=ref_ants).numpy()
     )
@@ -95,8 +126,13 @@ def optimize_matches(
         verbose=False,
     )
     if mov_peaks is None or ref_peaks is None or len(mov_peaks) < 2 or len(ref_peaks) < 2:
-        print("Not enough peaks detected, returning original settings")
+        click.echo("Not enough peaks detected for optimization, returning original settings.")
         return beads_match_settings
+
+    click.echo(
+        f"Starting grid search: {len(mov_peaks)} mov peaks, {len(ref_peaks)} ref peaks, "
+        f"{np.prod([len(v) for v in param_grid.values()])} parameter combinations."
+    )
 
     ndim = mov_peaks.shape[1]
     best_score = -1.0
@@ -105,8 +141,8 @@ def optimize_matches(
     grid_keys = list(param_grid.keys())
     grid_values = [param_grid[k] for k in grid_keys]
 
-    # Mapping from param_grid keys to settings attributes
     def apply_trial_params(trial_settings, trial_params):
+        """Apply parameter values from a grid search trial to a BeadsMatchSettings copy."""
         fm = trial_settings.filter_matches_settings
         hm = trial_settings.hungarian_match_settings
         w = hm.cost_matrix_settings.weights
@@ -183,7 +219,7 @@ def optimize_matches(
                 continue
 
             if verbose:
-                print(f"  {trial_params} -> matches={len(matches)}, score={score:.4f}")
+                click.echo(f"  {trial_params} -> matches={len(matches)}, score={score:.4f}")
 
             if score > best_score:
                 best_score = score
@@ -191,12 +227,12 @@ def optimize_matches(
 
         except Exception as e:
             if verbose:
-                print(f"  {trial_params} -> failed: {e}")
+                click.echo(f"  {trial_params} -> failed: {e}")
             continue
 
     if verbose:
-        print(f"Best score: {best_score:.4f}")
-        print(f"Best settings: {best_settings}")
+        click.echo(f"Best score: {best_score:.4f}")
+        click.echo(f"Best settings: {best_settings}")
 
     return best_settings
 
@@ -206,23 +242,34 @@ def overlap_score(
     ref_peaks: ArrayLike,
     radius: int = 6,
     verbose: bool = False,
-):
+) -> float:
     """
-    Compute the overlap score for the beads registration based on the overlap fraction and IoU.
-    between detected bead peaks from ref and mov channels.
+    Compute the overlap fraction between two sets of bead peaks.
 
-    Args:
-        ref_peaks: (N_ref, 3) array of LF bead coordinates (z, y, x)
-        mov_peaks: (N_mov, 3) array of LS bead coordinates (z, y, x)
-        radius:    spherical neighborhood radius (voxels)
+    For each reference peak, checks whether any moving peak falls within a
+    spherical neighborhood of the given radius (using a KDTree). The score is
+    the fraction of reference peaks that have at least one nearby moving peak,
+    normalized by the smaller peak set size.
 
-    Returns:
-       score: float
+    Parameters
+    ----------
+    mov_peaks : ArrayLike
+        (N_mov, D) array of moving bead coordinates (z, y, x).
+    ref_peaks : ArrayLike
+        (N_ref, D) array of reference bead coordinates (z, y, x).
+    radius : int
+        Spherical neighborhood radius in voxels for overlap counting.
+    verbose : bool
+        If True, prints peak counts and overlap statistics.
 
+    Returns
+    -------
+    float
+        Overlap fraction in [0, 1]. Returns np.nan if either peak set is empty.
     """
 
     if len(mov_peaks) == 0 or len(ref_peaks) == 0:
-        print("No peaks found, returning nan metrics")
+        click.echo("No peaks found, returning nan metrics")
         return np.nan
 
     # ---- Overlap counting using KDTree ----
@@ -267,48 +314,46 @@ def estimate_tczyx(
     mode: Literal["registration", "stabilization"] = "registration",
 ) -> list[Transform]:
     """
-    Perform beads-based temporal registration of 4D data using affine transformations between the source and target channels.
+    Estimate beads-based registration transforms for all timepoints.
 
-    This function calculates timepoint-specific affine transformations to align a source channel
-    to a target channel in 4D (T, Z, Y, X) data. It validates, smooths, and interpolates transformations
-    across timepoints for consistent registration.
+    Orchestrates the full registration pipeline: computes the approximate transform
+    (if needed), then estimates per-timepoint transforms either sequentially with
+    propagation or independently via SLURM, depending on settings.
 
     Parameters
     ----------
     mov_tczyx : da.Array
-       4D array (T, C, Z, Y, X) of the moving channel (Dask array).
+        Moving data (T, C, Z, Y, X).
     ref_tczyx : da.Array
-       4D array (T, C, Z, Y, X) of the target channel (Dask array).
+        Reference data (T, C, Z, Y, X).
+    mov_channel_index : int
+        Channel index in the moving data containing beads.
+    ref_channel_index : int, optional
+        Channel index in the reference data. Ignored in stabilization mode.
     beads_match_settings : BeadsMatchSettings
-        Settings for the beads match.
+        Settings for bead detection, matching, filtering, and QC.
     affine_transform_settings : AffineTransformSettings
-        Settings for the affine transform.
+        Settings for transform type, initial approx transform, and propagation.
     verbose : bool
-        If True, prints detailed logs of the registration process.
+        If True, prints detailed logs.
     cluster : bool
-        If True, uses the cluster.
-    sbatch_filepath : Path
-        Path to the sbatch file.
+        If True, submits jobs to SLURM; otherwise runs locally.
+    sbatch_filepath : Path, optional
+        Path to sbatch file for custom SLURM parameters.
     output_folder_path : Path
-        Path to the output folder.
-    quality_control : bool
-        If True, performs quality control.
-    threshold_score : float
-        Threshold score for the quality control.
-    grid_search : bool
-        If True, performs grid search.
-    mode : Literal["registration", "stabilization"]
-        Mode to perform the registration(between two channels) or stabilization (between a channel over time).
+        Directory to save per-timepoint transforms and logs.
+    ref_voxel_size : tuple[float, float, float]
+        Reference voxel size (Z, Y, X) in microns.
+    mov_voxel_size : tuple[float, float, float]
+        Moving voxel size (Z, Y, X) in microns.
+    mode : {"registration", "stabilization"}
+        "registration": align two different channels.
+        "stabilization": align one channel to itself over time.
+
     Returns
     -------
     list[Transform]
-        List of affine transformation matrices (4x4), one for each timepoint.
-        Invalid or missing transformations are interpolated.
-
-    Notes
-    -----
-    Each timepoint is processed in parallel using submitit executor.
-    Use verbose=True for detailed logging during registration. The verbose output will be saved at the same level as the output zarr.
+        One 4x4 affine transform per timepoint.
     """
     mov_tzyx = mov_tczyx[:, mov_channel_index]
     if mode == "stabilization":
@@ -368,7 +413,34 @@ def estimate_with_propagation(
     verbose: bool = False,
     output_folder_path: Path = None,
     mode: Literal["registration", "stabilization"] = "registration",
-) -> Transform:
+) -> None:
+    """
+    Estimate transforms sequentially, propagating each result to the next timepoint.
+
+    Processes timepoints in order (t=0, 1, 2, ...). After each timepoint, the
+    estimated transform is used as the approximate transform for the next timepoint.
+    This is useful when drift is gradual and cumulative, as each timepoint starts
+    from a better initial guess.
+
+    Parameters
+    ----------
+    mov_tzyx : da.Array
+        Moving volume (T, Z, Y, X).
+    ref_tzyx : da.Array
+        Reference volume (T, Z, Y, X).
+    beads_match_settings : BeadsMatchSettings
+        Settings for bead detection, matching, and filtering.
+    affine_transform_settings : AffineTransformSettings
+        Settings for transform type and initial approximate transform.
+        Modified in-place: approx_transform is updated after each timepoint.
+    verbose : bool
+        If True, prints progress for each timepoint.
+    output_folder_path : Path
+        Directory to save per-timepoint transform .npy files.
+    mode : {"registration", "stabilization"}
+        "registration": align moving to reference channel.
+        "stabilization": align moving channel to itself over time.
+    """
     initial_transform = affine_transform_settings.approx_transform
     T, _, _, _ = mov_tzyx.shape
     for t in range(T):
@@ -405,14 +477,35 @@ def estimate_independently(
     cluster: str = 'local',
     sbatch_filepath: Path = None,
     mode: Literal["registration", "stabilization"] = "registration",
-) -> Transform:
+) -> None:
     """
-    Calculate the affine transformation matrix between source and target channels
-    based on detected bead matches at a specific timepoint.
+    Estimate transforms for all timepoints independently via SLURM.
 
-    This function detects beads in both source and target datasets, matches them,
-    and computes an affine transformation to align the two channels. It applies
-    the transformation to the source channel and returns the transformed channel.
+    Each timepoint is submitted as an independent job using submitit. All jobs
+    use the same approximate transform as their starting point (no propagation).
+    Suitable for large datasets where timepoints can be processed in parallel.
+
+    Parameters
+    ----------
+    mov_tzyx : da.Array
+        Moving volume (T, Z, Y, X).
+    ref_tzyx : da.Array
+        Reference volume (T, Z, Y, X).
+    beads_match_settings : BeadsMatchSettings
+        Settings for bead detection, matching, and filtering.
+    affine_transform_settings : AffineTransformSettings
+        Settings for transform type and initial approximate transform.
+    verbose : bool
+        If True, prints progress for each timepoint.
+    output_folder_path : Path
+        Directory to save per-timepoint transform .npy files.
+    cluster : str
+        Submitit cluster backend ('local', 'slurm', etc.).
+    sbatch_filepath : Path, optional
+        Path to sbatch file for custom SLURM parameters.
+    mode : {"registration", "stabilization"}
+        "registration": align moving to reference channel.
+        "stabilization": align moving channel to itself over time.
     """
     T, Z, Y, X = mov_tzyx.shape
     num_cpus, gb_ram_per_cpu = estimate_resources(
@@ -528,7 +621,7 @@ def peaks_from_beads(
         click.echo('Not enough beads detected')
         return
     if mask_path is not None:
-        print("Filtering peaks with mask")
+        click.echo("Filtering peaks with mask")
         with open_ome_zarr(mask_path) as mask_ds:
             mask_load = np.asarray(mask_ds.data[0, 0])
 
@@ -554,23 +647,33 @@ def matches_from_beads(
     verbose: bool = False,
 ) -> ArrayLike:
     """
-    Get matches from beads using the hungarian algorithm.
+    Find bead correspondences between moving and reference peak sets.
+
+    Supports two matching algorithms:
+    - "hungarian": Builds k-NN graphs for both peak sets, computes a cost matrix
+      based on position distance and edge consistency, then solves the assignment
+      problem with the Hungarian algorithm.
+    - "match_descriptor": Uses scikit-image's descriptor matching on peak positions.
+
+    After matching, applies geometric consistency filters (distance quantiles,
+    direction threshold, angle threshold) to remove outliers.
 
     Parameters
     ----------
     mov_peaks : ArrayLike
-        (n, 2) array of moving peaks.
+        (N, D) array of moving peak coordinates (D = 2 or 3).
     ref_peaks : ArrayLike
-        (m, 2) array of reference peaks.
+        (M, D) array of reference peak coordinates.
     beads_match_settings : BeadsMatchSettings
-        Settings for the beads match.
+        Settings controlling the matching algorithm, graph construction,
+        cost matrix weights, and post-match filtering.
     verbose : bool
-        If True, prints detailed logs during the process.
+        If True, prints matching settings and match count.
 
     Returns
     -------
     ArrayLike
-        (n, 2) array of matches.
+        (K, 2) array of matched index pairs [mov_idx, ref_idx].
     """
     if verbose:
         click.echo(f'Getting matches from beads with settings: {beads_match_settings}')
@@ -696,44 +799,39 @@ def estimate_tzyx(
     user_transform: Transform = None,
 ) -> Transform:
     """
-    Calculate the affine transformation matrix between source and target channels
-    based on detected bead matches at a specific timepoint.
+    Estimate the affine transform for a single timepoint.
 
-    This function detects beads in both source and target datasets, matches them,
-    and computes an affine transformation to align the two channels. It applies
-    various filtering steps, including angle-based filtering, to improve match quality.
+    Extracts the 3D volumes for the given timepoint, sets up the reference
+    depending on the mode (registration vs stabilization), and delegates to
+    `estimate()` for iterative bead-based transform estimation.
 
     Parameters
     ----------
     t_idx : int
         Timepoint index to process.
     mov_tzyx : da.Array
-       4D array (T, Z, Y, X) of the moving channel (Dask array).
-    ref_tzyx : da.Array, optional
-       4D array (T, Z, Y, X) of the reference channel (Dask array). If not provided, the first timepoint of the moving channel will be used.
+        Moving volume (T, Z, Y, X).
+    ref_tzyx : da.Array
+        Reference volume (T, Z, Y, X). Ignored in stabilization mode.
     beads_match_settings : BeadsMatchSettings
-        Settings for the beads match.
+        Settings for bead detection, matching, and filtering.
     affine_transform_settings : AffineTransformSettings
-        Settings for the affine transform.
+        Settings for transform type and initial approximate transform.
     verbose : bool
         If True, prints detailed logs during the process.
-    slurm : bool
-        If True, uses SLURM for parallel processing.
-    output_folder_path : Path
-        Path to save the output.
+    output_folder_path : Path, optional
+        Directory to save the transform as ``{t_idx}.npy``.
+    mode : {"registration", "stabilization"}
+        "registration": align moving to reference (different channels).
+        "stabilization": align moving channel to itself over time,
+        using t_reference setting ("first" or "previous").
+    user_transform : Transform, optional
+        Alternative initial transform to compete with the default on iteration 0.
 
     Returns
     -------
-    list | None
-        A 4x4 affine transformation matrix as a nested list if successful,
-        or None if no valid transformation could be calculated.
-
-    Notes
-    -----
-    Uses ANTsPy for initial transformation application and bead detection.
-    Peaks (beads) are detected using a block-based algorithm with thresholds for source and target datasets.
-    Bead matches are filtered based on distance and angular deviation from the dominant direction.
-    If fewer than three matches are found after filtering, the function returns None.
+    Transform or None
+        The estimated 4x4 affine transform, or None if estimation failed.
     """
     click.echo("........................................................................")
     click.echo(f'Processing timepoint: {t_idx}')
@@ -782,13 +880,44 @@ def optimize_transform(
     affine_transform_settings: AffineTransformSettings,
     verbose: bool = False,
     debug: bool = False,
-) -> tuple[Transform, float, float]:
+) -> tuple[Transform, float]:
+    """
+    Refine a transform by bead matching and evaluate registration quality.
 
+    Applies the current transform to the moving volume, detects beads in both
+    the registered moving and reference volumes, matches them, estimates a
+    correction transform, and composes it with the input transform. Returns
+    the better of the two (original vs corrected) based on overlap score.
+
+    Parameters
+    ----------
+    transform : Transform
+        Current transform to refine (maps moving -> reference space).
+    mov : ArrayLike
+        Original (unregistered) moving volume (Z, Y, X).
+    ref : ArrayLike
+        Reference volume (Z, Y, X).
+    beads_match_settings : BeadsMatchSettings
+        Settings controlling peak detection, matching, and filtering.
+    affine_transform_settings : AffineTransformSettings
+        Settings for the transform type (affine/euclidean/similarity).
+    verbose : bool
+        If True, prints quality scores before and after optimization.
+    debug : bool
+        If True, prints detailed intermediate results (peaks, matches, transforms).
+
+    Returns
+    -------
+    tuple[Transform, float]
+        The best transform and its overlap score.
+        Returns (None, -1) if not enough peaks or matches are found.
+    """
     mov_ants = ants.from_numpy(mov)
     ref_ants = ants.from_numpy(ref)
 
+    # Step 1: Score the current transform by applying it and measuring peak overlap
     if debug:
-        click.echo("Checking quality score before beads matching")
+        click.echo("Step 1: Scoring current transform (before bead matching)...")
     mov_reg_approx = transform.to_ants().apply_to_image(mov_ants, reference=ref_ants).numpy()
     mov_peaks, ref_peaks = peaks_from_beads(
         mov=mov_reg_approx,
@@ -807,8 +936,9 @@ def optimize_transform(
         verbose=debug,
     )
 
+    # Step 2: Match beads and estimate a correction transform
     if debug:
-        click.echo("Optimizing transform with beads matching")
+        click.echo("Step 2: Matching beads to estimate correction transform...")
     matches = matches_from_beads(
         mov_peaks=mov_peaks,
         ref_peaks=ref_peaks,
@@ -830,8 +960,9 @@ def optimize_transform(
     )
     composed_transform = transform @ inv_transform
 
+    # Step 3: Score the composed (corrected) transform
     if debug:
-        click.echo("Checking quality score after beads matching")
+        click.echo("Step 3: Scoring composed transform (after bead matching)...")
     mov_reg_optimized = (
         composed_transform.to_ants().apply_to_image(mov_ants, reference=ref_ants).numpy()
     )
@@ -874,42 +1005,45 @@ def estimate(
     output_filepath: Path = None,
     user_transform: Transform = None,
     debug: bool = False,
-) -> tuple[Transform, float]:
+) -> Transform:
     """
-    Estimate the affine transformation between source and target channels
-    based on detected bead matches.
+    Estimate the best affine transformation between moving and reference volumes.
+
+    Iteratively refines the transform by detecting beads, matching them, estimating
+    a correction, and scoring the result. Supports an optional user-provided
+    transform that competes with the computed one on the first iteration.
 
     Works for both 2D (Y, X) and 3D (Z, Y, X) arrays.
 
     Parameters
     ----------
-    mov : da.Array
-        Moving channel data.
-    ref : da.Array
-        Reference channel data.
+    mov : ArrayLike
+        Moving channel volume (Z, Y, X) or (Y, X).
+    ref : ArrayLike
+        Reference channel volume (Z, Y, X) or (Y, X).
     beads_match_settings : BeadsMatchSettings
-        Settings for the beads match.
+        Settings for bead detection, matching, filtering, and QC iterations.
     affine_transform_settings : AffineTransformSettings
-        Settings for the affine transform.
+        Settings for transform type and initial approximate transform.
     verbose : bool
-        If True, prints detailed logs during the process.
-    output_filepath : Path
-        Path to save the output.
-    qc_score_threshold : float
-        Threshold score for the quality control.
+        If True, prints the best transform and score at the end.
+    output_filepath : Path, optional
+        If provided, saves the best transform matrix as a .npy file.
+    user_transform : Transform, optional
+        An alternative initial transform (e.g. from a previous timepoint).
+        Tested on the first iteration; used if it scores better.
+    debug : bool
+        If True, passes debug flag to optimize_transform for detailed logging.
+
     Returns
     -------
     Transform
-        The estimated transformation.
-
-    Raises
-    ------
-    ValueError
-        If the source or target channel data is missing.
+        The best transform found across all iterations. Falls back to the
+        initial approximate transform if no valid optimization was found.
     """
 
     if _check_nan_n_zeros(mov) or _check_nan_n_zeros(ref):
-        click.echo('Beads data is missing')
+        click.echo('Skipping: moving or reference data contains only NaN/zeros.')
         return
 
     initial_transform = Transform(
@@ -922,8 +1056,10 @@ def estimate(
     transform_iter_dict = {}
 
     while current_iterations < qc_iterations:
-        print(f"Current iteration: {current_iterations}")
-        click.echo("Optimizing current transform")
+        click.echo(
+            f"Iteration {current_iterations + 1}/{qc_iterations}: "
+            "optimizing transform via bead matching..."
+        )
         optimized_transform, quality_score_optimized = optimize_transform(
             transform=transform,
             mov=mov,
