@@ -31,8 +31,8 @@ from biahub.cli.slurm import wait_for_jobs_to_finish
 from biahub.cli.utils import estimate_resources, yaml_to_model
 from biahub.registration.utils import (
     evaluate_transforms,
-    save_transforms,
     match_shape,
+    save_transforms,
 )
 from biahub.settings import (
     EstimateStabilizationSettings,
@@ -71,7 +71,6 @@ def remove_beads_fov_from_path_list(
             path for path in position_dirpaths if skip_beads_fov not in str(path)
         ]
     return position_dirpaths
-
 
 
 def plot_cross_correlation(

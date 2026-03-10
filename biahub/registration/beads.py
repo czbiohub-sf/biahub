@@ -24,7 +24,7 @@ from biahub.cli.utils import (
 )
 from biahub.core.graph_matching import Graph, GraphMatcher
 from biahub.core.transform import Transform
-from biahub.registration.utils import load_transforms, get_aprox_transform
+from biahub.registration.utils import get_aprox_transform, load_transforms
 from biahub.settings import AffineTransformSettings, BeadsMatchSettings, DetectPeaksSettings
 
 

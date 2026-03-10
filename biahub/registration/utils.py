@@ -7,6 +7,7 @@ import ants
 import click
 import largestinteriorrectangle as lir
 import numpy as np
+import scipy
 
 from matplotlib import pyplot as plt
 from numpy.typing import ArrayLike
@@ -15,12 +16,12 @@ from scipy.interpolate import interp1d
 from biahub.cli.utils import (
     model_to_yaml,
 )
+from biahub.core.transform import Transform
 from biahub.settings import (
     AffineTransformSettings,
     RegistrationSettings,
     StabilizationSettings,
 )
-from biahub.core.transform import Transform
 
 # TODO: see if at some point these globals should be hidden or exposed.
 NA_DETECTION_SOURCE = 1.35
@@ -825,6 +826,7 @@ def apply_affine_transform(
             ).numpy()
 
         elif method == "scipy":
+
             registered_zyx = scipy.ndimage.affine_transform(zyx_data, matrix, output_shape_zyx)
 
         else:
