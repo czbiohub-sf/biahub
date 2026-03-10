@@ -21,13 +21,13 @@ from biahub.settings import (
     StabilizationSettings,
 )
 from biahub.core.transform import Transform
+
 # TODO: see if at some point these globals should be hidden or exposed.
 NA_DETECTION_SOURCE = 1.35
 NA_DETECTION_TARGET = 1.35
 WAVELENGTH_EMISSION_SOURCE_CHANNEL = 0.45  # in um
 WAVELENGTH_EMISSION_TARGET_CHANNEL = 0.6  # in um
 FOCUS_SLICE_ROI_WIDTH = 150  # size of central ROI used to find focal slice
-
 
 
 def get_aprox_transform(
@@ -38,13 +38,12 @@ def get_aprox_transform(
     verbose: bool = False,
     ref_voxel_size: tuple[float, float, float] = (0.174, 0.1494, 0.1494),
     mov_voxel_size: tuple[float, float, float] = (0.174, 0.1494, 0.1494),
-
 ) -> Transform:
 
     mov_Z, mov_Y, mov_X = mov_shape
     ref_Z, ref_Y, ref_X = ref_shape
 
-# Calculate scaling factors for displaying data     source_channel_voxel_size, target_channel_voxel_size
+    # Calculate scaling factors for displaying data     source_channel_voxel_size, target_channel_voxel_size
     scaling_factor_z = mov_voxel_size[-3] / ref_voxel_size[-3]
     scaling_factor_yx = mov_voxel_size[-1] / ref_voxel_size[-1]
     click.echo(
@@ -74,7 +73,7 @@ def get_aprox_transform(
     compound_affine = np.linalg.inv(scaling_affine @ rotate90_affine @ fliplr_affine)
 
     return Transform(matrix=compound_affine)
-    
+
 
 def validate_transforms(
     transforms: list[ArrayLike],
@@ -836,6 +835,8 @@ def apply_affine_transform(
             registered_zyx = registered_zyx[Z_slice, Y_slice, X_slice]
 
     return registered_zyx
+
+
 def pad_to_shape(
     arr: ArrayLike,
     shape: Tuple[int, ...],

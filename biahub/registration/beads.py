@@ -28,23 +28,20 @@ from biahub.registration.utils import load_transforms, get_aprox_transform
 from biahub.settings import AffineTransformSettings, BeadsMatchSettings, DetectPeaksSettings
 
 
-
-def registration_beads_score(
+def overlap_score(
     mov_peaks: ArrayLike,
     ref_peaks: ArrayLike,
     radius: int = 6,
     verbose: bool = False,
 ):
     """
-    Compute the score for the beads registration based on the overlap fraction and IoU.
-    between detected bead peaks from LF (ref) and LS (mov) channels.
+    Compute the overlap score for the beads registration based on the overlap fraction and IoU.
+    between detected bead peaks from ref and mov channels.
 
     Args:
         ref_peaks: (N_ref, 3) array of LF bead coordinates (z, y, x)
         mov_peaks: (N_mov, 3) array of LS bead coordinates (z, y, x)
-        matches:   (M, 2) matched indices (optional)
         radius:    spherical neighborhood radius (voxels)
-        ref_shape: optional 3D shape for visualization masks
 
     Returns:
        score: float
@@ -97,7 +94,7 @@ def estimate_tczyx(
     mode: Literal["registration", "stabilization"] = "registration",
 ) -> list[Transform]:
     """
-    Perform beads-based temporal registration of 4D data using affine transformations.
+    Perform beads-based temporal registration of 4D data using affine transformations between the source and target channels.
 
     This function calculates timepoint-specific affine transformations to align a source channel
     to a target channel in 4D (T, Z, Y, X) data. It validates, smooths, and interpolates transformations
@@ -149,21 +146,19 @@ def estimate_tczyx(
     output_transforms_path = output_folder_path / "xyz_transforms"
     output_transforms_path.mkdir(parents=True, exist_ok=True)
 
-    if Transform(matrix=np.array(affine_transform_settings.approx_transform)).is_identity:
+    if affine_transform_settings.compute_approx_transform:
         approx_transform = get_aprox_transform(
             mov_shape=mov_tzyx.shape[-3:],
             ref_shape=ref_tzyx.shape[-3:],
             pre_affine_90degree_rotation=-1,
-            pre_affine_fliplr=False ,
+            pre_affine_fliplr=False,
             verbose=verbose,
             ref_voxel_size=ref_voxel_size,
             mov_voxel_size=mov_voxel_size,
         )
-        print("computed approx transform: ", approx_transform)
-
+        click.echo("Computed approx transform: ", approx_transform)
         affine_transform_settings.approx_transform = approx_transform.to_list()
 
-    
     if affine_transform_settings.use_prev_t_transform:
         estimate_with_propagation(
             mov_tzyx=mov_tzyx,
@@ -603,19 +598,6 @@ def estimate_tzyx(
         output_filepath=output_filepath,
         user_transform=user_transform,
     )
-    # if quality_score < beads_match_settings.qc_settings.score_threshold:
-    #     beads_match_settings.filter_matches_settings.min_distance_quantile = 0.1
-    #     beads_match_settings.filter_matches_settings.max_distance_quantile = 0.99
-
-    #     transform, quality_score = estimate(
-    #         mov=mov_zyx,
-    #         ref=ref_zyx,
-    #         beads_match_settings=beads_match_settings,
-    #         affine_transform_settings=affine_transform_settings,
-    #         verbose=verbose,
-    #         output_filepath=output_filepath,
-    #         user_transform=user_transform,
-    # )
     return transform
 
 
@@ -645,7 +627,7 @@ def optimize_transform(
     if (len(mov_peaks) is None) or (len(ref_peaks) is None):
         return None, -1
 
-    quality_score_approx = registration_beads_score(
+    quality_score_approx = overlap_score(
         mov_peaks=mov_peaks,
         ref_peaks=ref_peaks,
         radius=beads_match_settings.qc_settings.score_centroid_mask_radius,
@@ -688,7 +670,7 @@ def optimize_transform(
         verbose=debug,
     )
 
-    quality_score_optimized = registration_beads_score(
+    quality_score_optimized = overlap_score(
         mov_peaks=mov_peaks_optimized,
         ref_peaks=ref_peaks_optimized,
         radius=beads_match_settings.qc_settings.score_centroid_mask_radius,
@@ -703,7 +685,6 @@ def optimize_transform(
     if verbose:
         click.echo(f"Quality score before beads matching: {quality_score_approx}")
         click.echo(f"Quality score after beads matching: {quality_score_optimized}")
-    
 
     if quality_score_optimized >= quality_score_approx:
         return composed_transform, quality_score_optimized

@@ -9,12 +9,9 @@ Coordinate convention: ZYX ordering for 3D, YX for 2D.
 """
 
 from __future__ import annotations
-from typing import Literal, Tuple
+from typing import Literal
 
-import ants
-import click
 import numpy as np
-import scipy
 
 from numpy.typing import NDArray
 from scipy.ndimage import affine_transform
