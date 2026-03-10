@@ -1,0 +1,45 @@
+fov_list:
+  - 0/1/000000
+  - 0/1/001000
+  - 0/1/002000
+  - 0/2/000000
+  - 0/2/001000
+  - 0/2/002000
+  - 0/2/003000
+  - 0/8/000000
+
+output_dir: /hpc/projects/tlg2_mantis/2025_09_05_52hpf_cldnb-she-myo6b/3-visualization/all_channels/fov
+output_filename: BF_nuc_mem_0_2_002000.mp4
+grid: [1, 3]
+
+movs:
+  - mov_path: BF/fov/0_2_002000.mp4
+    crop_box: [176, 1072, 970, 2166]
+    legend: "BF - 0/2/002000"
+    legend_font_size: 20
+    timestamp_font_size: 20
+    rotation: 0
+    frame_step: 12
+    frame_time_sampling_min: 5
+
+  - mov_path: nuclei_projection/fov/0_2_002000.mp4
+    crop_box: [0, 784, 240, 881]
+    legend: "Nuclei max projection - 0/2/002000"
+    legend_font_size: 20
+    timestamp_font_size: 20
+    rotation: -90
+    frame_step: 12
+    frame_time_sampling_min: 5
+
+  - mov_path: membrane_projection/fov/0_2_002000.mp4
+    crop_box: [0, 1248, 976, 2168]
+    legend: "Membrane max projection - 0/2/002000"
+    legend_font_size: 20
+    timestamp_font_size: 20
+    rotation: -90
+    frame_step: 12
+    frame_time_sampling_min: 5
+
+
+
+    
