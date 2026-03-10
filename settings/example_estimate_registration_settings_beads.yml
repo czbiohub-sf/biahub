@@ -62,7 +62,9 @@ beads_match_settings:
 
 # Settings for affine transformation estimation (applies to all stabilization methods)
 affine_transform_settings:
-  transform_type: similarity # Type of transform to estimate "euclidean", "similarity", or "affine"
+  use_prev_t_transform: True # Use the previous timepoint transform as the initial transform
+  compute_approx_transform: False # Compute the approximate transform using the beads match settings
+  transform_type: affine # Type of transform to estimate "euclidean", "similarity", or "affine"
   approx_transform: # Optional initial guess for the 4x4 affine transformation matrix (if None, will be estimated)
     - - 1
       - 0
