@@ -643,3 +643,36 @@ class SegmentationModel(BaseModel):
 class SegmentationSettings(BaseModel):
     models: Dict[str, SegmentationModel]
     model_config = {"extra": "forbid", "protected_namespaces": ()}
+
+
+class TileSettings(MyBaseModel):
+    channels: list[str] | None = None
+    patch_size: list[int | str] = Field(
+        default=["*", 512, 512],
+        description="ZYX patch size. Use '*' for full dimension size",
+    )
+    step_size: list[int | str] = Field(
+        default=["*", 256, 256],
+        description="ZYX step size. Use '*' for full dimension size",
+    )
+    rechunk: list[int | str] | None = Field(
+        default=None,
+        description="Rechunk input to these sizes (TCZYX). \
+         The ZYX dimensions will also be used as chunk_size for patchly \
+         processing. Use '*' to keep dimension unchanged. None means no rechunking.",
+    )
+    output_chunks: list[int] | None = Field(
+        default=None,
+        description="Output chunk size (TCZYX). If None, auto-calculated based on patch_size",
+    )
+
+    @model_validator(mode="after")
+    def validate_dimensions(self):
+        """Ensure all size lists have correct number of elements"""
+        for field in ["patch_size", "step_size"]:
+            value = getattr(self, field)
+            if len(value) != 3:
+                raise ValueError(f"{field} must have exactly 3 elements (ZYX)")
+        if self.rechunk is not None and len(self.rechunk) != 5:
+            raise ValueError("rechunk must have exactly 5 elements (TCZYX)")
+        return self
