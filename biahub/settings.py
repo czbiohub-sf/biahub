@@ -188,6 +188,7 @@ class AffineTransformSettings(MyBaseModel):
     transform_type: Literal["euclidean", "similarity", "affine"] = "euclidean"
     approx_transform: list = np.eye(4).tolist()
     use_prev_t_transform: bool = True
+    compute_approx_transform: bool = False
 
     @field_validator("approx_transform")
     @classmethod
