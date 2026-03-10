@@ -1,5 +1,4 @@
 import itertools
-import os
 import shutil
 
 from datetime import datetime
@@ -30,14 +29,12 @@ from biahub.cli.parsing import (
 )
 from biahub.cli.slurm import wait_for_jobs_to_finish
 from biahub.cli.utils import estimate_resources, yaml_to_model
-from biahub.estimate_registration import (
-    estimate_transform_from_beads,
+from biahub.registration.utils import (
     evaluate_transforms,
+    match_shape,
     save_transforms,
 )
 from biahub.settings import (
-    AffineTransformSettings,
-    BeadsMatchSettings,
     EstimateStabilizationSettings,
     FocusFindingSettings,
     PhaseCrossCorrSettings,
@@ -74,112 +71,6 @@ def remove_beads_fov_from_path_list(
             path for path in position_dirpaths if skip_beads_fov not in str(path)
         ]
     return position_dirpaths
-
-
-def pad_to_shape(
-    arr: ArrayLike,
-    shape: Tuple[int, ...],
-    mode: str,
-    verbose: bool = False,
-    **kwargs,
-) -> ArrayLike:
-    """
-    Pad or crop array to match provided shape.
-
-    Parameters
-    ----------
-    arr : ArrayLike
-        Input array.
-    shape : Tuple[int]
-        Output shape.
-    mode : str
-        Padding mode (see np.pad).
-    verbose : bool
-        If True, print verbose output.
-    kwargs : dict
-        Additional keyword arguments for np.pad.
-
-    Returns
-    -------
-    ArrayLike
-        Padded array.
-    """
-    assert arr.ndim == len(shape)
-
-    dif = tuple(s - a for s, a in zip(shape, arr.shape))
-    assert all(d >= 0 for d in dif)
-
-    pad_width = [[s // 2, s - s // 2] for s in dif]
-
-    if verbose:
-        click.echo(
-            f"padding: input shape {arr.shape}, output shape {shape}, padding {pad_width}"
-        )
-
-    return np.pad(arr, pad_width=pad_width, mode=mode, **kwargs)
-
-
-def center_crop(
-    arr: ArrayLike,
-    shape: Tuple[int, ...],
-    verbose: bool = False,
-) -> ArrayLike:
-    """
-    Crop the center of `arr` to match provided shape.
-
-    Parameters
-    ----------
-    arr : ArrayLike
-        Input array.
-    shape : Tuple[int, ...]
-    """
-    assert arr.ndim == len(shape)
-
-    starts = tuple((cur_s - s) // 2 for cur_s, s in zip(arr.shape, shape))
-
-    assert all(s >= 0 for s in starts)
-
-    slicing = tuple(slice(s, s + d) for s, d in zip(starts, shape))
-    if verbose:
-        click.echo(
-            f"center crop: input shape {arr.shape}, output shape {shape}, slicing {slicing}"
-        )
-    return arr[slicing]
-
-
-def match_shape(
-    img: ArrayLike,
-    shape: Tuple[int, ...],
-    verbose: bool = False,
-) -> ArrayLike:
-    """
-    Pad or crop array to match provided shape.
-
-    Parameters
-    ----------
-    img : ArrayLike
-        Input array.
-    shape : Tuple[int, ...]
-    verbose : bool
-        If True, print verbose output.
-
-    Returns
-    -------
-    ArrayLike
-        Padded or cropped array.
-    """
-
-    if np.any(shape > img.shape):
-        padded_shape = np.maximum(img.shape, shape)
-        img = pad_to_shape(img, padded_shape, mode="reflect")
-
-    if np.any(shape < img.shape):
-        img = center_crop(img, shape)
-
-    if verbose:
-        click.echo(f"matched shape: input shape {img.shape}, output shape {shape}")
-
-    return img
 
 
 def plot_cross_correlation(
@@ -801,132 +692,6 @@ def estimate_xyz_stabilization_pcc(
     shutil.rmtree(transforms_out_path)
 
     return fov_transforms
-
-
-def estimate_xyz_stabilization_with_beads(
-    channel_tzyx: da.Array,
-    beads_match_settings: BeadsMatchSettings,
-    affine_transform_settings: AffineTransformSettings,
-    verbose: bool = False,
-    cluster: str = "local",
-    sbatch_filepath: Optional[Path] = None,
-    output_folder_path: Path = None,
-) -> list[ArrayLike]:
-    """
-    Estimate the xyz stabilization for a single position.
-
-    Parameters
-    ----------
-    channel_tzyx : da.Array
-        Source channel data.
-    beads_match_settings : BeadsMatchSettings
-        Settings for the beads match.
-    affine_transform_settings : AffineTransformSettings
-        Settings for the affine transform.
-    verbose : bool
-        If True, print verbose output.
-    cluster : str
-        Cluster to use.
-    sbatch_filepath : Path
-        Path to the sbatch file.
-    output_folder_path : Path
-        Path to the output folder.
-
-    Returns
-    -------
-    list[ArrayLike]
-        List of the xyz stabilization for each timepoint.
-    """
-
-    (T, Z, Y, X) = channel_tzyx.shape
-
-    if beads_match_settings.t_reference == "first":
-        target_channel_tzyx = np.broadcast_to(channel_tzyx[0], (T, Z, Y, X)).copy()
-    elif beads_match_settings.t_reference == "previous":
-        target_channel_tzyx = np.roll(channel_tzyx, shift=-1, axis=0)
-        target_channel_tzyx[0] = channel_tzyx[0]
-
-    else:
-        raise ValueError("Invalid reference. Please use 'first' or 'previous as reference")
-
-    # Compute transformations in parallel
-
-    num_cpus, gb_ram_per_cpu = estimate_resources(
-        shape=(T, 1, Z, Y, X), ram_multiplier=5, max_num_cpus=16
-    )
-
-    # Prepare SLURM arguments
-    slurm_args = {
-        "slurm_job_name": "estimate_focus_z",
-        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
-        "slurm_cpus_per_task": num_cpus,
-        "slurm_array_parallelism": 100,
-        "slurm_time": 30,
-        "slurm_partition": "preempted",
-    }
-
-    if sbatch_filepath:
-        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
-
-    output_folder_path.mkdir(parents=True, exist_ok=True)
-    slurm_out_path = output_folder_path / "slurm_output"
-    slurm_out_path.mkdir(parents=True, exist_ok=True)
-
-    # Submitit executor
-    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
-    executor.update_parameters(**slurm_args)
-
-    click.echo(f"Submitting SLURM focus estimation jobs with resources: {slurm_args}")
-    output_transforms_path = output_folder_path / "xyz_transforms"
-    output_transforms_path.mkdir(parents=True, exist_ok=True)
-
-    # Submit jobs
-    jobs = []
-    with submitit.helpers.clean_env(), executor.batch():
-        for t in range(1, T, 1):
-            job = executor.submit(
-                estimate_transform_from_beads,
-                source_channel_tzyx=channel_tzyx,
-                target_channel_tzyx=target_channel_tzyx,
-                verbose=verbose,
-                beads_match_settings=beads_match_settings,
-                affine_transform_settings=affine_transform_settings,
-                slurm=True,
-                output_folder_path=output_transforms_path,
-                t_idx=t,
-            )
-            jobs.append(job)
-
-    # Save job IDs
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    log_path = slurm_out_path / f"job_ids_{timestamp}.log"
-    with open(log_path, "w") as log_file:
-        for job in jobs:
-            log_file.write(f"{job.job_id}\n")
-
-    wait_for_jobs_to_finish(jobs)
-
-    # Load the transforms
-    transforms = [np.eye(4).tolist()]
-    for t in range(1, T):
-        file_path = output_transforms_path / f"{t}.npy"
-        if not os.path.exists(file_path):
-            transforms.append(None)
-            click.echo(f"Transform for timepoint {t} not found.")
-        else:
-            T_zyx_shift = np.load(file_path).tolist()
-            transforms.append(T_zyx_shift)
-
-    # Check if the number of transforms matches the number of timepoints
-    if len(transforms) != T:
-        raise ValueError(
-            f"Number of transforms {len(transforms)} does not match number of timepoints {T}"
-        )
-
-    # Remove the output folder
-    shutil.rmtree(output_transforms_path)
-
-    return transforms
 
 
 def estimate_xy_stabilization_per_position(
@@ -1633,21 +1398,26 @@ def estimate_stabilization(
                 click.echo(
                     f"Error estimating {stabilization_type} stabilization parameters: {e}"
                 )
-
         elif stabilization_method == "beads":
+
+            from biahub.registration.beads import estimate_tczyx
 
             click.echo("Estimating xyz stabilization parameters with beads")
             with open_ome_zarr(input_position_dirpaths[0], mode="r") as beads_position:
                 source_channels = beads_position.channel_names
                 source_channel_index = source_channels.index(stabilization_estimation_channel)
-                channel_tzyx = beads_position.data.dask_array()[:, source_channel_index]
+                channel_tczyx = beads_position.data.dask_array()
 
-            xyz_transforms = estimate_xyz_stabilization_with_beads(
-                channel_tzyx=channel_tzyx,
+            xyz_transforms = estimate_tczyx(
+                mov_tczyx=channel_tczyx,
+                ref_tczyx=channel_tczyx,
+                mov_channel_index=source_channel_index,
+                ref_channel_index=source_channel_index,
                 beads_match_settings=settings.beads_match_settings,
                 affine_transform_settings=settings.affine_transform_settings,
                 verbose=verbose,
                 output_folder_path=output_dirpath,
+                mode="stabilization",
                 cluster=cluster,
                 sbatch_filepath=sbatch_filepath,
             )
