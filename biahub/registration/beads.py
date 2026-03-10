@@ -926,7 +926,7 @@ def optimize_transform(
         ref_peaks_settings=beads_match_settings.target_peaks_settings,
         verbose=debug,
     )
-    if (len(mov_peaks) is None) or (len(ref_peaks) is None):
+    if mov_peaks is None or ref_peaks is None:
         return None, -1
 
     quality_score_approx = overlap_score(
