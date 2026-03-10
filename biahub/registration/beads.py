@@ -1,4 +1,5 @@
 from datetime import datetime
+from itertools import product
 from pathlib import Path
 from typing import Literal
 
@@ -26,6 +27,178 @@ from biahub.core.graph_matching import Graph, GraphMatcher
 from biahub.core.transform import Transform
 from biahub.registration.utils import get_aprox_transform, load_transforms
 from biahub.settings import AffineTransformSettings, BeadsMatchSettings, DetectPeaksSettings
+
+
+def optimize_matches(
+    mov: ArrayLike,
+    ref: ArrayLike,
+    approx_transform: Transform,
+    beads_match_settings: BeadsMatchSettings,
+    affine_transform_settings: AffineTransformSettings,
+    param_grid: dict = None,
+    verbose: bool = False,
+) -> BeadsMatchSettings:
+    """
+    Optimize BeadsMatchSettings by grid search over matching and filter parameters.
+
+    For each parameter combination: detects peaks in approximately registered space,
+    matches them, estimates a correction transform, composes it with the approx transform,
+    applies to the full volume via ANTs, re-detects peaks, and scores the overlap.
+
+    Parameters
+    ----------
+    mov : ArrayLike
+        Original (unregistered) moving volume (Z, Y, X).
+    ref : ArrayLike
+        Reference volume (Z, Y, X).
+    approx_transform : Transform
+        Initial approximate transform to compose with.
+    beads_match_settings : BeadsMatchSettings
+        Initial matching settings to use as baseline.
+    affine_transform_settings : AffineTransformSettings
+        Settings for the affine transform estimation.
+    param_grid : dict, optional
+        Dictionary of parameter names to lists of values to search.
+        Supported keys: 'min_distance_quantile', 'max_distance_quantile',
+        'direction_threshold', 'cost_threshold', 'max_ratio', 'k',
+        'weights_dist', 'weights_edge_angle', 'weights_edge_length',
+        'weights_pca_dir', 'weights_pca_aniso', 'weights_edge_descriptor'.
+    verbose : bool
+        If True, prints logs for each trial.
+
+    Returns
+    -------
+    BeadsMatchSettings
+        The settings that produced the best overlap score.
+    """
+    if param_grid is None:
+        param_grid = {
+            'min_distance_quantile': [0, 0.01],
+            'max_distance_quantile': [0, 0.99],
+            'direction_threshold': [0, 50],
+            'k': [5, 10],
+        }
+
+    score_radius = beads_match_settings.qc_settings.score_centroid_mask_radius
+    mov_ants = ants.from_numpy(mov.astype(np.float32))
+    ref_ants = ants.from_numpy(ref.astype(np.float32))
+
+    # Detect peaks once in approximately registered space
+    mov_reg_approx = (
+        approx_transform.to_ants().apply_to_image(mov_ants, reference=ref_ants).numpy()
+    )
+    mov_peaks, ref_peaks = peaks_from_beads(
+        mov=mov_reg_approx,
+        ref=ref,
+        mov_peaks_settings=beads_match_settings.source_peaks_settings,
+        ref_peaks_settings=beads_match_settings.target_peaks_settings,
+        verbose=False,
+    )
+    if mov_peaks is None or ref_peaks is None or len(mov_peaks) < 2 or len(ref_peaks) < 2:
+        print("Not enough peaks detected, returning original settings")
+        return beads_match_settings
+
+    ndim = mov_peaks.shape[1]
+    best_score = -1.0
+    best_settings = beads_match_settings
+
+    grid_keys = list(param_grid.keys())
+    grid_values = [param_grid[k] for k in grid_keys]
+
+    # Mapping from param_grid keys to settings attributes
+    def apply_trial_params(trial_settings, trial_params):
+        fm = trial_settings.filter_matches_settings
+        hm = trial_settings.hungarian_match_settings
+        w = hm.cost_matrix_settings.weights
+        param_map = {
+            'min_distance_quantile': lambda v: setattr(fm, 'min_distance_quantile', v),
+            'max_distance_quantile': lambda v: setattr(fm, 'max_distance_quantile', v),
+            'direction_threshold': lambda v: setattr(fm, 'direction_threshold', v),
+            'cost_threshold': lambda v: setattr(hm, 'cost_threshold', v),
+            'max_ratio': lambda v: setattr(hm, 'max_ratio', v),
+            'k': lambda v: setattr(hm.edge_graph_settings, 'k', v),
+            'weights_dist': lambda v: w.__setitem__('dist', v),
+            'weights_edge_angle': lambda v: w.__setitem__('edge_angle', v),
+            'weights_edge_length': lambda v: w.__setitem__('edge_length', v),
+            'weights_pca_dir': lambda v: w.__setitem__('pca_dir', v),
+            'weights_pca_aniso': lambda v: w.__setitem__('pca_aniso', v),
+            'weights_edge_descriptor': lambda v: w.__setitem__('edge_descriptor', v),
+        }
+        for key, val in trial_params.items():
+            if key in param_map:
+                param_map[key](val)
+
+    for combo in product(*grid_values):
+        trial_params = dict(zip(grid_keys, combo))
+        trial_settings = beads_match_settings.model_copy(deep=True)
+        apply_trial_params(trial_settings, trial_params)
+
+        try:
+            matches = matches_from_beads(
+                mov_peaks=mov_peaks,
+                ref_peaks=ref_peaks,
+                beads_match_settings=trial_settings,
+                verbose=False,
+            )
+
+            if len(matches) < 3:
+                continue
+
+            fwd_transform, inv_transform = transform_from_matches(
+                matches=matches,
+                mov_peaks=mov_peaks,
+                ref_peaks=ref_peaks,
+                affine_transform_settings=affine_transform_settings,
+                ndim=ndim,
+                verbose=False,
+            )
+
+            # Compose approx_transform with correction and apply to full volume
+            composed_transform = approx_transform @ inv_transform
+            mov_reg_optimized = (
+                composed_transform.to_ants()
+                .apply_to_image(mov_ants, reference=ref_ants)
+                .numpy()
+            )
+
+            # Re-detect peaks and score
+            mov_peaks_opt, ref_peaks_opt = peaks_from_beads(
+                mov=mov_reg_optimized,
+                ref=ref,
+                mov_peaks_settings=beads_match_settings.source_peaks_settings,
+                ref_peaks_settings=beads_match_settings.target_peaks_settings,
+                verbose=False,
+            )
+            if mov_peaks_opt is None or ref_peaks_opt is None:
+                continue
+
+            score = overlap_score(
+                mov_peaks=mov_peaks_opt,
+                ref_peaks=ref_peaks_opt,
+                radius=score_radius,
+                verbose=False,
+            )
+
+            if np.isnan(score):
+                continue
+
+            if verbose:
+                print(f"  {trial_params} -> matches={len(matches)}, score={score:.4f}")
+
+            if score > best_score:
+                best_score = score
+                best_settings = trial_settings
+
+        except Exception as e:
+            if verbose:
+                print(f"  {trial_params} -> failed: {e}")
+            continue
+
+    if verbose:
+        print(f"Best score: {best_score:.4f}")
+        print(f"Best settings: {best_settings}")
+
+    return best_settings
 
 
 def overlap_score(
