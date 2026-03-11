@@ -360,6 +360,36 @@ def test_overlap_bbox_with_nans():
     print("NAN TEST PASSED!")
 
 
+def test_blank_first_frame():
+    """Test that a blank first timepoint is properly skipped."""
+    T, C, Z, Y, X = 5, 1, 5, 50, 60
+    rng = np.random.default_rng(77)
+
+    arr1 = rng.random((T, C, Z, Y, X), dtype=np.float32) + 0.1
+    arr1[0, :, :, :, :] = 0  # t=0 completely blank
+    arr1[:, :, :, :, :5] = 0  # left 5 cols always zero
+
+    arr2 = rng.random((T, C, Z, Y, X), dtype=np.float32) + 0.1
+    arr2[0, :, :, :, :] = 0  # t=0 completely blank
+    arr2[:, :, :, :, 50:] = 0  # right 10 cols always zero
+
+    # Without skip_frames: blank t=0 poisons combined_mask -> None
+    result_no_skip = find_overlap_bbox_across_time([arr1, arr2])
+    assert result_no_skip is None, "Without skip_frames, blank t=0 should cause no overlap"
+
+    # With skip_frames: blank t=0 is excluded
+    result = find_overlap_bbox_across_time([arr1, arr2], skip_frames=[0])
+    assert result is not None, "With skip_frames=[0], should find valid overlap"
+    (y_min, y_max, x_min, x_max), mask, per_t = result
+    assert x_min == 5, f"x_min={x_min} != 5"
+    assert x_max == 49, f"x_max={x_max} != 49"
+    assert per_t[0].tolist() == [0, 0, 0, 0], "Blank frame should have zero bbox"
+    assert per_t[1, 2] > 0, "Non-blank frame should have valid x_min"
+
+    print(f"Blank t=0 bbox: Y=[{y_min}:{y_max+1}], X=[{x_min}:{x_max+1}]")
+    print("BLANK FIRST FRAME TEST PASSED!")
+
+
 def plot_overlap(
     arrays: list[np.ndarray],
     bbox,
@@ -475,23 +505,23 @@ def plot_overlap(
     ax2.set_title(f"t={t} overlay | bbox Y=[{y_min}:{y_max_val+1}], X=[{x_min}:{x_max_val+1}]")
     ax2.set_xlabel("X")
     ax2.set_ylabel("Y")
-    plt.tight_layout()
+    fig2.tight_layout()
     if save_path:
         overlay_path = save_path.replace(".png", "_overlay.png")
-        plt.savefig(overlay_path, dpi=150, bbox_inches="tight")
+        fig2.savefig(overlay_path, dpi=150, bbox_inches="tight")
         print(f"Saved overlay to {overlay_path}")
     else:
         plt.show()
-    plt.close()
+    plt.close(fig2)
 
     fig.suptitle(f"t={t} | bbox Y=[{y_min}:{y_max_val+1}], X=[{x_min}:{x_max_val+1}]")
-    plt.tight_layout()
+    fig.tight_layout()
     if save_path:
-        plt.savefig(save_path, dpi=150, bbox_inches="tight")
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
         print(f"Saved plot to {save_path}")
     else:
         plt.show()
-    plt.close()
+    plt.close(fig)
 
 
 def plot_z_focus(
@@ -668,6 +698,148 @@ def build_drop_list(
     return {'drop_indices': drop_indices, 'keep_indices': keep_indices, 'reasons': reasons}
 
 
+## ===== Single-pass metadata computation =====
+
+def compute_per_timepoint_metadata(
+    arrays: list[np.ndarray],
+    pixel_size: float,
+    lf_mask_radius: float | None = None,
+    blank_threshold: float = 1e-6,
+) -> dict | None:
+    """Single-pass computation of blank frames, overlap bbox, and z_focus.
+
+    Iterates each timepoint once, loading mid-Z slices for both blank
+    detection and overlap computation simultaneously. For non-blank
+    frames, also computes z_focus from the LF phase Z-stack.
+
+    Parameters
+    ----------
+    arrays : list of np.ndarray
+        Arrays with shape (T, C, Z, Y, X). The first array is assumed
+        to be label-free (LF) data.
+    pixel_size : float
+        Physical pixel size for z_focus computation.
+    lf_mask_radius : float or None
+        Circular mask radius for the LF well border.
+    blank_threshold : float
+        A frame is blank if any channel in any array has
+        nanmax(abs(slice)) below this threshold at mid-Z.
+
+    Returns
+    -------
+    dict or None
+        None if no valid overlap is found. Otherwise dict with keys:
+        bbox, overlap_mask, per_t_bboxes, blank_frames, z_focus,
+        max_intensities.
+    """
+    T = arrays[0].shape[0]
+    Y_common = min(arr.shape[-2] for arr in arrays)
+    X_common = min(arr.shape[-1] for arr in arrays)
+
+    circ_mask = None
+    if lf_mask_radius is not None:
+        circ_mask = make_circular_mask(
+            arrays[0].shape[-2], arrays[0].shape[-1], lf_mask_radius
+        )
+
+    combined_mask = np.ones((Y_common, X_common), dtype=bool)
+    per_t_bboxes = np.zeros((T, 4), dtype=int)
+    blank_frames = []
+    z_focus = []
+    max_intensities = np.zeros(T, dtype=np.float64)
+    mid_z_placeholder = arrays[0].shape[2] // 2
+
+    for t in tqdm(range(T), desc="Processing timepoints"):
+        # Load mid-Z slices once for all arrays/channels
+        mid_z_slices = []  # (array_index, 2D slice)
+        t_max = 0.0
+        is_blank = False
+
+        for i, arr in enumerate(arrays):
+            z_mid = arr.shape[2] // 2
+            for c in range(arr.shape[1]):
+                slc = np.asarray(arr[t, c, z_mid, :, :])
+                slc_max = float(np.nanmax(np.abs(slc)))
+                t_max = max(t_max, slc_max)
+                if slc_max < blank_threshold:
+                    is_blank = True
+                mid_z_slices.append((i, slc))
+
+        max_intensities[t] = t_max
+
+        if is_blank:
+            blank_frames.append(t)
+            per_t_bboxes[t] = [0, 0, 0, 0]
+            z_focus.append(mid_z_placeholder)
+            continue
+
+        # Z focus from LF phase Z-stack
+        lf_phase_zyx = np.asarray(arrays[0][t, 0, :, :, :])
+        z_focus.append(
+            focus_from_transverse_band(
+                lf_phase_zyx,
+                NA_det=NA_DET,
+                lambda_ill=LAMBDA_ILL,
+                pixel_size=pixel_size,
+            )
+        )
+
+        # Overlap from mid-Z slices already loaded above
+        overlap_slices = []
+        for arr_idx, slc in mid_z_slices:
+            slc = slc.copy()
+            if arr_idx == 0 and circ_mask is not None:
+                slc[~circ_mask] = 0
+            overlap_slices.append(slc)
+
+        t_mask = find_overlap_mask(overlap_slices)
+        combined_mask &= t_mask
+
+        ys_t, xs_t = np.where(t_mask)
+        if len(ys_t) > 0:
+            per_t_bboxes[t] = [ys_t.min(), ys_t.max(), xs_t.min(), xs_t.max()]
+        else:
+            per_t_bboxes[t] = [0, 0, 0, 0]
+
+    # Print blank statistics
+    print(f"\nBlank frame statistics:")
+    print(f"  Total frames: {T}")
+    print(f"  Blank frames: {len(blank_frames)} ({100 * len(blank_frames) / T:.1f}%)")
+    print(
+        f"  Max intensity per frame: mean={np.mean(max_intensities):.4f}, "
+        f"std={np.std(max_intensities):.4f}, "
+        f"range=[{max_intensities.min():.4f}, {max_intensities.max():.4f}]"
+    )
+    if blank_frames:
+        print(f"  Blank timepoints: {blank_frames}")
+        runs = []
+        start = blank_frames[0]
+        for i in range(1, len(blank_frames)):
+            if blank_frames[i] != blank_frames[i - 1] + 1:
+                runs.append((start, blank_frames[i - 1]))
+                start = blank_frames[i]
+        runs.append((start, blank_frames[-1]))
+        print(
+            f"  Consecutive blank runs: "
+            f"{['t={}-{}'.format(s, e) if s != e else 't={}'.format(s) for s, e in runs]}"
+        )
+
+    # Combined bbox
+    ys, xs = np.where(combined_mask)
+    if len(ys) == 0:
+        return None
+
+    bbox = (int(ys.min()), int(ys.max()), int(xs.min()), int(xs.max()))
+    return {
+        "bbox": bbox,
+        "overlap_mask": combined_mask,
+        "per_t_bboxes": per_t_bboxes,
+        "blank_frames": blank_frames,
+        "z_focus": z_focus,
+        "max_intensities": max_intensities,
+    }
+
+
 ## ===== STAGE 1: Compute metadata per FOV =====
 
 def compute_fov_metadata(
@@ -680,6 +852,9 @@ def compute_fov_metadata(
     DEBUG: bool = True,
 ) -> dict:
     """Stage 1: Compute bbox, z_focus, blank frames, and drop list for one FOV.
+
+    Uses a single pass over all timepoints to detect blank frames,
+    compute the overlap bounding box, and find z_focus simultaneously.
 
     Saves plots/CSVs to output_plots_dir. Returns a summary dict with
     crop dimensions and keep_indices so stage 2 can determine min T/Y/X.
@@ -694,34 +869,35 @@ def compute_fov_metadata(
         pixel_size = im_lf_ds.scale[-1]
         print(f"Pixel size: {pixel_size} um")
 
-        # --- Blank frames (must run first) ---
-        blank_frames = find_blank_frames([im_lf_arr, im_ls_arr])
-        print(f"Blank frames: {blank_frames}")
-
-        # --- Overlap bbox (skip blank frames) ---
-        result = find_overlap_bbox_across_time(
+        # --- Single pass: blank detection + overlap bbox + z_focus ---
+        metadata = compute_per_timepoint_metadata(
             [im_lf_arr, im_ls_arr],
+            pixel_size=pixel_size,
             lf_mask_radius=lf_mask_radius,
-            pixel_size=None,
-            skip_frames=blank_frames,
         )
-        if result is None:
+        if metadata is None:
             print("ERROR: No valid overlap found")
             return {"status": "no_overlap"}
 
-        (y_min, y_max, x_min, x_max), overlap_mask, per_t_bboxes = result
+        bbox = metadata["bbox"]
+        y_min, y_max, x_min, x_max = bbox
+        overlap_mask = metadata["overlap_mask"]
+        per_t_bboxes = metadata["per_t_bboxes"]
+        blank_frames = metadata["blank_frames"]
+        z_focus = metadata["z_focus"]
+
+        print(f"Blank frames: {blank_frames}")
         print(f"Overlap bbox: Y=[{y_min}:{y_max+1}], X=[{x_min}:{x_max+1}]")
         print(f"Crop size: Y={y_max - y_min + 1}, X={x_max - x_min + 1}")
 
         if DEBUG:
             print(f"Overlap mask shape: {overlap_mask.shape}")
             print(f"Valid pixels in mask: {overlap_mask.sum()} / {overlap_mask.size}")
-            # Use first non-blank timepoint for the debug plot
             blank_set = set(blank_frames)
             t_debug = next((t for t in range(T) if t not in blank_set), 0)
             plot_overlap(
                 [im_lf_arr, im_ls_arr],
-                (y_min, y_max, x_min, x_max),
+                bbox,
                 overlap_mask=overlap_mask,
                 t=t_debug,
                 save_path=str(output_plots_dir / f"overlap_t{t_debug}.png"),
@@ -733,33 +909,17 @@ def compute_fov_metadata(
             ).to_csv(bbox_csv, index_label="t")
             print(f"Saved per-timepoint bboxes to {bbox_csv}")
             plot_bbox_over_time(
-                per_t_bboxes,
-                (y_min, y_max, x_min, x_max),
+                per_t_bboxes, bbox,
                 save_path=str(output_plots_dir / "bbox_over_time.png"),
             )
 
-        # --- Z focus (skip blank frames, use mid-Z as placeholder) ---
-        blank_set = set(blank_frames)
-        z_focus = []
-        for t in tqdm(range(T), desc="Finding z focus"):
-            if t in blank_set:
-                # Placeholder for blank frames; will be dropped later
-                z_focus.append(im_lf_arr.shape[2] // 2)
-                continue
-            lf_phase_zyx = np.asarray(im_lf_arr[t, 0, :, :, :])
-            z_focus_lf = focus_from_transverse_band(
-                lf_phase_zyx,
-                NA_det=NA_DET,
-                lambda_ill=LAMBDA_ILL,
-                pixel_size=pixel_size,
-            )
-            z_focus.append(z_focus_lf)
+        # --- Z focus stats (on non-blank frames only) ---
         print(f"Z focus: {z_focus}")
         z_focus_csv = output_plots_dir / "z_focus.csv"
         pd.DataFrame({"z_focus": z_focus}).to_csv(z_focus_csv, index_label="t")
         print(f"Saved z focus to {z_focus_csv}")
 
-        # Compute z_focus stats only on non-blank frames
+        blank_set = set(blank_frames)
         z_focus_valid = [z_focus[t] for t in range(T) if t not in blank_set]
         z_focus_stats = plot_z_focus(
             z_focus_valid,
@@ -1152,6 +1312,7 @@ if __name__ == "__main__":
     test_overlap_bbox_with_y_padding()
     test_overlap_bbox_different_spatial_dims()
     test_overlap_bbox_with_nans()
+    test_blank_first_frame()
     print("\n=== SUBMITTING ALL FOVs ===")
     root_path = Path("/hpc/projects/intracellular_dashboard/organelle_dynamics/")
     dataset = "2024_11_07_A549_SEC61_DENV"
