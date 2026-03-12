@@ -10,6 +10,7 @@ import numpy as np
 import submitit
 
 from iohub.ngff import open_ome_zarr
+from iohub.ngff.utils import create_empty_plate
 
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
@@ -22,7 +23,6 @@ from biahub.cli.parsing import (
     sbatch_filepath_preprocess,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import create_empty_hcs_zarr
 
 
 def run_viscy_preprocess(
@@ -322,7 +322,7 @@ def virtual_stain(
             "dtype": np.float32,
         }
 
-        create_empty_hcs_zarr(
+        create_empty_plate(
             store_path=output_dirpath,
             position_keys=[p.parts[-3:] for p in input_position_dirpaths],
             **output_metadata,
