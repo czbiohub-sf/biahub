@@ -9,6 +9,7 @@ import submitit
 from iohub.ngff import open_ome_zarr
 from scipy.linalg import svd
 from scipy.spatial.transform import Rotation as R
+from iohub.ngff.utils import create_empty_plate
 
 from biahub.cli.disk import check_disk_space_with_du
 from biahub.cli.monitor import monitor_jobs
@@ -23,7 +24,6 @@ from biahub.cli.parsing import (
 )
 from biahub.cli.utils import (
     copy_n_paste_czyx,
-    create_empty_hcs_zarr,
     estimate_resources,
     process_single_position_v2,
     yaml_to_model,
@@ -214,7 +214,7 @@ def stabilize(
     }
 
     # Create the output zarr mirroring input_position_dirpaths
-    create_empty_hcs_zarr(
+    create_empty_plate(
         store_path=output_dirpath,
         position_keys=[p.parts[-3:] for p in input_position_dirpaths],
         **output_metadata,
