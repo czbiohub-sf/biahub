@@ -10,6 +10,7 @@ from iohub import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate
 from tqdm import tqdm
 from waveorder.focus import focus_from_transverse_band
+from dynacell_qc_report import generate_dataset_report
 
 
 NA_DET = 1.35
@@ -962,11 +963,11 @@ def compute_fov_metadata(
 ## ===== STAGE 2: Crop and save into plate =====
 
 def crop_fov(
-    im_lf_path: Path,
-    im_ls_path: Path,
+    input_zarr_paths: list[Path],
     output_zarr: Path,
     output_plots_dir: Path,
     fov: str,
+    global_drop_csv: Path,
     z_final: int = 64,
     T_out: int | None = None,
     Y_out: int | None = None,
@@ -974,19 +975,27 @@ def crop_fov(
 ):
     """Stage 2: Crop one FOV and write into the pre-created plate.
 
-    Reads bbox, z_focus, and keep_indices from stage 1 CSVs.
+    Reads bbox, z_focus from stage 1 CSVs and keep_indices from the
+    global drop list.
     Crops to uniform (T_out, C, z_final, Y_out, X_out) with padding.
+
+    Parameters
+    ----------
+    input_zarr_paths : list of Path
+        Paths to input zarr FOV positions (e.g. [lf_zarr/fov, ls_zarr/fov]).
+    global_drop_csv : Path
+        Path to drop_list_all_fovs.csv (fov, t, reason). Unique t values are dropped.
     """
     # Read stage 1 metadata
     z_focus_df = pd.read_csv(output_plots_dir / "z_focus.csv")
     z_focus = z_focus_df["z_focus"].tolist()
 
-    drop_path = output_plots_dir / "drop_list.csv"
-    if drop_path.stat().st_size > 0:
-        drop_df = pd.read_csv(drop_path)
-        drop_set = set(drop_df["t"].tolist()) if len(drop_df) > 0 else set()
-    else:
-        drop_set = set()
+    # Read global drop list — unique timepoints across all FOVs
+    drop_set = set()
+    if global_drop_csv.exists() and global_drop_csv.stat().st_size > 0:
+        drop_df = pd.read_csv(global_drop_csv)
+        if len(drop_df) > 0:
+            drop_set = set(drop_df["t"].unique().tolist())
     T_total = len(z_focus)
     keep_indices = np.array(sorted(set(range(T_total)) - drop_set), dtype=int)
 
@@ -1005,18 +1014,21 @@ def crop_fov(
     if T_out is not None and len(keep_indices) > T_out:
         keep_indices = keep_indices[:T_out]
 
-    position_key = tuple(fov.split("/"))
     fov_str = fov
 
     print(f"\nCropping FOV {fov_str} to {output_zarr}")
     print(f"  Crop: ({len(keep_indices)}, ?, {Z_out}, {Y_crop}, {X_crop})")
     print(f"  Plate dims: T={T_out}, Y={Y_out}, X={X_out}")
     print(f"  z_final: {z_final} (1/3 below={z_below}, 2/3 above={z_above})")
+    print(f"  Input zarrs: {len(input_zarr_paths)}")
 
-    with open_ome_zarr(im_lf_path) as im_lf_ds, open_ome_zarr(im_ls_path) as im_ls_ds:
-        im_lf_arr = im_lf_ds.data.dask_array()
-        im_ls_arr = im_ls_ds.data.dask_array()
-        src_arrays = [im_lf_arr, im_ls_arr]
+    # Open all input zarrs
+    from contextlib import ExitStack
+    with ExitStack() as stack:
+        src_arrays = []
+        for zarr_path in input_zarr_paths:
+            ds = stack.enter_context(open_ome_zarr(zarr_path))
+            src_arrays.append(ds.data.dask_array())
 
         pos_path = output_zarr / fov_str
         with open_ome_zarr(pos_path, mode="r+") as out_ds:
@@ -1045,6 +1057,154 @@ def crop_fov(
     print(f"Saved cropped FOV {fov_str}")
 
 
+## ===== Beads registration QC =====
+
+def compute_beads_registration_qc(
+    im_lf_path: Path,
+    im_ls_path: Path,
+    output_plots_dir: Path,
+    n_std: float = 2.5,
+) -> dict:
+    """Compute per-timepoint registration QC using phase cross-correlation on beads.
+
+    For each timepoint, computes PCC between mid-Z slices of the LF and LS
+    beads channels. Reports the Pearson correlation and residual shift.
+    Timepoints with high shift or low correlation are flagged as outliers.
+
+    Returns a dict with 'drop_indices' (timepoints to drop due to bad registration).
+    """
+    from skimage.registration import phase_cross_correlation as pcc_skimage
+
+    with open_ome_zarr(im_lf_path) as im_lf_ds, open_ome_zarr(im_ls_path) as im_ls_ds:
+        im_lf_arr = im_lf_ds.data.dask_array()
+        im_ls_arr = im_ls_ds.data.dask_array()
+        T = im_lf_arr.shape[0]
+        print(f"Beads QC: LF shape={im_lf_arr.shape}, LS shape={im_ls_arr.shape}")
+
+        pearson_corrs = np.zeros(T, dtype=np.float64)
+        pcc_shifts_z = np.zeros(T, dtype=np.float64)
+        pcc_shifts_y = np.zeros(T, dtype=np.float64)
+        pcc_shifts_x = np.zeros(T, dtype=np.float64)
+        pcc_errors = np.zeros(T, dtype=np.float64)
+
+        z_mid_lf = im_lf_arr.shape[2] // 2
+        z_mid_ls = im_ls_arr.shape[2] // 2
+
+        for t in tqdm(range(T), desc="Beads registration QC"):
+            # Use channel 0 (phase) for LF and channel 0 for LS
+            lf_slice = np.asarray(im_lf_arr[t, 0, z_mid_lf, :, :]).astype(np.float64)
+            ls_slice = np.asarray(im_ls_arr[t, 0, z_mid_ls, :, :]).astype(np.float64)
+
+            # Crop to common region
+            Y_common = min(lf_slice.shape[0], ls_slice.shape[0])
+            X_common = min(lf_slice.shape[1], ls_slice.shape[1])
+            lf_crop = lf_slice[:Y_common, :X_common]
+            ls_crop = ls_slice[:Y_common, :X_common]
+
+            # Pearson correlation
+            lf_flat = lf_crop.ravel()
+            ls_flat = ls_crop.ravel()
+            lf_centered = lf_flat - lf_flat.mean()
+            ls_centered = ls_flat - ls_flat.mean()
+            denom = np.sqrt(np.sum(lf_centered**2) * np.sum(ls_centered**2))
+            if denom > 0:
+                pearson_corrs[t] = np.sum(lf_centered * ls_centered) / denom
+            else:
+                pearson_corrs[t] = np.nan
+
+            # Phase cross-correlation (residual shift after registration)
+            shift, error, _phasediff = pcc_skimage(
+                lf_crop, ls_crop, upsample_factor=10
+            )
+            pcc_shifts_y[t] = shift[0]
+            pcc_shifts_x[t] = shift[1]
+            pcc_errors[t] = error
+
+    # Shift magnitude
+    shift_mag = np.sqrt(pcc_shifts_y**2 + pcc_shifts_x**2)
+
+    # Outlier detection on shift magnitude
+    mu_shift = np.nanmean(shift_mag)
+    sigma_shift = np.nanstd(shift_mag)
+    upper_shift = mu_shift + n_std * sigma_shift
+    shift_outliers = np.where(shift_mag > upper_shift)[0]
+
+    # Outlier detection on Pearson correlation (low is bad)
+    mu_corr = np.nanmean(pearson_corrs)
+    sigma_corr = np.nanstd(pearson_corrs)
+    lower_corr = mu_corr - n_std * sigma_corr
+    corr_outliers = np.where(pearson_corrs < lower_corr)[0]
+
+    all_outliers = np.array(sorted(set(shift_outliers) | set(corr_outliers)), dtype=int)
+
+    print(f"\nBeads registration QC results:")
+    print(f"  Pearson corr: mean={mu_corr:.4f}, std={sigma_corr:.4f}")
+    print(f"  Shift magnitude: mean={mu_shift:.2f}, std={sigma_shift:.2f}")
+    print(f"  Shift outliers (>{upper_shift:.2f} px): {len(shift_outliers)}")
+    print(f"  Correlation outliers (<{lower_corr:.4f}): {len(corr_outliers)}")
+    print(f"  Total bad timepoints: {len(all_outliers)}")
+    if len(all_outliers) > 0:
+        print(f"  Bad timepoints: {all_outliers.tolist()}")
+
+    # Save CSV
+    qc_df = pd.DataFrame({
+        "t": np.arange(T),
+        "pearson_corr": pearson_corrs,
+        "pcc_shift_y": pcc_shifts_y,
+        "pcc_shift_x": pcc_shifts_x,
+        "shift_magnitude": shift_mag,
+        "pcc_error": pcc_errors,
+    })
+    qc_csv = output_plots_dir / "registration_qc.csv"
+    qc_df.to_csv(qc_csv, index=False)
+    print(f"  Saved QC CSV to {qc_csv}")
+
+    # Plot
+    fig, axes = plt.subplots(3, 1, figsize=(12, 9), sharex=True)
+
+    ax = axes[0]
+    ax.plot(pearson_corrs, "tab:blue", alpha=0.7, linewidth=0.8)
+    ax.axhline(mu_corr, color="orange", linestyle=":", linewidth=1)
+    ax.fill_between(range(T), mu_corr - sigma_corr, mu_corr + sigma_corr,
+                    color="orange", alpha=0.12)
+    ax.axhline(lower_corr, color="red", linestyle="--", linewidth=0.8, alpha=0.5)
+    if len(corr_outliers) > 0:
+        ax.scatter(corr_outliers, pearson_corrs[corr_outliers],
+                   color="red", s=20, zorder=5)
+    ax.set_ylabel("Pearson correlation")
+    ax.set_title(f"Beads registration QC | mean r={mu_corr:.4f}")
+
+    ax = axes[1]
+    ax.plot(pcc_shifts_y, "tab:blue", alpha=0.7, linewidth=0.8, label="shift Y")
+    ax.plot(pcc_shifts_x, "tab:green", alpha=0.7, linewidth=0.8, label="shift X")
+    ax.axhline(0, color="gray", linestyle="--", linewidth=0.5)
+    ax.set_ylabel("PCC shift (px)")
+    ax.legend(fontsize=7)
+
+    ax = axes[2]
+    ax.plot(shift_mag, "tab:purple", alpha=0.7, linewidth=0.8)
+    ax.axhline(mu_shift, color="orange", linestyle=":", linewidth=1)
+    ax.axhline(upper_shift, color="red", linestyle="--", linewidth=0.8, alpha=0.5)
+    if len(shift_outliers) > 0:
+        ax.scatter(shift_outliers, shift_mag[shift_outliers],
+                   color="red", s=20, zorder=5)
+    ax.set_ylabel("Shift magnitude (px)")
+    ax.set_xlabel("Time point")
+
+    fig.suptitle("Beads registration QC", fontsize=13)
+    plt.tight_layout()
+    plot_path = output_plots_dir / "registration_qc.png"
+    plt.savefig(plot_path, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"  Saved QC plot to {plot_path}")
+
+    return {
+        "drop_indices": all_outliers,
+        "pearson_corrs": pearson_corrs,
+        "shift_magnitude": shift_mag,
+    }
+
+
 ## ===== Two-stage orchestrator =====
 
 def run_all_fovs(
@@ -1054,17 +1214,46 @@ def run_all_fovs(
     z_final: int = 64,
     n_std: float = 2.5,
     local: bool = False,
+    stage1_run_dir: Path | None = None,
+    beads_fov: str | None = None,
+    max_drops: int = 5,
+    overlay_channels: list[str] | None = None,
 ):
     """Two-stage pipeline:
     Stage 1: Compute bbox, z_focus, drop list per FOV (parallel submitit jobs).
     Stage 2: After stage 1 completes, gather min T/Y/X, create plate, crop all FOVs.
+
+    Parameters
+    ----------
+    stage1_run_dir : Path or None
+        If provided, skip stage 1 and read its results from this existing run
+        directory (e.g. run_20260312_112144). Stage 2 output goes into a new run dir.
+    beads_fov : str or None
+        FOV key for the beads position (e.g. "C/1/000000"). Used for
+        registration QC: per-timepoint phase cross-correlation between
+        LF and LS beads channels is computed and timepoints with poor
+        registration are added to the global drop list.
+        This FOV is excluded from the regular processing pipeline.
     """
     lf_zarr = root_path / dataset / "1-preprocess" / "label-free" / "0-reconstruct" / f"{dataset}.zarr"
     ls_zarr = root_path / dataset / "1-preprocess" / "light-sheet" / "raw" / "1-register" / f"{dataset}.zarr"
+    ls_deconvolved_zarr = root_path / dataset / "1-preprocess" / "light-sheet" / "deconvolved" / "2-register" / f"{dataset}.zarr"
+    bf_zarr = root_path / dataset / "0-convert" / f"{dataset}_symlink" / f"{dataset}_labelfree_1.zarr"
+   # vs_zarr = root_path / dataset / "1-preprocess" / "label-free" / "1-virtual-stain" / f"{dataset}.zarr"
+
+    # If reusing stage 1, read from existing run; create new dir for stage 2 output
+    if stage1_run_dir is not None:
+        stage1_dir = root_path / dataset / "dynacell" / stage1_run_dir
+        plots_dir = stage1_dir / "plots"
+        print(f"Reusing stage 1 results from: {stage1_dir}")
+    else:
+        stage1_dir = None
+
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = root_path / dataset / "dynacell" / f"run_{run_id}"
     output_zarr = output_dir / f"{dataset}.zarr"
-    plots_dir = output_dir / "plots"
+    if stage1_dir is None:
+        plots_dir = output_dir / "plots"
     output_dir.mkdir(parents=True, exist_ok=True)
     print(f"Run ID: {run_id}")
     print(f"Output dir: {output_dir}")
@@ -1074,23 +1263,36 @@ def run_all_fovs(
     position_keys = [p.parts[-3:] for p in position_dirpaths]
     print(f"Found {len(position_keys)} FOVs")
 
-    # Get metadata from first FOV for resource estimation
-    with open_ome_zarr(position_dirpaths[0]) as lf_ds:
-        _, C_lf, Z_lf, Y_lf, X_lf = lf_ds.data.shape
-        scale = list(lf_ds.scale)
-        lf_channel_names = list(lf_ds.channel_names)
+    # Validate beads FOV
+    if beads_fov is not None:
+        beads_key = tuple(beads_fov.split("/"))
+        if beads_key not in position_keys:
+            print(f"WARNING: beads_fov '{beads_fov}' not found in dataset, skipping beads QC")
+            beads_fov = None
+        else:
+            print(f"  Beads FOV: {beads_fov} (will run registration QC in addition to standard processing)")
 
-    ls_first = ls_zarr / "/".join(position_keys[0])
-    with open_ome_zarr(ls_first) as ls_ds:
-        _, C_ls, Z_ls, Y_ls, X_ls = ls_ds.data.shape
-        ls_channel_names = list(ls_ds.channel_names)
+    # Get metadata from first FOV for resource estimation
+    # All zarrs that will be cropped in stage 2
+    all_zarrs = [lf_zarr, ls_zarr, ls_deconvolved_zarr, bf_zarr]  # vs_zarr commented out
+    first_fov = "/".join(position_keys[0])
+
+    all_channel_names = []
+    total_elements_per_t = 0
+    bytes_per_element = np.dtype(np.float32).itemsize
+    scale = None
+
+    for zarr_path in all_zarrs:
+        fov_path = zarr_path / first_fov
+        with open_ome_zarr(fov_path) as ds:
+            _, C_i, Z_i, Y_i, X_i = ds.data.shape
+            all_channel_names.extend(list(ds.channel_names))
+            total_elements_per_t += C_i * Z_i * Y_i * X_i
+            if scale is None:
+                scale = list(ds.scale)
 
     # Resource estimation
-    bytes_per_element = np.dtype(np.float32).itemsize
-    gb_per_timepoint = (
-        (C_lf * Z_lf * Y_lf * X_lf + C_ls * Z_ls * Y_ls * X_ls)
-        * bytes_per_element / 1e9
-    )
+    gb_per_timepoint = total_elements_per_t * bytes_per_element / 1e9
     gb_ram_per_cpu = max(4, int(np.ceil(gb_per_timepoint * 4)))
     num_cpus = 4
 
@@ -1098,90 +1300,283 @@ def run_all_fovs(
     slurm_out_path = output_dir / "slurm_output"
     slurm_out_path.mkdir(parents=True, exist_ok=True)
 
-    # ========================
-    # STAGE 1: Compute metadata
-    # ========================
-    print(f"\n=== STAGE 1: Computing metadata for {len(position_keys)} FOVs ===")
+    if stage1_dir is None:
+        # ========================
+        # STAGE 1: Compute metadata
+        # ========================
+        print(f"\n=== STAGE 1: Computing metadata for {len(position_keys)} FOVs ===")
 
-    slurm_args_s1 = {
-        "slurm_job_name": "dynacell_s1_metadata",
-        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
-        "slurm_cpus_per_task": num_cpus,
-        "slurm_array_parallelism": 100,
-        "slurm_time": 120,
-        "slurm_partition": "cpu",
+        slurm_args_s1 = {
+            "slurm_job_name": "dynacell_s1_metadata",
+            "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
+            "slurm_cpus_per_task": num_cpus,
+            "slurm_array_parallelism": 100,
+            "slurm_time": 120,
+            "slurm_partition": "cpu",
+        }
+
+        executor_s1 = submitit.AutoExecutor(folder=slurm_out_path / "stage1", cluster=cluster)
+        executor_s1.update_parameters(**slurm_args_s1)
+
+        print(f"  Resources: {num_cpus} CPUs, {gb_ram_per_cpu}G RAM/CPU")
+        jobs_s1 = []
+
+        with submitit.helpers.clean_env(), executor_s1.batch():
+            for position_key in position_keys:
+                fov = "/".join(position_key)
+                fov_name = "_".join(position_key)
+                im_lf_path = lf_zarr / fov
+                im_ls_path = ls_zarr / fov
+                output_plots_dir = plots_dir / fov_name
+                output_plots_dir.mkdir(parents=True, exist_ok=True)
+
+                job = executor_s1.submit(
+                    compute_fov_metadata,
+                    im_lf_path=im_lf_path,
+                    im_ls_path=im_ls_path,
+                    output_plots_dir=output_plots_dir,
+                    fov=fov,
+                    lf_mask_radius=lf_mask_radius,
+                    n_std=n_std,
+                    DEBUG=True,
+                )
+                jobs_s1.append(job)
+
+        job_ids_s1 = [job.job_id for job in jobs_s1]
+        log_path_s1 = slurm_out_path / "stage1_job_ids.log"
+        with log_path_s1.open("w") as f:
+            f.write("\n".join(job_ids_s1))
+        print(f"Stage 1: Submitted {len(jobs_s1)} jobs. IDs: {log_path_s1}")
+
+        # Submit beads registration QC job (runs in parallel with stage 1)
+        beads_qc_job = None
+        if beads_fov is not None:
+            beads_fov_name = "_".join(beads_fov.split("/"))
+            beads_plots_dir = plots_dir / beads_fov_name
+            beads_plots_dir.mkdir(parents=True, exist_ok=True)
+
+            executor_beads = submitit.AutoExecutor(
+                folder=slurm_out_path / "beads_qc", cluster=cluster
+            )
+            executor_beads.update_parameters(**slurm_args_s1)
+            beads_qc_job = executor_beads.submit(
+                compute_beads_registration_qc,
+                im_lf_path=lf_zarr / beads_fov,
+                im_ls_path=ls_zarr / beads_fov,
+                output_plots_dir=beads_plots_dir,
+                n_std=n_std,
+            )
+            print(f"Beads QC: Submitted job {beads_qc_job.job_id}")
+
+        # ========================
+        # Wait for stage 1 to complete
+        # ========================
+        print("\nWaiting for stage 1 jobs to complete...")
+        results_s1 = [job.result() for job in jobs_s1]
+
+        # Check for failures
+        failed = [r for r in results_s1 if r.get("status") != "ok"]
+        if failed:
+            print(f"WARNING: {len(failed)} FOVs failed in stage 1:")
+            for r in failed:
+                print(f"  {r}")
+
+        ok_results = [r for r in results_s1 if r.get("status") == "ok"]
+        if not ok_results:
+            print("ERROR: No FOVs succeeded in stage 1")
+            return
+    else:
+        # ========================
+        # Read stage 1 results from existing run
+        # ========================
+        print(f"\n=== Skipping stage 1, reading results from {stage1_dir} ===")
+        global_summary_path = stage1_dir / "global_summary.csv"
+        if global_summary_path.exists():
+            ok_results = pd.read_csv(global_summary_path).to_dict("records")
+        else:
+            # Reconstruct from per-FOV summaries
+            ok_results = []
+            for position_key in position_keys:
+                fov_name = "_".join(position_key)
+                summary_path = plots_dir / fov_name / "fov_summary.csv"
+                if summary_path.exists():
+                    summary = pd.read_csv(summary_path).to_dict("records")[0]
+                    if summary.get("status") == "ok":
+                        ok_results.append(summary)
+        if not ok_results:
+            print("ERROR: No valid stage 1 results found")
+            return
+        print(f"  Loaded {len(ok_results)} FOV results from stage 1")
+        beads_qc_job = None  # no beads job when reusing stage 1
+
+    # ========================
+    # Collect beads registration QC results
+    # ========================
+    beads_drop_indices = np.array([], dtype=int)
+    if beads_qc_job is not None:
+        print("\nWaiting for beads QC job to complete...")
+        beads_qc_result = beads_qc_job.result()
+        beads_drop_indices = beads_qc_result["drop_indices"]
+        print(f"Beads QC: {len(beads_drop_indices)} bad registration timepoints")
+    elif beads_fov is not None:
+        # Reusing stage 1: read beads QC from existing CSV
+        beads_fov_name = "_".join(beads_fov.split("/"))
+        beads_qc_csv = plots_dir / beads_fov_name / "registration_qc.csv"
+        if beads_qc_csv.exists():
+            beads_qc_df = pd.read_csv(beads_qc_csv)
+            shift_mag = beads_qc_df["shift_magnitude"].values
+            pearson = beads_qc_df["pearson_corr"].values
+            mu_s, sigma_s = np.nanmean(shift_mag), np.nanstd(shift_mag)
+            mu_c, sigma_c = np.nanmean(pearson), np.nanstd(pearson)
+            shift_bad = np.where(shift_mag > mu_s + n_std * sigma_s)[0]
+            corr_bad = np.where(pearson < mu_c - n_std * sigma_c)[0]
+            beads_drop_indices = np.array(
+                sorted(set(shift_bad) | set(corr_bad)), dtype=int
+            )
+            print(f"Beads QC (from CSV): {len(beads_drop_indices)} bad registration timepoints")
+        else:
+            print(f"WARNING: No beads QC CSV found at {beads_qc_csv}")
+
+    # ========================
+    # Disqualify FOVs with too many drops
+    # ========================
+    fov_drop_counts = {}
+    ok_fov_set = {"_".join(r["fov"].split("/")) for r in ok_results}
+
+    for fov_result in ok_results:
+        fov = fov_result["fov"]
+        fov_name = "_".join(fov.split("/"))
+        drop_path = plots_dir / fov_name / "drop_list.csv"
+        n_drops = 0
+        if drop_path.exists() and drop_path.stat().st_size > 0:
+            drop_df = pd.read_csv(drop_path)
+            n_drops = len(drop_df)
+        fov_drop_counts[fov_name] = n_drops
+
+    disqualified_fovs = {
+        fov_name for fov_name, n in fov_drop_counts.items() if n > max_drops
     }
 
-    executor_s1 = submitit.AutoExecutor(folder=slurm_out_path / "stage1", cluster=cluster)
-    executor_s1.update_parameters(**slurm_args_s1)
-
-    print(f"  Resources: {num_cpus} CPUs, {gb_ram_per_cpu}G RAM/CPU")
-    jobs_s1 = []
-
-    with submitit.helpers.clean_env(), executor_s1.batch():
-        for position_key in position_keys:
-            fov = "/".join(position_key)
-            fov_name = "_".join(position_key)
-            im_lf_path = lf_zarr / fov
-            im_ls_path = ls_zarr / fov
-            output_plots_dir = plots_dir / fov_name
-            output_plots_dir.mkdir(parents=True, exist_ok=True)
-
-            job = executor_s1.submit(
-                compute_fov_metadata,
-                im_lf_path=im_lf_path,
-                im_ls_path=im_ls_path,
-                output_plots_dir=output_plots_dir,
-                fov=fov,
-                lf_mask_radius=lf_mask_radius,
-                n_std=n_std,
-                DEBUG=True,
-            )
-            jobs_s1.append(job)
-
-    job_ids_s1 = [job.job_id for job in jobs_s1]
-    log_path_s1 = slurm_out_path / "stage1_job_ids.log"
-    with log_path_s1.open("w") as f:
-        f.write("\n".join(job_ids_s1))
-    print(f"Stage 1: Submitted {len(jobs_s1)} jobs. IDs: {log_path_s1}")
-
-    # ========================
-    # Wait for stage 1 to complete
-    # ========================
-    print("\nWaiting for stage 1 jobs to complete...")
-    results_s1 = [job.result() for job in jobs_s1]
-
-    # Check for failures
-    failed = [r for r in results_s1 if r.get("status") != "ok"]
-    if failed:
-        print(f"WARNING: {len(failed)} FOVs failed in stage 1:")
-        for r in failed:
-            print(f"  {r}")
-
-    ok_results = [r for r in results_s1 if r.get("status") == "ok"]
-    if not ok_results:
-        print("ERROR: No FOVs succeeded in stage 1")
+    # If the beads FOV is disqualified, registration is too poor to continue
+    beads_fov_name = "_".join(beads_fov.split("/")) if beads_fov else None
+    if beads_fov_name is not None and beads_fov_name in disqualified_fovs:
+        print(f"\n{'='*60}")
+        print(f"ERROR: Beads FOV '{beads_fov}' is disqualified "
+              f"({fov_drop_counts[beads_fov_name]} dropped frames > {max_drops}).")
+        print(f"Registration quality is insufficient for this dataset.")
+        print(f"Please improve the registration before running dynacell preprocessing.")
+        print(f"{'='*60}")
         return
+
+    # Generate annotations.csv (status: 0=not checked, 1=visual checked, -1=unfit)
+    annotation_rows = []
+    for position_key in position_keys:
+        fov_name = "_".join(position_key)
+        if fov_name == beads_fov_name:
+            status = 1
+            well_map = "Beads"
+            comments = f"beads: {len(beads_drop_indices)} bad registration timepoints"
+        elif fov_name not in ok_fov_set:
+            status = -1
+            well_map = ""
+            comments = "auto: failed stage 1"
+        elif fov_name in disqualified_fovs:
+            status = -1
+            well_map = ""
+            comments = (
+                f"auto: {fov_drop_counts[fov_name]} dropped frames (>{max_drops})"
+            )
+        else:
+            status = 0
+            well_map = ""
+            comments = ""
+        annotation_rows.append({
+            "fov": fov_name,
+            "status": status,
+            "Well-map": well_map,
+            "comments": comments,
+        })
+    annotations_df = pd.DataFrame(
+        annotation_rows, columns=["fov", "status", "Well-map", "comments"]
+    )
+    annotations_path = output_dir / "annotations.csv"
+    annotations_df.to_csv(annotations_path, index=False)
+    print(f"Saved annotations to {annotations_path}")
+
+    # Filter to only qualified FOVs for stage 2
+    qualified_results = [
+        r for r in ok_results
+        if "_".join(r["fov"].split("/")) not in disqualified_fovs
+    ]
+
+    print(f"\n=== FOV qualification (max {max_drops} drops) ===")
+    print(f"  Total FOVs: {len(position_keys)}")
+    print(f"  Failed stage 1: {len(position_keys) - len(ok_results)}")
+    print(f"  Disqualified (>{max_drops} drops): {len(disqualified_fovs)}")
+    for fov_name in sorted(disqualified_fovs):
+        print(f"    {fov_name}: {fov_drop_counts[fov_name]} drops")
+    print(f"  Qualified for stage 2: {len(qualified_results)}")
+
+    if not qualified_results:
+        print("ERROR: No qualified FOVs remaining after disqualification")
+        return
+
+    ok_results = qualified_results
+
+    # ========================
+    # Unify drop list from QUALIFIED FOVs only + beads QC
+    # (disqualified FOVs are already excluded from ok_results above)
+    # ========================
+    global_drop_set = set()
+    T_total = ok_results[0]["T_total"]
+    for fov_result in ok_results:
+        fov = fov_result["fov"]
+        fov_name = "_".join(fov.split("/"))
+        drop_path = plots_dir / fov_name / "drop_list.csv"
+        if drop_path.exists() and drop_path.stat().st_size > 0:
+            drop_df = pd.read_csv(drop_path)
+            if len(drop_df) > 0:
+                global_drop_set.update(drop_df["t"].tolist())
+
+    # Merge beads registration QC bad timepoints
+    beads_drop_set = set(int(t) for t in beads_drop_indices)
+    n_beads_new = len(beads_drop_set - global_drop_set)
+    global_drop_set.update(beads_drop_set)
+
+    global_keep_indices = np.array(
+        sorted(set(range(T_total)) - global_drop_set), dtype=int
+    )
+    print(f"\n=== Unified drop list (qualified FOVs + beads QC) ===")
+    print(f"  Drops from qualified FOVs: {len(global_drop_set) - len(beads_drop_set & global_drop_set)}")
+    if len(beads_drop_indices) > 0:
+        print(f"  Beads QC bad timepoints: {len(beads_drop_indices)} "
+              f"({n_beads_new} new)")
+    print(f"  Total global drops: {len(global_drop_set)}")
+    print(f"  Remaining after unified drop: {len(global_keep_indices)} / {T_total}")
+
+    global_drop_csv = output_dir / "drop_list_all_fovs.csv"
 
     # ========================
     # Gather min T, Y, X across FOVs
     # ========================
-    T_min = min(r["T_out"] for r in ok_results)
+    T_min = len(global_keep_indices)
     Y_min = min(r["Y_crop"] for r in ok_results)
     X_min = min(r["X_crop"] for r in ok_results)
 
-    all_channel_names = lf_channel_names + ls_channel_names
     C_out = len(all_channel_names)
     Z_out = z_final
 
     print(f"\n=== Stage 1 summary ===")
-    print(f"  FOVs OK: {len(ok_results)} / {len(results_s1)}")
+    print(f"  FOVs OK: {len(ok_results)}")
     print(f"  T_min (after drops): {T_min}")
     print(f"  Y_min: {Y_min}, X_min: {X_min}")
     print(f"  Output plate shape: ({T_min}, {C_out}, {Z_out}, {Y_min}, {X_min})")
 
-    # Save global summary
+    # Save global summary — use actual cropped values, not per-FOV stage 1 values
     global_summary = pd.DataFrame(ok_results)
+    global_summary["T_out"] = T_min
+    global_summary["Y_crop"] = Y_min
+    global_summary["X_crop"] = X_min
     global_summary.to_csv(output_dir / "global_summary.csv", index=False)
     print(f"Saved global summary to {output_dir / 'global_summary.csv'}")
 
@@ -1216,27 +1611,34 @@ def run_all_fovs(
     # ========================
     # Combined blank frames summary across all FOVs
     # ========================
-    blank_rows = []
+    drop_rows = []
     for fov in ok_fovs:
         fov_name = "_".join(fov.split("/"))
         drop_path = plots_dir / fov_name / "drop_list.csv"
         if drop_path.stat().st_size > 0:
             drop_df = pd.read_csv(drop_path)
             for _, row in drop_df.iterrows():
-                blank_rows.append({
+                drop_rows.append({
                     "fov": fov_name,
                     "t": int(row["t"]),
                     "reason": row["reason"],
                 })
-    blank_summary_df = pd.DataFrame(blank_rows, columns=["fov", "t", "reason"])
-    blank_summary_path = output_dir / "drop_list_all_fovs.csv"
-    blank_summary_df.to_csv(blank_summary_path, index=False)
-    print(f"Saved combined drop list to {blank_summary_path}")
-    print(f"  Total dropped frames across FOVs: {len(blank_summary_df)}")
+    # Add beads registration QC drops
+    for t in sorted(beads_drop_set):
+        drop_rows.append({
+            "fov": "beads_qc",
+            "t": int(t),
+            "reason": "bad_registration",
+        })
+    drop_all_df = pd.DataFrame(drop_rows, columns=["fov", "t", "reason"])
+    drop_all_path = output_dir / "drop_list_all_fovs.csv"
+    drop_all_df.to_csv(drop_all_path, index=False)
+    print(f"Saved combined drop list to {drop_all_path}")
+    print(f"  Total entries: {len(drop_all_df)}, unique timepoints dropped: {drop_all_df['t'].nunique()}")
 
     # Per-FOV drop count summary
-    if len(blank_summary_df) > 0:
-        drop_counts = blank_summary_df.groupby("fov").size().reset_index(name="n_dropped")
+    if len(drop_all_df) > 0:
+        drop_counts = drop_all_df.groupby("fov").size().reset_index(name="n_dropped")
         print("  Drops per FOV:")
         for _, row in drop_counts.iterrows():
             print(f"    {row['fov']}: {row['n_dropped']}")
@@ -1275,17 +1677,16 @@ def run_all_fovs(
     with submitit.helpers.clean_env(), executor_s2.batch():
         for fov in ok_fovs:
             fov_name = "_".join(fov.split("/"))
-            im_lf_path = lf_zarr / fov
-            im_ls_path = ls_zarr / fov
+            input_zarr_paths = [lf_zarr / fov, ls_zarr / fov, ls_deconvolved_zarr / fov, bf_zarr / fov] #, vs_zarr / fov]
             fov_plots_dir = plots_dir / fov_name
 
             job = executor_s2.submit(
                 crop_fov,
-                im_lf_path=im_lf_path,
-                im_ls_path=im_ls_path,
+                input_zarr_paths=input_zarr_paths,
                 output_zarr=output_zarr,
                 output_plots_dir=fov_plots_dir,
                 fov=fov,
+                global_drop_csv=global_drop_csv,
                 z_final=z_final,
                 T_out=T_min,
                 Y_out=Y_min,
@@ -1305,6 +1706,12 @@ def run_all_fovs(
         job.result()
     print(f"\nDone! Output plate at {output_zarr}")
 
+    # ========================
+    # Generate QC report
+    # ========================
+    print(f"\n=== Generating QC report ===")
+    generate_dataset_report(output_dir, overlay_channels=overlay_channels)
+
 
 if __name__ == "__main__":
     test_overlap_bbox()
@@ -1321,4 +1728,7 @@ if __name__ == "__main__":
         dataset=dataset,
         lf_mask_radius=0.75,
         local=False,
+        stage1_run_dir=None,
+        beads_fov="C/1/000000",
+        overlay_channels=["Phase3D", "raw GFP EX488 EM525-45"],
     )
