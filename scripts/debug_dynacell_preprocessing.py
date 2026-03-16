@@ -1218,6 +1218,7 @@ def run_all_fovs(
     beads_fov: str | None = None,
     max_drops: int = 5,
     overlay_channels: list[str] | None = None,
+    exclude_fovs: list[str] | None = None,
 ):
     """Two-stage pipeline:
     Stage 1: Compute bbox, z_focus, drop list per FOV (parallel submitit jobs).
@@ -1262,6 +1263,14 @@ def run_all_fovs(
     position_dirpaths = sorted([Path(p) for p in glob(str(lf_zarr / "*" / "*" / "*"))])
     position_keys = [p.parts[-3:] for p in position_dirpaths]
     print(f"Found {len(position_keys)} FOVs")
+
+    # Exclude user-specified FOVs
+    if exclude_fovs:
+        exclude_set = {tuple(f.split("/")) for f in exclude_fovs}
+        excluded = [k for k in position_keys if k in exclude_set]
+        position_keys = [k for k in position_keys if k not in exclude_set]
+        if excluded:
+            print(f"  Excluded by user: {len(excluded)} FOVs: {['/'.join(k) for k in excluded]}")
 
     # Validate beads FOV
     if beads_fov is not None:
@@ -1496,9 +1505,19 @@ def run_all_fovs(
             "Well-map": well_map,
             "comments": comments,
         })
+    # Add user-excluded FOVs
+    if exclude_fovs:
+        for fov in exclude_fovs:
+            annotation_rows.append({
+                "fov": "_".join(fov.split("/")),
+                "status": -1,
+                "Well-map": "",
+                "comments": "user: excluded",
+            })
     annotations_df = pd.DataFrame(
         annotation_rows, columns=["fov", "status", "Well-map", "comments"]
     )
+    annotations_df = annotations_df.sort_values("fov").reset_index(drop=True)
     annotations_path = output_dir / "annotations.csv"
     annotations_df.to_csv(annotations_path, index=False)
     print(f"Saved annotations to {annotations_path}")
@@ -1722,13 +1741,15 @@ if __name__ == "__main__":
     test_blank_first_frame()
     print("\n=== SUBMITTING ALL FOVs ===")
     root_path = Path("/hpc/projects/intracellular_dashboard/organelle_dynamics/")
-    dataset = "2024_11_07_A549_SEC61_DENV"
+    dataset = "2025_07_22_A549_SEC61_TOMM20_G3BP1_ZIKV"
     run_all_fovs(
         root_path=root_path,
         dataset=dataset,
         lf_mask_radius=0.75,
         local=False,
         stage1_run_dir=None,
-        beads_fov="C/1/000000",
+        beads_fov="A/3/000000",
         overlay_channels=["Phase3D", "raw GFP EX488 EM525-45"],
+        exclude_fovs=["A/3/000001", "A/3/001000", "A/3/001001"],
+        
     )
