@@ -1,3 +1,5 @@
+from collections.abc import Callable
+
 import numpy as np
 
 # List of modules to scan for functions - ultrack imported only if available
@@ -22,7 +24,7 @@ FUNCTION_MAP = {
 }
 
 
-def resolve_function(function_name: str, custom_functions: dict = None):
+def resolve_function(function_name: str, custom_functions: dict = None) -> Callable:
     """
     Resolve a function by its name from the predefined FUNCTION_MAP.
 

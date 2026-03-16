@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import ants
 import click
 import napari
@@ -25,7 +27,7 @@ def _optimize_registration(
     source_czyx: np.ndarray,
     target_czyx: np.ndarray,
     initial_tform: np.ndarray,
-    source_channel_index: int | list = 0,
+    source_channel_index: int | list[int] = 0,
     target_channel_index: int = 0,
     crop: bool = False,
     target_mask_radius: float | None = None,
@@ -34,7 +36,7 @@ def _optimize_registration(
     verbose: bool = False,
     slurm: bool = False,
     t_idx: int = 0,
-    output_folder_path: str | None = None,
+    output_folder_path: Path | None = None,
 ) -> np.ndarray | None:
     """
     Optimize the affine transform between source and target channels using ANTs library.
@@ -47,7 +49,7 @@ def _optimize_registration(
         Target channel data in CZYX format.
     initial_tform : np.ndarray
         Approximate estimate of the affine transform matrix, often obtained through manual registration, see `estimate-registration`.
-    source_channel_index : int | list, optional
+    source_channel_index : int | list[int], optional
         Index or list of indices of source channels to be used for registration, by default 0.
     target_channel_index : int, optional
         Index of the target channel to be used for registration, by default 0.
@@ -65,7 +67,7 @@ def _optimize_registration(
         Whether the function is running in a SLURM job, which will save the output to a file, by default False.
     t_idx : int, optional
         Time index for the registration, by default 0. Only used if `slurm` is True.
-    output_folder_path : str | None, optional
+    output_folder_path : Path | None, optional
         Path to the folder where the output transform will be saved if `slurm` is True, by default None.
 
     Returns
@@ -205,17 +207,39 @@ def _optimize_registration(
     help="Display the registered channels in a napari viewer",
 )
 def optimize_registration_cli(
-    source_position_dirpaths,
-    target_position_dirpaths,
-    config_filepath,
-    output_filepath,
-    display_viewer,
-):
+    source_position_dirpaths: list[Path],
+    target_position_dirpaths: list[Path],
+    config_filepath: Path,
+    output_filepath: Path,
+    display_viewer: bool,
+) -> None:
     """
     Optimize the affine transform between source and target channels using ANTs library.
 
-    Start by generating an initial affine transform with `estimate-registration`.
+    This function refines an initial affine transform (typically obtained from
+    `estimate-registration`) by optimizing registration parameters using the ANTs
+    library. The optimized transform is saved to a YAML configuration file.
 
+    Parameters
+    ----------
+    source_position_dirpaths : list[Path]
+        List of paths to the source position directories (OME-Zarr format).
+    target_position_dirpaths : list[Path]
+        List of paths to the target position directories (OME-Zarr format).
+    config_filepath : Path
+        Path to the YAML configuration file containing initial registration settings.
+    output_filepath : Path
+        Path to the output YAML file where optimized registration settings will be saved.
+    display_viewer : bool
+        If True, display the registered channels in a napari viewer for visual inspection.
+
+    Returns
+    -------
+    None
+        Optimized registration settings are saved to the specified output file.
+
+    Examples
+    --------
     >> biahub optimize-registration -s ./acq_name_virtual_staining_reconstructed.zarr/0/0/0 -t ./acq_name_lightsheet_deskewed.zarr/0/0/0 -c ./transform.yml -o ./optimized_transform.yml -d -v
     """
 

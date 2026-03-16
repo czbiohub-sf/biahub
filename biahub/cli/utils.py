@@ -6,7 +6,6 @@ import multiprocessing as mp
 
 from functools import partial
 from pathlib import Path
-from typing import List, Tuple
 
 import click
 import numpy as np
@@ -18,10 +17,23 @@ from numpy.typing import DTypeLike
 from tqdm import tqdm
 
 
-def update_model(model_instance, update_dict):
+def update_model(model_instance, update_dict: dict) -> type:
     """
-    Properly updates a Pydantic model with only the provided values while keeping the defaults.
+    Properly update a Pydantic model with only the provided values while keeping the defaults.
+
     This ensures that nested models retain missing values instead of getting overwritten.
+
+    Parameters
+    ----------
+    model_instance
+        The Pydantic model instance to update.
+    update_dict : dict
+        Dictionary of field names and values to update.
+
+    Returns
+    -------
+    type
+        A new model instance with updated fields.
     """
     updated_fields = {}
     for key, value in update_dict.items():
@@ -40,32 +52,48 @@ def update_model(model_instance, update_dict):
 # TODO: convert all code to use this function from now on
 def create_empty_hcs_zarr(
     store_path: Path,
-    position_keys: list[Tuple[str]],
+    position_keys: list[tuple[str, str, str]],
     channel_names: list[str],
-    shape: Tuple[int],
-    chunks: Tuple[int] = None,
-    scale: Tuple[float] = (1, 1, 1, 1, 1),
+    shape: tuple[int, int, int, int, int],
+    chunks: tuple[int, int, int, int, int] | None = None,
+    scale: tuple[float, float, float, float, float] = (1, 1, 1, 1, 1),
     dtype: DTypeLike = np.float32,
-    max_chunk_size_bytes=500e6,
+    max_chunk_size_bytes: float = 500e6,
 ) -> None:
     """
-    If the plate does not exist, create an empty zarr plate.
-    If the plate exists, append positions and channels if they are not
-    already in the plate.
+    Create an empty HCS plate Zarr store or append positions and channels if it exists.
+
+    If the plate does not exist, create an empty zarr plate. If the plate exists,
+    append positions and channels if they are not already in the plate.
+
     Parameters
     ----------
     store_path : Path
-        hcs plate path
-    position_keys : list[Tuple[str]]
+        HCS plate path.
+    position_keys : list[tuple[str, str, str]]
         Position keys, will append if not present in the plate.
-        e.g. [("A", "1", "0"), ("A", "1", "1")]
-    shape : Tuple[int]
-    chunks : Tuple[int]
-    scale : Tuple[float]
+        e.g. [("A", "1", "0"), ("A", "1", "1")].
     channel_names : list[str]
         Channel names, will append if not present in metadata.
-    dtype : DTypeLike
+    shape : tuple[int, int, int, int, int]
+        Shape of the data array in (T, C, Z, Y, X) format.
+    chunks : tuple[int, int, int, int, int] | None, optional
+        Chunk size in (T, C, Z, Y, X) format. If None, chunks are automatically
+        calculated to fit within max_chunk_size_bytes, by default None.
+    scale : tuple[float, float, float, float, float], optional
+        Physical scale of the data in (T, C, Z, Y, X) format, by default (1, 1, 1, 1, 1).
+    dtype : DTypeLike, optional
+        Data type of the array, by default np.float32.
+    max_chunk_size_bytes : float, optional
+        Maximum chunk size in bytes for automatic chunk calculation, by default 500e6.
 
+    Returns
+    -------
+    None
+        The Zarr store is created or modified in-place.
+
+    Notes
+    -----
     Modifying from recOrder
     https://github.com/mehta-lab/recOrder/blob/d31ad910abf84c65ba927e34561f916651cbb3e8/recOrder/cli/utils.py#L12
     """
@@ -119,7 +147,9 @@ def create_empty_hcs_zarr(
 
 
 def get_output_paths(
-    input_paths: list[Path], output_zarr_path: Path, ensure_unique_positions: bool = None
+    input_paths: list[Path],
+    output_zarr_path: Path,
+    ensure_unique_positions: bool | None = None,
 ) -> list[Path]:
     """
     Generates a mirrored output path list given an input list of positions
@@ -130,10 +160,10 @@ def get_output_paths(
         List of input position paths
     output_zarr_path : Path
         Base output zarr path
-    ensure_unique_positions : bool, optional
+    ensure_unique_positions : bool | None, optional
         If True, ensures unique output position paths by appending a suffix to the column part
         when duplicate position names are detected.
-        For example, if "A/1/0" is duplicated, it becomes "A/1d0/0", "A/1d1/0", etc.
+        For example, if "A/1/0" is duplicated, it becomes "A/1d0/0", "A/1d1/0", etc., by default None.
 
     Returns
     -------
@@ -180,7 +210,29 @@ def get_output_paths(
 def apply_function_to_zyx_and_save(
     func, position: Position, output_path: Path, t_idx: int, c_idx: int, **kwargs
 ) -> None:
-    """Load a zyx array from a Position object, apply a transformation and save the result to file"""
+    """
+    Load a ZYX array from a Position object, apply a transformation and save the result to file.
+
+    Parameters
+    ----------
+    func
+        Function to apply to the ZYX array.
+    position : Position
+        Position object containing the input data.
+    output_path : Path
+        Path to the output Zarr store where the result will be saved.
+    t_idx : int
+        Time index to process.
+    c_idx : int
+        Channel index to process.
+    **kwargs
+        Additional keyword arguments to pass to the function.
+
+    Returns
+    -------
+    None
+        The processed data is written to the output store.
+    """
     click.echo(f"Processing c={c_idx}, t={t_idx}")
 
     zyx_data = position[0][t_idx, c_idx]
@@ -205,10 +257,38 @@ def apply_transform_to_zyx_and_save_v2(
     output_channel_indices: list[int],
     t_idx: int,
     t_idx_out: int,
-    c_idx: int = None,
+    c_idx: int | None = None,
     **kwargs,
 ) -> None:
-    """Load a zyx array from a Position object, apply a transformation to CZYX or ZYX and save the result to file"""
+    """
+    Load a ZYX or CZYX array from a Position object, apply a transformation and save the result to file.
+
+    Parameters
+    ----------
+    func
+        Function to apply to the data array.
+    position : Position
+        Position object containing the input data.
+    output_path : Path
+        Path to the output Zarr store where the result will be saved.
+    input_channel_indices : list[int]
+        List of input channel indices to process.
+    output_channel_indices : list[int]
+        List of output channel indices where results will be written.
+    t_idx : int
+        Input time index to process.
+    t_idx_out : int
+        Output time index where results will be written.
+    c_idx : int | None, optional
+        Channel index (used when input_channel_indices is empty), by default None.
+    **kwargs
+        Additional keyword arguments to pass to the function.
+
+    Returns
+    -------
+    None
+        The processed data is written to the output store.
+    """
 
     # TODO: temporary fix to slumkit issue
     if _is_nested(input_channel_indices):
@@ -260,7 +340,27 @@ def process_single_position(
     num_processes: int = mp.cpu_count(),
     **kwargs,
 ) -> None:
-    """Register a single position with multiprocessing parallelization over T and C"""
+    """
+    Process a single position with multiprocessing parallelization over T and C axes.
+
+    Parameters
+    ----------
+    func
+        Function to apply to each ZYX array.
+    input_data_path : Path
+        Path to the input OME-Zarr dataset.
+    output_path : Path
+        Path to the output OME-Zarr dataset.
+    num_processes : int, optional
+        Number of processes to use for parallelization, by default mp.cpu_count().
+    **kwargs
+        Additional keyword arguments to pass to the function.
+
+    Returns
+    -------
+    None
+        Processed data is written to the output dataset.
+    """
     # Function to be applied
     click.echo(f"Function to be applied: \t{func}")
 
@@ -315,14 +415,44 @@ def process_single_position_v2(
     func,
     input_data_path: Path,
     output_path: Path,
-    time_indices: list = [0],
-    time_indices_out: list = [0],
-    input_channel_idx: list = [],
-    output_channel_idx: list = [],
+    time_indices: list[int] | str = [0],
+    time_indices_out: list[int] | None = None,
+    input_channel_idx: list[int] | None = None,
+    output_channel_idx: list[int] | None = None,
     num_processes: int = mp.cpu_count(),
     **kwargs,
 ) -> None:
-    """Register a single position with multiprocessing parallelization over T and C"""
+    """
+    Process a single position with multiprocessing parallelization over T and C axes.
+
+    This is an improved version that supports flexible time and channel indexing.
+
+    Parameters
+    ----------
+    func
+        Function to apply to each data array.
+    input_data_path : Path
+        Path to the input OME-Zarr dataset.
+    output_path : Path
+        Path to the output OME-Zarr dataset.
+    time_indices : list[int] | str, optional
+        List of time indices to process, or "all" to process all timepoints, by default [0].
+    time_indices_out : list[int] | None, optional
+        List of output time indices. If None, matches time_indices, by default None.
+    input_channel_idx : list[int] | None, optional
+        List of input channel indices. If None or empty, processes all channels individually, by default None.
+    output_channel_idx : list[int] | None, optional
+        List of output channel indices. If None or empty, matches input_channel_idx, by default None.
+    num_processes : int, optional
+        Number of processes to use for parallelization, by default mp.cpu_count().
+    **kwargs
+        Additional keyword arguments to pass to the function.
+
+    Returns
+    -------
+    None
+        Processed data is written to the output dataset.
+    """
     # Function to be applied
     click.echo(f"Function to be applied: \t{func}")
 
@@ -411,22 +541,22 @@ def process_single_position_v2(
         )
 
 
-def copy_n_paste(zyx_data: np.ndarray, zyx_slicing_params: list) -> np.ndarray:
+def copy_n_paste(zyx_data: np.ndarray, zyx_slicing_params: list[slice]) -> np.ndarray:
     """
-    Load a zyx array and crop given a list of ZYX slices()
+    Crop a ZYX array given a list of ZYX slices.
 
     Parameters
     ----------
     zyx_data : np.ndarray
-        data to copy
-    zyx_slicing_params : list
-        list of slicing parameters for z,y,x
-        Each element is a single slice object [z_slice, y_slice, x_slice]
+        Data array to crop, with shape (Z, Y, X).
+    zyx_slicing_params : list[slice]
+        List of slicing parameters for z, y, x dimensions.
+        Each element is a slice object: [z_slice, y_slice, x_slice].
 
     Returns
     -------
     np.ndarray
-        crop of the input zyx_data given the slicing parameters
+        Cropped array from the input zyx_data given the slicing parameters.
     """
     # Replace NaN values with zeros
     zyx_data = np.nan_to_num(zyx_data, nan=0)
@@ -438,22 +568,22 @@ def copy_n_paste(zyx_data: np.ndarray, zyx_slicing_params: list) -> np.ndarray:
     return zyx_data_sliced
 
 
-def copy_n_paste_czyx(czyx_data: np.ndarray, czyx_slicing_params: list) -> np.ndarray:
+def copy_n_paste_czyx(czyx_data: np.ndarray, czyx_slicing_params: list[slice]) -> np.ndarray:
     """
-    Load a zyx array and crop given a list of ZYX slices()
+    Crop a CZYX array given a list of ZYX slices.
 
     Parameters
     ----------
     czyx_data : np.ndarray
-        data to copy
-    czyx_slicing_params : list
-        list of slicing parameters for z,y,x
-        Each element is a single slice object [z_slice, y_slice, x_slice]
+        Data array to crop, with shape (C, Z, Y, X).
+    czyx_slicing_params : list[slice]
+        List of slicing parameters for z, y, x dimensions.
+        Each element is a slice object: [z_slice, y_slice, x_slice].
 
     Returns
     -------
     np.ndarray
-        crop of the input czyx_data given the slicing parameters
+        Cropped array from the input czyx_data given the slicing parameters.
     """
     czyx_data_sliced = czyx_data[
         :,
@@ -466,14 +596,19 @@ def copy_n_paste_czyx(czyx_data: np.ndarray, czyx_slicing_params: list) -> np.nd
 
 def append_channels(input_data_path: Path, target_data_path: Path) -> None:
     """
-    Append channels to a target zarr store
+    Append channels from an input Zarr store to a target Zarr store.
 
     Parameters
     ----------
     input_data_path : Path
-        input zarr path = /input.zarr
+        Path to the input Zarr store containing channels to append.
     target_data_path : Path
-        target zarr path  = /target.zarr
+        Path to the target Zarr store where channels will be appended.
+
+    Returns
+    -------
+    None
+        Channels are appended to the target store in-place.
     """
     appending_dataset = open_ome_zarr(input_data_path, mode="r")
     appending_channel_names = appending_dataset.channel_names
@@ -587,7 +722,20 @@ def yaml_to_model(yaml_path: Path, model):
     return model(**raw_settings)
 
 
-def _is_nested(lst):
+def _is_nested(lst: list) -> bool:
+    """
+    Check if a list contains nested lists or strings.
+
+    Parameters
+    ----------
+    lst : list
+        List to check for nested structures.
+
+    Returns
+    -------
+    bool
+        True if the list contains nested lists or strings, False otherwise.
+    """
     return any(isinstance(i, list) for i in lst) or any(isinstance(i, str) for i in lst)
 
 
@@ -608,19 +756,24 @@ def _check_nan_n_zeros(input_array: np.ndarray) -> bool:
     return np.all(np.isnan(input_array)) or np.all(input_array == 0)
 
 
-def get_empty_frame_indices(input_array: np.ndarray) -> List[int]:
+def get_empty_frame_indices(input_array: np.ndarray) -> list[int]:
     """
     Get the indices of the empty frames in a 3D array.
 
     Parameters
     ----------
     input_array : np.ndarray
-        Input array (3D).
+        Input array with shape (Z, Y, X).
 
     Returns
     -------
-    List[int]
+    list[int]
         List of Z indices that are entirely zeros or NaNs.
+
+    Raises
+    ------
+    ValueError
+        If the input array is not 3D.
     """
     indices = []
 
@@ -635,35 +788,40 @@ def get_empty_frame_indices(input_array: np.ndarray) -> List[int]:
 
 
 def estimate_resources(
-    shape: Tuple[int, int, int, int, int],
+    shape: tuple[int, int, int, int, int],
     dtype: DTypeLike = np.float32,
     ram_multiplier: float = 1.0,
     max_num_cpus: int = 64,
     min_ram_per_cpu: int = 4,
-):
+) -> tuple[int, int]:
     """
     Estimate the number of CPUs and the amount of RAM required for processing a given data volume.
 
     Parameters
     ----------
-    shape : Tuple[int, int, int, int, int]
+    shape : tuple[int, int, int, int, int]
         The shape of the data as a tuple (T, C, Z, Y, X).
     dtype : DTypeLike, optional
-        The data type of the elements. Default is np.float32.
+        The data type of the elements, by default np.float32.
     ram_multiplier : float, optional
         Multiplier to scale the required memory for processing a given ZYX volume. For example,
         if a processing pipeline makes two copies of the input data, then the ram_multiplier
-        should be at least 3. Default is 1.0.
+        should be at least 3, by default 1.0.
     max_num_cpus : int, optional
-        Maximum number of available CPUs. Default is 64.
+        Maximum number of available CPUs, by default 64.
     min_ram_per_cpu : int, optional
-        Minimum amount of RAM per CPU in GB. Default is 4.
+        Minimum amount of RAM per CPU in GB, by default 4.
 
     Returns
     -------
-    Tuple[int, int]
+    tuple[int, int]
         A tuple containing the estimated number of CPUs and the required amount of RAM per CPU in GB.
         These values can be passed to the `--cpus_per_task` and `--mem_per_cpu` parameters of sbatch.
+
+    Raises
+    ------
+    ValueError
+        If the shape is not a 5-tuple.
     """
     if len(shape) != 5:
         raise ValueError("The shape must be a 5-tuple (T, C, Z, Y, X).")

@@ -1,5 +1,4 @@
 from pathlib import Path
-from typing import List
 
 import ants
 import click
@@ -36,7 +35,7 @@ def apply_stabilization_transform(
     zyx_data: np.ndarray,
     list_of_shifts: list[np.ndarray],
     t_idx: int,
-    output_shape: tuple[int, int, int] = None,
+    output_shape: tuple[int, int, int] | None = None,
 ):
     """
     Apply stabilization transformations to 3D or 4D volumetric data.
@@ -44,18 +43,26 @@ def apply_stabilization_transform(
     This function applies a time-indexed stabilization transformation to a single 3D (Z, Y, X) volume
     or a 4D (C, Z, Y, X) volume using a precomputed list of transformations.
 
-    Parameters:
-    - zyx_data (np.ndarray): Input 3D (Z, Y, X) or 4D (C, Z, Y, X) volumetric data.
-    - list_of_shifts (list[np.ndarray]): List of transformation matrices (one per time index).
-    - t_idx (int): Time index corresponding to the transformation to apply.
-    - output_shape (tuple[int, int, int], optional): Desired shape of the output stabilized volume.
-                                                     If None, the shape of `zyx_data` is used.
-                                                     Defaults to None.
+    Parameters
+    ----------
+    zyx_data : np.ndarray
+        Input 3D (Z, Y, X) or 4D (C, Z, Y, X) volumetric data.
+    list_of_shifts : list[np.ndarray]
+        List of transformation matrices (one per time index).
+    t_idx : int
+        Time index corresponding to the transformation to apply.
+    output_shape : tuple[int, int, int], optional
+        Desired shape of the output stabilized volume.
+        If None, the shape of `zyx_data` is used. Defaults to None.
 
-    Returns:
-    - np.ndarray: The stabilized 3D (Z, Y, X) or 4D (C, Z, Y, X) volume.
 
-    Notes:
+    Returns
+    -------
+    np.ndarray
+        The stabilized 3D (Z, Y, X) or 4D (C, Z, Y, X) volume.
+
+    Notes
+    -----
     - If `zyx_data` is 4D, the function recursively applies stabilization to each channel (C).
     - Uses ANTsPy for applying the transformation to the input data.
     - Handles `NaN` values in the input by replacing them with 0 before applying the transformation.
@@ -89,10 +96,10 @@ def apply_stabilization_transform(
 
 
 def stabilize(
-    input_position_dirpaths: List[str],
+    input_position_dirpaths: list[str],
     output_dirpath: str,
     config_filepaths: list[str],
-    sbatch_filepath: str = None,
+    sbatch_filepath: str | None = None,
     local: bool = False,
     monitor: bool = True,
 ):
@@ -103,28 +110,39 @@ def stabilize(
     configuration settings. It supports both local processing and SLURM-based distributed
     processing and outputs a Zarr dataset with stabilized channels.
 
-    Parameters:
-    - input_position_dirpaths (List[str]): List of file paths to the input OME-Zarr datasets for each position.
-    - output_dirpath (str): Directory path to save the stabilized output dataset.
-    - config_filepaths (list[str]): Paths to the YAML configuration files containing transformation settings.
-    - sbatch_filepath (str, optional): Path to a SLURM sbatch file to override default SLURM settings. Defaults to None.
-    - local (bool, optional): If True, runs the stabilization process locally instead of submitting to SLURM. Defaults to False.
+    Parameters
+    ----------
+    input_position_dirpaths : list[str]
+        List of file paths to the input OME-Zarr datasets for each position.
+    output_dirpath : str
+        Directory path to save the stabilized output dataset.
+    config_filepaths : list[str]
+        Paths to the YAML configuration files containing transformation settings.
+    sbatch_filepath : str | None, optional
+        Path to a SLURM sbatch file to override default SLURM settings, by default None.
+    local : bool, optional
+        If True, runs the stabilization process locally instead of submitting to SLURM, by default False.
+    monitor : bool, optional
+        If True, monitor the progress of the submitted jobs, by default True.
 
-    Returns:
-    - None: Writes the stabilized dataset to the specified output directory.
+    Returns
+    -------
+    None
+        The stabilized dataset is written to the specified output directory.
 
-    Notes:
+    Notes
+    -----
     - The function applies stabilization based on affine transformations specified in the configuration file.
     - Stabilization can estimate both YX and Z drifts and handles multi-channel data.
     - Input and output datasets must follow the OME-Zarr format.
 
-    Example:
-    >> biahub stabilize-timelapse
-        -i ./timelapse.zarr/0/0/0               # Input timelapse dataset
-        -o ./stabilized_timelapse.zarr          # Output directory for stabilized data
-        -c ./file_w_matrices.yml                # Configuration file with transformation matrices
-        -v                                      # Verbose mode for detailed logs
-        --local                                 # Run locally instead of submitting to SLURM
+    Examples
+    --------
+    >> biahub stabilize-timelapse \\
+        -i ./timelapse.zarr/0/0/0 \\
+        -o ./stabilized_timelapse.zarr \\
+        -c ./file_w_matrices.yml \\
+        --local
 
     """
 
@@ -326,22 +344,48 @@ def stabilize(
 @local()
 @monitor()
 def stabilize_cli(
-    input_position_dirpaths: List[str],
+    input_position_dirpaths: list[str],
     output_dirpath: str,
     config_filepaths: list[str],
-    sbatch_filepath: str,
+    sbatch_filepath: str | None,
     local: bool,
     monitor: bool,
 ):
     """
-    Stabilize a timelapse dataset by applying spatial transformations estimated by estimate-stabilization.
+    Stabilize a timelapse dataset by applying spatial transformations.
 
-    Example:
-    >> biahub stabilize-timelapse
-        -i ./timelapse.zarr/0/0/0               # Input timelapse dataset
-        -o ./stabilized_timelapse.zarr          # Output directory for stabilized data
-        -c ./file_w_matrices.yml                # Configuration file with transformation matrices
-        --local                                 # Run locally instead of submitting to SLURM
+    This command-line tool applies pre-computed stabilization transformations to a timelapse
+    dataset. The transformations are typically estimated using `estimate-stabilization` and
+    stored in a YAML configuration file. It supports parallel execution via SLURM or local
+    processing.
+
+    Parameters
+    ----------
+    input_position_dirpaths : list[str]
+        List of file paths to the input OME-Zarr datasets for each position.
+    output_dirpath : str
+        Directory path to save the stabilized output dataset.
+    config_filepaths : list[str]
+        Paths to the YAML configuration files containing transformation settings.
+    sbatch_filepath : str | None, optional
+        Path to a SLURM sbatch file to override default SLURM settings, by default None.
+    local : bool, optional
+        If True, runs the stabilization process locally instead of submitting to SLURM, by default False.
+    monitor : bool, optional
+        If True, monitor the progress of the submitted jobs, by default True.
+
+    Returns
+    -------
+    None
+        The stabilized dataset is written to the specified output directory.
+
+    Examples
+    --------
+    >> biahub stabilize \\
+        -i ./timelapse.zarr/0/0/0 \\
+        -o ./stabilized_timelapse.zarr \\
+        -c ./file_w_matrices.yml \\
+        --local
     """
     stabilize(
         input_position_dirpaths=input_position_dirpaths,

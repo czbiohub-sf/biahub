@@ -1,5 +1,4 @@
 from pathlib import Path
-from typing import List
 
 import click
 import numpy as np
@@ -29,20 +28,21 @@ from biahub.settings import DeskewSettings
 torch.multiprocessing.set_start_method('spawn', force=True)
 
 
-def _average_n_slices(data, average_window_width=1):
-    """Average an array over its first axis
+def _average_n_slices(data: np.ndarray, average_window_width: int = 1) -> np.ndarray:
+    """
+    Average an array over its first axis.
 
     Parameters
     ----------
-    data : np.array
-
+    data : np.ndarray
+        Input array to average.
     average_window_width : int, optional
-        Averaging window applied to the first axis.
+        Averaging window applied to the first axis, by default 1
 
     Returns
     -------
-    data_averaged : np.array
-
+    np.ndarray
+        Averaged array with shape (data.shape[0] // average_window_width, ...) + data.shape[1:]
     """
     # If first dimension isn't divisible by average_window_width, pad it
     remainder = data.shape[0] % average_window_width
@@ -57,21 +57,22 @@ def _average_n_slices(data, average_window_width=1):
     return data_averaged
 
 
-def _get_averaged_shape(deskewed_data_shape: tuple, average_window_width: int) -> tuple:
+def _get_averaged_shape(
+    deskewed_data_shape: tuple[int, ...], average_window_width: int
+) -> tuple[int, ...]:
     """
     Compute the shape of the data returned from `_average_n_slices` function.
 
     Parameters
     ----------
-    deskewed_data_shape : tuple
+    deskewed_data_shape : tuple[int, ...]
         Shape of the original data before averaging.
-
     average_window_width : int
         Averaging window applied to the first axis.
 
     Returns
     -------
-    averaged_shape : tuple
+    tuple[int, ...]
         Shape of the data returned from `_average_n_slices`.
     """
     averaged_shape = (
@@ -80,20 +81,21 @@ def _get_averaged_shape(deskewed_data_shape: tuple, average_window_width: int) -
     return averaged_shape
 
 
-def _get_transform_matrix(ls_angle_deg: float, px_to_scan_ratio: float):
+def _get_transform_matrix(ls_angle_deg: float, px_to_scan_ratio: float) -> np.ndarray:
     """
     Compute affine transformation matrix used to deskew data.
 
     Parameters
     ----------
     ls_angle_deg : float
+        Light sheet angle in degrees.
     px_to_scan_ratio : float
-    keep_overhang : bool
+        Ratio of pixel size to scan step size.
 
     Returns
     -------
-    matrix : np.array
-        Affine transformation matrix.
+    np.ndarray
+        4x4 affine transformation matrix.
     """
     ct = np.cos(ls_angle_deg * np.pi / 180)
 
@@ -115,39 +117,47 @@ def _get_transform_matrix(ls_angle_deg: float, px_to_scan_ratio: float):
 
 
 def get_deskewed_data_shape(
-    raw_data_shape: tuple,
+    raw_data_shape: tuple[int, int, int],
     ls_angle_deg: float,
     px_to_scan_ratio: float,
     keep_overhang: bool,
     average_n_slices: int = 1,
     pixel_size_um: float = 1,
-):
-    """Get the shape of the deskewed data set and its voxel size
+) -> tuple[tuple[int, int, int], tuple[float, float, float]]:
+    """
+    Get the shape of the deskewed data set and its voxel size.
+
     Parameters
     ----------
-    raw_data_shape : tuple
-        Shape of the raw data, must be len = 3
+    raw_data_shape : tuple[int, int, int]
+        Shape of the raw data in ZYX order.
     ls_angle_deg : float
-        Angle of the light sheet relative to the optical axis, in degrees
+        Angle of the light sheet relative to the optical axis, in degrees.
     px_to_scan_ratio : float
-        Ratio of the pixel size to light sheet scan step
-    keep_overhang : bool, optional
-        If true, the shape of the whole volume within the tilted parallelepiped
-        will be returned
-        If false, the shape of the deskewed volume within a cuboid region will
-        be returned
+        Ratio of the pixel size to light sheet scan step.
+    keep_overhang : bool
+        If True, the shape of the whole volume within the tilted parallelepiped
+        will be returned. If False, the shape of the deskewed volume within a
+        cuboid region will be returned.
     average_n_slices : int, optional
-        after deskewing, averages every n slices (default = 1 applies no averaging)
+        After deskewing, averages every n slices, by default 1 (applies no averaging).
     pixel_size_um : float, optional
-        Pixel size in micrometers. If not provided, a default value of 1 will be
-        used and the returned voxel size will represent a voxel scale
+        Pixel size in micrometers, by default 1. If the default value is used,
+        the returned voxel size will represent a voxel scale.
+
     Returns
     -------
-    output_shape : tuple
-        Output shape of the deskewed data in ZYX order
-    voxel_size : tuple
-        Size of the deskewed voxels in micrometers. If the default
-        pixel_size_um = 1 is used this parameter will represent the voxel scale
+    tuple[tuple[int, int, int], tuple[float, float, float]]
+        Tuple containing:
+        - output_shape : Output shape of the deskewed data in ZYX order
+        - voxel_size : Size of the deskewed voxels in micrometers. If the default
+          pixel_size_um = 1 is used, this parameter will represent the voxel scale.
+
+    Raises
+    ------
+    ValueError
+        If keep_overhang=False and the computed Xp <= 0, indicating the dataset
+        contains only overhang.
     """
 
     # Trig
@@ -183,36 +193,40 @@ def deskew(
     px_to_scan_ratio: float,
     keep_overhang: bool,
     average_n_slices: int = 1,
-    device='cpu',
+    device: str = 'cpu',
 ) -> np.ndarray:
-    """Deskews fluorescence data from the mantis microscope
+    """
+    Deskew fluorescence data from the mantis microscope.
+
     Parameters
     ----------
-    raw_data : NDArray with ndim == 3
-        raw data from the mantis microscope
+    raw_data : np.ndarray
+        Raw data from the mantis microscope with ndim == 3:
         - axis 0 corresponds to the scanning axis
         - axis 1 corresponds to the "tilted" axis
         - axis 2 corresponds to the axis in the plane of the coverslip
     ls_angle_deg : float
-        angle of light sheet with respect to the optical axis in degrees
+        Angle of light sheet with respect to the optical axis in degrees.
     px_to_scan_ratio : float
-        (pixel spacing / scan spacing) in object space
-        e.g. if camera pixels = 6.5 um and mag = 1.4*40, then the pixel spacing
-        is 6.5/(1.4*40) = 0.116 um. If the scan spacing is 0.3 um, then
-        px_to_scan_ratio = 0.116 / 0.3 = 0.386
+        Ratio of (pixel spacing / scan spacing) in object space.
+        For example, if camera pixels = 6.5 um and mag = 1.4*40, then the pixel
+        spacing is 6.5/(1.4*40) = 0.116 um. If the scan spacing is 0.3 um, then
+        px_to_scan_ratio = 0.116 / 0.3 = 0.386.
     keep_overhang : bool
-        If true, compute the whole volume within the tilted parallelepiped.
-        If false, only compute the deskewed volume within a cuboid region.
+        If True, compute the whole volume within the tilted parallelepiped.
+        If False, only compute the deskewed volume within a cuboid region.
     average_n_slices : int, optional
-        after deskewing, averages every n slices (default = 1 applies no averaging)
+        After deskewing, averages every n slices, by default 1 (applies no averaging).
     device : str, optional
-        torch device to use for computation. Default is 'cpu'.
+        Torch device to use for computation, by default 'cpu'.
+
     Returns
     -------
-    deskewed_data : NDArray with ndim == 3
-        axis 0 is the Z axis, normal to the coverslip
-        axis 1 is the Y axis, input axis 2 in the plane of the coverslip
-        axis 2 is the X axis, the scanning axis
+    np.ndarray
+        Deskewed data with ndim == 3:
+        - axis 0 is the Z axis, normal to the coverslip
+        - axis 1 is the Y axis, input axis 2 in the plane of the coverslip
+        - axis 2 is the X axis, the scanning axis
     """
     # Prepare transforms
     matrix = _get_transform_matrix(
@@ -248,7 +262,23 @@ def deskew(
 
 # Adapt ZYX function to CZYX
 # Needs to be a top-level function for multiprocessing pickling
-def _czyx_deskew_data(data, **kwargs):
+def _czyx_deskew_data(data: np.ndarray, **kwargs) -> np.ndarray:
+    """
+    Apply deskewing to CZYX data by processing each channel separately.
+
+    Parameters
+    ----------
+    data : np.ndarray
+        Input data with shape (C, Z, Y, X) where C is the channel dimension.
+    **kwargs
+        Additional keyword arguments passed to `deskew` function.
+
+    Returns
+    -------
+    np.ndarray
+        Deskewed data with shape (C, Z', Y', X') where the spatial dimensions
+        may differ from input due to deskewing transformation.
+    """
     return deskew(data[0], **kwargs)[None]
 
 
@@ -260,20 +290,44 @@ def _czyx_deskew_data(data, **kwargs):
 @local()
 @monitor()
 def deskew_cli(
-    input_position_dirpaths: List[str],
+    input_position_dirpaths: list[str],
     config_filepath: Path,
     output_dirpath: str,
-    sbatch_filepath: str = None,
+    sbatch_filepath: str | None = None,
     local: bool = False,
     monitor: bool = True,
-):
+) -> None:
     """
-    Deskew a single position across T and C axes using a configuration file
-    generated by estimate_deskew.py
+    Deskew a single position across T and C axes using a configuration file.
 
-    >> biahub deskew \
-        -i ./input.zarr/*/*/* \
-        -c ./deskew_params.yml \
+    Uses a configuration file generated by estimate_deskew.py to deskew
+    fluorescence data from the mantis microscope.
+
+    Parameters
+    ----------
+    input_position_dirpaths : list[str]
+        List of input position directory paths to process.
+    config_filepath : Path
+        Path to the deskew configuration YAML file.
+    output_dirpath : str
+        Path to the output zarr directory.
+    sbatch_filepath : str | None, optional
+        Path to the SLURM batch file for job configuration, by default None
+    local : bool, optional
+        Whether to run locally instead of on a SLURM cluster, by default False
+    monitor : bool, optional
+        Whether to monitor job progress, by default True
+
+    Returns
+    -------
+    None
+        Results are written directly to disk in the `output_dirpath`.
+
+    Examples
+    --------
+    >> biahub deskew \\
+        -i ./input.zarr/*/*/* \\
+        -c ./deskew_params.yml \\
         -o ./output.zarr
     """
 

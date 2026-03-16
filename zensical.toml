@@ -50,6 +50,17 @@ repo_url = "https://github.com/czbiohub-sf/biahub"
 nav = [
   { "Home" = "index.md" },
   { "CLI Reference" = "cli.md" },
+  { "API Reference" = [
+    "api/index.md",
+    { "PSF Analysis" = "api/psf.md" },
+    { "Registration" = "api/registration.md" },
+    { "Processing" = "api/processing.md" },
+    { "Stabilization" = "api/stabilization.md" },
+    { "Stitching" = "api/stitching.md" },
+    { "Segmentation" = "api/segmentation.md" },
+    { "Virtual Staining" = "api/virtual_stain.md" },
+    { "Utilities" = "api/utilities.md" },
+  ] },
   { "Confocal" = [
     "confocal/confocal_imaging.md",
     "confocal/image_processing.md",
@@ -324,6 +335,7 @@ link = "https://github.com/czbiohub-sf/biahub"
 anchor_linenums = true
 line_spans = "__span"
 pygments_lang_class = true
+
 [project.markdown_extensions.pymdownx.inlinehilite]
 [project.markdown_extensions.pymdownx.snippets]
 [project.markdown_extensions.pymdownx.superfences]
@@ -332,3 +344,12 @@ pygments_lang_class = true
 name = "mermaid"
 class = "mermaid"
 format = "pymdownx.superfences.fence_code_format"
+
+[project.plugins.mkdocstrings.handlers.python]
+inventories = ["https://docs.python.org/3/objects.inv", "https://numpy.org/doc/stable/objects.inv"]
+paths = ["biahub"]
+
+[project.plugins.mkdocstrings.handlers.python.options]
+docstring_style = "numpy"
+inherited_members = true
+show_source = false

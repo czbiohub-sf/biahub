@@ -4,10 +4,11 @@ import os
 
 from glob import glob
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Tuple, Union
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ultrack import MainConfig
+    import networkx
 
 import click
 import dask.array as da
@@ -80,7 +81,7 @@ CUSTOM_FUNCTIONS = {
 }
 
 
-def fill_empty_frames(arr: ArrayLike, empty_frames_idx: List[int]) -> ArrayLike:
+def fill_empty_frames(arr: ArrayLike, empty_frames_idx: list[int]) -> ArrayLike:
     """
     Fill empty frames in a time-series imaging array using nearest available frames.
 
@@ -93,7 +94,7 @@ def fill_empty_frames(arr: ArrayLike, empty_frames_idx: List[int]) -> ArrayLike:
     ----------
     arr : ArrayLike
         Time-series imaging data of shape (T, Y, X) or (T, C, Y, X). The first dimension must be time.
-    empty_frames_idx : list of int
+    empty_frames_idx : list[int]
         List of time indices (frame numbers) that are considered empty and should be filled.
 
     Returns
@@ -156,9 +157,7 @@ def fill_empty_frames(arr: ArrayLike, empty_frames_idx: List[int]) -> ArrayLike:
     return arr
 
 
-def get_empty_frames_idx_from_csv(
-    blank_frame_df: pd.DataFrame, fov: str
-) -> Union[List[int], None]:
+def get_empty_frames_idx_from_csv(blank_frame_df: pd.DataFrame, fov: str) -> list[int] | None:
     """
     Extract the indices of empty timepoints for a given field of view (FOV) from a DataFrame.
 
@@ -176,7 +175,7 @@ def get_empty_frames_idx_from_csv(
 
     Returns
     -------
-    list of int or None
+    list[int] | None
         List of integer indices representing empty timepoints for the specified FOV.
         Returns `None` if no matching FOV is found or if no empty frames are reported.
 
@@ -245,7 +244,7 @@ def central_z_slice(z_shape: int) -> slice:
     return slice(z_center - half_window, z_center + half_window + 1)
 
 
-def resolve_z_slice(z_range: Tuple[int, int], z_shape: int) -> Tuple[slice, int]:
+def resolve_z_slice(z_range: tuple[int, int] | None, z_shape: int) -> tuple[slice, int]:
     """
     Resolve the z-slice range based on user input and imaging mode.
 
@@ -259,7 +258,7 @@ def resolve_z_slice(z_range: Tuple[int, int], z_shape: int) -> Tuple[slice, int]
 
     Parameters
     ----------
-    z_range : Tuple[int, int]
+    z_range : tuple[int, int] | None
         The (start, stop) indices for slicing Z-planes. If (-1, -1), central slicing will be used.
         If None, all planes are returned.
     z_shape : int
@@ -267,10 +266,10 @@ def resolve_z_slice(z_range: Tuple[int, int], z_shape: int) -> Tuple[slice, int]
 
     Returns
     -------
-    slice
-        A slice object selecting the requested Z-range from the dataset.
-    int
-        The number of Z-planes in the selected range.
+    tuple[slice, int]
+        A tuple containing:
+        - A slice object selecting the requested Z-range from the dataset.
+        - The number of Z-planes in the selected range.
 
     Raises
     ------
@@ -309,9 +308,9 @@ def run_ultrack(
     tracking_config: MainConfig,
     foreground_mask: ArrayLike,
     contour_gradient_map: ArrayLike,
-    scale: Union[Tuple[float, float], Tuple[float, float, float]],
-    database_path,
-):
+    scale: tuple[float, float] | tuple[float, float, float],
+    database_path: Path,
+) -> tuple[np.ndarray, pd.DataFrame, networkx.Graph]:
     """
     Run object tracking using the Ultrack library.
 
@@ -331,22 +330,24 @@ def run_ultrack(
     contour_gradient_map : ArrayLike
         Gradient map or edge score map used to refine object boundaries and define connectivity
         for linking detected objects between timepoints.
-    scale : tuple of float
+    scale : tuple[float, float] | tuple[float, float, float]
         Physical resolution scale in either (Y, X) or (Z, Y, X) depending on whether the data is 2D or 3D.
     database_path : Path
         Directory where tracking results, configuration files, and output data will be saved.
 
     Returns
     -------
-    labels : np.ndarray
-        Labeled segmentation array of shape (T, Z, Y, X) or (T, Y, X), where each object instance
-        is assigned a unique integer label across time.
-    tracks_df : pandas.DataFrame
-        DataFrame with tracking metadata including object ID, frame index, spatial coordinates,
-        and parent-child relationships.
-    graph : networkx.Graph
-        Directed graph representing tracked object lineages. Nodes correspond to objects and
-        edges represent links between objects across frames.
+    tuple[np.ndarray, pd.DataFrame, networkx.Graph]
+        A tuple containing:
+        - labels : np.ndarray
+            Labeled segmentation array of shape (T, Z, Y, X) or (T, Y, X), where each object instance
+            is assigned a unique integer label across time.
+        - tracks_df : pd.DataFrame
+            DataFrame with tracking metadata including object ID, frame index, spatial coordinates,
+            and parent-child relationships.
+        - graph : networkx.Graph
+            Directed graph representing tracked object lineages. Nodes correspond to objects and
+            edges represent links between objects across frames.
 
     Notes
     -----
@@ -395,10 +396,10 @@ def run_ultrack(
 
 
 def run_preprocessing_pipeline(
-    data_dict: Dict[str, ArrayLike],
-    input_images: List[ProcessingInputChannel],
+    data_dict: dict[str, ArrayLike],
+    input_images: list[ProcessingInputChannel],
     visualize: bool = False,
-) -> Dict[str, ArrayLike]:
+) -> dict[str, ArrayLike]:
     """
     Run a configurable preprocessing pipeline on input image channels.
 
@@ -409,18 +410,18 @@ def run_preprocessing_pipeline(
 
     Parameters
     ----------
-    data_dict : dict of str to ArrayLike
+    data_dict : dict[str, ArrayLike]
         A dictionary where each key is a channel name and each value is the corresponding
         multi-dimensional image array (typically of shape (T, Z, Y, X) or (T, C, Z, Y, X)).
-    input_images : list of ProcessingInputChannel
+    input_images : list[ProcessingInputChannel]
         A list of input image specifications. Each `ProcessingInputChannel` defines
         which channels to process and the pipeline (functions + arguments) to apply.
     visualize : bool, optional
-        If True, opens a Napari viewer to display each processed channel after its pipeline.
+        If True, opens a Napari viewer to display each processed channel after its pipeline, by default False.
 
     Returns
     -------
-    dict of str to ArrayLike
+    dict[str, ArrayLike]
         Updated dictionary where the processed channel data has replaced the originals.
 
     Notes
@@ -495,11 +496,11 @@ def run_preprocessing_pipeline(
 
 
 def load_data(
-    position_key: Tuple[str, str, str],
-    input_images: List[ProcessingInputChannel],
+    position_key: tuple[str, str, str],
+    input_images: list[ProcessingInputChannel],
     z_slices: slice,
     visualize: bool = False,
-) -> Dict[str, ArrayLike]:
+) -> dict[str, ArrayLike]:
     """
     Load and extract specified channels from an OME-Zarr dataset for a given position.
 
@@ -509,19 +510,19 @@ def load_data(
 
     Parameters
     ----------
-    position_key : tuple of str
+    position_key : tuple[str, str, str]
         A tuple of three strings representing the hierarchical path to a specific position
         in the dataset (e.g., (plate, well, position)).
-    input_images : list of ProcessingInputChannel
+    input_images : list[ProcessingInputChannel]
         List of input image channel configurations. Each item defines the path and channels to load.
     z_slices : slice
         Slice object specifying which Z-planes to extract (e.g., central slices for 2D mode).
     visualize : bool, optional
-        If True, opens a Napari viewer and displays each loaded channel. Default is False.
+        If True, opens a Napari viewer and displays each loaded channel, by default False.
 
     Returns
     -------
-    dict of str to ArrayLike
+    dict[str, ArrayLike]
         Dictionary mapping each channel name to its corresponding image data array.
         Each array is a Dask array of shape (T, Z, Y, X), extracted from the OME-Zarr store.
 
@@ -551,9 +552,9 @@ def load_data(
 
 def fill_empty_frames_from_csv(
     fov: str,
-    data_dict: Dict[str, ArrayLike],
-    blank_frame_csv_path: Path,
-) -> Dict[str, ArrayLike]:
+    data_dict: dict[str, ArrayLike],
+    blank_frame_csv_path: Path | None,
+) -> dict[str, ArrayLike]:
     """
     Fill empty timepoints in a multi-channel image dictionary using a CSV file of blank frames.
 
@@ -562,17 +563,17 @@ def fill_empty_frames_from_csv(
 
     Parameters
     ----------
-    data_dict : dict of str to ArrayLike
-        Dictionary mapping channel names to image arrays.
-    csv_path : Path
-        Path to the CSV file containing empty frame information.
-        The CSV must contain columns: 'FOV' and 't'.
     fov : str
         Field of view identifier used to filter the CSV rows.
+    data_dict : dict[str, ArrayLike]
+        Dictionary mapping channel names to image arrays.
+    blank_frame_csv_path : Path | None
+        Path to the CSV file containing empty frame information.
+        The CSV must contain columns: 'FOV' and 't'. If None, no filling is performed.
 
     Returns
     -------
-    dict of str to ArrayLike
+    dict[str, ArrayLike]
         Updated dictionary with empty frames filled in-place.
     """
     if blank_frame_csv_path:
@@ -585,12 +586,12 @@ def fill_empty_frames_from_csv(
 
 
 def data_preprocessing(
-    position_key: str,
-    input_images: List[ProcessingInputChannel],
+    position_key: tuple[str, str, str],
+    input_images: list[ProcessingInputChannel],
     z_slices: slice,
-    blank_frames_path: Path = None,
+    blank_frames_path: Path | None = None,
     visualize: bool = False,
-) -> Dict[str, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Load, preprocess, and prepare image data for tracking.
 
@@ -601,24 +602,26 @@ def data_preprocessing(
 
     Parameters
     ----------
-    position_key : str
-        FOV key, typically formed as "Plate_Well_Position" (e.g., "A_1_3").
-    input_images : list of ProcessingInputChannel
+    position_key : tuple[str, str, str]
+        FOV key as a tuple of (plate, well, position) strings (e.g., ("A", "1", "3")).
+    input_images : list[ProcessingInputChannel]
         Configuration defining which channels to load and how to process them.
     z_slices : slice
         Slice object selecting which Z-planes to load (e.g., central slices).
-    blank_frames_path : Path, optional
+    blank_frames_path : Path | None, optional
         Optional path to a CSV file containing frame indices to be filled for each FOV.
-        If not provided, empty frame handling is skipped.
+        If not provided, empty frame handling is skipped, by default None.
     visualize : bool, optional
-        If True, opens Napari viewer to visualize each intermediate step.
+        If True, opens Napari viewer to visualize each intermediate step, by default False.
 
     Returns
     -------
-    dict of str to np.ndarray
-        Dictionary containing two arrays:
-        - "foreground" : binary mask array for detected objects
-        - "contour"    : gradient/edge map for contour-based refinement
+    tuple[np.ndarray, np.ndarray]
+        A tuple containing:
+        - foreground_mask : np.ndarray
+            Binary mask array for detected objects
+        - contour_gradient_map : np.ndarray
+            Gradient/edge map for contour-based refinement
 
     Raises
     ------
@@ -630,7 +633,7 @@ def data_preprocessing(
     --------
     >>> z_slice = slice(10, 15)
     >>> foreground, contour = data_preprocessing(
-    ...     position_key="A_1_3",
+    ...     position_key=("A", "1", "3"),
     ...     input_images=config.input_images,
     ...     z_slices=z_slice,
     ...     blank_frames_path=Path("blank_frames.csv"),
@@ -662,14 +665,14 @@ def data_preprocessing(
 
 
 def track_one_position(
-    position_key: str,
-    input_images: List[ProcessingInputChannel],
+    position_key: tuple[str, str, str],
+    input_images: list[ProcessingInputChannel],
     output_dirpath: Path,
     tracking_config: MainConfig,
-    blank_frames_path: Path = None,
-    z_slices: Tuple[int, int] = (0, 0),
-    scale: Tuple[float, float, float, float, float] = (1, 1, 1, 1, 1),
-) -> None:
+    blank_frames_path: Path | None = None,
+    z_slices: tuple[int, int] = (0, 0),
+    scale: tuple[float, float, float, float, float] = (1, 1, 1, 1, 1),
+) -> tuple[np.ndarray, pd.DataFrame]:
     """
     Run tracking on a single field of view using foreground and contour channel data.
 
@@ -678,29 +681,35 @@ def track_one_position(
     as long as the pipeline produces a binary foreground mask and a corresponding contour map.
     Parameters
     ----------
-    position_key : str
-        A string identifier for the field of view (e.g., "A_1_3"), typically composed of
-        Plate, Well, and Position joined by underscores.
-    input_images : list of ProcessingInputChannel
+    position_key : tuple[str, str, str]
+        A tuple identifier for the field of view (e.g., ("A", "1", "3")), typically composed of
+        Plate, Well, and Position.
+    input_images : list[ProcessingInputChannel]
         Configuration describing which channels to load and how to preprocess them.
     output_dirpath : Path
         Output directory where labeled Zarr volumes and track CSVs will be stored.
     tracking_config : MainConfig
         Ultrack configuration containing segmentation, linking, and optimization settings.
-    blank_frames_path : Path, optional
+    blank_frames_path : Path | None, optional
         Path to CSV file indicating empty frames for the current FOV. If None, blank frame
-        filling is skipped.
-    z_slices : tuple of int, optional
+        filling is skipped, by default None.
+    z_slices : tuple[int, int], optional
         Tuple specifying the range of Z-slices to load. If (0, 0), the central slice range
-        will be auto-resolved. Default is (0, 0).
-    scale : tuple of float, optional
+        will be auto-resolved, by default (0, 0).
+    scale : tuple[float, float, float, float, float], optional
         Physical scale of the dataset in (T, C, Z, Y, X) order. Tracking uses either the
-        (Z, Y, X) or (Y, X) portion depending on dimensionality. Default is (1, 1, 1, 1, 1).
+        (Z, Y, X) or (Y, X) portion depending on dimensionality, by default (1, 1, 1, 1, 1).
 
     Returns
     -------
-    None
-        Outputs are saved directly to disk:
+    tuple[np.ndarray, pd.DataFrame]
+        A tuple containing:
+        - tracking_labels : np.ndarray
+            Tracked object labels array
+        - tracks_df : pd.DataFrame
+            DataFrame containing the track graph (IDs, positions, parents)
+
+        Outputs are also saved directly to disk:
         - Tracked object labels in Zarr format
         - CSV file containing the track graph (IDs, positions, parents)
 
@@ -713,7 +722,7 @@ def track_one_position(
     Examples
     --------
     >>> track_one_position(
-    ...     position_key="A_1_3",
+    ...     position_key=("A", "1", "3"),
     ...     input_images=config.input_images,
     ...     output_dirpath=Path("output.zarr"),
     ...     tracking_config=cfg,
@@ -762,8 +771,8 @@ def track_one_position(
 def track(
     output_dirpath: str,
     config_filepath: str,
-    sbatch_filepath: str = None,
-    local: bool = None,
+    sbatch_filepath: str | None = None,
+    local: bool | None = None,
 ) -> None:
     """
     Launch tracking jobs for multiple imaging positions using foreground and contour data.
@@ -771,17 +780,17 @@ def track(
     This function orchestrates the tracking of cell trajectories across multiple fields of view (FOVs).
     It supports any imaging modality, as long as preprocessing produces the required foreground mask
     and contour gradient map for tracking.
-        Parameters
+    Parameters
     ----------
     output_dirpath : str
         Path to the Zarr store where output labeled segmentations and track data will be saved.
     config_filepath : str
         Path to the YAML configuration file containing tracking and preprocessing settings.
-    sbatch_filepath : str, optional
+    sbatch_filepath : str | None, optional
         Path to a SLURM batch script to override default SLURM job parameters. If not provided,
-        defaults for CPUs, memory, and parallelism are used.
-    local : bool, optional
-        If True, runs all tracking jobs sequentially on the local machine instead of submitting via SLURM.
+        defaults for CPUs, memory, and parallelism are used, by default None.
+    local : bool | None, optional
+        If True, runs all tracking jobs sequentially on the local machine instead of submitting via SLURM, by default None.
 
     Returns
     -------
@@ -939,20 +948,36 @@ def track(
 def track_cli(
     output_dirpath: str,
     config_filepath: Path,
-    sbatch_filepath: str = None,
-    local: bool = None,
+    sbatch_filepath: str | None = None,
+    local: bool | None = None,
 ) -> None:
     """
     Track objects in 2D or 3D time-lapse microscopy data using configurable preprocessing.
 
     This command applies preprocessing, handles optional blank frame filling, and performs
     object tracking on each position using the Ultrack library. Compatible with any image
-    modality as long as it produces 'foreground' and 'contour' inputs.
+    modality as long as it produces 'foreground' and 'contour' inputs. It supports parallel
+    execution via SLURM or local processing.
 
-    Example usage:
+    Parameters
+    ----------
+    output_dirpath : str
+        Path to the Zarr store where output labeled segmentations and track data will be saved.
+    config_filepath : Path
+        Path to the YAML configuration file containing tracking and preprocessing settings.
+    sbatch_filepath : str | None, optional
+        Path to a SLURM batch script to override default SLURM job parameters, by default None.
+    local : bool | None, optional
+        If True, runs all tracking jobs sequentially on the local machine instead of submitting via SLURM, by default None.
 
-    biahub track -i virtual_staining.zarr/*/*/* -o output.zarr -c config_tracking.yml
+    Returns
+    -------
+    None
+        Results are written directly to disk in the `output_dirpath`.
 
+    Examples
+    --------
+    >> biahub track -o output.zarr -c config_tracking.yml
     """
 
     track(

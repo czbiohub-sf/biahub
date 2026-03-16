@@ -39,6 +39,42 @@ def apply_inverse_transfer_function(
     local: bool = False,
     monitor: bool = True,
 ) -> None:
+    """
+    Apply an inverse transfer function to a dataset using a configuration file.
+
+    Applies a transfer function to all positions in the list `input_position_dirpaths`.
+    All positions must have the same TCZYX shape. Appends channels to the output zarr,
+    so multiple reconstructions can fill a single store.
+
+    Parameters
+    ----------
+    input_position_dirpaths : list[Path]
+        List of paths to input position directories to process.
+    transfer_function_dirpath : Path
+        Path to the transfer function zarr directory.
+    config_filepath : Path
+        Path to the reconstruction configuration YAML file.
+    output_dirpath : Path
+        Path to the output zarr directory where results will be saved.
+    num_processes : int
+        Number of processes to use for parallel processing.
+    sbatch_filepath : Path
+        Path to the SLURM batch file for job configuration.
+    local : bool, optional
+        Whether to run locally instead of on a SLURM cluster, by default False
+    monitor : bool, optional
+        Whether to monitor job progress, by default True
+
+    Returns
+    -------
+    None
+        Results are written directly to disk in the `output_dirpath`.
+
+    Notes
+    -----
+    See https://github.com/mehta-lab/waveorder/tree/main/docs/examples for example
+    configuration files.
+    """
 
     output_metadata = get_reconstruction_output_metadata(
         input_position_dirpaths[0], config_filepath

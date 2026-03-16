@@ -35,10 +35,10 @@ def binning_czyx(
     ----------
     czyx_data : np.ndarray
         Input array to bin in CZYX format
-    binning_factor_zyx : Sequence[int]
-        Binning factor in each dimension (Z, Y, X). Can be list or tuple.
-    mode : str
-        'sum' for sum binning or 'mean' for mean binning
+    binning_factor_zyx : Sequence[int], optional
+        Binning factor in each dimension (Z, Y, X). Can be list or tuple, by default [1, 2, 2].
+    mode : Literal['sum', 'mean'], optional
+        'sum' for sum binning or 'mean' for mean binning, by default 'sum'
 
     Returns
     -------
@@ -160,9 +160,16 @@ def process_with_config(
     output_dirpath : Path
         Output directory path
     sbatch_filepath : Path | None, optional
-        Path to the SLURM batch file, by default None
+        Path to the SLURM batch file, by default None.
     local : bool, optional
-        Whether to run locally or submit to SLURM, by default False
+        Whether to run locally or submit to SLURM, by default False.
+    monitor : bool, optional
+        Whether to monitor job progress, by default True.
+
+    Returns
+    -------
+    None
+        Processed data is written to the output directory.
     """
 
     # Convert to Path objects
@@ -325,8 +332,33 @@ def process_with_config_cli(
     """
     Process data with functions specified in the config file.
 
-    Example usage:
-    biahub process-with-config -i ./timelapse.zarr/0/0/0 -c ./process_params.yml -o ./processed_timelapse.zarr
+    This command applies processing functions (e.g., binning) to input position
+    data according to the configuration file. Processing is performed in parallel
+    across positions using SLURM or local execution.
+
+    Parameters
+    ----------
+    input_position_dirpaths : Sequence[Path]
+        List of paths to the input position directories (OME-Zarr format).
+    config_filepath : Path
+        Path to the YAML configuration file specifying processing functions and settings.
+    output_dirpath : Path
+        Path to the output directory where processed data will be saved.
+    sbatch_filepath : Path | None, optional
+        Path to the SLURM batch file for cluster submission, by default None.
+    local : bool, optional
+        If True, run the jobs locally instead of submitting to a SLURM cluster, by default False.
+    monitor : bool, optional
+        If True, monitor the progress of the submitted jobs, by default True.
+
+    Returns
+    -------
+    None
+        Processed data is written to the output directory.
+
+    Examples
+    --------
+    >> biahub process-with-config -i ./timelapse.zarr/0/0/0 -c ./process_params.yml -o ./processed_timelapse.zarr
     """
     process_with_config(
         input_position_dirpaths=input_position_dirpaths,

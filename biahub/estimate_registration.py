@@ -3,7 +3,7 @@ import shutil
 
 from datetime import datetime
 from pathlib import Path
-from typing import Literal, Union
+from typing import Literal
 
 import ants
 import click
@@ -147,7 +147,7 @@ def interpolate_transforms(
     window_size: int = 3,
     interpolation_type: Literal["linear", "cubic"] = "linear",
     verbose: bool = False,
-):
+) -> list[ArrayLike]:
     """
     Interpolate missing transforms (None) in a list of affine transformation matrices.
 
@@ -236,7 +236,7 @@ def check_transforms_difference(
     shape_zyx: tuple[int, int, int],
     threshold: float = 5.0,
     verbose: bool = False,
-):
+) -> bool:
     """
     Evaluate the difference between two affine transforms by calculating the
     Mean Squared Error (MSE) of a grid of points transformed by each matrix.
@@ -352,12 +352,12 @@ def evaluate_transforms(
 
 
 def save_transforms(
-    model: Union[AffineTransformSettings, StabilizationSettings, RegistrationSettings],
+    model: AffineTransformSettings | StabilizationSettings | RegistrationSettings,
     transforms: list[ArrayLike],
     output_filepath_settings: Path,
-    output_filepath_plot: Path = None,
+    output_filepath_plot: Path | None = None,
     verbose: bool = False,
-):
+) -> None:
     """
     Save the transforms to a yaml file and plot the translations.
 
@@ -409,7 +409,7 @@ def save_transforms(
 def plot_translations(
     transforms_zyx: ArrayLike,
     output_filepath: Path,
-):
+) -> None:
     """
     Plot the translations of a list of affine transformation matrices.
 
@@ -797,9 +797,9 @@ def ants_registration(
     ants_registration_settings: AntsRegistrationSettings,
     affine_transform_settings: AffineTransformSettings,
     verbose: bool = False,
-    output_folder_path: Path = None,
+    output_folder_path: Path | None = None,
     cluster: str = 'local',
-    sbatch_filepath: Path = None,
+    sbatch_filepath: Path | None = None,
 ) -> list[ArrayLike]:
     """
     Perform ants registration of two volumetric image channels.
@@ -811,9 +811,9 @@ def ants_registration(
     Parameters
     ----------
     source_data_tczyx : da.Array
-       4D array (T, C, Z, Y, X) of the source channel (Dask array).
+        4D array (T, C, Z, Y, X) of the source channel (Dask array).
     target_data_tczyx : da.Array
-       4D array (T, C, Z, Y, X) of the target channel (Dask array).
+        4D array (T, C, Z, Y, X) of the target channel (Dask array).
     source_channel_index : int | list[int]
         Index of the source channel.
     target_channel_index : int
@@ -932,12 +932,12 @@ def ants_registration(
 def beads_based_registration(
     source_channel_tzyx: da.Array,
     target_channel_tzyx: da.Array,
-    beads_match_settings: BeadsMatchSettings = None,
-    affine_transform_settings: AffineTransformSettings = None,
+    beads_match_settings: BeadsMatchSettings | None = None,
+    affine_transform_settings: AffineTransformSettings | None = None,
     verbose: bool = False,
     cluster: bool = False,
-    sbatch_filepath: Path = None,
-    output_folder_path: Path = None,
+    sbatch_filepath: Path | None = None,
+    output_folder_path: Path | None = None,
 ) -> list[ArrayLike]:
     """
     Perform beads-based temporal registration of 4D data using affine transformations.
@@ -949,9 +949,9 @@ def beads_based_registration(
     Parameters
     ----------
     source_channel_tzyx : da.Array
-       4D array (T, Z, Y, X) of the source channel (Dask array).
+        4D array (T, Z, Y, X) of the source channel (Dask array).
     target_channel_tzyx : da.Array
-       4D array (T, Z, Y, X) of the target channel (Dask array).
+        4D array (T, Z, Y, X) of the target channel (Dask array).
     beads_match_settings : BeadsMatchSettings
         Settings for the beads match.
     affine_transform_settings : AffineTransformSettings
@@ -1207,6 +1207,13 @@ def match_hungarian_local_cost(
         Dictionary of source edge attributes.
     target_attrs : dict[tuple[int, int], float]
         Dictionary of target edge attributes.
+    default_cost : float
+        Default cost value to use when no match is found.
+
+    Returns
+    -------
+    float
+        Mean cost of matched edges between the two graphs.
     """
     C = np.full((len(s_neighbors), len(t_neighbors)), default_cost)
 
@@ -1305,7 +1312,7 @@ def compute_cost_matrix(
     target_peaks: ArrayLike,
     source_edges: list[tuple[int, int]],
     target_edges: list[tuple[int, int]],
-    weights: dict[str, float] = None,
+    weights: dict[str, float] | None = None,
     distance_metric: str = 'euclidean',
     normalize: bool = False,
 ) -> ArrayLike:
@@ -1635,6 +1642,7 @@ def get_matches_from_hungarian(
 ) -> ArrayLike:
     """
     Get matches from beads using the hungarian algorithm.
+
     Parameters
     ----------
     source_peaks : ArrayLike
@@ -1918,9 +1926,9 @@ def estimate_transform_from_beads(
     t_idx : int
         Timepoint index to process.
     source_channel_tzyx : da.Array
-       4D array (T, Z, Y, X) of the source channel (Dask array).
+        4D array (T, Z, Y, X) of the source channel (Dask array).
     target_channel_tzyx : da.Array
-       4D array (T, Z, Y, X) of the target channel (Dask array).
+        4D array (T, Z, Y, X) of the target channel (Dask array).
     beads_match_settings : BeadsMatchSettings
         Settings for the beads match.
     affine_transform_settings : AffineTransformSettings
@@ -2023,9 +2031,9 @@ def estimate_registration(
     config_filepath: str,
     registration_target_channel: str,
     registration_source_channel: list[str],
-    sbatch_filepath: str = None,
+    sbatch_filepath: str | None = None,
     local: bool = False,
-):
+) -> None:
     """
     Estimate the affine transformation between a source and target image for registration.
 
@@ -2041,14 +2049,16 @@ def estimate_registration(
         List of file paths to the target channel data in OME-Zarr format.
     output_filepath : str
         Path to save the estimated registration configuration file (YAML).
-    num_processes : int
-        Number of processes for parallel computations (used in bead-based registration).
     config_filepath : str
         Path to the YAML configuration file for the registration settings.
     registration_target_channel : str
         Name of the target channel to be used when registration params are applied.
-    registration_source_channels : list[str]
+    registration_source_channel : list[str]
         List of source channel names to be used when registration params are applied.
+    sbatch_filepath : str | None, optional
+        Path to the SLURM batch file for cluster submission, by default None.
+    local : bool, optional
+        If True, run the jobs locally instead of submitting to a SLURM cluster, by default False.
 
     Returns
     -------
@@ -2222,13 +2232,13 @@ def estimate_registration_cli(
     config_filepath: Path,
     registration_target_channel: str,
     registration_source_channel: list[str],
-    sbatch_filepath: str = None,
+    sbatch_filepath: str | None = None,
     local: bool = False,
-):
+) -> None:
     """
     Estimate the affine transformation between a source and target image for registration.
 
-    This command-line tools estimates the registration transforms between a source (moving) and target (fixed) image
+    This command-line tool estimates the registration transforms between a source (moving) and target (fixed) image
     using either (1) user input, (2) images or registration beads, or (3) image features via the ANTS registration library.
     The output is a configuration file that can be used with subsequent tools (`stabilize` and `register`).
 
@@ -2237,7 +2247,34 @@ def estimate_registration_cli(
     ANTs-based registration uses the ANTsPy library to estimate transformations based on image features. Optionally,
     a Sobel filter may be applied to the data to enhance feature detection between label-free and fluorescent channels.
 
-    Example:
+    Parameters
+    ----------
+    source_position_dirpaths : list[str]
+        List of file paths to the source channel data in OME-Zarr format.
+    target_position_dirpaths : list[str]
+        List of file paths to the target channel data in OME-Zarr format.
+    output_filepath : str
+        Path to save the estimated registration configuration file (YAML).
+    config_filepath : Path
+        Path to the YAML configuration file for the registration settings.
+    registration_target_channel : str
+        Name of the target channel to be used when registration params are applied.
+        If not provided, the target channel from the config file will be used.
+    registration_source_channel : list[str]
+        List of source channel names to be used when registration params are applied.
+        May be passed multiple times. If not provided, the source channels from the config file will be used.
+    sbatch_filepath : str | None, optional
+        Path to the SLURM batch file for cluster submission, by default None.
+    local : bool, optional
+        If True, run the jobs locally instead of submitting to a SLURM cluster, by default False.
+
+    Returns
+    -------
+    None
+        Writes the estimated registration parameters to the specified output file.
+
+    Examples
+    --------
     >> biahub estimate-registration
         -s ./acq_name_labelfree_reconstructed.zarr/0/0/0   # Source channel OME-Zarr data path
         -t ./acq_name_lightsheet_deskewed.zarr/0/0/0       # Target channel OME-Zarr data path

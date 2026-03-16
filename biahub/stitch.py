@@ -1,7 +1,6 @@
 from collections import defaultdict
 from itertools import product
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 import click
 import numpy as np
@@ -55,20 +54,20 @@ def list_of_nd_slices_from_array_shape(
 
 
 def check_overlap(
-    chunk: Tuple[slice, slice, slice],
-    fov_shift: Tuple[float, float, float],
-    fov_extent: Tuple[int, int, int],
+    chunk: tuple[slice, slice, slice],
+    fov_shift: tuple[float, float, float],
+    fov_extent: tuple[int, int, int],
 ) -> bool:
     """
     Check if a chunk overlaps with a field of view (FOV).
 
     Parameters
     ----------
-    chunk : Tuple[slice, slice, slice]
+    chunk : tuple[slice, slice, slice]
         3D chunk defined by slice objects for each dimension.
-    fov_shift : Tuple[float, float, float]
+    fov_shift : tuple[float, float, float]
         Translation offset of the FOV in (z, y, x) order.
-    fov_extent : Tuple[int, int, int]
+    fov_extent : tuple[int, int, int]
         Size of the FOV in (z, y, x) order.
 
     Returns
@@ -86,28 +85,28 @@ def check_overlap(
 
 
 def overlap_slices(
-    chunk_corner: Tuple[float, float, float],
-    chunk_extent: Tuple[float, float, float],
-    fov_corner: Tuple[float, float, float],
-    fov_extent: Tuple[int, int, int],
-) -> Tuple[Optional[Tuple[slice, slice, slice]], Optional[Tuple[slice, slice, slice]]]:
+    chunk_corner: tuple[float, float, float],
+    chunk_extent: tuple[float, float, float],
+    fov_corner: tuple[float, float, float],
+    fov_extent: tuple[int, int, int],
+) -> tuple[tuple[slice, slice, slice] | None, tuple[slice, slice, slice] | None]:
     """
     Calculate slice objects for overlapping regions between a chunk and FOV.
 
     Parameters
     ----------
-    chunk_corner : Tuple[float, float, float]
+    chunk_corner : tuple[float, float, float]
         Corner position of the chunk in (z, y, x) order.
-    chunk_extent : Tuple[float, float, float]
+    chunk_extent : tuple[float, float, float]
         Size of the chunk in (z, y, x) order.
-    fov_corner : Tuple[float, float, float]
+    fov_corner : tuple[float, float, float]
         Corner position of the FOV in (z, y, x) order.
-    fov_extent : Tuple[int, int, int]
+    fov_extent : tuple[int, int, int]
         Size of the FOV in (z, y, x) order.
 
     Returns
     -------
-    Tuple[Optional[Tuple[slice, slice, slice]], Optional[Tuple[slice, slice, slice]]]
+    tuple[tuple[slice, slice, slice] | None, tuple[slice, slice, slice] | None]
         A tuple containing (fixed_slice, moving_slice) for the overlapping region,
         or (None, None) if no overlap exists.
     """
@@ -129,25 +128,25 @@ def overlap_slices(
 
 
 def find_contributing_fovs(
-    chunk: Tuple[slice, slice, slice],
-    fov_shifts: Dict[str, Tuple[float, float, float]],
-    fov_extent: Tuple[int, int, int],
-) -> List[str]:
+    chunk: tuple[slice, slice, slice],
+    fov_shifts: dict[str, tuple[float, float, float]],
+    fov_extent: tuple[int, int, int],
+) -> list[str]:
     """
     Find all FOVs that contribute data to a given chunk.
 
     Parameters
     ----------
-    chunk : Tuple[slice, slice, slice]
+    chunk : tuple[slice, slice, slice]
         3D chunk defined by slice objects for each dimension.
-    fov_shifts : Dict[str, Tuple[float, float, float]]
+    fov_shifts : dict[str, tuple[float, float, float]]
         Dictionary mapping FOV names to their translation offsets in (z, y, x) order.
-    fov_extent : Tuple[int, int, int]
+    fov_extent : tuple[int, int, int]
         Size of each FOV in (z, y, x) order.
 
     Returns
     -------
-    List[str]
+    list[str]
         List of FOV names that overlap with the given chunk.
     """
     contributing_fovs = []
@@ -158,21 +157,21 @@ def find_contributing_fovs(
 
 
 def get_output_shape(
-    shifts: Dict[str, Tuple[float, float, float]], tile_shape: Tuple[int, ...]
-) -> Tuple[int, int, int]:
+    shifts: dict[str, tuple[float, float, float]], tile_shape: tuple[int, ...]
+) -> tuple[int, int, int]:
     """
     Calculate the output shape of the stitched image from FOV shifts.
 
     Parameters
     ----------
-    shifts : Dict[str, Tuple[float, float, float]]
+    shifts : dict[str, tuple[float, float, float]]
         Dictionary mapping FOV names to their translation offsets in (z, y, x) order.
-    tile_shape : Tuple[int, ...]
+    tile_shape : tuple[int, ...]
         Shape of individual tiles/FOVs.
 
     Returns
     -------
-    Tuple[int, int, int]
+    tuple[int, int, int]
         Output shape of the stitched image in (z, y, x) order.
     """
 
@@ -188,11 +187,11 @@ def get_output_shape(
 
 
 def write_output_chunk(
-    output_chunk_slices: Tuple[slice, slice, slice],
-    fov_shifts: Dict[str, Tuple[float, float, float]],
+    output_chunk_slices: tuple[slice, slice, slice],
+    fov_shifts: dict[str, tuple[float, float, float]],
     channel_idx: int,
     input_plate: Plate,
-    input_fov_shape: Tuple[int, int, int, int, int],
+    input_fov_shape: tuple[int, int, int, int, int],
     output_position: Position,
     verbose: bool,
     blending_exponent: float = 1.0,
@@ -208,22 +207,27 @@ def write_output_chunk(
 
     Parameters
     ----------
-    output_chunk_slices : Tuple[slice, slice, slice]
+    output_chunk_slices : tuple[slice, slice, slice]
         Slice objects defining the chunk region in the output image.
-    fov_shifts : Dict[str, Tuple[float, float, float]]
+    fov_shifts : dict[str, tuple[float, float, float]]
         Dictionary mapping FOV names to their translation offsets in (z, y, x) order.
     channel_idx : int
         Index of the channel to process.
     input_plate : Plate
         Input plate containing all FOV data.
-    input_fov_shape : Tuple[int, int, int, int, int]
+    input_fov_shape : tuple[int, int, int, int, int]
         Shape of input FOVs in (T, C, Z, Y, X) order.
     output_position : Position
         Output position where the stitched data will be written.
     verbose : bool
         Whether to print detailed progress information.
-    blending_exponent : float, default=1.0
-        Exponent for distance-based blending weights. Higher values create sharper transitions.
+    blending_exponent : float, optional
+        Exponent for distance-based blending weights. Higher values create sharper transitions, by default 1.0.
+
+    Returns
+    -------
+    None
+        The stitched chunk is written to the output position.
     """
     # For each output chunk, find the input fovs that contribute to it
     contributing_fov_names = find_contributing_fovs(
@@ -326,11 +330,11 @@ def write_output_chunk(
 @click.option("--debug", is_flag=True, help="Run in debug mode")
 @monitor()
 def stitch_cli(
-    input_position_dirpaths: List[str],
+    input_position_dirpaths: list[str],
     output_dirpath: str,
     config_filepath: Path,
     verbose: bool = False,
-    sbatch_filepath: str = None,
+    sbatch_filepath: str | None = None,
     local: bool = False,
     blending_exponent: float = 1.0,
     debug: bool = False,
@@ -338,8 +342,43 @@ def stitch_cli(
 ) -> None:
     """
     Stitch FOVs in each well together into a single FOV.
-    Uses shift from configuration file generated with `biahub estimate-stitch`.
 
+    This command-line tool stitches multiple fields of view (FOVs) within each well
+    into a single composite image. It uses translation parameters from a configuration
+    file generated by `estimate-stitch` and supports distance-based blending for
+    smooth transitions between overlapping regions. It supports parallel execution
+    via SLURM or local processing.
+
+    Parameters
+    ----------
+    input_position_dirpaths : list[str]
+        List of paths to the input position directories (OME-Zarr format).
+    output_dirpath : str
+        Path to the output directory where the stitched dataset will be saved.
+    config_filepath : Path
+        Path to the YAML configuration file containing stitching parameters
+        (generated by `estimate-stitch`).
+    verbose : bool, optional
+        If True, print detailed progress information, by default False.
+    sbatch_filepath : str | None, optional
+        Path to the SLURM batch file for cluster submission, by default None.
+    local : bool, optional
+        If True, run the jobs locally instead of submitting to a SLURM cluster, by default False.
+    blending_exponent : float, optional
+        Exponent for blending weights. 0.0 is average blending, 1.0 is linear blending,
+        and >1.0 is progressively sharper S-curve blending, by default 1.0.
+    debug : bool, optional
+        If True, run in debug mode, by default False.
+    monitor : bool, optional
+        If True, monitor the progress of the submitted jobs, by default False.
+
+    Returns
+    -------
+    None
+        The stitched dataset is written to the specified output directory.
+
+    Examples
+    --------
     >> biahub stitch -i ./input.zarr/*/*/* -c ./config.yaml -o ./output.zarr
     """
 
