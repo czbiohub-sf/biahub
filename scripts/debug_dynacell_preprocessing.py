@@ -1839,6 +1839,7 @@ def run_all_fovs(
         scale=scale,
         channel_names=all_channel_names,
         dtype=np.float32,
+        version = '0.5',
     )
     print(f"Created output plate at {output_zarr}")
 
@@ -1915,5 +1916,6 @@ if __name__ == "__main__":
         beads_fov="A/3/000001",
         overlay_channels=["Phase3D", "raw GFP EX488 EM525-45"],
         exclude_fovs=["A/3/000000", "A/3/001000", "A/3/001001"],
+        z_final = 44,
         
     )
