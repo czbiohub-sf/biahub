@@ -12,6 +12,7 @@ import io
 import sys
 from datetime import datetime
 from pathlib import Path
+import re
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -155,6 +156,15 @@ def _plot_z_focus(fov_plots_dir: Path) -> str | None:
     return _fig_to_base64(fig)
 
 
+def _parse_bbox_value(value) -> list[int]:
+    bbox_str = str(value).strip()
+    bbox_str = re.sub(r"np\.int\d+\(([-+]?\d+)\)", r"\1", bbox_str)
+    parts = [part.strip() for part in bbox_str.strip("[]()").split(",") if part.strip()]
+    if len(parts) != 4:
+        raise ValueError(f"Invalid bbox value: {value!r}")
+    return [int(part) for part in parts]
+
+
 def _plot_bbox(fov_plots_dir: Path) -> str | None:
     bbox_csv = fov_plots_dir / "per_t_bboxes.csv"
     if not bbox_csv.exists():
@@ -172,7 +182,7 @@ def _plot_bbox(fov_plots_dir: Path) -> str | None:
     summary_csv = fov_plots_dir / "fov_summary.csv"
     if summary_csv.exists():
         bbox_str = pd.read_csv(summary_csv)["bbox"].iloc[0]
-        bbox = [int(x.strip()) for x in bbox_str.strip("[]").split(",")]
+        bbox = _parse_bbox_value(bbox_str)
         ax.axhline(bbox[1] - bbox[0] + 1, color="tab:purple", linestyle="--", linewidth=0.8, alpha=0.5)
         ax.axhline(bbox[3] - bbox[2] + 1, color="tab:green", linestyle="--", linewidth=0.8, alpha=0.5)
 
