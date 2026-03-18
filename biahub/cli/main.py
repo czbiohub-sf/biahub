@@ -155,6 +155,16 @@ COMMANDS = [
         "help": "Segment a position using pretrained model or pipeline",
     },
     {
+        "name": "segment-organelles",
+        "import_path": "biahub.segment_organelles.segment_organelles_cli",
+        "help": "Segment organelles using Frangi filtering",
+    },
+    {
+        "name": "extract-organelle-features",
+        "import_path": "biahub.extract_organelle_features.extract_organelle_features_cli",
+        "help": "Extract morphological features from organelle labels",
+    },
+    {
         "name": "virtual-stain",
         "import_path": "biahub.virtual_stain.virtual_stain_cli",
         "help": "Run VisCy virtual staining",
