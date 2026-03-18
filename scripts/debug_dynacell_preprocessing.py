@@ -62,6 +62,54 @@ def find_overlap_mask(arrays: list[np.ndarray]) -> np.ndarray:
     return overlap_mask
 
 
+def find_inscribed_bbox(mask: np.ndarray) -> tuple[int, int, int, int] | None:
+    """Find the tightest axis-aligned rectangle whose borders are fully valid.
+
+    Starts from the bounding box of the mask and iteratively shrinks each
+    edge inward until the entire top/bottom row and left/right column lie
+    inside the valid region. This handles sheared overlaps and circular
+    masks without the area-optimization quirks of the maximal-rectangle
+    algorithm.
+
+    Parameters
+    ----------
+    mask : np.ndarray of bool, shape (Y, X).
+
+    Returns
+    -------
+    (y_min, y_max, x_min, x_max) or None if no True pixels exist.
+    """
+    if not np.any(mask):
+        return None
+
+    ys, xs = np.where(mask)
+    y_min, y_max = int(ys.min()), int(ys.max())
+    x_min, x_max = int(xs.min()), int(xs.max())
+
+    # Shrink one pixel per side per iteration so all four sides
+    # converge together (avoids collapsing one axis before the other).
+    changed = True
+    while changed:
+        changed = False
+        if y_min <= y_max and not mask[y_min, x_min : x_max + 1].all():
+            y_min += 1
+            changed = True
+        if y_max >= y_min and not mask[y_max, x_min : x_max + 1].all():
+            y_max -= 1
+            changed = True
+        if x_min <= x_max and not mask[y_min : y_max + 1, x_min].all():
+            x_min += 1
+            changed = True
+        if x_max >= x_min and not mask[y_min : y_max + 1, x_max].all():
+            x_max -= 1
+            changed = True
+
+    if y_max < y_min or x_max < x_min:
+        return None
+
+    return (y_min, y_max, x_min, x_max)
+
+
 def find_overlap_bbox_across_time(
     arrays: list[np.ndarray],
     lf_mask_radius: float | None = None,
@@ -127,32 +175,28 @@ def find_overlap_bbox_across_time(
         else:
             z_focus_lf = arrays[0].shape[2] // 2
 
+        # Use z_focus for ALL arrays so incomplete-Z frames
+        # (beginning/end of FOV) are handled correctly.
         slices = []
         for i, arr in enumerate(arrays):
-            if i == 0:
-                z_idx = z_focus_lf
-            else:
-                z_idx = arr.shape[2] // 2
             for c in range(arr.shape[1]):
-                slc = np.asarray(arr[t, c, z_idx, :, :]).copy()
-                # Mask the LF phase with the circular mask
+                slc = np.asarray(arr[t, c, z_focus_lf, :, :]).copy()
                 if i == 0 and circ_mask is not None:
                     slc[~circ_mask] = 0
                 slices.append(slc)
         t_mask = find_overlap_mask(slices)
         combined_mask &= t_mask
 
-        ys_t, xs_t = np.where(t_mask)
-        if len(ys_t) > 0:
-            per_t_bboxes[t] = [ys_t.min(), ys_t.max(), xs_t.min(), xs_t.max()]
+        t_bbox = find_inscribed_bbox(t_mask)
+        if t_bbox is not None:
+            per_t_bboxes[t] = list(t_bbox)
         else:
             per_t_bboxes[t] = [0, 0, 0, 0]
 
-    ys, xs = np.where(combined_mask)
-    if len(ys) == 0:
+    bbox = find_inscribed_bbox(combined_mask)
+    if bbox is None:
         return None
 
-    bbox = (int(ys.min()), int(ys.max()), int(xs.min()), int(xs.max()))
     return bbox, combined_mask, per_t_bboxes
 
 
@@ -389,6 +433,69 @@ def test_blank_first_frame():
 
     print(f"Blank t=0 bbox: Y=[{y_min}:{y_max+1}], X=[{x_min}:{x_max+1}]")
     print("BLANK FIRST FRAME TEST PASSED!")
+
+
+def test_inscribed_bbox():
+    """Test find_inscribed_bbox on a mildly sheared parallelogram (realistic LS data)."""
+    # 100x120 mask with mild shear: ~0.1 px shift per row (10px total over 100 rows)
+    # This matches real deskewed LS data where shear is small relative to width.
+    mask = np.zeros((100, 120), dtype=bool)
+    width = 80
+    for y in range(100):
+        x_start = y // 10  # shifts right by 1 every 10 rows
+        mask[y, x_start : x_start + width] = True
+
+    # Bounding box would be (0, 99, 0, 89) — includes invalid sheared corners.
+    # Border-shrink should find a rectangle fully inside the parallelogram.
+    result = find_inscribed_bbox(mask)
+    assert result is not None
+    y_min, y_max, x_min, x_max = result
+    # Verify all pixels in the bbox are True
+    assert mask[y_min : y_max + 1, x_min : x_max + 1].all(), "Bbox has False pixels!"
+    # Should keep most of the area (mild shear loses only ~10 cols)
+    area = (y_max - y_min + 1) * (x_max - x_min + 1)
+    assert area >= 80 * 70, f"Area {area} too small for mild shear"
+    print(f"Inscribed bbox: Y=[{y_min}:{y_max+1}], X=[{x_min}:{x_max+1}], area={area}")
+    print("INSCRIBED BBOX TEST PASSED!")
+
+
+def test_overlap_bbox_sheared():
+    """Test that sheared LS overlap is handled via inscribed bbox."""
+    T, C, Z, Y, X = 2, 1, 5, 100, 120
+    rng = np.random.default_rng(55)
+
+    # LF: valid everywhere
+    lf = rng.random((T, C, Z, Y, X), dtype=np.float32) + 0.1
+
+    # LS: mildly sheared parallelogram (realistic: ~0.1 px shift per row)
+    ls = np.zeros((T, C, Z, Y, X), dtype=np.float32)
+    for y in range(Y):
+        x_start = y // 10  # 10px total shift over 100 rows
+        x_end = x_start + 80
+        if x_end <= X:
+            ls[:, :, :, y, x_start:x_end] = (
+                rng.random((T, C, Z, x_end - x_start), dtype=np.float32) + 0.1
+            )
+
+    result = find_overlap_bbox_across_time([lf, ls])
+    assert result is not None
+    (y_min, y_max, x_min, x_max), mask, per_t = result
+
+    # The bbox must be fully inside the valid LS region
+    for y in range(y_min, y_max + 1):
+        ls_start = y // 10
+        assert x_min >= ls_start, (
+            f"Row {y}: x_min={x_min} < ls_start={ls_start}"
+        )
+        assert x_max < ls_start + 80, (
+            f"Row {y}: x_max={x_max} >= ls_end={ls_start + 80}"
+        )
+
+    area = (y_max - y_min + 1) * (x_max - x_min + 1)
+    print(
+        f"Sheared bbox: Y=[{y_min}:{y_max+1}], X=[{x_min}:{x_max+1}], area={area}"
+    )
+    print("SHEARED OVERLAP TEST PASSED!")
 
 
 def plot_overlap(
@@ -709,9 +816,11 @@ def compute_per_timepoint_metadata(
 ) -> dict | None:
     """Single-pass computation of blank frames, overlap bbox, and z_focus.
 
-    Iterates each timepoint once, loading mid-Z slices for both blank
-    detection and overlap computation simultaneously. For non-blank
-    frames, also computes z_focus from the LF phase Z-stack.
+    Iterates each timepoint once, loading mid-Z slices for blank detection.
+    For non-blank frames, computes z_focus from the LF phase Z-stack, then
+    loads z_focus slices for overlap computation (handles incomplete Z
+    volumes at beginning/end of FOV). The bbox is the largest inscribed
+    axis-aligned rectangle in the overlap mask (handles sheared LS data).
 
     Parameters
     ----------
@@ -776,29 +885,30 @@ def compute_per_timepoint_metadata(
 
         # Z focus from LF phase Z-stack
         lf_phase_zyx = np.asarray(arrays[0][t, 0, :, :, :])
-        z_focus.append(
-            focus_from_transverse_band(
-                lf_phase_zyx,
-                NA_det=NA_DET,
-                lambda_ill=LAMBDA_ILL,
-                pixel_size=pixel_size,
-            )
+        z_f = focus_from_transverse_band(
+            lf_phase_zyx,
+            NA_det=NA_DET,
+            lambda_ill=LAMBDA_ILL,
+            pixel_size=pixel_size,
         )
+        z_focus.append(z_f)
 
-        # Overlap from mid-Z slices already loaded above
+        # Overlap from z_focus slices (not mid-Z) so that frames with
+        # incomplete Z volumes at the beginning/end are handled correctly.
         overlap_slices = []
-        for arr_idx, slc in mid_z_slices:
-            slc = slc.copy()
-            if arr_idx == 0 and circ_mask is not None:
-                slc[~circ_mask] = 0
-            overlap_slices.append(slc)
+        for i, arr in enumerate(arrays):
+            for c in range(arr.shape[1]):
+                slc = np.asarray(arr[t, c, z_f, :, :]).copy()
+                if i == 0 and circ_mask is not None:
+                    slc[~circ_mask] = 0
+                overlap_slices.append(slc)
 
         t_mask = find_overlap_mask(overlap_slices)
         combined_mask &= t_mask
 
-        ys_t, xs_t = np.where(t_mask)
-        if len(ys_t) > 0:
-            per_t_bboxes[t] = [ys_t.min(), ys_t.max(), xs_t.min(), xs_t.max()]
+        t_bbox = find_inscribed_bbox(t_mask)
+        if t_bbox is not None:
+            per_t_bboxes[t] = list(t_bbox)
         else:
             per_t_bboxes[t] = [0, 0, 0, 0]
 
@@ -825,12 +935,12 @@ def compute_per_timepoint_metadata(
             f"{['t={}-{}'.format(s, e) if s != e else 't={}'.format(s) for s, e in runs]}"
         )
 
-    # Combined bbox
-    ys, xs = np.where(combined_mask)
-    if len(ys) == 0:
+    # Combined bbox (bounding box of valid region — a few zero pixels
+    # Border-shrink: tightest rectangle with fully valid borders.
+    bbox = find_inscribed_bbox(combined_mask)
+    if bbox is None:
         return None
 
-    bbox = (int(ys.min()), int(ys.max()), int(xs.min()), int(xs.max()))
     return {
         "bbox": bbox,
         "overlap_mask": combined_mask,
@@ -942,8 +1052,45 @@ def compute_fov_metadata(
             save_path=str(output_plots_dir / "drop_list.csv"),
         )
 
+        # --- Recompute bbox using only kept frames ---
+        # Dropped frames should not constrain the overlap bbox.
+        # Quick second pass: load z_focus slices for kept frames only,
+        # accumulate combined mask, then compute inscribed bbox.
+        keep_indices = drop_info["keep_indices"]
+        arrays = [im_lf_arr, im_ls_arr]
+        Y_common = min(arr.shape[-2] for arr in arrays)
+        X_common = min(arr.shape[-1] for arr in arrays)
+        circ_mask = None
+        if lf_mask_radius is not None:
+            circ_mask = make_circular_mask(
+                arrays[0].shape[-2], arrays[0].shape[-1], lf_mask_radius
+            )
+
+        kept_mask = np.ones((Y_common, X_common), dtype=bool)
+        for t in tqdm(keep_indices, desc="Recomputing bbox from kept frames"):
+            z_f = int(z_focus[t])
+            slices = []
+            for i, arr in enumerate(arrays):
+                for c in range(arr.shape[1]):
+                    slc = np.asarray(arr[t, c, z_f, :, :]).copy()
+                    if i == 0 and circ_mask is not None:
+                        slc[~circ_mask] = 0
+                    slices.append(slc)
+            kept_mask &= find_overlap_mask(slices)
+
+        # Use bounding box (not inscribed) — a few zero pixels at circle
+        kept_bbox = find_inscribed_bbox(kept_mask)
+        if kept_bbox is not None:
+            print(f"Recomputed bbox from {len(keep_indices)} kept frames "
+                  f"(was Y=[{bbox[0]}:{bbox[1]+1}], X=[{bbox[2]}:{bbox[3]+1}])")
+            y_min, y_max, x_min, x_max = kept_bbox
+        else:
+            print("WARNING: kept-frame mask has no valid overlap, using all-frame bbox")
+
+        print(f"Final bbox: Y=[{y_min}:{y_max+1}], X=[{x_min}:{x_max+1}]")
+        print(f"Final crop size: Y={y_max - y_min + 1}, X={x_max - x_min + 1}")
+
     # Save FOV summary metadata for stage 2
-    keep_indices = drop_info["keep_indices"]
     summary = {
         "status": "ok",
         "fov": fov,
@@ -1010,6 +1157,14 @@ def crop_fov(
     z_above = z_final - z_below - 1
     Z_out = z_final
 
+    # Center-crop / center-pad offsets when per-FOV crop differs from plate dims
+    y_src_off = max(0, (Y_crop - Y_out) // 2)
+    x_src_off = max(0, (X_crop - X_out) // 2)
+    y_dst_off = max(0, (Y_out - Y_crop) // 2)
+    x_dst_off = max(0, (X_out - X_crop) // 2)
+    y_size = min(Y_crop, Y_out)
+    x_size = min(X_crop, X_out)
+
     # Limit to T_out timepoints (min across all FOVs after dropping)
     if T_out is not None and len(keep_indices) > T_out:
         keep_indices = keep_indices[:T_out]
@@ -1017,8 +1172,11 @@ def crop_fov(
     fov_str = fov
 
     print(f"\nCropping FOV {fov_str} to {output_zarr}")
-    print(f"  Crop: ({len(keep_indices)}, ?, {Z_out}, {Y_crop}, {X_crop})")
+    print(f"  FOV crop: ({len(keep_indices)}, ?, {Z_out}, {Y_crop}, {X_crop})")
     print(f"  Plate dims: T={T_out}, Y={Y_out}, X={X_out}")
+    if Y_crop != Y_out or X_crop != X_out:
+        print(f"  Center-crop src[{y_src_off}:{y_src_off+y_size}, {x_src_off}:{x_src_off+x_size}]"
+              f" -> dst[{y_dst_off}:{y_dst_off+y_size}, {x_dst_off}:{x_dst_off+x_size}]")
     print(f"  z_final: {z_final} (1/3 below={z_below}, 2/3 above={z_above})")
     print(f"  Input zarrs: {len(input_zarr_paths)}")
 
@@ -1050,7 +1208,11 @@ def crop_fov(
                         )
                         out_slice = np.zeros((Z_out, Y_out, X_out), dtype=np.float32)
                         z_actual = slc.shape[0]
-                        out_slice[pad_top:pad_top + z_actual, :Y_crop, :X_crop] = slc
+                        out_slice[
+                            pad_top:pad_top + z_actual,
+                            y_dst_off:y_dst_off + y_size,
+                            x_dst_off:x_dst_off + x_size,
+                        ] = slc[:, y_src_off:y_src_off + y_size, x_src_off:x_src_off + x_size]
                         out_img[t_out, c_out] = out_slice
                         c_out += 1
 
@@ -1733,23 +1895,25 @@ def run_all_fovs(
 
 
 if __name__ == "__main__":
+    test_inscribed_bbox()
     test_overlap_bbox()
     test_overlap_bbox_no_overlap()
     test_overlap_bbox_with_y_padding()
     test_overlap_bbox_different_spatial_dims()
     test_overlap_bbox_with_nans()
     test_blank_first_frame()
+    test_overlap_bbox_sheared()
     print("\n=== SUBMITTING ALL FOVs ===")
     root_path = Path("/hpc/projects/intracellular_dashboard/organelle_dynamics/")
-    dataset = "2025_07_22_A549_SEC61_TOMM20_G3BP1_ZIKV"
+    dataset = "2025_07_24_A549_SEC61_TOMM20_G3BP1_ZIKV"
     run_all_fovs(
         root_path=root_path,
         dataset=dataset,
-        lf_mask_radius=0.75,
+        lf_mask_radius=0.98,
         local=False,
         stage1_run_dir=None,
-        beads_fov="A/3/000000",
+        beads_fov="A/3/000001",
         overlay_channels=["Phase3D", "raw GFP EX488 EM525-45"],
-        exclude_fovs=["A/3/000001", "A/3/001000", "A/3/001001"],
+        exclude_fovs=["A/3/000000", "A/3/001000", "A/3/001001"],
         
     )
