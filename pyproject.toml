@@ -20,7 +20,7 @@ classifiers = [
 
 # list package dependencies here
 dependencies = [
-  "iohub[tensorstore]==0.3.0a5",
+  "iohub[tensorstore]==0.3.0a6",
   "stitch @ git+https://github.com/ahillsley/stitching@jen",
   "matplotlib",
   "natsort",
@@ -33,7 +33,7 @@ dependencies = [
   "submitit",
   "torch",
   "tqdm",
-  "waveorder==3.0.0",
+  "waveorder==3.0.1",
   "largestinteriorrectangle",
   "antspyx",
   "pystackreg",
