@@ -903,6 +903,9 @@ def compute_per_timepoint_metadata(
             lambda_ill=LAMBDA_ILL,
             pixel_size=pixel_size,
         )
+        # Clamp z_f to min Z across all arrays (LF and LS may differ in Z)
+        Z_min = min(arr.shape[2] for arr in arrays)
+        z_f = int(np.clip(z_f, 0, Z_min - 1))
         z_focus.append(z_f)
 
         # Overlap from z_focus slices (not mid-Z) so that frames with
@@ -1998,8 +2001,26 @@ if __name__ == "__main__":
     #     z_window = 20,
     # )
 
+    # root_path = Path("/hpc/projects/intracellular_dashboard/organelle_dynamics/")
+    # dataset = "2025_07_22_A549_SEC61_TOMM20_G3BP1_ZIKV"
+    # run_all_fovs(
+    #     root_path=root_path,
+    #     dataset=dataset,
+    #     lf_mask_radius=0.98,
+    #     local=False,
+    #     stage1_run_dir=None,
+    #     beads_fov="A/3/000000",
+    #     overlay_channels=["Phase3D", "raw GFP EX488 EM525-45"],
+    #     exclude_fovs=["A/3/000001", "A/3/001000", "A/3/001001"],
+    #     z_final = 48,
+    #     n_std = 2.5,
+    #    # z_window = 20,
+    # )
+
+    # 2024_11_05_A549_TOMM20_ZIKV_DENV
+
     root_path = Path("/hpc/projects/intracellular_dashboard/organelle_dynamics/")
-    dataset = "2024_11_07_A549_SEC61_DENV"
+    dataset = "2024_11_05_A549_TOMM20_ZIKV_DENV"
     run_all_fovs(
         root_path=root_path,
         dataset=dataset,
@@ -2011,8 +2032,24 @@ if __name__ == "__main__":
         #exclude_fovs=["A/3/000001", "A/3/001000", "A/3/001001"],
         z_final = 48,
         n_std = 2.5,
-       # z_window = 20,
+        z_window = 20,
     )
+
+    # root_path = Path("/hpc/projects/intracellular_dashboard/organelle_dynamics/")
+    # dataset = "2024_11_07_A549_SEC61_DENV"
+    # run_all_fovs(
+    #     root_path=root_path,
+    #     dataset=dataset,
+    #     lf_mask_radius=0.98,
+    #     local=False,
+    #     stage1_run_dir=None,
+    #     beads_fov="C/1/000000",
+    #     overlay_channels=["Phase3D", "raw GFP EX488 EM525-45"],
+    #     #exclude_fovs=["A/3/000001", "A/3/001000", "A/3/001001"],
+    #     z_final = 48,
+    #     n_std = 2.5,
+    #     z_window = 20,
+    # )
 
 
     # root_path = Path("/hpc/projects/intracellular_dashboard/organelle_dynamics/")
