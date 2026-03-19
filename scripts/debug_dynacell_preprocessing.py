@@ -1,4 +1,7 @@
 from datetime import datetime
+import json
+import subprocess
+import time
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -636,6 +639,7 @@ def plot_z_focus(
     z_focus: list[int],
     save_path: str | None = None,
     n_std: float = 2.5,
+    z_window: int | None = None,
 ) -> dict:
     """Plot z focus index over time with statistics and outlier detection.
 
@@ -645,8 +649,16 @@ def plot_z_focus(
     t_axis = np.arange(len(z_arr))
     mu = np.mean(z_arr)
     sigma = np.std(z_arr)
-    upper = mu + n_std * sigma
-    lower = mu - n_std * sigma
+    if z_window is not None:
+        upper = mu + z_window
+        lower = mu - z_window
+    else:
+        upper = mu + n_std * sigma
+        lower = mu - n_std * sigma
+
+    print(f"Z window: {z_window}")
+    print(f"Upper: {upper}, Lower: {lower}")
+    print(f"N std: {n_std}")
 
     # Outlier timepoints
     t_above = np.where(z_arr > upper)[0]
@@ -675,13 +687,13 @@ def plot_z_focus(
     ax.plot(t_axis, z_arr, "tab:blue", alpha=0.7, linewidth=1.0, label="per timepoint")
     ax.axhline(mu, color="orange", linestyle=":", linewidth=1.5, label=f"mean = {mu:.1f}")
     ax.fill_between(t_axis, mu - sigma, mu + sigma, color="orange", alpha=0.15, label=f"1 std = {sigma:.1f}")
-    ax.fill_between(t_axis, lower, upper, color="red", alpha=0.07, label=f"2 std = [{lower:.1f}, {upper:.1f}]")
+    ax.fill_between(t_axis, lower, upper, color="red", alpha=0.07, label=f"{n_std} std = [{lower:.1f}, {upper:.1f}]")
     ax.axhline(np.median(z_arr), color="green", linestyle="--", linewidth=1.2, label=f"median = {np.median(z_arr):.0f}")
     # Mark outliers
     if len(t_above) > 0:
-        ax.scatter(t_above, z_arr[t_above], color="red", s=30, zorder=5, label=f"above 2std (n={len(t_above)})")
+        ax.scatter(t_above, z_arr[t_above], color="red", s=30, zorder=5, label=f"above {n_std}std (n={len(t_above)})")
     if len(t_below) > 0:
-        ax.scatter(t_below, z_arr[t_below], color="purple", s=30, zorder=5, label=f"below 2std (n={len(t_below)})")
+        ax.scatter(t_below, z_arr[t_below], color="purple", s=30, zorder=5, label=f"below {n_std}std (n={len(t_below)})")
     ax.set_xlabel("Time point")
     ax.set_ylabel("Z focus index")
     ax.set_title(
@@ -960,6 +972,7 @@ def compute_fov_metadata(
     fov: str,
     lf_mask_radius: float = 0.75,
     n_std: float = 2.5,
+    z_window: int | None = None,
     DEBUG: bool = True,
 ) -> dict:
     """Stage 1: Compute bbox, z_focus, blank frames, and drop list for one FOV.
@@ -1036,6 +1049,7 @@ def compute_fov_metadata(
             z_focus_valid,
             save_path=str(output_plots_dir / "z_focus.png"),
             n_std=n_std,
+            z_window=z_window,
         )
 
         # Remap outlier indices back to original timepoint indices
@@ -1369,6 +1383,27 @@ def compute_beads_registration_qc(
 
 ## ===== Two-stage orchestrator =====
 
+def _get_git_info(repo_path: str | Path | None = None) -> dict:
+    """Return current git branch, commit hash, and dirty status for a repo."""
+    cwd = str(repo_path) if repo_path else None
+    info = {}
+    try:
+        info["branch"] = subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=cwd, text=True
+        ).strip()
+        info["commit"] = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=cwd, text=True
+        ).strip()
+        info["dirty"] = bool(
+            subprocess.check_output(
+                ["git", "status", "--porcelain"], cwd=cwd, text=True
+            ).strip()
+        )
+    except Exception as e:
+        info["error"] = str(e)
+    return info
+
+
 def run_all_fovs(
     root_path: Path,
     dataset: str,
@@ -1381,6 +1416,7 @@ def run_all_fovs(
     max_drops: int = 5,
     overlay_channels: list[str] | None = None,
     exclude_fovs: list[str] | None = None,
+    z_window: int | None = None,
 ):
     """Two-stage pipeline:
     Stage 1: Compute bbox, z_focus, drop list per FOV (parallel submitit jobs).
@@ -1420,6 +1456,33 @@ def run_all_fovs(
     output_dir.mkdir(parents=True, exist_ok=True)
     print(f"Run ID: {run_id}")
     print(f"Output dir: {output_dir}")
+
+    # Log run parameters, timestamp, and git info
+    _run_start_time = time.time()
+    biahub_repo = Path(__file__).resolve().parent.parent
+    run_log = {
+        "timestamp": datetime.now().isoformat(),
+        "run_id": run_id,
+        "parameters": {
+            "root_path": str(root_path),
+            "dataset": dataset,
+            "lf_mask_radius": lf_mask_radius,
+            "z_final": z_final,
+            "n_std": n_std,
+            "local": local,
+            "stage1_run_dir": str(stage1_run_dir) if stage1_run_dir else None,
+            "beads_fov": beads_fov,
+            "max_drops": max_drops,
+            "overlay_channels": overlay_channels,
+            "exclude_fovs": exclude_fovs,
+            "z_window": z_window,
+        },
+        "git": _get_git_info(biahub_repo),
+    }
+    run_log_path = output_dir / "run_log.json"
+    with open(run_log_path, "w") as f:
+        json.dump(run_log, f, indent=2)
+    print(f"Saved run log to {run_log_path}")
 
     # Discover FOVs
     position_dirpaths = sorted([Path(p) for p in glob(str(lf_zarr / "*" / "*" / "*"))])
@@ -1483,7 +1546,7 @@ def run_all_fovs(
             "slurm_cpus_per_task": num_cpus,
             "slurm_array_parallelism": 100,
             "slurm_time": 120,
-            "slurm_partition": "cpu",
+            "slurm_partition": "gpu",
         }
 
         executor_s1 = submitit.AutoExecutor(folder=slurm_out_path / "stage1", cluster=cluster)
@@ -1509,6 +1572,7 @@ def run_all_fovs(
                     fov=fov,
                     lf_mask_radius=lf_mask_radius,
                     n_std=n_std,
+                    z_window=z_window,
                     DEBUG=True,
                 )
                 jobs_s1.append(job)
@@ -1849,7 +1913,7 @@ def run_all_fovs(
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,
         "slurm_time": 120,
-        "slurm_partition": "cpu",
+        "slurm_partition": "gpu",
     }
 
     executor_s2 = submitit.AutoExecutor(folder=slurm_out_path / "stage2", cluster=cluster)
@@ -1894,6 +1958,16 @@ def run_all_fovs(
     print(f"\n=== Generating QC report ===")
     generate_dataset_report(output_dir, overlay_channels=overlay_channels)
 
+    # Update run log with execution time
+    elapsed_sec = time.time() - _run_start_time
+    run_log["execution_time_sec"] = round(elapsed_sec, 1)
+    run_log["execution_time_human"] = (
+        f"{int(elapsed_sec // 3600)}h {int((elapsed_sec % 3600) // 60)}m {int(elapsed_sec % 60)}s"
+    )
+    with open(run_log_path, "w") as f:
+        json.dump(run_log, f, indent=2)
+    print(f"Updated run log with execution time: {run_log['execution_time_human']}")
+
 
 if __name__ == "__main__":
     test_inscribed_bbox()
@@ -1905,17 +1979,74 @@ if __name__ == "__main__":
     test_blank_first_frame()
     test_overlap_bbox_sheared()
     print("\n=== SUBMITTING ALL FOVs ===")
+
+    
+
+    # root_path = Path("/hpc/projects/intracellular_dashboard/organelle_dynamics/")
+    # dataset = "2025_08_26_A549_SEC61_TOMM20_ZIKV"
+    # run_all_fovs(
+    #     root_path=root_path,
+    #     dataset=dataset,
+    #     lf_mask_radius=0.98,
+    #     local=False,
+    #     stage1_run_dir=None,
+    #     beads_fov="A/3/000000",
+    #     overlay_channels=["Phase3D", "raw GFP EX488 EM525-45"],
+    #     exclude_fovs=["A/3/000001", "A/3/001000", "A/3/001001"],
+    #     z_final = 48,
+    #     n_std = 2.5,
+    #     z_window = 20,
+    # )
+
     root_path = Path("/hpc/projects/intracellular_dashboard/organelle_dynamics/")
-    dataset = "2025_07_24_A549_SEC61_TOMM20_G3BP1_ZIKV"
+    dataset = "2024_11_07_A549_SEC61_DENV"
     run_all_fovs(
         root_path=root_path,
         dataset=dataset,
         lf_mask_radius=0.98,
         local=False,
         stage1_run_dir=None,
-        beads_fov="A/3/000001",
+        beads_fov="C/1/000000",
         overlay_channels=["Phase3D", "raw GFP EX488 EM525-45"],
-        exclude_fovs=["A/3/000000", "A/3/001000", "A/3/001001"],
-        z_final = 44,
-        
+        #exclude_fovs=["A/3/000001", "A/3/001000", "A/3/001001"],
+        z_final = 48,
+        n_std = 2.5,
+       # z_window = 20,
     )
+
+
+    # root_path = Path("/hpc/projects/intracellular_dashboard/organelle_dynamics/")
+    # dataset = "2024_10_31_A549_SEC61_ZIKV_DENV"
+    # run_all_fovs(
+    #     root_path=root_path,
+    #     dataset=dataset,
+    #     lf_mask_radius=0.98,
+    #     local=False,
+    #     stage1_run_dir=None,
+    #     beads_fov="C/1/000000",
+    #     overlay_channels=["Phase3D", "raw GFP EX488 EM525-45"],
+    #  #   exclude_fovs=["A/3/000000", "A/3/001000", "A/3/001001"],
+    #     z_final = 48,
+    #     n_std = 3.5,
+    #     z_window = 20,
+    # )
+
+
+    # root_path = Path("/hpc/projects/intracellular_dashboard/organelle_dynamics/")
+    # dataset = "2025_07_24_A549_SEC61_TOMM20_G3BP1_ZIKV"
+    # run_all_fovs(
+    #     root_path=root_path,
+    #     dataset=dataset,
+    #     lf_mask_radius=0.98,
+    #     local=False,
+    #     stage1_run_dir=None,
+    #     beads_fov="A/3/000001",
+    #     overlay_channels=["Phase3D", "raw GFP EX488 EM525-45"],
+    #     exclude_fovs=["A/3/000000", "A/3/001000", "A/3/001001"],
+    #     z_final = 48,
+    #     n_std = 2.5,
+    #     z_window = 20,
+    # )
+
+
+
