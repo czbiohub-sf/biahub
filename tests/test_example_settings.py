@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from biahub.settings import (
     CharacterizeSettings,
     ConcatenateSettings,
+    ConvertSettings,
     DeskewSettings,
     EstimateRegistrationSettings,
     EstimateStabilizationSettings,
@@ -27,6 +28,7 @@ example_settings_params = [
     ("example_concatenate_multi_position.yml", ConcatenateSettings),
     ("example_concatenate_settings_organelle_dynamics.yml", ConcatenateSettings),
     ("example_concatenate_settings.yml", ConcatenateSettings),
+    ("example_convert_settings.yml", ConvertSettings),
     ("example_deskew_settings.yml", DeskewSettings),
     ("example_estimate_registration_settings_beads.yml", EstimateRegistrationSettings),
     ("example_estimate_registration_settings_manual.yml", EstimateRegistrationSettings),
