@@ -1,0 +1,13 @@
+# it's important that phase is first and fluorescence is second in the list
+concat_data_paths:
+- '../1-preprocess/label-free/2-stabilize/phase/2025_04_17_A549_H2B_CAAX_DENV.zarr/*/*/*'
+- '../1-preprocess/light-sheet/raw/3-stabilize-xy/2025_04_17_A549_H2B_CAAX_DENV.zarr/*/*/*'
+- '../1-preprocess/label-free/2-stabilize/virtual-stain/2025_04_17_A549_H2B_CAAX_DENV.zarr/*/*/*'
+- '../1-preprocess/light-sheet/deconvolved/2-stabilize-register/2025_04_17_A549_H2B_CAAX_DENV.zarr/*/*/*'
+time_indices: all  # replace "all" with e.g. "[0, 1, 2]"" for cropping
+channel_names:
+- all
+- all
+- all
+- all
+chunks_czyx: null  # replace "null" with e.g. "[1, 100, 100, 100]" for desired chunking [C,Z,Y,X]
