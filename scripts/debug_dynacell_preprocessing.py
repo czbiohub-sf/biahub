@@ -1,0 +1,1160 @@
+from datetime import datetime
+import yaml
+import subprocess
+import time
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import submitit
+from glob import glob
+from pathlib import Path
+from iohub import open_ome_zarr
+from iohub.ngff.utils import create_empty_plate
+from dynacell_qc_report import generate_dataset_report
+
+from dynacell_geometry import (
+    NA_DET,
+    LAMBDA_ILL,
+    make_circular_mask,
+    find_overlap_mask,
+    find_inscribed_bbox,
+    find_overlap_bbox_across_time,
+)
+from dynacell_plotting import plot_bbox_over_time, plot_overlap, plot_z_focus
+from dynacell_qc import (
+    compute_beads_registration_qc,
+    compute_laplacian_qc,
+    compute_entropy_qc,
+    compute_dust_qc,
+    compute_bleach_qc,
+)
+from dynacell_stage1 import (
+    find_blank_frames,
+    build_drop_list,
+    compute_per_timepoint_metadata,
+    compute_fov_metadata,
+)
+from dynacell_stage2 import crop_fov
+
+
+def test_overlap_bbox():
+    """Test with synthetic numpy arrays."""
+    T, C_lf, C_ls, Z, Y, X = 3, 2, 1, 5, 100, 120
+    rng = np.random.default_rng(42)
+
+    # Label-free: zero padding on the left, increasing per t
+    lf = rng.random((T, C_lf, Z, Y, X), dtype=np.float32) + 0.1
+    for t in range(T):
+        lf[t, :, :, :, : 10 + t] = 0
+
+    # Light-sheet: zero padding on the right, increasing per t
+    ls = rng.random((T, C_ls, Z, Y, X), dtype=np.float32) + 0.1
+    for t in range(T):
+        ls[t, :, :, :, -(15 + t) :] = 0
+
+    # Run
+    result = find_overlap_bbox_across_time([lf, ls])
+    assert result is not None, "Expected overlap, got None"
+    (y_min, y_max, x_min, x_max), mask, per_t = result
+
+    # Expected per-t:
+    #   t=0: lf zeros cols 0-9,  ls zeros cols 105-119 -> X overlap [10, 104]
+    #   t=1: lf zeros cols 0-10, ls zeros cols 104-119 -> X overlap [11, 103]
+    #   t=2: lf zeros cols 0-11, ls zeros cols 103-119 -> X overlap [12, 102]
+    # Intersection: x_min=12, x_max=102, y_min=0, y_max=99
+    assert y_min == 0, f"y_min={y_min} != 0"
+    assert y_max == 99, f"y_max={y_max} != 99"
+    assert x_min == 12, f"x_min={x_min} != 12"
+    assert x_max == 102, f"x_max={x_max} != 102"
+    assert mask.shape == (100, 120), f"mask shape={mask.shape}"
+    assert mask[50, 50] is np.True_, "center should be valid"
+    assert mask[50, 0] is np.False_, "left edge should be invalid"
+
+    print(f"Overlap bbox: Y=[{y_min}:{y_max+1}], X=[{x_min}:{x_max+1}]")
+    print(f"Crop size: Y={y_max - y_min + 1}, X={x_max - x_min + 1}")
+    print("TEST PASSED!")
+
+
+def test_overlap_bbox_no_overlap():
+    """Test with arrays that have no overlapping non-zero region."""
+    T, C, Z, Y, X = 2, 1, 3, 50, 50
+    rng = np.random.default_rng(0)
+
+    arr1 = rng.random((T, C, Z, Y, X), dtype=np.float32) + 0.1
+    arr1[:, :, :, :, 25:] = 0  # only left half
+
+    arr2 = rng.random((T, C, Z, Y, X), dtype=np.float32) + 0.1
+    arr2[:, :, :, :, :25] = 0  # only right half
+
+    result = find_overlap_bbox_across_time([arr1, arr2])
+    assert result is None, f"Expected None, got {result}"
+    print("NO-OVERLAP TEST PASSED!")
+
+
+def test_overlap_bbox_with_y_padding():
+    """Test with zero padding in both Y and X."""
+    T, C, Z, Y, X = 2, 1, 5, 80, 100
+    rng = np.random.default_rng(7)
+
+    arr1 = rng.random((T, C, Z, Y, X), dtype=np.float32) + 0.1
+    arr1[:, :, :, :5, :] = 0   # top 5 rows zero
+    arr1[:, :, :, :, :8] = 0   # left 8 cols zero
+
+    arr2 = rng.random((T, C, Z, Y, X), dtype=np.float32) + 0.1
+    arr2[:, :, :, 70:, :] = 0  # bottom 10 rows zero
+    arr2[:, :, :, :, 90:] = 0  # right 10 cols zero
+
+    result = find_overlap_bbox_across_time([arr1, arr2])
+    assert result is not None
+    (y_min, y_max, x_min, x_max), mask, per_t = result
+    assert y_min == 5, f"y_min={y_min} != 5"
+    assert y_max == 69, f"y_max={y_max} != 69"
+    assert x_min == 8, f"x_min={x_min} != 8"
+    assert x_max == 89, f"x_max={x_max} != 89"
+    print(f"Y+X padding bbox: Y=[{y_min}:{y_max+1}], X=[{x_min}:{x_max+1}]")
+    print("Y+X PADDING TEST PASSED!")
+
+
+def test_overlap_bbox_different_spatial_dims():
+    """Test with arrays that have different Y,X dimensions (like real data)."""
+    T, Z = 2, 5
+    rng = np.random.default_rng(99)
+
+    # arr1: (T, 1, Z, 100, 80) - zeros on left 5 cols
+    arr1 = rng.random((T, 1, Z, 100, 80), dtype=np.float32) + 0.1
+    arr1[:, :, :, :, :5] = 0
+
+    # arr2: (T, 2, Z, 60, 120) - zeros on bottom 10 rows
+    arr2 = rng.random((T, 2, Z, 60, 120), dtype=np.float32) + 0.1
+    arr2[:, :, :, 50:, :] = 0
+
+    # Common region: Y=min(100,60)=60, X=min(80,120)=80
+    # arr1 in common: zeros cols 0-4, valid Y=[0:60], X=[5:80]
+    # arr2 in common: zeros rows 50-59, valid Y=[0:50], X=[0:80]
+    # Overlap: Y=[0:50], X=[5:80]
+    result = find_overlap_bbox_across_time([arr1, arr2])
+    assert result is not None, f"Expected overlap, got None"
+    (y_min, y_max, x_min, x_max), mask, per_t = result
+    assert y_min == 0, f"y_min={y_min} != 0"
+    assert y_max == 49, f"y_max={y_max} != 49"
+    assert x_min == 5, f"x_min={x_min} != 5"
+    assert x_max == 79, f"x_max={x_max} != 79"
+    # mask shape should be min(Y), min(X) = 60, 80
+    assert mask.shape == (60, 80), f"mask shape={mask.shape}"
+    print(f"Different dims bbox: Y=[{y_min}:{y_max+1}], X=[{x_min}:{x_max+1}]")
+    print("DIFFERENT SPATIAL DIMS TEST PASSED!")
+
+
+def test_overlap_bbox_with_nans():
+    """Test that NaN regions are treated as invalid (like zeros)."""
+    T, C, Z, Y, X = 2, 1, 3, 50, 60
+    rng = np.random.default_rng(13)
+
+    arr1 = rng.random((T, C, Z, Y, X), dtype=np.float32) + 0.1
+    arr1[:, :, :, :, :10] = np.nan  # NaN on left
+
+    arr2 = rng.random((T, C, Z, Y, X), dtype=np.float32) + 0.1
+    arr2[:, :, :, :, 50:] = 0  # zeros on right
+
+    result = find_overlap_bbox_across_time([arr1, arr2])
+    assert result is not None
+    (y_min, y_max, x_min, x_max), mask, per_t = result
+    assert x_min == 10, f"x_min={x_min} != 10"
+    assert x_max == 49, f"x_max={x_max} != 49"
+    print(f"NaN bbox: Y=[{y_min}:{y_max+1}], X=[{x_min}:{x_max+1}]")
+    print("NAN TEST PASSED!")
+
+
+def test_blank_first_frame():
+    """Test that a blank first timepoint is properly skipped."""
+    T, C, Z, Y, X = 5, 1, 5, 50, 60
+    rng = np.random.default_rng(77)
+
+    arr1 = rng.random((T, C, Z, Y, X), dtype=np.float32) + 0.1
+    arr1[0, :, :, :, :] = 0  # t=0 completely blank
+    arr1[:, :, :, :, :5] = 0  # left 5 cols always zero
+
+    arr2 = rng.random((T, C, Z, Y, X), dtype=np.float32) + 0.1
+    arr2[0, :, :, :, :] = 0  # t=0 completely blank
+    arr2[:, :, :, :, 50:] = 0  # right 10 cols always zero
+
+    # Without skip_frames: blank t=0 poisons combined_mask -> None
+    result_no_skip = find_overlap_bbox_across_time([arr1, arr2])
+    assert result_no_skip is None, "Without skip_frames, blank t=0 should cause no overlap"
+
+    # With skip_frames: blank t=0 is excluded
+    result = find_overlap_bbox_across_time([arr1, arr2], skip_frames=[0])
+    assert result is not None, "With skip_frames=[0], should find valid overlap"
+    (y_min, y_max, x_min, x_max), mask, per_t = result
+    assert x_min == 5, f"x_min={x_min} != 5"
+    assert x_max == 49, f"x_max={x_max} != 49"
+    assert per_t[0].tolist() == [0, 0, 0, 0], "Blank frame should have zero bbox"
+    assert per_t[1, 2] > 0, "Non-blank frame should have valid x_min"
+
+    print(f"Blank t=0 bbox: Y=[{y_min}:{y_max+1}], X=[{x_min}:{x_max+1}]")
+    print("BLANK FIRST FRAME TEST PASSED!")
+
+
+def test_inscribed_bbox():
+    """Test find_inscribed_bbox on a mildly sheared parallelogram (realistic LS data)."""
+    # 100x120 mask with mild shear: ~0.1 px shift per row (10px total over 100 rows)
+    # This matches real deskewed LS data where shear is small relative to width.
+    mask = np.zeros((100, 120), dtype=bool)
+    width = 80
+    for y in range(100):
+        x_start = y // 10  # shifts right by 1 every 10 rows
+        mask[y, x_start : x_start + width] = True
+
+    # Bounding box would be (0, 99, 0, 89) — includes invalid sheared corners.
+    # Border-shrink should find a rectangle fully inside the parallelogram.
+    result = find_inscribed_bbox(mask)
+    assert result is not None
+    y_min, y_max, x_min, x_max = result
+    # Verify all pixels in the bbox are True
+    assert mask[y_min : y_max + 1, x_min : x_max + 1].all(), "Bbox has False pixels!"
+    # Should keep most of the area (mild shear loses only ~10 cols)
+    area = (y_max - y_min + 1) * (x_max - x_min + 1)
+    assert area >= 80 * 70, f"Area {area} too small for mild shear"
+    print(f"Inscribed bbox: Y=[{y_min}:{y_max+1}], X=[{x_min}:{x_max+1}], area={area}")
+    print("INSCRIBED BBOX TEST PASSED!")
+
+
+def test_overlap_bbox_sheared():
+    """Test that sheared LS overlap is handled via inscribed bbox."""
+    T, C, Z, Y, X = 2, 1, 5, 100, 120
+    rng = np.random.default_rng(55)
+
+    # LF: valid everywhere
+    lf = rng.random((T, C, Z, Y, X), dtype=np.float32) + 0.1
+
+    # LS: mildly sheared parallelogram (realistic: ~0.1 px shift per row)
+    ls = np.zeros((T, C, Z, Y, X), dtype=np.float32)
+    for y in range(Y):
+        x_start = y // 10  # 10px total shift over 100 rows
+        x_end = x_start + 80
+        if x_end <= X:
+            ls[:, :, :, y, x_start:x_end] = (
+                rng.random((T, C, Z, x_end - x_start), dtype=np.float32) + 0.1
+            )
+
+    result = find_overlap_bbox_across_time([lf, ls])
+    assert result is not None
+    (y_min, y_max, x_min, x_max), mask, per_t = result
+
+    # The bbox must be fully inside the valid LS region
+    for y in range(y_min, y_max + 1):
+        ls_start = y // 10
+        assert x_min >= ls_start, (
+            f"Row {y}: x_min={x_min} < ls_start={ls_start}"
+        )
+        assert x_max < ls_start + 80, (
+            f"Row {y}: x_max={x_max} >= ls_end={ls_start + 80}"
+        )
+
+    area = (y_max - y_min + 1) * (x_max - x_min + 1)
+    print(
+        f"Sheared bbox: Y=[{y_min}:{y_max+1}], X=[{x_min}:{x_max+1}], area={area}"
+    )
+    print("SHEARED OVERLAP TEST PASSED!")
+
+
+## ===== Pipeline helpers =====
+
+def _get_git_info(repo_path: str | Path | None = None) -> dict:
+    """Return current git branch, commit hash, and dirty status for a repo."""
+    cwd = str(repo_path) if repo_path else None
+    info = {}
+    try:
+        info["branch"] = subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=cwd, text=True
+        ).strip()
+        info["commit"] = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=cwd, text=True
+        ).strip()
+        info["dirty"] = bool(
+            subprocess.check_output(
+                ["git", "status", "--porcelain"], cwd=cwd, text=True
+            ).strip()
+        )
+    except Exception as e:
+        info["error"] = str(e)
+    return info
+
+
+def _resolve_zarr_paths(root_path: Path, dataset: str, lf_zarr_override: Path | None = None):
+    """Resolve all input zarr paths for a dataset."""
+    if lf_zarr_override is not None:
+        lf_zarr = lf_zarr_override
+    else:
+        lf_zarr = root_path / dataset / "1-preprocess" / "label-free" / "0-reconstruct" / f"{dataset}.zarr"
+    ls_zarr = root_path / dataset / "1-preprocess" / "light-sheet" / "raw" / "1-register" / f"{dataset}.zarr"
+    ls_deconvolved_zarr = root_path / dataset / "1-preprocess" / "light-sheet" / "deconvolved" / "2-register" / f"{dataset}.zarr"
+    bf_zarr = root_path / dataset / "0-convert" / f"{dataset}_symlink" / f"{dataset}_labelfree_1.zarr"
+    # vs_zarr = root_path / dataset / "1-preprocess" / "label-free" / "1-virtual-stain" / f"{dataset}.zarr"
+    return lf_zarr, ls_zarr, ls_deconvolved_zarr, bf_zarr
+
+
+def _discover_and_filter_fovs(lf_zarr, include_fovs, exclude_fovs, beads_fov):
+    """Discover FOV positions in the zarr and apply include/exclude filters."""
+    position_dirpaths = sorted([Path(p) for p in glob(str(lf_zarr / "*" / "*" / "*"))])
+    position_keys = [p.parts[-3:] for p in position_dirpaths]
+    print(f"Found {len(position_keys)} FOVs")
+
+    if include_fovs:
+        include_set = {tuple(f.split("/")) for f in include_fovs}
+        position_keys = [k for k in position_keys if k in include_set]
+        print(f"  Filtered to {len(position_keys)} FOVs by include_fovs")
+
+    if exclude_fovs:
+        exclude_set = {tuple(f.split("/")) for f in exclude_fovs}
+        excluded = [k for k in position_keys if k in exclude_set]
+        position_keys = [k for k in position_keys if k not in exclude_set]
+        if excluded:
+            print(f"  Excluded by user: {len(excluded)} FOVs: {['/'.join(k) for k in excluded]}")
+
+    if beads_fov is not None:
+        beads_key = tuple(beads_fov.split("/"))
+        # Check that beads FOV exists in the original (unfiltered) position list
+        all_keys_set = {p.parts[-3:] for p in sorted(Path(lf_zarr).glob("*/*/*"))}
+        if beads_key not in all_keys_set:
+            print(f"WARNING: beads_fov '{beads_fov}' not found in dataset, skipping beads QC")
+            beads_fov = None
+        else:
+            # Remove beads FOV from processing list — it's only used for registration QC
+            position_keys = [k for k in position_keys if k != beads_key]
+            print(f"  Beads FOV: {beads_fov} (registration QC only, excluded from processing)")
+    else:
+        print("  No beads_fov specified, skipping registration QC")
+
+    return position_keys, beads_fov
+
+
+def _get_plate_metadata(all_zarrs, first_fov):
+    """Read channel names, scale, and estimate SLURM resources from the first FOV."""
+    all_channel_names = []
+    total_elements_per_t = 0
+    scale = None
+
+    for zarr_path in all_zarrs:
+        fov_path = zarr_path / first_fov
+        with open_ome_zarr(fov_path) as ds:
+            _, C_i, Z_i, Y_i, X_i = ds.data.shape
+            all_channel_names.extend(list(ds.channel_names))
+            total_elements_per_t += C_i * Z_i * Y_i * X_i
+            if scale is None:
+                scale = list(ds.scale)
+
+    bytes_per_element = np.dtype(np.float32).itemsize
+    gb_per_timepoint = total_elements_per_t * bytes_per_element / 1e9
+    gb_ram_per_cpu = max(4, int(np.ceil(gb_per_timepoint * 4)))
+
+    return all_channel_names, scale, gb_ram_per_cpu
+
+
+def _submit_stage1_jobs(
+    position_keys, lf_zarr, ls_zarr, plots_dir,
+    slurm_out_path, cluster, slurm_args,
+    lf_mask_radius, n_std, z_window, z_final, beads_fov,
+    z_index=None,
+):
+    """Submit stage 1 SLURM jobs for per-FOV metadata and optional beads QC.
+
+    Returns (ok_results, beads_qc_job). beads_qc_job may be None.
+    """
+    print(f"\n=== STAGE 1: Computing metadata for {len(position_keys)} FOVs ===")
+
+    executor_s1 = submitit.AutoExecutor(folder=slurm_out_path / "stage1", cluster=cluster)
+    executor_s1.update_parameters(slurm_job_name="dynacell_s1_metadata", **slurm_args)
+
+    print(f"  Resources: {slurm_args['slurm_cpus_per_task']} CPUs, {slurm_args['slurm_mem_per_cpu']} RAM/CPU")
+    jobs_s1 = []
+
+    with submitit.helpers.clean_env(), executor_s1.batch():
+        for position_key in position_keys:
+            fov = "/".join(position_key)
+            fov_name = "_".join(position_key)
+            output_plots_dir = plots_dir / fov_name
+            output_plots_dir.mkdir(parents=True, exist_ok=True)
+
+            job = executor_s1.submit(
+                compute_fov_metadata,
+                im_lf_path=lf_zarr / fov,
+                im_ls_path=ls_zarr / fov,
+                output_plots_dir=output_plots_dir,
+                fov=fov,
+                lf_mask_radius=lf_mask_radius,
+                n_std=n_std,
+                z_window=z_window,
+                z_final=z_final,
+                z_index=z_index,
+                DEBUG=True,
+            )
+            jobs_s1.append(job)
+
+    job_ids_s1 = [job.job_id for job in jobs_s1]
+    log_path_s1 = slurm_out_path / "stage1_job_ids.log"
+    with log_path_s1.open("w") as f:
+        f.write("\n".join(job_ids_s1))
+    print(f"Stage 1: Submitted {len(jobs_s1)} jobs. IDs: {log_path_s1}")
+
+    # Submit beads registration QC (runs in parallel with stage 1)
+    beads_qc_job = None
+    if beads_fov is not None:
+        beads_fov_name = "_".join(beads_fov.split("/"))
+        beads_plots_dir = plots_dir / beads_fov_name
+        beads_plots_dir.mkdir(parents=True, exist_ok=True)
+
+        executor_beads = submitit.AutoExecutor(
+            folder=slurm_out_path / "beads_qc", cluster=cluster
+        )
+        executor_beads.update_parameters(slurm_job_name="dynacell_beads_qc", **slurm_args)
+        beads_qc_job = executor_beads.submit(
+            compute_beads_registration_qc,
+            im_lf_path=lf_zarr / beads_fov,
+            im_ls_path=ls_zarr / beads_fov,
+            output_plots_dir=beads_plots_dir,
+            n_std=n_std,
+        )
+        print(f"Beads QC: Submitted job {beads_qc_job.job_id}")
+
+    # Wait for stage 1 completion
+    print("\nWaiting for stage 1 jobs to complete...")
+    results_s1 = [job.result() for job in jobs_s1]
+
+    failed = [r for r in results_s1 if r.get("status") != "ok"]
+    if failed:
+        print(f"WARNING: {len(failed)} FOVs failed in stage 1:")
+        for r in failed:
+            print(f"  {r}")
+
+    ok_results = [r for r in results_s1 if r.get("status") == "ok"]
+    return ok_results, beads_qc_job
+
+
+def _load_stage1_results(stage1_dir, plots_dir, position_keys):
+    """Read stage 1 results from an existing run directory."""
+    print(f"\n=== Skipping stage 1, reading results from {stage1_dir} ===")
+    global_summary_path = stage1_dir / "global_summary.csv"
+    if global_summary_path.exists():
+        ok_results = pd.read_csv(global_summary_path).to_dict("records")
+    else:
+        ok_results = []
+        for position_key in position_keys:
+            fov_name = "_".join(position_key)
+            summary_path = plots_dir / fov_name / "fov_summary.csv"
+            if summary_path.exists():
+                summary = pd.read_csv(summary_path).to_dict("records")[0]
+                if summary.get("status") == "ok":
+                    ok_results.append(summary)
+    print(f"  Loaded {len(ok_results)} FOV results from stage 1")
+    return ok_results
+
+
+def _collect_beads_qc(beads_qc_job, beads_fov, plots_dir, n_std):
+    """Collect beads registration QC results from a running job or existing CSV."""
+    beads_drop_indices = np.array([], dtype=int)
+    if beads_qc_job is not None:
+        print("\nWaiting for beads QC job to complete...")
+        beads_qc_result = beads_qc_job.result()
+        beads_drop_indices = beads_qc_result["drop_indices"]
+        print(f"Beads QC: {len(beads_drop_indices)} bad registration timepoints")
+    elif beads_fov is not None:
+        beads_fov_name = "_".join(beads_fov.split("/"))
+        beads_qc_csv = plots_dir / beads_fov_name / "registration_qc.csv"
+        if beads_qc_csv.exists():
+            beads_qc_df = pd.read_csv(beads_qc_csv)
+            shift_mag = beads_qc_df["shift_magnitude"].values
+            pearson = beads_qc_df["pearson_corr"].values
+            mu_s, sigma_s = np.nanmean(shift_mag), np.nanstd(shift_mag)
+            mu_c, sigma_c = np.nanmean(pearson), np.nanstd(pearson)
+            shift_bad = np.where(shift_mag > mu_s + n_std * sigma_s)[0]
+            corr_bad = np.where(pearson < mu_c - n_std * sigma_c)[0]
+            beads_drop_indices = np.array(
+                sorted(set(shift_bad) | set(corr_bad)), dtype=int
+            )
+            print(f"Beads QC (from CSV): {len(beads_drop_indices)} bad registration timepoints")
+        else:
+            print(f"WARNING: No beads QC CSV found at {beads_qc_csv}")
+    return beads_drop_indices
+
+
+def _qualify_fovs(
+    ok_results, plots_dir, max_drops, beads_fov, beads_drop_indices,
+    position_keys, exclude_fovs, output_dir,
+):
+    """Disqualify FOVs with too many drops and generate annotations.csv.
+
+    Returns the qualified results list, or an empty list on fatal error.
+    """
+    fov_drop_counts = {}
+    ok_fov_set = {"_".join(r["fov"].split("/")) for r in ok_results}
+
+    for fov_result in ok_results:
+        fov = fov_result["fov"]
+        fov_name = "_".join(fov.split("/"))
+        drop_path = plots_dir / fov_name / "drop_list.csv"
+        n_drops = 0
+        if drop_path.exists() and drop_path.stat().st_size > 0:
+            drop_df = pd.read_csv(drop_path)
+            n_drops = len(drop_df)
+        fov_drop_counts[fov_name] = n_drops
+
+    disqualified_fovs = {
+        fov_name for fov_name, n in fov_drop_counts.items() if n > max_drops
+    }
+
+    # Generate annotations.csv (status: 0=not checked, 1=visual checked, -1=unfit)
+    annotation_rows = []
+    for position_key in position_keys:
+        fov_name = "_".join(position_key)
+        if fov_name not in ok_fov_set:
+            status = -1
+            well_map = ""
+            comments = "auto: failed stage 1"
+        elif fov_name in disqualified_fovs:
+            status = -1
+            well_map = ""
+            comments = (
+                f"auto: {fov_drop_counts[fov_name]} dropped frames (>{max_drops})"
+            )
+        else:
+            status = 0
+            well_map = ""
+            comments = ""
+        annotation_rows.append({
+            "fov": fov_name,
+            "status": status,
+            "Well-map": well_map,
+            "comments": comments,
+        })
+    if beads_fov is not None:
+        annotation_rows.append({
+            "fov": "_".join(beads_fov.split("/")),
+            "status": 1,
+            "Well-map": "Beads",
+            "comments": f"beads: {len(beads_drop_indices)} bad registration timepoints",
+        })
+    if exclude_fovs:
+        for fov in exclude_fovs:
+            annotation_rows.append({
+                "fov": "_".join(fov.split("/")),
+                "status": -1,
+                "Well-map": "",
+                "comments": "user: excluded",
+            })
+    # Dataset row for general comments
+    annotation_rows.append({
+        "fov": "dataset",
+        "status": 0,
+        "Well-map": "",
+        "comments": "",
+    })
+    annotations_df = pd.DataFrame(
+        annotation_rows, columns=["fov", "status", "Well-map", "comments"]
+    )
+    annotations_df = annotations_df.sort_values("fov").reset_index(drop=True)
+    annotations_path = output_dir / "annotations.csv"
+    annotations_df.to_csv(annotations_path, index=False)
+    print(f"Saved annotations to {annotations_path}")
+
+    # Filter to qualified
+    qualified_results = [
+        r for r in ok_results
+        if "_".join(r["fov"].split("/")) not in disqualified_fovs
+    ]
+
+    print(f"\n=== FOV qualification (max {max_drops} drops) ===")
+    print(f"  Total FOVs: {len(position_keys)}")
+    print(f"  Failed stage 1: {len(position_keys) - len(ok_results)}")
+    print(f"  Disqualified (>{max_drops} drops): {len(disqualified_fovs)}")
+    for fov_name in sorted(disqualified_fovs):
+        print(f"    {fov_name}: {fov_drop_counts[fov_name]} drops")
+    print(f"  Qualified for stage 2: {len(qualified_results)}")
+
+    if not qualified_results:
+        print("ERROR: No qualified FOVs remaining after disqualification")
+
+    return qualified_results
+
+
+def _build_unified_drop_list(ok_results, plots_dir, beads_drop_indices, output_dir):
+    """Merge per-FOV drops and beads QC into a global drop list.
+
+    Returns (global_keep_indices, global_drop_csv_path).
+    Writes drop_list_all_fovs.csv.
+    """
+    ok_fovs = [r["fov"] for r in ok_results]
+    T_total = ok_results[0]["T_total"]
+
+    global_drop_set = set()
+    drop_rows = []
+    for fov in ok_fovs:
+        fov_name = "_".join(fov.split("/"))
+        drop_path = plots_dir / fov_name / "drop_list.csv"
+        if drop_path.exists() and drop_path.stat().st_size > 0:
+            drop_df = pd.read_csv(drop_path)
+            if len(drop_df) > 0:
+                global_drop_set.update(drop_df["t"].tolist())
+                for _, row in drop_df.iterrows():
+                    drop_rows.append({
+                        "fov": fov_name,
+                        "t": int(row["t"]),
+                        "reason": row["reason"],
+                    })
+
+    # Merge beads registration QC
+    beads_drop_set = set(int(t) for t in beads_drop_indices)
+    n_beads_new = len(beads_drop_set - global_drop_set)
+    global_drop_set.update(beads_drop_set)
+    for t in sorted(beads_drop_set):
+        drop_rows.append({
+            "fov": "beads_qc",
+            "t": int(t),
+            "reason": "bad_registration",
+        })
+
+    global_keep_indices = np.array(
+        sorted(set(range(T_total)) - global_drop_set), dtype=int
+    )
+
+    print(f"\n=== Unified drop list (qualified FOVs + beads QC) ===")
+    print(f"  Drops from qualified FOVs: {len(global_drop_set) - len(beads_drop_set & global_drop_set)}")
+    if len(beads_drop_indices) > 0:
+        print(f"  Beads QC bad timepoints: {len(beads_drop_indices)} "
+              f"({n_beads_new} new)")
+    print(f"  Total global drops: {len(global_drop_set)}")
+    print(f"  Remaining after unified drop: {len(global_keep_indices)} / {T_total}")
+
+    # Write CSV
+    drop_all_df = pd.DataFrame(drop_rows, columns=["fov", "t", "reason"])
+    global_drop_csv = output_dir / "drop_list_all_fovs.csv"
+    drop_all_df.to_csv(global_drop_csv, index=False)
+    print(f"Saved combined drop list to {global_drop_csv}")
+    print(f"  Total entries: {len(drop_all_df)}, unique timepoints dropped: {drop_all_df['t'].nunique()}")
+
+    if len(drop_all_df) > 0:
+        drop_counts = drop_all_df.groupby("fov").size().reset_index(name="n_dropped")
+        print("  Drops per FOV:")
+        for _, row in drop_counts.iterrows():
+            print(f"    {row['fov']}: {row['n_dropped']}")
+
+    return global_keep_indices, global_drop_csv
+
+
+def _save_stage1_summary(ok_results, plots_dir, output_dir, all_channel_names,
+                         z_final, global_keep_indices, drop_frames=True):
+    """Compute unified plate dims, save global summary and combined z_focus plots.
+
+    Returns (T_min, Y_min, X_min, C_out, Z_out).
+    """
+    ok_fovs = [r["fov"] for r in ok_results]
+    T_total = ok_results[0]["T_total"]
+    if drop_frames:
+        T_min = len(global_keep_indices)
+    else:
+        T_min = T_total
+    Y_min = min(r["Y_crop"] for r in ok_results)
+    X_min = min(r["X_crop"] for r in ok_results)
+    C_out = len(all_channel_names)
+    Z_out = z_final
+
+    print(f"\n=== Stage 1 summary ===")
+    print(f"  FOVs OK: {len(ok_results)}")
+    print(f"  T_min (after drops): {T_min}")
+    print(f"  Y_min: {Y_min}, X_min: {X_min}")
+    print(f"  Output plate shape: ({T_min}, {C_out}, {Z_out}, {Y_min}, {X_min})")
+
+    # Save global summary -- use actual cropped values, not per-FOV stage 1 values
+    global_summary = pd.DataFrame(ok_results)
+    global_summary["T_out"] = T_min
+    global_summary["Y_crop"] = Y_min
+    global_summary["X_crop"] = X_min
+    global_summary.to_csv(output_dir / "global_summary.csv", index=False)
+    print(f"Saved global summary to {output_dir / 'global_summary.csv'}")
+
+    # Combined all-FOV plots
+    from dynacell_plotting import (
+        plot_z_focus_all_fovs,
+        plot_laplacian_all_fovs,
+        plot_hf_ratio_all_fovs,
+        plot_entropy_all_fovs,
+        plot_blur_detection_all_fovs,
+        plot_drop_correlation_all_fovs,
+        plot_registration_pcc_all_fovs,
+    )
+
+    def _save_all_fovs_plot(fig, data, output_dir, name, data_col=None):
+        """Helper: save figure + CSV for an all-FOVs plot."""
+        fig.savefig(output_dir / f"{name}.png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        if data:
+            if data_col:
+                csv_data = {k: v[data_col] for k, v in data.items()}
+            else:
+                csv_data = data
+            df = pd.DataFrame(csv_data)
+            df.index.name = "t"
+            df.to_csv(output_dir / f"{name}.csv")
+        print(f"Saved {name}.png to {output_dir}")
+
+    fig, z_data = plot_z_focus_all_fovs(ok_fovs, plots_dir)
+    _save_all_fovs_plot(fig, z_data, output_dir, "z_focus_all_fovs")
+
+    fig, lap_data = plot_laplacian_all_fovs(ok_fovs, plots_dir)
+    _save_all_fovs_plot(fig, lap_data, output_dir, "laplacian_all_fovs")
+
+    fig, hf_data = plot_hf_ratio_all_fovs(ok_fovs, plots_dir)
+    _save_all_fovs_plot(fig, hf_data, output_dir, "hf_ratio_all_fovs", data_col="hf_ratio")
+
+    fig, ent_data = plot_entropy_all_fovs(ok_fovs, plots_dir)
+    _save_all_fovs_plot(fig, ent_data, output_dir, "entropy_all_fovs", data_col="entropy")
+
+    fig, blur_summary = plot_blur_detection_all_fovs(ok_fovs, plots_dir)
+    fig.savefig(output_dir / "blur_detection_all_fovs.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    if blur_summary:
+        pd.DataFrame(blur_summary).to_csv(
+            output_dir / "blur_detection_all_fovs.csv", index=False)
+    print(f"Saved blur_detection_all_fovs.png to {output_dir}")
+
+    T_total_plot = ok_results[0]["T_total"] if ok_results else 66
+    drop_fig, drop_df, corr_text = plot_drop_correlation_all_fovs(
+        ok_fovs, plots_dir, T_total_plot)
+    if drop_fig is not None:
+        drop_fig.savefig(output_dir / "drop_correlation_all_fovs.png",
+                         dpi=150, bbox_inches="tight")
+        plt.close(drop_fig)
+        drop_df.to_csv(output_dir / "drop_correlation_all_fovs.csv", index=False)
+        print(f"Saved drop_correlation_all_fovs.png to {output_dir}")
+        if corr_text:
+            print("Correlated drops (>=2 FOVs at same timepoint):")
+            for line in corr_text:
+                print(line)
+    else:
+        print("No drops found across FOVs — skipping drop correlation plot")
+
+    fig, pcc_data = plot_registration_pcc_all_fovs(ok_fovs, plots_dir)
+    _save_all_fovs_plot(fig, pcc_data, output_dir, "registration_pcc_all_fovs")
+
+    return T_min, Y_min, X_min, C_out, Z_out
+
+
+def _run_stage2(
+    ok_results, all_zarrs, output_zarr, plots_dir,
+    slurm_out_path, cluster, slurm_args, global_drop_csv,
+    z_final, T_min, Y_min, X_min, all_channel_names, scale,
+    overlay_channels, output_dir, drop_frames=True,
+):
+    """Create output plate, submit stage 2 crop jobs, wait, and generate QC report."""
+    ok_fovs = [r["fov"] for r in ok_results]
+    C_out = len(all_channel_names)
+    Z_out = z_final
+
+    print(f"\n=== STAGE 2: Cropping {len(ok_results)} FOVs ===")
+
+    ok_position_keys = [tuple(fov.split("/")) for fov in ok_fovs]
+    create_empty_plate(
+        store_path=output_zarr,
+        position_keys=ok_position_keys,
+        shape=(T_min, C_out, Z_out, Y_min, X_min),
+        chunks=(1, 1, Z_out, Y_min, X_min),
+        scale=scale,
+        channel_names=all_channel_names,
+        dtype=np.float32,
+        version='0.5',
+    )
+    print(f"Created output plate at {output_zarr}")
+
+    lf_zarr, ls_zarr, ls_deconvolved_zarr, bf_zarr = all_zarrs
+
+    executor_s2 = submitit.AutoExecutor(folder=slurm_out_path / "stage2", cluster=cluster)
+    executor_s2.update_parameters(slurm_job_name="dynacell_s2_crop", **slurm_args)
+
+    jobs_s2 = []
+    with submitit.helpers.clean_env(), executor_s2.batch():
+        for fov in ok_fovs:
+            fov_name = "_".join(fov.split("/"))
+            input_zarr_paths = [lf_zarr / fov, ls_zarr / fov, ls_deconvolved_zarr / fov, bf_zarr / fov]  # vs_zarr excluded
+
+            job = executor_s2.submit(
+                crop_fov,
+                input_zarr_paths=input_zarr_paths,
+                output_zarr=output_zarr,
+                output_plots_dir=plots_dir / fov_name,
+                fov=fov,
+                global_drop_csv=global_drop_csv,
+                z_final=z_final,
+                T_out=T_min,
+                Y_out=Y_min,
+                X_out=X_min,
+                drop_frames=drop_frames,
+            )
+            jobs_s2.append(job)
+
+    job_ids_s2 = [job.job_id for job in jobs_s2]
+    log_path_s2 = slurm_out_path / "stage2_job_ids.log"
+    with log_path_s2.open("w") as f:
+        f.write("\n".join(job_ids_s2))
+    print(f"Stage 2: Submitted {len(jobs_s2)} jobs. IDs: {log_path_s2}")
+
+    print("\nWaiting for stage 2 jobs to complete...")
+    for job in jobs_s2:
+        job.result()
+    print(f"\nDone! Output plate at {output_zarr}")
+
+    # Generate QC report
+    print(f"\n=== Generating QC report ===")
+    generate_dataset_report(output_dir, overlay_channels=overlay_channels)
+
+
+def _finalize_run_log(run_log, run_log_path, start_time):
+    """Update run log with execution time."""
+    elapsed_sec = time.time() - start_time
+    run_log["execution_time_sec"] = round(elapsed_sec, 1)
+    run_log["execution_time_human"] = (
+        f"{int(elapsed_sec // 3600)}h {int((elapsed_sec % 3600) // 60)}m {int(elapsed_sec % 60)}s"
+    )
+    with open(run_log_path, "w") as f:
+        yaml.dump(run_log, f, default_flow_style=False, sort_keys=False)
+    print(f"Updated run log with execution time: {run_log['execution_time_human']}")
+
+
+## ===== Orchestrator =====
+
+def run_all_fovs(
+    root_path: Path,
+    dataset: str,
+    lf_mask_radius: float = 0.75,
+    z_final: int = 64,
+    n_std: float = 2.5,
+    local: bool = False,
+    stage1_run_dir: Path | None = None,
+    beads_fov: str | None = None,
+    max_drops: int = 5,
+    overlay_channels: list[str] | None = None,
+    exclude_fovs: list[str] | None = None,
+    include_fovs: list[str] | None = None,
+    z_window: int | None = None,
+    lf_zarr_override: Path | None = None,
+    stages: list[int] | None = None,
+    z_index: int | str | None = None,
+    drop_frames: bool = True,
+):
+    """Two-stage pipeline for dynacell preprocessing.
+
+    Stage 1: Compute bbox, z_focus, drop list per FOV (parallel submitit jobs).
+    Stage 2: After stage 1 completes, gather min T/Y/X, create plate, crop all FOVs.
+
+    Parameters
+    ----------
+    stage1_run_dir : Path or None
+        If provided, skip stage 1 and read its results from this existing run
+        directory (e.g. run_20260312_112144). Stage 2 output goes into a new run dir.
+    beads_fov : str or None
+        FOV key for the beads position (e.g. "C/1/000000"). Used for
+        registration QC: per-timepoint phase cross-correlation between
+        LF and LS beads channels is computed and timepoints with poor
+        registration are added to the global drop list.
+    include_fovs : list of str or None
+        If provided, only process these FOVs (e.g. ["A/1/000001", "A/1/001001"]).
+        Applied before exclude_fovs. If None, process all discovered FOVs.
+    stages : list of int or None
+        Which stages to run: [1], [2], or [1, 2]. Default None means [1, 2].
+        Stage 2 alone requires stage1_run_dir to read existing results.
+    z_index : int, "mid", or None
+        If an int, use this fixed z index instead of auto-detecting z_focus.
+        If "mid", use the mid-Z slice (Z // 2).
+        If None (default), compute z_focus per timepoint.
+    drop_frames : bool
+        If True (default), drop flagged timepoints in stage 2 (blank, z_focus
+        outliers, entropy outliers, bad registration). If False, keep all
+        timepoints — the drop list is still computed for QC but not applied.
+    """
+    if stages is None:
+        stages = [1, 2]
+    if 2 in stages and 1 not in stages and stage1_run_dir is None:
+        raise ValueError("Stage 2 alone requires stage1_run_dir to read existing results.")
+
+    # Resolve input zarr paths
+    lf_zarr, ls_zarr, ls_deconvolved_zarr, bf_zarr = _resolve_zarr_paths(
+        root_path, dataset, lf_zarr_override
+    )
+    all_zarrs = [lf_zarr, ls_zarr, ls_deconvolved_zarr, bf_zarr]
+
+    # Setup output directories
+    if stage1_run_dir is not None:
+        stage1_dir = root_path / dataset / "dynacell" / stage1_run_dir
+        plots_dir = stage1_dir / "plots"
+        print(f"Reusing stage 1 results from: {stage1_dir}")
+    else:
+        stage1_dir = None
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_dir = root_path / dataset / "dynacell" / f"run_{run_id}"
+    output_zarr = output_dir / f"{dataset}.zarr"
+    if stage1_dir is None:
+        plots_dir = output_dir / "plots"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Run ID: {run_id}")
+    print(f"Output dir: {output_dir}")
+
+    # Write run log
+    _run_start_time = time.time()
+    biahub_repo = Path(__file__).resolve().parent.parent
+    run_log = {
+        "timestamp": datetime.now().isoformat(),
+        "run_id": run_id,
+        "parameters": {
+            "root_path": str(root_path),
+            "dataset": dataset,
+            "lf_mask_radius": lf_mask_radius,
+            "z_final": z_final,
+            "n_std": n_std,
+            "local": local,
+            "stage1_run_dir": str(stage1_run_dir) if stage1_run_dir else None,
+            "beads_fov": beads_fov,
+            "max_drops": max_drops,
+            "overlay_channels": overlay_channels,
+            "exclude_fovs": exclude_fovs,
+            "include_fovs": include_fovs,
+            "stages": stages,
+            "z_window": z_window,
+            "z_index": z_index,
+            "drop_frames": drop_frames,
+        },
+        "git": _get_git_info(biahub_repo),
+    }
+    run_log_path = output_dir / "run_log.yaml"
+    with open(run_log_path, "w") as f:
+        yaml.dump(run_log, f, default_flow_style=False, sort_keys=False)
+    print(f"Saved run log to {run_log_path}")
+
+    # Discover and filter FOVs
+    position_keys, beads_fov = _discover_and_filter_fovs(
+        lf_zarr, include_fovs, exclude_fovs, beads_fov
+    )
+
+    # Read plate metadata and estimate resources
+    all_channel_names, scale, gb_ram_per_cpu = _get_plate_metadata(
+        all_zarrs, "/".join(position_keys[0])
+    )
+    num_cpus = 4
+    cluster = "local" if local else "slurm"
+    slurm_out_path = output_dir / "slurm_output"
+    slurm_out_path.mkdir(parents=True, exist_ok=True)
+    slurm_args = {
+        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
+        "slurm_cpus_per_task": num_cpus,
+        "slurm_array_parallelism": 100,
+        "slurm_time": 120,
+        "slurm_partition": "gpu",
+    }
+
+    # Stage 1: compute per-FOV metadata or load existing results
+    if 1 in stages and stage1_dir is None:
+        ok_results, beads_qc_job = _submit_stage1_jobs(
+            position_keys=position_keys,
+            lf_zarr=lf_zarr, ls_zarr=ls_zarr,
+            plots_dir=plots_dir,
+            slurm_out_path=slurm_out_path, cluster=cluster, slurm_args=slurm_args,
+            lf_mask_radius=lf_mask_radius, n_std=n_std,
+            z_window=z_window, z_final=z_final,
+            beads_fov=beads_fov,
+            z_index=z_index,
+        )
+        if not ok_results:
+            print("ERROR: No FOVs succeeded in stage 1")
+            return
+    elif stage1_dir is not None:
+        ok_results = _load_stage1_results(stage1_dir, plots_dir, position_keys)
+        beads_qc_job = None
+        if not ok_results:
+            print("ERROR: No valid stage 1 results found")
+            return
+
+    # Collect beads registration QC results
+    beads_drop_indices = _collect_beads_qc(beads_qc_job, beads_fov, plots_dir, n_std)
+
+    # Dataset-level dust QC on LF Phase channel
+    if 1 in stages:
+        ok_fov_keys = [r["fov"] for r in ok_results]
+        blank_frames_per_fov = {}
+        for r in ok_results:
+            fov_name = "_".join(r["fov"].split("/"))
+            drop_path = plots_dir / fov_name / "drop_list.csv"
+            if drop_path.exists() and drop_path.stat().st_size > 0:
+                drop_df = pd.read_csv(drop_path)
+                blank_t = drop_df[
+                    drop_df["reason"].str.contains("blank", case=False, na=False)
+                ]["t"].values
+                blank_frames_per_fov[r["fov"]] = set(int(t) for t in blank_t)
+        print(f"\n=== Dust QC ===")
+        compute_dust_qc(
+            lf_zarr=lf_zarr,
+            fov_keys=ok_fov_keys,
+            output_dir=output_dir,
+            lf_mask_radius=lf_mask_radius,
+            blank_frames_per_fov=blank_frames_per_fov,
+        )
+
+        print(f"\n=== Bleach QC ===")
+        compute_bleach_qc(
+            ls_zarr=ls_zarr,
+            fov_keys=ok_fov_keys,
+            plots_dir=plots_dir,
+            output_dir=output_dir,
+            blank_frames_per_fov=blank_frames_per_fov,
+        )
+
+    # Qualify FOVs (disqualify those with too many drops)
+    ok_results = _qualify_fovs(
+        ok_results, plots_dir, max_drops, beads_fov, beads_drop_indices,
+        position_keys, exclude_fovs, output_dir,
+    )
+    if not ok_results:
+        _finalize_run_log(run_log, run_log_path, _run_start_time)
+        return
+
+    # Build unified drop list across all qualified FOVs + beads QC
+    global_keep_indices, global_drop_csv = _build_unified_drop_list(
+        ok_results, plots_dir, beads_drop_indices, output_dir,
+    )
+
+    # Save stage 1 summary and combined plots
+    T_min, Y_min, X_min, C_out, Z_out = _save_stage1_summary(
+        ok_results, plots_dir, output_dir, all_channel_names,
+        z_final, global_keep_indices, drop_frames=drop_frames,
+    )
+
+    # Early exit if only stage 1 was requested
+    if 2 not in stages:
+        _finalize_run_log(run_log, run_log_path, _run_start_time)
+        print(f"\nStage 1 only — skipping stage 2. Output: {output_dir}")
+        return
+
+    # Stage 2: crop into unified plate
+    _run_stage2(
+        ok_results=ok_results, all_zarrs=all_zarrs,
+        output_zarr=output_zarr, plots_dir=plots_dir,
+        slurm_out_path=slurm_out_path, cluster=cluster, slurm_args=slurm_args,
+        global_drop_csv=global_drop_csv, z_final=z_final,
+        T_min=T_min, Y_min=Y_min, X_min=X_min,
+        all_channel_names=all_channel_names, scale=scale,
+        overlay_channels=overlay_channels, output_dir=output_dir,
+        drop_frames=drop_frames,
+    )
+    _finalize_run_log(run_log, run_log_path, _run_start_time)
+
+
+if __name__ == "__main__":
+    test_inscribed_bbox()
+    test_overlap_bbox()
+    test_overlap_bbox_no_overlap()
+    test_overlap_bbox_with_y_padding()
+    test_overlap_bbox_different_spatial_dims()
+    test_overlap_bbox_with_nans()
+    test_blank_first_frame()
+    test_overlap_bbox_sheared()
+    print("\n=== SUBMITTING ALL FOVs ===")
+
+
+
+    # root_path = Path("/hpc/projects/intracellular_dashboard/organelle_dynamics/")
+    # dataset = "2025_08_26_A549_SEC61_TOMM20_ZIKV"
+    # run_all_fovs(
+    #     root_path=root_path,
+    #     dataset=dataset,
+    #     lf_mask_radius=0.98,
+    #     local=False,
+    #     stage1_run_dir=None,
+    #     beads_fov="A/3/000000",
+    #     overlay_channels=["Phase3D", "raw GFP EX488 EM525-45"],
+    #     exclude_fovs=["A/3/000001", "A/3/001000", "A/3/001001"],
+    #     z_final = 48,
+    #     n_std = 2.5,
+    #     z_window = 20,
+    # )
+
+    # root_path = Path("/hpc/projects/intracellular_dashboard/organelle_dynamics/")
+    # dataset = "2025_07_22_A549_SEC61_TOMM20_G3BP1_ZIKV"
+    # run_all_fovs(
+    #     root_path=root_path,
+    #     dataset=dataset,
+    #     lf_mask_radius=0.98,
+    #     local=False,
+    #     stage1_run_dir=None,
+    #     beads_fov="A/3/000000",
+    #     overlay_channels=["Phase3D", "raw GFP EX488 EM525-45"],
+    #     exclude_fovs=["A/3/000001", "A/3/001000", "A/3/001001"],
+    #     z_final = 48,
+    #     n_std = 2.5,
+    #    # z_window = 20,
+    # )
+
+    # 2024_11_05_A549_TOMM20_ZIKV_DENV
+
+    # root_path = Path("/hpc/projects/intracellular_dashboard/organelle_dynamics/")
+    # dataset = "2024_11_05_A549_TOMM20_ZIKV_DENV"
+    # run_all_fovs(
+    #     root_path=root_path,
+    #     dataset=dataset,
+    #     lf_mask_radius=0.98,
+    #     local=False,
+    #     stage1_run_dir=None,
+    #     beads_fov="C/1/000000",
+    #     overlay_channels=["Phase3D", "raw GFP EX488 EM525-45"],
+    #     #exclude_fovs=["A/3/000001", "A/3/001000", "A/3/001001"],
+    #     z_final = 48,
+    #     n_std = 2.5,
+    #     z_window = 20,
+    # )
+
+    # root_path = Path("/hpc/projects/intracellular_dashboard/organelle_dynamics/")
+    # dataset = "2024_11_07_A549_SEC61_DENV"
+    # run_all_fovs(
+    #     root_path=root_path,
+    #     dataset=dataset,
+    #     lf_mask_radius=0.98,
+    #     local=False,
+    #     stage1_run_dir=None,
+    #     beads_fov="C/1/000000",
+    #     overlay_channels=["Phase3D", "raw GFP EX488 EM525-45"],
+    #     #exclude_fovs=["A/3/000001", "A/3/001000", "A/3/001001"],
+    #     z_final = 48,
+    #     n_std = 2.5,
+    #     z_window = 20,
+    # )
+
+
+    # root_path = Path("/hpc/projects/intracellular_dashboard/organelle_dynamics/")
+    # dataset = "2024_10_31_A549_SEC61_ZIKV_DENV"
+    # run_all_fovs(
+    #     root_path=root_path,
+    #     dataset=dataset,
+    #     lf_mask_radius=0.98,
+    #     local=False,
+    #     stage1_run_dir=None,
+    #     beads_fov="C/1/000000",
+    #     overlay_channels=["Phase3D", "raw GFP EX488 EM525-45"],
+    #  #   exclude_fovs=["A/3/000000", "A/3/001000", "A/3/001001"],
+    #     z_final = 48,
+    #     n_std = 3.5,
+    #     z_window = 20,
+    # )
+
+
+    root_path = Path("/hpc/projects/intracellular_dashboard/organelle_dynamics/")
+    dataset = "2025_07_24_A549_SEC61_TOMM20_G3BP1_ZIKV"
+    run_all_fovs(
+        root_path=root_path,
+        dataset=dataset,
+        lf_mask_radius=0.98,
+        local=False,
+        stage1_run_dir=None,
+        beads_fov="A/3/000001",
+        overlay_channels=["Phase3D", "raw GFP EX488 EM525-45"],
+        exclude_fovs=["A/3/000000", "A/3/001000", "A/3/001001"],
+        z_final = 48,
+        n_std = 2,
+        z_window = 20,
+        stages=[1, 2],
+    )
