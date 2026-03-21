@@ -169,6 +169,11 @@ COMMANDS = [
         "import_path": "biahub.track.track_cli",
         "help": "Track objects in 2D/3D time-lapse microscopy",
     },
+    {
+        "name": "napari-movie",
+        "import_path": "biahub.visualize.napari_movie.napari_movie_cli",
+        "help": "Generate MP4 videos from Zarr datasets using napari for rendering or viewing",
+    },
 ]
 
 
