@@ -64,11 +64,11 @@ if __name__ == "__main__":
         print(f"FOV: {fov_key} — {info['note']}")
 
         # Read z_focus
-        z_csv = run_dir / "plots" / fov_name / "z_focus.csv"
+        z_csv = run_dir / "per_fov_analysis" / fov_name / "z_focus.csv"
         z_focus = pd.read_csv(z_csv, index_col=0)["z_focus"].values.astype(int)
 
         # Read blank frames
-        drop_csv = run_dir / "plots" / fov_name / "drop_list.csv"
+        drop_csv = run_dir / "per_fov_analysis" / fov_name / "drop_list.csv"
         blank_set = set()
         if drop_csv.exists():
             drop_df = pd.read_csv(drop_csv)

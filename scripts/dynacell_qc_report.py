@@ -549,6 +549,47 @@ def _plot_entropy_qc(fov_plots_dir: Path) -> str | None:
     return _fig_to_base64(fig)
 
 
+def _plot_frc_qc(fov_plots_dir: Path) -> str | None:
+    """Render per-FOV FRC blur QC from frc_qc.csv (reporting only)."""
+    csv = fov_plots_dir / "frc_qc.csv"
+    if not csv.exists():
+        return None
+
+    df = pd.read_csv(csv)
+
+    blank_set = _get_blank_frames(fov_plots_dir)
+    if blank_set:
+        df = df[~df["t"].isin(blank_set)]
+
+    if len(df) == 0:
+        return None
+
+    t = df["t"].values
+    frc_val = df["frc_mean_corr"].values
+
+    valid = ~np.isnan(frc_val)
+    if not valid.any():
+        return None
+
+    med = np.nanmedian(frc_val[valid])
+
+    fig, ax = plt.subplots(1, 1, figsize=(7, 3))
+
+    ax.plot(t[valid], frc_val[valid], "tab:blue", alpha=0.7, linewidth=0.8)
+    ax.axhline(med, color="green", linestyle="--", linewidth=1, label=f"median={med:.4f}")
+    title = f"FRC QC | median={med:.4f}"
+    if blank_set:
+        title += f" (excl. {len(blank_set)} blank)"
+    ax.set_title(title, fontsize=9)
+    ax.set_ylabel("FRC mean correlation", fontsize=8)
+    ax.set_xlabel("t", fontsize=8)
+    ax.legend(fontsize=6)
+    ax.tick_params(labelsize=7)
+
+    fig.tight_layout()
+    return _fig_to_base64(fig)
+
+
 def _plot_dust_qc(run_dir: Path) -> str | None:
     """Embed the pre-generated dust_qc.png if it exists."""
     dust_png = run_dir / "dust_qc.png"
@@ -731,7 +772,7 @@ def generate_dataset_report(
     Path to the generated HTML file.
     """
     run_dir = Path(run_dir)
-    plots_dir = run_dir / "plots"
+    plots_dir = run_dir / "per_fov_analysis"
     html_path = run_dir / "dataset_report.html"
 
     global_csv = run_dir / "global_summary.csv"
@@ -804,6 +845,7 @@ def generate_dataset_report(
         ("Laplacian QC — All FOVs", "laplacian_all_fovs.png"),
         ("Entropy QC — All FOVs", "entropy_all_fovs.png"),
         ("HF Ratio QC — All FOVs", "hf_ratio_all_fovs.png"),
+        ("FRC QC — All FOVs", "frc_all_fovs.png"),
         ("Registration PCC — All FOVs", "registration_pcc_all_fovs.png"),
         ("Blur Detection (HF + Entropy) — All FOVs", "blur_detection_all_fovs.png"),
         ("Drop Correlation — All FOVs", "drop_correlation_all_fovs.png"),
@@ -844,6 +886,7 @@ def generate_dataset_report(
             (_plot_laplacian_qc, (fov_dir,)),
             (_plot_entropy_qc, (fov_dir,)),
             (_plot_hf_ratio_qc, (fov_dir,)),
+            (_plot_frc_qc, (fov_dir,)),
             (_plot_fov_registration_qc, (fov_dir,)),
             (_plot_registration_qc, (fov_dir,)),
         ]:
@@ -858,17 +901,11 @@ def generate_dataset_report(
     html_path.write_text("\n".join(html_parts))
     print(f"Report saved to {html_path}")
 
-    # Annotations CSV (preserve if exists — the main one is created by _qualify_fovs)
+    # Annotations CSV — preserve if exists (created by _qualify_fovs)
     annotations_path = run_dir / "annotations.csv"
     if not annotations_path.exists():
-        rows = [{"fov": d.name, "status": 0, "Well-map": "", "comments": ""}
-                for d in fov_dirs]
-        # Add dataset row for general comments
-        rows.append({"fov": "dataset", "status": 0, "Well-map": "", "comments": ""})
-        pd.DataFrame(rows, columns=["fov", "status", "Well-map", "comments"]).to_csv(
-            annotations_path, index=False,
-        )
-        print(f"Annotations template saved to {annotations_path}")
+        print(f"Annotations CSV not found at {annotations_path} "
+              f"(will be created by the main pipeline)")
     else:
         print(f"Annotations CSV already exists at {annotations_path} (preserved)")
 
@@ -938,7 +975,7 @@ def generate_annotated_report(
     Path to the generated annotated HTML file.
     """
     run_dir = Path(run_dir)
-    plots_dir = run_dir / "plots"
+    plots_dir = run_dir / "per_fov_analysis"
     html_path = run_dir / "dataset_report_annotated.html"
 
     global_csv = run_dir / "global_summary.csv"
@@ -953,25 +990,34 @@ def generate_annotated_report(
             f"Run generate_dataset_report first, then fill in annotations."
         )
     annotations_df = pd.read_csv(annotations_path)
-    # Build lookup: fov_name -> {status, Well-map, comments}
+    # Build per-FOV summary from per-timepoint annotations
     ann_map = {}
     dataset_comment = ""
-    for _, row in annotations_df.iterrows():
-        fov = str(row["fov"]).strip()
-        if fov == "dataset":
-            dataset_comment = str(row.get("comments", "")).strip()
-            if dataset_comment == "nan":
-                dataset_comment = ""
-        else:
-            ann_map[fov] = {
-                "status": int(row.get("status", 0)),
-                "well_map": str(row.get("Well-map", "")).strip(),
-                "comments": str(row.get("comments", "")).strip(),
-            }
-            if ann_map[fov]["comments"] == "nan":
-                ann_map[fov]["comments"] = ""
-            if ann_map[fov]["well_map"] == "nan":
-                ann_map[fov]["well_map"] = ""
+    for fov_name, grp in annotations_df.groupby("fov"):
+        fov_name = str(fov_name).strip()
+        n_blank = int(grp["blank"].sum()) if "blank" in grp.columns else 0
+        n_bad_reg = int(grp["bad_reg"].sum()) if "bad_reg" in grp.columns else 0
+        n_oof = int(grp["out_of_focus"].sum()) if "out_of_focus" in grp.columns else 0
+        n_total = len(grp)
+        # Collect non-empty comments
+        comments_list = [
+            str(c).strip() for c in grp["comments"] if str(c).strip() not in ("", "nan")
+        ] if "comments" in grp.columns else []
+        summary_parts = []
+        if n_blank:
+            summary_parts.append(f"blank={n_blank}")
+        if n_bad_reg:
+            summary_parts.append(f"bad_reg={n_bad_reg}")
+        if n_oof:
+            summary_parts.append(f"oof={n_oof}")
+        auto_comment = ", ".join(summary_parts)
+        user_comment = "; ".join(comments_list) if comments_list else ""
+        full_comment = "; ".join(filter(None, [auto_comment, user_comment]))
+        ann_map[fov_name] = {
+            "status": 0,
+            "well_map": "",
+            "comments": full_comment,
+        }
 
     zarr_candidates = list(run_dir.glob("*.zarr"))
     output_zarr = zarr_candidates[0] if zarr_candidates else None
@@ -1023,14 +1069,12 @@ def generate_annotated_report(
 
     # --- Annotations summary table ---
     html_parts.append("<h2>Annotations Summary</h2>")
-    ann_header = "<tr><th>FOV</th><th>Status</th><th>Well-map</th><th>Comments</th></tr>"
+    ann_header = "<tr><th>FOV</th><th>Comments</th></tr>"
     ann_rows = ""
     for fov_name in sorted(ann_map.keys()):
         info = ann_map[fov_name]
-        badge_html, _ = _STATUS_LABELS.get(info["status"], _STATUS_LABELS[0])
         ann_rows += (
-            f'<tr><td>{fov_name}</td><td>{badge_html}</td>'
-            f'<td>{info["well_map"]}</td><td>{info["comments"]}</td></tr>\n'
+            f'<tr><td>{fov_name}</td><td>{info["comments"]}</td></tr>\n'
         )
     html_parts.append(f"<table>{ann_header}{ann_rows}</table>")
 
@@ -1056,6 +1100,7 @@ def generate_annotated_report(
         ("Laplacian QC — All FOVs", "laplacian_all_fovs.png"),
         ("Entropy QC — All FOVs", "entropy_all_fovs.png"),
         ("HF Ratio QC — All FOVs", "hf_ratio_all_fovs.png"),
+        ("FRC QC — All FOVs", "frc_all_fovs.png"),
         ("Registration PCC — All FOVs", "registration_pcc_all_fovs.png"),
         ("Blur Detection (HF + Entropy) — All FOVs", "blur_detection_all_fovs.png"),
         ("Drop Correlation — All FOVs", "drop_correlation_all_fovs.png"),
@@ -1083,22 +1128,17 @@ def generate_annotated_report(
 
         # Annotation info for this FOV
         ann_info = ann_map.get(fov_name, {"status": 0, "well_map": "", "comments": ""})
-        badge_html, _ = _STATUS_LABELS.get(ann_info["status"], _STATUS_LABELS[0])
 
         html_parts.append(f"""
 <div class="fov-section">
-<h3>{fov_name} {badge_html}</h3>
+<h3>{fov_name}</h3>
 <div class="meta">{summary_info}</div>
 """)
 
         # Show annotation comment if present
         if ann_info["comments"]:
             html_parts.append(
-                f'<div class="annotation-box"><b>Comment:</b> {ann_info["comments"]}</div>'
-            )
-        if ann_info["well_map"]:
-            html_parts.append(
-                f'<div class="annotation-box"><b>Well-map:</b> {ann_info["well_map"]}</div>'
+                f'<div class="annotation-box"><b>QC:</b> {ann_info["comments"]}</div>'
             )
 
         html_parts.append('<div class="fov-grid">')
@@ -1111,6 +1151,7 @@ def generate_annotated_report(
             (_plot_laplacian_qc, (fov_dir,)),
             (_plot_entropy_qc, (fov_dir,)),
             (_plot_hf_ratio_qc, (fov_dir,)),
+            (_plot_frc_qc, (fov_dir,)),
             (_plot_fov_registration_qc, (fov_dir,)),
             (_plot_registration_qc, (fov_dir,)),
         ]:

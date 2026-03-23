@@ -78,14 +78,14 @@ if __name__ == "__main__":
         print(f"FOV: {fov_key}")
 
         # Read existing entropy data
-        ent_df = pd.read_csv(run_dir / "plots" / fov_name / "entropy_qc.csv")
+        ent_df = pd.read_csv(run_dir / "per_fov_analysis" / fov_name / "entropy_qc.csv")
         entropy = ent_df["entropy"].values.astype(float)
         ent_lz = compute_local_z(entropy)
 
         # Read z_focus and blank frames
-        z_csv = run_dir / "plots" / fov_name / "z_focus.csv"
+        z_csv = run_dir / "per_fov_analysis" / fov_name / "z_focus.csv"
         z_focus = pd.read_csv(z_csv, index_col=0)["z_focus"].values.astype(int)
-        drop_csv = run_dir / "plots" / fov_name / "drop_list.csv"
+        drop_csv = run_dir / "per_fov_analysis" / fov_name / "drop_list.csv"
         blank_set = set()
         if drop_csv.exists():
             drop_df = pd.read_csv(drop_csv)

@@ -19,6 +19,8 @@ from dynacell_qc import (
     compute_laplacian_qc,
     compute_entropy_qc,
     compute_hf_ratio_qc,
+    compute_bleach_fov,
+    compute_frc_qc,
     compute_fov_registration_qc,
 )
 
@@ -433,6 +435,25 @@ def compute_fov_metadata(
             blank_frames=blank_frames,
         )
 
+        # --- FRC blur QC on LS GFP channel (reporting only) ---
+        compute_frc_qc(
+            im_ls_path=im_ls_path,
+            output_plots_dir=output_plots_dir,
+            z_focus=z_focus,
+            channel_name="raw GFP EX488 EM525-45",
+            blank_frames=blank_frames,
+        )
+
+        # --- Bleach QC on LS GFP channel (per-FOV) ---
+        compute_bleach_fov(
+            im_ls_path=im_ls_path,
+            output_plots_dir=output_plots_dir,
+            z_focus=z_focus,
+            bbox=(y_min, y_max, x_min, x_max),
+            channel_name="raw GFP EX488 EM525-45",
+            blank_frames=blank_frames,
+        )
+
         # --- Per-FOV registration QC (Pearson LF vs LS, reporting only) ---
         compute_fov_registration_qc(
             im_lf_arr=im_lf_arr,
@@ -504,3 +525,297 @@ def compute_fov_metadata(
     print(f"Saved FOV summary to {summary_csv}")
 
     return summary
+
+
+## ===== Two-phase stage 1: core + per-metric QC =====
+
+
+def compute_fov_core(
+    im_lf_path: Path,
+    im_ls_path: Path,
+    output_plots_dir: Path,
+    fov: str,
+    lf_mask_radius: float = 0.75,
+    n_std: float = 2.5,
+    z_window: int | None = None,
+    z_index: int | str | None = None,
+    DEBUG: bool = True,
+) -> dict:
+    """Phase 1: Compute bbox, z_focus, blank frames, and drop list for one FOV.
+
+    This is the core metadata needed before QC metrics can run.
+    Saves z_focus.csv, drop_list.csv, fov_summary.csv to output_plots_dir.
+    """
+    with open_ome_zarr(im_lf_path) as im_lf_ds, open_ome_zarr(im_ls_path) as im_ls_ds:
+        im_lf_arr = im_lf_ds.data.dask_array()
+        im_ls_arr = im_ls_ds.data.dask_array()
+        T = im_lf_arr.shape[0]
+        print(f"LF shape: {im_lf_arr.shape}")
+        print(f"LS shape: {im_ls_arr.shape}")
+
+        pixel_size = im_lf_ds.scale[-1]
+        print(f"Pixel size: {pixel_size} um")
+
+        # --- Single pass: blank detection + overlap bbox + z_focus ---
+        metadata = compute_per_timepoint_metadata(
+            [im_lf_arr, im_ls_arr],
+            pixel_size=pixel_size,
+            lf_mask_radius=lf_mask_radius,
+            z_index=z_index,
+        )
+        if metadata is None:
+            print("ERROR: No valid overlap found")
+            return {"status": "no_overlap"}
+
+        bbox = metadata["bbox"]
+        y_min, y_max, x_min, x_max = bbox
+        overlap_mask = metadata["overlap_mask"]
+        per_t_bboxes = metadata["per_t_bboxes"]
+        blank_frames = metadata["blank_frames"]
+        z_focus = metadata["z_focus"]
+
+        print(f"Blank frames: {blank_frames}")
+        print(f"Overlap bbox: Y=[{y_min}:{y_max+1}], X=[{x_min}:{x_max+1}]")
+        print(f"Crop size: Y={y_max - y_min + 1}, X={x_max - x_min + 1}")
+
+        if DEBUG:
+            print(f"Overlap mask shape: {overlap_mask.shape}")
+            print(f"Valid pixels in mask: {overlap_mask.sum()} / {overlap_mask.size}")
+            blank_set = set(blank_frames)
+            t_debug = next((t for t in range(T) if t not in blank_set), 0)
+            plot_overlap(
+                [im_lf_arr, im_ls_arr],
+                bbox,
+                overlap_mask=overlap_mask,
+                t=t_debug,
+                save_path=str(output_plots_dir / f"overlap_t{t_debug}.png"),
+                lf_mask_radius=lf_mask_radius,
+            )
+            bbox_csv = output_plots_dir / "per_t_bboxes.csv"
+            pd.DataFrame(
+                per_t_bboxes, columns=["y_min", "y_max", "x_min", "x_max"]
+            ).to_csv(bbox_csv, index_label="t")
+            print(f"Saved per-timepoint bboxes to {bbox_csv}")
+            plot_bbox_over_time(
+                per_t_bboxes, bbox,
+                save_path=str(output_plots_dir / "bbox_over_time.png"),
+            )
+
+        # --- Z focus stats (on non-blank frames only) ---
+        print(f"Z focus: {z_focus}")
+        z_focus_csv = output_plots_dir / "z_focus.csv"
+        pd.DataFrame({"z_focus": z_focus}).to_csv(z_focus_csv, index_label="t")
+        print(f"Saved z focus to {z_focus_csv}")
+
+        if z_index is not None:
+            z_label = f"mid (Z//2={z_focus[0]})" if z_index == "mid" else str(z_index)
+            print(f"Using fixed z_index={z_label}, skipping z_focus outlier detection")
+            z_focus_outliers_original = np.array([], dtype=int)
+        else:
+            blank_set = set(blank_frames)
+            z_focus_valid = [z_focus[t] for t in range(T) if t not in blank_set]
+            z_focus_stats = plot_z_focus(
+                z_focus_valid,
+                save_path=str(output_plots_dir / "z_focus.png"),
+                n_std=n_std,
+                z_window=z_window,
+            )
+            valid_t_indices = [t for t in range(T) if t not in blank_set]
+            z_focus_outliers_original = np.array(
+                [valid_t_indices[i] for i in z_focus_stats["t_outliers"]], dtype=int
+            )
+
+        # --- Drop list (blank frames + z_focus outliers only) ---
+        drop_info = build_drop_list(
+            blank_frames=blank_frames,
+            z_focus_outliers=z_focus_outliers_original,
+            T=T,
+            save_path=str(output_plots_dir / "drop_list.csv"),
+        )
+
+        # --- Recompute bbox using only kept frames ---
+        keep_indices = drop_info["keep_indices"]
+        arrays = [im_lf_arr, im_ls_arr]
+        Y_common = min(arr.shape[-2] for arr in arrays)
+        X_common = min(arr.shape[-1] for arr in arrays)
+        circ_mask = None
+        if lf_mask_radius is not None:
+            circ_mask = make_circular_mask(
+                arrays[0].shape[-2], arrays[0].shape[-1], lf_mask_radius
+            )
+
+        kept_mask = np.ones((Y_common, X_common), dtype=bool)
+        for t in tqdm(keep_indices, desc="Recomputing bbox from kept frames"):
+            z_f = int(z_focus[t])
+            slices = []
+            for i, arr in enumerate(arrays):
+                for c in range(arr.shape[1]):
+                    slc = np.asarray(arr[t, c, z_f, :, :]).copy()
+                    if i == 0 and circ_mask is not None:
+                        slc[~circ_mask] = 0
+                    slices.append(slc)
+            kept_mask &= find_overlap_mask(slices)
+
+        kept_bbox = find_inscribed_bbox(kept_mask)
+        if kept_bbox is not None:
+            print(f"Recomputed bbox from {len(keep_indices)} kept frames "
+                  f"(was Y=[{bbox[0]}:{bbox[1]+1}], X=[{bbox[2]}:{bbox[3]+1}])")
+            y_min, y_max, x_min, x_max = kept_bbox
+        else:
+            print("WARNING: kept-frame mask has no valid overlap, using all-frame bbox")
+
+        print(f"Final bbox: Y=[{y_min}:{y_max+1}], X=[{x_min}:{x_max+1}]")
+        print(f"Final crop size: Y={y_max - y_min + 1}, X={x_max - x_min + 1}")
+
+    # Save FOV summary metadata
+    summary = {
+        "status": "ok",
+        "fov": fov,
+        "bbox": [y_min, y_max, x_min, x_max],
+        "Y_crop": y_max - y_min + 1,
+        "X_crop": x_max - x_min + 1,
+        "T_out": len(keep_indices),
+        "T_total": T,
+    }
+    summary_csv = output_plots_dir / "fov_summary.csv"
+    pd.DataFrame([summary]).to_csv(summary_csv, index=False)
+    print(f"Saved FOV summary to {summary_csv}")
+
+    return summary
+
+
+def _read_core_metadata(output_plots_dir: Path) -> dict:
+    """Read core metadata files written by compute_fov_core.
+
+    Returns dict with z_focus, blank_frames, bbox, or None if files missing.
+    """
+    z_focus_csv = output_plots_dir / "z_focus.csv"
+    drop_csv = output_plots_dir / "drop_list.csv"
+    summary_csv = output_plots_dir / "fov_summary.csv"
+
+    if not z_focus_csv.exists() or not summary_csv.exists():
+        return None
+
+    z_df = pd.read_csv(z_focus_csv)
+    z_focus = z_df["z_focus"].tolist()
+
+    blank_frames = []
+    if drop_csv.exists() and drop_csv.stat().st_size > 0:
+        drop_df = pd.read_csv(drop_csv)
+        blank_rows = drop_df[drop_df["reason"].str.contains("blank", case=False, na=False)]
+        blank_frames = blank_rows["t"].tolist()
+
+    summary = pd.read_csv(summary_csv).to_dict("records")[0]
+    import ast
+    bbox_raw = summary["bbox"]
+    if isinstance(bbox_raw, str):
+        bbox = tuple(ast.literal_eval(bbox_raw))
+    else:
+        bbox = (bbox_raw,)
+
+    return {
+        "z_focus": z_focus,
+        "blank_frames": blank_frames,
+        "bbox": bbox,
+    }
+
+
+# Mapping of QC metric names to their functions and required arguments
+QC_METRICS = [
+    "laplacian",
+    "entropy",
+    "hf_ratio",
+    "frc",
+    "bleach",
+    "fov_registration",
+]
+
+
+def run_fov_qc(
+    metric: str,
+    im_lf_path: Path,
+    im_ls_path: Path,
+    output_plots_dir: Path,
+    lf_mask_radius: float = 0.75,
+    z_final: int = 64,
+    channel_name: str = "raw GFP EX488 EM525-45",
+) -> str:
+    """Phase 2: Run a single QC metric for one FOV.
+
+    Reads core metadata (z_focus, blank_frames, bbox) from output_plots_dir,
+    then dispatches to the appropriate QC function.
+
+    Parameters
+    ----------
+    metric : str
+        One of: "laplacian", "entropy", "hf_ratio", "frc", "bleach", "fov_registration"
+    """
+    core = _read_core_metadata(output_plots_dir)
+    if core is None:
+        print(f"ERROR: Core metadata not found in {output_plots_dir}")
+        return f"error: no core metadata for {metric}"
+
+    z_focus = core["z_focus"]
+    blank_frames = core["blank_frames"]
+    bbox = core["bbox"]
+
+    print(f"Running QC metric: {metric}")
+    print(f"  z_focus: {len(z_focus)} timepoints, blank_frames: {blank_frames}")
+
+    if metric == "laplacian":
+        compute_laplacian_qc(
+            im_ls_path=im_ls_path,
+            output_plots_dir=output_plots_dir,
+            z_focus=z_focus,
+            channel_name=channel_name,
+            z_final=z_final,
+            n_std=2.0,
+            blank_frames=blank_frames,
+        )
+    elif metric == "entropy":
+        compute_entropy_qc(
+            im_ls_path=im_ls_path,
+            output_plots_dir=output_plots_dir,
+            channel_name=channel_name,
+            blank_frames=blank_frames,
+        )
+    elif metric == "hf_ratio":
+        compute_hf_ratio_qc(
+            im_ls_path=im_ls_path,
+            output_plots_dir=output_plots_dir,
+            z_focus=z_focus,
+            channel_name=channel_name,
+            blank_frames=blank_frames,
+        )
+    elif metric == "frc":
+        compute_frc_qc(
+            im_ls_path=im_ls_path,
+            output_plots_dir=output_plots_dir,
+            z_focus=z_focus,
+            channel_name=channel_name,
+            blank_frames=blank_frames,
+        )
+    elif metric == "bleach":
+        compute_bleach_fov(
+            im_ls_path=im_ls_path,
+            output_plots_dir=output_plots_dir,
+            z_focus=z_focus,
+            bbox=bbox,
+            channel_name=channel_name,
+            blank_frames=blank_frames,
+        )
+    elif metric == "fov_registration":
+        with open_ome_zarr(im_lf_path) as im_lf_ds, open_ome_zarr(im_ls_path) as im_ls_ds:
+            compute_fov_registration_qc(
+                im_lf_arr=im_lf_ds.data.dask_array(),
+                im_ls_arr=im_ls_ds.data.dask_array(),
+                z_focus=z_focus,
+                output_plots_dir=output_plots_dir,
+                lf_mask_radius=lf_mask_radius,
+                blank_frames=blank_frames,
+            )
+    else:
+        raise ValueError(f"Unknown QC metric: {metric}. Must be one of {QC_METRICS}")
+
+    print(f"Done: {metric}")
+    return f"ok: {metric}"

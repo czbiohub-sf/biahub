@@ -85,7 +85,7 @@ def compute_detrended_local_z(series, blank, trend_window=11, local_window=3):
 
 if __name__ == "__main__":
     for fov_name, info in test_fovs.items():
-        csv_path = run_dir / "plots" / fov_name / "hf_ratio_qc.csv"
+        csv_path = run_dir / "per_fov_analysis" / fov_name / "hf_ratio_qc.csv"
         df = pd.read_csv(csv_path)
 
         hf = df["hf_ratio"].values.astype(float)

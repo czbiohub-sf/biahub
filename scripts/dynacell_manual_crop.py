@@ -104,7 +104,7 @@ def manual_crop(
     z_final = params["z_final"]
 
     all_zarrs = _resolve_zarr_paths(root_path, dataset, params)
-    plots_dir = run_dir / "plots"
+    plots_dir = run_dir / "per_fov_analysis"
 
     # Read stage 1 results
     summary_df = pd.read_csv(run_dir / "global_summary.csv")

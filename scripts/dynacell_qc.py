@@ -11,6 +11,7 @@ from iohub import open_ome_zarr
 
 from dynacell_geometry import make_circular_mask
 from dynacell_plotting import (
+    STYLE as _STYLE,
     plot_registration_qc,
     plot_laplacian_qc,
     plot_entropy_qc,
@@ -61,11 +62,23 @@ def compute_beads_registration_qc(
             lf_crop = lf_slice[:Y_common, :X_common]
             ls_crop = ls_slice[:Y_common, :X_common]
 
-            # Pearson correlation
-            lf_flat = lf_crop.ravel()
-            ls_flat = ls_crop.ravel()
-            lf_centered = lf_flat - lf_flat.mean()
-            ls_centered = ls_flat - ls_flat.mean()
+            # Handle NaN values
+            nan_mask = np.isnan(lf_crop) | np.isnan(ls_crop)
+            if nan_mask.all():
+                pearson_corrs[t] = np.nan
+                pcc_shifts_y[t] = np.nan
+                pcc_shifts_x[t] = np.nan
+                pcc_errors[t] = np.nan
+                continue
+            lf_clean = np.where(nan_mask, 0.0, lf_crop)
+            ls_clean = np.where(nan_mask, 0.0, ls_crop)
+
+            # Pearson correlation (on non-NaN pixels only)
+            valid = ~nan_mask
+            lf_valid = lf_crop[valid]
+            ls_valid = ls_crop[valid]
+            lf_centered = lf_valid - lf_valid.mean()
+            ls_centered = ls_valid - ls_valid.mean()
             denom = np.sqrt(np.sum(lf_centered**2) * np.sum(ls_centered**2))
             if denom > 0:
                 pearson_corrs[t] = np.sum(lf_centered * ls_centered) / denom
@@ -74,7 +87,7 @@ def compute_beads_registration_qc(
 
             # Phase cross-correlation (residual shift after registration)
             shift, error, _phasediff = pcc_skimage(
-                lf_crop, ls_crop, upsample_factor=10
+                lf_clean, ls_clean, upsample_factor=10
             )
             pcc_shifts_y[t] = shift[0]
             pcc_shifts_x[t] = shift[1]
@@ -187,32 +200,60 @@ def compute_fov_registration_qc(
         if denom > 0:
             pearson_corrs[t] = np.sum(lf_centered * ls_centered) / denom
 
+    # Outlier detection (reporting only — low PCC = bad registration)
+    valid_mask = ~np.isnan(pearson_corrs)
+    valid_vals = pearson_corrs[valid_mask]
+    mu = float(np.nanmean(pearson_corrs))
+    sigma = float(np.nanstd(pearson_corrs))
+    local_z = np.full(T, np.nan, dtype=np.float64)
+    is_outlier = np.zeros(T, dtype=int)
+    if sigma > 1e-12:
+        local_z[valid_mask] = (pearson_corrs[valid_mask] - mu) / sigma
+        is_outlier[valid_mask] = (local_z[valid_mask] < -2.5).astype(int)
+
+    n_outliers = int(is_outlier.sum())
+    print(f"  FOV registration: mean={mu:.4f}, std={sigma:.4f}, outliers={n_outliers} (reporting only)")
+
     # Save CSV
-    qc_df = pd.DataFrame({"t": np.arange(T), "pearson_corr": pearson_corrs})
+    qc_df = pd.DataFrame({
+        "t": np.arange(T),
+        "pearson_corr": pearson_corrs,
+        "local_z": local_z,
+        "is_outlier": is_outlier,
+    })
     qc_csv = output_plots_dir / "fov_registration_qc.csv"
     qc_df.to_csv(qc_csv, index=False)
     print(f"  Saved FOV registration QC to {qc_csv}")
 
     # Plot (valid frames only, keep time index)
-    valid_idx = np.where(~np.isnan(pearson_corrs))[0]
-    fig, ax = plt.subplots(figsize=(10, 3))
-    ax.plot(valid_idx, pearson_corrs[valid_idx], ".-", markersize=3, linewidth=0.5)
-    ax.set_xlabel("Timepoint")
-    ax.set_ylabel("Pearson correlation (LF vs LS)")
-    mu = np.nanmean(pearson_corrs)
+    valid_idx = np.where(valid_mask)[0]
+    fig, ax = plt.subplots(figsize=_STYLE["fig_single"])
+    ax.plot(valid_idx, pearson_corrs[valid_idx], ".-",
+            markersize=_STYLE["marker_size"], linewidth=_STYLE["lw_data"])
+    ax.set_xlabel("Timepoint", fontsize=_STYLE["fs_label"])
+    ax.set_ylabel("Pearson correlation (LF vs LS)", fontsize=_STYLE["fs_label"])
     title = f"Per-timepoint LF–LS registration (Phase ch 0)"
     if blank_set:
         title += f" (excl. {len(blank_set)} blank)"
-    ax.set_title(title)
-    ax.axhline(mu, color="orange", linestyle="--", linewidth=0.8, label=f"mean={mu:.4f}")
-    ax.legend(fontsize=8)
+    ax.set_title(title, fontsize=_STYLE["fs_title"])
+    ax.axhline(mu, color=_STYLE["c_mean"], linestyle="--", linewidth=_STYLE["lw_ref"],
+               label=f"mean={mu:.4f}")
+    if n_outliers > 0:
+        outlier_idx = np.where(is_outlier)[0]
+        ax.scatter(outlier_idx, pearson_corrs[outlier_idx], color=_STYLE["c_outlier"],
+                   s=_STYLE["scatter_size"], zorder=5, label=f"outliers ({n_outliers})")
+    ax.legend(fontsize=_STYLE["fs_legend"])
     ax.set_xlim(0, T - 1)
+    fov_reg_lim = _STYLE["ylim"].get("fov_reg_pearson")
+    if fov_reg_lim is not None:
+        ax.set_ylim(fov_reg_lim)
+    ax.tick_params(labelsize=_STYLE["fs_tick"])
     fig.tight_layout()
     plot_path = output_plots_dir / "fov_registration_qc.png"
-    fig.savefig(plot_path, dpi=150, bbox_inches="tight")
+    fig.savefig(plot_path, dpi=_STYLE["dpi"], bbox_inches="tight")
     plt.close(fig)
 
-    return {"pearson_corrs": pearson_corrs}
+    return {"pearson_corrs": pearson_corrs, "outliers": np.where(is_outlier)[0]}
 
 
 def compute_laplacian_qc(
@@ -699,6 +740,226 @@ def compute_hf_ratio_qc(
     return {"hf_ratios": hf_ratios, "outliers": outliers, "stats": stats}
 
 
+def compute_bleach_fov(
+    im_ls_path: Path,
+    output_plots_dir: Path,
+    z_focus: list[int],
+    bbox: tuple[int, int, int, int],
+    channel_name: str = "raw GFP EX488 EM525-45",
+    blank_frames: list[int] | None = None,
+) -> dict:
+    """Measure per-timepoint mean GFP intensity within the crop bbox at z_focus.
+
+    Saves bleach_qc.csv and bleach_qc.png per FOV. The dataset-level
+    bleach summary reads these CSVs instead of re-opening the zarrs.
+    """
+    with open_ome_zarr(im_ls_path) as ds:
+        arr = ds.data.dask_array()
+        T, C, Z, Y, X = arr.shape
+        channels = list(ds.channel_names)
+
+        if channel_name not in channels:
+            print(f"WARNING: channel '{channel_name}' not in {channels} for bleach QC")
+            return {"mean_intensities": np.full(T, np.nan), "normalized": np.full(T, np.nan)}
+
+        c_idx = channels.index(channel_name)
+        y_min, y_max, x_min, x_max = bbox
+        blank_set = set(blank_frames) if blank_frames else set()
+
+        means = np.full(T, np.nan, dtype=np.float64)
+        for t in range(T):
+            if t in blank_set:
+                continue
+            z_f = min(int(z_focus[t]), Z - 1)
+            slc = np.asarray(
+                arr[t, c_idx, z_f, y_min:y_max + 1, x_min:x_max + 1]
+            ).astype(np.float64)
+            means[t] = float(np.mean(slc))
+
+    # Normalize to first valid timepoint
+    first_valid = np.where(~np.isnan(means))[0]
+    normalized = np.full(T, np.nan, dtype=np.float64)
+    if len(first_valid) > 0 and means[first_valid[0]] > 0:
+        normalized = means / means[first_valid[0]]
+
+    # Save CSV
+    fov_df = pd.DataFrame({
+        "t": np.arange(T),
+        "mean_intensity": means,
+        "normalized": normalized,
+    })
+    fov_df.to_csv(output_plots_dir / "bleach_qc.csv", index=False)
+
+    # Per-FOV plot
+    valid_idx = np.where(~np.isnan(normalized))[0]
+    fig, ax = plt.subplots(figsize=_STYLE["fig_single"])
+    ax.plot(valid_idx, normalized[valid_idx], ".-",
+            markersize=_STYLE["marker_size"], linewidth=_STYLE["lw_data"])
+    ax.axhline(1.0, color="gray", linestyle=":", linewidth=0.5)
+    pct_rem = float(normalized[valid_idx[-1]] * 100) if len(valid_idx) > 0 else 0
+    ax.set_xlabel("Timepoint", fontsize=_STYLE["fs_label"])
+    ax.set_ylabel("Normalized intensity", fontsize=_STYLE["fs_label"])
+    fov_name = output_plots_dir.name
+    ax.set_title(f"Bleach QC | {fov_name} | {pct_rem:.1f}% remaining", fontsize=_STYLE["fs_title"])
+    bleach_lim = _STYLE["ylim"].get("bleach_norm")
+    if bleach_lim is not None:
+        ax.set_ylim(bleach_lim)
+    else:
+        ax.set_ylim(bottom=0)
+    ax.tick_params(labelsize=_STYLE["fs_tick"])
+    fig.tight_layout()
+    fig.savefig(output_plots_dir / "bleach_qc.png", dpi=_STYLE["dpi"], bbox_inches="tight")
+    plt.close(fig)
+
+    print(f"  Bleach QC: {pct_rem:.1f}% remaining at last t")
+    return {"mean_intensities": means, "normalized": normalized}
+
+
+def _frc_mean_corr(img_2d: np.ndarray) -> float:
+    """Compute mean of FRC correlation curve — higher = sharper."""
+    try:
+        from cubic.metrics.frc.frc import calculate_frc
+        result = calculate_frc(img_2d.astype(np.float32))
+        corr = np.array(result.correlation["correlation"])
+        if corr.ndim == 0 or len(corr) == 0:
+            return np.nan
+        return float(np.nanmean(corr))
+    except Exception:
+        return np.nan
+
+
+def compute_frc_qc(
+    im_ls_path: Path,
+    output_plots_dir: Path,
+    z_focus: list[int],
+    channel_name: str = "raw GFP EX488 EM525-45",
+    z_range: int = 5,
+    blank_frames: list[int] | None = None,
+) -> dict:
+    """Measure per-timepoint FRC mean correlation as a blur/quality indicator.
+
+    For each timepoint, computes the FRC curve on z_focus ± z_range Z planes
+    and takes the median of the mean correlation values. Lower FRC correlation
+    indicates blur or loss of high-frequency content.
+
+    Reporting only — not used for frame dropping or outlier detection.
+
+    Parameters
+    ----------
+    im_ls_path : Path
+        Path to the LS zarr FOV position.
+    output_plots_dir : Path
+        Directory for saving plots and CSVs.
+    z_focus : list of int
+        Per-timepoint z_focus indices.
+    channel_name : str
+        Channel to measure.
+    z_range : int
+        Number of Z planes above and below z_focus to include.
+    blank_frames : list of int or None
+        Timepoints to skip.
+
+    Returns
+    -------
+    dict with 'frc_values' and 'stats'.
+    """
+    from dynacell_plotting import plot_frc_qc
+
+    with open_ome_zarr(im_ls_path) as ds:
+        arr = ds.data.dask_array()
+        T, C, Z, Y, X = arr.shape
+        channels = list(ds.channel_names)
+
+        if channel_name not in channels:
+            print(f"WARNING: channel '{channel_name}' not found in {channels}")
+            return {
+                "frc_values": np.zeros(T),
+                "stats": {},
+            }
+
+        c_idx = channels.index(channel_name)
+        print(
+            f"FRC QC: channel='{channel_name}' (c={c_idx}), "
+            f"z_range=±{z_range}"
+        )
+
+        blank_set = set(blank_frames) if blank_frames else set()
+        frc_values = np.full(T, np.nan, dtype=np.float64)
+        for t in tqdm(range(T), desc="FRC QC (multi-Z)"):
+            if t in blank_set:
+                continue
+            z_f = int(z_focus[t])
+            z_lo = max(0, z_f - z_range)
+            z_hi = min(Z, z_f + z_range + 1)
+            frc_zs = []
+            for z in range(z_lo, z_hi):
+                img = np.asarray(arr[t, c_idx, z, :, :]).astype(np.float32)
+                if np.ptp(img) < 1e-6:
+                    continue
+                frc_zs.append(_frc_mean_corr(img))
+            valid_frc = [v for v in frc_zs if not np.isnan(v)]
+            if valid_frc:
+                frc_values[t] = np.median(valid_frc)
+
+    # --- Exclude blank frames ---
+    blank = np.isnan(frc_values)
+    valid = frc_values[~blank]
+    if len(valid) < 3:
+        print("WARNING: too few valid frames for FRC QC")
+        return {
+            "frc_values": frc_values,
+            "stats": {},
+        }
+
+    med = float(np.median(valid))
+    mu = float(np.mean(valid))
+    sigma = float(np.std(valid))
+
+    # Outlier detection (reporting only — low FRC = blurry)
+    local_z = np.full(T, np.nan, dtype=np.float64)
+    is_outlier = np.zeros(T, dtype=int)
+    if sigma > 1e-12:
+        local_z[~blank] = (frc_values[~blank] - mu) / sigma
+        is_outlier[~blank] = (local_z[~blank] < -2.5).astype(int)
+
+    n_outliers = int(is_outlier.sum())
+
+    stats = {
+        "median": med,
+        "mean": mu,
+        "std": sigma,
+        "z_range": z_range,
+        "n_outliers": n_outliers,
+    }
+
+    print(f"\nFRC QC results ({channel_name}):")
+    print(f"  Median={med:.6f}, Mean={mu:.6f}, Std={sigma:.6f}, multi-Z ±{z_range}")
+    print(f"  Outliers (z < -2.5, reporting only): {n_outliers}")
+
+    # Save CSV
+    qc_df = pd.DataFrame({
+        "t": np.arange(T),
+        "frc_mean_corr": frc_values,
+        "local_z": local_z,
+        "is_outlier": is_outlier,
+    })
+    qc_csv = output_plots_dir / "frc_qc.csv"
+    qc_df.to_csv(qc_csv, index=False)
+    print(f"  Saved CSV to {qc_csv}")
+
+    # Plot
+    fig = plot_frc_qc(
+        frc_values=frc_values, blank_mask=blank, med=med,
+        channel_name=channel_name, z_range=z_range,
+    )
+    plot_path = output_plots_dir / "frc_qc.png"
+    fig.savefig(plot_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved plot to {plot_path}")
+
+    return {"frc_values": frc_values, "outliers": np.where(is_outlier)[0], "stats": stats}
+
+
 def compute_dust_qc(
     lf_zarr: Path,
     fov_keys: list[str],
@@ -867,6 +1128,26 @@ def compute_dust_qc(
     plt.close(fig)
     print(f"  Saved plot to {plot_path}")
 
+    # Save dust mask as zarr (1, 1, Z, Y, X) — binary uint8
+    dust_volume = np.zeros((Z_total, Y, X), dtype=np.uint8)
+    for z, mask in dust_maps.items():
+        dust_volume[z] = mask.astype(np.uint8)
+    dust_zarr_path = output_dir / "dust_mask.zarr"
+    from iohub.ngff.utils import create_empty_plate
+    create_empty_plate(
+        store_path=dust_zarr_path,
+        position_keys=[("0", "0", "000000")],
+        shape=(1, 1, Z_total, Y, X),
+        chunks=(1, 1, Z_total, Y, X),
+        scale=(1.0, 1.0, 1.0, 1.0, 1.0),
+        channel_names=["dust_mask"],
+        dtype=np.uint8,
+        version='0.5',
+    )
+    with open_ome_zarr(dust_zarr_path / "0" / "0" / "000000", mode="r+") as ds:
+        ds["0"][:] = dust_volume[np.newaxis, np.newaxis, ...]
+    print(f"  Saved dust mask zarr to {dust_zarr_path} — shape (1, 1, {Z_total}, {Y}, {X})")
+
     return {
         "z_stats": z_stats,
         "worst_z": worst_z,
@@ -877,34 +1158,27 @@ def compute_dust_qc(
 
 
 def compute_bleach_qc(
-    ls_zarr: Path,
     fov_keys: list[str],
     plots_dir: Path,
     output_dir: Path,
     channel_name: str = "raw GFP EX488 EM525-45",
-    blank_frames_per_fov: dict[str, set[int]] | None = None,
+    **_ignored,
 ) -> dict:
-    """Estimate GFP photobleaching across the dataset over time.
+    """Aggregate per-FOV bleach QC CSVs into a dataset-level summary.
 
-    For each FOV, measures mean GFP intensity at the in-focus Z plane
-    (from z_focus.csv) within the sample bbox (from fov_summary.csv)
-    per timepoint. Curves are normalized to t=0 to show relative decay.
-    An exponential decay is fit to the mean curve to estimate half-life.
+    Reads plots/<fov>/bleach_qc.csv (produced by compute_bleach_fov in stage 1)
+    and fits an exponential decay to the mean normalized curve.
 
     Parameters
     ----------
-    ls_zarr : Path
-        Path to the LS zarr store (plate-level).
     fov_keys : list of str
         FOV keys in "A/1/000001" format.
     plots_dir : Path
-        Stage 1 plots directory (contains per-FOV z_focus.csv, fov_summary.csv).
+        Stage 1 plots directory (contains per-FOV bleach_qc.csv).
     output_dir : Path
-        Directory for saving plots and CSVs.
+        Directory for saving dataset-level plots and CSVs.
     channel_name : str
-        GFP channel name in the LS zarr.
-    blank_frames_per_fov : dict or None
-        Mapping fov_key -> set of blank timepoint indices to skip.
+        Channel name (for plot labels).
 
     Returns
     -------
@@ -912,63 +1186,18 @@ def compute_bleach_qc(
     """
     from scipy.optimize import curve_fit
 
-    if blank_frames_per_fov is None:
-        blank_frames_per_fov = {}
-
-    # Collect per-FOV mean intensity curves
-    fov_curves = {}  # fov_key -> (t_indices, mean_intensities)
-
-    for fov_key in tqdm(fov_keys, desc="Bleach QC: reading FOVs"):
+    # Read per-FOV bleach CSVs
+    fov_curves = {}  # fov_key -> (t_arr, means)
+    for fov_key in fov_keys:
         fov_name = "_".join(fov_key.split("/"))
-        fov_plots = plots_dir / fov_name
-
-        # Read z_focus
-        z_csv = fov_plots / "z_focus.csv"
-        if not z_csv.exists():
+        bleach_csv = plots_dir / fov_name / "bleach_qc.csv"
+        if not bleach_csv.exists():
             continue
-        z_focus = pd.read_csv(z_csv, index_col=0)["z_focus"].values.astype(int)
-
-        # Read bbox for spatial ROI
-        summary_csv = fov_plots / "fov_summary.csv"
-        if not summary_csv.exists():
+        df = pd.read_csv(bleach_csv)
+        valid = df.dropna(subset=["mean_intensity"])
+        if len(valid) == 0:
             continue
-        bbox_str = str(pd.read_csv(summary_csv)["bbox"].iloc[0]).strip()
-        bbox_str = re.sub(r"np\.int\d+\(([-+]?\d+)\)", r"\1", bbox_str)
-        parts = [p.strip() for p in bbox_str.strip("[]()").split(",") if p.strip()]
-        if len(parts) != 4:
-            continue
-        y_min, y_max, x_min, x_max = [int(p) for p in parts]
-
-        blank_set = blank_frames_per_fov.get(fov_key, set())
-        T_total = len(z_focus)
-
-        pos_path = ls_zarr / fov_key
-        if not pos_path.exists():
-            continue
-
-        with open_ome_zarr(pos_path) as ds:
-            arr = ds.data.dask_array()
-            channels = list(ds.channel_names)
-            if channel_name not in channels:
-                print(f"  WARNING: '{channel_name}' not in {channels} for {fov_key}")
-                continue
-            c_idx = channels.index(channel_name)
-
-            t_valid = []
-            means = []
-            for t in range(T_total):
-                if t in blank_set:
-                    continue
-                z_f = int(z_focus[t])
-                z_f = min(z_f, arr.shape[2] - 1)
-                slc = np.asarray(
-                    arr[t, c_idx, z_f, y_min:y_max + 1, x_min:x_max + 1]
-                ).astype(np.float64)
-                t_valid.append(t)
-                means.append(float(np.mean(slc)))
-
-        if len(t_valid) > 0:
-            fov_curves[fov_key] = (np.array(t_valid), np.array(means))
+        fov_curves[fov_key] = (valid["t"].values, valid["mean_intensity"].values)
 
     if not fov_curves:
         print("WARNING: No valid FOV curves for bleach QC")
