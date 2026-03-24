@@ -359,6 +359,8 @@ def _submit_stage1_jobs(
     slurm_out_path, cluster, slurm_args,
     lf_mask_radius, n_std, z_window, z_final, beads_fov,
     z_index=None,
+    qc_metrics=None,
+    manual_drop_frames=None,
 ):
     """Submit stage 1 SLURM jobs in two phases: core metadata then QC metrics.
 
@@ -366,8 +368,20 @@ def _submit_stage1_jobs(
     Phase 2: Per-(FOV, metric) QC jobs that read core outputs.
     Beads QC runs in parallel with phase 1.
 
+    Parameters
+    ----------
+    qc_metrics : list of str or None
+        Which QC metrics to run. If None, runs all QC_METRICS.
+        Valid values: "laplacian", "entropy", "hf_ratio", "frc", "bleach", "fov_registration".
+
     Returns (ok_results, beads_qc_job). beads_qc_job may be None.
     """
+    if qc_metrics is None:
+        qc_metrics = QC_METRICS
+    else:
+        invalid = set(qc_metrics) - set(QC_METRICS)
+        if invalid:
+            raise ValueError(f"Unknown QC metrics: {invalid}. Valid: {QC_METRICS}")
     print(f"\n=== STAGE 1: Computing metadata for {len(position_keys)} FOVs ===")
     print(f"  Resources: {slurm_args['slurm_cpus_per_task']} CPUs, {slurm_args['slurm_mem_per_cpu']} RAM/CPU")
 
@@ -385,6 +399,10 @@ def _submit_stage1_jobs(
             output_plots_dir = plots_dir / fov_name
             output_plots_dir.mkdir(parents=True, exist_ok=True)
 
+            fov_manual_drops = None
+            if manual_drop_frames and fov in manual_drop_frames:
+                fov_manual_drops = manual_drop_frames[fov]
+
             job = executor_core.submit(
                 compute_fov_core,
                 im_lf_path=lf_zarr / fov,
@@ -395,6 +413,7 @@ def _submit_stage1_jobs(
                 n_std=n_std,
                 z_window=z_window,
                 z_index=z_index,
+                manual_drop_frames=fov_manual_drops,
                 DEBUG=True,
             )
             jobs_core.append(job)
@@ -445,8 +464,8 @@ def _submit_stage1_jobs(
         for fov, fov_name, out_dir in fov_info
         if fov_name in ok_fov_set
     ]
-    n_qc_jobs = len(ok_fov_info) * len(QC_METRICS)
-    print(f"\n--- Phase 2: QC metrics ({len(ok_fov_info)} FOVs x {len(QC_METRICS)} metrics = {n_qc_jobs} jobs) ---")
+    n_qc_jobs = len(ok_fov_info) * len(qc_metrics)
+    print(f"\n--- Phase 2: QC metrics ({len(ok_fov_info)} FOVs x {len(qc_metrics)} metrics = {n_qc_jobs} jobs) ---")
 
     executor_qc = submitit.AutoExecutor(folder=slurm_out_path / "stage1_qc", cluster=cluster)
     executor_qc.update_parameters(slurm_job_name="dynacell_s1_qc", **slurm_args)
@@ -454,7 +473,7 @@ def _submit_stage1_jobs(
     jobs_qc = []
     with submitit.helpers.clean_env(), executor_qc.batch():
         for fov, fov_name, output_plots_dir in ok_fov_info:
-            for metric in QC_METRICS:
+            for metric in qc_metrics:
                 job = executor_qc.submit(
                     run_fov_qc,
                     metric=metric,
@@ -578,32 +597,102 @@ def _qualify_fovs(
     return qualified_results
 
 
-def _build_unified_drop_list(ok_results, plots_dir, beads_drop_indices, output_dir):
-    """Merge per-FOV drops and beads QC into a global drop list.
+def _build_unified_drop_list(ok_results, plots_dir, beads_drop_indices, output_dir,
+                             drop_metrics=None):
+    """Merge per-FOV drops, beads QC, and QC metric outliers into a global drop list.
+
+    Parameters
+    ----------
+    drop_metrics : list of str
+        Sources whose outliers should be used to drop frames. Includes both
+        core sources ("blank", "z_focus", "manual") and QC metric names
+        (e.g. "laplacian", "frc"). Default ["blank", "z_focus", "manual"].
 
     Returns (global_keep_indices, global_drop_csv_path).
     Writes drop_list_all_fovs.csv.
     """
+    # Mapping from drop_list.csv reason strings to drop_metrics names
+    REASON_TO_SOURCE = {
+        "blank_frame": "blank",
+        "z_focus_outlier": "z_focus",
+        "manual": "manual",
+    }
+
+    # Mapping from QC metric name to CSV filename
+    METRIC_CSV = {
+        "laplacian": "laplacian_qc.csv",
+        "entropy": "entropy_qc.csv",
+        "hf_ratio": "hf_ratio_qc.csv",
+        "frc": "frc_qc.csv",
+        "bleach": "bleach_qc.csv",
+        "max_intensity": "max_intensity_qc.csv",
+        "fov_registration": "fov_registration_qc.csv",
+    }
+
+    if drop_metrics is None:
+        drop_metrics = ["blank", "z_focus", "manual"]
+    drop_metrics_set = set(drop_metrics)
+
     ok_fovs = [r["fov"] for r in ok_results]
     T_total = ok_results[0]["T_total"]
 
     global_drop_set = set()
     drop_rows = []
+
+    # Core drops from per-FOV drop_list.csv (blank, z_focus, manual)
+    core_counts = {}
     for fov in ok_fovs:
         fov_name = "_".join(fov.split("/"))
         drop_path = plots_dir / fov_name / "drop_list.csv"
         if drop_path.exists() and drop_path.stat().st_size > 0:
             drop_df = pd.read_csv(drop_path)
-            if len(drop_df) > 0:
-                global_drop_set.update(drop_df["t"].tolist())
-                for _, row in drop_df.iterrows():
+            for _, row in drop_df.iterrows():
+                t = int(row["t"])
+                # A row can have multiple reasons (comma-separated)
+                reasons = [r.strip() for r in str(row["reason"]).split(",")]
+                # Check if any reason matches an enabled drop_metrics source
+                matched = False
+                for reason in reasons:
+                    source = REASON_TO_SOURCE.get(reason, reason)
+                    if source in drop_metrics_set:
+                        matched = True
+                        break
+                if matched:
+                    global_drop_set.add(t)
                     drop_rows.append({
                         "fov": fov_name,
-                        "t": int(row["t"]),
+                        "t": t,
                         "reason": row["reason"],
                     })
+                    for reason in reasons:
+                        source = REASON_TO_SOURCE.get(reason, reason)
+                        core_counts[source] = core_counts.get(source, 0) + 1
 
-    # Merge beads registration QC
+    # QC metric outliers from drop_metrics
+    qc_metric_names = drop_metrics_set - {"blank", "z_focus", "manual"}
+    n_metric_drops = 0
+    metric_counts = {}
+    for fov in ok_fovs:
+        fov_name = "_".join(fov.split("/"))
+        for metric in qc_metric_names:
+            csv_name = METRIC_CSV.get(metric)
+            if csv_name is None:
+                continue
+            csv_path = plots_dir / fov_name / csv_name
+            outlier_t = _read_qc_outliers(csv_path)
+            new_t = outlier_t - global_drop_set
+            if new_t:
+                n_metric_drops += len(new_t)
+                metric_counts[metric] = metric_counts.get(metric, 0) + len(new_t)
+                global_drop_set.update(new_t)
+            for t in sorted(outlier_t):
+                drop_rows.append({
+                    "fov": fov_name,
+                    "t": int(t),
+                    "reason": f"{metric}_outlier",
+                })
+
+    # Beads registration QC (always applied if beads_fov was specified)
     beads_drop_set = set(int(t) for t in beads_drop_indices)
     n_beads_new = len(beads_drop_set - global_drop_set)
     global_drop_set.update(beads_drop_set)
@@ -618,11 +707,15 @@ def _build_unified_drop_list(ok_results, plots_dir, beads_drop_indices, output_d
         sorted(set(range(T_total)) - global_drop_set), dtype=int
     )
 
-    print(f"\n=== Unified drop list (qualified FOVs + beads QC) ===")
-    print(f"  Drops from qualified FOVs: {len(global_drop_set) - len(beads_drop_set & global_drop_set)}")
+    print(f"\n=== Unified drop list ===")
+    print(f"  drop_metrics: {drop_metrics}")
+    for source, count in sorted(core_counts.items()):
+        print(f"  {source}: {count} entries")
+    if metric_counts:
+        for metric, count in sorted(metric_counts.items()):
+            print(f"  {metric}_outlier: {count} new timepoints")
     if len(beads_drop_indices) > 0:
-        print(f"  Beads QC bad timepoints: {len(beads_drop_indices)} "
-              f"({n_beads_new} new)")
+        print(f"  beads_qc: {len(beads_drop_indices)} ({n_beads_new} new)")
     print(f"  Total global drops: {len(global_drop_set)}")
     print(f"  Remaining after unified drop: {len(global_keep_indices)} / {T_total}")
 
@@ -803,10 +896,14 @@ def _save_stage1_summary(ok_results, plots_dir, output_dir, all_channel_names,
         plot_hf_ratio_all_fovs,
         plot_entropy_all_fovs,
         plot_frc_all_fovs,
-        plot_blur_detection_all_fovs,
+        plot_max_intensity_all_fovs,
         plot_drop_correlation_all_fovs,
         plot_outlier_correlation_all_fovs,
         plot_registration_pcc_all_fovs,
+        plot_outlier_heatmap_fov_metric,
+        plot_outlier_cooccurrence_matrix,
+        plot_outlier_temporal_density,
+        plot_metric_correlation_matrix,
     )
 
     def _save_all_fovs_plot(fig, data, output_dir, name, data_col=None):
@@ -838,13 +935,8 @@ def _save_stage1_summary(ok_results, plots_dir, output_dir, all_channel_names,
     fig, frc_data = plot_frc_all_fovs(ok_fovs, plots_dir)
     _save_all_fovs_plot(fig, frc_data, output_dir, "frc_all_fovs", data_col="frc_mean_corr")
 
-    fig, blur_summary = plot_blur_detection_all_fovs(ok_fovs, plots_dir)
-    fig.savefig(output_dir / "blur_detection_all_fovs.png", dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    if blur_summary:
-        pd.DataFrame(blur_summary).to_csv(
-            output_dir / "blur_detection_all_fovs.csv", index=False)
-    print(f"Saved blur_detection_all_fovs.png to {output_dir}")
+    fig, maxint_data = plot_max_intensity_all_fovs(ok_fovs, plots_dir)
+    _save_all_fovs_plot(fig, maxint_data, output_dir, "max_intensity_all_fovs")
 
     T_total_plot = ok_results[0]["T_total"] if ok_results else 66
     drop_fig, drop_df, corr_text = plot_drop_correlation_all_fovs(
@@ -880,6 +972,27 @@ def _save_stage1_summary(ok_results, plots_dir, output_dir, all_channel_names,
                 print(line)
     else:
         print("No QC outliers found across FOVs — skipping outlier correlation plot")
+
+    # Cross-FOV diagnostic views
+    fig, _ = plot_outlier_heatmap_fov_metric(ok_fovs, plots_dir, T_total_plot)
+    fig.savefig(output_dir / "outlier_heatmap_fov_metric.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved outlier_heatmap_fov_metric.png to {output_dir}")
+
+    fig = plot_outlier_cooccurrence_matrix(ok_fovs, plots_dir, T_total_plot)
+    fig.savefig(output_dir / "outlier_cooccurrence_matrix.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved outlier_cooccurrence_matrix.png to {output_dir}")
+
+    fig = plot_outlier_temporal_density(ok_fovs, plots_dir, T_total_plot)
+    fig.savefig(output_dir / "outlier_temporal_density.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved outlier_temporal_density.png to {output_dir}")
+
+    fig = plot_metric_correlation_matrix(ok_fovs, plots_dir, T_total_plot)
+    fig.savefig(output_dir / "metric_correlation_matrix.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved metric_correlation_matrix.png to {output_dir}")
 
     return T_min, Y_min, X_min, C_out, Z_out
 
@@ -984,6 +1097,9 @@ def run_all_fovs(
     stages: list[int] | None = None,
     z_index: int | str | None = None,
     drop_frames: bool = True,
+    qc_metrics: list[str] | None = None,
+    drop_metrics: list[str] | None = None,
+    annotations_dir: Path | None = None,
 ):
     """Two-stage pipeline for dynacell preprocessing.
 
@@ -1014,11 +1130,44 @@ def run_all_fovs(
         If True (default), drop flagged timepoints in stage 2 (blank, z_focus
         outliers, entropy outliers, bad registration). If False, keep all
         timepoints — the drop list is still computed for QC but not applied.
+    qc_metrics : list of str or None
+        Which QC metrics to compute in stage 1 phase 2. If None (default),
+        runs all: laplacian, entropy, hf_ratio, frc, bleach, max_intensity,
+        fov_registration. All metrics report `is_outlier` in their CSVs.
+    drop_metrics : list of str or None
+        Which sources' outliers should be used to drop frames. Combines core
+        sources and QC metric names into a single list. Valid values:
+          - "blank" — blank (all-zero) frames
+          - "z_focus" — z_focus outlier frames
+          - "manual" — manual drops from annotations
+          - Any QC metric name (e.g. "laplacian", "frc", "entropy", etc.)
+        If None (default), uses ["blank", "z_focus", "manual"].
+        QC metric names must be a subset of qc_metrics.
+    annotations_dir : Path or None
+        Path to pre-annotations directory (created by dynacell_init_annotations.py).
+        Contains annotations.csv (FOV-level) and per_fov/<fov>/annotation.csv
+        (timepoint-level). FOVs with exclude=1 are excluded. Timepoints with
+        exclude=1 are added to the drop list with reason "manual".
     """
     if stages is None:
         stages = [1, 2]
     if 2 in stages and 1 not in stages and stage1_run_dir is None:
         raise ValueError("Stage 2 alone requires stage1_run_dir to read existing results.")
+
+    # Validate drop_metrics
+    CORE_DROP_SOURCES = {"blank", "z_focus", "manual"}
+    if drop_metrics is None:
+        drop_metrics = ["blank", "z_focus", "manual"]
+    else:
+        effective_qc = qc_metrics if qc_metrics is not None else QC_METRICS
+        valid_sources = CORE_DROP_SOURCES | set(effective_qc)
+        invalid = set(drop_metrics) - valid_sources
+        if invalid:
+            raise ValueError(
+                f"Unknown drop_metrics: {invalid}. "
+                f"Valid: {sorted(valid_sources)}"
+            )
+    print(f"Drop metrics: {drop_metrics}")
 
     # Resolve input zarr paths
     lf_zarr, ls_zarr, ls_deconvolved_zarr, bf_zarr = _resolve_zarr_paths(
@@ -1065,6 +1214,9 @@ def run_all_fovs(
             "z_window": z_window,
             "z_index": z_index,
             "drop_frames": drop_frames,
+            "qc_metrics": qc_metrics,
+            "drop_metrics": drop_metrics,
+            "annotations_dir": str(annotations_dir) if annotations_dir else None,
         },
         "git": _get_git_info(biahub_repo),
     }
@@ -1072,6 +1224,41 @@ def run_all_fovs(
     with open(run_log_path, "w") as f:
         yaml.dump(run_log, f, default_flow_style=False, sort_keys=False)
     print(f"Saved run log to {run_log_path}")
+
+    # Read pre-annotations (FOV-level exclusions)
+    annot_exclude_fovs = []
+    manual_drop_frames = {}  # fov_key -> list of timepoints to drop
+    if annotations_dir is not None:
+        annotations_dir = Path(annotations_dir)
+        ds_annot = annotations_dir / "annotations.csv"
+        if ds_annot.exists():
+            annot_df = pd.read_csv(ds_annot)
+            excluded = annot_df[annot_df["exclude"] == 1]["fov"].tolist()
+            annot_exclude_fovs = excluded
+            print(f"Pre-annotations: {len(excluded)} FOVs excluded by annotations")
+        # Read per-FOV timepoint exclusions
+        per_fov_dir = annotations_dir / "per_fov"
+        if per_fov_dir.exists():
+            for fov_dir in per_fov_dir.iterdir():
+                if not fov_dir.is_dir():
+                    continue
+                fov_annot = fov_dir / "annotation.csv"
+                if fov_annot.exists():
+                    fov_df = pd.read_csv(fov_annot, comment="#")
+                    excluded_t = fov_df[fov_df["exclude"] == 1]["t"].tolist()
+                    if excluded_t:
+                        fov_key = "/".join(fov_dir.name.split("_"))
+                        manual_drop_frames[fov_key] = [int(t) for t in excluded_t]
+            if manual_drop_frames:
+                n_total = sum(len(v) for v in manual_drop_frames.values())
+                print(f"Pre-annotations: {n_total} timepoints manually excluded across {len(manual_drop_frames)} FOVs")
+
+    # Merge annotation exclusions with user-specified exclude_fovs
+    if annot_exclude_fovs:
+        if exclude_fovs is None:
+            exclude_fovs = annot_exclude_fovs
+        else:
+            exclude_fovs = list(set(exclude_fovs + annot_exclude_fovs))
 
     # Discover and filter FOVs
     position_keys, beads_fov = _discover_and_filter_fovs(
@@ -1105,6 +1292,8 @@ def run_all_fovs(
             z_window=z_window, z_final=z_final,
             beads_fov=beads_fov,
             z_index=z_index,
+            qc_metrics=qc_metrics,
+            manual_drop_frames=manual_drop_frames,
         )
         if not ok_results:
             print("ERROR: No FOVs succeeded in stage 1")
@@ -1160,6 +1349,7 @@ def run_all_fovs(
     # Build unified drop list across all qualified FOVs + beads QC
     global_keep_indices, global_drop_csv = _build_unified_drop_list(
         ok_results, plots_dir, beads_drop_indices, output_dir,
+        drop_metrics=drop_metrics,
     )
 
     # Generate per-FOV and combined annotations CSVs
@@ -1241,21 +1431,21 @@ if __name__ == "__main__":
 
     # 2024_11_05_A549_TOMM20_ZIKV_DENV
 
-    root_path = Path("/hpc/projects/intracellular_dashboard/organelle_dynamics/")
-    dataset = "2024_11_05_A549_TOMM20_ZIKV_DENV"
-    run_all_fovs(
-        root_path=root_path,
-        dataset=dataset,
-        lf_mask_radius=0.98,
-        local=False,
-        stage1_run_dir=None,
-        beads_fov="C/1/000000",
-        overlay_channels=["Phase3D", "raw GFP EX488 EM525-45"],
-        #exclude_fovs=["A/3/000001", "A/3/001000", "A/3/001001"],
-        z_final = 48,
-        n_std = 2.5,
-        #z_window = 20,
-    )
+    # root_path = Path("/hpc/projects/intracellular_dashboard/organelle_dynamics/")
+    # dataset = "2024_11_05_A549_TOMM20_ZIKV_DENV"
+    # run_all_fovs(
+    #     root_path=root_path,
+    #     dataset=dataset,
+    #     lf_mask_radius=0.98,
+    #     local=False,
+    #     stage1_run_dir=None,
+    #     beads_fov="C/1/000000",
+    #     overlay_channels=["Phase3D", "raw GFP EX488 EM525-45"],
+    #     #exclude_fovs=["A/3/000001", "A/3/001000", "A/3/001001"],
+    #     z_final = 48,
+    #     n_std = 2.5,
+    #     #z_window = 20,
+    # )
 
     # root_path = Path("/hpc/projects/intracellular_dashboard/organelle_dynamics/")
     # dataset = "2024_11_07_A549_SEC61_DENV"
@@ -1307,19 +1497,19 @@ if __name__ == "__main__":
     # )
 
 
-    # root_path = Path("/hpc/projects/intracellular_dashboard/organelle_dynamics/")
-    # dataset = "2025_07_24_A549_SEC61_TOMM20_G3BP1_ZIKV"
-    # run_all_fovs(
-    #     root_path=root_path,
-    #     dataset=dataset,
-    #     lf_mask_radius=0.98,
-    #     local=False,
-    #     stage1_run_dir=None,
-    #     beads_fov="A/3/000001",
-    #     overlay_channels=["Phase3D", "raw GFP EX488 EM525-45"],
-    #     exclude_fovs=["A/3/000000", "A/3/001000", "A/3/001001"],
-    #     z_final = 48,
-    #     n_std = 2,
-    #     z_window = 20,
-    #     stages=[1, 2],
-    # )
+    root_path = Path("/hpc/projects/intracellular_dashboard/organelle_dynamics/")
+    dataset = "2025_07_24_A549_SEC61_TOMM20_G3BP1_ZIKV"
+    run_all_fovs(
+        root_path=root_path,
+        dataset=dataset,
+        lf_mask_radius=0.98,
+        local=False,
+        stage1_run_dir=None,
+        beads_fov="A/3/000001",
+        overlay_channels=["Phase3D", "raw GFP EX488 EM525-45"],
+        exclude_fovs=["A/3/000000", "A/3/001000", "A/3/001001"],
+        z_final = 48,
+        n_std = 2,
+        z_window = 20,
+        stages=[1, 2],
+    )
