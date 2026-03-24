@@ -1,9 +1,20 @@
-"""Visualization utilities for dynacell preprocessing."""
+"""Visualization utilities for dynacell preprocessing.
 
+Also contains replot helpers to regenerate all QC plots from existing CSVs
+(formerly in dynacell_replot.py).
+
+Usage (replot mode):
+    python dynacell_plotting.py <run_dir>
+"""
+
+import ast
+import argparse
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+import yaml
+from pathlib import Path
 
 from dynacell_geometry import make_circular_mask
 
@@ -32,6 +43,8 @@ STYLE = {
     "c_fill": "#ff7f0e",       # orange (for std bands)
     "c_grid": "#cccccc",
 
+    "c_zscore": "#9467bd",         # purple — dedicated for local z-score panels
+
     # Semantic QC colors
     "c_qc": {
         "blank_frame": "#888888",
@@ -40,6 +53,9 @@ STYLE = {
         "entropy": "#9467bd",
         "frc": "#1f77b4",
         "fov_reg": "#2ca02c",
+        "laplacian": "#8c564b",
+        "max_intensity": "#e377c2",
+        "bleach": "#bcbd22",
     },
 
     # Lines
@@ -62,22 +78,29 @@ STYLE = {
     "fig_all_double": (12, 8),  # all-FOV two panels
     "fig_all_triple": (12, 10), # all-FOV three panels
 
-    # Y-axis limits per metric (based on prior dataset runs)
-    # None means auto-scale; tuple means (ymin, ymax)
+    # Y-axis limits per metric.
+    # None means data-adaptive (auto-scale with margin).
+    # Tuple means fixed (ymin, ymax) — only for semantically meaningful ranges.
     "ylim": {
-        "z_focus": (15, 65),
-        "laplacian": (0, 650),
-        "entropy": (0, 4.5),
-        "entropy_local_z": (-5, 5),
-        "hf_ratio": (0, 0.015),
-        "hf_local_z": (-6, 6),
-        "frc": (0.3, 0.8),             # room for outliers
-        "fov_reg_pearson": (-0.02, 0.06),
-        "fov_reg_local_z": (-5, 5),
-        "bleach_norm": (0, 1.15),
-        "shift_magnitude": None,        # auto
-        "pearson_beads": None,           # auto
+        "z_focus": None,
+        "laplacian": None,
+        "entropy": None,
+        "entropy_local_z": None,         # data-adaptive z-score
+        "hf_ratio": None,
+        "hf_local_z": None,             # data-adaptive z-score
+        "frc": None,
+        "frc_local_z": None,            # data-adaptive z-score
+        "max_intensity": None,
+        "max_intensity_local_z": None,   # data-adaptive z-score
+        "fov_reg_pearson": None,
+        "fov_reg_local_z": None,         # data-adaptive z-score
+        "laplacian_local_z": None,       # data-adaptive z-score
+        "bleach_norm": (0, 1.15),        # normalised to 1
+        "bleach_local_z": None,          # data-adaptive z-score
+        "shift_magnitude": None,
+        "pearson_beads": None,
     },
+    "ylim_margin": 0.25,  # fractional padding for data-adaptive limits
 }
 
 # Ordered color cycle for multi-FOV plots
@@ -88,11 +111,24 @@ COLOR_CYCLE = [
 ]
 
 
-def _set_ylim(ax, key):
-    """Set y-axis limits from STYLE['ylim'] if defined for the given key."""
+def _set_ylim(ax, key, data=None):
+    """Set y-axis limits from STYLE['ylim'] if fixed, else let matplotlib auto-scale.
+
+    When ylim is None, matplotlib auto-scales to fit all plotted elements
+    (data, axhlines, fill_between, scatter, etc.) with a small margin.
+    """
     lim = STYLE["ylim"].get(key)
     if lim is not None:
         ax.set_ylim(lim)
+    else:
+        # Let matplotlib auto-scale to include all plotted elements,
+        # then add a small margin so points at edges aren't clipped.
+        ax.autoscale_view()
+        lo, hi = ax.get_ylim()
+        span = hi - lo
+        if span > 0:
+            margin = STYLE.get("ylim_margin", 0.05)
+            ax.set_ylim(lo - margin * span, hi + margin * span)
 
 
 def _apply_style(fig, axes=None):
@@ -103,7 +139,8 @@ def _apply_style(fig, axes=None):
         axes = [axes]
     for ax in axes:
         ax.tick_params(labelsize=STYLE["fs_tick"])
-        ax.grid(axis="x", alpha=0.15, color=STYLE["c_grid"])
+        ax.grid(True, alpha=0.15, color=STYLE["c_grid"])
+        ax.set_xlim(left=0)
     fig.tight_layout()
 
 
@@ -157,8 +194,8 @@ def plot_bbox_over_time(
     _plot_panel(axes[1, 1], valid_t, x_max_t, bbox[3], S["c_secondary"], "x_max")
     _plot_panel(axes[2, 0], valid_t, height_t, bbox[1] - bbox[0] + 1, S["c_tertiary"], "Height (Y)")
     _plot_panel(axes[2, 1], valid_t, width_t, bbox[3] - bbox[2] + 1, S["c_tertiary"], "Width (X)")
-    axes[2, 0].set_xlabel("Time point", fontsize=S["fs_label"])
-    axes[2, 1].set_xlabel("Time point", fontsize=S["fs_label"])
+    axes[2, 0].set_xlabel("Timepoint", fontsize=S["fs_label"])
+    axes[2, 1].set_xlabel("Timepoint", fontsize=S["fs_label"])
 
     # --- Statistics text box ---
     stats_lines = [
@@ -383,7 +420,7 @@ def plot_z_focus(
     # Plot
     S = STYLE
     fig, ax = plt.subplots(1, 1, figsize=S["fig_single"])
-    ax.plot(t_axis, z_arr, S["c_primary"], alpha=S["alpha_data"], linewidth=S["lw_data"], label="per timepoint")
+    ax.plot(t_axis, z_arr, ".-", color=S["c_primary"], ms=S["marker_size"], alpha=S["alpha_data"], linewidth=S["lw_data"], label="per timepoint")
     ax.axhline(mu, color=S["c_mean"], linestyle=":", linewidth=S["lw_ref"], label=f"mean = {mu:.1f}")
     ax.fill_between(t_axis, mu - sigma, mu + sigma, color=S["c_fill"], alpha=S["alpha_fill"], label=f"1 std = {sigma:.1f}")
     ax.fill_between(t_axis, lower, upper, color=S["c_threshold"], alpha=0.07, label=f"{n_std} std = [{lower:.1f}, {upper:.1f}]")
@@ -393,7 +430,7 @@ def plot_z_focus(
         ax.scatter(t_above, z_arr[t_above], color=S["c_outlier"], s=S["scatter_size"], zorder=5, label=f"above {n_std}std (n={len(t_above)})")
     if len(t_below) > 0:
         ax.scatter(t_below, z_arr[t_below], color=S["c_tertiary"], s=S["scatter_size"], zorder=5, label=f"below {n_std}std (n={len(t_below)})")
-    ax.set_xlabel("Time point", fontsize=S["fs_label"])
+    ax.set_xlabel("Timepoint", fontsize=S["fs_label"])
     ax.set_ylabel("Z focus index", fontsize=S["fs_label"])
     ax.set_title(
         f"Z focus over time | mean={mu:.1f}, std={sigma:.1f}, "
@@ -401,7 +438,7 @@ def plot_z_focus(
         fontsize=S["fs_title"],
     )
     ax.legend(fontsize=S["fs_legend"], loc="best")
-    _set_ylim(ax, "z_focus")
+    _set_ylim(ax, "z_focus", data=z_arr)
     _apply_style(fig)
     if save_path:
         plt.savefig(save_path, dpi=S["dpi"], bbox_inches="tight")
@@ -441,7 +478,7 @@ def plot_registration_qc(
     fig, axes = plt.subplots(3, 1, figsize=S["fig_triple"], sharex=True)
 
     ax = axes[0]
-    ax.plot(pearson_corrs, S["c_primary"], alpha=S["alpha_data"], linewidth=S["lw_data"])
+    ax.plot(pearson_corrs, ".-", color=S["c_primary"], ms=S["marker_size"], alpha=S["alpha_data"], linewidth=S["lw_data"])
     ax.axhline(mu_corr, color=S["c_mean"], linestyle=":", linewidth=S["lw_ref"])
     ax.fill_between(range(T), mu_corr - sigma_corr, mu_corr + sigma_corr,
                     color=S["c_fill"], alpha=S["alpha_fill"])
@@ -451,25 +488,25 @@ def plot_registration_qc(
                    color=S["c_outlier"], s=S["scatter_size"], zorder=5)
     ax.set_ylabel("Pearson correlation", fontsize=S["fs_label"])
     ax.set_title(f"Beads registration QC | mean r={mu_corr:.4f}", fontsize=S["fs_title"])
-    _set_ylim(ax, "pearson_beads")
+    _set_ylim(ax, "pearson_beads", data=pearson_corrs)
 
     ax = axes[1]
-    ax.plot(pcc_shifts_y, S["c_primary"], alpha=S["alpha_data"], linewidth=S["lw_data"], label="shift Y")
-    ax.plot(pcc_shifts_x, S["c_secondary"], alpha=S["alpha_data"], linewidth=S["lw_data"], label="shift X")
+    ax.plot(pcc_shifts_y, ".-", color=S["c_primary"], ms=S["marker_size"], alpha=S["alpha_data"], linewidth=S["lw_data"], label="shift Y")
+    ax.plot(pcc_shifts_x, ".-", color=S["c_secondary"], ms=S["marker_size"], alpha=S["alpha_data"], linewidth=S["lw_data"], label="shift X")
     ax.axhline(0, color="gray", linestyle="--", linewidth=0.5)
     ax.set_ylabel("PCC shift (px)", fontsize=S["fs_label"])
     ax.legend(fontsize=S["fs_legend"])
 
     ax = axes[2]
-    ax.plot(shift_mag, S["c_tertiary"], alpha=S["alpha_data"], linewidth=S["lw_data"])
+    ax.plot(shift_mag, ".-", color=S["c_tertiary"], ms=S["marker_size"], alpha=S["alpha_data"], linewidth=S["lw_data"])
     ax.axhline(mu_shift, color=S["c_mean"], linestyle=":", linewidth=S["lw_ref"])
     ax.axhline(upper_shift, color=S["c_threshold"], linestyle="--", linewidth=S["lw_threshold"], alpha=0.5)
     if len(shift_outliers) > 0:
         ax.scatter(shift_outliers, shift_mag[shift_outliers],
                    color=S["c_outlier"], s=S["scatter_size"], zorder=5)
     ax.set_ylabel("Shift magnitude (px)", fontsize=S["fs_label"])
-    ax.set_xlabel("Time point", fontsize=S["fs_label"])
-    _set_ylim(ax, "shift_magnitude")
+    ax.set_xlabel("Timepoint", fontsize=S["fs_label"])
+    _set_ylim(ax, "shift_magnitude", data=shift_mag)
 
     fig.suptitle("Beads registration QC", fontsize=S["fs_suptitle"])
     _apply_style(fig)
@@ -477,45 +514,65 @@ def plot_registration_qc(
 
 
 def plot_laplacian_qc(
-    lap3d_vars: np.ndarray,
-    max_ints: np.ndarray,
+    lap_vars: np.ndarray,
     mu: float,
     sigma: float,
     lower: float,
     n_std: float,
     outliers: np.ndarray,
     channel_name: str,
+    local_z: np.ndarray | None = None,
 ) -> plt.Figure:
-    """Plot Laplacian variance (sharpness) and max intensity per timepoint (blank frames excluded)."""
+    """Plot Laplacian variance and local z-score per timepoint."""
     S = STYLE
-    valid_idx = np.where(~np.isnan(lap3d_vars))[0]
-    n_blank = len(lap3d_vars) - len(valid_idx)
+    valid_idx = np.where(~np.isnan(lap_vars))[0]
+    n_blank = len(lap_vars) - len(valid_idx)
+    has_lz = local_z is not None
 
-    fig, axes = plt.subplots(2, 1, figsize=S["fig_double"], sharex=True)
+    n_panels = 2 if has_lz else 1
+    figsize = S["fig_double"] if has_lz else S["fig_single"]
+    if n_panels == 1:
+        fig, ax_single = plt.subplots(1, 1, figsize=figsize)
+        axes = [ax_single]
+    else:
+        fig, axes = plt.subplots(n_panels, 1, figsize=figsize, sharex=True)
 
+    T = len(lap_vars)
+
+    # Panel 1: Laplacian variance
     ax = axes[0]
-    ax.plot(valid_idx, lap3d_vars[valid_idx], S["c_primary"], alpha=S["alpha_data"], linewidth=S["lw_data"])
+    ax.plot(valid_idx, lap_vars[valid_idx], ".-", ms=S["marker_size"], alpha=S["alpha_data"], linewidth=S["lw_data"])
     ax.axhline(mu, color=S["c_mean"], linestyle=":", linewidth=S["lw_ref"], label=f"mean={mu:.1f}")
     ax.fill_between(valid_idx, mu - sigma, mu + sigma, color=S["c_fill"], alpha=S["alpha_fill"])
     ax.axhline(lower, color=S["c_threshold"], linestyle="--", linewidth=S["lw_threshold"], alpha=0.5,
                label=f"mean-{n_std}*std={lower:.1f}")
     if len(outliers) > 0:
-        ax.scatter(outliers, lap3d_vars[outliers], color=S["c_outlier"], s=S["scatter_size"], zorder=5,
+        ax.scatter(outliers, lap_vars[outliers], color=S["c_outlier"], s=S["scatter_size"], zorder=5,
                    label=f"outliers ({len(outliers)})")
-    ax.set_ylabel("3D Laplacian variance", fontsize=S["fs_label"])
-    title = f"Laplacian blur QC | {channel_name}"
+    ax.set_ylabel("Laplacian variance (max-Z proj)", fontsize=S["fs_label"])
+    title = f"Laplacian blur QC (max-Z proj) | {channel_name}"
     if n_blank > 0:
         title += f" (excl. {n_blank} blank)"
     ax.set_title(title, fontsize=S["fs_title"])
     ax.legend(fontsize=S["fs_legend"], loc="best")
-    _set_ylim(ax, "laplacian")
+    _set_ylim(ax, "laplacian", data=lap_vars[valid_idx])
 
-    ax = axes[1]
-    ax.plot(valid_idx, max_ints[valid_idx], S["c_secondary"], alpha=S["alpha_data"], linewidth=S["lw_data"])
-    if len(outliers) > 0:
-        ax.scatter(outliers, max_ints[outliers], color=S["c_outlier"], s=S["scatter_size"], zorder=5)
-    ax.set_ylabel("Max intensity (ROI)", fontsize=S["fs_label"])
-    ax.set_xlabel("Time point", fontsize=S["fs_label"])
+    # Panel 2: Local z-score
+    if has_lz:
+        ax = axes[1]
+        plot_lz = local_z[valid_idx]
+        ax.plot(valid_idx, plot_lz, ".-", ms=S["marker_size"], alpha=S["alpha_data"], color=S["c_zscore"],
+                label="Local z-score")
+        ax.axhline(-n_std, color=S["c_threshold"], ls="--", lw=S["lw_threshold"], alpha=0.6,
+                   label=f"threshold (-{n_std})")
+        if len(outliers) > 0:
+            ax.scatter(outliers, local_z[outliers], color=S["c_outlier"], s=S["scatter_size"], zorder=5)
+        ax.set_ylabel("Local z-score", fontsize=S["fs_label"])
+        ax.legend(fontsize=S["fs_legend"])
+        _set_ylim(ax, "laplacian_local_z", data=plot_lz)
+
+    axes[-1].set_xlabel("Timepoint", fontsize=S["fs_label"])
+    axes[-1].set_xlim(0, T - 1)
 
     _apply_style(fig)
     return fig
@@ -538,10 +595,11 @@ def plot_entropy_qc(
     plot_ent = entropies[valid_idx]
     plot_local_z = local_z[valid_idx]
 
+    T = len(entropies)
     fig, axes = plt.subplots(2, 1, figsize=S["fig_double"], sharex=True)
 
     ax = axes[0]
-    ax.plot(valid_idx, plot_ent, "o-", ms=S["marker_size"], alpha=S["alpha_data"])
+    ax.plot(valid_idx, plot_ent, ".-", ms=S["marker_size"], alpha=S["alpha_data"])
     ax.axhline(med, color=S["c_median"], ls="--", lw=S["lw_ref"], label=f"median={med:.4f}")
     if global_lower is not None:
         ax.axhline(global_lower, color=S["c_mean"], ls=":", lw=S["lw_ref"],
@@ -550,29 +608,32 @@ def plot_entropy_qc(
         ax.axhline(global_upper, color=S["c_mean"], ls=":", lw=S["lw_ref"],
                     label=f"IQR upper={global_upper:.4f}")
         ax.fill_between(
-            ax.get_xlim(), global_lower, global_upper,
+            [0, T - 1], global_lower, global_upper,
             color=S["c_median"], alpha=0.05, zorder=0,
         )
-    for idx in outliers:
-        ax.axvline(idx, color=S["c_outlier"], alpha=0.4, lw=1.5)
+    if len(outliers) > 0:
+        ax.scatter(outliers, entropies[outliers], color=S["c_outlier"],
+                   s=S["scatter_size"], zorder=5, label=f"outliers ({len(outliers)})")
     ax.set_ylabel("Shannon entropy", fontsize=S["fs_label"])
-    ax.set_title(f"Entropy blur QC | {channel_name} (global+local threshold)", fontsize=S["fs_title"])
+    ax.set_title(f"Entropy QC | {channel_name} (global+local threshold)", fontsize=S["fs_title"])
     ax.legend(fontsize=S["fs_legend"])
-    _set_ylim(ax, "entropy")
+    _set_ylim(ax, "entropy", data=plot_ent)
 
     ax = axes[1]
-    ax.plot(valid_idx, plot_local_z, "o-", ms=S["marker_size"], alpha=S["alpha_data"], color=S["c_tertiary"],
+    ax.plot(valid_idx, plot_local_z, ".-", ms=S["marker_size"], alpha=S["alpha_data"], color=S["c_zscore"],
             label="Local z-score")
     ax.axhline(local_z_threshold, color=S["c_threshold"], ls="--", lw=S["lw_threshold"],
-               label=f"threshold=+{local_z_threshold}")
+               label=f"threshold (+{local_z_threshold})")
     ax.axhline(-local_z_threshold, color=S["c_threshold"], ls="--", lw=S["lw_threshold"],
-               label=f"threshold=-{local_z_threshold}")
-    for idx in outliers:
-        ax.axvline(idx, color=S["c_outlier"], alpha=0.4, lw=1.5)
+               label=f"threshold (-{local_z_threshold})")
+    if len(outliers) > 0:
+        ax.scatter(outliers, local_z[outliers], color=S["c_outlier"],
+                   s=S["scatter_size"], zorder=5)
     ax.set_ylabel("Local z-score", fontsize=S["fs_label"])
     ax.set_xlabel("Timepoint", fontsize=S["fs_label"])
     ax.legend(fontsize=S["fs_legend"])
-    _set_ylim(ax, "entropy_local_z")
+    ax.set_xlim(0, T - 1)
+    _set_ylim(ax, "entropy_local_z", data=plot_local_z)
 
     _apply_style(fig)
     return fig
@@ -585,75 +646,43 @@ def plot_hf_ratio_qc(
     outliers: np.ndarray,
     med: float,
     hf_z_threshold: float,
-    ent_z_threshold: float,
     channel_name: str,
-    z_range: int = 5,
-    ent_local_z: np.ndarray | None = None,
 ) -> plt.Figure:
-    """Plot HF energy ratio, local z-scores (HF + entropy), and combined decision."""
+    """Plot HF energy ratio and local z-score (2-panel)."""
     S = STYLE
     valid_idx = np.where(~blank_mask)[0]
     plot_hf = hf_ratios[valid_idx]
     plot_hf_lz = hf_local_z[valid_idx]
+
     T = len(hf_ratios)
-    t_ax = np.arange(T)
-    has_entropy = ent_local_z is not None and len(ent_local_z) == T
+    fig, axes = plt.subplots(2, 1, figsize=S["fig_double"], sharex=True)
 
-    n_panels = 3 if has_entropy else 2
-    fig, axes = plt.subplots(n_panels, 1, figsize=(12, 3.5 * n_panels), sharex=True)
-
-    # Panel 1: HF ratio (multi-Z median)
+    # Panel 1: HF ratio (max-Z projection)
     ax = axes[0]
     ax.plot(valid_idx, plot_hf, ".-", ms=S["marker_size"], alpha=S["alpha_data"])
     ax.axhline(med, color=S["c_median"], ls="--", lw=S["lw_ref"], label=f"median={med:.6f}")
-    for idx in outliers:
-        ax.axvline(idx, color=S["c_outlier"], alpha=0.4, lw=1.5)
+    if len(outliers) > 0:
+        ax.scatter(outliers, hf_ratios[outliers], color=S["c_outlier"],
+                   s=S["scatter_size"], zorder=5, label=f"outliers ({len(outliers)})")
     ax.set_ylabel("HF energy ratio", fontsize=S["fs_label"])
-    ax.set_title(f"HF ratio blur QC (multi-Z ±{z_range}) | {channel_name}", fontsize=S["fs_title"])
+    ax.set_title(f"HF ratio QC (max-Z proj) | {channel_name}", fontsize=S["fs_title"])
     ax.legend(fontsize=S["fs_legend"])
-    _set_ylim(ax, "hf_ratio")
+    _set_ylim(ax, "hf_ratio", data=plot_hf)
 
-    # Panel 2: HF local z-score + entropy local z-score
+    # Panel 2: HF local z-score
     ax = axes[1]
-    ax.plot(valid_idx, plot_hf_lz, ".-", ms=S["marker_size"], alpha=S["alpha_data"], color=S["c_primary"],
-            label="HF local z-score")
-    ax.axhline(-hf_z_threshold, color=S["c_primary"], ls="--", lw=S["lw_threshold"], alpha=0.6,
-               label=f"HF thresh (-{hf_z_threshold})")
-    for idx in outliers:
-        ax.axvline(idx, color=S["c_outlier"], alpha=0.4, lw=1.5)
-    ax.set_ylabel("HF local z-score", fontsize=S["fs_label"], color=S["c_primary"])
-    _set_ylim(ax, "hf_local_z")
-
-    if has_entropy:
-        ax2 = ax.twinx()
-        plot_ent_lz = ent_local_z[valid_idx]
-        ax2.plot(valid_idx, plot_ent_lz, ".-", ms=S["marker_size"], alpha=S["alpha_data"], color=S["c_mean"],
-                 label="Entropy local z-score")
-        ax2.axhline(+ent_z_threshold, color=S["c_mean"], ls="--", lw=S["lw_threshold"], alpha=0.6,
-                     label=f"Ent thresh (+{ent_z_threshold})")
-        ax2.set_ylabel("Entropy local z-score", fontsize=S["fs_label"], color=S["c_mean"])
-        ax2.tick_params(labelsize=S["fs_tick"])
-        lines1, labels1 = ax.get_legend_handles_labels()
-        lines2, labels2 = ax2.get_legend_handles_labels()
-        ax.legend(lines1 + lines2, labels1 + labels2, fontsize=S["fs_legend"], loc="lower left")
-    else:
-        ax.legend(fontsize=S["fs_legend"])
-
-    if has_entropy:
-        # Panel 3: Combined decision
-        ax = axes[2]
-        combined = np.zeros(T, dtype=float)
-        combined[outliers] = 1.0
-        ax.fill_between(t_ax, combined, alpha=0.3, color=S["c_outlier"], label="FLAGGED")
-        for idx in outliers:
-            ax.axvline(idx, color=S["c_outlier"], alpha=0.5)
-        ax.set_ylabel("Flagged", fontsize=S["fs_label"])
-        ax.set_xlabel("Timepoint", fontsize=S["fs_label"])
-        method_str = f"hf_lz<-{hf_z_threshold} AND ent_lz>+{ent_z_threshold}"
-        ax.set_title(f"Combined blur: {method_str} | outliers: {outliers.tolist()}", fontsize=S["fs_title"])
-        ax.legend(fontsize=S["fs_legend"])
-    else:
-        axes[-1].set_xlabel("Timepoint", fontsize=S["fs_label"])
+    ax.plot(valid_idx, plot_hf_lz, ".-", ms=S["marker_size"], alpha=S["alpha_data"], color=S["c_zscore"],
+            label="Local z-score")
+    ax.axhline(-hf_z_threshold, color=S["c_threshold"], ls="--", lw=S["lw_threshold"], alpha=0.6,
+               label=f"threshold (-{hf_z_threshold})")
+    if len(outliers) > 0:
+        ax.scatter(outliers, hf_local_z[outliers], color=S["c_outlier"],
+                   s=S["scatter_size"], zorder=5)
+    ax.set_ylabel("Local z-score", fontsize=S["fs_label"])
+    ax.set_xlabel("Timepoint", fontsize=S["fs_label"])
+    ax.legend(fontsize=S["fs_legend"])
+    ax.set_xlim(0, T - 1)
+    _set_ylim(ax, "hf_local_z", data=plot_hf_lz)
 
     _apply_style(fig)
     return fig
@@ -661,25 +690,227 @@ def plot_hf_ratio_qc(
 
 def plot_frc_qc(
     frc_values: np.ndarray,
+    local_z: np.ndarray,
     blank_mask: np.ndarray,
     med: float,
     channel_name: str,
-    z_range: int = 5,
+    mean_frc_curve: np.ndarray | None = None,
 ) -> plt.Figure:
-    """Plot FRC mean correlation per timepoint (reporting only)."""
+    """Plot FRC mean correlation, local z-score, and mean FRC curve."""
     S = STYLE
     valid_idx = np.where(~blank_mask)[0]
     plot_frc = frc_values[valid_idx]
+    plot_lz = local_z[valid_idx]
+    outlier_idx = valid_idx[plot_lz < -2.5] if len(plot_lz) > 0 else np.array([])
 
-    fig, ax = plt.subplots(1, 1, figsize=S["fig_single"])
+    T = len(frc_values)
+    n_panels = 3 if mean_frc_curve is not None else 2
+    figsize = S["fig_triple"] if n_panels == 3 else S["fig_double"]
+    fig, axes = plt.subplots(n_panels, 1, figsize=figsize, sharex=(n_panels == 2))
 
+    # Panel 1: FRC mean correlation over time
+    ax = axes[0]
     ax.plot(valid_idx, plot_frc, ".-", ms=S["marker_size"], alpha=S["alpha_data"])
     ax.axhline(med, color=S["c_median"], ls="--", lw=S["lw_ref"], label=f"median={med:.4f}")
+    if len(outlier_idx) > 0:
+        ax.scatter(outlier_idx, frc_values[outlier_idx], color=S["c_outlier"],
+                   s=S["scatter_size"], zorder=5, label=f"outliers ({len(outlier_idx)})")
     ax.set_ylabel("FRC mean correlation", fontsize=S["fs_label"])
-    ax.set_xlabel("Timepoint", fontsize=S["fs_label"])
-    ax.set_title(f"FRC blur QC (multi-Z ±{z_range}) | {channel_name}", fontsize=S["fs_title"])
+    ax.set_title(f"FRC blur QC (max-Z proj) | {channel_name}", fontsize=S["fs_title"])
     ax.legend(fontsize=S["fs_legend"])
-    _set_ylim(ax, "frc")
+    _set_ylim(ax, "frc", data=plot_frc)
+
+    # Panel 2: Local z-score
+    ax = axes[1]
+    ax.plot(valid_idx, plot_lz, ".-", ms=S["marker_size"], alpha=S["alpha_data"],
+            color=S["c_zscore"], label="Local z-score")
+    ax.axhline(-2.5, color=S["c_threshold"], ls="--", lw=S["lw_threshold"],
+               label="threshold (-2.5)")
+    if len(outlier_idx) > 0:
+        ax.scatter(outlier_idx, local_z[outlier_idx], color=S["c_outlier"],
+                   s=S["scatter_size"], zorder=5)
+    ax.set_ylabel("Local z-score", fontsize=S["fs_label"])
+    ax.set_xlabel("Timepoint", fontsize=S["fs_label"])
+    ax.legend(fontsize=S["fs_legend"])
+    ax.set_xlim(0, T - 1)
+    _set_ylim(ax, "frc_local_z", data=plot_lz)
+
+    # Panel 3: Mean FRC correlation curve (correlation vs frequency ring)
+    if mean_frc_curve is not None:
+        ax = axes[2]
+        freq = np.linspace(0, 1, len(mean_frc_curve))
+        ax.plot(freq, mean_frc_curve, color=S["c_primary"], lw=S["lw_ref"],
+                label="mean FRC curve")
+        ax.axhline(1 / 7, color=S["c_threshold"], ls="--", lw=S["lw_threshold"],
+                    alpha=0.7, label="1/7 threshold")
+        ax.set_xlabel("Spatial frequency (Nyquist fraction)", fontsize=S["fs_label"])
+        ax.set_ylabel("FRC correlation", fontsize=S["fs_label"])
+        ax.set_title("Mean FRC curve (averaged over timepoints)", fontsize=S["fs_title"])
+        ax.legend(fontsize=S["fs_legend"])
+        ax.set_xlim(0, 1)
+        ax.set_ylim(-0.05, 1.05)
+
+    _apply_style(fig)
+    return fig
+
+
+def plot_max_intensity_qc(
+    max_vals: np.ndarray,
+    blank_mask: np.ndarray,
+    med: float,
+    channel_name: str,
+    local_z: np.ndarray | None = None,
+) -> plt.Figure:
+    """Plot max intensity and local z-score over time."""
+    S = STYLE
+    valid_idx = np.where(~blank_mask)[0]
+    plot_vals = max_vals[valid_idx]
+    has_lz = local_z is not None and not np.all(np.isnan(local_z))
+    T = len(max_vals)
+
+    if has_lz:
+        fig, axes = plt.subplots(2, 1, figsize=S["fig_double"], sharex=True)
+        ax = axes[0]
+    else:
+        fig, ax = plt.subplots(1, 1, figsize=S["fig_single"])
+
+    ax.plot(valid_idx, plot_vals, ".-", ms=S["marker_size"], alpha=S["alpha_data"])
+    ax.axhline(med, color=S["c_median"], ls="--", lw=S["lw_ref"], label=f"median={med:.2f}")
+    ax.set_ylabel("Max intensity (full Z)", fontsize=S["fs_label"])
+    ax.set_title(f"Max intensity QC | {channel_name}", fontsize=S["fs_title"])
+    ax.legend(fontsize=S["fs_legend"])
+    ax.set_xlim(0, T - 1)
+    _set_ylim(ax, "max_intensity", data=plot_vals)
+
+    if has_lz:
+        ax = axes[1]
+        plot_lz = local_z[valid_idx]
+        ax.plot(valid_idx, plot_lz, ".-", ms=S["marker_size"], alpha=S["alpha_data"], color=S["c_zscore"],
+                label="Local z-score")
+        ax.axhline(2.5, color=S["c_threshold"], ls="--", lw=S["lw_threshold"], alpha=0.6,
+                   label="threshold (+2.5)")
+        ax.axhline(-2.5, color=S["c_threshold"], ls="--", lw=S["lw_threshold"], alpha=0.6,
+                   label="threshold (-2.5)")
+        outlier_mask = np.abs(local_z) > 2.5
+        outlier_valid = outlier_mask[valid_idx]
+        if outlier_valid.any():
+            ax.scatter(valid_idx[outlier_valid], plot_lz[outlier_valid],
+                       color=S["c_outlier"], s=S["scatter_size"], zorder=5)
+        ax.set_ylabel("Local z-score", fontsize=S["fs_label"])
+        ax.set_xlabel("Timepoint", fontsize=S["fs_label"])
+        ax.legend(fontsize=S["fs_legend"])
+        ax.set_xlim(0, T - 1)
+        _set_ylim(ax, "max_intensity_local_z", data=plot_lz)
+    else:
+        ax.set_xlabel("Timepoint", fontsize=S["fs_label"])
+
+    _apply_style(fig)
+    return fig
+
+
+def plot_fov_registration_qc(
+    pearson_corrs: np.ndarray,
+    mu: float,
+    n_outliers: int,
+    outlier_idx: np.ndarray,
+    blank_count: int = 0,
+    local_z: np.ndarray | None = None,
+) -> plt.Figure:
+    """Plot per-FOV Pearson correlation and local z-score."""
+    S = STYLE
+    valid_mask = ~np.isnan(pearson_corrs)
+    valid_idx = np.where(valid_mask)[0]
+    T = len(pearson_corrs)
+    has_lz = local_z is not None and not np.all(np.isnan(local_z))
+
+    if has_lz:
+        fig, axes = plt.subplots(2, 1, figsize=S["fig_double"], sharex=True)
+        ax = axes[0]
+    else:
+        fig, ax = plt.subplots(figsize=S["fig_single"])
+
+    ax.plot(valid_idx, pearson_corrs[valid_idx], ".-",
+            markersize=S["marker_size"], linewidth=S["lw_data"])
+    title = "Per-timepoint LF–LS registration (Phase ch 0)"
+    if blank_count > 0:
+        title += f" (excl. {blank_count} blank)"
+    ax.set_title(title, fontsize=S["fs_title"])
+    ax.axhline(mu, color=S["c_mean"], linestyle="--", linewidth=S["lw_ref"],
+               label=f"mean={mu:.4f}")
+    if n_outliers > 0:
+        ax.scatter(outlier_idx, pearson_corrs[outlier_idx], color=S["c_outlier"],
+                   s=S["scatter_size"], zorder=5, label=f"outliers ({n_outliers})")
+    ax.set_ylabel("Pearson correlation (LF vs LS)", fontsize=S["fs_label"])
+    ax.legend(fontsize=S["fs_legend"])
+    ax.set_xlim(0, T - 1)
+    _set_ylim(ax, "fov_reg_pearson", data=pearson_corrs[valid_idx])
+
+    if has_lz:
+        ax = axes[1]
+        plot_lz = local_z[valid_idx]
+        ax.plot(valid_idx, plot_lz, ".-", ms=S["marker_size"], alpha=S["alpha_data"],
+                color=S["c_zscore"], label="Local z-score")
+        ax.axhline(-2.5, color=S["c_threshold"], ls="--", lw=S["lw_threshold"], alpha=0.6,
+                   label="threshold (-2.5)")
+        if n_outliers > 0:
+            ax.scatter(outlier_idx, local_z[outlier_idx], color=S["c_outlier"],
+                       s=S["scatter_size"], zorder=5)
+        ax.set_ylabel("Local z-score", fontsize=S["fs_label"])
+        ax.set_xlabel("Timepoint", fontsize=S["fs_label"])
+        ax.legend(fontsize=S["fs_legend"])
+        ax.set_xlim(0, T - 1)
+        _set_ylim(ax, "fov_reg_local_z", data=plot_lz)
+    else:
+        ax.set_xlabel("Timepoint", fontsize=S["fs_label"])
+
+    _apply_style(fig)
+    return fig
+
+
+def plot_bleach_fov_qc(
+    normalized: np.ndarray,
+    fov_name: str,
+    local_z: np.ndarray | None = None,
+) -> plt.Figure:
+    """Plot per-FOV bleach curve and local z-score (residual from trend)."""
+    S = STYLE
+    valid_idx = np.where(~np.isnan(normalized))[0]
+    pct_rem = float(normalized[valid_idx[-1]] * 100) if len(valid_idx) > 0 else 0
+    has_lz = local_z is not None and not np.all(np.isnan(local_z))
+
+    if has_lz:
+        fig, axes = plt.subplots(2, 1, figsize=S["fig_double"], sharex=True)
+        ax = axes[0]
+    else:
+        fig, ax = plt.subplots(figsize=S["fig_single"])
+
+    ax.plot(valid_idx, normalized[valid_idx], ".-",
+            markersize=S["marker_size"], linewidth=S["lw_data"])
+    ax.axhline(1.0, color="gray", linestyle=":", linewidth=0.5)
+    ax.set_ylabel("Normalized intensity", fontsize=S["fs_label"])
+    ax.set_title(f"Bleach QC | {fov_name} | {pct_rem:.1f}% remaining", fontsize=S["fs_title"])
+    _set_ylim(ax, "bleach_norm")
+
+    if has_lz:
+        ax = axes[1]
+        plot_lz = local_z[valid_idx]
+        ax.plot(valid_idx, plot_lz, ".-", ms=S["marker_size"], alpha=S["alpha_data"],
+                color=S["c_zscore"], label="Local z-score (residual)")
+        ax.axhline(3.0, color=S["c_threshold"], ls="--", lw=S["lw_threshold"], alpha=0.6,
+                   label="threshold (±3.0)")
+        ax.axhline(-3.0, color=S["c_threshold"], ls="--", lw=S["lw_threshold"], alpha=0.6)
+        # Mark outliers
+        outlier_mask = np.abs(local_z) > 3.0
+        outlier_valid = outlier_mask[valid_idx]
+        if outlier_valid.any():
+            ax.scatter(valid_idx[outlier_valid], plot_lz[outlier_valid],
+                       color=S["c_outlier"], s=S["scatter_size"], zorder=5)
+        ax.set_ylabel("Local z-score", fontsize=S["fs_label"])
+        ax.set_xlabel("Timepoint", fontsize=S["fs_label"])
+        ax.legend(fontsize=S["fs_legend"])
+        _set_ylim(ax, "bleach_local_z", data=plot_lz)
+    else:
+        ax.set_xlabel("Timepoint", fontsize=S["fs_label"])
 
     _apply_style(fig)
     return fig
@@ -826,11 +1057,11 @@ def plot_z_focus_all_fovs(
         all_data[fov_name] = z_vals
         ax.plot(z_vals, alpha=S["alpha_multi"], linewidth=S["lw_data"],
                 color=COLOR_CYCLE[i % len(COLOR_CYCLE)], label=fov_name)
-    ax.set_xlabel("Time point", fontsize=S["fs_label"])
+    ax.set_xlabel("Timepoint", fontsize=S["fs_label"])
     ax.set_ylabel("Z focus index", fontsize=S["fs_label"])
     ax.set_title(f"Z focus across all FOVs ({len(ok_fovs)} FOVs)", fontsize=S["fs_title"])
     ax.legend(fontsize=S["fs_legend_multi"], loc="best", ncol=2)
-    _set_ylim(ax, "z_focus")
+    _set_ylim(ax, "z_focus", data=np.concatenate(list(all_data.values())) if all_data else None)
     _apply_style(fig)
     return fig, all_data
 
@@ -849,14 +1080,15 @@ def plot_laplacian_all_fovs(
         if not csv_path.exists():
             continue
         df = pd.read_csv(csv_path)
-        all_data[fov_name] = df.set_index("t")["lap3d_var"]
-        ax.plot(df["t"], df["lap3d_var"], alpha=S["alpha_multi"], linewidth=S["lw_data"],
+        col = "lap_var" if "lap_var" in df.columns else "lap3d_var"
+        all_data[fov_name] = df.set_index("t")[col]
+        ax.plot(df["t"], df[col], alpha=S["alpha_multi"], linewidth=S["lw_data"],
                 color=COLOR_CYCLE[i % len(COLOR_CYCLE)], label=fov_name)
-    ax.set_xlabel("Time point", fontsize=S["fs_label"])
+    ax.set_xlabel("Timepoint", fontsize=S["fs_label"])
     ax.set_ylabel("Laplacian variance", fontsize=S["fs_label"])
     ax.set_title(f"Laplacian QC across all FOVs ({len(all_data)} FOVs)", fontsize=S["fs_title"])
     ax.legend(fontsize=S["fs_legend_multi"], loc="best", ncol=2)
-    _set_ylim(ax, "laplacian")
+    _set_ylim(ax, "laplacian", data=np.concatenate([s.values for s in all_data.values()]) if all_data else None)
     _apply_style(fig)
     return fig, all_data
 
@@ -881,15 +1113,17 @@ def plot_hf_ratio_all_fovs(
                      color=c, label=fov_name)
         axes[1].plot(df["t"], df["hf_local_z"], alpha=S["alpha_multi"], linewidth=S["lw_data"],
                      color=c, label=fov_name)
-    axes[0].set_ylabel("HF energy ratio (multi-Z)", fontsize=S["fs_label"])
+    axes[0].set_ylabel("HF energy ratio (max-Z proj)", fontsize=S["fs_label"])
     axes[0].set_title(f"HF ratio QC across all FOVs ({len(all_data)} FOVs)", fontsize=S["fs_title"])
-    axes[1].set_xlabel("Time point", fontsize=S["fs_label"])
+    axes[1].set_xlabel("Timepoint", fontsize=S["fs_label"])
     axes[1].set_ylabel("HF local z-score", fontsize=S["fs_label"])
     axes[1].axhline(-3.0, color=S["c_threshold"], linestyle="--", linewidth=S["lw_threshold"],
                     alpha=0.7, label="threshold")
     axes[1].axhline(3.0, color=S["c_threshold"], linestyle="--", linewidth=S["lw_threshold"], alpha=0.7)
-    _set_ylim(axes[0], "hf_ratio")
-    _set_ylim(axes[1], "hf_local_z")
+    hf_vals = np.concatenate([d["hf_ratio"].values for d in all_data.values()]) if all_data else None
+    hf_lz_vals = np.concatenate([d["hf_local_z"].values for d in all_data.values()]) if all_data else None
+    _set_ylim(axes[0], "hf_ratio", data=hf_vals)
+    _set_ylim(axes[1], "hf_local_z", data=hf_lz_vals)
     for a in axes:
         a.legend(fontsize=S["fs_legend_multi"], loc="best", ncol=2)
     _apply_style(fig)
@@ -918,13 +1152,15 @@ def plot_entropy_all_fovs(
                      color=c, label=fov_name)
     axes[0].set_ylabel("Shannon entropy", fontsize=S["fs_label"])
     axes[0].set_title(f"Entropy QC across all FOVs ({len(all_data)} FOVs)", fontsize=S["fs_title"])
-    axes[1].set_xlabel("Time point", fontsize=S["fs_label"])
+    axes[1].set_xlabel("Timepoint", fontsize=S["fs_label"])
     axes[1].set_ylabel("Entropy local z-score", fontsize=S["fs_label"])
     axes[1].axhline(2.0, color=S["c_threshold"], linestyle="--", linewidth=S["lw_threshold"],
                     alpha=0.7, label="threshold")
     axes[1].axhline(-2.0, color=S["c_threshold"], linestyle="--", linewidth=S["lw_threshold"], alpha=0.7)
-    _set_ylim(axes[0], "entropy")
-    _set_ylim(axes[1], "entropy_local_z")
+    ent_vals = np.concatenate([d["entropy"].values for d in all_data.values()]) if all_data else None
+    ent_lz_vals = np.concatenate([d["local_z"].values for d in all_data.values()]) if all_data else None
+    _set_ylim(axes[0], "entropy", data=ent_vals)
+    _set_ylim(axes[1], "entropy_local_z", data=ent_lz_vals)
     for a in axes:
         a.legend(fontsize=S["fs_legend_multi"], loc="best", ncol=2)
     _apply_style(fig)
@@ -973,7 +1209,7 @@ def plot_blur_detection_all_fovs(
                     alpha=0.7, label="Ent thresh")
     axes[1].legend(fontsize=S["fs_legend_multi"], loc="best", ncol=2)
     _set_ylim(axes[1], "entropy_local_z")
-    axes[2].set_xlabel("Time point", fontsize=S["fs_label"])
+    axes[2].set_xlabel("Timepoint", fontsize=S["fs_label"])
     axes[2].set_ylabel("FOV", fontsize=S["fs_label"])
     n_blur_total = sum(b["n_blur"] for b in blur_summary)
     axes[2].set_title(f"Flagged blur frames: {n_blur_total} total across {len(blur_summary)} FOVs",
@@ -1066,7 +1302,7 @@ def plot_drop_correlation_all_fovs(
             for t, n in shared.items():
                 fovs_at_t = subset[subset["t"] == t]["fov"].tolist()
                 corr_text.append(f"  t={t} ({reason}): {n} FOVs — {', '.join(fovs_at_t)}")
-    ax.set_xlabel("Time point", fontsize=S["fs_label"])
+    ax.set_xlabel("Timepoint", fontsize=S["fs_label"])
     ax.set_ylabel("# FOVs", fontsize=S["fs_label"])
     ax.set_title("Correlated drops: timepoints dropped in >=2 FOVs", fontsize=S["fs_title"])
     ax.legend(fontsize=S["fs_legend_multi"])
@@ -1191,7 +1427,7 @@ def plot_outlier_correlation_all_fovs(
             for t, n in shared.items():
                 fovs_at_t = subset[subset["t"] == t]["fov"].tolist()
                 corr_text.append(f"  t={t} ({reason}): {n} FOVs — {', '.join(fovs_at_t)}")
-    ax.set_xlabel("Time point", fontsize=S["fs_label"])
+    ax.set_xlabel("Timepoint", fontsize=S["fs_label"])
     ax.set_ylabel("# FOVs", fontsize=S["fs_label"])
     ax.set_title("Correlated outliers: timepoints flagged in >=2 FOVs (reporting only)",
                  fontsize=S["fs_title"])
@@ -1205,13 +1441,303 @@ def plot_outlier_correlation_all_fovs(
     return fig, outlier_df, corr_text
 
 
+# ---------------------------------------------------------------------------
+# Outlier correlation analysis (3-view decomposition)
+# ---------------------------------------------------------------------------
+
+# All QC CSVs with is_outlier column
+_OUTLIER_SOURCES = {
+    "laplacian": "laplacian_qc.csv",
+    "entropy": "entropy_qc.csv",
+    "hf_blur": "hf_ratio_qc.csv",
+    "frc": "frc_qc.csv",
+    "max_intensity": "max_intensity_qc.csv",
+    "fov_reg": "fov_registration_qc.csv",
+    "bleach": "bleach_qc.csv",
+}
+
+
+def _gather_all_outliers(ok_fovs, plots_dir):
+    """Read is_outlier from all per-FOV QC CSVs.
+
+    Returns a DataFrame with columns: fov, t, metric (one row per outlier event).
+    """
+    rows = []
+    for fov in ok_fovs:
+        fov_name = "_".join(fov.split("/"))
+        for metric, csv_name in _OUTLIER_SOURCES.items():
+            csv_path = plots_dir / fov_name / csv_name
+            if not csv_path.exists():
+                continue
+            df = pd.read_csv(csv_path)
+            if "is_outlier" not in df.columns:
+                continue
+            outlier_ts = df.loc[df["is_outlier"] == 1, "t"].values
+            for t in outlier_ts:
+                rows.append({"fov": fov_name, "t": int(t), "metric": metric})
+    return pd.DataFrame(rows) if rows else pd.DataFrame(columns=["fov", "t", "metric"])
+
+
+def plot_outlier_heatmap_fov_metric(
+    ok_fovs: list[str],
+    plots_dir,
+    T_total: int,
+) -> tuple[plt.Figure, pd.DataFrame]:
+    """Heatmap: FOVs (rows) x metrics (cols), color = fraction of timepoints flagged.
+
+    Answers: 'Which FOVs are problematic, and which metrics flag them?'
+    """
+    S = STYLE
+    outlier_df = _gather_all_outliers(ok_fovs, plots_dir)
+    metrics = list(_OUTLIER_SOURCES.keys())
+    fov_names = sorted(["_".join(f.split("/")) for f in ok_fovs])
+
+    # Build matrix: fraction of timepoints flagged per (FOV, metric)
+    matrix = np.zeros((len(fov_names), len(metrics)), dtype=np.float64)
+    for i, fov in enumerate(fov_names):
+        for j, metric in enumerate(metrics):
+            sub = outlier_df[(outlier_df["fov"] == fov) & (outlier_df["metric"] == metric)]
+            matrix[i, j] = len(sub) / T_total if T_total > 0 else 0
+
+    fig, ax = plt.subplots(figsize=(max(8, len(metrics) * 1.2), max(6, len(fov_names) * 0.35)))
+    im = ax.imshow(matrix, aspect="auto", cmap="YlOrRd", vmin=0,
+                   vmax=max(0.15, np.max(matrix) * 1.1) if matrix.max() > 0 else 0.1)
+    ax.set_xticks(range(len(metrics)))
+    ax.set_xticklabels(metrics, fontsize=S["fs_label"], rotation=45, ha="right")
+    ax.set_yticks(range(len(fov_names)))
+    ax.set_yticklabels(fov_names, fontsize=S["fs_legend_multi"])
+
+    # Annotate cells with count
+    for i in range(len(fov_names)):
+        for j in range(len(metrics)):
+            count = int(matrix[i, j] * T_total)
+            if count > 0:
+                text_color = "white" if matrix[i, j] > 0.08 else "black"
+                ax.text(j, i, str(count), ha="center", va="center",
+                        fontsize=S["fs_legend_multi"], color=text_color)
+
+    cb = fig.colorbar(im, ax=ax, shrink=0.8, pad=0.02)
+    cb.set_label("Fraction of timepoints flagged", fontsize=S["fs_label"])
+
+    ax.set_title("Outlier rate per FOV and metric", fontsize=S["fs_suptitle"])
+    fig.tight_layout()
+    return fig, outlier_df
+
+
+def plot_outlier_cooccurrence_matrix(
+    ok_fovs: list[str],
+    plots_dir,
+    T_total: int,
+) -> plt.Figure:
+    """Symmetric heatmap: Jaccard similarity between each pair of metrics.
+
+    For each pair (A, B), the Jaccard index is |A∩B| / |A∪B| where each
+    element is a (fov, t) tuple flagged by that metric.
+
+    Answers: 'When entropy flags a frame, does HF also flag it?'
+    """
+    S = STYLE
+    outlier_df = _gather_all_outliers(ok_fovs, plots_dir)
+    metrics = list(_OUTLIER_SOURCES.keys())
+    n = len(metrics)
+
+    # Build sets of (fov, t) tuples per metric
+    sets = {}
+    for metric in metrics:
+        sub = outlier_df[outlier_df["metric"] == metric]
+        sets[metric] = set(zip(sub["fov"], sub["t"]))
+
+    # Jaccard matrix
+    jaccard = np.zeros((n, n), dtype=np.float64)
+    for i in range(n):
+        for j in range(n):
+            a, b = sets[metrics[i]], sets[metrics[j]]
+            union = len(a | b)
+            if union > 0:
+                jaccard[i, j] = len(a & b) / union
+            elif i == j:
+                jaccard[i, j] = 1.0
+
+    fig, ax = plt.subplots(figsize=(max(6, n * 0.9), max(5, n * 0.8)))
+    im = ax.imshow(jaccard, cmap="Blues", vmin=0, vmax=1)
+    ax.set_xticks(range(n))
+    ax.set_xticklabels(metrics, fontsize=S["fs_label"], rotation=45, ha="right")
+    ax.set_yticks(range(n))
+    ax.set_yticklabels(metrics, fontsize=S["fs_label"])
+
+    # Annotate
+    for i in range(n):
+        for j in range(n):
+            val = jaccard[i, j]
+            text_color = "white" if val > 0.5 else "black"
+            ax.text(j, i, f"{val:.2f}", ha="center", va="center",
+                    fontsize=S["fs_annotation"], color=text_color)
+
+    cb = fig.colorbar(im, ax=ax, shrink=0.8, pad=0.02)
+    cb.set_label("Jaccard similarity", fontsize=S["fs_label"])
+
+    ax.set_title("Outlier co-occurrence between metrics (Jaccard index)", fontsize=S["fs_suptitle"])
+    fig.tight_layout()
+    return fig
+
+
+# Mapping: metric name → (csv filename, local z-score column)
+_METRIC_Z_COLUMNS = {
+    "laplacian": ("laplacian_qc.csv", "local_z"),
+    "entropy": ("entropy_qc.csv", "local_z"),
+    "hf_blur": ("hf_ratio_qc.csv", "hf_local_z"),
+    "frc": ("frc_qc.csv", "local_z"),
+    "max_intensity": ("max_intensity_qc.csv", "local_z"),
+    "fov_reg": ("fov_registration_qc.csv", "local_z"),
+    "bleach": ("bleach_qc.csv", "local_z"),
+}
+
+
+def _gather_metric_zscores(ok_fovs, plots_dir, T_total):
+    """Build a DataFrame of local z-scores: rows = (fov, t), columns = metrics."""
+    from dynacell_plotting import _recompute_bleach_local_z, _arr_from_csv
+
+    records = []
+    for fov in ok_fovs:
+        fov_name = "_".join(fov.split("/"))
+        row_base = {}
+        for metric, (csv_name, z_col) in _METRIC_Z_COLUMNS.items():
+            csv_path = plots_dir / fov_name / csv_name
+            if not csv_path.exists():
+                continue
+            df = pd.read_csv(csv_path)
+            if z_col not in df.columns:
+                continue
+            T = int(df["t"].max()) + 1
+            z_arr = _arr_from_csv(df, z_col, T)
+            # Recompute bleach z if all NaN
+            if metric == "bleach" and np.all(np.isnan(z_arr)):
+                norm_arr = _arr_from_csv(df, "normalized", T)
+                z_arr = _recompute_bleach_local_z(norm_arr)
+            for t in range(min(T, T_total)):
+                key = (fov_name, t)
+                if key not in row_base:
+                    row_base[key] = {"fov": fov_name, "t": t}
+                row_base[key][metric] = z_arr[t] if t < len(z_arr) else np.nan
+        records.extend(row_base.values())
+    return pd.DataFrame(records)
+
+
+def plot_metric_correlation_matrix(
+    ok_fovs: list[str],
+    plots_dir,
+    T_total: int,
+) -> plt.Figure:
+    """Spearman correlation matrix between continuous local z-scores of all metrics.
+
+    Each observation is a (FOV, timepoint). NaN pairs are excluded per-pair.
+
+    Answers: 'Do metrics move together — e.g., when laplacian z drops, does HF z also drop?'
+    """
+    from scipy.stats import spearmanr
+
+    S = STYLE
+    zscore_df = _gather_metric_zscores(ok_fovs, plots_dir, T_total)
+    metrics = [m for m in _METRIC_Z_COLUMNS if m in zscore_df.columns]
+    n = len(metrics)
+
+    # Compute pairwise Spearman correlation
+    corr = np.full((n, n), np.nan, dtype=np.float64)
+    pvals = np.full((n, n), np.nan, dtype=np.float64)
+    for i in range(n):
+        for j in range(n):
+            a = zscore_df[metrics[i]].values
+            b = zscore_df[metrics[j]].values
+            valid = ~(np.isnan(a) | np.isnan(b))
+            if valid.sum() > 10:
+                r, p = spearmanr(a[valid], b[valid])
+                corr[i, j] = r
+                pvals[i, j] = p
+
+    fig, ax = plt.subplots(figsize=(max(6, n * 0.9), max(5, n * 0.8)))
+    im = ax.imshow(corr, cmap="RdBu_r", vmin=-1, vmax=1)
+    ax.set_xticks(range(n))
+    ax.set_xticklabels(metrics, fontsize=S["fs_label"], rotation=45, ha="right")
+    ax.set_yticks(range(n))
+    ax.set_yticklabels(metrics, fontsize=S["fs_label"])
+
+    # Annotate with rho and significance stars
+    for i in range(n):
+        for j in range(n):
+            val = corr[i, j]
+            if np.isnan(val):
+                continue
+            stars = ""
+            p = pvals[i, j]
+            if p < 0.001:
+                stars = "***"
+            elif p < 0.01:
+                stars = "**"
+            elif p < 0.05:
+                stars = "*"
+            text_color = "white" if abs(val) > 0.6 else "black"
+            ax.text(j, i, f"{val:.2f}{stars}", ha="center", va="center",
+                    fontsize=S["fs_annotation"], color=text_color)
+
+    cb = fig.colorbar(im, ax=ax, shrink=0.8, pad=0.02)
+    cb.set_label("Spearman ρ", fontsize=S["fs_label"])
+
+    ax.set_title("Metric correlation (local z-scores, all FOVs×timepoints)",
+                 fontsize=S["fs_suptitle"])
+    fig.tight_layout()
+    return fig
+
+
+def plot_outlier_temporal_density(
+    ok_fovs: list[str],
+    plots_dir,
+    T_total: int,
+) -> plt.Figure:
+    """Heatmap strips: metrics (rows) x timepoints (cols), color = # FOVs flagged.
+
+    Answers: 'Which timepoints are globally bad, and do multiple metrics agree?'
+    """
+    S = STYLE
+    outlier_df = _gather_all_outliers(ok_fovs, plots_dir)
+    metrics = list(_OUTLIER_SOURCES.keys())
+    n_fovs = len(ok_fovs)
+
+    # Build matrix: # FOVs flagged per (metric, timepoint)
+    matrix = np.zeros((len(metrics), T_total), dtype=np.float64)
+    for i, metric in enumerate(metrics):
+        sub = outlier_df[outlier_df["metric"] == metric]
+        for _, row in sub.iterrows():
+            t = int(row["t"])
+            if 0 <= t < T_total:
+                matrix[i, t] += 1
+
+    fig, ax = plt.subplots(figsize=(14, max(3, len(metrics) * 0.6 + 1)))
+    vmax = max(3, matrix.max()) if matrix.max() > 0 else 1
+    im = ax.imshow(matrix, aspect="auto", cmap="YlOrRd", vmin=0, vmax=vmax,
+                   interpolation="nearest")
+
+    ax.set_yticks(range(len(metrics)))
+    ax.set_yticklabels(metrics, fontsize=S["fs_label"])
+    ax.set_xlabel("Timepoint", fontsize=S["fs_label"])
+
+    cb = fig.colorbar(im, ax=ax, shrink=0.8, pad=0.02)
+    cb.set_label("# FOVs flagged", fontsize=S["fs_label"])
+
+    ax.set_title(
+        f"Temporal outlier density ({n_fovs} FOVs, {int(matrix.sum())} total outlier events)",
+        fontsize=S["fs_suptitle"],
+    )
+    fig.tight_layout()
+    return fig
+
+
 def plot_frc_all_fovs(
     ok_fovs: list[str],
     plots_dir,
 ) -> tuple[plt.Figure, dict]:
-    """FRC mean correlation across all FOVs (reporting only). Returns (fig, {fov_name: df})."""
+    """FRC mean correlation + local z-score across all FOVs. Returns (fig, {fov_name: df})."""
     S = STYLE
-    fig, ax = plt.subplots(1, 1, figsize=S["fig_all_single"])
+    fig, axes = plt.subplots(2, 1, figsize=S["fig_all_double"], sharex=True)
     all_data = {}
     for i, fov in enumerate(ok_fovs):
         fov_name = "_".join(fov.split("/"))
@@ -1219,14 +1745,53 @@ def plot_frc_all_fovs(
         if not csv_path.exists():
             continue
         df = pd.read_csv(csv_path)
-        all_data[fov_name] = df.set_index("t")[["frc_mean_corr"]]
-        ax.plot(df["t"], df["frc_mean_corr"], alpha=S["alpha_multi"], linewidth=S["lw_data"],
+        cols = ["frc_mean_corr"]
+        if "local_z" in df.columns:
+            cols.append("local_z")
+        all_data[fov_name] = df.set_index("t")[cols]
+        c = COLOR_CYCLE[i % len(COLOR_CYCLE)]
+        axes[0].plot(df["t"], df["frc_mean_corr"], alpha=S["alpha_multi"], linewidth=S["lw_data"],
+                     color=c, label=fov_name)
+        if "local_z" in df.columns:
+            axes[1].plot(df["t"], df["local_z"], alpha=S["alpha_multi"], linewidth=S["lw_data"],
+                         color=c, label=fov_name)
+    axes[0].set_ylabel("FRC mean correlation", fontsize=S["fs_label"])
+    axes[0].set_title(f"FRC QC across all FOVs ({len(all_data)} FOVs)", fontsize=S["fs_title"])
+    axes[1].set_xlabel("Timepoint", fontsize=S["fs_label"])
+    axes[1].set_ylabel("FRC local z-score", fontsize=S["fs_label"])
+    axes[1].axhline(-2.5, color=S["c_threshold"], linestyle="--", linewidth=S["lw_threshold"],
+                    alpha=0.7, label="threshold")
+    frc_vals = np.concatenate([d["frc_mean_corr"].values for d in all_data.values()]) if all_data else None
+    frc_lz_vals = np.concatenate([d["local_z"].values for d in all_data.values() if "local_z" in d.columns]) if all_data else None
+    _set_ylim(axes[0], "frc", data=frc_vals)
+    _set_ylim(axes[1], "frc_local_z", data=frc_lz_vals)
+    for a in axes:
+        a.legend(fontsize=S["fs_legend_multi"], loc="best", ncol=2)
+    _apply_style(fig)
+    return fig, all_data
+
+
+def plot_max_intensity_all_fovs(
+    ok_fovs: list[str],
+    plots_dir,
+) -> tuple[plt.Figure, dict]:
+    """Max intensity across all FOVs (reporting only). Returns (fig, {fov_name: series})."""
+    S = STYLE
+    fig, ax = plt.subplots(1, 1, figsize=S["fig_all_single"])
+    all_data = {}
+    for i, fov in enumerate(ok_fovs):
+        fov_name = "_".join(fov.split("/"))
+        csv_path = plots_dir / fov_name / "max_intensity_qc.csv"
+        if not csv_path.exists():
+            continue
+        df = pd.read_csv(csv_path)
+        all_data[fov_name] = df.set_index("t")["max_intensity"]
+        ax.plot(df["t"], df["max_intensity"], alpha=S["alpha_multi"], linewidth=S["lw_data"],
                 color=COLOR_CYCLE[i % len(COLOR_CYCLE)], label=fov_name)
-    ax.set_ylabel("FRC mean correlation", fontsize=S["fs_label"])
-    ax.set_xlabel("Time point", fontsize=S["fs_label"])
-    ax.set_title(f"FRC QC across all FOVs ({len(all_data)} FOVs)", fontsize=S["fs_title"])
+    ax.set_ylabel("Max intensity (full Z)", fontsize=S["fs_label"])
+    ax.set_xlabel("Timepoint", fontsize=S["fs_label"])
+    ax.set_title(f"Max intensity QC across all FOVs ({len(all_data)} FOVs)", fontsize=S["fs_title"])
     ax.legend(fontsize=S["fs_legend_multi"], loc="best", ncol=2)
-    _set_ylim(ax, "frc")
     _apply_style(fig)
     return fig, all_data
 
@@ -1248,10 +1813,319 @@ def plot_registration_pcc_all_fovs(
         all_data[fov_name] = df.set_index("t")["pearson_corr"]
         ax.plot(df["t"], df["pearson_corr"], alpha=S["alpha_multi"], linewidth=S["lw_data"],
                 color=COLOR_CYCLE[i % len(COLOR_CYCLE)], label=fov_name)
-    ax.set_xlabel("Time point", fontsize=S["fs_label"])
+    ax.set_xlabel("Timepoint", fontsize=S["fs_label"])
     ax.set_ylabel("Pearson correlation (LF vs LS)", fontsize=S["fs_label"])
     ax.set_title(f"Registration QC across all FOVs ({len(all_data)} FOVs)", fontsize=S["fs_title"])
     ax.legend(fontsize=S["fs_legend_multi"], loc="best", ncol=2)
-    _set_ylim(ax, "fov_reg_pearson")
+    reg_vals = np.concatenate([s.values for s in all_data.values()]) if all_data else None
+    _set_ylim(ax, "fov_reg_pearson", data=reg_vals)
     _apply_style(fig)
     return fig, all_data
+
+
+# ---------------------------------------------------------------------------
+# Replot helpers — regenerate QC plots from existing CSVs
+# ---------------------------------------------------------------------------
+
+def _arr_from_csv(df, col, T):
+    """Build a full-length array from a CSV with a 't' column."""
+    arr = np.full(T, np.nan, dtype=np.float64)
+    for _, row in df.iterrows():
+        t = int(row["t"])
+        if t < T:
+            arr[t] = row[col]
+    return arr
+
+
+def _blank_mask_from_arr(arr):
+    return np.isnan(arr)
+
+
+def _recompute_bleach_local_z(normalized):
+    """Recompute bleach local z-score from normalized intensity (for legacy CSVs)."""
+    from scipy.ndimage import median_filter
+    T = len(normalized)
+    local_z = np.full(T, np.nan, dtype=np.float64)
+    valid_mask = ~np.isnan(normalized)
+    if valid_mask.sum() > 5:
+        smoothed = np.full(T, np.nan)
+        smoothed[valid_mask] = median_filter(normalized[valid_mask], size=5, mode="nearest")
+        residuals = np.full(T, np.nan)
+        residuals[valid_mask] = normalized[valid_mask] - smoothed[valid_mask]
+        valid_res = residuals[valid_mask]
+        mad = float(np.median(np.abs(valid_res - np.median(valid_res))))
+        scale = 1.4826 * mad if mad > 1e-12 else float(np.std(valid_res))
+        if scale > 1e-12:
+            local_z[valid_mask] = (residuals[valid_mask] - np.median(valid_res)) / scale
+    return local_z
+
+
+def replot_fov(fov_dir, fov_name, n_std, z_window):
+    """Regenerate all per-FOV plots from CSVs."""
+    fov_dir = Path(fov_dir)
+    count = 0
+
+    # --- bbox over time ---
+    bbox_csv = fov_dir / "per_t_bboxes.csv"
+    summary_csv = fov_dir / "fov_summary.csv"
+    if bbox_csv.exists() and summary_csv.exists():
+        bbox_df = pd.read_csv(bbox_csv)
+        per_t = bbox_df[["y_min", "y_max", "x_min", "x_max"]].values
+        summary = pd.read_csv(summary_csv).iloc[0]
+        bbox = ast.literal_eval(summary["bbox"])
+        plot_bbox_over_time(per_t, tuple(bbox), save_path=str(fov_dir / "bbox_over_time.png"))
+        count += 1
+
+    # --- z_focus ---
+    z_csv = fov_dir / "z_focus.csv"
+    if z_csv.exists():
+        z_df = pd.read_csv(z_csv)
+        plot_z_focus(
+            z_df["z_focus"].tolist(),
+            save_path=str(fov_dir / "z_focus.png"),
+            n_std=n_std,
+            z_window=z_window,
+        )
+        count += 1
+
+    # --- laplacian ---
+    lap_csv = fov_dir / "laplacian_qc.csv"
+    if lap_csv.exists():
+        df = pd.read_csv(lap_csv)
+        col = "lap_var" if "lap_var" in df.columns else "lap3d_var"
+        T = int(df["t"].max()) + 1
+        lap_vars = _arr_from_csv(df, col, T)
+        valid = lap_vars[~np.isnan(lap_vars)]
+        mu, sigma = float(np.mean(valid)), float(np.std(valid))
+        lower = mu - n_std * sigma
+        outlier_mask = df.get("is_outlier", pd.Series([0] * len(df))).values.astype(bool)
+        outliers = df["t"].values[outlier_mask]
+        local_z = _arr_from_csv(df, "local_z", T) if "local_z" in df.columns else None
+        fig = plot_laplacian_qc(lap_vars, mu, sigma, lower, n_std, outliers,
+                                "raw GFP EX488 EM525-45", local_z=local_z)
+        fig.savefig(fov_dir / "laplacian_qc.png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        count += 1
+
+    # --- entropy ---
+    ent_csv = fov_dir / "entropy_qc.csv"
+    if ent_csv.exists():
+        df = pd.read_csv(ent_csv)
+        T = int(df["t"].max()) + 1
+        entropies = _arr_from_csv(df, "entropy", T)
+        local_z = _arr_from_csv(df, "local_z", T)
+        blank_mask = _blank_mask_from_arr(entropies)
+        outlier_mask = df.get("is_outlier", pd.Series([0] * len(df))).values.astype(bool)
+        outliers = df["t"].values[outlier_mask]
+        med = float(np.nanmedian(entropies))
+        global_lower = None
+        global_upper = None
+        if "global_outlier" in df.columns:
+            valid_ent = entropies[~blank_mask]
+            q1, q3 = np.percentile(valid_ent, [25, 75])
+            iqr = q3 - q1
+            global_lower = q1 - 1.5 * iqr
+            global_upper = q3 + 1.5 * iqr
+        fig = plot_entropy_qc(entropies, local_z, blank_mask, outliers, med, 2.5,
+                              "raw GFP EX488 EM525-45",
+                              global_lower=global_lower, global_upper=global_upper)
+        fig.savefig(fov_dir / "entropy_qc.png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        count += 1
+
+    # --- hf_ratio ---
+    hf_csv = fov_dir / "hf_ratio_qc.csv"
+    if hf_csv.exists():
+        df = pd.read_csv(hf_csv)
+        T = int(df["t"].max()) + 1
+        hf_ratios = _arr_from_csv(df, "hf_ratio", T)
+        hf_local_z = _arr_from_csv(df, "hf_local_z", T)
+        blank_mask = _blank_mask_from_arr(hf_ratios)
+        outlier_mask = df.get("is_outlier", pd.Series([0] * len(df))).values.astype(bool)
+        outliers = df["t"].values[outlier_mask]
+        med = float(np.nanmedian(hf_ratios))
+        fig = plot_hf_ratio_qc(hf_ratios, hf_local_z, blank_mask, outliers, med,
+                                3.0, "raw GFP EX488 EM525-45")
+        fig.savefig(fov_dir / "hf_ratio_qc.png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        count += 1
+
+    # --- frc ---
+    frc_csv = fov_dir / "frc_qc.csv"
+    if frc_csv.exists():
+        df = pd.read_csv(frc_csv)
+        T = int(df["t"].max()) + 1
+        frc_vals = _arr_from_csv(df, "frc_mean_corr", T)
+        local_z = _arr_from_csv(df, "local_z", T) if "local_z" in df.columns else np.zeros(T)
+        blank_mask = _blank_mask_from_arr(frc_vals)
+        med = float(np.nanmedian(frc_vals))
+        fig = plot_frc_qc(frc_vals, local_z, blank_mask, med,
+                          "raw GFP EX488 EM525-45", mean_frc_curve=None)
+        fig.savefig(fov_dir / "frc_qc.png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        count += 1
+
+    # --- max_intensity ---
+    mi_csv = fov_dir / "max_intensity_qc.csv"
+    if mi_csv.exists():
+        df = pd.read_csv(mi_csv)
+        T = int(df["t"].max()) + 1
+        max_vals = _arr_from_csv(df, "max_intensity", T)
+        blank_mask = _blank_mask_from_arr(max_vals)
+        med = float(np.nanmedian(max_vals))
+        local_z = _arr_from_csv(df, "local_z", T) if "local_z" in df.columns else None
+        fig = plot_max_intensity_qc(max_vals, blank_mask, med, "raw GFP EX488 EM525-45",
+                                    local_z=local_z)
+        fig.savefig(fov_dir / "max_intensity_qc.png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        count += 1
+
+    # --- fov_registration ---
+    reg_csv = fov_dir / "fov_registration_qc.csv"
+    if reg_csv.exists():
+        df = pd.read_csv(reg_csv)
+        T = int(df["t"].max()) + 1
+        pearson = _arr_from_csv(df, "pearson_corr", T)
+        mu = float(np.nanmean(pearson))
+        outlier_mask = df.get("is_outlier", pd.Series([0] * len(df))).values.astype(bool)
+        outlier_idx = df["t"].values[outlier_mask]
+        n_blank = T - int((~np.isnan(pearson)).sum())
+        local_z = _arr_from_csv(df, "local_z", T) if "local_z" in df.columns else None
+        fig = plot_fov_registration_qc(pearson, mu, len(outlier_idx), outlier_idx,
+                                        blank_count=n_blank, local_z=local_z)
+        fig.savefig(fov_dir / "fov_registration_qc.png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        count += 1
+
+    # --- bleach ---
+    bleach_csv = fov_dir / "bleach_qc.csv"
+    if bleach_csv.exists():
+        df = pd.read_csv(bleach_csv)
+        T = int(df["t"].max()) + 1
+        normalized = _arr_from_csv(df, "normalized", T)
+        local_z = _arr_from_csv(df, "local_z", T) if "local_z" in df.columns else None
+        # Recompute local_z if CSV has all-NaN values (legacy data)
+        if local_z is None or np.all(np.isnan(local_z)):
+            local_z = _recompute_bleach_local_z(normalized)
+        fig = plot_bleach_fov_qc(normalized, fov_name, local_z=local_z)
+        fig.savefig(fov_dir / "bleach_qc.png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        count += 1
+
+    return count
+
+
+def replot_all_fovs(run_dir):
+    """Regenerate all per-FOV + all-FOV summary plots from CSVs."""
+    run_dir = Path(run_dir)
+    plots_dir = run_dir / "per_fov_analysis"
+
+    # Read run parameters
+    run_log_path = run_dir / "run_log.yaml"
+    if run_log_path.exists():
+        with open(run_log_path) as f:
+            run_log = yaml.safe_load(f)
+        params = run_log.get("parameters", {})
+        n_std = params.get("n_std", 2.5)
+        z_window = params.get("z_window", None)
+    else:
+        print("WARNING: run_log.yaml not found, using default parameters")
+        n_std = 2.5
+        z_window = None
+
+    # Discover FOVs from global_summary or directory listing
+    global_csv = run_dir / "global_summary.csv"
+    if global_csv.exists():
+        summary_df = pd.read_csv(global_csv)
+        ok_fovs = summary_df["fov"].tolist()
+    else:
+        ok_fovs = []
+        for d in sorted(plots_dir.iterdir()):
+            if d.is_dir() and (d / "fov_summary.csv").exists():
+                ok_fovs.append("/".join(d.name.split("_")))
+
+    print(f"Run dir: {run_dir}")
+    print(f"Parameters: n_std={n_std}, z_window={z_window}")
+    print(f"Found {len(ok_fovs)} FOVs to replot")
+
+    # --- Per-FOV plots ---
+    total_plots = 0
+    for fov in ok_fovs:
+        fov_name = "_".join(fov.split("/"))
+        fov_dir = plots_dir / fov_name
+        if not fov_dir.exists():
+            print(f"  Skipping {fov_name}: directory not found")
+            continue
+        n = replot_fov(fov_dir, fov_name, n_std, z_window)
+        total_plots += n
+
+    print(f"\nRegenerated {total_plots} per-FOV plots across {len(ok_fovs)} FOVs")
+
+    # --- All-FOV summary plots ---
+    print("\n=== Regenerating all-FOV summary plots ===")
+
+    def _save(fig, name):
+        fig.savefig(run_dir / f"{name}.png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  Saved {name}.png")
+
+    fig, _ = plot_z_focus_all_fovs(ok_fovs, plots_dir)
+    _save(fig, "z_focus_all_fovs")
+
+    fig, _ = plot_laplacian_all_fovs(ok_fovs, plots_dir)
+    _save(fig, "laplacian_all_fovs")
+
+    fig, _ = plot_hf_ratio_all_fovs(ok_fovs, plots_dir)
+    _save(fig, "hf_ratio_all_fovs")
+
+    fig, _ = plot_entropy_all_fovs(ok_fovs, plots_dir)
+    _save(fig, "entropy_all_fovs")
+
+    fig, _ = plot_frc_all_fovs(ok_fovs, plots_dir)
+    _save(fig, "frc_all_fovs")
+
+    fig, _ = plot_max_intensity_all_fovs(ok_fovs, plots_dir)
+    _save(fig, "max_intensity_all_fovs")
+
+    # T_total from first FOV summary
+    T_total = 66
+    if global_csv.exists():
+        T_total = int(summary_df.iloc[0].get("T_total", 66))
+
+    drop_fig, drop_df, corr_text = plot_drop_correlation_all_fovs(ok_fovs, plots_dir, T_total)
+    if drop_fig is not None:
+        _save(drop_fig, "drop_correlation_all_fovs")
+
+    fig, _ = plot_registration_pcc_all_fovs(ok_fovs, plots_dir)
+    _save(fig, "registration_pcc_all_fovs")
+
+    out_fig, out_df, out_text = plot_outlier_correlation_all_fovs(ok_fovs, plots_dir, T_total)
+    if out_fig is not None:
+        _save(out_fig, "outlier_correlation_all_fovs")
+
+    # --- New 3-view outlier correlation analysis ---
+    fig, _ = plot_outlier_heatmap_fov_metric(ok_fovs, plots_dir, T_total)
+    _save(fig, "outlier_heatmap_fov_metric")
+
+    fig = plot_outlier_cooccurrence_matrix(ok_fovs, plots_dir, T_total)
+    _save(fig, "outlier_cooccurrence_matrix")
+
+    fig = plot_outlier_temporal_density(ok_fovs, plots_dir, T_total)
+    _save(fig, "outlier_temporal_density")
+
+    fig = plot_metric_correlation_matrix(ok_fovs, plots_dir, T_total)
+    _save(fig, "metric_correlation_matrix")
+
+    print("\nDone!")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Regenerate dynacell QC plots from existing CSVs"
+    )
+    parser.add_argument(
+        "run_dir", type=str,
+        help="Path to the run directory (e.g. run_20260323_174801)",
+    )
+    args = parser.parse_args()
+    replot_all_fovs(args.run_dir)
