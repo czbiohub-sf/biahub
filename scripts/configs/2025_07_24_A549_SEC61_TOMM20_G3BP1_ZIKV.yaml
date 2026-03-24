@@ -7,6 +7,7 @@ processing:
   z_final: 48
   z_window: 20
   z_index: null
+  z_crop: 26
 
 fovs:
   beads: A/3/000001

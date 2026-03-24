@@ -19,6 +19,7 @@ def crop_fov(
     Y_out: int | None = None,
     X_out: int | None = None,
     drop_frames: bool = True,
+    z_crop: int | None = None,
 ):
     """Stage 2: Crop one FOV and write into the pre-created plate.
 
@@ -35,6 +36,9 @@ def crop_fov(
     drop_frames : bool
         If True (default), drop timepoints listed in global_drop_csv.
         If False, keep all timepoints (no T cropping).
+    z_crop : int or None
+        If set, use this fixed z as the crop center for all timepoints
+        instead of the per-timepoint z_focus values.
     """
     # Read stage 1 metadata
     z_focus_df = pd.read_csv(output_plots_dir / "z_focus.csv")
@@ -83,6 +87,10 @@ def crop_fov(
     if Y_crop != Y_out or X_crop != X_out:
         print(f"  Center-crop src[{y_src_off}:{y_src_off+y_size}, {x_src_off}:{x_src_off+x_size}]"
               f" -> dst[{y_dst_off}:{y_dst_off+y_size}, {x_dst_off}:{x_dst_off+x_size}]")
+    if z_crop is not None:
+        print(f"  z_crop: {z_crop} (fixed z center for all timepoints)")
+    else:
+        print(f"  z_crop: per-timepoint z_focus")
     print(f"  z_final: {z_final} (1/3 below={z_below}, 2/3 above={z_above})")
     print(f"  Input zarrs: {len(input_zarr_paths)}")
 
@@ -98,7 +106,7 @@ def crop_fov(
             out_img = out_ds["0"]
 
             for t_out, t_in in enumerate(tqdm(keep_indices, desc=f"Cropping {fov_str}")):
-                z_center = int(z_focus[t_in])
+                z_center = z_crop if z_crop is not None else int(z_focus[t_in])
 
                 c_out = 0
                 for src_arr in src_arrays:

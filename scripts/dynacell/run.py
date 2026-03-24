@@ -813,7 +813,7 @@ def _run_stage2(
     ok_results, all_zarrs, output_zarr, plots_dir,
     slurm_out_path, cluster, slurm_args, global_drop_csv,
     z_final, T_min, Y_min, X_min, all_channel_names, scale,
-    overlay_channels, output_dir, drop_frames=True,
+    overlay_channels, output_dir, drop_frames=True, z_crop=None,
 ):
     """Create output plate, submit stage 2 crop jobs, wait, and generate QC report."""
     ok_fovs = [r["fov"] for r in ok_results]
@@ -858,6 +858,7 @@ def _run_stage2(
                 Y_out=Y_min,
                 X_out=X_min,
                 drop_frames=drop_frames,
+                z_crop=z_crop,
             )
             jobs_s2.append(job)
 
@@ -914,6 +915,7 @@ def run_all_fovs(
     annotations_dir: Path | None = None,
     qc_thresholds: dict | None = None,
     slurm_config: dict | None = None,
+    z_crop: int | None = None,
 ):
     """Two-stage pipeline for dynacell preprocessing.
 
@@ -940,6 +942,10 @@ def run_all_fovs(
         If an int, use this fixed z index instead of auto-detecting z_focus.
         If "mid", use the mid-Z slice (Z // 2).
         If None (default), compute z_focus per timepoint.
+    z_crop : int or None
+        If set, use this fixed z as the crop center in stage 2 instead of
+        the per-timepoint z_focus. Independent of z_index (z_focus detection
+        still runs for QC when z_index is None).
     drop_frames : bool
         If True (default), drop flagged timepoints in stage 2 (blank, z_focus
         outliers, entropy outliers, bad registration). If False, keep all
@@ -1207,7 +1213,7 @@ def run_all_fovs(
         T_min=T_min, Y_min=Y_min, X_min=X_min,
         all_channel_names=all_channel_names, scale=scale,
         overlay_channels=overlay_channels, output_dir=output_dir,
-        drop_frames=drop_frames,
+        drop_frames=drop_frames, z_crop=z_crop,
     )
     _finalize_run_log(run_log, run_log_path, _run_start_time)
 
@@ -1248,4 +1254,5 @@ def run_from_config(config_path: str | Path, local: bool = False, stage1_run_dir
         annotations_dir=Path(cfg["annotations_dir"]) if cfg.get("annotations_dir") else None,
         qc_thresholds=cfg.get("qc_thresholds"),
         slurm_config=cfg.get("slurm"),
+        z_crop=proc.get("z_crop"),
     )
