@@ -321,6 +321,7 @@ tr:hover { background: var(--accent-light); }
 }
 .badge-ok { background: var(--success-bg); color: var(--success); }
 .badge-warn { background: var(--warning-bg); color: var(--warning); }
+.badge-disqualified { background: #ffcdd2; color: #b71c1c; }
 
 /* --- TOC navigation --- */
 .toc {
@@ -487,12 +488,19 @@ def generate_dataset_report(
 
     fov_dirs = sorted([d for d in plots_dir.iterdir() if d.is_dir()]) if plots_dir.exists() else []
 
+    # Build set of qualified FOVs (present in global_summary)
+    qualified_fovs = set()
+    if "fov" in global_summary_df.columns:
+        qualified_fovs = {
+            "_".join(f.split("/")) for f in global_summary_df["fov"]
+        }
+
     dataset_name = run_dir.parent.parent.name if run_dir.parent.name == "dynacell" else run_dir.name
     run_id = run_dir.name
     n_fovs = len(fov_dirs)
 
     print(f"Generating QC report for {run_dir}")
-    print(f"  FOVs: {n_fovs}")
+    print(f"  FOVs: {n_fovs} ({len(qualified_fovs)} qualified)")
     print(f"  Output zarr: {output_zarr}")
 
     # --- Build HTML ---
@@ -563,24 +571,27 @@ def generate_dataset_report(
     for fov_dir in fov_dirs:
         fov_name = fov_dir.name
         fov_key = "/".join(fov_name.split("_"))
-        print(f"  Rendering FOV: {fov_name}")
+        is_qualified = fov_name in qualified_fovs
+        print(f"  Rendering FOV: {fov_name}{'  [disqualified]' if not is_qualified else ''}")
 
         summary_info = _fov_summary_html(fov_dir)
+        badge = "" if is_qualified else ' <span class="badge badge-disqualified">disqualified</span>'
 
         html_parts.append(f"""
 <div class="fov-section" id="fov-{fov_name}">
-<h3>{fov_name}</h3>
+<h3>{fov_name}{badge}</h3>
 <div class="fov-meta">{summary_info}</div>
 <div class="fov-grid">
 """)
 
-        # Crop overlay (rendered live from zarr)
-        crop_img = _plot_crop_overlay(output_zarr, fov_key, overlay_channels)
-        if crop_img:
-            html_parts.append(
-                f'<div class="plot-cell">{_img_tag(crop_img)}'
-                f'<div class="plot-label">Crop overlay (t=0)</div></div>'
-            )
+        # Crop overlay (rendered live from zarr — only for qualified FOVs)
+        if is_qualified:
+            crop_img = _plot_crop_overlay(output_zarr, fov_key, overlay_channels)
+            if crop_img:
+                html_parts.append(
+                    f'<div class="plot-cell">{_img_tag(crop_img)}'
+                    f'<div class="plot-label">Crop overlay (t=0)</div></div>'
+                )
 
         # Embed pre-generated per-FOV PNGs
         for label, fname in _PER_FOV_PLOTS:
@@ -721,12 +732,19 @@ def generate_annotated_report(
 
     fov_dirs = sorted([d for d in plots_dir.iterdir() if d.is_dir()]) if plots_dir.exists() else []
 
+    # Build set of qualified FOVs (present in global_summary)
+    qualified_fovs_ann = set()
+    if "fov" in global_summary_df.columns:
+        qualified_fovs_ann = {
+            "_".join(f.split("/")) for f in global_summary_df["fov"]
+        }
+
     dataset_name = run_dir.parent.parent.name if run_dir.parent.name == "dynacell" else run_dir.name
     run_id = run_dir.name
     n_fovs = len(fov_dirs)
 
     print(f"Generating annotated QC report for {run_dir}")
-    print(f"  FOVs: {n_fovs}, annotations: {len(ann_map)}")
+    print(f"  FOVs: {n_fovs} ({len(qualified_fovs_ann)} qualified), annotations: {len(ann_map)}")
 
     # --- Build HTML ---
     combined_css = CSS + ANNOTATED_CSS_EXTRA
@@ -814,15 +832,17 @@ def generate_annotated_report(
     for fov_dir in fov_dirs:
         fov_name = fov_dir.name
         fov_key = "/".join(fov_name.split("_"))
-        print(f"  Rendering FOV: {fov_name}")
+        is_qualified = fov_name in qualified_fovs_ann
+        print(f"  Rendering FOV: {fov_name}{'  [disqualified]' if not is_qualified else ''}")
 
         summary_info = _fov_summary_html(fov_dir)
         ann = ann_map.get(fov_name, {"status": 0, "comments": ""})
         status_html, _ = _STATUS_LABELS.get(ann["status"], _STATUS_LABELS[0])
+        dq_badge = ' <span class="badge badge-disqualified">disqualified</span>' if not is_qualified else ""
 
         html_parts.append(f"""
 <div class="fov-section" id="ann-fov-{fov_name}">
-<h3>{fov_name} {status_html}</h3>
+<h3>{fov_name} {status_html}{dq_badge}</h3>
 <div class="fov-meta">{summary_info}</div>
 """)
 
@@ -833,13 +853,14 @@ def generate_annotated_report(
 
         html_parts.append('<div class="fov-grid">')
 
-        # Crop overlay (rendered live)
-        crop_img = _plot_crop_overlay(output_zarr, fov_key, overlay_channels)
-        if crop_img:
-            html_parts.append(
-                f'<div class="plot-cell">{_img_tag(crop_img)}'
-                f'<div class="plot-label">Crop overlay (t=0)</div></div>'
-            )
+        # Crop overlay (rendered live — only for qualified FOVs)
+        if is_qualified:
+            crop_img = _plot_crop_overlay(output_zarr, fov_key, overlay_channels)
+            if crop_img:
+                html_parts.append(
+                    f'<div class="plot-cell">{_img_tag(crop_img)}'
+                    f'<div class="plot-label">Crop overlay (t=0)</div></div>'
+                )
 
         for label, fname in _PER_FOV_PLOTS:
             b64 = _png_to_base64(fov_dir / fname)
