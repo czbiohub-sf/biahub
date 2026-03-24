@@ -64,7 +64,7 @@ def _get_blank_frames(fov_plots_dir: Path) -> set[int]:
 
 
 # ---------------------------------------------------------------------------
-# Plot renderers — each returns a base64 string or None
+# Plot renderers — only for plots that need live rendering (not pre-generated)
 # ---------------------------------------------------------------------------
 
 def _plot_crop_overlay(
@@ -137,48 +137,6 @@ def _plot_crop_overlay(
     return _fig_to_base64(fig)
 
 
-def _plot_z_focus(fov_plots_dir: Path) -> str | None:
-    z_csv = fov_plots_dir / "z_focus.csv"
-    if not z_csv.exists():
-        return None
-
-    z_all = pd.read_csv(z_csv, index_col=0)["z_focus"].values.astype(float)
-    t_all = np.arange(len(z_all))
-
-    # Exclude blank frames
-    blank_set = _get_blank_frames(fov_plots_dir)
-    valid_mask = np.array([i not in blank_set for i in range(len(z_all))])
-    t = t_all[valid_mask]
-    z_arr = z_all[valid_mask]
-
-    if len(z_arr) == 0:
-        return None
-
-    mu, sigma = np.mean(z_arr), np.std(z_arr)
-    upper, lower = mu + 2.5 * sigma, mu - 2.5 * sigma
-    outlier_mask = (z_arr > upper) | (z_arr < lower)
-
-    fig, ax = plt.subplots(figsize=(7, 3))
-    ax.plot(t, z_arr, "tab:blue", alpha=0.7, linewidth=0.8)
-    ax.axhline(mu, color="orange", linestyle=":", linewidth=1)
-    ax.fill_between(t, mu - sigma, mu + sigma, color="orange", alpha=0.12)
-    ax.fill_between(t, lower, upper, color="red", alpha=0.05)
-    ax.axhline(np.median(z_arr), color="green", linestyle="--", linewidth=0.8)
-    if outlier_mask.any():
-        ax.scatter(t[outlier_mask], z_arr[outlier_mask], color="red", s=15, zorder=5)
-
-    n_blank = len(blank_set)
-    title = f"Z focus | mean={mu:.1f}  std={sigma:.1f}  outliers={outlier_mask.sum()}"
-    if n_blank > 0:
-        title += f"  (excl. {n_blank} blank)"
-    ax.set_title(title, fontsize=9)
-    ax.set_xlabel("t", fontsize=8)
-    ax.set_ylabel("Z focus", fontsize=8)
-    ax.tick_params(labelsize=7)
-    fig.tight_layout()
-    return _fig_to_base64(fig)
-
-
 def _parse_bbox_value(value) -> list[int]:
     bbox_str = str(value).strip()
     bbox_str = re.sub(r"np\.int\d+\(([-+]?\d+)\)", r"\1", bbox_str)
@@ -188,507 +146,248 @@ def _parse_bbox_value(value) -> list[int]:
     return [int(part) for part in parts]
 
 
-def _plot_bbox(fov_plots_dir: Path) -> str | None:
-    bbox_csv = fov_plots_dir / "per_t_bboxes.csv"
-    if not bbox_csv.exists():
-        return None
-
-    per_t_all = pd.read_csv(bbox_csv, index_col=0).values
-    t_all = np.arange(per_t_all.shape[0])
-
-    # Exclude blank frames
-    blank_set = _get_blank_frames(fov_plots_dir)
-    valid_mask = np.array([i not in blank_set for i in range(len(t_all))])
-    t = t_all[valid_mask]
-    per_t = per_t_all[valid_mask]
-
-    if len(t) == 0:
-        return None
-
-    height_t = per_t[:, 1] - per_t[:, 0] + 1
-    width_t = per_t[:, 3] - per_t[:, 2] + 1
-
-    fig, ax = plt.subplots(figsize=(7, 3))
-    ax.plot(t, height_t, "tab:purple", alpha=0.7, linewidth=0.8, label="Height (Y)")
-    ax.plot(t, width_t, "tab:green", alpha=0.7, linewidth=0.8, label="Width (X)")
-
-    summary_csv = fov_plots_dir / "fov_summary.csv"
-    if summary_csv.exists():
-        bbox_str = pd.read_csv(summary_csv)["bbox"].iloc[0]
-        bbox = _parse_bbox_value(bbox_str)
-        ax.axhline(bbox[1] - bbox[0] + 1, color="tab:purple", linestyle="--", linewidth=0.8, alpha=0.5)
-        ax.axhline(bbox[3] - bbox[2] + 1, color="tab:green", linestyle="--", linewidth=0.8, alpha=0.5)
-
-    title = "Bbox height/width over time"
-    if blank_set:
-        title += f" (excl. {len(blank_set)} blank)"
-    ax.set_title(title, fontsize=9)
-    ax.set_xlabel("t", fontsize=8)
-    ax.set_ylabel("pixels", fontsize=8)
-    ax.legend(fontsize=7, loc="best")
-    ax.tick_params(labelsize=7)
-    fig.tight_layout()
-    return _fig_to_base64(fig)
-
-
-def _plot_intensity(fov_plots_dir: Path) -> str | None:
-    csv = fov_plots_dir / "max_intensities.csv"
-    if not csv.exists():
-        return None
-
-    df = pd.read_csv(csv)
-    channels = [c for c in df.columns if c != "t"]
-    cmap = {"arr0_ch0": "gray", "arr0_ch1": "silver",
-            "arr1_ch0": "green", "arr1_ch1": "red", "arr1_ch2": "cyan"}
-
-    # Exclude blank frames
-    blank_set = _get_blank_frames(fov_plots_dir)
-    valid_mask = ~df["t"].isin(blank_set)
-    df = df[valid_mask]
-    t = df["t"].values
-
-    if len(t) == 0:
-        return None
-
-    fig, ax = plt.subplots(figsize=(7, 3))
-    for ch in channels:
-        ax.plot(t, df[ch].values, alpha=0.7, linewidth=0.8, label=ch, color=cmap.get(ch))
-
-    title = "Per-channel max intensity"
-    if blank_set:
-        title += f" (excl. {len(blank_set)} blank)"
-    ax.set_title(title, fontsize=9)
-    ax.set_xlabel("t", fontsize=8)
-    ax.set_ylabel("Max intensity", fontsize=8)
-    ax.legend(fontsize=6, loc="best")
-    ax.tick_params(labelsize=7)
-    fig.tight_layout()
-    return _fig_to_base64(fig)
-
-
-def _plot_registration_qc(fov_plots_dir: Path) -> str | None:
-    csv = fov_plots_dir / "registration_qc.csv"
-    if not csv.exists():
-        return None
-
-    df = pd.read_csv(csv)
-
-    # Exclude blank frames
-    blank_set = _get_blank_frames(fov_plots_dir)
-    if blank_set:
-        df = df[~df["t"].isin(blank_set)]
-
-    t = df["t"].values
-    pearson = df["pearson_corr"].values
-    shift_y = df["pcc_shift_y"].values
-    shift_x = df["pcc_shift_x"].values
-    pcc_err = df["pcc_error"].values
-
-    valid = ~np.isnan(pearson)
-    if not valid.any():
-        return None
-
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(7, 5), sharex=True)
-
-    mu = np.nanmean(pearson[valid])
-    sigma = np.nanstd(pearson[valid])
-    ax1.plot(t[valid], pearson[valid], "tab:blue", alpha=0.7, linewidth=0.8, label="Pearson r")
-    ax1.axhline(mu, color="orange", linestyle=":", linewidth=1)
-    ax1.fill_between(t[valid], mu - sigma, mu + sigma, color="orange", alpha=0.12)
-    ax1.set_ylabel("Pearson r", fontsize=8)
-    title = f"Registration QC | Pearson mean={mu:.3f}"
-    if blank_set:
-        title += f" (excl. {len(blank_set)} blank)"
-    ax1.set_title(title, fontsize=9)
-    ax1.legend(fontsize=6)
-    ax1.tick_params(labelsize=7)
-
-    valid_s = ~np.isnan(shift_y)
-    if valid_s.any():
-        ax2.plot(t[valid_s], shift_y[valid_s], "tab:blue", alpha=0.7, linewidth=0.8, label="shift Y")
-        ax2.plot(t[valid_s], shift_x[valid_s], "tab:green", alpha=0.7, linewidth=0.8, label="shift X")
-        ax2.axhline(0, color="gray", linestyle="--", linewidth=0.5)
-        ax2b = ax2.twinx()
-        valid_e = ~np.isnan(pcc_err)
-        if valid_e.any():
-            ax2b.plot(t[valid_e], pcc_err[valid_e], "tab:red", alpha=0.4, linewidth=0.6, label="error")
-            ax2b.set_ylabel("PCC error", fontsize=7, color="tab:red")
-            ax2b.tick_params(axis="y", labelcolor="tab:red", labelsize=6)
-            ax2b.legend(fontsize=5, loc="upper right")
-    ax2.set_xlabel("t", fontsize=8)
-    ax2.set_ylabel("PCC shift (px)", fontsize=8)
-    ax2.legend(fontsize=6)
-    ax2.tick_params(labelsize=7)
-
-    fig.tight_layout()
-    return _fig_to_base64(fig)
-
-
-def _plot_fov_registration_qc(fov_plots_dir: Path) -> str | None:
-    """Render per-FOV LF–LS Pearson correlation from fov_registration_qc.csv."""
-    csv = fov_plots_dir / "fov_registration_qc.csv"
-    if not csv.exists():
-        return None
-
-    df = pd.read_csv(csv)
-
-    # Exclude blank frames
-    blank_set = _get_blank_frames(fov_plots_dir)
-    if blank_set:
-        df = df[~df["t"].isin(blank_set)]
-
-    t = df["t"].values
-    pearson = df["pearson_corr"].values
-    valid = ~np.isnan(pearson)
-    if not valid.any():
-        return None
-
-    fig, ax = plt.subplots(figsize=(7, 2.5))
-    mu = np.nanmean(pearson[valid])
-    sigma = np.nanstd(pearson[valid])
-    ax.plot(t[valid], pearson[valid], ".-", markersize=2, linewidth=0.6, color="tab:blue")
-    ax.axhline(mu, color="orange", linestyle="--", linewidth=0.8, label=f"mean={mu:.4f}")
-    ax.fill_between(t[valid], mu - sigma, mu + sigma, color="orange", alpha=0.12)
-    ax.set_xlabel("t", fontsize=8)
-    ax.set_ylabel("Pearson r (LF vs LS)", fontsize=8)
-    title = f"Registration QC | mean={mu:.4f} \u00b1 {sigma:.4f}"
-    if blank_set:
-        title += f" (excl. {len(blank_set)} blank)"
-    ax.set_title(title, fontsize=9)
-    ax.legend(fontsize=7)
-    ax.tick_params(labelsize=7)
-    fig.tight_layout()
-    return _fig_to_base64(fig)
-
-
-def _plot_laplacian_qc(fov_plots_dir: Path) -> str | None:
-    csv = fov_plots_dir / "laplacian_qc.csv"
-    if not csv.exists():
-        return None
-
-    df = pd.read_csv(csv)
-
-    # Exclude blank frames
-    blank_set = _get_blank_frames(fov_plots_dir)
-    if blank_set:
-        df = df[~df["t"].isin(blank_set)]
-
-    if len(df) == 0:
-        return None
-
-    t = df["t"].values
-    lap_var = df["lap3d_var"].values
-
-    mu, sigma = np.mean(lap_var), np.std(lap_var)
-    lower = mu - 2.5 * sigma
-
-    fig, ax = plt.subplots(figsize=(7, 3))
-    ax.plot(t, lap_var, "tab:blue", alpha=0.7, linewidth=0.8, label="Laplacian var")
-    ax.axhline(mu, color="orange", linestyle=":", linewidth=1, label=f"mean={mu:.2f}")
-    ax.fill_between(t, mu - sigma, mu + sigma, color="orange", alpha=0.12, label=f"1 std")
-    ax.axhline(lower, color="red", linestyle="--", linewidth=0.8, alpha=0.6, label=f"2.5 std={lower:.2f}")
-
-    # Mark low-sharpness outliers
-    outlier_mask = lap_var < lower
-    if outlier_mask.any():
-        ax.scatter(t[outlier_mask], lap_var[outlier_mask], color="red", s=15, zorder=5,
-                   label=f"blur (n={outlier_mask.sum()})")
-
-    title = f"Laplacian variance (sharpness) | mean={mu:.2f}"
-    if blank_set:
-        title += f" (excl. {len(blank_set)} blank)"
-    ax.set_title(title, fontsize=9)
-    ax.set_xlabel("t", fontsize=8)
-    ax.set_ylabel("3D Laplacian var", fontsize=8)
-    ax.legend(fontsize=6, loc="best")
-    ax.tick_params(labelsize=7)
-    fig.tight_layout()
-    return _fig_to_base64(fig)
-
-
-def _plot_hf_ratio_qc(fov_plots_dir: Path) -> str | None:
-    """Render per-FOV HF ratio blur QC from hf_ratio_qc.csv."""
-    csv = fov_plots_dir / "hf_ratio_qc.csv"
-    if not csv.exists():
-        return None
-
-    df = pd.read_csv(csv)
-
-    blank_set = _get_blank_frames(fov_plots_dir)
-    if blank_set:
-        df = df[~df["t"].isin(blank_set)]
-
-    if len(df) == 0:
-        return None
-
-    t = df["t"].values
-    hf_ratio = df["hf_ratio"].values
-    hf_local_z = df["hf_local_z"].values if "hf_local_z" in df.columns else df.get("local_z", pd.Series(np.zeros(len(df)))).values
-    ent_local_z = df["ent_local_z"].values if "ent_local_z" in df.columns else None
-    is_outlier = df["is_outlier"].values.astype(bool) if "is_outlier" in df.columns else np.zeros(len(df), dtype=bool)
-
-    valid = ~np.isnan(hf_ratio)
-    if not valid.any():
-        return None
-
-    mu = np.nanmean(hf_ratio[valid])
-    has_ent = ent_local_z is not None
-
-    n_panels = 3 if has_ent else 2
-    fig, axes = plt.subplots(n_panels, 1, figsize=(7, 2.5 * n_panels), sharex=True)
-
-    ax1 = axes[0]
-    ax1.plot(t[valid], hf_ratio[valid], "tab:blue", alpha=0.7, linewidth=0.8)
-    ax1.axhline(mu, color="orange", linestyle=":", linewidth=1, label=f"mean={mu:.6f}")
-    if is_outlier.any():
-        ax1.scatter(t[is_outlier], hf_ratio[is_outlier], color="red", s=15, zorder=5,
-                    label=f"blur (n={is_outlier.sum()})")
-    method = "HF+entropy" if has_ent else "HF-only"
-    title = f"HF ratio blur QC ({method}) | mean={mu:.6f}  outliers={is_outlier.sum()}"
-    if blank_set:
-        title += f" (excl. {len(blank_set)} blank)"
-    ax1.set_title(title, fontsize=9)
-    ax1.set_ylabel("HF energy ratio (multi-Z)", fontsize=8)
-    ax1.legend(fontsize=6)
-    ax1.tick_params(labelsize=7)
-
-    ax2 = axes[1]
-    valid_lz = ~np.isnan(hf_local_z)
-    if valid_lz.any():
-        ax2.plot(t[valid_lz], hf_local_z[valid_lz], "tab:blue", alpha=0.7, linewidth=0.8, label="HF local z")
-        ax2.axhline(-3.0, color="tab:blue", linestyle="--", linewidth=0.5, alpha=0.6, label="HF thresh (-3.0)")
-        if is_outlier.any():
-            ax2.scatter(t[is_outlier], hf_local_z[is_outlier], color="red", s=15, zorder=5)
-    if has_ent:
-        ax2r = ax2.twinx()
-        valid_ent = ~np.isnan(ent_local_z)
-        if valid_ent.any():
-            ax2r.plot(t[valid_ent], ent_local_z[valid_ent], "tab:orange", alpha=0.7, linewidth=0.8, label="Ent local z")
-            ax2r.axhline(+2.0, color="tab:orange", linestyle="--", linewidth=0.5, alpha=0.6, label="Ent thresh (+2.0)")
-        ax2r.set_ylabel("Entropy local z", fontsize=8, color="tab:orange")
-        ax2r.tick_params(labelsize=7)
-        lines1, labels1 = ax2.get_legend_handles_labels()
-        lines2, labels2 = ax2r.get_legend_handles_labels()
-        ax2.legend(lines1 + lines2, labels1 + labels2, fontsize=6, loc="lower left")
-    else:
-        ax2.legend(fontsize=6)
-    ax2.set_ylabel("HF local z-score", fontsize=8, color="tab:blue")
-    ax2.tick_params(labelsize=7)
-
-    if has_ent:
-        ax3 = axes[2]
-        combined = np.zeros(len(t), dtype=float)
-        combined[is_outlier] = 1.0
-        ax3.fill_between(t, combined, alpha=0.3, color="red", label="FLAGGED")
-        for idx in t[is_outlier]:
-            ax3.axvline(idx, color="red", alpha=0.5)
-        ax3.set_xlabel("t", fontsize=8)
-        ax3.set_ylabel("Flagged", fontsize=8)
-        ax3.set_title(f"Outliers: {t[is_outlier].tolist()}", fontsize=8)
-        ax3.legend(fontsize=6)
-        ax3.tick_params(labelsize=7)
-    else:
-        axes[-1].set_xlabel("t", fontsize=8)
-
-    fig.tight_layout()
-    return _fig_to_base64(fig)
-
-
-def _plot_entropy_qc(fov_plots_dir: Path) -> str | None:
-    csv = fov_plots_dir / "entropy_qc.csv"
-    if not csv.exists():
-        return None
-
-    df = pd.read_csv(csv)
-
-    # Exclude blank frames
-    blank_set = _get_blank_frames(fov_plots_dir)
-    if blank_set:
-        df = df[~df["t"].isin(blank_set)]
-
-    if len(df) == 0:
-        return None
-
-    t = df["t"].values
-    entropy = df["entropy"].values
-    is_outlier = df["is_outlier"].values.astype(bool) if "is_outlier" in df.columns else np.zeros(len(df), dtype=bool)
-
-    mu, sigma = np.mean(entropy), np.std(entropy)
-
-    fig, ax = plt.subplots(figsize=(7, 3))
-    ax.plot(t, entropy, "tab:blue", alpha=0.7, linewidth=0.8, label="Entropy")
-    ax.axhline(mu, color="orange", linestyle=":", linewidth=1, label=f"mean={mu:.2f}")
-    ax.fill_between(t, mu - sigma, mu + sigma, color="orange", alpha=0.12, label="1 std")
-
-    if is_outlier.any():
-        ax.scatter(t[is_outlier], entropy[is_outlier], color="red", s=15, zorder=5,
-                   label=f"outlier (n={is_outlier.sum()})")
-
-    # Plot local_z on twin axis if available
-    if "local_z" in df.columns:
-        ax2 = ax.twinx()
-        local_z = df["local_z"].values
-        valid_lz = ~np.isnan(local_z)
-        if valid_lz.any():
-            ax2.plot(t[valid_lz], local_z[valid_lz], "tab:red", alpha=0.3, linewidth=0.6, label="local z-score")
-            ax2.axhline(2.5, color="red", linestyle="--", linewidth=0.5, alpha=0.4)
-            ax2.axhline(-2.5, color="red", linestyle="--", linewidth=0.5, alpha=0.4)
-            ax2.set_ylabel("Local z-score", fontsize=7, color="tab:red")
-            ax2.tick_params(axis="y", labelcolor="tab:red", labelsize=6)
-            ax2.legend(fontsize=5, loc="upper right")
-
-    title = f"Shannon entropy | mean={mu:.2f}  outliers={is_outlier.sum()}"
-    if blank_set:
-        title += f" (excl. {len(blank_set)} blank)"
-    ax.set_title(title, fontsize=9)
-    ax.set_xlabel("t", fontsize=8)
-    ax.set_ylabel("Entropy", fontsize=8)
-    ax.legend(fontsize=6, loc="best")
-    ax.tick_params(labelsize=7)
-    fig.tight_layout()
-    return _fig_to_base64(fig)
-
-
-def _plot_frc_qc(fov_plots_dir: Path) -> str | None:
-    """Render per-FOV FRC blur QC from frc_qc.csv (reporting only)."""
-    csv = fov_plots_dir / "frc_qc.csv"
-    if not csv.exists():
-        return None
-
-    df = pd.read_csv(csv)
-
-    blank_set = _get_blank_frames(fov_plots_dir)
-    if blank_set:
-        df = df[~df["t"].isin(blank_set)]
-
-    if len(df) == 0:
-        return None
-
-    t = df["t"].values
-    frc_val = df["frc_mean_corr"].values
-
-    valid = ~np.isnan(frc_val)
-    if not valid.any():
-        return None
-
-    med = np.nanmedian(frc_val[valid])
-
-    fig, ax = plt.subplots(1, 1, figsize=(7, 3))
-
-    ax.plot(t[valid], frc_val[valid], "tab:blue", alpha=0.7, linewidth=0.8)
-    ax.axhline(med, color="green", linestyle="--", linewidth=1, label=f"median={med:.4f}")
-    title = f"FRC QC | median={med:.4f}"
-    if blank_set:
-        title += f" (excl. {len(blank_set)} blank)"
-    ax.set_title(title, fontsize=9)
-    ax.set_ylabel("FRC mean correlation", fontsize=8)
-    ax.set_xlabel("t", fontsize=8)
-    ax.legend(fontsize=6)
-    ax.tick_params(labelsize=7)
-
-    fig.tight_layout()
-    return _fig_to_base64(fig)
-
-
-def _plot_dust_qc(run_dir: Path) -> str | None:
-    """Embed the pre-generated dust_qc.png if it exists."""
-    dust_png = run_dir / "dust_qc.png"
-    if not dust_png.exists():
-        return None
-    with open(dust_png, "rb") as f:
-        return base64.b64encode(f.read()).decode("utf-8")
-
-
-def _plot_bleach_qc(run_dir: Path) -> str | None:
-    """Embed the pre-generated bleach_qc.png if it exists."""
-    bleach_png = run_dir / "bleach_qc.png"
-    if not bleach_png.exists():
-        return None
-    with open(bleach_png, "rb") as f:
-        return base64.b64encode(f.read()).decode("utf-8")
-
-
-def _plot_cross_fov_z_focus(run_dir: Path) -> str | None:
-    csv = run_dir / "z_focus_all_fovs.csv"
-    if not csv.exists():
-        return None
-    z_df = pd.read_csv(csv, index_col=0)
-    fig, ax = plt.subplots(figsize=(10, 4))
-    for col in z_df.columns:
-        ax.plot(z_df.index, z_df[col], alpha=0.5, linewidth=0.8, label=col)
-    ax.set_xlabel("Time point", fontsize=9)
-    ax.set_ylabel("Z focus index", fontsize=9)
-    ax.set_title(f"Z focus across all FOVs ({len(z_df.columns)} FOVs)", fontsize=11)
-    ax.legend(fontsize=5, loc="best", ncol=3)
-    ax.tick_params(labelsize=7)
-    fig.tight_layout()
-    return _fig_to_base64(fig)
-
-
 # ---------------------------------------------------------------------------
 # HTML generation
 # ---------------------------------------------------------------------------
 
 CSS = """
-body {
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    max-width: 1200px;
-    margin: 0 auto;
-    padding: 20px;
-    background: #fafafa;
-    color: #333;
+:root {
+    --bg: #f8f9fa;
+    --card-bg: #ffffff;
+    --border: #dee2e6;
+    --heading: #212529;
+    --subheading: #495057;
+    --text: #333333;
+    --text-muted: #6c757d;
+    --accent: #0d6efd;
+    --accent-light: #e7f1ff;
+    --success: #198754;
+    --success-bg: #d1e7dd;
+    --warning: #cc8a00;
+    --warning-bg: #fff3cd;
+    --danger: #dc3545;
 }
-h1 { border-bottom: 3px solid #2c3e50; padding-bottom: 10px; color: #2c3e50; }
-h2 { border-bottom: 2px solid #3498db; padding-bottom: 6px; color: #2c3e50; margin-top: 40px; }
-h3 { color: #2c3e50; margin-top: 30px; }
-.meta { color: #666; font-size: 0.95em; margin-bottom: 20px; }
-.meta span { display: inline-block; margin-right: 25px; }
+
+* { box-sizing: border-box; }
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+                 'Helvetica Neue', Arial, sans-serif;
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 24px 32px;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+}
+
+h1 {
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: var(--heading);
+    border-bottom: 3px solid var(--accent);
+    padding-bottom: 12px;
+    margin-bottom: 16px;
+}
+h2 {
+    font-size: 1.35rem;
+    font-weight: 600;
+    color: var(--heading);
+    border-bottom: 2px solid var(--border);
+    padding-bottom: 8px;
+    margin-top: 48px;
+    margin-bottom: 16px;
+}
+h3 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--subheading);
+    margin-top: 24px;
+    margin-bottom: 8px;
+}
+
+.meta {
+    color: var(--text-muted);
+    font-size: 0.9em;
+    margin-bottom: 24px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 24px;
+}
+.meta span { white-space: nowrap; }
+.meta b { color: var(--text); }
+
+/* --- Tables --- */
 table {
     border-collapse: collapse;
     width: 100%;
-    margin: 15px 0;
+    margin: 12px 0;
     font-size: 0.85em;
+    background: var(--card-bg);
+    border-radius: 6px;
+    overflow: hidden;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.06);
 }
 th, td {
-    border: 1px solid #ddd;
-    padding: 6px 10px;
+    border: 1px solid var(--border);
+    padding: 8px 12px;
     text-align: center;
 }
-th { background: #2c3e50; color: white; font-weight: 600; }
-tr:nth-child(even) { background: #f2f2f2; }
-tr:hover { background: #e8f4fd; }
-.fov-section {
-    background: white;
-    border: 1px solid #ddd;
-    border-radius: 8px;
-    padding: 20px;
-    margin: 25px 0;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+th {
+    background: var(--heading);
+    color: white;
+    font-weight: 600;
+    font-size: 0.9em;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
 }
+tr:nth-child(even) { background: #f8f9fa; }
+tr:hover { background: var(--accent-light); }
+
+/* --- FOV sections --- */
+.fov-section {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 24px;
+    margin: 20px 0;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.04);
+}
+.fov-section h3 {
+    margin-top: 0;
+    font-size: 1.15rem;
+    color: var(--heading);
+}
+.fov-meta {
+    color: var(--text-muted);
+    font-size: 0.85em;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #eee;
+}
+
+/* --- Plot grid --- */
 .fov-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 10px;
-    margin-top: 10px;
+    gap: 12px;
+    margin-top: 12px;
 }
-.fov-grid img { width: 100%; height: auto; border-radius: 4px; display: block; }
-.fov-grid .plot-cell { text-align: center; background: #fafafa; border-radius: 4px; padding: 4px; }
-.no-data { color: #999; font-style: italic; text-align: center; padding: 40px; }
+.fov-grid img {
+    width: 100%;
+    height: auto;
+    border-radius: 6px;
+    display: block;
+    border: 1px solid #eee;
+}
+.plot-cell {
+    text-align: center;
+    background: #fafbfc;
+    border-radius: 6px;
+    padding: 6px;
+}
+.plot-cell-wide {
+    grid-column: 1 / -1;
+    text-align: center;
+    background: #fafbfc;
+    border-radius: 6px;
+    padding: 6px;
+}
+.plot-label {
+    font-size: 0.75em;
+    color: var(--text-muted);
+    margin-top: 4px;
+}
+
+/* --- Summary section --- */
 .summary-grid {
     display: grid;
     grid-template-columns: 1fr;
-    gap: 15px;
+    gap: 16px;
 }
+.summary-grid img {
+    width: 100%;
+    border-radius: 6px;
+    border: 1px solid #eee;
+}
+
+/* --- Badges --- */
 .badge {
     display: inline-block;
-    padding: 2px 8px;
-    border-radius: 10px;
+    padding: 2px 10px;
+    border-radius: 12px;
     font-size: 0.8em;
     font-weight: 600;
 }
-.badge-ok { background: #d4edda; color: #155724; }
-.badge-warn { background: #fff3cd; color: #856404; }
+.badge-ok { background: var(--success-bg); color: var(--success); }
+.badge-warn { background: var(--warning-bg); color: var(--warning); }
+
+/* --- TOC navigation --- */
+.toc {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 20px;
+    margin: 20px 0;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.04);
+}
+.toc h3 {
+    margin-top: 0;
+    margin-bottom: 8px;
+    font-size: 0.95rem;
+}
+.toc-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 12px;
+}
+.toc-grid a {
+    color: var(--accent);
+    text-decoration: none;
+    font-size: 0.82em;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: var(--accent-light);
+    transition: background 0.15s;
+}
+.toc-grid a:hover {
+    background: #cfe2ff;
+    text-decoration: underline;
+}
+
+.no-data { color: var(--text-muted); font-style: italic; text-align: center; padding: 40px; }
 """
+
+# Per-FOV plots to embed (label, filename)
+_PER_FOV_PLOTS = [
+    ("Crop overlay (t=0)", "overlap_t0_overlay.png"),
+    ("Z focus", "z_focus.png"),
+    ("Bbox over time", "bbox_over_time.png"),
+    ("Laplacian QC", "laplacian_qc.png"),
+    ("Entropy QC", "entropy_qc.png"),
+    ("HF ratio QC", "hf_ratio_qc.png"),
+    ("FRC QC", "frc_qc.png"),
+    ("Max intensity QC", "max_intensity_qc.png"),
+    ("FOV registration QC", "fov_registration_qc.png"),
+    ("Bleach QC", "bleach_qc.png"),
+]
+
+# All-FOV summary plots to embed (title, filename)
+_ALL_FOV_PLOTS = [
+    ("Z Focus — All FOVs", "z_focus_all_fovs.png"),
+    ("Laplacian QC — All FOVs", "laplacian_all_fovs.png"),
+    ("Entropy QC — All FOVs", "entropy_all_fovs.png"),
+    ("HF Ratio QC — All FOVs", "hf_ratio_all_fovs.png"),
+    ("FRC QC — All FOVs", "frc_all_fovs.png"),
+    ("Max Intensity QC — All FOVs", "max_intensity_all_fovs.png"),
+    ("Registration PCC — All FOVs", "registration_pcc_all_fovs.png"),
+    ("Drop Correlation — All FOVs", "drop_correlation_all_fovs.png"),
+    ("Outlier Correlation — All FOVs", "outlier_correlation_all_fovs.png"),
+    ("FOV × Metric Heatmap", "outlier_heatmap_fov_metric.png"),
+    ("Jaccard Co-occurrence Matrix", "outlier_cooccurrence_matrix.png"),
+    ("Temporal Outlier Density", "outlier_temporal_density.png"),
+    ("Spearman Correlation Matrix", "metric_correlation_matrix.png"),
+]
 
 
 def _drop_table_html(run_dir: Path, global_summary_df: pd.DataFrame) -> str:
@@ -762,10 +461,13 @@ def generate_dataset_report(
 ) -> Path:
     """Generate a self-contained HTML QC report.
 
+    Embeds pre-generated per-FOV PNGs and all-FOV summary PNGs
+    for consistent styling. Only the crop overlay is rendered live.
+
     Parameters
     ----------
     run_dir : Path
-        Run directory containing plots/, global_summary.csv, etc.
+        Run directory containing per_fov_analysis/, global_summary.csv, etc.
 
     Returns
     -------
@@ -780,7 +482,7 @@ def generate_dataset_report(
         raise FileNotFoundError(f"global_summary.csv not found in {run_dir}")
     global_summary_df = pd.read_csv(global_csv)
 
-    zarr_candidates = list(run_dir.glob("*.zarr"))
+    zarr_candidates = [z for z in run_dir.glob("*.zarr") if z.name != "dust_mask.zarr"]
     output_zarr = zarr_candidates[0] if zarr_candidates else None
 
     fov_dirs = sorted([d for d in plots_dir.iterdir() if d.is_dir()]) if plots_dir.exists() else []
@@ -826,29 +528,17 @@ def generate_dataset_report(
     # --- Cross-FOV summary ---
     html_parts.append("<h2>Cross-FOV Summary</h2>")
 
-    z_img = _plot_cross_fov_z_focus(run_dir)
-    if z_img:
-        html_parts.append(f'<div class="summary-grid">{_img_tag(z_img, "100%")}</div>')
+    # Embed pre-generated all-FOV summary PNGs
+    for _title, _fname in _ALL_FOV_PLOTS:
+        _b64 = _png_to_base64(run_dir / _fname)
+        if _b64:
+            html_parts.append(f"<h3>{_title}</h3>")
+            html_parts.append(f'<div class="summary-grid">{_img_tag(_b64, "100%")}</div>')
 
-    dust_img = _plot_dust_qc(run_dir)
-    if dust_img:
-        html_parts.append("<h3>Dust QC</h3>")
-        html_parts.append(f'<div class="summary-grid">{_img_tag(dust_img, "100%")}</div>')
-
-    bleach_img = _plot_bleach_qc(run_dir)
-    if bleach_img:
-        html_parts.append("<h3>Bleach QC</h3>")
-        html_parts.append(f'<div class="summary-grid">{_img_tag(bleach_img, "100%")}</div>')
-
-    # All-FOV summary plots (generated during stage 1)
+    # Dust and bleach summary PNGs (generated during global QC)
     for _title, _fname in [
-        ("Laplacian QC — All FOVs", "laplacian_all_fovs.png"),
-        ("Entropy QC — All FOVs", "entropy_all_fovs.png"),
-        ("HF Ratio QC — All FOVs", "hf_ratio_all_fovs.png"),
-        ("FRC QC — All FOVs", "frc_all_fovs.png"),
-        ("Registration PCC — All FOVs", "registration_pcc_all_fovs.png"),
-        ("Blur Detection (HF + Entropy) — All FOVs", "blur_detection_all_fovs.png"),
-        ("Drop Correlation — All FOVs", "drop_correlation_all_fovs.png"),
+        ("Dust QC", "dust_qc.png"),
+        ("Bleach QC (all FOVs)", "bleach_qc.png"),
     ]:
         _b64 = _png_to_base64(run_dir / _fname)
         if _b64:
@@ -861,9 +551,15 @@ def generate_dataset_report(
     html_parts.append("<h3>Per-FOV Dimensions</h3>")
     html_parts.append(_dimensions_table_html(global_summary_df))
 
-    # --- Per-FOV sections ---
+    # --- Table of Contents ---
     html_parts.append("<h2>Per-FOV Analysis</h2>")
+    html_parts.append('<div class="toc"><h3>Jump to FOV</h3><div class="toc-grid">')
+    for fov_dir in fov_dirs:
+        fov_name = fov_dir.name
+        html_parts.append(f'<a href="#fov-{fov_name}">{fov_name}</a>')
+    html_parts.append("</div></div>")
 
+    # --- Per-FOV sections ---
     for fov_dir in fov_dirs:
         fov_name = fov_dir.name
         fov_key = "/".join(fov_name.split("_"))
@@ -872,27 +568,28 @@ def generate_dataset_report(
         summary_info = _fov_summary_html(fov_dir)
 
         html_parts.append(f"""
-<div class="fov-section">
+<div class="fov-section" id="fov-{fov_name}">
 <h3>{fov_name}</h3>
-<div class="meta">{summary_info}</div>
+<div class="fov-meta">{summary_info}</div>
 <div class="fov-grid">
 """)
 
-        # All plots as grid cells (CSS auto-flows 2 per row)
-        for plot_fn, plot_args in [
-            (_plot_crop_overlay, (output_zarr, fov_key, overlay_channels)),
-            (_plot_z_focus, (fov_dir,)),
-            (_plot_bbox, (fov_dir,)),
-            (_plot_laplacian_qc, (fov_dir,)),
-            (_plot_entropy_qc, (fov_dir,)),
-            (_plot_hf_ratio_qc, (fov_dir,)),
-            (_plot_frc_qc, (fov_dir,)),
-            (_plot_fov_registration_qc, (fov_dir,)),
-            (_plot_registration_qc, (fov_dir,)),
-        ]:
-            img = plot_fn(*plot_args)
-            if img:
-                html_parts.append(f'<div class="plot-cell">{_img_tag(img)}</div>')
+        # Crop overlay (rendered live from zarr)
+        crop_img = _plot_crop_overlay(output_zarr, fov_key, overlay_channels)
+        if crop_img:
+            html_parts.append(
+                f'<div class="plot-cell">{_img_tag(crop_img)}'
+                f'<div class="plot-label">Crop overlay (t=0)</div></div>'
+            )
+
+        # Embed pre-generated per-FOV PNGs
+        for label, fname in _PER_FOV_PLOTS:
+            b64 = _png_to_base64(fov_dir / fname)
+            if b64:
+                html_parts.append(
+                    f'<div class="plot-cell">{_img_tag(b64)}'
+                    f'<div class="plot-label">{label}</div></div>'
+                )
 
         html_parts.append("</div></div>")  # close fov-grid, fov-section
 
@@ -968,7 +665,7 @@ def generate_annotated_report(
     Parameters
     ----------
     run_dir : Path
-        Run directory containing plots/, global_summary.csv, annotations.csv.
+        Run directory containing per_fov_analysis/, global_summary.csv, annotations.csv.
 
     Returns
     -------
@@ -1019,7 +716,7 @@ def generate_annotated_report(
             "comments": full_comment,
         }
 
-    zarr_candidates = list(run_dir.glob("*.zarr"))
+    zarr_candidates = [z for z in run_dir.glob("*.zarr") if z.name != "dust_mask.zarr"]
     output_zarr = zarr_candidates[0] if zarr_candidates else None
 
     fov_dirs = sorted([d for d in plots_dir.iterdir() if d.is_dir()]) if plots_dir.exists() else []
@@ -1061,7 +758,7 @@ def generate_annotated_report(
         )
     html_parts.append("</div>")
 
-    # Dataset-level comment
+    # Dataset comment
     if dataset_comment:
         html_parts.append(
             f'<div class="dataset-comment"><b>Dataset comment:</b> {dataset_comment}</div>'
@@ -1069,41 +766,31 @@ def generate_annotated_report(
 
     # --- Annotations summary table ---
     html_parts.append("<h2>Annotations Summary</h2>")
-    ann_header = "<tr><th>FOV</th><th>Comments</th></tr>"
     ann_rows = ""
     for fov_name in sorted(ann_map.keys()):
-        info = ann_map[fov_name]
+        a = ann_map[fov_name]
+        status_html, _ = _STATUS_LABELS.get(a["status"], _STATUS_LABELS[0])
+        comment = a["comments"] or "-"
         ann_rows += (
-            f'<tr><td>{fov_name}</td><td>{info["comments"]}</td></tr>\n'
+            f"<tr><td>{fov_name}</td><td>{status_html}</td>"
+            f"<td style='text-align:left'>{comment}</td></tr>\n"
         )
-    html_parts.append(f"<table>{ann_header}{ann_rows}</table>")
+    html_parts.append(
+        f"<table><tr><th>FOV</th><th>Status</th><th>Comments</th></tr>{ann_rows}</table>"
+    )
 
     # --- Cross-FOV summary ---
     html_parts.append("<h2>Cross-FOV Summary</h2>")
 
-    z_img = _plot_cross_fov_z_focus(run_dir)
-    if z_img:
-        html_parts.append(f'<div class="summary-grid">{_img_tag(z_img, "100%")}</div>')
+    for _title, _fname in _ALL_FOV_PLOTS:
+        _b64 = _png_to_base64(run_dir / _fname)
+        if _b64:
+            html_parts.append(f"<h3>{_title}</h3>")
+            html_parts.append(f'<div class="summary-grid">{_img_tag(_b64, "100%")}</div>')
 
-    dust_img = _plot_dust_qc(run_dir)
-    if dust_img:
-        html_parts.append("<h3>Dust QC</h3>")
-        html_parts.append(f'<div class="summary-grid">{_img_tag(dust_img, "100%")}</div>')
-
-    bleach_img = _plot_bleach_qc(run_dir)
-    if bleach_img:
-        html_parts.append("<h3>Bleach QC</h3>")
-        html_parts.append(f'<div class="summary-grid">{_img_tag(bleach_img, "100%")}</div>')
-
-    # All-FOV summary plots (generated during stage 1)
     for _title, _fname in [
-        ("Laplacian QC — All FOVs", "laplacian_all_fovs.png"),
-        ("Entropy QC — All FOVs", "entropy_all_fovs.png"),
-        ("HF Ratio QC — All FOVs", "hf_ratio_all_fovs.png"),
-        ("FRC QC — All FOVs", "frc_all_fovs.png"),
-        ("Registration PCC — All FOVs", "registration_pcc_all_fovs.png"),
-        ("Blur Detection (HF + Entropy) — All FOVs", "blur_detection_all_fovs.png"),
-        ("Drop Correlation — All FOVs", "drop_correlation_all_fovs.png"),
+        ("Dust QC", "dust_qc.png"),
+        ("Bleach QC (all FOVs)", "bleach_qc.png"),
     ]:
         _b64 = _png_to_base64(run_dir / _fname)
         if _b64:
@@ -1118,6 +805,11 @@ def generate_annotated_report(
 
     # --- Per-FOV sections ---
     html_parts.append("<h2>Per-FOV Analysis</h2>")
+    html_parts.append('<div class="toc"><h3>Jump to FOV</h3><div class="toc-grid">')
+    for fov_dir in fov_dirs:
+        fov_name = fov_dir.name
+        html_parts.append(f'<a href="#ann-fov-{fov_name}">{fov_name}</a>')
+    html_parts.append("</div></div>")
 
     for fov_dir in fov_dirs:
         fov_name = fov_dir.name
@@ -1125,39 +817,37 @@ def generate_annotated_report(
         print(f"  Rendering FOV: {fov_name}")
 
         summary_info = _fov_summary_html(fov_dir)
-
-        # Annotation info for this FOV
-        ann_info = ann_map.get(fov_name, {"status": 0, "well_map": "", "comments": ""})
+        ann = ann_map.get(fov_name, {"status": 0, "comments": ""})
+        status_html, _ = _STATUS_LABELS.get(ann["status"], _STATUS_LABELS[0])
 
         html_parts.append(f"""
-<div class="fov-section">
-<h3>{fov_name}</h3>
-<div class="meta">{summary_info}</div>
+<div class="fov-section" id="ann-fov-{fov_name}">
+<h3>{fov_name} {status_html}</h3>
+<div class="fov-meta">{summary_info}</div>
 """)
 
-        # Show annotation comment if present
-        if ann_info["comments"]:
+        if ann.get("comments"):
             html_parts.append(
-                f'<div class="annotation-box"><b>QC:</b> {ann_info["comments"]}</div>'
+                f'<div class="annotation-box"><b>Notes:</b> {ann["comments"]}</div>'
             )
 
         html_parts.append('<div class="fov-grid">')
 
-        # All plots as grid cells (CSS auto-flows 2 per row)
-        for plot_fn, plot_args in [
-            (_plot_crop_overlay, (output_zarr, fov_key, overlay_channels)),
-            (_plot_z_focus, (fov_dir,)),
-            (_plot_bbox, (fov_dir,)),
-            (_plot_laplacian_qc, (fov_dir,)),
-            (_plot_entropy_qc, (fov_dir,)),
-            (_plot_hf_ratio_qc, (fov_dir,)),
-            (_plot_frc_qc, (fov_dir,)),
-            (_plot_fov_registration_qc, (fov_dir,)),
-            (_plot_registration_qc, (fov_dir,)),
-        ]:
-            img = plot_fn(*plot_args)
-            if img:
-                html_parts.append(f'<div class="plot-cell">{_img_tag(img)}</div>')
+        # Crop overlay (rendered live)
+        crop_img = _plot_crop_overlay(output_zarr, fov_key, overlay_channels)
+        if crop_img:
+            html_parts.append(
+                f'<div class="plot-cell">{_img_tag(crop_img)}'
+                f'<div class="plot-label">Crop overlay (t=0)</div></div>'
+            )
+
+        for label, fname in _PER_FOV_PLOTS:
+            b64 = _png_to_base64(fov_dir / fname)
+            if b64:
+                html_parts.append(
+                    f'<div class="plot-cell">{_img_tag(b64)}'
+                    f'<div class="plot-label">{label}</div></div>'
+                )
 
         html_parts.append("</div></div>")  # close fov-grid, fov-section
 
@@ -1168,14 +858,19 @@ def generate_annotated_report(
     return html_path
 
 
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python dynacell_qc_report.py /path/to/run_dir [--annotated]")
+        print("Usage: python dynacell_qc_report.py <run_dir> [--annotated]")
         sys.exit(1)
+
     run_dir = Path(sys.argv[1])
     annotated = "--annotated" in sys.argv
+
     if annotated:
-        html_path = generate_annotated_report(run_dir)
+        generate_annotated_report(run_dir)
     else:
-        html_path = generate_dataset_report(run_dir)
-    print(f"Report saved to {html_path}")
+        generate_dataset_report(run_dir)
