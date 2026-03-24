@@ -11,7 +11,6 @@ from iohub import open_ome_zarr
 
 from dynacell_geometry import make_circular_mask
 from dynacell_plotting import (
-    STYLE as _STYLE,
     plot_registration_qc,
     plot_laplacian_qc,
     plot_entropy_qc,
@@ -225,32 +224,18 @@ def compute_fov_registration_qc(
     qc_df.to_csv(qc_csv, index=False)
     print(f"  Saved FOV registration QC to {qc_csv}")
 
-    # Plot (valid frames only, keep time index)
-    valid_idx = np.where(valid_mask)[0]
-    fig, ax = plt.subplots(figsize=_STYLE["fig_single"])
-    ax.plot(valid_idx, pearson_corrs[valid_idx], ".-",
-            markersize=_STYLE["marker_size"], linewidth=_STYLE["lw_data"])
-    ax.set_xlabel("Timepoint", fontsize=_STYLE["fs_label"])
-    ax.set_ylabel("Pearson correlation (LF vs LS)", fontsize=_STYLE["fs_label"])
-    title = f"Per-timepoint LF–LS registration (Phase ch 0)"
-    if blank_set:
-        title += f" (excl. {len(blank_set)} blank)"
-    ax.set_title(title, fontsize=_STYLE["fs_title"])
-    ax.axhline(mu, color=_STYLE["c_mean"], linestyle="--", linewidth=_STYLE["lw_ref"],
-               label=f"mean={mu:.4f}")
-    if n_outliers > 0:
-        outlier_idx = np.where(is_outlier)[0]
-        ax.scatter(outlier_idx, pearson_corrs[outlier_idx], color=_STYLE["c_outlier"],
-                   s=_STYLE["scatter_size"], zorder=5, label=f"outliers ({n_outliers})")
-    ax.legend(fontsize=_STYLE["fs_legend"])
-    ax.set_xlim(0, T - 1)
-    fov_reg_lim = _STYLE["ylim"].get("fov_reg_pearson")
-    if fov_reg_lim is not None:
-        ax.set_ylim(fov_reg_lim)
-    ax.tick_params(labelsize=_STYLE["fs_tick"])
-    fig.tight_layout()
+    # Plot
+    from dynacell_plotting import plot_fov_registration_qc
+    fig = plot_fov_registration_qc(
+        pearson_corrs=pearson_corrs,
+        mu=mu,
+        n_outliers=n_outliers,
+        outlier_idx=np.where(is_outlier)[0],
+        blank_count=len(blank_set),
+        local_z=local_z,
+    )
     plot_path = output_plots_dir / "fov_registration_qc.png"
-    fig.savefig(plot_path, dpi=_STYLE["dpi"], bbox_inches="tight")
+    fig.savefig(plot_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
     return {"pearson_corrs": pearson_corrs, "outliers": np.where(is_outlier)[0]}
@@ -259,25 +244,20 @@ def compute_fov_registration_qc(
 def compute_laplacian_qc(
     im_ls_path: Path,
     output_plots_dir: Path,
-    z_focus: list[int],
     channel_name: str = "raw GFP EX488 EM525-45",
-    z_final: int = 64,
     roi_half: int = 300,
     n_std: float = 2.0,
     blank_frames: list[int] | None = None,
 ) -> dict:
-    """Compute per-timepoint 3D Laplacian variance to detect blurry frames.
+    """Compute per-timepoint 2D Laplacian variance on max-Z projection to detect blur.
 
-    For each timepoint, uses the LF z_focus to extract a sub-volume
-    (1/3 below, 2/3 above z_focus -- same asymmetric window as crop_fov)
-    and computes the variance of the 3D Laplacian. Blurry frames have
+    For each timepoint, max-projects the full Z stack, crops to an XY ROI,
+    and computes the variance of the 2D Laplacian. Blurry frames have
     lower variance because high-frequency content is suppressed.
     Blank frames are set to NaN and excluded from statistics.
     """
     from scipy.ndimage import laplace
 
-    z_below = z_final // 3
-    z_above = z_final - z_below - 1
     blank_set = set(blank_frames) if blank_frames else set()
 
     with open_ome_zarr(im_ls_path) as ds:
@@ -287,7 +267,7 @@ def compute_laplacian_qc(
 
         if channel_name not in channels:
             print(f"WARNING: channel '{channel_name}' not found in {channels}")
-            return {"lap3d_vars": np.full(T, np.nan), "outliers": np.array([], dtype=int)}
+            return {"lap_vars": np.full(T, np.nan), "outliers": np.array([], dtype=int)}
 
         c_idx = channels.index(channel_name)
         y_c, x_c = Y // 2, X // 2
@@ -298,57 +278,62 @@ def compute_laplacian_qc(
         x_end = min(X, x_c + roi_half)
 
         print(f"Laplacian QC: channel='{channel_name}' (c={c_idx}), "
-              f"z_final={z_final} (1/3 below={z_below}, 2/3 above={z_above}), "
+              f"max-Z projection, "
               f"Y=[{y_start}:{y_end}], X=[{x_start}:{x_end}]")
 
-        lap3d_vars = np.full(T, np.nan, dtype=np.float64)
+        lap_vars = np.full(T, np.nan, dtype=np.float64)
         max_ints = np.full(T, np.nan, dtype=np.float64)
 
-        for t in tqdm(range(T), desc="Laplacian QC"):
+        for t in tqdm(range(T), desc="Laplacian QC (max-Z proj)"):
             if t in blank_set:
                 continue
-            z_f = int(z_focus[t])
-            z_start_vol = max(0, z_f - z_below)
-            z_end_vol = min(Z, z_f + z_above + 1)
 
             vol = np.asarray(
-                arr[t, c_idx, z_start_vol:z_end_vol, y_start:y_end, x_start:x_end]
+                arr[t, c_idx, :, y_start:y_end, x_start:x_end]
             ).astype(np.float64)
-            max_ints[t] = float(np.max(vol))
+            mip = np.max(vol, axis=0)  # max Z projection → (Y, X)
+            max_ints[t] = float(np.max(mip))
             if max_ints[t] < 1e-6:
                 continue
 
-            lap3d = laplace(vol)
-            lap3d_vars[t] = float(np.var(lap3d))
+            lap2d = laplace(mip)
+            lap_vars[t] = float(np.var(lap2d))
 
     # Stats on non-blank frames only
-    valid_mask = ~np.isnan(lap3d_vars)
+    valid_mask = ~np.isnan(lap_vars)
     if valid_mask.sum() == 0:
         print("WARNING: All frames blank, no Laplacian QC computed")
-        return {"lap3d_vars": lap3d_vars, "outliers": np.array([], dtype=int)}
+        return {"lap_vars": lap_vars, "outliers": np.array([], dtype=int)}
 
-    valid_vals = lap3d_vars[valid_mask]
+    valid_vals = lap_vars[valid_mask]
     mu = float(np.mean(valid_vals))
     sigma = float(np.std(valid_vals))
     lower = mu - n_std * sigma
 
-    outliers = np.where((lap3d_vars < lower) & valid_mask)[0]
+    # Local z-score
+    local_z = np.full(T, np.nan, dtype=np.float64)
+    if sigma > 1e-12:
+        local_z[valid_mask] = (lap_vars[valid_mask] - mu) / sigma
+
+    outliers = np.where((lap_vars < lower) & valid_mask)[0]
+    is_outlier = np.zeros(T, dtype=int)
+    is_outlier[outliers] = 1
 
     print(f"\nLaplacian QC results ({channel_name}):")
-    print(f"  3D Laplacian variance: mean={mu:.2f}, std={sigma:.2f}")
+    print(f"  Laplacian variance (max-Z proj): mean={mu:.2f}, std={sigma:.2f}")
     print(f"  Threshold (mean - {n_std}*std): {lower:.2f}")
     print(f"  Outliers (blurry frames): {len(outliers)}")
     if len(outliers) > 0:
         for t in outliers:
-            zscore = (lap3d_vars[t] - mu) / sigma if sigma > 0 else 0
-            print(f"    t={t}: lap3d_var={lap3d_vars[t]:.2f}, "
-                  f"z_focus={z_focus[t]}, z-score={zscore:.2f}")
+            print(f"    t={t}: lap_var={lap_vars[t]:.2f}, z-score={local_z[t]:.2f}")
 
     # Save CSV
     qc_df = pd.DataFrame({
         "t": np.arange(T),
-        "lap3d_var": lap3d_vars,
+        "lap_var": lap_vars,
         "max_intensity": max_ints,
+        "local_z": local_z,
+        "is_outlier": is_outlier,
     })
     qc_csv = output_plots_dir / "laplacian_qc.csv"
     qc_df.to_csv(qc_csv, index=False)
@@ -356,9 +341,10 @@ def compute_laplacian_qc(
 
     # Plot
     fig = plot_laplacian_qc(
-        lap3d_vars=lap3d_vars, max_ints=max_ints,
+        lap_vars=lap_vars,
         mu=mu, sigma=sigma, lower=lower, n_std=n_std,
         outliers=outliers, channel_name=channel_name,
+        local_z=local_z,
     )
     plot_path = output_plots_dir / "laplacian_qc.png"
     fig.savefig(plot_path, dpi=150, bbox_inches="tight")
@@ -366,7 +352,7 @@ def compute_laplacian_qc(
     print(f"  Saved plot to {plot_path}")
 
     return {
-        "lap3d_vars": lap3d_vars,
+        "lap_vars": lap_vars,
         "outliers": outliers,
         "mean": mu,
         "std": sigma,
@@ -412,17 +398,18 @@ def compute_entropy_qc(
         c_idx = channels.index(channel_name)
         print(
             f"Entropy QC: channel='{channel_name}' (c={c_idx}), "
-            f"full volume Z={Z}, bins={n_bins}"
+            f"max-Z-projection, Z={Z}, bins={n_bins}"
         )
 
         entropies = np.full(T, np.nan, dtype=np.float64)
-        for t in tqdm(range(T), desc="Entropy QC"):
+        for t in tqdm(range(T), desc="Entropy QC (max-Z proj)"):
             if t in blank_set:
                 continue
             vol = np.asarray(arr[t, c_idx]).astype(np.float32)
-            if np.ptp(vol) < 1.0:
+            mip = np.max(vol, axis=0)  # max Z projection → (Y, X)
+            if np.ptp(mip) < 1.0:
                 continue
-            entropies[t] = _entropy(vol, n_bins)
+            entropies[t] = _entropy(mip, n_bins)
 
     # --- Exclude blank frames ---
     blank = np.isnan(entropies)
@@ -542,30 +529,20 @@ def _hf_energy_ratio(img_2d: np.ndarray, cutoff_fraction: float = 0.1) -> float:
 def compute_hf_ratio_qc(
     im_ls_path: Path,
     output_plots_dir: Path,
-    z_focus: list[int],
     channel_name: str = "raw GFP EX488 EM525-45",
     cutoff_fraction: float = 0.1,
-    z_range: int = 5,
     local_window: int = 3,
     hf_z_threshold: float = 3.0,
-    ent_z_threshold: float = 2.0,
     blank_frames: list[int] | None = None,
 ) -> dict:
-    """Detect blurry LS frames using combined HF ratio + entropy.
+    """Measure per-timepoint HF energy ratio as a blur/quality indicator.
 
-    For each timepoint, computes the median HF energy ratio across
-    z_focus ± z_range Z planes (more robust than single Z — blur affects
-    all Z planes while biological dynamics vary per Z).
+    For each timepoint, computes the HF energy ratio on the max-Z
+    projection of the full volume. Lower ratio = less high-frequency
+    content = blurrier.
 
-    Outlier detection combines HF ratio with entropy: real optical blur
-    causes HF ratio to DROP and entropy to RISE simultaneously. Biological
-    dynamics (cell division, infection) affect HF ratio but not entropy.
-
-    A frame is flagged as blurry only if BOTH:
-      - HF local z-score < -hf_z_threshold  (HF ratio dropped)
-      - Entropy local z-score > +ent_z_threshold  (entropy rose)
-
-    Entropy data is read from entropy_qc.csv (must be computed first).
+    Outlier detection uses local z-score of the HF ratio. Frames with
+    local_z < -hf_z_threshold are flagged as outliers.
 
     Parameters
     ----------
@@ -573,22 +550,15 @@ def compute_hf_ratio_qc(
         Path to the LS zarr FOV position.
     output_plots_dir : Path
         Directory for saving plots and CSVs.
-    z_focus : list of int
-        Per-timepoint z_focus indices.
     channel_name : str
         Channel to measure blur on.
     cutoff_fraction : float
         Fraction of max frequency for the high/low boundary (default 0.1).
-    z_range : int
-        Number of Z planes above and below z_focus to include (default 5).
     local_window : int
         Half-window for local z-score comparison.
     hf_z_threshold : float
         HF ratio local z-score threshold. Frames with local_z < -threshold
-        are candidates for blur (default 3.0).
-    ent_z_threshold : float
-        Entropy local z-score threshold. Candidates are confirmed as blurry
-        only if entropy local_z > +threshold (default 2.0).
+        are flagged as outliers (default 3.0).
     blank_frames : list of int or None
         Timepoints to skip (blank frames).
 
@@ -597,16 +567,6 @@ def compute_hf_ratio_qc(
     dict with 'hf_ratios', 'outliers', 'stats'.
     """
     from dynacell_plotting import plot_hf_ratio_qc
-
-    # --- Read entropy local z-scores (computed before HF ratio QC) ---
-    ent_csv = output_plots_dir / "entropy_qc.csv"
-    ent_local_z = None
-    if ent_csv.exists():
-        ent_df = pd.read_csv(ent_csv)
-        ent_local_z = ent_df["local_z"].values.astype(float)
-        print(f"HF ratio QC: loaded entropy local_z from {ent_csv}")
-    else:
-        print(f"WARNING: {ent_csv} not found — falling back to HF-only detection")
 
     with open_ome_zarr(im_ls_path) as ds:
         arr = ds.data.dask_array()
@@ -624,25 +584,19 @@ def compute_hf_ratio_qc(
         c_idx = channels.index(channel_name)
         print(
             f"HF ratio QC: channel='{channel_name}' (c={c_idx}), "
-            f"cutoff={cutoff_fraction}, z_range=±{z_range}"
+            f"cutoff={cutoff_fraction}, max-Z projection"
         )
 
         blank_set = set(blank_frames) if blank_frames else set()
         hf_ratios = np.full(T, np.nan, dtype=np.float64)
-        for t in tqdm(range(T), desc="HF ratio QC (multi-Z)"):
+        for t in tqdm(range(T), desc="HF ratio QC (max-Z proj)"):
             if t in blank_set:
                 continue
-            z_f = int(z_focus[t])
-            z_lo = max(0, z_f - z_range)
-            z_hi = min(Z, z_f + z_range + 1)
-            hf_zs = []
-            for z in range(z_lo, z_hi):
-                img = np.asarray(arr[t, c_idx, z, :, :]).astype(np.float64)
-                if np.ptp(img) < 1e-6:
-                    continue
-                hf_zs.append(_hf_energy_ratio(img, cutoff_fraction))
-            if hf_zs:
-                hf_ratios[t] = np.median(hf_zs)
+            vol = np.asarray(arr[t, c_idx]).astype(np.float64)
+            mip = np.max(vol, axis=0)  # max Z projection → (Y, X)
+            if np.ptp(mip) < 1e-6:
+                continue
+            hf_ratios[t] = _hf_energy_ratio(mip, cutoff_fraction)
 
     # --- Exclude blank frames ---
     blank = np.isnan(hf_ratios)
@@ -672,54 +626,31 @@ def compute_hf_ratio_qc(
             loc_std = np.std(neighbors)
             hf_local_z[t] = (hf_ratios[t] - loc_mean) / loc_std if loc_std > 0 else 0
 
-    # --- Combined outlier detection ---
-    hf_flag = (hf_local_z < -hf_z_threshold) & ~blank
-
-    if ent_local_z is not None and len(ent_local_z) == T:
-        # Combined rule: HF drops AND entropy rises → real blur
-        ent_flag = ent_local_z > +ent_z_threshold
-        outlier_mask = hf_flag & ent_flag
-        used_combined = True
-    else:
-        # Fallback: HF-only (less reliable but better than nothing)
-        outlier_mask = hf_flag
-        used_combined = False
-
+    # --- Outlier detection: HF local z-score only ---
+    outlier_mask = (hf_local_z < -hf_z_threshold) & ~blank
     outliers = np.where(outlier_mask)[0]
 
     stats = {
         "median": med,
         "hf_z_threshold": hf_z_threshold,
-        "ent_z_threshold": ent_z_threshold,
         "cutoff_fraction": cutoff_fraction,
-        "z_range": z_range,
-        "used_combined": used_combined,
     }
 
-    method = "combined HF+entropy" if used_combined else "HF-only"
-    print(f"\nHF ratio QC results ({channel_name}, {method}):")
-    print(f"  Median={med:.6f}, multi-Z ±{z_range}")
-    print(f"  HF threshold: local_z < -{hf_z_threshold}")
-    if used_combined:
-        print(f"  Entropy threshold: local_z > +{ent_z_threshold}")
-        hf_only_count = int(hf_flag.sum())
-        print(f"  HF-only candidates: {hf_only_count}")
-    print(f"  Outliers (blurry): {len(outliers)}")
+    print(f"\nHF ratio QC results ({channel_name}):")
+    print(f"  Median={med:.6f}, max-Z projection")
+    print(f"  Threshold: local_z < -{hf_z_threshold}")
+    print(f"  Outliers (low HF): {len(outliers)}")
     for t in outliers:
-        ent_str = f", ent_lz={ent_local_z[t]:+.2f}" if ent_local_z is not None else ""
         print(f"    t={t}: hf_ratio={hf_ratios[t]:.6f}, "
-              f"hf_lz={hf_local_z[t]:+.2f}{ent_str}")
+              f"hf_lz={hf_local_z[t]:+.2f}")
 
     # Save CSV
-    csv_data = {
+    qc_df = pd.DataFrame({
         "t": np.arange(T),
         "hf_ratio": hf_ratios,
         "hf_local_z": hf_local_z,
         "is_outlier": outlier_mask.astype(int),
-    }
-    if ent_local_z is not None and len(ent_local_z) == T:
-        csv_data["ent_local_z"] = ent_local_z
-    qc_df = pd.DataFrame(csv_data)
+    })
     qc_csv = output_plots_dir / "hf_ratio_qc.csv"
     qc_df.to_csv(qc_csv, index=False)
     print(f"  Saved CSV to {qc_csv}")
@@ -728,9 +659,8 @@ def compute_hf_ratio_qc(
     fig = plot_hf_ratio_qc(
         hf_ratios=hf_ratios, hf_local_z=hf_local_z, blank_mask=blank,
         outliers=outliers, med=med,
-        hf_z_threshold=hf_z_threshold, ent_z_threshold=ent_z_threshold,
-        channel_name=channel_name, z_range=z_range,
-        ent_local_z=ent_local_z,
+        hf_z_threshold=hf_z_threshold,
+        channel_name=channel_name,
     )
     plot_path = output_plots_dir / "hf_ratio_qc.png"
     fig.savefig(plot_path, dpi=150, bbox_inches="tight")
@@ -743,12 +673,11 @@ def compute_hf_ratio_qc(
 def compute_bleach_fov(
     im_ls_path: Path,
     output_plots_dir: Path,
-    z_focus: list[int],
     bbox: tuple[int, int, int, int],
     channel_name: str = "raw GFP EX488 EM525-45",
     blank_frames: list[int] | None = None,
 ) -> dict:
-    """Measure per-timepoint mean GFP intensity within the crop bbox at z_focus.
+    """Measure per-timepoint mean GFP intensity within the crop bbox on max-Z projection.
 
     Saves bleach_qc.csv and bleach_qc.png per FOV. The dataset-level
     bleach summary reads these CSVs instead of re-opening the zarrs.
@@ -770,11 +699,11 @@ def compute_bleach_fov(
         for t in range(T):
             if t in blank_set:
                 continue
-            z_f = min(int(z_focus[t]), Z - 1)
-            slc = np.asarray(
-                arr[t, c_idx, z_f, y_min:y_max + 1, x_min:x_max + 1]
+            vol = np.asarray(
+                arr[t, c_idx, :, y_min:y_max + 1, x_min:x_max + 1]
             ).astype(np.float64)
-            means[t] = float(np.mean(slc))
+            mip = np.max(vol, axis=0)  # max Z projection → (Y, X)
+            means[t] = float(np.mean(mip))
 
     # Normalize to first valid timepoint
     first_valid = np.where(~np.isnan(means))[0]
@@ -782,65 +711,157 @@ def compute_bleach_fov(
     if len(first_valid) > 0 and means[first_valid[0]] > 0:
         normalized = means / means[first_valid[0]]
 
+    # Outlier detection: flag frames with sudden jumps/drops in normalized intensity
+    # Use rolling-median residuals — large deviations from local trend are outliers
+    local_z = np.full(T, np.nan, dtype=np.float64)
+    is_outlier = np.zeros(T, dtype=int)
+    valid_mask = ~np.isnan(normalized)
+    if valid_mask.sum() > 5:
+        from scipy.ndimage import median_filter
+        smoothed = np.full(T, np.nan)
+        smoothed[valid_mask] = median_filter(normalized[valid_mask], size=5, mode="nearest")
+        residuals = np.full(T, np.nan)
+        residuals[valid_mask] = normalized[valid_mask] - smoothed[valid_mask]
+        valid_res = residuals[valid_mask]
+        mad = float(np.median(np.abs(valid_res - np.median(valid_res))))
+        scale = 1.4826 * mad if mad > 1e-12 else float(np.std(valid_res))
+        if scale > 1e-12:
+            local_z[valid_mask] = (residuals[valid_mask] - np.median(valid_res)) / scale
+            is_outlier[valid_mask] = (np.abs(local_z[valid_mask]) > 3.0).astype(int)
+
     # Save CSV
     fov_df = pd.DataFrame({
         "t": np.arange(T),
         "mean_intensity": means,
         "normalized": normalized,
+        "local_z": local_z,
+        "is_outlier": is_outlier,
     })
     fov_df.to_csv(output_plots_dir / "bleach_qc.csv", index=False)
 
     # Per-FOV plot
-    valid_idx = np.where(~np.isnan(normalized))[0]
-    fig, ax = plt.subplots(figsize=_STYLE["fig_single"])
-    ax.plot(valid_idx, normalized[valid_idx], ".-",
-            markersize=_STYLE["marker_size"], linewidth=_STYLE["lw_data"])
-    ax.axhline(1.0, color="gray", linestyle=":", linewidth=0.5)
-    pct_rem = float(normalized[valid_idx[-1]] * 100) if len(valid_idx) > 0 else 0
-    ax.set_xlabel("Timepoint", fontsize=_STYLE["fs_label"])
-    ax.set_ylabel("Normalized intensity", fontsize=_STYLE["fs_label"])
+    from dynacell_plotting import plot_bleach_fov_qc
     fov_name = output_plots_dir.name
-    ax.set_title(f"Bleach QC | {fov_name} | {pct_rem:.1f}% remaining", fontsize=_STYLE["fs_title"])
-    bleach_lim = _STYLE["ylim"].get("bleach_norm")
-    if bleach_lim is not None:
-        ax.set_ylim(bleach_lim)
-    else:
-        ax.set_ylim(bottom=0)
-    ax.tick_params(labelsize=_STYLE["fs_tick"])
-    fig.tight_layout()
-    fig.savefig(output_plots_dir / "bleach_qc.png", dpi=_STYLE["dpi"], bbox_inches="tight")
+    fig = plot_bleach_fov_qc(normalized=normalized, fov_name=fov_name, local_z=local_z)
+    fig.savefig(output_plots_dir / "bleach_qc.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
+    valid_idx = np.where(~np.isnan(normalized))[0]
+    pct_rem = float(normalized[valid_idx[-1]] * 100) if len(valid_idx) > 0 else 0
 
     print(f"  Bleach QC: {pct_rem:.1f}% remaining at last t")
     return {"mean_intensities": means, "normalized": normalized}
 
 
-def _frc_mean_corr(img_2d: np.ndarray) -> float:
-    """Compute mean of FRC correlation curve — higher = sharper."""
+def compute_max_intensity_qc(
+    im_ls_path: Path,
+    output_plots_dir: Path,
+    channel_name: str = "raw GFP EX488 EM525-45",
+    blank_frames: list[int] | None = None,
+) -> dict:
+    """Track per-timepoint max intensity across the full Z stack.
+
+    For each timepoint, computes the global max pixel value over all Z
+    slices of the given channel. Useful for detecting intensity drift,
+    sudden drops (e.g. lost focus), or anomalous bright frames.
+
+    Saves max_intensity_qc.csv and max_intensity_qc.png per FOV.
+    """
+    from dynacell_plotting import plot_max_intensity_qc
+
+    with open_ome_zarr(im_ls_path) as ds:
+        arr = ds.data.dask_array()
+        T, C, Z, Y, X = arr.shape
+        channels = list(ds.channel_names)
+
+        if channel_name not in channels:
+            print(f"WARNING: channel '{channel_name}' not found in {channels}")
+            return {"max_intensities": np.full(T, np.nan)}
+
+        c_idx = channels.index(channel_name)
+        print(f"Max intensity QC: channel='{channel_name}' (c={c_idx}), full Z={Z}")
+
+        blank_set = set(blank_frames) if blank_frames else set()
+        max_vals = np.full(T, np.nan, dtype=np.float64)
+        for t in tqdm(range(T), desc="Max intensity QC"):
+            if t in blank_set:
+                continue
+            vol = np.asarray(arr[t, c_idx]).astype(np.float64)
+            max_vals[t] = float(np.max(vol))
+
+    blank = np.isnan(max_vals)
+    valid = max_vals[~blank]
+    if len(valid) < 2:
+        print("WARNING: too few valid frames for max intensity QC")
+        return {"max_intensities": max_vals}
+
+    med = float(np.median(valid))
+    mu = float(np.mean(valid))
+    sigma = float(np.std(valid))
+
+    # Outlier detection: local z-score, flag if |z| > 2.5
+    local_z = np.full(T, np.nan, dtype=np.float64)
+    is_outlier = np.zeros(T, dtype=int)
+    if sigma > 1e-12:
+        local_z[~blank] = (max_vals[~blank] - mu) / sigma
+        is_outlier[~blank] = (np.abs(local_z[~blank]) > 2.5).astype(int)
+
+    n_outliers = int(is_outlier.sum())
+    print(f"\nMax intensity QC results ({channel_name}):")
+    print(f"  Median={med:.2f}, Min={valid.min():.2f}, Max={valid.max():.2f}")
+    print(f"  Outliers (|z| > 2.5): {n_outliers}")
+
+    # Save CSV
+    qc_df = pd.DataFrame({
+        "t": np.arange(T),
+        "max_intensity": max_vals,
+        "local_z": local_z,
+        "is_outlier": is_outlier,
+    })
+    qc_csv = output_plots_dir / "max_intensity_qc.csv"
+    qc_df.to_csv(qc_csv, index=False)
+    print(f"  Saved CSV to {qc_csv}")
+
+    # Plot
+    fig = plot_max_intensity_qc(
+        max_vals=max_vals, blank_mask=blank,
+        med=med, channel_name=channel_name,
+        local_z=local_z,
+    )
+    plot_path = output_plots_dir / "max_intensity_qc.png"
+    fig.savefig(plot_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved plot to {plot_path}")
+
+    return {"max_intensities": max_vals}
+
+
+def _frc_mean_corr(img_2d: np.ndarray) -> tuple[float, np.ndarray | None]:
+    """Compute mean of FRC correlation curve — higher = sharper.
+
+    Returns (mean_corr, correlation_curve). The curve is None on failure.
+    """
     try:
         from cubic.metrics.frc.frc import calculate_frc
         result = calculate_frc(img_2d.astype(np.float32))
         corr = np.array(result.correlation["correlation"])
         if corr.ndim == 0 or len(corr) == 0:
-            return np.nan
-        return float(np.nanmean(corr))
+            return np.nan, None
+        return float(np.nanmean(corr)), corr
     except Exception:
-        return np.nan
+        return np.nan, None
 
 
 def compute_frc_qc(
     im_ls_path: Path,
     output_plots_dir: Path,
-    z_focus: list[int],
     channel_name: str = "raw GFP EX488 EM525-45",
-    z_range: int = 5,
     blank_frames: list[int] | None = None,
 ) -> dict:
     """Measure per-timepoint FRC mean correlation as a blur/quality indicator.
 
-    For each timepoint, computes the FRC curve on z_focus ± z_range Z planes
-    and takes the median of the mean correlation values. Lower FRC correlation
-    indicates blur or loss of high-frequency content.
+    For each timepoint, computes the FRC curve on the max-Z projection
+    of the full volume. Lower FRC correlation indicates blur or loss of
+    high-frequency content.
 
     Reporting only — not used for frame dropping or outlier detection.
 
@@ -850,12 +871,8 @@ def compute_frc_qc(
         Path to the LS zarr FOV position.
     output_plots_dir : Path
         Directory for saving plots and CSVs.
-    z_focus : list of int
-        Per-timepoint z_focus indices.
     channel_name : str
         Channel to measure.
-    z_range : int
-        Number of Z planes above and below z_focus to include.
     blank_frames : list of int or None
         Timepoints to skip.
 
@@ -880,26 +897,23 @@ def compute_frc_qc(
         c_idx = channels.index(channel_name)
         print(
             f"FRC QC: channel='{channel_name}' (c={c_idx}), "
-            f"z_range=±{z_range}"
+            f"max-Z projection"
         )
 
         blank_set = set(blank_frames) if blank_frames else set()
         frc_values = np.full(T, np.nan, dtype=np.float64)
-        for t in tqdm(range(T), desc="FRC QC (multi-Z)"):
+        frc_curves = {}  # t -> correlation curve
+        for t in tqdm(range(T), desc="FRC QC (max-Z proj)"):
             if t in blank_set:
                 continue
-            z_f = int(z_focus[t])
-            z_lo = max(0, z_f - z_range)
-            z_hi = min(Z, z_f + z_range + 1)
-            frc_zs = []
-            for z in range(z_lo, z_hi):
-                img = np.asarray(arr[t, c_idx, z, :, :]).astype(np.float32)
-                if np.ptp(img) < 1e-6:
-                    continue
-                frc_zs.append(_frc_mean_corr(img))
-            valid_frc = [v for v in frc_zs if not np.isnan(v)]
-            if valid_frc:
-                frc_values[t] = np.median(valid_frc)
+            vol = np.asarray(arr[t, c_idx]).astype(np.float32)
+            mip = np.max(vol, axis=0)  # max Z projection → (Y, X)
+            if np.ptp(mip) < 1e-6:
+                continue
+            mean_corr, curve = _frc_mean_corr(mip)
+            frc_values[t] = mean_corr
+            if curve is not None:
+                frc_curves[t] = curve
 
     # --- Exclude blank frames ---
     blank = np.isnan(frc_values)
@@ -928,12 +942,11 @@ def compute_frc_qc(
         "median": med,
         "mean": mu,
         "std": sigma,
-        "z_range": z_range,
         "n_outliers": n_outliers,
     }
 
     print(f"\nFRC QC results ({channel_name}):")
-    print(f"  Median={med:.6f}, Mean={mu:.6f}, Std={sigma:.6f}, multi-Z ±{z_range}")
+    print(f"  Median={med:.6f}, Mean={mu:.6f}, Std={sigma:.6f}, max-Z projection")
     print(f"  Outliers (z < -2.5, reporting only): {n_outliers}")
 
     # Save CSV
@@ -947,10 +960,20 @@ def compute_frc_qc(
     qc_df.to_csv(qc_csv, index=False)
     print(f"  Saved CSV to {qc_csv}")
 
+    # Compute mean FRC curve across valid timepoints
+    mean_frc_curve = None
+    if frc_curves:
+        # Pad/truncate to common length
+        max_len = max(len(c) for c in frc_curves.values())
+        curve_stack = np.full((len(frc_curves), max_len), np.nan)
+        for i, c in enumerate(frc_curves.values()):
+            curve_stack[i, :len(c)] = c
+        mean_frc_curve = np.nanmean(curve_stack, axis=0)
+
     # Plot
     fig = plot_frc_qc(
-        frc_values=frc_values, blank_mask=blank, med=med,
-        channel_name=channel_name, z_range=z_range,
+        frc_values=frc_values, local_z=local_z, blank_mask=blank, med=med,
+        channel_name=channel_name, mean_frc_curve=mean_frc_curve,
     )
     plot_path = output_plots_dir / "frc_qc.png"
     fig.savefig(plot_path, dpi=150, bbox_inches="tight")

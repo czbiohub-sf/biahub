@@ -20,6 +20,7 @@ from dynacell_qc import (
     compute_entropy_qc,
     compute_hf_ratio_qc,
     compute_bleach_fov,
+    compute_max_intensity_qc,
     compute_frc_qc,
     compute_fov_registration_qc,
 )
@@ -89,8 +90,9 @@ def build_drop_list(
     T: int,
     save_path: str | None = None,
     hf_blur_outliers: np.ndarray | None = None,
+    manual_drop_frames: list[int] | None = None,
 ) -> dict:
-    """Combine blank frames, z_focus outliers, and HF ratio blur outliers into a drop list.
+    """Combine blank frames, z_focus outliers, HF blur outliers, and manual drops.
 
     Returns
     -------
@@ -107,6 +109,9 @@ def build_drop_list(
     if hf_blur_outliers is not None:
         for t in hf_blur_outliers:
             reasons.setdefault(int(t), []).append("hf_blur")
+    if manual_drop_frames is not None:
+        for t in manual_drop_frames:
+            reasons.setdefault(int(t), []).append("manual")
 
     drop_indices = np.array(sorted(reasons.keys()), dtype=int)
     keep_indices = np.array(sorted(set(range(T)) - set(drop_indices)), dtype=int)
@@ -411,9 +416,7 @@ def compute_fov_metadata(
         compute_laplacian_qc(
             im_ls_path=im_ls_path,
             output_plots_dir=output_plots_dir,
-            z_focus=z_focus,
             channel_name="raw GFP EX488 EM525-45",
-            z_final=z_final,
             n_std=2.0,
             blank_frames=blank_frames,
         )
@@ -430,7 +433,6 @@ def compute_fov_metadata(
         compute_hf_ratio_qc(
             im_ls_path=im_ls_path,
             output_plots_dir=output_plots_dir,
-            z_focus=z_focus,
             channel_name="raw GFP EX488 EM525-45",
             blank_frames=blank_frames,
         )
@@ -439,7 +441,6 @@ def compute_fov_metadata(
         compute_frc_qc(
             im_ls_path=im_ls_path,
             output_plots_dir=output_plots_dir,
-            z_focus=z_focus,
             channel_name="raw GFP EX488 EM525-45",
             blank_frames=blank_frames,
         )
@@ -448,8 +449,15 @@ def compute_fov_metadata(
         compute_bleach_fov(
             im_ls_path=im_ls_path,
             output_plots_dir=output_plots_dir,
-            z_focus=z_focus,
             bbox=(y_min, y_max, x_min, x_max),
+            channel_name="raw GFP EX488 EM525-45",
+            blank_frames=blank_frames,
+        )
+
+        # --- Max intensity QC on LS GFP channel (reporting only) ---
+        compute_max_intensity_qc(
+            im_ls_path=im_ls_path,
+            output_plots_dir=output_plots_dir,
             channel_name="raw GFP EX488 EM525-45",
             blank_frames=blank_frames,
         )
@@ -539,12 +547,18 @@ def compute_fov_core(
     n_std: float = 2.5,
     z_window: int | None = None,
     z_index: int | str | None = None,
+    manual_drop_frames: list[int] | None = None,
     DEBUG: bool = True,
 ) -> dict:
     """Phase 1: Compute bbox, z_focus, blank frames, and drop list for one FOV.
 
     This is the core metadata needed before QC metrics can run.
     Saves z_focus.csv, drop_list.csv, fov_summary.csv to output_plots_dir.
+
+    Parameters
+    ----------
+    manual_drop_frames : list of int or None
+        Timepoints to drop from pre-annotations (added with reason "manual").
     """
     with open_ome_zarr(im_lf_path) as im_lf_ds, open_ome_zarr(im_ls_path) as im_ls_ds:
         im_lf_arr = im_lf_ds.data.dask_array()
@@ -625,12 +639,15 @@ def compute_fov_core(
                 [valid_t_indices[i] for i in z_focus_stats["t_outliers"]], dtype=int
             )
 
-        # --- Drop list (blank frames + z_focus outliers only) ---
+        # --- Drop list (blank frames + z_focus outliers + manual drops) ---
+        if manual_drop_frames:
+            print(f"Manual drops from pre-annotations: {manual_drop_frames}")
         drop_info = build_drop_list(
             blank_frames=blank_frames,
             z_focus_outliers=z_focus_outliers_original,
             T=T,
             save_path=str(output_plots_dir / "drop_list.csv"),
+            manual_drop_frames=manual_drop_frames,
         )
 
         # --- Recompute bbox using only kept frames ---
@@ -727,6 +744,7 @@ QC_METRICS = [
     "hf_ratio",
     "frc",
     "bleach",
+    "max_intensity",
     "fov_registration",
 ]
 
@@ -748,7 +766,7 @@ def run_fov_qc(
     Parameters
     ----------
     metric : str
-        One of: "laplacian", "entropy", "hf_ratio", "frc", "bleach", "fov_registration"
+        One of: "laplacian", "entropy", "hf_ratio", "frc", "bleach", "max_intensity", "fov_registration"
     """
     core = _read_core_metadata(output_plots_dir)
     if core is None:
@@ -766,9 +784,7 @@ def run_fov_qc(
         compute_laplacian_qc(
             im_ls_path=im_ls_path,
             output_plots_dir=output_plots_dir,
-            z_focus=z_focus,
             channel_name=channel_name,
-            z_final=z_final,
             n_std=2.0,
             blank_frames=blank_frames,
         )
@@ -783,7 +799,6 @@ def run_fov_qc(
         compute_hf_ratio_qc(
             im_ls_path=im_ls_path,
             output_plots_dir=output_plots_dir,
-            z_focus=z_focus,
             channel_name=channel_name,
             blank_frames=blank_frames,
         )
@@ -791,7 +806,6 @@ def run_fov_qc(
         compute_frc_qc(
             im_ls_path=im_ls_path,
             output_plots_dir=output_plots_dir,
-            z_focus=z_focus,
             channel_name=channel_name,
             blank_frames=blank_frames,
         )
@@ -799,8 +813,14 @@ def run_fov_qc(
         compute_bleach_fov(
             im_ls_path=im_ls_path,
             output_plots_dir=output_plots_dir,
-            z_focus=z_focus,
             bbox=bbox,
+            channel_name=channel_name,
+            blank_frames=blank_frames,
+        )
+    elif metric == "max_intensity":
+        compute_max_intensity_qc(
+            im_ls_path=im_ls_path,
+            output_plots_dir=output_plots_dir,
             channel_name=channel_name,
             blank_frames=blank_frames,
         )
