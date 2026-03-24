@@ -206,7 +206,7 @@ def _submit_stage1_jobs(
         f.write("\n".join(job_ids_core))
     print(f"Phase 1: Submitted {len(jobs_core)} core jobs. IDs: {log_path_core}")
 
-    # Submit beads registration QC (runs in parallel with phase 1)
+    # Submit beads registration QC + core metadata (runs in parallel with phase 1)
     beads_qc_job = None
     if beads_fov is not None:
         beads_fov_name = "_".join(beads_fov.split("/"))
@@ -228,6 +228,26 @@ def _submit_stage1_jobs(
             n_std=beads_n_std,
         )
         print(f"Beads QC: Submitted job {beads_qc_job.job_id}")
+
+        # Also run core metadata on beads FOV (for overlap plot / diagnostics)
+        executor_beads_core = submitit.AutoExecutor(
+            folder=slurm_out_path / "beads_core", cluster=cluster
+        )
+        executor_beads_core.update_parameters(slurm_job_name="dynacell_beads_core", **slurm_args)
+        executor_beads_core.submit(
+            compute_fov_core,
+            im_lf_path=lf_zarr / beads_fov,
+            im_ls_path=ls_zarr / beads_fov,
+            output_plots_dir=beads_plots_dir,
+            fov=beads_fov,
+            lf_mask_radius=lf_mask_radius,
+            n_std=n_std,
+            z_window=z_window,
+            z_index=z_index,
+            DEBUG=True,
+            qc_thresholds=qc_thresholds,
+        )
+        print(f"Beads core: Submitted diagnostics job")
 
     # Wait for phase 1 completion
     print("\nWaiting for phase 1 (core) jobs to complete...")

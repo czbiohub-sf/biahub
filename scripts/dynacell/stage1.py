@@ -91,8 +91,9 @@ def build_drop_list(
     save_path: str | None = None,
     hf_blur_outliers: np.ndarray | None = None,
     manual_drop_frames: list[int] | None = None,
+    bbox_outlier_frames: list[int] | None = None,
 ) -> dict:
-    """Combine blank frames, z_focus outliers, HF blur outliers, and manual drops.
+    """Combine blank frames, z_focus outliers, HF blur outliers, bbox outliers, and manual drops.
 
     Returns
     -------
@@ -112,6 +113,9 @@ def build_drop_list(
     if manual_drop_frames is not None:
         for t in manual_drop_frames:
             reasons.setdefault(int(t), []).append("manual")
+    if bbox_outlier_frames is not None:
+        for t in bbox_outlier_frames:
+            reasons.setdefault(int(t), []).append("bbox_outlier")
 
     drop_indices = np.array(sorted(reasons.keys()), dtype=int)
     keep_indices = np.array(sorted(set(range(T)) - set(drop_indices)), dtype=int)
@@ -241,12 +245,13 @@ def compute_per_timepoint_metadata(
             z_f = int(np.clip(z_f, 0, Z_min - 1))
         z_focus.append(z_f)
 
-        # Overlap from z_focus slices (not mid-Z) so that frames with
-        # incomplete Z volumes at the beginning/end are handled correctly.
+        # Overlap from mid-Z slices (XY overlap is z-independent;
+        # using z_focus here would break when z_focus is an outlier).
         overlap_slices = []
         for i, arr in enumerate(arrays):
+            z_mid = arr.shape[2] // 2
             for c in range(arr.shape[1]):
-                slc = np.asarray(arr[t, c, z_f, :, :]).copy()
+                slc = np.asarray(arr[t, c, z_mid, :, :]).copy()
                 if i == 0 and circ_mask is not None:
                     slc[~circ_mask] = 0
                 overlap_slices.append(slc)
@@ -524,11 +529,11 @@ def compute_fov_metadata(
 
         kept_mask = np.ones((Y_common, X_common), dtype=bool)
         for t in tqdm(keep_indices, desc="Recomputing bbox from kept frames"):
-            z_f = int(z_focus[t])
             slices = []
             for i, arr in enumerate(arrays):
+                z_mid = arr.shape[2] // 2
                 for c in range(arr.shape[1]):
-                    slc = np.asarray(arr[t, c, z_f, :, :]).copy()
+                    slc = np.asarray(arr[t, c, z_mid, :, :]).copy()
                     if i == 0 and circ_mask is not None:
                         slc[~circ_mask] = 0
                     slices.append(slc)
@@ -668,7 +673,33 @@ def compute_fov_core(
                 [valid_t_indices[i] for i in z_focus_stats["t_outliers"]], dtype=int
             )
 
-        # --- Drop list (blank frames + z_focus outliers + manual drops) ---
+        # --- Detect per-t bbox area outliers (partial acquisitions) ---
+        bbox_areas = np.array([
+            (b[1] - b[0] + 1) * (b[3] - b[2] + 1) if b[1] > 0 else 0
+            for b in per_t_bboxes
+        ], dtype=float)
+        # Only consider non-blank, non-zero area frames
+        blank_set = set(blank_frames)
+        valid_area_mask = np.array([
+            t not in blank_set and bbox_areas[t] > 0 for t in range(T)
+        ])
+        bbox_outlier_frames = []
+        if valid_area_mask.sum() > 2:
+            valid_areas = bbox_areas[valid_area_mask]
+            median_area = np.median(valid_areas)
+            # Flag frames with area < 25% of median (severe partial acquisition)
+            area_threshold = 0.25 * median_area
+            for t in range(T):
+                if valid_area_mask[t] and bbox_areas[t] < area_threshold:
+                    bbox_outlier_frames.append(t)
+            if bbox_outlier_frames:
+                print(f"\nBbox area outliers (area < 25% of median={median_area:.0f}):")
+                for t in bbox_outlier_frames:
+                    print(f"  t={t}: area={bbox_areas[t]:.0f}, "
+                          f"bbox=[{per_t_bboxes[t][0]}:{per_t_bboxes[t][1]}, "
+                          f"{per_t_bboxes[t][2]}:{per_t_bboxes[t][3]}]")
+
+        # --- Drop list (blank frames + z_focus outliers + manual drops + bbox outliers) ---
         if manual_drop_frames:
             print(f"Manual drops from pre-annotations: {manual_drop_frames}")
         drop_info = build_drop_list(
@@ -677,6 +708,7 @@ def compute_fov_core(
             T=T,
             save_path=str(output_plots_dir / "drop_list.csv"),
             manual_drop_frames=manual_drop_frames,
+            bbox_outlier_frames=bbox_outlier_frames if bbox_outlier_frames else None,
         )
 
         # --- Recompute bbox using only kept frames ---
@@ -692,11 +724,11 @@ def compute_fov_core(
 
         kept_mask = np.ones((Y_common, X_common), dtype=bool)
         for t in tqdm(keep_indices, desc="Recomputing bbox from kept frames"):
-            z_f = int(z_focus[t])
             slices = []
             for i, arr in enumerate(arrays):
+                z_mid = arr.shape[2] // 2
                 for c in range(arr.shape[1]):
-                    slc = np.asarray(arr[t, c, z_f, :, :]).copy()
+                    slc = np.asarray(arr[t, c, z_mid, :, :]).copy()
                     if i == 0 and circ_mask is not None:
                         slc[~circ_mask] = 0
                     slices.append(slc)
