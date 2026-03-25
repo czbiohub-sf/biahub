@@ -108,6 +108,8 @@ def compute_beads_registration_qc(
     corr_outliers = np.where(pearson_corrs < lower_corr)[0]
 
     all_outliers = np.array(sorted(set(shift_outliers) | set(corr_outliers)), dtype=int)
+    is_outlier = np.zeros(T, dtype=int)
+    is_outlier[all_outliers] = 1
 
     print(f"\nBeads registration QC results:")
     print(f"  Pearson corr: mean={mu_corr:.4f}, std={sigma_corr:.4f}")
@@ -126,6 +128,7 @@ def compute_beads_registration_qc(
         "pcc_shift_x": pcc_shifts_x,
         "shift_magnitude": shift_mag,
         "pcc_error": pcc_errors,
+        "is_outlier": is_outlier,
     })
     qc_csv = output_plots_dir / "registration_qc.csv"
     qc_df.to_csv(qc_csv, index=False)
