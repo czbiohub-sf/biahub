@@ -161,6 +161,58 @@ def compute_beads_registration_qc(
     plt.close(fig)
     print(f"  Saved QC plot to {plot_path}")
 
+    # Outlier agreement between shift magnitude and pearson correlation
+    shift_set = set(shift_outliers.tolist())
+    corr_set = set(corr_outliers.tolist())
+    both = shift_set & corr_set
+    shift_only = shift_set - corr_set
+    corr_only = corr_set - shift_set
+    print(f"\n  Outlier agreement:")
+    print(f"    Shift only: {len(shift_only)} {sorted(shift_only)}")
+    print(f"    Corr only:  {len(corr_only)} {sorted(corr_only)}")
+    print(f"    Both:       {len(both)} {sorted(both)}")
+
+    # Scatter plot: shift magnitude vs pearson correlation
+    fig_scatter, ax = plt.subplots(figsize=(7, 5))
+    # Classify each valid point
+    valid = ~np.isnan(shift_mag) & ~np.isnan(pearson_corrs)
+    colors = np.full(T, "tab:blue", dtype=object)
+    for i in range(T):
+        if not valid[i]:
+            colors[i] = "lightgray"
+        elif i in both:
+            colors[i] = "red"
+        elif i in shift_set:
+            colors[i] = "orange"
+        elif i in corr_set:
+            colors[i] = "purple"
+
+    for label, color, marker in [
+        ("OK", "tab:blue", "o"),
+        ("Shift outlier", "orange", "s"),
+        ("Corr outlier", "purple", "D"),
+        ("Both", "red", "X"),
+        ("Blank", "lightgray", "."),
+    ]:
+        mask = colors == color
+        if mask.any():
+            ax.scatter(
+                shift_mag[mask], pearson_corrs[mask],
+                c=color, marker=marker, s=30, alpha=0.7, label=label,
+            )
+
+    ax.axvline(upper_shift, color="orange", ls="--", alpha=0.6, label=f"Shift threshold ({upper_shift:.1f})")
+    ax.axhline(lower_corr, color="purple", ls="--", alpha=0.6, label=f"Corr threshold ({lower_corr:.4f})")
+    ax.set_xlabel("Shift magnitude (px)")
+    ax.set_ylabel("Pearson correlation")
+    ax.set_title("Beads QC: outlier agreement")
+    ax.legend(fontsize=7, loc="best")
+    fig_scatter.tight_layout()
+    scatter_path = output_plots_dir / "registration_qc_agreement.png"
+    fig_scatter.savefig(scatter_path, dpi=150, bbox_inches="tight")
+    plt.close(fig_scatter)
+    print(f"  Saved agreement plot to {scatter_path}")
+
     return {
         "drop_indices": all_outliers,
         "pearson_corrs": pearson_corrs,
