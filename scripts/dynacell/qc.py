@@ -234,37 +234,40 @@ def compute_fov_registration_qc(
     blank_frames: list[int] | None = None,
     n_std: float = 2.5,
 ) -> dict:
-    """Compute per-timepoint Pearson correlation between LF and LS phase channels.
+    """Compute per-timepoint 3D Pearson correlation between LF and LS phase channels.
 
     This is a lightweight registration QC that runs on every FOV (not just beads).
-    For each timepoint, correlates LF channel 0 and LS channel 0 at z_focus
-    within the circular mask. Results are saved to CSV and plot for reporting only
-    (not used for the drop list). Blank frames are set to NaN.
+    For each timepoint, correlates the full 3D LF and LS volumes (channel 0)
+    within the circular mask applied per Z-plane. Results are saved to CSV and
+    plot for reporting only (not used for the drop list). Blank frames are set to NaN.
     """
     T = im_lf_arr.shape[0]
+    Z_common = min(im_lf_arr.shape[2], im_ls_arr.shape[2])
     pearson_corrs = np.full(T, np.nan, dtype=np.float64)
     blank_set = set(blank_frames) if blank_frames else set()
 
     Y_common = min(im_lf_arr.shape[-2], im_ls_arr.shape[-2])
     X_common = min(im_lf_arr.shape[-1], im_ls_arr.shape[-1])
-    mask = None
+    mask_2d = None
     if lf_mask_radius is not None:
         circ = make_circular_mask(im_lf_arr.shape[-2], im_lf_arr.shape[-1], lf_mask_radius)
-        mask = circ[:Y_common, :X_common]
+        mask_2d = circ[:Y_common, :X_common]
 
-    for t in tqdm(range(T), desc="Registration QC (Pearson)"):
+    for t in tqdm(range(T), desc="Registration QC (3D Pearson)"):
         if t in blank_set:
             continue
-        z_f = int(z_focus[t])
-        lf_slice = np.asarray(im_lf_arr[t, 0, z_f, :Y_common, :X_common]).astype(np.float64)
-        ls_slice = np.asarray(im_ls_arr[t, 0, z_f, :Y_common, :X_common]).astype(np.float64)
+        # Load full 3D volume (channel 0)
+        lf_vol = np.asarray(im_lf_arr[t, 0, :Z_common, :Y_common, :X_common]).astype(np.float64)
+        ls_vol = np.asarray(im_ls_arr[t, 0, :Z_common, :Y_common, :X_common]).astype(np.float64)
 
-        if mask is not None:
-            lf_flat = lf_slice[mask].ravel()
-            ls_flat = ls_slice[mask].ravel()
+        if mask_2d is not None:
+            # Apply 2D mask to each Z-plane
+            mask_3d = np.broadcast_to(mask_2d[np.newaxis, :, :], lf_vol.shape)
+            lf_flat = lf_vol[mask_3d].ravel()
+            ls_flat = ls_vol[mask_3d].ravel()
         else:
-            lf_flat = lf_slice.ravel()
-            ls_flat = ls_slice.ravel()
+            lf_flat = lf_vol.ravel()
+            ls_flat = ls_vol.ravel()
 
         lf_centered = lf_flat - lf_flat.mean()
         ls_centered = ls_flat - ls_flat.mean()
