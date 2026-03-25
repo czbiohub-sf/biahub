@@ -26,11 +26,11 @@ def compute_beads_registration_qc(
     n_std: float = 2.5,
     blank_frames: list[int] | None = None,
 ) -> dict:
-    """Compute per-timepoint registration QC using phase cross-correlation on beads.
+    """Compute per-timepoint registration QC using 3D phase cross-correlation on beads.
 
-    For each timepoint, computes PCC between mid-Z slices of the LF and LS
-    beads channels. Reports the Pearson correlation and residual shift.
-    Timepoints with high shift or low correlation are flagged as outliers.
+    For each timepoint, computes 3D PCC between the full LF and LS volumes
+    (channel 0). Reports the 3D Pearson correlation and residual YX shift.
+    Beads are distributed across Z, so 3D analysis captures them all.
     Blank frames are skipped (set to NaN) and excluded from outlier statistics.
 
     Returns a dict with 'drop_indices' (timepoints to drop due to bad registration).
@@ -41,12 +41,13 @@ def compute_beads_registration_qc(
         im_lf_arr = im_lf_ds.data.dask_array()
         im_ls_arr = im_ls_ds.data.dask_array()
         T = im_lf_arr.shape[0]
-        print(f"Beads QC: LF shape={im_lf_arr.shape}, LS shape={im_ls_arr.shape}")
+        Z_lf, Z_ls = im_lf_arr.shape[2], im_ls_arr.shape[2]
+        print(f"Beads QC (3D): LF shape={im_lf_arr.shape}, LS shape={im_ls_arr.shape}")
 
         # Detect blank frames if not provided
         if blank_frames is None:
             blank_frames = []
-            z_mid_check = im_lf_arr.shape[2] // 2
+            z_mid_check = Z_lf // 2
             for t in range(T):
                 slc = np.asarray(im_lf_arr[t, 0, z_mid_check, :, :])
                 if float(np.nanmax(np.abs(slc))) < 1e-6:
@@ -56,53 +57,55 @@ def compute_beads_registration_qc(
         blank_set = set(blank_frames)
 
         pearson_corrs = np.full(T, np.nan, dtype=np.float64)
+        pcc_shifts_z = np.full(T, np.nan, dtype=np.float64)
         pcc_shifts_y = np.full(T, np.nan, dtype=np.float64)
         pcc_shifts_x = np.full(T, np.nan, dtype=np.float64)
         pcc_errors = np.full(T, np.nan, dtype=np.float64)
 
-        z_mid_lf = im_lf_arr.shape[2] // 2
-        z_mid_ls = im_ls_arr.shape[2] // 2
+        # Common spatial dimensions
+        Z_common = min(Z_lf, Z_ls)
+        Y_common = min(im_lf_arr.shape[3], im_ls_arr.shape[3])
+        X_common = min(im_lf_arr.shape[4], im_ls_arr.shape[4])
 
-        for t in tqdm(range(T), desc="Beads registration QC"):
+        for t in tqdm(range(T), desc="Beads registration QC (3D)"):
             if t in blank_set:
                 continue
 
-            # Use channel 0 (phase) for LF and channel 0 for LS
-            lf_slice = np.asarray(im_lf_arr[t, 0, z_mid_lf, :, :]).astype(np.float64)
-            ls_slice = np.asarray(im_ls_arr[t, 0, z_mid_ls, :, :]).astype(np.float64)
-
-            # Crop to common region
-            Y_common = min(lf_slice.shape[0], ls_slice.shape[0])
-            X_common = min(lf_slice.shape[1], ls_slice.shape[1])
-            lf_crop = lf_slice[:Y_common, :X_common]
-            ls_crop = ls_slice[:Y_common, :X_common]
+            # Load full 3D volume (channel 0) for both modalities
+            lf_vol = np.asarray(
+                im_lf_arr[t, 0, :Z_common, :Y_common, :X_common]
+            ).astype(np.float64)
+            ls_vol = np.asarray(
+                im_ls_arr[t, 0, :Z_common, :Y_common, :X_common]
+            ).astype(np.float64)
 
             # Handle NaN values
-            nan_mask = np.isnan(lf_crop) | np.isnan(ls_crop)
+            nan_mask = np.isnan(lf_vol) | np.isnan(ls_vol)
             if nan_mask.all():
                 continue
-            lf_clean = np.where(nan_mask, 0.0, lf_crop)
-            ls_clean = np.where(nan_mask, 0.0, ls_crop)
+            lf_clean = np.where(nan_mask, 0.0, lf_vol)
+            ls_clean = np.where(nan_mask, 0.0, ls_vol)
 
-            # Pearson correlation (on non-NaN pixels only)
+            # 3D Pearson correlation (on non-NaN voxels only)
             valid = ~nan_mask
-            lf_valid = lf_crop[valid]
-            ls_valid = ls_crop[valid]
+            lf_valid = lf_vol[valid]
+            ls_valid = ls_vol[valid]
             lf_centered = lf_valid - lf_valid.mean()
             ls_centered = ls_valid - ls_valid.mean()
             denom = np.sqrt(np.sum(lf_centered**2) * np.sum(ls_centered**2))
             if denom > 0:
                 pearson_corrs[t] = np.sum(lf_centered * ls_centered) / denom
 
-            # Phase cross-correlation (residual shift after registration)
+            # 3D phase cross-correlation (returns [z, y, x] shifts)
             shift, error, _phasediff = pcc_skimage(
                 lf_clean, ls_clean, upsample_factor=10
             )
-            pcc_shifts_y[t] = shift[0]
-            pcc_shifts_x[t] = shift[1]
+            pcc_shifts_z[t] = shift[0]
+            pcc_shifts_y[t] = shift[1]
+            pcc_shifts_x[t] = shift[2]
             pcc_errors[t] = error
 
-    # Shift magnitude
+    # YX shift magnitude (registration quality in lateral plane)
     shift_mag = np.sqrt(pcc_shifts_y**2 + pcc_shifts_x**2)
     valid_mask = ~np.isnan(shift_mag)
 
@@ -122,10 +125,11 @@ def compute_beads_registration_qc(
     is_outlier = np.zeros(T, dtype=int)
     is_outlier[all_outliers] = 1
 
-    print(f"\nBeads registration QC results:")
+    print(f"\nBeads registration QC results (3D):")
     print(f"  Blank frames excluded: {len(blank_set)}")
-    print(f"  Pearson corr: mean={mu_corr:.4f}, std={sigma_corr:.4f}")
-    print(f"  Shift magnitude: mean={mu_shift:.2f}, std={sigma_shift:.2f}")
+    print(f"  Pearson corr (3D): mean={mu_corr:.4f}, std={sigma_corr:.4f}")
+    print(f"  YX shift magnitude: mean={mu_shift:.2f}, std={sigma_shift:.2f}")
+    print(f"  Z shift: mean={np.nanmean(pcc_shifts_z):.2f}, std={np.nanstd(pcc_shifts_z):.2f}")
     print(f"  Shift outliers (>{upper_shift:.2f} px): {len(shift_outliers)}")
     print(f"  Correlation outliers (<{lower_corr:.4f}): {len(corr_outliers)}")
     print(f"  Total bad timepoints: {len(all_outliers)}")
@@ -136,6 +140,7 @@ def compute_beads_registration_qc(
     qc_df = pd.DataFrame({
         "t": np.arange(T),
         "pearson_corr": pearson_corrs,
+        "pcc_shift_z": pcc_shifts_z,
         "pcc_shift_y": pcc_shifts_y,
         "pcc_shift_x": pcc_shifts_x,
         "shift_magnitude": shift_mag,
