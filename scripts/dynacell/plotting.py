@@ -878,6 +878,87 @@ def plot_fov_registration_qc(
     return fig
 
 
+def plot_tilt_qc(
+    tilt_ranges: np.ndarray,
+    tilt_slopes: np.ndarray,
+    blank_mask: np.ndarray,
+    med: float,
+    local_z: np.ndarray | None = None,
+    n_std: float = 2.5,
+    example_grid: np.ndarray | None = None,
+    grid_size: int = 3,
+) -> plt.Figure:
+    """Plot tilt range over time, local z-score, and example grid heatmap."""
+    S = STYLE
+    valid_idx = np.where(~blank_mask)[0]
+    has_lz = local_z is not None and not np.all(np.isnan(local_z))
+    T = len(tilt_ranges)
+
+    n_rows = 2 if has_lz else 1
+    has_grid = example_grid is not None and not np.all(np.isnan(example_grid))
+    if has_grid:
+        fig = plt.figure(figsize=(S["fig_double"][0] + 3, S["fig_double"][1]))
+        gs = fig.add_gridspec(n_rows, 2, width_ratios=[3, 1], hspace=0.3, wspace=0.3)
+        ax_range = fig.add_subplot(gs[0, 0])
+        ax_grid = fig.add_subplot(gs[0, 1])
+        if has_lz:
+            ax_lz = fig.add_subplot(gs[1, 0], sharex=ax_range)
+    else:
+        if has_lz:
+            fig, axes = plt.subplots(2, 1, figsize=S["fig_double"], sharex=True)
+            ax_range = axes[0]
+            ax_lz = axes[1]
+        else:
+            fig, ax_range = plt.subplots(1, 1, figsize=S["fig_single"])
+
+    # Tilt range trace
+    ax_range.plot(valid_idx, tilt_ranges[valid_idx], ".-",
+                  ms=S["marker_size"], alpha=S["alpha_data"])
+    ax_range.axhline(med, color=S["c_median"], ls="--", lw=S["lw_ref"],
+                     label=f"median={med:.2f}")
+    ax_range.set_ylabel("Tilt range (z-slices)", fontsize=S["fs_label"])
+    ax_range.set_title("Tilt QC | sub-region z-focus range", fontsize=S["fs_title"])
+    ax_range.legend(fontsize=S["fs_legend"])
+    ax_range.set_xlim(0, T - 1)
+
+    # Example grid heatmap
+    if has_grid:
+        im = ax_grid.imshow(example_grid, cmap="RdYlBu_r", aspect="equal",
+                            interpolation="nearest")
+        ax_grid.set_title(f"Z-focus grid (t=0)", fontsize=S["fs_title"])
+        ax_grid.set_xlabel("X region", fontsize=S["fs_label"])
+        ax_grid.set_ylabel("Y region", fontsize=S["fs_label"])
+        for iy in range(grid_size):
+            for ix in range(grid_size):
+                val = example_grid[iy, ix]
+                if not np.isnan(val):
+                    ax_grid.text(ix, iy, f"{val:.0f}", ha="center", va="center",
+                                fontsize=8, color="black")
+        fig.colorbar(im, ax=ax_grid, label="z-focus", shrink=0.8)
+
+    # Local z-score
+    if has_lz:
+        plot_lz = local_z[valid_idx]
+        ax_lz.plot(valid_idx, plot_lz, ".-", ms=S["marker_size"],
+                   alpha=S["alpha_data"], color=S["c_zscore"], label="Local z-score")
+        ax_lz.axhline(n_std, color=S["c_threshold"], ls="--", lw=S["lw_threshold"],
+                      alpha=0.6, label=f"threshold (+{n_std})")
+        outlier_mask = local_z > n_std
+        outlier_valid = outlier_mask[valid_idx]
+        if outlier_valid.any():
+            ax_lz.scatter(valid_idx[outlier_valid], plot_lz[outlier_valid],
+                         color=S["c_outlier"], s=S["scatter_size"], zorder=5)
+        ax_lz.set_ylabel("Local z-score", fontsize=S["fs_label"])
+        ax_lz.set_xlabel("Timepoint", fontsize=S["fs_label"])
+        ax_lz.legend(fontsize=S["fs_legend"])
+        ax_lz.set_xlim(0, T - 1)
+    else:
+        ax_range.set_xlabel("Timepoint", fontsize=S["fs_label"])
+
+    _apply_style(fig)
+    return fig
+
+
 def plot_bleach_fov_qc(
     normalized: np.ndarray,
     fov_name: str,

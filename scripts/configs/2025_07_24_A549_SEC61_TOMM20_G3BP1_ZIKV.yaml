@@ -49,6 +49,8 @@ qc_thresholds:
     n_std: 2.5
   fov_registration:
     n_std: 2.5
+  tilt:
+    n_std: 2.5
 
 slurm:
   partition: gpu

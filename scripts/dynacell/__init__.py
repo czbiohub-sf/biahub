@@ -18,6 +18,7 @@ from dynacell.qc import (
     compute_bleach_fov,
     compute_dust_qc,
     compute_bleach_qc,
+    compute_tilt_qc,
 )
 from dynacell.stage1 import (
     find_blank_frames,

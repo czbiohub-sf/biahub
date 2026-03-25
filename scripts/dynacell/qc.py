@@ -1330,3 +1330,166 @@ def compute_bleach_qc(
         "fit_params": fit_params,
         "n_fovs": len(norm_curves),
     }
+
+
+def compute_tilt_qc(
+    im_lf_path: Path,
+    output_plots_dir: Path,
+    blank_frames: list[int] | None = None,
+    n_std: float = 2.5,
+    grid_size: int = 3,
+) -> dict:
+    """Measure per-timepoint sample tilt by computing z-focus in sub-regions.
+
+    Divides each FOV into a grid_size × grid_size grid, computes z-focus
+    independently in each sub-region using focus_from_transverse_band,
+    then fits a plane to the local z-focus values. Reports tilt_range
+    (max - min z across the grid) per timepoint.
+
+    Saves tilt_qc.csv and tilt_qc.png per FOV.
+
+    Parameters
+    ----------
+    im_lf_path : Path
+        Path to the label-free zarr FOV position.
+    output_plots_dir : Path
+        Directory to save CSV and plot.
+    blank_frames : list of int or None
+        Timepoints to skip (blank frames).
+    n_std : float
+        Threshold for outlier detection on tilt_range.
+    grid_size : int
+        Number of sub-regions per axis (default 3 → 3×3 = 9 sub-regions).
+    """
+    from waveorder.focus import focus_from_transverse_band
+    from dynacell.geometry import NA_DET, LAMBDA_ILL
+    from dynacell.plotting import plot_tilt_qc
+
+    with open_ome_zarr(im_lf_path) as ds:
+        arr = ds.data.dask_array()
+        T, C, Z, Y, X = arr.shape
+        pixel_size = ds.scale[-1]
+
+    print(f"Tilt QC: grid={grid_size}x{grid_size}, T={T}, Z={Z}, YxX={Y}x{X}")
+
+    blank_set = set(blank_frames) if blank_frames else set()
+
+    # Sub-region boundaries
+    y_edges = np.linspace(0, Y, grid_size + 1, dtype=int)
+    x_edges = np.linspace(0, X, grid_size + 1, dtype=int)
+
+    tilt_ranges = np.full(T, np.nan, dtype=np.float64)
+    tilt_slopes = np.full(T, np.nan, dtype=np.float64)
+    # Store grid z-focus for representative timepoints
+    grid_z_all = np.full((T, grid_size, grid_size), np.nan, dtype=np.float64)
+
+    with open_ome_zarr(im_lf_path) as ds:
+        arr = ds.data.dask_array()
+
+        for t in tqdm(range(T), desc="Tilt QC"):
+            if t in blank_set:
+                continue
+
+            lf_vol = np.asarray(arr[t, 0, :, :, :])
+            grid_z = np.full((grid_size, grid_size), np.nan, dtype=np.float64)
+
+            for iy in range(grid_size):
+                for ix in range(grid_size):
+                    sub_vol = lf_vol[
+                        :, y_edges[iy]:y_edges[iy + 1], x_edges[ix]:x_edges[ix + 1]
+                    ]
+                    # Skip sub-regions that are too small or all-zero
+                    if sub_vol.shape[1] < 32 or sub_vol.shape[2] < 32:
+                        continue
+                    if np.max(np.abs(sub_vol)) < 1e-10:
+                        continue
+                    try:
+                        z_f = focus_from_transverse_band(
+                            sub_vol,
+                            NA_det=NA_DET,
+                            lambda_ill=LAMBDA_ILL,
+                            pixel_size=pixel_size,
+                        )
+                        grid_z[iy, ix] = float(np.clip(z_f, 0, Z - 1))
+                    except Exception:
+                        pass
+
+            grid_z_all[t] = grid_z
+            valid = grid_z[~np.isnan(grid_z)]
+            if len(valid) < 3:
+                continue
+
+            tilt_ranges[t] = float(np.max(valid) - np.min(valid))
+
+            # Fit plane z = a*x + b*y + c to grid centers
+            rows_fit = []
+            for iy in range(grid_size):
+                for ix in range(grid_size):
+                    if not np.isnan(grid_z[iy, ix]):
+                        yc = (y_edges[iy] + y_edges[iy + 1]) / 2
+                        xc = (x_edges[ix] + x_edges[ix + 1]) / 2
+                        rows_fit.append([xc, yc, grid_z[iy, ix]])
+            if len(rows_fit) >= 3:
+                pts = np.array(rows_fit)
+                A = np.column_stack([pts[:, 0], pts[:, 1], np.ones(len(pts))])
+                coeffs, _, _, _ = np.linalg.lstsq(A, pts[:, 2], rcond=None)
+                slope_x, slope_y = coeffs[0], coeffs[1]
+                tilt_slopes[t] = float(np.sqrt(slope_x**2 + slope_y**2))
+
+    # Outlier detection on tilt_range
+    valid_mask = ~np.isnan(tilt_ranges)
+    valid_vals = tilt_ranges[valid_mask]
+    if len(valid_vals) < 2:
+        print("WARNING: too few valid frames for tilt QC")
+        return {"tilt_ranges": tilt_ranges}
+
+    mu = float(np.mean(valid_vals))
+    sigma = float(np.std(valid_vals))
+    med = float(np.median(valid_vals))
+
+    local_z = np.full(T, np.nan, dtype=np.float64)
+    is_outlier = np.zeros(T, dtype=int)
+    if sigma > 1e-12:
+        local_z[valid_mask] = (tilt_ranges[valid_mask] - mu) / sigma
+        is_outlier[valid_mask] = (local_z[valid_mask] > n_std).astype(int)
+
+    n_outliers = int(is_outlier.sum())
+    print(f"\nTilt QC results:")
+    print(f"  Median tilt range: {med:.2f} z-slices")
+    print(f"  Mean tilt range: {mu:.2f} z-slices (std={sigma:.2f})")
+    print(f"  Max tilt range: {valid_vals.max():.2f} z-slices")
+    print(f"  Outliers (z > {n_std}): {n_outliers}")
+
+    # Save CSV
+    qc_df = pd.DataFrame({
+        "t": np.arange(T),
+        "tilt_range": tilt_ranges,
+        "tilt_slope": tilt_slopes,
+        "local_z": local_z,
+        "is_outlier": is_outlier,
+    })
+    qc_csv = output_plots_dir / "tilt_qc.csv"
+    qc_df.to_csv(qc_csv, index=False)
+    print(f"  Saved CSV to {qc_csv}")
+
+    # Save grid z-focus for first valid timepoint (for diagnostic plot)
+    first_valid = np.where(valid_mask)[0]
+    example_grid = grid_z_all[first_valid[0]] if len(first_valid) > 0 else None
+
+    # Plot
+    fig = plot_tilt_qc(
+        tilt_ranges=tilt_ranges,
+        tilt_slopes=tilt_slopes,
+        blank_mask=~valid_mask,
+        med=med,
+        local_z=local_z,
+        n_std=n_std,
+        example_grid=example_grid,
+        grid_size=grid_size,
+    )
+    plot_path = output_plots_dir / "tilt_qc.png"
+    fig.savefig(plot_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved plot to {plot_path}")
+
+    return {"tilt_ranges": tilt_ranges}

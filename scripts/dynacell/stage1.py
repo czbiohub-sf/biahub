@@ -23,6 +23,7 @@ from dynacell.qc import (
     compute_max_intensity_qc,
     compute_frc_qc,
     compute_fov_registration_qc,
+    compute_tilt_qc,
 )
 
 
@@ -807,6 +808,7 @@ QC_METRICS = [
     "bleach",
     "max_intensity",
     "fov_registration",
+    "tilt",
 ]
 
 
@@ -908,6 +910,13 @@ def run_fov_qc(
                 blank_frames=blank_frames,
                 n_std=metric_n_std,
             )
+    elif metric == "tilt":
+        compute_tilt_qc(
+            im_lf_path=im_lf_path,
+            output_plots_dir=output_plots_dir,
+            blank_frames=blank_frames,
+            n_std=metric_n_std,
+        )
     else:
         raise ValueError(f"Unknown QC metric: {metric}. Must be one of {QC_METRICS}")
 
