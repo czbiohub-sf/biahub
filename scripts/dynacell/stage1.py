@@ -808,7 +808,6 @@ QC_METRICS = [
     "bleach",
     "max_intensity",
     "fov_registration",
-    "tilt",
 ]
 
 
