@@ -49,7 +49,7 @@ qc_thresholds:
   fov_registration:
     n_std: 2.5
   tilt:
-    n_std: 2.5
+    max_offset: 5
 
 slurm:
   partition: gpu

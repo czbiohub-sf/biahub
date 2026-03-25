@@ -1412,6 +1412,7 @@ def compute_tilt_qc(
     output_plots_dir: Path,
     blank_frames: list[int] | None = None,
     n_std: float = 2.5,
+    max_offset: float = 5.0,
     grid_size: int = 3,
 ) -> dict:
     """Measure per-timepoint sample tilt by computing z-focus in sub-regions.
@@ -1420,6 +1421,9 @@ def compute_tilt_qc(
     independently in each sub-region using focus_from_transverse_band,
     then fits a plane to the local z-focus values. Reports tilt_range
     (max - min z across the grid) per timepoint.
+
+    Outlier detection uses median + max_offset (z-slices) as an absolute
+    threshold, which is robust to outlier-inflated std.
 
     Saves tilt_qc.csv and tilt_qc.png per FOV.
 
@@ -1432,7 +1436,9 @@ def compute_tilt_qc(
     blank_frames : list of int or None
         Timepoints to skip (blank frames).
     n_std : float
-        Threshold for outlier detection on tilt_range.
+        Unused, kept for API compatibility. Use max_offset instead.
+    max_offset : float
+        Frames with tilt_range > median + max_offset are flagged as outliers.
     grid_size : int
         Number of sub-regions per axis (default 3 → 3×3 = 9 sub-regions).
     """
@@ -1511,36 +1517,33 @@ def compute_tilt_qc(
                 slope_x, slope_y = coeffs[0], coeffs[1]
                 tilt_slopes[t] = float(np.sqrt(slope_x**2 + slope_y**2))
 
-    # Outlier detection on tilt_range
+    # Outlier detection on tilt_range: median + max_offset
     valid_mask = ~np.isnan(tilt_ranges)
     valid_vals = tilt_ranges[valid_mask]
     if len(valid_vals) < 2:
         print("WARNING: too few valid frames for tilt QC")
         return {"tilt_ranges": tilt_ranges}
 
-    mu = float(np.mean(valid_vals))
-    sigma = float(np.std(valid_vals))
     med = float(np.median(valid_vals))
+    threshold = med + max_offset
 
-    local_z = np.full(T, np.nan, dtype=np.float64)
     is_outlier = np.zeros(T, dtype=int)
-    if sigma > 1e-12:
-        local_z[valid_mask] = (tilt_ranges[valid_mask] - mu) / sigma
-        is_outlier[valid_mask] = (local_z[valid_mask] > n_std).astype(int)
+    is_outlier[valid_mask] = (tilt_ranges[valid_mask] > threshold).astype(int)
 
     n_outliers = int(is_outlier.sum())
     print(f"\nTilt QC results:")
     print(f"  Median tilt range: {med:.2f} z-slices")
-    print(f"  Mean tilt range: {mu:.2f} z-slices (std={sigma:.2f})")
+    print(f"  Threshold: median + {max_offset} = {threshold:.2f} z-slices")
     print(f"  Max tilt range: {valid_vals.max():.2f} z-slices")
-    print(f"  Outliers (z > {n_std}): {n_outliers}")
+    print(f"  Outliers (>{threshold:.1f}): {n_outliers}")
+    if n_outliers > 0:
+        print(f"  Outlier timepoints: {np.where(is_outlier)[0].tolist()}")
 
     # Save CSV
     qc_df = pd.DataFrame({
         "t": np.arange(T),
         "tilt_range": tilt_ranges,
         "tilt_slope": tilt_slopes,
-        "local_z": local_z,
         "is_outlier": is_outlier,
     })
     qc_csv = output_plots_dir / "tilt_qc.csv"
@@ -1557,8 +1560,9 @@ def compute_tilt_qc(
         tilt_slopes=tilt_slopes,
         blank_mask=~valid_mask,
         med=med,
-        local_z=local_z,
-        n_std=n_std,
+        threshold=threshold,
+        max_offset=max_offset,
+        is_outlier=is_outlier,
         example_grid=example_grid,
         grid_size=grid_size,
     )

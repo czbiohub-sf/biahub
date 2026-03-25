@@ -911,11 +911,14 @@ def run_fov_qc(
                 n_std=metric_n_std,
             )
     elif metric == "tilt":
+        tilt_max_offset = 5.0
+        if qc_thresholds and "tilt" in qc_thresholds:
+            tilt_max_offset = qc_thresholds["tilt"].get("max_offset", tilt_max_offset)
         compute_tilt_qc(
             im_lf_path=im_lf_path,
             output_plots_dir=output_plots_dir,
             blank_frames=blank_frames,
-            n_std=metric_n_std,
+            max_offset=tilt_max_offset,
         )
     else:
         raise ValueError(f"Unknown QC metric: {metric}. Must be one of {QC_METRICS}")
