@@ -24,12 +24,14 @@ def compute_beads_registration_qc(
     im_ls_path: Path,
     output_plots_dir: Path,
     n_std: float = 2.5,
+    blank_frames: list[int] | None = None,
 ) -> dict:
     """Compute per-timepoint registration QC using phase cross-correlation on beads.
 
     For each timepoint, computes PCC between mid-Z slices of the LF and LS
     beads channels. Reports the Pearson correlation and residual shift.
     Timepoints with high shift or low correlation are flagged as outliers.
+    Blank frames are skipped (set to NaN) and excluded from outlier statistics.
 
     Returns a dict with 'drop_indices' (timepoints to drop due to bad registration).
     """
@@ -41,16 +43,30 @@ def compute_beads_registration_qc(
         T = im_lf_arr.shape[0]
         print(f"Beads QC: LF shape={im_lf_arr.shape}, LS shape={im_ls_arr.shape}")
 
-        pearson_corrs = np.zeros(T, dtype=np.float64)
-        pcc_shifts_z = np.zeros(T, dtype=np.float64)
-        pcc_shifts_y = np.zeros(T, dtype=np.float64)
-        pcc_shifts_x = np.zeros(T, dtype=np.float64)
-        pcc_errors = np.zeros(T, dtype=np.float64)
+        # Detect blank frames if not provided
+        if blank_frames is None:
+            blank_frames = []
+            z_mid_check = im_lf_arr.shape[2] // 2
+            for t in range(T):
+                slc = np.asarray(im_lf_arr[t, 0, z_mid_check, :, :])
+                if float(np.nanmax(np.abs(slc))) < 1e-6:
+                    blank_frames.append(t)
+            if blank_frames:
+                print(f"  Detected {len(blank_frames)} blank frames: {blank_frames}")
+        blank_set = set(blank_frames)
+
+        pearson_corrs = np.full(T, np.nan, dtype=np.float64)
+        pcc_shifts_y = np.full(T, np.nan, dtype=np.float64)
+        pcc_shifts_x = np.full(T, np.nan, dtype=np.float64)
+        pcc_errors = np.full(T, np.nan, dtype=np.float64)
 
         z_mid_lf = im_lf_arr.shape[2] // 2
         z_mid_ls = im_ls_arr.shape[2] // 2
 
         for t in tqdm(range(T), desc="Beads registration QC"):
+            if t in blank_set:
+                continue
+
             # Use channel 0 (phase) for LF and channel 0 for LS
             lf_slice = np.asarray(im_lf_arr[t, 0, z_mid_lf, :, :]).astype(np.float64)
             ls_slice = np.asarray(im_ls_arr[t, 0, z_mid_ls, :, :]).astype(np.float64)
@@ -64,10 +80,6 @@ def compute_beads_registration_qc(
             # Handle NaN values
             nan_mask = np.isnan(lf_crop) | np.isnan(ls_crop)
             if nan_mask.all():
-                pearson_corrs[t] = np.nan
-                pcc_shifts_y[t] = np.nan
-                pcc_shifts_x[t] = np.nan
-                pcc_errors[t] = np.nan
                 continue
             lf_clean = np.where(nan_mask, 0.0, lf_crop)
             ls_clean = np.where(nan_mask, 0.0, ls_crop)
@@ -81,8 +93,6 @@ def compute_beads_registration_qc(
             denom = np.sqrt(np.sum(lf_centered**2) * np.sum(ls_centered**2))
             if denom > 0:
                 pearson_corrs[t] = np.sum(lf_centered * ls_centered) / denom
-            else:
-                pearson_corrs[t] = np.nan
 
             # Phase cross-correlation (residual shift after registration)
             shift, error, _phasediff = pcc_skimage(
@@ -94,24 +104,26 @@ def compute_beads_registration_qc(
 
     # Shift magnitude
     shift_mag = np.sqrt(pcc_shifts_y**2 + pcc_shifts_x**2)
+    valid_mask = ~np.isnan(shift_mag)
 
-    # Outlier detection on shift magnitude
+    # Outlier detection on shift magnitude (only on non-blank frames)
     mu_shift = np.nanmean(shift_mag)
     sigma_shift = np.nanstd(shift_mag)
     upper_shift = mu_shift + n_std * sigma_shift
-    shift_outliers = np.where(shift_mag > upper_shift)[0]
+    shift_outliers = np.where(valid_mask & (shift_mag > upper_shift))[0]
 
-    # Outlier detection on Pearson correlation (low is bad)
+    # Outlier detection on Pearson correlation (low is bad, only on non-blank frames)
     mu_corr = np.nanmean(pearson_corrs)
     sigma_corr = np.nanstd(pearson_corrs)
     lower_corr = mu_corr - n_std * sigma_corr
-    corr_outliers = np.where(pearson_corrs < lower_corr)[0]
+    corr_outliers = np.where(valid_mask & (pearson_corrs < lower_corr))[0]
 
     all_outliers = np.array(sorted(set(shift_outliers) | set(corr_outliers)), dtype=int)
     is_outlier = np.zeros(T, dtype=int)
     is_outlier[all_outliers] = 1
 
     print(f"\nBeads registration QC results:")
+    print(f"  Blank frames excluded: {len(blank_set)}")
     print(f"  Pearson corr: mean={mu_corr:.4f}, std={sigma_corr:.4f}")
     print(f"  Shift magnitude: mean={mu_shift:.2f}, std={sigma_shift:.2f}")
     print(f"  Shift outliers (>{upper_shift:.2f} px): {len(shift_outliers)}")
