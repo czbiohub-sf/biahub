@@ -379,9 +379,12 @@ def _qualify_fovs(
             n_drops = len(drop_df)
         fov_drop_counts[fov_name] = n_drops
 
-    disqualified_fovs = {
-        fov_name for fov_name, n in fov_drop_counts.items() if n > max_drops
-    }
+    if max_drops is not None:
+        disqualified_fovs = {
+            fov_name for fov_name, n in fov_drop_counts.items() if n > max_drops
+        }
+    else:
+        disqualified_fovs = set()
 
     # Filter to qualified
     qualified_results = [
@@ -389,12 +392,15 @@ def _qualify_fovs(
         if "_".join(r["fov"].split("/")) not in disqualified_fovs
     ]
 
-    print(f"\n=== FOV qualification (max {max_drops} drops) ===")
+    print(f"\n=== FOV qualification (max_drops={max_drops}) ===")
     print(f"  Total FOVs: {len(position_keys)}")
     print(f"  Failed stage 1: {len(position_keys) - len(ok_results)}")
-    print(f"  Disqualified (>{max_drops} drops): {len(disqualified_fovs)}")
-    for fov_name in sorted(disqualified_fovs):
-        print(f"    {fov_name}: {fov_drop_counts[fov_name]} drops")
+    if max_drops is not None:
+        print(f"  Disqualified (>{max_drops} drops): {len(disqualified_fovs)}")
+        for fov_name in sorted(disqualified_fovs):
+            print(f"    {fov_name}: {fov_drop_counts[fov_name]} drops")
+    else:
+        print(f"  Disqualified: 0 (no threshold set)")
     print(f"  Qualified for stage 2: {len(qualified_results)}")
 
     if not qualified_results:
@@ -901,7 +907,7 @@ def run_all_fovs(
     local: bool = False,
     stage1_run_dir: Path | None = None,
     beads_fov: str | None = None,
-    max_drops: int = 5,
+    max_drops: int | None = None,
     overlay_channels: list[str] | None = None,
     exclude_fovs: list[str] | None = None,
     include_fovs: list[str] | None = None,
@@ -1008,6 +1014,11 @@ def run_all_fovs(
     if stage1_dir is None:
         plots_dir = output_dir / "per_fov_analysis"
     output_dir.mkdir(parents=True, exist_ok=True)
+    # Symlink per_fov_analysis so the QC report can find FOV plots
+    if stage1_dir is not None and stage1_dir != output_dir:
+        link = output_dir / "per_fov_analysis"
+        if not link.exists():
+            link.symlink_to(plots_dir)
     print(f"Run ID: {run_id}")
     print(f"Output dir: {output_dir}")
 
@@ -1255,4 +1266,5 @@ def run_from_config(config_path: str | Path, local: bool = False, stage1_run_dir
         qc_thresholds=cfg.get("qc_thresholds"),
         slurm_config=cfg.get("slurm"),
         z_crop=proc.get("z_crop"),
+        max_drops=cfg.get("max_drops"),
     )

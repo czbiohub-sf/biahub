@@ -16,6 +16,8 @@ fovs:
     - A/3/001001
   include: null
 
+max_drops: null
+
 stages: [1, 2]
 
 overlay_channels:

@@ -1,18 +1,17 @@
 dataset:
   root_path: /hpc/projects/intracellular_dashboard/organelle_dynamics
-  name: 2025_07_24_A549_SEC61_TOMM20_G3BP1_ZIKV
+  name: 2025_08_26_A549_SEC61_TOMM20_ZIKV
 
 processing:
   lf_mask_radius: 0.98
   z_final: 48
   z_window: 20
   z_index: null
-  z_crop: 26
 
 fovs:
-  beads: A/3/000001
+  beads: A/3/000000
   exclude:
-    - A/3/000000
+    - A/3/000001
     - A/3/001000
     - A/3/001001
   include: null
@@ -25,7 +24,7 @@ overlay_channels:
   - Phase3D
   - raw GFP EX488 EM525-45
 
-annotations_dir: /hpc/projects/intracellular_dashboard/organelle_dynamics/2025_07_24_A549_SEC61_TOMM20_G3BP1_ZIKV/dynacell/annotations
+annotations_dir: /hpc/projects/intracellular_dashboard/organelle_dynamics/2025_08_26_A549_SEC61_TOMM20_ZIKV/dynacell/annotations
 
 drop_metrics:
   - blank

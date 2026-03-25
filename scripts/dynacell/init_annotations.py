@@ -120,6 +120,6 @@ if __name__ == "__main__":
     # 2024_11_05_A549_TOMM20_ZIKV_DENV
     init_annotations(
         root_path=root_path,
-        dataset="2025_07_24_A549_SEC61_TOMM20_G3BP1_ZIKV",
-        beads_fov="A/3/000001",
+        dataset="2024_11_07_A549_SEC61_DENV",
+        beads_fov="C/1/000000",
     )
