@@ -977,6 +977,8 @@ def run_all_fovs(
     """
     if stages is None:
         stages = [1, 2]
+    # Normalize stages: allow strings like "beads_qc"
+    stages = [s if isinstance(s, str) else int(s) for s in stages]
     if 2 in stages and 1 not in stages and stage1_run_dir is None:
         raise ValueError("Stage 2 alone requires stage1_run_dir to read existing results.")
 
@@ -1120,6 +1122,66 @@ def run_all_fovs(
             f"export PYTHONPATH={scripts_dir}:$PYTHONPATH",
         ],
     }
+
+    # Beads QC only mode
+    if "beads_qc" in stages and 1 not in stages and 2 not in stages:
+        if beads_fov is None:
+            print("ERROR: beads_qc stage requires beads_fov to be set")
+            return
+        beads_fov_name = "_".join(beads_fov.split("/"))
+        beads_plots_dir = plots_dir / beads_fov_name
+        beads_plots_dir.mkdir(parents=True, exist_ok=True)
+
+        beads_n_std = n_std
+        if qc_thresholds and "beads_registration" in qc_thresholds:
+            beads_n_std = qc_thresholds["beads_registration"].get("n_std", n_std)
+
+        print(f"\n=== Beads QC only ===")
+        print(f"  Beads FOV: {beads_fov}")
+
+        # Submit beads registration QC
+        executor_beads = submitit.AutoExecutor(
+            folder=slurm_out_path / "beads_qc", cluster=cluster
+        )
+        executor_beads.update_parameters(slurm_job_name="dynacell_beads_qc", **slurm_args)
+        beads_qc_job = executor_beads.submit(
+            compute_beads_registration_qc,
+            im_lf_path=lf_zarr / beads_fov,
+            im_ls_path=ls_zarr / beads_fov,
+            output_plots_dir=beads_plots_dir,
+            n_std=beads_n_std,
+        )
+        print(f"  Submitted beads QC job {beads_qc_job.job_id}")
+
+        # Also run core metadata on beads FOV
+        executor_beads_core = submitit.AutoExecutor(
+            folder=slurm_out_path / "beads_core", cluster=cluster
+        )
+        executor_beads_core.update_parameters(slurm_job_name="dynacell_beads_core", **slurm_args)
+        beads_core_job = executor_beads_core.submit(
+            compute_fov_core,
+            im_lf_path=lf_zarr / beads_fov,
+            im_ls_path=ls_zarr / beads_fov,
+            output_plots_dir=beads_plots_dir,
+            fov=beads_fov,
+            lf_mask_radius=lf_mask_radius,
+            n_std=n_std,
+            z_window=z_window,
+            z_index=z_index,
+            DEBUG=True,
+            qc_thresholds=qc_thresholds,
+        )
+        print(f"  Submitted beads core job {beads_core_job.job_id}")
+
+        print("\nWaiting for beads jobs to complete...")
+        beads_qc_result = beads_qc_job.result()
+        beads_core_job.result()
+        beads_drop_indices = beads_qc_result["drop_indices"]
+        print(f"Beads QC: {len(beads_drop_indices)} bad registration timepoints")
+
+        _finalize_run_log(run_log, run_log_path, _run_start_time)
+        print(f"\nBeads QC complete. Results in: {beads_plots_dir}")
+        return
 
     # Stage 1: compute per-FOV metadata or load existing results
     if 1 in stages and stage1_dir is None:
