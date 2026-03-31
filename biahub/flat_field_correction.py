@@ -82,7 +82,7 @@ def flat_field_single_timepoint(
     click.echo(f"Starting: input={input_data_path}, output={output_path}")
     position_key = input_data_path.parts[-3:]
     fov_name = "_".join(position_key)
-    output_metadata_path = output_path.parent /"static_metadata" / fov_name
+    output_metadata_path = output_path.parent / "static_metadata" / fov_name
     output_metadata_path.mkdir(parents=True, exist_ok=True)
 
     with open_ome_zarr(input_data_path, mode="r") as input_dataset:

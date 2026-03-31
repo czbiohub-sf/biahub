@@ -8,11 +8,11 @@ from pydantic import ValidationError
 
 from biahub.settings import (
     CharacterizeSettings,
-    FlatFieldCorrectionSettings,
     ConcatenateSettings,
     DeskewSettings,
     EstimateRegistrationSettings,
     EstimateStabilizationSettings,
+    FlatFieldCorrectionSettings,
     ProcessingImportFuncSettings,
     RegistrationSettings,
     SegmentationSettings,
