@@ -281,8 +281,6 @@ class EstimateStabilizationSettings(MyBaseModel):
 
 class FlatFieldCorrectionSettings(MyBaseModel):
     channel_names: Optional[list[str]] = None
-    flat_field_all: bool = False
-    time_indices: Union[list[int], Literal["all"]] = "all"
 
 
 class ProcessingSettings(MyBaseModel):

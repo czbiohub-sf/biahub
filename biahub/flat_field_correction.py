@@ -3,13 +3,12 @@ from typing import List, Tuple
 
 import click
 import numpy as np
-import submitit
 import pandas as pd
+import submitit
 
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate
 
-from biahub.cli import utils
 from biahub.cli.parsing import (
     config_filepath,
     input_position_dirpaths,
@@ -33,12 +32,12 @@ def flat_field_correction(
 ) -> Tuple[np.ndarray, dict]:
     """
     Apply flat field correction to the data.
-    
+
     Parameters
     ----------
     zyx_data : np.ndarray
         The data to apply flat field correction to.
-    axis : int  
+    axis : int
         The axis to compute the median on.
     keepdims : bool
         Whether to keep the dimensions of the static pattern. Default is True.
@@ -48,7 +47,7 @@ def flat_field_correction(
     Tuple[np.ndarray, dict]
         A tuple containing the flat field corrected data and the static pattern statistics.
     """
-    
+
     static_pattern = np.median(zyx_data, axis=axis, keepdims=keepdims)
     static_dict = {
         "shape": static_pattern.shape,
@@ -60,8 +59,6 @@ def flat_field_correction(
         "sum": static_pattern.sum(),
     }
     return zyx_data / static_pattern * static_pattern.mean(), static_dict
-
-
 
 
 def flat_field_single_timepoint(
@@ -90,7 +87,7 @@ def flat_field_single_timepoint(
 
     with open_ome_zarr(input_data_path, mode="r") as input_dataset:
         _, C, _, _, _ = input_dataset.data.shape
-       
+
         for c_idx in range(C):
             click.echo(f"[t={t_idx}, c={c_idx}] Reading data...")
             channel_name = input_dataset.channel_names[c_idx]
@@ -104,9 +101,13 @@ def flat_field_single_timepoint(
                 click.echo(f"[t={t_idx}, c={c_idx}] Applying flat field correction...")
                 zyx_data, static_dict = flat_field_correction(zyx_data)
                 click.echo(f"[t={t_idx}, c={c_idx}] Flat field correction done")
-                static_dict_path = output_metadata_path / f"static_dict_t_{t_idx}_{channel_name}.csv"
+                static_dict_path = (
+                    output_metadata_path / f"static_dict_t_{t_idx}_{channel_name}.csv"
+                )
                 pd.DataFrame(static_dict).to_csv(static_dict_path, index=False)
-                click.echo(f"[t={t_idx}, c={c_idx}] Static dictionary saved to {static_dict_path}")
+                click.echo(
+                    f"[t={t_idx}, c={c_idx}] Static dictionary saved to {static_dict_path}"
+                )
             else:
                 click.echo(f"[t={t_idx}, c={c_idx}] Copying channel as-is")
                 zyx_data = np.asarray(zyx_data, dtype=np.float32)
@@ -117,7 +118,7 @@ def flat_field_single_timepoint(
 
             click.echo(f"[t={t_idx}, c={c_idx}] Done ({c_idx + 1}/{C} channels)")
 
-        click.echo(f"[t={t_idx}] Completed all {C} channels")            
+        click.echo(f"[t={t_idx}] Completed all {C} channels")
 
 
 def flat_field(
@@ -149,7 +150,6 @@ def flat_field(
     """
     output_dirpath = Path(output_dirpath)
     slurm_out_path = output_dirpath.parent / "slurm_output"
-    
 
     # Load settings
     settings = yaml_to_model(config_filepath, FlatFieldCorrectionSettings)
@@ -161,7 +161,7 @@ def flat_field(
         scale = input_dataset.scale
 
     # Determine which channels to flat field correct
-    if settings.flat_field_all:
+    if settings.channel_names is None:
         channel_names = all_channel_names
         click.echo(f"Flat fielding ALL channels: {all_channel_names}")
     elif settings.channel_names:
@@ -174,7 +174,7 @@ def flat_field(
         channel_names = settings.channel_names
         click.echo(f"Input channels: {all_channel_names}")
         click.echo(f"Flat field channels: {channel_names}")
-        click.echo(f"Other channels will be copied as-is")
+        click.echo("Other channels will be copied as-is")
     else:
         raise click.ClickException(
             "Must specify either 'channel_names' or 'flat_field_all: true' in config."
@@ -224,7 +224,7 @@ def flat_field(
     jobs = []
     with submitit.helpers.clean_env(), executor.batch():
         for input_position_path in input_position_dirpaths:
-             for t_idx in range(T):
+            for t_idx in range(T):
                 jobs.append(
                     executor.submit(
                         flat_field_single_timepoint,
@@ -241,7 +241,9 @@ def flat_field(
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
 
-    click.echo(f"Submitted {len(jobs)} jobs ({len(input_position_dirpaths)} FOVs x {T} timepoints)")
+    click.echo(
+        f"Submitted {len(jobs)} jobs ({len(input_position_dirpaths)} FOVs x {T} timepoints)"
+    )
 
 
 @click.command("flat-field")
@@ -272,6 +274,7 @@ def flat_field_correction_cli(
         sbatch_filepath=sbatch_filepath,
         local=local,
     )
+
 
 if __name__ == "__main__":
     flat_field_correction_cli()
