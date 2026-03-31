@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from biahub.settings import (
     CharacterizeSettings,
+    FlatFieldCorrectionSettings,
     ConcatenateSettings,
     DeskewSettings,
     EstimateRegistrationSettings,
@@ -51,6 +52,7 @@ example_settings_params = [
     ("example_stabilize_timelapse_settings.yml", StabilizationSettings),
     ("example_stitch_settings.yml", StitchSettings),
     ("example_track_settings.yml", TrackingSettings),
+    ("example_flat_field_settings.yml", FlatFieldCorrectionSettings),
 ]
 
 try:
