@@ -295,6 +295,7 @@ class DeskewSettings(MyBaseModel):
     px_to_scan_ratio: Optional[PositiveFloat] = None
     scan_step_um: Optional[PositiveFloat] = None
     keep_overhang: bool = False
+    overhang_fill: Literal["zero", "mean"] = "zero"
     average_n_slices: PositiveInt = 3
 
     @field_validator("ls_angle_deg")

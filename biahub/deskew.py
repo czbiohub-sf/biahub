@@ -5,6 +5,7 @@ import click
 import numpy as np
 import submitit
 import torch
+from scipy.ndimage import binary_dilation
 
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate
@@ -82,18 +83,20 @@ def _get_averaged_shape(deskewed_data_shape: tuple, average_window_width: int) -
 
 def _get_transform_matrix(ls_angle_deg: float, px_to_scan_ratio: float):
     """
-    Compute affine transformation matrix used to deskew data.
+    Compute the 4x4 affine matrix that maps oblique light-sheet coordinates
+    to a deskewed (coverslip-aligned) coordinate system.
 
     Parameters
     ----------
     ls_angle_deg : float
+        Light-sheet angle relative to the optical axis, in degrees.
     px_to_scan_ratio : float
-    keep_overhang : bool
+        Ratio of camera pixel spacing to scan step size in object space.
 
     Returns
     -------
-    matrix : np.array
-        Affine transformation matrix.
+    matrix : np.ndarray, shape (4, 4)
+        Affine transformation matrix for use with MONAI's Affine transform.
     """
     ct = np.cos(ls_angle_deg * np.pi / 180)
 
@@ -177,42 +180,110 @@ def _get_deskewed_data_shape(
     return averaged_output_shape, voxel_size
 
 
+def _fill_overhang_with_mean(
+    data: np.ndarray,
+    dilation_iterations: int = 3,
+    debug_plot_path: Path = None,
+) -> np.ndarray:
+    """Replace zero-padded overhang regions with the mean of the valid signal.
+
+    After deskewing with padding_mode="zeros", overhang voxels are exactly 0.
+    Bilinear interpolation at the boundary produces a gradient from signal to 0,
+    so the mask is dilated inward to also cover those blended voxels.
+
+    Parameters
+    ----------
+    data : np.ndarray
+        Deskewed 3D volume with zero-padded overhangs.
+    dilation_iterations : int
+        Number of binary dilation iterations to grow the zero-mask inward,
+        capturing interpolation artifacts at the overhang boundary.
+    debug_plot_path : Path, optional
+        If provided, saves a diagnostic figure showing the masks and result.
+
+    Returns
+    -------
+    filled : np.ndarray
+        Volume with overhang regions replaced by the mean of the valid signal.
+    """
+    zero_mask = data == 0
+    dilated_mask = binary_dilation(zero_mask, iterations=dilation_iterations)
+    valid_mean = data[~dilated_mask].mean()
+    filled = data.copy()
+    filled[dilated_mask] = valid_mean
+
+    if debug_plot_path is not None:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        mid_z = data.shape[0] // 2
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+
+        axes[0, 0].imshow(data[mid_z], cmap="gray")
+        axes[0, 0].set_title(f"Deskewed (z={mid_z})")
+
+        axes[0, 1].imshow(zero_mask[mid_z], cmap="gray")
+        axes[0, 1].set_title("Zero mask")
+
+        axes[1, 0].imshow(dilated_mask[mid_z], cmap="gray")
+        axes[1, 0].set_title(f"Dilated mask (iterations={dilation_iterations})")
+
+        im = axes[1, 1].imshow(filled[mid_z], cmap="gray")
+        axes[1, 1].set_title(f"Filled (mean={valid_mean:.1f})")
+
+        fig.colorbar(im, ax=axes[1, 1], fraction=0.046)
+        fig.tight_layout()
+        fig.savefig(debug_plot_path, dpi=150)
+        plt.close(fig)
+        print(f"Overhang mask debug plot saved to {debug_plot_path}")
+
+    return filled
+
+
 def deskew_zyx(
     raw_data: np.ndarray,
     ls_angle_deg: float,
     px_to_scan_ratio: float,
     keep_overhang: bool,
     average_n_slices: int = 1,
+    overhang_fill: str = "zero",
     device='cpu',
+    debug_plot_path: Path = None,
 ) -> np.ndarray:
-    """Deskews fluorescence data from the mantis microscope
+    """Deskew a single ZYX volume from oblique light-sheet coordinates to
+    coverslip-aligned coordinates using an affine transform.
+
     Parameters
     ----------
-    raw_data : NDArray with ndim == 3
-        raw data from the mantis microscope
-        - axis 0 corresponds to the scanning axis
-        - axis 1 corresponds to the "tilted" axis
-        - axis 2 corresponds to the axis in the plane of the coverslip
+    raw_data : np.ndarray, shape (Z, Y, X)
+        Raw 3D volume where Z is the scanning axis, Y is the tilted axis,
+        and X is in the plane of the coverslip.
     ls_angle_deg : float
-        angle of light sheet with respect to the optical axis in degrees
+        Light-sheet angle relative to the optical axis, in degrees.
     px_to_scan_ratio : float
-        (pixel spacing / scan spacing) in object space
-        e.g. if camera pixels = 6.5 um and mag = 1.4*40, then the pixel spacing
-        is 6.5/(1.4*40) = 0.116 um. If the scan spacing is 0.3 um, then
-        px_to_scan_ratio = 0.116 / 0.3 = 0.386
+        Ratio of camera pixel spacing to scan step size in object space.
+        E.g. pixel_size=6.5um, mag=1.4x40 -> spacing=0.116um, scan=0.3um
+        -> px_to_scan_ratio = 0.116/0.3 = 0.386.
     keep_overhang : bool
-        If true, compute the whole volume within the tilted parallelepiped.
-        If false, only compute the deskewed volume within a cuboid region.
+        If True, output the full volume within the tilted parallelepiped.
+        If False, crop to the cuboid region without overhang.
     average_n_slices : int, optional
-        after deskewing, averages every n slices (default = 1 applies no averaging)
+        Number of Z slices to average after deskewing (default=1, no averaging).
+    overhang_fill : str, optional
+        How to fill overhang regions: "zero" keeps them as zeros (default),
+        "mean" replaces them with the mean of the valid signal.
     device : str, optional
-        torch device to use for computation. Default is 'cpu'.
+        Torch device for computation ('cpu' or 'cuda'). Default is 'cpu'.
+    debug_plot_path : Path, optional
+        If provided, saves an overhang mask diagnostic plot to this path.
+
     Returns
     -------
-    deskewed_data : NDArray with ndim == 3
-        axis 0 is the Z axis, normal to the coverslip
-        axis 1 is the Y axis, input axis 2 in the plane of the coverslip
-        axis 2 is the X axis, the scanning axis
+    deskewed_data : np.ndarray, shape (Z', Y', X')
+        Deskewed volume where Z' is normal to the coverslip, Y' and X' are
+        in the coverslip plane.
     """
     # Prepare transforms
     matrix = _get_transform_matrix(
@@ -243,23 +314,48 @@ def deskew_zyx(
     averaged_deskewed_data = _average_n_slices(
         deskewed_data, average_window_width=average_n_slices
     )
+
+    # Fill overhang regions after averaging
+    if keep_overhang and overhang_fill == "mean":
+        averaged_deskewed_data = _fill_overhang_with_mean(
+            averaged_deskewed_data, debug_plot_path=debug_plot_path
+        )
+
     return averaged_deskewed_data
 
 
-# Adapt ZYX function to CZYX
-# Needs to be a top-level function for multiprocessing pickling
 def deskew_czyx(
     input_position_path: Path,
     output_dirpath: Path,
     t_idx: int,
     settings: DeskewSettings,
 ) -> None:
-    print(f"Processing t={t_idx}")
-    print(f"Input position path: {input_position_path}")
+    """Deskew all channels for a single timepoint and write to the output zarr.
+
+    This is a top-level function so it can be pickled by submitit for SLURM jobs.
+    Each SLURM job processes one (position, timepoint) pair.
+
+    Parameters
+    ----------
+    input_position_path : Path
+        Path to the input OME-Zarr position (e.g. input.zarr/A/1/fov0).
+    output_dirpath : Path
+        Root path of the output OME-Zarr store.
+    t_idx : int
+        Timepoint index to process.
+    settings : DeskewSettings
+        Deskew parameters (angles, ratios, averaging, etc.).
+    """
     position_key = input_position_path.parts[-3:]
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    print(f"Deskewing position={'/'.join(position_key)} t={t_idx} on {device}")
 
     with open_ome_zarr(input_position_path, mode="r") as input_dataset:
         _, C, _, _, _ = input_dataset.data.shape
+
+
+    plot_dirpath = output_dirpath.parent / "deskew_debug_plots"
+    plot_dirpath.mkdir(parents=True, exist_ok=True)
 
     output_path = output_dirpath / Path(*position_key)
     with open_ome_zarr(output_path, mode="r+") as output_dataset:
@@ -271,22 +367,43 @@ def deskew_czyx(
                 settings.px_to_scan_ratio,
                 settings.keep_overhang,
                 settings.average_n_slices,
-                device='cuda' if torch.cuda.is_available() else 'cpu',
+                overhang_fill=settings.overhang_fill,
+                device=device,
+                debug_plot_path=plot_dirpath / f"deskew_debug_plot_tfov_{t_idx}_c_{c}.png",
             )
             output_dataset[0][t_idx, c] = deskewed_data
+    print(f"Done position={'/'.join(position_key)} t={t_idx}")
 
-def deskew( input_position_dirpaths: List[str],
+def deskew(
+    input_position_dirpaths: List[str],
     config_filepath: Path,
     output_dirpath: str,
     sbatch_filepath: str = None,
     local: bool = False,
-    monitor: bool = True,):
+    monitor: bool = True,
+):
+    """Deskew all positions across T and C axes, submitting one SLURM job
+    per (position, timepoint) pair.
+
+    Reads deskew parameters from a YAML config file, creates the output
+    OME-Zarr store, and submits parallel jobs via submitit.
+
+    Parameters
+    ----------
+    input_position_dirpaths : list of str
+        Paths to input OME-Zarr positions (e.g. input.zarr/A/1/fov0).
+    config_filepath : Path
+        Path to the YAML file with DeskewSettings.
+    output_dirpath : str
+        Root path for the output OME-Zarr store.
+    sbatch_filepath : str, optional
+        Path to an sbatch file to override default SLURM parameters.
+    local : bool, optional
+        If True, run locally instead of submitting to SLURM.
+    monitor : bool, optional
+        If True, monitor job progress after submission.
     """
-    Deskew API function to deskew a dataset  across T and C axes using a configuration file
-    
-    
-    """
-        # Convert string paths to Path objects
+    # Convert string paths to Path objects
     output_dirpath = Path(output_dirpath)
 
     slurm_out_path = output_dirpath.parent / "slurm_output"
@@ -343,12 +460,18 @@ def deskew( input_position_dirpaths: List[str],
     else:
         cluster = "slurm"
 
-    # Prepare and submit jobs
-    click.echo(f"Preparing jobs: {slurm_args}")
+    n_positions = len(input_position_dirpaths)
+    n_jobs = n_positions * T
+    click.echo(
+        f"Deskew: {n_positions} position(s) x {T} timepoints = {n_jobs} jobs "
+        f"({cluster} mode)"
+    )
+    click.echo(f"SLURM params: {slurm_args}")
+    click.echo(f"Output: {output_dirpath}")
+    click.echo(f"Deskewed shape per position: (T={T}, C={C}) + {deskewed_shape}")
+
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
-
-    click.echo('Submitting SLURM jobs...')
 
     jobs = []
     with submitit.helpers.clean_env(), executor.batch():
@@ -364,11 +487,13 @@ def deskew( input_position_dirpaths: List[str],
                     )
             )
 
-    job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
+    job_ids = [job.job_id for job in jobs]
+    click.echo(f"Submitted {len(job_ids)} jobs: {job_ids[0]} .. {job_ids[-1]}")
 
     log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
+    click.echo(f"Job IDs saved to {log_path}")
 
     if monitor:
         monitor_jobs(jobs, input_position_dirpaths)
