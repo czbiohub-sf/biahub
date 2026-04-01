@@ -9,6 +9,7 @@ import torch
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate, process_single_position
 from monai.transforms.spatial.array import Affine
+from skimage.morphology import binary_dilation
 
 from biahub.cli import utils
 from biahub.cli.monitor import monitor_jobs
@@ -175,6 +176,8 @@ def get_deskewed_data_shape(
     averaged_output_shape = _get_averaged_shape(output_shape, average_n_slices)
 
     return averaged_output_shape, voxel_size
+
+
 def _fill_overhang_with_mean(
     data: np.ndarray,
     dilation_iterations: int = 3,
@@ -235,6 +238,7 @@ def _fill_overhang_with_mean(
         print(f"Overhang mask debug plot saved to {debug_plot_path}")
 
     return filled
+
 
 def deskew_zyx(
     raw_data: np.ndarray,
@@ -305,7 +309,7 @@ def deskew_zyx(
         deskewed_data, average_window_width=average_n_slices
     )
 
-        # Fill overhang regions after averaging
+    # Fill overhang regions after averaging
     if keep_overhang and overhang_fill == "mean":
         averaged_deskewed_data = _fill_overhang_with_mean(
             averaged_deskewed_data, debug_plot_path=debug_plot_path
@@ -318,6 +322,7 @@ def deskew_zyx(
 # Needs to be a top-level function for multiprocessing pickling
 def _czyx_deskew_data(data, **kwargs):
     return deskew_zyx(data[0], **kwargs)[None]
+
 
 def deskew(
     input_position_dirpaths: List[str],
@@ -349,7 +354,7 @@ def deskew(
     -------
     None
     """
-        # Convert string paths to Path objects
+    # Convert string paths to Path objects
     output_dirpath = Path(output_dirpath)
 
     slurm_out_path = output_dirpath.parent / "slurm_output"
@@ -447,7 +452,6 @@ def deskew(
 
     if monitor:
         monitor_jobs(jobs, input_position_dirpaths)
-
 
 
 @click.command("deskew")
