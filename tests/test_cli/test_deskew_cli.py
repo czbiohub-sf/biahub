@@ -36,8 +36,8 @@ def test_deskew_data():
     ls_angle_deg = 36
     average_n_slices = 1
     keep_overhang = True
-    deskewed_data = deskew.deskew(
-        raw_data, ls_angle_deg, px_to_scan_ratio, keep_overhang, average_n_slices
+    deskewed_data = deskew.deskew_zyx(
+        raw_data, ls_angle_deg, px_to_scan_ratio, keep_overhang, average_n_slices=average_n_slices
     )
     assert deskewed_data.shape[1] == 4
     assert deskewed_data[0, 0, 0] != 0  # indicates incorrect shifting
@@ -94,7 +94,7 @@ def test_deskew_overhang_only_dataset_error():
         deskew.get_deskewed_data_shape(shape, angle, ratio, keep_overhang=False)
 
     with pytest.raises(ValueError, match="Dataset contains only overhang"):
-        deskew.deskew(data, angle, ratio, keep_overhang=False)
+        deskew.deskew_zyx(data, angle, ratio, keep_overhang=False)
 
     # Should succeed with keep_overhang=True
     out_shape, _ = deskew.get_deskewed_data_shape(shape, angle, ratio, keep_overhang=True)
