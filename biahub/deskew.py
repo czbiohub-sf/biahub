@@ -248,11 +248,11 @@ def deskew_zyx(
 
 # Adapt ZYX function to CZYX
 # Needs to be a top-level function for multiprocessing pickling
-def _czyx_deskew_data(
+def deskew_czyx(
     input_position_path: Path,
     output_dirpath: Path,
     t_idx: int,
-    deskew_args: dict,
+    settings: DeskewSettings,
 ) -> None:
     print(f"Processing t={t_idx}")
     print(f"Input position path: {input_position_path}")
@@ -265,7 +265,14 @@ def _czyx_deskew_data(
     with open_ome_zarr(output_path, mode="r+") as output_dataset:
         for c in range(C):
             data = np.asarray(input_dataset.data[t_idx, c])
-            deskewed_data = deskew_zyx(data, **deskew_args)
+            deskewed_data = deskew_zyx(
+                data,
+                settings.ls_angle_deg,
+                settings.px_to_scan_ratio,
+                settings.keep_overhang,
+                settings.average_n_slices,
+                device='cuda' if torch.cuda.is_available() else 'cpu',
+            )
             output_dataset[0][t_idx, c] = deskewed_data
 
 def deskew( input_position_dirpaths: List[str],
@@ -311,13 +318,6 @@ def deskew( input_position_dirpaths: List[str],
         dtype=np.float32,
     )
 
-    deskew_args = {
-        'ls_angle_deg': settings.ls_angle_deg,
-        'px_to_scan_ratio': settings.px_to_scan_ratio,
-        'keep_overhang': settings.keep_overhang,
-        'average_n_slices': settings.average_n_slices,
-    }
-
     # Estimate resources
     num_cpus, gb_ram = estimate_resources(
         shape=(T, C, Z, Y, X), ram_multiplier=16, max_num_cpus=16
@@ -356,11 +356,11 @@ def deskew( input_position_dirpaths: List[str],
             for t in range(T):
                 jobs.append(
                     executor.submit(
-                        _czyx_deskew_data,
+                        deskew_czyx,
                         input_position_path,
                         output_dirpath,
                         t,
-                        deskew_args,
+                        settings,
                     )
             )
 
