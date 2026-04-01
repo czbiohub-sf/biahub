@@ -25,6 +25,21 @@ Add `-resume` to restart from where a previous run left off.
 
 ### Environment setup
 
+On HPC, load the required modules first:
+
+```bash
+module load nextflow
+module load uv
+```
+
+Create the virtualenv (from the repo root):
+
+```bash
+uv venv
+source .venv/bin/activate
+uv sync
+```
+
 Nextflow processes run in a clean shell, so the `biahub` CLI must be made available explicitly. Pass `--venv_path` to activate a virtualenv before each process:
 
 ```bash
