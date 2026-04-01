@@ -8,11 +8,15 @@ params.flat_field_config = null
 params.deskew_config     = null
 params.reconstruct_config = null
 params.num_processes     = 1
-params.venv_path         = null
+params.biahub_project    = null
+params.work_dir          = null
 
 // Derive dataset name from input zarr basename (e.g. "experiment.zarr" -> "experiment")
 def dataset_name = params.input_zarr ?
     new File(params.input_zarr).name.replaceAll(/\.zarr$/, '') : null
+
+def biahub_cmd = params.biahub_project ?
+    "uv run --project ${params.biahub_project} biahub" : "biahub"
 
 
 // ---------------------------------------------------------------------------
@@ -27,7 +31,7 @@ process list_positions {
 
     script:
     """
-    biahub nf list-positions -i ${params.input_zarr}
+    ${biahub_cmd} nf list-positions -i ${params.input_zarr}
     """
 }
 
@@ -40,7 +44,7 @@ process init_flat_field {
 
     script:
     """
-    biahub nf init-flat-field \
+    ${biahub_cmd} nf init-flat-field \
         -i ${params.input_zarr} \
         -o ${params.output_dir}/0-flatfield/${dataset_name}.zarr \
         -c ${params.flat_field_config}
@@ -62,7 +66,7 @@ process run_flat_field {
 
     script:
     """
-    biahub nf run-flat-field \
+    ${biahub_cmd} nf run-flat-field \
         -i ${params.input_zarr} \
         -o ${params.output_dir}/0-flatfield/${dataset_name}.zarr \
         -p ${position} \
@@ -82,7 +86,7 @@ process init_deskew {
 
     script:
     """
-    biahub nf init-deskew \
+    ${biahub_cmd} nf init-deskew \
         -i ${params.output_dir}/0-flatfield/${dataset_name}.zarr \
         -o ${params.output_dir}/1-deskew/${dataset_name}.zarr \
         -c ${params.deskew_config}
@@ -104,7 +108,7 @@ process run_deskew {
 
     script:
     """
-    biahub nf run-deskew \
+    ${biahub_cmd} nf run-deskew \
         -i ${params.output_dir}/0-flatfield/${dataset_name}.zarr \
         -o ${params.output_dir}/1-deskew/${dataset_name}.zarr \
         -p ${position} \
@@ -124,7 +128,7 @@ process init_reconstruct {
 
     script:
     """
-    biahub nf init-reconstruct \
+    ${biahub_cmd} nf init-reconstruct \
         -i ${params.output_dir}/1-deskew/${dataset_name}.zarr \
         -o ${params.output_dir}/2-reconstruct/${dataset_name}.zarr \
         -t ${params.output_dir}/2-reconstruct/transfer_function_${dataset_name}.zarr \
@@ -147,7 +151,7 @@ process run_apply_inv_tf {
 
     script:
     """
-    biahub nf run-apply-inv-tf \
+    ${biahub_cmd} nf run-apply-inv-tf \
         -i ${params.output_dir}/1-deskew/${dataset_name}.zarr \
         -o ${params.output_dir}/2-reconstruct/${dataset_name}.zarr \
         -t ${params.output_dir}/2-reconstruct/transfer_function_${dataset_name}.zarr \
