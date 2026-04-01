@@ -279,6 +279,10 @@ class EstimateStabilizationSettings(MyBaseModel):
         return self
 
 
+class FlatFieldCorrectionSettings(MyBaseModel):
+    channel_names: Optional[list[str]] = None
+
+
 class ProcessingSettings(MyBaseModel):
     fliplr: Optional[bool] = False
     flipud: Optional[bool] = False

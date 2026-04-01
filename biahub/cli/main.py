@@ -70,6 +70,11 @@ COMMANDS = [
         "help": "Estimate affine transform between timepoints or arms",
     },
     {
+        "name": "flat-field",
+        "import_path": "biahub.flat_field_correction.flat_field_correction_cli",
+        "help": "Apply flat field correction to selected channels",
+    },
+    {
         "name": "flip",
         "import_path": "biahub.flip.flip_cli",
         "help": "Flip images in a dataset",
