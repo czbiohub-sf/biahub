@@ -9,7 +9,7 @@ import torch
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate, process_single_position
 from monai.transforms.spatial.array import Affine
-from skimage.morphology import binary_dilation
+from scipy.ndimage import binary_dilation
 
 from biahub.cli import utils
 from biahub.cli.monitor import monitor_jobs
