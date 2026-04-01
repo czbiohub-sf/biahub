@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import List
+from typing import List, Literal
 
 import click
 import numpy as np
@@ -175,15 +175,76 @@ def get_deskewed_data_shape(
     averaged_output_shape = _get_averaged_shape(output_shape, average_n_slices)
 
     return averaged_output_shape, voxel_size
+def _fill_overhang_with_mean(
+    data: np.ndarray,
+    dilation_iterations: int = 3,
+    debug_plot_path: Path = None,
+) -> np.ndarray:
+    """Replace zero-padded overhang regions with the mean of the valid signal.
 
+    After deskewing with padding_mode="zeros", overhang voxels are exactly 0.
+    Bilinear interpolation at the boundary produces a gradient from signal to 0,
+    so the mask is dilated inward to also cover those blended voxels.
+
+    Parameters
+    ----------
+    data : np.ndarray
+        Deskewed 3D volume with zero-padded overhangs.
+    dilation_iterations : int
+        Number of binary dilation iterations to grow the zero-mask inward,
+        capturing interpolation artifacts at the overhang boundary.
+    debug_plot_path : Path, optional
+        If provided, saves a diagnostic figure showing the masks and result.
+
+    Returns
+    -------
+    filled : np.ndarray
+        Volume with overhang regions replaced by the mean of the valid signal.
+    """
+    zero_mask = data == 0
+    dilated_mask = binary_dilation(zero_mask, iterations=dilation_iterations)
+    valid_mean = data[~dilated_mask].mean()
+    filled = data.copy()
+    filled[dilated_mask] = valid_mean
+
+    if debug_plot_path is not None:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        mid_z = data.shape[0] // 2
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+
+        axes[0, 0].imshow(data[mid_z], cmap="gray")
+        axes[0, 0].set_title(f"Deskewed (z={mid_z})")
+
+        axes[0, 1].imshow(zero_mask[mid_z], cmap="gray")
+        axes[0, 1].set_title("Zero mask")
+
+        axes[1, 0].imshow(dilated_mask[mid_z], cmap="gray")
+        axes[1, 0].set_title(f"Dilated mask (iterations={dilation_iterations})")
+
+        im = axes[1, 1].imshow(filled[mid_z], cmap="gray")
+        axes[1, 1].set_title(f"Filled (mean={valid_mean:.1f})")
+
+        fig.colorbar(im, ax=axes[1, 1], fraction=0.046)
+        fig.tight_layout()
+        fig.savefig(debug_plot_path, dpi=150)
+        plt.close(fig)
+        print(f"Overhang mask debug plot saved to {debug_plot_path}")
+
+    return filled
 
 def deskew_zyx(
     raw_data: np.ndarray,
     ls_angle_deg: float,
     px_to_scan_ratio: float,
     keep_overhang: bool,
+    device: str = 'cpu',
     average_n_slices: int = 1,
-    device='cpu',
+    overhang_fill: Literal["zero", "mean"] = "zero",
+    debug_plot_path: Path = None,
 ) -> np.ndarray:
     """Deskews fluorescence data from the mantis microscope
     Parameters
@@ -243,6 +304,13 @@ def deskew_zyx(
     averaged_deskewed_data = _average_n_slices(
         deskewed_data, average_window_width=average_n_slices
     )
+
+        # Fill overhang regions after averaging
+    if keep_overhang and overhang_fill == "mean":
+        averaged_deskewed_data = _fill_overhang_with_mean(
+            averaged_deskewed_data, debug_plot_path=debug_plot_path
+        )
+
     return averaged_deskewed_data
 
 
@@ -319,6 +387,7 @@ def deskew(
         'px_to_scan_ratio': settings.px_to_scan_ratio,
         'keep_overhang': settings.keep_overhang,
         'average_n_slices': settings.average_n_slices,
+        'overhang_fill': settings.overhang_fill,
         'extra_metadata': {'deskew': settings.model_dump()},
     }
 
