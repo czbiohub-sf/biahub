@@ -37,7 +37,11 @@ def test_deskew_data():
     average_n_slices = 1
     keep_overhang = True
     deskewed_data = deskew.deskew_zyx(
-        raw_data, ls_angle_deg, px_to_scan_ratio, keep_overhang, average_n_slices=average_n_slices
+        raw_data,
+        ls_angle_deg,
+        px_to_scan_ratio,
+        keep_overhang,
+        average_n_slices=average_n_slices,
     )
     assert deskewed_data.shape[1] == 4
     assert deskewed_data[0, 0, 0] != 0  # indicates incorrect shifting
