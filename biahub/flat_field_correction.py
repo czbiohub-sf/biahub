@@ -1,3 +1,6 @@
+import multiprocessing as mp
+
+from functools import partial
 from pathlib import Path
 from typing import List, Tuple
 
@@ -46,40 +49,27 @@ def flat_field_correction(
     static_pattern = np.median(zyx_data, axis=axis)
     mean_val = static_pattern.mean()
     static_dict = {
-        "mean": mean_val,
-        "min": static_pattern.min(),
-        "max": static_pattern.max(),
-        "std": static_pattern.std(),
+        "mean": float(mean_val),
+        "min": float(static_pattern.min()),
+        "max": float(static_pattern.max()),
+        "std": float(static_pattern.std()),
     }
     return zyx_data / static_pattern * mean_val, static_dict
 
 
-def flat_field_single_timepoint(
+def _process_timepoint(
     input_data_path: Path,
-    output_path: Path,
+    output_position_path: Path,
     channel_names: List[str],
     t_idx: int,
 ):
-    """Apply flat field correction to selected channels and copy the rest at a single timepoint.
-
-    Parameters
-    ----------
-    input_data_path : Path
-        Path to the input position.
-    output_path : Path
-        Path to the output position.
-    flat_field_channel_indices : list[int]
-        Indices of channels to apply flat field correction to.
-    """
-
-    click.echo(f"Starting: input={input_data_path}, output={output_path}")
-    position_key = input_data_path.parts[-3:]
-
+    """Process all channels for a single timepoint."""
     with open_ome_zarr(input_data_path, mode="r") as input_dataset:
-        _, C, _, _, _ = input_dataset.data.shape
+        all_channel_names = input_dataset.channel_names
+        C = input_dataset.data.shape[1]
 
         for c_idx in range(C):
-            channel_name = input_dataset.channel_names[c_idx]
+            channel_name = all_channel_names[c_idx]
             zyx_data = np.asarray(input_dataset.data[t_idx, c_idx])
 
             if _check_nan_n_zeros(zyx_data):
@@ -92,14 +82,53 @@ def flat_field_single_timepoint(
                 zyx_data = np.asarray(zyx_data, dtype=np.float32)
                 static_dict = None
 
-            with open_ome_zarr(output_path / Path(*position_key), mode="r+") as output_dataset:
+            with open_ome_zarr(output_position_path, mode="r+") as output_dataset:
                 output_dataset[0][t_idx, c_idx] = zyx_data
                 if static_dict is not None:
                     output_dataset.zattrs[f"flat-field-t{t_idx}-{channel_name}"] = static_dict
 
-            click.echo(f"[t={t_idx}, c={c_idx}] Done ({c_idx + 1}/{C} channels)")
+    click.echo(f"[t={t_idx}] Done")
 
-        click.echo(f"[t={t_idx}] Completed all {C} channels")
+
+def process_single_position_flat_field(
+    input_data_path: Path,
+    output_path: Path,
+    channel_names: List[str],
+    num_processes: int = mp.cpu_count(),
+):
+    """Apply flat field correction to a single position with multiprocessing over T.
+
+    Parameters
+    ----------
+    input_data_path : Path
+        Path to the input position.
+    output_path : Path
+        Path to the output zarr store.
+    channel_names : list[str]
+        Channel names to flat field correct.
+    num_processes : int
+        Number of parallel processes.
+    """
+    click.echo(f"Processing position: {input_data_path}")
+    position_key = input_data_path.parts[-3:]
+    output_position_path = output_path / Path(*position_key)
+
+    with open_ome_zarr(input_data_path, mode="r") as input_dataset:
+        T = input_dataset.data.shape[0]
+
+    click.echo(f"Starting multiprocess pool with {num_processes} processes")
+    with mp.Pool(num_processes) as pool:
+        pool.map(
+            partial(
+                _process_timepoint,
+                input_data_path,
+                output_position_path,
+                channel_names,
+            ),
+            range(T),
+        )
+
+    click.echo(f"Completed position: {input_data_path}")
 
 
 def flat_field(
@@ -124,10 +153,6 @@ def flat_field(
         Path to the sbatch file.
     local : bool
         If True, run locally.
-
-    Returns
-    -------
-    None
     """
     output_dirpath = Path(output_dirpath)
     slurm_out_path = output_dirpath.parent / "slurm_output"
@@ -158,7 +183,7 @@ def flat_field(
         click.echo("Other channels will be copied as-is")
     else:
         raise click.ClickException(
-            "Must specify either 'channel_names' or 'flat_field_all: true' in config."
+            "Must specify either 'channel_names' or set channel_names to null in config."
         )
 
     # Create output zarr with all channels
@@ -175,15 +200,15 @@ def flat_field(
 
     # Estimate resources
     num_cpus, gb_ram = estimate_resources(
-        shape=(1, C, Z, Y, X),
-        ram_multiplier=15,
+        shape=(T, C, Z, Y, X),
+        ram_multiplier=5,
     )
 
     # Prepare SLURM arguments
     slurm_args = {
         "slurm_job_name": "flat-field",
         "slurm_mem_per_cpu": f"{gb_ram}G",
-        "slurm_cpus_per_task": 1,
+        "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,
         "slurm_time": 360,
         "slurm_partition": "cpu",
@@ -196,7 +221,7 @@ def flat_field(
     # Run locally or submit to SLURM
     cluster = "local" if local else "slurm"
 
-    # Prepare and submit jobs (one per FOV and T)
+    # Prepare and submit jobs (one per position)
     click.echo(f"Preparing jobs: {slurm_args}")
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
@@ -205,16 +230,15 @@ def flat_field(
     jobs = []
     with submitit.helpers.clean_env(), executor.batch():
         for input_position_path in input_position_dirpaths:
-            for t_idx in range(T):
-                jobs.append(
-                    executor.submit(
-                        flat_field_single_timepoint,
-                        input_position_path,
-                        output_dirpath,
-                        channel_names,
-                        t_idx,
-                    )
+            jobs.append(
+                executor.submit(
+                    process_single_position_flat_field,
+                    input_position_path,
+                    output_dirpath,
+                    channel_names,
+                    num_processes=slurm_args["slurm_cpus_per_task"],
                 )
+            )
 
     job_ids = [job.job_id for job in jobs]
     log_path = slurm_out_path / "submitit_jobs_ids.log"
@@ -222,9 +246,7 @@ def flat_field(
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
 
-    click.echo(
-        f"Submitted {len(jobs)} jobs ({len(input_position_dirpaths)} FOVs x {T} timepoints)"
-    )
+    click.echo(f"Submitted {len(jobs)} jobs ({len(input_position_dirpaths)} positions)")
 
 
 @click.command("flat-field")
