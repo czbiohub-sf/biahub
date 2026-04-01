@@ -3,7 +3,6 @@ from typing import List, Tuple
 
 import click
 import numpy as np
-import pandas as pd
 import submitit
 
 from iohub.ngff import open_ome_zarr
@@ -28,37 +27,31 @@ from biahub.settings import FlatFieldCorrectionSettings
 def flat_field_correction(
     zyx_data: np.ndarray,
     axis: int = 0,
-    keepdims: bool = True,
 ) -> Tuple[np.ndarray, dict]:
     """
-    Apply flat field correction to the data.
+    Apply flat field correction by dividing out the median pattern along an axis.
 
     Parameters
     ----------
     zyx_data : np.ndarray
         The data to apply flat field correction to.
     axis : int
-        The axis to compute the median on.
-    keepdims : bool
-        Whether to keep the dimensions of the static pattern. Default is True.
+        The axis to compute the median along.
 
     Returns
     -------
     Tuple[np.ndarray, dict]
         A tuple containing the flat field corrected data and the static pattern statistics.
     """
-
-    static_pattern = np.median(zyx_data, axis=axis, keepdims=keepdims)
+    static_pattern = np.median(zyx_data, axis=axis)
+    mean_val = static_pattern.mean()
     static_dict = {
-        "shape": static_pattern.shape,
-        "mean": static_pattern.mean(),
+        "mean": mean_val,
         "min": static_pattern.min(),
         "max": static_pattern.max(),
         "std": static_pattern.std(),
-        "var": static_pattern.var(),
-        "sum": static_pattern.sum(),
     }
-    return zyx_data / static_pattern * static_pattern.mean(), static_dict
+    return zyx_data / static_pattern * mean_val, static_dict
 
 
 def flat_field_single_timepoint(
@@ -81,15 +74,11 @@ def flat_field_single_timepoint(
 
     click.echo(f"Starting: input={input_data_path}, output={output_path}")
     position_key = input_data_path.parts[-3:]
-    fov_name = "_".join(position_key)
-    output_metadata_path = output_path.parent / "static_metadata" / fov_name
-    output_metadata_path.mkdir(parents=True, exist_ok=True)
 
     with open_ome_zarr(input_data_path, mode="r") as input_dataset:
         _, C, _, _, _ = input_dataset.data.shape
 
         for c_idx in range(C):
-            click.echo(f"[t={t_idx}, c={c_idx}] Reading data...")
             channel_name = input_dataset.channel_names[c_idx]
             zyx_data = np.asarray(input_dataset.data[t_idx, c_idx])
 
@@ -98,23 +87,15 @@ def flat_field_single_timepoint(
                 continue
 
             if channel_name in channel_names:
-                click.echo(f"[t={t_idx}, c={c_idx}] Applying flat field correction...")
                 zyx_data, static_dict = flat_field_correction(zyx_data)
-                click.echo(f"[t={t_idx}, c={c_idx}] Flat field correction done")
-                static_dict_path = (
-                    output_metadata_path / f"static_dict_t_{t_idx}_{channel_name}.csv"
-                )
-                pd.DataFrame(static_dict).to_csv(static_dict_path, index=False)
-                click.echo(
-                    f"[t={t_idx}, c={c_idx}] Static dictionary saved to {static_dict_path}"
-                )
             else:
-                click.echo(f"[t={t_idx}, c={c_idx}] Copying channel as-is")
                 zyx_data = np.asarray(zyx_data, dtype=np.float32)
+                static_dict = None
 
-            click.echo(f"[t={t_idx}, c={c_idx}] Writing to output...")
             with open_ome_zarr(output_path / Path(*position_key), mode="r+") as output_dataset:
                 output_dataset[0][t_idx, c_idx] = zyx_data
+                if static_dict is not None:
+                    output_dataset.zattrs[f"flat-field-t{t_idx}-{channel_name}"] = static_dict
 
             click.echo(f"[t={t_idx}, c={c_idx}] Done ({c_idx + 1}/{C} channels)")
 
