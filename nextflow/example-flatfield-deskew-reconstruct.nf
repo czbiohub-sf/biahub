@@ -24,26 +24,16 @@ def viscy_cmd = params.viscy_project ?
     "uv run --project ${params.viscy_project} viscy" :
     "uv run --from 'viscy @ git+https://github.com/mehta-lab/VisCy@v0.3.4' viscy"
 
+def parse_resources(stdout_text) {
+    def line = stdout_text.trim().readLines().findAll { it.startsWith('RESOURCES:') }.last()
+    def parts = line.replace('RESOURCES:', '').trim().split(' ')
+    return [cpus: parts[0].toInteger(), mem_gb: parts[1].toInteger()]
+}
+
 
 // ---------------------------------------------------------------------------
 // Processes — shared
 // ---------------------------------------------------------------------------
-
-process estimate_resources {
-    label 'cpu_small'
-
-    input:
-    val ram_multiplier
-
-    output:
-    stdout
-
-    script:
-    """
-    ${biahub_cmd} nf estimate-resources -i ${params.input_zarr} --ram-multiplier ${ram_multiplier}
-    """
-}
-
 
 process list_positions {
     label 'cpu_small'
@@ -66,7 +56,7 @@ process init_flat_field {
     label 'cpu_small'
 
     output:
-    val true
+    stdout
 
     script:
     """
@@ -81,7 +71,7 @@ process init_flat_field {
 process run_flat_field {
     tag "${position}"
     cpus { meta.cpus }
-    memory { "${meta.mem_gb * meta.cpus} GB" }
+    memory { "${meta.mem_gb} GB" }
     time '2h'
     queue 'cpu'
     maxRetries 1
@@ -116,7 +106,7 @@ process init_deskew {
     val trigger
 
     output:
-    val true
+    stdout
 
     script:
     """
@@ -129,13 +119,17 @@ process init_deskew {
 
 
 process run_deskew {
-    label 'gpu'
     tag "${position}"
+    cpus { meta.cpus }
+    memory { "${meta.mem_gb} GB" }
+    time '2h'
+    queue 'gpu'
+    clusterOptions '--gres=gpu:1'
     maxRetries 1
     errorStrategy 'retry'
 
     input:
-    val position
+    tuple val(position), val(meta)
 
     output:
     val position
@@ -162,7 +156,7 @@ process init_reconstruct {
     val trigger
 
     output:
-    val true
+    stdout
 
     script:
     """
@@ -170,19 +164,23 @@ process init_reconstruct {
         -i ${params.output_dir}/1-deskew/${dataset_name}.zarr \
         -o ${params.output_dir}/2-reconstruct/${dataset_name}.zarr \
         -t ${params.output_dir}/2-reconstruct/transfer_function_${dataset_name}.zarr \
-        -c ${params.reconstruct_config}
+        -c ${params.reconstruct_config} \
+        -j ${params.num_processes}
     """
 }
 
 
 process run_apply_inv_tf {
-    label 'cpu_medium'
     tag "${position}"
+    cpus { meta.cpus }
+    memory { "${meta.mem_gb} GB" }
+    time '2h'
+    queue 'cpu'
     maxRetries 1
     errorStrategy 'retry'
 
     input:
-    val position
+    tuple val(position), val(meta)
 
     output:
     val position
@@ -211,7 +209,7 @@ process init_virtual_stain {
     val trigger
 
     output:
-    val true
+    stdout
 
     script:
     """
@@ -244,13 +242,17 @@ process run_virtual_stain_preprocess {
 
 
 process run_virtual_stain {
-    label 'gpu'
     tag "${position}"
+    cpus { meta.cpus }
+    memory { "${meta.mem_gb} GB" }
+    time '2h'
+    queue 'gpu'
+    clusterOptions '--gres=gpu:1'
     maxRetries 1
     errorStrategy 'retry'
 
     input:
-    val position
+    tuple val(position), val(meta)
 
     output:
     val position
@@ -280,14 +282,11 @@ process run_virtual_stain {
 workflow flat_field_wf {
     take:
     positions
-    resources
 
     main:
-    ff_init = init_flat_field()
+    resources = init_flat_field().map { parse_resources(it) }
     ff_done = positions
         .flatMap { it }
-        .combine(ff_init)
-        .map { pos, ready -> pos }
         .combine(resources)
         | run_flat_field
         | collect
@@ -303,11 +302,10 @@ workflow deskew_wf {
     prev_done
 
     main:
-    dk_init = init_deskew(prev_done.map { 'done' })
+    resources = init_deskew(prev_done.map { 'done' }).map { parse_resources(it) }
     dk_done = positions
         .flatMap { it }
-        .combine(dk_init)
-        .map { pos, ready -> pos }
+        .combine(resources)
         | run_deskew
         | collect
 
@@ -322,11 +320,10 @@ workflow reconstruct_wf {
     prev_done
 
     main:
-    rc_init = init_reconstruct(prev_done.map { 'done' })
+    resources = init_reconstruct(prev_done.map { 'done' }).map { parse_resources(it) }
     rc_done = positions
         .flatMap { it }
-        .combine(rc_init)
-        .map { pos, ready -> pos }
+        .combine(resources)
         | run_apply_inv_tf
         | collect
 
@@ -341,15 +338,15 @@ workflow virtual_stain_wf {
     prev_done
 
     main:
-    vs_init = init_virtual_stain(prev_done.map { 'done' })
+    resources = init_virtual_stain(prev_done.map { 'done' }).map { parse_resources(it) }
     vs_preprocess = run_virtual_stain_preprocess(prev_done.map { 'done' })
 
-    ready = vs_init.combine(vs_preprocess)
+    ready = resources.combine(vs_preprocess)
 
     vs_done = positions
         .flatMap { it }
         .combine(ready)
-        .map { pos, init_done, preprocess_done -> pos }
+        .map { pos, meta, preprocess_done -> [pos, meta] }
         | run_virtual_stain
         | collect
 
@@ -376,11 +373,7 @@ workflow {
         | take( params.max_positions ?: -1 )
         | collect
 
-    ff_resources = estimate_resources(Channel.value(5))
-        .map { it.trim().split(' ') }
-        .map { [cpus: it[0].toInteger(), mem_gb: it[1].toInteger()] }
-
-    ff_done = flat_field_wf(all_positions, ff_resources)
+    ff_done = flat_field_wf(all_positions)
     dk_done = deskew_wf(all_positions, ff_done.done)
     rc_done = reconstruct_wf(all_positions, dk_done.done)
 

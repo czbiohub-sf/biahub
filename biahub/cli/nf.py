@@ -7,7 +7,7 @@ import numpy as np
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate
 
-from biahub.cli.utils import _check_nan_n_zeros, yaml_to_model
+from biahub.cli.utils import _check_nan_n_zeros, estimate_resources, yaml_to_model
 
 logger = logging.getLogger(__name__)
 
@@ -16,21 +16,6 @@ logger = logging.getLogger(__name__)
 def nf_cli():
     """Nextflow-oriented commands for single-unit-of-work processing."""
 
-
-@nf_cli.command("estimate-resources")
-@click.option("--input-zarr", "-i", required=True, type=click.Path(exists=True))
-@click.option("--ram-multiplier", default=1.0, type=float)
-def estimate_resources_cmd(input_zarr: str, ram_multiplier: float):
-    """Estimate cpus and memory for processing. Outputs: cpus mem_per_cpu_gb"""
-    from biahub.cli.utils import estimate_resources
-
-    with open_ome_zarr(input_zarr, mode="r") as plate:
-        for _, pos in plate.positions():
-            shape = pos.data.shape
-            break
-
-    num_cpus, gb_ram_per_cpu = estimate_resources(shape, ram_multiplier=ram_multiplier)
-    click.echo(f"{num_cpus} {gb_ram_per_cpu}")
 
 
 @nf_cli.command("list-positions")
@@ -86,6 +71,11 @@ def init_flat_field(input_zarr: str, output_zarr: str, config: str):
         dtype=np.float32,
     )
     click.echo(f"Created {output_zarr} ({len(position_keys)} positions)")
+
+    num_cpus, mem_per_cpu = estimate_resources(
+        shape=(T, C, Z, Y, X), ram_multiplier=5
+    )
+    click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
 
 
 @nf_cli.command("run-flat-field")
@@ -164,6 +154,11 @@ def init_deskew(input_zarr: str, output_zarr: str, config: str):
     )
     click.echo(f"Created {output_zarr} ({len(position_keys)} positions)")
 
+    num_cpus, mem_per_cpu = estimate_resources(
+        shape=(T, C, Z, Y, X), ram_multiplier=16, max_num_cpus=16
+    )
+    click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
+
 
 @nf_cli.command("run-deskew")
 @click.option("--input-zarr", "-i", required=True, type=click.Path(exists=True))
@@ -219,7 +214,10 @@ def run_deskew(input_zarr: str, output_zarr: str, position: str, config: str):
 @click.option("--output-zarr", "-o", required=True, type=click.Path())
 @click.option("--tf-path", "-t", required=True, type=click.Path())
 @click.option("--config", "-c", required=True, type=click.Path(exists=True))
-def init_reconstruct(input_zarr: str, output_zarr: str, tf_path: str, config: str):
+@click.option("--num-processes", "-j", default=1, type=int)
+def init_reconstruct(
+    input_zarr: str, output_zarr: str, tf_path: str, config: str, num_processes: int
+):
     """Compute transfer function and create empty output zarr for reconstruction."""
     from waveorder.cli.apply_inverse_transfer_function import (
         get_reconstruction_output_metadata,
@@ -228,6 +226,8 @@ def init_reconstruct(input_zarr: str, output_zarr: str, tf_path: str, config: st
         compute_transfer_function_cli as compute_transfer_function,
     )
     from waveorder.cli.utils import create_empty_hcs_zarr
+    from waveorder.cli.utils import estimate_resources as wo_estimate_resources
+    from waveorder.cli.settings import ReconstructionSettings
 
     config_path = Path(config)
     tf_zarr = Path(tf_path)
@@ -235,10 +235,12 @@ def init_reconstruct(input_zarr: str, output_zarr: str, tf_path: str, config: st
     with open_ome_zarr(input_zarr, mode="r") as plate:
         position_keys = []
         first_position_path = None
+        T = C = Z = Y = X = 0
         for name, pos in plate.positions():
             position_keys.append(tuple(name.split("/")))
             if first_position_path is None:
                 first_position_path = Path(input_zarr) / name
+                T, C, Z, Y, X = pos.data.shape
 
     click.echo(f"Computing transfer function from {first_position_path}")
     compute_transfer_function(first_position_path, config_path, tf_zarr)
@@ -252,6 +254,12 @@ def init_reconstruct(input_zarr: str, output_zarr: str, tf_path: str, config: st
         **output_metadata,
     )
     click.echo(f"Created {output_zarr} ({len(position_keys)} positions)")
+
+    settings = yaml_to_model(config_path, ReconstructionSettings)
+    num_cpus, mem_per_cpu = wo_estimate_resources(
+        [T, C, Z, Y, X], settings, num_processes
+    )
+    click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
 
 
 @nf_cli.command("run-apply-inv-tf")
@@ -334,6 +342,10 @@ def init_virtual_stain(input_zarr: str, output_zarr: str, config: str):
         f"Created {output_zarr} ({len(position_keys)} positions, "
         f"channels={prediction_channels})"
     )
+
+    num_cpus = 4
+    mem_per_cpu = 8
+    click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
 
 
 @nf_cli.command("copy-virtual-stain")
