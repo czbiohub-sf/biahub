@@ -2,7 +2,7 @@
 
 ## example-flatfield-deskew-reconstruct
 
-Three-step pipeline: flat-field correction → deskew → reconstruct (compute transfer function + apply inverse TF). Each step fans out per position within the plate zarr.
+Four-step pipeline: flat-field correction → deskew → reconstruct (compute transfer function + apply inverse TF) → virtual stain (optional). Each step fans out per position within the plate zarr.
 
 ![Pipeline DAG](example-flatfield-deskew-reconstruct.png)
 
@@ -114,7 +114,8 @@ biahub nf init-flat-field -i <input.zarr> -o <output.zarr> -c <config.yml>
 biahub nf run-flat-field -i <input.zarr> -o <output.zarr> -p <position> -c <config.yml>
 biahub nf init-deskew -i <input.zarr> -o <output.zarr> -c <config.yml>
 biahub nf run-deskew -i <input.zarr> -o <output.zarr> -p <position> -c <config.yml>
-biahub nf init-reconstruct -i <input.zarr> -o <output.zarr> -t <tf.zarr> -c <config.yml>
+biahub nf init-reconstruct -i <input.zarr> -o <output.zarr> -c <config.yml>
+biahub nf compute-transfer-function -i <input.zarr> -t <tf.zarr> -c <config.yml>
 biahub nf run-apply-inv-tf -i <input.zarr> -o <output.zarr> -t <tf.zarr> -p <position> -c <config.yml>
 ```
 
