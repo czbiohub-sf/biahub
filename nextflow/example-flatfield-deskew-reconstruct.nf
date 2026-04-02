@@ -24,9 +24,9 @@ def viscy_cmd = params.viscy_project ?
     "uv run --project ${params.viscy_project} viscy" :
     "uv run --from 'viscy @ git+https://github.com/mehta-lab/VisCy@v0.3.4' viscy"
 
-def parse_resources(stdout_text) {
-    def line = stdout_text.trim().readLines().findAll { it.startsWith('RESOURCES:') }.last()
-    def parts = line.replace('RESOURCES:', '').trim().split(' ')
+def parse_resources(stdout_text, prefix = 'RESOURCES:') {
+    def line = stdout_text.trim().readLines().findAll { it.startsWith(prefix) }.last()
+    def parts = line.replace(prefix, '').trim().split(' ')
     return [cpus: parts[0].toInteger(), mem_gb: parts[1].toInteger()]
 }
 
@@ -150,7 +150,7 @@ process run_deskew {
 // ---------------------------------------------------------------------------
 
 process init_reconstruct {
-    label 'cpu_medium'
+    label 'cpu_small'
 
     input:
     val trigger
@@ -163,9 +163,30 @@ process init_reconstruct {
     ${biahub_cmd} nf init-reconstruct \
         -i ${params.output_dir}/1-deskew/${dataset_name}.zarr \
         -o ${params.output_dir}/2-reconstruct/${dataset_name}.zarr \
-        -t ${params.output_dir}/2-reconstruct/transfer_function_${dataset_name}.zarr \
         -c ${params.reconstruct_config} \
         -j ${params.num_processes}
+    """
+}
+
+
+process compute_transfer_function {
+    cpus { meta.cpus }
+    memory { "${meta.mem_gb} GB" }
+    time '2h'
+    queue 'cpu'
+
+    input:
+    val meta
+
+    output:
+    val true
+
+    script:
+    """
+    ${biahub_cmd} nf compute-transfer-function \
+        -i ${params.output_dir}/1-deskew/${dataset_name}.zarr \
+        -t ${params.output_dir}/2-reconstruct/transfer_function_${dataset_name}.zarr \
+        -c ${params.reconstruct_config}
     """
 }
 
@@ -320,10 +341,17 @@ workflow reconstruct_wf {
     prev_done
 
     main:
-    resources = init_reconstruct(prev_done.map { 'done' }).map { parse_resources(it) }
+    init_out = init_reconstruct(prev_done.map { 'done' })
+    tf_resources = init_out.map { parse_resources(it, 'TF_RESOURCES:') }
+    run_resources = init_out.map { parse_resources(it) }
+
+    tf_done = compute_transfer_function(tf_resources)
+
     rc_done = positions
         .flatMap { it }
-        .combine(resources)
+        .combine(run_resources)
+        .combine(tf_done)
+        .map { pos, meta, tf -> [pos, meta] }
         | run_apply_inv_tf
         | collect
 

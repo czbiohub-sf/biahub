@@ -209,28 +209,48 @@ def run_deskew(input_zarr: str, output_zarr: str, position: str, config: str):
 # ---------------------------------------------------------------------------
 
 
+def _upsampled_zyx(settings, zyx_shape: tuple[int, int, int]) -> tuple[int, int, int]:
+    """Return the Nyquist-upsampled ZYX shape used during TF computation."""
+    import math
+
+    from waveorder import sampling
+
+    Z, Y, X = zyx_shape
+    if settings.phase is not None:
+        tf = settings.phase.transfer_function
+        trans_nyq = sampling.transverse_nyquist(
+            tf.wavelength_illumination,
+            tf.numerical_aperture_illumination,
+            tf.numerical_aperture_detection,
+        )
+        axial_nyq = sampling.axial_nyquist(
+            tf.wavelength_illumination,
+            tf.numerical_aperture_detection,
+            tf.index_of_refraction_media,
+        )
+        yx_factor = math.ceil(tf.yx_pixel_size / trans_nyq)
+        z_factor = math.ceil(tf.z_pixel_size / axial_nyq)
+        Z, Y, X = Z * z_factor, Y * yx_factor, X * yx_factor
+    return Z, Y, X
+
+
 @nf_cli.command("init-reconstruct")
 @click.option("--input-zarr", "-i", required=True, type=click.Path(exists=True))
 @click.option("--output-zarr", "-o", required=True, type=click.Path())
-@click.option("--tf-path", "-t", required=True, type=click.Path())
 @click.option("--config", "-c", required=True, type=click.Path(exists=True))
 @click.option("--num-processes", "-j", default=1, type=int)
 def init_reconstruct(
-    input_zarr: str, output_zarr: str, tf_path: str, config: str, num_processes: int
+    input_zarr: str, output_zarr: str, config: str, num_processes: int
 ):
-    """Compute transfer function and create empty output zarr for reconstruction."""
+    """Create empty output zarr and estimate resources for reconstruction."""
     from waveorder.cli.apply_inverse_transfer_function import (
         get_reconstruction_output_metadata,
-    )
-    from waveorder.cli.compute_transfer_function import (
-        compute_transfer_function_cli as compute_transfer_function,
     )
     from waveorder.cli.utils import create_empty_hcs_zarr
     from waveorder.cli.utils import estimate_resources as wo_estimate_resources
     from waveorder.cli.settings import ReconstructionSettings
 
     config_path = Path(config)
-    tf_zarr = Path(tf_path)
 
     with open_ome_zarr(input_zarr, mode="r") as plate:
         position_keys = []
@@ -241,10 +261,6 @@ def init_reconstruct(
             if first_position_path is None:
                 first_position_path = Path(input_zarr) / name
                 T, C, Z, Y, X = pos.data.shape
-
-    click.echo(f"Computing transfer function from {first_position_path}")
-    compute_transfer_function(first_position_path, config_path, tf_zarr)
-    click.echo(f"Transfer function saved to {tf_zarr}")
 
     output_metadata = get_reconstruction_output_metadata(first_position_path, config_path)
 
@@ -260,6 +276,34 @@ def init_reconstruct(
         [T, C, Z, Y, X], settings, num_processes
     )
     click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
+
+    uZ, uY, uX = _upsampled_zyx(settings, (Z, Y, X))
+    tf_cpus, tf_mem = wo_estimate_resources([1, 1, uZ, uY, uX], settings, 1)
+    click.echo(f"TF_RESOURCES:{tf_cpus} {tf_cpus * tf_mem}")
+
+
+@nf_cli.command("compute-transfer-function")
+@click.option("--input-zarr", "-i", required=True, type=click.Path(exists=True))
+@click.option("--tf-path", "-t", required=True, type=click.Path())
+@click.option("--config", "-c", required=True, type=click.Path(exists=True))
+def compute_transfer_function(input_zarr: str, tf_path: str, config: str):
+    """Compute transfer function from the first position in the input zarr."""
+    from waveorder.cli.compute_transfer_function import (
+        compute_transfer_function_cli,
+    )
+
+    config_path = Path(config)
+    tf_zarr = Path(tf_path)
+
+    with open_ome_zarr(input_zarr, mode="r") as plate:
+        first_position_path = None
+        for name, _ in plate.positions():
+            first_position_path = Path(input_zarr) / name
+            break
+
+    click.echo(f"Computing transfer function from {first_position_path}")
+    compute_transfer_function_cli(first_position_path, config_path, tf_zarr)
+    click.echo(f"Transfer function saved to {tf_zarr}")
 
 
 @nf_cli.command("run-apply-inv-tf")
