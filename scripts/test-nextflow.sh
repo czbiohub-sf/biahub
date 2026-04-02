@@ -10,4 +10,5 @@ nextflow run "${BIAHUB_ROOT}/nextflow/example-flatfield-deskew-reconstruct.nf" \
     --output_dir "${PIPELINE_DIR}/1-nextflow-test-preprocess" \
     --flat_field_config "${PIPELINE_DIR}/1-preprocess/0-flatfield/flatfield_settings.yaml" \
     --deskew_config "${PIPELINE_DIR}/1-preprocess/1-deskew/deskew_settings.yml" \
-    --reconstruct_config "${PIPELINE_DIR}/1-preprocess/2-reconstruct/phase_setting.yaml"
+    --reconstruct_config "${PIPELINE_DIR}/1-preprocess/2-reconstruct/phase_setting.yaml" \
+    -resume
