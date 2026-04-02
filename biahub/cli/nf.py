@@ -79,7 +79,7 @@ def init_flat_field(input_zarr: str, output_zarr: str, config: str):
 @click.option("--config", "-c", required=True, type=click.Path(exists=True))
 def run_flat_field(input_zarr: str, output_zarr: str, position: str, config: str):
     """Apply flat-field correction to a single position (all timepoints)."""
-    from biahub.flat_field_correction import flat_field_single_timepoint
+    from biahub.flat_field_correction import process_single_position_flat_field
     from biahub.settings import FlatFieldCorrectionSettings
 
     input_position = Path(input_zarr) / position
@@ -88,12 +88,14 @@ def run_flat_field(input_zarr: str, output_zarr: str, position: str, config: str
 
     with open_ome_zarr(str(input_position), mode="r") as ds:
         all_channel_names = ds.channel_names
-        T = ds.data.shape[0]
 
     channel_names = settings.channel_names if settings.channel_names else all_channel_names
 
-    for t_idx in range(T):
-        flat_field_single_timepoint(input_position, output_zarr_path, channel_names, t_idx)
+    process_single_position_flat_field(
+        input_data_path=input_position,
+        output_path=output_zarr_path,
+        channel_names=channel_names,
+    )
 
     click.echo(f"Flat-field done: {position}")
 
