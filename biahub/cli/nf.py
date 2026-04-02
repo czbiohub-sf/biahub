@@ -17,6 +17,22 @@ def nf_cli():
     """Nextflow-oriented commands for single-unit-of-work processing."""
 
 
+@nf_cli.command("estimate-resources")
+@click.option("--input-zarr", "-i", required=True, type=click.Path(exists=True))
+@click.option("--ram-multiplier", default=1.0, type=float)
+def estimate_resources_cmd(input_zarr: str, ram_multiplier: float):
+    """Estimate cpus and memory for processing. Outputs: cpus mem_per_cpu_gb"""
+    from biahub.cli.utils import estimate_resources
+
+    with open_ome_zarr(input_zarr, mode="r") as plate:
+        for _, pos in plate.positions():
+            shape = pos.data.shape
+            break
+
+    num_cpus, gb_ram_per_cpu = estimate_resources(shape, ram_multiplier=ram_multiplier)
+    click.echo(f"{num_cpus} {gb_ram_per_cpu}")
+
+
 @nf_cli.command("list-positions")
 @click.option("--input-zarr", "-i", required=True, type=click.Path(exists=True))
 def list_positions(input_zarr: str):
@@ -156,7 +172,7 @@ def init_deskew(input_zarr: str, output_zarr: str, config: str):
 @click.option("--config", "-c", required=True, type=click.Path(exists=True))
 def run_deskew(input_zarr: str, output_zarr: str, position: str, config: str):
     """Deskew a single position (all timepoints and channels)."""
-    from biahub.deskew import deskew
+    from biahub.deskew import deskew_zyx
     from biahub.settings import DeskewSettings
 
     input_position = Path(input_zarr) / position
@@ -182,7 +198,7 @@ def run_deskew(input_zarr: str, output_zarr: str, position: str, config: str):
                     click.echo(f"  Skipping (empty)")
                     continue
 
-                deskewed = deskew(zyx_data, **deskew_kwargs)
+                deskewed = deskew_zyx(zyx_data, **deskew_kwargs)
 
                 with open_ome_zarr(str(output_position), mode="r+") as output_ds:
                     output_ds[0][t_idx, c_idx] = deskewed
@@ -274,3 +290,68 @@ def run_apply_inv_tf(
         output_metadata["channel_names"],
     )
     click.echo(f"Reconstruction done: {position}")
+
+
+# ---------------------------------------------------------------------------
+# Virtual stain
+# ---------------------------------------------------------------------------
+
+
+@nf_cli.command("init-virtual-stain")
+@click.option("--input-zarr", "-i", required=True, type=click.Path(exists=True))
+@click.option("--output-zarr", "-o", required=True, type=click.Path())
+@click.option("--config", "-c", required=True, type=click.Path(exists=True))
+def init_virtual_stain(input_zarr: str, output_zarr: str, config: str):
+    """Create empty output zarr for virtual staining predictions."""
+    import yaml
+
+    with open(config) as f:
+        cfg = yaml.safe_load(f)
+
+    target_channels = cfg["data"]["init_args"]["target_channel"]
+    prediction_channels = [f"{ch}_prediction" for ch in target_channels]
+
+    with open_ome_zarr(input_zarr, mode="r") as plate:
+        position_keys = []
+        T = C = Z = Y = X = 0
+        scale = None
+        for name, pos in plate.positions():
+            position_keys.append(tuple(name.split("/")))
+            if scale is None:
+                T, C, Z, Y, X = pos.data.shape
+                scale = pos.scale
+
+    create_empty_plate(
+        store_path=Path(output_zarr),
+        position_keys=position_keys,
+        channel_names=prediction_channels,
+        shape=(T, len(prediction_channels), Z, Y, X),
+        scale=scale,
+        version="0.5",
+        dtype=np.float32,
+    )
+    click.echo(
+        f"Created {output_zarr} ({len(position_keys)} positions, "
+        f"channels={prediction_channels})"
+    )
+
+
+@nf_cli.command("copy-virtual-stain")
+@click.option("--temp-zarr", "-t", required=True, type=click.Path(exists=True))
+@click.option("--output-zarr", "-o", required=True, type=click.Path(exists=True))
+@click.option("--position", "-p", required=True)
+def copy_virtual_stain(temp_zarr: str, output_zarr: str, position: str):
+    """Copy viscy prediction from temp FOV zarr into output plate position."""
+    import shutil
+
+    temp_position = Path(temp_zarr) / position
+    output_position = Path(output_zarr) / position
+
+    with open_ome_zarr(str(temp_position), mode="r") as src:
+        src_data = np.asarray(src[0][:])
+
+    with open_ome_zarr(str(output_position), mode="r+") as dst:
+        dst[0][:] = src_data
+
+    shutil.rmtree(temp_zarr)
+    click.echo(f"Virtual stain copied: {position}")

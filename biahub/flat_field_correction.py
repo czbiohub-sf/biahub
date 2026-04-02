@@ -1,5 +1,6 @@
 import multiprocessing as mp
 
+from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from pathlib import Path
 from typing import List, Tuple
@@ -117,7 +118,7 @@ def process_single_position_flat_field(
         T = input_dataset.data.shape[0]
 
     click.echo(f"Starting multiprocess pool with {num_processes} processes")
-    with mp.Pool(num_processes) as pool:
+    with ThreadPoolExecutor(max_workers=num_processes) as pool:
         pool.map(
             partial(
                 _process_timepoint,
