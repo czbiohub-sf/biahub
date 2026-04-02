@@ -77,7 +77,10 @@ def init_flat_field(input_zarr: str, output_zarr: str, config: str):
 @click.option("--output-zarr", "-o", required=True, type=click.Path(exists=True))
 @click.option("--position", "-p", required=True)
 @click.option("--config", "-c", required=True, type=click.Path(exists=True))
-def run_flat_field(input_zarr: str, output_zarr: str, position: str, config: str):
+@click.option("--num-processes", "-j", default=1, type=int)
+def run_flat_field(
+    input_zarr: str, output_zarr: str, position: str, config: str, num_processes: int
+):
     """Apply flat-field correction to a single position (all timepoints)."""
     from biahub.flat_field_correction import process_single_position_flat_field
     from biahub.settings import FlatFieldCorrectionSettings
@@ -95,6 +98,7 @@ def run_flat_field(input_zarr: str, output_zarr: str, position: str, config: str
         input_data_path=input_position,
         output_path=output_zarr_path,
         channel_names=channel_names,
+        num_processes=num_processes,
     )
 
     click.echo(f"Flat-field done: {position}")
