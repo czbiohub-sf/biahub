@@ -295,9 +295,7 @@ def compute_transfer_function(input_zarr: str, tf_path: str, config: str):
             break
 
     if first_position_path is None:
-        raise click.ClickException(
-            f"Input plate '{input_zarr}' contains no positions."
-        )
+        raise click.ClickException(f"Input plate '{input_zarr}' contains no positions.")
 
     click.echo(f"Computing transfer function from {first_position_path}")
     compute_transfer_function_cli(first_position_path, config_path, tf_zarr)
