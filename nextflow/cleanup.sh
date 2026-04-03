@@ -20,7 +20,4 @@ rm -rf "${target}/.nextflow/"
 echo "Removing Nextflow log files..."
 rm -f "${target}/.nextflow.log" "${target}/.nextflow.log."*
 
-echo "Removing Nextflow reports..."
-rm -rf "${target}/nextflow/output/"
-
 echo "Done."
