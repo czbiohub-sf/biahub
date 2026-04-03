@@ -187,7 +187,7 @@ def run_deskew(input_zarr: str, output_zarr: str, position: str, config: str):
                 zyx_data = np.asarray(input_ds.data[t_idx, c_idx])
 
                 if _check_nan_n_zeros(zyx_data):
-                    click.echo(f"  Skipping (empty)")
+                    click.echo("  Skipping (empty)")
                     continue
 
                 deskewed = deskew_zyx(zyx_data, **deskew_kwargs)
