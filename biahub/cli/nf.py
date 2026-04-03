@@ -1,4 +1,5 @@
 import logging
+
 from pathlib import Path
 
 import click
@@ -241,9 +242,9 @@ def init_reconstruct(input_zarr: str, output_zarr: str, config: str, num_process
     from waveorder.cli.apply_inverse_transfer_function import (
         get_reconstruction_output_metadata,
     )
+    from waveorder.cli.settings import ReconstructionSettings
     from waveorder.cli.utils import create_empty_hcs_zarr
     from waveorder.cli.utils import estimate_resources as wo_estimate_resources
-    from waveorder.cli.settings import ReconstructionSettings
 
     config_path = Path(config)
 
