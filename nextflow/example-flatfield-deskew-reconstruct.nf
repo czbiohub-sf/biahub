@@ -25,8 +25,11 @@ def viscy_cmd = params.viscy_project ?
     "uv run --from 'viscy @ git+https://github.com/mehta-lab/VisCy@v0.3.4' viscy"
 
 def parse_resources(stdout_text, prefix = 'RESOURCES:') {
-    def line = stdout_text.trim().readLines().findAll { it.startsWith(prefix) }.last()
-    def parts = line.replace(prefix, '').trim().split(' ')
+    def matching = stdout_text.trim().readLines().findAll { it.startsWith(prefix) }
+    if (!matching) {
+        error "Expected a '${prefix}' line in command output but none was found. The underlying CLI may have failed."
+    }
+    def parts = matching.last().replace(prefix, '').trim().split(/\s+/)
     return [cpus: parts[0].toInteger(), mem_gb: parts[1].toInteger()]
 }
 
@@ -43,7 +46,7 @@ process list_positions {
 
     script:
     """
-    ${biahub_cmd} nf list-positions -i ${params.input_zarr}
+    ${biahub_cmd} nf list-positions -i "${params.input_zarr}"
     """
 }
 
@@ -61,9 +64,9 @@ process init_flat_field {
     script:
     """
     ${biahub_cmd} nf init-flat-field \
-        -i ${params.input_zarr} \
-        -o ${params.output_dir}/0-flatfield/${dataset_name}.zarr \
-        -c ${params.flat_field_config}
+        -i "${params.input_zarr}" \
+        -o "${params.output_dir}/0-flatfield/${dataset_name}.zarr" \
+        -c "${params.flat_field_config}"
     """
 }
 
@@ -86,10 +89,10 @@ process run_flat_field {
     script:
     """
     ${biahub_cmd} nf run-flat-field \
-        -i ${params.input_zarr} \
-        -o ${params.output_dir}/0-flatfield/${dataset_name}.zarr \
-        -p ${position} \
-        -c ${params.flat_field_config} \
+        -i "${params.input_zarr}" \
+        -o "${params.output_dir}/0-flatfield/${dataset_name}.zarr" \
+        -p "${position}" \
+        -c "${params.flat_field_config}" \
         -j ${task.cpus}
     """
 }
@@ -111,9 +114,9 @@ process init_deskew {
     script:
     """
     ${biahub_cmd} nf init-deskew \
-        -i ${params.output_dir}/0-flatfield/${dataset_name}.zarr \
-        -o ${params.output_dir}/1-deskew/${dataset_name}.zarr \
-        -c ${params.deskew_config}
+        -i "${params.output_dir}/0-flatfield/${dataset_name}.zarr" \
+        -o "${params.output_dir}/1-deskew/${dataset_name}.zarr" \
+        -c "${params.deskew_config}"
     """
 }
 
@@ -137,10 +140,10 @@ process run_deskew {
     script:
     """
     ${biahub_cmd} nf run-deskew \
-        -i ${params.output_dir}/0-flatfield/${dataset_name}.zarr \
-        -o ${params.output_dir}/1-deskew/${dataset_name}.zarr \
-        -p ${position} \
-        -c ${params.deskew_config}
+        -i "${params.output_dir}/0-flatfield/${dataset_name}.zarr" \
+        -o "${params.output_dir}/1-deskew/${dataset_name}.zarr" \
+        -p "${position}" \
+        -c "${params.deskew_config}"
     """
 }
 
@@ -161,9 +164,9 @@ process init_reconstruct {
     script:
     """
     ${biahub_cmd} nf init-reconstruct \
-        -i ${params.output_dir}/1-deskew/${dataset_name}.zarr \
-        -o ${params.output_dir}/2-reconstruct/${dataset_name}.zarr \
-        -c ${params.reconstruct_config} \
+        -i "${params.output_dir}/1-deskew/${dataset_name}.zarr" \
+        -o "${params.output_dir}/2-reconstruct/${dataset_name}.zarr" \
+        -c "${params.reconstruct_config}" \
         -j ${params.num_processes}
     """
 }
@@ -184,9 +187,9 @@ process compute_transfer_function {
     script:
     """
     ${biahub_cmd} nf compute-transfer-function \
-        -i ${params.output_dir}/1-deskew/${dataset_name}.zarr \
-        -t ${params.output_dir}/2-reconstruct/transfer_function_${dataset_name}.zarr \
-        -c ${params.reconstruct_config}
+        -i "${params.output_dir}/1-deskew/${dataset_name}.zarr" \
+        -t "${params.output_dir}/2-reconstruct/transfer_function_${dataset_name}.zarr" \
+        -c "${params.reconstruct_config}"
     """
 }
 
@@ -209,11 +212,11 @@ process run_apply_inv_tf {
     script:
     """
     ${biahub_cmd} nf run-apply-inv-tf \
-        -i ${params.output_dir}/1-deskew/${dataset_name}.zarr \
-        -o ${params.output_dir}/2-reconstruct/${dataset_name}.zarr \
-        -t ${params.output_dir}/2-reconstruct/transfer_function_${dataset_name}.zarr \
-        -p ${position} \
-        -c ${params.reconstruct_config} \
+        -i "${params.output_dir}/1-deskew/${dataset_name}.zarr" \
+        -o "${params.output_dir}/2-reconstruct/${dataset_name}.zarr" \
+        -t "${params.output_dir}/2-reconstruct/transfer_function_${dataset_name}.zarr" \
+        -p "${position}" \
+        -c "${params.reconstruct_config}" \
         -j ${params.num_processes}
     """
 }
@@ -235,9 +238,9 @@ process init_virtual_stain {
     script:
     """
     ${biahub_cmd} nf init-virtual-stain \
-        -i ${params.output_dir}/2-reconstruct/${dataset_name}.zarr \
-        -o ${params.output_dir}/3-virtual-stain/${dataset_name}.zarr \
-        -c ${params.predict_config}
+        -i "${params.output_dir}/2-reconstruct/${dataset_name}.zarr" \
+        -o "${params.output_dir}/3-virtual-stain/${dataset_name}.zarr" \
+        -c "${params.predict_config}"
     """
 }
 
@@ -254,7 +257,7 @@ process run_virtual_stain_preprocess {
     script:
     """
     ${viscy_cmd} preprocess \
-        --data_path ${params.output_dir}/2-reconstruct/${dataset_name}.zarr \
+        --data_path "${params.output_dir}/2-reconstruct/${dataset_name}.zarr" \
         --channel_names -1 \
         --num_workers ${task.cpus} \
         --block_size 32
@@ -282,16 +285,16 @@ process run_virtual_stain {
     def temp_zarr = "${params.output_dir}/3-virtual-stain/temp/${position.replaceAll('/', '_')}.zarr"
     """
     ${viscy_cmd} predict \
-        -c ${params.predict_config} \
-        --data.init_args.data_path ${params.output_dir}/2-reconstruct/${dataset_name}.zarr/${position} \
+        -c "${params.predict_config}" \
+        --data.init_args.data_path "${params.output_dir}/2-reconstruct/${dataset_name}.zarr/${position}" \
         --trainer.callbacks+=viscy.translation.predict_writer.HCSPredictionWriter \
-        --trainer.callbacks.output_store ${temp_zarr} \
-        --trainer.default_root_dir ${params.output_dir}/3-virtual-stain/logs
+        --trainer.callbacks.output_store "${temp_zarr}" \
+        --trainer.default_root_dir "${params.output_dir}/3-virtual-stain/logs"
 
     ${biahub_cmd} nf copy-virtual-stain \
-        -t ${temp_zarr} \
-        -o ${params.output_dir}/3-virtual-stain/${dataset_name}.zarr \
-        -p ${position}
+        -t "${temp_zarr}" \
+        -o "${params.output_dir}/3-virtual-stain/${dataset_name}.zarr" \
+        -p "${position}"
     """
 }
 

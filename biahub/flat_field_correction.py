@@ -117,16 +117,18 @@ def process_single_position_flat_field(
     with open_ome_zarr(input_data_path, mode="r") as input_dataset:
         T = input_dataset.data.shape[0]
 
-    click.echo(f"Starting multiprocess pool with {num_processes} processes")
+    click.echo(f"Starting thread pool with {num_processes} workers")
     with ThreadPoolExecutor(max_workers=num_processes) as pool:
-        pool.map(
-            partial(
-                _process_timepoint,
-                input_data_path,
-                output_position_path,
-                channel_names,
-            ),
-            range(T),
+        list(
+            pool.map(
+                partial(
+                    _process_timepoint,
+                    input_data_path,
+                    output_position_path,
+                    channel_names,
+                ),
+                range(T),
+            )
         )
 
     click.echo(f"Completed position: {input_data_path}")

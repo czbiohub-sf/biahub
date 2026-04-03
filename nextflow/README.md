@@ -61,6 +61,9 @@ Run `nextflow` from your project's pipeline directory so that `.nextflow.log`, `
 | `--reconstruct_config` | YAML config for waveorder `ReconstructionSettings` |
 | `--num_processes` | Intra-position parallelism for reconstruction (default: 1) |
 | `--biahub_project` | Path to biahub repo root for `uv run` (optional; see [Environment setup](#environment-setup)) |
+| `--viscy_project` | Path to VisCy repo root for `uv run` (optional; falls back to installing from git) |
+| `--predict_config` | YAML config for VisCy virtual stain prediction (optional; enables virtual stain step) |
+| `--max_positions` | Limit fan-out to first N positions (default: 0 = all positions) |
 | `--work_dir` | Nextflow work directory for intermediate files (default: `work/` in current directory) |
 
 ### Output

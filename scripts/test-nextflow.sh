@@ -1,3 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
 BIAHUB_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PIPELINE_DIR="${1:-/hpc/projects/intracellular_dashboard/organelle_dynamics/2026_03_18_A549_CAAX_DRAQ5_DENV_ZIKV/pipeline}"
 VISCY_ROOT="${VISCY_ROOT:-${HOME}/repos/VisCy}"
@@ -14,5 +17,4 @@ nextflow run "${BIAHUB_ROOT}/nextflow/example-flatfield-deskew-reconstruct.nf" \
     --deskew_config "${PIPELINE_DIR}/1-preprocess/1-deskew/deskew_settings.yml" \
     --reconstruct_config "${PIPELINE_DIR}/1-preprocess/2-reconstruct/phase_setting.yaml" \
     --predict_config "${PIPELINE_DIR}/1-preprocess/3-virtual-stain/predict.yml" \
-    --max_positions 3 \
     -resume
