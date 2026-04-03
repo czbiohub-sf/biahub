@@ -397,12 +397,14 @@ workflow {
     if (!params.deskew_config)      error "Provide --deskew_config"
     if (!params.reconstruct_config) error "Provide --reconstruct_config"
 
-    all_positions = list_positions()
+    positions_ch = list_positions()
         | splitText
         | map { it.trim() }
         | filter { it }
-        | take( params.max_positions ?: -1 )
-        | collect
+
+    all_positions = params.max_positions > 0
+        ? positions_ch | take(params.max_positions) | collect
+        : positions_ch | collect
 
     ff_done = flat_field_wf(all_positions)
     dk_done = deskew_wf(all_positions, ff_done.done)
