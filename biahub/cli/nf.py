@@ -17,7 +17,6 @@ def nf_cli():
     """Nextflow-oriented commands for single-unit-of-work processing."""
 
 
-
 @nf_cli.command("list-positions")
 @click.option("--input-zarr", "-i", required=True, type=click.Path(exists=True))
 def list_positions(input_zarr: str):
@@ -72,9 +71,7 @@ def init_flat_field(input_zarr: str, output_zarr: str, config: str):
     )
     click.echo(f"Created {output_zarr} ({len(position_keys)} positions)")
 
-    num_cpus, mem_per_cpu = estimate_resources(
-        shape=(T, C, Z, Y, X), ram_multiplier=5
-    )
+    num_cpus, mem_per_cpu = estimate_resources(shape=(T, C, Z, Y, X), ram_multiplier=5)
     click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
 
 
@@ -239,9 +236,7 @@ def _upsampled_zyx(settings, zyx_shape: tuple[int, int, int]) -> tuple[int, int,
 @click.option("--output-zarr", "-o", required=True, type=click.Path())
 @click.option("--config", "-c", required=True, type=click.Path(exists=True))
 @click.option("--num-processes", "-j", default=1, type=int)
-def init_reconstruct(
-    input_zarr: str, output_zarr: str, config: str, num_processes: int
-):
+def init_reconstruct(input_zarr: str, output_zarr: str, config: str, num_processes: int):
     """Create empty output zarr and estimate resources for reconstruction."""
     from waveorder.cli.apply_inverse_transfer_function import (
         get_reconstruction_output_metadata,
@@ -272,9 +267,7 @@ def init_reconstruct(
     click.echo(f"Created {output_zarr} ({len(position_keys)} positions)")
 
     settings = yaml_to_model(config_path, ReconstructionSettings)
-    num_cpus, mem_per_cpu = wo_estimate_resources(
-        [T, C, Z, Y, X], settings, num_processes
-    )
+    num_cpus, mem_per_cpu = wo_estimate_resources([T, C, Z, Y, X], settings, num_processes)
     click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
 
     uZ, uY, uX = _upsampled_zyx(settings, (Z, Y, X))
