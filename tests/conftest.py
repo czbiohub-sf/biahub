@@ -81,6 +81,22 @@ def example_process_with_config_settings():
     yield settings_path, settings
 
 
+@pytest.fixture(scope="function")
+def example_organelle_segmentation_settings():
+    settings_path = "./settings/example_organelle_segmentation.yml"
+    with open(settings_path) as file:
+        settings = yaml.safe_load(file)
+    yield settings_path, settings
+
+
+@pytest.fixture(scope="function")
+def example_organelle_feature_extraction_settings():
+    settings_path = "./settings/example_organelle_feature_extraction.yml"
+    with open(settings_path) as file:
+        settings = yaml.safe_load(file)
+    yield settings_path, settings
+
+
 @pytest.fixture()
 def sbatch_file(tmp_path):
     filepath = tmp_path / "sbatch.txt"
