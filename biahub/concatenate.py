@@ -101,7 +101,10 @@ def get_channel_combiner_metadata(
     # Expand the data paths
     expanded_paths = []
     for paths in data_paths_list:
-        expanded_paths.append([Path(path) for path in natsorted(glob.glob(paths))])
+        # Filter out zarr.json files - they are metadata, not image directories
+        all_paths = natsorted(glob.glob(paths))
+        filtered_paths = [Path(path) for path in all_paths if not path.endswith('zarr.json')]
+        expanded_paths.append(filtered_paths)
 
     # Flatten the expanded paths
     all_data_paths = [path for paths in expanded_paths for path in paths]
@@ -344,18 +347,42 @@ def concatenate(
     if cropped_shape_zyx[0] > Z or cropped_shape_zyx[1] > Y or cropped_shape_zyx[2] > X:
         raise ValueError("The cropped shape is larger than the original shape.")
 
+    # Detect input zarr version to preserve it in output
+    input_version = settings.output_ome_zarr_version
+    try:
+        source_plate_path = Path(all_data_paths[0]).parent.parent.parent
+        with open_ome_zarr(source_plate_path, mode="r") as input_plate:
+            input_version = input_plate.version
+            click.echo(f"Detected input zarr version: {input_version}")
+    except (RuntimeError, FileNotFoundError):
+        # Position is not part of a plate, use default from settings
+        click.echo(
+            f"Could not detect input zarr version, using setting: {settings.output_ome_zarr_version}"
+        )
+        pass
+
     # TODO: make assertion for chunk size?
     if settings.chunks_czyx is not None:
         chunk_size = [1] + list(settings.chunks_czyx)
+        # Convert to native Python integers for zarr v3 compatibility
+        chunk_size = tuple(int(x) for x in chunk_size)
     else:
         chunk_size = settings.chunks_czyx
+
+    # Convert to native Python types for zarr v3 compatibility
+    output_shape = tuple(
+        int(x)
+        for x in ((len(input_time_indices), len(all_channel_names)) + tuple(cropped_shape_zyx))
+    )
+    output_scale = tuple(float(x) for x in ((1,) * 2 + tuple(output_voxel_size)))
+
     # Logic for creation of zarr and metadata
     output_metadata = {
-        "shape": (len(input_time_indices), len(all_channel_names)) + tuple(cropped_shape_zyx),
+        "shape": output_shape,
         "chunks": chunk_size,
         "shards_ratio": settings.shards_ratio,
-        "version": settings.output_ome_zarr_version,
-        "scale": (1,) * 2 + tuple(output_voxel_size),
+        "version": input_version,
+        "scale": output_scale,
         "channel_names": all_channel_names,
         "dtype": dtype,
     }
