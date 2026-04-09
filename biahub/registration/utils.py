@@ -884,7 +884,7 @@ def pad_to_shape(
     """
     assert arr.ndim == len(shape)
 
-    dif = tuple(s - a for s, a in zip(shape, arr.shape))
+    dif = tuple(s - a for s, a in zip(shape, arr.shape, strict=True))
     assert all(d >= 0 for d in dif)
 
     pad_width = [[s // 2, s - s // 2] for s in dif]
@@ -913,11 +913,11 @@ def center_crop(
     """
     assert arr.ndim == len(shape)
 
-    starts = tuple((cur_s - s) // 2 for cur_s, s in zip(arr.shape, shape))
+    starts = tuple((cur_s - s) // 2 for cur_s, s in zip(arr.shape, shape, strict=True))
 
     assert all(s >= 0 for s in starts)
 
-    slicing = tuple(slice(s, s + d) for s, d in zip(starts, shape))
+    slicing = tuple(slice(s, s + d) for s, d in zip(starts, shape, strict=True))
     if verbose:
         click.echo(
             f"center crop: input shape {arr.shape}, output shape {shape}, slicing {slicing}"

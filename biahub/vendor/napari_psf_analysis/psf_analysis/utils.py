@@ -56,7 +56,10 @@ def compute_cov_matrix(img_data: ArrayLike, spacing: tuple[float, ...]) -> Array
     -------
         The covariance matrix of the image data weighted by the intensity.
     """
-    extends = [np.arange(dim_size) * s for dim_size, s in zip(img_data.shape, spacing)]
+    extends = [
+        np.arange(dim_size) * s
+        for dim_size, s in zip(img_data.shape, spacing)  # noqa: B905
+    ]
 
     grids = np.meshgrid(*extends, indexing="ij")
 

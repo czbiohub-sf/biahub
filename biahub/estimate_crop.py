@@ -87,7 +87,7 @@ def estimate_crop_one_position(
 
     if len(valid_T) == 0:
         click.echo("No valid data found for current position, will not crop.")
-        return tuple(zip((0, 0, 0), _max_zyx_dims))
+        return tuple(zip((0, 0, 0), _max_zyx_dims, strict=True))
     valid_data = data[valid_T, valid_C]
 
     # Compute a mask where all voxels are non-zero along time and channel dimensions
@@ -224,7 +224,7 @@ def estimate_crop(
     jobs = []
 
     with submitit.helpers.clean_env(), executor.batch():
-        for ls_dir, lf_dir in zip(ls_position_dirpaths, lf_position_dirpaths):
+        for ls_dir, lf_dir in zip(ls_position_dirpaths, lf_position_dirpaths, strict=True):
             job = executor.submit(
                 estimate_crop_one_position,
                 lf_mask_radius=lf_mask_radius,

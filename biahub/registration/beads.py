@@ -165,7 +165,7 @@ def optimize_matches(
                 param_map[key](val)
 
     for combo in product(*grid_values):
-        trial_params = dict(zip(grid_keys, combo))
+        trial_params = dict(zip(grid_keys, combo, strict=True))
         trial_settings = beads_match_settings.model_copy(deep=True)
         apply_trial_params(trial_settings, trial_params)
 

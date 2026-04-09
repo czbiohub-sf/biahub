@@ -197,7 +197,7 @@ def process_with_config(
                 if not callable(resolved_func):
                     raise ValueError(f"Function {proc.function} is not callable")
             except ValueError as e:
-                raise ValueError(f"Function {proc.function} could not be resolved: {e}")
+                raise ValueError(f"Function {proc.function} could not be resolved: {e}") from e
     else:
         raise ValueError("Processing functions must be specified")
 
@@ -288,7 +288,7 @@ def process_with_config(
     jobs = []
     with submitit.helpers.clean_env(), executor.batch():
         for input_position_path, output_position_path in zip(
-            input_position_dirpaths, output_position_paths
+            input_position_dirpaths, output_position_paths, strict=True
         ):
             jobs.append(
                 executor.submit(

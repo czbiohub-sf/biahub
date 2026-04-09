@@ -402,7 +402,7 @@ class Transform:
         except ImportError:
             raise ImportError(
                 "ANTsPy is required for backend='ants'. Install with: pip install antspyx"
-            )
+            ) from None
 
         if self._ndim != 3:
             raise NotImplementedError("ANTs backend only supports 3D transforms")
@@ -443,7 +443,7 @@ class Transform:
         except ImportError:
             raise ImportError(
                 "ANTsPy is required for to_ants(). Install with: pip install antspyx"
-            )
+            ) from None
         if self._ndim not in (2, 3):
             raise ValueError(f"Unsupported ndim: {self._ndim}")
         T_ants_style = self._matrix[:, :-1].ravel()

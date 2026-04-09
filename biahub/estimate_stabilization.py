@@ -155,7 +155,7 @@ def phase_cross_corr_padding(
     """
     shape = tuple(
         cast(int, next_fast_len(int(max(s1, s2) * maximum_shift)))
-        for s1, s2 in zip(ref_img.shape, mov_img.shape)
+        for s1, s2 in zip(ref_img.shape, mov_img.shape, strict=True)
     )
 
     if verbose:
@@ -185,7 +185,7 @@ def phase_cross_corr_padding(
 
     argmax = np.argmax(corr)
     peak = np.unravel_index(argmax, corr.shape)
-    peak = tuple(s // 2 - p for s, p in zip(corr.shape, peak))
+    peak = tuple(s // 2 - p for s, p in zip(corr.shape, peak, strict=True))
 
     if verbose:
         click.echo(f"phase cross corr. peak at {peak}")
@@ -748,7 +748,7 @@ def estimate_xy_stabilization_per_position(
         tyx_data = np.stack(
             [
                 input_position[0][t, channel_index, z, y_idx, x_idx]
-                for t, z in zip(range(T), z_idx)
+                for t, z in zip(range(T), z_idx, strict=True)
             ]
         )
         tyx_data = np.clip(tyx_data, a_min=0, a_max=None)
@@ -1332,7 +1332,7 @@ def estimate_stabilization(
                         )
 
                     xyz_transforms = np.asarray(
-                        [a @ b for a, b in zip(xy_transforms, z_transforms)]
+                        [a @ b for a, b in zip(xy_transforms, z_transforms, strict=True)]
                     ).tolist()
 
                     if eval_transform_settings:

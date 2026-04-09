@@ -120,7 +120,8 @@ def estimate_bleaching_cli(input_position_dirpaths, output_dirpath):
     except Exception as e:
         print(e)
         warnings.warn(
-            "WARNING: this position has no plate metadata, so the time metadata will be missing."
+            "WARNING: this position has no plate metadata, so the time metadata will be missing.",
+            stacklevel=2,
         )
 
     # Loop through position
@@ -137,7 +138,7 @@ def estimate_bleaching_cli(input_position_dirpaths, output_dirpath):
             dt = np.float32(plate_zattrs["Summary"]["Interval_ms"] / MSECS_PER_MINUTE)
         except Exception as e:
             print(e)
-            warnings.warn(f"WARNING: missing time metadata for p={well_name}")
+            warnings.warn(f"WARNING: missing time metadata for p={well_name}", stacklevel=2)
             dt = 1
 
         times = np.arange(0, T * dt, step=dt)

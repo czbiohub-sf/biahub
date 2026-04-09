@@ -46,9 +46,14 @@ def list_of_nd_slices_from_array_shape(
         # ]
     """
     chunk_slices: list[tuple[slice, slice, slice]] = []
-    for idx in product(*[range(0, s, c) for s, c in zip(array_shape, chunk_shape)]):
+    for idx in product(
+        *[range(0, s, c) for s, c in zip(array_shape, chunk_shape, strict=True)]
+    ):
         chunk_slices.append(
-            tuple(slice(i, min(i + c, s)) for i, c, s in zip(idx, chunk_shape, array_shape))
+            tuple(
+                slice(i, min(i + c, s))
+                for i, c, s in zip(idx, chunk_shape, array_shape, strict=True)
+            )
         )
     return chunk_slices
 
@@ -266,7 +271,9 @@ def write_output_chunk(
     # Slice into the precomputed distance map to build the distance maps for
     # each contributing fov
     distance_maps = np.zeros((len(contributing_fov_names),) + output_chunk.shape[-3:])
-    for i, (fixed_slice, moving_slice) in enumerate(zip(fixed_slices, moving_slices)):
+    for i, (fixed_slice, moving_slice) in enumerate(
+        zip(fixed_slices, moving_slices, strict=True)
+    ):
         if verbose:
             click.echo(f"\t\tComputing distance map for {contributing_fov_names[i]}")
         distance_maps[(i, *fixed_slice)] = centered_distance_map[(*moving_slice,)]
@@ -280,7 +287,7 @@ def write_output_chunk(
 
     # Apply weights to each contributing fov and sum
     for i, (fov_name, fixed_slice, moving_slice) in enumerate(
-        zip(contributing_fov_names, fixed_slices, moving_slices)
+        zip(contributing_fov_names, fixed_slices, moving_slices, strict=True)
     ):
         if verbose:
             click.echo(f"\t\tApplying weight maps to {fov_name}")

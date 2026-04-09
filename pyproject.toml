@@ -102,18 +102,8 @@ ignore = [
     "N802",  # Function name should be lowercase (scientific code uses uppercase)
     "N803",  # Argument name should be lowercase (scientific code uses uppercase)
     "N806",  # Variable in function should be lowercase (scientific code uses uppercase)
-    "N805",  # First argument of a method should be named `self`
-    "N812",  # Lowercase imported as non-lowercase
     "N815",  # Variable in class scope should not be mixedCase
-    "N817",  # CamelCase imported as acronym
-    "N999",  # Invalid module name
-    "B006",  # Do not use mutable data structures for argument defaults
-    "B007",  # Loop control variable not used within loop body
-    "B016",  # Cannot raise a literal
-    "B028",  # No explicit `stacklevel` keyword argument found
-    "B904",  # Within an `except` clause, raise exceptions with `raise ... from`
-    "B905",  # `zip()` without an explicit `strict=` parameter
-    "UP022", # Prefer `capture_output` over sending `stdout` and `stderr` to `PIPE`
+    "N999",  # Invalid module name (vendored BeadExtractor.py)
 ]
 
 [tool.ruff.lint.isort]

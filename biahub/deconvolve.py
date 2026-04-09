@@ -173,7 +173,7 @@ def deconvolve_cli(
     jobs = []
     with submitit.helpers.clean_env(), executor.batch():
         for input_position_path, output_position_path in zip(
-            input_position_dirpaths, output_position_paths
+            input_position_dirpaths, output_position_paths, strict=True
         ):
             job = executor.submit(
                 process_single_position,

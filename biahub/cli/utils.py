@@ -291,8 +291,7 @@ def process_single_position(
     if "extra_metadata" in non_func_args:
         # For each dictionary in the nest
         with open_ome_zarr(output_path, mode="r+") as output_dataset:
-            for params_metadata_keys in kwargs["extra_metadata"].keys():
-                output_dataset.zattrs["extra_metadata"] = non_func_args["extra_metadata"]
+            output_dataset.zattrs["extra_metadata"] = non_func_args["extra_metadata"]
 
     # Loop through (T, C), deskewing and writing as we go
     click.echo(f"\nStarting multiprocess pool with {num_processes} processes")
@@ -314,14 +313,23 @@ def process_single_position_v2(
     func,
     input_data_path: Path,
     output_path: Path,
-    time_indices: list = [0],
-    time_indices_out: list = [0],
-    input_channel_idx: list = [],
-    output_channel_idx: list = [],
+    time_indices: list | None = None,
+    time_indices_out: list | None = None,
+    input_channel_idx: list | None = None,
+    output_channel_idx: list | None = None,
     num_processes: int = mp.cpu_count(),
     **kwargs,
 ) -> None:
     """Register a single position with multiprocessing parallelization over T and C"""
+    if time_indices is None:
+        time_indices = [0]
+    if time_indices_out is None:
+        time_indices_out = [0]
+    if input_channel_idx is None:
+        input_channel_idx = []
+    if output_channel_idx is None:
+        output_channel_idx = []
+
     # Function to be applied
     click.echo(f"Function to be applied: \t{func}")
 
@@ -364,8 +372,7 @@ def process_single_position_v2(
     if "extra_metadata" in non_func_args:
         # For each dictionary in the nest
         with open_ome_zarr(output_path, mode="r+") as output_dataset:
-            for params_metadata_keys in kwargs["extra_metadata"].keys():
-                output_dataset.zattrs["extra_metadata"] = non_func_args["extra_metadata"]
+            output_dataset.zattrs["extra_metadata"] = non_func_args["extra_metadata"]
 
     # Loop through (T, C), deskewing and writing as we go
     click.echo(f"\nStarting multiprocess pool with {num_processes} processes")
@@ -376,7 +383,7 @@ def process_single_position_v2(
         iterable = [
             (time_idx, time_idx_out, c)
             for (time_idx, time_idx_out), c in itertools.product(
-                zip(time_indices, time_indices_out), range(C)
+                zip(time_indices, time_indices_out, strict=True), range(C)
             )
         ]
         partial_apply_transform_to_zyx_and_save = partial(
@@ -390,7 +397,7 @@ def process_single_position_v2(
         )
     else:
         # If C is empty, use only the range for time_indices
-        iterable = list(zip(time_indices, time_indices_out))
+        iterable = list(zip(time_indices, time_indices_out, strict=True))
         partial_apply_transform_to_zyx_and_save = partial(
             apply_transform_to_zyx_and_save_v2,
             func,
@@ -581,7 +588,7 @@ def yaml_to_model(yaml_path: Path, model):
         with open(yaml_path) as file:
             raw_settings = yaml.safe_load(file)
     except FileNotFoundError:
-        raise FileNotFoundError(f"The YAML file '{yaml_path}' does not exist.")
+        raise FileNotFoundError(f"The YAML file '{yaml_path}' does not exist.") from None
 
     return model(**raw_settings)
 

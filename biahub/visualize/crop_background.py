@@ -19,7 +19,7 @@ def detect_crop_params(file_path):
         "null",
         "-",
     ]
-    result = subprocess.run(command, stderr=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    result = subprocess.run(command, capture_output=True, text=True)
 
     # Extract the crop parameters from the output
     crop_line = None

@@ -30,7 +30,7 @@ def get_dir_size_du(path: str) -> int:
     except subprocess.CalledProcessError as e:
         raise RuntimeError(
             f"[get_dir_size_du] Failed to run du on {resolved_path}: {e.stderr.strip()}"
-        )
+        ) from e
 
 
 def check_disk_space_with_du(

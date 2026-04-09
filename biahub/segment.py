@@ -62,7 +62,7 @@ def segment_data(
 
     czyx_segmentation = []
     # Process each model in a loop
-    for i, (model_name, model_args) in enumerate(segmentation_models.items()):
+    for model_name, model_args in segmentation_models.items():
         click.echo(f"Segmenting with model {model_name}")
         z_slice_2D = model_args.z_slice_2D
         czyx_data_to_segment = (
@@ -234,7 +234,7 @@ def segment_cli(
     jobs = []
     with submitit.helpers.clean_env(), executor.batch():
         for input_position_path, output_position_path in zip(
-            input_position_dirpaths, output_position_paths
+            input_position_dirpaths, output_position_paths, strict=True
         ):
             jobs.append(
                 executor.submit(

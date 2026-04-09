@@ -45,7 +45,7 @@ def estimate_psf_cli(
     try:
         pzyx_data = np.array(pzyx_data)
     except Exception:
-        raise "Concatenating position arrays failed."
+        raise ValueError("Concatenating position arrays failed.") from None
 
     # Read settings
     settings = yaml_to_model(config_filepath, PsfFromBeadsSettings)
@@ -87,7 +87,7 @@ def estimate_psf_cli(
             zyx_data=zyx_data,
             points=peaks,
             scale=zyx_scale,
-            patch_size=tuple([a * b for a, b in zip(patch_size, zyx_scale)]),
+            patch_size=tuple([a * b for a, b in zip(patch_size, zyx_scale, strict=True)]),
         )
 
         # Filter PSFs with non-standard shapes

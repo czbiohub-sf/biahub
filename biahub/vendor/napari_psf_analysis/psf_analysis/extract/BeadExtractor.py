@@ -47,7 +47,7 @@ class BeadExtractor:
 
     def _create_slices(self, point: tuple[int, int, int]) -> tuple[slice, slice, slice]:
         slices = []
-        for coordinate, margin in zip(point, self._margins):
+        for coordinate, margin in zip(point, self._margins):  # noqa: B905
             start = int(coordinate - margin // 2)
             end = start + int(margin)
             slices.append(slice(start, end))

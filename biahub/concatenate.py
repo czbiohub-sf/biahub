@@ -108,7 +108,7 @@ def get_channel_combiner_metadata(
 
     # For each original path, determine the appropriate slice specifications
     for i, (paths, per_datapath_channels) in enumerate(
-        zip(expanded_paths, processing_channel_names)
+        zip(expanded_paths, processing_channel_names, strict=True)
     ):
         # NOTE: taking first file as sample to get the channel names
         dataset = open_ome_zarr(paths[0])
@@ -401,20 +401,19 @@ def concatenate(
     jobs = []
 
     with submitit.helpers.clean_env(), executor.batch():
-        for i, (
+        for (
             input_position_path,
             output_position_path,
             input_channel_idx,
             output_channel_idx,
             zyx_slicing_params,
-        ) in enumerate(
-            zip(
-                all_data_paths,
-                output_position_paths_list,
-                input_channel_idx_list,
-                output_channel_idx_list,
-                all_slicing_params,
-            )
+        ) in zip(
+            all_data_paths,
+            output_position_paths_list,
+            input_channel_idx_list,
+            output_channel_idx_list,
+            all_slicing_params,
+            strict=True,
         ):
             # Create slicing parameters for this specific path
             copy_n_paste_kwargs = {"zyx_slicing_params": zyx_slicing_params}

@@ -141,9 +141,9 @@ def estimate_stitch_cli(
 
     # Prepare stage positions in pixel coordinates for each well
     final_translation_dict = {}
-    for i, (key, value) in enumerate(grouped_wells.items()):
+    for key, value in grouped_wells.items():
         zyx_array = []
-        for my_value in grouped_wells[key].values():
+        for my_value in value.values():
             zyx_array.append(my_value)
         zyx_well_array = np.array(zyx_array)
 
@@ -177,7 +177,7 @@ def estimate_stitch_cli(
                 z_index=pcc_z_index,
             )
             print("Confidence scores:")
-            for k, v in confidence_dict.items():
+            for v in confidence_dict.values():
                 print(f"{v[0]}: {v[-1]:.2f}")
 
             # Get actual tile size from the first position's data shape

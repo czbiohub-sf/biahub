@@ -591,7 +591,7 @@ class GraphMatcher:
         cost_thresh = np.quantile(C, self.cost_threshold)
         matches = []
 
-        for i, j in zip(row_ind, col_ind):
+        for i, j in zip(row_ind, col_ind, strict=True):
             if i >= n_A or j >= n_B:
                 continue
 

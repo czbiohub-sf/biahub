@@ -8,7 +8,7 @@ import submitit
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate
 from scipy.linalg import svd
-from scipy.spatial.transform import Rotation as R
+from scipy.spatial.transform import Rotation as R  # noqa: N817
 
 from biahub.cli.disk import check_disk_space_with_du
 from biahub.cli.monitor import monitor_jobs

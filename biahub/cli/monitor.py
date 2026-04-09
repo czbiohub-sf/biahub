@@ -30,7 +30,7 @@ def _print_status(jobs, position_dirpaths, elapsed_list, print_indices=None):
         print_indices = range(len(jobs))
 
     complete_count = 0
-    for i, (job, position_dirpath) in enumerate(zip(jobs, position_dirpaths)):
+    for i, (job, position_dirpath) in enumerate(zip(jobs, position_dirpaths, strict=True)):
         try:
             node_name = job.get_info()["NodeList"]  # slowest, so do this first
         except Exception:
@@ -79,7 +79,7 @@ def _get_jobs_to_print(jobs, num_to_print):
             return job_indices_to_print
 
     # fill in the rest with complete jobs
-    for i, job in enumerate(jobs):
+    for i in range(len(jobs)):
         job_indices_to_print.append(i)
         if len(job_indices_to_print) == num_to_print:
             return job_indices_to_print

@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
-import torch.nn.functional as F
+import torch.nn.functional as F  # noqa: N812
 
 from iohub.ngff import open_ome_zarr
 from numpy.typing import ArrayLike
@@ -233,7 +233,7 @@ def analyze_psf(
 
     results = []
     peak_coordinates = np.asarray(peak_coordinates)
-    for patch, peak_coords in zip(zyx_patches, peak_coordinates):
+    for patch, peak_coords in zip(zyx_patches, peak_coordinates, strict=True):
         patch = (patch + offset) * gain
         patch = np.clip(patch, 0, None).astype(np.int32)
         bead = Calibrated3DImage(data=patch, spacing=scale, offset=peak_coords)
@@ -302,7 +302,7 @@ def calculate_robust_peak_widths(zyx_data: ArrayLike, zyx_scale: tuple):
     )
 
     fwhm = []
-    for _slice, _scale in zip(slices, zyx_scale):
+    for _slice, _scale in zip(slices, zyx_scale, strict=True):
         try:
             y = zyx_data[_slice]
             x = np.arange(y.size)
@@ -360,7 +360,7 @@ def plot_psf_slices(
 
     bead_psf_slices_path = plots_dir / "beads_psf_slices.png"
     fig, ax = plt.subplots(3, num_beads)
-    for _ax, bead, bead_number in zip(ax[0], beads, bead_numbers):
+    for _ax, bead, bead_number in zip(ax[0], beads, bead_numbers, strict=True):
         _ax.imshow(
             bead[shape_Z // 2, :, :],
             cmap=cmap,
@@ -371,14 +371,14 @@ def plot_psf_slices(
         _ax.set_ylabel(axis_labels[-2])
         _ax.set_title(f"Bead: {bead_number}")
 
-    for _ax, bead in zip(ax[1], beads):
+    for _ax, bead in zip(ax[1], beads, strict=True):
         _ax.imshow(
             bead[:, shape_Y // 2, :], cmap=cmap, origin="lower", aspect=scale_Z / scale_X
         )
         _ax.set_xlabel(axis_labels[-1])
         _ax.set_ylabel(axis_labels[-3])
 
-    for _ax, bead in zip(ax[2], beads):
+    for _ax, bead in zip(ax[2], beads, strict=True):
         _ax.imshow(
             bead[:, :, shape_X // 2], cmap=cmap, origin="lower", aspect=scale_Z / scale_Y
         )
@@ -416,7 +416,7 @@ def plot_fwhm_vs_acq_axes(plots_dir: str, x, y, z, fwhm_x, fwhm_y, fwhm_z, axis_
         fig.savefig(out_dir)
 
     out_dirs = [plots_dir / f"fwhm_vs_{axis}.png" for axis in axis_labels]
-    for our_dir, x_axis, x_axis_label in zip(out_dirs, (z, y, x), axis_labels):
+    for our_dir, x_axis, x_axis_label in zip(out_dirs, (z, y, x), axis_labels, strict=True):
         plot_fwhm_vs_acq_axis(our_dir, x_axis, fwhm_x, fwhm_y, fwhm_z, x_axis_label)
 
     return out_dirs
@@ -802,7 +802,7 @@ def characterize_psf_cli(
     >> biahub characterize-psf -i ./beads.zarr/*/*/* -c ./characterize_params.yml -o ./
     """
     if len(input_position_dirpaths) > 1:
-        warnings.warn("Only the first position will be characterized.")
+        warnings.warn("Only the first position will be characterized.", stacklevel=2)
 
     # Read settings
     settings = yaml_to_model(config_filepath, CharacterizeSettings)

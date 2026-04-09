@@ -349,7 +349,7 @@ class RegistrationSettings(MyBaseModel):
             if np_array.shape != (4, 4):
                 raise ValueError("The array must be a 3x3 ndarray.")
         except ValueError:
-            raise ValueError("The array must contain valid numerical values.")
+            raise ValueError("The array must contain valid numerical values.") from None
 
         return v
 
@@ -616,7 +616,7 @@ def get_valid_eval_args():
         raise ImportError(
             "The 'cellpose' package is required to validate 'eval_args' in cellpose model configurations. "
             "Please install it to proceed with cellpose-related configurations."
-        )
+        ) from None
 
 
 class PreprocessingFunctions(BaseModel):
