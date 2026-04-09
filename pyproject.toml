@@ -18,10 +18,9 @@ classifiers = [
 ]
 
 dependencies = [
-  "iohub[tensorstore]>=0.3.0a5,<0.4",
+  "iohub[tensorstore]>=0.3.0a6",
   "stitch",
   "matplotlib",
-  "napari[all]",
   "natsort",
   "numpy",
   "markdown",
@@ -32,11 +31,10 @@ dependencies = [
   "submitit",
   "torch",
   "tqdm",
-  "waveorder",
+  "waveorder==3.0.1",
   "largestinteriorrectangle",
   "antspyx",
   "pystackreg",
-  "napari-animation",
   "imageio-ffmpeg",
   "dask[array]",
   "toml",
@@ -51,14 +49,16 @@ segment = ["cellpose"]
 
 track = ["ultrack>=0.7.0rc2"]
 
+gui = ["napari", "PyQt6", "napari-animation"]
+
 shard = ["tensorstore"]
 
 build = ["build", "twine"]
 
-all = ["biahub[segment,track,shard,build]"]
+all = ["biahub[segment,track,shard,build,gui]"]
 
 dev = [
-  "biahub[all]",
+  "biahub[segment,track,shard,build]",
   "black==25.1",
   "flake8==7.2",
   "isort==6.0",

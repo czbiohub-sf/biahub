@@ -121,9 +121,21 @@ class MatchDescriptorSettings(MyBaseModel):
     cross_check: bool = False
 
 
+class FilterMatchesSettings(MyBaseModel):
+    angle_threshold: float = 0
+    direction_threshold: float = 0
+    min_distance_quantile: float = 0.01
+    max_distance_quantile: float = 0.95
+
+
+class QCBeadsRegistrationSettings(MyBaseModel):
+    iterations: int = 2
+    score_threshold: float = 0.40
+    score_centroid_mask_radius: int = 6
+
+
 class BeadsMatchSettings(MyBaseModel):
     algorithm: Literal["hungarian", "match_descriptor"] = "hungarian"
-    t_reference: Literal["first", "previous"] = "first"
     source_peaks_settings: Optional[DetectPeaksSettings] = Field(
         default_factory=DetectPeaksSettings
     )
@@ -132,8 +144,8 @@ class BeadsMatchSettings(MyBaseModel):
     )
     match_descriptor_settings: MatchDescriptorSettings = MatchDescriptorSettings()
     hungarian_match_settings: HungarianMatchSettings = HungarianMatchSettings()
-    filter_distance_threshold: float = 0.95
-    filter_angle_threshold: float = 0
+    filter_matches_settings: FilterMatchesSettings = FilterMatchesSettings()
+    qc_settings: QCBeadsRegistrationSettings = QCBeadsRegistrationSettings()
 
 
 class PhaseCrossCorrSettings(MyBaseModel):
@@ -172,8 +184,11 @@ class EvalTransformSettings(MyBaseModel):
 
 
 class AffineTransformSettings(MyBaseModel):
+    t_reference: Literal["first", "previous"] = "first"
     transform_type: Literal["euclidean", "similarity", "affine"] = "euclidean"
     approx_transform: list = np.eye(4).tolist()
+    use_prev_t_transform: bool = True
+    compute_approx_transform: bool = False
 
     @field_validator("approx_transform")
     @classmethod
@@ -264,6 +279,10 @@ class EstimateStabilizationSettings(MyBaseModel):
         return self
 
 
+class FlatFieldCorrectionSettings(MyBaseModel):
+    channel_names: Optional[list[str]] = None
+
+
 class ProcessingSettings(MyBaseModel):
     fliplr: Optional[bool] = False
     flipud: Optional[bool] = False
@@ -276,6 +295,7 @@ class DeskewSettings(MyBaseModel):
     px_to_scan_ratio: Optional[PositiveFloat] = None
     scan_step_um: Optional[PositiveFloat] = None
     keep_overhang: bool = False
+    overhang_fill: Literal["zero", "mean"] = "zero"
     average_n_slices: PositiveInt = 3
 
     @field_validator("ls_angle_deg")
@@ -537,10 +557,10 @@ class ConcatenateSettings(MyBaseModel):
 
 class StabilizationSettings(MyBaseModel):
     stabilization_estimation_channel: str
-    stabilization_type: Literal["z", "xy", "xyz"]
-    stabilization_method: Literal["beads", "phase-cross-corr", "focus-finding"] = (
-        "focus-finding"
-    )
+    stabilization_type: Literal["z", "xy", "xyz", "affine"]
+    stabilization_method: Literal[
+        "beads", "phase-cross-corr", "focus-finding", "manual", "ants", "beads"
+    ] = "focus-finding"
     stabilization_channels: list
     affine_transform_zyx_list: list
     time_indices: Union[NonNegativeInt, list[NonNegativeInt], Literal["all"]] = "all"
