@@ -69,11 +69,11 @@ def example_blank_frames_csv(tmp_path):
 
     # Create sample blank frame data
     data = {
-        'FOV': ['A_1_0', 'B_1_0', 'B_2_0'],
-        't': [
-            '[0]',
-            '[2]',
-            '[]',
+        "FOV": ["A_1_0", "B_1_0", "B_2_0"],
+        "t": [
+            "[0]",
+            "[2]",
+            "[]",
         ],  # A_1_0 has blank frame 0, B_1_0 has blank frame 2, B_2_0 has no blank frames
     }
 
@@ -108,7 +108,7 @@ def test_track_cli_local(
     with open(config_path) as f:
         config_content = f.read()
     config_content = config_content.replace("/path/to/virtual_staining.zarr", str(plate_path))
-    with open(test_config_path, 'w') as f:
+    with open(test_config_path, "w") as f:
         f.write(config_content)
 
     # Call the track function directly instead of using CLI
@@ -155,7 +155,7 @@ def test_track_cli_with_blank_frames(
     # Update blank frames path
     config_content = config_content.replace("blank_frames.csv", str(example_blank_frames_csv))
 
-    with open(test_config_path, 'w') as f:
+    with open(test_config_path, "w") as f:
         f.write(config_content)
 
     # Call the track function directly
@@ -179,11 +179,11 @@ def test_track_cli_invalid_config(tmp_path, monkeypatch):
     invalid_config_path = tmp_path / "invalid_config.yml"
 
     # Create an invalid config file
-    with open(invalid_config_path, 'w') as f:
+    with open(invalid_config_path, "w") as f:
         f.write("invalid: yaml: content")
 
     # Test that the track function raises an exception with invalid config
-    with pytest.raises(Exception):
+    with pytest.raises(Exception):  # noqa: B017
         track(
             output_dirpath=str(output_path),
             config_filepath=str(invalid_config_path),
@@ -209,11 +209,11 @@ def test_track_cli_missing_input_path(tmp_path, example_track_settings, monkeypa
         "/path/to/virtual_staining.zarr", "/non/existent/path"
     )
 
-    with open(test_config_path, 'w') as f:
+    with open(test_config_path, "w") as f:
         f.write(config_content)
 
     # Test that the track function raises an exception with missing input path
-    with pytest.raises(Exception):
+    with pytest.raises((FileNotFoundError, ValueError)):
         track(
             output_dirpath=str(output_path),
             config_filepath=str(test_config_path),

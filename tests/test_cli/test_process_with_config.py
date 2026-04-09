@@ -65,7 +65,7 @@ def test_process_with_config_binning_2x2(tmp_path, example_process_plate, monkey
 """
 
     config_path = tmp_path / "test_process_config_binning.yml"
-    with open(config_path, 'w') as f:
+    with open(config_path, "w") as f:
         f.write(config_content)
 
     # Get input position paths
@@ -126,7 +126,7 @@ def test_process_with_config_squaring(tmp_path, example_process_plate, monkeypat
 """
 
     config_path = tmp_path / "test_process_config_squaring.yml"
-    with open(config_path, 'w') as f:
+    with open(config_path, "w") as f:
         f.write(config_content)
 
     # Get input position paths
@@ -198,7 +198,7 @@ def test_process_with_config_binning_and_squaring(
 """
 
     config_path = tmp_path / "test_process_config_combined.yml"
-    with open(config_path, 'w') as f:
+    with open(config_path, "w") as f:
         f.write(config_content)
 
     # Get input position paths
@@ -327,13 +327,13 @@ def test_process_with_config_invalid_function(tmp_path, example_process_plate, m
 """
 
     config_path = tmp_path / "test_process_config_invalid.yml"
-    with open(config_path, 'w') as f:
+    with open(config_path, "w") as f:
         f.write(config_content)
 
     input_position_paths = [plate_path / "A" / "1" / "0"]
 
     # Test that it raises an exception with invalid function
-    with pytest.raises(Exception):
+    with pytest.raises((ValueError, AttributeError)):
         process_with_config(
             input_position_dirpaths=input_position_paths,
             config_filepath=config_path,
@@ -359,13 +359,13 @@ def test_process_with_config_invalid_channel(tmp_path, example_process_plate, mo
 """
 
     config_path = tmp_path / "test_process_config_invalid_channel.yml"
-    with open(config_path, 'w') as f:
+    with open(config_path, "w") as f:
         f.write(config_content)
 
     input_position_paths = [plate_path / "A" / "1" / "0"]
 
     # Test that it raises an exception with invalid channel
-    with pytest.raises(Exception):
+    with pytest.raises((ValueError, KeyError)):
         process_with_config(
             input_position_dirpaths=input_position_paths,
             config_filepath=config_path,
@@ -388,13 +388,13 @@ def test_process_with_config_empty_functions(tmp_path, example_process_plate, mo
 """
 
     config_path = tmp_path / "test_process_config_empty.yml"
-    with open(config_path, 'w') as f:
+    with open(config_path, "w") as f:
         f.write(config_content)
 
     input_position_paths = [plate_path / "A" / "1" / "0"]
 
     # Test that it raises an exception with empty functions
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError):
         process_with_config(
             input_position_dirpaths=input_position_paths,
             config_filepath=config_path,
@@ -428,7 +428,7 @@ def test_process_with_config_multiple_channels(tmp_path, example_process_plate, 
 """
 
     config_path = tmp_path / "test_process_config_multiple.yml"
-    with open(config_path, 'w') as f:
+    with open(config_path, "w") as f:
         f.write(config_content)
 
     # Get input position paths
