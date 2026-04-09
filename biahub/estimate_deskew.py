@@ -20,7 +20,7 @@ def estimate_deskew_cli(input_position_dirpaths, output_filepath):
 
     >> biahub estimate-deskew -i ./input.zarr/0/0/0 -o ./deskew_params.yml
     """
-    if not str(output_filepath).endswith(('.yaml', '.yml')):
+    if not str(output_filepath).endswith((".yaml", ".yml")):
         raise ValueError("Output file must be a YAML file.")
 
     # Read p, t, c = (0, 0, 0) into an array

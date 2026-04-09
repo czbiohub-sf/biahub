@@ -418,7 +418,7 @@ def estimate_tczyx(
     affine_transform_settings: AffineTransformSettings,
     verbose: bool = False,
     output_folder_path: Path = None,
-    cluster: str = 'local',
+    cluster: str = "local",
     sbatch_filepath: Path = None,
 ) -> list[Transform]:
     """
@@ -492,7 +492,7 @@ def estimate_tczyx(
     output_transforms_path = output_folder_path / "xyz_transforms"
     output_transforms_path.mkdir(parents=True, exist_ok=True)
 
-    click.echo('Computing registration transforms...')
+    click.echo("Computing registration transforms...")
     # NOTE: ants is mulitthreaded so no need for multiprocessing here
     # Submit jobs
     jobs = []

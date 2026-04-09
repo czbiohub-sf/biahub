@@ -1,14 +1,15 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
 name = "biahub"
-version = "0.1.0"
 description = "Bioimage analysis hub."
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.11, <4.0"
+requires-python = ">=3.11, <3.14"
+
+dynamic = ["version"]
 
 classifiers = [
   "Development Status :: 3 - Alpha",
@@ -18,6 +19,7 @@ classifiers = [
 ]
 
 dependencies = [
+  "click",
   "iohub[tensorstore]>=0.3.0a6",
   "stitch",
   "matplotlib",
@@ -31,7 +33,7 @@ dependencies = [
   "submitit",
   "torch",
   "tqdm",
-  "waveorder==3.0.1",
+  "waveorder>=0.3",
   "largestinteriorrectangle",
   "antspyx",
   "pystackreg",
@@ -57,67 +59,69 @@ build = ["build", "twine"]
 
 all = ["biahub[segment,track,shard,build,gui]"]
 
-dev = [
-  "biahub[segment,track,shard,build]",
-  "black==25.1",
-  "flake8==7.2",
-  "isort==6.0",
-  "pytest==8.4",
-  "pre-commit~=4.2",
-]
 doc = [
     "zensical>=0.0.11",
     "mkdocs-click>=0.8",
 ]
 
+[dependency-groups]
+dev = [
+  "biahub[segment,track,shard,build]",
+  "pre-commit~=4.5",
+  "pytest~=8.4",
+  "ruff~=0.15",
+]
+
 [project.scripts]
 biahub = "biahub.cli.main:cli"
 
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.version.raw-options]
+version_scheme = "post-release"
+local_scheme = "no-local-version"
+
+[tool.hatch.build.targets.wheel]
+packages = ["biahub"]
+
 [tool.uv.sources]
 stitch = { git = "https://github.com/ahillsley/stitching", branch = "jen" }
-waveorder = { git = "https://github.com/mehta-lab/waveorder.git" }
 
-[tool.black]
+[tool.ruff]
 line-length = 95
-target-version = ['py310']
-include = '\.pyi?$'
-skip-string-normalization = true
-exclude = '''
-(
-  /(
-      \.eggs
-    | \.git
-    | \.hg
-    | \.mypy_cache
-    | \.tox
-    | \.venv
-    | _build
-    | build
-    | dist
-    | notebooks
-    | ignore
-    | examples
-    | scripts
-  )/
-)
-'''
+target-version = "py311"
 
-[tool.isort]
-profile = "black"
-line_length = 95
-lines_between_types = 1
-default_section = "THIRDPARTY"
-no_lines_before = ["STDLIB"]
-ensure_newline_before_comments = true
-skip_glob = ["examples/*", "scripts/*"]
+exclude = ["archive", "examples", "scripts", "notebooks", "ignore"]
 
-[tool.pylint]
-# disable all conventions, refactors, warnings (C, R, W) and the following:
-# E0401: unable-to-import (since it is possible that no one environment has all required packages)
-# E1136: unsubscriptable-object (anecdotal false positives for numpy objects)
-disable = ["C", "R", "W", "import-error", "unsubscriptable-object"]
-msg-template = "{line},{column},{category},{symbol}:{msg}"
-reports = "n"
+[tool.ruff.lint]
+select = ["F", "E", "W", "I", "N", "UP", "B"]
+
+ignore = [
+    "E501",  # Line too long (handled by formatter)
+    "N802",  # Function name should be lowercase (scientific code uses uppercase)
+    "N803",  # Argument name should be lowercase (scientific code uses uppercase)
+    "N806",  # Variable in function should be lowercase (scientific code uses uppercase)
+    "N805",  # First argument of a method should be named `self`
+    "N812",  # Lowercase imported as non-lowercase
+    "N815",  # Variable in class scope should not be mixedCase
+    "N817",  # CamelCase imported as acronym
+    "N999",  # Invalid module name
+    "B006",  # Do not use mutable data structures for argument defaults
+    "B007",  # Loop control variable not used within loop body
+    "B016",  # Cannot raise a literal
+    "B028",  # No explicit `stacklevel` keyword argument found
+    "B904",  # Within an `except` clause, raise exceptions with `raise ... from`
+    "B905",  # `zip()` without an explicit `strict=` parameter
+    "UP022", # Prefer `capture_output` over sending `stdout` and `stderr` to `PIPE`
+]
+
+[tool.ruff.lint.isort]
+lines-between-types = 1
+known-first-party = ["biahub"]
+
+[tool.ruff.format]
+docstring-code-format = true
 
 [tool.pytest.ini_options]
 addopts = ["--import-mode=importlib"]

@@ -17,7 +17,7 @@ Key conventions
 import os
 
 from pathlib import Path
-from typing import Literal, Tuple, Union
+from typing import Literal
 
 import ants
 import click
@@ -223,7 +223,7 @@ def interpolate_transforms(
                 continue
 
             f = interp1d(
-                local_x, local_y, axis=0, kind=interpolation_type, fill_value='extrapolate'
+                local_x, local_y, axis=0, kind=interpolation_type, fill_value="extrapolate"
             )
             transforms[idx] = f(idx).tolist()
             if verbose:
@@ -235,8 +235,8 @@ def interpolate_transforms(
             valid_transform_indices,
             valid_transforms,
             axis=0,
-            kind='linear',
-            fill_value='extrapolate',
+            kind="linear",
+            fill_value="extrapolate",
         )
         transforms = [
             f(i).tolist() if transforms[i] is None else transforms[i] for i in range(n)
@@ -291,7 +291,7 @@ def check_transforms_difference(
     mse = np.mean(differences)
 
     if verbose:
-        click.echo(f'MSE of transformed points: {mse:.2f}; threshold: {threshold:.2f}')
+        click.echo(f"MSE of transformed points: {mse:.2f}; threshold: {threshold:.2f}")
     return mse <= threshold
 
 
@@ -367,7 +367,7 @@ def evaluate_transforms(
 
 
 def save_transforms(
-    model: Union[AffineTransformSettings, StabilizationSettings, RegistrationSettings],
+    model: AffineTransformSettings | StabilizationSettings | RegistrationSettings,
     transforms: list[ArrayLike],
     output_filepath_settings: Path,
     output_filepath_plot: Path = None,
@@ -458,7 +458,7 @@ def plot_translations(
     axs[1].set_title("X-Translation")
     axs[2].plot(y_transforms)
     axs[2].set_title("Y-Translation")
-    plt.savefig(output_filepath, dpi=300, bbox_inches='tight')
+    plt.savefig(output_filepath, dpi=300, bbox_inches="tight")
     plt.close()
 
 
@@ -517,7 +517,7 @@ def convert_transform_to_numpy(T_ants):
     return T_numpy
 
 
-def find_lir(registered_zyx: np.ndarray, plot: bool = False) -> Tuple:
+def find_lir(registered_zyx: np.ndarray, plot: bool = False) -> tuple:
     registered_zyx = np.asarray(registered_zyx, dtype=bool)
 
     # Find the lir in YX at Z//2
@@ -579,12 +579,12 @@ def find_lir(registered_zyx: np.ndarray, plot: bool = False) -> Tuple:
 
 
 def find_overlapping_volume(
-    input_zyx_shape: Tuple,
-    target_zyx_shape: Tuple,
+    input_zyx_shape: tuple,
+    target_zyx_shape: tuple,
     transformation_matrix: np.ndarray,
     method: str = "LIR",
     plot: bool = False,
-) -> Tuple:
+) -> tuple:
     """
     Find the overlapping rectangular volume after registration of two 3D datasets
 
@@ -684,7 +684,7 @@ def get_3D_rescaling_matrix(start_shape_zyx, scaling_factor_zyx=(1, 1, 1), end_s
 
 
 def get_3D_rotation_matrix(
-    start_shape_zyx: Tuple, angle: float = 0.0, end_shape_zyx: Tuple = None
+    start_shape_zyx: tuple, angle: float = 0.0, end_shape_zyx: tuple = None
 ) -> np.ndarray:
     """
     Rotate Transformation Matrix
@@ -774,7 +774,7 @@ def get_3D_fliplr_matrix(start_shape_zyx: tuple, end_shape_zyx: tuple = None) ->
 def apply_affine_transform(
     zyx_data: np.ndarray,
     matrix: np.ndarray,
-    output_shape_zyx: Tuple,
+    output_shape_zyx: tuple,
     method="ants",
     interpolation: str = "linear",
     crop_output_slicing: bool = None,
@@ -842,7 +842,6 @@ def apply_affine_transform(
             ).numpy()
 
         elif method == "scipy":
-
             registered_zyx = scipy.ndimage.affine_transform(zyx_data, matrix, output_shape_zyx)
 
         else:
@@ -857,7 +856,7 @@ def apply_affine_transform(
 
 def pad_to_shape(
     arr: ArrayLike,
-    shape: Tuple[int, ...],
+    shape: tuple[int, ...],
     mode: str,
     verbose: bool = False,
     **kwargs,
@@ -900,7 +899,7 @@ def pad_to_shape(
 
 def center_crop(
     arr: ArrayLike,
-    shape: Tuple[int, ...],
+    shape: tuple[int, ...],
     verbose: bool = False,
 ) -> ArrayLike:
     """
@@ -928,7 +927,7 @@ def center_crop(
 
 def match_shape(
     img: ArrayLike,
-    shape: Tuple[int, ...],
+    shape: tuple[int, ...],
     verbose: bool = False,
 ) -> ArrayLike:
     """

@@ -3,7 +3,6 @@ import shutil
 import subprocess
 
 from pathlib import Path
-from typing import List
 
 import click
 import numpy as np
@@ -96,11 +95,11 @@ def run_viscy_predict(
         "module load anaconda && "
         f"conda activate {path_viscy_env} && "
         "viscy predict "
-        f"-c \"{config_file}\" "
-        f"--data.init_args.data_path \"{data_path}\" "
+        f'-c "{config_file}" '
+        f'--data.init_args.data_path "{data_path}" '
         f"--trainer.callbacks+=viscy.translation.predict_writer.HCSPredictionWriter "
-        f"--trainer.callbacks.output_store \"{output_store}\" "
-        f"--trainer.default_root_dir \"{log_dir}\""
+        f'--trainer.callbacks.output_store "{output_store}" '
+        f'--trainer.default_root_dir "{log_dir}"'
     )
     if verbose:
         click.echo(f"Predict FOV: {'/'.join(Path(data_path).parts[-3:])}")
@@ -129,7 +128,6 @@ def combine_fov_zarrs_to_plate(
         Whether to delete the moved files afterwards. Default True.
     """
     for fov in fovs:
-
         row, col, pos = fov.parts[-3:]
         nested_fov_path = temp_dir / f"{row}_{col}_{pos}.zarr" / row / col / pos
 
@@ -156,7 +154,7 @@ def combine_fov_zarrs_to_plate(
 
 
 def virtual_stain(
-    input_position_dirpaths: List[str],
+    input_position_dirpaths: list[str],
     output_dirpath: str,
     predict_config_filepath: str,
     path_viscy_env: str,
@@ -210,7 +208,6 @@ def virtual_stain(
     path_viscy_env = Path(path_viscy_env)
 
     if run_mode in ["all", "preprocess"]:
-
         slurm_args_preprocess = {
             "slurm_job_name": "VS_preprocess",
             "slurm_mem_per_cpu": "8G",
@@ -400,7 +397,7 @@ def virtual_stain(
     help="Which VisCy stage(s) to run.",
 )
 def virtual_stain_cli(
-    input_position_dirpaths: List[str],
+    input_position_dirpaths: list[str],
     output_dirpath: str,
     predict_config_filepath: str,
     path_viscy_env: str,

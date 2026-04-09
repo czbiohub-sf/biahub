@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import List, Literal
+from typing import Literal
 
 import click
 import numpy as np
@@ -27,7 +27,7 @@ from biahub.settings import DeskewSettings
 
 # Needed for multiprocessing with GPUs
 # https://github.com/pytorch/pytorch/issues/40403#issuecomment-1422625325
-torch.multiprocessing.set_start_method('spawn', force=True)
+torch.multiprocessing.set_start_method("spawn", force=True)
 
 
 def _average_n_slices(data, average_window_width=1):
@@ -49,7 +49,7 @@ def _average_n_slices(data, average_window_width=1):
     remainder = data.shape[0] % average_window_width
     if remainder > 0:
         padding_width = average_window_width - remainder
-        data = np.pad(data, [(0, padding_width)] + [(0, 0)] * (data.ndim - 1), mode='edge')
+        data = np.pad(data, [(0, padding_width)] + [(0, 0)] * (data.ndim - 1), mode="edge")
 
     # Reshape then average over the first dimension
     new_shape = (data.shape[0] // average_window_width, average_window_width) + data.shape[1:]
@@ -245,7 +245,7 @@ def deskew_zyx(
     ls_angle_deg: float,
     px_to_scan_ratio: float,
     keep_overhang: bool,
-    device: str = 'cpu',
+    device: str = "cpu",
     average_n_slices: int = 1,
     overhang_fill: Literal["zero", "mean"] = "zero",
     debug_plot_path: Path = None,
@@ -325,7 +325,7 @@ def _czyx_deskew_data(data, **kwargs):
 
 
 def deskew(
-    input_position_dirpaths: List[str],
+    input_position_dirpaths: list[str],
     config_filepath: Path,
     output_dirpath: str,
     sbatch_filepath: str = None,
@@ -388,12 +388,12 @@ def deskew(
     )
 
     deskew_args = {
-        'ls_angle_deg': settings.ls_angle_deg,
-        'px_to_scan_ratio': settings.px_to_scan_ratio,
-        'keep_overhang': settings.keep_overhang,
-        'average_n_slices': settings.average_n_slices,
-        'overhang_fill': settings.overhang_fill,
-        'extra_metadata': {'deskew': settings.model_dump()},
+        "ls_angle_deg": settings.ls_angle_deg,
+        "px_to_scan_ratio": settings.px_to_scan_ratio,
+        "keep_overhang": settings.keep_overhang,
+        "average_n_slices": settings.average_n_slices,
+        "overhang_fill": settings.overhang_fill,
+        "extra_metadata": {"deskew": settings.model_dump()},
     }
 
     # Estimate resources
@@ -426,7 +426,7 @@ def deskew(
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
 
-    click.echo('Submitting SLURM jobs...')
+    click.echo("Submitting SLURM jobs...")
 
     jobs = []
     with submitit.helpers.clean_env(), executor.batch():
@@ -462,7 +462,7 @@ def deskew(
 @local()
 @monitor()
 def deskew_cli(
-    input_position_dirpaths: List[str],
+    input_position_dirpaths: list[str],
     config_filepath: Path,
     output_dirpath: str,
     sbatch_filepath: str = None,

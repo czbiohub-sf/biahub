@@ -1,5 +1,4 @@
 from pathlib import Path
-from typing import List, Tuple
 
 import ants
 import click
@@ -61,7 +60,7 @@ def get_3D_rescaling_matrix(start_shape_zyx, scaling_factor_zyx=(1, 1, 1), end_s
 
 
 def get_3D_rotation_matrix(
-    start_shape_zyx: Tuple, angle: float = 0.0, end_shape_zyx: Tuple = None
+    start_shape_zyx: tuple, angle: float = 0.0, end_shape_zyx: tuple = None
 ) -> np.ndarray:
     """
     Rotate Transformation Matrix
@@ -206,7 +205,7 @@ def convert_transform_to_numpy(T_ants):
 def apply_affine_transform(
     zyx_data: np.ndarray,
     matrix: np.ndarray,
-    output_shape_zyx: Tuple,
+    output_shape_zyx: tuple,
     method="ants",
     interpolation: str = "linear",
     crop_output_slicing: bool = None,
@@ -286,7 +285,7 @@ def apply_affine_transform(
     return registered_zyx
 
 
-def find_lir(registered_zyx: np.ndarray, plot: bool = False) -> Tuple:
+def find_lir(registered_zyx: np.ndarray, plot: bool = False) -> tuple:
     registered_zyx = np.asarray(registered_zyx, dtype=bool)
 
     # Find the lir in YX at Z//2
@@ -348,12 +347,12 @@ def find_lir(registered_zyx: np.ndarray, plot: bool = False) -> Tuple:
 
 
 def find_overlapping_volume(
-    input_zyx_shape: Tuple,
-    target_zyx_shape: Tuple,
+    input_zyx_shape: tuple,
+    target_zyx_shape: tuple,
     transformation_matrix: np.ndarray,
     method: str = "LIR",
     plot: bool = False,
-) -> Tuple:
+) -> tuple:
     """
     Find the overlapping rectangular volume after registration of two 3D datasets
 
@@ -413,8 +412,8 @@ def rescale_voxel_size(affine_matrix, input_scale):
 @sbatch_filepath()
 @monitor()
 def register_cli(
-    source_position_dirpaths: List[str],
-    target_position_dirpaths: List[str],
+    source_position_dirpaths: list[str],
+    target_position_dirpaths: list[str],
     config_filepath: Path,
     output_dirpath: str,
     local: bool,

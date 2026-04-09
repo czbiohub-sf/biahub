@@ -1,5 +1,4 @@
 from pathlib import Path
-from typing import List
 
 import ants
 import click
@@ -76,7 +75,7 @@ def apply_stabilization_transform(
             )
         return stabilized_czyx
     else:
-        click.echo(f'shifting matrix with t_idx:{t_idx} \n{list_of_shifts[t_idx]}')
+        click.echo(f"shifting matrix with t_idx:{t_idx} \n{list_of_shifts[t_idx]}")
         target_zyx_ants = ants.from_numpy(np.zeros((output_shape), dtype=np.float32))
 
         zyx_data = np.nan_to_num(zyx_data, nan=0)
@@ -89,7 +88,7 @@ def apply_stabilization_transform(
 
 
 def stabilize(
-    input_position_dirpaths: List[str],
+    input_position_dirpaths: list[str],
     output_dirpath: str,
     config_filepaths: list[str],
     sbatch_filepath: str = None,
@@ -168,7 +167,7 @@ def stabilize(
 
     # Convert to Euler angles
     rotation = R.from_matrix(R_pure)
-    euler_angles = rotation.as_euler('xyz', degrees=True)  # XYZ order, in degrees
+    euler_angles = rotation.as_euler("xyz", degrees=True)  # XYZ order, in degrees
 
     if np.isclose(euler_angles[0], 90, atol=10):
         X = Y_slice.stop - Y_slice.start
@@ -263,7 +262,7 @@ def stabilize(
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
 
-    click.echo('Submitting SLURM jobs...')
+    click.echo("Submitting SLURM jobs...")
     jobs = []
     with submitit.helpers.clean_env(), executor.batch():
         # apply stabilization to channels in the chosen channels and else copy the rest
@@ -326,7 +325,7 @@ def stabilize(
 @local()
 @monitor()
 def stabilize_cli(
-    input_position_dirpaths: List[str],
+    input_position_dirpaths: list[str],
     output_dirpath: str,
     config_filepaths: list[str],
     sbatch_filepath: str,

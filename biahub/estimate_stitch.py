@@ -1,6 +1,5 @@
 from collections import defaultdict
 from pathlib import Path
-from typing import Tuple
 
 import click
 import numpy as np
@@ -16,7 +15,7 @@ from biahub.settings import StitchSettings
 
 def extract_stage_position(
     plate_dataset: Plate, position_name: str
-) -> Tuple[float, float, float]:
+) -> tuple[float, float, float]:
     """
     Extract stage position coordinates from plate metadata.
 
@@ -57,7 +56,7 @@ def extract_stage_position(
                     pass
 
                 try:
-                    z_stage_name = stage_position['DefaultZStage']
+                    z_stage_name = stage_position["DefaultZStage"]
                     zpos = stage_position[z_stage_name]
                 except KeyError:
                     pass
@@ -125,7 +124,7 @@ def estimate_stitch_cli(
 
         # Find position name from position-level omero metadata
         with open_ome_zarr(input_position_dirpath) as input_position_dataset:
-            position_name = input_position_dataset.zattrs['omero']['name']
+            position_name = input_position_dataset.zattrs["omero"]["name"]
 
         # Use position name to index into micromanager plate-level metadata
         with open_ome_zarr(input_plate_path) as input_plate_dataset:

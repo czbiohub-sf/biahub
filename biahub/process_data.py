@@ -1,5 +1,6 @@
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Literal, Sequence
+from typing import Literal
 
 import click
 import numpy as np
@@ -26,7 +27,7 @@ from biahub.settings import ProcessingFunctions, ProcessingImportFuncSettings
 def binning_czyx(
     czyx_data: np.ndarray,
     binning_factor_zyx: Sequence[int] = [1, 2, 2],
-    mode: Literal['sum', 'mean'] = 'sum',
+    mode: Literal["sum", "mean"] = "sum",
 ) -> np.ndarray:
     """
     Binning via summing or averaging pixels within bin windows
@@ -72,7 +73,7 @@ def binning_czyx(
             )
         )
 
-        if mode == 'sum':
+        if mode == "sum":
             output[c] = reshaped.sum(axis=(1, 3, 5))
             # Normalize sum to [0, max_val] where max_val is dtype dependent
             if output[c].max() > 0:  # Avoid division by zero
@@ -85,13 +86,13 @@ def binning_czyx(
                     * max_val
                     / (output[c].max() - output[c].min())
                 )
-        elif mode == 'mean':
+        elif mode == "mean":
             output[c] = reshaped.mean(axis=(1, 3, 5))
         else:
             raise ValueError(f"Invalid mode: {mode}. Must be 'sum' or 'mean'.")
 
     # For mean mode and integer dtypes, scale to dtype range
-    if mode == 'mean' and np.issubdtype(czyx_data.dtype, np.integer):
+    if mode == "mean" and np.issubdtype(czyx_data.dtype, np.integer):
         dtype_info = np.iinfo(czyx_data.dtype)
         output = output * dtype_info.max / output.max()
 
@@ -134,7 +135,7 @@ def process_czyx(
         else:
             raise ValueError("Only one input channel is supported for now")
 
-        click.echo(f'Processing with {func.__name__} with kwargs {kwargs} to channel {c_idx}')
+        click.echo(f"Processing with {func.__name__} with kwargs {kwargs} to channel {c_idx}")
         czyx_data = func(czyx_data, **kwargs)
 
     return czyx_data

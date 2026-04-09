@@ -6,7 +6,6 @@ import multiprocessing as mp
 
 from functools import partial
 from pathlib import Path
-from typing import List, Tuple
 
 import click
 import numpy as np
@@ -40,11 +39,11 @@ def update_model(model_instance, update_dict):
 # TODO: convert all code to use this function from now on
 def create_empty_hcs_zarr(
     store_path: Path,
-    position_keys: list[Tuple[str]],
+    position_keys: list[tuple[str]],
     channel_names: list[str],
-    shape: Tuple[int],
-    chunks: Tuple[int] = None,
-    scale: Tuple[float] = (1, 1, 1, 1, 1),
+    shape: tuple[int],
+    chunks: tuple[int] = None,
+    scale: tuple[float] = (1, 1, 1, 1, 1),
     dtype: DTypeLike = np.float32,
     max_chunk_size_bytes=500e6,
 ) -> None:
@@ -289,11 +288,11 @@ def process_single_position(
 
     # Write the settings into the metadata if existing
     # TODO: alternatively we can throw all extra arguments as metadata.
-    if 'extra_metadata' in non_func_args:
+    if "extra_metadata" in non_func_args:
         # For each dictionary in the nest
-        with open_ome_zarr(output_path, mode='r+') as output_dataset:
-            for params_metadata_keys in kwargs['extra_metadata'].keys():
-                output_dataset.zattrs['extra_metadata'] = non_func_args['extra_metadata']
+        with open_ome_zarr(output_path, mode="r+") as output_dataset:
+            for params_metadata_keys in kwargs["extra_metadata"].keys():
+                output_dataset.zattrs["extra_metadata"] = non_func_args["extra_metadata"]
 
     # Loop through (T, C), deskewing and writing as we go
     click.echo(f"\nStarting multiprocess pool with {num_processes} processes")
@@ -362,11 +361,11 @@ def process_single_position_v2(
             non_func_args[k] = v
 
     # Write the settings into the metadata if existing
-    if 'extra_metadata' in non_func_args:
+    if "extra_metadata" in non_func_args:
         # For each dictionary in the nest
-        with open_ome_zarr(output_path, mode='r+') as output_dataset:
-            for params_metadata_keys in kwargs['extra_metadata'].keys():
-                output_dataset.zattrs['extra_metadata'] = non_func_args['extra_metadata']
+        with open_ome_zarr(output_path, mode="r+") as output_dataset:
+            for params_metadata_keys in kwargs["extra_metadata"].keys():
+                output_dataset.zattrs["extra_metadata"] = non_func_args["extra_metadata"]
 
     # Loop through (T, C), deskewing and writing as we go
     click.echo(f"\nStarting multiprocess pool with {num_processes} processes")
@@ -520,7 +519,7 @@ def model_to_yaml(model, yaml_path: Path) -> None:
     --------
     >>> from my_model import MyModel
     >>> model = MyModel()
-    >>> model_to_yaml(model, 'model.yaml')
+    >>> model_to_yaml(model, "model.yaml")
 
     """
     yaml_path = Path(yaml_path)
@@ -570,7 +569,7 @@ def yaml_to_model(yaml_path: Path, model):
     Examples
     --------
     >>> from my_model import MyModel
-    >>> model = yaml_to_model('model.yaml', MyModel)
+    >>> model = yaml_to_model("model.yaml", MyModel)
 
     """
     yaml_path = Path(yaml_path)
@@ -579,7 +578,7 @@ def yaml_to_model(yaml_path: Path, model):
         raise TypeError("The provided model must be a class with a callable constructor.")
 
     try:
-        with open(yaml_path, "r") as file:
+        with open(yaml_path) as file:
             raw_settings = yaml.safe_load(file)
     except FileNotFoundError:
         raise FileNotFoundError(f"The YAML file '{yaml_path}' does not exist.")
@@ -608,7 +607,7 @@ def _check_nan_n_zeros(input_array: np.ndarray) -> bool:
     return np.all(np.isnan(input_array)) or np.all(input_array == 0)
 
 
-def get_empty_frame_indices(input_array: np.ndarray) -> List[int]:
+def get_empty_frame_indices(input_array: np.ndarray) -> list[int]:
     """
     Get the indices of the empty frames in a 3D array.
 
@@ -635,7 +634,7 @@ def get_empty_frame_indices(input_array: np.ndarray) -> List[int]:
 
 
 def estimate_resources(
-    shape: Tuple[int, int, int, int, int],
+    shape: tuple[int, int, int, int, int],
     dtype: DTypeLike = np.float32,
     ram_multiplier: float = 1.0,
     max_num_cpus: int = 64,

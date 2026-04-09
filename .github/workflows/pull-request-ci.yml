@@ -7,41 +7,37 @@ on:
     branches: [main]
 
 jobs:
-  style:
-    name: Check Style
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      - uses: actions/setup-python@v5
+
+      - name: Ruff lint
+        uses: astral-sh/ruff-action@v3
+
+      - name: Ruff format
+        uses: astral-sh/ruff-action@v3
         with:
-          python-version: "3.11"
-      - uses: psf/black@stable
-        with:
-          src: "biahub"
-          options: "--check --verbose"
-          use_pyproject: true
-      - uses: py-actions/flake8@v2
-        with:
-          path: "biahub"
-          flake8-version: "7.2.0"
-      - uses: isort/isort-action@v1
-        with:
-          isort-version: "6.0.1"
+          args: "format --check"
 
   test:
     name: Run Tests
-    needs: [style]
+    needs: [lint]
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - uses: astral-sh/setup-uv@v6
+      with:
+        fetch-depth: 0  # Fetch all history for hatch-vcs
+    - uses: astral-sh/setup-uv@v7
+      with:
+        enable-cache: true
     - uses: actions/setup-python@v5
       with:
         python-version: "3.11"
 
     - name: Install the biahub package
-      run: uv sync --extra dev
+      run: uv sync --group dev
       env:
         UV_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
 

@@ -1,6 +1,5 @@
 from enum import Enum, auto
 from pathlib import Path
-from typing import Optional
 
 import dask.array as da
 import napari
@@ -115,10 +114,10 @@ def _create_positioned_element(
     margin_factor: float = 0.05,
     text_size: int = 20,
     color: str = "white",
-    text: Optional[str] = None,
+    text: str | None = None,
     layer_name: str = "overlay_element",
     edge_width: int = 0,
-    line_length: Optional[float] = None,
+    line_length: float | None = None,
 ) -> None:
     """
     Base function to create positioned elements (text overlays, scale bars, etc.) in the viewer.
@@ -218,7 +217,7 @@ def add_scale_bar(
     position: ElementPosition = ElementPosition.BOTTOM_RIGHT,
     margin_factor: float = 0.05,
     line_width: int = 5,
-    text_size: Optional[int] = None,
+    text_size: int | None = None,
     color: str = "white",
 ) -> napari.layers.Shapes:
     """
@@ -267,8 +266,8 @@ def add_scale_bar(
 
 def add_text_overlay(
     viewer: napari.Viewer,
-    time_axis: Optional[int] = 0,  # None to disable time display
-    z_axis: Optional[int] = 1,  # None to disable z display
+    time_axis: int | None = 0,  # None to disable time display
+    z_axis: int | None = 1,  # None to disable z display
     position: ElementPosition = ElementPosition.TOP_LEFT,
     margin_factor: float = 0.05,
     text_size: int = 20,
@@ -359,8 +358,8 @@ def add_text_overlay(
 def simple_recording(
     viewer: napari.Viewer,
     output_path: Path,
-    loop_axes: list[tuple[int, tuple[Optional[int], Optional[int]], Optional[float]]],
-    z_focal_plane: Optional[int] = None,  # New argument to specify z
+    loop_axes: list[tuple[int, tuple[int | None, int | None], float | None]],
+    z_focal_plane: int | None = None,  # New argument to specify z
     fps: int = 60,
     buffer_duration: float = 0.5,
     default_duration: float = 5.0,
@@ -390,11 +389,11 @@ def simple_recording(
     -----
     Assuming TZYX order, loop over time from t=10 to t=100 in 5 seconds
     ```python
-    simple_recording(viewer, 'test.mp4', [(0, (10, 100), 5)])
+    simple_recording(viewer, "test.mp4", [(0, (10, 100), 5)])
     ```
     Loop over two axes t and z with 5 seconds duration each
     ```python
-    simple_recording(viewer, 'test.mp4', [(0, (None, None), 5), (1, (None, None), 5)])
+    simple_recording(viewer, "test.mp4", [(0, (None, None), 5), (1, (None, None), 5)])
     ```
     """
     animation = Animation(viewer)

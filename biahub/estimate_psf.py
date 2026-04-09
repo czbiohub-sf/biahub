@@ -2,7 +2,6 @@ import gc
 import time
 
 from pathlib import Path
-from typing import List
 
 import click
 import numpy as np
@@ -22,7 +21,7 @@ from biahub.settings import PsfFromBeadsSettings
 @config_filepath()
 @output_dirpath()
 def estimate_psf_cli(
-    input_position_dirpaths: List[str],
+    input_position_dirpaths: list[str],
     config_filepath: Path,
     output_dirpath: str,
 ):
@@ -82,7 +81,7 @@ def estimate_psf_cli(
 
         torch.cuda.empty_cache()
         t2 = time.time()
-        click.echo(f'Time to detect peaks: {t2-t1}')
+        click.echo(f"Time to detect peaks: {t2 - t1}")
 
         beads, _ = extract_beads(
             zyx_data=zyx_data,

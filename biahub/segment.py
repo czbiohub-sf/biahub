@@ -90,7 +90,7 @@ def segment_data(
         )
         segmentation, _, _ = model.eval(
             czyx_data_to_segment, channel_axis=0, z_axis=1, **model_args.eval_args
-        )  # noqa: python-no-eval
+        )
         if z_slice_2D is not None and isinstance(z_slice_2D, int):
             segmentation = segmentation[np.newaxis, ...]
         czyx_segmentation.append(segmentation)

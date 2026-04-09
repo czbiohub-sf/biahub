@@ -10,16 +10,16 @@ Provides two classes:
 
 Typical usage::
 
-    mov_graph = Graph.from_nodes(mov_peaks, mode='knn', k=5)
-    ref_graph = Graph.from_nodes(ref_peaks, mode='knn', k=5)
-    matcher = GraphMatcher(algorithm='hungarian', cross_check=True)
+    mov_graph = Graph.from_nodes(mov_peaks, mode="knn", k=5)
+    ref_graph = Graph.from_nodes(ref_peaks, mode="knn", k=5)
+    matcher = GraphMatcher(algorithm="hungarian", cross_check=True)
     matches = matcher.match(mov_graph, ref_graph)
     matches = matcher.filter_matches(matches, mov_graph, ref_graph, direction_threshold=50)
 """
 
 from collections import defaultdict
 from functools import cached_property
-from typing import Literal, Optional
+from typing import Literal
 
 import click
 import numpy as np
@@ -58,13 +58,13 @@ class Graph:
     Examples
     --------
     >>> # Build a graph from nodes with k-nearest neighbors
-    >>> graph = Graph.from_nodes(nodes, mode='knn', k=5)
+    >>> graph = Graph.from_nodes(nodes, mode="knn", k=5)
 
     >>> # Build a graph from nodes with radius neighbors
-    >>> graph = Graph.from_nodes(nodes, mode='radius', radius=30.0)
+    >>> graph = Graph.from_nodes(nodes, mode="radius", radius=30.0)
 
     >>> # Build a graph from nodes with all-to-all edges
-    >>> graph = Graph.from_nodes(nodes, mode='full')
+    >>> graph = Graph.from_nodes(nodes, mode="full")
     """
 
     def __init__(
@@ -112,7 +112,7 @@ class Graph:
 
         elif mode == "radius":
             graph = radius_neighbors_graph(
-                points, radius=radius, mode='connectivity', include_self=False
+                points, radius=radius, mode="connectivity", include_self=False
             )
             if graph.nnz == 0:
                 return []
@@ -278,31 +278,25 @@ class GraphMatcher:
     --------
     >>> # Hungarian matching (graph-based)
     >>> matcher = GraphMatcher(
-    ...     algorithm='hungarian',
-    ...     weights={'dist': 0.5, 'edge_length': 1.0},
-    ...     cross_check=True
+    ...     algorithm="hungarian", weights={"dist": 0.5, "edge_length": 1.0}, cross_check=True
     ... )
     >>> matches = matcher.match(moving_graph, ref_graph)
 
     >>> # Descriptor matching (feature-based)
-    >>> matcher = GraphMatcher(
-    ...     algorithm='descriptor',
-    ...     cross_check=True,
-    ...     max_ratio=0.8
-    ... )
+    >>> matcher = GraphMatcher(algorithm="descriptor", cross_check=True, max_ratio=0.8)
     >>> matches = matcher.match(moving_graph, ref_graph)
     """
 
     def __init__(
         self,
-        algorithm: Literal['hungarian', 'descriptor'] = 'hungarian',
-        weights: Optional[dict[str, float]] = None,
-        distance_metric: str = 'euclidean',
+        algorithm: Literal["hungarian", "descriptor"] = "hungarian",
+        weights: dict[str, float] | None = None,
+        distance_metric: str = "euclidean",
         normalize: bool = False,
         cost_threshold: float = 0.9,
         cross_check: bool = False,
-        max_ratio: Optional[float] = None,
-        metric: str = 'euclidean',  # for descriptor matching
+        max_ratio: float | None = None,
+        metric: str = "euclidean",  # for descriptor matching
         verbose: bool = False,
     ):
         self.algorithm = algorithm
@@ -333,7 +327,7 @@ class GraphMatcher:
         self,
         moving: Graph,
         reference: Graph,
-        verbose: Optional[bool] = None,
+        verbose: bool | None = None,
     ) -> NDArray[np.integer]:
         """
         Find correspondences between two graphs.
@@ -366,9 +360,9 @@ class GraphMatcher:
             return np.array([]).reshape(0, 2).astype(np.int32)
 
         # Dispatch to appropriate algorithm
-        if self.algorithm == 'hungarian':
+        if self.algorithm == "hungarian":
             return self._match_hungarian(moving, reference, verbose)
-        elif self.algorithm == 'descriptor':
+        elif self.algorithm == "descriptor":
             return self._match_descriptor(moving, reference, verbose)
         else:
             raise ValueError(f"Unknown algorithm: {self.algorithm}")
@@ -470,7 +464,7 @@ class GraphMatcher:
         # Edge consistency
         if w["edge_length"] > 0:
             C_edge_len = self._compute_edge_consistency_cost(
-                moving, reference, attr_type='distance', default_cost=1e6
+                moving, reference, attr_type="distance", default_cost=1e6
             )
             if self.normalize:
                 max_val = C_edge_len.max()
@@ -480,7 +474,7 @@ class GraphMatcher:
 
         if w["edge_angle"] > 0 and moving.dim == 2:
             C_edge_ang = self._compute_edge_consistency_cost(
-                moving, reference, attr_type='angle', default_cost=np.pi
+                moving, reference, attr_type="angle", default_cost=np.pi
             )
             if self.normalize:
                 C_edge_ang = C_edge_ang / np.pi
@@ -532,10 +526,10 @@ class GraphMatcher:
         n, m = moving.n_nodes, reference.n_nodes
         cost_matrix = np.full((n, m), default_cost, dtype=np.float32)
 
-        if attr_type == 'distance':
+        if attr_type == "distance":
             mov_attrs = moving.edge_distances
             ref_attrs = reference.edge_distances
-        elif attr_type == 'angle':
+        elif attr_type == "angle":
             mov_attrs = moving.edge_angles
             ref_attrs = reference.edge_angles
             if not mov_attrs or not ref_attrs:
@@ -664,11 +658,11 @@ class GraphMatcher:
         matches: NDArray[np.integer],
         moving: Graph,
         reference: Graph,
-        angle_threshold: Optional[float] = 0,
-        direction_threshold: Optional[float] = 0,
+        angle_threshold: float | None = 0,
+        direction_threshold: float | None = 0,
         min_distance_quantile: float = 0.01,
         max_distance_quantile: float = 0.95,
-        verbose: Optional[bool] = None,
+        verbose: bool | None = None,
     ) -> NDArray[np.integer]:
         """
         Filter matches based on geometric consistency.

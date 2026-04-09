@@ -23,12 +23,11 @@ def get_dir_size_du(path: str) -> int:
 
     try:
         result = subprocess.run(
-            ['du', '-sb', resolved_path.as_posix()], capture_output=True, check=True, text=True
+            ["du", "-sb", resolved_path.as_posix()], capture_output=True, check=True, text=True
         )
         size_bytes = int(result.stdout.strip().split()[0])
         return size_bytes
     except subprocess.CalledProcessError as e:
-
         raise RuntimeError(
             f"[get_dir_size_du] Failed to run du on {resolved_path}: {e.stderr.strip()}"
         )
@@ -69,7 +68,7 @@ def check_disk_space_with_du(
             Path(output_path)
             / f"disk_space_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
         )
-        with open(report_path, 'w') as report_file:
+        with open(report_path, "w") as report_file:
             report_file.write(
                 f"Input Size: {input_size_human}\n"
                 f"Estimated Output Size ({margin:.3f}x): {required_space_human}\n"

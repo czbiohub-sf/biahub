@@ -117,11 +117,9 @@ def user_assisted_registration(
     source_channel_focus_idx = focus_from_transverse_band(
         source_channel_volume[
             :,
-            source_channel_Y // 2
-            - FOCUS_SLICE_ROI_WIDTH : source_channel_Y // 2
+            source_channel_Y // 2 - FOCUS_SLICE_ROI_WIDTH : source_channel_Y // 2
             + FOCUS_SLICE_ROI_WIDTH,
-            source_channel_X // 2
-            - FOCUS_SLICE_ROI_WIDTH : source_channel_X // 2
+            source_channel_X // 2 - FOCUS_SLICE_ROI_WIDTH : source_channel_X // 2
             + FOCUS_SLICE_ROI_WIDTH,
         ],
         NA_det=NA_DETECTION_SOURCE,
@@ -132,11 +130,9 @@ def user_assisted_registration(
     target_channel_focus_idx = focus_from_transverse_band(
         target_channel_volume[
             :,
-            target_channel_Y // 2
-            - FOCUS_SLICE_ROI_WIDTH : target_channel_Y // 2
+            target_channel_Y // 2 - FOCUS_SLICE_ROI_WIDTH : target_channel_Y // 2
             + FOCUS_SLICE_ROI_WIDTH,
-            target_channel_X // 2
-            - FOCUS_SLICE_ROI_WIDTH : target_channel_X // 2
+            target_channel_X // 2 - FOCUS_SLICE_ROI_WIDTH : target_channel_X // 2
             + FOCUS_SLICE_ROI_WIDTH,
         ],
         NA_det=NA_DETECTION_TARGET,
@@ -209,8 +205,8 @@ def user_assisted_registration(
     source_layer = viewer.add_image(
         source_zxy_pre_reg.numpy(),
         name=f"source_{source_channel_name}",
-        blending='additive',
-        colormap='green',
+        blending="additive",
+        colormap="green",
     )
     points_source_channel = viewer.add_points(
         ndim=3, name=f"pts_source_{source_channel_name}", size=20, face_color=COLOR_CYCLE[0]
@@ -346,7 +342,7 @@ def user_assisted_registration(
         source_zxy_manual_reg.numpy(),
         name=f"registered_{source_channel_name}",
         colormap="magenta",
-        blending='additive',
+        blending="additive",
     )
     # Cleanup
     viewer.layers.remove(points_source_channel)
@@ -355,7 +351,7 @@ def user_assisted_registration(
 
     # Ants affine transforms
     tform = convert_transform_to_numpy(tx_manual)
-    click.echo(f'Estimated affine transformation matrix:\n{tform}\n')
+    click.echo(f"Estimated affine transformation matrix:\n{tform}\n")
     input("Press <Enter> to close the viewer and exit...")
     viewer.close()
 
@@ -532,7 +528,7 @@ def estimate_registration(
             stabilization_method=settings.estimation_method,
             stabilization_channels=[source_channel_name, target_channel_name],
             affine_transform_zyx_list=transforms,
-            time_indices='all',
+            time_indices="all",
             output_voxel_size=voxel_size,
         )
         if settings.verbose:

@@ -220,12 +220,11 @@ def estimate_crop(
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
 
-    click.echo('Submitting SLURM jobs...')
+    click.echo("Submitting SLURM jobs...")
     jobs = []
 
     with submitit.helpers.clean_env(), executor.batch():
         for ls_dir, lf_dir in zip(ls_position_dirpaths, lf_position_dirpaths):
-
             job = executor.submit(
                 estimate_crop_one_position,
                 lf_mask_radius=lf_mask_radius,

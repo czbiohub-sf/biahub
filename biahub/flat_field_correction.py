@@ -2,7 +2,6 @@ import multiprocessing as mp
 
 from functools import partial
 from pathlib import Path
-from typing import List, Tuple
 
 import click
 import numpy as np
@@ -30,7 +29,7 @@ from biahub.settings import FlatFieldCorrectionSettings
 def flat_field_correction(
     zyx_data: np.ndarray,
     axis: int = 0,
-) -> Tuple[np.ndarray, dict]:
+) -> tuple[np.ndarray, dict]:
     """
     Apply flat field correction by dividing out the median pattern along an axis.
 
@@ -60,7 +59,7 @@ def flat_field_correction(
 def _process_timepoint(
     input_data_path: Path,
     output_position_path: Path,
-    channel_names: List[str],
+    channel_names: list[str],
     t_idx: int,
 ):
     """Process all channels for a single timepoint."""
@@ -93,7 +92,7 @@ def _process_timepoint(
 def process_single_position_flat_field(
     input_data_path: Path,
     output_path: Path,
-    channel_names: List[str],
+    channel_names: list[str],
     num_processes: int = mp.cpu_count(),
 ):
     """Apply flat field correction to a single position with multiprocessing over T.
@@ -132,7 +131,7 @@ def process_single_position_flat_field(
 
 
 def flat_field(
-    input_position_dirpaths: List[str],
+    input_position_dirpaths: list[str],
     config_filepath: Path,
     output_dirpath: str,
     sbatch_filepath: str = None,
@@ -256,7 +255,7 @@ def flat_field(
 @sbatch_filepath()
 @local()
 def flat_field_correction_cli(
-    input_position_dirpaths: List[str],
+    input_position_dirpaths: list[str],
     config_filepath: Path,
     output_dirpath: str,
     sbatch_filepath: str = None,

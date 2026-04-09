@@ -1,7 +1,5 @@
 import logging
 
-from typing import List, Tuple
-
 import numpy as np
 
 from numpy.typing import ArrayLike
@@ -13,15 +11,15 @@ logger = logging.getLogger(__name__)
 
 class BeadExtractor:
     _image: Calibrated3DImage = None
-    _patch_size: Tuple[int, int, int] = None
+    _patch_size: tuple[int, int, int] = None
     _margins: ArrayLike = None
 
-    def __init__(self, image: Calibrated3DImage, patch_size: Tuple[int, int, int]):
+    def __init__(self, image: Calibrated3DImage, patch_size: tuple[int, int, int]):
         self._image = image
         self._patch_size = patch_size
         self._margins = np.array(patch_size) / np.array(image.spacing)
 
-    def _in_margins(self, point: Tuple[int, int, int]) -> bool:
+    def _in_margins(self, point: tuple[int, int, int]) -> bool:
         lower_bounds = self._margins / 2
         upper_bounds = np.array(self._image.data.shape) - self._margins / 2
 
@@ -29,17 +27,13 @@ class BeadExtractor:
 
         if out_of_bounds:
             logger.warning(
-                "Discarded point ({}, {}, {}). Too close to image border.".format(
-                    np.round(point[2]),
-                    np.round(point[1]),
-                    np.round(point[0]),
-                )
+                f"Discarded point ({np.round(point[2])}, {np.round(point[1])}, {np.round(point[0])}). Too close to image border."
             )
             return False
         else:
             return True
 
-    def extract_beads(self, points: ArrayLike) -> List[Calibrated3DImage]:
+    def extract_beads(self, points: ArrayLike) -> list[Calibrated3DImage]:
         beads = []
         for point in points:
             if self._in_margins(point):
@@ -51,7 +45,7 @@ class BeadExtractor:
 
         return beads
 
-    def _create_slices(self, point: Tuple[int, int, int]) -> Tuple[slice, slice, slice]:
+    def _create_slices(self, point: tuple[int, int, int]) -> tuple[slice, slice, slice]:
         slices = []
         for coordinate, margin in zip(point, self._margins):
             start = int(coordinate - margin // 2)
@@ -60,11 +54,11 @@ class BeadExtractor:
 
         return tuple(slices)
 
-    def _extract_rough_crop(self, point: Tuple[int, int, int]):
+    def _extract_rough_crop(self, point: tuple[int, int, int]):
         z_slice, y_slice, x_slice = self._create_slices(point)
         return self._image.data[z_slice, y_slice, x_slice]
 
-    def _find_closest_peak(self, point: Tuple[int, int, int]) -> Tuple[int, int, int]:
+    def _find_closest_peak(self, point: tuple[int, int, int]) -> tuple[int, int, int]:
         crop = self._extract_rough_crop(point)
         peak_offset = self._compute_peak_offset(crop)
         return (
@@ -73,7 +67,7 @@ class BeadExtractor:
             int(point[2] + peak_offset[2]),
         )
 
-    def _compute_peak_offset(self, crop: ArrayLike) -> Tuple[int, int, int]:
+    def _compute_peak_offset(self, crop: ArrayLike) -> tuple[int, int, int]:
         from skimage.filters import gaussian
 
         peak_coordinates = np.unravel_index(

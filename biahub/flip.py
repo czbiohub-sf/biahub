@@ -1,5 +1,3 @@
-from typing import List
-
 import click
 
 from iohub import open_ome_zarr
@@ -11,7 +9,7 @@ from biahub.cli.parsing import input_position_dirpaths
 @input_position_dirpaths()
 @click.option("-x", is_flag=True, help="Enable the x flag.")
 @click.option("-y", is_flag=True, help="Enable the y flag.")
-def flip_cli(input_position_dirpaths: List[str], x: bool, y: bool):
+def flip_cli(input_position_dirpaths: list[str], x: bool, y: bool):
     """
     Flip the input position files in the specified direction.
 
@@ -23,7 +21,6 @@ def flip_cli(input_position_dirpaths: List[str], x: bool, y: bool):
     for input_position_filepath in input_position_dirpaths:
         print(f"Flipping {input_position_filepath}")
         with open_ome_zarr(input_position_filepath, mode="a") as dataset:
-
             array = dataset["0"]
             T, C, _, _, _ = array.shape
 

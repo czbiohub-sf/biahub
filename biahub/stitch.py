@@ -1,7 +1,6 @@
 from collections import defaultdict
 from itertools import product
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 import click
 import numpy as np
@@ -55,9 +54,9 @@ def list_of_nd_slices_from_array_shape(
 
 
 def check_overlap(
-    chunk: Tuple[slice, slice, slice],
-    fov_shift: Tuple[float, float, float],
-    fov_extent: Tuple[int, int, int],
+    chunk: tuple[slice, slice, slice],
+    fov_shift: tuple[float, float, float],
+    fov_extent: tuple[int, int, int],
 ) -> bool:
     """
     Check if a chunk overlaps with a field of view (FOV).
@@ -86,11 +85,11 @@ def check_overlap(
 
 
 def overlap_slices(
-    chunk_corner: Tuple[float, float, float],
-    chunk_extent: Tuple[float, float, float],
-    fov_corner: Tuple[float, float, float],
-    fov_extent: Tuple[int, int, int],
-) -> Tuple[Optional[Tuple[slice, slice, slice]], Optional[Tuple[slice, slice, slice]]]:
+    chunk_corner: tuple[float, float, float],
+    chunk_extent: tuple[float, float, float],
+    fov_corner: tuple[float, float, float],
+    fov_extent: tuple[int, int, int],
+) -> tuple[tuple[slice, slice, slice] | None, tuple[slice, slice, slice] | None]:
     """
     Calculate slice objects for overlapping regions between a chunk and FOV.
 
@@ -129,10 +128,10 @@ def overlap_slices(
 
 
 def find_contributing_fovs(
-    chunk: Tuple[slice, slice, slice],
-    fov_shifts: Dict[str, Tuple[float, float, float]],
-    fov_extent: Tuple[int, int, int],
-) -> List[str]:
+    chunk: tuple[slice, slice, slice],
+    fov_shifts: dict[str, tuple[float, float, float]],
+    fov_extent: tuple[int, int, int],
+) -> list[str]:
     """
     Find all FOVs that contribute data to a given chunk.
 
@@ -158,8 +157,8 @@ def find_contributing_fovs(
 
 
 def get_output_shape(
-    shifts: Dict[str, Tuple[float, float, float]], tile_shape: Tuple[int, ...]
-) -> Tuple[int, int, int]:
+    shifts: dict[str, tuple[float, float, float]], tile_shape: tuple[int, ...]
+) -> tuple[int, int, int]:
     """
     Calculate the output shape of the stitched image from FOV shifts.
 
@@ -188,11 +187,11 @@ def get_output_shape(
 
 
 def write_output_chunk(
-    output_chunk_slices: Tuple[slice, slice, slice],
-    fov_shifts: Dict[str, Tuple[float, float, float]],
+    output_chunk_slices: tuple[slice, slice, slice],
+    fov_shifts: dict[str, tuple[float, float, float]],
     channel_idx: int,
     input_plate: Plate,
-    input_fov_shape: Tuple[int, int, int, int, int],
+    input_fov_shape: tuple[int, int, int, int, int],
     output_position: Position,
     verbose: bool,
     blending_exponent: float = 1.0,
@@ -326,7 +325,7 @@ def write_output_chunk(
 @click.option("--debug", is_flag=True, help="Run in debug mode")
 @monitor()
 def stitch_cli(
-    input_position_dirpaths: List[str],
+    input_position_dirpaths: list[str],
     output_dirpath: str,
     config_filepath: Path,
     verbose: bool = False,
@@ -358,7 +357,7 @@ def stitch_cli(
 
     # Create output store
     output_plate = open_ome_zarr(
-        output_dirpath, layout='hcs', mode="w", channel_names=settings.channels
+        output_dirpath, layout="hcs", mode="w", channel_names=settings.channels
     )
 
     # Group shift metadata by well
@@ -372,7 +371,7 @@ def stitch_cli(
     for well_name, fov_shifts in shifts_by_well.items():
         if verbose:
             click.echo(
-                f"Processing well {list(shifts_by_well.keys()).index(well_name)+1}/{len(shifts_by_well)}: {well_name}"
+                f"Processing well {list(shifts_by_well.keys()).index(well_name) + 1}/{len(shifts_by_well)}: {well_name}"
             )
         first_fov_name = list(shifts_by_well[well_name].keys())[0]
         input_fov_shape = input_plate[first_fov_name].data.shape
@@ -416,7 +415,7 @@ def stitch_cli(
         for chunk in chunk_list:
             if verbose:
                 click.echo(
-                    f"\tPreparing job for chunk {chunk_list.index(chunk)+1}/{len(chunk_list)}: {chunk}"
+                    f"\tPreparing job for chunk {chunk_list.index(chunk) + 1}/{len(chunk_list)}: {chunk}"
                 )
             job_args_list.append(
                 (
@@ -482,5 +481,5 @@ def stitch_cli(
         monitor_jobs(jobs, [])
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     stitch_cli()

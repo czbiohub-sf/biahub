@@ -9,6 +9,7 @@ Coordinate convention: ZYX ordering for 3D, YX for 2D.
 """
 
 from __future__ import annotations
+
 from typing import Literal
 
 import numpy as np
@@ -148,7 +149,7 @@ class Transform:
         Examples
         --------
         >>> t = Transform.from_translation([5, 10, 15])  # 3D: Z=5, Y=10, X=15
-        >>> t = Transform.from_translation([10, 15])     # 2D: Y=10, X=15
+        >>> t = Transform.from_translation([10, 15])  # 2D: Y=10, X=15
         """
         offset = np.asarray(offset, dtype=np.float64)
         ndim = len(offset)

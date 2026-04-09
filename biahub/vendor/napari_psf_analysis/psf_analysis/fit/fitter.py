@@ -1,5 +1,3 @@
-from typing import Tuple
-
 import numpy as np
 
 from numpy.typing import ArrayLike
@@ -58,7 +56,7 @@ class ZFitter:
             )
         )
 
-    def _fit_gaussian(self) -> Tuple[ArrayLike, ArrayLike]:
+    def _fit_gaussian(self) -> tuple[ArrayLike, ArrayLike]:
         from scipy.optimize import curve_fit
 
         return curve_fit(
@@ -114,7 +112,7 @@ class YXFitter:
             )
         )
 
-    def _fit_gaussian(self) -> Tuple[ArrayLike, ArrayLike]:
+    def _fit_gaussian(self) -> tuple[ArrayLike, ArrayLike]:
         from scipy.optimize import curve_fit
 
         return curve_fit(
@@ -133,7 +131,7 @@ class YXFitter:
 
     def _get_principal_components(
         self, optimal_params: ArrayLike
-    ) -> Tuple[float, float, float]:
+    ) -> tuple[float, float, float]:
         yx_cov_matrix = np.array(
             [
                 [optimal_params[4], optimal_params[5]],
@@ -183,7 +181,7 @@ class ZYXFitter:
             ),
         )
 
-    def _fit_gaussian(self) -> Tuple[ArrayLike, ArrayLike]:
+    def _fit_gaussian(self) -> tuple[ArrayLike, ArrayLike]:
         from scipy.optimize import curve_fit
 
         return curve_fit(
@@ -242,7 +240,7 @@ class ZYXFitter:
 
     def _get_principal_components(
         self, optimal_params: ArrayLike
-    ) -> Tuple[float, float, float]:
+    ) -> tuple[float, float, float]:
         zyx_cov_matrix = np.array(
             [
                 [optimal_params[5], optimal_params[6], optimal_params[7]],

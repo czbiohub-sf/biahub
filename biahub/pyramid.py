@@ -1,7 +1,6 @@
 import datetime
 
 from pathlib import Path
-from typing import List
 
 import click
 import submitit
@@ -71,7 +70,7 @@ def pyramid(fov_path: Path, levels: int, method: str) -> None:
     help="Downsampling method to use.",
 )
 def pyramid_cli(
-    input_position_dirpaths: List[Path],
+    input_position_dirpaths: list[Path],
     levels: int = 4,
     method: str = "mean",
     sbatch_filepath: Path | None = None,

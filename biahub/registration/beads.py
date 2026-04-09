@@ -100,10 +100,10 @@ def optimize_matches(
     """
     if param_grid is None:
         param_grid = {
-            'min_distance_quantile': [0, 0.01],
-            'max_distance_quantile': [0, 0.99],
-            'direction_threshold': [0, 50],
-            'k': [5, 10],
+            "min_distance_quantile": [0, 0.01],
+            "max_distance_quantile": [0, 0.99],
+            "direction_threshold": [0, 50],
+            "k": [5, 10],
         }
 
     score_radius = beads_match_settings.qc_settings.score_centroid_mask_radius
@@ -147,18 +147,18 @@ def optimize_matches(
         hm = trial_settings.hungarian_match_settings
         w = hm.cost_matrix_settings.weights
         param_map = {
-            'min_distance_quantile': lambda v: setattr(fm, 'min_distance_quantile', v),
-            'max_distance_quantile': lambda v: setattr(fm, 'max_distance_quantile', v),
-            'direction_threshold': lambda v: setattr(fm, 'direction_threshold', v),
-            'cost_threshold': lambda v: setattr(hm, 'cost_threshold', v),
-            'max_ratio': lambda v: setattr(hm, 'max_ratio', v),
-            'k': lambda v: setattr(hm.edge_graph_settings, 'k', v),
-            'weights_dist': lambda v: w.__setitem__('dist', v),
-            'weights_edge_angle': lambda v: w.__setitem__('edge_angle', v),
-            'weights_edge_length': lambda v: w.__setitem__('edge_length', v),
-            'weights_pca_dir': lambda v: w.__setitem__('pca_dir', v),
-            'weights_pca_aniso': lambda v: w.__setitem__('pca_aniso', v),
-            'weights_edge_descriptor': lambda v: w.__setitem__('edge_descriptor', v),
+            "min_distance_quantile": lambda v: setattr(fm, "min_distance_quantile", v),
+            "max_distance_quantile": lambda v: setattr(fm, "max_distance_quantile", v),
+            "direction_threshold": lambda v: setattr(fm, "direction_threshold", v),
+            "cost_threshold": lambda v: setattr(hm, "cost_threshold", v),
+            "max_ratio": lambda v: setattr(hm, "max_ratio", v),
+            "k": lambda v: setattr(hm.edge_graph_settings, "k", v),
+            "weights_dist": lambda v: w.__setitem__("dist", v),
+            "weights_edge_angle": lambda v: w.__setitem__("edge_angle", v),
+            "weights_edge_length": lambda v: w.__setitem__("edge_length", v),
+            "weights_pca_dir": lambda v: w.__setitem__("pca_dir", v),
+            "weights_pca_aniso": lambda v: w.__setitem__("pca_aniso", v),
+            "weights_edge_descriptor": lambda v: w.__setitem__("edge_descriptor", v),
         }
         for key, val in trial_params.items():
             if key in param_map:
@@ -474,7 +474,7 @@ def estimate_independently(
     affine_transform_settings: AffineTransformSettings,
     verbose: bool = False,
     output_folder_path: Path = None,
-    cluster: str = 'local',
+    cluster: str = "local",
     sbatch_filepath: Path = None,
     mode: Literal["registration", "stabilization"] = "registration",
 ) -> None:
@@ -592,7 +592,7 @@ def peaks_from_beads(
         Tuple of (mov_peaks, ref_peaks).
     """
     if verbose:
-        click.echo('Detecting beads in moving dataset')
+        click.echo("Detecting beads in moving dataset")
     # TODO: detecte peaks in the zyx space, use skimage.feature.peak_local_max for 2D
     mov_peaks = detect_peaks(
         mov,
@@ -603,7 +603,7 @@ def peaks_from_beads(
         verbose=verbose,
     )
     if verbose:
-        click.echo('Detecting beads in reference dataset')
+        click.echo("Detecting beads in reference dataset")
     # TODO: detecte peaks in the zyx space, use skimage.feature.peak_local_max for 2D
     ref_peaks = detect_peaks(
         ref,
@@ -614,11 +614,11 @@ def peaks_from_beads(
         verbose=verbose,
     )
     if verbose:
-        click.echo(f'Total of peaks in moving dataset: {len(mov_peaks)}')
-        click.echo(f'Total of peaks in reference dataset: {len(ref_peaks)}')
+        click.echo(f"Total of peaks in moving dataset: {len(mov_peaks)}")
+        click.echo(f"Total of peaks in reference dataset: {len(ref_peaks)}")
 
     if len(mov_peaks) < 2 or len(ref_peaks) < 2:
-        click.echo('Not enough beads detected')
+        click.echo("Not enough beads detected")
         return
     if mask_path is not None:
         click.echo("Filtering peaks with mask")
@@ -676,15 +676,15 @@ def matches_from_beads(
         (K, 2) array of matched index pairs [mov_idx, ref_idx].
     """
     if verbose:
-        click.echo(f'Getting matches from beads with settings: {beads_match_settings}')
+        click.echo(f"Getting matches from beads with settings: {beads_match_settings}")
 
-    if beads_match_settings.algorithm == 'match_descriptor':
+    if beads_match_settings.algorithm == "match_descriptor":
         mov_graph = Graph.from_nodes(mov_peaks)
         ref_graph = Graph.from_nodes(ref_peaks)
 
         match_descriptor_settings = beads_match_settings.match_descriptor_settings
         matcher = GraphMatcher(
-            algorithm='descriptor',
+            algorithm="descriptor",
             cross_check=match_descriptor_settings.cross_check,
             max_ratio=match_descriptor_settings.max_ratio,
             metric=match_descriptor_settings.distance_metric,
@@ -693,17 +693,17 @@ def matches_from_beads(
 
         matches = matcher.match(mov_graph, ref_graph)
 
-    elif beads_match_settings.algorithm == 'hungarian':
+    elif beads_match_settings.algorithm == "hungarian":
         hungarian_match_settings = beads_match_settings.hungarian_match_settings
         mov_graph = Graph.from_nodes(
-            mov_peaks, mode='knn', k=hungarian_match_settings.edge_graph_settings.k
+            mov_peaks, mode="knn", k=hungarian_match_settings.edge_graph_settings.k
         )
         ref_graph = Graph.from_nodes(
-            ref_peaks, mode='knn', k=hungarian_match_settings.edge_graph_settings.k
+            ref_peaks, mode="knn", k=hungarian_match_settings.edge_graph_settings.k
         )
 
         matcher = GraphMatcher(
-            algorithm='hungarian',
+            algorithm="hungarian",
             weights=hungarian_match_settings.cost_matrix_settings.weights,
             cost_threshold=hungarian_match_settings.cost_threshold,
             cross_check=hungarian_match_settings.cross_check,
@@ -725,7 +725,7 @@ def matches_from_beads(
     )
 
     if verbose:
-        click.echo(f'Total of matches: {len(matches)}')
+        click.echo(f"Total of matches: {len(matches)}")
 
     return matches
 
@@ -769,14 +769,14 @@ def transform_from_matches(
         raise ValueError(f"Peaks must be 2D or 3D, got {ndim}D")
 
     # Create appropriate transform
-    if affine_transform_settings.transform_type == 'affine':
+    if affine_transform_settings.transform_type == "affine":
         transform = AffineTransform(dimensionality=ndim)
-    elif affine_transform_settings.transform_type == 'euclidean':
+    elif affine_transform_settings.transform_type == "euclidean":
         transform = EuclideanTransform(dimensionality=ndim)
-    elif affine_transform_settings.transform_type == 'similarity':
+    elif affine_transform_settings.transform_type == "similarity":
         transform = SimilarityTransform(dimensionality=ndim)
     else:
-        raise ValueError(f'Unknown transform type: {affine_transform_settings.transform_type}')
+        raise ValueError(f"Unknown transform type: {affine_transform_settings.transform_type}")
 
     # Fit transform
     transform.estimate(mov_peaks[matches[:, 0]], ref_peaks[matches[:, 1]])
@@ -834,7 +834,7 @@ def estimate_tzyx(
         The estimated 4x4 affine transform, or None if estimation failed.
     """
     click.echo("........................................................................")
-    click.echo(f'Processing timepoint: {t_idx}')
+    click.echo(f"Processing timepoint: {t_idx}")
 
     (T, Z, Y, X) = mov_tzyx.shape
 
@@ -947,7 +947,7 @@ def optimize_transform(
     )
 
     if len(matches) < 3:
-        click.echo('Not enough matches found, returning the current transform')
+        click.echo("Not enough matches found, returning the current transform")
         return None, -1
 
     fwd_transform, inv_transform = transform_from_matches(
@@ -981,7 +981,7 @@ def optimize_transform(
         verbose=debug,
     )
     if debug:
-        click.echo(f'Bead matches: {matches}')
+        click.echo(f"Bead matches: {matches}")
         click.echo(f"Forward transform: {fwd_transform}")
         click.echo(f"Inverse transform: {inv_transform}")
         click.echo(f"Composed transform: {composed_transform}")
@@ -1043,7 +1043,7 @@ def estimate(
     """
 
     if _check_nan_n_zeros(mov) or _check_nan_n_zeros(ref):
-        click.echo('Skipping: moving or reference data contains only NaN/zeros.')
+        click.echo("Skipping: moving or reference data contains only NaN/zeros.")
         return
 
     initial_transform = Transform(
@@ -1091,7 +1091,6 @@ def estimate(
             )
 
             if quality_score_optimized < quality_score_optimized_user:
-
                 transform_iter_dict[current_iterations] = {
                     "transform": optimized_transform_user,
                     "quality_score": quality_score_optimized_user,

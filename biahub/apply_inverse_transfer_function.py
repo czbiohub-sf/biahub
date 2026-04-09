@@ -100,7 +100,7 @@ def apply_inverse_transfer_function(
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
 
-    click.echo('Submitting SLURM jobs...')
+    click.echo("Submitting SLURM jobs...")
     jobs = []
     with submitit.helpers.clean_env(), executor.batch():
         for input_position_dirpath in input_position_dirpaths:

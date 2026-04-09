@@ -8,7 +8,7 @@ import warnings
 import webbrowser
 
 from pathlib import Path
-from typing import List, Literal
+from typing import Literal
 
 import click
 import markdown
@@ -33,14 +33,14 @@ from biahub.vendor.napari_psf_analysis import PSF, BeadExtractor, Calibrated3DIm
 
 def _make_plots(
     output_path: Path,
-    beads: List[ArrayLike],
+    beads: list[ArrayLike],
     df_gaussian_fit: pd.DataFrame,
     df_1d_peak_width: pd.DataFrame,
     scale: tuple,
     axis_labels: tuple,
-    fwhm_plot_type: Literal['1D', '3D'],
+    fwhm_plot_type: Literal["1D", "3D"],
 ):
-    plots_dir = output_path / 'plots'
+    plots_dir = output_path / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
     random_bead_number = sorted(np.random.choice(len(beads), 5, replace=False))
 
@@ -52,18 +52,18 @@ def _make_plots(
         random_bead_number,
     )
 
-    if fwhm_plot_type == '1D':
-        plot_data_x = [df_1d_peak_width[col].values for col in ('x_mu', 'y_mu', 'z_mu')]
+    if fwhm_plot_type == "1D":
+        plot_data_x = [df_1d_peak_width[col].values for col in ("x_mu", "y_mu", "z_mu")]
         plot_data_y = [
-            df_1d_peak_width[col].values for col in ('1d_x_fwhm', '1d_y_fwhm', '1d_z_fwhm')
+            df_1d_peak_width[col].values for col in ("1d_x_fwhm", "1d_y_fwhm", "1d_z_fwhm")
         ]
-    elif fwhm_plot_type == '3D':
-        plot_data_x = [df_gaussian_fit[col].values for col in ('x_mu', 'y_mu', 'z_mu')]
+    elif fwhm_plot_type == "3D":
+        plot_data_x = [df_gaussian_fit[col].values for col in ("x_mu", "y_mu", "z_mu")]
         plot_data_y = [
-            df_gaussian_fit[col].values for col in ('zyx_x_fwhm', 'zyx_y_fwhm', 'zyx_z_fwhm')
+            df_gaussian_fit[col].values for col in ("zyx_x_fwhm", "zyx_y_fwhm", "zyx_z_fwhm")
         ]
     else:
-        raise ValueError(f'Invalid fwhm_plot_type: {fwhm_plot_type}')
+        raise ValueError(f"Invalid fwhm_plot_type: {fwhm_plot_type}")
 
     fwhm_vs_acq_axes_paths = plot_fwhm_vs_acq_axes(
         plots_dir,
@@ -74,10 +74,10 @@ def _make_plots(
 
     psf_amp_paths = plot_psf_amp(
         plots_dir,
-        df_gaussian_fit['x_mu'].values,
-        df_gaussian_fit['y_mu'].values,
-        df_gaussian_fit['z_mu'].values,
-        df_gaussian_fit['zyx_amp'].values,
+        df_gaussian_fit["x_mu"].values,
+        df_gaussian_fit["y_mu"].values,
+        df_gaussian_fit["z_mu"].values,
+        df_gaussian_fit["zyx_amp"].values,
         axis_labels,
     )
 
@@ -88,7 +88,7 @@ def generate_report(
     output_path: Path,
     data_dir: Path,
     dataset: str,
-    beads: List[ArrayLike],
+    beads: list[ArrayLike],
     peaks: ArrayLike,
     df_gaussian_fit: pd.DataFrame,
     df_1d_peak_width: pd.DataFrame,
@@ -115,22 +115,22 @@ def generate_report(
 
     # calculate statistics
     fwhm_3d_mean = [
-        df_gaussian_fit[col].mean() for col in ('zyx_z_fwhm', 'zyx_y_fwhm', 'zyx_x_fwhm')
+        df_gaussian_fit[col].mean() for col in ("zyx_z_fwhm", "zyx_y_fwhm", "zyx_x_fwhm")
     ]
     fwhm_3d_std = [
-        df_gaussian_fit[col].std() for col in ('zyx_z_fwhm', 'zyx_y_fwhm', 'zyx_x_fwhm')
+        df_gaussian_fit[col].std() for col in ("zyx_z_fwhm", "zyx_y_fwhm", "zyx_x_fwhm")
     ]
     fwhm_pc_mean = [
-        df_gaussian_fit[col].mean() for col in ('zyx_pc3_fwhm', 'zyx_pc2_fwhm', 'zyx_pc1_fwhm')
+        df_gaussian_fit[col].mean() for col in ("zyx_pc3_fwhm", "zyx_pc2_fwhm", "zyx_pc1_fwhm")
     ]
     fwhm_1d_mean = [
-        df_1d_peak_width[col].mean() for col in ('1d_z_fwhm', '1d_y_fwhm', '1d_x_fwhm')
+        df_1d_peak_width[col].mean() for col in ("1d_z_fwhm", "1d_y_fwhm", "1d_x_fwhm")
     ]
     fwhm_1d_std = [
-        df_1d_peak_width[col].std() for col in ('1d_z_fwhm', '1d_y_fwhm', '1d_x_fwhm')
+        df_1d_peak_width[col].std() for col in ("1d_z_fwhm", "1d_y_fwhm", "1d_x_fwhm")
     ]
-    snr_mean = df_gaussian_fit['zyx_snr'].mean()
-    snr_std = df_gaussian_fit['zyx_snr'].std()
+    snr_mean = df_gaussian_fit["zyx_snr"].mean()
+    snr_std = df_gaussian_fit["zyx_snr"].std()
 
     # generate html report
     html_report = _generate_html(
@@ -153,16 +153,16 @@ def generate_report(
     )
 
     # save html report and other results
-    with open(output_path / 'peaks.pkl', 'wb') as file:
+    with open(output_path / "peaks.pkl", "wb") as file:
         pickle.dump(peaks, file)
 
-    df_gaussian_fit.to_csv(output_path / 'psf_gaussian_fit.csv', index=False)
-    df_1d_peak_width.to_csv(output_path / 'psf_1d_peak_width.csv', index=False)
+    df_gaussian_fit.to_csv(output_path / "psf_gaussian_fit.csv", index=False)
+    df_1d_peak_width.to_csv(output_path / "psf_1d_peak_width.csv", index=False)
 
-    with pkg_resources.path(biahub.artefacts, 'github-markdown.css') as css_path:
+    with pkg_resources.path(biahub.artefacts, "github-markdown.css") as css_path:
         shutil.copy(css_path, output_path)
-    html_file_path = output_path / ('psf_analysis_report.html')
-    with open(html_file_path, 'w') as file:
+    html_file_path = output_path / ("psf_analysis_report.html")
+    with open(html_file_path, "w") as file:
         file.write(html_report)
 
     # display html report
@@ -191,8 +191,8 @@ def extract_beads(
 
 
 def analyze_psf(
-    zyx_patches: List[ArrayLike],
-    peak_coordinates: List[tuple],
+    zyx_patches: list[ArrayLike],
+    peak_coordinates: list[tuple],
     scale: tuple,
     offset: float = 0.0,
     gain: float = 1.0,
@@ -246,34 +246,34 @@ def analyze_psf(
         results.append(summary_dict)
 
     df_gaussian_fit = pd.DataFrame.from_records(results)
-    df_gaussian_fit['z_mu'] += peak_coordinates[:, 0] * scale[0]
-    df_gaussian_fit['y_mu'] += peak_coordinates[:, 1] * scale[1]
-    df_gaussian_fit['x_mu'] += peak_coordinates[:, 2] * scale[2]
-    df_gaussian_fit['z_amp'] /= gain  # amplitude is measured relative to the offset
-    df_gaussian_fit['zyx_amp'] /= gain
+    df_gaussian_fit["z_mu"] += peak_coordinates[:, 0] * scale[0]
+    df_gaussian_fit["y_mu"] += peak_coordinates[:, 1] * scale[1]
+    df_gaussian_fit["x_mu"] += peak_coordinates[:, 2] * scale[2]
+    df_gaussian_fit["z_amp"] /= gain  # amplitude is measured relative to the offset
+    df_gaussian_fit["zyx_amp"] /= gain
 
     df_1d_peak_width = pd.DataFrame(
         [f_1d_peak_width(zyx_patch, scale) for zyx_patch in zyx_patches],
-        columns=(f'1d_{i}_fwhm' for i in ('z', 'y', 'x')),
+        columns=(f"1d_{i}_fwhm" for i in ("z", "y", "x")),
     )
     df_1d_peak_width = pd.concat(
-        (df_gaussian_fit[['z_mu', 'y_mu', 'x_mu']], df_1d_peak_width), axis=1
+        (df_gaussian_fit[["z_mu", "y_mu", "x_mu"]], df_1d_peak_width), axis=1
     )
 
     # clean up dataframes
     df_gaussian_fit = df_gaussian_fit.dropna()
     df_1d_peak_width = df_1d_peak_width.dropna().loc[
-        ~(df_1d_peak_width[['1d_z_fwhm', '1d_y_fwhm', '1d_x_fwhm']] == 0).any(axis=1)
+        ~(df_1d_peak_width[["1d_z_fwhm", "1d_y_fwhm", "1d_x_fwhm"]] == 0).any(axis=1)
     ]
 
     # compute peak SNR
-    df_gaussian_fit['zyx_snr'] = df_gaussian_fit['zyx_amp'] / noise
+    df_gaussian_fit["zyx_snr"] = df_gaussian_fit["zyx_amp"] / noise
 
     return df_gaussian_fit, df_1d_peak_width
 
 
 def compute_noise_level(
-    zyx_data: ArrayLike, peak_coordinates: List[tuple], patch_size_pix: tuple
+    zyx_data: ArrayLike, peak_coordinates: list[tuple], patch_size_pix: tuple
 ):
     # Mask out the peaks
     mask = np.ones_like(zyx_data, dtype=bool)
@@ -348,7 +348,7 @@ def calculate_peak_widths(zyx_data: ArrayLike, zyx_scale: tuple):
 
 def plot_psf_slices(
     plots_dir: str,
-    beads: List[ArrayLike],
+    beads: list[ArrayLike],
     zyx_scale: tuple,
     axis_labels: tuple,
     bead_numbers: list,
@@ -356,31 +356,31 @@ def plot_psf_slices(
     num_beads = len(beads)
     scale_Z, scale_Y, scale_X = zyx_scale
     shape_Z, shape_Y, shape_X = beads[0].shape
-    cmap = 'viridis'
+    cmap = "viridis"
 
-    bead_psf_slices_path = plots_dir / 'beads_psf_slices.png'
+    bead_psf_slices_path = plots_dir / "beads_psf_slices.png"
     fig, ax = plt.subplots(3, num_beads)
     for _ax, bead, bead_number in zip(ax[0], beads, bead_numbers):
         _ax.imshow(
             bead[shape_Z // 2, :, :],
             cmap=cmap,
-            origin='lower',
+            origin="lower",
             aspect=scale_Y / scale_X,
         )
         _ax.set_xlabel(axis_labels[-1])
         _ax.set_ylabel(axis_labels[-2])
-        _ax.set_title(f'Bead: {bead_number}')
+        _ax.set_title(f"Bead: {bead_number}")
 
     for _ax, bead in zip(ax[1], beads):
         _ax.imshow(
-            bead[:, shape_Y // 2, :], cmap=cmap, origin='lower', aspect=scale_Z / scale_X
+            bead[:, shape_Y // 2, :], cmap=cmap, origin="lower", aspect=scale_Z / scale_X
         )
         _ax.set_xlabel(axis_labels[-1])
         _ax.set_ylabel(axis_labels[-3])
 
     for _ax, bead in zip(ax[2], beads):
         _ax.imshow(
-            bead[:, :, shape_X // 2], cmap=cmap, origin='lower', aspect=scale_Z / scale_Y
+            bead[:, :, shape_X // 2], cmap=cmap, origin="lower", aspect=scale_Z / scale_Y
         )
         _ax.set_xlabel(axis_labels[-2])
         _ax.set_ylabel(axis_labels[-3])
@@ -404,18 +404,18 @@ def plot_psf_slices(
 def plot_fwhm_vs_acq_axes(plots_dir: str, x, y, z, fwhm_x, fwhm_y, fwhm_z, axis_labels: tuple):
     def plot_fwhm_vs_acq_axis(out_dir: str, x, fwhm_x, fwhm_y, fwhm_z, x_axis_label: str):
         fig, ax = plt.subplots(1, 1)
-        artist1 = ax.plot(x, fwhm_x, 'o', x, fwhm_y, 'o')
-        ax.set_ylabel('{} and {} FWHM (um)'.format(*axis_labels[1:][::-1]))
-        ax.set_xlabel('{} position (um)'.format(x_axis_label))
+        artist1 = ax.plot(x, fwhm_x, "o", x, fwhm_y, "o")
+        ax.set_ylabel("{} and {} FWHM (um)".format(*axis_labels[1:][::-1]))
+        ax.set_xlabel(f"{x_axis_label} position (um)")
 
         ax2 = ax.twinx()
-        artist2 = ax2.plot(x, fwhm_z, 'o', color='green')
-        ax2.set_ylabel('{} FWHM (um)'.format(axis_labels[0]), color='green')
-        ax2.tick_params(axis='y', labelcolor='green')
+        artist2 = ax2.plot(x, fwhm_z, "o", color="green")
+        ax2.set_ylabel(f"{axis_labels[0]} FWHM (um)", color="green")
+        ax2.tick_params(axis="y", labelcolor="green")
         plt.legend(artist1 + artist2, axis_labels[::-1])
         fig.savefig(out_dir)
 
-    out_dirs = [plots_dir / f'fwhm_vs_{axis}.png' for axis in axis_labels]
+    out_dirs = [plots_dir / f"fwhm_vs_{axis}.png" for axis in axis_labels]
     for our_dir, x_axis, x_axis_label in zip(out_dirs, (z, y, x), axis_labels):
         plot_fwhm_vs_acq_axis(our_dir, x_axis, fwhm_x, fwhm_y, fwhm_z, x_axis_label)
 
@@ -423,7 +423,7 @@ def plot_fwhm_vs_acq_axes(plots_dir: str, x, y, z, fwhm_x, fwhm_y, fwhm_z, axis_
 
 
 def plot_psf_amp(plots_dir: str, x, y, z, amp, axis_labels: tuple):
-    psf_amp_xy_path = plots_dir / 'psf_amp_xy.png'
+    psf_amp_xy_path = plots_dir / "psf_amp_xy.png"
     fig, ax = plt.subplots(1, 1)
 
     sc = ax.scatter(
@@ -432,19 +432,19 @@ def plot_psf_amp(plots_dir: str, x, y, z, amp, axis_labels: tuple):
         c=amp,
         vmin=np.quantile(amp, 0.01),
         vmax=np.quantile(amp, 0.99),
-        cmap='summer',
+        cmap="summer",
     )
-    ax.set_aspect('equal')
-    ax.set_xlabel(f'{axis_labels[-1]} (um)')
-    ax.set_ylabel(f'{axis_labels[-2]} (um)')
-    plt.colorbar(sc, label='Amplitude (a.u.)')
+    ax.set_aspect("equal")
+    ax.set_xlabel(f"{axis_labels[-1]} (um)")
+    ax.set_ylabel(f"{axis_labels[-2]} (um)")
+    plt.colorbar(sc, label="Amplitude (a.u.)")
     fig.savefig(psf_amp_xy_path)
 
-    psf_amp_z_path = plots_dir / 'psf_amp_z.png'
+    psf_amp_z_path = plots_dir / "psf_amp_z.png"
     fig, ax = plt.subplots(1, 1)
     ax.scatter(z, amp)
-    ax.set_xlabel(f'{axis_labels[-3]} (um)')
-    ax.set_ylabel('Amplitude (a.u.)')
+    ax.set_xlabel(f"{axis_labels[-3]} (um)")
+    ax.set_ylabel("Amplitude (a.u.)")
     fig.savefig(psf_amp_z_path)
 
     return psf_amp_xy_path, psf_amp_z_path
@@ -470,7 +470,7 @@ def _generate_html(
 ):
 
     # string indents need to be like that, otherwise this turns into a code block
-    report_str = f'''
+    report_str = f"""
 # PSF Analysis
 
 ## Overview
@@ -500,7 +500,7 @@ def _generate_html(
     - {axis_labels[-2]}: {fwhm_1d_mean[-2]:.3f} ± {fwhm_1d_std[1]:.3f} um
     - {axis_labels[-3]}: {fwhm_1d_mean[-3]:.3f} ± {fwhm_1d_std[2]:.3f} um
 * 3D principal components
-    - {'{:.3f} um, {:.3f} um, {:.3f} um'.format(*fwhm_pc_mean)}
+    - {"{:.3f} um, {:.3f} um, {:.3f} um".format(*fwhm_pc_mean)}
 
 ## Representative bead PSF images
 ![beads psf slices]({bead_psf_slices_path})
@@ -519,9 +519,9 @@ def _generate_html(
 
 ## PSF amplitude versus {axis_labels[-3]} position
 ![psf amp z]({psf_amp_paths[1]} "psf amp z")
-'''
+"""
 
-    css_style = '''
+    css_style = """
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="github-markdown.css">
 <style>
@@ -539,22 +539,22 @@ def _generate_html(
         }
     }
 </style>
-'''
+"""
 
-    head = f'''
+    head = f"""
 <head>
     <title>PSF Analysis: {dataset_name}</title>
 </head>
-    '''
+    """
 
     html = markdown.markdown(report_str)
-    formatted_html = f'''
+    formatted_html = f"""
 {css_style}
 {head}
 <article class="markdown-body">
 {html}
 </article>
-'''.strip()
+""".strip()
 
     return formatted_html
 
@@ -697,13 +697,13 @@ def detect_peaks(
 
     num_peaks_returned = len(coords)
     if verbose:
-        print(f'Number of peaks detected: {num_peaks}')
-        print(f'Number of peaks rejected by max_num_peaks: {num_rejected_max_num_peaks}')
-        print(f'Number of peaks rejected by threshold_abs: {num_rejected_threshold_abs}')
-        print(f'Number of peaks rejected by nms_distance: {num_rejected_nms_distance}')
-        print(f'Number of peaks rejected by min_distance: {num_rejected_min_distance}')
-        print(f'Number of peaks rejected by exclude_border: {num_rejected_exclude_border}')
-        print(f'Number of peaks returned: {num_peaks_returned}')
+        print(f"Number of peaks detected: {num_peaks}")
+        print(f"Number of peaks rejected by max_num_peaks: {num_rejected_max_num_peaks}")
+        print(f"Number of peaks rejected by threshold_abs: {num_rejected_threshold_abs}")
+        print(f"Number of peaks rejected by nms_distance: {num_rejected_nms_distance}")
+        print(f"Number of peaks rejected by min_distance: {num_rejected_min_distance}")
+        print(f"Number of peaks rejected by exclude_border: {num_rejected_exclude_border}")
+        print(f"Number of peaks returned: {num_peaks_returned}")
 
     del zyx_image, smooth_image
     return coords.cpu().numpy()
@@ -735,7 +735,7 @@ def _characterize_psf(
     gc.collect()
     torch.cuda.empty_cache()
     t2 = time.time()
-    click.echo(f'Time to detect peaks: {t2-t1}')
+    click.echo(f"Time to detect peaks: {t2 - t1}")
 
     t1 = time.time()
     beads, peak_coordinates = extract_beads(
@@ -768,7 +768,7 @@ def _characterize_psf(
             use_robust_1d_fwhm=use_robust_1d_fwhm,
         )
     t2 = time.time()
-    click.echo(f'Time to analyze PSFs: {t2-t1}')
+    click.echo(f"Time to analyze PSFs: {t2 - t1}")
 
     # Generate HTML report
     generate_report(
@@ -792,7 +792,7 @@ def _characterize_psf(
 @config_filepath()
 @output_dirpath()
 def characterize_psf_cli(
-    input_position_dirpaths: List[str],
+    input_position_dirpaths: list[str],
     config_filepath: Path,
     output_dirpath: str,
 ):
