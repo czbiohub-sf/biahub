@@ -92,7 +92,7 @@ stitch = { git = "https://github.com/ahillsley/stitching", branch = "jen" }
 line-length = 95
 target-version = "py311"
 
-exclude = ["archive", "examples", "scripts", "notebooks", "ignore"]
+exclude = ["archive", "examples", "scripts", "notebooks"]
 
 [tool.ruff.lint]
 select = ["F", "E", "W", "I", "N", "UP", "B"]
