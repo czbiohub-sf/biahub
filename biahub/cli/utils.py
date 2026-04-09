@@ -27,13 +27,13 @@ def update_model(model_instance, update_dict):
         if isinstance(value, dict) and hasattr(model_instance, key):
             # If it's a nested dict, update the nested Pydantic model properly
             nested_model = getattr(model_instance, key)
-            updated_fields[key] = nested_model.copy(update=value)
+            updated_fields[key] = nested_model.model_copy(update=value)
         else:
             # Otherwise, just update the value directly
             updated_fields[key] = value
 
     # Create a new instance with updated fields
-    return model_instance.copy(update=updated_fields)
+    return model_instance.model_copy(update=updated_fields)
 
 
 # TODO: convert all code to use this function from now on
