@@ -1,6 +1,8 @@
 import os
 import shutil
 import subprocess
+import sys
+import warnings
 
 from datetime import datetime
 from pathlib import Path
@@ -13,7 +15,7 @@ from humanize import naturalsize
 def get_dir_size_du(path: str) -> int:
     """
     Use `du -sb` to get the total size in bytes of a directory or file.
-    Follows symlinks to measure the actual data.
+    Only supported on Linux.
     """
     resolved_path = Path(path).resolve()
     if not resolved_path.exists():
@@ -23,10 +25,12 @@ def get_dir_size_du(path: str) -> int:
 
     try:
         result = subprocess.run(
-            ["du", "-sb", resolved_path.as_posix()], capture_output=True, check=True, text=True
+            ["du", "-sb", resolved_path.as_posix()],
+            capture_output=True,
+            check=True,
+            text=True,
         )
-        size_bytes = int(result.stdout.strip().split()[0])
-        return size_bytes
+        return int(result.stdout.strip().split()[0])
     except subprocess.CalledProcessError as e:
         raise RuntimeError(
             f"[get_dir_size_du] Failed to run du on {resolved_path}: {e.stderr.strip()}"
@@ -48,6 +52,13 @@ def check_disk_space_with_du(
     Returns:
         bool: True if there is enough space, False otherwise.
     """
+    if sys.platform != "linux":
+        warnings.warn(
+            "Disk space check requires Linux (du -sb). Skipping check.",
+            stacklevel=2,
+        )
+        return True
+
     input_size = get_dir_size_du(input_path)
     required_space = input_size * margin
     available_space = shutil.disk_usage(os.path.abspath(output_path)).free
