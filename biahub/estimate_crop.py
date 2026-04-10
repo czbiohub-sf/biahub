@@ -19,7 +19,12 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.cli.slurm import wait_for_jobs_to_finish
-from biahub.cli.utils import estimate_resources, model_to_yaml, yaml_to_model
+from biahub.cli.utils import (
+    estimate_resources,
+    get_submitit_cluster,
+    model_to_yaml,
+    yaml_to_model,
+)
 from biahub.register import find_lir
 from biahub.settings import ConcatenateSettings
 
@@ -210,10 +215,7 @@ def estimate_crop(
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
     # Run locally or submit to SLURM
-    if local:
-        cluster = "local"
-    else:
-        cluster = "slurm"
+    cluster = get_submitit_cluster(local)
 
     # Prepare and submit jobs
     click.echo(f"Preparing jobs: {slurm_args}")

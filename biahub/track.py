@@ -32,6 +32,7 @@ from biahub.cli.parsing import (
 from biahub.cli.resolve_function import resolve_function
 from biahub.cli.utils import (
     estimate_resources,
+    get_submitit_cluster,
     update_model,
     yaml_to_model,
 )
@@ -894,10 +895,7 @@ def track(
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
     # Run locally or submit to SLURM
-    if local:
-        cluster = "local"
-    else:
-        cluster = "slurm"
+    cluster = get_submitit_cluster(local)
 
     # Prepare and submit jobs
     click.echo(f"Preparing jobs: {slurm_args}")
@@ -925,6 +923,7 @@ def track(
 
     job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 
+    slurm_out_path.mkdir(exist_ok=True)
     log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))

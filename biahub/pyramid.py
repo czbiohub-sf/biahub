@@ -13,7 +13,7 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import estimate_resources
+from biahub.cli.utils import estimate_resources, get_submitit_cluster
 
 
 def pyramid(fov_path: Path, levels: int, method: str) -> None:
@@ -97,7 +97,7 @@ def pyramid_cli(
 
     num_cpus, gb_ram = estimate_resources(shape=(T, C, Z, Y, X), ram_multiplier=5)
 
-    cluster = "local" if local else "slurm"
+    cluster = get_submitit_cluster(local)
 
     slurm_args = {
         "slurm_job_name": "pyramid",

@@ -28,7 +28,7 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.cli.slurm import wait_for_jobs_to_finish
-from biahub.cli.utils import estimate_resources, yaml_to_model
+from biahub.cli.utils import estimate_resources, get_submitit_cluster, yaml_to_model
 from biahub.registration.utils import (
     evaluate_transforms,
     match_shape,
@@ -628,7 +628,7 @@ def estimate_xyz_stabilization_pcc(
 
     output_folder_path.mkdir(parents=True, exist_ok=True)
     slurm_out_path = output_folder_path / "slurm_output"
-    slurm_out_path.mkdir(parents=True, exist_ok=True)
+    slurm_out_path.mkdir(exist_ok=True)
 
     with open_ome_zarr(input_position_dirpaths[0]) as dataset:
         shape = dataset.data.shape
@@ -813,7 +813,7 @@ def estimate_xy_stabilization(
 
     output_folder_path.mkdir(parents=True, exist_ok=True)
     slurm_out_path = output_folder_path / "slurm_output"
-    slurm_out_path.mkdir(parents=True, exist_ok=True)
+    slurm_out_path.mkdir(exist_ok=True)
 
     # Estimate resources from a sample dataset
     with open_ome_zarr(input_position_dirpaths[0]) as dataset:
@@ -1093,7 +1093,7 @@ def estimate_z_stabilization(
 
     output_folder_path.mkdir(parents=True, exist_ok=True)
     slurm_out_path = output_folder_path / "slurm_output"
-    slurm_out_path.mkdir(parents=True, exist_ok=True)
+    slurm_out_path.mkdir(exist_ok=True)
 
     # Estimate resources from a sample dataset
     with open_ome_zarr(input_position_dirpaths[0]) as dataset:
@@ -1275,10 +1275,7 @@ def estimate_stabilization(
         T, C, Z, Y, X = dataset.data.shape
 
     # Run locally or submit to SLURM
-    if local:
-        cluster = "local"
-    else:
-        cluster = "slurm"
+    cluster = get_submitit_cluster(local)
 
     # Load the evaluation settings
     eval_transform_settings = settings.eval_transform_settings

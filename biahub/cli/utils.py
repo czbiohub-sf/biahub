@@ -3,6 +3,7 @@ import inspect
 import io
 import itertools
 import multiprocessing as mp
+import os
 
 from functools import partial
 from pathlib import Path
@@ -15,6 +16,13 @@ from iohub.ngff import Position, open_ome_zarr
 from iohub.ngff.models import TransformationMeta
 from numpy.typing import DTypeLike
 from tqdm import tqdm
+
+
+def get_submitit_cluster(local: bool = False) -> str:
+    """Return the submitit cluster type: 'debug' in CI, 'local' if local, else 'slurm'."""
+    if os.environ.get("CI") == "true":
+        return "debug"
+    return "local" if local else "slurm"
 
 
 def update_model(model_instance, update_dict):

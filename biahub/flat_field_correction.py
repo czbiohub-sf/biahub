@@ -21,6 +21,7 @@ from biahub.cli.parsing import (
 from biahub.cli.utils import (
     _check_nan_n_zeros,
     estimate_resources,
+    get_submitit_cluster,
     yaml_to_model,
 )
 from biahub.settings import FlatFieldCorrectionSettings
@@ -218,7 +219,7 @@ def flat_field(
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
     # Run locally or submit to SLURM
-    cluster = "local" if local else "slurm"
+    cluster = get_submitit_cluster(local)
 
     # Prepare and submit jobs (one per position)
     click.echo(f"Preparing jobs: {slurm_args}")
@@ -240,6 +241,7 @@ def flat_field(
             )
 
     job_ids = [job.job_id for job in jobs]
+    slurm_out_path.mkdir(exist_ok=True)
     log_path = slurm_out_path / "submitit_jobs_ids.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("w") as log_file:

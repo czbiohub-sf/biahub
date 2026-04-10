@@ -19,6 +19,7 @@ from biahub.cli.parsing import (
     target_position_dirpaths,
 )
 from biahub.cli.utils import (
+    get_submitit_cluster,
     model_to_yaml,
     yaml_to_model,
 )
@@ -433,10 +434,7 @@ def estimate_registration(
         target_channel_voxel_size = voxel_size[-3:]
 
     # Run locally or submit to SLURM
-    if local:
-        cluster = "local"
-    else:
-        cluster = "slurm"
+    cluster = get_submitit_cluster(local)
     eval_transform_settings = settings.eval_transform_settings
 
     if settings.estimation_method == "beads":

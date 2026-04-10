@@ -1,8 +1,13 @@
+import os
+
 import numpy as np
 import pytest
 import yaml
 
 from iohub.ngff import open_ome_zarr
+
+# Use submitit debug executor (in-process, no forking) for fast tests
+os.environ["CI"] = "true"
 
 # These fixtures return paired
 # - paths for testing CLIs

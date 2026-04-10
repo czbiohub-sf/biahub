@@ -21,7 +21,7 @@ from biahub.cli.parsing import (
     sbatch_filepath_preprocess,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import create_empty_hcs_zarr
+from biahub.cli.utils import create_empty_hcs_zarr, get_submitit_cluster
 
 
 def run_viscy_preprocess(
@@ -198,10 +198,7 @@ def virtual_stain(
     output_dirpath = Path(output_dirpath)
     slurm_out_path = output_dirpath.parent / "slurm_output"
 
-    if local:
-        cluster = "local"
-    else:
-        cluster = "slurm"
+    cluster = get_submitit_cluster(local)
 
     job_ids_preprocess = []
     slurm_dependency = None
@@ -241,6 +238,7 @@ def virtual_stain(
         ]  # Access job IDs after batch submission
 
         log_path = Path(slurm_out_path / "preprocess" / "submitit_jobs_ids.log")
+        log_path.parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("w") as log_file:
             log_file.write("\n".join(job_ids))
 
@@ -303,6 +301,7 @@ def virtual_stain(
         ]  # Access job IDs after batch submission
 
         log_path = Path(slurm_out_path / "predict" / "submitit_jobs_ids.log")
+        log_path.parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("w") as log_file:
             log_file.write("\n".join(job_ids))
 
@@ -356,6 +355,7 @@ def virtual_stain(
         ]  # Access job IDs after batch submission
 
         log_path = Path(slurm_out_path / "combine" / "submitit_jobs_ids.log")
+        log_path.parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("w") as log_file:
             log_file.write("\n".join(job_ids))
 

@@ -527,7 +527,7 @@ def estimate_independently(
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
     slurm_out_path = output_folder_path.parent / "slurm_output"
-    slurm_out_path.mkdir(parents=True, exist_ok=True)
+    slurm_out_path.mkdir(exist_ok=True)
 
     # Submitit executor
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)

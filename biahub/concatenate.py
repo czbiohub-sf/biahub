@@ -1,5 +1,4 @@
 import glob
-import os
 
 from pathlib import Path
 
@@ -20,7 +19,13 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import copy_n_paste, estimate_resources, get_output_paths, yaml_to_model
+from biahub.cli.utils import (
+    copy_n_paste,
+    estimate_resources,
+    get_output_paths,
+    get_submitit_cluster,
+    yaml_to_model,
+)
 from biahub.settings import ConcatenateSettings
 
 
@@ -387,11 +392,7 @@ def concatenate(
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
     # Run locally or submit to SLURM
-    cluster = "slurm"
-    if local:
-        cluster = "local"
-    if os.environ.get("CI") == "true":
-        cluster = "debug"
+    cluster = get_submitit_cluster(local)
 
     # Prepare and submit jobs
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
@@ -434,9 +435,7 @@ def concatenate(
 
     job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 
-    # slurm_out_path is not created for debug cluster
-    if not slurm_out_path.exists():
-        slurm_out_path.mkdir()
+    slurm_out_path.mkdir(exist_ok=True)
     log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))

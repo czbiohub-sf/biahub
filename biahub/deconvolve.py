@@ -21,7 +21,12 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import estimate_resources, get_output_paths, yaml_to_model
+from biahub.cli.utils import (
+    estimate_resources,
+    get_output_paths,
+    get_submitit_cluster,
+    yaml_to_model,
+)
 from biahub.settings import DeconvolveSettings
 
 
@@ -159,10 +164,7 @@ def deconvolve_cli(
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
     # Run locally or submit to SLURM
-    if local:
-        cluster = "local"
-    else:
-        cluster = "slurm"
+    cluster = get_submitit_cluster(local)
 
     # Prepare and submit jobs
     click.echo(f"Preparing jobs: {slurm_args}")
@@ -188,6 +190,7 @@ def deconvolve_cli(
 
     job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 
+    slurm_out_path.mkdir(exist_ok=True)
     log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
