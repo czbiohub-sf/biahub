@@ -181,7 +181,7 @@ def deconvolve_cli(
                 deconvolve,
                 str(input_position_path),
                 str(output_position_path),
-                num_processes=int(slurm_args["slurm_cpus_per_task"]),
+                num_threads=int(slurm_args["slurm_cpus_per_task"]),
                 transfer_function_store_path=str(transfer_function_store_path),
                 regularization_strength=float(settings.regularization_strength),
             )
