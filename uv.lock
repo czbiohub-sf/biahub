@@ -378,7 +378,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">2,<3" },
     { name = "pystackreg" },
     { name = "scikit-learn" },
-    { name = "scipy", specifier = "<1.16" },
+    { name = "scipy" },
     { name = "stitch", git = "https://github.com/ahillsley/stitching?branch=jen" },
     { name = "submitit" },
     { name = "tensorstore", marker = "extra == 'all'" },
