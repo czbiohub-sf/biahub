@@ -12,12 +12,19 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v4
         with:
-          python-version: 3.11
-      - run: pip install .[doc]
-      - run: zensical build --clean
+          fetch-depth: 0  # Fetch all history for hatch-vcs
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: uv sync --extra doc
+        env:
+          UV_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
+      - run: uv run zensical build --clean
       - uses: actions/upload-pages-artifact@v4
         with:
           path: site

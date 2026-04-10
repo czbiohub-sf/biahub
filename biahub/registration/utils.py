@@ -17,7 +17,7 @@ Key conventions
 import os
 
 from pathlib import Path
-from typing import Literal, Tuple, Union
+from typing import Literal
 
 import ants
 import click
@@ -100,8 +100,9 @@ def validate_transforms(
     verbose: bool = False,
 ) -> list[ArrayLike]:
     """
-    Validate that a provided list of transforms do not deviate beyond the tolerance threshold
-    relative to the average transform within a given window size.
+    Validate that a provided list of transforms do not deviate beyond tolerance.
+
+    Relative to the average transform within a given window size.
 
     Parameters
     ----------
@@ -223,7 +224,7 @@ def interpolate_transforms(
                 continue
 
             f = interp1d(
-                local_x, local_y, axis=0, kind=interpolation_type, fill_value='extrapolate'
+                local_x, local_y, axis=0, kind=interpolation_type, fill_value="extrapolate"
             )
             transforms[idx] = f(idx).tolist()
             if verbose:
@@ -235,8 +236,8 @@ def interpolate_transforms(
             valid_transform_indices,
             valid_transforms,
             axis=0,
-            kind='linear',
-            fill_value='extrapolate',
+            kind="linear",
+            fill_value="extrapolate",
         )
         transforms = [
             f(i).tolist() if transforms[i] is None else transforms[i] for i in range(n)
@@ -253,8 +254,10 @@ def check_transforms_difference(
     verbose: bool = False,
 ):
     """
-    Evaluate the difference between two affine transforms by calculating the
-    Mean Squared Error (MSE) of a grid of points transformed by each matrix.
+    Evaluate the difference between two affine transforms.
+
+    Calculates the Mean Squared Error (MSE) of a grid of points transformed
+    by each matrix.
 
     Parameters
     ----------
@@ -291,7 +294,7 @@ def check_transforms_difference(
     mse = np.mean(differences)
 
     if verbose:
-        click.echo(f'MSE of transformed points: {mse:.2f}; threshold: {threshold:.2f}')
+        click.echo(f"MSE of transformed points: {mse:.2f}; threshold: {threshold:.2f}")
     return mse <= threshold
 
 
@@ -306,6 +309,7 @@ def evaluate_transforms(
 ) -> ArrayLike:
     """
     Evaluate a list of affine transformation matrices.
+
     Transform matrices are checked for deviation from the average within a given window size.
     If a transform is found to lead to shift larger than the given tolerance,
     that transform will be replaced by interpolation of valid transforms within a given window size.
@@ -332,7 +336,6 @@ def evaluate_transforms(
     list[ArrayLike]
         List of affine transformation matrices with missing values filled via linear interpolation.
     """
-
     if not isinstance(transforms, list):
         transforms = transforms.tolist()
     if len(transforms) < validation_window_size:
@@ -367,7 +370,7 @@ def evaluate_transforms(
 
 
 def save_transforms(
-    model: Union[AffineTransformSettings, StabilizationSettings, RegistrationSettings],
+    model: AffineTransformSettings | StabilizationSettings | RegistrationSettings,
     transforms: list[ArrayLike],
     output_filepath_settings: Path,
     output_filepath_plot: Path = None,
@@ -434,6 +437,7 @@ def plot_translations(
         List of affine transformation matrices (4x4), one for each timepoint.
     output_filepath : Path
         Path to the output plot file.
+
     Returns
     -------
     None
@@ -458,12 +462,12 @@ def plot_translations(
     axs[1].set_title("X-Translation")
     axs[2].plot(y_transforms)
     axs[2].set_title("Y-Translation")
-    plt.savefig(output_filepath, dpi=300, bbox_inches='tight')
+    plt.savefig(output_filepath, dpi=300, bbox_inches="tight")
     plt.close()
 
 
 def convert_transform_to_ants(T_numpy: np.ndarray):
-    """Homogeneous 3D transformation matrix from numpy to ants
+    """Homogeneous 3D transformation matrix from numpy to ants.
 
     Parameters
     ----------
@@ -487,7 +491,7 @@ def convert_transform_to_ants(T_numpy: np.ndarray):
 
 def convert_transform_to_numpy(T_ants):
     """
-    Convert the ants transformation matrix to numpy 3D homogenous transform
+    Convert the ants transformation matrix to numpy 3D homogenous transform.
 
     Modified from Jordao's dexp code
 
@@ -501,7 +505,6 @@ def convert_transform_to_numpy(T_ants):
         Converted Ants to numpy array
 
     """
-
     T_numpy = T_ants.parameters.reshape((3, 4), order="F")
     T_numpy[:, :3] = T_numpy[:, :3].transpose()
     T_numpy = np.vstack((T_numpy, np.array([0, 0, 0, 1])))
@@ -517,7 +520,7 @@ def convert_transform_to_numpy(T_ants):
     return T_numpy
 
 
-def find_lir(registered_zyx: np.ndarray, plot: bool = False) -> Tuple:
+def find_lir(registered_zyx: np.ndarray, plot: bool = False) -> tuple:
     registered_zyx = np.asarray(registered_zyx, dtype=bool)
 
     # Find the lir in YX at Z//2
@@ -579,14 +582,14 @@ def find_lir(registered_zyx: np.ndarray, plot: bool = False) -> Tuple:
 
 
 def find_overlapping_volume(
-    input_zyx_shape: Tuple,
-    target_zyx_shape: Tuple,
+    input_zyx_shape: tuple,
+    target_zyx_shape: tuple,
     transformation_matrix: np.ndarray,
     method: str = "LIR",
     plot: bool = False,
-) -> Tuple:
+) -> tuple:
     """
-    Find the overlapping rectangular volume after registration of two 3D datasets
+    Find the overlapping rectangular volume after registration of two 3D datasets.
 
     Parameters
     ----------
@@ -605,7 +608,6 @@ def find_overlapping_volume(
         ZYX slices of the overlapping volume after registration
 
     """
-
     # Make dummy volumes
     moving_volume = np.ones(tuple(input_zyx_shape), dtype=np.float32)
     fixed_volume = np.ones(tuple(target_zyx_shape), dtype=np.float32)
@@ -684,10 +686,10 @@ def get_3D_rescaling_matrix(start_shape_zyx, scaling_factor_zyx=(1, 1, 1), end_s
 
 
 def get_3D_rotation_matrix(
-    start_shape_zyx: Tuple, angle: float = 0.0, end_shape_zyx: Tuple = None
+    start_shape_zyx: tuple, angle: float = 0.0, end_shape_zyx: tuple = None
 ) -> np.ndarray:
     """
-    Rotate Transformation Matrix
+    Rotate Transformation Matrix.
 
     Parameters
     ----------
@@ -774,12 +776,12 @@ def get_3D_fliplr_matrix(start_shape_zyx: tuple, end_shape_zyx: tuple = None) ->
 def apply_affine_transform(
     zyx_data: np.ndarray,
     matrix: np.ndarray,
-    output_shape_zyx: Tuple,
+    output_shape_zyx: tuple,
     method="ants",
     interpolation: str = "linear",
     crop_output_slicing: bool = None,
 ) -> np.ndarray:
-    """_summary_
+    """_summary_.
 
     Parameters
     ----------
@@ -801,7 +803,6 @@ def apply_affine_transform(
     np.ndarray
         registered zyx data
     """
-
     Z, Y, X = output_shape_zyx
     if crop_output_slicing is not None:
         Z_slice, Y_slice, X_slice = crop_output_slicing
@@ -842,7 +843,6 @@ def apply_affine_transform(
             ).numpy()
 
         elif method == "scipy":
-
             registered_zyx = scipy.ndimage.affine_transform(zyx_data, matrix, output_shape_zyx)
 
         else:
@@ -857,7 +857,7 @@ def apply_affine_transform(
 
 def pad_to_shape(
     arr: ArrayLike,
-    shape: Tuple[int, ...],
+    shape: tuple[int, ...],
     mode: str,
     verbose: bool = False,
     **kwargs,
@@ -885,7 +885,7 @@ def pad_to_shape(
     """
     assert arr.ndim == len(shape)
 
-    dif = tuple(s - a for s, a in zip(shape, arr.shape))
+    dif = tuple(s - a for s, a in zip(shape, arr.shape, strict=True))
     assert all(d >= 0 for d in dif)
 
     pad_width = [[s // 2, s - s // 2] for s in dif]
@@ -900,7 +900,7 @@ def pad_to_shape(
 
 def center_crop(
     arr: ArrayLike,
-    shape: Tuple[int, ...],
+    shape: tuple[int, ...],
     verbose: bool = False,
 ) -> ArrayLike:
     """
@@ -914,11 +914,11 @@ def center_crop(
     """
     assert arr.ndim == len(shape)
 
-    starts = tuple((cur_s - s) // 2 for cur_s, s in zip(arr.shape, shape))
+    starts = tuple((cur_s - s) // 2 for cur_s, s in zip(arr.shape, shape, strict=True))
 
     assert all(s >= 0 for s in starts)
 
-    slicing = tuple(slice(s, s + d) for s, d in zip(starts, shape))
+    slicing = tuple(slice(s, s + d) for s, d in zip(starts, shape, strict=True))
     if verbose:
         click.echo(
             f"center crop: input shape {arr.shape}, output shape {shape}, slicing {slicing}"
@@ -928,7 +928,7 @@ def center_crop(
 
 def match_shape(
     img: ArrayLike,
-    shape: Tuple[int, ...],
+    shape: tuple[int, ...],
     verbose: bool = False,
 ) -> ArrayLike:
     """
@@ -947,7 +947,6 @@ def match_shape(
     ArrayLike
         Padded or cropped array.
     """
-
     if np.any(shape > img.shape):
         padded_shape = np.maximum(img.shape, shape)
         img = pad_to_shape(img, padded_shape, mode="reflect")

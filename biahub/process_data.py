@@ -1,5 +1,6 @@
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Literal, Sequence
+from typing import Literal
 
 import click
 import numpy as np
@@ -19,17 +20,22 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.cli.resolve_function import resolve_function
-from biahub.cli.utils import estimate_resources, get_output_paths, yaml_to_model
+from biahub.cli.utils import (
+    estimate_resources,
+    get_output_paths,
+    get_submitit_cluster,
+    yaml_to_model,
+)
 from biahub.settings import ProcessingFunctions, ProcessingImportFuncSettings
 
 
 def binning_czyx(
     czyx_data: np.ndarray,
     binning_factor_zyx: Sequence[int] = [1, 2, 2],
-    mode: Literal['sum', 'mean'] = 'sum',
+    mode: Literal["sum", "mean"] = "sum",
 ) -> np.ndarray:
     """
-    Binning via summing or averaging pixels within bin windows
+    Binning via summing or averaging pixels within bin windows.
 
     Parameters
     ----------
@@ -72,7 +78,7 @@ def binning_czyx(
             )
         )
 
-        if mode == 'sum':
+        if mode == "sum":
             output[c] = reshaped.sum(axis=(1, 3, 5))
             # Normalize sum to [0, max_val] where max_val is dtype dependent
             if output[c].max() > 0:  # Avoid division by zero
@@ -85,13 +91,13 @@ def binning_czyx(
                     * max_val
                     / (output[c].max() - output[c].min())
                 )
-        elif mode == 'mean':
+        elif mode == "mean":
             output[c] = reshaped.mean(axis=(1, 3, 5))
         else:
             raise ValueError(f"Invalid mode: {mode}. Must be 'sum' or 'mean'.")
 
     # For mean mode and integer dtypes, scale to dtype range
-    if mode == 'mean' and np.issubdtype(czyx_data.dtype, np.integer):
+    if mode == "mean" and np.issubdtype(czyx_data.dtype, np.integer):
         dtype_info = np.iinfo(czyx_data.dtype)
         output = output * dtype_info.max / output.max()
 
@@ -109,7 +115,7 @@ def process_czyx(
     processing_functions: list[ProcessingFunctions],
 ) -> np.ndarray:
     """
-    Process a CZYX image using processing functions
+    Process a CZYX image using processing functions.
 
     Parameters
     ----------
@@ -134,7 +140,7 @@ def process_czyx(
         else:
             raise ValueError("Only one input channel is supported for now")
 
-        click.echo(f'Processing with {func.__name__} with kwargs {kwargs} to channel {c_idx}')
+        click.echo(f"Processing with {func.__name__} with kwargs {kwargs} to channel {c_idx}")
         czyx_data = func(czyx_data, **kwargs)
 
     return czyx_data
@@ -146,6 +152,7 @@ def process_with_config(
     output_dirpath: Path,
     sbatch_filepath: Path | None = None,
     local: bool = False,
+    block: bool = False,
     monitor: bool = True,
 ) -> None:
     """
@@ -163,8 +170,11 @@ def process_with_config(
         Path to the SLURM batch file, by default None
     local : bool, optional
         Whether to run locally or submit to SLURM, by default False
+    block : bool, optional
+        Whether to block until all jobs are complete, by default False
+    monitor : bool, optional
+        Whether to monitor jobs, by default True
     """
-
     # Convert to Path objects
     output_dirpath = Path(output_dirpath)
     config_filepath = Path(config_filepath)
@@ -196,7 +206,7 @@ def process_with_config(
                 if not callable(resolved_func):
                     raise ValueError(f"Function {proc.function} is not callable")
             except ValueError as e:
-                raise ValueError(f"Function {proc.function} could not be resolved: {e}")
+                raise ValueError(f"Function {proc.function} could not be resolved: {e}") from e
     else:
         raise ValueError("Processing functions must be specified")
 
@@ -272,10 +282,7 @@ def process_with_config(
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
     # Run locally or submit to SLURM
-    if local:
-        cluster = "local"
-    else:
-        cluster = "slurm"
+    cluster = get_submitit_cluster(local)
 
     # Prepare and submit jobs
     click.echo(f"Preparing jobs: {slurm_args}")
@@ -287,7 +294,7 @@ def process_with_config(
     jobs = []
     with submitit.helpers.clean_env(), executor.batch():
         for input_position_path, output_position_path in zip(
-            input_position_dirpaths, output_position_paths
+            input_position_dirpaths, output_position_paths, strict=True
         ):
             jobs.append(
                 executor.submit(
@@ -302,6 +309,9 @@ def process_with_config(
                     **process_args,
                 )
             )
+
+    if block:
+        _ = [job.result() for job in jobs]
 
     if monitor:
         monitor_jobs(jobs, input_position_dirpaths)
@@ -322,11 +332,12 @@ def process_with_config_cli(
     local: bool = False,
     monitor: bool = True,
 ) -> None:
-    """
-    Process data with functions specified in the config file.
+    """Process data with functions specified in the config file.
 
-    Example usage:
-    biahub process-with-config -i ./timelapse.zarr/0/0/0 -c ./process_params.yml -o ./processed_timelapse.zarr
+    >>> biahub process-with-config \
+        -i ./timelapse.zarr/0/0/0 \
+        -c ./process_params.yml \
+        -o ./processed_timelapse.zarr
     """
     process_with_config(
         input_position_dirpaths=input_position_dirpaths,

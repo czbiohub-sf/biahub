@@ -1,7 +1,6 @@
 import datetime
 
 from pathlib import Path
-from typing import List
 
 import click
 import submitit
@@ -14,7 +13,7 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import estimate_resources
+from biahub.cli.utils import estimate_resources, get_submitit_cluster
 
 
 def pyramid(fov_path: Path, levels: int, method: str) -> None:
@@ -71,22 +70,19 @@ def pyramid(fov_path: Path, levels: int, method: str) -> None:
     help="Downsampling method to use.",
 )
 def pyramid_cli(
-    input_position_dirpaths: List[Path],
+    input_position_dirpaths: list[Path],
     levels: int = 4,
     method: str = "mean",
     sbatch_filepath: Path | None = None,
     local: bool = False,
 ) -> None:
-    """
-    Creates multi-scale pyramids for OME-Zarr datasets.
+    """Create multi-scale pyramids for OME-Zarr datasets.
 
     Uses cascade downsampling to generate progressively downscaled pyramid levels.
     Each level is 2x downsampled from the previous (e.g., levels=4 creates the original
     plus 2x, 4x, and 8x downsampled versions as arrays "0", "1", "2", "3").
 
-    Example:
-        biahub pyramid -i ./data.zarr/*/*/* --levels 4 --local
-        biahub pyramid -i ./data.zarr/0/0/0 -lv 5 --method max
+    >>> biahub pyramid -i ./data.zarr/*/*/* --levels 4 --local
     """
     if levels <= 1:
         click.echo("No pyramid levels to create (levels must be > 1).")
@@ -98,7 +94,7 @@ def pyramid_cli(
 
     num_cpus, gb_ram = estimate_resources(shape=(T, C, Z, Y, X), ram_multiplier=5)
 
-    cluster = "local" if local else "slurm"
+    cluster = get_submitit_cluster(local)
 
     slurm_args = {
         "slurm_job_name": "pyramid",

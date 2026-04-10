@@ -2,7 +2,7 @@ PACKAGE_NAME := biahub
 
 .PHONY: setup-develop
 setup-develop:
-	pip install -e ".[dev]"
+	uv sync --group dev
 
 .PHONY: uninstall
 uninstall:
@@ -10,17 +10,19 @@ uninstall:
 
 .PHONY: check-format
 check-format:
-	black --check -S -t py310 .
-	isort --check .
+	ruff format --check .
 
 .PHONY: format
 format:
-	black -S -t py310 .
-	isort .
+	ruff format .
 
 .PHONY: lint
 lint:
-	flake8 $(PACKAGE_NAME)
+	ruff check .
+
+.PHONY: lint-fix
+lint-fix:
+	ruff check --fix .
 
 # run the pre-commit hooks on all files (not just staged changes)
 # (requires pre-commit to be installed)
@@ -30,4 +32,4 @@ pre-commit:
 
 .PHONY: test
 test:
-	python -m pytest . --disable-pytest-warnings
+	uv run pytest --disable-pytest-warnings

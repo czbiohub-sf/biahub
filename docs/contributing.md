@@ -20,7 +20,7 @@ to [fork](https://github.com/czbiohub-sf/biahub/fork) the repository.
 1. Install the package in development mode:
 
 ```bash
-pip install -e ".[dev]"
+uv sync --group dev
 ```
 
 2. Install pre-commit hooks:
@@ -29,7 +29,7 @@ pip install -e ".[dev]"
 pre-commit install
 ```
 
-The pre-commit hooks automatically run style checks (e.g. `flake8`, `black`, `isort`) when staged changes are committed. Resolve any violations before committing your changes. You can manually run the pre-commit hooks at any time using the `make pre-commit` command.
+The pre-commit hooks automatically run style checks (via `ruff`) when staged changes are committed. Resolve any violations before committing your changes. You can manually run the pre-commit hooks at any time using the `make pre-commit` command.
 
 ## Makefile
 
@@ -38,9 +38,10 @@ A [makefile](https://github.com/czbiohub-sf/biahub/blob/main/Makefile) is includ
 ```bash
 make setup-develop # setup the package in development mode
 make uninstall # uninstall the package
-make check-format # run black and isort format check
-make format # run black and isort formatting
-make lint # run flake8 linting
+make check-format # run ruff format check
+make format # run ruff formatting
+make lint # run ruff linting
+make lint-fix # run ruff linting with auto-fix
 make pre-commit # run pre-commit hooks on all files
 make test # run pytest
 ```

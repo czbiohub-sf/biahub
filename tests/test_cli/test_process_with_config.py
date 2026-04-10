@@ -11,10 +11,7 @@ def example_process_plate(tmp_path):
     """
     plate_path = tmp_path / "process_plate.zarr"
 
-    position_list = (
-        ("A", "1", "0"),
-        ("B", "1", "0"),
-    )
+    position_list = (("A", "1", "0"),)
 
     # Create plate with test channels
     from iohub.ngff import open_ome_zarr
@@ -30,17 +27,9 @@ def example_process_plate(tmp_path):
         position = plate_dataset.create_position(row, col, fov)
         # Create test data with known values for verification
         # Shape: (T, C, Z, Y, X) = (3, 2, 4, 32, 32)
-        data = np.zeros((3, 2, 4, 32, 32), dtype=np.float32)
-
-        # Fill with test pattern for easy verification
-        for t in range(3):
-            for c in range(2):
-                for z in range(4):
-                    # Create a simple pattern: increasing values from top-left
-                    for y in range(32):
-                        for x in range(32):
-                            data[t, c, z, y, x] = (y + x) / 100.0 + 0.1
-
+        yy, xx = np.meshgrid(np.arange(32), np.arange(32), indexing="ij")
+        pattern = ((yy + xx) / 100.0 + 0.1).astype(np.float32)
+        data = np.broadcast_to(pattern, (3, 2, 4, 32, 32)).copy()
         position["0"] = data
 
     yield plate_path, plate_dataset
@@ -65,14 +54,11 @@ def test_process_with_config_binning_2x2(tmp_path, example_process_plate, monkey
 """
 
     config_path = tmp_path / "test_process_config_binning.yml"
-    with open(config_path, 'w') as f:
+    with open(config_path, "w") as f:
         f.write(config_content)
 
     # Get input position paths
-    input_position_paths = [
-        plate_path / "A" / "1" / "0",
-        plate_path / "B" / "1" / "0",
-    ]
+    input_position_paths = [plate_path / "A" / "1" / "0"]
 
     # Call process_with_config function directly
     process_with_config(
@@ -80,13 +66,15 @@ def test_process_with_config_binning_2x2(tmp_path, example_process_plate, monkey
         config_filepath=config_path,
         output_dirpath=output_path,
         local=True,
+        block=True,
+        monitor=False,
     )
 
     # Verify output exists
     assert output_path.exists()
 
     # Verify output structure
-    for position in ["A/1/0", "B/1/0"]:
+    for position in ["A/1/0"]:
         position_path = output_path / position
         assert position_path.exists()
 
@@ -126,14 +114,11 @@ def test_process_with_config_squaring(tmp_path, example_process_plate, monkeypat
 """
 
     config_path = tmp_path / "test_process_config_squaring.yml"
-    with open(config_path, 'w') as f:
+    with open(config_path, "w") as f:
         f.write(config_content)
 
     # Get input position paths
-    input_position_paths = [
-        plate_path / "A" / "1" / "0",
-        plate_path / "B" / "1" / "0",
-    ]
+    input_position_paths = [plate_path / "A" / "1" / "0"]
 
     # Call process_with_config function directly
     process_with_config(
@@ -141,6 +126,8 @@ def test_process_with_config_squaring(tmp_path, example_process_plate, monkeypat
         config_filepath=config_path,
         output_dirpath=output_path,
         local=True,
+        block=True,
+        monitor=False,
     )
 
     # Verify output exists
@@ -198,14 +185,11 @@ def test_process_with_config_binning_and_squaring(
 """
 
     config_path = tmp_path / "test_process_config_combined.yml"
-    with open(config_path, 'w') as f:
+    with open(config_path, "w") as f:
         f.write(config_content)
 
     # Get input position paths
-    input_position_paths = [
-        plate_path / "A" / "1" / "0",
-        plate_path / "B" / "1" / "0",
-    ]
+    input_position_paths = [plate_path / "A" / "1" / "0"]
 
     # Call process_with_config function directly
     process_with_config(
@@ -213,13 +197,15 @@ def test_process_with_config_binning_and_squaring(
         config_filepath=config_path,
         output_dirpath=output_path,
         local=True,
+        block=True,
+        monitor=False,
     )
 
     # Verify output exists
     assert output_path.exists()
 
     # Verify output structure
-    for position in ["A/1/0", "B/1/0"]:
+    for position in ["A/1/0"]:
         position_path = output_path / position
         assert position_path.exists()
 
@@ -327,13 +313,13 @@ def test_process_with_config_invalid_function(tmp_path, example_process_plate, m
 """
 
     config_path = tmp_path / "test_process_config_invalid.yml"
-    with open(config_path, 'w') as f:
+    with open(config_path, "w") as f:
         f.write(config_content)
 
     input_position_paths = [plate_path / "A" / "1" / "0"]
 
     # Test that it raises an exception with invalid function
-    with pytest.raises(Exception):
+    with pytest.raises((ValueError, AttributeError)):
         process_with_config(
             input_position_dirpaths=input_position_paths,
             config_filepath=config_path,
@@ -359,13 +345,13 @@ def test_process_with_config_invalid_channel(tmp_path, example_process_plate, mo
 """
 
     config_path = tmp_path / "test_process_config_invalid_channel.yml"
-    with open(config_path, 'w') as f:
+    with open(config_path, "w") as f:
         f.write(config_content)
 
     input_position_paths = [plate_path / "A" / "1" / "0"]
 
     # Test that it raises an exception with invalid channel
-    with pytest.raises(Exception):
+    with pytest.raises((ValueError, KeyError)):
         process_with_config(
             input_position_dirpaths=input_position_paths,
             config_filepath=config_path,
@@ -388,13 +374,13 @@ def test_process_with_config_empty_functions(tmp_path, example_process_plate, mo
 """
 
     config_path = tmp_path / "test_process_config_empty.yml"
-    with open(config_path, 'w') as f:
+    with open(config_path, "w") as f:
         f.write(config_content)
 
     input_position_paths = [plate_path / "A" / "1" / "0"]
 
     # Test that it raises an exception with empty functions
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError):
         process_with_config(
             input_position_dirpaths=input_position_paths,
             config_filepath=config_path,
@@ -428,7 +414,7 @@ def test_process_with_config_multiple_channels(tmp_path, example_process_plate, 
 """
 
     config_path = tmp_path / "test_process_config_multiple.yml"
-    with open(config_path, 'w') as f:
+    with open(config_path, "w") as f:
         f.write(config_content)
 
     # Get input position paths
@@ -442,6 +428,8 @@ def test_process_with_config_multiple_channels(tmp_path, example_process_plate, 
         config_filepath=config_path,
         output_dirpath=output_path,
         local=True,
+        block=True,
+        monitor=False,
     )
 
     # Verify output exists

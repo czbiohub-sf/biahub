@@ -1,7 +1,12 @@
-exclude: ^(docs|notebooks|ignore|/tests/artifacts|examples|scripts)/
+ci:
+  autoupdate_schedule: monthly
+  autofix_commit_msg: "style(pre-commit.ci): auto fixes [...]"
+  autoupdate_commit_msg: "ci(pre-commit.ci): autoupdate"
+
+exclude: (^|/)(docs|notebooks|ignore|tests/artifacts|examples|scripts)/
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0
+    rev: v6.0.0
     hooks:
       - id: check-yaml
       - id: check-toml
@@ -22,20 +27,11 @@ repos:
       - id: python-check-blanket-type-ignore
       - id: python-no-log-warn
 
-  - repo: https://github.com/pycqa/isort
-    rev: 6.0.1
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.1
     hooks:
-    - id: isort
-
-  - repo: https://github.com/psf/black
-    rev: 25.1.0
-    hooks:
-    - id: black
-      entry: black
-
-  - repo: https://github.com/pycqa/flake8
-    rev: 7.2.0
-    hooks:
-    - id: flake8
-      entry: flake8
-      args: [--statistics]
+      # Run the linter
+      - id: ruff
+        args: [--fix]
+      # Run the formatter
+      - id: ruff-format

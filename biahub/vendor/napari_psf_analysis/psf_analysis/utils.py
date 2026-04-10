@@ -1,5 +1,3 @@
-from typing import Tuple
-
 import numpy as np
 
 from numpy.typing import ArrayLike
@@ -41,7 +39,7 @@ def fwhm(sigma: float) -> float:
     return 2 * np.sqrt(2 * np.log(2)) * sigma
 
 
-def compute_cov_matrix(img_data: ArrayLike, spacing: Tuple[float, ...]) -> ArrayLike:
+def compute_cov_matrix(img_data: ArrayLike, spacing: tuple[float, ...]) -> ArrayLike:
     """Weighted covariance matrix.
 
     Given some image data the intensity weighted covariance matrix over the
@@ -58,7 +56,10 @@ def compute_cov_matrix(img_data: ArrayLike, spacing: Tuple[float, ...]) -> Array
     -------
         The covariance matrix of the image data weighted by the intensity.
     """
-    extends = [np.arange(dim_size) * s for dim_size, s in zip(img_data.shape, spacing)]
+    extends = [
+        np.arange(dim_size) * s
+        for dim_size, s in zip(img_data.shape, spacing)  # noqa: B905
+    ]
 
     grids = np.meshgrid(*extends, indexing="ij")
 
@@ -67,7 +68,7 @@ def compute_cov_matrix(img_data: ArrayLike, spacing: Tuple[float, ...]) -> Array
     return np.cov(m, fweights=img_data.ravel())
 
 
-def estimate_from_data(sample: ArrayLike, data: ArrayLike, sample_spacing: Tuple[float, ...]):
+def estimate_from_data(sample: ArrayLike, data: ArrayLike, sample_spacing: tuple[float, ...]):
     """Estimate Gaussian fit parameters from data.
 
     Given some sample and data initialization parameters for a Gaussian fit
