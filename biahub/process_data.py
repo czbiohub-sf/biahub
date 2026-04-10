@@ -147,6 +147,7 @@ def process_with_config(
     output_dirpath: Path,
     sbatch_filepath: Path | None = None,
     local: bool = False,
+    block: bool = False,
     monitor: bool = True,
 ) -> None:
     """
@@ -164,6 +165,10 @@ def process_with_config(
         Path to the SLURM batch file, by default None
     local : bool, optional
         Whether to run locally or submit to SLURM, by default False
+    block : bool, optional
+        Whether to block until all jobs are complete, by default False
+    monitor : bool, optional
+        Whether to monitor jobs, by default True
     """
 
     # Convert to Path objects
@@ -303,6 +308,9 @@ def process_with_config(
                     **process_args,
                 )
             )
+
+    if block:
+        _ = [job.result() for job in jobs]
 
     if monitor:
         monitor_jobs(jobs, input_position_dirpaths)

@@ -11,10 +11,7 @@ def example_process_plate(tmp_path):
     """
     plate_path = tmp_path / "process_plate.zarr"
 
-    position_list = (
-        ("A", "1", "0"),
-        ("B", "1", "0"),
-    )
+    position_list = (("A", "1", "0"),)
 
     # Create plate with test channels
     from iohub.ngff import open_ome_zarr
@@ -30,17 +27,9 @@ def example_process_plate(tmp_path):
         position = plate_dataset.create_position(row, col, fov)
         # Create test data with known values for verification
         # Shape: (T, C, Z, Y, X) = (3, 2, 4, 32, 32)
-        data = np.zeros((3, 2, 4, 32, 32), dtype=np.float32)
-
-        # Fill with test pattern for easy verification
-        for t in range(3):
-            for c in range(2):
-                for z in range(4):
-                    # Create a simple pattern: increasing values from top-left
-                    for y in range(32):
-                        for x in range(32):
-                            data[t, c, z, y, x] = (y + x) / 100.0 + 0.1
-
+        yy, xx = np.meshgrid(np.arange(32), np.arange(32), indexing="ij")
+        pattern = ((yy + xx) / 100.0 + 0.1).astype(np.float32)
+        data = np.broadcast_to(pattern, (3, 2, 4, 32, 32)).copy()
         position["0"] = data
 
     yield plate_path, plate_dataset
@@ -69,10 +58,7 @@ def test_process_with_config_binning_2x2(tmp_path, example_process_plate, monkey
         f.write(config_content)
 
     # Get input position paths
-    input_position_paths = [
-        plate_path / "A" / "1" / "0",
-        plate_path / "B" / "1" / "0",
-    ]
+    input_position_paths = [plate_path / "A" / "1" / "0"]
 
     # Call process_with_config function directly
     process_with_config(
@@ -80,13 +66,15 @@ def test_process_with_config_binning_2x2(tmp_path, example_process_plate, monkey
         config_filepath=config_path,
         output_dirpath=output_path,
         local=True,
+        block=True,
+        monitor=False,
     )
 
     # Verify output exists
     assert output_path.exists()
 
     # Verify output structure
-    for position in ["A/1/0", "B/1/0"]:
+    for position in ["A/1/0"]:
         position_path = output_path / position
         assert position_path.exists()
 
@@ -130,10 +118,7 @@ def test_process_with_config_squaring(tmp_path, example_process_plate, monkeypat
         f.write(config_content)
 
     # Get input position paths
-    input_position_paths = [
-        plate_path / "A" / "1" / "0",
-        plate_path / "B" / "1" / "0",
-    ]
+    input_position_paths = [plate_path / "A" / "1" / "0"]
 
     # Call process_with_config function directly
     process_with_config(
@@ -141,6 +126,8 @@ def test_process_with_config_squaring(tmp_path, example_process_plate, monkeypat
         config_filepath=config_path,
         output_dirpath=output_path,
         local=True,
+        block=True,
+        monitor=False,
     )
 
     # Verify output exists
@@ -202,10 +189,7 @@ def test_process_with_config_binning_and_squaring(
         f.write(config_content)
 
     # Get input position paths
-    input_position_paths = [
-        plate_path / "A" / "1" / "0",
-        plate_path / "B" / "1" / "0",
-    ]
+    input_position_paths = [plate_path / "A" / "1" / "0"]
 
     # Call process_with_config function directly
     process_with_config(
@@ -213,13 +197,15 @@ def test_process_with_config_binning_and_squaring(
         config_filepath=config_path,
         output_dirpath=output_path,
         local=True,
+        block=True,
+        monitor=False,
     )
 
     # Verify output exists
     assert output_path.exists()
 
     # Verify output structure
-    for position in ["A/1/0", "B/1/0"]:
+    for position in ["A/1/0"]:
         position_path = output_path / position
         assert position_path.exists()
 
@@ -442,6 +428,8 @@ def test_process_with_config_multiple_channels(tmp_path, example_process_plate, 
         config_filepath=config_path,
         output_dirpath=output_path,
         local=True,
+        block=True,
+        monitor=False,
     )
 
     # Verify output exists

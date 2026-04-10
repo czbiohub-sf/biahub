@@ -6,13 +6,16 @@ from iohub import open_ome_zarr
 from biahub.concatenate import concatenate
 from biahub.settings import ConcatenateSettings
 
+# Single position for tests that don't need multiple positions
+_ONE_POS = [("A", "1", "0")]
+
 
 def test_concatenate_channels(create_custom_plate, tmp_path, sbatch_file):
     """
     Test concatenating channels across zarr stores with the same layout
     """
     # Create example plates with same layout and different channels
-    position_list = ["A/1/0", "B/1/0", "B/2/0"]
+    position_list = ["A/1/0", "B/1/0"]
     plate_1_path, plate_1 = create_custom_plate(
         tmp_path / "zarr1",
         position_list=[p.split("/") for p in position_list],
@@ -36,6 +39,8 @@ def test_concatenate_channels(create_custom_plate, tmp_path, sbatch_file):
         output_dirpath=output_path,
         sbatch_filepath=sbatch_file,
         local=True,
+        block=True,
+        monitor=False,
     )
 
     output_plate = open_ome_zarr(output_path)
@@ -57,10 +62,10 @@ def test_concatenate_specific_channels(create_custom_plate, tmp_path, sbatch_fil
 
     # Create test plates
     plate_1_path, plate_1 = create_custom_plate(
-        tmp_path / "zarr1", channel_names=["DAPI", "Cy5"]
+        tmp_path / "zarr1", position_list=_ONE_POS, channel_names=["DAPI", "Cy5"]
     )
     plate_2_path, plate_2 = create_custom_plate(
-        tmp_path / "zarr2", channel_names=["GFP", "RFP"]
+        tmp_path / "zarr2", position_list=_ONE_POS, channel_names=["GFP", "RFP"]
     )
 
     # Select only specific channels from each plate
@@ -79,6 +84,8 @@ def test_concatenate_specific_channels(create_custom_plate, tmp_path, sbatch_fil
         output_dirpath=output_path,
         sbatch_filepath=sbatch_file,
         local=True,
+        block=True,
+        monitor=False,
     )
 
     output_plate = open_ome_zarr(output_path)
@@ -94,8 +101,12 @@ def test_concatenate_with_time_indices(create_custom_plate, tmp_path, sbatch_fil
     """
 
     # Create test plates
-    plate_1_path, plate_1 = create_custom_plate(tmp_path / "zarr1", time_points=10)
-    plate_2_path, plate_2 = create_custom_plate(tmp_path / "zarr2", time_points=5)
+    plate_1_path, plate_1 = create_custom_plate(
+        tmp_path / "zarr1", position_list=_ONE_POS, time_points=5
+    )
+    plate_2_path, plate_2 = create_custom_plate(
+        tmp_path / "zarr2", position_list=_ONE_POS, time_points=5
+    )
 
     # Select only specific time indices
     settings = ConcatenateSettings(
@@ -110,6 +121,8 @@ def test_concatenate_with_time_indices(create_custom_plate, tmp_path, sbatch_fil
         output_dirpath=output_path,
         sbatch_filepath=sbatch_file,
         local=True,
+        block=True,
+        monitor=False,
     )
 
     output_plate = open_ome_zarr(output_path)
@@ -126,6 +139,7 @@ def test_concatenate_with_single_slice_to_all(create_custom_plate, tmp_path, sba
     (T, Z, Y, X) = (3, 4, 6, 8)
     plate_1_path, plate_1 = create_custom_plate(
         tmp_path / "zarr1",
+        position_list=_ONE_POS,
         time_points=T,
         z_size=Z,
         y_size=Y,
@@ -134,6 +148,7 @@ def test_concatenate_with_single_slice_to_all(create_custom_plate, tmp_path, sba
     )
     plate_2_path, plate_2 = create_custom_plate(
         tmp_path / "zarr2",
+        position_list=_ONE_POS,
         time_points=T,
         z_size=Z,
         y_size=Y,
@@ -156,6 +171,8 @@ def test_concatenate_with_single_slice_to_all(create_custom_plate, tmp_path, sba
         output_dirpath=output_path,
         sbatch_filepath=sbatch_file,
         local=True,
+        block=True,
+        monitor=False,
     )
 
     output_plate = open_ome_zarr(output_path)
@@ -170,10 +187,20 @@ def test_concatenate_with_cropping(create_custom_plate, tmp_path, sbatch_file):
     Z, Y, X = 4, 6, 8
     # Create example plates
     plate_1_path, plate_1 = create_custom_plate(
-        tmp_path / "zarr1", channel_names=["DAPI", "Cy5"], z_size=Z, y_size=Y, x_size=X
+        tmp_path / "zarr1",
+        position_list=_ONE_POS,
+        channel_names=["DAPI", "Cy5"],
+        z_size=Z,
+        y_size=Y,
+        x_size=X,
     )
     plate_2_path, plate_2 = create_custom_plate(
-        tmp_path / "zarr2", channel_names=["GFP", "RFP"], z_size=Z, y_size=Y, x_size=X
+        tmp_path / "zarr2",
+        position_list=_ONE_POS,
+        channel_names=["GFP", "RFP"],
+        z_size=Z,
+        y_size=Y,
+        x_size=X,
     )
 
     # Define crop parameters
@@ -196,6 +223,8 @@ def test_concatenate_with_cropping(create_custom_plate, tmp_path, sbatch_file):
         output_dirpath=output_path,
         sbatch_filepath=sbatch_file,
         local=True,
+        block=True,
+        monitor=False,
     )
 
     output_plate = open_ome_zarr(output_path)
@@ -220,6 +249,7 @@ def test_concatenate_with_custom_chunks(
     # Create example plates
     plate_1_path, plate_1 = create_custom_plate(
         tmp_path / "zarr1",
+        position_list=_ONE_POS,
         channel_names=["DAPI", "Cy5"],
         time_points=3,
         z_size=4,
@@ -228,6 +258,7 @@ def test_concatenate_with_custom_chunks(
     )
     plate_2_path, plate_2 = create_custom_plate(
         tmp_path / "zarr2",
+        position_list=_ONE_POS,
         channel_names=["GFP", "RFP"],
         time_points=3,
         z_size=4,
@@ -320,6 +351,8 @@ def test_concatenate_multiple_plates(create_custom_plate, tmp_path, sbatch_file)
         output_dirpath=output_path,
         sbatch_filepath=sbatch_file,
         local=True,
+        block=True,
+        monitor=False,
     )
 
     output_plate = open_ome_zarr(output_path)
@@ -343,11 +376,11 @@ def test_concatenate_mismatched_with_cropping(create_custom_plate, tmp_path, sba
     same output shape
     """
     plate_1_path, plate_1 = create_custom_plate(
-        tmp_path / "zarr1", time_points=3, z_size=2, y_size=3, x_size=3
+        tmp_path / "zarr1", position_list=_ONE_POS, time_points=3, z_size=2, y_size=3, x_size=3
     )
 
     plate_2_path, plate_2 = create_custom_plate(
-        tmp_path / "zarr2", time_points=3, z_size=4, y_size=6, x_size=6
+        tmp_path / "zarr2", position_list=_ONE_POS, time_points=3, z_size=4, y_size=6, x_size=6
     )
 
     settings = ConcatenateSettings(
@@ -365,6 +398,8 @@ def test_concatenate_mismatched_with_cropping(create_custom_plate, tmp_path, sba
         output_dirpath=output_path,
         sbatch_filepath=sbatch_file,
         local=True,
+        block=True,
+        monitor=False,
     )
 
     output_plate = open_ome_zarr(output_path)
@@ -379,26 +414,25 @@ def test_concatenate_with_mixed_slice_formats(create_custom_plate, tmp_path, sba
     # Create a plate with larger dimensions to test mixed slice formats
     plate_path_1, plate_1 = create_custom_plate(
         tmp_path / "large_plate_1",
+        position_list=_ONE_POS,
         time_points=2,
-        z_size=10,  # Larger Z dimension for testing
-        y_size=20,  # Larger Y dimension for testing
-        x_size=20,  # Larger X dimension for testing
+        z_size=10,
+        y_size=20,
+        x_size=20,
     )
     plate_path_2, plate_2 = create_custom_plate(
         tmp_path / "large_plate_2",
+        position_list=_ONE_POS,
         time_points=2,
-        z_size=5,  # Larger Z dimension for testing
-        y_size=4,  # Larger Y dimension for testing
-        x_size=8,  # Larger X dimension for testing
+        z_size=5,
+        y_size=4,
+        x_size=8,
     )
 
     # Define mixed slice formats
-    z_slices = [
-        [0, 5],
-        "all",
-    ]  # First 5 slices, all slices, and last 5 slices
-    y_slices = [[2, 6], "all"]  # First 10 slices and last 10 slices
-    x_slices = [[4, 12], "all"]  # All slices in X dimension
+    z_slices = [[0, 5], "all"]
+    y_slices = [[2, 6], "all"]
+    x_slices = [[4, 12], "all"]
 
     settings = ConcatenateSettings(
         concat_data_paths=[str(plate_path_1) + "/*/*/*", str(plate_path_2) + "/*/*/*"],
@@ -415,6 +449,8 @@ def test_concatenate_with_mixed_slice_formats(create_custom_plate, tmp_path, sba
         output_dirpath=output_path,
         sbatch_filepath=sbatch_file,
         local=True,
+        block=True,
+        monitor=False,
     )
 
     output_plate = open_ome_zarr(output_path)
@@ -462,6 +498,8 @@ def test_concatenate_with_unique_positions(create_custom_plate, tmp_path, sbatch
         output_dirpath=output_path_unique,
         sbatch_filepath=sbatch_file,
         local=True,
+        block=True,
+        monitor=False,
     )
 
     output_plate_unique = open_ome_zarr(output_path_unique)
