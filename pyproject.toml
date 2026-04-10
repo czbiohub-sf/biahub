@@ -7,7 +7,7 @@ name = "biahub"
 description = "Bioimage analysis hub."
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = "==3.11.*"
+requires-python = ">=3.11"
 
 dynamic = ["version"]
 
