@@ -21,7 +21,7 @@ classifiers = [
 dependencies = [
   "click",
   "iohub[tensorstore]>=0.3.0a6",
-  "stitch",
+  "stitch @ git+https://github.com/ahillsley/stitching@jen",
   "matplotlib",
   "natsort",
   "numpy",
@@ -75,6 +75,9 @@ dev = [
 [project.scripts]
 biahub = "biahub.cli.main:cli"
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [tool.hatch.version]
 source = "vcs"
 
@@ -84,9 +87,6 @@ local_scheme = "no-local-version"
 
 [tool.hatch.build.targets.wheel]
 packages = ["biahub"]
-
-[tool.uv.sources]
-stitch = { git = "https://github.com/ahillsley/stitching", branch = "jen" }
 
 [tool.ruff]
 line-length = 95
