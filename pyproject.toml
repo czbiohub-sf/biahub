@@ -51,7 +51,7 @@ segment = ["cellpose"]
 
 track = ["ultrack>=0.7.0rc2"]
 
-gui = ["napari[pyqt]", "napari-animation"]
+gui = ["napari[pyqt6]", "PyQt6>=6.5,<6.8", "napari-animation"]
 
 shard = ["tensorstore"]
 
