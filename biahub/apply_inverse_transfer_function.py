@@ -21,7 +21,7 @@ from biahub.cli.parsing import (
     input_position_dirpaths,
     local,
     monitor,
-    num_processes,
+    num_threads,
     output_dirpath,
     sbatch_filepath,
     sbatch_to_submitit,
@@ -34,7 +34,7 @@ def apply_inverse_transfer_function(
     transfer_function_dirpath: Path,
     config_filepath: Path,
     output_dirpath: Path,
-    num_processes: int,
+    num_threads: int,
     sbatch_filepath: Path,
     local: bool = False,
     monitor: bool = True,
@@ -50,7 +50,7 @@ def apply_inverse_transfer_function(
         **output_metadata,
     )
     # Initialize torch num of threads and interoeration operations
-    if num_processes > 1:
+    if num_threads > 1:
         torch.set_num_threads(1)
         torch.set_num_interop_threads(1)
 
@@ -60,7 +60,7 @@ def apply_inverse_transfer_function(
 
     settings = yaml_to_model(config_filepath, ReconstructionSettings)
 
-    num_cpus, gb_ram_per_cpu = estimate_resources([T, C, Z, Y, X], settings, num_processes)
+    num_cpus, gb_ram_per_cpu = estimate_resources([T, C, Z, Y, X], settings, num_threads)
     num_jobs = len(input_position_dirpaths)
 
     # Prepare and submit jobs
@@ -110,7 +110,7 @@ def apply_inverse_transfer_function(
                 transfer_function_dirpath,
                 config_filepath,
                 output_dirpath / Path(*input_position_dirpath.parts[-3:]),
-                num_processes,
+                num_threads,
                 output_metadata["channel_names"],
             )
             jobs.append(job)
@@ -130,7 +130,7 @@ def apply_inverse_transfer_function(
 @transfer_function_dirpath()
 @config_filepath()
 @output_dirpath()
-@num_processes()
+@num_threads()
 @sbatch_filepath()
 @local()
 @monitor()
@@ -139,7 +139,7 @@ def apply_inverse_transfer_function_cli(
     transfer_function_dirpath: Path,
     config_filepath: Path,
     output_dirpath: Path,
-    num_processes: int,
+    num_threads: int,
     sbatch_filepath: Path,
     local: bool = False,
     monitor: bool = True,
@@ -162,7 +162,7 @@ def apply_inverse_transfer_function_cli(
         transfer_function_dirpath=transfer_function_dirpath,
         config_filepath=config_filepath,
         output_dirpath=output_dirpath,
-        num_processes=num_processes,
+        num_threads=num_threads,
         sbatch_filepath=sbatch_filepath,
         local=local,
         monitor=monitor,

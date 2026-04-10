@@ -275,13 +275,13 @@ def monitor() -> Callable:
     return decorator
 
 
-def num_processes() -> Callable:
+def num_threads() -> Callable:
     def decorator(f: Callable) -> Callable:
         return click.option(
-            "--num-processes",
+            "--num-threads",
             "-j",
             default=1,
-            help="Number of parallel processes",
+            help="Number of parallel threads",
             required=False,
             type=int,
         )(f)

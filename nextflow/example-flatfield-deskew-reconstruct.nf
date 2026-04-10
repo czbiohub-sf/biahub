@@ -8,7 +8,7 @@ params.flat_field_config  = null
 params.deskew_config      = null
 params.reconstruct_config = null
 params.predict_config     = null
-params.num_processes      = 1
+params.num_threads      = 1
 params.biahub_project     = null
 params.viscy_project      = null
 params.work_dir           = null
@@ -167,7 +167,7 @@ process init_reconstruct {
         -i "${params.output_dir}/1-deskew/${dataset_name}.zarr" \
         -o "${params.output_dir}/2-reconstruct/${dataset_name}.zarr" \
         -c "${params.reconstruct_config}" \
-        -j ${params.num_processes}
+        -j ${params.num_threads}
     """
 }
 
@@ -217,7 +217,7 @@ process run_apply_inv_tf {
         -t "${params.output_dir}/2-reconstruct/transfer_function_${dataset_name}.zarr" \
         -p "${position}" \
         -c "${params.reconstruct_config}" \
-        -j ${params.num_processes}
+        -j ${params.num_threads}
     """
 }
 

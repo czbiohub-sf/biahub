@@ -6,7 +6,7 @@ name = "biahub"
 description = "Bioimage analysis hub."
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.11, <4.0"
+requires-python = ">=3.12, <4.0"
 
 # the dynamically determined project metadata attributes
 dynamic = ["version"]
@@ -20,7 +20,7 @@ classifiers = [
 
 # list package dependencies here
 dependencies = [
-  "iohub[tensorstore]==0.3.0a6",
+  "iohub[tensorstore]>=0.3.2",
   "stitch @ git+https://github.com/ahillsley/stitching@jen",
   "matplotlib",
   "natsort",

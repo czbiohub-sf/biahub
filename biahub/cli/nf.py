@@ -6,9 +6,14 @@ import click
 import numpy as np
 
 from iohub.ngff import open_ome_zarr
-from iohub.ngff.utils import create_empty_plate
+from iohub.ngff.utils import create_empty_plate, process_single_position
 
-from biahub.cli.utils import _check_nan_n_zeros, estimate_resources, yaml_to_model
+from biahub.cli.utils import (
+    copy_position_metadata,
+    estimate_resources,
+    read_plate_metadata,
+    yaml_to_model,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,17 +46,7 @@ def init_flat_field(input_zarr: str, output_zarr: str, config: str):
     from biahub.settings import FlatFieldCorrectionSettings
 
     settings = yaml_to_model(Path(config), FlatFieldCorrectionSettings)
-
-    with open_ome_zarr(input_zarr, mode="r") as plate:
-        position_keys = []
-        channel_names = scale = None
-        T = C = Z = Y = X = 0
-        for name, pos in plate.positions():
-            position_keys.append(tuple(name.split("/")))
-            if channel_names is None:
-                channel_names = pos.channel_names
-                T, C, Z, Y, X = pos.data.shape
-                scale = pos.scale
+    position_keys, channel_names, shape, scale = read_plate_metadata(input_zarr)
 
     if settings.channel_names:
         for ch in settings.channel_names:
@@ -64,15 +59,16 @@ def init_flat_field(input_zarr: str, output_zarr: str, config: str):
         store_path=Path(output_zarr),
         position_keys=position_keys,
         channel_names=channel_names,
-        shape=(T, C, Z, Y, X),
+        shape=shape,
         chunks=None,
         scale=scale,
         version="0.5",
         dtype=np.float32,
     )
+    copy_position_metadata(Path(input_zarr), Path(output_zarr))
     click.echo(f"Created {output_zarr} ({len(position_keys)} positions)")
 
-    num_cpus, mem_per_cpu = estimate_resources(shape=(T, C, Z, Y, X), ram_multiplier=5)
+    num_cpus, mem_per_cpu = estimate_resources(shape=shape, ram_multiplier=5)
     click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
 
 
@@ -81,16 +77,16 @@ def init_flat_field(input_zarr: str, output_zarr: str, config: str):
 @click.option("--output-zarr", "-o", required=True, type=click.Path(exists=True))
 @click.option("--position", "-p", required=True)
 @click.option("--config", "-c", required=True, type=click.Path(exists=True))
-@click.option("--num-processes", "-j", default=1, type=int)
+@click.option("--num-threads", "-j", default=1, type=int)
 def run_flat_field(
-    input_zarr: str, output_zarr: str, position: str, config: str, num_processes: int
+    input_zarr: str, output_zarr: str, position: str, config: str, num_threads: int
 ):
     """Apply flat-field correction to a single position (all timepoints)."""
-    from biahub.flat_field_correction import process_single_position_flat_field
+    from biahub.flat_field_correction import czyx_flat_field_correction
     from biahub.settings import FlatFieldCorrectionSettings
 
     input_position = Path(input_zarr) / position
-    output_zarr_path = Path(output_zarr)
+    output_position = Path(output_zarr) / position
     settings = yaml_to_model(Path(config), FlatFieldCorrectionSettings)
 
     with open_ome_zarr(str(input_position), mode="r") as ds:
@@ -98,11 +94,13 @@ def run_flat_field(
 
     channel_names = settings.channel_names if settings.channel_names else all_channel_names
 
-    process_single_position_flat_field(
-        input_data_path=input_position,
-        output_path=output_zarr_path,
+    process_single_position(
+        czyx_flat_field_correction,
+        input_position,
+        output_position,
+        num_threads=num_threads,
         channel_names=channel_names,
-        num_processes=num_processes,
+        all_channel_names=all_channel_names,
     )
 
     click.echo(f"Flat-field done: {position}")
@@ -123,16 +121,8 @@ def init_deskew(input_zarr: str, output_zarr: str, config: str):
     from biahub.settings import DeskewSettings
 
     settings = yaml_to_model(Path(config), DeskewSettings)
-
-    with open_ome_zarr(input_zarr, mode="r") as plate:
-        position_keys = []
-        channel_names = None
-        T = C = Z = Y = X = 0
-        for name, pos in plate.positions():
-            position_keys.append(tuple(name.split("/")))
-            if channel_names is None:
-                channel_names = pos.channel_names
-                T, C, Z, Y, X = pos.data.shape
+    position_keys, channel_names, shape, _ = read_plate_metadata(input_zarr)
+    T, C, Z, Y, X = shape
 
     deskewed_shape, voxel_size = get_deskewed_data_shape(
         (Z, Y, X),
@@ -150,11 +140,10 @@ def init_deskew(input_zarr: str, output_zarr: str, config: str):
         shape=(T, C) + deskewed_shape,
         scale=(1, 1) + voxel_size,
     )
+    copy_position_metadata(Path(input_zarr), Path(output_zarr))
     click.echo(f"Created {output_zarr} ({len(position_keys)} positions)")
 
-    num_cpus, mem_per_cpu = estimate_resources(
-        shape=(T, C, Z, Y, X), ram_multiplier=16, max_num_cpus=16
-    )
+    num_cpus, mem_per_cpu = estimate_resources(shape=shape, ram_multiplier=16, max_num_cpus=16)
     click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
 
 
@@ -165,39 +154,25 @@ def init_deskew(input_zarr: str, output_zarr: str, config: str):
 @click.option("--config", "-c", required=True, type=click.Path(exists=True))
 def run_deskew(input_zarr: str, output_zarr: str, position: str, config: str):
     """Deskew a single position (all timepoints and channels)."""
-    from biahub.deskew import deskew_zyx
+    from biahub.deskew import _czyx_deskew_data
     from biahub.settings import DeskewSettings
 
     input_position = Path(input_zarr) / position
     output_position = Path(output_zarr) / position
     settings = yaml_to_model(Path(config), DeskewSettings)
 
-    deskew_kwargs = {
-        "ls_angle_deg": settings.ls_angle_deg,
-        "px_to_scan_ratio": settings.px_to_scan_ratio,
-        "keep_overhang": settings.keep_overhang,
-        "average_n_slices": settings.average_n_slices,
-    }
-
-    with open_ome_zarr(str(input_position), mode="r") as input_ds:
-        T, C, _, _, _ = input_ds.data.shape
-
-        for t_idx in range(T):
-            for c_idx in range(C):
-                click.echo(f"Deskewing {position} t={t_idx} c={c_idx}")
-                zyx_data = np.asarray(input_ds.data[t_idx, c_idx])
-
-                if _check_nan_n_zeros(zyx_data):
-                    click.echo("  Skipping (empty)")
-                    continue
-
-                deskewed = deskew_zyx(zyx_data, **deskew_kwargs)
-
-                with open_ome_zarr(str(output_position), mode="r+") as output_ds:
-                    output_ds[0][t_idx, c_idx] = deskewed
-
-    with open_ome_zarr(str(output_position), mode="r+") as output_ds:
-        output_ds.zattrs["extra_metadata"] = {"deskew": settings.model_dump()}
+    process_single_position(
+        _czyx_deskew_data,
+        input_position,
+        output_position,
+        num_threads=1,
+        ls_angle_deg=settings.ls_angle_deg,
+        px_to_scan_ratio=settings.px_to_scan_ratio,
+        keep_overhang=settings.keep_overhang,
+        average_n_slices=settings.average_n_slices,
+        overhang_fill=settings.overhang_fill,
+        extra_metadata={"deskew": settings.model_dump()},
+    )
 
     click.echo(f"Deskew done: {position}")
 
@@ -236,8 +211,8 @@ def _upsampled_zyx(settings, zyx_shape: tuple[int, int, int]) -> tuple[int, int,
 @click.option("--input-zarr", "-i", required=True, type=click.Path(exists=True))
 @click.option("--output-zarr", "-o", required=True, type=click.Path())
 @click.option("--config", "-c", required=True, type=click.Path(exists=True))
-@click.option("--num-processes", "-j", default=1, type=int)
-def init_reconstruct(input_zarr: str, output_zarr: str, config: str, num_processes: int):
+@click.option("--num-threads", "-j", default=1, type=int)
+def init_reconstruct(input_zarr: str, output_zarr: str, config: str, num_threads: int):
     """Create empty output zarr and estimate resources for reconstruction."""
     from waveorder.cli.apply_inverse_transfer_function import (
         get_reconstruction_output_metadata,
@@ -247,16 +222,9 @@ def init_reconstruct(input_zarr: str, output_zarr: str, config: str, num_process
     from waveorder.cli.utils import estimate_resources as wo_estimate_resources
 
     config_path = Path(config)
-
-    with open_ome_zarr(input_zarr, mode="r") as plate:
-        position_keys = []
-        first_position_path = None
-        T = C = Z = Y = X = 0
-        for name, pos in plate.positions():
-            position_keys.append(tuple(name.split("/")))
-            if first_position_path is None:
-                first_position_path = Path(input_zarr) / name
-                T, C, Z, Y, X = pos.data.shape
+    position_keys, _, shape, _ = read_plate_metadata(input_zarr)
+    T, C, Z, Y, X = shape
+    first_position_path = Path(input_zarr) / "/".join(position_keys[0])
 
     output_metadata = get_reconstruction_output_metadata(first_position_path, config_path)
 
@@ -265,10 +233,11 @@ def init_reconstruct(input_zarr: str, output_zarr: str, config: str, num_process
         position_keys=position_keys,
         **output_metadata,
     )
+    copy_position_metadata(Path(input_zarr), Path(output_zarr))
     click.echo(f"Created {output_zarr} ({len(position_keys)} positions)")
 
     settings = yaml_to_model(config_path, ReconstructionSettings)
-    num_cpus, mem_per_cpu = wo_estimate_resources([T, C, Z, Y, X], settings, num_processes)
+    num_cpus, mem_per_cpu = wo_estimate_resources(list(shape), settings, num_threads)
     click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
 
     uZ, uY, uX = _upsampled_zyx(settings, (Z, Y, X))
@@ -289,14 +258,10 @@ def compute_transfer_function(input_zarr: str, tf_path: str, config: str):
     config_path = Path(config)
     tf_zarr = Path(tf_path)
 
-    with open_ome_zarr(input_zarr, mode="r") as plate:
-        first_position_path = None
-        for name, _ in plate.positions():
-            first_position_path = Path(input_zarr) / name
-            break
-
-    if first_position_path is None:
+    position_keys, _, _, _ = read_plate_metadata(input_zarr)
+    if not position_keys:
         raise click.ClickException(f"Input plate '{input_zarr}' contains no positions.")
+    first_position_path = Path(input_zarr) / "/".join(position_keys[0])
 
     click.echo(f"Computing transfer function from {first_position_path}")
     compute_transfer_function_cli(first_position_path, config_path, tf_zarr)
@@ -309,14 +274,14 @@ def compute_transfer_function(input_zarr: str, tf_path: str, config: str):
 @click.option("--tf-path", "-t", required=True, type=click.Path(exists=True))
 @click.option("--position", "-p", required=True)
 @click.option("--config", "-c", required=True, type=click.Path(exists=True))
-@click.option("--num-processes", "-j", default=1, type=int)
+@click.option("--num-threads", "-j", default=1, type=int)
 def run_apply_inv_tf(
     input_zarr: str,
     output_zarr: str,
     tf_path: str,
     position: str,
     config: str,
-    num_processes: int,
+    num_threads: int,
 ):
     """Apply inverse transfer function to a single position."""
     from waveorder.cli.apply_inverse_transfer_function import (
@@ -335,7 +300,7 @@ def run_apply_inv_tf(
         Path(tf_path),
         config_path,
         output_position,
-        num_processes,
+        num_threads,
         output_metadata["channel_names"],
     )
     click.echo(f"Reconstruction done: {position}")
@@ -360,15 +325,8 @@ def init_virtual_stain(input_zarr: str, output_zarr: str, config: str):
     target_channels = cfg["data"]["init_args"]["target_channel"]
     prediction_channels = [f"{ch}_prediction" for ch in target_channels]
 
-    with open_ome_zarr(input_zarr, mode="r") as plate:
-        position_keys = []
-        T = C = Z = Y = X = 0
-        scale = None
-        for name, pos in plate.positions():
-            position_keys.append(tuple(name.split("/")))
-            if scale is None:
-                T, C, Z, Y, X = pos.data.shape
-                scale = pos.scale
+    position_keys, _, shape, scale = read_plate_metadata(input_zarr)
+    T, _, Z, Y, X = shape
 
     create_empty_plate(
         store_path=Path(output_zarr),
@@ -379,6 +337,7 @@ def init_virtual_stain(input_zarr: str, output_zarr: str, config: str):
         version="0.5",
         dtype=np.float32,
     )
+    copy_position_metadata(Path(input_zarr), Path(output_zarr))
     click.echo(
         f"Created {output_zarr} ({len(position_keys)} positions, "
         f"channels={prediction_channels})"
@@ -402,9 +361,11 @@ def copy_virtual_stain(temp_zarr: str, output_zarr: str, position: str):
 
     with open_ome_zarr(str(temp_position), mode="r") as src:
         src_data = np.asarray(src[0][:])
+        src_attrs = dict(src.zattrs)
 
     with open_ome_zarr(str(output_position), mode="r+") as dst:
         dst[0][:] = src_data
+        dst.zattrs.update(src_attrs)
 
     shutil.rmtree(temp_zarr)
     click.echo(f"Virtual stain copied: {position}")

@@ -59,7 +59,7 @@ Run `nextflow` from your project's pipeline directory so that `.nextflow.log`, `
 | `--flat_field_config` | YAML config for `FlatFieldCorrectionSettings` |
 | `--deskew_config` | YAML config for `DeskewSettings` |
 | `--reconstruct_config` | YAML config for waveorder `ReconstructionSettings` |
-| `--num_processes` | Intra-position parallelism for reconstruction (default: 1) |
+| `--num_threads` | Intra-position parallelism for reconstruction (default: 1) |
 | `--biahub_project` | Path to biahub repo root for `uv run` (optional; see [Environment setup](#environment-setup)) |
 | `--viscy_project` | Path to VisCy repo root for `uv run` (optional; falls back to installing from git) |
 | `--predict_config` | YAML config for VisCy virtual stain prediction (optional; enables virtual stain step) |
