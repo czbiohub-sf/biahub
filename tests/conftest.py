@@ -166,6 +166,7 @@ def create_custom_plate():
         z_size=4,
         y_size=5,
         x_size=6,
+        version="0.4",
     ):
         """
         Create a plate with custom channel names
@@ -177,6 +178,7 @@ def create_custom_plate():
             z_size: Size of Z dimension (default: 4)
             y_size: Size of Y dimension (default: 5)
             x_size: Size of X dimension (default: 6)
+            version: OME-NGFF version ("0.4" or "0.5", default: "0.4")
 
         Returns:
             Tuple of (plate_path, plate_dataset)
@@ -189,6 +191,7 @@ def create_custom_plate():
             layout="hcs",
             mode="w",
             channel_names=channel_names,
+            version=version,
         )
 
         for row, col, fov in position_list:

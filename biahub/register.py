@@ -10,6 +10,7 @@ import scipy.ndimage
 import submitit
 
 from iohub import open_ome_zarr
+from iohub.ngff.utils import create_empty_plate
 
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
@@ -24,7 +25,6 @@ from biahub.cli.parsing import (
 )
 from biahub.cli.utils import (
     copy_n_paste_czyx,
-    create_empty_hcs_zarr,
     estimate_resources,
     process_single_position_v2,
     yaml_to_model,
@@ -497,10 +497,21 @@ def register_cli(
         "dtype": np.float32,
     }
 
+    # Detect input zarr version to preserve it in output
+    input_version = "0.4"
+    try:
+        source_plate_path = Path(source_position_dirpaths[0]).parent.parent.parent
+        with open_ome_zarr(source_plate_path, mode="r") as input_plate:
+            input_version = input_plate.version
+    except (RuntimeError, FileNotFoundError):
+        # Position is not part of a plate, use default version
+        pass
+
     # Create the output zarr mirroring source_position_dirpaths
-    create_empty_hcs_zarr(
+    create_empty_plate(
         store_path=output_dirpath,
         position_keys=[p.parts[-3:] for p in source_position_dirpaths],
+        version=input_version,
         **output_metadata,
     )
 
