@@ -112,6 +112,9 @@ ignore = [
     "D105",  # Missing docstring in magic method
 ]
 
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["D"]
+
 [tool.ruff.lint.pydocstyle]
 convention = "numpy"
 
