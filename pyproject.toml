@@ -68,7 +68,7 @@ dev = [
   "pre-commit~=4.2",
 ]
 doc = [
-    "zensical>=0.0.11",
+    "zensical>=0.0.32",
     "mkdocs-click>=0.8",
 ]
 

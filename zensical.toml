@@ -83,6 +83,7 @@ variant = "modern"
 #primary = "indigo"
 #accent = "indigo"
 
+
 # Zensical allows you to override specific blocks, partials, or whole
 # templates as well as to define your own templates. To do this, uncomment
 # the custom_dir setting below and set it to a directory in which you
@@ -301,9 +302,9 @@ toggle.name = "Switch to light mode"
 # - https://zensical.org/docs/setup/logo-and-icons
 # - https://zensical.org/docs/authoring/icons-emojis/#search
 # ----------------------------------------------------------------------------
-#[project.theme.icon]
-#logo = "lucide/smile"
-#repo = "lucide/smile"
+[project.theme.icon]
+logo = "lucide/microscope"
+repo = "simple/github"
 
 # ----------------------------------------------------------------------------
 # The "extra" section contains miscellaneous settings.
