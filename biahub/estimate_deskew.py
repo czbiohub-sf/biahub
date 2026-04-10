@@ -15,10 +15,9 @@ from biahub.settings import DeskewSettings
 @input_position_dirpaths()
 @output_filepath()
 def estimate_deskew_cli(input_position_dirpaths, output_filepath):
-    """
-    Routine for estimating deskewing parameters from calibration data.
+    """Routine for estimating deskewing parameters from calibration data.
 
-    >> biahub estimate-deskew -i ./input.zarr/0/0/0 -o ./deskew_params.yml
+    >>> biahub estimate-deskew -i ./input.zarr/0/0/0 -o ./deskew_params.yml
     """
     if not str(output_filepath).endswith((".yaml", ".yml")):
         raise ValueError("Output file must be a YAML file.")

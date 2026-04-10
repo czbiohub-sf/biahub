@@ -100,8 +100,9 @@ def validate_transforms(
     verbose: bool = False,
 ) -> list[ArrayLike]:
     """
-    Validate that a provided list of transforms do not deviate beyond the tolerance threshold
-    relative to the average transform within a given window size.
+    Validate that a provided list of transforms do not deviate beyond tolerance.
+
+    Relative to the average transform within a given window size.
 
     Parameters
     ----------
@@ -253,8 +254,10 @@ def check_transforms_difference(
     verbose: bool = False,
 ):
     """
-    Evaluate the difference between two affine transforms by calculating the
-    Mean Squared Error (MSE) of a grid of points transformed by each matrix.
+    Evaluate the difference between two affine transforms.
+
+    Calculates the Mean Squared Error (MSE) of a grid of points transformed
+    by each matrix.
 
     Parameters
     ----------
@@ -306,6 +309,7 @@ def evaluate_transforms(
 ) -> ArrayLike:
     """
     Evaluate a list of affine transformation matrices.
+
     Transform matrices are checked for deviation from the average within a given window size.
     If a transform is found to lead to shift larger than the given tolerance,
     that transform will be replaced by interpolation of valid transforms within a given window size.
@@ -332,7 +336,6 @@ def evaluate_transforms(
     list[ArrayLike]
         List of affine transformation matrices with missing values filled via linear interpolation.
     """
-
     if not isinstance(transforms, list):
         transforms = transforms.tolist()
     if len(transforms) < validation_window_size:
@@ -434,6 +437,7 @@ def plot_translations(
         List of affine transformation matrices (4x4), one for each timepoint.
     output_filepath : Path
         Path to the output plot file.
+
     Returns
     -------
     None
@@ -463,7 +467,7 @@ def plot_translations(
 
 
 def convert_transform_to_ants(T_numpy: np.ndarray):
-    """Homogeneous 3D transformation matrix from numpy to ants
+    """Homogeneous 3D transformation matrix from numpy to ants.
 
     Parameters
     ----------
@@ -487,7 +491,7 @@ def convert_transform_to_ants(T_numpy: np.ndarray):
 
 def convert_transform_to_numpy(T_ants):
     """
-    Convert the ants transformation matrix to numpy 3D homogenous transform
+    Convert the ants transformation matrix to numpy 3D homogenous transform.
 
     Modified from Jordao's dexp code
 
@@ -501,7 +505,6 @@ def convert_transform_to_numpy(T_ants):
         Converted Ants to numpy array
 
     """
-
     T_numpy = T_ants.parameters.reshape((3, 4), order="F")
     T_numpy[:, :3] = T_numpy[:, :3].transpose()
     T_numpy = np.vstack((T_numpy, np.array([0, 0, 0, 1])))
@@ -586,7 +589,7 @@ def find_overlapping_volume(
     plot: bool = False,
 ) -> tuple:
     """
-    Find the overlapping rectangular volume after registration of two 3D datasets
+    Find the overlapping rectangular volume after registration of two 3D datasets.
 
     Parameters
     ----------
@@ -605,7 +608,6 @@ def find_overlapping_volume(
         ZYX slices of the overlapping volume after registration
 
     """
-
     # Make dummy volumes
     moving_volume = np.ones(tuple(input_zyx_shape), dtype=np.float32)
     fixed_volume = np.ones(tuple(target_zyx_shape), dtype=np.float32)
@@ -687,7 +689,7 @@ def get_3D_rotation_matrix(
     start_shape_zyx: tuple, angle: float = 0.0, end_shape_zyx: tuple = None
 ) -> np.ndarray:
     """
-    Rotate Transformation Matrix
+    Rotate Transformation Matrix.
 
     Parameters
     ----------
@@ -779,7 +781,7 @@ def apply_affine_transform(
     interpolation: str = "linear",
     crop_output_slicing: bool = None,
 ) -> np.ndarray:
-    """_summary_
+    """_summary_.
 
     Parameters
     ----------
@@ -801,7 +803,6 @@ def apply_affine_transform(
     np.ndarray
         registered zyx data
     """
-
     Z, Y, X = output_shape_zyx
     if crop_output_slicing is not None:
         Z_slice, Y_slice, X_slice = crop_output_slicing
@@ -946,7 +947,6 @@ def match_shape(
     ArrayLike
         Padded or cropped array.
     """
-
     if np.any(shape > img.shape):
         padded_shape = np.maximum(img.shape, shape)
         img = pad_to_shape(img, padded_shape, mode="reflect")

@@ -29,8 +29,9 @@ def list_of_nd_slices_from_array_shape(
     array_shape: tuple[int, int, int], chunk_shape: tuple[int, int, int]
 ) -> list[tuple[slice, slice, slice]]:
     """
-    Return a list of slices dividing an array of shape `array_shape`
-    into chunks of shape `chunk_shape`.
+    Return a list of slices dividing an array into chunks.
+
+    Divides an array of shape `array_shape` into chunks of shape `chunk_shape`.
 
     Example:
         list_of_nd_slices_from_array_shape((4, 5, 6), (2, 3, 4))
@@ -179,7 +180,6 @@ def get_output_shape(
     Tuple[int, int, int]
         Output shape of the stitched image in (z, y, x) order.
     """
-
     z_shifts = [shift[0] for shift in shifts.values()]
     y_shifts = [shift[1] for shift in shifts.values()]
     x_shifts = [shift[2] for shift in shifts.values()]
@@ -342,13 +342,12 @@ def stitch_cli(
     debug: bool = False,
     monitor: bool = False,
 ) -> None:
-    """
-    Stitch FOVs in each well together into a single FOV.
+    """Stitch FOVs in each well together into a single FOV.
+
     Uses shift from configuration file generated with `biahub estimate-stitch`.
 
-    >> biahub stitch -i ./input.zarr/*/*/* -c ./config.yaml -o ./output.zarr
+    >>> biahub stitch -i ./input.zarr/*/*/* -c ./config.yaml -o ./output.zarr
     """
-
     click.echo("Starting stitching...")
     settings = yaml_to_model(config_filepath, StitchSettings)
     input_plate = open_ome_zarr(input_position_dirpaths[0].parents[2], mode="r")

@@ -101,8 +101,7 @@ def estimate_stitch_cli(
     local: bool,
     monitor: bool,
 ):
-    """
-    Estimate stitching parameters for positions in wells of a zarr store.
+    """Estimate stitching parameters for positions in wells of a zarr store.
 
     This routine uses micro-manager stage position metadata and iohub scale
     metadata to generate translation parameters for stitching. Translations are

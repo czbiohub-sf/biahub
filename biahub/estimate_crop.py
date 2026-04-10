@@ -48,6 +48,7 @@ def estimate_crop_one_position(
         Radius of the circular mask which will be applied to the phase channel. If None, no masking will be applied
     output_dir : Path
         Path to save the output CSV file.
+
     Returns
     -------
     tuple
@@ -156,7 +157,7 @@ def estimate_crop(
     """
     Estimate a crop region where both phase and fluorescene volumes are non-zero.
 
-    Parameters:
+    Parameters
     ----------
     config_filepath : str
         Path to a yaml ConcatenateSettings file.
@@ -303,24 +304,12 @@ def estimate_crop_cli(
     sbatch_filepath: str = None,
     local: bool = False,
 ):
-    """
-    Estimate a crop region where both phase and fluorescene volumes are non-zero.
+    """Estimate a crop region where both phase and fluorescence volumes are non-zero.
 
-    Parameters:
-    ----------
-    config_filepath : str
-        Path to a yaml ConcatenateSettings file.
-        This file will be replicated in the output with modified XYZ slicing parametrs.
-    output_filepath : str
-        Path to save the output config file.
-    lf_mask_radius : float
-        Radius of the circular mask given as fraction of image width to apply to the phase channel.
-        A good value if 0.95.
-    sbatch_filepath : str
-        Path to a SLURM submission script.
-    local : bool
-        If True, run the jobs locally.
-
+    >>> biahub estimate-crop \
+        -c ./concat.yml \
+        -o ./cropped_concat.yml \
+        --local
     """
     estimate_crop(
         config_filepath=config_filepath,

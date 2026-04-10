@@ -35,9 +35,7 @@ from biahub.vendor.napari_psf_analysis.psf_analysis.utils import fwhm
 
 
 class ZFitter:
-    """
-    Fit a 1D Gaussian to the Z pixel column centered in the YX plane.
-    """
+    """Fit a 1D Gaussian to the Z pixel column centered in the YX plane."""
 
     image: Calibrated3DImage
     _estimator: ZEstimator

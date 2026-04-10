@@ -28,6 +28,7 @@ def get_submitit_cluster(local: bool = False) -> str:
 def update_model(model_instance, update_dict):
     """
     Properly updates a Pydantic model with only the provided values while keeping the defaults.
+
     This ensures that nested models retain missing values instead of getting overwritten.
     """
     updated_fields = {}
@@ -57,8 +58,10 @@ def create_empty_hcs_zarr(
 ) -> None:
     """
     If the plate does not exist, create an empty zarr plate.
+
     If the plate exists, append positions and channels if they are not
     already in the plate.
+
     Parameters
     ----------
     store_path : Path
@@ -129,7 +132,7 @@ def get_output_paths(
     input_paths: list[Path], output_zarr_path: Path, ensure_unique_positions: bool = None
 ) -> list[Path]:
     """
-    Generates a mirrored output path list given an input list of positions
+    Generate a mirrored output path list given an input list of positions.
 
     Parameters
     ----------
@@ -187,7 +190,7 @@ def get_output_paths(
 def apply_function_to_zyx_and_save(
     func, position: Position, output_path: Path, t_idx: int, c_idx: int, **kwargs
 ) -> None:
-    """Load a zyx array from a Position object, apply a transformation and save the result to file"""
+    """Load a zyx array from a Position object, apply a transformation and save the result to file."""
     click.echo(f"Processing c={c_idx}, t={t_idx}")
 
     zyx_data = position[0][t_idx, c_idx]
@@ -215,8 +218,7 @@ def apply_transform_to_zyx_and_save_v2(
     c_idx: int = None,
     **kwargs,
 ) -> None:
-    """Load a zyx array from a Position object, apply a transformation to CZYX or ZYX and save the result to file"""
-
+    """Load a zyx array from a Position object, apply a transformation to CZYX or ZYX and save the result to file."""
     # TODO: temporary fix to slumkit issue
     if _is_nested(input_channel_indices):
         input_channel_indices = [int(x) for x in input_channel_indices if x.isdigit()]
@@ -267,7 +269,7 @@ def process_single_position(
     num_processes: int = mp.cpu_count(),
     **kwargs,
 ) -> None:
-    """Register a single position with multiprocessing parallelization over T and C"""
+    """Register a single position with multiprocessing parallelization over T and C."""
     # Function to be applied
     click.echo(f"Function to be applied: \t{func}")
 
@@ -328,7 +330,7 @@ def process_single_position_v2(
     num_processes: int = mp.cpu_count(),
     **kwargs,
 ) -> None:
-    """Register a single position with multiprocessing parallelization over T and C"""
+    """Register a single position with multiprocessing parallelization over T and C."""
     if time_indices is None:
         time_indices = [0]
     if time_indices_out is None:
@@ -427,7 +429,7 @@ def process_single_position_v2(
 
 def copy_n_paste(zyx_data: np.ndarray, zyx_slicing_params: list) -> np.ndarray:
     """
-    Load a zyx array and crop given a list of ZYX slices()
+    Load a zyx array and crop given a list of ZYX slices().
 
     Parameters
     ----------
@@ -454,7 +456,7 @@ def copy_n_paste(zyx_data: np.ndarray, zyx_slicing_params: list) -> np.ndarray:
 
 def copy_n_paste_czyx(czyx_data: np.ndarray, czyx_slicing_params: list) -> np.ndarray:
     """
-    Load a zyx array and crop given a list of ZYX slices()
+    Load a zyx array and crop given a list of ZYX slices().
 
     Parameters
     ----------
@@ -480,7 +482,7 @@ def copy_n_paste_czyx(czyx_data: np.ndarray, czyx_slicing_params: list) -> np.nd
 
 def append_channels(input_data_path: Path, target_data_path: Path) -> None:
     """
-    Append channels to a target zarr store
+    Append channels to a target zarr store.
 
     Parameters
     ----------
@@ -607,7 +609,7 @@ def _is_nested(lst):
 
 def _check_nan_n_zeros(input_array: np.ndarray) -> bool:
     """
-    Checks if data are all zeros or nan.
+    Check if data are all zeros or nan.
 
     Parameters
     ----------

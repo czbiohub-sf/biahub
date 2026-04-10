@@ -116,7 +116,6 @@ def fill_empty_frames(arr: ArrayLike, empty_frames_idx: list[int]) -> ArrayLike:
     >>> empty_frames_idx = [0, 4]
     >>> arr_filled = fill_empty_frames(arr, empty_frames_idx)
     """
-
     if not empty_frames_idx or not isinstance(empty_frames_idx, list):
         return arr
 
@@ -191,7 +190,6 @@ def get_empty_frames_idx_from_csv(blank_frame_df: pd.DataFrame, fov: str) -> lis
     >>> get_empty_frames_idx_from_csv(df, "A/1/1")
     [0, 2, 4]
     """
-
     empty_frames_idx = blank_frame_df[blank_frame_df["FOV"] == fov]["t"]
     if not empty_frames_idx.empty:
         t_value = empty_frames_idx.iloc[0]
@@ -676,6 +674,7 @@ def track_one_position(
     This function loads image data, applies a preprocessing pipeline, fills blank frames if needed,
     and uses the Ultrack library to compute object tracks. It is agnostic to the imaging source —
     as long as the pipeline produces a binary foreground mask and a corresponding contour map.
+
     Parameters
     ----------
     position_key : str
@@ -722,7 +721,6 @@ def track_one_position(
     ...     scale=(1, 1, 0.5, 0.2, 0.2),
     ... )
     """
-
     fov = "_".join(position_key)
     click.echo(f"Processing FOV: {fov.replace('_', '/')}")
     # tracking input images
@@ -771,7 +769,8 @@ def track(
     This function orchestrates the tracking of cell trajectories across multiple fields of view (FOVs).
     It supports any imaging modality, as long as preprocessing produces the required foreground mask
     and contour gradient map for tracking.
-        Parameters
+
+    Parameters
     ----------
     output_dirpath : str
         Path to the Zarr store where output labeled segmentations and track data will be saved.
@@ -940,19 +939,17 @@ def track_cli(
     sbatch_filepath: str = None,
     local: bool = None,
 ) -> None:
-    """
-    Track objects in 2D or 3D time-lapse microscopy data using configurable preprocessing.
+    """Track objects in 2D or 3D time-lapse microscopy data using configurable preprocessing.
 
     This command applies preprocessing, handles optional blank frame filling, and performs
     object tracking on each position using the Ultrack library. Compatible with any image
     modality as long as it produces 'foreground' and 'contour' inputs.
 
-    Example usage:
-
-    biahub track -i virtual_staining.zarr/*/*/* -o output.zarr -c config_tracking.yml
-
+    >>> biahub track \
+        -i virtual_staining.zarr/*/*/* \
+        -o output.zarr \
+        -c config_tracking.yml
     """
-
     track(
         output_dirpath=output_dirpath,
         config_filepath=config_filepath,

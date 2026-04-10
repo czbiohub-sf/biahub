@@ -10,13 +10,9 @@ from biahub.cli.parsing import input_position_dirpaths
 @click.option("-x", is_flag=True, help="Enable the x flag.")
 @click.option("-y", is_flag=True, help="Enable the y flag.")
 def flip_cli(input_position_dirpaths: list[str], x: bool, y: bool):
-    """
-    Flip the input position files in the specified direction.
+    """Flip the input position files in the specified direction.
 
-    Args:
-        input_position_dirpaths (List[str]): List of input position file paths.
-        x (bool): If True, flip in the x direction.
-        y (bool): If True, flip in the y direction.
+    >>> biahub flip -i ./input.zarr/*/*/* --x
     """
     for input_position_filepath in input_position_dirpaths:
         print(f"Flipping {input_position_filepath}")

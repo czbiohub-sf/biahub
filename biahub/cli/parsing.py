@@ -196,8 +196,9 @@ def sbatch_filepath_predict() -> Callable:
 
 
 def sbatch_to_submitit(filepath: str) -> dict:
-    """Reads a text configuration file and returns a dictionary of parameters
-    which can be passed to the submitit executor. This file can contain parameters
+    """Read a text configuration file and return a dictionary of parameters.
+
+    Which can be passed to the submitit executor. This file can contain parameters
     starting with #SBATCH to configure SLURM jobs or parameters starting with #LOCAL
     to configure local jobs. The submitit executor will only apply valid parameters
     and will, for example, ignore local parameters when running on SLURM.
@@ -224,7 +225,6 @@ def sbatch_to_submitit(filepath: str) -> dict:
     >>> print(dict)
     {'slurm_mem_per_cpu': '16G', 'slurm_time': '1:00:00', 'cpus_per_task': 1}
     """
-
     with open(filepath) as f:
         sbatch_file = f.readlines()
 

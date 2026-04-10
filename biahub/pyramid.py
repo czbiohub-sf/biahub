@@ -76,16 +76,13 @@ def pyramid_cli(
     sbatch_filepath: Path | None = None,
     local: bool = False,
 ) -> None:
-    """
-    Creates multi-scale pyramids for OME-Zarr datasets.
+    """Create multi-scale pyramids for OME-Zarr datasets.
 
     Uses cascade downsampling to generate progressively downscaled pyramid levels.
     Each level is 2x downsampled from the previous (e.g., levels=4 creates the original
     plus 2x, 4x, and 8x downsampled versions as arrays "0", "1", "2", "3").
 
-    Example:
-        biahub pyramid -i ./data.zarr/*/*/* --levels 4 --local
-        biahub pyramid -i ./data.zarr/0/0/0 -lv 5 --method max
+    >>> biahub pyramid -i ./data.zarr/*/*/* --levels 4 --local
     """
     if levels <= 1:
         click.echo("No pyramid levels to create (levels must be > 1).")

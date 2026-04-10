@@ -476,7 +476,6 @@ class Transform:
         Based on conversion from:
         https://sourceforge.net/p/advants/discussion/840261/thread/9fbbaab7/
         """
-
         params = T_ants.parameters
         fixed_params = T_ants.fixed_parameters
         if len(params) == 6:

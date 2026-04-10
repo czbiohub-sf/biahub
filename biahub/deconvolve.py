@@ -93,10 +93,13 @@ def deconvolve_cli(
     local: bool = False,
     monitor: bool = True,
 ):
-    """
-    Deconvolve across T and C axes using a PSF and a configuration file
+    """Deconvolve across T and C axes using a PSF and a configuration file.
 
-    >> biahub deconvolve -i ./input.zarr/*/*/* -p ./psf.zarr -c ./deconvolve_params.yml -o ./output.zarr
+    >>> biahub deconvolve \
+        -i ./input.zarr/*/*/* \
+        -p ./psf.zarr \
+        -c ./deconvolve_params.yml \
+        -o ./output.zarr
     """
     # Convert string paths to Path objects
     output_dirpath = Path(output_dirpath)

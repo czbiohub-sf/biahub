@@ -17,7 +17,7 @@ class ElementPosition(Enum):
 
 
 def get_contours(labels, thickness: int, background_label: int):
-    """Computes the contours of a 2D label image.
+    """Compute the contours of a 2D label image.
 
     Parameters
     ----------
@@ -51,10 +51,12 @@ def suggest_contrast_limits(intensity_array):
     """
     Suggest contrast limits for an array of pixel intensities.
 
-    Parameters:
+    Parameters
+    ----------
     intensity_array (numpy array): A flattened array of pixel intensity values (0-255).
 
-    Returns:
+    Returns
+    -------
     tuple: Suggested lower and upper contrast limits (1st percentile, 99th percentile).
     """
     if intensity_array.size == 0:
@@ -86,6 +88,7 @@ def _clear_overlays(viewer: napari.Viewer, layer_name: str = "scale_bar") -> Non
 def _clear_dim_callbacks(viewer: napari.Viewer) -> None:
     """
     Clear all custom callbacks from the viewer's dimension events.
+
     Preserves napari's internal callbacks.
 
     Parameters
@@ -120,7 +123,7 @@ def _create_positioned_element(
     line_length: float | None = None,
 ) -> None:
     """
-    Base function to create positioned elements (text overlays, scale bars, etc.) in the viewer.
+    Create positioned elements (text overlays, scale bars, etc.) in the viewer.
 
     Parameters
     ----------

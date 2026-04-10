@@ -35,7 +35,7 @@ def binning_czyx(
     mode: Literal["sum", "mean"] = "sum",
 ) -> np.ndarray:
     """
-    Binning via summing or averaging pixels within bin windows
+    Binning via summing or averaging pixels within bin windows.
 
     Parameters
     ----------
@@ -115,7 +115,7 @@ def process_czyx(
     processing_functions: list[ProcessingFunctions],
 ) -> np.ndarray:
     """
-    Process a CZYX image using processing functions
+    Process a CZYX image using processing functions.
 
     Parameters
     ----------
@@ -175,7 +175,6 @@ def process_with_config(
     monitor : bool, optional
         Whether to monitor jobs, by default True
     """
-
     # Convert to Path objects
     output_dirpath = Path(output_dirpath)
     config_filepath = Path(config_filepath)
@@ -333,11 +332,12 @@ def process_with_config_cli(
     local: bool = False,
     monitor: bool = True,
 ) -> None:
-    """
-    Process data with functions specified in the config file.
+    """Process data with functions specified in the config file.
 
-    Example usage:
-    biahub process-with-config -i ./timelapse.zarr/0/0/0 -c ./process_params.yml -o ./processed_timelapse.zarr
+    >>> biahub process-with-config \
+        -i ./timelapse.zarr/0/0/0 \
+        -c ./process_params.yml \
+        -o ./processed_timelapse.zarr
     """
     process_with_config(
         input_position_dirpaths=input_position_dirpaths,

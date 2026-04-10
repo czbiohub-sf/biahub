@@ -202,8 +202,8 @@ def analyze_psf(
     """
     Analyze point spread function (PSF) from given 3D patches.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     zyx_patches : List[ArrayLike]
         List of 3D image patches to be analyzed.
     peak_coordinates : List[tuple]
@@ -219,8 +219,8 @@ def analyze_psf(
     use_robust_1d_fwhm : bool
         If True, use the "robust" 1D FWHM calculation method.
 
-    Returns:
-    --------
+    Returns
+    -------
     df_gaussian_fit : pandas.DataFrame
         DataFrame containing the results of the Gaussian fit analysis.
     df_1d_peak_width : pandas.DataFrame
@@ -572,6 +572,7 @@ def detect_peaks(
     verbose: bool = False,
 ):
     """Detect peaks with local maxima.
+
     This is an approximate torch implementation of `skimage.feature.peak_local_max`.
     The algorithm works well with small kernel size, by default (8, 8, 8) which
     generates a large number of peak candidates, and strict peak rejection criteria
@@ -796,10 +797,12 @@ def characterize_psf_cli(
     config_filepath: Path,
     output_dirpath: str,
 ):
-    """
-    Characterize the point spread function (PSF) from bead images and output an html report
+    """Characterize the point spread function (PSF) from bead images and output an html report.
 
-    >> biahub characterize-psf -i ./beads.zarr/*/*/* -c ./characterize_params.yml -o ./
+    >>> biahub characterize-psf \
+        -i ./beads.zarr/*/*/* \
+        -c ./characterize_params.yml \
+        -o ./
     """
     if len(input_position_dirpaths) > 1:
         warnings.warn("Only the first position will be characterized.", stacklevel=2)

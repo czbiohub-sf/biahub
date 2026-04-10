@@ -44,7 +44,8 @@ def apply_stabilization_transform(
     This function applies a time-indexed stabilization transformation to a single 3D (Z, Y, X) volume
     or a 4D (C, Z, Y, X) volume using a precomputed list of transformations.
 
-    Parameters:
+    Parameters
+    ----------
     - zyx_data (np.ndarray): Input 3D (Z, Y, X) or 4D (C, Z, Y, X) volumetric data.
     - list_of_shifts (list[np.ndarray]): List of transformation matrices (one per time index).
     - t_idx (int): Time index corresponding to the transformation to apply.
@@ -52,16 +53,17 @@ def apply_stabilization_transform(
                                                      If None, the shape of `zyx_data` is used.
                                                      Defaults to None.
 
-    Returns:
+    Returns
+    -------
     - np.ndarray: The stabilized 3D (Z, Y, X) or 4D (C, Z, Y, X) volume.
 
-    Notes:
+    Notes
+    -----
     - If `zyx_data` is 4D, the function recursively applies stabilization to each channel (C).
     - Uses ANTsPy for applying the transformation to the input data.
     - Handles `NaN` values in the input by replacing them with 0 before applying the transformation.
     - Echoes the transformation matrix for debugging purposes when verbose logging is enabled.
     """
-
     if output_shape is None:
         output_shape = zyx_data.shape[-3:]
 
@@ -103,23 +105,26 @@ def stabilize(
     configuration settings. It supports both local processing and SLURM-based distributed
     processing and outputs a Zarr dataset with stabilized channels.
 
-    Parameters:
+    Parameters
+    ----------
     - input_position_dirpaths (List[str]): List of file paths to the input OME-Zarr datasets for each position.
     - output_dirpath (str): Directory path to save the stabilized output dataset.
     - config_filepaths (list[str]): Paths to the YAML configuration files containing transformation settings.
     - sbatch_filepath (str, optional): Path to a SLURM sbatch file to override default SLURM settings. Defaults to None.
     - local (bool, optional): If True, runs the stabilization process locally instead of submitting to SLURM. Defaults to False.
 
-    Returns:
+    Returns
+    -------
     - None: Writes the stabilized dataset to the specified output directory.
 
-    Notes:
+    Notes
+    -----
     - The function applies stabilization based on affine transformations specified in the configuration file.
     - Stabilization can estimate both YX and Z drifts and handles multi-channel data.
     - Input and output datasets must follow the OME-Zarr format.
 
     Example:
-    >> biahub stabilize-timelapse
+    >>> biahub stabilize-timelapse
         -i ./timelapse.zarr/0/0/0               # Input timelapse dataset
         -o ./stabilized_timelapse.zarr          # Output directory for stabilized data
         -c ./file_w_matrices.yml                # Configuration file with transformation matrices
@@ -127,7 +132,6 @@ def stabilize(
         --local                                 # Run locally instead of submitting to SLURM
 
     """
-
     # Single config file for all FOVs
 
     settings = yaml_to_model(config_filepaths[0], StabilizationSettings)
@@ -331,15 +335,13 @@ def stabilize_cli(
     local: bool,
     monitor: bool,
 ):
-    """
-    Stabilize a timelapse dataset by applying spatial transformations estimated by estimate-stabilization.
+    """Stabilize a timelapse dataset by applying spatial transformations estimated by estimate-stabilization.
 
-    Example:
-    >> biahub stabilize-timelapse
-        -i ./timelapse.zarr/0/0/0               # Input timelapse dataset
-        -o ./stabilized_timelapse.zarr          # Output directory for stabilized data
-        -c ./file_w_matrices.yml                # Configuration file with transformation matrices
-        --local                                 # Run locally instead of submitting to SLURM
+    >>> biahub stabilize-timelapse \
+        -i ./timelapse.zarr/0/0/0 \
+        -o ./stabilized_timelapse.zarr \
+        -c ./file_w_matrices.yml \
+        --local
     """
     stabilize(
         input_position_dirpaths=input_position_dirpaths,

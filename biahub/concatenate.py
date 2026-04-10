@@ -38,7 +38,8 @@ def get_path_slice_param(slice_param, path_index, total_paths):
         path_index: The index of the current path
         total_paths: The total number of paths
 
-    Returns:
+    Returns
+    -------
         The slice parameter for the current path
     """
     # Handle 'all' case
@@ -68,7 +69,8 @@ def create_path_slicing_params(path_z_slice, path_y_slice, path_x_slice, dataset
         path_x_slice: The X slice parameter for the path
         dataset_shape: The shape of the dataset
 
-    Returns:
+    Returns
+    -------
         A list of slice objects [z_slice, y_slice, x_slice]
     """
     z_slice = get_slice(path_z_slice, dataset_shape[2])
@@ -90,7 +92,8 @@ def get_channel_combiner_metadata(
         processing_channel_names: List of channel names to process
         slicing_params: List of slicing parameters [Z_slice, Y_slice, X_slice]
 
-    Returns:
+    Returns
+    -------
         Tuple of (all_data_paths, all_channel_names, input_channel_idx, output_channel_idx, all_slicing_params)
     """
     all_data_paths = []
@@ -185,7 +188,8 @@ def get_slice(slice_param, max_value: int):
         slice_param: Can be 'all' or a single slice range [start, end]
         max_value: Maximum value for the dimension
 
-    Returns:
+    Returns
+    -------
         A slice object
     """
     # Handle 'all' case
@@ -204,9 +208,7 @@ def get_slice(slice_param, max_value: int):
 
 
 def validate_slicing_params_zyx(slicing_params_zyx_list: list[list[slice, slice, slice]]):
-    """
-    Validate that all slicing parameters are the same for a given dimension
-    """
+    """Validate that all slicing parameters are the same for a given dimension."""
     first_slice_size = calculate_cropped_size(slicing_params_zyx_list[0])
     for i, slice_obj in enumerate(slicing_params_zyx_list[1:], 1):
         slice_size = calculate_cropped_size(slice_obj)
@@ -226,7 +228,8 @@ def calculate_cropped_size(
     Args:
         slice_params_zyx: A list of slice parameters for the Z, Y, and X dimensions
 
-    Returns:
+    Returns
+    -------
         A tuple of the size of the dimension after cropping for the Z, Y, and X dimensions
     """
     # Calculate the size of each dimension by taking the absolute difference between stop and start
@@ -460,12 +463,10 @@ def concatenate_cli(
     local: bool = False,
     monitor: bool = True,
 ):
-    """
-    Concatenate datasets (with optional cropping)
+    """Concatenate datasets (with optional cropping).
 
-    >> biahub concatenate -c ./concat.yml -o ./output_concat.zarr
+    >>> biahub concatenate -c ./concat.yml -o ./output_concat.zarr
     """
-
     concatenate(
         settings=yaml_to_model(config_filepath, ConcatenateSettings),
         output_dirpath=Path(output_dirpath),

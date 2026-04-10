@@ -95,7 +95,7 @@ target-version = "py311"
 exclude = ["archive", "examples", "scripts", "notebooks"]
 
 [tool.ruff.lint]
-select = ["F", "E", "W", "I", "N", "UP", "B"]
+select = ["F", "E", "W", "I", "N", "UP", "B", "D"]
 
 ignore = [
     "E501",  # Line too long (handled by formatter)
@@ -104,7 +104,16 @@ ignore = [
     "N806",  # Variable in function should be lowercase (scientific code uses uppercase)
     "N815",  # Variable in class scope should not be mixedCase
     "N999",  # Invalid module name (vendored BeadExtractor.py)
+    "D100",  # Missing docstring in public module
+    "D101",  # Missing docstring in public class
+    "D102",  # Missing docstring in public method
+    "D103",  # Missing docstring in public function
+    "D104",  # Missing docstring in public package
+    "D105",  # Missing docstring in magic method
 ]
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
 
 [tool.ruff.lint.isort]
 lines-between-types = 1

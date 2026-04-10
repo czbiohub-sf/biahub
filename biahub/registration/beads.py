@@ -267,7 +267,6 @@ def overlap_score(
     float
         Overlap fraction in [0, 1]. Returns np.nan if either peak set is empty.
     """
-
     if len(mov_peaks) == 0 or len(ref_peaks) == 0:
         click.echo("No peaks found, returning nan metrics")
         return np.nan
@@ -586,6 +585,7 @@ def peaks_from_beads(
         If True, prints detailed logs during the process.
     mask_path : Path
         Path to the mask file.
+
     Returns
     -------
     tuple[ArrayLike, ArrayLike]
@@ -739,8 +739,9 @@ def transform_from_matches(
     verbose: bool = False,
 ) -> tuple[Transform, Transform]:
     """
-    Estimate the affine transformation matrix between source and target channels
-    based on detected bead matches at a specific timepoint.
+    Estimate the affine transformation matrix between source and target channels.
+
+    Based on detected bead matches at a specific timepoint.
 
     Parameters
     ----------
@@ -1041,7 +1042,6 @@ def estimate(
         The best transform found across all iterations. Falls back to the
         initial approximate transform if no valid optimization was found.
     """
-
     if _check_nan_n_zeros(mov) or _check_nan_n_zeros(ref):
         click.echo("Skipping: moving or reference data contains only NaN/zeros.")
         return

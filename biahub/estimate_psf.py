@@ -25,10 +25,9 @@ def estimate_psf_cli(
     config_filepath: Path,
     output_dirpath: str,
 ):
-    """
-    Estimate the point spread function (PSF) from bead images
+    """Estimate the point spread function (PSF) from bead images.
 
-    >> biahub estimate-psf -i ./beads.zarr/*/*/* -c ./psf_params.yml -o ./psf.zarr
+    >>> biahub estimate-psf -i ./beads.zarr/*/*/* -c ./psf_params.yml -o ./psf.zarr
     """
     # Convert string paths to Path objects
     output_dirpath = Path(output_dirpath)

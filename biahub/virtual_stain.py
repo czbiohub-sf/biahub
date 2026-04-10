@@ -33,6 +33,7 @@ def run_viscy_preprocess(
 ):
     """
     Run VisCy preprocess on a single FOV.
+
     Parameters
     ----------
     data_path : str
@@ -73,6 +74,7 @@ def run_viscy_predict(
 ):
     """
     Run VisCy predict on a single FOV.
+
     Parameters
     ----------
     data_path : str
@@ -410,16 +412,15 @@ def virtual_stain_cli(
     monitor: bool = True,
     verbose: bool = True,
 ):
-    """
-    Run VisCy virtual staining on a zarr plate from dedicated python environment.
-    Example:
-    biahub virtual-stain \
+    """Run VisCy virtual staining on a zarr plate from dedicated python environment.
+
+    >>> biahub virtual-stain \
         --input-position-dirpaths path.zarr/*/*/* \
         --output-dirpath output.zarr \
         --predict-config-filepath predict.yml \
         --preprocess-config-filepath preprocess.yml \
         --path-viscy-env /path/to/viscy/env \
-        --run-mode all \
+        --run-mode all
     """
     virtual_stain(
         input_position_dirpaths=input_position_dirpaths,

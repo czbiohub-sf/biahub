@@ -19,7 +19,7 @@ MSECS_PER_MINUTE = 60000
 
 
 def plot_bleaching_curves(times, tczyx_data, channel_names, output_file, title=""):
-    """Plots bleaching curves and estimates bleaching lifetimes
+    """Plot bleaching curves and estimate bleaching lifetimes.
 
     Parameters
     ----------
@@ -106,12 +106,10 @@ def plot_bleaching_curves(times, tczyx_data, channel_names, output_file, title="
 @input_position_dirpaths()
 @output_dirpath()
 def estimate_bleaching_cli(input_position_dirpaths, output_dirpath):
-    """
-    Estimate bleaching from raw data
+    """Estimate bleaching from raw data.
 
-    >> biahub estimate-bleaching -i ./input.zarr/0/0/0 -o ./bleaching-curves/
+    >>> biahub estimate-bleaching -i ./input.zarr/0/0/0 -o ./bleaching-curves/
     """
-
     # Read plate metadata if it exists
     try:
         plate_path = Path(*Path(input_position_dirpaths[0]).parts[:-3])

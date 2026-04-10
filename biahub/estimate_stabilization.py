@@ -134,7 +134,7 @@ def phase_cross_corr_padding(
     verbose: bool = False,
 ) -> tuple[int, ...]:
     """
-    Borrowing from Jordao dexpv2.crosscorr https://github.com/royerlab/dexpv2
+    Borrowing from Jordao dexpv2.crosscorr https://github.com/royerlab/dexpv2.
 
     Computes translation shift using arg. maximum of phase cross correlation.
     Input are padded or cropped for fast FFT computation assuming a maximum translation shift.
@@ -203,7 +203,7 @@ def phase_cross_corr(
     verbose: bool = False,
 ) -> tuple[int, ...]:
     """
-    Borrowing from Jordao dexpv2.crosscorr https://github.com/royerlab/dexpv2
+    Borrowing from Jordao dexpv2.crosscorr https://github.com/royerlab/dexpv2.
 
     Computes translation shift using arg. maximum of phase cross correlation.
     Input are padded or cropped for fast FFT computation assuming a maximum translation shift.
@@ -224,7 +224,6 @@ def phase_cross_corr(
     Tuple[int, ...]
         Shift between reference and moved image.
     """
-
     Fimg1 = np.fft.rfftn(ref_img)
     Fimg2 = np.fft.rfftn(mov_img)
     eps = np.finfo(Fimg1.dtype).eps
@@ -284,7 +283,6 @@ def get_tform_from_pcc(
     ArrayLike
         Transformation matrix.
     """
-
     target = np.asarray(source_channel_tzyx[t]).astype(np.float32)
     source = np.asarray(target_channel_tzyx[t]).astype(np.float32)
 
@@ -320,7 +318,7 @@ def plot_pcc_drifts(
     voxel_size: tuple[float, float, float] = (0.174, 0.1494, 0.1494),  # (Z, Y, X) in microns
 ) -> None:
     """
-    Plot the drifts from PCC per timepoint for a single position
+    Plot the drifts from PCC per timepoint for a single position.
 
     Parameters
     ----------
@@ -334,6 +332,7 @@ def plot_pcc_drifts(
         Title for the plot.
     voxel_size : Tuple[float, float, float]
         Voxel size in microns.
+
     Returns
     -------
     None
@@ -401,7 +400,7 @@ def plot_corr_max_min_sum(
     corr_df: pd.DataFrame, output_path: Path, label="sample", title="Cross-Correlation Summary"
 ) -> None:
     """
-    Plot the max, min, and sum of the cross-correlation from PCC per timepoint for a single position
+    Plot the max, min, and sum of the cross-correlation from PCC per timepoint for a single position.
 
     Parameters
     ----------
@@ -621,7 +620,6 @@ def estimate_xyz_stabilization_pcc(
     dict[str, list[ArrayLike]]
         Dictionary of the xyz stabilization for each position.
     """
-
     input_position_dirpaths = remove_beads_fov_from_path_list(
         input_position_dirpaths, phase_cross_corr_settings.skip_beads_fov
     )
@@ -806,7 +804,6 @@ def estimate_xy_stabilization(
     dict[str, list[ArrayLike]]
         Dictionary of the xy stabilization for each position.
     """
-
     input_position_dirpaths = remove_beads_fov_from_path_list(
         input_position_dirpaths, stack_reg_settings.skip_beads_fov
     )
@@ -1063,6 +1060,7 @@ def estimate_z_stabilization(
 ) -> dict[str, list[ArrayLike]]:
     """
     Estimate the z stabilization for a list of positions.
+
     Parameters
     ----------
     input_position_dirpaths : list[Path]
@@ -1252,7 +1250,6 @@ def estimate_stabilization(
     -----
     The verbose output will be saved at the same level as the output zarr.
     """
-
     # Load the settings
     config_filepath = Path(config_filepath)
 
@@ -1619,15 +1616,17 @@ def estimate_stabilization_cli(
     sbatch_filepath: str = None,
     local: bool = False,
 ):
-    """
-    Estimate translation matrices for XYZ stabilization of a timelapse dataset.
+    """Estimate translation matrices for XYZ stabilization of a timelapse dataset.
 
     Stabilization parameters may be computed for the XY, Z, or XYZ dimensions using
     focus finding, beads, or phase cross correlation methods.
 
-    Example usage:
-    biahub estimate-stabilization -i ./timelapse.zarr/0/0/0 -o ./stabilization.yml  -c ./config.yml -s ./sbatch.sh --local --verbose
-
+    >>> biahub estimate-stabilization \
+        -i ./timelapse.zarr/0/0/0 \
+        -o ./stabilization.yml \
+        -c ./config.yml \
+        -s ./sbatch.sh \
+        --local --verbose
     """
     estimate_stabilization(
         input_position_dirpaths=input_position_dirpaths,

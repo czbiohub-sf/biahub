@@ -142,8 +142,7 @@ def apply_inverse_transfer_function_cli(
     local: bool = False,
     monitor: bool = True,
 ):
-    """
-    Apply an inverse transfer function to a dataset using a configuration file.
+    """Apply an inverse transfer function to a dataset using a configuration file.
 
     Applies a transfer function to all positions in the list `input-position-dirpaths`,
     so all positions must have the same TCZYX shape.
@@ -152,9 +151,12 @@ def apply_inverse_transfer_function_cli(
 
     See https://github.com/mehta-lab/waveorder/tree/main/docs/examples for example configuration files.
 
-    >> biahub apply-inv-tf -i ./input.zarr/*/*/* -t ./transfer-function.zarr -c /examples/birefringence.yml -o ./output.zarr
+    >>> biahub apply-inv-tf \
+        -i ./input.zarr/*/*/* \
+        -t ./transfer-function.zarr \
+        -c /examples/birefringence.yml \
+        -o ./output.zarr
     """
-
     apply_inverse_transfer_function(
         input_position_dirpaths=input_position_dirpaths,
         transfer_function_dirpath=transfer_function_dirpath,

@@ -64,7 +64,7 @@ def get_3D_rotation_matrix(
     start_shape_zyx: tuple, angle: float = 0.0, end_shape_zyx: tuple = None
 ) -> np.ndarray:
     """
-    Rotate Transformation Matrix
+    Rotate Transformation Matrix.
 
     Parameters
     ----------
@@ -149,7 +149,7 @@ def get_3D_fliplr_matrix(start_shape_zyx: tuple, end_shape_zyx: tuple = None) ->
 
 
 def convert_transform_to_ants(T_numpy: np.ndarray):
-    """Homogeneous 3D transformation matrix from numpy to ants
+    """Homogeneous 3D transformation matrix from numpy to ants.
 
     Parameters
     ----------
@@ -173,7 +173,7 @@ def convert_transform_to_ants(T_numpy: np.ndarray):
 
 def convert_transform_to_numpy(T_ants):
     """
-    Convert the ants transformation matrix to numpy 3D homogenous transform
+    Convert the ants transformation matrix to numpy 3D homogenous transform.
 
     Modified from Jordao's dexp code
 
@@ -187,7 +187,6 @@ def convert_transform_to_numpy(T_ants):
         Converted Ants to numpy array
 
     """
-
     T_numpy = T_ants.parameters.reshape((3, 4), order="F")
     T_numpy[:, :3] = T_numpy[:, :3].transpose()
     T_numpy = np.vstack((T_numpy, np.array([0, 0, 0, 1])))
@@ -211,7 +210,7 @@ def apply_affine_transform(
     interpolation: str = "linear",
     crop_output_slicing: bool = None,
 ) -> np.ndarray:
-    """_summary_
+    """_summary_.
 
     Parameters
     ----------
@@ -233,7 +232,6 @@ def apply_affine_transform(
     np.ndarray
         registered zyx data
     """
-
     Z, Y, X = output_shape_zyx
     if crop_output_slicing is not None:
         Z_slice, Y_slice, X_slice = crop_output_slicing
@@ -355,7 +353,7 @@ def find_overlapping_volume(
     plot: bool = False,
 ) -> tuple:
     """
-    Find the overlapping rectangular volume after registration of two 3D datasets
+    Find the overlapping rectangular volume after registration of two 3D datasets.
 
     Parameters
     ----------
@@ -374,7 +372,6 @@ def find_overlapping_volume(
         ZYX slices of the overlapping volume after registration
 
     """
-
     # Make dummy volumes
     moving_volume = np.ones(tuple(input_zyx_shape), dtype=np.float32)
     fixed_volume = np.ones(tuple(target_zyx_shape), dtype=np.float32)
@@ -421,14 +418,16 @@ def register_cli(
     sbatch_filepath: Path,
     monitor: bool = True,
 ):
-    """
-    Apply an affine transformation to a single position across T and C axes based on a registration config file.
+    """Apply an affine transformation to a single position across T and C axes based on a registration config file.
 
     Start by generating an initial affine transform with `estimate-register`. Optionally, refine this transform with `optimize-register`. Finally, use `register`.
 
-    >> biahub register -s source.zarr/*/*/* -t target.zarr/*/*/* -c config.yaml -o ./acq_name_registerred.zarr
+    >>> biahub register \
+        -s source.zarr/*/*/* \
+        -t target.zarr/*/*/* \
+        -c config.yaml \
+        -o ./acq_name_registerred.zarr
     """
-
     # Convert string paths to Path objects
     output_dirpath = Path(output_dirpath)
 

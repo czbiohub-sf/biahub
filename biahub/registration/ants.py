@@ -172,7 +172,6 @@ def preprocess_czyx(
     This function currently assumes that target channel is phase and source channels are fluorescence.
     If multiple source channels are provided, they will be summed, after clipping, filtering, and cropping, if enabled.
     """
-
     mov_czyx = np.asarray(mov_czyx).astype(np.float32)
     ref_czyx = np.asarray(ref_czyx).astype(np.float32)
 
@@ -395,7 +394,6 @@ def postprocess_transform(
     Transform
         The final composed transform mapping original moving -> reference space.
     """
-
     shift_to_roi = np.eye(4)
     shift_to_roi[:3, -1] = preprocess_offset
 
@@ -448,6 +446,7 @@ def estimate_tczyx(
         Path to the folder where the output transform will be saved, by default None.
     cluster : str, optional
         Cluster to use, by default 'local'.
+
     Returns
     -------
     list[Transform]

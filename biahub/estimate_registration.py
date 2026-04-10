@@ -110,7 +110,6 @@ def user_assisted_registration(
     - Two types of transformations are supported: similarity (with scaling) and Euclidean (no scaling).
     - The function visually displays intermediate and final results in napari for user validation.
     """
-
     # Find the in-focus slice
     source_channel_Z, source_channel_Y, source_channel_X = source_channel_volume.shape[-3:]
     target_channel_Z, target_channel_Y, target_channel_X = target_channel_volume.shape[-3:]
@@ -574,8 +573,7 @@ def estimate_registration_cli(
     sbatch_filepath: str = None,
     local: bool = False,
 ):
-    """
-    Estimate the affine transformation between a source and target image for registration.
+    """Estimate the affine transformation between a source and target image for registration.
 
     This command-line tools estimates the registration transforms between a source (moving) and target (fixed) image
     using either (1) user input, (2) images or registration beads, or (3) image features via the ANTS registration library.
@@ -586,17 +584,15 @@ def estimate_registration_cli(
     ANTs-based registration uses the ANTsPy library to estimate transformations based on image features. Optionally,
     a Sobel filter may be applied to the data to enhance feature detection between label-free and fluorescent channels.
 
-    Example:
-    >> biahub estimate-registration
-        -s ./acq_name_labelfree_reconstructed.zarr/0/0/0   # Source channel OME-Zarr data path
-        -t ./acq_name_lightsheet_deskewed.zarr/0/0/0       # Target channel OME-Zarr data path
-        -o ./output.yml                                    # Output configuration file path
-        --config ./config.yml                              # Path to input configuration file
-        --registration-target-channel "Phase3D"            # Name of the target channel
-        --registration-source-channel "GFP"                # Names of source channel
-        --registration-source-channel "mCherry"            # Names of another source channel
+    >>> biahub estimate-registration \
+        -s ./acq_name_labelfree_reconstructed.zarr/0/0/0 \
+        -t ./acq_name_lightsheet_deskewed.zarr/0/0/0 \
+        -o ./output.yml \
+        --config ./config.yml \
+        --registration-target-channel "Phase3D" \
+        --registration-source-channel "GFP" \
+        --registration-source-channel "mCherry"
     """
-
     estimate_registration(
         source_position_dirpaths=source_position_dirpaths,
         target_position_dirpaths=target_position_dirpaths,

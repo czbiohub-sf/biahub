@@ -15,6 +15,7 @@ from humanize import naturalsize
 def get_dir_size_du(path: str) -> int:
     """
     Use `du -sb` to get the total size in bytes of a directory or file.
+
     Only supported on Linux.
     """
     resolved_path = Path(path).resolve()
@@ -49,7 +50,8 @@ def check_disk_space_with_du(
         margin (float): Safety factor (e.g., 1.1 = 10% extra).
         verbose (bool): Whether to print diagnostics.
 
-    Returns:
+    Returns
+    -------
         bool: True if there is enough space, False otherwise.
     """
     if sys.platform != "linux":
@@ -116,8 +118,9 @@ def check_disk_space_with_du(
     help="Print detailed diagnostics.",
 )
 def check_disk_space_cli(input_path: str, output_path: str, margin: float, verbose: bool):
-    """
-    CLI command to check disk space using `du -sb`.
+    """Check disk space using `du -sb`.
+
+    >>> biahub check-disk-space -i ./input.zarr -o ./output.zarr
     """
     enough_space = check_disk_space_with_du(
         input_path=input_path,

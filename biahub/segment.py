@@ -114,15 +114,13 @@ def segment_cli(
     local: bool = False,
     monitor: bool = True,
 ):
-    """
-    Segment a single position across T axes using the configuration file.
+    """Segment a single position across T axes using the configuration file.
 
-    >> biahub segment \
+    >>> biahub segment \
         -i ./input.zarr/*/*/* \
         -c ./segment_params.yml \
         -o ./output.zarr
     """
-
     # Convert string paths to Path objects
     output_dirpath = Path(output_dirpath)
     config_filepath = Path(config_filepath)

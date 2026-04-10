@@ -263,12 +263,11 @@ def flat_field_correction_cli(
     sbatch_filepath: str = None,
     local: bool = False,
 ):
-    """
-    Apply flat field correction across T and selected C axes.
+    """Apply flat field correction across T and selected C axes.
 
-    >> biahub flat-field \\
-        -i ./input.zarr/*/*/* \\
-        -c ./flat_field_params.yml \\
+    >>> biahub flat-field \
+        -i ./input.zarr/*/*/* \
+        -c ./flat_field_params.yml \
         -o ./output.zarr
     """
     flat_field(

@@ -89,7 +89,7 @@ def _get_jobs_to_print(jobs, num_to_print):
 
 
 def monitor_jobs(jobs: list[submitit.Job], position_dirpaths: list[Path]):
-    """Displays the status of a list of submitit jobs with corresponding paths.
+    """Display the status of a list of submitit jobs with corresponding paths.
 
     Parameters
     ----------
