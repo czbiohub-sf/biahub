@@ -139,6 +139,7 @@ def init_deskew(input_zarr: str, output_zarr: str, config: str):
         channel_names=channel_names,
         shape=(T, C) + deskewed_shape,
         scale=(1, 1) + voxel_size,
+        version="0.5",
     )
     copy_position_metadata(Path(input_zarr), Path(output_zarr))
     click.echo(f"Created {output_zarr} ({len(position_keys)} positions)")

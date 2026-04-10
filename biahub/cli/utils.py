@@ -183,7 +183,7 @@ def create_empty_hcs_zarr(
 
     # Create plate
     output_plate = open_ome_zarr(
-        str(store_path), layout="hcs", mode="a", channel_names=channel_names
+        str(store_path), layout="hcs", mode="a", channel_names=channel_names, version="0.5"
     )
     transform = [TransformationMeta(type="scale", scale=scale)]
 
