@@ -35,10 +35,10 @@ def reconstruct_cli(
     local: bool = False,
     monitor: bool = True,
 ):
-    """
-    Reconstruct a dataset using a configuration file. This is a
-    convenience function for a `compute-tf` call followed by a `apply-inv-tf`
-    call.
+    """Reconstruct a dataset using a configuration file.
+
+    This is a convenience function for a `compute-tf` call followed by a
+    `apply-inv-tf` call.
 
     Calculates the transfer function based on the shape of the first position
     in the list `input-position-dirpaths`, then applies that transfer function
@@ -47,7 +47,7 @@ def reconstruct_cli(
 
     See https://github.com/mehta-lab/waveorder/tree/main/docs/examples for example configuration files.
 
-    >> biahub reconstruct -i ./input.zarr/*/*/* -c ./examples/birefringence.yml -o ./output.zarr
+    >>> biahub reconstruct -i ./input.zarr/*/*/* -c ./examples/birefringence.yml -o ./output.zarr
     """
     # glob all positions in input_position_dirpaths
 

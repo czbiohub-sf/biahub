@@ -19,7 +19,7 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import estimate_resources, yaml_to_model
+from biahub.cli.utils import estimate_resources, get_submitit_cluster, yaml_to_model
 from biahub.settings import SegmentationSettings
 
 
@@ -62,7 +62,7 @@ def segment_data(
 
     czyx_segmentation = []
     # Process each model in a loop
-    for i, (model_name, model_args) in enumerate(segmentation_models.items()):
+    for model_name, model_args in segmentation_models.items():
         click.echo(f"Segmenting with model {model_name}")
         z_slice_2D = model_args.z_slice_2D
         czyx_data_to_segment = (
@@ -90,7 +90,7 @@ def segment_data(
         )
         segmentation, _, _ = model.eval(
             czyx_data_to_segment, channel_axis=0, z_axis=1, **model_args.eval_args
-        )  # noqa: python-no-eval
+        )
         if z_slice_2D is not None and isinstance(z_slice_2D, int):
             segmentation = segmentation[np.newaxis, ...]
         czyx_segmentation.append(segmentation)
@@ -114,15 +114,13 @@ def segment_cli(
     local: bool = False,
     monitor: bool = True,
 ):
-    """
-    Segment a single position across T axes using the configuration file.
+    """Segment a single position across T axes using the configuration file.
 
-    >> biahub segment \
+    >>> biahub segment \
         -i ./input.zarr/*/*/* \
         -c ./segment_params.yml \
         -o ./output.zarr
     """
-
     # Convert string paths to Path objects
     output_dirpath = Path(output_dirpath)
     config_filepath = Path(config_filepath)
@@ -221,10 +219,7 @@ def segment_cli(
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
     # Run locally or submit to SLURM
-    if local:
-        cluster = "local"
-    else:
-        cluster = "slurm"
+    cluster = get_submitit_cluster(local)
 
     # Prepare and submit jobs
     click.echo(f"Preparing jobs: {slurm_args}")
@@ -234,7 +229,7 @@ def segment_cli(
     jobs = []
     with submitit.helpers.clean_env(), executor.batch():
         for input_position_path, output_position_path in zip(
-            input_position_dirpaths, output_position_paths
+            input_position_dirpaths, output_position_paths, strict=True
         ):
             jobs.append(
                 executor.submit(

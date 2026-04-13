@@ -26,7 +26,7 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import yaml_to_model
+from biahub.cli.utils import get_submitit_cluster, yaml_to_model
 
 
 def apply_inverse_transfer_function(
@@ -90,17 +90,14 @@ def apply_inverse_transfer_function(
     if sbatch_filepath:
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
-    if local:
-        cluster = "local"
-    else:
-        cluster = "slurm"
+    cluster = get_submitit_cluster(local)
 
     # Prepare and submit jobs
     click.echo(f"Preparing jobs: {slurm_args}")
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
 
-    click.echo('Submitting SLURM jobs...')
+    click.echo("Submitting SLURM jobs...")
     jobs = []
     with submitit.helpers.clean_env(), executor.batch():
         for input_position_dirpath in input_position_dirpaths:
@@ -117,6 +114,7 @@ def apply_inverse_transfer_function(
 
     job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 
+    slurm_out_path.mkdir(exist_ok=True)
     log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
@@ -144,8 +142,7 @@ def apply_inverse_transfer_function_cli(
     local: bool = False,
     monitor: bool = True,
 ):
-    """
-    Apply an inverse transfer function to a dataset using a configuration file.
+    """Apply an inverse transfer function to a dataset using a configuration file.
 
     Applies a transfer function to all positions in the list `input-position-dirpaths`,
     so all positions must have the same TCZYX shape.
@@ -154,9 +151,12 @@ def apply_inverse_transfer_function_cli(
 
     See https://github.com/mehta-lab/waveorder/tree/main/docs/examples for example configuration files.
 
-    >> biahub apply-inv-tf -i ./input.zarr/*/*/* -t ./transfer-function.zarr -c /examples/birefringence.yml -o ./output.zarr
+    >>> biahub apply-inv-tf \
+        -i ./input.zarr/*/*/* \
+        -t ./transfer-function.zarr \
+        -c /examples/birefringence.yml \
+        -o ./output.zarr
     """
-
     apply_inverse_transfer_function(
         input_position_dirpaths=input_position_dirpaths,
         transfer_function_dirpath=transfer_function_dirpath,

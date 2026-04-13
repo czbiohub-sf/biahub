@@ -18,8 +18,8 @@ from biahub.cli.parsing import input_position_dirpaths, output_dirpath
 MSECS_PER_MINUTE = 60000
 
 
-def plot_bleaching_curves(times, tczyx_data, channel_names, output_file, title=''):
-    """Plots bleaching curves and estimates bleaching lifetimes
+def plot_bleaching_curves(times, tczyx_data, channel_names, output_file, title=""):
+    """Plot bleaching curves and estimate bleaching lifetimes.
 
     Parameters
     ----------
@@ -85,20 +85,20 @@ def plot_bleaching_curves(times, tczyx_data, channel_names, output_file, title='
             xdata,
             ydata,
             label=label,
-            marker='o',
+            marker="o",
             markeredgewidth=0,
             linewidth=0,
             color=channel_color,
         )
 
-    ax.set_title(title, {'fontsize': 8})
+    ax.set_title(title, {"fontsize": 8})
     ax.set_xlabel("Time (minutes)")
     ax.set_ylabel("Mean Intensity (AU)")
     ax.legend(frameon=False, markerfirst=False)
-    ax.spines['right'].set_visible(False)
-    ax.spines['top'].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["top"].set_visible(False)
 
-    plt.savefig(output_file, bbox_inches='tight')
+    plt.savefig(output_file, bbox_inches="tight")
     plt.close()
 
 
@@ -106,12 +106,10 @@ def plot_bleaching_curves(times, tczyx_data, channel_names, output_file, title='
 @input_position_dirpaths()
 @output_dirpath()
 def estimate_bleaching_cli(input_position_dirpaths, output_dirpath):
-    """
-    Estimate bleaching from raw data
+    """Estimate bleaching from raw data.
 
-    >> biahub estimate-bleaching -i ./input.zarr/0/0/0 -o ./bleaching-curves/
+    >>> biahub estimate-bleaching -i ./input.zarr/0/0/0 -o ./bleaching-curves/
     """
-
     # Read plate metadata if it exists
     try:
         plate_path = Path(*Path(input_position_dirpaths[0]).parts[:-3])
@@ -120,7 +118,8 @@ def estimate_bleaching_cli(input_position_dirpaths, output_dirpath):
     except Exception as e:
         print(e)
         warnings.warn(
-            "WARNING: this position has no plate metadata, so the time metadata will be missing."
+            "WARNING: this position has no plate metadata, so the time metadata will be missing.",
+            stacklevel=2,
         )
 
     # Loop through position
@@ -134,10 +133,10 @@ def estimate_bleaching_cli(input_position_dirpaths, output_dirpath):
         # Generate plot for each position
         T = tczyx_data.shape[0]
         try:
-            dt = np.float32(plate_zattrs['Summary']['Interval_ms'] / MSECS_PER_MINUTE)
+            dt = np.float32(plate_zattrs["Summary"]["Interval_ms"] / MSECS_PER_MINUTE)
         except Exception as e:
             print(e)
-            warnings.warn(f"WARNING: missing time metadata for p={well_name}")
+            warnings.warn(f"WARNING: missing time metadata for p={well_name}", stacklevel=2)
             dt = 1
 
         times = np.arange(0, T * dt, step=dt)

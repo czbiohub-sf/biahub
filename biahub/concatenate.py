@@ -1,5 +1,4 @@
 import glob
-import os
 
 from pathlib import Path
 
@@ -20,7 +19,13 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import copy_n_paste, estimate_resources, get_output_paths, yaml_to_model
+from biahub.cli.utils import (
+    copy_n_paste,
+    estimate_resources,
+    get_output_paths,
+    get_submitit_cluster,
+    yaml_to_model,
+)
 from biahub.settings import ConcatenateSettings
 
 
@@ -33,7 +38,8 @@ def get_path_slice_param(slice_param, path_index, total_paths):
         path_index: The index of the current path
         total_paths: The total number of paths
 
-    Returns:
+    Returns
+    -------
         The slice parameter for the current path
     """
     # Handle 'all' case
@@ -63,7 +69,8 @@ def create_path_slicing_params(path_z_slice, path_y_slice, path_x_slice, dataset
         path_x_slice: The X slice parameter for the path
         dataset_shape: The shape of the dataset
 
-    Returns:
+    Returns
+    -------
         A list of slice objects [z_slice, y_slice, x_slice]
     """
     z_slice = get_slice(path_z_slice, dataset_shape[2])
@@ -85,7 +92,8 @@ def get_channel_combiner_metadata(
         processing_channel_names: List of channel names to process
         slicing_params: List of slicing parameters [Z_slice, Y_slice, X_slice]
 
-    Returns:
+    Returns
+    -------
         Tuple of (all_data_paths, all_channel_names, input_channel_idx, output_channel_idx, all_slicing_params)
     """
     all_data_paths = []
@@ -108,7 +116,7 @@ def get_channel_combiner_metadata(
 
     # For each original path, determine the appropriate slice specifications
     for i, (paths, per_datapath_channels) in enumerate(
-        zip(expanded_paths, processing_channel_names)
+        zip(expanded_paths, processing_channel_names, strict=True)
     ):
         # NOTE: taking first file as sample to get the channel names
         dataset = open_ome_zarr(paths[0])
@@ -180,7 +188,8 @@ def get_slice(slice_param, max_value: int):
         slice_param: Can be 'all' or a single slice range [start, end]
         max_value: Maximum value for the dimension
 
-    Returns:
+    Returns
+    -------
         A slice object
     """
     # Handle 'all' case
@@ -199,9 +208,7 @@ def get_slice(slice_param, max_value: int):
 
 
 def validate_slicing_params_zyx(slicing_params_zyx_list: list[list[slice, slice, slice]]):
-    """
-    Validate that all slicing parameters are the same for a given dimension
-    """
+    """Validate that all slicing parameters are the same for a given dimension."""
     first_slice_size = calculate_cropped_size(slicing_params_zyx_list[0])
     for i, slice_obj in enumerate(slicing_params_zyx_list[1:], 1):
         slice_size = calculate_cropped_size(slice_obj)
@@ -221,7 +228,8 @@ def calculate_cropped_size(
     Args:
         slice_params_zyx: A list of slice parameters for the Z, Y, and X dimensions
 
-    Returns:
+    Returns
+    -------
         A tuple of the size of the dimension after cropping for the Z, Y, and X dimensions
     """
     # Calculate the size of each dimension by taking the absolute difference between stop and start
@@ -387,11 +395,7 @@ def concatenate(
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
     # Run locally or submit to SLURM
-    cluster = "slurm"
-    if local:
-        cluster = "local"
-    if os.environ.get("CI") == "true":
-        cluster = "debug"
+    cluster = get_submitit_cluster(local)
 
     # Prepare and submit jobs
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
@@ -401,20 +405,19 @@ def concatenate(
     jobs = []
 
     with submitit.helpers.clean_env(), executor.batch():
-        for i, (
+        for (
             input_position_path,
             output_position_path,
             input_channel_idx,
             output_channel_idx,
             zyx_slicing_params,
-        ) in enumerate(
-            zip(
-                all_data_paths,
-                output_position_paths_list,
-                input_channel_idx_list,
-                output_channel_idx_list,
-                all_slicing_params,
-            )
+        ) in zip(
+            all_data_paths,
+            output_position_paths_list,
+            input_channel_idx_list,
+            output_channel_idx_list,
+            all_slicing_params,
+            strict=True,
         ):
             # Create slicing parameters for this specific path
             copy_n_paste_kwargs = {"zyx_slicing_params": zyx_slicing_params}
@@ -435,9 +438,7 @@ def concatenate(
 
     job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 
-    # slurm_out_path is not created for debug cluster
-    if not slurm_out_path.exists():
-        slurm_out_path.mkdir()
+    slurm_out_path.mkdir(exist_ok=True)
     log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
@@ -462,12 +463,10 @@ def concatenate_cli(
     local: bool = False,
     monitor: bool = True,
 ):
-    """
-    Concatenate datasets (with optional cropping)
+    """Concatenate datasets (with optional cropping).
 
-    >> biahub concatenate -c ./concat.yml -o ./output_concat.zarr
+    >>> biahub concatenate -c ./concat.yml -o ./output_concat.zarr
     """
-
     concatenate(
         settings=yaml_to_model(config_filepath, ConcatenateSettings),
         output_dirpath=Path(output_dirpath),

@@ -1,5 +1,4 @@
 from pathlib import Path
-from typing import List, Tuple
 
 import ants
 import click
@@ -26,6 +25,7 @@ from biahub.cli.utils import (
     copy_n_paste_czyx,
     create_empty_hcs_zarr,
     estimate_resources,
+    get_submitit_cluster,
     process_single_position_v2,
     yaml_to_model,
 )
@@ -61,10 +61,10 @@ def get_3D_rescaling_matrix(start_shape_zyx, scaling_factor_zyx=(1, 1, 1), end_s
 
 
 def get_3D_rotation_matrix(
-    start_shape_zyx: Tuple, angle: float = 0.0, end_shape_zyx: Tuple = None
+    start_shape_zyx: tuple, angle: float = 0.0, end_shape_zyx: tuple = None
 ) -> np.ndarray:
     """
-    Rotate Transformation Matrix
+    Rotate Transformation Matrix.
 
     Parameters
     ----------
@@ -149,7 +149,7 @@ def get_3D_fliplr_matrix(start_shape_zyx: tuple, end_shape_zyx: tuple = None) ->
 
 
 def convert_transform_to_ants(T_numpy: np.ndarray):
-    """Homogeneous 3D transformation matrix from numpy to ants
+    """Homogeneous 3D transformation matrix from numpy to ants.
 
     Parameters
     ----------
@@ -173,7 +173,7 @@ def convert_transform_to_ants(T_numpy: np.ndarray):
 
 def convert_transform_to_numpy(T_ants):
     """
-    Convert the ants transformation matrix to numpy 3D homogenous transform
+    Convert the ants transformation matrix to numpy 3D homogenous transform.
 
     Modified from Jordao's dexp code
 
@@ -187,7 +187,6 @@ def convert_transform_to_numpy(T_ants):
         Converted Ants to numpy array
 
     """
-
     T_numpy = T_ants.parameters.reshape((3, 4), order="F")
     T_numpy[:, :3] = T_numpy[:, :3].transpose()
     T_numpy = np.vstack((T_numpy, np.array([0, 0, 0, 1])))
@@ -206,12 +205,12 @@ def convert_transform_to_numpy(T_ants):
 def apply_affine_transform(
     zyx_data: np.ndarray,
     matrix: np.ndarray,
-    output_shape_zyx: Tuple,
+    output_shape_zyx: tuple,
     method="ants",
     interpolation: str = "linear",
     crop_output_slicing: bool = None,
 ) -> np.ndarray:
-    """_summary_
+    """_summary_.
 
     Parameters
     ----------
@@ -233,7 +232,6 @@ def apply_affine_transform(
     np.ndarray
         registered zyx data
     """
-
     Z, Y, X = output_shape_zyx
     if crop_output_slicing is not None:
         Z_slice, Y_slice, X_slice = crop_output_slicing
@@ -286,7 +284,7 @@ def apply_affine_transform(
     return registered_zyx
 
 
-def find_lir(registered_zyx: np.ndarray, plot: bool = False) -> Tuple:
+def find_lir(registered_zyx: np.ndarray, plot: bool = False) -> tuple:
     registered_zyx = np.asarray(registered_zyx, dtype=bool)
 
     # Find the lir in YX at Z//2
@@ -348,14 +346,14 @@ def find_lir(registered_zyx: np.ndarray, plot: bool = False) -> Tuple:
 
 
 def find_overlapping_volume(
-    input_zyx_shape: Tuple,
-    target_zyx_shape: Tuple,
+    input_zyx_shape: tuple,
+    target_zyx_shape: tuple,
     transformation_matrix: np.ndarray,
     method: str = "LIR",
     plot: bool = False,
-) -> Tuple:
+) -> tuple:
     """
-    Find the overlapping rectangular volume after registration of two 3D datasets
+    Find the overlapping rectangular volume after registration of two 3D datasets.
 
     Parameters
     ----------
@@ -374,7 +372,6 @@ def find_overlapping_volume(
         ZYX slices of the overlapping volume after registration
 
     """
-
     # Make dummy volumes
     moving_volume = np.ones(tuple(input_zyx_shape), dtype=np.float32)
     fixed_volume = np.ones(tuple(target_zyx_shape), dtype=np.float32)
@@ -413,22 +410,24 @@ def rescale_voxel_size(affine_matrix, input_scale):
 @sbatch_filepath()
 @monitor()
 def register_cli(
-    source_position_dirpaths: List[str],
-    target_position_dirpaths: List[str],
+    source_position_dirpaths: list[str],
+    target_position_dirpaths: list[str],
     config_filepath: Path,
     output_dirpath: str,
     local: bool,
     sbatch_filepath: Path,
     monitor: bool = True,
 ):
-    """
-    Apply an affine transformation to a single position across T and C axes based on a registration config file.
+    """Apply an affine transformation to a single position across T and C axes based on a registration config file.
 
     Start by generating an initial affine transform with `estimate-register`. Optionally, refine this transform with `optimize-register`. Finally, use `register`.
 
-    >> biahub register -s source.zarr/*/*/* -t target.zarr/*/*/* -c config.yaml -o ./acq_name_registerred.zarr
+    >>> biahub register \
+        -s source.zarr/*/*/* \
+        -t target.zarr/*/*/* \
+        -c config.yaml \
+        -o ./acq_name_registerred.zarr
     """
-
     # Convert string paths to Path objects
     output_dirpath = Path(output_dirpath)
 
@@ -541,10 +540,7 @@ def register_cli(
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
     # Run locally or submit to SLURM
-    if local:
-        cluster = "local"
-    else:
-        cluster = "slurm"
+    cluster = get_submitit_cluster(local)
 
     # Prepare and submit jobs
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
@@ -603,6 +599,7 @@ def register_cli(
     # concatenate affine_jobs and copy_jobs
     job_ids = [job.job_id for job in affine_jobs + copy_jobs]
 
+    slurm_out_path.mkdir(exist_ok=True)
     log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))

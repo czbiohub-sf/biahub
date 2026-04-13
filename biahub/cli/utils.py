@@ -4,10 +4,10 @@ import io
 import itertools
 import logging
 import multiprocessing as mp
+import os
 
 from functools import partial
 from pathlib import Path
-from typing import List, Tuple
 
 import click
 import numpy as np
@@ -113,9 +113,17 @@ def copy_position_metadata(input_zarr: Path, output_zarr: Path) -> None:
                 logger.debug("Copied metadata for position %s", name)
 
 
+def get_submitit_cluster(local: bool = False) -> str:
+    """Return the submitit cluster type: 'debug' in CI, 'local' if local, else 'slurm'."""
+    if os.environ.get("CI") == "true":
+        return "debug"
+    return "local" if local else "slurm"
+
+
 def update_model(model_instance, update_dict):
     """
     Properly updates a Pydantic model with only the provided values while keeping the defaults.
+
     This ensures that nested models retain missing values instead of getting overwritten.
     """
     updated_fields = {}
@@ -123,30 +131,32 @@ def update_model(model_instance, update_dict):
         if isinstance(value, dict) and hasattr(model_instance, key):
             # If it's a nested dict, update the nested Pydantic model properly
             nested_model = getattr(model_instance, key)
-            updated_fields[key] = nested_model.copy(update=value)
+            updated_fields[key] = nested_model.model_copy(update=value)
         else:
             # Otherwise, just update the value directly
             updated_fields[key] = value
 
     # Create a new instance with updated fields
-    return model_instance.copy(update=updated_fields)
+    return model_instance.model_copy(update=updated_fields)
 
 
 # TODO: convert all code to use this function from now on
 def create_empty_hcs_zarr(
     store_path: Path,
-    position_keys: list[Tuple[str]],
+    position_keys: list[tuple[str]],
     channel_names: list[str],
-    shape: Tuple[int],
-    chunks: Tuple[int] = None,
-    scale: Tuple[float] = (1, 1, 1, 1, 1),
+    shape: tuple[int],
+    chunks: tuple[int] = None,
+    scale: tuple[float] = (1, 1, 1, 1, 1),
     dtype: DTypeLike = np.float32,
     max_chunk_size_bytes=500e6,
 ) -> None:
     """
     If the plate does not exist, create an empty zarr plate.
+
     If the plate exists, append positions and channels if they are not
     already in the plate.
+
     Parameters
     ----------
     store_path : Path
@@ -217,7 +227,7 @@ def get_output_paths(
     input_paths: list[Path], output_zarr_path: Path, ensure_unique_positions: bool = None
 ) -> list[Path]:
     """
-    Generates a mirrored output path list given an input list of positions
+    Generate a mirrored output path list given an input list of positions.
 
     Parameters
     ----------
@@ -275,7 +285,7 @@ def get_output_paths(
 def apply_function_to_zyx_and_save(
     func, position: Position, output_path: Path, t_idx: int, c_idx: int, **kwargs
 ) -> None:
-    """Load a zyx array from a Position object, apply a transformation and save the result to file"""
+    """Load a zyx array from a Position object, apply a transformation and save the result to file."""
     click.echo(f"Processing c={c_idx}, t={t_idx}")
 
     zyx_data = position[0][t_idx, c_idx]
@@ -303,8 +313,7 @@ def apply_transform_to_zyx_and_save_v2(
     c_idx: int = None,
     **kwargs,
 ) -> None:
-    """Load a zyx array from a Position object, apply a transformation to CZYX or ZYX and save the result to file"""
-
+    """Load a zyx array from a Position object, apply a transformation to CZYX or ZYX and save the result to file."""
     # TODO: temporary fix to slumkit issue
     if _is_nested(input_channel_indices):
         input_channel_indices = [int(x) for x in input_channel_indices if x.isdigit()]
@@ -355,7 +364,7 @@ def process_single_position(
     num_threads: int = mp.cpu_count(),
     **kwargs,
 ) -> None:
-    """Register a single position with multiprocessing parallelization over T and C"""
+    """Register a single position with multiprocessing parallelization over T and C."""
     # Function to be applied
     click.echo(f"Function to be applied: \t{func}")
 
@@ -384,11 +393,10 @@ def process_single_position(
 
     # Write the settings into the metadata if existing
     # TODO: alternatively we can throw all extra arguments as metadata.
-    if 'extra_metadata' in non_func_args:
+    if "extra_metadata" in non_func_args:
         # For each dictionary in the nest
-        with open_ome_zarr(output_path, mode='r+') as output_dataset:
-            for params_metadata_keys in kwargs['extra_metadata'].keys():
-                output_dataset.zattrs['extra_metadata'] = non_func_args['extra_metadata']
+        with open_ome_zarr(output_path, mode="r+") as output_dataset:
+            output_dataset.zattrs["extra_metadata"] = non_func_args["extra_metadata"]
 
     # Loop through (T, C), deskewing and writing as we go
     click.echo(f"\nStarting multiprocess pool with {num_threads} threads")
@@ -410,14 +418,23 @@ def process_single_position_v2(
     func,
     input_data_path: Path,
     output_path: Path,
-    time_indices: list = [0],
-    time_indices_out: list = [0],
-    input_channel_idx: list = [],
-    output_channel_idx: list = [],
+    time_indices: list | None = None,
+    time_indices_out: list | None = None,
+    input_channel_idx: list | None = None,
+    output_channel_idx: list | None = None,
     num_threads: int = mp.cpu_count(),
     **kwargs,
 ) -> None:
-    """Register a single position with multiprocessing parallelization over T and C"""
+    """Register a single position with multiprocessing parallelization over T and C."""
+    if time_indices is None:
+        time_indices = [0]
+    if time_indices_out is None:
+        time_indices_out = [0]
+    if input_channel_idx is None:
+        input_channel_idx = []
+    if output_channel_idx is None:
+        output_channel_idx = []
+
     # Function to be applied
     click.echo(f"Function to be applied: \t{func}")
 
@@ -457,11 +474,10 @@ def process_single_position_v2(
             non_func_args[k] = v
 
     # Write the settings into the metadata if existing
-    if 'extra_metadata' in non_func_args:
+    if "extra_metadata" in non_func_args:
         # For each dictionary in the nest
-        with open_ome_zarr(output_path, mode='r+') as output_dataset:
-            for params_metadata_keys in kwargs['extra_metadata'].keys():
-                output_dataset.zattrs['extra_metadata'] = non_func_args['extra_metadata']
+        with open_ome_zarr(output_path, mode="r+") as output_dataset:
+            output_dataset.zattrs["extra_metadata"] = non_func_args["extra_metadata"]
 
     # Loop through (T, C), deskewing and writing as we go
     click.echo(f"\nStarting multiprocess pool with {num_threads} threads")
@@ -472,7 +488,7 @@ def process_single_position_v2(
         iterable = [
             (time_idx, time_idx_out, c)
             for (time_idx, time_idx_out), c in itertools.product(
-                zip(time_indices, time_indices_out), range(C)
+                zip(time_indices, time_indices_out, strict=True), range(C)
             )
         ]
         partial_apply_transform_to_zyx_and_save = partial(
@@ -486,7 +502,7 @@ def process_single_position_v2(
         )
     else:
         # If C is empty, use only the range for time_indices
-        iterable = list(zip(time_indices, time_indices_out))
+        iterable = list(zip(time_indices, time_indices_out, strict=True))
         partial_apply_transform_to_zyx_and_save = partial(
             apply_transform_to_zyx_and_save_v2,
             func,
@@ -508,7 +524,7 @@ def process_single_position_v2(
 
 def copy_n_paste(zyx_data: np.ndarray, zyx_slicing_params: list) -> np.ndarray:
     """
-    Load a zyx array and crop given a list of ZYX slices()
+    Load a zyx array and crop given a list of ZYX slices().
 
     Parameters
     ----------
@@ -535,7 +551,7 @@ def copy_n_paste(zyx_data: np.ndarray, zyx_slicing_params: list) -> np.ndarray:
 
 def copy_n_paste_czyx(czyx_data: np.ndarray, czyx_slicing_params: list) -> np.ndarray:
     """
-    Load a zyx array and crop given a list of ZYX slices()
+    Load a zyx array and crop given a list of ZYX slices().
 
     Parameters
     ----------
@@ -561,7 +577,7 @@ def copy_n_paste_czyx(czyx_data: np.ndarray, czyx_slicing_params: list) -> np.nd
 
 def append_channels(input_data_path: Path, target_data_path: Path) -> None:
     """
-    Append channels to a target zarr store
+    Append channels to a target zarr store.
 
     Parameters
     ----------
@@ -615,7 +631,7 @@ def model_to_yaml(model, yaml_path: Path) -> None:
     --------
     >>> from my_model import MyModel
     >>> model = MyModel()
-    >>> model_to_yaml(model, 'model.yaml')
+    >>> model_to_yaml(model, "model.yaml")
 
     """
     yaml_path = Path(yaml_path)
@@ -665,7 +681,7 @@ def yaml_to_model(yaml_path: Path, model):
     Examples
     --------
     >>> from my_model import MyModel
-    >>> model = yaml_to_model('model.yaml', MyModel)
+    >>> model = yaml_to_model("model.yaml", MyModel)
 
     """
     yaml_path = Path(yaml_path)
@@ -674,10 +690,10 @@ def yaml_to_model(yaml_path: Path, model):
         raise TypeError("The provided model must be a class with a callable constructor.")
 
     try:
-        with open(yaml_path, "r") as file:
+        with open(yaml_path) as file:
             raw_settings = yaml.safe_load(file)
     except FileNotFoundError:
-        raise FileNotFoundError(f"The YAML file '{yaml_path}' does not exist.")
+        raise FileNotFoundError(f"The YAML file '{yaml_path}' does not exist.") from None
 
     return model(**raw_settings)
 
@@ -688,7 +704,7 @@ def _is_nested(lst):
 
 def _check_nan_n_zeros(input_array: np.ndarray) -> bool:
     """
-    Checks if data are all zeros or nan.
+    Check if data are all zeros or nan.
 
     Parameters
     ----------
@@ -703,7 +719,7 @@ def _check_nan_n_zeros(input_array: np.ndarray) -> bool:
     return np.all(np.isnan(input_array)) or np.all(input_array == 0)
 
 
-def get_empty_frame_indices(input_array: np.ndarray) -> List[int]:
+def get_empty_frame_indices(input_array: np.ndarray) -> list[int]:
     """
     Get the indices of the empty frames in a 3D array.
 
@@ -730,7 +746,7 @@ def get_empty_frame_indices(input_array: np.ndarray) -> List[int]:
 
 
 def estimate_resources(
-    shape: Tuple[int, int, int, int, int],
+    shape: tuple[int, int, int, int, int],
     dtype: DTypeLike = np.float32,
     ram_multiplier: float = 1.0,
     max_num_cpus: int = 64,

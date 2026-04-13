@@ -1,6 +1,8 @@
 import logging
 
-__version__ = "0.1.0"
+from importlib.metadata import version
+
+__version__ = version("biahub")
 __mm_version__ = "2023-08-07"
 
 
@@ -14,12 +16,12 @@ def get_console_handler():
 
 
 def get_console_formatter():
-    console_format = logging.Formatter('%(levelname)s - %(module)s.%(funcName)s - %(message)s')
+    console_format = logging.Formatter("%(levelname)s - %(module)s.%(funcName)s - %(message)s")
     return console_format
 
 
 # Setup logger
-logger = logging.getLogger('biahub')
+logger = logging.getLogger("biahub")
 logger.setLevel(logging.DEBUG)
 
 logger.addHandler(get_console_handler())

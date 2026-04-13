@@ -1,7 +1,7 @@
 import glob
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 import click
 
@@ -16,7 +16,7 @@ def _validate_and_process_paths(
 ) -> list[Path]:
     # Sort and validate the input paths
     input_paths = [p for p in map(Path, natsorted(value)) if p.is_dir()]
-    with open_ome_zarr(input_paths[0], mode='r') as dataset:
+    with open_ome_zarr(input_paths[0], mode="r") as dataset:
         if isinstance(dataset, Plate):
             raise ValueError(
                 "Please supply a single position instead of an HCS plate. Likely fix: replace 'input.zarr' with 'input.zarr/0/0/0'"
@@ -196,8 +196,9 @@ def sbatch_filepath_predict() -> Callable:
 
 
 def sbatch_to_submitit(filepath: str) -> dict:
-    """Reads a text configuration file and returns a dictionary of parameters
-    which can be passed to the submitit executor. This file can contain parameters
+    """Read a text configuration file and return a dictionary of parameters.
+
+    Which can be passed to the submitit executor. This file can contain parameters
     starting with #SBATCH to configure SLURM jobs or parameters starting with #LOCAL
     to configure local jobs. The submitit executor will only apply valid parameters
     and will, for example, ignore local parameters when running on SLURM.
@@ -224,8 +225,7 @@ def sbatch_to_submitit(filepath: str) -> dict:
     >>> print(dict)
     {'slurm_mem_per_cpu': '16G', 'slurm_time': '1:00:00', 'cpus_per_task': 1}
     """
-
-    with open(filepath, "r") as f:
+    with open(filepath) as f:
         sbatch_file = f.readlines()
 
     keywords = ["SBATCH", "LOCAL"]

@@ -172,7 +172,6 @@ def preprocess_czyx(
     This function currently assumes that target channel is phase and source channels are fluorescence.
     If multiple source channels are provided, they will be summed, after clipping, filtering, and cropping, if enabled.
     """
-
     mov_czyx = np.asarray(mov_czyx).astype(np.float32)
     ref_czyx = np.asarray(ref_czyx).astype(np.float32)
 
@@ -395,7 +394,6 @@ def postprocess_transform(
     Transform
         The final composed transform mapping original moving -> reference space.
     """
-
     shift_to_roi = np.eye(4)
     shift_to_roi[:3, -1] = preprocess_offset
 
@@ -418,7 +416,7 @@ def estimate_tczyx(
     affine_transform_settings: AffineTransformSettings,
     verbose: bool = False,
     output_folder_path: Path = None,
-    cluster: str = 'local',
+    cluster: str = "local",
     sbatch_filepath: Path = None,
 ) -> list[Transform]:
     """
@@ -448,6 +446,7 @@ def estimate_tczyx(
         Path to the folder where the output transform will be saved, by default None.
     cluster : str, optional
         Cluster to use, by default 'local'.
+
     Returns
     -------
     list[Transform]
@@ -482,7 +481,7 @@ def estimate_tczyx(
 
     output_folder_path.mkdir(parents=True, exist_ok=True)
     slurm_out_path = output_folder_path / "slurm_output"
-    slurm_out_path.mkdir(parents=True, exist_ok=True)
+    slurm_out_path.mkdir(exist_ok=True)
 
     # Submitit executor
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
@@ -492,7 +491,7 @@ def estimate_tczyx(
     output_transforms_path = output_folder_path / "xyz_transforms"
     output_transforms_path.mkdir(parents=True, exist_ok=True)
 
-    click.echo('Computing registration transforms...')
+    click.echo("Computing registration transforms...")
     # NOTE: ants is mulitthreaded so no need for multiprocessing here
     # Submit jobs
     jobs = []

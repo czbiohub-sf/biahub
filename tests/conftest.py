@@ -1,8 +1,13 @@
+import os
+
 import numpy as np
 import pytest
 import yaml
 
 from iohub.ngff import open_ome_zarr
+
+# Use submitit debug executor (in-process, no forking) for fast tests
+os.environ["CI"] = "true"
 
 # These fixtures return paired
 # - paths for testing CLIs
@@ -160,8 +165,8 @@ def create_custom_plate():
 
     def _create_plate(
         tmp_path,
-        position_list=[("A", "1", "0"), ("B", "1", "0"), ("B", "2", "0")],
-        channel_names=["GFP", "RFP", "Phase3D"],
+        position_list=(("A", "1", "0"), ("B", "1", "0"), ("B", "2", "0")),
+        channel_names=("GFP", "RFP", "Phase3D"),
         time_points=3,
         z_size=4,
         y_size=5,

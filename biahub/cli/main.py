@@ -12,7 +12,7 @@ class NaturalOrderGroup(click.Group):
 
 @click.group(context_settings=CONTEXT, cls=NaturalOrderGroup)
 def cli():
-    """command-line tools for biahub"""
+    """command-line tools for biahub."""
 
 
 class LazyCommand(click.Command):

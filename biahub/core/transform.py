@@ -9,6 +9,7 @@ Coordinate convention: ZYX ordering for 3D, YX for 2D.
 """
 
 from __future__ import annotations
+
 from typing import Literal
 
 import numpy as np
@@ -148,7 +149,7 @@ class Transform:
         Examples
         --------
         >>> t = Transform.from_translation([5, 10, 15])  # 3D: Z=5, Y=10, X=15
-        >>> t = Transform.from_translation([10, 15])     # 2D: Y=10, X=15
+        >>> t = Transform.from_translation([10, 15])  # 2D: Y=10, X=15
         """
         offset = np.asarray(offset, dtype=np.float64)
         ndim = len(offset)
@@ -401,7 +402,7 @@ class Transform:
         except ImportError:
             raise ImportError(
                 "ANTsPy is required for backend='ants'. Install with: pip install antspyx"
-            )
+            ) from None
 
         if self._ndim != 3:
             raise NotImplementedError("ANTs backend only supports 3D transforms")
@@ -442,7 +443,7 @@ class Transform:
         except ImportError:
             raise ImportError(
                 "ANTsPy is required for to_ants(). Install with: pip install antspyx"
-            )
+            ) from None
         if self._ndim not in (2, 3):
             raise ValueError(f"Unsupported ndim: {self._ndim}")
         T_ants_style = self._matrix[:, :-1].ravel()
@@ -475,7 +476,6 @@ class Transform:
         Based on conversion from:
         https://sourceforge.net/p/advants/discussion/840261/thread/9fbbaab7/
         """
-
         params = T_ants.parameters
         fixed_params = T_ants.fixed_parameters
         if len(params) == 6:

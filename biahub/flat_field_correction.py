@@ -1,5 +1,4 @@
 from pathlib import Path
-from typing import List, Tuple
 
 import click
 import numpy as np
@@ -18,6 +17,7 @@ from biahub.cli.parsing import (
 )
 from biahub.cli.utils import (
     estimate_resources,
+    get_submitit_cluster,
     yaml_to_model,
 )
 from biahub.settings import FlatFieldCorrectionSettings
@@ -26,7 +26,7 @@ from biahub.settings import FlatFieldCorrectionSettings
 def flat_field_correction(
     zyx_data: np.ndarray,
     axis: int = 0,
-) -> Tuple[np.ndarray, dict]:
+) -> tuple[np.ndarray, dict]:
     """
     Apply flat field correction by dividing out the median pattern along an axis.
 
@@ -55,8 +55,8 @@ def flat_field_correction(
 
 def czyx_flat_field_correction(
     czyx_data: np.ndarray,
-    channel_names: List[str] = None,
-    all_channel_names: List[str] = None,
+    channel_names: list[str] = None,
+    all_channel_names: list[str] = None,
 ) -> np.ndarray:
     """Apply flat-field correction to a CZYX array.
 
@@ -87,7 +87,7 @@ def czyx_flat_field_correction(
 
 
 def flat_field(
-    input_position_dirpaths: List[str],
+    input_position_dirpaths: list[str],
     config_filepath: Path,
     output_dirpath: str,
     sbatch_filepath: str = None,
@@ -174,7 +174,7 @@ def flat_field(
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
     # Run locally or submit to SLURM
-    cluster = "local" if local else "slurm"
+    cluster = get_submitit_cluster(local)
 
     # Prepare and submit jobs (one per position)
     click.echo(f"Preparing jobs: {slurm_args}")
@@ -201,6 +201,7 @@ def flat_field(
             )
 
     job_ids = [job.job_id for job in jobs]
+    slurm_out_path.mkdir(exist_ok=True)
     log_path = slurm_out_path / "submitit_jobs_ids.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("w") as log_file:
@@ -216,18 +217,17 @@ def flat_field(
 @sbatch_filepath()
 @local()
 def flat_field_correction_cli(
-    input_position_dirpaths: List[str],
+    input_position_dirpaths: list[str],
     config_filepath: Path,
     output_dirpath: str,
     sbatch_filepath: str = None,
     local: bool = False,
 ):
-    """
-    Apply flat field correction across T and selected C axes.
+    """Apply flat field correction across T and selected C axes.
 
-    >> biahub flat-field \\
-        -i ./input.zarr/*/*/* \\
-        -c ./flat_field_params.yml \\
+    >>> biahub flat-field \
+        -i ./input.zarr/*/*/* \
+        -c ./flat_field_params.yml \
         -o ./output.zarr
     """
     flat_field(
