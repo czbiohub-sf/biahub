@@ -19,6 +19,7 @@ from biahub.cli.parsing import (
     target_position_dirpaths,
 )
 from biahub.cli.utils import (
+    get_submitit_cluster,
     model_to_yaml,
     yaml_to_model,
 )
@@ -109,7 +110,6 @@ def user_assisted_registration(
     - Two types of transformations are supported: similarity (with scaling) and Euclidean (no scaling).
     - The function visually displays intermediate and final results in napari for user validation.
     """
-
     # Find the in-focus slice
     source_channel_Z, source_channel_Y, source_channel_X = source_channel_volume.shape[-3:]
     target_channel_Z, target_channel_Y, target_channel_X = target_channel_volume.shape[-3:]
@@ -117,11 +117,9 @@ def user_assisted_registration(
     source_channel_focus_idx = focus_from_transverse_band(
         source_channel_volume[
             :,
-            source_channel_Y // 2
-            - FOCUS_SLICE_ROI_WIDTH : source_channel_Y // 2
+            source_channel_Y // 2 - FOCUS_SLICE_ROI_WIDTH : source_channel_Y // 2
             + FOCUS_SLICE_ROI_WIDTH,
-            source_channel_X // 2
-            - FOCUS_SLICE_ROI_WIDTH : source_channel_X // 2
+            source_channel_X // 2 - FOCUS_SLICE_ROI_WIDTH : source_channel_X // 2
             + FOCUS_SLICE_ROI_WIDTH,
         ],
         NA_det=NA_DETECTION_SOURCE,
@@ -132,11 +130,9 @@ def user_assisted_registration(
     target_channel_focus_idx = focus_from_transverse_band(
         target_channel_volume[
             :,
-            target_channel_Y // 2
-            - FOCUS_SLICE_ROI_WIDTH : target_channel_Y // 2
+            target_channel_Y // 2 - FOCUS_SLICE_ROI_WIDTH : target_channel_Y // 2
             + FOCUS_SLICE_ROI_WIDTH,
-            target_channel_X // 2
-            - FOCUS_SLICE_ROI_WIDTH : target_channel_X // 2
+            target_channel_X // 2 - FOCUS_SLICE_ROI_WIDTH : target_channel_X // 2
             + FOCUS_SLICE_ROI_WIDTH,
         ],
         NA_det=NA_DETECTION_TARGET,
@@ -209,8 +205,8 @@ def user_assisted_registration(
     source_layer = viewer.add_image(
         source_zxy_pre_reg.numpy(),
         name=f"source_{source_channel_name}",
-        blending='additive',
-        colormap='green',
+        blending="additive",
+        colormap="green",
     )
     points_source_channel = viewer.add_points(
         ndim=3, name=f"pts_source_{source_channel_name}", size=20, face_color=COLOR_CYCLE[0]
@@ -346,7 +342,7 @@ def user_assisted_registration(
         source_zxy_manual_reg.numpy(),
         name=f"registered_{source_channel_name}",
         colormap="magenta",
-        blending='additive',
+        blending="additive",
     )
     # Cleanup
     viewer.layers.remove(points_source_channel)
@@ -355,7 +351,7 @@ def user_assisted_registration(
 
     # Ants affine transforms
     tform = convert_transform_to_numpy(tx_manual)
-    click.echo(f'Estimated affine transformation matrix:\n{tform}\n')
+    click.echo(f"Estimated affine transformation matrix:\n{tform}\n")
     input("Press <Enter> to close the viewer and exit...")
     viewer.close()
 
@@ -437,10 +433,7 @@ def estimate_registration(
         target_channel_voxel_size = voxel_size[-3:]
 
     # Run locally or submit to SLURM
-    if local:
-        cluster = "local"
-    else:
-        cluster = "slurm"
+    cluster = get_submitit_cluster(local)
     eval_transform_settings = settings.eval_transform_settings
 
     if settings.estimation_method == "beads":
@@ -532,7 +525,7 @@ def estimate_registration(
             stabilization_method=settings.estimation_method,
             stabilization_channels=[source_channel_name, target_channel_name],
             affine_transform_zyx_list=transforms,
-            time_indices='all',
+            time_indices="all",
             output_voxel_size=voxel_size,
         )
         if settings.verbose:
@@ -580,8 +573,7 @@ def estimate_registration_cli(
     sbatch_filepath: str = None,
     local: bool = False,
 ):
-    """
-    Estimate the affine transformation between a source and target image for registration.
+    """Estimate the affine transformation between a source and target image for registration.
 
     This command-line tools estimates the registration transforms between a source (moving) and target (fixed) image
     using either (1) user input, (2) images or registration beads, or (3) image features via the ANTS registration library.
@@ -592,17 +584,15 @@ def estimate_registration_cli(
     ANTs-based registration uses the ANTsPy library to estimate transformations based on image features. Optionally,
     a Sobel filter may be applied to the data to enhance feature detection between label-free and fluorescent channels.
 
-    Example:
-    >> biahub estimate-registration
-        -s ./acq_name_labelfree_reconstructed.zarr/0/0/0   # Source channel OME-Zarr data path
-        -t ./acq_name_lightsheet_deskewed.zarr/0/0/0       # Target channel OME-Zarr data path
-        -o ./output.yml                                    # Output configuration file path
-        --config ./config.yml                              # Path to input configuration file
-        --registration-target-channel "Phase3D"            # Name of the target channel
-        --registration-source-channel "GFP"                # Names of source channel
-        --registration-source-channel "mCherry"            # Names of another source channel
+    >>> biahub estimate-registration \
+        -s ./acq_name_labelfree_reconstructed.zarr/0/0/0 \
+        -t ./acq_name_lightsheet_deskewed.zarr/0/0/0 \
+        -o ./output.yml \
+        --config ./config.yml \
+        --registration-target-channel "Phase3D" \
+        --registration-source-channel "GFP" \
+        --registration-source-channel "mCherry"
     """
-
     estimate_registration(
         source_position_dirpaths=source_position_dirpaths,
         target_position_dirpaths=target_position_dirpaths,

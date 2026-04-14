@@ -19,7 +19,12 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.cli.slurm import wait_for_jobs_to_finish
-from biahub.cli.utils import estimate_resources, model_to_yaml, yaml_to_model
+from biahub.cli.utils import (
+    estimate_resources,
+    get_submitit_cluster,
+    model_to_yaml,
+    yaml_to_model,
+)
 from biahub.register import find_lir
 from biahub.settings import ConcatenateSettings
 
@@ -43,6 +48,7 @@ def estimate_crop_one_position(
         Radius of the circular mask which will be applied to the phase channel. If None, no masking will be applied
     output_dir : Path
         Path to save the output CSV file.
+
     Returns
     -------
     tuple
@@ -87,7 +93,7 @@ def estimate_crop_one_position(
 
     if len(valid_T) == 0:
         click.echo("No valid data found for current position, will not crop.")
-        return tuple(zip((0, 0, 0), _max_zyx_dims))
+        return tuple(zip((0, 0, 0), _max_zyx_dims, strict=True))
     valid_data = data[valid_T, valid_C]
 
     # Compute a mask where all voxels are non-zero along time and channel dimensions
@@ -151,7 +157,7 @@ def estimate_crop(
     """
     Estimate a crop region where both phase and fluorescene volumes are non-zero.
 
-    Parameters:
+    Parameters
     ----------
     config_filepath : str
         Path to a yaml ConcatenateSettings file.
@@ -210,22 +216,18 @@ def estimate_crop(
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
     # Run locally or submit to SLURM
-    if local:
-        cluster = "local"
-    else:
-        cluster = "slurm"
+    cluster = get_submitit_cluster(local)
 
     # Prepare and submit jobs
     click.echo(f"Preparing jobs: {slurm_args}")
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
 
-    click.echo('Submitting SLURM jobs...')
+    click.echo("Submitting SLURM jobs...")
     jobs = []
 
     with submitit.helpers.clean_env(), executor.batch():
-        for ls_dir, lf_dir in zip(ls_position_dirpaths, lf_position_dirpaths):
-
+        for ls_dir, lf_dir in zip(ls_position_dirpaths, lf_position_dirpaths, strict=True):
             job = executor.submit(
                 estimate_crop_one_position,
                 lf_mask_radius=lf_mask_radius,
@@ -302,24 +304,12 @@ def estimate_crop_cli(
     sbatch_filepath: str = None,
     local: bool = False,
 ):
-    """
-    Estimate a crop region where both phase and fluorescene volumes are non-zero.
+    """Estimate a crop region where both phase and fluorescence volumes are non-zero.
 
-    Parameters:
-    ----------
-    config_filepath : str
-        Path to a yaml ConcatenateSettings file.
-        This file will be replicated in the output with modified XYZ slicing parametrs.
-    output_filepath : str
-        Path to save the output config file.
-    lf_mask_radius : float
-        Radius of the circular mask given as fraction of image width to apply to the phase channel.
-        A good value if 0.95.
-    sbatch_filepath : str
-        Path to a SLURM submission script.
-    local : bool
-        If True, run the jobs locally.
-
+    >>> biahub estimate-crop \
+        -c ./concat.yml \
+        -o ./cropped_concat.yml \
+        --local
     """
     estimate_crop(
         config_filepath=config_filepath,

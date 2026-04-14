@@ -3,7 +3,7 @@ import shutil
 
 from datetime import datetime
 from pathlib import Path
-from typing import List, Literal, Optional, Tuple, cast
+from typing import Literal, cast
 
 import click
 import dask.array as da
@@ -28,7 +28,7 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.cli.slurm import wait_for_jobs_to_finish
-from biahub.cli.utils import estimate_resources, yaml_to_model
+from biahub.cli.utils import estimate_resources, get_submitit_cluster, yaml_to_model
 from biahub.registration.utils import (
     evaluate_transforms,
     match_shape,
@@ -65,7 +65,7 @@ def remove_beads_fov_from_path_list(
     list[Path]
         Paths to the input position directories without the beads FOV.
     """
-    if skip_beads_fov != '0':
+    if skip_beads_fov != "0":
         click.echo(f"Removing beads FOV {skip_beads_fov} from input data paths")
         position_dirpaths = [
             path for path in position_dirpaths if skip_beads_fov not in str(path)
@@ -129,12 +129,12 @@ def phase_cross_corr_padding(
     ref_img: ArrayLike,
     mov_img: ArrayLike,
     maximum_shift: float = 1.2,
-    normalization: Optional[Literal["magnitude", "classic"]] = None,
-    output_path: Optional[Path] = None,
+    normalization: Literal["magnitude", "classic"] | None = None,
+    output_path: Path | None = None,
     verbose: bool = False,
-) -> Tuple[int, ...]:
+) -> tuple[int, ...]:
     """
-    Borrowing from Jordao dexpv2.crosscorr https://github.com/royerlab/dexpv2
+    Borrowing from Jordao dexpv2.crosscorr https://github.com/royerlab/dexpv2.
 
     Computes translation shift using arg. maximum of phase cross correlation.
     Input are padded or cropped for fast FFT computation assuming a maximum translation shift.
@@ -155,7 +155,7 @@ def phase_cross_corr_padding(
     """
     shape = tuple(
         cast(int, next_fast_len(int(max(s1, s2) * maximum_shift)))
-        for s1, s2 in zip(ref_img.shape, mov_img.shape)
+        for s1, s2 in zip(ref_img.shape, mov_img.shape, strict=True)
     )
 
     if verbose:
@@ -185,7 +185,7 @@ def phase_cross_corr_padding(
 
     argmax = np.argmax(corr)
     peak = np.unravel_index(argmax, corr.shape)
-    peak = tuple(s // 2 - p for s, p in zip(corr.shape, peak))
+    peak = tuple(s // 2 - p for s, p in zip(corr.shape, peak, strict=True))
 
     if verbose:
         click.echo(f"phase cross corr. peak at {peak}")
@@ -198,12 +198,12 @@ def phase_cross_corr_padding(
 def phase_cross_corr(
     ref_img: ArrayLike,
     mov_img: ArrayLike,
-    normalization: Optional[Literal["magnitude", "classic"]] = None,
-    output_path: Optional[Path] = None,
+    normalization: Literal["magnitude", "classic"] | None = None,
+    output_path: Path | None = None,
     verbose: bool = False,
-) -> Tuple[int, ...]:
+) -> tuple[int, ...]:
     """
-    Borrowing from Jordao dexpv2.crosscorr https://github.com/royerlab/dexpv2
+    Borrowing from Jordao dexpv2.crosscorr https://github.com/royerlab/dexpv2.
 
     Computes translation shift using arg. maximum of phase cross correlation.
     Input are padded or cropped for fast FFT computation assuming a maximum translation shift.
@@ -224,7 +224,6 @@ def phase_cross_corr(
     Tuple[int, ...]
         Shift between reference and moved image.
     """
-
     Fimg1 = np.fft.rfftn(ref_img)
     Fimg2 = np.fft.rfftn(mov_img)
     eps = np.finfo(Fimg1.dtype).eps
@@ -261,10 +260,10 @@ def get_tform_from_pcc(
     source_channel_tzyx: da.Array,
     target_channel_tzyx: da.Array,
     function_type: Literal["custom_padding", "custom"] = "custom",
-    normalization: Optional[Literal["magnitude", "classic"]] = None,
-    output_path: Optional[Path] = None,
+    normalization: Literal["magnitude", "classic"] | None = None,
+    output_path: Path | None = None,
     verbose: bool = False,
-) -> Tuple[ArrayLike, Tuple[int, int, int]]:
+) -> tuple[ArrayLike, tuple[int, int, int]]:
     """
     Get the transformation matrix from phase cross correlation.
 
@@ -284,7 +283,6 @@ def get_tform_from_pcc(
     ArrayLike
         Transformation matrix.
     """
-
     target = np.asarray(source_channel_tzyx[t]).astype(np.float32)
     source = np.asarray(target_channel_tzyx[t]).astype(np.float32)
 
@@ -314,13 +312,13 @@ def get_tform_from_pcc(
 def plot_pcc_drifts(
     df: pd.DataFrame,
     output_dir: Path,
-    label='sample',
-    title='PCC Drift Analysis',
-    unit: Literal['µm', 'px'] = 'µm',
-    voxel_size: Tuple[float, float, float] = (0.174, 0.1494, 0.1494),  # (Z, Y, X) in microns
+    label="sample",
+    title="PCC Drift Analysis",
+    unit: Literal["µm", "px"] = "µm",
+    voxel_size: tuple[float, float, float] = (0.174, 0.1494, 0.1494),  # (Z, Y, X) in microns
 ) -> None:
     """
-    Plot the drifts from PCC per timepoint for a single position
+    Plot the drifts from PCC per timepoint for a single position.
 
     Parameters
     ----------
@@ -334,27 +332,28 @@ def plot_pcc_drifts(
         Title for the plot.
     voxel_size : Tuple[float, float, float]
         Voxel size in microns.
+
     Returns
     -------
     None
         Saves the plot to the output directory.
     """
-    if unit == 'µm':
+    if unit == "µm":
         # Unpack voxel sizes
         z_scale, y_scale, x_scale = voxel_size
 
         # Convert to microns
-        df['ShiftX'] = df['ShiftX'] * x_scale
-        df['ShiftY'] = df['ShiftY'] * y_scale
-        df['ShiftZ'] = df['ShiftZ'] * z_scale
+        df["ShiftX"] = df["ShiftX"] * x_scale
+        df["ShiftY"] = df["ShiftY"] * y_scale
+        df["ShiftZ"] = df["ShiftZ"] * z_scale
 
     # Cumulative and magnitude drift
-    df['CumulativeShiftX'] = df['ShiftX'].cumsum()
-    df['CumulativeShiftY'] = df['ShiftY'].cumsum()
-    df['CumulativeShiftZ'] = df['ShiftZ'].cumsum()
-    df['DriftMagnitude'] = np.sqrt(df['ShiftX'] ** 2 + df['ShiftY'] ** 2 + df['ShiftZ'] ** 2)
-    df['CumulativeDrift'] = np.sqrt(
-        df['CumulativeShiftX'] ** 2 + df['CumulativeShiftY'] ** 2 + df['CumulativeShiftZ'] ** 2
+    df["CumulativeShiftX"] = df["ShiftX"].cumsum()
+    df["CumulativeShiftY"] = df["ShiftY"].cumsum()
+    df["CumulativeShiftZ"] = df["ShiftZ"].cumsum()
+    df["DriftMagnitude"] = np.sqrt(df["ShiftX"] ** 2 + df["ShiftY"] ** 2 + df["ShiftZ"] ** 2)
+    df["CumulativeDrift"] = np.sqrt(
+        df["CumulativeShiftX"] ** 2 + df["CumulativeShiftY"] ** 2 + df["CumulativeShiftZ"] ** 2
     )
 
     fig, axs = plt.subplots(3, 1, figsize=(12, 10), sharex=True)
@@ -398,10 +397,10 @@ def plot_pcc_drifts(
 
 
 def plot_corr_max_min_sum(
-    corr_df: pd.DataFrame, output_path: Path, label='sample', title='Cross-Correlation Summary'
+    corr_df: pd.DataFrame, output_path: Path, label="sample", title="Cross-Correlation Summary"
 ) -> None:
     """
-    Plot the max, min, and sum of the cross-correlation from PCC per timepoint for a single position
+    Plot the max, min, and sum of the cross-correlation from PCC per timepoint for a single position.
 
     Parameters
     ----------
@@ -621,14 +620,13 @@ def estimate_xyz_stabilization_pcc(
     dict[str, list[ArrayLike]]
         Dictionary of the xyz stabilization for each position.
     """
-
     input_position_dirpaths = remove_beads_fov_from_path_list(
         input_position_dirpaths, phase_cross_corr_settings.skip_beads_fov
     )
 
     output_folder_path.mkdir(parents=True, exist_ok=True)
     slurm_out_path = output_folder_path / "slurm_output"
-    slurm_out_path.mkdir(parents=True, exist_ok=True)
+    slurm_out_path.mkdir(exist_ok=True)
 
     with open_ome_zarr(input_position_dirpaths[0]) as dataset:
         shape = dataset.data.shape
@@ -748,7 +746,7 @@ def estimate_xy_stabilization_per_position(
         tyx_data = np.stack(
             [
                 input_position[0][t, channel_index, z, y_idx, x_idx]
-                for t, z in zip(range(T), z_idx)
+                for t, z in zip(range(T), z_idx, strict=True)
             ]
         )
         tyx_data = np.clip(tyx_data, a_min=0, a_max=None)
@@ -777,7 +775,7 @@ def estimate_xy_stabilization(
     output_folder_path: Path,
     stack_reg_settings: StackRegSettings,
     channel_index: int = 0,
-    sbatch_filepath: Optional[Path] = None,
+    sbatch_filepath: Path | None = None,
     cluster: str = "local",
     verbose: bool = False,
 ) -> dict[str, list[ArrayLike]]:
@@ -806,14 +804,13 @@ def estimate_xy_stabilization(
     dict[str, list[ArrayLike]]
         Dictionary of the xy stabilization for each position.
     """
-
     input_position_dirpaths = remove_beads_fov_from_path_list(
         input_position_dirpaths, stack_reg_settings.skip_beads_fov
     )
 
     output_folder_path.mkdir(parents=True, exist_ok=True)
     slurm_out_path = output_folder_path / "slurm_output"
-    slurm_out_path.mkdir(parents=True, exist_ok=True)
+    slurm_out_path.mkdir(exist_ok=True)
 
     # Estimate resources from a sample dataset
     with open_ome_zarr(input_position_dirpaths[0]) as dataset:
@@ -901,7 +898,7 @@ def estimate_xy_stabilization(
 
 def estimate_z_focus_per_position(
     input_position_dirpath: Path,
-    input_channel_indices: Tuple[int, ...],
+    input_channel_indices: tuple[int, ...],
     center_crop_xy: list[int, int],
     output_path_focus_csv: Path,
     output_path_transform: Path,
@@ -1056,13 +1053,14 @@ def estimate_z_stabilization(
     output_folder_path: Path,
     focus_finding_settings: FocusFindingSettings,
     channel_index: int,
-    sbatch_filepath: Optional[Path] = None,
+    sbatch_filepath: Path | None = None,
     cluster: str = "local",
     verbose: bool = False,
     estimate_z_index: bool = False,
 ) -> dict[str, list[ArrayLike]]:
     """
     Estimate the z stabilization for a list of positions.
+
     Parameters
     ----------
     input_position_dirpaths : list[Path]
@@ -1093,7 +1091,7 @@ def estimate_z_stabilization(
 
     output_folder_path.mkdir(parents=True, exist_ok=True)
     slurm_out_path = output_folder_path / "slurm_output"
-    slurm_out_path.mkdir(parents=True, exist_ok=True)
+    slurm_out_path.mkdir(exist_ok=True)
 
     # Estimate resources from a sample dataset
     with open_ome_zarr(input_position_dirpaths[0]) as dataset:
@@ -1222,7 +1220,7 @@ def estimate_z_stabilization(
 
 
 def estimate_stabilization(
-    input_position_dirpaths: List[str],
+    input_position_dirpaths: list[str],
     output_dirpath: str,
     config_filepath: str,
     sbatch_filepath: str = None,
@@ -1252,7 +1250,6 @@ def estimate_stabilization(
     -----
     The verbose output will be saved at the same level as the output zarr.
     """
-
     # Load the settings
     config_filepath = Path(config_filepath)
 
@@ -1275,10 +1272,7 @@ def estimate_stabilization(
         T, C, Z, Y, X = dataset.data.shape
 
     # Run locally or submit to SLURM
-    if local:
-        cluster = "local"
-    else:
-        cluster = "slurm"
+    cluster = get_submitit_cluster(local)
 
     # Load the evaluation settings
     eval_transform_settings = settings.eval_transform_settings
@@ -1320,11 +1314,9 @@ def estimate_stabilization(
             )
 
             try:
-
                 for fov, xy_transforms in tqdm(
                     xy_transforms_dict.items(), desc="Processing FOVs"
                 ):
-
                     z_transforms = np.asarray(z_transforms_dict[fov])
                     xy_transforms = np.asarray(xy_transforms)
 
@@ -1334,7 +1326,7 @@ def estimate_stabilization(
                         )
 
                     xyz_transforms = np.asarray(
-                        [a @ b for a, b in zip(xy_transforms, z_transforms)]
+                        [a @ b for a, b in zip(xy_transforms, z_transforms, strict=True)]
                     ).tolist()
 
                     if eval_transform_settings:
@@ -1399,7 +1391,6 @@ def estimate_stabilization(
                     f"Error estimating {stabilization_type} stabilization parameters: {e}"
                 )
         elif stabilization_method == "beads":
-
             from biahub.registration.beads import estimate_tczyx
 
             click.echo("Estimating xyz stabilization parameters with beads")
@@ -1619,21 +1610,23 @@ def estimate_stabilization(
 @sbatch_filepath()
 @local()
 def estimate_stabilization_cli(
-    input_position_dirpaths: List[str],
+    input_position_dirpaths: list[str],
     output_dirpath: str,
     config_filepath: Path,
     sbatch_filepath: str = None,
     local: bool = False,
 ):
-    """
-    Estimate translation matrices for XYZ stabilization of a timelapse dataset.
+    """Estimate translation matrices for XYZ stabilization of a timelapse dataset.
 
     Stabilization parameters may be computed for the XY, Z, or XYZ dimensions using
     focus finding, beads, or phase cross correlation methods.
 
-    Example usage:
-    biahub estimate-stabilization -i ./timelapse.zarr/0/0/0 -o ./stabilization.yml  -c ./config.yml -s ./sbatch.sh --local --verbose
-
+    >>> biahub estimate-stabilization \
+        -i ./timelapse.zarr/0/0/0 \
+        -o ./stabilization.yml \
+        -c ./config.yml \
+        -s ./sbatch.sh \
+        --local --verbose
     """
     estimate_stabilization(
         input_position_dirpaths=input_position_dirpaths,

@@ -1,10 +1,11 @@
 from __future__ import annotations
+
 import ast
 import os
 
 from glob import glob
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Tuple, Union
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ultrack import MainConfig
@@ -31,6 +32,7 @@ from biahub.cli.parsing import (
 from biahub.cli.resolve_function import resolve_function
 from biahub.cli.utils import (
     estimate_resources,
+    get_submitit_cluster,
     update_model,
     yaml_to_model,
 )
@@ -80,7 +82,7 @@ CUSTOM_FUNCTIONS = {
 }
 
 
-def fill_empty_frames(arr: ArrayLike, empty_frames_idx: List[int]) -> ArrayLike:
+def fill_empty_frames(arr: ArrayLike, empty_frames_idx: list[int]) -> ArrayLike:
     """
     Fill empty frames in a time-series imaging array using nearest available frames.
 
@@ -114,7 +116,6 @@ def fill_empty_frames(arr: ArrayLike, empty_frames_idx: List[int]) -> ArrayLike:
     >>> empty_frames_idx = [0, 4]
     >>> arr_filled = fill_empty_frames(arr, empty_frames_idx)
     """
-
     if not empty_frames_idx or not isinstance(empty_frames_idx, list):
         return arr
 
@@ -156,9 +157,7 @@ def fill_empty_frames(arr: ArrayLike, empty_frames_idx: List[int]) -> ArrayLike:
     return arr
 
 
-def get_empty_frames_idx_from_csv(
-    blank_frame_df: pd.DataFrame, fov: str
-) -> Union[List[int], None]:
+def get_empty_frames_idx_from_csv(blank_frame_df: pd.DataFrame, fov: str) -> list[int] | None:
     """
     Extract the indices of empty timepoints for a given field of view (FOV) from a DataFrame.
 
@@ -187,15 +186,14 @@ def get_empty_frames_idx_from_csv(
 
     Examples
     --------
-    >>> df = pd.DataFrame({'FOV': ['A/1/1'], 't': ['[0, 2, 4]']})
-    >>> get_empty_frames_idx_from_csv(df, 'A/1/1')
+    >>> df = pd.DataFrame({"FOV": ["A/1/1"], "t": ["[0, 2, 4]"]})
+    >>> get_empty_frames_idx_from_csv(df, "A/1/1")
     [0, 2, 4]
     """
-
-    empty_frames_idx = blank_frame_df[blank_frame_df['FOV'] == fov]['t']
+    empty_frames_idx = blank_frame_df[blank_frame_df["FOV"] == fov]["t"]
     if not empty_frames_idx.empty:
         t_value = empty_frames_idx.iloc[0]
-        if isinstance(t_value, str) and t_value.startswith('['):
+        if isinstance(t_value, str) and t_value.startswith("["):
             t_value = ast.literal_eval(t_value)
         if isinstance(t_value, list):
             return [int(i) for i in t_value]
@@ -245,7 +243,7 @@ def central_z_slice(z_shape: int) -> slice:
     return slice(z_center - half_window, z_center + half_window + 1)
 
 
-def resolve_z_slice(z_range: Tuple[int, int], z_shape: int) -> Tuple[slice, int]:
+def resolve_z_slice(z_range: tuple[int, int], z_shape: int) -> tuple[slice, int]:
     """
     Resolve the z-slice range based on user input and imaging mode.
 
@@ -309,7 +307,7 @@ def run_ultrack(
     tracking_config: MainConfig,
     foreground_mask: ArrayLike,
     contour_gradient_map: ArrayLike,
-    scale: Union[Tuple[float, float], Tuple[float, float, float]],
+    scale: tuple[float, float] | tuple[float, float, float],
     database_path,
 ):
     """
@@ -361,10 +359,10 @@ def run_ultrack(
     ...     foreground_mask=binary_mask,
     ...     contour_gradient_map=gradient_map,
     ...     scale=(0.5, 0.5, 1.0),
-    ...     database_path=Path("results/posA")
+    ...     database_path=Path("results/posA"),
     ... )
     """
-    from ultrack import MainConfig, Tracker
+    from ultrack import Tracker
 
     cfg: MainConfig = tracking_config
 
@@ -395,10 +393,10 @@ def run_ultrack(
 
 
 def run_preprocessing_pipeline(
-    data_dict: Dict[str, ArrayLike],
-    input_images: List[ProcessingInputChannel],
+    data_dict: dict[str, ArrayLike],
+    input_images: list[ProcessingInputChannel],
     visualize: bool = False,
-) -> Dict[str, ArrayLike]:
+) -> dict[str, ArrayLike]:
     """
     Run a configurable preprocessing pipeline on input image channels.
 
@@ -447,10 +445,10 @@ def run_preprocessing_pipeline(
     ...                     function="np.mean",
     ...                     kwargs={"axis": 1},
     ...                     per_timepoint=False,
-    ...                     input_channels=["raw"]
+    ...                     input_channels=["raw"],
     ...                 )
     ...             ]
-    ...         }
+    ...         },
     ...     )
     ... ]
 
@@ -495,11 +493,11 @@ def run_preprocessing_pipeline(
 
 
 def load_data(
-    position_key: Tuple[str, str, str],
-    input_images: List[ProcessingInputChannel],
+    position_key: tuple[str, str, str],
+    input_images: list[ProcessingInputChannel],
     z_slices: slice,
     visualize: bool = False,
-) -> Dict[str, ArrayLike]:
+) -> dict[str, ArrayLike]:
     """
     Load and extract specified channels from an OME-Zarr dataset for a given position.
 
@@ -551,9 +549,9 @@ def load_data(
 
 def fill_empty_frames_from_csv(
     fov: str,
-    data_dict: Dict[str, ArrayLike],
+    data_dict: dict[str, ArrayLike],
     blank_frame_csv_path: Path,
-) -> Dict[str, ArrayLike]:
+) -> dict[str, ArrayLike]:
     """
     Fill empty timepoints in a multi-channel image dictionary using a CSV file of blank frames.
 
@@ -586,11 +584,11 @@ def fill_empty_frames_from_csv(
 
 def data_preprocessing(
     position_key: str,
-    input_images: List[ProcessingInputChannel],
+    input_images: list[ProcessingInputChannel],
     z_slices: slice,
     blank_frames_path: Path = None,
     visualize: bool = False,
-) -> Dict[str, np.ndarray]:
+) -> dict[str, np.ndarray]:
     """
     Load, preprocess, and prepare image data for tracking.
 
@@ -634,7 +632,7 @@ def data_preprocessing(
     ...     input_images=config.input_images,
     ...     z_slices=z_slice,
     ...     blank_frames_path=Path("blank_frames.csv"),
-    ...     visualize=False
+    ...     visualize=False,
     ... )
     >>> foreground.shape, contour.shape
     ((10, 5, 256, 256), (10, 5, 256, 256))
@@ -663,12 +661,12 @@ def data_preprocessing(
 
 def track_one_position(
     position_key: str,
-    input_images: List[ProcessingInputChannel],
+    input_images: list[ProcessingInputChannel],
     output_dirpath: Path,
     tracking_config: MainConfig,
     blank_frames_path: Path = None,
-    z_slices: Tuple[int, int] = (0, 0),
-    scale: Tuple[float, float, float, float, float] = (1, 1, 1, 1, 1),
+    z_slices: tuple[int, int] = (0, 0),
+    scale: tuple[float, float, float, float, float] = (1, 1, 1, 1, 1),
 ) -> None:
     """
     Run tracking on a single field of view using foreground and contour channel data.
@@ -676,6 +674,7 @@ def track_one_position(
     This function loads image data, applies a preprocessing pipeline, fills blank frames if needed,
     and uses the Ultrack library to compute object tracks. It is agnostic to the imaging source —
     as long as the pipeline produces a binary foreground mask and a corresponding contour map.
+
     Parameters
     ----------
     position_key : str
@@ -719,10 +718,9 @@ def track_one_position(
     ...     tracking_config=cfg,
     ...     blank_frames_path=Path("blank_frames.csv"),
     ...     z_slices=(10, 15),
-    ...     scale=(1, 1, 0.5, 0.2, 0.2)
+    ...     scale=(1, 1, 0.5, 0.2, 0.2),
     ... )
     """
-
     fov = "_".join(position_key)
     click.echo(f"Processing FOV: {fov.replace('_', '/')}")
     # tracking input images
@@ -771,7 +769,8 @@ def track(
     This function orchestrates the tracking of cell trajectories across multiple fields of view (FOVs).
     It supports any imaging modality, as long as preprocessing produces the required foreground mask
     and contour gradient map for tracking.
-        Parameters
+
+    Parameters
     ----------
     output_dirpath : str
         Path to the Zarr store where output labeled segmentations and track data will be saved.
@@ -895,10 +894,7 @@ def track(
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
     # Run locally or submit to SLURM
-    if local:
-        cluster = "local"
-    else:
-        cluster = "slurm"
+    cluster = get_submitit_cluster(local)
 
     # Prepare and submit jobs
     click.echo(f"Preparing jobs: {slurm_args}")
@@ -906,7 +902,7 @@ def track(
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
 
-    click.echo('Submitting SLURM jobs...')
+    click.echo("Submitting SLURM jobs...")
     jobs = []
 
     with submitit.helpers.clean_env(), executor.batch():
@@ -926,6 +922,7 @@ def track(
 
     job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 
+    slurm_out_path.mkdir(exist_ok=True)
     log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
@@ -942,19 +939,17 @@ def track_cli(
     sbatch_filepath: str = None,
     local: bool = None,
 ) -> None:
-    """
-    Track objects in 2D or 3D time-lapse microscopy data using configurable preprocessing.
+    """Track objects in 2D or 3D time-lapse microscopy data using configurable preprocessing.
 
     This command applies preprocessing, handles optional blank frame filling, and performs
     object tracking on each position using the Ultrack library. Compatible with any image
     modality as long as it produces 'foreground' and 'contour' inputs.
 
-    Example usage:
-
-    biahub track -i virtual_staining.zarr/*/*/* -o output.zarr -c config_tracking.yml
-
+    >>> biahub track \
+        -i virtual_staining.zarr/*/*/* \
+        -o output.zarr \
+        -c config_tracking.yml
     """
-
     track(
         output_dirpath=output_dirpath,
         config_filepath=config_filepath,
