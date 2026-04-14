@@ -57,9 +57,11 @@ gui = ["napari[pyqt6]", "PyQt6>=6.5,<6.8", "napari-animation"]
 
 shard = ["tensorstore"]
 
+stain = ["viscy"]
+
 build = ["build", "twine"]
 
-all = ["biahub[segment,track,shard,build,gui]"]
+all = ["biahub[segment,track,shard,build,gui,stain]"]
 
 doc = [
     "zensical>=0.0.32",
