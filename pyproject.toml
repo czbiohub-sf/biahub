@@ -29,7 +29,7 @@ dependencies = [
   "numpy",
   "markdown",
   "monai",
-  "pandas~=2.1",
+  "pandas",
   "pydantic>2",
   "scipy",
   "submitit",
