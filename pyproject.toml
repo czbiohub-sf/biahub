@@ -7,7 +7,7 @@ name = "biahub"
 description = "Bioimage analysis hub."
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.12, <4.0"
+requires-python = ">=3.11"
 
 dynamic = ["version"]
 
@@ -20,14 +20,16 @@ classifiers = [
 
 dependencies = [
   "click",
-  "iohub[tensorstore]>=0.3.2",
+  # need to pin until #198, #199, #215 are resolved
+  # iohub>0.3 writes to zarr v3 by default which breaks biahub tests
+  "iohub==0.3.0a7",
   "stitch @ git+https://github.com/ahillsley/stitching@jen",
   "matplotlib",
   "natsort",
   "numpy",
   "markdown",
   "monai",
-  "pandas~=2.1",
+  "pandas",
   "pydantic>2",
   "scipy",
   "submitit",
@@ -49,18 +51,23 @@ dependencies = [
 [project.optional-dependencies]
 segment = ["cellpose"]
 
-track = ["ultrack>=0.7.0rc2"]
+track = ["ultrack>=0.7"]
 
 gui = ["napari[pyqt6]", "PyQt6>=6.5,<6.8", "napari-animation"]
 
 shard = ["tensorstore"]
 
+# TODO: resolved to v0.3.2 which is not compatible with iohub 0.3.0a7
+# bring bach once we sort out iohub dependencies
+# stain = ["viscy"]
+stain = []
+
 build = ["build", "twine"]
 
-all = ["biahub[segment,track,shard,build,gui]"]
+all = ["biahub[segment,track,shard,build,gui,stain]"]
 
 doc = [
-    "zensical>=0.0.11",
+    "zensical>=0.0.32",
     "mkdocs-click>=0.8",
 ]
 
