@@ -57,7 +57,10 @@ gui = ["napari[pyqt6]", "PyQt6>=6.5,<6.8", "napari-animation"]
 
 shard = ["tensorstore"]
 
-stain = ["viscy"]
+# TODO: resolved to v0.3.2 which is not compatible with iohub 0.3.0a7
+# bring bach once we sort out iohub dependencies
+# stain = ["viscy"]
+stain = []
 
 build = ["build", "twine"]
 
