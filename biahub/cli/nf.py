@@ -1101,3 +1101,216 @@ def estimate_stabilization_beads(
         shape=shape, ram_multiplier=8, max_num_cpus=16
     )
     click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
+
+
+# ---------------------------------------------------------------------------
+# PSF estimation
+# ---------------------------------------------------------------------------
+
+
+@nf_cli.command("estimate-psf")
+@click.option("--input-zarr", "-i", required=True, type=click.Path(exists=True))
+@click.option("--position", "-p", required=True)
+@click.option("--config", "-c", required=True, type=click.Path(exists=True))
+@click.option("--output-zarr", "-o", required=True, type=click.Path())
+def nf_estimate_psf(input_zarr: str, position: str, config: str, output_zarr: str):
+    """Estimate average PSF from bead images for a single position."""
+    import torch
+
+    from iohub.ngff.models import TransformationMeta
+
+    from biahub.characterize_psf import detect_peaks, extract_beads
+    from biahub.settings import PsfFromBeadsSettings
+
+    settings = yaml_to_model(Path(config), PsfFromBeadsSettings)
+    patch_size = (
+        settings.axis0_patch_size,
+        settings.axis1_patch_size,
+        settings.axis2_patch_size,
+    )
+
+    position_path = Path(input_zarr) / position
+    with open_ome_zarr(str(position_path), mode="r") as ds:
+        zyx_data = ds["0"][0, 0]
+        zyx_scale = ds.scale[-3:]
+
+    bead_detection_settings = {
+        "block_size": (64, 64, 32),
+        "blur_kernel_size": 3,
+        "nms_distance": 32,
+        "min_distance": 50,
+        "threshold_abs": 200.0,
+        "max_num_peaks": 2000,
+        "exclude_border": (5, 10, 5),
+        "device": "cuda" if torch.cuda.is_available() else "cpu",
+    }
+
+    peaks = detect_peaks(zyx_data, **bead_detection_settings, verbose=True)
+    beads, _ = extract_beads(
+        zyx_data=zyx_data,
+        points=peaks,
+        scale=zyx_scale,
+        patch_size=tuple(a * b for a, b in zip(patch_size, zyx_scale, strict=True)),
+    )
+
+    if not beads:
+        raise click.ClickException(f"No beads detected in {position}.")
+
+    filtered_beads = [x for x in beads if x.shape == beads[0].shape]
+    bzyx_data = np.stack(filtered_beads)
+    normalized = bzyx_data / np.max(bzyx_data, axis=(-3, -2, -1))[:, None, None, None]
+    average_psf = np.mean(normalized, axis=0)
+    average_psf -= np.min(average_psf)
+    average_psf /= np.max(average_psf)
+
+    output_path = Path(output_zarr)
+    with open_ome_zarr(
+        output_path, layout="hcs", mode="w", channel_names=["PSF"]
+    ) as out:
+        pos = out.create_position("0", "0", "0")
+        pos.create_zeros(
+            name="0",
+            shape=(1, 1) + average_psf.shape,
+            chunks=(1, 1) + average_psf.shape,
+            dtype=np.float32,
+            transform=[
+                TransformationMeta(type="scale", scale=(1.0, 1.0) + tuple(zyx_scale))
+            ],
+        )
+        pos["0"][0, 0] = average_psf
+
+    click.echo(f"PSF estimated from {len(filtered_beads)} beads: {position}")
+    click.echo("RESOURCES:4 32")
+
+
+# ---------------------------------------------------------------------------
+# Deconvolution
+# ---------------------------------------------------------------------------
+
+
+@nf_cli.command("init-deconvolve")
+@click.option("--input-zarr", "-i", required=True, type=click.Path(exists=True))
+@click.option("--output-zarr", "-o", required=True, type=click.Path())
+@click.option("--psf-zarr", required=True, type=click.Path(exists=True))
+@click.option("--tf-zarr", required=True, type=click.Path())
+@click.option("--config", "-c", required=True, type=click.Path(exists=True))
+def init_deconvolve(
+    input_zarr: str, output_zarr: str, psf_zarr: str, tf_zarr: str, config: str
+):
+    """Create empty output plate, compute transfer function, and estimate resources."""
+    import torch
+
+    from iohub.ngff.models import TransformationMeta
+
+    from biahub.settings import DeconvolveSettings
+
+    settings = yaml_to_model(Path(config), DeconvolveSettings)
+    position_keys, channel_names, shape, scale = read_plate_metadata(input_zarr)
+    T, C, Z, Y, X = shape
+
+    create_empty_plate(
+        store_path=Path(output_zarr),
+        position_keys=position_keys,
+        channel_names=channel_names,
+        shape=shape,
+        scale=scale,
+        version="0.5",
+    )
+    copy_position_metadata(Path(input_zarr), Path(output_zarr))
+    click.echo(f"Created {output_zarr} ({len(position_keys)} positions)")
+
+    with open_ome_zarr(str(Path(psf_zarr) / "0/0/0"), mode="r") as psf_ds:
+        psf_data = psf_ds["0"][0, 0]
+        psf_scale = psf_ds.scale
+
+    zyx_padding = np.array((Z, Y, X)) - np.array(psf_data.shape)
+    pad_width = [
+        (x // 2, x // 2) if x % 2 == 0 else (x // 2, x // 2 + 1) for x in zyx_padding
+    ]
+    padded_psf = np.pad(psf_data, pad_width=pad_width, mode="constant", constant_values=0)
+    transfer_function = torch.abs(torch.fft.fftn(torch.tensor(padded_psf)))
+    transfer_function /= torch.max(transfer_function)
+    tf_numpy = transfer_function.numpy()
+
+    tf_path = Path(tf_zarr)
+    with open_ome_zarr(tf_path, layout="fov", mode="w-", channel_names=["PSF"]) as tf_ds:
+        tf_ds.create_image(
+            "0",
+            tf_numpy[None, None],
+            chunks=(1, 1, 256) + (Y, X),
+            transform=[TransformationMeta(type="scale", scale=psf_scale)],
+        )
+
+    click.echo(f"Transfer function saved to {tf_zarr}")
+
+    num_cpus, mem_per_cpu = estimate_resources(
+        shape=[T, C, Z, Y, X], ram_multiplier=16, max_num_cpus=16
+    )
+    click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
+
+
+@nf_cli.command("run-deconvolve")
+@click.option("--input-zarr", "-i", required=True, type=click.Path(exists=True))
+@click.option("--output-zarr", "-o", required=True, type=click.Path(exists=True))
+@click.option("--tf-zarr", required=True, type=click.Path(exists=True))
+@click.option("--position", "-p", required=True)
+@click.option("--config", "-c", required=True, type=click.Path(exists=True))
+@click.option("--num-threads", "-j", default=1, type=int)
+def run_deconvolve(
+    input_zarr: str,
+    output_zarr: str,
+    tf_zarr: str,
+    position: str,
+    config: str,
+    num_threads: int,
+):
+    """Apply deconvolution to a single position using precomputed transfer function."""
+    from biahub.deconvolve import deconvolve
+    from biahub.settings import DeconvolveSettings
+
+    settings = yaml_to_model(Path(config), DeconvolveSettings)
+    input_position = Path(input_zarr) / position
+    output_position = Path(output_zarr) / position
+
+    process_single_position(
+        deconvolve,
+        str(input_position),
+        str(output_position),
+        num_processes=num_threads,
+        transfer_function_store_path=str(tf_zarr),
+        regularization_strength=float(settings.regularization_strength),
+    )
+
+    click.echo(f"Deconvolution done: {position}")
+
+
+# ---------------------------------------------------------------------------
+# Flip
+# ---------------------------------------------------------------------------
+
+
+@nf_cli.command("flip")
+@click.option("--input-zarr", "-i", required=True, type=click.Path(exists=True))
+@click.option("--position", "-p", required=True)
+@click.option("--x", "flip_x", is_flag=True, help="Flip along X axis")
+@click.option("--y", "flip_y", is_flag=True, help="Flip along Y axis")
+def nf_flip(input_zarr: str, position: str, flip_x: bool, flip_y: bool):
+    """Flip data in-place for a single position along X and/or Y."""
+    if not flip_x and not flip_y:
+        raise click.ClickException("Provide at least --x or --y.")
+
+    position_path = Path(input_zarr) / position
+    with open_ome_zarr(str(position_path), mode="r+") as ds:
+        array = ds["0"]
+        T, C, _, _, _ = array.shape
+        for t in range(T):
+            for c in range(C):
+                data = array[t, c]
+                if flip_x:
+                    data = data[:, :, ::-1]
+                if flip_y:
+                    data = data[:, ::-1, :]
+                array[t, c] = data
+
+    click.echo(f"Flipped: {position}")
+    click.echo("RESOURCES:1 2")

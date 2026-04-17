@@ -876,3 +876,264 @@ def test_estimate_stabilization_beads(tmp_path, example_plate):
         mock_beads.assert_called_once()
         call_kwargs = mock_beads.call_args.kwargs
         assert call_kwargs["mode"] == "stabilization"
+
+
+# ---------------------------------------------------------------------------
+# Deconvolution: estimate-psf / init-deconvolve / run-deconvolve
+# ---------------------------------------------------------------------------
+
+
+def test_estimate_psf(tmp_path, example_plate):
+    """estimate-psf calls detect_peaks/extract_beads and writes psf.zarr."""
+    plate_path, ds = example_plate
+    ds.close()
+
+    output_path = tmp_path / "psf.zarr"
+    config = {
+        "axis0_patch_size": 101,
+        "axis1_patch_size": 101,
+        "axis2_patch_size": 101,
+    }
+    config_path = tmp_path / "psf_config.yml"
+    config_path.write_text(yaml.dump(config))
+
+    fake_peaks = np.array([[2, 2, 3]])
+    fake_beads = [np.random.randn(4, 5, 6).astype(np.float32)]
+
+    with (
+        patch("biahub.characterize_psf.detect_peaks", return_value=fake_peaks) as mock_detect,
+        patch(
+            "biahub.characterize_psf.extract_beads",
+            return_value=(fake_beads, [fake_peaks[0]]),
+        ),
+    ):
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "nf",
+                "estimate-psf",
+                "-i",
+                str(plate_path),
+                "-p",
+                "A/1/0",
+                "-c",
+                str(config_path),
+                "-o",
+                str(output_path),
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert output_path.exists()
+        assert "RESOURCES:" in result.output
+        mock_detect.assert_called_once()
+
+    with open_ome_zarr(str(output_path), mode="r") as out:
+        pos = out["0/0/0"]
+        assert pos.data.shape[0] == 1
+        assert pos.data.shape[1] == 1
+        assert pos.data.dtype == np.float32
+
+
+def test_init_deconvolve(tmp_path, example_plate):
+    """init-deconvolve creates output plate, computes transfer function, emits RESOURCES."""
+    plate_path, ds = example_plate
+    ds.close()
+
+    # Create a minimal PSF zarr (single position, single channel)
+    psf_path = tmp_path / "psf.zarr"
+    psf_ds = open_ome_zarr(psf_path, layout="hcs", mode="w", channel_names=["PSF"])
+    pos = psf_ds.create_position("0", "0", "0")
+    pos["0"] = np.random.randn(1, 1, 4, 5, 6).astype(np.float32)
+    psf_ds.close()
+
+    output_path = tmp_path / "deconv_output.zarr"
+    tf_path = tmp_path / "transfer_function.zarr"
+    config = {"regularization_strength": 0.001}
+    config_path = tmp_path / "deconv_config.yml"
+    config_path.write_text(yaml.dump(config))
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "nf",
+            "init-deconvolve",
+            "-i",
+            str(plate_path),
+            "-o",
+            str(output_path),
+            "--psf-zarr",
+            str(psf_path),
+            "--tf-zarr",
+            str(tf_path),
+            "-c",
+            str(config_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert output_path.exists()
+    assert tf_path.exists()
+    assert "RESOURCES:" in result.output
+
+    with open_ome_zarr(str(output_path), mode="r") as out:
+        pos = out["A/1/0"]
+        assert pos.data.shape == (3, 6, 4, 5, 6)
+
+    with open_ome_zarr(str(tf_path), mode="r") as tf:
+        assert tf["0"].shape[-3:] == (4, 5, 6)
+
+
+def test_run_deconvolve(tmp_path, example_plate):
+    """run-deconvolve calls process_single_position with deconvolve and correct args."""
+    plate_path, ds = example_plate
+    ds.close()
+
+    # Create minimal PSF and TF zarrs
+    psf_path = tmp_path / "psf.zarr"
+    psf_ds = open_ome_zarr(psf_path, layout="hcs", mode="w", channel_names=["PSF"])
+    pos = psf_ds.create_position("0", "0", "0")
+    pos["0"] = np.random.randn(1, 1, 4, 5, 6).astype(np.float32)
+    psf_ds.close()
+
+    output_path = tmp_path / "deconv_output.zarr"
+    tf_path = tmp_path / "transfer_function.zarr"
+    config = {"regularization_strength": 0.001}
+    config_path = tmp_path / "deconv_config.yml"
+    config_path.write_text(yaml.dump(config))
+
+    runner = CliRunner()
+    # Init first
+    runner.invoke(
+        cli,
+        [
+            "nf",
+            "init-deconvolve",
+            "-i",
+            str(plate_path),
+            "-o",
+            str(output_path),
+            "--psf-zarr",
+            str(psf_path),
+            "--tf-zarr",
+            str(tf_path),
+            "-c",
+            str(config_path),
+        ],
+    )
+
+    with patch("biahub.cli.nf.process_single_position") as mock_process:
+        result = runner.invoke(
+            cli,
+            [
+                "nf",
+                "run-deconvolve",
+                "-i",
+                str(plate_path),
+                "-o",
+                str(output_path),
+                "--tf-zarr",
+                str(tf_path),
+                "-p",
+                "A/1/0",
+                "-c",
+                str(config_path),
+                "-j",
+                "2",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        mock_process.assert_called_once()
+        call_kwargs = mock_process.call_args
+        assert call_kwargs.kwargs["num_processes"] == 2
+        assert "transfer_function_store_path" in call_kwargs.kwargs
+        assert "regularization_strength" in call_kwargs.kwargs
+
+
+# ---------------------------------------------------------------------------
+# flip
+# ---------------------------------------------------------------------------
+
+
+def test_flip_x(example_plate):
+    """flip --x flips data along X axis in-place for a single position."""
+    plate_path, ds = example_plate
+    ds.close()
+
+    with open_ome_zarr(str(plate_path), mode="r") as plate:
+        original = np.asarray(plate["A/1/0"]["0"][0, 0])
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "nf",
+            "flip",
+            "-i",
+            str(plate_path),
+            "-p",
+            "A/1/0",
+            "--x",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+
+    with open_ome_zarr(str(plate_path), mode="r") as plate:
+        flipped = np.asarray(plate["A/1/0"]["0"][0, 0])
+
+    np.testing.assert_array_equal(flipped, original[:, :, ::-1])
+
+
+def test_flip_y(example_plate):
+    """flip --y flips data along Y axis in-place for a single position."""
+    plate_path, ds = example_plate
+    ds.close()
+
+    with open_ome_zarr(str(plate_path), mode="r") as plate:
+        original = np.asarray(plate["A/1/0"]["0"][0, 0])
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "nf",
+            "flip",
+            "-i",
+            str(plate_path),
+            "-p",
+            "A/1/0",
+            "--y",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+
+    with open_ome_zarr(str(plate_path), mode="r") as plate:
+        flipped = np.asarray(plate["A/1/0"]["0"][0, 0])
+
+    np.testing.assert_array_equal(flipped, original[:, ::-1, :])
+
+
+def test_flip_no_axis_fails(example_plate):
+    """flip without --x or --y should fail."""
+    plate_path, ds = example_plate
+    ds.close()
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "nf",
+            "flip",
+            "-i",
+            str(plate_path),
+            "-p",
+            "A/1/0",
+        ],
+    )
+
+    assert result.exit_code != 0
