@@ -98,8 +98,9 @@ def copy_position_metadata(input_zarr: Path, output_zarr: Path) -> None:
                     if val is not None:
                         setattr(dst_pos.metadata.multiscales[0], field, val)
 
-                if src_meta.labels is not None:
-                    dst_pos.metadata.labels = src_meta.labels
+                src_labels = getattr(src_meta, "labels", None)
+                if src_labels is not None:
+                    dst_pos.metadata.labels = src_labels
 
                 dst_pos.metadata.multiscales[0].datasets = saved_datasets
                 dst_pos.metadata.omero = saved_omero

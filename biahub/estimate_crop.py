@@ -72,12 +72,12 @@ def estimate_crop_one_position(
     # Ensure data dimensions are the same
     lf_shape = lf_mask.shape[-3:]
     ls_shape = ls_mask.shape[-3:]
+    _max_zyx_dims = np.asarray([lf_shape, ls_shape]).min(axis=0)
     if lf_shape != ls_shape:
         click.echo(
             "WARNING: Phase and fluorescence datasets should have the same shape, got"
             f" phase shape: {lf_shape}, fluorescence shape: {ls_shape}"
         )
-        _max_zyx_dims = np.asarray([lf_shape, ls_shape]).min(axis=0)
         lf_mask = lf_mask[..., : _max_zyx_dims[0], : _max_zyx_dims[1], : _max_zyx_dims[2]]
         ls_mask = ls_mask[..., : _max_zyx_dims[0], : _max_zyx_dims[1], : _max_zyx_dims[2]]
 

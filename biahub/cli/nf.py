@@ -370,3 +370,734 @@ def copy_virtual_stain(temp_zarr: str, output_zarr: str, position: str):
 
     shutil.rmtree(temp_zarr)
     click.echo(f"Virtual stain copied: {position}")
+
+
+# ---------------------------------------------------------------------------
+# Channel rename
+# ---------------------------------------------------------------------------
+
+
+@nf_cli.command("rename-channels")
+@click.option("--input-zarr", "-i", required=True, type=click.Path(exists=True))
+@click.option("--position", "-p", required=True)
+@click.option("--prefix", default="", help="Prefix to prepend to each channel name")
+@click.option("--suffix", default="", help="Suffix to append to each channel name")
+def rename_channels(input_zarr: str, position: str, prefix: str, suffix: str):
+    """Rename channels for a single position (metadata-only, no data copy)."""
+    if not prefix and not suffix:
+        raise click.ClickException("Provide at least --prefix or --suffix.")
+
+    position_path = Path(input_zarr) / position
+    with open_ome_zarr(str(position_path), mode="r+") as pos:
+        for old_name in list(pos.channel_names):
+            new_name = f"{prefix}{old_name}{suffix}"
+            pos.rename_channel(old_name, new_name)
+
+    click.echo(f"Renamed channels: {position}")
+    click.echo("RESOURCES:1 2")
+
+
+# ---------------------------------------------------------------------------
+# Tracking
+# ---------------------------------------------------------------------------
+
+
+@nf_cli.command("init-track")
+@click.option("--input-zarr", "-i", required=True, type=click.Path(exists=True))
+@click.option("--output-zarr", "-o", required=True, type=click.Path())
+@click.option("--config", "-c", required=True, type=click.Path(exists=True))
+def init_track(input_zarr: str, output_zarr: str, config: str):
+    """Create empty output zarr for tracking (uint32 labels, single channel)."""
+    from biahub.settings import TrackingSettings
+    from biahub.track import resolve_z_slice
+
+    settings = yaml_to_model(Path(config), TrackingSettings)
+    position_keys, _, shape, scale = read_plate_metadata(input_zarr)
+    T, C, Z, Y, X = shape
+
+    _, Z_out = resolve_z_slice(settings.z_range, Z)
+
+    if settings.mode == "2D":
+        output_shape = (T, 1, 1, Y, X)
+    else:
+        output_shape = (T, 1, Z_out, Y, X)
+
+    create_empty_plate(
+        store_path=Path(output_zarr),
+        position_keys=position_keys,
+        channel_names=[f"{settings.target_channel}_labels"],
+        shape=output_shape,
+        chunks=None,
+        scale=scale,
+        version="0.5",
+        dtype=np.uint32,
+    )
+    copy_position_metadata(Path(input_zarr), Path(output_zarr))
+    click.echo(f"Created {output_zarr} ({len(position_keys)} positions)")
+
+    num_cpus, mem_per_cpu = estimate_resources(
+        shape=[T, C, Z_out, Y, X], ram_multiplier=16, max_num_cpus=16
+    )
+    click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
+
+
+@nf_cli.command("run-track")
+@click.option("--output-zarr", "-o", required=True, type=click.Path(exists=True))
+@click.option("--position", "-p", required=True)
+@click.option("--config", "-c", required=True, type=click.Path(exists=True))
+@click.option("--blank-frames-csv", default=None, type=click.Path(exists=True))
+def run_track(output_zarr: str, position: str, config: str, blank_frames_csv: str | None):
+    """Run tracking for a single position."""
+    from biahub.settings import TrackingSettings
+    from biahub.track import resolve_z_slice, track_one_position
+
+    settings = yaml_to_model(Path(config), TrackingSettings)
+    output_dirpath = Path(output_zarr)
+    position_key = tuple(position.split("/"))
+
+    input_images_paths = [
+        image.path for image in settings.input_images if image.path is not None
+    ]
+    if not input_images_paths:
+        raise click.ClickException("No input_images_paths provided in config.")
+
+    with open_ome_zarr(str(input_images_paths[0] / Path(*position_key)), mode="r") as ds:
+        T, C, Z, Y, X = ds.data.shape
+        scale = ds.scale
+
+    z_slices, _ = resolve_z_slice(settings.z_range, Z)
+    track_scale = scale[-2:] if settings.mode == "2D" else scale[-3:]
+
+    blank_path = Path(blank_frames_csv) if blank_frames_csv else settings.blank_frames_path
+
+    track_one_position(
+        position_key=position_key,
+        input_images=settings.input_images,
+        output_dirpath=output_dirpath,
+        tracking_config=settings.tracking_config,
+        blank_frames_path=blank_path,
+        z_slices=z_slices,
+        scale=track_scale,
+    )
+
+    click.echo(f"Tracking done: {position}")
+
+
+# ---------------------------------------------------------------------------
+# Assembly (estimate-crop / init-concatenate / run-concatenate)
+# ---------------------------------------------------------------------------
+
+
+@nf_cli.command("estimate-crop")
+@click.option("--config", "-c", required=True, type=click.Path(exists=True))
+@click.option("--output-config", "-o", required=True, type=click.Path())
+@click.option(
+    "--lf-mask-radius",
+    type=float,
+    default=0.95,
+    help="Circular mask radius as fraction of image width for phase channel.",
+)
+def nf_estimate_crop(config: str, output_config: str, lf_mask_radius: float):
+    """Estimate crop region across all positions and write updated config."""
+    import glob as globmod
+
+    from natsort import natsorted
+
+    from biahub.cli.utils import model_to_yaml
+    from biahub.estimate_crop import estimate_crop_one_position
+    from biahub.settings import ConcatenateSettings
+
+    config_path = Path(config)
+    settings = yaml_to_model(config_path, ConcatenateSettings)
+
+    if len(settings.concat_data_paths) < 2:
+        raise click.ClickException(
+            "estimate-crop requires at least 2 concat_data_paths (label-free + light-sheet)."
+        )
+
+    lf_positions = natsorted(
+        [Path(p) for p in globmod.glob(settings.concat_data_paths[0]) if Path(p).is_dir()]
+    )
+    ls_positions = natsorted(
+        [Path(p) for p in globmod.glob(settings.concat_data_paths[1]) if Path(p).is_dir()]
+    )
+
+    if len(lf_positions) != len(ls_positions):
+        raise click.ClickException(
+            f"Mismatched position counts: {len(lf_positions)} label-free vs {len(ls_positions)} light-sheet."
+        )
+
+    all_ranges = []
+    for lf_dir, ls_dir in zip(lf_positions, ls_positions, strict=True):
+        z_range, y_range, x_range = estimate_crop_one_position(
+            lf_dir=lf_dir,
+            ls_dir=ls_dir,
+            lf_mask_radius=lf_mask_radius,
+        )
+        all_ranges.append([z_range, y_range, x_range])
+
+    all_ranges = np.array(all_ranges)
+    standardized_ranges = np.concatenate(
+        [
+            all_ranges[..., 0].max(axis=0, keepdims=True),
+            all_ranges[..., 1].min(axis=0, keepdims=True),
+        ]
+    )
+
+    output_model = settings.model_copy()
+    output_model.Z_slice = standardized_ranges[:, 0].tolist()
+    output_model.Y_slice = standardized_ranges[:, 1].tolist()
+    output_model.X_slice = standardized_ranges[:, 2].tolist()
+    model_to_yaml(output_model, Path(output_config))
+
+    click.echo(f"Updated config written to {output_config}")
+    click.echo("RESOURCES:4 32")
+
+
+@nf_cli.command("init-concatenate")
+@click.option("--config", "-c", required=True, type=click.Path(exists=True))
+@click.option("--output-zarr", "-o", required=True, type=click.Path())
+def init_concatenate(config: str, output_zarr: str):
+    """Create empty output zarr for concatenation."""
+    from iohub.ngff.utils import create_empty_plate
+
+    from biahub.cli.utils import get_output_paths
+    from biahub.concatenate import (
+        calculate_cropped_size,
+        get_channel_combiner_metadata,
+    )
+    from biahub.settings import ConcatenateSettings
+
+    settings = yaml_to_model(Path(config), ConcatenateSettings)
+    slicing_params = [settings.Z_slice, settings.Y_slice, settings.X_slice]
+
+    (
+        all_data_paths,
+        all_channel_names,
+        _input_channel_idx,
+        _output_channel_idx,
+        all_slicing_params,
+    ) = get_channel_combiner_metadata(
+        settings.concat_data_paths, settings.channel_names, slicing_params
+    )
+
+    output_position_paths = get_output_paths(
+        all_data_paths,
+        Path(output_zarr),
+        ensure_unique_positions=settings.ensure_unique_positions,
+    )
+
+    all_shapes = []
+    all_dtypes = []
+    all_voxel_sizes = []
+    for path in all_data_paths:
+        with open_ome_zarr(path) as ds:
+            all_shapes.append(ds.data.shape)
+            all_dtypes.append(ds.data.dtype)
+            all_voxel_sizes.append(ds.scale[-3:])
+
+    T = all_shapes[0][0]
+    if settings.time_indices == "all":
+        T = min(s[0] for s in all_shapes)
+        input_time_indices = list(range(T))
+    elif isinstance(settings.time_indices, list):
+        input_time_indices = settings.time_indices
+    elif isinstance(settings.time_indices, int):
+        input_time_indices = [settings.time_indices]
+
+    if all(d == all_dtypes[0] for d in all_dtypes):
+        dtype = all_dtypes[0]
+    else:
+        dtype = np.float32
+
+    cropped_shape_zyx = calculate_cropped_size(all_slicing_params[0])
+    output_voxel_size = all_voxel_sizes[0]
+
+    output_shape = (len(input_time_indices), len(all_channel_names)) + tuple(cropped_shape_zyx)
+    output_scale = (1,) * 2 + tuple(output_voxel_size)
+
+    create_empty_plate(
+        store_path=Path(output_zarr),
+        position_keys=[p.parts[-3:] for p in output_position_paths],
+        channel_names=all_channel_names,
+        shape=output_shape,
+        chunks=settings.chunks_czyx if settings.chunks_czyx else None,
+        scale=output_scale,
+        version=settings.output_ome_zarr_version,
+        dtype=dtype,
+    )
+
+    click.echo(f"Created {output_zarr} ({len(output_position_paths)} positions)")
+
+    C = all_shapes[0][1]
+    Z, Y, X = all_shapes[0][2:]
+    batch_size = settings.shards_ratio[0] if settings.shards_ratio else 1
+    num_cpus, mem_per_cpu = estimate_resources(
+        shape=(T // batch_size, C, Z, Y, X), ram_multiplier=4 * batch_size, max_num_cpus=16
+    )
+    click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
+
+
+@nf_cli.command("run-concatenate")
+@click.option("--config", "-c", required=True, type=click.Path(exists=True))
+@click.option("--output-zarr", "-o", required=True, type=click.Path(exists=True))
+@click.option("--position", "-p", required=True)
+@click.option("--num-threads", "-j", default=1, type=int)
+def run_concatenate(config: str, output_zarr: str, position: str, num_threads: int):
+    """Copy and crop data from all input stores for one position into output."""
+    from iohub.ngff.utils import process_single_position as iohub_process_single_position
+
+    from biahub.cli.utils import copy_n_paste
+    from biahub.concatenate import get_channel_combiner_metadata
+    from biahub.settings import ConcatenateSettings
+
+    settings = yaml_to_model(Path(config), ConcatenateSettings)
+    slicing_params = [settings.Z_slice, settings.Y_slice, settings.X_slice]
+
+    (
+        all_data_paths,
+        _all_channel_names,
+        input_channel_idx_list,
+        output_channel_idx_list,
+        all_slicing_params,
+    ) = get_channel_combiner_metadata(
+        settings.concat_data_paths, settings.channel_names, slicing_params
+    )
+
+    all_shapes = []
+    for path in all_data_paths:
+        with open_ome_zarr(path) as ds:
+            all_shapes.append(ds.data.shape)
+
+    T = all_shapes[0][0]
+    if settings.time_indices == "all":
+        T = min(s[0] for s in all_shapes)
+        input_time_indices = list(range(T))
+    elif isinstance(settings.time_indices, list):
+        input_time_indices = settings.time_indices
+    elif isinstance(settings.time_indices, int):
+        input_time_indices = [settings.time_indices]
+
+    output_dirpath = Path(output_zarr)
+
+    for (
+        input_path,
+        input_ch_idx,
+        output_ch_idx,
+        zyx_slicing_params,
+    ) in zip(
+        all_data_paths,
+        input_channel_idx_list,
+        output_channel_idx_list,
+        all_slicing_params,
+        strict=True,
+    ):
+        fov_key = "/".join(Path(input_path).parts[-3:])
+        if fov_key != position:
+            continue
+
+        output_position_path = output_dirpath / position
+
+        iohub_process_single_position(
+            copy_n_paste,
+            input_position_path=input_path,
+            output_position_path=output_position_path,
+            input_channel_indices=input_ch_idx,
+            output_channel_indices=output_ch_idx,
+            input_time_indices=input_time_indices,
+            output_time_indices=list(range(len(input_time_indices))),
+            num_processes=num_threads,
+            zyx_slicing_params=zyx_slicing_params,
+        )
+
+    click.echo(f"Concatenation done: {position}")
+
+
+# ---------------------------------------------------------------------------
+# Stabilization: combine-transforms / init-stabilize / run-stabilize
+# ---------------------------------------------------------------------------
+
+
+@nf_cli.command("combine-transforms")
+@click.option("--config-a", "-a", required=True, type=click.Path(exists=True))
+@click.option("--config-b", "-b", required=True, type=click.Path(exists=True))
+@click.option("--output-config", "-o", required=True, type=click.Path())
+def combine_transforms(config_a: str, config_b: str, output_config: str):
+    """Compose two per-FOV transform lists: output[t] = A[t] @ B[t]."""
+    from biahub.cli.utils import model_to_yaml
+    from biahub.settings import StabilizationSettings
+
+    settings_a = yaml_to_model(Path(config_a), StabilizationSettings)
+    settings_b = yaml_to_model(Path(config_b), StabilizationSettings)
+
+    transforms_a = np.array(settings_a.affine_transform_zyx_list)
+    transforms_b = np.array(settings_b.affine_transform_zyx_list)
+
+    if len(transforms_a) != len(transforms_b):
+        raise click.ClickException(
+            f"Transform count mismatch: {len(transforms_a)} vs {len(transforms_b)}"
+        )
+
+    composed = np.array(
+        [a @ b for a, b in zip(transforms_a, transforms_b, strict=True)]
+    )
+
+    output_model = settings_a.model_copy()
+    output_model.affine_transform_zyx_list = composed.tolist()
+    model_to_yaml(output_model, Path(output_config))
+
+    click.echo(f"Combined transforms written to {output_config}")
+    click.echo("RESOURCES:1 4")
+
+
+@nf_cli.command("init-stabilize")
+@click.option("--input-zarr", "-i", required=True, type=click.Path(exists=True))
+@click.option("--output-zarr", "-o", required=True, type=click.Path())
+@click.option("--config", "-c", required=True, type=click.Path(exists=True))
+def init_stabilize(input_zarr: str, output_zarr: str, config: str):
+    """Create empty output zarr for stabilization."""
+    from scipy.linalg import svd
+    from scipy.spatial.transform import Rotation
+
+    from biahub.settings import StabilizationSettings
+
+    settings = yaml_to_model(Path(config), StabilizationSettings)
+    position_keys, channel_names, shape, _ = read_plate_metadata(input_zarr)
+    T, C, Z, Y, X = shape
+
+    combined_mats = np.array(settings.affine_transform_zyx_list)
+
+    R_matrix = combined_mats[0][:3, :3]
+    U, _, Vt = svd(R_matrix)
+    R_pure = U @ Vt
+    euler_angles = Rotation.from_matrix(R_pure).as_euler("xyz", degrees=True)
+
+    if np.isclose(euler_angles[0], 90, atol=10):
+        out_Y, out_X = X, Y
+    else:
+        out_Y, out_X = Y, X
+
+    if settings.time_indices == "all":
+        time_indices = list(range(T))
+    elif isinstance(settings.time_indices, list):
+        time_indices = settings.time_indices
+    elif isinstance(settings.time_indices, int):
+        time_indices = [settings.time_indices]
+
+    output_shape = (len(time_indices), len(channel_names), Z, out_Y, out_X)
+
+    create_empty_plate(
+        store_path=Path(output_zarr),
+        position_keys=position_keys,
+        channel_names=channel_names,
+        shape=output_shape,
+        chunks=None,
+        scale=settings.output_voxel_size,
+        version="0.5",
+        dtype=np.float32,
+    )
+    copy_position_metadata(Path(input_zarr), Path(output_zarr))
+    click.echo(f"Created {output_zarr} ({len(position_keys)} positions)")
+
+    num_cpus, mem_per_cpu = estimate_resources(
+        shape=output_shape, ram_multiplier=16, max_num_cpus=16
+    )
+    click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
+
+
+@nf_cli.command("run-stabilize")
+@click.option("--input-zarr", "-i", required=True, type=click.Path(exists=True))
+@click.option("--output-zarr", "-o", required=True, type=click.Path(exists=True))
+@click.option("--position", "-p", required=True)
+@click.option("--config", "-c", required=True, type=click.Path(exists=True))
+@click.option("--num-threads", "-j", default=1, type=int)
+def run_stabilize(
+    input_zarr: str,
+    output_zarr: str,
+    position: str,
+    config: str,
+    num_threads: int,
+):
+    """Apply precomputed stabilization transforms to a single position."""
+    from biahub.cli.utils import process_single_position_v2
+    from biahub.settings import StabilizationSettings
+    from biahub.stabilize import apply_stabilization_transform
+
+    settings = yaml_to_model(Path(config), StabilizationSettings)
+    combined_mats = np.array(settings.affine_transform_zyx_list)
+
+    input_position = Path(input_zarr) / position
+    output_position = Path(output_zarr) / position
+
+    with open_ome_zarr(str(input_position), mode="r") as ds:
+        T, C, Z, Y, X = ds.data.shape
+        channel_names = ds.channel_names
+
+    with open_ome_zarr(str(output_position), mode="r") as ds_out:
+        _, _, out_Z, out_Y, out_X = ds_out.data.shape
+
+    if settings.time_indices == "all":
+        time_indices = list(range(T))
+    elif isinstance(settings.time_indices, list):
+        time_indices = settings.time_indices
+    elif isinstance(settings.time_indices, int):
+        time_indices = [settings.time_indices]
+
+    for ch_idx, ch_name in enumerate(channel_names):
+        process_single_position_v2(
+            func=apply_stabilization_transform,
+            input_data_path=input_position,
+            output_path=Path(output_zarr),
+            time_indices=time_indices,
+            input_channel_idx=[ch_idx],
+            output_channel_idx=[ch_idx],
+            num_threads=num_threads,
+            list_of_shifts=combined_mats,
+            output_shape=(out_Z, out_Y, out_X),
+        )
+
+    click.echo(f"Stabilization done: {position}")
+
+
+# ---------------------------------------------------------------------------
+# Stabilization estimation: z-focus / xy / pcc / beads
+# ---------------------------------------------------------------------------
+
+
+@nf_cli.command("estimate-stabilization-z-focus")
+@click.option("--input-zarr", "-i", required=True, type=click.Path(exists=True))
+@click.option("--position", "-p", required=True)
+@click.option("--config", "-c", required=True, type=click.Path(exists=True))
+@click.option("--output-dir", "-o", required=True, type=click.Path())
+def estimate_stabilization_z_focus(
+    input_zarr: str, position: str, config: str, output_dir: str
+):
+    """Estimate Z-focus stabilization for a single position."""
+    from biahub.estimate_stabilization import estimate_z_focus_per_position
+    from biahub.settings import EstimateStabilizationSettings
+
+    settings = yaml_to_model(Path(config), EstimateStabilizationSettings)
+    input_position = Path(input_zarr) / position
+
+    with open_ome_zarr(str(input_position), mode="r") as ds:
+        channel_names = ds.channel_names
+        shape = ds.data.shape
+
+    channel_index = channel_names.index(settings.stabilization_estimation_channel)
+
+    output_path = Path(output_dir)
+    focus_csv_dir = output_path / "z_focus_positions"
+    transform_dir = output_path / "z_transforms"
+
+    estimate_z_focus_per_position(
+        input_position_dirpath=input_position,
+        input_channel_indices=(channel_index,),
+        center_crop_xy=settings.focus_finding_settings.center_crop_xy,
+        output_path_focus_csv=focus_csv_dir,
+        output_path_transform=transform_dir,
+        verbose=settings.verbose,
+    )
+
+    click.echo(f"Z-focus estimation done: {position}")
+    num_cpus, mem_per_cpu = estimate_resources(
+        shape=shape, ram_multiplier=8, max_num_cpus=16
+    )
+    click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
+
+
+@nf_cli.command("estimate-stabilization-xy")
+@click.option("--input-zarr", "-i", required=True, type=click.Path(exists=True))
+@click.option("--position", "-p", required=True)
+@click.option("--config", "-c", required=True, type=click.Path(exists=True))
+@click.option("--focus-csv", required=True, type=click.Path(exists=True))
+@click.option("--output-dir", "-o", required=True, type=click.Path())
+def estimate_stabilization_xy(
+    input_zarr: str, position: str, config: str, focus_csv: str, output_dir: str
+):
+    """Estimate XY stabilization for a single position (requires merged focus CSV)."""
+    from biahub.estimate_stabilization import estimate_xy_stabilization_per_position
+    from biahub.settings import EstimateStabilizationSettings
+
+    settings = yaml_to_model(Path(config), EstimateStabilizationSettings)
+    input_position = Path(input_zarr) / position
+
+    with open_ome_zarr(str(input_position), mode="r") as ds:
+        channel_names = ds.channel_names
+        shape = ds.data.shape
+
+    channel_index = channel_names.index(settings.stabilization_estimation_channel)
+
+    output_path = Path(output_dir)
+    transform_dir = output_path / "xy_transforms"
+    transform_dir.mkdir(parents=True, exist_ok=True)
+
+    estimate_xy_stabilization_per_position(
+        input_position_dirpath=input_position,
+        output_folder_path=transform_dir,
+        df_z_focus_path=Path(focus_csv),
+        channel_index=channel_index,
+        center_crop_xy=settings.stack_reg_settings.center_crop_xy,
+        t_reference=settings.stack_reg_settings.t_reference,
+        verbose=settings.verbose,
+    )
+
+    click.echo(f"XY stabilization estimation done: {position}")
+    num_cpus, mem_per_cpu = estimate_resources(
+        shape=shape, ram_multiplier=8, max_num_cpus=16
+    )
+    click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
+
+
+@nf_cli.command("estimate-stabilization-pcc")
+@click.option("--input-zarr", "-i", required=True, type=click.Path(exists=True))
+@click.option("--position", "-p", required=True)
+@click.option("--config", "-c", required=True, type=click.Path(exists=True))
+@click.option("--output-dir", "-o", required=True, type=click.Path())
+def estimate_stabilization_pcc(
+    input_zarr: str, position: str, config: str, output_dir: str
+):
+    """Estimate XYZ stabilization via phase cross-correlation for a single position."""
+    from biahub.estimate_stabilization import (
+        estimate_xyz_stabilization_pcc_per_position,
+    )
+    from biahub.registration.utils import save_transforms
+    from biahub.settings import EstimateStabilizationSettings, StabilizationSettings
+
+    settings = yaml_to_model(Path(config), EstimateStabilizationSettings)
+    input_position = Path(input_zarr) / position
+
+    with open_ome_zarr(str(input_position), mode="r") as ds:
+        channel_names = ds.channel_names
+        voxel_size = ds.scale
+        shape = ds.data.shape
+
+    channel_index = channel_names.index(settings.stabilization_estimation_channel)
+
+    output_path = Path(output_dir)
+    transforms_dir = output_path / "transforms_per_position"
+    transforms_dir.mkdir(parents=True, exist_ok=True)
+    shifts_dir = output_path / "shifts_per_position"
+    shifts_dir.mkdir(parents=True, exist_ok=True)
+
+    transforms = estimate_xyz_stabilization_pcc_per_position(
+        input_position_dirpath=input_position,
+        output_folder_path=transforms_dir,
+        output_shifts_path=shifts_dir,
+        channel_index=channel_index,
+        phase_cross_corr_settings=settings.phase_cross_corr_settings,
+        verbose=settings.verbose,
+    )
+
+    position_filename = position.replace("/", "_")
+    model = StabilizationSettings(
+        stabilization_type=settings.stabilization_type,
+        stabilization_method=settings.stabilization_method,
+        stabilization_estimation_channel=settings.stabilization_estimation_channel,
+        stabilization_channels=settings.stabilization_channels,
+        affine_transform_zyx_list=[],
+        time_indices="all",
+        output_voxel_size=voxel_size,
+    )
+
+    if settings.eval_transform_settings:
+        from biahub.registration.utils import evaluate_transforms
+
+        T, C, Z, Y, X = shape
+        transforms = evaluate_transforms(
+            transforms=transforms,
+            shape_zyx=(Z, Y, X),
+            validation_window_size=settings.eval_transform_settings.validation_window_size,
+            validation_tolerance=settings.eval_transform_settings.validation_tolerance,
+            interpolation_window_size=settings.eval_transform_settings.interpolation_window_size,
+            interpolation_type=settings.eval_transform_settings.interpolation_type,
+            verbose=settings.verbose,
+        )
+
+    save_transforms(
+        model=model,
+        transforms=transforms,
+        output_filepath_settings=output_path / "xyz_stabilization_settings" / f"{position_filename}.yml",
+        verbose=settings.verbose,
+    )
+
+    click.echo(f"PCC stabilization estimation done: {position}")
+    num_cpus, mem_per_cpu = estimate_resources(
+        shape=shape, ram_multiplier=16, max_num_cpus=16
+    )
+    click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
+
+
+@nf_cli.command("estimate-stabilization-beads")
+@click.option("--input-zarr", "-i", required=True, type=click.Path(exists=True))
+@click.option("--position", "-p", required=True)
+@click.option("--config", "-c", required=True, type=click.Path(exists=True))
+@click.option("--output-dir", "-o", required=True, type=click.Path())
+def estimate_stabilization_beads(
+    input_zarr: str, position: str, config: str, output_dir: str
+):
+    """Estimate stabilization from beads on a single reference FOV (one-shot)."""
+    from biahub.registration.beads import estimate_tczyx
+    from biahub.registration.utils import save_transforms
+    from biahub.settings import EstimateStabilizationSettings, StabilizationSettings
+
+    settings = yaml_to_model(Path(config), EstimateStabilizationSettings)
+    input_position = Path(input_zarr) / position
+
+    with open_ome_zarr(str(input_position), mode="r") as ds:
+        channel_names = ds.channel_names
+        voxel_size = ds.scale
+        shape = ds.data.shape
+        channel_tczyx = ds.data.dask_array()
+
+    channel_index = channel_names.index(settings.stabilization_estimation_channel)
+
+    output_path = Path(output_dir)
+
+    xyz_transforms = estimate_tczyx(
+        mov_tczyx=channel_tczyx,
+        ref_tczyx=channel_tczyx,
+        mov_channel_index=channel_index,
+        ref_channel_index=channel_index,
+        beads_match_settings=settings.beads_match_settings,
+        affine_transform_settings=settings.affine_transform_settings,
+        verbose=settings.verbose,
+        output_folder_path=output_path,
+        mode="stabilization",
+    )
+
+    model = StabilizationSettings(
+        stabilization_type=settings.stabilization_type,
+        stabilization_method=settings.stabilization_method,
+        stabilization_estimation_channel=settings.stabilization_estimation_channel,
+        stabilization_channels=settings.stabilization_channels,
+        affine_transform_zyx_list=[],
+        time_indices="all",
+        output_voxel_size=voxel_size,
+    )
+
+    if settings.eval_transform_settings:
+        from biahub.registration.utils import evaluate_transforms
+
+        T, C, Z, Y, X = shape
+        xyz_transforms = evaluate_transforms(
+            transforms=xyz_transforms,
+            shape_zyx=(Z, Y, X),
+            validation_window_size=settings.eval_transform_settings.validation_window_size,
+            validation_tolerance=settings.eval_transform_settings.validation_tolerance,
+            interpolation_window_size=settings.eval_transform_settings.interpolation_window_size,
+            interpolation_type=settings.eval_transform_settings.interpolation_type,
+            verbose=settings.verbose,
+        )
+
+    save_transforms(
+        model=model,
+        transforms=xyz_transforms,
+        output_filepath_settings=output_path / "xyz_stabilization_settings.yml",
+        verbose=settings.verbose,
+    )
+
+    click.echo(f"Beads stabilization estimation done: {position}")
+    num_cpus, mem_per_cpu = estimate_resources(
+        shape=shape, ram_multiplier=8, max_num_cpus=16
+    )
+    click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
