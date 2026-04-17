@@ -1314,3 +1314,587 @@ def nf_flip(input_zarr: str, position: str, flip_x: bool, flip_y: bool):
 
     click.echo(f"Flipped: {position}")
     click.echo("RESOURCES:1 2")
+
+
+# ---------------------------------------------------------------------------
+# Registration estimation
+# ---------------------------------------------------------------------------
+
+
+@nf_cli.command("estimate-registration")
+@click.option("--source-zarr", required=True, type=click.Path(exists=True))
+@click.option("--target-zarr", required=True, type=click.Path(exists=True))
+@click.option("--position", "-p", required=True)
+@click.option("--config", "-c", required=True, type=click.Path(exists=True))
+@click.option("--output-dir", "-o", required=True, type=click.Path())
+@click.option("--registration-target-channel", "-rt", type=str, default=None)
+@click.option("--registration-source-channel", "-rs", type=str, multiple=True)
+def nf_estimate_registration(
+    source_zarr: str,
+    target_zarr: str,
+    position: str,
+    config: str,
+    output_dir: str,
+    registration_target_channel: str | None,
+    registration_source_channel: tuple[str, ...],
+):
+    """Estimate affine registration between source and target for a single position."""
+    from biahub.cli.utils import model_to_yaml
+    from biahub.registration.utils import evaluate_transforms
+    from biahub.settings import (
+        EstimateRegistrationSettings,
+        RegistrationSettings,
+        StabilizationSettings,
+    )
+
+    settings = yaml_to_model(Path(config), EstimateRegistrationSettings)
+
+    source_position = Path(source_zarr) / position
+    target_position = Path(target_zarr) / position
+
+    with open_ome_zarr(str(source_position), mode="r") as src:
+        source_channels = src.channel_names
+        source_channel_index = source_channels.index(settings.source_channel_name)
+        source_data = src.data.dask_array()
+        source_voxel_size = src.scale[-3:]
+        source_shape = src.data.shape
+
+    with open_ome_zarr(str(target_position), mode="r") as tgt:
+        target_channels = tgt.channel_names
+        target_channel_index = target_channels.index(settings.target_channel_name)
+        target_data = tgt.data.dask_array()
+        target_voxel_size = tgt.scale[-3:]
+        voxel_size = tgt.scale
+
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    if settings.estimation_method == "beads":
+        from biahub.registration.beads import estimate_tczyx
+
+        transforms = estimate_tczyx(
+            mov_tczyx=source_data,
+            ref_tczyx=target_data,
+            mov_channel_index=source_channel_index,
+            ref_channel_index=target_channel_index,
+            beads_match_settings=settings.beads_match_settings,
+            affine_transform_settings=settings.affine_transform_settings,
+            verbose=settings.verbose,
+            output_folder_path=output_path,
+            ref_voxel_size=target_voxel_size,
+            mov_voxel_size=source_voxel_size,
+            mode="registration",
+        )
+    elif settings.estimation_method == "ants":
+        from biahub.registration.ants import estimate_tczyx
+
+        transforms = estimate_tczyx(
+            mov_tczyx=source_data,
+            ref_tczyx=target_data,
+            mov_channel_index=source_channel_index,
+            ref_channel_index=target_channel_index,
+            ants_registration_settings=settings.ants_registration_settings,
+            affine_transform_settings=settings.affine_transform_settings,
+            verbose=settings.verbose,
+            output_folder_path=output_path,
+        )
+    else:
+        raise click.ClickException(
+            f"Unsupported estimation method for NF: {settings.estimation_method}. "
+            "Use 'beads' or 'ants'."
+        )
+
+    reg_target_ch = registration_target_channel or settings.target_channel_name
+    reg_source_chs = list(registration_source_channel) or [settings.source_channel_name]
+
+    if settings.eval_transform_settings and len(transforms) > 1:
+        transforms = evaluate_transforms(
+            transforms=transforms,
+            shape_zyx=source_data.shape[-3:],
+            validation_window_size=settings.eval_transform_settings.validation_window_size,
+            validation_tolerance=settings.eval_transform_settings.validation_tolerance,
+            interpolation_window_size=settings.eval_transform_settings.interpolation_window_size,
+            interpolation_type=settings.eval_transform_settings.interpolation_type,
+            verbose=settings.verbose,
+        )
+
+    if len(transforms) == 1:
+        model = RegistrationSettings(
+            source_channel_names=reg_source_chs,
+            target_channel_name=reg_target_ch,
+            affine_transform_zyx=transforms[0],
+        )
+    else:
+        model = StabilizationSettings(
+            stabilization_estimation_channel=settings.target_channel_name,
+            stabilization_type="affine",
+            stabilization_method=settings.estimation_method,
+            stabilization_channels=[settings.source_channel_name, settings.target_channel_name],
+            affine_transform_zyx_list=transforms,
+            time_indices="all",
+            output_voxel_size=voxel_size,
+        )
+
+    model_to_yaml(model, output_path / "registration_settings.yml")
+
+    click.echo(f"Registration estimation done: {position}")
+    num_cpus, mem_per_cpu = estimate_resources(
+        shape=source_shape, ram_multiplier=16, max_num_cpus=16
+    )
+    click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
+
+
+# ---------------------------------------------------------------------------
+# Registration optimization
+# ---------------------------------------------------------------------------
+
+
+@nf_cli.command("optimize-registration")
+@click.option("--source-zarr", required=True, type=click.Path(exists=True))
+@click.option("--target-zarr", required=True, type=click.Path(exists=True))
+@click.option("--position", "-p", required=True)
+@click.option("--config", "-c", required=True, type=click.Path(exists=True))
+@click.option("--output", "-o", required=True, type=click.Path())
+def nf_optimize_registration(
+    source_zarr: str,
+    target_zarr: str,
+    position: str,
+    config: str,
+    output: str,
+):
+    """Refine registration estimate using ANTs optimization for a single position."""
+    from biahub.cli.utils import model_to_yaml
+    from biahub.optimize_registration import _optimize_registration
+    from biahub.settings import RegistrationSettings
+
+    settings = yaml_to_model(Path(config), RegistrationSettings)
+
+    t_idx = settings.time_indices
+    if not isinstance(t_idx, int):
+        t_idx = 0
+
+    source_position = Path(source_zarr) / position
+    target_position = Path(target_zarr) / position
+
+    with open_ome_zarr(str(source_position), mode="r") as src:
+        source_channel_names = src.channel_names
+        source_channel_index = source_channel_names.index(settings.source_channel_names[0])
+        source_data_czyx = np.asarray(src.data[t_idx])
+        shape = src.data.shape
+
+    with open_ome_zarr(str(target_position), mode="r") as tgt:
+        target_channel_names = tgt.channel_names
+        target_channel_index = target_channel_names.index(settings.target_channel_name)
+        target_data_czyx = np.asarray(tgt.data[t_idx])
+
+    approx_tform = np.asarray(settings.affine_transform_zyx, dtype=np.float32)
+
+    composed_matrix = _optimize_registration(
+        source_czyx=source_data_czyx,
+        target_czyx=target_data_czyx,
+        initial_tform=approx_tform,
+        source_channel_index=source_channel_index,
+        target_channel_index=target_channel_index,
+        crop=True,
+        verbose=settings.verbose,
+    )
+
+    output_path = Path(output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_settings = settings.model_copy()
+    output_settings.affine_transform_zyx = composed_matrix.tolist()
+    model_to_yaml(output_settings, output_path)
+
+    click.echo(f"Registration optimization done: {position}")
+    num_cpus, mem_per_cpu = estimate_resources(
+        shape=shape, ram_multiplier=16, max_num_cpus=16
+    )
+    click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
+
+
+# ---------------------------------------------------------------------------
+# Registration apply: init + run
+# ---------------------------------------------------------------------------
+
+
+@nf_cli.command("init-register")
+@click.option("--source-zarr", required=True, type=click.Path(exists=True))
+@click.option("--target-zarr", required=True, type=click.Path(exists=True))
+@click.option("--output-zarr", "-o", required=True, type=click.Path())
+@click.option("--config", "-c", required=True, type=click.Path(exists=True))
+def nf_init_register(
+    source_zarr: str,
+    target_zarr: str,
+    output_zarr: str,
+    config: str,
+):
+    """Create empty output zarr for registration."""
+    from biahub.register import find_overlapping_volume, rescale_voxel_size
+    from biahub.settings import RegistrationSettings
+
+    settings = yaml_to_model(Path(config), RegistrationSettings)
+    matrix = np.array(settings.affine_transform_zyx)
+
+    position_keys, source_channel_names, source_shape, source_scale = read_plate_metadata(
+        source_zarr
+    )
+    T, C, Z, Y, X = source_shape
+    source_shape_zyx = (Z, Y, X)
+
+    with open_ome_zarr(str(Path(target_zarr) / "/".join(position_keys[0])), mode="r") as tgt:
+        target_channel_names = tgt.channel_names
+        target_shape_zyx = tgt.data.shape[-3:]
+
+    output_voxel_size = rescale_voxel_size(matrix[:3, :3], source_scale[-3:])
+
+    if settings.time_indices == "all":
+        time_indices = list(range(T))
+    elif isinstance(settings.time_indices, list):
+        time_indices = settings.time_indices
+    elif isinstance(settings.time_indices, int):
+        time_indices = [settings.time_indices]
+
+    output_channel_names = list(target_channel_names)
+    if source_zarr != target_zarr:
+        output_channel_names += list(source_channel_names)
+
+    if not settings.keep_overhang:
+        Z_slice, Y_slice, X_slice = find_overlapping_volume(
+            source_shape_zyx, target_shape_zyx, matrix
+        )
+        cropped_shape_zyx = (
+            Z_slice.stop - Z_slice.start,
+            Y_slice.stop - Y_slice.start,
+            X_slice.stop - X_slice.start,
+        )
+    else:
+        cropped_shape_zyx = target_shape_zyx
+
+    output_shape = (len(time_indices), len(output_channel_names)) + tuple(cropped_shape_zyx)
+
+    create_empty_plate(
+        store_path=Path(output_zarr),
+        position_keys=position_keys,
+        channel_names=output_channel_names,
+        shape=output_shape,
+        chunks=None,
+        scale=(1, 1) + tuple(output_voxel_size),
+        version="0.5",
+        dtype=np.float32,
+    )
+    copy_position_metadata(Path(source_zarr), Path(output_zarr))
+    click.echo(f"Created {output_zarr} ({len(position_keys)} positions)")
+
+    num_cpus, mem_per_cpu = estimate_resources(
+        shape=output_shape, ram_multiplier=5, max_num_cpus=16
+    )
+    click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
+
+
+@nf_cli.command("run-register")
+@click.option("--source-zarr", required=True, type=click.Path(exists=True))
+@click.option("--target-zarr", required=True, type=click.Path(exists=True))
+@click.option("--output-zarr", "-o", required=True, type=click.Path(exists=True))
+@click.option("--position", "-p", required=True)
+@click.option("--config", "-c", required=True, type=click.Path(exists=True))
+@click.option("--num-threads", "-j", default=1, type=int)
+def nf_run_register(
+    source_zarr: str,
+    target_zarr: str,
+    output_zarr: str,
+    position: str,
+    config: str,
+    num_threads: int,
+):
+    """Apply registration transform to a single position."""
+    from biahub.cli.utils import copy_n_paste_czyx, process_single_position_v2
+    from biahub.register import apply_affine_transform, find_overlapping_volume
+    from biahub.settings import RegistrationSettings
+
+    settings = yaml_to_model(Path(config), RegistrationSettings)
+    matrix = np.array(settings.affine_transform_zyx)
+
+    source_position = Path(source_zarr) / position
+    target_position = Path(target_zarr) / position
+    output_position = Path(output_zarr) / position
+
+    with open_ome_zarr(str(source_position), mode="r") as src:
+        T = src.data.shape[0]
+        source_channel_names = src.channel_names
+        source_shape_zyx = src.data.shape[-3:]
+
+    with open_ome_zarr(str(target_position), mode="r") as tgt:
+        target_channel_names = tgt.channel_names
+        target_shape_zyx = tgt.data.shape[-3:]
+
+    with open_ome_zarr(str(output_position), mode="r") as out:
+        output_channel_names = out.channel_names
+
+    if settings.time_indices == "all":
+        time_indices = list(range(T))
+    elif isinstance(settings.time_indices, list):
+        time_indices = settings.time_indices
+    elif isinstance(settings.time_indices, int):
+        time_indices = [settings.time_indices]
+
+    if not settings.keep_overhang:
+        Z_slice, Y_slice, X_slice = find_overlapping_volume(
+            source_shape_zyx, target_shape_zyx, matrix
+        )
+        crop_slicing = [Z_slice, Y_slice, X_slice]
+    else:
+        crop_slicing = None
+
+    affine_kwargs = {
+        "matrix": matrix,
+        "output_shape_zyx": target_shape_zyx,
+        "crop_output_slicing": crop_slicing,
+        "interpolation": settings.interpolation,
+    }
+
+    copy_kwargs = {
+        "czyx_slicing_params": crop_slicing
+        if crop_slicing
+        else [
+            slice(0, target_shape_zyx[0]),
+            slice(0, target_shape_zyx[1]),
+            slice(0, target_shape_zyx[2]),
+        ],
+    }
+
+    for channel_name in source_channel_names:
+        if channel_name not in settings.source_channel_names:
+            continue
+        process_single_position_v2(
+            func=apply_affine_transform,
+            input_data_path=source_position,
+            output_path=Path(output_zarr),
+            time_indices=time_indices,
+            input_channel_idx=[source_channel_names.index(channel_name)],
+            output_channel_idx=[output_channel_names.index(channel_name)],
+            num_threads=num_threads,
+            **affine_kwargs,
+        )
+
+    for channel_name in target_channel_names:
+        if channel_name in settings.source_channel_names:
+            continue
+        process_single_position_v2(
+            func=copy_n_paste_czyx,
+            input_data_path=target_position,
+            output_path=Path(output_zarr),
+            time_indices=time_indices,
+            input_channel_idx=[target_channel_names.index(channel_name)],
+            output_channel_idx=[output_channel_names.index(channel_name)],
+            num_threads=num_threads,
+            **copy_kwargs,
+        )
+
+    click.echo(f"Registration done: {position}")
+
+
+# ---------------------------------------------------------------------------
+# Stitch estimation
+# ---------------------------------------------------------------------------
+
+
+@nf_cli.command("estimate-stitch")
+@click.option("--input-zarr", "-i", required=True, type=click.Path(exists=True))
+@click.option("--output", "-o", required=True, type=click.Path())
+@click.option("--fliplr", is_flag=True)
+@click.option("--flipud", is_flag=True)
+@click.option("--flipxy", is_flag=True)
+@click.option("--pcc-channel-name", default=None, type=str)
+@click.option("--pcc-z-index", default=0, type=int)
+def nf_estimate_stitch(
+    input_zarr: str,
+    output: str,
+    fliplr: bool,
+    flipud: bool,
+    flipxy: bool,
+    pcc_channel_name: str | None,
+    pcc_z_index: int,
+):
+    """Estimate stitching translations from stage positions (one-shot)."""
+    from collections import defaultdict
+
+    from biahub.cli.utils import model_to_yaml
+    from biahub.estimate_stitch import extract_stage_position
+    from biahub.settings import StitchSettings
+
+    plate_path = Path(input_zarr)
+    output_path = Path(output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open_ome_zarr(str(plate_path), mode="r") as plate:
+        position_keys = [name for name, _ in plate.positions()]
+
+    translation_dict = {}
+    for pos_key in position_keys:
+        with open_ome_zarr(str(plate_path / pos_key), mode="r") as pos_ds:
+            position_name = pos_ds.zattrs["omero"]["name"]
+
+        with open_ome_zarr(str(plate_path), mode="r") as plate_ds:
+            zyx_position = extract_stage_position(plate_ds, position_name)
+
+        translation_dict[pos_key] = zyx_position
+
+    grouped_wells = defaultdict(dict)
+    for key, value in translation_dict.items():
+        well_name = "/".join(key.split("/")[:2])
+        grouped_wells[well_name][key] = value
+
+    final_translation_dict = {}
+    for well_name, well_positions in grouped_wells.items():
+        zyx_array = np.array(list(well_positions.values()))
+        zyx_array -= np.min(zyx_array, axis=0)
+
+        with open_ome_zarr(str(plate_path / position_keys[0]), mode="r") as ref_pos:
+            scale = ref_pos.scale[2:]
+        zyx_array /= scale
+
+        if pcc_channel_name is not None:
+            from stitch.stitch.tile import optimal_positions, pairwise_shifts
+
+            tile_lut = {t.split("/")[-1]: i for i, t in enumerate(well_positions)}
+            initial_guess = {
+                well_name: {
+                    "i": zyx_array[:, 1],
+                    "j": zyx_array[:, 2],
+                }
+            }
+            with open_ome_zarr(str(plate_path), mode="r") as p:
+                channel_index = p.get_channel_index(pcc_channel_name)
+
+            edge_list, confidence_dict = pairwise_shifts(
+                well_positions,
+                plate_path,
+                well_name,
+                flipud=flipud,
+                fliplr=fliplr,
+                rot90=False,
+                overlap=300,
+                channel_index=channel_index,
+                z_index=pcc_z_index,
+            )
+
+            first_pos = list(well_positions.keys())[0]
+            with open_ome_zarr(str(plate_path / first_pos), mode="r") as fp:
+                tile_size = fp.data.shape[-2:]
+
+            opt_shift_dict = optimal_positions(
+                edge_list, tile_lut, well_name, tile_size=tile_size, initial_guess=initial_guess
+            )
+            zyx_array[:, 1] = [a[0] for a in opt_shift_dict.values()]
+            zyx_array[:, 2] = [a[1] for a in opt_shift_dict.values()]
+
+        if fliplr:
+            zyx_array[:, 2] *= -1
+        if flipud:
+            zyx_array[:, 1] *= -1
+        if flipxy:
+            zyx_array[:, [1, 2]] = zyx_array[:, [2, 1]]
+
+        zyx_array -= np.minimum(zyx_array.min(axis=0), 0)
+
+        for i, fov_name in enumerate(well_positions.keys()):
+            final_translation_dict[fov_name] = list(np.round(zyx_array[i], 2))
+
+    settings = StitchSettings(channels=None, total_translation=final_translation_dict)
+    model_to_yaml(settings, output_path)
+
+    click.echo(f"Stitch estimation done ({len(position_keys)} positions)")
+    click.echo("RESOURCES:4 16")
+
+
+# ---------------------------------------------------------------------------
+# Stitch apply (per-well)
+# ---------------------------------------------------------------------------
+
+
+@nf_cli.command("stitch")
+@click.option("--input-zarr", "-i", required=True, type=click.Path(exists=True))
+@click.option("--output-zarr", "-o", required=True, type=click.Path())
+@click.option("--well", required=True, type=str)
+@click.option("--config", "-c", required=True, type=click.Path(exists=True))
+@click.option("--blending-exponent", "-b", type=float, default=1.0)
+def nf_stitch(
+    input_zarr: str,
+    output_zarr: str,
+    well: str,
+    config: str,
+    blending_exponent: float,
+):
+    """Stitch FOVs for a single well with distance-weighted blending."""
+    from iohub.ngff import TransformationMeta
+
+    from biahub.settings import StitchSettings
+    from biahub.stitch import get_output_shape, list_of_nd_slices_from_array_shape, write_output_chunk
+
+    settings = yaml_to_model(Path(config), StitchSettings)
+    plate_path = Path(input_zarr)
+    output_path = Path(output_zarr)
+
+    input_plate = open_ome_zarr(str(plate_path), mode="r")
+    input_channels = input_plate.channel_names
+    if settings.channels is None:
+        settings.channels = input_channels
+    channel_idx = np.asarray([input_channels.index(ch) for ch in settings.channels])
+
+    fov_shifts = {
+        k: v for k, v in settings.total_translation.items() if k.startswith(well + "/")
+    }
+    if not fov_shifts:
+        raise click.ClickException(f"No FOVs found for well {well}")
+
+    first_fov_name = list(fov_shifts.keys())[0]
+    input_fov_shape = input_plate[first_fov_name].data.shape
+    output_shape_zyx = get_output_shape(fov_shifts, input_fov_shape)
+    output_chunk_size = (
+        1,
+        1,
+        output_shape_zyx[0],
+        *input_plate[first_fov_name].data.chunks[-2:],
+    )
+    output_scale = input_plate[first_fov_name].scale
+
+    output_shape = (
+        input_fov_shape[0],
+        len(channel_idx),
+    ) + output_shape_zyx
+
+    output_plate = open_ome_zarr(str(output_path), layout="hcs", mode="a", channel_names=settings.channels)
+    output_position = output_plate.create_position(
+        first_fov_name.split("/")[0],
+        first_fov_name.split("/")[1],
+        "0",
+    )
+    _ = output_position.create_zeros(
+        "0",
+        shape=output_shape,
+        chunks=(1, 1, 10, output_chunk_size[-2], output_chunk_size[-1]),
+        dtype=np.float16,
+        transform=[TransformationMeta(type="scale", scale=output_scale)],
+    )
+
+    chunk_list = list_of_nd_slices_from_array_shape(
+        output_shape_zyx, output_chunk_size[2:]
+    )
+
+    for chunk in chunk_list:
+        write_output_chunk(
+            chunk,
+            fov_shifts,
+            channel_idx,
+            input_plate,
+            input_fov_shape,
+            output_position,
+            False,
+            blending_exponent,
+        )
+
+    click.echo(f"Stitching done: well {well}")
+    num_cpus, mem_per_cpu = estimate_resources(
+        shape=input_fov_shape, ram_multiplier=25, max_num_cpus=16
+    )
+    click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")

@@ -2,7 +2,6 @@ from pathlib import Path
 
 import ants
 import click
-import napari
 import numpy as np
 
 from iohub import open_ome_zarr
@@ -194,7 +193,8 @@ def user_assisted_registration(
 
     source_zxy_pre_reg = tx_manual.apply_to_image(source_zyx_ants, reference=target_zyx_ants)
 
-    # Get a napari viewer
+    import napari
+
     viewer = napari.Viewer()
 
     viewer.add_image(target_channel_volume, name=f"target_{target_channel_name}")

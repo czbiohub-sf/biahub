@@ -1,6 +1,5 @@
 import ants
 import click
-import napari
 import numpy as np
 
 from iohub import open_ome_zarr
@@ -270,6 +269,8 @@ def optimize_registration_cli(
     model_to_yaml(output_settings, output_filepath)
 
     if display_viewer:
+        import napari
+
         click.echo("Initializing napari viewer...")
         approx_tform_ants = convert_transform_to_ants(approx_tform)
         composed_matrix_ants = convert_transform_to_ants(composed_matrix)

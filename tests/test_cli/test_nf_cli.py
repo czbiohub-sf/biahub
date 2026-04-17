@@ -1137,3 +1137,319 @@ def test_flip_no_axis_fails(example_plate):
     )
 
     assert result.exit_code != 0
+
+
+# ---------------------------------------------------------------------------
+# Registration: estimate-registration / optimize-registration / init-register / run-register
+# ---------------------------------------------------------------------------
+
+
+def _make_estimate_registration_config(tmp_path, filename="est_reg_config.yml", **overrides):
+    """Write a minimal EstimateRegistrationSettings YAML for testing."""
+    cfg = {
+        "target_channel_name": "GFP",
+        "source_channel_name": "RFP",
+        "estimation_method": "beads",
+        "verbose": False,
+    }
+    cfg.update(overrides)
+    config_path = tmp_path / filename
+    config_path.write_text(yaml.dump(cfg))
+    return config_path
+
+
+def _make_registration_config(tmp_path, filename="reg_config.yml", **overrides):
+    """Write a minimal RegistrationSettings YAML for testing."""
+    cfg = {
+        "source_channel_names": ["Phase3D"],
+        "target_channel_name": "GFP",
+        "affine_transform_zyx": np.eye(4).tolist(),
+        "keep_overhang": True,
+        "time_indices": "all",
+    }
+    cfg.update(overrides)
+    config_path = tmp_path / filename
+    config_path.write_text(yaml.dump(cfg))
+    return config_path
+
+
+def test_estimate_registration_beads(tmp_path, example_plate):
+    """estimate-registration calls beads.estimate_tczyx and writes output YAML."""
+    plate_path, ds = example_plate
+    ds.close()
+
+    config_path = _make_estimate_registration_config(tmp_path, estimation_method="beads")
+    output_dir = tmp_path / "reg_output"
+
+    with patch("biahub.registration.beads.estimate_tczyx") as mock_beads:
+        mock_beads.return_value = [np.eye(4).tolist()]
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "nf",
+                "estimate-registration",
+                "--source-zarr",
+                str(plate_path),
+                "--target-zarr",
+                str(plate_path),
+                "-p",
+                "A/1/0",
+                "-c",
+                str(config_path),
+                "-o",
+                str(output_dir),
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "RESOURCES:" in result.output
+        mock_beads.assert_called_once()
+        call_kwargs = mock_beads.call_args.kwargs
+        assert call_kwargs["mode"] == "registration"
+        assert (output_dir / "registration_settings.yml").exists()
+
+
+def test_estimate_registration_ants(tmp_path, example_plate):
+    """estimate-registration calls ants.estimate_tczyx when method is ants."""
+    plate_path, ds = example_plate
+    ds.close()
+
+    config_path = _make_estimate_registration_config(tmp_path, estimation_method="ants")
+    output_dir = tmp_path / "reg_output"
+
+    with patch("biahub.registration.ants.estimate_tczyx") as mock_ants:
+        mock_ants.return_value = [np.eye(4).tolist()]
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "nf",
+                "estimate-registration",
+                "--source-zarr",
+                str(plate_path),
+                "--target-zarr",
+                str(plate_path),
+                "-p",
+                "A/1/0",
+                "-c",
+                str(config_path),
+                "-o",
+                str(output_dir),
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "RESOURCES:" in result.output
+        mock_ants.assert_called_once()
+
+
+def test_optimize_registration(tmp_path, example_plate):
+    """optimize-registration calls _optimize_registration and writes updated config."""
+    plate_path, ds = example_plate
+    ds.close()
+
+    config_path = _make_registration_config(
+        tmp_path,
+        source_channel_names=["RFP"],
+        target_channel_name="GFP",
+    )
+    output_path = tmp_path / "optimized_config.yml"
+
+    with patch(
+        "biahub.optimize_registration._optimize_registration"
+    ) as mock_optimize:
+        mock_optimize.return_value = np.eye(4)
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "nf",
+                "optimize-registration",
+                "--source-zarr",
+                str(plate_path),
+                "--target-zarr",
+                str(plate_path),
+                "-p",
+                "A/1/0",
+                "-c",
+                str(config_path),
+                "-o",
+                str(output_path),
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "RESOURCES:" in result.output
+        mock_optimize.assert_called_once()
+        assert output_path.exists()
+
+
+def test_init_register(tmp_path, example_plate):
+    """init-register creates empty output zarr with correct channels."""
+    plate_path, ds = example_plate
+    ds.close()
+
+    config_path = _make_registration_config(
+        tmp_path,
+        source_channel_names=["Phase3D"],
+        target_channel_name="GFP",
+        keep_overhang=True,
+    )
+    output_path = tmp_path / "registered.zarr"
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "nf",
+            "init-register",
+            "--source-zarr",
+            str(plate_path),
+            "--target-zarr",
+            str(plate_path),
+            "-o",
+            str(output_path),
+            "-c",
+            str(config_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "RESOURCES:" in result.output
+    assert output_path.exists()
+
+    with open_ome_zarr(str(output_path), mode="r") as out:
+        pos = out["A/1/0"]
+        ch_names = out.channel_names
+        assert "Phase3D" in ch_names
+        assert "GFP" in ch_names
+
+
+def test_run_register(tmp_path, example_plate):
+    """run-register calls process_single_position_v2 with apply_affine_transform."""
+    plate_path, ds = example_plate
+    ds.close()
+
+    config_path = _make_registration_config(
+        tmp_path,
+        source_channel_names=["Phase3D"],
+        target_channel_name="GFP",
+        keep_overhang=True,
+    )
+
+    output_path = tmp_path / "registered.zarr"
+    runner = CliRunner()
+    runner.invoke(
+        cli,
+        [
+            "nf",
+            "init-register",
+            "--source-zarr",
+            str(plate_path),
+            "--target-zarr",
+            str(plate_path),
+            "-o",
+            str(output_path),
+            "-c",
+            str(config_path),
+        ],
+    )
+
+    with patch("biahub.cli.utils.process_single_position_v2") as mock_process:
+        result = runner.invoke(
+            cli,
+            [
+                "nf",
+                "run-register",
+                "--source-zarr",
+                str(plate_path),
+                "--target-zarr",
+                str(plate_path),
+                "-o",
+                str(output_path),
+                "-p",
+                "A/1/0",
+                "-c",
+                str(config_path),
+                "-j",
+                "2",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert mock_process.call_count >= 1
+        first_call = mock_process.call_args_list[0]
+        assert first_call.kwargs["num_threads"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Stitch: estimate-stitch / stitch
+# ---------------------------------------------------------------------------
+
+
+def test_estimate_stitch(tmp_path, example_plate):
+    """estimate-stitch reads stage positions and writes StitchSettings YAML."""
+    plate_path, ds = example_plate
+    ds.close()
+
+    output_path = tmp_path / "stitch_settings.yml"
+
+    with patch(
+        "biahub.estimate_stitch.extract_stage_position"
+    ) as mock_stage:
+        mock_stage.return_value = (0.0, 100.0, 200.0)
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "nf",
+                "estimate-stitch",
+                "-i",
+                str(plate_path),
+                "-o",
+                str(output_path),
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "RESOURCES:" in result.output
+        assert output_path.exists()
+
+
+def test_stitch(tmp_path, example_plate):
+    """stitch per-well creates output and calls write_output_chunk."""
+    plate_path, ds = example_plate
+    ds.close()
+
+    stitch_cfg = {
+        "channels": ["GFP", "RFP"],
+        "total_translation": {
+            "A/1/0": [0.0, 0.0, 0.0],
+        },
+    }
+    config_path = tmp_path / "stitch_config.yml"
+    config_path.write_text(yaml.dump(stitch_cfg))
+    output_path = tmp_path / "stitched.zarr"
+
+    with patch("biahub.stitch.write_output_chunk") as mock_write:
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "nf",
+                "stitch",
+                "-i",
+                str(plate_path),
+                "-o",
+                str(output_path),
+                "--well",
+                "A/1",
+                "-c",
+                str(config_path),
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "RESOURCES:" in result.output
+        assert output_path.exists()
