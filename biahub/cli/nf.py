@@ -751,9 +751,7 @@ def combine_transforms(config_a: str, config_b: str, output_config: str):
             f"Transform count mismatch: {len(transforms_a)} vs {len(transforms_b)}"
         )
 
-    composed = np.array(
-        [a @ b for a, b in zip(transforms_a, transforms_b, strict=True)]
-    )
+    composed = np.array([a @ b for a, b in zip(transforms_a, transforms_b, strict=True)])
 
     output_model = settings_a.model_copy()
     output_model.affine_transform_zyx_list = composed.tolist()
@@ -855,7 +853,7 @@ def run_stabilize(
     elif isinstance(settings.time_indices, int):
         time_indices = [settings.time_indices]
 
-    for ch_idx, ch_name in enumerate(channel_names):
+    for ch_idx, _ch_name in enumerate(channel_names):
         process_single_position_v2(
             func=apply_stabilization_transform,
             input_data_path=input_position,
@@ -893,7 +891,6 @@ def estimate_stabilization_z_focus(
 
     with open_ome_zarr(str(input_position), mode="r") as ds:
         channel_names = ds.channel_names
-        shape = ds.data.shape
 
     channel_index = channel_names.index(settings.stabilization_estimation_channel)
 
@@ -931,7 +928,6 @@ def estimate_stabilization_xy(
 
     with open_ome_zarr(str(input_position), mode="r") as ds:
         channel_names = ds.channel_names
-        shape = ds.data.shape
 
     channel_index = channel_names.index(settings.stabilization_estimation_channel)
 
@@ -957,9 +953,7 @@ def estimate_stabilization_xy(
 @click.option("--position", "-p", required=True)
 @click.option("--config", "-c", required=True, type=click.Path(exists=True))
 @click.option("--output-dir", "-o", required=True, type=click.Path())
-def estimate_stabilization_pcc(
-    input_zarr: str, position: str, config: str, output_dir: str
-):
+def estimate_stabilization_pcc(input_zarr: str, position: str, config: str, output_dir: str):
     """Estimate XYZ stabilization via phase cross-correlation for a single position."""
     from biahub.estimate_stabilization import (
         estimate_xyz_stabilization_pcc_per_position,
@@ -1020,7 +1014,9 @@ def estimate_stabilization_pcc(
     save_transforms(
         model=model,
         transforms=transforms,
-        output_filepath_settings=output_path / "xyz_stabilization_settings" / f"{position_filename}.yml",
+        output_filepath_settings=output_path
+        / "xyz_stabilization_settings"
+        / f"{position_filename}.yml",
         verbose=settings.verbose,
     )
 
@@ -1032,9 +1028,7 @@ def estimate_stabilization_pcc(
 @click.option("--position", "-p", required=True)
 @click.option("--config", "-c", required=True, type=click.Path(exists=True))
 @click.option("--output-dir", "-o", required=True, type=click.Path())
-def estimate_stabilization_beads(
-    input_zarr: str, position: str, config: str, output_dir: str
-):
+def estimate_stabilization_beads(input_zarr: str, position: str, config: str, output_dir: str):
     """Estimate stabilization from beads on a single reference FOV (one-shot)."""
     from biahub.registration.beads import estimate_tczyx
     from biahub.registration.utils import save_transforms
@@ -1160,18 +1154,14 @@ def nf_estimate_psf(input_zarr: str, position: str, config: str, output_zarr: st
     average_psf /= np.max(average_psf)
 
     output_path = Path(output_zarr)
-    with open_ome_zarr(
-        output_path, layout="hcs", mode="w", channel_names=["PSF"]
-    ) as out:
+    with open_ome_zarr(output_path, layout="hcs", mode="w", channel_names=["PSF"]) as out:
         pos = out.create_position("0", "0", "0")
         pos.create_zeros(
             name="0",
             shape=(1, 1) + average_psf.shape,
             chunks=(1, 1) + average_psf.shape,
             dtype=np.float32,
-            transform=[
-                TransformationMeta(type="scale", scale=(1.0, 1.0) + tuple(zyx_scale))
-            ],
+            transform=[TransformationMeta(type="scale", scale=(1.0, 1.0) + tuple(zyx_scale))],
         )
         pos["0"][0, 0] = average_psf
 
@@ -1197,9 +1187,6 @@ def init_deconvolve(
 
     from iohub.ngff.models import TransformationMeta
 
-    from biahub.settings import DeconvolveSettings
-
-    settings = yaml_to_model(Path(config), DeconvolveSettings)
     position_keys, channel_names, shape, scale = read_plate_metadata(input_zarr)
     T, C, Z, Y, X = shape
 
@@ -1219,9 +1206,7 @@ def init_deconvolve(
         psf_scale = psf_ds.scale
 
     zyx_padding = np.array((Z, Y, X)) - np.array(psf_data.shape)
-    pad_width = [
-        (x // 2, x // 2) if x % 2 == 0 else (x // 2, x // 2 + 1) for x in zyx_padding
-    ]
+    pad_width = [(x // 2, x // 2) if x % 2 == 0 else (x // 2, x // 2 + 1) for x in zyx_padding]
     padded_psf = np.pad(psf_data, pad_width=pad_width, mode="constant", constant_values=0)
     transfer_function = torch.abs(torch.fft.fftn(torch.tensor(padded_psf)))
     transfer_function /= torch.max(transfer_function)
@@ -1351,7 +1336,6 @@ def nf_estimate_registration(
         source_channel_index = source_channels.index(settings.source_channel_name)
         source_data = src.data.dask_array()
         source_voxel_size = src.scale[-3:]
-        source_shape = src.data.shape
 
     with open_ome_zarr(str(target_position), mode="r") as tgt:
         target_channels = tgt.channel_names
@@ -1423,7 +1407,10 @@ def nf_estimate_registration(
             stabilization_estimation_channel=settings.target_channel_name,
             stabilization_type="affine",
             stabilization_method=settings.estimation_method,
-            stabilization_channels=[settings.source_channel_name, settings.target_channel_name],
+            stabilization_channels=[
+                settings.source_channel_name,
+                settings.target_channel_name,
+            ],
             affine_transform_zyx_list=transforms,
             time_indices="all",
             output_voxel_size=voxel_size,
@@ -1470,7 +1457,6 @@ def nf_optimize_registration(
         source_channel_names = src.channel_names
         source_channel_index = source_channel_names.index(settings.source_channel_names[0])
         source_data_czyx = np.asarray(src.data[t_idx])
-        shape = src.data.shape
 
     with open_ome_zarr(str(target_position), mode="r") as tgt:
         target_channel_names = tgt.channel_names
@@ -1769,7 +1755,11 @@ def nf_estimate_stitch(
                 tile_size = fp.data.shape[-2:]
 
             opt_shift_dict = optimal_positions(
-                edge_list, tile_lut, well_name, tile_size=tile_size, initial_guess=initial_guess
+                edge_list,
+                tile_lut,
+                well_name,
+                tile_size=tile_size,
+                initial_guess=initial_guess,
             )
             zyx_array[:, 1] = [a[0] for a in opt_shift_dict.values()]
             zyx_array[:, 2] = [a[1] for a in opt_shift_dict.values()]
@@ -1815,7 +1805,11 @@ def nf_stitch(
     from iohub.ngff import TransformationMeta
 
     from biahub.settings import StitchSettings
-    from biahub.stitch import get_output_shape, list_of_nd_slices_from_array_shape, write_output_chunk
+    from biahub.stitch import (
+        get_output_shape,
+        list_of_nd_slices_from_array_shape,
+        write_output_chunk,
+    )
 
     settings = yaml_to_model(Path(config), StitchSettings)
     plate_path = Path(input_zarr)
@@ -1849,7 +1843,9 @@ def nf_stitch(
         len(channel_idx),
     ) + output_shape_zyx
 
-    output_plate = open_ome_zarr(str(output_path), layout="hcs", mode="a", channel_names=settings.channels)
+    output_plate = open_ome_zarr(
+        str(output_path), layout="hcs", mode="a", channel_names=settings.channels
+    )
     output_position = output_plate.create_position(
         first_fov_name.split("/")[0],
         first_fov_name.split("/")[1],
@@ -1863,9 +1859,7 @@ def nf_stitch(
         transform=[TransformationMeta(type="scale", scale=output_scale)],
     )
 
-    chunk_list = list_of_nd_slices_from_array_shape(
-        output_shape_zyx, output_chunk_size[2:]
-    )
+    chunk_list = list_of_nd_slices_from_array_shape(output_shape_zyx, output_chunk_size[2:])
 
     for chunk in chunk_list:
         write_output_chunk(

@@ -540,7 +540,9 @@ def _make_stabilization_config(tmp_path, transforms, filename="stab_config.yml")
         "stabilization_type": "xyz",
         "stabilization_method": "focus-finding",
         "stabilization_channels": ["GFP", "RFP"],
-        "affine_transform_zyx_list": [t.tolist() if hasattr(t, "tolist") else t for t in transforms],
+        "affine_transform_zyx_list": [
+            t.tolist() if hasattr(t, "tolist") else t for t in transforms
+        ],
         "time_indices": "all",
         "output_voxel_size": [1.0, 1.0, 1.0, 1.0, 1.0],
     }
@@ -607,12 +609,8 @@ def test_combine_transforms(tmp_path):
 
 def test_combine_transforms_mismatched_lengths(tmp_path):
     """combine-transforms fails when transform lists have different lengths."""
-    config_a = _make_stabilization_config(
-        tmp_path, _identity_transforms(3), "config_a.yml"
-    )
-    config_b = _make_stabilization_config(
-        tmp_path, _identity_transforms(5), "config_b.yml"
-    )
+    config_a = _make_stabilization_config(tmp_path, _identity_transforms(3), "config_a.yml")
+    config_b = _make_stabilization_config(tmp_path, _identity_transforms(5), "config_b.yml")
     output_config = tmp_path / "combined.yml"
 
     runner = CliRunner()
@@ -751,9 +749,7 @@ def test_estimate_stabilization_z_focus(tmp_path, example_plate):
     config_path = _make_estimate_stabilization_config(tmp_path, stabilization_type="z")
     output_dir = tmp_path / "z_focus_output"
 
-    with patch(
-        "biahub.estimate_stabilization.estimate_z_focus_per_position"
-    ) as mock_z_focus:
+    with patch("biahub.estimate_stabilization.estimate_z_focus_per_position") as mock_z_focus:
         runner = CliRunner()
         result = runner.invoke(
             cli,
@@ -785,7 +781,9 @@ def test_estimate_stabilization_xy(tmp_path, example_plate):
     config_path = _make_estimate_stabilization_config(tmp_path, stabilization_type="xy")
 
     focus_csv = tmp_path / "positions_focus.csv"
-    focus_csv.write_text("position,time_idx,channel,focus_idx\nA/1/0,0,GFP,10\nA/1/0,1,GFP,11\nA/1/0,2,GFP,12\n")
+    focus_csv.write_text(
+        "position,time_idx,channel,focus_idx\nA/1/0,0,GFP,10\nA/1/0,1,GFP,11\nA/1/0,2,GFP,12\n"
+    )
 
     output_dir = tmp_path / "xy_output"
 
@@ -1267,9 +1265,7 @@ def test_optimize_registration(tmp_path, example_plate):
     )
     output_path = tmp_path / "optimized_config.yml"
 
-    with patch(
-        "biahub.optimize_registration._optimize_registration"
-    ) as mock_optimize:
+    with patch("biahub.optimize_registration._optimize_registration") as mock_optimize:
         mock_optimize.return_value = np.eye(4)
         runner = CliRunner()
         result = runner.invoke(
@@ -1330,7 +1326,6 @@ def test_init_register(tmp_path, example_plate):
     assert output_path.exists()
 
     with open_ome_zarr(str(output_path), mode="r") as out:
-        pos = out["A/1/0"]
         ch_names = out.channel_names
         assert "Phase3D" in ch_names
         assert "GFP" in ch_names
@@ -1405,9 +1400,7 @@ def test_estimate_stitch(tmp_path, example_plate):
 
     output_path = tmp_path / "stitch_settings.yml"
 
-    with patch(
-        "biahub.estimate_stitch.extract_stage_position"
-    ) as mock_stage:
+    with patch("biahub.estimate_stitch.extract_stage_position") as mock_stage:
         mock_stage.return_value = (0.0, 100.0, 200.0)
         runner = CliRunner()
         result = runner.invoke(
@@ -1441,7 +1434,7 @@ def test_stitch(tmp_path, example_plate):
     config_path.write_text(yaml.dump(stitch_cfg))
     output_path = tmp_path / "stitched.zarr"
 
-    with patch("biahub.stitch.write_output_chunk") as mock_write:
+    with patch("biahub.stitch.write_output_chunk"):
         runner = CliRunner()
         result = runner.invoke(
             cli,

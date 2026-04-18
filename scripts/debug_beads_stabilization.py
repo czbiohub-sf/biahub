@@ -1,20 +1,27 @@
 # %%
-import ants
-import numpy as np
 from pathlib import Path
-from iohub import open_ome_zarr
-from biahub.core.transform import convert_transform_to_ants, Transform
+
+import ants
 import napari
-from biahub.settings import EstimateRegistrationSettings
 import numpy as np
 
-from biahub.registration.beads import transform_from_matches, matches_from_beads, peaks_from_beads, optimize_transform
+from iohub import open_ome_zarr
+
+from biahub.core.transform import Transform
+from biahub.registration.beads import (
+    matches_from_beads,
+    peaks_from_beads,
+    transform_from_matches,
+)
+from biahub.settings import EstimateRegistrationSettings
 
 # %%%
 
-dataset = '2024_12_11_A549_LAMP1_DENV'
-fov = 'C/1/000000'
-root_path = Path(f'/hpc/projects/intracellular_dashboard/organelle_dynamics/{dataset}/1-preprocess/')
+dataset = "2024_12_11_A549_LAMP1_DENV"
+fov = "C/1/000000"
+root_path = Path(
+    f"/hpc/projects/intracellular_dashboard/organelle_dynamics/{dataset}/1-preprocess/"
+)
 lf_data_path = root_path / f"label-free/0-reconstruct/{dataset}.zarr" / fov
 visualize = True
 t_ref = 3
@@ -25,40 +32,37 @@ t_mov = 4
 config_dict = {
     "target_channel_name": "Phase3D",
     "source_channel_name": "Phase3D",
-    "beads_match_settings": { 
+    "beads_match_settings": {
         "algorithm": "hungarian",
         "qc_settings": {
             "iterations": 2,
             "score_threshold": 0.40,
-            "score_centroid_mask_radius": 6
+            "score_centroid_mask_radius": 6,
         },
         "filter_matches_settings": {
             "min_distance_quantile": 0.0,
             "max_distance_quantile": 0.0,
             "angle_threshold": 0,
-            "direction_threshold": 0
+            "direction_threshold": 0,
         },
         "source_peaks_settings": {
             "threshold_abs": 0.8,
             "nms_distance": 16,
             "min_distance": 0,
-            "block_size": [8, 8, 8]
+            "block_size": [8, 8, 8],
         },
         "target_peaks_settings": {
             "threshold_abs": 0.8,
             "nms_distance": 16,
             "min_distance": 0,
-            "block_size": [8, 8, 8]
+            "block_size": [8, 8, 8],
         },
         "hungarian_match_settings": {
             "distance_metric": "euclidean",
             "cost_threshold": 0.05,
             "cross_check": True,
             "max_ratio": 1,
-            "edge_graph_settings": {
-                "method": "knn",
-                "k": 10
-            },
+            "edge_graph_settings": {"method": "knn", "k": 10},
             "cost_matrix_settings": {
                 "normalize": False,
                 "weights": {
@@ -67,9 +71,9 @@ config_dict = {
                     "edge_length": 1.0,
                     "pca_dir": 0.0,
                     "pca_aniso": 0.0,
-                    "edge_descriptor": 0
-                }
-            }
+                    "edge_descriptor": 0,
+                },
+            },
         },
     },
     "affine_transform_settings": {
@@ -79,11 +83,10 @@ config_dict = {
             [1, 0, 0, 0],
             [0, 0, -1.288, 1960],
             [0, 1.288, 0, -460],
-            [0.0, 0.0, 0.0, 1.0]
-        ]
+            [0.0, 0.0, 0.0, 1.0],
+        ],
     },
-
-    "verbose": True
+    "verbose": True,
 }
 config = EstimateRegistrationSettings(**config_dict)
 
@@ -91,14 +94,13 @@ config = EstimateRegistrationSettings(**config_dict)
 with open_ome_zarr(lf_data_path) as ref_ds:
     ref_channel_name = ref_ds.channel_names
     ref_channel_index = ref_ds.channel_names.index(config.target_channel_name)
-    ref_data = np.asarray(ref_ds.data[t_ref, ref_channel_index]) # take phase channel
+    ref_data = np.asarray(ref_ds.data[t_ref, ref_channel_index])  # take phase channel
     ref_scale = ref_ds.scale
-    
-    mov_data = np.asarray(ref_ds.data[t_mov, ref_channel_index]) # take phase channel
+
+    mov_data = np.asarray(ref_ds.data[t_mov, ref_channel_index])  # take phase channel
     mov_scale = ref_ds.scale
 
 #
-
 
 
 # qc, measure matches vectors directions, lenght, angle .. statiscs, then evaluate the mean, std, min, max, etc.
@@ -106,8 +108,8 @@ with open_ome_zarr(lf_data_path) as ref_ds:
 # %%
 if visualize:
     viewer = napari.Viewer()
-    viewer.add_image(ref_data, name='LF')
-    viewer.add_image(mov_data, name='LS')
+    viewer.add_image(ref_data, name="LF")
+    viewer.add_image(mov_data, name="LS")
 
 # %% Detect peaks in LS data
 
@@ -120,57 +122,64 @@ mov_peaks, ref_peaks = peaks_from_beads(
 )
 
 
-#%%
+# %%
 if visualize:
     viewer = napari.Viewer()
-    viewer.add_image(mov_data, name='LS')
+    viewer.add_image(mov_data, name="LS")
     viewer.add_points(
-        mov_peaks, name='peaks local max LS', size=20, symbol='disc', face_color='magenta'
+        mov_peaks, name="peaks local max LS", size=20, symbol="disc", face_color="magenta"
     )
 # %%
 if visualize:
     viewer = napari.Viewer()
-    viewer.add_image(ref_data, name='LF')
+    viewer.add_image(ref_data, name="LF")
     viewer.add_points(
-        ref_peaks, name='peaks local max LF', size=20, symbol='disc', face_color='green'
+        ref_peaks, name="peaks local max LF", size=20, symbol="disc", face_color="green"
     )
 
 # %%
 
-matches = matches_from_beads(
-    mov_peaks,
-    ref_peaks,
-    config.beads_match_settings,
-    verbose=True
-)
+matches = matches_from_beads(mov_peaks, ref_peaks, config.beads_match_settings, verbose=True)
 
 # %%
 if visualize:
     # visualize matches
     viewer = napari.Viewer()
-    viewer.add_image(ref_data, name='LF', contrast_limits=(0.5, 1.0),blending='additive')
+    viewer.add_image(ref_data, name="LF", contrast_limits=(0.5, 1.0), blending="additive")
     viewer.add_points(
-        ref_peaks, name='LF peaks', size=12, symbol='ring', face_color='yellow',blending='additive'
+        ref_peaks,
+        name="LF peaks",
+        size=12,
+        symbol="ring",
+        face_color="yellow",
+        blending="additive",
     )
-    viewer.add_image(mov_data, name='LS', contrast_limits=(110, 230), blending='additive', colormap='green')
+    viewer.add_image(
+        mov_data, name="LS", contrast_limits=(110, 230), blending="additive", colormap="green"
+    )
     viewer.add_points(
-        mov_peaks, name='LS peaks', size=12, symbol='ring', face_color='red',blending='additive'
+        mov_peaks,
+        name="LS peaks",
+        size=12,
+        symbol="ring",
+        face_color="red",
+        blending="additive",
     )
     # Project in 3D to be able to view the lines
     viewer.add_shapes(
         data=[np.asarray([mov_peaks[m[0]], ref_peaks[m[1]]]) for m in matches],
-        shape_type='line',
+        shape_type="line",
         edge_width=5,
-        blending='additive',
+        blending="additive",
     )
     viewer.dims.ndisplay = 3
 
 
 # %% Register LS data using compount transform
-from biahub.core.transform import Transform
+
 initial_transform = Transform(
-        matrix=np.asarray(config.affine_transform_settings.approx_transform)
-    )
+    matrix=np.asarray(config.affine_transform_settings.approx_transform)
+)
 
 fwd_transform, inv_transform = transform_from_matches(
     matches=matches,
@@ -181,25 +190,24 @@ fwd_transform, inv_transform = transform_from_matches(
 )
 mov_data_ants = ants.from_numpy(mov_data)
 ref_data_ants = ants.from_numpy(ref_data)
-mov_data_reg = inv_transform.to_ants().apply_to_image(
-    mov_data_ants, reference=ref_data_ants
-).numpy()
+mov_data_reg = (
+    inv_transform.to_ants().apply_to_image(mov_data_ants, reference=ref_data_ants).numpy()
+)
 
 if visualize:
     viewer = napari.Viewer()
-    viewer.add_image(ref_data, name='LF', contrast_limits=(-0.5, 1.0))
+    viewer.add_image(ref_data, name="LF", contrast_limits=(-0.5, 1.0))
     viewer.add_image(
-    mov_data,
-    name='LS approx registered',
-    contrast_limits=(110, 230),
-    blending='additive',
-    colormap='green'
+        mov_data,
+        name="LS approx registered",
+        contrast_limits=(110, 230),
+        blending="additive",
+        colormap="green",
     )
     viewer.add_image(
         mov_data_reg,
-        name='LS registered',
+        name="LS registered",
         contrast_limits=(110, 230),
-        blending='additive',
-        colormap='magenta'
+        blending="additive",
+        colormap="magenta",
     )
-

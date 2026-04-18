@@ -185,9 +185,7 @@ def flat_field(
     jobs = []
     with submitit.helpers.clean_env(), executor.batch():
         for input_position_path in input_position_dirpaths:
-            output_position_path = output_dirpath / Path(
-                *input_position_path.parts[-3:]
-            )
+            output_position_path = output_dirpath / Path(*input_position_path.parts[-3:])
             jobs.append(
                 executor.submit(
                     process_single_position,

@@ -90,9 +90,11 @@ def copy_position_metadata(input_zarr: Path, output_zarr: Path) -> None:
                 src_meta = ImagesMeta.model_validate(src_ome)
 
                 dst_pos.metadata.multiscales[0].axes = src_meta.multiscales[0].axes
-                dst_pos.metadata.multiscales[0].coordinate_transformations = (
-                    src_meta.multiscales[0].coordinate_transformations
-                )
+                dst_pos.metadata.multiscales[
+                    0
+                ].coordinate_transformations = src_meta.multiscales[
+                    0
+                ].coordinate_transformations
                 for field in ("name", "type", "metadata"):
                     val = getattr(src_meta.multiscales[0], field, None)
                     if val is not None:
