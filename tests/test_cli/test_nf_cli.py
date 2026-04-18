@@ -22,6 +22,26 @@ def test_list_positions(example_plate):
     assert "B/2/0" in lines
 
 
+def test_init_resources(example_plate):
+    """init-resources reads input shape and outputs RESOURCES line."""
+    plate_path, _ = example_plate
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "nf",
+            "init-resources",
+            "-i",
+            str(plate_path),
+            "-r",
+            "8",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "RESOURCES:" in result.output
+
+
 def test_init_flat_field(tmp_path, example_plate):
     plate_path, _ = example_plate
     output_path = tmp_path / "output.zarr"
@@ -133,8 +153,8 @@ def test_rename_channels_no_prefix_or_suffix_fails(example_plate):
     assert result.exit_code != 0
 
 
-def test_rename_channels_resources(example_plate):
-    """Command should print RESOURCES line."""
+def test_rename_channels_succeeds(example_plate):
+    """Command should succeed with valid prefix."""
     plate_path, plate_dataset = example_plate
     plate_dataset.close()
 
@@ -154,7 +174,6 @@ def test_rename_channels_resources(example_plate):
     )
 
     assert result.exit_code == 0
-    assert "RESOURCES:" in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -574,7 +593,6 @@ def test_combine_transforms(tmp_path):
 
     assert result.exit_code == 0, result.output
     assert output_config.exists()
-    assert "RESOURCES:" in result.output
 
     with open(output_config) as f:
         updated = yaml.safe_load(f)
@@ -726,7 +744,7 @@ def _make_estimate_stabilization_config(tmp_path, filename="est_stab_config.yml"
 
 
 def test_estimate_stabilization_z_focus(tmp_path, example_plate):
-    """estimate-stabilization-z-focus calls estimate_z_focus_per_position and emits RESOURCES."""
+    """estimate-stabilization-z-focus calls estimate_z_focus_per_position."""
     plate_path, ds = example_plate
     ds.close()
 
@@ -754,7 +772,6 @@ def test_estimate_stabilization_z_focus(tmp_path, example_plate):
         )
 
         assert result.exit_code == 0, result.output
-        assert "RESOURCES:" in result.output
         mock_z_focus.assert_called_once()
         call_kwargs = mock_z_focus.call_args.kwargs
         assert "A/1/0" in str(call_kwargs["input_position_dirpath"])
@@ -796,7 +813,6 @@ def test_estimate_stabilization_xy(tmp_path, example_plate):
         )
 
         assert result.exit_code == 0, result.output
-        assert "RESOURCES:" in result.output
         mock_xy.assert_called_once()
         call_kwargs = mock_xy.call_args.kwargs
         assert call_kwargs["df_z_focus_path"] == focus_csv
@@ -836,7 +852,6 @@ def test_estimate_stabilization_pcc(tmp_path, example_plate):
         )
 
         assert result.exit_code == 0, result.output
-        assert "RESOURCES:" in result.output
         mock_pcc.assert_called_once()
 
 
@@ -872,7 +887,6 @@ def test_estimate_stabilization_beads(tmp_path, example_plate):
         )
 
         assert result.exit_code == 0, result.output
-        assert "RESOURCES:" in result.output
         mock_beads.assert_called_once()
         call_kwargs = mock_beads.call_args.kwargs
         assert call_kwargs["mode"] == "stabilization"
@@ -926,7 +940,6 @@ def test_estimate_psf(tmp_path, example_plate):
 
         assert result.exit_code == 0, result.output
         assert output_path.exists()
-        assert "RESOURCES:" in result.output
         mock_detect.assert_called_once()
 
     with open_ome_zarr(str(output_path), mode="r") as out:
@@ -1203,7 +1216,6 @@ def test_estimate_registration_beads(tmp_path, example_plate):
         )
 
         assert result.exit_code == 0, result.output
-        assert "RESOURCES:" in result.output
         mock_beads.assert_called_once()
         call_kwargs = mock_beads.call_args.kwargs
         assert call_kwargs["mode"] == "registration"
@@ -1240,7 +1252,6 @@ def test_estimate_registration_ants(tmp_path, example_plate):
         )
 
         assert result.exit_code == 0, result.output
-        assert "RESOURCES:" in result.output
         mock_ants.assert_called_once()
 
 
@@ -1280,7 +1291,6 @@ def test_optimize_registration(tmp_path, example_plate):
         )
 
         assert result.exit_code == 0, result.output
-        assert "RESOURCES:" in result.output
         mock_optimize.assert_called_once()
         assert output_path.exists()
 
@@ -1413,7 +1423,6 @@ def test_estimate_stitch(tmp_path, example_plate):
         )
 
         assert result.exit_code == 0, result.output
-        assert "RESOURCES:" in result.output
         assert output_path.exists()
 
 
@@ -1451,5 +1460,4 @@ def test_stitch(tmp_path, example_plate):
         )
 
         assert result.exit_code == 0, result.output
-        assert "RESOURCES:" in result.output
         assert output_path.exists()

@@ -32,6 +32,19 @@ def list_positions(input_zarr: str):
             click.echo(name)
 
 
+@nf_cli.command("init-resources")
+@click.option("--input-zarr", "-i", required=True, type=click.Path(exists=True))
+@click.option("--ram-multiplier", "-r", required=True, type=float)
+@click.option("--max-num-cpus", default=16, type=int)
+def init_resources(input_zarr: str, ram_multiplier: float, max_num_cpus: int):
+    """Estimate CPU/memory resources from input zarr shape (for Nextflow fan-out)."""
+    _, _, shape, _ = read_plate_metadata(input_zarr)
+    num_cpus, mem_per_cpu = estimate_resources(
+        shape=shape, ram_multiplier=ram_multiplier, max_num_cpus=max_num_cpus
+    )
+    click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
+
+
 # ---------------------------------------------------------------------------
 # Flat-field
 # ---------------------------------------------------------------------------
@@ -344,8 +357,9 @@ def init_virtual_stain(input_zarr: str, output_zarr: str, config: str):
         f"channels={prediction_channels})"
     )
 
-    num_cpus = 4
-    mem_per_cpu = 8
+    num_cpus, mem_per_cpu = estimate_resources(
+        shape=(T, len(prediction_channels), Z, Y, X), ram_multiplier=16, max_num_cpus=16
+    )
     click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
 
 
@@ -394,7 +408,6 @@ def rename_channels(input_zarr: str, position: str, prefix: str, suffix: str):
             pos.rename_channel(old_name, new_name)
 
     click.echo(f"Renamed channels: {position}")
-    click.echo("RESOURCES:1 2")
 
 
 # ---------------------------------------------------------------------------
@@ -747,7 +760,6 @@ def combine_transforms(config_a: str, config_b: str, output_config: str):
     model_to_yaml(output_model, Path(output_config))
 
     click.echo(f"Combined transforms written to {output_config}")
-    click.echo("RESOURCES:1 4")
 
 
 @nf_cli.command("init-stabilize")
@@ -899,10 +911,6 @@ def estimate_stabilization_z_focus(
     )
 
     click.echo(f"Z-focus estimation done: {position}")
-    num_cpus, mem_per_cpu = estimate_resources(
-        shape=shape, ram_multiplier=8, max_num_cpus=16
-    )
-    click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
 
 
 @nf_cli.command("estimate-stabilization-xy")
@@ -942,10 +950,6 @@ def estimate_stabilization_xy(
     )
 
     click.echo(f"XY stabilization estimation done: {position}")
-    num_cpus, mem_per_cpu = estimate_resources(
-        shape=shape, ram_multiplier=8, max_num_cpus=16
-    )
-    click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
 
 
 @nf_cli.command("estimate-stabilization-pcc")
@@ -1021,10 +1025,6 @@ def estimate_stabilization_pcc(
     )
 
     click.echo(f"PCC stabilization estimation done: {position}")
-    num_cpus, mem_per_cpu = estimate_resources(
-        shape=shape, ram_multiplier=16, max_num_cpus=16
-    )
-    click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
 
 
 @nf_cli.command("estimate-stabilization-beads")
@@ -1097,10 +1097,6 @@ def estimate_stabilization_beads(
     )
 
     click.echo(f"Beads stabilization estimation done: {position}")
-    num_cpus, mem_per_cpu = estimate_resources(
-        shape=shape, ram_multiplier=8, max_num_cpus=16
-    )
-    click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
 
 
 # ---------------------------------------------------------------------------
@@ -1180,7 +1176,6 @@ def nf_estimate_psf(input_zarr: str, position: str, config: str, output_zarr: st
         pos["0"][0, 0] = average_psf
 
     click.echo(f"PSF estimated from {len(filtered_beads)} beads: {position}")
-    click.echo("RESOURCES:4 32")
 
 
 # ---------------------------------------------------------------------------
@@ -1313,7 +1308,6 @@ def nf_flip(input_zarr: str, position: str, flip_x: bool, flip_y: bool):
                 array[t, c] = data
 
     click.echo(f"Flipped: {position}")
-    click.echo("RESOURCES:1 2")
 
 
 # ---------------------------------------------------------------------------
@@ -1438,10 +1432,6 @@ def nf_estimate_registration(
     model_to_yaml(model, output_path / "registration_settings.yml")
 
     click.echo(f"Registration estimation done: {position}")
-    num_cpus, mem_per_cpu = estimate_resources(
-        shape=source_shape, ram_multiplier=16, max_num_cpus=16
-    )
-    click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
 
 
 # ---------------------------------------------------------------------------
@@ -1506,10 +1496,6 @@ def nf_optimize_registration(
     model_to_yaml(output_settings, output_path)
 
     click.echo(f"Registration optimization done: {position}")
-    num_cpus, mem_per_cpu = estimate_resources(
-        shape=shape, ram_multiplier=16, max_num_cpus=16
-    )
-    click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
 
 
 # ---------------------------------------------------------------------------
@@ -1894,7 +1880,3 @@ def nf_stitch(
         )
 
     click.echo(f"Stitching done: well {well}")
-    num_cpus, mem_per_cpu = estimate_resources(
-        shape=input_fov_shape, ram_multiplier=25, max_num_cpus=16
-    )
-    click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
