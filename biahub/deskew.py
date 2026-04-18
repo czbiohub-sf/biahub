@@ -421,7 +421,9 @@ def deskew_zyx(
     )[0]
 
     # Apply averaging on GPU before transferring to CPU
-    deskewed_data = _average_n_slices_torch(deskewed_data, average_window_width=average_n_slices)
+    deskewed_data = _average_n_slices_torch(
+        deskewed_data, average_window_width=average_n_slices
+    )
 
     # to numpy array on CPU
     deskewed_data = deskewed_data.cpu().numpy()
@@ -545,9 +547,9 @@ def _czyx_fast_deskew_data(data, device="cuda", num_splits=1, **kwargs):
         # The deskew flips X → higher input X maps to lower output Y, so reverse.
         chunks = np.array_split(zyx, num_splits, axis=2)
         results = [
-            fast_deskew_zyx(
-                torch.from_numpy(c.astype(np.float32)).to(device), **kwargs
-            ).cpu().numpy()
+            fast_deskew_zyx(torch.from_numpy(c.astype(np.float32)).to(device), **kwargs)
+            .cpu()
+            .numpy()
             for c in reversed(chunks)
         ]
         return np.concatenate(results, axis=1)[None]
