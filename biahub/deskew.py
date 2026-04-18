@@ -328,6 +328,38 @@ def _fill_overhang_with_mean(
     return filled
 
 
+def _fill_overhang_torch(
+    data: torch.Tensor,
+    fill_value: float | None = None,
+    dilation_iterations: int = 3,
+) -> torch.Tensor:
+    """Replace zero-padded overhang regions on GPU.
+
+    Uses `F.max_pool3d` for binary dilation instead of `scipy.ndimage`.
+    The structuring element is a 3x3x3 cube (26-connectivity), which is
+    slightly more aggressive than scipy's default cross (6-connectivity).
+
+    Parameters
+    ----------
+    data : torch.Tensor
+        Deskewed 3D volume with zero-padded overhangs.
+    fill_value : float or None
+        Value to fill overhang regions with.  If None, the mean of the valid
+        (non-overhang) signal is used.
+    dilation_iterations : int
+        Number of binary dilation iterations to grow the zero-mask inward,
+        capturing interpolation artifacts at the overhang boundary.
+    """
+    mask = (data == 0).float().unsqueeze(0).unsqueeze(0)  # (1, 1, Z, Y, X)
+    for _ in range(dilation_iterations):
+        mask = F.max_pool3d(mask, kernel_size=3, stride=1, padding=1)
+    dilated_mask = mask.squeeze(0).squeeze(0) > 0.5  # back to bool (Z, Y, X)
+
+    if fill_value is None:
+        fill_value = data[~dilated_mask].mean()
+    return torch.where(dilated_mask, fill_value, data)
+
+
 def deskew_zyx(
     raw_data: np.ndarray,
     ls_angle_deg: float,
@@ -411,6 +443,7 @@ def fast_deskew_zyx(
     px_to_scan_ratio: float,
     keep_overhang: bool,
     average_n_slices: int = 1,
+    overhang_fill: Literal["mean"] | float = 0,
 ) -> torch.Tensor:
     """Fast deskew of fluorescence data from the mantis microscope.
 
@@ -436,6 +469,11 @@ def fast_deskew_zyx(
         If false, only compute the deskewed volume within a cuboid region.
     average_n_slices : int, optional
         after deskewing, averages every n slices (default = 1 applies no averaging)
+    overhang_fill : "mean" or float, optional
+        How to fill overhang regions (only used when keep_overhang=True).
+        "mean" replaces with the mean of the valid signal, or pass a numeric
+        value (e.g. 0 to leave as-is, or 100) to fill with that constant.
+        Default is 0.
 
     Returns
     -------
@@ -478,13 +516,44 @@ def fast_deskew_zyx(
         data_ra, grid, mode="bilinear", padding_mode="zeros", align_corners=True
     )
     # (Z_avg, Y_out, N, X_out) → average over the N grouped slices
-    return deskewed.mean(dim=2)
+    result = deskewed.mean(dim=2)
+
+    if keep_overhang and (overhang_fill == "mean" or overhang_fill != 0):
+        fill_value = None if overhang_fill == "mean" else float(overhang_fill)
+        result = _fill_overhang_torch(result, fill_value=fill_value)
+
+    return result
 
 
 # Adapt ZYX function to CZYX
 # Needs to be a top-level function for multiprocessing pickling
 def _czyx_deskew_data(data, **kwargs):
     return deskew_zyx(data[0], **kwargs)[None]
+
+
+def _czyx_fast_deskew_data(data, device="cuda", num_splits=1, **kwargs):
+    """CZYX wrapper for `fast_deskew_zyx`. Handles numpy↔torch conversion.
+
+    When `num_splits` > 1 the volume is split along input axis 2
+    (X_coverslip → output Y) before transfer to GPU, so each chunk fits in
+    device memory.  The Y axis is independent in the deskew transform so the
+    result is exact.
+    """
+    zyx = data[0]  # (Z, Y, X)
+    if num_splits > 1:
+        # Split along X (axis 2), deskew each chunk, concatenate along output Y (axis 1).
+        # The deskew flips X → higher input X maps to lower output Y, so reverse.
+        chunks = np.array_split(zyx, num_splits, axis=2)
+        results = [
+            fast_deskew_zyx(
+                torch.from_numpy(c.astype(np.float32)).to(device), **kwargs
+            ).cpu().numpy()
+            for c in reversed(chunks)
+        ]
+        return np.concatenate(results, axis=1)[None]
+
+    tensor = torch.from_numpy(zyx.astype(np.float32)).to(device)
+    return fast_deskew_zyx(tensor, **kwargs).cpu().numpy()[None]
 
 
 def deskew(
@@ -596,7 +665,7 @@ def deskew(
             jobs.append(
                 executor.submit(
                     process_single_position,
-                    _czyx_deskew_data,
+                    _czyx_fast_deskew_data,
                     input_position_path,
                     output_position_path,
                     num_processes=slurm_args["slurm_cpus_per_task"],
