@@ -1,0 +1,5 @@
+pixel_size_um: 0.116
+ls_angle_deg: 30.0
+scan_step_um: 0.150
+average_n_slices: 3
+keep_overhang: false

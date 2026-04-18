@@ -1,0 +1,10 @@
+concat_data_paths:
+  - REPLACE_WITH_DESKEW_ZARR_PATH/*/*/*
+  - REPLACE_WITH_RECONSTRUCT_ZARR_PATH/*/*/*
+  - REPLACE_WITH_VIRTUAL_STAIN_ZARR_PATH/*/*/*
+time_indices: all
+channel_names:
+  - all
+  - all
+  - all
+chunks_czyx: null
