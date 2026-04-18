@@ -87,6 +87,64 @@ def _average_n_slices_torch(data: torch.Tensor, average_window_width: int) -> to
     return data.reshape(new_shape).mean(dim=1)
 
 
+def _rearrange_axes(data: torch.Tensor) -> torch.Tensor:
+    """Apply the integer part of the deskew affine: axis permutation and flips.
+
+    Maps input (Z_scan, Y_tilt, X_coverslip) to output (Z_out, Y_out, Z_in)
+    where Z_out indexes the output Z axis (normal to coverslip) and the last
+    axis is the scan axis that still requires fractional interpolation.
+
+    The mapping implemented is:
+        in_y = Y_in - 1 - z_out   (flip along axis 0 after permute)
+        in_x = X_in - 1 - y_out   (flip along axis 1 after permute)
+    """
+    return data.permute(1, 2, 0).flip(0).flip(1).contiguous()
+
+
+def _build_deskew_grid(
+    Z_out_full: int,
+    X_out: int,
+    Z_in: int,
+    ls_angle_deg: float,
+    px_to_scan_ratio: float,
+    average_n_slices: int,
+    device: torch.device,
+) -> torch.Tensor:
+    """Build the 2-D sampling grid for `F.grid_sample`.
+
+    Returns a grid of shape `(Z_avg, N, X_out, 2)` where `N` is
+    `average_n_slices` and `Z_avg = ceil(Z_out_full / N)`.  The two
+    coordinates per sample are:
+
+    * **W** (`grid[..., 0]`): the normalised scan-axis (Z_in) position,
+      derived from `in_z = px * x_out - px * cos(θ) * z_out + offset`.
+    * **H** (`grid[..., 1]`): indexes the N grouped sub-slices that will
+      be averaged after interpolation.
+    """
+    N = average_n_slices
+    Z_avg = int(np.ceil(Z_out_full / N))
+
+    ct = np.cos(ls_angle_deg * np.pi / 180)
+    px = px_to_scan_ratio
+    offset = px * ct * (Z_out_full - 1) / 2 - px * (X_out - 1) / 2 + (Z_in - 1) / 2
+
+    # z_out index for each (avg_slice a, sub-slice k): z_out = a*N + k
+    a_idx = torch.arange(Z_avg, device=device, dtype=torch.float32)
+    k_idx = torch.arange(N, device=device, dtype=torch.float32)
+    x_idx = torch.arange(X_out, device=device, dtype=torch.float32)
+    z_out_all = a_idx.unsqueeze(1) * N + k_idx.unsqueeze(0)  # (Z_avg, N)
+
+    # W coordinate: in_z normalised to [-1, 1] for align_corners=True
+    in_z_f = px * x_idx - px * ct * z_out_all.unsqueeze(2) + offset  # (Z_avg, N, X_out)
+    in_z_norm = 2.0 * in_z_f / (Z_in - 1) - 1.0
+
+    # H coordinate: point to each of the N grouped sub-slice positions
+    h_norm = (2.0 * k_idx / max(N - 1, 1) - 1.0) if N > 1 else torch.zeros(1, device=device)
+    h_grid = h_norm.view(1, N, 1).expand(Z_avg, N, X_out)
+
+    return torch.stack([in_z_norm, h_grid], dim=-1)  # (Z_avg, N, X_out, 2)
+
+
 def _get_averaged_shape(deskewed_data_shape: tuple, average_window_width: int) -> tuple:
     """
     Compute the shape of the data returned from `_average_n_slices` function.
@@ -359,8 +417,8 @@ def fast_deskew_zyx(
     Exploits the structure of the deskew affine: two of the three input axes
     map to output axes via integer permutations/flips (no interpolation
     needed), and only the scan axis (Z) requires fractional resampling.
-    A 2-D ``grid_sample`` with Y_out as the channel dimension replaces the
-    full 3-D trilinear ``grid_sample`` used by MONAI ``Affine``.
+    A 2-D `grid_sample` with Y_out as the channel dimension replaces the
+    full 3-D trilinear `grid_sample` used by MONAI `Affine`.
 
     Parameters
     ----------
@@ -389,59 +447,32 @@ def fast_deskew_zyx(
     device = raw_data.device
     Z_in = raw_data.shape[0]
 
-    # Get the un-averaged output shape (average_n_slices not passed → defaults to 1)
+    # Un-averaged output shape (average_n_slices defaults to 1)
     output_shape, _ = get_deskewed_data_shape(
         raw_data.shape, ls_angle_deg, px_to_scan_ratio, keep_overhang
     )
     Z_out_full, _, X_out = output_shape  # Z_out_full = Y_in
 
-    # The deskew affine (centred-voxel coords, output→input) is:
-    #   in_y = Y_in-1-z_out   (integer — axis permute + flip)
-    #   in_x = X_in-1-y_out   (integer — axis permute + flip)
-    #   in_z = px*x_out - px*ct*z_out + offset   (fractional — needs interpolation)
-    #
-    # Permute+flip handles the integer mappings.  Y_out becomes the channel
-    # dimension of a 2-D grid_sample so a single grid is shared across all
-    # Y_out rows.  When average_n_slices > 1, consecutive z_out slices are
-    # grouped into the H spatial dimension so that grid_sample produces the
-    # grouped layout directly and a final mean(dim=2) replaces a separate
-    # averaging pass.
-    data_ra = raw_data.permute(1, 2, 0).flip(0).flip(1).contiguous()
-    # data_ra: (Z_out_full, Y_out, Z_in)
-
     N = average_n_slices
     Z_avg = int(np.ceil(Z_out_full / N))
+
+    # Integer axis mapping: (Z_scan, Y_tilt, X_coverslip) → (Z_out, Y_out, Z_in)
+    data_ra = _rearrange_axes(raw_data)
 
     # Pad z_out dim to be divisible by N (edge replication)
     pad_n = Z_avg * N - Z_out_full
     if pad_n > 0:
         data_ra = torch.cat([data_ra, data_ra[-1:].expand(pad_n, -1, -1)], dim=0)
 
+    # Reshape to (Batch=Z_avg, C=Y_out, H=N, W=Z_in) — consecutive z_out
+    # slices are grouped into H so averaging becomes a mean over dim 2.
     Y_out = data_ra.shape[1]
-
-    # Reshape to (Z_avg, Y_out, N, Z_in) = (Batch, C, H, W)
     data_ra = data_ra.reshape(Z_avg, N, Y_out, Z_in).permute(0, 2, 1, 3)
 
-    # Build sampling grid: (Z_avg, N, X_out, 2)
-    ct = np.cos(ls_angle_deg * np.pi / 180)
-    px = px_to_scan_ratio
-    offset = px * ct * (Z_out_full - 1) / 2 - px * (X_out - 1) / 2 + (Z_in - 1) / 2
-
-    # z_out index for each (avg_slice a, sub-slice k): z_out = a*N + k
-    a_idx = torch.arange(Z_avg, device=device, dtype=torch.float32)
-    k_idx = torch.arange(N, device=device, dtype=torch.float32)
-    x_idx = torch.arange(X_out, device=device, dtype=torch.float32)
-    z_out_all = a_idx.unsqueeze(1) * N + k_idx.unsqueeze(0)  # (Z_avg, N)
-
-    # W coordinate: in_z normalised to [-1, 1]
-    in_z_f = px * x_idx - px * ct * z_out_all.unsqueeze(2) + offset  # (Z_avg, N, X_out)
-    in_z_norm = 2.0 * in_z_f / (Z_in - 1) - 1.0
-
-    # H coordinate: sample exactly at each of the N grouped positions
-    h_norm = (2.0 * k_idx / max(N - 1, 1) - 1.0) if N > 1 else torch.zeros(1, device=device)
-    h_grid = h_norm.view(1, N, 1).expand(Z_avg, N, X_out)
-
-    grid = torch.stack([in_z_norm, h_grid], dim=-1)  # (Z_avg, N, X_out, 2)
+    # Fractional scan-axis interpolation via 2-D grid_sample
+    grid = _build_deskew_grid(
+        Z_out_full, X_out, Z_in, ls_angle_deg, px_to_scan_ratio, N, device
+    )
 
     deskewed = F.grid_sample(
         data_ra, grid, mode="bilinear", padding_mode="zeros", align_corners=True
