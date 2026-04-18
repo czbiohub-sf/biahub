@@ -627,6 +627,7 @@ def deskew(
         "keep_overhang": settings.keep_overhang,
         "average_n_slices": settings.average_n_slices,
         "overhang_fill": settings.overhang_fill,
+        "device": settings.device,
         "extra_metadata": {"deskew": settings.model_dump()},
     }
 
