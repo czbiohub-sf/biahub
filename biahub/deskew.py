@@ -5,7 +5,7 @@ import click
 import numpy as np
 import submitit
 import torch
-import torch.nn.functional as F
+import torch.nn.functional as F  # noqa: N812
 
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate, process_single_position
