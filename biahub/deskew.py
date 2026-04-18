@@ -387,43 +387,67 @@ def fast_deskew_zyx(
         axis 2 is the X axis, the scanning axis
     """
     device = raw_data.device
+    Z_in = raw_data.shape[0]
+
+    # Get the un-averaged output shape (average_n_slices not passed → defaults to 1)
     output_shape, _ = get_deskewed_data_shape(
         raw_data.shape, ls_angle_deg, px_to_scan_ratio, keep_overhang
     )
-
-    Z_in = raw_data.shape[0]
-    Z_out, _, X_out = output_shape
+    Z_out_full, _, X_out = output_shape  # Z_out_full = Y_in
 
     # The deskew affine (centred-voxel coords, output→input) is:
     #   in_y = Y_in-1-z_out   (integer — axis permute + flip)
     #   in_x = X_in-1-y_out   (integer — axis permute + flip)
     #   in_z = px*x_out - px*ct*z_out + offset   (fractional — needs interpolation)
     #
-    # Permute+flip handles the integer mappings.  We then treat Y_out as the
-    # channel dimension of a 2-D grid_sample (H=1, W=Z_in) so that a single
-    # sampling grid (Z_out, 1, X_out, 2) is shared across all Y_out rows.
+    # Permute+flip handles the integer mappings.  Y_out becomes the channel
+    # dimension of a 2-D grid_sample so a single grid is shared across all
+    # Y_out rows.  When average_n_slices > 1, consecutive z_out slices are
+    # grouped into the H spatial dimension so that grid_sample produces the
+    # grouped layout directly and a final mean(dim=2) replaces a separate
+    # averaging pass.
     data_ra = raw_data.permute(1, 2, 0).flip(0).flip(1).contiguous()
-    data_ra = data_ra.unsqueeze(2)  # (Z_out, Y_out, 1, Z_in) = (N, C, H, W)
+    # data_ra: (Z_out_full, Y_out, Z_in)
 
-    # Build sampling grid: normalise in_z to [-1, 1] for align_corners=True
+    N = average_n_slices
+    Z_avg = int(np.ceil(Z_out_full / N))
+
+    # Pad z_out dim to be divisible by N (edge replication)
+    pad_n = Z_avg * N - Z_out_full
+    if pad_n > 0:
+        data_ra = torch.cat([data_ra, data_ra[-1:].expand(pad_n, -1, -1)], dim=0)
+
+    Y_out = data_ra.shape[1]
+
+    # Reshape to (Z_avg, Y_out, N, Z_in) = (Batch, C, H, W)
+    data_ra = data_ra.reshape(Z_avg, N, Y_out, Z_in).permute(0, 2, 1, 3)
+
+    # Build sampling grid: (Z_avg, N, X_out, 2)
     ct = np.cos(ls_angle_deg * np.pi / 180)
     px = px_to_scan_ratio
-    offset = px * ct * (Z_out - 1) / 2 - px * (X_out - 1) / 2 + (Z_in - 1) / 2
-    z_idx = torch.arange(Z_out, device=device, dtype=torch.float32)
+    offset = px * ct * (Z_out_full - 1) / 2 - px * (X_out - 1) / 2 + (Z_in - 1) / 2
+
+    # z_out index for each (avg_slice a, sub-slice k): z_out = a*N + k
+    a_idx = torch.arange(Z_avg, device=device, dtype=torch.float32)
+    k_idx = torch.arange(N, device=device, dtype=torch.float32)
     x_idx = torch.arange(X_out, device=device, dtype=torch.float32)
-    in_z_f = px * x_idx.unsqueeze(0) - px * ct * z_idx.unsqueeze(1) + offset
-    in_z_norm = 2.0 * in_z_f / (Z_in - 1) - 1.0  # (Z_out, X_out)
+    z_out_all = a_idx.unsqueeze(1) * N + k_idx.unsqueeze(0)  # (Z_avg, N)
 
-    grid = torch.zeros(Z_out, 1, X_out, 2, device=device)
-    grid[:, 0, :, 0] = in_z_norm  # x-coord indexes W (=Z_in)
-    # grid y-coord stays 0 (indexes H=1, i.e. the single row)
+    # W coordinate: in_z normalised to [-1, 1]
+    in_z_f = px * x_idx - px * ct * z_out_all.unsqueeze(2) + offset  # (Z_avg, N, X_out)
+    in_z_norm = 2.0 * in_z_f / (Z_in - 1) - 1.0
 
-    deskewed_data = F.grid_sample(
+    # H coordinate: sample exactly at each of the N grouped positions
+    h_norm = (2.0 * k_idx / max(N - 1, 1) - 1.0) if N > 1 else torch.zeros(1, device=device)
+    h_grid = h_norm.view(1, N, 1).expand(Z_avg, N, X_out)
+
+    grid = torch.stack([in_z_norm, h_grid], dim=-1)  # (Z_avg, N, X_out, 2)
+
+    deskewed = F.grid_sample(
         data_ra, grid, mode="bilinear", padding_mode="zeros", align_corners=True
     )
-    deskewed_data = deskewed_data.squeeze(2)  # (Z_out, Y_out, X_out)
-
-    return _average_n_slices_torch(deskewed_data, average_window_width=average_n_slices)
+    # (Z_avg, Y_out, N, X_out) → average over the N grouped slices
+    return deskewed.mean(dim=2)
 
 
 # Adapt ZYX function to CZYX
