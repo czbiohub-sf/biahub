@@ -5,6 +5,7 @@ import click
 import numpy as np
 import submitit
 import torch
+import torch.nn.functional as F
 
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate, process_single_position
@@ -84,84 +85,6 @@ def _average_n_slices_torch(data: torch.Tensor, average_window_width: int) -> to
 
     new_shape = (data.shape[0] // average_window_width, average_window_width) + data.shape[1:]
     return data.reshape(new_shape).mean(dim=1)
-
-
-def _deskew_interpolate(
-    data_ra: torch.Tensor,
-    in_z_f: torch.Tensor,
-    Z_in: int,
-    Y_out: int,
-    X_out: int,
-    batch_z: int = 256,
-) -> torch.Tensor:
-    """Interpolate along the Z axis of a pre-arranged tensor.
-
-    Implements bilinear 1-D interpolation with ``padding_mode='zeros'``,
-    matching MONAI ``Affine`` behaviour exactly.  Processes ``Z_out`` rows
-    in batches to bound peak GPU memory.
-
-    Parameters
-    ----------
-    data_ra : torch.Tensor, shape (Z_out, Y_out, Z_in)
-        Input tensor after the integer axis-permutation and flip that encodes
-        the in_y / in_x mappings.
-    in_z_f : torch.Tensor, shape (Z_out, X_out)
-        Floating-point Z_in sampling positions for every (z_out, x_out) pair.
-    Z_in, Y_out, X_out : int
-        Spatial dimensions.
-    batch_z : int
-        Number of Z_out rows to process per GPU kernel batch.
-
-    Returns
-    -------
-    torch.Tensor, shape (Z_out, Y_out, X_out)
-    """
-    Z_out = data_ra.shape[0]
-    device = data_ra.device
-
-    in_z0 = in_z_f.floor().long()
-    in_z0_safe = in_z0.clamp(0, Z_in - 1)
-    in_z1_safe = (in_z0 + 1).clamp(0, Z_in - 1)
-    in_z_frac = (in_z_f - in_z0.float()).clamp(0.0, 1.0)
-
-    # Boundary regions for padding_mode='zeros' bilinear blend
-    below_edge = (in_z_f > -1) & (in_z_f < 0)   # blend zero ↔ data[0]
-    above_edge = (in_z_f > Z_in - 1) & (in_z_f < Z_in)  # blend data[Z-1] ↔ zero
-    fully_out = ~((in_z_f >= 0) & (in_z_f <= Z_in - 1) | below_edge | above_edge)
-
-    w_below = (in_z_f + 1).clamp(0.0, 1.0)
-    w_above = (Z_in - in_z_f).clamp(0.0, 1.0)
-    idx_zero = torch.zeros(1, dtype=torch.long, device=device)
-    idx_last = torch.full((1,), Z_in - 1, dtype=torch.long, device=device)
-
-    slices = []
-    for z_s in range(0, Z_out, batch_z):
-        z_e = min(z_s + batch_z, Z_out)
-        B = z_e - z_s
-        d = data_ra[z_s:z_e]  # (B, Y_out, Z_in)
-
-        def exp(t, _B=B):
-            return t[z_s:z_e].unsqueeze(1).expand(_B, Y_out, X_out)
-
-        res = torch.lerp(d.gather(2, exp(in_z0_safe)), d.gather(2, exp(in_z1_safe)), exp(in_z_frac))
-
-        # Edge blends
-        mask_be = exp(below_edge)
-        if mask_be.any():
-            wb = exp(w_below)
-            edge_val = d.gather(2, idx_zero.expand(B, Y_out, 1).expand(B, Y_out, X_out))
-            res = torch.where(mask_be, edge_val * wb, res)
-
-        mask_ae = exp(above_edge)
-        if mask_ae.any():
-            wa = exp(w_above)
-            edge_val = d.gather(2, idx_last.expand(B, Y_out, 1).expand(B, Y_out, X_out))
-            res = torch.where(mask_ae, edge_val * wa, res)
-
-        res[exp(fully_out)] = 0.0
-        slices.append(res)
-
-    return torch.cat(slices, dim=0)
 
 
 def _get_averaged_shape(deskewed_data_shape: tuple, average_window_width: int) -> tuple:
@@ -436,12 +359,12 @@ def fast_deskew_zyx(
 ) -> np.ndarray:
     """Fast deskew of fluorescence data from the mantis microscope.
 
-    Drop-in replacement for :func:`deskew_zyx` that is ~14x faster by
-    exploiting the structure of the deskew affine transform: two of the three
-    input axes map to output axes via integer permutations and flips, so only
-    a single axis requires floating-point interpolation.  The 3-D trilinear
-    ``grid_sample`` used by MONAI ``Affine`` is replaced by a 1-D
-    ``gather``+``lerp`` along the scan (Z) axis only.
+    Drop-in replacement for :func:`deskew_zyx` that exploits the structure of
+    the deskew affine: two of the three input axes map to output axes via
+    integer permutations/flips (no interpolation needed), and only the scan
+    axis (Z) requires fractional resampling.  A 2-D ``grid_sample`` with
+    Y_out as the channel dimension replaces the full 3-D trilinear
+    ``grid_sample`` used by MONAI ``Affine``.
 
     Parameters
     ----------
@@ -473,40 +396,48 @@ def fast_deskew_zyx(
         raw_data.shape, ls_angle_deg, px_to_scan_ratio, keep_overhang
     )
 
-    # Move input to device as float32; pin memory for faster async CPU→GPU transfer
+    # Move input to device as float32; pin memory for faster CPU→GPU transfer
     raw_data_f32 = torch.from_numpy(raw_data.astype(np.float32))
     if device != "cpu":
         raw_data_f32 = raw_data_f32.pin_memory()
     raw_data_tensor = raw_data_f32.to(device, non_blocking=True)
 
-    Z_in, Y_in, X_in = raw_data.shape
+    Z_in = raw_data.shape[0]
     Z_out, Y_out, X_out = output_shape
 
-    # Integer axis mapping: permute (Z,Y,X)→(Y,X,Z) then flip to implement
-    #   in_y = Y_in-1-z_out  and  in_x = X_in-1-y_out  exactly.
-    data_ra = raw_data_tensor.permute(1, 2, 0).flip(0).flip(1).contiguous()  # (Z_out, Y_out, Z_in)
+    # The deskew affine (centred-voxel coords, output→input) is:
+    #   in_y = Y_in-1-z_out   (integer — axis permute + flip)
+    #   in_x = X_in-1-y_out   (integer — axis permute + flip)
+    #   in_z = px*x_out - px*ct*z_out + offset   (fractional — needs interpolation)
+    #
+    # Permute+flip handles the integer mappings.  We then treat Y_out as the
+    # channel dimension of a 2-D grid_sample (H=1, W=Z_in) so that a single
+    # sampling grid (Z_out, 1, X_out, 2) is shared across all Y_out rows.
+    data_ra = raw_data_tensor.permute(1, 2, 0).flip(0).flip(1).contiguous()
+    data_ra = data_ra.unsqueeze(2)  # (Z_out, Y_out, 1, Z_in) = (N, C, H, W)
 
-    # Fractional Z_in position for every (z_out, x_out) output voxel.
-    # Derived from the affine matrix in centred-voxel space:
-    #   in_z = px * x_out - px*ct * z_out + offset
+    # Build sampling grid: normalise in_z to [-1, 1] for align_corners=True
     ct = np.cos(ls_angle_deg * np.pi / 180)
     px = px_to_scan_ratio
     offset = px * ct * (Z_out - 1) / 2 - px * (X_out - 1) / 2 + (Z_in - 1) / 2
     z_idx = torch.arange(Z_out, device=device, dtype=torch.float32)
     x_idx = torch.arange(X_out, device=device, dtype=torch.float32)
-    in_z_f = px * x_idx.unsqueeze(0) - px * ct * z_idx.unsqueeze(1) + offset  # (Z_out, X_out)
+    in_z_f = px * x_idx.unsqueeze(0) - px * ct * z_idx.unsqueeze(1) + offset
+    in_z_norm = 2.0 * in_z_f / (Z_in - 1) - 1.0  # (Z_out, X_out)
 
-    deskewed_data = _deskew_interpolate(data_ra, in_z_f, Z_in, Y_out, X_out)
+    grid = torch.zeros(Z_out, 1, X_out, 2, device=device)
+    grid[:, 0, :, 0] = in_z_norm  # x-coord indexes W (=Z_in)
+    # grid y-coord stays 0 (indexes H=1, i.e. the single row)
 
-    # Apply averaging on GPU before transferring to CPU
+    deskewed_data = F.grid_sample(
+        data_ra, grid, mode="bilinear", padding_mode="zeros", align_corners=True
+    )
+    deskewed_data = deskewed_data.squeeze(2)  # (Z_out, Y_out, X_out)
+
+    # Average and transfer to CPU
     deskewed_data = _average_n_slices_torch(deskewed_data, average_window_width=average_n_slices)
+    averaged_deskewed_data = deskewed_data.cpu().numpy()
 
-    # to numpy array on CPU
-    deskewed_data = deskewed_data.cpu().numpy()
-
-    averaged_deskewed_data = deskewed_data
-
-    # Fill overhang regions after averaging
     if keep_overhang and overhang_fill == "mean":
         averaged_deskewed_data = _fill_overhang_with_mean(
             averaged_deskewed_data, debug_plot_path=debug_plot_path
