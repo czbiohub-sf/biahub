@@ -348,28 +348,24 @@ def deskew_zyx(
 
 
 def fast_deskew_zyx(
-    raw_data: np.ndarray,
+    raw_data: torch.Tensor,
     ls_angle_deg: float,
     px_to_scan_ratio: float,
     keep_overhang: bool,
-    device: str = "cpu",
     average_n_slices: int = 1,
-    overhang_fill: Literal["zero", "mean"] = "zero",
-    debug_plot_path: Path = None,
-) -> np.ndarray:
+) -> torch.Tensor:
     """Fast deskew of fluorescence data from the mantis microscope.
 
-    Drop-in replacement for :func:`deskew_zyx` that exploits the structure of
-    the deskew affine: two of the three input axes map to output axes via
-    integer permutations/flips (no interpolation needed), and only the scan
-    axis (Z) requires fractional resampling.  A 2-D ``grid_sample`` with
-    Y_out as the channel dimension replaces the full 3-D trilinear
-    ``grid_sample`` used by MONAI ``Affine``.
+    Exploits the structure of the deskew affine: two of the three input axes
+    map to output axes via integer permutations/flips (no interpolation
+    needed), and only the scan axis (Z) requires fractional resampling.
+    A 2-D ``grid_sample`` with Y_out as the channel dimension replaces the
+    full 3-D trilinear ``grid_sample`` used by MONAI ``Affine``.
 
     Parameters
     ----------
-    raw_data : NDArray with ndim == 3
-        raw data from the mantis microscope
+    raw_data : torch.Tensor with ndim == 3, dtype float32
+        raw data from the mantis microscope, already on the target device
         - axis 0 corresponds to the scanning axis
         - axis 1 corresponds to the "tilted" axis
         - axis 2 corresponds to the axis in the plane of the coverslip
@@ -382,28 +378,21 @@ def fast_deskew_zyx(
         If false, only compute the deskewed volume within a cuboid region.
     average_n_slices : int, optional
         after deskewing, averages every n slices (default = 1 applies no averaging)
-    device : str, optional
-        torch device to use for computation. Default is 'cpu'.
 
     Returns
     -------
-    deskewed_data : NDArray with ndim == 3
+    deskewed_data : torch.Tensor with ndim == 3
         axis 0 is the Z axis, normal to the coverslip
         axis 1 is the Y axis, input axis 2 in the plane of the coverslip
         axis 2 is the X axis, the scanning axis
     """
+    device = raw_data.device
     output_shape, _ = get_deskewed_data_shape(
         raw_data.shape, ls_angle_deg, px_to_scan_ratio, keep_overhang
     )
 
-    # Move input to device as float32; pin memory for faster CPU→GPU transfer
-    raw_data_f32 = torch.from_numpy(raw_data.astype(np.float32))
-    if device != "cpu":
-        raw_data_f32 = raw_data_f32.pin_memory()
-    raw_data_tensor = raw_data_f32.to(device, non_blocking=True)
-
     Z_in = raw_data.shape[0]
-    Z_out, Y_out, X_out = output_shape
+    Z_out, _, X_out = output_shape
 
     # The deskew affine (centred-voxel coords, output→input) is:
     #   in_y = Y_in-1-z_out   (integer — axis permute + flip)
@@ -413,7 +402,7 @@ def fast_deskew_zyx(
     # Permute+flip handles the integer mappings.  We then treat Y_out as the
     # channel dimension of a 2-D grid_sample (H=1, W=Z_in) so that a single
     # sampling grid (Z_out, 1, X_out, 2) is shared across all Y_out rows.
-    data_ra = raw_data_tensor.permute(1, 2, 0).flip(0).flip(1).contiguous()
+    data_ra = raw_data.permute(1, 2, 0).flip(0).flip(1).contiguous()
     data_ra = data_ra.unsqueeze(2)  # (Z_out, Y_out, 1, Z_in) = (N, C, H, W)
 
     # Build sampling grid: normalise in_z to [-1, 1] for align_corners=True
@@ -434,16 +423,7 @@ def fast_deskew_zyx(
     )
     deskewed_data = deskewed_data.squeeze(2)  # (Z_out, Y_out, X_out)
 
-    # Average and transfer to CPU
-    deskewed_data = _average_n_slices_torch(deskewed_data, average_window_width=average_n_slices)
-    averaged_deskewed_data = deskewed_data.cpu().numpy()
-
-    if keep_overhang and overhang_fill == "mean":
-        averaged_deskewed_data = _fill_overhang_with_mean(
-            averaged_deskewed_data, debug_plot_path=debug_plot_path
-        )
-
-    return averaged_deskewed_data
+    return _average_n_slices_torch(deskewed_data, average_window_width=average_n_slices)
 
 
 # Adapt ZYX function to CZYX
