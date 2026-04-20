@@ -1,0 +1,9 @@
+# Example configuration for Zarr V2 to V3 conversion
+# All parameters are optional - if not provided, uses input chunks and no sharding
+# Format: 5-tuple in TCZYX order
+
+# Chunk size for output Zarr
+chunks: [1, 1, 64, 256, 256]  # [T, C, Z, Y, X]
+
+# Sharding ratio - ratio of shards to chunks per dimension
+shards_ratio: [1, 1, 2, 2, 2]  # [T, C, Z, Y, X]
