@@ -18,6 +18,7 @@ from biahub.settings import (
     SegmentationSettings,
     StabilizationSettings,
     StitchSettings,
+    TileSettings,
     TrackingSettings,
 )
 
@@ -51,6 +52,7 @@ example_settings_params = [
     ("example_segmentation_settings.yml", SegmentationSettings),
     ("example_stabilize_timelapse_settings.yml", StabilizationSettings),
     ("example_stitch_settings.yml", StitchSettings),
+    ("example_tile_settings.yaml", TileSettings),
     ("example_track_settings.yml", TrackingSettings),
     ("example_flat_field_settings.yml", FlatFieldCorrectionSettings),
 ]
