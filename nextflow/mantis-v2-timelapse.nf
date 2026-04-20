@@ -621,12 +621,14 @@ workflow {
     dk_done  = deskew_wf(all_positions, ff_done.done)
     rc_done  = reconstruct_wf(all_positions, dk_done.done)
 
-    // Phase 2: three parallel branches after reconstruct
+    // Phase 2: virtual stain + tracking (parallel, both read from reconstruct)
     vs_done  = virtual_stain_wf(all_positions, rc_done.done)
     tk_done  = track_wf(all_positions, rc_done.done)
-    rn_done  = rename_wf(all_positions, rc_done.done)
 
-    // Phase 3: assembly (waits for all three branches)
-    assembly_trigger = vs_done.done.mix(tk_done.done, rn_done.done) | collect
-    assemble_wf(all_positions, assembly_trigger)
+    // Phase 2b: rename reconstruct channels (after VS + tracking finish reading)
+    rename_trigger = vs_done.done.mix(tk_done.done) | collect
+    rn_done  = rename_wf(all_positions, rename_trigger)
+
+    // Phase 3: assembly (waits for rename)
+    assemble_wf(all_positions, rn_done.done)
 }
