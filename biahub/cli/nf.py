@@ -528,6 +528,9 @@ def run_track(
     input_images_path: str | None,
 ):
     """Run tracking for a single position."""
+    from ultrack import MainConfig
+
+    from biahub.cli.utils import update_model
     from biahub.settings import TrackingSettings
     from biahub.track import resolve_z_slice, track_one_position
 
@@ -557,11 +560,13 @@ def run_track(
 
     blank_path = Path(blank_frames_csv) if blank_frames_csv else settings.blank_frames_path
 
+    tracking_config = update_model(MainConfig(), settings.tracking_config)
+
     track_one_position(
         position_key=position_key,
         input_images=settings.input_images,
         output_dirpath=output_dirpath,
-        tracking_config=settings.tracking_config,
+        tracking_config=tracking_config,
         blank_frames_path=blank_path,
         z_slices=z_slices,
         scale=track_scale,
