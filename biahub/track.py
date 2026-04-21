@@ -46,9 +46,10 @@ _ultrack_patched = False
 def _patch_ultrack_readonly_buffer():
     """Workaround for scikit-image #6378: read-only buffer in _map_array.
 
-    ultrack's MIPSolver.add_edges passes np.asarray() results (potentially
-    read-only under numpy 2.x) into skimage's ArrayMap, whose Cython code
-    rejects read-only memoryviews. Force writable copies before indexing.
+    ultrack's MIPSolver passes np.asarray() results (potentially read-only
+    under numpy 2.x) into skimage's ArrayMap, whose Cython code rejects
+    read-only memoryviews. Force writable copies in both add_nodes (where the
+    ArrayMap is constructed) and add_edges (where it is indexed).
 
     Remove when scikit-image >= 0.27 is available.
     """
@@ -58,6 +59,14 @@ def _patch_ultrack_readonly_buffer():
     _ultrack_patched = True
 
     from ultrack.core.solve.solver.mip_solver import MIPSolver
+
+    _original_add_nodes = MIPSolver.add_nodes
+
+    def _add_nodes_writable(self, indices, *args, **kwargs):
+        indices = np.array(indices, dtype=int)
+        return _original_add_nodes(self, indices, *args, **kwargs)
+
+    MIPSolver.add_nodes = _add_nodes_writable
 
     _original_add_edges = MIPSolver.add_edges
 
