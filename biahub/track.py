@@ -40,6 +40,34 @@ from biahub.settings import ProcessingInputChannel, TrackingSettings
 
 # Lazy imports for ultrack - imported only when needed in specific functions
 
+_ultrack_patched = False
+
+
+def _patch_ultrack_readonly_buffer():
+    """Workaround for scikit-image #6378: read-only buffer in _map_array.
+
+    ultrack's MIPSolver.add_edges passes np.asarray() results (potentially
+    read-only under numpy 2.x) into skimage's ArrayMap, whose Cython code
+    rejects read-only memoryviews. Force writable copies before indexing.
+
+    Remove when scikit-image >= 0.27 is available.
+    """
+    global _ultrack_patched
+    if _ultrack_patched:
+        return
+    _ultrack_patched = True
+
+    from ultrack.core.solve.solver.mip_solver import MIPSolver
+
+    _original_add_edges = MIPSolver.add_edges
+
+    def _add_edges_writable(self, sources, targets, weights):
+        sources = np.array(sources, dtype=int)
+        targets = np.array(targets, dtype=int)
+        return _original_add_edges(self, sources, targets, weights)
+
+    MIPSolver.add_edges = _add_edges_writable
+
 
 def mem_nuc_contour(nuclei_prediction: ArrayLike, membrane_prediction: ArrayLike) -> ArrayLike:
     """
@@ -363,6 +391,8 @@ def run_ultrack(
     ... )
     """
     from ultrack import Tracker
+
+    _patch_ultrack_readonly_buffer()
 
     cfg: MainConfig = tracking_config
 
