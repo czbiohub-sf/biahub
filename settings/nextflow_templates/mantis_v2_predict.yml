@@ -40,4 +40,4 @@ data:
           subtrahend: median
           divisor: iqr
 return_predictions: false
-ckpt_path: REPLACE_WITH_CHECKPOINT_PATH
+ckpt_path: /hpc/projects/comp.micro/virtual_staining/models/fcmae-cyto3d-sensor/vscyto3d-logs/hek-a549-ipsc-finetune/checkpoints/epoch=83-step=14532-loss=0.492.ckpt
