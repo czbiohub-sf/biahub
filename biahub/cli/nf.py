@@ -129,13 +129,33 @@ def run_flat_field(
 @click.option("--output-zarr", "-o", required=True, type=click.Path())
 @click.option("--config", "-c", required=True, type=click.Path(exists=True))
 def init_deskew(input_zarr: str, output_zarr: str, config: str):
-    """Create empty output zarr for deskew."""
+    """Create empty output zarr for deskew.
+
+    If ``pixel_size_um`` is absent from the config, it is resolved from the
+    input zarr YX scale.  The resolved config is written next to the output
+    zarr as ``deskew_resolved.yml`` for downstream processes.
+    """
+    import yaml
     from biahub.deskew import get_deskewed_data_shape
     from biahub.settings import DeskewSettings
 
-    settings = yaml_to_model(Path(config), DeskewSettings)
-    position_keys, channel_names, shape, _ = read_plate_metadata(input_zarr)
+    config_path = Path(config)
+    position_keys, channel_names, shape, scale = read_plate_metadata(input_zarr)
     T, C, Z, Y, X = shape
+
+    with open(config_path) as f:
+        cfg = yaml.safe_load(f)
+
+    if "pixel_size_um" not in cfg or cfg["pixel_size_um"] is None:
+        cfg["pixel_size_um"] = float(scale[-1])
+        click.echo(f"Resolved pixel_size_um={cfg['pixel_size_um']} from input zarr")
+
+    resolved_config = Path(output_zarr).parent / "deskew_resolved.yml"
+    resolved_config.parent.mkdir(parents=True, exist_ok=True)
+    with open(resolved_config, "w") as f:
+        yaml.safe_dump(cfg, f, default_flow_style=False, sort_keys=False)
+
+    settings = yaml_to_model(resolved_config, DeskewSettings)
 
     deskewed_shape, voxel_size = get_deskewed_data_shape(
         (Z, Y, X),
@@ -227,7 +247,14 @@ def _upsampled_zyx(settings, zyx_shape: tuple[int, int, int]) -> tuple[int, int,
 @click.option("--config", "-c", required=True, type=click.Path(exists=True))
 @click.option("--num-threads", "-j", default=1, type=int)
 def init_reconstruct(input_zarr: str, output_zarr: str, config: str, num_threads: int):
-    """Create empty output zarr and estimate resources for reconstruction."""
+    """Create empty output zarr and estimate resources for reconstruction.
+
+    Reads post-deskew pixel sizes from the input zarr scale metadata and
+    injects them into the reconstruction config so that the transfer function
+    uses the correct voxel dimensions.  The resolved config is written next to
+    the output zarr as ``reconstruct_resolved.yml``.
+    """
+    import yaml
     from waveorder.cli.apply_inverse_transfer_function import (
         get_reconstruction_output_metadata,
     )
@@ -236,11 +263,37 @@ def init_reconstruct(input_zarr: str, output_zarr: str, config: str, num_threads
     from waveorder.cli.utils import estimate_resources as wo_estimate_resources
 
     config_path = Path(config)
-    position_keys, _, shape, _ = read_plate_metadata(input_zarr)
+    position_keys, _, shape, scale = read_plate_metadata(input_zarr)
     T, C, Z, Y, X = shape
-    first_position_path = Path(input_zarr) / "/".join(position_keys[0])
 
-    output_metadata = get_reconstruction_output_metadata(first_position_path, config_path)
+    yx_pixel_size = float(scale[-1])
+    z_pixel_size = float(scale[-3])
+
+    with open(config_path) as f:
+        cfg = yaml.safe_load(f)
+
+    resolved_yx = yx_pixel_size
+    resolved_z = z_pixel_size
+    for section in ("phase", "birefringence", "fluorescence"):
+        tf = (cfg.get(section) or {}).get("transfer_function")
+        if tf is not None:
+            if "yx_pixel_size" not in tf or tf["yx_pixel_size"] is None:
+                tf["yx_pixel_size"] = yx_pixel_size
+            else:
+                resolved_yx = tf["yx_pixel_size"]
+            if "z_pixel_size" not in tf or tf["z_pixel_size"] is None:
+                tf["z_pixel_size"] = z_pixel_size
+            else:
+                resolved_z = tf["z_pixel_size"]
+
+    resolved_config = Path(output_zarr).parent / "reconstruct_resolved.yml"
+    resolved_config.parent.mkdir(parents=True, exist_ok=True)
+    with open(resolved_config, "w") as f:
+        yaml.safe_dump(cfg, f, default_flow_style=False, sort_keys=False)
+    click.echo(f"Pixel sizes (yx={resolved_yx}, z={resolved_z}) → {resolved_config}")
+
+    first_position_path = Path(input_zarr) / "/".join(position_keys[0])
+    output_metadata = get_reconstruction_output_metadata(first_position_path, resolved_config)
 
     create_empty_hcs_zarr(
         store_path=Path(output_zarr),
@@ -250,7 +303,7 @@ def init_reconstruct(input_zarr: str, output_zarr: str, config: str, num_threads
     copy_position_metadata(Path(input_zarr), Path(output_zarr))
     click.echo(f"Created {output_zarr} ({len(position_keys)} positions)")
 
-    settings = yaml_to_model(config_path, ReconstructionSettings)
+    settings = yaml_to_model(resolved_config, ReconstructionSettings)
     num_cpus, mem_per_cpu = wo_estimate_resources(list(shape), settings, num_threads)
     click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
 
@@ -459,12 +512,31 @@ def init_track(input_zarr: str, output_zarr: str, config: str):
 @click.option("--position", "-p", required=True)
 @click.option("--config", "-c", required=True, type=click.Path(exists=True))
 @click.option("--blank-frames-csv", default=None, type=click.Path(exists=True))
-def run_track(output_zarr: str, position: str, config: str, blank_frames_csv: str | None):
+@click.option(
+    "--input-images-path",
+    default=None,
+    type=click.Path(exists=True),
+    help="Override the first non-null input_images path from config.",
+)
+def run_track(
+    output_zarr: str,
+    position: str,
+    config: str,
+    blank_frames_csv: str | None,
+    input_images_path: str | None,
+):
     """Run tracking for a single position."""
     from biahub.settings import TrackingSettings
     from biahub.track import resolve_z_slice, track_one_position
 
     settings = yaml_to_model(Path(config), TrackingSettings)
+
+    if input_images_path is not None:
+        for image in settings.input_images:
+            if image.path is not None:
+                image.path = Path(input_images_path)
+                break
+
     output_dirpath = Path(output_zarr)
     position_key = tuple(position.split("/"))
 
@@ -510,7 +582,18 @@ def run_track(output_zarr: str, position: str, config: str, blank_frames_csv: st
     default=0.95,
     help="Circular mask radius as fraction of image width for phase channel.",
 )
-def nf_estimate_crop(config: str, output_config: str, lf_mask_radius: float):
+@click.option(
+    "--concat-data-paths",
+    multiple=True,
+    type=str,
+    help="Override concat_data_paths from config (one per source, repeat flag).",
+)
+def nf_estimate_crop(
+    config: str,
+    output_config: str,
+    lf_mask_radius: float,
+    concat_data_paths: tuple[str, ...],
+):
     """Estimate crop region across all positions and write updated config."""
     import glob as globmod
 
@@ -522,6 +605,9 @@ def nf_estimate_crop(config: str, output_config: str, lf_mask_radius: float):
 
     config_path = Path(config)
     settings = yaml_to_model(config_path, ConcatenateSettings)
+
+    if concat_data_paths:
+        settings.concat_data_paths = list(concat_data_paths)
 
     if len(settings.concat_data_paths) < 2:
         raise click.ClickException(

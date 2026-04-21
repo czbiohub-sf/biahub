@@ -4,7 +4,7 @@ z_range: [-1, -1]
 target_channel: nuclei_prediction
 
 input_images:
-  - path: REPLACE_WITH_VIRTUAL_STAIN_ZARR_PATH
+  - path: null  # overridden by --input-images-path at runtime
     channels:
       nuclei_prediction:
         - function: np.mean

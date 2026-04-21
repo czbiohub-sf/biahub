@@ -1,7 +1,9 @@
+# concat_data_paths are overridden by --concat-data-paths at runtime.
+# Provide placeholder entries to match the number of channel_names groups.
 concat_data_paths:
-  - REPLACE_WITH_DESKEW_ZARR_PATH/*/*/*
-  - REPLACE_WITH_RECONSTRUCT_ZARR_PATH/*/*/*
-  - REPLACE_WITH_VIRTUAL_STAIN_ZARR_PATH/*/*/*
+  - placeholder
+  - placeholder
+  - placeholder
 time_indices: all
 channel_names:
   - all

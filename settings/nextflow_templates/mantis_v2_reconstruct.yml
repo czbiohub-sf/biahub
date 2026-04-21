@@ -4,8 +4,10 @@ reconstruction_dimension: 3
 phase:
   transfer_function:
     wavelength_illumination: 0.450
-    yx_pixel_size: 0.1494
-    z_pixel_size: 0.174
+    # yx_pixel_size and z_pixel_size are resolved from the deskew output zarr
+    # by init-reconstruct. Uncomment to override with specific values:
+    # yx_pixel_size: 0.1494
+    # z_pixel_size: 0.174
     z_padding: 5
     index_of_refraction_media: 1.4
     numerical_aperture_detection: 1.35

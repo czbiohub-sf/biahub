@@ -145,7 +145,7 @@ process run_deskew {
         -i "${params.output_dir}/0-flatfield/${dataset_name}.zarr" \
         -o "${params.output_dir}/1-deskew/${dataset_name}.zarr" \
         -p "${position}" \
-        -c "${params.deskew_config}"
+        -c "${params.output_dir}/1-deskew/deskew_resolved.yml"
     """
 }
 
@@ -190,7 +190,7 @@ process compute_transfer_function {
     ${biahub_cmd} nf compute-transfer-function \
         -i "${params.output_dir}/1-deskew/${dataset_name}.zarr" \
         -t "${params.output_dir}/2-reconstruct/transfer_function_${dataset_name}.zarr" \
-        -c "${params.reconstruct_config}"
+        -c "${params.output_dir}/2-reconstruct/reconstruct_resolved.yml"
     """
 }
 
@@ -216,7 +216,7 @@ process run_apply_inv_tf {
         -o "${params.output_dir}/2-reconstruct/${dataset_name}.zarr" \
         -t "${params.output_dir}/2-reconstruct/transfer_function_${dataset_name}.zarr" \
         -p "${position}" \
-        -c "${params.reconstruct_config}" \
+        -c "${params.output_dir}/2-reconstruct/reconstruct_resolved.yml" \
         -j ${params.num_threads}
     """
 }
@@ -385,7 +385,8 @@ process run_track {
     ${biahub_cmd} nf run-track \
         -o "${params.output_dir}/4-track/${dataset_name}.zarr" \
         -p "${position}" \
-        -c "${params.track_config}"
+        -c "${params.track_config}" \
+        --input-images-path "${params.output_dir}/3-virtual-stain/${dataset_name}.zarr"
     """
 }
 
@@ -407,7 +408,10 @@ process estimate_crop {
     """
     ${biahub_cmd} nf estimate-crop \
         -c "${params.concatenate_config}" \
-        -o "${params.output_dir}/5-assemble/concatenate_cropped.yml"
+        -o "${params.output_dir}/5-assemble/concatenate_cropped.yml" \
+        --concat-data-paths "${params.output_dir}/1-deskew/${dataset_name}.zarr/*/*/*" \
+        --concat-data-paths "${params.output_dir}/2-reconstruct/${dataset_name}.zarr/*/*/*" \
+        --concat-data-paths "${params.output_dir}/3-virtual-stain/${dataset_name}.zarr/*/*/*"
     """
 }
 
