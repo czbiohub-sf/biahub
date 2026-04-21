@@ -239,7 +239,7 @@ def segment_cli(
                     output_position_path,
                     input_channel_indices=[list(range(C))],
                     output_channel_indices=[list(range(C_segment))],
-                    num_threads=np.min([20, int(num_cpus * 0.8)]),
+                    num_processes=np.min([20, int(num_cpus * 0.8)]),
                     segmentation_models=segment_args,
                 )
             )

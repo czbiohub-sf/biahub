@@ -305,7 +305,7 @@ def process_with_config(
                     input_time_indices=list(range(T)),
                     input_channel_indices=[list(range(C))],  # Process all channels
                     output_channel_indices=[list(range(C))],
-                    num_threads=slurm_args["slurm_cpus_per_task"],
+                    num_processes=slurm_args["slurm_cpus_per_task"],
                     **process_args,
                 )
             )

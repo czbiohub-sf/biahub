@@ -15,7 +15,7 @@ from biahub.cli.parsing import (
     input_position_dirpaths,
     local,
     monitor,
-    num_threads,
+    num_processes,
     output_dirpath,
     sbatch_filepath_predict,
     sbatch_filepath_preprocess,
@@ -164,7 +164,7 @@ def virtual_stain(
     sbatch_filepath_preprocess: str = None,
     sbatch_filepath_predict: str = None,
     run_mode: str = "all",
-    num_threads: int = 32,
+    num_processes: int = 32,
     local: bool = False,
     monitor: bool = True,
     verbose: bool = True,
@@ -190,7 +190,7 @@ def virtual_stain(
         Path to the VisCy predict sbatch file.
     run_mode : str
         Which VisCy stage(s) to run.
-    num_threads : int
+    num_processes : int
         Number of processes to use.
     local : bool
         Whether to run locally.
@@ -210,7 +210,7 @@ def virtual_stain(
         slurm_args_preprocess = {
             "slurm_job_name": "VS_preprocess",
             "slurm_mem_per_cpu": "8G",
-            "slurm_cpus_per_task": num_threads,
+            "slurm_cpus_per_task": num_processes,
             "slurm_array_parallelism": 1,
             "slurm_time": 8 * 60,
             "slurm_partition": "cpu",
@@ -228,7 +228,7 @@ def virtual_stain(
             job = executor.submit(
                 run_viscy_preprocess,
                 data_path=str(plate_path),
-                num_workers=num_threads,
+                num_workers=num_processes,
                 config_file=preprocess_config_filepath,
                 path_viscy_env=path_viscy_env,
                 verbose=verbose,
@@ -329,7 +329,7 @@ def virtual_stain(
         slurm_args_combine = {
             "slurm_job_name": "VS_combine",
             "slurm_mem_per_cpu": "8G",
-            "slurm_cpus_per_task": num_threads,
+            "slurm_cpus_per_task": num_processes,
             "slurm_array_parallelism": 1,
             "slurm_time": 8 * 60,
             "slurm_partition": "cpu",
@@ -373,7 +373,7 @@ def virtual_stain(
 @output_dirpath()
 @sbatch_filepath_preprocess()
 @sbatch_filepath_predict()
-@num_threads()
+@num_processes()
 @local()
 @monitor()
 @click.option("--verbose", is_flag=True, default=False, help="Verbose output.")
@@ -405,7 +405,7 @@ def virtual_stain_cli(
     path_viscy_env: str,
     preprocess_config_filepath: str = None,
     run_mode: str = "all",
-    num_threads: int = 32,
+    num_processes: int = 32,
     sbatch_filepath_preprocess: str = None,
     sbatch_filepath_predict: str = None,
     local: bool = False,
@@ -431,7 +431,7 @@ def virtual_stain_cli(
         sbatch_filepath_predict=sbatch_filepath_predict,
         path_viscy_env=path_viscy_env,
         run_mode=run_mode,
-        num_threads=num_threads,
+        num_processes=num_processes,
         local=local,
         monitor=monitor,
         verbose=verbose,

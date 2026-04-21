@@ -364,7 +364,7 @@ def process_single_position(
     func,
     input_data_path: Path,
     output_path: Path,
-    num_threads: int = mp.cpu_count(),
+    num_processes: int = mp.cpu_count(),
     **kwargs,
 ) -> None:
     """Register a single position with multiprocessing parallelization over T and C."""
@@ -402,8 +402,8 @@ def process_single_position(
             output_dataset.zattrs["extra_metadata"] = non_func_args["extra_metadata"]
 
     # Loop through (T, C), deskewing and writing as we go
-    click.echo(f"\nStarting multiprocess pool with {num_threads} threads")
-    with mp.Pool(num_threads) as p:
+    click.echo(f"\nStarting multiprocess pool with {num_processes} processes")
+    with mp.Pool(num_processes) as p:
         p.starmap(
             partial(
                 apply_function_to_zyx_and_save,
@@ -425,7 +425,7 @@ def process_single_position_v2(
     time_indices_out: list | None = None,
     input_channel_idx: list | None = None,
     output_channel_idx: list | None = None,
-    num_threads: int = mp.cpu_count(),
+    num_processes: int = mp.cpu_count(),
     **kwargs,
 ) -> None:
     """Register a single position with multiprocessing parallelization over T and C."""
@@ -483,7 +483,7 @@ def process_single_position_v2(
             output_dataset.zattrs["extra_metadata"] = non_func_args["extra_metadata"]
 
     # Loop through (T, C), deskewing and writing as we go
-    click.echo(f"\nStarting multiprocess pool with {num_threads} threads")
+    click.echo(f"\nStarting multiprocess pool with {num_processes} processes")
 
     if input_channel_idx is None or len(input_channel_idx) == 0:
         # If C is not empty, use itertools.product with both ranges
@@ -517,8 +517,8 @@ def process_single_position_v2(
             **func_args,
         )
 
-    click.echo(f"\nStarting multiprocess pool with {num_threads} threads")
-    with mp.Pool(num_threads) as p:
+    click.echo(f"\nStarting multiprocess pool with {num_processes} processes")
+    with mp.Pool(num_processes) as p:
         p.starmap(
             partial_apply_transform_to_zyx_and_save,
             iterable,
@@ -647,7 +647,6 @@ def model_to_yaml(model, yaml_path: Path) -> None:
     # Remove None-valued fields
     clean_model_dict = {key: value for key, value in model_dict.items() if value is not None}
 
-    yaml_path.parent.mkdir(parents=True, exist_ok=True)
     with open(yaml_path, "w+") as f:
         yaml.dump(clean_model_dict, f, default_flow_style=False, sort_keys=False)
 

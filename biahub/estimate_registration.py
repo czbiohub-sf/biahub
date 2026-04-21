@@ -383,7 +383,7 @@ def estimate_registration(
         List of file paths to the target channel data in OME-Zarr format.
     output_filepath : str
         Path to save the estimated registration configuration file (YAML).
-    num_threads : int
+    num_processes : int
         Number of processes for parallel computations (used in bead-based registration).
     config_filepath : str
         Path to the YAML configuration file for the registration settings.

@@ -954,7 +954,7 @@ def run_stabilize(
             time_indices=time_indices,
             input_channel_idx=[ch_idx],
             output_channel_idx=[ch_idx],
-            num_threads=num_threads,
+            num_processes=num_threads,
             list_of_shifts=combined_mats,
             output_shape=(out_Z, out_Y, out_X),
         )
@@ -1737,7 +1737,7 @@ def nf_run_register(
             time_indices=time_indices,
             input_channel_idx=[source_channel_names.index(channel_name)],
             output_channel_idx=[output_channel_names.index(channel_name)],
-            num_threads=num_threads,
+            num_processes=num_threads,
             **affine_kwargs,
         )
 
@@ -1751,7 +1751,7 @@ def nf_run_register(
             time_indices=time_indices,
             input_channel_idx=[target_channel_names.index(channel_name)],
             output_channel_idx=[output_channel_names.index(channel_name)],
-            num_threads=num_threads,
+            num_processes=num_threads,
             **copy_kwargs,
         )
 

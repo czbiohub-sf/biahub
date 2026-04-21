@@ -192,7 +192,7 @@ def flat_field(
                     czyx_flat_field_correction,
                     input_position_path,
                     output_position_path,
-                    num_threads=slurm_args["slurm_cpus_per_task"],
+                    num_processes=slurm_args["slurm_cpus_per_task"],
                     channel_names=channel_names,
                     all_channel_names=all_channel_names,
                 )

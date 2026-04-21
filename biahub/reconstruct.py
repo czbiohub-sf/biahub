@@ -12,7 +12,7 @@ from biahub.cli.parsing import (
     input_position_dirpaths,
     local,
     monitor,
-    num_threads,
+    num_processes,
     output_dirpath,
     sbatch_filepath,
 )
@@ -22,7 +22,7 @@ from biahub.cli.parsing import (
 @input_position_dirpaths()
 @config_filepath()
 @output_dirpath()
-@num_threads()
+@num_processes()
 @sbatch_filepath()
 @local()
 @monitor()
@@ -30,7 +30,7 @@ def reconstruct_cli(
     input_position_dirpaths: list[Path],
     config_filepath: Path,
     output_dirpath: Path,
-    num_threads: int,
+    num_processes: int,
     sbatch_filepath: Path,
     local: bool = False,
     monitor: bool = True,
@@ -70,7 +70,7 @@ def reconstruct_cli(
         transfer_function_path,
         config_filepath,
         output_dirpath,
-        num_threads,
+        num_processes,
         sbatch_filepath,
         local,
         monitor,
