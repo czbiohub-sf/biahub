@@ -46,10 +46,12 @@ _ultrack_patched = False
 def _patch_ultrack_readonly_buffer():
     """Workaround for scikit-image #6378: read-only buffer in _map_array.
 
-    ultrack's MIPSolver passes np.asarray() results (potentially read-only
-    under numpy 2.x) into skimage's ArrayMap, whose Cython code rejects
-    read-only memoryviews. Force writable copies in both add_nodes (where the
-    ArrayMap is constructed) and add_edges (where it is indexed).
+    scikit-image's Cython ``_map_array`` rejects read-only memoryviews.
+    Under numpy 2.x, pandas DataFrame columns and ``np.asarray`` results are
+    often read-only, so every call path through ``map_array`` can trigger this.
+
+    Patch ``skimage.util.map_array`` directly to force writable copies of
+    all arrays before passing them to Cython.
 
     Remove when scikit-image >= 0.27 is available.
     """
@@ -58,24 +60,23 @@ def _patch_ultrack_readonly_buffer():
         return
     _ultrack_patched = True
 
-    from ultrack.core.solve.solver.mip_solver import MIPSolver
+    import skimage.util._map_array as _ma
 
-    _original_add_nodes = MIPSolver.add_nodes
+    _original_map_array = _ma.map_array
 
-    def _add_nodes_writable(self, indices, *args, **kwargs):
-        indices = np.array(indices, dtype=int)
-        return _original_add_nodes(self, indices, *args, **kwargs)
+    def _map_array_writable(input_arr, input_vals, output_vals, out=None):
+        input_arr = np.array(input_arr, copy=False)
+        if not input_arr.flags.writeable:
+            input_arr = input_arr.copy()
+        input_vals = np.array(input_vals, copy=False)
+        if not input_vals.flags.writeable:
+            input_vals = input_vals.copy()
+        output_vals = np.array(output_vals, copy=False)
+        if not output_vals.flags.writeable:
+            output_vals = output_vals.copy()
+        return _original_map_array(input_arr, input_vals, output_vals, out=out)
 
-    MIPSolver.add_nodes = _add_nodes_writable
-
-    _original_add_edges = MIPSolver.add_edges
-
-    def _add_edges_writable(self, sources, targets, weights):
-        sources = np.array(sources, dtype=int)
-        targets = np.array(targets, dtype=int)
-        return _original_add_edges(self, sources, targets, weights)
-
-    MIPSolver.add_edges = _add_edges_writable
+    _ma.map_array = _map_array_writable
 
 
 def mem_nuc_contour(nuclei_prediction: ArrayLike, membrane_prediction: ArrayLike) -> ArrayLike:
