@@ -405,6 +405,7 @@ def run_ultrack(
         detection=foreground_mask,
         edges=contour_gradient_map,
         scale=scale,
+        overwrite=True,
     )
 
     tracks_df, graph = tracker.to_tracks_layer()
