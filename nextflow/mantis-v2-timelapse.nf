@@ -198,7 +198,7 @@ process run_apply_inv_tf {
     tag "${position}"
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
-    time '2h'
+    time '6h'
     queue 'cpu'
     maxRetries 1
     errorStrategy 'retry'
