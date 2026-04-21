@@ -370,7 +370,8 @@ process run_track {
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time '2h'
-    queue 'cpu'
+    queue 'gpu'
+    clusterOptions '--gres=gpu:1'
     maxRetries 1
     errorStrategy 'retry'
 
