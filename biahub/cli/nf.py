@@ -535,7 +535,7 @@ def run_track(
 
     if input_images_path is not None:
         for image in settings.input_images:
-            if image.path is not None:
+            if image.path is None:
                 image.path = Path(input_images_path)
                 break
 

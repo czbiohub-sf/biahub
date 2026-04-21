@@ -301,6 +301,85 @@ def test_run_track(tmp_path, example_plate):
         assert call_kwargs.kwargs["output_dirpath"] == output_path
 
 
+def test_run_track_null_path_override(tmp_path, example_plate):
+    """run-track --input-images-path overrides null paths in config."""
+    plate_path, plate_dataset = example_plate
+    plate_dataset.close()
+
+    # Config with null path on first entry (matches real track.yml usage)
+    cfg = {
+        "mode": "2D",
+        "z_range": [-1, -1],
+        "target_channel": "GFP",
+        "input_images": [
+            {
+                "path": None,
+                "channels": {"GFP": []},
+            },
+            {
+                "path": None,
+                "channels": {
+                    "foreground": [
+                        {
+                            "function": "np.ones_like",
+                            "input_channels": ["GFP"],
+                            "kwargs": {},
+                        }
+                    ],
+                    "contour": [
+                        {
+                            "function": "np.zeros_like",
+                            "input_channels": ["GFP"],
+                            "kwargs": {},
+                        }
+                    ],
+                },
+            },
+        ],
+        "tracking_config": {},
+    }
+    config_path = tmp_path / "track_config_null.yml"
+    config_path.write_text(yaml.dump(cfg))
+
+    output_path = tmp_path / "track_output.zarr"
+    runner = CliRunner()
+    runner.invoke(
+        cli,
+        [
+            "nf",
+            "init-track",
+            "-i",
+            str(plate_path),
+            "-o",
+            str(output_path),
+            "-c",
+            str(config_path),
+        ],
+    )
+
+    with patch("biahub.track.track_one_position") as mock_track:
+        result = runner.invoke(
+            cli,
+            [
+                "nf",
+                "run-track",
+                "-o",
+                str(output_path),
+                "-p",
+                "A/1/0",
+                "-c",
+                str(config_path),
+                "--input-images-path",
+                str(plate_path),
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        mock_track.assert_called_once()
+        first_image = mock_track.call_args.kwargs["input_images"][0]
+        assert first_image.path == plate_path
+
+
 # ---------------------------------------------------------------------------
 # estimate-crop / init-concatenate / run-concatenate (assembly)
 # ---------------------------------------------------------------------------
