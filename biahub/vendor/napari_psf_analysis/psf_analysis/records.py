@@ -1,5 +1,3 @@
-from typing import Tuple
-
 from pydantic import BaseModel, NonNegativeFloat, PositiveFloat, PositiveInt
 
 
@@ -74,13 +72,13 @@ class PSFRecord(BaseModel):
 
 
 class PSFAnalysisInputs(BaseModel):
-    date: Tuple[int, int, int]
+    date: tuple[int, int, int]
     microscope: str
     magnification: PositiveInt
     objective_id: str
     na: PositiveFloat
-    spacing: Tuple[PositiveFloat, PositiveFloat, PositiveFloat]
-    crop_size: Tuple[PositiveInt, PositiveInt, PositiveInt]
+    spacing: tuple[PositiveFloat, PositiveFloat, PositiveFloat]
+    crop_size: tuple[PositiveInt, PositiveInt, PositiveInt]
     image_name: str
     temperature: float
     airy_unit: PositiveFloat

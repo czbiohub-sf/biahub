@@ -1,5 +1,4 @@
 from pathlib import Path
-from typing import List
 
 import click
 import numpy as np
@@ -22,7 +21,12 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import estimate_resources, get_output_paths, yaml_to_model
+from biahub.cli.utils import (
+    estimate_resources,
+    get_output_paths,
+    get_submitit_cluster,
+    yaml_to_model,
+)
 from biahub.settings import DeconvolveSettings
 
 
@@ -49,7 +53,7 @@ def deconvolve(
     regularization_strength: float = 1e-3,
 ) -> np.ndarray:
     if transfer_function is None:
-        with open_ome_zarr(transfer_function_store_path, layout='fov', mode='r') as ds:
+        with open_ome_zarr(transfer_function_store_path, layout="fov", mode="r") as ds:
             transfer_function = torch.tensor(ds.data[0, 0])
 
     output = []
@@ -81,7 +85,7 @@ def deconvolve(
 @local()
 @monitor()
 def deconvolve_cli(
-    input_position_dirpaths: List[str],
+    input_position_dirpaths: list[str],
     psf_dirpath: str,
     config_filepath: Path,
     output_dirpath: str,
@@ -89,10 +93,13 @@ def deconvolve_cli(
     local: bool = False,
     monitor: bool = True,
 ):
-    """
-    Deconvolve across T and C axes using a PSF and a configuration file
+    """Deconvolve across T and C axes using a PSF and a configuration file.
 
-    >> biahub deconvolve -i ./input.zarr/*/*/* -p ./psf.zarr -c ./deconvolve_params.yml -o ./output.zarr
+    >>> biahub deconvolve \
+        -i ./input.zarr/*/*/* \
+        -p ./psf.zarr \
+        -c ./deconvolve_params.yml \
+        -o ./output.zarr
     """
     # Convert string paths to Path objects
     output_dirpath = Path(output_dirpath)
@@ -122,7 +129,7 @@ def deconvolve_cli(
 
     # Compute transfer function
     click.echo("Computing transfer function...")
-    with open_ome_zarr(Path(psf_dirpath, '0/0/0'), mode="r") as psf_dataset:
+    with open_ome_zarr(Path(psf_dirpath, "0/0/0"), mode="r") as psf_dataset:
         if scale[-3:] != psf_dataset.scale[-3:]:
             click.echo(
                 f"Warning: PSF scale: {scale[-3:]} does not match data scale: {scale[-3:]}. "
@@ -132,13 +139,13 @@ def deconvolve_cli(
 
     transfer_function = compute_tranfser_function(psf_data, output_zyx_shape=shape[-3:])
     with open_ome_zarr(
-        transfer_function_store_path, layout='fov', mode='w-', channel_names=['PSF']
+        transfer_function_store_path, layout="fov", mode="w-", channel_names=["PSF"]
     ) as psf_output_dataset:
         psf_output_dataset.create_image(
-            '0',
+            "0",
             transfer_function[None, None],
             chunks=(1, 1, 256) + shape[-2:],
-            transform=[TransformationMeta(type='scale', scale=psf_dataset.scale)],
+            transform=[TransformationMeta(type="scale", scale=psf_dataset.scale)],
         )
 
     # Estimate resources
@@ -160,21 +167,18 @@ def deconvolve_cli(
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
     # Run locally or submit to SLURM
-    if local:
-        cluster = "local"
-    else:
-        cluster = "slurm"
+    cluster = get_submitit_cluster(local)
 
     # Prepare and submit jobs
     click.echo(f"Preparing jobs: {slurm_args}")
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
 
-    click.echo('Submitting SLURM jobs...')
+    click.echo("Submitting SLURM jobs...")
     jobs = []
     with submitit.helpers.clean_env(), executor.batch():
         for input_position_path, output_position_path in zip(
-            input_position_dirpaths, output_position_paths
+            input_position_dirpaths, output_position_paths, strict=True
         ):
             job = executor.submit(
                 process_single_position,
@@ -189,6 +193,7 @@ def deconvolve_cli(
 
     job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 
+    slurm_out_path.mkdir(exist_ok=True)
     log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))

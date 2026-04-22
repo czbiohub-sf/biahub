@@ -1,5 +1,3 @@
-from typing import Tuple
-
 import numpy as np
 
 from biahub.vendor.napari_psf_analysis.image import Calibrated3DImage
@@ -62,14 +60,14 @@ class ZEstimator(Estimator):
 
 class YXEstimator(Estimator):
     sample: YXSample = None
-    _centroid: Tuple[float, float] = None
-    _sigmas: Tuple[float, float] = None
+    _centroid: tuple[float, float] = None
+    _sigmas: tuple[float, float] = None
 
     def __init__(self, image: Calibrated3DImage, yx_sample: YXSample):
         super().__init__(image=image)
         self.sample = yx_sample
 
-    def get_centroid(self) -> Tuple[float, float]:
+    def get_centroid(self) -> tuple[float, float]:
         if self._centroid is None:
             from skimage.measure import centroid
 
@@ -81,7 +79,7 @@ class YXEstimator(Estimator):
 
         return self._centroid
 
-    def get_sigmas(self) -> Tuple[float, float]:
+    def get_sigmas(self) -> tuple[float, float]:
         if self._sigmas is None:
             cov_matrix = compute_cov_matrix(
                 img_data=self.sample.image.data, spacing=self.sample.image.spacing
@@ -96,14 +94,14 @@ class YXEstimator(Estimator):
 
 class ZYXEstimator(Estimator):
     sample: ZYXSample = None
-    _centroid: Tuple[float, float, float] = None
-    _sigmas: Tuple[float, float, float] = None
+    _centroid: tuple[float, float, float] = None
+    _sigmas: tuple[float, float, float] = None
 
     def __init__(self, image: Calibrated3DImage, zyx_sample: ZYXSample):
         super().__init__(image=image)
         self.sample = zyx_sample
 
-    def get_centroid(self) -> Tuple[float, float, float]:
+    def get_centroid(self) -> tuple[float, float, float]:
         if self._centroid is None:
             from skimage.measure import centroid
 
@@ -116,7 +114,7 @@ class ZYXEstimator(Estimator):
 
         return self._centroid
 
-    def get_sigmas(self) -> Tuple[float, float, float]:
+    def get_sigmas(self) -> tuple[float, float, float]:
         if self._sigmas is None:
             cov_matrix = compute_cov_matrix(
                 img_data=self.sample.image.data, spacing=self.sample.image.spacing

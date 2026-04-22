@@ -1,7 +1,6 @@
 from collections import defaultdict
 from itertools import product
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 import click
 import numpy as np
@@ -22,7 +21,7 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import estimate_resources, yaml_to_model
+from biahub.cli.utils import estimate_resources, get_submitit_cluster, yaml_to_model
 from biahub.settings import StitchSettings
 
 
@@ -30,8 +29,9 @@ def list_of_nd_slices_from_array_shape(
     array_shape: tuple[int, int, int], chunk_shape: tuple[int, int, int]
 ) -> list[tuple[slice, slice, slice]]:
     """
-    Return a list of slices dividing an array of shape `array_shape`
-    into chunks of shape `chunk_shape`.
+    Return a list of slices dividing an array into chunks.
+
+    Divides an array of shape `array_shape` into chunks of shape `chunk_shape`.
 
     Example:
         list_of_nd_slices_from_array_shape((4, 5, 6), (2, 3, 4))
@@ -47,17 +47,22 @@ def list_of_nd_slices_from_array_shape(
         # ]
     """
     chunk_slices: list[tuple[slice, slice, slice]] = []
-    for idx in product(*[range(0, s, c) for s, c in zip(array_shape, chunk_shape)]):
+    for idx in product(
+        *[range(0, s, c) for s, c in zip(array_shape, chunk_shape, strict=True)]
+    ):
         chunk_slices.append(
-            tuple(slice(i, min(i + c, s)) for i, c, s in zip(idx, chunk_shape, array_shape))
+            tuple(
+                slice(i, min(i + c, s))
+                for i, c, s in zip(idx, chunk_shape, array_shape, strict=True)
+            )
         )
     return chunk_slices
 
 
 def check_overlap(
-    chunk: Tuple[slice, slice, slice],
-    fov_shift: Tuple[float, float, float],
-    fov_extent: Tuple[int, int, int],
+    chunk: tuple[slice, slice, slice],
+    fov_shift: tuple[float, float, float],
+    fov_extent: tuple[int, int, int],
 ) -> bool:
     """
     Check if a chunk overlaps with a field of view (FOV).
@@ -86,11 +91,11 @@ def check_overlap(
 
 
 def overlap_slices(
-    chunk_corner: Tuple[float, float, float],
-    chunk_extent: Tuple[float, float, float],
-    fov_corner: Tuple[float, float, float],
-    fov_extent: Tuple[int, int, int],
-) -> Tuple[Optional[Tuple[slice, slice, slice]], Optional[Tuple[slice, slice, slice]]]:
+    chunk_corner: tuple[float, float, float],
+    chunk_extent: tuple[float, float, float],
+    fov_corner: tuple[float, float, float],
+    fov_extent: tuple[int, int, int],
+) -> tuple[tuple[slice, slice, slice] | None, tuple[slice, slice, slice] | None]:
     """
     Calculate slice objects for overlapping regions between a chunk and FOV.
 
@@ -129,10 +134,10 @@ def overlap_slices(
 
 
 def find_contributing_fovs(
-    chunk: Tuple[slice, slice, slice],
-    fov_shifts: Dict[str, Tuple[float, float, float]],
-    fov_extent: Tuple[int, int, int],
-) -> List[str]:
+    chunk: tuple[slice, slice, slice],
+    fov_shifts: dict[str, tuple[float, float, float]],
+    fov_extent: tuple[int, int, int],
+) -> list[str]:
     """
     Find all FOVs that contribute data to a given chunk.
 
@@ -158,8 +163,8 @@ def find_contributing_fovs(
 
 
 def get_output_shape(
-    shifts: Dict[str, Tuple[float, float, float]], tile_shape: Tuple[int, ...]
-) -> Tuple[int, int, int]:
+    shifts: dict[str, tuple[float, float, float]], tile_shape: tuple[int, ...]
+) -> tuple[int, int, int]:
     """
     Calculate the output shape of the stitched image from FOV shifts.
 
@@ -175,7 +180,6 @@ def get_output_shape(
     Tuple[int, int, int]
         Output shape of the stitched image in (z, y, x) order.
     """
-
     z_shifts = [shift[0] for shift in shifts.values()]
     y_shifts = [shift[1] for shift in shifts.values()]
     x_shifts = [shift[2] for shift in shifts.values()]
@@ -188,11 +192,11 @@ def get_output_shape(
 
 
 def write_output_chunk(
-    output_chunk_slices: Tuple[slice, slice, slice],
-    fov_shifts: Dict[str, Tuple[float, float, float]],
+    output_chunk_slices: tuple[slice, slice, slice],
+    fov_shifts: dict[str, tuple[float, float, float]],
     channel_idx: int,
     input_plate: Plate,
-    input_fov_shape: Tuple[int, int, int, int, int],
+    input_fov_shape: tuple[int, int, int, int, int],
     output_position: Position,
     verbose: bool,
     blending_exponent: float = 1.0,
@@ -267,7 +271,9 @@ def write_output_chunk(
     # Slice into the precomputed distance map to build the distance maps for
     # each contributing fov
     distance_maps = np.zeros((len(contributing_fov_names),) + output_chunk.shape[-3:])
-    for i, (fixed_slice, moving_slice) in enumerate(zip(fixed_slices, moving_slices)):
+    for i, (fixed_slice, moving_slice) in enumerate(
+        zip(fixed_slices, moving_slices, strict=True)
+    ):
         if verbose:
             click.echo(f"\t\tComputing distance map for {contributing_fov_names[i]}")
         distance_maps[(i, *fixed_slice)] = centered_distance_map[(*moving_slice,)]
@@ -281,7 +287,7 @@ def write_output_chunk(
 
     # Apply weights to each contributing fov and sum
     for i, (fov_name, fixed_slice, moving_slice) in enumerate(
-        zip(contributing_fov_names, fixed_slices, moving_slices)
+        zip(contributing_fov_names, fixed_slices, moving_slices, strict=True)
     ):
         if verbose:
             click.echo(f"\t\tApplying weight maps to {fov_name}")
@@ -326,7 +332,7 @@ def write_output_chunk(
 @click.option("--debug", is_flag=True, help="Run in debug mode")
 @monitor()
 def stitch_cli(
-    input_position_dirpaths: List[str],
+    input_position_dirpaths: list[str],
     output_dirpath: str,
     config_filepath: Path,
     verbose: bool = False,
@@ -336,13 +342,12 @@ def stitch_cli(
     debug: bool = False,
     monitor: bool = False,
 ) -> None:
-    """
-    Stitch FOVs in each well together into a single FOV.
+    """Stitch FOVs in each well together into a single FOV.
+
     Uses shift from configuration file generated with `biahub estimate-stitch`.
 
-    >> biahub stitch -i ./input.zarr/*/*/* -c ./config.yaml -o ./output.zarr
+    >>> biahub stitch -i ./input.zarr/*/*/* -c ./config.yaml -o ./output.zarr
     """
-
     click.echo("Starting stitching...")
     settings = yaml_to_model(config_filepath, StitchSettings)
     input_plate = open_ome_zarr(input_position_dirpaths[0].parents[2], mode="r")
@@ -358,7 +363,7 @@ def stitch_cli(
 
     # Create output store
     output_plate = open_ome_zarr(
-        output_dirpath, layout='hcs', mode="w", channel_names=settings.channels
+        output_dirpath, layout="hcs", mode="w", channel_names=settings.channels
     )
 
     # Group shift metadata by well
@@ -372,7 +377,7 @@ def stitch_cli(
     for well_name, fov_shifts in shifts_by_well.items():
         if verbose:
             click.echo(
-                f"Processing well {list(shifts_by_well.keys()).index(well_name)+1}/{len(shifts_by_well)}: {well_name}"
+                f"Processing well {list(shifts_by_well.keys()).index(well_name) + 1}/{len(shifts_by_well)}: {well_name}"
             )
         first_fov_name = list(shifts_by_well[well_name].keys())[0]
         input_fov_shape = input_plate[first_fov_name].data.shape
@@ -416,7 +421,7 @@ def stitch_cli(
         for chunk in chunk_list:
             if verbose:
                 click.echo(
-                    f"\tPreparing job for chunk {chunk_list.index(chunk)+1}/{len(chunk_list)}: {chunk}"
+                    f"\tPreparing job for chunk {chunk_list.index(chunk) + 1}/{len(chunk_list)}: {chunk}"
                 )
             job_args_list.append(
                 (
@@ -451,10 +456,7 @@ def stitch_cli(
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
     # Run locally or submit to SLURM
-    if local:
-        cluster = "local"
-    else:
-        cluster = "slurm"
+    cluster = get_submitit_cluster(local)
 
     # Prepare and submit jobs
     click.echo(f"Preparing jobs: {slurm_args}")
@@ -474,6 +476,7 @@ def stitch_cli(
 
     job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 
+    slurm_out_path.mkdir(exist_ok=True)
     log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
@@ -482,5 +485,5 @@ def stitch_cli(
         monitor_jobs(jobs, [])
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     stitch_cli()

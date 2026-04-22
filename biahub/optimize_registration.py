@@ -81,7 +81,6 @@ def _optimize_registration(
     This function currently assumes that target channel is phase and source channels are fluorescence.
     If multiple source channels are provided, they will be summed, after clipping, filtering, and cropping, if enabled.
     """
-
     source_czyx = np.asarray(source_czyx).astype(np.float32)
     target_czyx = np.asarray(target_czyx).astype(np.float32)
 
@@ -211,14 +210,16 @@ def optimize_registration_cli(
     output_filepath,
     display_viewer,
 ):
-    """
-    Optimize the affine transform between source and target channels using ANTs library.
+    """Optimize the affine transform between source and target channels using ANTs library.
 
     Start by generating an initial affine transform with `estimate-registration`.
 
-    >> biahub optimize-registration -s ./acq_name_virtual_staining_reconstructed.zarr/0/0/0 -t ./acq_name_lightsheet_deskewed.zarr/0/0/0 -c ./transform.yml -o ./optimized_transform.yml -d -v
+    >>> biahub optimize-registration \
+        -s ./acq_name_virtual_staining_reconstructed.zarr/0/0/0 \
+        -t ./acq_name_lightsheet_deskewed.zarr/0/0/0 \
+        -c ./transform.yml \
+        -o ./optimized_transform.yml -d -v
     """
-
     settings = yaml_to_model(config_filepath, RegistrationSettings)
     t_idx = settings.time_indices
     # if time_indices not int type

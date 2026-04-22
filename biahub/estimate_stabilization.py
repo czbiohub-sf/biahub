@@ -1,10 +1,9 @@
 import itertools
-import os
 import shutil
 
 from datetime import datetime
 from pathlib import Path
-from typing import List, Literal, Optional, Tuple, cast
+from typing import Literal, cast
 
 import click
 import dask.array as da
@@ -29,15 +28,13 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.cli.slurm import wait_for_jobs_to_finish
-from biahub.cli.utils import estimate_resources, yaml_to_model
-from biahub.estimate_registration import (
-    estimate_transform_from_beads,
+from biahub.cli.utils import estimate_resources, get_submitit_cluster, yaml_to_model
+from biahub.registration.utils import (
     evaluate_transforms,
+    match_shape,
     save_transforms,
 )
 from biahub.settings import (
-    AffineTransformSettings,
-    BeadsMatchSettings,
     EstimateStabilizationSettings,
     FocusFindingSettings,
     PhaseCrossCorrSettings,
@@ -68,118 +65,12 @@ def remove_beads_fov_from_path_list(
     list[Path]
         Paths to the input position directories without the beads FOV.
     """
-    if skip_beads_fov != '0':
+    if skip_beads_fov != "0":
         click.echo(f"Removing beads FOV {skip_beads_fov} from input data paths")
         position_dirpaths = [
             path for path in position_dirpaths if skip_beads_fov not in str(path)
         ]
     return position_dirpaths
-
-
-def pad_to_shape(
-    arr: ArrayLike,
-    shape: Tuple[int, ...],
-    mode: str,
-    verbose: bool = False,
-    **kwargs,
-) -> ArrayLike:
-    """
-    Pad or crop array to match provided shape.
-
-    Parameters
-    ----------
-    arr : ArrayLike
-        Input array.
-    shape : Tuple[int]
-        Output shape.
-    mode : str
-        Padding mode (see np.pad).
-    verbose : bool
-        If True, print verbose output.
-    kwargs : dict
-        Additional keyword arguments for np.pad.
-
-    Returns
-    -------
-    ArrayLike
-        Padded array.
-    """
-    assert arr.ndim == len(shape)
-
-    dif = tuple(s - a for s, a in zip(shape, arr.shape))
-    assert all(d >= 0 for d in dif)
-
-    pad_width = [[s // 2, s - s // 2] for s in dif]
-
-    if verbose:
-        click.echo(
-            f"padding: input shape {arr.shape}, output shape {shape}, padding {pad_width}"
-        )
-
-    return np.pad(arr, pad_width=pad_width, mode=mode, **kwargs)
-
-
-def center_crop(
-    arr: ArrayLike,
-    shape: Tuple[int, ...],
-    verbose: bool = False,
-) -> ArrayLike:
-    """
-    Crop the center of `arr` to match provided shape.
-
-    Parameters
-    ----------
-    arr : ArrayLike
-        Input array.
-    shape : Tuple[int, ...]
-    """
-    assert arr.ndim == len(shape)
-
-    starts = tuple((cur_s - s) // 2 for cur_s, s in zip(arr.shape, shape))
-
-    assert all(s >= 0 for s in starts)
-
-    slicing = tuple(slice(s, s + d) for s, d in zip(starts, shape))
-    if verbose:
-        click.echo(
-            f"center crop: input shape {arr.shape}, output shape {shape}, slicing {slicing}"
-        )
-    return arr[slicing]
-
-
-def match_shape(
-    img: ArrayLike,
-    shape: Tuple[int, ...],
-    verbose: bool = False,
-) -> ArrayLike:
-    """
-    Pad or crop array to match provided shape.
-
-    Parameters
-    ----------
-    img : ArrayLike
-        Input array.
-    shape : Tuple[int, ...]
-    verbose : bool
-        If True, print verbose output.
-
-    Returns
-    -------
-    ArrayLike
-        Padded or cropped array.
-    """
-
-    if np.any(shape > img.shape):
-        padded_shape = np.maximum(img.shape, shape)
-        img = pad_to_shape(img, padded_shape, mode="reflect")
-
-    if np.any(shape < img.shape):
-        img = center_crop(img, shape)
-
-    if verbose:
-        click.echo(f"matched shape: input shape {img.shape}, output shape {shape}")
-
-    return img
 
 
 def plot_cross_correlation(
@@ -238,12 +129,12 @@ def phase_cross_corr_padding(
     ref_img: ArrayLike,
     mov_img: ArrayLike,
     maximum_shift: float = 1.2,
-    normalization: Optional[Literal["magnitude", "classic"]] = None,
-    output_path: Optional[Path] = None,
+    normalization: Literal["magnitude", "classic"] | None = None,
+    output_path: Path | None = None,
     verbose: bool = False,
-) -> Tuple[int, ...]:
+) -> tuple[int, ...]:
     """
-    Borrowing from Jordao dexpv2.crosscorr https://github.com/royerlab/dexpv2
+    Borrowing from Jordao dexpv2.crosscorr https://github.com/royerlab/dexpv2.
 
     Computes translation shift using arg. maximum of phase cross correlation.
     Input are padded or cropped for fast FFT computation assuming a maximum translation shift.
@@ -264,7 +155,7 @@ def phase_cross_corr_padding(
     """
     shape = tuple(
         cast(int, next_fast_len(int(max(s1, s2) * maximum_shift)))
-        for s1, s2 in zip(ref_img.shape, mov_img.shape)
+        for s1, s2 in zip(ref_img.shape, mov_img.shape, strict=True)
     )
 
     if verbose:
@@ -294,7 +185,7 @@ def phase_cross_corr_padding(
 
     argmax = np.argmax(corr)
     peak = np.unravel_index(argmax, corr.shape)
-    peak = tuple(s // 2 - p for s, p in zip(corr.shape, peak))
+    peak = tuple(s // 2 - p for s, p in zip(corr.shape, peak, strict=True))
 
     if verbose:
         click.echo(f"phase cross corr. peak at {peak}")
@@ -307,12 +198,12 @@ def phase_cross_corr_padding(
 def phase_cross_corr(
     ref_img: ArrayLike,
     mov_img: ArrayLike,
-    normalization: Optional[Literal["magnitude", "classic"]] = None,
-    output_path: Optional[Path] = None,
+    normalization: Literal["magnitude", "classic"] | None = None,
+    output_path: Path | None = None,
     verbose: bool = False,
-) -> Tuple[int, ...]:
+) -> tuple[int, ...]:
     """
-    Borrowing from Jordao dexpv2.crosscorr https://github.com/royerlab/dexpv2
+    Borrowing from Jordao dexpv2.crosscorr https://github.com/royerlab/dexpv2.
 
     Computes translation shift using arg. maximum of phase cross correlation.
     Input are padded or cropped for fast FFT computation assuming a maximum translation shift.
@@ -333,7 +224,6 @@ def phase_cross_corr(
     Tuple[int, ...]
         Shift between reference and moved image.
     """
-
     Fimg1 = np.fft.rfftn(ref_img)
     Fimg2 = np.fft.rfftn(mov_img)
     eps = np.finfo(Fimg1.dtype).eps
@@ -370,10 +260,10 @@ def get_tform_from_pcc(
     source_channel_tzyx: da.Array,
     target_channel_tzyx: da.Array,
     function_type: Literal["custom_padding", "custom"] = "custom",
-    normalization: Optional[Literal["magnitude", "classic"]] = None,
-    output_path: Optional[Path] = None,
+    normalization: Literal["magnitude", "classic"] | None = None,
+    output_path: Path | None = None,
     verbose: bool = False,
-) -> Tuple[ArrayLike, Tuple[int, int, int]]:
+) -> tuple[ArrayLike, tuple[int, int, int]]:
     """
     Get the transformation matrix from phase cross correlation.
 
@@ -393,7 +283,6 @@ def get_tform_from_pcc(
     ArrayLike
         Transformation matrix.
     """
-
     target = np.asarray(source_channel_tzyx[t]).astype(np.float32)
     source = np.asarray(target_channel_tzyx[t]).astype(np.float32)
 
@@ -423,13 +312,13 @@ def get_tform_from_pcc(
 def plot_pcc_drifts(
     df: pd.DataFrame,
     output_dir: Path,
-    label='sample',
-    title='PCC Drift Analysis',
-    unit: Literal['µm', 'px'] = 'µm',
-    voxel_size: Tuple[float, float, float] = (0.174, 0.1494, 0.1494),  # (Z, Y, X) in microns
+    label="sample",
+    title="PCC Drift Analysis",
+    unit: Literal["µm", "px"] = "µm",
+    voxel_size: tuple[float, float, float] = (0.174, 0.1494, 0.1494),  # (Z, Y, X) in microns
 ) -> None:
     """
-    Plot the drifts from PCC per timepoint for a single position
+    Plot the drifts from PCC per timepoint for a single position.
 
     Parameters
     ----------
@@ -443,27 +332,28 @@ def plot_pcc_drifts(
         Title for the plot.
     voxel_size : Tuple[float, float, float]
         Voxel size in microns.
+
     Returns
     -------
     None
         Saves the plot to the output directory.
     """
-    if unit == 'µm':
+    if unit == "µm":
         # Unpack voxel sizes
         z_scale, y_scale, x_scale = voxel_size
 
         # Convert to microns
-        df['ShiftX'] = df['ShiftX'] * x_scale
-        df['ShiftY'] = df['ShiftY'] * y_scale
-        df['ShiftZ'] = df['ShiftZ'] * z_scale
+        df["ShiftX"] = df["ShiftX"] * x_scale
+        df["ShiftY"] = df["ShiftY"] * y_scale
+        df["ShiftZ"] = df["ShiftZ"] * z_scale
 
     # Cumulative and magnitude drift
-    df['CumulativeShiftX'] = df['ShiftX'].cumsum()
-    df['CumulativeShiftY'] = df['ShiftY'].cumsum()
-    df['CumulativeShiftZ'] = df['ShiftZ'].cumsum()
-    df['DriftMagnitude'] = np.sqrt(df['ShiftX'] ** 2 + df['ShiftY'] ** 2 + df['ShiftZ'] ** 2)
-    df['CumulativeDrift'] = np.sqrt(
-        df['CumulativeShiftX'] ** 2 + df['CumulativeShiftY'] ** 2 + df['CumulativeShiftZ'] ** 2
+    df["CumulativeShiftX"] = df["ShiftX"].cumsum()
+    df["CumulativeShiftY"] = df["ShiftY"].cumsum()
+    df["CumulativeShiftZ"] = df["ShiftZ"].cumsum()
+    df["DriftMagnitude"] = np.sqrt(df["ShiftX"] ** 2 + df["ShiftY"] ** 2 + df["ShiftZ"] ** 2)
+    df["CumulativeDrift"] = np.sqrt(
+        df["CumulativeShiftX"] ** 2 + df["CumulativeShiftY"] ** 2 + df["CumulativeShiftZ"] ** 2
     )
 
     fig, axs = plt.subplots(3, 1, figsize=(12, 10), sharex=True)
@@ -507,10 +397,10 @@ def plot_pcc_drifts(
 
 
 def plot_corr_max_min_sum(
-    corr_df: pd.DataFrame, output_path: Path, label='sample', title='Cross-Correlation Summary'
+    corr_df: pd.DataFrame, output_path: Path, label="sample", title="Cross-Correlation Summary"
 ) -> None:
     """
-    Plot the max, min, and sum of the cross-correlation from PCC per timepoint for a single position
+    Plot the max, min, and sum of the cross-correlation from PCC per timepoint for a single position.
 
     Parameters
     ----------
@@ -730,14 +620,13 @@ def estimate_xyz_stabilization_pcc(
     dict[str, list[ArrayLike]]
         Dictionary of the xyz stabilization for each position.
     """
-
     input_position_dirpaths = remove_beads_fov_from_path_list(
         input_position_dirpaths, phase_cross_corr_settings.skip_beads_fov
     )
 
     output_folder_path.mkdir(parents=True, exist_ok=True)
     slurm_out_path = output_folder_path / "slurm_output"
-    slurm_out_path.mkdir(parents=True, exist_ok=True)
+    slurm_out_path.mkdir(exist_ok=True)
 
     with open_ome_zarr(input_position_dirpaths[0]) as dataset:
         shape = dataset.data.shape
@@ -803,132 +692,6 @@ def estimate_xyz_stabilization_pcc(
     return fov_transforms
 
 
-def estimate_xyz_stabilization_with_beads(
-    channel_tzyx: da.Array,
-    beads_match_settings: BeadsMatchSettings,
-    affine_transform_settings: AffineTransformSettings,
-    verbose: bool = False,
-    cluster: str = "local",
-    sbatch_filepath: Optional[Path] = None,
-    output_folder_path: Path = None,
-) -> list[ArrayLike]:
-    """
-    Estimate the xyz stabilization for a single position.
-
-    Parameters
-    ----------
-    channel_tzyx : da.Array
-        Source channel data.
-    beads_match_settings : BeadsMatchSettings
-        Settings for the beads match.
-    affine_transform_settings : AffineTransformSettings
-        Settings for the affine transform.
-    verbose : bool
-        If True, print verbose output.
-    cluster : str
-        Cluster to use.
-    sbatch_filepath : Path
-        Path to the sbatch file.
-    output_folder_path : Path
-        Path to the output folder.
-
-    Returns
-    -------
-    list[ArrayLike]
-        List of the xyz stabilization for each timepoint.
-    """
-
-    (T, Z, Y, X) = channel_tzyx.shape
-
-    if beads_match_settings.t_reference == "first":
-        target_channel_tzyx = np.broadcast_to(channel_tzyx[0], (T, Z, Y, X)).copy()
-    elif beads_match_settings.t_reference == "previous":
-        target_channel_tzyx = np.roll(channel_tzyx, shift=-1, axis=0)
-        target_channel_tzyx[0] = channel_tzyx[0]
-
-    else:
-        raise ValueError("Invalid reference. Please use 'first' or 'previous as reference")
-
-    # Compute transformations in parallel
-
-    num_cpus, gb_ram_per_cpu = estimate_resources(
-        shape=(T, 1, Z, Y, X), ram_multiplier=5, max_num_cpus=16
-    )
-
-    # Prepare SLURM arguments
-    slurm_args = {
-        "slurm_job_name": "estimate_focus_z",
-        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
-        "slurm_cpus_per_task": num_cpus,
-        "slurm_array_parallelism": 100,
-        "slurm_time": 30,
-        "slurm_partition": "preempted",
-    }
-
-    if sbatch_filepath:
-        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
-
-    output_folder_path.mkdir(parents=True, exist_ok=True)
-    slurm_out_path = output_folder_path / "slurm_output"
-    slurm_out_path.mkdir(parents=True, exist_ok=True)
-
-    # Submitit executor
-    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
-    executor.update_parameters(**slurm_args)
-
-    click.echo(f"Submitting SLURM focus estimation jobs with resources: {slurm_args}")
-    output_transforms_path = output_folder_path / "xyz_transforms"
-    output_transforms_path.mkdir(parents=True, exist_ok=True)
-
-    # Submit jobs
-    jobs = []
-    with submitit.helpers.clean_env(), executor.batch():
-        for t in range(1, T, 1):
-            job = executor.submit(
-                estimate_transform_from_beads,
-                source_channel_tzyx=channel_tzyx,
-                target_channel_tzyx=target_channel_tzyx,
-                verbose=verbose,
-                beads_match_settings=beads_match_settings,
-                affine_transform_settings=affine_transform_settings,
-                slurm=True,
-                output_folder_path=output_transforms_path,
-                t_idx=t,
-            )
-            jobs.append(job)
-
-    # Save job IDs
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    log_path = slurm_out_path / f"job_ids_{timestamp}.log"
-    with open(log_path, "w") as log_file:
-        for job in jobs:
-            log_file.write(f"{job.job_id}\n")
-
-    wait_for_jobs_to_finish(jobs)
-
-    # Load the transforms
-    transforms = [np.eye(4).tolist()]
-    for t in range(1, T):
-        file_path = output_transforms_path / f"{t}.npy"
-        if not os.path.exists(file_path):
-            transforms.append(None)
-            click.echo(f"Transform for timepoint {t} not found.")
-        else:
-            T_zyx_shift = np.load(file_path).tolist()
-            transforms.append(T_zyx_shift)
-
-    # Check if the number of transforms matches the number of timepoints
-    if len(transforms) != T:
-        raise ValueError(
-            f"Number of transforms {len(transforms)} does not match number of timepoints {T}"
-        )
-
-    # Remove the output folder
-    shutil.rmtree(output_transforms_path)
-
-    return transforms
-
-
 def estimate_xy_stabilization_per_position(
     input_position_dirpath: Path,
     output_folder_path: Path,
@@ -983,7 +746,7 @@ def estimate_xy_stabilization_per_position(
         tyx_data = np.stack(
             [
                 input_position[0][t, channel_index, z, y_idx, x_idx]
-                for t, z in zip(range(T), z_idx)
+                for t, z in zip(range(T), z_idx, strict=True)
             ]
         )
         tyx_data = np.clip(tyx_data, a_min=0, a_max=None)
@@ -1012,7 +775,7 @@ def estimate_xy_stabilization(
     output_folder_path: Path,
     stack_reg_settings: StackRegSettings,
     channel_index: int = 0,
-    sbatch_filepath: Optional[Path] = None,
+    sbatch_filepath: Path | None = None,
     cluster: str = "local",
     verbose: bool = False,
 ) -> dict[str, list[ArrayLike]]:
@@ -1041,14 +804,13 @@ def estimate_xy_stabilization(
     dict[str, list[ArrayLike]]
         Dictionary of the xy stabilization for each position.
     """
-
     input_position_dirpaths = remove_beads_fov_from_path_list(
         input_position_dirpaths, stack_reg_settings.skip_beads_fov
     )
 
     output_folder_path.mkdir(parents=True, exist_ok=True)
     slurm_out_path = output_folder_path / "slurm_output"
-    slurm_out_path.mkdir(parents=True, exist_ok=True)
+    slurm_out_path.mkdir(exist_ok=True)
 
     # Estimate resources from a sample dataset
     with open_ome_zarr(input_position_dirpaths[0]) as dataset:
@@ -1136,7 +898,7 @@ def estimate_xy_stabilization(
 
 def estimate_z_focus_per_position(
     input_position_dirpath: Path,
-    input_channel_indices: Tuple[int, ...],
+    input_channel_indices: tuple[int, ...],
     center_crop_xy: list[int, int],
     output_path_focus_csv: Path,
     output_path_transform: Path,
@@ -1291,13 +1053,14 @@ def estimate_z_stabilization(
     output_folder_path: Path,
     focus_finding_settings: FocusFindingSettings,
     channel_index: int,
-    sbatch_filepath: Optional[Path] = None,
+    sbatch_filepath: Path | None = None,
     cluster: str = "local",
     verbose: bool = False,
     estimate_z_index: bool = False,
 ) -> dict[str, list[ArrayLike]]:
     """
     Estimate the z stabilization for a list of positions.
+
     Parameters
     ----------
     input_position_dirpaths : list[Path]
@@ -1328,7 +1091,7 @@ def estimate_z_stabilization(
 
     output_folder_path.mkdir(parents=True, exist_ok=True)
     slurm_out_path = output_folder_path / "slurm_output"
-    slurm_out_path.mkdir(parents=True, exist_ok=True)
+    slurm_out_path.mkdir(exist_ok=True)
 
     # Estimate resources from a sample dataset
     with open_ome_zarr(input_position_dirpaths[0]) as dataset:
@@ -1457,7 +1220,7 @@ def estimate_z_stabilization(
 
 
 def estimate_stabilization(
-    input_position_dirpaths: List[str],
+    input_position_dirpaths: list[str],
     output_dirpath: str,
     config_filepath: str,
     sbatch_filepath: str = None,
@@ -1487,7 +1250,6 @@ def estimate_stabilization(
     -----
     The verbose output will be saved at the same level as the output zarr.
     """
-
     # Load the settings
     config_filepath = Path(config_filepath)
 
@@ -1510,10 +1272,7 @@ def estimate_stabilization(
         T, C, Z, Y, X = dataset.data.shape
 
     # Run locally or submit to SLURM
-    if local:
-        cluster = "local"
-    else:
-        cluster = "slurm"
+    cluster = get_submitit_cluster(local)
 
     # Load the evaluation settings
     eval_transform_settings = settings.eval_transform_settings
@@ -1555,11 +1314,9 @@ def estimate_stabilization(
             )
 
             try:
-
                 for fov, xy_transforms in tqdm(
                     xy_transforms_dict.items(), desc="Processing FOVs"
                 ):
-
                     z_transforms = np.asarray(z_transforms_dict[fov])
                     xy_transforms = np.asarray(xy_transforms)
 
@@ -1569,7 +1326,7 @@ def estimate_stabilization(
                         )
 
                     xyz_transforms = np.asarray(
-                        [a @ b for a, b in zip(xy_transforms, z_transforms)]
+                        [a @ b for a, b in zip(xy_transforms, z_transforms, strict=True)]
                     ).tolist()
 
                     if eval_transform_settings:
@@ -1633,21 +1390,25 @@ def estimate_stabilization(
                 click.echo(
                     f"Error estimating {stabilization_type} stabilization parameters: {e}"
                 )
-
         elif stabilization_method == "beads":
+            from biahub.registration.beads import estimate_tczyx
 
             click.echo("Estimating xyz stabilization parameters with beads")
             with open_ome_zarr(input_position_dirpaths[0], mode="r") as beads_position:
                 source_channels = beads_position.channel_names
                 source_channel_index = source_channels.index(stabilization_estimation_channel)
-                channel_tzyx = beads_position.data.dask_array()[:, source_channel_index]
+                channel_tczyx = beads_position.data.dask_array()
 
-            xyz_transforms = estimate_xyz_stabilization_with_beads(
-                channel_tzyx=channel_tzyx,
+            xyz_transforms = estimate_tczyx(
+                mov_tczyx=channel_tczyx,
+                ref_tczyx=channel_tczyx,
+                mov_channel_index=source_channel_index,
+                ref_channel_index=source_channel_index,
                 beads_match_settings=settings.beads_match_settings,
                 affine_transform_settings=settings.affine_transform_settings,
                 verbose=verbose,
                 output_folder_path=output_dirpath,
+                mode="stabilization",
                 cluster=cluster,
                 sbatch_filepath=sbatch_filepath,
             )
@@ -1849,21 +1610,23 @@ def estimate_stabilization(
 @sbatch_filepath()
 @local()
 def estimate_stabilization_cli(
-    input_position_dirpaths: List[str],
+    input_position_dirpaths: list[str],
     output_dirpath: str,
     config_filepath: Path,
     sbatch_filepath: str = None,
     local: bool = False,
 ):
-    """
-    Estimate translation matrices for XYZ stabilization of a timelapse dataset.
+    """Estimate translation matrices for XYZ stabilization of a timelapse dataset.
 
     Stabilization parameters may be computed for the XY, Z, or XYZ dimensions using
     focus finding, beads, or phase cross correlation methods.
 
-    Example usage:
-    biahub estimate-stabilization -i ./timelapse.zarr/0/0/0 -o ./stabilization.yml  -c ./config.yml -s ./sbatch.sh --local --verbose
-
+    >>> biahub estimate-stabilization \
+        -i ./timelapse.zarr/0/0/0 \
+        -o ./stabilization.yml \
+        -c ./config.yml \
+        -s ./sbatch.sh \
+        --local --verbose
     """
     estimate_stabilization(
         input_position_dirpaths=input_position_dirpaths,

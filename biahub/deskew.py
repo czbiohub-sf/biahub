@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import List
+from typing import Literal
 
 import click
 import numpy as np
@@ -9,6 +9,7 @@ import torch
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate, process_single_position
 from monai.transforms.spatial.array import Affine
+from scipy.ndimage import binary_dilation
 
 from biahub.cli import utils
 from biahub.cli.monitor import monitor_jobs
@@ -21,16 +22,16 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import estimate_resources, yaml_to_model
+from biahub.cli.utils import estimate_resources, get_submitit_cluster, yaml_to_model
 from biahub.settings import DeskewSettings
 
 # Needed for multiprocessing with GPUs
 # https://github.com/pytorch/pytorch/issues/40403#issuecomment-1422625325
-torch.multiprocessing.set_start_method('spawn', force=True)
+torch.multiprocessing.set_start_method("spawn", force=True)
 
 
 def _average_n_slices(data, average_window_width=1):
-    """Average an array over its first axis
+    """Average an array over its first axis.
 
     Parameters
     ----------
@@ -48,7 +49,7 @@ def _average_n_slices(data, average_window_width=1):
     remainder = data.shape[0] % average_window_width
     if remainder > 0:
         padding_width = average_window_width - remainder
-        data = np.pad(data, [(0, padding_width)] + [(0, 0)] * (data.ndim - 1), mode='edge')
+        data = np.pad(data, [(0, padding_width)] + [(0, 0)] * (data.ndim - 1), mode="edge")
 
     # Reshape then average over the first dimension
     new_shape = (data.shape[0] // average_window_width, average_window_width) + data.shape[1:]
@@ -122,7 +123,8 @@ def get_deskewed_data_shape(
     average_n_slices: int = 1,
     pixel_size_um: float = 1,
 ):
-    """Get the shape of the deskewed data set and its voxel size
+    """Get the shape of the deskewed data set and its voxel size.
+
     Parameters
     ----------
     raw_data_shape : tuple
@@ -141,6 +143,7 @@ def get_deskewed_data_shape(
     pixel_size_um : float, optional
         Pixel size in micrometers. If not provided, a default value of 1 will be
         used and the returned voxel size will represent a voxel scale
+
     Returns
     -------
     output_shape : tuple
@@ -149,7 +152,6 @@ def get_deskewed_data_shape(
         Size of the deskewed voxels in micrometers. If the default
         pixel_size_um = 1 is used this parameter will represent the voxel scale
     """
-
     # Trig
     theta = ls_angle_deg * np.pi / 180
     st = np.sin(theta)
@@ -177,15 +179,80 @@ def get_deskewed_data_shape(
     return averaged_output_shape, voxel_size
 
 
-def deskew(
+def _fill_overhang_with_mean(
+    data: np.ndarray,
+    dilation_iterations: int = 3,
+    debug_plot_path: Path = None,
+) -> np.ndarray:
+    """Replace zero-padded overhang regions with the mean of the valid signal.
+
+    After deskewing with padding_mode="zeros", overhang voxels are exactly 0.
+    Bilinear interpolation at the boundary produces a gradient from signal to 0,
+    so the mask is dilated inward to also cover those blended voxels.
+
+    Parameters
+    ----------
+    data : np.ndarray
+        Deskewed 3D volume with zero-padded overhangs.
+    dilation_iterations : int
+        Number of binary dilation iterations to grow the zero-mask inward,
+        capturing interpolation artifacts at the overhang boundary.
+    debug_plot_path : Path, optional
+        If provided, saves a diagnostic figure showing the masks and result.
+
+    Returns
+    -------
+    filled : np.ndarray
+        Volume with overhang regions replaced by the mean of the valid signal.
+    """
+    zero_mask = data == 0
+    dilated_mask = binary_dilation(zero_mask, iterations=dilation_iterations)
+    valid_mean = data[~dilated_mask].mean()
+    filled = data.copy()
+    filled[dilated_mask] = valid_mean
+
+    if debug_plot_path is not None:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        mid_z = data.shape[0] // 2
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+
+        axes[0, 0].imshow(data[mid_z], cmap="gray")
+        axes[0, 0].set_title(f"Deskewed (z={mid_z})")
+
+        axes[0, 1].imshow(zero_mask[mid_z], cmap="gray")
+        axes[0, 1].set_title("Zero mask")
+
+        axes[1, 0].imshow(dilated_mask[mid_z], cmap="gray")
+        axes[1, 0].set_title(f"Dilated mask (iterations={dilation_iterations})")
+
+        im = axes[1, 1].imshow(filled[mid_z], cmap="gray")
+        axes[1, 1].set_title(f"Filled (mean={valid_mean:.1f})")
+
+        fig.colorbar(im, ax=axes[1, 1], fraction=0.046)
+        fig.tight_layout()
+        fig.savefig(debug_plot_path, dpi=150)
+        plt.close(fig)
+        print(f"Overhang mask debug plot saved to {debug_plot_path}")
+
+    return filled
+
+
+def deskew_zyx(
     raw_data: np.ndarray,
     ls_angle_deg: float,
     px_to_scan_ratio: float,
     keep_overhang: bool,
+    device: str = "cpu",
     average_n_slices: int = 1,
-    device='cpu',
+    overhang_fill: Literal["zero", "mean"] = "zero",
+    debug_plot_path: Path = None,
 ) -> np.ndarray:
-    """Deskews fluorescence data from the mantis microscope
+    """Deskews fluorescence data from the mantis microscope.
+
     Parameters
     ----------
     raw_data : NDArray with ndim == 3
@@ -207,6 +274,7 @@ def deskew(
         after deskewing, averages every n slices (default = 1 applies no averaging)
     device : str, optional
         torch device to use for computation. Default is 'cpu'.
+
     Returns
     -------
     deskewed_data : NDArray with ndim == 3
@@ -243,24 +311,24 @@ def deskew(
     averaged_deskewed_data = _average_n_slices(
         deskewed_data, average_window_width=average_n_slices
     )
+
+    # Fill overhang regions after averaging
+    if keep_overhang and overhang_fill == "mean":
+        averaged_deskewed_data = _fill_overhang_with_mean(
+            averaged_deskewed_data, debug_plot_path=debug_plot_path
+        )
+
     return averaged_deskewed_data
 
 
 # Adapt ZYX function to CZYX
 # Needs to be a top-level function for multiprocessing pickling
 def _czyx_deskew_data(data, **kwargs):
-    return deskew(data[0], **kwargs)[None]
+    return deskew_zyx(data[0], **kwargs)[None]
 
 
-@click.command("deskew")
-@input_position_dirpaths()
-@config_filepath()
-@output_dirpath()
-@sbatch_filepath()
-@local()
-@monitor()
-def deskew_cli(
-    input_position_dirpaths: List[str],
+def deskew(
+    input_position_dirpaths: list[str],
     config_filepath: Path,
     output_dirpath: str,
     sbatch_filepath: str = None,
@@ -268,15 +336,27 @@ def deskew_cli(
     monitor: bool = True,
 ):
     """
-    Deskew a single position across T and C axes using a configuration file
-    generated by estimate_deskew.py
+    Deskew a dataset across T and C axes using a configuration file.
 
-    >> biahub deskew \
-        -i ./input.zarr/*/*/* \
-        -c ./deskew_params.yml \
-        -o ./output.zarr
+    Parameters
+    ----------
+    input_position_dirpaths : List[str]
+        List of input position directory paths
+    config_filepath : Path
+        Path to the configuration file
+    output_dirpath : str
+        Path to the output directory
+    sbatch_filepath : str, optional
+        Path to the SLURM batch file
+    local : bool, optional
+        Whether to run locally or submit to SLURM
+    monitor : bool, optional
+        Whether to monitor the jobs
+
+    Returns
+    -------
+    None
     """
-
     # Convert string paths to Path objects
     output_dirpath = Path(output_dirpath)
 
@@ -311,11 +391,12 @@ def deskew_cli(
     )
 
     deskew_args = {
-        'ls_angle_deg': settings.ls_angle_deg,
-        'px_to_scan_ratio': settings.px_to_scan_ratio,
-        'keep_overhang': settings.keep_overhang,
-        'average_n_slices': settings.average_n_slices,
-        'extra_metadata': {'deskew': settings.model_dump()},
+        "ls_angle_deg": settings.ls_angle_deg,
+        "px_to_scan_ratio": settings.px_to_scan_ratio,
+        "keep_overhang": settings.keep_overhang,
+        "average_n_slices": settings.average_n_slices,
+        "overhang_fill": settings.overhang_fill,
+        "extra_metadata": {"deskew": settings.model_dump()},
     }
 
     # Estimate resources
@@ -338,22 +419,19 @@ def deskew_cli(
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
     # Run locally or submit to SLURM
-    if local:
-        cluster = "local"
-    else:
-        cluster = "slurm"
+    cluster = get_submitit_cluster(local)
 
     # Prepare and submit jobs
     click.echo(f"Preparing jobs: {slurm_args}")
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
 
-    click.echo('Submitting SLURM jobs...')
+    click.echo("Submitting SLURM jobs...")
 
     jobs = []
     with submitit.helpers.clean_env(), executor.batch():
         for input_position_path, output_position_path in zip(
-            input_position_dirpaths, output_position_paths
+            input_position_dirpaths, output_position_paths, strict=True
         ):
             jobs.append(
                 executor.submit(
@@ -368,12 +446,45 @@ def deskew_cli(
 
     job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 
+    slurm_out_path.mkdir(exist_ok=True)
     log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
 
     if monitor:
         monitor_jobs(jobs, input_position_dirpaths)
+
+
+@click.command("deskew")
+@input_position_dirpaths()
+@config_filepath()
+@output_dirpath()
+@sbatch_filepath()
+@local()
+@monitor()
+def deskew_cli(
+    input_position_dirpaths: list[str],
+    config_filepath: Path,
+    output_dirpath: str,
+    sbatch_filepath: str = None,
+    local: bool = False,
+    monitor: bool = True,
+):
+    """Deskew a single position across T and C axes using a configuration file, generated by estimate_deskew.py.
+
+    >>> biahub deskew \
+        -i ./input.zarr/*/*/* \
+        -c ./deskew_params.yml \
+        -o ./output.zarr
+    """
+    deskew(
+        input_position_dirpaths=input_position_dirpaths,
+        config_filepath=config_filepath,
+        output_dirpath=output_dirpath,
+        sbatch_filepath=sbatch_filepath,
+        local=local,
+        monitor=monitor,
+    )
 
 
 if __name__ == "__main__":

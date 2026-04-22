@@ -12,7 +12,7 @@ class NaturalOrderGroup(click.Group):
 
 @click.group(context_settings=CONTEXT, cls=NaturalOrderGroup)
 def cli():
-    """command-line tools for biahub"""
+    """command-line tools for biahub."""
 
 
 class LazyCommand(click.Command):
@@ -68,6 +68,11 @@ COMMANDS = [
         "name": "estimate-registration",
         "import_path": "biahub.estimate_registration.estimate_registration_cli",
         "help": "Estimate affine transform between timepoints or arms",
+    },
+    {
+        "name": "flat-field",
+        "import_path": "biahub.flat_field_correction.flat_field_correction_cli",
+        "help": "Apply flat field correction to selected channels",
     },
     {
         "name": "flip",

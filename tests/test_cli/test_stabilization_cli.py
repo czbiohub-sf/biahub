@@ -5,8 +5,8 @@ from click.testing import CliRunner
 from biahub.cli.main import cli
 
 
-# skip this test for now
-@pytest.mark.skip(reason="Skipping test_estimate_stabilization")
+# skip: fixture references missing settings file (example_estimate_stabilization_settings.yml)
+@pytest.mark.skip(reason="Missing settings file")
 def test_estimate_stabilization(
     tmp_path, example_plate, example_estimate_stabilization_settings
 ):

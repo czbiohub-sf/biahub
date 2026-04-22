@@ -1,6 +1,5 @@
 from collections import defaultdict
 from pathlib import Path
-from typing import Tuple
 
 import click
 import numpy as np
@@ -16,7 +15,7 @@ from biahub.settings import StitchSettings
 
 def extract_stage_position(
     plate_dataset: Plate, position_name: str
-) -> Tuple[float, float, float]:
+) -> tuple[float, float, float]:
     """
     Extract stage position coordinates from plate metadata.
 
@@ -57,7 +56,7 @@ def extract_stage_position(
                     pass
 
                 try:
-                    z_stage_name = stage_position['DefaultZStage']
+                    z_stage_name = stage_position["DefaultZStage"]
                     zpos = stage_position[z_stage_name]
                 except KeyError:
                     pass
@@ -102,8 +101,7 @@ def estimate_stitch_cli(
     local: bool,
     monitor: bool,
 ):
-    """
-    Estimate stitching parameters for positions in wells of a zarr store.
+    """Estimate stitching parameters for positions in wells of a zarr store.
 
     This routine uses micro-manager stage position metadata and iohub scale
     metadata to generate translation parameters for stitching. Translations are
@@ -125,7 +123,7 @@ def estimate_stitch_cli(
 
         # Find position name from position-level omero metadata
         with open_ome_zarr(input_position_dirpath) as input_position_dataset:
-            position_name = input_position_dataset.zattrs['omero']['name']
+            position_name = input_position_dataset.zattrs["omero"]["name"]
 
         # Use position name to index into micromanager plate-level metadata
         with open_ome_zarr(input_plate_path) as input_plate_dataset:
@@ -142,9 +140,9 @@ def estimate_stitch_cli(
 
     # Prepare stage positions in pixel coordinates for each well
     final_translation_dict = {}
-    for i, (key, value) in enumerate(grouped_wells.items()):
+    for key, value in grouped_wells.items():
         zyx_array = []
-        for my_value in grouped_wells[key].values():
+        for my_value in value.values():
             zyx_array.append(my_value)
         zyx_well_array = np.array(zyx_array)
 
@@ -178,7 +176,7 @@ def estimate_stitch_cli(
                 z_index=pcc_z_index,
             )
             print("Confidence scores:")
-            for k, v in confidence_dict.items():
+            for v in confidence_dict.values():
                 print(f"{v[0]}: {v[-1]:.2f}")
 
             # Get actual tile size from the first position's data shape

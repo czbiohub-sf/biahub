@@ -1,14 +1,14 @@
 [build-system]
-requires = ["setuptools >= 61", "setuptools_scm[toml]>=3.4", "wheel"]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
 
 [project]
 name = "biahub"
 description = "Bioimage analysis hub."
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.11, <4.0"
+requires-python = ">=3.11"
 
-# the dynamically determined project metadata attributes
 dynamic = ["version"]
 
 classifiers = [
@@ -18,22 +18,24 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
 ]
 
-# list package dependencies here
 dependencies = [
-  "iohub[tensorstore]==0.3.0a6",
+  "click",
+  # need to pin until #198, #199, #215 are resolved
+  # iohub>0.3 writes to zarr v3 by default which breaks biahub tests
+  "iohub==0.3.0a7",
   "stitch @ git+https://github.com/ahillsley/stitching@jen",
   "matplotlib",
   "natsort",
   "numpy",
   "markdown",
   "monai",
-  "pandas~=2.1",
-  "pydantic>2,<3",
-  "scipy<1.16",  # as of 06/23/2025 scipy 1.16.0 breaks test imports
+  "pandas",
+  "pydantic>2",
+  "scipy",
   "submitit",
   "torch",
   "tqdm",
-  "waveorder==3.0.1",
+  "waveorder>=0.3",
   "largestinteriorrectangle",
   "antspyx",
   "pystackreg",
@@ -49,84 +51,86 @@ dependencies = [
 [project.optional-dependencies]
 segment = ["cellpose"]
 
-track = ["ultrack>=0.7.0rc2"]
+track = ["ultrack>=0.7"]
 
-gui = ["napari", "PyQt6", "napari-animation"]
+gui = ["napari[pyqt6]", "PyQt6>=6.5,<6.8", "napari-animation"]
 
 shard = ["tensorstore"]
 
+# TODO: resolved to v0.3.2 which is not compatible with iohub 0.3.0a7
+# bring bach once we sort out iohub dependencies
+# stain = ["viscy"]
+stain = []
+
 build = ["build", "twine"]
 
-all = ["biahub[segment,track,shard,build,gui]"]
+all = ["biahub[segment,track,shard,build,gui,stain]"]
 
+doc = [
+    "zensical>=0.0.32",
+    "mkdocs-click>=0.8",
+]
+
+[dependency-groups]
 dev = [
   "biahub[segment,track,shard,build]",
-  "black==25.1",
-  "flake8==7.2",
-  "isort==6.0",
-  "pytest==8.4",
-  "pre-commit~=4.2",
-]
-doc = [
-    "zensical>=0.0.11",
-    "mkdocs-click>=0.8",
+  "pre-commit~=4.5",
+  "pytest~=8.4",
+  "ruff~=0.15",
 ]
 
 [project.scripts]
 biahub = "biahub.cli.main:cli"
 
-[tool.setuptools]
-# explicitly specify the package name
-# TODO: is there a better way to do this?
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.version.raw-options]
+version_scheme = "post-release"
+local_scheme = "no-local-version"
+
+[tool.hatch.build.targets.wheel]
 packages = ["biahub"]
 
-# allow use of __file__ to load data files included in the package
-zip-safe = false
-
-[tool.setuptools.dynamic]
-version = { attr = "biahub.__version__" }
-
-[tool.black]
+[tool.ruff]
 line-length = 95
-target-version = ['py310']
-include = '\.pyi?$'
-skip-string-normalization = true
-exclude = '''
-(
-  /(
-      \.eggs
-    | \.git
-    | \.hg
-    | \.mypy_cache
-    | \.tox
-    | \.venv
-    | _build
-    | build
-    | dist
-    | notebooks
-    | ignore
-    | examples
-    | scripts
-  )/
-)
-'''
+target-version = "py311"
 
-[tool.isort]
-profile = "black"
-line_length = 95
-lines_between_types = 1
-default_section = "THIRDPARTY"
-no_lines_before = ["STDLIB"]
-ensure_newline_before_comments = true
-skip_glob = ["examples/*", "scripts/*"]
+exclude = ["archive", "examples", "scripts", "notebooks"]
 
-[tool.pylint]
-# disable all conventions, refactors, warnings (C, R, W) and the following:
-# E0401: unable-to-import (since it is possible that no one environment has all required packages)
-# E1136: unsubscriptable-object (anecdotal false positives for numpy objects)
-disable = ["C", "R", "W", "import-error", "unsubscriptable-object"]
-msg-template = "{line},{column},{category},{symbol}:{msg}"
-reports = "n"
+[tool.ruff.lint]
+select = ["F", "E", "W", "I", "N", "UP", "B", "D"]
+
+ignore = [
+    "E501",  # Line too long (handled by formatter)
+    "N802",  # Function name should be lowercase (scientific code uses uppercase)
+    "N803",  # Argument name should be lowercase (scientific code uses uppercase)
+    "N806",  # Variable in function should be lowercase (scientific code uses uppercase)
+    "N815",  # Variable in class scope should not be mixedCase
+    "N999",  # Invalid module name (vendored BeadExtractor.py)
+    "D100",  # Missing docstring in public module
+    "D101",  # Missing docstring in public class
+    "D102",  # Missing docstring in public method
+    "D103",  # Missing docstring in public function
+    "D104",  # Missing docstring in public package
+    "D105",  # Missing docstring in magic method
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.ruff.lint.isort]
+lines-between-types = 1
+known-first-party = ["biahub"]
+
+[tool.ruff.format]
+docstring-code-format = true
 
 [tool.pytest.ini_options]
 addopts = ["--import-mode=importlib"]

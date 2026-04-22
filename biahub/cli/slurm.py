@@ -11,6 +11,7 @@ def wait_for_jobs_to_finish(jobs: list[submitit.Job]) -> None:
     ----------
     jobs : list
         A list of submitit Job objects that represent the SLURM jobs to wait for.
+
     Returns
     -------
     None

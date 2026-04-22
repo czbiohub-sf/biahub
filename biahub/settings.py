@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Literal
 
 import numpy as np
 import torch
@@ -32,9 +32,9 @@ class DetectPeaksSettings(MyBaseModel):
 
 class ProcessingFunctions(MyBaseModel):
     function: str
-    input_channels: Optional[List[str]] = None  # Optional
-    kwargs: Dict[str, Any] = {}
-    per_timepoint: Optional[bool] = True
+    input_channels: list[str] | None = None  # Optional
+    kwargs: dict[str, Any] = {}
+    per_timepoint: bool | None = True
 
 
 class ProcessingImportFuncSettings(MyBaseModel):
@@ -42,8 +42,8 @@ class ProcessingImportFuncSettings(MyBaseModel):
 
 
 class ProcessingInputChannel(MyBaseModel):
-    path: Union[str, None] = None
-    channels: Dict[str, List[ProcessingFunctions]]
+    path: str | None = None
+    channels: dict[str, list[ProcessingFunctions]]
 
     @field_validator("path")
     @classmethod
@@ -61,9 +61,9 @@ class TrackingSettings(MyBaseModel):
     fov: str = "*/*/*"
     blank_frames_path: str = None
     mode: Literal["2D", "3D"] = "2D"
-    z_range: Optional[Tuple[int, int]] = None
-    input_images: List[ProcessingInputChannel]
-    tracking_config: Dict[str, Any] = {}
+    z_range: tuple[int, int] | None = None
+    input_images: list[ProcessingInputChannel]
+    tracking_config: dict[str, Any] = {}
 
     @field_validator("blank_frames_path")
     @classmethod
@@ -75,8 +75,8 @@ class TrackingSettings(MyBaseModel):
 
 class EdgeGraphSettings(BaseModel):
     method: Literal["knn", "radius", "full"] = "knn"
-    k: Optional[int] = None
-    radius: Optional[float] = None
+    k: int | None = None
+    radius: float | None = None
 
     @model_validator(mode="after")
     def set_defaults_and_validate(self) -> "EdgeGraphSettings":
@@ -121,31 +121,43 @@ class MatchDescriptorSettings(MyBaseModel):
     cross_check: bool = False
 
 
+class FilterMatchesSettings(MyBaseModel):
+    angle_threshold: float = 0
+    direction_threshold: float = 0
+    min_distance_quantile: float = 0.01
+    max_distance_quantile: float = 0.95
+
+
+class QCBeadsRegistrationSettings(MyBaseModel):
+    iterations: int = 2
+    score_threshold: float = 0.40
+    score_centroid_mask_radius: int = 6
+
+
 class BeadsMatchSettings(MyBaseModel):
     algorithm: Literal["hungarian", "match_descriptor"] = "hungarian"
-    t_reference: Literal["first", "previous"] = "first"
-    source_peaks_settings: Optional[DetectPeaksSettings] = Field(
+    source_peaks_settings: DetectPeaksSettings | None = Field(
         default_factory=DetectPeaksSettings
     )
-    target_peaks_settings: Optional[DetectPeaksSettings] = Field(
+    target_peaks_settings: DetectPeaksSettings | None = Field(
         default_factory=DetectPeaksSettings
     )
     match_descriptor_settings: MatchDescriptorSettings = MatchDescriptorSettings()
     hungarian_match_settings: HungarianMatchSettings = HungarianMatchSettings()
-    filter_distance_threshold: float = 0.95
-    filter_angle_threshold: float = 0
+    filter_matches_settings: FilterMatchesSettings = FilterMatchesSettings()
+    qc_settings: QCBeadsRegistrationSettings = QCBeadsRegistrationSettings()
 
 
 class PhaseCrossCorrSettings(MyBaseModel):
-    normalization: Optional[Literal["magnitude", "classic"]] = None
+    normalization: Literal["magnitude", "classic"] | None = None
     maximum_shift: float = 1.2
     function_type: Literal["custom_padding", "custom"] = "custom"
     t_reference: Literal["first", "previous"] = "first"
     skip_beads_fov: str = "0"
     center_crop_xy: list[int, int] = None
-    X_slice: Union[list, list[Union[list, Literal["all"]]], Literal["all"]] = "all"
-    Y_slice: Union[list, list[Union[list, Literal["all"]]], Literal["all"]] = "all"
-    Z_slice: Union[list, list[Union[list, Literal["all"]]], Literal["all"]] = "all"
+    X_slice: list | list[list | Literal["all"]] | Literal["all"] = "all"
+    Y_slice: list | list[list | Literal["all"]] | Literal["all"] = "all"
+    Z_slice: list | list[list | Literal["all"]] | Literal["all"] = "all"
 
 
 class FocusFindingSettings(MyBaseModel):
@@ -158,7 +170,7 @@ class FocusFindingSettings(MyBaseModel):
 class StackRegSettings(MyBaseModel):
     center_crop_xy: list[int, int] = [800, 800]
     skip_beads_fov: str = "0"
-    focus_finding_settings: Optional[FocusFindingSettings] = Field(
+    focus_finding_settings: FocusFindingSettings | None = Field(
         default_factory=FocusFindingSettings
     )
     t_reference: Literal["first", "previous"] = "first"
@@ -172,8 +184,11 @@ class EvalTransformSettings(MyBaseModel):
 
 
 class AffineTransformSettings(MyBaseModel):
+    t_reference: Literal["first", "previous"] = "first"
     transform_type: Literal["euclidean", "similarity", "affine"] = "euclidean"
     approx_transform: list = np.eye(4).tolist()
+    use_prev_t_transform: bool = True
+    compute_approx_transform: bool = False
 
     @field_validator("approx_transform")
     @classmethod
@@ -202,14 +217,14 @@ class EstimateRegistrationSettings(MyBaseModel):
     target_channel_name: str
     source_channel_name: str
     estimation_method: Literal["manual", "beads", "ants"] = "manual"
-    beads_match_settings: Optional[BeadsMatchSettings] = None
-    focus_finding_settings: Optional[FocusFindingSettings] = None
+    beads_match_settings: BeadsMatchSettings | None = None
+    focus_finding_settings: FocusFindingSettings | None = None
     affine_transform_settings: AffineTransformSettings = Field(
         default_factory=AffineTransformSettings
     )
-    eval_transform_settings: Optional[EvalTransformSettings] = None
-    ants_registration_settings: Optional[AntsRegistrationSettings] = None
-    manual_registration_settings: Optional[ManualRegistrationSettings] = None
+    eval_transform_settings: EvalTransformSettings | None = None
+    ants_registration_settings: AntsRegistrationSettings | None = None
+    manual_registration_settings: ManualRegistrationSettings | None = None
     verbose: bool = False
 
     @model_validator(mode="after")
@@ -230,14 +245,14 @@ class EstimateStabilizationSettings(MyBaseModel):
     stabilization_method: Literal["beads", "phase-cross-corr", "focus-finding"] = (
         "focus-finding"
     )
-    beads_match_settings: Optional[BeadsMatchSettings] = None
-    phase_cross_corr_settings: Optional[PhaseCrossCorrSettings] = None
-    stack_reg_settings: Optional[StackRegSettings] = None
-    focus_finding_settings: Optional[FocusFindingSettings] = None
+    beads_match_settings: BeadsMatchSettings | None = None
+    phase_cross_corr_settings: PhaseCrossCorrSettings | None = None
+    stack_reg_settings: StackRegSettings | None = None
+    focus_finding_settings: FocusFindingSettings | None = None
     affine_transform_settings: AffineTransformSettings = Field(
         default_factory=AffineTransformSettings
     )
-    eval_transform_settings: Optional[EvalTransformSettings] = None
+    eval_transform_settings: EvalTransformSettings | None = None
     verbose: bool = False
 
     @model_validator(mode="after")
@@ -264,18 +279,23 @@ class EstimateStabilizationSettings(MyBaseModel):
         return self
 
 
+class FlatFieldCorrectionSettings(MyBaseModel):
+    channel_names: list[str] | None = None
+
+
 class ProcessingSettings(MyBaseModel):
-    fliplr: Optional[bool] = False
-    flipud: Optional[bool] = False
-    rot90: Optional[int] = 0
+    fliplr: bool | None = False
+    flipud: bool | None = False
+    rot90: int | None = 0
 
 
 class DeskewSettings(MyBaseModel):
     pixel_size_um: PositiveFloat
     ls_angle_deg: PositiveFloat
-    px_to_scan_ratio: Optional[PositiveFloat] = None
-    scan_step_um: Optional[PositiveFloat] = None
+    px_to_scan_ratio: PositiveFloat | None = None
+    scan_step_um: PositiveFloat | None = None
     keep_overhang: bool = False
+    overhang_fill: Literal["zero", "mean"] = "zero"
     average_n_slices: PositiveInt = 3
 
     @field_validator("ls_angle_deg")
@@ -310,7 +330,7 @@ class RegistrationSettings(MyBaseModel):
     affine_transform_zyx: list
     keep_overhang: bool = False
     interpolation: str = "linear"
-    time_indices: Union[NonNegativeInt, list[NonNegativeInt], Literal["all"]] = "all"
+    time_indices: NonNegativeInt | list[NonNegativeInt] | Literal["all"] = "all"
     verbose: bool = False
 
     @field_validator("affine_transform_zyx")
@@ -329,7 +349,7 @@ class RegistrationSettings(MyBaseModel):
             if np_array.shape != (4, 4):
                 raise ValueError("The array must be a 3x3 ndarray.")
         except ValueError:
-            raise ValueError("The array must contain valid numerical values.")
+            raise ValueError("The array must contain valid numerical values.") from None
 
         return v
 
@@ -368,14 +388,14 @@ class CharacterizeSettings(MyBaseModel):
 
 class ConcatenateSettings(MyBaseModel):
     concat_data_paths: list[str]
-    time_indices: Union[int, list[int], Literal["all"]] = "all"
-    channel_names: list[Union[str, list[str]]]
-    X_slice: Union[list, list[Union[list, Literal["all"]]], Literal["all"]] = "all"
-    Y_slice: Union[list, list[Union[list, Literal["all"]]], Literal["all"]] = "all"
-    Z_slice: Union[list, list[Union[list, Literal["all"]]], Literal["all"]] = "all"
-    chunks_czyx: Union[Literal[None], list[int]] = None
+    time_indices: int | list[int] | Literal["all"] = "all"
+    channel_names: list[str | list[str]]
+    X_slice: list | list[list | Literal["all"]] | Literal["all"] = "all"
+    Y_slice: list | list[list | Literal["all"]] | Literal["all"] = "all"
+    Z_slice: list | list[list | Literal["all"]] | Literal["all"] = "all"
+    chunks_czyx: Literal[None] | list[int] = None
     shards_ratio: list[int] | None = None
-    ensure_unique_positions: Optional[bool] = False
+    ensure_unique_positions: bool | None = False
     output_ome_zarr_version: Literal["0.4", "0.5"] = "0.4"
 
     @field_validator("concat_data_paths")
@@ -537,13 +557,13 @@ class ConcatenateSettings(MyBaseModel):
 
 class StabilizationSettings(MyBaseModel):
     stabilization_estimation_channel: str
-    stabilization_type: Literal["z", "xy", "xyz"]
-    stabilization_method: Literal["beads", "phase-cross-corr", "focus-finding"] = (
-        "focus-finding"
-    )
+    stabilization_type: Literal["z", "xy", "xyz", "affine"]
+    stabilization_method: Literal[
+        "beads", "phase-cross-corr", "focus-finding", "manual", "ants", "beads"
+    ] = "focus-finding"
     stabilization_channels: list
     affine_transform_zyx_list: list
-    time_indices: Union[NonNegativeInt, list[NonNegativeInt], Literal["all"]] = "all"
+    time_indices: NonNegativeInt | list[NonNegativeInt] | Literal["all"] = "all"
     output_voxel_size: list[
         PositiveFloat, PositiveFloat, PositiveFloat, PositiveFloat, PositiveFloat
     ] = [1.0, 1.0, 1.0, 1.0, 1.0]
@@ -563,9 +583,9 @@ class StabilizationSettings(MyBaseModel):
 
 
 class StitchSettings(BaseModel):
-    channels: Optional[list[str]] = None
-    total_translation: Optional[dict[str, list[float, float, float]]] = None
-    affine_transform: Optional[dict[str, list]] = None
+    channels: list[str] | None = None
+    total_translation: dict[str, list[float, float, float]] | None = None
+    affine_transform: dict[str, list] | None = None
 
     def __init__(self, **data):
         # Adding a leading zero for zyx translation for backwards compatibility
@@ -596,19 +616,19 @@ def get_valid_eval_args():
         raise ImportError(
             "The 'cellpose' package is required to validate 'eval_args' in cellpose model configurations. "
             "Please install it to proceed with cellpose-related configurations."
-        )
+        ) from None
 
 
 class PreprocessingFunctions(BaseModel):
     function: ImportString
     channel: str
-    kwargs: Dict[str, Any] = {}
+    kwargs: dict[str, Any] = {}
 
 
 class SegmentationModel(BaseModel):
     path_to_model: str
-    eval_args: Dict[str, Any]
-    z_slice_2D: Optional[int] = None
+    eval_args: dict[str, Any]
+    z_slice_2D: int | None = None
     preprocessing: list[PreprocessingFunctions] = []
 
     @field_validator("eval_args", mode="before")
@@ -641,5 +661,5 @@ class SegmentationModel(BaseModel):
 
 
 class SegmentationSettings(BaseModel):
-    models: Dict[str, SegmentationModel]
+    models: dict[str, SegmentationModel]
     model_config = {"extra": "forbid", "protected_namespaces": ()}
