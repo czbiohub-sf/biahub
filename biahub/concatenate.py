@@ -106,10 +106,14 @@ def get_channel_combiner_metadata(
     # Unpack slicing parameters
     z_slice_param, y_slice_param, x_slice_param = slicing_params
 
-    # Expand the data paths
+    # Expand the data paths. Filter to directories so that per-group
+    # `zarr.json` metadata files (OME-Zarr v0.5 / zarr v3) aren't picked up
+    # by wildcards like "*/*/*".
     expanded_paths = []
     for paths in data_paths_list:
-        expanded_paths.append([Path(path) for path in natsorted(glob.glob(paths))])
+        expanded_paths.append(
+            [Path(path) for path in natsorted(glob.glob(paths)) if Path(path).is_dir()]
+        )
 
     # Flatten the expanded paths
     all_data_paths = [path for paths in expanded_paths for path in paths]

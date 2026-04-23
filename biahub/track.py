@@ -827,8 +827,12 @@ def track(
         raise ValueError("No input_images_paths provided")
     fov = settings.fov
 
-    # check if all input_images_paths have the same position keys
-    input_position_dirpaths = [Path(p) for p in glob(str(input_images_paths[0] / fov))]
+    # check if all input_images_paths have the same position keys.
+    # Filter to directories so per-group `zarr.json` metadata (OME-Zarr v0.5
+    # / zarr v3) isn't picked up by wildcards like "*/*/*".
+    input_position_dirpaths = [
+        Path(p) for p in glob(str(input_images_paths[0] / fov)) if Path(p).is_dir()
+    ]
     position_keys = [p.parts[-3:] for p in input_position_dirpaths]
 
     tracking_cfg = settings.tracking_config

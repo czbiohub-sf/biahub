@@ -7,7 +7,7 @@ name = "biahub"
 description = "Bioimage analysis hub."
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 
 dynamic = ["version"]
 
@@ -15,7 +15,7 @@ classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Science/Research",
   "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
 ]
 
 dependencies = [
@@ -81,6 +81,12 @@ dev = [
 [project.scripts]
 biahub = "biahub.cli.main:cli"
 
+[tool.uv]
+# Needed so that uv considers pypi (and not only the pytorch CPU extra index)
+# when resolving build-system requirements such as iohub's hatchling /
+# uv-dynamic-versioning chain, which pulls in packaging>=24.2.
+index-strategy = "unsafe-best-match"
+
 [tool.hatch.metadata]
 allow-direct-references = true
 
@@ -96,7 +102,7 @@ packages = ["biahub"]
 
 [tool.ruff]
 line-length = 95
-target-version = "py311"
+target-version = "py312"
 
 exclude = ["archive", "examples", "scripts", "notebooks"]
 
