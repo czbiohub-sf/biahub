@@ -9,7 +9,7 @@ import scipy.ndimage
 import submitit
 
 from iohub import open_ome_zarr
-from iohub.ngff.utils import create_empty_plate
+from iohub.ngff.utils import create_empty_plate, process_single_position
 
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
@@ -26,7 +26,6 @@ from biahub.cli.utils import (
     copy_n_paste_czyx,
     estimate_resources,
     get_submitit_cluster,
-    process_single_position_v2,
     yaml_to_model,
 )
 from biahub.settings import RegistrationSettings
@@ -559,13 +558,14 @@ def register_cli(
                 if channel_name not in settings.source_channel_names:
                     continue
                 affine_job = executor.submit(
-                    process_single_position_v2,
+                    process_single_position,
                     apply_affine_transform,
-                    input_data_path=input_position_path,  # source store
-                    output_path=output_dirpath,
-                    time_indices=time_indices,
-                    input_channel_idx=[source_channel_names.index(channel_name)],
-                    output_channel_idx=[output_channel_names.index(channel_name)],
+                    input_position_path=input_position_path,  # source store
+                    output_position_path=output_dirpath
+                    / Path(*input_position_path.parts[-3:]),
+                    input_time_indices=time_indices,
+                    input_channel_indices=[[source_channel_names.index(channel_name)]],
+                    output_channel_indices=[[output_channel_names.index(channel_name)]],
                     num_processes=int(slurm_args["slurm_cpus_per_task"]),
                     **affine_transform_args,
                 )
@@ -583,13 +583,14 @@ def register_cli(
                 if channel_name in settings.source_channel_names:
                     continue
                 copy_job = executor.submit(
-                    process_single_position_v2,
+                    process_single_position,
                     copy_n_paste_czyx,
-                    input_data_path=input_position_path,  # target store
-                    output_path=output_dirpath,
-                    time_indices=time_indices,
-                    input_channel_idx=[target_channel_names.index(channel_name)],
-                    output_channel_idx=[output_channel_names.index(channel_name)],
+                    input_position_path=input_position_path,  # target store
+                    output_position_path=output_dirpath
+                    / Path(*input_position_path.parts[-3:]),
+                    input_time_indices=time_indices,
+                    input_channel_indices=[[target_channel_names.index(channel_name)]],
+                    output_channel_indices=[[output_channel_names.index(channel_name)]],
                     num_processes=int(slurm_args["slurm_cpus_per_task"]),
                     **copy_n_paste_kwargs,
                 )

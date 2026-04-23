@@ -20,9 +20,8 @@ classifiers = [
 
 dependencies = [
   "click",
-  # need to pin until #198, #199, #215 are resolved
-  # iohub>0.3 writes to zarr v3 by default which breaks biahub tests
-  "iohub==0.3.0a7",
+  # TODO: update iohub dependency once sharding_in_utils is merged
+  "iohub[tensorstore] @ git+https://github.com/czbiohub-sf/iohub@feat/sharding_in_utils",
   "stitch @ git+https://github.com/ahillsley/stitching@jen",
   "matplotlib",
   "natsort",
