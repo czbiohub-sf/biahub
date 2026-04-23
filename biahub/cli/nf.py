@@ -751,8 +751,6 @@ def init_concatenate(config: str, output_zarr: str):
 @click.option("--num-threads", "-j", default=1, type=int)
 def run_concatenate(config: str, output_zarr: str, position: str, num_threads: int):
     """Copy and crop data from all input stores for one position into output."""
-    from iohub.ngff.utils import process_single_position as iohub_process_single_position
-
     from biahub.cli.utils import copy_n_paste
     from biahub.concatenate import get_channel_combiner_metadata
     from biahub.settings import ConcatenateSettings
@@ -804,7 +802,7 @@ def run_concatenate(config: str, output_zarr: str, position: str, num_threads: i
 
         output_position_path = output_dirpath / position
 
-        iohub_process_single_position(
+        process_single_position(
             copy_n_paste,
             input_position_path=input_path,
             output_position_path=output_position_path,
@@ -812,7 +810,7 @@ def run_concatenate(config: str, output_zarr: str, position: str, num_threads: i
             output_channel_indices=output_ch_idx,
             input_time_indices=input_time_indices,
             output_time_indices=list(range(len(input_time_indices))),
-            num_processes=num_threads,
+            num_threads=num_threads,
             zyx_slicing_params=zyx_slicing_params,
         )
 
@@ -922,7 +920,6 @@ def run_stabilize(
     num_threads: int,
 ):
     """Apply precomputed stabilization transforms to a single position."""
-    from biahub.cli.utils import process_single_position_v2
     from biahub.settings import StabilizationSettings
     from biahub.stabilize import apply_stabilization_transform
 
@@ -933,7 +930,7 @@ def run_stabilize(
     output_position = Path(output_zarr) / position
 
     with open_ome_zarr(str(input_position), mode="r") as ds:
-        T, C, Z, Y, X = ds.data.shape
+        T = ds.data.shape[0]
         channel_names = ds.channel_names
 
     with open_ome_zarr(str(output_position), mode="r") as ds_out:
@@ -946,18 +943,24 @@ def run_stabilize(
     elif isinstance(settings.time_indices, int):
         time_indices = [settings.time_indices]
 
-    for ch_idx, _ch_name in enumerate(channel_names):
-        process_single_position_v2(
-            func=apply_stabilization_transform,
-            input_data_path=input_position,
-            output_path=Path(output_zarr),
-            time_indices=time_indices,
-            input_channel_idx=[ch_idx],
-            output_channel_idx=[ch_idx],
-            num_processes=num_threads,
-            list_of_shifts=combined_mats,
-            output_shape=(out_Z, out_Y, out_X),
+    def _stabilize_czyx(czyx_data, input_time_index, **kwargs):
+        return apply_stabilization_transform(
+            czyx_data, t_idx=input_time_index, **kwargs
         )
+
+    channel_indices = [[ch] for ch in range(len(channel_names))]
+
+    process_single_position(
+        _stabilize_czyx,
+        input_position,
+        output_position,
+        input_channel_indices=channel_indices,
+        output_channel_indices=channel_indices,
+        input_time_indices=time_indices,
+        num_threads=num_threads,
+        list_of_shifts=combined_mats,
+        output_shape=(out_Z, out_Y, out_X),
+    )
 
     click.echo(f"Stabilization done: {position}")
 
@@ -1349,7 +1352,7 @@ def run_deconvolve(
         deconvolve,
         str(input_position),
         str(output_position),
-        num_processes=num_threads,
+        num_threads=num_threads,
         transfer_function_store_path=str(tf_zarr),
         regularization_strength=float(settings.regularization_strength),
     )
@@ -1672,7 +1675,7 @@ def nf_run_register(
     num_threads: int,
 ):
     """Apply registration transform to a single position."""
-    from biahub.cli.utils import copy_n_paste_czyx, process_single_position_v2
+    from biahub.cli.utils import copy_n_paste_czyx
     from biahub.register import apply_affine_transform, find_overlapping_volume
     from biahub.settings import RegistrationSettings
 
@@ -1727,31 +1730,43 @@ def nf_run_register(
         ],
     }
 
+    source_input_ch = []
+    source_output_ch = []
     for channel_name in source_channel_names:
         if channel_name not in settings.source_channel_names:
             continue
-        process_single_position_v2(
-            func=apply_affine_transform,
-            input_data_path=source_position,
-            output_path=Path(output_zarr),
-            time_indices=time_indices,
-            input_channel_idx=[source_channel_names.index(channel_name)],
-            output_channel_idx=[output_channel_names.index(channel_name)],
-            num_processes=num_threads,
+        source_input_ch.append([source_channel_names.index(channel_name)])
+        source_output_ch.append([output_channel_names.index(channel_name)])
+
+    if source_input_ch:
+        process_single_position(
+            apply_affine_transform,
+            source_position,
+            output_position,
+            input_channel_indices=source_input_ch,
+            output_channel_indices=source_output_ch,
+            input_time_indices=time_indices,
+            num_threads=num_threads,
             **affine_kwargs,
         )
 
+    target_input_ch = []
+    target_output_ch = []
     for channel_name in target_channel_names:
         if channel_name in settings.source_channel_names:
             continue
-        process_single_position_v2(
-            func=copy_n_paste_czyx,
-            input_data_path=target_position,
-            output_path=Path(output_zarr),
-            time_indices=time_indices,
-            input_channel_idx=[target_channel_names.index(channel_name)],
-            output_channel_idx=[output_channel_names.index(channel_name)],
-            num_processes=num_threads,
+        target_input_ch.append([target_channel_names.index(channel_name)])
+        target_output_ch.append([output_channel_names.index(channel_name)])
+
+    if target_input_ch:
+        process_single_position(
+            copy_n_paste_czyx,
+            target_position,
+            output_position,
+            input_channel_indices=target_input_ch,
+            output_channel_indices=target_output_ch,
+            input_time_indices=time_indices,
+            num_threads=num_threads,
             **copy_kwargs,
         )
 

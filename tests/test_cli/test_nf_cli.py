@@ -748,7 +748,7 @@ def test_init_stabilize(tmp_path, example_plate):
 
 
 def test_run_stabilize(tmp_path, example_plate):
-    """run-stabilize invokes process_single_position_v2 with correct args."""
+    """run-stabilize invokes iohub process_single_position with correct args."""
     plate_path, ds = example_plate
     ds.close()
 
@@ -773,7 +773,7 @@ def test_run_stabilize(tmp_path, example_plate):
         ],
     )
 
-    with patch("biahub.cli.utils.process_single_position_v2") as mock_process:
+    with patch("biahub.cli.nf.process_single_position") as mock_process:
         result = runner.invoke(
             cli,
             [
@@ -793,9 +793,9 @@ def test_run_stabilize(tmp_path, example_plate):
         )
 
         assert result.exit_code == 0, result.output
-        assert mock_process.call_count == 6  # one per channel
-        call_kwargs = mock_process.call_args_list[0]
-        assert call_kwargs.kwargs["num_processes"] == 2
+        mock_process.assert_called_once()
+        call_kwargs = mock_process.call_args
+        assert call_kwargs.kwargs["num_threads"] == 2
         assert "list_of_shifts" in call_kwargs.kwargs
         assert "output_shape" in call_kwargs.kwargs
 
@@ -1138,7 +1138,7 @@ def test_run_deconvolve(tmp_path, example_plate):
         assert result.exit_code == 0, result.output
         mock_process.assert_called_once()
         call_kwargs = mock_process.call_args
-        assert call_kwargs.kwargs["num_processes"] == 2
+        assert call_kwargs.kwargs["num_threads"] == 2
         assert "transfer_function_store_path" in call_kwargs.kwargs
         assert "regularization_strength" in call_kwargs.kwargs
 
@@ -1411,7 +1411,7 @@ def test_init_register(tmp_path, example_plate):
 
 
 def test_run_register(tmp_path, example_plate):
-    """run-register calls process_single_position_v2 with apply_affine_transform."""
+    """run-register calls iohub process_single_position with apply_affine_transform."""
     plate_path, ds = example_plate
     ds.close()
 
@@ -1440,7 +1440,7 @@ def test_run_register(tmp_path, example_plate):
         ],
     )
 
-    with patch("biahub.cli.utils.process_single_position_v2") as mock_process:
+    with patch("biahub.cli.nf.process_single_position") as mock_process:
         result = runner.invoke(
             cli,
             [
@@ -1464,7 +1464,7 @@ def test_run_register(tmp_path, example_plate):
         assert result.exit_code == 0, result.output
         assert mock_process.call_count >= 1
         first_call = mock_process.call_args_list[0]
-        assert first_call.kwargs["num_processes"] == 2
+        assert first_call.kwargs["num_threads"] == 2
 
 
 # ---------------------------------------------------------------------------
