@@ -33,6 +33,7 @@ from biahub.cli.resolve_function import resolve_function
 from biahub.cli.utils import (
     estimate_resources,
     get_submitit_cluster,
+    resolve_ome_zarr_version,
     update_model,
     yaml_to_model,
 )
@@ -859,6 +860,9 @@ def track(
         "scale": scale,
         "channel_names": [f"{settings.target_channel}_labels"],
         "dtype": np.uint32,
+        "version": resolve_ome_zarr_version(
+            input_position_dirpaths[0], settings.output_ome_zarr_version
+        ),
     }
 
     # Create the output zarr mirroring input_position_dirpaths

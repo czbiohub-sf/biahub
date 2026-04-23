@@ -26,6 +26,7 @@ from biahub.cli.utils import (
     copy_n_paste_czyx,
     estimate_resources,
     get_submitit_cluster,
+    resolve_ome_zarr_version,
     yaml_to_model,
 )
 from biahub.settings import RegistrationSettings
@@ -493,6 +494,9 @@ def register_cli(
         "scale": (1,) * 2 + tuple(output_voxel_size),
         "channel_names": output_channel_names,
         "dtype": np.float32,
+        "version": resolve_ome_zarr_version(
+            source_position_dirpaths[0], settings.output_ome_zarr_version
+        ),
     }
 
     # Create the output zarr mirroring source_position_dirpaths

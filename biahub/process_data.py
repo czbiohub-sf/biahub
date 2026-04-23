@@ -24,6 +24,7 @@ from biahub.cli.utils import (
     estimate_resources,
     get_output_paths,
     get_submitit_cluster,
+    resolve_ome_zarr_version,
     yaml_to_model,
 )
 from biahub.settings import ProcessingFunctions, ProcessingImportFuncSettings
@@ -250,6 +251,9 @@ def process_with_config(
         "scale": new_scale,
         "channel_names": channel_names,
         "dtype": np.float32,
+        "version": resolve_ome_zarr_version(
+            input_position_dirpaths[0], settings.output_ome_zarr_version
+        ),
     }
 
     # Create the output zarr mirroring input_position_dirpaths

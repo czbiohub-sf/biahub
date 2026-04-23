@@ -24,6 +24,7 @@ from biahub.cli.utils import (
     estimate_resources,
     get_output_paths,
     get_submitit_cluster,
+    resolve_ome_zarr_version,
     yaml_to_model,
 )
 from biahub.settings import ConcatenateSettings
@@ -366,7 +367,9 @@ def concatenate(
         "shape": (len(input_time_indices), len(all_channel_names)) + tuple(cropped_shape_zyx),
         "chunks": chunk_size,
         "shards_ratio": settings.shards_ratio,
-        "version": settings.output_ome_zarr_version,
+        "version": resolve_ome_zarr_version(
+            all_data_paths[0], settings.output_ome_zarr_version
+        ),
         "scale": (1,) * 2 + tuple(output_voxel_size),
         "channel_names": all_channel_names,
         "dtype": dtype,

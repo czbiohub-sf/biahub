@@ -1,6 +1,7 @@
 import os
 
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import yaml
@@ -15,6 +16,21 @@ def get_submitit_cluster(local: bool = False) -> str:
     if os.environ.get("CI") == "true":
         return "debug"
     return "local" if local else "slurm"
+
+
+def resolve_ome_zarr_version(
+    reference_store_path: Path,
+    override: Literal["0.4", "0.5"] | None,
+) -> Literal["0.4", "0.5"]:
+    """Pick the OME-Zarr version to use for an output store.
+
+    When ``override`` is set it wins; otherwise the version is read from
+    ``reference_store_path`` so the output preserves the input's version.
+    """
+    if override is not None:
+        return override
+    with open_ome_zarr(str(reference_store_path), mode="r") as dataset:
+        return dataset.version
 
 
 def update_model(model_instance, update_dict):
