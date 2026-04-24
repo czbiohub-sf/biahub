@@ -25,6 +25,7 @@ from biahub.cli.utils import (
     estimate_resources,
     get_output_paths,
     get_submitit_cluster,
+    resolve_ome_zarr_version,
     yaml_to_model,
 )
 from biahub.settings import DeconvolveSettings
@@ -125,6 +126,9 @@ def deconvolve_cli(
         channel_names=channel_names,
         shape=shape,
         scale=scale,
+        version=resolve_ome_zarr_version(
+            input_position_dirpaths[0], settings.output_ome_zarr_version
+        ),
     )
 
     # Compute transfer function

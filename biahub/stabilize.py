@@ -6,7 +6,7 @@ import numpy as np
 import submitit
 
 from iohub.ngff import open_ome_zarr
-from iohub.ngff.utils import create_empty_plate
+from iohub.ngff.utils import create_empty_plate, process_single_position
 from scipy.linalg import svd
 from scipy.spatial.transform import Rotation as R  # noqa: N817
 
@@ -25,7 +25,7 @@ from biahub.cli.utils import (
     copy_n_paste_czyx,
     estimate_resources,
     get_submitit_cluster,
-    process_single_position_v2,
+    resolve_ome_zarr_version,
     yaml_to_model,
 )
 from biahub.register import convert_transform_to_ants
@@ -35,7 +35,7 @@ from biahub.settings import StabilizationSettings
 def apply_stabilization_transform(
     zyx_data: np.ndarray,
     list_of_shifts: list[np.ndarray],
-    t_idx: int,
+    input_time_index: int,
     output_shape: tuple[int, int, int] = None,
 ):
     """
@@ -48,7 +48,7 @@ def apply_stabilization_transform(
     ----------
     - zyx_data (np.ndarray): Input 3D (Z, Y, X) or 4D (C, Z, Y, X) volumetric data.
     - list_of_shifts (list[np.ndarray]): List of transformation matrices (one per time index).
-    - t_idx (int): Time index corresponding to the transformation to apply.
+    - input_time_index (int): Time index corresponding to the transformation to apply.
     - output_shape (tuple[int, int, int], optional): Desired shape of the output stabilized volume.
                                                      If None, the shape of `zyx_data` is used.
                                                      Defaults to None.
@@ -68,17 +68,20 @@ def apply_stabilization_transform(
         output_shape = zyx_data.shape[-3:]
 
     # Get the transformation matrix for the current time index
-    tx_shifts = convert_transform_to_ants(list_of_shifts[t_idx])
+    tx_shifts = convert_transform_to_ants(list_of_shifts[input_time_index])
 
     if zyx_data.ndim == 4:
         stabilized_czyx = np.zeros((zyx_data.shape[0],) + output_shape, dtype=np.float32)
         for c in range(zyx_data.shape[0]):
             stabilized_czyx[c] = apply_stabilization_transform(
-                zyx_data[c], list_of_shifts, t_idx, output_shape
+                zyx_data[c], list_of_shifts, input_time_index, output_shape
             )
         return stabilized_czyx
     else:
-        click.echo(f"shifting matrix with t_idx:{t_idx} \n{list_of_shifts[t_idx]}")
+        click.echo(
+            f"shifting matrix with input_time_index:{input_time_index} \n"
+            f"{list_of_shifts[input_time_index]}"
+        )
         target_zyx_ants = ants.from_numpy(np.zeros((output_shape), dtype=np.float32))
 
         zyx_data = np.nan_to_num(zyx_data, nan=0)
@@ -215,6 +218,9 @@ def stabilize(
         "scale": settings.output_voxel_size,
         "channel_names": channel_names,
         "dtype": np.float32,
+        "version": resolve_ome_zarr_version(
+            input_position_dirpaths[0], settings.output_ome_zarr_version
+        ),
     }
 
     # Create the output zarr mirroring input_position_dirpaths
@@ -279,16 +285,17 @@ def stabilize(
             combined_mats = np.array(settings.affine_transform_zyx_list)
             stabilize_zyx_args = {"list_of_shifts": combined_mats}
             for channel_name in channel_names:
+                output_position_path = output_dirpath / Path(*input_position_path.parts[-3:])
                 if channel_name in stabilization_channels:
                     job = executor.submit(
-                        process_single_position_v2,
+                        process_single_position,
                         apply_stabilization_transform,
-                        input_data_path=input_position_path,  # source store
-                        output_path=output_dirpath,
-                        time_indices=time_indices,
+                        input_position_path=input_position_path,  # source store
+                        output_position_path=output_position_path,
+                        input_time_indices=time_indices,
                         output_shape=(Z, Y, X),
-                        input_channel_idx=[channel_names.index(channel_name)],
-                        output_channel_idx=[channel_names.index(channel_name)],
+                        input_channel_indices=[[channel_names.index(channel_name)]],
+                        output_channel_indices=[[channel_names.index(channel_name)]],
                         num_processes=int(
                             slurm_args["slurm_cpus_per_task"]
                         ),  # parallel processing over time
@@ -296,13 +303,13 @@ def stabilize(
                     )
                 else:
                     job = executor.submit(
-                        process_single_position_v2,
+                        process_single_position,
                         copy_n_paste_czyx,
-                        input_data_path=input_position_path,  # target store
-                        output_path=output_dirpath,
-                        time_indices=time_indices,
-                        input_channel_idx=[channel_names.index(channel_name)],
-                        output_channel_idx=[channel_names.index(channel_name)],
+                        input_position_path=input_position_path,  # target store
+                        output_position_path=output_position_path,
+                        input_time_indices=time_indices,
+                        input_channel_indices=[[channel_names.index(channel_name)]],
+                        output_channel_indices=[[channel_names.index(channel_name)]],
                         num_processes=int(slurm_args["slurm_cpus_per_task"]),
                         **copy_n_paste_kwargs,
                     )

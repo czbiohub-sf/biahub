@@ -19,7 +19,12 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import estimate_resources, get_submitit_cluster, yaml_to_model
+from biahub.cli.utils import (
+    estimate_resources,
+    get_submitit_cluster,
+    resolve_ome_zarr_version,
+    yaml_to_model,
+)
 from biahub.settings import SegmentationSettings
 
 
@@ -198,6 +203,9 @@ def segment_cli(
         shape=segmentation_shape,
         chunks=None,
         scale=scale,
+        version=resolve_ome_zarr_version(
+            input_position_dirpaths[0], settings.output_ome_zarr_version
+        ),
     )
 
     # Estimate resources

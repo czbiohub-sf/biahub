@@ -39,6 +39,8 @@ class ProcessingFunctions(MyBaseModel):
 
 class ProcessingImportFuncSettings(MyBaseModel):
     processing_functions: list[ProcessingFunctions] = []
+    # When None, preserve the OME-Zarr version of the input store.
+    output_ome_zarr_version: Literal["0.4", "0.5"] | None = None
 
 
 class ProcessingInputChannel(MyBaseModel):
@@ -64,6 +66,8 @@ class TrackingSettings(MyBaseModel):
     z_range: tuple[int, int] | None = None
     input_images: list[ProcessingInputChannel]
     tracking_config: dict[str, Any] = {}
+    # When None, preserve the OME-Zarr version of the input store.
+    output_ome_zarr_version: Literal["0.4", "0.5"] | None = None
 
     @field_validator("blank_frames_path")
     @classmethod
@@ -281,6 +285,8 @@ class EstimateStabilizationSettings(MyBaseModel):
 
 class FlatFieldCorrectionSettings(MyBaseModel):
     channel_names: list[str] | None = None
+    # When None, preserve the OME-Zarr version of the input store.
+    output_ome_zarr_version: Literal["0.4", "0.5"] | None = None
 
 
 class ProcessingSettings(MyBaseModel):
@@ -297,6 +303,8 @@ class DeskewSettings(MyBaseModel):
     keep_overhang: bool = False
     overhang_fill: Literal["zero", "mean"] = "zero"
     average_n_slices: PositiveInt = 3
+    # When None, preserve the OME-Zarr version of the input store.
+    output_ome_zarr_version: Literal["0.4", "0.5"] | None = None
 
     @field_validator("ls_angle_deg")
     @classmethod
@@ -332,6 +340,8 @@ class RegistrationSettings(MyBaseModel):
     interpolation: str = "linear"
     time_indices: NonNegativeInt | list[NonNegativeInt] | Literal["all"] = "all"
     verbose: bool = False
+    # When None, preserve the OME-Zarr version of the input store.
+    output_ome_zarr_version: Literal["0.4", "0.5"] | None = None
 
     @field_validator("affine_transform_zyx")
     @classmethod
@@ -362,6 +372,8 @@ class PsfFromBeadsSettings(MyBaseModel):
 
 class DeconvolveSettings(MyBaseModel):
     regularization_strength: PositiveFloat = 0.001
+    # When None, preserve the OME-Zarr version of the input store.
+    output_ome_zarr_version: Literal["0.4", "0.5"] | None = None
 
 
 class CharacterizeSettings(MyBaseModel):
@@ -396,7 +408,10 @@ class ConcatenateSettings(MyBaseModel):
     chunks_czyx: Literal[None] | list[int] = None
     shards_ratio: list[int] | None = None
     ensure_unique_positions: bool | None = False
-    output_ome_zarr_version: Literal["0.4", "0.5"] = "0.4"
+    # Concatenate is the migration path into v0.5 stores, so it defaults to
+    # "0.5". Set to None to preserve the input store's OME-Zarr version, or
+    # to "0.4" / "0.5" to force a specific output version.
+    output_ome_zarr_version: Literal["0.4", "0.5"] | None = "0.5"
 
     @field_validator("concat_data_paths")
     @classmethod
@@ -567,6 +582,8 @@ class StabilizationSettings(MyBaseModel):
     output_voxel_size: list[
         PositiveFloat, PositiveFloat, PositiveFloat, PositiveFloat, PositiveFloat
     ] = [1.0, 1.0, 1.0, 1.0, 1.0]
+    # When None, preserve the OME-Zarr version of the input store.
+    output_ome_zarr_version: Literal["0.4", "0.5"] | None = None
 
     @field_validator("affine_transform_zyx_list")
     @classmethod
@@ -586,6 +603,8 @@ class StitchSettings(BaseModel):
     channels: list[str] | None = None
     total_translation: dict[str, list[float, float, float]] | None = None
     affine_transform: dict[str, list] | None = None
+    # When None, preserve the OME-Zarr version of the input store.
+    output_ome_zarr_version: Literal["0.4", "0.5"] | None = None
 
     def __init__(self, **data):
         # Adding a leading zero for zyx translation for backwards compatibility
@@ -662,4 +681,6 @@ class SegmentationModel(BaseModel):
 
 class SegmentationSettings(BaseModel):
     models: dict[str, SegmentationModel]
+    # When None, preserve the OME-Zarr version of the input store.
+    output_ome_zarr_version: Literal["0.4", "0.5"] | None = None
     model_config = {"extra": "forbid", "protected_namespaces": ()}

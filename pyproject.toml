@@ -7,7 +7,7 @@ name = "biahub"
 description = "Bioimage analysis hub."
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 
 dynamic = ["version"]
 
@@ -15,14 +15,13 @@ classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Science/Research",
   "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
 ]
 
 dependencies = [
   "click",
-  # need to pin until #198, #199, #215 are resolved
-  # iohub>0.3 writes to zarr v3 by default which breaks biahub tests
-  "iohub==0.3.0a7",
+  # TODO: update iohub dependency once sharding_in_utils is merged
+  "iohub @ git+https://github.com/czbiohub-sf/iohub@feat/sharding_in_utils",
   "stitch @ git+https://github.com/ahillsley/stitching@jen",
   "matplotlib",
   "natsort",
@@ -55,8 +54,6 @@ track = ["ultrack>=0.7"]
 
 gui = ["napari[pyqt6]", "PyQt6>=6.5,<6.8", "napari-animation"]
 
-shard = ["tensorstore"]
-
 # TODO: resolved to v0.3.2 which is not compatible with iohub 0.3.0a7
 # bring bach once we sort out iohub dependencies
 # stain = ["viscy"]
@@ -64,7 +61,7 @@ stain = []
 
 build = ["build", "twine"]
 
-all = ["biahub[segment,track,shard,build,gui,stain]"]
+all = ["biahub[segment,track,build,gui,stain]"]
 
 doc = [
     "zensical>=0.0.32",
@@ -73,7 +70,7 @@ doc = [
 
 [dependency-groups]
 dev = [
-  "biahub[segment,track,shard,build]",
+  "biahub[segment,track,build]",
   "pre-commit~=4.5",
   "pytest~=8.4",
   "ruff~=0.15",
@@ -81,6 +78,12 @@ dev = [
 
 [project.scripts]
 biahub = "biahub.cli.main:cli"
+
+[tool.uv]
+# Needed so that uv considers pypi (and not only the pytorch CPU extra index)
+# when resolving build-system requirements such as iohub's hatchling /
+# uv-dynamic-versioning chain, which pulls in packaging>=24.2.
+index-strategy = "unsafe-best-match"
 
 [tool.hatch.metadata]
 allow-direct-references = true
@@ -97,7 +100,7 @@ packages = ["biahub"]
 
 [tool.ruff]
 line-length = 95
-target-version = "py311"
+target-version = "py312"
 
 exclude = ["archive", "examples", "scripts", "notebooks"]
 
