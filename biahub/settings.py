@@ -603,6 +603,8 @@ class StitchSettings(BaseModel):
     channels: list[str] | None = None
     total_translation: dict[str, list[float, float, float]] | None = None
     affine_transform: dict[str, list] | None = None
+    # When None, preserve the OME-Zarr version of the input store.
+    output_ome_zarr_version: Literal["0.4", "0.5"] | None = None
 
     def __init__(self, **data):
         # Adding a leading zero for zyx translation for backwards compatibility
