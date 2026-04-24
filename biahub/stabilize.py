@@ -25,6 +25,7 @@ from biahub.cli.utils import (
     copy_n_paste_czyx,
     estimate_resources,
     get_submitit_cluster,
+    resolve_ome_zarr_version,
     yaml_to_model,
 )
 from biahub.register import convert_transform_to_ants
@@ -217,6 +218,9 @@ def stabilize(
         "scale": settings.output_voxel_size,
         "channel_names": channel_names,
         "dtype": np.float32,
+        "version": resolve_ome_zarr_version(
+            input_position_dirpaths[0], settings.output_ome_zarr_version
+        ),
     }
 
     # Create the output zarr mirroring input_position_dirpaths
