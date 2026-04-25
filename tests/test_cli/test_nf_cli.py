@@ -1,12 +1,24 @@
 from unittest.mock import patch
 
 import numpy as np
+import pytest
 import yaml
 
 from click.testing import CliRunner
 from iohub.ngff import open_ome_zarr
 
 from biahub.cli.main import cli
+
+try:
+    import ultrack  # noqa: F401
+
+    _has_ultrack = True
+except ImportError:
+    _has_ultrack = False
+
+requires_ultrack = pytest.mark.skipif(
+    not _has_ultrack, reason="ultrack not installed"
+)
 
 
 def test_list_positions(example_plate):
@@ -255,6 +267,7 @@ def test_init_track(tmp_path, example_plate):
         assert "label" in pos.channel_names[0].lower() or "GFP" in pos.channel_names[0]
 
 
+@requires_ultrack
 def test_run_track(tmp_path, example_plate):
     """run-track invokes track_one_position with correct args."""
     plate_path, plate_dataset = example_plate
@@ -301,6 +314,7 @@ def test_run_track(tmp_path, example_plate):
         assert call_kwargs.kwargs["output_dirpath"] == output_path
 
 
+@requires_ultrack
 def test_run_track_null_path_override(tmp_path, example_plate):
     """run-track --input-images-path overrides null paths in config."""
     plate_path, plate_dataset = example_plate
