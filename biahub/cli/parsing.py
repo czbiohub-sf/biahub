@@ -280,7 +280,7 @@ def num_processes() -> Callable:
         return click.option(
             "--num-processes",
             "-j",
-            default=mp.cpu_count(),
+            default=1,
             help="Number of simultaneous processes",
             required=False,
             type=int,
