@@ -944,9 +944,7 @@ def run_stabilize(
         time_indices = [settings.time_indices]
 
     def _stabilize_czyx(czyx_data, input_time_index, **kwargs):
-        return apply_stabilization_transform(
-            czyx_data, t_idx=input_time_index, **kwargs
-        )
+        return apply_stabilization_transform(czyx_data, t_idx=input_time_index, **kwargs)
 
     channel_indices = [[ch] for ch in range(len(channel_names))]
 
