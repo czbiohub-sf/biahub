@@ -1,29 +1,52 @@
 # Nextflow Pipelines
 
-## example-flatfield-deskew-reconstruct
+## Philosophy
 
-Four-step pipeline: flat-field correction → deskew → reconstruct (compute transfer function + apply inverse TF) → virtual stain (optional). Each step fans out per position within the plate zarr.
+Configs and launch scripts live **with the data**, not in the repo. Each experiment directory should contain:
+
+```
+experiment_dir/
+  input.zarr
+  configs/
+    flat_field.yml
+    deskew.yml
+    reconstruct.yml
+    ...
+  run_pipeline.sh
+  work/                  # nextflow work dir (gitignored, disposable)
+```
+
+The bash script pins all paths (input zarr, output dir, config dir, repo locations) and passes them to `nextflow run`. This keeps the pipeline definitions in the repo generic and reusable while the per-experiment choices are tracked alongside the data.
+
+See the working example at:
+
+```
+/hpc/projects/intracellular_dashboard/refactor_biahub/phase2_dev/mantis_v2_dev/
+  run_mantis_v2.sh
+  configs/
+    flat_field.yml
+    deskew.yml
+    reconstruct.yml
+    predict.yml
+    track.yml
+    concatenate.yml
+```
+
+## Pipelines
+
+### example-flatfield-deskew-reconstruct
+
+Four-step pipeline: flat-field correction -> deskew -> reconstruct (compute transfer function + apply inverse TF) -> virtual stain (optional). Each step fans out per position within the plate zarr.
 
 ![Pipeline DAG](example-flatfield-deskew-reconstruct.png)
 
-### Usage
+### mantis-v2-timelapse
 
-```bash
-nextflow run /path/to/biahub/nextflow/example-flatfield-deskew-reconstruct.nf \
-    -profile local \
-    --biahub_project /path/to/biahub \
-    --input_zarr /path/to/input.zarr \
-    --output_dir /path/to/output \
-    --flat_field_config /path/to/flat_field.yml \
-    --deskew_config /path/to/deskew.yml \
-    --reconstruct_config /path/to/reconstruct.yml
-```
+Full mantis v2 pipeline: flat-field -> deskew -> reconstruct -> virtual stain + tracking (parallel) -> rename channels -> assembly (crop + concatenate). Designed for timelapse plate-level data.
 
-Use `-profile slurm` instead of `-profile local` to submit jobs to SLURM.
+![Pipeline DAG](mantis-v2-timelapse.png)
 
-Add `-resume` to restart from where a previous run left off.
-
-### Environment setup
+## Environment setup
 
 On HPC, load the required modules first:
 
@@ -48,9 +71,50 @@ Nextflow processes use `uv run --project <path> biahub` to invoke the CLI, so th
 
 Omit `--biahub_project` if `biahub` is already on `PATH` (e.g. in a container image).
 
-Run `nextflow` from your project's pipeline directory so that `.nextflow.log`, `.nextflow/`, and `work/` land there rather than in the repo.
+Run `nextflow` from your experiment directory so that `.nextflow.log`, `.nextflow/`, and `work/` land there rather than in the repo.
 
-### Parameters
+## Usage
+
+Write a bash launch script in your experiment directory. Example (`run_mantis_v2.sh`):
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+BIAHUB_PROJECT="/home/aliu/repos/biahub"
+VISCY_PROJECT="/path/to/viscy-env"
+PIPELINE="${BIAHUB_PROJECT}/nextflow/mantis-v2-timelapse.nf"
+NF_CONFIG="${BIAHUB_PROJECT}/nextflow/nextflow.config"
+
+DEV_DIR="/path/to/experiment"
+INPUT_ZARR="${DEV_DIR}/input.zarr"
+OUTPUT_DIR="${DEV_DIR}"
+CONFIGS="${DEV_DIR}/configs"
+WORK_DIR="${DEV_DIR}/work"
+
+nextflow run "${PIPELINE}" \
+    -c "${NF_CONFIG}" \
+    -profile slurm \
+    --input_zarr         "${INPUT_ZARR}" \
+    --output_dir         "${OUTPUT_DIR}" \
+    --flat_field_config  "${CONFIGS}/flat_field.yml" \
+    --deskew_config      "${CONFIGS}/deskew.yml" \
+    --reconstruct_config "${CONFIGS}/reconstruct.yml" \
+    --predict_config     "${CONFIGS}/predict.yml" \
+    --track_config       "${CONFIGS}/track.yml" \
+    --concatenate_config "${CONFIGS}/concatenate.yml" \
+    --rename_suffix      "_recon" \
+    --biahub_project     "${BIAHUB_PROJECT}" \
+    --viscy_project      "${VISCY_PROJECT}" \
+    --work_dir           "${WORK_DIR}" \
+    --num_threads        1 \
+    -resume \
+    "$@"
+```
+
+Use `-profile local` instead of `-profile slurm` for local execution.
+
+## Parameters
 
 | Parameter | Description |
 |-----------|-------------|
@@ -59,16 +123,19 @@ Run `nextflow` from your project's pipeline directory so that `.nextflow.log`, `
 | `--flat_field_config` | YAML config for `FlatFieldCorrectionSettings` |
 | `--deskew_config` | YAML config for `DeskewSettings` |
 | `--reconstruct_config` | YAML config for waveorder `ReconstructionSettings` |
+| `--predict_config` | YAML config for VisCy virtual stain prediction (optional; enables virtual stain step) |
+| `--track_config` | YAML config for tracking (optional) |
+| `--concatenate_config` | YAML config for concatenation (optional) |
+| `--rename_suffix` | Suffix for channel renaming (optional) |
 | `--num_threads` | Intra-position parallelism for reconstruction (default: 1) |
 | `--biahub_project` | Path to biahub repo root for `uv run` (optional; see [Environment setup](#environment-setup)) |
-| `--viscy_project` | Path to VisCy repo root for `uv run` (optional; falls back to installing from git) |
-| `--predict_config` | YAML config for VisCy virtual stain prediction (optional; enables virtual stain step) |
+| `--viscy_project` | Path to VisCy repo root for `uv run` (optional) |
 | `--max_positions` | Limit fan-out to first N positions (default: 0 = all positions) |
 | `--work_dir` | Nextflow work directory for intermediate files (default: `work/` in current directory) |
 
-### Output
+## Output
 
-The dataset name is derived from the input zarr basename (e.g. `experiment.zarr` → `experiment`).
+The dataset name is derived from the input zarr basename (e.g. `experiment.zarr` -> `experiment`).
 
 ```
 output_dir/
@@ -81,14 +148,14 @@ output_dir/
     <dataset_name>.zarr
 ```
 
-### Profiles
+## Profiles
 
 | Profile | Executor | Notes |
 |---------|----------|-------|
 | `local` | Local | Pass `--biahub_project` to use `uv run` (see [Environment setup](#environment-setup)) |
 | `slurm` | SLURM | Submits to `cpu` queue; deskew uses `gpu` queue with `--gres=gpu:1` |
 
-### Nextflow reports
+## Nextflow reports
 
 After a run completes, reports are written to `nextflow/output/`:
 - `dag.html` — pipeline DAG
@@ -96,7 +163,7 @@ After a run completes, reports are written to `nextflow/output/`:
 - `trace.txt` — per-task trace
 - `timeline.html` — timeline visualization
 
-### Cleanup
+## Cleanup
 
 After a run completes, remove Nextflow work directories, cache, and logs:
 
@@ -107,7 +174,7 @@ bash nextflow/cleanup.sh /path/to  # clean a specific directory
 
 This does **not** remove your output zarrs — only Nextflow's internal files (`work/`, `.nextflow/`, logs, reports).
 
-### CLI commands
+## CLI commands
 
 The pipeline invokes these `biahub nf` subcommands:
 
