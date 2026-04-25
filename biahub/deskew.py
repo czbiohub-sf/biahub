@@ -98,7 +98,7 @@ def _rearrange_axes(data: torch.Tensor) -> torch.Tensor:
         in_y = Y_in - 1 - z_out   (flip along axis 0 after permute)
         in_x = X_in - 1 - y_out   (flip along axis 1 after permute)
     """
-    return data.permute(1, 2, 0).flip(0).flip(1).contiguous()
+    return data.permute(1, 2, 0).flip([0, 1]).contiguous()
 
 
 def _build_deskew_grid(
@@ -517,6 +517,7 @@ def fast_deskew_zyx(
     deskewed = F.grid_sample(
         data_ra, grid, mode="bilinear", padding_mode="zeros", align_corners=True
     )
+    del data_ra  # release ~1V; only deskewed is needed for the mean
     # (Z_avg, Y_out, N, X_out) → average over the N grouped slices
     result = deskewed.mean(dim=2)
 
@@ -547,14 +548,20 @@ def _czyx_fast_deskew_data(data, device="cuda", num_splits=1, **kwargs):
         # The deskew flips X → higher input X maps to lower output Y, so reverse.
         chunks = np.array_split(zyx, num_splits, axis=2)
         results = [
-            fast_deskew_zyx(torch.from_numpy(c.astype(np.float32)).to(device), **kwargs)
+            fast_deskew_zyx(
+                torch.from_numpy(c).to(device=device, dtype=torch.float32),
+                **kwargs,
+            )
             .cpu()
             .numpy()
             for c in reversed(chunks)
         ]
         return np.concatenate(results, axis=1)[None]
 
-    tensor = torch.from_numpy(zyx.astype(np.float32)).to(device)
+    # Cast in torch (one allocation in torch's allocator) instead of via
+    # numpy's astype (which would create an intermediate numpy buffer that
+    # the torch tensor then shares memory with).
+    tensor = torch.from_numpy(zyx).to(device=device, dtype=torch.float32)
     return fast_deskew_zyx(tensor, **kwargs).cpu().numpy()[None]
 
 
@@ -633,7 +640,7 @@ def deskew(
 
     # Estimate resources
     num_cpus, gb_ram = estimate_resources(
-        shape=(T, C, Z, Y, X), ram_multiplier=16, max_num_cpus=16
+        shape=(T, C, Z, Y, X), ram_multiplier=32, max_num_cpus=8
     )
 
     # Prepare SLURM arguments
