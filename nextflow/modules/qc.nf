@@ -3,7 +3,8 @@ include { dataset_name; biahub_cmd } from './common'
 
 def qc_cmd() {
     return params.qc_project ?
-        "uv run --project ${params.qc_project} imaging-qc" : "imaging-qc"
+        "uv run --project ${params.qc_project} imaging-qc" :
+        "uv run --from 'imaging-qc-pipeline @ git+https://github.com/czbiohub-sf/imaging-qc-pipeline@v0.3.1' imaging-qc"
 }
 
 
