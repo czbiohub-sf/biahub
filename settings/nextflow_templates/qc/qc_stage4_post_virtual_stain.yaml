@@ -1,0 +1,6 @@
+defaults:
+  - qc_base
+  - _self_
+
+stage: 4
+display_name: "Post Virtual Stain"

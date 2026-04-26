@@ -8,6 +8,7 @@ import numpy as np
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate, process_single_position
 
+from biahub.cli.nf_qc import nf_qc_cli
 from biahub.cli.utils import (
     copy_position_metadata,
     estimate_resources,
@@ -21,6 +22,9 @@ logger = logging.getLogger(__name__)
 @click.group("nf")
 def nf_cli():
     """Nextflow-oriented commands for single-unit-of-work processing."""
+
+
+nf_cli.add_command(nf_qc_cli)
 
 
 @nf_cli.command("list-positions")

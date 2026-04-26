@@ -1,0 +1,6 @@
+defaults:
+  - qc_base
+  - _self_
+
+stage: 1
+display_name: "Post Flat-Field"

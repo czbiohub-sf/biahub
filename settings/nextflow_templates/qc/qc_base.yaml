@@ -1,0 +1,81 @@
+backend: iohub
+positions: null
+metric_group: default
+log_level: INFO
+upstream_qc_dir: null
+mode: full
+
+metric_groups:
+  default:
+    scope: position
+    metrics:
+      - intensity_stats
+      - signal_to_noise
+      - blank
+      - tenengrad
+      - bleach_rate
+
+metrics:
+  - intensity_stats
+  - signal_to_noise
+  - blank
+  - tenengrad
+  - bleach_rate
+
+intensity_stats:
+  grid: 16
+  quantiles: [0.01, 0.05, 0.25, 0.5, 0.75, 0.95, 0.99]
+
+signal_to_noise:
+  granularity: z
+  gate:
+    hard_floor: 5.0
+    hard_ceiling: null
+    outlier_method: global_zscore
+    outlier_params:
+      n_std: 3.0
+      tail: lower
+
+blank:
+  intensity_threshold: 0.01
+  variance_threshold: 1.0e-6
+  granularity: z
+  channels: null
+  gate:
+    aggregation: any
+    granularity: channel
+
+tenengrad:
+  threshold: 0.0
+  granularity: z
+  gate:
+    hard_floor: 10.0
+    hard_ceiling: null
+    outlier_method: global_zscore
+    outlier_params:
+      n_std: 3.0
+      tail: lower
+
+bleach_rate:
+  gate:
+    hard_floor: null
+    hard_ceiling: null
+    outlier_method: global_zscore
+    outlier_params:
+      n_std: 3.0
+
+report:
+  mode: full
+  max_timepoints: 5
+  compact: false
+  metric_archetypes:
+    signal_to_noise: facetgrid
+    tenengrad: facetgrid
+    intensity_stats: range_drift
+    bleach_rate: timeseries
+  metric_labels:
+    signal_to_noise: "Signal-to-Noise Ratio"
+    blank: "Blank Detection"
+    tenengrad: "Tenengrad"
+    intensity_stats: "Intensity Statistics"
+    bleach_rate: "Bleach Rate"
