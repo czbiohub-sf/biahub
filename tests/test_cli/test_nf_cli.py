@@ -1512,6 +1512,30 @@ def test_estimate_stitch(tmp_path, example_plate):
         assert output_path.exists()
 
 
+def test_clean_temp_removes_existing(tmp_path):
+    """clean-temp removes an existing temp directory."""
+    temp_dir = tmp_path / "stale_temp"
+    temp_dir.mkdir()
+    (temp_dir / "leftover.zarr").mkdir()
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["nf", "clean-temp", str(temp_dir)])
+
+    assert result.exit_code == 0
+    assert not temp_dir.exists()
+
+
+def test_clean_temp_noop_when_missing(tmp_path):
+    """clean-temp succeeds even if the directory doesn't exist."""
+    temp_dir = tmp_path / "nonexistent"
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["nf", "clean-temp", str(temp_dir)])
+
+    assert result.exit_code == 0
+    assert not temp_dir.exists()
+
+
 def test_stitch(tmp_path, example_plate):
     """stitch per-well creates output and calls write_output_chunk."""
     plate_path, ds = example_plate

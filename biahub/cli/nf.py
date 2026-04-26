@@ -384,6 +384,20 @@ def run_apply_inv_tf(
 # ---------------------------------------------------------------------------
 
 
+@nf_cli.command("clean-temp")
+@click.argument("temp_dir", type=click.Path())
+def clean_temp(temp_dir: str):
+    """Remove a temp directory if it exists (idempotent pre-retry cleanup)."""
+    import shutil
+
+    path = Path(temp_dir)
+    if path.exists():
+        shutil.rmtree(path)
+        logger.info(f"Removed stale temp directory: {path}")
+    else:
+        logger.info(f"No temp directory to clean: {path}")
+
+
 @nf_cli.command("init-virtual-stain")
 @click.option("--input-zarr", "-i", required=True, type=click.Path(exists=True))
 @click.option("--output-zarr", "-o", required=True, type=click.Path())

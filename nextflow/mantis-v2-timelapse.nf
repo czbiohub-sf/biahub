@@ -83,11 +83,11 @@ workflow {
         def vs_zarr  = "${params.output_dir}/3-virtual-stain/${dataset_name()}.zarr"
         def asm_zarr = "${params.output_dir}/5-assemble/${dataset_name()}.zarr"
 
-        qc1 = qc_post_flatfield(all_positions, ff_done.done,  ff_zarr,  "${qc_dir}/qc_stage1_post_flatfield.yaml")
-        qc2 = qc_post_deskew(all_positions, dk_done.done,     dk_zarr,  "${qc_dir}/qc_stage2_post_deskew.yaml")
-        qc3 = qc_post_reconstruct(all_positions, rc_done.done, rc_zarr, "${qc_dir}/qc_stage3_post_reconstruct.yaml")
-        qc4 = qc_post_virtual_stain(all_positions, vs_done.done, vs_zarr, "${qc_dir}/qc_stage4_post_virtual_stain.yaml")
-        qc5 = qc_post_assembly(all_positions, asm_done.done,   asm_zarr, "${qc_dir}/qc_stage5_post_assembly.yaml")
+        qc1 = qc_post_flatfield(all_positions, ff_done.done,  ff_zarr,  "${qc_dir}/qc_stage1_post_flatfield.yaml", "flatfield")
+        qc2 = qc_post_deskew(all_positions, dk_done.done,     dk_zarr,  "${qc_dir}/qc_stage2_post_deskew.yaml", "deskew")
+        qc3 = qc_post_reconstruct(all_positions, rc_done.done, rc_zarr, "${qc_dir}/qc_stage3_post_reconstruct.yaml", "reconstruct")
+        qc4 = qc_post_virtual_stain(all_positions, vs_done.done, vs_zarr, "${qc_dir}/qc_stage4_post_virtual_stain.yaml", "virtual_stain")
+        qc5 = qc_post_assembly(all_positions, asm_done.done,   asm_zarr, "${qc_dir}/qc_stage5_post_assembly.yaml", "assembly")
 
         all_qc = qc1.done.mix(qc2.done, qc3.done, qc4.done, qc5.done) | collect
         all_summaries = qc1.summary.mix(qc2.summary, qc3.summary, qc4.summary, qc5.summary) | collect

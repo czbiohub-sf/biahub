@@ -39,10 +39,10 @@ process merge_qc_stage {
     errorStrategy { task.exitStatus in [0, 1] ? 'ignore' : 'retry' }
 
     input:
-    tuple val(zarr_path), val(done), val(config_path)
+    tuple val(zarr_path), val(done), val(config_path), val(stage_name)
 
     output:
-    path 'qc_stage_summary.txt'
+    path "${stage_name}_qc_summary.txt"
 
     script:
     """
@@ -52,7 +52,7 @@ process merge_qc_stage {
         "${zarr_path}" \
         --mode gate_only 2>&1 | tee gate_log.txt >&2
     ${qc_cmd()} merge-gates "${zarr_path}"
-    grep 'QC_SUMMARY' gate_log.txt > qc_stage_summary.txt || echo "no_summary" > qc_stage_summary.txt
+    grep 'QC_SUMMARY' gate_log.txt > ${stage_name}_qc_summary.txt || echo "no_summary" > ${stage_name}_qc_summary.txt
     """
 }
 
@@ -122,6 +122,7 @@ workflow qc_stage_wf {
     prev_done
     zarr_path
     config_path
+    stage_name
 
     main:
     barrier = prev_done.map { 'done' }
@@ -133,7 +134,7 @@ workflow qc_stage_wf {
         | collect
 
     summary = qc_done
-        .map { done -> tuple(zarr_path, done, config_path) }
+        .map { done -> tuple(zarr_path, done, config_path, stage_name) }
         | merge_qc_stage
 
     emit:

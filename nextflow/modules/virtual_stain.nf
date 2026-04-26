@@ -18,6 +18,8 @@ process init_virtual_stain {
 
     script:
     """
+    ${biahub_cmd()} nf clean-temp \
+        "${params.output_dir}/3-virtual-stain/temp"
     ${biahub_cmd()} nf init-virtual-stain \
         -i "${params.output_dir}/2-reconstruct/${dataset_name()}.zarr" \
         -o "${params.output_dir}/3-virtual-stain/${dataset_name()}.zarr" \
