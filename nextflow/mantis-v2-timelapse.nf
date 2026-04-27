@@ -21,6 +21,7 @@ params.qc_config_dir       = null
 params.qc_project          = null
 params.qc_report_dir       = null
 params.qc_report_static    = false
+params.quarto_bin          = null
 
 include { list_positions; dataset_name } from './modules/common'
 include { flat_field_wf }     from './modules/flat_field'

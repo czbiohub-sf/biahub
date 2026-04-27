@@ -83,8 +83,10 @@ set -euo pipefail
 
 BIAHUB_PROJECT="/home/aliu/repos/biahub"
 VISCY_PROJECT="/path/to/viscy-env"
+QC_PROJECT="/path/to/imaging-qc-pipeline"
 PIPELINE="${BIAHUB_PROJECT}/nextflow/mantis-v2-timelapse.nf"
 NF_CONFIG="${BIAHUB_PROJECT}/nextflow/nextflow.config"
+QC_CONFIGS="${BIAHUB_PROJECT}/settings/nextflow_templates/qc"
 
 DEV_DIR="/path/to/experiment"
 INPUT_ZARR="${DEV_DIR}/input.zarr"
@@ -106,6 +108,9 @@ nextflow run "${PIPELINE}" \
     --rename_suffix      "_recon" \
     --biahub_project     "${BIAHUB_PROJECT}" \
     --viscy_project      "${VISCY_PROJECT}" \
+    --qc_config_dir      "${QC_CONFIGS}" \
+    --qc_project         "${QC_PROJECT}" \
+    --quarto_bin         "/home/aliu/opt/quarto-1.7.23/bin" \
     --work_dir           "${WORK_DIR}" \
     --num_threads        1 \
     -resume \
@@ -132,6 +137,11 @@ Use `-profile local` instead of `-profile slurm` for local execution.
 | `--viscy_project` | Path to VisCy repo root for `uv run` (optional) |
 | `--max_positions` | Limit fan-out to first N positions (default: 0 = all positions) |
 | `--work_dir` | Nextflow work directory for intermediate files (default: `work/` in current directory) |
+| `--qc_config_dir` | Directory containing per-stage QC YAML configs (optional; enables QC stages) |
+| `--qc_project` | Path to `imaging-qc-pipeline` repo root for `uv run` (optional; falls back to PyPI install) |
+| `--qc_report_dir` | Directory for the final QC report (default: `<output_dir>/qc/report`) |
+| `--qc_report_static` | Generate static PNG-only report instead of interactive Quarto/Plotly (default: `false`) |
+| `--quarto_bin` | Path to directory containing the `quarto` binary (required for interactive reports on Slurm, where `~/.bashrc` is not sourced) |
 
 ## Output
 
