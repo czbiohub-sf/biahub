@@ -93,6 +93,6 @@ workflow {
         all_summaries = qc1.summary.mix(qc2.summary, qc3.summary, qc4.summary, qc5.summary) | collect
 
         def report_dir = params.qc_report_dir ?: "${params.output_dir}/qc/report"
-        qc_report_wf(all_qc, all_summaries, asm_zarr, [ff_zarr, dk_zarr, rc_zarr, vs_zarr], report_dir, "${qc_dir}/qc_stage5_post_assembly.yaml")
+        qc_report_wf(all_qc, all_summaries, asm_zarr, [ff_zarr, dk_zarr, rc_zarr, vs_zarr], params.output_dir, report_dir)
     }
 }

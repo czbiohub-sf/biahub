@@ -97,9 +97,8 @@ process final_merge_and_report {
     label 'cpu_medium'
 
     input:
-    val assembly_zarr
+    val output_dir
     val report_dir
-    val config_path
     val consolidated
 
     output:
@@ -107,10 +106,8 @@ process final_merge_and_report {
 
     script:
     """
-    ${qc_cmd()} merge "${assembly_zarr}"
     ${qc_cmd()} report \
-        --config "${config_path}" \
-        "${assembly_zarr}" \
+        --multi-store "${output_dir}" \
         "${report_dir}" \
         --static
     """
@@ -150,12 +147,12 @@ workflow qc_report_wf {
     all_summaries
     assembly_zarr
     step_zarrs
+    output_dir
     report_dir
-    config_path
 
     main:
     consolidated = consolidate_qc(all_qc_done, step_zarrs, assembly_zarr)
-    final_merge_and_report(assembly_zarr, report_dir, config_path, consolidated)
+    final_merge_and_report(output_dir, report_dir, consolidated)
     log_qc_summary(all_summaries)
 
     emit:
