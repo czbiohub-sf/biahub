@@ -105,11 +105,12 @@ process final_merge_and_report {
     val true
 
     script:
+    def static_flag = params.qc_report_static ? '--static' : ''
     """
     ${qc_cmd()} report \
         --multi-store "${output_dir}" \
         "${report_dir}" \
-        --static
+        ${static_flag}
     """
 }
 
