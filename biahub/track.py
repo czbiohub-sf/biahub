@@ -40,6 +40,44 @@ from biahub.settings import ProcessingInputChannel, TrackingSettings
 
 # Lazy imports for ultrack - imported only when needed in specific functions
 
+_ultrack_patched = False
+
+
+def _patch_ultrack_readonly_buffer():
+    """Workaround for scikit-image #6378: read-only buffer in _map_array.
+
+    scikit-image's Cython ``_map_array`` rejects read-only memoryviews.
+    Under numpy 2.x, pandas DataFrame columns and ``np.asarray`` results are
+    often read-only, so every call path through ``map_array`` can trigger this.
+
+    Patch ``skimage.util.map_array`` directly to force writable copies of
+    all arrays before passing them to Cython.
+
+    Remove when scikit-image >= 0.27 is available.
+    """
+    global _ultrack_patched
+    if _ultrack_patched:
+        return
+    _ultrack_patched = True
+
+    import skimage.util._map_array as _ma
+
+    _original_map_array = _ma.map_array
+
+    def _map_array_writable(input_arr, input_vals, output_vals, out=None):
+        input_arr = np.array(input_arr, copy=False)
+        if not input_arr.flags.writeable:
+            input_arr = input_arr.copy()
+        input_vals = np.array(input_vals, copy=False)
+        if not input_vals.flags.writeable:
+            input_vals = input_vals.copy()
+        output_vals = np.array(output_vals, copy=False)
+        if not output_vals.flags.writeable:
+            output_vals = output_vals.copy()
+        return _original_map_array(input_arr, input_vals, output_vals, out=out)
+
+    _ma.map_array = _map_array_writable
+
 
 def mem_nuc_contour(nuclei_prediction: ArrayLike, membrane_prediction: ArrayLike) -> ArrayLike:
     """
@@ -364,6 +402,8 @@ def run_ultrack(
     """
     from ultrack import Tracker
 
+    _patch_ultrack_readonly_buffer()
+
     cfg: MainConfig = tracking_config
 
     cfg.data_config.working_dir = database_path
@@ -375,6 +415,7 @@ def run_ultrack(
         detection=foreground_mask,
         edges=contour_gradient_map,
         scale=scale,
+        overwrite=True,
     )
 
     tracks_df, graph = tracker.to_tracks_layer()

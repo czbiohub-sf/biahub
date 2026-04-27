@@ -281,7 +281,7 @@ def num_processes() -> Callable:
             "--num-processes",
             "-j",
             default=1,
-            help="Number of parallel processes",
+            help="Number of simultaneous processes",
             required=False,
             type=int,
         )(f)

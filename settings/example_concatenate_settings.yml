@@ -63,9 +63,9 @@ shards_ratio: null
 
 # Version of the OME-Zarr format to use for the output
 # Options:
-#   - "0.4" (default)
-#   - "0.5"
-output_ome_zarr_version: "0.4"
+#   - "0.4"
+#   - "0.5" (default)
+output_ome_zarr_version: "0.5"
 
 # Whether to ensure unique position names in the output
 # Options:

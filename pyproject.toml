@@ -7,7 +7,7 @@ name = "biahub"
 description = "Bioimage analysis hub."
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 
 dynamic = ["version"]
 
@@ -20,9 +20,7 @@ classifiers = [
 
 dependencies = [
   "click",
-  # need to pin until #198, #199, #215 are resolved
-  # iohub>0.3 writes to zarr v3 by default which breaks biahub tests
-  "iohub==0.3.0a7",
+  "iohub==0.3.2",
   "stitch @ git+https://github.com/ahillsley/stitching@jen",
   "matplotlib",
   "natsort",
@@ -51,15 +49,14 @@ dependencies = [
 [project.optional-dependencies]
 segment = ["cellpose"]
 
-track = ["ultrack>=0.7"]
+track = ["ultrack>=0.7", "cupy-cuda12x"]
 
 gui = ["napari[pyqt6]", "PyQt6>=6.5,<6.8", "napari-animation"]
 
 shard = ["tensorstore"]
 
-# TODO: resolved to v0.3.2 which is not compatible with iohub 0.3.0a7
-# bring bach once we sort out iohub dependencies
-# stain = ["viscy"]
+# viscy v0.3.4 pins iohub<0.3, incompatible with iohub 0.3.2
+# use standalone viscy-env project for virtual staining
 stain = []
 
 build = ["build", "twine"]

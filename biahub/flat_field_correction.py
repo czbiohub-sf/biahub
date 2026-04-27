@@ -1,6 +1,3 @@
-import multiprocessing as mp
-
-from functools import partial
 from pathlib import Path
 
 import click
@@ -8,7 +5,7 @@ import numpy as np
 import submitit
 
 from iohub.ngff import open_ome_zarr
-from iohub.ngff.utils import create_empty_plate
+from iohub.ngff.utils import create_empty_plate, process_single_position
 
 from biahub.cli.parsing import (
     config_filepath,
@@ -19,7 +16,6 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.cli.utils import (
-    _check_nan_n_zeros,
     estimate_resources,
     get_submitit_cluster,
     yaml_to_model,
@@ -57,78 +53,37 @@ def flat_field_correction(
     return zyx_data / static_pattern * mean_val, static_dict
 
 
-def _process_timepoint(
-    input_data_path: Path,
-    output_position_path: Path,
-    channel_names: list[str],
-    t_idx: int,
-):
-    """Process all channels for a single timepoint."""
-    with open_ome_zarr(input_data_path, mode="r") as input_dataset:
-        all_channel_names = input_dataset.channel_names
-        C = input_dataset.data.shape[1]
-
-        for c_idx in range(C):
-            channel_name = all_channel_names[c_idx]
-            zyx_data = np.asarray(input_dataset.data[t_idx, c_idx])
-
-            if _check_nan_n_zeros(zyx_data):
-                click.echo(f"[t={t_idx}, c={c_idx}] Skipped (all zeros or nans)")
-                continue
-
-            if channel_name in channel_names:
-                zyx_data, static_dict = flat_field_correction(zyx_data)
-            else:
-                zyx_data = np.asarray(zyx_data, dtype=np.float32)
-                static_dict = None
-
-            with open_ome_zarr(output_position_path, mode="r+") as output_dataset:
-                output_dataset[0][t_idx, c_idx] = zyx_data
-                if static_dict is not None:
-                    output_dataset.zattrs[f"flat-field-t{t_idx}-{channel_name}"] = static_dict
-
-    click.echo(f"[t={t_idx}] Done")
-
-
-def process_single_position_flat_field(
-    input_data_path: Path,
-    output_path: Path,
-    channel_names: list[str],
-    num_processes: int = mp.cpu_count(),
-):
-    """Apply flat field correction to a single position with multiprocessing over T.
+def czyx_flat_field_correction(
+    czyx_data: np.ndarray,
+    channel_names: list[str] = None,
+    all_channel_names: list[str] = None,
+) -> np.ndarray:
+    """Apply flat-field correction to a CZYX array.
 
     Parameters
     ----------
-    input_data_path : Path
-        Path to the input position.
-    output_path : Path
-        Path to the output zarr store.
-    channel_names : list[str]
-        Channel names to flat field correct.
-    num_processes : int
-        Number of parallel processes.
+    czyx_data : np.ndarray
+        Input CZYX array.
+    channel_names : list[str], optional
+        Channels to flat-field correct. If None, correct all.
+    all_channel_names : list[str], optional
+        All channel names in the dataset (for index lookup).
+
+    Returns
+    -------
+    np.ndarray
+        Flat-field corrected CZYX array.
     """
-    click.echo(f"Processing position: {input_data_path}")
-    position_key = input_data_path.parts[-3:]
-    output_position_path = output_path / Path(*position_key)
-
-    with open_ome_zarr(input_data_path, mode="r") as input_dataset:
-        T = input_dataset.data.shape[0]
-
-    click.echo(f"Starting multiprocess pool with {num_processes} processes")
-    with mp.Pool(num_processes) as pool:
-        pool.map(
-            partial(
-                _process_timepoint,
-                input_data_path,
-                output_position_path,
-                channel_names,
-            ),
-            range(T),
-        )
-
-    click.echo(f"Completed position: {input_data_path}")
+    output = np.empty_like(czyx_data, dtype=np.float32)
+    for c_idx in range(czyx_data.shape[0]):
+        zyx_data = czyx_data[c_idx]
+        if channel_names is None or all_channel_names is None:
+            output[c_idx], _ = flat_field_correction(zyx_data)
+        elif all_channel_names[c_idx] in channel_names:
+            output[c_idx], _ = flat_field_correction(zyx_data)
+        else:
+            output[c_idx] = zyx_data.astype(np.float32)
+    return output
 
 
 def flat_field(
@@ -230,13 +185,16 @@ def flat_field(
     jobs = []
     with submitit.helpers.clean_env(), executor.batch():
         for input_position_path in input_position_dirpaths:
+            output_position_path = output_dirpath / Path(*input_position_path.parts[-3:])
             jobs.append(
                 executor.submit(
-                    process_single_position_flat_field,
+                    process_single_position,
+                    czyx_flat_field_correction,
                     input_position_path,
-                    output_dirpath,
-                    channel_names,
+                    output_position_path,
                     num_processes=slurm_args["slurm_cpus_per_task"],
+                    channel_names=channel_names,
+                    all_channel_names=all_channel_names,
                 )
             )
 

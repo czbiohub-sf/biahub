@@ -1,0 +1,58 @@
+mode: "2D"
+fov: "*/*/*"
+z_range: [-1, -1]
+target_channel: nuclei_prediction
+
+input_images:
+  - path: null  # overridden by --input-images-path at runtime
+    channels:
+      nuclei_prediction:
+        - function: np.mean
+          kwargs:
+            axis: 1
+          per_timepoint: false
+        - function: ultrack.imgproc.normalize
+          kwargs:
+            gamma: 0.7
+      membrane_prediction:
+        - function: np.mean
+          kwargs:
+            axis: 1
+          per_timepoint: false
+        - function: ultrack.imgproc.normalize
+          kwargs:
+            gamma: 0.7
+
+  - path: null
+    channels:
+      foreground:
+        - function: ultrack.imgproc.detect_foreground
+          input_channels:
+            - nuclei_prediction
+          kwargs:
+            sigma: 80
+      contour:
+        - function: biahub.track.mem_nuc_contour
+          input_channels:
+            - nuclei_prediction
+            - membrane_prediction
+          kwargs: {}
+
+tracking_config:
+  segmentation_config:
+    min_area: 2500
+    max_area: 80000
+    n_workers: 10
+    min_frontier: 0.5
+    max_noise: 0.00
+  linking_config:
+    n_workers: 10
+    max_distance: 15
+    distance_weight: -0.0001
+    max_neighbors: 3
+  tracking_config:
+    n_threads: 14
+    disappear_weight: -0.0001
+    appear_weight: -0.001
+    division_weight: -0.0001
+    bias: 0.0001

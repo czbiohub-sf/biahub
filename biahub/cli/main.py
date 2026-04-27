@@ -48,6 +48,41 @@ class LazyCommand(click.Command):
         return self._real_command.format_options(ctx, formatter)
 
 
+class LazyGroup(click.Group):
+    """A click Group that lazily loads its backing module."""
+
+    def __init__(self, name, import_path, help=None, short_help=None):
+        super().__init__(name=name, help=help, short_help=short_help)
+        self.import_path = import_path
+        self._real_group = None
+
+    def _load(self):
+        if self._real_group is None:
+            module_path, attr_name = self.import_path.rsplit(".", 1)
+            module = importlib.import_module(module_path)
+            self._real_group = getattr(module, attr_name)
+
+    def list_commands(self, ctx):
+        self._load()
+        return self._real_group.list_commands(ctx)
+
+    def get_command(self, ctx, cmd_name):
+        self._load()
+        return self._real_group.get_command(ctx, cmd_name)
+
+    def invoke(self, ctx):
+        self._load()
+        return self._real_group.invoke(ctx)
+
+    def get_help(self, ctx):
+        self._load()
+        return self._real_group.get_help(ctx)
+
+    def format_usage(self, ctx, formatter):
+        self._load()
+        return self._real_group.format_usage(ctx, formatter)
+
+
 COMMANDS = [
     {
         "name": "estimate-bleaching",
@@ -186,6 +221,15 @@ for cmd in COMMANDS:
             short_help=cmd["help"].split(".")[0],
         )
     )
+
+cli.add_command(
+    LazyGroup(
+        name="nf",
+        import_path="biahub.cli.nf.nf_cli",
+        help="Nextflow-oriented commands for single-unit-of-work processing",
+        short_help="Nextflow-oriented commands",
+    )
+)
 
 
 if __name__ == "__main__":

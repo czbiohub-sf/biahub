@@ -109,7 +109,9 @@ def get_channel_combiner_metadata(
     # Expand the data paths
     expanded_paths = []
     for paths in data_paths_list:
-        expanded_paths.append([Path(path) for path in natsorted(glob.glob(paths))])
+        expanded_paths.append(
+            [Path(path) for path in natsorted(glob.glob(paths)) if Path(path).is_dir()]
+        )
 
     # Flatten the expanded paths
     all_data_paths = [path for paths in expanded_paths for path in paths]
