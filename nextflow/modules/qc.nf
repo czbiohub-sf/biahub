@@ -106,11 +106,13 @@ process final_merge_and_report {
 
     script:
     def static_flag = params.qc_report_static ? '--static' : ''
+    def config_flag = params.qc_config_dir ? "--config \"${params.qc_config_dir}\"" : ''
     def path_prefix = params.quarto_bin ? "export PATH=\"${params.quarto_bin}:\${PATH}\"" : ''
     """
     ${path_prefix}
     ${qc_cmd()} report \
         --multi-store "${output_dir}" \
+        ${config_flag} \
         "${report_dir}" \
         ${static_flag}
     """
