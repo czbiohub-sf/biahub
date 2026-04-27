@@ -647,6 +647,7 @@ def model_to_yaml(model, yaml_path: Path) -> None:
     # Remove None-valued fields
     clean_model_dict = {key: value for key, value in model_dict.items() if value is not None}
 
+    yaml_path.parent.mkdir(parents=True, exist_ok=True)
     with open(yaml_path, "w+") as f:
         yaml.dump(clean_model_dict, f, default_flow_style=False, sort_keys=False)
 
