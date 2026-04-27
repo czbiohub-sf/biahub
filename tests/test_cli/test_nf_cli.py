@@ -16,9 +16,7 @@ try:
 except ImportError:
     _has_ultrack = False
 
-requires_ultrack = pytest.mark.skipif(
-    not _has_ultrack, reason="ultrack not installed"
-)
+requires_ultrack = pytest.mark.skipif(not _has_ultrack, reason="ultrack not installed")
 
 
 def test_list_positions(example_plate):
