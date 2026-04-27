@@ -200,11 +200,16 @@ def run_deskew(input_zarr: str, output_zarr: str, position: str, config: str):
     output_position = Path(output_zarr) / position
     settings = yaml_to_model(Path(config), DeskewSettings)
 
+    import torch
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
     process_single_position(
         _czyx_deskew_data,
         input_position,
         output_position,
         num_threads=1,
+        device=device,
         ls_angle_deg=settings.ls_angle_deg,
         px_to_scan_ratio=settings.px_to_scan_ratio,
         keep_overhang=settings.keep_overhang,
