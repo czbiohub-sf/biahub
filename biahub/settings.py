@@ -396,7 +396,7 @@ class ConcatenateSettings(MyBaseModel):
     chunks_czyx: Literal[None] | list[int] = None
     shards_ratio: list[int] | None = None
     ensure_unique_positions: bool | None = False
-    output_ome_zarr_version: Literal["0.4", "0.5"] = "0.4"
+    output_ome_zarr_version: Literal["0.4", "0.5"] = "0.5"
 
     @field_validator("concat_data_paths")
     @classmethod
