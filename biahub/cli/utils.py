@@ -10,8 +10,8 @@ from typing import Literal
 import numpy as np
 import yaml
 
-from iohub.ngff import Position, open_ome_zarr
-from iohub.ngff.models import ImagesMeta, TransformationMeta
+from iohub.ngff import open_ome_zarr
+from iohub.ngff.models import ImagesMeta
 from numpy.typing import DTypeLike
 from tqdm import tqdm
 
@@ -511,9 +511,7 @@ def _match_batches(
     original_ref: list[int],
     batched_ref: list[list[int]],
 ) -> list[list[int]]:
-    return [
-        [flat_indices[original_ref.index(i)] for i in batch] for batch in batched_ref
-    ]
+    return [[flat_indices[original_ref.index(i)] for i in batch] for batch in batched_ref]
 
 
 def estimate_resources(

@@ -1,11 +1,14 @@
+import time
+
 from pathlib import Path
 
 import numpy as np
 import torch
-from biahub.deskew import deskew_zyx, fast_deskew_zyx, get_deskewed_data_shape
+
 from iohub import open_ome_zarr
 from iohub.ngff import TransformationMeta
-import time
+
+from biahub.deskew import deskew_zyx, fast_deskew_zyx, get_deskewed_data_shape
 
 LS_SCAN_ANGLE = 30.0
 PX_SIZE_UM = 0.1133
@@ -36,15 +39,15 @@ deskewed_data = deskew_zyx(
     px_to_scan_ratio=PX_TO_SCAN_RATIO,
     keep_overhang=KEEP_OVERHANG,
     average_n_slices=AVERAGE_N_SLICES,
-    device='cuda'
+    device="cuda",
 )
 end_time = time.time()
 print(f"Deskewing completed in {end_time - start_time:.2f} seconds")
 
-print(f"Running fast_deskew_zyx...")
+print("Running fast_deskew_zyx...")
 start_time = time.time()
-print(f"Transferring data to GPU...")
-data_tensor = torch.from_numpy(data.astype(np.float32)).to('cuda')
+print("Transferring data to GPU...")
+data_tensor = torch.from_numpy(data.astype(np.float32)).to("cuda")
 t1 = time.time()
 print(f"Data transfer completed in {t1 - start_time:.2f} seconds")
 fast_deskewed_tensor = fast_deskew_zyx(
@@ -58,32 +61,34 @@ torch.cuda.synchronize()
 end_time = time.time()
 fast_deskewed_data = fast_deskewed_tensor.cpu().numpy()
 print(f"fast deskew completed in {end_time - t1:.2f} seconds (excluding data transfer)")
-print(f"Total time for fast deskew (including data transfer): {end_time - start_time:.2f} seconds")
+print(
+    f"Total time for fast deskew (including data transfer): {end_time - start_time:.2f} seconds"
+)
 
 with open_ome_zarr(
     "/tmp/fish-0_neuromast-0_deskewed.ome.zarr",
-    mode='w',
-    layout='fov',
-    channel_names=['deskewed'],
-    version="0.5"
-    ) as ds2:
+    mode="w",
+    layout="fov",
+    channel_names=["deskewed"],
+    version="0.5",
+) as ds2:
     im = ds2.create_image(
         name="0",
         data=deskewed_data[None, None],
         chunks=(1, 1) + deskewed_data_shape,
-        transform=[TransformationMeta(type="scale", scale=(1, 1)+deskewed_voxel_size)]
+        transform=[TransformationMeta(type="scale", scale=(1, 1) + deskewed_voxel_size)],
     )
 
 with open_ome_zarr(
     "/tmp/fish-0_neuromast-0_fast_deskewed.ome.zarr",
-    mode='w',
-    layout='fov',
-    channel_names=['fast_deskewed'],
-    version="0.5"
-    ) as ds3:
+    mode="w",
+    layout="fov",
+    channel_names=["fast_deskewed"],
+    version="0.5",
+) as ds3:
     im = ds3.create_image(
         name="0",
         data=fast_deskewed_data[None, None],
         chunks=(1, 1) + deskewed_data_shape,
-        transform=[TransformationMeta(type="scale", scale=(1, 1)+deskewed_voxel_size)]
+        transform=[TransformationMeta(type="scale", scale=(1, 1) + deskewed_voxel_size)],
     )

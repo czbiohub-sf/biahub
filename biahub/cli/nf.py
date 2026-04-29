@@ -103,9 +103,7 @@ def init_flat_field(input_zarr: str, output_zarr: str, config: str):
 @click.option("--output-zarr", "-o", required=True, type=click.Path(exists=True))
 @click.option("--position", "-p", required=True)
 @click.option("--config", "-c", required=True, type=click.Path(exists=True))
-def run_flat_field(
-    input_zarr: str, output_zarr: str, position: str, config: str
-):
+def run_flat_field(input_zarr: str, output_zarr: str, position: str, config: str):
     """Apply flat-field correction to a single position (all timepoints)."""
     from biahub.flat_field_correction import _czyx_flat_field
     from biahub.settings import FlatFieldCorrectionSettings
@@ -278,11 +276,11 @@ def init_reconstruct(input_zarr: str, output_zarr: str, config: str):
     """
     import yaml
 
+    from iohub.ngff.utils import create_empty_plate
     from waveorder.cli.apply_inverse_transfer_function import (
         get_reconstruction_output_metadata,
     )
     from waveorder.cli.settings import ReconstructionSettings
-    from iohub.ngff.utils import create_empty_plate
     from waveorder.cli.utils import estimate_resources as wo_estimate_resources
 
     config_path = Path(config)
