@@ -16,7 +16,6 @@ from biahub.cli.nf_qc import nf_qc_cli
 from biahub.cli.utils import (
     copy_position_metadata,
     estimate_resources,
-    plan_single_position,
     read_plate_metadata,
     yaml_to_model,
 )
@@ -198,18 +197,7 @@ def init_deskew(input_zarr: str, output_zarr: str, config: str):
         with open_ome_zarr(Path(output_zarr) / "/".join(pk), mode="r+") as ds:
             ds.zattrs["extra_metadata"] = deskew_metadata
 
-    first_position = Path(input_zarr) / "/".join(position_keys[0])
-    first_output = Path(output_zarr) / "/".join(position_keys[0])
-    work_items = plan_single_position(first_position, first_output)
-
-    click.echo(f"Created {output_zarr} ({len(position_keys)} positions, {len(work_items)} chunks/pos)")
-
-    import json
-
-    for item in work_items:
-        click.echo(
-            f"WORK:{json.dumps({'in_ch': item.input_channel_indices, 'out_ch': item.output_channel_indices, 'in_t': item.input_time_indices, 'out_t': item.output_time_indices})}"
-        )
+    click.echo(f"Created {output_zarr} ({len(position_keys)} positions)")
 
     num_cpus, mem_per_cpu = estimate_resources(shape=shape, ram_multiplier=16, max_num_cpus=16)
     click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
