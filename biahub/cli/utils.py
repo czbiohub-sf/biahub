@@ -1,19 +1,12 @@
-import contextlib
-import inspect
-import io
-import itertools
-import multiprocessing as mp
 import os
 
-from functools import partial
 from pathlib import Path
+from typing import Literal
 
-import click
 import numpy as np
 import yaml
 
-from iohub.ngff import Position, open_ome_zarr
-from iohub.ngff.models import TransformationMeta
+from iohub.ngff import open_ome_zarr
 from numpy.typing import DTypeLike
 from tqdm import tqdm
 
@@ -23,6 +16,21 @@ def get_submitit_cluster(local: bool = False) -> str:
     if os.environ.get("CI") == "true":
         return "debug"
     return "local" if local else "slurm"
+
+
+def resolve_ome_zarr_version(
+    reference_store_path: Path,
+    override: Literal["0.4", "0.5"] | None,
+) -> Literal["0.4", "0.5"]:
+    """Pick the OME-Zarr version to use for an output store.
+
+    When ``override`` is set it wins; otherwise the version is read from
+    ``reference_store_path`` so the output preserves the input's version.
+    """
+    if override is not None:
+        return override
+    with open_ome_zarr(str(reference_store_path), mode="r") as dataset:
+        return dataset.version
 
 
 def update_model(model_instance, update_dict):
@@ -43,89 +51,6 @@ def update_model(model_instance, update_dict):
 
     # Create a new instance with updated fields
     return model_instance.model_copy(update=updated_fields)
-
-
-# TODO: convert all code to use this function from now on
-def create_empty_hcs_zarr(
-    store_path: Path,
-    position_keys: list[tuple[str]],
-    channel_names: list[str],
-    shape: tuple[int],
-    chunks: tuple[int] = None,
-    scale: tuple[float] = (1, 1, 1, 1, 1),
-    dtype: DTypeLike = np.float32,
-    max_chunk_size_bytes=500e6,
-) -> None:
-    """
-    If the plate does not exist, create an empty zarr plate.
-
-    If the plate exists, append positions and channels if they are not
-    already in the plate.
-
-    Parameters
-    ----------
-    store_path : Path
-        hcs plate path
-    position_keys : list[Tuple[str]]
-        Position keys, will append if not present in the plate.
-        e.g. [("A", "1", "0"), ("A", "1", "1")]
-    shape : Tuple[int]
-    chunks : Tuple[int]
-    scale : Tuple[float]
-    channel_names : list[str]
-        Channel names, will append if not present in metadata.
-    dtype : DTypeLike
-
-    Modifying from recOrder
-    https://github.com/mehta-lab/recOrder/blob/d31ad910abf84c65ba927e34561f916651cbb3e8/recOrder/cli/utils.py#L12
-    """
-    MAX_CHUNK_SIZE = max_chunk_size_bytes  # in bytes
-    bytes_per_pixel = np.dtype(dtype).itemsize
-
-    # Limiting the chunking to 500MB
-    if chunks is None:
-        chunk_zyx_shape = list(shape[-3:])
-        # chunk_zyx_shape[-3] > 1 ensures while loop will not stall if single
-        # XY image is larger than MAX_CHUNK_SIZE
-        while (
-            chunk_zyx_shape[-3] > 1
-            and np.prod(chunk_zyx_shape) * bytes_per_pixel > MAX_CHUNK_SIZE
-        ):
-            chunk_zyx_shape[-3] = np.ceil(chunk_zyx_shape[-3] / 2).astype(int)
-        chunk_zyx_shape = tuple(chunk_zyx_shape)
-
-        chunks = 2 * (1,) + chunk_zyx_shape
-
-    # Create plate
-    output_plate = open_ome_zarr(
-        str(store_path), layout="hcs", mode="a", channel_names=channel_names
-    )
-    transform = [TransformationMeta(type="scale", scale=scale)]
-
-    # Create positions
-    for position_key in position_keys:
-        position_key_string = "/".join(position_key)
-        # Check if position is already in the store, if not create it
-        if position_key_string not in output_plate.zgroup:
-            position = output_plate.create_position(*position_key)
-            _ = position.create_zeros(
-                name="0",
-                shape=shape,
-                chunks=chunks,
-                dtype=dtype,
-                transform=transform,
-            )
-        else:
-            position = output_plate[position_key_string]
-
-    # Check if channel_names are already in the store, if not append them
-    for channel_name in channel_names:
-        # Read channel names directly from metadata to avoid race conditions
-        metadata_channel_names = [
-            channel.label for channel in position.metadata.omero.channels
-        ]
-        if channel_name not in metadata_channel_names:
-            position.append_channel(channel_name, resize_arrays=True)
 
 
 def get_output_paths(
@@ -185,246 +110,6 @@ def get_output_paths(
             list_output_path.append(Path(output_zarr_path, *path_strings))
 
     return list_output_path
-
-
-def apply_function_to_zyx_and_save(
-    func, position: Position, output_path: Path, t_idx: int, c_idx: int, **kwargs
-) -> None:
-    """Load a zyx array from a Position object, apply a transformation and save the result to file."""
-    click.echo(f"Processing c={c_idx}, t={t_idx}")
-
-    zyx_data = position[0][t_idx, c_idx]
-    if _check_nan_n_zeros(zyx_data):
-        click.echo(f"Skipping c={c_idx}, t={t_idx} due to all zeros or nans")
-    else:
-        # Apply function
-        processed_zyx = func(zyx_data, **kwargs)
-
-        # Write to file
-        with open_ome_zarr(output_path, mode="r+") as output_dataset:
-            output_dataset[0][t_idx, c_idx] = processed_zyx
-
-        click.echo(f"Finished Writing.. c={c_idx}, t={t_idx}")
-
-
-def apply_transform_to_zyx_and_save_v2(
-    func,
-    position: Position,
-    output_path: Path,
-    input_channel_indices: list[int],
-    output_channel_indices: list[int],
-    t_idx: int,
-    t_idx_out: int,
-    c_idx: int = None,
-    **kwargs,
-) -> None:
-    """Load a zyx array from a Position object, apply a transformation to CZYX or ZYX and save the result to file."""
-    # TODO: temporary fix to slumkit issue
-    if _is_nested(input_channel_indices):
-        input_channel_indices = [int(x) for x in input_channel_indices if x.isdigit()]
-    if _is_nested(output_channel_indices):
-        output_channel_indices = [int(x) for x in output_channel_indices if x.isdigit()]
-
-    # Check if t_idx should be added to the func kwargs
-    # This is needed when a different processing is needed for each time point, for example during stabilization
-    all_func_params = inspect.signature(func).parameters.keys()
-    if "t_idx" in all_func_params:
-        kwargs["t_idx"] = t_idx
-
-    # Process CZYX vs ZYX
-    if input_channel_indices is not None and len(input_channel_indices) > 0:
-        click.echo(f"Processing t={t_idx}")
-
-        czyx_data = position.data.oindex[t_idx, input_channel_indices]
-        if not _check_nan_n_zeros(czyx_data):
-            transformed_czyx = func(czyx_data, **kwargs)
-            # Write to file
-            with open_ome_zarr(output_path, mode="r+") as output_dataset:
-                output_dataset[0].oindex[t_idx_out, output_channel_indices] = transformed_czyx
-            click.echo(f"Finished Writing.. t={t_idx}")
-        else:
-            click.echo(f"Skipping t={t_idx} due to all zeros or nans")
-    else:
-        click.echo(f"Processing c={c_idx}, t={t_idx}")
-
-        czyx_data = position.data.oindex[t_idx, c_idx : c_idx + 1]
-        # Checking if nans or zeros and skip processing
-        if not _check_nan_n_zeros(czyx_data):
-            # Apply transformation
-            transformed_czyx = func(czyx_data, **kwargs)
-
-            # Write to file
-            with open_ome_zarr(output_path, mode="r+") as output_dataset:
-                output_dataset[0][t_idx_out, c_idx : c_idx + 1] = transformed_czyx
-
-            click.echo(f"Finished Writing.. c={c_idx}, t={t_idx}")
-        else:
-            click.echo(f"Skipping c={c_idx}, t={t_idx} due to all zeros or nans")
-
-
-def process_single_position(
-    func,
-    input_data_path: Path,
-    output_path: Path,
-    num_processes: int = mp.cpu_count(),
-    **kwargs,
-) -> None:
-    """Register a single position with multiprocessing parallelization over T and C."""
-    # Function to be applied
-    click.echo(f"Function to be applied: \t{func}")
-
-    # Get the reader and writer
-    click.echo(f"Input data path:\t{input_data_path}")
-    click.echo(f"Output data path:\t{str(output_path)}")
-    input_dataset = open_ome_zarr(str(input_data_path))
-    stdout_buffer = io.StringIO()
-    with contextlib.redirect_stdout(stdout_buffer):
-        input_dataset.print_tree()
-    click.echo(f" Input data tree: {stdout_buffer.getvalue()}")
-
-    T, C, _, _, _ = input_dataset.data.shape
-
-    # Check the arguments for the function
-    all_func_params = inspect.signature(func).parameters.keys()
-    # Extract the relevant kwargs for the function 'func'
-    func_args = {}
-    non_func_args = {}
-
-    for k, v in kwargs.items():
-        if k in all_func_params:
-            func_args[k] = v
-        else:
-            non_func_args[k] = v
-
-    # Write the settings into the metadata if existing
-    # TODO: alternatively we can throw all extra arguments as metadata.
-    if "extra_metadata" in non_func_args:
-        # For each dictionary in the nest
-        with open_ome_zarr(output_path, mode="r+") as output_dataset:
-            output_dataset.zattrs["extra_metadata"] = non_func_args["extra_metadata"]
-
-    # Loop through (T, C), deskewing and writing as we go
-    click.echo(f"\nStarting multiprocess pool with {num_processes} processes")
-    with mp.Pool(num_processes) as p:
-        p.starmap(
-            partial(
-                apply_function_to_zyx_and_save,
-                func,
-                input_dataset,
-                str(output_path),
-                **func_args,
-            ),
-            itertools.product(range(T), range(C)),
-        )
-
-
-# TODO: modifiy how we get the time and channesl like recOrder (isinstance(input, list) or instance(input,int) or all)
-def process_single_position_v2(
-    func,
-    input_data_path: Path,
-    output_path: Path,
-    time_indices: list | None = None,
-    time_indices_out: list | None = None,
-    input_channel_idx: list | None = None,
-    output_channel_idx: list | None = None,
-    num_processes: int = mp.cpu_count(),
-    **kwargs,
-) -> None:
-    """Register a single position with multiprocessing parallelization over T and C."""
-    if time_indices is None:
-        time_indices = [0]
-    if time_indices_out is None:
-        time_indices_out = [0]
-    if input_channel_idx is None:
-        input_channel_idx = []
-    if output_channel_idx is None:
-        output_channel_idx = []
-
-    # Function to be applied
-    click.echo(f"Function to be applied: \t{func}")
-
-    # Get the reader and writer
-    click.echo(f"Input data path:\t{input_data_path}")
-    click.echo(f"Output data path:\t{str(output_path)}")
-    input_dataset = open_ome_zarr(str(input_data_path))
-    stdout_buffer = io.StringIO()
-    with contextlib.redirect_stdout(stdout_buffer):
-        input_dataset.print_tree()
-    click.echo(f" Input data tree: {stdout_buffer.getvalue()}")
-
-    # Find time indices
-    if time_indices == "all":
-        time_indices = range(input_dataset.data.shape[0])
-        time_indices_out = time_indices
-    elif isinstance(time_indices, list):
-        time_indices_out = range(len(time_indices))
-
-    # Check for invalid times
-    time_ubound = input_dataset.data.shape[0] - 1
-    if np.max(time_indices) > time_ubound:
-        raise ValueError(
-            f"time_indices = {time_indices} includes a time index beyond the maximum index of the dataset = {time_ubound}"
-        )
-
-    # Check the arguments for the function
-    all_func_params = inspect.signature(func).parameters.keys()
-    # Extract the relevant kwargs for the function 'func'
-    func_args = {}
-    non_func_args = {}
-
-    for k, v in kwargs.items():
-        if k in all_func_params:
-            func_args[k] = v
-        else:
-            non_func_args[k] = v
-
-    # Write the settings into the metadata if existing
-    if "extra_metadata" in non_func_args:
-        # For each dictionary in the nest
-        with open_ome_zarr(output_path, mode="r+") as output_dataset:
-            output_dataset.zattrs["extra_metadata"] = non_func_args["extra_metadata"]
-
-    # Loop through (T, C), deskewing and writing as we go
-    click.echo(f"\nStarting multiprocess pool with {num_processes} processes")
-
-    if input_channel_idx is None or len(input_channel_idx) == 0:
-        # If C is not empty, use itertools.product with both ranges
-        _, C, _, _, _ = input_dataset.data.shape
-        iterable = [
-            (time_idx, time_idx_out, c)
-            for (time_idx, time_idx_out), c in itertools.product(
-                zip(time_indices, time_indices_out, strict=True), range(C)
-            )
-        ]
-        partial_apply_transform_to_zyx_and_save = partial(
-            apply_transform_to_zyx_and_save_v2,
-            func,
-            input_dataset,
-            output_path / Path(*input_data_path.parts[-3:]),
-            input_channel_idx,
-            output_channel_idx,
-            **func_args,
-        )
-    else:
-        # If C is empty, use only the range for time_indices
-        iterable = list(zip(time_indices, time_indices_out, strict=True))
-        partial_apply_transform_to_zyx_and_save = partial(
-            apply_transform_to_zyx_and_save_v2,
-            func,
-            input_dataset,
-            output_path / Path(*input_data_path.parts[-3:]),
-            input_channel_idx,
-            output_channel_idx,
-            c_idx=0,
-            **func_args,
-        )
-
-    click.echo(f"\nStarting multiprocess pool with {num_processes} processes")
-    with mp.Pool(num_processes) as p:
-        p.starmap(
-            partial_apply_transform_to_zyx_and_save,
-            iterable,
-        )
 
 
 def copy_n_paste(zyx_data: np.ndarray, zyx_slicing_params: list) -> np.ndarray:
@@ -601,10 +286,6 @@ def yaml_to_model(yaml_path: Path, model):
         raise FileNotFoundError(f"The YAML file '{yaml_path}' does not exist.") from None
 
     return model(**raw_settings)
-
-
-def _is_nested(lst):
-    return any(isinstance(i, list) for i in lst) or any(isinstance(i, str) for i in lst)
 
 
 def _check_nan_n_zeros(input_array: np.ndarray) -> bool:

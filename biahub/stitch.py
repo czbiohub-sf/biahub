@@ -21,7 +21,12 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import estimate_resources, get_submitit_cluster, yaml_to_model
+from biahub.cli.utils import (
+    estimate_resources,
+    get_submitit_cluster,
+    resolve_ome_zarr_version,
+    yaml_to_model,
+)
 from biahub.settings import StitchSettings
 
 
@@ -361,9 +366,18 @@ def stitch_cli(
     if not all(channel in input_channels for channel in settings.channels):
         raise ValueError("Invalid channel(s) provided.")
 
-    # Create output store
+    # Create output store. Per-well output shapes differ, so we open the
+    # plate directly rather than going through `create_empty_plate`, but we
+    # still route the OME-Zarr version through `resolve_ome_zarr_version`
+    # so the output matches the input (or the settings override).
     output_plate = open_ome_zarr(
-        output_dirpath, layout="hcs", mode="w", channel_names=settings.channels
+        output_dirpath,
+        layout="hcs",
+        mode="w",
+        channel_names=settings.channels,
+        version=resolve_ome_zarr_version(
+            input_position_dirpaths[0], settings.output_ome_zarr_version
+        ),
     )
 
     # Group shift metadata by well

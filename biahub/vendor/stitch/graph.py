@@ -1,11 +1,26 @@
 import numpy as np
 
+from numpy.typing import NDArray
 
-def connectivity(points: np.array) -> dict:
-    """Build the connectivity graph between neighboring grid points.
 
-    Preserves the input order of points: when fed Hilbert-curve order, the
-    returned edges come out in Hilbert order.
+def connectivity(points: NDArray) -> dict:
+    """Build the connectivity graph between 4-connected (right / down) neighbors.
+
+    Each input point is paired with its right (``+x``) and down (``+y``)
+    neighbor when present. The traversal preserves input order, so when
+    fed Hilbert-curve order the returned edges come out in Hilbert order.
+    Diagonal neighbors are not considered.
+
+    Parameters
+    ----------
+    points : numpy.ndarray
+        Integer array of shape ``(N, 2)`` of ``(x, y)`` grid coordinates.
+
+    Returns
+    -------
+    dict[str, list[tuple[int, int]]]
+        Mapping from edge index (string-typed) to a 2-element list
+        ``[(x, y), (x', y')]`` representing the edge endpoints.
     """
     point_set = set(map(tuple, points))
     edges = dict()
@@ -17,12 +32,25 @@ def connectivity(points: np.array) -> dict:
             if neighbor in point_set:
                 edges[f"{edge_inx}"] = [(x, y), neighbor]
                 edge_inx += 1
-                # edges.add(tuple(sorted([(x, y), neighbor])))
     return edges
 
 
 def hilbert_index_to_xy(n, d):
-    """Convert a 1D Hilbert index to 2D coordinates in an n x n grid."""
+    """Convert a 1D Hilbert index to 2D ``(x, y)`` coordinates on an n x n grid.
+
+    Parameters
+    ----------
+    n : int
+        Side length of the (square) grid. Must be a power of 2 for the
+        Hilbert curve to fill the entire grid.
+    d : int
+        Hilbert-curve index, ``0 <= d < n * n``.
+
+    Returns
+    -------
+    numpy.ndarray
+        Two-element integer array ``[x, y]``.
+    """
     x = y = 0
     t = d
     s = 1
@@ -41,9 +69,21 @@ def hilbert_index_to_xy(n, d):
 
 
 def generate_hilbert_curve(n):
-    """Generate the Hilbert curve order for an ``n x n`` grid.
+    """Generate the Hilbert-curve traversal of an ``n x n`` grid.
 
-    Only fills the entire grid if ``n`` is a power of 2.
+    Only fills the entire grid when ``n`` is a power of 2; otherwise the
+    output is the prefix of the next-power-of-2 curve that fits.
+
+    Parameters
+    ----------
+    n : int
+        Side length of the grid.
+
+    Returns
+    -------
+    numpy.ndarray
+        Integer array of shape ``(n * n, 2)``: one ``(x, y)`` row per
+        Hilbert-index in increasing order.
     """
     order = []
     for i in range(n * n):
@@ -51,8 +91,24 @@ def generate_hilbert_curve(n):
     return np.asarray(order)
 
 
-def hilbert_over_points(points: np.array) -> np.array:
-    """Return the Hilbert-curve order of the given set of grid points."""
+def hilbert_over_points(points: NDArray) -> NDArray:
+    """Return the Hilbert-curve order of the given set of grid points.
+
+    Generates the Hilbert curve over the smallest power-of-2 grid that
+    contains the input bounding box, then keeps only the points present
+    in ``points`` (preserving Hilbert order).
+
+    Parameters
+    ----------
+    points : numpy.ndarray
+        Integer array of shape ``(N, 2)`` of ``(x, y)`` grid coordinates.
+
+    Returns
+    -------
+    numpy.ndarray
+        Integer array of shape ``(N, 2)`` with the same set of points
+        reordered along the Hilbert curve.
+    """
     n = int(np.max(points) + 1)
     n_full_curve = 1 if n == 0 else 1 << (n - 1).bit_length()
     hilbert_curve = generate_hilbert_curve(n_full_curve)

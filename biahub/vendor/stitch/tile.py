@@ -5,6 +5,7 @@ import numpy as np
 import scipy
 
 from iohub import open_ome_zarr
+from numpy.typing import NDArray
 from tqdm import tqdm
 
 from . import connect
@@ -111,7 +112,7 @@ class TileCache:
         return aug_tile
 
 
-def augment_tile(tile: np.ndarray, flipud: bool, fliplr: bool, rot90: int) -> np.array:
+def augment_tile(tile: NDArray, flipud: bool, fliplr: bool, rot90: int) -> NDArray:
     """Augment a tile with flips and 90-degree rotations."""
     if flipud:
         tile = np.flip(tile, axis=-2)
@@ -123,7 +124,7 @@ def augment_tile(tile: np.ndarray, flipud: bool, fliplr: bool, rot90: int) -> np
 
 
 def offset(
-    image_a: np.array, image_b: np.array, relation: tuple, overlap: int
+    image_a: NDArray, image_b: NDArray, relation: tuple, overlap: int
 ) -> TranslationRegistrationModel:
     """Register two neighboring tiles and return a shift + confidence model.
 
@@ -170,7 +171,43 @@ def pairwise_shifts(
     channel_index: int = 0,
     z_index: int = 0,
 ) -> list:
-    """Estimate pairwise phase-correlation shifts between neighboring FOVs in a well."""
+    """Estimate pairwise phase-correlation shifts between neighboring FOVs in a well.
+
+    FOV grid coordinates are parsed from FOV names assuming the ``XXXYYY``
+    convention. Neighbors are visited in Hilbert-curve order to keep adjacent
+    edges close in iteration time, improving the tile-cache hit rate. Each
+    edge is registered by phase correlation on the overlap strip.
+
+    Parameters
+    ----------
+    positions : list[str]
+        FOV names within the well, each formatted as ``XXXYYY`` (or
+        ``row/col/XXXYYY``; only the trailing token is parsed).
+    store_path : str | Path
+        Path to the OME-Zarr store containing the FOVs.
+    well : str
+        Well key within the store, e.g. ``"0/4"``.
+    flipud, fliplr : bool
+        Whether to flip each tile along the Y / X axis before registration.
+    rot90 : int
+        Number of 90-degree rotations to apply to each tile (0-3).
+    overlap : int, optional
+        Estimated overlap in pixels between adjacent tiles. Used to size the
+        ROI strip passed to phase correlation. Default 150.
+    channel_index : int, optional
+        Channel to read from each FOV (default 0).
+    z_index : int, optional
+        Z slice to read from each FOV (default 0). Stitching is computed in 2D.
+
+    Returns
+    -------
+    edge_list : list[Edge]
+        One ``Edge`` per neighbor pair, each carrying its registration model.
+    confidence_dict : dict[str, list]
+        Per-edge record of ``[pos_a, pos_b, confidence]`` keyed by edge index.
+        ``pos_a``/``pos_b`` are 2-element ``[x, y]`` integer lists; the
+        confidence is a float. JSON/YAML safe.
+    """
     # get neighboring tiles
     grid_positions = parse_positions(positions)
     hilbert_order = hilbert_over_points(grid_positions)
@@ -207,7 +244,40 @@ def pairwise_shifts(
 def optimal_positions(
     edge_list: list, tile_lut: dict, well: str, tile_size: tuple, initial_guess: dict = None
 ) -> dict:
-    """Solve the pairwise-shift graph for globally consistent absolute tile positions."""
+    """Solve the pairwise-shift graph for globally consistent absolute tile positions.
+
+    Builds a sparse incidence matrix over the tile-edge graph and solves
+    ``min_x |A x - y|_1`` (plain L1 regression) once per spatial axis to
+    recover absolute tile positions in pixel coordinates. The first tile is
+    pinned to the origin via an extra row, and outputs are zeroed so that
+    the minimum coordinate per axis is 0.
+
+    Parameters
+    ----------
+    edge_list : list[Edge]
+        Edges as returned by :func:`pairwise_shifts`. Each edge contributes
+        one row per axis to the incidence matrix.
+    tile_lut : dict[str, int]
+        Mapping from FOV name (``XXXYYY``) to row index in the incidence
+        matrix. Keys must cover every FOV referenced by ``edge_list``.
+    well : str
+        Well key, used to index into ``initial_guess``.
+    tile_size : tuple[int, int]
+        ``(Y, X)`` tile shape in pixels. Used to seed the initial guess
+        when ``initial_guess`` is ``None``; the resulting guess assumes a
+        square tile grid.
+    initial_guess : dict, optional
+        Per-well warm-start positions, structured as
+        ``{well: {"i": [...], "j": [...]}}``. When ``None``, an axis-aligned
+        guess derived from ``tile_size`` is used.
+
+    Returns
+    -------
+    dict[str, list[int]]
+        Mapping from ``"{well}/{fov_name}"`` to a 2-element ``[i, j]``
+        position in pixel coordinates, with the minimum per axis shifted
+        to 0. JSON/YAML safe.
+    """
     y_i = np.zeros(len(edge_list) + 1, dtype=np.float32)
     y_j = np.zeros(len(edge_list) + 1, dtype=np.float32)
 
