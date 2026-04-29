@@ -2,7 +2,7 @@ include { dataset_name; parse_resources; biahub_cmd } from './common'
 
 
 process init_track {
-    label 'cpu_small'
+    label 'cpu_local'
 
     input:
     val trigger
@@ -21,11 +21,10 @@ process init_track {
 
 process run_track {
     tag "${position}"
+    label 'gpu'
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time '2h'
-    queue 'gpu'
-    clusterOptions '--gres=gpu:1'
     maxRetries 1
     errorStrategy 'retry'
 

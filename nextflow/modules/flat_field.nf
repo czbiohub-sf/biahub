@@ -2,7 +2,7 @@ include { dataset_name; parse_resources; biahub_cmd } from './common'
 
 
 process init_flat_field {
-    label 'cpu_small'
+    label 'cpu_local'
 
     output:
     stdout
@@ -18,10 +18,10 @@ process init_flat_field {
 
 process run_flat_field {
     tag "${position}"
+    label 'cpu_preempted'
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
-    time '2h'
-    queue 'cpu'
+    time '1h'
     maxRetries 1
     errorStrategy 'retry'
 

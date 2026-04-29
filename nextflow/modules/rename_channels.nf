@@ -2,7 +2,7 @@ include { dataset_name; parse_resources; biahub_cmd } from './common'
 
 
 process init_resources_rename {
-    label 'cpu_small'
+    label 'cpu_local'
 
     input:
     val trigger
@@ -20,10 +20,10 @@ process init_resources_rename {
 
 process rename_channels {
     tag "${position}"
+    label 'cpu_preempted'
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time '30m'
-    queue 'cpu'
 
     input:
     tuple val(position), val(meta)

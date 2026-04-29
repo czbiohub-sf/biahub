@@ -18,7 +18,7 @@ def biahub_cmd() {
 }
 
 process init_chunks {
-    label 'cpu_small'
+    label 'cpu_local'
 
     input:
     val zarr_path
@@ -33,7 +33,7 @@ process init_chunks {
 }
 
 process list_positions {
-    label 'cpu_small'
+    label 'cpu_local'
 
     output:
     stdout

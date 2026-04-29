@@ -8,7 +8,7 @@ def viscy_cmd() {
 
 
 process init_virtual_stain {
-    label 'cpu_small'
+    label 'cpu_local'
 
     input:
     val trigger
@@ -28,7 +28,8 @@ process init_virtual_stain {
 }
 
 process run_virtual_stain_preprocess {
-    label 'cpu_medium'
+    label 'cpu_preempted'
+    time '1h'
 
     input:
     val trigger
@@ -48,11 +49,10 @@ process run_virtual_stain_preprocess {
 
 process run_virtual_stain {
     tag "${position}"
+    label 'gpu'
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time '2h'
-    queue 'gpu'
-    clusterOptions '--gres=gpu:1'
     maxRetries 1
     errorStrategy 'retry'
 

@@ -2,7 +2,8 @@ include { dataset_name; parse_resources; biahub_cmd } from './common'
 
 
 process estimate_crop {
-    label 'cpu_medium'
+    label 'cpu_preempted'
+    time '1h'
 
     input:
     val trigger
@@ -22,7 +23,7 @@ process estimate_crop {
 }
 
 process init_concatenate {
-    label 'cpu_small'
+    label 'cpu_local'
 
     input:
     val trigger
@@ -40,10 +41,10 @@ process init_concatenate {
 
 process run_concatenate {
     tag "${position}"
+    label 'cpu_preempted'
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time '2h'
-    queue 'cpu'
     maxRetries 1
     errorStrategy 'retry'
 

@@ -2,7 +2,7 @@ include { parse_resources; biahub_cmd } from './common'
 
 
 process init_resources_stabilization {
-    label 'cpu_small'
+    label 'cpu_local'
 
     input:
     tuple val(trigger), val(in_zarr), val(ram_mult)
@@ -20,10 +20,10 @@ process init_resources_stabilization {
 
 process estimate_stabilization_z_focus {
     tag "${position}"
+    label 'cpu_preempted'
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time '2h'
-    queue 'cpu'
     maxRetries 1
     errorStrategy 'retry'
 
@@ -45,10 +45,10 @@ process estimate_stabilization_z_focus {
 
 process estimate_stabilization_xy {
     tag "${position}"
+    label 'cpu_preempted'
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time '2h'
-    queue 'cpu'
     maxRetries 1
     errorStrategy 'retry'
 
@@ -71,7 +71,7 @@ process estimate_stabilization_xy {
 
 process combine_transforms {
     tag "${position}"
-    label 'cpu_small'
+    label 'cpu_local'
 
     input:
     tuple val(position), val(out_dir)
@@ -91,10 +91,10 @@ process combine_transforms {
 
 process estimate_stabilization_pcc {
     tag "${position}"
+    label 'cpu_preempted'
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time '2h'
-    queue 'cpu'
     maxRetries 1
     errorStrategy 'retry'
 
@@ -115,7 +115,8 @@ process estimate_stabilization_pcc {
 }
 
 process estimate_stabilization_beads {
-    label 'cpu_medium'
+    label 'cpu_preempted'
+    time '2h'
 
     input:
     tuple val(trigger), val(in_zarr), val(config), val(out_dir), val(bead_pos)
@@ -134,7 +135,7 @@ process estimate_stabilization_beads {
 }
 
 process init_stabilize {
-    label 'cpu_small'
+    label 'cpu_local'
 
     input:
     tuple val(trigger), val(in_zarr), val(out_zarr), val(config)
@@ -153,10 +154,10 @@ process init_stabilize {
 
 process run_stabilize {
     tag "${position}"
+    label 'cpu_preempted'
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time '2h'
-    queue 'cpu'
     maxRetries 1
     errorStrategy 'retry'
 

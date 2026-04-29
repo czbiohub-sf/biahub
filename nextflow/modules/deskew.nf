@@ -2,7 +2,7 @@ include { dataset_name; parse_resources; biahub_cmd } from './common'
 
 
 process init_deskew {
-    label 'cpu_small'
+    label 'cpu_local'
 
     input:
     val trigger
@@ -21,9 +21,10 @@ process init_deskew {
 
 process run_deskew {
     tag "${position}"
+    label 'cpu_preempted'
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
-    time '2h'
+    time '1h'
     maxRetries 1
     errorStrategy 'retry'
 

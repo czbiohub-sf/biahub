@@ -2,7 +2,7 @@ include { dataset_name; parse_resources; biahub_cmd } from './common'
 
 
 process init_reconstruct {
-    label 'cpu_small'
+    label 'cpu_local'
 
     input:
     val trigger
@@ -20,10 +20,10 @@ process init_reconstruct {
 }
 
 process compute_transfer_function {
+    label 'cpu_preempted'
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time '2h'
-    queue 'cpu'
 
     input:
     val meta
@@ -42,10 +42,10 @@ process compute_transfer_function {
 
 process run_apply_inv_tf {
     tag "${position}"
+    label 'cpu_preempted'
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time '6h'
-    queue 'cpu'
     maxRetries 1
     errorStrategy 'retry'
 

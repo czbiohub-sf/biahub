@@ -1,4 +1,4 @@
-include { dataset_name; biahub_cmd; init_chunks } from './common'
+include { dataset_name; biahub_cmd } from './common'
 
 
 def qc_cmd() {
@@ -8,16 +8,32 @@ def qc_cmd() {
 }
 
 
-process run_qc_chunk {
-    tag "${position}/${chunk.chunk_id}"
-    label 'cpu_medium'
-    time '1h'
-    queue 'cpu'
+process init_qc_fanout {
+    label 'cpu_local'
+
+    input:
+    tuple val(zarr_path), val(config_path)
+
+    output:
+    stdout
+
+    script:
+    """
+    ${biahub_cmd()} nf qc init-qc-fanout -i "${zarr_path}" -c "${config_path}"
+    """
+}
+
+
+process run_qc_chunked {
+    tag "${position}/${group}/${chunk_id}"
+    label 'cpu_preempted'
+    time '2h'
     maxRetries 1
     errorStrategy { task.exitStatus in [0, 1] ? 'ignore' : 'retry' }
 
     input:
-    tuple val(position), val(zarr_path), val(config_path), val(chunk)
+    tuple val(position), val(group), val(start), val(end), val(chunk_id),
+          val(zarr_path), val(config_path)
 
     output:
     val position
@@ -28,16 +44,45 @@ process run_qc_chunk {
         --config "${config_path}" \
         "${zarr_path}" \
         --mode metrics_only \
+        --metric-group ${group} \
         --no-merge \
-        --time-indices ${chunk.start}:${chunk.end} \
-        --chunk-id ${chunk.chunk_id} \
+        --time-indices ${start}:${end} \
+        --chunk-id ${chunk_id} \
+        'positions=["${position}"]'
+    """
+}
+
+
+process run_qc_position {
+    tag "${position}/${group}"
+    label 'cpu_preempted'
+    time '2h'
+    maxRetries 1
+    errorStrategy { task.exitStatus in [0, 1] ? 'ignore' : 'retry' }
+
+    input:
+    tuple val(position), val(group), val(zarr_path), val(config_path)
+
+    output:
+    val position
+
+    script:
+    """
+    ${qc_cmd()} run \
+        --config "${config_path}" \
+        "${zarr_path}" \
+        --mode metrics_only \
+        --metric-group ${group} \
+        --no-merge \
+        --chunk-id ${group} \
         'positions=["${position}"]'
     """
 }
 
 
 process merge_qc_stage {
-    label 'cpu_small'
+    label 'cpu_preempted'
+    time '30m'
     errorStrategy { task.exitStatus in [0, 1] ? 'ignore' : 'retry' }
 
     input:
@@ -60,7 +105,7 @@ process merge_qc_stage {
 
 
 process consolidate_qc {
-    label 'cpu_small'
+    label 'cpu_local'
 
     input:
     val all_qc_done
@@ -79,7 +124,7 @@ process consolidate_qc {
 
 
 process log_qc_summary {
-    label 'cpu_small'
+    label 'cpu_local'
 
     input:
     path summaries
@@ -95,7 +140,8 @@ process log_qc_summary {
 
 
 process final_merge_and_report {
-    label 'cpu_medium'
+    label 'cpu_preempted'
+    time '1h'
 
     input:
     val output_dir
@@ -129,16 +175,25 @@ workflow qc_stage_wf {
     stage_name
 
     main:
-    barrier = prev_done.map { 'done' }
-
-    qc_done = barrier
-        .map { zarr_path }
-        | init_chunks
+    fanout = prev_done
+        .map { tuple(zarr_path, config_path) }
+        | init_qc_fanout
         | splitCsv()
-        | map { row -> [row[0], zarr_path, config_path,
-                        [start: row[1], end: row[2], chunk_id: row[3]]] }
-        | run_qc_chunk
-        | collect
+
+    // position-scoped groups: time-chunked (start/end non-empty)
+    chunked_done = fanout
+        .filter { row -> row[2] != '' }
+        .map { row -> tuple(row[0], row[1], row[2], row[3], row[4],
+                            zarr_path, config_path) }
+        | run_qc_chunked
+
+    // temporal-scoped groups: per-position, all timepoints (start/end empty)
+    position_done = fanout
+        .filter { row -> row[2] == '' }
+        .map { row -> tuple(row[0], row[1], zarr_path, config_path) }
+        | run_qc_position
+
+    qc_done = chunked_done.mix(position_done) | collect
 
     summary = qc_done
         .map { done -> tuple(zarr_path, done, config_path, stage_name) }
