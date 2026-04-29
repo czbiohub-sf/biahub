@@ -163,6 +163,15 @@ output_dir/
 | `local` | Local | Pass `--biahub_project` to use `uv run` (see [Environment setup](#environment-setup)) |
 | `slurm` | SLURM | Submits to `cpu` queue; deskew uses `gpu` queue with `--gres=gpu:1` |
 
+## DAG diagrams
+
+The pipeline DAG PNGs are generated from Graphviz `.dot` source files in this directory:
+
+```bash
+dot -Tpng -Gdpi=150 example-flatfield-deskew-reconstruct.dot -o example-flatfield-deskew-reconstruct.png
+dot -Tpng -Gdpi=150 mantis-v2-timelapse.dot -o mantis-v2-timelapse.png
+```
+
 ## Nextflow reports
 
 After a run completes, reports are written to `nextflow/output/`:
@@ -195,6 +204,20 @@ biahub nf run-deskew -i <input.zarr> -o <output.zarr> -p <position> -c <config.y
 biahub nf init-reconstruct -i <input.zarr> -o <output.zarr> -c <config.yml>
 biahub nf compute-transfer-function -i <input.zarr> -t <tf.zarr> -c <config.yml>
 biahub nf run-apply-inv-tf -i <input.zarr> -o <output.zarr> -t <tf.zarr> -p <position> -c <config.yml>
+biahub nf qc init-chunks -i <plate.zarr>
 ```
 
 Each command is a single unit of work (no SLURM/submitit). Nextflow handles distribution and scheduling.
+
+### QC fan-out
+
+`biahub nf qc init-chunks` emits a headerless CSV to stdout with one row per `(position, time-chunk)` pair:
+
+```
+A/1/0,0,25,t0-24
+A/1/0,25,50,t25-49
+B/1/0,0,25,t0-24
+...
+```
+
+Nextflow consumes this directly via the built-in `splitCsv` operator — no custom Groovy parsing required. Each CSV row maps to one `run_qc_chunk` process invocation.
