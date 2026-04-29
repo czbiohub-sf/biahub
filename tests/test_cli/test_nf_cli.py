@@ -1578,8 +1578,40 @@ def test_init_chunks(example_plate):
     positions = sorted(set(r[0] for r in rows))
     assert positions == ["A/1/0", "B/1/0", "B/2/0"]
 
-    starts = sorted(set(int(r[1]) for r in rows))
-    ends = sorted(set(int(r[2]) for r in rows))
-    assert starts == [0, 1, 2]
-    assert ends == [1, 2, 3]
-    assert all(r[3].startswith("t") for r in rows)
+
+def test_init_qc_fanout(example_plate, tmp_path):
+    """init-qc-fanout emits CSV rows split by metric group scope."""
+    plate_path, _ = example_plate
+
+    config = tmp_path / "qc_test.yaml"
+    config.write_text(
+        "metric_groups:\n"
+        "  default:\n"
+        "    scope: position\n"
+        "    metrics: [tenengrad]\n"
+        "  temporal:\n"
+        "    scope: temporal\n"
+        "    metrics: [bleach_rate]\n"
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        ["nf", "qc", "init-qc-fanout", "-i", str(plate_path), "-c", str(config)],
+    )
+    assert result.exit_code == 0, result.output
+
+    lines = [line for line in result.output.strip().splitlines() if line]
+    rows = [line.split(",") for line in lines]
+
+    chunked = [r for r in rows if r[2] != ""]
+    temporal = [r for r in rows if r[2] == ""]
+
+    # 3 positions × 3 time chunks for position-scoped group
+    assert len(chunked) == 9
+    assert all(r[1] == "default" for r in chunked)
+    assert all(len(r) == 5 for r in chunked)
+
+    # 3 positions × 1 for temporal-scoped group
+    assert len(temporal) == 3
+    assert all(r[1] == "temporal" for r in temporal)

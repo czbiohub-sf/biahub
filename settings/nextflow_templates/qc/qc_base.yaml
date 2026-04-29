@@ -13,6 +13,9 @@ metric_groups:
       - signal_to_noise
       - blank
       - tenengrad
+  temporal:
+    scope: temporal
+    metrics:
       - bleach_rate
 
 metrics:
