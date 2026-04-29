@@ -8,7 +8,6 @@ params.flat_field_config  = null
 params.deskew_config      = null
 params.reconstruct_config = null
 params.predict_config     = null
-params.num_threads      = 1
 params.biahub_project     = null
 params.viscy_project      = null
 params.work_dir           = null

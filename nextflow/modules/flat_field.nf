@@ -37,8 +37,7 @@ process run_flat_field {
         -i "${params.input_zarr}" \
         -o "${params.output_dir}/0-flatfield/${dataset_name()}.zarr" \
         -p "${position}" \
-        -c "${params.flat_field_config}" \
-        -j ${task.cpus}
+        -c "${params.flat_field_config}"
     """
 }
 

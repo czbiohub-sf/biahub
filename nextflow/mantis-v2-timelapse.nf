@@ -12,7 +12,6 @@ params.track_config        = null
 params.concatenate_config  = null
 params.rename_prefix       = ""
 params.rename_suffix       = ""
-params.num_threads         = 1
 params.biahub_project      = null
 params.viscy_project       = null
 params.work_dir            = null

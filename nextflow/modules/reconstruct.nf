@@ -15,8 +15,7 @@ process init_reconstruct {
     ${biahub_cmd()} nf init-reconstruct \
         -i "${params.output_dir}/1-deskew/${dataset_name()}.zarr" \
         -o "${params.output_dir}/2-reconstruct/${dataset_name()}.zarr" \
-        -c "${params.reconstruct_config}" \
-        -j ${params.num_threads}
+        -c "${params.reconstruct_config}"
     """
 }
 
@@ -63,8 +62,7 @@ process run_apply_inv_tf {
         -o "${params.output_dir}/2-reconstruct/${dataset_name()}.zarr" \
         -t "${params.output_dir}/2-reconstruct/transfer_function_${dataset_name()}.zarr" \
         -p "${position}" \
-        -c "${params.output_dir}/2-reconstruct/reconstruct_resolved.yml" \
-        -j ${params.num_threads}
+        -c "${params.output_dir}/2-reconstruct/reconstruct_resolved.yml"
     """
 }
 

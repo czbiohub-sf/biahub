@@ -799,15 +799,12 @@ def test_run_stabilize(tmp_path, example_plate):
                 "A/1/0",
                 "-c",
                 str(config_path),
-                "-j",
-                "2",
             ],
         )
 
         assert result.exit_code == 0, result.output
         mock_process.assert_called_once()
         call_kwargs = mock_process.call_args
-        assert call_kwargs.kwargs["num_threads"] == 2
         assert "list_of_shifts" in call_kwargs.kwargs
         assert "output_shape" in call_kwargs.kwargs
 
@@ -1142,15 +1139,12 @@ def test_run_deconvolve(tmp_path, example_plate):
                 "A/1/0",
                 "-c",
                 str(config_path),
-                "-j",
-                "2",
             ],
         )
 
         assert result.exit_code == 0, result.output
         mock_process.assert_called_once()
         call_kwargs = mock_process.call_args
-        assert call_kwargs.kwargs["num_threads"] == 2
         assert "transfer_function_store_path" in call_kwargs.kwargs
         assert "regularization_strength" in call_kwargs.kwargs
 
@@ -1468,15 +1462,11 @@ def test_run_register(tmp_path, example_plate):
                 "A/1/0",
                 "-c",
                 str(config_path),
-                "-j",
-                "2",
             ],
         )
 
         assert result.exit_code == 0, result.output
         assert mock_process.call_count >= 1
-        first_call = mock_process.call_args_list[0]
-        assert first_call.kwargs["num_threads"] == 2
 
 
 # ---------------------------------------------------------------------------

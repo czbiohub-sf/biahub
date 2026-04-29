@@ -6,12 +6,17 @@ import click
 import numpy as np
 
 from iohub.ngff import open_ome_zarr
-from iohub.ngff.utils import create_empty_plate, process_single_position
+from iohub.ngff.utils import (
+    apply_transform_to_tczyx_and_save,
+    create_empty_plate,
+    process_single_position,
+)
 
 from biahub.cli.nf_qc import nf_qc_cli
 from biahub.cli.utils import (
     copy_position_metadata,
     estimate_resources,
+    plan_single_position,
     read_plate_metadata,
     yaml_to_model,
 )
@@ -21,7 +26,12 @@ logger = logging.getLogger(__name__)
 
 @click.group("nf")
 def nf_cli():
-    """Nextflow-oriented commands for single-unit-of-work processing."""
+    """Nextflow-oriented commands for single-unit-of-work processing.
+
+    Nextflow owns all parallelism: each command processes one position
+    serially (num_threads defaults to 1 in iohub's process_single_position).
+    Do not add internal multiprocessing/threading here.
+    """
 
 
 nf_cli.add_command(nf_qc_cli)
@@ -94,9 +104,8 @@ def init_flat_field(input_zarr: str, output_zarr: str, config: str):
 @click.option("--output-zarr", "-o", required=True, type=click.Path(exists=True))
 @click.option("--position", "-p", required=True)
 @click.option("--config", "-c", required=True, type=click.Path(exists=True))
-@click.option("--num-threads", "-j", default=1, type=int)
 def run_flat_field(
-    input_zarr: str, output_zarr: str, position: str, config: str, num_threads: int
+    input_zarr: str, output_zarr: str, position: str, config: str
 ):
     """Apply flat-field correction to a single position (all timepoints)."""
     from biahub.flat_field_correction import czyx_flat_field_correction
@@ -115,7 +124,6 @@ def run_flat_field(
         czyx_flat_field_correction,
         input_position,
         output_position,
-        num_threads=num_threads,
         channel_names=channel_names,
         all_channel_names=all_channel_names,
     )
@@ -180,7 +188,24 @@ def init_deskew(input_zarr: str, output_zarr: str, config: str):
         version="0.5",
     )
     copy_position_metadata(Path(input_zarr), Path(output_zarr))
-    click.echo(f"Created {output_zarr} ({len(position_keys)} positions)")
+
+    deskew_metadata = {"deskew": settings.model_dump()}
+    for pk in position_keys:
+        with open_ome_zarr(Path(output_zarr) / "/".join(pk), mode="r+") as ds:
+            ds.zattrs["extra_metadata"] = deskew_metadata
+
+    first_position = Path(input_zarr) / "/".join(position_keys[0])
+    first_output = Path(output_zarr) / "/".join(position_keys[0])
+    work_items = plan_single_position(first_position, first_output)
+
+    click.echo(f"Created {output_zarr} ({len(position_keys)} positions, {len(work_items)} chunks/pos)")
+
+    import json
+
+    for item in work_items:
+        click.echo(
+            f"WORK:{json.dumps({'in_ch': item.input_channel_indices, 'out_ch': item.output_channel_indices, 'in_t': item.input_time_indices, 'out_t': item.output_time_indices})}"
+        )
 
     num_cpus, mem_per_cpu = estimate_resources(shape=shape, ram_multiplier=16, max_num_cpus=16)
     click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
@@ -191,8 +216,11 @@ def init_deskew(input_zarr: str, output_zarr: str, config: str):
 @click.option("--output-zarr", "-o", required=True, type=click.Path(exists=True))
 @click.option("--position", "-p", required=True)
 @click.option("--config", "-c", required=True, type=click.Path(exists=True))
-def run_deskew(input_zarr: str, output_zarr: str, position: str, config: str):
-    """Deskew a single position (all timepoints and channels)."""
+@click.option("--work-item", "-w", default=None, help="JSON work item from init-deskew")
+def run_deskew(
+    input_zarr: str, output_zarr: str, position: str, config: str, work_item: str | None
+):
+    """Deskew a single position or a single (C, T) chunk."""
     from biahub.deskew import _czyx_deskew_data
     from biahub.settings import DeskewSettings
 
@@ -200,23 +228,37 @@ def run_deskew(input_zarr: str, output_zarr: str, position: str, config: str):
     output_position = Path(output_zarr) / position
     settings = yaml_to_model(Path(config), DeskewSettings)
 
-    import torch
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    process_single_position(
-        _czyx_deskew_data,
-        input_position,
-        output_position,
-        num_threads=1,
-        device=device,
+    func_kwargs = dict(
+        device="cpu",
         ls_angle_deg=settings.ls_angle_deg,
         px_to_scan_ratio=settings.px_to_scan_ratio,
         keep_overhang=settings.keep_overhang,
         average_n_slices=settings.average_n_slices,
         overhang_fill=settings.overhang_fill,
-        extra_metadata={"deskew": settings.model_dump()},
     )
+
+    if work_item is not None:
+        import json
+
+        wi = json.loads(work_item)
+        apply_transform_to_tczyx_and_save(
+            _czyx_deskew_data,
+            input_position,
+            output_position,
+            input_channel_indices=wi["in_ch"],
+            output_channel_indices=wi["out_ch"],
+            input_time_indices=wi["in_t"],
+            output_time_indices=wi["out_t"],
+            **func_kwargs,
+        )
+    else:
+        process_single_position(
+            _czyx_deskew_data,
+            input_position,
+            output_position,
+            extra_metadata={"deskew": settings.model_dump()},
+            **func_kwargs,
+        )
 
     click.echo(f"Deskew done: {position}")
 
@@ -255,8 +297,7 @@ def _upsampled_zyx(settings, zyx_shape: tuple[int, int, int]) -> tuple[int, int,
 @click.option("--input-zarr", "-i", required=True, type=click.Path(exists=True))
 @click.option("--output-zarr", "-o", required=True, type=click.Path())
 @click.option("--config", "-c", required=True, type=click.Path(exists=True))
-@click.option("--num-threads", "-j", default=1, type=int)
-def init_reconstruct(input_zarr: str, output_zarr: str, config: str, num_threads: int):
+def init_reconstruct(input_zarr: str, output_zarr: str, config: str):
     """Create empty output zarr and estimate resources for reconstruction.
 
     Reads post-deskew pixel sizes from the input zarr scale metadata and
@@ -315,7 +356,7 @@ def init_reconstruct(input_zarr: str, output_zarr: str, config: str, num_threads
     click.echo(f"Created {output_zarr} ({len(position_keys)} positions)")
 
     settings = yaml_to_model(resolved_config, ReconstructionSettings)
-    num_cpus, mem_per_cpu = wo_estimate_resources(list(shape), settings, num_threads)
+    num_cpus, mem_per_cpu = wo_estimate_resources(list(shape), settings, 1)
     click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
 
     uZ, uY, uX = _upsampled_zyx(settings, (Z, Y, X))
@@ -352,14 +393,12 @@ def compute_transfer_function(input_zarr: str, tf_path: str, config: str):
 @click.option("--tf-path", "-t", required=True, type=click.Path(exists=True))
 @click.option("--position", "-p", required=True)
 @click.option("--config", "-c", required=True, type=click.Path(exists=True))
-@click.option("--num-threads", "-j", default=1, type=int)
 def run_apply_inv_tf(
     input_zarr: str,
     output_zarr: str,
     tf_path: str,
     position: str,
     config: str,
-    num_threads: int,
 ):
     """Apply inverse transfer function to a single position."""
     from waveorder.cli.apply_inverse_transfer_function import (
@@ -378,7 +417,7 @@ def run_apply_inv_tf(
         Path(tf_path),
         config_path,
         output_position,
-        num_threads,
+        1,
         output_metadata["channel_names"],
     )
     click.echo(f"Reconstruction done: {position}")
@@ -771,8 +810,7 @@ def init_concatenate(config: str, output_zarr: str):
 @click.option("--config", "-c", required=True, type=click.Path(exists=True))
 @click.option("--output-zarr", "-o", required=True, type=click.Path(exists=True))
 @click.option("--position", "-p", required=True)
-@click.option("--num-threads", "-j", default=1, type=int)
-def run_concatenate(config: str, output_zarr: str, position: str, num_threads: int):
+def run_concatenate(config: str, output_zarr: str, position: str):
     """Copy and crop data from all input stores for one position into output."""
     from biahub.cli.utils import copy_n_paste
     from biahub.concatenate import get_channel_combiner_metadata
@@ -833,7 +871,6 @@ def run_concatenate(config: str, output_zarr: str, position: str, num_threads: i
             output_channel_indices=output_ch_idx,
             input_time_indices=input_time_indices,
             output_time_indices=list(range(len(input_time_indices))),
-            num_threads=num_threads,
             zyx_slicing_params=zyx_slicing_params,
         )
 
@@ -934,13 +971,11 @@ def init_stabilize(input_zarr: str, output_zarr: str, config: str):
 @click.option("--output-zarr", "-o", required=True, type=click.Path(exists=True))
 @click.option("--position", "-p", required=True)
 @click.option("--config", "-c", required=True, type=click.Path(exists=True))
-@click.option("--num-threads", "-j", default=1, type=int)
 def run_stabilize(
     input_zarr: str,
     output_zarr: str,
     position: str,
     config: str,
-    num_threads: int,
 ):
     """Apply precomputed stabilization transforms to a single position."""
     from biahub.settings import StabilizationSettings
@@ -978,7 +1013,6 @@ def run_stabilize(
         input_channel_indices=channel_indices,
         output_channel_indices=channel_indices,
         input_time_indices=time_indices,
-        num_threads=num_threads,
         list_of_shifts=combined_mats,
         output_shape=(out_Z, out_Y, out_X),
     )
@@ -1352,14 +1386,12 @@ def init_deconvolve(
 @click.option("--tf-zarr", required=True, type=click.Path(exists=True))
 @click.option("--position", "-p", required=True)
 @click.option("--config", "-c", required=True, type=click.Path(exists=True))
-@click.option("--num-threads", "-j", default=1, type=int)
 def run_deconvolve(
     input_zarr: str,
     output_zarr: str,
     tf_zarr: str,
     position: str,
     config: str,
-    num_threads: int,
 ):
     """Apply deconvolution to a single position using precomputed transfer function."""
     from biahub.deconvolve import deconvolve
@@ -1373,7 +1405,6 @@ def run_deconvolve(
         deconvolve,
         str(input_position),
         str(output_position),
-        num_threads=num_threads,
         transfer_function_store_path=str(tf_zarr),
         regularization_strength=float(settings.regularization_strength),
     )
@@ -1686,14 +1717,12 @@ def nf_init_register(
 @click.option("--output-zarr", "-o", required=True, type=click.Path(exists=True))
 @click.option("--position", "-p", required=True)
 @click.option("--config", "-c", required=True, type=click.Path(exists=True))
-@click.option("--num-threads", "-j", default=1, type=int)
 def nf_run_register(
     source_zarr: str,
     target_zarr: str,
     output_zarr: str,
     position: str,
     config: str,
-    num_threads: int,
 ):
     """Apply registration transform to a single position."""
     from biahub.cli.utils import copy_n_paste_czyx
@@ -1767,7 +1796,6 @@ def nf_run_register(
             input_channel_indices=source_input_ch,
             output_channel_indices=source_output_ch,
             input_time_indices=time_indices,
-            num_threads=num_threads,
             **affine_kwargs,
         )
 
@@ -1787,7 +1815,6 @@ def nf_run_register(
             input_channel_indices=target_input_ch,
             output_channel_indices=target_output_ch,
             input_time_indices=time_indices,
-            num_threads=num_threads,
             **copy_kwargs,
         )
 

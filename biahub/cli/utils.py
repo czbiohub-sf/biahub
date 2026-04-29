@@ -6,6 +6,8 @@ import logging
 import multiprocessing as mp
 import os
 
+from collections import defaultdict
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 
@@ -747,6 +749,88 @@ def get_empty_frame_indices(input_array: np.ndarray) -> list[int]:
 
     else:
         raise ValueError("Input array must be 3D.")
+
+
+@dataclass(frozen=True)
+class WorkItem:
+    """A single (channel_group, time_batch) unit of work for Nextflow fan-out."""
+
+    input_channel_indices: list[int] | slice
+    output_channel_indices: list[int] | slice
+    input_time_indices: list[int]
+    output_time_indices: list[int]
+
+
+def plan_single_position(
+    input_position_path: Path,
+    output_position_path: Path,
+    input_channel_indices: list[slice] | list[list[int]] | None = None,
+    output_channel_indices: list[slice] | list[list[int]] | None = None,
+    input_time_indices: list[int] | None = None,
+    output_time_indices: list[int] | None = None,
+) -> list[WorkItem]:
+    """Compute shard-aligned (C, T) work items without executing any transforms.
+
+    Mirrors the chunking logic in iohub's ``process_single_position`` but
+    returns the work items instead of running them, so Nextflow can fan out
+    over individual chunks.
+    """
+    with open_ome_zarr(input_position_path, layout="fov", mode="r") as ds:
+        input_shape = ds.data.shape
+    with open_ome_zarr(output_position_path, layout="fov", mode="r") as ds:
+        output_shards = ds.data.shards
+
+    if input_time_indices is None:
+        input_time_indices = list(range(input_shape[0]))
+    if output_time_indices is None:
+        output_time_indices = input_time_indices
+
+    if output_shards is not None:
+        batched_out_t = _shard_aligned_batches(output_time_indices, output_shards[0])
+        batched_in_t = _match_batches(input_time_indices, output_time_indices, batched_out_t)
+    else:
+        batched_in_t = [[i] for i in input_time_indices]
+        batched_out_t = [[i] for i in output_time_indices]
+
+    if input_channel_indices is None:
+        input_channel_indices = [[c] for c in range(input_shape[1])]
+        output_channel_indices = input_channel_indices
+    if output_channel_indices is None:
+        output_channel_indices = input_channel_indices
+    if output_shards is not None and output_shards[1] != 1:
+        raise ValueError("Sharding along the channel dimension is not supported.")
+
+    time_ubound = input_shape[0] - 1
+    if max(input_time_indices) > time_ubound:
+        raise ValueError(
+            f"input_time_indices includes index beyond dataset max ({time_ubound})"
+        )
+
+    items = []
+    for (in_ch, out_ch), (in_t, out_t) in itertools.product(
+        zip(input_channel_indices, output_channel_indices, strict=False),
+        zip(batched_in_t, batched_out_t, strict=False),
+    ):
+        items.append(WorkItem(in_ch, out_ch, in_t, out_t))
+    return items
+
+
+def _shard_aligned_batches(indices: list[int], shard_size: int) -> list[list[int]]:
+    indices = sorted(indices)
+    batches: dict[int, list[int]] = defaultdict(list)
+    for idx in indices:
+        batches[idx // shard_size].append(idx)
+    return list(batches.values())
+
+
+def _match_batches(
+    flat_indices: list[int],
+    original_ref: list[int],
+    batched_ref: list[list[int]],
+) -> list[list[int]]:
+    return [
+        [flat_indices[original_ref.index(i)] for i in batch] for batch in batched_ref
+    ]
 
 
 def estimate_resources(

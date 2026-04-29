@@ -112,7 +112,6 @@ nextflow run "${PIPELINE}" \
     --qc_project         "${QC_PROJECT}" \
     --quarto_bin         "/home/aliu/opt/quarto-1.7.23/bin" \
     --work_dir           "${WORK_DIR}" \
-    --num_threads        1 \
     -resume \
     "$@"
 ```
@@ -132,7 +131,6 @@ Use `-profile local` instead of `-profile slurm` for local execution.
 | `--track_config` | YAML config for tracking (optional) |
 | `--concatenate_config` | YAML config for concatenation (optional) |
 | `--rename_suffix` | Suffix for channel renaming (optional) |
-| `--num_threads` | Intra-position parallelism for reconstruction (default: 1) |
 | `--biahub_project` | Path to biahub repo root for `uv run` (optional; see [Environment setup](#environment-setup)) |
 | `--viscy_project` | Path to VisCy repo root for `uv run` (optional) |
 | `--max_positions` | Limit fan-out to first N positions (default: 0 = all positions) |

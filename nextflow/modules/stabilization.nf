@@ -172,8 +172,7 @@ process run_stabilize {
         -i "${in_zarr}" \
         -o "${out_zarr}" \
         -p "${position}" \
-        -c "${config}" \
-        -j ${task.cpus}
+        -c "${config}"
     """
 }
 

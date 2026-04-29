@@ -58,8 +58,7 @@ process run_concatenate {
     ${biahub_cmd()} nf run-concatenate \
         -c "${params.output_dir}/5-assemble/concatenate_cropped.yml" \
         -o "${params.output_dir}/5-assemble/${dataset_name()}.zarr" \
-        -p "${position}" \
-        -j ${task.cpus}
+        -p "${position}"
     """
 }
 
