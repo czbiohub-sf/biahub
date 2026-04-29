@@ -108,7 +108,7 @@ def run_flat_field(
     input_zarr: str, output_zarr: str, position: str, config: str
 ):
     """Apply flat-field correction to a single position (all timepoints)."""
-    from biahub.flat_field_correction import czyx_flat_field_correction
+    from biahub.flat_field_correction import flat_field_correction
     from biahub.settings import FlatFieldCorrectionSettings
 
     input_position = Path(input_zarr) / position
@@ -121,7 +121,7 @@ def run_flat_field(
     channel_names = settings.channel_names if settings.channel_names else all_channel_names
 
     process_single_position(
-        czyx_flat_field_correction,
+        flat_field_correction,
         input_position,
         output_position,
         channel_names=channel_names,
