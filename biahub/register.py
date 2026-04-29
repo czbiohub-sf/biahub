@@ -570,7 +570,7 @@ def register_cli(
                     input_time_indices=time_indices,
                     input_channel_indices=[[source_channel_names.index(channel_name)]],
                     output_channel_indices=[[output_channel_names.index(channel_name)]],
-                    num_processes=int(slurm_args["slurm_cpus_per_task"]),
+                    num_workers=int(slurm_args["slurm_cpus_per_task"]),
                     **affine_transform_args,
                 )
                 affine_jobs.append(affine_job)
@@ -595,7 +595,7 @@ def register_cli(
                     input_time_indices=time_indices,
                     input_channel_indices=[[target_channel_names.index(channel_name)]],
                     output_channel_indices=[[output_channel_names.index(channel_name)]],
-                    num_processes=int(slurm_args["slurm_cpus_per_task"]),
+                    num_workers=int(slurm_args["slurm_cpus_per_task"]),
                     **copy_n_paste_kwargs,
                 )
                 copy_jobs.append(copy_job)
