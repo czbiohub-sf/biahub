@@ -24,16 +24,36 @@ process init_qc_fanout {
 }
 
 
+process estimate_qc_resources {
+    label 'cpu_local'
+    tag "${zarr_path}:${metric_group}"
+
+    input:
+    tuple val(zarr_path), val(metric_group), val(config_path)
+
+    output:
+    tuple val(metric_group), stdout
+
+    script:
+    """
+    ${qc_cmd()} estimate-resources --config "${config_path}" "${zarr_path}" \
+        --metric-group ${metric_group} --num-workers 1 \
+        | python3 -c "import sys,json; print(json.load(sys.stdin)['estimate_gb'])"
+    """
+}
+
+
 process run_qc_chunked {
     tag "${position}/${group}/${chunk_id}"
     label 'cpu_preempted'
+    memory { "${mem_gb * task.attempt} GB" }
     time '2h'
     maxRetries 1
     errorStrategy { task.exitStatus in [0, 1] ? 'ignore' : 'retry' }
 
     input:
     tuple val(position), val(group), val(start), val(end), val(chunk_id),
-          val(zarr_path), val(config_path)
+          val(zarr_path), val(config_path), val(mem_gb)
 
     output:
     val position
@@ -56,12 +76,13 @@ process run_qc_chunked {
 process run_qc_position {
     tag "${position}/${group}"
     label 'cpu_preempted'
+    memory { "${mem_gb * task.attempt} GB" }
     time '2h'
     maxRetries 1
     errorStrategy { task.exitStatus in [0, 1] ? 'ignore' : 'retry' }
 
     input:
-    tuple val(position), val(group), val(zarr_path), val(config_path)
+    tuple val(position), val(group), val(zarr_path), val(config_path), val(mem_gb)
 
     output:
     val position
@@ -180,17 +201,35 @@ workflow qc_stage_wf {
         | init_qc_fanout
         | splitCsv()
 
+    // Estimate resources per (zarr, metric_group) — one call per group, not per position
+    estimates = fanout
+        .map { row -> row[1] }
+        .unique()
+        .map { group -> tuple(zarr_path, group, config_path) }
+        | estimate_qc_resources
+        | map { group, stdout_text ->
+            tuple(group, stdout_text.trim().toFloat().round(1))
+        }
+
     // position-scoped groups: time-chunked (start/end non-empty)
+    // join with estimates by group name (index 0)
     chunked_done = fanout
         .filter { row -> row[2] != '' }
-        .map { row -> tuple(row[0], row[1], row[2], row[3], row[4],
-                            zarr_path, config_path) }
+        .map { row -> tuple(row[1], row[0], row[2], row[3], row[4]) }
+        .combine(estimates, by: 0)
+        .map { group, position, start, end, chunk_id, mem_gb ->
+            tuple(position, group, start, end, chunk_id, zarr_path, config_path, mem_gb)
+        }
         | run_qc_chunked
 
     // temporal-scoped groups: per-position, all timepoints (start/end empty)
     position_done = fanout
         .filter { row -> row[2] == '' }
-        .map { row -> tuple(row[0], row[1], zarr_path, config_path) }
+        .map { row -> tuple(row[1], row[0]) }
+        .combine(estimates, by: 0)
+        .map { group, position, mem_gb ->
+            tuple(position, group, zarr_path, config_path, mem_gb)
+        }
         | run_qc_position
 
     qc_done = chunked_done.mix(position_done) | collect
