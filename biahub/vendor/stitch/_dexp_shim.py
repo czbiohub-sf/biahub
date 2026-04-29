@@ -187,7 +187,7 @@ def linsolve(
     y: NDArray,
     *,
     tolerance: float = 1e-6,
-    x0: NDArray | None =None,
+    x0: NDArray | None = None,
     maxiter: int = 10**12,
     maxfun: int = 10**12,
     order_error: float = 1,
