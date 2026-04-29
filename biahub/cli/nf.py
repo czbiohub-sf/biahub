@@ -311,7 +311,7 @@ def init_reconstruct(input_zarr: str, output_zarr: str, config: str):
         get_reconstruction_output_metadata,
     )
     from waveorder.cli.settings import ReconstructionSettings
-    from waveorder.cli.utils import create_empty_hcs_zarr
+    from iohub.ngff.utils import create_empty_plate
     from waveorder.cli.utils import estimate_resources as wo_estimate_resources
 
     config_path = Path(config)
@@ -346,8 +346,9 @@ def init_reconstruct(input_zarr: str, output_zarr: str, config: str):
 
     first_position_path = Path(input_zarr) / "/".join(position_keys[0])
     output_metadata = get_reconstruction_output_metadata(first_position_path, resolved_config)
+    output_metadata.pop("plate_metadata", None)
 
-    create_empty_hcs_zarr(
+    create_empty_plate(
         store_path=Path(output_zarr),
         position_keys=position_keys,
         **output_metadata,
