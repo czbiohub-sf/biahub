@@ -1,4 +1,4 @@
-include { dataset_name; biahub_cmd } from './common'
+include { dataset_name; biahub_cmd; init_chunks } from './common'
 
 
 def qc_cmd() {
@@ -8,8 +8,8 @@ def qc_cmd() {
 }
 
 
-process run_qc_position {
-    tag "${position}"
+process run_qc_chunk {
+    tag "${position}/${chunk.chunk_id}"
     label 'cpu_medium'
     time '1h'
     queue 'cpu'
@@ -17,7 +17,7 @@ process run_qc_position {
     errorStrategy { task.exitStatus in [0, 1] ? 'ignore' : 'retry' }
 
     input:
-    tuple val(position), val(zarr_path), val(config_path)
+    tuple val(position), val(zarr_path), val(config_path), val(chunk)
 
     output:
     val position
@@ -29,7 +29,8 @@ process run_qc_position {
         "${zarr_path}" \
         --mode metrics_only \
         --no-merge \
-        --chunk-id default \
+        --time-indices ${chunk.start}:${chunk.end} \
+        --chunk-id ${chunk.chunk_id} \
         'positions=["${position}"]'
     """
 }
@@ -129,11 +130,14 @@ workflow qc_stage_wf {
 
     main:
     barrier = prev_done.map { 'done' }
-    qc_done = positions
-        .flatMap { it }
-        .combine(barrier)
-        .map { pos, _barrier -> [pos, zarr_path, config_path] }
-        | run_qc_position
+
+    qc_done = barrier
+        .map { zarr_path }
+        | init_chunks
+        | splitCsv()
+        | map { row -> [row[0], zarr_path, config_path,
+                        [start: row[1], end: row[2], chunk_id: row[3]]] }
+        | run_qc_chunk
         | collect
 
     summary = qc_done

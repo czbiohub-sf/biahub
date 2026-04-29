@@ -6,12 +6,43 @@ from pathlib import Path
 
 import click
 
+from biahub.cli.utils import plan_single_position, read_plate_metadata
+
 logger = logging.getLogger(__name__)
 
 
 @click.group("qc")
 def nf_qc_cli():
     """QC adapter commands for Nextflow pipelines."""
+
+
+@nf_qc_cli.command("init-chunks")
+@click.option("--input-zarr", "-i", required=True, type=click.Path(exists=True))
+def init_chunks(input_zarr: str) -> None:
+    """Emit (position, start, end, chunk_id) CSV rows for Nextflow QC fan-out.
+
+    Produces a headerless CSV with one row per (position, time-chunk) pair.
+    Nextflow consumes this directly via ``splitCsv``.
+    """
+    position_keys, _, _, _ = read_plate_metadata(input_zarr)
+    first_position = Path(input_zarr) / "/".join(position_keys[0])
+    items = plan_single_position(first_position, first_position)
+
+    chunks: list[tuple[int, int, str]] = []
+    seen: set[tuple[int, ...]] = set()
+    for item in items:
+        key = tuple(item.input_time_indices)
+        if key in seen:
+            continue
+        seen.add(key)
+        start = item.input_time_indices[0]
+        end = item.input_time_indices[-1] + 1
+        chunks.append((start, end, f"t{start}-{end - 1}"))
+
+    for pos_key in position_keys:
+        position = "/".join(pos_key)
+        for start, end, chunk_id in chunks:
+            click.echo(f"{position},{start},{end},{chunk_id}")
 
 
 @nf_qc_cli.command("consolidate")

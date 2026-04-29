@@ -1559,3 +1559,27 @@ def test_stitch(tmp_path, example_plate):
 
         assert result.exit_code == 0, result.output
         assert output_path.exists()
+
+
+def test_init_chunks(example_plate):
+    """init-chunks emits CSV rows: position,start,end,chunk_id."""
+    plate_path, _ = example_plate
+    runner = CliRunner()
+    result = runner.invoke(cli, ["nf", "qc", "init-chunks", "-i", str(plate_path)])
+
+    assert result.exit_code == 0, result.output
+    lines = [line for line in result.output.strip().splitlines() if line]
+    # 3 positions × 3 time chunks = 9 rows
+    assert len(lines) == 9
+
+    rows = [line.split(",") for line in lines]
+    assert all(len(r) == 4 for r in rows), f"Expected 4 columns per row: {rows}"
+
+    positions = sorted(set(r[0] for r in rows))
+    assert positions == ["A/1/0", "B/1/0", "B/2/0"]
+
+    starts = sorted(set(int(r[1]) for r in rows))
+    ends = sorted(set(int(r[2]) for r in rows))
+    assert starts == [0, 1, 2]
+    assert ends == [1, 2, 3]
+    assert all(r[3].startswith("t") for r in rows)
