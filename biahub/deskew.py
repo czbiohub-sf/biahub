@@ -23,7 +23,12 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import estimate_resources, get_submitit_cluster, yaml_to_model
+from biahub.cli.utils import (
+    estimate_resources,
+    get_submitit_cluster,
+    resolve_ome_zarr_version,
+    yaml_to_model,
+)
 from biahub.settings import DeskewSettings
 
 # Needed for multiprocessing with GPUs
@@ -626,6 +631,9 @@ def deskew(
         channel_names=channel_names,
         shape=(T, C) + deskewed_shape,
         scale=(1, 1) + voxel_size,
+        version=resolve_ome_zarr_version(
+            input_position_dirpaths[0], settings.output_ome_zarr_version
+        ),
     )
 
     deskew_args = {
@@ -678,7 +686,7 @@ def deskew(
                     _czyx_fast_deskew_data,
                     input_position_path,
                     output_position_path,
-                    num_processes=slurm_args["slurm_cpus_per_task"],
+                    num_workers=slurm_args["slurm_cpus_per_task"],
                     **deskew_args,
                 )
             )

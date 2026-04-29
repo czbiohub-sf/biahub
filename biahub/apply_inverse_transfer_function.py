@@ -7,13 +7,14 @@ import submitit
 import torch
 
 from iohub import open_ome_zarr
+from iohub.ngff.utils import create_empty_plate
 from waveorder.cli.apply_inverse_transfer_function import (
     apply_inverse_transfer_function_single_position,
     get_reconstruction_output_metadata,
 )
 from waveorder.cli.parsing import transfer_function_dirpath
 from waveorder.cli.settings import ReconstructionSettings
-from waveorder.cli.utils import create_empty_hcs_zarr, estimate_resources
+from waveorder.cli.utils import estimate_resources
 
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
@@ -43,12 +44,21 @@ def apply_inverse_transfer_function(
     output_metadata = get_reconstruction_output_metadata(
         input_position_dirpaths[0], config_filepath
     )
+    # `plate_metadata` is not a `create_empty_plate` parameter; write it to
+    # the plate's zattrs after creation. `output_metadata["version"]` is read
+    # from the input plate by waveorder, so the output preserves the input's
+    # OME-Zarr version.
+    plate_metadata = output_metadata.pop("plate_metadata", {})
 
-    create_empty_hcs_zarr(
+    create_empty_plate(
         store_path=output_dirpath,
         position_keys=[p.parts[-3:] for p in input_position_dirpaths],
         **output_metadata,
     )
+
+    if plate_metadata:
+        with open_ome_zarr(str(output_dirpath), mode="r+") as output_plate:
+            output_plate.zattrs.update(plate_metadata)
     # Initialize torch num of threads and interoeration operations
     if num_processes > 1:
         torch.set_num_threads(1)

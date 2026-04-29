@@ -22,6 +22,7 @@ from biahub.cli.utils import (
     _check_nan_n_zeros,
     estimate_resources,
     get_submitit_cluster,
+    resolve_ome_zarr_version,
     yaml_to_model,
 )
 from biahub.settings import FlatFieldCorrectionSettings
@@ -194,7 +195,9 @@ def flat_field(
         shape=(T, C, Z, Y, X),
         chunks=None,
         scale=scale,
-        version="0.5",
+        version=resolve_ome_zarr_version(
+            input_position_dirpaths[0], settings.output_ome_zarr_version
+        ),
         dtype=np.float32,
     )
 
