@@ -1,4 +1,5 @@
 import logging
+import os
 
 from pathlib import Path
 
@@ -7,7 +8,6 @@ import numpy as np
 
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import (
-    apply_transform_to_tczyx_and_save,
     create_empty_plate,
     process_single_position,
 )
@@ -28,9 +28,9 @@ logger = logging.getLogger(__name__)
 def nf_cli():
     """Nextflow-oriented commands for single-unit-of-work processing.
 
-    Nextflow owns all parallelism: each command processes one position
-    serially (num_threads defaults to 1 in iohub's process_single_position).
-    Do not add internal multiprocessing/threading here.
+    Nextflow fans out one process per position.  Within a position,
+    process_single_position parallelises over (T, C) using num_workers
+    derived from the Slurm/OS CPU allocation.
     """
 
 
@@ -127,6 +127,7 @@ def run_flat_field(
         _czyx_flat_field,
         input_position,
         output_position,
+        num_workers=os.cpu_count() or 1,
         target_indices=target_indices,
         extra_metadata={"flat_field_correction": settings.model_dump()},
     )
@@ -219,11 +220,8 @@ def init_deskew(input_zarr: str, output_zarr: str, config: str):
 @click.option("--output-zarr", "-o", required=True, type=click.Path(exists=True))
 @click.option("--position", "-p", required=True)
 @click.option("--config", "-c", required=True, type=click.Path(exists=True))
-@click.option("--work-item", "-w", default=None, help="JSON work item from init-deskew")
-def run_deskew(
-    input_zarr: str, output_zarr: str, position: str, config: str, work_item: str | None
-):
-    """Deskew a single position or a single (C, T) chunk."""
+def run_deskew(input_zarr: str, output_zarr: str, position: str, config: str):
+    """Deskew a single position (all timepoints and channels)."""
     from biahub.deskew import _czyx_deskew_data
     from biahub.settings import DeskewSettings
 
@@ -231,7 +229,12 @@ def run_deskew(
     output_position = Path(output_zarr) / position
     settings = yaml_to_model(Path(config), DeskewSettings)
 
-    func_kwargs = dict(
+    process_single_position(
+        _czyx_deskew_data,
+        input_position,
+        output_position,
+        num_workers=os.cpu_count() or 1,
+        extra_metadata={"deskew": settings.model_dump()},
         device="cpu",
         ls_angle_deg=settings.ls_angle_deg,
         px_to_scan_ratio=settings.px_to_scan_ratio,
@@ -239,29 +242,6 @@ def run_deskew(
         average_n_slices=settings.average_n_slices,
         overhang_fill=settings.overhang_fill,
     )
-
-    if work_item is not None:
-        import json
-
-        wi = json.loads(work_item)
-        apply_transform_to_tczyx_and_save(
-            _czyx_deskew_data,
-            input_position,
-            output_position,
-            input_channel_indices=wi["in_ch"],
-            output_channel_indices=wi["out_ch"],
-            input_time_indices=wi["in_t"],
-            output_time_indices=wi["out_t"],
-            **func_kwargs,
-        )
-    else:
-        process_single_position(
-            _czyx_deskew_data,
-            input_position,
-            output_position,
-            extra_metadata={"deskew": settings.model_dump()},
-            **func_kwargs,
-        )
 
     click.echo(f"Deskew done: {position}")
 
@@ -871,6 +851,7 @@ def run_concatenate(config: str, output_zarr: str, position: str):
             copy_n_paste,
             input_position_path=input_path,
             output_position_path=output_position_path,
+            num_workers=os.cpu_count() or 1,
             input_channel_indices=input_ch_idx,
             output_channel_indices=output_ch_idx,
             input_time_indices=input_time_indices,
@@ -1014,6 +995,7 @@ def run_stabilize(
         _stabilize_czyx,
         input_position,
         output_position,
+        num_workers=os.cpu_count() or 1,
         input_channel_indices=channel_indices,
         output_channel_indices=channel_indices,
         input_time_indices=time_indices,
@@ -1409,6 +1391,7 @@ def run_deconvolve(
         deconvolve,
         str(input_position),
         str(output_position),
+        num_workers=os.cpu_count() or 1,
         transfer_function_store_path=str(tf_zarr),
         regularization_strength=float(settings.regularization_strength),
     )
@@ -1797,6 +1780,7 @@ def nf_run_register(
             apply_affine_transform,
             source_position,
             output_position,
+            num_workers=os.cpu_count() or 1,
             input_channel_indices=source_input_ch,
             output_channel_indices=source_output_ch,
             input_time_indices=time_indices,
@@ -1816,6 +1800,7 @@ def nf_run_register(
             copy_n_paste_czyx,
             target_position,
             output_position,
+            num_workers=os.cpu_count() or 1,
             input_channel_indices=target_input_ch,
             output_channel_indices=target_output_ch,
             input_time_indices=time_indices,
