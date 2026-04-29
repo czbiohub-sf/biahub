@@ -301,8 +301,9 @@ class DeskewSettings(MyBaseModel):
     px_to_scan_ratio: PositiveFloat | None = None
     scan_step_um: PositiveFloat | None = None
     keep_overhang: bool = False
-    overhang_fill: Literal["zero", "mean"] = "zero"
+    overhang_fill: Literal["mean"] | float = 0
     average_n_slices: PositiveInt = 3
+    device: str = "cpu"
     # When None, preserve the OME-Zarr version of the input store.
     output_ome_zarr_version: Literal["0.4", "0.5"] | None = None
 
