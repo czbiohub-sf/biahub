@@ -921,6 +921,7 @@ def track(
     # Use the number of CPUs and RAM per CPU in the tracking configuration
     tracking_cfg["segmentation_config"]["n_workers"] = num_cpus
     tracking_cfg["linking_config"]["n_workers"] = num_cpus
+    tracking_cfg["tracking_config"]["n_threads"] = num_cpus
 
     # Create default instance
     default_config = MainConfig()
