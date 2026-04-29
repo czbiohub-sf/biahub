@@ -47,6 +47,7 @@ blank:
 
 tenengrad:
   threshold: 0.0
+  normalize: true
   granularity: z
   gate:
     hard_floor: 10.0
