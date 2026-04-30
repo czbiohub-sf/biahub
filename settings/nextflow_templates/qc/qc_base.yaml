@@ -14,16 +14,9 @@ metric_groups:
       - blank
       - tenengrad
   temporal:
-    scope: temporal
+    scope: dependent
     metrics:
       - bleach_rate
-
-metrics:
-  - intensity_stats
-  - signal_to_noise
-  - blank
-  - tenengrad
-  - bleach_rate
 
 intensity_stats:
   grid: 16

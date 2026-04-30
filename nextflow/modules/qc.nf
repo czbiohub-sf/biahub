@@ -101,6 +101,23 @@ process run_qc_position {
 }
 
 
+process merge_qc_metrics {
+    label 'cpu_preempted'
+    time '30m'
+
+    input:
+    tuple val(zarr_path), val(done)
+
+    output:
+    val true
+
+    script:
+    """
+    ${qc_cmd()} merge-metrics "${zarr_path}"
+    """
+}
+
+
 process merge_qc_stage {
     label 'cpu_preempted'
     time '30m'
@@ -223,11 +240,24 @@ workflow qc_stage_wf {
         | run_qc_chunked
 
     // temporal-scoped groups: per-position, all timepoints (start/end empty)
+    // Must wait for chunked jobs AND metric merge — temporal metrics (e.g.
+    // bleach_rate) depend on upstream results (e.g. intensity_stats) that
+    // run_qc_chunked writes as chunk parquets. merge_qc_metrics consolidates
+    // them into the per-position stage parquet that _resolve_upstream reads.
+    chunked_collected = chunked_done | ifEmpty('none') | collect
+    metrics_merged = chunked_collected
+        .map { done -> tuple(zarr_path, done) }
+        | merge_qc_metrics
+
     position_done = fanout
         .filter { row -> row[2] == '' }
         .map { row -> tuple(row[1], row[0]) }
         .combine(estimates, by: 0)
         .map { group, position, mem_gb ->
+            tuple(position, group, zarr_path, config_path, mem_gb)
+        }
+        .combine(metrics_merged)
+        .map { position, group, zarr_path, config_path, mem_gb, trigger ->
             tuple(position, group, zarr_path, config_path, mem_gb)
         }
         | run_qc_position

@@ -118,6 +118,8 @@ Pass the env path to the pipeline:
 
 ### imaging-qc-pipeline (QC stages + Quarto)
 
+The QC processes in `modules/qc.nf` shell out to the `imaging-qc` CLI — they do **not** import Nextflow subworkflows or Python code from `imaging-qc-pipeline`. All orchestration (fan-out, chunking, merging) is defined here in biahub; `imaging-qc-pipeline` is a black-box CLI dependency. This means changes to the internal Nextflow or Python orchestration in `imaging-qc-pipeline` (DAG resolution, dispatch, subworkflows) do not affect this pipeline as long as the CLI contract is stable.
+
 The QC stages require a separate `imaging-qc-pipeline` environment and Quarto (for interactive reports). Follow steps 1–3 of the [imaging-qc-pipeline getting started guide](https://github.com/czbiohub-sf/imaging-qc-pipeline/tree/main#getting-started-hpc-path-brunoreef), then pass the project path and Quarto binary location to the pipeline:
 
 ```bash
