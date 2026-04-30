@@ -18,7 +18,7 @@ process init_flat_field {
 
 process run_flat_field {
     tag "${position}"
-    label 'cpu_preempted'
+    label 'cpu'
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time '1h'

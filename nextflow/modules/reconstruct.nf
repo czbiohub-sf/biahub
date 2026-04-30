@@ -20,7 +20,7 @@ process init_reconstruct {
 }
 
 process compute_transfer_function {
-    label 'cpu_preempted'
+    label 'cpu'
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time '2h'
@@ -42,7 +42,7 @@ process compute_transfer_function {
 
 process run_apply_inv_tf {
     tag "${position}"
-    label 'cpu_preempted'
+    label 'cpu'
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time '6h'

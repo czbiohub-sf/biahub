@@ -28,7 +28,7 @@ process init_virtual_stain {
 }
 
 process run_virtual_stain_preprocess {
-    label 'cpu_preempted'
+    label 'cpu'
     time '1h'
 
     input:

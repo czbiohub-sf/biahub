@@ -20,7 +20,7 @@ process init_resources_rename {
 
 process rename_channels {
     tag "${position}"
-    label 'cpu_preempted'
+    label 'cpu'
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time '30m'

@@ -21,7 +21,7 @@ process init_deskew {
 
 process run_deskew {
     tag "${position}"
-    label 'cpu_preempted'
+    label 'cpu'
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time '1h'

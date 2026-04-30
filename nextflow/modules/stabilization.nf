@@ -20,7 +20,7 @@ process init_resources_stabilization {
 
 process estimate_stabilization_z_focus {
     tag "${position}"
-    label 'cpu_preempted'
+    label 'cpu'
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time '2h'
@@ -45,7 +45,7 @@ process estimate_stabilization_z_focus {
 
 process estimate_stabilization_xy {
     tag "${position}"
-    label 'cpu_preempted'
+    label 'cpu'
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time '2h'
@@ -91,7 +91,7 @@ process combine_transforms {
 
 process estimate_stabilization_pcc {
     tag "${position}"
-    label 'cpu_preempted'
+    label 'cpu'
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time '2h'
@@ -115,7 +115,7 @@ process estimate_stabilization_pcc {
 }
 
 process estimate_stabilization_beads {
-    label 'cpu_preempted'
+    label 'cpu'
     time '2h'
 
     input:
@@ -154,7 +154,7 @@ process init_stabilize {
 
 process run_stabilize {
     tag "${position}"
-    label 'cpu_preempted'
+    label 'cpu'
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time '2h'

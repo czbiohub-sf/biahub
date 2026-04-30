@@ -20,7 +20,7 @@ process init_estimate_crop {
 
 process estimate_crop {
     tag "${lf_position}"
-    label 'cpu_preempted'
+    label 'cpu'
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time '1h'
@@ -82,7 +82,7 @@ process init_concatenate {
 
 process run_concatenate {
     tag "${position}"
-    label 'cpu_preempted'
+    label 'cpu'
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time '2h'

@@ -45,7 +45,7 @@ process estimate_qc_resources {
 
 process run_qc_chunked {
     tag "${position}/${group}/${chunk_id}"
-    label 'cpu_preempted'
+    label 'cpu'
     memory { "${mem_gb * task.attempt} GB" }
     time '2h'
     maxRetries 1
@@ -75,7 +75,7 @@ process run_qc_chunked {
 
 process run_qc_position {
     tag "${position}/${group}"
-    label 'cpu_preempted'
+    label 'cpu'
     memory { "${mem_gb * task.attempt} GB" }
     time '2h'
     maxRetries 1
@@ -102,7 +102,7 @@ process run_qc_position {
 
 
 process merge_qc_metrics {
-    label 'cpu_preempted'
+    label 'cpu'
     time '30m'
 
     input:
@@ -119,7 +119,7 @@ process merge_qc_metrics {
 
 
 process merge_qc_stage {
-    label 'cpu_preempted'
+    label 'cpu'
     time '30m'
     errorStrategy { task.exitStatus in [0, 1] ? 'ignore' : 'retry' }
 
@@ -178,7 +178,7 @@ process log_qc_summary {
 
 
 process final_merge_and_report {
-    label 'cpu_preempted'
+    label 'cpu'
     time '1h'
 
     input:
