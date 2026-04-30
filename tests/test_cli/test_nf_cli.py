@@ -1732,6 +1732,37 @@ def test_clean_temp_noop_when_missing(tmp_path):
     assert not temp_dir.exists()
 
 
+def test_clean_position_removes_existing(tmp_path):
+    """clean-position removes a position directory from an output zarr."""
+    zarr_dir = tmp_path / "output.zarr"
+    pos_dir = zarr_dir / "A" / "3" / "002002"
+    pos_dir.mkdir(parents=True)
+    (pos_dir / "0").mkdir()
+    (pos_dir / "0" / "0").mkdir()
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli, ["nf", "clean-position", "-o", str(zarr_dir), "-p", "A/3/002002"]
+    )
+
+    assert result.exit_code == 0
+    assert not pos_dir.exists()
+    assert zarr_dir.exists()
+
+
+def test_clean_position_noop_when_missing(tmp_path):
+    """clean-position succeeds even if the position doesn't exist."""
+    zarr_dir = tmp_path / "output.zarr"
+    zarr_dir.mkdir()
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli, ["nf", "clean-position", "-o", str(zarr_dir), "-p", "A/3/002002"]
+    )
+
+    assert result.exit_code == 0
+
+
 def test_stitch(tmp_path, example_plate):
     """stitch per-well creates output and calls write_output_chunk."""
     plate_path, ds = example_plate
