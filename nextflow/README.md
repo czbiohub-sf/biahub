@@ -93,11 +93,13 @@ requires-python = ">=3.12"
 
 dependencies = [
     "viscy",
+    "cytoland",
     "umap-learn",
 ]
 
 [tool.uv.sources]
 viscy = { path = "/path/to/VisCy", editable = true }
+cytoland = { path = "/path/to/VisCy/applications/cytoland", editable = true }
 viscy-data = { path = "/path/to/VisCy/packages/viscy-data", editable = true }
 viscy-models = { path = "/path/to/VisCy/packages/viscy-models", editable = true }
 viscy-transforms = { path = "/path/to/VisCy/packages/viscy-transforms", editable = true }
