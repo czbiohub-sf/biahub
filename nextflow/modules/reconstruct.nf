@@ -48,6 +48,7 @@ process run_apply_inv_tf {
     time '6h'
     maxRetries 1
     errorStrategy 'retry'
+    beforeScript { task.attempt > 1 ? "${biahub_cmd()} nf clean-position -o '${params.output_dir}/2-reconstruct/${dataset_name()}.zarr' -p '${position}'" : '' }
 
     input:
     tuple val(position), val(meta)
@@ -56,14 +57,10 @@ process run_apply_inv_tf {
     val position
 
     script:
-    def output_zarr = "${params.output_dir}/2-reconstruct/${dataset_name()}.zarr"
     """
-    if [ ${task.attempt} -gt 1 ]; then
-        ${biahub_cmd()} nf clean-position -o "${output_zarr}" -p "${position}"
-    fi
     ${biahub_cmd()} nf run-apply-inv-tf \
         -i "${params.output_dir}/1-deskew/${dataset_name()}.zarr" \
-        -o "${output_zarr}" \
+        -o "${params.output_dir}/2-reconstruct/${dataset_name()}.zarr" \
         -t "${params.output_dir}/2-reconstruct/transfer_function_${dataset_name()}.zarr" \
         -p "${position}" \
         -c "${params.output_dir}/2-reconstruct/reconstruct_resolved.yml"

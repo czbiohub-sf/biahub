@@ -88,6 +88,7 @@ process run_concatenate {
     time '2h'
     maxRetries 1
     errorStrategy 'retry'
+    beforeScript { task.attempt > 1 ? "${biahub_cmd()} nf clean-position -o '${params.output_dir}/5-assemble/${dataset_name()}.zarr' -p '${position}'" : '' }
 
     input:
     tuple val(position), val(meta)
@@ -96,14 +97,10 @@ process run_concatenate {
     val position
 
     script:
-    def output_zarr = "${params.output_dir}/5-assemble/${dataset_name()}.zarr"
     """
-    if [ ${task.attempt} -gt 1 ]; then
-        ${biahub_cmd()} nf clean-position -o "${output_zarr}" -p "${position}"
-    fi
     ${biahub_cmd()} nf run-concatenate \
         -c "${params.output_dir}/5-assemble/concatenate_cropped.yml" \
-        -o "${output_zarr}" \
+        -o "${params.output_dir}/5-assemble/${dataset_name()}.zarr" \
         -p "${position}"
     """
 }

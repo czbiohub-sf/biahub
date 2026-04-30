@@ -27,6 +27,7 @@ process run_deskew {
     time { task.attempt == 1 ? '1h' : '2h' }
     maxRetries 1
     errorStrategy 'retry'
+    beforeScript { task.attempt > 1 ? "${biahub_cmd()} nf clean-position -o '${params.output_dir}/1-deskew/${dataset_name()}.zarr' -p '${position}'" : '' }
 
     input:
     tuple val(position), val(meta)
@@ -35,14 +36,10 @@ process run_deskew {
     val position
 
     script:
-    def output_zarr = "${params.output_dir}/1-deskew/${dataset_name()}.zarr"
     """
-    if [ ${task.attempt} -gt 1 ]; then
-        ${biahub_cmd()} nf clean-position -o "${output_zarr}" -p "${position}"
-    fi
     ${biahub_cmd()} nf run-deskew \
         -i "${params.output_dir}/0-flatfield/${dataset_name()}.zarr" \
-        -o "${output_zarr}" \
+        -o "${params.output_dir}/1-deskew/${dataset_name()}.zarr" \
         -p "${position}" \
         -c "${params.output_dir}/1-deskew/deskew_resolved.yml"
     """

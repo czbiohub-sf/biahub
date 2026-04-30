@@ -27,6 +27,7 @@ process run_track {
     time '2h'
     maxRetries 1
     errorStrategy 'retry'
+    beforeScript { task.attempt > 1 ? "${biahub_cmd()} nf clean-position -o '${params.output_dir}/4-track/${dataset_name()}.zarr' -p '${position}'" : '' }
 
     input:
     tuple val(position), val(meta)
@@ -35,13 +36,9 @@ process run_track {
     val position
 
     script:
-    def output_zarr = "${params.output_dir}/4-track/${dataset_name()}.zarr"
     """
-    if [ ${task.attempt} -gt 1 ]; then
-        ${biahub_cmd()} nf clean-position -o "${output_zarr}" -p "${position}"
-    fi
     ${biahub_cmd()} nf run-track \
-        -o "${output_zarr}" \
+        -o "${params.output_dir}/4-track/${dataset_name()}.zarr" \
         -p "${position}" \
         -c "${params.track_config}" \
         --input-images-path "${params.output_dir}/3-virtual-stain/${dataset_name()}.zarr"

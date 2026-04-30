@@ -24,6 +24,7 @@ process run_flat_field {
     time '1h'
     maxRetries 1
     errorStrategy 'retry'
+    beforeScript { task.attempt > 1 ? "${biahub_cmd()} nf clean-position -o '${params.output_dir}/0-flatfield/${dataset_name()}.zarr' -p '${position}'" : '' }
 
     input:
     tuple val(position), val(meta)
@@ -32,14 +33,10 @@ process run_flat_field {
     val position
 
     script:
-    def output_zarr = "${params.output_dir}/0-flatfield/${dataset_name()}.zarr"
     """
-    if [ ${task.attempt} -gt 1 ]; then
-        ${biahub_cmd()} nf clean-position -o "${output_zarr}" -p "${position}"
-    fi
     ${biahub_cmd()} nf run-flat-field \
         -i "${params.input_zarr}" \
-        -o "${output_zarr}" \
+        -o "${params.output_dir}/0-flatfield/${dataset_name()}.zarr" \
         -p "${position}" \
         -c "${params.flat_field_config}"
     """
