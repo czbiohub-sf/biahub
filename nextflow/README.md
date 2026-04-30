@@ -116,23 +116,13 @@ Pass the env path to the pipeline:
 --viscy_project /path/to/viscy-env
 ```
 
-### imaging-qc-pipeline (QC stages)
+### imaging-qc-pipeline (QC stages + Quarto)
 
-The QC stages require a separate `imaging-qc-pipeline` environment. Install with the `[hpc,interactive]` extras for full metric coverage and interactive Plotly reports:
-
-```bash
-git clone git@github.com:czbiohub-sf/imaging-qc-pipeline.git
-cd imaging-qc-pipeline
-uv venv --python 3.12
-uv pip install -e '.[hpc,interactive]'
-```
-
-The `[hpc]` extra pulls in `iohub`, `waveorder`, and `cubic`. The `[interactive]` extra adds Plotly for HTML reports.
-
-Pass the project path to the pipeline:
+The QC stages require a separate `imaging-qc-pipeline` environment and Quarto (for interactive reports). Follow steps 1–3 of the [imaging-qc-pipeline getting started guide](https://github.com/czbiohub-sf/imaging-qc-pipeline/tree/main#getting-started-hpc-path-brunoreef), then pass the project path and Quarto binary location to the pipeline:
 
 ```bash
 --qc_project /path/to/imaging-qc-pipeline
+--quarto_bin /path/to/quarto/bin
 ```
 
 ### Run location
@@ -146,19 +136,22 @@ Write a bash launch script in your experiment directory. Example (`run_mantis_v2
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
+module load uv
+module load nextflow
 
-BIAHUB_PROJECT="/home/aliu/repos/biahub"
+BIAHUB_PROJECT="/path/to/biahub"
 VISCY_PROJECT="/path/to/viscy-env"
 QC_PROJECT="/path/to/imaging-qc-pipeline"
+QUARTO_BIN="/path/to/quarto/bin"
 PIPELINE="${BIAHUB_PROJECT}/nextflow/mantis-v2-timelapse.nf"
 NF_CONFIG="${BIAHUB_PROJECT}/nextflow/nextflow.config"
-QC_CONFIGS="${BIAHUB_PROJECT}/settings/nextflow_templates/qc"
 
-DEV_DIR="/path/to/experiment"
-INPUT_ZARR="${DEV_DIR}/input.zarr"
-OUTPUT_DIR="${DEV_DIR}"
-CONFIGS="${DEV_DIR}/configs"
-WORK_DIR="${DEV_DIR}/work"
+RUN_DIR="/path/to/experiment"
+INPUT_ZARR="/path/to/input.zarr"
+OUTPUT_DIR="${RUN_DIR}"
+CONFIGS="${RUN_DIR}/configs"
+QC_CONFIGS="${CONFIGS}/qc"
+WORK_DIR="${RUN_DIR}/work"
 
 nextflow run "${PIPELINE}" \
     -c "${NF_CONFIG}" \
@@ -176,7 +169,7 @@ nextflow run "${PIPELINE}" \
     --viscy_project      "${VISCY_PROJECT}" \
     --qc_config_dir      "${QC_CONFIGS}" \
     --qc_project         "${QC_PROJECT}" \
-    --quarto_bin         "/home/aliu/opt/quarto-1.7.23/bin" \
+    --quarto_bin         "${QUARTO_BIN}" \
     --work_dir           "${WORK_DIR}" \
     -resume \
     "$@"
