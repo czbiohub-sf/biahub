@@ -11,8 +11,11 @@ digraph pipeline {
     // box (pink)       = GPU processes
     // box (purple)     = optional processes
 
-    // ── list_positions ──
+    // ── input ──
+    input_zarr     [shape=cylinder fillcolor="#E8E8E8" label="input.zarr"]
     list_positions [shape=ellipse fillcolor="#B5D6A7" label="list_positions"]
+
+    input_zarr -> list_positions
 
     // ── 0 · flat-field ──
     init_flat_field   [shape=ellipse fillcolor="#B5D6A7"

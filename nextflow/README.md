@@ -55,6 +55,8 @@ module load nextflow
 module load uv
 ```
 
+### biahub
+
 Create the virtualenv (from the repo root):
 
 ```bash
@@ -70,6 +72,68 @@ Nextflow processes use `uv run --project <path> biahub` to invoke the CLI, so th
 ```
 
 Omit `--biahub_project` if `biahub` is already on `PATH` (e.g. in a container image).
+
+### VisCy (virtual staining)
+
+The virtual stain step requires a separate VisCy environment. We use an editable install from the `modular-viscy-staging` branch, which depends on iohub ≥0.3.3 (earlier versions crash when the plate zarr contains a `tables/` group at root).
+
+```bash
+# checkout the correct branch
+cd /path/to/VisCy
+git checkout modular-viscy-staging
+
+# create a thin wrapper project for the environment
+mkdir -p /path/to/viscy-env
+cat > /path/to/viscy-env/pyproject.toml << 'EOF'
+[project]
+name = "viscy-env"
+version = "0.1.0"
+description = "Standalone viscy environment for virtual staining inference"
+requires-python = ">=3.12"
+
+dependencies = [
+    "viscy",
+    "umap-learn",
+]
+
+[tool.uv.sources]
+viscy = { path = "/path/to/VisCy", editable = true }
+viscy-data = { path = "/path/to/VisCy/packages/viscy-data", editable = true }
+viscy-models = { path = "/path/to/VisCy/packages/viscy-models", editable = true }
+viscy-transforms = { path = "/path/to/VisCy/packages/viscy-transforms", editable = true }
+viscy-utils = { path = "/path/to/VisCy/packages/viscy-utils", editable = true }
+EOF
+
+cd /path/to/viscy-env
+uv sync
+```
+
+Pass the env path to the pipeline:
+
+```bash
+--viscy_project /path/to/viscy-env
+```
+
+### imaging-qc-pipeline (QC stages)
+
+The QC stages require a separate `imaging-qc-pipeline` environment. Install with the `[hpc,interactive]` extras for full metric coverage and interactive Plotly reports:
+
+```bash
+git clone git@github.com:czbiohub-sf/imaging-qc-pipeline.git
+cd imaging-qc-pipeline
+uv venv --python 3.12
+uv pip install -e '.[hpc,interactive]'
+```
+
+The `[hpc]` extra pulls in `iohub`, `waveorder`, and `cubic`. The `[interactive]` extra adds Plotly for HTML reports.
+
+Pass the project path to the pipeline:
+
+```bash
+--qc_project /path/to/imaging-qc-pipeline
+```
+
+### Run location
 
 Run `nextflow` from your experiment directory so that `.nextflow.log`, `.nextflow/`, and `work/` land there rather than in the repo.
 
@@ -132,7 +196,7 @@ Use `-profile local` instead of `-profile slurm` for local execution.
 | `--concatenate_config` | YAML config for concatenation (optional) |
 | `--rename_suffix` | Suffix for channel renaming (optional) |
 | `--biahub_project` | Path to biahub repo root for `uv run` (optional; see [Environment setup](#environment-setup)) |
-| `--viscy_project` | Path to VisCy repo root for `uv run` (optional) |
+| `--viscy_project` | Path to viscy-env wrapper project for `uv run` (optional; see [VisCy setup](#viscy-virtual-staining)) |
 | `--max_positions` | Limit fan-out to first N positions (default: 0 = all positions) |
 | `--work_dir` | Nextflow work directory for intermediate files (default: `work/` in current directory) |
 | `--qc_config_dir` | Directory containing per-stage QC YAML configs (optional; enables QC stages) |
@@ -163,23 +227,6 @@ output_dir/
 | `local` | Local | Pass `--biahub_project` to use `uv run` (see [Environment setup](#environment-setup)) |
 | `slurm` | SLURM | Submits to `cpu` queue; deskew uses `gpu` queue with `--gres=gpu:1` |
 
-## DAG diagrams
-
-The pipeline DAG PNGs are generated from Graphviz `.dot` source files in this directory:
-
-```bash
-dot -Tpng -Gdpi=150 example-flatfield-deskew-reconstruct.dot -o example-flatfield-deskew-reconstruct.png
-dot -Tpng -Gdpi=150 mantis-v2-timelapse.dot -o mantis-v2-timelapse.png
-```
-
-## Nextflow reports
-
-After a run completes, reports are written to `nextflow/output/`:
-- `dag.html` — pipeline DAG
-- `report.html` — execution report
-- `trace.txt` — per-task trace
-- `timeline.html` — timeline visualization
-
 ## Cleanup
 
 After a run completes, remove Nextflow work directories, cache, and logs:
@@ -193,31 +240,4 @@ This does **not** remove your output zarrs — only Nextflow's internal files (`
 
 ## CLI commands
 
-The pipeline invokes these `biahub nf` subcommands:
-
-```
-biahub nf list-positions -i <plate.zarr>
-biahub nf init-flat-field -i <input.zarr> -o <output.zarr> -c <config.yml>
-biahub nf run-flat-field -i <input.zarr> -o <output.zarr> -p <position> -c <config.yml>
-biahub nf init-deskew -i <input.zarr> -o <output.zarr> -c <config.yml>
-biahub nf run-deskew -i <input.zarr> -o <output.zarr> -p <position> -c <config.yml>
-biahub nf init-reconstruct -i <input.zarr> -o <output.zarr> -c <config.yml>
-biahub nf compute-transfer-function -i <input.zarr> -t <tf.zarr> -c <config.yml>
-biahub nf run-apply-inv-tf -i <input.zarr> -o <output.zarr> -t <tf.zarr> -p <position> -c <config.yml>
-biahub nf qc init-chunks -i <plate.zarr>
-```
-
-Each command is a single unit of work (no SLURM/submitit). Nextflow handles distribution and scheduling.
-
-### QC fan-out
-
-`biahub nf qc init-chunks` emits a headerless CSV to stdout with one row per `(position, time-chunk)` pair:
-
-```
-A/1/0,0,25,t0-24
-A/1/0,25,50,t25-49
-B/1/0,0,25,t0-24
-...
-```
-
-Nextflow consumes this directly via the built-in `splitCsv` operator — no custom Groovy parsing required. Each CSV row maps to one `run_qc_chunk` process invocation.
+The pipeline invokes `biahub nf` subcommands. Run `biahub nf --help` for the full list. Each command is a single unit of work; Nextflow handles distribution and scheduling.
