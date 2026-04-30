@@ -83,6 +83,7 @@ process init_concatenate {
 process run_concatenate {
     tag "${position}"
     label 'cpu'
+    maxForks 30
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time '2h'

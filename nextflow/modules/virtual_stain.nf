@@ -50,19 +50,19 @@ process run_virtual_stain_preprocess {
 process run_virtual_stain {
     tag "${position}"
     label 'gpu'
+    maxForks 30
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time '2h'
     maxRetries 1
     errorStrategy 'retry'
+    beforeScript { task.attempt > 1 ? "${biahub_cmd()} nf clean-position -o '${params.output_dir}/3-virtual-stain/${dataset_name()}.zarr' -p '${position}'" : '' }
 
     input:
     tuple val(position), val(meta)
 
     output:
     val position
-
-    beforeScript { task.attempt > 1 ? "${biahub_cmd()} nf clean-position -o '${params.output_dir}/3-virtual-stain/${dataset_name()}.zarr' -p '${position}'" : '' }
 
     script:
     def temp_zarr = "${params.output_dir}/3-virtual-stain/temp/${position.replaceAll('/', '_')}.zarr"

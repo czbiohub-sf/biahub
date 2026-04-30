@@ -43,6 +43,7 @@ process compute_transfer_function {
 process run_apply_inv_tf {
     tag "${position}"
     label 'cpu'
+    maxForks 30
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time '6h'

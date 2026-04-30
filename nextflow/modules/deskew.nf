@@ -22,6 +22,7 @@ process init_deskew {
 process run_deskew {
     tag "${position}"
     label 'cpu'
+    maxForks 30
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time { task.attempt == 1 ? '1h' : '2h' }

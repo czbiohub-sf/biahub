@@ -22,6 +22,7 @@ process init_track {
 process run_track {
     tag "${position}"
     label 'gpu'
+    maxForks 30
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time '2h'
