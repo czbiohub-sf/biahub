@@ -53,7 +53,7 @@ tenengrad:
   normalize: true
   granularity: z
   gate:
-    hard_floor: 10.0
+    hard_floor: 0.001
     hard_ceiling: null
     outlier_method: global_zscore
     outlier_params:
