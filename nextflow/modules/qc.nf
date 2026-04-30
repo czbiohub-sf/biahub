@@ -156,7 +156,11 @@ process consolidate_qc {
     script:
     def step_args = step_zarrs.collect { "-s ${it}" }.join(' ')
     """
-    ${biahub_cmd()} nf qc consolidate ${step_args} -a "${assembly_zarr}"
+    if [ -n "${assembly_zarr}" ] && [ -d "${assembly_zarr}" ]; then
+        ${biahub_cmd()} nf qc consolidate ${step_args} -a "${assembly_zarr}"
+    else
+        echo "No assembly zarr provided or found — skipping consolidation"
+    fi
     """
 }
 

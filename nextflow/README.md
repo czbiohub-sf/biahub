@@ -46,6 +46,10 @@ Full mantis v2 pipeline: flat-field -> deskew -> reconstruct -> virtual stain + 
 
 ![Pipeline DAG](mantis-v2-timelapse.png)
 
+### qc-standalone
+
+Standalone QC pipeline for running `imaging-qc` against one or more pre-existing zarr stores without the full mantis pipeline. Supports arbitrary zarr+config pairs via a CSV manifest, two-pass metric computation with timepoint batching as distributed Slurm jobs, and a chained consolidation + report. See [README-qc-standalone.md](README-qc-standalone.md) for full usage and examples.
+
 ## Environment setup
 
 On HPC, load the required modules first:
