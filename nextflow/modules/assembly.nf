@@ -13,30 +13,50 @@ process init_estimate_crop {
     script:
     """
     ${biahub_cmd()} nf init-estimate-crop \
-        --concat-data-path "${params.output_dir}/1-deskew/${dataset_name()}.zarr/*/*/*"
+        --lf-data-path "${params.output_dir}/1-deskew/${dataset_name()}.zarr/*/*/*" \
+        --ls-data-path "${params.output_dir}/2-reconstruct/${dataset_name()}.zarr/*/*/*"
     """
 }
 
 process estimate_crop {
+    tag "${lf_position}"
     label 'cpu_preempted'
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time '1h'
+    maxRetries 1
+    errorStrategy 'retry'
 
     input:
-    val meta
+    tuple val(lf_position), val(ls_position), val(meta)
+
+    output:
+    stdout
+
+    script:
+    """
+    ${biahub_cmd()} nf estimate-crop \
+        --lf-position "${lf_position}" \
+        --ls-position "${ls_position}"
+    """
+}
+
+process reduce_crop_ranges {
+    label 'cpu_local'
+
+    input:
+    path ranges_file
+    val trigger
 
     output:
     val true
 
     script:
     """
-    ${biahub_cmd()} nf estimate-crop \
+    ${biahub_cmd()} nf reduce-crop-ranges \
         -c "${params.concatenate_config}" \
         -o "${params.output_dir}/5-assemble/concatenate_cropped.yml" \
-        --concat-data-paths "${params.output_dir}/1-deskew/${dataset_name()}.zarr/*/*/*" \
-        --concat-data-paths "${params.output_dir}/2-reconstruct/${dataset_name()}.zarr/*/*/*" \
-        --concat-data-paths "${params.output_dir}/3-virtual-stain/${dataset_name()}.zarr/*/*/*"
+        --ranges-file "${ranges_file}"
     """
 }
 
@@ -82,14 +102,33 @@ process run_concatenate {
 }
 
 
+def parse_positions(stdout_text) {
+    return stdout_text.trim().readLines()
+        .findAll { it.startsWith('POSITION:') }
+        .collect { line ->
+            def parts = line.replace('POSITION:', '').trim().split('\t')
+            [parts[0], parts[1]]
+        }
+}
+
+
 workflow assemble_wf {
     take:
     positions
     prev_done
 
     main:
-    crop_resources = init_estimate_crop(prev_done.map { 'done' }).map { parse_resources(it) }
-    crop_done = estimate_crop(crop_resources)
+    init_out = init_estimate_crop(prev_done.map { 'done' })
+    crop_resources = init_out.map { parse_resources(it) }
+    crop_positions = init_out
+        .flatMap { parse_positions(it) }
+        .combine(crop_resources)
+
+    ranges_ch = estimate_crop(crop_positions)
+        | collectFile(name: 'all_ranges.txt', newLine: true)
+
+    crop_done = reduce_crop_ranges(ranges_ch, ranges_ch.map { 'done' })
+
     resources = init_concatenate(crop_done).map { parse_resources(it) }
     as_done = positions
         .flatMap { it }

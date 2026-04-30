@@ -614,96 +614,120 @@ def run_track(
 
 @nf_cli.command("init-estimate-crop")
 @click.option(
-    "--concat-data-path",
+    "--lf-data-path",
     required=True,
     type=str,
-    help="Glob pattern for one source zarr (resolves to position-level zarrs).",
+    help="Glob pattern for label-free source zarr (resolves to position-level zarrs).",
 )
-def init_estimate_crop(concat_data_path: str):
-    """Estimate resources for estimate-crop from one source zarr's metadata."""
+@click.option(
+    "--ls-data-path",
+    required=True,
+    type=str,
+    help="Glob pattern for light-sheet source zarr (resolves to position-level zarrs).",
+)
+def init_estimate_crop(lf_data_path: str, ls_data_path: str):
+    """Emit RESOURCES and paired position lines for per-FOV estimate-crop fan-out."""
     import glob as globmod
 
     from natsort import natsorted
 
-    positions = natsorted(
-        [Path(p) for p in globmod.glob(concat_data_path) if Path(p).is_dir()]
+    lf_positions = natsorted(
+        [Path(p) for p in globmod.glob(lf_data_path) if Path(p).is_dir()]
     )
-    if not positions:
-        raise click.ClickException(f"No positions found matching '{concat_data_path}'")
+    ls_positions = natsorted(
+        [Path(p) for p in globmod.glob(ls_data_path) if Path(p).is_dir()]
+    )
+    if not lf_positions:
+        raise click.ClickException(f"No positions found matching '{lf_data_path}'")
+    if not ls_positions:
+        raise click.ClickException(f"No positions found matching '{ls_data_path}'")
+    if len(lf_positions) != len(ls_positions):
+        raise click.ClickException(
+            f"Mismatched position counts: {len(lf_positions)} label-free "
+            f"vs {len(ls_positions)} light-sheet."
+        )
 
-    with open_ome_zarr(positions[0]) as ds:
+    with open_ome_zarr(lf_positions[0]) as ds:
         T, C, Z, Y, X = ds.data.shape
         dtype = ds.data.dtype
 
-    # estimate_crop loads T×1×Z×Y×X per source (2 sources) via .compute(),
-    # producing bool masks then concatenating. Peak memory is dominated by
-    # dask materialising the full float array before reducing to bool.
+    # Per-FOV: loads T×1×Z×Y×X per source (2 sources) via .compute(),
+    # producing bool masks then concatenating.
     volume_gb = T * Z * Y * X * np.dtype(dtype).itemsize / 2**30
     total_gb = max(8, int(np.ceil(volume_gb * 4)))
     click.echo(f"RESOURCES:1 {total_gb}")
 
+    for lf_pos, ls_pos in zip(lf_positions, ls_positions, strict=True):
+        click.echo(f"POSITION:{lf_pos}\t{ls_pos}")
+
 
 @nf_cli.command("estimate-crop")
-@click.option("--config", "-c", required=True, type=click.Path(exists=True))
-@click.option("--output-config", "-o", required=True, type=click.Path())
+@click.option(
+    "--lf-position",
+    required=True,
+    type=click.Path(exists=True),
+    help="Path to label-free position zarr.",
+)
+@click.option(
+    "--ls-position",
+    required=True,
+    type=click.Path(exists=True),
+    help="Path to light-sheet position zarr.",
+)
 @click.option(
     "--lf-mask-radius",
     type=float,
     default=0.95,
     help="Circular mask radius as fraction of image width for phase channel.",
 )
-@click.option(
-    "--concat-data-paths",
-    multiple=True,
-    type=str,
-    help="Override concat_data_paths from config (one per source, repeat flag).",
-)
 def nf_estimate_crop(
-    config: str,
-    output_config: str,
+    lf_position: str,
+    ls_position: str,
     lf_mask_radius: float,
-    concat_data_paths: tuple[str, ...],
 ):
-    """Estimate crop region across all positions and write updated config."""
-    import glob as globmod
-
-    from natsort import natsorted
-
-    from biahub.cli.utils import model_to_yaml
+    """Estimate crop ranges for a single FOV and emit them to stdout."""
     from biahub.estimate_crop import estimate_crop_one_position
+
+    z_range, y_range, x_range = estimate_crop_one_position(
+        lf_dir=Path(lf_position),
+        ls_dir=Path(ls_position),
+        lf_mask_radius=lf_mask_radius,
+    )
+
+    click.echo(f"RANGES:{z_range[0]},{z_range[1]} {y_range[0]},{y_range[1]} {x_range[0]},{x_range[1]}")
+
+
+@nf_cli.command("reduce-crop-ranges")
+@click.option("--config", "-c", required=True, type=click.Path(exists=True))
+@click.option("--output-config", "-o", required=True, type=click.Path())
+@click.option(
+    "--ranges-file",
+    required=True,
+    type=click.Path(exists=True),
+    help="File with one RANGES: line per FOV (collected from estimate-crop outputs).",
+)
+def reduce_crop_ranges(config: str, output_config: str, ranges_file: str):
+    """Reduce per-FOV crop ranges into a global standardized crop config."""
+    from biahub.cli.utils import model_to_yaml
     from biahub.settings import ConcatenateSettings
 
     config_path = Path(config)
     settings = yaml_to_model(config_path, ConcatenateSettings)
 
-    if concat_data_paths:
-        settings.concat_data_paths = list(concat_data_paths)
-
-    if len(settings.concat_data_paths) < 2:
-        raise click.ClickException(
-            "estimate-crop requires at least 2 concat_data_paths (label-free + light-sheet)."
-        )
-
-    lf_positions = natsorted(
-        [Path(p) for p in globmod.glob(settings.concat_data_paths[0]) if Path(p).is_dir()]
-    )
-    ls_positions = natsorted(
-        [Path(p) for p in globmod.glob(settings.concat_data_paths[1]) if Path(p).is_dir()]
-    )
-
-    if len(lf_positions) != len(ls_positions):
-        raise click.ClickException(
-            f"Mismatched position counts: {len(lf_positions)} label-free vs {len(ls_positions)} light-sheet."
-        )
-
     all_ranges = []
-    for lf_dir, ls_dir in zip(lf_positions, ls_positions, strict=True):
-        z_range, y_range, x_range = estimate_crop_one_position(
-            lf_dir=lf_dir,
-            ls_dir=ls_dir,
-            lf_mask_radius=lf_mask_radius,
-        )
-        all_ranges.append([z_range, y_range, x_range])
+    with open(ranges_file) as f:
+        for line in f:
+            line = line.strip()
+            if not line.startswith("RANGES:"):
+                continue
+            parts = line.replace("RANGES:", "").strip().split()
+            z_start, z_end = (int(v) for v in parts[0].split(","))
+            y_start, y_end = (int(v) for v in parts[1].split(","))
+            x_start, x_end = (int(v) for v in parts[2].split(","))
+            all_ranges.append([[z_start, z_end], [y_start, y_end], [x_start, x_end]])
+
+    if not all_ranges:
+        raise click.ClickException("No RANGES: lines found in ranges file.")
 
     all_ranges = np.array(all_ranges)
     standardized_ranges = np.concatenate(
