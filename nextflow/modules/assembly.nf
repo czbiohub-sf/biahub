@@ -1,12 +1,30 @@
 include { dataset_name; parse_resources; biahub_cmd } from './common'
 
 
-process estimate_crop {
-    label 'cpu_preempted'
-    time '1h'
+process init_estimate_crop {
+    label 'cpu_local'
 
     input:
     val trigger
+
+    output:
+    stdout
+
+    script:
+    """
+    ${biahub_cmd()} nf init-estimate-crop \
+        --concat-data-path "${params.output_dir}/1-deskew/${dataset_name()}.zarr/*/*/*"
+    """
+}
+
+process estimate_crop {
+    label 'cpu_preempted'
+    cpus { meta.cpus }
+    memory { "${meta.mem_gb} GB" }
+    time '1h'
+
+    input:
+    val meta
 
     output:
     val true
@@ -70,7 +88,8 @@ workflow assemble_wf {
     prev_done
 
     main:
-    crop_done = estimate_crop(prev_done.map { 'done' })
+    crop_resources = init_estimate_crop(prev_done.map { 'done' }).map { parse_resources(it) }
+    crop_done = estimate_crop(crop_resources)
     resources = init_concatenate(crop_done).map { parse_resources(it) }
     as_done = positions
         .flatMap { it }

@@ -612,6 +612,37 @@ def run_track(
 # ---------------------------------------------------------------------------
 
 
+@nf_cli.command("init-estimate-crop")
+@click.option(
+    "--concat-data-path",
+    required=True,
+    type=str,
+    help="Glob pattern for one source zarr (resolves to position-level zarrs).",
+)
+def init_estimate_crop(concat_data_path: str):
+    """Estimate resources for estimate-crop from one source zarr's metadata."""
+    import glob as globmod
+
+    from natsort import natsorted
+
+    positions = natsorted(
+        [Path(p) for p in globmod.glob(concat_data_path) if Path(p).is_dir()]
+    )
+    if not positions:
+        raise click.ClickException(f"No positions found matching '{concat_data_path}'")
+
+    with open_ome_zarr(positions[0]) as ds:
+        T, C, Z, Y, X = ds.data.shape
+        dtype = ds.data.dtype
+
+    # estimate_crop loads T×1×Z×Y×X per source (2 sources) via .compute(),
+    # producing bool masks then concatenating. Peak memory is dominated by
+    # dask materialising the full float array before reducing to bool.
+    volume_gb = T * Z * Y * X * np.dtype(dtype).itemsize / 2**30
+    total_gb = max(8, int(np.ceil(volume_gb * 4)))
+    click.echo(f"RESOURCES:1 {total_gb}")
+
+
 @nf_cli.command("estimate-crop")
 @click.option("--config", "-c", required=True, type=click.Path(exists=True))
 @click.option("--output-config", "-o", required=True, type=click.Path())
@@ -689,7 +720,6 @@ def nf_estimate_crop(
     model_to_yaml(output_model, Path(output_config))
 
     click.echo(f"Updated config written to {output_config}")
-    click.echo("RESOURCES:4 32")
 
 
 @nf_cli.command("init-concatenate")
