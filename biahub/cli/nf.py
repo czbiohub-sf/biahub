@@ -394,8 +394,27 @@ def run_apply_inv_tf(
 
 
 # ---------------------------------------------------------------------------
-# Virtual stain
+# Pre-retry cleanup
 # ---------------------------------------------------------------------------
+
+
+@nf_cli.command("clean-position")
+@click.option("--output-zarr", "-o", required=True, type=click.Path())
+@click.option("--position", "-p", required=True, type=str)
+def clean_position(output_zarr: str, position: str):
+    """Remove a position from an output zarr before retry.
+
+    Killed jobs (timeout, preemption) can leave corrupt zarr shards.
+    Call this before re-running a position to avoid checksum errors.
+    """
+    import shutil
+
+    pos_path = Path(output_zarr) / position
+    if pos_path.exists():
+        shutil.rmtree(pos_path)
+        logger.info(f"Cleaned position for retry: {pos_path}")
+    else:
+        logger.info(f"No position to clean: {pos_path}")
 
 
 @nf_cli.command("clean-temp")
@@ -410,6 +429,11 @@ def clean_temp(temp_dir: str):
         logger.info(f"Removed stale temp directory: {path}")
     else:
         logger.info(f"No temp directory to clean: {path}")
+
+
+# ---------------------------------------------------------------------------
+# Virtual stain
+# ---------------------------------------------------------------------------
 
 
 @nf_cli.command("init-virtual-stain")

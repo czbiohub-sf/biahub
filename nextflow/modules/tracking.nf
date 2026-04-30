@@ -35,9 +35,13 @@ process run_track {
     val position
 
     script:
+    def output_zarr = "${params.output_dir}/4-track/${dataset_name()}.zarr"
     """
+    if [ ${task.attempt} -gt 1 ]; then
+        ${biahub_cmd()} nf clean-position -o "${output_zarr}" -p "${position}"
+    fi
     ${biahub_cmd()} nf run-track \
-        -o "${params.output_dir}/4-track/${dataset_name()}.zarr" \
+        -o "${output_zarr}" \
         -p "${position}" \
         -c "${params.track_config}" \
         --input-images-path "${params.output_dir}/3-virtual-stain/${dataset_name()}.zarr"

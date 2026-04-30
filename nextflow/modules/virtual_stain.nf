@@ -64,8 +64,12 @@ process run_virtual_stain {
 
     script:
     def temp_zarr = "${params.output_dir}/3-virtual-stain/temp/${position.replaceAll('/', '_')}.zarr"
+    def output_zarr = "${params.output_dir}/3-virtual-stain/${dataset_name()}.zarr"
     """
     rm -rf "${temp_zarr}"
+    if [ ${task.attempt} -gt 1 ]; then
+        ${biahub_cmd()} nf clean-position -o "${output_zarr}" -p "${position}"
+    fi
 
     ${viscy_cmd()} predict \
         -c "${params.predict_config}" \
@@ -77,7 +81,7 @@ process run_virtual_stain {
 
     ${biahub_cmd()} nf copy-virtual-stain \
         -t "${temp_zarr}" \
-        -o "${params.output_dir}/3-virtual-stain/${dataset_name()}.zarr" \
+        -o "${output_zarr}" \
         -p "${position}"
     """
 }

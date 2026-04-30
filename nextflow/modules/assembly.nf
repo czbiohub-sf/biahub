@@ -96,10 +96,14 @@ process run_concatenate {
     val position
 
     script:
+    def output_zarr = "${params.output_dir}/5-assemble/${dataset_name()}.zarr"
     """
+    if [ ${task.attempt} -gt 1 ]; then
+        ${biahub_cmd()} nf clean-position -o "${output_zarr}" -p "${position}"
+    fi
     ${biahub_cmd()} nf run-concatenate \
         -c "${params.output_dir}/5-assemble/concatenate_cropped.yml" \
-        -o "${params.output_dir}/5-assemble/${dataset_name()}.zarr" \
+        -o "${output_zarr}" \
         -p "${position}"
     """
 }
