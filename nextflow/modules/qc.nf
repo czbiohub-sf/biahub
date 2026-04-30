@@ -19,7 +19,7 @@ process init_qc_fanout {
 
     script:
     """
-    ${biahub_cmd()} nf qc init-qc-fanout -i "${zarr_path}" -c "${config_path}"
+    ${biahub_cmd()} nf qc init-qc-fanout -i "${zarr_path}" -c "${config_path}" --chunk-size ${params.qc_chunk_size}
     """
 }
 

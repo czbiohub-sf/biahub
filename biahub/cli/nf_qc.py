@@ -64,7 +64,14 @@ def init_chunks(input_zarr: str) -> None:
 @nf_qc_cli.command("init-qc-fanout")
 @click.option("--input-zarr", "-i", required=True, type=click.Path(exists=True))
 @click.option("--config", "-c", required=True, type=click.Path(exists=True))
-def init_qc_fanout(input_zarr: str, config: str) -> None:
+@click.option(
+    "--chunk-size",
+    type=int,
+    default=10,
+    show_default=True,
+    help="Number of timepoints per QC chunk. Merges shard-aligned batches.",
+)
+def init_qc_fanout(input_zarr: str, config: str, chunk_size: int) -> None:
     """Emit fan-out rows for QC metric groups, respecting scope.
 
     Reads metric_groups from the QC config and zarr metadata to produce
@@ -94,6 +101,7 @@ def init_qc_fanout(input_zarr: str, config: str) -> None:
         first_position = Path(input_zarr) / "/".join(position_keys[0])
         items = plan_single_position(first_position, first_position)
         seen: set[tuple[int, ...]] = set()
+        shard_chunks: list[tuple[int, int]] = []
         for item in items:
             key = tuple(item.input_time_indices)
             if key in seen:
@@ -101,7 +109,15 @@ def init_qc_fanout(input_zarr: str, config: str) -> None:
             seen.add(key)
             start = item.input_time_indices[0]
             end = item.input_time_indices[-1] + 1
-            chunks.append((start, end, f"t{start}-{end - 1}"))
+            shard_chunks.append((start, end))
+        shard_chunks.sort()
+        for i in range(0, len(shard_chunks), chunk_size):
+            batch = shard_chunks[i : i + chunk_size]
+            merged_start = batch[0][0]
+            merged_end = batch[-1][1]
+            chunks.append(
+                (merged_start, merged_end, f"t{merged_start}-{merged_end - 1}")
+            )
 
     for group_name, group_def in groups.items():
         scope = group_def.get("scope", "position")
