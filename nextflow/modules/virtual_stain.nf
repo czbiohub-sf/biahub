@@ -70,7 +70,7 @@ process run_virtual_stain {
     ${viscy_cmd()} predict \
         -c "${params.predict_config}" \
         --data.init_args.data_path "${params.output_dir}/2-reconstruct/${dataset_name()}.zarr/${position}" \
-        --data.init_args.num_workers ${task.cpus} \
+        --data.init_args.num_workers 0 \
         --trainer.callbacks+=viscy_utils.callbacks.prediction_writer.HCSPredictionWriter \
         --trainer.callbacks.output_store "${temp_zarr}" \
         --trainer.default_root_dir "${params.output_dir}/3-virtual-stain/logs"
