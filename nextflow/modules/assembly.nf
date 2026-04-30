@@ -56,7 +56,10 @@ process reduce_crop_ranges {
     ${biahub_cmd()} nf reduce-crop-ranges \
         -c "${params.concatenate_config}" \
         -o "${params.output_dir}/5-assemble/concatenate_cropped.yml" \
-        --ranges-file "${ranges_file}"
+        --ranges-file "${ranges_file}" \
+        --concat-data-paths "${params.output_dir}/1-deskew/${dataset_name()}.zarr/*/*/*" \
+        --concat-data-paths "${params.output_dir}/2-reconstruct/${dataset_name()}.zarr/*/*/*" \
+        --concat-data-paths "${params.output_dir}/3-virtual-stain/${dataset_name()}.zarr/*/*/*"
     """
 }
 

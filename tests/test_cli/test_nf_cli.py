@@ -679,6 +679,65 @@ def test_reduce_crop_ranges(tmp_path, example_plate, example_plate_2):
     assert updated["X_slice"] == [1, 5]
 
 
+def test_reduce_crop_ranges_overrides_concat_data_paths(
+    tmp_path, example_plate, example_plate_2
+):
+    """reduce-crop-ranges with --concat-data-paths replaces placeholder paths in output."""
+    plate_path_1, ds1 = example_plate
+    ds1.close()
+    plate_path_2, ds2 = example_plate_2
+    ds2.close()
+
+    cfg = {
+        "concat_data_paths": ["placeholder", "placeholder"],
+        "channel_names": [["Phase3D"], ["GFP"]],
+        "time_indices": "all",
+        "X_slice": "all",
+        "Y_slice": "all",
+        "Z_slice": "all",
+        "output_ome_zarr_version": "0.5",
+    }
+    config_path = tmp_path / "concat_placeholder.yml"
+    config_path.write_text(yaml.dump(cfg))
+
+    ranges_file = tmp_path / "all_ranges.txt"
+    ranges_file.write_text("RANGES:0,4 0,5 0,6\nRANGES:1,3 1,4 1,5\n")
+
+    real_path_1 = str(plate_path_1) + "/*/*/*"
+    real_path_2 = str(plate_path_2) + "/*/*/*"
+    output_config = tmp_path / "cropped_concat.yml"
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "nf",
+            "reduce-crop-ranges",
+            "-c",
+            str(config_path),
+            "-o",
+            str(output_config),
+            "--ranges-file",
+            str(ranges_file),
+            "--concat-data-paths",
+            real_path_1,
+            "--concat-data-paths",
+            real_path_2,
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert output_config.exists()
+
+    with open(output_config) as f:
+        updated = yaml.safe_load(f)
+    assert updated["concat_data_paths"] == [real_path_1, real_path_2]
+    assert "placeholder" not in str(updated["concat_data_paths"])
+    assert updated["Z_slice"] == [1, 3]
+    assert updated["Y_slice"] == [1, 4]
+    assert updated["X_slice"] == [1, 5]
+
+
 def test_estimate_crop_e2e(tmp_path, example_plate, example_plate_2):
     """End-to-end: init → per-FOV estimate → reduce produces valid crop config."""
     plate_path_1, ds1 = example_plate

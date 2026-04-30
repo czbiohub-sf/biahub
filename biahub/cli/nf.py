@@ -706,7 +706,15 @@ def nf_estimate_crop(
     type=click.Path(exists=True),
     help="File with one RANGES: line per FOV (collected from estimate-crop outputs).",
 )
-def reduce_crop_ranges(config: str, output_config: str, ranges_file: str):
+@click.option(
+    "--concat-data-paths",
+    multiple=True,
+    type=str,
+    help="Override concat_data_paths from config (one per source, repeat flag).",
+)
+def reduce_crop_ranges(
+    config: str, output_config: str, ranges_file: str, concat_data_paths: tuple[str, ...]
+):
     """Reduce per-FOV crop ranges into a global standardized crop config."""
     from biahub.cli.utils import model_to_yaml
     from biahub.settings import ConcatenateSettings
@@ -738,6 +746,8 @@ def reduce_crop_ranges(config: str, output_config: str, ranges_file: str):
     )
 
     output_model = settings.model_copy()
+    if concat_data_paths:
+        output_model.concat_data_paths = list(concat_data_paths)
     output_model.Z_slice = standardized_ranges[:, 0].tolist()
     output_model.Y_slice = standardized_ranges[:, 1].tolist()
     output_model.X_slice = standardized_ranges[:, 2].tolist()
