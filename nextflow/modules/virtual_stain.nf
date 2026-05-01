@@ -29,6 +29,7 @@ process init_virtual_stain {
 
 process run_virtual_stain_preprocess {
     label 'cpu'
+    cpus 16
     memory { "${64 * task.attempt} GB" }
     time '1h'
     maxRetries 1
