@@ -47,7 +47,7 @@ process run_virtual_stain_preprocess {
         --data_path "${params.output_dir}/2-reconstruct/${dataset_name()}.zarr" \
         --channel_names -1 \
         --num_workers ${task.cpus} \
-        --block_size 8
+        --block_size 32
     """
 }
 
