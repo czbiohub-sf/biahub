@@ -29,7 +29,7 @@ process init_virtual_stain {
 
 process run_virtual_stain_preprocess {
     label 'cpu'
-    memory '32 GB'
+    memory { "${64 * task.attempt} GB" }
     time '1h'
     maxRetries 1
     errorStrategy 'retry'
