@@ -103,7 +103,10 @@ process run_qc_position {
 
 process merge_qc_metrics {
     label 'cpu'
+    memory '32 GB'
     time '30m'
+    maxRetries 1
+    errorStrategy 'retry'
 
     input:
     tuple val(zarr_path), val(done)
@@ -120,7 +123,9 @@ process merge_qc_metrics {
 
 process merge_qc_stage {
     label 'cpu'
+    memory '32 GB'
     time '30m'
+    maxRetries 1
     errorStrategy { task.exitStatus in [0, 1] ? 'ignore' : 'retry' }
 
     input:
@@ -183,6 +188,7 @@ process log_qc_summary {
 
 process final_merge_and_report {
     label 'cpu'
+    memory '32 GB'
     time '1h'
 
     input:
