@@ -57,10 +57,9 @@ process run_virtual_stain {
     maxForks 30
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
-    time '2h'
-    maxRetries 1
+    time { task.attempt == 1 ? '2h' : '4h' }
+    maxRetries 2
     errorStrategy 'retry'
-    beforeScript { task.attempt > 1 ? "${biahub_cmd()} nf clean-position -o '${params.output_dir}/3-virtual-stain/${dataset_name()}.zarr' -p '${position}'" : '' }
 
     input:
     tuple val(position), val(meta)
