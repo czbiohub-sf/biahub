@@ -97,13 +97,11 @@ biahub = "biahub.cli.main:cli"
 index-strategy = "unsafe-best-match"
 
 [tool.uv.sources]
-# During the tile-stitch productionization, biahub depends on the
-# in-flight waveorder feature branch via a local worktrunk path. Once
-# the integrated waveorder + biahub set passes parity + c0041/c0032
-# reproduction, this gets replaced with a tagged release pin.
-# Branch protection blocks path / git+ deps in main — feature
-# branches only.
-waveorder = { path = "../waveorder.feature-tile-stitch-engine", editable = true }
+# During the tile-stitch productionization, biahub pins waveorder to
+# the in-flight feature branch (PR mehta-lab/waveorder#559). Replace
+# with a tagged release pin once that lands. Branch protection blocks
+# git+ deps from `main` — feature branches only.
+waveorder = { git = "https://github.com/mehta-lab/waveorder.git", branch = "feature/tile-stitch-engine" }
 
 [tool.hatch.metadata]
 allow-direct-references = true
