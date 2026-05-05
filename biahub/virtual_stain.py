@@ -3,7 +3,6 @@ import shutil
 import subprocess
 
 from pathlib import Path
-from typing import List
 
 import click
 import numpy as np
@@ -34,6 +33,7 @@ def run_viscy_preprocess(
 ):
     """
     Run VisCy preprocess on a single FOV.
+
     Parameters
     ----------
     data_path : str
@@ -74,6 +74,7 @@ def run_viscy_predict(
 ):
     """
     Run VisCy predict on a single FOV.
+
     Parameters
     ----------
     data_path : str
@@ -156,7 +157,7 @@ def combine_fov_zarrs_to_plate(
 
 
 def virtual_stain(
-    input_position_dirpaths: List[str],
+    input_position_dirpaths: list[str],
     output_dirpath: str,
     predict_config_filepath: str,
     path_viscy_env: str,
@@ -400,7 +401,7 @@ def virtual_stain(
     help="Which VisCy stage(s) to run.",
 )
 def virtual_stain_cli(
-    input_position_dirpaths: List[str],
+    input_position_dirpaths: list[str],
     output_dirpath: str,
     predict_config_filepath: str,
     path_viscy_env: str,
@@ -415,6 +416,7 @@ def virtual_stain_cli(
 ):
     """
     Run VisCy virtual staining on a zarr plate from dedicated python environment.
+
     Example:
     biahub virtual-stain \
         --input-position-dirpaths path.zarr/*/*/* \
