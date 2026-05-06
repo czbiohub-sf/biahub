@@ -95,10 +95,12 @@ process init_concatenate {
     stdout
 
     script:
+    def output_zarr = "${params.output_dir}/5-assemble/${dataset_name()}.zarr"
     """
+    rm -rf "${output_zarr}"
     ${biahub_cmd()} nf init-concatenate \
         -c "${resolved_config}" \
-        -o "${params.output_dir}/5-assemble/${dataset_name()}.zarr"
+        -o "${output_zarr}"
     """
 }
 
