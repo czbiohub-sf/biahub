@@ -3,13 +3,13 @@ import shutil
 import subprocess
 
 from pathlib import Path
+from typing import List
 
 import click
 import numpy as np
 import submitit
 
 from iohub.ngff import open_ome_zarr
-from iohub.ngff.utils import create_empty_plate
 
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
@@ -22,6 +22,7 @@ from biahub.cli.parsing import (
     sbatch_filepath_preprocess,
     sbatch_to_submitit,
 )
+from biahub.cli.utils import create_empty_hcs_zarr
 
 
 def run_viscy_preprocess(
@@ -33,7 +34,6 @@ def run_viscy_preprocess(
 ):
     """
     Run VisCy preprocess on a single FOV.
-
     Parameters
     ----------
     data_path : str
@@ -74,7 +74,6 @@ def run_viscy_predict(
 ):
     """
     Run VisCy predict on a single FOV.
-
     Parameters
     ----------
     data_path : str
@@ -97,11 +96,11 @@ def run_viscy_predict(
         "module load anaconda && "
         f"conda activate {path_viscy_env} && "
         "viscy predict "
-        f'-c "{config_file}" '
-        f'--data.init_args.data_path "{data_path}" '
+        f"-c \"{config_file}\" "
+        f"--data.init_args.data_path \"{data_path}\" "
         f"--trainer.callbacks+=viscy.translation.predict_writer.HCSPredictionWriter "
-        f'--trainer.callbacks.output_store "{output_store}" '
-        f'--trainer.default_root_dir "{log_dir}"'
+        f"--trainer.callbacks.output_store \"{output_store}\" "
+        f"--trainer.default_root_dir \"{log_dir}\""
     )
     if verbose:
         click.echo(f"Predict FOV: {'/'.join(Path(data_path).parts[-3:])}")
@@ -130,6 +129,7 @@ def combine_fov_zarrs_to_plate(
         Whether to delete the moved files afterwards. Default True.
     """
     for fov in fovs:
+
         row, col, pos = fov.parts[-3:]
         nested_fov_path = temp_dir / f"{row}_{col}_{pos}.zarr" / row / col / pos
 
@@ -156,7 +156,7 @@ def combine_fov_zarrs_to_plate(
 
 
 def virtual_stain(
-    input_position_dirpaths: list[str],
+    input_position_dirpaths: List[str],
     output_dirpath: str,
     predict_config_filepath: str,
     path_viscy_env: str,
@@ -210,6 +210,7 @@ def virtual_stain(
     path_viscy_env = Path(path_viscy_env)
 
     if run_mode in ["all", "preprocess"]:
+
         slurm_args_preprocess = {
             "slurm_job_name": "VS_preprocess",
             "slurm_mem_per_cpu": "8G",
@@ -321,7 +322,7 @@ def virtual_stain(
             "dtype": np.float32,
         }
 
-        create_empty_plate(
+        create_empty_hcs_zarr(
             store_path=output_dirpath,
             position_keys=[p.parts[-3:] for p in input_position_dirpaths],
             **output_metadata,
@@ -399,7 +400,7 @@ def virtual_stain(
     help="Which VisCy stage(s) to run.",
 )
 def virtual_stain_cli(
-    input_position_dirpaths: list[str],
+    input_position_dirpaths: List[str],
     output_dirpath: str,
     predict_config_filepath: str,
     path_viscy_env: str,
@@ -414,7 +415,6 @@ def virtual_stain_cli(
 ):
     """
     Run VisCy virtual staining on a zarr plate from dedicated python environment.
-
     Example:
     biahub virtual-stain \
         --input-position-dirpaths path.zarr/*/*/* \
