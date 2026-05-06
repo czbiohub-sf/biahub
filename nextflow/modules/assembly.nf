@@ -70,16 +70,18 @@ process resolve_concatenate_config {
     val trigger
 
     output:
-    val true
+    path "concatenate_resolved.yml"
 
     script:
+    def resolved = "${params.output_dir}/5-assemble/concatenate_resolved.yml"
     """
     ${biahub_cmd()} nf resolve-concatenate-config \
         -c "${params.concatenate_config}" \
-        -o "${params.output_dir}/5-assemble/concatenate_resolved.yml" \
+        -o "${resolved}" \
         --concat-data-paths "${params.output_dir}/1-deskew/${dataset_name()}.zarr/*/*/*" \
         --concat-data-paths "${params.output_dir}/2-reconstruct/${dataset_name()}.zarr/*/*/*" \
         --concat-data-paths "${params.output_dir}/3-virtual-stain/${dataset_name()}.zarr/*/*/*"
+    cp "${resolved}" concatenate_resolved.yml
     """
 }
 
@@ -87,7 +89,7 @@ process init_concatenate {
     label 'cpu_local'
 
     input:
-    val trigger
+    path resolved_config
 
     output:
     stdout
@@ -95,7 +97,7 @@ process init_concatenate {
     script:
     """
     ${biahub_cmd()} nf init-concatenate \
-        -c "${params.output_dir}/5-assemble/concatenate_resolved.yml" \
+        -c "${resolved_config}" \
         -o "${params.output_dir}/5-assemble/${dataset_name()}.zarr"
     """
 }
@@ -143,8 +145,8 @@ workflow assemble_wf_mantisv2 {
     prev_done
 
     main:
-    resolved = resolve_concatenate_config(prev_done.map { 'done' })
-    resources = init_concatenate(resolved).map { parse_resources(it) }
+    resolved_config = resolve_concatenate_config(prev_done.map { 'done' })
+    resources = init_concatenate(resolved_config).map { parse_resources(it) }
     as_done = positions
         .flatMap { it }
         .combine(resources)
