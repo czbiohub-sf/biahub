@@ -183,7 +183,7 @@ def flat_field(
                     _czyx_flat_field,
                     input_position_path,
                     output_position_path,
-                    num_workers=int(slurm_args["slurm_cpus_per_task"]),
+                    num_processes=int(slurm_args["slurm_cpus_per_task"]),
                     **flat_field_args,
                 )
             )

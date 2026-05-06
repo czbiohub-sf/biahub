@@ -296,7 +296,7 @@ def stabilize(
                         output_shape=(Z, Y, X),
                         input_channel_indices=[[channel_names.index(channel_name)]],
                         output_channel_indices=[[channel_names.index(channel_name)]],
-                        num_workers=int(
+                        num_processes=int(
                             slurm_args["slurm_cpus_per_task"]
                         ),  # parallel processing over time
                         **stabilize_zyx_args,
@@ -310,7 +310,7 @@ def stabilize(
                         input_time_indices=time_indices,
                         input_channel_indices=[[channel_names.index(channel_name)]],
                         output_channel_indices=[[channel_names.index(channel_name)]],
-                        num_workers=int(slurm_args["slurm_cpus_per_task"]),
+                        num_processes=int(slurm_args["slurm_cpus_per_task"]),
                         **copy_n_paste_kwargs,
                     )
 
