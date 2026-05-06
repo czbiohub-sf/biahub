@@ -686,7 +686,7 @@ def deskew(
                     _czyx_fast_deskew_data,
                     input_position_path,
                     output_position_path,
-                    num_workers=slurm_args["slurm_cpus_per_task"],
+                    num_processes=slurm_args["slurm_cpus_per_task"],
                     **deskew_args,
                 )
             )
