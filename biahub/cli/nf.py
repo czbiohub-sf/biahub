@@ -655,12 +655,8 @@ def init_estimate_crop(lf_data_path: str, ls_data_path: str):
 
     from natsort import natsorted
 
-    lf_positions = natsorted(
-        [Path(p) for p in globmod.glob(lf_data_path) if Path(p).is_dir()]
-    )
-    ls_positions = natsorted(
-        [Path(p) for p in globmod.glob(ls_data_path) if Path(p).is_dir()]
-    )
+    lf_positions = natsorted([Path(p) for p in globmod.glob(lf_data_path) if Path(p).is_dir()])
+    ls_positions = natsorted([Path(p) for p in globmod.glob(ls_data_path) if Path(p).is_dir()])
     if not lf_positions:
         raise click.ClickException(f"No positions found matching '{lf_data_path}'")
     if not ls_positions:
@@ -718,7 +714,9 @@ def nf_estimate_crop(
         lf_mask_radius=lf_mask_radius,
     )
 
-    click.echo(f"RANGES:{z_range[0]},{z_range[1]} {y_range[0]},{y_range[1]} {x_range[0]},{x_range[1]}")
+    click.echo(
+        f"RANGES:{z_range[0]},{z_range[1]} {y_range[0]},{y_range[1]} {x_range[0]},{x_range[1]}"
+    )
 
 
 @nf_cli.command("reduce-crop-ranges")

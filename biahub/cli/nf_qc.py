@@ -79,7 +79,7 @@ def init_qc_fanout(input_zarr: str, config: str, chunk_size: int) -> None:
 
     Position-scoped groups emit one row per (position, time-chunk)::
 
-        position,group_name,start,end,chunk_id
+        position, group_name, start, end, chunk_id
 
     Temporal-scoped groups emit one row per position (no chunking)::
 
@@ -93,9 +93,7 @@ def init_qc_fanout(input_zarr: str, config: str, chunk_size: int) -> None:
     position_keys, _, _, _ = read_plate_metadata(input_zarr)
     positions = ["/".join(pk) for pk in position_keys]
 
-    has_position_scope = any(
-        g.get("scope", "position") == "position" for g in groups.values()
-    )
+    has_position_scope = any(g.get("scope", "position") == "position" for g in groups.values())
     chunks: list[tuple[int, int, str]] = []
     if has_position_scope:
         first_position = Path(input_zarr) / "/".join(position_keys[0])
@@ -115,9 +113,7 @@ def init_qc_fanout(input_zarr: str, config: str, chunk_size: int) -> None:
             batch = shard_chunks[i : i + chunk_size]
             merged_start = batch[0][0]
             merged_end = batch[-1][1]
-            chunks.append(
-                (merged_start, merged_end, f"t{merged_start}-{merged_end - 1}")
-            )
+            chunks.append((merged_start, merged_end, f"t{merged_start}-{merged_end - 1}"))
 
     for group_name, group_def in groups.items():
         scope = group_def.get("scope", "position")

@@ -646,11 +646,7 @@ def test_reduce_crop_ranges(tmp_path, example_plate, example_plate_2):
     config_path.write_text(yaml.dump(cfg))
 
     ranges_file = tmp_path / "all_ranges.txt"
-    ranges_file.write_text(
-        "RANGES:0,4 0,5 0,6\n"
-        "RANGES:1,3 1,4 1,5\n"
-        "RANGES:0,4 0,5 0,6\n"
-    )
+    ranges_file.write_text("RANGES:0,4 0,5 0,6\nRANGES:1,3 1,4 1,5\nRANGES:0,4 0,5 0,6\n")
 
     output_config = tmp_path / "cropped_concat.yml"
 
@@ -872,7 +868,11 @@ def test_estimate_crop_e2e(tmp_path, example_plate, example_plate_2):
 
     with open(output_config) as f:
         updated = yaml.safe_load(f)
-    assert updated["Z_slice"] != "all" or updated["Y_slice"] != "all" or updated["X_slice"] != "all"
+    assert (
+        updated["Z_slice"] != "all"
+        or updated["Y_slice"] != "all"
+        or updated["X_slice"] != "all"
+    )
     for dim in ("Z_slice", "Y_slice", "X_slice"):
         assert isinstance(updated[dim], list)
         assert len(updated[dim]) == 2
