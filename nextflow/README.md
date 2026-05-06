@@ -42,9 +42,40 @@ Four-step pipeline: flat-field correction -> deskew -> reconstruct (compute tran
 
 ### mantis-v2-timelapse
 
-Full mantis v2 pipeline: flat-field -> deskew -> reconstruct -> virtual stain + tracking (parallel) -> rename channels -> assembly (crop + concatenate). Designed for timelapse plate-level data.
+Full mantis v2 pipeline: flat-field -> deskew -> reconstruct -> virtual stain + tracking (parallel) -> rename channels -> assembly (concatenate). Designed for timelapse plate-level data.
 
 ![Pipeline DAG](mantis-v2-timelapse.png)
+
+**Entry points.** The pipeline supports `-entry` to restart from any stage, assuming prior outputs exist on disk:
+
+| Entry | Assumes exists on disk | Runs |
+|-------|------------------------|------|
+| `full` (default) | input zarr | all stages |
+| `from_deskew` | 0-flatfield | deskew → assembly |
+| `from_reconstruct` | 0-flatfield, 1-deskew | reconstruct → assembly |
+| `from_virtual_stain` | through 2-reconstruct | virtual stain → assembly |
+| `from_tracking` | through 3-virtual-stain | tracking → assembly |
+| `from_assembly` | through rename | assembly only |
+
+Each entry point only validates the params it needs. For example, `from_assembly` only requires `--output_dir`, `--concatenate_config`, `--input_zarr`, and `--biahub_project`. QC runs only for the stages that actually execute.
+
+Example — rerun just assembly + QC:
+
+```bash
+nextflow run "${PIPELINE}" \
+    -c "${NF_CONFIG}" \
+    -profile slurm \
+    -entry from_assembly \
+    --input_zarr         "${INPUT_ZARR}" \
+    --output_dir         "${OUTPUT_DIR}" \
+    --concatenate_config "${CONFIGS}/concatenate.yml" \
+    --biahub_project     "${BIAHUB_PROJECT}" \
+    --qc_config_dir      "${QC_CONFIGS}" \
+    --qc_project         "${QC_PROJECT}" \
+    --quarto_bin         "${QUARTO_BIN}" \
+    --work_dir           "${WORK_DIR}" \
+    -resume
+```
 
 ### qc-standalone
 
