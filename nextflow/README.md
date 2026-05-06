@@ -110,12 +110,12 @@ Omit `--biahub_project` if `biahub` is already on `PATH` (e.g. in a container im
 
 ### VisCy (virtual staining)
 
-The virtual stain step requires a separate VisCy environment. We use an editable install from the `modular-viscy-staging` branch, which depends on iohub ≥0.3.3 (earlier versions crash when the plate zarr contains a `tables/` group at root).
+The virtual stain step requires a separate VisCy environment. We use an editable install from the [`dynacell-models`](https://github.com/mehta-lab/VisCy/pull/404) branch, which depends on iohub ≥0.3.3 (earlier versions crash when the plate zarr contains a `tables/` group at root).
 
 ```bash
 # checkout the correct branch
 cd /path/to/VisCy
-git checkout modular-viscy-staging
+git checkout dynacell-models
 
 # create a thin wrapper project for the environment
 mkdir -p /path/to/viscy-env
@@ -155,7 +155,14 @@ Pass the env path to the pipeline:
 
 The QC processes in `modules/qc.nf` shell out to the `imaging-qc` CLI — they do **not** import Nextflow subworkflows or Python code from `imaging-qc-pipeline`. All orchestration (fan-out, chunking, merging) is defined here in biahub; `imaging-qc-pipeline` is a black-box CLI dependency. This means changes to the internal Nextflow or Python orchestration in `imaging-qc-pipeline` (DAG resolution, dispatch, subworkflows) do not affect this pipeline as long as the CLI contract is stable.
 
-The QC stages require a separate `imaging-qc-pipeline` environment and Quarto (for interactive reports). Follow steps 1–3 of the [imaging-qc-pipeline getting started guide](https://github.com/czbiohub-sf/imaging-qc-pipeline/tree/main#getting-started-hpc-path-brunoreef), then pass the project path and Quarto binary location to the pipeline:
+The QC stages require a separate `imaging-qc-pipeline` environment and Quarto (for interactive reports). **Pin to the `v0.3.1` tag** — later versions may change the CLI contract. Follow steps 1–3 of the [imaging-qc-pipeline getting started guide](https://github.com/czbiohub-sf/imaging-qc-pipeline/tree/v0.3.1#getting-started-hpc-path-brunoreef), checking out the tag before installing:
+
+```bash
+cd /path/to/imaging-qc-pipeline
+git checkout v0.3.1
+```
+
+Then pass the project path and Quarto binary location to the pipeline:
 
 ```bash
 --qc_project /path/to/imaging-qc-pipeline
