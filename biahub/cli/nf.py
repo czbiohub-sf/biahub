@@ -1944,7 +1944,8 @@ def nf_estimate_stitch(
     translation_dict = {}
     for pos_key in position_keys:
         with open_ome_zarr(str(plate_path / pos_key), mode="r") as pos_ds:
-            position_name = pos_ds.zattrs["omero"]["name"]
+            omero = pos_ds.zattrs.get("omero", {})
+            position_name = omero.get("name", pos_key.split("/")[-1])
 
         with open_ome_zarr(str(plate_path), mode="r") as plate_ds:
             zyx_position = extract_stage_position(plate_ds, position_name)
