@@ -105,11 +105,11 @@ digraph pipeline {
     subgraph cluster_asm {
         label="5 · assemble" style=filled fillcolor="#F4CCCC"
         fontname="Helvetica" fontsize=12
-        estimate_crop    [shape=ellipse fillcolor="#B5D6A7" label="estimate_crop"]
-        init_concatenate [shape=ellipse fillcolor="#B5D6A7" label="init_concatenate"]
-        run_concatenate  [shape=box fillcolor="#A4C2F4"
-                          label="run_concatenate\n(× positions)"]
-        estimate_crop -> init_concatenate
+        resolve_concat_config [shape=ellipse fillcolor="#B5D6A7" label="resolve_concatenate_config"]
+        init_concatenate      [shape=ellipse fillcolor="#B5D6A7" label="init_concatenate"]
+        run_concatenate       [shape=box fillcolor="#A4C2F4"
+                               label="run_concatenate\n(× positions)"]
+        resolve_concat_config -> init_concatenate
         init_concatenate -> run_concatenate [label="resources"]
     }
 
@@ -142,7 +142,7 @@ digraph pipeline {
     run_apply_inv_tf -> preprocess_vs
     run_virtual_stain -> init_track       [label="all done" lhead=cluster_tk]
     run_track -> init_resources_rename    [label="all done" lhead=cluster_rn]
-    rename_channels -> estimate_crop      [label="all done" lhead=cluster_asm]
+    rename_channels -> resolve_concat_config [label="all done" lhead=cluster_asm]
 
     // ════════════════════════════════════════
     //  QC edges (red, dashed)

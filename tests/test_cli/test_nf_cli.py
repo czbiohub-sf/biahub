@@ -738,6 +738,58 @@ def test_reduce_crop_ranges_overrides_concat_data_paths(
     assert updated["X_slice"] == [1, 5]
 
 
+def test_resolve_concatenate_config(tmp_path, example_plate, example_plate_2):
+    """resolve-concatenate-config substitutes placeholder paths without cropping."""
+    plate_path_1, ds1 = example_plate
+    ds1.close()
+    plate_path_2, ds2 = example_plate_2
+    ds2.close()
+
+    cfg = {
+        "concat_data_paths": ["placeholder", "placeholder"],
+        "channel_names": [["Phase3D"], ["GFP"]],
+        "time_indices": "all",
+        "X_slice": "all",
+        "Y_slice": "all",
+        "Z_slice": "all",
+        "output_ome_zarr_version": "0.5",
+    }
+    config_path = tmp_path / "concat_placeholder.yml"
+    config_path.write_text(yaml.dump(cfg))
+
+    real_path_1 = str(plate_path_1) + "/*/*/*"
+    real_path_2 = str(plate_path_2) + "/*/*/*"
+    output_config = tmp_path / "resolved_concat.yml"
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "nf",
+            "resolve-concatenate-config",
+            "-c",
+            str(config_path),
+            "-o",
+            str(output_config),
+            "--concat-data-paths",
+            real_path_1,
+            "--concat-data-paths",
+            real_path_2,
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert output_config.exists()
+
+    with open(output_config) as f:
+        updated = yaml.safe_load(f)
+    assert updated["concat_data_paths"] == [real_path_1, real_path_2]
+    assert "placeholder" not in str(updated["concat_data_paths"])
+    assert updated["X_slice"] == "all"
+    assert updated["Y_slice"] == "all"
+    assert updated["Z_slice"] == "all"
+
+
 def test_estimate_crop_e2e(tmp_path, example_plate, example_plate_2):
     """End-to-end: init → per-FOV estimate → reduce produces valid crop config."""
     plate_path_1, ds1 = example_plate

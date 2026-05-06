@@ -29,7 +29,7 @@ include { reconstruct_wf }    from './modules/reconstruct'
 include { virtual_stain_wf }  from './modules/virtual_stain'
 include { rename_wf }         from './modules/rename_channels'
 include { track_wf }          from './modules/tracking'
-include { assemble_wf }       from './modules/assembly'
+include { assemble_wf_mantisv2 } from './modules/assembly'
 include { qc_stage_wf as qc_post_flatfield }      from './modules/qc'
 include { qc_stage_wf as qc_post_deskew }         from './modules/qc'
 include { qc_stage_wf as qc_post_reconstruct }    from './modules/qc'
@@ -73,7 +73,7 @@ workflow {
     rn_done  = rename_wf(all_positions, tk_done.done)
 
     // Phase 3: assembly (waits for rename)
-    asm_done = assemble_wf(all_positions, rn_done.done)
+    asm_done = assemble_wf_mantisv2(all_positions, rn_done.done)
 
     // QC stages (parallel with next processing step, non-blocking)
     if (params.qc_config_dir) {

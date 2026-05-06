@@ -63,6 +63,26 @@ process reduce_crop_ranges {
     """
 }
 
+process resolve_concatenate_config {
+    label 'cpu_local'
+
+    input:
+    val trigger
+
+    output:
+    val true
+
+    script:
+    """
+    ${biahub_cmd()} nf resolve-concatenate-config \
+        -c "${params.concatenate_config}" \
+        -o "${params.output_dir}/5-assemble/concatenate_resolved.yml" \
+        --concat-data-paths "${params.output_dir}/1-deskew/${dataset_name()}.zarr/*/*/*" \
+        --concat-data-paths "${params.output_dir}/2-reconstruct/${dataset_name()}.zarr/*/*/*" \
+        --concat-data-paths "${params.output_dir}/3-virtual-stain/${dataset_name()}.zarr/*/*/*"
+    """
+}
+
 process init_concatenate {
     label 'cpu_local'
 
@@ -75,7 +95,7 @@ process init_concatenate {
     script:
     """
     ${biahub_cmd()} nf init-concatenate \
-        -c "${params.output_dir}/5-assemble/concatenate_cropped.yml" \
+        -c "${params.output_dir}/5-assemble/concatenate_resolved.yml" \
         -o "${params.output_dir}/5-assemble/${dataset_name()}.zarr"
     """
 }
@@ -100,7 +120,7 @@ process run_concatenate {
     script:
     """
     ${biahub_cmd()} nf run-concatenate \
-        -c "${params.output_dir}/5-assemble/concatenate_cropped.yml" \
+        -c "${params.output_dir}/5-assemble/concatenate_resolved.yml" \
         -o "${params.output_dir}/5-assemble/${dataset_name()}.zarr" \
         -p "${position}"
     """
@@ -117,24 +137,14 @@ def parse_positions(stdout_text) {
 }
 
 
-workflow assemble_wf {
+workflow assemble_wf_mantisv2 {
     take:
     positions
     prev_done
 
     main:
-    init_out = init_estimate_crop(prev_done.map { 'done' })
-    crop_resources = init_out.map { parse_resources(it) }
-    crop_positions = init_out
-        .flatMap { parse_positions(it) }
-        .combine(crop_resources)
-
-    ranges_ch = estimate_crop(crop_positions)
-        | collectFile(name: 'all_ranges.txt', newLine: true)
-
-    crop_done = reduce_crop_ranges(ranges_ch, ranges_ch.map { 'done' })
-
-    resources = init_concatenate(crop_done).map { parse_resources(it) }
+    resolved = resolve_concatenate_config(prev_done.map { 'done' })
+    resources = init_concatenate(resolved).map { parse_resources(it) }
     as_done = positions
         .flatMap { it }
         .combine(resources)

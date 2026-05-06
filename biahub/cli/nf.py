@@ -780,6 +780,29 @@ def reduce_crop_ranges(
     click.echo(f"Updated config written to {output_config}")
 
 
+@nf_cli.command("resolve-concatenate-config")
+@click.option("--config", "-c", required=True, type=click.Path(exists=True))
+@click.option("--output-config", "-o", required=True, type=click.Path())
+@click.option(
+    "--concat-data-paths",
+    multiple=True,
+    type=str,
+    help="Real concat_data_paths (one per source, repeat flag).",
+)
+def resolve_concatenate_config(
+    config: str, output_config: str, concat_data_paths: tuple[str, ...]
+):
+    """Resolve placeholder concat_data_paths without cropping."""
+    from biahub.cli.utils import model_to_yaml
+    from biahub.settings import ConcatenateSettings
+
+    settings = yaml_to_model(Path(config), ConcatenateSettings)
+    output_model = settings.model_copy()
+    output_model.concat_data_paths = list(concat_data_paths)
+    model_to_yaml(output_model, Path(output_config))
+    click.echo(f"Resolved config written to {output_config}")
+
+
 @nf_cli.command("init-concatenate")
 @click.option("--config", "-c", required=True, type=click.Path(exists=True))
 @click.option("--output-zarr", "-o", required=True, type=click.Path())
