@@ -1,10 +1,8 @@
 #!/usr/bin/env nextflow
 //
 // Standalone QC pipeline — runs imaging-qc against arbitrary zarr stores
-// listed in a CSV manifest, with two-pass metric computation (chunked
-// position-scoped metrics first, then dependent/temporal metrics after merge),
-// timepoint batching as distributed Slurm jobs, and a chained consolidation +
-// report at the end.
+// listed in a CSV manifest. Python owns all dispatch logic via
+// plan-stage --format csv; Nextflow owns fan-out, barriers, and retries.
 //
 // See nextflow/README-qc-standalone.md for usage and examples.
 //
@@ -22,32 +20,14 @@ params.qc_report_dir    = null
 params.qc_chunk_size    = 10
 params.max_positions    = 0
 
-include { biahub_cmd } from './modules/common'
-include { init_qc_fanout }          from './modules/qc'
-include { estimate_qc_resources }   from './modules/qc'
-include { run_qc_chunked }          from './modules/qc'
-include { run_qc_position }         from './modules/qc'
-include { merge_qc_metrics }        from './modules/qc'
-include { merge_qc_stage }          from './modules/qc'
-include { consolidate_qc }          from './modules/qc'
-include { log_qc_summary }          from './modules/qc'
-include { final_merge_and_report }  from './modules/qc'
-
-
-process discover_positions {
-    label 'cpu_local'
-
-    input:
-    val zarr_path
-
-    output:
-    stdout
-
-    script:
-    """
-    ${biahub_cmd()} nf list-positions -i "${zarr_path}"
-    """
-}
+include { biahub_cmd }             from './modules/common'
+include { plan_stage }             from './modules/qc'
+include { run_step }               from './modules/qc'
+include { finalize_wave }          from './modules/qc'
+include { finalize_stage }         from './modules/qc'
+include { consolidate_qc }         from './modules/qc'
+include { log_qc_summary }         from './modules/qc'
+include { final_merge_and_report } from './modules/qc'
 
 
 workflow {
@@ -59,7 +39,6 @@ workflow {
     }
 
     // ── Parse manifest ──────────────────────────────────────────────
-    // Collect into a value channel (list of tuples) so it can be reused.
     manifest = Channel
         .fromPath(params.stages_manifest)
         .splitCsv(header: true)
@@ -67,126 +46,94 @@ workflow {
             def is_asm = (row.assembly ?: 'false').trim().toLowerCase() in ['true', '1', 'yes']
             [row.zarr_path.trim(), row.config_path.trim(), row.stage_name.trim(), is_asm]
         }
-        .toList()  // value channel: [[zarr, config, name, asm], ...]
+        .toList()
 
-    // ── Discover positions ──────────────────────────────────────────
-    first_zarr = manifest.map { rows -> rows[0][0] }
-
-    if (params.positions) {
-        positions_ch = Channel.of(params.positions.tokenize(','))
-            .flatMap { it }
-            .map { it.trim() }
-    } else {
-        positions_ch = first_zarr
-            | discover_positions
-            | splitText
-            | map { it.trim() }
-            | filter { it }
-    }
-
-    all_positions = params.max_positions > 0
-        ? positions_ch | take(params.max_positions) | collect
-        : positions_ch | collect
-
-    // ── Fan-out per stage ───────────────────────────────────────────
-    // Emit each manifest row as a queue channel for fan-out.
-    // init_qc_fanout takes tuple(zarr, config) and emits CSV rows:
-    //   position, group, start, end, chunk_id
-    fanout_inputs = manifest
+    // ── Plan each stage via plan-stage --format csv ─────────────────
+    plan_inputs = manifest
         .flatMap { rows -> rows.collect { row -> tuple(row[0], row[1]) } }
 
-    fanout_raw = init_qc_fanout(fanout_inputs)
+    plans = plan_stage(plan_inputs)
 
-    // Re-attach stage metadata. init_qc_fanout preserves input order,
-    // so merge pairs each (zarr, config, name) with its stdout output.
-    stage_meta = manifest
-        .flatMap { rows -> rows.collect { row -> tuple(row[0], row[1], row[2]) } }
-
-    fanout_rows = stage_meta
-        .merge(fanout_raw)
-        .flatMap { zarr, config, name, csv_text ->
-            csv_text.trim().tokenize('\n').collect { line ->
-                def cols = line.split(',', -1)
-                tuple(zarr, config, name, cols[0], cols[1], cols[2], cols[3], cols[4])
+    // Parse CSV rows and branch by wave_id
+    parsed = plans
+        .flatMap { z, cfg, csv_text ->
+            csv_text.trim().tokenize('\n').tail().collect { line ->
+                def c = line.split(',', -1)
+                tuple(z, cfg, c[0].toInteger(), c[1], c[2], c[3], c[4], c[5], c[6])
             }
         }
-
-    // ── Resource estimation ─────────────────────────────────────────
-    // One estimate per unique (zarr, group, config)
-    unique_groups = fanout_rows
-        .map { zarr, config, name, pos, group, start, end, chunk_id ->
-            tuple(zarr, group, config)
-        }
-        .unique()
-
-    estimates = estimate_qc_resources(unique_groups)
-        .map { group, mem_text ->
-            tuple(group, mem_text.trim().toFloat().round(1))
+        .branch {
+            w0: it[2] == 0
+            w1: it[2] == 1
+            w2: it[2] == 2
         }
 
-    // ── Pass 1: chunked position-scoped metrics (Slurm) ────────────
-    // Rows with non-empty start/end are time-chunked
-    chunked = fanout_rows
-        .filter { zarr, config, name, pos, group, start, end, chunk_id -> start != '' }
-        .map { zarr, config, name, pos, group, start, end, chunk_id ->
-            tuple(group, pos, start, end, chunk_id, zarr, config)
+    // ── Wave 0: position-scoped (chunked) ───────────────────────────
+    w0_input = parsed.w0
+        .map { z, cfg, wid, sid, scope, pos, cid, ti, fin ->
+            [z, cfg, sid, pos ?: null, cid ?: null, ti ?: null]
         }
-        .combine(estimates, by: 0)
-        .map { group, pos, start, end, chunk_id, zarr, config, mem_gb ->
-            tuple(pos, group, start, end, chunk_id, zarr, config, mem_gb)
+    w0_done = run_step(w0_input)
+
+    // Finalize wave 0 (merge chunks)
+    w0_zarrs = w0_done
+        .map { z, sid, pos -> z }
+        .ifEmpty('none')
+        .collect()
+
+    // Get unique zarrs that had wave 0 work
+    fw0_input = plans
+        .map { z, cfg, csv_text -> [z, cfg] }
+        .combine(w0_zarrs)
+        .map { z, cfg, done -> [z, cfg, 0] }
+
+    fw0_done = finalize_wave(fw0_input)
+
+    // ── Wave 1: dependent metrics ───────────────────────────────────
+    w1_input = parsed.w1
+        .map { z, cfg, wid, sid, scope, pos, cid, ti, fin ->
+            [z, cfg, sid, pos ?: null, null, null]
         }
-
-    chunked_done = run_qc_chunked(chunked)
-
-    // ── Merge metrics per zarr (Slurm) ──────────────────────────────
-    // After all chunked jobs finish, merge chunk parquets per zarr
-    // so that pass-2 dependent metrics can read consolidated results.
-    zarrs_with_chunks = chunked
-        .map { pos, group, start, end, chunk_id, zarr, config, mem_gb -> zarr }
-        .unique()
-
-    metrics_merged = zarrs_with_chunks
-        .combine(chunked_done.ifEmpty('none').collect())
-        .map { zarr, done -> tuple(zarr, done) }
-        | merge_qc_metrics
-
-    // ── Pass 2: dependent/temporal metrics (Slurm) ──────────────────
-    // Rows with empty start/end. Wait for merge_qc_metrics to finish
-    // because these metrics (e.g. bleach_rate) depend on upstream
-    // results (e.g. intensity_stats) written by pass-1 chunks.
-    dependent = fanout_rows
-        .filter { zarr, config, name, pos, group, start, end, chunk_id -> start == '' }
-        .map { zarr, config, name, pos, group, start, end, chunk_id ->
-            tuple(group, pos, zarr, config)
+        .combine(fw0_done.collect())
+        .map { z, cfg, sid, pos, cid, ti, barrier ->
+            [z, cfg, sid, pos, cid, ti]
         }
-        .combine(estimates, by: 0)
-        .map { group, pos, zarr, config, mem_gb ->
-            tuple(pos, group, zarr, config, mem_gb)
+    w1_done = run_step(w1_input)
+
+    w1_barrier = w1_done
+        .map { z, sid, pos -> z }
+        .ifEmpty('none')
+        .mix(fw0_done.map { z, wid -> z })
+        .collect()
+
+    // ── Wave 2: store-scoped ────────────────────────────────────────
+    w2_input = parsed.w2
+        .map { z, cfg, wid, sid, scope, pos, cid, ti, fin ->
+            [z, cfg, sid, null, null, null]
         }
-        .combine(metrics_merged.collect())
-        .map { pos, group, zarr, config, mem_gb, trigger ->
-            tuple(pos, group, zarr, config, mem_gb)
+        .combine(w1_barrier)
+        .map { z, cfg, sid, pos, cid, ti, barrier ->
+            [z, cfg, sid, pos, cid, ti]
         }
+    w2_done = run_step(w2_input)
 
-    dependent_done = run_qc_position(dependent)
+    // ── Finalize each stage ─────────────────────────────────────────
+    all_compute = w0_done.mix(w1_done, w2_done)
+        .map { z, sid, pos -> z }
+        .ifEmpty('none')
+        .collect()
 
-    // ── Merge + gate per stage (Slurm) ──────────────────────────────
-    all_qc_done = chunked_done.mix(dependent_done).collect()
+    fs_inputs = manifest
+        .flatMap { rows -> rows.collect { row -> [row[0], row[1]] } }
+        .combine(all_compute)
+        .map { zarr, config, done -> [zarr, config] }
 
-    stage_merge_inputs = manifest
-        .flatMap { rows -> rows.collect { row -> tuple(row[0], row[1], row[2]) } }
-        .combine(all_qc_done)
-        .map { zarr, config, name, done ->
-            tuple(zarr, done, config, name)
-        }
-
-    summaries = merge_qc_stage(stage_merge_inputs)
-    all_summaries = summaries | collect
+    summaries = finalize_stage(fs_inputs)
+    all_summaries = summaries
+        .map { zarr, summary -> summary }
+        .collect()
 
     // ── Consolidate (local) ─────────────────────────────────────────
-    // Copy QC parquets from step zarrs into the assembly zarr.
-    // When no stage is marked assembly=true, the process is a no-op
-    // (guarded in the consolidate_qc process script).
     step_zarrs = manifest
         .map { rows -> rows.findAll { !it[3] }.collect { it[0] } }
 
@@ -198,7 +145,7 @@ workflow {
 
     consolidate_done = consolidate_qc(all_summaries, step_zarrs, assembly_zarr)
 
-    // ── Report (Slurm) ──────────────────────────────────────────────
+    // ── Report ──────────────────────────────────────────────────────
     def report_dir = params.qc_report_dir ?: "${params.output_dir}/qc/report"
     final_merge_and_report(params.output_dir, report_dir, consolidate_done)
     log_qc_summary(all_summaries)
