@@ -141,38 +141,39 @@ for config format.
 
 ## Architecture
 
+Python owns all dispatch logic via `plan-stage` (JSON). Nextflow owns
+fan-out, barriers, and retries. Three waves execute sequentially with
+`.count()` barriers between them.
+
 ```
           manifest.csv
                │
     ┌──────────▼──────────┐
-    │  discover_positions │  (local)
+    │  plan_stage          │  (local) Python emits plan.json v2
     └──────────┬──────────┘
                │
     ┌──────────▼──────────┐
-    │  init_qc_fanout     │  (local, per stage)
-    │  estimate_resources  │  (local, per metric group)
+    │  Wave 0: run_step   │  (Slurm) position-scoped, chunked
+    └──────────┬──────────┘
+               │ .count() barrier
+    ┌──────────▼──────────┐
+    │  finalize_wave(0)   │  (Slurm) merge chunk parquets
+    └──────────┬──────────┘
+               │ .count() barrier
+    ┌──────────▼──────────┐
+    │  Wave 1: run_step   │  (Slurm) dependent metrics
+    └──────────┬──────────┘
+               │ .count() barrier
+    ┌──────────▼──────────┐
+    │  Wave 2: run_step   │  (Slurm) store-scoped metrics
+    └──────────┬──────────┘
+               │ .count() barrier
+    ┌──────────▼──────────┐
+    │  finalize_stage     │  (Slurm) aggregate + gates + summary
     └──────────┬──────────┘
                │
     ┌──────────▼──────────┐
-    │  PASS 1: chunked    │  (Slurm) timepoint batches as
-    │  position metrics   │  distributed jobs
-    └──────────┬──────────┘
-               │
-    ┌──────────▼──────────┐
-    │  merge_qc_metrics   │  (Slurm) consolidate chunk parquets
-    └──────────┬──────────┘
-               │
-    ┌──────────▼──────────┐
-    │  PASS 2: dependent  │  (Slurm) metrics that read pass-1
-    │  temporal metrics   │  results (e.g. bleach_rate)
-    └──────────┬──────────┘
-               │
-    ┌──────────▼──────────┐
-    │  merge + gate       │  (Slurm) per stage
-    └──────────┬──────────┘
-               │
-    ┌──────────▼──────────┐
-    │  consolidate        │  (local) copy parquets to assembly
+    │  consolidate_qc     │  (local) copy parquets to assembly
     └──────────┬──────────┘
                │
     ┌──────────▼──────────┐
@@ -184,24 +185,25 @@ for config format.
 
 | Step | Executor | Why |
 |------|----------|-----|
-| Position discovery | local | Reads zarr metadata only |
-| Fan-out + resource estimation | local | Lightweight CLI calls |
-| Metric computation (pass 1 + 2) | Slurm | CPU-intensive, parallelized |
-| Metric merge | Slurm | Reads/writes parquets |
-| Gate evaluation | Slurm | Reads merged parquets |
-| Consolidation | local | File copy only |
+| plan_stage | local | Reads zarr metadata, emits JSON |
+| run_step (waves 0-2) | Slurm | CPU-intensive, parallelized |
+| finalize_wave | Slurm | Reads/writes parquets |
+| finalize_stage | Slurm | Aggregation + gate evaluation |
+| consolidate_qc | local | File copy only |
 | Report generation | Slurm | Quarto rendering can be memory-heavy |
 
-### Two-pass metric computation
+### Three-wave metric computation
 
-Some metrics depend on the results of other metrics. For example,
-`bleach_rate` requires `intensity_stats` to be computed and merged first.
-The pipeline handles this automatically:
+`plan-stage` classifies metrics into waves by scope:
 
-1. **Pass 1** runs all position-scoped, time-chunked metrics as distributed
-   Slurm jobs (controlled by `--qc_chunk_size`).
-2. `merge_qc_metrics` consolidates chunk parquets into per-position results.
-3. **Pass 2** runs dependent/temporal metrics that read pass-1 outputs.
+1. **Wave 0** (position): position-scoped metrics, optionally chunked by
+   timepoint (`--qc_chunk_size`). Each (position, chunk) is a Slurm job.
+2. **finalize_wave(0)** merges chunk parquets into per-position results.
+3. **Wave 1** (dependent): metrics that read wave-0 outputs (e.g. `bleach_rate`
+   depends on `intensity_stats`).
+4. **Wave 2** (store): store-scoped metrics (one job per zarr, no position
+   fan-out).
+5. **finalize_stage** aggregates all results, evaluates gates, writes summary.
 
-The fan-out logic (`init_qc_fanout`) determines which metrics go to which
-pass based on whether they have time-chunk boundaries.
+Empty waves are no-ops — `.count()` emits 0, and the barrier propagates
+without spawning processes.

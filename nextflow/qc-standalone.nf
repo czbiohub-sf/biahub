@@ -2,7 +2,7 @@
 //
 // Standalone QC pipeline — runs imaging-qc against arbitrary zarr stores
 // listed in a CSV manifest. Python owns all dispatch logic via
-// plan-stage --format csv; Nextflow owns fan-out, barriers, and retries.
+// plan-stage (JSON); Nextflow owns fan-out, barriers, and retries.
 //
 // See nextflow/README-qc-standalone.md for usage and examples.
 //
@@ -20,14 +20,16 @@ params.qc_report_dir    = null
 params.qc_chunk_size    = 10
 params.max_positions    = 0
 
-include { biahub_cmd }             from './modules/common'
-include { plan_stage }             from './modules/qc'
-include { run_step }               from './modules/qc'
-include { finalize_wave }          from './modules/qc'
-include { finalize_stage }         from './modules/qc'
-include { consolidate_qc }         from './modules/qc'
-include { log_qc_summary }         from './modules/qc'
-include { final_merge_and_report } from './modules/qc'
+include { biahub_cmd }                         from './modules/common'
+include { plan_stage }                         from './modules/qc_processes'
+include { run_step as run_step_w0 }            from './modules/qc_processes'
+include { run_step as run_step_w1 }            from './modules/qc_processes'
+include { run_step as run_step_w2 }            from './modules/qc_processes'
+include { finalize_wave }                      from './modules/qc_processes'
+include { finalize_stage }                     from './modules/qc_processes'
+include { consolidate_qc }                     from './modules/qc_processes'
+include { log_qc_summary }                     from './modules/qc_processes'
+include { final_merge_and_report }             from './modules/qc_processes'
 
 
 workflow {
@@ -48,18 +50,22 @@ workflow {
         }
         .toList()
 
-    // ── Plan each stage via plan-stage --format csv ─────────────────
+    // ── Plan each stage ─────────────────────────────────────────────
     plan_inputs = manifest
         .flatMap { rows -> rows.collect { row -> tuple(row[0], row[1]) } }
 
     plans = plan_stage(plan_inputs)
 
-    // Parse CSV rows and branch by wave_id
+    // Parse plan JSON, flatten into work items, branch by wave_id
     parsed = plans
-        .flatMap { z, cfg, csv_text ->
-            csv_text.trim().tokenize('\n').tail().collect { line ->
-                def c = line.split(',', -1)
-                tuple(z, cfg, c[0].toInteger(), c[1], c[2], c[3], c[4], c[5], c[6])
+        .flatMap { z, cfg, json_text ->
+            def plan = new groovy.json.JsonSlurper().parseText(json_text.trim())
+            plan.waves.collectMany { w ->
+                (w.items ?: []).collect { i ->
+                    [z, cfg, w.wave_id, i.step_id,
+                     i.position ?: null, i.chunk_id ?: null,
+                     i.time_indices ?: null]
+                }
             }
         }
         .branch {
@@ -69,64 +75,39 @@ workflow {
         }
 
     // ── Wave 0: position-scoped (chunked) ───────────────────────────
-    w0_input = parsed.w0
-        .map { z, cfg, wid, sid, scope, pos, cid, ti, fin ->
-            [z, cfg, sid, pos ?: null, cid ?: null, ti ?: null]
-        }
-    w0_done = run_step(w0_input)
+    w0_in = parsed.w0.map { z,c,wid,sid,pos,cid,ti -> [z,c,sid,pos,cid,ti,[:]] }
+    w0_done = run_step_w0(w0_in)
+    w0_count = w0_done.count()
 
     // Finalize wave 0 (merge chunks)
-    w0_zarrs = w0_done
-        .map { z, sid, pos -> z }
-        .ifEmpty('none')
-        .collect()
-
-    // Get unique zarrs that had wave 0 work
     fw0_input = plans
-        .map { z, cfg, csv_text -> [z, cfg] }
-        .combine(w0_zarrs)
-        .map { z, cfg, done -> [z, cfg, 0] }
+        .map { z, cfg, json_text -> [z, cfg] }
+        .combine(w0_count)
+        .map { z, cfg, n -> [z, cfg, 0] }
 
     fw0_done = finalize_wave(fw0_input)
+    fw0_count = fw0_done.count()
 
     // ── Wave 1: dependent metrics ───────────────────────────────────
-    w1_input = parsed.w1
-        .map { z, cfg, wid, sid, scope, pos, cid, ti, fin ->
-            [z, cfg, sid, pos ?: null, null, null]
-        }
-        .combine(fw0_done.collect())
-        .map { z, cfg, sid, pos, cid, ti, barrier ->
-            [z, cfg, sid, pos, cid, ti]
-        }
-    w1_done = run_step(w1_input)
-
-    w1_barrier = w1_done
-        .map { z, sid, pos -> z }
-        .ifEmpty('none')
-        .mix(fw0_done.map { z, wid -> z })
-        .collect()
+    w1_in = parsed.w1
+        .combine(fw0_count)
+        .map { z,c,wid,sid,pos,cid,ti,n -> [z,c,sid,pos,null,null,[:]] }
+    w1_done = run_step_w1(w1_in)
+    w1_count = w1_done.mix(fw0_done).count()
 
     // ── Wave 2: store-scoped ────────────────────────────────────────
-    w2_input = parsed.w2
-        .map { z, cfg, wid, sid, scope, pos, cid, ti, fin ->
-            [z, cfg, sid, null, null, null]
-        }
-        .combine(w1_barrier)
-        .map { z, cfg, sid, pos, cid, ti, barrier ->
-            [z, cfg, sid, pos, cid, ti]
-        }
-    w2_done = run_step(w2_input)
+    w2_in = parsed.w2
+        .combine(w1_count)
+        .map { z,c,wid,sid,pos,cid,ti,n -> [z,c,sid,null,null,null,[:]] }
+    w2_done = run_step_w2(w2_in)
 
     // ── Finalize each stage ─────────────────────────────────────────
-    all_compute = w0_done.mix(w1_done, w2_done)
-        .map { z, sid, pos -> z }
-        .ifEmpty('none')
-        .collect()
+    all_done = w0_done.mix(w1_done, w2_done).count()
 
     fs_inputs = manifest
         .flatMap { rows -> rows.collect { row -> [row[0], row[1]] } }
-        .combine(all_compute)
-        .map { zarr, config, done -> [zarr, config] }
+        .combine(all_done)
+        .map { zarr, config, n -> [zarr, config] }
 
     summaries = finalize_stage(fs_inputs)
     all_summaries = summaries
