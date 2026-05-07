@@ -20,14 +20,10 @@ include { final_merge_and_report }             from './qc_processes'
 
 workflow qc_stage_wf {
     take:
-    prev_done        // Channel: trigger from upstream
-    zarr_path        // val: path to zarr store
-    config_path      // val: path to stage YAML config
-    stage_name       // val: human-readable stage name
+    plan_inputs      // Channel of tuple(zarr_path, config_path)
 
     main:
-    plan_input = prev_done.map { tuple(zarr_path, config_path) }
-    plan_out = plan_stage(plan_input)
+    plan_out = plan_stage(plan_inputs)
 
     // Parse plan JSON, flatten into work items, branch by wave_id
     items = plan_out
@@ -49,10 +45,10 @@ workflow qc_stage_wf {
     w0_count = w0_done.count()
 
     // Finalize wave 0 (merge chunks before dependent wave)
-    zarr_ch = prev_done.map { zarr_path }
     fw0 = finalize_wave(
-        zarr_ch.combine(w0_count)
-            .map { z, n -> [z, config_path, 0] }
+        plan_out.map { z, cfg, json -> [z, cfg] }
+            .combine(w0_count)
+            .map { z, cfg, n -> [z, cfg, 0] }
     )
     fw0_count = fw0.count()
 
@@ -71,9 +67,9 @@ workflow qc_stage_wf {
 
     // Finalize stage: aggregate + gate + summary
     all_done = w0_done.mix(w1_done, w2_done).count()
-    merged = zarr_ch
+    merged = plan_out.map { z, cfg, json -> [z, cfg] }
         .combine(all_done)
-        .map { z, n -> [z, config_path] }
+        .map { z, cfg, n -> [z, cfg] }
         | finalize_stage
 
     emit:

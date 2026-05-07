@@ -67,27 +67,27 @@ def run_qc(all_positions, Map stages) {
     def qc_summary_list = []
 
     if (stages.ff_done) {
-        qc1 = qc_post_flatfield(stages.ff_done, ff_zarr, "${qc_dir}/qc_stage1_post_flatfield.yaml", "flatfield")
+        qc1 = qc_post_flatfield(stages.ff_done.map { [ff_zarr, "${qc_dir}/qc_stage1_post_flatfield.yaml"] })
         qc_done_list.add(qc1.done)
         qc_summary_list.add(qc1.summary)
     }
     if (stages.dk_done) {
-        qc2 = qc_post_deskew(stages.dk_done, dk_zarr, "${qc_dir}/qc_stage2_post_deskew.yaml", "deskew")
+        qc2 = qc_post_deskew(stages.dk_done.map { [dk_zarr, "${qc_dir}/qc_stage2_post_deskew.yaml"] })
         qc_done_list.add(qc2.done)
         qc_summary_list.add(qc2.summary)
     }
     if (stages.rc_done) {
-        qc3 = qc_post_reconstruct(stages.rc_done, rc_zarr, "${qc_dir}/qc_stage3_post_reconstruct.yaml", "reconstruct")
+        qc3 = qc_post_reconstruct(stages.rc_done.map { [rc_zarr, "${qc_dir}/qc_stage3_post_reconstruct.yaml"] })
         qc_done_list.add(qc3.done)
         qc_summary_list.add(qc3.summary)
     }
     if (stages.vs_done) {
-        qc4 = qc_post_virtual_stain(stages.vs_done, vs_zarr, "${qc_dir}/qc_stage4_post_virtual_stain.yaml", "virtual_stain")
+        qc4 = qc_post_virtual_stain(stages.vs_done.map { [vs_zarr, "${qc_dir}/qc_stage4_post_virtual_stain.yaml"] })
         qc_done_list.add(qc4.done)
         qc_summary_list.add(qc4.summary)
     }
     if (stages.asm_done) {
-        qc5 = qc_post_assembly(stages.asm_done, asm_zarr, "${qc_dir}/qc_stage5_post_assembly.yaml", "assembly")
+        qc5 = qc_post_assembly(stages.asm_done.map { [asm_zarr, "${qc_dir}/qc_stage5_post_assembly.yaml"] })
         qc_done_list.add(qc5.done)
         qc_summary_list.add(qc5.summary)
     }
