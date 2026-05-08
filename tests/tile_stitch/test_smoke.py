@@ -17,7 +17,11 @@ def _minimal_yaml(run_dir: Path) -> dict:
         "tile_stitch": {
             "tile": {"tile_size": {"y": 32, "x": 32}, "overlap": {"y": 4, "x": 4}},
             "blend": {"kind": "uniform_mean"},
-            "recon": {"kind": "phase"},
+            "recon": {
+                "input_channel_names": ["BF"],
+                "reconstruction_dimension": 3,
+                "phase": {},
+            },
         },
         "cpu_pool": {
             "scratch_dir": str(run_dir / "scratch"),
@@ -28,10 +32,13 @@ def _minimal_yaml(run_dir: Path) -> dict:
 
 
 def test_config_yaml_parses(tmp_path: Path):
+    from waveorder.api.tile_stitch import select_recon_modality
+
     payload = _minimal_yaml(tmp_path)
     parsed = yaml.safe_load(yaml.safe_dump(payload))
     run = TileStitchRun.model_validate(parsed)
-    assert run.tile_stitch.recon.kind == "phase"
+    name, _ = select_recon_modality(run.tile_stitch.recon)
+    assert name == "phase"
     assert run.cpu_pool.batch_size == 2
     assert run.gpu_pool is None
 

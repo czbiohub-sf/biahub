@@ -17,24 +17,28 @@ tile_stitch:
     accumulator_dtype: float32
     sigma_fraction: 0.125
   recon:
-    kind: phase
-    transfer_function:
-      yx_pixel_size: 0.1842
-      z_pixel_size: 0.1842
-      z_padding: 50
-      z_focus_offset: -0.1775253564119339
-      index_of_refraction_media: 1.3
-      numerical_aperture_detection: 1.1
-      numerical_aperture_illumination: 0.8
-      wavelength_illumination: 0.76
-      invert_phase_contrast: false
-      tilt_angle_zenith: -0.47925180196762085
-      tilt_angle_azimuth: -0.07744445651769638
-    apply_inverse:
-      reconstruction_algorithm: Tikhonov
-      regularization_strength: 0.01
-      TV_rho_strength: 0.001
-      TV_iterations: 1
+    # Full waveorder ``ReconstructionSettings`` schema — same as ``wo rec``.
+    input_channel_names: ["camera 22500102 view 0 @ 780nm"]
+    reconstruction_dimension: 3
+    time_indices: 0
+    phase:
+      transfer_function:
+        yx_pixel_size: 0.1842
+        z_pixel_size: 0.1842
+        z_padding: 50
+        z_focus_offset: -0.1775253564119339
+        index_of_refraction_media: 1.3
+        numerical_aperture_detection: 1.1
+        numerical_aperture_illumination: 0.8
+        wavelength_illumination: 0.76
+        invert_phase_contrast: false
+        tilt_angle_zenith: -0.47925180196762085
+        tilt_angle_azimuth: -0.07744445651769638
+      apply_inverse:
+        reconstruction_algorithm: Tikhonov
+        regularization_strength: 0.01
+        TV_rho_strength: 0.001
+        TV_iterations: 1
 
 gpu_pool:
   rmm_pool_size: 60GB
