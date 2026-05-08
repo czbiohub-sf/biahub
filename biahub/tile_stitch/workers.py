@@ -70,22 +70,31 @@ def _write_meta(meta_dir: str, meta: dict[str, Any]) -> None:
         f.write(json.dumps({**meta, "_schema_version": "1"}, default=str) + "\n")
 
 
-def _resolve_recon_module(plan: RunPlan):
-    """Dispatch on settings.recon.kind."""
-    kind = plan.settings.recon.kind
-    if kind == "phase":
+def _resolve_recon(plan: RunPlan):
+    """Pick recon module + modality settings from the populated recon block.
+
+    Returns ``(module, modality_settings)`` based on which of
+    ``plan.settings.recon.{phase, fluorescence, birefringence}`` is set.
+    Replaces the legacy dispatch on ``settings.recon.kind`` (removed when
+    waveorder switched to embedding the full ``ReconstructionSettings``
+    schema in ``TileStitchSettings``).
+    """
+    from waveorder.api.tile_stitch import select_recon_modality
+
+    name, modality_settings = select_recon_modality(plan.settings.recon)
+    if name == "phase":
         from waveorder.api import phase
 
-        return phase
-    if kind == "fluorescence":
+        return phase, modality_settings
+    if name == "fluorescence":
         from waveorder.api import fluorescence
 
-        return fluorescence
-    if kind == "birefringence":
+        return fluorescence, modality_settings
+    if name == "birefringence":
         from waveorder.api import birefringence
 
-        return birefringence
-    raise ValueError(f"unknown recon kind: {kind!r}")
+        return birefringence, modality_settings
+    raise ValueError(f"unknown recon modality: {name!r}")
 
 
 # --- per-worker TF cache --------------------------------------------------
@@ -102,10 +111,11 @@ def _get_tf_settings(plan: RunPlan) -> tuple[Any, Any]:
     key = (plan.settings.model_dump_json(),)
     if key in _TF_CACHE:
         return _TF_CACHE[key]
-    from waveorder.api.tile_stitch import prepare_transfer_function
+    from waveorder.api.tile_stitch import prepare_transfer_function, select_recon_modality
 
-    tf = prepare_transfer_function(plan.settings, recon_dim=3, device=None)
-    _TF_CACHE[key] = (tf, plan.settings.recon)
+    tf = prepare_transfer_function(plan.settings, device=None)
+    _, modality_settings = select_recon_modality(plan.settings.recon)
+    _TF_CACHE[key] = (tf, modality_settings)
     return _TF_CACHE[key]
 
 
@@ -152,12 +162,12 @@ def reconstruct_batch_memory(
         blocks.append(block_xa)
     t_read = time.monotonic() - t0
 
-    recon_module = _resolve_recon_module(plan)
+    recon_module, _ = _resolve_recon(plan)
     t0 = time.monotonic()
     recons = recon_module.apply_inverse_transfer_function(
         blocks,
         tf,
-        recon_dim=3 if "z" in plan.tile_dims else 2,
+        recon_dim=plan.settings.recon.reconstruction_dimension,
         settings=recon_settings,
         device=device,
     )
@@ -316,9 +326,9 @@ def _get_tf_cuda(plan: RunPlan) -> tuple[dict[str, Any], Any]:
     key = (plan.settings.model_dump_json(),)
     if key in _TF_CUDA_CACHE:
         return _TF_CUDA_CACHE[key]
-    from waveorder.api.tile_stitch import prepare_transfer_function
+    from waveorder.api.tile_stitch import prepare_transfer_function, select_recon_modality
 
-    tf = prepare_transfer_function(plan.settings, recon_dim=3, device=None)
+    tf = prepare_transfer_function(plan.settings, device=None)
     cuda_tf = {
         "real_potential_transfer_function": torch.as_tensor(
             tf["real_potential_transfer_function"].values, device="cuda"
@@ -327,7 +337,8 @@ def _get_tf_cuda(plan: RunPlan) -> tuple[dict[str, Any], Any]:
             tf["imaginary_potential_transfer_function"].values, device="cuda"
         ),
     }
-    _TF_CUDA_CACHE[key] = (cuda_tf, plan.settings.recon)
+    _, modality_settings = select_recon_modality(plan.settings.recon)
+    _TF_CUDA_CACHE[key] = (cuda_tf, modality_settings)
     return _TF_CUDA_CACHE[key]
 
 
