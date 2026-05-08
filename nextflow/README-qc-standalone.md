@@ -18,7 +18,6 @@ nextflow run /path/to/biahub/nextflow/qc-standalone.nf \
     --output_dir       /path/to/experiment \
     --qc_project       /path/to/imaging-qc-pipeline \
     --biahub_project   /path/to/biahub \
-    --quarto_bin       /path/to/quarto/bin \
     -resume
 ```
 
@@ -64,8 +63,6 @@ module load nextflow
 
 BIAHUB_PROJECT="/home/aliu/repos/biahub"
 QC_PROJECT="/home/aliu/repos/imaging-qc-pipeline"
-QUARTO_BIN="/home/aliu/opt/quarto-1.7.23/bin"
-
 DEV_DIR="/hpc/projects/intracellular_dashboard/refactor_biahub/phase2_dev/mantis_v2_dev_qc"
 PIPELINE="${BIAHUB_PROJECT}/nextflow/qc-standalone.nf"
 NF_CONFIG="${BIAHUB_PROJECT}/nextflow/nextflow.config"
@@ -78,7 +75,6 @@ nextflow run "${PIPELINE}" \
     --output_dir       "${DEV_DIR}" \
     --biahub_project   "${BIAHUB_PROJECT}" \
     --qc_project       "${QC_PROJECT}" \
-    --quarto_bin       "${QUARTO_BIN}" \
     --work_dir         "${WORK_DIR}" \
     -resume \
     "$@"
@@ -94,7 +90,6 @@ nextflow run "${PIPELINE}" \
     --output_dir       "${DEV_DIR}" \
     --biahub_project   "${BIAHUB_PROJECT}" \
     --qc_project       "${QC_PROJECT}" \
-    --quarto_bin       "${QUARTO_BIN}" \
     --positions        "B/3/000000,B/3/000001" \
     --qc_report_static \
     -resume
@@ -135,8 +130,7 @@ for config format.
 | `--qc_chunk_size` | Timepoints per distributed chunk job | `10` |
 | `--qc_project` | Path to `imaging-qc-pipeline` for `uv run` | falls back to PyPI |
 | `--biahub_project` | Path to biahub repo root for `uv run` | assumes `biahub` on PATH |
-| `--quarto_bin` | Directory containing `quarto` binary | not set |
-| `--qc_report_static` | Generate static PNG report (no Quarto) | `false` |
+| `--qc_report_static` | Generate static PNG-only report instead of interactive Plotly | `false` |
 | `--qc_report_dir` | Report output directory | `<output_dir>/qc/report` |
 
 ## Architecture
@@ -185,7 +179,7 @@ fan-out, barriers, and retries. Three waves execute sequentially with
 | run_step (waves 0-2) | Slurm | CPU-intensive, parallelized |
 | finalize_wave | Slurm | Reads/writes parquets |
 | finalize_stage | Slurm | Aggregation + gate evaluation |
-| Report generation | Slurm | Quarto rendering can be memory-heavy |
+| Report generation | Slurm | Jinja2 + Plotly rendering |
 
 ### Three-wave metric computation
 

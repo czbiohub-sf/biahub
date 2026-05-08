@@ -14,7 +14,6 @@ params.output_dir       = null
 params.positions        = null
 params.qc_project       = null
 params.biahub_project   = null
-params.quarto_bin       = null
 params.qc_report_static = false
 params.qc_report_dir    = null
 params.qc_chunk_size    = 10
