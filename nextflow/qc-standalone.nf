@@ -26,42 +26,23 @@ include { qc_report_wf }  from './modules/qc'
 
 workflow {
     if (!params.stages_manifest) {
-        error "Provide --stages_manifest (CSV with header: zarr_path,config_path,stage_name,assembly)"
+        error "Provide --stages_manifest (CSV with header: zarr_path,config_path,stage_name)"
     }
     if (!params.output_dir) {
         error "Provide --output_dir"
     }
 
     // ── Parse manifest ──────────────────────────────────────────────
-    manifest = Channel
+    plan_inputs = Channel
         .fromPath(params.stages_manifest)
         .splitCsv(header: true)
-        .map { row ->
-            def is_asm = (row.assembly ?: 'false').trim().toLowerCase() in ['true', '1', 'yes']
-            [row.zarr_path.trim(), row.config_path.trim(), row.stage_name.trim(), is_asm]
-        }
-        .toList()
-
-    // ── Run QC via shared workflow ──────────────────────────────────
-    plan_inputs = manifest
-        .flatMap { rows -> rows.collect { row -> tuple(row[0], row[1]) } }
+        .map { row -> tuple(row.zarr_path.trim(), row.config_path.trim()) }
 
     qc = qc_stage_wf(plan_inputs)
 
-    all_qc_done   = qc.done.collect()
-    all_summaries  = qc.summary.collect()
-
-    // ── Consolidate (local) ─────────────────────────────────────────
-    step_zarrs = manifest
-        .map { rows -> rows.findAll { !it[3] }.collect { it[0] } }
-
-    assembly_zarr = manifest
-        .map { rows ->
-            def asm = rows.find { it[3] }
-            asm ? asm[0] : ''
-        }
+    all_qc_done = qc.done.collect()
 
     // ── Report ──────────────────────────────────────────────────────
     def report_dir = params.qc_report_dir ?: "${params.output_dir}/qc/report"
-    qc_report_wf(all_qc_done, all_summaries, assembly_zarr, step_zarrs, params.output_dir, report_dir)
+    qc_report_wf(all_qc_done, params.output_dir, report_dir)
 }

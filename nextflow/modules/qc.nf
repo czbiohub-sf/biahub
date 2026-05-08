@@ -4,8 +4,6 @@ include { run_step as run_step_w1 }            from './qc_processes'
 include { run_step as run_step_w2 }            from './qc_processes'
 include { finalize_wave }                      from './qc_processes'
 include { finalize_stage }                     from './qc_processes'
-include { consolidate_qc }                     from './qc_processes'
-include { log_qc_summary }                     from './qc_processes'
 include { final_merge_and_report }             from './qc_processes'
 
 
@@ -73,25 +71,19 @@ workflow qc_stage_wf {
         | finalize_stage
 
     emit:
-    done    = merged.map { z, summary -> z }
-    summary = merged.map { z, summary -> summary }
+    done = merged.map { z, summary -> z }
 }
 
 
 workflow qc_report_wf {
     take:
     all_qc_done
-    all_summaries
-    assembly_zarr
-    step_zarrs
     output_dir
     report_dir
 
     main:
-    consolidated = consolidate_qc(all_qc_done, step_zarrs, assembly_zarr)
-    final_merge_and_report(output_dir, report_dir, consolidated)
-    log_qc_summary(all_summaries)
+    final_merge_and_report(output_dir, report_dir, all_qc_done)
 
     emit:
-    done = log_qc_summary.out
+    done = final_merge_and_report.out
 }

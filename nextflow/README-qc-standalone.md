@@ -173,10 +173,6 @@ fan-out, barriers, and retries. Three waves execute sequentially with
     └──────────┬──────────┘
                │
     ┌──────────▼──────────┐
-    │  consolidate_qc     │  (local) copy parquets to assembly
-    └──────────┬──────────┘
-               │
-    ┌──────────▼──────────┐
     │  report             │  (Slurm)
     └──────────┴──────────┘
 ```
@@ -189,7 +185,6 @@ fan-out, barriers, and retries. Three waves execute sequentially with
 | run_step (waves 0-2) | Slurm | CPU-intensive, parallelized |
 | finalize_wave | Slurm | Reads/writes parquets |
 | finalize_stage | Slurm | Aggregation + gate evaluation |
-| consolidate_qc | local | File copy only |
 | Report generation | Slurm | Quarto rendering can be memory-heavy |
 
 ### Three-wave metric computation

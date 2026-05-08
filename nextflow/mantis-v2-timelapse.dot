@@ -122,7 +122,7 @@ digraph pipeline {
     qc_vs  [shape=box fillcolor="#F9CB9C" label="qc · post-virtual-stain\ninit_qc_fanout → estimate_resources\n→ run_qc_chunked / run_qc_position\n→ merge_qc_stage"]
     qc_asm [shape=box fillcolor="#F9CB9C" label="qc · post-assembly\ninit_qc_fanout → estimate_resources\n→ run_qc_chunked / run_qc_position\n→ merge_qc_stage"]
 
-    qc_report [shape=box fillcolor="#F9CB9C" label="qc · report\nconsolidate_qc →\nfinal_merge_and_report ∥ log_qc_summary"]
+    qc_report [shape=box fillcolor="#F9CB9C" label="qc · report\nfinal_merge_and_report"]
 
     // ════════════════════════════════════════
     //  Main pipeline edges

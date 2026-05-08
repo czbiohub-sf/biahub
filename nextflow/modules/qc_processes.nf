@@ -1,5 +1,3 @@
-include { biahub_cmd } from './common'
-
 
 def qc_cmd() {
     return params.qc_project ?
@@ -92,46 +90,6 @@ process finalize_stage {
     """
 }
 
-
-process consolidate_qc {
-    label 'cpu_local'
-
-    input:
-    val all_qc_done
-    val step_zarrs
-    val assembly_zarr
-
-    output:
-    val true
-
-    script:
-    def step_args = step_zarrs.collect { "-s ${it}" }.join(' ')
-    """
-    if [ -n "${assembly_zarr}" ] && [ -d "${assembly_zarr}" ]; then
-        ${biahub_cmd()} nf qc consolidate ${step_args} -a "${assembly_zarr}"
-    else
-        echo "No assembly zarr provided or found — skipping consolidation"
-    fi
-    """
-}
-
-
-process log_qc_summary {
-    label 'cpu_local'
-
-    input:
-    val summaries
-
-    output:
-    val true
-
-    script:
-    """
-    ${biahub_cmd()} nf qc log-summary ${summaries}
-    """
-}
-
-
 process final_merge_and_report {
     label 'cpu'
     memory '32 GB'
@@ -140,7 +98,7 @@ process final_merge_and_report {
     input:
     val output_dir
     val report_dir
-    val consolidated
+    val all_qc_done
 
     output:
     val true
