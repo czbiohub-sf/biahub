@@ -37,7 +37,8 @@ dependencies = [
   "antspyx",
   "pystackreg",
   "imageio-ffmpeg",
-  "dask[array]",
+  "dask[array,distributed]",
+  "dask-jobqueue>=0.9",
   "toml",
   "scikit-learn",
   "numba>=0.58.0",
@@ -47,6 +48,18 @@ dependencies = [
 
 [project.optional-dependencies]
 segment = ["cellpose"]
+
+# Tile-stitch GPU execution path. Pinned tuples are negotiated against
+# the RAPIDS release cadence (revisited each minor); CUDA 14 migration
+# is a future-minor concern.
+tilestitch-gpu = [
+  "dask-cuda>=26.04,<26.10",
+  "cupy-cuda13x>=14.0,<15",
+  "rmm-cu13>=26.04,<27",
+  "numba-cuda>=0.0.20,<0.1",
+  "ucxx-cu13>=0.49",
+  "distributed-ucxx-cu13>=0.49",
+]
 
 track = ["ultrack>=0.7"]
 
@@ -82,6 +95,13 @@ biahub = "biahub.cli.main:cli"
 # when resolving build-system requirements such as iohub's hatchling /
 # uv-dynamic-versioning chain, which pulls in packaging>=24.2.
 index-strategy = "unsafe-best-match"
+
+[tool.uv.sources]
+# During the tile-stitch productionization, biahub pins waveorder to
+# the in-flight feature branch (PR mehta-lab/waveorder#559). Replace
+# with a tagged release pin once that lands. Branch protection blocks
+# git+ deps from `main` — feature branches only.
+waveorder = { git = "https://github.com/mehta-lab/waveorder.git", branch = "feature/tile-stitch-engine" }
 
 [tool.hatch.metadata]
 allow-direct-references = true
@@ -136,3 +156,6 @@ docstring-code-format = true
 [tool.pytest.ini_options]
 addopts = ["--import-mode=importlib"]
 testpaths = ["tests"]
+markers = [
+    "gpu: tests that require a CUDA device (skipped on CPU-only CI runners)",
+]
