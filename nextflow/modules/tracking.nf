@@ -1,4 +1,4 @@
-include { dataset_name; parse_resources; biahub_cmd } from './common'
+include { dataset_name; parse_resources; biahub_cmd; slurm_logs; slurm_log_dir } from './common'
 
 
 process init_track {
@@ -12,6 +12,7 @@ process init_track {
 
     script:
     """
+    mkdir -p "${slurm_log_dir('track')}"
     ${biahub_cmd()} nf init-track \
         -i "${params.output_dir}/2-reconstruct/${dataset_name()}.zarr" \
         -o "${params.output_dir}/4-track/${dataset_name()}.zarr" \
@@ -22,6 +23,7 @@ process init_track {
 process run_track {
     tag "${position}"
     label 'gpu'
+    clusterOptions { "--gres=gpu:1 " + slurm_logs('track') }
     maxForks 30
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }

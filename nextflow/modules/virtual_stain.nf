@@ -1,4 +1,4 @@
-include { dataset_name; parse_resources; biahub_cmd } from './common'
+include { dataset_name; parse_resources; biahub_cmd; slurm_logs; slurm_log_dir } from './common'
 
 def viscy_cmd() {
     return params.viscy_project ?
@@ -18,6 +18,7 @@ process init_virtual_stain {
 
     script:
     """
+    mkdir -p "${slurm_log_dir('virtual_stain')}"
     ${biahub_cmd()} nf clean-temp \
         "${params.output_dir}/3-virtual-stain/temp"
     ${biahub_cmd()} nf init-virtual-stain \
@@ -29,6 +30,7 @@ process init_virtual_stain {
 
 process run_virtual_stain_preprocess {
     label 'cpu'
+    clusterOptions { slurm_logs('virtual_stain') }
     cpus 16
     memory { "${64 * task.attempt} GB" }
     time '1h'
@@ -54,10 +56,11 @@ process run_virtual_stain_preprocess {
 process run_virtual_stain {
     tag "${position}"
     label 'gpu'
+    clusterOptions { "--gres=gpu:1 " + slurm_logs('virtual_stain') }
     maxForks 30
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
-    time { task.attempt == 1 ? '2h' : '4h' }
+    time { task.attempt == 1 ? '8h' : '12h' }
     maxRetries 2
     errorStrategy 'retry'
 

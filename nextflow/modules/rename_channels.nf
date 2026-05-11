@@ -1,4 +1,4 @@
-include { dataset_name; parse_resources; biahub_cmd } from './common'
+include { dataset_name; parse_resources; biahub_cmd; slurm_logs; slurm_log_dir } from './common'
 
 
 process init_resources_rename {
@@ -12,6 +12,7 @@ process init_resources_rename {
 
     script:
     """
+    mkdir -p "${slurm_log_dir('rename')}"
     ${biahub_cmd()} nf init-resources \
         -i "${params.output_dir}/2-reconstruct/${dataset_name()}.zarr" \
         -r 2
@@ -21,6 +22,7 @@ process init_resources_rename {
 process rename_channels {
     tag "${position}"
     label 'cpu'
+    clusterOptions { slurm_logs('rename') }
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time '30m'

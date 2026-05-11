@@ -1,4 +1,4 @@
-include { dataset_name; parse_resources; biahub_cmd } from './common'
+include { dataset_name; parse_resources; biahub_cmd; slurm_logs; slurm_log_dir } from './common'
 
 
 process init_reconstruct {
@@ -12,6 +12,7 @@ process init_reconstruct {
 
     script:
     """
+    mkdir -p "${slurm_log_dir('reconstruct')}"
     ${biahub_cmd()} nf init-reconstruct \
         -i "${params.output_dir}/1-deskew/${dataset_name()}.zarr" \
         -o "${params.output_dir}/2-reconstruct/${dataset_name()}.zarr" \
@@ -21,6 +22,7 @@ process init_reconstruct {
 
 process compute_transfer_function {
     label 'cpu'
+    clusterOptions { slurm_logs('reconstruct') }
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time '2h'
@@ -43,6 +45,7 @@ process compute_transfer_function {
 process run_apply_inv_tf {
     tag "${position}"
     label 'cpu'
+    clusterOptions { slurm_logs('reconstruct') }
     maxForks 30
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }

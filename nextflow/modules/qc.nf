@@ -1,4 +1,4 @@
-include { dataset_name; biahub_cmd } from './common'
+include { dataset_name; biahub_cmd; slurm_logs; slurm_log_dir } from './common'
 
 
 def qc_cmd() {
@@ -19,6 +19,7 @@ process init_qc_fanout {
 
     script:
     """
+    mkdir -p "${slurm_log_dir('qc')}"
     ${biahub_cmd()} nf qc init-qc-fanout -i "${zarr_path}" -c "${config_path}" --chunk-size ${params.qc_chunk_size}
     """
 }
@@ -46,6 +47,7 @@ process estimate_qc_resources {
 process run_qc_chunked {
     tag "${position}/${group}/${chunk_id}"
     label 'cpu'
+    clusterOptions { slurm_logs('qc') }
     memory { "${mem_gb * task.attempt} GB" }
     time '2h'
     maxRetries 1
@@ -76,6 +78,7 @@ process run_qc_chunked {
 process run_qc_position {
     tag "${position}/${group}"
     label 'cpu'
+    clusterOptions { slurm_logs('qc') }
     memory { "${mem_gb * task.attempt} GB" }
     time '2h'
     maxRetries 1
@@ -103,6 +106,7 @@ process run_qc_position {
 
 process merge_qc_metrics {
     label 'cpu'
+    clusterOptions { slurm_logs('qc') }
     memory '32 GB'
     time '30m'
     maxRetries 1
@@ -123,6 +127,7 @@ process merge_qc_metrics {
 
 process merge_qc_stage {
     label 'cpu'
+    clusterOptions { slurm_logs('qc') }
     memory '32 GB'
     time '30m'
     maxRetries 1
@@ -188,6 +193,7 @@ process log_qc_summary {
 
 process final_merge_and_report {
     label 'cpu'
+    clusterOptions { slurm_logs('qc') }
     memory '32 GB'
     time '1h'
 

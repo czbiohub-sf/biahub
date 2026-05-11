@@ -1,4 +1,4 @@
-include { dataset_name; parse_resources; biahub_cmd } from './common'
+include { dataset_name; parse_resources; biahub_cmd; slurm_logs; slurm_log_dir } from './common'
 
 
 process init_estimate_crop {
@@ -12,6 +12,7 @@ process init_estimate_crop {
 
     script:
     """
+    mkdir -p "${slurm_log_dir('assemble')}"
     ${biahub_cmd()} nf init-estimate-crop \
         --lf-data-path "${params.output_dir}/1-deskew/${dataset_name()}.zarr/*/*/*" \
         --ls-data-path "${params.output_dir}/2-reconstruct/${dataset_name()}.zarr/*/*/*"
@@ -21,6 +22,7 @@ process init_estimate_crop {
 process estimate_crop {
     tag "${lf_position}"
     label 'cpu'
+    clusterOptions { slurm_logs('assemble') }
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time '1h'
@@ -107,6 +109,7 @@ process init_concatenate {
 process run_concatenate {
     tag "${position}"
     label 'cpu'
+    clusterOptions { slurm_logs('assemble') }
     maxForks 30
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }

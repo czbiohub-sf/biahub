@@ -1,4 +1,4 @@
-include { dataset_name; parse_resources; biahub_cmd } from './common'
+include { dataset_name; parse_resources; biahub_cmd; slurm_logs; slurm_log_dir } from './common'
 
 
 process init_deskew {
@@ -12,6 +12,7 @@ process init_deskew {
 
     script:
     """
+    mkdir -p "${slurm_log_dir('deskew')}"
     ${biahub_cmd()} nf init-deskew \
         -i "${params.output_dir}/0-flatfield/${dataset_name()}.zarr" \
         -o "${params.output_dir}/1-deskew/${dataset_name()}.zarr" \
@@ -22,6 +23,7 @@ process init_deskew {
 process run_deskew {
     tag "${position}"
     label 'cpu'
+    clusterOptions { slurm_logs('deskew') }
     maxForks 30
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
