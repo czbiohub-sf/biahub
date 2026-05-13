@@ -427,22 +427,23 @@ def clean_position(output_zarr: str, position: str):
             chunks = img.chunks
             break
 
-    # Delete corrupted position.
-    shutil.rmtree(pos_path)
-    logger.info(f"Cleaned corrupted position: {pos_path}")
+    # # Delete corrupted position.
+    # shutil.rmtree(pos_path)
+    # logger.info(f"Cleaned corrupted position: {pos_path}")
 
-    # Re-create the empty position.
-    pos_key = tuple(position.split("/"))
-    create_empty_plate(
-        store_path=Path(output_zarr),
-        position_keys=[pos_key],
-        channel_names=channel_names,
-        shape=shape,
-        chunks=chunks,
-        scale=tuple(scale),
-        dtype=dtype,
-    )
-    logger.info(f"Re-created empty position for retry: {pos_path}")
+    # # Re-create the empty position.
+    # pos_key = tuple(position.split("/"))
+    # create_empty_plate(
+    #     store_path=Path(output_zarr),
+    #     position_keys=[pos_key],
+    #     channel_names=channel_names,
+    #     shape=shape,
+    #     chunks=chunks,
+    #     scale=tuple(scale),
+    #     dtype=dtype,
+    # )
+    # logger.info(f"Re-created empty position for retry: {pos_path}")
+    logger.info(f"Position exists but skipping delete/recreate: {pos_path}")
 
 
 @nf_cli.command("clean-temp")
