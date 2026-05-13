@@ -52,7 +52,7 @@ process run_apply_inv_tf {
     time '6h'
     maxRetries 1
     errorStrategy 'retry'
-    beforeScript { task.attempt > 1 ? "${biahub_cmd()} nf clean-position -o '${params.output_dir}/2-reconstruct/${dataset_name()}.zarr' -p '${position}'" : '' }
+
 
     input:
     tuple val(position), val(meta)

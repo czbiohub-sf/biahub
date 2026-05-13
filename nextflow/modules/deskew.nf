@@ -30,7 +30,7 @@ process run_deskew {
     time { task.attempt == 1 ? '1h' : '2h' }
     maxRetries 1
     errorStrategy 'retry'
-    beforeScript { task.attempt > 1 ? "${biahub_cmd()} nf clean-position -o '${params.output_dir}/1-deskew/${dataset_name()}.zarr' -p '${position}'" : '' }
+
 
     input:
     tuple val(position), val(meta)

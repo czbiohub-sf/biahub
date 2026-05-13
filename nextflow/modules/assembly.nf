@@ -116,7 +116,7 @@ process run_concatenate {
     time '2h'
     maxRetries 1
     errorStrategy 'retry'
-    beforeScript { task.attempt > 1 ? "${biahub_cmd()} nf clean-position -o '${params.output_dir}/5-assemble/${dataset_name()}.zarr' -p '${position}'" : '' }
+
 
     input:
     tuple val(position), val(meta)

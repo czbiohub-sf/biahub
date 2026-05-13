@@ -1784,51 +1784,6 @@ def test_clean_temp_noop_when_missing(tmp_path):
     assert not temp_dir.exists()
 
 
-def test_clean_position_removes_and_recreates(tmp_path):
-    """clean-position removes a corrupted position and re-creates it empty."""
-    zarr_dir = tmp_path / "output.zarr"
-    shape = (3, 2, 4, 5, 6)
-
-    plate = open_ome_zarr(
-        zarr_dir, layout="hcs", mode="w", channel_names=["GFP", "RFP"]
-    )
-    for row, col, fov in [("A", "3", "002002"), ("A", "3", "002003")]:
-        pos = plate.create_position(row, col, fov)
-        pos.create_zeros(name="0", shape=shape, dtype=np.float32)
-    plate.close()
-
-    # Write junk to simulate a corrupted position.
-    pos_dir = zarr_dir / "A" / "3" / "002002"
-    (pos_dir / "corrupt_file").write_text("bad data")
-
-    runner = CliRunner()
-    result = runner.invoke(
-        cli, ["nf", "clean-position", "-o", str(zarr_dir), "-p", "A/3/002002"]
-    )
-
-    assert result.exit_code == 0, result.output
-    # Position directory should exist again (re-created empty).
-    assert pos_dir.exists()
-    # Corrupt file should be gone.
-    assert not (pos_dir / "corrupt_file").exists()
-    # The re-created position should be openable with mode='r+'.
-    with open_ome_zarr(str(pos_dir), mode="r+") as pos:
-        assert pos.data.shape == shape
-
-
-def test_clean_position_noop_when_missing(tmp_path):
-    """clean-position succeeds even if the position doesn't exist."""
-    zarr_dir = tmp_path / "output.zarr"
-    zarr_dir.mkdir()
-
-    runner = CliRunner()
-    result = runner.invoke(
-        cli, ["nf", "clean-position", "-o", str(zarr_dir), "-p", "A/3/002002"]
-    )
-
-    assert result.exit_code == 0
-
-
 def test_stitch(tmp_path, example_plate):
     """stitch per-well creates output and calls write_output_chunk."""
     plate_path, ds = example_plate
