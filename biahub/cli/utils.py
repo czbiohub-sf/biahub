@@ -1,5 +1,9 @@
+import itertools
+import logging
 import os
 
+from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -7,8 +11,106 @@ import numpy as np
 import yaml
 
 from iohub.ngff import open_ome_zarr
+from iohub.ngff.models import ImagesMeta
 from numpy.typing import DTypeLike
 from tqdm import tqdm
+
+logger = logging.getLogger(__name__)
+
+
+def read_plate_metadata(input_zarr: str | Path):
+    """Read position keys, channel names, shape, and scale from an HCS plate.
+
+    Parameters
+    ----------
+    input_zarr : str or Path
+        Path to the input HCS plate zarr store.
+
+    Returns
+    -------
+    position_keys : list[tuple[str, str, str]]
+    channel_names : list[str]
+    shape : tuple[int, int, int, int, int]
+        TCZYX shape from the first position.
+    scale : tuple[float, ...]
+        Voxel scale from the first position.
+    """
+    with open_ome_zarr(str(input_zarr), mode="r") as plate:
+        position_keys = []
+        channel_names = None
+        shape = scale = None
+        for name, pos in plate.positions():
+            position_keys.append(tuple(name.split("/")))
+            if channel_names is None:
+                channel_names = pos.channel_names
+                shape = pos.data.shape
+                scale = pos.scale
+    return position_keys, channel_names, shape, scale
+
+
+_OME_KEYS = {"ome", "multiscales", "omero", "labels", "version"}
+
+
+def copy_position_metadata(input_zarr: Path, output_zarr: Path) -> None:
+    """Copy per-position OME metadata and custom zattrs from input to output plate.
+
+    Transfers axis definitions, FOV-level coordinate transforms, label references,
+    and any custom (non-OME) zattrs. Preserves the output's dataset layout, omero
+    channel info, and version.
+
+    Parameters
+    ----------
+    input_zarr : Path
+        Path to the source HCS plate zarr store.
+    output_zarr : Path
+        Path to the destination HCS plate zarr store (must already exist).
+    """
+    with open_ome_zarr(str(input_zarr), mode="r") as src_plate:
+        with open_ome_zarr(str(output_zarr), mode="r+") as dst_plate:
+            dst_positions = {name for name, _ in dst_plate.positions()}
+
+            for name, src_pos in src_plate.positions():
+                if name not in dst_positions:
+                    continue
+
+                dst_pos = dst_plate[name]
+
+                src_ome = dict(src_pos.maybe_wrapped_ome_attrs)
+
+                raw_attrs = dict(src_pos.zattrs)
+                custom_attrs = {k: v for k, v in raw_attrs.items() if k not in _OME_KEYS}
+
+                saved_datasets = dst_pos.metadata.multiscales[0].datasets
+                saved_omero = dst_pos.metadata.omero
+
+                src_ome.setdefault("version", "0.5")
+                src_meta = ImagesMeta.model_validate(src_ome)
+
+                dst_pos.metadata.multiscales[0].axes = src_meta.multiscales[0].axes
+                dst_pos.metadata.multiscales[
+                    0
+                ].coordinate_transformations = src_meta.multiscales[
+                    0
+                ].coordinate_transformations
+                for field in ("name", "type", "metadata"):
+                    val = getattr(src_meta.multiscales[0], field, None)
+                    if val is not None:
+                        setattr(dst_pos.metadata.multiscales[0], field, val)
+
+                src_labels = getattr(src_meta, "labels", None)
+                if src_labels is not None:
+                    dst_pos.metadata.labels = src_labels
+
+                dst_pos.metadata.multiscales[0].datasets = saved_datasets
+                dst_pos.metadata.omero = saved_omero
+                dst_pos.metadata.version = "0.5"
+
+                dst_pos.dump_meta()
+
+                for k, v in custom_attrs.items():
+                    dst_pos.zattrs[k] = v
+
+                logger.debug("Copied metadata for position %s", name)
 
 
 def get_submitit_cluster(local: bool = False) -> str:
@@ -234,6 +336,7 @@ def model_to_yaml(model, yaml_path: Path) -> None:
     # Remove None-valued fields
     clean_model_dict = {key: value for key, value in model_dict.items() if value is not None}
 
+    yaml_path.parent.mkdir(parents=True, exist_ok=True)
     with open(yaml_path, "w+") as f:
         yaml.dump(clean_model_dict, f, default_flow_style=False, sort_keys=False)
 
@@ -329,6 +432,86 @@ def get_empty_frame_indices(input_array: np.ndarray) -> list[int]:
 
     else:
         raise ValueError("Input array must be 3D.")
+
+
+@dataclass(frozen=True)
+class WorkItem:
+    """A single (channel_group, time_batch) unit of work for Nextflow fan-out."""
+
+    input_channel_indices: list[int] | slice
+    output_channel_indices: list[int] | slice
+    input_time_indices: list[int]
+    output_time_indices: list[int]
+
+
+def plan_single_position(
+    input_position_path: Path,
+    output_position_path: Path,
+    input_channel_indices: list[slice] | list[list[int]] | None = None,
+    output_channel_indices: list[slice] | list[list[int]] | None = None,
+    input_time_indices: list[int] | None = None,
+    output_time_indices: list[int] | None = None,
+) -> list[WorkItem]:
+    """Compute shard-aligned (C, T) work items without executing any transforms.
+
+    Mirrors the chunking logic in iohub's ``process_single_position`` but
+    returns the work items instead of running them, so Nextflow can fan out
+    over individual chunks.
+    """
+    with open_ome_zarr(input_position_path, layout="fov", mode="r") as ds:
+        input_shape = ds.data.shape
+    with open_ome_zarr(output_position_path, layout="fov", mode="r") as ds:
+        output_shards = ds.data.shards
+
+    if input_time_indices is None:
+        input_time_indices = list(range(input_shape[0]))
+    if output_time_indices is None:
+        output_time_indices = input_time_indices
+
+    if output_shards is not None:
+        batched_out_t = _shard_aligned_batches(output_time_indices, output_shards[0])
+        batched_in_t = _match_batches(input_time_indices, output_time_indices, batched_out_t)
+    else:
+        batched_in_t = [[i] for i in input_time_indices]
+        batched_out_t = [[i] for i in output_time_indices]
+
+    if input_channel_indices is None:
+        input_channel_indices = [[c] for c in range(input_shape[1])]
+        output_channel_indices = input_channel_indices
+    if output_channel_indices is None:
+        output_channel_indices = input_channel_indices
+    if output_shards is not None and output_shards[1] != 1:
+        raise ValueError("Sharding along the channel dimension is not supported.")
+
+    time_ubound = input_shape[0] - 1
+    if max(input_time_indices) > time_ubound:
+        raise ValueError(
+            f"input_time_indices includes index beyond dataset max ({time_ubound})"
+        )
+
+    items = []
+    for (in_ch, out_ch), (in_t, out_t) in itertools.product(
+        zip(input_channel_indices, output_channel_indices, strict=False),
+        zip(batched_in_t, batched_out_t, strict=False),
+    ):
+        items.append(WorkItem(in_ch, out_ch, in_t, out_t))
+    return items
+
+
+def _shard_aligned_batches(indices: list[int], shard_size: int) -> list[list[int]]:
+    indices = sorted(indices)
+    batches: dict[int, list[int]] = defaultdict(list)
+    for idx in indices:
+        batches[idx // shard_size].append(idx)
+    return list(batches.values())
+
+
+def _match_batches(
+    flat_indices: list[int],
+    original_ref: list[int],
+    batched_ref: list[list[int]],
+) -> list[list[int]]:
+    return [[flat_indices[original_ref.index(i)] for i in batch] for batch in batched_ref]
 
 
 def estimate_resources(

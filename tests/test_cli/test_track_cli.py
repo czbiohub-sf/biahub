@@ -4,6 +4,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+pytest.importorskip("ultrack", reason="ultrack not installed")
+
 from biahub.track import track
 
 

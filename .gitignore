@@ -2,6 +2,7 @@
 ignore/
 output/
 cache/
+.nextflow/
 
 tests/output/
 client/.npm/

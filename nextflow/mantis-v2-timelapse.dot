@@ -1,0 +1,161 @@
+digraph pipeline {
+    rankdir=TB
+    fontname="Helvetica"
+    node [fontname="Helvetica" fontsize=11 style=filled]
+    edge [fontname="Helvetica" fontsize=10]
+    compound=true
+
+    // ── Colors ──
+    // green  #B5D6A7 = init / single-run
+    // blue   #A4C2F4 = fan-out per-position
+    // pink   #F4CCCC = GPU fan-out
+    // gold   #FFE599 = collect barrier
+    // salmon #F9CB9C = QC stages
+    // purple #D9D2E9 = optional
+
+    // ════════════════════════════════════════
+    //  Input
+    // ════════════════════════════════════════
+    input_zarr      [shape=cylinder fillcolor="#E8E8E8" label="input.zarr"]
+    list_positions  [shape=ellipse fillcolor="#B5D6A7" label="list_positions"]
+
+    input_zarr -> list_positions
+
+    // ════════════════════════════════════════
+    //  0 · flat-field
+    // ════════════════════════════════════════
+    subgraph cluster_ff {
+        label="0 · flat-field" style=filled fillcolor="#FFF2CC"
+        fontname="Helvetica" fontsize=12
+        init_flat_field [shape=ellipse fillcolor="#B5D6A7" label="init_flat_field"]
+        run_flat_field  [shape=box fillcolor="#A4C2F4"
+                         label="run_flat_field\n(× positions)"]
+        init_flat_field -> run_flat_field [label="resources"]
+    }
+
+    // ════════════════════════════════════════
+    //  1 · deskew
+    // ════════════════════════════════════════
+    subgraph cluster_dk {
+        label="1 · deskew" style=filled fillcolor="#CFE2F3"
+        fontname="Helvetica" fontsize=12
+        init_deskew [shape=ellipse fillcolor="#B5D6A7" label="init_deskew"]
+        run_deskew  [shape=box fillcolor="#A4C2F4"
+                     label="run_deskew\n(× positions)"]
+        init_deskew -> run_deskew [label="resources"]
+    }
+
+    // ════════════════════════════════════════
+    //  2 · reconstruct
+    // ════════════════════════════════════════
+    subgraph cluster_rc {
+        label="2 · reconstruct" style=filled fillcolor="#CFE2F3"
+        fontname="Helvetica" fontsize=12
+        init_reconstruct    [shape=ellipse fillcolor="#B5D6A7" label="init_reconstruct"]
+        compute_tf          [shape=ellipse fillcolor="#B5D6A7" label="compute_transfer_function"]
+        run_apply_inv_tf    [shape=box fillcolor="#A4C2F4"
+                             label="run_apply_inv_tf\n(× positions)"]
+        init_reconstruct -> compute_tf       [label="TF resources"]
+        init_reconstruct -> run_apply_inv_tf [label="run resources"]
+        compute_tf -> run_apply_inv_tf       [label="TF ready"]
+    }
+
+    // ════════════════════════════════════════
+    //  3 · virtual stain
+    // ════════════════════════════════════════
+    subgraph cluster_vs {
+        label="3 · virtual stain" style=filled fillcolor="#D9EAD3"
+        fontname="Helvetica" fontsize=12
+        init_virtual_stain [shape=ellipse fillcolor="#B5D6A7" label="init_virtual_stain"]
+        preprocess_vs      [shape=ellipse fillcolor="#B5D6A7" label="preprocess\n(VisCy)"]
+        run_virtual_stain  [shape=box fillcolor="#F4CCCC"
+                            label="run_virtual_stain\n(× positions)\n[GPU]"]
+        init_virtual_stain -> run_virtual_stain [label="resources"]
+        preprocess_vs -> run_virtual_stain      [label="preprocessed"]
+    }
+
+    // ════════════════════════════════════════
+    //  4 · tracking
+    // ════════════════════════════════════════
+    subgraph cluster_tk {
+        label="4 · tracking" style=filled fillcolor="#E8D5F5"
+        fontname="Helvetica" fontsize=12
+        init_track [shape=ellipse fillcolor="#B5D6A7" label="init_track"]
+        run_track  [shape=box fillcolor="#F4CCCC"
+                    label="run_track\n(× positions)\n[GPU]"]
+        init_track -> run_track [label="resources"]
+    }
+
+    // ════════════════════════════════════════
+    //  rename channels
+    // ════════════════════════════════════════
+    subgraph cluster_rn {
+        label="rename channels" style=filled fillcolor="#FFE599"
+        fontname="Helvetica" fontsize=12
+        init_resources_rename [shape=ellipse fillcolor="#B5D6A7"
+                               label="init_resources_rename"]
+        rename_channels       [shape=box fillcolor="#A4C2F4"
+                               label="rename_channels\n(× positions)"]
+        init_resources_rename -> rename_channels [label="resources"]
+    }
+
+    // ════════════════════════════════════════
+    //  5 · assemble
+    // ════════════════════════════════════════
+    subgraph cluster_asm {
+        label="5 · assemble" style=filled fillcolor="#F4CCCC"
+        fontname="Helvetica" fontsize=12
+        resolve_concat_config [shape=ellipse fillcolor="#B5D6A7" label="resolve_concatenate_config"]
+        init_concatenate      [shape=ellipse fillcolor="#B5D6A7" label="init_concatenate"]
+        run_concatenate       [shape=box fillcolor="#A4C2F4"
+                               label="run_concatenate\n(× positions)"]
+        resolve_concat_config -> init_concatenate
+        init_concatenate -> run_concatenate [label="resources"]
+    }
+
+    // ════════════════════════════════════════
+    //  QC stages (each: init_chunks → splitCsv → run_qc_chunk → merge)
+    // ════════════════════════════════════════
+    qc_ff  [shape=box fillcolor="#F9CB9C" label="qc · post-flatfield\ninit_qc_fanout → estimate_resources\n→ run_qc_chunked / run_qc_position\n→ merge_qc_stage"]
+    qc_dk  [shape=box fillcolor="#F9CB9C" label="qc · post-deskew\ninit_qc_fanout → estimate_resources\n→ run_qc_chunked / run_qc_position\n→ merge_qc_stage"]
+    qc_rc  [shape=box fillcolor="#F9CB9C" label="qc · post-reconstruct\ninit_qc_fanout → estimate_resources\n→ run_qc_chunked / run_qc_position\n→ merge_qc_stage"]
+    qc_vs  [shape=box fillcolor="#F9CB9C" label="qc · post-virtual-stain\ninit_qc_fanout → estimate_resources\n→ run_qc_chunked / run_qc_position\n→ merge_qc_stage"]
+    qc_asm [shape=box fillcolor="#F9CB9C" label="qc · post-assembly\ninit_qc_fanout → estimate_resources\n→ run_qc_chunked / run_qc_position\n→ merge_qc_stage"]
+
+    qc_report [shape=box fillcolor="#F9CB9C" label="qc · report\nconsolidate_qc →\nfinal_merge_and_report ∥ log_qc_summary"]
+
+    // ════════════════════════════════════════
+    //  Main pipeline edges
+    // ════════════════════════════════════════
+    list_positions -> init_flat_field     [label="positions"]
+    list_positions -> run_flat_field      [style=dashed label="positions"]
+    list_positions -> run_deskew          [style=dashed label="positions"]
+    list_positions -> run_apply_inv_tf    [style=dashed label="positions"]
+    list_positions -> run_virtual_stain   [style=dashed label="positions"]
+    list_positions -> run_track           [style=dashed label="positions"]
+    list_positions -> rename_channels     [style=dashed label="positions"]
+    list_positions -> run_concatenate     [style=dashed label="positions"]
+
+    run_flat_field -> init_deskew         [label="all done" lhead=cluster_dk]
+    run_deskew -> init_reconstruct        [label="all done" lhead=cluster_rc]
+    run_apply_inv_tf -> init_virtual_stain [label="all done" lhead=cluster_vs]
+    run_apply_inv_tf -> preprocess_vs
+    run_virtual_stain -> init_track       [label="all done" lhead=cluster_tk]
+    run_track -> init_resources_rename    [label="all done" lhead=cluster_rn]
+    rename_channels -> resolve_concat_config [label="all done" lhead=cluster_asm]
+
+    // ════════════════════════════════════════
+    //  QC edges (red, dashed)
+    // ════════════════════════════════════════
+    run_flat_field -> qc_ff       [color=red style=dashed label="done"]
+    run_deskew -> qc_dk           [color=red style=dashed label="done"]
+    run_apply_inv_tf -> qc_rc     [color=red style=dashed label="done"]
+    run_virtual_stain -> qc_vs    [color=red style=dashed label="done"]
+    run_concatenate -> qc_asm     [color=red style=dashed label="done"]
+
+    qc_ff -> qc_report            [color=red style=dashed]
+    qc_dk -> qc_report            [color=red style=dashed]
+    qc_rc -> qc_report            [color=red style=dashed]
+    qc_vs -> qc_report            [color=red style=dashed]
+    qc_asm -> qc_report           [color=red style=dashed]
+}
