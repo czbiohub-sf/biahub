@@ -4,7 +4,7 @@ include { dataset_name; biahub_cmd; slurm_logs; slurm_log_dir } from './common'
 def qc_cmd() {
     return params.qc_project ?
         "uv run --project ${params.qc_project} imaging-qc" :
-        "uv run --from 'imaging-qc-pipeline @ git+https://github.com/czbiohub-sf/imaging-qc-pipeline@v0.3.1' imaging-qc"
+        "uv run --from 'imaging-qc-pipeline @ git+https://github.com/czbiohub-sf/imaging-qc-pipeline@v0.3.2' imaging-qc"
 }
 
 
@@ -107,7 +107,7 @@ process run_qc_position {
 process merge_qc_metrics {
     label 'cpu'
     clusterOptions { slurm_logs('qc') }
-    memory '32 GB'
+    memory { task.attempt == 1 ? '32 GB' : '48 GB' }
     time '30m'
     maxRetries 1
     errorStrategy 'retry'
@@ -128,7 +128,7 @@ process merge_qc_metrics {
 process merge_qc_stage {
     label 'cpu'
     clusterOptions { slurm_logs('qc') }
-    memory '32 GB'
+    memory { task.attempt == 1 ? '32 GB' : '48 GB' }
     time '30m'
     maxRetries 1
     errorStrategy { task.exitStatus in [0, 1] ? 'ignore' : 'retry' }
