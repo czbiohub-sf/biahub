@@ -1784,6 +1784,54 @@ def test_clean_temp_noop_when_missing(tmp_path):
     assert not temp_dir.exists()
 
 
+def test_clean_intermediates_deletes_zarrs(tmp_path):
+    """clean-intermediates deletes intermediate zarrs and keeps others."""
+    output_dir = tmp_path / "output"
+    dataset = "my_dataset"
+
+    # Create intermediate zarrs that should be deleted.
+    for dirname in ["0-flatfield", "1-deskew", "2-reconstruct", "3-virtual-stain"]:
+        zarr_path = output_dir / dirname / f"{dataset}.zarr"
+        zarr_path.mkdir(parents=True)
+        (zarr_path / "data.bin").write_text("fake")
+
+    # Create zarrs that should be kept.
+    for dirname in ["4-track", "5-assemble"]:
+        zarr_path = output_dir / dirname / f"{dataset}.zarr"
+        zarr_path.mkdir(parents=True)
+        (zarr_path / "data.bin").write_text("fake")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        ["nf", "clean-intermediates", "-o", str(output_dir), "-d", dataset],
+    )
+
+    assert result.exit_code == 0, result.output
+
+    # Intermediate zarrs should be gone.
+    for dirname in ["0-flatfield", "1-deskew", "2-reconstruct", "3-virtual-stain"]:
+        assert not (output_dir / dirname / f"{dataset}.zarr").exists()
+
+    # Track and assemble zarrs should still exist.
+    for dirname in ["4-track", "5-assemble"]:
+        assert (output_dir / dirname / f"{dataset}.zarr").exists()
+
+
+def test_clean_intermediates_noop_when_missing(tmp_path):
+    """clean-intermediates succeeds even if no intermediate zarrs exist."""
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        ["nf", "clean-intermediates", "-o", str(output_dir), "-d", "nodata"],
+    )
+
+    assert result.exit_code == 0
+
+
 def test_stitch(tmp_path, example_plate):
     """stitch per-well creates output and calls write_output_chunk."""
     plate_path, ds = example_plate

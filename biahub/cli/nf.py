@@ -412,6 +412,31 @@ def clean_temp(temp_dir: str):
         logger.info(f"No temp directory to clean: {path}")
 
 
+@nf_cli.command("clean-intermediates")
+@click.option("--output-dir", "-o", required=True, type=click.Path())
+@click.option("--dataset-name", "-d", required=True, type=str)
+def clean_intermediates(output_dir: str, dataset_name: str):
+    """Delete intermediate zarrs after successful assembly.
+
+    Removes 0-flatfield, 1-deskew, 2-reconstruct, and 3-virtual-stain zarrs.
+    """
+    import shutil
+
+    intermediate_dirs = [
+        "0-flatfield",
+        "1-deskew",
+        "2-reconstruct",
+        "3-virtual-stain",
+    ]
+    for dirname in intermediate_dirs:
+        zarr_path = Path(output_dir) / dirname / f"{dataset_name}.zarr"
+        if zarr_path.exists():
+            shutil.rmtree(zarr_path)
+            logger.info(f"Deleted intermediate zarr: {zarr_path}")
+        else:
+            logger.info(f"Intermediate zarr not found (skipping): {zarr_path}")
+
+
 # ---------------------------------------------------------------------------
 # Virtual stain
 # ---------------------------------------------------------------------------

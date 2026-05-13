@@ -134,6 +134,21 @@ process run_concatenate {
 }
 
 
+process clean_intermediates {
+    label 'cpu_local'
+
+    input:
+    val trigger
+
+    script:
+    """
+    ${biahub_cmd()} nf clean-intermediates \
+        -o "${params.output_dir}" \
+        -d "${dataset_name()}"
+    """
+}
+
+
 def parse_positions(stdout_text) {
     return stdout_text.trim().readLines()
         .findAll { it.startsWith('POSITION:') }
@@ -157,6 +172,10 @@ workflow assemble_wf_mantisv2 {
         .combine(resources)
         | run_concatenate
         | collect
+
+    if (params.clean_intermediates) {
+        clean_intermediates(as_done)
+    }
 
     emit:
     done = as_done
