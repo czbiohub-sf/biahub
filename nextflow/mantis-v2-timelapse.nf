@@ -279,6 +279,66 @@ workflow from_assembly {
 
 
 // ---------------------------------------------------------------------------
+//  Standalone entries: rerun a single step only
+//  Usage: nextflow run ... -entry only_flat_field
+// ---------------------------------------------------------------------------
+
+workflow only_flat_field {
+    if (!params.input_zarr)        error "Provide --input_zarr"
+    if (!params.output_dir)        error "Provide --output_dir"
+    if (!params.flat_field_config) error "Provide --flat_field_config"
+
+    all_positions = collect_positions()
+    flat_field_wf(all_positions)
+}
+
+workflow only_deskew {
+    if (!params.output_dir)    error "Provide --output_dir"
+    if (!params.deskew_config) error "Provide --deskew_config"
+
+    all_positions = collect_positions()
+    trigger = Channel.value(true)
+    deskew_wf(all_positions, trigger)
+}
+
+workflow only_reconstruct {
+    if (!params.output_dir)          error "Provide --output_dir"
+    if (!params.reconstruct_config)  error "Provide --reconstruct_config"
+
+    all_positions = collect_positions()
+    trigger = Channel.value(true)
+    reconstruct_wf(all_positions, trigger)
+}
+
+workflow only_virtual_stain {
+    if (!params.output_dir)      error "Provide --output_dir"
+    if (!params.predict_config)  error "Provide --predict_config"
+
+    all_positions = collect_positions()
+    trigger = Channel.value(true)
+    virtual_stain_wf(all_positions, trigger)
+}
+
+workflow only_tracking {
+    if (!params.output_dir)    error "Provide --output_dir"
+    if (!params.track_config)  error "Provide --track_config"
+
+    all_positions = collect_positions()
+    trigger = Channel.value(true)
+    track_wf(all_positions, trigger)
+}
+
+workflow only_assembly {
+    if (!params.output_dir)          error "Provide --output_dir"
+    if (!params.concatenate_config)  error "Provide --concatenate_config"
+
+    all_positions = collect_positions()
+    trigger = Channel.value(true)
+    assemble_wf_mantisv2(all_positions, trigger)
+}
+
+
+// ---------------------------------------------------------------------------
 //  Default entry (anonymous workflow delegates to full)
 // ---------------------------------------------------------------------------
 
