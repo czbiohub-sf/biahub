@@ -18,9 +18,12 @@ import pandas as pd
 import submitit
 import toml
 
+
 from iohub import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate
 from numpy.typing import ArrayLike
+from cellpose import models as cp_models
+
 
 from biahub.cli.parsing import (
     config_filepath,
@@ -37,7 +40,8 @@ from biahub.cli.utils import (
     update_model,
     yaml_to_model,
 )
-from biahub.settings import ProcessingInputChannel, TrackingSettings
+from biahub.settings import CellposeConfig, FocusConfig, ProcessingInputChannel, TrackingSettings
+from tqdm import tqdm
 
 # Lazy imports for ultrack - imported only when needed in specific functions
 
@@ -342,82 +346,205 @@ def resolve_z_slice(z_range: tuple[int, int], z_shape: int) -> tuple[slice, int]
     return z_slices, Z
 
 
+def find_focus_per_timepoint(
+    im_data,
+    NA_det: float,
+    lambda_ill: float,
+    pixel_size: float,
+) -> np.ndarray:
+    """Find the in-focus z-slice for each timepoint using waveorder.
+
+    Parameters
+    ----------
+    im_data : array-like
+        Image data of shape (T, C, Z, Y, X).
+    NA_det : float
+        Numerical aperture of the detection objective.
+    lambda_ill : float
+        Illumination wavelength in micrometers.
+    pixel_size : float
+        Pixel size in micrometers.
+
+    Returns
+    -------
+    np.ndarray
+        Array of shape (T,) with the in-focus z-index per timepoint.
+    """
+    from waveorder.focus import focus_from_transverse_band
+
+    T = im_data.shape[0]
+    Z = im_data.shape[2]
+    z_focus = np.zeros(T, dtype=int)
+    for t in tqdm(range(T), desc="Finding focus"):
+        zyx = np.asarray(im_data[t, 0, :, :, :])
+        z_f = focus_from_transverse_band(
+            zyx,
+            NA_det=NA_det,
+            lambda_ill=lambda_ill,
+            pixel_size=pixel_size,
+        )
+        if z_f is None:
+            z_f = Z // 2
+        z_focus[t] = int(np.clip(z_f, 0, Z - 1))
+    return z_focus
+
+
+def resolve_focus_z_slice(
+    position_key: tuple[str, ...],
+    input_images: list[ProcessingInputChannel],
+    focus_config: FocusConfig,
+) -> tuple[slice, int]:
+    """Find in-focus z using waveorder and build an asymmetric window.
+
+    Uses 1/3 of ``z_window`` below focus and 2/3 above, matching the
+    dynacell convention from test_tracking.py.
+
+    Parameters
+    ----------
+    position_key : tuple of str
+        (plate, well, position) identifying the FOV.
+    input_images : list of ProcessingInputChannel
+        Input image configuration (first non-null path is used).
+    focus_config : FocusConfig
+        Optical parameters and z_window size.
+
+    Returns
+    -------
+    slice
+        Z-slice range centered on the detected focus.
+    int
+        Number of Z-planes in the selected range.
+    """
+    # Find the first input path
+    vs_path = None
+    for image in input_images:
+        if image.path is not None:
+            vs_path = image.path / Path(*position_key)
+            break
+    if vs_path is None:
+        raise ValueError("No input path found for focus finding.")
+
+    with open_ome_zarr(str(vs_path), mode="r") as ds:
+        Z = ds.data.shape[2]
+        z_focus = find_focus_per_timepoint(
+            ds.data,
+            NA_det=focus_config.NA_det,
+            lambda_ill=focus_config.lambda_ill,
+            pixel_size=focus_config.pixel_size,
+        )
+
+    z_median = int(np.median(z_focus))
+    z_window = focus_config.z_window
+    z_below = z_window // 3
+    z_above = z_window - z_below - 1
+    z_start = max(0, z_median - z_below)
+    z_stop = min(Z, z_median + z_above + 1)
+    z_slicing = slice(z_start, z_stop)
+
+    click.echo(
+        f"Focus z-slicing: {z_slicing} "
+        f"(median focus z={z_median}, {z_below} below / {z_above} above, "
+        f"range=[{z_focus.min()}, {z_focus.max()}])"
+    )
+    return z_slicing, z_stop - z_start
+
+
+def run_cellpose_per_frame(
+    images: np.ndarray,
+    model_type: str = "nuclei",
+    diameter: float = 80,
+    cellprob_threshold: float = 0.0,
+    flow_threshold: float = 0.4,
+    gpu: bool = True,
+    min_size: int = 500,
+) -> np.ndarray:
+    """Run cellpose on each 2D frame of a (T, Y, X) array.
+
+    Returns an integer label array of shape (T, Y, X).
+    """
+    model = cp_models.CellposeModel(model_type=model_type, gpu=gpu)
+
+    T = images.shape[0]
+    labels = np.zeros_like(images, dtype=np.int32)
+    for t in tqdm(range(T), desc="Cellpose segmentation"):
+        mask, _, _ = model.eval(
+            images[t],
+            diameter=diameter,
+            channels=[0, 0],  # grayscale
+            cellprob_threshold=cellprob_threshold,
+            flow_threshold=flow_threshold,
+            min_size=min_size,
+        )
+        labels[t] = mask
+    return labels
+
 def run_ultrack(
     tracking_config: MainConfig,
-    foreground_mask: ArrayLike,
-    contour_gradient_map: ArrayLike,
     scale: tuple[float, float] | tuple[float, float, float],
     database_path,
+    foreground_mask: ArrayLike | None = None,
+    contour_gradient_map: ArrayLike | None = None,
+    cellpose_labels: ArrayLike | None = None,
+    labels_sigma: float = 5.0,
 ):
     """
     Run object tracking using the Ultrack library.
 
-    Note: ultrack is imported lazily within this function.
-
-    This function performs object tracking on time-series image data using a binary
-    foreground mask and a contour gradient map. It outputs labeled segmentation results,
-    a track DataFrame, and a graph representing object trajectories over time.
+    Supports two modes:
+    - **foreground+contour**: pass ``foreground_mask`` and ``contour_gradient_map``.
+    - **cellpose labels**: pass ``cellpose_labels`` (and optionally ``labels_sigma``).
 
     Parameters
     ----------
     tracking_config : MainConfig
-        Ultrack configuration object defining segmentation, linking, and optimization parameters.
-    foreground_mask : ArrayLike
-        Binary mask (0 or 1) indicating detected object regions over time.
-        Shape is typically (T, Z, Y, X) or (T, Y, X).
-    contour_gradient_map : ArrayLike
-        Gradient map or edge score map used to refine object boundaries and define connectivity
-        for linking detected objects between timepoints.
+        Ultrack configuration object.
     scale : tuple of float
-        Physical resolution scale in either (Y, X) or (Z, Y, X) depending on whether the data is 2D or 3D.
+        Physical resolution scale in (Y, X) or (Z, Y, X).
     database_path : Path
-        Directory where tracking results, configuration files, and output data will be saved.
+        Directory for tracking results and configuration files.
+    foreground_mask : ArrayLike, optional
+        Binary foreground mask. Required for foreground+contour mode.
+    contour_gradient_map : ArrayLike, optional
+        Edge/gradient map. Required for foreground+contour mode.
+    cellpose_labels : ArrayLike, optional
+        Integer label array from cellpose. Required for cellpose mode.
+    labels_sigma : float, optional
+        Gaussian sigma for ``labels_to_contours`` conversion. Default 5.0.
 
     Returns
     -------
     labels : np.ndarray
-        Labeled segmentation array of shape (T, Z, Y, X) or (T, Y, X), where each object instance
-        is assigned a unique integer label across time.
+        Labeled segmentation array.
     tracks_df : pandas.DataFrame
-        DataFrame with tracking metadata including object ID, frame index, spatial coordinates,
-        and parent-child relationships.
-    graph : networkx.Graph
-        Directed graph representing tracked object lineages. Nodes correspond to objects and
-        edges represent links between objects across frames.
-
-    Notes
-    -----
-    - `foreground_mask` must be a binary mask (e.g., after thresholding a probability map).
-    - This function modifies `tracking_config` to set the working directory (`working_dir`).
-    - The configuration used is saved to `config.toml` under the `database_path`.
-
-    Examples
-    --------
-    >>> labels, tracks_df, graph = run_ultrack(
-    ...     tracking_config=cfg,
-    ...     foreground_mask=binary_mask,
-    ...     contour_gradient_map=gradient_map,
-    ...     scale=(0.5, 0.5, 1.0),
-    ...     database_path=Path("results/posA"),
-    ... )
+        Tracking metadata.
+    graph : dict
+        Directed graph of tracked object lineages.
     """
     from ultrack import Tracker
 
     _patch_ultrack_readonly_buffer()
 
     cfg: MainConfig = tracking_config
-
     cfg.data_config.working_dir = database_path
 
     print(cfg)
 
     tracker = Tracker(cfg)
-    tracker.track(
-        detection=foreground_mask,
-        edges=contour_gradient_map,
-        scale=scale,
-        overwrite=True,
-    )
+
+    if cellpose_labels is not None:
+        tracker.track(
+            labels=cellpose_labels,
+            sigma=labels_sigma,
+            scale=scale,
+            overwrite=True,
+        )
+    else:
+        tracker.track(
+            detection=foreground_mask,
+            edges=contour_gradient_map,
+            scale=scale,
+            overwrite=True,
+        )
 
     tracks_df, graph = tracker.to_tracks_layer()
     labels = tracker.to_zarr(
@@ -701,6 +828,82 @@ def data_preprocessing(
     return foreground_mask, contour_gradient_map
 
 
+def cellpose_preprocessing(
+    position_key: str,
+    input_images: list[ProcessingInputChannel],
+    z_slices: slice,
+    blank_frames_path: Path = None,
+    cellpose_config: CellposeConfig = None,
+) -> np.ndarray:
+    """
+    Load data, fill empty frames, and run cellpose segmentation.
+
+    Returns an integer label array of shape (T, Y, X) ready to pass
+    directly to ``run_ultrack(..., cellpose_labels=...)``.
+
+    Parameters
+    ----------
+    position_key : str
+        FOV key (plate, well, position).
+    input_images : list of ProcessingInputChannel
+        Channel loading configuration.
+    z_slices : slice
+        Z-planes to load.
+    blank_frames_path : Path, optional
+        CSV of blank frames.
+    cellpose_config : CellposeConfig
+        Cellpose model parameters including ``input_channel``.
+    """
+    fov = "/".join(position_key)
+
+    data_dict = load_data(
+        position_key=position_key,
+        input_images=input_images,
+        z_slices=z_slices,
+    )
+    data_dict = run_preprocessing_pipeline(data_dict, input_images)
+    data_dict = fill_empty_frames_from_csv(fov, data_dict, blank_frames_path)
+
+    # Get the channel to segment
+    channel_name = cellpose_config.input_channel
+    if channel_name not in data_dict:
+        raise ValueError(
+            f"Cellpose input channel '{channel_name}' not found in data. "
+            f"Available: {list(data_dict.keys())}"
+        )
+
+    images = data_dict[channel_name]
+    if isinstance(images, da.Array):
+        images = images.compute()
+    images = np.asarray(images)
+
+    # Project Z if needed (T, Z, Y, X) -> (T, Y, X)
+    if images.ndim == 4:
+        click.echo(f"Projecting Z-dimension via mean: {images.shape} -> (T, Y, X)")
+        images = images.mean(axis=1)
+
+    click.echo(
+        f"Running cellpose ({cellpose_config.model_type}, "
+        f"diameter={cellpose_config.diameter}) on channel '{channel_name}'..."
+    )
+    cellpose_labels = run_cellpose_per_frame(
+        images,
+        model_type=cellpose_config.model_type,
+        diameter=cellpose_config.diameter,
+        cellprob_threshold=cellpose_config.cellprob_threshold,
+        flow_threshold=cellpose_config.flow_threshold,
+        gpu=cellpose_config.gpu,
+        min_size=cellpose_config.min_size,
+    )
+
+    n_cells = [len(np.unique(cellpose_labels[t])) - 1 for t in range(cellpose_labels.shape[0])]
+    click.echo(
+        f"Cellpose cells per frame: mean={np.mean(n_cells):.1f}, "
+        f"min={np.min(n_cells)}, max={np.max(n_cells)}"
+    )
+    return cellpose_labels
+
+
 def track_one_position(
     position_key: str,
     input_images: list[ProcessingInputChannel],
@@ -709,81 +912,78 @@ def track_one_position(
     blank_frames_path: Path = None,
     z_slices: tuple[int, int] = (0, 0),
     scale: tuple[float, float, float, float, float] = (1, 1, 1, 1, 1),
+    cellpose_config: CellposeConfig | None = None,
+    focus_config: FocusConfig | None = None,
 ) -> None:
     """
-    Run tracking on a single field of view using foreground and contour channel data.
+    Run tracking on a single field of view.
 
-    This function loads image data, applies a preprocessing pipeline, fills blank frames if needed,
-    and uses the Ultrack library to compute object tracks. It is agnostic to the imaging source —
-    as long as the pipeline produces a binary foreground mask and a corresponding contour map.
+    Supports two segmentation modes:
+    - **foreground+contour** (default): preprocessing must produce 'foreground' and 'contour' channels.
+    - **cellpose**: runs cellpose per-frame on a specified channel and passes labels directly to ultrack.
 
     Parameters
     ----------
     position_key : str
-        A string identifier for the field of view (e.g., "A_1_3"), typically composed of
-        Plate, Well, and Position joined by underscores.
+        FOV identifier (e.g., ``("A", "1", "3")``).
     input_images : list of ProcessingInputChannel
-        Configuration describing which channels to load and how to preprocess them.
+        Channels to load and preprocess.
     output_dirpath : Path
-        Output directory where labeled Zarr volumes and track CSVs will be stored.
+        Output Zarr store for labels and tracks.
     tracking_config : MainConfig
-        Ultrack configuration containing segmentation, linking, and optimization settings.
+        Ultrack configuration.
     blank_frames_path : Path, optional
-        Path to CSV file indicating empty frames for the current FOV. If None, blank frame
-        filling is skipped.
+        CSV of empty frames per FOV.
     z_slices : tuple of int, optional
-        Tuple specifying the range of Z-slices to load. If (0, 0), the central slice range
-        will be auto-resolved. Default is (0, 0).
+        Z-range to load. Default ``(0, 0)`` triggers auto central slicing.
     scale : tuple of float, optional
-        Physical scale of the dataset in (T, C, Z, Y, X) order. Tracking uses either the
-        (Z, Y, X) or (Y, X) portion depending on dimensionality. Default is (1, 1, 1, 1, 1).
-
-    Returns
-    -------
-    None
-        Outputs are saved directly to disk:
-        - Tracked object labels in Zarr format
-        - CSV file containing the track graph (IDs, positions, parents)
-
-    Notes
-    -----
-    - Output is saved to `{output_dirpath}/{position_key}/tracks_{position_key}.csv`.
-    - The Ultrack config is also saved as TOML in a `_config_tracking/{FOV}/` subdirectory.
-    - If required input channels ("foreground" and "contour") are missing, a ValueError is raised.
-
-    Examples
-    --------
-    >>> track_one_position(
-    ...     position_key="A_1_3",
-    ...     input_images=config.input_images,
-    ...     output_dirpath=Path("output.zarr"),
-    ...     tracking_config=cfg,
-    ...     blank_frames_path=Path("blank_frames.csv"),
-    ...     z_slices=(10, 15),
-    ...     scale=(1, 1, 0.5, 0.2, 0.2),
-    ... )
+        Physical scale ``(T, C, Z, Y, X)``.
+    cellpose_config : CellposeConfig, optional
+        If provided, uses cellpose segmentation instead of foreground+contour.
+    focus_config : FocusConfig, optional
+        If provided, uses waveorder focus finding to determine z-slicing
+        (overrides z_slices).
     """
     fov = "_".join(position_key)
     click.echo(f"Processing FOV: {fov.replace('_', '/')}")
-    # tracking input images
-    foreground_mask, contour_gradient_map = data_preprocessing(
-        position_key, input_images, z_slices, blank_frames_path
-    )
+
+    # Override z_slices with focus-based slicing when configured
+    if focus_config is not None:
+        z_slices, _ = resolve_focus_z_slice(position_key, input_images, focus_config)
 
     # Define path to save the tracking database and graph
     filename = output_dirpath.stem
     database_path = output_dirpath.parent / f"{filename}_config_tracking" / f"{fov}"
     os.makedirs(database_path, exist_ok=True)
 
-    # Perform tracking
-    click.echo("Tracking...")
-    tracking_labels, tracks_df, _ = run_ultrack(
-        tracking_config=tracking_config,
-        foreground_mask=foreground_mask,
-        contour_gradient_map=contour_gradient_map,
-        scale=scale,
-        database_path=database_path,
-    )
+    if cellpose_config is not None:
+        # Cellpose mode: load data, fill blanks, run cellpose, pass labels to ultrack
+        cellpose_labels = cellpose_preprocessing(
+            position_key, input_images, z_slices, blank_frames_path, cellpose_config
+        )
+
+        click.echo("Tracking with cellpose labels...")
+        tracking_labels, tracks_df, _ = run_ultrack(
+            tracking_config=tracking_config,
+            scale=scale,
+            database_path=database_path,
+            cellpose_labels=cellpose_labels,
+            labels_sigma=cellpose_config.labels_sigma,
+        )
+    else:
+        # Foreground + contour mode
+        foreground_mask, contour_gradient_map = data_preprocessing(
+            position_key, input_images, z_slices, blank_frames_path
+        )
+
+        click.echo("Tracking with foreground + contour...")
+        tracking_labels, tracks_df, _ = run_ultrack(
+            tracking_config=tracking_config,
+            scale=scale,
+            database_path=database_path,
+            foreground_mask=foreground_mask,
+            contour_gradient_map=contour_gradient_map,
+        )
 
     # Save the tracks graph to a CSV file
     csv_path = output_dirpath / Path(*position_key) / f"tracks_{fov}.csv"
@@ -955,6 +1155,8 @@ def track(
     click.echo("Submitting SLURM jobs...")
     jobs = []
 
+    cellpose_cfg = settings.cellpose_config if settings.segmentation_method == "cellpose" else None
+
     with submitit.helpers.clean_env(), executor.batch():
         for position_key in position_keys:
             job = executor.submit(
@@ -966,6 +1168,8 @@ def track(
                 blank_frames_path=settings.blank_frames_path,
                 z_slices=z_slices,
                 scale=track_scale,
+                cellpose_config=cellpose_cfg,
+                focus_config=settings.focus_config,
             )
 
             jobs.append(job)

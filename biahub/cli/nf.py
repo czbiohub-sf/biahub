@@ -624,6 +624,8 @@ def run_track(
 
     tracking_config = update_model(MainConfig(), settings.tracking_config)
 
+    cellpose_cfg = settings.cellpose_config if settings.segmentation_method == "cellpose" else None
+
     track_one_position(
         position_key=position_key,
         input_images=settings.input_images,
@@ -632,6 +634,8 @@ def run_track(
         blank_frames_path=blank_path,
         z_slices=z_slices,
         scale=track_scale,
+        cellpose_config=cellpose_cfg,
+        focus_config=settings.focus_config,
     )
 
     click.echo(f"Tracking done: {position}")
