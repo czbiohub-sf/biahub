@@ -478,7 +478,7 @@ def run_cellpose_per_frame(
             flow_threshold=flow_threshold,
             min_size=min_size,
         )
-        labels[t] = mask
+        labels[t] = np.asarray(mask)
     return labels
 
 
