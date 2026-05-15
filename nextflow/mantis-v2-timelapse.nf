@@ -124,11 +124,11 @@ workflow full {
     dk_done  = deskew_wf(all_positions, ff_done.done)
     rc_done  = reconstruct_wf(all_positions, dk_done.done)
     vs_done  = virtual_stain_wf(all_positions, rc_done.done)
-    tk_done  = track_wf(all_positions, vs_done.done)
     pre_asm  = (params.rename_prefix || params.rename_suffix)
-        ? rename_wf(all_positions, tk_done.done).done
-        : tk_done.done
+        ? rename_wf(all_positions, vs_done.done).done
+        : vs_done.done
     asm_done = assemble_wf_mantisv2(all_positions, pre_asm)
+    tk_done  = track_wf(all_positions, asm_done.done)
 
     run_qc(all_positions, [
         ff_done:  ff_done.done,
@@ -159,11 +159,11 @@ workflow from_deskew {
     dk_done  = deskew_wf(all_positions, trigger)
     rc_done  = reconstruct_wf(all_positions, dk_done.done)
     vs_done  = virtual_stain_wf(all_positions, rc_done.done)
-    tk_done  = track_wf(all_positions, vs_done.done)
     pre_asm  = (params.rename_prefix || params.rename_suffix)
-        ? rename_wf(all_positions, tk_done.done).done
-        : tk_done.done
+        ? rename_wf(all_positions, vs_done.done).done
+        : vs_done.done
     asm_done = assemble_wf_mantisv2(all_positions, pre_asm)
+    tk_done  = track_wf(all_positions, asm_done.done)
 
     run_qc(all_positions, [
         dk_done:  dk_done.done,
@@ -191,11 +191,11 @@ workflow from_reconstruct {
 
     rc_done  = reconstruct_wf(all_positions, trigger)
     vs_done  = virtual_stain_wf(all_positions, rc_done.done)
-    tk_done  = track_wf(all_positions, vs_done.done)
     pre_asm  = (params.rename_prefix || params.rename_suffix)
-        ? rename_wf(all_positions, tk_done.done).done
-        : tk_done.done
+        ? rename_wf(all_positions, vs_done.done).done
+        : vs_done.done
     asm_done = assemble_wf_mantisv2(all_positions, pre_asm)
+    tk_done  = track_wf(all_positions, asm_done.done)
 
     run_qc(all_positions, [
         rc_done:  rc_done.done,
@@ -220,11 +220,11 @@ workflow from_virtual_stain {
     trigger = Channel.value(true)
 
     vs_done  = virtual_stain_wf(all_positions, trigger)
-    tk_done  = track_wf(all_positions, vs_done.done)
     pre_asm  = (params.rename_prefix || params.rename_suffix)
-        ? rename_wf(all_positions, tk_done.done).done
-        : tk_done.done
+        ? rename_wf(all_positions, vs_done.done).done
+        : vs_done.done
     asm_done = assemble_wf_mantisv2(all_positions, pre_asm)
+    tk_done  = track_wf(all_positions, asm_done.done)
 
     run_qc(all_positions, [
         vs_done:  vs_done.done,
@@ -234,32 +234,7 @@ workflow from_virtual_stain {
 
 
 // ---------------------------------------------------------------------------
-//  Entry: from tracking (assumes through 3-virtual-stain exist)
-//  Usage: nextflow run ... -entry from_tracking
-// ---------------------------------------------------------------------------
-
-workflow from_tracking {
-    if (!params.output_dir)          error "Provide --output_dir"
-    if (!params.track_config)        error "Provide --track_config"
-    if (!params.concatenate_config)  error "Provide --concatenate_config"
-
-    all_positions = collect_positions()
-    trigger = Channel.value(true)
-
-    tk_done  = track_wf(all_positions, trigger)
-    pre_asm  = (params.rename_prefix || params.rename_suffix)
-        ? rename_wf(all_positions, tk_done.done).done
-        : tk_done.done
-    asm_done = assemble_wf_mantisv2(all_positions, pre_asm)
-
-    run_qc(all_positions, [
-        asm_done: asm_done.done,
-    ])
-}
-
-
-// ---------------------------------------------------------------------------
-//  Entry: from assembly (assumes through rename exist)
+//  Entry: from assembly (assumes through 3-virtual-stain exist)
 //  Usage: nextflow run ... -entry from_assembly
 // ---------------------------------------------------------------------------
 
@@ -275,6 +250,22 @@ workflow from_assembly {
     run_qc(all_positions, [
         asm_done: asm_done.done,
     ])
+}
+
+
+// ---------------------------------------------------------------------------
+//  Entry: from tracking (assumes through 5-assemble exist)
+//  Usage: nextflow run ... -entry from_tracking
+// ---------------------------------------------------------------------------
+
+workflow from_tracking {
+    if (!params.output_dir)          error "Provide --output_dir"
+    if (!params.track_config)        error "Provide --track_config"
+
+    all_positions = collect_positions()
+    trigger = Channel.value(true)
+
+    tk_done  = track_wf(all_positions, trigger)
 }
 
 
