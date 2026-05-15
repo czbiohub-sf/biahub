@@ -18,12 +18,11 @@ import pandas as pd
 import submitit
 import toml
 
-
+from cellpose import models as cp_models
 from iohub import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate
 from numpy.typing import ArrayLike
-from cellpose import models as cp_models
-
+from tqdm import tqdm
 
 from biahub.cli.parsing import (
     config_filepath,
@@ -40,8 +39,12 @@ from biahub.cli.utils import (
     update_model,
     yaml_to_model,
 )
-from biahub.settings import CellposeConfig, FocusConfig, ProcessingInputChannel, TrackingSettings
-from tqdm import tqdm
+from biahub.settings import (
+    CellposeConfig,
+    FocusConfig,
+    ProcessingInputChannel,
+    TrackingSettings,
+)
 
 # Lazy imports for ultrack - imported only when needed in specific functions
 
@@ -478,38 +481,24 @@ def run_cellpose_per_frame(
         labels[t] = mask
     return labels
 
+
 def run_ultrack(
     tracking_config: MainConfig,
-    scale: tuple[float, float] | tuple[float, float, float],
     database_path,
-    foreground_mask: ArrayLike | None = None,
-    contour_gradient_map: ArrayLike | None = None,
-    cellpose_labels: ArrayLike | None = None,
-    labels_sigma: float = 5.0,
+    **track_kwargs,
 ):
     """
     Run object tracking using the Ultrack library.
-
-    Supports two modes:
-    - **foreground+contour**: pass ``foreground_mask`` and ``contour_gradient_map``.
-    - **cellpose labels**: pass ``cellpose_labels`` (and optionally ``labels_sigma``).
 
     Parameters
     ----------
     tracking_config : MainConfig
         Ultrack configuration object.
-    scale : tuple of float
-        Physical resolution scale in (Y, X) or (Z, Y, X).
     database_path : Path
         Directory for tracking results and configuration files.
-    foreground_mask : ArrayLike, optional
-        Binary foreground mask. Required for foreground+contour mode.
-    contour_gradient_map : ArrayLike, optional
-        Edge/gradient map. Required for foreground+contour mode.
-    cellpose_labels : ArrayLike, optional
-        Integer label array from cellpose. Required for cellpose mode.
-    labels_sigma : float, optional
-        Gaussian sigma for ``labels_to_contours`` conversion. Default 5.0.
+    **track_kwargs
+        Keyword arguments forwarded to ``Tracker.track()``.
+        E.g. ``detection``, ``edges``, ``scale``, ``labels``, ``sigma``, ``overwrite``.
 
     Returns
     -------
@@ -530,21 +519,7 @@ def run_ultrack(
     print(cfg)
 
     tracker = Tracker(cfg)
-
-    if cellpose_labels is not None:
-        tracker.track(
-            labels=cellpose_labels,
-            sigma=labels_sigma,
-            scale=scale,
-            overwrite=True,
-        )
-    else:
-        tracker.track(
-            detection=foreground_mask,
-            edges=contour_gradient_map,
-            scale=scale,
-            overwrite=True,
-        )
+    tracker.track(**track_kwargs)
 
     tracks_df, graph = tracker.to_tracks_layer()
     labels = tracker.to_zarr(
@@ -751,7 +726,7 @@ def fill_empty_frames_from_csv(
     return data_dict
 
 
-def data_preprocessing(
+def foreground_preprocessing(
     position_key: str,
     input_images: list[ProcessingInputChannel],
     z_slices: slice,
@@ -796,7 +771,7 @@ def data_preprocessing(
     Examples
     --------
     >>> z_slice = slice(10, 15)
-    >>> foreground, contour = data_preprocessing(
+    >>> foreground, contour = foreground_preprocessing(
     ...     position_key="A_1_3",
     ...     input_images=config.input_images,
     ...     z_slices=z_slice,
@@ -965,24 +940,26 @@ def track_one_position(
         click.echo("Tracking with cellpose labels...")
         tracking_labels, tracks_df, _ = run_ultrack(
             tracking_config=tracking_config,
-            scale=scale,
             database_path=database_path,
-            cellpose_labels=cellpose_labels,
-            labels_sigma=cellpose_config.labels_sigma,
+            labels=cellpose_labels,
+            sigma=cellpose_config.labels_sigma,
+            scale=scale,
+            overwrite=True,
         )
     else:
         # Foreground + contour mode
-        foreground_mask, contour_gradient_map = data_preprocessing(
+        foreground_mask, contour_gradient_map = foreground_preprocessing(
             position_key, input_images, z_slices, blank_frames_path
         )
 
         click.echo("Tracking with foreground + contour...")
         tracking_labels, tracks_df, _ = run_ultrack(
             tracking_config=tracking_config,
-            scale=scale,
             database_path=database_path,
-            foreground_mask=foreground_mask,
-            contour_gradient_map=contour_gradient_map,
+            detection=foreground_mask,
+            edges=contour_gradient_map,
+            scale=scale,
+            overwrite=True,
         )
 
     # Save the tracks graph to a CSV file
@@ -1155,7 +1132,9 @@ def track(
     click.echo("Submitting SLURM jobs...")
     jobs = []
 
-    cellpose_cfg = settings.cellpose_config if settings.segmentation_method == "cellpose" else None
+    cellpose_cfg = (
+        settings.cellpose_config if settings.segmentation_method == "cellpose" else None
+    )
 
     with submitit.helpers.clean_env(), executor.batch():
         for position_key in position_keys:
