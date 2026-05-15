@@ -527,6 +527,68 @@ def rename_channels(input_zarr: str, position: str, prefix: str, suffix: str):
     click.echo(f"Renamed channels: {position}")
 
 
+@nf_cli.command("rename-channels-map")
+@click.option("--input-zarr", "-i", required=True, type=click.Path(exists=True))
+@click.option("--position", "-p", required=True)
+@click.option(
+    "--config",
+    "-c",
+    default=None,
+    type=click.Path(exists=True),
+    help="YAML config with rename rules. If not provided, applies default rules.",
+)
+def rename_channels_map(input_zarr: str, position: str, config: str | None):
+    """Rename channels using a mapping config (metadata-only, no data copy).
+
+    Default rules (when no config is provided):
+    - 'BF - Oblique' -> 'BF'
+    - 'Phase3D*' -> 'Phase3D'
+    - All other channels get 'raw ' prefix
+
+    Config YAML format::
+
+        rename_exact:
+          "BF - Oblique": "BF"
+        rename_startswith:
+          "Phase3D": "Phase3D"
+        raw_prefix_exclude:
+          - "BF - Oblique"
+          - "Phase3D"
+          - "nuclei_prediction"
+          - "membrane_prediction"
+    """
+    import yaml
+
+    if config:
+        with open(config) as f:
+            rules = yaml.safe_load(f)
+        rename_exact = rules.get("rename_exact", {})
+        rename_startswith = rules.get("rename_startswith", {})
+        raw_exclude = set(rules.get("raw_prefix_exclude", []))
+    else:
+        rename_exact = {"BF - Oblique": "BF"}
+        rename_startswith = {"Phase3D": "Phase3D"}
+        raw_exclude = {"BF - Oblique", "nuclei_prediction", "membrane_prediction"}
+
+    position_path = Path(input_zarr) / position
+    with open_ome_zarr(str(position_path), mode="r+") as pos:
+        for old_name in list(pos.channel_names):
+            if old_name in rename_exact:
+                new_name = rename_exact[old_name]
+            elif any(old_name.startswith(prefix) for prefix in rename_startswith):
+                new_name = next(
+                    v for k, v in rename_startswith.items() if old_name.startswith(k)
+                )
+            elif old_name not in raw_exclude and not old_name.startswith("raw "):
+                new_name = f"raw {old_name}"
+            else:
+                continue
+            pos.rename_channel(old_name, new_name)
+            click.echo(f"  '{old_name}' -> '{new_name}'")
+
+    click.echo(f"Renamed channels: {position}")
+
+
 # ---------------------------------------------------------------------------
 # Tracking
 # ---------------------------------------------------------------------------
@@ -624,7 +686,9 @@ def run_track(
 
     tracking_config = update_model(MainConfig(), settings.tracking_config)
 
-    cellpose_cfg = settings.cellpose_config if settings.segmentation_method == "cellpose" else None
+    cellpose_cfg = (
+        settings.cellpose_config if settings.segmentation_method == "cellpose" else None
+    )
 
     track_one_position(
         position_key=position_key,

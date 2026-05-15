@@ -61,3 +61,56 @@ workflow rename_wf {
     emit:
     done = rn_done
 }
+
+
+// ---------------------------------------------------------------------------
+// Rename channels using a mapping config (runs on multiple zarrs)
+// ---------------------------------------------------------------------------
+
+process rename_channels_map_process {
+    tag "${position} @ ${zarr_path}"
+    label 'cpu_local'
+    time '10m'
+
+    input:
+    tuple val(position), val(zarr_path), val(config_flag)
+
+    output:
+    val position
+
+    script:
+    """
+    ${biahub_cmd()} nf rename-channels-map \
+        -i "${zarr_path}" \
+        -p "${position}" \
+        ${config_flag}
+    """
+}
+
+workflow rename_channels_map_wf {
+    take:
+    positions
+    prev_done
+
+    main:
+    def config_flag = params.rename_config
+        ? "-c ${params.rename_config}"
+        : ""
+
+    // Apply to deskew, reconstruct, and virtual-stain zarrs
+    def zarr_paths = [
+        "${params.output_dir}/1-deskew/${dataset_name()}.zarr",
+        "${params.output_dir}/2-reconstruct/${dataset_name()}.zarr",
+        "${params.output_dir}/3-virtual-stain/${dataset_name()}.zarr",
+    ]
+
+    rn_done = prev_done.map { 'done' }
+        | combine( positions.flatMap { it } )
+        | map { trigger, pos -> pos }
+        | flatMap { pos -> zarr_paths.collect { zarr -> [pos, zarr, config_flag] } }
+        | rename_channels_map_process
+        | collect
+
+    emit:
+    done = rn_done
+}
