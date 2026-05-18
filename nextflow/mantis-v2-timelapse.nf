@@ -154,7 +154,7 @@ workflow full {
         vs_done:  vs_done.done,
         asm_done: asm_done.done,
     ])
-    registry_trigger = tk_done.done.combine(qc_done).map { _, _ -> true }
+    registry_trigger = tk_done.done.combine(qc_done).map { tk, qc -> true }
     airtable_registry_wf(registry_trigger)
 }
 
@@ -192,7 +192,7 @@ workflow from_deskew {
         vs_done:  vs_done.done,
         asm_done: asm_done.done,
     ])
-    registry_trigger = tk_done.done.combine(qc_done).map { _, _ -> true }
+    registry_trigger = tk_done.done.combine(qc_done).map { tk, qc -> true }
     airtable_registry_wf(registry_trigger)
 }
 
@@ -227,7 +227,7 @@ workflow from_reconstruct {
         vs_done:  vs_done.done,
         asm_done: asm_done.done,
     ])
-    registry_trigger = tk_done.done.combine(qc_done).map { _, _ -> true }
+    registry_trigger = tk_done.done.combine(qc_done).map { tk, qc -> true }
     airtable_registry_wf(registry_trigger)
 }
 
@@ -259,7 +259,7 @@ workflow from_virtual_stain {
         vs_done:  vs_done.done,
         asm_done: asm_done.done,
     ])
-    registry_trigger = tk_done.done.combine(qc_done).map { _, _ -> true }
+    registry_trigger = tk_done.done.combine(qc_done).map { tk, qc -> true }
     airtable_registry_wf(registry_trigger)
 }
 
@@ -298,7 +298,7 @@ workflow from_tracking {
 
     tk_done  = track_wf(all_positions, trigger)
     qc_done = run_qc(all_positions, [:])
-    registry_trigger = tk_done.done.combine(qc_done).map { _, _ -> true }
+    registry_trigger = tk_done.done.combine(qc_done).map { tk, qc -> true }
     airtable_registry_wf(registry_trigger)
 }
 
@@ -376,7 +376,7 @@ workflow only_tracking {
     trigger = Channel.value(true)
     tk_done = track_wf(all_positions, trigger)
     qc_done = run_qc(all_positions, [:])
-    registry_trigger = tk_done.done.combine(qc_done).map { _, _ -> true }
+    registry_trigger = tk_done.done.combine(qc_done).map { tk, qc -> true }
     airtable_registry_wf(registry_trigger)
 }
 
