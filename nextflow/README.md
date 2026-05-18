@@ -151,6 +151,29 @@ Pass the env path to the pipeline:
 --viscy_project /path/to/viscy-env
 ```
 
+### Airtable Dataset Registry
+
+The optional Airtable registry hook uses the existing VisCy Airtable CLI after tracking completes. It runs:
+
+```bash
+register /path/to/output_dir/5-assemble/<dataset>.zarr/*/*/*
+write    /path/to/output_dir/5-assemble/<dataset>.zarr/*/*/*
+```
+
+against the VisCy monorepo's `applications/airtable` project. This requires:
+
+```bash
+export AIRTABLE_API_KEY=...
+export AIRTABLE_BASE_ID=...
+```
+
+and a VisCy checkout with the Airtable app available:
+
+```bash
+--airtable_project /path/to/VisCy
+--airtable_registry_after_tracking true
+```
+
 ### imaging-qc-pipeline (QC stages + Quarto)
 
 The QC processes in `modules/qc.nf` shell out to the `imaging-qc` CLI — they do **not** import Nextflow subworkflows or Python code from `imaging-qc-pipeline`. All orchestration (fan-out, chunking, merging) is defined here in biahub; `imaging-qc-pipeline` is a black-box CLI dependency. This means changes to the internal Nextflow or Python orchestration in `imaging-qc-pipeline` (DAG resolution, dispatch, subworkflows) do not affect this pipeline as long as the CLI contract is stable.
@@ -236,6 +259,7 @@ Use `-profile local` instead of `-profile slurm` for local execution.
 | `--rename_suffix` | Suffix for channel renaming (optional) |
 | `--biahub_project` | Path to biahub repo root for `uv run` (optional; see [Environment setup](#environment-setup)) |
 | `--viscy_project` | Path to viscy-env wrapper project for `uv run` (optional; see [VisCy setup](#viscy-virtual-staining)) |
+| `--airtable_project` | Path to the VisCy monorepo root containing `applications/airtable` (optional; required for Airtable registry integration) |
 | `--max_positions` | Limit fan-out to first N positions (default: 0 = all positions) |
 | `--work_dir` | Nextflow work directory for intermediate files (default: `work/` in current directory) |
 | `--qc_config_dir` | Directory containing per-stage QC YAML configs (optional; enables QC stages) |
@@ -243,6 +267,9 @@ Use `-profile local` instead of `-profile slurm` for local execution.
 | `--qc_report_dir` | Directory for the final QC report (default: `<output_dir>/qc/report`) |
 | `--qc_report_static` | Generate static PNG-only report instead of interactive Quarto/Plotly (default: `false`) |
 | `--quarto_bin` | Path to directory containing the `quarto` binary (required for interactive reports on Slurm, where `~/.bashrc` is not sourced) |
+| `--airtable_registry_after_tracking` | After tracking finishes, run VisCy Airtable `register` + `write` on the assembled zarr positions (default: `false`) |
+| `--airtable_registry_dataset` | Optional Airtable dataset name override passed to the registration CLI (default: zarr stem) |
+| `--airtable_registry_dry_run` | Log Airtable registry actions without writing to Airtable or zarr metadata (default: `false`) |
 
 ## Output
 
