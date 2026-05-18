@@ -23,6 +23,21 @@ from biahub.cli.utils import (
 logger = logging.getLogger(__name__)
 
 
+def _remove_existing_path(path: Path, label: str = "output path"):
+    """Remove an existing file or directory before recreating step outputs."""
+    import shutil
+
+    if not path.exists():
+        return
+
+    if path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+
+    click.echo(f"Removed existing {label}: {path}")
+
+
 @click.group("nf")
 def nf_cli():
     """Nextflow-oriented commands for single-unit-of-work processing.
@@ -80,6 +95,8 @@ def init_flat_field(input_zarr: str, output_zarr: str, config: str):
                 raise click.ClickException(
                     f"Channel '{ch}' not found. Available: {channel_names}"
                 )
+
+    _remove_existing_path(Path(output_zarr), label="output zarr")
 
     create_empty_plate(
         store_path=Path(output_zarr),
@@ -179,6 +196,8 @@ def init_deskew(input_zarr: str, output_zarr: str, config: str):
         settings.average_n_slices,
         settings.pixel_size_um,
     )
+
+    _remove_existing_path(Path(output_zarr), label="output zarr")
 
     create_empty_plate(
         store_path=Path(output_zarr),
@@ -317,6 +336,8 @@ def init_reconstruct(input_zarr: str, output_zarr: str, config: str):
     output_metadata = get_reconstruction_output_metadata(first_position_path, resolved_config)
     output_metadata.pop("plate_metadata", None)
 
+    _remove_existing_path(Path(output_zarr), label="output zarr")
+
     create_empty_plate(
         store_path=Path(output_zarr),
         position_keys=position_keys,
@@ -351,6 +372,8 @@ def compute_transfer_function(input_zarr: str, tf_path: str, config: str):
     if not position_keys:
         raise click.ClickException(f"Input plate '{input_zarr}' contains no positions.")
     first_position_path = Path(input_zarr) / "/".join(position_keys[0])
+
+    _remove_existing_path(tf_zarr, label="transfer function zarr")
 
     click.echo(f"Computing transfer function from {first_position_path}")
     compute_transfer_function_cli(first_position_path, config_path, tf_zarr)
@@ -459,6 +482,8 @@ def init_virtual_stain(input_zarr: str, output_zarr: str, config: str):
     position_keys, _, shape, scale = read_plate_metadata(input_zarr)
     T, _, Z, Y, X = shape
 
+    _remove_existing_path(Path(output_zarr), label="output zarr")
+
     create_empty_plate(
         store_path=Path(output_zarr),
         position_keys=position_keys,
@@ -527,6 +552,68 @@ def rename_channels(input_zarr: str, position: str, prefix: str, suffix: str):
     click.echo(f"Renamed channels: {position}")
 
 
+@nf_cli.command("rename-channels-map")
+@click.option("--input-zarr", "-i", required=True, type=click.Path(exists=True))
+@click.option("--position", "-p", required=True)
+@click.option(
+    "--config",
+    "-c",
+    default=None,
+    type=click.Path(exists=True),
+    help="YAML config with rename rules. If not provided, applies default rules.",
+)
+def rename_channels_map(input_zarr: str, position: str, config: str | None):
+    """Rename channels using a mapping config (metadata-only, no data copy).
+
+    Default rules (when no config is provided):
+    - 'BF - Oblique' -> 'BF'
+    - 'Phase3D*' -> 'Phase3D'
+    - All other channels get 'raw ' prefix
+
+    Config YAML format::
+
+        rename_exact:
+          "BF - Oblique": "BF"
+        rename_startswith:
+          "Phase3D": "Phase3D"
+        raw_prefix_exclude:
+          - "BF - Oblique"
+          - "Phase3D"
+          - "nuclei_prediction"
+          - "membrane_prediction"
+    """
+    import yaml
+
+    if config:
+        with open(config) as f:
+            rules = yaml.safe_load(f)
+        rename_exact = rules.get("rename_exact", {})
+        rename_startswith = rules.get("rename_startswith", {})
+        raw_exclude = set(rules.get("raw_prefix_exclude", []))
+    else:
+        rename_exact = {"BF - Oblique": "BF"}
+        rename_startswith = {"Phase3D": "Phase3D"}
+        raw_exclude = {"BF - Oblique", "nuclei_prediction", "membrane_prediction"}
+
+    position_path = Path(input_zarr) / position
+    with open_ome_zarr(str(position_path), mode="r+") as pos:
+        for old_name in list(pos.channel_names):
+            if old_name in rename_exact:
+                new_name = rename_exact[old_name]
+            elif any(old_name.startswith(prefix) for prefix in rename_startswith):
+                new_name = next(
+                    v for k, v in rename_startswith.items() if old_name.startswith(k)
+                )
+            elif old_name not in raw_exclude and not old_name.startswith("raw "):
+                new_name = f"raw {old_name}"
+            else:
+                continue
+            pos.rename_channel(old_name, new_name)
+            click.echo(f"  '{old_name}' -> '{new_name}'")
+
+    click.echo(f"Renamed channels: {position}")
+
+
 # ---------------------------------------------------------------------------
 # Tracking
 # ---------------------------------------------------------------------------
@@ -551,6 +638,8 @@ def init_track(input_zarr: str, output_zarr: str, config: str):
         output_shape = (T, 1, 1, Y, X)
     else:
         output_shape = (T, 1, Z_out, Y, X)
+
+    _remove_existing_path(Path(output_zarr), label="output zarr")
 
     create_empty_plate(
         store_path=Path(output_zarr),
