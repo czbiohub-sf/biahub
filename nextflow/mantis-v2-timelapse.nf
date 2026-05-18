@@ -279,22 +279,6 @@ workflow from_assembly {
 
 
 // ---------------------------------------------------------------------------
-//  Entry: from tracking (assumes through 5-assemble exist)
-//  Usage: nextflow run ... -entry from_tracking
-// ---------------------------------------------------------------------------
-
-workflow from_tracking {
-    if (!params.output_dir)          error "Provide --output_dir"
-    if (!params.track_config)        error "Provide --track_config"
-
-    all_positions = collect_positions()
-    trigger = Channel.value(true)
-
-    tk_done  = track_wf(all_positions, trigger)
-}
-
-
-// ---------------------------------------------------------------------------
 //  Standalone entries: rerun a single step only
 //  Usage: nextflow run ... -entry only_flat_field
 // ---------------------------------------------------------------------------
