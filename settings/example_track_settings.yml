@@ -2,18 +2,39 @@
 mode: "2D"
 
 fov: "*/*/*"
-# Z-slice range to extract. Use [-1, -1] to auto-compute a centered slice. If None, all planes are returned or the user-defined range is used.
-z_range: [-1, -1]
+# Z-slice range to extract. Use [-1, -1] to auto-compute a centered slice.
+# Set to null when using focus_config (waveorder focus finding).
+z_range: null
 
 # Name of the target channel used to name the tracking output label channel.
 target_channel: nuclei_prediction
 blank_frames_path: blank_frames.csv
 
+# Waveorder focus finding (overrides z_range when set).
+# Finds the in-focus z-plane per timepoint and extracts a window around it.
+focus_config:
+  NA_det: 1.35
+  lambda_ill: 0.500
+  pixel_size: 0.1133
+  z_window: 40
+
+# Segmentation method: "foreground_contour" or "cellpose"
+segmentation_method: cellpose
+
+cellpose_config:
+  model_type: nuclei
+  diameter: 80
+  cellprob_threshold: 0.0
+  flow_threshold: 0.4
+  gpu: true
+  min_size: 2500
+  input_channel: nuclei_prediction
+  labels_sigma: 5.0
+
 # Input image configurations.
 # Each entry defines one dataset with its path and channels to process.
 input_images:
 
-  # First input: predicted nuclei and membrane channels.
   - path: /path/to/virtual_staining.zarr
     channels:
       nuclei_prediction:
@@ -21,45 +42,36 @@ input_images:
         - function: np.mean
           kwargs:
             axis: 1
-          per_timepoint: False
+          per_timepoint: false
 
-        # Normalize intensity with gamma correction
-        - function: ultrack.imgproc.normalize
-          kwargs:
-            gamma: 0.7
-
-      membrane_prediction:
-        - function: np.mean
-          kwargs:
-            axis: 1
-          per_timepoint: False
-
-        - function: ultrack.imgproc.normalize
-          kwargs:
-            gamma: 0.7
-
-  # # Optional: load label masks directly with or without processing.
-  # - path: /path/to/segmentation.zarr
+  # Uncomment below for foreground_contour segmentation method:
+  #     - function: ultrack.imgproc.normalize
+  #       kwargs:
+  #         gamma: 0.7
+  #
+  #   membrane_prediction:
+  #     - function: np.mean
+  #       kwargs:
+  #         axis: 1
+  #       per_timepoint: false
+  #     - function: ultrack.imgproc.normalize
+  #       kwargs:
+  #         gamma: 0.7
+  #
+  # - path: null
   #   channels:
-  #     nuclei_prediction_labels: []
-
-  # Virtual channel: computed dynamically using prior outputs.
-  # if path is null, the channel is computed dynamically using the prior outputs.
-  - path: null
-    channels:
-      foreground:
-        - function: ultrack.imgproc.detect_foreground
-          input_channels:
-            - nuclei_prediction
-          kwargs:
-            sigma: 90
-
-      contour:
-        - function: biahub.cli.track.mem_nuc_contour
-          input_channels:
-            - nuclei_prediction
-            - membrane_prediction
-          kwargs: {}
+  #     foreground:
+  #       - function: ultrack.imgproc.detect_foreground
+  #         input_channels:
+  #           - nuclei_prediction
+  #         kwargs:
+  #           sigma: 90
+  #     contour:
+  #       - function: biahub.track.mem_nuc_contour
+  #         input_channels:
+  #           - nuclei_prediction
+  #           - membrane_prediction
+  #         kwargs: {}
 
 # Configuration for Ultrack tracking algorithm.
 # See: https://royerlab.github.io/ultrack/
@@ -68,11 +80,11 @@ tracking_config:
 
   # Segmentation parameters: controls object detection from foreground/contour maps.
   segmentation_config:
-    min_area: 2100            # Minimum object area (pixels)
+    min_area: 2500            # Minimum object area (pixels)
     max_area: 80000           # Maximum object area (pixels)
     n_workers: 10             # Number of CPU threads for segmentation
-    min_frontier: 0.4         # Minimum frontier strength for boundaries
-    max_noise: 0.05           # Maximum tolerated noise in segmentation
+    min_frontier: 0.5         # Minimum frontier strength for boundaries
+    max_noise: 0.00           # Maximum tolerated noise in segmentation
 
   # Linking parameters: controls how detections are connected across timepoints.
   linking_config:
@@ -87,3 +99,4 @@ tracking_config:
     disappear_weight: -0.0001  # Penalty for object disappearance
     appear_weight: -0.001      # Penalty for new object appearance
     division_weight: -0.0001   # Penalty (or reward) for cell division events
+    bias: 0.0001
