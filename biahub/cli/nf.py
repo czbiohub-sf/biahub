@@ -23,6 +23,21 @@ from biahub.cli.utils import (
 logger = logging.getLogger(__name__)
 
 
+def _remove_existing_path(path: Path, label: str = "output path"):
+    """Remove an existing file or directory before recreating step outputs."""
+    import shutil
+
+    if not path.exists():
+        return
+
+    if path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+
+    click.echo(f"Removed existing {label}: {path}")
+
+
 @click.group("nf")
 def nf_cli():
     """Nextflow-oriented commands for single-unit-of-work processing.
@@ -80,6 +95,8 @@ def init_flat_field(input_zarr: str, output_zarr: str, config: str):
                 raise click.ClickException(
                     f"Channel '{ch}' not found. Available: {channel_names}"
                 )
+
+    _remove_existing_path(Path(output_zarr), label="output zarr")
 
     create_empty_plate(
         store_path=Path(output_zarr),
@@ -179,6 +196,8 @@ def init_deskew(input_zarr: str, output_zarr: str, config: str):
         settings.average_n_slices,
         settings.pixel_size_um,
     )
+
+    _remove_existing_path(Path(output_zarr), label="output zarr")
 
     create_empty_plate(
         store_path=Path(output_zarr),
@@ -317,6 +336,8 @@ def init_reconstruct(input_zarr: str, output_zarr: str, config: str):
     output_metadata = get_reconstruction_output_metadata(first_position_path, resolved_config)
     output_metadata.pop("plate_metadata", None)
 
+    _remove_existing_path(Path(output_zarr), label="output zarr")
+
     create_empty_plate(
         store_path=Path(output_zarr),
         position_keys=position_keys,
@@ -351,6 +372,8 @@ def compute_transfer_function(input_zarr: str, tf_path: str, config: str):
     if not position_keys:
         raise click.ClickException(f"Input plate '{input_zarr}' contains no positions.")
     first_position_path = Path(input_zarr) / "/".join(position_keys[0])
+
+    _remove_existing_path(tf_zarr, label="transfer function zarr")
 
     click.echo(f"Computing transfer function from {first_position_path}")
     compute_transfer_function_cli(first_position_path, config_path, tf_zarr)
@@ -458,6 +481,8 @@ def init_virtual_stain(input_zarr: str, output_zarr: str, config: str):
 
     position_keys, _, shape, scale = read_plate_metadata(input_zarr)
     T, _, Z, Y, X = shape
+
+    _remove_existing_path(Path(output_zarr), label="output zarr")
 
     create_empty_plate(
         store_path=Path(output_zarr),
@@ -613,6 +638,8 @@ def init_track(input_zarr: str, output_zarr: str, config: str):
         output_shape = (T, 1, 1, Y, X)
     else:
         output_shape = (T, 1, Z_out, Y, X)
+
+    _remove_existing_path(Path(output_zarr), label="output zarr")
 
     create_empty_plate(
         store_path=Path(output_zarr),

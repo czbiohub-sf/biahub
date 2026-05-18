@@ -293,7 +293,11 @@ workflow only_flat_field {
     if (!params.flat_field_config) error "Provide --flat_field_config"
 
     all_positions = collect_positions()
-    flat_field_wf(all_positions)
+    ff_done = flat_field_wf(all_positions)
+
+    run_qc(all_positions, [
+        ff_done: ff_done.done,
+    ])
 }
 
 workflow only_deskew {
@@ -302,7 +306,11 @@ workflow only_deskew {
 
     all_positions = collect_positions()
     trigger = Channel.value(true)
-    deskew_wf(all_positions, trigger)
+    dk_done = deskew_wf(all_positions, trigger)
+
+    run_qc(all_positions, [
+        dk_done: dk_done.done,
+    ])
 }
 
 workflow only_reconstruct {
@@ -311,7 +319,11 @@ workflow only_reconstruct {
 
     all_positions = collect_positions()
     trigger = Channel.value(true)
-    reconstruct_wf(all_positions, trigger)
+    rc_done = reconstruct_wf(all_positions, trigger)
+
+    run_qc(all_positions, [
+        rc_done: rc_done.done,
+    ])
 }
 
 workflow only_virtual_stain {
@@ -320,7 +332,11 @@ workflow only_virtual_stain {
 
     all_positions = collect_positions()
     trigger = Channel.value(true)
-    virtual_stain_wf(all_positions, trigger)
+    vs_done = virtual_stain_wf(all_positions, trigger)
+
+    run_qc(all_positions, [
+        vs_done: vs_done.done,
+    ])
 }
 
 workflow only_rename_channels_map {
@@ -346,7 +362,11 @@ workflow only_assembly {
 
     all_positions = collect_positions()
     trigger = Channel.value(true)
-    assemble_wf_mantisv2(all_positions, trigger)
+    asm_done = assemble_wf_mantisv2(all_positions, trigger)
+
+    run_qc(all_positions, [
+        asm_done: asm_done.done,
+    ])
 }
 
 
