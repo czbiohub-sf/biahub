@@ -279,6 +279,110 @@ workflow from_assembly {
 
 
 // ---------------------------------------------------------------------------
+//  Entry: from tracking (assumes through 5-assemble exist)
+//  Usage: nextflow run ... -entry from_tracking
+// ---------------------------------------------------------------------------
+
+workflow from_tracking {
+    if (!params.output_dir)          error "Provide --output_dir"
+    if (!params.track_config)        error "Provide --track_config"
+
+    all_positions = collect_positions()
+    trigger = Channel.value(true)
+
+    tk_done  = track_wf(all_positions, trigger)
+}
+
+
+// ---------------------------------------------------------------------------
+//  Standalone entries: rerun a single step only
+//  Usage: nextflow run ... -entry only_flat_field
+// ---------------------------------------------------------------------------
+
+workflow only_flat_field {
+    if (!params.input_zarr)        error "Provide --input_zarr"
+    if (!params.output_dir)        error "Provide --output_dir"
+    if (!params.flat_field_config) error "Provide --flat_field_config"
+
+    all_positions = collect_positions()
+    ff_done = flat_field_wf(all_positions)
+
+    run_qc(all_positions, [
+        ff_done: ff_done.done,
+    ])
+}
+
+workflow only_deskew {
+    if (!params.output_dir)    error "Provide --output_dir"
+    if (!params.deskew_config) error "Provide --deskew_config"
+
+    all_positions = collect_positions()
+    trigger = Channel.value(true)
+    dk_done = deskew_wf(all_positions, trigger)
+
+    run_qc(all_positions, [
+        dk_done: dk_done.done,
+    ])
+}
+
+workflow only_reconstruct {
+    if (!params.output_dir)          error "Provide --output_dir"
+    if (!params.reconstruct_config)  error "Provide --reconstruct_config"
+
+    all_positions = collect_positions()
+    trigger = Channel.value(true)
+    rc_done = reconstruct_wf(all_positions, trigger)
+
+    run_qc(all_positions, [
+        rc_done: rc_done.done,
+    ])
+}
+
+workflow only_virtual_stain {
+    if (!params.output_dir)      error "Provide --output_dir"
+    if (!params.predict_config)  error "Provide --predict_config"
+
+    all_positions = collect_positions()
+    trigger = Channel.value(true)
+    vs_done = virtual_stain_wf(all_positions, trigger)
+
+    run_qc(all_positions, [
+        vs_done: vs_done.done,
+    ])
+}
+
+workflow only_rename_channels_map {
+    if (!params.output_dir) error "Provide --output_dir"
+
+    all_positions = collect_positions()
+    trigger = Channel.value(true)
+    rename_channels_map_wf(all_positions, trigger)
+}
+
+workflow only_tracking {
+    if (!params.output_dir)    error "Provide --output_dir"
+    if (!params.track_config)  error "Provide --track_config"
+
+    all_positions = collect_positions()
+    trigger = Channel.value(true)
+    track_wf(all_positions, trigger)
+}
+
+workflow only_assembly {
+    if (!params.output_dir)          error "Provide --output_dir"
+    if (!params.concatenate_config)  error "Provide --concatenate_config"
+
+    all_positions = collect_positions()
+    trigger = Channel.value(true)
+    asm_done = assemble_wf_mantisv2(all_positions, trigger)
+
+    run_qc(all_positions, [
+        asm_done: asm_done.done,
+    ])
+}
+
+
+// ---------------------------------------------------------------------------
 //  Default entry (anonymous workflow delegates to full)
 // ---------------------------------------------------------------------------
 

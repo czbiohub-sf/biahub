@@ -78,6 +78,50 @@ def test_init_flat_field(tmp_path, example_plate):
     assert "RESOURCES:" in result.output
 
 
+def test_init_flat_field_overwrites_existing_output(tmp_path, example_plate):
+    plate_path, _ = example_plate
+    output_path = tmp_path / "output.zarr"
+    config_path = tmp_path / "ff_config.yml"
+    config_path.write_text(yaml.dump({"channel_names": None}))
+
+    runner = CliRunner()
+    first = runner.invoke(
+        cli,
+        [
+            "nf",
+            "init-flat-field",
+            "-i",
+            str(plate_path),
+            "-o",
+            str(output_path),
+            "-c",
+            str(config_path),
+        ],
+    )
+    assert first.exit_code == 0, first.output
+
+    junk = output_path / "stale.txt"
+    junk.write_text("stale")
+
+    second = runner.invoke(
+        cli,
+        [
+            "nf",
+            "init-flat-field",
+            "-i",
+            str(plate_path),
+            "-o",
+            str(output_path),
+            "-c",
+            str(config_path),
+        ],
+    )
+
+    assert second.exit_code == 0, second.output
+    assert not junk.exists()
+    assert "Removed existing output zarr" in second.output
+
+
 # ---------------------------------------------------------------------------
 # rename-channels
 # ---------------------------------------------------------------------------
@@ -263,6 +307,51 @@ def test_init_track(tmp_path, example_plate):
         assert pos.data.dtype == np.uint32
         assert len(pos.channel_names) == 1
         assert "label" in pos.channel_names[0].lower() or "GFP" in pos.channel_names[0]
+
+
+def test_init_track_overwrites_existing_output(tmp_path, example_plate):
+    plate_path, plate_dataset = example_plate
+    plate_dataset.close()
+
+    output_path = tmp_path / "track_output.zarr"
+    config_path = _make_tracking_config(tmp_path, plate_path)
+
+    runner = CliRunner()
+    first = runner.invoke(
+        cli,
+        [
+            "nf",
+            "init-track",
+            "-i",
+            str(plate_path),
+            "-o",
+            str(output_path),
+            "-c",
+            str(config_path),
+        ],
+    )
+    assert first.exit_code == 0, first.output
+
+    junk = output_path / "stale.txt"
+    junk.write_text("stale")
+
+    second = runner.invoke(
+        cli,
+        [
+            "nf",
+            "init-track",
+            "-i",
+            str(plate_path),
+            "-o",
+            str(output_path),
+            "-c",
+            str(config_path),
+        ],
+    )
+
+    assert second.exit_code == 0, second.output
+    assert not junk.exists()
+    assert "Removed existing output zarr" in second.output
 
 
 @requires_ultrack
