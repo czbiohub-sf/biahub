@@ -15,6 +15,7 @@ params.rename_suffix       = null
 params.rename_config       = null
 params.biahub_project      = null
 params.viscy_project       = null
+params.airtable_project    = null
 params.work_dir            = null
 params.max_positions       = 0
 params.qc_config_dir       = null
@@ -23,8 +24,12 @@ params.qc_report_dir       = null
 params.qc_report_static    = false
 params.quarto_bin          = null
 params.clean_intermediates = false
+params.airtable_registry_after_tracking = false
+params.airtable_registry_dataset        = null
+params.airtable_registry_dry_run        = false
 
 include { list_positions; dataset_name } from './modules/common'
+include { airtable_registry_wf } from './modules/airtable_registry'
 include { flat_field_wf }     from './modules/flat_field'
 include { deskew_wf }         from './modules/deskew'
 include { reconstruct_wf }    from './modules/reconstruct'
@@ -56,7 +61,7 @@ def collect_positions() {
 }
 
 def run_qc(all_positions, Map stages) {
-    if (!params.qc_config_dir) return
+    if (!params.qc_config_dir) return Channel.value(true)
 
     def qc_dir   = params.qc_config_dir
     def ff_zarr  = "${params.output_dir}/0-flatfield/${dataset_name()}.zarr"
@@ -99,8 +104,17 @@ def run_qc(all_positions, Map stages) {
         all_summaries = qc_summary_list.inject { a, b -> a.mix(b) } | collect
 
         def report_dir = params.qc_report_dir ?: "${params.output_dir}/qc/report"
-        qc_report_wf(all_qc, all_summaries, asm_zarr, [ff_zarr, dk_zarr, rc_zarr, vs_zarr], params.output_dir, report_dir)
+        return qc_report_wf(
+            all_qc,
+            all_summaries,
+            asm_zarr,
+            [ff_zarr, dk_zarr, rc_zarr, vs_zarr],
+            params.output_dir,
+            report_dir,
+        ).done
     }
+
+    return Channel.value(true)
 }
 
 
@@ -133,14 +147,15 @@ workflow full {
         : pre_rename
     asm_done = assemble_wf_mantisv2(all_positions, pre_asm)
     tk_done  = track_wf(all_positions, asm_done.done)
-
-    run_qc(all_positions, [
+    qc_done = run_qc(all_positions, [
         ff_done:  ff_done.done,
         dk_done:  dk_done.done,
         rc_done:  rc_done.done,
         vs_done:  vs_done.done,
         asm_done: asm_done.done,
     ])
+    registry_trigger = tk_done.done.combine(qc_done).map { _, _ -> true }
+    airtable_registry_wf(registry_trigger)
 }
 
 
@@ -171,13 +186,14 @@ workflow from_deskew {
         : pre_rename
     asm_done = assemble_wf_mantisv2(all_positions, pre_asm)
     tk_done  = track_wf(all_positions, asm_done.done)
-
-    run_qc(all_positions, [
+    qc_done = run_qc(all_positions, [
         dk_done:  dk_done.done,
         rc_done:  rc_done.done,
         vs_done:  vs_done.done,
         asm_done: asm_done.done,
     ])
+    registry_trigger = tk_done.done.combine(qc_done).map { _, _ -> true }
+    airtable_registry_wf(registry_trigger)
 }
 
 
@@ -206,12 +222,13 @@ workflow from_reconstruct {
         : pre_rename
     asm_done = assemble_wf_mantisv2(all_positions, pre_asm)
     tk_done  = track_wf(all_positions, asm_done.done)
-
-    run_qc(all_positions, [
+    qc_done = run_qc(all_positions, [
         rc_done:  rc_done.done,
         vs_done:  vs_done.done,
         asm_done: asm_done.done,
     ])
+    registry_trigger = tk_done.done.combine(qc_done).map { _, _ -> true }
+    airtable_registry_wf(registry_trigger)
 }
 
 
@@ -238,11 +255,12 @@ workflow from_virtual_stain {
         : pre_rename
     asm_done = assemble_wf_mantisv2(all_positions, pre_asm)
     tk_done  = track_wf(all_positions, asm_done.done)
-
-    run_qc(all_positions, [
+    qc_done = run_qc(all_positions, [
         vs_done:  vs_done.done,
         asm_done: asm_done.done,
     ])
+    registry_trigger = tk_done.done.combine(qc_done).map { _, _ -> true }
+    airtable_registry_wf(registry_trigger)
 }
 
 
@@ -279,6 +297,9 @@ workflow from_tracking {
     trigger = Channel.value(true)
 
     tk_done  = track_wf(all_positions, trigger)
+    qc_done = run_qc(all_positions, [:])
+    registry_trigger = tk_done.done.combine(qc_done).map { _, _ -> true }
+    airtable_registry_wf(registry_trigger)
 }
 
 
@@ -353,7 +374,10 @@ workflow only_tracking {
 
     all_positions = collect_positions()
     trigger = Channel.value(true)
-    track_wf(all_positions, trigger)
+    tk_done = track_wf(all_positions, trigger)
+    qc_done = run_qc(all_positions, [:])
+    registry_trigger = tk_done.done.combine(qc_done).map { _, _ -> true }
+    airtable_registry_wf(registry_trigger)
 }
 
 workflow only_assembly {
