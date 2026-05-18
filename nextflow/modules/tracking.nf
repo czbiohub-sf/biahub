@@ -14,7 +14,7 @@ process init_track {
     """
     mkdir -p "${slurm_log_dir('track')}"
     ${biahub_cmd()} nf init-track \
-        -i "${params.output_dir}/2-reconstruct/${dataset_name()}.zarr" \
+        -i "${params.output_dir}/5-assemble/${dataset_name()}.zarr" \
         -o "${params.output_dir}/4-track/${dataset_name()}.zarr" \
         -c "${params.track_config}"
     """
