@@ -44,7 +44,7 @@ process run_track {
         -o "${params.output_dir}/4-track/${dataset_name()}.zarr" \
         -p "${position}" \
         -c "${params.track_config}" \
-        --input-images-path "${params.output_dir}/3-virtual-stain/${dataset_name()}.zarr"
+        --input-images-path "${params.output_dir}/5-assemble/${dataset_name()}.zarr"
     """
 }
 
