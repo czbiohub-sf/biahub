@@ -72,14 +72,13 @@ nextflow run "${PIPELINE}" \
     --biahub_project     "${BIAHUB_PROJECT}" \
     --qc_config_dir      "${QC_CONFIGS}" \
     --qc_project         "${QC_PROJECT}" \
-    --quarto_bin         "${QUARTO_BIN}" \
     --work_dir           "${WORK_DIR}" \
     -resume
 ```
 
 ### qc-standalone
 
-Standalone QC pipeline for running `imaging-qc` against one or more pre-existing zarr stores without the full mantis pipeline. Supports arbitrary zarr+config pairs via a CSV manifest, two-pass metric computation with timepoint batching as distributed Slurm jobs, and a chained consolidation + report. See [README-qc-standalone.md](README-qc-standalone.md) for full usage and examples.
+Standalone QC pipeline for running `imaging-qc` against one or more pre-existing zarr stores without the full mantis pipeline. Supports arbitrary zarr+config pairs via a CSV manifest, with `imaging-qc` owning the stage plan and Nextflow handling wave fan-out, barriers, retries, and reporting. See [README-qc-standalone.md](README-qc-standalone.md) for full usage and examples.
 
 ## Environment setup
 
@@ -174,22 +173,21 @@ and a VisCy checkout with the Airtable app available:
 --airtable_registry_after_tracking true
 ```
 
-### imaging-qc-pipeline (QC stages + Quarto)
+### imaging-qc-pipeline (QC stages)
 
-The QC processes in `modules/qc.nf` shell out to the `imaging-qc` CLI — they do **not** import Nextflow subworkflows or Python code from `imaging-qc-pipeline`. All orchestration (fan-out, chunking, merging) is defined here in biahub; `imaging-qc-pipeline` is a black-box CLI dependency. This means changes to the internal Nextflow or Python orchestration in `imaging-qc-pipeline` (DAG resolution, dispatch, subworkflows) do not affect this pipeline as long as the CLI contract is stable.
+The QC processes in `modules/qc.nf` shell out to the `imaging-qc` CLI — they do **not** import Nextflow subworkflows or Python code from `imaging-qc-pipeline`. `imaging-qc-pipeline` owns the stage planning contract (`plan-stage`, `run-step`, `finalize-wave`, `finalize-stage`), while biahub owns the surrounding Nextflow wiring, barriers, retries, and report invocation. This means the integration depends on the CLI contract staying stable, not on importing internal `imaging-qc-pipeline` modules.
 
-The QC stages require a separate `imaging-qc-pipeline` environment and Quarto (for interactive reports). **Pin to the `v0.3.1` tag** — later versions may change the CLI contract. Follow steps 1–3 of the [imaging-qc-pipeline getting started guide](https://github.com/czbiohub-sf/imaging-qc-pipeline/tree/v0.3.1#getting-started-hpc-path-brunoreef), checking out the tag before installing:
+The QC stages require a separate `imaging-qc-pipeline` environment. **Pin to the `v0.3.2` tag** — later versions may change the CLI contract. Follow steps 1–3 of the [imaging-qc-pipeline getting started guide](https://github.com/czbiohub-sf/imaging-qc-pipeline/tree/v0.3.2#getting-started-hpc-path-brunoreef), checking out the tag before installing:
 
 ```bash
 cd /path/to/imaging-qc-pipeline
-git checkout v0.3.1
+git checkout v0.3.2
 ```
 
-Then pass the project path and Quarto binary location to the pipeline:
+Then pass the project path to the pipeline:
 
 ```bash
 --qc_project /path/to/imaging-qc-pipeline
---quarto_bin /path/to/quarto/bin
 ```
 
 ### Run location
@@ -209,7 +207,6 @@ module load nextflow
 BIAHUB_PROJECT="/path/to/biahub"
 VISCY_PROJECT="/path/to/viscy-env"
 QC_PROJECT="/path/to/imaging-qc-pipeline"
-QUARTO_BIN="/path/to/quarto/bin"
 PIPELINE="${BIAHUB_PROJECT}/nextflow/mantis-v2-timelapse.nf"
 NF_CONFIG="${BIAHUB_PROJECT}/nextflow/nextflow.config"
 
@@ -236,7 +233,6 @@ nextflow run "${PIPELINE}" \
     --viscy_project      "${VISCY_PROJECT}" \
     --qc_config_dir      "${QC_CONFIGS}" \
     --qc_project         "${QC_PROJECT}" \
-    --quarto_bin         "${QUARTO_BIN}" \
     --work_dir           "${WORK_DIR}" \
     -resume \
     "$@"
@@ -265,8 +261,7 @@ Use `-profile local` instead of `-profile slurm` for local execution.
 | `--qc_config_dir` | Directory containing per-stage QC YAML configs (optional; enables QC stages) |
 | `--qc_project` | Path to `imaging-qc-pipeline` repo root for `uv run` (optional; falls back to PyPI install) |
 | `--qc_report_dir` | Directory for the final QC report (default: `<output_dir>/qc/report`) |
-| `--qc_report_static` | Generate static PNG-only report instead of interactive Quarto/Plotly (default: `false`) |
-| `--quarto_bin` | Path to directory containing the `quarto` binary (required for interactive reports on Slurm, where `~/.bashrc` is not sourced) |
+| `--qc_report_static` | Generate static PNG-only report instead of interactive Plotly (default: `false`) |
 | `--airtable_registry_after_tracking` | After tracking finishes, run VisCy Airtable `register` + `write` on the assembled zarr positions (default: `false`) |
 | `--airtable_registry_dataset` | Optional Airtable dataset name override passed to the registration CLI (default: zarr stem) |
 | `--airtable_registry_dry_run` | Log Airtable registry actions without writing to Airtable or zarr metadata (default: `false`) |

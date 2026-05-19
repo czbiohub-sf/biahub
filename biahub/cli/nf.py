@@ -12,7 +12,6 @@ from iohub.ngff.utils import (
     process_single_position,
 )
 
-from biahub.cli.nf_qc import nf_qc_cli
 from biahub.cli.utils import (
     copy_position_metadata,
     estimate_resources,
@@ -46,10 +45,6 @@ def nf_cli():
     process_single_position parallelises over (T, C) using num_workers
     derived from the Slurm/OS CPU allocation.
     """
-
-
-nf_cli.add_command(nf_qc_cli)
-
 
 @nf_cli.command("list-positions")
 @click.option("--input-zarr", "-i", required=True, type=click.Path(exists=True))

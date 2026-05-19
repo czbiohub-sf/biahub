@@ -114,15 +114,15 @@ digraph pipeline {
     }
 
     // ════════════════════════════════════════
-    //  QC stages (each: init_chunks → splitCsv → run_qc_chunk → merge)
+    //  QC stages (each: plan_stage -> run_step waves -> finalize_stage)
     // ════════════════════════════════════════
-    qc_ff  [shape=box fillcolor="#F9CB9C" label="qc · post-flatfield\ninit_qc_fanout → estimate_resources\n→ run_qc_chunked / run_qc_position\n→ merge_qc_stage"]
-    qc_dk  [shape=box fillcolor="#F9CB9C" label="qc · post-deskew\ninit_qc_fanout → estimate_resources\n→ run_qc_chunked / run_qc_position\n→ merge_qc_stage"]
-    qc_rc  [shape=box fillcolor="#F9CB9C" label="qc · post-reconstruct\ninit_qc_fanout → estimate_resources\n→ run_qc_chunked / run_qc_position\n→ merge_qc_stage"]
-    qc_vs  [shape=box fillcolor="#F9CB9C" label="qc · post-virtual-stain\ninit_qc_fanout → estimate_resources\n→ run_qc_chunked / run_qc_position\n→ merge_qc_stage"]
-    qc_asm [shape=box fillcolor="#F9CB9C" label="qc · post-assembly\ninit_qc_fanout → estimate_resources\n→ run_qc_chunked / run_qc_position\n→ merge_qc_stage"]
+    qc_ff  [shape=box fillcolor="#F9CB9C" label="qc · post-flatfield\nplan_stage → run_step(w0-2)\n→ finalize_wave → finalize_stage"]
+    qc_dk  [shape=box fillcolor="#F9CB9C" label="qc · post-deskew\nplan_stage → run_step(w0-2)\n→ finalize_wave → finalize_stage"]
+    qc_rc  [shape=box fillcolor="#F9CB9C" label="qc · post-reconstruct\nplan_stage → run_step(w0-2)\n→ finalize_wave → finalize_stage"]
+    qc_vs  [shape=box fillcolor="#F9CB9C" label="qc · post-virtual-stain\nplan_stage → run_step(w0-2)\n→ finalize_wave → finalize_stage"]
+    qc_asm [shape=box fillcolor="#F9CB9C" label="qc · post-assembly\nplan_stage → run_step(w0-2)\n→ finalize_wave → finalize_stage"]
 
-    qc_report [shape=box fillcolor="#F9CB9C" label="qc · report\nconsolidate_qc →\nfinal_merge_and_report ∥ log_qc_summary"]
+    qc_report [shape=box fillcolor="#F9CB9C" label="qc · report\nfinal_merge_and_report"]
 
     // ════════════════════════════════════════
     //  Main pipeline edges

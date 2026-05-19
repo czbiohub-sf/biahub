@@ -22,7 +22,6 @@ params.qc_config_dir       = null
 params.qc_project          = null
 params.qc_report_dir       = null
 params.qc_report_static    = false
-params.quarto_bin          = null
 params.clean_intermediates = false
 params.airtable_registry_after_tracking = false
 params.airtable_registry_dataset        = null
@@ -71,47 +70,33 @@ def run_qc(all_positions, Map stages) {
     def asm_zarr = "${params.output_dir}/5-assemble/${dataset_name()}.zarr"
 
     def qc_done_list = []
-    def qc_summary_list = []
 
     if (stages.ff_done) {
-        qc1 = qc_post_flatfield(all_positions, stages.ff_done, ff_zarr, "${qc_dir}/qc_stage1_post_flatfield.yaml", "flatfield")
+        qc1 = qc_post_flatfield(stages.ff_done.map { tuple(ff_zarr, "${qc_dir}/qc_stage1_post_flatfield.yaml") })
         qc_done_list.add(qc1.done)
-        qc_summary_list.add(qc1.summary)
     }
     if (stages.dk_done) {
-        qc2 = qc_post_deskew(all_positions, stages.dk_done, dk_zarr, "${qc_dir}/qc_stage2_post_deskew.yaml", "deskew")
+        qc2 = qc_post_deskew(stages.dk_done.map { tuple(dk_zarr, "${qc_dir}/qc_stage2_post_deskew.yaml") })
         qc_done_list.add(qc2.done)
-        qc_summary_list.add(qc2.summary)
     }
     if (stages.rc_done) {
-        qc3 = qc_post_reconstruct(all_positions, stages.rc_done, rc_zarr, "${qc_dir}/qc_stage3_post_reconstruct.yaml", "reconstruct")
+        qc3 = qc_post_reconstruct(stages.rc_done.map { tuple(rc_zarr, "${qc_dir}/qc_stage3_post_reconstruct.yaml") })
         qc_done_list.add(qc3.done)
-        qc_summary_list.add(qc3.summary)
     }
     if (stages.vs_done) {
-        qc4 = qc_post_virtual_stain(all_positions, stages.vs_done, vs_zarr, "${qc_dir}/qc_stage4_post_virtual_stain.yaml", "virtual_stain")
+        qc4 = qc_post_virtual_stain(stages.vs_done.map { tuple(vs_zarr, "${qc_dir}/qc_stage4_post_virtual_stain.yaml") })
         qc_done_list.add(qc4.done)
-        qc_summary_list.add(qc4.summary)
     }
     if (stages.asm_done) {
-        qc5 = qc_post_assembly(all_positions, stages.asm_done, asm_zarr, "${qc_dir}/qc_stage5_post_assembly.yaml", "assembly")
+        qc5 = qc_post_assembly(stages.asm_done.map { tuple(asm_zarr, "${qc_dir}/qc_stage5_post_assembly.yaml") })
         qc_done_list.add(qc5.done)
-        qc_summary_list.add(qc5.summary)
     }
 
     if (qc_done_list.size() > 0) {
         all_qc = qc_done_list.inject { a, b -> a.mix(b) } | collect
-        all_summaries = qc_summary_list.inject { a, b -> a.mix(b) } | collect
 
         def report_dir = params.qc_report_dir ?: "${params.output_dir}/qc/report"
-        return qc_report_wf(
-            all_qc,
-            all_summaries,
-            asm_zarr,
-            [ff_zarr, dk_zarr, rc_zarr, vs_zarr],
-            params.output_dir,
-            report_dir,
-        ).done
+        return qc_report_wf(all_qc, params.output_dir, report_dir).done
     }
 
     return Channel.value(true)

@@ -34,21 +34,6 @@ def airtable_cmd() {
     return "uv run --project ${params.airtable_project} --package airtable-utils ${script}"
 }
 
-process init_chunks {
-    label 'cpu_local'
-
-    input:
-    val zarr_path
-
-    output:
-    stdout
-
-    script:
-    """
-    ${biahub_cmd()} nf qc init-chunks -i "${zarr_path}"
-    """
-}
-
 process list_positions {
     label 'cpu_local'
 

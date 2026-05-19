@@ -1,309 +1,96 @@
-include { dataset_name; biahub_cmd; slurm_logs; slurm_log_dir } from './common'
+include { plan_stage }                         from './qc_processes'
+include { run_step as run_step_w0 }            from './qc_processes'
+include { run_step as run_step_w1 }            from './qc_processes'
+include { run_step as run_step_w2 }            from './qc_processes'
+include { finalize_wave }                      from './qc_processes'
+include { finalize_stage }                     from './qc_processes'
+include { final_merge_and_report }             from './qc_processes'
 
 
-def qc_cmd() {
-    return params.qc_project ?
-        "uv run --project ${params.qc_project} imaging-qc" :
-        "uv run --from 'imaging-qc-pipeline @ git+https://github.com/czbiohub-sf/imaging-qc-pipeline@v0.3.2' imaging-qc"
-}
-
-
-process init_qc_fanout {
-    label 'cpu_local'
-
-    input:
-    tuple val(zarr_path), val(config_path)
-
-    output:
-    stdout
-
-    script:
-    """
-    mkdir -p "${slurm_log_dir('qc')}"
-    ${biahub_cmd()} nf qc init-qc-fanout -i "${zarr_path}" -c "${config_path}" --chunk-size ${params.qc_chunk_size}
-    """
-}
-
-
-process estimate_qc_resources {
-    label 'cpu_local'
-    tag "${zarr_path}:${metric_group}"
-
-    input:
-    tuple val(zarr_path), val(metric_group), val(config_path)
-
-    output:
-    tuple val(metric_group), stdout
-
-    script:
-    """
-    ${qc_cmd()} estimate-resources --config "${config_path}" "${zarr_path}" \
-        --metric-group ${metric_group} --num-workers 1 \
-        | python3 -c "import sys,json; print(json.load(sys.stdin)['estimate_gb'])"
-    """
-}
-
-
-process run_qc_chunked {
-    tag "${position}/${group}/${chunk_id}"
-    label 'cpu'
-    clusterOptions { slurm_logs('qc') }
-    memory { "${mem_gb * task.attempt} GB" }
-    time '2h'
-    maxRetries 1
-    errorStrategy { task.exitStatus in [0, 1] ? 'ignore' : 'retry' }
-
-    input:
-    tuple val(position), val(group), val(start), val(end), val(chunk_id),
-          val(zarr_path), val(config_path), val(mem_gb)
-
-    output:
-    val position
-
-    script:
-    """
-    ${qc_cmd()} run \
-        --config "${config_path}" \
-        "${zarr_path}" \
-        --mode metrics_only \
-        --metric-group ${group} \
-        --no-merge \
-        --time-indices ${start}:${end} \
-        --chunk-id ${chunk_id} \
-        'positions=["${position}"]'
-    """
-}
-
-
-process run_qc_position {
-    tag "${position}/${group}"
-    label 'cpu'
-    clusterOptions { slurm_logs('qc') }
-    memory { "${mem_gb * task.attempt} GB" }
-    time '2h'
-    maxRetries 1
-    errorStrategy { task.exitStatus in [0, 1] ? 'ignore' : 'retry' }
-
-    input:
-    tuple val(position), val(group), val(zarr_path), val(config_path), val(mem_gb)
-
-    output:
-    val position
-
-    script:
-    """
-    ${qc_cmd()} run \
-        --config "${config_path}" \
-        "${zarr_path}" \
-        --mode metrics_only \
-        --metric-group ${group} \
-        --no-merge \
-        --chunk-id ${group} \
-        'positions=["${position}"]'
-    """
-}
-
-
-process merge_qc_metrics {
-    label 'cpu'
-    clusterOptions { slurm_logs('qc') }
-    memory { task.attempt == 1 ? '32 GB' : '48 GB' }
-    time '30m'
-    maxRetries 1
-    errorStrategy 'retry'
-
-    input:
-    tuple val(zarr_path), val(done)
-
-    output:
-    val true
-
-    script:
-    """
-    ${qc_cmd()} merge-metrics "${zarr_path}"
-    """
-}
-
-
-process merge_qc_stage {
-    label 'cpu'
-    clusterOptions { slurm_logs('qc') }
-    memory { task.attempt == 1 ? '32 GB' : '48 GB' }
-    time '30m'
-    maxRetries 1
-    errorStrategy { task.exitStatus in [0, 1] ? 'ignore' : 'retry' }
-
-    input:
-    tuple val(zarr_path), val(done), val(config_path), val(stage_name)
-
-    output:
-    path "${stage_name}_qc_summary.txt"
-
-    script:
-    """
-    ${qc_cmd()} merge-metrics "${zarr_path}"
-    ${qc_cmd()} run \
-        --config "${config_path}" \
-        "${zarr_path}" \
-        --mode gate_only 2>&1 | tee gate_log.txt >&2
-    ${qc_cmd()} merge-gates "${zarr_path}"
-    grep 'QC_SUMMARY' gate_log.txt > ${stage_name}_qc_summary.txt || echo "no_summary" > ${stage_name}_qc_summary.txt
-    """
-}
-
-
-process consolidate_qc {
-    label 'cpu_local'
-
-    input:
-    val all_qc_done
-    val step_zarrs
-    val assembly_zarr
-
-    output:
-    val true
-
-    script:
-    def step_args = step_zarrs.collect { "-s ${it}" }.join(' ')
-    """
-    if [ -n "${assembly_zarr}" ] && [ -d "${assembly_zarr}" ]; then
-        ${biahub_cmd()} nf qc consolidate ${step_args} -a "${assembly_zarr}"
-    else
-        echo "No assembly zarr provided or found — skipping consolidation"
-    fi
-    """
-}
-
-
-process log_qc_summary {
-    label 'cpu_local'
-
-    input:
-    path summaries
-
-    output:
-    val true
-
-    script:
-    """
-    ${biahub_cmd()} nf qc log-summary ${summaries}
-    """
-}
-
-
-process final_merge_and_report {
-    label 'cpu'
-    clusterOptions { slurm_logs('qc') }
-    memory '32 GB'
-    time '1h'
-
-    input:
-    val output_dir
-    val report_dir
-    val consolidated
-
-    output:
-    val true
-
-    script:
-    def static_flag = params.qc_report_static ? '--static' : ''
-    def config_flag = params.qc_config_dir ? "--config \"${params.qc_config_dir}\"" : ''
-    def path_prefix = params.quarto_bin ? "export PATH=\"${params.quarto_bin}:\${PATH}\"" : ''
-    """
-    ${path_prefix}
-    ${qc_cmd()} report \
-        --multi-store "${output_dir}" \
-        ${config_flag} \
-        "${report_dir}" \
-        ${static_flag}
-    """
-}
-
+// ---------------------------------------------------------------------------
+//  qc_stage_wf: plan-driven QC stage execution
+//
+//  plan-stage emits plan.json v2 to stdout. Nextflow parses JSON, branches
+//  items by wave_id, and uses .count() barriers between waves.
+//  Fixed 3-tier structure: wave 0 -> finalize_wave -> wave 1 -> wave 2 ->
+//  finalize_stage. Empty waves are no-ops (.count() emits 0).
+// ---------------------------------------------------------------------------
 
 workflow qc_stage_wf {
     take:
-    positions
-    prev_done
-    zarr_path
-    config_path
-    stage_name
+    plan_inputs
 
     main:
-    fanout = prev_done
-        .map { tuple(zarr_path, config_path) }
-        | init_qc_fanout
-        | splitCsv()
+    plan_out = plan_stage(plan_inputs)
 
-    // Estimate resources per (zarr, metric_group) — one call per group, not per position
-    estimates = fanout
-        .map { row -> row[1] }
-        .unique()
-        .map { group -> tuple(zarr_path, group, config_path) }
-        | estimate_qc_resources
-        | map { group, stdout_text ->
-            tuple(group, stdout_text.trim().toFloat().round(1))
+    items = plan_out
+        .flatMap { zarr_path, config_path, json_text ->
+            def plan = new groovy.json.JsonSlurper().parseText(json_text.trim())
+            plan.waves.collectMany { wave ->
+                (wave.items ?: []).collect { item ->
+                    [
+                        zarr_path,
+                        config_path,
+                        wave.wave_id,
+                        item.step_id,
+                        item.position ?: null,
+                        item.chunk_id ?: null,
+                        item.time_indices ?: null,
+                    ]
+                }
+            }
         }
+        .branch { w0: it[2] == 0; w1: it[2] == 1; w2: it[2] == 2 }
 
-    // position-scoped groups: time-chunked (start/end non-empty)
-    // join with estimates by group name (index 0)
-    chunked_done = fanout
-        .filter { row -> row[2] != '' }
-        .map { row -> tuple(row[1], row[0], row[2], row[3], row[4]) }
-        .combine(estimates, by: 0)
-        .map { group, position, start, end, chunk_id, mem_gb ->
-            tuple(position, group, start, end, chunk_id, zarr_path, config_path, mem_gb)
+    w0_in = items.w0.map { zarr_path, config_path, wave_id, step_id, position, chunk_id, time_indices ->
+        [zarr_path, config_path, step_id, position, chunk_id, time_indices, [:]]
+    }
+    w0_done = run_step_w0(w0_in)
+    w0_count = w0_done.count()
+
+    fw0 = finalize_wave(
+        plan_out.map { zarr_path, config_path, json_text -> [zarr_path, config_path] }
+            .combine(w0_count)
+            .map { zarr_path, config_path, count -> [zarr_path, config_path, 0] }
+    )
+    fw0_count = fw0.count()
+
+    w1_in = items.w1
+        .combine(fw0_count)
+        .map { zarr_path, config_path, wave_id, step_id, position, chunk_id, time_indices, count ->
+            [zarr_path, config_path, step_id, position, null, null, [:]]
         }
-        | run_qc_chunked
+    w1_done = run_step_w1(w1_in)
+    w1_count = w1_done.mix(fw0).count()
 
-    // temporal-scoped groups: per-position, all timepoints (start/end empty)
-    // Must wait for chunked jobs AND metric merge — temporal metrics (e.g.
-    // bleach_rate) depend on upstream results (e.g. intensity_stats) that
-    // run_qc_chunked writes as chunk parquets. merge_qc_metrics consolidates
-    // them into the per-position stage parquet that _resolve_upstream reads.
-    chunked_collected = chunked_done | ifEmpty('none') | collect
-    metrics_merged = chunked_collected
-        .map { done -> tuple(zarr_path, done) }
-        | merge_qc_metrics
-
-    position_done = fanout
-        .filter { row -> row[2] == '' }
-        .map { row -> tuple(row[1], row[0]) }
-        .combine(estimates, by: 0)
-        .map { group, position, mem_gb ->
-            tuple(position, group, zarr_path, config_path, mem_gb)
+    w2_in = items.w2
+        .combine(w1_count)
+        .map { zarr_path, config_path, wave_id, step_id, position, chunk_id, time_indices, count ->
+            [zarr_path, config_path, step_id, null, null, null, [:]]
         }
-        .combine(metrics_merged)
-        .map { position, group, zarr_path, config_path, mem_gb, trigger ->
-            tuple(position, group, zarr_path, config_path, mem_gb)
-        }
-        | run_qc_position
+    w2_done = run_step_w2(w2_in)
 
-    qc_done = chunked_done.mix(position_done) | collect
-
-    summary = qc_done
-        .map { done -> tuple(zarr_path, done, config_path, stage_name) }
-        | merge_qc_stage
+    all_done = w0_done.mix(w1_done, w2_done).count()
+    merged = plan_out
+        .map { zarr_path, config_path, json_text -> [zarr_path, config_path] }
+        .combine(all_done)
+        .map { zarr_path, config_path, count -> [zarr_path, config_path] }
+        | finalize_stage
 
     emit:
-    done    = summary
-    summary = summary
+    done = merged.map { zarr_path, summary -> zarr_path }
 }
 
 
 workflow qc_report_wf {
     take:
     all_qc_done
-    all_summaries
-    assembly_zarr
-    step_zarrs
     output_dir
     report_dir
 
     main:
-    consolidated = consolidate_qc(all_qc_done, step_zarrs, assembly_zarr)
-    final_merge_and_report(output_dir, report_dir, consolidated)
-    log_qc_summary(all_summaries)
+    final_merge_and_report(output_dir, report_dir, all_qc_done)
 
     emit:
-    done = log_qc_summary.out
+    done = final_merge_and_report.out
 }
