@@ -152,29 +152,6 @@ process merge_qc_stage {
 }
 
 
-process consolidate_qc {
-    label 'cpu_local'
-
-    input:
-    val all_qc_done
-    val step_zarrs
-    val assembly_zarr
-
-    output:
-    val true
-
-    script:
-    def step_args = step_zarrs.collect { "-s ${it}" }.join(' ')
-    """
-    if [ -n "${assembly_zarr}" ] && [ -d "${assembly_zarr}" ]; then
-        ${biahub_cmd()} nf qc consolidate ${step_args} -a "${assembly_zarr}"
-    else
-        echo "No assembly zarr provided or found — skipping consolidation"
-    fi
-    """
-}
-
-
 process log_qc_summary {
     label 'cpu_local'
 
@@ -295,13 +272,11 @@ workflow qc_report_wf {
     all_qc_done
     all_summaries
     assembly_zarr
-    step_zarrs
     output_dir
     report_dir
 
     main:
-    consolidated = consolidate_qc(all_qc_done, step_zarrs, assembly_zarr)
-    final_merge_and_report(output_dir, report_dir, consolidated)
+    final_merge_and_report(output_dir, report_dir, all_qc_done)
     log_qc_summary(all_summaries)
 
     emit:

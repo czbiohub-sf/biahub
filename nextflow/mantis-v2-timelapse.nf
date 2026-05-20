@@ -108,7 +108,6 @@ def run_qc(all_positions, Map stages) {
             all_qc,
             all_summaries,
             asm_zarr,
-            [ff_zarr, dk_zarr, rc_zarr, vs_zarr],
             params.output_dir,
             report_dir,
         ).done
