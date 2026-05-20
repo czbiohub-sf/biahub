@@ -26,6 +26,14 @@ def biahub_cmd() {
         "uv run --project ${params.biahub_project} biahub" : "biahub"
 }
 
+def airtable_cmd() {
+    if (!params.airtable_project) {
+        error "Provide --airtable_project when Airtable registry integration is enabled"
+    }
+    def script = "${params.airtable_project}/applications/airtable/scripts/write_experiment_metadata.py"
+    return "uv run --project ${params.airtable_project} --package airtable-utils ${script}"
+}
+
 process init_chunks {
     label 'cpu_local'
 
