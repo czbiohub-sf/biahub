@@ -1905,7 +1905,17 @@ def test_init_qc_fanout(example_plate, tmp_path):
     runner = CliRunner()
     result = runner.invoke(
         cli,
-        ["nf", "qc", "init-qc-fanout", "-i", str(plate_path), "-c", str(config), "--chunk-size", "1"],
+        [
+            "nf",
+            "qc",
+            "init-qc-fanout",
+            "-i",
+            str(plate_path),
+            "-c",
+            str(config),
+            "--chunk-size",
+            "1",
+        ],
     )
     assert result.exit_code == 0, result.output
 
