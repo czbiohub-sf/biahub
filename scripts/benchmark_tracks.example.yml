@@ -27,7 +27,7 @@ methods:
     path: /hpc/mydata/taylla.theodoro/repo/biahub/tmp/tracksdata_benchmark
     working_dir: /hpc/mydata/taylla.theodoro/repo/biahub
     base_config: /hpc/mydata/taylla.theodoro/repo/biahub/scripts/tracksdata_benchmark_base.yml
-    command_template: PYTHONPATH=/hpc/mydata/taylla.theodoro/repo/biahub:$PYTHONPATH /hpc/mydata/eduardo.hirata/repos/viscy/applications/eet/.venv/bin/python /hpc/mydata/taylla.theodoro/repo/biahub/scripts/run_tracksdata_fov.py --config {config_path} --fov-key {fov_name}
+    command_template: /hpc/mydata/taylla.theodoro/repo/biahub/.venv/bin/python /hpc/mydata/taylla.theodoro/repo/biahub/scripts/run_tracksdata_fov.py --config {config_path} --fov-key {fov_name}
     csv_pattern: /hpc/mydata/taylla.theodoro/repo/biahub/tmp/tracksdata_benchmark/{fov_slug}.csv
     config_overrides:
       output_dir: /hpc/mydata/taylla.theodoro/repo/biahub/tmp/tracksdata_benchmark

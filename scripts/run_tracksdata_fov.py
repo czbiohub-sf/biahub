@@ -4,12 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import os
+import site
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import polars as pl
-import tracksdata as td
 import yaml
 from cellpose import models as cp_models
 from iohub import open_ome_zarr
@@ -30,6 +31,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--fov-key", required=True, help="FOV key like A/3/000002")
     return parser
+
+
+def load_tracksdata() -> object:
+    extra_site = os.environ.get("TRACKSDATA_SITEPACKAGES")
+    if extra_site:
+        site.addsitedir(extra_site)
+    import tracksdata as td  # noqa: PLC0415
+
+    return td
 
 
 def main() -> int:
@@ -102,6 +112,7 @@ def main() -> int:
         cellpose_labels[t] = mask
 
     print("[bold]Running tracksdata ILP[/bold]")
+    td = load_tracksdata()
     td.options.set_options(show_progress=True)
     graph = td.graph.InMemoryGraph()
     nodes_op = td.nodes.RegionPropsNodes()
