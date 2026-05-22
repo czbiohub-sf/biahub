@@ -20,7 +20,7 @@ min_track_fraction: 0.5
 methods:
   - name: cellpose+ultrack
     kind: biahub
-    path: /hpc/projects/intracellular_dashboard/organelle_dynamics/2026_04_28_A549_SEC61B_DENV/1-preprocess/4-track
+    path: /hpc/projects/intracellular_dashboard/organelle_dynamics/2026_04_28_A549_SEC61B_DENV/1-preprocess/4-track/2026_04_28_A549_SEC61B_DENV.zarr
 
   - name: cellpose+tracksdata
     kind: command
