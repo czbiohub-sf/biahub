@@ -52,8 +52,6 @@ track = ["ultrack>=0.7", "cupy-cuda12x"]
 
 gui = ["napari[pyqt6]", "PyQt6>=6.5,<6.8", "napari-animation"]
 
-shard = ["tensorstore"]
-
 # TODO: resolved to v0.3.2 which is not compatible with iohub 0.3.0a7
 # bring back once we sort out iohub dependencies
 # stain = ["viscy"]
