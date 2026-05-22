@@ -26,6 +26,15 @@ def load_config(path: Path) -> dict:
         return yaml.safe_load(f)
 
 
+def resolve_channel_index(ds: object, channel_name: str | None) -> int:
+    if not channel_name:
+        return 0
+    channel_names = getattr(ds, "channel_names", None) or []
+    if channel_name in channel_names:
+        return channel_names.index(channel_name)
+    raise ValueError(f"Channel {channel_name!r} not found in {channel_names!r}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True, type=Path)
@@ -51,8 +60,14 @@ def main() -> int:
     fov_key = args.fov_key
     fov_path = fov_key
     dataset_root = root / dataset
-    im_path = dataset_root / "1-preprocess/2-reconstruct" / f"{dataset}.zarr" / fov_path
-    vs_path = dataset_root / "1-preprocess/3-virtual-stain" / f"{dataset}.zarr" / fov_path
+    image_cfg = cfg.get("image", {})
+    image_path = Path(
+        image_cfg.get(
+            "path",
+            dataset_root / "1-preprocess/2-reconstruct" / f"{dataset}.zarr" / fov_path,
+        )
+    )
+    channel_name = image_cfg.get("channel_name")
 
     opt = cfg["optical"]
     cp = cfg["cellpose"]
@@ -65,14 +80,15 @@ def main() -> int:
     print(f"[bold]FOV[/bold]     {fov_key}")
     print(f"[bold]Output[/bold]   {csv_path}")
 
-    with open_ome_zarr(im_path, mode="r") as ds:
+    with open_ome_zarr(image_path, mode="r") as ds:
         T, C, Z, Y, X = ds.data.shape
         scale = tuple(float(s) for s in ds.scale[-2:])
+        channel_idx = resolve_channel_index(ds, channel_name)
 
-    with open_ome_zarr(vs_path, mode="r") as vs_ds:
+    with open_ome_zarr(image_path, mode="r") as image_ds:
         z_focus = np.zeros(T, dtype=int)
         for t in tqdm(range(T), desc="Focus"):
-            zyx = np.asarray(vs_ds.data[t, 0, :, :, :])
+            zyx = np.asarray(image_ds.data[t, channel_idx, :, :, :])
             z_f = focus_from_transverse_band(
                 zyx,
                 NA_det=opt["NA_det"],
@@ -87,12 +103,12 @@ def main() -> int:
     z_above = z_window - z_below - 1
     z_slicing = slice(max(0, z_median - z_below), min(Z, z_median + z_above + 1))
 
-    with open_ome_zarr(vs_path, mode="r") as vs_ds:
-        vs_dask = vs_ds.data.dask_array()
-        nuc_arr = vs_dask[:, 0, z_slicing, :, :].mean(axis=1).compute()
-
-    with open_ome_zarr(im_path, mode="r") as ds:
-        im_arr = np.stack([np.asarray(ds.data[t, 0, z_focus[t], :, :]) for t in range(T)])
+    with open_ome_zarr(image_path, mode="r") as image_ds:
+        image_dask = image_ds.data.dask_array()
+        nuc_arr = image_dask[:, channel_idx, z_slicing, :, :].mean(axis=1).compute()
+        im_arr = np.stack(
+            [np.asarray(image_ds.data[t, channel_idx, z_focus[t], :, :]) for t in range(T)]
+        )
     empty = [f for f in range(T) if np.sum(im_arr[f]) == 0.0]
     if empty:
         nuc_arr = fill_empty_frames(nuc_arr, empty)

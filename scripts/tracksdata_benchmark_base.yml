@@ -2,6 +2,10 @@ dataset: 2026_04_28_A549_SEC61B_DENV
 root: /hpc/projects/intracellular_dashboard/organelle_dynamics
 output_dir: /hpc/mydata/taylla.theodoro/repo/biahub/tmp/tracksdata_benchmark
 
+image:
+  path: /hpc/projects/intracellular_dashboard/organelle_dynamics/2026_04_28_A549_SEC61B_DENV/1-preprocess/5-assemble/2026_04_28_A549_SEC61B_DENV.zarr
+  channel_name: nuclei_prediction
+
 optical:
   NA_det: 1.35
   lambda_ill: 0.500
@@ -29,4 +33,3 @@ tracksdata:
   border_appearance_weight: -1.0
   distance_norm: 100.0
   edge_weight_mode: iou_distance
-

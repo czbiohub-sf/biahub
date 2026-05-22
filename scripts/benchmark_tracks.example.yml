@@ -40,6 +40,6 @@ methods:
     command_template: /hpc/mydata/eduardo.hirata/repos/viscy/applications/eet/.venv/bin/python /hpc/mydata/eduardo.hirata/repos/viscy/applications/eet/scripts/track_fov.py --config {config_path} --fov-key {fov_name}
     csv_pattern: /hpc/mydata/eduardo.hirata/repos/viscy/applications/eet/output/eet_benchmark/{fov_slug}.csv
     config_overrides:
-      data_zarr: /hpc/projects/intracellular_dashboard/organelle_dynamics/2026_04_28_A549_SEC61B_DENV/1-preprocess/3-virtual-stain/2026_04_28_A549_SEC61B_DENV.zarr
+      data_zarr: /hpc/projects/intracellular_dashboard/organelle_dynamics/2026_04_28_A549_SEC61B_DENV/1-preprocess/5-assemble/2026_04_28_A549_SEC61B_DENV.zarr
       output_dir: /hpc/mydata/eduardo.hirata/repos/viscy/applications/eet/output/eet_benchmark
       model_path: /hpc/projects/organelle_phenotyping/models/eet/2026_03_17_CTC_HSC_01_50k_steps.pt
