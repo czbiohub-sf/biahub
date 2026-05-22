@@ -35,6 +35,18 @@ def resolve_channel_index(ds: object, channel_name: str | None) -> int:
     raise ValueError(f"Channel {channel_name!r} not found in {channel_names!r}")
 
 
+def resolve_image_node(image_root: object, fov_key: str) -> object:
+    if hasattr(image_root, "data"):
+        return image_root
+    if hasattr(image_root, "positions"):
+        for key, position in image_root.positions():
+            if key == fov_key:
+                return position
+        available = [key for key, _ in image_root.positions()]
+        raise KeyError(f"FOV {fov_key!r} not found in image root; available keys: {available!r}")
+    raise TypeError(f"Unsupported image root type: {type(image_root)!r}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True, type=Path)
@@ -80,12 +92,12 @@ def main() -> int:
     print(f"[bold]FOV[/bold]     {fov_key}")
     print(f"[bold]Output[/bold]   {csv_path}")
 
-    with open_ome_zarr(image_path, mode="r") as ds:
-        T, C, Z, Y, X = ds.data.shape
-        scale = tuple(float(s) for s in ds.scale[-2:])
-        channel_idx = resolve_channel_index(ds, channel_name)
+    with open_ome_zarr(image_path, mode="r") as image_root:
+        image_ds = resolve_image_node(image_root, fov_key)
+        T, C, Z, Y, X = image_ds.data.shape
+        scale = tuple(float(s) for s in image_ds.scale[-2:])
+        channel_idx = resolve_channel_index(image_ds, channel_name)
 
-    with open_ome_zarr(image_path, mode="r") as image_ds:
         z_focus = np.zeros(T, dtype=int)
         for t in tqdm(range(T), desc="Focus"):
             zyx = np.asarray(image_ds.data[t, channel_idx, :, :, :])
@@ -97,21 +109,20 @@ def main() -> int:
             )
             z_focus[t] = int(np.clip(z_f if z_f is not None else Z // 2, 0, Z - 1))
 
-    z_median = int(np.median(z_focus))
-    z_window = opt["z_window"]
-    z_below = z_window // 3
-    z_above = z_window - z_below - 1
-    z_slicing = slice(max(0, z_median - z_below), min(Z, z_median + z_above + 1))
+        z_median = int(np.median(z_focus))
+        z_window = opt["z_window"]
+        z_below = z_window // 3
+        z_above = z_window - z_below - 1
+        z_slicing = slice(max(0, z_median - z_below), min(Z, z_median + z_above + 1))
 
-    with open_ome_zarr(image_path, mode="r") as image_ds:
         image_dask = image_ds.data.dask_array()
         nuc_arr = image_dask[:, channel_idx, z_slicing, :, :].mean(axis=1).compute()
         im_arr = np.stack(
             [np.asarray(image_ds.data[t, channel_idx, z_focus[t], :, :]) for t in range(T)]
         )
-    empty = [f for f in range(T) if np.sum(im_arr[f]) == 0.0]
-    if empty:
-        nuc_arr = fill_empty_frames(nuc_arr, empty)
+        empty = [f for f in range(T) if np.sum(im_arr[f]) == 0.0]
+        if empty:
+            nuc_arr = fill_empty_frames(nuc_arr, empty)
 
     print("[bold]Running cellpose[/bold]")
     model = cp_models.CellposeModel(model_type=cp["model_type"], gpu=cp["gpu"])
