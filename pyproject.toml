@@ -48,11 +48,11 @@ dependencies = [
 [project.optional-dependencies]
 segment = ["cellpose"]
 
-track = ["ultrack>=0.7", "cupy-cuda12x"]
+track = ["ultrack>=0.7"]
 
 gui = ["napari[pyqt6]", "PyQt6>=6.5,<6.8", "napari-animation"]
 
-shard = ["tensorstore"]
+shard = []
 
 # TODO: resolved to v0.3.2 which is not compatible with iohub 0.3.0a7
 # bring back once we sort out iohub dependencies
