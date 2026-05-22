@@ -1,0 +1,39 @@
+# Benchmark configuration for comparing tracking methods against annotations.
+#
+# Each annotation CSV must contain one FOV and the common columns:
+#   fov_name, track_id, t, x, y
+#
+# Prediction sources can be:
+#   - biahub: nested biahub output tree with tracks_{fov}.csv
+#   - csv_root: flat root with one CSV per FOV
+#   - csv_template: arbitrary path template using {fov_name}, {fov_slug}, {fov_path}
+
+annotations:
+  - /hpc/projects/intracellular_dashboard/organelle_dynamics/2026_04_28_A549_SEC61B_DENV/Annotation/backup/A_2_001002.csv
+  - /hpc/projects/intracellular_dashboard/organelle_dynamics/2026_04_28_A549_SEC61B_DENV/Annotation/backup/A_2_002002.csv
+  - /hpc/projects/intracellular_dashboard/organelle_dynamics/2026_04_28_A549_SEC61B_DENV/Annotation/backup/A_3_000002.csv
+  - /hpc/projects/intracellular_dashboard/organelle_dynamics/2026_04_28_A549_SEC61B_DENV/Annotation/backup/A_3_001002.csv
+
+max_distance: 30.0
+min_track_fraction: 0.5
+
+methods:
+  - name: cellpose+ultrack
+    kind: biahub
+    path: /hpc/projects/intracellular_dashboard/organelle_dynamics/2026_04_28_A549_SEC61B_DENV/1-preprocess/4-track
+
+  - name: cellpose+tracksdata
+    kind: csv_template
+    path: /hpc/mydata/eduardo.hirata/repos/viscy/applications/eet/output/tracksdata/{fov_slug}.csv
+
+  - name: cellpose+tracksdata+ett
+    kind: command
+    path: /hpc/mydata/eduardo.hirata/repos/viscy/applications/eet/output/eet_benchmark
+    working_dir: /hpc/mydata/eduardo.hirata/repos/viscy/applications/eet
+    base_config: /hpc/mydata/eduardo.hirata/repos/viscy/applications/eet/configs/default.yaml
+    command_template: /hpc/mydata/eduardo.hirata/repos/viscy/applications/eet/.venv/bin/python /hpc/mydata/eduardo.hirata/repos/viscy/applications/eet/scripts/track_fov.py --config {config_path} --fov-key {fov_name}
+    csv_pattern: /hpc/mydata/eduardo.hirata/repos/viscy/applications/eet/output/eet_benchmark/{fov_slug}.csv
+    config_overrides:
+      data_zarr: /hpc/projects/intracellular_dashboard/organelle_dynamics/2026_04_28_A549_SEC61B_DENV/1-preprocess/3-virtual-stain/2026_04_28_A549_SEC61B_DENV.zarr
+      output_dir: /hpc/mydata/eduardo.hirata/repos/viscy/applications/eet/output/eet_benchmark
+      model_path: /hpc/projects/organelle_phenotyping/models/eet/2026_03_17_CTC_HSC_01_50k_steps.pt

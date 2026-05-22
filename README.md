@@ -129,3 +129,6 @@ biahub stitch \
 
 ## Contributing
 We would appreciate the bug reports and code contributions if you use this package. If you would like to contribute to this package, please read the [contributing guide](CONTRIBUTING.md).
+
+## Tracking benchmark
+For manual track annotations and method comparisons, see `scripts/benchmark_tracks.py` and the example config in `scripts/benchmark_tracks.example.yml`. The benchmark scores per-FOV track tables against annotation CSVs and reports detection, track-coverage, and centroid-error summaries.
