@@ -356,8 +356,13 @@ def score_tracks(
     if "parent_track_id" in pred.columns and "parent_track_id" in ref.columns:
         parent_checks = []
         for pred_track_id, ref_track_id in pred_track_to_ref.items():
-            pred_parent_ids = pred.loc[pred["track_id"] == pred_track_id, "parent_track_id"]
-            pred_parent_ids = pred_parent_ids[pred_parent_ids >= 0].unique()
+            pred_parent_ids = (
+                pred.loc[pred["track_id"] == pred_track_id, "parent_track_id"]
+                .dropna()
+                .astype(int)
+                .to_numpy()
+            )
+            pred_parent_ids = np.unique(pred_parent_ids[pred_parent_ids >= 0])
             if len(pred_parent_ids) != 1:
                 continue
             pred_parent = int(pred_parent_ids[0])
@@ -365,8 +370,13 @@ def score_tracks(
                 continue
             pred_parent_ref = pred_track_to_ref[pred_parent]
 
-            ref_parent_ids = ref.loc[ref["track_id"] == ref_track_id, "parent_track_id"]
-            ref_parent_ids = ref_parent_ids[ref_parent_ids >= 0].unique()
+            ref_parent_ids = (
+                ref.loc[ref["track_id"] == ref_track_id, "parent_track_id"]
+                .dropna()
+                .astype(int)
+                .to_numpy()
+            )
+            ref_parent_ids = np.unique(ref_parent_ids[ref_parent_ids >= 0])
             if len(ref_parent_ids) != 1:
                 continue
             ref_parent = int(ref_parent_ids[0])
