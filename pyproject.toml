@@ -21,7 +21,6 @@ classifiers = [
 dependencies = [
   "click",
   "iohub>=0.3.4",
-  "stitch @ git+https://github.com/ahillsley/stitching@jen",
   "matplotlib",
   "natsort",
   "numpy",
