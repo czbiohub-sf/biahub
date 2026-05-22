@@ -1,0 +1,32 @@
+dataset: 2026_04_28_A549_SEC61B_DENV
+root: /hpc/projects/intracellular_dashboard/organelle_dynamics
+output_dir: /hpc/mydata/taylla.theodoro/repo/biahub/tmp/tracksdata_benchmark
+
+optical:
+  NA_det: 1.35
+  lambda_ill: 0.500
+  pixel_size: 0.1133
+  z_window: 40
+
+cellpose:
+  model_type: nuclei
+  diameter: 80
+  cellprob_threshold: 0.0
+  flow_threshold: 0.4
+  min_size: 2500
+  gpu: true
+
+tracksdata:
+  distance_threshold: 40.0
+  n_neighbors: 3
+  node_weight: -2.0
+  appearance_weight: 1.0
+  disappearance_weight: 5.0
+  division_weight: 1.0
+  use_iou: true
+  num_threads: 4
+  border_margin: 60
+  border_appearance_weight: -1.0
+  distance_norm: 100.0
+  edge_weight_mode: iou_distance
+
