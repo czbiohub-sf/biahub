@@ -73,6 +73,9 @@ def _normalize_track_table(
     if "parent_track_id" not in out.columns:
         out["parent_track_id"] = -1
 
+    # Annotated CSVs may include cleaned noise rows without track assignments.
+    out = out.dropna(subset=["track_id", "t", "x", "y"]).copy()
+
     out["track_id"] = out["track_id"].astype(int)
     out["parent_track_id"] = out["parent_track_id"].fillna(-1).astype(int)
     out["t"] = out["t"].astype(int)
