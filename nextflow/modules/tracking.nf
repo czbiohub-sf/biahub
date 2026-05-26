@@ -14,7 +14,7 @@ process init_track {
     """
     mkdir -p "${slurm_log_dir('track')}"
     ${biahub_cmd()} nf init-track \
-        -i "${params.output_dir}/2-reconstruct/${dataset_name()}.zarr" \
+        -i "${params.output_dir}/5-assemble/${dataset_name()}.zarr" \
         -o "${params.output_dir}/4-track/${dataset_name()}.zarr" \
         -c "${params.track_config}"
     """
@@ -44,7 +44,7 @@ process run_track {
         -o "${params.output_dir}/4-track/${dataset_name()}.zarr" \
         -p "${position}" \
         -c "${params.track_config}" \
-        --input-images-path "${params.output_dir}/3-virtual-stain/${dataset_name()}.zarr"
+        --input-images-path "${params.output_dir}/5-assemble/${dataset_name()}.zarr"
     """
 }
 
