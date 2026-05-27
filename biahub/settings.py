@@ -58,14 +58,39 @@ class ProcessingInputChannel(MyBaseModel):
         return v
 
 
+class CellposeConfig(MyBaseModel):
+    """Configuration for Cellpose segmentation used as input to tracking."""
+
+    model_type: str = "nuclei"
+    diameter: float = 80
+    cellprob_threshold: float = 0.0
+    flow_threshold: float = 0.4
+    gpu: bool = True
+    min_size: int = 500
+    input_channel: str = "nuclei_prediction"
+    labels_sigma: float = 5.0
+
+
+class FocusConfig(MyBaseModel):
+    """Optical parameters for waveorder focus finding."""
+
+    NA_det: float = 1.35
+    lambda_ill: float = 0.500
+    pixel_size: float = 0.1133
+    z_window: int = 40
+
+
 class TrackingSettings(MyBaseModel):
     target_channel: str = "nuclei_prediction"
     fov: str = "*/*/*"
     blank_frames_path: str = None
     mode: Literal["2D", "3D"] = "2D"
     z_range: tuple[int, int] | None = None
+    focus_config: FocusConfig | None = None
     input_images: list[ProcessingInputChannel]
     tracking_config: dict[str, Any] = {}
+    segmentation_method: Literal["foreground_contour", "cellpose"] = "foreground_contour"
+    cellpose_config: CellposeConfig | None = None
     # When None, preserve the OME-Zarr version of the input store.
     output_ome_zarr_version: Literal["0.4", "0.5"] | None = None
 
