@@ -137,6 +137,7 @@ def test_deskew_cli_debug_single_position(tmp_path, example_plate, example_deske
 
     assert result.exit_code == 0, result.output
     assert output_path.exists()
+    assert "Deskew complete:" in result.output
 
 
 def test_deskew_overhang_only_dataset_error():

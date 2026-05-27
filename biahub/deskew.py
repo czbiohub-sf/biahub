@@ -736,6 +736,13 @@ def deskew(
     if monitor:
         monitor_jobs(jobs, input_position_dirpaths)
 
+    # Only echo completion when jobs ran synchronously (debug cluster) or
+    # we explicitly waited for them via monitor. On a SLURM submit without
+    # monitor, the jobs are still running and we'd be lying.
+    if resolved_cluster == "debug" or monitor:
+        for path in input_position_dirpaths:
+            click.echo(f"Deskew complete: {path}")
+
 
 @click.command("deskew")
 @input_position_dirpaths()
