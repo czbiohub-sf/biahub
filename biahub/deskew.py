@@ -6,7 +6,6 @@ import numpy as np
 import submitit
 import torch
 import torch.nn.functional as F  # noqa: N812
-import yaml
 
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate, process_single_position
@@ -18,6 +17,7 @@ from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
     cluster,
     config_filepath,
+    init_only,
     input_position_dirpaths,
     monitor,
     output_dirpath,
@@ -28,6 +28,7 @@ from biahub.cli.utils import (
     estimate_resources,
     get_submitit_cluster,
     resolve_ome_zarr_version,
+    yaml_to_model,
 )
 from biahub.settings import DeskewSettings
 
@@ -576,20 +577,20 @@ def _load_deskew_settings(
 ) -> DeskewSettings:
     """Load DeskewSettings, resolving pixel_size_um from a reference zarr if absent.
 
-    DeskewSettings requires pixel_size_um, but it's often more natural to read it
-    from the input plate's XY scale than to write it into the config by hand.
-    Patches the raw YAML before pydantic validation so the required-field constraint
-    is satisfied either way.
+    It's often more natural to read pixel_size_um from the input plate's XY scale
+    than to write it into the config by hand. After resolving, derive
+    px_to_scan_ratio from scan_step_um if it wasn't provided directly.
     """
-    with open(config_filepath) as f:
-        cfg = yaml.safe_load(f) or {}
-    if cfg.get("pixel_size_um") is None:
+    settings = yaml_to_model(config_filepath, DeskewSettings)
+    if settings.pixel_size_um is None:
         with open_ome_zarr(str(reference_position_path), mode="r") as ds:
-            cfg["pixel_size_um"] = float(ds.scale[-1])
+            settings.pixel_size_um = float(ds.scale[-1])
         click.echo(
-            f"Resolved pixel_size_um={cfg['pixel_size_um']} from {reference_position_path}"
+            f"Resolved pixel_size_um={settings.pixel_size_um} from {reference_position_path}"
         )
-    return DeskewSettings(**cfg)
+    if settings.px_to_scan_ratio is None:
+        settings.px_to_scan_ratio = round(settings.pixel_size_um / settings.scan_step_um, 3)
+    return settings
 
 
 def _init_output_plate(
@@ -751,13 +752,7 @@ def deskew(
 @sbatch_filepath()
 @cluster()
 @monitor()
-@click.option(
-    "--init",
-    "init_only",
-    is_flag=True,
-    default=False,
-    help="Only create the output plate and exit; skip per-position processing.",
-)
+@init_only()
 def deskew_cli(
     input_position_dirpaths: list[str],
     config_filepath: Path,

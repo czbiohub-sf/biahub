@@ -100,9 +100,19 @@ def test_deskew_settings():
     with pytest.raises(ValueError):
         DeskewSettings(pixel_size_um=0.116, ls_angle_deg=90, scan_step_um=0.313)
 
-    # Test px_to_scan_ratio logic
+    # Test px_to_scan_ratio logic: must provide either px_to_scan_ratio or scan_step_um
     with pytest.raises(ValueError):
         DeskewSettings(pixel_size_um=0.116, ls_angle_deg=36, scan_step_um=None)
+
+    # Both pixel_size_um and scan_step_um omitted is also an error
+    with pytest.raises(ValueError):
+        DeskewSettings(ls_angle_deg=36)
+
+    # pixel_size_um may be omitted when scan_step_um is provided; the caller
+    # is expected to fill in pixel_size_um from the input zarr scale before use.
+    settings = DeskewSettings(ls_angle_deg=36, scan_step_um=0.313)
+    assert settings.pixel_size_um is None
+    assert settings.px_to_scan_ratio is None
 
 
 def test_register_settings():

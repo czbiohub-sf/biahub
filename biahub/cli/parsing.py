@@ -279,6 +279,19 @@ def cluster() -> Callable:
     return decorator
 
 
+def init_only() -> Callable:
+    def decorator(f: Callable) -> Callable:
+        return click.option(
+            "--init",
+            "init_only",
+            is_flag=True,
+            default=False,
+            help="Only initialize the output store and exit; skip per-position processing.",
+        )(f)
+
+    return decorator
+
+
 def monitor() -> Callable:
     def decorator(f: Callable) -> Callable:
         return click.option(
