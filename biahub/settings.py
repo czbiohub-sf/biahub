@@ -296,9 +296,7 @@ class ProcessingSettings(MyBaseModel):
 
 
 class DeskewSettings(MyBaseModel):
-    # pixel_size_um and px_to_scan_ratio may be None at load time and filled in
-    # later (e.g. resolved from the input zarr scale by the deskew CLI).
-    pixel_size_um: PositiveFloat | None = None
+    pixel_size_um: PositiveFloat
     ls_angle_deg: PositiveFloat
     px_to_scan_ratio: PositiveFloat | None = None
     scan_step_um: PositiveFloat | None = None
@@ -323,20 +321,15 @@ class DeskewSettings(MyBaseModel):
             return round(float(v), 3)
 
     def __init__(self, **data):
-        px_to_scan_ratio = data.get("px_to_scan_ratio")
-        scan_step_um = data.get("scan_step_um")
-        pixel_size_um = data.get("pixel_size_um")
-        if px_to_scan_ratio is None:
-            if scan_step_um is None:
-                raise ValueError(
-                    "Provide px_to_scan_ratio, or scan_step_um (pixel_size_um can be "
-                    "auto-resolved from the input zarr scale)"
+        if data.get("px_to_scan_ratio") is None:
+            if data.get("scan_step_um") is not None:
+                data["px_to_scan_ratio"] = round(
+                    data["pixel_size_um"] / data["scan_step_um"], 3
                 )
-            # Derive when both numerator and denominator are present; otherwise
-            # leave px_to_scan_ratio as None and let the caller resolve it after
-            # filling in pixel_size_um.
-            if pixel_size_um is not None:
-                data["px_to_scan_ratio"] = round(pixel_size_um / scan_step_um, 3)
+            else:
+                raise ValueError(
+                    "If px_to_scan_ratio is not provided, both pixel_size_um and scan_step_um must be provided"
+                )
         super().__init__(**data)
 
 
