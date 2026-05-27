@@ -113,10 +113,19 @@ def copy_position_metadata(input_zarr: Path, output_zarr: Path) -> None:
                 logger.debug("Copied metadata for position %s", name)
 
 
-def get_submitit_cluster(local: bool = False) -> str:
-    """Return the submitit cluster type: 'debug' in CI, 'local' if local, else 'slurm'."""
+def get_submitit_cluster(
+    local: bool = False,
+    cluster: str | None = None,
+) -> str:
+    """Return the submitit cluster type.
+
+    'debug' is forced in CI. Otherwise the explicit `cluster` string wins;
+    if no cluster is given, falls back to the legacy `local` boolean.
+    """
     if os.environ.get("CI") == "true":
         return "debug"
+    if cluster is not None:
+        return cluster
     return "local" if local else "slurm"
 
 

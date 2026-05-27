@@ -13,8 +13,8 @@ process init_deskew {
     script:
     """
     mkdir -p "${slurm_log_dir('deskew')}"
-    ${biahub_cmd()} nf init-deskew \
-        -i "${params.output_dir}/0-flatfield/${dataset_name()}.zarr" \
+    ${biahub_cmd()} deskew --init \
+        -i "${params.output_dir}/0-flatfield/${dataset_name()}.zarr"/*/*/* \
         -o "${params.output_dir}/1-deskew/${dataset_name()}.zarr" \
         -c "${params.deskew_config}"
     """
@@ -40,11 +40,10 @@ process run_deskew {
 
     script:
     """
-    ${biahub_cmd()} nf run-deskew \
-        -i "${params.output_dir}/0-flatfield/${dataset_name()}.zarr" \
+    ${biahub_cmd()} deskew --cluster debug \
+        -i "${params.output_dir}/0-flatfield/${dataset_name()}.zarr/${position}" \
         -o "${params.output_dir}/1-deskew/${dataset_name()}.zarr" \
-        -p "${position}" \
-        -c "${params.output_dir}/1-deskew/deskew_resolved.yml"
+        -c "${params.deskew_config}"
     """
 }
 
