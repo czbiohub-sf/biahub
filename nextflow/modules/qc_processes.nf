@@ -1,3 +1,4 @@
+include { slurm_logs; slurm_log_dir } from './common'
 
 def qc_cmd() {
     return params.qc_project ?
@@ -19,6 +20,7 @@ process plan_stage {
     script:
     def chunk_arg = params.qc_chunk_size ? "--chunk-size ${params.qc_chunk_size}" : ""
     """
+    mkdir -p "${slurm_log_dir('qc')}"
     ${qc_cmd()} plan-stage --config ${config_path} ${chunk_arg} ${zarr_path}
     """
 }
@@ -27,6 +29,7 @@ process plan_stage {
 process run_step {
     tag "${zarr_path}/${position ?: 'store'}/${step_id}"
     label 'cpu'
+    clusterOptions { slurm_logs('qc') }
     memory { "${(meta?.memory_gb ?: 16).toFloat() * task.attempt} GB" }
     time '2h'
     maxRetries 1
@@ -51,7 +54,8 @@ process run_step {
 
 process finalize_wave {
     label 'cpu'
-    memory { "${32 * task.attempt} GB" }
+    clusterOptions { slurm_logs('qc') }
+    memory { task.attempt == 1 ? '32 GB' : '48 GB' }
     time '30m'
     maxRetries 1
     errorStrategy { task.exitStatus in [137, 140, 143] ? 'retry' : 'terminate' }
@@ -72,7 +76,8 @@ process finalize_wave {
 
 process finalize_stage {
     label 'cpu'
-    memory { "${32 * task.attempt} GB" }
+    clusterOptions { slurm_logs('qc') }
+    memory { task.attempt == 1 ? '32 GB' : '48 GB' }
     time '1h'
     maxRetries 1
     errorStrategy { task.exitStatus in [137, 140, 143] ? 'retry' : 'terminate' }
@@ -92,6 +97,7 @@ process finalize_stage {
 
 process final_merge_and_report {
     label 'cpu'
+    clusterOptions { slurm_logs('qc') }
     memory '32 GB'
     time '1h'
 

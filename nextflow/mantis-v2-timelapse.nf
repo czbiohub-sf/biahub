@@ -29,7 +29,7 @@ include { reconstruct_wf }    from './modules/reconstruct'
 include { virtual_stain_wf }  from './modules/virtual_stain'
 include { rename_wf }         from './modules/rename_channels'
 include { track_wf }          from './modules/tracking'
-include { assemble_wf_mantisv2 } from './modules/assembly'
+include { assemble_wf_mantisv2; clean_intermediates } from './modules/assembly'
 include { qc_stage_wf as qc_post_flatfield }      from './modules/qc'
 include { qc_stage_wf as qc_post_deskew }         from './modules/qc'
 include { qc_stage_wf as qc_post_reconstruct }    from './modules/qc'
@@ -54,7 +54,7 @@ def collect_positions() {
 }
 
 def run_qc(all_positions, Map stages) {
-    if (!params.qc_config_dir) return
+    if (!params.qc_config_dir) return Channel.value(true)
 
     def qc_dir   = params.qc_config_dir
     def ff_zarr  = "${params.output_dir}/0-flatfield/${dataset_name()}.zarr"
@@ -91,7 +91,10 @@ def run_qc(all_positions, Map stages) {
 
         def report_dir = params.qc_report_dir ?: "${params.output_dir}/qc/report"
         qc_report_wf(all_qc, params.output_dir, report_dir)
+        return qc_report_wf.out.done
     }
+
+    return Channel.value(true)
 }
 
 
@@ -122,13 +125,17 @@ workflow full {
         : tk_done.done
     asm_done = assemble_wf_mantisv2(all_positions, pre_asm)
 
-    run_qc(all_positions, [
+    qc_done = run_qc(all_positions, [
         ff_done:  ff_done.done,
         dk_done:  dk_done.done,
         rc_done:  rc_done.done,
         vs_done:  vs_done.done,
         asm_done: asm_done.done,
     ])
+
+    if (params.clean_intermediates) {
+        clean_intermediates(asm_done.done.mix(qc_done).collect())
+    }
 }
 
 
@@ -157,12 +164,16 @@ workflow from_deskew {
         : tk_done.done
     asm_done = assemble_wf_mantisv2(all_positions, pre_asm)
 
-    run_qc(all_positions, [
+    qc_done = run_qc(all_positions, [
         dk_done:  dk_done.done,
         rc_done:  rc_done.done,
         vs_done:  vs_done.done,
         asm_done: asm_done.done,
     ])
+
+    if (params.clean_intermediates) {
+        clean_intermediates(asm_done.done.mix(qc_done).collect())
+    }
 }
 
 
@@ -189,11 +200,15 @@ workflow from_reconstruct {
         : tk_done.done
     asm_done = assemble_wf_mantisv2(all_positions, pre_asm)
 
-    run_qc(all_positions, [
+    qc_done = run_qc(all_positions, [
         rc_done:  rc_done.done,
         vs_done:  vs_done.done,
         asm_done: asm_done.done,
     ])
+
+    if (params.clean_intermediates) {
+        clean_intermediates(asm_done.done.mix(qc_done).collect())
+    }
 }
 
 
@@ -218,10 +233,14 @@ workflow from_virtual_stain {
         : tk_done.done
     asm_done = assemble_wf_mantisv2(all_positions, pre_asm)
 
-    run_qc(all_positions, [
+    qc_done = run_qc(all_positions, [
         vs_done:  vs_done.done,
         asm_done: asm_done.done,
     ])
+
+    if (params.clean_intermediates) {
+        clean_intermediates(asm_done.done.mix(qc_done).collect())
+    }
 }
 
 
@@ -244,9 +263,13 @@ workflow from_tracking {
         : tk_done.done
     asm_done = assemble_wf_mantisv2(all_positions, pre_asm)
 
-    run_qc(all_positions, [
+    qc_done = run_qc(all_positions, [
         asm_done: asm_done.done,
     ])
+
+    if (params.clean_intermediates) {
+        clean_intermediates(asm_done.done.mix(qc_done).collect())
+    }
 }
 
 
@@ -264,9 +287,13 @@ workflow from_assembly {
 
     asm_done = assemble_wf_mantisv2(all_positions, trigger)
 
-    run_qc(all_positions, [
+    qc_done = run_qc(all_positions, [
         asm_done: asm_done.done,
     ])
+
+    if (params.clean_intermediates) {
+        clean_intermediates(asm_done.done.mix(qc_done).collect())
+    }
 }
 
 
