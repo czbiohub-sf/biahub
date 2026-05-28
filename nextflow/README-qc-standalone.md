@@ -18,7 +18,6 @@ nextflow run /path/to/biahub/nextflow/qc-standalone.nf \
     --output_dir       /path/to/experiment \
     --qc_project       /path/to/imaging-qc-pipeline \
     --biahub_project   /path/to/biahub \
-    --quarto_bin       /path/to/quarto/bin \
     -resume
 ```
 
@@ -64,8 +63,6 @@ module load nextflow
 
 BIAHUB_PROJECT="/home/aliu/repos/biahub"
 QC_PROJECT="/home/aliu/repos/imaging-qc-pipeline"
-QUARTO_BIN="/home/aliu/opt/quarto-1.7.23/bin"
-
 DEV_DIR="/hpc/projects/intracellular_dashboard/refactor_biahub/phase2_dev/mantis_v2_dev_qc"
 PIPELINE="${BIAHUB_PROJECT}/nextflow/qc-standalone.nf"
 NF_CONFIG="${BIAHUB_PROJECT}/nextflow/nextflow.config"
@@ -78,7 +75,6 @@ nextflow run "${PIPELINE}" \
     --output_dir       "${DEV_DIR}" \
     --biahub_project   "${BIAHUB_PROJECT}" \
     --qc_project       "${QC_PROJECT}" \
-    --quarto_bin       "${QUARTO_BIN}" \
     --work_dir         "${WORK_DIR}" \
     -resume \
     "$@"
@@ -94,7 +90,6 @@ nextflow run "${PIPELINE}" \
     --output_dir       "${DEV_DIR}" \
     --biahub_project   "${BIAHUB_PROJECT}" \
     --qc_project       "${QC_PROJECT}" \
-    --quarto_bin       "${QUARTO_BIN}" \
     --positions        "B/3/000000,B/3/000001" \
     --qc_report_static \
     -resume
@@ -135,44 +130,40 @@ for config format.
 | `--qc_chunk_size` | Timepoints per distributed chunk job | `10` |
 | `--qc_project` | Path to `imaging-qc-pipeline` for `uv run` | falls back to PyPI |
 | `--biahub_project` | Path to biahub repo root for `uv run` | assumes `biahub` on PATH |
-| `--quarto_bin` | Directory containing `quarto` binary | not set |
-| `--qc_report_static` | Generate static PNG report (no Quarto) | `false` |
+| `--qc_report_static` | Generate static PNG-only report instead of interactive Plotly | `false` |
 | `--qc_report_dir` | Report output directory | `<output_dir>/qc/report` |
 
 ## Architecture
+
+Python owns all dispatch logic via `plan-stage` (JSON). Nextflow owns
+fan-out, barriers, and retries. Three waves execute sequentially with
+`.count()` barriers between them.
 
 ```
           manifest.csv
                │
     ┌──────────▼──────────┐
-    │  discover_positions │  (local)
+    │  plan_stage          │  (local) Python emits plan.json v2
     └──────────┬──────────┘
                │
     ┌──────────▼──────────┐
-    │  init_qc_fanout     │  (local, per stage)
-    │  estimate_resources  │  (local, per metric group)
+    │  Wave 0: run_step   │  (Slurm) position-scoped, chunked
     └──────────┬──────────┘
-               │
+               │ .count() barrier
     ┌──────────▼──────────┐
-    │  PASS 1: chunked    │  (Slurm) timepoint batches as
-    │  position metrics   │  distributed jobs
+    │  finalize_wave(0)   │  (Slurm) merge chunk parquets
     └──────────┬──────────┘
-               │
+               │ .count() barrier
     ┌──────────▼──────────┐
-    │  merge_qc_metrics   │  (Slurm) consolidate chunk parquets
+    │  Wave 1: run_step   │  (Slurm) dependent metrics
     └──────────┬──────────┘
-               │
+               │ .count() barrier
     ┌──────────▼──────────┐
-    │  PASS 2: dependent  │  (Slurm) metrics that read pass-1
-    │  temporal metrics   │  results (e.g. bleach_rate)
+    │  Wave 2: run_step   │  (Slurm) store-scoped metrics
     └──────────┬──────────┘
-               │
+               │ .count() barrier
     ┌──────────▼──────────┐
-    │  merge + gate       │  (Slurm) per stage
-    └──────────┬──────────┘
-               │
-    ┌──────────▼──────────┐
-    │  consolidate        │  (local) copy parquets to assembly
+    │  finalize_stage     │  (Slurm) aggregate + gates + summary
     └──────────┬──────────┘
                │
     ┌──────────▼──────────┐
@@ -184,24 +175,24 @@ for config format.
 
 | Step | Executor | Why |
 |------|----------|-----|
-| Position discovery | local | Reads zarr metadata only |
-| Fan-out + resource estimation | local | Lightweight CLI calls |
-| Metric computation (pass 1 + 2) | Slurm | CPU-intensive, parallelized |
-| Metric merge | Slurm | Reads/writes parquets |
-| Gate evaluation | Slurm | Reads merged parquets |
-| Consolidation | local | File copy only |
-| Report generation | Slurm | Quarto rendering can be memory-heavy |
+| plan_stage | local | Reads zarr metadata, emits JSON |
+| run_step (waves 0-2) | Slurm | CPU-intensive, parallelized |
+| finalize_wave | Slurm | Reads/writes parquets |
+| finalize_stage | Slurm | Aggregation + gate evaluation |
+| Report generation | Slurm | Jinja2 + Plotly rendering |
 
-### Two-pass metric computation
+### Three-wave metric computation
 
-Some metrics depend on the results of other metrics. For example,
-`bleach_rate` requires `intensity_stats` to be computed and merged first.
-The pipeline handles this automatically:
+`plan-stage` classifies metrics into waves by scope:
 
-1. **Pass 1** runs all position-scoped, time-chunked metrics as distributed
-   Slurm jobs (controlled by `--qc_chunk_size`).
-2. `merge_qc_metrics` consolidates chunk parquets into per-position results.
-3. **Pass 2** runs dependent/temporal metrics that read pass-1 outputs.
+1. **Wave 0** (position): position-scoped metrics, optionally chunked by
+   timepoint (`--qc_chunk_size`). Each (position, chunk) is a Slurm job.
+2. **finalize_wave(0)** merges chunk parquets into per-position results.
+3. **Wave 1** (dependent): metrics that read wave-0 outputs (e.g. `bleach_rate`
+   depends on `intensity_stats`).
+4. **Wave 2** (store): store-scoped metrics (one job per zarr, no position
+   fan-out).
+5. **finalize_stage** aggregates all results, evaluates gates, writes summary.
 
-The fan-out logic (`init_qc_fanout`) determines which metrics go to which
-pass based on whether they have time-chunk boundaries.
+Empty waves are no-ops — `.count()` emits 0, and the barrier propagates
+without spawning processes.

@@ -26,20 +26,6 @@ def biahub_cmd() {
         "uv run --project ${params.biahub_project} biahub" : "biahub"
 }
 
-process init_chunks {
-    label 'cpu_local'
-
-    input:
-    val zarr_path
-
-    output:
-    stdout
-
-    script:
-    """
-    ${biahub_cmd()} nf qc init-chunks -i "${zarr_path}"
-    """
-}
 
 process list_positions {
     label 'cpu_local'

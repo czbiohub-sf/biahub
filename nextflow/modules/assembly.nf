@@ -173,10 +173,6 @@ workflow assemble_wf_mantisv2 {
         | run_concatenate
         | collect
 
-    if (params.clean_intermediates) {
-        clean_intermediates(as_done)
-    }
-
     emit:
     done = as_done
 }

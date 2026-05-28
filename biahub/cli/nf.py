@@ -12,7 +12,6 @@ from iohub.ngff.utils import (
     process_single_position,
 )
 
-from biahub.cli.nf_qc import nf_qc_cli
 from biahub.cli.utils import (
     copy_position_metadata,
     estimate_resources,
@@ -32,8 +31,6 @@ def nf_cli():
     derived from the Slurm/OS CPU allocation.
     """
 
-
-nf_cli.add_command(nf_qc_cli)
 
 
 @nf_cli.command("list-positions")

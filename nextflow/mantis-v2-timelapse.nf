@@ -20,7 +20,6 @@ params.qc_config_dir       = null
 params.qc_project          = null
 params.qc_report_dir       = null
 params.qc_report_static    = false
-params.quarto_bin          = null
 params.clean_intermediates = false
 
 include { list_positions; dataset_name } from './modules/common'
@@ -30,7 +29,7 @@ include { reconstruct_wf }    from './modules/reconstruct'
 include { virtual_stain_wf }  from './modules/virtual_stain'
 include { rename_wf }         from './modules/rename_channels'
 include { track_wf }          from './modules/tracking'
-include { assemble_wf_mantisv2 } from './modules/assembly'
+include { assemble_wf_mantisv2; clean_intermediates } from './modules/assembly'
 include { qc_stage_wf as qc_post_flatfield }      from './modules/qc'
 include { qc_stage_wf as qc_post_deskew }         from './modules/qc'
 include { qc_stage_wf as qc_post_reconstruct }    from './modules/qc'
@@ -55,7 +54,7 @@ def collect_positions() {
 }
 
 def run_qc(all_positions, Map stages) {
-    if (!params.qc_config_dir) return
+    if (!params.qc_config_dir) return Channel.value(true)
 
     def qc_dir   = params.qc_config_dir
     def ff_zarr  = "${params.output_dir}/0-flatfield/${dataset_name()}.zarr"
@@ -65,41 +64,37 @@ def run_qc(all_positions, Map stages) {
     def asm_zarr = "${params.output_dir}/5-assemble/${dataset_name()}.zarr"
 
     def qc_done_list = []
-    def qc_summary_list = []
 
     if (stages.ff_done) {
-        qc1 = qc_post_flatfield(all_positions, stages.ff_done, ff_zarr, "${qc_dir}/qc_stage1_post_flatfield.yaml", "flatfield")
+        qc1 = qc_post_flatfield(stages.ff_done.map { [ff_zarr, "${qc_dir}/qc_stage1_post_flatfield.yaml"] })
         qc_done_list.add(qc1.done)
-        qc_summary_list.add(qc1.summary)
     }
     if (stages.dk_done) {
-        qc2 = qc_post_deskew(all_positions, stages.dk_done, dk_zarr, "${qc_dir}/qc_stage2_post_deskew.yaml", "deskew")
+        qc2 = qc_post_deskew(stages.dk_done.map { [dk_zarr, "${qc_dir}/qc_stage2_post_deskew.yaml"] })
         qc_done_list.add(qc2.done)
-        qc_summary_list.add(qc2.summary)
     }
     if (stages.rc_done) {
-        qc3 = qc_post_reconstruct(all_positions, stages.rc_done, rc_zarr, "${qc_dir}/qc_stage3_post_reconstruct.yaml", "reconstruct")
+        qc3 = qc_post_reconstruct(stages.rc_done.map { [rc_zarr, "${qc_dir}/qc_stage3_post_reconstruct.yaml"] })
         qc_done_list.add(qc3.done)
-        qc_summary_list.add(qc3.summary)
     }
     if (stages.vs_done) {
-        qc4 = qc_post_virtual_stain(all_positions, stages.vs_done, vs_zarr, "${qc_dir}/qc_stage4_post_virtual_stain.yaml", "virtual_stain")
+        qc4 = qc_post_virtual_stain(stages.vs_done.map { [vs_zarr, "${qc_dir}/qc_stage4_post_virtual_stain.yaml"] })
         qc_done_list.add(qc4.done)
-        qc_summary_list.add(qc4.summary)
     }
     if (stages.asm_done) {
-        qc5 = qc_post_assembly(all_positions, stages.asm_done, asm_zarr, "${qc_dir}/qc_stage5_post_assembly.yaml", "assembly")
+        qc5 = qc_post_assembly(stages.asm_done.map { [asm_zarr, "${qc_dir}/qc_stage5_post_assembly.yaml"] })
         qc_done_list.add(qc5.done)
-        qc_summary_list.add(qc5.summary)
     }
 
     if (qc_done_list.size() > 0) {
         all_qc = qc_done_list.inject { a, b -> a.mix(b) } | collect
-        all_summaries = qc_summary_list.inject { a, b -> a.mix(b) } | collect
 
         def report_dir = params.qc_report_dir ?: "${params.output_dir}/qc/report"
-        qc_report_wf(all_qc, all_summaries, asm_zarr, [ff_zarr, dk_zarr, rc_zarr, vs_zarr], params.output_dir, report_dir)
+        qc_report_wf(all_qc, params.output_dir, report_dir)
+        return qc_report_wf.out.done
     }
+
+    return Channel.value(true)
 }
 
 
@@ -130,13 +125,17 @@ workflow full {
         : tk_done.done
     asm_done = assemble_wf_mantisv2(all_positions, pre_asm)
 
-    run_qc(all_positions, [
+    qc_done = run_qc(all_positions, [
         ff_done:  ff_done.done,
         dk_done:  dk_done.done,
         rc_done:  rc_done.done,
         vs_done:  vs_done.done,
         asm_done: asm_done.done,
     ])
+
+    if (params.clean_intermediates) {
+        clean_intermediates(asm_done.done.mix(qc_done).collect())
+    }
 }
 
 
@@ -165,12 +164,16 @@ workflow from_deskew {
         : tk_done.done
     asm_done = assemble_wf_mantisv2(all_positions, pre_asm)
 
-    run_qc(all_positions, [
+    qc_done = run_qc(all_positions, [
         dk_done:  dk_done.done,
         rc_done:  rc_done.done,
         vs_done:  vs_done.done,
         asm_done: asm_done.done,
     ])
+
+    if (params.clean_intermediates) {
+        clean_intermediates(asm_done.done.mix(qc_done).collect())
+    }
 }
 
 
@@ -197,11 +200,15 @@ workflow from_reconstruct {
         : tk_done.done
     asm_done = assemble_wf_mantisv2(all_positions, pre_asm)
 
-    run_qc(all_positions, [
+    qc_done = run_qc(all_positions, [
         rc_done:  rc_done.done,
         vs_done:  vs_done.done,
         asm_done: asm_done.done,
     ])
+
+    if (params.clean_intermediates) {
+        clean_intermediates(asm_done.done.mix(qc_done).collect())
+    }
 }
 
 
@@ -226,10 +233,14 @@ workflow from_virtual_stain {
         : tk_done.done
     asm_done = assemble_wf_mantisv2(all_positions, pre_asm)
 
-    run_qc(all_positions, [
+    qc_done = run_qc(all_positions, [
         vs_done:  vs_done.done,
         asm_done: asm_done.done,
     ])
+
+    if (params.clean_intermediates) {
+        clean_intermediates(asm_done.done.mix(qc_done).collect())
+    }
 }
 
 
@@ -252,9 +263,13 @@ workflow from_tracking {
         : tk_done.done
     asm_done = assemble_wf_mantisv2(all_positions, pre_asm)
 
-    run_qc(all_positions, [
+    qc_done = run_qc(all_positions, [
         asm_done: asm_done.done,
     ])
+
+    if (params.clean_intermediates) {
+        clean_intermediates(asm_done.done.mix(qc_done).collect())
+    }
 }
 
 
@@ -272,9 +287,13 @@ workflow from_assembly {
 
     asm_done = assemble_wf_mantisv2(all_positions, trigger)
 
-    run_qc(all_positions, [
+    qc_done = run_qc(all_positions, [
         asm_done: asm_done.done,
     ])
+
+    if (params.clean_intermediates) {
+        clean_intermediates(asm_done.done.mix(qc_done).collect())
+    }
 }
 
 
