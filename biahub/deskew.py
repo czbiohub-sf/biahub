@@ -643,30 +643,27 @@ def deskew(
     monitor: bool = True,
     init_only: bool = False,
 ):
-    """
-    Deskew a dataset across T and C axes using a configuration file.
+    """Deskew oblique plane light-sheet dataset, processing time point and channels in parallel.
 
     Parameters
     ----------
-    input_position_dirpaths : List[str]
-        List of input position directory paths. Pass a single position path
-        for per-position Nextflow workers, or many for the SLURM fan-out flow.
+    input_position_dirpaths : list[str]
+        Paths to input positions, for example: "input.zarr/0/0/0", "input.zarr/0/0/[0-9]",
+        or "input.zarr/*/*/*".
     config_filepath : Path
-        Path to the configuration file
+        Path to YAML configuration file.
     output_dirpath : str
-        Path to the output directory
+        Path to "output.zarr" directory.
     sbatch_filepath : str, optional
-        Path to the SLURM batch file
+        SBATCH filepath that contains slurm parameters to overwrite defaults.
+        For example, '#SBATCH --mem-per-cpu=16G' will override the default memory per CPU.
     cluster : str, optional
-        Submitit cluster to use: "slurm" (default), "local", or "debug".
+        Execution cluster: 'slurm' submits to a Slurm cluster, 'local' runs jobs as
+        subprocesses on this machine, 'debug' runs jobs in-process in the foreground.
     monitor : bool, optional
-        Whether to monitor the jobs
+        Monitor of submitted SLURM jobs.
     init_only : bool, optional
-        If True, create the output plate and exit without processing any positions.
-
-    Returns
-    -------
-    None
+        Only initialize the output store and exit; skip per-position processing.
     """
     output_dirpath = Path(output_dirpath)
     slurm_out_path = output_dirpath.parent / "slurm_output"
@@ -765,22 +762,21 @@ def deskew_cli(
     monitor: bool = False,
     init_only: bool = False,
 ):
-    r"""Deskew one or more positions across T and C axes.
-
-    The output plate is (re)initialized on every call; create_empty_plate is
-    idempotent so this is safe under fan-out. Use --init to only initialize.
+    """Deskew oblique plane light-sheet dataset. Deskew parameters can be estimated with estimate-deskew.
 
     \b
-    SLURM fan-out across a whole plate:
+    SLURM fan-out of positions across a whole plate:
     >>> biahub deskew -i ./input.zarr/*/*/* -c ./deskew_params.yml -o ./output.zarr
+
+    \b
+    Initialize the output plate only (e.g. before running per-position Nextflow workers):
+    >>> biahub deskew --init -i ./input.zarr/*/*/* -c ./deskew_params.yml -o ./output.zarr
 
     \b
     In-process run of a single position (e.g. from a Nextflow worker):
     >>> biahub deskew --cluster debug -i ./input.zarr/A/1/0 -c ./deskew_params.yml -o ./output.zarr
 
-    \b
-    Initialize the output plate only:
-    >>> biahub deskew --init -i ./input.zarr/*/*/* -c ./deskew_params.yml -o ./output.zarr
+
     """
     deskew(
         input_position_dirpaths=input_position_dirpaths,

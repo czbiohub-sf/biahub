@@ -57,7 +57,7 @@ def input_position_dirpaths() -> Callable:
             cls=OptionEatAll,
             type=tuple,
             callback=_validate_and_process_paths,
-            help='Paths to input positions, for example: "input.zarr/0/0/0" or "input.zarr/*/*/*"',
+            help='Paths to input positions, for example: "input.zarr/0/0/0", "input.zarr/0/0/[0-9]", or "input.zarr/*/*/*"',
         )(f)
 
     return decorator
@@ -270,7 +270,7 @@ def cluster() -> Callable:
             default="slurm",
             show_default=True,
             help=(
-                "Submitit cluster: 'slurm' submits to a Slurm cluster, "
+                "Execution cluster: 'slurm' submits to a Slurm cluster, "
                 "'local' runs jobs as subprocesses on this machine, "
                 "'debug' runs jobs in-process in the foreground."
             ),
