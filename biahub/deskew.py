@@ -734,15 +734,18 @@ def deskew(
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
 
+    # submitit's DebugExecutor is lazy: .submit() wraps the callable in a
+    # DebugJob but execution only happens when .wait()/.done()/.result() is
+    # called. Run each one in the foreground and stream progress; monitor's
+    # async polling UI is pointless against synchronous in-process jobs.
+    if resolved_cluster == "debug":
+        for job, path in zip(jobs, input_position_dirpaths, strict=True):
+            job.wait()
+            click.echo(f"Deskew complete: {path}")
+        return
+
     if monitor:
         monitor_jobs(jobs, input_position_dirpaths)
-
-    # Only echo completion when jobs ran synchronously (debug cluster) or
-    # we explicitly waited for them via monitor. On a SLURM submit without
-    # monitor, the jobs are still running and we'd be lying.
-    if resolved_cluster == "debug" or monitor:
-        for path in input_position_dirpaths:
-            click.echo(f"Deskew complete: {path}")
 
 
 @click.command("deskew")
