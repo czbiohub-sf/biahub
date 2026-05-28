@@ -395,53 +395,6 @@ def run_apply_inv_tf(
 # ---------------------------------------------------------------------------
 
 
-@nf_cli.command("clean-position")
-@click.option("--output-zarr", "-o", required=True, type=click.Path())
-@click.option("--position", "-p", required=True, type=str)
-def clean_position(output_zarr: str, position: str):
-    """Remove a position from an output zarr and re-create it empty before retry.
-
-    Killed jobs (timeout, preemption) can leave corrupt zarr shards.
-    Call this before re-running a position to avoid checksum errors.
-    After deletion the position is re-created via ``create_empty_plate``
-    so that downstream tools can open it with ``mode='r+'``.
-    """
-    import shutil
-
-    pos_path = Path(output_zarr) / position
-    if not pos_path.exists():
-        logger.info(f"No position to clean: {pos_path}")
-        return
-
-    # Read plate metadata before deleting the position.
-    _, channel_names, shape, scale = read_plate_metadata(output_zarr)
-
-    # Read dtype and chunks from an existing position's array.
-    with open_ome_zarr(output_zarr, mode="r") as plate:
-        for _, pos in plate.positions():
-            img = pos.data
-            dtype = img.dtype
-            chunks = img.chunks
-            break
-
-    # Delete corrupted position.
-    shutil.rmtree(pos_path)
-    logger.info(f"Cleaned corrupted position: {pos_path}")
-
-    # Re-create the empty position.
-    pos_key = tuple(position.split("/"))
-    create_empty_plate(
-        store_path=Path(output_zarr),
-        position_keys=[pos_key],
-        channel_names=channel_names,
-        shape=shape,
-        chunks=chunks,
-        scale=tuple(scale),
-        dtype=dtype,
-    )
-    logger.info(f"Re-created empty position for retry: {pos_path}")
-
-
 @nf_cli.command("clean-temp")
 @click.argument("temp_dir", type=click.Path())
 def clean_temp(temp_dir: str):
@@ -454,6 +407,31 @@ def clean_temp(temp_dir: str):
         logger.info(f"Removed stale temp directory: {path}")
     else:
         logger.info(f"No temp directory to clean: {path}")
+
+
+@nf_cli.command("clean-intermediates")
+@click.option("--output-dir", "-o", required=True, type=click.Path())
+@click.option("--dataset-name", "-d", required=True, type=str)
+def clean_intermediates(output_dir: str, dataset_name: str):
+    """Delete intermediate zarrs after successful assembly.
+
+    Removes 0-flatfield, 1-deskew, 2-reconstruct, and 3-virtual-stain zarrs.
+    """
+    import shutil
+
+    intermediate_dirs = [
+        "0-flatfield",
+        "1-deskew",
+        "2-reconstruct",
+        "3-virtual-stain",
+    ]
+    for dirname in intermediate_dirs:
+        zarr_path = Path(output_dir) / dirname / f"{dataset_name}.zarr"
+        if zarr_path.exists():
+            shutil.rmtree(zarr_path)
+            logger.info(f"Deleted intermediate zarr: {zarr_path}")
+        else:
+            logger.info(f"Intermediate zarr not found (skipping): {zarr_path}")
 
 
 # ---------------------------------------------------------------------------

@@ -10,8 +10,8 @@ params.reconstruct_config  = null
 params.predict_config      = null
 params.track_config        = null
 params.concatenate_config  = null
-params.rename_prefix       = ""
-params.rename_suffix       = ""
+params.rename_prefix       = null
+params.rename_suffix       = null
 params.biahub_project      = null
 params.viscy_project       = null
 params.work_dir            = null
@@ -20,6 +20,7 @@ params.qc_config_dir       = null
 params.qc_project          = null
 params.qc_report_dir       = null
 params.qc_report_static    = false
+params.clean_intermediates = false
 
 include { list_positions; dataset_name } from './modules/common'
 include { flat_field_wf }     from './modules/flat_field'
@@ -108,9 +109,6 @@ workflow full {
     if (!params.predict_config)      error "Provide --predict_config"
     if (!params.track_config)        error "Provide --track_config"
     if (!params.concatenate_config)  error "Provide --concatenate_config"
-    if (!params.rename_prefix && !params.rename_suffix) {
-        error "Provide --rename_prefix and/or --rename_suffix"
-    }
 
     all_positions = collect_positions()
 
@@ -119,8 +117,10 @@ workflow full {
     rc_done  = reconstruct_wf(all_positions, dk_done.done)
     vs_done  = virtual_stain_wf(all_positions, rc_done.done)
     tk_done  = track_wf(all_positions, vs_done.done)
-    rn_done  = rename_wf(all_positions, tk_done.done)
-    asm_done = assemble_wf_mantisv2(all_positions, rn_done.done)
+    pre_asm  = (params.rename_prefix || params.rename_suffix)
+        ? rename_wf(all_positions, tk_done.done).done
+        : tk_done.done
+    asm_done = assemble_wf_mantisv2(all_positions, pre_asm)
 
     run_qc(all_positions, [
         ff_done:  ff_done.done,
@@ -144,9 +144,6 @@ workflow from_deskew {
     if (!params.predict_config)      error "Provide --predict_config"
     if (!params.track_config)        error "Provide --track_config"
     if (!params.concatenate_config)  error "Provide --concatenate_config"
-    if (!params.rename_prefix && !params.rename_suffix) {
-        error "Provide --rename_prefix and/or --rename_suffix"
-    }
 
     all_positions = collect_positions()
     trigger = Channel.value(true)
@@ -155,8 +152,10 @@ workflow from_deskew {
     rc_done  = reconstruct_wf(all_positions, dk_done.done)
     vs_done  = virtual_stain_wf(all_positions, rc_done.done)
     tk_done  = track_wf(all_positions, vs_done.done)
-    rn_done  = rename_wf(all_positions, tk_done.done)
-    asm_done = assemble_wf_mantisv2(all_positions, rn_done.done)
+    pre_asm  = (params.rename_prefix || params.rename_suffix)
+        ? rename_wf(all_positions, tk_done.done).done
+        : tk_done.done
+    asm_done = assemble_wf_mantisv2(all_positions, pre_asm)
 
     run_qc(all_positions, [
         dk_done:  dk_done.done,
@@ -178,9 +177,6 @@ workflow from_reconstruct {
     if (!params.predict_config)      error "Provide --predict_config"
     if (!params.track_config)        error "Provide --track_config"
     if (!params.concatenate_config)  error "Provide --concatenate_config"
-    if (!params.rename_prefix && !params.rename_suffix) {
-        error "Provide --rename_prefix and/or --rename_suffix"
-    }
 
     all_positions = collect_positions()
     trigger = Channel.value(true)
@@ -188,8 +184,10 @@ workflow from_reconstruct {
     rc_done  = reconstruct_wf(all_positions, trigger)
     vs_done  = virtual_stain_wf(all_positions, rc_done.done)
     tk_done  = track_wf(all_positions, vs_done.done)
-    rn_done  = rename_wf(all_positions, tk_done.done)
-    asm_done = assemble_wf_mantisv2(all_positions, rn_done.done)
+    pre_asm  = (params.rename_prefix || params.rename_suffix)
+        ? rename_wf(all_positions, tk_done.done).done
+        : tk_done.done
+    asm_done = assemble_wf_mantisv2(all_positions, pre_asm)
 
     run_qc(all_positions, [
         rc_done:  rc_done.done,
@@ -209,17 +207,16 @@ workflow from_virtual_stain {
     if (!params.predict_config)      error "Provide --predict_config"
     if (!params.track_config)        error "Provide --track_config"
     if (!params.concatenate_config)  error "Provide --concatenate_config"
-    if (!params.rename_prefix && !params.rename_suffix) {
-        error "Provide --rename_prefix and/or --rename_suffix"
-    }
 
     all_positions = collect_positions()
     trigger = Channel.value(true)
 
     vs_done  = virtual_stain_wf(all_positions, trigger)
     tk_done  = track_wf(all_positions, vs_done.done)
-    rn_done  = rename_wf(all_positions, tk_done.done)
-    asm_done = assemble_wf_mantisv2(all_positions, rn_done.done)
+    pre_asm  = (params.rename_prefix || params.rename_suffix)
+        ? rename_wf(all_positions, tk_done.done).done
+        : tk_done.done
+    asm_done = assemble_wf_mantisv2(all_positions, pre_asm)
 
     run_qc(all_positions, [
         vs_done:  vs_done.done,
@@ -237,16 +234,15 @@ workflow from_tracking {
     if (!params.output_dir)          error "Provide --output_dir"
     if (!params.track_config)        error "Provide --track_config"
     if (!params.concatenate_config)  error "Provide --concatenate_config"
-    if (!params.rename_prefix && !params.rename_suffix) {
-        error "Provide --rename_prefix and/or --rename_suffix"
-    }
 
     all_positions = collect_positions()
     trigger = Channel.value(true)
 
     tk_done  = track_wf(all_positions, trigger)
-    rn_done  = rename_wf(all_positions, tk_done.done)
-    asm_done = assemble_wf_mantisv2(all_positions, rn_done.done)
+    pre_asm  = (params.rename_prefix || params.rename_suffix)
+        ? rename_wf(all_positions, tk_done.done).done
+        : tk_done.done
+    asm_done = assemble_wf_mantisv2(all_positions, pre_asm)
 
     run_qc(all_positions, [
         asm_done: asm_done.done,

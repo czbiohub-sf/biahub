@@ -12,6 +12,15 @@ def parse_resources(stdout_text, prefix = 'RESOURCES:') {
     return [cpus: parts[0].toInteger(), mem_gb: parts[1].toInteger()]
 }
 
+def slurm_log_dir(step_name) {
+    return "${params.output_dir}/slurm_output/${step_name}"
+}
+
+def slurm_logs(step_name) {
+    def dir = slurm_log_dir(step_name)
+    return "--output=${dir}/%x_%j.out --error=${dir}/%x_%j.err"
+}
+
 def biahub_cmd() {
     return params.biahub_project ?
         "uv run --project ${params.biahub_project} biahub" : "biahub"

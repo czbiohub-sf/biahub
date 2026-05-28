@@ -1784,46 +1784,49 @@ def test_clean_temp_noop_when_missing(tmp_path):
     assert not temp_dir.exists()
 
 
-def test_clean_position_removes_and_recreates(tmp_path):
-    """clean-position removes a corrupted position and re-creates it empty."""
-    zarr_dir = tmp_path / "output.zarr"
-    shape = (3, 2, 4, 5, 6)
+def test_clean_intermediates_deletes_zarrs(tmp_path):
+    """clean-intermediates deletes intermediate zarrs and keeps others."""
+    output_dir = tmp_path / "output"
+    dataset = "my_dataset"
 
-    plate = open_ome_zarr(
-        zarr_dir, layout="hcs", mode="w", channel_names=["GFP", "RFP"]
-    )
-    for row, col, fov in [("A", "3", "002002"), ("A", "3", "002003")]:
-        pos = plate.create_position(row, col, fov)
-        pos.create_zeros(name="0", shape=shape, dtype=np.float32)
-    plate.close()
+    # Create intermediate zarrs that should be deleted.
+    for dirname in ["0-flatfield", "1-deskew", "2-reconstruct", "3-virtual-stain"]:
+        zarr_path = output_dir / dirname / f"{dataset}.zarr"
+        zarr_path.mkdir(parents=True)
+        (zarr_path / "data.bin").write_text("fake")
 
-    # Write junk to simulate a corrupted position.
-    pos_dir = zarr_dir / "A" / "3" / "002002"
-    (pos_dir / "corrupt_file").write_text("bad data")
+    # Create zarrs that should be kept.
+    for dirname in ["4-track", "5-assemble"]:
+        zarr_path = output_dir / dirname / f"{dataset}.zarr"
+        zarr_path.mkdir(parents=True)
+        (zarr_path / "data.bin").write_text("fake")
 
     runner = CliRunner()
     result = runner.invoke(
-        cli, ["nf", "clean-position", "-o", str(zarr_dir), "-p", "A/3/002002"]
+        cli,
+        ["nf", "clean-intermediates", "-o", str(output_dir), "-d", dataset],
     )
 
     assert result.exit_code == 0, result.output
-    # Position directory should exist again (re-created empty).
-    assert pos_dir.exists()
-    # Corrupt file should be gone.
-    assert not (pos_dir / "corrupt_file").exists()
-    # The re-created position should be openable with mode='r+'.
-    with open_ome_zarr(str(pos_dir), mode="r+") as pos:
-        assert pos.data.shape == shape
+
+    # Intermediate zarrs should be gone.
+    for dirname in ["0-flatfield", "1-deskew", "2-reconstruct", "3-virtual-stain"]:
+        assert not (output_dir / dirname / f"{dataset}.zarr").exists()
+
+    # Track and assemble zarrs should still exist.
+    for dirname in ["4-track", "5-assemble"]:
+        assert (output_dir / dirname / f"{dataset}.zarr").exists()
 
 
-def test_clean_position_noop_when_missing(tmp_path):
-    """clean-position succeeds even if the position doesn't exist."""
-    zarr_dir = tmp_path / "output.zarr"
-    zarr_dir.mkdir()
+def test_clean_intermediates_noop_when_missing(tmp_path):
+    """clean-intermediates succeeds even if no intermediate zarrs exist."""
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
 
     runner = CliRunner()
     result = runner.invoke(
-        cli, ["nf", "clean-position", "-o", str(zarr_dir), "-p", "A/3/002002"]
+        cli,
+        ["nf", "clean-intermediates", "-o", str(output_dir), "-d", "nodata"],
     )
 
     assert result.exit_code == 0
@@ -1902,7 +1905,17 @@ def test_init_qc_fanout(example_plate, tmp_path):
     runner = CliRunner()
     result = runner.invoke(
         cli,
-        ["nf", "qc", "init-qc-fanout", "-i", str(plate_path), "-c", str(config), "--chunk-size", "1"],
+        [
+            "nf",
+            "qc",
+            "init-qc-fanout",
+            "-i",
+            str(plate_path),
+            "-c",
+            str(config),
+            "--chunk-size",
+            "1",
+        ],
     )
     assert result.exit_code == 0, result.output
 

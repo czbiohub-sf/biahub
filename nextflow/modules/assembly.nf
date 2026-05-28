@@ -1,4 +1,4 @@
-include { dataset_name; parse_resources; biahub_cmd } from './common'
+include { dataset_name; parse_resources; biahub_cmd; slurm_logs; slurm_log_dir } from './common'
 
 
 process init_estimate_crop {
@@ -12,6 +12,7 @@ process init_estimate_crop {
 
     script:
     """
+    mkdir -p "${slurm_log_dir('assemble')}"
     ${biahub_cmd()} nf init-estimate-crop \
         --lf-data-path "${params.output_dir}/1-deskew/${dataset_name()}.zarr/*/*/*" \
         --ls-data-path "${params.output_dir}/2-reconstruct/${dataset_name()}.zarr/*/*/*"
@@ -21,6 +22,7 @@ process init_estimate_crop {
 process estimate_crop {
     tag "${lf_position}"
     label 'cpu'
+    clusterOptions { slurm_logs('assemble') }
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time '1h'
@@ -107,13 +109,14 @@ process init_concatenate {
 process run_concatenate {
     tag "${position}"
     label 'cpu'
+    clusterOptions { slurm_logs('assemble') }
     maxForks 30
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time '2h'
     maxRetries 1
     errorStrategy 'retry'
-    beforeScript { task.attempt > 1 ? "${biahub_cmd()} nf clean-position -o '${params.output_dir}/5-assemble/${dataset_name()}.zarr' -p '${position}'" : '' }
+
 
     input:
     tuple val(position), val(meta)
@@ -127,6 +130,21 @@ process run_concatenate {
         -c "${params.output_dir}/5-assemble/concatenate_resolved.yml" \
         -o "${params.output_dir}/5-assemble/${dataset_name()}.zarr" \
         -p "${position}"
+    """
+}
+
+
+process clean_intermediates {
+    label 'cpu_local'
+
+    input:
+    val trigger
+
+    script:
+    """
+    ${biahub_cmd()} nf clean-intermediates \
+        -o "${params.output_dir}" \
+        -d "${dataset_name()}"
     """
 }
 
@@ -154,6 +172,10 @@ workflow assemble_wf_mantisv2 {
         .combine(resources)
         | run_concatenate
         | collect
+
+    if (params.clean_intermediates) {
+        clean_intermediates(as_done)
+    }
 
     emit:
     done = as_done
