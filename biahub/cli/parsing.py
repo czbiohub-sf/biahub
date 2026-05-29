@@ -262,6 +262,36 @@ def local() -> Callable:
     return decorator
 
 
+def cluster() -> Callable:
+    def decorator(f: Callable) -> Callable:
+        return click.option(
+            "--cluster",
+            type=click.Choice(["slurm", "local", "debug"], case_sensitive=False),
+            default="slurm",
+            show_default=True,
+            help=(
+                "Execution cluster: 'slurm' submits to a Slurm cluster, "
+                "'local' runs jobs as subprocesses on this machine, "
+                "'debug' runs jobs in-process in the foreground."
+            ),
+        )(f)
+
+    return decorator
+
+
+def init_only() -> Callable:
+    def decorator(f: Callable) -> Callable:
+        return click.option(
+            "--init",
+            "init_only",
+            is_flag=True,
+            default=False,
+            help="Only initialize the output store and exit; skip per-position processing.",
+        )(f)
+
+    return decorator
+
+
 def monitor() -> Callable:
     def decorator(f: Callable) -> Callable:
         return click.option(
