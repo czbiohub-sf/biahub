@@ -3,7 +3,6 @@ from typing import Literal
 
 import click
 import numpy as np
-import submitit
 import torch
 import torch.nn.functional as F  # noqa: N812
 
@@ -13,7 +12,6 @@ from monai.transforms.spatial.array import Affine
 from scipy.ndimage import binary_dilation
 
 from biahub.cli import utils
-from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
     config_filepath,
     input_position_dirpaths,
@@ -21,11 +19,10 @@ from biahub.cli.parsing import (
     monitor,
     output_dirpath,
     sbatch_filepath,
-    sbatch_to_submitit,
 )
+from biahub.cli.slurm import submit_jobs
 from biahub.cli.utils import (
     estimate_resources,
-    get_submitit_cluster,
     resolve_ome_zarr_version,
     yaml_to_model,
 )
@@ -661,45 +658,27 @@ def deskew(
         "slurm_partition": "preempted",
     }
 
-    # Override defaults if sbatch_filepath is provided
-    if sbatch_filepath:
-        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
-
-    # Run locally or submit to SLURM
-    cluster = get_submitit_cluster(local)
-
-    # Prepare and submit jobs
-    click.echo(f"Preparing jobs: {slurm_args}")
-    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
-    executor.update_parameters(**slurm_args)
-
-    click.echo("Submitting SLURM jobs...")
-
-    jobs = []
-    with submitit.helpers.clean_env(), executor.batch():
+    # Fan out one job per position (FOV) and submit/monitor via the shared helper
+    job_args = [
+        (
+            (_czyx_fast_deskew_data, input_position_path, output_position_path),
+            {"num_workers": slurm_args["slurm_cpus_per_task"], **deskew_args},
+        )
         for input_position_path, output_position_path in zip(
             input_position_dirpaths, output_position_paths, strict=True
-        ):
-            jobs.append(
-                executor.submit(
-                    process_single_position,
-                    _czyx_fast_deskew_data,
-                    input_position_path,
-                    output_position_path,
-                    num_workers=slurm_args["slurm_cpus_per_task"],
-                    **deskew_args,
-                )
-            )
+        )
+    ]
 
-    job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
-
-    slurm_out_path.mkdir(exist_ok=True)
-    log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
-    with log_path.open("w") as log_file:
-        log_file.write("\n".join(job_ids))
-
-    if monitor:
-        monitor_jobs(jobs, input_position_dirpaths)
+    submit_jobs(
+        process_single_position,
+        job_args,
+        slurm_out_path=slurm_out_path,
+        slurm_args=slurm_args,
+        finalize="monitor" if monitor else "none",
+        monitor_paths=input_position_dirpaths,
+        local=local,
+        sbatch_filepath=sbatch_filepath,
+    )
 
 
 @click.command("deskew")

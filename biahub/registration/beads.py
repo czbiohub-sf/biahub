@@ -25,7 +25,6 @@ Key conventions
 - Transforms map from moving space to reference space (forward direction).
 """
 
-from datetime import datetime
 from itertools import product
 from pathlib import Path
 from typing import Literal
@@ -34,7 +33,6 @@ import ants
 import click
 import dask.array as da
 import numpy as np
-import submitit
 
 from iohub import open_ome_zarr
 from numpy.typing import ArrayLike
@@ -42,10 +40,7 @@ from scipy.spatial import cKDTree
 from skimage.transform import AffineTransform, EuclideanTransform, SimilarityTransform
 
 from biahub.characterize_psf import detect_peaks
-from biahub.cli.parsing import (
-    sbatch_to_submitit,
-)
-from biahub.cli.slurm import wait_for_jobs_to_finish
+from biahub.cli.slurm import submit_jobs
 from biahub.cli.utils import (
     _check_nan_n_zeros,
     estimate_resources,
@@ -522,42 +517,35 @@ def estimate_independently(
         "slurm_use_srun": False,
     }
 
-    if sbatch_filepath:
-        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
-
     slurm_out_path = output_folder_path.parent / "slurm_output"
-    slurm_out_path.mkdir(exist_ok=True)
 
-    # Submitit executor
-    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
-    executor.update_parameters(**slurm_args)
-    click.echo(f"Submitting SLURM focus estimation jobs with resources: {slurm_args}")
+    # Fan out one job per timepoint (T) and block until all finish
+    job_args = [
+        (
+            (),
+            {
+                "t_idx": t,
+                "mov_tzyx": mov_tzyx,
+                "ref_tzyx": ref_tzyx,
+                "beads_match_settings": beads_match_settings,
+                "affine_transform_settings": affine_transform_settings,
+                "verbose": verbose,
+                "output_folder_path": output_folder_path,
+                "mode": mode,
+            },
+        )
+        for t in range(T)
+    ]
 
-    # Submit jobs
-    jobs = []
-    with submitit.helpers.clean_env(), executor.batch():
-        for t in range(T):
-            job = executor.submit(
-                estimate_tzyx,
-                t_idx=t,
-                mov_tzyx=mov_tzyx,
-                ref_tzyx=ref_tzyx,
-                beads_match_settings=beads_match_settings,
-                affine_transform_settings=affine_transform_settings,
-                verbose=verbose,
-                output_folder_path=output_folder_path,
-                mode=mode,
-            )
-            jobs.append(job)
-
-    # Save job IDs
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    log_path = slurm_out_path / f"job_ids_{timestamp}.log"
-    with open(log_path, "w") as log_file:
-        for job in jobs:
-            log_file.write(f"{job.job_id}\n")
-
-    wait_for_jobs_to_finish(jobs)
+    submit_jobs(
+        estimate_tzyx,
+        job_args,
+        slurm_out_path=slurm_out_path,
+        slurm_args=slurm_args,
+        finalize="wait",
+        cluster=cluster,
+        sbatch_filepath=sbatch_filepath,
+    )
 
 
 def peaks_from_beads(
