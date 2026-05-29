@@ -4,7 +4,8 @@ include { run_step as run_step_w1 }            from './qc_processes'
 include { run_step as run_step_w2 }            from './qc_processes'
 include { finalize_wave }                      from './qc_processes'
 include { finalize_stage }                     from './qc_processes'
-include { final_merge_and_report }             from './qc_processes'
+include { generate_report_spec }                from './qc_processes'
+include { run_report }                          from './qc_processes'
 
 
 // ---------------------------------------------------------------------------
@@ -77,13 +78,13 @@ workflow qc_stage_wf {
 
 workflow qc_report_wf {
     take:
-    all_qc_done
-    output_dir
+    all_qc_done      // collected list of zarr paths
     report_dir
 
     main:
-    final_merge_and_report(output_dir, report_dir, all_qc_done)
+    spec = generate_report_spec(all_qc_done)
+    run_report(spec, report_dir)
 
     emit:
-    done = final_merge_and_report.out
+    done = run_report.out
 }

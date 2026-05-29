@@ -149,16 +149,6 @@ process clean_intermediates {
 }
 
 
-def parse_positions(stdout_text) {
-    return stdout_text.trim().readLines()
-        .findAll { it.startsWith('POSITION:') }
-        .collect { line ->
-            def parts = line.replace('POSITION:', '').trim().split('\t')
-            [parts[0], parts[1]]
-        }
-}
-
-
 workflow assemble_wf_mantisv2 {
     take:
     positions

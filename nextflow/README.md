@@ -239,6 +239,39 @@ Use `-profile local` instead of `-profile slurm` for local execution.
 | `--qc_report_dir` | Directory for the final QC report (default: `<output_dir>/qc/report`) |
 | `--qc_report_static` | Generate static PNG-only report instead of interactive Plotly (default: `false`) |
 
+## QC reporting
+
+QC reporting uses the `imaging-qc report --report-spec` interface. The pipeline auto-generates a `report_spec.yaml` from the zarr stores that completed QC. For a full mantis-v2 run with all QC stages enabled, the generated spec looks like:
+
+```yaml
+title: "QC Report"
+tabs:
+  - label: "0-flatfield"
+    zarr_path: /output/0-flatfield/experiment.zarr
+    qc_dir: /output/0-flatfield/experiment_qc
+    config: /path/to/qc_config_dir
+  - label: "1-deskew"
+    zarr_path: /output/1-deskew/experiment.zarr
+    qc_dir: /output/1-deskew/experiment_qc
+    config: /path/to/qc_config_dir
+  - label: "2-reconstruct"
+    zarr_path: /output/2-reconstruct/experiment.zarr
+    qc_dir: /output/2-reconstruct/experiment_qc
+    config: /path/to/qc_config_dir
+  - label: "3-virtual-stain"
+    zarr_path: /output/3-virtual-stain/experiment.zarr
+    qc_dir: /output/3-virtual-stain/experiment_qc
+    config: /path/to/qc_config_dir
+  - label: "5-assemble"
+    zarr_path: /output/5-assemble/experiment.zarr
+    qc_dir: /output/5-assemble/experiment_qc
+    config: /path/to/qc_config_dir
+```
+
+Tab labels are derived from the parent directory name of each zarr store. The `config` field points to `--qc_config_dir`, which contains per-stage YAML configs (e.g. `qc_stage1_post_flatfield.yaml`). The `qc_dir` is the external sibling `<stem>_qc/` directory where `imaging-qc` writes parquets.
+
+When running from a partial entry point (e.g. `-entry from_reconstruct`), only the stages that executed appear as tabs. See the [imaging-qc-pipeline report-spec docs](https://github.com/czbiohub-sf/imaging-qc-pipeline) for the full manifest schema.
+
 ## Output
 
 The dataset name is derived from the input zarr basename (e.g. `experiment.zarr` -> `experiment`).

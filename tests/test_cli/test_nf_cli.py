@@ -1869,3 +1869,129 @@ def test_stitch(tmp_path, example_plate):
         assert output_path.exists()
 
 
+# ---------------------------------------------------------------------------
+# generate-report-spec
+# ---------------------------------------------------------------------------
+
+
+def test_generate_report_spec_basic(tmp_path):
+    """generate-report-spec writes a valid YAML with one tab per zarr path."""
+    output = tmp_path / "report_spec.yaml"
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "nf",
+            "generate-report-spec",
+            "-o",
+            str(output),
+            "/data/0-flatfield/experiment.zarr",
+            "/data/1-deskew/experiment.zarr",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert output.exists()
+
+    spec = yaml.safe_load(output.read_text())
+    assert spec["title"] == "QC Report"
+    assert len(spec["tabs"]) == 2
+
+    tab0 = spec["tabs"][0]
+    assert tab0["label"] == "0-flatfield"
+    assert tab0["zarr_path"] == "/data/0-flatfield/experiment.zarr"
+    assert tab0["qc_dir"] == "/data/0-flatfield/experiment_qc"
+    assert "config" not in tab0
+
+    tab1 = spec["tabs"][1]
+    assert tab1["label"] == "1-deskew"
+    assert tab1["qc_dir"] == "/data/1-deskew/experiment_qc"
+
+
+def test_generate_report_spec_with_config_dir(tmp_path):
+    """generate-report-spec includes config field when --config-dir is given."""
+    output = tmp_path / "report_spec.yaml"
+    config_dir = tmp_path / "qc_configs"
+    config_dir.mkdir()
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "nf",
+            "generate-report-spec",
+            "-o",
+            str(output),
+            "--config-dir",
+            str(config_dir),
+            "/data/2-reconstruct/dataset.zarr",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    spec = yaml.safe_load(output.read_text())
+    assert len(spec["tabs"]) == 1
+    assert spec["tabs"][0]["config"] == str(config_dir)
+
+
+def test_generate_report_spec_custom_title(tmp_path):
+    """generate-report-spec respects --title."""
+    output = tmp_path / "report_spec.yaml"
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "nf",
+            "generate-report-spec",
+            "-o",
+            str(output),
+            "--title",
+            "My Custom Report",
+            "/data/5-assemble/exp.zarr",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    spec = yaml.safe_load(output.read_text())
+    assert spec["title"] == "My Custom Report"
+
+
+def test_generate_report_spec_ome_zarr_suffix(tmp_path):
+    """generate-report-spec strips .ome.zarr suffix for qc_dir."""
+    output = tmp_path / "report_spec.yaml"
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "nf",
+            "generate-report-spec",
+            "-o",
+            str(output),
+            "/data/stage/dataset.ome.zarr",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    spec = yaml.safe_load(output.read_text())
+    assert spec["tabs"][0]["qc_dir"] == "/data/stage/dataset_qc"
+
+
+def test_generate_report_spec_creates_parent_dirs(tmp_path):
+    """generate-report-spec creates parent directories for the output path."""
+    output = tmp_path / "nested" / "dir" / "report_spec.yaml"
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "nf",
+            "generate-report-spec",
+            "-o",
+            str(output),
+            "/data/0-flatfield/exp.zarr",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert output.exists()
+
+

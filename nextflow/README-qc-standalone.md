@@ -30,25 +30,20 @@ Each row is one QC stage. Stages run in parallel.
 |--------|----------|-------------|
 | `zarr_path` | yes | Absolute path to the zarr store |
 | `config_path` | yes | Absolute path to the `imaging-qc` YAML config for this stage |
-| `stage_name` | yes | Label for this stage (used in summary output and file naming) |
-| `assembly` | no | `true` if this is the assembly zarr that receives consolidated QC parquets from the other (step) zarrs. At most one row should be `true`. Default: `false` |
 
 ### Example: `stages.csv`
 
 ```csv
-zarr_path,config_path,stage_name,assembly
-/hpc/projects/.../2-reconstruct/dataset.zarr,/hpc/projects/.../configs/qc/qc_stage3_post_reconstruct.yaml,reconstruct,false
-/hpc/projects/.../5-assemble/dataset.zarr,/hpc/projects/.../configs/qc/qc_stage5_post_assembly.yaml,assembly,true
+zarr_path,config_path
+/hpc/projects/.../2-reconstruct/dataset.zarr,/hpc/projects/.../configs/qc/qc_stage3_post_reconstruct.yaml
+/hpc/projects/.../5-assemble/dataset.zarr,/hpc/projects/.../configs/qc/qc_stage5_post_assembly.yaml
 ```
 
-### Example: single zarr, no assembly
-
-When QC-ing a standalone zarr (not part of a multi-step pipeline), omit the
-`assembly` column or set all rows to `false`. Consolidation is skipped.
+### Example: single zarr
 
 ```csv
-zarr_path,config_path,stage_name,assembly
-/hpc/projects/.../my_data.zarr,/path/to/qc_config.yaml,my_stage,false
+zarr_path,config_path
+/hpc/projects/.../my_data.zarr,/path/to/qc_config.yaml
 ```
 
 ## Launch script
@@ -90,7 +85,7 @@ nextflow run "${PIPELINE}" \
     --output_dir       "${DEV_DIR}" \
     --biahub_project   "${BIAHUB_PROJECT}" \
     --qc_project       "${QC_PROJECT}" \
-    --positions        "B/3/000000,B/3/000001" \
+    --max_positions    2 \
     --qc_report_static \
     -resume
 ```
@@ -125,7 +120,6 @@ for config format.
 |-----------|-------------|---------|
 | `--stages_manifest` | CSV manifest (see above) | *required* |
 | `--output_dir` | Parent directory for report output | *required* |
-| `--positions` | Comma-separated position keys (e.g. `B/3/000000,B/3/000001`) | auto-discovered from first zarr |
 | `--max_positions` | Limit to first N positions (0 = all) | `0` |
 | `--qc_chunk_size` | Timepoints per distributed chunk job | `10` |
 | `--qc_project` | Path to `imaging-qc-pipeline` for `uv run` | falls back to PyPI |

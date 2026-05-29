@@ -90,7 +90,7 @@ def run_qc(all_positions, Map stages) {
         all_qc = qc_done_list.inject { a, b -> a.mix(b) } | collect
 
         def report_dir = params.qc_report_dir ?: "${params.output_dir}/qc/report"
-        qc_report_wf(all_qc, params.output_dir, report_dir)
+        qc_report_wf(all_qc, report_dir)
         return qc_report_wf.out.done
     }
 

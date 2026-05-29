@@ -1,4 +1,4 @@
-include { slurm_logs; slurm_log_dir } from './common'
+include { slurm_logs; slurm_log_dir; biahub_cmd } from './common'
 
 def qc_cmd() {
     return params.qc_project ?
@@ -95,27 +95,44 @@ process finalize_stage {
     """
 }
 
-process final_merge_and_report {
+process generate_report_spec {
+    label 'cpu_local'
+
+    input:
+    val zarr_paths
+
+    output:
+    path 'report_spec.yaml'
+
+    script:
+    def config_flag = params.qc_config_dir ? "--config-dir \"${params.qc_config_dir}\"" : ''
+    def zarr_args = zarr_paths.collect { "\"${it}\"" }.join(' ')
+    """
+    ${biahub_cmd()} nf generate-report-spec \
+        -o report_spec.yaml \
+        ${config_flag} \
+        ${zarr_args}
+    """
+}
+
+process run_report {
     label 'cpu'
     clusterOptions { slurm_logs('qc') }
     memory '32 GB'
     time '1h'
 
     input:
-    val output_dir
+    path report_spec
     val report_dir
-    val all_qc_done
 
     output:
     val true
 
     script:
     def static_flag = params.qc_report_static ? '--static' : ''
-    def config_flag = params.qc_config_dir ? "--config \"${params.qc_config_dir}\"" : ''
     """
     ${qc_cmd()} report \
-        --multi-store "${output_dir}" \
-        ${config_flag} \
+        --report-spec "${report_spec}" \
         "${report_dir}" \
         ${static_flag}
     """

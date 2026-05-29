@@ -11,7 +11,6 @@ nextflow.enable.dsl = 2
 
 params.stages_manifest  = null
 params.output_dir       = null
-params.positions        = null
 params.qc_project       = null
 params.biahub_project   = null
 params.qc_report_static = false
@@ -25,7 +24,7 @@ include { qc_report_wf }  from './modules/qc'
 
 workflow {
     if (!params.stages_manifest) {
-        error "Provide --stages_manifest (CSV with header: zarr_path,config_path,stage_name)"
+        error "Provide --stages_manifest (CSV with header: zarr_path,config_path)"
     }
     if (!params.output_dir) {
         error "Provide --output_dir"
@@ -43,5 +42,5 @@ workflow {
 
     // ── Report ──────────────────────────────────────────────────────
     def report_dir = params.qc_report_dir ?: "${params.output_dir}/qc/report"
-    qc_report_wf(all_qc_done, params.output_dir, report_dir)
+    qc_report_wf(all_qc_done, report_dir)
 }
