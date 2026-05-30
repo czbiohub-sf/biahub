@@ -275,6 +275,24 @@ def monitor() -> Callable:
     return decorator
 
 
+def executor() -> Callable:
+    def decorator(f: Callable) -> Callable:
+        return click.option(
+            "--executor",
+            type=click.Choice(["sequential", "local", "slurm"], case_sensitive=False),
+            default="slurm",
+            show_default=True,
+            help=(
+                "Execution backend: 'sequential' runs jobs in-process one at a time "
+                "(no SLURM; for debugging or single-position workers), 'local' runs "
+                "parallel subprocesses on this machine, 'slurm' submits to a SLURM "
+                "cluster."
+            ),
+        )(f)
+
+    return decorator
+
+
 def num_processes() -> Callable:
     def decorator(f: Callable) -> Callable:
         return click.option(

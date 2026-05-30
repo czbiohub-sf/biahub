@@ -8,12 +8,52 @@ from tqdm import tqdm
 
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import sbatch_to_submitit
-from biahub.cli.utils import get_submitit_cluster
+from biahub.cli.utils import estimate_resources, get_submitit_cluster
 
 # A single unit of work: positional args (tuple) and keyword args (dict) for the
-# submitted callable. ``submit_jobs``/``SlurmExecutor.submit_batch`` iterate over
-# a list of these and call ``func(*args, **kwargs)`` once per entry.
+# queued callable. ``JobRunner``/``SlurmExecutor.submit_batch`` iterate over a list
+# of these and call ``func(*args, **kwargs)`` once per entry.
 JobArgs = tuple[tuple, dict]
+
+
+def resolve_slurm_args(
+    slurm_args: dict,
+    shape: tuple[int, ...],
+    *,
+    ram_multiplier: float = 1.0,
+    max_num_cpus: int = 64,
+) -> dict:
+    """
+    Return a copy of ``slurm_args`` with cpus/mem sized to the data volume.
+
+    Every image-processing CLI shares this pattern: a static base of SLURM params
+    (job name, partition, time, array parallelism, ...) plus two fields that should
+    scale with the data -- ``slurm_cpus_per_task`` and ``slurm_mem_per_cpu``. This
+    estimates those two from ``shape`` and overrides them, leaving the rest of the
+    base untouched (so extra keys like ``slurm_use_srun`` survive).
+
+    Use the returned ``slurm_args["slurm_cpus_per_task"]`` as the kernel's
+    ``num_workers`` to keep a single source of truth for the CPU count.
+
+    Parameters
+    ----------
+    slurm_args : dict
+        Base SLURM parameters. Comes from ``settings.slurm_settings.model_dump()`` or
+        a literal dict. Not mutated.
+    shape : tuple[int, ...]
+        Data shape passed to :func:`estimate_resources` (typically ``(T, C, Z, Y, X)``).
+    ram_multiplier : float, optional
+        Per-CLI memory scaling for ``estimate_resources``. Default 1.0.
+    max_num_cpus : int, optional
+        Per-CLI cap for ``estimate_resources``. Default 64.
+    """
+    num_cpus, gb_ram = estimate_resources(
+        shape=shape, ram_multiplier=ram_multiplier, max_num_cpus=max_num_cpus
+    )
+    resolved = dict(slurm_args)
+    resolved["slurm_cpus_per_task"] = num_cpus
+    resolved["slurm_mem_per_cpu"] = f"{gb_ram}G"
+    return resolved
 
 
 def wait_for_jobs_to_finish(jobs: list[submitit.Job]) -> None:
@@ -51,16 +91,18 @@ class SlurmExecutor:
     processing (deskew, register, ...) *and* estimator fan-outs over an arbitrary
     index such as timepoints (``estimate_registration``'s ``estimate_tczyx``).
 
-    For a single batch + finalize in one call, use the :func:`submit_jobs` wrapper.
-    Modules with multiple batches (e.g. ``register``, ``stabilize``) or dependency
-    chains (e.g. ``virtual_stain``) call :meth:`submit_batch` more than once and
+    Most callers should use :class:`JobRunner` (backend selection plus a single
+    ``add``/``execute`` flow). Modules with multiple batches (e.g. ``register``,
+    ``stabilize``) or dependency chains (e.g. ``virtual_stain``) construct a
+    ``SlurmExecutor`` directly, call :meth:`submit_batch` more than once, and
     finalize with :meth:`monitor` (live progress, image modules) or :meth:`wait`
     (block silently, estimators).
 
     Parameters
     ----------
-    slurm_out_path : Union[str, Path]
-        Directory where submitit writes its logs and the job-id file.
+    output_dirpath : Union[str, Path]
+        The run's output store. submitit logs and the job-id file are written to a
+        ``slurm_output`` directory beside it (``output_dirpath.parent / "slurm_output"``).
     slurm_args : dict
         Parameters passed to ``executor.update_parameters`` (e.g. ``slurm_job_name``,
         ``slurm_cpus_per_task``, ``slurm_mem_per_cpu``, ``slurm_partition``).
@@ -77,14 +119,15 @@ class SlurmExecutor:
 
     def __init__(
         self,
-        slurm_out_path: str | Path,
+        output_dirpath: str | Path,
         slurm_args: dict,
         *,
         local: bool = False,
         cluster: str | None = None,
         sbatch_filepath: str | Path | None = None,
     ) -> None:
-        self.slurm_out_path = Path(slurm_out_path)
+        # SLURM logs + job-id file live in a `slurm_output` dir beside the output store.
+        self.slurm_out_path = Path(output_dirpath).parent / "slurm_output"
 
         # Override defaults if an sbatch file is provided. Copy so we don't mutate
         # the caller's dict.
@@ -148,80 +191,3 @@ class SlurmExecutor:
     def wait(self) -> None:
         """Block until all submitted jobs finish, without live monitoring."""
         wait_for_jobs_to_finish(self.jobs)
-
-
-def submit_jobs(
-    func: Callable,
-    job_args: Iterable[JobArgs],
-    *,
-    slurm_out_path: str | Path,
-    slurm_args: dict,
-    finalize: str = "monitor",
-    monitor_paths: list | None = None,
-    local: bool = False,
-    cluster: str | None = None,
-    sbatch_filepath: str | Path | None = None,
-) -> SlurmExecutor:
-    """
-    Submit one batch of SLURM jobs and finalize, in a single call.
-
-    Function-agnostic convenience wrapper around :class:`SlurmExecutor`: it sets up
-    the executor, submits ``func`` once per ``(args, kwargs)`` entry in ``job_args``,
-    and finalizes. ``func`` and the fan-out axis are entirely up to the caller — the
-    same call serves one-job-per-FOV image processing
-    (``submit_jobs(process_single_position, [...])``) and per-timepoint estimators
-    (``submit_jobs(estimate_tzyx, [...], finalize="wait")``) alike.
-
-    Modules that submit multiple batches (e.g. ``register``, ``stabilize``) or
-    dependency chains (e.g. ``virtual_stain``) should use :class:`SlurmExecutor`
-    directly, calling :meth:`SlurmExecutor.submit_batch` more than once.
-
-    Parameters
-    ----------
-    func : Callable
-        The callable to submit for every job. The same callable is used for the
-        whole batch; per-job variation lives in ``job_args``.
-    job_args : Iterable[JobArgs]
-        One ``(args, kwargs)`` tuple per job; each job runs ``func(*args, **kwargs)``.
-        Build this however the work fans out — over FOV, timepoints, channels, etc.
-    slurm_out_path : Union[str, Path]
-        Directory for submitit logs and the job-id file.
-    slurm_args : dict
-        Parameters for ``executor.update_parameters``.
-    finalize : {"monitor", "wait", "none"}, optional
-        How to finalize after submission: ``"monitor"`` for live progress (image
-        modules), ``"wait"`` to block silently until done (estimators), or
-        ``"none"`` to return immediately. Default ``"monitor"``.
-    monitor_paths : list, optional
-        Paths passed to ``monitor_jobs`` for progress labels when
-        ``finalize="monitor"`` (typically the input position dirpaths).
-    local : bool, optional
-        Run locally instead of submitting to SLURM. Default False.
-    cluster : str, optional
-        Pre-resolved submitit cluster backend; takes precedence over ``local``.
-    sbatch_filepath : Union[str, Path], optional
-        Optional sbatch file whose parsed contents override ``slurm_args``.
-
-    Returns
-    -------
-    SlurmExecutor
-        The executor used, with ``.jobs`` populated, so callers can inspect or
-        further wait on the submitted jobs.
-    """
-    if finalize not in ("monitor", "wait", "none"):
-        raise ValueError(f"finalize must be 'monitor', 'wait', or 'none', got {finalize!r}")
-
-    executor = SlurmExecutor(
-        slurm_out_path,
-        slurm_args,
-        local=local,
-        cluster=cluster,
-        sbatch_filepath=sbatch_filepath,
-    )
-    executor.submit_batch(func, job_args)
-
-    if finalize == "monitor":
-        executor.monitor(monitor_paths)
-    elif finalize == "wait":
-        executor.wait()
-    return executor
