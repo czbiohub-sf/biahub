@@ -23,6 +23,15 @@ class MyBaseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class SlurmSettings(MyBaseModel):
+    slurm_job_name: str
+    slurm_mem_per_cpu: str
+    slurm_cpus_per_task: int
+    slurm_array_parallelism: int
+    slurm_time: int
+    slurm_partition: str
+
+
 class DetectPeaksSettings(MyBaseModel):
     threshold_abs: float = 110
     nms_distance: int = 16
@@ -295,17 +304,22 @@ class ProcessingSettings(MyBaseModel):
     rot90: int | None = 0
 
 
-class DeskewSettings(MyBaseModel):
-    pixel_size_um: PositiveFloat
+class DeskewParams(MyBaseModel):
+    """Deskew kernel parameters, matching the ``fast_deskew_zyx`` call signature.
+
+    These fields are splatted directly into the per-position kernel call
+    (``model_dump()`` -> ``func(**kwargs)``), so the model *is* the signature: no
+    hand-maintained mapping between settings and kernel args to drift out of sync.
+    ``px_to_scan_ratio`` may be left unset and derived by :class:`DeskewSettings`
+    from ``pixel_size_um`` / ``scan_step_um``.
+    """
+
     ls_angle_deg: PositiveFloat
     px_to_scan_ratio: PositiveFloat | None = None
-    scan_step_um: PositiveFloat | None = None
     keep_overhang: bool = False
     overhang_fill: Literal["mean"] | float = 0
     average_n_slices: PositiveInt = 3
     device: str = "cpu"
-    # When None, preserve the OME-Zarr version of the input store.
-    output_ome_zarr_version: Literal["0.4", "0.5"] | None = None
 
     @field_validator("ls_angle_deg")
     @classmethod
@@ -319,18 +333,43 @@ class DeskewSettings(MyBaseModel):
     def px_to_scan_ratio_check(cls, v):
         if v is not None:
             return round(float(v), 3)
+        return v
 
-    def __init__(self, **data):
-        if data.get("px_to_scan_ratio") is None:
-            if data.get("scan_step_um") is not None:
-                data["px_to_scan_ratio"] = round(
-                    data["pixel_size_um"] / data["scan_step_um"], 3
-                )
+
+class DeskewSettings(MyBaseModel):
+    pixel_size_um: PositiveFloat
+    scan_step_um: PositiveFloat | None = None
+    deskew_params: DeskewParams
+    # When None, preserve the OME-Zarr version of the input store.
+    output_ome_zarr_version: Literal["0.4", "0.5"] | None = None
+    slurm_settings: SlurmSettings = SlurmSettings(
+        slurm_job_name="deskew",
+        slurm_mem_per_cpu="32G",
+        slurm_cpus_per_task=8,
+        slurm_array_parallelism=100,
+        slurm_time=120,
+        slurm_partition="preempted",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _derive_px_to_scan_ratio(cls, data):
+        # Fill deskew_params.px_to_scan_ratio from pixel_size_um / scan_step_um when
+        # it is not given directly, so callers can specify either.
+        if not isinstance(data, dict):
+            return data
+        params = data.get("deskew_params")
+        if isinstance(params, dict) and params.get("px_to_scan_ratio") is None:
+            pixel_size_um = data.get("pixel_size_um")
+            scan_step_um = data.get("scan_step_um")
+            if pixel_size_um is not None and scan_step_um is not None:
+                params["px_to_scan_ratio"] = round(pixel_size_um / scan_step_um, 3)
             else:
                 raise ValueError(
-                    "If px_to_scan_ratio is not provided, both pixel_size_um and scan_step_um must be provided"
+                    "If deskew_params.px_to_scan_ratio is not provided, both "
+                    "pixel_size_um and scan_step_um must be provided"
                 )
-        super().__init__(**data)
+        return data
 
 
 class RegistrationSettings(MyBaseModel):

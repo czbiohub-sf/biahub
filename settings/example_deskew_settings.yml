@@ -1,7 +1,8 @@
 pixel_size_um: 0.116
-ls_angle_deg: 36.17  # can be calibrated using estimate_deskew.py
-px_to_scan_ratio: 0.371  # Optional, can be calibrated using estimate_deskew.py
-scan_step_um: 0.313  # Optional, corresponds to 10 mV
-keep_overhang: true  # Optional, if true deskewed array will have the shape of a tilted parallelepiped
-average_n_slices: 3  # Axial averaging applied after deskewing
-overhang_fill: mean # Optional, if true zero-padded overhang regions will be filled with the mean of the valid signal
+scan_step_um: 0.313  # Optional, corresponds to 10 mV; used to derive px_to_scan_ratio
+deskew_params:
+  ls_angle_deg: 36.17  # can be calibrated using estimate_deskew.py
+  px_to_scan_ratio: 0.371  # Optional, derived from pixel_size_um / scan_step_um if unset
+  keep_overhang: true  # Optional, if true deskewed array will have the shape of a tilted parallelepiped
+  average_n_slices: 3  # Axial averaging applied after deskewing
+  overhang_fill: mean  # Optional, value used to fill zero-padded overhang regions

@@ -1,5 +1,3 @@
-from dataclasses import asdict
-
 import click
 import napari
 import numpy as np
@@ -8,7 +6,7 @@ import yaml
 from iohub.ngff import open_ome_zarr
 
 from biahub.cli.parsing import input_position_dirpaths, output_filepath
-from biahub.settings import DeskewSettings
+from biahub.settings import DeskewParams, DeskewSettings
 
 
 @click.command("estimate-deskew")
@@ -71,15 +69,17 @@ def estimate_deskew_cli(input_position_dirpaths, output_filepath):
     # Create validated object
     settings = DeskewSettings(
         pixel_size_um=pixel_size_um,
-        ls_angle_deg=theta_deg,
-        px_to_scan_ratio=px_to_scan_ratio,
         scan_step_um=scan_step_um,
+        deskew_params=DeskewParams(
+            ls_angle_deg=theta_deg,
+            px_to_scan_ratio=px_to_scan_ratio,
+        ),
     )
 
     # Write result
     print(f"Writing deskewing parameters to {output_filepath}")
     with open(output_filepath, "w") as f:
-        yaml.dump(asdict(settings), f)
+        yaml.dump(settings.model_dump(), f)
 
 
 if __name__ == "__main__":

@@ -89,20 +89,29 @@ def test_deskew_settings():
     # Test extra parameter
     with pytest.raises(ValidationError):
         DeskewSettings(
-            pixel_size_um=0.116, ls_angle_deg=36, scan_step_um=0.313, typo_param="test"
+            pixel_size_um=0.116,
+            scan_step_um=0.313,
+            deskew_params={"ls_angle_deg": 36},
+            typo_param="test",
         )
 
     # Test negative value
     with pytest.raises(ValidationError):
-        DeskewSettings(pixel_size_um=-3, ls_angle_deg=36, scan_step_um=0.313)
+        DeskewSettings(
+            pixel_size_um=-3, scan_step_um=0.313, deskew_params={"ls_angle_deg": 36}
+        )
 
     # Test light sheet angle range
     with pytest.raises(ValueError):
-        DeskewSettings(pixel_size_um=0.116, ls_angle_deg=90, scan_step_um=0.313)
+        DeskewSettings(
+            pixel_size_um=0.116, scan_step_um=0.313, deskew_params={"ls_angle_deg": 90}
+        )
 
     # Test px_to_scan_ratio logic
     with pytest.raises(ValueError):
-        DeskewSettings(pixel_size_um=0.116, ls_angle_deg=36, scan_step_um=None)
+        DeskewSettings(
+            pixel_size_um=0.116, scan_step_um=None, deskew_params={"ls_angle_deg": 36}
+        )
 
 
 def test_register_settings():
