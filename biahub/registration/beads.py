@@ -40,10 +40,10 @@ from scipy.spatial import cKDTree
 from skimage.transform import AffineTransform, EuclideanTransform, SimilarityTransform
 
 from biahub.characterize_psf import detect_peaks
-from biahub.cli.slurm import submit_jobs
+from biahub.cli.job_runner import JobRunner
+from biahub.cli.slurm import resolve_slurm_args
 from biahub.cli.utils import (
     _check_nan_n_zeros,
-    estimate_resources,
 )
 from biahub.core.graph_matching import Graph, GraphMatcher
 from biahub.core.transform import Transform
@@ -502,50 +502,43 @@ def estimate_independently(
         "stabilization": align moving channel to itself over time.
     """
     T, Z, Y, X = mov_tzyx.shape
-    num_cpus, gb_ram_per_cpu = estimate_resources(
-        shape=(T, 2, Z, Y, X), ram_multiplier=5, max_num_cpus=16
+
+    # Static SLURM params; resolve_slurm_args sizes cpus/mem to the data.
+    slurm_args = resolve_slurm_args(
+        {
+            "slurm_job_name": "estimate_registration",
+            "slurm_array_parallelism": 100,
+            "slurm_time": 30,
+            "slurm_partition": "preempted",
+            "slurm_use_srun": False,
+        },
+        (T, 2, Z, Y, X),
+        ram_multiplier=5,
+        max_num_cpus=16,
     )
 
-    # Prepare SLURM arguments
-    slurm_args = {
-        "slurm_job_name": "estimate_registration",
-        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
-        "slurm_cpus_per_task": num_cpus,
-        "slurm_array_parallelism": 100,
-        "slurm_time": 30,
-        "slurm_partition": "preempted",
-        "slurm_use_srun": False,
-    }
+    # Map the legacy submitit cluster selector onto the JobRunner backend:
+    # "debug" -> in-process, falsy -> local, otherwise pass through.
+    backend = {"debug": "sequential"}.get(cluster, cluster) or "local"
 
-    slurm_out_path = output_folder_path.parent / "slurm_output"
-
-    # Fan out one job per timepoint (T) and block until all finish
-    job_args = [
-        (
-            (),
-            {
-                "t_idx": t,
-                "mov_tzyx": mov_tzyx,
-                "ref_tzyx": ref_tzyx,
-                "beads_match_settings": beads_match_settings,
-                "affine_transform_settings": affine_transform_settings,
-                "verbose": verbose,
-                "output_folder_path": output_folder_path,
-                "mode": mode,
-            },
-        )
-        for t in range(T)
-    ]
-
-    submit_jobs(
+    # Fan out one job per timepoint (T); only t_idx varies, the rest is constant.
+    JobRunner(
         estimate_tzyx,
-        job_args,
-        slurm_out_path=slurm_out_path,
+        range(T),
+        {
+            "mov_tzyx": mov_tzyx,
+            "ref_tzyx": ref_tzyx,
+            "beads_match_settings": beads_match_settings,
+            "affine_transform_settings": affine_transform_settings,
+            "verbose": verbose,
+            "output_folder_path": output_folder_path,
+            "mode": mode,
+        },
+        executor=backend,
+        output_dirpath=output_folder_path,
         slurm_args=slurm_args,
-        finalize="wait",
-        cluster=cluster,
         sbatch_filepath=sbatch_filepath,
-    )
+    ).execute(finalize="wait")
 
 
 def peaks_from_beads(

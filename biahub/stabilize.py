@@ -21,9 +21,9 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
+from biahub.cli.slurm import resolve_slurm_args
 from biahub.cli.utils import (
     copy_n_paste_czyx,
-    estimate_resources,
     get_submitit_cluster,
     resolve_ome_zarr_version,
     yaml_to_model,
@@ -241,22 +241,19 @@ def stabilize(
 
     copy_n_paste_kwargs = {"czyx_slicing_params": ([Z_slice, Y_slice, X_slice])}
 
-    # Estimate resources
-
-    num_cpus, gb_ram_per_cpu = estimate_resources(
-        shape=[T, C, Z, Y, X], ram_multiplier=16, max_num_cpus=16
+    # Prepare SLURM arguments; resolve_slurm_args sizes cpus/mem to the data.
+    slurm_args = resolve_slurm_args(
+        {
+            "slurm_job_name": "stabilize",
+            "slurm_array_parallelism": 100,  # process up to 100 positions at a time
+            "slurm_time": 20,
+            "slurm_partition": "preempted",
+            "slurm_use_srun": False,
+        },
+        (T, C, Z, Y, X),
+        ram_multiplier=16,
+        max_num_cpus=16,
     )
-
-    # Prepare SLURM arguments
-    slurm_args = {
-        "slurm_job_name": "stabilize",
-        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
-        "slurm_cpus_per_task": num_cpus,
-        "slurm_array_parallelism": 100,  # process up to 100 positions at a time
-        "slurm_time": 20,
-        "slurm_partition": "preempted",
-        "slurm_use_srun": False,
-    }
 
     # Override defaults if sbatch_filepath is provided
     if sbatch_filepath:
