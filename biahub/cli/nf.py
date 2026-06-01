@@ -1,14 +1,23 @@
+import logging
+import shutil
+
+from pathlib import Path
+
 import click
 
 from iohub.ngff import open_ome_zarr
+
+from biahub.cli.utils import estimate_resources, read_plate_metadata
+
+logger = logging.getLogger(__name__)
 
 
 @click.group("nf")
 def nf_cli():
     """Nextflow-oriented utility commands.
 
-    Generic helpers shared across Nextflow pipelines. Step-specific init/run
-    logic lives on each step's own CLI command (e.g. ``biahub deskew``).
+    Generic helpers for position listing, resource estimation, and cleanup.
+    Step-specific init/run logic lives on each step's own CLI command.
     """
 
 
@@ -19,3 +28,51 @@ def list_positions(input_zarr: str):
     with open_ome_zarr(input_zarr, mode="r") as plate:
         for name, _ in plate.positions():
             click.echo(name)
+
+
+@nf_cli.command("init-resources")
+@click.option("--input-zarr", "-i", required=True, type=click.Path(exists=True))
+@click.option("--ram-multiplier", "-r", required=True, type=float)
+@click.option("--max-num-cpus", default=16, type=int)
+def init_resources(input_zarr: str, ram_multiplier: float, max_num_cpus: int):
+    """Estimate CPU/memory resources from input zarr shape (for Nextflow fan-out)."""
+    _, _, shape, _ = read_plate_metadata(input_zarr)
+    num_cpus, mem_per_cpu = estimate_resources(
+        shape=shape, ram_multiplier=ram_multiplier, max_num_cpus=max_num_cpus
+    )
+    click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
+
+
+@nf_cli.command("clean-temp")
+@click.argument("temp_dir", type=click.Path())
+def clean_temp(temp_dir: str):
+    """Remove a temp directory if it exists (idempotent pre-retry cleanup)."""
+    path = Path(temp_dir)
+    if path.exists():
+        shutil.rmtree(path)
+        logger.info(f"Removed stale temp directory: {path}")
+    else:
+        logger.info(f"No temp directory to clean: {path}")
+
+
+@nf_cli.command("clean-intermediates")
+@click.option("--output-dir", "-o", required=True, type=click.Path())
+@click.option("--dataset-name", "-d", required=True, type=str)
+def clean_intermediates(output_dir: str, dataset_name: str):
+    """Delete intermediate zarrs after successful assembly.
+
+    Removes 0-flatfield, 1-deskew, 2-reconstruct, and 3-virtual-stain zarrs.
+    """
+    intermediate_dirs = [
+        "0-flatfield",
+        "1-deskew",
+        "2-reconstruct",
+        "3-virtual-stain",
+    ]
+    for dirname in intermediate_dirs:
+        zarr_path = Path(output_dir) / dirname / f"{dataset_name}.zarr"
+        if zarr_path.exists():
+            shutil.rmtree(zarr_path)
+            logger.info(f"Deleted intermediate zarr: {zarr_path}")
+        else:
+            logger.info(f"Intermediate zarr not found (skipping): {zarr_path}")

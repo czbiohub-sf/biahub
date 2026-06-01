@@ -75,3 +75,18 @@ workflow collect_positions {
     emit:
     out
 }
+
+
+process clean_intermediates {
+    label 'cpu_local'
+
+    input:
+    val trigger
+
+    script:
+    """
+    ${biahub_cmd()} nf clean-intermediates \
+        -o "${params.output}" \
+        -d "${dataset_name()}"
+    """
+}
