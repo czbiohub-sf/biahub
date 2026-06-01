@@ -762,7 +762,7 @@ def deskew_cli(
     monitor: bool = False,
     init_only: bool = False,
 ):
-    """Deskew oblique plane light-sheet dataset. Deskew parameters can be estimated with estimate-deskew.
+    r"""Deskew oblique plane light-sheet dataset. Deskew parameters can be estimated with estimate-deskew.
 
     \b
     SLURM fan-out of positions across a whole plate:
