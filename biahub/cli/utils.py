@@ -52,11 +52,13 @@ _OME_KEYS = {"ome", "multiscales", "omero", "labels", "version"}
 
 
 def copy_position_metadata(input_zarr: Path, output_zarr: Path) -> None:
-    """Copy per-position OME metadata and custom zattrs from input to output plate.
+    """Copy per-position custom zattrs and label references from input to output plate.
 
-    Transfers axis definitions, FOV-level coordinate transforms, label references,
-    and any custom (non-OME) zattrs. Preserves the output's dataset layout, omero
-    channel info, and version.
+    Transfers label references and any custom (non-OME) zattrs such as
+    ``extra_metadata``. Does **not** copy coordinate transforms or axis
+    definitions, since processing steps frequently change the data scale
+    and ``create_empty_plate`` already sets the correct output transforms
+    via its ``scale`` parameter.
 
     Parameters
     ----------
@@ -76,36 +78,16 @@ def copy_position_metadata(input_zarr: Path, output_zarr: Path) -> None:
                 dst_pos = dst_plate[name]
 
                 src_ome = dict(src_pos.maybe_wrapped_ome_attrs)
+                src_ome.setdefault("version", "0.5")
+                src_meta = ImagesMeta.model_validate(src_ome)
 
                 raw_attrs = dict(src_pos.zattrs)
                 custom_attrs = {k: v for k, v in raw_attrs.items() if k not in _OME_KEYS}
 
-                saved_datasets = dst_pos.metadata.multiscales[0].datasets
-                saved_omero = dst_pos.metadata.omero
-
-                src_ome.setdefault("version", "0.5")
-                src_meta = ImagesMeta.model_validate(src_ome)
-
-                dst_pos.metadata.multiscales[0].axes = src_meta.multiscales[0].axes
-                dst_pos.metadata.multiscales[
-                    0
-                ].coordinate_transformations = src_meta.multiscales[
-                    0
-                ].coordinate_transformations
-                for field in ("name", "type", "metadata"):
-                    val = getattr(src_meta.multiscales[0], field, None)
-                    if val is not None:
-                        setattr(dst_pos.metadata.multiscales[0], field, val)
-
                 src_labels = getattr(src_meta, "labels", None)
                 if src_labels is not None:
                     dst_pos.metadata.labels = src_labels
-
-                dst_pos.metadata.multiscales[0].datasets = saved_datasets
-                dst_pos.metadata.omero = saved_omero
-                dst_pos.metadata.version = "0.5"
-
-                dst_pos.dump_meta()
+                    dst_pos.dump_meta()
 
                 for k, v in custom_attrs.items():
                     dst_pos.zattrs[k] = v
