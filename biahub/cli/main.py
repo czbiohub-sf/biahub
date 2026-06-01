@@ -174,6 +174,11 @@ COMMANDS = [
         "import_path": "biahub.track.track_cli",
         "help": "Track objects in 2D/3D time-lapse microscopy",
     },
+    {
+        "name": "rename-channels",
+        "import_path": "biahub.rename_channels.rename_channels_cli",
+        "help": "Rename channels for a single position (metadata-only)",
+    },
 ]
 
 

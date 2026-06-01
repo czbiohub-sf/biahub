@@ -3,7 +3,12 @@ import os
 import numpy as np
 import pandas as pd
 import pytest
+import yaml
 
+from click.testing import CliRunner
+from iohub.ngff import open_ome_zarr
+
+from biahub.cli.main import cli
 from biahub.track import track
 
 
@@ -20,9 +25,6 @@ def example_tracking_plate(tmp_path):
         ("B", "2", "0"),
     )
 
-    # Create plate with nuclei and membrane prediction channels
-    from iohub.ngff import open_ome_zarr
-
     plate_dataset = open_ome_zarr(
         plate_path,
         layout="hcs",
@@ -32,14 +34,12 @@ def example_tracking_plate(tmp_path):
 
     for row, col, fov in position_list:
         position = plate_dataset.create_position(row, col, fov)
-        # Create realistic nuclei and membrane data
         # Shape: (T, C, Z, Y, X) = (5, 2, 3, 64, 64)
         data = np.random.uniform(0.1, 0.3, size=(5, 2, 3, 64, 64)).astype(np.float32)
 
         # Add some bright nuclei spots to channel 0
         for t in range(5):
             for z in range(3):
-                # Add 3-5 nuclei per frame
                 for _ in range(np.random.randint(3, 6)):
                     y, x = np.random.randint(10, 54, 2)
                     data[t, 0, z, y - 3 : y + 4, x - 3 : x + 4] = np.random.uniform(0.7, 1.0)
@@ -47,10 +47,8 @@ def example_tracking_plate(tmp_path):
         # Add some membrane boundaries to channel 1
         for t in range(5):
             for z in range(3):
-                # Add some membrane structures
                 for _ in range(np.random.randint(2, 4)):
                     y, x = np.random.randint(15, 49, 2)
-                    # Create circular membrane structures
                     yy, xx = np.ogrid[:64, :64]
                     mask = (yy - y) ** 2 + (xx - x) ** 2 <= 25
                     data[t, 1, z][mask] = np.random.uniform(0.6, 0.9)
@@ -67,14 +65,13 @@ def example_blank_frames_csv(tmp_path):
     """
     csv_path = tmp_path / "blank_frames.csv"
 
-    # Create sample blank frame data
     data = {
         "FOV": ["A_1_0", "B_1_0", "B_2_0"],
         "t": [
             "[0]",
             "[2]",
             "[]",
-        ],  # A_1_0 has blank frame 0, B_1_0 has blank frame 2, B_2_0 has no blank frames
+        ],
     }
 
     df = pd.DataFrame(data)
@@ -83,49 +80,116 @@ def example_blank_frames_csv(tmp_path):
     yield csv_path
 
 
+def _make_tracking_config(plate_path, tmp_path):
+    """Create a minimal tracking config pointing at the test plate."""
+    config_path = tmp_path / "track_config.yml"
+    config = {
+        "mode": "2D",
+        "fov": "*/*/*",
+        "z_range": [-1, -1],
+        "target_channel": "nuclei_prediction",
+        "input_images": [
+            {
+                "path": str(plate_path),
+                "channels": {
+                    "nuclei_prediction": [
+                        {
+                            "function": "np.mean",
+                            "kwargs": {"axis": 1},
+                            "per_timepoint": False,
+                        },
+                    ],
+                    "membrane_prediction": [
+                        {
+                            "function": "np.mean",
+                            "kwargs": {"axis": 1},
+                            "per_timepoint": False,
+                        },
+                    ],
+                },
+            },
+            {
+                "path": None,
+                "channels": {
+                    "foreground": [
+                        {
+                            "function": "ultrack.imgproc.detect_foreground",
+                            "input_channels": ["nuclei_prediction"],
+                            "kwargs": {"sigma": 90},
+                        },
+                    ],
+                    "contour": [
+                        {
+                            "function": "biahub.track.mem_nuc_contour",
+                            "input_channels": [
+                                "nuclei_prediction",
+                                "membrane_prediction",
+                            ],
+                            "kwargs": {},
+                        },
+                    ],
+                },
+            },
+        ],
+        "tracking_config": {
+            "segmentation_config": {
+                "min_area": 100,
+                "max_area": 80000,
+                "n_workers": 1,
+                "min_frontier": 0.4,
+                "max_noise": 0.05,
+            },
+            "linking_config": {
+                "n_workers": 1,
+                "max_distance": 15,
+                "distance_weight": -0.0001,
+                "max_neighbors": 3,
+            },
+            "tracking_config": {
+                "n_threads": 1,
+                "disappear_weight": -0.0001,
+                "appear_weight": -0.001,
+                "division_weight": -0.0001,
+            },
+        },
+    }
+    config_path.write_text(yaml.dump(config))
+    return config_path
+
+
 def test_track_cli_local(
     tmp_path, example_tracking_plate, example_track_settings, sbatch_file, monkeypatch
 ):
-    # Set environment variable globally for the entire test process
     monkeypatch.setenv("ULTRACK_ARRAY_MODULE", "numpy")
     os.environ["ULTRACK_ARRAY_MODULE"] = "numpy"
 
-    # Create a custom sbatch file that forces local execution
     custom_sbatch_file = tmp_path / "custom_sbatch.txt"
     with open(custom_sbatch_file, "w") as f:
         f.write("#SBATCH --cpus-per-task=1\n")
-        f.write("#SBATCH --array-parallelism=1\n")  # Force only 1 job at a time
+        f.write("#SBATCH --array-parallelism=1\n")
         f.write("#LOCAL --cpus-per-task=1\n")
         f.write("#LOCAL --timeout-min=5\n")
-        f.write("#LOCAL --array-parallelism=1\n")  # Force local to use only 1 process
+        f.write("#LOCAL --array-parallelism=1\n")
 
     plate_path, _ = example_tracking_plate
-    config_path, _ = example_track_settings
+    config_path = _make_tracking_config(plate_path, tmp_path)
     output_path = tmp_path / "tracking_output.zarr"
 
-    # Create a modified config for testing
-    test_config_path = tmp_path / "test_track_config.yml"
-    with open(config_path) as f:
-        config_content = f.read()
-    config_content = config_content.replace("/path/to/virtual_staining.zarr", str(plate_path))
-    with open(test_config_path, "w") as f:
-        f.write(config_content)
-
-    # Call the track function directly instead of using CLI
     track(
+        input_position_dirpaths=[
+            str(plate_path / "A" / "1" / "0"),
+            str(plate_path / "B" / "1" / "0"),
+            str(plate_path / "B" / "2" / "0"),
+        ],
         output_dirpath=str(output_path),
-        config_filepath=str(test_config_path),
+        config_filepath=str(config_path),
         sbatch_filepath=str(custom_sbatch_file),
-        local=True,
+        cluster="local",
     )
 
-    # Test that the output directory is created
     assert output_path.exists()
-
-    # Test that the basic structure is created (we don't expect the full pipeline to work in tests)
     for position in ["A/1/0", "B/1/0", "B/2/0"]:
         position_path = output_path / position
-        # The position directories should exist even if tracking fails
         assert position_path.exists()
 
 
@@ -138,73 +202,61 @@ def test_track_cli_with_blank_frames(
     monkeypatch,
 ):
     monkeypatch.setenv("ULTRACK_ARRAY_MODULE", "numpy")
-    """
-    Test the track function with blank frames CSV
-    """
+
     plate_path, _ = example_tracking_plate
-    config_path, _ = example_track_settings
+    config_path = _make_tracking_config(plate_path, tmp_path)
     output_path = tmp_path / "tracking_output_blank_frames.zarr"
 
-    # Create a modified config for testing with blank frames
-    test_config_path = tmp_path / "test_track_config_blank_frames.yml"
+    # Add blank_frames_path to config
     with open(config_path) as f:
-        config_content = f.read()
+        config = yaml.safe_load(f)
+    config["blank_frames_path"] = str(example_blank_frames_csv)
+    with open(config_path, "w") as f:
+        yaml.dump(config, f)
 
-    # Update the path in the config to point to our test data
-    config_content = config_content.replace("/path/to/virtual_staining.zarr", str(plate_path))
-    # Update blank frames path
-    config_content = config_content.replace("blank_frames.csv", str(example_blank_frames_csv))
-
-    with open(test_config_path, "w") as f:
-        f.write(config_content)
-
-    # Call the track function directly
     track(
+        input_position_dirpaths=[
+            str(plate_path / "A" / "1" / "0"),
+            str(plate_path / "B" / "1" / "0"),
+            str(plate_path / "B" / "2" / "0"),
+        ],
         output_dirpath=str(output_path),
-        config_filepath=str(test_config_path),
+        config_filepath=str(config_path),
         sbatch_filepath=str(sbatch_file),
-        local=True,
+        cluster="local",
     )
 
-    # Check that the command executed successfully
     assert output_path.exists()
 
 
 def test_track_cli_invalid_config(tmp_path, monkeypatch):
     monkeypatch.setenv("ULTRACK_ARRAY_MODULE", "numpy")
-    """
-    Test that the track function fails with invalid config
-    """
+
     output_path = tmp_path / "output.zarr"
     invalid_config_path = tmp_path / "invalid_config.yml"
 
-    # Create an invalid config file
     with open(invalid_config_path, "w") as f:
         f.write("invalid: yaml: content")
 
-    # Test that the track function raises an exception with invalid config
     with pytest.raises(Exception):  # noqa: B017
         track(
+            input_position_dirpaths=[str(tmp_path / "nonexistent" / "A" / "1" / "0")],
             output_dirpath=str(output_path),
             config_filepath=str(invalid_config_path),
-            local=True,
+            cluster="local",
         )
 
 
 def test_track_cli_missing_input_path(tmp_path, example_track_settings, monkeypatch):
     monkeypatch.setenv("ULTRACK_ARRAY_MODULE", "numpy")
-    """
-    Test that the track function fails when input path doesn't exist
-    """
+
     config_path, _ = example_track_settings
     output_path = tmp_path / "output.zarr"
 
-    # Create a config with non-existent input path
     test_config_path = tmp_path / "test_track_config_missing.yml"
     with open(config_path) as f:
         config_content = f.read()
 
-    # Update the path to a non-existent location
     config_content = config_content.replace(
         "/path/to/virtual_staining.zarr", "/non/existent/path"
     )
@@ -212,10 +264,87 @@ def test_track_cli_missing_input_path(tmp_path, example_track_settings, monkeypa
     with open(test_config_path, "w") as f:
         f.write(config_content)
 
-    # Test that the track function raises an exception with missing input path
     with pytest.raises((FileNotFoundError, ValueError)):
         track(
+            input_position_dirpaths=[str(tmp_path / "nonexistent" / "A" / "1" / "0")],
             output_dirpath=str(output_path),
             config_filepath=str(test_config_path),
-            local=True,
+            cluster="local",
         )
+
+
+def test_track_cli_init_only(tmp_path, example_tracking_plate):
+    """Test that --init creates the output store and emits RESOURCES."""
+    plate_path, _ = example_tracking_plate
+    output_path = tmp_path / "track_output.zarr"
+    config_path = _make_tracking_config(plate_path, tmp_path)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "track",
+            "-i",
+            str(plate_path / "A" / "1" / "0"),
+            str(plate_path / "B" / "1" / "0"),
+            str(plate_path / "B" / "2" / "0"),
+            "-o",
+            str(output_path),
+            "-c",
+            str(config_path),
+            "--init",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert output_path.exists()
+    assert "RESOURCES:" in result.output
+
+    with open_ome_zarr(str(output_path / "A" / "1" / "0"), mode="r") as ds:
+        assert ds.data.dtype == np.uint32
+        assert ds.channel_names == ["nuclei_prediction_labels"]
+
+
+def test_track_cli_debug_single_position(tmp_path, example_tracking_plate, monkeypatch):
+    """Test that --cluster debug creates the plate, loads data, and starts tracking.
+
+    The CBC solver (used when Gurobi is unavailable) has a known read-only buffer
+    bug that may cause the solver step to fail on small test data.  This test
+    verifies the code path through init + data loading + preprocessing; a full
+    end-to-end run is validated on real data in Tier 2 integration tests.
+    """
+    monkeypatch.setenv("ULTRACK_ARRAY_MODULE", "numpy")
+
+    plate_path, _ = example_tracking_plate
+    output_path = tmp_path / "track_output.zarr"
+    config_path = _make_tracking_config(plate_path, tmp_path)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "track",
+            "-i",
+            str(plate_path / "A" / "1" / "0"),
+            "-o",
+            str(output_path),
+            "-c",
+            str(config_path),
+            "--cluster",
+            "debug",
+        ],
+    )
+
+    # Output plate is always created before tracking starts
+    assert output_path.exists()
+    assert "RESOURCES:" in result.output
+
+    with open_ome_zarr(str(output_path / "A" / "1" / "0"), mode="r") as ds:
+        assert ds.data.dtype == np.uint32
+        assert ds.channel_names == ["nuclei_prediction_labels"]
+
+    if result.exit_code == 0:
+        assert "Tracking complete:" in result.output
+    else:
+        # CBC solver read-only buffer bug — expected without Gurobi
+        assert "buffer source array is read-only" in result.output
