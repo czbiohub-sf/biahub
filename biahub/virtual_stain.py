@@ -1,3 +1,4 @@
+import logging
 import os
 import shutil
 import subprocess
@@ -7,13 +8,16 @@ from pathlib import Path
 import click
 import numpy as np
 import submitit
+import yaml
 
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate
 
 from biahub.cli.monitor import monitor_jobs
+from biahub.cli.option_eat_all import OptionEatAll
 from biahub.cli.parsing import (
-    input_position_dirpaths,
+    config_filepath,
+    init_only,
     local,
     monitor,
     num_processes,
@@ -22,7 +26,24 @@ from biahub.cli.parsing import (
     sbatch_filepath_preprocess,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import get_submitit_cluster
+from biahub.cli.utils import (
+    copy_position_metadata,
+    estimate_resources,
+    get_submitit_cluster,
+    read_plate_metadata,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def _optional_validate_paths(
+    ctx: click.Context, opt: click.Option, value: tuple | None
+) -> list[Path] | None:
+    if value is None or len(value) == 0:
+        return None
+    from natsort import natsorted
+
+    return [p for p in map(Path, natsorted(value)) if p.is_dir()]
 
 
 def run_viscy_preprocess(
@@ -32,22 +53,6 @@ def run_viscy_preprocess(
     path_viscy_env: Path = None,
     verbose: bool = False,
 ):
-    """
-    Run VisCy preprocess on a single FOV.
-
-    Parameters
-    ----------
-    data_path : str
-        Path to the FOV data.
-    num_workers : int
-        Number of workers to use.
-    config_file : str
-        Path to the VisCy config file.
-    path_viscy_env : Path
-        Path to the VisCy environment.
-    verbose : bool
-        Whether to print verbose output.
-    """
     cmd = (
         "module load anaconda && "
         f"conda activate {path_viscy_env} && "
@@ -73,27 +78,7 @@ def run_viscy_predict(
     path_viscy_env: Path = None,
     verbose: bool = False,
 ):
-    """
-    Run VisCy predict on a single FOV.
-
-    Parameters
-    ----------
-    data_path : str
-        Path to the FOV data.
-    config_file : str
-        Path to the VisCy config file.
-    output_store : str
-        Path to the output store.
-    log_dir : str
-        Path to the log directory.
-    path_viscy_env : Path
-        Path to the VisCy environment.
-    verbose : bool
-        Whether to print verbose output.
-
-    """
     os.chdir(log_dir)
-    # Compose the shell command
     cmd = (
         "module load anaconda && "
         f"conda activate {path_viscy_env} && "
@@ -116,20 +101,6 @@ def combine_fov_zarrs_to_plate(
     output_dirpath: Path,
     cleanup: bool = True,
 ):
-    """
-    Combine VisCy-predicted FOV Zarrs (in temp) into a single HCS plate Zarr by moving.
-
-    Parameters
-    ----------
-    fovs : list of Path
-        Original FOV paths (used to extract B/1/000000).
-    temp_dir : Path
-        Directory containing the individual .zarr folders (each named like B_1_000000.zarr).
-    output_dirpath : Path
-        The plate-level HCS Zarr to merge into.
-    cleanup : bool
-        Whether to delete the moved files afterwards. Default True.
-    """
     for fov in fovs:
         row, col, pos = fov.parts[-3:]
         nested_fov_path = temp_dir / f"{row}_{col}_{pos}.zarr" / row / col / pos
@@ -146,7 +117,6 @@ def combine_fov_zarrs_to_plate(
         print(f"Moving {nested_fov_path} → {dest_path}")
         shutil.move(str(nested_fov_path), str(dest_path))
 
-    # Optionally remove the full temp zarr folder if it's now empty
     if cleanup:
         try:
             shutil.rmtree(temp_dir)
@@ -154,6 +124,73 @@ def combine_fov_zarrs_to_plate(
             print(f"Could not remove {temp_dir}: {e}")
 
     print(f"Combined all FOVs into {output_dirpath}")
+
+
+def _init_output_plate(
+    input_zarr: Path,
+    output_zarr: Path,
+    config_filepath: Path,
+) -> tuple[int, int, int, int, int]:
+    """Create the empty virtual-stain output plate.
+
+    Reads target channels from the predict config, creates the output store
+    with ``<channel>_prediction`` channel names, and copies per-position
+    metadata from the input plate.
+
+    Returns the (T, C_pred, Z, Y, X) output shape.
+    """
+    with open(config_filepath) as f:
+        cfg = yaml.safe_load(f)
+
+    target_channels = cfg["data"]["init_args"]["target_channel"]
+    prediction_channels = [f"{ch}_prediction" for ch in target_channels]
+
+    position_keys, _, shape, scale = read_plate_metadata(input_zarr)
+    T, _, Z, Y, X = shape
+
+    output_shape = (T, len(prediction_channels), Z, Y, X)
+
+    create_empty_plate(
+        store_path=output_zarr,
+        position_keys=position_keys,
+        channel_names=prediction_channels,
+        shape=output_shape,
+        scale=scale,
+        version="0.5",
+        dtype=np.float32,
+    )
+    copy_position_metadata(input_zarr, output_zarr)
+    click.echo(
+        f"Created {output_zarr} ({len(position_keys)} positions, "
+        f"channels={prediction_channels})"
+    )
+    return output_shape
+
+
+def _copy_position(
+    temp_zarr: Path,
+    output_zarr: Path,
+    position: str,
+) -> None:
+    """Copy viscy prediction from a temp FOV zarr into the output plate position.
+
+    The temp zarr is a per-position HCS plate produced by VisCy's
+    HCSPredictionWriter.  This reads the data and attributes from the nested
+    position, writes them into the output plate, then removes the temp zarr.
+    """
+    temp_position = temp_zarr / position
+    output_position = output_zarr / position
+
+    with open_ome_zarr(str(temp_position), mode="r") as src:
+        src_data = np.asarray(src[0][:])
+        src_attrs = dict(src.zattrs)
+
+    with open_ome_zarr(str(output_position), mode="r+") as dst:
+        dst[0][:] = src_data
+        dst.zattrs.update(src_attrs)
+
+    shutil.rmtree(temp_zarr)
+    click.echo(f"Virtual stain copied: {position}")
 
 
 def virtual_stain(
@@ -170,34 +207,6 @@ def virtual_stain(
     monitor: bool = True,
     verbose: bool = True,
 ):
-    """
-    Run VisCy virtual stain on a plate.
-
-    Parameters
-    ----------
-    input_position_dirpaths : List[str]
-        List of paths to the input position directories.
-    output_dirpath : str
-        Path to the output directory.
-    predict_config_filepath : str
-        Path to the VisCy predict config file.
-    preprocess_config_filepath : str
-        Path to the VisCy preprocess config file.
-    path_viscy_env : str
-        Path to the VisCy environment.
-    sbatch_filepath_preprocess : str
-        Path to the VisCy preprocess sbatch file.
-    sbatch_filepath_predict : str
-        Path to the VisCy predict sbatch file.
-    run_mode : str
-        Which VisCy stage(s) to run.
-    num_processes : int
-        Number of processes to use.
-    local : bool
-        Whether to run locally.
-    monitor : bool
-
-    """
     output_dirpath = Path(output_dirpath)
     slurm_out_path = output_dirpath.parent / "slurm_output"
 
@@ -236,9 +245,7 @@ def virtual_stain(
             )
             job_ids_preprocess.append(job)
 
-        job_ids = [
-            job.job_id for job in job_ids_preprocess
-        ]  # Access job IDs after batch submission
+        job_ids = [job.job_id for job in job_ids_preprocess]
 
         log_path = Path(slurm_out_path / "preprocess" / "submitit_jobs_ids.log")
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -299,9 +306,7 @@ def virtual_stain(
                 )
                 job_ids_predict.append(job)
 
-        job_ids = [
-            job.job_id for job in job_ids_predict
-        ]  # Access job IDs after batch submission
+        job_ids = [job.job_id for job in job_ids_predict]
 
         log_path = Path(slurm_out_path / "predict" / "submitit_jobs_ids.log")
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -353,9 +358,7 @@ def virtual_stain(
             )
             job_ids_combine.append(job)
 
-        job_ids = [
-            job.job_id for job in job_ids_combine
-        ]  # Access job IDs after batch submission
+        job_ids = [job.job_id for job in job_ids_combine]
 
         log_path = Path(slurm_out_path / "combine" / "submitit_jobs_ids.log")
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -370,8 +373,39 @@ def virtual_stain(
 
 
 @click.command("virtual-stain")
-@input_position_dirpaths()
+@click.option(
+    "--input-position-dirpaths",
+    "-i",
+    required=False,
+    cls=OptionEatAll,
+    type=tuple,
+    callback=_optional_validate_paths,
+    help="Paths to input positions (required for --init and full runs).",
+)
 @output_dirpath()
+@config_filepath()
+@init_only()
+@click.option(
+    "--copy",
+    "copy_mode",
+    is_flag=True,
+    default=False,
+    help="Copy viscy prediction from temp zarr into output plate position.",
+)
+@click.option(
+    "--temp-zarr",
+    "-t",
+    default=None,
+    type=click.Path(),
+    help="Path to temp FOV zarr (required for --copy).",
+)
+@click.option(
+    "--position",
+    "-p",
+    default=None,
+    type=str,
+    help="Position key like B/3/000000 (required for --copy).",
+)
 @sbatch_filepath_preprocess()
 @sbatch_filepath_predict()
 @num_processes()
@@ -380,7 +414,7 @@ def virtual_stain(
 @click.option("--verbose", is_flag=True, default=False, help="Verbose output.")
 @click.option(
     "--path-viscy-env",
-    required=True,
+    default=None,
     help="Conda environment with VisCy installed.",
 )
 @click.option(
@@ -389,21 +423,20 @@ def virtual_stain(
     help="Path to the VisCy preprocess config file.",
 )
 @click.option(
-    "--predict-config-filepath",
-    type=str,
-    help="Path to the VisCy predict config file.",
-)
-@click.option(
     "--run-mode",
     type=click.Choice(["all", "preprocess", "predict"]),
     default="all",
     help="Which VisCy stage(s) to run.",
 )
 def virtual_stain_cli(
-    input_position_dirpaths: list[str],
-    output_dirpath: str,
-    predict_config_filepath: str,
-    path_viscy_env: str,
+    input_position_dirpaths: list[Path] | None,
+    output_dirpath: Path,
+    config_filepath: Path,
+    init_only: bool = False,
+    copy_mode: bool = False,
+    temp_zarr: str | None = None,
+    position: str | None = None,
+    path_viscy_env: str | None = None,
     preprocess_config_filepath: str = None,
     run_mode: str = "all",
     num_processes: int = 32,
@@ -413,20 +446,51 @@ def virtual_stain_cli(
     monitor: bool = True,
     verbose: bool = True,
 ):
-    """Run VisCy virtual staining on a zarr plate from dedicated python environment.
+    r"""Run VisCy virtual staining on a zarr plate.
 
-    >>> biahub virtual-stain \
-        --input-position-dirpaths path.zarr/*/*/* \
-        --output-dirpath output.zarr \
-        --predict-config-filepath predict.yml \
-        --preprocess-config-filepath preprocess.yml \
-        --path-viscy-env /path/to/viscy/env \
-        --run-mode all
+    \b
+    Initialize the output plate only (Nextflow init step):
+    >>> biahub virtual-stain --init -i ./input.zarr/*/*/* -c ./predict.yml -o ./output.zarr
+
+    \b
+    Copy a single position from temp zarr (Nextflow per-position copy step):
+    >>> biahub virtual-stain --copy -t ./temp/B_3_000000.zarr -o ./output.zarr -p B/3/000000 -c ./predict.yml
+
+    \b
+    Full SLURM run (preprocess + predict + combine):
+    >>> biahub virtual-stain -i ./input.zarr/*/*/* -o ./output.zarr \
+        -c ./predict.yml --path-viscy-env /path/to/viscy/env --run-mode all
     """
+    if copy_mode:
+        if temp_zarr is None:
+            raise click.UsageError("--temp-zarr / -t is required when using --copy.")
+        if position is None:
+            raise click.UsageError("--position / -p is required when using --copy.")
+        _copy_position(Path(temp_zarr), output_dirpath, position)
+        return
+
+    if not input_position_dirpaths:
+        raise click.UsageError(
+            "--input-position-dirpaths / -i is required for --init and full runs."
+        )
+
+    if init_only:
+        input_plate = Path(input_position_dirpaths[0]).parents[2]
+        output_shape = _init_output_plate(input_plate, output_dirpath, config_filepath)
+
+        num_cpus, mem_per_cpu = estimate_resources(
+            shape=output_shape, ram_multiplier=16, max_num_cpus=16
+        )
+        click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
+        return
+
+    if path_viscy_env is None:
+        raise click.UsageError("--path-viscy-env is required for full virtual stain runs.")
+
     virtual_stain(
         input_position_dirpaths=input_position_dirpaths,
-        output_dirpath=output_dirpath,
-        predict_config_filepath=predict_config_filepath,
+        output_dirpath=str(output_dirpath),
+        predict_config_filepath=str(config_filepath),
         preprocess_config_filepath=preprocess_config_filepath,
         sbatch_filepath_preprocess=sbatch_filepath_preprocess,
         sbatch_filepath_predict=sbatch_filepath_predict,
