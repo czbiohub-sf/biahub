@@ -20,6 +20,7 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.cli.utils import (
+    copy_position_metadata,
     estimate_resources,
     get_submitit_cluster,
     resolve_ome_zarr_version,
@@ -118,6 +119,9 @@ def _init_output_plate(
         ),
         dtype=np.float32,
     )
+
+    input_plate = Path(input_position_dirpaths[0]).parents[2]
+    copy_position_metadata(input_plate, output_dirpath)
 
     return (T, C, Z, Y, X), all_channel_names
 
