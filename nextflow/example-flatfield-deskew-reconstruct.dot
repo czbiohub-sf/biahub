@@ -1,0 +1,71 @@
+digraph pipeline {
+    rankdir=TB
+    fontname="Helvetica"
+    node [fontname="Helvetica" fontsize=11 style=filled]
+    edge [fontname="Helvetica" fontsize=10]
+
+    // ── Shapes ──
+    // ellipse (green)  = init / single-run processes
+    // box (blue)       = fan-out per-position processes
+    // diamond (gold)   = collect barrier
+    // box (pink)       = GPU processes
+    // box (purple)     = optional processes
+
+    // ── input ──
+    input_zarr     [shape=cylinder fillcolor="#E8E8E8" label="input.zarr"]
+    list_positions [shape=ellipse fillcolor="#B5D6A7" label="list_positions"]
+
+    input_zarr -> list_positions
+
+    // ── 0 · flat-field ──
+    init_flat_field   [shape=ellipse fillcolor="#B5D6A7"
+                       label="init_flat_field\n(create plate +\nestimate resources)"]
+    run_flat_field    [shape=box fillcolor="#A4C2F4"
+                       label="run_flat_field\n[per position]"]
+    collect_ff        [shape=diamond fillcolor="#FFE599" label="collect\n(barrier)"]
+
+    // ── 1 · deskew ──
+    init_deskew       [shape=ellipse fillcolor="#B5D6A7" label="init_deskew"]
+    run_deskew        [shape=box fillcolor="#A4C2F4"
+                       label="run_deskew\n[per position]"]
+    collect_dk        [shape=diamond fillcolor="#FFE599" label="collect\n(barrier)"]
+
+    // ── 2 · reconstruct ──
+    init_reconstruct  [shape=ellipse fillcolor="#B5D6A7"
+                       label="init_reconstruct\n(create plate +\nestimate resources)"]
+    compute_tf        [shape=ellipse fillcolor="#B5D6A7"
+                       label="compute_transfer\n_function\n[dynamic memory]"]
+    run_apply_inv_tf  [shape=box fillcolor="#F4CCCC"
+                       label="run_apply_inv_tf\n[per position]"]
+    collect_rc        [shape=diamond fillcolor="#FFE599" label="collect\n(barrier)"]
+
+    // ── 3 · virtual stain (optional) ──
+    init_vs           [shape=ellipse fillcolor="#B5D6A7" label="init_virtual_stain"]
+    preprocess_vs     [shape=ellipse fillcolor="#B5D6A7" label="run_virtual_stain\n_preprocess"]
+    run_vs            [shape=box fillcolor="#D9D2E9"
+                       label="run_virtual_stain\n[per position]"]
+
+    // ── Edges ──
+    list_positions -> init_flat_field  [label="positions"]
+    list_positions -> run_flat_field   [style=dashed label="positions"]
+    init_flat_field -> run_flat_field  [label="ready"]
+    run_flat_field -> collect_ff
+
+    collect_ff -> init_deskew          [label="trigger"]
+    list_positions -> run_deskew       [style=dashed label="positions"]
+    init_deskew -> run_deskew          [label="ready"]
+    run_deskew -> collect_dk
+
+    collect_dk -> init_reconstruct     [label="trigger"]
+    init_reconstruct -> compute_tf     [label="TF_RESOURCES"]
+    init_reconstruct -> run_apply_inv_tf [label="RESOURCES" style=dashed]
+    compute_tf -> run_apply_inv_tf     [label="TF ready"]
+    list_positions -> run_apply_inv_tf [style=dashed label="positions"]
+    run_apply_inv_tf -> collect_rc
+
+    collect_rc -> init_vs              [label="trigger"]
+    collect_rc -> preprocess_vs        [label="trigger"]
+    list_positions -> run_vs           [style=dashed label="positions"]
+    init_vs -> run_vs                  [label="ready"]
+    preprocess_vs -> run_vs            [label="ready"]
+}

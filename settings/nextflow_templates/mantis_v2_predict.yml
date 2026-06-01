@@ -1,0 +1,72 @@
+trainer:
+  precision: 32-true
+  inference_mode: true
+  accelerator: gpu
+  strategy: auto
+  devices: 1
+  num_nodes: 1
+  # TQDMProgressBar instead of Lightning's default RichProgressBar:
+  # rich's progress bar is interactive-TTY only and produces NO output
+  # in SLURM batch logs. tqdm prints one line per refresh — visible.
+  callbacks:
+    - class_path: lightning.pytorch.callbacks.TQDMProgressBar
+      init_args:
+        refresh_rate: 1   # write a line every batch
+  # predict.sh appends HCSPredictionWriter via `--trainer.callbacks+=`;
+  # the TQDMProgressBar above is preserved alongside it.
+
+return_predictions: false
+
+# Model config matches training (finetune_a549_infected_4gpu_batched.yml).
+model:
+  class_path: cytoland.engine.VSUNet
+  init_args:
+    architecture: fcmae
+    model_config:
+      in_channels: 1
+      out_channels: 2
+      encoder_blocks: [3, 3, 9, 3]
+      encoder_drop_path_rate: 0.1
+      dims: [96, 192, 384, 768]
+      decoder_conv_blocks: 2
+      stem_kernel_size: [5, 4, 4]
+      in_stack_depth: 15
+      pretraining: false
+    test_time_augmentations: true
+    tta_type: 'median'
+
+
+# Single-Position predict (data_path injected via CLI per array task).
+# Normalization mirrors training: Phase3D mean/std at timepoint_statistics.
+data:
+  class_path: viscy_data.hcs.HCSDataModule
+  init_args:
+    source_channel: Phase3D_recon
+    target_channel:
+      - "nuclei"
+      - "membrane"
+
+    # z_window_size MUST match model.in_stack_depth (15). Training used
+    # z_window_size=20 with a (15, 384, 384) GPU center-crop in the
+    # augmentation chain — predict has no such crop, so we set the
+    # window to 15 directly. With 20 the model stalled (silent failure
+    # in inference path on the wrong Z dim).
+    z_window_size: 15
+    # bs=16 on full-FOV (2048, 2048) at predict time: ~5 GB
+    # activations/sample × 16 = 80 GB peak. Fits H100 80 GB tightly,
+    # comfortable on H200 144 GB. Drop to 8 if A6000 (48 GB).
+    batch_size: 1
+
+
+    num_workers: 0
+    # yx_patch_size: [2048, 2048]
+
+    normalizations:
+      - class_path: viscy_transforms.NormalizeSampled
+        init_args:
+          keys: [Phase3D_recon]
+          level: timepoint_statistics
+          subtrahend: median
+          divisor: iqr
+
+ckpt_path: "/hpc/projects/organelle_phenotyping/models/VSCyto3D-A549-infection-finetune/4gpu_bf16_bs16_to_ep7/checkpoints/epoch=7-step=832.ckpt"

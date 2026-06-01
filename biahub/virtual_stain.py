@@ -22,7 +22,6 @@ from biahub.cli.parsing import (
     sbatch_filepath_preprocess,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import get_submitit_cluster
 
 
 def run_viscy_preprocess(
@@ -201,7 +200,10 @@ def virtual_stain(
     output_dirpath = Path(output_dirpath)
     slurm_out_path = output_dirpath.parent / "slurm_output"
 
-    cluster = get_submitit_cluster(local)
+    if local:
+        cluster = "local"
+    else:
+        cluster = "slurm"
 
     job_ids_preprocess = []
     slurm_dependency = None
@@ -241,7 +243,6 @@ def virtual_stain(
         ]  # Access job IDs after batch submission
 
         log_path = Path(slurm_out_path / "preprocess" / "submitit_jobs_ids.log")
-        log_path.parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("w") as log_file:
             log_file.write("\n".join(job_ids))
 
@@ -304,7 +305,6 @@ def virtual_stain(
         ]  # Access job IDs after batch submission
 
         log_path = Path(slurm_out_path / "predict" / "submitit_jobs_ids.log")
-        log_path.parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("w") as log_file:
             log_file.write("\n".join(job_ids))
 
@@ -358,7 +358,6 @@ def virtual_stain(
         ]  # Access job IDs after batch submission
 
         log_path = Path(slurm_out_path / "combine" / "submitit_jobs_ids.log")
-        log_path.parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("w") as log_file:
             log_file.write("\n".join(job_ids))
 
@@ -415,13 +414,14 @@ def virtual_stain_cli(
 ):
     """Run VisCy virtual staining on a zarr plate from dedicated python environment.
 
-    >>> biahub virtual-stain \
+    Example:
+    biahub virtual-stain \
         --input-position-dirpaths path.zarr/*/*/* \
         --output-dirpath output.zarr \
         --predict-config-filepath predict.yml \
         --preprocess-config-filepath preprocess.yml \
         --path-viscy-env /path/to/viscy/env \
-        --run-mode all
+        --run-mode all \
     """
     virtual_stain(
         input_position_dirpaths=input_position_dirpaths,

@@ -1,0 +1,12 @@
+# concat_data_paths are overridden by --concat-data-paths at runtime.
+# Provide placeholder entries to match the number of channel_names groups.
+concat_data_paths:
+  - placeholder
+  - placeholder
+  - placeholder
+time_indices: all
+channel_names:
+  - all
+  - all
+  - all
+chunks_czyx: null
