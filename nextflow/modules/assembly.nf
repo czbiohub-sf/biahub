@@ -81,6 +81,7 @@ process resolve_concatenate_config {
     // Resolve placeholder concat_data_paths to actual glob patterns.
     def resolved = "${params.output_dir}/5-assemble/concatenate_resolved.yml"
     """
+    mkdir -p "${params.output_dir}/5-assemble"
     ${biahub_cmd()} concatenate --resolve-config \
         -c "${params.concatenate_config}" \
         -o "${resolved}" \
