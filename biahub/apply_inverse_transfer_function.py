@@ -1,3 +1,4 @@
+import logging
 import math
 
 from pathlib import Path
@@ -33,6 +34,8 @@ from biahub.cli.utils import (
     yaml_to_model,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def _resolve_config(
     config_filepath: Path,
@@ -54,20 +57,38 @@ def _resolve_config(
         yx_pixel_size = float(ds.scale[-1])
         z_pixel_size = float(ds.scale[-3])
 
+    resolved_any = False
     for section in ("phase", "birefringence", "fluorescence"):
         tf = (cfg.get(section) or {}).get("transfer_function")
         if tf is not None:
             if "yx_pixel_size" not in tf or tf["yx_pixel_size"] is None:
                 tf["yx_pixel_size"] = yx_pixel_size
+                resolved_any = True
+                logger.warning(
+                    "%s.transfer_function.yx_pixel_size not set in config; "
+                    "resolved %.4f from input zarr metadata",
+                    section,
+                    yx_pixel_size,
+                )
             if "z_pixel_size" not in tf or tf["z_pixel_size"] is None:
                 tf["z_pixel_size"] = z_pixel_size
+                resolved_any = True
+                logger.warning(
+                    "%s.transfer_function.z_pixel_size not set in config; "
+                    "resolved %.4f from input zarr metadata",
+                    section,
+                    z_pixel_size,
+                )
+
+    if not resolved_any:
+        click.echo("Pixel sizes already present in config; no resolution needed")
 
     resolved_config = output_dirpath.parent / "reconstruct_resolved.yml"
     resolved_config.parent.mkdir(parents=True, exist_ok=True)
     with open(resolved_config, "w") as f:
         yaml.safe_dump(cfg, f, default_flow_style=False, sort_keys=False)
 
-    click.echo(f"Pixel sizes (yx={yx_pixel_size}, z={z_pixel_size}) -> {resolved_config}")
+    click.echo(f"Resolved config written to {resolved_config}")
     return resolved_config
 
 
