@@ -306,13 +306,7 @@ def test_track_cli_init_only(tmp_path, example_tracking_plate):
 
 
 def test_track_cli_debug_single_position(tmp_path, example_tracking_plate, monkeypatch):
-    """Test that --cluster debug creates the plate, loads data, and starts tracking.
-
-    The CBC solver (used when Gurobi is unavailable) has a known read-only buffer
-    bug that may cause the solver step to fail on small test data.  This test
-    verifies the code path through init + data loading + preprocessing; a full
-    end-to-end run is validated on real data in Tier 2 integration tests.
-    """
+    """Test that --cluster debug processes a single position in-process."""
     monkeypatch.setenv("ULTRACK_ARRAY_MODULE", "numpy")
 
     plate_path, _ = example_tracking_plate
@@ -335,16 +329,11 @@ def test_track_cli_debug_single_position(tmp_path, example_tracking_plate, monke
         ],
     )
 
-    # Output plate is always created before tracking starts
+    assert result.exit_code == 0, result.output
     assert output_path.exists()
-    assert "RESOURCES:" in result.output
+    assert "Tracking complete:" in result.output
 
     with open_ome_zarr(str(output_path / "A" / "1" / "0"), mode="r") as ds:
-        assert ds.data.dtype == np.uint32
-        assert ds.channel_names == ["nuclei_prediction_labels"]
-
-    if result.exit_code == 0:
-        assert "Tracking complete:" in result.output
-    else:
-        # CBC solver read-only buffer bug — expected without Gurobi
-        assert "buffer source array is read-only" in result.output
+        data = ds["0"][:]
+        assert data.dtype == np.uint32
+        assert data.shape[0] > 0
