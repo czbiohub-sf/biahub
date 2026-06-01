@@ -150,12 +150,8 @@ def estimate_crop_one_position(
 
 def _init_estimate_crop(lf_data_path: str, ls_data_path: str):
     """Emit RESOURCES and paired position lines for per-FOV estimate-crop fan-out."""
-    lf_positions = natsorted(
-        [Path(p) for p in globmod.glob(lf_data_path) if Path(p).is_dir()]
-    )
-    ls_positions = natsorted(
-        [Path(p) for p in globmod.glob(ls_data_path) if Path(p).is_dir()]
-    )
+    lf_positions = natsorted([Path(p) for p in globmod.glob(lf_data_path) if Path(p).is_dir()])
+    ls_positions = natsorted([Path(p) for p in globmod.glob(ls_data_path) if Path(p).is_dir()])
     if not lf_positions:
         raise click.ClickException(f"No positions found matching '{lf_data_path}'")
     if not ls_positions:

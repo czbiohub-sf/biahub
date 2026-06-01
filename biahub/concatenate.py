@@ -300,7 +300,9 @@ def _init_concatenate(settings: ConcatenateSettings, output_dirpath: Path):
         dtype = np.float32
 
     if not all(vs == all_voxel_sizes[0] for vs in all_voxel_sizes):
-        click.echo("Warning: Datasets have different voxel sizes. Taking the first voxel size.")
+        click.echo(
+            "Warning: Datasets have different voxel sizes. Taking the first voxel size."
+        )
 
     cropped_shape_zyx = calculate_cropped_size(all_slicing_params[0])
     output_voxel_size = all_voxel_sizes[0]
@@ -321,9 +323,7 @@ def _init_concatenate(settings: ConcatenateSettings, output_dirpath: Path):
         chunks=chunk_size,
         shards_ratio=settings.shards_ratio,
         scale=output_scale,
-        version=resolve_ome_zarr_version(
-            all_data_paths[0], settings.output_ome_zarr_version
-        ),
+        version=resolve_ome_zarr_version(all_data_paths[0], settings.output_ome_zarr_version),
         dtype=dtype,
     )
 

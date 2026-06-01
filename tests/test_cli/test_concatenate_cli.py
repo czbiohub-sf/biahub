@@ -70,7 +70,9 @@ class TestEstimateCropCli:
         assert result.exit_code == 0, result.output
         assert "RESOURCES:" in result.output
         assert "POSITION:" in result.output
-        position_lines = [line for line in result.output.splitlines() if line.startswith("POSITION:")]
+        position_lines = [
+            line for line in result.output.splitlines() if line.startswith("POSITION:")
+        ]
         assert len(position_lines) == 2
 
     def test_single_fov_mode(self, tmp_path):
@@ -98,7 +100,9 @@ class TestEstimateCropCli:
 
         assert result.exit_code == 0, result.output
         assert "RANGES:" in result.output
-        ranges_line = [line for line in result.output.splitlines() if line.startswith("RANGES:")]
+        ranges_line = [
+            line for line in result.output.splitlines() if line.startswith("RANGES:")
+        ]
         assert len(ranges_line) == 1
         parts = ranges_line[0].replace("RANGES:", "").strip().split()
         assert len(parts) == 3
