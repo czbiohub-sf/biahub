@@ -766,7 +766,7 @@ def deskew_cli(
     monitor: bool = False,
     init_only: bool = False,
 ):
-    r"""Deskew oblique plane light-sheet dataset. Deskew parameters can be estimated with estimate-deskew.
+    """Deskew oblique plane light-sheet dataset. Deskew parameters can be estimated with estimate-deskew.
 
     \b
     SLURM fan-out of positions across a whole plate:
@@ -781,7 +781,7 @@ def deskew_cli(
     >>> biahub deskew --cluster debug -i ./input.zarr/A/1/0 -c ./deskew_params.yml -o ./output.zarr
 
 
-    """
+    """  # noqa: D301
     deskew(
         input_position_dirpaths=input_position_dirpaths,
         config_filepath=config_filepath,
