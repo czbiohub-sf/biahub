@@ -29,7 +29,6 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.cli.utils import (
-    copy_position_metadata,
     get_submitit_cluster,
     yaml_to_model,
 )
@@ -141,14 +140,13 @@ def _init_output_plate(
     output_metadata.pop("plate_metadata", None)
     channel_names = output_metadata["channel_names"]
 
+    input_plate = Path(input_position_dirpaths[0]).parents[2]
     create_empty_plate(
         store_path=output_dirpath,
         position_keys=[Path(p).parts[-3:] for p in input_position_dirpaths],
         **output_metadata,
+        copy_metadata_from=input_plate,
     )
-
-    input_plate = Path(input_position_dirpaths[0]).parents[2]
-    copy_position_metadata(input_plate, output_dirpath)
 
     click.echo(f"Created {output_dirpath} ({len(input_position_dirpaths)} positions)")
     return input_shape, channel_names, resolved_config
@@ -237,13 +235,13 @@ def apply_inverse_transfer_function(
 
     # SLURM / local: create output plate and fan out via submitit
     output_metadata.pop("plate_metadata", None)
+    input_plate = Path(input_position_dirpaths[0]).parents[2]
     create_empty_plate(
         store_path=output_dirpath,
         position_keys=[p.parts[-3:] for p in input_position_dirpaths],
         **output_metadata,
+        copy_metadata_from=input_plate,
     )
-    input_plate = Path(input_position_dirpaths[0]).parents[2]
-    copy_position_metadata(input_plate, output_dirpath)
 
     settings = yaml_to_model(config_filepath, ReconstructionSettings)
     with open_ome_zarr(str(input_position_dirpaths[0]), mode="r") as ds:
