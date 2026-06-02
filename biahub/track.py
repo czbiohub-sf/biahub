@@ -27,7 +27,6 @@ from biahub.cli.parsing import (
 )
 from biahub.cli.resolve_function import resolve_function
 from biahub.cli.utils import (
-    copy_position_metadata,
     estimate_resources,
     get_submitit_cluster,
     resolve_ome_zarr_version,
@@ -774,6 +773,7 @@ def _init_output_plate(
 
     position_keys = [Path(p).parts[-3:] for p in input_position_dirpaths]
 
+    input_plate = Path(input_position_dirpaths[0]).parents[2]
     create_empty_plate(
         store_path=output_dirpath,
         position_keys=position_keys,
@@ -785,10 +785,8 @@ def _init_output_plate(
             input_position_dirpaths[0], settings.output_ome_zarr_version
         ),
         dtype=np.uint32,
+        copy_metadata_from=input_plate,
     )
-
-    input_plate = Path(input_position_dirpaths[0]).parents[2]
-    copy_position_metadata(input_plate, output_dirpath)
 
     click.echo(f"Created {output_dirpath} ({len(position_keys)} positions)")
 
