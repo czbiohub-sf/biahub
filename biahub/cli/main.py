@@ -184,6 +184,11 @@ COMMANDS = [
         "import_path": "biahub.qc.generate_report_spec_cli",
         "help": "Generate a report-spec YAML for imaging-qc from completed zarr stores",
     },
+    {
+        "name": "combine-transforms",
+        "import_path": "biahub.combine_transforms.combine_transforms_cli",
+        "help": "Compose two per-FOV stabilization transform configs",
+    },
 ]
 
 
