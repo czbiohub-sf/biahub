@@ -75,7 +75,6 @@ def read_plate_metadata(input_zarr: str | Path):
     return position_keys, channel_names, shape, scale
 
 
-
 def update_model(model_instance, update_dict):
     """
     Properly updates a Pydantic model with only the provided values while keeping the defaults.
