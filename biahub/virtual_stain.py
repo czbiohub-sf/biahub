@@ -27,7 +27,6 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.cli.utils import (
-    copy_position_metadata,
     estimate_resources,
     get_submitit_cluster,
     read_plate_metadata,
@@ -158,8 +157,8 @@ def _init_output_plate(
         scale=scale,
         version="0.5",
         dtype=np.float32,
+        copy_metadata_from=input_zarr,
     )
-    copy_position_metadata(input_zarr, output_zarr)
     click.echo(
         f"Created {output_zarr} ({len(position_keys)} positions, "
         f"channels={prediction_channels})"
