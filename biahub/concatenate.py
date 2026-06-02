@@ -315,6 +315,11 @@ def _init_concatenate(settings: ConcatenateSettings, output_dirpath: Path):
     else:
         chunk_size = settings.chunks_czyx
 
+    metadata_map = {
+        "/".join(p.parts[-3:]): src
+        for src, p in zip(all_data_paths, output_position_paths)
+    }
+
     create_empty_plate(
         store_path=output_dirpath,
         position_keys=[p.parts[-3:] for p in output_position_paths],
@@ -325,6 +330,7 @@ def _init_concatenate(settings: ConcatenateSettings, output_dirpath: Path):
         scale=output_scale,
         version=resolve_ome_zarr_version(all_data_paths[0], settings.output_ome_zarr_version),
         dtype=dtype,
+        copy_metadata_map=metadata_map,
     )
 
     click.echo(f"Created {output_dirpath} ({len(output_position_paths)} positions)")
@@ -546,10 +552,16 @@ def concatenate(
         "dtype": dtype,
     }
 
+    metadata_map = {
+        "/".join(p.parts[-3:]): src
+        for src, p in zip(all_data_paths, output_position_paths_list)
+    }
+
     # Create the output zarr mirroring source_position_dirpaths
     create_empty_plate(
         store_path=output_dirpath,
         position_keys=[p.parts[-3:] for p in output_position_paths_list],
+        copy_metadata_map=metadata_map,
         **output_metadata,
     )
 
