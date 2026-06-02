@@ -30,12 +30,8 @@ include { virtual_stain_wf }  from './modules/virtual_stain'
 include { rename_wf }         from './modules/rename_channels'
 include { track_wf }          from './modules/tracking'
 include { assemble_wf_mantisv2 } from './modules/assembly'
-include { qc_stage_wf as qc_post_flatfield }      from './modules/qc'
-include { qc_stage_wf as qc_post_deskew }         from './modules/qc'
-include { qc_stage_wf as qc_post_reconstruct }    from './modules/qc'
-include { qc_stage_wf as qc_post_virtual_stain }  from './modules/qc'
-include { qc_stage_wf as qc_post_assembly }        from './modules/qc'
-include { qc_report_wf }                           from './modules/qc'
+include { qc_stage_wf }      from './modules/qc'
+include { qc_report_wf }     from './modules/qc'
 
 
 // ---------------------------------------------------------------------------
@@ -53,48 +49,44 @@ def collect_positions() {
         : positions_ch | collect
 }
 
-def run_qc(all_positions, Map stages) {
-    if (!params.qc_config_dir) return Channel.value(true)
+// Build a channel of (zarr_path, config_path) tuples for QC stages.
+// Each entry in stage_channels is [done_channel, zarr_path, config_filename].
+// Null entries are filtered out; done_channels gate when each stage can start.
+def build_qc_inputs(List stage_channels) {
+    if (!params.qc_config_dir) return Channel.empty()
 
-    def qc_dir   = params.qc_config_dir
-    def ff_zarr  = "${params.output_dir}/0-flatfield/${dataset_name()}.zarr"
-    def dk_zarr  = "${params.output_dir}/1-deskew/${dataset_name()}.zarr"
-    def rc_zarr  = "${params.output_dir}/2-reconstruct/${dataset_name()}.zarr"
-    def vs_zarr  = "${params.output_dir}/3-virtual-stain/${dataset_name()}.zarr"
-    def asm_zarr = "${params.output_dir}/5-assemble/${dataset_name()}.zarr"
+    def inputs = stage_channels
+        .findAll { it[0] != null }
+        .collect { done_ch, zarr, cfg -> done_ch.map { [zarr, cfg] } }
 
-    def qc_done_list = []
+    if (inputs.size() == 0) return Channel.empty()
+    return inputs.inject { a, b -> a.mix(b) }
+}
 
-    if (stages.ff_done) {
-        qc1 = qc_post_flatfield(stages.ff_done.map { [ff_zarr, "${qc_dir}/qc_stage1_post_flatfield.yaml"] })
-        qc_done_list.add(qc1.done)
-    }
-    if (stages.dk_done) {
-        qc2 = qc_post_deskew(stages.dk_done.map { [dk_zarr, "${qc_dir}/qc_stage2_post_deskew.yaml"] })
-        qc_done_list.add(qc2.done)
-    }
-    if (stages.rc_done) {
-        qc3 = qc_post_reconstruct(stages.rc_done.map { [rc_zarr, "${qc_dir}/qc_stage3_post_reconstruct.yaml"] })
-        qc_done_list.add(qc3.done)
-    }
-    if (stages.vs_done) {
-        qc4 = qc_post_virtual_stain(stages.vs_done.map { [vs_zarr, "${qc_dir}/qc_stage4_post_virtual_stain.yaml"] })
-        qc_done_list.add(qc4.done)
-    }
-    if (stages.asm_done) {
-        qc5 = qc_post_assembly(stages.asm_done.map { [asm_zarr, "${qc_dir}/qc_stage5_post_assembly.yaml"] })
-        qc_done_list.add(qc5.done)
-    }
 
-    if (qc_done_list.size() > 0) {
-        all_qc = qc_done_list.inject { a, b -> a.mix(b) } | collect
+// ---------------------------------------------------------------------------
+//  QC wrapper workflow
+//
+//  Takes a channel of (zarr_path, config_path) tuples, runs QC stages on
+//  each, then generates a combined report. When the input channel is empty
+//  (QC not requested), no processes execute and the output is empty.
+// ---------------------------------------------------------------------------
 
-        def report_dir = params.qc_report_dir ?: "${params.output_dir}/qc/report"
-        qc_report_wf(all_qc, report_dir)
-        return qc_report_wf.out.done
-    }
+workflow run_qc_wf {
+    take:
+    qc_inputs       // Channel of tuple(zarr_path, config_path)
 
-    return Channel.value(true)
+    main:
+    qc_stage_wf(qc_inputs)
+    all_qc = qc_stage_wf.out.done
+        | collect
+        | filter { it.size() > 0 }
+
+    def report_dir = params.qc_report_dir ?: "${params.output_dir}/qc/report"
+    qc_report_wf(all_qc, report_dir)
+
+    emit:
+    done = qc_report_wf.out.done
 }
 
 
@@ -125,16 +117,20 @@ workflow full {
         : tk_done.done
     asm_done = assemble_wf_mantisv2(all_positions, pre_asm)
 
-    qc_done = run_qc(all_positions, [
-        ff_done:  ff_done.done,
-        dk_done:  dk_done.done,
-        rc_done:  rc_done.done,
-        vs_done:  vs_done.done,
-        asm_done: asm_done.done,
+    def ds      = dataset_name()
+    def out     = params.output_dir
+    def qc_dir  = params.qc_config_dir
+    qc_inputs = build_qc_inputs([
+        [ff_done.done,  "${out}/0-flatfield/${ds}.zarr",      "${qc_dir}/qc_stage1_post_flatfield.yaml"],
+        [dk_done.done,  "${out}/1-deskew/${ds}.zarr",         "${qc_dir}/qc_stage2_post_deskew.yaml"],
+        [rc_done.done,  "${out}/2-reconstruct/${ds}.zarr",    "${qc_dir}/qc_stage3_post_reconstruct.yaml"],
+        [vs_done.done,  "${out}/3-virtual-stain/${ds}.zarr",  "${qc_dir}/qc_stage4_post_virtual_stain.yaml"],
+        [asm_done.done, "${out}/5-assemble/${ds}.zarr",       "${qc_dir}/qc_stage5_post_assembly.yaml"],
     ])
+    run_qc_wf(qc_inputs)
 
     if (params.clean_intermediates) {
-        clean_intermediates(asm_done.done.mix(qc_done).collect())
+        clean_intermediates(asm_done.done.mix(run_qc_wf.out.done).collect())
     }
 }
 
@@ -164,15 +160,19 @@ workflow from_deskew {
         : tk_done.done
     asm_done = assemble_wf_mantisv2(all_positions, pre_asm)
 
-    qc_done = run_qc(all_positions, [
-        dk_done:  dk_done.done,
-        rc_done:  rc_done.done,
-        vs_done:  vs_done.done,
-        asm_done: asm_done.done,
+    def ds      = dataset_name()
+    def out     = params.output_dir
+    def qc_dir  = params.qc_config_dir
+    qc_inputs = build_qc_inputs([
+        [dk_done.done,  "${out}/1-deskew/${ds}.zarr",         "${qc_dir}/qc_stage2_post_deskew.yaml"],
+        [rc_done.done,  "${out}/2-reconstruct/${ds}.zarr",    "${qc_dir}/qc_stage3_post_reconstruct.yaml"],
+        [vs_done.done,  "${out}/3-virtual-stain/${ds}.zarr",  "${qc_dir}/qc_stage4_post_virtual_stain.yaml"],
+        [asm_done.done, "${out}/5-assemble/${ds}.zarr",       "${qc_dir}/qc_stage5_post_assembly.yaml"],
     ])
+    run_qc_wf(qc_inputs)
 
     if (params.clean_intermediates) {
-        clean_intermediates(asm_done.done.mix(qc_done).collect())
+        clean_intermediates(asm_done.done.mix(run_qc_wf.out.done).collect())
     }
 }
 
@@ -200,14 +200,18 @@ workflow from_reconstruct {
         : tk_done.done
     asm_done = assemble_wf_mantisv2(all_positions, pre_asm)
 
-    qc_done = run_qc(all_positions, [
-        rc_done:  rc_done.done,
-        vs_done:  vs_done.done,
-        asm_done: asm_done.done,
+    def ds      = dataset_name()
+    def out     = params.output_dir
+    def qc_dir  = params.qc_config_dir
+    qc_inputs = build_qc_inputs([
+        [rc_done.done,  "${out}/2-reconstruct/${ds}.zarr",    "${qc_dir}/qc_stage3_post_reconstruct.yaml"],
+        [vs_done.done,  "${out}/3-virtual-stain/${ds}.zarr",  "${qc_dir}/qc_stage4_post_virtual_stain.yaml"],
+        [asm_done.done, "${out}/5-assemble/${ds}.zarr",       "${qc_dir}/qc_stage5_post_assembly.yaml"],
     ])
+    run_qc_wf(qc_inputs)
 
     if (params.clean_intermediates) {
-        clean_intermediates(asm_done.done.mix(qc_done).collect())
+        clean_intermediates(asm_done.done.mix(run_qc_wf.out.done).collect())
     }
 }
 
@@ -233,13 +237,17 @@ workflow from_virtual_stain {
         : tk_done.done
     asm_done = assemble_wf_mantisv2(all_positions, pre_asm)
 
-    qc_done = run_qc(all_positions, [
-        vs_done:  vs_done.done,
-        asm_done: asm_done.done,
+    def ds      = dataset_name()
+    def out     = params.output_dir
+    def qc_dir  = params.qc_config_dir
+    qc_inputs = build_qc_inputs([
+        [vs_done.done,  "${out}/3-virtual-stain/${ds}.zarr",  "${qc_dir}/qc_stage4_post_virtual_stain.yaml"],
+        [asm_done.done, "${out}/5-assemble/${ds}.zarr",       "${qc_dir}/qc_stage5_post_assembly.yaml"],
     ])
+    run_qc_wf(qc_inputs)
 
     if (params.clean_intermediates) {
-        clean_intermediates(asm_done.done.mix(qc_done).collect())
+        clean_intermediates(asm_done.done.mix(run_qc_wf.out.done).collect())
     }
 }
 
@@ -263,12 +271,16 @@ workflow from_tracking {
         : tk_done.done
     asm_done = assemble_wf_mantisv2(all_positions, pre_asm)
 
-    qc_done = run_qc(all_positions, [
-        asm_done: asm_done.done,
+    def ds      = dataset_name()
+    def out     = params.output_dir
+    def qc_dir  = params.qc_config_dir
+    qc_inputs = build_qc_inputs([
+        [asm_done.done, "${out}/5-assemble/${ds}.zarr", "${qc_dir}/qc_stage5_post_assembly.yaml"],
     ])
+    run_qc_wf(qc_inputs)
 
     if (params.clean_intermediates) {
-        clean_intermediates(asm_done.done.mix(qc_done).collect())
+        clean_intermediates(asm_done.done.mix(run_qc_wf.out.done).collect())
     }
 }
 
@@ -287,12 +299,16 @@ workflow from_assembly {
 
     asm_done = assemble_wf_mantisv2(all_positions, trigger)
 
-    qc_done = run_qc(all_positions, [
-        asm_done: asm_done.done,
+    def ds      = dataset_name()
+    def out     = params.output_dir
+    def qc_dir  = params.qc_config_dir
+    qc_inputs = build_qc_inputs([
+        [asm_done.done, "${out}/5-assemble/${ds}.zarr", "${qc_dir}/qc_stage5_post_assembly.yaml"],
     ])
+    run_qc_wf(qc_inputs)
 
     if (params.clean_intermediates) {
-        clean_intermediates(asm_done.done.mix(qc_done).collect())
+        clean_intermediates(asm_done.done.mix(run_qc_wf.out.done).collect())
     }
 }
 
