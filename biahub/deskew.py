@@ -26,7 +26,6 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.cli.utils import (
-    copy_position_metadata,
     estimate_resources,
     get_submitit_cluster,
     resolve_ome_zarr_version,
@@ -621,6 +620,7 @@ def _init_output_plate(
         settings.pixel_size_um,
     )
 
+    input_plate = Path(input_position_dirpaths[0]).parents[2]
     create_empty_plate(
         store_path=output_dirpath,
         position_keys=[Path(p).parts[-3:] for p in input_position_dirpaths],
@@ -630,10 +630,8 @@ def _init_output_plate(
         version=resolve_ome_zarr_version(
             input_position_dirpaths[0], settings.output_ome_zarr_version
         ),
+        copy_metadata_from=input_plate,
     )
-
-    input_plate = Path(input_position_dirpaths[0]).parents[2]
-    copy_position_metadata(input_plate, output_dirpath)
 
     return (T, C, Z, Y, X), channel_names
 

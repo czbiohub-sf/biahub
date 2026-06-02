@@ -8,7 +8,6 @@ import numpy as np
 import yaml
 
 from iohub.ngff import open_ome_zarr
-from iohub.ngff.models import ImagesMeta
 from numpy.typing import DTypeLike
 from tqdm import tqdm
 
@@ -75,52 +74,6 @@ def read_plate_metadata(input_zarr: str | Path):
                 scale = pos.scale
     return position_keys, channel_names, shape, scale
 
-
-_OME_KEYS = {"ome", "multiscales", "omero", "labels", "version"}
-
-
-def copy_position_metadata(input_zarr: Path, output_zarr: Path) -> None:
-    """Copy per-position custom zattrs and label references from input to output plate.
-
-    Transfers label references and any custom (non-OME) zattrs such as
-    ``extra_metadata``. Does **not** copy coordinate transforms or axis
-    definitions, since processing steps frequently change the data scale
-    and ``create_empty_plate`` already sets the correct output transforms
-    via its ``scale`` parameter.
-
-    Parameters
-    ----------
-    input_zarr : Path
-        Path to the source HCS plate zarr store.
-    output_zarr : Path
-        Path to the destination HCS plate zarr store (must already exist).
-    """
-    with open_ome_zarr(str(input_zarr), mode="r") as src_plate:
-        with open_ome_zarr(str(output_zarr), mode="r+") as dst_plate:
-            dst_positions = {name for name, _ in dst_plate.positions()}
-
-            for name, src_pos in src_plate.positions():
-                if name not in dst_positions:
-                    continue
-
-                dst_pos = dst_plate[name]
-
-                src_ome = dict(src_pos.maybe_wrapped_ome_attrs)
-                src_ome.setdefault("version", "0.5")
-                src_meta = ImagesMeta.model_validate(src_ome)
-
-                raw_attrs = dict(src_pos.zattrs)
-                custom_attrs = {k: v for k, v in raw_attrs.items() if k not in _OME_KEYS}
-
-                src_labels = getattr(src_meta, "labels", None)
-                if src_labels is not None:
-                    dst_pos.metadata.labels = src_labels
-                    dst_pos.dump_meta()
-
-                for k, v in custom_attrs.items():
-                    dst_pos.zattrs[k] = v
-
-                logger.debug("Copied metadata for position %s", name)
 
 
 def update_model(model_instance, update_dict):

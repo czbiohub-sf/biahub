@@ -20,7 +20,7 @@ classifiers = [
 
 dependencies = [
   "click",
-  "iohub>=0.3.4",
+  "iohub @ git+https://github.com/czbiohub-sf/iohub.git@feat/create-empty-plate-copy-metadata",
   "matplotlib",
   "natsort",
   "numpy",
