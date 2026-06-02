@@ -13,8 +13,9 @@ from iohub.ngff.utils import create_empty_plate, process_single_position
 
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
+    cluster,
     config_filepath,
-    local,
+    init_only,
     monitor,
     output_dirpath,
     sbatch_filepath,
@@ -401,42 +402,18 @@ def rescale_voxel_size(affine_matrix, input_scale):
     return np.linalg.norm(affine_matrix, axis=1) * input_scale
 
 
-@click.command("register")
-@source_position_dirpaths()
-@target_position_dirpaths()
-@config_filepath()
-@output_dirpath()
-@local()
-@sbatch_filepath()
-@monitor()
-def register_cli(
-    source_position_dirpaths: list[str],
-    target_position_dirpaths: list[str],
-    config_filepath: Path,
-    output_dirpath: str,
-    local: bool,
-    sbatch_filepath: Path,
-    monitor: bool = True,
-):
-    """Apply an affine transformation to a single position across T and C axes based on a registration config file.
+def _load_settings(config_filepath: Path) -> RegistrationSettings:
+    return yaml_to_model(config_filepath, RegistrationSettings)
 
-    Start by generating an initial affine transform with `estimate-register`. Optionally, refine this transform with `optimize-register`. Finally, use `register`.
 
-    >>> biahub register \
-        -s source.zarr/*/*/* \
-        -t target.zarr/*/*/* \
-        -c config.yaml \
-        -o ./acq_name_registerred.zarr
-    """
-    # Convert string paths to Path objects
-    output_dirpath = Path(output_dirpath)
-
-    # Parse from the yaml file
-    settings = yaml_to_model(config_filepath, RegistrationSettings)
+def _prepare_registration(
+    source_position_dirpaths: list[Path],
+    target_position_dirpaths: list[Path],
+    settings: RegistrationSettings,
+) -> dict:
+    """Compute all registration geometry: shapes, channels, crop slicing, output metadata."""
     matrix = np.array(settings.affine_transform_zyx)
-    keep_overhang = settings.keep_overhang
 
-    # Calculate the output voxel size from the input scale and affine transform
     with open_ome_zarr(source_position_dirpaths[0]) as source_dataset:
         T, C, Z, Y, X = source_dataset.data.shape
         source_channel_names = source_dataset.channel_names
@@ -452,7 +429,6 @@ def register_cli(
     click.echo(f"Transformation matrix:\n{matrix}")
     click.echo(f"Voxel size: {output_voxel_size}")
 
-    # Logic to parse time indices
     if settings.time_indices == "all":
         time_indices = list(range(T))
     elif isinstance(settings.time_indices, list):
@@ -462,18 +438,15 @@ def register_cli(
     else:
         raise ValueError(f"Invalid time_indices type {type(settings.time_indices)}")
 
-    output_channel_names = target_channel_names
+    output_channel_names = list(target_channel_names)
     if target_position_dirpaths != source_position_dirpaths:
         output_channel_names += source_channel_names
 
-    if not keep_overhang:
-        # Find the largest interior rectangle
+    if not settings.keep_overhang:
         click.echo("\nFinding largest overlapping volume between source and target datasets")
         Z_slice, Y_slice, X_slice = find_overlapping_volume(
             source_shape_zyx, target_shape_zyx, matrix
         )
-        # TODO: start or stop may be None
-        # Overwrite the previous target shape
         cropped_shape_zyx = (
             Z_slice.stop - Z_slice.start,
             Y_slice.stop - Y_slice.start,
@@ -488,26 +461,102 @@ def register_cli(
             slice(0, cropped_shape_zyx[-1]),
         )
 
-    output_metadata = {
-        "shape": (len(time_indices), len(output_channel_names)) + tuple(cropped_shape_zyx),
-        "chunks": None,
-        "scale": (1,) * 2 + tuple(output_voxel_size),
-        "channel_names": output_channel_names,
-        "dtype": np.float32,
-        "version": resolve_ome_zarr_version(
-            source_position_dirpaths[0], settings.output_ome_zarr_version
-        ),
+    return {
+        "matrix": matrix,
+        "source_channel_names": source_channel_names,
+        "target_channel_names": target_channel_names,
+        "output_channel_names": output_channel_names,
+        "source_shape_zyx": source_shape_zyx,
+        "target_shape_zyx": target_shape_zyx,
+        "cropped_shape_zyx": cropped_shape_zyx,
+        "output_voxel_size": output_voxel_size,
+        "time_indices": time_indices,
+        "crop_slicing": (Z_slice, Y_slice, X_slice),
+        "input_shape": (T, C, Z, Y, X),
     }
 
-    # Create the output zarr mirroring source_position_dirpaths
+
+def _init_output_plate(
+    source_position_dirpaths: list[Path],
+    output_dirpath: Path,
+    settings: RegistrationSettings,
+    reg: dict,
+) -> None:
+    """Create the empty registered output plate."""
     create_empty_plate(
         store_path=output_dirpath,
         position_keys=[p.parts[-3:] for p in source_position_dirpaths],
-        **output_metadata,
+        shape=(len(reg["time_indices"]), len(reg["output_channel_names"]))
+        + tuple(reg["cropped_shape_zyx"]),
+        chunks=None,
+        scale=(1,) * 2 + tuple(reg["output_voxel_size"]),
+        channel_names=reg["output_channel_names"],
+        dtype=np.float32,
+        version=resolve_ome_zarr_version(
+            source_position_dirpaths[0], settings.output_ome_zarr_version
+        ),
     )
 
-    # Get the affine transformation matrix
-    # NOTE: add any extra metadata if needed:
+
+@click.command("register")
+@source_position_dirpaths()
+@target_position_dirpaths()
+@config_filepath()
+@output_dirpath()
+@sbatch_filepath()
+@cluster()
+@monitor()
+@init_only()
+def register_cli(
+    source_position_dirpaths: list[str],
+    target_position_dirpaths: list[str],
+    config_filepath: Path,
+    output_dirpath: str,
+    sbatch_filepath: Path,
+    cluster: str = "slurm",
+    monitor: bool = False,
+    init_only: bool = False,
+):
+    r"""Apply an affine transformation to a single position across T and C axes based on a registration config file.
+
+    Start by generating an initial affine transform with `estimate-register`. Optionally,
+    refine this transform with `optimize-register`. Finally, use `register`.
+
+    \b
+    SLURM fan-out of positions across a whole plate:
+    >>> biahub register -s source.zarr/*/*/* -t target.zarr/*/*/* -c config.yaml -o ./registered.zarr
+
+    \b
+    Initialize the output plate only (e.g. before Nextflow fan-out):
+    >>> biahub register --init -s source.zarr/*/*/* -t target.zarr/*/*/* -c config.yaml -o ./registered.zarr
+
+    \b
+    In-process run of a single position (e.g. from a Nextflow worker):
+    >>> biahub register --cluster debug -s source.zarr/A/1/0 -t target.zarr/A/1/0 -c config.yaml -o ./registered.zarr
+    """  # noqa: D301
+    output_dirpath = Path(output_dirpath)
+    slurm_out_path = output_dirpath.parent / "slurm_output"
+
+    settings = _load_settings(config_filepath)
+    reg = _prepare_registration(source_position_dirpaths, target_position_dirpaths, settings)
+
+    matrix = reg["matrix"]
+    source_channel_names = reg["source_channel_names"]
+    target_channel_names = reg["target_channel_names"]
+    output_channel_names = reg["output_channel_names"]
+    target_shape_zyx = reg["target_shape_zyx"]
+    time_indices = reg["time_indices"]
+    Z_slice, Y_slice, X_slice = reg["crop_slicing"]
+    T, C, Z, Y, X = reg["input_shape"]
+
+    _init_output_plate(source_position_dirpaths, output_dirpath, settings, reg)
+    num_cpus, gb_ram = estimate_resources(shape=(T, C, Z, Y, X), ram_multiplier=5)
+    click.echo(f"RESOURCES:{num_cpus} {num_cpus * gb_ram}")
+
+    if init_only:
+        click.echo(f"Initialized {output_dirpath} ({len(source_position_dirpaths)} positions)")
+        return
+
     extra_metadata = {
         "affine_transformation": {
             "transform_matrix": matrix.tolist(),
@@ -516,19 +565,18 @@ def register_cli(
 
     affine_transform_args = {
         "matrix": matrix,
-        "output_shape_zyx": target_shape_zyx,  # NOTE: this should be the shape of the original target dataset
-        "crop_output_slicing": ([Z_slice, Y_slice, X_slice] if not keep_overhang else None),
+        "output_shape_zyx": target_shape_zyx,
+        "crop_output_slicing": (
+            [Z_slice, Y_slice, X_slice] if not settings.keep_overhang else None
+        ),
         "interpolation": settings.interpolation,
         "extra_metadata": extra_metadata,
     }
 
-    copy_n_paste_kwargs = {"czyx_slicing_params": ([Z_slice, Y_slice, X_slice])}
+    copy_n_paste_kwargs = {"czyx_slicing_params": [Z_slice, Y_slice, X_slice]}
 
-    # Estimate resources
     num_cpus, gb_ram = estimate_resources(shape=(T, C, Z, Y, X), ram_multiplier=5)
 
-    # Prepare SLURM arguments
-    slurm_out_path = Path(output_dirpath).parent / "slurm_output"
     slurm_args = {
         "slurm_job_name": "register",
         "slurm_mem_per_cpu": f"{gb_ram}G",
@@ -538,22 +586,18 @@ def register_cli(
         "slurm_partition": "preempted",
     }
 
-    # Override defaults if sbatch_filepath is provided
     if sbatch_filepath:
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
-    # Run locally or submit to SLURM
-    cluster = get_submitit_cluster(local)
-
-    # Prepare and submit jobs
-    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
+    # --cluster debug: Nextflow handles per-position fan-out and resource scheduling,
+    # so the CLI runs in-process via submitit's DebugExecutor rather than submitting
+    # its own SLURM jobs. See examples/submitit_debug_nextflow/ for rationale.
+    resolved_cluster = get_submitit_cluster(cluster=cluster)
+    click.echo(f"Preparing jobs on cluster='{resolved_cluster}': {slurm_args}")
+    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=resolved_cluster)
     executor.update_parameters(**slurm_args)
 
-    # NOTE: channels will not be processed in parallel
-    # NOTE: the the source and target datastores may be the same (e.g. Hummingbird datasets)
-
-    # apply affine transform to channels in the source datastore that should be registered
-    # as given in the config file (i.e. settings.source_channel_names)
+    click.echo("Submitting jobs...")
     affine_jobs = []
     affine_names = []
     with submitit.helpers.clean_env(), executor.batch():
@@ -564,7 +608,7 @@ def register_cli(
                 affine_job = executor.submit(
                     process_single_position,
                     apply_affine_transform,
-                    input_position_path=input_position_path,  # source store
+                    input_position_path=input_position_path,
                     output_position_path=output_dirpath
                     / Path(*input_position_path.parts[-3:]),
                     input_time_indices=time_indices,
@@ -576,9 +620,6 @@ def register_cli(
                 affine_jobs.append(affine_job)
                 affine_names.append(input_position_path)
 
-    # crop all channels that are not being registered and save them in the output zarr store
-    # Note: when target and source datastores are the same we don't process channels which
-    # were already registered in the previous step
     copy_jobs = []
     copy_names = []
     with submitit.helpers.clean_env(), executor.batch():
@@ -589,7 +630,7 @@ def register_cli(
                 copy_job = executor.submit(
                     process_single_position,
                     copy_n_paste_czyx,
-                    input_position_path=input_position_path,  # target store
+                    input_position_path=input_position_path,
                     output_position_path=output_dirpath
                     / Path(*input_position_path.parts[-3:]),
                     input_time_indices=time_indices,
@@ -601,16 +642,22 @@ def register_cli(
                 copy_jobs.append(copy_job)
                 copy_names.append(input_position_path)
 
-    # concatenate affine_jobs and copy_jobs
-    job_ids = [job.job_id for job in affine_jobs + copy_jobs]
+    all_jobs = affine_jobs + copy_jobs
+    job_ids = [job.job_id for job in all_jobs]
 
     slurm_out_path.mkdir(exist_ok=True)
     log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
 
+    if resolved_cluster == "debug":
+        for job in all_jobs:
+            job.wait()
+        click.echo("Registration complete")
+        return
+
     if monitor:
-        monitor_jobs(affine_jobs + copy_jobs, affine_names + copy_names)
+        monitor_jobs(all_jobs, affine_names + copy_names)
 
 
 if __name__ == "__main__":

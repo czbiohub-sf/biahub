@@ -13,9 +13,10 @@ from iohub.ngff.nodes import Plate, Position
 
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
+    cluster,
     config_filepath,
+    init_only,
     input_position_dirpaths,
-    local,
     monitor,
     output_dirpath,
     sbatch_filepath,
@@ -314,47 +315,18 @@ def write_output_chunk(
     output_array[(slice(None), channel_idx, *output_chunk_slices)] = output_chunk
 
 
-@click.command("stitch")
-@input_position_dirpaths()
-@config_filepath()
-@output_dirpath()
-@sbatch_filepath()
-@local()
-@click.option(
-    "--verbose",
-    "-v",
-    is_flag=True,
-    type=bool,
-    help="Verbose stitching output. Default is False.",
-)
-@click.option(
-    "--blending-exponent",
-    "-b",
-    type=float,
-    default=1.0,
-    help="Exponent for blending weights. 0.0 is average blending, 1.0 is linear blending, and >1.0 is progressively sharper S-curve blending.",
-)
-@click.option("--debug", is_flag=True, help="Run in debug mode")
-@monitor()
-def stitch_cli(
-    input_position_dirpaths: list[str],
-    output_dirpath: str,
-    config_filepath: Path,
-    verbose: bool = False,
-    sbatch_filepath: str = None,
-    local: bool = False,
-    blending_exponent: float = 1.0,
-    debug: bool = False,
-    monitor: bool = False,
-) -> None:
-    """Stitch FOVs in each well together into a single FOV.
+def _load_settings(config_filepath: Path) -> StitchSettings:
+    return yaml_to_model(config_filepath, StitchSettings)
 
-    Uses shift from configuration file generated with `biahub estimate-stitch`.
 
-    >>> biahub stitch -i ./input.zarr/*/*/* -c ./config.yaml -o ./output.zarr
+def _prepare_stitch(
+    input_position_dirpaths: list[Path],
+    settings: StitchSettings,
+) -> tuple:
+    """Open input plate, resolve channels, group shifts by well.
+
+    Returns (input_plate, channel_idx, shifts_by_well).
     """
-    click.echo("Starting stitching...")
-    settings = yaml_to_model(config_filepath, StitchSettings)
     input_plate = open_ome_zarr(input_position_dirpaths[0].parents[2], mode="r")
     all_shifts = settings.total_translation
 
@@ -366,10 +338,23 @@ def stitch_cli(
     if not all(channel in input_channels for channel in settings.channels):
         raise ValueError("Invalid channel(s) provided.")
 
-    # Create output store. Per-well output shapes differ, so we open the
-    # plate directly rather than going through `create_empty_plate`, but we
-    # still route the OME-Zarr version through `resolve_ome_zarr_version`
-    # so the output matches the input (or the settings override).
+    shifts_by_well = defaultdict(dict)
+    for key, value in all_shifts.items():
+        well_name = "/".join(key.split("/")[:2])
+        shifts_by_well[well_name][key] = value
+
+    return input_plate, channel_idx, shifts_by_well
+
+
+def _init_output_store(
+    input_position_dirpaths: list[Path],
+    output_dirpath: Path,
+    settings: StitchSettings,
+    input_plate,
+    channel_idx,
+    shifts_by_well: dict,
+) -> tuple[list[tuple], list]:
+    """Create the per-well output store and return (job_args_list, output_positions)."""
     output_plate = open_ome_zarr(
         output_dirpath,
         layout="hcs",
@@ -380,20 +365,10 @@ def stitch_cli(
         ),
     )
 
-    # Group shift metadata by well
-    shifts_by_well = defaultdict(dict)
-    for key, value in all_shifts.items():
-        well_name = "/".join(key.split("/")[:2])
-        shifts_by_well[well_name][key] = value
-
-    # Prepare jobs
     job_args_list = []
-    for well_name, fov_shifts in shifts_by_well.items():
-        if verbose:
-            click.echo(
-                f"Processing well {list(shifts_by_well.keys()).index(well_name) + 1}/{len(shifts_by_well)}: {well_name}"
-            )
-        first_fov_name = list(shifts_by_well[well_name].keys())[0]
+    input_fov_shape = None
+    for _well_name, fov_shifts in shifts_by_well.items():
+        first_fov_name = list(fov_shifts.keys())[0]
         input_fov_shape = input_plate[first_fov_name].data.shape
         output_shape_zyx = get_output_shape(fov_shifts, input_fov_shape)
         output_chunk_size = (
@@ -409,9 +384,6 @@ def stitch_cli(
             len(channel_idx),
         ) + output_shape_zyx
 
-        # Create the output array
-        # note that output shape is different for each well, so we are not
-        # using iohub.ngff.utils.create_empty_plate here
         output_position = output_plate.create_position(
             first_fov_name.split("/")[0],
             first_fov_name.split("/")[1],
@@ -425,18 +397,12 @@ def stitch_cli(
             transform=[TransformationMeta(type="scale", scale=output_scale)],
         )
 
-        # Split the output array into chunks
         chunk_list = list_of_nd_slices_from_array_shape(
             output_shape_zyx,
             output_chunk_size[2:],
         )
 
-        # Append job arguments for each chunk
         for chunk in chunk_list:
-            if verbose:
-                click.echo(
-                    f"\tPreparing job for chunk {chunk_list.index(chunk) + 1}/{len(chunk_list)}: {chunk}"
-                )
             job_args_list.append(
                 (
                     chunk,
@@ -445,17 +411,90 @@ def stitch_cli(
                     input_plate,
                     input_fov_shape,
                     output_position,
-                    verbose,
-                    blending_exponent,
                 )
             )
 
-    # Estimate resources
+    return job_args_list, input_fov_shape
+
+
+@click.command("stitch")
+@input_position_dirpaths()
+@config_filepath()
+@output_dirpath()
+@sbatch_filepath()
+@cluster()
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    type=bool,
+    help="Verbose stitching output. Default is False.",
+)
+@click.option(
+    "--blending-exponent",
+    "-b",
+    type=float,
+    default=1.0,
+    help="Exponent for blending weights. 0.0 is average blending, 1.0 is linear blending, and >1.0 is progressively sharper S-curve blending.",
+)
+@monitor()
+@init_only()
+def stitch_cli(
+    input_position_dirpaths: list[str],
+    output_dirpath: str,
+    config_filepath: Path,
+    sbatch_filepath: str = None,
+    cluster: str = "slurm",
+    verbose: bool = False,
+    blending_exponent: float = 1.0,
+    monitor: bool = False,
+    init_only: bool = False,
+) -> None:
+    r"""Stitch FOVs in each well together into a single FOV.
+
+    Uses shift from configuration file generated with `biahub estimate-stitch`.
+
+    \b
+    SLURM fan-out of chunks across all wells:
+    >>> biahub stitch -i ./input.zarr/*/*/* -c ./config.yaml -o ./output.zarr
+
+    \b
+    Initialize the output store only (e.g. before Nextflow fan-out):
+    >>> biahub stitch --init -i ./input.zarr/*/*/* -c ./config.yaml -o ./output.zarr
+
+    \b
+    In-process run (e.g. from a Nextflow worker):
+    >>> biahub stitch --cluster debug -i ./input.zarr/*/*/* -c ./config.yaml -o ./output.zarr
+    """  # noqa: D301
+    click.echo("Starting stitching...")
+    output_dirpath = Path(output_dirpath)
+    slurm_out_path = output_dirpath.parent / "slurm_output"
+
+    settings = _load_settings(config_filepath)
+    input_plate, channel_idx, shifts_by_well = _prepare_stitch(
+        input_position_dirpaths, settings
+    )
+    job_args_list, input_fov_shape = _init_output_store(
+        input_position_dirpaths,
+        output_dirpath,
+        settings,
+        input_plate,
+        channel_idx,
+        shifts_by_well,
+    )
+
     num_cpus, gb_ram = estimate_resources(
         shape=input_fov_shape, ram_multiplier=25, max_num_cpus=16
     )
 
-    # Prepare SLURM arguments
+    if init_only:
+        click.echo(f"RESOURCES:{num_cpus} {num_cpus * gb_ram}")
+        click.echo(
+            f"Initialized {output_dirpath} ({len(shifts_by_well)} wells, "
+            f"{len(job_args_list)} chunks)"
+        )
+        return
+
     slurm_args = {
         "slurm_job_name": "stitch",
         "slurm_mem_per_cpu": f"{gb_ram}G",
@@ -465,17 +504,15 @@ def stitch_cli(
         "slurm_partition": "preempted",
     }
 
-    # Override defaults if sbatch_filepath is provided
     if sbatch_filepath:
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
-    # Run locally or submit to SLURM
-    cluster = get_submitit_cluster(local)
-
-    # Prepare and submit jobs
-    click.echo(f"Preparing jobs: {slurm_args}")
-    slurm_out_path = Path(output_dirpath).parent / "slurm_output"
-    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
+    # --cluster debug: Nextflow handles resource scheduling, so the CLI runs
+    # in-process via submitit's DebugExecutor rather than submitting its own
+    # SLURM jobs. See examples/submitit_debug_nextflow/ for rationale.
+    resolved_cluster = get_submitit_cluster(cluster=cluster)
+    click.echo(f"Preparing jobs on cluster='{resolved_cluster}': {slurm_args}")
+    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=resolved_cluster)
     executor.update_parameters(**slurm_args)
 
     jobs = []
@@ -485,15 +522,23 @@ def stitch_cli(
                 executor.submit(
                     write_output_chunk,
                     *job_args,
+                    verbose,
+                    blending_exponent,
                 )
             )
 
-    job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
+    job_ids = [job.job_id for job in jobs]
 
     slurm_out_path.mkdir(exist_ok=True)
     log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
+
+    if resolved_cluster == "debug":
+        for job in jobs:
+            job.wait()
+        click.echo("Stitching complete")
+        return
 
     if monitor:
         monitor_jobs(jobs, [])
