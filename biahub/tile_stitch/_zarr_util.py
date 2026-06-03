@@ -1,4 +1,4 @@
-"""Shared zarr helpers for the Monarch and Dask tile-stitch drivers."""
+"""Shared zarr helpers for the Monarch tile-stitch driver."""
 
 from pathlib import Path
 
@@ -13,36 +13,20 @@ def create_multi_tp_zarr(
 ) -> None:
     """Pre-create an OME-NGFF FOV with ``T=full_shape[0]`` slots, no host RAM.
 
-    ``iohub.ngff.Position.create_image(data=np.zeros(full_shape))``
-    materializes the full zeros array on the host, which is hundreds of
-    GB for multi-TP outputs. We use a tiny placeholder to write the
-    OME-NGFF metadata, then drop and recreate the underlying zarr array
-    with the correct shape and ``fill_value=0`` so unwritten chunks read
-    back as zero.
+    ``Position.create_zeros`` writes the OME-NGFF metadata and a lazily
+    zero-filled zarr array (unwritten chunks read back as ``fill_value=0``)
+    without materializing the full array on the host — which would be
+    hundreds of GB for multi-TP outputs. Shards then write their disjoint
+    T slots concurrently.
     """
-    import shutil
-
-    import zarr
-
     from iohub.ngff import open_ome_zarr
 
-    out_ds = open_ome_zarr(
+    with open_ome_zarr(
         path, layout="fov", mode="w", channel_names=[channel_label]
-    )
-    out_ds.create_image("0", np.zeros((1, 1, 1, 1, 1), dtype=np.float32))
-    out_ds.close()
-
-    arr_path = Path(path) / "0"
-    if arr_path.exists():
-        shutil.rmtree(arr_path)
-    g = zarr.open_group(str(path), mode="a")
-    g.create_dataset(
-        "0",
-        shape=full_shape,
-        chunks=chunk_shape,
-        dtype=np.float32,
-        fill_value=0.0,
-    )
+    ) as out_ds:
+        out_ds.create_zeros(
+            "0", shape=full_shape, dtype=np.float32, chunks=chunk_shape
+        )
 
 
 def parse_timepoints(spec: str) -> list[int]:
