@@ -130,9 +130,7 @@ def virtual_stain_position(
     # model schema and the normalization transforms.
     instances = parser.instantiate(cfg)
     vsunet = instances.model
-    state_dict = torch.load(cfg.ckpt_path, weights_only=True, map_location="cpu")[
-        "state_dict"
-    ]
+    state_dict = torch.load(cfg.ckpt_path, weights_only=True, map_location="cpu")["state_dict"]
     vsunet.load_state_dict(state_dict)
     vsunet.eval().to(device)
 
@@ -153,9 +151,7 @@ def virtual_stain_position(
     normalize = Compose(instances.data.normalizations)
 
     source_channel = cfg.data.init_args.source_channel
-    source_channel = (
-        source_channel[0] if isinstance(source_channel, list) else source_channel
-    )
+    source_channel = source_channel[0] if isinstance(source_channel, list) else source_channel
     target_channels = cfg.data.init_args.target_channel
     target_channels = (
         [target_channels] if isinstance(target_channels, str) else target_channels
@@ -269,20 +265,14 @@ def virtual_stain(
         [target_channels] if isinstance(target_channels, str) else target_channels
     )
 
-    input_shape = _init_output_plate(
-        input_position_dirpaths, output_dirpath, target_channels
-    )
+    input_shape = _init_output_plate(input_position_dirpaths, output_dirpath, target_channels)
 
     # Estimate resources (one timepoint volume in RAM per worker)
-    num_cpus, gb_ram = estimate_resources(
-        shape=input_shape, ram_multiplier=16, max_num_cpus=8
-    )
+    num_cpus, gb_ram = estimate_resources(shape=input_shape, ram_multiplier=16, max_num_cpus=8)
     click.echo(f"RESOURCES:{num_cpus} {num_cpus * gb_ram}")
 
     if init_only:
-        click.echo(
-            f"Initialized {output_dirpath} ({len(input_position_dirpaths)} positions)"
-        )
+        click.echo(f"Initialized {output_dirpath} ({len(input_position_dirpaths)} positions)")
         return
 
     output_position_paths = utils.get_output_paths(input_position_dirpaths, output_dirpath)
