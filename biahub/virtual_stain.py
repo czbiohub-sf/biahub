@@ -4,7 +4,6 @@ import click
 import numpy as np
 import submitit
 import torch
-import torch.nn.functional as F  # noqa: N812
 
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate
@@ -89,110 +88,6 @@ def load_predict_config(config_filepath: Path, data_path: Path):
     return parser, cfg
 
 
-def _normalization_params(normalizations, source_channel: str):
-    """Extract (level, subtrahend, divisor) for ``source_channel`` from the config.
-
-    Reads the ``NormalizeSampled`` entry in ``data.init_args.normalizations``
-    whose keys include the source channel, mirroring ``viscy predict``.
-    """
-    if normalizations is None:
-        raise ValueError(
-            "No normalizations defined in the config. Add a NormalizeSampled "
-            "transform for the source channel so predictions match `viscy predict`."
-        )
-    for norm in normalizations:
-        init_args = norm.init_args
-        keys = init_args["keys"]
-        keys = [keys] if isinstance(keys, str) else keys
-        if source_channel in keys:
-            return init_args.level, init_args.subtrahend, init_args.divisor
-    raise ValueError(
-        f"No normalization found for source channel '{source_channel}' "
-        f"in the config normalizations."
-    )
-
-
-def _read_fov_statistics(
-    dataset, source_channel: str, level: str, subtrahend: str, divisor: str
-) -> tuple[float, float]:
-    """Read precomputed normalization statistics from the store metadata.
-
-    These are written by `viscy preprocess`. Raises a helpful error if missing.
-    """
-    norm_meta = dataset.zattrs.get("normalization")
-    if (
-        norm_meta is None
-        or source_channel not in norm_meta
-        or level not in norm_meta[source_channel]
-    ):
-        raise RuntimeError(
-            f"Normalization statistics ('{level}' for channel '{source_channel}') "
-            f"were not found in the input store. Run `viscy preprocess` on the "
-            f"input dataset before virtual staining."
-        )
-    stats = norm_meta[source_channel][level]
-    return float(stats[subtrahend]), float(stats[divisor])
-
-
-def _predict_volume(
-    predictor,
-    source: torch.Tensor,
-    out_channel: int,
-    step: int,
-    use_tta: bool,
-    reduction: str,
-) -> torch.Tensor:
-    """Run sliding-window prediction, optionally with 90-degree rotation TTA.
-
-    Rotation TTA pads the volume to a square in YX before rotating, so the
-    90/270-degree rotations are shape-preserving, then crops back afterwards.
-    This mirrors VisCy's ``VSUNet.perform_test_time_augmentations`` and keeps
-    TTA correct for non-square fields of view (rotating a non-square volume
-    in-place would otherwise change the YX dimensions).
-
-    Parameters
-    ----------
-    predictor : AugmentedPredictionVSUNet
-        Sliding-window predictor (with identity transforms).
-    source : torch.Tensor
-        Normalized source volume, shape ``(B, C, Z, Y, X)``.
-    out_channel : int
-        Number of predicted output channels.
-    step : int
-        Sliding-window step along Z.
-    use_tta : bool
-        Whether to apply rotation test-time augmentation.
-    reduction : str
-        ``"median"`` or ``"mean"`` aggregation across rotations.
-
-    Returns
-    -------
-    torch.Tensor
-        Prediction of shape ``(B, out_channel, Z, Y, X)``.
-    """
-    if not use_tta:
-        return predictor.predict_sliding_windows(
-            source, out_channel=out_channel, step=step
-        )
-
-    *_, height, width = source.shape
-    side = max(height, width)
-    # Pad YX to a square so 90/270-degree rotations preserve the shape.
-    padded = F.pad(source, (0, side - width, 0, side - height))
-    predictions = []
-    for k in range(4):
-        rotated = torch.rot90(padded, k, dims=(-2, -1))
-        pred = predictor.predict_sliding_windows(
-            rotated, out_channel=out_channel, step=step
-        )
-        pred = torch.rot90(pred, -k, dims=(-2, -1))
-        predictions.append(pred[..., :height, :width])  # crop back to original YX
-    stacked = torch.stack(predictions)
-    if reduction == "median":
-        return stacked.median(dim=0).values
-    return stacked.mean(dim=0)
-
-
 def virtual_stain_position(
     config_filepath: Path,
     input_position_path: Path,
@@ -201,10 +96,15 @@ def virtual_stain_position(
     """Run cytoland virtual staining on a single position, looping over time.
 
     Inference is GPU-bound, so timepoints are processed serially in a ``for``
-    loop rather than in parallel. Each timepoint volume is normalized using the
-    precomputed statistics in the store and passed through
+    loop rather than in parallel. Each timepoint volume is normalized with the
+    config's ``NormalizeSampled`` transforms (using the precomputed statistics
+    in the store) and passed through
     ``AugmentedPredictionVSUNet.predict_sliding_windows`` -- the same linear
     feathering blend used by the ``viscy predict`` ``HCSPredictionWriter``.
+
+    Normalization and test-time augmentation are delegated to VisCy
+    (``NormalizeSampled`` / ``read_norm_meta`` / ``with_rotation_tta``) so the
+    behavior stays in sync with ``viscy predict``.
 
     Parameters
     ----------
@@ -216,6 +116,8 @@ def virtual_stain_position(
         Output position to write predictions into.
     """
     from cytoland.engine import AugmentedPredictionVSUNet
+    from monai.transforms import Compose
+    from viscy_data import read_norm_meta
 
     parser, cfg = load_predict_config(config_filepath, input_position_path)
 
@@ -223,23 +125,32 @@ def virtual_stain_position(
         cfg.device if (cfg.device == "cpu" or torch.cuda.is_available()) else "cpu"
     )
 
-    # Instantiate the VSUNet from VisCy's own class, then load the checkpoint
-    # weights. Building via VisCy keeps biahub free of the model schema.
-    vsunet = parser.instantiate(cfg).model
+    # Instantiate the VSUNet and the data module from VisCy's own classes, then
+    # load the checkpoint weights. Building via VisCy keeps biahub free of the
+    # model schema and the normalization transforms.
+    instances = parser.instantiate(cfg)
+    vsunet = instances.model
     state_dict = torch.load(cfg.ckpt_path, weights_only=True, map_location="cpu")[
         "state_dict"
     ]
     vsunet.load_state_dict(state_dict)
     vsunet.eval().to(device)
 
-    # Read the config's test-time-augmentation flags. Rotation TTA is applied
-    # at the volume level (see ``_predict_volume``) with square padding so it
-    # works on non-square FOVs, so the wrapper itself uses identity transforms.
+    # Test-time augmentation: reuse VisCy's rotation-TTA helper, which is
+    # correct for non-square FOVs. Defaults follow the config's model flags.
     use_tta = bool(getattr(cfg.model.init_args, "test_time_augmentations", False))
     tta_type = getattr(cfg.model.init_args, "tta_type", "mean")
     reduction = "median" if tta_type == "median" else "mean"
+    if use_tta:
+        predictor = AugmentedPredictionVSUNet.with_rotation_tta(
+            vsunet.model, reduction=reduction
+        )
+    else:
+        predictor = AugmentedPredictionVSUNet(model=vsunet.model)
+    predictor = predictor.eval().to(device)
 
-    predictor = AugmentedPredictionVSUNet(model=vsunet.model).eval().to(device)
+    # Normalization: reuse the configured NormalizeSampled transforms directly.
+    normalize = Compose(instances.data.normalizations)
 
     source_channel = cfg.data.init_args.source_channel
     source_channel = (
@@ -250,17 +161,19 @@ def virtual_stain_position(
         [target_channels] if isinstance(target_channels, str) else target_channels
     )
     out_channel = len(target_channels)
-    level, subtrahend, divisor = _normalization_params(
-        cfg.data.init_args.normalizations, source_channel
-    )
     step = cfg.sliding_window_step
 
     with open_ome_zarr(str(input_position_path), mode="r") as input_dataset:
         T = input_dataset.data.shape[0]
         channel_index = input_dataset.channel_names.index(source_channel)
-        subtrahend_value, divisor_value = _read_fov_statistics(
-            input_dataset, source_channel, level, subtrahend, divisor
-        )
+        # Precomputed statistics written by `viscy preprocess`.
+        norm_meta = read_norm_meta(input_dataset)
+        if norm_meta is None or source_channel not in norm_meta:
+            raise RuntimeError(
+                f"Normalization statistics for channel '{source_channel}' were not "
+                f"found in the input store. Run `viscy preprocess` on the input "
+                f"dataset before virtual staining."
+            )
 
         with open_ome_zarr(str(output_position_path), mode="r+") as output_dataset:
             for t in range(T):
@@ -268,16 +181,13 @@ def virtual_stain_position(
                 volume = np.asarray(
                     input_dataset.data[t : t + 1, channel_index : channel_index + 1]
                 )
-                volume = (volume - subtrahend_value) / divisor_value
                 source = torch.from_numpy(volume).float().to(device)
+                # Apply VisCy's configured normalization via a sample dict.
+                sample = normalize({source_channel: source, "norm_meta": norm_meta})
+                source = sample[source_channel]
                 with torch.inference_mode():
-                    prediction = _predict_volume(
-                        predictor,
-                        source,
-                        out_channel=out_channel,
-                        step=step,
-                        use_tta=use_tta,
-                        reduction=reduction,
+                    prediction = predictor.predict_sliding_windows(
+                        source, out_channel=out_channel, step=step
                     )
                 output_dataset.data[t] = prediction[0].cpu().numpy()
 

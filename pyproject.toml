@@ -81,7 +81,7 @@ biahub = "biahub.cli.main:cli"
 index-strategy = "unsafe-best-match"
 
 [tool.uv.sources]
-cytoland = { git = "https://github.com/mehta-lab/VisCy", subdirectory = "applications/cytoland", branch = "modular-viscy-staging" }
+cytoland = { git = "https://github.com/mehta-lab/VisCy", subdirectory = "applications/cytoland", branch = "feat/vs-nonsquare-tta-and-helpers" }
 
 [tool.hatch.metadata]
 allow-direct-references = true
