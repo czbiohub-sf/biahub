@@ -1,441 +1,475 @@
-import os
-import shutil
-import subprocess
-
 from pathlib import Path
 
 import click
 import numpy as np
 import submitit
+import torch
+import torch.nn.functional as F  # noqa: N812
 
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate
 
+from biahub.cli import utils
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
+    cluster,
+    config_filepath,
+    init_only,
     input_position_dirpaths,
-    local,
     monitor,
-    num_processes,
     output_dirpath,
-    sbatch_filepath_predict,
-    sbatch_filepath_preprocess,
+    sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import get_submitit_cluster
+from biahub.cli.utils import (
+    estimate_resources,
+    get_submitit_cluster,
+    resolve_ome_zarr_version,
+)
+
+# Needed for multiprocessing with GPUs
+# https://github.com/pytorch/pytorch/issues/40403#issuecomment-1422625325
+torch.multiprocessing.set_start_method("spawn", force=True)
 
 
-def run_viscy_preprocess(
-    data_path: str,
-    num_workers: int = 32,
-    config_file: str = None,
-    path_viscy_env: Path = None,
-    verbose: bool = False,
-):
+def build_predict_parser():
+    """Build a jsonargparse parser that mirrors the ``viscy predict`` config.
+
+    The model and data blocks are registered as subclass arguments of VisCy's
+    own ``VSUNet`` and ``HCSDataModule`` classes, so the configuration is
+    validated against VisCy's actual class signatures -- the same machinery the
+    ``viscy predict`` CLI uses. biahub therefore keeps no copy of the model
+    schema that could fall out of date when VisCy changes upstream.
+
+    The two biahub-specific orchestration knobs (``sliding_window_step`` and
+    ``device``) and the top-level ``ckpt_path`` are added as plain arguments.
+    ``data.init_args.data_path`` is intentionally left out of the config file --
+    biahub injects the position path per job.
     """
-    Run VisCy preprocess on a single FOV.
+    import jsonargparse
+
+    from cytoland.engine import VSUNet
+    from viscy_data.hcs import HCSDataModule
+
+    parser = jsonargparse.ArgumentParser()
+    parser.add_argument("--config", action="config")
+    parser.add_subclass_arguments(VSUNet, "model")
+    parser.add_subclass_arguments(HCSDataModule, "data")
+    parser.add_argument("--ckpt_path", type=str, required=True)
+    parser.add_argument("--sliding_window_step", type=int, default=1)
+    parser.add_argument("--device", type=str, default="cuda")
+    return parser
+
+
+def load_predict_config(config_filepath: Path, data_path: Path):
+    """Validate a VisCy predict config and inject the per-position ``data_path``.
 
     Parameters
     ----------
-    data_path : str
-        Path to the FOV data.
-    num_workers : int
-        Number of workers to use.
-    config_file : str
-        Path to the VisCy config file.
-    path_viscy_env : Path
-        Path to the VisCy environment.
-    verbose : bool
-        Whether to print verbose output.
+    config_filepath : Path
+        Path to the VisCy-style predict YAML config.
+    data_path : Path
+        Position path injected as ``data.init_args.data_path`` (biahub supplies
+        this per job; the first position is used for submit-time validation).
+
+    Returns
+    -------
+    tuple
+        ``(parser, cfg)`` where ``cfg`` is the validated config namespace.
     """
-    cmd = (
-        "module load anaconda && "
-        f"conda activate {path_viscy_env} && "
-        f"viscy preprocess "
-        f"--data_path {data_path} "
-        f"--num_workers {num_workers} "
+    parser = build_predict_parser()
+    cfg = parser.parse_args(
+        [
+            "--config",
+            str(config_filepath),
+            "--data.init_args.data_path",
+            str(data_path),
+        ]
     )
-    if config_file:
-        cmd += f" -c {config_file}"
-    else:
-        cmd += "--channel_names -1  --block_size 32"
-    if verbose:
-        click.echo(f"Preprocess FOV: {'/'.join(Path(data_path).parts[-3:])}")
-        click.echo(f"Command: {cmd}")
-    subprocess.run(cmd, shell=True, check=True, executable="/bin/bash")
+    return parser, cfg
 
 
-def run_viscy_predict(
-    data_path: str,
-    config_file: str,
-    output_store: str,
-    log_dir: str,
-    path_viscy_env: Path = None,
-    verbose: bool = False,
-):
+def _normalization_params(normalizations, source_channel: str):
+    """Extract (level, subtrahend, divisor) for ``source_channel`` from the config.
+
+    Reads the ``NormalizeSampled`` entry in ``data.init_args.normalizations``
+    whose keys include the source channel, mirroring ``viscy predict``.
     """
-    Run VisCy predict on a single FOV.
+    if normalizations is None:
+        raise ValueError(
+            "No normalizations defined in the config. Add a NormalizeSampled "
+            "transform for the source channel so predictions match `viscy predict`."
+        )
+    for norm in normalizations:
+        init_args = norm.init_args
+        keys = init_args["keys"]
+        keys = [keys] if isinstance(keys, str) else keys
+        if source_channel in keys:
+            return init_args.level, init_args.subtrahend, init_args.divisor
+    raise ValueError(
+        f"No normalization found for source channel '{source_channel}' "
+        f"in the config normalizations."
+    )
+
+
+def _read_fov_statistics(
+    dataset, source_channel: str, level: str, subtrahend: str, divisor: str
+) -> tuple[float, float]:
+    """Read precomputed normalization statistics from the store metadata.
+
+    These are written by `viscy preprocess`. Raises a helpful error if missing.
+    """
+    norm_meta = dataset.zattrs.get("normalization")
+    if (
+        norm_meta is None
+        or source_channel not in norm_meta
+        or level not in norm_meta[source_channel]
+    ):
+        raise RuntimeError(
+            f"Normalization statistics ('{level}' for channel '{source_channel}') "
+            f"were not found in the input store. Run `viscy preprocess` on the "
+            f"input dataset before virtual staining."
+        )
+    stats = norm_meta[source_channel][level]
+    return float(stats[subtrahend]), float(stats[divisor])
+
+
+def _predict_volume(
+    predictor,
+    source: torch.Tensor,
+    out_channel: int,
+    step: int,
+    use_tta: bool,
+    reduction: str,
+) -> torch.Tensor:
+    """Run sliding-window prediction, optionally with 90-degree rotation TTA.
+
+    Rotation TTA pads the volume to a square in YX before rotating, so the
+    90/270-degree rotations are shape-preserving, then crops back afterwards.
+    This mirrors VisCy's ``VSUNet.perform_test_time_augmentations`` and keeps
+    TTA correct for non-square fields of view (rotating a non-square volume
+    in-place would otherwise change the YX dimensions).
 
     Parameters
     ----------
-    data_path : str
-        Path to the FOV data.
-    config_file : str
-        Path to the VisCy config file.
-    output_store : str
-        Path to the output store.
-    log_dir : str
-        Path to the log directory.
-    path_viscy_env : Path
-        Path to the VisCy environment.
-    verbose : bool
-        Whether to print verbose output.
+    predictor : AugmentedPredictionVSUNet
+        Sliding-window predictor (with identity transforms).
+    source : torch.Tensor
+        Normalized source volume, shape ``(B, C, Z, Y, X)``.
+    out_channel : int
+        Number of predicted output channels.
+    step : int
+        Sliding-window step along Z.
+    use_tta : bool
+        Whether to apply rotation test-time augmentation.
+    reduction : str
+        ``"median"`` or ``"mean"`` aggregation across rotations.
 
+    Returns
+    -------
+    torch.Tensor
+        Prediction of shape ``(B, out_channel, Z, Y, X)``.
     """
-    os.chdir(log_dir)
-    # Compose the shell command
-    cmd = (
-        "module load anaconda && "
-        f"conda activate {path_viscy_env} && "
-        "viscy predict "
-        f'-c "{config_file}" '
-        f'--data.init_args.data_path "{data_path}" '
-        f"--trainer.callbacks+=viscy.translation.predict_writer.HCSPredictionWriter "
-        f'--trainer.callbacks.output_store "{output_store}" '
-        f'--trainer.default_root_dir "{log_dir}"'
+    if not use_tta:
+        return predictor.predict_sliding_windows(
+            source, out_channel=out_channel, step=step
+        )
+
+    *_, height, width = source.shape
+    side = max(height, width)
+    # Pad YX to a square so 90/270-degree rotations preserve the shape.
+    padded = F.pad(source, (0, side - width, 0, side - height))
+    predictions = []
+    for k in range(4):
+        rotated = torch.rot90(padded, k, dims=(-2, -1))
+        pred = predictor.predict_sliding_windows(
+            rotated, out_channel=out_channel, step=step
+        )
+        pred = torch.rot90(pred, -k, dims=(-2, -1))
+        predictions.append(pred[..., :height, :width])  # crop back to original YX
+    stacked = torch.stack(predictions)
+    if reduction == "median":
+        return stacked.median(dim=0).values
+    return stacked.mean(dim=0)
+
+
+def virtual_stain_position(
+    config_filepath: Path,
+    input_position_path: Path,
+    output_position_path: Path,
+):
+    """Run cytoland virtual staining on a single position, looping over time.
+
+    Inference is GPU-bound, so timepoints are processed serially in a ``for``
+    loop rather than in parallel. Each timepoint volume is normalized using the
+    precomputed statistics in the store and passed through
+    ``AugmentedPredictionVSUNet.predict_sliding_windows`` -- the same linear
+    feathering blend used by the ``viscy predict`` ``HCSPredictionWriter``.
+
+    Parameters
+    ----------
+    config_filepath : Path
+        Path to the VisCy-style predict config.
+    input_position_path : Path
+        Input position (label-free source) to virtually stain.
+    output_position_path : Path
+        Output position to write predictions into.
+    """
+    from cytoland.engine import AugmentedPredictionVSUNet
+
+    parser, cfg = load_predict_config(config_filepath, input_position_path)
+
+    device = torch.device(
+        cfg.device if (cfg.device == "cpu" or torch.cuda.is_available()) else "cpu"
     )
-    if verbose:
-        click.echo(f"Predict FOV: {'/'.join(Path(data_path).parts[-3:])}")
-        click.echo(f"Command: {cmd}")
-    subprocess.run(cmd, shell=True, check=True, executable="/bin/bash")
+
+    # Instantiate the VSUNet from VisCy's own class, then load the checkpoint
+    # weights. Building via VisCy keeps biahub free of the model schema.
+    vsunet = parser.instantiate(cfg).model
+    state_dict = torch.load(cfg.ckpt_path, weights_only=True, map_location="cpu")[
+        "state_dict"
+    ]
+    vsunet.load_state_dict(state_dict)
+    vsunet.eval().to(device)
+
+    # Read the config's test-time-augmentation flags. Rotation TTA is applied
+    # at the volume level (see ``_predict_volume``) with square padding so it
+    # works on non-square FOVs, so the wrapper itself uses identity transforms.
+    use_tta = bool(getattr(cfg.model.init_args, "test_time_augmentations", False))
+    tta_type = getattr(cfg.model.init_args, "tta_type", "mean")
+    reduction = "median" if tta_type == "median" else "mean"
+
+    predictor = AugmentedPredictionVSUNet(model=vsunet.model).eval().to(device)
+
+    source_channel = cfg.data.init_args.source_channel
+    source_channel = (
+        source_channel[0] if isinstance(source_channel, list) else source_channel
+    )
+    target_channels = cfg.data.init_args.target_channel
+    target_channels = (
+        [target_channels] if isinstance(target_channels, str) else target_channels
+    )
+    out_channel = len(target_channels)
+    level, subtrahend, divisor = _normalization_params(
+        cfg.data.init_args.normalizations, source_channel
+    )
+    step = cfg.sliding_window_step
+
+    with open_ome_zarr(str(input_position_path), mode="r") as input_dataset:
+        T = input_dataset.data.shape[0]
+        channel_index = input_dataset.channel_names.index(source_channel)
+        subtrahend_value, divisor_value = _read_fov_statistics(
+            input_dataset, source_channel, level, subtrahend, divisor
+        )
+
+        with open_ome_zarr(str(output_position_path), mode="r+") as output_dataset:
+            for t in range(T):
+                # (1, 1, Z, Y, X) source volume for this timepoint
+                volume = np.asarray(
+                    input_dataset.data[t : t + 1, channel_index : channel_index + 1]
+                )
+                volume = (volume - subtrahend_value) / divisor_value
+                source = torch.from_numpy(volume).float().to(device)
+                with torch.inference_mode():
+                    prediction = _predict_volume(
+                        predictor,
+                        source,
+                        out_channel=out_channel,
+                        step=step,
+                        use_tta=use_tta,
+                        reduction=reduction,
+                    )
+                output_dataset.data[t] = prediction[0].cpu().numpy()
 
 
-def combine_fov_zarrs_to_plate(
-    fovs: list[Path],
-    temp_dir: Path,
+def _init_output_plate(
+    input_position_dirpaths: list[Path],
     output_dirpath: Path,
-    cleanup: bool = True,
-):
+    target_channels: list[str],
+) -> tuple[int, int, int, int, int]:
+    """Create (or extend) the empty virtual-stain output plate.
+
+    The output mirrors the input geometry but contains only the predicted
+    virtual-stain channels. ``create_empty_plate`` is idempotent, so this is
+    safe to call from both the orchestrator and per-position runs.
+
+    Returns the input ``(T, C, Z, Y, X)`` shape.
     """
-    Combine VisCy-predicted FOV Zarrs (in temp) into a single HCS plate Zarr by moving.
+    with open_ome_zarr(str(input_position_dirpaths[0]), mode="r") as input_dataset:
+        input_shape = input_dataset.data.shape
+        scale = input_dataset.scale
+    T, C, Z, Y, X = input_shape
 
-    Parameters
-    ----------
-    fovs : list of Path
-        Original FOV paths (used to extract B/1/000000).
-    temp_dir : Path
-        Directory containing the individual .zarr folders (each named like B_1_000000.zarr).
-    output_dirpath : Path
-        The plate-level HCS Zarr to merge into.
-    cleanup : bool
-        Whether to delete the moved files afterwards. Default True.
-    """
-    for fov in fovs:
-        row, col, pos = fov.parts[-3:]
-        nested_fov_path = temp_dir / f"{row}_{col}_{pos}.zarr" / row / col / pos
+    create_empty_plate(
+        store_path=output_dirpath,
+        position_keys=[Path(p).parts[-3:] for p in input_position_dirpaths],
+        channel_names=target_channels,
+        shape=(T, len(target_channels), Z, Y, X),
+        scale=scale,
+        version=resolve_ome_zarr_version(input_position_dirpaths[0], None),
+    )
 
-        if not nested_fov_path.exists():
-            print(f"Skipping missing: {nested_fov_path}")
-            continue
-
-        dest_path = output_dirpath / row / col / pos
-
-        if dest_path.exists():
-            shutil.rmtree(dest_path)
-
-        print(f"Moving {nested_fov_path} → {dest_path}")
-        shutil.move(str(nested_fov_path), str(dest_path))
-
-    # Optionally remove the full temp zarr folder if it's now empty
-    if cleanup:
-        try:
-            shutil.rmtree(temp_dir)
-        except Exception as e:
-            print(f"Could not remove {temp_dir}: {e}")
-
-    print(f"Combined all FOVs into {output_dirpath}")
+    return (T, C, Z, Y, X)
 
 
 def virtual_stain(
     input_position_dirpaths: list[str],
+    config_filepath: Path,
     output_dirpath: str,
-    predict_config_filepath: str,
-    path_viscy_env: str,
-    preprocess_config_filepath: str = None,
-    sbatch_filepath_preprocess: str = None,
-    sbatch_filepath_predict: str = None,
-    run_mode: str = "all",
-    num_processes: int = 32,
-    local: bool = False,
+    sbatch_filepath: str = None,
+    cluster: str = "slurm",
     monitor: bool = True,
-    verbose: bool = True,
+    init_only: bool = False,
 ):
-    """
-    Run VisCy virtual stain on a plate.
+    """Run cytoland virtual staining on a plate, one GPU job per position.
+
+    Opens the input store, creates an output store containing only the
+    predicted virtual-stain channels, and dispatches one job per position. Each
+    job runs ``virtual_stain_position``, which loops over timepoints on a single
+    GPU.
 
     Parameters
     ----------
-    input_position_dirpaths : List[str]
-        List of paths to the input position directories.
+    input_position_dirpaths : list[str]
+        Input position directory paths.
+    config_filepath : Path
+        Path to the VisCy-style predict config.
     output_dirpath : str
-        Path to the output directory.
-    predict_config_filepath : str
-        Path to the VisCy predict config file.
-    preprocess_config_filepath : str
-        Path to the VisCy preprocess config file.
-    path_viscy_env : str
-        Path to the VisCy environment.
-    sbatch_filepath_preprocess : str
-        Path to the VisCy preprocess sbatch file.
-    sbatch_filepath_predict : str
-        Path to the VisCy predict sbatch file.
-    run_mode : str
-        Which VisCy stage(s) to run.
-    num_processes : int
-        Number of processes to use.
-    local : bool
-        Whether to run locally.
-    monitor : bool
-
+        Output plate path.
+    sbatch_filepath : str, optional
+        SBATCH file overriding default SLURM parameters.
+    cluster : str, optional
+        Execution cluster: 'slurm' submits to a Slurm cluster, 'local' runs jobs
+        as subprocesses on this machine, 'debug' runs jobs in-process in the
+        foreground.
+    monitor : bool, optional
+        Monitor submitted jobs.
+    init_only : bool, optional
+        Only initialize the output store and exit; skip per-position processing.
     """
     output_dirpath = Path(output_dirpath)
+    config_filepath = Path(config_filepath)
     slurm_out_path = output_dirpath.parent / "slurm_output"
 
-    cluster = get_submitit_cluster(local)
+    # Validate the config against VisCy's schema up front (using the first
+    # position for data_path) and read the predicted channel names.
+    _, cfg = load_predict_config(config_filepath, input_position_dirpaths[0])
+    target_channels = cfg.data.init_args.target_channel
+    target_channels = (
+        [target_channels] if isinstance(target_channels, str) else target_channels
+    )
 
-    job_ids_preprocess = []
-    slurm_dependency = None
-    path_viscy_env = Path(path_viscy_env)
+    input_shape = _init_output_plate(
+        input_position_dirpaths, output_dirpath, target_channels
+    )
 
-    if run_mode in ["all", "preprocess"]:
-        slurm_args_preprocess = {
-            "slurm_job_name": "VS_preprocess",
-            "slurm_mem_per_cpu": "8G",
-            "slurm_cpus_per_task": num_processes,
-            "slurm_array_parallelism": 1,
-            "slurm_time": 8 * 60,
-            "slurm_partition": "cpu",
-        }
+    # Estimate resources (one timepoint volume in RAM per worker)
+    num_cpus, gb_ram = estimate_resources(
+        shape=input_shape, ram_multiplier=16, max_num_cpus=8
+    )
+    click.echo(f"RESOURCES:{num_cpus} {num_cpus * gb_ram}")
 
-        if sbatch_filepath_preprocess:
-            slurm_args_preprocess.update(sbatch_to_submitit(sbatch_filepath_preprocess))
-
-        executor = submitit.AutoExecutor(folder=slurm_out_path / "preprocess", cluster=cluster)
-        executor.update_parameters(**slurm_args_preprocess)
-        click.echo(f"Submitting preprocess job with: {slurm_args_preprocess}")
-
-        plate_path = Path(input_position_dirpaths[0]).parents[2]
-        with executor.batch():
-            job = executor.submit(
-                run_viscy_preprocess,
-                data_path=str(plate_path),
-                num_workers=num_processes,
-                config_file=preprocess_config_filepath,
-                path_viscy_env=path_viscy_env,
-                verbose=verbose,
-            )
-            job_ids_preprocess.append(job)
-
-        job_ids = [
-            job.job_id for job in job_ids_preprocess
-        ]  # Access job IDs after batch submission
-
-        log_path = Path(slurm_out_path / "preprocess" / "submitit_jobs_ids.log")
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        with log_path.open("w") as log_file:
-            log_file.write("\n".join(job_ids))
-
-        slurm_dependency = f"afterok:{job.job_id}"
-
-    job_ids_predict = []
-    job_ids_combine = []
-
-    if run_mode in ["all", "predict"]:
-        slurm_args_predict = {
-            "slurm_job_name": "VS_predict",
-            "slurm_mem_per_cpu": "16G",
-            "slurm_cpus_per_task": 32,
-            "slurm_array_parallelism": 100,
-            "slurm_time": 8 * 60,
-            "slurm_partition": "gpu",
-            "slurm_gres": "gpu:1",
-            "slurm_constraint": "a100|a6000|a40",
-            "slurm_use_srun": False,
-        }
-
-        if slurm_dependency:
-            slurm_args_predict["slurm_dependency"] = slurm_dependency
-
-        if sbatch_filepath_predict:
-            slurm_args_predict.update(sbatch_to_submitit(sbatch_filepath_predict))
-
-        executor = submitit.AutoExecutor(folder=slurm_out_path / "predict", cluster=cluster)
-        executor.update_parameters(**slurm_args_predict)
-        click.echo(f"Submitting predict jobs with: {slurm_args_predict}")
-        config_file = str(Path(predict_config_filepath).resolve())
-        fovs = []
-
-        with executor.batch():
-            for input_position_path in input_position_dirpaths:
-                fov = Path(*input_position_path.parts[-3:])
-                fovs.append(fov)
-                log_dir = (output_dirpath.parent / "logs" / "_".join(fov.parts)).resolve()
-                os.makedirs(log_dir, exist_ok=True)
-                data_path = str(Path(input_position_path).resolve())
-
-                output_fov_path = (
-                    output_dirpath.parent / "temp" / f"{'_'.join(fov.parts)}.zarr"
-                )
-                output_store = str(Path(output_fov_path).resolve())
-
-                job = executor.submit(
-                    run_viscy_predict,
-                    data_path=data_path,
-                    config_file=config_file,
-                    output_store=output_store,
-                    log_dir=log_dir,
-                    path_viscy_env=path_viscy_env,
-                    verbose=verbose,
-                )
-                job_ids_predict.append(job)
-
-        job_ids = [
-            job.job_id for job in job_ids_predict
-        ]  # Access job IDs after batch submission
-
-        log_path = Path(slurm_out_path / "predict" / "submitit_jobs_ids.log")
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        with log_path.open("w") as log_file:
-            log_file.write("\n".join(job_ids))
-
-        with open_ome_zarr(input_position_dirpaths[0]) as dataset:
-            T, C, Z, Y, X = dataset.data.shape
-            channel_names = dataset.channel_names
-            scale = dataset.scale
-
-        output_metadata = {
-            "shape": (T, len(channel_names), Z, Y, X),
-            "chunks": None,
-            "scale": scale,
-            "channel_names": channel_names,
-            "dtype": np.float32,
-        }
-
-        create_empty_plate(
-            store_path=output_dirpath,
-            position_keys=[p.parts[-3:] for p in input_position_dirpaths],
-            **output_metadata,
+    if init_only:
+        click.echo(
+            f"Initialized {output_dirpath} ({len(input_position_dirpaths)} positions)"
         )
+        return
 
-        slurm_args_combine = {
-            "slurm_job_name": "VS_combine",
-            "slurm_mem_per_cpu": "8G",
-            "slurm_cpus_per_task": num_processes,
-            "slurm_array_parallelism": 1,
-            "slurm_time": 8 * 60,
-            "slurm_partition": "cpu",
-            "slurm_dependency": f"afterok:{':'.join([str(job.job_id) for job in job_ids_predict])}",
-        }
+    output_position_paths = utils.get_output_paths(input_position_dirpaths, output_dirpath)
 
-        executor = submitit.AutoExecutor(folder=slurm_out_path / "combine", cluster=cluster)
-        executor.update_parameters(**slurm_args_combine)
-        click.echo(f"Submitting combine job with: {slurm_args_combine}")
+    T = input_shape[0]
+    # Prepare SLURM arguments
+    slurm_args = {
+        "slurm_job_name": "virtual-stain",
+        "slurm_gres": "gpu:1",
+        "slurm_mem_per_cpu": f"{gb_ram}G",
+        "slurm_cpus_per_task": num_cpus,
+        "slurm_array_parallelism": 100,  # process up to 100 positions at a time
+        "slurm_time": int(np.ceil(np.max([60, T * 3]))),
+        "slurm_partition": "gpu",
+    }
 
-        plate_path = Path(input_position_dirpaths[0]).parents[2]
+    # Override defaults if sbatch_filepath is provided
+    if sbatch_filepath:
+        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
-        with executor.batch():
-            job = executor.submit(
-                combine_fov_zarrs_to_plate,
-                fovs=fovs,
-                temp_dir=output_dirpath.parent / "temp",
-                output_dirpath=output_dirpath,
-                cleanup=True,
+    resolved_cluster = get_submitit_cluster(cluster=cluster)
+    click.echo(f"Preparing jobs on cluster='{resolved_cluster}': {slurm_args}")
+    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=resolved_cluster)
+    executor.update_parameters(**slurm_args)
+
+    click.echo("Submitting jobs...")
+    jobs = []
+    with submitit.helpers.clean_env(), executor.batch():
+        for input_position_path, output_position_path in zip(
+            input_position_dirpaths, output_position_paths, strict=True
+        ):
+            jobs.append(
+                executor.submit(
+                    virtual_stain_position,
+                    config_filepath,
+                    input_position_path,
+                    output_position_path,
+                )
             )
-            job_ids_combine.append(job)
 
-        job_ids = [
-            job.job_id for job in job_ids_combine
-        ]  # Access job IDs after batch submission
+    job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 
-        log_path = Path(slurm_out_path / "combine" / "submitit_jobs_ids.log")
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        with log_path.open("w") as log_file:
-            log_file.write("\n".join(job_ids))
+    slurm_out_path.mkdir(parents=True, exist_ok=True)
+    log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
+    with log_path.open("w") as log_file:
+        log_file.write("\n".join(job_ids))
+
+    # submitit's DebugExecutor is lazy: .submit() wraps the callable in a
+    # DebugJob but execution only happens when .wait()/.done()/.result() is
+    # called. Run each one in the foreground and stream progress; monitor's
+    # async polling UI is pointless against synchronous in-process jobs.
+    if resolved_cluster == "debug":
+        for job, path in zip(jobs, input_position_dirpaths, strict=True):
+            job.wait()
+            click.echo(f"Virtual staining complete: {path}")
+        return
 
     if monitor:
-        job_ids = [
-            job.job_id for job in job_ids_predict + job_ids_preprocess + job_ids_combine
-        ]
-        monitor_jobs(job_ids, input_position_dirpaths)
+        monitor_jobs(jobs, input_position_dirpaths)
 
 
 @click.command("virtual-stain")
 @input_position_dirpaths()
+@config_filepath()
 @output_dirpath()
-@sbatch_filepath_preprocess()
-@sbatch_filepath_predict()
-@num_processes()
-@local()
+@sbatch_filepath()
+@cluster()
 @monitor()
-@click.option("--verbose", is_flag=True, default=False, help="Verbose output.")
-@click.option(
-    "--path-viscy-env",
-    required=True,
-    help="Conda environment with VisCy installed.",
-)
-@click.option(
-    "--preprocess-config-filepath",
-    type=str,
-    help="Path to the VisCy preprocess config file.",
-)
-@click.option(
-    "--predict-config-filepath",
-    type=str,
-    help="Path to the VisCy predict config file.",
-)
-@click.option(
-    "--run-mode",
-    type=click.Choice(["all", "preprocess", "predict"]),
-    default="all",
-    help="Which VisCy stage(s) to run.",
-)
+@init_only()
 def virtual_stain_cli(
     input_position_dirpaths: list[str],
+    config_filepath: Path,
     output_dirpath: str,
-    predict_config_filepath: str,
-    path_viscy_env: str,
-    preprocess_config_filepath: str = None,
-    run_mode: str = "all",
-    num_processes: int = 32,
-    sbatch_filepath_preprocess: str = None,
-    sbatch_filepath_predict: str = None,
-    local: bool = False,
+    sbatch_filepath: str = None,
+    cluster: str = "slurm",
     monitor: bool = True,
-    verbose: bool = True,
+    init_only: bool = False,
 ):
-    """Run VisCy virtual staining on a zarr plate from dedicated python environment.
+    """Virtually stain a label-free dataset using a cytoland (VisCy) model.
+
+    Runs cytoland's ``predict_sliding_windows`` per position, looping over
+    timepoints on a single GPU. The config is a ``viscy predict`` YAML and is
+    validated against VisCy's own model/data classes.
 
     >>> biahub virtual-stain \
-        --input-position-dirpaths path.zarr/*/*/* \
-        --output-dirpath output.zarr \
-        --predict-config-filepath predict.yml \
-        --preprocess-config-filepath preprocess.yml \
-        --path-viscy-env /path/to/viscy/env \
-        --run-mode all
+        -i ./input.zarr/*/*/* \
+        -c ./virtual_stain_params.yml \
+        -o ./output.zarr
     """
     virtual_stain(
         input_position_dirpaths=input_position_dirpaths,
+        config_filepath=config_filepath,
         output_dirpath=output_dirpath,
-        predict_config_filepath=predict_config_filepath,
-        preprocess_config_filepath=preprocess_config_filepath,
-        sbatch_filepath_preprocess=sbatch_filepath_preprocess,
-        sbatch_filepath_predict=sbatch_filepath_predict,
-        path_viscy_env=path_viscy_env,
-        run_mode=run_mode,
-        num_processes=num_processes,
-        local=local,
+        sbatch_filepath=sbatch_filepath,
+        cluster=cluster,
         monitor=monitor,
-        verbose=verbose,
+        init_only=init_only,
     )
 
 

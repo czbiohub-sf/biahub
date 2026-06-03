@@ -52,10 +52,7 @@ track = ["ultrack>=0.7"]
 
 gui = ["napari[pyqt6]", "PyQt6>=6.5,<6.8", "napari-animation"]
 
-# TODO: resolved to v0.3.2 which is not compatible with iohub 0.3.0a7
-# bring bach once we sort out iohub dependencies
-# stain = ["viscy"]
-stain = []
+stain = ["cytoland"]
 
 build = ["build", "twine"]
 
@@ -82,6 +79,9 @@ biahub = "biahub.cli.main:cli"
 # when resolving build-system requirements such as iohub's hatchling /
 # uv-dynamic-versioning chain, which pulls in packaging>=24.2.
 index-strategy = "unsafe-best-match"
+
+[tool.uv.sources]
+cytoland = { git = "https://github.com/mehta-lab/VisCy", subdirectory = "applications/cytoland", branch = "modular-viscy-staging" }
 
 [tool.hatch.metadata]
 allow-direct-references = true
