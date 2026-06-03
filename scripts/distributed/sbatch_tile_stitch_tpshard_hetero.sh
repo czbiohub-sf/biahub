@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # TP-parallel Monarch tile-stitch — 4 single-GPU shards across FLEXIBLE node
-# placement, mixing H100 and H200. Derived from sbatch_m3_monarch_tpshard.sh.
+# placement, mixing H100 and H200. Derived from sbatch_tile_stitch_tpshard.sh.
 #
 # Design: timepoints are independent, so we shard them across 4 single-GPU
 # tasks. Each task runs its own single-host Monarch this_host() runtime on its
@@ -23,14 +23,14 @@
 # it, then write their disjoint T-slots concurrently.
 #
 # Submit (10 TPs across 4 single-GPU shards):
-#   sbatch scripts/distributed/sbatch_m3_monarch_4gpu_hetero.sh \
-#       --config settings/tile-rec-stitch/monarch_2gpu.yml \
+#   sbatch scripts/distributed/sbatch_tile_stitch_tpshard_hetero.sh \
+#       --config settings/tile-rec-stitch/example_minimal.yml \
 #       --input  /hpc/projects/waveorder/tile-stitch/sample_datasets/deskewed_t100_c0.zarr \
 #       --output /hpc/projects/waveorder/tile-stitch/runs/bench_t10_monarch_4gpu_hetero/output \
 #       --channel "camera 22500102 view 0 @ 780nm" \
 #       --timepoints 0-9
 #
-#SBATCH --job-name=m3-monarch-4gpu-hetero
+#SBATCH --job-name=tile-stitch-tpshard-hetero
 #SBATCH --partition=gpu
 #SBATCH --ntasks=4
 #SBATCH --gpus-per-task=1

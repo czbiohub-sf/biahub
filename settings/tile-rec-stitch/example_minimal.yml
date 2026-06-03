@@ -3,8 +3,8 @@
 # (Monarch is the only backend now). monarch block omitted → bench-best
 # defaults (recon_batch=4, prefetch_depth=6, device=cuda).
 #
-#   sbatch scripts/distributed/sbatch_m3_monarch.sh \
-#       --config settings/tile-rec-stitch/monarch_2gpu.yml \
+#   sbatch scripts/distributed/sbatch_tile_stitch_singlenode.sh \
+#       --config settings/tile-rec-stitch/example_minimal.yml \
 #       --input  /hpc/projects/waveorder/tile-stitch/sample_datasets/l0_brightfield_fov.zarr \
 #       --output /hpc/projects/waveorder/tile-stitch/runs/m3_integration/output \
 #       --channel "camera 22500102 view 0 @ 780nm" --timepoint 0

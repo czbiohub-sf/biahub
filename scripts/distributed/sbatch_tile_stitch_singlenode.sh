@@ -2,13 +2,13 @@
 # M3 — single-host Monarch full c0041 run on 2 H200.
 #
 # Submit:
-#   sbatch scripts/distributed/sbatch_m3_monarch.sh \
-#       --config settings/tile-rec-stitch/monarch_2gpu.yml \
+#   sbatch scripts/distributed/sbatch_tile_stitch_singlenode.sh \
+#       --config settings/tile-rec-stitch/example_minimal.yml \
 #       --input  /hpc/projects/waveorder/tile-stitch/sample_datasets/l0_brightfield_fov.zarr \
-#       --output /hpc/projects/waveorder/tile-stitch/runs/m3_monarch/output \
+#       --output /hpc/projects/waveorder/tile-stitch/runs/tile_stitch/output \
 #       --channel "camera 22500102 view 0 @ 780nm"
 #
-#SBATCH --job-name=m3-monarch
+#SBATCH --job-name=tile-stitch-singlenode
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:2
 #SBATCH --gres-flags=enforce-binding

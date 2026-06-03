@@ -8,14 +8,14 @@
 # Each node runs its own Monarch this_host() actor mesh on 2 GPUs.
 #
 # Submit (10 TPs across 2 nodes → 5 TPs/node):
-#   sbatch scripts/distributed/sbatch_m3_monarch_tpshard.sh \
-#       --config settings/tile-rec-stitch/monarch_2gpu.yml \
+#   sbatch scripts/distributed/sbatch_tile_stitch_tpshard.sh \
+#       --config settings/tile-rec-stitch/example_minimal.yml \
 #       --input  /hpc/projects/waveorder/tile-stitch/sample_datasets/deskewed_t100_c0.zarr \
 #       --output /hpc/projects/waveorder/tile-stitch/runs/bench_t10_monarch_tpshard/output \
 #       --channel "camera 22500102 view 0 @ 780nm" \
 #       --timepoints 0-9
 #
-#SBATCH --job-name=m3-monarch-tpshard
+#SBATCH --job-name=tile-stitch-tpshard
 #SBATCH --partition=gpu
 #SBATCH --nodes=2
 #SBATCH --ntasks-per-node=1

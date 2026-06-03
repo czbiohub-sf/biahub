@@ -2,13 +2,13 @@
 #
 # Single node, 2 GPUs:
 #   biahub tile-stitch \
-#       -c settings/tile-rec-stitch/example_tile_stitch_gpu.yml \
+#       -c settings/tile-rec-stitch/example_annotated.yml \
 #       -i /hpc/projects/waveorder/tile-stitch/sample_datasets/l0_brightfield_fov.zarr \
 #       -o /hpc/projects/waveorder/tile-stitch/runs/repro_c0041/output \
 #       --channel "camera 22500102 view 0 @ 780nm" --timepoint 0
 #
 # Many timepoints across nodes: add --timepoints 0-9 --shard-by-proc and submit
-# via scripts/distributed/sbatch_m3_monarch_tpshard.sh.
+# via scripts/distributed/sbatch_tile_stitch_tpshard.sh.
 
 tile_stitch:                  # waveorder TileStitchSettings (tile + blend + recon)
   tile:
