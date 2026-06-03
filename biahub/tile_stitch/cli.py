@@ -86,10 +86,12 @@ def tile_stitch_cli(
 
     import os
 
+    import numpy as np
+
     from iohub.ngff import open_ome_zarr
     from waveorder.tile_stitch._engine import build_plan as engine_build_plan
 
-    from biahub.tile_stitch._zarr_util import create_multi_tp_zarr, parse_timepoints
+    from biahub.tile_stitch._zarr_util import parse_timepoints
     from biahub.tile_stitch.config import TileStitchRun
     from biahub.tile_stitch.monarch.backend import MonarchBackend
     from biahub.tile_stitch.plan import from_engine_plan, write_plan
@@ -150,9 +152,17 @@ def tile_stitch_cli(
         output_path if output_path.suffix == ".zarr" else output_path.with_suffix(".zarr")
     )
     if procid == 0:
-        # One coordinator creates the shared zarr (T-chunk=1 → shards write
-        # disjoint chunks concurrently, no races).
-        create_multi_tp_zarr(final_output, full_shape, chunk_shape, f"{ch}_recon")
+        # One coordinator pre-creates the shared output mosaic: an OME-NGFF
+        # FOV whose T dim spans the GLOBAL range, lazily zero-filled
+        # (unwritten T slots read back as 0). T-chunk=1 so shards write
+        # disjoint chunks concurrently, no races. ``create_zeros`` writes the
+        # metadata + array without materializing the (100s of GB) full volume.
+        with open_ome_zarr(
+            final_output, layout="fov", mode="w", channel_names=[f"{ch}_recon"]
+        ) as out_ds:
+            out_ds.create_zeros(
+                "0", shape=full_shape, dtype=np.float32, chunks=chunk_shape
+            )
         logger.info(
             "output zarr created: %s | full_shape=%s | chunks=%s",
             final_output, full_shape, chunk_shape,

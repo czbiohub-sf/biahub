@@ -70,7 +70,6 @@ def test_monarch_single_gpu_one_tp(tmp_path: Path):
     from iohub.ngff import open_ome_zarr
     from waveorder.tile_stitch._engine import build_plan as engine_build_plan
 
-    from biahub.tile_stitch._zarr_util import create_multi_tp_zarr
     from biahub.tile_stitch.config import MonarchConfig
     from biahub.tile_stitch.monarch.backend import MonarchBackend
     from biahub.tile_stitch.plan import from_engine_plan, write_plan
@@ -96,9 +95,12 @@ def test_monarch_single_gpu_one_tp(tmp_path: Path):
     spatial = tuple(engine_plan.full_shape[d] for d in engine_plan.tile_dims)
     tile_spatial = tuple(settings.tile.tile_size[d] for d in engine_plan.tile_dims)
     out_path = tmp_path / "output.zarr"
-    create_multi_tp_zarr(
-        out_path, (1, 1) + spatial, (1, 1) + tile_spatial, f"{channel}_recon"
-    )
+    with open_ome_zarr(
+        out_path, layout="fov", mode="w", channel_names=[f"{channel}_recon"]
+    ) as out_ds:
+        out_ds.create_zeros(
+            "0", shape=(1, 1) + spatial, dtype=np.float32, chunks=(1, 1) + tile_spatial
+        )
 
     run_plan = from_engine_plan(
         engine_plan,
