@@ -383,7 +383,7 @@ requires-dist = [
     { name = "twine", marker = "extra == 'build'" },
     { name = "ultrack", marker = "extra == 'all'", specifier = ">=0.7" },
     { name = "ultrack", marker = "extra == 'track'", specifier = ">=0.7" },
-    { name = "waveorder", editable = "/home/sricharan.varra/mydata/repos/waveorder.feature-distributed-recon" },
+    { name = "waveorder", git = "https://github.com/mehta-lab/waveorder.git?rev=f377a43" },
     { name = "zensical", marker = "extra == 'doc'", specifier = ">=0.0.32" },
 ]
 provides-extras = ["all", "build", "doc", "gui", "segment", "stain", "tilestitch-gpu", "track"]
@@ -5397,7 +5397,8 @@ wheels = [
 
 [[package]]
 name = "waveorder"
-source = { editable = "/home/sricharan.varra/mydata/repos/waveorder.feature-distributed-recon" }
+version = "3.0.5.dev2+f377a43"
+source = { git = "https://github.com/mehta-lab/waveorder.git?rev=f377a43#f377a43276535e28ec3f7cdb31a91897a96f5adb" }
 dependencies = [
     { name = "click" },
     { name = "colorspacious" },
@@ -5416,98 +5417,6 @@ dependencies = [
     { name = "tensorboard" },
     { name = "torch" },
     { name = "wget" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "click", specifier = ">=8.0.1" },
-    { name = "colorspacious", specifier = ">=1.1.2" },
-    { name = "importlib-metadata" },
-    { name = "iohub", specifier = ">=0.3.4" },
-    { name = "ipywidgets", specifier = ">=7.5.1" },
-    { name = "jupyter", marker = "extra == 'all'" },
-    { name = "jupyter", marker = "extra == 'visual'" },
-    { name = "jupytext", marker = "extra == 'all'" },
-    { name = "jupytext", marker = "extra == 'visual'" },
-    { name = "matplotlib", specifier = ">=3.1.1" },
-    { name = "napari", extras = ["pyqt6"], marker = "extra == 'all'" },
-    { name = "napari", extras = ["pyqt6"], marker = "extra == 'visual'" },
-    { name = "napari-ome-zarr", marker = "extra == 'all'", specifier = ">=0.3.2" },
-    { name = "napari-ome-zarr", marker = "extra == 'visual'", specifier = ">=0.3.2" },
-    { name = "natsort", specifier = ">=7.1.1" },
-    { name = "numpy", specifier = ">=1.24" },
-    { name = "psutil" },
-    { name = "pycromanager", marker = "extra == 'all'", specifier = "==0.27.2" },
-    { name = "pycromanager", marker = "extra == 'visual'", specifier = "==0.27.2" },
-    { name = "pydantic" },
-    { name = "pyqt6", marker = "extra == 'all'", specifier = ">=6.5,<6.8" },
-    { name = "pyqt6", marker = "extra == 'visual'", specifier = ">=6.5,<6.8" },
-    { name = "pyqtgraph", specifier = ">=0.12.3" },
-    { name = "pywavelets", specifier = ">=1.1.1" },
-    { name = "qtpy" },
-    { name = "scipy", specifier = ">=1.3.0" },
-    { name = "tensorboard", specifier = ">=2.14" },
-    { name = "torch", specifier = ">=2.4.1" },
-    { name = "wget", specifier = ">=3.2" },
-]
-provides-extras = ["all", "visual"]
-
-[package.metadata.requires-dev]
-bench = [
-    { name = "click", specifier = ">=8.2.0" },
-    { name = "hypothesis" },
-    { name = "napari", extras = ["pyqt6"] },
-    { name = "pyqt6", specifier = ">=6.5,<6.8" },
-    { name = "pytest", specifier = ">=5.0.0" },
-    { name = "pytest-cov" },
-    { name = "pytest-qt" },
-    { name = "pyyaml" },
-    { name = "scikit-image" },
-]
-dev = [
-    { name = "click", specifier = ">=8.2.0" },
-    { name = "hypothesis" },
-    { name = "importlib-metadata" },
-    { name = "linkify-it-py" },
-    { name = "matplotlib" },
-    { name = "myst-parser" },
-    { name = "napari", extras = ["pyqt6"] },
-    { name = "numpydoc" },
-    { name = "pre-commit" },
-    { name = "pydata-sphinx-theme" },
-    { name = "pyqt6", specifier = ">=6.5,<6.8" },
-    { name = "pytest", specifier = ">=5.0.0" },
-    { name = "pytest-cov" },
-    { name = "pytest-qt" },
-    { name = "pyyaml" },
-    { name = "scikit-image" },
-    { name = "sphinx-copybutton" },
-    { name = "sphinx-gallery" },
-    { name = "sphinx-mdinclude" },
-    { name = "sphinx-sitemap" },
-    { name = "sphinxcontrib-video" },
-]
-docs = [
-    { name = "importlib-metadata" },
-    { name = "linkify-it-py" },
-    { name = "matplotlib" },
-    { name = "myst-parser" },
-    { name = "numpydoc" },
-    { name = "pydata-sphinx-theme" },
-    { name = "sphinx-copybutton" },
-    { name = "sphinx-gallery" },
-    { name = "sphinx-mdinclude" },
-    { name = "sphinx-sitemap" },
-    { name = "sphinxcontrib-video" },
-]
-test = [
-    { name = "click", specifier = ">=8.2.0" },
-    { name = "hypothesis" },
-    { name = "napari", extras = ["pyqt6"] },
-    { name = "pyqt6", specifier = ">=6.5,<6.8" },
-    { name = "pytest", specifier = ">=5.0.0" },
-    { name = "pytest-cov" },
-    { name = "pytest-qt" },
 ]
 
 [[package]]

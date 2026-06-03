@@ -93,11 +93,11 @@ biahub = "biahub.cli.main:cli"
 index-strategy = "unsafe-best-match"
 
 [tool.uv.sources]
-# Dev pointer: biahub iterates against the distributed-recon worktrunk
-# of waveorder while E2/E3 development is in flight. Once distributed-recon
-# merges upstream, flip back to:
-#   waveorder = { git = "https://github.com/mehta-lab/waveorder.git", rev = "<merge-commit>" }
-waveorder = { path = "/home/sricharan.varra/mydata/repos/waveorder.feature-distributed-recon", editable = true }
+# waveorder's tile-stitch engine (waveorder.tile_stitch + waveorder.api.tile_stitch)
+# is merged into waveorder main but not yet in a PyPI release, so pin the merge
+# commit. Drop this source and bump the version constraint above once a release
+# ships it.
+waveorder = { git = "https://github.com/mehta-lab/waveorder.git", rev = "f377a43" }
 
 [tool.hatch.metadata]
 allow-direct-references = true
