@@ -45,36 +45,6 @@ def resolve_ome_zarr_version(
         return dataset.version
 
 
-def read_plate_metadata(input_zarr: str | Path):
-    """Read position keys, channel names, shape, and scale from an HCS plate.
-
-    Parameters
-    ----------
-    input_zarr : str or Path
-        Path to the input HCS plate zarr store.
-
-    Returns
-    -------
-    position_keys : list[tuple[str, str, str]]
-    channel_names : list[str]
-    shape : tuple[int, int, int, int, int]
-        TCZYX shape from the first position.
-    scale : tuple[float, ...]
-        Voxel scale from the first position.
-    """
-    with open_ome_zarr(str(input_zarr), mode="r") as plate:
-        position_keys = []
-        channel_names = None
-        shape = scale = None
-        for name, pos in plate.positions():
-            position_keys.append(tuple(name.split("/")))
-            if channel_names is None:
-                channel_names = pos.channel_names
-                shape = pos.data.shape
-                scale = pos.scale
-    return position_keys, channel_names, shape, scale
-
-
 def update_model(model_instance, update_dict):
     """
     Properly updates a Pydantic model with only the provided values while keeping the defaults.
