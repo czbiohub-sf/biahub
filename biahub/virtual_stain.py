@@ -26,11 +26,7 @@ from biahub.cli.parsing import (
     sbatch_filepath_preprocess,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import (
-    estimate_resources,
-    get_submitit_cluster,
-    read_plate_metadata,
-)
+from biahub.cli.utils import estimate_resources, get_submitit_cluster
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +122,7 @@ def combine_fov_zarrs_to_plate(
 
 
 def _init_output_plate(
-    input_zarr: Path,
+    input_position_dirpaths: list[Path],
     output_zarr: Path,
     config_filepath: Path,
 ) -> tuple[int, int, int, int, int]:
@@ -144,7 +140,10 @@ def _init_output_plate(
     target_channels = cfg["data"]["init_args"]["target_channel"]
     prediction_channels = [f"{ch}_prediction" for ch in target_channels]
 
-    position_keys, _, shape, scale = read_plate_metadata(input_zarr)
+    position_keys = [Path(p).parts[-3:] for p in input_position_dirpaths]
+    with open_ome_zarr(str(input_position_dirpaths[0]), mode="r") as ds:
+        shape = ds.data.shape
+        scale = ds.scale
     T, _, Z, Y, X = shape
 
     output_shape = (T, len(prediction_channels), Z, Y, X)
@@ -157,7 +156,7 @@ def _init_output_plate(
         scale=scale,
         version="0.5",
         dtype=np.float32,
-        copy_metadata_from=input_zarr,
+        copy_metadata_from=Path(input_position_dirpaths[0]).parents[2],
     )
     click.echo(
         f"Created {output_zarr} ({len(position_keys)} positions, "
@@ -474,8 +473,9 @@ def virtual_stain_cli(
         )
 
     if init_only:
-        input_plate = Path(input_position_dirpaths[0]).parents[2]
-        output_shape = _init_output_plate(input_plate, output_dirpath, config_filepath)
+        output_shape = _init_output_plate(
+            input_position_dirpaths, output_dirpath, config_filepath
+        )
 
         num_cpus, mem_per_cpu = estimate_resources(
             shape=output_shape, ram_multiplier=16, max_num_cpus=16
