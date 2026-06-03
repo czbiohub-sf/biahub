@@ -58,7 +58,7 @@ def test_deskew_data():
     )
 
 
-def test_deskew_cli(tmp_path, example_plate, example_deskew_settings, sbatch_file):
+def test_deskew_cli(tmp_path, example_plate, example_deskew_settings):
     plate_path, _ = example_plate
     config_path, _ = example_deskew_settings
     output_path = tmp_path / "output.zarr"
@@ -77,9 +77,7 @@ def test_deskew_cli(tmp_path, example_plate, example_deskew_settings, sbatch_fil
             "-o",
             str(output_path),
             "--cluster",
-            "local",
-            "--sbatch-filepath",
-            sbatch_file,
+            "debug",
         ],
     )
 
