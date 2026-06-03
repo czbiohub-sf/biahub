@@ -20,6 +20,17 @@ import yaml
 logger = logging.getLogger(__name__)
 
 
+def parse_timepoints(spec: str) -> list[int]:
+    """Parse '0-9' (inclusive range), '0,3,7' (list), or '5' (single)."""
+    spec = spec.strip()
+    if "," in spec:
+        return [int(x) for x in spec.split(",")]
+    if "-" in spec:
+        lo, hi = spec.split("-", 1)
+        return list(range(int(lo), int(hi) + 1))
+    return [int(spec)]
+
+
 @click.command("tile-stitch", no_args_is_help=True)
 @click.option(
     "--config",
@@ -91,7 +102,6 @@ def tile_stitch_cli(
     from iohub.ngff import open_ome_zarr
     from waveorder.tile_stitch._engine import build_plan as engine_build_plan
 
-    from biahub.tile_stitch._zarr_util import parse_timepoints
     from biahub.tile_stitch.config import TileStitchRun
     from biahub.tile_stitch.monarch.backend import MonarchBackend
     from biahub.tile_stitch.plan import from_engine_plan, write_plan
