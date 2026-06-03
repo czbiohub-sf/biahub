@@ -7,7 +7,7 @@ import click
 
 from iohub.ngff import open_ome_zarr
 
-from biahub.cli.utils import estimate_resources, read_plate_metadata
+from biahub.cli.utils import estimate_resources
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,9 @@ def list_positions(input_zarr: str):
 @click.option("--max-num-cpus", default=16, type=int)
 def init_resources(input_zarr: str, ram_multiplier: float, max_num_cpus: int):
     """Estimate CPU/memory resources from input zarr shape (for Nextflow fan-out)."""
-    _, _, shape, _ = read_plate_metadata(input_zarr)
+    with open_ome_zarr(input_zarr, mode="r") as plate:
+        first_pos = next(plate.positions())[1]
+        shape = first_pos.data.shape
     num_cpus, mem_per_cpu = estimate_resources(
         shape=shape, ram_multiplier=ram_multiplier, max_num_cpus=max_num_cpus
     )
