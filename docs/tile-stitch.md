@@ -12,7 +12,7 @@ Copy one of the example YAMLs as a starting point:
 
 - `settings/example_tile_stitch_cpu.yml` — CPU SLURMCluster +
   dask-jobqueue, K=4 batched recon.
-- `settings/example_tile_stitch_gpu.yml` — single-node `LocalCUDACluster`,
+- `settings/tile-rec-stitch/example_tile_stitch_gpu.yml` — single-node `LocalCUDACluster`,
   RMM pool + cupy DLPack handoff.
 
 What to edit per run:

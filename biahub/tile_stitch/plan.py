@@ -18,6 +18,8 @@ from waveorder.api.tile_stitch import TileStitchSettings
 from waveorder.tile_stitch._engine import TileStitchPlan
 from waveorder.tile_stitch.partition import InputTile, OutputTile
 
+from biahub.tile_stitch.config import MonarchConfig
+
 
 @dataclass
 class RunPlan:
@@ -46,10 +48,18 @@ class RunPlan:
     # Output zarr leading dims (T, C) — written-by driver, read-by stitch.
     leading_shape: tuple[int, ...] = (1, 1)
 
+    # Monarch engine knobs, carried so each actor reads the same config across
+    # ``setup`` and every per-TP ``swap_to``. Optional with a default so an
+    # older pickle (pre-Stage-3) still loads — the actor falls back to
+    # ``MonarchConfig()`` defaults when this is ``None``.
+    monarch: MonarchConfig | None = None
 
-def write_plan(plan: RunPlan, run_dir: str | Path) -> str:
-    """Pickle plan to ``<run_dir>/plan.pkl``. Returns the path."""
-    p = Path(run_dir) / "plan.pkl"
+
+def write_plan(
+    plan: RunPlan, run_dir: str | Path, filename: str = "plan.pkl"
+) -> str:
+    """Pickle plan to ``<run_dir>/<filename>``. Returns the path."""
+    p = Path(run_dir) / filename
     p.parent.mkdir(parents=True, exist_ok=True)
     with open(p, "wb") as f:
         pickle.dump(plan, f, protocol=pickle.HIGHEST_PROTOCOL)
@@ -77,6 +87,7 @@ def from_engine_plan(
     channel_idx: int,
     timepoint: int,
     leading_shape: tuple[int, ...] = (1, 1),
+    monarch: MonarchConfig | None = None,
 ) -> RunPlan:
     """Compose a RunPlan from a waveorder TileStitchPlan + biahub I/O config."""
     return RunPlan(
@@ -95,4 +106,5 @@ def from_engine_plan(
         input_batches=engine_plan.input_batches,
         output_to_batches=engine_plan.output_to_batches,
         leading_shape=leading_shape,
+        monarch=monarch,
     )
