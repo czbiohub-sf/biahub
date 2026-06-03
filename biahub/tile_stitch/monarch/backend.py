@@ -69,9 +69,7 @@ def _wait_for_ready(ready_dir: str, node_list: list[str], timeout_s: int = 300) 
     )
 
 
-def build_recon_batches(
-    order: list[int], tiles_by_id: dict, bsize: int
-) -> list[list[int]]:
+def build_recon_batches(order: list[int], tiles_by_id: dict, bsize: int) -> list[list[int]]:
     """Group ``order`` into batches of ``bsize`` same-shape tiles.
 
     All tiles in a batch must share spatial shape (the batched FFT stacks
@@ -171,15 +169,15 @@ class MonarchBackend:
             if self._ready_dir:
                 _wait_for_ready(self._ready_dir, self._node_list, timeout_s=300)
             logger.info("attaching to %d host workers: %s", len(addrs), addrs)
-            host_mesh = ma.attach_to_workers(
-                workers=addrs, ca="trust_all_connections"
-            )
+            host_mesh = ma.attach_to_workers(workers=addrs, ca="trust_all_connections")
             _await_initialized_sync(host_mesh)
             self._procs = host_mesh.spawn_procs(per_host={"gpus": self._gpn})
             self._n_gpus = len(self._node_list) * self._gpn
             logger.info(
                 "multi-host mesh: %d nodes × %d gpus = %d actors",
-                len(self._node_list), self._gpn, self._n_gpus,
+                len(self._node_list),
+                self._gpn,
+                self._n_gpus,
             )
         else:
             self._gpn = self._gpus_per_node or local_gpus
@@ -202,9 +200,7 @@ class MonarchBackend:
         ``call_one`` sees exactly one actor. Single-host has only ``gpus``.
         """
         if self._is_multihost:
-            return self._workers.slice(
-                hosts=flat_idx // self._gpn, gpus=flat_idx % self._gpn
-            )
+            return self._workers.slice(hosts=flat_idx // self._gpn, gpus=flat_idx % self._gpn)
         return self._workers.slice(gpus=flat_idx)
 
     # --- per-TP volume swap ------------------------------------------------
@@ -239,9 +235,7 @@ class MonarchBackend:
         (full A+B pipelined wall), ``n_outputs`` (completed non-empty
         stitches), and ``summaries`` (per-stitch timing dicts).
         """
-        t_a, t_pipe, summaries = asyncio.run(
-            self._drive_one_tp(plan, recon_batch)
-        )
+        t_a, t_pipe, summaries = asyncio.run(self._drive_one_tp(plan, recon_batch))
         # The drive's final ``while stitch_in_flight > 0`` loop has run, so
         # every Stage B stitch (and its RDMA pulls) for this TP has completed.
         self._drained = True
@@ -348,9 +342,7 @@ class MonarchBackend:
                 await _maybe_dispatch_outputs(ready)
 
         if recon_batch > 1:
-            batches = build_recon_batches(
-                run_plan.input_order, tiles_by_id, recon_batch
-            )
+            batches = build_recon_batches(run_plan.input_order, tiles_by_id, recon_batch)
             # Prime each actor's reader with the FLATTENED tile order of the
             # batches it will receive (round-robin ``i % n_gpus``), so the
             # background reader stays a batch ahead of the GPU. For full
@@ -370,7 +362,8 @@ class MonarchBackend:
             ]
             logger.info(
                 "Stage A+B pipelined: %d batches (B=%d) dispatched",
-                len(recon_tasks), recon_batch,
+                len(recon_tasks),
+                recon_batch,
             )
         else:
             # Prime each actor's prefetch reader with its assigned tile
@@ -388,9 +381,7 @@ class MonarchBackend:
                 asyncio.create_task(_do_recon(tile_id, i % n_gpus))
                 for i, tile_id in enumerate(run_plan.input_order)
             ]
-            logger.info(
-                "Stage A+B pipelined: %d recon tasks dispatched", len(recon_tasks)
-            )
+            logger.info("Stage A+B pipelined: %d recon tasks dispatched", len(recon_tasks))
         await asyncio.gather(*recon_tasks)
 
         while stitch_in_flight > 0:

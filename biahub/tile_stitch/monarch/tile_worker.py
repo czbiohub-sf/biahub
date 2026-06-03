@@ -191,8 +191,8 @@ class TileWorker(Actor):
         self._gpu_depth = self._cfg.gpu_depth
         self._gpu_staged: dict[int, Any] = {}
         self._assigned_order: list[int] = []
-        self._stage_cursor = 0    # index in _assigned_order staged up to
-        self._consumed = 0        # tiles consumed by recon (bounds the window)
+        self._stage_cursor = 0  # index in _assigned_order staged up to
+        self._consumed = 0  # tiles consumed by recon (bounds the window)
         # Lazily-built compiled recon callable. ``torch.compile`` with
         # ``mode="reduce-overhead"`` captures CUDA graphs after a couple
         # warm-up calls, eliminating Python+kernel-launch overhead for
@@ -211,12 +211,12 @@ class TileWorker(Actor):
 
     def _reset_recon_stats(self) -> None:
         """Zero the per-actor Stage A timing counters (call per TP)."""
-        self._rs_n = 0          # tiles reconstructed
-        self._rs_io_s = 0.0     # zarr read / volume slice + H2D
-        self._rs_fft_s = 0.0    # recon_fn (FFT + Tikhonov)
-        self._rs_d2h_s = 0.0    # GPU->CPU + RDMABuffer setup
-        self._rs_first = None   # monotonic ts of first recon start
-        self._rs_last = None    # monotonic ts of last recon end
+        self._rs_n = 0  # tiles reconstructed
+        self._rs_io_s = 0.0  # zarr read / volume slice + H2D
+        self._rs_fft_s = 0.0  # recon_fn (FFT + Tikhonov)
+        self._rs_d2h_s = 0.0  # GPU->CPU + RDMABuffer setup
+        self._rs_first = None  # monotonic ts of first recon start
+        self._rs_last = None  # monotonic ts of last recon end
 
     def _load_volume_to_gpu(self):
         """Read the whole TP+channel slab from zarr into HBM once.
@@ -282,7 +282,8 @@ class TileWorker(Actor):
             # the overlap path issues. Force eager so the two don't fight.
             log.info(
                 "gpu_idx=%d GPU overlap on — forcing eager (was mode=%s)",
-                self.gpu_idx, mode,
+                self.gpu_idx,
+                mode,
             )
             mode = "none"
         if mode == "none":
@@ -296,7 +297,8 @@ class TileWorker(Actor):
         except Exception as exc:
             log.warning(
                 "gpu_idx=%d torch.compile failed (%s) — falling back to eager",
-                self.gpu_idx, exc,
+                self.gpu_idx,
+                exc,
             )
             self._compiled_recon = _eager
         return self._compiled_recon
@@ -485,9 +487,7 @@ class TileWorker(Actor):
         pin_float32 = self._gpu_overlap
 
         def _load(tid: int):
-            return _core.read_tile_block(
-                plan, tiles_by_id[tid], pin_float32=pin_float32
-            )
+            return _core.read_tile_block(plan, tiles_by_id[tid], pin_float32=pin_float32)
 
         self._reader = PrefetchReader(_load, list(tile_ids), depth)
         return {
@@ -556,9 +556,7 @@ class TileWorker(Actor):
 
         handles: list[TileHandle] = []
         for i, tid in enumerate(tile_ids):
-            recon_cpu = (
-                recons[i].unsqueeze(0).to(torch.float32).contiguous().detach().cpu()
-            )
+            recon_cpu = recons[i].unsqueeze(0).to(torch.float32).contiguous().detach().cpu()
             handles.append(self._store_recon(tid, recon_cpu))
         t_end = _t.monotonic()
 
@@ -637,9 +635,7 @@ class TileWorker(Actor):
         # FFT + D2H, so the next unit's input is ready when its FFT starts.
         handles: list[TileHandle] = []
         for i, tid in enumerate(tile_ids):
-            recon_cpu = (
-                recons[i].unsqueeze(0).to(torch.float32).contiguous().detach().cpu()
-            )
+            recon_cpu = recons[i].unsqueeze(0).to(torch.float32).contiguous().detach().cpu()
             handles.append(self._store_recon(tid, recon_cpu))
         ev_d2h_done = torch.cuda.Event(enable_timing=True)
         ev_d2h_done.record(compute)
@@ -679,9 +675,7 @@ class TileWorker(Actor):
         if self._recon_sem is None:
             self._recon_sem = asyncio.Semaphore(self._cfg.recon_concurrency)
         async with self._recon_sem:
-            return await asyncio.to_thread(
-                self._reconstruct_batch_blocking, tile_ids
-            )
+            return await asyncio.to_thread(self._reconstruct_batch_blocking, tile_ids)
 
     @endpoint
     async def recon_stats(self) -> dict:
@@ -830,6 +824,7 @@ class TileWorker(Actor):
             remote_pulls.append((tid, dst))
 
         if pull_futs:
+
             async def _await(f):
                 return await f
 
@@ -857,9 +852,7 @@ class TileWorker(Actor):
             # CPU numpy weighted-mean blend (geometry pre-built in
             # ``_stitch_geom``); GPU blend would contend with concurrent
             # recon on the same device.
-            result = _core.blend_contributors(
-                geom, contribs_np, blend_kernel, kernel_cache
-            )
+            result = _core.blend_contributors(geom, contribs_np, blend_kernel, kernel_cache)
             t_blend = time.monotonic() - t_blend_start
 
             t_write_start = time.monotonic()

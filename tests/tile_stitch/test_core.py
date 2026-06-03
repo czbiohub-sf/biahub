@@ -64,8 +64,9 @@ class _Plan:
     settings schema.
     """
 
-    def __init__(self, *, input_tiles, output_tiles, output_to_inputs,
-                 tile_dims, leading_shape):
+    def __init__(
+        self, *, input_tiles, output_tiles, output_to_inputs, tile_dims, leading_shape
+    ):
         self.input_tiles = input_tiles
         self.output_tiles = output_tiles
         self.output_to_inputs = output_to_inputs

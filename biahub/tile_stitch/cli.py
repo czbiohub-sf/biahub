@@ -170,12 +170,12 @@ def tile_stitch_cli(
         with open_ome_zarr(
             final_output, layout="fov", mode="w", channel_names=[f"{ch}_recon"]
         ) as out_ds:
-            out_ds.create_zeros(
-                "0", shape=full_shape, dtype=np.float32, chunks=chunk_shape
-            )
+            out_ds.create_zeros("0", shape=full_shape, dtype=np.float32, chunks=chunk_shape)
         logger.info(
             "output zarr created: %s | full_shape=%s | chunks=%s",
-            final_output, full_shape, chunk_shape,
+            final_output,
+            full_shape,
+            chunk_shape,
         )
     else:
         # Other shards wait for the coordinator's zarr to appear.
@@ -240,7 +240,11 @@ def tile_stitch_cli(
             n_completed = summary["n_outputs"]
             logger.info(
                 "TP %d finished: wall=%.1fs (A=%.1fs), tiles=%d/%d",
-                tp, wall, t_a, n_completed, len(run_plan.output_tiles),
+                tp,
+                wall,
+                t_a,
+                n_completed,
+                len(run_plan.output_tiles),
             )
 
             try:
@@ -248,33 +252,49 @@ def tile_stitch_cli(
                     logger.info(
                         "  actor %s gpu%d: n=%d io=%.1fs fft=%.1fs d2h=%.1fs "
                         "busy=%.1fs span=%.1fs util=%.2f",
-                        st["host"], st["gpu_idx"], st["n_tiles"],
-                        st["io_s"], st["fft_s"], st["d2h_s"],
-                        st["busy_s"], st["span_s"], st["util"],
+                        st["host"],
+                        st["gpu_idx"],
+                        st["n_tiles"],
+                        st["io_s"],
+                        st["fft_s"],
+                        st["d2h_s"],
+                        st["busy_s"],
+                        st["span_s"],
+                        st["util"],
                     )
             except Exception as exc:
                 logger.warning("recon_stats collection failed: %s", exc)
 
-            per_tp_walls.append({
-                "timepoint": tp,
-                "wall_s": wall,
-                "stage_a_s": t_a,
-                "n_outputs": n_completed,
-            })
+            per_tp_walls.append(
+                {
+                    "timepoint": tp,
+                    "wall_s": wall,
+                    "stage_a_s": t_a,
+                    "n_outputs": n_completed,
+                }
+            )
 
     total_s = time.monotonic() - t_total_start
     # Per-shard walls file so concurrent shards don't clobber each other.
     walls_name = f"walls_proc{procid}.json" if shard_by_proc else "walls.json"
     walls_path = run_dir / walls_name
-    walls_path.write_text(json.dumps({
-        "procid": procid,
-        "nprocs": nprocs,
-        "tps": [w["timepoint"] for w in per_tp_walls],
-        "total_s": total_s,
-        "per_tp": per_tp_walls,
-    }, indent=2))
+    walls_path.write_text(
+        json.dumps(
+            {
+                "procid": procid,
+                "nprocs": nprocs,
+                "tps": [w["timepoint"] for w in per_tp_walls],
+                "total_s": total_s,
+                "per_tp": per_tp_walls,
+            },
+            indent=2,
+        )
+    )
     logger.info(
         "tile-stitch done: shard %d tps=%s total=%.1fs walls=%s",
-        procid, [w["timepoint"] for w in per_tp_walls], total_s, walls_path,
+        procid,
+        [w["timepoint"] for w in per_tp_walls],
+        total_s,
+        walls_path,
     )
     click.echo(f"tile-stitch complete: {final_output}")

@@ -38,32 +38,34 @@ def _phantom_settings(channel: str):
 
     # Tiny tiles with a small overlap so the grid has interior + edge output
     # tiles (the blend path needs at least one multi-contributor output).
-    return TileStitchSettings.model_validate({
-        "tile": {
-            "tile_size": {"z": 8, "y": 32, "x": 32},
-            "overlap": {"z": 0, "y": 8, "x": 8},
-        },
-        "blend": {"kind": "gaussian_mean", "sigma_fraction": 0.125},
-        "recon": {
-            "input_channel_names": [channel],
-            "reconstruction_dimension": 3,
-            "phase": {
-                "transfer_function": {
-                    "yx_pixel_size": 0.25,
-                    "z_pixel_size": 0.25,
-                    "z_padding": 2,
-                    "index_of_refraction_media": 1.3,
-                    "numerical_aperture_detection": 1.0,
-                    "numerical_aperture_illumination": 0.5,
-                    "wavelength_illumination": 0.5,
-                },
-                "apply_inverse": {
-                    "reconstruction_algorithm": "Tikhonov",
-                    "regularization_strength": 0.01,
+    return TileStitchSettings.model_validate(
+        {
+            "tile": {
+                "tile_size": {"z": 8, "y": 32, "x": 32},
+                "overlap": {"z": 0, "y": 8, "x": 8},
+            },
+            "blend": {"kind": "gaussian_mean", "sigma_fraction": 0.125},
+            "recon": {
+                "input_channel_names": [channel],
+                "reconstruction_dimension": 3,
+                "phase": {
+                    "transfer_function": {
+                        "yx_pixel_size": 0.25,
+                        "z_pixel_size": 0.25,
+                        "z_padding": 2,
+                        "index_of_refraction_media": 1.3,
+                        "numerical_aperture_detection": 1.0,
+                        "numerical_aperture_illumination": 0.5,
+                        "wavelength_illumination": 0.5,
+                    },
+                    "apply_inverse": {
+                        "reconstruction_algorithm": "Tikhonov",
+                        "regularization_strength": 0.01,
+                    },
                 },
             },
-        },
-    })
+        }
+    )
 
 
 def test_monarch_single_gpu_one_tp(tmp_path: Path):

@@ -53,9 +53,7 @@ class PrefetchReader:
         self._consume_idx = 0  # index of the next tile the consumer wants
         self._cv = threading.Condition()
         self._stop = False
-        self._thread = threading.Thread(
-            target=self._run, name="prefetch-reader", daemon=True
-        )
+        self._thread = threading.Thread(target=self._run, name="prefetch-reader", daemon=True)
         self._thread.start()
 
     def _run(self) -> None:
@@ -125,8 +123,7 @@ def build_stitch_geom(plan) -> dict[int, dict]:
     for out_tile in plan.output_tiles:
         oid = out_tile.tile_id
         out_spatial = [
-            (out_tile.slices[d].start, out_tile.slices[d].stop)
-            for d in plan.tile_dims
+            (out_tile.slices[d].start, out_tile.slices[d].stop) for d in plan.tile_dims
         ]
         out_shape = leading + tuple(hi - lo for lo, hi in out_spatial)
         contrib_geom: dict[int, dict] = {}
@@ -329,16 +326,14 @@ def blend_contributors(geom_entry, contribs_np, blend, kernel_cache):
         cinfo = contrib_geom.get(tid)
         if cinfo is None:
             continue
-        kernel_full = get_blend_kernel(
-            blend, cinfo["tile_shape"], sample_dtype, kernel_cache
-        )
+        kernel_full = get_blend_kernel(blend, cinfo["tile_shape"], sample_dtype, kernel_cache)
         kernel_view = kernel_full[cinfo["in_local"]]
         v_view = tile_full[cinfo["in_full_idx"]]
         accum_v[cinfo["out_full_idx"]] += v_view * kernel_view
         accum_w[cinfo["out_full_idx"]] += kernel_view
 
     with np.errstate(invalid="ignore", divide="ignore"):
-        result = np.where(
-            accum_w > 0, accum_v / accum_w, blend.fill_value
-        ).astype(np.float32, copy=False)
+        result = np.where(accum_w > 0, accum_v / accum_w, blend.fill_value).astype(
+            np.float32, copy=False
+        )
     return result

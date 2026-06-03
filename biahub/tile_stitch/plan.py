@@ -55,9 +55,7 @@ class RunPlan:
     monarch: MonarchConfig | None = None
 
 
-def write_plan(
-    plan: RunPlan, run_dir: str | Path, filename: str = "plan.pkl"
-) -> str:
+def write_plan(plan: RunPlan, run_dir: str | Path, filename: str = "plan.pkl") -> str:
     """Pickle plan to ``<run_dir>/<filename>``. Returns the path."""
     p = Path(run_dir) / filename
     p.parent.mkdir(parents=True, exist_ok=True)
