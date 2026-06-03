@@ -348,7 +348,7 @@ requires-dist = [
     { name = "dask", extras = ["array"] },
     { name = "humanize" },
     { name = "imageio-ffmpeg" },
-    { name = "iohub", specifier = ">=0.3.4" },
+    { name = "iohub", git = "https://github.com/czbiohub-sf/iohub.git?rev=feat%2Fcreate-empty-plate-copy-metadata" },
     { name = "largestinteriorrectangle" },
     { name = "llvmlite", specifier = ">=0.41.0" },
     { name = "markdown" },
@@ -1676,8 +1676,8 @@ wheels = [
 
 [[package]]
 name = "iohub"
-version = "0.3.4"
-source = { registry = "https://pypi.org/simple" }
+version = "0.3.6.dev13+9f9d971"
+source = { git = "https://github.com/czbiohub-sf/iohub.git?rev=feat%2Fcreate-empty-plate-copy-metadata#9f9d97144be2addf6711d20aae0e4e5d7a4985af" }
 dependencies = [
     { name = "blosc2" },
     { name = "dask", extra = ["array"] },
@@ -1693,10 +1693,6 @@ dependencies = [
     { name = "xarray" },
     { name = "zarr" },
     { name = "zarrs" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/39/bc/7a62c0516421912f03d19aeb67573ea8e9c9f136c1f16df3f23e77af6d59/iohub-0.3.4.tar.gz", hash = "sha256:fc3d83de31e1b443539fe5a91aeafdacecb8eeddff9779272d4f21080d9596ba", size = 294205, upload-time = "2026-04-28T18:31:52.703Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/cf/5c/c59e25af6a9fe4952aa0359aa6fb3ac663ef76aadb6b3cc09e85b1250972/iohub-0.3.4-py3-none-any.whl", hash = "sha256:f4f215cce244896d6ffc1280198beacfd66691dc9477da77a2f16e46ffd0f4a8", size = 86239, upload-time = "2026-04-28T18:31:51.209Z" },
 ]
 
 [[package]]

@@ -630,7 +630,7 @@ def _init_output_plate(
         version=resolve_ome_zarr_version(
             input_position_dirpaths[0], settings.output_ome_zarr_version
         ),
-        copy_metadata_from=input_plate,
+        metadata_sources=[input_plate],
     )
 
     return (T, C, Z, Y, X), channel_names
