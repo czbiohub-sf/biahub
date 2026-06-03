@@ -902,8 +902,8 @@ wheels = [
 
 [[package]]
 name = "cytoland"
-version = "0.0.0.post237.dev0+a629fa2"
-source = { git = "https://github.com/mehta-lab/VisCy?subdirectory=applications%2Fcytoland&branch=feat%2Fvs-nonsquare-tta-and-helpers#a629fa26fb46a25502a9b919b9a29432b3d5a1d3" }
+version = "0.0.0.post237.dev0+eb1ffa1"
+source = { git = "https://github.com/mehta-lab/VisCy?subdirectory=applications%2Fcytoland&branch=feat%2Fvs-nonsquare-tta-and-helpers#eb1ffa1944d99dc17101be36e92fc4f9dff74175" }
 dependencies = [
     { name = "imageio" },
     { name = "lightning" },
@@ -5661,8 +5661,8 @@ wheels = [
 
 [[package]]
 name = "viscy-data"
-version = "0.0.0.post237.dev0+a629fa2"
-source = { git = "https://github.com/mehta-lab/VisCy?subdirectory=packages%2Fviscy-data&branch=feat%2Fvs-nonsquare-tta-and-helpers#a629fa26fb46a25502a9b919b9a29432b3d5a1d3" }
+version = "0.0.0.post237.dev0+eb1ffa1"
+source = { git = "https://github.com/mehta-lab/VisCy?subdirectory=packages%2Fviscy-data&branch=feat%2Fvs-nonsquare-tta-and-helpers#eb1ffa1944d99dc17101be36e92fc4f9dff74175" }
 dependencies = [
     { name = "imageio" },
     { name = "iohub" },
@@ -5679,8 +5679,8 @@ dependencies = [
 
 [[package]]
 name = "viscy-models"
-version = "0.0.0.post237.dev0+a629fa2"
-source = { git = "https://github.com/mehta-lab/VisCy?subdirectory=packages%2Fviscy-models&branch=feat%2Fvs-nonsquare-tta-and-helpers#a629fa26fb46a25502a9b919b9a29432b3d5a1d3" }
+version = "0.0.0.post237.dev0+eb1ffa1"
+source = { git = "https://github.com/mehta-lab/VisCy?subdirectory=packages%2Fviscy-models&branch=feat%2Fvs-nonsquare-tta-and-helpers#eb1ffa1944d99dc17101be36e92fc4f9dff74175" }
 dependencies = [
     { name = "monai" },
     { name = "numpy" },
@@ -5692,8 +5692,8 @@ dependencies = [
 
 [[package]]
 name = "viscy-transforms"
-version = "0.0.0.post237.dev0+a629fa2"
-source = { git = "https://github.com/mehta-lab/VisCy?subdirectory=packages%2Fviscy-transforms&branch=feat%2Fvs-nonsquare-tta-and-helpers#a629fa26fb46a25502a9b919b9a29432b3d5a1d3" }
+version = "0.0.0.post237.dev0+eb1ffa1"
+source = { git = "https://github.com/mehta-lab/VisCy?subdirectory=packages%2Fviscy-transforms&branch=feat%2Fvs-nonsquare-tta-and-helpers#eb1ffa1944d99dc17101be36e92fc4f9dff74175" }
 dependencies = [
     { name = "kornia" },
     { name = "monai" },
@@ -5703,8 +5703,8 @@ dependencies = [
 
 [[package]]
 name = "viscy-utils"
-version = "0.0.0.post237.dev0+a629fa2"
-source = { git = "https://github.com/mehta-lab/VisCy?subdirectory=packages%2Fviscy-utils&branch=feat%2Fvs-nonsquare-tta-and-helpers#a629fa26fb46a25502a9b919b9a29432b3d5a1d3" }
+version = "0.0.0.post237.dev0+eb1ffa1"
+source = { git = "https://github.com/mehta-lab/VisCy?subdirectory=packages%2Fviscy-utils&branch=feat%2Fvs-nonsquare-tta-and-helpers#eb1ffa1944d99dc17101be36e92fc4f9dff74175" }
 dependencies = [
     { name = "iohub" },
     { name = "jsonargparse", extra = ["signatures"] },
