@@ -1,3 +1,5 @@
+import time
+
 from pathlib import Path
 from typing import Literal
 
@@ -125,11 +127,14 @@ def virtual_stain_position(
     from monai.transforms import Compose
     from viscy_data import read_norm_meta
 
+    position_name = "/".join(Path(input_position_path).parts[-3:])
+    position_start = time.perf_counter()
     parser, cfg = load_predict_config(config_filepath, input_position_path)
 
     device = torch.device(
         cfg.device if (cfg.device == "cpu" or torch.cuda.is_available()) else "cpu"
     )
+    click.echo(f"[{position_name}] Starting virtual staining on device '{device}'")
 
     # Instantiate the VSUNet and the data module from VisCy's own classes, then
     # load the checkpoint weights. Building via VisCy keeps biahub free of the
@@ -139,6 +144,7 @@ def virtual_stain_position(
     state_dict = torch.load(cfg.ckpt_path, weights_only=True, map_location="cpu")["state_dict"]
     vsunet.load_state_dict(state_dict)
     vsunet.eval().to(device)
+    click.echo(f"[{position_name}] Loaded checkpoint: {cfg.ckpt_path}")
 
     # Test-time augmentation: reuse VisCy's rotation-TTA helper, which is
     # correct for non-square FOVs. Defaults follow the config's model flags.
@@ -149,8 +155,12 @@ def virtual_stain_position(
         predictor = AugmentedPredictionVSUNet.with_rotation_tta(
             vsunet.model, reduction=reduction
         )
+        click.echo(
+            f"[{position_name}] Test-time augmentation: on ({reduction} over 4 rotations)"
+        )
     else:
         predictor = AugmentedPredictionVSUNet(model=vsunet.model)
+        click.echo(f"[{position_name}] Test-time augmentation: off")
     predictor = predictor.eval().to(device)
 
     # Normalization: reuse the configured NormalizeSampled transforms directly.
@@ -166,7 +176,7 @@ def virtual_stain_position(
     step = cfg.sliding_window_step
 
     with open_ome_zarr(str(input_position_path), mode="r") as input_dataset:
-        T = input_dataset.data.shape[0]
+        T, _, Z, Y, X = input_dataset.data.shape
         channel_index = input_dataset.channel_names.index(source_channel)
         # Precomputed statistics written by `viscy preprocess`.
         norm_meta = read_norm_meta(input_dataset)
@@ -177,8 +187,17 @@ def virtual_stain_position(
                 f"dataset before virtual staining."
             )
 
+        in_stack_depth = getattr(vsunet.model, "out_stack_depth", None)
+        n_windows = (Z - in_stack_depth) // step + 1 if in_stack_depth else "?"
+        click.echo(
+            f"[{position_name}] {T} timepoints, volume (Z,Y,X)=({Z},{Y},{X}), "
+            f"'{source_channel}' -> {target_channels}, "
+            f"{n_windows} sliding windows/timepoint (step={step})"
+        )
+
         with open_ome_zarr(str(output_position_path), mode="r+") as output_dataset:
             for t in range(T):
+                t_start = time.perf_counter()
                 # (1, 1, Z, Y, X) source volume for this timepoint
                 volume = np.asarray(
                     input_dataset.data[t : t + 1, channel_index : channel_index + 1]
@@ -192,6 +211,15 @@ def virtual_stain_position(
                         source, out_channel=out_channel, step=step
                     )
                 output_dataset.data[t] = prediction[0].cpu().numpy()
+                click.echo(
+                    f"[{position_name}] timepoint {t + 1}/{T} done "
+                    f"({time.perf_counter() - t_start:.1f}s)"
+                )
+
+    click.echo(
+        f"[{position_name}] Completed {T} timepoints in "
+        f"{time.perf_counter() - position_start:.1f}s -> {output_position_path}"
+    )
 
 
 def _init_output_plate(
