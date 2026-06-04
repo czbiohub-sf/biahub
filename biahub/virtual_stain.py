@@ -300,7 +300,7 @@ def virtual_stain(
         "slurm_gres": "gpu:1",
         "slurm_mem_per_cpu": f"{gb_ram}G",
         "slurm_cpus_per_task": num_cpus,
-        "slurm_array_parallelism": 100,  # process up to 100 positions at a time
+        "slurm_array_parallelism": 20,  # process up to 20 positions at a time
         "slurm_time": int(np.ceil(np.max([60, T * 3]))),
         "slurm_partition": "gpu",
     }
