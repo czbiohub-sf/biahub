@@ -118,7 +118,7 @@ def _init_output_plate(
             input_position_dirpaths[0], settings.output_ome_zarr_version
         ),
         dtype=np.float32,
-        copy_metadata_from=input_plate,
+        metadata_sources=input_plate,
     )
 
     return (T, C, Z, Y, X), all_channel_names

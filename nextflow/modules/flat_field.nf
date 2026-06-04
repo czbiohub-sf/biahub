@@ -7,7 +7,7 @@
 // the Nextflow task.  See also:
 // examples/submitit_debug_nextflow/2026-05-27-submitit-debug-nextflow-concerns.md
 
-include { dataset_name; parse_resources; biahub_cmd; slurm_logs; slurm_log_dir } from './common'
+include { dataset_name; parse_resources; biahub_cmd; slurm_logs; slurm_log_dir; step_dir } from './common'
 
 
 process init_flat_field {
@@ -21,7 +21,7 @@ process init_flat_field {
     mkdir -p "${slurm_log_dir('flat_field')}"
     ${biahub_cmd()} flat-field --init \
         -i "${params.input_zarr}"/*/*/* \
-        -o "${params.output_dir}/0-flatfield/${dataset_name()}.zarr" \
+        -o "${params.output_dir}/${step_dir('flat_field')}/${dataset_name()}.zarr" \
         -c "${params.flat_field_config}"
     """
 }
@@ -47,7 +47,7 @@ process run_flat_field {
     """
     ${biahub_cmd()} flat-field --cluster debug \
         -i "${params.input_zarr}/${position}" \
-        -o "${params.output_dir}/0-flatfield/${dataset_name()}.zarr" \
+        -o "${params.output_dir}/${step_dir('flat_field')}/${dataset_name()}.zarr" \
         -c "${params.flat_field_config}"
     """
 }
