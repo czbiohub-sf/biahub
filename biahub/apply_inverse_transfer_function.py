@@ -145,7 +145,7 @@ def _init_output_plate(
         store_path=output_dirpath,
         position_keys=[Path(p).parts[-3:] for p in input_position_dirpaths],
         **output_metadata,
-        copy_metadata_from=input_plate,
+        metadata_sources=input_plate,
     )
 
     click.echo(f"Created {output_dirpath} ({len(input_position_dirpaths)} positions)")
@@ -240,7 +240,7 @@ def apply_inverse_transfer_function(
         store_path=output_dirpath,
         position_keys=[p.parts[-3:] for p in input_position_dirpaths],
         **output_metadata,
-        copy_metadata_from=input_plate,
+        metadata_sources=input_plate,
     )
 
     settings = yaml_to_model(config_filepath, ReconstructionSettings)

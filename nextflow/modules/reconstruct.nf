@@ -11,7 +11,7 @@
 // resource scheduling, so the CLI must NOT submit its own SLURM jobs.
 // See: examples/submitit_debug_nextflow/2026-05-27-submitit-debug-nextflow-concerns.md
 
-include { dataset_name; parse_resources; biahub_cmd; slurm_logs; slurm_log_dir } from './common'
+include { dataset_name; parse_resources; biahub_cmd; slurm_logs; slurm_log_dir; step_dir } from './common'
 
 
 process init_apply_inv_tf {
@@ -27,8 +27,8 @@ process init_apply_inv_tf {
     """
     mkdir -p "${slurm_log_dir('reconstruct')}"
     ${biahub_cmd()} apply-inv-tf --init \
-        -i "${params.output_dir}/1-deskew/${dataset_name()}.zarr"/*/*/* \
-        -o "${params.output_dir}/2-reconstruct/${dataset_name()}.zarr" \
+        -i "${params.output_dir}/${step_dir('deskew')}/${dataset_name()}.zarr"/*/*/* \
+        -o "${params.output_dir}/${step_dir('reconstruct')}/${dataset_name()}.zarr" \
         -c "${params.reconstruct_config}"
     """
 }
@@ -49,9 +49,9 @@ process compute_transfer_function {
     script:
     """
     ${biahub_cmd()} compute-tf \
-        -i "${params.output_dir}/1-deskew/${dataset_name()}.zarr"/*/*/* \
-        -o "${params.output_dir}/2-reconstruct/transfer_function_reconstruct_resolved.zarr" \
-        -c "${params.output_dir}/2-reconstruct/reconstruct_resolved.yml"
+        -i "${params.output_dir}/${step_dir('deskew')}/${dataset_name()}.zarr"/*/*/* \
+        -o "${params.output_dir}/${step_dir('reconstruct')}/transfer_function_reconstruct_resolved.zarr" \
+        -c "${params.output_dir}/${step_dir('reconstruct')}/reconstruct_resolved.yml"
     """
 }
 
@@ -75,10 +75,10 @@ process run_apply_inv_tf {
     script:
     """
     ${biahub_cmd()} apply-inv-tf --cluster debug \
-        -i "${params.output_dir}/1-deskew/${dataset_name()}.zarr/${position}" \
-        -t "${params.output_dir}/2-reconstruct/transfer_function_reconstruct_resolved.zarr" \
-        -o "${params.output_dir}/2-reconstruct/${dataset_name()}.zarr" \
-        -c "${params.output_dir}/2-reconstruct/reconstruct_resolved.yml"
+        -i "${params.output_dir}/${step_dir('deskew')}/${dataset_name()}.zarr/${position}" \
+        -t "${params.output_dir}/${step_dir('reconstruct')}/transfer_function_reconstruct_resolved.zarr" \
+        -o "${params.output_dir}/${step_dir('reconstruct')}/${dataset_name()}.zarr" \
+        -c "${params.output_dir}/${step_dir('reconstruct')}/reconstruct_resolved.yml"
     """
 }
 
