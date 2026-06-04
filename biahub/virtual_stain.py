@@ -293,7 +293,13 @@ def virtual_stain(
 
     output_position_paths = utils.get_output_paths(input_position_dirpaths, output_dirpath)
 
-    T = input_shape[0]
+    T, Z = input_shape[0], input_shape[2]
+    # Generous wall-clock budget (minutes), assuming median TTA (4 rotations).
+    # Each timepoint runs ~Z sliding windows along Z. Measured ~1.4 s/window
+    # with TTA on this model; budget ~5 s/window (~3-4x margin for slower GPUs,
+    # larger FOVs, and compute-bound runs) with a 60-minute floor.
+    seconds_per_window = 5
+    slurm_time = int(np.ceil(max(60, T * Z * seconds_per_window / 60)))
     # Prepare SLURM arguments
     slurm_args = {
         "slurm_job_name": "virtual-stain",
@@ -301,7 +307,7 @@ def virtual_stain(
         "slurm_mem_per_cpu": f"{gb_ram}G",
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 20,  # process up to 20 positions at a time
-        "slurm_time": int(np.ceil(np.max([60, T * 3]))),
+        "slurm_time": slurm_time,
         "slurm_partition": "gpu",
     }
 
