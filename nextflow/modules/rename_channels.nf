@@ -1,4 +1,4 @@
-include { dataset_name; parse_resources; biahub_cmd; slurm_logs; slurm_log_dir } from './common'
+include { dataset_name; parse_resources; biahub_cmd; slurm_logs; slurm_log_dir; step_dir } from './common'
 
 
 process init_resources_rename {
@@ -14,7 +14,7 @@ process init_resources_rename {
     """
     mkdir -p "${slurm_log_dir('rename')}"
     ${biahub_cmd()} nf init-resources \
-        -i "${params.output_dir}/2-reconstruct/${dataset_name()}.zarr" \
+        -i "${params.output_dir}/${step_dir('reconstruct')}/${dataset_name()}.zarr" \
         -r 2
     """
 }
@@ -39,7 +39,7 @@ process rename_channels {
     // biahub rename-channels is a standalone command (metadata-only, no data copy).
     """
     ${biahub_cmd()} rename-channels \
-        -i "${params.output_dir}/2-reconstruct/${dataset_name()}.zarr" \
+        -i "${params.output_dir}/${step_dir('reconstruct')}/${dataset_name()}.zarr" \
         -p "${position}" \
         ${prefix_flag} ${suffix_flag}
     """

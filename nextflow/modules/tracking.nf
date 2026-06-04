@@ -1,4 +1,4 @@
-include { dataset_name; parse_resources; biahub_cmd; slurm_logs; slurm_log_dir } from './common'
+include { dataset_name; parse_resources; biahub_cmd; slurm_logs; slurm_log_dir; step_dir } from './common'
 
 
 process init_track {
@@ -18,8 +18,8 @@ process init_track {
     """
     mkdir -p "${slurm_log_dir('track')}"
     ${biahub_cmd()} track --init \
-        -i "${params.output_dir}/2-reconstruct/${dataset_name()}.zarr"/*/*/* \
-        -o "${params.output_dir}/4-track/${dataset_name()}.zarr" \
+        -i "${params.output_dir}/${step_dir('reconstruct')}/${dataset_name()}.zarr"/*/*/* \
+        -o "${params.output_dir}/${step_dir('track')}/${dataset_name()}.zarr" \
         -c "${params.track_config}"
     """
 }
@@ -46,10 +46,10 @@ process run_track {
     // --cluster debug: run in-process; Nextflow handles per-position fan-out.
     """
     ${biahub_cmd()} track --cluster debug \
-        -i "${params.output_dir}/2-reconstruct/${dataset_name()}.zarr/${position}" \
-        -o "${params.output_dir}/4-track/${dataset_name()}.zarr" \
+        -i "${params.output_dir}/${step_dir('reconstruct')}/${dataset_name()}.zarr/${position}" \
+        -o "${params.output_dir}/${step_dir('track')}/${dataset_name()}.zarr" \
         -c "${params.track_config}" \
-        --input-images-path "${params.output_dir}/3-virtual-stain/${dataset_name()}.zarr"
+        --input-images-path "${params.output_dir}/${step_dir('virtual_stain')}/${dataset_name()}.zarr"
     """
 }
 

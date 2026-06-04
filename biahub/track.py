@@ -785,7 +785,7 @@ def _init_output_plate(
             input_position_dirpaths[0], settings.output_ome_zarr_version
         ),
         dtype=np.uint32,
-        copy_metadata_from=input_plate,
+        metadata_sources=input_plate,
     )
 
     click.echo(f"Created {output_dirpath} ({len(position_keys)} positions)")
