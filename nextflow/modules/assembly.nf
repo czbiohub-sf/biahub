@@ -1,4 +1,4 @@
-include { dataset_name; parse_resources; biahub_cmd; slurm_logs; slurm_log_dir } from './common'
+include { dataset_name; parse_resources; biahub_cmd; slurm_logs; slurm_log_dir; step_dir } from './common'
 
 
 process init_estimate_crop {
@@ -15,8 +15,8 @@ process init_estimate_crop {
     """
     mkdir -p "${slurm_log_dir('assemble')}"
     ${biahub_cmd()} estimate-crop --init \
-        --lf-data-path "${params.output_dir}/1-deskew/${dataset_name()}.zarr/*/*/*" \
-        --ls-data-path "${params.output_dir}/2-reconstruct/${dataset_name()}.zarr/*/*/*"
+        --lf-data-path "${params.output_dir}/${step_dir('deskew')}/${dataset_name()}.zarr/*/*/*" \
+        --ls-data-path "${params.output_dir}/${step_dir('reconstruct')}/${dataset_name()}.zarr/*/*/*"
     """
 }
 
@@ -60,11 +60,11 @@ process reduce_crop_ranges {
     """
     ${biahub_cmd()} estimate-crop --reduce \
         -c "${params.concatenate_config}" \
-        -o "${params.output_dir}/5-assemble/concatenate_cropped.yml" \
+        -o "${params.output_dir}/${step_dir('assemble')}/concatenate_cropped.yml" \
         --ranges-file "${ranges_file}" \
-        --concat-data-paths "${params.output_dir}/1-deskew/${dataset_name()}.zarr/*/*/*" \
-        --concat-data-paths "${params.output_dir}/2-reconstruct/${dataset_name()}.zarr/*/*/*" \
-        --concat-data-paths "${params.output_dir}/3-virtual-stain/${dataset_name()}.zarr/*/*/*"
+        --concat-data-paths "${params.output_dir}/${step_dir('deskew')}/${dataset_name()}.zarr/*/*/*" \
+        --concat-data-paths "${params.output_dir}/${step_dir('reconstruct')}/${dataset_name()}.zarr/*/*/*" \
+        --concat-data-paths "${params.output_dir}/${step_dir('virtual_stain')}/${dataset_name()}.zarr/*/*/*"
     """
 }
 
@@ -79,15 +79,15 @@ process resolve_concatenate_config {
 
     script:
     // Resolve placeholder concat_data_paths to actual glob patterns.
-    def resolved = "${params.output_dir}/5-assemble/concatenate_resolved.yml"
+    def resolved = "${params.output_dir}/${step_dir('assemble')}/concatenate_resolved.yml"
     """
     mkdir -p "${params.output_dir}/5-assemble"
     ${biahub_cmd()} concatenate --resolve-config \
         -c "${params.concatenate_config}" \
         -o "${resolved}" \
-        --concat-data-paths "${params.output_dir}/1-deskew/${dataset_name()}.zarr/*/*/*" \
-        --concat-data-paths "${params.output_dir}/2-reconstruct/${dataset_name()}.zarr/*/*/*" \
-        --concat-data-paths "${params.output_dir}/3-virtual-stain/${dataset_name()}.zarr/*/*/*"
+        --concat-data-paths "${params.output_dir}/${step_dir('deskew')}/${dataset_name()}.zarr/*/*/*" \
+        --concat-data-paths "${params.output_dir}/${step_dir('reconstruct')}/${dataset_name()}.zarr/*/*/*" \
+        --concat-data-paths "${params.output_dir}/${step_dir('virtual_stain')}/${dataset_name()}.zarr/*/*/*"
     cp "${resolved}" concatenate_resolved.yml
     """
 }
@@ -103,7 +103,7 @@ process init_concatenate {
 
     script:
     // biahub concatenate --init creates the empty output plate and emits RESOURCES.
-    def output_zarr = "${params.output_dir}/5-assemble/${dataset_name()}.zarr"
+    def output_zarr = "${params.output_dir}/${step_dir('assemble')}/${dataset_name()}.zarr"
     """
     rm -rf "${output_zarr}"
     ${biahub_cmd()} concatenate --init \
@@ -133,8 +133,8 @@ process run_concatenate {
     // --cluster debug: run in-process; Nextflow handles per-position fan-out.
     """
     ${biahub_cmd()} concatenate --cluster debug \
-        -c "${params.output_dir}/5-assemble/concatenate_resolved.yml" \
-        -o "${params.output_dir}/5-assemble/${dataset_name()}.zarr" \
+        -c "${params.output_dir}/${step_dir('assemble')}/concatenate_resolved.yml" \
+        -o "${params.output_dir}/${step_dir('assemble')}/${dataset_name()}.zarr" \
         -p "${position}"
     """
 }
