@@ -24,6 +24,9 @@ data:
     source_channel: Phase3D
     target_channel: [nuclei, membrane]
     z_window_size: 15  # must match model in_stack_depth
+    # No effect on biahub: predict_sliding_windows processes one z-window at a
+    # time. Kept for parity with `viscy predict` configs.
+    batch_size: 1
     normalizations:
       - class_path: viscy_transforms.NormalizeSampled
         init_args:
