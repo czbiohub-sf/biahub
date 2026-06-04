@@ -22,7 +22,6 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.cli.utils import (
-    estimate_resources,
     get_submitit_cluster,
     resolve_ome_zarr_version,
 )
@@ -283,8 +282,9 @@ def virtual_stain(
         cfg.output_ome_zarr_version,
     )
 
-    # Estimate resources (one timepoint volume in RAM per worker)
-    num_cpus, gb_ram = estimate_resources(shape=input_shape, ram_multiplier=16, max_num_cpus=8)
+    # Timepoints are processed sequentially on a single GPU, so resource needs
+    # are independent of dataset size.
+    num_cpus, gb_ram = 16, 4
     click.echo(f"RESOURCES:{num_cpus} {num_cpus * gb_ram}")
 
     if init_only:
