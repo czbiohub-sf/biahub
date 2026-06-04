@@ -13,7 +13,7 @@
 // The predict step writes to a temp per-position zarr, and the --copy step
 // moves data from that temp zarr into the output plate.
 
-include { dataset_name; parse_resources; biahub_cmd; slurm_logs; slurm_log_dir } from './common'
+include { dataset_name; parse_resources; biahub_cmd; slurm_logs; slurm_log_dir; step_dir } from './common'
 
 def viscy_cmd() {
     return params.viscy_project ?
@@ -34,10 +34,10 @@ process init_virtual_stain {
     script:
     """
     mkdir -p "${slurm_log_dir('virtual_stain')}"
-    rm -rf "${params.output_dir}/3-virtual-stain/temp"
+    rm -rf "${params.output_dir}/${step_dir('virtual_stain')}/temp"
     ${biahub_cmd()} virtual-stain --init \
-        -i "${params.output_dir}/2-reconstruct/${dataset_name()}.zarr"/*/*/* \
-        -o "${params.output_dir}/3-virtual-stain/${dataset_name()}.zarr" \
+        -i "${params.output_dir}/${step_dir('reconstruct')}/${dataset_name()}.zarr"/*/*/* \
+        -o "${params.output_dir}/${step_dir('virtual_stain')}/${dataset_name()}.zarr" \
         -c "${params.predict_config}"
     """
 }
@@ -60,7 +60,7 @@ process run_virtual_stain_preprocess {
     script:
     """
     ${viscy_cmd()} preprocess \
-        --data_path "${params.output_dir}/2-reconstruct/${dataset_name()}.zarr" \
+        --data_path "${params.output_dir}/${step_dir('reconstruct')}/${dataset_name()}.zarr" \
         --channel_names -1 \
         --num_workers ${task.cpus} \
         --block_size 32
@@ -85,21 +85,21 @@ process run_virtual_stain {
     val position
 
     script:
-    def temp_zarr = "${params.output_dir}/3-virtual-stain/temp/${position.replaceAll('/', '_')}.zarr"
+    def temp_zarr = "${params.output_dir}/${step_dir('virtual_stain')}/temp/${position.replaceAll('/', '_')}.zarr"
     """
     rm -rf "${temp_zarr}"
 
     ${viscy_cmd()} predict \
         -c "${params.predict_config}" \
-        --data.init_args.data_path "${params.output_dir}/2-reconstruct/${dataset_name()}.zarr/${position}" \
+        --data.init_args.data_path "${params.output_dir}/${step_dir('reconstruct')}/${dataset_name()}.zarr/${position}" \
         --data.init_args.num_workers 0 \
         --trainer.callbacks+=viscy_utils.callbacks.prediction_writer.HCSPredictionWriter \
         --trainer.callbacks.output_store "${temp_zarr}" \
-        --trainer.default_root_dir "${params.output_dir}/3-virtual-stain/logs"
+        --trainer.default_root_dir "${params.output_dir}/${step_dir('virtual_stain')}/logs"
 
     ${biahub_cmd()} virtual-stain --copy \
         -t "${temp_zarr}" \
-        -o "${params.output_dir}/3-virtual-stain/${dataset_name()}.zarr" \
+        -o "${params.output_dir}/${step_dir('virtual_stain')}/${dataset_name()}.zarr" \
         -p "${position}" \
         -c "${params.predict_config}"
     """

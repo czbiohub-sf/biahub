@@ -156,7 +156,7 @@ def _init_output_plate(
         scale=scale,
         version="0.5",
         dtype=np.float32,
-        copy_metadata_from=Path(input_position_dirpaths[0]).parents[2],
+        metadata_sources=Path(input_position_dirpaths[0]).parents[2],
     )
     click.echo(
         f"Created {output_zarr} ({len(position_keys)} positions, "
