@@ -26,7 +26,10 @@ from biahub.cli.parsing import (
     sbatch_filepath_preprocess,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import estimate_resources, get_submitit_cluster
+from biahub.cli.utils import (
+    estimate_resources,
+    get_submitit_cluster,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +125,7 @@ def combine_fov_zarrs_to_plate(
 
 
 def _init_output_plate(
-    input_position_dirpaths: list[Path],
+    input_zarr: Path,
     output_zarr: Path,
     config_filepath: Path,
 ) -> tuple[int, int, int, int, int]:
@@ -140,10 +143,11 @@ def _init_output_plate(
     target_channels = cfg["data"]["init_args"]["target_channel"]
     prediction_channels = [f"{ch}_prediction" for ch in target_channels]
 
-    position_keys = [Path(p).parts[-3:] for p in input_position_dirpaths]
-    with open_ome_zarr(str(input_position_dirpaths[0]), mode="r") as ds:
-        shape = ds.data.shape
-        scale = ds.scale
+    with open_ome_zarr(str(input_zarr), mode="r") as plate:
+        position_keys = [tuple(name.split("/")) for name, _ in plate.positions()]
+        first_pos = next(plate.positions())[1]
+        shape = first_pos.data.shape
+        scale = first_pos.scale
     T, _, Z, Y, X = shape
 
     output_shape = (T, len(prediction_channels), Z, Y, X)
@@ -156,7 +160,7 @@ def _init_output_plate(
         scale=scale,
         version="0.5",
         dtype=np.float32,
-        metadata_sources=Path(input_position_dirpaths[0]).parents[2],
+        metadata_sources=input_zarr,
     )
     click.echo(
         f"Created {output_zarr} ({len(position_keys)} positions, "
@@ -473,9 +477,8 @@ def virtual_stain_cli(
         )
 
     if init_only:
-        output_shape = _init_output_plate(
-            input_position_dirpaths, output_dirpath, config_filepath
-        )
+        input_plate = Path(input_position_dirpaths[0]).parents[2]
+        output_shape = _init_output_plate(input_plate, output_dirpath, config_filepath)
 
         num_cpus, mem_per_cpu = estimate_resources(
             shape=output_shape, ram_multiplier=16, max_num_cpus=16
