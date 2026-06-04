@@ -7,7 +7,7 @@
 // Nextflow task.  See also:
 // examples/submitit_debug_nextflow/2026-05-27-submitit-debug-nextflow-concerns.md
 
-include { dataset_name; parse_resources; biahub_cmd; slurm_logs; slurm_log_dir } from './common'
+include { dataset_name; parse_resources; biahub_cmd; slurm_logs; slurm_log_dir; step_dir } from './common'
 
 
 process init_deskew {
@@ -23,8 +23,8 @@ process init_deskew {
     """
     mkdir -p "${slurm_log_dir('deskew')}"
     ${biahub_cmd()} deskew --init \
-        -i "${params.output_dir}/0-flatfield/${dataset_name()}.zarr"/*/*/* \
-        -o "${params.output_dir}/1-deskew/${dataset_name()}.zarr" \
+        -i "${params.output_dir}/${step_dir('flat_field')}/${dataset_name()}.zarr"/*/*/* \
+        -o "${params.output_dir}/${step_dir('deskew')}/${dataset_name()}.zarr" \
         -c "${params.deskew_config}"
     """
 }
@@ -50,8 +50,8 @@ process run_deskew {
     script:
     """
     ${biahub_cmd()} deskew --cluster debug \
-        -i "${params.output_dir}/0-flatfield/${dataset_name()}.zarr/${position}" \
-        -o "${params.output_dir}/1-deskew/${dataset_name()}.zarr" \
+        -i "${params.output_dir}/${step_dir('flat_field')}/${dataset_name()}.zarr/${position}" \
+        -o "${params.output_dir}/${step_dir('deskew')}/${dataset_name()}.zarr" \
         -c "${params.deskew_config}"
     """
 }

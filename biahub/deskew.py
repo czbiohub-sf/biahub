@@ -630,7 +630,7 @@ def _init_output_plate(
         version=resolve_ome_zarr_version(
             input_position_dirpaths[0], settings.output_ome_zarr_version
         ),
-        metadata_sources=[input_plate],
+        metadata_sources=input_plate,
     )
 
     return (T, C, Z, Y, X), channel_names
@@ -689,7 +689,7 @@ def deskew(
         "average_n_slices": settings.average_n_slices,
         "overhang_fill": settings.overhang_fill,
         "device": settings.device,
-        "extra_metadata": {"biahub-deskew": settings.model_dump()},
+        "extra_metadata": {"deskew": settings.model_dump()},
     }
 
     slurm_args = {

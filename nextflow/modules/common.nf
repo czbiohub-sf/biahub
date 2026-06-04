@@ -3,6 +3,18 @@ def dataset_name() {
         new File(params.input_zarr).name.replaceAll(/\.zarr$/, '') : null
 }
 
+// Look up a step's output directory name from the pipeline steps config YAML.
+// The YAML is the single source of truth for directory layout; different
+// workflows (mantis-v2, dragonfly, etc.) provide their own config.
+def step_dir(step_name) {
+    if (!params.pipeline_steps_config) {
+        error "Provide --pipeline_steps_config (path to pipeline steps YAML)"
+    }
+    def yaml = new org.yaml.snakeyaml.Yaml()
+    def config = yaml.load(new File(params.pipeline_steps_config).text)
+    return config.steps[step_name].dir
+}
+
 def parse_resources(stdout_text, prefix = 'RESOURCES:') {
     def matching = stdout_text.trim().readLines().findAll { it.startsWith(prefix) }
     if (!matching) {
