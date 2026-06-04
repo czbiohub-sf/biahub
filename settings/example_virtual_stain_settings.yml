@@ -33,3 +33,9 @@ data:
           divisor: iqr
 
 ckpt_path: /hpc/projects/comp.micro/virtual_staining/models/fcmae-cyto3d-sensor/vscyto3d-logs/hek-a549-ipsc-finetune/checkpoints/epoch=83-step=14532-loss=0.492.ckpt
+
+# Optional biahub orchestration knobs (defaults shown).
+sliding_window_step: 1  # Z step for the sliding window; 1 = maximum overlap.
+device: cuda  # torch device for inference.
+# Output OME-Zarr version: null preserves the input store's version; "0.4" or "0.5" overrides.
+output_ome_zarr_version: null

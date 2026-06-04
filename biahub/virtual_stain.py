@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal
 
 import click
 import numpy as np
@@ -40,10 +41,10 @@ def build_predict_parser():
     ``viscy predict`` CLI uses. biahub therefore keeps no copy of the model
     schema that could fall out of date when VisCy changes upstream.
 
-    The two biahub-specific orchestration knobs (``sliding_window_step`` and
-    ``device``) and the top-level ``ckpt_path`` are added as plain arguments.
-    ``data.init_args.data_path`` is intentionally left out of the config file --
-    biahub injects the position path per job.
+    The biahub-specific orchestration knobs (``sliding_window_step``,
+    ``device``, ``output_ome_zarr_version``) and the top-level ``ckpt_path``
+    are added as plain arguments. ``data.init_args.data_path`` is intentionally
+    left out of the config file -- biahub injects the position path per job.
     """
     import jsonargparse
 
@@ -57,6 +58,12 @@ def build_predict_parser():
     parser.add_argument("--ckpt_path", type=str, required=True)
     parser.add_argument("--sliding_window_step", type=int, default=1)
     parser.add_argument("--device", type=str, default="cuda")
+    # Output OME-Zarr version: None preserves the input store's version.
+    parser.add_argument(
+        "--output_ome_zarr_version",
+        type=Literal["0.4", "0.5"] | None,
+        default=None,
+    )
     return parser
 
 
@@ -192,12 +199,16 @@ def _init_output_plate(
     input_position_dirpaths: list[Path],
     output_dirpath: Path,
     target_channels: list[str],
+    output_ome_zarr_version: str | None = None,
 ) -> tuple[int, int, int, int, int]:
     """Create (or extend) the empty virtual-stain output plate.
 
     The output mirrors the input geometry but contains only the predicted
     virtual-stain channels. ``create_empty_plate`` is idempotent, so this is
     safe to call from both the orchestrator and per-position runs.
+
+    ``output_ome_zarr_version`` dictates the output store's OME-Zarr version;
+    when None the input store's version is preserved.
 
     Returns the input ``(T, C, Z, Y, X)`` shape.
     """
@@ -212,7 +223,7 @@ def _init_output_plate(
         channel_names=target_channels,
         shape=(T, len(target_channels), Z, Y, X),
         scale=scale,
-        version=resolve_ome_zarr_version(input_position_dirpaths[0], None),
+        version=resolve_ome_zarr_version(input_position_dirpaths[0], output_ome_zarr_version),
     )
 
     return (T, C, Z, Y, X)
@@ -265,7 +276,12 @@ def virtual_stain(
         [target_channels] if isinstance(target_channels, str) else target_channels
     )
 
-    input_shape = _init_output_plate(input_position_dirpaths, output_dirpath, target_channels)
+    input_shape = _init_output_plate(
+        input_position_dirpaths,
+        output_dirpath,
+        target_channels,
+        cfg.output_ome_zarr_version,
+    )
 
     # Estimate resources (one timepoint volume in RAM per worker)
     num_cpus, gb_ram = estimate_resources(shape=input_shape, ram_multiplier=16, max_num_cpus=8)
