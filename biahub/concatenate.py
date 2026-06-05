@@ -406,6 +406,12 @@ def _run_concatenate_one_position(
 
         output_position_path = output_dirpath / position
 
+        # Preserve extra_metadata written by create_empty_plate's
+        # metadata_sources — process_single_position overwrites it with
+        # None when the kwarg is absent (iohub <= 0.3.7).
+        with open_ome_zarr(str(output_position_path), layout="fov", mode="r") as pos:
+            existing_extra = pos.zattrs.get("extra_metadata")
+
         process_single_position(
             copy_n_paste,
             input_position_path=input_path,
@@ -415,6 +421,7 @@ def _run_concatenate_one_position(
             output_channel_indices=output_ch_idx,
             input_time_indices=input_time_indices,
             output_time_indices=list(range(len(input_time_indices))),
+            extra_metadata=existing_extra,
             zyx_slicing_params=zyx_slicing_params,
         )
 
@@ -615,7 +622,14 @@ def concatenate(
             all_slicing_params,
             strict=True,
         ):
-            # Create slicing parameters for this specific path
+            # Preserve extra_metadata written by create_empty_plate's
+            # metadata_sources — process_single_position overwrites it with
+            # None when the kwarg is absent (iohub <= 0.3.7).
+            with open_ome_zarr(
+                str(output_position_path), layout="fov", mode="r"
+            ) as pos:
+                existing_extra = pos.zattrs.get("extra_metadata")
+
             copy_n_paste_kwargs = {"zyx_slicing_params": zyx_slicing_params}
 
             job = executor.submit(
@@ -628,6 +642,7 @@ def concatenate(
                 input_time_indices=input_time_indices,
                 output_time_indices=list(range(len(input_time_indices))),
                 num_workers=int(slurm_args["slurm_cpus_per_task"]),
+                extra_metadata=existing_extra,
                 **copy_n_paste_kwargs,
             )
             jobs.append(job)
