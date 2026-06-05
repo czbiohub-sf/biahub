@@ -31,25 +31,17 @@ from biahub.cli.utils import (
 )
 from biahub.settings import ConcatenateSettings
 
-_OME_KEYS = {"ome", "multiscales", "omero", "labels", "version"}
 
-
-def _copy_metadata_map(
-    output_plate_path: Path | str, metadata_map: dict[str, Path | str]
-) -> None:
-    with open_ome_zarr(str(output_plate_path), mode="r+") as plate:
-        for dest_key, src_path in metadata_map.items():
-            if dest_key not in plate:
-                continue
-            try:
-                src_pos = open_ome_zarr(str(src_path), layout="fov", mode="r")
-            except FileNotFoundError:
-                continue
-            dest_pos = plate[dest_key]
-            for k, v in dict(src_pos.zattrs).items():
-                if k not in _OME_KEYS and k not in dest_pos.zattrs:
-                    dest_pos.zattrs[k] = v
-            src_pos.close()
+def _unique_source_plates(data_paths: list[Path]) -> list[Path]:
+    """Deduplicated source plate paths from position paths, preserving order."""
+    seen = set()
+    plates = []
+    for p in data_paths:
+        plate = Path(p).parents[2]
+        if plate not in seen:
+            seen.add(plate)
+            plates.append(plate)
+    return plates
 
 
 def get_path_slice_param(slice_param, path_index, total_paths):
@@ -335,10 +327,7 @@ def _init_concatenate(settings: ConcatenateSettings, output_dirpath: Path):
     else:
         chunk_size = settings.chunks_czyx
 
-    metadata_map = {
-        "/".join(p.parts[-3:]): src
-        for src, p in zip(all_data_paths, output_position_paths)
-    }
+    source_plates = _unique_source_plates(all_data_paths)
 
     create_empty_plate(
         store_path=output_dirpath,
@@ -350,8 +339,8 @@ def _init_concatenate(settings: ConcatenateSettings, output_dirpath: Path):
         scale=output_scale,
         version=resolve_ome_zarr_version(all_data_paths[0], settings.output_ome_zarr_version),
         dtype=dtype,
+        metadata_sources=list(reversed(source_plates)),
     )
-    _copy_metadata_map(output_dirpath, metadata_map)
 
     click.echo(f"Created {output_dirpath} ({len(output_position_paths)} positions)")
 
@@ -572,18 +561,15 @@ def concatenate(
         "dtype": dtype,
     }
 
-    metadata_map = {
-        "/".join(p.parts[-3:]): src
-        for src, p in zip(all_data_paths, output_position_paths_list)
-    }
+    source_plates = _unique_source_plates(all_data_paths)
 
     # Create the output zarr mirroring source_position_dirpaths
     create_empty_plate(
         store_path=output_dirpath,
         position_keys=[p.parts[-3:] for p in output_position_paths_list],
+        metadata_sources=list(reversed(source_plates)),
         **output_metadata,
     )
-    _copy_metadata_map(output_dirpath, metadata_map)
 
     # Estimate resources
     batch_size = settings.shards_ratio[0] if settings.shards_ratio else 1
