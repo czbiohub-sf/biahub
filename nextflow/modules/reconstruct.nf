@@ -1,5 +1,10 @@
 // Reconstruct subworkflow: init → compute TF → fan-out apply-inv-tf × N positions.
 //
+// This subworkflow is PATH-AGNOSTIC. Callers pass the input zarr, output zarr,
+// and config explicitly; the module has no idea where it sits in the pipeline
+// directory layout. The TF zarr and resolved config paths are derived from the
+// output_zarr's parent directory (the module's internal convention).
+//
 // Three-phase pattern:
 // 1. init_apply_inv_tf: creates the output plate, resolves pixel sizes from
 //    zarr metadata into reconstruct_resolved.yml, emits RESOURCES: and TF_RESOURCES:
@@ -11,13 +16,16 @@
 // resource scheduling, so the CLI must NOT submit its own SLURM jobs.
 // See: examples/submitit_debug_nextflow/2026-05-27-submitit-debug-nextflow-concerns.md
 
-include { dataset_name; parse_resources; biahub_cmd; slurm_logs; slurm_log_dir; step_dir } from './common'
+include { parse_resources; biahub_cmd; slurm_logs; slurm_log_dir } from './common'
 
 
 process init_apply_inv_tf {
     label 'cpu_local'
 
     input:
+    val input_zarr
+    val output_zarr
+    val config
     val trigger
 
     output:
@@ -27,9 +35,9 @@ process init_apply_inv_tf {
     """
     mkdir -p "${slurm_log_dir('reconstruct')}"
     ${biahub_cmd()} apply-inv-tf --init \
-        -i "${params.output_dir}/${step_dir('deskew')}/${dataset_name()}.zarr"/*/*/* \
-        -o "${params.output_dir}/${step_dir('reconstruct')}/${dataset_name()}.zarr" \
-        -c "${params.reconstruct_config}"
+        -i "${input_zarr}"/*/*/* \
+        -o "${output_zarr}" \
+        -c "${config}"
     """
 }
 
@@ -42,6 +50,9 @@ process compute_transfer_function {
 
     input:
     val meta
+    val input_zarr
+    val tf_zarr
+    val resolved_config
 
     output:
     val true
@@ -49,9 +60,9 @@ process compute_transfer_function {
     script:
     """
     ${biahub_cmd()} compute-tf \
-        -i "${params.output_dir}/${step_dir('deskew')}/${dataset_name()}.zarr"/*/*/* \
-        -o "${params.output_dir}/${step_dir('reconstruct')}/transfer_function_reconstruct_resolved.zarr" \
-        -c "${params.output_dir}/${step_dir('reconstruct')}/reconstruct_resolved.yml"
+        -i "${input_zarr}"/*/*/* \
+        -o "${tf_zarr}" \
+        -c "${resolved_config}"
     """
 }
 
@@ -68,6 +79,10 @@ process run_apply_inv_tf {
 
     input:
     tuple val(position), val(meta)
+    val input_zarr
+    val output_zarr
+    val tf_zarr
+    val resolved_config
 
     output:
     val position
@@ -75,33 +90,46 @@ process run_apply_inv_tf {
     script:
     """
     ${biahub_cmd()} apply-inv-tf --cluster debug \
-        -i "${params.output_dir}/${step_dir('deskew')}/${dataset_name()}.zarr/${position}" \
-        -t "${params.output_dir}/${step_dir('reconstruct')}/transfer_function_reconstruct_resolved.zarr" \
-        -o "${params.output_dir}/${step_dir('reconstruct')}/${dataset_name()}.zarr" \
-        -c "${params.output_dir}/${step_dir('reconstruct')}/reconstruct_resolved.yml"
+        -i "${input_zarr}/${position}" \
+        -t "${tf_zarr}" \
+        -o "${output_zarr}" \
+        -c "${resolved_config}"
     """
 }
 
 
+// take:
+//   positions    collected channel of position keys (e.g. ['A/1/0', 'B/1/0'])
+//   input_zarr   path to the input plate.zarr (deskew output)
+//   output_zarr  path to the reconstructed output plate.zarr
+//   config       path to the reconstruct settings YAML
+//   prev_done    gating channel — reconstruct starts once this emits
 workflow reconstruct_wf {
     take:
     positions
+    input_zarr
+    output_zarr
+    config
     prev_done
 
     main:
-    init_out = init_apply_inv_tf(prev_done.map { 'done' })
+    def output_dir      = new File(output_zarr).parent
+    def tf_zarr         = "${output_dir}/transfer_function_reconstruct_resolved.zarr"
+    def resolved_config = "${output_dir}/reconstruct_resolved.yml"
+
+    init_out = init_apply_inv_tf(input_zarr, output_zarr, config, prev_done.map { 'done' })
     tf_resources = init_out.map { parse_resources(it, 'TF_RESOURCES:') }
     run_resources = init_out.map { parse_resources(it) }
 
-    tf_done = compute_transfer_function(tf_resources)
+    tf_done = compute_transfer_function(tf_resources, input_zarr, tf_zarr, resolved_config)
 
-    rc_done = positions
+    pos_meta = positions
         .flatMap { it }
         .combine(run_resources)
         .combine(tf_done)
         .map { pos, meta, tf -> [pos, meta] }
-        | run_apply_inv_tf
-        | collect
+
+    rc_done = run_apply_inv_tf(pos_meta, input_zarr, output_zarr, tf_zarr, resolved_config) | collect
 
     emit:
     done = rc_done
