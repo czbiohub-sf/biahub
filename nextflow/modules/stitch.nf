@@ -1,5 +1,8 @@
 // Stitch subworkflow: estimate → init → run.
 //
+// This subworkflow is PATH-AGNOSTIC. Callers pass input zarr, output zarr,
+// and stitch config path explicitly.
+//
 // estimate_stitch extracts stage positions and computes stitching parameters.
 //
 // init_stitch creates the per-well output stores and emits RESOURCES.
@@ -16,6 +19,8 @@ process estimate_stitch {
     label 'cpu_local'
 
     input:
+    val input_zarr
+    val stitch_config
     val trigger
 
     output:
@@ -24,8 +29,8 @@ process estimate_stitch {
     script:
     """
     ${biahub_cmd()} estimate-stitch \
-        -i "${params.stitch_input_zarr}"/*/*/* \
-        -o "${params.stitch_config}"
+        -i "${input_zarr}"/*/*/* \
+        -o "${stitch_config}"
     """
 }
 
@@ -33,6 +38,9 @@ process init_stitch {
     label 'cpu_local'
 
     input:
+    val input_zarr
+    val output_zarr
+    val stitch_config
     val trigger
 
     output:
@@ -42,9 +50,9 @@ process init_stitch {
     """
     mkdir -p "${slurm_log_dir('stitch')}"
     ${biahub_cmd()} stitch --init \
-        -i "${params.stitch_input_zarr}"/*/*/* \
-        -o "${params.stitch_output_zarr}" \
-        -c "${params.stitch_config}"
+        -i "${input_zarr}"/*/*/* \
+        -o "${output_zarr}" \
+        -c "${stitch_config}"
     """
 }
 
@@ -59,6 +67,9 @@ process run_stitch {
 
     input:
     tuple val(trigger), val(meta)
+    val input_zarr
+    val output_zarr
+    val stitch_config
 
     output:
     val true
@@ -66,25 +77,31 @@ process run_stitch {
     script:
     """
     ${biahub_cmd()} stitch --cluster debug \
-        -i "${params.stitch_input_zarr}"/*/*/* \
-        -o "${params.stitch_output_zarr}" \
-        -c "${params.stitch_config}"
+        -i "${input_zarr}"/*/*/* \
+        -o "${output_zarr}" \
+        -c "${stitch_config}"
     """
 }
 
 
+// take:
+//   input_zarr     path to the input plate.zarr
+//   output_zarr    path to the stitched output plate.zarr
+//   stitch_config  path to the stitch config YAML (written by estimate)
+//   prev_done      gating channel
 workflow stitch_wf {
     take:
+    input_zarr
+    output_zarr
+    stitch_config
     prev_done
 
     main:
-    init_out = init_stitch(prev_done.map { 'done' })
+    init_out = init_stitch(input_zarr, output_zarr, stitch_config, prev_done.map { 'done' })
     resources = init_out.map { parse_resources(it) }
 
-    st_done = resources
-        .map { meta -> tuple('done', meta) }
-        | run_stitch
-        | collect
+    trigger_meta = resources.map { meta -> tuple('done', meta) }
+    st_done = run_stitch(trigger_meta, input_zarr, output_zarr, stitch_config) | collect
 
     emit:
     done = st_done
