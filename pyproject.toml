@@ -20,7 +20,7 @@ classifiers = [
 
 dependencies = [
   "click",
-  "iohub>=0.3.4",
+  "iohub>=0.3.7",
   "matplotlib",
   "natsort",
   "numpy",
