@@ -1,5 +1,9 @@
 // Virtual stain subworkflow: init → preprocess → fan-out (predict + copy) × N positions.
 //
+// This subworkflow is PATH-AGNOSTIC. Callers pass the input zarr, output zarr,
+// and config explicitly. Temp paths for predict output are derived from the
+// output_zarr's parent directory.
+//
 // Virtual staining uses VisCy (external tool) for the GPU work, so the
 // preprocess and predict steps call viscy directly rather than biahub CLI.
 // Only init and copy are biahub commands:
@@ -13,7 +17,7 @@
 // The predict step writes to a temp per-position zarr, and the --copy step
 // moves data from that temp zarr into the output plate.
 
-include { dataset_name; parse_resources; biahub_cmd; slurm_logs; slurm_log_dir; step_dir } from './common'
+include { parse_resources; biahub_cmd; slurm_logs; slurm_log_dir } from './common'
 
 def viscy_cmd() {
     return params.viscy_project ?
@@ -26,6 +30,10 @@ process init_virtual_stain {
     label 'cpu_local'
 
     input:
+    val input_zarr
+    val output_zarr
+    val config
+    val output_dir
     val trigger
 
     output:
@@ -34,11 +42,11 @@ process init_virtual_stain {
     script:
     """
     mkdir -p "${slurm_log_dir('virtual_stain')}"
-    rm -rf "${params.output_dir}/${step_dir('virtual_stain')}/temp"
+    rm -rf "${output_dir}/temp"
     ${biahub_cmd()} virtual-stain --init \
-        -i "${params.output_dir}/${step_dir('reconstruct')}/${dataset_name()}.zarr"/*/*/* \
-        -o "${params.output_dir}/${step_dir('virtual_stain')}/${dataset_name()}.zarr" \
-        -c "${params.predict_config}"
+        -i "${input_zarr}"/*/*/* \
+        -o "${output_zarr}" \
+        -c "${config}"
     """
 }
 
@@ -52,6 +60,7 @@ process run_virtual_stain_preprocess {
     errorStrategy 'retry'
 
     input:
+    val input_zarr
     val trigger
 
     output:
@@ -60,7 +69,7 @@ process run_virtual_stain_preprocess {
     script:
     """
     ${viscy_cmd()} preprocess \
-        --data_path "${params.output_dir}/${step_dir('reconstruct')}/${dataset_name()}.zarr" \
+        --data_path "${input_zarr}" \
         --channel_names -1 \
         --num_workers ${task.cpus} \
         --block_size 32
@@ -80,49 +89,65 @@ process run_virtual_stain {
 
     input:
     tuple val(position), val(meta)
+    val input_zarr
+    val output_zarr
+    val config
+    val output_dir
 
     output:
     val position
 
     script:
-    def temp_zarr = "${params.output_dir}/${step_dir('virtual_stain')}/temp/${position.replaceAll('/', '_')}.zarr"
+    def temp_zarr = "${output_dir}/temp/${position.replaceAll('/', '_')}.zarr"
     """
     rm -rf "${temp_zarr}"
 
     ${viscy_cmd()} predict \
-        -c "${params.predict_config}" \
-        --data.init_args.data_path "${params.output_dir}/${step_dir('reconstruct')}/${dataset_name()}.zarr/${position}" \
+        -c "${config}" \
+        --data.init_args.data_path "${input_zarr}/${position}" \
         --data.init_args.num_workers 0 \
         --trainer.callbacks+=viscy_utils.callbacks.prediction_writer.HCSPredictionWriter \
         --trainer.callbacks.output_store "${temp_zarr}" \
-        --trainer.default_root_dir "${params.output_dir}/${step_dir('virtual_stain')}/logs"
+        --trainer.default_root_dir "${output_dir}/logs"
 
     ${biahub_cmd()} virtual-stain --copy \
         -t "${temp_zarr}" \
-        -o "${params.output_dir}/${step_dir('virtual_stain')}/${dataset_name()}.zarr" \
+        -o "${output_zarr}" \
         -p "${position}" \
-        -c "${params.predict_config}"
+        -c "${config}"
     """
 }
 
 
+// take:
+//   positions    collected channel of position keys (e.g. ['A/1/0', 'B/1/0'])
+//   input_zarr   path to the input plate.zarr (reconstruct output)
+//   output_zarr  path to the virtual stain output plate.zarr
+//   config       path to the predict settings YAML
+//   prev_done    gating channel — virtual stain starts once this emits
 workflow virtual_stain_wf {
     take:
     positions
+    input_zarr
+    output_zarr
+    config
     prev_done
 
     main:
-    resources = init_virtual_stain(prev_done.map { 'done' }).map { parse_resources(it) }
-    vs_preprocess = run_virtual_stain_preprocess(prev_done.map { 'done' })
+    def output_dir = new File(output_zarr).parent
+
+    resources = init_virtual_stain(input_zarr, output_zarr, config, output_dir, prev_done.map { 'done' })
+        .map { parse_resources(it) }
+    vs_preprocess = run_virtual_stain_preprocess(input_zarr, prev_done.map { 'done' })
 
     ready = resources.combine(vs_preprocess)
 
-    vs_done = positions
+    pos_meta = positions
         .flatMap { it }
         .combine(ready)
         .map { pos, meta, preprocess_done -> [pos, meta] }
-        | run_virtual_stain
-        | collect
+
+    vs_done = run_virtual_stain(pos_meta, input_zarr, output_zarr, config, output_dir) | collect
 
     emit:
     done = vs_done
