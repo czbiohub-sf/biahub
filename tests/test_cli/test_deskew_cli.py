@@ -58,12 +58,11 @@ def test_deskew_data():
     )
 
 
-def test_deskew_cli(tmp_path, example_plate, example_deskew_settings, sbatch_file):
+def test_deskew_cli(tmp_path, example_plate, example_deskew_settings):
     plate_path, _ = example_plate
     config_path, _ = example_deskew_settings
     output_path = tmp_path / "output.zarr"
 
-    # Test deskew cli
     runner = CliRunner()
     result = runner.invoke(
         cli,
@@ -77,14 +76,66 @@ def test_deskew_cli(tmp_path, example_plate, example_deskew_settings, sbatch_fil
             str(config_path),
             "-o",
             str(output_path),
-            "--local",
-            "--sbatch-filepath",
-            sbatch_file,
+            "--cluster",
+            "debug",
         ],
     )
 
+    assert output_path.exists(), result.output
+    assert result.exit_code == 0, result.output
+
+
+def test_deskew_cli_init_only(tmp_path, example_plate, example_deskew_settings):
+    plate_path, _ = example_plate
+    config_path, _ = example_deskew_settings
+    output_path = tmp_path / "output.zarr"
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "deskew",
+            "-i",
+            str(plate_path) + "/A/1/0",
+            str(plate_path) + "/B/1/0",
+            str(plate_path) + "/B/2/0",
+            "-c",
+            str(config_path),
+            "-o",
+            str(output_path),
+            "--init",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
     assert output_path.exists()
-    assert result.exit_code == 0
+    assert "RESOURCES:" in result.output
+
+
+def test_deskew_cli_debug_single_position(tmp_path, example_plate, example_deskew_settings):
+    plate_path, _ = example_plate
+    config_path, _ = example_deskew_settings
+    output_path = tmp_path / "output.zarr"
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "deskew",
+            "-i",
+            str(plate_path) + "/A/1/0",
+            "-c",
+            str(config_path),
+            "-o",
+            str(output_path),
+            "--cluster",
+            "debug",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert output_path.exists()
+    assert "Deskew complete:" in result.output
 
 
 def test_deskew_overhang_only_dataset_error():

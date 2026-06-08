@@ -1,3 +1,4 @@
+import glob as globmod
 import shutil
 
 from ast import literal_eval
@@ -10,11 +11,11 @@ import pandas as pd
 import submitit
 
 from iohub import open_ome_zarr
+from natsort import natsorted
 
 from biahub.cli.parsing import (
-    config_filepath,
+    init_only,
     local,
-    output_filepath,
     sbatch_filepath,
     sbatch_to_submitit,
 )
@@ -72,12 +73,12 @@ def estimate_crop_one_position(
     # Ensure data dimensions are the same
     lf_shape = lf_mask.shape[-3:]
     ls_shape = ls_mask.shape[-3:]
+    _max_zyx_dims = np.asarray([lf_shape, ls_shape]).min(axis=0)
     if lf_shape != ls_shape:
         click.echo(
             "WARNING: Phase and fluorescence datasets should have the same shape, got"
             f" phase shape: {lf_shape}, fluorescence shape: {ls_shape}"
         )
-        _max_zyx_dims = np.asarray([lf_shape, ls_shape]).min(axis=0)
         lf_mask = lf_mask[..., : _max_zyx_dims[0], : _max_zyx_dims[1], : _max_zyx_dims[2]]
         ls_mask = ls_mask[..., : _max_zyx_dims[0], : _max_zyx_dims[1], : _max_zyx_dims[2]]
 
@@ -145,6 +146,81 @@ def estimate_crop_one_position(
         [y_slice.start, y_slice.stop],
         [x_slice.start, x_slice.stop],
     )
+
+
+def _init_estimate_crop(lf_data_path: str, ls_data_path: str):
+    """Emit RESOURCES and paired position lines for per-FOV estimate-crop fan-out."""
+    lf_positions = natsorted([Path(p) for p in globmod.glob(lf_data_path) if Path(p).is_dir()])
+    ls_positions = natsorted([Path(p) for p in globmod.glob(ls_data_path) if Path(p).is_dir()])
+    if not lf_positions:
+        raise click.ClickException(f"No positions found matching '{lf_data_path}'")
+    if not ls_positions:
+        raise click.ClickException(f"No positions found matching '{ls_data_path}'")
+    if len(lf_positions) != len(ls_positions):
+        raise click.ClickException(
+            f"Mismatched position counts: {len(lf_positions)} label-free "
+            f"vs {len(ls_positions)} light-sheet."
+        )
+
+    with open_ome_zarr(lf_positions[0]) as ds:
+        T, C, Z, Y, X = ds.data.shape
+        dtype = ds.data.dtype
+
+    volume_gb = T * Z * Y * X * np.dtype(dtype).itemsize / 2**30
+    total_gb = max(8, int(np.ceil(volume_gb * 4)))
+    click.echo(f"RESOURCES:1 {total_gb}")
+
+    for lf_pos, ls_pos in zip(lf_positions, ls_positions, strict=True):
+        click.echo(f"POSITION:{lf_pos}\t{ls_pos}")
+
+
+def _reduce_crop_ranges(
+    config_path: Path,
+    output_config: Path,
+    ranges_file: Path,
+    concat_data_paths: tuple[str, ...] | None,
+):
+    """Reduce per-FOV crop ranges into a global standardized crop config."""
+    settings = yaml_to_model(config_path, ConcatenateSettings)
+
+    all_ranges = []
+    with open(ranges_file) as f:
+        for line in f:
+            line = line.strip()
+            if not line.startswith("RANGES:"):
+                continue
+            parts = line.replace("RANGES:", "").strip().split()
+            z_start, z_end = (int(v) for v in parts[0].split(","))
+            y_start, y_end = (int(v) for v in parts[1].split(","))
+            x_start, x_end = (int(v) for v in parts[2].split(","))
+            all_ranges.append([[z_start, z_end], [y_start, y_end], [x_start, x_end]])
+
+    if not all_ranges:
+        raise click.ClickException("No RANGES: lines found in ranges file.")
+
+    all_ranges = np.array(all_ranges)
+    standardized_ranges = np.concatenate(
+        [
+            all_ranges[..., 0].max(axis=0, keepdims=True),
+            all_ranges[..., 1].min(axis=0, keepdims=True),
+        ]
+    )
+
+    click.echo(
+        f"Standardized ranges:\nZ: {standardized_ranges[:, 0].tolist()}\n"
+        f"Y: {standardized_ranges[:, 1].tolist()}\n"
+        f"X: {standardized_ranges[:, 2].tolist()}"
+    )
+
+    output_model = settings.model_copy()
+    if concat_data_paths:
+        output_model.concat_data_paths = list(concat_data_paths)
+    output_model.Z_slice = standardized_ranges[:, 0].tolist()
+    output_model.Y_slice = standardized_ranges[:, 1].tolist()
+    output_model.X_slice = standardized_ranges[:, 2].tolist()
+    model_to_yaml(output_model, output_config)
+
+    click.echo(f"Updated config written to {output_config}")
 
 
 def estimate_crop(
@@ -287,37 +363,144 @@ def estimate_crop(
 
 
 @click.command("estimate-crop")
-@config_filepath()
-@output_filepath()
+@click.option(
+    "--config-filepath",
+    "-c",
+    type=click.Path(exists=True, file_okay=True, dir_okay=False),
+    default=None,
+    help="Path to YAML configuration file.",
+)
+@click.option(
+    "--output-filepath",
+    "-o",
+    type=click.Path(exists=False, file_okay=True, dir_okay=False),
+    default=None,
+    help="Path to output file.",
+)
 @sbatch_filepath()
 @local()
+@init_only()
 @click.option(
     "--lf-mask-radius",
     type=float,
-    help="(Optional) Radius of the circular mask given as fraction of image width to apply to the phase channel.",
-    required=False,
+    default=0.95,
+    help="Radius of the circular mask given as fraction of image width to apply to the phase channel.",
+)
+@click.option(
+    "--lf-data-path",
+    type=str,
+    default=None,
+    help="Glob pattern for label-free source zarr (--init mode).",
+)
+@click.option(
+    "--ls-data-path",
+    type=str,
+    default=None,
+    help="Glob pattern for light-sheet source zarr (--init mode).",
+)
+@click.option(
+    "--lf-position",
+    type=click.Path(exists=True),
+    default=None,
+    help="Path to a single label-free position zarr (per-FOV mode).",
+)
+@click.option(
+    "--ls-position",
+    type=click.Path(exists=True),
+    default=None,
+    help="Path to a single light-sheet position zarr (per-FOV mode).",
+)
+@click.option(
+    "--reduce",
+    "reduce_mode",
+    is_flag=True,
+    default=False,
+    help="Reduce per-FOV crop ranges into a global standardized crop config.",
+)
+@click.option(
+    "--ranges-file",
+    type=click.Path(exists=True),
+    default=None,
+    help="File with one RANGES: line per FOV (--reduce mode).",
+)
+@click.option(
+    "--concat-data-paths",
+    multiple=True,
+    type=str,
+    help="Override concat_data_paths from config (--reduce mode, repeat flag).",
 )
 def estimate_crop_cli(
-    config_filepath: str,
-    output_filepath: str,
-    lf_mask_radius: float = 0.95,
-    sbatch_filepath: str = None,
-    local: bool = False,
+    config_filepath: str | None,
+    output_filepath: str | None,
+    sbatch_filepath: str | None,
+    local: bool,
+    init_only: bool,
+    lf_mask_radius: float,
+    lf_data_path: str | None,
+    ls_data_path: str | None,
+    lf_position: str | None,
+    ls_position: str | None,
+    reduce_mode: bool,
+    ranges_file: str | None,
+    concat_data_paths: tuple[str, ...],
 ):
-    """Estimate a crop region where both phase and fluorescence volumes are non-zero.
+    r"""Estimate a crop region where both phase and fluorescence volumes are non-zero.
 
+    \b
+    Full end-to-end (SLURM fan-out + reduce):
+    >>> biahub estimate-crop -c ./concat.yml -o ./cropped_concat.yml --local
+
+    \b
+    Nextflow init (list positions, emit RESOURCES):
+    >>> biahub estimate-crop --init \
+        --lf-data-path "deskew.zarr/*/*/*" \
+        --ls-data-path "reconstruct.zarr/*/*/*"
+
+    \b
+    Nextflow per-FOV (estimate one position, emit RANGES):
     >>> biahub estimate-crop \
-        -c ./concat.yml \
-        -o ./cropped_concat.yml \
-        --local
+        --lf-position deskew.zarr/B/3/000000 \
+        --ls-position reconstruct.zarr/B/3/000000
+
+    \b
+    Nextflow reduce (aggregate ranges into config):
+    >>> biahub estimate-crop --reduce \
+        -c concat.yml -o cropped.yml --ranges-file ranges.txt
     """
-    estimate_crop(
-        config_filepath=config_filepath,
-        output_filepath=output_filepath,
-        lf_mask_radius=lf_mask_radius,
-        sbatch_filepath=sbatch_filepath,
-        local=local,
-    )
+    if init_only:
+        if not lf_data_path or not ls_data_path:
+            raise click.UsageError("--init requires --lf-data-path and --ls-data-path")
+        _init_estimate_crop(lf_data_path, ls_data_path)
+    elif lf_position and ls_position:
+        z_range, y_range, x_range = estimate_crop_one_position(
+            lf_dir=Path(lf_position),
+            ls_dir=Path(ls_position),
+            lf_mask_radius=lf_mask_radius,
+        )
+        click.echo(
+            f"RANGES:{z_range[0]},{z_range[1]} "
+            f"{y_range[0]},{y_range[1]} "
+            f"{x_range[0]},{x_range[1]}"
+        )
+    elif reduce_mode:
+        if not config_filepath or not output_filepath or not ranges_file:
+            raise click.UsageError("--reduce requires -c, -o, and --ranges-file")
+        _reduce_crop_ranges(
+            config_path=Path(config_filepath),
+            output_config=Path(output_filepath),
+            ranges_file=Path(ranges_file),
+            concat_data_paths=concat_data_paths or None,
+        )
+    else:
+        if not config_filepath or not output_filepath:
+            raise click.UsageError("Default mode requires -c and -o")
+        estimate_crop(
+            config_filepath=Path(config_filepath),
+            output_filepath=Path(output_filepath),
+            lf_mask_radius=lf_mask_radius,
+            sbatch_filepath=sbatch_filepath,
+            local=local,
+        )
 
 
 if __name__ == "__main__":
