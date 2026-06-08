@@ -1,26 +1,34 @@
-include { dataset_name; parse_resources; biahub_cmd; slurm_logs; slurm_log_dir; step_dir } from './common'
+// Tracking subworkflow: init → parse_resources → fan-out run × N positions.
+//
+// This subworkflow is PATH-AGNOSTIC. Callers pass the input zarr (plate
+// structure), input images zarr (image data for tracking), output zarr,
+// and config explicitly.
+//
+// Tracking is a 2-input step: reads reconstruct for plate structure and
+// virtual-stain for image data.
+
+include { parse_resources; biahub_cmd; slurm_logs; slurm_log_dir } from './common'
 
 
 process init_track {
     label 'cpu_local'
 
     input:
+    val input_zarr
+    val output_zarr
+    val config
     val trigger
 
     output:
     stdout
 
     script:
-    // biahub track --init creates the output plate and emits RESOURCES.
-    // --cluster debug is used on the Nextflow path so the CLI runs in-process
-    // rather than submitting its own Slurm jobs — Nextflow handles the fan-out
-    // and resource scheduling.
     """
     mkdir -p "${slurm_log_dir('track')}"
     ${biahub_cmd()} track --init \
-        -i "${params.output_dir}/${step_dir('reconstruct')}/${dataset_name()}.zarr"/*/*/* \
-        -o "${params.output_dir}/${step_dir('track')}/${dataset_name()}.zarr" \
-        -c "${params.track_config}"
+        -i "${input_zarr}"/*/*/* \
+        -o "${output_zarr}" \
+        -c "${config}"
     """
 }
 
@@ -35,37 +43,52 @@ process run_track {
     maxRetries 1
     errorStrategy 'retry'
 
-
     input:
     tuple val(position), val(meta)
+    val input_zarr
+    val input_images_zarr
+    val output_zarr
+    val config
 
     output:
     val position
 
     script:
-    // --cluster debug: run in-process; Nextflow handles per-position fan-out.
     """
     ${biahub_cmd()} track --cluster debug \
-        -i "${params.output_dir}/${step_dir('reconstruct')}/${dataset_name()}.zarr/${position}" \
-        -o "${params.output_dir}/${step_dir('track')}/${dataset_name()}.zarr" \
-        -c "${params.track_config}" \
-        --input-images-path "${params.output_dir}/${step_dir('virtual_stain')}/${dataset_name()}.zarr"
+        -i "${input_zarr}/${position}" \
+        -o "${output_zarr}" \
+        -c "${config}" \
+        --input-images-path "${input_images_zarr}"
     """
 }
 
 
+// take:
+//   positions          collected channel of position keys
+//   input_zarr         path to reconstruct output zarr (plate structure)
+//   input_images_zarr  path to virtual-stain output zarr (image data for tracking)
+//   output_zarr        path to tracking output zarr
+//   config             path to track settings YAML
+//   prev_done          gating channel
 workflow track_wf {
     take:
     positions
+    input_zarr
+    input_images_zarr
+    output_zarr
+    config
     prev_done
 
     main:
-    resources = init_track(prev_done.map { 'done' }).map { parse_resources(it) }
-    tk_done = positions
+    init_out = init_track(input_zarr, output_zarr, config, prev_done.map { 'done' })
+    resources = init_out.map { parse_resources(it) }
+
+    pos_meta = positions
         .flatMap { it }
         .combine(resources)
-        | run_track
-        | collect
+
+    tk_done = run_track(pos_meta, input_zarr, input_images_zarr, output_zarr, config) | collect
 
     emit:
     done = tk_done

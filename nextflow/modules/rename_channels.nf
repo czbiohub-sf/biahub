@@ -1,10 +1,16 @@
-include { dataset_name; parse_resources; biahub_cmd; slurm_logs; slurm_log_dir; step_dir } from './common'
+// Rename channels subworkflow: init_resources → fan-out rename × N positions.
+//
+// This subworkflow is PATH-AGNOSTIC. Callers pass the target zarr to rename
+// channels on. Rename is metadata-only — operates on a single zarr in-place.
+
+include { parse_resources; biahub_cmd; slurm_logs; slurm_log_dir } from './common'
 
 
 process init_resources_rename {
     label 'cpu_local'
 
     input:
+    val target_zarr
     val trigger
 
     output:
@@ -14,7 +20,7 @@ process init_resources_rename {
     """
     mkdir -p "${slurm_log_dir('rename')}"
     ${biahub_cmd()} nf init-resources \
-        -i "${params.output_dir}/${step_dir('reconstruct')}/${dataset_name()}.zarr" \
+        -i "${target_zarr}" \
         -r 2
     """
 }
@@ -29,6 +35,7 @@ process rename_channels {
 
     input:
     tuple val(position), val(meta)
+    val target_zarr
 
     output:
     val position
@@ -36,28 +43,34 @@ process rename_channels {
     script:
     def prefix_flag = params.rename_prefix ? "--prefix '${params.rename_prefix}'" : ""
     def suffix_flag = params.rename_suffix ? "--suffix '${params.rename_suffix}'" : ""
-    // biahub rename-channels is a standalone command (metadata-only, no data copy).
     """
     ${biahub_cmd()} rename-channels \
-        -i "${params.output_dir}/${step_dir('reconstruct')}/${dataset_name()}.zarr" \
+        -i "${target_zarr}" \
         -p "${position}" \
         ${prefix_flag} ${suffix_flag}
     """
 }
 
 
+// take:
+//   positions    collected channel of position keys
+//   target_zarr  zarr to rename channels on (e.g. reconstruct output)
+//   prev_done    gating channel
 workflow rename_wf {
     take:
     positions
+    target_zarr
     prev_done
 
     main:
-    resources = init_resources_rename(prev_done.map { 'done' }).map { parse_resources(it) }
-    rn_done = positions
+    init_out = init_resources_rename(target_zarr, prev_done.map { 'done' })
+    resources = init_out.map { parse_resources(it) }
+
+    pos_meta = positions
         .flatMap { it }
         .combine(resources)
-        | rename_channels
-        | collect
+
+    rn_done = rename_channels(pos_meta, target_zarr) | collect
 
     emit:
     done = rn_done
