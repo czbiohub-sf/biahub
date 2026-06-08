@@ -6,6 +6,7 @@ import numpy as np
 import submitit
 import torch
 import torch.nn.functional as F  # noqa: N812
+import yaml
 
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate, process_single_position
@@ -15,9 +16,10 @@ from scipy.ndimage import binary_dilation
 from biahub.cli import utils
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
+    cluster,
     config_filepath,
+    init_only,
     input_position_dirpaths,
-    local,
     monitor,
     output_dirpath,
     sbatch_filepath,
@@ -27,7 +29,6 @@ from biahub.cli.utils import (
     estimate_resources,
     get_submitit_cluster,
     resolve_ome_zarr_version,
-    yaml_to_model,
 )
 from biahub.settings import DeskewSettings
 
@@ -570,51 +571,46 @@ def _czyx_fast_deskew_data(data, device="cuda", num_splits=1, **kwargs):
     return fast_deskew_zyx(tensor, **kwargs).cpu().numpy()[None]
 
 
-def deskew(
-    input_position_dirpaths: list[str],
+def _load_deskew_settings(
     config_filepath: Path,
-    output_dirpath: str,
-    sbatch_filepath: str = None,
-    local: bool = False,
-    monitor: bool = True,
-):
+    reference_position_path: str | Path,
+) -> DeskewSettings:
+    """Load DeskewSettings, resolving pixel_size_um from a reference zarr if absent.
+
+    DeskewSettings requires pixel_size_um, but it's often more natural to read it
+    from the input plate's XY scale than to write it into the config by hand.
+    Patches the raw YAML before pydantic validation so the required-field constraint
+    is satisfied either way.
     """
-    Deskew a dataset across T and C axes using a configuration file.
+    with open(config_filepath) as f:
+        cfg = yaml.safe_load(f) or {}
+    if cfg.get("pixel_size_um") is None:
+        with open_ome_zarr(str(reference_position_path), mode="r") as ds:
+            cfg["pixel_size_um"] = float(ds.scale[-1])
+        click.echo(
+            f"Resolved pixel_size_um={cfg['pixel_size_um']} from {reference_position_path}"
+        )
+    return DeskewSettings(**cfg)
 
-    Parameters
-    ----------
-    input_position_dirpaths : List[str]
-        List of input position directory paths
-    config_filepath : Path
-        Path to the configuration file
-    output_dirpath : str
-        Path to the output directory
-    sbatch_filepath : str, optional
-        Path to the SLURM batch file
-    local : bool, optional
-        Whether to run locally or submit to SLURM
-    monitor : bool, optional
-        Whether to monitor the jobs
 
-    Returns
-    -------
-    None
+def _init_output_plate(
+    input_position_dirpaths: list[Path],
+    output_dirpath: Path,
+    settings: DeskewSettings,
+) -> tuple[tuple[int, int, int, int, int], list[str]]:
+    """Create (or extend) the empty deskewed output plate.
+
+    create_empty_plate is idempotent: re-running with the same positions is a
+    no-op, and new positions get appended. Safe to call from both the SLURM
+    orchestrator and from per-position runs.
+
+    Returns the input (T, C, Z, Y, X) shape and channel names.
     """
-    # Convert string paths to Path objects
-    output_dirpath = Path(output_dirpath)
-
-    slurm_out_path = output_dirpath.parent / "slurm_output"
-
-    # Handle single position or wildcard filepath
-    output_position_paths = utils.get_output_paths(input_position_dirpaths, output_dirpath)
-
-    # Get the deskewing parameters
-    # Load the first position to infer dataset information
     with open_ome_zarr(str(input_position_dirpaths[0]), mode="r") as input_dataset:
         channel_names = input_dataset.channel_names
-        T, C, Z, Y, X = input_dataset.data.shape
+        input_shape = input_dataset.data.shape
+    T, C, Z, Y, X = input_shape
 
-    settings = yaml_to_model(config_filepath, DeskewSettings)
     deskewed_shape, voxel_size = get_deskewed_data_shape(
         (Z, Y, X),
         settings.ls_angle_deg,
@@ -624,17 +620,67 @@ def deskew(
         settings.pixel_size_um,
     )
 
-    # Create a zarr store output to mirror the input
+    input_plate = Path(input_position_dirpaths[0]).parents[2]
     create_empty_plate(
         store_path=output_dirpath,
-        position_keys=[p.parts[-3:] for p in input_position_dirpaths],
+        position_keys=[Path(p).parts[-3:] for p in input_position_dirpaths],
         channel_names=channel_names,
         shape=(T, C) + deskewed_shape,
         scale=(1, 1) + voxel_size,
         version=resolve_ome_zarr_version(
             input_position_dirpaths[0], settings.output_ome_zarr_version
         ),
+        metadata_sources=input_plate,
     )
+
+    return (T, C, Z, Y, X), channel_names
+
+
+def deskew(
+    input_position_dirpaths: list[str],
+    config_filepath: Path,
+    output_dirpath: str,
+    sbatch_filepath: str = None,
+    cluster: str = "slurm",
+    monitor: bool = True,
+    init_only: bool = False,
+):
+    """Deskew oblique plane light-sheet dataset, processing time point and channels in parallel.
+
+    Parameters
+    ----------
+    input_position_dirpaths : list[str]
+        Paths to input positions, for example: "input.zarr/0/0/0", "input.zarr/0/0/[0-9]",
+        or "input.zarr/*/*/*".
+    config_filepath : Path
+        Path to YAML configuration file.
+    output_dirpath : str
+        Path to "output.zarr" directory.
+    sbatch_filepath : str, optional
+        SBATCH filepath that contains slurm parameters to overwrite defaults.
+        For example, '#SBATCH --mem-per-cpu=16G' will override the default memory per CPU.
+    cluster : str, optional
+        Execution cluster: 'slurm' submits to a Slurm cluster, 'local' runs jobs as
+        subprocesses on this machine, 'debug' runs jobs in-process in the foreground.
+    monitor : bool, optional
+        Monitor of submitted SLURM jobs.
+    init_only : bool, optional
+        Only initialize the output store and exit; skip per-position processing.
+    """
+    output_dirpath = Path(output_dirpath)
+    slurm_out_path = output_dirpath.parent / "slurm_output"
+
+    settings = _load_deskew_settings(config_filepath, input_position_dirpaths[0])
+    input_shape, _ = _init_output_plate(input_position_dirpaths, output_dirpath, settings)
+
+    num_cpus, gb_ram = estimate_resources(shape=input_shape, ram_multiplier=32, max_num_cpus=8)
+    click.echo(f"RESOURCES:{num_cpus} {num_cpus * gb_ram}")
+
+    if init_only:
+        click.echo(f"Initialized {output_dirpath} ({len(input_position_dirpaths)} positions)")
+        return
+
+    output_position_paths = utils.get_output_paths(input_position_dirpaths, output_dirpath)
 
     deskew_args = {
         "ls_angle_deg": settings.ls_angle_deg,
@@ -646,12 +692,6 @@ def deskew(
         "extra_metadata": {"deskew": settings.model_dump()},
     }
 
-    # Estimate resources
-    num_cpus, gb_ram = estimate_resources(
-        shape=(T, C, Z, Y, X), ram_multiplier=32, max_num_cpus=8
-    )
-
-    # Prepare SLURM arguments
     slurm_args = {
         "slurm_job_name": "deskew",
         "slurm_mem_per_cpu": f"{gb_ram}G",
@@ -660,20 +700,15 @@ def deskew(
         "slurm_time": 60,
         "slurm_partition": "preempted",
     }
-
-    # Override defaults if sbatch_filepath is provided
     if sbatch_filepath:
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
-    # Run locally or submit to SLURM
-    cluster = get_submitit_cluster(local)
-
-    # Prepare and submit jobs
-    click.echo(f"Preparing jobs: {slurm_args}")
-    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
+    resolved_cluster = get_submitit_cluster(cluster=cluster)
+    click.echo(f"Preparing jobs on cluster='{resolved_cluster}': {slurm_args}")
+    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=resolved_cluster)
     executor.update_parameters(**slurm_args)
 
-    click.echo("Submitting SLURM jobs...")
+    click.echo("Submitting jobs...")
 
     jobs = []
     with submitit.helpers.clean_env(), executor.batch():
@@ -691,12 +726,22 @@ def deskew(
                 )
             )
 
-    job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
+    job_ids = [job.job_id for job in jobs]
 
     slurm_out_path.mkdir(exist_ok=True)
     log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
+
+    # submitit's DebugExecutor is lazy: .submit() wraps the callable in a
+    # DebugJob but execution only happens when .wait()/.done()/.result() is
+    # called. Run each one in the foreground and stream progress; monitor's
+    # async polling UI is pointless against synchronous in-process jobs.
+    if resolved_cluster == "debug":
+        for job, path in zip(jobs, input_position_dirpaths, strict=True):
+            job.wait()
+            click.echo(f"Deskew complete: {path}")
+        return
 
     if monitor:
         monitor_jobs(jobs, input_position_dirpaths)
@@ -707,30 +752,42 @@ def deskew(
 @config_filepath()
 @output_dirpath()
 @sbatch_filepath()
-@local()
+@cluster()
 @monitor()
+@init_only()
 def deskew_cli(
     input_position_dirpaths: list[str],
     config_filepath: Path,
     output_dirpath: str,
     sbatch_filepath: str = None,
-    local: bool = False,
-    monitor: bool = True,
+    cluster: str = "slurm",
+    monitor: bool = False,
+    init_only: bool = False,
 ):
-    """Deskew a single position across T and C axes using a configuration file, generated by estimate_deskew.py.
+    """Deskew oblique plane light-sheet dataset. Deskew parameters can be estimated with estimate-deskew.
 
-    >>> biahub deskew \
-        -i ./input.zarr/*/*/* \
-        -c ./deskew_params.yml \
-        -o ./output.zarr
-    """
+    \b
+    SLURM fan-out of positions across a whole plate:
+    >>> biahub deskew -i ./input.zarr/*/*/* -c ./deskew_params.yml -o ./output.zarr
+
+    \b
+    Initialize the output plate only (e.g. before running per-position Nextflow workers):
+    >>> biahub deskew --init -i ./input.zarr/*/*/* -c ./deskew_params.yml -o ./output.zarr
+
+    \b
+    In-process run of a single position (e.g. from a Nextflow worker):
+    >>> biahub deskew --cluster debug -i ./input.zarr/A/1/0 -c ./deskew_params.yml -o ./output.zarr
+
+
+    """  # noqa: D301
     deskew(
         input_position_dirpaths=input_position_dirpaths,
         config_filepath=config_filepath,
         output_dirpath=output_dirpath,
         sbatch_filepath=sbatch_filepath,
-        local=local,
+        cluster=cluster,
         monitor=monitor,
+        init_only=init_only,
     )
 
 
