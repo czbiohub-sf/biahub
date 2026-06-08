@@ -13,7 +13,7 @@ def parse_resources(stdout_text, prefix = 'RESOURCES:') {
 }
 
 def slurm_log_dir(step_name) {
-    return "${params.output}/slurm_output/${step_name}"
+    return "${params.output}/nextflow/slurm_output/${step_name}"
 }
 
 def slurm_logs(step_name) {

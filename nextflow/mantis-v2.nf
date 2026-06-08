@@ -26,7 +26,6 @@ params.output            = null   // output directory for all step zarrs
 params.deskew_config     = null
 params.flat_field_config = null   // reserved for the upcoming flat-field step
 params.biahub_project    = null
-params.work_dir          = null
 params.max_positions     = 0
 
 include { collect_positions; dataset_name } from './modules/common'
