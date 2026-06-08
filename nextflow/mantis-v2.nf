@@ -37,6 +37,13 @@ DIRECTORY_LAYOUT = [
     assemble      : '5-assemble',
 ]
 
+INTERMEDIATE_DIRS = [
+    DIRECTORY_LAYOUT.flat_field,
+    DIRECTORY_LAYOUT.deskew,
+    DIRECTORY_LAYOUT.reconstruct,
+    DIRECTORY_LAYOUT.virtual_stain,
+]
+
 
 // ---------------------------------------------------------------------------
 //  Helpers
@@ -46,7 +53,7 @@ def build_qc_inputs(List stage_channels) {
     if (!params.qc_config_dir) return Channel.empty()
 
     def inputs = stage_channels
-        .findAll { it[0] != null }
+        .findAll { it[0] != null && new File(it[2].toString()).exists() }
         .collect { done_ch, zarr, cfg -> done_ch.map { [zarr, cfg] } }
 
     if (inputs.size() == 0) return Channel.empty()
@@ -139,7 +146,7 @@ workflow full {
     run_qc_wf(qc_inputs)
 
     if (params.clean_intermediates) {
-        clean_intermediates(asm_done.done.mix(run_qc_wf.out.done).collect())
+        clean_intermediates(INTERMEDIATE_DIRS, asm_done.done.mix(run_qc_wf.out.done).collect())
     }
 }
 
@@ -197,7 +204,7 @@ workflow from_deskew {
     run_qc_wf(qc_inputs)
 
     if (params.clean_intermediates) {
-        clean_intermediates(asm_done.done.mix(run_qc_wf.out.done).collect())
+        clean_intermediates(INTERMEDIATE_DIRS, asm_done.done.mix(run_qc_wf.out.done).collect())
     }
 }
 
@@ -249,7 +256,7 @@ workflow from_reconstruct {
     run_qc_wf(qc_inputs)
 
     if (params.clean_intermediates) {
-        clean_intermediates(asm_done.done.mix(run_qc_wf.out.done).collect())
+        clean_intermediates(INTERMEDIATE_DIRS, asm_done.done.mix(run_qc_wf.out.done).collect())
     }
 }
 
@@ -296,7 +303,7 @@ workflow from_virtual_stain {
     run_qc_wf(qc_inputs)
 
     if (params.clean_intermediates) {
-        clean_intermediates(asm_done.done.mix(run_qc_wf.out.done).collect())
+        clean_intermediates(INTERMEDIATE_DIRS, asm_done.done.mix(run_qc_wf.out.done).collect())
     }
 }
 
@@ -338,7 +345,7 @@ workflow from_tracking {
     run_qc_wf(qc_inputs)
 
     if (params.clean_intermediates) {
-        clean_intermediates(asm_done.done.mix(run_qc_wf.out.done).collect())
+        clean_intermediates(INTERMEDIATE_DIRS, asm_done.done.mix(run_qc_wf.out.done).collect())
     }
 }
 
@@ -372,7 +379,7 @@ workflow from_assembly {
     run_qc_wf(qc_inputs)
 
     if (params.clean_intermediates) {
-        clean_intermediates(asm_done.done.mix(run_qc_wf.out.done).collect())
+        clean_intermediates(INTERMEDIATE_DIRS, asm_done.done.mix(run_qc_wf.out.done).collect())
     }
 }
 

@@ -66,14 +66,17 @@ def test_clean_intermediates(tmp_path, example_plate):
         zarr_path.mkdir(parents=True)
         (zarr_path / ".zattrs").write_text("{}")
 
+    dirs = ["0-flatfield", "1-deskew", "2-reconstruct", "3-virtual-stain"]
+    dir_flags = [flag for d in dirs for flag in ["-i", d]]
+
     runner = CliRunner()
     result = runner.invoke(
         cli,
-        ["nf", "clean-intermediates", "-o", str(output_dir), "-d", dataset_name],
+        ["nf", "clean-intermediates", "-o", str(output_dir), "-d", dataset_name] + dir_flags,
     )
     assert result.exit_code == 0
 
-    for dirname in ["0-flatfield", "1-deskew", "2-reconstruct", "3-virtual-stain"]:
+    for dirname in dirs:
         assert not (output_dir / dirname / f"{dataset_name}.zarr").exists()
 
 
@@ -84,6 +87,7 @@ def test_clean_intermediates_missing(tmp_path):
     runner = CliRunner()
     result = runner.invoke(
         cli,
-        ["nf", "clean-intermediates", "-o", str(output_dir), "-d", "missing"],
+        ["nf", "clean-intermediates", "-o", str(output_dir), "-d", "missing",
+         "-i", "0-flatfield", "-i", "1-deskew"],
     )
     assert result.exit_code == 0
