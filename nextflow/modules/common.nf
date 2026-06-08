@@ -18,7 +18,16 @@ def slurm_log_dir(step_name) {
 
 def slurm_logs(step_name) {
     def dir = slurm_log_dir(step_name)
-    return "--output=${dir}/%x_%j.out --error=${dir}/%x_%j.err"
+    // NOTE: the --output/--error targets are intentionally CROSSED.
+    // Nextflow's task launcher tees the job's streams with an fd swap
+    // (`... 3>&1 1>&2 2>&3 ...` in .command.run) so it can write the task's
+    // stdout to .command.out and stderr to .command.err. A side effect is that
+    // the *batch script's* own stdout/stderr streams — the ones SLURM captures
+    // via --output/--error — are swapped relative to the program's streams:
+    // the --output stream carries the program's stderr and vice versa.
+    // Mapping --output to the .err file and --error to the .out file undoes
+    // that swap so each file ends up with the stream its name implies.
+    return "--output=${dir}/%x_%j.err --error=${dir}/%x_%j.out"
 }
 
 def biahub_cmd() {
