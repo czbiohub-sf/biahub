@@ -673,7 +673,7 @@ def deskew(
     settings = _load_deskew_settings(config_filepath, input_position_dirpaths[0])
     input_shape, _ = _init_output_plate(input_position_dirpaths, output_dirpath, settings)
 
-    num_cpus, gb_ram = estimate_resources(shape=input_shape, ram_multiplier=32, max_num_cpus=8)
+    num_cpus, gb_ram = estimate_resources(shape=input_shape, ram_multiplier=8, max_num_cpus=16)
     click.echo(f"RESOURCES:{num_cpus} {num_cpus * gb_ram}")
 
     if init_only:

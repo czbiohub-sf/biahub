@@ -161,7 +161,7 @@ def flat_field(
     )
 
     T, C, Z, Y, X = input_shape
-    num_cpus, gb_ram = estimate_resources(shape=input_shape, ram_multiplier=5)
+    num_cpus, gb_ram = estimate_resources(shape=input_shape, ram_multiplier=8, max_num_cpus=16)
     click.echo(f"RESOURCES:{num_cpus} {num_cpus * gb_ram}")
 
     if init_only:
