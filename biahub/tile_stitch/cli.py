@@ -56,6 +56,16 @@ def parse_timepoints(spec: str) -> list[int]:
 )
 @click.option("--channel", type=str, default=None)
 @click.option(
+    "--output-channels",
+    type=str,
+    default=None,
+    help="Comma-separated ordered list of input channels that share ONE output "
+    "zarr (each reconstructed by a separate invocation with the same --output). "
+    "This run writes the C slot matching its --channel; the first channel "
+    "(index 0) creates the C=N store with all '<ch>_recon' names, the rest "
+    "append. Omit for a single-channel output.",
+)
+@click.option(
     "--nodes",
     type=str,
     default=None,
@@ -84,6 +94,7 @@ def tile_stitch_cli(
     timepoint: int | None,
     timepoints: str | None,
     channel: str | None,
+    output_channels: str | None,
     nodes: str | None,
     port: int,
     ready_dir: str | None,
@@ -146,45 +157,93 @@ def tile_stitch_cli(
     src = open_ome_zarr(input_path, layout="fov", mode="r")
     ch = channel if channel is not None else src.channel_names[0]
     channel_idx = src.channel_names.index(ch)
+    # Reconstruction is in-place on the input voxel grid (no resampling), so the
+    # output must carry the input's voxel scale. Without this the output zarr
+    # defaults to all-1s and viewers render it with the wrong (isotropic) aspect
+    # — anisotropic data (e.g. coarse Y) then looks squashed/"transposed".
+    input_scale = list(src.scale)
+
+    # Multi-channel shared output: all listed channels write into ONE C=N zarr,
+    # each invocation filling its own C slot. The first channel (index 0) creates
+    # the store with every '<ch>_recon' name; the rest append. Omitting
+    # --output-channels keeps the single-channel (C=1) behavior.
+    out_channels = (
+        [c.strip() for c in output_channels.split(",") if c.strip()]
+        if output_channels
+        else [ch]
+    )
+    if ch not in out_channels:
+        raise click.ClickException(
+            f"--channel {ch!r} is not in --output-channels {out_channels}"
+        )
+    n_out_channels = len(out_channels)
+    out_channel_idx = out_channels.index(ch)
+    out_recon_names = [f"{c}_recon" for c in out_channels]
     czyx = src.to_xarray().isel(t=tps[0]).sel(c=[ch])
     engine_plan = engine_build_plan(czyx, run.tile_stitch, batch_size=None)
 
     spatial_shape = tuple(engine_plan.full_shape[d] for d in engine_plan.tile_dims)
     tile_spatial = tuple(run.tile_stitch.tile.tile_size[d] for d in engine_plan.tile_dims)
-    chunk_shape = (1, 1) + tile_spatial
+    # Output chunk = one tile, BUT capped so a single blosc compress stays under
+    # its hard 2 GiB limit. Full-Z tiles with large YX overflow it (e.g.
+    # 2368x512x512x4 = 2.48 GB > 2 GiB -> blosc_compress_ctx fails). Cap the
+    # leading (depth) dim to ~1 GiB worth; each output tile owns its full depth
+    # column, so a smaller depth chunk doesn't create cross-tile write races.
+    CHUNK_BYTES_CAP = 1_000_000_000
+    lead, *rest = tile_spatial  # (depth, ...lateral)
+    rest_bytes = int(np.prod(rest)) * 4  # float32
+    cap = max(1, CHUNK_BYTES_CAP // max(1, rest_bytes))
+    chunk_shape = (1, 1, min(lead, cap)) + tuple(rest)
 
     # Output zarr T dim spans the GLOBAL TP range so every shard's writes land
-    # in the right slot; unwritten slots read back as zero (fill_value).
+    # in the right slot; unwritten slots read back as zero (fill_value). C spans
+    # all shared output channels; this run fills its own C slot.
     t_size = max(global_tps) + 1
-    full_shape = (t_size, 1) + spatial_shape
+    full_shape = (t_size, n_out_channels) + spatial_shape
 
     final_output = (
         output_path if output_path.suffix == ".zarr" else output_path.with_suffix(".zarr")
     )
-    if procid == 0:
-        # One coordinator pre-creates the shared output mosaic: an OME-NGFF
-        # FOV whose T dim spans the GLOBAL range, lazily zero-filled
-        # (unwritten T slots read back as 0). T-chunk=1 so shards write
-        # disjoint chunks concurrently, no races. ``create_zeros`` writes the
-        # metadata + array without materializing the (100s of GB) full volume.
+    # The first output channel (index 0) on the coordinator shard pre-creates the
+    # shared output: an OME-NGFF FOV whose T spans the GLOBAL range and C spans
+    # all channels, lazily zero-filled. T- and C-chunk=1 so shards/channels write
+    # disjoint chunks concurrently, no races. Every other channel and shard waits
+    # for it, then writes its own [t, c_idx] slot (the stitch opens mode="a").
+    is_creator = procid == 0 and out_channel_idx == 0
+    if is_creator:
+        from iohub.ngff.models import TransformationMeta
+
         with open_ome_zarr(
-            final_output, layout="fov", mode="w", channel_names=[f"{ch}_recon"]
+            final_output, layout="fov", mode="w", channel_names=out_recon_names
         ) as out_ds:
-            out_ds.create_zeros("0", shape=full_shape, dtype=np.float32, chunks=chunk_shape)
+            out_ds.create_zeros(
+                "0",
+                shape=full_shape,
+                dtype=np.float32,
+                chunks=chunk_shape,
+                transform=[TransformationMeta(type="scale", scale=input_scale)],
+            )
         logger.info(
-            "output zarr created: %s | full_shape=%s | chunks=%s",
+            "output zarr created: %s | full_shape=%s | chunks=%s | channels=%s",
             final_output,
             full_shape,
             chunk_shape,
+            out_recon_names,
         )
     else:
-        # Other shards wait for the coordinator's zarr to appear.
+        # Other shards / channels wait for the coordinator's zarr to appear.
         arr0 = Path(final_output) / "0"
-        for _ in range(300):
+        for _ in range(600):
             if arr0.exists():
                 break
             time.sleep(1)
-        logger.info("shard %d: output zarr ready at %s", procid, final_output)
+        logger.info(
+            "shard %d (channel %s -> C=%d): output zarr ready at %s",
+            procid,
+            ch,
+            out_channel_idx,
+            final_output,
+        )
 
     # Build (and pickle) one plan per TP. ``plan.timepoint`` selects both the
     # input TP (volume load) and the output T slot (stitch write). The resolved
@@ -201,6 +260,7 @@ def tile_stitch_cli(
             channel=ch,
             channel_idx=channel_idx,
             timepoint=tp,
+            output_channel_index=out_channel_idx,
             monarch=cfg,
         )
         plan_filename = f"plan_t{tp}.pkl" if multi_tp else "plan.pkl"
@@ -250,14 +310,16 @@ def tile_stitch_cli(
             try:
                 for st in backend.collect_recon_stats():
                     logger.info(
-                        "  actor %s gpu%d: n=%d io=%.1fs fft=%.1fs d2h=%.1fs "
-                        "busy=%.1fs span=%.1fs util=%.2f",
+                        "  actor %s gpu%d: n=%d io=%.1fs fft=%.1fs "
+                        "d2h=%.1fs (copy=%.1fs rdma=%.1fs) busy=%.1fs span=%.1fs util=%.2f",
                         st["host"],
                         st["gpu_idx"],
                         st["n_tiles"],
                         st["io_s"],
                         st["fft_s"],
                         st["d2h_s"],
+                        st.get("copy_s", 0.0),
+                        st.get("rdma_s", 0.0),
                         st["busy_s"],
                         st["span_s"],
                         st["util"],

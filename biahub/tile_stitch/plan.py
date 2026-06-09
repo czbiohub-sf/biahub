@@ -48,6 +48,10 @@ class RunPlan:
     # Output zarr leading dims (T, C) — written-by driver, read-by stitch.
     leading_shape: tuple[int, ...] = (1, 1)
 
+    # C slot this channel writes in a (possibly multi-channel) shared output
+    # zarr. 0 for single-channel runs; the stitch writes ``[t, c_idx, zyx]``.
+    output_channel_index: int = 0
+
     # Monarch engine knobs, carried so each actor reads the same config across
     # ``setup`` and every per-TP ``swap_to``. Optional with a default so an
     # older pickle (pre-Stage-3) still loads — the actor falls back to
@@ -85,6 +89,7 @@ def from_engine_plan(
     channel_idx: int,
     timepoint: int,
     leading_shape: tuple[int, ...] = (1, 1),
+    output_channel_index: int = 0,
     monarch: MonarchConfig | None = None,
 ) -> RunPlan:
     """Compose a RunPlan from a waveorder TileStitchPlan + biahub I/O config."""
@@ -104,5 +109,6 @@ def from_engine_plan(
         input_batches=engine_plan.input_batches,
         output_to_batches=engine_plan.output_to_batches,
         leading_shape=leading_shape,
+        output_channel_index=output_channel_index,
         monarch=monarch,
     )
