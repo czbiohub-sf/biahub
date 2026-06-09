@@ -173,7 +173,7 @@ def flat_field(
 
     flat_field_args = {
         "target_indices": target_indices,
-        "extra_metadata": {"flat_field_correction": settings.model_dump()},
+        "extra_metadata": {"biahub-flat_field": settings.model_dump()},
     }
 
     slurm_args = {
