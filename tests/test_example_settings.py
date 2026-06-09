@@ -13,6 +13,8 @@ from biahub.settings import (
     EstimateRegistrationSettings,
     EstimateStabilizationSettings,
     FlatFieldCorrectionSettings,
+    GridMoviesSettings,
+    GridPerWellSettings,
     ProcessingImportFuncSettings,
     RegistrationSettings,
     SegmentationSettings,
@@ -53,6 +55,8 @@ example_settings_params = [
     ("example_stitch_settings.yml", StitchSettings),
     ("example_track_settings.yml", TrackingSettings),
     ("example_flat_field_settings.yml", FlatFieldCorrectionSettings),
+    ("example_grid_per_well_settings.yml", GridPerWellSettings),
+    ("example_grid_movies_settings.yml", GridMoviesSettings),
 ]
 
 try:
