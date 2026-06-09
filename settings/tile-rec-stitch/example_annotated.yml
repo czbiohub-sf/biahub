@@ -12,6 +12,9 @@
 
 tile_stitch:                  # waveorder TileStitchSettings (tile + blend + recon)
   tile:
+    # Z is the optical/defocus axis. For PHASE recon, tiling Z reintroduces
+    # defocus-TF seam stripes — prefer ONE full-Z tile (z = full depth,
+    # overlap z: 0) and sweep only YX. The 512³ here is a generic illustration.
     tile_size: {z: 512, y: 512, x: 512}
     overlap:   {z: 32,  y: 32,  x: 32}
   blend:
@@ -50,14 +53,17 @@ monarch:
                               # for non-SLURM boxes. No --gres hand-sync needed.
   recon_batch: 4              # tiles per batched FFT (1 = per-tile); bench best = 4
   prefetch_depth: 6           # background read-ahead (0 = off); keep >= recon_batch
-  resident_volume: false      # true = whole volume in VRAM (requires recon_batch=1)
   rdma_timeout_s: 60
   recon_concurrency: 1        # in-actor recon semaphore (>1 risks Tikhonov HBM OOM)
   window_per_actor: 6         # Stage B backpressure window
-  compile_mode: reduce-overhead   # reduce-overhead | default | none
+  compile_mode: none          # none (eager, default) | default | reduce-overhead.
+                              # Eager is reliable across GPU counts/archs/shapes;
+                              # reduce-overhead trips CUDA-graph TLS on >2 GPUs and
+                              # JIT-stalls on Blackwell, so opt in only for proven runs.
   device: cuda                # cuda | cpu (cpu not yet wired)
-  gpu_overlap: false          # experimental copy-stream input staging
-  gpu_depth: 1                # GPU input-stager look-ahead (gpu_overlap only)
+  recon_dtype: float32        # float32 (lossless, default) | float16 (halves the D2H
+                              # copy AND the ibverbs RDMA bytes; ~3 sig-digit loss,
+                              # blend still accumulates in float32)
 
 retries: 1                    # advisory only — Monarch fails loud
 run_dir: /hpc/projects/waveorder/tile-stitch/runs/repro_c0041
