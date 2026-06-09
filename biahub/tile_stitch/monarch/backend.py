@@ -69,14 +69,44 @@ def _wait_for_ready(ready_dir: str, node_list: list[str], timeout_s: int = 300) 
     )
 
 
-def build_recon_batches(order: list[int], tiles_by_id: dict, bsize: int) -> list[list[int]]:
+def _grid_coords(tiles_by_id: dict, dims: tuple) -> dict:
+    """Map tile_id -> integer grid index per dim (rank of its slice start)."""
+    starts = {d: sorted({t.slices[d].start for t in tiles_by_id.values()}) for d in dims}
+    rank = {d: {s: i for i, s in enumerate(starts[d])} for d in dims}
+    return {
+        tid: tuple(rank[d][t.slices[d].start] for d in dims) for tid, t in tiles_by_id.items()
+    }
+
+
+def _morton(coord: tuple) -> int:
+    """Z-order key by bit-interleaving integer grid coords (locality-preserving)."""
+    key = 0
+    n = len(coord)
+    for b in range(20):
+        for j, c in enumerate(coord):
+            key |= ((c >> b) & 1) << (n * b + j)
+    return key
+
+
+def build_recon_batches(
+    order: list[int],
+    tiles_by_id: dict,
+    bsize: int,
+    *,
+    locality: bool = False,
+    tile_dims: tuple | None = None,
+) -> list[list[int]]:
     """Group ``order`` into batches of ``bsize`` same-shape tiles.
 
     All tiles in a batch must share spatial shape (the batched FFT stacks
     them into ``(B, Z, Y, X)``). Tiles are bucketed by shape first — so
     interior tiles form full batches and ragged edge shapes form their
-    own (possibly smaller) batches — then each bucket is chunked, keeping
-    input-order within a shape for pipeline locality.
+    own (possibly smaller) batches — then each bucket is chunked.
+
+    Default ordering within a shape is ``input_order`` (raster). With
+    ``locality=True`` each shape bucket is Z-order (Morton) sorted first, so a
+    ``bsize`` chunk is a spatially compact cluster (raster chunks straddle
+    row/plane wraps). ``tile_dims`` is required when ``locality`` is set.
     """
     from collections import OrderedDict
 
@@ -84,6 +114,13 @@ def build_recon_batches(order: list[int], tiles_by_id: dict, bsize: int) -> list
     for tid in order:
         shp = tuple(tiles_by_id[tid].shape)
         by_shape.setdefault(shp, []).append(tid)
+
+    if locality:
+        if tile_dims is None:
+            raise ValueError("build_recon_batches(locality=True) needs tile_dims")
+        gc = _grid_coords(tiles_by_id, tile_dims)
+        for shp in by_shape:
+            by_shape[shp] = sorted(by_shape[shp], key=lambda t: _morton(gc[t]))
 
     batches: list[list[int]] = []
     for tids in by_shape.values():
@@ -220,12 +257,23 @@ class MonarchBackend:
             )
 
         async def _swap():
-            await self._workers.swap_to.call(plan_path=plan_path)
+            vm = await self._workers.swap_to.call(plan_path=plan_path)
+            return [st for _, st in vm.items()]
 
         t_swap = time.monotonic()
-        asyncio.run(_swap())
+        stats = asyncio.run(_swap())
         self._drained = False  # new TP not yet driven/drained
-        logger.info("volume swap: %.1fs", time.monotonic() - t_swap)
+        # Current (post-cleanup) host RSS across actors — watch this stay flat
+        # across TPs. A steady climb means recon host memory isn't being
+        # released between TPs (e.g. undropped RDMABuffer registrations).
+        cur = max((s.get("host_rss_gb", 0.0) for s in stats), default=0.0)
+        peak = max((s.get("host_maxrss_gb", 0.0) for s in stats), default=0.0)
+        logger.info(
+            "volume swap: %.1fs (max actor host RSS now %.1f GB, peak %.1f GB)",
+            time.monotonic() - t_swap,
+            cur,
+            peak,
+        )
 
     # --- per-TP drive ------------------------------------------------------
     def drive_tp(self, plan_path: str, plan, *, recon_batch: int = 1) -> dict:
@@ -274,6 +322,23 @@ class MonarchBackend:
         stitch_in_flight = 0
         summaries: list[dict] = []
 
+        # Refcount each input tile by how many output tiles still need it. When a
+        # tile's last output finishes stitching, no in-flight RDMA pull can need
+        # it anymore, so free its recon immediately — drop the driver's RDMABuffer
+        # handle and ``forget`` the actor's cached CPU tensor — instead of holding
+        # the whole TP's ~100 GB of recons in host RAM until ``swap_to``.
+        tile_remaining = {tid: len(outs) for tid, outs in input_to_outputs.items()}
+        freed_pending: list[int] = []
+
+        async def _flush_forget() -> None:
+            # ``.call`` returns a Monarch Future (awaitable), not a coroutine, so
+            # await it directly — don't wrap in asyncio.create_task. Batched
+            # (caller flushes every ~32 frees), so the round-trip cost is small.
+            if freed_pending:
+                ids = list(freed_pending)
+                freed_pending.clear()
+                await self._workers.forget.call(tile_ids=ids)
+
         t_a_start = time.monotonic()
         t_a_end_local = [0.0]
         a_remaining = [len(run_plan.input_order)]
@@ -283,6 +348,21 @@ class MonarchBackend:
             s = await done_recv.recv()
             stitch_in_flight -= 1
             summaries.append(s)
+            # This output is done -> decrement its contributors; free any whose
+            # last output just completed (safe: no pending/in-flight stitch needs
+            # them once tile_remaining hits 0).
+            oid = s.get("out_tile_id")
+            if oid is not None:
+                for tid in run_plan.output_to_inputs.get(oid, ()):
+                    r = tile_remaining.get(tid)
+                    if r is None:
+                        continue
+                    tile_remaining[tid] = r - 1
+                    if r <= 1:
+                        recon_handles.pop(tid, None)  # drop driver's RDMABuffer ref
+                        freed_pending.append(tid)
+                if len(freed_pending) >= 32:
+                    await _flush_forget()
             n_done = len(summaries)
             if n_done % 20 == 0:
                 logger.info("Stage B: %d completed", n_done)
@@ -342,12 +422,15 @@ class MonarchBackend:
                 await _maybe_dispatch_outputs(ready)
 
         if recon_batch > 1:
-            batches = build_recon_batches(run_plan.input_order, tiles_by_id, recon_batch)
-            # Prime each actor's reader with the FLATTENED tile order of the
-            # batches it will receive (round-robin ``i % n_gpus``), so the
-            # background reader stays a batch ahead of the GPU. For full
-            # overlap the config's ``prefetch_depth`` should be >= recon_batch
-            # (a whole next batch buffered during the current FFT).
+            batches = build_recon_batches(
+                run_plan.input_order,
+                tiles_by_id,
+                recon_batch,
+            )
+            # Prefetch the next work-unit's read during the current FFT (the
+            # IO-bound read overlaps compute): prime each actor's tile reader
+            # with the FLATTENED order of its assigned batches. Assignment is
+            # round-robin (``i % n_gpus``).
             per_actor_order: dict[int, list[int]] = {g: [] for g in range(n_gpus)}
             for i, b in enumerate(batches):
                 per_actor_order[i % n_gpus].extend(b)
@@ -386,6 +469,9 @@ class MonarchBackend:
 
         while stitch_in_flight > 0:
             await _drain_one_stitch()
+        # Free the last batch of recons before returning (swap_to/teardown will
+        # clear whatever remains anyway).
+        await _flush_forget()
         logger.info("Stage B: %d/%d completed (final)", len(summaries), stitch_count)
         return t_a_end_local[0], time.monotonic() - t_a_start, summaries
 

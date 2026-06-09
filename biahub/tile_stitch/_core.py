@@ -183,34 +183,65 @@ def get_tf_cuda(settings, device: str) -> tuple[dict[str, Any], Any]:
     )
 
     tf = prepare_transfer_function(settings, device=None)
-    _, modality_settings = select_recon_modality(settings.recon)
-    cuda_tf = {
-        "real_potential_transfer_function": torch.as_tensor(
-            tf["real_potential_transfer_function"].values, device=device
-        ),
-        "imaginary_potential_transfer_function": torch.as_tensor(
-            tf["imaginary_potential_transfer_function"].values, device=device
-        ),
-    }
+    modality, modality_settings = select_recon_modality(settings.recon)
+    # Dispatch on modality: phase has a real+imaginary potential TF; fluorescence
+    # has a single optical TF. ``make_eager_recon`` keys off these dict entries.
+    if modality == "fluorescence":
+        cuda_tf = {
+            "optical_transfer_function": torch.as_tensor(
+                tf["optical_transfer_function"].values, device=device
+            ),
+        }
+    else:  # phase (thick 3D)
+        cuda_tf = {
+            "real_potential_transfer_function": torch.as_tensor(
+                tf["real_potential_transfer_function"].values, device=device
+            ),
+            "imaginary_potential_transfer_function": torch.as_tensor(
+                tf["imaginary_potential_transfer_function"].values, device=device
+            ),
+        }
     _TF_CUDA_CACHE[key] = (cuda_tf, modality_settings)
     return _TF_CUDA_CACHE[key]
 
 
 def make_eager_recon(cuda_tf, recon_settings) -> Callable:
-    """Return the bare eager ``zyx -> recon`` closure.
+    """Return the bare eager ``zyx -> recon`` closure for the active modality.
 
     Binds the TF tensors + ``apply_inverse`` kwargs into a closure so a
     downstream ``torch.compile`` graph only sees a single dynamic input.
     ``torch.compile`` wrapping (and the compiled-callable cache) stays in the
     actor — this module only provides the pure eager closure both the eager
     and compiled paths build on.
+
+    Modality is inferred from ``cuda_tf`` (built by :func:`get_tf_cuda`):
+    ``optical_transfer_function`` -> fluorescence (thick 3D OTF deconvolution),
+    otherwise the phase real+imaginary potential TF. The
+    ``apply_inverse.model_dump()`` kwargs (reconstruction_algorithm,
+    regularization_strength, TV_*) line up with both model signatures.
     """
+    z_padding = recon_settings.transfer_function.z_padding
+    apply_kwargs = recon_settings.apply_inverse.model_dump()
+
+    if "optical_transfer_function" in cuda_tf:
+        from waveorder.models import isotropic_fluorescent_thick_3d as fluor
+
+        otf = cuda_tf["optical_transfer_function"]
+
+        def _eager(zyx):
+            return fluor.apply_inverse_transfer_function(
+                zyx,
+                otf,
+                z_padding=z_padding,
+                **apply_kwargs,
+            )
+
+        return _eager
+
     from waveorder.models import phase_thick_3d
 
     tf_real = cuda_tf["real_potential_transfer_function"]
     tf_imag = cuda_tf["imaginary_potential_transfer_function"]
-    z_padding = recon_settings.transfer_function.z_padding
-    apply_kwargs = recon_settings.apply_inverse.model_dump()
 
     def _eager(zyx):
         return phase_thick_3d.apply_inverse_transfer_function(
@@ -224,19 +255,12 @@ def make_eager_recon(cuda_tf, recon_settings) -> Callable:
     return _eager
 
 
-def read_tile_block(plan, tile, *, pin_float32: bool = False):
+def read_tile_block(plan, tile):
     """Read one input tile as a ``(Z, Y, X)`` array.
 
     The leaf zarr read used by the actor's per-TP ``PrefetchReader`` loader
-    closure. By default returns the raw source dtype (typically uint16) as a
-    numpy array; the recon path casts to float32 during the H2D copy.
-
-    With ``pin_float32=True`` (the GPU-overlap path), the uint16→float32 cast
-    and the host-pinning are done here, in the background reader thread,
-    returning a **pinned float32** ``torch`` CPU tensor. This moves both the
-    cast and the page-lock off the recon hot path so the H2D can be an async
-    ``non_blocking`` copy. Pinning is what makes ``non_blocking=True`` actually
-    asynchronous — a pageable buffer would force a synchronous staging copy.
+    closure. Returns the raw source dtype (typically uint16) as a numpy array;
+    the recon path casts to float32 during the H2D copy.
     """
     import numpy as np
 
@@ -248,15 +272,7 @@ def read_tile_block(plan, tile, *, pin_float32: bool = False):
         slice(plan.timepoint, plan.timepoint + 1),
         slice(plan.channel_idx, plan.channel_idx + 1),
     ) + tuple(tile.slices[d] for d in plan.tile_dims)
-    block = np.asarray(z_arr[sl]).squeeze(axis=(0, 1))  # drop singleton T, C
-    if not pin_float32:
-        return block
-    import torch
-
-    # ``astype`` materialises the float32 buffer in the reader thread;
-    # ``pin_memory`` page-locks it so the subsequent H2D can be a true async
-    # DMA off the recon critical path.
-    return torch.from_numpy(np.ascontiguousarray(block, dtype=np.float32)).pin_memory()
+    return np.asarray(z_arr[sl]).squeeze(axis=(0, 1))  # drop singleton T, C
 
 
 def load_tile_zyx(plan, tile, *, volume=None, device: str):
@@ -318,15 +334,20 @@ def blend_contributors(geom_entry, contribs_np, blend, kernel_cache):
     out_shape = geom_entry["out_shape"]
     contrib_geom = geom_entry["contributors"]
 
-    sample_dtype = next(iter(contribs_np.values())).dtype
-    accum_v = np.zeros(out_shape, dtype=sample_dtype)
-    accum_w = np.zeros(out_shape, dtype=sample_dtype)
+    # Accumulate in float32 regardless of the contributor dtype: a float16
+    # recon store (monarch.recon_dtype=float16) halves the RDMA payload, but
+    # summing value*weight in float16 would overflow/round badly. The float32
+    # kernel upcasts each f16 ``v_view`` for free, so only the stored tile
+    # loses bits — the blend math is full precision.
+    accum_dtype = np.float32
+    accum_v = np.zeros(out_shape, dtype=accum_dtype)
+    accum_w = np.zeros(out_shape, dtype=accum_dtype)
 
     for tid, tile_full in contribs_np.items():
         cinfo = contrib_geom.get(tid)
         if cinfo is None:
             continue
-        kernel_full = get_blend_kernel(blend, cinfo["tile_shape"], sample_dtype, kernel_cache)
+        kernel_full = get_blend_kernel(blend, cinfo["tile_shape"], accum_dtype, kernel_cache)
         kernel_view = kernel_full[cinfo["in_local"]]
         v_view = tile_full[cinfo["in_full_idx"]]
         accum_v[cinfo["out_full_idx"]] += v_view * kernel_view

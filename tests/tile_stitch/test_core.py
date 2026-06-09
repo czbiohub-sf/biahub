@@ -175,18 +175,19 @@ def test_blend_contributors_fill_value_outside_coverage():
     assert np.all(np.isnan(result[0, :, 4:8]))
 
 
-def _write_region(plan_timepoint, leading_c, out_spatial):
+def _write_region(plan_timepoint, out_c_idx, out_spatial):
     """Replicate the actor's stitch write-region convention.
 
-    The T axis is carried by an explicit ``slice(t_off, t_off + 1)``; the
-    remaining leading dims come from ``leading_shape[1:]`` and the spatial
-    dims from the per-output-tile geometry. Pinning it here guards against a
-    regression to the v6 leading-axis convention (which folds T into the
-    leading dims and would mis-place every multi-TP write).
+    The T axis is carried by an explicit ``slice(t_off, t_off + 1)``; the C axis
+    by this channel's slot ``slice(out_c_idx, out_c_idx + 1)`` in the (possibly
+    multi-channel) shared output; the spatial dims by the per-output-tile
+    geometry. Pinning it here guards against (a) the v6 leading-axis regression
+    that folded T into the leading dims and mis-placed every multi-TP write, and
+    (b) mis-placing a channel's C slot in a shared multi-channel output.
     """
     return (
         (slice(plan_timepoint, plan_timepoint + 1),)
-        + tuple(slice(0, n) for n in leading_c)
+        + (slice(out_c_idx, out_c_idx + 1),)
         + tuple(slice(lo, hi) for lo, hi in out_spatial)
     )
 
@@ -203,15 +204,21 @@ def test_timepoint_write_region_carries_t_axis():
     assert entry["out_shape"] == (1, 8, 8)
 
     t_off = 3
-    leading_c = leading_shape[1:]
-    region = _write_region(t_off, leading_c, entry["out_spatial"])
+    region = _write_region(t_off, 0, entry["out_spatial"])  # single-channel, C=0
 
     # First element is the explicit T slot for this timepoint.
     assert region[0] == slice(3, 4)
-    # Then the C leading dim, then the two spatial dims.
+    # Then the C slot (0 here), then the two spatial dims.
     assert region[1] == slice(0, 1)
     assert region[2] == slice(0, 8)
     assert region[3] == slice(0, 8)
+
+    # Multi-channel shared output: channel index 1 writes the C=1 slot, T/spatial
+    # unchanged. This is what lets phase+fluor share one (T, C, Z, Y, X) zarr.
+    region_c1 = _write_region(t_off, 1, entry["out_spatial"])
+    assert region_c1[0] == slice(3, 4)
+    assert region_c1[1] == slice(1, 2)
+    assert region_c1[2:] == region[2:]
     # The blended array (with a leading None for the T axis at write time)
     # has rank matching the write region.
     result = _core.blend_contributors(
@@ -222,6 +229,40 @@ def test_timepoint_write_region_carries_t_axis():
     )
     assert result[None].shape == (1, 1, 8, 8)
     assert len(region) == result[None].ndim
+
+
+def test_build_recon_batches_locality_invariants():
+    """Morton batching keeps batches shape-uniform, <= bsize, all tiles once."""
+    from biahub.tile_stitch.monarch.backend import build_recon_batches
+
+    dims = ("z", "y", "x")
+    # 1×3×4 grid of uniform 2×2×2 tiles, step 2 (no overlap needed for grouping).
+    tiles, order = [], []
+    tid = 0
+    for iy in range(3):
+        for ix in range(4):
+            tiles.append(
+                InputTile(
+                    tile_id=tid,
+                    slices={
+                        "z": slice(0, 2),
+                        "y": slice(iy * 2, iy * 2 + 2),
+                        "x": slice(ix * 2, ix * 2 + 2),
+                    },
+                )
+            )
+            order.append(tid)
+            tid += 1
+    tiles_by_id = {t.tile_id: t for t in tiles}
+
+    batches = build_recon_batches(order, tiles_by_id, 4, locality=True, tile_dims=dims)
+    flat = [t for b in batches for t in b]
+    assert sorted(flat) == sorted(order)  # every tile exactly once
+    assert all(len(b) <= 4 for b in batches)  # respects bsize
+    for b in batches:  # shape-uniform per batch
+        assert len({tuple(tiles_by_id[t].shape) for t in b}) == 1
+    # Morton groups the 12 tiles into 3 compact quads, not raster rows.
+    assert len(batches) == 3
 
 
 def test_frozen_monarch_config_pickles_through_plan():
@@ -239,7 +280,6 @@ def test_frozen_monarch_config_pickles_through_plan():
     cfg = MonarchConfig(
         gpus_per_node=4,
         recon_batch=1,
-        resident_volume=True,
         compile_mode=CompileMode.NONE,
         device=Device.CUDA,
     )
@@ -255,3 +295,54 @@ def test_frozen_monarch_config_pickles_through_plan():
 
     with pytest.raises(ValidationError):
         restored.recon_batch = 8
+
+
+def test_blend_contributors_float16_accumulates_in_float32():
+    """A float16 recon store (monarch.recon_dtype=float16) blends in float32.
+
+    The float16 store halves the RDMA payload, but the weighted-mean
+    accumulation must stay float32 (summing value*weight in float16 would
+    overflow/round badly). ``blend_contributors`` forces a float32 accumulator
+    regardless of contributor dtype, so the float16-input result must match a
+    float32-reference blend of the same values to well within float16 noise.
+    """
+    plan = _two_tile_plan(leading_shape=(1, 1))
+    geom = _core.build_stitch_geom(plan)
+    blend = _ramp_blend()
+
+    # Non-trivial values (a value range float16 stores exactly enough of) so the
+    # weighted mean exercises real arithmetic, not just constants.
+    rng = np.random.default_rng(0)
+    v0 = (rng.uniform(100.0, 4000.0, size=(1, 8, 5))).astype(np.float32)
+    v1 = (rng.uniform(100.0, 4000.0, size=(1, 8, 5))).astype(np.float32)
+
+    # float16 contributors → the path under test.
+    res_f16 = _core.blend_contributors(
+        geom[0], {0: v0.astype(np.float16), 1: v1.astype(np.float16)}, blend, {}
+    )
+    # float32 reference: same values, full precision throughout.
+    res_f32 = _core.blend_contributors(geom[0], {0: v0, 1: v1}, blend, {})
+
+    # Accumulation must be float32 regardless of the (float16) contributor dtype.
+    assert res_f16.dtype == np.float32
+    assert res_f32.dtype == np.float32
+
+    # Compare only the covered region (the fill_value here is NaN).
+    covered = ~np.isnan(res_f32)
+    diff = res_f16[covered] - res_f32[covered]
+    nrmse = np.sqrt(np.mean(diff**2)) / (
+        np.sqrt(np.mean(res_f32[covered] ** 2)) + 1e-12
+    )
+    assert nrmse < 1e-2, f"float16 blend NRMSE {nrmse:.2e} exceeds 1e-2"
+
+
+def test_recon_dtype_default_is_float32_and_float16_opt_in():
+    """recon_dtype defaults to lossless float32; float16 is opt-in.
+
+    The stored/transmitted recon dtype halves the D2H + ibverbs-MR bytes at
+    float16 (lossy, ~3 sig digits), so the default must stay lossless.
+    """
+    from biahub.tile_stitch.config import MonarchConfig
+
+    assert MonarchConfig().recon_dtype == "float32"
+    assert MonarchConfig(recon_dtype="float16").recon_dtype == "float16"

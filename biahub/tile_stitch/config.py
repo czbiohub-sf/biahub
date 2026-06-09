@@ -34,6 +34,20 @@ class Device(StrEnum):
     CPU = "cpu"
 
 
+class ReconDtype(StrEnum):
+    """Dtype the recon result is STORED + transmitted in (not the compute dtype).
+
+    The FFT recon always runs in float32 on the GPU; this only controls the
+    GPU→host D2H + RDMA payload. ``FLOAT16`` halves both the pinned-copy bytes
+    and the ibverbs MR (the two halves of the per-actor ``d2h`` cost) at the
+    price of ~3 significant digits — a reasonable match when the source is
+    already float16, but a quality tradeoff, so the default stays lossless.
+    """
+
+    FLOAT32 = "float32"
+    FLOAT16 = "float16"
+
+
 class CompileMode(StrEnum):
     """``torch.compile`` mode for the recon callable.
 
@@ -73,10 +87,6 @@ class MonarchConfig(BaseModel):
         default=6,
         description="Background read-ahead depth (0 disables). Want >= recon_batch.",
     )
-    resident_volume: bool = Field(
-        default=False,
-        description="Opt into GPU-resident volume (incompatible with recon_batch>1).",
-    )
     rdma_timeout_s: PositiveInt = 60
     recon_concurrency: PositiveInt = Field(
         default=1,
@@ -85,29 +95,26 @@ class MonarchConfig(BaseModel):
     window_per_actor: PositiveInt = Field(
         default=6, description="Stage B backpressure window (per actor)."
     )
-    compile_mode: CompileMode = CompileMode.REDUCE_OVERHEAD
+    compile_mode: CompileMode = Field(
+        default=CompileMode.NONE,
+        description="torch.compile mode. Default NONE (eager): reliable across "
+        "GPU counts/archs/tile shapes. REDUCE_OVERHEAD (CUDA-graph trees) trips a "
+        "thread-local-storage assertion under the multi-actor worker-thread recon "
+        "on >2 GPUs, and torch.compile JIT-stalls on Blackwell; opt into it only "
+        "for proven single-shape, <=2-GPU runs. DEFAULT (inductor, no CUDA graphs) "
+        "is a middle ground but the complex-FFT recon isn't inductor-fusible, so "
+        "it gives little over eager.",
+    )
     device: Device = Device.CUDA
-    gpu_overlap: bool = Field(
-        default=False,
-        description="Stage next batch's input H2D on a copy stream during the "
-        "current FFT (streaming only; forces eager compile). Experimental.",
+    recon_dtype: ReconDtype = Field(
+        default=ReconDtype.FLOAT32,
+        description="Dtype the recon is stored + RDMA-transmitted in (compute "
+        "stays float32). FLOAT16 halves the D2H copy AND the ibverbs MR bytes "
+        "(both halves of the per-actor d2h cost) — cast GPU-side before the "
+        "pinned copy. Lossy (~3 sig digits); default FLOAT32 is lossless. The "
+        "Stage B blend upcasts to float32 regardless, so accumulation precision "
+        "is unaffected — only the stored tile loses bits.",
     )
-    gpu_depth: PositiveInt = Field(
-        default=1,
-        description="GPU input-stager look-ahead in work-units (gpu_overlap only).",
-    )
-
-    @model_validator(mode="after")
-    def _reject_resident_with_batch(self) -> Self:
-        # Resident volume (~34 GB) + Tikhonov (~30 GB) ≈ 64 GB on an 80 GB H200;
-        # a batched (B, Z, Y, X) stack on top exceeds HBM. Hard reject.
-        if self.resident_volume and self.recon_batch > 1:
-            raise ValueError(
-                "resident_volume=True is incompatible with recon_batch>1 "
-                "(HBM OOM: ~34 GB volume + ~30 GB Tikhonov + batched stack "
-                "> 80 GB). Set recon_batch=1 or resident_volume=False."
-            )
-        return self
 
     @model_validator(mode="after")
     def _warn_prefetch_below_batch(self) -> Self:

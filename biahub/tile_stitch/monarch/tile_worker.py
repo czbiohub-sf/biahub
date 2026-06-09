@@ -11,6 +11,8 @@ through CPU automatically. We already pay the GPU→CPU move at the end
 of recon (the v7 dask path does too), so there is no additional cost.
 """
 
+import threading
+
 from typing import Any
 
 from monarch.actor import Actor, current_rank, endpoint
@@ -150,49 +152,22 @@ class TileWorker(Actor):
         # tears down (or ``forget`` is called) so the RDMABuffer handles
         # we hand to peers remain valid.
         self.recons: dict[int, torch.Tensor] = {}
+        # The RDMABuffer for each cached recon, kept so we can explicitly
+        # ``drop()`` it on free. ``RDMABuffer`` has no ``__del__``: dropping the
+        # Python ref does NOT deregister the underlying ibverbs MR, so the
+        # recon's host pages stay pinned (and ``malloc_trim`` can't reclaim
+        # them). Across a persistent multi-TP actor that leaks ~100 GB/TP →
+        # OOM. ``forget``/``swap_to`` drop these explicitly.
+        self._rdma_buffers: dict[int, Any] = {}
         # Serialize the GPU-bound recon. Default ``recon_concurrency=1`` —
         # Tikhonov holds ~30 GB on device, so >1 risks OOM. Sized from config
         # at first use; lazy-init avoids binding an asyncio loop here (this
         # ``__init__`` may run before the loop exists in some transport paths).
         self._recon_sem = None
-        # Background prefetch reader (streaming mode only). Primed per-TP via
-        # the ``prime_reader`` endpoint with this actor's assigned tile order.
+        # Background prefetch reader. Primed per-TP via the ``prime_reader``
+        # endpoint with this actor's assigned tile order: it pulls tile N+1's
+        # zarr bytes while the GPU runs tile N's FFT.
         self._reader: PrefetchReader | None = None
-        # Streaming tiles is the default: per-tile zarr reads, no resident
-        # volume. ``monarch.resident_volume=true`` opts into GPU-resident mode
-        # (uint16 source halves HBM vs float32; ~34 GB volume + ~30 GB Tikhonov
-        # ≈ 64 GB on the 80 GB H200, fits only for our current dataset size).
-        # At 2× spatial growth or multi-node scale, streaming is mandatory.
-        self._stream_tiles = not self._cfg.resident_volume
-        if self._stream_tiles:
-            self._volume_gpu = None
-        else:
-            self._volume_gpu = self._load_volume_to_gpu()
-        # GPU H2D-overlap (``monarch.gpu_overlap``, default off). When on, the
-        # prefetch reader produces pinned float32 host tensors and H2D copies
-        # run on a dedicated copy stream; v2 stages the NEXT gpu_depth work-
-        # units' inputs onto the device on the copy stream while the CURRENT
-        # unit's FFT runs on the compute stream (exactly one FFT in flight —
-        # the ~30 GB Tikhonov peak forbids concurrent compute). Streaming only
-        # (resident volume already lives on the GPU). CUDA-graph capture
-        # (reduce-overhead) can't compose with manual streams, so overlap forces
-        # eager compile (see _get_compiled_recon).
-        self._gpu_overlap = self._stream_tiles and self._cfg.gpu_overlap
-        if self._gpu_overlap:
-            self._copy_stream = torch.cuda.Stream(device=gpu_idx)
-        else:
-            self._copy_stream = None
-        # GPU input stager (v2). ``gpu_depth`` = how many work-units ahead to
-        # stage on the device (1 = one FFT's inputs ahead). ``_gpu_staged`` maps
-        # tile_id -> (device tensor, H2D event); the FFT's compute stream waits
-        # each tile's event before reading it. ``_assigned_order`` +
-        # ``_stage_cursor`` track this actor's flat tile sequence (set by
-        # prime_reader) so stage-ahead knows what comes next.
-        self._gpu_depth = self._cfg.gpu_depth
-        self._gpu_staged: dict[int, Any] = {}
-        self._assigned_order: list[int] = []
-        self._stage_cursor = 0  # index in _assigned_order staged up to
-        self._consumed = 0  # tiles consumed by recon (bounds the window)
         # Lazily-built compiled recon callable. ``torch.compile`` with
         # ``mode="reduce-overhead"`` captures CUDA graphs after a couple
         # warm-up calls, eliminating Python+kernel-launch overhead for
@@ -207,6 +182,26 @@ class TileWorker(Actor):
         self._tiles_by_id = {t.tile_id: t for t in self.plan.input_tiles}
         self._stitch_geom: dict[int, dict] = _core.build_stitch_geom(self.plan)
         self._kernel_cache: dict[tuple, Any] = {}
+        # D2H via a reused pinned scratch buffer. A pageable ``.cpu()`` DMAs at
+        # ~2 GB/s (fresh alloc + page-faults + torch's chunked staging); a
+        # PINNED destination DMAs at ~25 GB/s (~11×). We can't pin every held
+        # recon (~150 GB at peak → mlocked), so we keep ONE reusable pinned
+        # scratch per actor sized to the largest recon seen: GPU→pinned scratch
+        # (fast DMA) then scratch→fresh pageable recon (CPU memcpy). Net ~3× on
+        # the copy half, pinned footprint bounded to one tile. Lazily grown,
+        # guarded by a lock (correct even at recon_concurrency>1), and falls
+        # back to pageable ``.cpu()`` once if the pin is refused (memlock).
+        self._pinned_scratch: Any = None
+        self._d2h_lock = threading.Lock()
+        self._pin_failed = False
+        # Stored/transmitted recon dtype (compute stays float32). float16 halves
+        # both the pinned-copy and the ibverbs-MR bytes; cast GPU-side in _d2h
+        # BEFORE the pinned copy (cast-during-copy drops to the pageable rate).
+        self._recon_dtype = (
+            torch.float16
+            if self._cfg.recon_dtype == "float16"
+            else torch.float32
+        )
         self._reset_recon_stats()
 
     def _reset_recon_stats(self) -> None:
@@ -214,46 +209,11 @@ class TileWorker(Actor):
         self._rs_n = 0  # tiles reconstructed
         self._rs_io_s = 0.0  # zarr read / volume slice + H2D
         self._rs_fft_s = 0.0  # recon_fn (FFT + Tikhonov)
-        self._rs_d2h_s = 0.0  # GPU->CPU + RDMABuffer setup
+        self._rs_d2h_s = 0.0  # GPU->CPU copy + RDMABuffer setup (total; = copy + rdma)
+        self._rs_copy_s = 0.0  # GPU->CPU copy only (the .cpu())
+        self._rs_rdma_s = 0.0  # RDMABuffer ibverbs MR registration only
         self._rs_first = None  # monotonic ts of first recon start
         self._rs_last = None  # monotonic ts of last recon end
-
-    def _load_volume_to_gpu(self):
-        """Read the whole TP+channel slab from zarr into HBM once.
-
-        Stored in source dtype (typically uint16). ``_reconstruct_blocking``
-        casts the per-tile view to float32 on the GPU when slicing.
-        """
-        import logging as _logging
-        import time as _time
-
-        import numpy as np
-        import torch
-
-        from iohub.ngff import open_ome_zarr
-
-        log = _logging.getLogger("TileWorker.volume")
-        t0 = _time.monotonic()
-        src = open_ome_zarr(self.plan.input_path, layout="fov", mode="r")
-        z_arr = src["0"]
-        sl = (
-            slice(self.plan.timepoint, self.plan.timepoint + 1),
-            slice(self.plan.channel_idx, self.plan.channel_idx + 1),
-        ) + tuple(slice(None) for _ in self.plan.tile_dims)
-        arr = np.asarray(z_arr[sl]).squeeze(axis=(0, 1))  # (1,1,Z,Y,X) → (Z,Y,X), drop T, C
-        t_read = _time.monotonic() - t0
-        t1 = _time.monotonic()
-        vol = torch.as_tensor(arr, device=f"cuda:{self.gpu_idx}")
-        t_h2d = _time.monotonic() - t1
-        log.info(
-            "gpu_idx=%d volume loaded shape=%s dtype=%s read=%.1fs h2d=%.1fs",
-            self.gpu_idx,
-            tuple(vol.shape),
-            vol.dtype,
-            t_read,
-            t_h2d,
-        )
-        return vol
 
     def _get_compiled_recon(self):
         """Return a (possibly torch.compile'd) callable ``zyx -> recon``.
@@ -271,21 +231,12 @@ class TileWorker(Actor):
         import torch
 
         device = f"cuda:{self.gpu_idx}"
+        log = _logging.getLogger("TileWorker.compile")
+
         cuda_tf, recon_settings = _core.get_tf_cuda(self.plan.settings, device)
         _eager = _core.make_eager_recon(cuda_tf, recon_settings)
 
         mode = self._cfg.compile_mode.value
-        log = _logging.getLogger("TileWorker.compile")
-        if self._gpu_overlap and mode != "none":
-            # CUDA-graph capture (reduce-overhead) records a fixed stream and
-            # cannot compose with the manual copy stream / cross-stream waits
-            # the overlap path issues. Force eager so the two don't fight.
-            log.info(
-                "gpu_idx=%d GPU overlap on — forcing eager (was mode=%s)",
-                self.gpu_idx,
-                mode,
-            )
-            mode = "none"
         if mode == "none":
             log.info("gpu_idx=%d compile disabled (monarch.compile_mode=none)", self.gpu_idx)
             self._compiled_recon = _eager
@@ -328,13 +279,10 @@ class TileWorker(Actor):
     def _load_tile_gpu(self, tile):
         """Load one input tile to a ``(Z, Y, X)`` float32 GPU tensor.
 
-        Streams from zarr (default) or slices the resident volume. The
-        resident path's ``.clone()`` (in ``_core.load_tile_zyx``) decouples
-        the slice so CUDA graphs see a stable input buffer.
+        Streams the tile from zarr (per-tile read, no resident volume).
         """
-        volume = None if self._stream_tiles else self._volume_gpu
         return _core.load_tile_zyx(
-            self.plan, tile, volume=volume, device=f"cuda:{self.gpu_idx}"
+            self.plan, tile, volume=None, device=f"cuda:{self.gpu_idx}"
         )
 
     def _load_one(self, tile_id: int, tile):
@@ -343,99 +291,60 @@ class TileWorker(Actor):
         Used by both the single-tile and batched recon paths so batched
         recon benefits from the same background read-ahead. Falls back to a
         synchronous load when prefetch is off or missed this tile.
-
-        GPU-overlap mode: the prefetched value is a pinned float32 host tensor,
-        so the H2D is issued ``non_blocking`` on ``self._copy_stream`` (off the
-        recon critical path). ``record_stream`` ties the GPU buffer's lifetime
-        to the compute stream so the caching allocator can't recycle it before
-        the FFT runs; the caller (``_reconstruct*_blocking``) makes the compute
-        stream ``wait_stream(self._copy_stream)`` once before compute.
         """
         import torch
 
         pre = self._reader.get(tile_id) if self._reader is not None else None
         if pre is None:
             return self._load_tile_gpu(tile)
+        return torch.as_tensor(pre, dtype=torch.float32, device=f"cuda:{self.gpu_idx}")
 
-        device = f"cuda:{self.gpu_idx}"
-        if self._gpu_overlap and self._copy_stream is not None:
-            # ``pre`` is a pinned float32 CPU tensor from the reader thread.
-            with torch.cuda.stream(self._copy_stream):
-                gpu = pre.to(device, non_blocking=True)
-            gpu.record_stream(torch.cuda.current_stream(self.gpu_idx))
-            # The H2D is async, so the pinned host buffer must outlive the
-            # in-flight DMA. Tie its lifetime to the GPU tensor (which lives
-            # through the FFT) so Python can't free it mid-copy.
-            gpu._pinned_src = pre
-            return gpu
-        return torch.as_tensor(pre, dtype=torch.float32, device=device)
+    def _d2h(self, gpu_tensor):
+        """GPU→host copy of one recon via a reused pinned scratch (approach C).
 
-    def _stage_tile(self, tile_id: int) -> bool:
-        """Queue one tile's H2D on the copy stream and record its event (v2).
-
-        Pulls the pinned float32 host tensor from the prefetch reader and
-        issues a ``non_blocking`` H2D on ``self._copy_stream``, recording a
-        CUDA event the compute stream later waits on. Stores
-        ``(device_tensor, event)`` in ``self._gpu_staged[tile_id]``. Returns
-        False (no-op) if the reader has no pinned tensor for this tile — the
-        consumer falls back to a synchronous load. Idempotent: already-staged
-        tiles are skipped.
+        ``gpu_tensor`` is the (already unsqueezed) device recon. Casts to
+        contiguous float32 on the GPU, DMAs it into the per-actor pinned
+        scratch (fast — pinned dest is a direct DMA), then memcpys out into a
+        fresh PAGEABLE tensor that becomes the held recon (RDMA-registered by
+        ``_store_recon``). The scratch is reused across tiles/work-units and
+        grown only when a larger recon appears. Falls back to a plain pageable
+        ``.cpu()`` if pinning is refused (e.g. a low ``memlock`` ulimit).
         """
         import torch
 
-        if tile_id in self._gpu_staged:
-            return True
-        pre = self._reader.get(tile_id) if self._reader is not None else None
-        if pre is None:
-            return False
-        device = f"cuda:{self.gpu_idx}"
-        with torch.cuda.stream(self._copy_stream):
-            gpu = pre.to(device, non_blocking=True)
-            evt = torch.cuda.Event()
-            evt.record(self._copy_stream)
-        # Mark the buffer as used by both streams so the allocator can't
-        # recycle it before the FFT (compute stream) reads it. Keep the pinned
-        # host buffer alive through the in-flight DMA.
-        gpu.record_stream(torch.cuda.current_stream(self.gpu_idx))
-        gpu._pinned_src = pre
-        self._gpu_staged[tile_id] = (gpu, evt)
-        return True
+        # Cast to the stored dtype ON THE GPU first (float16 halves the bytes
+        # the copy + ibverbs MR move). Casting during the host copy instead
+        # would fall off the fast pinned path — keep the copy a same-dtype DMA.
+        dtype = self._recon_dtype
+        g = gpu_tensor.to(dtype).contiguous().detach()
+        if self._pin_failed:
+            return g.cpu()
 
-    def _stage_fill_to(self, target_cursor: int, max_staged: int) -> None:
-        """Stage tiles until ``_stage_cursor`` reaches ``target_cursor``.
+        shape = tuple(g.shape)
+        numel = g.numel()
+        with self._d2h_lock:
+            scratch = self._pinned_scratch
+            # Scratch is sized in BYTES (uint8) so one buffer serves any dtype.
+            need_bytes = numel * g.element_size()
+            if scratch is None or scratch.numel() < need_bytes:
+                try:
+                    scratch = torch.empty(need_bytes, dtype=torch.uint8, pin_memory=True)
+                except RuntimeError as exc:  # pinning refused (memlock ulimit)
+                    import logging as _logging
 
-        Walks ``self._assigned_order`` from the current cursor and queues each
-        tile's H2D on the copy stream, advancing the cursor. Stops at the end
-        of the assignment, the first tile the reader can't supply (loaded
-        synchronously when consumed), or once ``len(_gpu_staged) >=
-        max_staged``. ``target_cursor`` is an absolute index into
-        ``_assigned_order`` so callers keep a bounded look-ahead relative to
-        consumption; ``max_staged`` is a hard size gate on the staged set so
-        the device-buffer footprint stays bounded even if recon units are
-        consumed out of ``_assigned_order`` order (a stage that ran ahead of an
-        out-of-order consumer would otherwise accumulate device buffers → OOM).
-        """
-        limit = min(target_cursor, len(self._assigned_order))
-        while self._stage_cursor < limit:
-            if len(self._gpu_staged) >= max_staged:
-                break
-            tid = self._assigned_order[self._stage_cursor]
-            if not self._stage_tile(tid):
-                break
-            self._stage_cursor += 1
-
-    def _take_staged(self, tile_id: int, tile):
-        """Consume a pre-staged device tensor, or load synchronously (v2).
-
-        Returns ``(gpu_tensor, event_or_None)``. If the tile was pre-staged,
-        the caller must make the compute stream wait ``event`` before reading
-        it. Otherwise falls back to the v1/synchronous ``_load_one`` path
-        (event None) so a stage miss never corrupts the result.
-        """
-        staged = self._gpu_staged.pop(tile_id, None)
-        if staged is not None:
-            return staged  # (gpu, event)
-        return self._load_one(tile_id, tile), None
+                    self._pin_failed = True
+                    _logging.getLogger("TileWorker.d2h").warning(
+                        "pinned D2H scratch alloc failed (%s); "
+                        "falling back to pageable .cpu()",
+                        exc,
+                    )
+                    return g.cpu()
+                self._pinned_scratch = scratch
+            view = scratch[:need_bytes].view(dtype).view(shape)
+            view.copy_(g)  # GPU → pinned scratch (fast DMA), blocks until done
+            recon_cpu = torch.empty(shape, dtype=dtype)  # pageable, held
+            recon_cpu.copy_(view)  # pinned scratch → pageable (CPU memcpy)
+        return recon_cpu
 
     def _store_recon(self, tile_id: int, recon_cpu) -> TileHandle:
         """Keep the CPU tensor alive in ``self.recons`` and wrap an RDMABuffer."""
@@ -443,8 +352,12 @@ class TileWorker(Actor):
 
         self.recons[tile_id] = recon_cpu
         flat = recon_cpu.view(torch.uint8).flatten()
+        buf = RDMABuffer(flat)
+        # Retain the buffer so ``forget``/``swap_to`` can ``drop()`` it (the MR
+        # outlives the Python ref otherwise — see ``self._rdma_buffers``).
+        self._rdma_buffers[tile_id] = buf
         return TileHandle(
-            buffer=RDMABuffer(flat),
+            buffer=buf,
             shape=tuple(recon_cpu.shape),
             dtype_name=str(recon_cpu.dtype),
         )
@@ -456,38 +369,25 @@ class TileWorker(Actor):
         Called by the driver once per TP with ``input_order[g::n_gpus]`` —
         the contiguous sequence this actor (gpu ``g``) will reconstruct. The
         reader pulls the next tile's zarr bytes while the GPU runs the
-        current tile's FFT. No-op in resident-volume mode (reads slice HBM,
-        nothing to prefetch) or when ``monarch.prefetch_depth=0``.
+        current tile's FFT. No-op when ``monarch.prefetch_depth=0``.
         """
         # Tear down any reader from the previous TP first.
         if self._reader is not None:
             self._reader.stop()
             self._reader = None
 
-        # Reset the v2 GPU stager for the new TP (drop any device tensors
-        # staged for the prior TP and record this actor's tile sequence so
-        # stage-ahead knows what's next).
-        self._gpu_staged.clear()
-        self._assigned_order = list(tile_ids)
-        self._stage_cursor = 0
-        self._consumed = 0
-
         depth = self._cfg.prefetch_depth
-        if depth <= 0 or not self._stream_tiles or not tile_ids:
+        if depth <= 0 or not tile_ids:
             return {"gpu_idx": self.gpu_idx, "prefetch": False, "depth": depth}
 
-        # Bind a per-tile loader over this actor's current plan. By default
-        # the loader returns a source-dtype ``(Z, Y, X)`` numpy array and the
-        # recon path casts to float32 during H2D (mirroring ``_load_tile_gpu``).
-        # In GPU-overlap mode it instead returns a pinned float32 host tensor
-        # so the cast + page-lock happen in this background thread, leaving the
-        # recon path with just an async H2D on the copy stream.
+        # Bind a per-tile loader over this actor's current plan. The loader
+        # returns a source-dtype ``(Z, Y, X)`` numpy array and the recon path
+        # casts to float32 during H2D (mirroring ``_load_tile_gpu``).
         tiles_by_id = self._tiles_by_id
         plan = self.plan
-        pin_float32 = self._gpu_overlap
 
         def _load(tid: int):
-            return _core.read_tile_block(plan, tiles_by_id[tid], pin_float32=pin_float32)
+            return _core.read_tile_block(plan, tiles_by_id[tid])
 
         self._reader = PrefetchReader(_load, list(tile_ids), depth)
         return {
@@ -506,8 +406,6 @@ class TileWorker(Actor):
         # inside waveorder resolve to the right device.
         torch.cuda.set_device(self.gpu_idx)
 
-        if self._gpu_overlap and self._copy_stream is not None:
-            return self._reconstruct_overlap([tile_id])[0]
         return self._reconstruct_sync([tile_id])[0]
 
     def _reconstruct_batch_blocking(self, tile_ids: list[int]) -> list[TileHandle]:
@@ -522,18 +420,14 @@ class TileWorker(Actor):
 
         torch.cuda.set_device(self.gpu_idx)
 
-        if self._gpu_overlap and self._copy_stream is not None:
-            return self._reconstruct_overlap(tile_ids)
         return self._reconstruct_sync(tile_ids)
 
     def _reconstruct_sync(self, tile_ids: list[int]) -> list[TileHandle]:
-        """Run synchronous recon for one work-unit (OFF path + overlap fallback).
+        """Run synchronous recon for one work-unit.
 
         Loads each tile (prefetch or zarr), stacks into ``(B, Z, Y, X)`` (B may
         be 1), runs the batched FFT, copies each result to CPU, and wraps an
-        RDMABuffer. Uses ``synchronize``-based io/fft/d2h timing — unchanged
-        from the pre-overlap path so the OFF default is byte- and
-        timing-semantics-identical.
+        RDMABuffer. Uses ``synchronize``-based io/fft/d2h timing.
         """
         import time as _t
 
@@ -555,98 +449,24 @@ class TileWorker(Actor):
         t_fft = _t.monotonic()
 
         handles: list[TileHandle] = []
+        copy_s = 0.0
+        rdma_s = 0.0
         for i, tid in enumerate(tile_ids):
-            recon_cpu = recons[i].unsqueeze(0).to(torch.float32).contiguous().detach().cpu()
+            tc = _t.monotonic()
+            recon_cpu = self._d2h(recons[i].unsqueeze(0))
+            tr = _t.monotonic()
             handles.append(self._store_recon(tid, recon_cpu))
+            copy_s += tr - tc
+            rdma_s += _t.monotonic() - tr
         t_end = _t.monotonic()
 
         self._rs_n += len(tile_ids)
         self._rs_io_s += t_io - t0
         self._rs_fft_s += t_fft - t_io
         self._rs_d2h_s += t_end - t_fft
+        self._rs_copy_s += copy_s
+        self._rs_rdma_s += rdma_s
         self._rs_last = t_end
-        return handles
-
-    def _reconstruct_overlap(self, tile_ids: list[int]) -> list[TileHandle]:
-        """v2 recon for one work-unit with cross-unit input H2D overlap.
-
-        Consumes the unit's inputs from the GPU stager (their H2D was queued on
-        the copy stream during the PRIOR unit's FFT), makes the compute stream
-        wait each tile's H2D event, runs the one batched FFT, then — before the
-        blocking D2H — stages the NEXT ``gpu_depth`` units' inputs on the copy
-        stream so their transfer overlaps this unit's D2H + the next FFT.
-        Exactly one FFT is in flight (the compute stream is serial and the
-        recon semaphore is 1).
-
-        Timing uses CUDA events (not ``synchronize``) so the copy stream is
-        free to run ahead of compute — a per-tile device barrier would defeat
-        the overlap. ``io_s`` is the copy-event→fft-start gap (≈0 when the H2D
-        fully overlapped the prior FFT), ``fft_s`` the batched FFT, ``d2h_s``
-        the GPU→CPU + RDMA wrap.
-        """
-        import time as _t
-
-        import torch
-
-        tiles_by_id = self._tiles_by_id
-        compute = torch.cuda.current_stream(self.gpu_idx)
-        unit_size = len(tile_ids)
-
-        if self._rs_first is None:
-            self._rs_first = _t.monotonic()
-
-        # Maintain a bounded look-ahead of gpu_depth units beyond what's been
-        # consumed: stage up to (consumed + (gpu_depth+1)*unit_size). On the
-        # first call this primes the current unit + gpu_depth ahead; on later
-        # calls the current unit is already staged (from the prior call's
-        # fill) and this refills the window by one unit. The max_staged size
-        # gate caps _gpu_staged at (gpu_depth+1) units regardless of whether
-        # units are consumed in _assigned_order order, so device buffers can't
-        # accumulate under out-of-order delivery.
-        window = (self._gpu_depth + 1) * unit_size
-        self._stage_fill_to(self._consumed + window, window)
-
-        # Consume each tile's staged device tensor; the compute stream waits the
-        # tile's H2D event so the FFT never reads an incomplete buffer. Stage
-        # misses fall back to a synchronous load (event None).
-        ev_io_start = torch.cuda.Event(enable_timing=True)
-        ev_io_start.record(compute)
-        zyx_list = []
-        for tid in tile_ids:
-            gpu, evt = self._take_staged(tid, tiles_by_id[tid])
-            if evt is not None:
-                compute.wait_event(evt)
-            zyx_list.append(gpu)
-        batch = torch.stack(zyx_list, dim=0)  # (B, Z, Y, X)
-        ev_io_done = torch.cuda.Event(enable_timing=True)
-        ev_io_done.record(compute)
-
-        self._consumed += unit_size
-
-        recon_fn = self._get_compiled_recon()
-        recons = recon_fn(batch)  # (B, Z, Y, X)
-        ev_fft_done = torch.cuda.Event(enable_timing=True)
-        ev_fft_done.record(compute)
-
-        # D2H + RDMA wrap. ``.cpu()`` blocks the host until the compute stream's
-        # FFT (and the D2H) complete — that's the single sync point per unit.
-        # The next units' input H2Ds were already queued on the copy stream (by
-        # the _stage_fill_to at the top) and keep running concurrently with this
-        # FFT + D2H, so the next unit's input is ready when its FFT starts.
-        handles: list[TileHandle] = []
-        for i, tid in enumerate(tile_ids):
-            recon_cpu = recons[i].unsqueeze(0).to(torch.float32).contiguous().detach().cpu()
-            handles.append(self._store_recon(tid, recon_cpu))
-        ev_d2h_done = torch.cuda.Event(enable_timing=True)
-        ev_d2h_done.record(compute)
-        ev_d2h_done.synchronize()  # ensure events below are valid to query
-
-        self._rs_n += unit_size
-        # elapsed_time is in ms → seconds.
-        self._rs_io_s += ev_io_start.elapsed_time(ev_io_done) / 1000.0
-        self._rs_fft_s += ev_io_done.elapsed_time(ev_fft_done) / 1000.0
-        self._rs_d2h_s += ev_fft_done.elapsed_time(ev_d2h_done) / 1000.0
-        self._rs_last = _t.monotonic()
         return handles
 
     @endpoint
@@ -701,6 +521,8 @@ class TileWorker(Actor):
             "io_s": round(self._rs_io_s, 2),
             "fft_s": round(self._rs_fft_s, 2),
             "d2h_s": round(self._rs_d2h_s, 2),
+            "copy_s": round(self._rs_copy_s, 2),  # GPU->CPU copy portion of d2h
+            "rdma_s": round(self._rs_rdma_s, 2),  # RDMABuffer registration portion
             "busy_s": round(busy, 2),
             "span_s": round(span, 2),
             "util": round(busy / span, 3) if span > 0 else 0.0,
@@ -708,12 +530,11 @@ class TileWorker(Actor):
 
     @endpoint
     async def swap_to(self, plan_path: str) -> dict:
-        """Switch this actor to a new plan: release prior volume, reload.
+        """Switch this actor to a new plan: release prior recons, reload.
 
         Used by the multi-TP loop: each TP has its own plan (different
         ``timepoint``). The TF cache and compiled recon survive the swap
-        (same modality + shape across TPs), so only the resident volume
-        is rebuilt.
+        (same modality + shape across TPs).
         """
         import ctypes
         import gc
@@ -722,7 +543,7 @@ class TileWorker(Actor):
 
         from biahub.tile_stitch.plan import load_plan
 
-        # Release the prior volume and any cached recons before reloading.
+        # Release any cached recons before reloading.
         # ``self.recons`` holds ~200 CPU recon tensors (+ their RDMABuffer
         # ibverbs registrations) per TP; without an explicit release +
         # malloc_trim, freed host pages are retained by glibc and RSS grows
@@ -732,11 +553,10 @@ class TileWorker(Actor):
         if self._reader is not None:
             self._reader.stop()
             self._reader = None
-        # Drop any GPU-staged inputs from the prior TP (they hold device buffers
-        # + pinned host buffers); the next TP re-primes the stager via
-        # prime_reader. Clearing here releases the HBM before empty_cache.
-        self._gpu_staged.clear()
-        self._volume_gpu = None
+        # Deregister any outstanding RDMABuffers before clearing recons.
+        # Refcount-free ``forget`` drops them as outputs stitch, so usually
+        # none remain — this is the backstop for a TP that ended early.
+        await self._drop_buffers(list(self._rdma_buffers.keys()))
         self.recons.clear()
         torch.cuda.empty_cache()
         gc.collect()
@@ -753,22 +573,43 @@ class TileWorker(Actor):
         # config falls back to defaults rather than crashing).
         self._cfg = self.plan.monarch or MonarchConfig()
         self._reset_recon_stats()
-        if not self._stream_tiles:
-            self._volume_gpu = self._load_volume_to_gpu()
+        import os
         import resource
 
-        rss_gb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024**2
+        maxrss_gb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024**2
+        # Current RSS (post clear/drop/malloc_trim) — unlike ru_maxrss (a
+        # monotonic peak), this falls when memory is actually released, so it's
+        # the signal for whether recon host memory is freed between TPs.
+        with open("/proc/self/statm") as _f:
+            rss_pages = int(_f.read().split()[1])
+        cur_rss_gb = rss_pages * os.sysconf("SC_PAGE_SIZE") / 1024**3
         return {
             "gpu_idx": self.gpu_idx,
             "timepoint": self.plan.timepoint,
-            "stream_tiles": self._stream_tiles,
             "vram_used_gb": round(torch.cuda.memory_allocated() / 1024**3, 2),
-            "host_maxrss_gb": round(rss_gb, 1),
+            "host_maxrss_gb": round(maxrss_gb, 1),
+            "host_rss_gb": round(cur_rss_gb, 1),
         }
+
+    async def _drop_buffers(self, tile_ids: list[int]) -> None:
+        """Deregister the RDMABuffers for ``tile_ids`` (releases pinned host
+        pages). ``RDMABuffer`` has no ``__del__``, so this explicit ``drop()``
+        is what actually frees the ibverbs MR; without it RSS grows per TP."""
+        for tid in tile_ids:
+            buf = self._rdma_buffers.pop(tid, None)
+            if buf is None:
+                continue
+            try:
+                await buf.drop()
+            except Exception:
+                pass
 
     @endpoint
     async def forget(self, tile_ids: list[int]) -> int:
-        """Drop the cached recon tensors for ``tile_ids``. Returns count freed."""
+        """Free cached recons for ``tile_ids``: drop their RDMABuffers (the MR
+        keeps the host pages pinned otherwise) and the cached tensors. Returns
+        the count of tensors freed."""
+        await self._drop_buffers(tile_ids)
         n = 0
         for tid in tile_ids:
             if tid in self.recons:
@@ -844,7 +685,7 @@ class TileWorker(Actor):
         blend_kernel = self._blend_kernel
         kernel_cache = self._kernel_cache
         t_off = self.plan.timepoint
-        leading_c = self.plan.leading_shape[1:]
+        out_c_idx = self.plan.output_channel_index
         output_path = self.plan.output_path
 
         def _blend_and_write() -> dict:
@@ -857,13 +698,14 @@ class TileWorker(Actor):
 
             t_write_start = time.monotonic()
             out_arr = zarr.open_group(output_path, mode="a")["0"]
-            # T axis is carried by an explicit slice(t_off, t_off + 1); the
-            # remaining leading dims use leading_shape[1:] and spatial dims
-            # come from the pre-built geometry. This convention is pinned
-            # CPU-side by test_core.test_timepoint_write_region_carries_t_axis.
+            # T axis carried by an explicit slice(t_off, t_off + 1); C axis by
+            # this channel's slot slice(out_c_idx, out_c_idx + 1) in the (possibly
+            # multi-channel) shared output; spatial dims from the pre-built
+            # geometry. Pinned CPU-side by
+            # test_core.test_timepoint_write_region_carries_t_axis.
             write_region = (
                 (slice(t_off, t_off + 1),)
-                + tuple(slice(0, n) for n in leading_c)
+                + (slice(out_c_idx, out_c_idx + 1),)
                 + tuple(slice(lo, hi) for lo, hi in out_spatial)
             )
             out_arr[write_region] = result[None]

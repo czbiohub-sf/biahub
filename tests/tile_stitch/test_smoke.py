@@ -47,10 +47,14 @@ def test_config_yaml_parses_with_monarch_defaults(tmp_path: Path):
     assert run.monarch.recon_batch == 4
     assert run.monarch.prefetch_depth == 6
     assert run.monarch.device is Device.CUDA
-    assert run.monarch.compile_mode is CompileMode.REDUCE_OVERHEAD
+    # Default compile_mode is NONE (eager): reliable across GPU counts/archs;
+    # reduce-overhead trips CUDA-graph TLS on >2 GPUs and JIT-stalls on Blackwell.
+    assert run.monarch.compile_mode is CompileMode.NONE
+    # Recon store dtype defaults to float32 (lossless); float16 is opt-in.
+    assert run.monarch.recon_dtype == "float32"
     # StrEnum members are plain strings on the wire / in comparisons.
     assert run.monarch.device == "cuda"
-    assert run.monarch.compile_mode == "reduce-overhead"
+    assert run.monarch.compile_mode == "none"
 
 
 def test_config_monarch_overrides(tmp_path: Path):
@@ -63,21 +67,11 @@ def test_config_monarch_overrides(tmp_path: Path):
 
 
 def test_default_config_is_valid_and_quiet():
-    # resident=False, recon_batch=4, prefetch_depth=6 trips neither validator.
+    # recon_batch=4, prefetch_depth=6 trips no validator.
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         cfg = MonarchConfig()
     assert cfg.recon_batch == 4
-
-
-def test_resident_volume_with_batch_rejected():
-    with pytest.raises(ValueError, match="resident_volume=True is incompatible"):
-        MonarchConfig(resident_volume=True, recon_batch=2)
-
-
-def test_resident_volume_with_batch1_ok():
-    cfg = MonarchConfig(resident_volume=True, recon_batch=1)
-    assert cfg.resident_volume is True
 
 
 def test_prefetch_below_batch_warns():
