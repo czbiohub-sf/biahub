@@ -122,3 +122,6 @@ ENV/
 # mypy
 .mypy_cache/
 .dmypy.json
+
+# local planning/scratch notes — not tracked
+.planning/

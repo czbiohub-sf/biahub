@@ -105,6 +105,11 @@ COMMANDS = [
         "help": "Stitch positions in wells of a zarr store",
     },
     {
+        "name": "tile-stitch",
+        "import_path": "biahub.tile_stitch.cli.tile_stitch_cli",
+        "help": "Tiled reconstruction over a dask cluster (CPU, optional GPU via --gpu)",
+    },
+    {
         "name": "concatenate",
         "import_path": "biahub.concatenate.concatenate_cli",
         "help": "Concatenate datasets (with optional cropping)",

@@ -37,7 +37,8 @@ dependencies = [
   "antspyx",
   "pystackreg",
   "imageio-ffmpeg",
-  "dask[array]",
+  "dask[array,distributed]",
+  "dask-jobqueue>=0.9",
   "toml",
   "scikit-learn",
   "numba>=0.58.0",
@@ -47,6 +48,14 @@ dependencies = [
 
 [project.optional-dependencies]
 segment = ["cellpose"]
+
+# Tile-stitch GPU execution path — the Monarch actor-mesh backend.
+# torch (CUDA) is already a base dep; Monarch adds the actor mesh + RDMA.
+# (The former Dask-cuda/cupy/rmm/ucxx stack and the nvmath cuFFTMp
+# experiment were removed when Monarch became the only backend.)
+tilestitch-gpu = [
+  "torchmonarch>=0.1.0",
+]
 
 track = ["ultrack>=0.7"]
 
@@ -82,6 +91,13 @@ biahub = "biahub.cli.main:cli"
 # when resolving build-system requirements such as iohub's hatchling /
 # uv-dynamic-versioning chain, which pulls in packaging>=24.2.
 index-strategy = "unsafe-best-match"
+
+[tool.uv.sources]
+# waveorder's tile-stitch engine (waveorder.tile_stitch + waveorder.api.tile_stitch)
+# is merged into waveorder main but not yet in a PyPI release, so pin the merge
+# commit. Drop this source and bump the version constraint above once a release
+# ships it.
+waveorder = { git = "https://github.com/mehta-lab/waveorder.git", rev = "f377a43" }
 
 [tool.hatch.metadata]
 allow-direct-references = true
@@ -136,3 +152,6 @@ docstring-code-format = true
 [tool.pytest.ini_options]
 addopts = ["--import-mode=importlib"]
 testpaths = ["tests"]
+markers = [
+    "gpu: tests that require a CUDA device (skipped on CPU-only CI runners)",
+]
