@@ -83,6 +83,12 @@ biahub = "biahub.cli.main:cli"
 # uv-dynamic-versioning chain, which pulls in packaging>=24.2.
 index-strategy = "unsafe-best-match"
 
+[tool.uv.sources]
+# Pin iohub to the branch that stores per-step provenance as top-level
+# zattrs keys (e.g. biahub-flat_field, biahub-deskew). Revert to the PyPI
+# release once those changes are merged and published.
+iohub = { git = "https://github.com/czbiohub-sf/iohub.git", branch = "feat/flat-extra-metadata" }
+
 [tool.hatch.metadata]
 allow-direct-references = true
 

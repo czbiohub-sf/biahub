@@ -673,7 +673,7 @@ def deskew(
     settings = _load_deskew_settings(config_filepath, input_position_dirpaths[0])
     input_shape, _ = _init_output_plate(input_position_dirpaths, output_dirpath, settings)
 
-    num_cpus, gb_ram = estimate_resources(shape=input_shape, ram_multiplier=32, max_num_cpus=8)
+    num_cpus, gb_ram = estimate_resources(shape=input_shape, ram_multiplier=8, max_num_cpus=16)
     click.echo(f"RESOURCES:{num_cpus} {num_cpus * gb_ram}")
 
     if init_only:
@@ -689,7 +689,7 @@ def deskew(
         "average_n_slices": settings.average_n_slices,
         "overhang_fill": settings.overhang_fill,
         "device": settings.device,
-        "extra_metadata": {"deskew": settings.model_dump()},
+        "extra_metadata": {"biahub-deskew": settings.model_dump()},
     }
 
     slurm_args = {

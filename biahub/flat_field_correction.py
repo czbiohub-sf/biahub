@@ -7,11 +7,13 @@ import submitit
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate, process_single_position
 
+from biahub.cli import utils
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
+    cluster,
     config_filepath,
+    init_only,
     input_position_dirpaths,
-    local,
     monitor,
     output_dirpath,
     sbatch_filepath,
@@ -19,7 +21,6 @@ from biahub.cli.parsing import (
 )
 from biahub.cli.utils import (
     estimate_resources,
-    get_output_paths,
     get_submitit_cluster,
     resolve_ome_zarr_version,
     yaml_to_model,
@@ -63,46 +64,11 @@ def _czyx_flat_field(czyx_data: np.ndarray, target_indices: list[int]) -> np.nda
     return out
 
 
-def flat_field(
-    input_position_dirpaths: list[str],
-    config_filepath: Path,
-    output_dirpath: str,
-    sbatch_filepath: str = None,
-    local: bool = False,
-    monitor: bool = True,
-):
-    """Apply flat field correction across T and selected C axes.
-
-    Parameters
-    ----------
-    input_position_dirpaths : List[str]
-        Paths to the input position directories.
-    config_filepath : Path
-        Path to the configuration file.
-    output_dirpath : str
-        Path to the output directory.
-    sbatch_filepath : str, optional
-        Path to the SLURM batch file.
-    local : bool, optional
-        If True, run locally instead of submitting to SLURM.
-    monitor : bool, optional
-        If True, monitor the submitted jobs.
-    """
-    output_dirpath = Path(output_dirpath)
-    slurm_out_path = output_dirpath.parent / "slurm_output"
-
-    output_position_paths = get_output_paths(input_position_dirpaths, output_dirpath)
-
-    # Load settings
-    settings = yaml_to_model(config_filepath, FlatFieldCorrectionSettings)
-
-    # Load the first position to infer dataset information
-    with open_ome_zarr(str(input_position_dirpaths[0]), mode="r") as input_dataset:
-        all_channel_names = input_dataset.channel_names
-        T, C, Z, Y, X = input_dataset.data.shape
-        scale = input_dataset.scale
-
-    # Determine which channels to flat field correct
+def _resolve_target_indices(
+    settings: FlatFieldCorrectionSettings,
+    all_channel_names: list[str],
+) -> list[int]:
+    """Resolve which channel indices to flat-field correct."""
     if settings.channel_names is None:
         target_channel_names = all_channel_names
         click.echo(f"Flat fielding ALL channels: {all_channel_names}")
@@ -121,35 +87,95 @@ def flat_field(
         raise click.ClickException(
             "Must specify either 'channel_names' or set channel_names to null in config."
         )
+    return [all_channel_names.index(name) for name in target_channel_names]
 
-    target_indices = [all_channel_names.index(name) for name in target_channel_names]
 
-    # Create output zarr with all channels
+def _init_output_plate(
+    input_position_dirpaths: list[Path],
+    output_dirpath: Path,
+    settings: FlatFieldCorrectionSettings,
+) -> tuple[tuple[int, int, int, int, int], list[str]]:
+    """Create the empty flat-field output plate.
+
+    Returns the input (T, C, Z, Y, X) shape and channel names.
+    """
+    with open_ome_zarr(str(input_position_dirpaths[0]), mode="r") as input_dataset:
+        all_channel_names = input_dataset.channel_names
+        input_shape = input_dataset.data.shape
+        scale = input_dataset.scale
+
+    T, C, Z, Y, X = input_shape
+
+    input_plate = Path(input_position_dirpaths[0]).parents[2]
     create_empty_plate(
         store_path=output_dirpath,
-        position_keys=[p.parts[-3:] for p in input_position_dirpaths],
+        position_keys=[Path(p).parts[-3:] for p in input_position_dirpaths],
         channel_names=all_channel_names,
         shape=(T, C, Z, Y, X),
-        chunks=None,
         scale=scale,
         version=resolve_ome_zarr_version(
             input_position_dirpaths[0], settings.output_ome_zarr_version
         ),
         dtype=np.float32,
+        metadata_sources=input_plate,
     )
+
+    return (T, C, Z, Y, X), all_channel_names
+
+
+def flat_field(
+    input_position_dirpaths: list[str],
+    config_filepath: Path,
+    output_dirpath: str,
+    sbatch_filepath: str = None,
+    cluster: str = "slurm",
+    monitor: bool = True,
+    init_only: bool = False,
+):
+    """Apply flat field correction across T and selected C axes.
+
+    Parameters
+    ----------
+    input_position_dirpaths : list[str]
+        Paths to the input position directories.
+    config_filepath : Path
+        Path to the configuration file.
+    output_dirpath : str
+        Path to the output directory.
+    sbatch_filepath : str, optional
+        Path to the SLURM batch file.
+    cluster : str, optional
+        Execution cluster: 'slurm' submits to a Slurm cluster, 'local' runs jobs as
+        subprocesses on this machine, 'debug' runs jobs in-process in the foreground.
+    monitor : bool, optional
+        If True, monitor the submitted jobs.
+    init_only : bool, optional
+        Only initialize the output store and exit; skip per-position processing.
+    """
+    output_dirpath = Path(output_dirpath)
+    slurm_out_path = output_dirpath.parent / "slurm_output"
+
+    settings = yaml_to_model(config_filepath, FlatFieldCorrectionSettings)
+    input_shape, all_channel_names = _init_output_plate(
+        input_position_dirpaths, output_dirpath, settings
+    )
+
+    T, C, Z, Y, X = input_shape
+    num_cpus, gb_ram = estimate_resources(shape=input_shape, ram_multiplier=8, max_num_cpus=16)
+    click.echo(f"RESOURCES:{num_cpus} {num_cpus * gb_ram}")
+
+    if init_only:
+        click.echo(f"Initialized {output_dirpath} ({len(input_position_dirpaths)} positions)")
+        return
+
+    output_position_paths = utils.get_output_paths(input_position_dirpaths, output_dirpath)
+    target_indices = _resolve_target_indices(settings, all_channel_names)
 
     flat_field_args = {
         "target_indices": target_indices,
-        "extra_metadata": {"flat_field_correction": settings.model_dump()},
+        "extra_metadata": {"biahub-flat_field": settings.model_dump()},
     }
 
-    # Estimate resources
-    num_cpus, gb_ram = estimate_resources(
-        shape=(T, C, Z, Y, X),
-        ram_multiplier=5,
-    )
-
-    # Prepare SLURM arguments
     slurm_args = {
         "slurm_job_name": "flat-field",
         "slurm_mem_per_cpu": f"{gb_ram}G",
@@ -159,19 +185,15 @@ def flat_field(
         "slurm_partition": "cpu",
     }
 
-    # Override defaults if sbatch_filepath is provided
     if sbatch_filepath:
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
-    # Run locally or submit to SLURM
-    cluster = get_submitit_cluster(local)
-
-    # Prepare and submit jobs (one per position)
-    click.echo(f"Preparing jobs: {slurm_args}")
-    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
+    resolved_cluster = get_submitit_cluster(cluster=cluster)
+    click.echo(f"Preparing jobs on cluster='{resolved_cluster}': {slurm_args}")
+    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=resolved_cluster)
     executor.update_parameters(**slurm_args)
 
-    click.echo("Submitting SLURM jobs...")
+    click.echo("Submitting jobs...")
     jobs = []
     with submitit.helpers.clean_env(), executor.batch():
         for input_position_path, output_position_path in zip(
@@ -191,9 +213,18 @@ def flat_field(
     job_ids = [job.job_id for job in jobs]
     slurm_out_path.mkdir(exist_ok=True)
     log_path = slurm_out_path / "submitit_jobs_ids.log"
-    log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
+
+    # submitit's DebugExecutor is lazy: .submit() wraps the callable in a
+    # DebugJob but execution only happens when .wait()/.done()/.result() is
+    # called. Run each one in the foreground and stream progress; monitor's
+    # async polling UI is pointless against synchronous in-process jobs.
+    if resolved_cluster == "debug":
+        for job, path in zip(jobs, input_position_dirpaths, strict=True):
+            job.wait()
+            click.echo(f"Flat-field complete: {path}")
+        return
 
     if monitor:
         monitor_jobs(jobs, input_position_dirpaths)
@@ -204,30 +235,40 @@ def flat_field(
 @config_filepath()
 @output_dirpath()
 @sbatch_filepath()
-@local()
+@cluster()
 @monitor()
+@init_only()
 def flat_field_correction_cli(
     input_position_dirpaths: list[str],
     config_filepath: Path,
     output_dirpath: str,
     sbatch_filepath: str = None,
-    local: bool = False,
-    monitor: bool = True,
+    cluster: str = "slurm",
+    monitor: bool = False,
+    init_only: bool = False,
 ):
-    """Apply flat field correction across T and selected C axes.
+    r"""Apply flat field correction across T and selected C axes.
 
-    >>> biahub flat-field \
-        -i ./input.zarr/*/*/* \
-        -c ./flat_field_params.yml \
-        -o ./output.zarr
+    \b
+    SLURM fan-out of positions across a whole plate:
+    >>> biahub flat-field -i ./input.zarr/*/*/* -c ./flat_field_params.yml -o ./output.zarr
+
+    \b
+    Initialize the output plate only (e.g. before running per-position Nextflow workers):
+    >>> biahub flat-field --init -i ./input.zarr/*/*/* -c ./flat_field_params.yml -o ./output.zarr
+
+    \b
+    In-process run of a single position (e.g. from a Nextflow worker):
+    >>> biahub flat-field --cluster debug -i ./input.zarr/A/1/0 -c ./flat_field_params.yml -o ./output.zarr
     """
     flat_field(
         input_position_dirpaths=input_position_dirpaths,
         config_filepath=config_filepath,
         output_dirpath=output_dirpath,
         sbatch_filepath=sbatch_filepath,
-        local=local,
+        cluster=cluster,
         monitor=monitor,
+        init_only=init_only,
     )
 
 

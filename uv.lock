@@ -348,7 +348,7 @@ requires-dist = [
     { name = "dask", extras = ["array"] },
     { name = "humanize" },
     { name = "imageio-ffmpeg" },
-    { name = "iohub", specifier = ">=0.3.7" },
+    { name = "iohub", git = "https://github.com/czbiohub-sf/iohub.git?branch=feat%2Fflat-extra-metadata" },
     { name = "largestinteriorrectangle" },
     { name = "llvmlite", specifier = ">=0.41.0" },
     { name = "markdown" },
@@ -1669,8 +1669,8 @@ wheels = [
 
 [[package]]
 name = "iohub"
-version = "0.3.7"
-source = { registry = "https://pypi.org/simple" }
+version = "0.3.8.dev7+46eb69c"
+source = { git = "https://github.com/czbiohub-sf/iohub.git?branch=feat%2Fflat-extra-metadata#46eb69c9d985f6cca99961aef1c6cede6ad47187" }
 dependencies = [
     { name = "blosc2" },
     { name = "dask", extra = ["array"] },
@@ -1686,10 +1686,6 @@ dependencies = [
     { name = "xarray" },
     { name = "zarr" },
     { name = "zarrs" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/78/2d/964f05273e5d13e10673cc08ceaf4634ccf6df3c4a70ffc9ceb80f3bfba2/iohub-0.3.7.tar.gz", hash = "sha256:7b81f89776dbb0a9efdf02ddfb44ac627881056d1a688cf494c25cb22f05733a", size = 312626, upload-time = "2026-06-04T21:59:27.029Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/e3/f7/a3c9bc58931eee0c405ae3dcb1c1ec6a8dd5a5260f56150de776ed824f10/iohub-0.3.7-py3-none-any.whl", hash = "sha256:324e2f529d177754ce2a5417941a7dfed75de7b52e912dca7d5a52dbaf4fc839", size = 96173, upload-time = "2026-06-04T21:59:25.683Z" },
 ]
 
 [[package]]
