@@ -56,7 +56,13 @@ process compute_transfer_function {
     // also covers fluorescence (x32) and combined birefringence+phase (x36,
     // which additionally downsamples in XY).  The factors only blow past 1 for
     // badly-undersampled data, which is not reconstructable phase to begin with.
-    cpus 1
+    //
+    // The TF computation is torch-CPU-FFT-bound (large 3D FFTs over the
+    // upsampled volume in optics.compute_weak_object_transfer_function_3D) and
+    // is not thread-pinned in the compute-tf path, so torch parallelizes the
+    // FFTs across the granted cores.  8 sits in the sweet spot before FFT
+    // thread-scaling tails off.
+    cpus 8
     memory '128 GB'
     time '30m'
 
