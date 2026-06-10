@@ -1669,8 +1669,8 @@ wheels = [
 
 [[package]]
 name = "iohub"
-version = "0.3.8.dev4+87cfd9e"
-source = { git = "https://github.com/czbiohub-sf/iohub.git?branch=feat%2Fflat-extra-metadata#87cfd9e7eb07c0ca6fd142f730015ab52f1b9813" }
+version = "0.3.8.dev7+46eb69c"
+source = { git = "https://github.com/czbiohub-sf/iohub.git?branch=feat%2Fflat-extra-metadata#46eb69c9d985f6cca99961aef1c6cede6ad47187" }
 dependencies = [
     { name = "blosc2" },
     { name = "dask", extra = ["array"] },
