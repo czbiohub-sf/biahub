@@ -112,7 +112,6 @@ def _init_output_plate(
         position_keys=[Path(p).parts[-3:] for p in input_position_dirpaths],
         channel_names=all_channel_names,
         shape=(T, C, Z, Y, X),
-        chunks=None,
         scale=scale,
         version=resolve_ome_zarr_version(
             input_position_dirpaths[0], settings.output_ome_zarr_version
@@ -162,7 +161,7 @@ def flat_field(
     )
 
     T, C, Z, Y, X = input_shape
-    num_cpus, gb_ram = estimate_resources(shape=input_shape, ram_multiplier=5)
+    num_cpus, gb_ram = estimate_resources(shape=input_shape, ram_multiplier=8, max_num_cpus=16)
     click.echo(f"RESOURCES:{num_cpus} {num_cpus * gb_ram}")
 
     if init_only:
@@ -174,7 +173,7 @@ def flat_field(
 
     flat_field_args = {
         "target_indices": target_indices,
-        "extra_metadata": {"flat_field_correction": settings.model_dump()},
+        "extra_metadata": {"biahub-flat_field": settings.model_dump()},
     }
 
     slurm_args = {
@@ -214,7 +213,6 @@ def flat_field(
     job_ids = [job.job_id for job in jobs]
     slurm_out_path.mkdir(exist_ok=True)
     log_path = slurm_out_path / "submitit_jobs_ids.log"
-    log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
 
