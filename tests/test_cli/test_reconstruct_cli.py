@@ -78,7 +78,6 @@ def test_apply_inv_tf_cli_init_only(tmp_path, reconstruct_plate, reconstruct_con
     assert result.exit_code == 0, result.output
     assert output_path.exists()
     assert "RESOURCES:" in result.output
-    assert "TF_RESOURCES:" in result.output
 
     resolved = tmp_path / "reconstruct_resolved.yml"
     assert resolved.exists()

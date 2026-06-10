@@ -7,8 +7,8 @@
 //
 // Three-phase pattern:
 // 1. init_apply_inv_tf: creates the output plate, resolves pixel sizes from
-//    zarr metadata into reconstruct_resolved.yml, emits RESOURCES: and TF_RESOURCES:
-// 2. compute_transfer_function: one-shot TF computation using TF_RESOURCES
+//    zarr metadata into reconstruct_resolved.yml, emits RESOURCES:
+// 2. compute_transfer_function: one-shot TF computation using hardcoded resources
 // 3. run_apply_inv_tf: per-position inverse TF application using RESOURCES
 //
 // run_apply_inv_tf uses `--cluster debug` so that submitit's DebugExecutor runs
@@ -44,12 +44,24 @@ process init_apply_inv_tf {
 process compute_transfer_function {
     label 'cpu'
     clusterOptions { slurm_logs('reconstruct') }
-    cpus { meta.cpus }
-    memory { "${meta.mem_gb} GB" }
-    time '2h'
+    // Hardcoded resources for the one-shot transfer-function computation.
+    //
+    // waveorder upsamples the volume to Nyquist internally before building the
+    // TF (waveorder/models/phase_thick_3d.py::calculate_transfer_function); the
+    // peak footprint scales with that upsampled volume, not the input volume.
+    // For properly-sampled label-free data the Nyquist upsampling factor is 1
+    // in every axis, so even for the largest volume we expect
+    // (~2048 x 2048 x 128 = 2 GB float32) the phase TF needs ~64 GB (2 GB x
+    // waveorder's x32 Fourier multiplier).  128 GB is a 2x margin over that and
+    // also covers fluorescence (x32) and combined birefringence+phase (x36,
+    // which additionally downsamples in XY).  The factors only blow past 1 for
+    // badly-undersampled data, which is not reconstructable phase to begin with.
+    cpus 1
+    memory '128 GB'
+    time '30m'
 
     input:
-    val meta
+    val trigger
     val input_zarr
     val tf_zarr
     val resolved_config
@@ -118,10 +130,12 @@ workflow reconstruct_wf {
     def resolved_config = "${output_dir}/reconstruct_resolved.yml"
 
     init_out = init_apply_inv_tf(input_zarr, output_zarr, config, prev_done.map { 'done' })
-    tf_resources = init_out.map { parse_resources(it, 'TF_RESOURCES:') }
     run_resources = init_out.map { parse_resources(it) }
+    // compute_transfer_function uses hardcoded resources (see process body),
+    // but must still wait for init to write reconstruct_resolved.yml.
+    init_done = init_out.map { 'done' }
 
-    tf_done = compute_transfer_function(tf_resources, input_zarr, tf_zarr, resolved_config)
+    tf_done = compute_transfer_function(init_done, input_zarr, tf_zarr, resolved_config)
 
     pos_meta = positions
         .flatMap { it }

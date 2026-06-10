@@ -1,5 +1,4 @@
 import logging
-import math
 
 from pathlib import Path
 
@@ -9,7 +8,6 @@ import yaml
 
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate
-from waveorder import sampling
 from waveorder.cli.apply_inverse_transfer_function import (
     apply_inverse_transfer_function_single_position,
     get_reconstruction_output_metadata,
@@ -89,30 +87,6 @@ def _resolve_config(
 
     click.echo(f"Resolved config written to {resolved_config}")
     return resolved_config
-
-
-def _upsampled_zyx(
-    settings: ReconstructionSettings,
-    zyx_shape: tuple[int, int, int],
-) -> tuple[int, int, int]:
-    """Return the Nyquist-upsampled ZYX shape used during TF computation."""
-    Z, Y, X = zyx_shape
-    if settings.phase is not None:
-        tf = settings.phase.transfer_function
-        trans_nyq = sampling.transverse_nyquist(
-            tf.wavelength_illumination,
-            tf.numerical_aperture_illumination,
-            tf.numerical_aperture_detection,
-        )
-        axial_nyq = sampling.axial_nyquist(
-            tf.wavelength_illumination,
-            tf.numerical_aperture_detection,
-            tf.index_of_refraction_media,
-        )
-        yx_factor = math.ceil(tf.yx_pixel_size / trans_nyq)
-        z_factor = math.ceil(tf.z_pixel_size / axial_nyq)
-        Z, Y, X = Z * z_factor, Y * yx_factor, X * yx_factor
-    return Z, Y, X
 
 
 def _init_output_plate(
@@ -196,15 +170,10 @@ def apply_inverse_transfer_function(
         input_shape, _, resolved_config = _init_output_plate(
             input_position_dirpaths, output_dirpath, config_filepath
         )
-        T, C, Z, Y, X = input_shape
         settings = yaml_to_model(resolved_config, ReconstructionSettings)
 
         num_cpus, mem_per_cpu = wo_estimate_resources(list(input_shape), settings, 1)
         click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
-
-        uZ, uY, uX = _upsampled_zyx(settings, (Z, Y, X))
-        tf_cpus, tf_mem = wo_estimate_resources([1, 1, uZ, uY, uX], settings, 1)
-        click.echo(f"TF_RESOURCES:{tf_cpus} {tf_cpus * tf_mem}")
         return
 
     output_metadata = get_reconstruction_output_metadata(
