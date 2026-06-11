@@ -32,7 +32,7 @@ dependencies = [
   "submitit",
   "torch",
   "tqdm",
-  "waveorder>=0.3",
+  "waveorder>=3.0.4",
   "largestinteriorrectangle",
   "antspyx",
   "pystackreg",

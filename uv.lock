@@ -377,7 +377,7 @@ requires-dist = [
     { name = "twine", marker = "extra == 'build'" },
     { name = "ultrack", marker = "extra == 'all'", specifier = ">=0.7" },
     { name = "ultrack", marker = "extra == 'track'", specifier = ">=0.7" },
-    { name = "waveorder", specifier = ">=0.3" },
+    { name = "waveorder", specifier = ">=3.0.4" },
     { name = "zensical", marker = "extra == 'doc'", specifier = ">=0.0.32" },
 ]
 provides-extras = ["all", "build", "doc", "gui", "segment", "stain", "track"]
@@ -5128,7 +5128,7 @@ wheels = [
 
 [[package]]
 name = "waveorder"
-version = "3.0.3"
+version = "3.0.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
@@ -5149,9 +5149,8 @@ dependencies = [
     { name = "torch" },
     { name = "wget" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/71/db/5df44daff246de65fcf7a2890e5ccab382e4396a3b2aa829442a3a66cd29/waveorder-3.0.3.tar.gz", hash = "sha256:aa962c50974fdab018a37e6a1ef6c7883100c9012ad15f3a02362d19b0aee57f", size = 67110504, upload-time = "2026-04-28T23:17:15.523Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f6/08/18bef9d3863e26850093ecaa02469eeb98aeb6f5726ee574938ced8deccd/waveorder-3.0.3-py3-none-any.whl", hash = "sha256:cf2a7c681ced1586a57d4d5e26c46c76aa2d873fabf3c5fbe30c7534782af2ee", size = 286417, upload-time = "2026-04-28T23:17:11.437Z" },
+    { url = "https://files.pythonhosted.org/packages/1a/bc/3f3657bdf1461fcaea05958278bfe53c2f2f3c0084e1a51e5517150c96da/waveorder-3.0.4-py3-none-any.whl", hash = "sha256:6d075b5eeeed898f9f6cf5e00b4043b12e4fd7085e25b35cbbc769b1312c6e05", size = 286705, upload-time = "2026-04-29T23:03:00.171Z" },
 ]
 
 [[package]]

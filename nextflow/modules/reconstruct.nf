@@ -56,10 +56,7 @@ process compute_transfer_function {
     // For properly-sampled label-free data the Nyquist upsampling factor is 1
     // in every axis, so even for the largest volume we expect
     // (~2048 x 2048 x 128 = 2 GB float32) the phase TF needs ~64 GB (2 GB x
-    // waveorder's x32 Fourier multiplier).  128 GB is a 2x margin over that and
-    // also covers fluorescence (x32) and combined birefringence+phase (x36,
-    // which additionally downsamples in XY).  The factors only blow past 1 for
-    // badly-undersampled data, which is not reconstructable phase to begin with.
+    // waveorder's x32 Fourier multiplier).
     //
     // The TF computation is torch-CPU-FFT-bound (large 3D FFTs over the
     // upsampled volume in optics.compute_weak_object_transfer_function_3D) and
@@ -67,7 +64,7 @@ process compute_transfer_function {
     // FFTs across the granted cores.  8 sits in the sweet spot before FFT
     // thread-scaling tails off.
     cpus 8
-    memory '128 GB'
+    memory '64 GB'
     time '30m'
 
     input:
