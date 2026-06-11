@@ -17,6 +17,8 @@ def reconstruct_config(tmp_path):
         "phase": {
             "transfer_function": {
                 "wavelength_illumination": 0.450,
+                "yx_pixel_size": 0.1,
+                "z_pixel_size": 0.25,
                 "z_padding": 0,
                 "index_of_refraction_media": 1.3,
                 "numerical_aperture_detection": 1.2,
@@ -79,14 +81,6 @@ def test_apply_inv_tf_cli_init_only(tmp_path, reconstruct_plate, reconstruct_con
     assert output_path.exists()
     assert "RESOURCES:" in result.output
 
-    resolved = tmp_path / "reconstruct_resolved.yml"
-    assert resolved.exists()
-    with open(resolved) as f:
-        cfg = yaml.safe_load(f)
-    tf_cfg = cfg["phase"]["transfer_function"]
-    assert tf_cfg["yx_pixel_size"] is not None
-    assert tf_cfg["z_pixel_size"] is not None
-
 
 def test_apply_inv_tf_cli_debug_single_position(
     tmp_path, reconstruct_plate, reconstruct_config
@@ -112,8 +106,6 @@ def test_apply_inv_tf_cli_debug_single_position(
     )
     assert result.exit_code == 0, result.output
 
-    resolved_config = tmp_path / "reconstruct_resolved.yml"
-
     # Step 2: compute TF (using the standalone compute-tf command)
     result = runner.invoke(
         cli,
@@ -122,7 +114,7 @@ def test_apply_inv_tf_cli_debug_single_position(
             "-i",
             str(reconstruct_plate) + "/A/1/0",
             "-c",
-            str(resolved_config),
+            str(reconstruct_config),
             "-o",
             str(tf_path),
         ],
@@ -142,7 +134,7 @@ def test_apply_inv_tf_cli_debug_single_position(
             "-t",
             str(tf_path),
             "-c",
-            str(resolved_config),
+            str(reconstruct_config),
             "-o",
             str(output_path),
         ],

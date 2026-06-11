@@ -1,10 +1,7 @@
-import logging
-
 from pathlib import Path
 
 import click
 import submitit
-import yaml
 
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate
@@ -31,85 +28,34 @@ from biahub.cli.utils import (
     yaml_to_model,
 )
 
-logger = logging.getLogger(__name__)
-
-
-def _resolve_config(
-    config_filepath: Path,
-    reference_position_path: Path,
-    output_dirpath: Path,
-) -> Path:
-    """Resolve pixel sizes from zarr metadata into the reconstruction config.
-
-    Reads voxel sizes from the input zarr scale metadata and injects them
-    into the config's transfer_function sections when absent.  Writes the
-    resolved config next to the output zarr as ``reconstruct_resolved.yml``.
-
-    Returns the path to the resolved config.
-    """
-    with open(config_filepath) as f:
-        cfg = yaml.safe_load(f)
-
-    with open_ome_zarr(str(reference_position_path), mode="r") as ds:
-        yx_pixel_size = float(ds.scale[-1])
-        z_pixel_size = float(ds.scale[-3])
-
-    resolved_any = False
-    for section in ("phase", "birefringence", "fluorescence"):
-        tf = (cfg.get(section) or {}).get("transfer_function")
-        if tf is not None:
-            if "yx_pixel_size" not in tf or tf["yx_pixel_size"] is None:
-                tf["yx_pixel_size"] = yx_pixel_size
-                resolved_any = True
-                logger.warning(
-                    "%s.transfer_function.yx_pixel_size not set in config; "
-                    "resolved %.4f from input zarr metadata",
-                    section,
-                    yx_pixel_size,
-                )
-            if "z_pixel_size" not in tf or tf["z_pixel_size"] is None:
-                tf["z_pixel_size"] = z_pixel_size
-                resolved_any = True
-                logger.warning(
-                    "%s.transfer_function.z_pixel_size not set in config; "
-                    "resolved %.4f from input zarr metadata",
-                    section,
-                    z_pixel_size,
-                )
-
-    if not resolved_any:
-        click.echo("Pixel sizes already present in config; no resolution needed")
-
-    resolved_config = output_dirpath.parent / "reconstruct_resolved.yml"
-    resolved_config.parent.mkdir(parents=True, exist_ok=True)
-    with open(resolved_config, "w") as f:
-        yaml.safe_dump(cfg, f, default_flow_style=False, sort_keys=False)
-
-    click.echo(f"Resolved config written to {resolved_config}")
-    return resolved_config
-
 
 def _init_output_plate(
     input_position_dirpaths: list[Path],
     output_dirpath: Path,
     config_filepath: Path,
-) -> tuple[tuple[int, int, int, int, int], list[str], Path]:
+    settings: ReconstructionSettings,
+) -> tuple[tuple[int, int, int, int, int], list[str]]:
     """Create the empty reconstruction output plate.
 
-    Resolves pixel sizes from zarr metadata, creates the output store, and
-    copies per-position metadata from the input plate.
+    ``settings`` is the validated ReconstructionSettings loaded by the caller.
+    Output shape/scale/version/channel names are derived by waveorder from the
+    config, and per-position metadata is copied from the input plate.
 
-    Returns (input_shape, channel_names, resolved_config_path).
+    create_empty_plate is idempotent: re-running with the same positions is a
+    no-op, and new positions get appended. Safe to call from both the init
+    orchestrator and from per-position runs.
+
+    Returns the input (T, C, Z, Y, X) shape and output channel names.
     """
-    resolved_config = _resolve_config(
-        config_filepath, input_position_dirpaths[0], output_dirpath
-    )
-
     with open_ome_zarr(str(input_position_dirpaths[0]), mode="r") as ds:
         input_shape = ds.data.shape
 
+    # Pixel sizes come from the config (the source of truth). waveorder's
+    # get_reconstruction_output_metadata already emits a PixelSizeMismatchWarning
+    # when the config pixel sizes disagree (>5%) with the input zarr scale, so we
+    # do not warn again here.
     output_metadata = get_reconstruction_output_metadata(
-        input_position_dirpaths[0], resolved_config
+        input_position_dirpaths[0], config_filepath
     )
     output_metadata.pop("plate_metadata", None)
     channel_names = output_metadata["channel_names"]
@@ -122,8 +68,7 @@ def _init_output_plate(
         metadata_sources=input_plate,
     )
 
-    click.echo(f"Created {output_dirpath} ({len(input_position_dirpaths)} positions)")
-    return input_shape, channel_names, resolved_config
+    return input_shape, channel_names
 
 
 def apply_inverse_transfer_function(
@@ -166,20 +111,20 @@ def apply_inverse_transfer_function(
     output_dirpath = Path(output_dirpath)
     slurm_out_path = output_dirpath.parent / "slurm_output"
 
-    if init_only:
-        input_shape, _, resolved_config = _init_output_plate(
-            input_position_dirpaths, output_dirpath, config_filepath
-        )
-        settings = yaml_to_model(resolved_config, ReconstructionSettings)
-
-        num_cpus, mem_per_cpu = wo_estimate_resources(list(input_shape), settings, 1)
-        click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
-        return
-
-    output_metadata = get_reconstruction_output_metadata(
-        input_position_dirpaths[0], config_filepath
+    settings = yaml_to_model(config_filepath, ReconstructionSettings)
+    input_shape, channel_names = _init_output_plate(
+        input_position_dirpaths, output_dirpath, config_filepath, settings
     )
-    channel_names = output_metadata["channel_names"]
+
+    num_cpus, mem_per_cpu = wo_estimate_resources(list(input_shape), settings, num_processes)
+    click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
+
+    if init_only:
+        click.echo(
+            f"Created {output_dirpath} ({len(input_position_dirpaths)} positions, "
+            f"{len(settings.output_channel_names)} output channels)"
+        )
+        return
 
     resolved_cluster = get_submitit_cluster(local=local, cluster=cluster)
 
@@ -202,26 +147,10 @@ def apply_inverse_transfer_function(
             click.echo(f"Apply-inv-tf done: {'/'.join(pos_path.parts[-3:])}")
         return
 
-    # SLURM / local: create output plate and fan out via submitit
-    output_metadata.pop("plate_metadata", None)
-    input_plate = Path(input_position_dirpaths[0]).parents[2]
-    create_empty_plate(
-        store_path=output_dirpath,
-        position_keys=[p.parts[-3:] for p in input_position_dirpaths],
-        **output_metadata,
-        metadata_sources=input_plate,
-    )
-
-    settings = yaml_to_model(config_filepath, ReconstructionSettings)
-    with open_ome_zarr(str(input_position_dirpaths[0]), mode="r") as ds:
-        input_shape = ds.data.shape
-    num_cpus, gb_ram_per_cpu = wo_estimate_resources(
-        list(input_shape), settings, num_processes
-    )
-
+    # SLURM / local: fan out via submitit (output plate already created above)
     slurm_args = {
         "slurm_job_name": "apply-inverse-transfer-function",
-        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
+        "slurm_mem_per_cpu": f"{mem_per_cpu}G",
         "slurm_cpus_per_task": num_cpus,
         "slurm_time": 360,
         "slurm_partition": "cpu",
