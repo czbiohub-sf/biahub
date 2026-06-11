@@ -76,9 +76,7 @@ def apply_inverse_transfer_function(
     transfer_function_dirpath: Path,
     config_filepath: Path,
     output_dirpath: Path,
-    num_processes: int = 16,
     sbatch_filepath: Path | None = None,
-    local: bool = False,
     cluster: str = "slurm",
     monitor: bool = True,
     init_only: bool = False,
@@ -95,12 +93,8 @@ def apply_inverse_transfer_function(
         Path to YAML reconstruction config.
     output_dirpath : Path
         Path to output zarr.
-    num_processes : int
-        Number of parallel processes per position.
     sbatch_filepath : Path, optional
         SBATCH file with slurm parameter overrides.
-    local : bool
-        Legacy flag — use ``cluster='local'`` instead.
     cluster : str
         Execution cluster: 'slurm', 'local', or 'debug'.
     monitor : bool
@@ -116,7 +110,8 @@ def apply_inverse_transfer_function(
         input_position_dirpaths, output_dirpath, config_filepath, settings
     )
 
-    num_cpus, mem_per_cpu = wo_estimate_resources(list(input_shape), settings, num_processes)
+    max_num_cpus = 16
+    num_cpus, mem_per_cpu = wo_estimate_resources(list(input_shape), settings, max_num_cpus)
     click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
 
     if init_only:
@@ -126,7 +121,7 @@ def apply_inverse_transfer_function(
         )
         return
 
-    resolved_cluster = get_submitit_cluster(local=local, cluster=cluster)
+    resolved_cluster = get_submitit_cluster(cluster=cluster)
 
     # Fan out one job per position via submitit. With --cluster debug, submitit's
     # DebugExecutor runs the work in-process (the slurm_* parameters are ignored):
