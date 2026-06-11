@@ -76,7 +76,7 @@ def apply_inverse_transfer_function(
     transfer_function_dirpath: Path,
     config_filepath: Path,
     output_dirpath: Path,
-    num_processes: int = 1,
+    num_processes: int = 16,
     sbatch_filepath: Path | None = None,
     local: bool = False,
     cluster: str = "slurm",
@@ -137,7 +137,7 @@ def apply_inverse_transfer_function(
         "slurm_job_name": "apply-inverse-transfer-function",
         "slurm_mem_per_cpu": f"{mem_per_cpu}G",
         "slurm_cpus_per_task": num_cpus,
-        "slurm_time": 360,
+        "slurm_time": 60,
         "slurm_partition": "cpu",
     }
 
@@ -159,7 +159,7 @@ def apply_inverse_transfer_function(
                     transfer_function_dirpath,
                     config_filepath,
                     output_dirpath / Path(*pos_path.parts[-3:]),
-                    num_processes,
+                    num_cpus,
                     channel_names,
                 )
             )
