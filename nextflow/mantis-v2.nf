@@ -16,21 +16,23 @@ nextflow.enable.dsl = 2
 //  (in some pipelines the first step converts raw input to zarr). To reorder
 //  steps, change where a step reads from here; the modules stay untouched.
 //
-//  Flat-field → deskew is wired today. The remaining steps (reconstruct,
-//  virtual-stain, track, assemble) arrive with their own PRs — follow the
-//  flat-field → deskew chaining below for the pattern.
+//  Flat-field → deskew → reconstruct is wired today. The remaining steps
+//  (virtual-stain, track, assemble) arrive with their own PRs — follow the
+//  chaining below for the pattern.
 // ---------------------------------------------------------------------------
 
-params.input             = null   // raw source — may not be a zarr store
-params.output            = null   // output directory for all step zarrs
-params.deskew_config     = null
-params.flat_field_config = null
-params.biahub_project    = null
-params.max_positions     = 0
+params.input              = null   // raw source — may not be a zarr store
+params.output             = null   // output directory for all step zarrs
+params.deskew_config      = null
+params.flat_field_config  = null
+params.reconstruct_config = null
+params.biahub_project     = null
+params.max_positions      = 0
 
 include { collect_positions; dataset_name } from './modules/common'
 include { deskew_wf } from './modules/deskew'
 include { flat_field_wf } from './modules/flat_field'
+include { reconstruct_wf } from './modules/reconstruct'
 
 // Output directory layout for the reconstruction steps — single source of
 // truth. Each entry is a subdirectory under params.output where that step
@@ -41,7 +43,7 @@ DIRECTORY_LAYOUT = [
     // convert    : '0-convert',     // first step when raw input isn't zarr
     flat_field    : '0-flatfield',
     deskew        : '1-deskew',
-    // reconstruct   : '2-reconstruct',
+    reconstruct   : '2-reconstruct',
     // virtual_stain : '3-virtual-stain',
     // track         : '4-track',
     // assemble      : '5-assemble',
@@ -49,10 +51,11 @@ DIRECTORY_LAYOUT = [
 
 
 workflow {
-    if (!params.input)             error "Provide --input"
-    if (!params.output)            error "Provide --output"
-    if (!params.flat_field_config) error "Provide --flat_field_config"
-    if (!params.deskew_config)     error "Provide --deskew_config"
+    if (!params.input)              error "Provide --input"
+    if (!params.output)             error "Provide --output"
+    if (!params.flat_field_config)  error "Provide --flat_field_config"
+    if (!params.deskew_config)      error "Provide --deskew_config"
+    if (!params.reconstruct_config) error "Provide --reconstruct_config"
 
     def ds  = dataset_name()
     def out = params.output
@@ -78,4 +81,14 @@ workflow {
     deskew_output = "${out}/${DIRECTORY_LAYOUT.deskew}/${ds}.zarr"
 
     deskew_done = deskew_wf(all_positions, deskew_input, deskew_output, params.deskew_config, deskew_trigger)
+
+    // ----- Reconstruct ------------------------------------------------------
+    // Phase reconstruction runs on the deskewed output and waits on deskew_done.
+    // It reads the deskewed brightfield channel — which channel is reconstructed
+    // is set by `input_channel_names` in the reconstruct config, not here.
+    reconstruct_trigger = deskew_done.done
+    reconstruct_input   = deskew_output
+    reconstruct_output  = "${out}/${DIRECTORY_LAYOUT.reconstruct}/${ds}.zarr"
+
+    reconstruct_done = reconstruct_wf(all_positions, reconstruct_input, reconstruct_output, params.reconstruct_config, reconstruct_trigger)
 }
