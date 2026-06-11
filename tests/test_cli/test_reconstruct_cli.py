@@ -140,7 +140,7 @@ def test_apply_inv_tf_cli_debug_single_position(
         ],
     )
     assert result.exit_code == 0, result.output
-    assert "Apply-inv-tf done:" in result.output
+    assert "Apply-inv-tf complete:" in result.output
 
     with open_ome_zarr(str(output_path / "A" / "1" / "0"), mode="r") as ds:
         data = ds["0"][:]

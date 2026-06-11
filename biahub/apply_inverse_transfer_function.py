@@ -128,26 +128,11 @@ def apply_inverse_transfer_function(
 
     resolved_cluster = get_submitit_cluster(local=local, cluster=cluster)
 
-    # --cluster debug: apply inverse TF per-position in-process.
-    # Nextflow already handles per-position fan-out and resource scheduling,
-    # so the CLI runs work in-process via submitit's DebugExecutor rather than
-    # submitting its own SLURM jobs.  See also:
+    # Fan out one job per position via submitit. With --cluster debug, submitit's
+    # DebugExecutor runs the work in-process (the slurm_* parameters are ignored):
+    # Nextflow already handles per-position fan-out and resource scheduling, so the
+    # CLI must NOT submit its own SLURM jobs. See also:
     # examples/submitit_debug_nextflow/2026-05-27-submitit-debug-nextflow-concerns.md
-    if resolved_cluster == "debug":
-        for pos_path in input_position_dirpaths:
-            output_position = output_dirpath / Path(*pos_path.parts[-3:])
-            apply_inverse_transfer_function_single_position(
-                pos_path,
-                transfer_function_dirpath,
-                config_filepath,
-                output_position,
-                num_processes,
-                channel_names,
-            )
-            click.echo(f"Apply-inv-tf done: {'/'.join(pos_path.parts[-3:])}")
-        return
-
-    # SLURM / local: fan out via submitit (output plate already created above)
     slurm_args = {
         "slurm_job_name": "apply-inverse-transfer-function",
         "slurm_mem_per_cpu": f"{mem_per_cpu}G",
@@ -184,6 +169,16 @@ def apply_inverse_transfer_function(
     log_path = slurm_out_path / "submitit_jobs_ids.log"
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
+
+    # submitit's DebugExecutor is lazy: .submit() wraps the callable in a DebugJob
+    # but execution only happens when .wait()/.done()/.result() is called. Run each
+    # one in the foreground and stream progress; monitor's async polling UI is
+    # pointless against synchronous in-process jobs.
+    if resolved_cluster == "debug":
+        for job, path in zip(jobs, input_position_dirpaths, strict=True):
+            job.wait()
+            click.echo(f"Apply-inv-tf complete: {path}")
+        return
 
     if monitor:
         monitor_jobs(jobs, input_position_dirpaths)
