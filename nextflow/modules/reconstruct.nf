@@ -133,7 +133,7 @@ workflow reconstruct_wf {
 
     main:
     def output_dir = new File(output_zarr).parent
-    def tf_zarr     = "${output_dir}/transfer_function_reconstruct_resolved.zarr"
+    def tf_zarr     = "${output_dir}/transfer_function.zarr"
 
     init_out = init_apply_inv_tf(input_zarr, output_zarr, config, prev_done.map { 'done' })
     run_resources = init_out.map { parse_resources(it) }
