@@ -415,7 +415,7 @@ def virtual_stain_cli(
     output_dirpath: str,
     sbatch_filepath: str = None,
     cluster: str = "slurm",
-    monitor: bool = True,
+    monitor: bool = False,
     init_only: bool = False,
 ):
     """Virtually stain a label-free dataset using a cytoland (VisCy) model.
@@ -424,11 +424,18 @@ def virtual_stain_cli(
     timepoints on a single GPU. The config is a ``viscy predict`` YAML and is
     validated against VisCy's own model/data classes.
 
-    >>> biahub virtual-stain \
-        -i ./input.zarr/*/*/* \
-        -c ./virtual_stain_params.yml \
-        -o ./output.zarr
-    """
+    \b
+    SLURM fan-out of positions across a whole plate:
+    >>> biahub virtual-stain -i ./input.zarr/*/*/* -c ./virtual_stain_params.yml -o ./output.zarr
+
+    \b
+    Initialize the output plate only (e.g. before running per-position Nextflow workers):
+    >>> biahub virtual-stain --init -i ./input.zarr/*/*/* -c ./virtual_stain_params.yml -o ./output.zarr
+
+    \b
+    In-process run of a single position (e.g. from a Nextflow worker):
+    >>> biahub virtual-stain --cluster debug -i ./input.zarr/A/1/0 -c ./virtual_stain_params.yml -o ./output.zarr
+    """  # noqa: D301
     virtual_stain(
         input_position_dirpaths=input_position_dirpaths,
         config_filepath=config_filepath,

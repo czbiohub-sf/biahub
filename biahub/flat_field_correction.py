@@ -247,7 +247,7 @@ def flat_field_correction_cli(
     monitor: bool = False,
     init_only: bool = False,
 ):
-    r"""Apply flat field correction across T and selected C axes.
+    """Apply flat field correction across T and selected C axes.
 
     \b
     SLURM fan-out of positions across a whole plate:
@@ -260,7 +260,7 @@ def flat_field_correction_cli(
     \b
     In-process run of a single position (e.g. from a Nextflow worker):
     >>> biahub flat-field --cluster debug -i ./input.zarr/A/1/0 -c ./flat_field_params.yml -o ./output.zarr
-    """
+    """  # noqa: D301
     flat_field(
         input_position_dirpaths=input_position_dirpaths,
         config_filepath=config_filepath,
