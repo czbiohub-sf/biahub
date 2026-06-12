@@ -1,33 +1,74 @@
-import os
-
 from pathlib import Path
 
 import click
 import submitit
-import torch
 
-from iohub import open_ome_zarr
+from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate
 from waveorder.cli.apply_inverse_transfer_function import (
     apply_inverse_transfer_function_single_position,
     get_reconstruction_output_metadata,
 )
-from waveorder.cli.parsing import transfer_function_dirpath
 from waveorder.cli.settings import ReconstructionSettings
-from waveorder.cli.utils import estimate_resources
+from waveorder.cli.utils import estimate_resources as wo_estimate_resources
 
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
+    cluster,
     config_filepath,
+    init_only,
     input_position_dirpaths,
-    local,
     monitor,
-    num_processes,
     output_dirpath,
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import get_submitit_cluster, yaml_to_model
+from biahub.cli.utils import (
+    get_submitit_cluster,
+    yaml_to_model,
+)
+
+
+def _init_output_plate(
+    input_position_dirpaths: list[Path],
+    output_dirpath: Path,
+    config_filepath: Path,
+    settings: ReconstructionSettings,
+) -> tuple[tuple[int, int, int, int, int], list[str]]:
+    """Create the empty reconstruction output plate.
+
+    ``settings`` is the validated ReconstructionSettings loaded by the caller.
+    Output shape/scale/version/channel names are derived by waveorder from the
+    config, and per-position metadata is copied from the input plate.
+
+    create_empty_plate is idempotent: re-running with the same positions is a
+    no-op, and new positions get appended. Safe to call from both the init
+    orchestrator and from per-position runs.
+
+    Returns the input (T, C, Z, Y, X) shape and output channel names.
+    """
+    with open_ome_zarr(str(input_position_dirpaths[0]), mode="r") as ds:
+        input_shape = ds.data.shape
+
+    # Pixel sizes come from the config (the source of truth). waveorder's
+    # get_reconstruction_output_metadata already emits a PixelSizeMismatchWarning
+    # when the config pixel sizes disagree (>5%) with the input zarr scale, so we
+    # do not warn again here.
+    output_metadata = get_reconstruction_output_metadata(
+        input_position_dirpaths[0], config_filepath
+    )
+    output_metadata.pop("plate_metadata", None)
+    channel_names = output_metadata["channel_names"]
+
+    input_plate = Path(input_position_dirpaths[0]).parents[2]
+    create_empty_plate(
+        store_path=output_dirpath,
+        position_keys=[Path(p).parts[-3:] for p in input_position_dirpaths],
+        **output_metadata,
+        metadata_sources=input_plate,
+    )
+
+    return input_shape, channel_names
 
 
 def apply_inverse_transfer_function(
@@ -35,99 +76,104 @@ def apply_inverse_transfer_function(
     transfer_function_dirpath: Path,
     config_filepath: Path,
     output_dirpath: Path,
-    num_processes: int,
-    sbatch_filepath: Path,
-    local: bool = False,
+    sbatch_filepath: Path | None = None,
+    cluster: str = "slurm",
     monitor: bool = True,
+    init_only: bool = False,
 ) -> None:
+    """Apply an inverse transfer function to a dataset.
 
-    output_metadata = get_reconstruction_output_metadata(
-        input_position_dirpaths[0], config_filepath
-    )
-    # `plate_metadata` is not a `create_empty_plate` parameter; write it to
-    # the plate's zattrs after creation. `output_metadata["version"]` is read
-    # from the input plate by waveorder, so the output preserves the input's
-    # OME-Zarr version.
-    plate_metadata = output_metadata.pop("plate_metadata", {})
-
-    create_empty_plate(
-        store_path=output_dirpath,
-        position_keys=[p.parts[-3:] for p in input_position_dirpaths],
-        **output_metadata,
-    )
-
-    if plate_metadata:
-        with open_ome_zarr(str(output_dirpath), mode="r+") as output_plate:
-            output_plate.zattrs.update(plate_metadata)
-    # Initialize torch num of threads and interoeration operations
-    if num_processes > 1:
-        torch.set_num_threads(1)
-        torch.set_num_interop_threads(1)
-
-    # Estimate resources
-    with open_ome_zarr(input_position_dirpaths[0]) as input_dataset:
-        T, C, Z, Y, X = input_dataset["0"].shape
-
-    settings = yaml_to_model(config_filepath, ReconstructionSettings)
-
-    num_cpus, gb_ram_per_cpu = estimate_resources([T, C, Z, Y, X], settings, num_processes)
-    num_jobs = len(input_position_dirpaths)
-
-    # Prepare and submit jobs
-    click.echo(
-        f"Preparing {num_jobs} job{'s, each with' if num_jobs > 1 else ' with'} "
-        f"{num_cpus} CPU{'s' if num_cpus > 1 else ''} and "
-        f"{gb_ram_per_cpu} GB of memory per CPU."
-    )
-
-    name_without_ext = os.path.splitext(Path(output_dirpath).name)[0]
+    Parameters
+    ----------
+    input_position_dirpaths : list[Path]
+        Paths to input positions.
+    transfer_function_dirpath : Path
+        Path to transfer function zarr (ignored in ``--init`` mode).
+    config_filepath : Path
+        Path to YAML reconstruction config.
+    output_dirpath : Path
+        Path to output zarr.
+    sbatch_filepath : Path, optional
+        SBATCH file with slurm parameter overrides.
+    cluster : str
+        Execution cluster: 'slurm', 'local', or 'debug'.
+    monitor : bool
+        Monitor submitted SLURM jobs.
+    init_only : bool
+        Only initialize the output store and exit.
+    """
+    output_dirpath = Path(output_dirpath)
     slurm_out_path = output_dirpath.parent / "slurm_output"
 
-    executor_folder = os.path.join(
-        Path(output_dirpath).parent.absolute(), name_without_ext + "_logs"
+    settings = yaml_to_model(config_filepath, ReconstructionSettings)
+    input_shape, channel_names = _init_output_plate(
+        input_position_dirpaths, output_dirpath, config_filepath, settings
     )
-    executor = submitit.AutoExecutor(folder=Path(executor_folder))
 
+    max_num_cpus = 16
+    num_cpus, mem_per_cpu = wo_estimate_resources(list(input_shape), settings, max_num_cpus)
+    click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
+
+    if init_only:
+        click.echo(
+            f"Created {output_dirpath} ({len(input_position_dirpaths)} positions, "
+            f"{len(settings.output_channel_names)} output channels)"
+        )
+        return
+
+    resolved_cluster = get_submitit_cluster(cluster=cluster)
+
+    # Fan out one job per position via submitit. With --cluster debug, submitit's
+    # DebugExecutor runs the work in-process (the slurm_* parameters are ignored):
+    # Nextflow already handles per-position fan-out and resource scheduling, so the
+    # CLI must NOT submit its own SLURM jobs. See also:
+    # examples/submitit_debug_nextflow/2026-05-27-submitit-debug-nextflow-concerns.md
     slurm_args = {
         "slurm_job_name": "apply-inverse-transfer-function",
-        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
+        "slurm_mem_per_cpu": f"{mem_per_cpu}G",
         "slurm_cpus_per_task": num_cpus,
         "slurm_time": 60,
         "slurm_partition": "cpu",
-        "slurm_use_srun": False,
     }
 
     if sbatch_filepath:
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
-    cluster = get_submitit_cluster(local)
-
-    # Prepare and submit jobs
-    click.echo(f"Preparing jobs: {slurm_args}")
-    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
+    click.echo(f"Preparing jobs on cluster='{resolved_cluster}': {slurm_args}")
+    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=resolved_cluster)
     executor.update_parameters(**slurm_args)
 
-    click.echo("Submitting SLURM jobs...")
+    click.echo("Submitting jobs...")
     jobs = []
     with submitit.helpers.clean_env(), executor.batch():
-        for input_position_dirpath in input_position_dirpaths:
-            job = executor.submit(
-                apply_inverse_transfer_function_single_position,
-                input_position_dirpath,
-                transfer_function_dirpath,
-                config_filepath,
-                output_dirpath / Path(*input_position_dirpath.parts[-3:]),
-                num_processes,
-                output_metadata["channel_names"],
+        for pos_path in input_position_dirpaths:
+            jobs.append(
+                executor.submit(
+                    apply_inverse_transfer_function_single_position,
+                    pos_path,
+                    transfer_function_dirpath,
+                    config_filepath,
+                    output_dirpath / Path(*pos_path.parts[-3:]),
+                    num_cpus,
+                    channel_names,
+                )
             )
-            jobs.append(job)
 
-    job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
-
+    job_ids = [job.job_id for job in jobs]
     slurm_out_path.mkdir(exist_ok=True)
-    log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
+    log_path = slurm_out_path / "submitit_jobs_ids.log"
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
+
+    # submitit's DebugExecutor is lazy: .submit() wraps the callable in a DebugJob
+    # but execution only happens when .wait()/.done()/.result() is called. Run each
+    # one in the foreground and stream progress; monitor's async polling UI is
+    # pointless against synchronous in-process jobs.
+    if resolved_cluster == "debug":
+        for job, path in zip(jobs, input_position_dirpaths, strict=True):
+            job.wait()
+            click.echo(f"Apply-inv-tf complete: {path}")
+        return
 
     if monitor:
         monitor_jobs(jobs, input_position_dirpaths)
@@ -135,47 +181,62 @@ def apply_inverse_transfer_function(
 
 @click.command("apply-inv-tf")
 @input_position_dirpaths()
-@transfer_function_dirpath()
+@click.option(
+    "--transfer-function-dirpath",
+    "-t",
+    default=None,
+    type=click.Path(),
+    help="Path to transfer function zarr (not required for --init).",
+)
 @config_filepath()
 @output_dirpath()
-@num_processes()
 @sbatch_filepath()
-@local()
+@cluster()
 @monitor()
+@init_only()
 def apply_inverse_transfer_function_cli(
     input_position_dirpaths: list[Path],
-    transfer_function_dirpath: Path,
+    transfer_function_dirpath: str | None,
     config_filepath: Path,
     output_dirpath: Path,
-    num_processes: int,
-    sbatch_filepath: Path,
-    local: bool = False,
-    monitor: bool = True,
+    sbatch_filepath: Path | None = None,
+    cluster: str = "slurm",
+    monitor: bool = False,
+    init_only: bool = False,
 ):
-    """Apply an inverse transfer function to a dataset using a configuration file.
+    r"""Apply an inverse transfer function to a dataset using a configuration file.
 
     Applies a transfer function to all positions in the list `input-position-dirpaths`,
     so all positions must have the same TCZYX shape.
 
-    Appends channels to ./output.zarr, so multiple reconstructions can fill a single store.
+    \b
+    Full SLURM fan-out:
+    >>> biahub apply-inv-tf -i ./input.zarr/*/*/* -t ./tf.zarr -c ./config.yml -o ./output.zarr
 
-    See https://github.com/mehta-lab/waveorder/tree/main/docs/examples for example configuration files.
+    \b
+    Initialize the output plate only (Nextflow init step):
+    >>> biahub apply-inv-tf --init -i ./input.zarr/*/*/* -c ./config.yml -o ./output.zarr
 
-    >>> biahub apply-inv-tf \
-        -i ./input.zarr/*/*/* \
-        -t ./transfer-function.zarr \
-        -c /examples/birefringence.yml \
-        -o ./output.zarr
+    \b
+    In-process run of a single position (Nextflow per-position step):
+    >>> biahub apply-inv-tf --cluster debug -i ./input.zarr/A/1/0 -t ./tf.zarr -c ./config.yml -o ./output.zarr
     """
+    if not init_only and transfer_function_dirpath is None:
+        raise click.UsageError(
+            "--transfer-function-dirpath / -t is required unless using --init."
+        )
+
     apply_inverse_transfer_function(
         input_position_dirpaths=input_position_dirpaths,
-        transfer_function_dirpath=transfer_function_dirpath,
+        transfer_function_dirpath=Path(transfer_function_dirpath)
+        if transfer_function_dirpath
+        else None,
         config_filepath=config_filepath,
         output_dirpath=output_dirpath,
-        num_processes=num_processes,
         sbatch_filepath=sbatch_filepath,
-        local=local,
+        cluster=cluster,
         monitor=monitor,
+        init_only=init_only,
     )
 
 

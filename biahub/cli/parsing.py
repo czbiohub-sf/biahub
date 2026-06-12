@@ -57,7 +57,7 @@ def input_position_dirpaths() -> Callable:
             cls=OptionEatAll,
             type=tuple,
             callback=_validate_and_process_paths,
-            help='Paths to input positions, for example: "input.zarr/0/0/0" or "input.zarr/*/*/*"',
+            help='Paths to input positions, for example: "input.zarr/0/0/0", "input.zarr/0/0/[0-9]", or "input.zarr/*/*/*"',
         )(f)
 
     return decorator

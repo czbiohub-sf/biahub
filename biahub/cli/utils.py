@@ -1,3 +1,4 @@
+import logging
 import os
 
 from pathlib import Path
@@ -9,6 +10,8 @@ import yaml
 from iohub.ngff import open_ome_zarr
 from numpy.typing import DTypeLike
 from tqdm import tqdm
+
+logger = logging.getLogger(__name__)
 
 
 def get_submitit_cluster(
