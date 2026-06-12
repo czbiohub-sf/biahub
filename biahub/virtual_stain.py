@@ -28,10 +28,6 @@ from biahub.cli.utils import (
     resolve_ome_zarr_version,
 )
 
-# Needed for multiprocessing with GPUs
-# https://github.com/pytorch/pytorch/issues/40403#issuecomment-1422625325
-torch.multiprocessing.set_start_method("spawn", force=True)
-
 
 def build_predict_parser():
     """Build a jsonargparse parser that mirrors the ``viscy predict`` config.
@@ -136,13 +132,14 @@ def virtual_stain_position(
     )
     click.echo(f"[{position_name}] Starting virtual staining on device '{device}'")
 
-    # Instantiate the VSUNet and the data module from VisCy's own classes, then
-    # load the checkpoint weights. Building via VisCy keeps biahub free of the
-    # model schema and the normalization transforms.
+    # Instantiate the VSUNet and the data module from VisCy's own classes.
+    # Route the top-level ckpt_path into the model's init args so VSUNet loads
+    # the weights itself: VSUNet.__init__ extracts the Lightning checkpoint's
+    # "state_dict" exactly as `viscy predict` does. Delegating keeps biahub free
+    # of both the model schema and any assumption about the checkpoint layout.
+    cfg.model.init_args.ckpt_path = str(cfg.ckpt_path)
     instances = parser.instantiate(cfg)
     vsunet = instances.model
-    state_dict = torch.load(cfg.ckpt_path, weights_only=True, map_location="cpu")["state_dict"]
-    vsunet.load_state_dict(state_dict)
     vsunet.eval().to(device)
     click.echo(f"[{position_name}] Loaded checkpoint: {cfg.ckpt_path}")
 
@@ -187,8 +184,15 @@ def virtual_stain_position(
                 f"dataset before virtual staining."
             )
 
-        in_stack_depth = getattr(vsunet.model, "out_stack_depth", None)
-        n_windows = (Z - in_stack_depth) // step + 1 if in_stack_depth else "?"
+        # Depth of the Z-window fed to the model. In VisCy's own
+        # `predict_sliding_windows`, `model.out_stack_depth` is the input window
+        # depth: each window is `x[:, :, start:start + out_stack_depth]`. We
+        # mirror that here purely to log the window count (the value matches
+        # `len(range(0, Z - out_stack_depth + 1, step))` exactly). "?" when the
+        # model exposes no such attribute, and 0 when the volume is too shallow
+        # for even one window (predict_sliding_windows then raises).
+        z_window_depth = getattr(vsunet.model, "out_stack_depth", None)
+        n_windows = max(0, (Z - z_window_depth) // step + 1) if z_window_depth else "?"
         click.echo(
             f"[{position_name}] {T} timepoints, volume (Z,Y,X)=({Z},{Y},{X}), "
             f"'{source_channel}' -> {target_channels}, "
@@ -291,6 +295,19 @@ def virtual_stain(
     init_only : bool, optional
         Only initialize the output store and exit; skip per-position processing.
     """
+    # The 'local' cluster launches every position as a concurrent subprocess
+    # (submitit's LocalExecutor ignores `slurm_array_parallelism`, so there is no
+    # concurrency cap) and biahub does not pin per-job GPUs, so all jobs target
+    # cuda:0. With more than one position that oversubscribes a single GPU. Use
+    # 'slurm' for multi-GPU parallelism or 'debug' to run positions one at a time.
+    if cluster == "local" and len(input_position_dirpaths) > 1:
+        raise ValueError(
+            f"cluster='local' cannot run {len(input_position_dirpaths)} positions: "
+            "local jobs run concurrently without a parallelism cap and all target "
+            "the same GPU. Use cluster='slurm' for multi-GPU parallelism, or "
+            "cluster='debug' to run positions sequentially on this machine."
+        )
+
     output_dirpath = Path(output_dirpath)
     config_filepath = Path(config_filepath)
     slurm_out_path = output_dirpath.parent / "slurm_output"
