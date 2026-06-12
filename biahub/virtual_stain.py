@@ -329,7 +329,7 @@ def virtual_stain(
 
     # Timepoints are processed sequentially on a single GPU, so resource needs
     # are independent of dataset size.
-    num_cpus, gb_ram = 16, 4
+    num_cpus, gb_ram = 16, 64
     click.echo(f"RESOURCES:{num_cpus} {num_cpus * gb_ram}")
 
     if init_only:
