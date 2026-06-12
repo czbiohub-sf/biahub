@@ -361,8 +361,8 @@ requires-dist = [
     { name = "cellpose", marker = "extra == 'all'" },
     { name = "cellpose", marker = "extra == 'segment'" },
     { name = "click" },
-    { name = "cytoland", marker = "extra == 'all'", git = "https://github.com/mehta-lab/VisCy?subdirectory=applications%2Fcytoland&branch=main" },
-    { name = "cytoland", marker = "extra == 'stain'", git = "https://github.com/mehta-lab/VisCy?subdirectory=applications%2Fcytoland&branch=main" },
+    { name = "cytoland", marker = "extra == 'all'", git = "https://github.com/mehta-lab/VisCy?subdirectory=applications%2Fcytoland&rev=7fb3bc1e78c0e0bd26e1845caba860f76223ba02" },
+    { name = "cytoland", marker = "extra == 'stain'", git = "https://github.com/mehta-lab/VisCy?subdirectory=applications%2Fcytoland&rev=7fb3bc1e78c0e0bd26e1845caba860f76223ba02" },
     { name = "dask", extras = ["array"] },
     { name = "humanize" },
     { name = "imageio-ffmpeg" },
@@ -789,7 +789,7 @@ name = "cryptography"
 version = "47.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cffi", marker = "platform_python_implementation != 'PyPy' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "cffi", marker = "platform_machine != 's390x' and platform_python_implementation != 'PyPy' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/ef/b2/7ffa7fe8207a8c42147ffe70c3e360b228160c1d85dc3faff16aaa3244c0/cryptography-47.0.0.tar.gz", hash = "sha256:9f8e55fe4e63613a5e1cc5819030f27b97742d720203a087802ce4ce9ceb52bb", size = 830863, upload-time = "2026-04-24T19:54:57.056Z" }
 wheels = [
@@ -902,8 +902,8 @@ wheels = [
 
 [[package]]
 name = "cytoland"
-version = "0.0.0.post213.dev0+b5c6ed9"
-source = { git = "https://github.com/mehta-lab/VisCy?subdirectory=applications%2Fcytoland&branch=main#b5c6ed9a192abc7d08e1712369b66a7580aff1f3" }
+version = "0.0.0.post211.dev0+7fb3bc1"
+source = { git = "https://github.com/mehta-lab/VisCy?subdirectory=applications%2Fcytoland&rev=7fb3bc1e78c0e0bd26e1845caba860f76223ba02#7fb3bc1e78c0e0bd26e1845caba860f76223ba02" }
 dependencies = [
     { name = "imageio" },
     { name = "lightning" },
@@ -1864,7 +1864,7 @@ name = "jaraco-classes"
 version = "3.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "more-itertools" },
+    { name = "more-itertools", marker = "platform_machine != 's390x'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/06/c0/ed4a27bc5571b99e3cff68f8a9fa5b56ff7df1c2251cc715a652ddd26402/jaraco.classes-3.4.0.tar.gz", hash = "sha256:47a024b51d0239c0dd8c8540c6c7f484be3b8fcf0b2d85c13825780d3b3f3acd", size = 11780, upload-time = "2024-03-31T07:27:36.643Z" }
 wheels = [
@@ -1885,7 +1885,7 @@ name = "jaraco-functools"
 version = "4.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "more-itertools" },
+    { name = "more-itertools", marker = "platform_machine != 's390x'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/0f/27/056e0638a86749374d6f57d0b0db39f29509cce9313cf91bdc0ac4d91084/jaraco_functools-4.4.0.tar.gz", hash = "sha256:da21933b0417b89515562656547a77b4931f98176eb173644c0d35032a33d6bb", size = 19943, upload-time = "2025-12-21T09:29:43.6Z" }
 wheels = [
@@ -2031,12 +2031,12 @@ name = "keyring"
 version = "25.7.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "jaraco-classes" },
-    { name = "jaraco-context" },
-    { name = "jaraco-functools" },
-    { name = "jeepney", marker = "sys_platform == 'linux'" },
-    { name = "pywin32-ctypes", marker = "sys_platform == 'win32'" },
-    { name = "secretstorage", marker = "sys_platform == 'linux'" },
+    { name = "jaraco-classes", marker = "platform_machine != 's390x'" },
+    { name = "jaraco-context", marker = "platform_machine != 's390x'" },
+    { name = "jaraco-functools", marker = "platform_machine != 's390x'" },
+    { name = "jeepney", marker = "platform_machine != 's390x' and sys_platform == 'linux'" },
+    { name = "pywin32-ctypes", marker = "platform_machine != 's390x' and sys_platform == 'win32'" },
+    { name = "secretstorage", marker = "platform_machine != 's390x' and sys_platform == 'linux'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/43/4b/674af6ef2f97d56f0ab5153bf0bfa28ccb6c3ed4d1babf4305449668807b/keyring-25.7.0.tar.gz", hash = "sha256:fe01bd85eb3f8fb3dd0405defdeac9a5b4f6f0439edbb3149577f244a2e8245b", size = 63516, upload-time = "2025-11-16T16:26:09.482Z" }
 wheels = [
@@ -4922,8 +4922,8 @@ name = "secretstorage"
 version = "3.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cryptography", marker = "sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'" },
-    { name = "jeepney", marker = "sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "cryptography", marker = "platform_machine != 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "jeepney", marker = "platform_machine != 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1c/03/e834bcd866f2f8a49a85eaff47340affa3bfa391ee9912a952a1faa68c7b/secretstorage-3.5.0.tar.gz", hash = "sha256:f04b8e4689cbce351744d5537bf6b1329c6fc68f91fa666f60a380edddcd11be", size = 19884, upload-time = "2025-11-23T19:02:53.191Z" }
 wheels = [
@@ -5652,8 +5652,8 @@ wheels = [
 
 [[package]]
 name = "viscy-data"
-version = "0.0.0.post213.dev0+b5c6ed9"
-source = { git = "https://github.com/mehta-lab/VisCy?subdirectory=packages%2Fviscy-data&branch=main#b5c6ed9a192abc7d08e1712369b66a7580aff1f3" }
+version = "0.0.0.post211.dev0+7fb3bc1"
+source = { git = "https://github.com/mehta-lab/VisCy?subdirectory=packages%2Fviscy-data&rev=7fb3bc1e78c0e0bd26e1845caba860f76223ba02#7fb3bc1e78c0e0bd26e1845caba860f76223ba02" }
 dependencies = [
     { name = "imageio" },
     { name = "iohub" },
@@ -5670,8 +5670,8 @@ dependencies = [
 
 [[package]]
 name = "viscy-models"
-version = "0.0.0.post213.dev0+b5c6ed9"
-source = { git = "https://github.com/mehta-lab/VisCy?subdirectory=packages%2Fviscy-models&branch=main#b5c6ed9a192abc7d08e1712369b66a7580aff1f3" }
+version = "0.0.0.post211.dev0+7fb3bc1"
+source = { git = "https://github.com/mehta-lab/VisCy?subdirectory=packages%2Fviscy-models&rev=7fb3bc1e78c0e0bd26e1845caba860f76223ba02#7fb3bc1e78c0e0bd26e1845caba860f76223ba02" }
 dependencies = [
     { name = "monai" },
     { name = "numpy" },
@@ -5683,8 +5683,8 @@ dependencies = [
 
 [[package]]
 name = "viscy-transforms"
-version = "0.0.0.post213.dev0+b5c6ed9"
-source = { git = "https://github.com/mehta-lab/VisCy?subdirectory=packages%2Fviscy-transforms&branch=main#b5c6ed9a192abc7d08e1712369b66a7580aff1f3" }
+version = "0.0.0.post211.dev0+7fb3bc1"
+source = { git = "https://github.com/mehta-lab/VisCy?subdirectory=packages%2Fviscy-transforms&rev=7fb3bc1e78c0e0bd26e1845caba860f76223ba02#7fb3bc1e78c0e0bd26e1845caba860f76223ba02" }
 dependencies = [
     { name = "kornia" },
     { name = "monai" },
@@ -5694,8 +5694,8 @@ dependencies = [
 
 [[package]]
 name = "viscy-utils"
-version = "0.0.0.post213.dev0+b5c6ed9"
-source = { git = "https://github.com/mehta-lab/VisCy?subdirectory=packages%2Fviscy-utils&branch=main#b5c6ed9a192abc7d08e1712369b66a7580aff1f3" }
+version = "0.0.0.post211.dev0+7fb3bc1"
+source = { git = "https://github.com/mehta-lab/VisCy?subdirectory=packages%2Fviscy-utils&rev=7fb3bc1e78c0e0bd26e1845caba860f76223ba02#7fb3bc1e78c0e0bd26e1845caba860f76223ba02" }
 dependencies = [
     { name = "iohub" },
     { name = "jsonargparse", extra = ["signatures"] },

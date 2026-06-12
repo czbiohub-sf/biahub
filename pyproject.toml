@@ -81,7 +81,9 @@ biahub = "biahub.cli.main:cli"
 index-strategy = "unsafe-best-match"
 
 [tool.uv.sources]
-cytoland = { git = "https://github.com/mehta-lab/VisCy", subdirectory = "applications/cytoland", branch = "main" }
+# Pin cytoland to the commit from VisCy PR #465 (non-square TTA and helpers).
+# Revert to the PyPI release once that PR is merged and published.
+cytoland = { git = "https://github.com/mehta-lab/VisCy", subdirectory = "applications/cytoland", rev = "7fb3bc1e78c0e0bd26e1845caba860f76223ba02" }
 # Pin iohub to the branch that stores per-step provenance as top-level
 # zattrs keys (e.g. biahub-flat_field, biahub-deskew). Revert to the PyPI
 # release once those changes are merged and published.
