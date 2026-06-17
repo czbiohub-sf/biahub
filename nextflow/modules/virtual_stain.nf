@@ -79,13 +79,26 @@ process run_virtual_stain_preprocess {
     output:
     val true
 
+    // `--trainer.logger false` disables the viscy CLI's default WandbLogger.
+    // The VisCy LightningCLI sets trainer.logger to a lazy WandbLogger for every
+    // subcommand (viscy_utils/cli.py); preprocess needs no logger, and W&B isn't
+    // in the `stain` extra, so instantiating it fails with a missing-wandb error.
+    //
+    // `unset SLURM_NTASKS`: sbatch exports the submit environment, so when this
+    // pipeline is launched from inside a SLURM allocation, the submit shell's
+    // SLURM_NTASKS leaks into the job. Lightning's Trainer then auto-detects a
+    // SLURMEnvironment and rejects SLURM_NTASKS>1 (it expects --ntasks-per-node).
+    // preprocess is a single-process CPU job, so clearing it lets Lightning fall
+    // back to LightningEnvironment. The dataloader uses --num_workers, not tasks.
     script:
     """
+    unset SLURM_NTASKS
     ${stain_cmd('viscy')} preprocess \
         --data_path "${input_zarr}" \
         --channel_names -1 \
         --num_workers ${task.cpus} \
-        --block_size 32
+        --block_size 32 \
+        --trainer.logger false
     """
 }
 
