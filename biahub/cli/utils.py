@@ -39,7 +39,10 @@ def echo_resources(num_cpus: int, mem_gb: int, time_min: int) -> None:
     time_min : int
         Wall-clock budget per position in minutes.
     """
-    click.echo("RESOURCES:" + json.dumps({"cpus": num_cpus, "mem_gb": mem_gb, "time_min": time_min}))
+    # Coerce to plain int: estimators may return numpy integers, which json
+    # cannot serialize.
+    payload = {"cpus": int(num_cpus), "mem_gb": int(mem_gb), "time_min": int(time_min)}
+    click.echo("RESOURCES:" + json.dumps(payload))
 
 
 def get_submitit_cluster(
