@@ -16,7 +16,7 @@ from tqdm import tqdm
 logger = logging.getLogger(__name__)
 
 
-def echo_resources(num_cpus: int, mem_gb: int, time_min: int) -> None:
+def echo_resources(num_cpus: int, mem_gb: int, time_minutes: int) -> None:
     """Emit the per-position resource request consumed by the Nextflow pipeline.
 
     Every step CLI calls this from its ``--init`` path so there is a single
@@ -36,12 +36,12 @@ def echo_resources(num_cpus: int, mem_gb: int, time_min: int) -> None:
         CPUs per position.
     mem_gb : int
         TOTAL memory per position in GB (not per-CPU).
-    time_min : int
+    time_minutes : int
         Wall-clock budget per position in minutes.
     """
     # Coerce to plain int: estimators may return numpy integers, which json
     # cannot serialize.
-    payload = {"cpus": int(num_cpus), "mem_gb": int(mem_gb), "time_min": int(time_min)}
+    payload = {"cpus": int(num_cpus), "mem_gb": int(mem_gb), "time_minutes": int(time_minutes)}
     click.echo("RESOURCES:" + json.dumps(payload))
 
 

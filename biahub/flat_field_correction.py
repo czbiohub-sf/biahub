@@ -166,8 +166,8 @@ def flat_field(
         shape=input_shape, ram_multiplier=8, max_num_cpus=16
     )
     mem_gb = num_cpus * gb_ram_per_cpu
-    time_min = 60
-    echo_resources(num_cpus, mem_gb, time_min)
+    time_minutes = 60
+    echo_resources(num_cpus, mem_gb, time_minutes)
 
     if init_only:
         click.echo(f"Initialized {output_dirpath} ({len(input_position_dirpaths)} positions)")
@@ -186,7 +186,7 @@ def flat_field(
         "slurm_mem": f"{mem_gb}G",
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,
-        "slurm_time": time_min,
+        "slurm_time": time_minutes,
         "slurm_partition": "cpu",
     }
 

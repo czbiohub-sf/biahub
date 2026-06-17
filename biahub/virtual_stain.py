@@ -338,8 +338,8 @@ def virtual_stain(
     # before the init_only return so --init emits it for the Nextflow pipeline.
     T, Z = input_shape[0], input_shape[2]
     seconds_per_window = 5
-    time_min = int(np.ceil(max(60, T * Z * seconds_per_window / 60)))
-    echo_resources(num_cpus, mem_gb, time_min)
+    time_minutes = int(np.ceil(max(60, T * Z * seconds_per_window / 60)))
+    echo_resources(num_cpus, mem_gb, time_minutes)
 
     if init_only:
         click.echo(f"Initialized {output_dirpath} ({len(input_position_dirpaths)} positions)")
@@ -354,7 +354,7 @@ def virtual_stain(
         "slurm_mem": f"{mem_gb}G",
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 20,  # process up to 20 positions at a time
-        "slurm_time": time_min,
+        "slurm_time": time_minutes,
         "slurm_partition": "gpu",
     }
 
