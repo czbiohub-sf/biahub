@@ -20,6 +20,7 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.cli.utils import (
+    echo_resources,
     estimate_resources,
     get_submitit_cluster,
     resolve_ome_zarr_version,
@@ -161,8 +162,12 @@ def flat_field(
     )
 
     T, C, Z, Y, X = input_shape
-    num_cpus, gb_ram = estimate_resources(shape=input_shape, ram_multiplier=8, max_num_cpus=16)
-    click.echo(f"RESOURCES:{num_cpus} {num_cpus * gb_ram}")
+    num_cpus, gb_ram_per_cpu = estimate_resources(
+        shape=input_shape, ram_multiplier=8, max_num_cpus=16
+    )
+    mem_gb = num_cpus * gb_ram_per_cpu
+    time_min = 60
+    echo_resources(num_cpus, mem_gb, time_min)
 
     if init_only:
         click.echo(f"Initialized {output_dirpath} ({len(input_position_dirpaths)} positions)")
@@ -178,10 +183,10 @@ def flat_field(
 
     slurm_args = {
         "slurm_job_name": "flat-field",
-        "slurm_mem_per_cpu": f"{gb_ram}G",
+        "slurm_mem": f"{mem_gb}G",
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,
-        "slurm_time": 360,
+        "slurm_time": time_min,
         "slurm_partition": "cpu",
     }
 

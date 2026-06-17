@@ -8,8 +8,12 @@ def parse_resources(stdout_text, prefix = 'RESOURCES:') {
     if (!matching) {
         error "Expected a '${prefix}' line in command output but none was found. The underlying CLI may have failed."
     }
-    def parts = matching.last().replace(prefix, '').trim().split(/\s+/)
-    return [cpus: parts[0].toInteger(), mem_gb: parts[1].toInteger()]
+    // The CLI emits a JSON payload (see biahub.cli.utils.echo_resources): cpus,
+    // total mem_gb, and per-position time_min. Parsing JSON keeps the contract
+    // order-independent and extensible.
+    def payload = matching.last().replace(prefix, '').trim()
+    def res = new groovy.json.JsonSlurper().parseText(payload)
+    return [cpus: res.cpus as int, mem_gb: res.mem_gb as int, time_min: res.time_min as int]
 }
 
 def slurm_log_dir(step_name) {

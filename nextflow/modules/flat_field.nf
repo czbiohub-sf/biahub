@@ -45,7 +45,7 @@ process run_flat_field {
     maxForks 30
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
-    time '1h'
+    time { "${meta.time_min * task.attempt} min" }
     maxRetries 1
     errorStrategy 'retry'
 

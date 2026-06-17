@@ -96,8 +96,8 @@ process run_virtual_stain {
     maxForks 30
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
-    time { task.attempt == 1 ? '8h' : '12h' }
-    maxRetries 2
+    time { "${meta.time_min * task.attempt} min" }
+    maxRetries 1
     errorStrategy 'retry'
 
     input:

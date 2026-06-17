@@ -1,9 +1,11 @@
+import json
 import logging
 import os
 
 from pathlib import Path
 from typing import Literal
 
+import click
 import numpy as np
 import yaml
 
@@ -12,6 +14,32 @@ from numpy.typing import DTypeLike
 from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
+
+
+def echo_resources(num_cpus: int, mem_gb: int, time_min: int) -> None:
+    """Emit the per-position resource request consumed by the Nextflow pipeline.
+
+    Every step CLI calls this from its ``--init`` path so there is a single
+    source of truth for per-position CPU, memory, and wall-clock time. The
+    Nextflow ``init_*`` process captures this line on stdout and
+    ``parse_resources`` (``nextflow/modules/common.nf``) reads the JSON payload
+    to set the per-position task's ``cpus``/``memory``/``time`` directives. The
+    same values also feed the CLI's own ``slurm_*`` submission args, so the
+    SLURM fan-out and the Nextflow fan-out request identical resources.
+
+    A single JSON payload keeps the contract order-independent and extensible
+    (new fields can be added without breaking the positional parsing).
+
+    Parameters
+    ----------
+    num_cpus : int
+        CPUs per position.
+    mem_gb : int
+        TOTAL memory per position in GB (not per-CPU).
+    time_min : int
+        Wall-clock budget per position in minutes.
+    """
+    click.echo("RESOURCES:" + json.dumps({"cpus": num_cpus, "mem_gb": mem_gb, "time_min": time_min}))
 
 
 def get_submitit_cluster(
