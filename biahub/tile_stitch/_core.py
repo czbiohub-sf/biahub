@@ -12,7 +12,11 @@ v6 path (which folds T into the leading dims) — that divergence corrupts
 multi-TP writes.
 """
 
+import concurrent.futures
+import logging
+import os
 import threading
+import time
 
 from collections.abc import Callable
 from typing import Any
@@ -22,6 +26,72 @@ from typing import Any
 # (or process reuse across runs) never returns cuda:0 tensors to a cuda:1
 # caller (tile_worker.py:451,462-467).
 _TF_CUDA_CACHE: dict[tuple, Any] = {}
+
+# Input store handles, opened ONCE per (process, path) and reused for every tile
+# slice. open_ome_zarr per read does a fresh NFS metadata handshake each time —
+# slow, and it widens the window for a transient read stall to wedge the
+# (timeout-less) prefetch reader. zarr array reads are thread-safe, so one cached
+# handle is safe across the background reader and the synchronous fallback.
+_INPUT_ARRAY_CACHE: dict[str, Any] = {}
+_INPUT_ARRAY_LOCK = threading.Lock()
+
+
+def _open_input_array(input_path: str):
+    """Level-0 array of the input FOV, opened once per process and cached."""
+    arr = _INPUT_ARRAY_CACHE.get(input_path)
+    if arr is None:
+        with _INPUT_ARRAY_LOCK:
+            arr = _INPUT_ARRAY_CACHE.get(input_path)  # re-check under lock
+            if arr is None:
+                from iohub.ngff import open_ome_zarr
+
+                arr = open_ome_zarr(input_path, layout="fov", mode="r")["0"]
+                _INPUT_ARRAY_CACHE[input_path] = arr
+    return arr
+
+
+# A single tile read that stalls on the filesystem would otherwise wedge the whole
+# pipeline (nothing downstream has a deadline). Each read runs on a pool thread with
+# a timeout; a stalled attempt is abandoned and retried on a fresh thread, and a
+# persistent stall raises (fails loudly) instead of hanging forever.
+_READ_TIMEOUT_S = float(os.environ.get("TILE_READ_TIMEOUT_S", "120"))
+_READ_RETRIES = int(os.environ.get("TILE_READ_RETRIES", "2"))
+_GET_TIMEOUT_S = float(os.environ.get("TILE_GET_TIMEOUT_S", "600"))
+
+logger = logging.getLogger("tile_stitch._core")
+
+_read_pool: concurrent.futures.ThreadPoolExecutor | None = None
+_read_pool_lock = threading.Lock()
+
+
+def _get_read_pool() -> concurrent.futures.ThreadPoolExecutor:
+    global _read_pool
+    if _read_pool is None:
+        with _read_pool_lock:
+            if _read_pool is None:
+                _read_pool = concurrent.futures.ThreadPoolExecutor(
+                    max_workers=4, thread_name_prefix="zarr-read"
+                )
+    return _read_pool
+
+
+def _read_with_retry(fn, *, timeout: float = _READ_TIMEOUT_S, retries: int = _READ_RETRIES):
+    """Run a blocking read with a deadline, retrying a stalled attempt on a fresh
+    thread. A read that raises propagates immediately (a real error, not a stall); a
+    read that never returns is abandoned after ``timeout`` and retried; a persistent
+    stall raises ``TimeoutError`` after ``retries`` so the caller fails loudly rather
+    than wedging the pipeline.
+    """
+    last_exc: BaseException | None = None
+    for _ in range(retries + 1):
+        fut = _get_read_pool().submit(fn)
+        try:
+            return fut.result(timeout=timeout)
+        except concurrent.futures.TimeoutError as exc:
+            last_exc = exc  # abandon the stuck read; retry on a fresh thread
+    raise TimeoutError(
+        f"tile read stalled: no progress in {retries + 1} attempts of {timeout:.0f}s"
+    ) from last_exc
 
 
 class PrefetchReader:
@@ -67,8 +137,12 @@ class PrefetchReader:
                     return
             try:
                 buf = self._load_fn(tid)
-            except Exception:
-                buf = None  # consumer falls back to a synchronous read
+            except Exception as exc:
+                # Consumer falls back to a synchronous read; log it so a non-stall
+                # failure (corrupt chunk / shape mismatch) is not invisible until it
+                # re-fails synchronously later.
+                logger.warning("prefetch read failed for tile %s: %s", tid, exc)
+                buf = None
             with self._cv:
                 self._buffers[tid] = buf
                 self._cv.notify_all()
@@ -90,8 +164,24 @@ class PrefetchReader:
                 self._cv.notify_all()
             for stale in [k for k in self._buffers if self._index[k] < i]:
                 self._buffers.pop(stale, None)
+            deadline = time.monotonic() + _GET_TIMEOUT_S
             while tile_id not in self._buffers and not self._stop:
-                self._cv.wait()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    # Reader wedged past the deadline. A silent multi-minute wait is
+                    # invisible; log it AND mark the reader dead so subsequent get()s
+                    # short-circuit to the synchronous read immediately instead of
+                    # each re-waiting the full deadline (serialising the actor behind
+                    # repeated long waits).
+                    logger.warning(
+                        "prefetch reader wedged: tile %s not ready after %.0fs; "
+                        "disabling prefetch, falling back to synchronous reads",
+                        tile_id, _GET_TIMEOUT_S,
+                    )
+                    self._stop = True
+                    self._cv.notify_all()
+                    return None
+                self._cv.wait(timeout=remaining)
             return self._buffers.pop(tile_id, None)
 
     def stop(self) -> None:
@@ -264,15 +354,12 @@ def read_tile_block(plan, tile):
     """
     import numpy as np
 
-    from iohub.ngff import open_ome_zarr
-
-    src = open_ome_zarr(plan.input_path, layout="fov", mode="r")
-    z_arr = src["0"]
+    z_arr = _open_input_array(plan.input_path)  # opened once, reused per tile
     sl = (
         slice(plan.timepoint, plan.timepoint + 1),
         slice(plan.channel_idx, plan.channel_idx + 1),
     ) + tuple(tile.slices[d] for d in plan.tile_dims)
-    return np.asarray(z_arr[sl]).squeeze(axis=(0, 1))  # drop singleton T, C
+    return _read_with_retry(lambda: np.asarray(z_arr[sl]).squeeze(axis=(0, 1)))  # drop T, C
 
 
 def load_tile_zyx(plan, tile, *, volume=None, device: str):
@@ -288,15 +375,12 @@ def load_tile_zyx(plan, tile, *, volume=None, device: str):
     if volume is None:
         import numpy as np
 
-        from iohub.ngff import open_ome_zarr
-
-        src = open_ome_zarr(plan.input_path, layout="fov", mode="r")
-        z_arr = src["0"]
+        z_arr = _open_input_array(plan.input_path)  # opened once, reused per tile
         sl_full = (
             slice(plan.timepoint, plan.timepoint + 1),
             slice(plan.channel_idx, plan.channel_idx + 1),
         ) + tuple(tile.slices[d] for d in plan.tile_dims)
-        block_np = np.asarray(z_arr[sl_full]).squeeze(axis=(0, 1))  # drop singleton T, C
+        block_np = _read_with_retry(lambda: np.asarray(z_arr[sl_full]).squeeze(axis=(0, 1)))
         return torch.as_tensor(block_np, dtype=torch.float32, device=device)
     sl = tuple(tile.slices[d] for d in plan.tile_dims)
     return volume[sl].to(torch.float32).contiguous().clone()
