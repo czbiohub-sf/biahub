@@ -76,10 +76,24 @@ def test_default_config_is_valid_and_quiet():
 
 def test_prefetch_below_batch_warns():
     # warn != raise — the model must still construct with the given values.
-    with pytest.warns(UserWarning, match="prefetch_depth .* < recon_batch"):
+    with pytest.warns(UserWarning, match="effective prefetch depth .* < recon_batch"):
         cfg = MonarchConfig(prefetch_depth=1, recon_batch=4)
     assert cfg.prefetch_depth == 1
     assert cfg.recon_batch == 4
+
+
+def test_prefetch_batches_overrides_depth_no_warn():
+    # prefetch_batches expresses read-ahead in recon_batch units; it auto-scales
+    # and never trips the sub-batch warning (effective = batches * recon_batch).
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # any warning would fail
+        cfg = MonarchConfig(recon_batch=8, prefetch_batches=2)
+    assert cfg.effective_prefetch_depth == 16  # 2 batches * 8
+    # prefetch_batches takes precedence over a raw prefetch_depth.
+    cfg2 = MonarchConfig(recon_batch=8, prefetch_depth=99, prefetch_batches=1)
+    assert cfg2.effective_prefetch_depth == 8
 
 
 def test_prefetch_zero_does_not_warn():

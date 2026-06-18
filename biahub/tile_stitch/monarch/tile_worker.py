@@ -369,14 +369,14 @@ class TileWorker(Actor):
         Called by the driver once per TP with ``input_order[g::n_gpus]`` —
         the contiguous sequence this actor (gpu ``g``) will reconstruct. The
         reader pulls the next tile's zarr bytes while the GPU runs the
-        current tile's FFT. No-op when ``monarch.prefetch_depth=0``.
+        current tile's FFT. No-op when the effective prefetch depth is 0.
         """
         # Tear down any reader from the previous TP first.
         if self._reader is not None:
             self._reader.stop()
             self._reader = None
 
-        depth = self._cfg.prefetch_depth
+        depth = self._cfg.effective_prefetch_depth
         if depth <= 0 or not tile_ids:
             return {"gpu_idx": self.gpu_idx, "prefetch": False, "depth": depth}
 

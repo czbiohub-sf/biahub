@@ -1,10 +1,16 @@
 """Tile-stitch run config — Monarch is the only distributed backend.
 
 ``MonarchConfig`` is the **single source of truth** for the durable,
-operator-tunable engine knobs (read from YAML — no env-var overrides, no
-duplicate CLI flags). Only the SLURM-/runtime topology that genuinely varies
-per allocation — ``--nodes``, ``--port``, ``--ready-dir``, ``--shard-by-proc``
-— stays on the CLI, since it can't be a static config value.
+operator-tunable engine knobs (read from YAML — no env-var overrides of durable
+knobs, no duplicate CLI flags). Only the SLURM-/runtime topology that genuinely
+varies per allocation — ``--nodes``, ``--port``, ``--ready-dir``,
+``--shard-by-proc`` — stays on the CLI, since it can't be a static config value.
+
+A few **debug / topology escape-hatch** env vars remain on the backend (not
+durable tuning): ``TILE_NUMA_BIND``, ``TILE_SHUTDOWN_TIMEOUT_S``,
+``TILE_DRIVE_HB_S`` (and the ``_core`` read-timeout knobs). The durable
+recon-dispatch knobs that used to be env vars are now config fields
+(``recon_max_inflight_per_gpu``, ``recon_rpc_timeout_s``, ``recon_rpc_retries``).
 """
 
 import warnings
@@ -62,6 +68,19 @@ class CompileMode(StrEnum):
     NONE = "none"
 
 
+class TileCacheOrder(StrEnum):
+    """Recon/stitch traversal order when the bounded tile-cache path is on.
+
+    MORTON (Z-order) keeps a cell's contributors co-resident → smallest live band
+    (measured −57% spills vs raster). RASTER = lexicographic. PLAN = the engine's
+    existing ``input_order`` (only the recon-dispatch budget applies, no reorder).
+    """
+
+    MORTON = "morton"
+    RASTER = "raster"
+    PLAN = "plan"
+
+
 class MonarchConfig(BaseModel):
     """Durable knobs for the Monarch tile-stitch engine.
 
@@ -85,7 +104,18 @@ class MonarchConfig(BaseModel):
     )
     prefetch_depth: NonNegativeInt = Field(
         default=6,
-        description="Background read-ahead depth (0 disables). Want >= recon_batch.",
+        description="Background read-ahead depth in TILES (0 disables). Raw escape "
+        "hatch; want >= recon_batch. Prefer prefetch_batches, which expresses this "
+        "in the natural unit and can't drop below a batch.",
+    )
+    prefetch_batches: NonNegativeInt | None = Field(
+        default=None,
+        description="Background read-ahead in RECON BATCHES — the natural unit, "
+        "since the consumer pulls a whole recon_batch at once. When set, the "
+        "effective tile depth is prefetch_batches * recon_batch, so it auto-scales "
+        "with recon_batch and never drops below one batch (the partial-overlap "
+        "footgun). Takes precedence over prefetch_depth. 0 disables prefetch; 2 = a "
+        "batch of slack to hide IO jitter on the IO/D2H-bound read path.",
     )
     rdma_timeout_s: PositiveInt = 60
     recon_concurrency: PositiveInt = Field(
@@ -116,16 +146,68 @@ class MonarchConfig(BaseModel):
         "is unaffected — only the stored tile loses bits.",
     )
 
+    tile_cache: bool = Field(
+        default=False,
+        description="Bound resident reconstructed tiles by a recon-dispatch budget "
+        "+ traversal order (the P3b OOM fix). Off (default) = the legacy "
+        "dispatch-all-recons path. On: recon dispatch is gated so at most "
+        "``resident_budget`` tiles are resident at once — recon can't outrun Stage "
+        "B and pile up host RAM.",
+    )
+    tile_cache_order: TileCacheOrder = Field(
+        default=TileCacheOrder.MORTON,
+        description="Recon/stitch traversal order when tile_cache is on.",
+    )
+    resident_budget: PositiveInt | None = Field(
+        default=None,
+        description="Max resident reconstructed tiles (recon-dispatch cap). Null = "
+        "auto: the interval-overlap peak of the chosen order (the minimum that can "
+        "stitch without deadlock). Higher = more recon-ahead (GPU util) at more "
+        "host RAM; the cap is also raised to >= recon_batch and max output fan-in.",
+    )
+    recon_max_inflight_per_gpu: NonNegativeInt = Field(
+        default=3,
+        description="Max concurrent in-flight recon work-units PER GPU on the "
+        "tile_cache (gated) path. Without a bound, all recon tasks hit the gate and "
+        "fire RPCs at once, flooding the Monarch mesh until calls stop flowing "
+        "(driver+workers idle, GPUs 0%). 0 = unbounded (legacy). Only applies when "
+        "tile_cache is on.",
+    )
+    recon_rpc_timeout_s: PositiveInt = Field(
+        default=90,
+        description="Per-recon-RPC timeout. Monarch occasionally fails to deliver/"
+        "pick up a reconstruct call under load (it never returns); a call exceeding "
+        "this is re-sent (rotating GPU). Set well above normal batch latency.",
+    )
+    recon_rpc_retries: NonNegativeInt = Field(
+        default=3,
+        description="Recon-RPC re-send attempts after a timeout before failing the "
+        "TP loudly.",
+    )
+
+    @property
+    def effective_prefetch_depth(self) -> int:
+        """Tile read-ahead depth the reader actually uses. ``prefetch_batches`` (in
+        units of ``recon_batch``) takes precedence over the raw ``prefetch_depth``,
+        so a batch-expressed setting can't fall below one batch."""
+        if self.prefetch_batches is not None:
+            return self.prefetch_batches * self.recon_batch
+        return self.prefetch_depth
+
     @model_validator(mode="after")
     def _warn_prefetch_below_batch(self) -> Self:
         # A prefetch depth below the batch size can't keep a whole next batch
         # buffered during the current FFT, so IO overlap is only partial. This
-        # is a perf footgun, not invalid — warn, don't raise.
-        if 0 < self.prefetch_depth < self.recon_batch:
+        # is a perf footgun, not invalid — warn, don't raise. Checked on the
+        # EFFECTIVE depth, so a prefetch_batches setting (which is batch-derived)
+        # never trips it; only a raw prefetch_depth < recon_batch does.
+        d = self.effective_prefetch_depth
+        if 0 < d < self.recon_batch:
             warnings.warn(
-                f"prefetch_depth ({self.prefetch_depth}) < recon_batch "
+                f"effective prefetch depth ({d}) < recon_batch "
                 f"({self.recon_batch}): prefetch can't stay a full batch ahead; "
-                "IO overlap will be partial. Set prefetch_depth >= recon_batch.",
+                "IO overlap will be partial. Set prefetch_batches >= 1 (or "
+                "prefetch_depth >= recon_batch).",
                 stacklevel=2,
             )
         return self
