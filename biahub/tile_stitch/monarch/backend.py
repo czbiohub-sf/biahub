@@ -27,18 +27,18 @@ import asyncio
 import contextlib
 import logging
 import os
-import subprocess
 import time
 
 from collections import defaultdict
-from pathlib import Path
 
 logger = logging.getLogger("MonarchBackend")
 
-# Pin each actor (CUDA device i) to its GPU's local NUMA node so H2D/D2H staging
-# and RDMA buffers use local memory bandwidth + the GPU's local NIC. Opt-out via
-# TILE_NUMA_BIND=0. Derivation falls back to no-binding if the topology can't be read.
-_NUMA_BIND = os.environ.get("TILE_NUMA_BIND", "1") != "0"
+# NUMA membind was removed: pinning each actor's memory to its GPU's local NUMA
+# node backfired under SLURM's multi-actor-per-NUMA packing — multiple read-heavy
+# actors saturated one NUMA's memory bandwidth (and membind pins memory, not the
+# threads, forcing cross-socket traffic for whichever actor's threads scheduled
+# remote), producing a ~4x single-actor read straggler. Letting Linux first-touch
+# place pages (no bind) balanced reads and cut aggregate io ~2.7x. So: no proc_bind.
 
 # Budget for draining Monarch's actor-context shutdown in teardown (see teardown).
 _SHUTDOWN_TIMEOUT_S = float(os.environ.get("TILE_SHUTDOWN_TIMEOUT_S", "15"))
@@ -65,46 +65,6 @@ _DRIVE_HB_S = float(os.environ.get("TILE_DRIVE_HB_S", "0"))
 _DEFAULT_MAX_INFLIGHT_PER_GPU = 3
 _DEFAULT_RECON_RPC_TIMEOUT_S = 90.0
 _DEFAULT_RECON_RPC_RETRIES = 3
-
-
-def _numa_proc_bind(n_gpus: int) -> list[dict[str, str]] | None:
-    """Per-proc NUMA binding list (proc i -> the NUMA node local to CUDA device i),
-    derived from the node's PCI topology. Returns None if it can't be resolved.
-    Assumes CUDA_DEVICE_ORDER=PCI_BUS_ID, so CUDA index == nvidia-smi index.
-    """
-    try:
-        out = subprocess.run(
-            ["nvidia-smi", "--query-gpu=index,pci.bus_id", "--format=csv,noheader"],
-            capture_output=True, text=True, timeout=30, check=True,
-        ).stdout
-    except Exception as exc:
-        logger.warning("NUMA bind: nvidia-smi query failed (%s); skipping", exc)
-        return None
-    by_idx: dict[int, str] = {}
-    for line in out.strip().splitlines():
-        idx_s, bus = (p.strip() for p in line.split(","))
-        parts = bus.split(":")  # nvidia-smi 00000000:18:00.0 -> /sys 0000:18:00.0
-        if len(parts) != 3:
-            return None
-        # /sys uses a 4-digit, lowercase domain (nvidia-smi gives 8-digit, uppercase).
-        dom = f"{parts[0][-4:]}:{parts[1]}:{parts[2]}".lower()
-        try:
-            numa = Path(f"/sys/bus/pci/devices/{dom}/numa_node").read_text().strip()
-        except OSError:
-            return None
-        if int(numa) < 0:  # -1 => kernel reports no NUMA affinity
-            return None
-        by_idx[int(idx_s)] = numa
-    if len(by_idx) < n_gpus:
-        return None
-    # membind only: pin each actor's allocations (H2D staging + RDMA buffers) to its
-    # GPU's local NUMA memory. cpunodebind is omitted on purpose — a partial CPU
-    # allocation may not include that NUMA's cores, which would make the proc
-    # unschedulable (spawn hang); membind is valid regardless of the cpuset and
-    # captures the H2D/NIC-locality win (the IO/D2H bottleneck).
-    bindings = [{"membind": by_idx[i]} for i in range(n_gpus)]
-    logger.info("NUMA bind (membind): proc->NUMA = %s", [b["membind"] for b in bindings])
-    return bindings
 
 
 class _ResidentGate:
@@ -355,10 +315,7 @@ class MonarchBackend:
             logger.info("attaching to %d host workers: %s", len(addrs), addrs)
             host_mesh = ma.attach_to_workers(workers=addrs, ca="trust_all_connections")
             _await_initialized_sync(host_mesh)
-            self._procs = host_mesh.spawn_procs(
-                per_host={"gpus": self._gpn},
-                proc_bind=(_numa_proc_bind(self._gpn) if _NUMA_BIND else None),
-            )
+            self._procs = host_mesh.spawn_procs(per_host={"gpus": self._gpn})
             self._n_gpus = len(self._node_list) * self._gpn
             logger.info(
                 "multi-host mesh: %d nodes × %d gpus = %d actors",
@@ -373,10 +330,7 @@ class MonarchBackend:
                 "single host: spawning %d actors (one per CUDA device)",
                 self._n_gpus,
             )
-            self._procs = this_host().spawn_procs(
-                per_host={"gpus": self._n_gpus},
-                proc_bind=(_numa_proc_bind(self._n_gpus) if _NUMA_BIND else None),
-            )
+            self._procs = this_host().spawn_procs(per_host={"gpus": self._n_gpus})
         # Init actors with the FIRST plan; subsequent TPs swap_to.
         self._workers = self._procs.spawn(
             "tile_workers", TileWorker, plan_path=first_plan_path

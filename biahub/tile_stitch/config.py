@@ -6,10 +6,10 @@ knobs, no duplicate CLI flags). Only the SLURM-/runtime topology that genuinely
 varies per allocation — ``--nodes``, ``--port``, ``--ready-dir``,
 ``--shard-by-proc`` — stays on the CLI, since it can't be a static config value.
 
-A few **debug / topology escape-hatch** env vars remain on the backend (not
-durable tuning): ``TILE_NUMA_BIND``, ``TILE_SHUTDOWN_TIMEOUT_S``,
-``TILE_DRIVE_HB_S`` (and the ``_core`` read-timeout knobs). The durable
-recon-dispatch knobs that used to be env vars are now config fields
+A few **debug escape-hatch** env vars remain on the backend (not durable
+tuning): ``TILE_SHUTDOWN_TIMEOUT_S``, ``TILE_DRIVE_HB_S`` (and the ``_core``
+read-timeout knobs). The durable recon-dispatch knobs that used to be env vars
+are now config fields
 (``recon_max_inflight_per_gpu``, ``recon_rpc_timeout_s``, ``recon_rpc_retries``).
 """
 
@@ -189,7 +189,8 @@ class MonarchConfig(BaseModel):
     def effective_prefetch_depth(self) -> int:
         """Tile read-ahead depth the reader actually uses. ``prefetch_batches`` (in
         units of ``recon_batch``) takes precedence over the raw ``prefetch_depth``,
-        so a batch-expressed setting can't fall below one batch."""
+        so a batch-expressed setting can't fall below one batch.
+        """
         if self.prefetch_batches is not None:
             return self.prefetch_batches * self.recon_batch
         return self.prefetch_depth
