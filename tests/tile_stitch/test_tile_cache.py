@@ -1,14 +1,13 @@
-"""Adapter tests: a fake int-keyed plan (the ``RunPlan`` duck type — ``tile_id`` +
-``slices: dict[str, slice]`` + ``output_to_inputs`` + ``tile_dims``) fed through
-``output_to_inputs_and_order``. Pins that the bridge produces a valid traversal and
-that Morton (from real slice coords) has a lower resident peak than raster."""
+"""Tests for the recon-dispatch order + budget. A fake int-keyed plan (the
+``RunPlan`` duck type — ``tile_id`` + ``slices: dict[str, slice]`` +
+``output_to_inputs`` + ``tile_dims``) is fed through ``morton_output_order``,
+without building a full waveorder plan."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from biahub.tile_stitch.tile_cache import peak_resident_tiles
-from biahub.tile_stitch.tile_cache_adapter import output_to_inputs_and_order
+from biahub.tile_stitch.tile_cache import morton_output_order, peak_resident_tiles
 
 TILE, OVERLAP = 8, 2
 STRIDE = TILE - OVERLAP
@@ -54,12 +53,11 @@ def _fake_plan(n: int):
     return _Plan(out_to_in, out_tiles, DIMS)
 
 
-def test_adapter_order_is_valid_permutation():
+def test_morton_order_is_valid_permutation():
     plan = _fake_plan(6)
-    for kind in ("morton", "raster"):
-        out_to_in, order = output_to_inputs_and_order(plan, order=kind)
-        assert sorted(order) == sorted(plan.output_to_inputs), kind  # no dupes/drops
-        assert out_to_in == plan.output_to_inputs
+    order = morton_output_order(plan)
+    assert sorted(order) == sorted(plan.output_to_inputs)  # no dupes/drops
+    assert order != sorted(plan.output_to_inputs)  # actually Z-order reordered
 
 
 def test_peak_resident_tiles_is_interval_overlap():

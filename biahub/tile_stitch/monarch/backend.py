@@ -96,29 +96,23 @@ class _ResidentGate:
 def _tile_cache_schedule(run_plan, recon_batch: int, cfg) -> tuple[list[int], int]:
     """Recon-dispatch order + resident budget for the bounded tile-cache path.
 
-    Morton/raster-orders the output tiles, then orders input tiles by their
+    Morton-orders the output tiles, then orders input tiles by their
     earliest-consuming output's rank (so recon follows the stitch sweep → tight
-    band). Budget = the chosen order's interval-overlap peak (min feasible),
-    clamped to >= recon_batch and >= max output fan-in (deadlock-safe).
+    band). Budget = that order's interval-overlap peak (min feasible), clamped to
+    >= recon_batch and >= max output fan-in (deadlock-safe).
     """
-    from biahub.tile_stitch.tile_cache import peak_resident_tiles
-    from biahub.tile_stitch.tile_cache_adapter import output_to_inputs_and_order
+    from biahub.tile_stitch.tile_cache import morton_output_order, peak_resident_tiles
 
     out_to_in = run_plan.output_to_inputs
-    kind = cfg.tile_cache_order.value
-    if kind == "plan":
-        in_order = list(run_plan.input_order)
-        out_order = list(out_to_in)
-    else:
-        _, out_order = output_to_inputs_and_order(run_plan, order=kind)
-        rank = {oid: i for i, oid in enumerate(out_order)}
-        input_to_outputs: dict[int, list[int]] = defaultdict(list)
-        for oid, ins in out_to_in.items():
-            for tid in ins:
-                input_to_outputs[tid].append(oid)
-        in_order = sorted(
-            input_to_outputs, key=lambda tid: min(rank[o] for o in input_to_outputs[tid])
-        )
+    out_order = morton_output_order(run_plan)
+    rank = {oid: i for i, oid in enumerate(out_order)}
+    input_to_outputs: dict[int, list[int]] = defaultdict(list)
+    for oid, ins in out_to_in.items():
+        for tid in ins:
+            input_to_outputs[tid].append(oid)
+    in_order = sorted(
+        input_to_outputs, key=lambda tid: min(rank[o] for o in input_to_outputs[tid])
+    )
     auto = peak_resident_tiles(out_to_in, out_order)
     max_fanin = max((len(v) for v in out_to_in.values()), default=1)
     n_gpus = getattr(cfg, "gpus_per_node", 1) or 1
@@ -400,11 +394,7 @@ class MonarchBackend:
         if cfg is not None and getattr(cfg, "tile_cache", False):
             input_order, budget = _tile_cache_schedule(run_plan, recon_batch, cfg)
             gate = _ResidentGate(budget)
-            logger.info(
-                "tile_cache ON: order=%s resident_budget=%d tiles",
-                cfg.tile_cache_order.value,
-                budget,
-            )
+            logger.info("tile_cache ON: morton order, resident_budget=%d tiles", budget)
 
         recon_handles: dict[int, object] = {}
         pending_outputs = {

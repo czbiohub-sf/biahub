@@ -10,7 +10,7 @@ import asyncio
 
 from dataclasses import dataclass
 
-from biahub.tile_stitch.config import MonarchConfig, TileCacheOrder
+from biahub.tile_stitch.config import MonarchConfig
 from biahub.tile_stitch.monarch.backend import _ResidentGate, _tile_cache_schedule
 
 TILE, OVERLAP = 8, 2
@@ -87,19 +87,11 @@ def test_resident_gate_bounds_concurrency_no_deadlock():
 def test_tile_cache_schedule_morton_valid_and_budget_safe():
     plan = _fake_plan(6)
     max_fanin = max(len(v) for v in plan.output_to_inputs.values())
-    cfg = MonarchConfig(tile_cache=True, tile_cache_order=TileCacheOrder.MORTON)
+    cfg = MonarchConfig(tile_cache=True)
     in_order, budget = _tile_cache_schedule(plan, recon_batch=4, cfg=cfg)
     assert sorted(in_order) == sorted(plan.input_order)  # valid permutation of inputs
     assert budget >= max_fanin and budget >= 4  # deadlock-safe + >= recon_batch
     assert in_order != plan.input_order  # Morton actually reordered
-
-
-def test_tile_cache_schedule_plan_order_is_identity():
-    plan = _fake_plan(4)
-    cfg = MonarchConfig(tile_cache=True, tile_cache_order=TileCacheOrder.PLAN)
-    in_order, budget = _tile_cache_schedule(plan, recon_batch=1, cfg=cfg)
-    assert in_order == plan.input_order  # PLAN = engine's existing order, unchanged
-    assert budget >= 1
 
 
 def test_explicit_budget_below_floor_is_raised():

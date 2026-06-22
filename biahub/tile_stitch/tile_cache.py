@@ -1,15 +1,18 @@
 """Traversal order + memory gate for the bounded recon-dispatch path.
 
-The two pure functions the live engine needs: ``morton_order`` (locality sweep,
-keeps a cell's contributors co-resident) and ``peak_resident_tiles`` (the
-plan-time budget — exact peak live input tiles for a batch=1 sweep).
+The live engine needs: ``morton_output_order`` (Morton sweep over a plan's output
+tiles) and ``peak_resident_tiles`` (the plan-time budget — exact peak live input
+tiles for a batch=1 sweep).
 """
 
 from __future__ import annotations
 
 import heapq
+import logging
 
 from collections.abc import Hashable, Iterable, Sequence
+
+logger = logging.getLogger(__name__)
 
 
 def morton_order(cells: Iterable[Sequence[int]]) -> list:
@@ -28,6 +31,29 @@ def morton_order(cells: Iterable[Sequence[int]]) -> list:
         return r
 
     return sorted(cells, key=code)
+
+
+def morton_output_order(plan) -> list[int]:
+    """Z-order a plan's output tiles by their start coords (the recon sweep order).
+
+    Duck-typed on ``plan``: needs ``output_to_inputs``, ``output_tiles`` (each with
+    ``.tile_id`` + ``.slices: dict[str, slice]``), and ``tile_dims``. Output tiles
+    are disjoint, so start coords are unique → the coord↔id map is bijective.
+    """
+    dims = tuple(plan.tile_dims)
+    coord_of = {ot.tile_id: tuple(ot.slices[d].start for d in dims) for ot in plan.output_tiles}
+    ids = [oid for oid in plan.output_to_inputs if oid in coord_of]
+    missing = [oid for oid in plan.output_to_inputs if oid not in coord_of]
+    if missing:
+        # An output with no coord would be silently dropped from the sweep and
+        # never stitched — the plan should carry a coord for every output.
+        logger.warning(
+            "morton order: %d/%d output tiles have no coord, excluded from the sweep "
+            "(first few: %s)",
+            len(missing), len(plan.output_to_inputs), missing[:5],
+        )
+    coord_to_id = {coord_of[oid]: oid for oid in ids}
+    return [coord_to_id[c] for c in morton_order(coord_of[oid] for oid in ids)]
 
 
 def peak_resident_tiles(out_to_in: dict[Hashable, Sequence], order: Sequence) -> int:

@@ -55,14 +55,6 @@ class CompileMode(StrEnum):
     NONE = "none"
 
 
-class TileCacheOrder(StrEnum):
-    """Recon-dispatch traversal order: MORTON (Z-order locality), RASTER (lexicographic), PLAN (engine input_order, budget-only)."""
-
-    MORTON = "morton"
-    RASTER = "raster"
-    PLAN = "plan"
-
-
 class MonarchConfig(BaseModel):
     """Durable knobs for the Monarch tile-stitch engine.
 
@@ -112,12 +104,8 @@ class MonarchConfig(BaseModel):
 
     tile_cache: bool = Field(
         default=False,
-        description="Gate recon dispatch to a resident budget + traversal order "
+        description="Gate recon dispatch to a resident budget over a Morton sweep "
         "(off = legacy dispatch-all).",
-    )
-    tile_cache_order: TileCacheOrder = Field(
-        default=TileCacheOrder.MORTON,
-        description="Traversal order when tile_cache is on.",
     )
     resident_budget: PositiveInt | None = Field(
         default=None,
