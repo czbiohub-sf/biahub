@@ -61,10 +61,7 @@ track = ["ultrack>=0.7"]
 
 gui = ["napari[pyqt6]", "PyQt6>=6.5,<6.8", "napari-animation"]
 
-# TODO: resolved to v0.3.2 which is not compatible with iohub 0.3.0a7
-# bring bach once we sort out iohub dependencies
-# stain = ["viscy"]
-stain = []
+stain = ["cytoland"]
 
 build = ["build", "twine"]
 
@@ -98,6 +95,9 @@ index-strategy = "unsafe-best-match"
 # commit. Drop this source and bump the version constraint above once a release
 # ships it.
 waveorder = { git = "https://github.com/mehta-lab/waveorder.git", rev = "f377a43" }
+# Pin cytoland to the commit from VisCy PR #465 (non-square TTA and helpers).
+# Revert to the PyPI release once that PR is merged and published.
+cytoland = { git = "https://github.com/mehta-lab/VisCy", subdirectory = "applications/cytoland", rev = "7fb3bc1e78c0e0bd26e1845caba860f76223ba02" }
 # Pin iohub to the branch that stores per-step provenance as top-level
 # zattrs keys (e.g. biahub-flat_field, biahub-deskew). Revert to the PyPI
 # release once those changes are merged and published.
