@@ -23,70 +23,6 @@ from biahub.tile_stitch._core import PrefetchReader
 from biahub.tile_stitch.config import MonarchConfig
 
 
-def _read_numa_node_for_gpu(gpu_idx: int) -> int | None:
-    """Resolve NUMA node for a CUDA device via pynvml→sysfs.
-
-    Returns ``None`` if the PCI device reports node ``-1`` (kernel-managed,
-    no affinity) or anything fails. H200 nodes report a real node for
-    every GPU, so ``None`` should only happen on misconfigured boxes.
-    """
-    try:
-        import pynvml
-
-        pynvml.nvmlInit()
-        try:
-            handle = pynvml.nvmlDeviceGetHandleByIndex(gpu_idx)
-            pci = pynvml.nvmlDeviceGetPciInfo(handle)
-            bus_id = pci.busIdLegacy.decode().lower()
-        finally:
-            pynvml.nvmlShutdown()
-        with open(f"/sys/bus/pci/devices/{bus_id}/numa_node") as f:
-            node = int(f.read().strip())
-        if node < 0:
-            return None
-        return node
-    except Exception:
-        return None
-
-
-def _pin_to_numa_for_gpu(gpu_idx: int) -> int | None:
-    """Set CPU affinity of the current thread to the GPU's NUMA node.
-
-    Returns the NUMA node id we pinned to (or ``None`` if no affinity was
-    applied — for example, on a host without sysfs NUMA info).
-    """
-    import os
-
-    node = _read_numa_node_for_gpu(gpu_idx)
-    if node is None:
-        # H200 Bruno fallback: GPU 0 → node 2, GPU 1 → node 3.
-        node = gpu_idx + 2
-    try:
-        with open(f"/sys/devices/system/node/node{node}/cpulist") as f:
-            cpulist = f.read().strip()
-    except FileNotFoundError:
-        return None
-    cpus: set[int] = set()
-    for part in cpulist.split(","):
-        if not part:
-            continue
-        if "-" in part:
-            lo, hi = part.split("-", 1)
-            cpus.update(range(int(lo), int(hi) + 1))
-        else:
-            cpus.add(int(part))
-    if not cpus:
-        return None
-    # SLURM cgroup may restrict us to a subset of host CPUs. Intersect so
-    # ``sched_setaffinity`` does not EINVAL on CPUs we don't actually own.
-    allowed = os.sched_getaffinity(0)
-    target = cpus & allowed
-    if not target:
-        return None
-    os.sched_setaffinity(0, target)
-    return node
-
-
 class TileHandle:
     """Picklable handle: ``RDMABuffer`` + shape + dtype name.
 
@@ -137,11 +73,6 @@ class TileWorker(Actor):
             gpu_idx = int(rank)
         torch.cuda.set_device(gpu_idx)
         self.gpu_idx = gpu_idx
-        # Pin CPU affinity to the GPU-local NUMA node. asyncio thread pool
-        # workers (used by ``asyncio.to_thread`` for blend + zarr write)
-        # inherit this affinity on Linux, keeping CPU blend work on the
-        # same socket as the GPU we DMA from.
-        self._numa_node = _pin_to_numa_for_gpu(gpu_idx)
         self.plan = load_plan(plan_path)
         self.plan_path = plan_path
         # Monarch knobs ride on the plan (carried across setup + swap_to). An
@@ -253,28 +184,6 @@ class TileWorker(Actor):
             )
             self._compiled_recon = _eager
         return self._compiled_recon
-
-    @endpoint
-    async def hostinfo(self) -> dict:
-        """Diagnostic: report host, pid, GPU index, and plan tile counts."""
-        import os
-        import socket
-
-        import torch
-
-        affinity = sorted(os.sched_getaffinity(0))
-        return {
-            "host": socket.gethostname(),
-            "pid": os.getpid(),
-            "gpu_idx": self.gpu_idx,
-            "numa_node": getattr(self, "_numa_node", None),
-            "affinity_cpus": f"{affinity[0]}-{affinity[-1]}" if affinity else "?",
-            "n_affinity_cpus": len(affinity),
-            "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES", "<unset>"),
-            "torch_cuda_current": torch.cuda.current_device(),
-            "n_input_tiles": len(self.plan.input_tiles),
-            "n_output_tiles": len(self.plan.output_tiles),
-        }
 
     def _load_tile_gpu(self, tile):
         """Load one input tile to a ``(Z, Y, X)`` float32 GPU tensor.
