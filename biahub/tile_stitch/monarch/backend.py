@@ -101,7 +101,7 @@ def _dispatch_schedule(run_plan, recon_batch: int, cfg) -> tuple[list[int], int]
     band). Budget = that order's interval-overlap peak (min feasible), clamped to
     >= recon_batch and >= max output fan-in (deadlock-safe).
     """
-    from biahub.tile_stitch.tile_cache import morton_output_order, peak_resident_tiles
+    from biahub.tile_stitch.dispatch import morton_output_order, peak_resident_tiles
 
     out_to_in = run_plan.output_to_inputs
     out_order = morton_output_order(run_plan)

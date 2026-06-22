@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from biahub.tile_stitch.tile_cache import morton_output_order, peak_resident_tiles
+from biahub.tile_stitch.dispatch import morton_output_order, peak_resident_tiles
 
 TILE, OVERLAP = 8, 2
 STRIDE = TILE - OVERLAP
