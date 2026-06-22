@@ -128,9 +128,7 @@ class TileWorker(Actor):
         # both the pinned-copy and the ibverbs-MR bytes; cast GPU-side in _d2h
         # BEFORE the pinned copy (cast-during-copy drops to the pageable rate).
         self._recon_dtype = (
-            torch.float16
-            if self._cfg.recon_dtype == "float16"
-            else torch.float32
+            torch.float16 if self._cfg.recon_dtype == "float16" else torch.float32
         )
         self._reset_recon_stats()
 
@@ -189,9 +187,7 @@ class TileWorker(Actor):
 
         Streams the tile from zarr (per-tile read, no resident volume).
         """
-        return _core.load_tile_zyx(
-            self.plan, tile, volume=None, device=f"cuda:{self.gpu_idx}"
-        )
+        return _core.load_tile_zyx(self.plan, tile, volume=None, device=f"cuda:{self.gpu_idx}")
 
     def _load_one(self, tile_id: int, tile):
         """Load one tile to a ``(Z,Y,X)`` f32 cuda tensor, preferring prefetch.
@@ -500,9 +496,11 @@ class TileWorker(Actor):
         }
 
     async def _drop_buffers(self, tile_ids: list[int]) -> None:
-        """Deregister the RDMABuffers for ``tile_ids`` (releases pinned host
-        pages). ``RDMABuffer`` has no ``__del__``, so this explicit ``drop()``
-        is what actually frees the ibverbs MR; without it RSS grows per TP."""
+        """Deregister the RDMABuffers for ``tile_ids`` (releases pinned host pages).
+
+        ``RDMABuffer`` has no ``__del__``, so this explicit ``drop()`` is what
+        actually frees the ibverbs MR; without it RSS grows per TP.
+        """
         for tid in tile_ids:
             buf = self._rdma_buffers.pop(tid, None)
             if buf is None:
@@ -514,9 +512,11 @@ class TileWorker(Actor):
 
     @endpoint
     async def forget(self, tile_ids: list[int]) -> int:
-        """Free cached recons for ``tile_ids``: drop their RDMABuffers (the MR
-        keeps the host pages pinned otherwise) and the cached tensors. Returns
-        the count of tensors freed."""
+        """Free cached recons for ``tile_ids``; return the count freed.
+
+        Drops their RDMABuffers (the MR keeps the host pages pinned otherwise)
+        and the cached tensors.
+        """
         await self._drop_buffers(tile_ids)
         n = 0
         for tid in tile_ids:

@@ -116,7 +116,12 @@ def _dispatch_schedule(run_plan, recon_batch: int, cfg) -> tuple[list[int], int]
     budget = max(cfg.resident_budget or 0, safe_floor, max_fanin, recon_batch)
     logger.info(
         "bounded_dispatch budget=%d tiles (auto_peak=%d + headroom %dx%d; max_fanin=%d cfg_req=%s)",
-        budget, auto, recon_batch, n_gpus, max_fanin, cfg.resident_budget,
+        budget,
+        auto,
+        recon_batch,
+        n_gpus,
+        max_fanin,
+        cfg.resident_budget,
     )
     return in_order, budget
 
@@ -390,7 +395,9 @@ class MonarchBackend:
         }
         stitch_count = 0
         stitch_in_flight = 0
-        recon_done = [False]  # set True after all recons finish; concurrent-drainer stop signal
+        recon_done = [
+            False
+        ]  # set True after all recons finish; concurrent-drainer stop signal
         summaries: list[dict] = []
 
         # Refcount each input tile by how many output tiles still need it. When a
@@ -477,10 +484,11 @@ class MonarchBackend:
             return list(seen)
 
         async def _recon_rpc(method: str, gpu: int, **kw):
-            """Issue a reconstruct[_batch] RPC with timeout+retry. A call that
-            doesn't return within the timeout is re-sent to the next GPU (Monarch
-            occasionally drops one under load, which would otherwise wedge the
-            drive). Non-timeout errors propagate immediately.
+            """Issue a reconstruct[_batch] RPC with timeout+retry.
+
+            A call that doesn't return within the timeout is re-sent to the next
+            GPU (Monarch occasionally drops one under load, which would otherwise
+            wedge the drive). Non-timeout errors propagate immediately.
 
             KNOWN TRADEOFF: on a timeout we re-send without cancelling the original
             on its worker — a *merely slow* (not dropped) call then runs twice, so
@@ -498,7 +506,10 @@ class MonarchBackend:
                 except TimeoutError:
                     logger.warning(
                         "recon RPC %s timed out on gpu=%d (attempt %d/%d) — re-sending",
-                        method, g, attempt + 1, rpc_retries + 1,
+                        method,
+                        g,
+                        attempt + 1,
+                        rpc_retries + 1,
                     )
             raise TimeoutError(f"reconstruct stuck after {rpc_retries} retries ({method})")
 
@@ -579,9 +590,7 @@ class MonarchBackend:
             # will reconstruct). The reader then pulls tile N+1 from zarr
             # while the GPU runs FFT on tile N. No-op if prefetch is disabled.
             prime_futs = [
-                self._actor_one(g).prime_reader.call_one(
-                    tile_ids=input_order[g::n_gpus]
-                )
+                self._actor_one(g).prime_reader.call_one(tile_ids=input_order[g::n_gpus])
                 for g in range(n_gpus)
             ]
             await asyncio.gather(*prime_futs)
@@ -607,14 +616,20 @@ class MonarchBackend:
             async def _heartbeat() -> None:
                 while True:
                     await asyncio.sleep(_DRIVE_HB_S)
-                    ready = sum(1 for ins in pending_outputs.values()
-                                if ins <= recon_handles.keys())
+                    ready = sum(
+                        1 for ins in pending_outputs.values() if ins <= recon_handles.keys()
+                    )
                     logger.info(
                         "DRIVE hb: a_remaining=%d in_flight=%d gate_free=%d held=%d "
                         "ready_undispatched=%d freed_pending=%d done=%d recon_done=%s",
-                        a_remaining[0], stitch_in_flight, gate._free,
-                        len(recon_handles), ready, len(freed_pending),
-                        len(summaries), recon_done[0],
+                        a_remaining[0],
+                        stitch_in_flight,
+                        gate._free,
+                        len(recon_handles),
+                        ready,
+                        len(freed_pending),
+                        len(summaries),
+                        recon_done[0],
                     )
 
             drainer = asyncio.create_task(_drainer())

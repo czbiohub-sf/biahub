@@ -41,15 +41,23 @@ def _fake_plan(n: int):
                 oid = gid(oz, oy, ox)
                 out_to_in[oid] = [
                     gid(iz, iy, ix)
-                    for iz in range(n) if ov(iz, oz)
-                    for iy in range(n) if ov(iy, oy)
-                    for ix in range(n) if ov(ix, ox)
+                    for iz in range(n)
+                    if ov(iz, oz)
+                    for iy in range(n)
+                    if ov(iy, oy)
+                    for ix in range(n)
+                    if ov(ix, ox)
                 ]
-                out_tiles.append(_Tile(oid, {
-                    "z": slice(oz * STRIDE, oz * STRIDE + STRIDE),
-                    "y": slice(oy * STRIDE, oy * STRIDE + STRIDE),
-                    "x": slice(ox * STRIDE, ox * STRIDE + STRIDE),
-                }))
+                out_tiles.append(
+                    _Tile(
+                        oid,
+                        {
+                            "z": slice(oz * STRIDE, oz * STRIDE + STRIDE),
+                            "y": slice(oy * STRIDE, oy * STRIDE + STRIDE),
+                            "x": slice(ox * STRIDE, ox * STRIDE + STRIDE),
+                        },
+                    )
+                )
     return _Plan(out_to_in, out_tiles, DIMS)
 
 

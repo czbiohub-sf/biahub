@@ -127,9 +127,11 @@ class MonarchConfig(BaseModel):
 
     @property
     def effective_prefetch_depth(self) -> int:
-        """Tile read-ahead depth the reader actually uses. ``prefetch_batches`` (in
-        units of ``recon_batch``) takes precedence over the raw ``prefetch_depth``,
-        so a batch-expressed setting can't fall below one batch.
+        """Tile read-ahead depth the reader actually uses.
+
+        ``prefetch_batches`` (in units of ``recon_batch``) takes precedence over
+        the raw ``prefetch_depth``, so a batch-expressed setting can't fall below
+        one batch.
         """
         if self.prefetch_batches is not None:
             return self.prefetch_batches * self.recon_batch

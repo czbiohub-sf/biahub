@@ -71,11 +71,12 @@ def _get_read_pool() -> concurrent.futures.ThreadPoolExecutor:
 
 
 def _read_with_retry(fn, *, timeout: float = _READ_TIMEOUT_S, retries: int = _READ_RETRIES):
-    """Run a blocking read with a deadline, retrying a stalled attempt on a fresh
-    thread. A read that raises propagates immediately (a real error, not a stall); a
-    read that never returns is abandoned after ``timeout`` and retried; a persistent
-    stall raises ``TimeoutError`` after ``retries`` so the caller fails loudly rather
-    than wedging the pipeline.
+    """Run a blocking read with a deadline, retrying a stalled attempt.
+
+    Runs on a fresh thread. A read that raises propagates immediately (a real
+    error, not a stall); a read that never returns is abandoned after ``timeout``
+    and retried; a persistent stall raises ``TimeoutError`` after ``retries`` so
+    the caller fails loudly rather than wedging the pipeline.
     """
     last_exc: BaseException | None = None
     for _ in range(retries + 1):
@@ -171,7 +172,8 @@ class PrefetchReader:
                     logger.warning(
                         "prefetch reader wedged: tile %s not ready after %.0fs; "
                         "disabling prefetch, falling back to synchronous reads",
-                        tile_id, _GET_TIMEOUT_S,
+                        tile_id,
+                        _GET_TIMEOUT_S,
                     )
                     self._stop = True
                     self._cv.notify_all()

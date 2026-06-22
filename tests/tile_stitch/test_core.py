@@ -242,7 +242,9 @@ def test_build_recon_batches_invariants():
     for tid in range(13):
         x_hi = 4 if tid % 4 == 0 else 2
         tiles.append(
-            InputTile(tile_id=tid, slices={"z": slice(0, 2), "y": slice(0, 2), "x": slice(0, x_hi)})
+            InputTile(
+                tile_id=tid, slices={"z": slice(0, 2), "y": slice(0, 2), "x": slice(0, x_hi)}
+            )
         )
         order.append(tid)
     tiles_by_id = {t.tile_id: t for t in tiles}
@@ -320,9 +322,7 @@ def test_blend_contributors_float16_accumulates_in_float32():
     # Compare only the covered region (the fill_value here is NaN).
     covered = ~np.isnan(res_f32)
     diff = res_f16[covered] - res_f32[covered]
-    nrmse = np.sqrt(np.mean(diff**2)) / (
-        np.sqrt(np.mean(res_f32[covered] ** 2)) + 1e-12
-    )
+    nrmse = np.sqrt(np.mean(diff**2)) / (np.sqrt(np.mean(res_f32[covered] ** 2)) + 1e-12)
     assert nrmse < 1e-2, f"float16 blend NRMSE {nrmse:.2e} exceeds 1e-2"
 
 

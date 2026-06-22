@@ -45,23 +45,32 @@ def _fake_plan(n: int) -> _Plan:
             for ox in range(n):
                 ins = [
                     gid(iz, iy, ix)
-                    for iz in range(n) if ov(iz, oz)
-                    for iy in range(n) if ov(iy, oy)
-                    for ix in range(n) if ov(ix, ox)
+                    for iz in range(n)
+                    if ov(iz, oz)
+                    for iy in range(n)
+                    if ov(iy, oy)
+                    for ix in range(n)
+                    if ov(ix, ox)
                 ]
                 out_to_in[gid(oz, oy, ox)] = ins
                 all_in.update(ins)
-                out_tiles.append(_Tile(gid(oz, oy, ox), {
-                    "z": slice(oz * STRIDE, oz * STRIDE + STRIDE),
-                    "y": slice(oy * STRIDE, oy * STRIDE + STRIDE),
-                    "x": slice(ox * STRIDE, ox * STRIDE + STRIDE),
-                }))
+                out_tiles.append(
+                    _Tile(
+                        gid(oz, oy, ox),
+                        {
+                            "z": slice(oz * STRIDE, oz * STRIDE + STRIDE),
+                            "y": slice(oy * STRIDE, oy * STRIDE + STRIDE),
+                            "x": slice(ox * STRIDE, ox * STRIDE + STRIDE),
+                        },
+                    )
+                )
     return _Plan(out_to_in, out_tiles, DIMS, sorted(all_in))
 
 
 def test_resident_gate_bounds_concurrency_no_deadlock():
     """Resident set never exceeds the budget; units of n acquire atomically; the
     whole batch of work-units completes (no partial-hold deadlock)."""
+
     async def main():
         budget = 3
         gate = _ResidentGate(budget)
@@ -101,8 +110,8 @@ def test_explicit_budget_below_floor_is_raised():
     cfg = MonarchConfig(bounded_dispatch=True, resident_budget=1)  # far below the floor
     max_fanin = max(len(v) for v in plan.output_to_inputs.values())
     _, budget = _dispatch_schedule(plan, recon_batch=2, cfg=cfg)
-    assert budget >= max_fanin and budget >= 2   # deadlock-safe minimums
-    assert budget > cfg.resident_budget          # the sub-floor request was floored up
+    assert budget >= max_fanin and budget >= 2  # deadlock-safe minimums
+    assert budget > cfg.resident_budget  # the sub-floor request was floored up
 
 
 def test_explicit_budget_above_floor_is_honored():

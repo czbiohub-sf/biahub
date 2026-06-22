@@ -1,6 +1,7 @@
 """Bounded tile-read path in ``biahub.tile_stitch._core``: a stalled read is
 abandoned + retried on a fresh thread, a persistent stall fails loudly instead of
 wedging, and the prefetch reader's ``get()`` falls back to ``None`` on a deadline."""
+
 from __future__ import annotations
 
 import threading

@@ -41,7 +41,9 @@ def morton_output_order(plan) -> list[int]:
     are disjoint, so start coords are unique → the coord↔id map is bijective.
     """
     dims = tuple(plan.tile_dims)
-    coord_of = {ot.tile_id: tuple(ot.slices[d].start for d in dims) for ot in plan.output_tiles}
+    coord_of = {
+        ot.tile_id: tuple(ot.slices[d].start for d in dims) for ot in plan.output_tiles
+    }
     ids = [oid for oid in plan.output_to_inputs if oid in coord_of]
     missing = [oid for oid in plan.output_to_inputs if oid not in coord_of]
     if missing:
@@ -50,7 +52,9 @@ def morton_output_order(plan) -> list[int]:
         logger.warning(
             "morton order: %d/%d output tiles have no coord, excluded from the sweep "
             "(first few: %s)",
-            len(missing), len(plan.output_to_inputs), missing[:5],
+            len(missing),
+            len(plan.output_to_inputs),
+            missing[:5],
         )
     coord_to_id = {coord_of[oid]: oid for oid in ids}
     return [coord_to_id[c] for c in morton_order(coord_of[oid] for oid in ids)]
