@@ -193,5 +193,41 @@ for cmd in COMMANDS:
     )
 
 
+class LazyGroup(click.Group):
+    """Click group that defers import until invoked."""
+
+    def __init__(self, name, import_path, **kwargs):
+        self.import_path = import_path
+        self._real_group = None
+        super().__init__(name=name, **kwargs)
+
+    def _load(self):
+        if self._real_group is None:
+            module_path, attr_name = self.import_path.rsplit(".", 1)
+            module = importlib.import_module(module_path)
+            self._real_group = getattr(module, attr_name)
+
+    def list_commands(self, ctx):
+        self._load()
+        return self._real_group.list_commands(ctx)
+
+    def get_command(self, ctx, cmd_name):
+        self._load()
+        return self._real_group.get_command(ctx, cmd_name)
+
+    def invoke(self, ctx):
+        self._load()
+        return self._real_group.invoke(ctx)
+
+    def get_help(self, ctx):
+        self._load()
+        return self._real_group.get_help(ctx)
+
+
+cli.add_command(
+    LazyGroup(name="nf", import_path="biahub.cli.nf.nf_cli", help="Nextflow utilities")
+)
+
+
 if __name__ == "__main__":
     cli()

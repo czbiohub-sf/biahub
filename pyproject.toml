@@ -20,7 +20,7 @@ classifiers = [
 
 dependencies = [
   "click",
-  "iohub>=0.3.4",
+  "iohub>=0.3.7",
   "matplotlib",
   "natsort",
   "numpy",
@@ -32,7 +32,7 @@ dependencies = [
   "submitit",
   "torch",
   "tqdm",
-  "waveorder>=0.3",
+  "waveorder>=3.0.4",
   "largestinteriorrectangle",
   "antspyx",
   "pystackreg",
@@ -98,6 +98,10 @@ index-strategy = "unsafe-best-match"
 # commit. Drop this source and bump the version constraint above once a release
 # ships it.
 waveorder = { git = "https://github.com/mehta-lab/waveorder.git", rev = "f377a43" }
+# Pin iohub to the branch that stores per-step provenance as top-level
+# zattrs keys (e.g. biahub-flat_field, biahub-deskew). Revert to the PyPI
+# release once those changes are merged and published.
+iohub = { git = "https://github.com/czbiohub-sf/iohub.git", branch = "feat/flat-extra-metadata" }
 
 [tool.hatch.metadata]
 allow-direct-references = true

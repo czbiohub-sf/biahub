@@ -57,7 +57,7 @@ def input_position_dirpaths() -> Callable:
             cls=OptionEatAll,
             type=tuple,
             callback=_validate_and_process_paths,
-            help='Paths to input positions, for example: "input.zarr/0/0/0" or "input.zarr/*/*/*"',
+            help='Paths to input positions, for example: "input.zarr/0/0/0", "input.zarr/0/0/[0-9]", or "input.zarr/*/*/*"',
         )(f)
 
     return decorator
@@ -257,6 +257,36 @@ def local() -> Callable:
             is_flag=True,
             default=False,
             help="Run jobs locally instead of submitting to SLURM.",
+        )(f)
+
+    return decorator
+
+
+def cluster() -> Callable:
+    def decorator(f: Callable) -> Callable:
+        return click.option(
+            "--cluster",
+            type=click.Choice(["slurm", "local", "debug"], case_sensitive=False),
+            default="slurm",
+            show_default=True,
+            help=(
+                "Execution cluster: 'slurm' submits to a Slurm cluster, "
+                "'local' runs jobs as subprocesses on this machine, "
+                "'debug' runs jobs in-process in the foreground."
+            ),
+        )(f)
+
+    return decorator
+
+
+def init_only() -> Callable:
+    def decorator(f: Callable) -> Callable:
+        return click.option(
+            "--init",
+            "init_only",
+            is_flag=True,
+            default=False,
+            help="Only initialize the output store and exit; skip per-position processing.",
         )(f)
 
     return decorator
