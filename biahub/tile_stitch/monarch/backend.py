@@ -101,7 +101,7 @@ def _tile_cache_schedule(run_plan, recon_batch: int, cfg) -> tuple[list[int], in
     band). Budget = the chosen order's interval-overlap peak (min feasible),
     clamped to >= recon_batch and >= max output fan-in (deadlock-safe).
     """
-    from biahub.tile_stitch.tile_cache import WindowedScheduler
+    from biahub.tile_stitch.tile_cache import peak_resident_tiles
     from biahub.tile_stitch.tile_cache_adapter import output_to_inputs_and_order
 
     out_to_in = run_plan.output_to_inputs
@@ -119,7 +119,7 @@ def _tile_cache_schedule(run_plan, recon_batch: int, cfg) -> tuple[list[int], in
         in_order = sorted(
             input_to_outputs, key=lambda tid: min(rank[o] for o in input_to_outputs[tid])
         )
-    auto = WindowedScheduler(out_to_in, out_order).predict_peak_tiles()
+    auto = peak_resident_tiles(out_to_in, out_order)
     max_fanin = max((len(v) for v in out_to_in.values()), default=1)
     n_gpus = getattr(cfg, "gpus_per_node", 1) or 1
     # ``auto`` is the *batch=1* liveness peak. Recon dispatches in ATOMIC batches
@@ -176,58 +176,18 @@ def _wait_for_ready(ready_dir: str, node_list: list[str], timeout_s: int = 300) 
     )
 
 
-def _grid_coords(tiles_by_id: dict, dims: tuple) -> dict:
-    """Map tile_id -> integer grid index per dim (rank of its slice start)."""
-    starts = {d: sorted({t.slices[d].start for t in tiles_by_id.values()}) for d in dims}
-    rank = {d: {s: i for i, s in enumerate(starts[d])} for d in dims}
-    return {
-        tid: tuple(rank[d][t.slices[d].start] for d in dims) for tid, t in tiles_by_id.items()
-    }
-
-
-def _morton(coord: tuple) -> int:
-    """Z-order key by bit-interleaving integer grid coords (locality-preserving)."""
-    key = 0
-    n = len(coord)
-    for b in range(20):
-        for j, c in enumerate(coord):
-            key |= ((c >> b) & 1) << (n * b + j)
-    return key
-
-
-def build_recon_batches(
-    order: list[int],
-    tiles_by_id: dict,
-    bsize: int,
-    *,
-    locality: bool = False,
-    tile_dims: tuple | None = None,
-) -> list[list[int]]:
+def build_recon_batches(order: list[int], tiles_by_id: dict, bsize: int) -> list[list[int]]:
     """Group ``order`` into batches of ``bsize`` same-shape tiles.
 
-    All tiles in a batch must share spatial shape (the batched FFT stacks
-    them into ``(B, Z, Y, X)``). Tiles are bucketed by shape first — so
-    interior tiles form full batches and ragged edge shapes form their
-    own (possibly smaller) batches — then each bucket is chunked.
-
-    Default ordering within a shape is ``input_order`` (raster). With
-    ``locality=True`` each shape bucket is Z-order (Morton) sorted first, so a
-    ``bsize`` chunk is a spatially compact cluster (raster chunks straddle
-    row/plane wraps). ``tile_dims`` is required when ``locality`` is set.
+    All tiles in a batch must share spatial shape (the batched FFT stacks them
+    into ``(B, Z, Y, X)``). Tiles are bucketed by shape first — so interior tiles
+    form full batches and ragged edge shapes form their own — then each is chunked.
     """
     from collections import OrderedDict
 
     by_shape: OrderedDict[tuple, list[int]] = OrderedDict()
     for tid in order:
-        shp = tuple(tiles_by_id[tid].shape)
-        by_shape.setdefault(shp, []).append(tid)
-
-    if locality:
-        if tile_dims is None:
-            raise ValueError("build_recon_batches(locality=True) needs tile_dims")
-        gc = _grid_coords(tiles_by_id, tile_dims)
-        for shp in by_shape:
-            by_shape[shp] = sorted(by_shape[shp], key=lambda t: _morton(gc[t]))
+        by_shape.setdefault(tuple(tiles_by_id[tid].shape), []).append(tid)
 
     batches: list[list[int]] = []
     for tids in by_shape.values():

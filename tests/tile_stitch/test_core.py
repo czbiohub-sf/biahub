@@ -231,38 +231,28 @@ def test_timepoint_write_region_carries_t_axis():
     assert len(region) == result[None].ndim
 
 
-def test_build_recon_batches_locality_invariants():
-    """Morton batching keeps batches shape-uniform, <= bsize, all tiles once."""
+def test_build_recon_batches_invariants():
+    """Batches are shape-uniform, <= bsize, and cover every tile exactly once.
+    Differing shapes bucket separately (a batched FFT needs one shape)."""
     from biahub.tile_stitch.monarch.backend import build_recon_batches
 
-    dims = ("z", "y", "x")
-    # 1×3×4 grid of uniform 2×2×2 tiles, step 2 (no overlap needed for grouping).
+    # Mixed shapes interleaved: tids 0,4,8,12 are wider in x (ragged edge), the
+    # rest uniform — so they must bucket into separate batches.
     tiles, order = [], []
-    tid = 0
-    for iy in range(3):
-        for ix in range(4):
-            tiles.append(
-                InputTile(
-                    tile_id=tid,
-                    slices={
-                        "z": slice(0, 2),
-                        "y": slice(iy * 2, iy * 2 + 2),
-                        "x": slice(ix * 2, ix * 2 + 2),
-                    },
-                )
-            )
-            order.append(tid)
-            tid += 1
+    for tid in range(13):
+        x_hi = 4 if tid % 4 == 0 else 2
+        tiles.append(
+            InputTile(tile_id=tid, slices={"z": slice(0, 2), "y": slice(0, 2), "x": slice(0, x_hi)})
+        )
+        order.append(tid)
     tiles_by_id = {t.tile_id: t for t in tiles}
 
-    batches = build_recon_batches(order, tiles_by_id, 4, locality=True, tile_dims=dims)
+    batches = build_recon_batches(order, tiles_by_id, 4)
     flat = [t for b in batches for t in b]
     assert sorted(flat) == sorted(order)  # every tile exactly once
     assert all(len(b) <= 4 for b in batches)  # respects bsize
     for b in batches:  # shape-uniform per batch
         assert len({tuple(tiles_by_id[t].shape) for t in b}) == 1
-    # Morton groups the 12 tiles into 3 compact quads, not raster rows.
-    assert len(batches) == 3
 
 
 def test_frozen_monarch_config_pickles_through_plan():

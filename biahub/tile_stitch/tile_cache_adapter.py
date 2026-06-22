@@ -1,18 +1,10 @@
-"""Adapter: the biahub/waveorder ``RunPlan`` → ``WindowedScheduler`` inputs.
+"""Adapter: a ``RunPlan`` → ``(out_to_in, traversal order)`` for the recon gate.
 
-This is the one bridge between the engine's plan and the engine-agnostic
-``tile_cache``. It is duck-typed — it needs only ``plan.output_to_inputs``
-(``dict[int, list[int]]``), ``plan.output_tiles`` (each with ``.tile_id`` +
-``.slices: dict[str, slice]``), and ``plan.tile_dims`` — so it tests without
-building a full waveorder plan, and the real ``RunPlan`` satisfies it as-is.
-
-`output_to_inputs` is already exactly the scheduler's ``out_to_in``; this just
-adds the traversal order. Output tiles are non-overlapping (one per output chunk),
-so their start coords are unique → a clean Morton/raster ordering.
-
-The recon/blend/write *wiring* (the part that calls waveorder recon + ``_core``
-+ the shard writer, and replaces ``tile_worker.self.recons``) is the next P3
-increment; this increment is purely structural (plan → out_to_in + order).
+Duck-typed — needs only ``plan.output_to_inputs``, ``plan.output_tiles`` (each
+with ``.tile_id`` + ``.slices: dict[str, slice]``), and ``plan.tile_dims`` — so it
+tests without a full waveorder plan, and the real ``RunPlan`` satisfies it as-is.
+Output tiles are non-overlapping, so their start coords are unique → a clean
+Morton/raster ordering.
 """
 
 from __future__ import annotations
@@ -40,11 +32,11 @@ class _PlanLike(Protocol):
 def output_to_inputs_and_order(
     plan: _PlanLike, order: Literal["morton", "raster"] = "morton"
 ) -> tuple[dict[int, list[int]], list[int]]:
-    """Return ``(out_to_in, ordered_output_ids)`` for ``WindowedScheduler``.
+    """Return ``(out_to_in, ordered_output_ids)`` for the recon-dispatch sweep.
 
     ``order='morton'`` Z-orders output tiles by their start coords (locality →
-    fewer spills, batch-friendly — measured −57% spills vs raster); ``'raster'``
-    is lexicographic by coords. Coords are taken in ``plan.tile_dims`` order.
+    tighter resident band); ``'raster'`` is lexicographic by coords. Coords are
+    taken in ``plan.tile_dims`` order.
     """
     out_to_in = {oid: list(ins) for oid, ins in plan.output_to_inputs.items()}
     dims = tuple(plan.tile_dims)
