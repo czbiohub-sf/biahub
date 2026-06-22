@@ -1,15 +1,10 @@
-"""Backend-neutral tile-stitch compute — shared by every distributed backend.
+"""Tile-stitch compute helpers: pure functions + small caches.
 
-Pure functions + small caches, no Monarch / no Dask imports. Everything here
-is lifted verbatim from the Monarch ``tile_worker.py`` actor (the
-device-correct, multi-actor-safe variant); the actor becomes a thin transport
-shell that calls into this module.
+No Monarch imports, so this layer unit-tests without a mesh; the actor is a thin
+transport shell over it.
 
-The leading-axis convention is the Monarch one: geometry strips the T axis
-(``leading_shape[1:]``) and the write region carries T via an explicit
-``slice(t_off, t_off + 1)``. Do NOT reconcile this with the Dask ``workers.py``
-v6 path (which folds T into the leading dims) — that divergence corrupts
-multi-TP writes.
+Leading-axis convention: geometry strips the T axis (``leading_shape[1:]``) and
+the write region carries T via an explicit ``slice(t_off, t_off + 1)``.
 """
 
 import concurrent.futures
@@ -199,8 +194,7 @@ def build_stitch_geom(plan) -> dict[int, dict]:
     Tile geometry (input tile slices, output tile slices, leading
     dims) is constant for the actor's lifetime: TP-to-TP swaps only
     change pixel values, not the grid. Pre-building this per
-    ``out_tile_id`` eliminates O(N) Python work in the hot blend
-    loop, where it was previously rebuilt for every stitch call.
+    ``out_tile_id`` eliminates O(N) Python work in the hot blend loop.
 
     Uses ``leading_shape[1:]`` — the T axis is stripped here and carried
     instead by an explicit ``slice(t_off, t_off + 1)`` at write time.
@@ -253,7 +247,7 @@ def build_stitch_geom(plan) -> dict[int, dict]:
 
 
 def get_tf_cuda(settings, device: str) -> tuple[dict[str, Any], Any]:
-    """Build (or fetch cached) CUDA TF tensors. Mirrors workers._get_tf_cuda.
+    """Build (or fetch cached) CUDA transfer-function tensors.
 
     Cache key is ``(settings.model_dump_json(), device)`` and tensors are
     built on the exact ``device`` string (e.g. ``"cuda:1"``) — the device in
@@ -408,10 +402,6 @@ def blend_contributors(geom_entry, contribs_np, blend, kernel_cache):
     Accumulates ``value * weight`` and ``weight`` over every contributor,
     then divides (filling empty pixels with ``blend.fill_value``). Returns
     the blended ``float32`` array; the zarr write stays in the actor.
-
-    Lifted from ``tile_worker.stitch._blend_and_write`` MINUS the zarr write
-    — NOT from ``workers.stitch_output_tile_v6`` (different leading-axis
-    convention).
     """
     import numpy as np
 

@@ -8,9 +8,7 @@ varies per allocation — ``--nodes``, ``--port``, ``--ready-dir``,
 
 A few **debug escape-hatch** env vars remain on the backend (not durable
 tuning): ``TILE_SHUTDOWN_TIMEOUT_S``, ``TILE_DRIVE_HB_S`` (and the ``_core``
-read-timeout knobs). The durable recon-dispatch knobs that used to be env vars
-are now config fields
-(``recon_max_inflight_per_gpu``, ``recon_rpc_timeout_s``, ``recon_rpc_retries``).
+read-timeout knobs).
 """
 
 import warnings
@@ -105,7 +103,7 @@ class MonarchConfig(BaseModel):
     bounded_dispatch: bool = Field(
         default=False,
         description="Gate recon dispatch to a resident budget over a Morton sweep "
-        "(off = legacy dispatch-all).",
+        "(off = unbounded dispatch-all).",
     )
     resident_budget: PositiveInt | None = Field(
         default=None,

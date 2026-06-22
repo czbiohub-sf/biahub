@@ -1,10 +1,8 @@
 """``MonarchBackend`` — the Monarch distributed engine for tile-stitch.
 
-Lifts the mesh bring-up + per-TP pipelined drive + volume swap + stats
-collection out of the ``m3_driver`` script into a single reusable class.
-``m3_driver`` (and, in Stage 3, ``cli.py``) build the shared scaffold (TP
-resolve/shard, engine plan, output zarr, per-TP plan pickles) and delegate
-the run loop here.
+The CLI builds the run scaffold (TP resolve/shard, engine plan, output zarr,
+per-TP plan pickles) and delegates the mesh bring-up + per-TP pipelined drive +
+volume swap + stats collection here.
 
 Lifecycle:
 
@@ -18,9 +16,8 @@ Lifecycle:
     backend.teardown()
 
 ``swap`` enforces that the prior TP's Stage B fully drained before issuing
-``swap_to`` (which clears the prior TP's recons + RDMABuffers). Splitting the
-old monolithic ``_drive_one_tp`` into ``drive_tp`` + ``swap`` would otherwise
-lose that structural guarantee and free buffers mid-RDMA-pull.
+``swap_to`` (which clears the prior TP's recons + RDMABuffers), so buffers are
+never freed mid-RDMA-pull.
 """
 
 import asyncio
@@ -33,13 +30,6 @@ from collections import defaultdict
 
 logger = logging.getLogger("MonarchBackend")
 
-# NUMA membind was removed: pinning each actor's memory to its GPU's local NUMA
-# node backfired under SLURM's multi-actor-per-NUMA packing — multiple read-heavy
-# actors saturated one NUMA's memory bandwidth (and membind pins memory, not the
-# threads, forcing cross-socket traffic for whichever actor's threads scheduled
-# remote), producing a ~4x single-actor read straggler. Letting Linux first-touch
-# place pages (no bind) balanced reads and cut aggregate io ~2.7x. So: no proc_bind.
-
 # Budget for draining Monarch's actor-context shutdown in teardown (see teardown).
 _SHUTDOWN_TIMEOUT_S = float(os.environ.get("TILE_SHUTDOWN_TIMEOUT_S", "15"))
 
@@ -48,15 +38,14 @@ _SHUTDOWN_TIMEOUT_S = float(os.environ.get("TILE_SHUTDOWN_TIMEOUT_S", "15"))
 # done) every interval — the signal that diagnoses a Stage-B stall/deadlock.
 _DRIVE_HB_S = float(os.environ.get("TILE_DRIVE_HB_S", "0"))
 
-# Recon-dispatch knob DEFAULTS — used only when no MonarchConfig is present (the
-# legacy cfg-less path). MonarchConfig is the source of truth otherwise, via
-# recon_max_inflight_per_gpu / recon_rpc_timeout_s / recon_rpc_retries (promoted
-# from env vars so the durable knobs live in one place; config.py:docstring).
+# Recon-dispatch knob DEFAULTS — used only when a plan carries no MonarchConfig.
+# MonarchConfig is the source of truth otherwise (recon_max_inflight_per_gpu /
+# recon_rpc_timeout_s / recon_rpc_retries).
 #
 # max_inflight bounds concurrent in-flight recon work-units PER GPU on the
 # bounded-dispatch path: without it, all recon tasks hit the gate and fire RPCs at
 # once, flooding the Monarch mesh until calls stop flowing (driver+workers idle,
-# GPUs 0%). 0 = unbounded (legacy).
+# GPUs 0%). 0 = unbounded.
 #
 # rpc_{timeout,retries}: Monarch occasionally fails to deliver/pick up a
 # reconstruct call under load (it never returns, wedging the drive); a call
@@ -68,7 +57,7 @@ _DEFAULT_RECON_RPC_RETRIES = 3
 
 
 class _ResidentGate:
-    """Bounds the resident reconstructed-tile set (the P3b OOM fix).
+    """Bounds the resident reconstructed-tile set (host-RAM OOM guard).
 
     Acquire ``n`` before dispatching a recon work-unit (n tiles); release one per
     tile as Stage B frees it (ref-count → 0). ``acquire`` takes all ``n`` slots
@@ -120,8 +109,7 @@ def _dispatch_schedule(run_plan, recon_batch: int, cfg) -> tuple[list[int], int]
     # of ``recon_batch`` and up to ``n_gpus`` run concurrently, so a budget of
     # exactly ``auto`` strands the last <recon_batch free slots: ``acquire(K)``
     # blocks forever once free < K and nothing is in flight to release a slot
-    # (the stranded-slots deadlock — froze the full FOV at ~output 50 with
-    # gate_free=7 < recon_batch=8). Add one full batch of headroom per concurrent
+    # (the stranded-slots deadlock). Add one full batch of headroom per concurrent
     # GPU so a batch can always be acquired at the liveness peak. This floor is
     # mandatory; a configured resident_budget may only raise the budget above it.
     safe_floor = auto + recon_batch * n_gpus
@@ -221,7 +209,7 @@ class MonarchBackend:
         self._n_gpus = 0
         # Stage-B drain guard: True only between a completed ``drive_tp`` and
         # the next ``swap``. ``swap`` refuses to release the prior TP's recons
-        # / RDMABuffers unless the last drive fully drained (reviewer E1).
+        # / RDMABuffers unless the last drive fully drained.
         self._drained = True
 
     # --- context manager: guarantee teardown on any exit -------------------
@@ -240,7 +228,7 @@ class MonarchBackend:
         # CPU is a configured device knob, but the actor's CUDA-only path
         # (set_device, resident volume, CUDA-graph compile, the cuda:{idx}
         # stream wiring) is not yet device-guarded. Fail loud rather than ship
-        # an untested half-wired CPU path (lead ruling 1).
+        # an untested half-wired CPU path.
         if self._device == "cpu":
             raise NotImplementedError(
                 "CPU device not yet wired for the Monarch backend; use device=cuda"
@@ -308,8 +296,8 @@ class MonarchBackend:
         Enforces that the prior TP's Stage B fully drained before issuing
         ``swap_to`` — ``swap_to`` clears the prior TP's cached recons and the
         RDMABuffers peers may still be pulling, so swapping mid-drain would
-        race in-flight RDMA reads (reviewer E1). ``drive_tp`` sets
-        ``_drained`` only after its final drain loop completes.
+        race in-flight RDMA reads. ``drive_tp`` sets ``_drained`` only after its
+        final drain loop completes.
         """
         if not self._drained:
             raise RuntimeError(
@@ -378,10 +366,10 @@ class MonarchBackend:
         # Bounded recon-dispatch path (behind the bounded_dispatch flag). Reorder
         # recon to a locality (Morton) sweep and cap resident reconstructed tiles
         # at a budget so recon can't outrun Stage B and OOM host RAM. Off → the
-        # legacy dispatch-all path, byte-for-byte unchanged.
+        # unbounded dispatch-all path.
         cfg = getattr(run_plan, "monarch", None)
         # Recon-dispatch knobs: MonarchConfig is the source of truth; fall back to
-        # the module defaults only on the legacy cfg-less path.
+        # the module defaults only when the plan carries no config.
         max_inflight = _DEFAULT_MAX_INFLIGHT_PER_GPU
         rpc_timeout = _DEFAULT_RECON_RPC_TIMEOUT_S
         rpc_retries = _DEFAULT_RECON_RPC_RETRIES
@@ -498,9 +486,9 @@ class MonarchBackend:
             on its worker — a *merely slow* (not dropped) call then runs twice, so
             two workers transiently hold that tile (extra host RAM not counted by
             the gate) until the broadcast ``forget`` reclaims both. The timeout is
-            set well above normal batch latency to make this rare. A proper
-            cancel-original + forget-superseded-handle fix needs a live-mesh run to
-            validate and is deferred to the worker-side-spill increment.
+            set well above normal batch latency to make this rare. A
+            cancel-original + forget-superseded-handle fix would avoid the
+            double-hold but needs live-mesh validation.
             """
             for attempt in range(rpc_retries + 1):
                 g = (gpu + attempt) % n_gpus
@@ -544,7 +532,7 @@ class MonarchBackend:
         # Bound concurrent recon dispatch on the gated path: excess tasks park on
         # this semaphore (FIFO, cheap) rather than all hitting the gate and firing
         # recon RPCs at once, which floods the Monarch mesh until calls stop
-        # flowing. ``None`` (unbounded) preserves the legacy dispatch-all behavior.
+        # flowing. ``None`` (unbounded) = dispatch-all, no semaphore.
         _dispatch_sem = (
             asyncio.Semaphore(max(max_inflight * n_gpus, recon_batch))
             if (gate is not None and max_inflight > 0)
@@ -603,7 +591,7 @@ class MonarchBackend:
             ]
             logger.info("Stage A+B pipelined: %d recon tasks dispatched", len(recon_tasks))
         if gate is not None:
-            # Concurrent drainer (the deadlock fix): owns done_recv, frees tiles +
+            # Concurrent drainer: owns done_recv, frees tiles +
             # releases gate slots independent of recon dispatch, so parked recon
             # tasks get unblocked. Recon = gated producer; this = consumer. Drains
             # while recon runs or any stitch is in flight; the ``stitch_in_flight>0``

@@ -1,4 +1,4 @@
-"""Monarch Actor port of v7's ``reconstruct_tile_memory_gpu``.
+"""Per-GPU Monarch actor: reconstruct assigned tiles and hold them.
 
 One Actor per GPU. Reconstructs assigned tiles, stores the CPU result on
 the actor (keeping it alive), and returns an :class:`RDMABuffer` handle.
@@ -6,9 +6,8 @@ Downstream Stage B receives these handles in a dict, ``read_into`` each
 via RDMA (ibverbs over IB intra-node, no Monarch mailbox involved for
 the bulk data), then blends locally and writes the zarr chunk.
 
-Monarch 0.5 RDMABuffer is CPU-only — GPU tensors would be bounced
-through CPU automatically. We already pay the GPU→CPU move at the end
-of recon (the v7 dask path does too), so there is no additional cost.
+Monarch 0.5 RDMABuffer is CPU-only, so GPU tensors bounce through CPU —
+but recon already ends with a GPU→CPU move, so there's no extra cost.
 """
 
 import threading
@@ -209,7 +208,7 @@ class TileWorker(Actor):
         return torch.as_tensor(pre, dtype=torch.float32, device=f"cuda:{self.gpu_idx}")
 
     def _d2h(self, gpu_tensor):
-        """GPU→host copy of one recon via a reused pinned scratch (approach C).
+        """GPU→host copy of one recon via a reused pinned scratch.
 
         ``gpu_tensor`` is the (already unsqueezed) device recon. Casts to
         contiguous float32 on the GPU, DMAs it into the per-actor pinned

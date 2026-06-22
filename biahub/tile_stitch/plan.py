@@ -1,4 +1,4 @@
-"""Run plan — pickled to disk, cached per-worker. Port of legacy V6Plan.
+"""Run plan — pickled to disk, cached per-worker.
 
 Composes the waveorder TileStitchPlan (recon-side: tiles, output_tiles,
 output_to_inputs, input_batches, output_to_batches) with biahub-side
@@ -53,8 +53,7 @@ class RunPlan:
     output_channel_index: int = 0
 
     # Monarch engine knobs, carried so each actor reads the same config across
-    # ``setup`` and every per-TP ``swap_to``. Optional with a default so an
-    # older pickle (pre-Stage-3) still loads — the actor falls back to
+    # ``setup`` and every per-TP ``swap_to``. Optional: the actor falls back to
     # ``MonarchConfig()`` defaults when this is ``None``.
     monarch: MonarchConfig | None = None
 

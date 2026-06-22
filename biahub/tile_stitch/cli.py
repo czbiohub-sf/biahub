@@ -46,7 +46,7 @@ def parse_timepoints(spec: str) -> list[int]:
     "--timepoint",
     type=int,
     default=None,
-    help="Single TP (back-compat). Use --timepoints for multi-TP loop.",
+    help="Single timepoint; use --timepoints for a range/list.",
 )
 @click.option(
     "--timepoints",
