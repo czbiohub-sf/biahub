@@ -1,7 +1,7 @@
 """CPU unit tests for the P3b driver-side pieces in ``monarch.backend`` — the
 bounded recon-dispatch gate and the Morton schedule/budget. No Monarch, no GPU:
 ``backend``'s Monarch imports are function-local, so the module imports clean and
-``_ResidentGate`` (pure asyncio) + ``_tile_cache_schedule`` (pure logic over a
+``_ResidentGate`` (pure asyncio) + ``_dispatch_schedule`` (pure logic over a
 duck-typed plan) test in isolation."""
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import asyncio
 from dataclasses import dataclass
 
 from biahub.tile_stitch.config import MonarchConfig
-from biahub.tile_stitch.monarch.backend import _ResidentGate, _tile_cache_schedule
+from biahub.tile_stitch.monarch.backend import _dispatch_schedule, _ResidentGate
 
 TILE, OVERLAP = 8, 2
 STRIDE = TILE - OVERLAP
@@ -84,11 +84,11 @@ def test_resident_gate_bounds_concurrency_no_deadlock():
     assert peak <= 3
 
 
-def test_tile_cache_schedule_morton_valid_and_budget_safe():
+def test_dispatch_schedule_morton_valid_and_budget_safe():
     plan = _fake_plan(6)
     max_fanin = max(len(v) for v in plan.output_to_inputs.values())
-    cfg = MonarchConfig(tile_cache=True)
-    in_order, budget = _tile_cache_schedule(plan, recon_batch=4, cfg=cfg)
+    cfg = MonarchConfig(bounded_dispatch=True)
+    in_order, budget = _dispatch_schedule(plan, recon_batch=4, cfg=cfg)
     assert sorted(in_order) == sorted(plan.input_order)  # valid permutation of inputs
     assert budget >= max_fanin and budget >= 4  # deadlock-safe + >= recon_batch
     assert in_order != plan.input_order  # Morton actually reordered
@@ -98,9 +98,9 @@ def test_explicit_budget_below_floor_is_raised():
     """A resident_budget below the mandatory deadlock-safe floor (auto_peak +
     recon_batch*n_gpus, the stranded-slots fix) is raised, not honored."""
     plan = _fake_plan(4)
-    cfg = MonarchConfig(tile_cache=True, resident_budget=1)  # far below the floor
+    cfg = MonarchConfig(bounded_dispatch=True, resident_budget=1)  # far below the floor
     max_fanin = max(len(v) for v in plan.output_to_inputs.values())
-    _, budget = _tile_cache_schedule(plan, recon_batch=2, cfg=cfg)
+    _, budget = _dispatch_schedule(plan, recon_batch=2, cfg=cfg)
     assert budget >= max_fanin and budget >= 2   # deadlock-safe minimums
     assert budget > cfg.resident_budget          # the sub-floor request was floored up
 
@@ -110,6 +110,6 @@ def test_explicit_budget_above_floor_is_honored():
     RAISE the budget, never lower a larger explicit request)."""
     plan = _fake_plan(4)
     big = 10_000
-    cfg = MonarchConfig(tile_cache=True, resident_budget=big)
-    _, budget = _tile_cache_schedule(plan, recon_batch=2, cfg=cfg)
+    cfg = MonarchConfig(bounded_dispatch=True, resident_budget=big)
+    _, budget = _dispatch_schedule(plan, recon_batch=2, cfg=cfg)
     assert budget == big

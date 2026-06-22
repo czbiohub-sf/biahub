@@ -53,8 +53,8 @@ _DRIVE_HB_S = float(os.environ.get("TILE_DRIVE_HB_S", "0"))
 # recon_max_inflight_per_gpu / recon_rpc_timeout_s / recon_rpc_retries (promoted
 # from env vars so the durable knobs live in one place; config.py:docstring).
 #
-# max_inflight bounds concurrent in-flight recon work-units PER GPU on the gated
-# (tile_cache) path: without it, all recon tasks hit the gate and fire RPCs at
+# max_inflight bounds concurrent in-flight recon work-units PER GPU on the
+# bounded-dispatch path: without it, all recon tasks hit the gate and fire RPCs at
 # once, flooding the Monarch mesh until calls stop flowing (driver+workers idle,
 # GPUs 0%). 0 = unbounded (legacy).
 #
@@ -93,8 +93,8 @@ class _ResidentGate:
             self._cond.notify_all()
 
 
-def _tile_cache_schedule(run_plan, recon_batch: int, cfg) -> tuple[list[int], int]:
-    """Recon-dispatch order + resident budget for the bounded tile-cache path.
+def _dispatch_schedule(run_plan, recon_batch: int, cfg) -> tuple[list[int], int]:
+    """Recon-dispatch order + resident budget for the bounded-dispatch path.
 
     Morton-orders the output tiles, then orders input tiles by their
     earliest-consuming output's rank (so recon follows the stitch sweep → tight
@@ -127,7 +127,7 @@ def _tile_cache_schedule(run_plan, recon_batch: int, cfg) -> tuple[list[int], in
     safe_floor = auto + recon_batch * n_gpus
     budget = max(cfg.resident_budget or 0, safe_floor, max_fanin, recon_batch)
     logger.info(
-        "tile_cache budget=%d tiles (auto_peak=%d + headroom %dx%d; max_fanin=%d cfg_req=%s)",
+        "bounded_dispatch budget=%d tiles (auto_peak=%d + headroom %dx%d; max_fanin=%d cfg_req=%s)",
         budget, auto, recon_batch, n_gpus, max_fanin, cfg.resident_budget,
     )
     return in_order, budget
@@ -375,7 +375,7 @@ class MonarchBackend:
 
         tiles_by_id = {t.tile_id: t for t in run_plan.input_tiles}
 
-        # P3b: bounded recon-dispatch path (behind the tile_cache flag). Reorder
+        # Bounded recon-dispatch path (behind the bounded_dispatch flag). Reorder
         # recon to a locality (Morton) sweep and cap resident reconstructed tiles
         # at a budget so recon can't outrun Stage B and OOM host RAM. Off → the
         # legacy dispatch-all path, byte-for-byte unchanged.
@@ -391,10 +391,10 @@ class MonarchBackend:
             rpc_retries = getattr(cfg, "recon_rpc_retries", rpc_retries)
         gate: _ResidentGate | None = None
         input_order = list(run_plan.input_order)
-        if cfg is not None and getattr(cfg, "tile_cache", False):
-            input_order, budget = _tile_cache_schedule(run_plan, recon_batch, cfg)
+        if cfg is not None and getattr(cfg, "bounded_dispatch", False):
+            input_order, budget = _dispatch_schedule(run_plan, recon_batch, cfg)
             gate = _ResidentGate(budget)
-            logger.info("tile_cache ON: morton order, resident_budget=%d tiles", budget)
+            logger.info("bounded_dispatch ON: morton order, resident_budget=%d tiles", budget)
 
         recon_handles: dict[int, object] = {}
         pending_outputs = {

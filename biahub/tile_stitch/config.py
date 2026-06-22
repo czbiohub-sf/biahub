@@ -102,7 +102,7 @@ class MonarchConfig(BaseModel):
         "(lossy ~3 digits), compute stays float32.",
     )
 
-    tile_cache: bool = Field(
+    bounded_dispatch: bool = Field(
         default=False,
         description="Gate recon dispatch to a resident budget over a Morton sweep "
         "(off = legacy dispatch-all).",
@@ -117,7 +117,7 @@ class MonarchConfig(BaseModel):
     recon_max_inflight_per_gpu: NonNegativeInt = Field(
         default=3,
         description="Max in-flight recon RPCs per GPU on the gated path; only when "
-        "tile_cache is on.",
+        "bounded_dispatch is on.",
     )
     recon_rpc_timeout_s: PositiveInt = Field(
         default=90,
