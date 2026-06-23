@@ -366,7 +366,7 @@ requires-dist = [
     { name = "dask", extras = ["array"] },
     { name = "humanize" },
     { name = "imageio-ffmpeg" },
-    { name = "iohub", git = "https://github.com/czbiohub-sf/iohub.git?branch=feat%2Fflat-extra-metadata" },
+    { name = "iohub", specifier = ">=0.3.8" },
     { name = "largestinteriorrectangle" },
     { name = "llvmlite", specifier = ">=0.41.0" },
     { name = "markdown" },
@@ -1766,8 +1766,8 @@ wheels = [
 
 [[package]]
 name = "iohub"
-version = "0.3.8.dev7+46eb69c"
-source = { git = "https://github.com/czbiohub-sf/iohub.git?branch=feat%2Fflat-extra-metadata#46eb69c9d985f6cca99961aef1c6cede6ad47187" }
+version = "0.3.8"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "blosc2" },
     { name = "dask", extra = ["array"] },
@@ -1783,6 +1783,10 @@ dependencies = [
     { name = "xarray" },
     { name = "zarr" },
     { name = "zarrs" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ce/72/c5941fb52dc71ba78d08c05c90d4a7e15a4d7fc25000f7a5b4af20d96a72/iohub-0.3.8.tar.gz", hash = "sha256:db9e7f941058573ea6eb72028081bc830332dc28c7d59c74f7111cf4730cf793", size = 842230, upload-time = "2026-06-22T18:54:19.801Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5a/55/8ddc8152eb3d38f94d3d5e15a95d210e044b70917071c31c97fd03148b76/iohub-0.3.8-py3-none-any.whl", hash = "sha256:4d34317104a635e5f23fb002352880292ecc04b0ea5286ee86347aaa649066c4", size = 97164, upload-time = "2026-06-22T18:54:18.582Z" },
 ]
 
 [[package]]
@@ -5772,6 +5776,7 @@ dependencies = [
     { name = "torch" },
     { name = "wget" },
 ]
+sdist = { url = "https://files.pythonhosted.org/packages/71/1d/96208c489ac53b48f024031191f4435985496d8bea4cf14e0132617a8fef/waveorder-3.0.4.tar.gz", hash = "sha256:e72e819bb5652e69f91203e21b309e6da15869a84016039f15479dd479794c39", size = 67110755, upload-time = "2026-06-23T03:37:29.238Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1a/bc/3f3657bdf1461fcaea05958278bfe53c2f2f3c0084e1a51e5517150c96da/waveorder-3.0.4-py3-none-any.whl", hash = "sha256:6d075b5eeeed898f9f6cf5e00b4043b12e4fd7085e25b35cbbc769b1312c6e05", size = 286705, upload-time = "2026-04-29T23:03:00.171Z" },
 ]

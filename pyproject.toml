@@ -20,7 +20,7 @@ classifiers = [
 
 dependencies = [
   "click",
-  "iohub>=0.3.7",
+  "iohub>=0.3.8",
   "matplotlib",
   "natsort",
   "numpy",
@@ -84,10 +84,6 @@ index-strategy = "unsafe-best-match"
 # Pin cytoland to the commit from VisCy PR #465 (non-square TTA and helpers).
 # Revert to the PyPI release once that PR is merged and published.
 cytoland = { git = "https://github.com/mehta-lab/VisCy", subdirectory = "applications/cytoland", rev = "7fb3bc1e78c0e0bd26e1845caba860f76223ba02" }
-# Pin iohub to the branch that stores per-step provenance as top-level
-# zattrs keys (e.g. biahub-flat_field, biahub-deskew). Revert to the PyPI
-# release once those changes are merged and published.
-iohub = { git = "https://github.com/czbiohub-sf/iohub.git", branch = "feat/flat-extra-metadata" }
 
 [tool.hatch.metadata]
 allow-direct-references = true
