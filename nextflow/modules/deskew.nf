@@ -46,7 +46,7 @@ process run_deskew {
     maxForks 30
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
-    time { task.attempt == 1 ? '1h' : '2h' }
+    time { "${meta.time_minutes * task.attempt} min" }
     maxRetries 1
     errorStrategy 'retry'
 
