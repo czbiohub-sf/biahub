@@ -685,3 +685,24 @@ class SegmentationSettings(BaseModel):
     # When None, preserve the OME-Zarr version of the input store.
     output_ome_zarr_version: Literal["0.4", "0.5"] | None = None
     model_config = {"extra": "forbid", "protected_namespaces": ()}
+
+
+class OrganelleSegmentationSettings(MyBaseModel):
+    channels: Dict[str, Dict[str, Any]]
+
+
+class OrganelleFeatureExtractionSettings(MyBaseModel):
+    labels_channel: str
+    intensity_channel: str
+    frangi_channel: Optional[str] = None
+    tracking_csv_path: Optional[str] = None
+    properties: Optional[List[str]] = None
+    extra_properties: Optional[List[str]] = None
+    output_csv_path: str
+
+    @field_validator("tracking_csv_path", mode="before")
+    @classmethod
+    def validate_tracking_csv_path(cls, v):
+        if v is not None and not Path(v).exists():
+            raise ValueError(f"tracking_csv_path does not exist: {v}")
+        return v
