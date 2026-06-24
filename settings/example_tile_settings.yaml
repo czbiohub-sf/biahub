@@ -1,0 +1,38 @@
+# Example configuration file for biahub tile command
+# This creates tiles/patches from positions in a zarr store using patchly's GridSampler
+
+# Channel selection (optional)
+# If not specified, all channels will be processed
+channels: ["DAPI", "GFP", "mCherry", "BF"]
+
+# Patch size in ZYX dimensions
+# Use "*" to use the full dimension size (no patching in that dimension)
+# Examples:
+#   - ["*", 512, 512]: Full Z, 512x512 XY patches (most common for 2D analysis)
+#   - [10, 256, 256]: 10 Z-slice patches, 256x256 XY
+patch_size: ["*", 512, 512]
+
+# Step size in ZYX dimensions
+# Controls the overlap between patches
+# Use "*" to use the full dimension size (no overlap)
+# Default: ["*", 256, 256] - no Z overlap, 50% XY overlap
+# Examples:
+#   - ["*", 256, 256]: 50% XY overlap (patch_size 512, step 256)
+#   - ["*", 384, 384]: 25% XY overlap (patch_size 512, step 384)
+#   - ["*", 512, 512]: No overlap (patch_size = step_size)
+step_size: ["*", 256, 256]
+
+# Optional: Rechunk input data to these sizes (TCZYX)
+# Set to null (or omit) to skip rechunking
+# Examples:
+#   - [1, 1, "*", 1024, 1024]: Process in 1024x1024 XY chunks
+#   - [1, 1, 10, 512, 512]: Process in 10x512x512 ZYX chunks
+#   - null: No rechunking, use default chunk_size of ["*", 1024, 1024]
+rechunk: [1, 1, "*", 1024, 1024]
+
+output_chunks: null
+
+# Notes:
+# ------
+# - GridSampler uses "squeeze" mode by default, ensuring all patches are the same size.
+# - Output positions follow the pattern: row/col/fovPPPPPP where PPPPPP is the patch index
