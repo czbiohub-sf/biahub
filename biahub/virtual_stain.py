@@ -24,6 +24,7 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.cli.utils import (
+    echo_resources,
     get_submitit_cluster,
     resolve_ome_zarr_version,
 )
@@ -329,8 +330,16 @@ def virtual_stain(
 
     # Timepoints are processed sequentially on a single GPU, so resource needs
     # are independent of dataset size.
-    num_cpus, gb_ram = 16, 64
-    click.echo(f"RESOURCES:{num_cpus} {gb_ram}")
+    num_cpus, mem_gb = 16, 64
+    # Generous wall-clock budget (minutes), assuming median TTA (4 rotations).
+    # Each timepoint runs ~Z sliding windows along Z. Measured ~1.4 s/window
+    # with TTA on this model; budget ~5 s/window (~3-4x margin for slower GPUs,
+    # larger FOVs, and compute-bound runs) with a 60-minute floor. Computed
+    # before the init_only return so --init emits it for the Nextflow pipeline.
+    T, Z = input_shape[0], input_shape[2]
+    seconds_per_window = 5
+    time_minutes = int(np.ceil(max(60, T * Z * seconds_per_window / 60)))
+    echo_resources(num_cpus, mem_gb, time_minutes)
 
     if init_only:
         click.echo(f"Initialized {output_dirpath} ({len(input_position_dirpaths)} positions)")
@@ -338,21 +347,14 @@ def virtual_stain(
 
     output_position_paths = utils.get_output_paths(input_position_dirpaths, output_dirpath)
 
-    T, Z = input_shape[0], input_shape[2]
-    # Generous wall-clock budget (minutes), assuming median TTA (4 rotations).
-    # Each timepoint runs ~Z sliding windows along Z. Measured ~1.4 s/window
-    # with TTA on this model; budget ~5 s/window (~3-4x margin for slower GPUs,
-    # larger FOVs, and compute-bound runs) with a 60-minute floor.
-    seconds_per_window = 5
-    slurm_time = int(np.ceil(max(60, T * Z * seconds_per_window / 60)))
     # Prepare SLURM arguments
     slurm_args = {
         "slurm_job_name": "virtual-stain",
         "slurm_gres": "gpu:1",
-        "slurm_mem_per_cpu": f"{gb_ram}G",
+        "slurm_mem": f"{mem_gb}G",
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 20,  # process up to 20 positions at a time
-        "slurm_time": slurm_time,
+        "slurm_time": time_minutes,
         "slurm_partition": "gpu",
     }
 

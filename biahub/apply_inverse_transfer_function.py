@@ -24,6 +24,7 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.cli.utils import (
+    echo_resources,
     get_submitit_cluster,
     yaml_to_model,
 )
@@ -112,7 +113,9 @@ def apply_inverse_transfer_function(
 
     max_num_cpus = 16
     num_cpus, mem_per_cpu = wo_estimate_resources(list(input_shape), settings, max_num_cpus)
-    click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
+    mem_gb = num_cpus * mem_per_cpu
+    time_minutes = 360
+    echo_resources(num_cpus, mem_gb, time_minutes)
 
     if init_only:
         click.echo(
@@ -130,9 +133,9 @@ def apply_inverse_transfer_function(
     # examples/submitit_debug_nextflow/2026-05-27-submitit-debug-nextflow-concerns.md
     slurm_args = {
         "slurm_job_name": "apply-inverse-transfer-function",
-        "slurm_mem_per_cpu": f"{mem_per_cpu}G",
+        "slurm_mem": f"{mem_gb}G",
         "slurm_cpus_per_task": num_cpus,
-        "slurm_time": 60,
+        "slurm_time": time_minutes,
         "slurm_partition": "cpu",
     }
 
