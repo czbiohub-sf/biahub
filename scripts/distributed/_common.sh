@@ -20,4 +20,4 @@ export CUDA_DEVICE_ORDER=PCI_BUS_ID
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-4}
 export PYTHONUNBUFFERED=1
 
-export RUN="uv run --no-sync --extra tilestitch-gpu --index-strategy unsafe-best-match"
+export RUN="uv run --no-sync --index-strategy unsafe-best-match"

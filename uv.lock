@@ -307,6 +307,7 @@ dependencies = [
     { name = "submitit" },
     { name = "toml" },
     { name = "torch" },
+    { name = "torchmonarch" },
     { name = "tqdm" },
     { name = "waveorder" },
 ]
@@ -340,9 +341,6 @@ segment = [
 ]
 stain = [
     { name = "cytoland" },
-]
-tilestitch-gpu = [
-    { name = "torchmonarch" },
 ]
 track = [
     { name = "ultrack" },
@@ -393,7 +391,7 @@ requires-dist = [
     { name = "submitit" },
     { name = "toml" },
     { name = "torch" },
-    { name = "torchmonarch", marker = "extra == 'tilestitch-gpu'", specifier = ">=0.1.0" },
+    { name = "torchmonarch", specifier = ">=0.1.0" },
     { name = "tqdm" },
     { name = "twine", marker = "extra == 'all'" },
     { name = "twine", marker = "extra == 'build'" },
@@ -402,7 +400,7 @@ requires-dist = [
     { name = "waveorder", specifier = ">=3.0.5" },
     { name = "zensical", marker = "extra == 'doc'", specifier = ">=0.0.32" },
 ]
-provides-extras = ["all", "build", "doc", "gui", "segment", "stain", "tilestitch-gpu", "track"]
+provides-extras = ["all", "build", "doc", "gui", "segment", "stain", "track"]
 
 [package.metadata.requires-dev]
 dev = [

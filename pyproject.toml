@@ -31,6 +31,7 @@ dependencies = [
   "scipy",
   "submitit",
   "torch",
+  "torchmonarch>=0.1.0",  # tile-stitch Monarch actor mesh + RDMA
   "tqdm",
   "waveorder>=3.0.5",
   "largestinteriorrectangle",
@@ -47,11 +48,6 @@ dependencies = [
 
 [project.optional-dependencies]
 segment = ["cellpose"]
-
-# Tile-stitch GPU path: the Monarch actor mesh + RDMA (torch/CUDA is a base dep).
-tilestitch-gpu = [
-  "torchmonarch>=0.1.0",
-]
 
 track = ["ultrack>=0.7"]
 
