@@ -15,11 +15,11 @@ import yaml
 
 from pydantic import ValidationError
 
-from biahub.tile_stitch.config import (
+from biahub.settings import (
     CompileMode,
     Device,
     MonarchConfig,
-    TileStitchRun,
+    TileStitchReconSettings,
 )
 
 
@@ -34,14 +34,13 @@ def _minimal_yaml(run_dir: Path) -> dict:
                 "phase": {},
             },
         },
-        "run_dir": str(run_dir),
     }
 
 
 def test_config_yaml_parses_with_monarch_defaults(tmp_path: Path):
     payload = _minimal_yaml(tmp_path)
     parsed = yaml.safe_load(yaml.safe_dump(payload))
-    run = TileStitchRun.model_validate(parsed)
+    run = TileStitchReconSettings.model_validate(parsed)
     assert run.tile_stitch.blend.kind == "uniform_mean"
     # monarch block omitted → default_factory supplies bench-best defaults.
     assert run.monarch.recon_batch == 4
@@ -60,7 +59,7 @@ def test_config_yaml_parses_with_monarch_defaults(tmp_path: Path):
 def test_config_monarch_overrides(tmp_path: Path):
     payload = _minimal_yaml(tmp_path)
     payload["monarch"] = {"gpus_per_node": 4, "recon_batch": 1, "compile_mode": "none"}
-    run = TileStitchRun.model_validate(payload)
+    run = TileStitchReconSettings.model_validate(payload)
     assert run.monarch.gpus_per_node == 4
     assert run.monarch.recon_batch == 1
     assert run.monarch.compile_mode is CompileMode.NONE

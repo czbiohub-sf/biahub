@@ -267,7 +267,7 @@ def test_frozen_monarch_config_pickles_through_plan():
     """
     import pickle
 
-    from biahub.tile_stitch.config import CompileMode, Device, MonarchConfig
+    from biahub.settings import CompileMode, Device, MonarchConfig
 
     cfg = MonarchConfig(
         gpus_per_node=4,
@@ -332,7 +332,7 @@ def test_recon_dtype_default_is_float32_and_float16_opt_in():
     The stored/transmitted recon dtype halves the D2H + ibverbs-MR bytes at
     float16 (lossy, ~3 sig digits), so the default must stay lossless.
     """
-    from biahub.tile_stitch.config import MonarchConfig
+    from biahub.settings import MonarchConfig
 
     assert MonarchConfig().recon_dtype == "float32"
     assert MonarchConfig(recon_dtype="float16").recon_dtype == "float16"

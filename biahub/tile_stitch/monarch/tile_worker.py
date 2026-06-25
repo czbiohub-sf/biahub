@@ -17,9 +17,9 @@ from typing import Any
 from monarch.actor import Actor, current_rank, endpoint
 from monarch.rdma import RDMABuffer
 
+from biahub.settings import MonarchConfig
 from biahub.tile_stitch import _core
 from biahub.tile_stitch._core import PrefetchReader
-from biahub.tile_stitch.config import MonarchConfig
 
 
 class TileHandle:

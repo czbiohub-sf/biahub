@@ -1,14 +1,14 @@
 # biahub tile-stitch — c0041 phase reconstruction example (Monarch backend).
 #
-# Single node, 2 GPUs:
-#   biahub tile-stitch \
-#       -c settings/tile-rec-stitch/example_annotated.yml \
+# Channel + timepoints are config-level (recon.input_channel_names below;
+# time_indices: all by default). The CLI is just -i / -c / -o:
+#   sbatch --nodes=1 --gres=gpu:2 scripts/distributed/sbatch_tile_stitch.sh \
 #       -i /hpc/projects/waveorder/tile-stitch/sample_datasets/l0_brightfield_fov.zarr \
-#       -o /hpc/projects/waveorder/tile-stitch/runs/repro_c0041/output \
-#       --channel "camera 22500102 view 0 @ 780nm" --timepoint 0
+#       -c settings/tile-rec-stitch/example_annotated.yml \
+#       -o /hpc/projects/waveorder/tile-stitch/runs/repro_c0041/output.zarr
 #
-# Many timepoints across nodes: add --timepoints 0-9 --shard-by-proc and submit
-# via scripts/distributed/sbatch_tile_stitch_tpshard.sh.
+# Multi-node is the same command with --nodes=N — the wrapper + engine
+# auto-detect the topology. Set timepoints with `time_indices` in this file.
 
 tile_stitch:                  # waveorder TileStitchSettings (tile + blend + recon)
   tile:
@@ -66,4 +66,3 @@ monarch:
                               # blend still accumulates in float32)
 
 retries: 1                    # advisory only — Monarch fails loud
-run_dir: /hpc/projects/waveorder/tile-stitch/runs/repro_c0041

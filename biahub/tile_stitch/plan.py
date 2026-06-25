@@ -18,7 +18,7 @@ from waveorder.api.tile_stitch import TileStitchSettings
 from waveorder.tile_stitch._engine import TileStitchPlan
 from waveorder.tile_stitch.partition import InputTile, OutputTile
 
-from biahub.tile_stitch.config import MonarchConfig
+from biahub.settings import MonarchConfig
 
 
 @dataclass

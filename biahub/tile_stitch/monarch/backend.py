@@ -135,6 +135,30 @@ def _await_initialized_sync(host_mesh) -> None:
     asyncio.run(_await(host_mesh))
 
 
+def _slurm_topology() -> tuple[list[str], int, str | None]:
+    """Resolve ``(hosts, port, ready_dir)`` from the SLURM allocation.
+
+    ``([], 0, None)`` for a single-node or non-SLURM run (caller uses
+    ``this_host()``). For a multi-node allocation the port + ready-dir are
+    derived deterministically from ``SLURM_JOB_ID`` so the driver and the
+    per-node ``worker_loop`` agree without passing any flags.
+    """
+    import subprocess
+
+    nodelist = os.environ.get("SLURM_NODELIST") or os.environ.get("SLURM_JOB_NODELIST")
+    nnodes = int(os.environ.get("SLURM_NNODES", "1") or "1")
+    if not nodelist or nnodes <= 1:
+        return [], 0, None
+    hosts = subprocess.check_output(
+        ["scontrol", "show", "hostnames", nodelist], text=True
+    ).split()
+    job_id = os.environ.get("SLURM_JOB_ID", "0")
+    port = 26000 + (int(job_id) % 2000)
+    base = os.environ.get("SLURM_SUBMIT_DIR") or os.environ.get("TMPDIR") or "/tmp"
+    ready_dir = os.path.join(base, f".tile_ready_{job_id}")
+    return hosts, port, ready_dir
+
+
 def _wait_for_ready(ready_dir: str, node_list: list[str], timeout_s: int = 300) -> None:
     """Block until every node has dropped its ``<hostname>.ready`` file.
 
@@ -186,28 +210,27 @@ def build_recon_batches(order: list[int], tiles_by_id: dict, bsize: int) -> list
 class MonarchBackend:
     """Monarch actor-mesh engine for a single tile-stitch run.
 
-    Multi-host (``nodes``, ``port``, ``ready_dir``) and the per-host GPU count
-    are runtime/SLURM-dependent, so they are constructor args, not config.
+    Topology (single- vs multi-node) is auto-detected from the SLURM allocation
+    in ``setup`` — no node/port/ready-dir args. Per-host GPU count is the only
+    allocation knob; null = auto-detect.
     """
 
     def __init__(
         self,
         *,
         gpus_per_node: int | None = None,
-        nodes: list[str] | None = None,
-        port: int = 26000,
-        ready_dir: str | None = None,
         window_per_actor: int = 6,
         device: str = "cuda",
     ):
         self._gpus_per_node = gpus_per_node
-        self._node_list = [n for n in (nodes or []) if n]
-        self._port = port
-        self._ready_dir = ready_dir
         self._window_per_actor = window_per_actor
         self._device = device
 
-        self._is_multihost = len(self._node_list) > 1
+        # Topology resolved from the SLURM allocation in ``setup``.
+        self._node_list: list[str] = []
+        self._port = 0
+        self._ready_dir: str | None = None
+        self._is_multihost = False
         self._procs = None
         self._workers = None
         self._gpn = 0
@@ -230,6 +253,10 @@ class MonarchBackend:
     # --- mesh lifecycle ----------------------------------------------------
     def setup(self, first_plan_path: str) -> None:
         """Spawn the actor mesh, initialised with the first TP's plan."""
+        # Resolve topology from the SLURM allocation: >1 node → multi-host
+        # HostMesh (attach to per-node worker loops); else single-host this_host.
+        self._node_list, self._port, self._ready_dir = _slurm_topology()
+        self._is_multihost = len(self._node_list) > 1
         # CPU is a configured device knob, but the actor's CUDA-only path
         # (set_device, resident volume, CUDA-graph compile, the cuda:{idx}
         # stream wiring) is not yet device-guarded. Fail loud rather than ship

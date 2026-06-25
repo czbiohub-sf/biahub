@@ -72,7 +72,7 @@ def test_monarch_single_gpu_one_tp(tmp_path: Path):
     from iohub.ngff import open_ome_zarr
     from waveorder.tile_stitch._engine import build_plan as engine_build_plan
 
-    from biahub.tile_stitch.config import MonarchConfig
+    from biahub.settings import MonarchConfig
     from biahub.tile_stitch.monarch.backend import MonarchBackend
     from biahub.tile_stitch.plan import from_engine_plan, write_plan
 

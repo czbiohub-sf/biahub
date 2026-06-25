@@ -1,13 +1,11 @@
-# 2-GPU Monarch tile-stitch — Stage 3 unified-CLI integration config.
-# Same tile_stitch block as the c0041 reference; pool configs dropped
-# (Monarch is the only backend now). monarch block omitted → bench-best
-# defaults (recon_batch=4, prefetch_depth=6, device=cuda).
+# Minimal Monarch tile-stitch config. Channel + timepoints are config-level
+# (recon.input_channel_names below; time_indices). monarch block omitted →
+# bench-best defaults (recon_batch=4, prefetch_depth=6, device=cuda).
 #
-#   sbatch scripts/distributed/sbatch_tile_stitch_singlenode.sh \
-#       --config settings/tile-rec-stitch/example_minimal.yml \
-#       --input  /hpc/projects/waveorder/tile-stitch/sample_datasets/l0_brightfield_fov.zarr \
-#       --output /hpc/projects/waveorder/tile-stitch/runs/m3_integration/output \
-#       --channel "camera 22500102 view 0 @ 780nm" --timepoint 0
+#   sbatch --nodes=1 --gres=gpu:2 scripts/distributed/sbatch_tile_stitch.sh \
+#       -i /hpc/projects/waveorder/tile-stitch/sample_datasets/l0_brightfield_fov.zarr \
+#       -c settings/tile-rec-stitch/example_minimal.yml \
+#       -o /hpc/projects/waveorder/tile-stitch/runs/m3_integration/output.zarr
 
 tile_stitch:
   tile:
@@ -40,4 +38,4 @@ tile_stitch:
         TV_iterations: 1
 
 retries: 1
-run_dir: /hpc/projects/waveorder/tile-stitch/runs/m3_integration
+time_indices: all  # 'all' (default) | a single index | a list of indices

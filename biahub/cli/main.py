@@ -107,7 +107,8 @@ COMMANDS = [
     {
         "name": "tile-stitch",
         "import_path": "biahub.tile_stitch.cli.tile_stitch_cli",
-        "help": "Tiled reconstruction over a dask cluster (CPU, optional GPU via --gpu)",
+        "help": "Tiled reconstruction + stitching over a Monarch GPU actor mesh "
+        "(not in the Nextflow pipeline yet)",
     },
     {
         "name": "concatenate",

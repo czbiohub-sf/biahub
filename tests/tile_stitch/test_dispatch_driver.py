@@ -10,7 +10,7 @@ import asyncio
 
 from dataclasses import dataclass
 
-from biahub.tile_stitch.config import MonarchConfig
+from biahub.settings import MonarchConfig
 from biahub.tile_stitch.monarch.backend import _dispatch_schedule, _ResidentGate
 
 TILE, OVERLAP = 8, 2

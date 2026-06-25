@@ -6,6 +6,6 @@ the Monarch actor-mesh lifecycle, the backend-neutral compute (``_core``), and
 the CLI. Monarch is the only distributed backend.
 """
 
-from biahub.tile_stitch.config import MonarchConfig, TileStitchRun
+from biahub.settings import MonarchConfig, TileStitchReconSettings
 
-__all__ = ["MonarchConfig", "TileStitchRun"]
+__all__ = ["MonarchConfig", "TileStitchReconSettings"]
