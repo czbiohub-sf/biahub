@@ -14,6 +14,7 @@ import threading
 import time
 
 from collections.abc import Callable
+from functools import cache
 from typing import Any
 
 # ONE module-level TF cache, shared across all actors in a process. The key
@@ -22,27 +23,19 @@ from typing import Any
 # caller (tile_worker.py:451,462-467).
 _TF_CUDA_CACHE: dict[tuple, Any] = {}
 
-# Input store handles, opened ONCE per (process, path) and reused for every tile
-# slice. open_ome_zarr per read does a fresh NFS metadata handshake each time —
-# slow, and it widens the window for a transient read stall to wedge the
-# (timeout-less) prefetch reader. zarr array reads are thread-safe, so one cached
-# handle is safe across the background reader and the synchronous fallback.
-_INPUT_ARRAY_CACHE: dict[str, Any] = {}
-_INPUT_ARRAY_LOCK = threading.Lock()
 
-
+@cache
 def _open_input_array(input_path: str):
-    """Level-0 array of the input FOV, opened once per process and cached."""
-    arr = _INPUT_ARRAY_CACHE.get(input_path)
-    if arr is None:
-        with _INPUT_ARRAY_LOCK:
-            arr = _INPUT_ARRAY_CACHE.get(input_path)  # re-check under lock
-            if arr is None:
-                from iohub.ngff import open_ome_zarr
+    """Level-0 array of the input FOV, opened once per process and cached.
 
-                arr = open_ome_zarr(input_path, layout="fov", mode="r")["0"]
-                _INPUT_ARRAY_CACHE[input_path] = arr
-    return arr
+    Re-opening per tile read does a fresh NFS metadata handshake each time —
+    slow over the shared store, and it widens the window for a transient stall to
+    wedge the (timeout-less) prefetch reader. zarr reads are thread-safe, so one
+    cached handle is reused by the background reader and the synchronous fallback.
+    """
+    from iohub.ngff import open_ome_zarr
+
+    return open_ome_zarr(input_path, layout="fov", mode="r")["0"]
 
 
 # A single tile read that stalls on the filesystem would otherwise wedge the whole
