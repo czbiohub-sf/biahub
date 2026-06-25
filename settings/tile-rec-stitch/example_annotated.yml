@@ -1,0 +1,68 @@
+# biahub tile-stitch — c0041 phase reconstruction example (Monarch backend).
+#
+# Channel + timepoints are config-level (recon.input_channel_names below;
+# time_indices: all by default). The CLI is just -i / -c / -o:
+#   sbatch --nodes=1 --gres=gpu:2 scripts/distributed/sbatch_tile_stitch.sh \
+#       -i /hpc/projects/waveorder/tile-stitch/sample_datasets/l0_brightfield_fov.zarr \
+#       -c settings/tile-rec-stitch/example_annotated.yml \
+#       -o /hpc/projects/waveorder/tile-stitch/runs/repro_c0041/output.zarr
+#
+# Multi-node is the same command with --nodes=N — the wrapper + engine
+# auto-detect the topology. Set timepoints with `time_indices` in this file.
+
+tile_stitch:                  # waveorder TileStitchSettings (tile + blend + recon)
+  tile:
+    # Z is the optical/defocus axis. For PHASE recon, tiling Z reintroduces
+    # defocus-TF seam stripes — prefer ONE full-Z tile (z = full depth,
+    # overlap z: 0) and sweep only YX. The 512³ here is a generic illustration.
+    tile_size: {z: 512, y: 512, x: 512}
+    overlap:   {z: 32,  y: 32,  x: 32}
+  blend:
+    kind: gaussian_mean
+    accumulator_dtype: float32
+    sigma_fraction: 0.125
+  recon:
+    # --channel / --timepoint override at slice time, but input_channel_names
+    # must be populated to satisfy the schema.
+    input_channel_names: ["camera 22500102 view 0 @ 780nm"]
+    reconstruction_dimension: 3
+    phase:
+      transfer_function:
+        yx_pixel_size: 0.1842
+        z_pixel_size: 0.1842
+        z_padding: 50
+        z_focus_offset: -0.1775253564119339
+        index_of_refraction_media: 1.3
+        numerical_aperture_detection: 1.1
+        numerical_aperture_illumination: 0.8
+        wavelength_illumination: 0.76
+        invert_phase_contrast: false
+        tilt_angle_zenith: -0.47925180196762085
+        tilt_angle_azimuth: -0.07744445651769638
+      apply_inverse:
+        reconstruction_algorithm: Tikhonov
+        regularization_strength: 0.01
+        TV_rho_strength: 0.001
+        TV_iterations: 1
+
+# Monarch engine knobs. The whole block is OPTIONAL — omit it for the
+# bench-best defaults shown here. Override only what you need.
+monarch:
+  # gpus_per_node: 2          # OMIT to auto-detect from the allocation
+                              # (SLURM_GPUS_ON_NODE / device count). Set only
+                              # for non-SLURM boxes. No --gres hand-sync needed.
+  recon_batch: 4              # tiles per batched FFT (1 = per-tile); bench best = 4
+  prefetch_depth: 6           # background read-ahead (0 = off); keep >= recon_batch
+  rdma_timeout_s: 60
+  recon_concurrency: 1        # in-actor recon semaphore (>1 risks Tikhonov HBM OOM)
+  window_per_actor: 6         # Stage B backpressure window
+  compile_mode: none          # none (eager, default) | default | reduce-overhead.
+                              # Eager is reliable across GPU counts/archs/shapes;
+                              # reduce-overhead trips CUDA-graph TLS on >2 GPUs and
+                              # JIT-stalls on Blackwell, so opt in only for proven runs.
+  device: cuda                # cuda | cpu (cpu not yet wired)
+  recon_dtype: float32        # float32 (lossless, default) | float16 (halves the D2H
+                              # copy AND the ibverbs RDMA bytes; ~3 sig-digit loss,
+                              # blend still accumulates in float32)
+
+retries: 1                    # advisory only — Monarch fails loud

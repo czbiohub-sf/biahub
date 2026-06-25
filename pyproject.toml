@@ -31,8 +31,9 @@ dependencies = [
   "scipy",
   "submitit",
   "torch",
+  "torchmonarch>=0.5.0",
   "tqdm",
-  "waveorder>=3.0.4",
+  "waveorder>=3.0.5",
   "largestinteriorrectangle",
   "antspyx",
   "pystackreg",
@@ -138,3 +139,6 @@ docstring-code-format = true
 [tool.pytest.ini_options]
 addopts = ["--import-mode=importlib"]
 testpaths = ["tests"]
+markers = [
+    "gpu: tests that require a CUDA device (skipped on CPU-only CI runners)",
+]
