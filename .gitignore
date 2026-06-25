@@ -122,9 +122,3 @@ ENV/
 # mypy
 .mypy_cache/
 .dmypy.json
-
-# local planning/scratch notes — not tracked
-.planning/
-
-# tile-stitch multi-node ready-dir (transient, created in the submit dir)
-.tile_ready_*
