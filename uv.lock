@@ -391,7 +391,7 @@ requires-dist = [
     { name = "submitit" },
     { name = "toml" },
     { name = "torch" },
-    { name = "torchmonarch", specifier = ">=0.1.0" },
+    { name = "torchmonarch", specifier = ">=0.5.0" },
     { name = "tqdm" },
     { name = "twine", marker = "extra == 'all'" },
     { name = "twine", marker = "extra == 'build'" },

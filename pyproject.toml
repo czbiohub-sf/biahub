@@ -31,7 +31,7 @@ dependencies = [
   "scipy",
   "submitit",
   "torch",
-  "torchmonarch>=0.1.0",
+  "torchmonarch>=0.5.0",
   "tqdm",
   "waveorder>=3.0.5",
   "largestinteriorrectangle",
