@@ -37,8 +37,7 @@ dependencies = [
   "antspyx",
   "pystackreg",
   "imageio-ffmpeg",
-  "dask[array,distributed]",
-  "dask-jobqueue>=0.9",
+  "dask[array]",
   "toml",
   "scikit-learn",
   "numba>=0.58.0",
@@ -49,10 +48,7 @@ dependencies = [
 [project.optional-dependencies]
 segment = ["cellpose"]
 
-# Tile-stitch GPU execution path — the Monarch actor-mesh backend.
-# torch (CUDA) is already a base dep; Monarch adds the actor mesh + RDMA.
-# (The former Dask-cuda/cupy/rmm/ucxx stack and the nvmath cuFFTMp
-# experiment were removed when Monarch became the only backend.)
+# Tile-stitch GPU path: the Monarch actor mesh + RDMA (torch/CUDA is a base dep).
 tilestitch-gpu = [
   "torchmonarch>=0.1.0",
 ]
