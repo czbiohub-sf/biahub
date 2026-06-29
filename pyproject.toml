@@ -50,13 +50,14 @@ segment = ["cellpose"]
 
 track = ["ultrack>=0.7"]
 
-gui = ["napari[pyqt6]", "PyQt6>=6.5,<6.8", "napari-animation"]
+# PyQt6>=6.10 does not provide wheels
+gui = ["napari[pyqt6]", "PyQt6<6.10", "napari-animation"]
 
 stain = ["cytoland"]
 
-build = ["build", "twine"]
+all = ["biahub[segment,track,gui,stain]"]
 
-all = ["biahub[segment,track,build,gui,stain]"]
+build = ["build", "twine"]
 
 doc = [
     "zensical>=0.0.32",
@@ -83,7 +84,7 @@ index-strategy = "unsafe-best-match"
 [tool.uv.sources]
 # Pin cytoland to the commit from VisCy PR #465 (non-square TTA and helpers).
 # Revert to the PyPI release once that PR is merged and published.
-cytoland = { git = "https://github.com/mehta-lab/VisCy", subdirectory = "applications/cytoland", rev = "7fb3bc1e78c0e0bd26e1845caba860f76223ba02" }
+cytoland = { git = "https://github.com/mehta-lab/VisCy", subdirectory = "applications/cytoland", rev = "4b62365c0df25929bffc7f01b3bb2d1c11d69cce" }
 
 [tool.hatch.metadata]
 allow-direct-references = true
