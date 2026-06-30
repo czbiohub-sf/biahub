@@ -345,7 +345,7 @@ track = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "biahub", extra = ["build", "segment", "track"] },
+    { name = "biahub", extra = ["all", "build"] },
     { name = "pre-commit" },
     { name = "pytest" },
     { name = "ruff" },
@@ -398,7 +398,7 @@ provides-extras = ["all", "build", "doc", "gui", "segment", "stain", "track"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "biahub", extras = ["segment", "track", "build"] },
+    { name = "biahub", extras = ["all", "build"] },
     { name = "pre-commit", specifier = "~=4.5" },
     { name = "pytest", specifier = "~=8.4" },
     { name = "ruff", specifier = "~=0.15" },
