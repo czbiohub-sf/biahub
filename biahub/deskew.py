@@ -29,6 +29,7 @@ from biahub.cli.parsing import (
 from biahub.cli.utils import (
     echo_resources,
     estimate_resources,
+    estimate_time_minutes,
     get_submitit_cluster,
     resolve_ome_zarr_version,
     yaml_to_model,
@@ -678,7 +679,11 @@ def deskew(
         shape=input_shape, ram_multiplier=8, max_num_cpus=16
     )
     mem_gb = num_cpus * gb_ram_per_cpu
-    time_minutes = 60
+    # Wall-time scales with total voxels processed. Calibrated from a completed
+    # run at this step's 16 CPUs: worst-case ~68 min for T*C*Z*Y*X ~= 2.9e11
+    # voxels -> ~7e7 voxels/s. safety_factor covers node/IO variance and retries.
+    T, C, Z, Y, X = input_shape
+    time_minutes = estimate_time_minutes(T * C * Z * Y * X, voxels_per_second=7.0e7)
     echo_resources(num_cpus, mem_gb, time_minutes)
 
     if init_only:

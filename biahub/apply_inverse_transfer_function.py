@@ -25,6 +25,7 @@ from biahub.cli.parsing import (
 )
 from biahub.cli.utils import (
     echo_resources,
+    estimate_time_minutes,
     get_submitit_cluster,
     yaml_to_model,
 )
@@ -114,7 +115,16 @@ def apply_inverse_transfer_function(
     max_num_cpus = 16
     num_cpus, mem_per_cpu = wo_estimate_resources(list(input_shape), settings, max_num_cpus)
     mem_gb = num_cpus * mem_per_cpu
-    time_minutes = 360
+    # Wall-time scales with total voxels reconstructed. Phase reconstruction only
+    # processes the input channels named in the config, so scale T*Z*Y*X by that
+    # count rather than the full C. Calibrated from a completed run: worst-case
+    # ~2.4 h for a single-channel 2.8e10-voxel volume -> ~3e6 voxels/s (this step
+    # is largely single-threaded per position). safety_factor covers the rest.
+    T, C, Z, Y, X = input_shape
+    n_reconstructed = len(settings.input_channel_names)
+    time_minutes = estimate_time_minutes(
+        T * n_reconstructed * Z * Y * X, voxels_per_second=3.0e6
+    )
     echo_resources(num_cpus, mem_gb, time_minutes)
 
     if init_only:

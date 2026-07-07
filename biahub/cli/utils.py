@@ -415,3 +415,46 @@ def estimate_resources(
     gb_ram_per_cpu = np.ceil(max(min_ram_per_cpu, gb_ram_per_volume * ram_multiplier))
 
     return int(num_cpus), int(gb_ram_per_cpu)
+
+
+def estimate_time_minutes(
+    num_voxels: int,
+    voxels_per_second: float,
+    floor_minutes: int = 30,
+    safety_factor: float = 2.0,
+) -> int:
+    """Estimate a per-position SLURM wall-time (minutes) from the data volume.
+
+    The companion to ``estimate_resources``: where memory scales with a single
+    ZYX volume, wall-time scales with the TOTAL number of voxels a step touches
+    for one position -- i.e. ``T * C_processed * Z * Y * X`` of its working set.
+    That total is divided by an empirically-measured per-step throughput
+    (voxels/second at the step's allocated CPU count) and inflated by a safety
+    factor, with a floor for tiny inputs.
+
+    Keying on total voxels (rather than the number of timepoints) is what makes
+    this GENERALIZE across dataset geometries. A long, thin timelapse (large T,
+    small YX) and a short, wide acquisition (small T, large ZYX) with comparable
+    total work get comparable wall-times -- neither is systematically under- or
+    over-provisioned. The per-step ``voxels_per_second`` constants were
+    calibrated from observed COMPLETED runs (see each call site); the safety
+    factor absorbs GPU/CPU variance, retries, and slower nodes.
+
+    Parameters
+    ----------
+    num_voxels : int
+        Total voxels processed for one position (T * C_processed * Z * Y * X).
+    voxels_per_second : float
+        Measured whole-job throughput for this step at its allocated resources.
+    floor_minutes : int, optional
+        Minimum wall-time so small inputs still get a sane request. Default 30.
+    safety_factor : float, optional
+        Multiplier over the nominal estimate. Default 2.0.
+
+    Returns
+    -------
+    int
+        Estimated wall-time in minutes (ceil), never below ``floor_minutes``.
+    """
+    minutes = safety_factor * num_voxels / voxels_per_second / 60.0
+    return int(np.ceil(max(floor_minutes, minutes)))
