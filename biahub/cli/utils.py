@@ -456,5 +456,14 @@ def estimate_time_minutes(
     int
         Estimated wall-time in minutes (ceil), never below ``floor_minutes``.
     """
+    if num_voxels < 0:
+        raise ValueError("num_voxels must be >= 0.")
+    if voxels_per_second <= 0:
+        raise ValueError("voxels_per_second must be > 0.")
+    if floor_minutes < 0:
+        raise ValueError("floor_minutes must be >= 0.")
+    if safety_factor <= 0:
+        raise ValueError("safety_factor must be > 0.")
+
     minutes = safety_factor * num_voxels / voxels_per_second / 60.0
     return int(np.ceil(max(floor_minutes, minutes)))
