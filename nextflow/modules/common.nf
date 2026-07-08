@@ -34,6 +34,23 @@ def slurm_logs(step_name) {
     return "--output=${dir}/%x_%j.err --error=${dir}/%x_%j.out"
 }
 
+// clusterOptions for the bulk CPU work on the preemptible `preempted` partition
+// (see the slurm profile in nextflow.config). Composes the log routing from
+// slurm_logs() with `--requeue`.
+//
+// `--requeue` is REQUIRED here, not optional: Nextflow's SLURM executor injects
+// `#SBATCH --no-requeue` into every batch script (it wants to own retries), so a
+// job is submitted with Requeue=0 and would be CANCELLED — not requeued — on
+// preemption, despite the cluster default JobRequeue=1. clusterOptions is
+// emitted as the last `#SBATCH` line, so this `--requeue` comes after Nextflow's
+// `--no-requeue` and wins (SLURM honours the last of conflicting directives),
+// flipping the job to Requeue=1. SLURM then requeues and reruns a preempted job
+// itself, so preemption is transparent to Nextflow and never fails the pipeline.
+// Ignored by the local executor, so it's a no-op under `-profile local`.
+def preemptible_logs(step_name) {
+    return "--requeue " + slurm_logs(step_name)
+}
+
 def biahub_cmd() {
     return params.biahub_project ?
         "uv run --project ${params.biahub_project} biahub" : "biahub"

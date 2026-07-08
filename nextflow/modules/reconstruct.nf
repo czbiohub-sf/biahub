@@ -20,7 +20,7 @@
 // resource scheduling, so the CLI must NOT submit its own SLURM jobs.
 // See: examples/submitit_debug_nextflow/2026-05-27-submitit-debug-nextflow-concerns.md
 
-include { parse_resources; biahub_cmd; slurm_logs; slurm_log_dir } from './common'
+include { parse_resources; biahub_cmd; preemptible_logs; slurm_log_dir } from './common'
 
 
 process init_apply_inv_tf {
@@ -47,7 +47,7 @@ process init_apply_inv_tf {
 
 process compute_transfer_function {
     label 'cpu'
-    clusterOptions { slurm_logs('reconstruct') }
+    clusterOptions { preemptible_logs('reconstruct') }
     // Hardcoded resources for the one-shot transfer-function computation.
     //
     // waveorder upsamples the volume to Nyquist internally before building the
@@ -88,7 +88,7 @@ process compute_transfer_function {
 process run_apply_inv_tf {
     tag "${position}"
     label 'cpu'
-    clusterOptions { slurm_logs('reconstruct') }
+    clusterOptions { preemptible_logs('reconstruct') }
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time { "${meta.time_minutes * task.attempt} min" }

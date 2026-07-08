@@ -13,7 +13,7 @@
 // the Nextflow task.  See also:
 // examples/submitit_debug_nextflow/2026-05-27-submitit-debug-nextflow-concerns.md
 
-include { parse_resources; biahub_cmd; slurm_logs; slurm_log_dir } from './common'
+include { parse_resources; biahub_cmd; preemptible_logs; slurm_log_dir } from './common'
 
 
 process init_flat_field {
@@ -41,7 +41,7 @@ process init_flat_field {
 process run_flat_field {
     tag "${position}"
     label 'cpu'
-    clusterOptions { slurm_logs('flat_field') }
+    clusterOptions { preemptible_logs('flat_field') }
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time { "${meta.time_minutes * task.attempt} min" }
