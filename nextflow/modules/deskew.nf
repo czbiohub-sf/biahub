@@ -14,7 +14,7 @@
 // Nextflow task.  See also:
 // examples/submitit_debug_nextflow/2026-05-27-submitit-debug-nextflow-concerns.md
 
-include { parse_resources; biahub_cmd; preemptible_logs; slurm_log_dir } from './common'
+include { parse_resources; biahub_cmd; slurm_logs; slurm_log_dir } from './common'
 
 
 process init_deskew {
@@ -42,7 +42,7 @@ process init_deskew {
 process run_deskew {
     tag "${position}"
     label 'cpu'
-    clusterOptions { preemptible_logs('deskew') }
+    clusterOptions { slurm_logs('deskew') }
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time { "${meta.time_minutes * task.attempt} min" }

@@ -29,7 +29,7 @@
 // extra (cytoland → viscy-utils provides the `viscy` console script), so the
 // tasks here run in that extra's environment rather than the plain biahub env.
 
-include { parse_resources; preemptible_logs; slurm_logs; slurm_log_dir } from './common'
+include { parse_resources; slurm_logs; slurm_log_dir } from './common'
 
 // Command prefix for tools that require biahub's `stain` extra. Both
 // `biahub virtual-stain` (it imports cytoland) and `viscy preprocess` need it.
@@ -65,7 +65,7 @@ process init_virtual_stain {
 
 process run_virtual_stain_preprocess {
     label 'cpu'
-    clusterOptions { preemptible_logs('virtual_stain') }
+    clusterOptions { slurm_logs('virtual_stain') }
     cpus 16
     memory { "${64 * task.attempt} GB" }
     time '1h'
