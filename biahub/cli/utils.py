@@ -454,7 +454,8 @@ def estimate_time_minutes(
     Returns
     -------
     int
-        Estimated wall-time in minutes (ceil), never below ``floor_minutes``.
+        Estimated wall-time in minutes, rounded up to the nearest 10 minutes
+        and never below ``floor_minutes``.
     """
     if num_voxels < 0:
         raise ValueError("num_voxels must be >= 0.")
@@ -465,5 +466,6 @@ def estimate_time_minutes(
     if safety_factor <= 0:
         raise ValueError("safety_factor must be > 0.")
 
-    minutes = safety_factor * num_voxels / voxels_per_second / 60.0
-    return int(np.ceil(max(floor_minutes, minutes)))
+    minutes = max(floor_minutes, safety_factor * num_voxels / voxels_per_second / 60.0)
+    # Round up to the nearest 10 minutes for tidy SLURM wall-time requests.
+    return int(np.ceil(minutes / 10.0) * 10)

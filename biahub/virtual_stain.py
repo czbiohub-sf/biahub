@@ -340,7 +340,9 @@ def virtual_stain(
     # the init_only return so --init emits it for the Nextflow pipeline.
     T, Z = input_shape[0], input_shape[2]
     seconds_per_window = 1.0
-    time_minutes = int(np.ceil(max(60, T * Z * seconds_per_window / 60)))
+    minutes = max(60, T * Z * seconds_per_window / 60)
+    # Round up to the nearest 10 minutes for tidy SLURM wall-time requests.
+    time_minutes = int(np.ceil(minutes / 10.0) * 10)
     echo_resources(num_cpus, mem_gb, time_minutes)
 
     if init_only:
