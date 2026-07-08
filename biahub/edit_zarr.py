@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import click
+import numpy as np
 import submitit
 
 from iohub import open_ome_zarr
@@ -160,6 +161,47 @@ def _resolve_time_indices(time_indices: int | list[int] | str, T: int) -> list[i
     return list(time_indices)
 
 
+def _write_position(
+    output_position_path: Path,
+    source_specs: list[tuple[Path, list[int], list[int]]],
+    time_indices: list[int],
+    output_time_indices: list[int],
+    zyx_slicing_params: list,
+) -> None:
+    """Fill one output position from one or more source stores.
+
+    ``source_specs`` is a list of ``(source_position_path, input_channel_indices,
+    output_channel_indices)``. Each source is read and cropped (same ZYX/T crop)
+    and written into the given output channels. Sources are processed
+    sequentially in a single job so that channels sharing an output position are
+    never written by two concurrent jobs -- the input copy and the substituted
+    channels land in one pass.
+    """
+    z_slice, y_slice, x_slice = zyx_slicing_params
+    with open_ome_zarr(str(output_position_path), mode="r+") as out_ds:
+        out_arr = out_ds["0"]
+        for source_position_path, in_channel_idx, out_channel_idx in source_specs:
+            with open_ome_zarr(str(source_position_path), mode="r") as in_ds:
+                in_arr = in_ds["0"]
+                for t_in, t_out in zip(time_indices, output_time_indices, strict=True):
+                    for c_in, c_out in zip(in_channel_idx, out_channel_idx, strict=True):
+                        zyx = in_arr[t_in, c_in, z_slice, y_slice, x_slice]
+                        out_arr[t_out, c_out] = np.nan_to_num(zyx, nan=0)
+
+
+def _resolve_substitutions(settings: EditZarrSettings) -> dict[str, Path]:
+    """Map each substituted output-channel name to its source store path."""
+    source_by_channel: dict[str, Path] = {}
+    for sub in settings.substitute_channels:
+        for name in sub.channels:
+            if name in source_by_channel:
+                raise click.ClickException(
+                    f"channel '{name}' is substituted from more than one source."
+                )
+            source_by_channel[name] = Path(sub.source)
+    return source_by_channel
+
+
 def edit_zarr(
     input_position_dirpaths: list[str],
     config_filepath: Path,
@@ -206,6 +248,29 @@ def edit_zarr(
 
     input_positions = [Path(p) for p in input_position_dirpaths]
     editions = _resolve_editions(input_positions, output_dirpath, settings, all_channel_names)
+
+    # Substitution: output-channel-name -> source store, validated against the
+    # resolved output channels and each source's channel list.
+    sub_source_by_channel = _resolve_substitutions(settings)
+    source_channel_names: dict[Path, list[str]] = {}
+    if sub_source_by_channel:
+        output_names = {name for e in editions for name in e.output_channel_names}
+        unknown = sorted(n for n in sub_source_by_channel if n not in output_names)
+        if unknown:
+            raise click.ClickException(
+                f"substitute_channels not present in output channels {sorted(output_names)}: "
+                f"{unknown}"
+            )
+        first_key = _position_key(input_positions[0])
+        for name, source in sub_source_by_channel.items():
+            if source not in source_channel_names:
+                with open_ome_zarr(str(source / first_key), mode="r") as src:
+                    source_channel_names[source] = src.channel_names
+            if name not in source_channel_names[source]:
+                raise click.ClickException(
+                    f"channel '{name}' not found in substitute source {source} "
+                    f"({source_channel_names[source]})"
+                )
 
     time_indices = _resolve_time_indices(settings.time_indices, T)
     z_slice = get_slice(settings.Z_slice, Z)
@@ -272,6 +337,7 @@ def edit_zarr(
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=resolved_cluster)
     executor.update_parameters(**slurm_args)
 
+    output_time_indices = list(range(len(time_indices)))
     click.echo("Submitting jobs...")
     jobs = []
     job_labels = []
@@ -281,17 +347,56 @@ def edit_zarr(
             for input_position_path, output_position_path in zip(
                 edition.input_positions, edition.output_positions, strict=True
             ):
+                if not sub_source_by_channel:
+                    # Fast path (no substitution): the proven concatenate/deskew
+                    # per-position machinery, unchanged.
+                    jobs.append(
+                        executor.submit(
+                            process_single_position,
+                            copy_n_paste,
+                            input_position_path=input_position_path,
+                            output_position_path=output_position_path,
+                            input_channel_indices=edition.input_channel_indices,
+                            output_channel_indices=output_channel_indices,
+                            input_time_indices=time_indices,
+                            output_time_indices=output_time_indices,
+                            num_workers=int(slurm_args["slurm_cpus_per_task"]),
+                            zyx_slicing_params=zyx_slicing_params,
+                        )
+                    )
+                    job_labels.append(output_position_path)
+                    continue
+
+                # With substitution, route each output channel to its source
+                # (input store, or a substitute store) and write them all in one
+                # job per position so no two jobs touch the same position.
+                position_key = _position_key(output_position_path)
+                input_in_idx, input_out_idx = [], []
+                sub_groups: dict[Path, list[int]] = {}
+                for out_idx, name in enumerate(edition.output_channel_names):
+                    if name in sub_source_by_channel:
+                        sub_groups.setdefault(sub_source_by_channel[name], []).append(out_idx)
+                    else:
+                        input_in_idx.append(edition.input_channel_indices[out_idx])
+                        input_out_idx.append(out_idx)
+
+                source_specs: list[tuple[Path, list[int], list[int]]] = []
+                if input_out_idx:
+                    source_specs.append((input_position_path, input_in_idx, input_out_idx))
+                for source, out_idxs in sub_groups.items():
+                    src_names = source_channel_names[source]
+                    src_in_idx = [
+                        src_names.index(edition.output_channel_names[j]) for j in out_idxs
+                    ]
+                    source_specs.append((source / position_key, src_in_idx, out_idxs))
+
                 jobs.append(
                     executor.submit(
-                        process_single_position,
-                        copy_n_paste,
-                        input_position_path=input_position_path,
+                        _write_position,
                         output_position_path=output_position_path,
-                        input_channel_indices=edition.input_channel_indices,
-                        output_channel_indices=output_channel_indices,
-                        input_time_indices=time_indices,
-                        output_time_indices=list(range(len(time_indices))),
-                        num_workers=int(slurm_args["slurm_cpus_per_task"]),
+                        source_specs=source_specs,
+                        time_indices=time_indices,
+                        output_time_indices=output_time_indices,
                         zyx_slicing_params=zyx_slicing_params,
                     )
                 )

@@ -626,16 +626,45 @@ class DivideSettings(MyBaseModel):
         return self
 
 
+class ChannelSubstitution(MyBaseModel):
+    """Overwrite output channels with data from another store, matched by name.
+
+    ``source`` is an OME-Zarr plate whose positions mirror the input's; each
+    name in ``channels`` is read from ``source`` (same position key, same
+    channel name) and written over that channel in the output. This is the
+    "re-ran virtual staining -> swap those channels back into the assembled
+    store" case: the channel must already exist in the output.
+    """
+
+    source: str
+    channels: list[str]
+
+    @field_validator("source")
+    @classmethod
+    def check_source(cls, v):
+        if not str(v).endswith(".zarr"):
+            raise ValueError("substitute source must be a .zarr store path.")
+        return v
+
+    @field_validator("channels")
+    @classmethod
+    def check_channels(cls, v):
+        if not v:
+            raise ValueError("substitute channels must be a non-empty list.")
+        return v
+
+
 class EditZarrSettings(MyBaseModel):
     """Per-position edits to a single OME-Zarr store.
 
-    Composes three edits over one input store -> one (or, with ``divide``,
-    several) output store(s):
+    Composes edits over one input store -> one (or, with ``divide``, several)
+    output store(s):
 
     * **crop** in T (``time_indices``) and ZYX (``Z_slice`` / ``Y_slice`` /
       ``X_slice``),
     * **drop / rename channels** via ``channels`` (a subset drops the rest; an
       ``output`` name renames),
+    * **substitute channels** from another store via ``substitute_channels``,
     * **divide** the store into multiple outputs (``divide``).
     """
 
@@ -646,6 +675,7 @@ class EditZarrSettings(MyBaseModel):
     # "all" keeps every channel with its original name; a list selects (and
     # optionally renames) channels, dropping any not listed.
     channels: Literal["all"] | list[ChannelRename] = "all"
+    substitute_channels: list[ChannelSubstitution] = []
     divide: DivideSettings | None = None
     chunks_czyx: list[int] | None = None
     shards_ratio: list[int] | None = None

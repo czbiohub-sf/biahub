@@ -86,6 +86,56 @@ def test_edit_zarr_drop_and_rename(tmp_path, example_plate):
         np.testing.assert_array_equal(out.data[:, 1], src.data[:, phase])
 
 
+def test_edit_zarr_substitute_channel(tmp_path, example_plate):
+    """Overwrite one channel from another store, keeping the rest from input."""
+    plate_path, _ = example_plate
+
+    # Build a substitute source with the same positions and a "GFP" channel
+    # holding distinct data.
+    source_path = tmp_path / "vs.zarr"
+    source = open_ome_zarr(source_path, layout="hcs", mode="w", channel_names=["GFP", "extra"])
+    source_gfp = {}
+    for row, col, fov in (("A", "1", "0"), ("B", "1", "0"), ("B", "2", "0")):
+        pos = source.create_position(row, col, fov)
+        data = np.random.uniform(0.0, 255.0, size=(3, 2, 4, 5, 6)).astype(np.float32)
+        pos["0"] = data
+        source_gfp[f"{row}/{col}/{fov}"] = data[:, 0]
+    source.close()
+
+    config_path = _write_config(
+        tmp_path,
+        {"substitute_channels": [{"source": str(source_path), "channels": ["GFP"]}]},
+    )
+    output_path = tmp_path / "output.zarr"
+
+    result = _run(
+        [
+            "edit-zarr",
+            "-i",
+            str(plate_path) + "/A/1/0",
+            "-c",
+            str(config_path),
+            "-o",
+            str(output_path),
+            "--cluster",
+            "debug",
+        ]
+    )
+    assert result.exit_code == 0, result.output
+
+    with (
+        open_ome_zarr(str(plate_path) + "/A/1/0", mode="r") as src,
+        open_ome_zarr(str(output_path) + "/A/1/0", mode="r") as out,
+    ):
+        assert out.channel_names == src.channel_names
+        gfp = out.channel_names.index("GFP")
+        rfp = out.channel_names.index("RFP")
+        # GFP came from the substitute source ...
+        np.testing.assert_array_equal(out.data[:, gfp], source_gfp["A/1/0"])
+        # ... every other channel is unchanged from the input.
+        np.testing.assert_array_equal(out.data[:, rfp], src.data[:, rfp])
+
+
 def test_edit_zarr_init_only(tmp_path, example_plate):
     plate_path, _ = example_plate
     config_path = _write_config(tmp_path, {"channels": "all"})

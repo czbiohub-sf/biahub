@@ -26,6 +26,16 @@ channels: "all"
 #   - {input: "GFP", output: "membrane"}
 #   - {input: "RFP"}
 
+# --- Substitute channels from another store (optional) ----------------------
+# Overwrite named channels in the output with data from another store, matched
+# by position key and channel name. Use case: re-ran virtual staining, swap
+# those channels back into the assembled store without re-concatenating.
+# The channel must already exist in the output (from `channels` above).
+substitute_channels: []
+# substitute_channels:
+#   - source: "/path/to/rerun_virtual_stain.zarr"
+#     channels: ["membrane_prediction", "nuclei_prediction"]
+
 # --- Divide into multiple stores (optional) ---------------------------------
 # When set, `-o` is treated as the PARENT directory and each group is written to
 # `<output>/<name>.zarr`. Renames from `channels` above still apply.
