@@ -106,7 +106,6 @@ process run_virtual_stain {
     tag "${position}"
     label 'gpu'
     clusterOptions { "--gres=gpu:1 " + slurm_logs('virtual_stain') }
-    maxForks 30
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time { "${meta.time_minutes * task.attempt} min" }

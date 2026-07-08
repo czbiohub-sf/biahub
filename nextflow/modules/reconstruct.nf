@@ -89,7 +89,6 @@ process run_apply_inv_tf {
     tag "${position}"
     label 'cpu'
     clusterOptions { slurm_logs('reconstruct') }
-    maxForks 30
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time { "${meta.time_minutes * task.attempt} min" }

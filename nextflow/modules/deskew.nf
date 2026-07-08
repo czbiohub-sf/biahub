@@ -43,7 +43,6 @@ process run_deskew {
     tag "${position}"
     label 'cpu'
     clusterOptions { slurm_logs('deskew') }
-    maxForks 30
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time { "${meta.time_minutes * task.attempt} min" }

@@ -42,7 +42,6 @@ process run_flat_field {
     tag "${position}"
     label 'cpu'
     clusterOptions { slurm_logs('flat_field') }
-    maxForks 30
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time { "${meta.time_minutes * task.attempt} min" }
