@@ -328,8 +328,9 @@ def virtual_stain(
         cfg.output_ome_zarr_version,
     )
 
-    # Timepoints are processed sequentially on a single GPU, so resource needs
-    # are independent of dataset size.
+    # Timepoints are processed sequentially on a single GPU, so CPU and RAM
+    # needs are fixed (independent of dataset size); only wall-time scales with
+    # the data (see the T*Z budget below).
     num_cpus, mem_gb = 16, 64
     # Wall-clock budget (minutes) for GPU prediction. Each timepoint runs ~Z
     # sliding windows along Z; this is a GPU step so time scales with T*Z, not
