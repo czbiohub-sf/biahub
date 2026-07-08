@@ -45,8 +45,6 @@ process run_flat_field {
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time { "${meta.time_minutes * task.attempt} min" }
-    maxRetries 1
-    errorStrategy 'retry'
 
     input:
     tuple val(position), val(meta)
