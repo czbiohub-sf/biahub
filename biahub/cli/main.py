@@ -110,6 +110,11 @@ COMMANDS = [
         "help": "Concatenate datasets (with optional cropping)",
     },
     {
+        "name": "edit-zarr",
+        "import_path": "biahub.edit_zarr.edit_zarr_cli",
+        "help": "Edit a zarr: crop, drop/rename channels, or divide into stores",
+    },
+    {
         "name": "estimate-stabilization",
         "import_path": "biahub.estimate_stabilization.estimate_stabilization_cli",
         "help": "Estimate translation matrices for XYZ stabilization",

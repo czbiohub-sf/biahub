@@ -1,0 +1,54 @@
+# Example configuration for the `edit-zarr` command.
+# Edits a single OME-Zarr store per position: crop (T/ZYX), drop/rename
+# channels, and/or divide one store into several.
+#
+#   biahub edit-zarr -i ./input.zarr/*/*/* -c ./edit.yml -o ./output.zarr
+
+# --- Crop in time -----------------------------------------------------------
+# "all"      : keep every timepoint (default)
+# 5          : keep only timepoint 5
+# [0, 1, 2]  : keep these explicit timepoint indices
+time_indices: "all"
+
+# --- Crop in ZYX ------------------------------------------------------------
+# "all"      : keep the full extent (default)
+# [start, end]: half-open crop along that axis
+Z_slice: "all"
+Y_slice: "all"
+X_slice: "all"
+
+# --- Drop / rename channels -------------------------------------------------
+# "all" keeps every channel with its original name. To DROP channels, list only
+# the ones to keep. To RENAME, set `output`; omit `output` to keep the name.
+channels: "all"
+# Example (keep + rename GFP->membrane, keep RFP, drop everything else):
+# channels:
+#   - {input: "GFP", output: "membrane"}
+#   - {input: "RFP"}
+
+# --- Divide into multiple stores (optional) ---------------------------------
+# When set, `-o` is treated as the PARENT directory and each group is written to
+# `<output>/<name>.zarr`. Renames from `channels` above still apply.
+divide: null
+#
+# Divide by channel groups (one store per channel subset, all positions):
+# divide:
+#   by: "channels"
+#   groups:
+#     - {name: "fluorescence", channels: ["GFP", "RFP"]}
+#     - {name: "label",        channels: ["mask"]}
+#
+# Divide by positions (route position keys into separate stores):
+# divide:
+#   by: "positions"
+#   groups:
+#     - {name: "mock",     positions: ["A/1/0", "A/2/0"]}
+#     - {name: "infected", positions: ["B/1/0"]}
+
+# --- Output store options ---------------------------------------------------
+# Output chunk size [C, Z, Y, X]; null uses the default.
+chunks_czyx: null
+# Shards ratio [T, C, Z, Y, X]; null disables sharding.
+shards_ratio: null
+# "0.4" / "0.5", or null to preserve the input store's version.
+output_ome_zarr_version: null

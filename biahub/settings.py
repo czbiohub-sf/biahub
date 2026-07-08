@@ -571,6 +571,127 @@ class ConcatenateSettings(MyBaseModel):
         return self
 
 
+class ChannelRename(MyBaseModel):
+    """Keep a single input channel in the output, optionally under a new name.
+
+    ``input`` is the channel name in the source store; ``output`` is the name to
+    give it in the edited store. When ``output`` is None the name is preserved.
+    Listing a subset of channels here is how channels are *dropped* -- any input
+    channel not named is left out of the output.
+    """
+
+    input: str
+    output: str | None = None
+
+
+class DivideGroup(MyBaseModel):
+    """One output store produced when dividing an input store.
+
+    ``name`` becomes the output store name (``<output_dirpath>/<name>.zarr``).
+    Exactly one of ``channels`` / ``positions`` is used, matching the parent
+    ``DivideSettings.by``: a channel subset (by="channels") or a list of position
+    keys like "A/1/0" (by="positions").
+    """
+
+    name: str
+    channels: list[str] | None = None
+    positions: list[str] | None = None
+
+
+class DivideSettings(MyBaseModel):
+    """Split one input store into several output stores.
+
+    ``by="channels"`` writes one store per group, each holding that group's
+    channel subset (every position included). ``by="positions"`` routes each
+    group's position keys into its own store (every selected channel included).
+    """
+
+    by: Literal["channels", "positions"]
+    groups: list[DivideGroup]
+
+    @model_validator(mode="after")
+    def check_groups(self) -> "DivideSettings":
+        if not self.groups:
+            raise ValueError("divide.groups must contain at least one group.")
+        names = [g.name for g in self.groups]
+        if len(names) != len(set(names)):
+            raise ValueError("divide.groups names must be unique.")
+        for g in self.groups:
+            if self.by == "channels" and not g.channels:
+                raise ValueError(f"Group '{g.name}' must list 'channels' when by='channels'.")
+            if self.by == "positions" and not g.positions:
+                raise ValueError(
+                    f"Group '{g.name}' must list 'positions' when by='positions'."
+                )
+        return self
+
+
+class EditZarrSettings(MyBaseModel):
+    """Per-position edits to a single OME-Zarr store.
+
+    Composes three edits over one input store -> one (or, with ``divide``,
+    several) output store(s):
+
+    * **crop** in T (``time_indices``) and ZYX (``Z_slice`` / ``Y_slice`` /
+      ``X_slice``),
+    * **drop / rename channels** via ``channels`` (a subset drops the rest; an
+      ``output`` name renames),
+    * **divide** the store into multiple outputs (``divide``).
+    """
+
+    time_indices: int | list[int] | Literal["all"] = "all"
+    X_slice: list[int] | Literal["all"] = "all"
+    Y_slice: list[int] | Literal["all"] = "all"
+    Z_slice: list[int] | Literal["all"] = "all"
+    # "all" keeps every channel with its original name; a list selects (and
+    # optionally renames) channels, dropping any not listed.
+    channels: Literal["all"] | list[ChannelRename] = "all"
+    divide: DivideSettings | None = None
+    chunks_czyx: list[int] | None = None
+    shards_ratio: list[int] | None = None
+    # When None, preserve the OME-Zarr version of the input store.
+    output_ome_zarr_version: Literal["0.4", "0.5"] | None = None
+
+    @field_validator("X_slice", "Y_slice", "Z_slice")
+    @classmethod
+    def check_slices(cls, v):
+        if v == "all":
+            return v
+        if (
+            not isinstance(v, list)
+            or len(v) != 2
+            or not all(isinstance(i, int) and i >= 0 for i in v)
+        ):
+            raise ValueError(
+                "Slice must be 'all' or a list of two non-negative integers [start, end]."
+            )
+        if v[1] <= v[0]:
+            raise ValueError("Slice end must be greater than start.")
+        return v
+
+    @field_validator("channels")
+    @classmethod
+    def check_channels(cls, v):
+        if v == "all":
+            return v
+        inputs = [c.input for c in v]
+        if len(inputs) != len(set(inputs)):
+            raise ValueError("channels: duplicate input channel names are not allowed.")
+        outputs = [c.output or c.input for c in v]
+        if len(outputs) != len(set(outputs)):
+            raise ValueError("channels: resolved output channel names must be unique.")
+        return v
+
+    @field_validator("chunks_czyx")
+    @classmethod
+    def check_chunk_size(cls, v):
+        if v is not None and (
+            not isinstance(v, list) or len(v) != 4 or not all(isinstance(i, int) for i in v)
+        ):
+            raise ValueError("chunks_czyx must be a list of 4 integers (C, Z, Y, X)")
+        return v
+
+
 class StabilizationSettings(MyBaseModel):
     stabilization_estimation_channel: str
     stabilization_type: Literal["z", "xy", "xyz", "affine"]
