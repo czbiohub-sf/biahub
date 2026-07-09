@@ -70,9 +70,7 @@ def clean_temp(temp_dir: str):
     required=True,
     help="Step directory name to clean (repeatable, e.g. -i 0-flatfield -i 1-deskew).",
 )
-def clean_intermediates(
-    output_dir: str, dataset_name: str, intermediate_dir: tuple[str, ...]
-):
+def clean_intermediates(output_dir: str, dataset_name: str, intermediate_dir: tuple[str, ...]):
     """Delete intermediate zarrs after successful assembly."""
     for dirname in intermediate_dir:
         zarr_path = Path(output_dir) / dirname / f"{dataset_name}.zarr"

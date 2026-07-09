@@ -626,9 +626,7 @@ def concatenate(
             # Preserve extra_metadata written by create_empty_plate's
             # metadata_sources — process_single_position overwrites it with
             # None when the kwarg is absent (iohub <= 0.3.7).
-            with open_ome_zarr(
-                str(output_position_path), layout="fov", mode="r"
-            ) as pos:
+            with open_ome_zarr(str(output_position_path), layout="fov", mode="r") as pos:
                 existing_extra = pos.zattrs.get("extra_metadata")
 
             copy_n_paste_kwargs = {"zyx_slicing_params": zyx_slicing_params}

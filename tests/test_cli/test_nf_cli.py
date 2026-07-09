@@ -87,7 +87,17 @@ def test_clean_intermediates_missing(tmp_path):
     runner = CliRunner()
     result = runner.invoke(
         cli,
-        ["nf", "clean-intermediates", "-o", str(output_dir), "-d", "missing",
-         "-i", "0-flatfield", "-i", "1-deskew"],
+        [
+            "nf",
+            "clean-intermediates",
+            "-o",
+            str(output_dir),
+            "-d",
+            "missing",
+            "-i",
+            "0-flatfield",
+            "-i",
+            "1-deskew",
+        ],
     )
     assert result.exit_code == 0
