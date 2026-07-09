@@ -127,8 +127,13 @@ For each target module, check and record deviations in these categories:
   consistent `num_workers` handling (no `int(...)` cast — `num_cpus` is already `int`).
   Wrapping an already-`Path` value in `Path(...)` is an accepted safety idiom, **not** a
   finding.
-- **Provenance** — output metadata carries `extra_metadata={"biahub-<verb>":
-  settings.model_dump()}` (flag processing commands that omit it).
+- **Provenance** — this metadata block is important: output metadata must carry
+  `extra_metadata={"biahub-<verb>": settings.model_dump()}`. **Flag it whenever it is
+  missing.** The *only* current exception is `apply_inverse_transfer_function`, because it
+  is known that `waveorder` writes the equivalent metadata for it. Do not generalize this:
+  using an external library is not itself an excuse — any other command that omits the
+  block (e.g. `virtual_stain`, which uses cytoland but does not write it) is still flagged
+  unless you have verified that command writes the equivalent provenance.
 - **CLI docstring** — one-line summary + `\b` block with the three canonical examples
   (SLURM fan-out / `--init` / `--cluster debug`) + trailing `# noqa: D301`.
 - **Docstring accuracy** — numpydoc Parameters match the actual signature (no documented-

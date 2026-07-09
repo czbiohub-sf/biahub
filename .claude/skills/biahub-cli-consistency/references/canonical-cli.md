@@ -157,7 +157,11 @@ output_position_paths = utils.get_output_paths(input_position_dirpaths, output_d
 
 <verb>_args = {
     ...,
-    "extra_metadata": {"biahub-<verb>": settings.model_dump()},   # provenance
+    # Provenance — important; required on every command. The ONLY known exception
+    # is apply-inv-tf, because waveorder writes the equivalent metadata for it.
+    # Using an external library is not itself an excuse (virtual_stain uses cytoland
+    # and still owes this block). Flag it whenever it is missing.
+    "extra_metadata": {"biahub-<verb>": settings.model_dump()},
 }
 
 slurm_args = {
