@@ -55,6 +55,12 @@ example_settings_params = [
     ("example_flat_field_settings.yml", FlatFieldCorrectionSettings),
 ]
 
+# Example configs validated against VisCy's own classes via jsonargparse rather
+# than a biahub pydantic Settings model (virtual staining keeps no model schema).
+jsonargparse_settings_files = [
+    "example_virtual_stain_settings.yml",
+]
+
 try:
     import cellpose  # noqa: F401
 
@@ -62,15 +68,36 @@ try:
 except ImportError:
     cellpose_available = False
 
+try:
+    import cytoland  # noqa: F401
+
+    cytoland_available = True
+except ImportError:
+    cytoland_available = False
+
 
 def test_all_example_settings_tested():
     num_settings_files = len(
         list(settings_files_dir.glob("*.yml")) + list(settings_files_dir.glob("*.yaml"))
     )
-    assert num_settings_files == len(example_settings_params), (
+    num_tested = len(example_settings_params) + len(jsonargparse_settings_files)
+    assert num_settings_files == num_tested, (
         "Not all example settings files are tested. "
-        f"Found {num_settings_files} files, but {len(example_settings_params)} are tested in test_example_settings."
+        f"Found {num_settings_files} files, but {num_tested} are tested in test_example_settings."
     )
+
+
+@pytest.mark.parametrize("path", jsonargparse_settings_files)
+def test_example_jsonargparse_settings(path):
+    # These configs are validated against VisCy's VSUNet/HCSDataModule classes,
+    # which require the optional `stain` extra (cytoland).
+    if not cytoland_available:
+        pytest.skip("cytoland not installed; skipping VisCy-config validation.")
+
+    from biahub.virtual_stain import load_predict_config
+
+    # data_path is injected per position at runtime; any placeholder validates.
+    load_predict_config(settings_files_dir / path, Path("/placeholder.zarr/A/1/0"))
 
 
 @pytest.mark.parametrize("path,settings_cls", example_settings_params)

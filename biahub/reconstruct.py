@@ -8,11 +8,10 @@ from waveorder.cli.compute_transfer_function import (
 
 from biahub.apply_inverse_transfer_function import apply_inverse_transfer_function
 from biahub.cli.parsing import (
+    cluster,
     config_filepath,
     input_position_dirpaths,
-    local,
     monitor,
-    num_processes,
     output_dirpath,
     sbatch_filepath,
 )
@@ -22,17 +21,15 @@ from biahub.cli.parsing import (
 @input_position_dirpaths()
 @config_filepath()
 @output_dirpath()
-@num_processes()
 @sbatch_filepath()
-@local()
+@cluster()
 @monitor()
 def reconstruct_cli(
     input_position_dirpaths: list[Path],
     config_filepath: Path,
     output_dirpath: Path,
-    num_processes: int,
     sbatch_filepath: Path,
-    local: bool = False,
+    cluster: str,
     monitor: bool = True,
 ):
     """Reconstruct a dataset using a configuration file.
@@ -70,9 +67,8 @@ def reconstruct_cli(
         transfer_function_path,
         config_filepath,
         output_dirpath,
-        num_processes,
         sbatch_filepath,
-        local,
+        cluster,
         monitor,
     )
 

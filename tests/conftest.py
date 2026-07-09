@@ -9,6 +9,38 @@ from iohub.ngff import open_ome_zarr
 # Use submitit debug executor (in-process, no forking) for fast tests
 os.environ["CI"] = "true"
 
+# iohub's default zarr implementation is a *process-global*. biahub relies on
+# the ``zarrs-python`` (Rust) pipeline for its sharded zarr-v3 writes
+# (flat-field, concatenate, ...). Importing ``cytoland``/``viscy_data`` runs
+# ``viscy_data._zarr_codec`` at import time, which flips that global to
+# ``zarr-python`` via ``set_default_implementation``. zarr-python's pure-Python
+# pipeline mishandles orthogonally-indexed sharded rank-5 writes, so once any
+# test imports cytoland (the virtual-stain config test, which also imports it
+# at module scope during collection) every later sharded write in the same
+# process fails with a broadcast ``shape mismatch``. In production each CLI
+# command runs in its own process so the two never collide, but pytest imports
+# them all together. Snapshot iohub's pristine default here -- conftest is
+# imported before any test module, i.e. before cytoland is imported -- and
+# restore it around every test below.
+from iohub.core import registry as _iohub_registry  # noqa: E402
+
+_IOHUB_DEFAULT_IMPLEMENTATION = _iohub_registry._default
+
+
+@pytest.fixture(autouse=True)
+def _restore_iohub_default_implementation():
+    """Pin iohub's default zarr implementation for the duration of each test.
+
+    See the module-level note above: keeps cytoland's import-time override from
+    leaking into biahub's sharded zarr writes.
+    """
+    _iohub_registry.set_default_implementation(_IOHUB_DEFAULT_IMPLEMENTATION)
+    try:
+        yield
+    finally:
+        _iohub_registry.set_default_implementation(_IOHUB_DEFAULT_IMPLEMENTATION)
+
+
 # These fixtures return paired
 # - paths for testing CLIs
 # - objects for testing underlying functions

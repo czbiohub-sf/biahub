@@ -1,28 +1,43 @@
-// Virtual stain subworkflow: init → preprocess → fan-out (predict + copy) × N positions.
+// Virtual-stain subworkflow: init + preprocess → fan-out run × N positions.
 //
 // This subworkflow is PATH-AGNOSTIC. Callers pass the input zarr, output zarr,
-// and config explicitly. Temp paths for predict output are derived from the
-// output_zarr's parent directory.
+// and config explicitly; the module has no idea where it sits in the pipeline
+// directory layout. The orchestrating pipeline (see mantis-v2.nf) owns the
+// layout and the order of steps; this module just virtually stains whatever
+// it's handed.
 //
-// Virtual staining uses VisCy (external tool) for the GPU work, so the
-// preprocess and predict steps call viscy directly rather than biahub CLI.
-// Only init and copy are biahub commands:
+// Since PR #267 the `biahub virtual-stain` CLI runs cytoland (modular VisCy)
+// prediction IN-PROCESS, so per-position work is a single `biahub virtual-stain
+// --cluster debug` call — no temp per-position zarr and no `--copy` merge step
+// (the old #259 flow). `--cluster debug` makes submitit's DebugExecutor run the
+// work synchronously inside the Nextflow task; Nextflow already handles
+// per-position fan-out and resource scheduling, so the CLI must NOT submit its
+// own SLURM jobs. See:
+// examples/submitit_debug_nextflow/2026-05-27-submitit-debug-nextflow-concerns.md
 //
-// 1. init_virtual_stain: creates empty output plate with prediction channels,
-//    cleans temp dir, emits RESOURCES:
-// 2. run_virtual_stain_preprocess: calls `viscy preprocess` on the whole plate
-// 3. run_virtual_stain: calls `viscy predict` per position, then
-//    `biahub virtual-stain --copy` to merge the temp FOV zarr into the plate
+// Three-phase pattern:
+// 1. init_virtual_stain: validates the config, creates the output plate with
+//    the predicted channels, emits RESOURCES:
+// 2. run_virtual_stain_preprocess: `viscy preprocess` over the whole input
+//    plate. virtual_stain_position reads precomputed normalization statistics
+//    from the input store (viscy_data.read_norm_meta) and errors if they are
+//    missing, so this must run before fan-out. NOTE: this MUTATES the input
+//    store by writing normalization metadata into it.
+// 3. run_virtual_stain: per-position GPU prediction using RESOURCES.
 //
-// The predict step writes to a temp per-position zarr, and the --copy step
-// moves data from that temp zarr into the output plate.
+// Both `biahub virtual-stain` and `viscy` live in biahub's optional `stain`
+// extra (cytoland → viscy-utils provides the `viscy` console script), so the
+// tasks here run in that extra's environment rather than the plain biahub env.
 
-include { parse_resources; biahub_cmd; slurm_logs; slurm_log_dir } from './common'
+include { parse_resources; slurm_logs; slurm_log_dir } from './common'
 
-def viscy_cmd() {
-    return params.viscy_project ?
-        "uv run --project ${params.viscy_project} viscy" :
-        "uv run --from 'viscy @ git+https://github.com/mehta-lab/VisCy@v0.3.4' viscy"
+// Command prefix for tools that require biahub's `stain` extra. Both
+// `biahub virtual-stain` (it imports cytoland) and `viscy preprocess` need it.
+// Falls back to the bare tool on the active environment when biahub_project is
+// unset (assumes that env already has the stain extra installed).
+def stain_cmd(tool) {
+    return params.biahub_project ?
+        "uv run --project ${params.biahub_project} --extra stain ${tool}" : tool
 }
 
 
@@ -33,7 +48,6 @@ process init_virtual_stain {
     val input_zarr
     val output_zarr
     val config
-    val output_dir
     val trigger
 
     output:
@@ -42,8 +56,7 @@ process init_virtual_stain {
     script:
     """
     mkdir -p "${slurm_log_dir('virtual_stain')}"
-    rm -rf "${output_dir}/temp"
-    ${biahub_cmd()} virtual-stain --init \
+    ${stain_cmd('biahub')} virtual-stain --init \
         -i "${input_zarr}"/*/*/* \
         -o "${output_zarr}" \
         -c "${config}"
@@ -66,13 +79,26 @@ process run_virtual_stain_preprocess {
     output:
     val true
 
+    // `--trainer.logger false` disables the viscy CLI's default WandbLogger.
+    // The VisCy LightningCLI sets trainer.logger to a lazy WandbLogger for every
+    // subcommand (viscy_utils/cli.py); preprocess needs no logger, and W&B isn't
+    // in the `stain` extra, so instantiating it fails with a missing-wandb error.
+    //
+    // `unset SLURM_NTASKS`: sbatch exports the submit environment, so when this
+    // pipeline is launched from inside a SLURM allocation, the submit shell's
+    // SLURM_NTASKS leaks into the job. Lightning's Trainer then auto-detects a
+    // SLURMEnvironment and rejects SLURM_NTASKS>1 (it expects --ntasks-per-node).
+    // preprocess is a single-process CPU job, so clearing it lets Lightning fall
+    // back to LightningEnvironment. The dataloader uses --num_workers, not tasks.
     script:
     """
-    ${viscy_cmd()} preprocess \
+    unset SLURM_NTASKS
+    ${stain_cmd('viscy')} preprocess \
         --data_path "${input_zarr}" \
         --channel_names -1 \
         --num_workers ${task.cpus} \
-        --block_size 32
+        --block_size 32 \
+        --trainer.logger false
     """
 }
 
@@ -83,8 +109,8 @@ process run_virtual_stain {
     maxForks 30
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
-    time { task.attempt == 1 ? '8h' : '12h' }
-    maxRetries 2
+    time { "${meta.time_minutes * task.attempt} min" }
+    maxRetries 1
     errorStrategy 'retry'
 
     input:
@@ -92,28 +118,15 @@ process run_virtual_stain {
     val input_zarr
     val output_zarr
     val config
-    val output_dir
 
     output:
     val position
 
     script:
-    def temp_zarr = "${output_dir}/temp/${position.replaceAll('/', '_')}.zarr"
     """
-    rm -rf "${temp_zarr}"
-
-    ${viscy_cmd()} predict \
-        -c "${config}" \
-        --data.init_args.data_path "${input_zarr}/${position}" \
-        --data.init_args.num_workers 0 \
-        --trainer.callbacks+=viscy_utils.callbacks.prediction_writer.HCSPredictionWriter \
-        --trainer.callbacks.output_store "${temp_zarr}" \
-        --trainer.default_root_dir "${output_dir}/logs"
-
-    ${biahub_cmd()} virtual-stain --copy \
-        -t "${temp_zarr}" \
+    ${stain_cmd('biahub')} virtual-stain --cluster debug \
+        -i "${input_zarr}/${position}" \
         -o "${output_zarr}" \
-        -p "${position}" \
         -c "${config}"
     """
 }
@@ -122,8 +135,8 @@ process run_virtual_stain {
 // take:
 //   positions    collected channel of position keys (e.g. ['A/1/0', 'B/1/0'])
 //   input_zarr   path to the input plate.zarr (reconstruct output)
-//   output_zarr  path to the virtual stain output plate.zarr
-//   config       path to the predict settings YAML
+//   output_zarr  path to the virtual-stain output plate.zarr
+//   config       path to the virtual-stain (viscy predict) settings YAML
 //   prev_done    gating channel — virtual stain starts once this emits
 workflow virtual_stain_wf {
     take:
@@ -134,10 +147,10 @@ workflow virtual_stain_wf {
     prev_done
 
     main:
-    def output_dir = new File(output_zarr).parent
+    init_out = init_virtual_stain(input_zarr, output_zarr, config, prev_done.map { 'done' })
+    resources = init_out.map { parse_resources(it) }
 
-    resources = init_virtual_stain(input_zarr, output_zarr, config, output_dir, prev_done.map { 'done' })
-        .map { parse_resources(it) }
+    // Preprocess the whole plate in parallel with init; both gate the fan-out.
     vs_preprocess = run_virtual_stain_preprocess(input_zarr, prev_done.map { 'done' })
 
     ready = resources.combine(vs_preprocess)
@@ -147,7 +160,7 @@ workflow virtual_stain_wf {
         .combine(ready)
         .map { pos, meta, preprocess_done -> [pos, meta] }
 
-    vs_done = run_virtual_stain(pos_meta, input_zarr, output_zarr, config, output_dir) | collect
+    vs_done = run_virtual_stain(pos_meta, input_zarr, output_zarr, config) | collect
 
     emit:
     done = vs_done

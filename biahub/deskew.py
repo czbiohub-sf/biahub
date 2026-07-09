@@ -1,3 +1,5 @@
+import warnings
+
 from pathlib import Path
 from typing import Literal
 
@@ -6,7 +8,6 @@ import numpy as np
 import submitit
 import torch
 import torch.nn.functional as F  # noqa: N812
-import yaml
 
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate, process_single_position
@@ -26,9 +27,11 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.cli.utils import (
+    echo_resources,
     estimate_resources,
     get_submitit_cluster,
     resolve_ome_zarr_version,
+    yaml_to_model,
 )
 from biahub.settings import DeskewSettings
 
@@ -571,26 +574,23 @@ def _czyx_fast_deskew_data(data, device="cuda", num_splits=1, **kwargs):
     return fast_deskew_zyx(tensor, **kwargs).cpu().numpy()[None]
 
 
-def _load_deskew_settings(
-    config_filepath: Path,
-    reference_position_path: str | Path,
-) -> DeskewSettings:
-    """Load DeskewSettings, resolving pixel_size_um from a reference zarr if absent.
+def _warn_pixel_size_mismatch(
+    settings: DeskewSettings, reference_position_path: str | Path
+) -> None:
+    """Warn if the config's lateral pixel size disagrees with the input zarr scale.
 
-    DeskewSettings requires pixel_size_um, but it's often more natural to read it
-    from the input plate's XY scale than to write it into the config by hand.
-    Patches the raw YAML before pydantic validation so the required-field constraint
-    is satisfied either way.
+    The config is the source of truth for ``pixel_size_um``; this only surfaces a
+    likely misconfiguration when it differs (>5%) from the input plate's XY scale
+    metadata.
     """
-    with open(config_filepath) as f:
-        cfg = yaml.safe_load(f) or {}
-    if cfg.get("pixel_size_um") is None:
-        with open_ome_zarr(str(reference_position_path), mode="r") as ds:
-            cfg["pixel_size_um"] = float(ds.scale[-1])
-        click.echo(
-            f"Resolved pixel_size_um={cfg['pixel_size_um']} from {reference_position_path}"
+    with open_ome_zarr(str(reference_position_path), mode="r") as ds:
+        zarr_pixel_size = float(ds.scale[-1])
+    if not np.isclose(settings.pixel_size_um, zarr_pixel_size, rtol=0.05):
+        warnings.warn(
+            f"Config pixel_size_um={settings.pixel_size_um} differs from the input "
+            f"zarr metadata XY scale ({zarr_pixel_size:.4f}).",
+            stacklevel=2,
         )
-    return DeskewSettings(**cfg)
 
 
 def _init_output_plate(
@@ -670,11 +670,16 @@ def deskew(
     output_dirpath = Path(output_dirpath)
     slurm_out_path = output_dirpath.parent / "slurm_output"
 
-    settings = _load_deskew_settings(config_filepath, input_position_dirpaths[0])
+    settings = yaml_to_model(config_filepath, DeskewSettings)
+    _warn_pixel_size_mismatch(settings, input_position_dirpaths[0])
     input_shape, _ = _init_output_plate(input_position_dirpaths, output_dirpath, settings)
 
-    num_cpus, gb_ram = estimate_resources(shape=input_shape, ram_multiplier=32, max_num_cpus=8)
-    click.echo(f"RESOURCES:{num_cpus} {num_cpus * gb_ram}")
+    num_cpus, gb_ram_per_cpu = estimate_resources(
+        shape=input_shape, ram_multiplier=8, max_num_cpus=16
+    )
+    mem_gb = num_cpus * gb_ram_per_cpu
+    time_minutes = 60
+    echo_resources(num_cpus, mem_gb, time_minutes)
 
     if init_only:
         click.echo(f"Initialized {output_dirpath} ({len(input_position_dirpaths)} positions)")
@@ -689,15 +694,15 @@ def deskew(
         "average_n_slices": settings.average_n_slices,
         "overhang_fill": settings.overhang_fill,
         "device": settings.device,
-        "extra_metadata": {"deskew": settings.model_dump()},
+        "extra_metadata": {"biahub-deskew": settings.model_dump()},
     }
 
     slurm_args = {
         "slurm_job_name": "deskew",
-        "slurm_mem_per_cpu": f"{gb_ram}G",
+        "slurm_mem": f"{mem_gb}G",
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,  # process up to 100 positions at a time
-        "slurm_time": 60,
+        "slurm_time": time_minutes,
         "slurm_partition": "preempted",
     }
     if sbatch_filepath:
