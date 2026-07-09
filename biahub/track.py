@@ -13,6 +13,7 @@ import submitit
 from iohub import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate
 from numpy.typing import ArrayLike
+from tqdm import tqdm
 
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
@@ -33,7 +34,7 @@ from biahub.cli.utils import (
     update_model,
     yaml_to_model,
 )
-from biahub.settings import ProcessingInputChannel, TrackingSettings
+from biahub.settings import CellposeConfig, ProcessingInputChannel, TrackingSettings
 
 logger = logging.getLogger(__name__)
 
@@ -342,34 +343,30 @@ def resolve_z_slice(z_range: tuple[int, int], z_shape: int) -> tuple[slice, int]
 
 def run_ultrack(
     tracking_config,
-    foreground_mask: ArrayLike,
-    contour_gradient_map: ArrayLike,
-    scale: tuple[float, float] | tuple[float, float, float],
     database_path,
+    **track_kwargs,
 ):
     """
     Run object tracking using the Ultrack library.
 
     Note: ultrack is imported lazily within this function.
 
-    This function performs object tracking on time-series image data using a binary
-    foreground mask and a contour gradient map. It outputs labeled segmentation results,
-    a track DataFrame, and a graph representing object trajectories over time.
+    This function performs object tracking on time-series image data and outputs labeled
+    segmentation results, a track DataFrame, and a graph of object trajectories over time.
+    The detection inputs are forwarded to ``Tracker.track()`` via ``**track_kwargs``, so it
+    accepts either the foreground+contour pair (``detection``, ``edges``) or precomputed
+    instance ``labels`` (with ``sigma``), plus ``scale`` and ``overwrite``.
 
     Parameters
     ----------
     tracking_config : MainConfig
         Ultrack configuration object defining segmentation, linking, and optimization parameters.
-    foreground_mask : ArrayLike
-        Binary mask (0 or 1) indicating detected object regions over time.
-        Shape is typically (T, Z, Y, X) or (T, Y, X).
-    contour_gradient_map : ArrayLike
-        Gradient map or edge score map used to refine object boundaries and define connectivity
-        for linking detected objects between timepoints.
-    scale : tuple of float
-        Physical resolution scale in either (Y, X) or (Z, Y, X) depending on whether the data is 2D or 3D.
     database_path : Path
         Directory where tracking results, configuration files, and output data will be saved.
+    **track_kwargs
+        Keyword arguments forwarded to ``Tracker.track()``. E.g. ``detection``, ``edges``
+        (foreground+contour mode), or ``labels``, ``sigma`` (cellpose mode), plus ``scale``
+        and ``overwrite``.
 
     Returns
     -------
@@ -385,19 +382,8 @@ def run_ultrack(
 
     Notes
     -----
-    - `foreground_mask` must be a binary mask (e.g., after thresholding a probability map).
     - This function modifies `tracking_config` to set the working directory (`working_dir`).
     - The configuration used is saved to `config.toml` under the `database_path`.
-
-    Examples
-    --------
-    >>> labels, tracks_df, graph = run_ultrack(
-    ...     tracking_config=cfg,
-    ...     foreground_mask=binary_mask,
-    ...     contour_gradient_map=gradient_map,
-    ...     scale=(0.5, 0.5, 1.0),
-    ...     database_path=Path("results/posA"),
-    ... )
     """
     import toml
 
@@ -412,12 +398,7 @@ def run_ultrack(
     click.echo(str(cfg))
 
     tracker = Tracker(cfg)
-    tracker.track(
-        detection=foreground_mask,
-        edges=contour_gradient_map,
-        scale=scale,
-        overwrite=True,
-    )
+    tracker.track(**track_kwargs)
 
     tracks_df, graph = tracker.to_tracks_layer()
     labels = tracker.to_zarr(
@@ -665,6 +646,117 @@ def data_preprocessing(
     return foreground_mask, contour_gradient_map
 
 
+def run_cellpose_per_frame(
+    images: np.ndarray,
+    model_type: str = "nuclei",
+    diameter: float = 80,
+    cellprob_threshold: float = 0.0,
+    flow_threshold: float = 0.4,
+    gpu: bool = True,
+    min_size: int = 500,
+) -> np.ndarray:
+    """Run cellpose on each 2D frame of a (T, Y, X) array.
+
+    Returns an integer label array of shape (T, Y, X).
+
+    Note: cellpose is imported lazily so that importing ``biahub.track`` does not
+    require the ``segment`` extra unless cellpose segmentation is actually used.
+    """
+    from cellpose import models as cp_models
+
+    model = cp_models.CellposeModel(model_type=model_type, gpu=gpu)
+
+    T = images.shape[0]
+    labels = np.zeros_like(images, dtype=np.int32)
+    for t in tqdm(range(T), desc="Cellpose segmentation"):
+        mask, _, _ = model.eval(
+            images[t],
+            diameter=diameter,
+            channels=[0, 0],  # grayscale
+            cellprob_threshold=cellprob_threshold,
+            flow_threshold=flow_threshold,
+            min_size=min_size,
+        )
+        labels[t] = np.asarray(mask)
+    return labels
+
+
+def cellpose_preprocessing(
+    position_key: str,
+    input_images: list[ProcessingInputChannel],
+    z_slices: slice,
+    blank_frames_path: Path = None,
+    cellpose_config: CellposeConfig = None,
+) -> np.ndarray:
+    """
+    Load data, fill empty frames, and run cellpose segmentation.
+
+    Returns an integer label array of shape (T, Y, X) ready to pass
+    directly to ``run_ultrack(..., labels=...)``.
+
+    Parameters
+    ----------
+    position_key : str
+        FOV key (plate, well, position).
+    input_images : list of ProcessingInputChannel
+        Channel loading configuration.
+    z_slices : slice
+        Z-planes to load.
+    blank_frames_path : Path, optional
+        CSV of blank frames.
+    cellpose_config : CellposeConfig
+        Cellpose model parameters including ``input_channel``.
+    """
+    fov = "/".join(position_key)
+
+    data_dict = load_data(
+        position_key=position_key,
+        input_images=input_images,
+        z_slices=z_slices,
+    )
+    data_dict = run_preprocessing_pipeline(data_dict, input_images)
+    data_dict = fill_empty_frames_from_csv(fov, data_dict, blank_frames_path)
+
+    # Get the channel to segment
+    channel_name = cellpose_config.input_channel
+    if channel_name not in data_dict:
+        raise ValueError(
+            f"Cellpose input channel '{channel_name}' not found in data. "
+            f"Available: {list(data_dict.keys())}"
+        )
+
+    images = data_dict[channel_name]
+    if isinstance(images, da.Array):
+        images = images.compute()
+    images = np.asarray(images)
+
+    # Project Z if needed (T, Z, Y, X) -> (T, Y, X)
+    if images.ndim == 4:
+        click.echo(f"Projecting Z-dimension via mean: {images.shape} -> (T, Y, X)")
+        images = images.mean(axis=1)
+
+    click.echo(
+        f"Running cellpose ({cellpose_config.model_type}, "
+        f"diameter={cellpose_config.diameter}) on channel '{channel_name}'..."
+    )
+    cellpose_labels = run_cellpose_per_frame(
+        images,
+        model_type=cellpose_config.model_type,
+        diameter=cellpose_config.diameter,
+        cellprob_threshold=cellpose_config.cellprob_threshold,
+        flow_threshold=cellpose_config.flow_threshold,
+        gpu=cellpose_config.gpu,
+        min_size=cellpose_config.min_size,
+    )
+
+    n_cells = [len(np.unique(cellpose_labels[t])) - 1 for t in range(cellpose_labels.shape[0])]
+    click.echo(
+        f"Cellpose cells per frame: mean={np.mean(n_cells):.1f}, "
+        f"min={np.min(n_cells)}, max={np.max(n_cells)}"
+    )
+    return cellpose_labels
+
+
 def track_one_position(
     position_key: str,
     input_images: list[ProcessingInputChannel],
@@ -673,13 +765,16 @@ def track_one_position(
     blank_frames_path: Path = None,
     z_slices: tuple[int, int] = (0, 0),
     scale: tuple[float, float, float, float, float] = (1, 1, 1, 1, 1),
+    cellpose_config: CellposeConfig | None = None,
 ) -> None:
     """
-    Run tracking on a single field of view using foreground and contour channel data.
+    Run tracking on a single field of view.
 
-    This function loads image data, applies a preprocessing pipeline, fills blank frames if needed,
-    and uses the Ultrack library to compute object tracks. It is agnostic to the imaging source —
-    as long as the pipeline produces a binary foreground mask and a corresponding contour map.
+    Supports two segmentation modes:
+    - **foreground+contour** (default): the preprocessing pipeline must produce a binary
+      foreground mask and a corresponding contour map, which are handed to ultrack.
+    - **cellpose**: runs cellpose per-frame on a specified channel and passes the resulting
+      instance labels directly to ultrack.
 
     Parameters
     ----------
@@ -701,6 +796,8 @@ def track_one_position(
     scale : tuple of float, optional
         Physical scale of the dataset in (T, C, Z, Y, X) order. Tracking uses either the
         (Z, Y, X) or (Y, X) portion depending on dimensionality. Default is (1, 1, 1, 1, 1).
+    cellpose_config : CellposeConfig, optional
+        If provided, uses cellpose segmentation instead of foreground+contour.
 
     Returns
     -------
@@ -713,29 +810,46 @@ def track_one_position(
     -----
     - Output is saved to `{output_dirpath}/{position_key}/tracks_{position_key}.csv`.
     - The Ultrack config is also saved as TOML in a `_config_tracking/{FOV}/` subdirectory.
-    - If required input channels ("foreground" and "contour") are missing, a ValueError is raised.
+    - In foreground+contour mode, missing "foreground"/"contour" channels raise a ValueError.
     """
     fov = "_".join(position_key)
     click.echo(f"Processing FOV: {fov.replace('_', '/')}")
-    # tracking input images
-    foreground_mask, contour_gradient_map = data_preprocessing(
-        position_key, input_images, z_slices, blank_frames_path
-    )
 
     # Define path to save the tracking database and graph
     filename = output_dirpath.stem
     database_path = output_dirpath.parent / f"{filename}_config_tracking" / f"{fov}"
     os.makedirs(database_path, exist_ok=True)
 
-    # Perform tracking
-    click.echo("Tracking...")
-    tracking_labels, tracks_df, _ = run_ultrack(
-        tracking_config=tracking_config,
-        foreground_mask=foreground_mask,
-        contour_gradient_map=contour_gradient_map,
-        scale=scale,
-        database_path=database_path,
-    )
+    if cellpose_config is not None:
+        # Cellpose mode: load data, fill blanks, run cellpose, pass labels to ultrack
+        cellpose_labels = cellpose_preprocessing(
+            position_key, input_images, z_slices, blank_frames_path, cellpose_config
+        )
+
+        click.echo("Tracking with cellpose labels...")
+        tracking_labels, tracks_df, _ = run_ultrack(
+            tracking_config=tracking_config,
+            database_path=database_path,
+            labels=cellpose_labels,
+            sigma=cellpose_config.labels_sigma,
+            scale=scale,
+            overwrite=True,
+        )
+    else:
+        # Foreground + contour mode
+        foreground_mask, contour_gradient_map = data_preprocessing(
+            position_key, input_images, z_slices, blank_frames_path
+        )
+
+        click.echo("Tracking with foreground + contour...")
+        tracking_labels, tracks_df, _ = run_ultrack(
+            tracking_config=tracking_config,
+            database_path=database_path,
+            detection=foreground_mask,
+            edges=contour_gradient_map,
+            scale=scale,
+            overwrite=True,
+        )
 
     # Save the tracks graph to a CSV file
     csv_path = output_dirpath / Path(*position_key) / f"tracks_{fov}.csv"
@@ -864,6 +978,10 @@ def track(
 
     position_keys = [Path(p).parts[-3:] for p in input_position_dirpaths]
 
+    cellpose_cfg = (
+        settings.cellpose_config if settings.segmentation_method == "cellpose" else None
+    )
+
     slurm_args = {
         "slurm_job_name": "tracking",
         "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
@@ -896,6 +1014,7 @@ def track(
                 blank_frames_path=settings.blank_frames_path,
                 z_slices=z_slices,
                 scale=track_scale,
+                cellpose_config=cellpose_cfg,
             )
             jobs.append(job)
 
