@@ -873,7 +873,7 @@ def track(
     )
 
     # Estimate resources
-    num_cpus, gb_ram_per_cpu = estimate_resources(
+    _, num_cpus, gb_ram_per_cpu = estimate_resources(
         shape=[T, C, Z, Y, X], ram_multiplier=16, max_num_cpus=16
     )
 

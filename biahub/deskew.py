@@ -29,7 +29,6 @@ from biahub.cli.parsing import (
 from biahub.cli.utils import (
     echo_resources,
     estimate_resources,
-    estimate_time_minutes,
     get_submitit_cluster,
     resolve_ome_zarr_version,
     yaml_to_model,
@@ -675,15 +674,14 @@ def deskew(
     _warn_pixel_size_mismatch(settings, input_position_dirpaths[0])
     input_shape, _ = _init_output_plate(input_position_dirpaths, output_dirpath, settings)
 
-    num_cpus, gb_ram_per_cpu = estimate_resources(
-        shape=input_shape, ram_multiplier=8, max_num_cpus=16
+    # RAM scales with one ZYX volume (ram_multiplier=8); wall-time scales with
+    # total voxels. time_multiplier ~= 0.5 min/Gvox calibrated from a completed
+    # run at this step's 16 CPUs (worst-case ~68 min for ~2.9e11 voxels, ~2x
+    # margin).
+    time_minutes, num_cpus, gb_ram_per_cpu = estimate_resources(
+        shape=input_shape, ram_multiplier=8, time_multiplier=0.5, max_num_cpus=16
     )
     mem_gb = num_cpus * gb_ram_per_cpu
-    # Wall-time scales with total voxels processed. Calibrated from a completed
-    # run at this step's 16 CPUs: worst-case ~68 min for T*C*Z*Y*X ~= 2.9e11
-    # voxels -> ~7e7 voxels/s. safety_factor covers node/IO variance and retries.
-    T, C, Z, Y, X = input_shape
-    time_minutes = estimate_time_minutes(T * C * Z * Y * X, voxels_per_second=7.0e7)
     echo_resources(num_cpus, mem_gb, time_minutes)
 
     if init_only:

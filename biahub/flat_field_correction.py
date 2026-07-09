@@ -22,7 +22,6 @@ from biahub.cli.parsing import (
 from biahub.cli.utils import (
     echo_resources,
     estimate_resources,
-    estimate_time_minutes,
     get_submitit_cluster,
     resolve_ome_zarr_version,
     yaml_to_model,
@@ -162,17 +161,15 @@ def flat_field(
         input_position_dirpaths, output_dirpath, settings
     )
 
-    T, C, Z, Y, X = input_shape
-    num_cpus, gb_ram_per_cpu = estimate_resources(
-        shape=input_shape, ram_multiplier=8, max_num_cpus=16
+    # RAM scales with one ZYX volume (ram_multiplier=8); wall-time scales with
+    # total voxels. time_multiplier ~= 1.4 min/Gvox calibrated from a completed
+    # run (worst-case ~50 min for ~2.9e11 voxels at 64 CPUs, scaled to this
+    # step's 16 with a ~2x margin). Channel selection only reduces work, so
+    # using all C is a safe upper bound.
+    time_minutes, num_cpus, gb_ram_per_cpu = estimate_resources(
+        shape=input_shape, ram_multiplier=8, time_multiplier=1.4, max_num_cpus=16
     )
     mem_gb = num_cpus * gb_ram_per_cpu
-    # Wall-time scales with total voxels processed. Calibrated from a completed
-    # run: worst-case ~50 min for T*C*Z*Y*X ~= 2.9e11 voxels, scaled from that
-    # run's 64 CPUs to this step's 16 -> ~2.4e7 voxels/s. safety_factor covers
-    # the rest. Channel selection (channel_names) only reduces work, so using
-    # all C is a safe upper bound.
-    time_minutes = estimate_time_minutes(T * C * Z * Y * X, voxels_per_second=2.4e7)
     echo_resources(num_cpus, mem_gb, time_minutes)
 
     if init_only:

@@ -525,7 +525,7 @@ def register_cli(
     copy_n_paste_kwargs = {"czyx_slicing_params": ([Z_slice, Y_slice, X_slice])}
 
     # Estimate resources
-    num_cpus, gb_ram = estimate_resources(shape=(T, C, Z, Y, X), ram_multiplier=5)
+    _, num_cpus, gb_ram = estimate_resources(shape=(T, C, Z, Y, X), ram_multiplier=5)
 
     # Prepare SLURM arguments
     slurm_out_path = Path(output_dirpath).parent / "slurm_output"

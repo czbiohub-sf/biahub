@@ -632,7 +632,7 @@ def estimate_xyz_stabilization_pcc(
         shape = dataset.data.shape
         T, C, Z, Y, X = shape
 
-    num_cpus, gb_ram_per_cpu = estimate_resources(
+    _, num_cpus, gb_ram_per_cpu = estimate_resources(
         shape=(T, C, Z, Y, X), ram_multiplier=16, max_num_cpus=16
     )
 
@@ -834,7 +834,7 @@ def estimate_xy_stabilization(
             focus_finding_settings=stack_reg_settings.focus_finding_settings,
         )
 
-    num_cpus, gb_ram_per_cpu = estimate_resources(
+    _, num_cpus, gb_ram_per_cpu = estimate_resources(
         shape=shape, ram_multiplier=16, max_num_cpus=16
     )
 
@@ -1097,7 +1097,7 @@ def estimate_z_stabilization(
     with open_ome_zarr(input_position_dirpaths[0]) as dataset:
         shape = dataset.data.shape  # (T, C, Z, Y, X)
 
-    num_cpus, gb_ram_per_cpu = estimate_resources(
+    _, num_cpus, gb_ram_per_cpu = estimate_resources(
         shape=shape, ram_multiplier=16, max_num_cpus=16
     )
 
