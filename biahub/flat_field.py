@@ -1,3 +1,5 @@
+import warnings
+
 from pathlib import Path
 
 import click
@@ -29,7 +31,7 @@ from biahub.cli.utils import (
 from biahub.settings import FlatFieldCorrectionSettings
 
 
-def flat_field_correction(zyx_data: np.ndarray, axis: int = 0) -> np.ndarray:
+def flat_field_zyx(zyx_data: np.ndarray, axis: int = 0) -> np.ndarray:
     """Apply flat field correction by dividing out the median pattern along an axis.
 
     Parameters
@@ -49,7 +51,34 @@ def flat_field_correction(zyx_data: np.ndarray, axis: int = 0) -> np.ndarray:
     return zyx_data / static_pattern * static_pattern.mean()
 
 
-def _czyx_flat_field(czyx_data: np.ndarray, target_indices: list[int]) -> np.ndarray:
+def flat_field_correction(zyx_data: np.ndarray, axis: int = 0) -> np.ndarray:
+    """Apply flat field correction (deprecated alias for :func:`flat_field_zyx`).
+
+    .. deprecated::
+        Renamed to :func:`flat_field_zyx` to follow the ``<verb>_zyx`` layer-1
+        naming convention. This alias will be removed in a future release.
+
+    Parameters
+    ----------
+    zyx_data : np.ndarray
+        The data to apply flat field correction to.
+    axis : int
+        The axis to compute the median along.
+
+    Returns
+    -------
+    np.ndarray
+        Flat-field corrected data (see :func:`flat_field_zyx`).
+    """
+    warnings.warn(
+        "flat_field_correction is deprecated; use flat_field_zyx instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return flat_field_zyx(zyx_data, axis=axis)
+
+
+def _flat_field_czyx(czyx_data: np.ndarray, target_indices: list[int]) -> np.ndarray:
     """Apply flat-field correction to selected channels of a CZYX volume.
 
     Channels listed in ``target_indices`` are corrected; the rest are
@@ -59,7 +88,7 @@ def _czyx_flat_field(czyx_data: np.ndarray, target_indices: list[int]) -> np.nda
     target = set(target_indices)
     for c in range(czyx_data.shape[0]):
         if c in target:
-            out[c] = flat_field_correction(czyx_data[c])
+            out[c] = flat_field_zyx(czyx_data[c])
         else:
             out[c] = czyx_data[c].astype(np.float32)
     return out
@@ -206,7 +235,7 @@ def flat_field(
             jobs.append(
                 executor.submit(
                     process_single_position,
-                    _czyx_flat_field,
+                    _flat_field_czyx,
                     input_position_path,
                     output_position_path,
                     num_workers=slurm_args["slurm_cpus_per_task"],

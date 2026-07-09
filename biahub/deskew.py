@@ -544,11 +544,11 @@ def fast_deskew_zyx(
 
 # Adapt ZYX function to CZYX
 # Needs to be a top-level function for multiprocessing pickling
-def _czyx_deskew_data(data, **kwargs):
+def _deskew_czyx(data, **kwargs):
     return deskew_zyx(data[0], **kwargs)[None]
 
 
-def _czyx_fast_deskew_data(data, device="cuda", num_splits=1, **kwargs):
+def _fast_deskew_czyx(data, device="cuda", num_splits=1, **kwargs):
     """CZYX wrapper for `fast_deskew_zyx`. Handles numpy↔torch conversion.
 
     When `num_splits` > 1 the volume is split along input axis 2
@@ -728,7 +728,7 @@ def deskew(
             jobs.append(
                 executor.submit(
                     process_single_position,
-                    _czyx_fast_deskew_data,
+                    _fast_deskew_czyx,
                     input_position_path,
                     output_position_path,
                     num_workers=slurm_args["slurm_cpus_per_task"],
