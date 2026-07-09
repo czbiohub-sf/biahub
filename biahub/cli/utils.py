@@ -378,11 +378,26 @@ def estimate_resources(
     shape: tuple[int, int, int, int, int],
     dtype: DTypeLike = np.float32,
     ram_multiplier: float = 1.0,
+    time_multiplier: float = 1.0,
     max_num_cpus: int = 64,
     min_ram_per_cpu: int = 4,
+    min_time_minutes: int = 30,
 ):
-    """
-    Estimate the number of CPUs and the amount of RAM required for processing a given data volume.
+    """Estimate wall-time, CPUs, and RAM required to process a data volume.
+
+    RAM scales with a single ZYX volume (the per-CPU working set); wall-time
+    scales with the TOTAL data (T * C * Z * Y * X). Keying wall-time on total
+    voxels -- rather than the number of timepoints -- is what makes the estimate
+    GENERALIZE across dataset geometries: a long, thin timelapse (large T, small
+    YX) and a short, wide acquisition (small T, large ZYX) with comparable total
+    work get comparable wall-times.
+
+    ``time_multiplier`` mirrors ``ram_multiplier``: it is the per-step scaling
+    knob, in minutes of wall-time per gigavoxel of total data, calibrated from
+    observed COMPLETED runs (see each call site). Callers that only need CPUs and
+    RAM can ignore the time estimate:
+
+        _, num_cpus, gb_ram_per_cpu = estimate_resources(shape, ram_multiplier=8)
 
     Parameters
     ----------
@@ -391,22 +406,30 @@ def estimate_resources(
     dtype : DTypeLike, optional
         The data type of the elements. Default is np.float32.
     ram_multiplier : float, optional
-        Multiplier to scale the required memory for processing a given ZYX volume. For example,
-        if a processing pipeline makes two copies of the input data, then the ram_multiplier
-        should be at least 3. Default is 1.0.
+        Multiplier to scale the required memory for processing a given ZYX volume.
+        For example, if a pipeline makes two copies of the input data, the
+        ram_multiplier should be at least 3. Default is 1.0.
+    time_multiplier : float, optional
+        Wall-time in minutes per gigavoxel of total data (T*C*Z*Y*X). The
+        per-step calibration knob, analogous to ram_multiplier. Default is 1.0.
     max_num_cpus : int, optional
         Maximum number of available CPUs. Default is 64.
     min_ram_per_cpu : int, optional
         Minimum amount of RAM per CPU in GB. Default is 4.
+    min_time_minutes : int, optional
+        Minimum wall-time so tiny inputs still get a sane request. Default 30.
 
     Returns
     -------
-    Tuple[int, int]
-        A tuple containing the estimated number of CPUs and the required amount of RAM per CPU in GB.
-        These values can be passed to the `--cpus_per_task` and `--mem_per_cpu` parameters of sbatch.
+    Tuple[int, int, int]
+        (time_minutes, num_cpus, gb_ram_per_cpu). time_minutes is rounded up to
+        the nearest 10 minutes; num_cpus and gb_ram_per_cpu map to sbatch's
+        --time, --cpus_per_task, and --mem_per_cpu.
     """
     if len(shape) != 5:
         raise ValueError("The shape must be a 5-tuple (T, C, Z, Y, X).")
+    if ram_multiplier <= 0 or time_multiplier <= 0:
+        raise ValueError("ram_multiplier and time_multiplier must be > 0.")
 
     T, C, Z, Y, X = shape
     gb_per_element = np.dtype(dtype).itemsize / 2**30  # bytes_per_element / bytes_per_gb
@@ -414,4 +437,10 @@ def estimate_resources(
     gb_ram_per_volume = Z * Y * X * gb_per_element
     gb_ram_per_cpu = np.ceil(max(min_ram_per_cpu, gb_ram_per_volume * ram_multiplier))
 
-    return int(num_cpus), int(gb_ram_per_cpu)
+    # Wall-time from total data volume, scaled by the per-step time_multiplier,
+    # then rounded up to the nearest 10 minutes for tidy SLURM requests.
+    gigavoxels = T * C * Z * Y * X / 1e9
+    minutes = max(min_time_minutes, gigavoxels * time_multiplier)
+    time_minutes = int(np.ceil(minutes / 10.0) * 10)
+
+    return time_minutes, int(num_cpus), int(gb_ram_per_cpu)

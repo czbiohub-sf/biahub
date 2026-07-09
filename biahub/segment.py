@@ -209,7 +209,7 @@ def segment_cli(
     )
 
     # Estimate resources
-    num_cpus, gb_ram_request = estimate_resources(shape=segmentation_shape, ram_multiplier=20)
+    _, num_cpus, gb_ram_request = estimate_resources(shape=segmentation_shape, ram_multiplier=20)
     num_gpus = 1
     slurm_time = np.ceil(np.max([80, T * 2.5])).astype(int)
     slurm_array_parallelism = 100

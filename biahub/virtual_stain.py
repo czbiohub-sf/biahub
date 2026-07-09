@@ -328,17 +328,21 @@ def virtual_stain(
         cfg.output_ome_zarr_version,
     )
 
-    # Timepoints are processed sequentially on a single GPU, so resource needs
-    # are independent of dataset size.
+    # Timepoints are processed sequentially on a single GPU, so CPU and RAM
+    # needs are fixed (independent of dataset size); only wall-time scales with
+    # the data (see the T*Z budget below).
     num_cpus, mem_gb = 16, 64
-    # Generous wall-clock budget (minutes), assuming median TTA (4 rotations).
-    # Each timepoint runs ~Z sliding windows along Z. Measured ~1.4 s/window
-    # with TTA on this model; budget ~5 s/window (~3-4x margin for slower GPUs,
-    # larger FOVs, and compute-bound runs) with a 60-minute floor. Computed
-    # before the init_only return so --init emits it for the Nextflow pipeline.
+    # Wall-clock budget (minutes) for GPU prediction. Each timepoint runs ~Z
+    # sliding windows along Z; this is a GPU step so time scales with T*Z, not
+    # with CPU count. Measured ~2 windows/s (0.5 s/window) with median TTA on
+    # this model from a completed run's tqdm; budget 1.0 s/window (~2x margin
+    # for slower GPUs and larger FOVs) with a 60-minute floor. Computed before
+    # the init_only return so --init emits it for the Nextflow pipeline.
     T, Z = input_shape[0], input_shape[2]
-    seconds_per_window = 5
-    time_minutes = int(np.ceil(max(60, T * Z * seconds_per_window / 60)))
+    seconds_per_window = 1.0
+    minutes = max(60, T * Z * seconds_per_window / 60)
+    # Round up to the nearest 10 minutes for tidy SLURM wall-time requests.
+    time_minutes = int(np.ceil(minutes / 10.0) * 10)
     echo_resources(num_cpus, mem_gb, time_minutes)
 
     if init_only:

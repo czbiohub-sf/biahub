@@ -198,7 +198,7 @@ def estimate_crop(
     with open_ome_zarr(lf_position_dirpaths[0]) as dataset:
         T, C, Z, Y, X = dataset.data.shape
 
-    num_cpus, gb_ram_per_cpu = estimate_resources(
+    _, num_cpus, gb_ram_per_cpu = estimate_resources(
         shape=[T, C, Z, Y, X], ram_multiplier=16, max_num_cpus=16
     )
     # Prepare SLURM arguments

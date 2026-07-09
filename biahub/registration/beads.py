@@ -507,7 +507,7 @@ def estimate_independently(
         "stabilization": align moving channel to itself over time.
     """
     T, Z, Y, X = mov_tzyx.shape
-    num_cpus, gb_ram_per_cpu = estimate_resources(
+    _, num_cpus, gb_ram_per_cpu = estimate_resources(
         shape=(T, 2, Z, Y, X), ram_multiplier=5, max_num_cpus=16
     )
 
