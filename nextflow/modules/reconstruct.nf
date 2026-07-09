@@ -2,13 +2,17 @@
 //
 // This subworkflow is PATH-AGNOSTIC. Callers pass the input zarr, output zarr,
 // and config explicitly; the module has no idea where it sits in the pipeline
-// directory layout. The TF zarr and resolved config paths are derived from the
-// output_zarr's parent directory (the module's internal convention).
+// directory layout. The TF zarr path is derived from the output_zarr's parent
+// directory (the module's internal convention).
+//
+// The config is the single source of truth and must carry the pixel sizes; the
+// CLI validates it and only warns if those pixel sizes disagree with the input
+// zarr metadata.  No resolved config is written.
 //
 // Three-phase pattern:
-// 1. init_apply_inv_tf: creates the output plate, resolves pixel sizes from
-//    zarr metadata into reconstruct_resolved.yml, emits RESOURCES: and TF_RESOURCES:
-// 2. compute_transfer_function: one-shot TF computation using TF_RESOURCES
+// 1. init_apply_inv_tf: validates the config, creates the output plate,
+//    emits RESOURCES:
+// 2. compute_transfer_function: one-shot TF computation using hardcoded resources
 // 3. run_apply_inv_tf: per-position inverse TF application using RESOURCES
 //
 // run_apply_inv_tf uses `--cluster debug` so that submitit's DebugExecutor runs
@@ -44,15 +48,30 @@ process init_apply_inv_tf {
 process compute_transfer_function {
     label 'cpu'
     clusterOptions { slurm_logs('reconstruct') }
-    cpus { meta.cpus }
-    memory { "${meta.mem_gb} GB" }
-    time '2h'
+    // Hardcoded resources for the one-shot transfer-function computation.
+    //
+    // waveorder upsamples the volume to Nyquist internally before building the
+    // TF (waveorder/models/phase_thick_3d.py::calculate_transfer_function); the
+    // peak footprint scales with that upsampled volume, not the input volume.
+    // For properly-sampled label-free data the Nyquist upsampling factor is 1
+    // in every axis, so even for the largest volume we expect
+    // (~2048 x 2048 x 128 = 2 GB float32) the phase TF needs ~64 GB (2 GB x
+    // waveorder's x32 Fourier multiplier).
+    //
+    // The TF computation is torch-CPU-FFT-bound (large 3D FFTs over the
+    // upsampled volume in optics.compute_weak_object_transfer_function_3D) and
+    // is not thread-pinned in the compute-tf path, so torch parallelizes the
+    // FFTs across the granted cores.  8 sits in the sweet spot before FFT
+    // thread-scaling tails off.
+    cpus 8
+    memory '64 GB'
+    time '30m'
 
     input:
-    val meta
+    val trigger
     val input_zarr
     val tf_zarr
-    val resolved_config
+    val config
 
     output:
     val true
@@ -62,7 +81,7 @@ process compute_transfer_function {
     ${biahub_cmd()} compute-tf \
         -i "${input_zarr}"/*/*/* \
         -o "${tf_zarr}" \
-        -c "${resolved_config}"
+        -c "${config}"
     """
 }
 
@@ -70,19 +89,16 @@ process run_apply_inv_tf {
     tag "${position}"
     label 'cpu'
     clusterOptions { slurm_logs('reconstruct') }
-    maxForks 30
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
-    time '6h'
-    maxRetries 1
-    errorStrategy 'retry'
+    time { "${meta.time_minutes * task.attempt} min" }
 
     input:
     tuple val(position), val(meta)
     val input_zarr
     val output_zarr
     val tf_zarr
-    val resolved_config
+    val config
 
     output:
     val position
@@ -93,7 +109,7 @@ process run_apply_inv_tf {
         -i "${input_zarr}/${position}" \
         -t "${tf_zarr}" \
         -o "${output_zarr}" \
-        -c "${resolved_config}"
+        -c "${config}"
     """
 }
 
@@ -113,15 +129,16 @@ workflow reconstruct_wf {
     prev_done
 
     main:
-    def output_dir      = new File(output_zarr).parent
-    def tf_zarr         = "${output_dir}/transfer_function_reconstruct_resolved.zarr"
-    def resolved_config = "${output_dir}/reconstruct_resolved.yml"
+    def output_dir = new File(output_zarr).parent
+    def tf_zarr     = "${output_dir}/transfer_function.zarr"
 
     init_out = init_apply_inv_tf(input_zarr, output_zarr, config, prev_done.map { 'done' })
-    tf_resources = init_out.map { parse_resources(it, 'TF_RESOURCES:') }
     run_resources = init_out.map { parse_resources(it) }
+    // compute_transfer_function uses hardcoded resources (see process body),
+    // but is gated on init so the output plate exists before the phases proceed.
+    init_done = init_out.map { 'done' }
 
-    tf_done = compute_transfer_function(tf_resources, input_zarr, tf_zarr, resolved_config)
+    tf_done = compute_transfer_function(init_done, input_zarr, tf_zarr, config)
 
     pos_meta = positions
         .flatMap { it }
@@ -129,7 +146,7 @@ workflow reconstruct_wf {
         .combine(tf_done)
         .map { pos, meta, tf -> [pos, meta] }
 
-    rc_done = run_apply_inv_tf(pos_meta, input_zarr, output_zarr, tf_zarr, resolved_config) | collect
+    rc_done = run_apply_inv_tf(pos_meta, input_zarr, output_zarr, tf_zarr, config) | collect
 
     emit:
     done = rc_done

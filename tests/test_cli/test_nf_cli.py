@@ -1,3 +1,5 @@
+import json
+
 from click.testing import CliRunner
 
 from biahub.cli.main import cli
@@ -25,14 +27,12 @@ def test_init_resources(example_plate):
     runner = CliRunner()
     result = runner.invoke(cli, ["nf", "init-resources", "-i", str(plate_path), "-r", "2.0"])
     assert result.exit_code == 0, result.output
-    assert result.output.strip().startswith("RESOURCES:")
+    line = next(ln for ln in result.output.splitlines() if ln.startswith("RESOURCES:"))
 
-    parts = result.output.strip().replace("RESOURCES:", "").split()
-    assert len(parts) == 2
-    cpus = int(parts[0])
-    mem = int(parts[1])
-    assert cpus >= 1
-    assert mem >= 1
+    payload = json.loads(line.replace("RESOURCES:", "", 1).strip())
+    assert payload["cpus"] >= 1
+    assert payload["mem_gb"] >= 1
+    assert payload["time_minutes"] >= 1
 
 
 def test_clean_temp(tmp_path):

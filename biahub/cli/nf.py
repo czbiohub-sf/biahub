@@ -7,7 +7,7 @@ import click
 
 from iohub.ngff import open_ome_zarr
 
-from biahub.cli.utils import estimate_resources
+from biahub.cli.utils import echo_resources, estimate_resources
 
 logger = logging.getLogger(__name__)
 
@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 def nf_cli():
     """Nextflow-oriented utility commands.
 
-    Generic helpers for position listing, resource estimation, and cleanup.
-    Step-specific init/run logic lives on each step's own CLI command.
+    Generic helpers shared across Nextflow pipelines. Step-specific init/run
+    logic lives on each step's own CLI command (e.g. ``biahub deskew``).
     """
 
 
@@ -34,7 +34,10 @@ def list_positions(input_zarr: str):
 @click.option("--input-zarr", "-i", required=True, type=click.Path(exists=True))
 @click.option("--ram-multiplier", "-r", required=True, type=float)
 @click.option("--max-num-cpus", default=16, type=int)
-def init_resources(input_zarr: str, ram_multiplier: float, max_num_cpus: int):
+@click.option("--time-minutes", default=60, type=int)
+def init_resources(
+    input_zarr: str, ram_multiplier: float, max_num_cpus: int, time_minutes: int
+):
     """Estimate CPU/memory resources from input zarr shape (for Nextflow fan-out)."""
     with open_ome_zarr(input_zarr, mode="r") as plate:
         first_pos = next(plate.positions())[1]
@@ -42,7 +45,7 @@ def init_resources(input_zarr: str, ram_multiplier: float, max_num_cpus: int):
     num_cpus, mem_per_cpu = estimate_resources(
         shape=shape, ram_multiplier=ram_multiplier, max_num_cpus=max_num_cpus
     )
-    click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
+    echo_resources(num_cpus, num_cpus * mem_per_cpu, time_minutes)
 
 
 @nf_cli.command("clean-temp")

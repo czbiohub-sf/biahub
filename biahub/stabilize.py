@@ -24,6 +24,7 @@ from biahub.cli.parsing import (
 )
 from biahub.cli.utils import (
     copy_n_paste_czyx,
+    echo_resources,
     estimate_resources,
     get_submitit_cluster,
     resolve_ome_zarr_version,
@@ -202,7 +203,7 @@ def stabilize(
     num_cpus, gb_ram = estimate_resources(
         shape=output_shape, ram_multiplier=16, max_num_cpus=16
     )
-    click.echo(f"RESOURCES:{num_cpus} {num_cpus * gb_ram}")
+    echo_resources(num_cpus, num_cpus * gb_ram, 20)
 
     if init_only:
         click.echo(f"Initialized {output_dirpath} ({len(input_position_dirpaths)} positions)")
