@@ -12,7 +12,7 @@ description: >-
 
 biahub commands are single-file modules under `biahub/` that expose a `@click.command`
 and are registered in `biahub/cli/main.py`. The processing commands share a strict
-template — see `flat_field_correction.py`, `deskew.py`, `virtual_stain.py`, and
+template — see `flat_field.py`, `deskew.py`, `virtual_stain.py`, and
 `apply_inverse_transfer_function.py`. This skill finds where a module drifts from that
 template and reports it for a fixer agent.
 
@@ -22,12 +22,16 @@ Every CLI module is layered. When reviewing, first classify each function into a
 then check the layer's rule:
 
 1. **Array-in / array-out compute functions** — pure `(array, params) -> array`, no I/O.
-   e.g. `deskew_zyx`, `fast_deskew_zyx`, `flat_field_correction`. **Required only for
-   reconstruction/compute methods internal to biahub.** A CLI whose heavy lifting comes
-   from an external library is *exempt* — do NOT invent one. Exempt examples:
-   `apply_inverse_transfer_function` (delegates to `waveorder`'s
+   **Named `<verb>_zyx()`** (operating on a ZYX volume), e.g. `deskew_zyx()`,
+   `flat_field_zyx()`; a qualified variant keeps the suffix (`fast_deskew_zyx()`).
+   **Required only for reconstruction/compute methods internal to biahub.** A CLI whose
+   heavy lifting comes from an external library is *exempt* — do NOT invent one. Exempt
+   examples: `apply_inverse_transfer_function` (delegates to `waveorder`'s
    `apply_inverse_transfer_function_single_position`) and `virtual_stain`
    (delegates to cytoland's `AugmentedPredictionVSUNet`).
+   The CZYX multiprocessing wrapper around a `<verb>_zyx()` function (the picklable
+   callable passed to `process_single_position`) is **named `_<verb>_czyx()`**, e.g.
+   `_deskew_czyx()`, `_flat_field_czyx()`.
 2. **API function** — `<verb>(paths_to_data, config, ...) -> None`, operating on zarr
    stores given paths + config. **Required for every CLI.** This is the orchestrator:
    `deskew`, `flat_field`, `virtual_stain`, `apply_inverse_transfer_function`. It must be
@@ -40,12 +44,12 @@ The pairing is the contract: `deskew_cli`↔`deskew`,
 inlines its logic instead of delegating to an API function is a defect (see
 `reconstruct.py`).
 
-The two layers must also share one stem (the **name triad** below). `flat_field` breaks
-this — its module/`_cli` are `flat_field_correction`/`flat_field_correction_cli` while the
-API function/command are `flat_field`/`flat-field`. **Flag this as a defect**; do not
-treat `flat_field_correction` as the canonical name. The whole module should converge on
-the single stem `flat_field` (file `flat_field.py`, functions `flat_field`/
-`flat_field_cli`, command `flat-field`).
+The layers must also share one stem (the **name triad** below): file `flat_field.py`, API
+`flat_field`, CLI `flat_field_cli`, command `flat-field` — all one stem. The layer-1 array
+function and its CZYX wrapper follow the `<verb>_zyx()` / `_<verb>_czyx()` rule above; the
+`flat_field` module still has the array function named `flat_field_correction` (should be
+`flat_field_zyx`) and its wrapper `_czyx_flat_field` (should be `_flat_field_czyx`) — flag
+those.
 
 ## Scope
 
@@ -109,10 +113,11 @@ For each target module, check and record deviations in these categories:
 
 - **Name triad** — module filename stem, orchestrator function, and `<verb>_cli`
   function should share one stem; the `@click.command("...")` string and `main.py` name
-  are that stem in kebab-case. (`flat_field_correction.py` breaks this.)
-- **Module anatomy / order** — pure compute fn(s) → `_czyx_*` picklable wrapper (if using
-  `process_single_position`) → `_init_output_plate` → other `_helpers` → orchestrator →
-  `<verb>_cli` → `if __name__ == "__main__":`.
+  are that stem in kebab-case. Separately, the layer-1 array fn is `<verb>_zyx()` and its
+  CZYX wrapper `_<verb>_czyx()` (see the layered-function rule).
+- **Module anatomy / order** — pure compute fn(s) `<verb>_zyx()` → `_<verb>_czyx()`
+  picklable wrapper (if using `process_single_position`) → `_init_output_plate` → other
+  `_helpers` → orchestrator → `<verb>_cli` → `if __name__ == "__main__":`.
 - **Signatures & type hints** — orchestrator and `_cli` share the standard signature
   `(input_position_dirpaths, config_filepath, output_dirpath, sbatch_filepath=None,
   cluster="slurm", monitor=..., init_only=False)`; **every annotation matches the
@@ -157,9 +162,9 @@ Emit one section per file. Each finding is a numbered entry:
    Auto-fix: safe.
 
 2. [idiom] biahub/<module>.py:388 — severity: cosmetic
-   Issue:   `log_path = Path(slurm_out_path / "...")` wraps an already-`Path` value.
-   Canon:   `log_path = slurm_out_path / "submitit_jobs_ids.log"` (flat_field_correction.py:220).
-   Fix:     Drop the redundant `Path(...)`.
+   Issue:   `slurm_out_path.mkdir(parents=True, exist_ok=True)`.
+   Canon:   `slurm_out_path.mkdir(exist_ok=True)` — no `parents=True` (deskew.py, flat_field.py).
+   Fix:     Drop `parents=True`.
    Auto-fix: safe.
 ```
 

@@ -1,6 +1,6 @@
 # Canonical biahub CLI structure
 
-Derived from the reference commands: `biahub/deskew.py`, `biahub/flat_field_correction.py`,
+Derived from the reference commands: `biahub/deskew.py`, `biahub/flat_field.py`,
 `biahub/virtual_stain.py`, `biahub/apply_inverse_transfer_function.py` (processing) and
 `biahub/reconstruct.py` (composition).
 
@@ -8,11 +8,17 @@ Derived from the reference commands: `biahub/deskew.py`, `biahub/flat_field_corr
 
 Every module is layered; the pairing of layers is the core contract.
 
-| Layer | Signature | Required? | Examples |
-|---|---|---|---|
-| 1. Array compute | `(array, params) -> array`, pure, no I/O | **Only** for compute methods *internal to biahub* | `deskew_zyx`, `fast_deskew_zyx`, `flat_field_correction` |
-| 2. API function | `<verb>(paths, config, ...) -> None`, operates on zarr stores | **Every** command | `deskew`, `flat_field`, `virtual_stain`, `apply_inverse_transfer_function` |
-| 3. CLI function | `<verb>_cli`, thin `@click.command` wrapper, delegates to layer 2 | **Every** command | `deskew_cli`, `apply_inverse_transfer_function_cli` |
+| Layer | Name | Signature | Required? | Examples |
+|---|---|---|---|---|
+| 1. Array compute | `<verb>_zyx()` | `(zyx_array, params) -> array`, pure, no I/O | **Only** for compute methods *internal to biahub* | `deskew_zyx`, `fast_deskew_zyx`, `flat_field_zyx` |
+| 1b. CZYX wrapper | `_<verb>_czyx()` | picklable CZYX adapter passed to `process_single_position` | Only with layer 1 + `process_single_position` | `_deskew_czyx`, `_fast_deskew_czyx`, `_flat_field_czyx` |
+| 2. API function | `<verb>()` | `(paths, config, ...) -> None`, operates on zarr stores | **Every** command | `deskew`, `flat_field`, `virtual_stain`, `apply_inverse_transfer_function` |
+| 3. CLI function | `<verb>_cli()` | thin `@click.command` wrapper, delegates to layer 2 | **Every** command | `deskew_cli`, `apply_inverse_transfer_function_cli` |
+
+Naming: the array function is suffixed `_zyx` (the volume layout it takes); its CZYX
+multiprocessing wrapper is `_<verb>_czyx` (private, since it exists only for pickling). A
+qualified array variant keeps the suffix and its wrapper mirrors the qualifier —
+`fast_deskew_zyx` → `_fast_deskew_czyx`.
 
 Layer 1 is **exempt** when the numerical work lives in an external library — do not invent
 an array-in/array-out function in that case:
@@ -39,9 +45,9 @@ separate API function) is a defect. `reconstruct.py` currently does this — fla
 
 1. **Imports**, isort-grouped (stdlib / third-party / iohub / biahub), `lines-between-types = 1`.
    Optional module-level setup (e.g. deskew's `torch.multiprocessing.set_start_method`).
-2. **Pure compute function(s)** — operate on `np.ndarray` / `torch.Tensor`, numpydoc
-   docstrings. e.g. `flat_field_correction`, `deskew_zyx`.
-3. **`_czyx_*` wrapper** — top-level (picklable) CZYX adapter passed to
+2. **Pure compute function(s) `<verb>_zyx()`** — operate on a ZYX `np.ndarray` /
+   `torch.Tensor`, numpydoc docstrings. e.g. `deskew_zyx`, `flat_field_zyx`.
+3. **`_<verb>_czyx()` wrapper** — top-level (picklable) CZYX adapter passed to
    `process_single_position`. Only when the command uses `process_single_position`.
    (virtual-stain instead defines a bespoke `virtual_stain_position`, which is an
    intentional exception because inference is GPU-bound and serial over time.)
@@ -65,20 +71,16 @@ One stem flows through the whole module:
 | `@click.command("...")` | `<stem>` kebab | `"deskew"` |
 | `main.py` COMMANDS name | `<stem>` kebab | `"deskew"` |
 
-`flat_field_correction.py` **violates** this and must be flagged: file/`_cli` use
-`flat_field_correction` while the API function and command use `flat_field`/`flat-field`.
-The fix converges the whole module on one stem — `flat_field`:
+`flat_field.py` now satisfies the triad (file `flat_field.py`, API `flat_field`, CLI
+`flat_field_cli`, command `flat-field`, `main.py` import `biahub.flat_field.flat_field_cli`).
+If you find a module where the stem drifts across file/`_cli`/command, flag it and give a
+rename table like the one above; renames are `Auto-fix: needs review` because they touch
+`main.py`, imports elsewhere, and the command's test file.
 
-| Artifact | Currently | Should be |
-|---|---|---|
-| module file | `flat_field_correction.py` | `flat_field.py` |
-| API fn | `flat_field` | `flat_field` (already correct) |
-| CLI fn | `flat_field_correction_cli` | `flat_field_cli` |
-| command | `flat-field` | `flat-field` (already correct) |
-| `main.py` import_path | `biahub.flat_field_correction.flat_field_correction_cli` | `biahub.flat_field.flat_field_cli` |
-
-This is `Auto-fix: needs review` — it renames a module and its `_cli`, so it touches
-`main.py`, imports elsewhere, and the test file `tests/test_cli/test_flat_field_cli.py`.
+The array-layer names are a **separate** rule (see "Function layers"): `flat_field.py`
+still names its array function `flat_field_correction` (should be `flat_field_zyx`) and its
+wrapper `_czyx_flat_field` (should be `_flat_field_czyx`) — those remain open defects even
+though the triad is now clean.
 
 ## Standard signature
 
