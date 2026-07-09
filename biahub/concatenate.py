@@ -1,4 +1,5 @@
 import glob
+import os
 
 from pathlib import Path
 
@@ -12,22 +13,36 @@ from natsort import natsorted
 
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
-    config_filepath,
+    cluster,
+    init_only,
     local,
     monitor,
-    output_dirpath,
     sbatch_filepath,
     sbatch_to_submitit,
 )
 from biahub.cli.utils import (
     copy_n_paste,
+    echo_resources,
     estimate_resources,
     get_output_paths,
     get_submitit_cluster,
+    model_to_yaml,
     resolve_ome_zarr_version,
     yaml_to_model,
 )
 from biahub.settings import ConcatenateSettings
+
+
+def _unique_source_plates(data_paths: list[Path]) -> list[Path]:
+    """Deduplicated source plate paths from position paths, preserving order."""
+    seen = set()
+    plates = []
+    for p in data_paths:
+        plate = Path(p).parents[2]
+        if plate not in seen:
+            seen.add(plate)
+            plates.append(plate)
+    return plates
 
 
 def get_path_slice_param(slice_param, path_index, total_paths):
@@ -248,6 +263,185 @@ def calculate_cropped_size(
     return cropped_shape_zyx
 
 
+def _resolve_time_indices(settings: ConcatenateSettings, all_shapes: list[tuple]) -> list[int]:
+    """Resolve input time indices from settings and shapes."""
+    T = all_shapes[0][0]
+    if settings.time_indices == "all":
+        T = min(s[0] for s in all_shapes)
+        return list(range(T))
+    elif isinstance(settings.time_indices, list):
+        return settings.time_indices
+    elif isinstance(settings.time_indices, int):
+        return [settings.time_indices]
+    return list(range(T))
+
+
+def _init_concatenate(settings: ConcatenateSettings, output_dirpath: Path):
+    """Create empty output zarr for concatenation and emit RESOURCES."""
+    slicing_params = [settings.Z_slice, settings.Y_slice, settings.X_slice]
+
+    (
+        all_data_paths,
+        all_channel_names,
+        _input_channel_idx,
+        _output_channel_idx,
+        all_slicing_params,
+    ) = get_channel_combiner_metadata(
+        settings.concat_data_paths, settings.channel_names, slicing_params
+    )
+
+    output_position_paths = get_output_paths(
+        all_data_paths,
+        output_dirpath,
+        ensure_unique_positions=settings.ensure_unique_positions,
+    )
+
+    all_shapes = []
+    all_dtypes = []
+    all_voxel_sizes = []
+    for path in all_data_paths:
+        with open_ome_zarr(path) as ds:
+            all_shapes.append(ds.data.shape)
+            all_dtypes.append(ds.data.dtype)
+            all_voxel_sizes.append(ds.scale[-3:])
+
+    input_time_indices = _resolve_time_indices(settings, all_shapes)
+
+    if all(d == all_dtypes[0] for d in all_dtypes):
+        dtype = all_dtypes[0]
+    else:
+        dtype = np.float32
+
+    if not all(vs == all_voxel_sizes[0] for vs in all_voxel_sizes):
+        click.echo(
+            "Warning: Datasets have different voxel sizes. Taking the first voxel size."
+        )
+
+    cropped_shape_zyx = calculate_cropped_size(all_slicing_params[0])
+    output_voxel_size = all_voxel_sizes[0]
+
+    output_shape = (len(input_time_indices), len(all_channel_names)) + tuple(cropped_shape_zyx)
+    output_scale = (1,) * 2 + tuple(output_voxel_size)
+
+    if settings.chunks_czyx is not None:
+        chunk_size = [1] + list(settings.chunks_czyx)
+    else:
+        chunk_size = settings.chunks_czyx
+
+    source_plates = _unique_source_plates(all_data_paths)
+
+    create_empty_plate(
+        store_path=output_dirpath,
+        position_keys=[p.parts[-3:] for p in output_position_paths],
+        channel_names=all_channel_names,
+        shape=output_shape,
+        chunks=chunk_size,
+        shards_ratio=settings.shards_ratio,
+        scale=output_scale,
+        version=resolve_ome_zarr_version(all_data_paths[0], settings.output_ome_zarr_version),
+        dtype=dtype,
+        metadata_sources=list(reversed(source_plates)),
+    )
+
+    click.echo(f"Created {output_dirpath} ({len(output_position_paths)} positions)")
+
+    T, C, Z, Y, X = all_shapes[0]
+    batch_size = settings.shards_ratio[0] if settings.shards_ratio else 1
+    num_cpus, mem_per_cpu = estimate_resources(
+        shape=(T // batch_size, C, Z, Y, X),
+        ram_multiplier=4 * batch_size,
+        max_num_cpus=16,
+    )
+    echo_resources(num_cpus, num_cpus * mem_per_cpu, 60)
+
+
+def _run_concatenate_one_position(
+    settings: ConcatenateSettings,
+    output_dirpath: Path,
+    position: str,
+):
+    """Copy and crop data from all input stores for one position into output."""
+    slicing_params = [settings.Z_slice, settings.Y_slice, settings.X_slice]
+
+    (
+        all_data_paths,
+        _all_channel_names,
+        input_channel_idx_list,
+        output_channel_idx_list,
+        all_slicing_params,
+    ) = get_channel_combiner_metadata(
+        settings.concat_data_paths, settings.channel_names, slicing_params
+    )
+
+    all_shapes = [open_ome_zarr(p).data.shape for p in all_data_paths]
+    # Close handles opened above
+    for p in all_data_paths:
+        try:
+            open_ome_zarr(p).close()
+        except Exception:
+            pass
+
+    # Re-read shapes properly
+    all_shapes = []
+    for path in all_data_paths:
+        with open_ome_zarr(path) as ds:
+            all_shapes.append(ds.data.shape)
+
+    input_time_indices = _resolve_time_indices(settings, all_shapes)
+
+    for (
+        input_path,
+        input_ch_idx,
+        output_ch_idx,
+        zyx_slicing_params,
+    ) in zip(
+        all_data_paths,
+        input_channel_idx_list,
+        output_channel_idx_list,
+        all_slicing_params,
+        strict=True,
+    ):
+        fov_key = "/".join(Path(input_path).parts[-3:])
+        if fov_key != position:
+            continue
+
+        output_position_path = output_dirpath / position
+
+        # Preserve extra_metadata written by create_empty_plate's
+        # metadata_sources — process_single_position overwrites it with
+        # None when the kwarg is absent (iohub <= 0.3.7).
+        with open_ome_zarr(str(output_position_path), layout="fov", mode="r") as pos:
+            existing_extra = pos.zattrs.get("extra_metadata")
+
+        process_single_position(
+            copy_n_paste,
+            input_position_path=input_path,
+            output_position_path=output_position_path,
+            num_workers=os.cpu_count() or 1,
+            input_channel_indices=input_ch_idx,
+            output_channel_indices=output_ch_idx,
+            input_time_indices=input_time_indices,
+            output_time_indices=list(range(len(input_time_indices))),
+            extra_metadata=existing_extra,
+            zyx_slicing_params=zyx_slicing_params,
+        )
+
+    click.echo(f"Concatenation done: {position}")
+
+
+def _resolve_concatenate_config(
+    config_path: Path,
+    output_config: Path,
+    concat_data_paths: tuple[str, ...],
+):
+    """Resolve placeholder concat_data_paths without cropping."""
+    settings = yaml_to_model(config_path, ConcatenateSettings)
+    output_model = settings.model_copy()
+    output_model.concat_data_paths = list(concat_data_paths)
+    model_to_yaml(output_model, output_config)
+    click.echo(f"Resolved config written to {output_config}")
+
+
 def concatenate(
     settings: ConcatenateSettings,
     output_dirpath: Path,
@@ -375,10 +569,13 @@ def concatenate(
         "dtype": dtype,
     }
 
+    source_plates = _unique_source_plates(all_data_paths)
+
     # Create the output zarr mirroring source_position_dirpaths
     create_empty_plate(
         store_path=output_dirpath,
         position_keys=[p.parts[-3:] for p in output_position_paths_list],
+        metadata_sources=list(reversed(source_plates)),
         **output_metadata,
     )
 
@@ -426,7 +623,12 @@ def concatenate(
             all_slicing_params,
             strict=True,
         ):
-            # Create slicing parameters for this specific path
+            # Preserve extra_metadata written by create_empty_plate's
+            # metadata_sources — process_single_position overwrites it with
+            # None when the kwarg is absent (iohub <= 0.3.7).
+            with open_ome_zarr(str(output_position_path), layout="fov", mode="r") as pos:
+                existing_extra = pos.zattrs.get("extra_metadata")
+
             copy_n_paste_kwargs = {"zyx_slicing_params": zyx_slicing_params}
 
             job = executor.submit(
@@ -439,6 +641,7 @@ def concatenate(
                 input_time_indices=input_time_indices,
                 output_time_indices=list(range(len(input_time_indices))),
                 num_workers=int(slurm_args["slurm_cpus_per_task"]),
+                extra_metadata=existing_extra,
                 **copy_n_paste_kwargs,
             )
             jobs.append(job)
@@ -458,25 +661,102 @@ def concatenate(
 
 
 @click.command("concatenate")
-@config_filepath()
-@output_dirpath()
+@click.option(
+    "--config-filepath",
+    "-c",
+    required=True,
+    type=click.Path(exists=True, file_okay=True, dir_okay=False),
+    help="Path to YAML configuration file.",
+)
+@click.option(
+    "--output-dirpath",
+    "-o",
+    required=True,
+    type=click.Path(exists=False),
+    help="Path to output directory or YAML file.",
+)
 @sbatch_filepath()
 @local()
+@cluster()
 @monitor()
+@init_only()
+@click.option(
+    "--position",
+    "-p",
+    type=str,
+    default=None,
+    help="Position key to process (e.g. B/3/000000). Required with --cluster debug.",
+)
+@click.option(
+    "--resolve-config",
+    "resolve_config_mode",
+    is_flag=True,
+    default=False,
+    help="Resolve placeholder concat_data_paths and write output config.",
+)
+@click.option(
+    "--concat-data-paths",
+    multiple=True,
+    type=str,
+    help="Override concat_data_paths from config (repeat flag, used with --resolve-config).",
+)
 def concatenate_cli(
-    config_filepath: Path,
+    config_filepath: str,
     output_dirpath: str,
     sbatch_filepath: str | None = None,
     local: bool = False,
-    monitor: bool = True,
+    cluster: str = "slurm",
+    monitor: bool = False,
+    init_only: bool = False,
+    position: str | None = None,
+    resolve_config_mode: bool = False,
+    concat_data_paths: tuple[str, ...] = (),
 ):
-    """Concatenate datasets (with optional cropping).
+    r"""Concatenate datasets (with optional cropping).
 
-    >>> biahub concatenate -c ./concat.yml -o ./output_concat.zarr
+    \b
+    Full end-to-end (SLURM fan-out):
+    >>> biahub concatenate -c ./concat.yml -o ./output.zarr
+
+    \b
+    Resolve placeholder paths (Nextflow config prep):
+    >>> biahub concatenate --resolve-config \
+        -c concat.yml -o resolved.yml \
+        --concat-data-paths "deskew.zarr/*/*/*" \
+        --concat-data-paths "reconstruct.zarr/*/*/*"
+
+    \b
+    Initialize output plate (Nextflow init):
+    >>> biahub concatenate --init -c resolved.yml -o output.zarr
+
+    \b
+    Per-position run (Nextflow worker, --cluster debug runs in-process):
+    >>> biahub concatenate --cluster debug \
+        -c resolved.yml -o output.zarr -p B/3/000000
     """
+    config_path = Path(config_filepath)
+    output_path = Path(output_dirpath)
+
+    if resolve_config_mode:
+        if not concat_data_paths:
+            raise click.UsageError("--resolve-config requires --concat-data-paths")
+        _resolve_concatenate_config(config_path, output_path, concat_data_paths)
+        return
+
+    settings = yaml_to_model(config_path, ConcatenateSettings)
+
+    if init_only:
+        _init_concatenate(settings, output_path)
+        return
+
+    if position is not None:
+        _run_concatenate_one_position(settings, output_path, position)
+        return
+
+    # Default: full end-to-end concatenation
     concatenate(
-        settings=yaml_to_model(config_filepath, ConcatenateSettings),
-        output_dirpath=Path(output_dirpath),
+        settings=settings,
+        output_dirpath=output_path,
         sbatch_filepath=sbatch_filepath,
         local=local,
         block=False,

@@ -79,3 +79,21 @@ workflow collect_positions {
     emit:
     out
 }
+
+
+process clean_intermediates {
+    label 'cpu_local'
+
+    input:
+    val intermediate_dirs
+    val trigger
+
+    script:
+    def dir_flags = intermediate_dirs.collect { "-i '${it}'" }.join(' ')
+    """
+    ${biahub_cmd()} nf clean-intermediates \
+        -o "${params.output}" \
+        -d "${dataset_name()}" \
+        ${dir_flags}
+    """
+}

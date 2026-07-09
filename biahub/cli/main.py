@@ -174,6 +174,21 @@ COMMANDS = [
         "import_path": "biahub.track.track_cli",
         "help": "Track objects in 2D/3D time-lapse microscopy",
     },
+    {
+        "name": "rename-channels",
+        "import_path": "biahub.rename_channels.rename_channels_cli",
+        "help": "Rename channels for a single position (metadata-only)",
+    },
+    {
+        "name": "generate-report-spec",
+        "import_path": "biahub.qc.generate_report_spec_cli",
+        "help": "Generate a report-spec YAML for imaging-qc from completed zarr stores",
+    },
+    {
+        "name": "combine-transforms",
+        "import_path": "biahub.combine_transforms.combine_transforms_cli",
+        "help": "Compose two per-FOV stabilization transform configs",
+    },
 ]
 
 

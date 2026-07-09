@@ -1603,31 +1603,237 @@ def estimate_stabilization(
                 )
 
 
+def _run_step_per_position(
+    input_position_dirpath: Path,
+    output_dirpath: Path,
+    settings: "EstimateStabilizationSettings",
+    step: str,
+    focus_csv: Path | None = None,
+) -> None:
+    """Run a single estimation step on one position (Nextflow per-position path).
+
+    Parameters
+    ----------
+    input_position_dirpath : Path
+        Path to a single input position (e.g. input.zarr/A/1/0).
+    output_dirpath : Path
+        Output directory for estimation results.
+    settings : EstimateStabilizationSettings
+        Estimation settings loaded from config.
+    step : str
+        One of 'z-focus', 'xy', 'pcc', 'beads'.
+    focus_csv : Path, optional
+        Path to merged focus CSV (required for 'xy' step).
+    """
+    with open_ome_zarr(str(input_position_dirpath), mode="r") as ds:
+        channel_names = ds.channel_names
+        voxel_size = ds.scale
+        shape = ds.data.shape
+
+    channel_index = channel_names.index(settings.stabilization_estimation_channel)
+    output_dirpath.mkdir(parents=True, exist_ok=True)
+
+    if step == "z-focus":
+        focus_csv_dir = output_dirpath / "z_focus_positions"
+        transform_dir = output_dirpath / "z_transforms"
+        estimate_z_focus_per_position(
+            input_position_dirpath=input_position_dirpath,
+            input_channel_indices=(channel_index,),
+            center_crop_xy=settings.focus_finding_settings.center_crop_xy,
+            output_path_focus_csv=focus_csv_dir,
+            output_path_transform=transform_dir,
+            verbose=settings.verbose,
+        )
+        click.echo(f"Z-focus estimation done: {input_position_dirpath}")
+
+    elif step == "xy":
+        if focus_csv is None:
+            raise click.UsageError("--focus-csv is required for --step xy")
+        transform_dir = output_dirpath / "xy_transforms"
+        transform_dir.mkdir(parents=True, exist_ok=True)
+        estimate_xy_stabilization_per_position(
+            input_position_dirpath=input_position_dirpath,
+            output_folder_path=transform_dir,
+            df_z_focus_path=focus_csv,
+            channel_index=channel_index,
+            center_crop_xy=settings.stack_reg_settings.center_crop_xy,
+            t_reference=settings.stack_reg_settings.t_reference,
+            verbose=settings.verbose,
+        )
+        click.echo(f"XY stabilization estimation done: {input_position_dirpath}")
+
+    elif step == "pcc":
+        transforms_dir = output_dirpath / "transforms_per_position"
+        transforms_dir.mkdir(parents=True, exist_ok=True)
+        shifts_dir = output_dirpath / "shifts_per_position"
+        shifts_dir.mkdir(parents=True, exist_ok=True)
+
+        transforms = estimate_xyz_stabilization_pcc_per_position(
+            input_position_dirpath=input_position_dirpath,
+            output_folder_path=transforms_dir,
+            output_shifts_path=shifts_dir,
+            channel_index=channel_index,
+            phase_cross_corr_settings=settings.phase_cross_corr_settings,
+            verbose=settings.verbose,
+        )
+
+        position_filename = str(Path(*input_position_dirpath.parts[-3:])).replace("/", "_")
+
+        model = StabilizationSettings(
+            stabilization_type=settings.stabilization_type,
+            stabilization_method=settings.stabilization_method,
+            stabilization_estimation_channel=settings.stabilization_estimation_channel,
+            stabilization_channels=settings.stabilization_channels,
+            affine_transform_zyx_list=[],
+            time_indices="all",
+            output_voxel_size=voxel_size,
+        )
+
+        if settings.eval_transform_settings:
+            T, C, Z, Y, X = shape
+            transforms = evaluate_transforms(
+                transforms=transforms,
+                shape_zyx=(Z, Y, X),
+                validation_window_size=settings.eval_transform_settings.validation_window_size,
+                validation_tolerance=settings.eval_transform_settings.validation_tolerance,
+                interpolation_window_size=settings.eval_transform_settings.interpolation_window_size,
+                interpolation_type=settings.eval_transform_settings.interpolation_type,
+                verbose=settings.verbose,
+            )
+
+        save_transforms(
+            model=model,
+            transforms=transforms,
+            output_filepath_settings=output_dirpath
+            / "xyz_stabilization_settings"
+            / f"{position_filename}.yml",
+            verbose=settings.verbose,
+        )
+        click.echo(f"PCC stabilization estimation done: {input_position_dirpath}")
+
+    elif step == "beads":
+        from biahub.registration.beads import estimate_tczyx
+
+        with open_ome_zarr(str(input_position_dirpath), mode="r") as ds:
+            channel_tczyx = ds.data.dask_array()
+
+        xyz_transforms = estimate_tczyx(
+            mov_tczyx=channel_tczyx,
+            ref_tczyx=channel_tczyx,
+            mov_channel_index=channel_index,
+            ref_channel_index=channel_index,
+            beads_match_settings=settings.beads_match_settings,
+            affine_transform_settings=settings.affine_transform_settings,
+            verbose=settings.verbose,
+            output_folder_path=output_dirpath,
+            mode="stabilization",
+        )
+
+        model = StabilizationSettings(
+            stabilization_type=settings.stabilization_type,
+            stabilization_method=settings.stabilization_method,
+            stabilization_estimation_channel=settings.stabilization_estimation_channel,
+            stabilization_channels=settings.stabilization_channels,
+            affine_transform_zyx_list=[],
+            time_indices="all",
+            output_voxel_size=voxel_size,
+        )
+
+        if settings.eval_transform_settings:
+            T, C, Z, Y, X = shape
+            xyz_transforms = evaluate_transforms(
+                transforms=xyz_transforms,
+                shape_zyx=(Z, Y, X),
+                validation_window_size=settings.eval_transform_settings.validation_window_size,
+                validation_tolerance=settings.eval_transform_settings.validation_tolerance,
+                interpolation_window_size=settings.eval_transform_settings.interpolation_window_size,
+                interpolation_type=settings.eval_transform_settings.interpolation_type,
+                verbose=settings.verbose,
+            )
+
+        save_transforms(
+            model=model,
+            transforms=xyz_transforms,
+            output_filepath_settings=output_dirpath / "xyz_stabilization_settings.yml",
+            verbose=settings.verbose,
+        )
+        click.echo(f"Beads stabilization estimation done: {input_position_dirpath}")
+
+    else:
+        raise click.UsageError(f"Unknown step: {step}")
+
+
 @click.command("estimate-stabilization")
 @input_position_dirpaths()
 @output_dirpath()
 @config_filepath()
 @sbatch_filepath()
 @local()
+@click.option(
+    "--step",
+    type=click.Choice(["z-focus", "xy", "pcc", "beads"], case_sensitive=False),
+    default=None,
+    help=(
+        "Per-position estimation step for Nextflow fan-out. "
+        "When set, runs a single estimation step on the input position(s). "
+        "Method settings are read from the config file."
+    ),
+)
+@click.option(
+    "--focus-csv",
+    type=click.Path(exists=True),
+    default=None,
+    help="Path to merged focus CSV (required for --step xy).",
+)
 def estimate_stabilization_cli(
     input_position_dirpaths: list[str],
     output_dirpath: str,
     config_filepath: Path,
     sbatch_filepath: str = None,
     local: bool = False,
+    step: str | None = None,
+    focus_csv: str | None = None,
 ):
-    """Estimate translation matrices for XYZ stabilization of a timelapse dataset.
+    r"""Estimate translation matrices for XYZ stabilization of a timelapse dataset.
 
     Stabilization parameters may be computed for the XY, Z, or XYZ dimensions using
     focus finding, beads, or phase cross correlation methods.
 
+    \b
+    Bulk estimation (all positions, SLURM fan-out):
     >>> biahub estimate-stabilization \
-        -i ./timelapse.zarr/0/0/0 \
-        -o ./stabilization.yml \
+        -i ./timelapse.zarr/*/*/* \
+        -o ./stabilization_output/ \
+        -c ./config.yml
+
+    \b
+    Per-position Z-focus estimation (Nextflow worker):
+    >>> biahub estimate-stabilization --step z-focus \
+        -i ./timelapse.zarr/A/1/0 \
+        -o ./stabilization_output/ \
+        -c ./config.yml
+
+    \b
+    Per-position XY estimation (requires merged focus CSV):
+    >>> biahub estimate-stabilization --step xy \
+        -i ./timelapse.zarr/A/1/0 \
+        -o ./stabilization_output/ \
         -c ./config.yml \
-        -s ./sbatch.sh \
-        --local --verbose
-    """
+        --focus-csv ./stabilization_output/positions_focus.csv
+    """  # noqa: D301
+    if step is not None:
+        settings = yaml_to_model(config_filepath, EstimateStabilizationSettings)
+        output_path = Path(output_dirpath)
+        for pos_path in input_position_dirpaths:
+            _run_step_per_position(
+                input_position_dirpath=pos_path,
+                output_dirpath=output_path,
+                settings=settings,
+                step=step,
+                focus_csv=Path(focus_csv) if focus_csv else None,
+            )
+        return
+
     estimate_stabilization(
         input_position_dirpaths=input_position_dirpaths,
         output_dirpath=output_dirpath,
