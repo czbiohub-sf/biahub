@@ -302,14 +302,15 @@ def resolve_z_slice(
     z_total: int | None = None,
     frac_below: float = Z_FOCUS_FRACTION_BELOW,
     frac_above: float = Z_FOCUS_FRACTION_ABOVE,
+    focus_channel_index: int = 0,
 ) -> tuple[slice, int]:
     """
     Resolve the z-slice range based on user input and imaging mode.
 
     This function determines which Z-planes to extract from a 3D or 4D volume based on:
     - Focus finding, if `use_focus` is True: the in-focus plane is detected per
-      timepoint (waveorder ``focus_from_transverse_band`` on channel 0, using the
-      module constants ``NA_DET``/``LAMBDA_ILL`` and ``pixel_size``), and a window
+      timepoint (waveorder ``focus_from_transverse_band`` on ``focus_channel_index``,
+      using the module constants ``NA_DET``/``LAMBDA_ILL`` and ``pixel_size``), and a window
       of ``z_total`` planes is placed around the median focus (``frac_below`` below,
       ``frac_above`` above). ``z_range`` is ignored in this mode.
     - A user-specified Z-range tuple `(start, stop)`, or
@@ -360,7 +361,7 @@ def resolve_z_slice(
         T = data.shape[0]
         z_focus = []
         for t in tqdm(range(T), desc="Finding focus"):
-            zyx = np.asarray(data[t, 0, :, :, :])
+            zyx = np.asarray(data[t, focus_channel_index, :, :, :])
             if zyx.sum() == 0:
                 z_focus.append(z_shape // 2)
                 continue
@@ -824,6 +825,7 @@ def track_one_position(
     z_total: int | None = None,
     focus_frac_below: float = Z_FOCUS_FRACTION_BELOW,
     focus_frac_above: float = Z_FOCUS_FRACTION_ABOVE,
+    focus_channel: str | None = None,
 ) -> None:
     """
     Run tracking on a single field of view.
@@ -889,6 +891,14 @@ def track_one_position(
         with open_ome_zarr(str(Path(input_path) / Path(*position_key)), mode="r") as ds:
             Z = ds.data.shape[2]
             pixel_size = ds.scale[-1]
+            if focus_channel is None:
+                focus_channel_index = 0
+            elif focus_channel in ds.channel_names:
+                focus_channel_index = ds.channel_names.index(focus_channel)
+            else:
+                raise ValueError(
+                    f"focus_channel '{focus_channel}' not found in {ds.channel_names}"
+                )
             z_slices, _ = resolve_z_slice(
                 None,
                 Z,
@@ -898,6 +908,7 @@ def track_one_position(
                 z_total=z_total,
                 frac_below=focus_frac_below,
                 frac_above=focus_frac_above,
+                focus_channel_index=focus_channel_index,
             )
         click.echo(f"Focus-resolved z-slice for {fov.replace('_', '/')}: {z_slices}")
 
@@ -1108,6 +1119,7 @@ def track(
                 z_total=settings.z_total,
                 focus_frac_below=settings.focus_frac_below,
                 focus_frac_above=settings.focus_frac_above,
+                focus_channel=settings.focus_channel,
             )
             jobs.append(job)
 

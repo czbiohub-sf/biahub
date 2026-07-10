@@ -85,6 +85,8 @@ class TrackingSettings(MyBaseModel):
     z_total: int | None = None
     focus_frac_below: float = 1 / 3
     focus_frac_above: float = 2 / 3
+    # Channel (by name) to run focus finding on. If None, the first channel is used.
+    focus_channel: str | None = None
     input_images: list[ProcessingInputChannel]
     tracking_config: dict[str, Any] = {}
     segmentation_method: Literal["foreground_contour", "cellpose"] = "foreground_contour"
