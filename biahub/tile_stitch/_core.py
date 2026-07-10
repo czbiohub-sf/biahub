@@ -17,6 +17,8 @@ from collections.abc import Callable
 from functools import cache
 from typing import Any
 
+from biahub.tile_stitch import _nvtx
+
 # ONE module-level TF cache, shared across all actors in a process. The key
 # includes the gpu_idx (via the device string) so multi-actor-in-one-process
 # (or process reuse across runs) never returns cuda:0 tensors to a cuda:1
@@ -125,7 +127,10 @@ class PrefetchReader:
                 if self._stop:
                     return
             try:
-                buf = self._load_fn(tid)
+                with _nvtx.stage("zarr_read", "blue"):
+                    buf = self._load_fn(tid)
+                if buf is not None:
+                    _nvtx.counter("bytes_read", unit="bytes").sample(int(getattr(buf, "nbytes", 0)))
             except Exception as exc:
                 # Consumer falls back to a synchronous read; log it so a non-stall
                 # failure (corrupt chunk / shape mismatch) is not invisible until it
@@ -241,45 +246,203 @@ def build_stitch_geom(plan) -> dict[int, dict]:
     return geom
 
 
+def _gpu_shared_optics(device):
+    """Context manager: build waveorder's phase shared optics on ``device`` (GPU).
+
+    Replaces ``phase_thick_3d._compute_shared_optics`` (which builds the large
+    ``(up_Z, up_Y, up_X)`` propagation-kernel + Green's-function arrays on CPU,
+    then the caller moves them to device) with a version that builds them
+    directly on ``device``. Keeps the transfer-function build off host RAM and on
+    the GPU (waveorder PR #562 approach), turning a ~300 s / ~340 GB-host build
+    into a sub-second GPU build for tiles whose upsampled optics fit VRAM.
+    """
+    import contextlib
+
+    import torch
+
+    from waveorder import optics, util
+    from waveorder.models import phase_thick_3d as _p3
+
+    @contextlib.contextmanager
+    def _cm():
+        orig = _p3._compute_shared_optics
+
+        def patched(zyx_shape, yx_pixel_size, z_pixel_size, wavelength_illumination,
+                    z_padding, index_of_refraction_media, numerical_aperture_detection,
+                    invert_phase_contrast=False, pupil_steepness=1e4):
+            fyy, fxx = util.generate_frequencies(zyx_shape[1:], yx_pixel_size)
+            fyy, fxx = fyy.to(device), fxx.to(device)
+            radial = torch.sqrt(fyy**2 + fxx**2)
+            z_total = zyx_shape[0] + 2 * z_padding
+            z_pos = torch.fft.ifftshift(
+                (torch.arange(z_total, device=device) - z_total // 2) * z_pixel_size
+            )
+            if invert_phase_contrast:
+                z_pos = torch.flip(z_pos, dims=(0,))
+            if torch.is_tensor(numerical_aperture_detection):
+                numerical_aperture_detection = numerical_aperture_detection.to(device)
+            det = optics.generate_pupil(
+                radial, numerical_aperture_detection, wavelength_illumination, steepness=pupil_steepness
+            )
+            wl_media = wavelength_illumination / index_of_refraction_media
+            prop = optics.generate_propagation_kernel(radial, det, wl_media, z_pos)
+            greens = optics.generate_greens_function_z(radial, det, wl_media, z_pos, axially_even=False)
+            return fyy, fxx, det, prop, greens
+
+        _p3._compute_shared_optics = patched
+        try:
+            yield
+        finally:
+            _p3._compute_shared_optics = orig
+
+    return _cm()
+
+
+def _build_phase_tf_gpu(settings, phase_settings, device):
+    """Build the 3D phase transfer function directly on ``device`` (GPU tensors).
+
+    Mirrors ``waveorder.api.phase.compute_transfer_function`` (recon_dim=3) but
+    passes GPU tilt tensors so ``calculate_transfer_function`` runs on the GPU
+    (it infers ``device = zen.device``) with the shared optics also built on-GPU.
+    Returns GPU tensors directly (no CPU round-trip). Propagates CUDA OOM so the
+    caller can fall back to the CPU build.
+    """
+    import torch
+
+    from waveorder.models import phase_thick_3d
+
+    s = phase_settings.transfer_function.resolve_floats()
+    ts = settings.tile.tile_size
+    zyx_shape = (int(ts["z"]), int(ts["y"]), int(ts["x"]))
+    zen = torch.as_tensor(float(s.tilt_angle_zenith), dtype=torch.float32, device=device)
+    azi = torch.as_tensor(float(s.tilt_angle_azimuth), dtype=torch.float32, device=device)
+    with _gpu_shared_optics(device):
+        real_tf, imag_tf = phase_thick_3d.calculate_transfer_function(
+            zyx_shape=zyx_shape,
+            yx_pixel_size=s.yx_pixel_size,
+            z_pixel_size=s.z_pixel_size,
+            wavelength_illumination=s.wavelength_illumination,
+            z_padding=s.z_padding,
+            index_of_refraction_media=s.index_of_refraction_media,
+            numerical_aperture_illumination=s.numerical_aperture_illumination,
+            numerical_aperture_detection=s.numerical_aperture_detection,
+            invert_phase_contrast=s.invert_phase_contrast,
+            tilt_angle_zenith=zen,
+            tilt_angle_azimuth=azi,
+        )
+    return {
+        "real_potential_transfer_function": real_tf.contiguous(),
+        "imaginary_potential_transfer_function": imag_tf.contiguous(),
+    }
+
+
+def _cpu_tf_arrays(settings, modality):
+    """Build the CPU transfer function once per node (disk cache + lock).
+
+    Actors are separate processes, so without sharing each rebuilds the identical
+    TF and multiplies the host-RAM peak (the fullZ-YX512 OOM cause). This builds
+    it once per node and shares the downsampled result via a node-local ``.npz``;
+    later actors block on an ``O_EXCL`` lock then load. Returns numpy arrays.
+    """
+    import hashlib
+    import os
+    import pathlib
+    import time
+
+    import numpy as np
+
+    from waveorder.api.tile_stitch import prepare_transfer_function
+
+    keys = (
+        ["optical_transfer_function"]
+        if modality == "fluorescence"
+        else ["real_potential_transfer_function", "imaginary_potential_transfer_function"]
+    )
+
+    def _build():
+        tf = prepare_transfer_function(settings, device=None)
+        return {k: np.asarray(tf[k].values) for k in keys}
+
+    if os.environ.get("TILESTITCH_TF_DISK_CACHE", "1") != "1":
+        return _build()
+
+    h = hashlib.sha1(settings.model_dump_json().encode()).hexdigest()[:16]
+    root = (
+        os.environ.get("TILESTITCH_TF_CACHE")
+        or os.environ.get("SLURM_TMPDIR")
+        or os.environ.get("TMPDIR")
+        or "/tmp"
+    )
+    cache = pathlib.Path(root) / "tilestitch_tf"
+    cache.mkdir(parents=True, exist_ok=True)
+    npz, lock = cache / f"{h}.npz", cache / f"{h}.lock"
+    deadline = time.monotonic() + 1800
+    while True:
+        if npz.exists():
+            try:
+                data = np.load(npz)
+                return {k: data[k] for k in keys}
+            except Exception:  # partially written; retry
+                time.sleep(2)
+                continue
+        try:
+            os.close(os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+        except FileExistsError:
+            if time.monotonic() > deadline:  # builder likely died -> local build
+                return _build()
+            time.sleep(2)
+            continue
+        try:
+            arrs = _build()
+            tmp = cache / f"{h}.tmp{os.getpid()}.npz"  # .npz suffix: np.savez won't re-append
+            np.savez(tmp, **arrs)
+            os.replace(tmp, npz)
+            return arrs
+        finally:
+            try:
+                lock.unlink()
+            except FileNotFoundError:
+                pass
+
+
 def get_tf_cuda(settings, device: str) -> tuple[dict[str, Any], Any]:
     """Build (or fetch cached) CUDA transfer-function tensors.
 
-    Cache key is ``(settings.model_dump_json(), device)`` and tensors are
-    built on the exact ``device`` string (e.g. ``"cuda:1"``) — the device in
-    the key is load-bearing for multi-actor-in-one-process correctness:
-    ``torch.cuda.set_device`` is thread-local, and asyncio.to_thread workers
-    start with current device 0, so the cache must never return cuda:0
-    tensors to a cuda:1 caller.
+    Per-process cache keyed on ``(settings, device)`` — the device is load-bearing
+    for multi-actor-in-one-process correctness (``torch.cuda.set_device`` is
+    thread-local). For 3D phase the TF is built directly on the GPU (fast, no
+    host-RAM balloon); on CUDA OOM it falls back to a CPU build shared once per
+    node. Fluorescence / 2D use the CPU path.
     """
+    import os
+
     import torch
 
     key = (settings.model_dump_json(), device)
     if key in _TF_CUDA_CACHE:
         return _TF_CUDA_CACHE[key]
-    from waveorder.api.tile_stitch import (
-        prepare_transfer_function,
-        select_recon_modality,
-    )
 
-    tf = prepare_transfer_function(settings, device=None)
+    from waveorder.api.tile_stitch import select_recon_modality
+
     modality, modality_settings = select_recon_modality(settings.recon)
-    # Dispatch on modality: phase has a real+imaginary potential TF; fluorescence
-    # has a single optical TF. ``make_eager_recon`` keys off these dict entries.
-    if modality == "fluorescence":
-        cuda_tf = {
-            "optical_transfer_function": torch.as_tensor(
-                tf["optical_transfer_function"].values, device=device
-            ),
-        }
-    else:  # phase (thick 3D)
-        cuda_tf = {
-            "real_potential_transfer_function": torch.as_tensor(
-                tf["real_potential_transfer_function"].values, device=device
-            ),
-            "imaginary_potential_transfer_function": torch.as_tensor(
-                tf["imaginary_potential_transfer_function"].values, device=device
-            ),
-        }
+    recon_dim = settings.recon.reconstruction_dimension
+
+    cuda_tf = None
+    if modality == "phase" and recon_dim == 3 and os.environ.get("TILESTITCH_GPU_OPTICS", "1") == "1":
+        try:
+            with _nvtx.stage("tf_build_gpu", "magenta"):
+                cuda_tf = _build_phase_tf_gpu(settings, modality_settings, device)
+        except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
+            if "out of memory" not in str(e).lower():
+                raise
+            torch.cuda.empty_cache()
+            cuda_tf = None  # fall back to the CPU build
+
+    if cuda_tf is None:
+        with _nvtx.stage("tf_build_cpu", "magenta"):
+            arrs = _cpu_tf_arrays(settings, modality)
+            cuda_tf = {k: torch.as_tensor(v, device=device) for k, v in arrs.items()}
+
     _TF_CUDA_CACHE[key] = (cuda_tf, modality_settings)
     return _TF_CUDA_CACHE[key]
 

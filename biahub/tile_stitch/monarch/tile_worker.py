@@ -18,7 +18,7 @@ from monarch.actor import Actor, current_rank, endpoint
 from monarch.rdma import RDMABuffer
 
 from biahub.settings import MonarchConfig
-from biahub.tile_stitch import _core
+from biahub.tile_stitch import _core, _nvtx
 from biahub.tile_stitch._core import PrefetchReader
 
 
@@ -342,24 +342,31 @@ class TileWorker(Actor):
         t0 = _t.monotonic()
         if self._rs_first is None:
             self._rs_first = t0
-        zyx_list = [self._load_one(tid, tiles_by_id[tid]) for tid in tile_ids]
-        batch = torch.stack(zyx_list, dim=0)  # (B, Z, Y, X)
-        torch.cuda.synchronize(self.gpu_idx)
+        with _nvtx.stage(f"load b={len(tile_ids)}", "cyan"):
+            zyx_list = [self._load_one(tid, tiles_by_id[tid]) for tid in tile_ids]
+            batch = torch.stack(zyx_list, dim=0)  # (B, Z, Y, X)
+            torch.cuda.synchronize(self.gpu_idx)
         t_io = _t.monotonic()
+        _nvtx.counter("bytes_h2d", unit="bytes").sample(batch.element_size() * batch.nelement())
 
         recon_fn = self._get_compiled_recon()
-        recons = recon_fn(batch)  # (B, Z, Y, X)
-        torch.cuda.synchronize(self.gpu_idx)
+        with _nvtx.stage(f"recon_fft b={len(tile_ids)}", "green"):
+            recons = recon_fn(batch)  # (B, Z, Y, X)
+            torch.cuda.synchronize(self.gpu_idx)
         t_fft = _t.monotonic()
+        _nvtx.counter("gpu_mem_mb").sample(int(torch.cuda.memory_allocated(self.gpu_idx) / 1e6))
 
         handles: list[TileHandle] = []
         copy_s = 0.0
         rdma_s = 0.0
         for i, tid in enumerate(tile_ids):
             tc = _t.monotonic()
-            recon_cpu = self._d2h(recons[i].unsqueeze(0))
+            with _nvtx.stage("d2h", "orange"):
+                recon_cpu = self._d2h(recons[i].unsqueeze(0))
             tr = _t.monotonic()
-            handles.append(self._store_recon(tid, recon_cpu))
+            _nvtx.counter("bytes_d2h", unit="bytes").sample(recon_cpu.nbytes)
+            with _nvtx.stage("rdma", "red"):
+                handles.append(self._store_recon(tid, recon_cpu))
             copy_s += tr - tc
             rdma_s += _t.monotonic() - tr
         t_end = _t.monotonic()
