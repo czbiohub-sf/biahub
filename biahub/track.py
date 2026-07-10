@@ -39,6 +39,16 @@ from biahub.settings import CellposeConfig, ProcessingInputChannel, TrackingSett
 
 logger = logging.getLogger(__name__)
 
+# Optical parameters for waveorder focus finding (focus_from_transverse_band),
+# shared with biahub.estimate_stabilization. Used only when a config sets
+# use_focus: true to resolve the in-focus z-window per FOV.
+NA_DET = 1.35
+LAMBDA_ILL = 0.500
+# Fraction of the z_total window placed below / above the detected focus plane
+# (1/3 below, 2/3 above — matches the dynacell convention).
+Z_FOCUS_FRACTION_BELOW = 1 / 3
+Z_FOCUS_FRACTION_ABOVE = 2 / 3
+
 # Lazy imports for ultrack - imported only when needed in specific functions
 
 _ultrack_patched = False
@@ -282,11 +292,26 @@ def central_z_slice(z_shape: int) -> slice:
     return slice(z_center - half_window, z_center + half_window + 1)
 
 
-def resolve_z_slice(z_range: tuple[int, int], z_shape: int) -> tuple[slice, int]:
+def resolve_z_slice(
+    z_range: tuple[int, int],
+    z_shape: int,
+    *,
+    data=None,
+    pixel_size: float | None = None,
+    use_focus: bool = False,
+    z_total: int | None = None,
+    frac_below: float = Z_FOCUS_FRACTION_BELOW,
+    frac_above: float = Z_FOCUS_FRACTION_ABOVE,
+) -> tuple[slice, int]:
     """
     Resolve the z-slice range based on user input and imaging mode.
 
     This function determines which Z-planes to extract from a 3D or 4D volume based on:
+    - Focus finding, if `use_focus` is True: the in-focus plane is detected per
+      timepoint (waveorder ``focus_from_transverse_band`` on channel 0, using the
+      module constants ``NA_DET``/``LAMBDA_ILL`` and ``pixel_size``), and a window
+      of ``z_total`` planes is placed around the median focus (``frac_below`` below,
+      ``frac_above`` above). ``z_range`` is ignored in this mode.
     - A user-specified Z-range tuple `(start, stop)`, or
     - Automatic central slicing if `(-1, -1)` is passed.
     - All planes are returned if `None` is passed.
@@ -325,6 +350,34 @@ def resolve_z_slice(z_range: tuple[int, int], z_shape: int) -> tuple[slice, int]
     >>> resolve_z_slice((-1, -1), z_shape=21)
     (slice(None), 21)
     """
+    if use_focus:
+        if data is None or pixel_size is None or z_total is None:
+            raise ValueError(
+                "use_focus=True requires data, pixel_size, and z_total to be provided."
+            )
+        from waveorder.focus import focus_from_transverse_band
+
+        T = data.shape[0]
+        z_focus = []
+        for t in tqdm(range(T), desc="Finding focus"):
+            zyx = np.asarray(data[t, 0, :, :, :])
+            if zyx.sum() == 0:
+                z_focus.append(z_shape // 2)
+                continue
+            z_f = focus_from_transverse_band(
+                zyx, NA_det=NA_DET, lambda_ill=LAMBDA_ILL, pixel_size=pixel_size
+            )
+            z_focus.append(z_shape // 2 if z_f is None else int(np.clip(z_f, 0, z_shape - 1)))
+
+        center = int(np.median(z_focus))
+        start = max(0, center - int(round(frac_below * z_total)))
+        stop = min(z_shape, center + int(round(frac_above * z_total)))
+        if stop <= start:
+            raise ValueError(
+                f"Focus z-window is empty (start={start}, stop={stop}); check z_total={z_total}."
+            )
+        return slice(start, stop), stop - start
+
     if z_range == (-1, -1):
         z_slices = central_z_slice(z_shape)
         Z = z_slices.stop - z_slices.start
@@ -767,6 +820,10 @@ def track_one_position(
     z_slices: tuple[int, int] = (0, 0),
     scale: tuple[float, float, float, float, float] = (1, 1, 1, 1, 1),
     cellpose_config: CellposeConfig | None = None,
+    use_focus: bool = False,
+    z_total: int | None = None,
+    focus_frac_below: float = Z_FOCUS_FRACTION_BELOW,
+    focus_frac_above: float = Z_FOCUS_FRACTION_ABOVE,
 ) -> None:
     """
     Run tracking on a single field of view.
@@ -820,6 +877,29 @@ def track_one_position(
     filename = output_dirpath.stem
     database_path = output_dirpath.parent / f"{filename}_config_tracking" / f"{fov}"
     os.makedirs(database_path, exist_ok=True)
+
+    # Focus-based z-resolution (per FOV): find the in-focus plane and take a
+    # window of z_total planes around it, overriding the passed z_slices.
+    if use_focus:
+        input_path = next((img.path for img in input_images if img.path is not None), None)
+        if input_path is None:
+            raise ValueError(
+                "use_focus=True requires an input_images entry with a non-null path."
+            )
+        with open_ome_zarr(str(Path(input_path) / Path(*position_key)), mode="r") as ds:
+            Z = ds.data.shape[2]
+            pixel_size = ds.scale[-1]
+            z_slices, _ = resolve_z_slice(
+                None,
+                Z,
+                data=ds.data,
+                pixel_size=pixel_size,
+                use_focus=True,
+                z_total=z_total,
+                frac_below=focus_frac_below,
+                frac_above=focus_frac_above,
+            )
+        click.echo(f"Focus-resolved z-slice for {fov.replace('_', '/')}: {z_slices}")
 
     if cellpose_config is not None:
         # Cellpose mode: load data, fill blanks, run cellpose, pass labels to ultrack
@@ -972,7 +1052,11 @@ def track(
         T, C, Z, Y, X = dataset.data.shape
         scale = dataset.scale
 
-    z_slices, _ = resolve_z_slice(settings.z_range, Z)
+    if settings.use_focus:
+        # z-slice is resolved per-FOV inside track_one_position via focus finding
+        z_slices = None
+    else:
+        z_slices, _ = resolve_z_slice(settings.z_range, Z)
     track_scale = scale[-2:] if settings.mode == "2D" else scale[-3:]
 
     tracking_cfg = settings.tracking_config
@@ -1020,6 +1104,10 @@ def track(
                 z_slices=z_slices,
                 scale=track_scale,
                 cellpose_config=cellpose_cfg,
+                use_focus=settings.use_focus,
+                z_total=settings.z_total,
+                focus_frac_below=settings.focus_frac_below,
+                focus_frac_above=settings.focus_frac_above,
             )
             jobs.append(job)
 

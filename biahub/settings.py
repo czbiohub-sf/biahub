@@ -77,6 +77,14 @@ class TrackingSettings(MyBaseModel):
     blank_frames_path: str = None
     mode: Literal["2D", "3D"] = "2D"
     z_range: tuple[int, int] | None = None
+    # Focus-based z-resolution. When use_focus is True, z_range is ignored and a
+    # window of z_total planes centred on the in-focus plane (found per-FOV via
+    # waveorder) is used instead. focus_frac_below/above split z_total below and
+    # above the detected focus plane (defaults: 1/3 below, 2/3 above).
+    use_focus: bool = False
+    z_total: int | None = None
+    focus_frac_below: float = 1 / 3
+    focus_frac_above: float = 2 / 3
     input_images: list[ProcessingInputChannel]
     tracking_config: dict[str, Any] = {}
     segmentation_method: Literal["foreground_contour", "cellpose"] = "foreground_contour"
