@@ -44,10 +44,6 @@ logger = logging.getLogger(__name__)
 # use_focus: true to resolve the in-focus z-window per FOV.
 NA_DET = 1.35
 LAMBDA_ILL = 0.500
-# Fraction of the z_total window placed below / above the detected focus plane
-# (1/3 below, 2/3 above — matches the dynacell convention).
-Z_FOCUS_FRACTION_BELOW = 1 / 3
-Z_FOCUS_FRACTION_ABOVE = 2 / 3
 
 # Lazy imports for ultrack - imported only when needed in specific functions
 
@@ -292,6 +288,28 @@ def central_z_slice(z_shape: int) -> slice:
     return slice(z_center - half_window, z_center + half_window + 1)
 
 
+def _median_focus_plane(data, z_shape: int, pixel_size: float, channel_index: int) -> int:
+    """Median in-focus z-plane across timepoints for one channel.
+
+    Uses waveorder ``focus_from_transverse_band`` (with the module constants
+    ``NA_DET``/``LAMBDA_ILL``) per timepoint; empty frames fall back to the
+    central plane. ``data`` is a (T, C, Z, Y, X) array-like.
+    """
+    from waveorder.focus import focus_from_transverse_band
+
+    z_focus = []
+    for t in tqdm(range(data.shape[0]), desc="Finding focus"):
+        zyx = np.asarray(data[t, channel_index, :, :, :])
+        if zyx.sum() == 0:
+            z_focus.append(z_shape // 2)
+            continue
+        z_f = focus_from_transverse_band(
+            zyx, NA_det=NA_DET, lambda_ill=LAMBDA_ILL, pixel_size=pixel_size
+        )
+        z_focus.append(z_shape // 2 if z_f is None else int(np.clip(z_f, 0, z_shape - 1)))
+    return int(np.median(z_focus))
+
+
 def resolve_z_slice(
     z_range: tuple[int, int],
     z_shape: int,
@@ -300,8 +318,8 @@ def resolve_z_slice(
     pixel_size: float | None = None,
     use_focus: bool = False,
     z_total: int | None = None,
-    frac_below: float = Z_FOCUS_FRACTION_BELOW,
-    frac_above: float = Z_FOCUS_FRACTION_ABOVE,
+    frac_below: float = 1 / 3,
+    frac_above: float = 2 / 3,
     focus_channel_index: int = 0,
 ) -> tuple[slice, int]:
     """
@@ -356,21 +374,7 @@ def resolve_z_slice(
             raise ValueError(
                 "use_focus=True requires data, pixel_size, and z_total to be provided."
             )
-        from waveorder.focus import focus_from_transverse_band
-
-        T = data.shape[0]
-        z_focus = []
-        for t in tqdm(range(T), desc="Finding focus"):
-            zyx = np.asarray(data[t, focus_channel_index, :, :, :])
-            if zyx.sum() == 0:
-                z_focus.append(z_shape // 2)
-                continue
-            z_f = focus_from_transverse_band(
-                zyx, NA_det=NA_DET, lambda_ill=LAMBDA_ILL, pixel_size=pixel_size
-            )
-            z_focus.append(z_shape // 2 if z_f is None else int(np.clip(z_f, 0, z_shape - 1)))
-
-        center = int(np.median(z_focus))
+        center = _median_focus_plane(data, z_shape, pixel_size, focus_channel_index)
         start = max(0, center - int(round(frac_below * z_total)))
         stop = min(z_shape, center + int(round(frac_above * z_total)))
         if stop <= start:
@@ -823,8 +827,8 @@ def track_one_position(
     cellpose_config: CellposeConfig | None = None,
     use_focus: bool = False,
     z_total: int | None = None,
-    focus_frac_below: float = Z_FOCUS_FRACTION_BELOW,
-    focus_frac_above: float = Z_FOCUS_FRACTION_ABOVE,
+    focus_frac_below: float = 1 / 3,
+    focus_frac_above: float = 2 / 3,
     focus_channel: str | None = None,
 ) -> None:
     """
