@@ -1,36 +1,33 @@
-from __future__ import annotations
-
 import ast
+import logging
 import os
 
-from glob import glob
 from pathlib import Path
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from ultrack import MainConfig
 
 import click
 import dask.array as da
-import napari
 import numpy as np
 import pandas as pd
 import submitit
-import toml
 
 from iohub import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate
 from numpy.typing import ArrayLike
 
+from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
+    cluster,
     config_filepath,
-    local,
+    init_only,
+    input_position_dirpaths,
+    monitor,
     output_dirpath,
     sbatch_filepath,
     sbatch_to_submitit,
 )
 from biahub.cli.resolve_function import resolve_function
 from biahub.cli.utils import (
+    echo_resources,
     estimate_resources,
     get_submitit_cluster,
     resolve_ome_zarr_version,
@@ -39,7 +36,47 @@ from biahub.cli.utils import (
 )
 from biahub.settings import ProcessingInputChannel, TrackingSettings
 
+logger = logging.getLogger(__name__)
+
 # Lazy imports for ultrack - imported only when needed in specific functions
+
+_ultrack_patched = False
+
+
+def _patch_ultrack_readonly_buffer():
+    """Workaround for scikit-image #6378: read-only buffer in _map_array.
+
+    scikit-image's Cython ``_map_array`` rejects read-only memoryviews.
+    Under numpy 2.x, pandas DataFrame columns and ``np.asarray`` results are
+    often read-only, so every call path through ``map_array`` can trigger this.
+
+    Patch ``skimage.util.map_array`` directly to force writable copies of
+    all arrays before passing them to Cython.
+
+    Remove when scikit-image >= 0.27 is available.
+    """
+    global _ultrack_patched
+    if _ultrack_patched:
+        return
+    _ultrack_patched = True
+
+    import skimage.util._map_array as _ma
+
+    _original_map_array = _ma.map_array
+
+    def _map_array_writable(input_arr, input_vals, output_vals, out=None):
+        input_arr = np.array(input_arr, copy=False)
+        if not input_arr.flags.writeable:
+            input_arr = input_arr.copy()
+        input_vals = np.array(input_vals, copy=False)
+        if not input_vals.flags.writeable:
+            input_vals = input_vals.copy()
+        output_vals = np.array(output_vals, copy=False)
+        if not output_vals.flags.writeable:
+            output_vals = output_vals.copy()
+        return _original_map_array(input_arr, input_vals, output_vals, out=out)
+
+    _ma.map_array = _map_array_writable
 
 
 def mem_nuc_contour(nuclei_prediction: ArrayLike, membrane_prediction: ArrayLike) -> ArrayLike:
@@ -305,7 +342,7 @@ def resolve_z_slice(z_range: tuple[int, int], z_shape: int) -> tuple[slice, int]
 
 
 def run_ultrack(
-    tracking_config: MainConfig,
+    tracking_config,
     foreground_mask: ArrayLike,
     contour_gradient_map: ArrayLike,
     scale: tuple[float, float] | tuple[float, float, float],
@@ -363,19 +400,24 @@ def run_ultrack(
     ...     database_path=Path("results/posA"),
     ... )
     """
+    import toml
+
     from ultrack import Tracker
 
-    cfg: MainConfig = tracking_config
+    _patch_ultrack_readonly_buffer()
+
+    cfg = tracking_config
 
     cfg.data_config.working_dir = database_path
 
-    print(cfg)
+    click.echo(str(cfg))
 
     tracker = Tracker(cfg)
     tracker.track(
         detection=foreground_mask,
         edges=contour_gradient_map,
         scale=scale,
+        overwrite=True,
     )
 
     tracks_df, graph = tracker.to_tracks_layer()
@@ -429,34 +471,9 @@ def run_preprocessing_pipeline(
     - If `per_timepoint` is True for a step, the function will be applied frame-by-frame
       using `ultrack.utils.array.array_apply`.
     - All functions must be registered in the `FUNCTION_MAP` to be resolved.
-
-    Examples
-    --------
-    >>> from biahub.settings import ProcessingInputChannel, ProcessingFunctions
-    >>> import numpy as np
-
-    >>> data_dict = {"raw": np.random.rand(10, 1, 256, 256)}  # shape (T, Z, Y, X)
-
-    >>> input_images = [
-    ...     ProcessingInputChannel(
-    ...         path=None,
-    ...         channels={
-    ...             "raw": [
-    ...                 ProcessingFunctions(
-    ...                     function="np.mean",
-    ...                     kwargs={"axis": 1},
-    ...                     per_timepoint=False,
-    ...                     input_channels=["raw"],
-    ...                 )
-    ...             ]
-    ...         },
-    ...     )
-    ... ]
-
-    >>> output = run_pipeline(data_dict, input_images)
-    >>> output["raw"].shape
-    (10, 256, 256)  # Z-averaged
     """
+    import napari
+
     from ultrack.utils.array import array_apply
 
     for image in input_images:
@@ -530,6 +547,8 @@ def load_data(
     - Uses `read_data()` to extract metadata and index the correct channel.
     - Channel names must match those present in the dataset.
     """
+    import napari
+
     data_dict = {}
     for image in input_images:
         # load the data from the zarr path
@@ -624,19 +643,6 @@ def data_preprocessing(
     ValueError
         If neither 'foreground' and 'contour' nor 'foreground_contour' channels are found
         in the processed data.
-
-    Examples
-    --------
-    >>> z_slice = slice(10, 15)
-    >>> foreground, contour = data_preprocessing(
-    ...     position_key="A_1_3",
-    ...     input_images=config.input_images,
-    ...     z_slices=z_slice,
-    ...     blank_frames_path=Path("blank_frames.csv"),
-    ...     visualize=False,
-    ... )
-    >>> foreground.shape, contour.shape
-    ((10, 5, 256, 256), (10, 5, 256, 256))
     """
     fov = "/".join(position_key)
     data_dict = load_data(
@@ -664,7 +670,7 @@ def track_one_position(
     position_key: str,
     input_images: list[ProcessingInputChannel],
     output_dirpath: Path,
-    tracking_config: MainConfig,
+    tracking_config,
     blank_frames_path: Path = None,
     z_slices: tuple[int, int] = (0, 0),
     scale: tuple[float, float, float, float, float] = (1, 1, 1, 1, 1),
@@ -709,18 +715,6 @@ def track_one_position(
     - Output is saved to `{output_dirpath}/{position_key}/tracks_{position_key}.csv`.
     - The Ultrack config is also saved as TOML in a `_config_tracking/{FOV}/` subdirectory.
     - If required input channels ("foreground" and "contour") are missing, a ValueError is raised.
-
-    Examples
-    --------
-    >>> track_one_position(
-    ...     position_key="A_1_3",
-    ...     input_images=config.input_images,
-    ...     output_dirpath=Path("output.zarr"),
-    ...     tracking_config=cfg,
-    ...     blank_frames_path=Path("blank_frames.csv"),
-    ...     z_slices=(10, 15),
-    ...     scale=(1, 1, 0.5, 0.2, 0.2),
-    ... )
     """
     fov = "_".join(position_key)
     click.echo(f"Processing FOV: {fov.replace('_', '/')}")
@@ -758,161 +752,140 @@ def track_one_position(
     return tracking_labels, tracks_df
 
 
+def _init_output_plate(
+    input_position_dirpaths: list[Path],
+    output_dirpath: Path,
+    settings: TrackingSettings,
+) -> tuple[int, int, int, int, int]:
+    """Create the empty tracking output plate.
+
+    Returns the (T, C, Z_out, Y, X) shape used for resource estimation.
+    """
+    with open_ome_zarr(str(input_position_dirpaths[0]), mode="r") as dataset:
+        T, C, Z, Y, X = dataset.data.shape
+        scale = dataset.scale
+
+    _, Z_out = resolve_z_slice(settings.z_range, Z)
+
+    if settings.mode == "2D":
+        output_shape = (T, 1, 1, Y, X)
+    else:
+        output_shape = (T, 1, Z_out, Y, X)
+
+    position_keys = [Path(p).parts[-3:] for p in input_position_dirpaths]
+
+    input_plate = Path(input_position_dirpaths[0]).parents[2]
+    create_empty_plate(
+        store_path=output_dirpath,
+        position_keys=position_keys,
+        channel_names=[f"{settings.target_channel}_labels"],
+        shape=output_shape,
+        chunks=None,
+        scale=scale,
+        version=resolve_ome_zarr_version(
+            input_position_dirpaths[0], settings.output_ome_zarr_version
+        ),
+        dtype=np.uint32,
+        metadata_sources=input_plate,
+    )
+
+    click.echo(f"Created {output_dirpath} ({len(position_keys)} positions)")
+
+    return (T, C, Z_out, Y, X)
+
+
 def track(
+    input_position_dirpaths: list[str],
     output_dirpath: str,
     config_filepath: str,
     sbatch_filepath: str = None,
-    local: bool = None,
-) -> None:
-    """
-    Launch tracking jobs for multiple imaging positions using foreground and contour data.
-
-    This function orchestrates the tracking of cell trajectories across multiple fields of view (FOVs).
-    It supports any imaging modality, as long as preprocessing produces the required foreground mask
-    and contour gradient map for tracking.
+    cluster: str = "slurm",
+    monitor: bool = True,
+    init_only: bool = False,
+    input_images_path: str | None = None,
+):
+    """Launch tracking jobs for multiple imaging positions.
 
     Parameters
     ----------
+    input_position_dirpaths : list[str]
+        Paths to input position directories (used for plate structure and metadata).
     output_dirpath : str
-        Path to the Zarr store where output labeled segmentations and track data will be saved.
+        Path to the output Zarr store.
     config_filepath : str
-        Path to the YAML configuration file containing tracking and preprocessing settings.
+        Path to the tracking configuration YAML.
     sbatch_filepath : str, optional
-        Path to a SLURM batch script to override default SLURM job parameters. If not provided,
-        defaults for CPUs, memory, and parallelism are used.
-    local : bool, optional
-        If True, runs all tracking jobs sequentially on the local machine instead of submitting via SLURM.
-
-    Returns
-    -------
-    None
-        Results are written directly to disk in the `output_dirpath`. Also logs Submitit job IDs.
-
-    Notes
-    -----
-    - This function mirrors the input Zarr structure in the output store.
-    - Tracking is distributed per FOV using Submitit SLURM array jobs by default.
-    - Tracking configurations (`n_workers`, scale, and output shapes) are inferred from the first FOV.
-    - Output logs are saved to `output_dirpath/../slurm_output/submitit_jobs_ids.log`.
-
-    Examples
-    --------
-    >>> track(
-    ...     output_dirpath="output.zarr",
-    ...     config_filepath="config_tracking.yml",
-    ...     sbatch_filepath="track_job.sbatch",
-    ...     local=False,
-    ... )
+        Path to a SLURM batch file to override defaults.
+    cluster : str, optional
+        Execution cluster: 'slurm', 'local', or 'debug'.
+    monitor : bool, optional
+        If True, monitor submitted jobs.
+    init_only : bool, optional
+        Only initialize the output store and exit.
+    input_images_path : str, optional
+        Override the first null input_images path in config (used by Nextflow).
     """
     from ultrack import MainConfig
 
     output_dirpath = Path(output_dirpath)
-    dataset_name = output_dirpath.stem
-    database_path = output_dirpath.parent / f"{dataset_name}_config_tracking"
-
-    if output_dirpath.exists():
-        raise ValueError(
-            f"Output directory {output_dirpath} already exists. Please choose a  output path."
-        )
-    if database_path.exists():
-        raise ValueError(
-            f"Tracking database directory {database_path} already exists. Please choose a output path."
-        )
+    slurm_out_path = output_dirpath.parent / "slurm_output"
 
     settings = yaml_to_model(config_filepath, TrackingSettings)
 
-    input_images_paths = [
-        image.path for image in settings.input_images if image.path is not None
-    ]
-    if len(input_images_paths) < 1:
-        raise ValueError("No input_images_paths provided")
-    fov = settings.fov
+    if input_images_path is not None:
+        for image in settings.input_images:
+            if image.path is None:
+                image.path = Path(input_images_path)
+                break
 
-    # check if all input_images_paths have the same position keys.
-    # Filter to directories so per-group `zarr.json` metadata (OME-Zarr v0.5
-    # / zarr v3) isn't picked up by wildcards like "*/*/*".
-    input_position_dirpaths = [
-        Path(p) for p in glob(str(input_images_paths[0] / fov)) if Path(p).is_dir()
-    ]
-    position_keys = [p.parts[-3:] for p in input_position_dirpaths]
+    output_shape = _init_output_plate(input_position_dirpaths, output_dirpath, settings)
+    T, C, Z_out, Y, X = output_shape
 
-    tracking_cfg = settings.tracking_config
+    num_cpus, gb_ram_per_cpu = estimate_resources(
+        shape=[T, C, Z_out, Y, X], ram_multiplier=16, max_num_cpus=16
+    )
+    echo_resources(num_cpus, num_cpus * gb_ram_per_cpu, time_minutes=60)
 
-    # Get the shape of the data
-    with open_ome_zarr(input_position_dirpaths[0]) as dataset:
+    if init_only:
+        return
+
+    # Read shape/scale from the first input position for tracking parameters
+    with open_ome_zarr(str(input_position_dirpaths[0]), mode="r") as dataset:
         T, C, Z, Y, X = dataset.data.shape
         scale = dataset.scale
 
-    # Resolve z-slices
-    z_slices, Z = resolve_z_slice(settings.z_range, Z)
+    z_slices, _ = resolve_z_slice(settings.z_range, Z)
+    track_scale = scale[-2:] if settings.mode == "2D" else scale[-3:]
 
-    # Define output metadata
-    if settings.mode == "2D":
-        output_shape = (T, 1, 1, Y, X)
-        track_scale = scale[-2:]
-    else:
-        output_shape = (T, 1, Z, Y, X)
-        track_scale = scale[-3:]
-
-    output_metadata = {
-        "shape": output_shape,
-        "chunks": None,
-        "scale": scale,
-        "channel_names": [f"{settings.target_channel}_labels"],
-        "dtype": np.uint32,
-        "version": resolve_ome_zarr_version(
-            input_position_dirpaths[0], settings.output_ome_zarr_version
-        ),
-    }
-
-    # Create the output zarr mirroring input_position_dirpaths
-    create_empty_plate(
-        store_path=output_dirpath,
-        position_keys=position_keys,
-        **output_metadata,
-    )
-
-    # Estimate resources
-    num_cpus, gb_ram_per_cpu = estimate_resources(
-        shape=[T, C, Z, Y, X], ram_multiplier=16, max_num_cpus=16
-    )
-
-    # Use the number of CPUs and RAM per CPU in the tracking configuration
+    tracking_cfg = settings.tracking_config
     tracking_cfg["segmentation_config"]["n_workers"] = num_cpus
     tracking_cfg["linking_config"]["n_workers"] = num_cpus
-
-    # Create default instance
     default_config = MainConfig()
     tracking_cfg = update_model(default_config, tracking_cfg)
 
-    # Prepare SLURM arguments
+    position_keys = [Path(p).parts[-3:] for p in input_position_dirpaths]
+
     slurm_args = {
         "slurm_job_name": "tracking",
         "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
         "slurm_cpus_per_task": num_cpus,
-        "slurm_array_parallelism": 100,  # process up to 100 positions at a time
+        "slurm_array_parallelism": 100,
         "slurm_time": 60,
         "slurm_partition": "preempted",
         "slurm_gpus_per_node": 1,
         "slurm_use_srun": False,
     }
 
-    # Override defaults if sbatch_filepath is provided
     if sbatch_filepath:
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
-    # Run locally or submit to SLURM
-    cluster = get_submitit_cluster(local)
-
-    # Prepare and submit jobs
-    click.echo(f"Preparing jobs: {slurm_args}")
-    slurm_out_path = output_dirpath.parent / "slurm_output"
-    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
+    resolved_cluster = get_submitit_cluster(cluster=cluster)
+    click.echo(f"Preparing jobs on cluster='{resolved_cluster}': {slurm_args}")
+    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=resolved_cluster)
     executor.update_parameters(**slurm_args)
 
-    click.echo("Submitting SLURM jobs...")
+    click.echo("Submitting jobs...")
     jobs = []
-
     with submitit.helpers.clean_env(), executor.batch():
         for position_key in position_keys:
             job = executor.submit(
@@ -925,44 +898,76 @@ def track(
                 z_slices=z_slices,
                 scale=track_scale,
             )
-
             jobs.append(job)
 
-    job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
-
+    job_ids = [job.job_id for job in jobs]
     slurm_out_path.mkdir(exist_ok=True)
     log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
 
+    # submitit's DebugExecutor is lazy: .submit() wraps the callable in a
+    # DebugJob but execution only happens when .wait()/.done()/.result() is
+    # called.  On the Nextflow path (--cluster debug) we run in-process so
+    # Nextflow handles the fan-out and resource scheduling.
+    if resolved_cluster == "debug":
+        for job, pk in zip(jobs, position_keys, strict=True):
+            job.wait()
+            click.echo(f"Tracking complete: {'/'.join(pk)}")
+        return
+
+    if monitor:
+        monitor_jobs(jobs, input_position_dirpaths)
+
 
 @click.command("track")
+@input_position_dirpaths()
 @output_dirpath()
 @config_filepath()
 @sbatch_filepath()
-@local()
+@cluster()
+@monitor()
+@init_only()
+@click.option(
+    "--input-images-path",
+    default=None,
+    type=click.Path(exists=True),
+    help="Override the first null input_images path from config (used by Nextflow).",
+)
 def track_cli(
+    input_position_dirpaths: list[str],
     output_dirpath: str,
     config_filepath: Path,
     sbatch_filepath: str = None,
-    local: bool = None,
-) -> None:
-    """Track objects in 2D or 3D time-lapse microscopy data using configurable preprocessing.
+    cluster: str = "slurm",
+    monitor: bool = False,
+    init_only: bool = False,
+    input_images_path: str | None = None,
+):
+    r"""Track objects in 2D or 3D time-lapse microscopy data using configurable preprocessing.
 
-    This command applies preprocessing, handles optional blank frame filling, and performs
-    object tracking on each position using the Ultrack library. Compatible with any image
-    modality as long as it produces 'foreground' and 'contour' inputs.
+    \b
+    Initialize the output plate only (Nextflow init step):
+    >>> biahub track --init -i ./reconstruct.zarr/*/*/* -o ./track.zarr -c config.yml
 
-    >>> biahub track \
-        -i virtual_staining.zarr/*/*/* \
-        -o output.zarr \
-        -c config_tracking.yml
+    \b
+    In-process run of a single position (Nextflow per-position worker):
+    >>> biahub track --cluster debug -i ./reconstruct.zarr/B/3/000000 \
+        -o ./track.zarr -c config.yml --input-images-path ./virtual-stain.zarr
+
+    \b
+    Full SLURM fan-out:
+    >>> biahub track -i ./reconstruct.zarr/*/*/* -o ./track.zarr -c config.yml
     """
     track(
+        input_position_dirpaths=input_position_dirpaths,
         output_dirpath=output_dirpath,
         config_filepath=config_filepath,
         sbatch_filepath=sbatch_filepath,
-        local=local,
+        cluster=cluster,
+        monitor=monitor,
+        init_only=init_only,
+        input_images_path=input_images_path,
     )
 
 

@@ -71,7 +71,7 @@ COMMANDS = [
     },
     {
         "name": "flat-field",
-        "import_path": "biahub.flat_field_correction.flat_field_correction_cli",
+        "import_path": "biahub.flat_field.flat_field_cli",
         "help": "Apply flat field correction to selected channels",
     },
     {
@@ -173,6 +173,11 @@ COMMANDS = [
         "name": "track",
         "import_path": "biahub.track.track_cli",
         "help": "Track objects in 2D/3D time-lapse microscopy",
+    },
+    {
+        "name": "rename-channels",
+        "import_path": "biahub.rename_channels.rename_channels_cli",
+        "help": "Rename channels for a single position (metadata-only)",
     },
 ]
 

@@ -1,3 +1,4 @@
+import json
 import time
 
 from pathlib import Path
@@ -232,6 +233,7 @@ def _init_output_plate(
     output_dirpath: Path,
     target_channels: list[str],
     output_ome_zarr_version: str | None = None,
+    extra_metadata: dict | None = None,
 ) -> tuple[int, int, int, int, int]:
     """Create (or extend) the empty virtual-stain output plate.
 
@@ -241,6 +243,10 @@ def _init_output_plate(
 
     ``output_ome_zarr_version`` dictates the output store's OME-Zarr version;
     when None the input store's version is preserved.
+
+    Each key of ``extra_metadata`` is written as a top-level zattr on every
+    output position (mirroring ``process_single_position``), recording
+    provenance such as the validated predict config.
 
     Returns the input ``(T, C, Z, Y, X)`` shape.
     """
@@ -258,14 +264,23 @@ def _init_output_plate(
         version=resolve_ome_zarr_version(input_position_dirpaths[0], output_ome_zarr_version),
     )
 
+    if extra_metadata:
+        for input_position_dirpath in input_position_dirpaths:
+            position_key = Path(input_position_dirpath).parts[-3:]
+            with open_ome_zarr(
+                str(Path(output_dirpath).joinpath(*position_key)), mode="r+"
+            ) as output_position:
+                for key, value in extra_metadata.items():
+                    output_position.zattrs[key] = value
+
     return (T, C, Z, Y, X)
 
 
 def virtual_stain(
-    input_position_dirpaths: list[str],
+    input_position_dirpaths: list[Path],
     config_filepath: Path,
-    output_dirpath: str,
-    sbatch_filepath: str = None,
+    output_dirpath: Path,
+    sbatch_filepath: str | None = None,
     cluster: str = "slurm",
     monitor: bool = True,
     init_only: bool = False,
@@ -279,11 +294,11 @@ def virtual_stain(
 
     Parameters
     ----------
-    input_position_dirpaths : list[str]
+    input_position_dirpaths : list[Path]
         Input position directory paths.
     config_filepath : Path
         Path to the VisCy-style predict config.
-    output_dirpath : str
+    output_dirpath : Path
         Output plate path.
     sbatch_filepath : str, optional
         SBATCH file overriding default SLURM parameters.
@@ -315,17 +330,25 @@ def virtual_stain(
 
     # Validate the config against VisCy's schema up front (using the first
     # position for data_path) and read the predicted channel names.
-    _, cfg = load_predict_config(config_filepath, input_position_dirpaths[0])
+    parser, cfg = load_predict_config(config_filepath, input_position_dirpaths[0])
     target_channels = cfg.data.init_args.target_channel
     target_channels = (
         [target_channels] if isinstance(target_channels, str) else target_channels
     )
+
+    # Record the validated predict config (VisCy jsonargparse namespace dumped to
+    # a JSON-serializable dict) as provenance on each output position. Drop the
+    # per-position data_path biahub injected for submit-time validation; it is
+    # not part of the config the user supplied.
+    config_metadata = json.loads(parser.dump(cfg, format="json"))
+    config_metadata.get("data", {}).get("init_args", {}).pop("data_path", None)
 
     input_shape = _init_output_plate(
         input_position_dirpaths,
         output_dirpath,
         target_channels,
         cfg.output_ome_zarr_version,
+        extra_metadata={"cytoland": config_metadata},
     )
 
     # Timepoints are processed sequentially on a single GPU, so resource needs
@@ -384,7 +407,7 @@ def virtual_stain(
 
     job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 
-    slurm_out_path.mkdir(parents=True, exist_ok=True)
+    slurm_out_path.mkdir(exist_ok=True)
     log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
@@ -412,10 +435,10 @@ def virtual_stain(
 @monitor()
 @init_only()
 def virtual_stain_cli(
-    input_position_dirpaths: list[str],
+    input_position_dirpaths: list[Path],
     config_filepath: Path,
-    output_dirpath: str,
-    sbatch_filepath: str = None,
+    output_dirpath: Path,
+    sbatch_filepath: str | None = None,
     cluster: str = "slurm",
     monitor: bool = False,
     init_only: bool = False,
