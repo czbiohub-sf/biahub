@@ -1,0 +1,44 @@
+# Virtual staining (cytoland / VisCy) predict config for `biahub virtual-stain`.
+# This is a `viscy predict` config and is validated against VisCy's own
+# VSUNet / HCSDataModule classes. `data.init_args.data_path` is injected by
+# biahub per position, so it is omitted here.
+model:
+  class_path: cytoland.engine.VSUNet
+  init_args:
+    architecture: fcmae
+    model_config:
+      in_channels: 1
+      out_channels: 2
+      in_stack_depth: 15
+      encoder_blocks: [3, 3, 9, 3]
+      dims: [96, 192, 384, 768]
+      decoder_conv_blocks: 2
+      stem_kernel_size: [5, 4, 4]
+      pretraining: false
+    test_time_augmentations: true
+    tta_type: median
+
+data:
+  class_path: viscy_data.hcs.HCSDataModule
+  init_args:
+    source_channel: Phase3D
+    target_channel: [nuclei, membrane]
+    z_window_size: 15  # must match model in_stack_depth
+    # No effect on biahub: predict_sliding_windows processes one z-window at a
+    # time. Kept for parity with `viscy predict` configs.
+    batch_size: 1
+    normalizations:
+      - class_path: viscy_transforms.NormalizeSampled
+        init_args:
+          keys: [Phase3D]
+          level: fov_statistics
+          subtrahend: median
+          divisor: iqr
+
+ckpt_path: /hpc/projects/comp.micro/virtual_staining/models/fcmae-cyto3d-sensor/vscyto3d-logs/hek-a549-ipsc-finetune/checkpoints/epoch=83-step=14532-loss=0.492.ckpt
+
+# Optional biahub orchestration knobs (defaults shown).
+sliding_window_step: 1  # Z step for the sliding window; 1 = maximum overlap.
+device: cuda  # torch device for inference.
+# Output OME-Zarr version: null preserves the input store's version; "0.4" or "0.5" overrides.
+output_ome_zarr_version: null

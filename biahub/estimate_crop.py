@@ -21,6 +21,7 @@ from biahub.cli.parsing import (
 )
 from biahub.cli.slurm import wait_for_jobs_to_finish
 from biahub.cli.utils import (
+    echo_resources,
     estimate_resources,
     get_submitit_cluster,
     model_to_yaml,
@@ -168,7 +169,7 @@ def _init_estimate_crop(lf_data_path: str, ls_data_path: str):
 
     volume_gb = T * Z * Y * X * np.dtype(dtype).itemsize / 2**30
     total_gb = max(8, int(np.ceil(volume_gb * 4)))
-    click.echo(f"RESOURCES:1 {total_gb}")
+    echo_resources(1, total_gb, time_minutes=30)
 
     for lf_pos, ls_pos in zip(lf_positions, ls_positions, strict=True):
         click.echo(f"POSITION:{lf_pos}\t{ls_pos}")

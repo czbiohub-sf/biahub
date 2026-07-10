@@ -27,6 +27,7 @@ from biahub.cli.parsing import (
 )
 from biahub.cli.resolve_function import resolve_function
 from biahub.cli.utils import (
+    echo_resources,
     estimate_resources,
     get_submitit_cluster,
     resolve_ome_zarr_version,
@@ -843,7 +844,7 @@ def track(
     num_cpus, gb_ram_per_cpu = estimate_resources(
         shape=[T, C, Z_out, Y, X], ram_multiplier=16, max_num_cpus=16
     )
-    click.echo(f"RESOURCES:{num_cpus} {num_cpus * gb_ram_per_cpu}")
+    echo_resources(num_cpus, num_cpus * gb_ram_per_cpu, time_minutes=60)
 
     if init_only:
         return

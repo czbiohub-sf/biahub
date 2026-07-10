@@ -22,6 +22,7 @@ from biahub.cli.parsing import (
 )
 from biahub.cli.utils import (
     copy_n_paste,
+    echo_resources,
     estimate_resources,
     get_output_paths,
     get_submitit_cluster,
@@ -351,7 +352,7 @@ def _init_concatenate(settings: ConcatenateSettings, output_dirpath: Path):
         ram_multiplier=4 * batch_size,
         max_num_cpus=16,
     )
-    click.echo(f"RESOURCES:{num_cpus} {num_cpus * mem_per_cpu}")
+    echo_resources(num_cpus, num_cpus * mem_per_cpu, time_minutes=60)
 
 
 def _run_concatenate_one_position(

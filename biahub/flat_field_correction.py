@@ -20,6 +20,7 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.cli.utils import (
+    echo_resources,
     estimate_resources,
     get_submitit_cluster,
     resolve_ome_zarr_version,
@@ -112,7 +113,6 @@ def _init_output_plate(
         position_keys=[Path(p).parts[-3:] for p in input_position_dirpaths],
         channel_names=all_channel_names,
         shape=(T, C, Z, Y, X),
-        chunks=None,
         scale=scale,
         version=resolve_ome_zarr_version(
             input_position_dirpaths[0], settings.output_ome_zarr_version
@@ -162,8 +162,12 @@ def flat_field(
     )
 
     T, C, Z, Y, X = input_shape
-    num_cpus, gb_ram = estimate_resources(shape=input_shape, ram_multiplier=5)
-    click.echo(f"RESOURCES:{num_cpus} {num_cpus * gb_ram}")
+    num_cpus, gb_ram_per_cpu = estimate_resources(
+        shape=input_shape, ram_multiplier=8, max_num_cpus=16
+    )
+    mem_gb = num_cpus * gb_ram_per_cpu
+    time_minutes = 60
+    echo_resources(num_cpus, mem_gb, time_minutes)
 
     if init_only:
         click.echo(f"Initialized {output_dirpath} ({len(input_position_dirpaths)} positions)")
@@ -174,15 +178,15 @@ def flat_field(
 
     flat_field_args = {
         "target_indices": target_indices,
-        "extra_metadata": {"flat_field_correction": settings.model_dump()},
+        "extra_metadata": {"biahub-flat_field": settings.model_dump()},
     }
 
     slurm_args = {
         "slurm_job_name": "flat-field",
-        "slurm_mem_per_cpu": f"{gb_ram}G",
+        "slurm_mem": f"{mem_gb}G",
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,
-        "slurm_time": 360,
+        "slurm_time": time_minutes,
         "slurm_partition": "cpu",
     }
 
@@ -214,7 +218,6 @@ def flat_field(
     job_ids = [job.job_id for job in jobs]
     slurm_out_path.mkdir(exist_ok=True)
     log_path = slurm_out_path / "submitit_jobs_ids.log"
-    log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
 
@@ -249,7 +252,7 @@ def flat_field_correction_cli(
     monitor: bool = False,
     init_only: bool = False,
 ):
-    r"""Apply flat field correction across T and selected C axes.
+    """Apply flat field correction across T and selected C axes.
 
     \b
     SLURM fan-out of positions across a whole plate:
@@ -262,7 +265,7 @@ def flat_field_correction_cli(
     \b
     In-process run of a single position (e.g. from a Nextflow worker):
     >>> biahub flat-field --cluster debug -i ./input.zarr/A/1/0 -c ./flat_field_params.yml -o ./output.zarr
-    """
+    """  # noqa: D301
     flat_field(
         input_position_dirpaths=input_position_dirpaths,
         config_filepath=config_filepath,

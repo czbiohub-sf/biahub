@@ -20,7 +20,7 @@ classifiers = [
 
 dependencies = [
   "click",
-  "iohub>=0.3.7",
+  "iohub>=0.3.8",
   "matplotlib",
   "natsort",
   "numpy",
@@ -32,7 +32,7 @@ dependencies = [
   "submitit",
   "torch",
   "tqdm",
-  "waveorder>=0.3",
+  "waveorder>=3.0.4",
   "largestinteriorrectangle",
   "antspyx",
   "pystackreg",
@@ -50,16 +50,14 @@ segment = ["cellpose"]
 
 track = ["ultrack>=0.7"]
 
-gui = ["napari[pyqt6]", "PyQt6>=6.5,<6.8", "napari-animation"]
+# PyQt6>=6.10 does not provide wheels
+gui = ["napari[pyqt6]", "PyQt6<6.10", "napari-animation"]
 
-# TODO: resolved to v0.3.2 which is not compatible with iohub 0.3.0a7
-# bring bach once we sort out iohub dependencies
-# stain = ["viscy"]
-stain = []
+stain = ["cytoland"]
+
+all = ["biahub[segment,track,gui,stain]"]
 
 build = ["build", "twine"]
-
-all = ["biahub[segment,track,build,gui,stain]"]
 
 doc = [
     "zensical>=0.0.32",
@@ -68,7 +66,7 @@ doc = [
 
 [dependency-groups]
 dev = [
-  "biahub[segment,track,build]",
+  "biahub[all,build]",
   "pre-commit~=4.5",
   "pytest~=8.4",
   "ruff~=0.15",
@@ -82,6 +80,11 @@ biahub = "biahub.cli.main:cli"
 # when resolving build-system requirements such as iohub's hatchling /
 # uv-dynamic-versioning chain, which pulls in packaging>=24.2.
 index-strategy = "unsafe-best-match"
+
+[tool.uv.sources]
+# Pin cytoland to the commit from VisCy PR #465 (non-square TTA and helpers).
+# Revert to the PyPI release once that PR is merged and published.
+cytoland = { git = "https://github.com/mehta-lab/VisCy", subdirectory = "applications/cytoland", rev = "4b62365c0df25929bffc7f01b3bb2d1c11d69cce" }
 
 [tool.hatch.metadata]
 allow-direct-references = true
