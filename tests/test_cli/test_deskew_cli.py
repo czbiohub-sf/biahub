@@ -5,6 +5,7 @@ from click.testing import CliRunner
 
 from biahub import deskew
 from biahub.cli.main import cli
+from biahub.cli.utils import estimate_resources
 
 
 def test_average_n_slices():
@@ -136,6 +137,51 @@ def test_deskew_cli_debug_single_position(tmp_path, example_plate, example_deske
     assert result.exit_code == 0, result.output
     assert output_path.exists()
     assert "Deskew complete:" in result.output
+
+
+def test_deskew_cli_multiprocess(
+    tmp_path, example_plate, example_deskew_settings, monkeypatch
+):
+    """Integration test of the real production path: deskew with num_cpus > 1.
+
+    The suite forces ``num_cpus=1`` in CI (see ``estimate_resources``) so tests
+    don't pay the ProcessPoolExecutor spawn cost. This test drops the ``CI`` flag
+    so deskew runs through the genuine multi-worker path, guarding against
+    regressions that the serial fast-path would otherwise hide (e.g. failures in
+    worker spawning or pickling of the per-position work).
+    """
+    monkeypatch.delenv("CI", raising=False)
+
+    plate_path, _ = example_plate
+    config_path, _ = example_deskew_settings
+    output_path = tmp_path / "output.zarr"
+
+    # With CI unset, the example plate (T*C = 3*6) resolves to more than one
+    # worker, so the run genuinely spawns a process pool.
+    num_cpus, _ = estimate_resources(shape=(3, 6, 4, 5, 6), ram_multiplier=8, max_num_cpus=16)
+    assert num_cpus > 1
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "deskew",
+            "-i",
+            str(plate_path) + "/A/1/0",
+            "-c",
+            str(config_path),
+            "-o",
+            str(output_path),
+            "--cluster",
+            "debug",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert output_path.exists()
+    assert "Deskew complete:" in result.output
+    # Confirm the real multi-worker path ran, not the serial fallback.
+    assert "multiprocess pool" in result.output
 
 
 def test_deskew_overhang_only_dataset_error():
