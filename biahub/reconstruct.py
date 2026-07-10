@@ -28,9 +28,9 @@ def reconstruct_cli(
     input_position_dirpaths: list[Path],
     config_filepath: Path,
     output_dirpath: Path,
-    sbatch_filepath: Path,
-    cluster: str,
-    monitor: bool = True,
+    sbatch_filepath: str | None = None,
+    cluster: str = "slurm",
+    monitor: bool = False,
 ):
     """Reconstruct a dataset using a configuration file.
 
@@ -44,8 +44,9 @@ def reconstruct_cli(
 
     See https://github.com/mehta-lab/waveorder/tree/main/docs/examples for example configuration files.
 
+    \b
     >>> biahub reconstruct -i ./input.zarr/*/*/* -c ./examples/birefringence.yml -o ./output.zarr
-    """
+    """  # noqa: D301
     # glob all positions in input_position_dirpaths
 
     # Handle transfer function path
