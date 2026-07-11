@@ -1,3 +1,5 @@
+import warnings
+
 from pathlib import Path
 
 import click
@@ -29,7 +31,7 @@ from biahub.cli.utils import (
 from biahub.settings import FlatFieldCorrectionSettings
 
 
-def flat_field_correction(zyx_data: np.ndarray, axis: int = 0) -> np.ndarray:
+def flat_field_zyx(zyx_data: np.ndarray, axis: int = 0) -> np.ndarray:
     """Apply flat field correction by dividing out the median pattern along an axis.
 
     Parameters
@@ -49,7 +51,34 @@ def flat_field_correction(zyx_data: np.ndarray, axis: int = 0) -> np.ndarray:
     return zyx_data / static_pattern * static_pattern.mean()
 
 
-def _czyx_flat_field(czyx_data: np.ndarray, target_indices: list[int]) -> np.ndarray:
+def flat_field_correction(zyx_data: np.ndarray, axis: int = 0) -> np.ndarray:
+    """Apply flat field correction (deprecated alias for :func:`flat_field_zyx`).
+
+    .. deprecated::
+        Renamed to :func:`flat_field_zyx` to follow the ``<verb>_zyx`` layer-1
+        naming convention. This alias will be removed in a future release.
+
+    Parameters
+    ----------
+    zyx_data : np.ndarray
+        The data to apply flat field correction to.
+    axis : int
+        The axis to compute the median along.
+
+    Returns
+    -------
+    np.ndarray
+        Flat-field corrected data (see :func:`flat_field_zyx`).
+    """
+    warnings.warn(
+        "flat_field_correction is deprecated; use flat_field_zyx instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return flat_field_zyx(zyx_data, axis=axis)
+
+
+def _flat_field_czyx(czyx_data: np.ndarray, target_indices: list[int]) -> np.ndarray:
     """Apply flat-field correction to selected channels of a CZYX volume.
 
     Channels listed in ``target_indices`` are corrected; the rest are
@@ -59,36 +88,10 @@ def _czyx_flat_field(czyx_data: np.ndarray, target_indices: list[int]) -> np.nda
     target = set(target_indices)
     for c in range(czyx_data.shape[0]):
         if c in target:
-            out[c] = flat_field_correction(czyx_data[c])
+            out[c] = flat_field_zyx(czyx_data[c])
         else:
             out[c] = czyx_data[c].astype(np.float32)
     return out
-
-
-def _resolve_target_indices(
-    settings: FlatFieldCorrectionSettings,
-    all_channel_names: list[str],
-) -> list[int]:
-    """Resolve which channel indices to flat-field correct."""
-    if settings.channel_names is None:
-        target_channel_names = all_channel_names
-        click.echo(f"Flat fielding ALL channels: {all_channel_names}")
-    elif settings.channel_names:
-        for name in settings.channel_names:
-            if name not in all_channel_names:
-                raise click.ClickException(
-                    f"Channel '{name}' not found in input dataset. "
-                    f"Available channels: {all_channel_names}"
-                )
-        target_channel_names = settings.channel_names
-        click.echo(f"Input channels: {all_channel_names}")
-        click.echo(f"Flat field channels: {target_channel_names}")
-        click.echo("Other channels will be copied as-is")
-    else:
-        raise click.ClickException(
-            "Must specify either 'channel_names' or set channel_names to null in config."
-        )
-    return [all_channel_names.index(name) for name in target_channel_names]
 
 
 def _init_output_plate(
@@ -124,11 +127,37 @@ def _init_output_plate(
     return (T, C, Z, Y, X), all_channel_names
 
 
+def _resolve_target_indices(
+    settings: FlatFieldCorrectionSettings,
+    all_channel_names: list[str],
+) -> list[int]:
+    """Resolve which channel indices to flat-field correct."""
+    if settings.channel_names is None:
+        target_channel_names = all_channel_names
+        click.echo(f"Flat fielding ALL channels: {all_channel_names}")
+    elif settings.channel_names:
+        for name in settings.channel_names:
+            if name not in all_channel_names:
+                raise click.ClickException(
+                    f"Channel '{name}' not found in input dataset. "
+                    f"Available channels: {all_channel_names}"
+                )
+        target_channel_names = settings.channel_names
+        click.echo(f"Input channels: {all_channel_names}")
+        click.echo(f"Flat field channels: {target_channel_names}")
+        click.echo("Other channels will be copied as-is")
+    else:
+        raise click.ClickException(
+            "Must specify either 'channel_names' or set channel_names to null in config."
+        )
+    return [all_channel_names.index(name) for name in target_channel_names]
+
+
 def flat_field(
-    input_position_dirpaths: list[str],
+    input_position_dirpaths: list[Path],
     config_filepath: Path,
-    output_dirpath: str,
-    sbatch_filepath: str = None,
+    output_dirpath: Path,
+    sbatch_filepath: str | None = None,
     cluster: str = "slurm",
     monitor: bool = True,
     init_only: bool = False,
@@ -137,11 +166,11 @@ def flat_field(
 
     Parameters
     ----------
-    input_position_dirpaths : list[str]
+    input_position_dirpaths : list[Path]
         Paths to the input position directories.
     config_filepath : Path
         Path to the configuration file.
-    output_dirpath : str
+    output_dirpath : Path
         Path to the output directory.
     sbatch_filepath : str, optional
         Path to the SLURM batch file.
@@ -161,7 +190,6 @@ def flat_field(
         input_position_dirpaths, output_dirpath, settings
     )
 
-    T, C, Z, Y, X = input_shape
     num_cpus, gb_ram_per_cpu = estimate_resources(
         shape=input_shape, ram_multiplier=8, max_num_cpus=16
     )
@@ -185,9 +213,9 @@ def flat_field(
         "slurm_job_name": "flat-field",
         "slurm_mem": f"{mem_gb}G",
         "slurm_cpus_per_task": num_cpus,
-        "slurm_array_parallelism": 100,
+        "slurm_array_parallelism": 100,  # process up to 100 positions at a time
         "slurm_time": time_minutes,
-        "slurm_partition": "cpu",
+        "slurm_partition": "preempted",
     }
 
     if sbatch_filepath:
@@ -207,10 +235,10 @@ def flat_field(
             jobs.append(
                 executor.submit(
                     process_single_position,
-                    _czyx_flat_field,
+                    _flat_field_czyx,
                     input_position_path,
                     output_position_path,
-                    num_workers=int(slurm_args["slurm_cpus_per_task"]),
+                    num_workers=slurm_args["slurm_cpus_per_task"],
                     **flat_field_args,
                 )
             )
@@ -243,11 +271,11 @@ def flat_field(
 @cluster()
 @monitor()
 @init_only()
-def flat_field_correction_cli(
-    input_position_dirpaths: list[str],
+def flat_field_cli(
+    input_position_dirpaths: list[Path],
     config_filepath: Path,
-    output_dirpath: str,
-    sbatch_filepath: str = None,
+    output_dirpath: Path,
+    sbatch_filepath: str | None = None,
     cluster: str = "slurm",
     monitor: bool = False,
     init_only: bool = False,
@@ -278,4 +306,4 @@ def flat_field_correction_cli(
 
 
 if __name__ == "__main__":
-    flat_field_correction_cli()
+    flat_field_cli()
