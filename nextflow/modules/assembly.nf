@@ -18,8 +18,9 @@
 // Like the other steps, a cheap `--init` step on the login node creates the
 // output plate (create_empty_plate is idempotent) and emits the RESOURCES line
 // that sizes the compute node. Path injection: the source zarr paths are
-// Nextflow runtime values, so `--resolve-config` templates them into
-// concat_data_paths — also a login-node step — before init/run read the config.
+// Nextflow runtime values, so passing `--concat-data-paths` templates them into
+// concat_data_paths (resolve mode) — also a login-node step — before init/run
+// read the config.
 
 include { parse_resources; biahub_cmd; slurm_logs; slurm_log_dir } from './common'
 
@@ -39,15 +40,15 @@ process resolve_concatenate_config {
     path "concatenate_resolved.yml"
 
     // Write the resolved config alongside the source config (config_dir) so it
-    // sits with the rest of the run's configs. `rm -f` first because
-    // `--resolve-config -o` refuses to overwrite an existing file, so a rerun
-    // would otherwise fail on the stale copy.
+    // sits with the rest of the run's configs. `rm -f` first because resolve
+    // mode's `-o` refuses to overwrite an existing file, so a rerun would
+    // otherwise fail on the stale copy.
     script:
     def resolved = "${config_dir}/concatenate_resolved.yml"
     """
     mkdir -p "${config_dir}"
     rm -f "${resolved}"
-    ${biahub_cmd()} concatenate --resolve-config \
+    ${biahub_cmd()} concatenate \
         -c "${config}" \
         -o "${resolved}" \
         --concat-data-paths "${deskew_zarr}/*/*/*" \

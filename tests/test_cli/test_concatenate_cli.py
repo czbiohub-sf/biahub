@@ -8,11 +8,12 @@ from biahub.cli.main import cli
 
 
 def test_resolve_config_blank_concat_data_paths(tmp_path):
-    """`--resolve-config` must fill a blank concat_data_paths in the source config.
+    """Passing --concat-data-paths resolves a blank concat_data_paths config.
 
-    Regression guard: the Nextflow config leaves concat_data_paths empty for the
-    pipeline to inject, so resolution must apply the override before validating
-    (concat_data_paths is a required non-empty list on ConcatenateSettings).
+    Regression guard: --concat-data-paths selects resolve mode and fills the
+    (intentionally blank, for Nextflow to inject) concat_data_paths, applying the
+    override before validating — concat_data_paths is a required non-empty list
+    on ConcatenateSettings.
     """
     config_path = tmp_path / "concatenate.yml"
     config_path.write_text(
@@ -27,7 +28,6 @@ def test_resolve_config_blank_concat_data_paths(tmp_path):
         cli,
         [
             "concatenate",
-            "--resolve-config",
             "-c",
             str(config_path),
             "-o",
