@@ -7,6 +7,43 @@ from iohub.ngff import open_ome_zarr
 from biahub.cli.main import cli
 
 
+def test_resolve_config_blank_concat_data_paths(tmp_path):
+    """`--resolve-config` must fill a blank concat_data_paths in the source config.
+
+    Regression guard: the Nextflow config leaves concat_data_paths empty for the
+    pipeline to inject, so resolution must apply the override before validating
+    (concat_data_paths is a required non-empty list on ConcatenateSettings).
+    """
+    config_path = tmp_path / "concatenate.yml"
+    config_path.write_text(
+        "concat_data_paths:\n\n"
+        "time_indices: all\n"
+        "channel_names:\n- all\n- all\n"
+        'output_ome_zarr_version: "0.5"\n'
+    )
+    resolved = tmp_path / "concatenate_resolved.yml"
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "concatenate",
+            "--resolve-config",
+            "-c",
+            str(config_path),
+            "-o",
+            str(resolved),
+            "--concat-data-paths",
+            "deskew.zarr/*/*/*",
+            "--concat-data-paths",
+            "reconstruct.zarr/*/*/*",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    out = yaml.safe_load(resolved.read_text())
+    assert out["concat_data_paths"] == ["deskew.zarr/*/*/*", "reconstruct.zarr/*/*/*"]
+
+
 def test_cluster_debug_single_shot(create_custom_plate, tmp_path):
     """`concatenate --cluster debug` (no -p) must run the whole plate in-process
     and block until every position is written.

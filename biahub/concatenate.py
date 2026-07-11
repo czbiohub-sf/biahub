@@ -5,6 +5,7 @@ from pathlib import Path
 import click
 import numpy as np
 import submitit
+import yaml
 
 from iohub import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate, process_single_position
@@ -400,11 +401,19 @@ def _resolve_concatenate_config(
     output_config: Path,
     concat_data_paths: tuple[str, ...],
 ):
-    """Resolve placeholder concat_data_paths without cropping."""
-    settings = yaml_to_model(config_path, ConcatenateSettings)
-    output_model = settings.model_copy()
-    output_model.concat_data_paths = list(concat_data_paths)
-    model_to_yaml(output_model, output_config)
+    """Fill in concat_data_paths and write the resolved config.
+
+    The source config's ``concat_data_paths`` is a placeholder — typically left
+    blank so Nextflow can inject the upstream store paths at runtime — so the
+    override is applied to the raw YAML *before* validation. ConcatenateSettings
+    requires ``concat_data_paths`` to be a non-empty list, which a blank
+    placeholder is not.
+    """
+    with open(config_path) as f:
+        raw = yaml.safe_load(f)
+    raw["concat_data_paths"] = list(concat_data_paths)
+    settings = ConcatenateSettings(**raw)
+    model_to_yaml(settings, output_config)
     click.echo(f"Resolved config written to {output_config}")
 
 
