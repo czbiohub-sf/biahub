@@ -5,6 +5,7 @@ from pathlib import Path
 import click
 import numpy as np
 import submitit
+import yaml
 
 from iohub import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate, process_single_position
@@ -12,8 +13,9 @@ from natsort import natsorted
 
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
+    cluster,
     config_filepath,
-    local,
+    init_only,
     monitor,
     output_dirpath,
     sbatch_filepath,
@@ -21,13 +23,27 @@ from biahub.cli.parsing import (
 )
 from biahub.cli.utils import (
     copy_n_paste,
+    echo_resources,
     estimate_resources,
     get_output_paths,
     get_submitit_cluster,
+    model_to_yaml,
     resolve_ome_zarr_version,
     yaml_to_model,
 )
 from biahub.settings import ConcatenateSettings
+
+
+def _unique_source_plates(data_paths: list[Path]) -> list[Path]:
+    """Deduplicated source plate paths from position paths, preserving order."""
+    seen = set()
+    plates = []
+    for p in data_paths:
+        plate = Path(p).parents[2]
+        if plate not in seen:
+            seen.add(plate)
+            plates.append(plate)
+    return plates
 
 
 def get_path_slice_param(slice_param, path_index, total_paths):
@@ -248,34 +264,33 @@ def calculate_cropped_size(
     return cropped_shape_zyx
 
 
-def concatenate(
-    settings: ConcatenateSettings,
-    output_dirpath: Path,
-    sbatch_filepath: str | None = None,
-    local: bool = False,
-    block: bool = False,
-    monitor: bool = True,
-):
-    """Concatenate datasets (with optional cropping).
+def _resolve_time_indices(settings: ConcatenateSettings, all_shapes: list[tuple]) -> list[int]:
+    """Resolve input time indices from settings and shapes."""
+    T = all_shapes[0][0]
+    if settings.time_indices == "all":
+        if not all(s[0] == T for s in all_shapes):
+            click.echo(
+                "Warning: Datasets have different number of time points. "
+                "Taking the smallest number of time points."
+            )
+        T = min(s[0] for s in all_shapes)
+        return list(range(T))
+    elif isinstance(settings.time_indices, list):
+        return settings.time_indices
+    elif isinstance(settings.time_indices, int):
+        return [settings.time_indices]
+    return list(range(T))
 
-    Parameters
-    ----------
-    settings : ConcatenateSettings
-        Configuration settings for concatenation
-    output_dirpath : Path
-        Path to the output dataset
-    sbatch_filepath : str | None, optional
-        Path to the SLURM batch file, by default None
-    local : bool, optional
-        Whether to run locally or on a cluster, by default False
-    block : bool, optional
-        Whether to block until all the jobs are complete,
-        by default False
-    monitor : bool, optional
-        Whether to monitor the jobs, by default True
+
+def _prepare_concatenate(settings: ConcatenateSettings, output_dirpath: Path) -> dict:
+    """Derive metadata and create the output plate.
+
+    Runs the channel/slice metadata resolution (the expensive
+    ``get_channel_combiner_metadata`` call), creates the output plate, and
+    returns everything the submit loop needs plus the input ``shape`` used by
+    ``concatenate`` to estimate SLURM resources. ``create_empty_plate`` is
+    idempotent, so calling this from both ``--init`` and the full run is safe.
     """
-    slurm_out_path = output_dirpath.parent / "slurm_output"
-
     slicing_params = [settings.Z_slice, settings.Y_slice, settings.X_slice]
     (
         all_data_paths,
@@ -286,7 +301,8 @@ def concatenate(
     ) = get_channel_combiner_metadata(
         settings.concat_data_paths, settings.channel_names, slicing_params
     )
-    output_position_paths_list = get_output_paths(
+
+    output_position_paths = get_output_paths(
         all_data_paths,
         output_dirpath,
         ensure_unique_positions=settings.ensure_unique_positions,
@@ -311,14 +327,13 @@ def concatenate(
         settings.Z_slice == "all"
         and settings.Y_slice == "all"
         and settings.X_slice == "all"
-        and not all([shape[-3:] == all_shapes[0][-3:] for shape in all_shapes])
+        and not all(shape[-3:] == all_shapes[0][-3:] for shape in all_shapes)
     ):
         raise ValueError(
             "Datasets have different shapes. All ZYX shapes must match to concatenate when using 'all' for slicing."
         )
 
-    # Check the voxel sizes
-    if not all([voxel_size == all_voxel_sizes[0] for voxel_size in all_voxel_sizes]):
+    if not all(voxel_size == all_voxel_sizes[0] for voxel_size in all_voxel_sizes):
         click.echo(
             "Warning: Datasets have different voxel sizes. Taking the first voxel size."
         )
@@ -326,43 +341,29 @@ def concatenate(
     T, C, Z, Y, X = all_shapes[0]
     output_voxel_size = all_voxel_sizes[0]
 
-    if all([dtype == all_dtypes[0] for dtype in all_dtypes]):
+    if all(dtype == all_dtypes[0] for dtype in all_dtypes):
         dtype = all_dtypes[0]
     else:
         click.echo("Warning: not all dtypes match. Casting data at float32.")
         dtype = np.float32
 
-    # Logic to parse time indices
-    if settings.time_indices == "all":
-        if not all([shape[0] == T for shape in all_shapes]):
-            click.echo(
-                "Warning: Datasets have different number of time points. Taking the smallest number of time points."
-            )
-        T = min([shape[0] for shape in all_shapes])
-        input_time_indices = list(range(T))
-    elif isinstance(settings.time_indices, list):
-        input_time_indices = settings.time_indices
-    elif isinstance(settings.time_indices, int):
-        input_time_indices = [settings.time_indices]
+    input_time_indices = _resolve_time_indices(settings, all_shapes)
 
-    # If input shapes are different but slicing is specified, inform the user
-    if not all([shape[-3:] == all_shapes[0][-3:] for shape in all_shapes]):
+    # If input shapes differ but slicing is specified, inform the user
+    if not all(shape[-3:] == all_shapes[0][-3:] for shape in all_shapes):
         click.echo(
             "Warning: Datasets have different shapes, but slicing parameters are specified. Will validate output shapes after cropping."
         )
 
     cropped_shape_zyx = calculate_cropped_size(all_slicing_params[0])
-
-    # Ensure that the cropped shape is within the bounds of the original shape
     if cropped_shape_zyx[0] > Z or cropped_shape_zyx[1] > Y or cropped_shape_zyx[2] > X:
         raise ValueError("The cropped shape is larger than the original shape.")
 
-    # TODO: make assertion for chunk size?
     if settings.chunks_czyx is not None:
         chunk_size = [1] + list(settings.chunks_czyx)
     else:
         chunk_size = settings.chunks_czyx
-    # Logic for creation of zarr and metadata
+
     output_metadata = {
         "shape": (len(input_time_indices), len(all_channel_names)) + tuple(cropped_shape_zyx),
         "chunks": chunk_size,
@@ -375,25 +376,105 @@ def concatenate(
         "dtype": dtype,
     }
 
-    # Create the output zarr mirroring source_position_dirpaths
+    source_plates = _unique_source_plates(all_data_paths)
     create_empty_plate(
         store_path=output_dirpath,
-        position_keys=[p.parts[-3:] for p in output_position_paths_list],
+        position_keys=[p.parts[-3:] for p in output_position_paths],
+        metadata_sources=list(reversed(source_plates)),
         **output_metadata,
     )
+    click.echo(f"Created {output_dirpath} ({len(output_position_paths)} positions)")
 
-    # Estimate resources
+    return {
+        "all_data_paths": all_data_paths,
+        "output_position_paths": output_position_paths,
+        "input_channel_idx_list": input_channel_idx_list,
+        "output_channel_idx_list": output_channel_idx_list,
+        "all_slicing_params": all_slicing_params,
+        "input_time_indices": input_time_indices,
+        "shape": (T, C, Z, Y, X),
+    }
+
+
+def _resolve_concatenate_config(
+    config_path: Path,
+    output_config: Path,
+    concat_data_paths: tuple[str, ...],
+):
+    """Fill in concat_data_paths and write the resolved config.
+
+    The source config's ``concat_data_paths`` is a placeholder — typically left
+    blank so Nextflow can inject the upstream store paths at runtime — so the
+    override is applied to the raw YAML *before* validation. ConcatenateSettings
+    requires ``concat_data_paths`` to be a non-empty list, which a blank
+    placeholder is not.
+    """
+    with open(config_path) as f:
+        raw = yaml.safe_load(f)
+    raw["concat_data_paths"] = list(concat_data_paths)
+    settings = ConcatenateSettings(**raw)
+    model_to_yaml(settings, output_config)
+    click.echo(f"Resolved config written to {output_config}")
+
+
+def concatenate(
+    settings: ConcatenateSettings,
+    output_dirpath: Path,
+    sbatch_filepath: str | None = None,
+    cluster: str = "slurm",
+    block: bool = False,
+    monitor: bool = True,
+    init_only: bool = False,
+):
+    """Concatenate datasets (with optional cropping).
+
+    Parameters
+    ----------
+    settings : ConcatenateSettings
+        Configuration settings for concatenation
+    output_dirpath : Path
+        Path to the output dataset
+    sbatch_filepath : str | None, optional
+        Path to the SLURM batch file, by default None
+    cluster : str, optional
+        Execution cluster: 'slurm' submits to a Slurm cluster, 'local' runs jobs
+        as subprocesses on this machine, 'debug' runs jobs in-process in the
+        foreground. By default 'slurm'.
+    block : bool, optional
+        Whether to block until all the jobs are complete,
+        by default False
+    monitor : bool, optional
+        Whether to monitor the jobs, by default True
+    init_only : bool, optional
+        Only create the output store and emit RESOURCES, then exit; skip the
+        per-position copy. By default False.
+    """
+    slurm_out_path = output_dirpath.parent / "slurm_output"
+
+    prep = _prepare_concatenate(settings, output_dirpath)
+    input_time_indices = prep["input_time_indices"]
+
+    T, C, Z, Y, X = prep["shape"]
     batch_size = settings.shards_ratio[0] if settings.shards_ratio else 1
     num_cpus, gb_ram_per_cpu = estimate_resources(
-        shape=(T // batch_size, C, Z, Y, X), ram_multiplier=4 * batch_size, max_num_cpus=16
+        shape=(T // batch_size, C, Z, Y, X),
+        ram_multiplier=8 * batch_size,
+        max_num_cpus=16,
     )
+    mem_gb = num_cpus * gb_ram_per_cpu
+    time_minutes = 60
+    echo_resources(num_cpus, mem_gb, time_minutes=time_minutes)
+
+    if init_only:
+        return
+
     # Prepare SLURM arguments
     slurm_args = {
         "slurm_job_name": "concatenate",
-        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
+        "slurm_mem": f"{mem_gb}G",
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,  # process up to 100 positions at a time
-        "slurm_time": 60,
+        "slurm_time": time_minutes,
         "slurm_partition": "preempted",
     }
 
@@ -401,14 +482,11 @@ def concatenate(
     if sbatch_filepath:
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
-    # Run locally or submit to SLURM
-    cluster = get_submitit_cluster(local)
-
-    # Prepare and submit jobs
-    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
+    resolved_cluster = get_submitit_cluster(cluster=cluster)
+    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=resolved_cluster)
     executor.update_parameters(**slurm_args)
 
-    click.echo(f"Submitting {cluster} jobs...")
+    click.echo(f"Submitting {resolved_cluster} jobs...")
     jobs = []
 
     with submitit.helpers.clean_env(), executor.batch():
@@ -419,15 +497,23 @@ def concatenate(
             output_channel_idx,
             zyx_slicing_params,
         ) in zip(
-            all_data_paths,
-            output_position_paths_list,
-            input_channel_idx_list,
-            output_channel_idx_list,
-            all_slicing_params,
+            prep["all_data_paths"],
+            prep["output_position_paths"],
+            prep["input_channel_idx_list"],
+            prep["output_channel_idx_list"],
+            prep["all_slicing_params"],
             strict=True,
         ):
-            # Create slicing parameters for this specific path
-            copy_n_paste_kwargs = {"zyx_slicing_params": zyx_slicing_params}
+            # Preserve extra_metadata written by create_empty_plate's
+            # metadata_sources — process_single_position overwrites it with None
+            # when the kwarg is absent (iohub <= 0.3.7) — and record this step's
+            # own provenance alongside it.
+            with open_ome_zarr(str(output_position_path), layout="fov", mode="r") as pos:
+                existing_extra = pos.zattrs.get("extra_metadata")
+            merged_extra = {
+                **(existing_extra or {}),
+                "biahub-concatenate": settings.model_dump(),
+            }
 
             job = executor.submit(
                 process_single_position,
@@ -438,15 +524,16 @@ def concatenate(
                 output_channel_indices=output_channel_idx,
                 input_time_indices=input_time_indices,
                 output_time_indices=list(range(len(input_time_indices))),
-                num_workers=int(slurm_args["slurm_cpus_per_task"]),
-                **copy_n_paste_kwargs,
+                num_workers=slurm_args["slurm_cpus_per_task"],
+                extra_metadata=merged_extra,
+                zyx_slicing_params=zyx_slicing_params,
             )
             jobs.append(job)
 
     job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 
     slurm_out_path.mkdir(exist_ok=True)
-    log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
+    log_path = slurm_out_path / "submitit_jobs_ids.log"
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
 
@@ -454,33 +541,88 @@ def concatenate(
         _ = [job.result() for job in jobs]
 
     if monitor:
-        monitor_jobs(jobs, all_data_paths)
+        monitor_jobs(jobs, prep["all_data_paths"])
 
 
 @click.command("concatenate")
 @config_filepath()
 @output_dirpath()
 @sbatch_filepath()
-@local()
+@cluster()
 @monitor()
+@init_only()
+@click.option(
+    "--resolve-config",
+    "resolve_config_mode",
+    is_flag=True,
+    default=False,
+    help="Resolve placeholder concat_data_paths and write output config.",
+)
+@click.option(
+    "--concat-data-paths",
+    multiple=True,
+    type=str,
+    help="Override concat_data_paths from config (repeat flag, used with --resolve-config).",
+)
 def concatenate_cli(
     config_filepath: Path,
-    output_dirpath: str,
+    output_dirpath: Path,
     sbatch_filepath: str | None = None,
-    local: bool = False,
-    monitor: bool = True,
+    cluster: str = "slurm",
+    monitor: bool = False,
+    init_only: bool = False,
+    resolve_config_mode: bool = False,
+    concat_data_paths: tuple[str, ...] = (),
 ):
-    """Concatenate datasets (with optional cropping).
+    r"""Concatenate datasets (with optional cropping).
 
-    >>> biahub concatenate -c ./concat.yml -o ./output_concat.zarr
+    \b
+    Full end-to-end (SLURM fan-out):
+    >>> biahub concatenate -c ./concat.yml -o ./output.zarr
+
+    \b
+    Resolve placeholder paths (Nextflow config prep, runs on the login node):
+    >>> biahub concatenate --resolve-config \
+        -c concat.yml -o resolved.yml \
+        --concat-data-paths "deskew.zarr/*/*/*" \
+        --concat-data-paths "reconstruct.zarr/*/*/*"
+
+    \b
+    Emit RESOURCES + create the output plate (Nextflow init, login node):
+    >>> biahub concatenate --init -c resolved.yml -o output.zarr
+
+    \b
+    Single-shot run on a reserved compute node (Nextflow assemble step):
+    'debug' iterates every position in-process; the CLI blocks until done.
+    >>> biahub concatenate --cluster debug -c resolved.yml -o output.zarr
     """
+    config_path = config_filepath
+    output_path = output_dirpath
+
+    if resolve_config_mode:
+        if not concat_data_paths:
+            raise click.UsageError("--resolve-config requires --concat-data-paths")
+        _resolve_concatenate_config(config_path, output_path, concat_data_paths)
+        return
+
+    settings = yaml_to_model(config_path, ConcatenateSettings)
+
+    # Default: full end-to-end concatenation (or --init to only create the plate
+    # and emit RESOURCES).
+    # For in-node clusters ('debug' runs in-process, 'local' spawns
+    # subprocesses) the jobs execute lazily and only run when their result is
+    # awaited, so block here — otherwise the command would return before any
+    # data is written. 'slurm' keeps the submit-and-detach behaviour (optionally
+    # followed with --monitor), matching the other CLIs.
+    block = cluster in ("debug", "local")
     concatenate(
-        settings=yaml_to_model(config_filepath, ConcatenateSettings),
-        output_dirpath=Path(output_dirpath),
+        settings=settings,
+        output_dirpath=output_path,
         sbatch_filepath=sbatch_filepath,
-        local=local,
-        block=False,
+        cluster=cluster,
+        block=block,
         monitor=monitor,
+        init_only=init_only,
     )
 
 
