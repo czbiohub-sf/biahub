@@ -126,7 +126,7 @@ workflow {
     // (`concatenate --cluster debug` iterates every position in-process); which
     // channels/crops come from each source is set by the concatenate config, not
     // here. The config's concat_data_paths are placeholders — the subworkflow
-    // injects the three source paths via --resolve-config.
+    // injects the three source paths via --concat-data-paths (resolve mode).
     assemble_trigger = virtual_stain_done.done
     assemble_output  = "${out}/${layout.assemble}/${ds}.zarr"
 
