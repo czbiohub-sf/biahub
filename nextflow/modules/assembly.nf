@@ -1,4 +1,5 @@
-// Assembly subworkflow: resolve concat config → single-shot concatenate.
+// Assembly subworkflow: resolve concat config → init (RESOURCES) → single-shot
+// concatenate.
 //
 // Unlike the per-position steps (deskew, reconstruct, …), concatenate combines
 // N source stores channel-wise at each position, so there is no single `-i` to
@@ -14,11 +15,13 @@
 // `--cluster local` (submitit spawns one subprocess per position) and size the
 // resources for the concurrent fan-out.
 //
-// Path injection: the source zarr paths are Nextflow runtime values, so
-// `--resolve-config` templates them into concat_data_paths — a cheap login-node
-// step — before the compute step reads the resolved config.
+// Like the other steps, a cheap `--init` step on the login node creates the
+// output plate (create_empty_plate is idempotent) and emits the RESOURCES line
+// that sizes the compute node. Path injection: the source zarr paths are
+// Nextflow runtime values, so `--resolve-config` templates them into
+// concat_data_paths — also a login-node step — before init/run read the config.
 
-include { biahub_cmd; slurm_logs; slurm_log_dir } from './common'
+include { parse_resources; biahub_cmd; slurm_logs; slurm_log_dir } from './common'
 
 
 process resolve_concatenate_config {
@@ -55,10 +58,31 @@ process resolve_concatenate_config {
 }
 
 
+// Create the output plate and emit the RESOURCES line used to size the compute
+// node. Cheap and metadata-only, so it stays on the login node (cpu_local).
+process init_concatenate {
+    label 'cpu_local'
+
+    input:
+    path resolved_config
+    val output_zarr
+
+    output:
+    stdout
+
+    script:
+    """
+    mkdir -p "${slurm_log_dir('assemble')}"
+    ${biahub_cmd()} concatenate --init \
+        -c "${resolved_config}" \
+        -o "${output_zarr}"
+    """
+}
+
+
 // Single-shot concatenation of the whole plate on a reserved compute node.
-// Resources are static (sized for the whole plate run, not one position) rather
-// than driven by a `--init` RESOURCES payload — the single-shot model does not
-// need the separate init/list-positions step. Tune cpus/memory/time to the data.
+// cpus/memory/time come from the RESOURCES payload emitted by init_concatenate
+// (parsed via parse_resources), matching the other CLIs.
 // NOTE: label 'cpu' routes to the 'preempted' partition; if the node is
 // reclaimed mid-run the whole task restarts (the global errorStrategy retries
 // it). Acceptable while the step is quick; route to a non-preempted partition
@@ -66,23 +90,22 @@ process resolve_concatenate_config {
 process run_concatenate {
     label 'cpu'
     clusterOptions { slurm_logs('assemble') }
-    cpus 16
-    memory '128 GB'
-    time '4h'
+    cpus   { meta.cpus }
+    memory { "${meta.mem_gb} GB" }
+    time   { "${meta.time_minutes * task.attempt} min" }
 
     input:
-    path resolved_config
     val output_zarr
+    val resolved_config_path
+    val meta
 
     output:
     val output_zarr
 
     script:
     """
-    mkdir -p "${slurm_log_dir('assemble')}"
-    rm -rf "${output_zarr}"
     ${biahub_cmd()} concatenate --cluster debug \
-        -c "${resolved_config}" \
+        -c "${resolved_config_path}" \
         -o "${output_zarr}"
     """
 }
@@ -106,12 +129,14 @@ workflow assemble_wf {
 
     main:
     def config_dir = new File(config.toString()).parent
+    def resolved_config_path = "${config_dir}/concatenate_resolved.yml"
 
     resolved = resolve_concatenate_config(
         deskew_zarr, reconstruct_zarr, virtual_stain_zarr,
         config_dir, config, prev_done.map { 'done' }
     )
-    as_done = run_concatenate(resolved, output_zarr)
+    resources = init_concatenate(resolved, output_zarr).map { parse_resources(it) }
+    as_done = run_concatenate(output_zarr, resolved_config_path, resources)
 
     emit:
     done = as_done

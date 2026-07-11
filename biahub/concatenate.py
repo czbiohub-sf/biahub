@@ -14,6 +14,7 @@ from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
     cluster,
     config_filepath,
+    init_only,
     monitor,
     output_dirpath,
     sbatch_filepath,
@@ -281,12 +282,13 @@ def _resolve_time_indices(settings: ConcatenateSettings, all_shapes: list[tuple]
 
 
 def _prepare_concatenate(settings: ConcatenateSettings, output_dirpath: Path) -> dict:
-    """Derive metadata, create the output plate, and estimate SLURM resources.
+    """Derive metadata and create the output plate.
 
-    Shared by ``--init`` and the full run so the channel/slice metadata (and the
-    expensive ``get_channel_combiner_metadata`` call) is computed exactly once per
-    invocation. Creates the output plate, emits the RESOURCES line, and returns
-    everything the submit loop needs.
+    Runs the channel/slice metadata resolution (the expensive
+    ``get_channel_combiner_metadata`` call), creates the output plate, and
+    returns everything the submit loop needs plus the input ``shape`` used by
+    ``concatenate`` to estimate SLURM resources. ``create_empty_plate`` is
+    idempotent, so calling this from both ``--init`` and the full run is safe.
     """
     slicing_params = [settings.Z_slice, settings.Y_slice, settings.X_slice]
     (
@@ -382,13 +384,6 @@ def _prepare_concatenate(settings: ConcatenateSettings, output_dirpath: Path) ->
     )
     click.echo(f"Created {output_dirpath} ({len(output_position_paths)} positions)")
 
-    batch_size = settings.shards_ratio[0] if settings.shards_ratio else 1
-    num_cpus, gb_ram_per_cpu = estimate_resources(
-        shape=(T // batch_size, C, Z, Y, X), ram_multiplier=4 * batch_size, max_num_cpus=16
-    )
-    time_minutes = 60
-    echo_resources(num_cpus, num_cpus * gb_ram_per_cpu, time_minutes=time_minutes)
-
     return {
         "all_data_paths": all_data_paths,
         "output_position_paths": output_position_paths,
@@ -396,9 +391,7 @@ def _prepare_concatenate(settings: ConcatenateSettings, output_dirpath: Path) ->
         "output_channel_idx_list": output_channel_idx_list,
         "all_slicing_params": all_slicing_params,
         "input_time_indices": input_time_indices,
-        "num_cpus": num_cpus,
-        "gb_ram_per_cpu": gb_ram_per_cpu,
-        "time_minutes": time_minutes,
+        "shape": (T, C, Z, Y, X),
     }
 
 
@@ -422,6 +415,7 @@ def concatenate(
     cluster: str = "slurm",
     block: bool = False,
     monitor: bool = True,
+    init_only: bool = False,
 ):
     """Concatenate datasets (with optional cropping).
 
@@ -442,19 +436,34 @@ def concatenate(
         by default False
     monitor : bool, optional
         Whether to monitor the jobs, by default True
+    init_only : bool, optional
+        Only create the output store and emit RESOURCES, then exit; skip the
+        per-position copy. By default False.
     """
     slurm_out_path = output_dirpath.parent / "slurm_output"
 
     prep = _prepare_concatenate(settings, output_dirpath)
     input_time_indices = prep["input_time_indices"]
 
+    T, C, Z, Y, X = prep["shape"]
+    batch_size = settings.shards_ratio[0] if settings.shards_ratio else 1
+    num_cpus, gb_ram_per_cpu = estimate_resources(
+        shape=(T // batch_size, C, Z, Y, X), ram_multiplier=4 * batch_size, max_num_cpus=16
+    )
+    mem_gb = num_cpus * gb_ram_per_cpu
+    time_minutes = 60
+    echo_resources(num_cpus, mem_gb, time_minutes=time_minutes)
+
+    if init_only:
+        return
+
     # Prepare SLURM arguments
     slurm_args = {
         "slurm_job_name": "concatenate",
-        "slurm_mem": f"{prep['num_cpus'] * prep['gb_ram_per_cpu']}G",
-        "slurm_cpus_per_task": prep["num_cpus"],
+        "slurm_mem": f"{mem_gb}G",
+        "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,  # process up to 100 positions at a time
-        "slurm_time": prep["time_minutes"],
+        "slurm_time": time_minutes,
         "slurm_partition": "preempted",
     }
 
@@ -530,6 +539,7 @@ def concatenate(
 @sbatch_filepath()
 @cluster()
 @monitor()
+@init_only()
 @click.option(
     "--resolve-config",
     "resolve_config_mode",
@@ -549,6 +559,7 @@ def concatenate_cli(
     sbatch_filepath: str | None = None,
     cluster: str = "slurm",
     monitor: bool = False,
+    init_only: bool = False,
     resolve_config_mode: bool = False,
     concat_data_paths: tuple[str, ...] = (),
 ):
@@ -566,6 +577,10 @@ def concatenate_cli(
         --concat-data-paths "reconstruct.zarr/*/*/*"
 
     \b
+    Emit RESOURCES + create the output plate (Nextflow init, login node):
+    >>> biahub concatenate --init -c resolved.yml -o output.zarr
+
+    \b
     Single-shot run on a reserved compute node (Nextflow assemble step):
     'debug' iterates every position in-process; the CLI blocks until done.
     >>> biahub concatenate --cluster debug -c resolved.yml -o output.zarr
@@ -581,7 +596,8 @@ def concatenate_cli(
 
     settings = yaml_to_model(config_path, ConcatenateSettings)
 
-    # Default: full end-to-end concatenation.
+    # Default: full end-to-end concatenation (or --init to only create the plate
+    # and emit RESOURCES).
     # For in-node clusters ('debug' runs in-process, 'local' spawns
     # subprocesses) the jobs execute lazily and only run when their result is
     # awaited, so block here — otherwise the command would return before any
@@ -595,6 +611,7 @@ def concatenate_cli(
         cluster=cluster,
         block=block,
         monitor=monitor,
+        init_only=init_only,
     )
 
 
