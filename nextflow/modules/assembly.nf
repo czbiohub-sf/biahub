@@ -28,17 +28,22 @@ process resolve_concatenate_config {
     val deskew_zarr
     val reconstruct_zarr
     val virtual_stain_zarr
-    val output_dir
+    val config_dir
     val config
     val trigger
 
     output:
     path "concatenate_resolved.yml"
 
+    // Write the resolved config alongside the source config (config_dir) so it
+    // sits with the rest of the run's configs. `rm -f` first because
+    // `--resolve-config -o` refuses to overwrite an existing file, so a rerun
+    // would otherwise fail on the stale copy.
     script:
-    def resolved = "${output_dir}/concatenate_resolved.yml"
+    def resolved = "${config_dir}/concatenate_resolved.yml"
     """
-    mkdir -p "${output_dir}"
+    mkdir -p "${config_dir}"
+    rm -f "${resolved}"
     ${biahub_cmd()} concatenate --resolve-config \
         -c "${config}" \
         -o "${resolved}" \
@@ -100,11 +105,11 @@ workflow assemble_wf {
     prev_done
 
     main:
-    def output_dir = new File(output_zarr).parent
+    def config_dir = new File(config.toString()).parent
 
     resolved = resolve_concatenate_config(
         deskew_zarr, reconstruct_zarr, virtual_stain_zarr,
-        output_dir, config, prev_done.map { 'done' }
+        config_dir, config, prev_done.map { 'done' }
     )
     as_done = run_concatenate(resolved, output_zarr)
 
