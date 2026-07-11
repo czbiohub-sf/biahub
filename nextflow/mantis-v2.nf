@@ -7,7 +7,8 @@ nextflow.enable.dsl = 2
 //
 //  This file is the ORCHESTRATION layer. It owns two things the step modules
 //  must not know about:
-//    1. the directory LAYOUT (the DIRECTORY_LAYOUT map below), and
+//    1. the directory LAYOUT (the DIRECTORY_LAYOUT map returned by
+//       directory_layout() below), and
 //    2. the ORDER steps run in and what each step reads/writes.
 //
 //  Each step's subworkflow (e.g. deskew_wf) is path-agnostic and speaks only in
@@ -43,15 +44,22 @@ include { assemble_wf } from './modules/assembly'
 // writes its <dataset>.zarr. The pipeline's raw input/output live in the
 // workflow body, not here (input may not even be a zarr). A Dragonfly pipeline
 // would define its own map; reordering or renaming a step is a one-line edit.
-DIRECTORY_LAYOUT = [
-    // convert    : '0-convert',     // first step when raw input isn't zarr
-    flat_field    : '0-flatfield',
-    deskew        : '1-deskew',
-    reconstruct   : '2-reconstruct',
-    virtual_stain : '3-virtual-stain',
-    // track         : '4-track',
-    assemble      : '5-assemble',
-]
+//
+// Defined as a function rather than a bare top-level assignment: Nextflow's DSL2
+// parser only allows declarations (include/process/workflow/function) at script
+// scope, so a `DIRECTORY_LAYOUT = [...]` statement fails to compile. The workflow
+// body calls directory_layout() once to get the map.
+def directory_layout() {
+    return [
+        // convert    : '0-convert',     // first step when raw input isn't zarr
+        flat_field    : '0-flatfield',
+        deskew        : '1-deskew',
+        reconstruct   : '2-reconstruct',
+        virtual_stain : '3-virtual-stain',
+        // track         : '4-track',
+        assemble      : '5-assemble',
+    ]
+}
 
 
 workflow {
@@ -63,8 +71,9 @@ workflow {
     if (!params.virtual_stain_config) error "Provide --virtual_stain_config"
     if (!params.concatenate_config) error "Provide --concatenate_config"
 
-    def ds  = dataset_name()
-    def out = params.output
+    def ds     = dataset_name()
+    def out    = params.output
+    def layout = directory_layout()
 
     collect_positions(params.input)
     all_positions = collect_positions.out
@@ -76,7 +85,7 @@ workflow {
     // doesn't care where its input comes from.
     ff_trigger = Channel.value(true)
     ff_input  = params.input
-    ff_output = "${out}/${DIRECTORY_LAYOUT.flat_field}/${ds}.zarr"
+    ff_output = "${out}/${layout.flat_field}/${ds}.zarr"
 
     ff_done = flat_field_wf(all_positions, ff_input, ff_output, params.flat_field_config, ff_trigger)
 
@@ -84,7 +93,7 @@ workflow {
     // Deskew reads flat-field's output and waits on ff_done before starting.
     deskew_trigger = ff_done.done
     deskew_input  = ff_output
-    deskew_output = "${out}/${DIRECTORY_LAYOUT.deskew}/${ds}.zarr"
+    deskew_output = "${out}/${layout.deskew}/${ds}.zarr"
 
     deskew_done = deskew_wf(all_positions, deskew_input, deskew_output, params.deskew_config, deskew_trigger)
 
@@ -94,7 +103,7 @@ workflow {
     // is set by `input_channel_names` in the reconstruct config, not here.
     reconstruct_trigger = deskew_done.done
     reconstruct_input   = deskew_output
-    reconstruct_output  = "${out}/${DIRECTORY_LAYOUT.reconstruct}/${ds}.zarr"
+    reconstruct_output  = "${out}/${layout.reconstruct}/${ds}.zarr"
 
     reconstruct_done = reconstruct_wf(all_positions, reconstruct_input, reconstruct_output, params.reconstruct_config, reconstruct_trigger)
 
@@ -106,7 +115,7 @@ workflow {
     // here.
     virtual_stain_trigger = reconstruct_done.done
     virtual_stain_input   = reconstruct_output
-    virtual_stain_output  = "${out}/${DIRECTORY_LAYOUT.virtual_stain}/${ds}.zarr"
+    virtual_stain_output  = "${out}/${layout.virtual_stain}/${ds}.zarr"
 
     virtual_stain_done = virtual_stain_wf(all_positions, virtual_stain_input, virtual_stain_output, params.virtual_stain_config, virtual_stain_trigger)
 
@@ -119,7 +128,7 @@ workflow {
     // here. The config's concat_data_paths are placeholders — the subworkflow
     // injects the three source paths via --resolve-config.
     assemble_trigger = virtual_stain_done.done
-    assemble_output  = "${out}/${DIRECTORY_LAYOUT.assemble}/${ds}.zarr"
+    assemble_output  = "${out}/${layout.assemble}/${ds}.zarr"
 
     assemble_wf(
         deskew_output,

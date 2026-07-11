@@ -139,3 +139,9 @@ docstring-code-format = true
 [tool.pytest.ini_options]
 addopts = ["--import-mode=importlib"]
 testpaths = ["tests"]
+filterwarnings = [
+    # higra (transitive via ultrack) ships math docstrings with unescaped
+    # backslashes, which Python >=3.12 flags as SyntaxWarning on import. Not
+    # fixable on our end (0.6.13 is the latest release); silence the noise.
+    "ignore:invalid escape sequence:SyntaxWarning",
+]

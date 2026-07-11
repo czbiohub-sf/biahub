@@ -185,7 +185,6 @@ def _get_transform_matrix(ls_angle_deg: float, px_to_scan_ratio: float):
     ----------
     ls_angle_deg : float
     px_to_scan_ratio : float
-    keep_overhang : bool
 
     Returns
     -------
@@ -278,7 +277,7 @@ def get_deskewed_data_shape(
 def _fill_overhang_with_mean(
     data: np.ndarray,
     dilation_iterations: int = 3,
-    debug_plot_path: Path = None,
+    debug_plot_path: Path | None = None,
 ) -> np.ndarray:
     """Replace zero-padded overhang regions with the mean of the valid signal.
 
@@ -377,7 +376,7 @@ def deskew_zyx(
     device: str = "cpu",
     average_n_slices: int = 1,
     overhang_fill: Literal["zero", "mean"] = "zero",
-    debug_plot_path: Path = None,
+    debug_plot_path: Path | None = None,
 ) -> np.ndarray:
     """Deskews fluorescence data from the mantis microscope.
 
@@ -402,6 +401,12 @@ def deskew_zyx(
         after deskewing, averages every n slices (default = 1 applies no averaging)
     device : str, optional
         torch device to use for computation. Default is 'cpu'.
+    overhang_fill : "zero" or "mean", optional
+        How to fill overhang regions (only used when keep_overhang=True).
+        "mean" replaces with the mean of the valid signal, "zero" leaves the
+        zero-padded overhang as-is. Default is "zero".
+    debug_plot_path : Path, optional
+        If provided, saves a diagnostic figure showing the masks and result.
 
     Returns
     -------
@@ -539,11 +544,11 @@ def fast_deskew_zyx(
 
 # Adapt ZYX function to CZYX
 # Needs to be a top-level function for multiprocessing pickling
-def _czyx_deskew_data(data, **kwargs):
+def _deskew_czyx(data, **kwargs):
     return deskew_zyx(data[0], **kwargs)[None]
 
 
-def _czyx_fast_deskew_data(data, device="cuda", num_splits=1, **kwargs):
+def _fast_deskew_czyx(data, device="cuda", num_splits=1, **kwargs):
     """CZYX wrapper for `fast_deskew_zyx`. Handles numpy↔torch conversion.
 
     When `num_splits` > 1 the volume is split along input axis 2
@@ -637,10 +642,10 @@ def _init_output_plate(
 
 
 def deskew(
-    input_position_dirpaths: list[str],
+    input_position_dirpaths: list[Path],
     config_filepath: Path,
-    output_dirpath: str,
-    sbatch_filepath: str = None,
+    output_dirpath: Path,
+    sbatch_filepath: str | None = None,
     cluster: str = "slurm",
     monitor: bool = True,
     init_only: bool = False,
@@ -649,12 +654,12 @@ def deskew(
 
     Parameters
     ----------
-    input_position_dirpaths : list[str]
+    input_position_dirpaths : list[Path]
         Paths to input positions, for example: "input.zarr/0/0/0", "input.zarr/0/0/[0-9]",
         or "input.zarr/*/*/*".
     config_filepath : Path
         Path to YAML configuration file.
-    output_dirpath : str
+    output_dirpath : Path
         Path to "output.zarr" directory.
     sbatch_filepath : str, optional
         SBATCH filepath that contains slurm parameters to overwrite defaults.
@@ -723,7 +728,7 @@ def deskew(
             jobs.append(
                 executor.submit(
                     process_single_position,
-                    _czyx_fast_deskew_data,
+                    _fast_deskew_czyx,
                     input_position_path,
                     output_position_path,
                     num_workers=slurm_args["slurm_cpus_per_task"],
@@ -761,10 +766,10 @@ def deskew(
 @monitor()
 @init_only()
 def deskew_cli(
-    input_position_dirpaths: list[str],
+    input_position_dirpaths: list[Path],
     config_filepath: Path,
-    output_dirpath: str,
-    sbatch_filepath: str = None,
+    output_dirpath: Path,
+    sbatch_filepath: str | None = None,
     cluster: str = "slurm",
     monitor: bool = False,
     init_only: bool = False,

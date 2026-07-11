@@ -97,7 +97,6 @@ def test_track_cli_local(
         f.write("#SBATCH --array-parallelism=1\n")  # Force only 1 job at a time
         f.write("#LOCAL --cpus-per-task=1\n")
         f.write("#LOCAL --timeout-min=5\n")
-        f.write("#LOCAL --array-parallelism=1\n")  # Force local to use only 1 process
 
     plate_path, _ = example_tracking_plate
     config_path, _ = example_track_settings

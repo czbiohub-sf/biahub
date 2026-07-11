@@ -410,7 +410,9 @@ def estimate_resources(
 
     T, C, Z, Y, X = shape
     gb_per_element = np.dtype(dtype).itemsize / 2**30  # bytes_per_element / bytes_per_gb
-    num_cpus = min(T * C, max_num_cpus)
+    # In CI/tests, run serially: the test data is tiny, so spawning a worker
+    # pool costs far more (per-process re-imports) than the work itself.
+    num_cpus = 1 if os.environ.get("CI") == "true" else min(T * C, max_num_cpus)
     gb_ram_per_volume = Z * Y * X * gb_per_element
     gb_ram_per_cpu = np.ceil(max(min_ram_per_cpu, gb_ram_per_volume * ram_multiplier))
 

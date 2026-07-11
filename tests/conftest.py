@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import yaml
 
-from iohub.ngff import open_ome_zarr
+from iohub.ngff import TransformationMeta, open_ome_zarr
 
 # Use submitit debug executor (in-process, no forking) for fast tests
 os.environ["CI"] = "true"
@@ -151,9 +151,16 @@ def example_plate(tmp_path):
         channel_names=["GFP", "RFP", "Phase3D", "Orientation", "Retardance", "Birefringence"],
     )
 
+    # Lateral pixel size matches example_deskew_settings.yml (pixel_size_um:
+    # 0.116) so deskew doesn't warn about a config/metadata scale mismatch.
+    scale = (1, 1, 1.0, 0.116, 0.116)
     for row, col, fov in position_list:
         position = plate_dataset.create_position(row, col, fov)
-        position["0"] = np.random.uniform(0.0, 255.0, size=(3, 6, 4, 5, 6)).astype(np.float32)
+        position.create_image(
+            "0",
+            np.random.uniform(0.0, 255.0, size=(3, 6, 4, 5, 6)).astype(np.float32),
+            transform=[TransformationMeta(type="scale", scale=scale)],
+        )
 
     yield plate_path, plate_dataset
 
