@@ -1,5 +1,4 @@
 import glob
-import os
 
 from pathlib import Path
 
@@ -15,7 +14,6 @@ from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
     cluster,
     config_filepath,
-    init_only,
     monitor,
     output_dirpath,
     sbatch_filepath,
@@ -404,73 +402,6 @@ def _prepare_concatenate(settings: ConcatenateSettings, output_dirpath: Path) ->
     }
 
 
-def _run_concatenate_one_position(
-    settings: ConcatenateSettings,
-    output_dirpath: Path,
-    position: str,
-):
-    """Copy and crop data from all input stores for one position into output."""
-    slicing_params = [settings.Z_slice, settings.Y_slice, settings.X_slice]
-
-    (
-        all_data_paths,
-        _all_channel_names,
-        input_channel_idx_list,
-        output_channel_idx_list,
-        all_slicing_params,
-    ) = get_channel_combiner_metadata(
-        settings.concat_data_paths, settings.channel_names, slicing_params
-    )
-
-    all_shapes = []
-    for path in all_data_paths:
-        with open_ome_zarr(path) as ds:
-            all_shapes.append(ds.data.shape)
-
-    input_time_indices = _resolve_time_indices(settings, all_shapes)
-
-    for (
-        input_path,
-        input_ch_idx,
-        output_ch_idx,
-        zyx_slicing_params,
-    ) in zip(
-        all_data_paths,
-        input_channel_idx_list,
-        output_channel_idx_list,
-        all_slicing_params,
-        strict=True,
-    ):
-        fov_key = "/".join(Path(input_path).parts[-3:])
-        if fov_key != position:
-            continue
-
-        output_position_path = output_dirpath / position
-
-        # Preserve extra_metadata written by create_empty_plate's
-        # metadata_sources — process_single_position overwrites it with None
-        # when the kwarg is absent (iohub <= 0.3.7) — and record this step's
-        # own provenance alongside it.
-        with open_ome_zarr(str(output_position_path), layout="fov", mode="r") as pos:
-            existing_extra = pos.zattrs.get("extra_metadata")
-        merged_extra = {**(existing_extra or {}), "biahub-concatenate": settings.model_dump()}
-
-        process_single_position(
-            copy_n_paste,
-            input_position_path=input_path,
-            output_position_path=output_position_path,
-            num_workers=os.cpu_count() or 1,
-            input_channel_indices=input_ch_idx,
-            output_channel_indices=output_ch_idx,
-            input_time_indices=input_time_indices,
-            output_time_indices=list(range(len(input_time_indices))),
-            extra_metadata=merged_extra,
-            zyx_slicing_params=zyx_slicing_params,
-        )
-
-    click.echo(f"Concatenation done: {position}")
-
-
 def _resolve_concatenate_config(
     config_path: Path,
     output_config: Path,
@@ -599,14 +530,6 @@ def concatenate(
 @sbatch_filepath()
 @cluster()
 @monitor()
-@init_only()
-@click.option(
-    "--position",
-    "-p",
-    type=str,
-    default=None,
-    help="Position key to process (e.g. B/3/000000). Required with --cluster debug.",
-)
 @click.option(
     "--resolve-config",
     "resolve_config_mode",
@@ -626,8 +549,6 @@ def concatenate_cli(
     sbatch_filepath: str | None = None,
     cluster: str = "slurm",
     monitor: bool = False,
-    init_only: bool = False,
-    position: str | None = None,
     resolve_config_mode: bool = False,
     concat_data_paths: tuple[str, ...] = (),
 ):
@@ -648,15 +569,6 @@ def concatenate_cli(
     Single-shot run on a reserved compute node (Nextflow assemble step):
     'debug' iterates every position in-process; the CLI blocks until done.
     >>> biahub concatenate --cluster debug -c resolved.yml -o output.zarr
-
-    \b
-    Initialize output plate only (metadata + RESOURCES, no data copy):
-    >>> biahub concatenate --init -c resolved.yml -o output.zarr
-
-    \b
-    Per-position run (in-process, one FOV):
-    >>> biahub concatenate --cluster debug \
-        -c resolved.yml -o output.zarr -p B/3/000000
     """
     config_path = config_filepath
     output_path = output_dirpath
@@ -668,14 +580,6 @@ def concatenate_cli(
         return
 
     settings = yaml_to_model(config_path, ConcatenateSettings)
-
-    if init_only:
-        _prepare_concatenate(settings, output_path)
-        return
-
-    if position is not None:
-        _run_concatenate_one_position(settings, output_path, position)
-        return
 
     # Default: full end-to-end concatenation.
     # For in-node clusters ('debug' runs in-process, 'local' spawns
