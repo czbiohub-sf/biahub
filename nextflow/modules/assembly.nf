@@ -87,9 +87,13 @@ process init_concatenate {
 // reclaimed mid-run the whole task restarts (the global errorStrategy retries
 // it). Acceptable while the step is quick; route to a non-preempted partition
 // if it grows long.
+// The single-shot copy is memory-bandwidth-bound, so exclude the slow, small-
+// memory cpu-c nodes (2017 Intel Xeon Gold 6126, 24 cores, 128 GB/node) — they
+// ran this ~6x slower than the AMD EPYC nodes. All other cpu-* nodes are EPYC
+// with >=750 GB, so a plain --exclude of cpu-c is enough.
 process run_concatenate {
     label 'cpu'
-    clusterOptions { slurm_logs('assemble') }
+    clusterOptions { "${slurm_logs('assemble')} --exclude=cpu-c-[1-4]" }
     cpus   { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time   { "${meta.time_minutes * task.attempt} min" }
