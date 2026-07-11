@@ -379,6 +379,7 @@ def estimate_resources(
     dtype: DTypeLike = np.float32,
     ram_multiplier: float = 1.0,
     max_num_cpus: int = 64,
+    min_num_cpus: int = 1,
     min_ram_per_cpu: int = 4,
 ):
     """
@@ -396,6 +397,9 @@ def estimate_resources(
         should be at least 3. Default is 1.0.
     max_num_cpus : int, optional
         Maximum number of available CPUs. Default is 64.
+    min_num_cpus : int, optional
+        Minimum number of CPUs to request (ignored in CI, which runs serially).
+        Default is 1.
     min_ram_per_cpu : int, optional
         Minimum amount of RAM per CPU in GB. Default is 4.
 
@@ -412,7 +416,9 @@ def estimate_resources(
     gb_per_element = np.dtype(dtype).itemsize / 2**30  # bytes_per_element / bytes_per_gb
     # In CI/tests, run serially: the test data is tiny, so spawning a worker
     # pool costs far more (per-process re-imports) than the work itself.
-    num_cpus = 1 if os.environ.get("CI") == "true" else min(T * C, max_num_cpus)
+    num_cpus = (
+        1 if os.environ.get("CI") == "true" else min(max(min_num_cpus, T * C), max_num_cpus)
+    )
     gb_ram_per_volume = Z * Y * X * gb_per_element
     gb_ram_per_cpu = np.ceil(max(min_ram_per_cpu, gb_ram_per_volume * ram_multiplier))
 
