@@ -456,8 +456,14 @@ def concatenate(
 
     T, C, Z, Y, X = prep["shape"]
     batch_size = settings.shards_ratio[0] if settings.shards_ratio else 1
+    # min_ram_per_cpu=8 gives 8 GB/cpu (128 GB total at 16 cpus), matching the
+    # memory the assemble step ran well with; the ZYX-volume estimate alone
+    # under-provisions here.
     num_cpus, gb_ram_per_cpu = estimate_resources(
-        shape=(T // batch_size, C, Z, Y, X), ram_multiplier=4 * batch_size, max_num_cpus=16
+        shape=(T // batch_size, C, Z, Y, X),
+        ram_multiplier=4 * batch_size,
+        max_num_cpus=16,
+        min_ram_per_cpu=8,
     )
     mem_gb = num_cpus * gb_ram_per_cpu
     time_minutes = 60
