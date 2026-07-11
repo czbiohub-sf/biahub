@@ -27,6 +27,7 @@ params.deskew_config = null
 params.flat_field_config = null
 params.reconstruct_config = null
 params.virtual_stain_config = null
+params.concatenate_config = null
 params.biahub_project = null
 params.max_positions = 0
 
@@ -35,6 +36,7 @@ include { deskew_wf } from './modules/deskew'
 include { flat_field_wf } from './modules/flat_field'
 include { reconstruct_wf } from './modules/reconstruct'
 include { virtual_stain_wf } from './modules/virtual_stain'
+include { assemble_wf } from './modules/assembly'
 
 // Output directory layout for the reconstruction steps — single source of
 // truth. Each entry is a subdirectory under params.output where that step
@@ -48,7 +50,7 @@ DIRECTORY_LAYOUT = [
     reconstruct   : '2-reconstruct',
     virtual_stain : '3-virtual-stain',
     // track         : '4-track',
-    // assemble      : '5-assemble',
+    assemble      : '5-assemble',
 ]
 
 
@@ -59,6 +61,7 @@ workflow {
     if (!params.deskew_config)      error "Provide --deskew_config"
     if (!params.reconstruct_config) error "Provide --reconstruct_config"
     if (!params.virtual_stain_config) error "Provide --virtual_stain_config"
+    if (!params.concatenate_config) error "Provide --concatenate_config"
 
     def ds  = dataset_name()
     def out = params.output
@@ -106,4 +109,24 @@ workflow {
     virtual_stain_output  = "${out}/${DIRECTORY_LAYOUT.virtual_stain}/${ds}.zarr"
 
     virtual_stain_done = virtual_stain_wf(all_positions, virtual_stain_input, virtual_stain_output, params.virtual_stain_config, virtual_stain_trigger)
+
+    // ----- Assemble ---------------------------------------------------------
+    // Concatenate the deskew, reconstruct, and virtual-stain outputs channel-wise
+    // into a single multichannel plate, waiting on virtual_stain_done. Unlike the
+    // per-position steps this runs single-shot on ONE reserved compute node
+    // (`concatenate --cluster debug` iterates every position in-process); which
+    // channels/crops come from each source is set by the concatenate config, not
+    // here. The config's concat_data_paths are placeholders — the subworkflow
+    // injects the three source paths via --resolve-config.
+    assemble_trigger = virtual_stain_done.done
+    assemble_output  = "${out}/${DIRECTORY_LAYOUT.assemble}/${ds}.zarr"
+
+    assemble_wf(
+        deskew_output,
+        reconstruct_output,
+        virtual_stain_output,
+        assemble_output,
+        params.concatenate_config,
+        assemble_trigger
+    )
 }
