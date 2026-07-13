@@ -179,6 +179,11 @@ COMMANDS = [
         "import_path": "biahub.rename_channels.rename_channels_cli",
         "help": "Rename channels for a single position (metadata-only)",
     },
+    {
+        "name": "generate-report-spec",
+        "import_path": "biahub.qc.generate_report_spec_cli",
+        "help": "Generate a report-spec YAML for imaging-qc from completed zarr stores",
+    },
 ]
 
 
