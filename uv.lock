@@ -397,7 +397,7 @@ requires-dist = [
     { name = "twine", marker = "extra == 'build'" },
     { name = "ultrack", marker = "extra == 'all'", specifier = ">=0.7" },
     { name = "ultrack", marker = "extra == 'track'", specifier = ">=0.7" },
-    { name = "waveorder", specifier = ">=3.0.5" },
+    { name = "waveorder", git = "https://github.com/mehta-lab/waveorder?rev=feat%2Fanisotropic-yx-pixel-size" },
     { name = "zensical", marker = "extra == 'doc'", specifier = ">=0.0.32" },
 ]
 provides-extras = ["all", "build", "doc", "gui", "segment", "stain", "track"]
@@ -5958,8 +5958,8 @@ wheels = [
 
 [[package]]
 name = "waveorder"
-version = "3.0.5"
-source = { registry = "https://pypi.org/simple" }
+version = "3.0.6.dev11+0d85183"
+source = { git = "https://github.com/mehta-lab/waveorder?rev=feat%2Fanisotropic-yx-pixel-size#0d85183e775a925fba71110b2a3146f0a1256232" }
 dependencies = [
     { name = "click" },
     { name = "colorspacious" },
@@ -5978,10 +5978,6 @@ dependencies = [
     { name = "tensorboard" },
     { name = "torch" },
     { name = "wget" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/94/6f/b1d5478ea51584d7975162d9cc8e3607d326194d54b5554beb9a7f4f7c16/waveorder-3.0.5.tar.gz", hash = "sha256:2f78105b0262d3df16a5f6e4a77a1aebcc3347533c1c2d891c8e223ecb3510a3", size = 67159460, upload-time = "2026-06-23T03:37:37.534Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/28/28/698e91f9dbaa9e78f8183ed0387e6abb53e1731851deddb09f4fcf85b055/waveorder-3.0.5-py3-none-any.whl", hash = "sha256:a06d4b1d8ec11e77140f0f8b26c2daf95dc5207d172bb8d46d734d1ae3c97af8", size = 324404, upload-time = "2026-06-23T03:37:15.45Z" },
 ]
 
 [[package]]
