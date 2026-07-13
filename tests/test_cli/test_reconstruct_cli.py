@@ -3,7 +3,7 @@ import pytest
 import yaml
 
 from click.testing import CliRunner
-from iohub.ngff import open_ome_zarr
+from iohub.ngff import TransformationMeta, open_ome_zarr
 
 from biahub.cli.main import cli
 
@@ -52,7 +52,13 @@ def reconstruct_plate(tmp_path):
 
     for row, col, fov in position_list:
         position = plate.create_position(row, col, fov)
-        position["0"] = np.random.uniform(1.0, 100.0, size=(1, 1, 5, 8, 8)).astype(np.float32)
+        # Match the pixel sizes declared in reconstruct_config so waveorder
+        # doesn't emit a PixelSizeMismatchWarning during reconstruction.
+        position.create_image(
+            "0",
+            np.random.uniform(1.0, 100.0, size=(1, 1, 5, 8, 8)).astype(np.float32),
+            transform=[TransformationMeta(type="scale", scale=(1, 1, 0.25, 0.1, 0.1))],
+        )
 
     plate.close()
     return plate_path

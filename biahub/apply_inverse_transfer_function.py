@@ -77,7 +77,7 @@ def apply_inverse_transfer_function(
     transfer_function_dirpath: Path,
     config_filepath: Path,
     output_dirpath: Path,
-    sbatch_filepath: Path | None = None,
+    sbatch_filepath: str | None = None,
     cluster: str = "slurm",
     monitor: bool = True,
     init_only: bool = False,
@@ -94,7 +94,7 @@ def apply_inverse_transfer_function(
         Path to YAML reconstruction config.
     output_dirpath : Path
         Path to output zarr.
-    sbatch_filepath : Path, optional
+    sbatch_filepath : str, optional
         SBATCH file with slurm parameter overrides.
     cluster : str
         Execution cluster: 'slurm', 'local', or 'debug'.
@@ -124,8 +124,6 @@ def apply_inverse_transfer_function(
         )
         return
 
-    resolved_cluster = get_submitit_cluster(cluster=cluster)
-
     # Fan out one job per position via submitit. With --cluster debug, submitit's
     # DebugExecutor runs the work in-process (the slurm_* parameters are ignored):
     # Nextflow already handles per-position fan-out and resource scheduling, so the
@@ -135,13 +133,15 @@ def apply_inverse_transfer_function(
         "slurm_job_name": "apply-inverse-transfer-function",
         "slurm_mem": f"{mem_gb}G",
         "slurm_cpus_per_task": num_cpus,
+        "slurm_array_parallelism": 100,  # process up to 100 positions at a time
         "slurm_time": time_minutes,
-        "slurm_partition": "cpu",
+        "slurm_partition": "preempted",
     }
 
     if sbatch_filepath:
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
+    resolved_cluster = get_submitit_cluster(cluster=cluster)
     click.echo(f"Preparing jobs on cluster='{resolved_cluster}': {slurm_args}")
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=resolved_cluster)
     executor.update_parameters(**slurm_args)
@@ -202,7 +202,7 @@ def apply_inverse_transfer_function_cli(
     transfer_function_dirpath: str | None,
     config_filepath: Path,
     output_dirpath: Path,
-    sbatch_filepath: Path | None = None,
+    sbatch_filepath: str | None = None,
     cluster: str = "slurm",
     monitor: bool = False,
     init_only: bool = False,
