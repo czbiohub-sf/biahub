@@ -31,8 +31,9 @@ dependencies = [
   "scipy",
   "submitit",
   "torch",
+  "torchmonarch>=0.5.0",
   "tqdm",
-  "waveorder>=3.0.4",
+  "waveorder>=3.0.5",
   "largestinteriorrectangle",
   "antspyx",
   "pystackreg",
@@ -85,6 +86,9 @@ index-strategy = "unsafe-best-match"
 # Pin cytoland to the commit from VisCy PR #465 (non-square TTA and helpers).
 # Revert to the PyPI release once that PR is merged and published.
 cytoland = { git = "https://github.com/mehta-lab/VisCy", subdirectory = "applications/cytoland", rev = "4b62365c0df25929bffc7f01b3bb2d1c11d69cce" }
+# Pin waveorder to the anisotropic-YX pixel-size branch (PR #568).
+# Revert to the PyPI release once that PR is merged and published.
+waveorder = { git = "https://github.com/mehta-lab/waveorder", rev = "feat/anisotropic-yx-pixel-size" }
 
 [tool.hatch.metadata]
 allow-direct-references = true
@@ -139,6 +143,9 @@ docstring-code-format = true
 [tool.pytest.ini_options]
 addopts = ["--import-mode=importlib"]
 testpaths = ["tests"]
+markers = [
+    "gpu: tests that require a CUDA device (skipped on CPU-only CI runners)",
+]
 filterwarnings = [
     # higra (transitive via ultrack) ships math docstrings with unescaped
     # backslashes, which Python >=3.12 flags as SyntaxWarning on import. Not
