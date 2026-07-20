@@ -29,7 +29,7 @@
 // extra (cytoland → viscy-utils provides the `viscy` console script), so the
 // tasks here run in that extra's environment rather than the plain biahub env.
 
-include { parse_resources; slurm_logs; slurm_log_dir } from './common'
+include { parse_resources; checksum_heal; slurm_logs; slurm_log_dir } from './common'
 
 // Command prefix for tools that require biahub's `stain` extra. Both
 // `biahub virtual-stain` (it imports cytoland) and `viscy preprocess` need it.
@@ -118,11 +118,9 @@ process run_virtual_stain {
     val position
 
     script:
+    def cmd = "${stain_cmd('biahub')} virtual-stain --cluster debug -i \"${input_zarr}/${position}\" -o \"${output_zarr}\" -c \"${config}\""
     """
-    ${stain_cmd('biahub')} virtual-stain --cluster debug \
-        -i "${input_zarr}/${position}" \
-        -o "${output_zarr}" \
-        -c "${config}"
+    ${checksum_heal(output_zarr, position, cmd)}
     """
 }
 
