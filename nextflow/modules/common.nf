@@ -40,37 +40,43 @@ def biahub_cmd() {
 }
 
 
-// Wrap a per-position command with self-healing for zarr's "checksum is invalid"
-// error. A per-position task killed mid-write (SLURM preemption / timeout / OOM
+// Wrap a per-position command with self-healing for zarr's torn-shard write
+// errors. A per-position task killed mid-write (SLURM preemption / timeout / OOM
 // — the 130..145 signal exits the global errorStrategy already retries) can
-// leave a torn zarr v3 shard in the output position. flat-field / deskew /
-// apply-inv-tf / virtual-stain all write partial chunks via read-modify-write,
-// so the NEXT attempt (a Nextflow retry, or a later `-resume`) reads that torn
-// shard back and zarr's codec pipeline raises `RuntimeError: the checksum is
-// invalid` — a non-signal exit (1) that the global errorStrategy would otherwise
-// `terminate` on, so retries and `-resume` both keep dying on the same position.
+// leave a torn or truncated zarr v3 shard in the output position. flat-field /
+// deskew / apply-inv-tf / virtual-stain all write partial chunks via
+// read-modify-write, so the NEXT attempt (a Nextflow retry, or a later
+// `-resume`) reads that torn shard back and zarr's `zarrs` codec pipeline aborts
+// with a non-signal exit (1) that the global errorStrategy would otherwise
+// `terminate` on — so retries and `-resume` both keep dying on the same
+// position. The same root cause surfaces as two distinct messages (see
+// czbiohub-sf/iohub#415), both matched below:
+//   - "the checksum is invalid"                                  (CRC32C mismatch)
+//   - "encoded shard is smaller than the expected size ..."      (truncated shard)
 //
 // This wrapper runs `cmd`, capturing its output. On failure it inspects the log
-// and ONLY if it sees "checksum is invalid" does it remove this position's chunk
-// data (the zarr v3 `c/` directories under `${output_zarr}/${position}`) while
-// preserving every `zarr.json` scaffold created by the `--init` step, then runs
-// `cmd` once more so the write starts from clean chunks. Any OTHER failure is
-// re-raised with its original exit status, so the global errorStrategy handles
-// it exactly as before. Safe and a no-op unless corruption is actually detected:
-// nothing is deleted when `cmd` succeeds, and the delete is scoped to a single
-// position group, so concurrent per-position tasks never touch each other.
+// and ONLY if it matches a torn-shard signature does it remove this position's
+// chunk data (the zarr v3 `c/` directories under `${output_zarr}/${position}`)
+// while preserving every `zarr.json` scaffold created by the `--init` step, then
+// runs `cmd` once more so the write starts from clean chunks. Any OTHER failure
+// is re-raised with its original exit status, so the global errorStrategy
+// handles it exactly as before. Safe and a no-op unless corruption is actually
+// detected: nothing is deleted when `cmd` succeeds, and the delete is scoped to
+// a single position group, so concurrent per-position tasks never touch each
+// other.
 //
 // `cmd` must be a single-line shell command string (no trailing backslashes),
 // since it is spliced into an `if !` pipeline and re-run verbatim. `set -o
 // pipefail` is required so the pipeline's status reflects `cmd`, not `tee`.
 def checksum_heal(output_zarr, position, cmd) {
     def pos_dir = "${output_zarr}/${position}"
+    def torn_shard_re = 'checksum is invalid|encoded shard is smaller than the expected size'
     return """
     set -o pipefail
     if ! ${cmd} 2>&1 | tee .checksum_heal.log; then
         heal_status=\${PIPESTATUS[0]}
-        if grep -q 'checksum is invalid' .checksum_heal.log; then
-            echo "[checksum-heal] corrupt output chunk detected for ${position}; clearing chunk data under ${pos_dir} and retrying once"
+        if grep -qE '${torn_shard_re}' .checksum_heal.log; then
+            echo "[checksum-heal] corrupt output shard detected for ${position}; clearing chunk data under ${pos_dir} and retrying once"
             find "${pos_dir}" -type d -name c -prune -exec rm -rf {} + 2>/dev/null || true
             ${cmd}
         else
