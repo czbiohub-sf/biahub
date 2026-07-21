@@ -40,6 +40,48 @@ def biahub_cmd() {
 }
 
 
+// Wrap a per-position command with clean-and-retry self-healing. A per-position
+// task killed mid-write (SLURM preemption / timeout / OOM, or a transient storage
+// I/O error) can leave a torn or partial zarr v3 shard in the output position.
+// Because flat-field / deskew / apply-inv-tf / virtual-stain write partial chunks
+// via read-modify-write, the NEXT attempt (a Nextflow retry, or a later `-resume`)
+// reads that torn shard back and zarr's `zarrs` codec pipeline aborts with a
+// non-signal exit (1) that the global errorStrategy would otherwise `terminate`
+// on — so retries and `-resume` keep dying on the same position. The same root
+// cause surfaces as several different messages depending on which codec hits the
+// corruption (see czbiohub-sf/iohub#415, czbiohub-sf/biahub#286):
+//   "the checksum is invalid" / "encoded shard is smaller than the expected size"
+//   / "blosc encoded value is invalid" / ...
+//
+// Rather than enumerate every message, this heals on ANY failure. A per-position
+// task always fully recomputes its position from the input, so on failure it is
+// always safe to remove that position's chunk data (the zarr v3 `c/` directories
+// under `${output_zarr}/${position}`, preserving every `zarr.json` scaffold from
+// the `--init` step) and run `cmd` once more from clean chunks: this recovers
+// every torn-shard flavour (present and future) and gives transient errors a
+// second chance. If the retry ALSO fails, its exit status propagates and the
+// global errorStrategy handles it exactly as before — so genuine bugs are not
+// masked, they just cost one extra attempt. No-op on success (nothing is
+// deleted), and the delete is scoped to a single position group, so concurrent
+// per-position tasks never touch each other.
+//
+// `cmd` must be a single shell command (no trailing backslashes): it is run, and
+// re-run verbatim on failure. `|| heal_status=$?` captures the exit code without
+// tripping the `-e` shell option so the retry logic can run.
+def checksum_heal(output_zarr, position, cmd) {
+    def pos_dir = "${output_zarr}/${position}"
+    return """
+    heal_status=0
+    ${cmd} || heal_status=\$?
+    if [ "\$heal_status" -ne 0 ]; then
+        echo "[self-heal] ${position}: attempt failed (exit \$heal_status); clearing chunk data under ${pos_dir} and retrying once"
+        find "${pos_dir}" -type d -name c -prune -exec rm -rf {} + 2>/dev/null || true
+        ${cmd}
+    fi
+    """.stripIndent()
+}
+
+
 // List the position keys of a plate zarr, one per line, for fan-out.
 process list_positions {
     label 'cpu_local'

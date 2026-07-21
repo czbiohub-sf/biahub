@@ -14,7 +14,7 @@
 // Nextflow task.  See also:
 // examples/submitit_debug_nextflow/2026-05-27-submitit-debug-nextflow-concerns.md
 
-include { parse_resources; biahub_cmd; slurm_logs; slurm_log_dir } from './common'
+include { parse_resources; biahub_cmd; checksum_heal; slurm_logs; slurm_log_dir } from './common'
 
 
 process init_deskew {
@@ -57,11 +57,9 @@ process run_deskew {
     val position
 
     script:
+    def cmd = "${biahub_cmd()} deskew --cluster debug -i \"${input_zarr}/${position}\" -o \"${output_zarr}\" -c \"${config}\""
     """
-    ${biahub_cmd()} deskew --cluster debug \
-        -i "${input_zarr}/${position}" \
-        -o "${output_zarr}" \
-        -c "${config}"
+    ${checksum_heal(output_zarr, position, cmd)}
     """
 }
 

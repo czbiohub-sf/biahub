@@ -20,7 +20,7 @@
 // resource scheduling, so the CLI must NOT submit its own SLURM jobs.
 // See: examples/submitit_debug_nextflow/2026-05-27-submitit-debug-nextflow-concerns.md
 
-include { parse_resources; biahub_cmd; slurm_logs; slurm_log_dir } from './common'
+include { parse_resources; biahub_cmd; checksum_heal; slurm_logs; slurm_log_dir } from './common'
 
 
 process init_apply_inv_tf {
@@ -104,12 +104,9 @@ process run_apply_inv_tf {
     val position
 
     script:
+    def cmd = "${biahub_cmd()} apply-inv-tf --cluster debug -i \"${input_zarr}/${position}\" -t \"${tf_zarr}\" -o \"${output_zarr}\" -c \"${config}\""
     """
-    ${biahub_cmd()} apply-inv-tf --cluster debug \
-        -i "${input_zarr}/${position}" \
-        -t "${tf_zarr}" \
-        -o "${output_zarr}" \
-        -c "${config}"
+    ${checksum_heal(output_zarr, position, cmd)}
     """
 }
 
