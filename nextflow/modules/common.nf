@@ -49,10 +49,11 @@ def biahub_cmd() {
 // `-resume`) reads that torn shard back and zarr's `zarrs` codec pipeline aborts
 // with a non-signal exit (1) that the global errorStrategy would otherwise
 // `terminate` on — so retries and `-resume` both keep dying on the same
-// position. The same root cause surfaces as two distinct messages (see
-// czbiohub-sf/iohub#415), both matched below:
-//   - "the checksum is invalid"                                  (CRC32C mismatch)
+// position. The same root cause surfaces as several distinct messages (see
+// czbiohub-sf/iohub#415), all matched below:
+//   - "the checksum is invalid"                                  (CRC32C shard-index mismatch)
 //   - "encoded shard is smaller than the expected size ..."      (truncated shard)
+//   - "blosc encoded value is invalid"                           (corrupt blosc inner chunk)
 //
 // This wrapper runs `cmd`, capturing its output. On failure it inspects the log
 // and ONLY if it matches a torn-shard signature does it remove this position's
@@ -70,7 +71,7 @@ def biahub_cmd() {
 // pipefail` is required so the pipeline's status reflects `cmd`, not `tee`.
 def checksum_heal(output_zarr, position, cmd) {
     def pos_dir = "${output_zarr}/${position}"
-    def torn_shard_re = 'checksum is invalid|encoded shard is smaller than the expected size'
+    def torn_shard_re = 'checksum is invalid|encoded shard is smaller than the expected size|blosc encoded value is invalid'
     return """
     set -o pipefail
     if ! ${cmd} 2>&1 | tee .checksum_heal.log; then
