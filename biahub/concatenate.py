@@ -552,17 +552,14 @@ def concatenate(
 @monitor()
 @init_only()
 @click.option(
-    "--resolve-config",
-    "resolve_config_mode",
-    is_flag=True,
-    default=False,
-    help="Resolve placeholder concat_data_paths and write output config.",
-)
-@click.option(
     "--concat-data-paths",
     multiple=True,
     type=str,
-    help="Override concat_data_paths from config (repeat flag, used with --resolve-config).",
+    help=(
+        "Resolve mode: inject these concat_data_paths into the config and write "
+        "the resolved config to -o (a YAML file), then exit. Repeat the flag once "
+        "per source store."
+    ),
 )
 def concatenate_cli(
     config_filepath: Path,
@@ -571,7 +568,6 @@ def concatenate_cli(
     cluster: str = "slurm",
     monitor: bool = False,
     init_only: bool = False,
-    resolve_config_mode: bool = False,
     concat_data_paths: tuple[str, ...] = (),
 ):
     r"""Concatenate datasets (with optional cropping).
@@ -581,8 +577,9 @@ def concatenate_cli(
     >>> biahub concatenate -c ./concat.yml -o ./output.zarr
 
     \b
-    Resolve placeholder paths (Nextflow config prep, runs on the login node):
-    >>> biahub concatenate --resolve-config \
+    Resolve placeholder paths (Nextflow config prep, runs on the login node).
+    Passing --concat-data-paths selects resolve mode; -o is the resolved YAML:
+    >>> biahub concatenate \
         -c concat.yml -o resolved.yml \
         --concat-data-paths "deskew.zarr/*/*/*" \
         --concat-data-paths "reconstruct.zarr/*/*/*"
@@ -599,9 +596,10 @@ def concatenate_cli(
     config_path = config_filepath
     output_path = output_dirpath
 
-    if resolve_config_mode:
-        if not concat_data_paths:
-            raise click.UsageError("--resolve-config requires --concat-data-paths")
+    # Passing --concat-data-paths means "resolve the config": inject the paths
+    # and write the resolved config to -o (a YAML file), then exit. This is the
+    # only use of --concat-data-paths, so its presence selects resolve mode.
+    if concat_data_paths:
         _resolve_concatenate_config(config_path, output_path, concat_data_paths)
         return
 
