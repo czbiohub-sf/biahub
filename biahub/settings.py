@@ -71,22 +71,47 @@ class CellposeConfig(MyBaseModel):
     labels_sigma: float = 5.0
 
 
+class ZSlicing(MyBaseModel):
+    """How to SELECT the Z-planes used for tracking.
+
+    The ``method`` decides which of the other fields are used; fields that belong to a
+    different method are simply ignored (all have defaults). The block selects a
+    z-window; the actual reduction to 2D is governed separately by
+    ``TrackingSettings.output_mode`` (plus any Z-projection step, e.g. ``np.mean``, in
+    ``input_images``).
+
+    Methods
+    -------
+    all
+        Use every plane (``slice(None)``).
+    central
+        Use an automatically centred window (see ``central_z_slice``).
+    range
+        Use the explicit ``range`` ``[start, stop]`` slice (falls back to all planes
+        if ``range`` is left unset).
+    focus
+        Detect the in-focus plane per-FOV (waveorder ``focus_from_transverse_band``
+        on ``focus_channel``) and take a fixed window of ``window_size`` planes around it,
+        split ``frac_below``/``frac_above``.
+    """
+
+    method: Literal["all", "central", "range", "focus"] = "all"
+    range: tuple[int, int] | None = None  # method: range
+    window_size: int = 48  # method: focus (fixed window size, in z-planes)
+    frac_below: float = 1 / 3  # method: focus
+    frac_above: float = 2 / 3  # method: focus
+    focus_channel: str | None = None  # method: focus -- channel focus-finding runs on
+
+
 class TrackingSettings(MyBaseModel):
     target_channel: str = "nuclei_prediction"
     fov: str = "*/*/*"
     blank_frames_path: Path | None = None
-    mode: Literal["2D", "3D"] = "2D"
-    z_range: tuple[int, int] | None = None
-    # Focus-based z-resolution. When use_focus is True, z_range is ignored and a
-    # window of z_total planes centred on the in-focus plane (found per-FOV via
-    # waveorder) is used instead. focus_frac_below/above split z_total below and
-    # above the detected focus plane (defaults: 1/3 below, 2/3 above).
-    use_focus: bool = False
-    z_total: int | None = None
-    focus_frac_below: float = 1 / 3
-    focus_frac_above: float = 2 / 3
-    # Channel (by name) to run focus finding on. If None, the first channel is used.
-    focus_channel: str | None = None
+    # 2D writes an output plate with Z=1 (input must be projected); 3D keeps the
+    # selected z-window. Does not itself project the data.
+    output_mode: Literal["2D", "3D"] = "2D"
+    # Which Z-planes to select for tracking. See ZSlicing.
+    z_slicing: ZSlicing = ZSlicing()
     input_images: list[ProcessingInputChannel]
     tracking_config: dict[str, Any] = {}
     segmentation_method: Literal["foreground_contour", "cellpose"] = "foreground_contour"

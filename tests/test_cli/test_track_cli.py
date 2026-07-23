@@ -9,7 +9,8 @@ from click.testing import CliRunner
 from iohub.ngff import open_ome_zarr
 
 from biahub.cli.main import cli
-from biahub.track import track
+from biahub.settings import TrackingSettings, ZSlicing
+from biahub.track import _init_output_plate, resolve_z_slice, track
 
 
 @pytest.fixture(scope="function")
@@ -84,13 +85,14 @@ def _make_tracking_config(plate_path, tmp_path):
     """Create a minimal tracking config pointing at the test plate."""
     config_path = tmp_path / "track_config.yml"
     config = {
-        "mode": "2D",
+        "output_mode": "2D",
         "fov": "*/*/*",
-        "z_range": [-1, -1],
+        "z_slicing": {"method": "central"},
         "target_channel": "nuclei_prediction",
         "input_images": [
             {
-                "path": str(plate_path),
+                # Primary data source left null -> resolved from the -i input plate.
+                "path": None,
                 "channels": {
                     "nuclei_prediction": [
                         {
@@ -253,22 +255,12 @@ def test_track_cli_missing_input_path(tmp_path, example_track_settings, monkeypa
     config_path, _ = example_track_settings
     output_path = tmp_path / "output.zarr"
 
-    test_config_path = tmp_path / "test_track_config_missing.yml"
-    with open(config_path) as f:
-        config_content = f.read()
-
-    config_content = config_content.replace(
-        "/path/to/virtual_staining.zarr", "/non/existent/path"
-    )
-
-    with open(test_config_path, "w") as f:
-        f.write(config_content)
-
-    with pytest.raises((FileNotFoundError, ValueError)):
+    # -i points at a nonexistent plate, so plate init fails before any tracking.
+    with pytest.raises((FileNotFoundError, ValueError, KeyError)):
         track(
             input_position_dirpaths=[str(tmp_path / "nonexistent" / "A" / "1" / "0")],
             output_dirpath=str(output_path),
-            config_filepath=str(test_config_path),
+            config_filepath=str(config_path),
             cluster="local",
         )
 
@@ -337,3 +329,174 @@ def test_track_cli_debug_single_position(tmp_path, example_tracking_plate, monke
         data = ds["0"][:]
         assert data.dtype == np.uint32
         assert data.shape[0] > 0
+
+
+# ---------------------------------------------------------------------------
+# Z-slicing resolution
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_z_slice_all():
+    z_slices, n = resolve_z_slice(ZSlicing(method="all"), z_shape=30)
+    assert z_slices == slice(None)
+    assert n == 30
+
+
+def test_resolve_z_slice_central():
+    z_slices, n = resolve_z_slice(ZSlicing(method="central"), z_shape=21)
+    assert n == z_slices.stop - z_slices.start
+    assert n >= 3
+
+
+def test_resolve_z_slice_range():
+    z_slices, n = resolve_z_slice(ZSlicing(method="range", range=(5, 10)), z_shape=30)
+    assert z_slices == slice(5, 10)
+    assert n == 5
+
+
+def test_resolve_z_slice_range_invalid():
+    with pytest.raises(ValueError):
+        resolve_z_slice(ZSlicing(method="range", range=(10, 5)), z_shape=30)
+
+
+def test_resolve_z_slice_focus_loads_full_reports_window():
+    # focus loads the full stack at read time; the count is the fixed window size.
+    z_slices, n = resolve_z_slice(ZSlicing(method="focus", window_size=15), z_shape=30)
+    assert z_slices == slice(None)
+    assert n == 15
+    # window larger than the stack collapses the count to the full depth.
+    _, n = resolve_z_slice(ZSlicing(method="focus", window_size=50), z_shape=30)
+    assert n == 30
+
+
+def test_focus_window_fixed_size_and_shifts_at_edges():
+    from biahub.track import _focus_window
+
+    # centred window of the requested size.
+    assert _focus_window(15, 6, 30, 1 / 3) == (slice(13, 19), 6)
+    # window bigger than the stack collapses to the full range.
+    assert _focus_window(15, 50, 30, 1 / 3) == (slice(0, 30), 30)
+    # a window that would spill past an edge is shifted, not clipped.
+    z_slices, n = _focus_window(29, 6, 30, 0.0)
+    assert n == 6
+    assert 0 <= z_slices.start and z_slices.stop <= 30
+
+
+def test_apply_focus_slicing_uniform_window(monkeypatch):
+    from biahub import track as track_mod
+
+    # Deterministic focus centre so the test doesn't depend on waveorder.
+    monkeypatch.setattr(track_mod, "_median_focus_plane", lambda stack, pixel_size: 15)
+
+    T, Z, Y, X = 4, 30, 8, 8
+    data_dict = {
+        "a": np.arange(T * Z * Y * X).reshape(T, Z, Y, X).astype(float),
+        "b": np.zeros((T, Z, Y, X)),
+    }
+    z = ZSlicing(method="focus", window_size=6, frac_below=1 / 3)
+    out = track_mod.apply_focus_slicing(data_dict, z, pixel_size=0.5)
+
+    # Same fixed window applied to every channel (center=15 -> slice(13, 19)).
+    assert out["a"].shape == (T, 6, Y, X)
+    assert out["b"].shape == (T, 6, Y, X)
+    assert np.array_equal(out["a"], data_dict["a"][:, 13:19])
+
+
+def test_zslicing_focus_defaults_window_size():
+    # focus works without an explicit window_size (defaults to 48).
+    z = ZSlicing(method="focus")
+    assert z.window_size == 48
+
+
+def test_zslicing_ignores_irrelevant_fields():
+    # method decides which fields are used; the rest are ignored, not rejected.
+    z_slices, n = resolve_z_slice(
+        ZSlicing(method="all", range=(0, 5), window_size=10), z_shape=30
+    )
+    assert z_slices == slice(None)
+    assert n == 30
+
+
+def test_resolve_z_slice_range_unset_falls_back_to_all():
+    z_slices, n = resolve_z_slice(ZSlicing(method="range"), z_shape=30)
+    assert z_slices == slice(None)
+    assert n == 30
+
+
+# ---------------------------------------------------------------------------
+# Output plate shape matches tracked Z
+# ---------------------------------------------------------------------------
+
+
+def _minimal_settings(**overrides):
+    base = {
+        "target_channel": "nuclei_prediction",
+        "input_images": [
+            {
+                "path": None,
+                "channels": {
+                    "nuclei_prediction": [{"function": "np.mean", "kwargs": {"axis": 1}}]
+                },
+            }
+        ],
+    }
+    base.update(overrides)
+    return TrackingSettings(**base)
+
+
+@pytest.mark.parametrize(
+    "output_mode, z_slicing, expected_z",
+    [
+        ("2D", {"method": "central"}, 1),
+        ("3D", {"method": "range", "range": (0, 2)}, 2),
+        # Regression: focus + 3D output Z equals the fixed focus window, not the
+        # full stack -- this is the shape-mismatch bug _init_output_plate had.
+        ("3D", {"method": "focus", "window_size": 2}, 2),
+    ],
+)
+def test_init_output_plate_shape(
+    tmp_path, example_tracking_plate, output_mode, z_slicing, expected_z
+):
+    plate_path, _ = example_tracking_plate
+    output_path = tmp_path / "init_shape.zarr"
+    settings = _minimal_settings(output_mode=output_mode, z_slicing=z_slicing)
+
+    shape = _init_output_plate([str(plate_path / "A" / "1" / "0")], output_path, settings)
+    assert shape[2] == expected_z
+    with open_ome_zarr(str(output_path / "A" / "1" / "0"), mode="r") as ds:
+        assert ds.data.shape[2] == expected_z
+
+
+# ---------------------------------------------------------------------------
+# Input-path resolution
+# ---------------------------------------------------------------------------
+
+
+def test_input_images_path_override(tmp_path, example_tracking_plate, monkeypatch):
+    """A null primary path is filled from --input-images-path when provided."""
+    monkeypatch.setenv("ULTRACK_ARRAY_MODULE", "numpy")
+
+    plate_path, _ = example_tracking_plate
+    output_path = tmp_path / "override_output.zarr"
+    config_path = _make_tracking_config(plate_path, tmp_path)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "track",
+            "-i",
+            str(plate_path / "A" / "1" / "0"),
+            "-o",
+            str(output_path),
+            "-c",
+            str(config_path),
+            "--cluster",
+            "debug",
+            "--input-images-path",
+            str(plate_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert output_path.exists()

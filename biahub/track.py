@@ -35,13 +35,17 @@ from biahub.cli.utils import (
     update_model,
     yaml_to_model,
 )
-from biahub.settings import CellposeConfig, ProcessingInputChannel, TrackingSettings
+from biahub.settings import (
+    CellposeConfig,
+    ProcessingInputChannel,
+    TrackingSettings,
+    ZSlicing,
+)
 
 logger = logging.getLogger(__name__)
 
 # Optical parameters for waveorder focus finding (focus_from_transverse_band),
-# shared with biahub.estimate_stabilization. Used only when a config sets
-# use_focus: true to resolve the in-focus z-window per FOV.
+# shared with biahub.estimate_stabilization.
 NA_DET = 1.35
 LAMBDA_ILL = 0.500
 
@@ -288,18 +292,18 @@ def central_z_slice(z_shape: int) -> slice:
     return slice(z_center - half_window, z_center + half_window + 1)
 
 
-def _median_focus_plane(data, z_shape: int, pixel_size: float, channel_index: int) -> int:
-    """Median in-focus z-plane across timepoints for one channel.
+def _median_focus_plane(stack: ArrayLike, pixel_size: float) -> int:
+    """Median in-focus z-plane across timepoints for a (T, Z, Y, X) stack.
 
     Uses waveorder ``focus_from_transverse_band`` (with the module constants
-    ``NA_DET``/``LAMBDA_ILL``) per timepoint; empty frames fall back to the
-    central plane. ``data`` is a (T, C, Z, Y, X) array-like.
+    ``NA_DET``/``LAMBDA_ILL``) per timepoint; empty frames fall back to the central plane.
     """
     from waveorder.focus import focus_from_transverse_band
 
+    z_shape = stack.shape[1]
     z_focus = []
-    for t in tqdm(range(data.shape[0]), desc="Finding focus"):
-        zyx = np.asarray(data[t, channel_index, :, :, :])
+    for t in tqdm(range(stack.shape[0]), desc="Finding focus"):
+        zyx = np.asarray(stack[t])
         if zyx.sum() == 0:
             z_focus.append(z_shape // 2)
             continue
@@ -310,109 +314,90 @@ def _median_focus_plane(data, z_shape: int, pixel_size: float, channel_index: in
     return int(np.median(z_focus))
 
 
-def resolve_z_slice(
-    z_range: tuple[int, int],
-    z_shape: int,
-    *,
-    data=None,
-    pixel_size: float | None = None,
-    use_focus: bool = False,
-    z_total: int | None = None,
-    frac_below: float = 1 / 3,
-    frac_above: float = 2 / 3,
-    focus_channel_index: int = 0,
+def _focus_window(
+    center: int, window_size: int, z_shape: int, frac_below: float
 ) -> tuple[slice, int]:
+    """Build a fixed-size z-window of ``window_size`` planes around ``center``.
+
+    The window is shifted (not clipped) to stay within ``[0, z_shape]``, so it always
+    spans exactly ``min(window_size, z_shape)`` planes. ``frac_below`` sets how far
+    below ``center`` it starts.
     """
-    Resolve the z-slice range based on user input and imaging mode.
+    size = min(window_size, z_shape)
+    start = center - int(round(frac_below * window_size))
+    stop = start + size
+    if start < 0:
+        start, stop = 0, size
+    elif stop > z_shape:
+        start, stop = z_shape - size, z_shape
+    return slice(start, stop), size
 
-    This function determines which Z-planes to extract from a 3D or 4D volume based on:
-    - Focus finding, if `use_focus` is True: the in-focus plane is detected per
-      timepoint (waveorder ``focus_from_transverse_band`` on ``focus_channel_index``,
-      using the module constants ``NA_DET``/``LAMBDA_ILL`` and ``pixel_size``), and a window
-      of ``z_total`` planes is placed around the median focus (``frac_below`` below,
-      ``frac_above`` above). ``z_range`` is ignored in this mode.
-    - A user-specified Z-range tuple `(start, stop)`, or
-    - Automatic central slicing if `(-1, -1)` is passed.
-    - All planes are returned if `None` is passed.
 
-    Validation ensures that the resulting slice includes at least one Z-plane.
-    Odd-length slices are not required.
+def resolve_z_slice(z: ZSlicing, z_shape: int) -> tuple[slice, int]:
+    """Resolve the read-time Z-slice and its plane count from a :class:`ZSlicing`.
 
-    Parameters
-    ----------
-    z_range : Tuple[int, int]
-        The (start, stop) indices for slicing Z-planes. If (-1, -1), central slicing will be used.
-        If None, all planes are returned.
-    z_shape : int
-        Total number of Z-planes in the dataset (e.g., `shape[2]`).
-    data : ArrayLike, optional
-        (T, C, Z, Y, X) array-like used for focus finding. Required when `use_focus` is True.
-    pixel_size : float, optional
-        Transverse pixel size passed to waveorder focus finding. Required when `use_focus` is True.
-    use_focus : bool, optional
-        If True, resolve the z-window per-FOV around the detected in-focus plane instead of
-        using `z_range`. Default is False.
-    z_total : int, optional
-        Number of planes in the focus window. Required when `use_focus` is True.
-    frac_below : float, optional
-        Fraction of `z_total` placed below the focus plane. Default is 1/3.
-    frac_above : float, optional
-        Fraction of `z_total` placed above the focus plane. Default is 2/3.
-    focus_channel_index : int, optional
-        Channel index to run focus finding on. Default is 0.
+    ``z.method`` selects the strategy: ``all`` (every plane), ``central`` (see
+    :func:`central_z_slice`), or ``range`` (explicit ``z.range``). ``focus`` is resolved
+    later, per-FOV, from the loaded data (see :func:`apply_focus_slicing`); here it just
+    loads the full stack (``slice(None)``) but reports the fixed window count
+    ``min(z.window_size, z_shape)``, so the output plate Z still matches the tracked Z.
 
-    Returns
-    -------
-    slice
-        A slice object selecting the requested Z-range from the dataset.
-    int
-        The number of Z-planes in the selected range.
-
-    Raises
-    ------
-    ValueError
-        If the user-provided slice range is invalid (e.g., stop <= start).
-
-    Examples
-    --------
-    >>> resolve_z_slice((5, 10), z_shape=30)
-    (slice(5, 10), 5)
-
-    >>> resolve_z_slice((-1, -1), z_shape=21)
-    (slice(9, 12), 3)  # 3 central slices
-
-    >>> resolve_z_slice((-1, -1), z_shape=21)
-    (slice(None), 21)
+    Returns ``(slice, n_planes)``.
     """
-    if use_focus:
-        if data is None or pixel_size is None or z_total is None:
-            raise ValueError(
-                "use_focus=True requires data, pixel_size, and z_total to be provided."
-            )
-        center = _median_focus_plane(data, z_shape, pixel_size, focus_channel_index)
-        start = max(0, center - int(round(frac_below * z_total)))
-        stop = min(z_shape, center + int(round(frac_above * z_total)))
+    if z.method == "all":
+        return slice(None), z_shape
+
+    if z.method == "central":
+        z_slices = central_z_slice(z_shape)
+        return z_slices, z_slices.stop - z_slices.start
+
+    if z.method == "range":
+        if z.range is None:
+            return slice(None), z_shape
+        start, stop = z.range
         if stop <= start:
             raise ValueError(
-                f"Focus z-window is empty (start={start}, stop={stop}); check z_total={z_total}."
+                f"Invalid z_slicing.range {z.range}: must contain at least one slice "
+                "(stop > start)."
             )
         return slice(start, stop), stop - start
 
-    if z_range == (-1, -1):
-        z_slices = central_z_slice(z_shape)
-        Z = z_slices.stop - z_slices.start
-    elif z_range is None:
-        z_slices = slice(None)
-        Z = z_shape
-    else:
-        start, stop = z_range
-        if stop <= start:
-            raise ValueError(
-                f"Invalid Z-slice range {z_range}: must contain at least one slice (stop > start)."
-            )
-        z_slices = slice(start, stop)
-        Z = stop - start
-    return z_slices, Z
+    if z.method == "focus":
+        # Load the full stack now; the focus window is applied per-FOV after loading.
+        return slice(None), min(z.window_size, z_shape)
+
+    raise ValueError(f"Unknown z_slicing.method: {z.method!r}")
+
+
+def apply_focus_slicing(
+    data_dict: dict[str, ArrayLike], z_slicing: ZSlicing, pixel_size: float
+) -> dict[str, ArrayLike]:
+    """Slice every loaded channel to a focus window (``method='focus'``).
+
+    The in-focus plane is found once per FOV on ``z_slicing.focus_channel`` (or the
+    first loaded channel if unset), then the SAME fixed window of
+    ``z_slicing.window_size`` planes is applied to every channel so they stay Z-aligned.
+    Channel arrays are (T, Z, Y, X). Only the focus channel's full stack is read; the
+    rest stay lazy and only their window is materialised downstream.
+    """
+    focus_channel = z_slicing.focus_channel or next(iter(data_dict))
+    if focus_channel not in data_dict:
+        raise ValueError(
+            f"focus_channel '{focus_channel}' not in loaded channels {list(data_dict)}."
+        )
+
+    stack = data_dict[focus_channel]
+    if isinstance(stack, da.Array):
+        stack = stack.compute()
+    stack = np.asarray(stack)
+
+    center = _median_focus_plane(stack, pixel_size)
+    z_slices, _ = _focus_window(
+        center, z_slicing.window_size, stack.shape[1], z_slicing.frac_below
+    )
+    click.echo(f"Focus-resolved z-slice: {z_slices}")
+
+    return {name: arr[:, z_slices] for name, arr in data_dict.items()}
 
 
 def run_ultrack(
@@ -597,8 +582,10 @@ def load_data(
 
     Notes
     -----
-    - Assumes that each `ProcessingInputChannel` has a valid `.path` attribute pointing to a Zarr store.
-    - Uses `read_data()` to extract metadata and index the correct channel.
+    - Only ``input_images`` entries with a non-null ``path`` are loaded here; entries
+      with ``path: null`` are virtual/computed channels produced later by
+      ``run_preprocessing_pipeline`` (``track`` resolves the primary null path before
+      submitting, see :func:`track`).
     - Channel names must match those present in the dataset.
     """
     import napari
@@ -656,47 +643,18 @@ def fill_empty_frames_from_csv(
     return data_dict
 
 
-def data_preprocessing(
+def _load_and_preprocess(
     position_key: str,
     input_images: list[ProcessingInputChannel],
     z_slices: slice,
-    blank_frames_path: Path | None = None,
+    blank_frames_path: Path | None,
+    z_slicing: ZSlicing | None,
+    pixel_size: float | None,
     visualize: bool = False,
-) -> dict[str, np.ndarray]:
-    """
-    Load, preprocess, and prepare image data for tracking.
+) -> dict[str, ArrayLike]:
+    """Load, focus-slice, run the processing pipeline, and fill blank frames for one FOV.
 
-    This function performs the full preprocessing pipeline on a single field of view (FOV).
-    It loads Z-sliced image data, applies configured preprocessing functions, fills in any
-    empty timepoints using a blank frame CSV (if provided), and returns the two required
-    channels for tracking: the foreground mask and the contour gradient map.
-
-    Parameters
-    ----------
-    position_key : str
-        FOV key, typically formed as "Plate_Well_Position" (e.g., "A_1_3").
-    input_images : list of ProcessingInputChannel
-        Configuration defining which channels to load and how to process them.
-    z_slices : slice
-        Slice object selecting which Z-planes to load (e.g., central slices).
-    blank_frames_path : Path, optional
-        Optional path to a CSV file containing frame indices to be filled for each FOV.
-        If not provided, empty frame handling is skipped.
-    visualize : bool, optional
-        If True, opens Napari viewer to visualize each intermediate step.
-
-    Returns
-    -------
-    dict of str to np.ndarray
-        Dictionary containing two arrays:
-        - "foreground" : binary mask array for detected objects
-        - "contour"    : gradient/edge map for contour-based refinement
-
-    Raises
-    ------
-    ValueError
-        If neither 'foreground' and 'contour' nor 'foreground_contour' channels are found
-        in the processed data.
+    Shared by the foreground+contour and cellpose segmentation paths.
     """
     fov = "/".join(position_key)
     data_dict = load_data(
@@ -705,19 +663,26 @@ def data_preprocessing(
         z_slices=z_slices,
         visualize=visualize,
     )
+    if z_slicing is not None and z_slicing.method == "focus":
+        data_dict = apply_focus_slicing(data_dict, z_slicing, pixel_size)
     data_dict = run_preprocessing_pipeline(data_dict, input_images, visualize=visualize)
-    data_dict = fill_empty_frames_from_csv(fov, data_dict, blank_frames_path)
+    return fill_empty_frames_from_csv(fov, data_dict, blank_frames_path)
 
-    # get foreground and contour
+
+def detect_foreground_segmentation(
+    data_dict: dict[str, ArrayLike],
+) -> tuple[ArrayLike, ArrayLike]:
+    """Pull the foreground mask and contour map out of a preprocessed ``data_dict``.
+
+    Accepts either separate ``foreground`` and ``contour`` channels or a single
+    ``foreground_contour`` pair. Raises if neither is present.
+    """
     channel_names = data_dict.keys()
     if "foreground" in channel_names and "contour" in channel_names:
-        foreground_mask, contour_gradient_map = data_dict["foreground"], data_dict["contour"]
-    elif "foreground_contour" in channel_names:
-        foreground_mask, contour_gradient_map = data_dict["foreground_contour"]
-    else:
-        raise ValueError("Foreground and contour channels are required for tracking.")
-    del data_dict
-    return foreground_mask, contour_gradient_map
+        return data_dict["foreground"], data_dict["contour"]
+    if "foreground_contour" in channel_names:
+        return data_dict["foreground_contour"]
+    raise ValueError("Foreground and contour channels are required for tracking.")
 
 
 def run_cellpose_per_frame(
@@ -755,42 +720,14 @@ def run_cellpose_per_frame(
     return labels
 
 
-def cellpose_preprocessing(
-    position_key: str,
-    input_images: list[ProcessingInputChannel],
-    z_slices: slice,
-    blank_frames_path: Path | None = None,
-    cellpose_config: CellposeConfig | None = None,
+def cellpose_segmentation(
+    data_dict: dict[str, ArrayLike], cellpose_config: CellposeConfig
 ) -> np.ndarray:
+    """Run cellpose on a preprocessed ``data_dict`` channel.
+
+    Selects ``cellpose_config.input_channel``, mean-projects Z if needed, and returns an
+    integer label array of shape (T, Y, X) ready for ``run_ultrack(..., labels=...)``.
     """
-    Load data, fill empty frames, and run cellpose segmentation.
-
-    Returns an integer label array of shape (T, Y, X) ready to pass
-    directly to ``run_ultrack(..., labels=...)``.
-
-    Parameters
-    ----------
-    position_key : str
-        FOV key (plate, well, position).
-    input_images : list of ProcessingInputChannel
-        Channel loading configuration.
-    z_slices : slice
-        Z-planes to load.
-    blank_frames_path : Path, optional
-        CSV of blank frames.
-    cellpose_config : CellposeConfig
-        Cellpose model parameters including ``input_channel``.
-    """
-    fov = "/".join(position_key)
-
-    data_dict = load_data(
-        position_key=position_key,
-        input_images=input_images,
-        z_slices=z_slices,
-    )
-    data_dict = run_preprocessing_pipeline(data_dict, input_images)
-    data_dict = fill_empty_frames_from_csv(fov, data_dict, blank_frames_path)
-
     # Get the channel to segment
     channel_name = cellpose_config.input_channel
     if channel_name not in data_dict:
@@ -837,14 +774,11 @@ def track_one_position(
     output_dirpath: Path,
     tracking_config,
     blank_frames_path: Path | None = None,
-    z_slices: tuple[int, int] = (0, 0),
-    scale: tuple[float, float, float, float, float] = (1, 1, 1, 1, 1),
+    z_slices: slice | None = None,
+    scale: tuple[float, ...] = (1, 1, 1, 1, 1),
     cellpose_config: CellposeConfig | None = None,
-    use_focus: bool = False,
-    z_total: int | None = None,
-    focus_frac_below: float = 1 / 3,
-    focus_frac_above: float = 2 / 3,
-    focus_channel: str | None = None,
+    z_slicing: ZSlicing | None = None,
+    output_mode: str = "2D",
 ) -> None:
     """
     Run tracking on a single field of view.
@@ -869,25 +803,20 @@ def track_one_position(
     blank_frames_path : Path, optional
         Path to CSV file indicating empty frames for the current FOV. If None, blank frame
         filling is skipped.
-    z_slices : tuple of int, optional
-        Tuple specifying the range of Z-slices to load. If (0, 0), the central slice range
-        will be auto-resolved. Default is (0, 0).
+    z_slices : slice, optional
+        Read-time Z-slice passed to ``load_data``. For ``method='focus'`` this is the
+        full stack and the window is applied per-FOV after loading.
     scale : tuple of float, optional
-        Physical scale of the dataset in (T, C, Z, Y, X) order. Tracking uses either the
-        (Z, Y, X) or (Y, X) portion depending on dimensionality. Default is (1, 1, 1, 1, 1).
+        Physical scale used for tracking, in (Z, Y, X) or (Y, X) order (already trimmed
+        by the caller to match ``output_mode``). Default is (1, 1, 1, 1, 1).
     cellpose_config : CellposeConfig, optional
         If provided, uses cellpose segmentation instead of foreground+contour.
-    use_focus : bool, optional
-        If True, resolve the z-window per-FOV via focus finding, overriding `z_slices`.
-        Default is False.
-    z_total : int, optional
-        Number of planes in the focus window. Required when `use_focus` is True.
-    focus_frac_below : float, optional
-        Fraction of `z_total` placed below the focus plane. Default is 1/3.
-    focus_frac_above : float, optional
-        Fraction of `z_total` placed above the focus plane. Default is 2/3.
-    focus_channel : str, optional
-        Channel name to run focus finding on. If None, the first channel is used.
+    z_slicing : ZSlicing, optional
+        Z-plane selection config. For ``method='focus'`` the in-focus window is resolved
+        per-FOV from the loaded data (see :func:`apply_focus_slicing`).
+    output_mode : str, optional
+        "2D" writes (T, Y, X) labels into the Z=0 plane; "3D" writes (T, Z, Y, X)
+        labels across the z-window. Default is "2D".
 
     Returns
     -------
@@ -902,6 +831,9 @@ def track_one_position(
     - The Ultrack config is also saved as TOML in a `_config_tracking/{FOV}/` subdirectory.
     - In foreground+contour mode, missing "foreground"/"contour" channels raise a ValueError.
     """
+    if z_slicing is None:
+        z_slicing = ZSlicing()
+
     fov = "_".join(position_key)
     click.echo(f"Processing FOV: {fov.replace('_', '/')}")
 
@@ -910,43 +842,16 @@ def track_one_position(
     database_path = output_dirpath.parent / f"{filename}_config_tracking" / f"{fov}"
     os.makedirs(database_path, exist_ok=True)
 
-    # Focus-based z-resolution (per FOV): find the in-focus plane and take a
-    # window of z_total planes around it, overriding the passed z_slices.
-    if use_focus:
-        input_path = next((img.path for img in input_images if img.path is not None), None)
-        if input_path is None:
-            raise ValueError(
-                "use_focus=True requires an input_images entry with a non-null path."
-            )
-        with open_ome_zarr(str(Path(input_path) / Path(*position_key)), mode="r") as ds:
-            Z = ds.data.shape[2]
-            pixel_size = ds.scale[-1]
-            if focus_channel is None:
-                focus_channel_index = 0
-            elif focus_channel in ds.channel_names:
-                focus_channel_index = ds.channel_names.index(focus_channel)
-            else:
-                raise ValueError(
-                    f"focus_channel '{focus_channel}' not found in {ds.channel_names}"
-                )
-            z_slices, _ = resolve_z_slice(
-                None,
-                Z,
-                data=ds.data,
-                pixel_size=pixel_size,
-                use_focus=True,
-                z_total=z_total,
-                frac_below=focus_frac_below,
-                frac_above=focus_frac_above,
-                focus_channel_index=focus_channel_index,
-            )
-        click.echo(f"Focus-resolved z-slice for {fov.replace('_', '/')}: {z_slices}")
+    # Load, focus-slice (method='focus'), run the processing pipeline, and fill blank
+    # frames once; both segmentation methods consume the resulting data_dict.
+    # pixel_size is the transverse pixel size = last element of the (trimmed) scale.
+    pixel_size = scale[-1]
+    data_dict = _load_and_preprocess(
+        position_key, input_images, z_slices, blank_frames_path, z_slicing, pixel_size
+    )
 
     if cellpose_config is not None:
-        # Cellpose mode: load data, fill blanks, run cellpose, pass labels to ultrack
-        cellpose_labels = cellpose_preprocessing(
-            position_key, input_images, z_slices, blank_frames_path, cellpose_config
-        )
+        cellpose_labels = cellpose_segmentation(data_dict, cellpose_config)
 
         click.echo("Tracking with cellpose labels...")
         tracking_labels, tracks_df, _ = run_ultrack(
@@ -958,10 +863,7 @@ def track_one_position(
             overwrite=True,
         )
     else:
-        # Foreground + contour mode
-        foreground_mask, contour_gradient_map = data_preprocessing(
-            position_key, input_images, z_slices, blank_frames_path
-        )
+        foreground_mask, contour_gradient_map = detect_foreground_segmentation(data_dict)
 
         click.echo("Tracking with foreground + contour...")
         tracking_labels, tracks_df, _ = run_ultrack(
@@ -981,9 +883,24 @@ def track_one_position(
 
     click.echo(f"Saved tracks to: {output_dirpath / Path(*position_key)}")
 
-    # Save the tracking labels
+    # Save the tracking labels. The output plate stores (T, 1, Z_out, Y, X); in 2D
+    # mode Z_out is 1 and labels are (T, Y, X); in 3D mode labels are (T, Z, Y, X).
+    labels = np.asarray(tracking_labels, dtype=np.uint32)
     with open_ome_zarr(output_dirpath / Path(*position_key), mode="r+") as output_dataset:
-        output_dataset[0][:, 0, 0] = np.asarray(tracking_labels, dtype=np.uint32)
+        if output_mode == "2D":
+            if labels.ndim != 3:
+                raise ValueError(
+                    f"output_mode='2D' expects (T, Y, X) labels but tracking produced "
+                    f"shape {labels.shape}. Ensure input_images projects Z (e.g. np.mean)."
+                )
+            output_dataset[0][:, 0, 0] = labels
+        else:
+            if labels.ndim != 4:
+                raise ValueError(
+                    f"output_mode='3D' expects (T, Z, Y, X) labels but tracking produced "
+                    f"shape {labels.shape}."
+                )
+            output_dataset[0][:, 0] = labels
     return tracking_labels, tracks_df
 
 
@@ -1000,12 +917,14 @@ def _init_output_plate(
         T, C, Z, Y, X = dataset.data.shape
         scale = dataset.scale
 
-    _, Z_out = resolve_z_slice(settings.z_range, Z)
+    # Data-free resolution: for focus this returns the fixed window size (min(total, Z)),
+    # so the plate Z matches the per-FOV tracked Z.
+    _, Z_win = resolve_z_slice(settings.z_slicing, Z)
 
-    if settings.mode == "2D":
+    if settings.output_mode == "2D":
         output_shape = (T, 1, 1, Y, X)
     else:
-        output_shape = (T, 1, Z_out, Y, X)
+        output_shape = (T, 1, Z_win, Y, X)
 
     position_keys = [Path(p).parts[-3:] for p in input_position_dirpaths]
 
@@ -1032,7 +951,7 @@ def _init_output_plate(
 
     click.echo(f"Created {output_dirpath} ({len(position_keys)} positions)")
 
-    return (T, C, Z_out, Y, X)
+    return (T, C, output_shape[2], Y, X)
 
 
 def track(
@@ -1064,7 +983,15 @@ def track(
     init_only : bool, optional
         Only initialize the output store and exit.
     input_images_path : str, optional
-        Override the first null input_images path in config (used by Nextflow).
+        Explicit pixel-data source filling the first null ``input_images`` path
+        (Nextflow). If unset, that null path falls back to the ``-i`` plate (see Notes).
+
+    Notes
+    -----
+    Two input sources: ``-i`` (``input_position_dirpaths``) gives the plate structure
+    and shape/scale, while ``input_images[].path`` gives the pixel data. The first null
+    ``path`` is the primary source (``--input-images-path`` if given, else the ``-i``
+    plate); later null entries are virtual/computed channels.
     """
     from ultrack import MainConfig
 
@@ -1073,11 +1000,14 @@ def track(
 
     settings = yaml_to_model(config_filepath, TrackingSettings)
 
-    if input_images_path is not None:
-        for image in settings.input_images:
-            if image.path is None:
-                image.path = Path(input_images_path)
-                break
+    # Resolve the primary (first null) input_images path: an explicit
+    # --input-images-path wins, else fall back to the -i input plate root.
+    input_plate = Path(input_position_dirpaths[0]).parents[2]
+    primary_path = Path(input_images_path) if input_images_path is not None else input_plate
+    for image in settings.input_images:
+        if image.path is None:
+            image.path = primary_path
+            break
 
     output_shape = _init_output_plate(input_position_dirpaths, output_dirpath, settings)
     T, C, Z_out, Y, X = output_shape
@@ -1100,12 +1030,9 @@ def track(
         T, C, Z, Y, X = dataset.data.shape
         scale = dataset.scale
 
-    if settings.use_focus:
-        # z-slice is resolved per-FOV inside track_one_position via focus finding
-        z_slices = None
-    else:
-        z_slices, _ = resolve_z_slice(settings.z_range, Z)
-    track_scale = scale[-2:] if settings.mode == "2D" else scale[-3:]
+    # Read-time slice (full stack for focus; the per-FOV window is applied after load).
+    z_slices, _ = resolve_z_slice(settings.z_slicing, Z)
+    track_scale = scale[-2:] if settings.output_mode == "2D" else scale[-3:]
 
     tracking_cfg = settings.tracking_config
     tracking_cfg["segmentation_config"]["n_workers"] = num_cpus
@@ -1152,11 +1079,8 @@ def track(
                 z_slices=z_slices,
                 scale=track_scale,
                 cellpose_config=cellpose_cfg,
-                use_focus=settings.use_focus,
-                z_total=settings.z_total,
-                focus_frac_below=settings.focus_frac_below,
-                focus_frac_above=settings.focus_frac_above,
-                focus_channel=settings.focus_channel,
+                z_slicing=settings.z_slicing,
+                output_mode=settings.output_mode,
             )
             jobs.append(job)
 
@@ -1192,7 +1116,8 @@ def track(
     "--input-images-path",
     default=None,
     type=click.Path(exists=True),
-    help="Override the first null input_images path from config (used by Nextflow).",
+    help="Pixel-data source filling the first null input_images path (used by "
+    "Nextflow). If omitted, that null path falls back to the -i input plate.",
 )
 def track_cli(
     input_position_dirpaths: list[Path],
