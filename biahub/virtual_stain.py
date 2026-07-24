@@ -255,10 +255,13 @@ def _init_output_plate(
         scale = input_dataset.scale
     T, C, Z, Y, X = input_shape
 
+    # Match viscy's HCSPredictionWriter naming contract: output channels are the
+    # target channels suffixed with "_prediction" (e.g. "nuclei" -> "nuclei_prediction").
+    # Downstream biahub steps (settings, track, airtable) key off this suffix. See #288.
     create_empty_plate(
         store_path=output_dirpath,
         position_keys=[Path(p).parts[-3:] for p in input_position_dirpaths],
-        channel_names=target_channels,
+        channel_names=[f"{ch}_prediction" for ch in target_channels],
         shape=(T, len(target_channels), Z, Y, X),
         scale=scale,
         version=resolve_ome_zarr_version(input_position_dirpaths[0], output_ome_zarr_version),
