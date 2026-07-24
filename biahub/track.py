@@ -1052,7 +1052,10 @@ def track(
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,  # process up to 100 positions at a time
         "slurm_time": time_minutes,
-        "slurm_partition": "preempted",
+        # Tracking runs cellpose on the GPU; use the non-preemptible `gpu` partition
+        # so long per-FOV jobs aren't evicted mid-run (unlike `preempted`).
+        # Override via --sbatch-filepath if a different partition is needed.
+        "slurm_partition": "gpu",
         "slurm_gpus_per_node": 1,
         "slurm_use_srun": False,
     }
