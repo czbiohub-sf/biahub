@@ -70,11 +70,15 @@ def _phantom_settings(channel: str):
 
 def test_monarch_single_gpu_one_tp(tmp_path: Path):
     from iohub.ngff import open_ome_zarr
-    from waveorder.tile_stitch._engine import build_plan as engine_build_plan
+    from waveorder.api.tile_stitch import build_plan as engine_build_plan
 
     from biahub.settings import MonarchConfig
     from biahub.tile_stitch.monarch.backend import MonarchBackend
-    from biahub.tile_stitch.plan import from_engine_plan, write_plan
+    from biahub.tile_stitch.plan import (
+        StitchWorkUnit,
+        program_from_engine_plan,
+        write_program,
+    )
 
     channel = "phantom"
     z, y, x = 8, 64, 64
@@ -87,7 +91,20 @@ def test_monarch_single_gpu_one_tp(tmp_path: Path):
     src.create_image("0", vol)
     src.close()
 
-    cfg = MonarchConfig(gpus_per_node=1, recon_batch=1, prefetch_depth=0)
+    gpu_count = int(os.environ.get("TILE_STITCH_GPU_COUNT", "1"))
+    dispatch_scheduler = os.environ.get(
+        "TILE_STITCH_SCHEDULER",
+        "windowed_graph_ready",
+    )
+    cfg = MonarchConfig(
+        gpus_per_node=gpu_count,
+        recon_batch=1,
+        prefetch_depth=2,
+        prefetch_workers=2,
+        resident_budget="auto",
+        dispatch_scheduler=dispatch_scheduler,
+        scheduler_window=8,
+    )
     settings = _phantom_settings(channel)
 
     src_r = open_ome_zarr(in_path, layout="fov", mode="r")
@@ -104,23 +121,35 @@ def test_monarch_single_gpu_one_tp(tmp_path: Path):
             "0", shape=(1, 1) + spatial, dtype=np.float32, chunks=(1, 1) + tile_spatial
         )
 
-    run_plan = from_engine_plan(
+    program = program_from_engine_plan(
         engine_plan,
         settings=settings,
-        input_path=str(in_path),
-        output_path=str(out_path),
-        channel=channel,
-        channel_idx=0,
-        timepoint=0,
         monarch=cfg,
     )
-    plan_path = write_plan(run_plan, tmp_path, filename="plan.pkl")
+    work = StitchWorkUnit(
+        input_path=str(in_path),
+        output_path=str(out_path),
+        channel_idx=0,
+        timepoint=0,
+    )
+    program_path = write_program(program, tmp_path)
 
-    with MonarchBackend(gpus_per_node=1, device="cuda") as backend:
-        backend.setup(plan_path)
-        summary = backend.drive_tp(plan_path, run_plan, recon_batch=1)
+    with MonarchBackend(gpus_per_node=gpu_count, device="cuda") as backend:
+        backend.setup(program_path, work)
+        summary = backend.drive_tp(program)
 
-    assert summary["n_outputs"] == len(run_plan.output_tiles)
+    assert summary["n_outputs"] == len(program.output_tiles)
+    assert summary["dispatch"]["scheduler"] == dispatch_scheduler
+    assert summary["dispatch"]["bounded"] == 1
+    if gpu_count > 1:
+        import monarch
+
+        remote_summaries = [item for item in summary["summaries"] if item["rdma_ops"] > 0]
+        assert remote_summaries
+        expected_backend = (
+            "tcp" if monarch.get_global_config().get("rdma_disable_ibverbs") else "ibverbs"
+        )
+        assert {item["rdma_backend"] for item in remote_summaries} == {expected_backend}
 
     out = open_ome_zarr(out_path, layout="fov", mode="r")
     arr = np.asarray(out["0"])
@@ -129,3 +158,14 @@ def test_monarch_single_gpu_one_tp(tmp_path: Path):
     assert np.isfinite(arr).all()
     # At least some output is non-zero (real recon ran, not all fill_value).
     assert np.abs(arr).max() > 0
+    output_artifact = os.environ.get("TILE_STITCH_SMOKE_OUTPUT")
+    if output_artifact:
+        np.save(output_artifact, arr)
+    reference_artifact = os.environ.get("TILE_STITCH_SMOKE_REFERENCE")
+    if reference_artifact:
+        np.testing.assert_allclose(
+            arr,
+            np.load(reference_artifact),
+            rtol=2e-5,
+            atol=2e-5,
+        )

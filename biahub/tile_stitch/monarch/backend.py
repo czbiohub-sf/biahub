@@ -1,133 +1,260 @@
-"""``MonarchBackend`` — the Monarch distributed engine for tile-stitch.
+"""Monarch actor-mesh execution for tile-stitch plans.
 
-The CLI builds the run scaffold (TP resolve/shard, engine plan, output zarr,
-per-TP plan pickles) and delegates the mesh bring-up + per-TP pipelined drive +
-volume swap + stats collection here.
-
-Lifecycle:
-
-    backend = MonarchBackend(gpus_per_node=..., nodes=..., port=..., ...)
-    backend.setup(plan_entries[0].plan_path)        # spawn the actor mesh
-    for i, (tp, plan_path, plan) in enumerate(plan_entries):
-        if i > 0:
-            backend.swap(plan_path)                  # per-TP volume/reader reset
-        summary = backend.drive_tp(plan_path, plan, recon_batch=recon_batch)
-        backend.collect_recon_stats()
-    backend.teardown()
-
-``swap`` enforces that the prior TP's Stage B fully drained before issuing
-``swap_to`` (which clears the prior TP's recons + RDMABuffers), so buffers are
-never freed mid-RDMA-pull.
+The backend owns mesh setup, validated dispatch, reconstruction/stitch
+pipelining, timepoint swaps, and actor teardown. A timepoint must drain before
+``swap`` releases its reconstruction buffers.
 """
 
 import asyncio
-import contextlib
 import logging
 import os
 import time
 
-from collections import defaultdict
+from collections.abc import Mapping
+from dataclasses import dataclass
+from ipaddress import IPv6Address
+from pathlib import Path
+from types import MappingProxyType
+
+from biahub.tile_stitch.monarch.execution import TimepointExecution
 
 logger = logging.getLogger("MonarchBackend")
 
-# Budget for draining Monarch's actor-context shutdown in teardown (see teardown).
+# Actor shutdown and diagnostics are environment-tunable for failure recovery.
 _SHUTDOWN_TIMEOUT_S = float(os.environ.get("TILE_SHUTDOWN_TIMEOUT_S", "15"))
 
-# Drive-loop debug heartbeat interval (seconds); 0 = off. When >0, the gated
-# drive loop logs its state (recon-left / in-flight / free gate slots / freed /
-# done) every interval — the signal that diagnoses a Stage-B stall/deadlock.
 _DRIVE_HB_S = float(os.environ.get("TILE_DRIVE_HB_S", "0"))
 
-# Recon-dispatch knob DEFAULTS — used only when a plan carries no MonarchConfig.
-# MonarchConfig is the source of truth otherwise (recon_max_inflight_per_gpu /
-# recon_rpc_timeout_s / recon_rpc_retries).
-#
-# max_inflight bounds concurrent in-flight recon work-units PER GPU on the
-# bounded-dispatch path: without it, all recon tasks hit the gate and fire RPCs at
-# once, flooding the Monarch mesh until calls stop flowing (driver+workers idle,
-# GPUs 0%). 0 = unbounded.
-#
-# rpc_{timeout,retries}: Monarch occasionally fails to deliver/pick up a
-# reconstruct call under load (it never returns, wedging the drive); a call
-# exceeding the timeout is re-sent (rotating GPU), up to retries times, then the
-# TP fails loudly.
-_DEFAULT_MAX_INFLIGHT_PER_GPU = 3
-_DEFAULT_RECON_RPC_TIMEOUT_S = 90.0
-_DEFAULT_RECON_RPC_RETRIES = 3
+_INFINIBAND_SYSFS = Path("/sys/class/infiniband")
+_MELLANOX_PCI_VENDOR_ID = 0x15B3
 
 
-class _ResidentGate:
-    """Bounds the resident reconstructed-tile set (host-RAM OOM guard).
+@dataclass(frozen=True, slots=True)
+class _RdmaPreflight:
+    """Local sysfs evidence needed to decide whether mlx5 is safe to use."""
 
-    Acquire ``n`` before dispatching a recon work-unit (n tiles); release one per
-    tile as Stage B frees it (ref-count → 0). ``acquire`` takes all ``n`` slots
-    atomically under the condition, so two batches can't each hold a partial set
-    and deadlock. Deadlock-safe when ``budget >= max tiles any single output needs
-    co-resident`` (the auto budget = the order's interval-overlap peak ensures it).
-    """
-
-    def __init__(self, budget: int) -> None:
-        self._free = budget
-        self._cond = asyncio.Condition()
-
-    async def acquire(self, n: int) -> None:
-        async with self._cond:
-            while self._free < n:
-                await self._cond.wait()
-            self._free -= n
-
-    async def release(self, n: int = 1) -> None:
-        async with self._cond:
-            self._free += n
-            self._cond.notify_all()
+    sysfs_readable: bool
+    device_count: int
+    active_mellanox_ports: tuple[str, ...]
+    unusable_mellanox_ports: tuple[str, ...]
 
 
-def _dispatch_schedule(run_plan, recon_batch: int, cfg) -> tuple[list[int], int]:
-    """Recon-dispatch order + resident budget for the bounded-dispatch path.
+def _is_monarch_global_gid(value: str) -> bool:
+    """Mirror Monarch's IPv6-form GID scope classification."""
+    try:
+        address = IPv6Address(value)
+    except ValueError:
+        return False
+    if int(address) == 0 or address.is_loopback:
+        return False
+    if address.ipv4_mapped is not None:
+        return not (address.ipv4_mapped.is_loopback or address.ipv4_mapped.is_link_local)
+    first, second, *_ = address.packed
+    return not (first == 0xFE and (second & 0xC0) in {0x80, 0xC0})
 
-    Morton-orders the output tiles, then orders input tiles by their
-    earliest-consuming output's rank (so recon follows the stitch sweep → tight
-    band). Budget = that order's interval-overlap peak (min feasible), clamped to
-    >= recon_batch and >= max output fan-in (deadlock-safe).
-    """
-    from biahub.tile_stitch.dispatch import morton_output_order, peak_resident_tiles
 
-    out_to_in = run_plan.output_to_inputs
-    out_order = morton_output_order(run_plan)
-    rank = {oid: i for i, oid in enumerate(out_order)}
-    input_to_outputs: dict[int, list[int]] = defaultdict(list)
-    for oid, ins in out_to_in.items():
-        for tid in ins:
-            input_to_outputs[tid].append(oid)
-    in_order = sorted(
-        input_to_outputs, key=lambda tid: min(rank[o] for o in input_to_outputs[tid])
+def _port_has_global_rocev2_gid(port: Path) -> bool:
+    """Return whether an active mlx5 port satisfies Monarch 0.6 QP setup."""
+    try:
+        gid_files = sorted(
+            (path for path in (port / "gids").iterdir() if path.name.isdecimal()),
+            key=lambda path: int(path.name),
+        )
+    except OSError:
+        return False
+
+    for gid_file in gid_files:
+        try:
+            gid = gid_file.read_text().strip()
+            gid_type = (port / "gid_attrs" / "types" / gid_file.name).read_text().strip()
+        except OSError:
+            continue
+        if gid_type == "RoCE v2" and _is_monarch_global_gid(gid):
+            return True
+    return False
+
+
+def _inspect_rdma_fabric(sysfs_root: Path = _INFINIBAND_SYSFS) -> _RdmaPreflight:
+    """Inspect active NVIDIA/Mellanox ports without initializing Monarch RDMA."""
+    try:
+        devices = sorted(sysfs_root.iterdir())
+    except OSError:
+        return _RdmaPreflight(False, 0, (), ())
+
+    active: list[str] = []
+    unusable: list[str] = []
+    for device in devices:
+        try:
+            vendor_id = int((device / "device" / "vendor").read_text().strip(), 0)
+        except (OSError, ValueError):
+            continue
+        if vendor_id != _MELLANOX_PCI_VENDOR_ID:
+            continue
+        try:
+            ports = sorted((device / "ports").iterdir())
+        except OSError:
+            continue
+        for port in ports:
+            try:
+                state = (port / "state").read_text().strip()
+            except OSError:
+                continue
+            if state.partition(":")[0].strip() != "4":
+                continue
+            name = f"{device.name}/port{port.name}"
+            active.append(name)
+            if not _port_has_global_rocev2_gid(port):
+                unusable.append(name)
+
+    return _RdmaPreflight(
+        True,
+        len(devices),
+        tuple(active),
+        tuple(unusable),
     )
-    auto = peak_resident_tiles(out_to_in, out_order)
-    max_fanin = max((len(v) for v in out_to_in.values()), default=1)
-    n_gpus = getattr(cfg, "gpus_per_node", 1) or 1
-    # ``auto`` is the *batch=1* liveness peak. Recon dispatches in ATOMIC batches
-    # of ``recon_batch`` and up to ``n_gpus`` run concurrently, so a budget of
-    # exactly ``auto`` strands the last <recon_batch free slots: ``acquire(K)``
-    # blocks forever once free < K and nothing is in flight to release a slot
-    # (the stranded-slots deadlock). Add one full batch of headroom per concurrent
-    # GPU so a batch can always be acquired at the liveness peak. This floor is
-    # mandatory; a configured resident_budget may only raise the budget above it.
-    safe_floor = auto + recon_batch * n_gpus
-    budget = max(cfg.resident_budget or 0, safe_floor, max_fanin, recon_batch)
+
+
+def _configure_rdma_transport(sysfs_root: Path = _INFINIBAND_SYSFS) -> str:
+    """Select native ibverbs only when local mlx5 QP setup can succeed."""
+    import monarch
+
+    from monarch.rdma import is_ibverbs_available
+
+    config = monarch.get_global_config()
+    if bool(config.get("rdma_disable_ibverbs")):
+        monarch.configure(rdma_allow_tcp_fallback=True)
+        logger.info("RDMA preflight: ibverbs explicitly disabled; using TCP fallback")
+        return "tcp"
+
+    if not is_ibverbs_available():
+        monarch.configure(rdma_allow_tcp_fallback=True)
+        logger.info("RDMA preflight: ibverbs unavailable; using TCP fallback")
+        return "tcp"
+
+    preflight = _inspect_rdma_fabric(sysfs_root)
+    reason = ""
+    if not preflight.sysfs_readable or preflight.device_count == 0:
+        reason = "InfiniBand sysfs is unavailable"
+    elif preflight.unusable_mellanox_ports:
+        reason = "active NVIDIA/Mellanox ports lack a global RoCEv2 GID: " + ", ".join(
+            preflight.unusable_mellanox_ports
+        )
+
+    if reason:
+        monarch.configure(
+            rdma_allow_tcp_fallback=True,
+            rdma_disable_ibverbs=True,
+        )
+        logger.warning("RDMA preflight: %s; forcing TCP fallback", reason)
+        return "tcp"
+
+    if preflight.active_mellanox_ports:
+        logger.info(
+            "RDMA preflight: all %d active NVIDIA/Mellanox ports expose a "
+            "global RoCEv2 GID; keeping ibverbs",
+            len(preflight.active_mellanox_ports),
+        )
+    else:
+        logger.info(
+            "RDMA preflight: no active NVIDIA/Mellanox ports found; "
+            "keeping the available non-mlx ibverbs backend"
+        )
+    return "ibverbs"
+
+
+@dataclass(frozen=True, slots=True)
+class _DispatchExecutionPlan:
+    """Validated scheduler output and runtime memory bound.
+
+    Attributes
+    ----------
+    input_order : tuple[int, ...]
+        Reconstruction order dispatched to actors.
+    resident_budget : int or None
+        Maximum resident tiles, or ``None`` for unbounded dispatch.
+    metrics : Mapping[str, int | float | str]
+        Immutable scheduler and budget telemetry.
+    """
+
+    input_order: tuple[int, ...]
+    resident_budget: int | None
+    metrics: Mapping[str, int | float | str]
+
+
+def _prepare_dispatch(
+    program,
+    recon_batch: int,
+    cfg,
+    *,
+    n_actors: int,
+) -> _DispatchExecutionPlan:
+    """Prepare validated scheduling state before actor execution."""
+    from biahub.tile_stitch.dispatch import (
+        SchedulerContext,
+        build_dispatch_plan,
+        build_dispatch_problem,
+    )
+
+    problem = build_dispatch_problem(program)
+    requested_budget = cfg.resident_budget if cfg is not None else None
+    bounded = requested_budget is not None
+    scheduler = str(cfg.dispatch_scheduler) if bounded else "plan"
+    context = SchedulerContext(
+        window=int(getattr(cfg, "scheduler_window", 32)),
+        recon_batch=recon_batch,
+        n_actors=n_actors,
+    )
+    schedule = build_dispatch_plan(problem, scheduler, context=context)
+    metrics = dict(schedule.metrics)
+    metrics["bounded"] = int(bounded)
+    if not bounded:
+        return _DispatchExecutionPlan(
+            schedule.input_order,
+            None,
+            MappingProxyType(metrics),
+        )
+
+    max_fanin = max(
+        (len(inputs) for inputs in problem.output_to_inputs.values()),
+        default=1,
+    )
+    safe_floor = schedule.peak_resident_tiles + recon_batch * n_actors
+    explicit_budget = 0 if requested_budget == "auto" else int(requested_budget)
+    budget = max(explicit_budget, safe_floor, max_fanin, recon_batch)
+    metrics.update(
+        {
+            "resident_budget": budget,
+            "resident_safe_floor": safe_floor,
+            "max_output_fanin": max_fanin,
+        }
+    )
     logger.info(
-        "bounded_dispatch budget=%d tiles (auto_peak=%d + headroom %dx%d; max_fanin=%d cfg_req=%s)",
+        "dispatch scheduler=%s window=%d budget=%d tiles "
+        "(planner_peak=%d + headroom %dx%d; max_fanin=%d requested=%s)",
+        scheduler,
+        context.window,
         budget,
-        auto,
+        schedule.peak_resident_tiles,
         recon_batch,
-        n_gpus,
+        n_actors,
         max_fanin,
-        cfg.resident_budget,
+        requested_budget,
     )
-    return in_order, budget
+    return _DispatchExecutionPlan(
+        schedule.input_order,
+        budget,
+        MappingProxyType(metrics),
+    )
 
 
 def _await_initialized_sync(host_mesh) -> None:
-    """Block until every attached host has connected."""
+    """Block until every attached host has connected.
+
+    Parameters
+    ----------
+    host_mesh : monarch.actor.HostMesh
+        Attached host mesh exposing an ``initialized`` future.
+    """
 
     async def _await(hm):
         await hm.initialized
@@ -136,12 +263,16 @@ def _await_initialized_sync(host_mesh) -> None:
 
 
 def _slurm_topology() -> tuple[list[str], int, str | None]:
-    """Resolve ``(hosts, port, ready_dir)`` from the SLURM allocation.
+    """Resolve multi-node topology from the SLURM allocation.
 
-    ``([], 0, None)`` for a single-node or non-SLURM run (caller uses
-    ``this_host()``). For a multi-node allocation the port + ready-dir are
-    derived deterministically from ``SLURM_JOB_ID`` so the driver and the
-    per-node ``worker_loop`` agree without passing any flags.
+    Returns
+    -------
+    hosts : list[str]
+        Allocated hostnames, empty for a local run.
+    port : int
+        Deterministic worker port, or zero for a local run.
+    ready_dir : str or None
+        Shared worker-readiness directory.
     """
     import subprocess
 
@@ -160,10 +291,21 @@ def _slurm_topology() -> tuple[list[str], int, str | None]:
 
 
 def _wait_for_ready(ready_dir: str, node_list: list[str], timeout_s: int = 300) -> None:
-    """Block until every node has dropped its ``<hostname>.ready`` file.
+    """Wait for every worker readiness file.
 
-    Workers write the file just before binding their listen socket, so a
-    small margin is added after all appear to let the sockets come up.
+    Parameters
+    ----------
+    ready_dir : str
+        Shared directory in which workers publish readiness.
+    node_list : list[str]
+        Expected worker hostnames.
+    timeout_s : int, optional
+        Maximum wait in seconds.
+
+    Raises
+    ------
+    RuntimeError
+        If all workers do not become ready before the deadline.
     """
     import os
     import time as _t
@@ -187,32 +329,64 @@ def _wait_for_ready(ready_dir: str, node_list: list[str], timeout_s: int = 300) 
     )
 
 
-def build_recon_batches(order: list[int], tiles_by_id: dict, bsize: int) -> list[list[int]]:
-    """Group ``order`` into batches of ``bsize`` same-shape tiles.
+class _MonarchExecutionTransport:
+    """Adapt Monarch actor calls to the transport-independent driver."""
 
-    All tiles in a batch must share spatial shape (the batched FFT stacks them
-    into ``(B, Z, Y, X)``). Tiles are bucketed by shape first — so interior tiles
-    form full batches and ragged edge shapes form their own — then each is chunked.
-    """
-    from collections import OrderedDict
+    def __init__(self, backend) -> None:
+        from monarch.actor import Channel
 
-    by_shape: OrderedDict[tuple, list[int]] = OrderedDict()
-    for tid in order:
-        by_shape.setdefault(tuple(tiles_by_id[tid].shape), []).append(tid)
+        self._backend = backend
+        self._send, self._receive = Channel.open()
 
-    batches: list[list[int]] = []
-    for tids in by_shape.values():
-        for i in range(0, len(tids), bsize):
-            batches.append(tids[i : i + bsize])
-    return batches
+    async def prime(self, assignments) -> None:
+        futures = [
+            self._backend._actor_one(gpu).prime_loader.call_one(tile_ids=list(tile_ids))
+            for gpu, tile_ids in assignments.items()
+        ]
+        await asyncio.gather(*futures)
+
+    async def reconstruct(self, gpu: int, tile_ids, timeout_s: float) -> list:
+        actor = self._backend._actor_one(gpu)
+        if len(tile_ids) == 1:
+            future = actor.reconstruct.call_one(tile_id=tile_ids[0])
+            handle = await asyncio.wait_for(future, timeout=timeout_s)
+            return [handle]
+        future = actor.reconstruct_batch.call_one(tile_ids=list(tile_ids))
+        return await asyncio.wait_for(future, timeout=timeout_s)
+
+    def dispatch_stitch(self, output_id: int, contributors) -> None:
+        from monarch.actor import send
+
+        send(
+            self._backend._workers.stitch,
+            args=(output_id, dict(contributors)),
+            kwargs={},
+            port=self._send,
+            selection="choose",
+        )
+
+    async def receive_stitch(self) -> dict:
+        return await self._receive.recv()
+
+    async def forget(self, tile_ids) -> None:
+        await self._backend._workers.forget.call(tile_ids=list(tile_ids))
 
 
 class MonarchBackend:
-    """Monarch actor-mesh engine for a single tile-stitch run.
+    """Execute tile-stitch plans over a Monarch actor mesh.
 
-    Topology (single- vs multi-node) is auto-detected from the SLURM allocation
-    in ``setup`` — no node/port/ready-dir args. Per-host GPU count is the only
-    allocation knob; null = auto-detect.
+    Parameters
+    ----------
+    gpus_per_node : int or None, optional
+        Actors per host. ``None`` uses locally visible CUDA devices.
+    window_per_actor : int, optional
+        Maximum in-flight output stitches per actor.
+    device : str, optional
+        Reconstruction device. Only ``"cuda"`` is currently supported.
+
+    Notes
+    -----
+    :meth:`setup` infers single- or multi-node topology from SLURM.
     """
 
     def __init__(
@@ -226,7 +400,6 @@ class MonarchBackend:
         self._window_per_actor = window_per_actor
         self._device = device
 
-        # Topology resolved from the SLURM allocation in ``setup``.
         self._node_list: list[str] = []
         self._port = 0
         self._ready_dir: str | None = None
@@ -235,26 +408,31 @@ class MonarchBackend:
         self._workers = None
         self._gpn = 0
         self._n_gpus = 0
-        # Stage-B drain guard: True only between a completed ``drive_tp`` and
-        # the next ``swap``. ``swap`` refuses to release the prior TP's recons
-        # / RDMABuffers unless the last drive fully drained.
+        # Prevent ``swap`` from releasing buffers used by in-flight RDMA reads.
         self._drained = True
 
-    # --- context manager: guarantee teardown on any exit -------------------
     def __enter__(self) -> "MonarchBackend":
-        # ``setup`` is still called explicitly inside the ``with`` block — it
-        # needs the first plan path, which the CLI scaffold computes.
         return self
 
     def __exit__(self, *exc) -> bool:
         self.teardown()
-        return False  # never swallow a driver error
+        return False
 
-    # --- mesh lifecycle ----------------------------------------------------
-    def setup(self, first_plan_path: str) -> None:
-        """Spawn the actor mesh, initialised with the first TP's plan."""
-        # Resolve topology from the SLURM allocation: >1 node → multi-host
-        # HostMesh (attach to per-node worker loops); else single-host this_host.
+    def setup(self, program_path: str, work) -> None:
+        """Spawn the actor mesh with one static program and initial work unit.
+
+        Parameters
+        ----------
+        program_path : str
+            Serialized static program loaded by every actor.
+        work : StitchWorkUnit
+            Initial input and output binding.
+
+        Raises
+        ------
+        NotImplementedError
+            If the backend is configured for CPU execution.
+        """
         self._node_list, self._port, self._ready_dir = _slurm_topology()
         self._is_multihost = len(self._node_list) > 1
         # CPU is a configured device knob, but the actor's CUDA-only path
@@ -265,6 +443,7 @@ class MonarchBackend:
             raise NotImplementedError(
                 "CPU device not yet wired for the Monarch backend; use device=cuda"
             )
+        _configure_rdma_transport()
         import monarch.actor as ma
         import torch
 
@@ -274,16 +453,12 @@ class MonarchBackend:
 
         local_gpus = torch.cuda.device_count()
         if self._is_multihost:
-            # Multi-host: attach to per-node worker loops, form a HostMesh.
-            # The local_gpus fallback assumes homogeneous nodes (it reflects
-            # the controller's device count, not the workers') — pass
-            # --gpus-per-node explicitly for heterogeneous allocations.
+            # Auto-detection assumes homogeneous workers; heterogeneous
+            # allocations must configure ``gpus_per_node``.
             self._gpn = self._gpus_per_node or local_gpus
             ma.enable_transport("tcp")
             addrs = [f"tcp://{n}:{self._port}" for n in self._node_list]
-            # Gate the attach on every worker signalling readiness — non-batch
-            # nodes cold-start uv/monarch/cuda slower than the batch node, and
-            # a one-shot attach races them ("config push failed on 1 host").
+            # Wait for every worker: cold-start time varies across nodes.
             if self._ready_dir:
                 _wait_for_ready(self._ready_dir, self._node_list, timeout_s=300)
             logger.info("attaching to %d host workers: %s", len(addrs), addrs)
@@ -305,66 +480,88 @@ class MonarchBackend:
                 self._n_gpus,
             )
             self._procs = this_host().spawn_procs(per_host={"gpus": self._n_gpus})
-        # Init actors with the FIRST plan; subsequent TPs swap_to.
         self._workers = self._procs.spawn(
-            "tile_workers", TileWorker, plan_path=first_plan_path
+            "tile_workers", TileWorker, program_path=program_path, work=work
         )
         logger.info("actor mesh extent: %s", self._procs.extent)
 
     def _actor_one(self, flat_idx: int):
-        """Single-actor slice for a flat actor index.
+        """Select one actor by flat index.
 
-        Multi-host meshes have dims ``{hosts, gpus}`` — slice both so
-        ``call_one`` sees exactly one actor. Single-host has only ``gpus``.
+        Parameters
+        ----------
+        flat_idx : int
+            Actor index across all hosts and GPUs.
+
+        Returns
+        -------
+        object
+            Monarch mesh slice containing exactly one actor.
         """
         if self._is_multihost:
             return self._workers.slice(hosts=flat_idx // self._gpn, gpus=flat_idx % self._gpn)
         return self._workers.slice(gpus=flat_idx)
 
-    # --- per-TP volume swap ------------------------------------------------
-    def swap(self, plan_path: str) -> None:
-        """Switch every actor to a new plan (per-TP volume + reader reset).
+    def bind_work_unit(self, work) -> None:
+        """Release prior unit resources and bind every actor to new work.
 
-        Enforces that the prior TP's Stage B fully drained before issuing
-        ``swap_to`` — ``swap_to`` clears the prior TP's cached recons and the
-        RDMABuffers peers may still be pulling, so swapping mid-drain would
-        race in-flight RDMA reads. ``drive_tp`` sets ``_drained`` only after its
-        final drain loop completes.
+        Parameters
+        ----------
+        work : StitchWorkUnit
+            Next input and output binding.
+
+        Raises
+        ------
+        RuntimeError
+            If the previous unit still has in-flight stitch or RDMA work.
         """
         if not self._drained:
             raise RuntimeError(
-                "swap() called before the prior TP's Stage B drained — refusing "
-                "to release recons/RDMABuffers mid-pull"
+                "bind_work_unit() called before Stage B drained; refusing to "
+                "release reconstructions during an RDMA pull"
             )
 
-        async def _swap():
-            vm = await self._workers.swap_to.call(plan_path=plan_path)
-            return [st for _, st in vm.items()]
+        async def _bind():
+            values = await self._workers.bind_work_unit.call(work=work)
+            return [stats for _, stats in values.items()]
 
-        t_swap = time.monotonic()
-        stats = asyncio.run(_swap())
-        self._drained = False  # new TP not yet driven/drained
-        # Current (post-cleanup) host RSS across actors — watch this stay flat
-        # across TPs. A steady climb means recon host memory isn't being
-        # released between TPs (e.g. undropped RDMABuffer registrations).
-        cur = max((s.get("host_rss_gb", 0.0) for s in stats), default=0.0)
-        peak = max((s.get("host_maxrss_gb", 0.0) for s in stats), default=0.0)
+        started = time.monotonic()
+        stats = asyncio.run(_bind())
+        self._drained = False
+        current = max((item.get("host_rss_gb", 0.0) for item in stats), default=0.0)
+        peak = max((item.get("host_maxrss_gb", 0.0) for item in stats), default=0.0)
         logger.info(
-            "volume swap: %.1fs (max actor host RSS now %.1f GB, peak %.1f GB)",
-            time.monotonic() - t_swap,
-            cur,
+            "work binding: %.1fs (max actor host RSS now %.1f GB, peak %.1f GB)",
+            time.monotonic() - started,
+            current,
             peak,
         )
 
-    # --- per-TP drive ------------------------------------------------------
-    def drive_tp(self, plan_path: str, plan, *, recon_batch: int = 1) -> dict:
-        """Stage A → Stage B pipelined drive for a single TP's plan.
+    def drive_tp(self, program) -> dict:
+        """Validate, schedule, and execute one bound work unit.
 
-        Returns a summary dict: ``stage_a_s`` (Stage A wall), ``pipe_s``
-        (full A+B pipelined wall), ``n_outputs`` (completed non-empty
-        stitches), and ``summaries`` (per-stitch timing dicts).
+        Parameters
+        ----------
+        program : StitchProgram
+            Static geometry and engine settings.
+
+        Returns
+        -------
+        dict
+            Stage timings, output count, per-stitch summaries, and dispatch
+            diagnostics.
         """
-        t_a, t_pipe, summaries = asyncio.run(self._drive_one_tp(plan, recon_batch))
+        cfg = program.monarch
+        recon_batch = int(cfg.recon_batch)
+        execution = _prepare_dispatch(
+            program,
+            recon_batch,
+            cfg,
+            n_actors=self._n_gpus,
+        )
+        t_a, t_pipe, summaries = asyncio.run(
+            self._drive_one_tp(program, recon_batch, execution)
+        )
         # The drive's final ``while stitch_in_flight > 0`` loop has run, so
         # every Stage B stitch (and its RDMA pulls) for this TP has completed.
         self._drained = True
@@ -374,325 +571,37 @@ class MonarchBackend:
             "pipe_s": t_pipe,
             "n_outputs": n_completed,
             "summaries": summaries,
+            "dispatch": dict(execution.metrics),
         }
 
-    async def _drive_one_tp(self, run_plan, recon_batch: int):
-        """Stage A → Stage B pipelined drive for a single TP's plan."""
-        from monarch.actor import Channel, send
-
-        workers = self._workers
-        n_gpus = self._n_gpus
-        window = self._window_per_actor * n_gpus
-
-        done_send, done_recv = Channel.open()
-
-        # Inverse map per-TP (cheap to rebuild; structure is identical across
-        # TPs but we rebuild for safety in case a config tweak ever changes it).
-        input_to_outputs: dict[int, list[int]] = defaultdict(list)
-        for oid, inputs in run_plan.output_to_inputs.items():
-            for tid in inputs:
-                input_to_outputs[tid].append(oid)
-
-        tiles_by_id = {t.tile_id: t for t in run_plan.input_tiles}
-
-        # Bounded recon-dispatch path (behind the bounded_dispatch flag). Reorder
-        # recon to a locality (Morton) sweep and cap resident reconstructed tiles
-        # at a budget so recon can't outrun Stage B and OOM host RAM. Off → the
-        # unbounded dispatch-all path.
-        cfg = getattr(run_plan, "monarch", None)
-        # Recon-dispatch knobs: MonarchConfig is the source of truth; fall back to
-        # the module defaults only when the plan carries no config.
-        max_inflight = _DEFAULT_MAX_INFLIGHT_PER_GPU
-        rpc_timeout = _DEFAULT_RECON_RPC_TIMEOUT_S
-        rpc_retries = _DEFAULT_RECON_RPC_RETRIES
-        if cfg is not None:
-            max_inflight = getattr(cfg, "recon_max_inflight_per_gpu", max_inflight)
-            rpc_timeout = getattr(cfg, "recon_rpc_timeout_s", rpc_timeout)
-            rpc_retries = getattr(cfg, "recon_rpc_retries", rpc_retries)
-        gate: _ResidentGate | None = None
-        input_order = list(run_plan.input_order)
-        if cfg is not None and getattr(cfg, "bounded_dispatch", False):
-            input_order, budget = _dispatch_schedule(run_plan, recon_batch, cfg)
-            gate = _ResidentGate(budget)
-            logger.info("bounded_dispatch ON: morton order, resident_budget=%d tiles", budget)
-
-        recon_handles: dict[int, object] = {}
-        pending_outputs = {
-            oid: set(inputs) for oid, inputs in run_plan.output_to_inputs.items()
-        }
-        stitch_count = 0
-        stitch_in_flight = 0
-        recon_done = [
-            False
-        ]  # set True after all recons finish; concurrent-drainer stop signal
-        summaries: list[dict] = []
-
-        # Refcount each input tile by how many output tiles still need it. When a
-        # tile's last output finishes stitching, no in-flight RDMA pull can need
-        # it anymore, so free its recon immediately — drop the driver's RDMABuffer
-        # handle and ``forget`` the actor's cached CPU tensor — instead of holding
-        # the whole TP's ~100 GB of recons in host RAM until ``swap_to``.
-        tile_remaining = {tid: len(outs) for tid, outs in input_to_outputs.items()}
-        freed_pending: list[int] = []
-
-        async def _flush_forget() -> None:
-            # ``.call`` returns a Monarch Future (awaitable), not a coroutine, so
-            # await it directly — don't wrap in asyncio.create_task. Batched
-            # (caller flushes every ~32 frees), so the round-trip cost is small.
-            if freed_pending:
-                ids = list(freed_pending)
-                freed_pending.clear()
-                await self._workers.forget.call(tile_ids=ids)
-
-        t_a_start = time.monotonic()
-        t_a_end_local = [0.0]
-        a_remaining = [len(input_order)]
-
-        async def _drain_one_stitch() -> None:
-            nonlocal stitch_in_flight
-            s = await done_recv.recv()
-            stitch_in_flight -= 1
-            summaries.append(s)
-            # This output is done -> decrement its contributors; free any whose
-            # last output just completed (safe: no pending/in-flight stitch needs
-            # them once tile_remaining hits 0).
-            oid = s.get("out_tile_id")
-            if oid is not None:
-                for tid in run_plan.output_to_inputs.get(oid, ()):
-                    r = tile_remaining.get(tid)
-                    if r is None:
-                        continue
-                    tile_remaining[tid] = r - 1
-                    if r <= 1:
-                        recon_handles.pop(tid, None)  # drop driver's RDMABuffer ref
-                        freed_pending.append(tid)
-                        if gate is not None:
-                            await gate.release(1)  # open a recon slot
-                if len(freed_pending) >= 32:
-                    await _flush_forget()
-            n_done = len(summaries)
-            if n_done % 20 == 0:
-                logger.info("Stage B: %d completed", n_done)
-
-        async def _maybe_dispatch_outputs(ready_outputs: list[int]) -> None:
-            nonlocal stitch_count, stitch_in_flight
-            for oid in ready_outputs:
-                while stitch_in_flight >= window:
-                    # Gated path: the concurrent drainer owns done_recv; just wait
-                    # for it to reduce in-flight (draining here would double-recv).
-                    # Sleep a short interval (matching the drainer cadence) instead
-                    # of sleep(0), which would hot-spin a core during backpressure.
-                    if gate is not None:
-                        await asyncio.sleep(0.002)
-                    else:
-                        await _drain_one_stitch()
-                contribs = {tid: recon_handles[tid] for tid in pending_outputs[oid]}
-                send(
-                    workers.stitch,
-                    args=(oid, contribs),
-                    kwargs={},
-                    port=done_send,
-                    selection="choose",
-                )
-                del pending_outputs[oid]
-                stitch_count += 1
-                stitch_in_flight += 1
-
-        def _ready_outputs(tile_ids: list[int]) -> list[int]:
-            seen: dict[int, None] = {}
-            for tid in tile_ids:
-                for oid in input_to_outputs.get(tid, []):
-                    if (
-                        oid in pending_outputs
-                        and oid not in seen
-                        and pending_outputs[oid] <= recon_handles.keys()
-                    ):
-                        seen[oid] = None
-            return list(seen)
-
-        async def _recon_rpc(method: str, gpu: int, **kw):
-            """Issue a reconstruct[_batch] RPC with timeout+retry.
-
-            A call that doesn't return within the timeout is re-sent to the next
-            GPU (Monarch occasionally drops one under load, which would otherwise
-            wedge the drive). Non-timeout errors propagate immediately.
-
-            KNOWN TRADEOFF: on a timeout we re-send without cancelling the original
-            on its worker — a *merely slow* (not dropped) call then runs twice, so
-            two workers transiently hold that tile (extra host RAM not counted by
-            the gate) until the broadcast ``forget`` reclaims both. The timeout is
-            set well above normal batch latency to make this rare. A
-            cancel-original + forget-superseded-handle fix would avoid the
-            double-hold but needs live-mesh validation.
-            """
-            for attempt in range(rpc_retries + 1):
-                g = (gpu + attempt) % n_gpus
-                try:
-                    call = getattr(self._actor_one(g), method).call_one(**kw)
-                    return await asyncio.wait_for(call, timeout=rpc_timeout)
-                except TimeoutError:
-                    logger.warning(
-                        "recon RPC %s timed out on gpu=%d (attempt %d/%d) — re-sending",
-                        method,
-                        g,
-                        attempt + 1,
-                        rpc_retries + 1,
-                    )
-            raise TimeoutError(f"reconstruct stuck after {rpc_retries} retries ({method})")
-
-        async def _do_recon(tile_id: int, gpu: int) -> None:
-            if gate is not None:
-                await gate.acquire(1)
-            handle = await _recon_rpc("reconstruct", gpu, tile_id=tile_id)
-            recon_handles[tile_id] = handle
-            a_remaining[0] -= 1
-            if a_remaining[0] == 0:
-                t_a_end_local[0] = time.monotonic() - t_a_start
-                logger.info("Stage A done in %.1fs", t_a_end_local[0])
-            ready = _ready_outputs([tile_id])
-            if ready:
-                await _maybe_dispatch_outputs(ready)
-
-        async def _do_recon_batch(tile_ids: list[int], gpu: int) -> None:
-            if gate is not None:
-                await gate.acquire(len(tile_ids))
-            handles = await _recon_rpc("reconstruct_batch", gpu, tile_ids=tile_ids)
-            for tid, handle in zip(tile_ids, handles, strict=True):
-                recon_handles[tid] = handle
-            a_remaining[0] -= len(tile_ids)
-            if a_remaining[0] == 0:
-                t_a_end_local[0] = time.monotonic() - t_a_start
-                logger.info("Stage A done in %.1fs", t_a_end_local[0])
-            ready = _ready_outputs(tile_ids)
-            if ready:
-                await _maybe_dispatch_outputs(ready)
-
-        # Bound concurrent recon dispatch on the gated path: excess tasks park on
-        # this semaphore (FIFO, cheap) rather than all hitting the gate and firing
-        # recon RPCs at once, which floods the Monarch mesh until calls stop
-        # flowing. ``None`` (unbounded) = dispatch-all, no semaphore.
-        _dispatch_sem = (
-            asyncio.Semaphore(max(max_inflight * n_gpus, recon_batch))
-            if (gate is not None and max_inflight > 0)
-            else None
+    async def _drive_one_tp(
+        self,
+        program,
+        recon_batch: int,
+        execution: _DispatchExecutionPlan,
+    ):
+        """Execute a prevalidated dispatch plan through the Monarch transport."""
+        driver = TimepointExecution(
+            program=program,
+            input_order=execution.input_order,
+            resident_budget=execution.resident_budget,
+            recon_batch=recon_batch,
+            n_actors=self._n_gpus,
+            window=self._window_per_actor * self._n_gpus,
+            transport=_MonarchExecutionTransport(self),
+            heartbeat_s=_DRIVE_HB_S,
         )
-
-        async def _dispatch(coro):
-            if _dispatch_sem is None:
-                await coro
-            else:
-                async with _dispatch_sem:
-                    await coro
-
-        if recon_batch > 1:
-            batches = build_recon_batches(
-                input_order,
-                tiles_by_id,
-                recon_batch,
-            )
-            # Prefetch the next work-unit's read during the current FFT (the
-            # IO-bound read overlaps compute): prime each actor's tile reader
-            # with the FLATTENED order of its assigned batches. Assignment is
-            # round-robin (``i % n_gpus``).
-            per_actor_order: dict[int, list[int]] = {g: [] for g in range(n_gpus)}
-            for i, b in enumerate(batches):
-                per_actor_order[i % n_gpus].extend(b)
-            prime_futs = [
-                self._actor_one(g).prime_reader.call_one(tile_ids=per_actor_order[g])
-                for g in range(n_gpus)
-            ]
-            await asyncio.gather(*prime_futs)
-            recon_tasks = [
-                asyncio.create_task(_dispatch(_do_recon_batch(b, i % n_gpus)))
-                for i, b in enumerate(batches)
-            ]
-            logger.info(
-                "Stage A+B pipelined: %d batches (B=%d) dispatched",
-                len(recon_tasks),
-                recon_batch,
-            )
-        else:
-            # Prime each actor's prefetch reader with its assigned tile
-            # sequence (round-robin ``input_order[g::n_gpus]`` — the order it
-            # will reconstruct). The reader then pulls tile N+1 from zarr
-            # while the GPU runs FFT on tile N. No-op if prefetch is disabled.
-            prime_futs = [
-                self._actor_one(g).prime_reader.call_one(tile_ids=input_order[g::n_gpus])
-                for g in range(n_gpus)
-            ]
-            await asyncio.gather(*prime_futs)
-            recon_tasks = [
-                asyncio.create_task(_dispatch(_do_recon(tile_id, i % n_gpus)))
-                for i, tile_id in enumerate(input_order)
-            ]
-            logger.info("Stage A+B pipelined: %d recon tasks dispatched", len(recon_tasks))
-        if gate is not None:
-            # Concurrent drainer: owns done_recv, frees tiles +
-            # releases gate slots independent of recon dispatch, so parked recon
-            # tasks get unblocked. Recon = gated producer; this = consumer. Drains
-            # while recon runs or any stitch is in flight; the ``stitch_in_flight>0``
-            # guard avoids blocking on recv() when nothing is dispatched (and means
-            # empty/never-ready outputs aren't waited on — same as the flag-off loop).
-            async def _drainer() -> None:
-                while not recon_done[0] or stitch_in_flight > 0:
-                    if stitch_in_flight > 0:
-                        await _drain_one_stitch()
-                    else:
-                        await asyncio.sleep(0.002)  # let recon dispatch the next ready output
-
-            async def _heartbeat() -> None:
-                while True:
-                    await asyncio.sleep(_DRIVE_HB_S)
-                    ready = sum(
-                        1 for ins in pending_outputs.values() if ins <= recon_handles.keys()
-                    )
-                    logger.info(
-                        "DRIVE hb: a_remaining=%d in_flight=%d gate_free=%d held=%d "
-                        "ready_undispatched=%d freed_pending=%d done=%d recon_done=%s",
-                        a_remaining[0],
-                        stitch_in_flight,
-                        gate._free,
-                        len(recon_handles),
-                        ready,
-                        len(freed_pending),
-                        len(summaries),
-                        recon_done[0],
-                    )
-
-            drainer = asyncio.create_task(_drainer())
-            hb = asyncio.create_task(_heartbeat()) if _DRIVE_HB_S > 0 else None
-            try:
-                await asyncio.gather(*recon_tasks)
-            except BaseException:
-                # A recon work-unit failed (e.g. _recon_rpc exhausted its retries).
-                # Signal + cancel the drainer and re-raise so the failure surfaces,
-                # instead of leaving recon_done False -> the drainer orphaned looping
-                # and the gate's slots leaked -> the exact deadlock this path exists
-                # to prevent. Aborting the TP loudly is correct here.
-                recon_done[0] = True
-                drainer.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await drainer
-                raise
-            else:
-                recon_done[0] = True
-                await drainer
-            finally:
-                if hb is not None:
-                    hb.cancel()
-        else:
-            await asyncio.gather(*recon_tasks)
-            while stitch_in_flight > 0:
-                await _drain_one_stitch()
-        # Free the last batch of recons before returning (swap_to/teardown will
-        # clear whatever remains anyway).
-        await _flush_forget()
-        logger.info("Stage B: %d/%d completed (final)", len(summaries), stitch_count)
-        return t_a_end_local[0], time.monotonic() - t_a_start, summaries
+        return await driver.run()
 
     # --- stats + teardown --------------------------------------------------
     def collect_recon_stats(self) -> list[dict]:
-        """Gather per-actor Stage A timing from every actor."""
+        """Collect Stage A telemetry from every actor.
+
+        Returns
+        -------
+        list[dict]
+            One reconstruction telemetry mapping per actor.
+        """
 
         async def _collect():
             vm = await self._workers.recon_stats.call()
@@ -717,7 +626,7 @@ class MonarchBackend:
         # already-resolved future and no-ops. Best-effort: swallow everything,
         # since this is end-of-life cleanup and must never fail the run.
         try:
-            from monarch._src.actor.actor_mesh import shutdown_context
+            from monarch.actor import shutdown_context
 
             shutdown_context().get(timeout=_SHUTDOWN_TIMEOUT_S)
         except Exception as exc:

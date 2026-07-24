@@ -18,6 +18,7 @@ from pydantic import ValidationError
 from biahub.settings import (
     CompileMode,
     Device,
+    DispatchScheduler,
     MonarchConfig,
     TileStitchReconSettings,
 )
@@ -54,15 +55,27 @@ def test_config_yaml_parses_with_monarch_defaults(tmp_path: Path):
     # StrEnum members are plain strings on the wire / in comparisons.
     assert run.monarch.device == "cuda"
     assert run.monarch.compile_mode == "none"
+    assert run.monarch.dispatch_scheduler is DispatchScheduler.MORTON
+    assert run.monarch.scheduler_window == 32
 
 
 def test_config_monarch_overrides(tmp_path: Path):
     payload = _minimal_yaml(tmp_path)
-    payload["monarch"] = {"gpus_per_node": 4, "recon_batch": 1, "compile_mode": "none"}
+    payload["monarch"] = {
+        "gpus_per_node": 4,
+        "recon_batch": 1,
+        "compile_mode": "none",
+        "resident_budget": "auto",
+        "dispatch_scheduler": "windowed_graph_ready",
+        "scheduler_window": 16,
+    }
     run = TileStitchReconSettings.model_validate(payload)
     assert run.monarch.gpus_per_node == 4
     assert run.monarch.recon_batch == 1
     assert run.monarch.compile_mode is CompileMode.NONE
+    assert run.monarch.dispatch_scheduler is DispatchScheduler.WINDOWED_GRAPH_READY
+    assert run.monarch.scheduler_window == 16
+    assert run.monarch.resident_budget == "auto"
 
 
 def test_default_config_is_valid_and_quiet():

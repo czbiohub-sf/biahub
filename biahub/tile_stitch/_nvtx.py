@@ -1,26 +1,13 @@
-"""Guarded NVTX instrumentation for Nsight Systems (nsys) profiling.
+"""Optional NVTX ranges and counters for tile-stitch profiling."""
 
-Zero-cost when the optional ``nvtx`` package isn't installed (no-op context
-managers / counters), and near-zero-cost when it is installed but no profiler is
-attached — ``nvtx.get_domain`` returns a disabled domain whose methods no-op.
-
-Usage::
-
-    from biahub.tile_stitch import _nvtx
-    with _nvtx.stage("recon_fft", "green"):
-        ...
-    _nvtx.counter("bytes_h2d", unit="bytes").sample(nbytes)
-"""
-
-from __future__ import annotations
 
 import contextlib
 
 try:
-    import nvtx as _nvtx  # optional; install with `uv pip install nvtx` for profiling
+    import nvtx as _nvtx
 
     _DOMAIN = _nvtx.get_domain("tile_stitch")
-except Exception:  # not installed -> everything no-ops
+except Exception:
     _nvtx = None
     _DOMAIN = None
 
@@ -28,7 +15,20 @@ _COUNTERS: dict = {}
 
 
 def stage(message: str, color: str = "blue"):
-    """Context manager for a named NVTX range on the ``tile_stitch`` domain."""
+    """Create an NVTX range context.
+
+    Parameters
+    ----------
+    message : str
+        Range label.
+    color : str, optional
+        NVTX display color.
+
+    Returns
+    -------
+    contextlib.AbstractContextManager
+        NVTX annotation, or a no-op context when profiling is unavailable.
+    """
     if _nvtx is None:
         return contextlib.nullcontext()
     return _nvtx.annotate(message=message, color=color, domain="tile_stitch")
@@ -43,7 +43,22 @@ class _NoopCounter:
 
 
 def counter(name: str, unit: str | None = None, integer: bool = True):
-    """Return a cached NVTX counter (time-series lane in nsys), or a no-op."""
+    """Return a cached NVTX counter or no-op replacement.
+
+    Parameters
+    ----------
+    name : str
+        Counter name.
+    unit : str or None, optional
+        Counter unit passed to NVTX semantics.
+    integer : bool, optional
+        Use an integer counter when ``True``; otherwise use floating point.
+
+    Returns
+    -------
+    object
+        Counter exposing ``sample`` and ``batch_submit``.
+    """
     c = _COUNTERS.get(name)
     if c is not None:
         return c
@@ -60,6 +75,14 @@ def counter(name: str, unit: str | None = None, integer: bool = True):
 
 
 def mark(message: str, color: str = "red"):
-    """Record an instantaneous event on the ``tile_stitch`` domain."""
+    """Record an instantaneous NVTX event.
+
+    Parameters
+    ----------
+    message : str
+        Event label.
+    color : str, optional
+        NVTX display color.
+    """
     if _nvtx is not None:
         _nvtx.mark(message=message, color=color, domain="tile_stitch")

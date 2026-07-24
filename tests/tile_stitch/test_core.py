@@ -16,8 +16,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from waveorder.tile_stitch.blend import Blend
-from waveorder.tile_stitch.partition import InputTile, OutputTile
+from waveorder.api.tile_stitch import Blend, InputTile, OutputTile
 
 from biahub.tile_stitch import _core
 
@@ -34,7 +33,7 @@ def _ramp_kernel(shape: tuple[int, ...]) -> np.ndarray:
     return np.broadcast_to(row, shape).copy()
 
 
-def _ramp_blend() -> Blend:
+def _ramp_blend(fill_value: float = float("nan")) -> Blend:
     """A minimal ``Blend`` carrying only the fields ``blend_contributors`` uses.
 
     ``blend_contributors`` touches just ``weight_kernel`` and ``fill_value``;
@@ -48,6 +47,28 @@ def _ramp_blend() -> Blend:
     return Blend(
         name="ramp",
         weight_kernel=_ramp_kernel,
+        init=_unused,
+        combine=_unused,
+        finalize=_unused,
+        fill_value=fill_value,
+    )
+
+
+def _separable_blend(name: str = "gaussian_mean_test") -> Blend:
+    def kernel(shape):
+        result = np.ones(shape, dtype=np.float64)
+        for axis, size in enumerate(shape):
+            axis_shape = [1] * len(shape)
+            axis_shape[axis] = size
+            result *= np.arange(1, size + 1, dtype=np.float64).reshape(axis_shape)
+        return result
+
+    def _unused(*_a, **_k):  # pragma: no cover - never called by _core
+        raise AssertionError("blend accumulate path not exercised by _core")
+
+    return Blend(
+        name=name,
+        weight_kernel=kernel,
         init=_unused,
         combine=_unused,
         finalize=_unused,
@@ -167,13 +188,79 @@ def test_blend_contributors_fill_value_outside_coverage():
         leading_shape=(1, 1),
     )
     geom = _core.build_stitch_geom(plan)
-    blend = _ramp_blend()
-
     t0 = np.full((1, 8, 4), 7.0, dtype=np.float64)
-    result = _core.blend_contributors(geom[0], {0: t0}, blend, {})
-    assert np.allclose(result[0, :, 0:4], 7.0)
-    assert np.all(np.isnan(result[0, :, 4:8]))
+    for fill_value in (float("nan"), 0.0, -3.5):
+        result = _core.blend_contributors(
+            geom[0], {0: t0}, _ramp_blend(fill_value), {}
+        )
+        assert result.dtype == np.float32
+        assert np.allclose(result[0, :, 0:4], 7.0)
+        uncovered = result[0, :, 4:8]
+        if np.isnan(fill_value):
+            assert np.all(np.isnan(uncovered))
+        else:
+            assert np.all(uncovered == fill_value)
 
+
+
+def test_separable_denominator_matches_explicit_accumulation():
+    plan = _two_tile_plan(leading_shape=(1, 1))
+    entry = _core.build_stitch_geom(plan)[0]
+    blend = _separable_blend()
+    cache = {}
+
+    denominator, active_axes = _core._separable_weight_sum(
+        entry, blend, np.float32, cache
+    )
+    explicit = np.zeros(entry["out_shape"], dtype=np.float32)
+    for cinfo in entry["contributors"].values():
+        kernel = _core.get_blend_kernel(
+            blend, cinfo["tile_shape"], np.float32, {}
+        )
+        explicit[cinfo["out_full_idx"]] += kernel[cinfo["in_local"]]
+
+    common_y_factor = np.arange(1, 9, dtype=np.float32)[:, None]
+    np.testing.assert_allclose(
+        np.broadcast_to(denominator, explicit[0].shape),
+        explicit[0] / common_y_factor,
+    )
+    assert active_axes == (False, True)
+    reduced = _core._get_reduced_blend_kernel(
+        blend, (8, 5), active_axes, np.float32, cache
+    )
+    assert reduced.shape == (1, 5)
+    assert all(key[0] != (8, 5) for key in cache if isinstance(key[0], tuple))
+
+
+def test_separable_blend_matches_fallback_and_rejects_irregular_geometry():
+    plan = _two_tile_plan(leading_shape=(1, 1))
+    entry = _core.build_stitch_geom(plan)[0]
+    values = {
+        0: np.full((1, 8, 5), 10.0, dtype=np.float32),
+        1: np.full((1, 8, 5), 20.0, dtype=np.float32),
+    }
+
+    optimized = _core.blend_contributors(
+        entry, values, _separable_blend(), {}
+    )
+    fallback = _core.blend_contributors(
+        entry, values, _separable_blend("custom_separable"), {}
+    )
+    np.testing.assert_allclose(optimized, fallback, rtol=1e-6, atol=1e-6)
+
+    irregular = {
+        **entry,
+        "contributors": {
+            **entry["contributors"],
+            2: {
+                **entry["contributors"][1],
+                "out_full_idx": (slice(None), slice(1, 8), slice(3, 8)),
+            },
+        },
+    }
+    assert _core._separable_weight_sum(
+        irregular, _separable_blend(), np.float32, {}
+    ) == (None, None)
 
 def _write_region(plan_timepoint, out_c_idx, out_spatial):
     """Replicate the actor's stitch write-region convention.
@@ -234,7 +321,7 @@ def test_timepoint_write_region_carries_t_axis():
 def test_build_recon_batches_invariants():
     """Batches are shape-uniform, <= bsize, and cover every tile exactly once.
     Differing shapes bucket separately (a batched FFT needs one shape)."""
-    from biahub.tile_stitch.monarch.backend import build_recon_batches
+    from biahub.tile_stitch.monarch.execution import build_recon_batches
 
     # Mixed shapes interleaved: tids 0,4,8,12 are wider in x (ragged edge), the
     # rest uniform — so they must bucket into separate batches.

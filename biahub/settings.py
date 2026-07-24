@@ -716,6 +716,14 @@ class CompileMode(StrEnum):
     NONE = "none"
 
 
+class DispatchScheduler(StrEnum):
+    """Driver-side reconstruction ordering strategy."""
+
+    PLAN = "plan"
+    MORTON = "morton"
+    WINDOWED_GRAPH_READY = "windowed_graph_ready"
+
+
 class MonarchConfig(BaseModel):
     """Durable knobs for the Monarch tile-stitch engine.
 
@@ -735,12 +743,24 @@ class MonarchConfig(BaseModel):
     )
     prefetch_depth: NonNegativeInt = Field(
         default=6,
-        description="Read-ahead depth in TILES (0 disables); prefer prefetch_batches.",
+        description="Speculative read-ahead in tiles; 0 reads only on request.",
     )
     prefetch_batches: NonNegativeInt | None = Field(
         default=None,
         description="Read-ahead in recon-batches (effective depth = batches * "
         "recon_batch); overrides prefetch_depth, 0 disables.",
+    )
+    prefetch_workers: PositiveInt = Field(
+        default=1,
+        description="Concurrent source reads per GPU actor; bounded by effective prefetch depth.",
+    )
+    read_timeout_s: PositiveInt = Field(
+        default=120,
+        description="Per-attempt source-read deadline.",
+    )
+    read_retries: NonNegativeInt = Field(
+        default=2,
+        description="Fresh-executor retries after a source-read deadline.",
     )
     rdma_timeout_s: PositiveInt = 60
     # >1 stacks Tikhonov intermediates on one GPU and risks HBM OOM.
@@ -763,22 +783,24 @@ class MonarchConfig(BaseModel):
         "(lossy ~3 digits), compute stays float32.",
     )
 
-    bounded_dispatch: bool = Field(
-        default=False,
-        description="Gate recon dispatch to a resident budget over a Morton sweep "
-        "(off = unbounded dispatch-all).",
+    dispatch_scheduler: DispatchScheduler = Field(
+        default=DispatchScheduler.MORTON,
+        description="Reconstruction ordering strategy used when a resident budget is active.",
     )
-    resident_budget: PositiveInt | None = Field(
+    scheduler_window: PositiveInt = Field(
+        default=32,
+        description="Candidate lookahead for windowed scheduling strategies.",
+    )
+    resident_budget: PositiveInt | Literal["auto"] | None = Field(
         default=None,
-        description="Max resident recon tiles; null = auto (the order's overlap "
-        "peak). Raised to >= recon_batch and max output fan-in.",
+        description="Resident reconstruction tiles: null = unbounded, 'auto' = "
+        "scheduler-derived safe floor, or a positive explicit limit.",
     )
     # 0 = unbounded: every recon task hits the gate and fires RPCs at once,
     # flooding the Monarch mesh until calls stop flowing (driver+workers idle).
     recon_max_inflight_per_gpu: NonNegativeInt = Field(
         default=3,
-        description="Max in-flight recon RPCs per GPU on the gated path; only when "
-        "bounded_dispatch is on.",
+        description="Max in-flight recon RPCs per GPU when a resident budget is active.",
     )
     recon_rpc_timeout_s: PositiveInt = Field(
         default=90,

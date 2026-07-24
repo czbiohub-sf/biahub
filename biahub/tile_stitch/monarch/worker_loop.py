@@ -1,13 +1,7 @@
-r"""Generic Monarch host-worker loop for multi-node runs.
+r"""Monarch host-worker entry point for multi-node tile-stitch runs.
 
-One instance runs per node (the tile-stitch wrapper launches it via
-``srun --ntasks-per-node=1`` when the allocation spans >1 node). It derives its
-TCP port + the shared ready-dir from the SLURM allocation — the same
-``_slurm_topology`` the driver uses — so no flags are passed: it binds, signals
-readiness, and serves as a Monarch host the driver attaches to.
-
-The listen address must be a resolvable hostname (wildcard ``tcp://*:PORT`` is
-rejected by Monarch) so the driver's connect string matches.
+Each node derives the same address and readiness directory as the driver, then
+serves a host the driver can attach to.
 """
 
 import logging
@@ -17,6 +11,13 @@ import sys
 
 
 def main() -> None:
+    """Start the Monarch host worker for the active SLURM node.
+
+    Raises
+    ------
+    SystemExit
+        If no multi-node SLURM allocation is active.
+    """
     import monarch.actor as ma
 
     from biahub.tile_stitch.monarch.backend import _slurm_topology
@@ -32,9 +33,7 @@ def main() -> None:
     ma.enable_transport("tcp")
     host = socket.gethostname()
     address = f"tcp://{host}:{port}"
-    # Signal readiness on the shared FS just before the blocking bind — a tiny
-    # race remains (file exists ~ms before the socket listens), so the driver
-    # adds a small margin after all files appear.
+    # Publish the address before entering Monarch's blocking worker loop.
     if ready_dir:
         os.makedirs(ready_dir, exist_ok=True)
         with open(os.path.join(ready_dir, f"{host}.ready"), "w") as f:
