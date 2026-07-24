@@ -64,12 +64,26 @@ def _is_plate_position(path: Path) -> bool:
         return False
 
 
-def _chunk_shape(tile_spatial: tuple[int, ...]) -> tuple[int, ...]:
-    """Keep float32 TCZYX chunks near 64 MB for parallel zarrs writes."""
+def _output_dtype(config: TileStitchReconSettings):
+    """Return the stored output dtype, taken from ``monarch.recon_dtype``.
+
+    ``ReconDtype`` is a ``StrEnum`` of numpy dtype names, so it converts directly.
+    """
+    import numpy as np
+
+    return np.dtype(str(config.monarch.recon_dtype))
+
+
+def _chunk_shape(tile_spatial: tuple[int, ...], itemsize: int) -> tuple[int, ...]:
+    """Keep TCZYX chunks near 64 MB for parallel zarrs writes.
+
+    ``itemsize`` follows the stored dtype, so a float16 run gets chunks with twice the
+    leading extent rather than half-size chunks.
+    """
     import math
 
     lead, *rest = tile_spatial
-    rest_bytes = math.prod(rest) * 4
+    rest_bytes = math.prod(rest) * itemsize
     cap = max(1, _CHUNK_BYTES_CAP // max(1, rest_bytes))
     return (1, 1, min(lead, cap), *rest)
 
@@ -184,7 +198,7 @@ def prepare_stitch_run(
         channel=channel,
         output_channel_name=f"{channel}_recon",
         full_shape=full_shape,
-        chunk_shape=_chunk_shape(tile_spatial),
+        chunk_shape=_chunk_shape(tile_spatial, _output_dtype(config).itemsize),
         scale=scale,
         plate_mode=plate_mode,
         position_keys=tuple(tuple(path.parts[-3:]) for path in position_paths),
@@ -193,11 +207,10 @@ def prepare_stitch_run(
 
 def create_stitch_output(prepared: PreparedStitchRun) -> None:
     """Create the validated run's destination OME-Zarr hierarchy."""
-    import numpy as np
-
     from iohub.ngff import open_ome_zarr
     from iohub.ngff.models import TransformationMeta
 
+    dtype = _output_dtype(prepared.config)
     prepared.run_dir.mkdir(parents=True, exist_ok=True)
     if prepared.plate_mode:
         from iohub.ngff.utils import create_empty_plate
@@ -209,7 +222,7 @@ def create_stitch_output(prepared: PreparedStitchRun) -> None:
             shape=prepared.full_shape,
             chunks=prepared.chunk_shape,
             scale=prepared.scale,
-            dtype=np.float32,
+            dtype=dtype,
         )
         return
 
@@ -222,7 +235,7 @@ def create_stitch_output(prepared: PreparedStitchRun) -> None:
         output.create_zeros(
             "0",
             shape=prepared.full_shape,
-            dtype=np.float32,
+            dtype=dtype,
             chunks=prepared.chunk_shape,
             transform=[TransformationMeta(type="scale", scale=list(prepared.scale))],
         )
