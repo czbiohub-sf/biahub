@@ -377,8 +377,9 @@ def apply_focus_slicing(
     The in-focus plane is found once per FOV on ``z_slicing.focus_channel`` (or the
     first loaded channel if unset), then the SAME fixed window of
     ``z_slicing.window_size`` planes is applied to every channel so they stay Z-aligned.
-    Channel arrays are (T, Z, Y, X). Only the focus channel's full stack is read; the
-    rest stay lazy and only their window is materialised downstream.
+    Channel arrays are (T, Z, Y, X). Focus finding reads the focus channel one timepoint
+    at a time; every channel stays lazy, so only the resolved window is materialised
+    downstream.
     """
     focus_channel = z_slicing.focus_channel or next(iter(data_dict))
     if focus_channel not in data_dict:
@@ -386,10 +387,11 @@ def apply_focus_slicing(
             f"focus_channel '{focus_channel}' not in loaded channels {list(data_dict)}."
         )
 
+    # Keep the stack lazy: _median_focus_plane indexes one timepoint at a time, so a
+    # dask array reads a single (Z, Y, X) volume per step. Materialising the whole
+    # (T, Z, Y, X) focus channel here costs tens of GB on a full timelapse and OOM-kills
+    # the worker.
     stack = data_dict[focus_channel]
-    if isinstance(stack, da.Array):
-        stack = stack.compute()
-    stack = np.asarray(stack)
 
     center = _median_focus_plane(stack, pixel_size)
     z_slices, _ = _focus_window(
@@ -527,19 +529,24 @@ def run_preprocessing_pipeline(
                 f_channel_name = step.input_channels
                 if f_channel_name is None:
                     f_channel_name = [channel_name]
-                f_data = [
-                    (
-                        data_dict[name].compute()
-                        if isinstance(data_dict[name], da.Array)
-                        else np.asarray(data_dict[name])
-                    )
-                    for name in f_channel_name
-                ]
+                # Feed the arrays in lazily. Materialising them here costs the full
+                # (T, Z, Y, X) stack -- tens of GB for a full timelapse -- even though
+                # neither branch below needs it all at once:
+                #   * array_apply slices one timepoint at a time into a zarr output;
+                #   * a reduction over a dask array (e.g. np.mean) streams chunk-wise
+                #     and only its much smaller result is materialised, just below.
+                # numpy functions dispatch on dask via __array_function__; any function
+                # that is not dask-aware falls back to np.asarray internally, which is
+                # exactly the eager behaviour this replaces.
+                f_data = [data_dict[name] for name in f_channel_name]
                 if per_timepoint:
                     result = array_apply(*f_data, func=run_function, **f_kwargs)
 
                 else:
                     result = run_function(*f_data, **f_kwargs)
+
+                if isinstance(result, da.Array):
+                    result = result.compute()
 
                 data_dict[channel_name] = result
                 if visualize:
@@ -638,6 +645,11 @@ def fill_empty_frames_from_csv(
         blank_frame_df = pd.read_csv(blank_frame_csv_path)
         empty_frames_idx = get_empty_frames_idx_from_csv(blank_frame_df, fov)
         for channel_name, channel_data in data_dict.items():
+            # fill_empty_frames mutates in place, so it needs a concrete array. Only
+            # materialise when there is actually something to fill, to keep channels
+            # that need no filling lazy.
+            if empty_frames_idx and isinstance(channel_data, da.Array):
+                channel_data = channel_data.compute()
             data_dict[channel_name] = fill_empty_frames(channel_data, empty_frames_idx)
 
     return data_dict
@@ -737,14 +749,16 @@ def cellpose_segmentation(
         )
 
     images = data_dict[channel_name]
-    if isinstance(images, da.Array):
-        images = images.compute()
-    images = np.asarray(images)
 
-    # Project Z if needed (T, Z, Y, X) -> (T, Y, X)
+    # Project Z BEFORE materialising: mean-reducing a dask array streams chunk-wise, so
+    # peak memory is the (T, Y, X) result rather than the full (T, Z, Y, X) stack.
     if images.ndim == 4:
         click.echo(f"Projecting Z-dimension via mean: {images.shape} -> (T, Y, X)")
         images = images.mean(axis=1)
+
+    if isinstance(images, da.Array):
+        images = images.compute()
+    images = np.asarray(images)
 
     click.echo(
         f"Running cellpose ({cellpose_config.model_type}, "
