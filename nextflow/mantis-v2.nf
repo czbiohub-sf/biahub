@@ -17,9 +17,10 @@ nextflow.enable.dsl = 2
 //  (in some pipelines the first step converts raw input to zarr). To reorder
 //  steps, change where a step reads from here; the modules stay untouched.
 //
-//  Flat-field → deskew → reconstruct → virtual-stain → (track ∥ assemble) is
-//  wired today: track and assemble both run after virtual-stain and are
-//  independent of each other. Follow the chaining below for the pattern.
+//  Flat-field → deskew → reconstruct → virtual-stain → assemble → track is
+//  wired today: assemble concatenates the deskew/reconstruct/virtual-stain
+//  channels into one plate, and track reads that assembled plate as its single
+//  input. Follow the chaining below for the pattern.
 // ---------------------------------------------------------------------------
 
 params.input = null   // raw source — may not be a zarr store
@@ -122,22 +123,9 @@ workflow {
 
     virtual_stain_done = virtual_stain_wf(all_positions, virtual_stain_input, virtual_stain_output, params.virtual_stain_config, virtual_stain_trigger)
 
-    // ----- Track ------------------------------------------------------------
-    // Tracking is a 2-input step: it reads reconstruct's output for the plate
-    // structure and virtual-stain's output for the image data to track. It
-    // waits on virtual_stain_done (which itself follows reconstruct), so both
-    // inputs are ready. Which channels are used is set by the track config.
-    track_trigger      = virtual_stain_done.done
-    track_input        = reconstruct_output
-    track_input_images = virtual_stain_output
-    track_output       = "${out}/${layout.track}/${ds}.zarr"
-
-    track_done = track_wf(all_positions, track_input, track_input_images, track_output, params.track_config, track_trigger)
-
     // ----- Assemble ---------------------------------------------------------
     // Concatenate the deskew, reconstruct, and virtual-stain outputs channel-wise
-    // into a single multichannel plate, waiting on virtual_stain_done. Track runs
-    // in parallel (assemble does not consume the tracking labels). Unlike the
+    // into a single multichannel plate, waiting on virtual_stain_done. Unlike the
     // per-position steps this runs single-shot on ONE reserved compute node
     // (`concatenate --cluster debug` iterates every position in-process); which
     // channels/crops come from each source is set by the concatenate config, not
@@ -146,7 +134,7 @@ workflow {
     assemble_trigger = virtual_stain_done.done
     assemble_output  = "${out}/${layout.assemble}/${ds}.zarr"
 
-    assemble_wf(
+    assemble_done = assemble_wf(
         deskew_output,
         reconstruct_output,
         virtual_stain_output,
@@ -154,4 +142,24 @@ workflow {
         params.concatenate_config,
         assemble_trigger
     )
+
+    // ----- Track ------------------------------------------------------------
+    // Track reads the ASSEMBLED plate for both of its inputs: assemble already
+    // carries the phase and virtual-stain channels (concatenate preserves channel
+    // names, so the track config's channel names resolve unchanged), so the plate
+    // structure and the image data come from the same store. It waits on
+    // assemble_done, which means tracking now runs AFTER assemble rather than in
+    // parallel with it — the tradeoff for the single input is that the whole plate
+    // must be assembled first. Two consequences of reading the assembled plate:
+    // any Z/Y/X crop or time_indices subset in the concatenate config is what
+    // tracking sees, and the intermediate stores are no longer needed once
+    // assemble is verified. To go back to the parallel wiring, point track_input
+    // at reconstruct_output, track_input_images at virtual_stain_output, and gate
+    // on virtual_stain_done.
+    track_trigger      = assemble_done.done
+    track_input        = assemble_output
+    track_input_images = assemble_output
+    track_output       = "${out}/${layout.track}/${ds}.zarr"
+
+    track_wf(all_positions, track_input, track_input_images, track_output, params.track_config, track_trigger)
 }
