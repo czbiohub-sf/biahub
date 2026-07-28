@@ -191,12 +191,13 @@ def flat_field(
     )
 
     # RAM scales with one ZYX volume (ram_multiplier=8); wall-time scales with
-    # total voxels. time_multiplier ~= 1.4 min/Gvox calibrated from a completed
-    # run (worst-case ~50 min for ~2.9e11 voxels at 64 CPUs, scaled to this
-    # step's 16 with a ~2x margin). Channel selection only reduces work, so
-    # using all C is a safe upper bound.
+    # the number of volumes (T*C). time_multiplier = 0.7 min/volume: the worst
+    # per-volume rate observed over completed runs is 0.34 min/volume (A549
+    # 2026_07_14, 68.3 min for 201 volumes; neuromast 2026_06_25 is 0.28), so
+    # this carries a ~2x margin. Channel selection only reduces work, so using
+    # all C is a safe upper bound.
     time_minutes, num_cpus, gb_ram_per_cpu = estimate_resources(
-        shape=input_shape, ram_multiplier=8, time_multiplier=1.4, max_num_cpus=16
+        shape=input_shape, ram_multiplier=8, time_multiplier=0.7, max_num_cpus=16
     )
     mem_gb = num_cpus * gb_ram_per_cpu
     echo_resources(num_cpus, mem_gb, time_minutes)

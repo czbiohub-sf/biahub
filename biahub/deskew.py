@@ -680,9 +680,10 @@ def deskew(
     input_shape, _ = _init_output_plate(input_position_dirpaths, output_dirpath, settings)
 
     # RAM scales with one ZYX volume (ram_multiplier=8); wall-time scales with
-    # total voxels. time_multiplier ~= 0.5 min/Gvox calibrated from a completed
-    # run at this step's 16 CPUs (worst-case ~68 min for ~2.9e11 voxels, ~2x
-    # margin).
+    # the number of volumes (T*C). time_multiplier = 0.5 min/volume: the worst
+    # per-volume rate observed over completed runs at this step's 16 CPUs is
+    # 0.24 min/volume (neuromast 2026_06_25, 307 min for 1316 volumes), so this
+    # carries a ~2x margin.
     time_minutes, num_cpus, gb_ram_per_cpu = estimate_resources(
         shape=input_shape, ram_multiplier=8, time_multiplier=0.5, max_num_cpus=16
     )
