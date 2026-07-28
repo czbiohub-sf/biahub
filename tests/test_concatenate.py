@@ -38,7 +38,7 @@ def test_concatenate_channels(create_custom_plate, tmp_path, sbatch_file):
         settings=settings,
         output_dirpath=output_path,
         sbatch_filepath=sbatch_file,
-        local=True,
+        cluster="local",
         block=True,
         monitor=False,
     )
@@ -83,7 +83,7 @@ def test_concatenate_specific_channels(create_custom_plate, tmp_path, sbatch_fil
         settings=settings,
         output_dirpath=output_path,
         sbatch_filepath=sbatch_file,
-        local=True,
+        cluster="local",
         block=True,
         monitor=False,
     )
@@ -120,7 +120,7 @@ def test_concatenate_with_time_indices(create_custom_plate, tmp_path, sbatch_fil
         settings=settings,
         output_dirpath=output_path,
         sbatch_filepath=sbatch_file,
-        local=True,
+        cluster="local",
         block=True,
         monitor=False,
     )
@@ -170,7 +170,7 @@ def test_concatenate_with_single_slice_to_all(create_custom_plate, tmp_path, sba
         settings=settings,
         output_dirpath=output_path,
         sbatch_filepath=sbatch_file,
-        local=True,
+        cluster="local",
         block=True,
         monitor=False,
     )
@@ -222,7 +222,7 @@ def test_concatenate_with_cropping(create_custom_plate, tmp_path, sbatch_file):
         settings=settings,
         output_dirpath=output_path,
         sbatch_filepath=sbatch_file,
-        local=True,
+        cluster="local",
         block=True,
         monitor=False,
     )
@@ -290,7 +290,7 @@ def test_concatenate_with_custom_chunks(
         settings=settings,
         output_dirpath=output_path,
         sbatch_filepath=sbatch_file,
-        local=True,
+        cluster="local",
         monitor=False,
         block=True,
     )
@@ -350,7 +350,7 @@ def test_concatenate_multiple_plates(create_custom_plate, tmp_path, sbatch_file)
         settings=settings,
         output_dirpath=output_path,
         sbatch_filepath=sbatch_file,
-        local=True,
+        cluster="local",
         block=True,
         monitor=False,
     )
@@ -397,7 +397,7 @@ def test_concatenate_mismatched_with_cropping(create_custom_plate, tmp_path, sba
         settings=settings,
         output_dirpath=output_path,
         sbatch_filepath=sbatch_file,
-        local=True,
+        cluster="local",
         block=True,
         monitor=False,
     )
@@ -448,7 +448,7 @@ def test_concatenate_with_mixed_slice_formats(create_custom_plate, tmp_path, sba
         settings=settings,
         output_dirpath=output_path,
         sbatch_filepath=sbatch_file,
-        local=True,
+        cluster="local",
         block=True,
         monitor=False,
     )
@@ -497,7 +497,7 @@ def test_concatenate_with_unique_positions(create_custom_plate, tmp_path, sbatch
         settings=settings_unique,
         output_dirpath=output_path_unique,
         sbatch_filepath=sbatch_file,
-        local=True,
+        cluster="local",
         block=True,
         monitor=False,
     )

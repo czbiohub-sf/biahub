@@ -71,7 +71,7 @@ COMMANDS = [
     },
     {
         "name": "flat-field",
-        "import_path": "biahub.flat_field_correction.flat_field_correction_cli",
+        "import_path": "biahub.flat_field.flat_field_cli",
         "help": "Apply flat field correction to selected channels",
     },
     {
