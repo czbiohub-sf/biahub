@@ -17,9 +17,10 @@ nextflow.enable.dsl = 2
 //  (in some pipelines the first step converts raw input to zarr). To reorder
 //  steps, change where a step reads from here; the modules stay untouched.
 //
-//  Flat-field → deskew → reconstruct → virtual-stain is wired today. The
-//  remaining steps (track, assemble) arrive with their own PRs — follow the
-//  chaining below for the pattern.
+//  Flat-field → deskew → reconstruct → virtual-stain → assemble → track is
+//  wired today: assemble concatenates the deskew/reconstruct/virtual-stain
+//  channels into one plate, and track reads that assembled plate as its single
+//  input. Follow the chaining below for the pattern.
 // ---------------------------------------------------------------------------
 
 params.input = null   // raw source — may not be a zarr store
@@ -28,6 +29,7 @@ params.deskew_config = null
 params.flat_field_config = null
 params.reconstruct_config = null
 params.virtual_stain_config = null
+params.track_config = null
 params.concatenate_config = null
 params.biahub_project = null
 params.max_positions = 0
@@ -37,6 +39,7 @@ include { deskew_wf } from './modules/deskew'
 include { flat_field_wf } from './modules/flat_field'
 include { reconstruct_wf } from './modules/reconstruct'
 include { virtual_stain_wf } from './modules/virtual_stain'
+include { track_wf } from './modules/tracking'
 include { assemble_wf } from './modules/assembly'
 
 // Output directory layout for the reconstruction steps — single source of
@@ -56,7 +59,7 @@ def directory_layout() {
         deskew        : '1-deskew',
         reconstruct   : '2-reconstruct',
         virtual_stain : '3-virtual-stain',
-        // track         : '4-track',
+        track         : '4-track',
         assemble      : '5-assemble',
     ]
 }
@@ -69,6 +72,7 @@ workflow {
     if (!params.deskew_config)      error "Provide --deskew_config"
     if (!params.reconstruct_config) error "Provide --reconstruct_config"
     if (!params.virtual_stain_config) error "Provide --virtual_stain_config"
+    if (!params.track_config)       error "Provide --track_config"
     if (!params.concatenate_config) error "Provide --concatenate_config"
 
     def ds     = dataset_name()
@@ -130,7 +134,7 @@ workflow {
     assemble_trigger = virtual_stain_done.done
     assemble_output  = "${out}/${layout.assemble}/${ds}.zarr"
 
-    assemble_wf(
+    assemble_done = assemble_wf(
         deskew_output,
         reconstruct_output,
         virtual_stain_output,
@@ -138,4 +142,24 @@ workflow {
         params.concatenate_config,
         assemble_trigger
     )
+
+    // ----- Track ------------------------------------------------------------
+    // Track reads the ASSEMBLED plate for both of its inputs: assemble already
+    // carries the phase and virtual-stain channels (concatenate preserves channel
+    // names, so the track config's channel names resolve unchanged), so the plate
+    // structure and the image data come from the same store. It waits on
+    // assemble_done, which means tracking now runs AFTER assemble rather than in
+    // parallel with it — the tradeoff for the single input is that the whole plate
+    // must be assembled first. Two consequences of reading the assembled plate:
+    // any Z/Y/X crop or time_indices subset in the concatenate config is what
+    // tracking sees, and the intermediate stores are no longer needed once
+    // assemble is verified. To go back to the parallel wiring, point track_input
+    // at reconstruct_output, track_input_images at virtual_stain_output, and gate
+    // on virtual_stain_done.
+    track_trigger      = assemble_done.done
+    track_input        = assemble_output
+    track_input_images = assemble_output
+    track_output       = "${out}/${layout.track}/${ds}.zarr"
+
+    track_wf(all_positions, track_input, track_input_images, track_output, params.track_config, track_trigger)
 }
