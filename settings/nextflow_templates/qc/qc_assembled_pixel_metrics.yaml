@@ -6,12 +6,27 @@ defaults:
 # `<name>_imaging.zarr` holding the raw acquired channels. Inherits the metric
 # set from qc_base (intensity_stats, signal_to_noise, blank, tenengrad,
 # bleach_rate) and applies it across all channels.
-#
-# The gate floors in qc_base (signal_to_noise hard_floor, tenengrad hard_floor)
-# are starting defaults, not calibrated constants: set them per experiment from
-# the channels and intensity scale at hand. A mixed brightfield + fluorescence
-# store (e.g. "BF - Oblique" alongside "raw GFP …"/"raw mCherry …") in particular
-# wants per-channel floors rather than one global value.
 
 stage: 5
 display_name: "Assembled Image — Pixel QC"
+
+# Per-channel SNR floors override qc_base's single scalar. Brightfield SNR is not
+# comparable to fluorescence, so "BF - Oblique" is left out of the mapping (an
+# unlisted channel gets no hard floor). The fluorescence values below are STARTING
+# POINTS keyed to this store's channel names, NOT constants calibrated from any
+# dataset — set each from the channel's healthy SNR for the experiment at hand.
+signal_to_noise:
+  granularity: z
+  gate:
+    # `granularity: channel` evaluates the gate per channel, which is what lets the
+    # {channel: value} hard_floor key by name (a channel-pooled gate has no channel
+    # to key by and refuses the mapping).
+    granularity: channel
+    hard_floor:
+      "raw GFP EX488 EM525-45": 5.0
+      "raw mCherry EX561 EM600-37": 5.0
+    hard_ceiling: null
+    outlier_method: zscore
+    outlier_params:
+      n_std: 3.0
+      tail: lower
