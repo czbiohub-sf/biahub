@@ -1,11 +1,11 @@
-include { plan_stage }                         from './qc_processes'
-include { run_step as run_step_w0 }            from './qc_processes'
-include { run_step as run_step_w1 }            from './qc_processes'
-include { run_step as run_step_w2 }            from './qc_processes'
-include { finalize_wave }                      from './qc_processes'
-include { finalize_stage }                     from './qc_processes'
-include { generate_report_spec }                from './qc_processes'
-include { run_report }                          from './qc_processes'
+include { plan_stage }                       from './qc_processes'
+include { compute_step as compute_step_w0 }  from './qc_processes'
+include { compute_step as compute_step_w1 }  from './qc_processes'
+include { compute_step as compute_step_w2 }  from './qc_processes'
+include { finalize_wave }                    from './qc_processes'
+include { finalize_stage }                   from './qc_processes'
+include { generate_report_spec }             from './qc_processes'
+include { run_report }                       from './qc_processes'
 
 
 // ---------------------------------------------------------------------------
@@ -40,7 +40,7 @@ workflow qc_stage_wf {
 
     // Wave 0: position-scoped (may be chunked)
     w0_in = items.w0.map { z,c,wid,sid,pos,cid,ti -> [z,c,sid,pos,cid,ti,[:]] }
-    w0_done = run_step_w0(w0_in)
+    w0_done = compute_step_w0(w0_in)
     w0_count = w0_done.count()
 
     // Finalize wave 0 (merge chunks before dependent wave)
@@ -55,14 +55,14 @@ workflow qc_stage_wf {
     w1_in = items.w1
         .combine(fw0_count)
         .map { z,c,wid,sid,pos,cid,ti,n -> [z,c,sid,pos,null,null,[:]] }
-    w1_done = run_step_w1(w1_in)
+    w1_done = compute_step_w1(w1_in)
     w1_count = w1_done.mix(fw0).count()
 
     // Wave 2: store-scoped (after wave 1)
     w2_in = items.w2
         .combine(w1_count)
         .map { z,c,wid,sid,pos,cid,ti,n -> [z,c,sid,null,null,null,[:]] }
-    w2_done = run_step_w2(w2_in)
+    w2_done = compute_step_w2(w2_in)
 
     // Finalize stage: aggregate + gate + summary
     all_done = w0_done.mix(w1_done, w2_done).count()

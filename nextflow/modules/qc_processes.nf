@@ -26,7 +26,7 @@ process plan_stage {
 }
 
 
-process run_step {
+process compute_step {
     tag "${zarr_path}/${position ?: 'store'}/${step_id}"
     label 'cpu'
     clusterOptions { slurm_logs('qc') }
