@@ -3,7 +3,7 @@ include { slurm_logs; slurm_log_dir; biahub_cmd } from './common'
 def qc_cmd() {
     return params.qc_project ?
         "uv run --project ${params.qc_project} imaging-qc" :
-        "uv run --from 'imaging-qc-pipeline @ git+https://github.com/czbiohub-sf/imaging-qc-pipeline@v0.3.2' imaging-qc"
+        "uv run --from 'imaging-qc-pipeline @ git+https://github.com/czbiohub-sf/imaging-qc-pipeline@v0.4.0a1' imaging-qc"
 }
 
 
@@ -26,7 +26,7 @@ process plan_stage {
 }
 
 
-process run_step {
+process compute_step {
     tag "${zarr_path}/${position ?: 'store'}/${step_id}"
     label 'cpu'
     clusterOptions { slurm_logs('qc') }
@@ -46,7 +46,7 @@ process run_step {
     def pos_arg = position ? "--positions '${position}'" : ""
     def chunk_arg = (chunk_id && time_indices) ? "--chunk-id ${chunk_id} --time-indices ${time_indices}" : ""
     """
-    ${qc_cmd()} run-step --config ${config_path} --step-id ${step_id} \
+    ${qc_cmd()} compute --config ${config_path} --step-id ${step_id} \
         ${pos_arg} ${chunk_arg} ${zarr_path}
     """
 }
@@ -69,7 +69,7 @@ process finalize_wave {
 
     script:
     """
-    ${qc_cmd()} finalize-wave --config ${config_path} --wave-id ${wave_id} ${zarr_path}
+    ${qc_cmd()} consolidate --config ${config_path} --wave-id ${wave_id} ${zarr_path}
     """
 }
 
@@ -91,7 +91,8 @@ process finalize_stage {
 
     script:
     """
-    ${qc_cmd()} finalize-stage --config ${config_path} ${zarr_path}
+    ${qc_cmd()} consolidate --config ${config_path} ${zarr_path}
+    ${qc_cmd()} gate --config ${config_path} ${zarr_path}
     """
 }
 
