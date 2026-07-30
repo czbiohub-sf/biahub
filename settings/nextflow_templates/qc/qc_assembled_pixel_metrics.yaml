@@ -1,0 +1,17 @@
+defaults:
+  - qc_base
+  - _self_
+
+# Pixel-value QC for an assembled (post-assembly) intensity store — the
+# `<name>_imaging.zarr` holding the raw acquired channels. Inherits the metric
+# set from qc_base (intensity_stats, signal_to_noise, blank, tenengrad,
+# bleach_rate) and applies it across all channels.
+#
+# The gate floors in qc_base (signal_to_noise hard_floor, tenengrad hard_floor)
+# are starting defaults, not calibrated constants: set them per experiment from
+# the channels and intensity scale at hand. A mixed brightfield + fluorescence
+# store (e.g. "BF - Oblique" alongside "raw GFP …"/"raw mCherry …") in particular
+# wants per-channel floors rather than one global value.
+
+stage: 5
+display_name: "Assembled Image — Pixel QC"
