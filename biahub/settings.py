@@ -44,7 +44,7 @@ class ProcessingImportFuncSettings(MyBaseModel):
 
 
 class ProcessingInputChannel(MyBaseModel):
-    path: str | None = None
+    path: Path | None = None
     channels: dict[str, list[ProcessingFunctions]]
 
     @field_validator("path")
@@ -58,14 +58,64 @@ class ProcessingInputChannel(MyBaseModel):
         return v
 
 
+class CellposeConfig(MyBaseModel):
+    """Configuration for Cellpose segmentation used as input to tracking."""
+
+    model_type: str = "nuclei"
+    diameter: float = 80
+    cellprob_threshold: float = 0.0
+    flow_threshold: float = 0.4
+    gpu: bool = True
+    min_size: int = 500
+    input_channel: str = "nuclei_prediction"
+    labels_sigma: float = 5.0
+
+
+class ZSlicing(MyBaseModel):
+    """How to SELECT the Z-planes used for tracking.
+
+    The ``method`` decides which of the other fields are used; fields that belong to a
+    different method are simply ignored (all have defaults). The block selects a
+    z-window; the actual reduction to 2D is governed separately by
+    ``TrackingSettings.output_mode`` (plus any Z-projection step, e.g. ``np.mean``, in
+    ``input_images``).
+
+    Methods
+    -------
+    all
+        Use every plane (``slice(None)``).
+    central
+        Use an automatically centred window (see ``central_z_slice``).
+    range
+        Use the explicit ``range`` ``[start, stop]`` slice (falls back to all planes
+        if ``range`` is left unset).
+    focus
+        Detect the in-focus plane per-FOV (waveorder ``focus_from_transverse_band``
+        on ``focus_channel``) and take a fixed window of ``window_size`` planes around it,
+        split ``frac_below``/``frac_above``.
+    """
+
+    method: Literal["all", "central", "range", "focus"] = "all"
+    range: tuple[int, int] | None = None  # method: range
+    window_size: int = 48  # method: focus (fixed window size, in z-planes)
+    frac_below: float = 1 / 3  # method: focus
+    frac_above: float = 2 / 3  # method: focus
+    focus_channel: str | None = None  # method: focus -- channel focus-finding runs on
+
+
 class TrackingSettings(MyBaseModel):
     target_channel: str = "nuclei_prediction"
     fov: str = "*/*/*"
-    blank_frames_path: str = None
-    mode: Literal["2D", "3D"] = "2D"
-    z_range: tuple[int, int] | None = None
+    blank_frames_path: Path | None = None
+    # 2D writes an output plate with Z=1 (input must be projected); 3D keeps the
+    # selected z-window. Does not itself project the data.
+    output_mode: Literal["2D", "3D"] = "2D"
+    # Which Z-planes to select for tracking. See ZSlicing.
+    z_slicing: ZSlicing = ZSlicing()
     input_images: list[ProcessingInputChannel]
     tracking_config: dict[str, Any] = {}
+    segmentation_method: Literal["foreground_contour", "cellpose"] = "foreground_contour"
+    cellpose_config: CellposeConfig | None = None
     # When None, preserve the OME-Zarr version of the input store.
     output_ome_zarr_version: Literal["0.4", "0.5"] | None = None
 

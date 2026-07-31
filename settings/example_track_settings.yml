@@ -1,20 +1,62 @@
-# Tracking mode: either "2D" (uses projected Z-slices) or "3D" (full volumetric).
-mode: "2D"
+# Output layout. "2D" writes a Z=1 plate (the input must be projected, e.g. via the
+# np.mean step below); "3D" keeps the selected z-window. output_mode does NOT project
+# the data itself -- it only controls the output shape.
+output_mode: "2D"
 
 fov: "*/*/*"
-# Z-slice range to extract. Use [-1, -1] to auto-compute a centered slice. If None, all planes are returned or the user-defined range is used.
-z_range: [-1, -1]
+
+# How to SELECT the Z-planes used for tracking. Set exactly one `method`; only the
+# fields relevant to that method apply (others are rejected at load time):
+#   all      - use every plane.
+#   central  - auto-centered window.
+#   range    - explicit [start, stop] (requires `range`).
+#   focus    - fixed window of `window_size` planes around the per-FOV in-focus plane
+#              (`frac_below`/`frac_above` split it; `focus_channel` picks the channel
+#              focus-finding runs on).
+z_slicing:
+  method: all
+  # range: [10, 25]           # method: range
+  # window_size: 48           # method: focus (number of z-planes in the window; default 48)
+  # frac_below: 0.33          # method: focus
+  # frac_above: 0.67          # method: focus
+  # focus_channel: nuclei_prediction  # method: focus
 
 # Name of the target channel used to name the tracking output label channel.
 target_channel: nuclei_prediction
 blank_frames_path: blank_frames.csv
 
-# Input image configurations.
-# Each entry defines one dataset with its path and channels to process.
+# Segmentation method used to feed ultrack: "cellpose" or "foreground_contour".
+# - cellpose: run a Cellpose model per frame to produce instance labels.
+# - foreground_contour: derive a foreground mask + contour map (ultrack segments).
+segmentation_method: cellpose
+
+# Cellpose model parameters (used only when segmentation_method: cellpose).
+cellpose_config:
+  model_type: nuclei
+  diameter: 80
+  cellprob_threshold: 0.0
+  flow_threshold: 0.4
+  gpu: true
+  min_size: 2500
+  input_channel: nuclei_prediction  # channel (from input_images) to segment
+  labels_sigma: 5.0                  # smoothing applied to labels before ultrack
+
+# Input image configurations. Each entry defines one dataset (path) and the channels
+# to load/process from it.
+#
+# Two input sources feed tracking:
+#   * `-i` (input_position_dirpaths) defines the plate structure (positions, shape, scale).
+#   * input_images[].path supplies the pixel data loaded per FOV.
+# The FIRST entry with `path: null` is the primary data source: it resolves to
+# `--input-images-path` if given (Nextflow), else to the `-i` input plate. So you can
+# leave it null here and point `-i` at the data. Any LATER null entries are
+# virtual/computed channels (see the foreground_contour example below).
 input_images:
 
-  # First input: predicted nuclei and membrane channels.
-  - path: /path/to/virtual_staining.zarr
+  # Cellpose mode: load and Z-project the channel named by cellpose_config.input_channel.
+  # path: null -> resolved from -i (or --input-images-path). Use an explicit
+  # /path/to/virtual_staining.zarr if the data lives elsewhere than the -i plate.
+  - path: null
     channels:
       nuclei_prediction:
         # Z-projection using mean intensity
@@ -23,43 +65,46 @@ input_images:
             axis: 1
           per_timepoint: False
 
-        # Normalize intensity with gamma correction
-        - function: ultrack.imgproc.normalize
-          kwargs:
-            gamma: 0.7
-
-      membrane_prediction:
-        - function: np.mean
-          kwargs:
-            axis: 1
-          per_timepoint: False
-
-        - function: ultrack.imgproc.normalize
-          kwargs:
-            gamma: 0.7
-
-  # # Optional: load label masks directly with or without processing.
-  # - path: /path/to/segmentation.zarr
+  # ---------------------------------------------------------------------------
+  # Alternative: segmentation_method: foreground_contour
+  # Replace the input_images block above with the following (first entry is the
+  # primary data source -> path: null; the second entry's null is a virtual channel):
+  #
+  # - path: null
   #   channels:
-  #     nuclei_prediction_labels: []
-
-  # Virtual channel: computed dynamically using prior outputs.
-  # if path is null, the channel is computed dynamically using the prior outputs.
-  - path: null
-    channels:
-      foreground:
-        - function: ultrack.imgproc.detect_foreground
-          input_channels:
-            - nuclei_prediction
-          kwargs:
-            sigma: 90
-
-      contour:
-        - function: biahub.cli.track.mem_nuc_contour
-          input_channels:
-            - nuclei_prediction
-            - membrane_prediction
-          kwargs: {}
+  #     nuclei_prediction:
+  #       - function: np.mean
+  #         kwargs:
+  #           axis: 1
+  #         per_timepoint: False
+  #       - function: ultrack.imgproc.normalize
+  #         kwargs:
+  #           gamma: 0.7
+  #     membrane_prediction:
+  #       - function: np.mean
+  #         kwargs:
+  #           axis: 1
+  #         per_timepoint: False
+  #       - function: ultrack.imgproc.normalize
+  #         kwargs:
+  #           gamma: 0.7
+  #
+  # # Virtual channel computed dynamically from the prior outputs (path: null).
+  # - path: null
+  #   channels:
+  #     foreground:
+  #       - function: ultrack.imgproc.detect_foreground
+  #         input_channels:
+  #           - nuclei_prediction
+  #         kwargs:
+  #           sigma: 90
+  #     contour:
+  #       - function: biahub.cli.track.mem_nuc_contour
+  #         input_channels:
+  #           - nuclei_prediction
+  #           - membrane_prediction
+  #         kwargs: {}
+  # ---------------------------------------------------------------------------
 
 # Configuration for Ultrack tracking algorithm.
 # See: https://royerlab.github.io/ultrack/
