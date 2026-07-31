@@ -92,7 +92,7 @@ def pyramid_cli(
     with open_ome_zarr(input_position_dirpaths[0], mode="r") as dataset:
         T, C, Z, Y, X = dataset.data.shape
 
-    num_cpus, gb_ram = estimate_resources(shape=(T, C, Z, Y, X), ram_multiplier=5)
+    _, num_cpus, gb_ram = estimate_resources(shape=(T, C, Z, Y, X), ram_multiplier=5)
 
     cluster = get_submitit_cluster(local)
 

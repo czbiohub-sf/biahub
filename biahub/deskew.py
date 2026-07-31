@@ -679,11 +679,15 @@ def deskew(
     _warn_pixel_size_mismatch(settings, input_position_dirpaths[0])
     input_shape, _ = _init_output_plate(input_position_dirpaths, output_dirpath, settings)
 
-    num_cpus, gb_ram_per_cpu = estimate_resources(
-        shape=input_shape, ram_multiplier=8, max_num_cpus=16
+    # RAM scales with one ZYX volume (ram_multiplier=8); wall-time scales with
+    # the number of volumes (T*C). time_multiplier = 0.5 min/volume: the worst
+    # per-volume rate observed over completed runs at this step's 16 CPUs is
+    # 0.24 min/volume (neuromast 2026_06_25, 307 min for 1316 volumes), so this
+    # carries a ~2x margin.
+    time_minutes, num_cpus, gb_ram_per_cpu = estimate_resources(
+        shape=input_shape, ram_multiplier=8, time_multiplier=0.5, max_num_cpus=16
     )
     mem_gb = num_cpus * gb_ram_per_cpu
-    time_minutes = 60
     echo_resources(num_cpus, mem_gb, time_minutes)
 
     if init_only:

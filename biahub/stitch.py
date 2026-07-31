@@ -451,7 +451,7 @@ def stitch_cli(
             )
 
     # Estimate resources
-    num_cpus, gb_ram = estimate_resources(
+    _, num_cpus, gb_ram = estimate_resources(
         shape=input_fov_shape, ram_multiplier=25, max_num_cpus=16
     )
 

@@ -456,7 +456,7 @@ def concatenate(
 
     T, C, Z, Y, X = prep["shape"]
     batch_size = settings.shards_ratio[0] if settings.shards_ratio else 1
-    num_cpus, gb_ram_per_cpu = estimate_resources(
+    _, num_cpus, gb_ram_per_cpu = estimate_resources(
         shape=(T // batch_size, C, Z, Y, X),
         ram_multiplier=8 * batch_size,
         max_num_cpus=16,

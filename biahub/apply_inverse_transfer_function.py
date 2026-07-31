@@ -25,6 +25,7 @@ from biahub.cli.parsing import (
 )
 from biahub.cli.utils import (
     echo_resources,
+    estimate_resources,
     get_submitit_cluster,
     yaml_to_model,
 )
@@ -114,7 +115,23 @@ def apply_inverse_transfer_function(
     max_num_cpus = 16
     num_cpus, mem_per_cpu = wo_estimate_resources(list(input_shape), settings, max_num_cpus)
     mem_gb = num_cpus * mem_per_cpu
-    time_minutes = 360
+    # CPUs/RAM come from waveorder above. Wall-time scales with the number of
+    # volumes reconstructed: phase reconstruction only processes the config's
+    # input channels, so pass a shape with C = that count and take only the time.
+    #
+    # time_multiplier = 3.0 min/volume, ~2x the worst rate observed over
+    # completed runs (A549 2026_06_16, 101 min for 67 volumes = 1.51 min/vol).
+    # NOTE: reconstruct is the one step where per-volume cost is not
+    # geometry-driven -- it spans 0.14-1.51 min/volume across runs (10x), and
+    # keying on voxels instead is no better (also ~10x), because the cost is
+    # dominated by the reconstruction algorithm settings (regularization, TV
+    # iterations) rather than data size. Sizing for the worst case therefore
+    # over-requests on many-volume datasets; see PR #273 discussion.
+    T, C, Z, Y, X = input_shape
+    n_reconstructed = len(settings.input_channel_names)
+    time_minutes, _, _ = estimate_resources(
+        (T, n_reconstructed, Z, Y, X), time_multiplier=3.0, max_num_cpus=max_num_cpus
+    )
     echo_resources(num_cpus, mem_gb, time_minutes)
 
     if init_only:

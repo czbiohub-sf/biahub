@@ -1026,11 +1026,11 @@ def track(
     output_shape = _init_output_plate(input_position_dirpaths, output_dirpath, settings)
     T, C, Z_out, Y, X = output_shape
 
-    num_cpus, gb_ram_per_cpu = estimate_resources(
+    _, num_cpus, gb_ram_per_cpu = estimate_resources(
         shape=[T, C, Z_out, Y, X], ram_multiplier=16, max_num_cpus=16
     )
-    mem_gb = num_cpus * gb_ram_per_cpu
     time_minutes = 60
+    mem_gb = num_cpus * gb_ram_per_cpu
     # Emit the JSON resources contract consumed by parse_resources in
     # nextflow/modules/common.nf (shared with every other step's --init).
     echo_resources(num_cpus, mem_gb, time_minutes)

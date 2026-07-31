@@ -158,7 +158,9 @@ def test_deskew_cli_multiprocess(
 
     # With CI unset, the example plate (T*C = 3*6) resolves to more than one
     # worker, so the run genuinely spawns a process pool.
-    num_cpus, _ = estimate_resources(shape=(3, 6, 4, 5, 6), ram_multiplier=8, max_num_cpus=16)
+    _, num_cpus, _ = estimate_resources(
+        shape=(3, 6, 4, 5, 6), ram_multiplier=8, max_num_cpus=16
+    )
     assert num_cpus > 1
 
     runner = CliRunner()

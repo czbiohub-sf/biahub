@@ -268,7 +268,7 @@ def process_with_config(
     }
 
     # Estimate Resources
-    num_cpus, gb_ram_per_cpu = estimate_resources(
+    _, num_cpus, gb_ram_per_cpu = estimate_resources(
         shape=output_shape, dtype=np.float32, ram_multiplier=4, max_num_cpus=16
     )
 

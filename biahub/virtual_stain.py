@@ -26,6 +26,7 @@ from biahub.cli.parsing import (
 )
 from biahub.cli.utils import (
     echo_resources,
+    estimate_resources,
     get_submitit_cluster,
     resolve_ome_zarr_version,
 )
@@ -351,17 +352,25 @@ def virtual_stain(
         extra_metadata={"cytoland": config_metadata},
     )
 
-    # Timepoints are processed sequentially on a single GPU, so resource needs
-    # are independent of dataset size.
+    # Timepoints are processed sequentially on a single GPU, so CPU and RAM
+    # needs are fixed (independent of dataset size); only wall-time scales with
+    # the data (see the T*Z budget below).
     num_cpus, mem_gb = 16, 64
-    # Generous wall-clock budget (minutes), assuming median TTA (4 rotations).
-    # Each timepoint runs ~Z sliding windows along Z. Measured ~1.4 s/window
-    # with TTA on this model; budget ~5 s/window (~3-4x margin for slower GPUs,
-    # larger FOVs, and compute-bound runs) with a 60-minute floor. Computed
-    # before the init_only return so --init emits it for the Nextflow pipeline.
-    T, Z = input_shape[0], input_shape[2]
-    seconds_per_window = 5
-    time_minutes = int(np.ceil(max(60, T * Z * seconds_per_window / 60)))
+    # Wall-clock budget for GPU prediction, on the same min/volume currency as
+    # the CPU steps. A per-window (T*Z) budget was tried first and fits worse:
+    # seconds/window spans 0.31 (neuromast) to 1.58 (A549) because a window's
+    # cost also depends on the YX footprint, so no single value covers both --
+    # 1.0 s/window under-provisions A549 and 5.0 over-provisions neuromast ~16x.
+    # Per-volume cost is much tighter (0.88-2.53 min/volume, ~3x), so budget
+    # 5.0 min/volume: ~2x the worst observed (A549 2026_05_27, 169 min for 67
+    # volumes). Computed before the init_only return so --init emits it for the
+    # Nextflow pipeline.
+    # One GPU pass per timepoint emits all target channels at once, so the unit
+    # of work is T volumes regardless of the input/target channel count.
+    T, _, Z, Y, X = input_shape
+    time_minutes, _, _ = estimate_resources(
+        (T, 1, Z, Y, X), time_multiplier=5.0, min_time_minutes=60
+    )
     echo_resources(num_cpus, mem_gb, time_minutes)
 
     if init_only:
