@@ -440,13 +440,25 @@ def estimate_with_propagation(
         "registration": align moving to reference channel.
         "stabilization": align moving channel to itself over time.
     """
-    initial_transform = affine_transform_settings.approx_transform
+    # The static seed from the config. Kept as the `user_transform` competition arm for
+    # every timepoint, so a run that has drifted still gets a chance to snap back to it.
+    config_seed = affine_transform_settings.approx_transform
+    # The most recent transform that actually succeeded. This -- not the config seed --
+    # is what a failed timepoint falls back to. Resetting to the config seed makes a
+    # single failure self-sustaining: the seed is a deliberately coarse initialisation
+    # (measured at overlap score 0.000 on real bead data), so the next timepoint starts
+    # from somewhere the matcher cannot recover from, fails in turn, and the failure
+    # walks forward as a cluster.
+    last_good_transform = config_seed
+
     T, _, _, _ = mov_tzyx.shape
     for t in range(T):
         if mode == "stabilization" and t == 0:
             continue
         if np.sum(mov_tzyx[t]) == 0 or np.sum(ref_tzyx[t]) == 0:
             click.echo(f"Timepoint {t} has no data, skipping")
+            # approx_transform stays on the last good one, so a blank frame costs only
+            # itself rather than derailing every timepoint after it.
         else:
             approx_transform = estimate_tzyx(
                 t_idx=t,
@@ -457,13 +469,17 @@ def estimate_with_propagation(
                 verbose=verbose,
                 output_folder_path=output_folder_path,
                 mode=mode,
-                user_transform=initial_transform,
+                user_transform=config_seed,
             )
 
             if approx_transform is not None:
-                affine_transform_settings.approx_transform = approx_transform.to_list()
-            else:
-                affine_transform_settings.approx_transform = initial_transform
+                last_good_transform = approx_transform.to_list()
+            elif verbose:
+                click.echo(
+                    f"Timepoint {t} produced no transform; propagating the last "
+                    "successful transform rather than the config seed."
+                )
+            affine_transform_settings.approx_transform = last_good_transform
 
 
 def estimate_independently(
