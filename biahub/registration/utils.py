@@ -14,6 +14,7 @@ Key conventions
 - Transforms are 4x4 homogeneous matrices.
 """
 
+import json
 import os
 
 from pathlib import Path
@@ -23,6 +24,7 @@ import ants
 import click
 import largestinteriorrectangle as lir
 import numpy as np
+import pandas as pd
 import scipy
 
 from matplotlib import pyplot as plt
@@ -462,6 +464,142 @@ def plot_translations(
     axs[1].set_title("X-Translation")
     axs[2].plot(y_transforms)
     axs[2].set_title("Y-Translation")
+    plt.savefig(output_filepath, dpi=300, bbox_inches="tight")
+    plt.close()
+
+
+def save_quality_score(
+    output_filepath: Path,
+    score: float,
+    fell_back_to_seed: bool = False,
+) -> None:
+    """
+    Save a single timepoint's registration quality score next to its transform.
+
+    Written as a sidecar rather than returned, so that ``estimate()`` keeps an identical
+    signature across registration methods, and because the independent estimation arm
+    runs each timepoint in its own process.
+
+    Parameters
+    ----------
+    output_filepath : Path
+        Destination, conventionally ``<transforms_dir>/{t}.score``.
+    score : float
+        Overlap score of the accepted transform, in [0, 1]. May be -1 or NaN when every
+        optimisation attempt failed.
+    fell_back_to_seed : bool
+        True when no optimisation succeeded and the coarse initial transform was saved
+        instead. Such a transform is indistinguishable from a real fit on disk, so this
+        flag is the only record that it is not one.
+    """
+    output_filepath.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"quality_score": float(score), "fell_back_to_seed": bool(fell_back_to_seed)}
+    output_filepath.write_text(json.dumps(payload))
+
+
+def load_quality_scores(transforms_path: Path, T: int) -> "pd.DataFrame":
+    """
+    Load per-timepoint quality scores written by ``save_quality_score``.
+
+    Mirrors :func:`load_transforms`: timepoints with no sidecar come back as NaN rather
+    than being dropped, so the result always has one row per timepoint and gaps stay
+    visible in the plot.
+
+    Parameters
+    ----------
+    transforms_path : Path
+        Directory holding ``{t}.score`` files.
+    T : int
+        Number of timepoints.
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns ``t``, ``quality_score``, ``fell_back_to_seed``, ``estimated``.
+    """
+    rows = []
+    for t in range(T):
+        path = transforms_path / f"{t}.score"
+        score, fell_back, estimated = np.nan, False, False
+        if path.exists():
+            try:
+                payload = json.loads(path.read_text())
+                score = float(payload.get("quality_score", np.nan))
+                fell_back = bool(payload.get("fell_back_to_seed", False))
+                estimated = True
+            except (ValueError, OSError):
+                pass
+        rows.append(
+            {
+                "t": t,
+                "quality_score": score,
+                "fell_back_to_seed": fell_back,
+                "estimated": estimated,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def plot_quality_scores(
+    scores: "pd.DataFrame",
+    output_filepath: Path,
+    score_threshold: float = 0.40,
+) -> None:
+    """
+    Plot the registration quality score over time.
+
+    The score was previously only echoed per timepoint, which made it impossible to see
+    where a run degraded without grepping the log. Timepoints that fell back to the seed
+    are marked, because those are the ones whose transform is not a real fit.
+
+    Parameters
+    ----------
+    scores : pd.DataFrame
+        As returned by :func:`load_quality_scores`.
+    output_filepath : Path
+        Destination png.
+    score_threshold : float
+        Drawn as a reference line; scores below it are counted in the title.
+
+    Notes
+    -----
+    The plot is saved as a png file.
+    """
+    output_filepath.parent.mkdir(parents=True, exist_ok=True)
+    scored = scores.dropna(subset=["quality_score"])
+
+    _, ax = plt.subplots(figsize=(12, 4))
+    ax.plot(scores["t"], scores["quality_score"], marker=".", ms=4, lw=1, color="tab:blue")
+    ax.axhline(
+        score_threshold, color="tab:red", ls="--", lw=1, label=f"threshold {score_threshold}"
+    )
+
+    fell_back = scores[scores["fell_back_to_seed"]]
+    if len(fell_back):
+        ax.scatter(
+            fell_back["t"],
+            fell_back["quality_score"].fillna(0.0),
+            marker="x",
+            s=45,
+            color="tab:red",
+            zorder=3,
+            label=f"fell back to seed ({len(fell_back)})",
+        )
+    missing = scores[~scores["estimated"]]
+    for t in missing["t"]:
+        ax.axvspan(t - 0.5, t + 0.5, color="orange", alpha=0.2, lw=0)
+
+    n_below = int((scored["quality_score"] < score_threshold).sum())
+    median = scored["quality_score"].median() if len(scored) else float("nan")
+    ax.set_title(
+        f"Registration quality score over time — median {median:.3f}, "
+        f"{n_below} below {score_threshold}, {len(missing)} not estimated"
+    )
+    ax.set_xlabel("timepoint")
+    ax.set_ylabel("overlap score")
+    ax.set_ylim(-0.03, 1.03)
+    ax.grid(alpha=0.3)
+    ax.legend(fontsize=8)
     plt.savefig(output_filepath, dpi=300, bbox_inches="tight")
     plt.close()
 

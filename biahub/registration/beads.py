@@ -52,7 +52,13 @@ from biahub.cli.utils import (
 )
 from biahub.core.graph_matching import Graph, GraphMatcher
 from biahub.core.transform import Transform
-from biahub.registration.utils import get_aprox_transform, load_transforms
+from biahub.registration.utils import (
+    get_aprox_transform,
+    load_quality_scores,
+    load_transforms,
+    plot_quality_scores,
+    save_quality_score,
+)
 from biahub.settings import AffineTransformSettings, BeadsMatchSettings, DetectPeaksSettings
 
 
@@ -400,6 +406,29 @@ def estimate_tczyx(
         )
 
     transforms = load_transforms(output_transforms_path, mov_tzyx.shape[0], verbose)
+
+    # Surface the per-timepoint quality score. It was previously only echoed as the run
+    # went, so there was no way to see where a run degraded without grepping the log --
+    # and no way at all for the independent arm, whose timepoints each log to their own
+    # submitit file.
+    scores = load_quality_scores(output_transforms_path, mov_tzyx.shape[0])
+    scores.to_csv(output_folder_path / "quality_scores.csv", index=False)
+    plot_quality_scores(
+        scores,
+        output_folder_path / "translation_plots" / "beads_quality_score.png",
+        score_threshold=beads_match_settings.qc_settings.score_threshold,
+    )
+    scored = scores.dropna(subset=["quality_score"])
+    if len(scored):
+        n_low = int(
+            (scored["quality_score"] < beads_match_settings.qc_settings.score_threshold).sum()
+        )
+        click.echo(
+            f"Quality score: median {scored['quality_score'].median():.3f}, "
+            f"{n_low} of {len(scored)} timepoints below "
+            f"{beads_match_settings.qc_settings.score_threshold}, "
+            f"{int(scores['fell_back_to_seed'].sum())} fell back to the seed"
+        )
 
     return transforms
 
@@ -1123,7 +1152,13 @@ def estimate(
     best_quality_score = max(transform_iter_dict.values(), key=lambda x: x["quality_score"])
     best_transform = best_quality_score["transform"]
 
-    if best_transform is None:
+    # Every optimisation attempt failed, so the coarse initial transform is all we have.
+    # Recorded explicitly: the saved .npy is otherwise indistinguishable from a real fit,
+    # and such a transform can still pass validate_transforms, which only checks
+    # consistency against neighbouring timepoints -- and a propagated seed is perfectly
+    # self-consistent.
+    fell_back_to_seed = best_transform is None
+    if fell_back_to_seed:
         best_transform = initial_transform
     if verbose:
         click.echo(f"Best transform: {best_transform}")
@@ -1131,5 +1166,14 @@ def estimate(
     if output_filepath:
         click.echo(f"Saving transform to {output_filepath}")
         np.save(output_filepath, best_transform.to_list())
+        # Persist the score as a sidecar rather than returning it, so that estimate()
+        # keeps the same signature across every registration method. Written to disk
+        # because the independent arm runs each timepoint in its own submitit process,
+        # so an in-memory accumulator would not survive.
+        save_quality_score(
+            Path(output_filepath).with_suffix(".score"),
+            score=best_quality_score["quality_score"],
+            fell_back_to_seed=fell_back_to_seed,
+        )
 
     return best_transform
