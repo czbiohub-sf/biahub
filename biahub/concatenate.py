@@ -462,7 +462,7 @@ def concatenate(
         max_num_cpus=16,
     )
     mem_gb = num_cpus * gb_ram_per_cpu
-    time_minutes = 60
+    time_minutes = 360
     echo_resources(num_cpus, mem_gb, time_minutes=time_minutes)
 
     if init_only:
