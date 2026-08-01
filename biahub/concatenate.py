@@ -18,6 +18,7 @@ from biahub.cli.parsing import (
     init_only,
     monitor,
     output_dirpath,
+    resume,
     sbatch_filepath,
     sbatch_to_submitit,
 )
@@ -29,6 +30,7 @@ from biahub.cli.utils import (
     get_submitit_cluster,
     model_to_yaml,
     resolve_ome_zarr_version,
+    settings_fingerprint,
     yaml_to_model,
 )
 from biahub.settings import ConcatenateSettings
@@ -425,6 +427,7 @@ def concatenate(
     block: bool = False,
     monitor: bool = True,
     init_only: bool = False,
+    resume: bool = False,
 ):
     """Concatenate datasets (with optional cropping).
 
@@ -448,6 +451,12 @@ def concatenate(
     init_only : bool, optional
         Only create the output store and emit RESOURCES, then exit; skip the
         per-position copy. By default False.
+    resume : bool, optional
+        Skip the (time, channel) units a previous attempt already finished,
+        rather than recopying the whole plate. This step is a single long job
+        covering every position, so a preemption or walltime kill near the end
+        otherwise discards hours of work. See
+        ``iohub.ngff.utils.process_single_position``.
     """
     slurm_out_path = output_dirpath.parent / "slurm_output"
 
@@ -525,6 +534,8 @@ def concatenate(
                 input_time_indices=input_time_indices,
                 output_time_indices=list(range(len(input_time_indices))),
                 num_workers=slurm_args["slurm_cpus_per_task"],
+                resume=resume,
+                resume_token=settings_fingerprint(settings),
                 extra_metadata=merged_extra,
                 zyx_slicing_params=zyx_slicing_params,
             )
@@ -551,6 +562,7 @@ def concatenate(
 @cluster()
 @monitor()
 @init_only()
+@resume()
 @click.option(
     "--concat-data-paths",
     multiple=True,
@@ -568,6 +580,7 @@ def concatenate_cli(
     cluster: str = "slurm",
     monitor: bool = False,
     init_only: bool = False,
+    resume: bool = False,
     concat_data_paths: tuple[str, ...] = (),
 ):
     r"""Concatenate datasets (with optional cropping).
@@ -621,6 +634,7 @@ def concatenate_cli(
         block=block,
         monitor=monitor,
         init_only=init_only,
+        resume=resume,
     )
 
 
