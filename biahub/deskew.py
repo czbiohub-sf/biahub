@@ -23,6 +23,7 @@ from biahub.cli.parsing import (
     input_position_dirpaths,
     monitor,
     output_dirpath,
+    resume,
     sbatch_filepath,
     sbatch_to_submitit,
 )
@@ -31,6 +32,7 @@ from biahub.cli.utils import (
     estimate_resources,
     get_submitit_cluster,
     resolve_ome_zarr_version,
+    settings_fingerprint,
     yaml_to_model,
 )
 from biahub.settings import DeskewSettings
@@ -649,6 +651,7 @@ def deskew(
     cluster: str = "slurm",
     monitor: bool = True,
     init_only: bool = False,
+    resume: bool = False,
 ):
     """Deskew oblique plane light-sheet dataset, processing time point and channels in parallel.
 
@@ -671,6 +674,10 @@ def deskew(
         Monitor of submitted SLURM jobs.
     init_only : bool, optional
         Only initialize the output store and exit; skip per-position processing.
+    resume : bool, optional
+        Skip the (time, channel) units a previous attempt already finished,
+        rather than recomputing the whole position. For retrying an interrupted
+        run; see ``iohub.ngff.utils.process_single_position``.
     """
     output_dirpath = Path(output_dirpath)
     slurm_out_path = output_dirpath.parent / "slurm_output"
@@ -736,6 +743,8 @@ def deskew(
                     input_position_path,
                     output_position_path,
                     num_workers=slurm_args["slurm_cpus_per_task"],
+                    resume=resume,
+                    resume_token=settings_fingerprint(settings),
                     **deskew_args,
                 )
             )
@@ -769,6 +778,7 @@ def deskew(
 @cluster()
 @monitor()
 @init_only()
+@resume()
 def deskew_cli(
     input_position_dirpaths: list[Path],
     config_filepath: Path,
@@ -777,6 +787,7 @@ def deskew_cli(
     cluster: str = "slurm",
     monitor: bool = False,
     init_only: bool = False,
+    resume: bool = False,
 ):
     """Deskew oblique plane light-sheet dataset. Deskew parameters can be estimated with estimate-deskew.
 
@@ -802,6 +813,7 @@ def deskew_cli(
         cluster=cluster,
         monitor=monitor,
         init_only=init_only,
+        resume=resume,
     )
 
 

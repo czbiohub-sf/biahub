@@ -85,6 +85,11 @@ index-strategy = "unsafe-best-match"
 # Pin cytoland to the commit from VisCy PR #465 (non-square TTA and helpers).
 # Revert to the PyPI release once that PR is merged and published.
 cytoland = { git = "https://github.com/mehta-lab/VisCy", subdirectory = "applications/cytoland", rev = "4b62365c0df25929bffc7f01b3bb2d1c11d69cce" }
+# Pin iohub to czbiohub-sf/iohub#feat/interrupt-safe-writes, which replaces a
+# shard torn by a preempted job instead of reading it back (the recurring
+# "checksum is invalid" abort) and adds the per-unit resume this branch drives
+# via --resume. Revert to the PyPI release once that is merged and published.
+iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "72011bd7fe345bed23267daa21b18e2e97ea9d21" }
 
 [tool.hatch.metadata]
 allow-direct-references = true

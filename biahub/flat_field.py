@@ -18,6 +18,7 @@ from biahub.cli.parsing import (
     input_position_dirpaths,
     monitor,
     output_dirpath,
+    resume,
     sbatch_filepath,
     sbatch_to_submitit,
 )
@@ -26,6 +27,7 @@ from biahub.cli.utils import (
     estimate_resources,
     get_submitit_cluster,
     resolve_ome_zarr_version,
+    settings_fingerprint,
     yaml_to_model,
 )
 from biahub.settings import FlatFieldCorrectionSettings
@@ -161,6 +163,7 @@ def flat_field(
     cluster: str = "slurm",
     monitor: bool = True,
     init_only: bool = False,
+    resume: bool = False,
 ):
     """Apply flat field correction across T and selected C axes.
 
@@ -181,6 +184,10 @@ def flat_field(
         If True, monitor the submitted jobs.
     init_only : bool, optional
         Only initialize the output store and exit; skip per-position processing.
+    resume : bool, optional
+        Skip the (time, channel) units a previous attempt already finished,
+        rather than recomputing the whole position. For retrying an interrupted
+        run; see ``iohub.ngff.utils.process_single_position``.
     """
     output_dirpath = Path(output_dirpath)
     slurm_out_path = output_dirpath.parent / "slurm_output"
@@ -244,6 +251,8 @@ def flat_field(
                     input_position_path,
                     output_position_path,
                     num_workers=slurm_args["slurm_cpus_per_task"],
+                    resume=resume,
+                    resume_token=settings_fingerprint(settings),
                     **flat_field_args,
                 )
             )
@@ -276,6 +285,7 @@ def flat_field(
 @cluster()
 @monitor()
 @init_only()
+@resume()
 def flat_field_cli(
     input_position_dirpaths: list[Path],
     config_filepath: Path,
@@ -284,6 +294,7 @@ def flat_field_cli(
     cluster: str = "slurm",
     monitor: bool = False,
     init_only: bool = False,
+    resume: bool = False,
 ):
     """Apply flat field correction across T and selected C axes.
 
@@ -307,6 +318,7 @@ def flat_field_cli(
         cluster=cluster,
         monitor=monitor,
         init_only=init_only,
+        resume=resume,
     )
 
 

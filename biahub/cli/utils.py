@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import os
@@ -43,6 +44,19 @@ def echo_resources(num_cpus: int, mem_gb: int, time_minutes: int) -> None:
     # cannot serialize.
     payload = {"cpus": int(num_cpus), "mem_gb": int(mem_gb), "time_minutes": int(time_minutes)}
     click.echo("RESOURCES:" + json.dumps(payload))
+
+
+def settings_fingerprint(settings) -> str:
+    """Stable short hash of a settings model.
+
+    Passed to ``process_single_position(resume_token=...)`` so that the
+    per-unit completion records a resumed run relies on belong to the settings
+    that produced them. Re-running a step with a changed config against an
+    existing output store then recomputes instead of skipping units whose data
+    would now be different.
+    """
+    payload = json.dumps(settings.model_dump(mode="json"), sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 
 def get_submitit_cluster(
