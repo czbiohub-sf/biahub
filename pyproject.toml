@@ -89,7 +89,7 @@ cytoland = { git = "https://github.com/mehta-lab/VisCy", subdirectory = "applica
 # shard torn by a preempted job instead of reading it back (the recurring
 # "checksum is invalid" abort) and adds the per-unit resume this branch drives
 # via --resume. Revert to the PyPI release once that is merged and published.
-iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "72011bd7fe345bed23267daa21b18e2e97ea9d21" }
+iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "aca8fbfe02259323f2917070bb5399b1e3900469" }
 
 [tool.hatch.metadata]
 allow-direct-references = true
