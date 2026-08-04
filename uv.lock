@@ -363,7 +363,7 @@ requires-dist = [
     { name = "dask", extras = ["array"] },
     { name = "humanize" },
     { name = "imageio-ffmpeg" },
-    { name = "iohub", git = "https://github.com/czbiohub-sf/iohub?rev=bf2799bc757f3855170c4047a6a5e7a52a8a0085" },
+    { name = "iohub", git = "https://github.com/czbiohub-sf/iohub?rev=d28c9fbf1fbf22de958af29eab7746c3e6bd80e5" },
     { name = "largestinteriorrectangle" },
     { name = "llvmlite", specifier = ">=0.41.0" },
     { name = "markdown" },
@@ -1786,8 +1786,8 @@ wheels = [
 
 [[package]]
 name = "iohub"
-version = "0.3.11.dev14+bf2799b"
-source = { git = "https://github.com/czbiohub-sf/iohub?rev=bf2799bc757f3855170c4047a6a5e7a52a8a0085#bf2799bc757f3855170c4047a6a5e7a52a8a0085" }
+version = "0.3.11.dev18+d28c9fb"
+source = { git = "https://github.com/czbiohub-sf/iohub?rev=d28c9fbf1fbf22de958af29eab7746c3e6bd80e5#d28c9fbf1fbf22de958af29eab7746c3e6bd80e5" }
 dependencies = [
     { name = "blosc2" },
     { name = "dask", extra = ["array"] },
