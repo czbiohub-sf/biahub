@@ -16,6 +16,23 @@ from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
+#: ``fnmatch`` patterns for the per-position zattrs keys that steps carry
+#: forward into their output store, passed as ``create_empty_plate``'s
+#: ``metadata_keys``. These are the provenance records each step stamps on its
+#: output — keeping them means a derived plate still describes how it was made.
+#:
+#: This is deliberately an allowlist rather than a denylist. Everything else an
+#: upstream store happens to carry is dropped, which matters most for the
+#: acquisition writer's ``ome_writers`` blob: it holds one record per raw
+#: Z-frame (~18 MB per position on a mantis plate), and its frame indices stop
+#: describing the data as soon as a step changes the shape. Copying it forward
+#: made every ``--init`` step read and rewrite tens of MB per position, and
+#: taxed every subsequent read of the position for no benefit.
+#:
+#: ``normalization`` (written by the reconstruction step) is intentionally
+#: absent — it describes that step's inputs, not its output.
+PROVENANCE_METADATA_KEYS = ("biahub-*", "waveorder", "cytoland")
+
 
 def echo_resources(num_cpus: int, mem_gb: int, time_minutes: int) -> None:
     """Emit the per-position resource request consumed by the Nextflow pipeline.

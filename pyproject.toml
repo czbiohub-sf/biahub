@@ -85,11 +85,17 @@ index-strategy = "unsafe-best-match"
 # Pin cytoland to the commit from VisCy PR #465 (non-square TTA and helpers).
 # Revert to the PyPI release once that PR is merged and published.
 cytoland = { git = "https://github.com/mehta-lab/VisCy", subdirectory = "applications/cytoland", rev = "4b62365c0df25929bffc7f01b3bb2d1c11d69cce" }
-# Pin iohub to czbiohub-sf/iohub#feat/interrupt-safe-writes, which replaces a
-# shard torn by a preempted job instead of reading it back (the recurring
-# "checksum is invalid" abort) and adds the per-unit resume this branch drives
-# via --resume. Revert to the PyPI release once that is merged and published.
-iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "714f0e2ede4faebd56f6a2ea7466afcd1d5a8b44" }
+# Pin iohub to czbiohub-sf/iohub#dev/biahub-pipeline, a short-lived branch that
+# combines the two iohub features this pipeline needs, each of which is up for
+# review on its own branch:
+#   feat/interrupt-safe-writes          replaces a shard torn by a preempted job
+#     instead of reading it back (the recurring "checksum is invalid" abort) and
+#     adds the per-unit resume this branch drives via --resume.
+#   feat/filter-copied-position-metadata  adds create_empty_plate's
+#     metadata_keys, so a step copies only the provenance zattrs it wants
+#     instead of every non-OME key (see PROVENANCE_METADATA_KEYS).
+# Repoint at each feature branch as it merges, then at the PyPI release.
+iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "fc851fd8a9dafb4a82bda138e4449cfe76eee5e8" }
 
 [tool.hatch.metadata]
 allow-direct-references = true

@@ -28,6 +28,7 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.cli.utils import (
+    PROVENANCE_METADATA_KEYS,
     echo_resources,
     estimate_resources,
     get_submitit_cluster,
@@ -638,6 +639,7 @@ def _init_output_plate(
             input_position_dirpaths[0], settings.output_ome_zarr_version
         ),
         metadata_sources=input_plate,
+        metadata_keys=PROVENANCE_METADATA_KEYS,
     )
 
     return (T, C, Z, Y, X), channel_names

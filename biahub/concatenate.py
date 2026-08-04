@@ -23,6 +23,7 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.cli.utils import (
+    PROVENANCE_METADATA_KEYS,
     copy_n_paste,
     echo_resources,
     estimate_resources,
@@ -383,6 +384,7 @@ def _prepare_concatenate(settings: ConcatenateSettings, output_dirpath: Path) ->
         store_path=output_dirpath,
         position_keys=[p.parts[-3:] for p in output_position_paths],
         metadata_sources=list(reversed(source_plates)),
+        metadata_keys=PROVENANCE_METADATA_KEYS,
         **output_metadata,
     )
     click.echo(f"Created {output_dirpath} ({len(output_position_paths)} positions)")
