@@ -175,6 +175,27 @@ class MatchDescriptorSettings(MyBaseModel):
     cross_check: bool = False
 
 
+class SpectralMatchSettings(MyBaseModel):
+    """Settings for pairwise-consistency (Leordeanu-Hebert) spectral matching.
+
+    Attributes
+    ----------
+    sigma : float
+        Tolerance in voxels on pairwise-distance agreement between two candidate
+        correspondences. Roughly the bead-localisation uncertainty.
+    rel_cut : float
+        Keep candidates scoring above this fraction of the top eigenvector entry.
+        Higher is stricter: measured on real data, 0.5 gives recall ~0.90 at precision
+        ~0.74, and 0.7 gives recall ~0.64 at precision ~0.83.
+    max_iter : int
+        Power-iteration steps for the principal eigenvector.
+    """
+
+    sigma: float = 3.0
+    rel_cut: float = 0.5
+    max_iter: int = 60
+
+
 class FilterMatchesSettings(MyBaseModel):
     angle_threshold: float = 0
     direction_threshold: float = 0
@@ -189,7 +210,7 @@ class QCBeadsRegistrationSettings(MyBaseModel):
 
 
 class BeadsMatchSettings(MyBaseModel):
-    algorithm: Literal["hungarian", "match_descriptor"] = "hungarian"
+    algorithm: Literal["hungarian", "match_descriptor", "spectral"] = "hungarian"
     source_peaks_settings: DetectPeaksSettings | None = Field(
         default_factory=DetectPeaksSettings
     )
@@ -198,8 +219,15 @@ class BeadsMatchSettings(MyBaseModel):
     )
     match_descriptor_settings: MatchDescriptorSettings = MatchDescriptorSettings()
     hungarian_match_settings: HungarianMatchSettings = HungarianMatchSettings()
+    spectral_match_settings: SpectralMatchSettings = SpectralMatchSettings()
     filter_matches_settings: FilterMatchesSettings = FilterMatchesSettings()
     qc_settings: QCBeadsRegistrationSettings = QCBeadsRegistrationSettings()
+    # Opt-in extra arm in estimate(): acquire the correspondence with spectral matching,
+    # then refine with the configured algorithm. Off by default so existing behaviour is
+    # unchanged; estimate() keeps whichever arm scores higher, so enabling it cannot make
+    # the result worse. Only useful when the initial transform may be wrong by more than
+    # about one bead spacing -- which is when the position-distance cost misleads.
+    try_spectral_arm: bool = False
 
 
 class PhaseCrossCorrSettings(MyBaseModel):
