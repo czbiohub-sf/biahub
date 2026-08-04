@@ -1,0 +1,14 @@
+# Tile per-FOV MP4s into per-well grids (one or more videos per well).
+# Files are grouped by well id parsed from the filename: <prefix>_<well>_...mp4
+mov_path: /path/to/per_fov_mp4s
+output_path: /path/to/output/per_well
+grid: [2, 2]
+time_sampling_min: 5      # minutes between source frames (null disables timestamp)
+rotation: 90              # degrees, applied to every tile
+max_frames: null          # or an int to cap output length
+frame_step: 5             # keep every 5th source frame
+legend_font_size: 20
+timestamp_font_size: 24
+add_legend: true          # label each tile with its source file stem
+fps: null                 # null => inherit from the first source movie
+quality: 8                # ffmpeg quality, 0-10
