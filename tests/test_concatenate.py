@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from iohub import open_ome_zarr
+from iohub.ngff.utils import create_empty_plate
 
 from biahub.concatenate import concatenate
 from biahub.settings import ConcatenateSettings
@@ -516,3 +517,102 @@ def test_concatenate_with_unique_positions(create_custom_plate, tmp_path, sbatch
     for _pos_name, pos in output_plate_unique.positions():
         # Both positions should have all channels
         assert set(pos.channel_names) == {"DAPI", "Cy5", "GFP", "RFP"}
+
+
+def _direct_copy_plate(path, channel_names, time_points=3, seed=0):
+    """A v0.5 plate whose geometry matches what concatenate's output will have.
+
+    ``create_empty_plate`` derives chunks and shards from the shape, so a source
+    built this way is byte-level compatible with the concatenated output as long
+    as concatenate is not asked to change dtype, geometry or ROI.
+    """
+    position_keys = [("A", "1", "0"), ("B", "1", "0")]
+    shape = (time_points, len(channel_names), 4, 16, 16)
+    create_empty_plate(
+        store_path=path,
+        position_keys=position_keys,
+        channel_names=list(channel_names),
+        shape=shape,
+        version="0.5",
+        dtype=np.uint16,
+    )
+    rng = np.random.default_rng(seed)
+    data = {}
+    for position_key in position_keys:
+        volume = rng.integers(1, 1000, size=shape).astype(np.uint16)
+        with open_ome_zarr(path / "/".join(position_key), layout="fov", mode="r+") as pos:
+            pos.data[:] = volume
+        data["/".join(position_key)] = volume
+    return data
+
+
+@pytest.mark.parametrize("link", [False, True])
+def test_concatenate_direct_copy_matches_read_write(tmp_path, sbatch_file, capsys, link):
+    """The direct-copy path must produce the same data as the read-write path."""
+    plate_1_path = tmp_path / "zarr1.zarr"
+    plate_2_path = tmp_path / "zarr2.zarr"
+    data_1 = _direct_copy_plate(plate_1_path, ["DAPI", "Cy3"], seed=0)
+    data_2 = _direct_copy_plate(plate_2_path, ["GFP"], seed=1)
+
+    settings = ConcatenateSettings(
+        concat_data_paths=[str(plate_1_path) + "/*/*/*", str(plate_2_path) + "/*/*/*"],
+        channel_names=["all", "all"],
+        time_indices="all",
+    )
+
+    outputs = {}
+    for label, direct_copy in (("direct", True), ("readwrite", False)):
+        outputs[label] = tmp_path / f"output_{label}.zarr"
+        concatenate(
+            settings=settings,
+            output_dirpath=outputs[label],
+            sbatch_filepath=sbatch_file,
+            cluster="local",
+            block=True,
+            monitor=False,
+            direct_copy=direct_copy,
+            link=link,
+        )
+        # 2 sources x 2 positions, so all four must take the path under test.
+        expected = "4/4" if direct_copy else "0/4"
+        assert f"Direct chunk copy: {expected}" in capsys.readouterr().out
+
+    with (
+        open_ome_zarr(outputs["direct"]) as direct,
+        open_ome_zarr(outputs["readwrite"]) as read_write,
+    ):
+        assert direct.channel_names == read_write.channel_names == ["DAPI", "Cy3", "GFP"]
+        for position_name, position in direct.positions():
+            np.testing.assert_array_equal(position.data[:], read_write[position_name].data[:])
+            # And against the inputs, so a bug shared by both paths still fails.
+            np.testing.assert_array_equal(position.data[:, :2], data_1[position_name])
+            np.testing.assert_array_equal(position.data[:, 2:], data_2[position_name])
+            assert "biahub-concatenate" in position.zattrs
+
+
+def test_concatenate_direct_copy_falls_back_on_a_crop(tmp_path, sbatch_file, capsys):
+    """A Z crop cannot be expressed as a rename, so the read-write path must run."""
+    plate_path = tmp_path / "zarr1.zarr"
+    data = _direct_copy_plate(plate_path, ["DAPI"], seed=0)
+
+    settings = ConcatenateSettings(
+        concat_data_paths=[str(plate_path) + "/*/*/*"],
+        channel_names=["all"],
+        time_indices="all",
+        Z_slice=[1, 3],
+    )
+
+    output_path = tmp_path / "output.zarr"
+    concatenate(
+        settings=settings,
+        output_dirpath=output_path,
+        sbatch_filepath=sbatch_file,
+        cluster="local",
+        block=True,
+        monitor=False,
+    )
+
+    assert "Direct chunk copy: 0/2" in capsys.readouterr().out
+    with open_ome_zarr(output_path) as output:
+        for position_name, position in output.positions():
+            np.testing.assert_array_equal(position.data[:], data[position_name][:, :, 1:3])
