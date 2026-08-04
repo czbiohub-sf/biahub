@@ -95,7 +95,7 @@ cytoland = { git = "https://github.com/mehta-lab/VisCy", subdirectory = "applica
 #     metadata_keys, so a step copies only the provenance zattrs it wants
 #     instead of every non-OME key (see PROVENANCE_METADATA_KEYS).
 # Repoint at each feature branch as it merges, then at the PyPI release.
-iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "fc851fd8a9dafb4a82bda138e4449cfe76eee5e8" }
+iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "bf2799bc757f3855170c4047a6a5e7a52a8a0085" }
 
 [tool.hatch.metadata]
 allow-direct-references = true
