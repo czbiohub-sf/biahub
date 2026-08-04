@@ -484,6 +484,25 @@ def estimate_with_propagation(
     for t in range(T):
         if mode == "stabilization" and t == 0:
             continue
+
+        # Resume: a timepoint already on disk is reloaded rather than recomputed, and its
+        # transform still propagates forward so the chain stays identical to an
+        # uninterrupted run. Without this, any interruption restarts at t=0 -- a 24 h
+        # walltime cut two 800-timepoint estimates at ~75% complete and would have
+        # discarded 23 h of finished work, even though every finished timepoint was
+        # already saved as {t}.npy.
+        existing = output_folder_path / f"{t}.npy" if output_folder_path else None
+        if existing is not None and existing.exists():
+            try:
+                last_good_transform = np.load(existing).tolist()
+                affine_transform_settings.approx_transform = last_good_transform
+                if verbose:
+                    click.echo(f"Timepoint {t} already estimated, reusing {existing.name}")
+                continue
+            except (OSError, ValueError):
+                # A truncated file from a job killed mid-write: recompute it.
+                click.echo(f"Timepoint {t} transform unreadable, recomputing")
+
         if np.sum(mov_tzyx[t]) == 0 or np.sum(ref_tzyx[t]) == 0:
             click.echo(f"Timepoint {t} has no data, skipping")
             # approx_transform stays on the last good one, so a blank frame costs only
@@ -664,7 +683,13 @@ def peaks_from_beads(
 
     if len(mov_peaks) < 2 or len(ref_peaks) < 2:
         click.echo("Not enough beads detected")
-        return
+        # Return a pair, not a bare None. The annotation promises a 2-tuple and every
+        # call site unpacks into two names, so a bare `return` raised
+        # "cannot unpack non-iterable NoneType object" and killed the whole run on the
+        # first timepoint with too few beads -- it took out a 3 h estimate at t=92 of
+        # 288. The callers already test `if mov_peaks is None`, so they were written
+        # expecting this contract; the unpacking simply crashed before those guards ran.
+        return None, None
     if mask_path is not None:
         click.echo("Filtering peaks with mask")
         with open_ome_zarr(mask_path) as mask_ds:
@@ -757,6 +782,27 @@ def matches_from_beads(
         )
 
         matches = matcher.match(mov_graph, ref_graph)
+
+    elif beads_match_settings.algorithm == "spectral":
+        spectral_match_settings = beads_match_settings.spectral_match_settings
+        # No graph features are used: spectral matching works from the raw point
+        # coordinates via pairwise distances, so the graph is just a node container and
+        # k is irrelevant here.
+        mov_graph = Graph.from_nodes(mov_peaks)
+        ref_graph = Graph.from_nodes(ref_peaks)
+
+        matcher = GraphMatcher(
+            algorithm="spectral",
+            spectral_sigma=spectral_match_settings.sigma,
+            spectral_rel_cut=spectral_match_settings.rel_cut,
+            spectral_max_iter=spectral_match_settings.max_iter,
+            verbose=verbose,
+        )
+
+        matches = matcher.match(mov_graph, ref_graph)
+
+    else:
+        raise ValueError(f"Unknown matching algorithm: {beads_match_settings.algorithm}")
 
     # Filter as part of the pipeline
     matches = matcher.filter_matches(
@@ -1019,6 +1065,15 @@ def optimize_transform(
         ref_peaks_settings=beads_match_settings.target_peaks_settings,
         verbose=debug,
     )
+    if mov_peaks_optimized is None or ref_peaks_optimized is None:
+        # The correction warped the beads out of detectability, so the composed transform
+        # cannot be scored and must not be accepted -- returning the pre-correction
+        # transform and score leaves the caller exactly where it started, which is the
+        # same outcome as a refinement that failed to improve.
+        click.echo(
+            "Composed transform left too few detectable beads; keeping the input transform."
+        )
+        return transform, quality_score_approx
 
     quality_score_optimized = overlap_score(
         mov_peaks=mov_peaks_optimized,
@@ -1143,6 +1198,45 @@ def estimate(
                 if quality_score_optimized_user == 1:
                     break
                 transform = optimized_transform_user
+
+        # Third arm: acquire the correspondence with spectral matching, then refine.
+        # Opt-in, and gated on the other arms having done badly, because it costs a full
+        # optimize_transform call and is only useful when the initial transform is wrong by
+        # more than about one bead spacing -- exactly when the position-distance cost in
+        # the Hungarian matcher starts pairing a bead with its neighbour instead of itself.
+        # Spectral matching uses only relative distances, so it is unaffected by how wrong
+        # the initial transform is.
+        #
+        # Whichever arm scores highest wins, so enabling this can never make the result
+        # worse than leaving it off.
+        best_so_far = transform_iter_dict[current_iterations]["quality_score"]
+        if (
+            beads_match_settings.try_spectral_arm
+            and current_iterations == 0
+            and best_so_far < beads_match_settings.qc_settings.score_threshold
+        ):
+            click.echo(
+                f"Score {best_so_far:.3f} below threshold "
+                f"{beads_match_settings.qc_settings.score_threshold}; trying spectral arm:"
+            )
+            spectral_settings = beads_match_settings.model_copy(deep=True)
+            spectral_settings.algorithm = "spectral"
+            optimized_transform_spec, quality_score_spec = optimize_transform(
+                transform=initial_transform,
+                mov=mov,
+                ref=ref,
+                beads_match_settings=spectral_settings,
+                affine_transform_settings=affine_transform_settings,
+                verbose=verbose,
+                debug=debug,
+            )
+            if optimized_transform_spec is not None and quality_score_spec > best_so_far:
+                click.echo(f"Spectral arm wins: {quality_score_spec:.3f}")
+                transform_iter_dict[current_iterations] = {
+                    "transform": optimized_transform_spec,
+                    "quality_score": quality_score_spec,
+                }
+                transform = optimized_transform_spec
 
         if transform is None:
             break
