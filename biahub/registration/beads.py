@@ -1219,9 +1219,11 @@ def estimate(
                 f"Score {best_so_far:.3f} below threshold "
                 f"{beads_match_settings.qc_settings.score_threshold}; trying spectral arm:"
             )
+            # Stage 1 -- ACQUIRE with spectral matching. This does not need the initial
+            # transform to be close, because only relative distances are used.
             spectral_settings = beads_match_settings.model_copy(deep=True)
             spectral_settings.algorithm = "spectral"
-            optimized_transform_spec, quality_score_spec = optimize_transform(
+            transform_spec, score_spec = optimize_transform(
                 transform=initial_transform,
                 mov=mov,
                 ref=ref,
@@ -1230,13 +1232,37 @@ def estimate(
                 verbose=verbose,
                 debug=debug,
             )
-            if optimized_transform_spec is not None and quality_score_spec > best_so_far:
-                click.echo(f"Spectral arm wins: {quality_score_spec:.3f}")
+
+            # Stage 2 -- REFINE from spectral's transform with the CONFIGURED matcher.
+            # This is the point of the cascade and not an optional extra: spectral
+            # acquires the correspondence but is the less precise of the two once the
+            # transform is already close, so handing its result back to the configured
+            # matcher is what recovers the last part. Measured at one real failing
+            # timepoint: seed 0.000 -> spectral 0.778 -> refined 0.882, which equals the
+            # best transform any variant found there. Stopping after stage 1 would have
+            # left 0.778 on the table.
+            if transform_spec is not None:
+                transform_refined, score_refined = optimize_transform(
+                    transform=transform_spec,
+                    mov=mov,
+                    ref=ref,
+                    beads_match_settings=beads_match_settings,
+                    affine_transform_settings=affine_transform_settings,
+                    verbose=verbose,
+                    debug=debug,
+                )
+                # optimize_transform only accepts a step that improves its own score, so
+                # a None here means refinement found nothing better -- keep stage 1.
+                if transform_refined is not None and score_refined > score_spec:
+                    transform_spec, score_spec = transform_refined, score_refined
+
+            if transform_spec is not None and score_spec > best_so_far:
+                click.echo(f"Spectral cascade wins: {best_so_far:.3f} -> {score_spec:.3f}")
                 transform_iter_dict[current_iterations] = {
-                    "transform": optimized_transform_spec,
-                    "quality_score": quality_score_spec,
+                    "transform": transform_spec,
+                    "quality_score": score_spec,
                 }
-                transform = optimized_transform_spec
+                transform = transform_spec
 
         if transform is None:
             break
