@@ -90,12 +90,15 @@ cytoland = { git = "https://github.com/mehta-lab/VisCy", subdirectory = "applica
 # review on its own branch:
 #   feat/interrupt-safe-writes          replaces a shard torn by a preempted job
 #     instead of reading it back (the recurring "checksum is invalid" abort) and
-#     adds the per-unit resume this branch drives via --resume.
+#     adds the per-unit resume this branch drives via --resume. Note that the
+#     resume records now sit BESIDE the store, in a `.iohub-progress/` sibling
+#     of the output zarr, rather than inside the array directory — so copying
+#     or deleting a store no longer carries or clears its progress state.
 #   feat/filter-copied-position-metadata  adds create_empty_plate's
 #     metadata_keys, so a step copies only the provenance zattrs it wants
 #     instead of every non-OME key (see PROVENANCE_METADATA_KEYS).
 # Repoint at each feature branch as it merges, then at the PyPI release.
-iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "d28c9fbf1fbf22de958af29eab7746c3e6bd80e5" }
+iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "c4984be5ea39e601d30687cd9b60f630e021eff1" }
 
 [tool.hatch.metadata]
 allow-direct-references = true
