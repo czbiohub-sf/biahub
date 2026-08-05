@@ -44,7 +44,14 @@ from scipy.spatial import cKDTree
 HARD_FAIL_SCORE = 0.40
 # Timepoints must be below BOTH the adaptive line and this floor to be flagged, so a
 # healthy run is not flagged for internal spread alone.
-FLAG_FLOOR_SCORE = 0.70
+#
+# 0.80, not the 0.70 first chosen: at 0.70 the floor swallowed the adaptive line entirely on
+# real data and the report became useless. Measured on two runs whose medians were 0.870 and
+# 0.875, adaptive lines 0.741 and 0.774 -- at a 0.70 floor those runs flagged 0 and 2
+# timepoints, while 5 and 5 sat in a clear tail below 0.75 and were independently confirmed
+# weak by a parameter sweep that improved them. The floor should only veto flagging on a run
+# with no meaningful spread, so it has to sit above where real tails fall.
+FLAG_FLOOR_SCORE = 0.80
 FLAG_K_MAD = 2.0
 
 

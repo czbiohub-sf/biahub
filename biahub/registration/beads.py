@@ -63,6 +63,71 @@ from biahub.registration.utils import (
 from biahub.settings import AffineTransformSettings, BeadsMatchSettings, DetectPeaksSettings
 
 
+# Default grid for the score-gated sweep fallback, distilled from a 432-combination
+# hungarian search and a 200-combination spectral search over the same 15 flagged timepoints
+# on two real datasets.
+#
+# A LIST of sub-grids, not one dict, because the two matchers are separate regimes: the
+# hungarian cost/graph parameters are inert when spectral does the matching and vice versa,
+# so a single cross product would spend most of its trials re-measuring identical results.
+# The union is 16 + 12 = 28 trials; the equivalent cross product would be 192.
+#
+# Hungarian axes, kept only where one actually decided a winner:
+#   cost_threshold  0.05 won at all 15 timepoints, against a global default of 0.10.
+#   weights_dist    0.25 won at 9 of 15 -- de-weighting position distance is what helps when
+#                   the initial transform is off by more than a bead spacing.
+#   method          "full" won at 3, and was only discoverable once EdgeGraphSettings.method
+#                   stopped being ignored; the kNN graph can omit the correct edge outright.
+#   max_distance_quantile  the loosest useful filter axis on sparse match sets.
+# Excluded: k (never decided a winner once method was free) and angle_threshold /
+# weights_edge_angle (both 2D-only, hence flat on ZYX data).
+#
+# The spectral sub-grid is what makes this fallback worth running: it supplied 8 of the 9
+# rescues, and adding it took the yield from 5 of 15 timepoints improved to 11 of 15 (mean
+# gain +0.049 taking max against the incumbent).
+#
+# Its ranges are bounded by a SEPARATE stratified sweep over 24 evenly-spaced timepoints,
+# not by what won at the weak ones, because those two searches disagree and the stratified
+# one is the trustworthy guide to whether a value is safe. Per-timepoint argmax on the weak
+# set picked rel_cut 0.2 at 8 of 15 timepoints, yet across the stratified set rel_cut 0.2 is
+# the single worst choice available (mean 0.694, worst case 0.000 -- outright failure at some
+# timepoints), and sigma 8.0 likewise collapses (mean 0.624, worst 0.000). Those apparent
+# wins were selection noise: with ~20 beads the overlap metric quantises at ~0.045, so
+# picking the max of 200 trials reliably finds a lucky flat-metric tie.
+#
+# Restricting to the values that never collapse costs almost nothing at the weak timepoints
+# it is meant to rescue -- 10 of 15 improved instead of 11, mean gain +0.0466 against
+# +0.0490, a difference of one timepoint well inside one quantisation step -- so the safe
+# ranges are strictly the better trade.
+DEFAULT_SWEEP_GRID = [
+    {
+        "cost_threshold": [0.05, 0.10],
+        "weights_dist": [0.25, 1.0],
+        "method": ["knn", "full"],
+        "max_distance_quantile": [0.95, 0.99],
+    },
+    {
+        "algorithm": ["spectral"],
+        "spectral_sigma": [1.0, 3.0, 5.0],
+        "spectral_rel_cut": [0.35, 0.65, 0.80],
+    },
+]
+
+
+def _set_graph_method(edge_graph_settings, method: str) -> None:
+    """Switch graph mode, supplying the parameter that mode needs.
+
+    EdgeGraphSettings' validator nulls whichever of k/radius the chosen method does not use,
+    so setting method alone can leave the other unset and the matcher then fails. Defaults
+    here match that validator's.
+    """
+    edge_graph_settings.method = method
+    if method == "knn" and edge_graph_settings.k is None:
+        edge_graph_settings.k = 10
+    elif method == "radius" and edge_graph_settings.radius is None:
+        edge_graph_settings.radius = 60.0
+
+
 def optimize_matches(
     mov: ArrayLike,
     ref: ArrayLike,
@@ -71,13 +136,18 @@ def optimize_matches(
     affine_transform_settings: AffineTransformSettings,
     param_grid: dict = None,
     verbose: bool = False,
-) -> BeadsMatchSettings:
+) -> tuple[BeadsMatchSettings, Transform | None, float]:
     """
     Optimize BeadsMatchSettings by grid search over matching and filter parameters.
 
     For each parameter combination: detects peaks in approximately registered space,
     matches them, estimates a correction transform, composes it with the approx transform,
     applies to the full volume via ANTs, re-detects peaks, and scores the overlap.
+
+    Peaks are detected once and reused: they depend only on approx_transform, not on the
+    matching parameters. Trials whose filtered match set is identical to one already
+    evaluated reuse that score instead of repeating the ANTs warp and peak re-detection,
+    which is the dominant cost -- many filter combinations collapse to the same match set.
 
     Parameters
     ----------
@@ -91,27 +161,27 @@ def optimize_matches(
         Initial matching settings to use as baseline.
     affine_transform_settings : AffineTransformSettings
         Settings for the affine transform estimation.
-    param_grid : dict, optional
-        Dictionary of parameter names to lists of values to search.
-        Supported keys: 'min_distance_quantile', 'max_distance_quantile',
-        'direction_threshold', 'cost_threshold', 'max_ratio', 'k',
-        'weights_dist', 'weights_edge_angle', 'weights_edge_length',
-        'weights_pca_dir', 'weights_pca_aniso', 'weights_edge_descriptor'.
+    param_grid : dict | list[dict], optional
+        Parameter names to lists of values. A list of such dicts is searched as the UNION of
+        their cross products, which is how mutually inert parameter sets -- the hungarian
+        cost parameters and the spectral ones -- are swept without paying for their cross
+        product. Defaults to DEFAULT_SWEEP_GRID. Unsupported keys raise ValueError rather
+        than being ignored, so a typo cannot silently produce a flat axis. See the setter
+        table in the body for what is supported.
     verbose : bool
         If True, prints logs for each trial.
 
     Returns
     -------
-    BeadsMatchSettings
-        The settings that produced the best overlap score.
+    tuple[BeadsMatchSettings, Transform | None, float]
+        The settings that produced the best overlap score, the transform they produced
+        (already composed with approx_transform, so directly comparable with
+        optimize_transform's return), and that score. The transform is None and the score
+        -1 if no trial produced a scoreable transform, in which case the returned settings
+        are the unmodified input.
     """
     if param_grid is None:
-        param_grid = {
-            "min_distance_quantile": [0, 0.01],
-            "max_distance_quantile": [0, 0.99],
-            "direction_threshold": [0, 50],
-            "k": [5, 10],
-        }
+        param_grid = DEFAULT_SWEEP_GRID
 
     score_radius = beads_match_settings.qc_settings.score_centroid_mask_radius
 
@@ -134,32 +204,49 @@ def optimize_matches(
     )
     if mov_peaks is None or ref_peaks is None or len(mov_peaks) < 2 or len(ref_peaks) < 2:
         click.echo("Not enough peaks detected for optimization, returning original settings.")
-        return beads_match_settings
+        return beads_match_settings, None, -1.0
+
+    # A bare dict is the single-sub-grid case; normalising here keeps one loop below.
+    sub_grids = [param_grid] if isinstance(param_grid, dict) else list(param_grid)
+    trial_params_list = [
+        dict(zip(sub, combo, strict=True))
+        for sub in sub_grids
+        for combo in product(*(sub[k] for k in sub))
+    ]
 
     click.echo(
         f"Starting grid search: {len(mov_peaks)} mov peaks, {len(ref_peaks)} ref peaks, "
-        f"{np.prod([len(v) for v in param_grid.values()])} parameter combinations."
+        f"{len(trial_params_list)} parameter combinations"
+        + (f" over {len(sub_grids)} sub-grids." if len(sub_grids) > 1 else ".")
     )
 
     ndim = mov_peaks.shape[1]
     best_score = -1.0
     best_settings = beads_match_settings
-
-    grid_keys = list(param_grid.keys())
-    grid_values = [param_grid[k] for k in grid_keys]
+    best_transform = None
 
     def apply_trial_params(trial_settings, trial_params):
         """Apply parameter values from a grid search trial to a BeadsMatchSettings copy."""
         fm = trial_settings.filter_matches_settings
         hm = trial_settings.hungarian_match_settings
+        eg = hm.edge_graph_settings
+        sm = trial_settings.spectral_match_settings
         w = hm.cost_matrix_settings.weights
         param_map = {
             "min_distance_quantile": lambda v: setattr(fm, "min_distance_quantile", v),
             "max_distance_quantile": lambda v: setattr(fm, "max_distance_quantile", v),
             "direction_threshold": lambda v: setattr(fm, "direction_threshold", v),
+            "angle_threshold": lambda v: setattr(fm, "angle_threshold", v),
             "cost_threshold": lambda v: setattr(hm, "cost_threshold", v),
             "max_ratio": lambda v: setattr(hm, "max_ratio", v),
-            "k": lambda v: setattr(hm.edge_graph_settings, "k", v),
+            "k": lambda v: setattr(eg, "k", v),
+            # method needs k/radius set consistently or EdgeGraphSettings' validator
+            # nulls whichever one the new mode requires.
+            "method": lambda v: _set_graph_method(eg, v),
+            "radius": lambda v: setattr(eg, "radius", v),
+            "algorithm": lambda v: setattr(trial_settings, "algorithm", v),
+            "spectral_sigma": lambda v: setattr(sm, "sigma", v),
+            "spectral_rel_cut": lambda v: setattr(sm, "rel_cut", v),
             "weights_dist": lambda v: w.__setitem__("dist", v),
             "weights_edge_angle": lambda v: w.__setitem__("edge_angle", v),
             "weights_edge_length": lambda v: w.__setitem__("edge_length", v),
@@ -167,12 +254,21 @@ def optimize_matches(
             "weights_pca_aniso": lambda v: w.__setitem__("pca_aniso", v),
             "weights_edge_descriptor": lambda v: w.__setitem__("edge_descriptor", v),
         }
+        unsupported = set(trial_params) - set(param_map)
+        if unsupported:
+            raise ValueError(
+                f"Unsupported param_grid key(s) {sorted(unsupported)}. "
+                f"Supported: {sorted(param_map)}"
+            )
         for key, val in trial_params.items():
-            if key in param_map:
-                param_map[key](val)
+            param_map[key](val)
 
-    for combo in product(*grid_values):
-        trial_params = dict(zip(grid_keys, combo, strict=True))
+    # Score keyed on (algorithm, match set), so a trial can only reuse a score computed
+    # from an identical match set under the same matcher.
+    score_cache: dict[tuple, float] = {}
+    transform_cache: dict[tuple, Transform] = {}
+
+    for trial_params in trial_params_list:
         trial_settings = beads_match_settings.model_copy(deep=True)
         apply_trial_params(trial_settings, trial_params)
 
@@ -185,6 +281,22 @@ def optimize_matches(
             )
 
             if len(matches) < 3:
+                continue
+
+            cache_key = (
+                trial_settings.algorithm,
+                tuple(map(tuple, np.asarray(matches))),
+            )
+            if cache_key in score_cache:
+                if score_cache[cache_key] > best_score:
+                    best_score = score_cache[cache_key]
+                    best_settings = trial_settings
+                    best_transform = transform_cache[cache_key]
+                if verbose:
+                    click.echo(
+                        f"  {trial_params} -> matches={len(matches)}, "
+                        f"score={score_cache[cache_key]:.4f} (cached)"
+                    )
                 continue
 
             fwd_transform, inv_transform = transform_from_matches(
@@ -225,23 +337,30 @@ def optimize_matches(
             if np.isnan(score):
                 continue
 
+            score_cache[cache_key] = score
+            transform_cache[cache_key] = composed_transform
+
             if verbose:
                 click.echo(f"  {trial_params} -> matches={len(matches)}, score={score:.4f}")
 
             if score > best_score:
                 best_score = score
                 best_settings = trial_settings
+                best_transform = composed_transform
 
         except Exception as e:
             if verbose:
                 click.echo(f"  {trial_params} -> failed: {e}")
             continue
 
+    click.echo(
+        f"Grid search best score: {best_score:.4f} "
+        f"({len(score_cache)} distinct match sets scored)"
+    )
     if verbose:
-        click.echo(f"Best score: {best_score:.4f}")
         click.echo(f"Best settings: {best_settings}")
 
-    return best_settings
+    return best_settings, best_transform, best_score
 
 
 def overlap_score(
@@ -1296,6 +1415,50 @@ def estimate(
     # get highest quality score
     best_quality_score = max(transform_iter_dict.values(), key=lambda x: x["quality_score"])
     best_transform = best_quality_score["transform"]
+
+    # Fourth arm, last resort: re-tune the matching parameters for THIS timepoint. Every arm
+    # above shares one parameter set across the whole timelapse, and a few timepoints are
+    # simply not well served by it. Gated on score because it is the most expensive arm --
+    # one ANTs warp plus peak re-detection per distinct match set.
+    #
+    # Runs after the loop, on the best of all arms, so it only ever fires where everything
+    # else has already failed, and its result is accepted only if it strictly wins. It
+    # therefore cannot make any timepoint worse than leaving it off.
+    sweep = beads_match_settings.sweep_fallback_settings
+    incumbent_score = best_quality_score["quality_score"]
+    if sweep.mode == "on_low_score" and incumbent_score < sweep.score_threshold:
+        click.echo(
+            f"Sweep fallback: best arm scored {incumbent_score:.3f} < "
+            f"{sweep.score_threshold}, grid-searching matching parameters for this timepoint"
+        )
+        try:
+            _, swept_transform, swept_score = optimize_matches(
+                mov=mov,
+                ref=ref,
+                approx_transform=initial_transform,
+                beads_match_settings=beads_match_settings,
+                affine_transform_settings=affine_transform_settings,
+                param_grid=sweep.grid,
+                verbose=verbose,
+            )
+        except Exception as e:  # noqa: BLE001
+            # A fallback that can take down a whole timelapse is worse than no fallback.
+            click.echo(f"Sweep fallback failed ({type(e).__name__}: {e}); keeping incumbent.")
+            swept_transform, swept_score = None, -1.0
+
+        if swept_transform is not None and swept_score > incumbent_score:
+            click.echo(f"Sweep fallback wins: {incumbent_score:.3f} -> {swept_score:.3f}")
+            best_transform = swept_transform
+            best_quality_score = {
+                "transform": swept_transform,
+                "quality_score": swept_score,
+            }
+            transform_iter_dict["sweep_fallback"] = best_quality_score
+        else:
+            click.echo(
+                f"Sweep fallback found nothing better than {incumbent_score:.3f}; "
+                "keeping incumbent."
+            )
 
     # Every optimisation attempt failed, so the coarse initial transform is all we have.
     # Recorded explicitly: the saved .npy is otherwise indistinguishable from a real fit,

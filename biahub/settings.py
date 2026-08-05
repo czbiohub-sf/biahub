@@ -209,6 +209,53 @@ class QCBeadsRegistrationSettings(MyBaseModel):
     score_centroid_mask_radius: int = 6
 
 
+class SweepFallbackSettings(MyBaseModel):
+    """Last-resort per-timepoint grid search over the matching parameters.
+
+    The other arms all reuse one parameter set for the whole timelapse. That set is chosen
+    to be good on average, and a handful of timepoints are simply not well served by it.
+    This re-tunes those timepoints individually.
+
+    Off by default because it is the most expensive thing in the estimator: one ANTs warp
+    plus peak re-detection per surviving trial, roughly 18 s each. Gating it on score is
+    what makes it affordable -- it fires on the few percent of timepoints that need it.
+
+    Measured on 15 flagged timepoints across two datasets: 5 improved, mean gain +0.030
+    taking max(incumbent, sweep). Modest, and it cannot regress -- estimate() keeps the
+    sweep result only if it strictly beats the incumbent -- so the honest description is a
+    small rescue for a real cost, worth enabling when a few bad timepoints matter more than
+    runtime.
+
+    Attributes
+    ----------
+    mode : Literal["off", "on_low_score"]
+        "on_low_score" runs the sweep when every other arm came in below score_threshold.
+    score_threshold : float
+        The gate, and the whole cost/benefit dial. Calibrated against the measured score
+        distribution of two real runs (144 and 240 timepoints, medians 0.870 and 0.875):
+
+            gate    fires on
+            0.70    0 of 144, 2 of 240     -- dead code
+            0.75    5 of 144, 5 of 240     <- default: the tail, ~2-4%
+            0.80    26 of 144, 29 of 240   -- ~15%, hours of extra compute
+
+        0.75 is where the tail actually is; the timepoints the sweep was measured to rescue
+        scored 0.60-0.78. Note this is far above qc_settings.score_threshold (0.40), which
+        marks an unusable transform rather than a merely weak one -- gating on 0.40 would
+        never fire on a healthy run.
+    grid : dict[str, list] | list[dict[str, list]] | None
+        Parameter grid; None uses DEFAULT_SWEEP_GRID in biahub.registration.beads. A list of
+        dicts is searched as the union of their cross products, which is how the hungarian
+        and spectral parameter sets are swept without paying for their cross product -- each
+        is inert while the other matcher is in use. Keys are validated against that module's
+        setter table, so a misspelled key raises instead of silently reading as a flat axis.
+    """
+
+    mode: Literal["off", "on_low_score"] = "off"
+    score_threshold: float = 0.75
+    grid: dict[str, list] | list[dict[str, list]] | None = None
+
+
 class BeadsMatchSettings(MyBaseModel):
     algorithm: Literal["hungarian", "match_descriptor", "spectral"] = "hungarian"
     source_peaks_settings: DetectPeaksSettings | None = Field(
@@ -239,6 +286,7 @@ class BeadsMatchSettings(MyBaseModel):
     # Defaults to "always" (i.e. variant D) on the benchmark below. Set "off" to restore
     # the previous behaviour exactly.
     spectral_arm: Literal["off", "on_low_score", "always"] = "always"
+    sweep_fallback_settings: SweepFallbackSettings = SweepFallbackSettings()
 
 
 class PhaseCrossCorrSettings(MyBaseModel):
@@ -412,8 +460,48 @@ class EstimateRegistrationSettings(MyBaseModel):
                 "independent": (False, "off"),
                 "independent_spectral": (False, "always"),
             }[self.beads_strategy]
-            self.affine_transform_settings.use_prev_t_transform = propagate
-            self.beads_match_settings.spectral_arm = spectral
+
+            # An explicit low-level flag always outranks the DEFAULT strategy. Without this,
+            # the default "independent_spectral" would silently flip a config that says
+            # use_prev_t_transform: true to false -- turning a propagation run into an
+            # independent one with no diagnostic, which every pre-existing config in the
+            # wild would hit, since they all set that flag directly and name no strategy.
+            strategy_explicit = "beads_strategy" in self.model_fields_set
+            prop_explicit = (
+                "use_prev_t_transform" in self.affine_transform_settings.model_fields_set
+            )
+            spectral_explicit = "spectral_arm" in self.beads_match_settings.model_fields_set
+
+            # Naming both a strategy and a flag that contradicts it is a config error, not a
+            # precedence question: one of the two is not what the author meant.
+            if strategy_explicit:
+                conflicts = []
+                if (
+                    prop_explicit
+                    and self.affine_transform_settings.use_prev_t_transform != propagate
+                ):
+                    conflicts.append(
+                        f"use_prev_t_transform="
+                        f"{self.affine_transform_settings.use_prev_t_transform} "
+                        f"(strategy implies {propagate})"
+                    )
+                if spectral_explicit and self.beads_match_settings.spectral_arm != spectral:
+                    conflicts.append(
+                        f"spectral_arm={self.beads_match_settings.spectral_arm!r} "
+                        f"(strategy implies {spectral!r})"
+                    )
+                if conflicts:
+                    raise ValueError(
+                        f"beads_strategy={self.beads_strategy!r} contradicts "
+                        + " and ".join(conflicts)
+                        + ". Set beads_strategy to null to drive the flags directly, or "
+                        "remove the conflicting flag."
+                    )
+
+            if strategy_explicit or not prop_explicit:
+                self.affine_transform_settings.use_prev_t_transform = propagate
+            if strategy_explicit or not spectral_explicit:
+                self.beads_match_settings.spectral_arm = spectral
         return self
 
 
