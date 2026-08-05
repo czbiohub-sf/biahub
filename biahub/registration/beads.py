@@ -52,6 +52,7 @@ from biahub.cli.utils import (
 )
 from biahub.core.graph_matching import Graph, GraphMatcher
 from biahub.core.transform import Transform
+from biahub.registration.qc import write_qc_report
 from biahub.registration.utils import (
     get_aprox_transform,
     load_quality_scores,
@@ -418,6 +419,18 @@ def estimate_tczyx(
         output_folder_path / "translation_plots" / "beads_quality_score.png",
         score_threshold=beads_match_settings.qc_settings.score_threshold,
     )
+    # Full QC report: adaptive flagging, transform plausibility, smoothness. Reports
+    # only -- nothing is modified, because interpolating weak timepoints was measured to
+    # make them worse.
+    try:
+        write_qc_report(
+            output_dir=output_folder_path,
+            scores=scores["quality_score"].to_numpy(),
+            transforms=[t for t in transforms if t is not None],
+        )
+    except Exception as e:  # noqa: BLE001
+        click.echo(f"QC report skipped: {type(e).__name__}: {e}")
+
     scored = scores.dropna(subset=["quality_score"])
     if len(scored):
         n_low = int(

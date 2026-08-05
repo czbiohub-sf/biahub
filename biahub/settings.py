@@ -235,7 +235,10 @@ class BeadsMatchSettings(MyBaseModel):
     #                   the spectral cascade still won 93/144 and 117/240 timepoints on two
     #                   real datasets, so gating it on failure gives up most of the gain.
     #                   Costs one extra optimize_transform pair per timepoint.
-    spectral_arm: Literal["off", "on_low_score", "always"] = "off"
+    #
+    # Defaults to "always" (i.e. variant D) on the benchmark below. Set "off" to restore
+    # the previous behaviour exactly.
+    spectral_arm: Literal["off", "on_low_score", "always"] = "always"
 
 
 class PhaseCrossCorrSettings(MyBaseModel):
@@ -277,7 +280,14 @@ class AffineTransformSettings(MyBaseModel):
     t_reference: Literal["first", "previous"] = "first"
     transform_type: Literal["euclidean", "similarity", "affine"] = "euclidean"
     approx_transform: list = np.eye(4).tolist()
-    use_prev_t_transform: bool = True
+    # Defaults to False (independent per timepoint) rather than propagation. Propagation
+    # exists to supply each timepoint with a good initial transform, but the spectral
+    # cascade is insensitive to its initial transform -- measured identical results from a
+    # seed scoring 0.826 and one scoring 0.000 -- so propagation stops paying for itself
+    # while keeping three drawbacks: it is serial (~3-10 h against ~20 min), it cannot be
+    # resumed cheaply, and a single failure propagates forward as a cluster. Set True to
+    # restore it.
+    use_prev_t_transform: bool = False
     compute_approx_transform: bool = False
 
     @field_validator("approx_transform")
