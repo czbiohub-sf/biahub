@@ -18,9 +18,16 @@ accuracy figure.
 **transform plausibility** -- shear and scale anisotropy from the decomposed linear part.
 Needs no image data, and catches geometrically impossible transforms: failed timepoints in
 an older run showed 57 degrees of shear and 3.8 anisotropy against normal values of ~6
-degrees and ~1.29. The expected values are instrument properties, not identity -- an
-oblique light-sheet plus deskew produces real z-y shear, and differing voxel sizes between
-the arms produce real anisotropy.
+degrees and ~1.29.
+
+The expected values are properties of the mantis microscope, not of identity. Mantis
+acquires fluorescence on an oblique light-sheet arm and the data is deskewed, so x is
+unaffected by the oblique geometry while z and y are coupled by the deskew -- which is why
+real z-y shear appears (~6 deg on zebrafish, ~10 deg on A549 cells) while y-x stays clean.
+Anisotropy of ~1.29 comes from the voxel-size ratio between the two arms: the label-free
+reference is 0.174/0.1494/0.1494 um and the light-sheet source 0.174/0.116/0.116, so xy
+must scale by 0.1494/0.116 = 1.288 while z scales by 1.0. On a different optical
+configuration these expected values would need re-deriving.
 
 **temporal smoothness** -- largest step in translation between consecutive timepoints.
 Independent per-timepoint estimation can be more accurate per frame yet produce a jittery
