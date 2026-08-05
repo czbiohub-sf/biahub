@@ -189,6 +189,23 @@ class SpectralMatchSettings(MyBaseModel):
         ~0.74, and 0.7 gives recall ~0.64 at precision ~0.83.
     max_iter : int
         Power-iteration steps for the principal eigenvector.
+
+    These defaults are deliberately left where they are, despite a sweep appearing to beat
+    them. Over 24 stratified timepoints on two datasets, sigma=5.0/rel_cut=0.65 dominated
+    3.0/0.5 on every summary statistic when spectral matching ran ALONE -- mean 0.872 vs
+    0.856, worst case 0.720 vs 0.667. Rerunning the full cascade end-to-end with the tuned
+    pair then showed no improvement at all: 17 timepoints better, 21 worse, mean delta
+    -0.002, Wilcoxon p=0.20, and the run minimum fell from 0.720 to 0.708.
+
+    The reason is that spectral only has to land the transform inside the basin that the
+    subsequent hungarian refinement converges from; once it does, its own precision is
+    discarded. 106 of 144 timepoints came out bit-identical under the two settings. So a
+    single-pass spectral benchmark ranks these parameters for a job the cascade does not ask
+    them to do, and tuning them against it is measuring the wrong thing.
+
+    They do still matter where spectral matching is used on its own -- see
+    DEFAULT_SWEEP_GRID in biahub.registration.beads, whose ranges come from that same
+    stratified sweep.
     """
 
     sigma: float = 3.0
@@ -220,11 +237,12 @@ class SweepFallbackSettings(MyBaseModel):
     plus peak re-detection per surviving trial, roughly 18 s each. Gating it on score is
     what makes it affordable -- it fires on the few percent of timepoints that need it.
 
-    Measured on 15 flagged timepoints across two datasets: 5 improved, mean gain +0.030
-    taking max(incumbent, sweep). Modest, and it cannot regress -- estimate() keeps the
-    sweep result only if it strictly beats the incumbent -- so the honest description is a
-    small rescue for a real cost, worth enabling when a few bad timepoints matter more than
-    runtime.
+    Measured on 15 flagged timepoints across two datasets, with the default grid: 8 improved,
+    mean gain +0.041 over all 15 and +0.077 over those it helped. It cannot regress --
+    estimate() keeps the sweep result only if it strictly beats the incumbent -- so the
+    honest description is a modest rescue for a real cost, worth enabling when a few bad
+    timepoints matter more than runtime. Note it found nothing at 7 of the 15, so it is a
+    tail-risk reducer rather than a general improvement.
 
     Attributes
     ----------

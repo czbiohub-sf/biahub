@@ -82,9 +82,13 @@ from biahub.settings import AffineTransformSettings, BeadsMatchSettings, DetectP
 # Excluded: k (never decided a winner once method was free) and angle_threshold /
 # weights_edge_angle (both 2D-only, hence flat on ZYX data).
 #
-# The spectral sub-grid is what makes this fallback worth running: it supplied 8 of the 9
-# rescues, and adding it took the yield from 5 of 15 timepoints improved to 11 of 15 (mean
-# gain +0.049 taking max against the incumbent).
+# What this grid delivers, measured on the 15 flagged timepoints, taking max against the
+# incumbent: 8 of 15 improved, mean gain +0.041 over all 15 and +0.077 over those it helped.
+# That is 83% of what an exhaustive 632-trial search over the same axes achieves (11 of 15,
+# +0.049) for 4% of the trials, which is why the axes are trimmed this hard.
+#
+# The spectral sub-grid is what makes the fallback worth running at all: it supplies 8 of the
+# 9 rescues, and a hungarian-only sweep gets only 5 of 15.
 #
 # Its ranges are bounded by a SEPARATE stratified sweep over 24 evenly-spaced timepoints,
 # not by what won at the weak ones, because those two searches disagree and the stratified
