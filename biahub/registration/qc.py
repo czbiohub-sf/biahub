@@ -1,7 +1,7 @@
 """Quality control for beads-registration transforms.
 
-Four measures, because no single one is sufficient and each catches something the others
-miss:
+Three measures, because no single one is sufficient and each catches something the
+others miss:
 
 **overlap score** -- fraction of reference beads with a moving bead within a radius. This
 is what the estimator optimises, but it is *piecewise-constant*: measured on real data it
@@ -14,20 +14,6 @@ voxels over a 0 -> 14 voxel perturbation), so this is what separates two transfo
 tie on score. Biased low in absolute terms when the reference cloud is much denser than the
 moving one, so use it to compare transforms at the same timepoint, not as an absolute
 accuracy figure.
-
-**transform plausibility** -- shear and scale anisotropy from the decomposed linear part.
-Needs no image data, and catches geometrically impossible transforms: failed timepoints in
-an older run showed 57 degrees of shear and 3.8 anisotropy against normal values of ~6
-degrees and ~1.29.
-
-The expected values are properties of the mantis microscope, not of identity. Mantis
-acquires fluorescence on an oblique light-sheet arm and the data is deskewed, so x is
-unaffected by the oblique geometry while z and y are coupled by the deskew -- which is why
-real z-y shear appears (~6 deg on zebrafish, ~10 deg on A549 cells) while y-x stays clean.
-Anisotropy of ~1.29 comes from the voxel-size ratio between the two arms: the label-free
-reference is 0.174/0.1494/0.1494 um and the light-sheet source 0.174/0.116/0.116, so xy
-must scale by 0.1494/0.116 = 1.288 while z scales by 1.0. On a different optical
-configuration these expected values would need re-deriving.
 
 **temporal smoothness** -- largest step in translation between consecutive timepoints.
 Independent per-timepoint estimation can be more accurate per frame yet produce a jittery
@@ -68,30 +54,6 @@ def matched_residual(mov_peaks: ArrayLike, ref_peaks: ArrayLike) -> dict:
         return {"resid_mean": np.nan, "resid_p95": np.nan}
     d, _ = cKDTree(np.asarray(ref_peaks)).query(np.asarray(mov_peaks), k=1)
     return {"resid_mean": float(d.mean()), "resid_p95": float(np.percentile(d, 95))}
-
-
-def decompose_transform(matrix: ArrayLike) -> dict:
-    """Shear and scale of the linear part, for plausibility checks.
-
-    Shear is reported per axis pair as the deviation of the transformed basis vectors from
-    orthogonal. On mantis data the y-x pair is clean (~0.5 deg) and serves as a noise
-    floor, while z-y carries real shear (~6 deg zebrafish, ~10 deg cells).
-    """
-    linear = np.asarray(matrix, dtype=float)[:3, :3]
-
-    def angle(u, v):
-        c = float(u @ v) / (np.linalg.norm(u) * np.linalg.norm(v) + 1e-12)
-        return abs(float(np.degrees(np.arccos(np.clip(c, -1, 1)))) - 90.0)
-
-    sv = np.linalg.svd(linear, compute_uv=False)
-    return {
-        "shear_zy_deg": angle(linear[:, 0], linear[:, 1]),
-        "shear_zx_deg": angle(linear[:, 0], linear[:, 2]),
-        "shear_yx_deg": angle(linear[:, 1], linear[:, 2]),
-        "scale_max": float(sv.max()),
-        "scale_min": float(sv.min()),
-        "scale_anisotropy": float(sv.max() / max(sv.min(), 1e-12)),
-    }
 
 
 def translation_smoothness(transforms: list[ArrayLike]) -> dict:
@@ -171,14 +133,8 @@ def write_qc_report(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     qc = flag_timepoints(scores)
-    # pd.concat does not carry .attrs through, so keep the flagging stats before adding
-    # any columns.
     stats = dict(qc.attrs)
 
-    if transforms is not None:
-        decomp = pd.DataFrame([decompose_transform(m) for m in transforms[: len(qc)]])
-        qc = pd.concat([qc, decomp], axis=1)
-        qc.attrs.update(stats)
     if residuals:
         for col in ("resid_mean", "resid_p95"):
             qc[col] = [residuals.get(t, {}).get(col, np.nan) for t in qc["t"]]

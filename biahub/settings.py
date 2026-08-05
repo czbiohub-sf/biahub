@@ -364,6 +364,33 @@ class EstimateRegistrationSettings(MyBaseModel):
     eval_transform_settings: EvalTransformSettings | None = None
     ants_registration_settings: AntsRegistrationSettings | None = None
     manual_registration_settings: ManualRegistrationSettings | None = None
+    # One visible field to choose the beads strategy, rather than requiring the user to know
+    # that two low-level flags -- affine_transform_settings.use_prev_t_transform and
+    # beads_match_settings.spectral_arm, in two different blocks -- combine to produce it:
+    #
+    #   beads_strategy          use_prev_t_transform   spectral_arm
+    #   propagate                       True              off
+    #   propagate_spectral              True              always
+    #   independent                     False             off
+    #   independent_spectral            False             always     <- default
+    #
+    # Benchmarked on 2025_09_17 (144 t) and 2025_09_18 (240 t), scoring warped beads against
+    # the reference:
+    #
+    #   propagate              median 0.864/0.875   min 0.000/0.667   1/0  below 0.40
+    #   independent            median ~0.826        min 0.000         6/33 below 0.40
+    #   independent_spectral   median 0.870/0.875   min 0.720/0.600   0/0  below 0.40
+    #
+    # independent_spectral is the default because the spectral cascade is insensitive to its
+    # initial transform -- measured identical results from a seed scoring 0.826 and one
+    # scoring 0.000 -- so propagation no longer earns its serial cost (~3-10 h against
+    # ~20 min), its lack of cheap resume, or its tendency to turn one failure into a cluster.
+    #
+    # Set to None to drive use_prev_t_transform and spectral_arm directly instead.
+    beads_strategy: (
+        Literal["propagate", "propagate_spectral", "independent", "independent_spectral"]
+        | None
+    ) = "independent_spectral"
     verbose: bool = False
 
     @model_validator(mode="after")
@@ -374,6 +401,19 @@ class EstimateRegistrationSettings(MyBaseModel):
             self.beads_match_settings = BeadsMatchSettings()
         elif self.estimation_method == "ants" and self.ants_registration_settings is None:
             self.ants_registration_settings = AntsRegistrationSettings()
+
+        # Expand the strategy into the two flags that actually drive estimate(). Runs after
+        # the block above so beads_match_settings exists. Skipped when beads_strategy is
+        # None, which leaves the low-level flags untouched for advanced use.
+        if self.beads_strategy is not None and self.beads_match_settings is not None:
+            propagate, spectral = {
+                "propagate": (True, "off"),
+                "propagate_spectral": (True, "always"),
+                "independent": (False, "off"),
+                "independent_spectral": (False, "always"),
+            }[self.beads_strategy]
+            self.affine_transform_settings.use_prev_t_transform = propagate
+            self.beads_match_settings.spectral_arm = spectral
         return self
 
 
