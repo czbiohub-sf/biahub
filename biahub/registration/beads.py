@@ -765,12 +765,23 @@ def matches_from_beads(
 
     elif beads_match_settings.algorithm == "hungarian":
         hungarian_match_settings = beads_match_settings.hungarian_match_settings
-        mov_graph = Graph.from_nodes(
-            mov_peaks, mode="knn", k=hungarian_match_settings.edge_graph_settings.k
-        )
-        ref_graph = Graph.from_nodes(
-            ref_peaks, mode="knn", k=hungarian_match_settings.edge_graph_settings.k
-        )
+        edge_graph_settings = hungarian_match_settings.edge_graph_settings
+        # Honour the configured graph mode. This was hardcoded to "knn", so `method` was
+        # silently ignored and "radius" / "full" did nothing. That matters here rather
+        # than being cosmetic: the two clouds have very different densities (~20 moving
+        # against ~54 reference peaks in the same volume), so a fixed k spans a 1.6x
+        # larger physical neighbourhood on the sparse side at every k tested. The
+        # edge-length cost then compares descriptors measured at different scales. A
+        # radius graph uses the same physical scale on both sides -- measured on synthetic
+        # clouds that took the edge-scale ratio from 1.46 to 0.99 and recall from 0.85 to
+        # 0.91. EdgeGraphSettings already validates and defaults k / radius per method.
+        graph_kwargs = {"mode": edge_graph_settings.method}
+        if edge_graph_settings.method == "knn":
+            graph_kwargs["k"] = edge_graph_settings.k
+        elif edge_graph_settings.method == "radius":
+            graph_kwargs["radius"] = edge_graph_settings.radius
+        mov_graph = Graph.from_nodes(mov_peaks, **graph_kwargs)
+        ref_graph = Graph.from_nodes(ref_peaks, **graph_kwargs)
 
         matcher = GraphMatcher(
             algorithm="hungarian",
