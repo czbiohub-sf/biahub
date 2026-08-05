@@ -222,12 +222,20 @@ class BeadsMatchSettings(MyBaseModel):
     spectral_match_settings: SpectralMatchSettings = SpectralMatchSettings()
     filter_matches_settings: FilterMatchesSettings = FilterMatchesSettings()
     qc_settings: QCBeadsRegistrationSettings = QCBeadsRegistrationSettings()
-    # Opt-in extra arm in estimate(): acquire the correspondence with spectral matching,
-    # then refine with the configured algorithm. Off by default so existing behaviour is
-    # unchanged; estimate() keeps whichever arm scores higher, so enabling it cannot make
-    # the result worse. Only useful when the initial transform may be wrong by more than
-    # about one bead spacing -- which is when the position-distance cost misleads.
-    try_spectral_arm: bool = False
+    # Extra arm in estimate(): acquire the correspondence with spectral matching, then
+    # refine with the configured algorithm. estimate() keeps whichever arm scores higher,
+    # so enabling this cannot make the result worse than leaving it off.
+    #
+    #   "off"           existing behaviour, unchanged
+    #   "on_low_score"  only when the other arms fall below qc_settings.score_threshold.
+    #                   Cheap, but note it will rarely fire in practice: measured scores
+    #                   sit at 0.6-1.0 against a 0.40 threshold.
+    #   "always"        run it at every timepoint. This is what the benchmarked variant D
+    #                   does, and it is not merely a rescue: with a good initial transform
+    #                   the spectral cascade still won 93/144 and 117/240 timepoints on two
+    #                   real datasets, so gating it on failure gives up most of the gain.
+    #                   Costs one extra optimize_transform pair per timepoint.
+    spectral_arm: Literal["off", "on_low_score", "always"] = "off"
 
 
 class PhaseCrossCorrSettings(MyBaseModel):

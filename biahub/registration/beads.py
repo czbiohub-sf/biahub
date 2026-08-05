@@ -1210,15 +1210,16 @@ def estimate(
         # Whichever arm scores highest wins, so enabling this can never make the result
         # worse than leaving it off.
         best_so_far = transform_iter_dict[current_iterations]["quality_score"]
-        if (
-            beads_match_settings.try_spectral_arm
-            and current_iterations == 0
-            and best_so_far < beads_match_settings.qc_settings.score_threshold
-        ):
-            click.echo(
-                f"Score {best_so_far:.3f} below threshold "
-                f"{beads_match_settings.qc_settings.score_threshold}; trying spectral arm:"
+        spectral_mode = beads_match_settings.spectral_arm
+        run_spectral = current_iterations == 0 and (
+            spectral_mode == "always"
+            or (
+                spectral_mode == "on_low_score"
+                and best_so_far < beads_match_settings.qc_settings.score_threshold
             )
+        )
+        if run_spectral:
+            click.echo(f"Spectral arm ({spectral_mode}), current best {best_so_far:.3f}:")
             # Stage 1 -- ACQUIRE with spectral matching. This does not need the initial
             # transform to be close, because only relative distances are used.
             spectral_settings = beads_match_settings.model_copy(deep=True)
