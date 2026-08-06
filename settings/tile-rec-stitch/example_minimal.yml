@@ -1,0 +1,41 @@
+# Minimal Monarch tile-stitch config. Channel + timepoints are config-level
+# (recon.input_channel_names below; time_indices). monarch block omitted →
+# bench-best defaults (recon_batch=4, prefetch_depth=6, device=cuda).
+#
+#   sbatch --nodes=1 --gres=gpu:2 scripts/distributed/sbatch_tile_stitch.sh \
+#       -i /hpc/projects/waveorder/tile-stitch/sample_datasets/l0_brightfield_fov.zarr \
+#       -c settings/tile-rec-stitch/example_minimal.yml \
+#       -o /hpc/projects/waveorder/tile-stitch/runs/m3_integration/output.zarr
+
+tile_stitch:
+  tile:
+    tile_size: {z: 512, y: 512, x: 512}
+    overlap:   {z: 32,  y: 32,  x: 32}
+  blend:
+    kind: gaussian_mean
+    accumulator_dtype: float32
+    sigma_fraction: 0.125
+  recon:
+    input_channel_names: ["camera 22500102 view 0 @ 780nm"]
+    reconstruction_dimension: 3
+    phase:
+      transfer_function:
+        yx_pixel_size: 0.1842
+        z_pixel_size: 0.1842
+        z_padding: 50
+        z_focus_offset: -0.1775253564119339
+        index_of_refraction_media: 1.3
+        numerical_aperture_detection: 1.1
+        numerical_aperture_illumination: 0.8
+        wavelength_illumination: 0.76
+        invert_phase_contrast: false
+        tilt_angle_zenith: -0.47925180196762085
+        tilt_angle_azimuth: -0.07744445651769638
+      apply_inverse:
+        reconstruction_algorithm: Tikhonov
+        regularization_strength: 0.01
+        TV_rho_strength: 0.001
+        TV_iterations: 1
+
+retries: 1
+time_indices: all  # 'all' (default) | a single index | a list of indices
