@@ -470,11 +470,30 @@ def make_eager_recon(cuda_tf, recon_settings) -> Callable:
 
         otf = cuda_tf["optical_transfer_function"]
 
+        # An unmatched back projector costs seconds to build on a full-Z OTF and
+        # depends only on the OTF + the rl_bp_* knobs, all fixed for a run. This
+        # factory runs once per actor, so build it here; otherwise waveorder rebuilds
+        # it on every batch and it dominates the recon (~50 s vs ~0.5 s per timepoint
+        # at 1 iteration).
+        back_projector_otf = None
+        if apply_kwargs.get("rl_back_projector", "matched") != "matched":
+            from waveorder.backprojector import calculate_back_projector
+
+            back_projector_otf = calculate_back_projector(
+                otf,
+                apply_kwargs["rl_back_projector"],
+                alpha=apply_kwargs.get("rl_bp_alpha"),
+                beta=apply_kwargs.get("rl_bp_beta"),
+                order=apply_kwargs.get("rl_bp_order", 8),
+                resolution_mode=apply_kwargs.get("rl_bp_resolution_mode", "fwhm"),
+            )
+
         def _eager(zyx):
             return fluor.apply_inverse_transfer_function(
                 zyx,
                 otf,
                 z_padding=z_padding,
+                back_projector_otf=back_projector_otf,
                 **apply_kwargs,
             )
 
