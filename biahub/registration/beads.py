@@ -593,7 +593,12 @@ def repair_flagged_timepoints(
                 best_matrix.to_list() if hasattr(best_matrix, "to_list") else best_matrix,
                 dtype=float,
             )
-            transforms[t] = matrix
+            # .tolist() to match what load_transforms puts in this list. Leaving a raw
+            # ndarray here serialises into registration_settings.yml as a
+            # !!python/object/apply:numpy._core.multiarray._reconstruct blob, which then
+            # fails to load -- so the repaired timepoints were the only ones that broke
+            # the downstream stabilize step.
+            transforms[t] = matrix.tolist()
             np.save(output_transforms_path / f"{t}.npy", matrix)
             score_col[t] = best_score
             scores.loc[scores["t"] == t, "quality_score"] = best_score
@@ -707,7 +712,10 @@ def estimate_tczyx(
             ref_voxel_size=ref_voxel_size,
             mov_voxel_size=mov_voxel_size,
         )
-        click.echo("Computed approx transform: ", approx_transform)
+        # f-string, not a second positional: click.echo's second parameter is `file`, so
+        # the original passed the Transform as the output stream and died on .write().
+        # This path had evidently never been exercised.
+        click.echo(f"Computed approx transform:\n{approx_transform}")
         affine_transform_settings.approx_transform = approx_transform.to_list()
 
     if affine_transform_settings.use_prev_t_transform:
