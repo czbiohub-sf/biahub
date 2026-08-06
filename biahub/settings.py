@@ -274,6 +274,48 @@ class SweepFallbackSettings(MyBaseModel):
     grid: dict[str, list] | list[dict[str, list]] | None = None
 
 
+class RepairPassSettings(MyBaseModel):
+    """Post-estimation reseeding of flagged timepoints from their neighbours.
+
+    The other half of the fallback, and it necessarily runs after the whole series exists
+    rather than inside estimate(): it seeds from t-1 AND t+1, and in independent mode t+1 is
+    still being computed in another shard while t is estimated. Reaching forwards is the
+    point -- propagation's built-in fallback can only reach back to t-1, and a timepoint that
+    failed because the sample jumped between t-1 and t is often fine from t+1.
+
+    It targets a different failure class from the sweep, which is why running both and keeping
+    the higher score is worth more than either alone:
+
+        sweep    right basin, suboptimal correspondence. Measured +0.058 on timepoints
+                 scoring 0.72-0.78, but only +0.006 on those below 0.72.
+        repair   wrong basin, or no usable transform at all -- which no amount of
+                 re-weighting the cost matrix fixes. At one real timepoint propagation gave
+                 0.429 where a reseed reached 0.778.
+
+    Gated on the run's own adaptive median-2*MAD line, not a second fixed threshold, so it
+    repairs exactly what the QC report flags. Every candidate is scored and accepted only if
+    it strictly beats the incumbent, so the pass cannot make a run worse.
+
+    Attributes
+    ----------
+    mode : Literal["off", "on_flagged"]
+        "on_flagged" repairs the timepoints the adaptive threshold flags.
+    try_config_seed : bool
+        Also try the static config approx_transform as a seed. Worth keeping for the case
+        both neighbours are themselves flagged, which is what a cluster of failures looks
+        like.
+    max_timepoints : int | None
+        Safety cap on how many timepoints to repair, since each costs up to one full
+        estimate() per candidate seed. None means no cap. When the cap bites, the worst
+        timepoints are repaired and the skipped ones are logged by name rather than
+        silently dropped.
+    """
+
+    mode: Literal["off", "on_flagged"] = "off"
+    try_config_seed: bool = True
+    max_timepoints: int | None = 25
+
+
 class BeadsMatchSettings(MyBaseModel):
     algorithm: Literal["hungarian", "match_descriptor", "spectral"] = "hungarian"
     source_peaks_settings: DetectPeaksSettings | None = Field(
@@ -305,6 +347,7 @@ class BeadsMatchSettings(MyBaseModel):
     # the previous behaviour exactly.
     spectral_arm: Literal["off", "on_low_score", "always"] = "always"
     sweep_fallback_settings: SweepFallbackSettings = SweepFallbackSettings()
+    repair_pass_settings: RepairPassSettings = RepairPassSettings()
 
 
 class PhaseCrossCorrSettings(MyBaseModel):
