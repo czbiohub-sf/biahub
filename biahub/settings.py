@@ -743,6 +743,24 @@ class MonarchConfig(BaseModel):
         "recon_batch); overrides prefetch_depth, 0 disables.",
     )
     rdma_timeout_s: PositiveInt = 60
+    # backend.py already reads both of these off the config (see _drive_one_tp,
+    # "MonarchConfig is the source of truth"), but they were never declared here, so
+    # extra="forbid" rejected them in YAML and getattr always fell through to the
+    # module defaults of 90 s / 3 retries.
+    #
+    # The 90 s default is effectively a budget for the WHOLE timepoint, not per tile:
+    # all N recon RPCs are dispatched up front, the actor runs them serially
+    # (recon_concurrency=1), and each RPC's timeout starts at dispatch. So the limit
+    # is n_tiles * per_tile_time. Measured on a 42-tile ROI: RL x100 = 84 s (passes,
+    # barely), RLGC x100 = 164 s (fails every time).
+    recon_rpc_timeout_s: PositiveFloat = Field(
+        default=90.0,
+        description="Per-RPC recon timeout in seconds; budgets the whole timepoint, "
+        "since all tiles are dispatched at once and executed serially.",
+    )
+    recon_rpc_retries: NonNegativeInt = Field(
+        default=3, description="Re-sends of a timed-out recon RPC before failing loud."
+    )
     # >1 stacks Tikhonov intermediates on one GPU and risks HBM OOM.
     recon_concurrency: PositiveInt = Field(
         default=1, description="In-actor concurrent recon limit."
