@@ -1,0 +1,66 @@
+# Tracking config for the mantis-v2 pipeline (`biahub track`).
+# NEUROMAST / ZEBRAFISH.
+#
+# Track reads the ASSEMBLED plate (5-assemble/<dataset>.zarr), so target_channel
+# and cellpose_config.input_channel must name channels that exist THERE.
+#
+# ⚠ VERIFY THE CHANNEL NAME BEFORE RUNNING. The zebrafish virtual-stain config
+# in this directory declares its targets as `nuclei` / `membrane`, while several
+# existing zebrafish track configs under /hpc/projects/tlg2_mantis/ still say
+# `nuclei_prediction` (the A549 naming). They cannot both be right. Print the
+# channel names of 3-virtual-stain (or 5-assemble) and set the three references
+# below — target_channel, cellpose_config.input_channel, and the input_images
+# channel key — to whatever is actually there.
+#
+# CURRENT SCHEMA. TrackingSettings forbids extra keys; the old fields `mode`,
+# `z_range` and `focus_config` are rejected. Mapping from the old schema:
+#   mode                            -> output_mode
+#   z_range + focus_config.z_window -> z_slicing.{method, window_size, focus_channel}
+
+# 2D writes an output plate with Z=1; input_images below projects Z with np.mean.
+output_mode: "2D"
+fov: "*/*/*"
+target_channel: nuclei
+
+# The old zebrafish configs used a 40-plane in-focus window
+# (focus_config.z_window: 40), which maps to the block below. `method: all`
+# takes every plane instead — cheaper, but more out-of-focus signal in the
+# projection that cellpose segments.
+z_slicing:
+  method: focus
+  window_size: 40
+  focus_channel: Phase3D
+
+segmentation_method: cellpose
+cellpose_config:
+  model_type: nuclei
+  diameter: 80
+  cellprob_threshold: 0.0
+  flow_threshold: 0.4
+  gpu: true
+  min_size: 2500
+  input_channel: nuclei
+  labels_sigma: 5.0
+
+input_images:
+  - path: null
+    channels:
+      nuclei:
+        - function: np.mean
+          kwargs:
+            axis: 1
+          per_timepoint: false
+
+tracking_config:
+  segmentation_config:
+    min_area: 2500
+    max_area: 80000
+    min_frontier: 0.5
+    max_noise: 0.00
+  linking_config:
+    max_distance: 15
+    distance_weight: -0.0001
+    max_neighbors: 3
+  tracking_config:
+    disappear_weight: -0.0001
+    appear_weight: -0.001

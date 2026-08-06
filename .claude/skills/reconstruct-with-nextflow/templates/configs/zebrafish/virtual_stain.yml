@@ -1,0 +1,60 @@
+# Virtual-stain config for `biahub virtual-stain` (--virtual_stain_config).
+# NEUROMAST / ZEBRAFISH model.
+#
+# Only `model`, `data` and `ckpt_path` are allowed at the top level (plus the
+# optional biahub knobs at the bottom). The `trainer:` and `return_predictions:`
+# blocks that viscy's predict.sh needed are REJECTED by build_predict_parser —
+# strip them when copying from an older predict.yml.
+#
+# `data.init_args.data_path` is injected per-position by biahub; leave it out.
+
+model:
+  class_path: cytoland.engine.VSUNet
+  init_args:
+    architecture: fcmae
+    model_config:
+      in_channels: 1
+      out_channels: 2
+      encoder_blocks: [3, 3, 9, 3]
+      encoder_drop_path_rate: 0.0
+      dims: [96, 192, 384, 768]
+      decoder_conv_blocks: 2
+      stem_kernel_size: [7, 4, 4]
+      in_stack_depth: 21
+      pretraining: false
+      head_conv: true
+      head_conv_expansion_ratio: 4
+      head_conv_pool: false
+    test_time_augmentations: true
+    tta_type: 'median'
+
+data:
+  class_path: viscy_data.hcs.HCSDataModule
+  init_args:
+    source_channel: Phase3D
+    target_channel:
+      - "nuclei"
+      - "membrane"
+
+    # MUST equal model.init_args.model_config.in_stack_depth (21). A mismatch
+    # does not raise — the model silently stalls in the inference path.
+    z_window_size: 21
+    # No effect in biahub: predict_sliding_windows processes one z-window at a
+    # time. Kept for parity with `viscy predict` configs.
+    batch_size: 1
+    num_workers: 0
+
+    normalizations:
+      - class_path: viscy_transforms.NormalizeSampled
+        init_args:
+          keys: [Phase3D]
+          level: fov_statistics
+          subtrahend: median
+          divisor: iqr
+
+ckpt_path: "/hpc/projects/comp.micro/virtual_staining/models/fcmae-3d/fit_v2/pretrain_end2end/lightning_logs/finetune_VS_end2end_v1_test6_prefetch2_nopersistwork_restart_2/checkpoints/epoch=64-step=24960.ckpt"
+
+# Optional biahub orchestration knobs (defaults shown; uncomment to override).
+# sliding_window_step: 1          # Z step for the sliding window; 1 = max overlap.
+# device: cuda                    # torch device for inference.
+# output_ome_zarr_version: null   # null preserves the input store version.
