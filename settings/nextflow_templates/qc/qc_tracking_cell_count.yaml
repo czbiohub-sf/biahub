@@ -1,0 +1,53 @@
+# Cell-count QC over a segmentation/tracking store (`<name>_tracking.zarr`)
+# rather than an intensity store. In the mantis/DynaCell layout the label classes
+# ARE the channels, so `channels:` selects the label class by name and the C
+# column in the output means the label class. Outputs land in
+# `<name>_tracking_qc/`, beside the label store.
+#
+# Self-contained on purpose: an external --config resolves Hydra defaults only
+# against its own directory, so this cannot reference imaging-qc's internal
+# /common or /segmentation groups — their keys are inlined below.
+
+backend: iohub
+positions: null
+metric_group: masks
+log_level: INFO
+upstream_qc_dir: null
+
+stage: 6
+display_name: "Tracking — Cell Count"
+metrics: null  # derived from metric_groups; override via CLI to run a subset
+
+metric_groups:
+  masks:
+    scope: position
+    metrics:
+      - instance_count
+
+instance_count:
+  # `slice` suits a 2D segmentation (Z=1), which is what the tracking subsets hold
+  # (one label plane per (T, C)). For a 3D segmentation set `volume` so each
+  # instance is counted once instead of once per plane.
+  granularity: slice
+  channels:
+    - nuclei_prediction_labels
+  gate:
+    # A count of zero is an empty frame — a dropped/blank timepoint the
+    # segmentation had nothing to find in. This is the degenerate structural
+    # boundary, not a constant calibrated from any dataset.
+    hard_floor: 1
+    # Per-(T,C,Z) verdicts, so one empty timepoint lands on the slice drop list
+    # instead of failing the whole position.
+    gate_granularity: slice
+    # No relative outlier fence, deliberately: at short T a zscore fence cannot
+    # fire and lower_quantile flags the wrong frames. Add one only with enough
+    # rows per population (n >= 11 for n_std 3.0) or pool with pooling_scope: store.
+
+report:
+  mode: full
+  max_timepoints: 5
+  compact: false
+  metric_archetypes:
+    instance_count: timeseries
+  metric_labels:
+    instance_count: "Instance Count"
