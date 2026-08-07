@@ -5,7 +5,7 @@
 #
 # This file exists only because nextflow/mantis-v2.nf hard-requires
 # --track_config and unconditionally wires track_wf after assemble — there is no
-# way to skip a step today. Tracked in the "make pipeline steps optional" issue.
+# way to skip a step today. Tracked in biahub#306 (make pipeline steps optional).
 #
 # So for a zebrafish run:
 #   - pass this file to --track_config so the pipeline validates and starts;

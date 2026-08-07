@@ -192,7 +192,7 @@ What this means in practice:
   config to "make tracking work" unless the user asks for neuromast tracking
   explicitly.
 
-Making steps optional is tracked in the "make pipeline steps optional" issue.
+Making steps optional is tracked in [biahub#306](https://github.com/czbiohub-sf/biahub/issues/306).
 Once that lands, drop the placeholder and stop after assemble.
 
 ## 5. Track reads the assembled plate, not the intermediates
