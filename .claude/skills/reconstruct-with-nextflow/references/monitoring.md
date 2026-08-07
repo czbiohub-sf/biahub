@@ -64,7 +64,7 @@ position), status, exit code, realized time and RSS, and attempt number. Count
 failures and retries from there, not from the console.
 
 Per-step task logs (remember `.out` holds the output, `.err` is empty — see
-`caveats.md` §8):
+`caveats.md` §9):
 
 ```bash
 ls -t <OUTPUT>/nextflow/slurm_output/*/ | head

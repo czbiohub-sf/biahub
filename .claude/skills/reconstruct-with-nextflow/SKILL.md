@@ -120,6 +120,9 @@ Do not run anything yet. Show the user, concretely:
 4. Which reference run the configs come from, and every value you changed.
 5. Pipeline steps that will run: flat-field → deskew → reconstruct →
    virtual-stain → assemble → track (the full `mantis-v2.nf` workflow).
+   **For neuromast/zebrafish, say that the deliverable is `5-assemble` and that
+   `4-track` is a discarded by-product** — tracking is an A549 step, but
+   `mantis-v2.nf` cannot skip it today. See `references/caveats.md` §4.
 6. Known caveats that apply to this dataset (from `references/caveats.md`).
 7. Rough wall-time and whether `-resume` is on.
 
@@ -200,12 +203,15 @@ Restarts are always `bash ./run_mantis_v2.sh` — the script already passes
 
 When the run finishes:
 
-1. **Rename channels on the assembled plate** — `templates/rename_channels.py`,
-   run against `<OUTPUT>/5-assemble/<DATASET>.zarr`. See
-   `references/caveats.md` §2. Check the actual channel names first; the mapping
-   is dataset-dependent.
+1. **Normalize channel names on the assembled plate** —
+   `templates/rename_channels.py`, run against
+   `<OUTPUT>/5-assemble/<DATASET>.zarr`. This applies the biahub#291 convention
+   and is idempotent, so it is safe to re-run. See `references/caveats.md` §2 —
+   and check first whether a `rename-channels` CLI has landed on main, which
+   would make the manual step obsolete.
 2. Verify the assembled store opens with iohub and report its shape, channels,
-   and size on disk.
+   and size on disk. For neuromast/zebrafish this is the deliverable; report
+   `4-track` only as a discarded by-product.
 3. Report the Nextflow summary: per-step task counts, failures, retries, and
    total wall time, from `<OUTPUT>/nextflow/trace.txt`. Point the user at
    `<OUTPUT>/nextflow/report.html` and `timeline.html`.

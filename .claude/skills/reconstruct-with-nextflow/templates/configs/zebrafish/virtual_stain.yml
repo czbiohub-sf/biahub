@@ -32,9 +32,15 @@ data:
   class_path: viscy_data.hcs.HCSDataModule
   init_args:
     source_channel: Phase3D
+    # The `_prediction` suffix is carried here deliberately. `biahub
+    # virtual-stain` names output channels VERBATIM from target_channel,
+    # dropping the suffix viscy's HCSPredictionWriter used to append
+    # (biahub#288), while the rest of biahub keys off it. Putting it in the
+    # config is the same workaround the A549 configs use; the assemble-stage
+    # rename (biahub#291) then becomes a no-op safety net for these two.
     target_channel:
-      - "nuclei"
-      - "membrane"
+      - "nuclei_prediction"
+      - "membrane_prediction"
 
     # MUST equal model.init_args.model_config.in_stack_depth (21). A mismatch
     # does not raise — the model silently stalls in the inference path.

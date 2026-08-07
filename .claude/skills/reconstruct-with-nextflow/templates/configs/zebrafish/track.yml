@@ -1,31 +1,34 @@
-# Tracking config for the mantis-v2 pipeline (`biahub track`).
-# NEUROMAST / ZEBRAFISH.
+# PLACEHOLDER — tracking is NOT part of the neuromast/zebrafish deliverable.
 #
-# Track reads the ASSEMBLED plate (5-assemble/<dataset>.zarr), so target_channel
-# and cellpose_config.input_channel must name channels that exist THERE.
+# The deliverable for this family is 5-assemble. Cell tracking is an A549 step;
+# neuromast work uses its own downstream tooling.
 #
-# ⚠ VERIFY THE CHANNEL NAME BEFORE RUNNING. The zebrafish virtual-stain config
-# in this directory declares its targets as `nuclei` / `membrane`, while several
-# existing zebrafish track configs under /hpc/projects/tlg2_mantis/ still say
-# `nuclei_prediction` (the A549 naming). They cannot both be right. Print the
-# channel names of 3-virtual-stain (or 5-assemble) and set the three references
-# below — target_channel, cellpose_config.input_channel, and the input_images
-# channel key — to whatever is actually there.
+# This file exists only because nextflow/mantis-v2.nf hard-requires
+# --track_config and unconditionally wires track_wf after assemble — there is no
+# way to skip a step today. Tracked in the "make pipeline steps optional" issue.
+#
+# So for a zebrafish run:
+#   - pass this file to --track_config so the pipeline validates and starts;
+#   - treat 5-assemble as the end of the run;
+#   - 4-track output is a by-product. Discard it, and do not report it as a
+#     deliverable.
+#
+# If you actually want neuromast tracking, do not start from this file — the
+# parameters below are copied from the A549 config and are NOT tuned for
+# neuromasts (cell diameter, areas, and linking distance all differ). Tune them
+# deliberately and say so.
 #
 # CURRENT SCHEMA. TrackingSettings forbids extra keys; the old fields `mode`,
 # `z_range` and `focus_config` are rejected. Mapping from the old schema:
 #   mode                            -> output_mode
 #   z_range + focus_config.z_window -> z_slicing.{method, window_size, focus_channel}
 
-# 2D writes an output plate with Z=1; input_images below projects Z with np.mean.
 output_mode: "2D"
 fov: "*/*/*"
-target_channel: nuclei
+target_channel: nuclei_prediction
 
 # The old zebrafish configs used a 40-plane in-focus window
-# (focus_config.z_window: 40), which maps to the block below. `method: all`
-# takes every plane instead — cheaper, but more out-of-focus signal in the
-# projection that cellpose segments.
+# (focus_config.z_window: 40), which maps to the block below.
 z_slicing:
   method: focus
   window_size: 40
@@ -39,13 +42,13 @@ cellpose_config:
   flow_threshold: 0.4
   gpu: true
   min_size: 2500
-  input_channel: nuclei
+  input_channel: nuclei_prediction
   labels_sigma: 5.0
 
 input_images:
   - path: null
     channels:
-      nuclei:
+      nuclei_prediction:
         - function: np.mean
           kwargs:
             axis: 1

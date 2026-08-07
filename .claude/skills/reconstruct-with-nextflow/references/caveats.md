@@ -49,39 +49,57 @@ print('HCS plate' if 'plate' in a.get('ome',{}) else 'FLAT — needs 0-convert')
 
 ## 2. Channel renaming after assemble
 
-The assembled plate inherits raw instrument channel labels, which are camera/filter
-strings rather than biological names. Downstream analysis expects the cleaned
-names, so this runs **once, after `5-assemble` completes**, in place on the
-assembled store.
+The assembled plate inherits whatever names its sources emitted: `BF - Oblique`
+from deskew, `Phase3D*` from reconstruct, `nuclei`/`membrane` from virtual-stain,
+and camera/filter strings like `mCherry EX561 EM600-37` from the raw fluorescence
+channels. Downstream steps then depend on acquisition-specific strings that differ
+between experiments.
 
-Canonical script:
-`/hpc/projects/intracellular_dashboard/organelle_dynamics/2026_05_27_A549_SEC61B_TOMM20_G3BP1_ZIKV/1-preprocess/5-assemble/rename_channels.py`
-(shipped here as `templates/rename_channels.py`).
+**The convention is defined in [biahub#291](https://github.com/czbiohub-sf/biahub/issues/291)**
+and implemented by `templates/rename_channels.py`. First match wins:
 
-Mapping it applies:
-
-| from | to |
+| incoming | renamed to |
 |---|---|
 | `BF - Oblique` | `BF` |
-| `mCherry EX561 EM600-37` | `raw mCherry EX561 EM600-37` |
-| `GFP EX488 EM525-45` | `raw GFP EX488 EM525-45` |
+| `Phase3D*` | `Phase3D` |
+| `nuclei` | `nuclei_prediction` |
+| `membrane` | `membrane_prediction` |
+| already canonical, or already `raw `-prefixed | left alone |
+| anything else | `raw <original>` |
 
-The `raw ` prefix distinguishes the acquired fluorescence channels from the
-virtual-stain predictions (`nuclei_prediction`, `membrane_prediction`), which are
-left alone.
+The rule is **idempotent** — the passthrough row is what makes re-running safe,
+so it never produces `raw raw mCherry ...`.
 
-**The channel list is dataset-dependent — print the actual channel names first
-and adapt the mapping.** A dataset with `Cy5 EX639 EM698-70` needs that entry
-added. The script takes the store stem via the `DATASET` env var and appends
-`.zarr`, so run it from the directory containing the store:
+Run once, after `5-assemble`, from the directory holding the store (the script
+reads the stem from `$DATASET` and appends `.zarr`):
 
 ```bash
 cd <OUTPUT>/5-assemble
 DATASET=<DATASET> uv run --project <BIAHUB> python rename_channels.py
 ```
 
-Renaming is in-place and not idempotent in the prefix direction — running it
-twice yields `raw raw mCherry ...`. Check the current names before re-running.
+**Why `nuclei` → `nuclei_prediction`:** `biahub virtual-stain` names its outputs
+verbatim from `data.init_args.target_channel`, dropping the `_prediction` suffix
+that viscy's `HCSPredictionWriter` used to append — a regression tracked in
+[biahub#288](https://github.com/czbiohub-sf/biahub/issues/288). The rest of biahub
+still keys off the suffix (`TrackingSettings` defaults, `track.py`'s
+`mem_nuc_contour`, viscy's airtable `filter_raw_channels`), so the rename bridges
+the gap.
+
+**⚠ Ordering.** This script runs *after* the whole Nextflow pipeline, but `4-track`
+runs *inside* it and reads the assembled plate — so **track sees the pre-rename
+names.** Any channel a track config references must exist under its un-renamed
+name at track time. The A549 configs work around this by putting the suffix
+directly in the VS `target_channel` (`nuclei_prediction`/`membrane_prediction`),
+which makes the rename rule a no-op safety net for those channels. The shipped
+templates do the same.
+
+**Stopgap status:** #291 proposes doing this inside `concatenate`, which already
+resolves the output channel list, so the assembled plate would be correct the
+first time. PRs [#260](https://github.com/czbiohub-sf/biahub/pull/260) and
+[#250](https://github.com/czbiohub-sf/biahub/pull/250) carry a `rename-channels`
+CLI and Nextflow subworkflow. **Neither has landed on main** — check before running
+this by hand, and drop the manual step once one of them merges.
 
 ---
 
@@ -105,8 +123,13 @@ models are in use, and the model/data fields must agree with the checkpoint:
 
 | family | checkpoint | `in_stack_depth` / `z_window_size` | `stem_kernel_size` | targets |
 |---|---|---|---|---|
-| neuromast / zebrafish | `/hpc/projects/comp.micro/virtual_staining/models/fcmae-3d/fit_v2/pretrain_end2end/lightning_logs/finetune_VS_end2end_v1_test6_prefetch2_nopersistwork_restart_2/checkpoints/epoch=64-step=24960.ckpt` | 21 | `[7, 4, 4]` | `nuclei`, `membrane` |
+| neuromast / zebrafish | `/hpc/projects/comp.micro/virtual_staining/models/fcmae-3d/fit_v2/pretrain_end2end/lightning_logs/finetune_VS_end2end_v1_test6_prefetch2_nopersistwork_restart_2/checkpoints/epoch=64-step=24960.ckpt` | 21 | `[7, 4, 4]` | `nuclei_prediction`, `membrane_prediction` |
 | A549 | `/hpc/projects/organelle_phenotyping/models/VSCyto3D-A549-infection-finetune/4gpu_bf16_bs16_to_ep7/checkpoints/epoch=7-step=832.ckpt` | 15 | `[5, 4, 4]` | `nuclei_prediction`, `membrane_prediction` |
+
+Both templates carry the `_prediction` suffix in `target_channel` deliberately —
+see §2 for why (biahub#288). Older zebrafish configs say plain `nuclei`/`membrane`;
+that still works, but only if nothing reads the store before the assemble-stage
+rename.
 
 `data.init_args.z_window_size` **must equal** `model.init_args.model_config.in_stack_depth`.
 A mismatch does not raise — the model silently stalls in the inference path.
@@ -137,8 +160,8 @@ still carry the old schema; do not copy them without migrating.
 
 Also: `target_channel` and `cellpose_config.input_channel` must match a channel
 name in the **assembled** plate, because track reads `5-assemble`, not
-`3-virtual-stain`. If you rename channels (§2) before tracking, the names must
-agree.
+`3-virtual-stain` — and they must match the **pre-rename** names, since track
+runs inside the pipeline while the rename (§2) runs after it.
 
 **`concatenate.yml` — `concat_data_paths` stay as `placeholder`.** The assemble
 subworkflow injects the three real source paths via `--concat-data-paths`. Three
@@ -147,7 +170,32 @@ reconstruct, virtual-stain). Do not "fix" them to real paths.
 
 ---
 
-## 4. Track reads the assembled plate, not the intermediates
+## 4. Neuromast/zebrafish datasets are not tracked
+
+**Tracking is an A549 step.** For the neuromast/zebrafish family the deliverable
+is `5-assemble`; `4-track` is not part of the pipeline's purpose there, and its
+parameters (cell diameter, min/max area, linking distance) are tuned for A549
+cells, not neuromasts.
+
+There is no way to express this today: `nextflow/mantis-v2.nf` errors without
+`--track_config` and unconditionally wires `track_wf` after assemble. So a
+zebrafish run still passes a track config, still produces a `4-track` store, and
+that store is a by-product to discard.
+
+What this means in practice:
+
+- Pass `templates/configs/zebrafish/track.yml` (a marked placeholder) so the run
+  validates and starts.
+- Say in the plan that `5-assemble` is the deliverable and `4-track` is
+  discarded, so the user is not surprised by the extra step's wall time.
+- Do not report tracking results for these datasets, and do not tune the track
+  config to "make tracking work" unless the user asks for neuromast tracking
+  explicitly.
+
+Making steps optional is tracked in the "make pipeline steps optional" issue.
+Once that lands, drop the placeholder and stop after assemble.
+
+## 5. Track reads the assembled plate, not the intermediates
 
 As wired today, `track_wf` takes `5-assemble/<DATASET>.zarr` for *both* its
 inputs. Two consequences:
@@ -157,7 +205,7 @@ inputs. Two consequences:
 - Tracking runs strictly *after* assemble, not in parallel with it. The whole
   plate must assemble before any track task starts.
 
-## 5. Assemble is a single job on one reserved node
+## 6. Assemble is a single job on one reserved node
 
 `concatenate --cluster debug` iterates every position in-process, so `5-assemble`
 is one large SLURM job rather than a fan-out — 16 TiB of I/O and tens of
@@ -165,7 +213,7 @@ thousands of write units for a typical plate. A late kill used to discard all of
 it; `biahub concatenate --resume` (which the Nextflow task passes) makes it
 recoverable. Give it room: it is the single longest step.
 
-## 6. Shard geometry and `shards_ratio`
+## 7. Shard geometry and `shards_ratio`
 
 `shards_ratio` is a ratio over the **chunk** shape, not an absolute shard shape
 (`shards = chunks * shards_ratio`, elementwise TCZYX). Changing the T entry
@@ -178,7 +226,7 @@ Larger T shards mean fewer, bigger files but a much larger RAM request and a muc
 worse blast radius when one tears — a shard spanning 10 timepoints loses all 10.
 Leave the T ratio alone unless you have a measured reason.
 
-## 7. Preemption is expected, not an error
+## 8. Preemption is expected, not an error
 
 Per-position work runs on the `preempted` partition. SLURM reclaims jobs there
 routinely; they exit 143 and Nextflow resubmits (`errorStrategy` retries exit
@@ -186,7 +234,7 @@ routinely; they exit 143 and Nextflow resubmits (`errorStrategy` retries exit
 Only escalate when retries are exhausted, or when the same position fails
 identically every time — that is the torn-shard signature, see `recovery.md`.
 
-## 8. SLURM log files look inverted
+## 9. SLURM log files look inverted
 
 `slurm_logs()` in `nextflow/modules/common.nf` deliberately crosses
 `--output`/`--error` to undo Nextflow's fd swap. The net effect: **the task's
@@ -195,7 +243,7 @@ file is empty.** Also, `.command.log` in the Nextflow work dir is empty, because
 the `clusterOptions` override wins over Nextflow's own `-o`. Read the
 `slurm_output` files, not the work dir logs.
 
-## 9. Do not edit the biahub checkout during a live run
+## 10. Do not edit the biahub checkout during a live run
 
 Editing files in `$BIAHUB_PROJECT` changes Nextflow task hashes and invalidates
 `-resume`, so a restart recomputes everything. Sync the branch and run

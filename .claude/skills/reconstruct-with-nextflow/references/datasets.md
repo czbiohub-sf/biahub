@@ -45,11 +45,11 @@ acquisition script, not reconstruction inputs. Ignore them.
 Reconstruction output goes to `/hpc/projects/...`, never next to the raw data.
 Which root depends on the dataset family:
 
-| family | cues in the name | output root |
-|---|---|---|
-| zebrafish / neuromast / dynatrack | `dynatrack`, `hpf`, `dpf`, `neuromast`, `cldnb`, `she`, `myo6b`, `zebrafish` | `/hpc/projects/tlg2_mantis/<DATASET>` |
-| cell line / organelle / infection | `A549`, `HEK`, `iPSC`, organelle genes (`SEC61B`, `TOMM20`, `G3BP1`, `MAP4`, `CAAX`, `H2B`), viruses (`DENV`, `ZIKV`, `HSV1`) | `/hpc/projects/intracellular_dashboard/organelle_dynamics/<DATASET>` |
-| instrument QC / calibration | `argolight`, `beads`, `psf`, `alignment`, `illumination`, `fluorescein`, `first_light`, `mantis_v2_*` | *no default* — ask. These are usually not reconstructed. |
+| family | cues in the name | output root | deliverable |
+|---|---|---|---|
+| zebrafish / neuromast / dynatrack | `dynatrack`, `hpf`, `dpf`, `neuromast`, `cldnb`, `she`, `myo6b`, `zebrafish` | `/hpc/projects/tlg2_mantis/<DATASET>` | `5-assemble` — **no tracking**, see `caveats.md` §4 |
+| cell line / organelle / infection | `A549`, `HEK`, `iPSC`, organelle genes (`SEC61B`, `TOMM20`, `G3BP1`, `MAP4`, `CAAX`, `H2B`), viruses (`DENV`, `ZIKV`, `HSV1`) | `/hpc/projects/intracellular_dashboard/organelle_dynamics/<DATASET>` | `5-assemble` + `4-track` |
+| instrument QC / calibration | `argolight`, `beads`, `psf`, `alignment`, `illumination`, `fluorescein`, `first_light`, `mantis_v2_*` | *no default* — ask. These are usually not reconstructed. | — |
 
 Neighbouring roots that exist and are **not** the default target — do not use
 them without being asked: `/hpc/projects/comp.micro/mantis`,

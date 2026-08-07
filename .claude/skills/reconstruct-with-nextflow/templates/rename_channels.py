@@ -1,74 +1,125 @@
-"""Rename raw instrument channel labels on the assembled plate.
+"""Normalize channel names on the assembled plate.
 
-Run ONCE, after 5-assemble completes, from the directory holding the store:
+Implements the convention in czbiohub-sf/biahub#291. Run ONCE, after
+``5-assemble`` completes, from the directory holding the store::
 
     cd <OUTPUT>/5-assemble
     DATASET=2026_07_14_A549_MAP4_ZIKV uv run --project <BIAHUB> python rename_channels.py
 
-`BF - Oblique` becomes `BF`, and each acquired fluorescence channel gets a
-`raw ` prefix so it is distinguishable from the virtual-stain predictions
-(`nuclei_prediction`, `membrane_prediction`), which are left untouched.
+Mapping (first match wins):
 
-CHECK THE CHANNEL LIST FIRST — it is dataset-dependent. Print the store's
-channel names and extend `RAW_CHANNELS` before running; a channel that is not
-listed here is silently left alone.
+===========================================  ==========================
+incoming                                     renamed to
+===========================================  ==========================
+``BF - Oblique``                             ``BF``
+``Phase3D*``                                 ``Phase3D``
+``nuclei``                                   ``nuclei_prediction``
+``membrane``                                 ``membrane_prediction``
+already canonical, or already ``raw ``-fixed  left alone
+anything else (e.g. ``mCherry EX561 ...``)   ``raw <original>``
+===========================================  ==========================
 
-NOT IDEMPOTENT in the prefix direction: running twice yields
-`raw raw mCherry ...`. Inspect the current names before a re-run.
+The ``raw`` prefix marks unprocessed detector output, so raw and derived
+channels are distinguishable at a glance. The rule is **idempotent** — the
+passthrough branch means re-running never yields ``raw raw mCherry ...``.
 
-Adapted from
-/hpc/projects/intracellular_dashboard/organelle_dynamics/
-  2026_05_27_A549_SEC61B_TOMM20_G3BP1_ZIKV/1-preprocess/5-assemble/rename_channels.py
+``nuclei`` -> ``nuclei_prediction`` exists because ``biahub virtual-stain``
+names its outputs verbatim from ``target_channel``, dropping the ``_prediction``
+suffix that viscy's ``HCSPredictionWriter`` used to append (biahub#288), while
+the rest of biahub still keys off the suffix.
+
+This script is a stopgap: biahub#291 proposes doing the rename inside
+``concatenate`` (it already resolves the output channel list, so the assembled
+plate would be correct the first time), and PRs #260 / #250 carry a
+``rename-channels`` CLI and Nextflow subworkflow. Neither has landed on main —
+check before running this by hand.
+
+ORDERING: this runs after the whole Nextflow pipeline, so ``4-track`` reads the
+assembled plate under its PRE-rename channel names. Any channel a track config
+references must exist under the un-renamed name at track time.
 """
 
 import os
 import sys
 
+from fnmatch import fnmatch
 from pathlib import Path
 
 from iohub import open_ome_zarr
 
-# Channels to prefix with 'raw'. Extend per dataset.
-RAW_CHANNELS = [
-    "mCherry EX561 EM600-37",
-    "GFP EX488 EM525-45",
-    "Cy5 EX639 EM698-70",
-]
-
-# Exact renames.
+# fnmatch patterns -> canonical name. First match wins, in declaration order.
 RENAMES = {
     "BF - Oblique": "BF",
+    "Phase3D*": "Phase3D",
+    "nuclei": "nuclei_prediction",
+    "membrane": "membrane_prediction",
 }
 
-dataset = os.environ.get("DATASET")
-if dataset is None:
-    sys.exit("DATASET environment variable is not set")
+# Names that are already canonical and must be left untouched.
+PASSTHROUGH = [
+    "BF",
+    "Phase3D",
+    "nuclei_prediction",
+    "membrane_prediction",
+]
 
-dataset_path = Path(f"{dataset}.zarr")
-if not dataset_path.exists():
-    raise FileNotFoundError(f"Dataset {dataset_path} does not exist.")
+# Prefix applied to every channel matching neither RENAMES nor PASSTHROUGH
+# (the raw detector channels). Set to None to leave them alone.
+UNMATCHED_PREFIX = "raw "
 
-with open_ome_zarr(dataset_path, mode="a") as ds:
-    print(f"channels before: {ds.channel_names}")
 
-    already_prefixed = [c for c in ds.channel_names if c.startswith("raw ")]
-    if already_prefixed:
-        sys.exit(
-            f"Channels already carry a 'raw ' prefix ({already_prefixed}) — "
-            "this store looks renamed. Refusing to double-prefix."
-        )
+def canonical_name(channel_name: str) -> str | None:
+    """Return the canonical name for a channel, or None to leave it unchanged.
 
-    for pos_name, pos in ds.positions():
-        print(f"Processing position: {pos_name}")
-        for channel_name in ds.channel_names:
-            if channel_name in RENAMES:
-                new_name = RENAMES[channel_name]
-            elif channel_name in RAW_CHANNELS:
-                new_name = f"raw {channel_name}"
-            else:
-                continue
-            print(f"  '{channel_name}' -> '{new_name}'")
-            pos.rename_channel(channel_name, new_name)
+    Parameters
+    ----------
+    channel_name : str
+        The channel name as it appears in the assembled store.
 
-with open_ome_zarr(dataset_path, mode="r") as ds:
-    print(f"channels after: {ds.channel_names}")
+    Returns
+    -------
+    str or None
+        The new name, or None if the channel is already canonical.
+    """
+    for pattern, new_name in RENAMES.items():
+        if fnmatch(channel_name, pattern):
+            return None if new_name == channel_name else new_name
+    if channel_name in PASSTHROUGH:
+        return None
+    if UNMATCHED_PREFIX and not channel_name.startswith(UNMATCHED_PREFIX):
+        return f"{UNMATCHED_PREFIX}{channel_name}"
+    return None
+
+
+def main() -> None:
+    """Rename every channel of the assembled plate named by ``$DATASET``."""
+    dataset = os.environ.get("DATASET")
+    if dataset is None:
+        sys.exit("DATASET environment variable is not set")
+
+    dataset_path = Path(f"{dataset}.zarr")
+    if not dataset_path.exists():
+        raise FileNotFoundError(f"Dataset {dataset_path} does not exist.")
+
+    with open_ome_zarr(dataset_path, mode="a") as ds:
+        print(f"channels before: {ds.channel_names}")
+        plan = {c: canonical_name(c) for c in ds.channel_names}
+        plan = {old: new for old, new in plan.items() if new is not None}
+
+        if not plan:
+            print("all channels already canonical -- nothing to do")
+            return
+        for old, new in plan.items():
+            print(f"  '{old}' -> '{new}'")
+
+        for pos_name, pos in ds.positions():
+            print(f"Processing position: {pos_name}")
+            for old, new in plan.items():
+                pos.rename_channel(old, new)
+
+    with open_ome_zarr(dataset_path, mode="r") as ds:
+        print(f"channels after: {ds.channel_names}")
+
+
+if __name__ == "__main__":
+    main()

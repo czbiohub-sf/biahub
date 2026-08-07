@@ -17,7 +17,7 @@ cat <WORKDIR>/.command.sh       # the exact biahub command, -i / -o / -p
 cat <WORKDIR>/.exitcode
 ```
 
-The real traceback is **not** in the work dir — see `caveats.md` §8. It is in
+The real traceback is **not** in the work dir — see `caveats.md` §9. It is in
 `<OUTPUT>/nextflow/slurm_output/<step>/*_<jobid>.out`.
 
 ## Decision table
