@@ -305,6 +305,25 @@ def monitor() -> Callable:
     return decorator
 
 
+def resume() -> Callable:
+    def decorator(f: Callable) -> Callable:
+        return click.option(
+            "--resume/--no-resume",
+            "resume",
+            default=False,
+            show_default=True,
+            help=(
+                "Skip the (time, channel) units this position already finished in an "
+                "earlier attempt instead of recomputing the whole position. For retrying "
+                "a run that was interrupted, e.g. by Slurm preemption. A finished unit is "
+                "skipped without re-deriving it, so pass --no-resume (or use a fresh "
+                "output store) when the settings changed."
+            ),
+        )(f)
+
+    return decorator
+
+
 def num_processes() -> Callable:
     def decorator(f: Callable) -> Callable:
         return click.option(
