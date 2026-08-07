@@ -1,0 +1,221 @@
+---
+name: reconstruct-with-nextflow
+description: >-
+  Run a mantis-v2 microscope dataset through the biahub Nextflow reconstruction
+  pipeline (nextflow/mantis-v2.nf: flat-field → deskew → reconstruct →
+  virtual-stain → assemble → track) on the Bruno HPC cluster. Locates the raw
+  acquisition under /hpc/instruments/cm.mantis, picks the output project
+  directory, scaffolds configs, launches the run in a tmux session in the
+  foreground so it can be watched, recovers from Lustre/torn-shard I/O errors,
+  and reports a summary. Use when asked to "reconstruct", "run the pipeline
+  on", or "process" a named mantis-v2 dataset.
+---
+
+# Reconstruct a mantis-v2 dataset with Nextflow
+
+Invocation: `/reconstruct-with-nextflow dataset <DATASET_NAME>`, or any request to
+run/reconstruct/process a mantis-v2 dataset by name.
+
+**Never launch before the user approves a plan.** Steps 1–5 are read-only
+investigation; step 6 presents the plan; nothing is written to disk until the
+user says go.
+
+## 0. Load context
+
+Read `references/datasets.md` first — it holds the directory conventions, the
+dataset-family rules, and the naming convention. Read `references/caveats.md`
+before writing any config. The other references are read on demand:
+`references/recovery.md` when a run fails, `references/monitoring.md` when the
+run is live.
+
+## 1. Confirm you are on Bruno
+
+`hostname` — Bruno nodes are `login-*`, `gpu-sm*`, `cpu-*`, `preempted-*`. If the
+shell is not on Bruno, stop and tell the user to connect; do not attempt to ssh
+somewhere on their behalf.
+
+Nextflow's head process is lightweight (it only submits SLURM jobs), so a **login
+node is the right place for it**. Reserve a compute node only if the user asks,
+or if a login-node policy kills long-lived processes — see
+`references/monitoring.md`.
+
+## 2. Find the raw acquisition
+
+Raw mantis-v2 data lives in `/hpc/instruments/cm.mantis/<DATASET_NAME>/`. That
+directory holds one or more `*.ome.zarr` stores plus `config.yaml`, `logs/`,
+`pos_list.pos`.
+
+```bash
+ls -1 /hpc/instruments/cm.mantis/ | grep -i <DATASET_NAME>
+ls -1 /hpc/instruments/cm.mantis/<DATASET_NAME>/
+```
+
+The store is normally `<DATASET_NAME>_1.ome.zarr` (Micro-Manager appends an
+acquisition index). **The convention is `YYYY_MM_DD_<description>` and the store
+name usually matches the directory name — when it does not, say so explicitly
+and ask which store to use before continuing.** This is common: e.g. directory
+`2026_08_04_smart_fov_selection_test` contains
+`2026_08_04_test_fov_selection_*.ome.zarr`, and multiple numbered/`_epi`/
+`_prescan`/`_fov_debug` variants sit side by side. Never silently pick one.
+
+Confirm the store is real, not an aborted acquisition:
+
+```bash
+du -sh /hpc/instruments/cm.mantis/<DATASET>/<STORE>.ome.zarr
+```
+
+`/hpc/instruments` is **read-only for this workflow**. Never write into it.
+
+## 3. Determine the layout — HCS plate or flat positions
+
+Read the store's root `zarr.json`:
+
+- `attributes.ome.plate` present → a real HCS plate. Feed it to the pipeline
+  directly.
+- Positions named `{R}Pos{C}` at the root and `bioformats2raw.layout: 3` → a flat
+  acquisition with **no HCS plate**. This is the usual case for
+  neuromast/zebrafish/dynatrack. It must be converted into a plate at
+  `<OUTPUT>/0-convert/<DATASET>.zarr` before the pipeline can fan out over
+  positions. See `references/caveats.md` §1.
+
+## 4. Choose the output project directory
+
+Apply the family rule in `references/datasets.md`, then **confirm it in the
+plan** — it is a proposal, not a decision:
+
+| dataset family | output root |
+|---|---|
+| zebrafish / neuromast / dynatrack | `/hpc/projects/tlg2_mantis/<DATASET>` |
+| A549 / cell-line / organelle | `/hpc/projects/intracellular_dashboard/organelle_dynamics/<DATASET>` |
+
+If the target directory already exists with step outputs in it, that is a
+**resume or a rerun** — say which you think it is and let the user decide before
+touching anything. The established convention for a fresh reprocess of the same
+data is a `<DATASET>_rerun` sibling.
+
+## 5. Find a reference run to copy configs from
+
+Configs are per-dataset and drift with the schema. Prefer copying from the most
+recent **successful** run of the same family and diffing against the shipped
+template, rather than using the template blind:
+
+```bash
+ls -dt /hpc/projects/tlg2_mantis/*/configs                                  # zebrafish
+ls -dt /hpc/projects/intracellular_dashboard/organelle_dynamics/*/configs   # A549
+```
+
+Templates for both families are in `templates/configs/{zebrafish,a549}/`. Every
+value that must be checked per dataset is called out in `references/caveats.md`
+§3 — pixel size, scan step, BF channel name, VS checkpoint, and the tracking
+schema.
+
+## 6. Present the plan
+
+Do not run anything yet. Show the user, concretely:
+
+1. Resolved input store, its size, position count, channel names, and
+   `(T, C, Z, Y, X)` shape.
+2. Whether a `0-convert` plate build is needed.
+3. Output project directory, and the full step layout that will be created.
+4. Which reference run the configs come from, and every value you changed.
+5. Pipeline steps that will run: flat-field → deskew → reconstruct →
+   virtual-stain → assemble → track (the full `mantis-v2.nf` workflow).
+   **For neuromast/zebrafish, say that the deliverable is `5-assemble` and that
+   `4-track` is a discarded by-product** — tracking is an A549 step, but
+   `mantis-v2.nf` cannot skip it today. See `references/caveats.md` §4.
+6. Known caveats that apply to this dataset (from `references/caveats.md`).
+7. Rough wall-time and whether `-resume` is on.
+
+Get explicit approval.
+
+## 7. Scaffold the output directory
+
+```bash
+mkdir -p <OUTPUT>/configs <OUTPUT>/nextflow
+cp <REFERENCE>/configs/*.yml <OUTPUT>/configs/
+```
+
+Then edit the copies for this dataset. Copy `templates/run_mantis_v2.sh` to
+`<OUTPUT>/run_mantis_v2.sh`, fill in `DATASET`, `DATA_DIR`, `PROJECT_DIR`,
+`BIAHUB_PROJECT`, and `chmod +x` it. Keep the script in the output directory —
+it is the run's provenance record.
+
+The pipeline itself creates `0-flatfield/ 1-deskew/ 2-reconstruct/
+3-virtual-stain/ 4-track/ 5-assemble/` and `nextflow/{work,slurm_output,
+report.html,timeline.html,trace.txt,dag.html}` under `--output`.
+
+If a plate build is needed, do it now via the **build-hcs-plate** agent (see
+`references/caveats.md` §1), and verify the plate opens with iohub before
+launching.
+
+## 8. Launch in tmux, in the foreground
+
+The user watches the run, so it must be attachable and in the foreground of its
+pane. Create a detached session, send the command, and tell the user how to
+attach — do **not** attach yourself.
+
+```bash
+SESSION="nf_<DATASET>"
+tmux new-session -d -s "$SESSION" -c "<OUTPUT>"
+tmux send-keys -t "$SESSION" "bash ./run_mantis_v2.sh 2>&1 | tee -a nextflow/run_$(date +%Y%m%dT%H%M%S).log" Enter
+```
+
+Tell the user: `tmux attach -t nf_<DATASET>` to watch, `Ctrl-b d` to detach.
+
+**Do not edit the biahub checkout while a run is live** — it changes Nextflow
+task hashes and invalidates `-resume`.
+
+Before the first launch on a fresh biahub branch, run `uv lock && uv sync` once;
+each per-position task is a `uv run --project`, and without a synced lockfile
+they all try to resolve dependencies concurrently.
+
+## 9. Monitor
+
+Follow `references/monitoring.md`. In short: poll `squeue -u $USER`, the tail of
+`<OUTPUT>/.nextflow.log`, and the per-step SLURM logs at
+`<OUTPUT>/nextflow/slurm_output/<step>/*_<jobid>.out`. Poll at a few minutes'
+interval, not seconds — these runs take hours to days.
+
+Notify the user via Slack on: pipeline completion, a terminating error, and a
+step that has retried past a reasonable threshold. Use
+`templates/notify.sh`, which posts to `$BIAHUB_SLACK_WEBHOOK` and falls back to
+printing in the terminal when the variable is unset.
+
+## 10. Handle errors
+
+When a task fails, classify before acting — `references/recovery.md` has the
+decision table. The one-line version:
+
+- **Exit 130–145** (preemption, timeout, OOM): Nextflow's `errorStrategy` already
+  retries up to 5 times. Do nothing unless retries are exhausted.
+- **Lustre EIO / `RuntimeError: the checksum is invalid` / torn shard**: a killed
+  task left a half-written shard, and it now fails identically on every retry and
+  every `-resume`. This needs the **job-io-error-repair** agent — it deletes only
+  the corrupt chunk data (never the metadata scaffold) and sets up a clean
+  `-resume`. Do not delete zarr data by hand.
+- **Exit 1/2 with a Python traceback**: a real bug or a bad config. Nextflow
+  terminates on purpose. Read the traceback, fix, relaunch with `-resume`.
+
+Restarts are always `bash ./run_mantis_v2.sh` — the script already passes
+`-resume`.
+
+## 11. Wrap up
+
+When the run finishes:
+
+1. **Normalize channel names on the assembled plate** —
+   `templates/rename_channels.py`, run against
+   `<OUTPUT>/5-assemble/<DATASET>.zarr`. This applies the biahub#291 convention
+   and is idempotent, so it is safe to re-run. See `references/caveats.md` §2 —
+   and check first whether a `rename-channels` CLI has landed on main, which
+   would make the manual step obsolete.
+2. Verify the assembled store opens with iohub and report its shape, channels,
+   and size on disk. For neuromast/zebrafish this is the deliverable; report
+   `4-track` only as a discarded by-product.
+3. Report the Nextflow summary: per-step task counts, failures, retries, and
+   total wall time, from `<OUTPUT>/nextflow/trace.txt`. Point the user at
+   `<OUTPUT>/nextflow/report.html` and `timeline.html`.
+4. Send a final Slack message.
+5. Flag anything that needs a human eye: positions that only passed after many
+   retries, steps that ran far longer than the reference run, an assembled
+   channel count that does not match expectations.
