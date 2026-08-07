@@ -363,7 +363,7 @@ requires-dist = [
     { name = "dask", extras = ["array"] },
     { name = "humanize" },
     { name = "imageio-ffmpeg" },
-    { name = "iohub", git = "https://github.com/czbiohub-sf/iohub?rev=c4984be5ea39e601d30687cd9b60f630e021eff1" },
+    { name = "iohub", git = "https://github.com/czbiohub-sf/iohub?rev=f3c40a4abfda790cf915fd9ccb04ca98fbf15925" },
     { name = "largestinteriorrectangle" },
     { name = "llvmlite", specifier = ">=0.41.0" },
     { name = "markdown" },
@@ -1786,8 +1786,8 @@ wheels = [
 
 [[package]]
 name = "iohub"
-version = "0.3.11.dev21+c4984be"
-source = { git = "https://github.com/czbiohub-sf/iohub?rev=c4984be5ea39e601d30687cd9b60f630e021eff1#c4984be5ea39e601d30687cd9b60f630e021eff1" }
+version = "0.3.11.dev10+f3c40a4"
+source = { git = "https://github.com/czbiohub-sf/iohub?rev=f3c40a4abfda790cf915fd9ccb04ca98fbf15925#f3c40a4abfda790cf915fd9ccb04ca98fbf15925" }
 dependencies = [
     { name = "blosc2" },
     { name = "dask", extra = ["array"] },
@@ -5773,7 +5773,7 @@ dependencies = [
 
 [[package]]
 name = "viscy-transforms"
-version = "0.1.0a0"
+version = "0.0.0.post215.dev0+4b62365"
 source = { git = "https://github.com/mehta-lab/VisCy?subdirectory=packages%2Fviscy-transforms&rev=4b62365c0df25929bffc7f01b3bb2d1c11d69cce#4b62365c0df25929bffc7f01b3bb2d1c11d69cce" }
 dependencies = [
     { name = "kornia" },

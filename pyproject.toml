@@ -85,20 +85,18 @@ index-strategy = "unsafe-best-match"
 # Pin cytoland to the commit from VisCy PR #465 (non-square TTA and helpers).
 # Revert to the PyPI release once that PR is merged and published.
 cytoland = { git = "https://github.com/mehta-lab/VisCy", subdirectory = "applications/cytoland", rev = "4b62365c0df25929bffc7f01b3bb2d1c11d69cce" }
-# Pin iohub to czbiohub-sf/iohub#dev/biahub-pipeline, a short-lived branch that
-# combines the two iohub features this pipeline needs, each of which is up for
-# review on its own branch:
-#   feat/interrupt-safe-writes          replaces a shard torn by a preempted job
-#     instead of reading it back (the recurring "checksum is invalid" abort) and
-#     adds the per-unit resume this branch drives via --resume. Note that the
-#     resume records now sit BESIDE the store, in a `.iohub-progress/` sibling
-#     of the output zarr, rather than inside the array directory — so copying
-#     or deleting a store no longer carries or clears its progress state.
-#   feat/filter-copied-position-metadata  adds create_empty_plate's
-#     metadata_keys, so a step copies only the provenance zattrs it wants
-#     instead of every non-OME key (see PROVENANCE_METADATA_KEYS).
-# Repoint at each feature branch as it merges, then at the PyPI release.
-iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "c4984be5ea39e601d30687cd9b60f630e021eff1" }
+# Pin iohub to czbiohub-sf/iohub main, which now carries the two features this
+# pipeline needs — both merged, but after the v0.3.10 release:
+#   #455  replaces a shard torn by a preempted job instead of reading it back
+#     (the recurring "checksum is invalid" abort) and adds the per-unit resume
+#     this branch drives via --resume. Note the resume records sit BESIDE the
+#     store, in a `.iohub-progress/` sibling of the output zarr, so copying or
+#     deleting a store no longer carries or clears its progress state.
+#   #454  adds create_empty_plate's metadata_keys, so a step copies only the
+#     provenance zattrs it wants instead of every non-OME key (see
+#     PROVENANCE_METADATA_KEYS).
+# Drop this source and raise the iohub floor once a release includes both.
+iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "f3c40a4abfda790cf915fd9ccb04ca98fbf15925" }
 
 [tool.hatch.metadata]
 allow-direct-references = true
