@@ -173,11 +173,37 @@ def write_qc_report(
         summary.update(extra)
 
     (output_dir / "qc_summary.json").write_text(json.dumps(summary, indent=2))
+    # Same content as the json, as a one-row csv, so a run can be pulled straight into a
+    # spreadsheet or concatenated across datasets without parsing nested json.
+    write_summary_csv(summary, output_dir / "qc_summary.csv")
+
     click.echo(
         f"QC: median={summary['median_score']:.3f} MAD={summary['mad']:.3f} "
         f"adaptive line={summary['adaptive_line']:.3f}\n"
         f"    {summary['n_flagged']} of {summary['n_timepoints']} timepoints flagged"
         + (f" -> {summary['flagged_timepoints']}" if summary["n_flagged"] else "")
-        + f"\n    wrote qc_flags.csv and qc_summary.json in {output_dir}"
+        + f"\n    wrote qc_flags.csv, qc_summary.json and qc_summary.csv in {output_dir}"
     )
     return qc
+
+
+def write_summary_csv(summary: dict, path: Path) -> pd.DataFrame:
+    """Write the QC summary dict as a one-row csv.
+
+    Nested values are flattened with an underscore (`smoothness_max_abs_dz`) and list values
+    are joined with semicolons rather than commas -- a comma-joined list of flagged
+    timepoints inside a csv field is a reliable way to produce a file that reads back with
+    the wrong number of columns in anything that does not honour quoting.
+    """
+    flat: dict = {}
+    for key, value in summary.items():
+        if isinstance(value, dict):
+            for sub, sub_value in value.items():
+                flat[f"{key}_{sub}"] = sub_value
+        elif isinstance(value, (list, tuple)):
+            flat[key] = ";".join(str(v) for v in value)
+        else:
+            flat[key] = value
+    df = pd.DataFrame([flat])
+    df.to_csv(path, index=False)
+    return df
