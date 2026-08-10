@@ -17,7 +17,7 @@ Bio-image analysis hub supporting high-throughput data reconstruction on HPC clu
 
 <!-- --8<-- [end:intro] -->
 
-<img src="docs/figures/dynacell_fig2.png" alt="FOV reconstruction" width="50%">
+<img src="docs/figures/dynacell_fig2.webp" alt="FOV reconstruction" width="80%">
 
 <!-- --8<-- [start:body] -->
 ## Install
