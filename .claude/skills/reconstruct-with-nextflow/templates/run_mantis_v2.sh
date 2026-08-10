@@ -19,20 +19,35 @@ module load cuda/12.8.0_570.86.10
 set -euo pipefail
 
 # --- fill in ---------------------------------------------------------------
+# DATASET is the output stem: every step writes <DATASET>.zarr, so use the clean
+# YYYY_MM_DD_<description> name even when the raw store is spelled differently.
 DATASET=""                 # e.g. 2026_07_14_A549_MAP4_ZIKV
 RAW_STORE=""               # basename of the raw store, e.g. ${DATASET}_1.ome.zarr
 PROJECT_DIR=""             # e.g. /hpc/projects/intracellular_dashboard/organelle_dynamics
 BIAHUB_PROJECT=""          # e.g. /hpc/mydata/taylla.theodoro/repo/biahub
-# Set to the 0-convert plate for acquisitions with no HCS plate (neuromast /
-# zebrafish / dynatrack); leave empty to read the raw store directly.
+
+# Output directory. Defaults to ${PROJECT_DIR}/${DATASET}; set it explicitly for
+# a sibling run — the convention for reprocessing the same data is
+# "${PROJECT_DIR}/${DATASET}_rerun", and "_smoketest" for a short trial store.
+OUTPUT_DIR=""
+
+# The 0-convert plate, for acquisitions with no HCS plate (neuromast /
+# zebrafish / dynatrack). Leave empty to read the raw store directly. Resolved
+# after OUTPUT_DIR below, so it may reference it.
 CONVERTED_ZARR=""          # e.g. ${OUTPUT_DIR}/0-convert/${DATASET}.zarr
 # ---------------------------------------------------------------------------
 
 DATA_DIR="/hpc/instruments/cm.mantis"
-OUTPUT_DIR="${PROJECT_DIR}/${DATASET}"
+OUTPUT_DIR="${OUTPUT_DIR:-${PROJECT_DIR}/${DATASET}}"
 CONFIGS="${OUTPUT_DIR}/configs"
 PIPELINE="${BIAHUB_PROJECT}/nextflow/mantis-v2.nf"
 NF_CONFIG="${BIAHUB_PROJECT}/nextflow/nextflow.config"
+
+# Default the converted plate to the conventional location if it exists there.
+if [[ -z "${CONVERTED_ZARR}" && -d "${OUTPUT_DIR}/0-convert/${DATASET}.zarr" ]]; then
+    CONVERTED_ZARR="${OUTPUT_DIR}/0-convert/${DATASET}.zarr"
+    echo "using 0-convert plate: ${CONVERTED_ZARR}"
+fi
 
 INPUT_ZARR="${CONVERTED_ZARR:-${DATA_DIR}/${DATASET}/${RAW_STORE}}"
 

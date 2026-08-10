@@ -246,7 +246,68 @@ the `clusterOptions` override wins over Nextflow's own `-o`. Read the
 ## 10. Do not edit the biahub checkout during a live run
 
 Editing files in `$BIAHUB_PROJECT` changes Nextflow task hashes and invalidates
-`-resume`, so a restart recomputes everything. Sync the branch and run
-`uv lock && uv sync` *before* launching, then leave it alone. Each per-position
-task is a `uv run --project`, so an unsynced lockfile also means every task
-resolves dependencies concurrently at startup.
+`-resume`, so a restart recomputes everything. Get the branch right *before*
+launching, then leave it alone.
+
+## 11. NEVER run `uv sync` on the biahub checkout — verify instead
+
+**This is the one instruction in this skill that has caused damage.** An earlier
+version said to run `uv lock && uv sync` before launching, on the theory that
+otherwise 30 concurrent tasks would each resolve dependencies. Doing that broke a
+working environment.
+
+**Why.** The `.venv` on this checkout carries **27 packages that are not in
+`uv.lock`** — installed out of band, and load-bearing: `cupy-cuda12x`,
+`tracksdata`, `stitch`, `dexp`, `dask-cuda`, `dask-image`, `distributed`, `ilpy`,
+`pyscipopt`, `polars`, `pims`, and their closure. `uv sync` treats anything absent
+from the lockfile as extraneous and removes it. That is correct uv behaviour and
+exactly the problem: **every** variant prunes them — `uv sync` would remove 33,
+`uv sync --all-extras` still removes 27. Confirm before believing otherwise:
+
+```bash
+uv sync --all-extras --dry-run 2>&1 | grep -cE "^ *- "   # 27 = do not sync
+```
+
+It also fails *partway* on Lustre — `failed to remove directory ... __pycache__:
+Directory not empty (os error 39)`, and a half-completed uninstall can leave a
+package whose `dist-info` lost its `RECORD`, which then shadows the real module.
+A broken `cupy` cascades: `iohub`, `cytoland` and `ultrack` all fail to import
+with `AttributeError: module 'cupy' has no attribute 'ndarray'`.
+
+**Do this instead — verify, never mutate:**
+
+```bash
+uv lock --check                     # lockfile current? (no error = yes)
+time uv run --project <BIAHUB> biahub nf --help   # ~0.5s = env materialized
+```
+
+A fast `uv run` means there is no resolution work to do and nothing to sync. If
+the env genuinely needs provisioning, that is a deliberate maintenance task with
+the user in the loop — not a pre-launch step. Never run a bare `uv sync` here, and
+if one fails with Lustre `ENOTEMPTY`, **stop**: the failure mode is a broken env,
+not a no-op.
+
+If it is already broken, the repair is to delete the corrupt package directory
+plus its `dist-info` so uv can lay it down fresh, then `uv pip install` the exact
+pins (`uv pip install` does *not* prune). Recovering the out-of-band set means
+reinstalling `stitch` and `tracksdata`, whose dependency closure pulls most of the
+other 25 back.
+
+## 12. Per-task `uv run` mutates the shared venv
+
+Every `uv run --project ...` invocation reinstalls one package — measured, 3 runs
+in a row, never converging:
+
+```
+Uninstalled 1 package in 54ms / Installed 1 package in 232ms
+```
+
+With `maxForks = 30`, that is up to 30 concurrent processes writing the same
+`site-packages`. `virtual_stain.nf` compounds it by using a different environment
+spec (`--extra stain`) from every other step's plain `biahub_cmd()`, so successive
+tasks ask uv for different environments against one shared venv.
+
+`uv run --no-sync` eliminates the mutation entirely (verified: no churn across
+repeated runs). The pipeline does not pass it today — tracked in biahub#307. Until
+that lands, expect this churn in a live run; it has not been observed to break a
+run, but it is the reason not to add any *further* environment mutation on top.

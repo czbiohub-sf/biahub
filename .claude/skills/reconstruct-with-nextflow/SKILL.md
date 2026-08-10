@@ -165,9 +165,17 @@ Tell the user: `tmux attach -t nf_<DATASET>` to watch, `Ctrl-b d` to detach.
 **Do not edit the biahub checkout while a run is live** — it changes Nextflow
 task hashes and invalidates `-resume`.
 
-Before the first launch on a fresh biahub branch, run `uv lock && uv sync` once;
-each per-position task is a `uv run --project`, and without a synced lockfile
-they all try to resolve dependencies concurrently.
+**Never run `uv sync` on the biahub checkout.** 27 packages in its `.venv` are not
+in `uv.lock`, and every `uv sync` variant deletes them — this has already broken a
+working environment once. Verify instead, and launch if both pass:
+
+```bash
+uv lock --check                                    # no error = lockfile current
+time uv run --project <BIAHUB> biahub nf --help    # ~0.5s = env materialized
+```
+
+If either looks wrong, stop and raise it with the user rather than syncing. Full
+detail and the repair procedure are in `references/caveats.md` §11.
 
 ## 9. Monitor
 
