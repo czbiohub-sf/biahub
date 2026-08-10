@@ -520,7 +520,7 @@ def select_flagged(
     score_col: ArrayLike,
     label: str,
     max_timepoints: int | None = None,
-) -> list[int]:
+) -> tuple[list[int], dict]:
     """Timepoints to act on, from the run's OWN adaptive median-2*MAD line.
 
     Shared by both fallback passes so they cannot drift apart in how they choose work, and
@@ -531,6 +531,10 @@ def select_flagged(
     i.e. where 0.75 sat at the median -- it fired 556 times and drove the job into its 24 h
     walltime. The adaptive line rescales with each run, so a fallback stays a fallback.
 
+    Returns (flagged timepoints, run statistics). The statistics are returned rather than
+    recomputed by callers so the number written to a log is provably the same one the
+    selection used.
+
     Returns the worst `max_timepoints` when a cap is set, and says which ones it dropped.
     """
     score_col = np.asarray(score_col, dtype=float)
@@ -539,11 +543,11 @@ def select_flagged(
         flags = flag_timepoints(score_col)
     except ValueError:
         click.echo(f"{label}: no finite scores to flag against; skipping.")
-        return []
+        return [], {}
     flagged = [int(t) for t in flags.loc[flags["flagged"], "t"]]
     if not flagged:
         click.echo(f"{label}: nothing flagged, nothing to do.")
-        return []
+        return [], dict(flags.attrs)
 
     click.echo(
         f"{label}: {len(flagged)} of {n_t} timepoints flagged "
@@ -559,7 +563,7 @@ def select_flagged(
             f"  capped at max_timepoints={max_timepoints}; taking the worst {len(flagged)} "
             f"and LEAVING {len(dropped)} untouched: {dropped}"
         )
-    return flagged
+    return flagged, dict(flags.attrs)
 
 
 def sweep_flagged_timepoints(
@@ -593,7 +597,7 @@ def sweep_flagged_timepoints(
     """
     settings = beads_match_settings.sweep_fallback_settings
     score_col = np.asarray(scores["quality_score"].to_numpy(dtype=float)).copy()
-    flagged = select_flagged(score_col, "Sweep fallback", settings.max_timepoints)
+    flagged, _stats = select_flagged(score_col, "Sweep fallback", settings.max_timepoints)
     if not flagged:
         return transforms, scores
 
@@ -693,7 +697,7 @@ def repair_flagged_timepoints(
     score_col = scores["quality_score"].to_numpy(dtype=float).copy()
     n_t = len(score_col)
 
-    flagged = select_flagged(score_col, "Repair pass", settings.max_timepoints)
+    flagged, stats = select_flagged(score_col, "Repair pass", settings.max_timepoints)
     if not flagged:
         return transforms, scores
 
@@ -852,9 +856,9 @@ def repair_flagged_timepoints(
     (output_transforms_path.parent / "repair_log.json").write_text(
         json.dumps(
             {
-                "adaptive_line": flags.attrs["adaptive_line"],
-                "median": flags.attrs["median"],
-                "mad": flags.attrs["mad"],
+                "adaptive_line": stats.get("adaptive_line"),
+                "median": stats.get("median"),
+                "mad": stats.get("mad"),
                 "n_flagged": len(log),
                 "n_improved": improved,
                 "repairs": log,
