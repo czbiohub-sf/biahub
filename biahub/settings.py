@@ -248,19 +248,28 @@ class SweepFallbackSettings(MyBaseModel):
     ----------
     mode : Literal["off", "on_low_score"]
         "on_low_score" runs the sweep when every other arm came in below score_threshold.
+    mode : Literal["off", "on_flagged", "on_low_score"]
+        "on_flagged" is the recommended setting: the sweep runs as a post-pass after the
+        repair pass, on the timepoints the run's OWN adaptive median-2*MAD line flags.
+
+        "on_low_score" is the legacy behaviour -- the sweep runs inside estimate(), gated on
+        the fixed score_threshold below. It is kept for reproducing earlier runs and is NOT
+        recommended, because a fixed gate does not transfer between datasets. Measured with
+        the gate at 0.75: on a run whose median was 0.870 it fired 0 times out of 144, and on
+        a run whose median was 0.753 -- where 0.75 sits at the median -- it fired 556 times,
+        stopped being a fallback, and pushed the job past its 24 h walltime.
+
+        The reason the adaptive gate has to live in a post-pass is that inside estimate() the
+        run-wide distribution does not exist yet: in independent mode the other timepoints are
+        still being computed in other SLURM jobs.
     score_threshold : float
-        The gate, and the whole cost/benefit dial. Calibrated against the measured score
-        distribution of two real runs (144 and 240 timepoints, medians 0.870 and 0.875):
-
-            gate    fires on
-            0.70    0 of 144, 2 of 240     -- dead code
-            0.75    5 of 144, 5 of 240     <- default: the tail, ~2-4%
-            0.80    26 of 144, 29 of 240   -- ~15%, hours of extra compute
-
-        0.75 is where the tail actually is; the timepoints the sweep was measured to rescue
-        scored 0.60-0.78. Note this is far above qc_settings.score_threshold (0.40), which
-        marks an unusable transform rather than a merely weak one -- gating on 0.40 would
-        never fire on a healthy run.
+        Only used by the legacy "on_low_score" mode. Calibrated against two runs with medians
+        0.870 and 0.875: 0.70 fired on 0 and 2 timepoints (dead code), 0.75 on 5 and 5 (the
+        tail), 0.80 on 26 and 29 (~15%, hours of compute). Ignored by "on_flagged", which
+        derives its own line per dataset.
+    max_timepoints : int | None
+        Cap on how many flagged timepoints to sweep, since each costs a full grid search.
+        When the cap bites, the worst are swept and the skipped ones are logged by name.
     grid : dict[str, list] | list[dict[str, list]] | None
         Parameter grid; None uses DEFAULT_SWEEP_GRID in biahub.registration.beads. A list of
         dicts is searched as the union of their cross products, which is how the hungarian
@@ -269,8 +278,9 @@ class SweepFallbackSettings(MyBaseModel):
         setter table, so a misspelled key raises instead of silently reading as a flat axis.
     """
 
-    mode: Literal["off", "on_low_score"] = "off"
+    mode: Literal["off", "on_flagged", "on_low_score"] = "off"
     score_threshold: float = 0.75
+    max_timepoints: int | None = 25
     grid: dict[str, list] | list[dict[str, list]] | None = None
 
 
@@ -314,6 +324,23 @@ class RepairPassSettings(MyBaseModel):
     mode: Literal["off", "on_flagged"] = "off"
     try_config_seed: bool = True
     max_timepoints: int | None = 25
+    # Seed a flagged timepoint from the run's own consensus geometry -- the element-wise
+    # median transform over the timepoints that scored well -- as well as from its
+    # neighbours. This repairs rather than discards a timepoint whose fit collapsed.
+    #
+    # It is what makes the geometry check actionable instead of merely diagnostic. Measured on
+    # one dataset, distance-from-consensus separated failed from good timepoints with AUC
+    # 1.000, and 15 failures were reflections (negative determinant) -- fits that collapsed
+    # outright. Those cannot be rescued by re-tuning matching parameters, but the run's own
+    # agreed geometry is a sound starting point for them.
+    use_consensus_seed: bool = True
+    # Only good timepoints define the consensus; including failures would contaminate the
+    # reference used to detect them.
+    consensus_score_threshold: float = 0.75
+    # Frobenius distance from the consensus linear part above which a timepoint's own linear
+    # part is treated as broken, so the consensus seeds are tried first. Measured: good
+    # timepoints sit at 0.021 and failures at 0.72, so anything in between separates them.
+    consensus_linear_tolerance: float = 0.25
 
 
 class BeadsMatchSettings(MyBaseModel):

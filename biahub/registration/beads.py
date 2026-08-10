@@ -464,6 +464,189 @@ def score_transform(
     )
 
 
+def consensus_geometry(
+    transforms: list,
+    scores: ArrayLike,
+    score_threshold: float = 0.75,
+) -> np.ndarray | None:
+    """Element-wise median transform over the timepoints that scored well.
+
+    The run's own consensus geometry, used as a repair seed. Built ONLY from good timepoints:
+    including the failures would contaminate the reference used to detect and fix them.
+
+    Why this is a good seed, and why its two halves are treated differently downstream:
+
+    The LINEAR part is optics -- rotation, scale, shear between the two arms. It is stable
+    across a timelapse and, on one instrument, across acquisitions. Measured on one dataset,
+    the linear parts of 345 good timepoints agree to a Frobenius distance of 0.021, while the
+    failures sit at 0.72; distance-from-consensus separated failed from good timepoints with
+    AUC 1.000, and 15 failures were outright reflections (negative determinant), i.e. fits
+    that collapsed rather than drifted.
+
+    The TRANSLATION is not comparable in that way, because it depends on the ROI selected on
+    the microscope. The same instrument with a slightly different ROI gives a translation
+    tens of voxels away while the linear part is unchanged -- measured 22 voxels in Y and 32
+    in X between one dataset's configured seed and its own consensus, at only 2.4 degrees of
+    rotation difference. So a timepoint's own translation is usually worth keeping even when
+    its linear part has to be replaced.
+
+    Returns None when too few timepoints score well enough to define a consensus.
+    """
+    scores = np.asarray(scores, dtype=float)
+    good = [
+        t
+        for t in range(min(len(transforms), len(scores)))
+        if transforms[t] is not None
+        and np.isfinite(scores[t])
+        and scores[t] >= score_threshold
+    ]
+    if len(good) < 5:
+        click.echo(
+            f"Consensus geometry: only {len(good)} timepoints score >= {score_threshold}; "
+            "not enough to define one."
+        )
+        return None
+    stack = np.asarray([np.asarray(transforms[t], dtype=float) for t in good])
+    med = np.median(stack, axis=0)
+    med[3] = [0.0, 0.0, 0.0, 1.0]
+    click.echo(
+        f"Consensus geometry from {len(good)} timepoints scoring >= {score_threshold} "
+        f"(det {np.linalg.det(med[:3, :3]):.4f})"
+    )
+    return med
+
+
+def select_flagged(
+    score_col: ArrayLike,
+    label: str,
+    max_timepoints: int | None = None,
+) -> list[int]:
+    """Timepoints to act on, from the run's OWN adaptive median-2*MAD line.
+
+    Shared by both fallback passes so they cannot drift apart in how they choose work, and
+    so neither carries a fixed score threshold.
+
+    A fixed gate cannot work across datasets. Measured with a hardcoded 0.75: on a run whose
+    median was 0.870 it fired 0 times out of 144, while on a run whose median was 0.753 --
+    i.e. where 0.75 sat at the median -- it fired 556 times and drove the job into its 24 h
+    walltime. The adaptive line rescales with each run, so a fallback stays a fallback.
+
+    Returns the worst `max_timepoints` when a cap is set, and says which ones it dropped.
+    """
+    score_col = np.asarray(score_col, dtype=float)
+    n_t = len(score_col)
+    try:
+        flags = flag_timepoints(score_col)
+    except ValueError:
+        click.echo(f"{label}: no finite scores to flag against; skipping.")
+        return []
+    flagged = [int(t) for t in flags.loc[flags["flagged"], "t"]]
+    if not flagged:
+        click.echo(f"{label}: nothing flagged, nothing to do.")
+        return []
+
+    click.echo(
+        f"{label}: {len(flagged)} of {n_t} timepoints flagged "
+        f"(adaptive line {flags.attrs['adaptive_line']:.3f}, median "
+        f"{flags.attrs['median']:.3f}) -> {flagged}"
+    )
+    if max_timepoints is not None and len(flagged) > max_timepoints:
+        # Announced, never silent: a capped pass that says nothing reads as full coverage.
+        worst = sorted(flagged, key=lambda t: np.nan_to_num(score_col[t], nan=-1.0))
+        dropped = sorted(worst[max_timepoints:])
+        flagged = sorted(worst[:max_timepoints])
+        click.echo(
+            f"  capped at max_timepoints={max_timepoints}; taking the worst {len(flagged)} "
+            f"and LEAVING {len(dropped)} untouched: {dropped}"
+        )
+    return flagged
+
+
+def sweep_flagged_timepoints(
+    mov_tzyx: da.Array,
+    ref_tzyx: da.Array,
+    transforms: list,
+    scores: "pd.DataFrame",
+    beads_match_settings: BeadsMatchSettings,
+    affine_transform_settings: AffineTransformSettings,
+    output_transforms_path: Path,
+    verbose: bool = False,
+) -> tuple[list, "pd.DataFrame"]:
+    """Re-tune the matching parameters for the timepoints still flagged after repair.
+
+    Runs LAST, and as a post-pass rather than inside estimate(), for two reasons that turned
+    out to be the same reason:
+
+    It has to be gated on the run's own score distribution, and inside estimate() that
+    distribution does not exist yet -- in independent mode the other timepoints are still
+    being computed in other SLURM jobs. Only a fixed threshold is available there, and a fixed
+    threshold does not survive contact with a second dataset (see select_flagged).
+
+    And it belongs after the repair pass because the two are not interchangeable. Reseeding
+    fixes a transform that is in the wrong basin; re-tuning parameters is measured to gain
+    +0.058 on timepoints scoring 0.72-0.78 but only +0.006 on those below 0.72. So repairing
+    first moves the hard failures out of the way, and whatever is still flagged afterwards is
+    by definition the mild tail -- exactly the population the sweep is good at. It also means
+    the sweep is not paying to re-tune timepoints the cheaper pass would have fixed anyway.
+
+    Accepted only on a strict score win, so this cannot make a run worse.
+    """
+    settings = beads_match_settings.sweep_fallback_settings
+    score_col = np.asarray(scores["quality_score"].to_numpy(dtype=float)).copy()
+    flagged = select_flagged(score_col, "Sweep fallback", settings.max_timepoints)
+    if not flagged:
+        return transforms, scores
+
+    log = []
+    for t in flagged:
+        before = score_col[t] if np.isfinite(score_col[t]) else -1.0
+        mov_t, ref_t = np.asarray(mov_tzyx[t]), np.asarray(ref_tzyx[t])
+        try:
+            _, swept_transform, swept_score = optimize_matches(
+                mov=mov_t,
+                ref=ref_t,
+                approx_transform=Transform(
+                    matrix=np.asarray(affine_transform_settings.approx_transform)
+                ),
+                beads_match_settings=beads_match_settings,
+                affine_transform_settings=affine_transform_settings,
+                param_grid=settings.grid,
+                verbose=verbose,
+            )
+        except Exception as e:  # noqa: BLE001
+            click.echo(f"  t={t} sweep failed: {type(e).__name__}: {e}")
+            continue
+
+        accepted = swept_transform is not None and swept_score > before
+        if accepted:
+            matrix = np.asarray(swept_transform.to_list(), dtype=float)
+            transforms[t] = matrix.tolist()
+            np.save(output_transforms_path / f"{t}.npy", matrix)
+            score_col[t] = swept_score
+            scores.loc[scores["t"] == t, "quality_score"] = swept_score
+            if "fell_back_to_seed" in scores:
+                scores.loc[scores["t"] == t, "fell_back_to_seed"] = False
+        click.echo(
+            f"  t={t:4d} {before:.3f} -> {swept_score if swept_transform is not None else before:.3f}"
+            + ("" if accepted else "  (kept original)")
+        )
+        log.append(
+            {
+                "t": t,
+                "before": float(before),
+                "after": float(swept_score) if swept_transform is not None else float(before),
+                "accepted": bool(accepted),
+            }
+        )
+
+    improved = sum(1 for r in log if r["accepted"])
+    click.echo(f"Sweep fallback: {improved} of {len(log)} flagged timepoints improved")
+    (output_transforms_path.parent / "sweep_log.json").write_text(
+        json.dumps({"n_flagged": len(log), "n_improved": improved, "sweeps": log}, indent=2)
+    )
+    return transforms, scores
+
+
 def repair_flagged_timepoints(
     mov_tzyx: da.Array,
     ref_tzyx: da.Array,
@@ -510,32 +693,16 @@ def repair_flagged_timepoints(
     score_col = scores["quality_score"].to_numpy(dtype=float).copy()
     n_t = len(score_col)
 
-    try:
-        flags = flag_timepoints(score_col)
-    except ValueError:
-        click.echo("Repair pass skipped: no finite scores to flag against.")
-        return transforms, scores
-    flagged = [int(t) for t in flags.loc[flags["flagged"], "t"]]
+    flagged = select_flagged(score_col, "Repair pass", settings.max_timepoints)
     if not flagged:
-        click.echo("Repair pass: nothing flagged, nothing to repair.")
         return transforms, scores
-
-    click.echo(
-        f"Repair pass: {len(flagged)} of {n_t} timepoints flagged "
-        f"(adaptive line {flags.attrs['adaptive_line']:.3f}) -> {flagged}"
-    )
-    if settings.max_timepoints is not None and len(flagged) > settings.max_timepoints:
-        # Announced rather than silently truncated: a capped run that says nothing reads as
-        # "everything was repaired".
-        worst = sorted(flagged, key=lambda t: np.nan_to_num(score_col[t], nan=-1.0))
-        dropped = sorted(worst[settings.max_timepoints :])
-        flagged = sorted(worst[: settings.max_timepoints])
-        click.echo(
-            f"  capped at max_timepoints={settings.max_timepoints}; repairing the worst "
-            f"{len(flagged)} and LEAVING {len(dropped)} unrepaired: {dropped}"
-        )
 
     seed_matrix = np.asarray(affine_transform_settings.approx_transform, dtype=float)
+    consensus = (
+        consensus_geometry(transforms, score_col, settings.consensus_score_threshold)
+        if settings.use_consensus_seed
+        else None
+    )
     flagged_set = set(flagged)
     good_median = float(np.nanmedian(score_col))
     log = []
@@ -546,9 +713,36 @@ def repair_flagged_timepoints(
         # Only non-flagged neighbours are worth seeding from; a flagged neighbour is by
         # definition not a transform we trust.
         candidates = []
+
+        # Consensus-geometry seeds, tried FIRST when this timepoint's linear part is itself
+        # broken. A reflection (negative determinant) or a linear part far from the run's
+        # consensus is a collapsed fit, not a drifted one, and no neighbour is a better
+        # starting point than the run's own agreed geometry.
+        #
+        # consensus_linear keeps the timepoint's OWN translation, because translation depends
+        # on the ROI selected on the microscope and on stage drift, so it carries real
+        # information even when the linear part does not. consensus_full replaces both, for
+        # when the translation is broken too.
+        degenerate = False
+        if consensus is not None and transforms[t] is not None:
+            L = np.asarray(transforms[t], dtype=float)[:3, :3]
+            degenerate = (
+                np.linalg.det(L) <= 0
+                or np.linalg.norm(L - consensus[:3, :3]) > settings.consensus_linear_tolerance
+            )
+            if degenerate:
+                keep_translation = consensus.copy()
+                keep_translation[:3, 3] = np.asarray(transforms[t], dtype=float)[:3, 3]
+                candidates.append(("consensus_linear", keep_translation))
+                candidates.append(("consensus_full", consensus.copy()))
+
         for name, idx in (("t-1", t - 1), ("t+1", t + 1)):
             if 0 <= idx < n_t and idx not in flagged_set and transforms[idx] is not None:
                 candidates.append((name, np.asarray(transforms[idx], dtype=float)))
+
+        # Also offered when the linear part looked fine: cheap, and it can still win.
+        if consensus is not None and not degenerate:
+            candidates.append(("consensus_full", consensus.copy()))
         if settings.try_config_seed:
             candidates.append(("config_seed", seed_matrix))
 
@@ -749,10 +943,26 @@ def estimate_tczyx(
     # submitit file.
     scores = load_quality_scores(output_transforms_path, mov_tzyx.shape[0])
 
-    # Second half of the fallback. Runs here, after the whole series is known, because it
-    # seeds from both neighbours and t+1 does not exist while t is being estimated. The
-    # sweep half already ran per-timepoint inside estimate(); between them they cover the
-    # two distinct failure modes, and each accepts its result only on a strict score win.
+    # Both fallbacks run here, after the whole series is known, and in this order.
+    #
+    # They must run here rather than inside estimate() because both are gated on the run's
+    # OWN adaptive median-2*MAD line, and that distribution does not exist while individual
+    # timepoints are being estimated in parallel shards. The repair pass additionally needs
+    # t+1, which likewise does not exist yet.
+    #
+    # REPAIR FIRST, then sweep. They address different failure modes and the cheap, effective
+    # one should go first:
+    #   repair  reseeds from t-1/t+1, so it moves a transform between basins. Measured
+    #           0.429 -> 0.941 at one real timepoint.
+    #   sweep   re-tunes matching parameters, worth +0.058 on timepoints scoring 0.72-0.78
+    #           but only +0.006 on those below 0.72.
+    # Repairing first clears the hard failures, so whatever is still flagged afterwards is
+    # the mild tail -- precisely the population the sweep is good at -- and the sweep does
+    # not spend a full grid search on timepoints reseeding would have fixed for less.
+    #
+    # Flags are RECOMPUTED between the two passes, so the sweep sees the post-repair
+    # distribution rather than a stale one. Each pass accepts a result only if it strictly
+    # beats the incumbent, so neither can make the run worse.
     if beads_match_settings.repair_pass_settings.mode == "on_flagged":
         transforms, scores = repair_flagged_timepoints(
             mov_tzyx=mov_tzyx,
@@ -763,6 +973,17 @@ def estimate_tczyx(
             affine_transform_settings=affine_transform_settings,
             output_transforms_path=output_transforms_path,
             mode=mode,
+            verbose=verbose,
+        )
+    if beads_match_settings.sweep_fallback_settings.mode == "on_flagged":
+        transforms, scores = sweep_flagged_timepoints(
+            mov_tzyx=mov_tzyx,
+            ref_tzyx=ref_tzyx,
+            transforms=transforms,
+            scores=scores,
+            beads_match_settings=beads_match_settings,
+            affine_transform_settings=affine_transform_settings,
+            output_transforms_path=output_transforms_path,
             verbose=verbose,
         )
 
@@ -1658,6 +1879,10 @@ def estimate(
     # Runs after the loop, on the best of all arms, so it only ever fires where everything
     # else has already failed, and its result is accepted only if it strictly wins. It
     # therefore cannot make any timepoint worse than leaving it off.
+    # "on_low_score" is the legacy in-estimate() arm, gated on a FIXED threshold because no
+    # run-wide distribution is available at this point. "on_flagged" is the adaptive
+    # replacement and deliberately does NOT fire here: it runs as a post-pass in
+    # estimate_tczyx, after the repair pass, where the run's own median and MAD are known.
     sweep = beads_match_settings.sweep_fallback_settings
     incumbent_score = best_quality_score["quality_score"]
     if sweep.mode == "on_low_score" and incumbent_score < sweep.score_threshold:
