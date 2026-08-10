@@ -17,7 +17,7 @@ Bio-image analysis hub supporting high-throughput data reconstruction on HPC clu
 
 <!-- --8<-- [end:intro] -->
 
-![FOV reconstruction](docs/figures/dynacell_fig2.png)
+<img src="docs/figures/dynacell_fig2.png" alt="FOV reconstruction" width="50%">
 
 <!-- --8<-- [start:body] -->
 ## Install
@@ -208,12 +208,14 @@ nextflow run mantis-v2.nf \
 
 | Parameter | Description |
 | --- | --- |
-| `--input` | raw source dataset (the mantis-v2 pipeline expects a plate zarr) |
-| `--output` | directory that receives every step's output, plus run reports |
-| `--*_config` | YAML settings for each step, the same files the CLI takes via `-c` |
-| `--biahub_project` | path to a `biahub` checkout; tasks then run as `uv run --project <path> biahub ...`. Omit it to use whatever `biahub` is on `PATH` in each task |
-| `--max_positions` | process only the first N positions (`0` = all); useful for smoke tests |
-| `--max_workers` | Slurm queue size, i.e. the cap on concurrently submitted jobs (default 100) |
+| `--input` | Raw source dataset (a plate zarr for mantis-v2) |
+| `--output` | Directory receiving every step's output and the run reports |
+| `--*_config` | Per-step YAML settings, as passed to the CLI via `-c` |
+| `--biahub_project` | Path to a `biahub` checkout to run tasks from |
+| `--max_positions` | Process only the first N positions (`0` = all) |
+| `--max_workers` | Cap on concurrently submitted Slurm jobs (default 100) |
+
+With `--biahub_project`, each task runs as `uv run --project <path> biahub ...`; omit it to use whatever `biahub` is on `PATH` on the compute node. `--max_positions` is useful for smoke tests on a handful of positions.
 
 Profiles select *where* work runs:
 

@@ -6,6 +6,6 @@
 
 --8<-- "README.md:intro"
 
-![FOV reconstruction](figures/dynacell_fig2.png)
+![FOV reconstruction](figures/dynacell_fig2.png){ width="50%" }
 
 --8<-- "README.md:body"
