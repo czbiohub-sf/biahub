@@ -854,6 +854,7 @@ def repair_flagged_timepoints(
         # third of its rescues in 0.72-0.80, where the sweep gains ~+0.058 for 28 trials; one
         # polish round is a single estimate() call and changes no matching parameter. Stops as
         # soon as a round fails to improve, so a converged timepoint costs one wasted call.
+        score_after_reseed = best_score
         for round_i in range(settings.polish_rounds):
             if best_matrix is None:
                 break
@@ -911,7 +912,12 @@ def repair_flagged_timepoints(
             {
                 "t": t,
                 "before": float(before),
+                # Split so each step can be attributed on its own: reseeding and polishing
+                # are separate decisions with separate costs, and folding them into one
+                # before/after makes it impossible to tell which one earned the gain.
+                "after_reseed": float(score_after_reseed),
                 "after": float(best_score),
+                "polish_gain": float(best_score - score_after_reseed),
                 "source": best_name,
                 "candidates_tried": [n for n, _ in candidates],
             }
