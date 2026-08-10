@@ -308,6 +308,6 @@ spec (`--extra stain`) from every other step's plain `biahub_cmd()`, so successi
 tasks ask uv for different environments against one shared venv.
 
 `uv run --no-sync` eliminates the mutation entirely (verified: no churn across
-repeated runs). The pipeline does not pass it today — tracked in biahub#307. Until
+repeated runs). The pipeline does not pass it today — tracked in [biahub#308](https://github.com/czbiohub-sf/biahub/issues/308). Until
 that lands, expect this churn in a live run; it has not been observed to break a
 run, but it is the reason not to add any *further* environment mutation on top.
