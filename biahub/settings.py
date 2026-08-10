@@ -374,8 +374,16 @@ class RepairPassSettings(MyBaseModel):
     # a third of its rescues in 0.72-0.80, where the sweep gains ~+0.058 for 28 trials, while
     # one polish round is a single estimate() call and changes no matching parameter.
     #
-    # Rounds stop as soon as one fails to improve, so a converged timepoint costs one call.
-    polish_rounds: int = 1
+    # Rounds stop as soon as one fails to improve, so the cap bounds the WORST case rather
+    # than the typical one: a timepoint that converges after one round costs two calls no
+    # matter how high this is set. That asymmetry is why the default is not 1.
+    #
+    # A badly-broken timepoint has the most headroom, not the least, so it is the case most
+    # likely to keep climbing. The spectral cascade already demonstrates the mechanism over a
+    # large gap -- measured seed 0.000 -> spectral 0.778 -> refined 0.882 at one real
+    # timepoint -- and polish is that same re-seed-and-refine step applied again. There is no
+    # reason it should only pay off near the top of the range.
+    polish_rounds: int = 3
 
 
 class BeadsMatchSettings(MyBaseModel):
