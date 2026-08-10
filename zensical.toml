@@ -326,7 +326,13 @@ anchor_linenums = true
 line_spans = "__span"
 pygments_lang_class = true
 [project.markdown_extensions.pymdownx.inlinehilite]
+# Snippets lets docs pages include files from the repository root (README.md,
+# CONTRIBUTING.md) instead of duplicating their text. base_path is relative to
+# the directory the build runs from (the repo root); check_paths makes a missing
+# or renamed snippet a build error rather than a silently empty page.
 [project.markdown_extensions.pymdownx.snippets]
+base_path = ["."]
+check_paths = true
 [project.markdown_extensions.pymdownx.superfences]
 
 [[project.markdown_extensions.pymdownx.superfences.custom_fences]]

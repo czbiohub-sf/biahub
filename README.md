@@ -7,10 +7,19 @@
 <!-- URLs -->
 [docs-url]: https://czbiohub-sf.github.io/biahub
 
+<!-- The sections below are the single source of truth for docs/index.md, which
+     includes them verbatim via pymdownx.snippets. Keep links inside the snippet
+     regions absolute so they resolve both on GitHub and on the docs site. -->
+<!-- --8<-- [start:intro] -->
 Bio-image analysis hub supporting high-throughput data reconstruction on HPC clusters with [Slurm](https://slurm.schedmd.com/documentation.html) workload management.
 
 `biahub` was originally developed to reconstruct data acquired on the [mantis](https://doi.org/10.1093/pnasnexus/pgae323) microscope using the [shrimPy](https://github.com/czbiohub-sf/shrimPy) acquisition engine, and has since been extended to process diverse multimodal datasets. `biahub` reconstruction workflows rely on OME-ZARR datasets (for example, as created with [iohub](https://github.com/czbiohub-sf/iohub)) which enable efficient parallelization across compute nodes.
 
+<!-- --8<-- [end:intro] -->
+
+![FOV reconstruction](docs/figures/dynacell_fig2.png)
+
+<!-- --8<-- [start:body] -->
 ## Install
 
 `biahub` uses [uv](https://docs.astral.sh/uv/) for environment and dependency management. Install `uv` first:
@@ -65,7 +74,7 @@ uv sync --group dev   # same as `make setup-develop`
 pre-commit install
 ```
 
-See the [contributing guide](CONTRIBUTING.md) for the full development workflow.
+See the [contributing guide](https://github.com/czbiohub-sf/biahub/blob/main/CONTRIBUTING.md) for the full development workflow.
 
 ## Command line interface
 
@@ -75,96 +84,53 @@ Reconstruction is driven by the `biahub` CLI. The commands share a small set of 
 | --- | --- |
 | `-i, --input-position-dirpaths` | input position(s), typically a glob such as `./data.zarr/*/*/*` |
 | `-o, --output-dirpath` | output zarr store or YAML file |
-| `-c, --config-filepath` | YAML settings file (see [`settings/`](settings) for examples) |
-| `-s` / `-t` | source and target positions (registration commands) |
-| `-l, --local` | run locally instead of submitting Slurm jobs |
-| `--cluster {slurm,local,debug}` | execution backend; `debug` runs in-process in the foreground |
-| `--init` | only create the output store and exit (used by the Nextflow workflows) |
-| `-m, --monitor` | follow the submitted jobs until they finish |
+| `-c, --config-filepath` | YAML settings file (see [`settings/`](https://github.com/czbiohub-sf/biahub/tree/main/settings) for examples) |
 
-Most steps come as an `estimate-*` command that writes a YAML of parameters you can inspect and edit, followed by an apply command that consumes that YAML. Run `biahub <command> --help` for the full option list, or browse the [CLI reference](https://czbiohub-sf.github.io/biahub/cli/).
+Execution is controlled by a few more flags: `-l, --local` runs the work on the current machine instead of submitting Slurm jobs, `--cluster {slurm,local,debug}` selects the backend explicitly (`debug` runs in-process in the foreground), `--init` only creates the output store and exits, and `-m, --monitor` follows the submitted jobs until they finish.
+
+Some steps include an `estimate-*` command that writes a YAML of parameters you can inspect and edit, followed by an apply command that consumes that YAML. Run `biahub <command> --help` for the full option list, or browse the [CLI reference](https://czbiohub-sf.github.io/biahub/cli/).
 
 ### Available commands
-
-**Quality control**
 
 | Command | Description |
 | --- | --- |
 | `estimate-bleaching` | Estimate photobleaching from raw data |
 | `characterize-psf` | Characterize a point spread function and write a report |
-
-**Preprocessing**
-
-| Command | Description |
-| --- | --- |
+| | |
 | `flat-field` | Apply flat-field correction to selected channels |
 | `flip` | Flip images in a dataset |
 | `pyramid` | Create multiscale pyramid levels |
 | `process-with-config` | Apply arbitrary YAML-defined functions to a dataset |
-
-**Deskewing**
-
-| Command | Description |
-| --- | --- |
+| | |
 | `estimate-deskew` | Estimate deskewing parameters |
 | `deskew` | Deskew positions across T and C |
-
-**Deconvolution**
-
-| Command | Description |
-| --- | --- |
+| | |
 | `estimate-psf` | Estimate a PSF from beads |
 | `deconvolve` | Deconvolve across T and C using a PSF |
-
-**Label-free reconstruction**
-
-| Command | Description |
-| --- | --- |
+| | |
 | `compute-tf` | Compute a transfer function from a PSF |
 | `apply-inv-tf` | Apply an inverse transfer function to a dataset |
-| `reconstruct` | Compute and apply in one step (phase/birefringence) |
-
-**Registration**
-
-| Command | Description |
-| --- | --- |
+| `reconstruct` | Reconstruct phase/birefringence in one step |
+| | |
 | `estimate-registration` | Estimate the affine transform between arms or timepoints |
 | `optimize-registration` | Refine a transform via match filtering |
 | `register` | Apply an affine transform to positions |
 | `estimate-crop` | Estimate the crop region for dual-channel alignment |
-
-**Stabilization**
-
-| Command | Description |
-| --- | --- |
+| | |
 | `estimate-stabilization` | Estimate XYZ translation matrices |
 | `stabilize` | Apply stabilization transforms |
-
-**Stitching and assembly**
-
-| Command | Description |
-| --- | --- |
+| | |
 | `estimate-stitch` | Estimate stitching parameters for positions |
 | `stitch` | Stitch positions within wells |
 | `concatenate` | Concatenate datasets channel-wise, with optional cropping |
-
-**Analysis**
-
-| Command | Description |
-| --- | --- |
+| | |
 | `segment` | Segment positions with a pretrained model or pipeline |
 | `virtual-stain` | Run VisCy/cytoland virtual staining |
 | `track` | Track objects in 2D/3D time-lapse data |
-
-**Utilities**
-
-| Command | Description |
-| --- | --- |
+| | |
 | `nf list-positions` | List position keys of a plate zarr (used for Nextflow fan-out) |
 
 ### Example: raw data to registered volumes
-
-![FOV reconstruction](/docs/figures/dynacell_fig2.png)
 
 ```sh
 # CONVERT TO ZARR
@@ -210,7 +176,7 @@ biahub stitch          -i ./acq_name.zarr/*/*/* -c ./stitch.yml -o ./stitched.za
 
 ## Nextflow workflows
 
-Chaining the CLI calls above by hand does not scale to large timelapses. The [`nextflow/`](nextflow) directory contains [Nextflow](https://www.nextflow.io/) pipelines that run a whole reconstruction end to end, fanning each step out over positions and submitting the work to Slurm.
+The [`nextflow/`](https://github.com/czbiohub-sf/biahub/tree/main/nextflow) directory contains [Nextflow](https://www.nextflow.io/) pipelines that run a whole reconstruction end to end for established workflows, fanning each step out over positions and submitting the work to Slurm.
 
 ```
 nextflow/
@@ -278,4 +244,5 @@ The step modules are path-agnostic: each subworkflow is handed an input zarr, an
 
 ## Contributing
 
-We would appreciate bug reports and code contributions if you use this package. If you would like to contribute to this package, please read the [contributing guide](CONTRIBUTING.md).
+We would appreciate bug reports and code contributions if you use this package. If you would like to contribute to this package, please read the [contributing guide](https://github.com/czbiohub-sf/biahub/blob/main/CONTRIBUTING.md).
+<!-- --8<-- [end:body] -->
