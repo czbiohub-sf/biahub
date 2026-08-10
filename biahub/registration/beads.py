@@ -598,6 +598,26 @@ def sweep_flagged_timepoints(
     settings = beads_match_settings.sweep_fallback_settings
     score_col = np.asarray(scores["quality_score"].to_numpy(dtype=float)).copy()
     flagged, _stats = select_flagged(score_col, "Sweep fallback", settings.max_timepoints)
+    if settings.scope == "repair_failures_only":
+        # Restrict to what the repair pass attempted and could not lift. Note this excludes
+        # the 0.66-0.73 band the post-repair line newly catches, which is where the sweep is
+        # measured to help most -- see SweepFallbackSettings.scope.
+        log_path = output_transforms_path.parent / "repair_log.json"
+        if log_path.exists():
+            not_rescued = set(json.loads(log_path.read_text()).get("not_rescued", []))
+            dropped = [t for t in flagged if t not in not_rescued]
+            flagged = [t for t in flagged if t in not_rescued]
+            click.echo(
+                f"  scope=repair_failures_only: sweeping {len(flagged)} of the flagged "
+                f"timepoints and SKIPPING {len(dropped)} the repair pass never attempted "
+                f"or already rescued: {dropped}"
+            )
+        else:
+            click.echo(
+                "  scope=repair_failures_only but no repair_log.json found; the repair pass "
+                "did not run, so there are no failures to restrict to. Sweeping nothing."
+            )
+            flagged = []
     if not flagged:
         return transforms, scores
 
@@ -852,7 +872,11 @@ def repair_flagged_timepoints(
         )
 
     improved = sum(1 for r in log if r["after"] > r["before"] + 1e-9)
-    click.echo(f"Repair pass: {improved} of {len(log)} flagged timepoints improved")
+    unrescued = sorted(r["t"] for r in log if r["after"] <= r["before"] + 1e-9)
+    click.echo(
+        f"Repair pass: {improved} of {len(log)} flagged timepoints improved"
+        + (f"; {len(unrescued)} not rescued: {unrescued}" if unrescued else "")
+    )
     (output_transforms_path.parent / "repair_log.json").write_text(
         json.dumps(
             {
@@ -861,6 +885,7 @@ def repair_flagged_timepoints(
                 "mad": stats.get("mad"),
                 "n_flagged": len(log),
                 "n_improved": improved,
+                "not_rescued": unrescued,
                 "repairs": log,
             },
             indent=2,

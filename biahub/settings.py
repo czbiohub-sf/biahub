@@ -281,6 +281,23 @@ class SweepFallbackSettings(MyBaseModel):
     mode: Literal["off", "on_flagged", "on_low_score"] = "off"
     score_threshold: float = 0.75
     max_timepoints: int | None = 25
+    # Which timepoints the sweep is allowed to touch, once the repair pass has run.
+    #
+    #   "still_flagged"         everything the adaptive line flags on the POST-repair scores.
+    #                           Because repair raises the median and shrinks the MAD, that
+    #                           line rises -- so this set is repair's failures PLUS timepoints
+    #                           that only became outliers relative to a now-healthier run.
+    #   "repair_failures_only"  strictly the timepoints repair attempted and did not lift.
+    #
+    # Default is "still_flagged", against the intuition that the sweep should only clean up
+    # after repair, because the measurements point the other way: the sweep gains +0.058 on
+    # timepoints scoring 0.72-0.78 and only +0.006 below 0.72, and found nothing at all across
+    # 28 trials on the worst timepoint tested. Repair's failures are the collapsed fits near
+    # zero -- exactly where sweeping does not help -- while the timepoints the rising line
+    # newly catches sit in the 0.66-0.73 band, which is the sweep's useful range. Restricting
+    # to repair failures therefore spends the budget where it cannot pay off and skips where
+    # it can.
+    scope: Literal["still_flagged", "repair_failures_only"] = "still_flagged"
     grid: dict[str, list] | list[dict[str, list]] | None = None
 
 
