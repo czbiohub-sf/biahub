@@ -341,6 +341,12 @@ class RepairPassSettings(MyBaseModel):
     # part is treated as broken, so the consensus seeds are tried first. Measured: good
     # timepoints sit at 0.021 and failures at 0.72, so anything in between separates them.
     consensus_linear_tolerance: float = 0.25
+    # How many robust spreads (MAD) a flagged timepoint's translation may sit from the
+    # consensus and still be considered worth keeping. Beyond this, the full-consensus seed is
+    # tried first instead. Measured need: collapsed fits on one dataset had translations
+    # thousands of voxels out, one reaching -15000 in x, so a broken linear part does not
+    # imply an intact translation.
+    consensus_translation_tolerance: float = 10.0
 
 
 class BeadsMatchSettings(MyBaseModel):

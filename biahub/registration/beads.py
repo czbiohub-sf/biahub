@@ -703,6 +703,24 @@ def repair_flagged_timepoints(
         if settings.use_consensus_seed
         else None
     )
+    # Robust spread of the GOOD timepoints' translations, per axis, used to judge whether a
+    # flagged timepoint's own translation is worth keeping. MAD rather than std, since the
+    # broken translations being screened out would dominate a standard deviation.
+    translation_spread = None
+    if consensus is not None:
+        good_tr = np.asarray(
+            [
+                np.asarray(transforms[t], dtype=float)[:3, 3]
+                for t in range(min(len(transforms), len(score_col)))
+                if transforms[t] is not None
+                and np.isfinite(score_col[t])
+                and score_col[t] >= settings.consensus_score_threshold
+            ]
+        )
+        if len(good_tr) >= 5:
+            translation_spread = np.maximum(
+                1.4826 * np.median(np.abs(good_tr - np.median(good_tr, axis=0)), axis=0), 1.0
+            )
     flagged_set = set(flagged)
     good_median = float(np.nanmedian(score_col))
     log = []
@@ -725,16 +743,33 @@ def repair_flagged_timepoints(
         # when the translation is broken too.
         degenerate = False
         if consensus is not None and transforms[t] is not None:
-            L = np.asarray(transforms[t], dtype=float)[:3, :3]
+            M = np.asarray(transforms[t], dtype=float)
+            L = M[:3, :3]
             degenerate = (
                 np.linalg.det(L) <= 0
                 or np.linalg.norm(L - consensus[:3, :3]) > settings.consensus_linear_tolerance
             )
             if degenerate:
+                # Keeping the timepoint's own translation is only sensible if that translation
+                # is itself credible. On a real dataset the collapsed fits had translations
+                # thousands of voxels out -- one reached -15000 in x -- so the shift is not
+                # reliably the surviving half of a broken transform. Offer the timepoint's own
+                # translation first when it is within reach of the run's spread, and the full
+                # consensus first when it is not.
+                own_translation_ok = translation_spread is not None and bool(
+                    np.all(
+                        np.abs(M[:3, 3] - consensus[:3, 3])
+                        <= settings.consensus_translation_tolerance * translation_spread
+                    )
+                )
                 keep_translation = consensus.copy()
-                keep_translation[:3, 3] = np.asarray(transforms[t], dtype=float)[:3, 3]
-                candidates.append(("consensus_linear", keep_translation))
-                candidates.append(("consensus_full", consensus.copy()))
+                keep_translation[:3, 3] = M[:3, 3]
+                if own_translation_ok:
+                    candidates.append(("consensus_linear", keep_translation))
+                    candidates.append(("consensus_full", consensus.copy()))
+                else:
+                    candidates.append(("consensus_full", consensus.copy()))
+                    candidates.append(("consensus_linear", keep_translation))
 
         for name, idx in (("t-1", t - 1), ("t+1", t + 1)):
             if 0 <= idx < n_t and idx not in flagged_set and transforms[idx] is not None:
