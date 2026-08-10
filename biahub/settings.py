@@ -364,6 +364,18 @@ class RepairPassSettings(MyBaseModel):
     # thousands of voxels out, one reaching -15000 in x, so a broken linear part does not
     # imply an intact translation.
     consensus_translation_tolerance: float = 10.0
+    # After a repair is accepted, re-seed the spectral/hungarian cascade FROM it and refine
+    # again, keeping the result only if it improves. 0 disables.
+    #
+    # Worth doing because the candidate seeds are all coarse -- the consensus geometry scores
+    # ~0.000 applied on its own -- and peak detection runs in warped space, so a cascade
+    # seeded from an already-good transform sees much better peaks than one seeded from
+    # scratch. It is also the cheaper answer to the gap the sweep targets: repair lands about
+    # a third of its rescues in 0.72-0.80, where the sweep gains ~+0.058 for 28 trials, while
+    # one polish round is a single estimate() call and changes no matching parameter.
+    #
+    # Rounds stop as soon as one fails to improve, so a converged timepoint costs one call.
+    polish_rounds: int = 1
 
 
 class BeadsMatchSettings(MyBaseModel):

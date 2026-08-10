@@ -841,6 +841,52 @@ def repair_flagged_timepoints(
             if best_score >= good_median:
                 break
 
+        # Polish: re-seed the cascade from the transform just accepted and refine again.
+        #
+        # Not a repeat of the candidate loop, even though it calls the same function. Every
+        # candidate above started from a COARSE seed -- the consensus geometry scores ~0.000
+        # applied on its own, and a neighbour's transform is only approximately right here.
+        # Peak detection runs in WARPED space, so what the matcher sees depends on how good
+        # the starting transform already is: seeded from an accepted 0.78 rather than from
+        # something scoring nothing, it finds correspondences it could not find before.
+        #
+        # Preferred over sending these timepoints to the parameter sweep. Repair lands about a
+        # third of its rescues in 0.72-0.80, where the sweep gains ~+0.058 for 28 trials; one
+        # polish round is a single estimate() call and changes no matching parameter. Stops as
+        # soon as a round fails to improve, so a converged timepoint costs one wasted call.
+        for round_i in range(settings.polish_rounds):
+            if best_matrix is None:
+                break
+            polish_ats = affine_transform_settings.model_copy(deep=True)
+            polish_ats.approx_transform = np.asarray(
+                best_matrix.to_list() if hasattr(best_matrix, "to_list") else best_matrix,
+                dtype=float,
+            ).tolist()
+            polish_ats.use_prev_t_transform = False
+            try:
+                polished = estimate(
+                    mov=mov_t,
+                    ref=ref_t,
+                    beads_match_settings=beads_match_settings,
+                    affine_transform_settings=polish_ats,
+                    verbose=False,
+                )
+                if polished is None:
+                    break
+                polished_score = score_transform(polished, mov_t, ref_t, beads_match_settings)
+            except Exception as e:  # noqa: BLE001
+                click.echo(
+                    f"  t={t} polish round {round_i + 1} failed: {type(e).__name__}: {e}"
+                )
+                break
+            if not (np.isfinite(polished_score) and polished_score > best_score + 1e-9):
+                break
+            click.echo(
+                f"    t={t:4d} polish {round_i + 1}: {best_score:.3f} -> {polished_score:.3f}"
+            )
+            best_matrix, best_score = polished, polished_score
+            best_name = f"{best_name}+polish{round_i + 1}"
+
         if best_matrix is not None:
             matrix = np.asarray(
                 best_matrix.to_list() if hasattr(best_matrix, "to_list") else best_matrix,
