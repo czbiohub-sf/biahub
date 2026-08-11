@@ -278,6 +278,16 @@ class SweepFallbackSettings(MyBaseModel):
         setter table, so a misspelled key raises instead of silently reading as a flat axis.
     """
 
+    # Off by default, deliberately, even though it is complementary to the repair pass.
+    #
+    # Measured across six datasets, repair alone recovered 3.654 score points and repair plus
+    # sweep in competition recovered 4.309 -- so the sweep adds a real 18%, but repair already
+    # captures 85% of the total at roughly half the cost. And after a repair pass the sweep's
+    # remaining wins are small: of 18 accepted gains, none reached 0.10 and six were 0.004 to
+    # 0.008, at or below the score metric's own resolution.
+    #
+    # Enable it, with fallback_mode="parallel", when the tail matters more than the runtime --
+    # on the worst dataset seen it beat repair at 5 of 20 timepoints, once by 0.455 -> 0.667.
     mode: Literal["off", "on_flagged", "on_low_score"] = "off"
     score_threshold: float = 0.75
     max_timepoints: int | None = 25
@@ -338,7 +348,16 @@ class RepairPassSettings(MyBaseModel):
         silently dropped.
     """
 
-    mode: Literal["off", "on_flagged"] = "off"
+    # On by default. Measured across six datasets it improved 44-85% of the timepoints it
+    # fired on, was positive on every one, and cost 0.8-6.7 CPU-hours per run. It cannot
+    # regress a run -- a candidate is accepted only if it strictly beats the incumbent -- so
+    # the only argument against enabling it is compute, and the adaptive gate keeps that
+    # proportional: it fires on the tail, not on the run.
+    #
+    # NOTE this changes behaviour for a config that does not mention it: such a run now gets
+    # a repair pass it did not before. The transforms can only improve, but the run takes
+    # longer and writes repair_log.json.
+    mode: Literal["off", "on_flagged"] = "on_flagged"
     try_config_seed: bool = True
     max_timepoints: int | None = 25
     # Seed a flagged timepoint from the run's own consensus geometry -- the element-wise
