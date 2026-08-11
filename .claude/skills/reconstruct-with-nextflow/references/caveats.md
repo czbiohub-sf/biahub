@@ -287,14 +287,20 @@ uv sync --all-extras --dry-run 2>&1 | grep -E "^ *- "   # lists what would go
 
 Read the list before syncing:
 
-- Only unused leaf packages (e.g. `nd2`, `ome-types`, `xsdata`,
-  `resource-backed-dask-array` — the `cellpose[all]` closure, which biahub does
-  not use)? Sync; nothing in the pipeline imports them.
-- Anything load-bearing — `cupy-cuda12x`, `tracksdata`, `stitch`, `dexp`,
+- **Empty** — nothing would be removed. Sync. This is the expected state, and it
+  is what a checkout tracking `main` gives today.
+- **Unused leaf packages only** — nothing in the pipeline imports them, and
+  `.venv/bin/{biahub,viscy}` still work after the sync. Sync.
+- **Anything load-bearing** — `cupy-cuda12x`, `tracksdata`, `stitch`, `dexp`,
   `dask-cuda`, `ilpy`, `pyscipopt` — **stop and raise it with the user.** One
   checkout had 27 such packages and syncing it broke a working environment. A
   broken `cupy` cascades: `iohub`, `cytoland` and `ultrack` then all fail to
   import with `AttributeError: module 'cupy' has no attribute 'ndarray'`.
+
+Do not memorize a package list for the middle case — lock membership moves. The
+`nd2`/`ome-types`/`xsdata` closure was outside the lock and prunable one week and
+pulled *into* it the next by an `iohub` git pin. Run the `--dry-run` and read what
+it actually says.
 
 That earlier damage is why this section used to forbid `uv sync` outright. The
 hazard was that checkout's out-of-band set, not `uv sync` itself.
