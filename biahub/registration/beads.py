@@ -595,7 +595,7 @@ def sweep_flagged_timepoints(
 
     Accepted only on a strict score win, so this cannot make a run worse.
     """
-    settings = beads_match_settings.sweep_fallback_settings
+    settings = beads_match_settings.fallback_settings.sweep_settings
     score_col = np.asarray(scores["quality_score"].to_numpy(dtype=float)).copy()
     flagged, _stats = select_flagged(score_col, "Sweep fallback", settings.max_timepoints)
     if settings.scope == "repair_failures_only":
@@ -711,7 +711,7 @@ def repair_flagged_timepoints(
     Returns the possibly-updated transforms and scores; the repaired .npy files are rewritten
     in place so the on-disk record matches what is returned.
     """
-    settings = beads_match_settings.repair_pass_settings
+    settings = beads_match_settings.fallback_settings.repair_settings
     # .copy(): to_numpy can hand back a read-only view onto the DataFrame's own buffer when
     # the dtype already matches, and this array is written to as repairs are accepted.
     score_col = scores["quality_score"].to_numpy(dtype=float).copy()
@@ -1142,9 +1142,9 @@ def estimate_tczyx(
     # Each pass still accepts a result only if it strictly beats what it started from, and the
     # transforms/scores handed to each are the SAME pre-fallback ones, so neither can regress
     # and neither can hide the other.
-    repair_on = beads_match_settings.repair_pass_settings.mode == "on_flagged"
-    sweep_on = beads_match_settings.sweep_fallback_settings.mode == "on_flagged"
-    fb_mode = beads_match_settings.fallback_mode
+    fb = beads_match_settings.fallback_settings
+    repair_on, sweep_on = fb.repair_enabled, fb.sweep_enabled
+    fb_mode = fb.order
     parallel = fb_mode == "parallel"
 
     if repair_on and sweep_on and parallel:
@@ -2105,13 +2105,13 @@ def estimate(
     # Runs after the loop, on the best of all arms, so it only ever fires where everything
     # else has already failed, and its result is accepted only if it strictly wins. It
     # therefore cannot make any timepoint worse than leaving it off.
-    # "on_low_score" is the legacy in-estimate() arm, gated on a FIXED threshold because no
-    # run-wide distribution is available at this point. "on_flagged" is the adaptive
-    # replacement and deliberately does NOT fire here: it runs as a post-pass in
-    # estimate_tczyx, after the repair pass, where the run's own median and MAD are known.
-    sweep = beads_match_settings.sweep_fallback_settings
+    # legacy_in_estimate is the old per-timepoint arm, gated on a FIXED threshold because no
+    # run-wide distribution exists at this point. The adaptive replacement runs as a post-pass
+    # in estimate_tczyx, where the run's own median and MAD are known, and deliberately does
+    # not fire here.
+    sweep = beads_match_settings.fallback_settings.sweep_settings
     incumbent_score = best_quality_score["quality_score"]
-    if sweep.mode == "on_low_score" and incumbent_score < sweep.score_threshold:
+    if sweep.legacy_in_estimate and incumbent_score < sweep.score_threshold:
         click.echo(
             f"Sweep fallback: best arm scored {incumbent_score:.3f} < "
             f"{sweep.score_threshold}, grid-searching matching parameters for this timepoint"

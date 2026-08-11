@@ -248,7 +248,7 @@ class QCBeadsRegistrationSettings(MyBaseModel):
     score_centroid_mask_radius: int = 6
 
 
-class SweepFallbackSettings(MyBaseModel):
+class SweepSettings(MyBaseModel):
     """Last-resort per-timepoint grid search over the matching parameters.
 
     The other arms all reuse one parameter set for the whole timelapse. That set is chosen
@@ -310,8 +310,16 @@ class SweepFallbackSettings(MyBaseModel):
     #
     # Enable it, with fallback_mode="parallel", when the tail matters more than the runtime --
     # on the worst dataset seen it beat repair at 5 of 20 timepoints, once by 0.455 -> 0.667.
-    mode: Literal["off", "on_flagged", "on_low_score"] = "off"
-    _coerce_mode = field_validator("mode", mode="before")(_coerce_yaml_off)
+    # Legacy in-estimate() arm: run the sweep per timepoint inside estimate(), gated on the
+    # fixed score_threshold below. NOT recommended -- a fixed gate does not transfer between
+    # datasets, and at 0.75 it fired 0 times on a run whose median was 0.870 and 556 times on
+    # one whose median was 0.753, where it stopped being a fallback and blew the walltime.
+    # Kept only to reproduce earlier runs. Whether the sweep runs as a POST-PASS is decided by
+    # FallbackSettings.mode, not here.
+    legacy_in_estimate: bool = False
+    # DEPRECATED: on/off moved to FallbackSettings.mode. Read only by the migration.
+    mode: str | None = None
+    _coerce_legacy_mode = field_validator("mode", mode="before")(_coerce_yaml_off)
     score_threshold: float = 0.75
     max_timepoints: int | None = 25
     # Which timepoints the sweep is allowed to touch, once the repair pass has run.
@@ -334,7 +342,7 @@ class SweepFallbackSettings(MyBaseModel):
     grid: dict[str, list] | list[dict[str, list]] | None = None
 
 
-class RepairPassSettings(MyBaseModel):
+class RepairSettings(MyBaseModel):
     """Post-estimation reseeding of flagged timepoints from their neighbours.
 
     The other half of the fallback, and it necessarily runs after the whole series exists
@@ -380,8 +388,9 @@ class RepairPassSettings(MyBaseModel):
     # NOTE this changes behaviour for a config that does not mention it: such a run now gets
     # a repair pass it did not before. The transforms can only improve, but the run takes
     # longer and writes repair_log.json.
-    mode: Literal["off", "on_flagged"] = "on_flagged"
-    _coerce_mode = field_validator("mode", mode="before")(_coerce_yaml_off)
+    # DEPRECATED: on/off moved to FallbackSettings.mode. Read only by the migration.
+    mode: str | None = None
+    _coerce_legacy_mode = field_validator("mode", mode="before")(_coerce_yaml_off)
     try_config_seed: bool = True
     max_timepoints: int | None = 25
     # Seed a flagged timepoint from the run's own consensus geometry -- the element-wise
@@ -427,6 +436,60 @@ class RepairPassSettings(MyBaseModel):
     # timepoint -- and polish is that same re-seed-and-refine step applied again. There is no
     # reason it should only pay off near the top of the range.
     polish_rounds: int = 3
+
+
+class FallbackSettings(MyBaseModel):
+    """What happens to the timepoints the QC flags, and how each pass is tuned.
+
+    One field says WHAT runs; the two nested blocks say HOW. This replaces three flags that
+    used to be read together in two different places, one of which was inert unless the other
+    two were both on -- and whose default read "parallel" while the sweep was off, so the
+    config said one thing and the run did another.
+
+    Modes
+    -----
+    off                 flagged timepoints are reported, never modified.
+    repair              reseed them from the run's consensus geometry or their neighbours.
+                        Default: across six datasets this recovered 3.654 score points against
+                        4.309 for repair and sweep competing -- 85% of the total for roughly
+                        half the compute.
+    sweep               grid-search the matching parameters instead.
+    repair_then_sweep   staged; sweep only what repair left flagged.
+    sweep_then_repair   staged, the other way round.
+    parallel            both from the same starting scores, better result wins per timepoint.
+                        Choose this when individual timepoints matter more than run-level
+                        statistics: the sweep rescued 6 of 72 flagged timepoints that repair
+                        could not touch at all -- about one per dataset -- which no average
+                        shows. Either staged order loses ground to it, because whichever pass
+                        runs first lifts timepoints above the adaptive line, re-flagging then
+                        removes them, and the second pass never gets a turn.
+
+    Every pass accepts a result only if it strictly beats what it started from, so no mode can
+    make a run worse than "off".
+    """
+
+    mode: (
+        Literal[
+            "off", "repair", "sweep", "repair_then_sweep", "sweep_then_repair", "parallel"
+        ]
+        | None
+    ) = "repair"
+    _coerce_mode = field_validator("mode", mode="before")(_coerce_yaml_off)
+    repair_settings: RepairSettings = RepairSettings()
+    sweep_settings: SweepSettings = SweepSettings()
+
+    @property
+    def repair_enabled(self) -> bool:
+        return self.mode in ("repair", "repair_then_sweep", "sweep_then_repair", "parallel")
+
+    @property
+    def sweep_enabled(self) -> bool:
+        return self.mode in ("sweep", "repair_then_sweep", "sweep_then_repair", "parallel")
+
+    @property
+    def order(self) -> str:
+        """Which staged order to use; "parallel" when the passes compete."""
+        return self.mode if self.mode in ("repair_then_sweep", "sweep_then_repair") else "parallel"
 
 
 class BeadsMatchSettings(MyBaseModel):
@@ -489,118 +552,84 @@ class BeadsMatchSettings(MyBaseModel):
         | None
     ) = "independent_spectral"
 
-    # fallback replaces three orchestration flags that used to be read together --
-    # repair_pass_settings.mode, sweep_fallback_settings.mode, and fallback_mode -- one of
-    # which was inert unless the other two were both on. That combination was misleading in
-    # its own right: the default read "parallel" while the sweep was off, so the config said
-    # one thing and the run did another.
-    #
-    #   off                 no fallback; flagged timepoints are reported, not touched
-    #   repair              reseed flagged timepoints from consensus/neighbours   <- default
-    #   sweep               grid-search the matching parameters instead
-    #   repair_then_sweep   staged, repair first, sweep whatever is still flagged
-    #   sweep_then_repair   staged, the other order
-    #   parallel            both from the same starting scores, better result wins
-    #
-    # Default "repair": measured across six datasets it recovered 3.654 score points against
-    # 4.309 for repair and sweep competing -- 85% of the total for roughly half the compute.
-    # Choose "parallel" when individual timepoints matter more than run statistics: the sweep
-    # rescued 6 of 72 flagged timepoints that repair could not touch at all, about one per
-    # dataset, which no run-level average shows.
-    #
-    # Set to None to drive the three low-level flags directly.
-    fallback: (
-        Literal[
-            "off", "repair", "sweep", "repair_then_sweep", "sweep_then_repair", "parallel"
-        ]
-        | None
-    ) = "repair"
-    _coerce_fallback = field_validator("fallback", mode="before")(_coerce_yaml_off)
-    # How the two fallback passes relate. Only consulted when BOTH are enabled; each pass is
-    # turned on or off by its own `mode`, so the five usable combinations are:
-    #
-    #   repair only          repair_pass=on_flagged, sweep_fallback=off
-    #   sweep only           repair_pass=off,        sweep_fallback=on_flagged
-    #   repair then sweep    both on, fallback_mode="repair_then_sweep"
-    #   sweep then repair    both on, fallback_mode="sweep_then_repair"
-    #   both, competing      both on, fallback_mode="parallel"        <- default
-    #
-    # "parallel" runs both from the SAME post-estimation scores and keeps whichever result is
-    # better per timepoint. It is the default because either sequential order measurably loses
-    # quality: whichever pass runs first lifts timepoints above the adaptive line, re-flagging
-    # then removes them, and the second pass never gets a turn on them. Measured at 09_17
-    # t=96, repair reached 0.773 while the sweep from the same start reached 0.864; run
-    # sequentially the sweep never ran there and the 0.091 was lost. The second pass is also
-    # judged against the first's improved score rather than the original, so fewer of its
-    # results are accepted.
-    #
-    # Head-to-head over 72 timepoints where both acted from the same starting transform:
-    # repair won 37, the sweep won 13, 22 tied, and taking the better of the two recovered
-    # 4.309 score points against 3.654 for repair alone -- 18% more. They are complementary,
-    # so neither ordering dominates and running both is what captures that.
-    #
-    # The sequential orders cost less and are kept for reproducing earlier runs and for when
-    # compute matters more than the tail.
-    fallback_mode: Literal["parallel", "repair_then_sweep", "sweep_then_repair"] = "parallel"
-    sweep_fallback_settings: SweepFallbackSettings = SweepFallbackSettings()
-    repair_pass_settings: RepairPassSettings = RepairPassSettings()
+    # Everything about the fallback lives in one nested block, named like every other block
+    # here (*_settings) and containing both the choice and the tuning for each pass.
+    fallback_settings: FallbackSettings = FallbackSettings()
+
+    # ---- DEPRECATED aliases. Accepted so configs written against the earlier field names
+    # keep validating under extra="forbid"; each is copied into fallback_settings and warned
+    # about. `fallback`/`fallback_mode` collapsed into fallback_settings.mode, and the two
+    # tuning blocks were renamed for consistency with their siblings.
+    fallback: str | None = None
+    fallback_mode: str | None = None
+    repair_pass_settings: RepairSettings | None = None
+    sweep_fallback_settings: SweepSettings | None = None
+
 
     @model_validator(mode="after")
-    def expand_fallback(self) -> "BeadsMatchSettings":
-        """Turn `fallback` into the three low-level flags that drive estimate_tczyx.
+    def migrate_deprecated_fallback_fields(self) -> "BeadsMatchSettings":
+        """Fold the old field names into fallback_settings, warning about each.
 
-        An explicitly-set low-level flag outranks a DEFAULTED `fallback`, so a config written
-        against the older field names keeps working. Setting `fallback` and a contradicting
-        low-level flag together is rejected rather than silently resolved -- the same rule as
-        `strategy`, and for the same reason: one of the two is not what the author meant.
+        Mapping the legacy `fallback` + `fallback_mode` pair is not a straight copy: the two
+        together expressed what fallback_settings.mode now expresses alone, and `fallback_mode`
+        was inert unless both passes were enabled. The old per-pass `mode` fields are read for
+        their on/off meaning only.
         """
-        if self.fallback is None:
+        legacy = {
+            "fallback": self.fallback,
+            "fallback_mode": self.fallback_mode,
+            "repair_pass_settings": self.repair_pass_settings,
+            "sweep_fallback_settings": self.sweep_fallback_settings,
+        }
+        used = [k for k, v in legacy.items() if v is not None]
+        if not used:
             return self
-        repair, sweep, order = {
-            "off": ("off", "off", "parallel"),
-            "repair": ("on_flagged", "off", "parallel"),
-            "sweep": ("off", "on_flagged", "parallel"),
-            "repair_then_sweep": ("on_flagged", "on_flagged", "repair_then_sweep"),
-            "sweep_then_repair": ("on_flagged", "on_flagged", "sweep_then_repair"),
-            "parallel": ("on_flagged", "on_flagged", "parallel"),
-        }[self.fallback]
+        warnings.warn(
+            f"{', '.join(used)} are deprecated; use beads_match_settings.fallback_settings "
+            "(mode / repair_settings / sweep_settings).",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
-        explicit = "fallback" in self.model_fields_set
-        conflicts = []
-        if explicit:
-            if "mode" in self.repair_pass_settings.model_fields_set and (
-                self.repair_pass_settings.mode != repair
-            ):
-                conflicts.append(
-                    f"repair_pass_settings.mode={self.repair_pass_settings.mode!r} "
-                    f"(fallback implies {repair!r})"
-                )
-            if "mode" in self.sweep_fallback_settings.model_fields_set and (
-                self.sweep_fallback_settings.mode != sweep
-            ):
-                conflicts.append(
-                    f"sweep_fallback_settings.mode="
-                    f"{self.sweep_fallback_settings.mode!r} (fallback implies {sweep!r})"
-                )
-            if "fallback_mode" in self.model_fields_set and self.fallback_mode != order:
-                conflicts.append(
-                    f"fallback_mode={self.fallback_mode!r} (fallback implies {order!r})"
-                )
-            if conflicts:
-                raise ValueError(
-                    f"fallback={self.fallback!r} contradicts " + " and ".join(conflicts)
-                    + ". Set fallback to null to drive the low-level flags directly, or "
-                    "remove the conflicting flag."
-                )
+        if self.repair_pass_settings is not None:
+            self.fallback_settings.repair_settings = self.repair_pass_settings
+        if self.sweep_fallback_settings is not None:
+            self.fallback_settings.sweep_settings = self.sweep_fallback_settings
 
-        if explicit or "mode" not in self.repair_pass_settings.model_fields_set:
-            self.repair_pass_settings.mode = repair
-        if explicit or "mode" not in self.sweep_fallback_settings.model_fields_set:
-            self.sweep_fallback_settings.mode = sweep
-        if explicit or "fallback_mode" not in self.model_fields_set:
-            self.fallback_mode = order
+        # `fallback` named the whole combination, so it wins outright.
+        if self.fallback is not None:
+            self.fallback_settings.mode = _coerce_yaml_off(self.fallback)
+            return self
+
+        # Otherwise reconstruct the combination from the per-pass on/off flags plus the order,
+        # which is what those three fields expressed between them.
+        rp = self.fallback_settings.repair_settings.mode
+        sp = self.fallback_settings.sweep_settings.mode
+        if rp is None and sp is None:
+            if self.fallback_mode is not None:
+                self.fallback_settings.mode = self.fallback_mode
+            return self
+
+        repair_on = rp == "on_flagged"
+        sweep_on = sp == "on_flagged"
+        if sp == "on_low_score":
+            # The old in-estimate() arm is a different mechanism from the post-pass sweep, so
+            # it maps to its own flag rather than to sweep_enabled.
+            self.fallback_settings.sweep_settings.legacy_in_estimate = True
+        # repair_then_sweep, not parallel, when the order was not stated: a config using the
+        # per-pass flags predates fallback_mode, and what those runs actually executed was the
+        # staged order. Reconstructing them as "parallel" would silently change the behaviour
+        # of every benchmark arm on disk.
+        order = self.fallback_mode or "repair_then_sweep"
+        if repair_on and sweep_on:
+            self.fallback_settings.mode = order
+        elif repair_on:
+            self.fallback_settings.mode = "repair"
+        elif sweep_on:
+            self.fallback_settings.mode = "sweep"
+        else:
+            self.fallback_settings.mode = "off"
         return self
-
 
 class PhaseCrossCorrSettings(MyBaseModel):
     normalization: Literal["magnitude", "classic"] | None = None
