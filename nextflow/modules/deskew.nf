@@ -14,7 +14,7 @@
 // Nextflow task.  See also:
 // examples/submitit_debug_nextflow/2026-05-27-submitit-debug-nextflow-concerns.md
 
-include { parse_resources; biahub_cmd; slurm_logs; slurm_log_dir } from './common'
+include { parse_resources; slurm_logs; slurm_log_dir } from './common'
 
 
 process init_deskew {
@@ -32,7 +32,7 @@ process init_deskew {
     script:
     """
     mkdir -p "${slurm_log_dir('deskew')}"
-    ${biahub_cmd()} deskew --init \
+    biahub deskew --init \
         -i "${input_zarr}"/*/*/* \
         -o "${output_zarr}" \
         -c "${config}"
@@ -58,7 +58,7 @@ process run_deskew {
 
     script:
     """
-    ${biahub_cmd()} deskew --cluster debug \
+    biahub deskew --cluster debug \
         -i "${input_zarr}/${position}" \
         -o "${output_zarr}" \
         -c "${config}"

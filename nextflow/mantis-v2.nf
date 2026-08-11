@@ -31,10 +31,9 @@ params.reconstruct_config = null
 params.virtual_stain_config = null
 params.track_config = null
 params.concatenate_config = null
-params.biahub_project = null
 params.max_positions = 0
 
-include { collect_positions; dataset_name } from './modules/common'
+include { collect_positions; dataset_name; check_environment } from './modules/common'
 include { deskew_wf } from './modules/deskew'
 include { flat_field_wf } from './modules/flat_field'
 include { reconstruct_wf } from './modules/reconstruct'
@@ -74,6 +73,9 @@ workflow {
     if (!params.virtual_stain_config) error "Provide --virtual_stain_config"
     if (!params.track_config)       error "Provide --track_config"
     if (!params.concatenate_config) error "Provide --concatenate_config"
+
+    // Tasks call `biahub`/`viscy` bare, so fail now if the env isn't activated.
+    check_environment()
 
     def ds     = dataset_name()
     def out    = params.output

@@ -31,7 +31,7 @@ scripts to adapt:
 Verify before launching:
 
 ```bash
-uv run --project /hpc/mydata/taylla.theodoro/repo/biahub python -c "
+<BIAHUB>/.venv/bin/python -c "
 from iohub.ngff import open_ome_zarr
 with open_ome_zarr('<OUTPUT>/0-convert/<DATASET>.zarr', mode='r') as p:
     print(len(list(p.positions())), 'positions', p.channel_names)"
@@ -75,7 +75,7 @@ reads the stem from `$DATASET` and appends `.zarr`):
 
 ```bash
 cd <OUTPUT>/5-assemble
-DATASET=<DATASET> uv run --project <BIAHUB> python rename_channels.py
+DATASET=<DATASET> <BIAHUB>/.venv/bin/python rename_channels.py
 ```
 
 **Why `nuclei` → `nuclei_prediction`:** `biahub virtual-stain` names its outputs
@@ -270,65 +270,134 @@ Editing files in `$BIAHUB_PROJECT` changes Nextflow task hashes and invalidates
 `-resume`, so a restart recomputes everything. Get the branch right *before*
 launching, then leave it alone.
 
-## 11. NEVER run `uv sync` on the biahub checkout — verify instead
+## 11. `uv sync` before launching — but check for out-of-band packages first
 
-**This is the one instruction in this skill that has caused damage.** An earlier
-version said to run `uv lock && uv sync` before launching, on the theory that
-otherwise 30 concurrent tasks would each resolve dependencies. Doing that broke a
-working environment.
+Run `uv sync --project <BIAHUB>` before every run. It is the whole provisioning
+step, and once it has run, activating the venv is all the pipeline needs. On a
+healthy checkout it is a ~1s near-no-op.
 
-**Why.** The `.venv` on this checkout carries **27 packages that are not in
-`uv.lock`** — installed out of band, and load-bearing: `cupy-cuda12x`,
-`tracksdata`, `stitch`, `dexp`, `dask-cuda`, `dask-image`, `distributed`, `ilpy`,
-`pyscipopt`, `polars`, `pims`, and their closure. `uv sync` treats anything absent
-from the lockfile as extraneous and removes it. That is correct uv behaviour and
-exactly the problem: **every** variant prunes them — `uv sync` would remove 33,
-`uv sync --all-extras` still removes 27. Confirm before believing otherwise:
+**The one thing to check first.** `uv sync` removes anything not in `uv.lock`, by
+design. If a checkout's `.venv` carries packages installed out of band, sync will
+prune them. This is per-checkout, so measure the checkout you are about to use
+rather than assuming:
 
 ```bash
-uv sync --all-extras --dry-run 2>&1 | grep -cE "^ *- "   # 27 = do not sync
+uv sync --all-extras --dry-run 2>&1 | grep -E "^ *- "   # lists what would go
 ```
 
-It also fails *partway* on Lustre — `failed to remove directory ... __pycache__:
-Directory not empty (os error 39)`, and a half-completed uninstall can leave a
-package whose `dist-info` lost its `RECORD`, which then shadows the real module.
-A broken `cupy` cascades: `iohub`, `cytoland` and `ultrack` all fail to import
-with `AttributeError: module 'cupy' has no attribute 'ndarray'`.
+Read the list before syncing:
 
-**Do this instead — verify, never mutate:**
+- Only unused leaf packages (e.g. `nd2`, `ome-types`, `xsdata`,
+  `resource-backed-dask-array` — the `cellpose[all]` closure, which biahub does
+  not use)? Sync; nothing in the pipeline imports them.
+- Anything load-bearing — `cupy-cuda12x`, `tracksdata`, `stitch`, `dexp`,
+  `dask-cuda`, `ilpy`, `pyscipopt` — **stop and raise it with the user.** One
+  checkout had 27 such packages and syncing it broke a working environment. A
+  broken `cupy` cascades: `iohub`, `cytoland` and `ultrack` then all fail to
+  import with `AttributeError: module 'cupy' has no attribute 'ndarray'`.
+
+That earlier damage is why this section used to forbid `uv sync` outright. The
+hazard was that checkout's out-of-band set, not `uv sync` itself.
+
+On Lustre a sync can also fail *partway* — `failed to remove directory ...
+__pycache__: Directory not empty (os error 39)`. If that happens, **stop**: a
+half-completed uninstall can leave a package whose `dist-info` lost its `RECORD`,
+which then shadows the real module. The repair is to delete the corrupt package
+directory plus its `dist-info` so uv can lay it down fresh, then `uv pip install`
+the exact pins (`uv pip install` does *not* prune).
+
+Verify after syncing, before launching:
 
 ```bash
-uv lock --check                     # lockfile current? (no error = yes)
-time uv run --project <BIAHUB> biahub nf --help   # ~0.5s = env materialized
+uv lock --check                                  # lockfile current
+<BIAHUB>/.venv/bin/biahub nf --help              # CLI importable
 ```
 
-A fast `uv run` means there is no resolution work to do and nothing to sync. If
-the env genuinely needs provisioning, that is a deliberate maintenance task with
-the user in the loop — not a pre-launch step. Never run a bare `uv sync` here, and
-if one fails with Lustre `ENOTEMPTY`, **stop**: the failure mode is a broken env,
-not a no-op.
+Use the venv's own entry point, not `uv run` — `uv run` performs an implicit sync
+on every invocation, which is exactly what the launch procedure resolves once up
+front.
 
-If it is already broken, the repair is to delete the corrupt package directory
-plus its `dist-info` so uv can lay it down fresh, then `uv pip install` the exact
-pins (`uv pip install` does *not* prune). Recovering the out-of-band set means
-reinstalling `stitch` and `tracksdata`, whose dependency closure pulls most of the
-other 25 back.
+**Two launch forms both work**; verified that each exports `VIRTUAL_ENV` and a
+`.venv/bin`-first `PATH` to child processes, which is what carries the
+environment through `nextflow` → `sbatch` → compute node:
 
-## 12. Per-task `uv run` mutates the shared venv
+```bash
+uv sync --project <BIAHUB> && source <BIAHUB>/.venv/bin/activate && nextflow run ...   # preferred
+uv run --project <BIAHUB> nextflow run ...                                             # equivalent
+```
 
-Every `uv run --project ...` invocation reinstalls one package — measured, 3 runs
-in a row, never converging:
+Prefer the first. `uv run` re-syncs on every invocation, so a lockfile change
+mid-run could shift the environment under a live pipeline, and it hides which env
+was used from the run log. Explicit activation is the provenance record. Note
+`nextflow` itself comes from `module load nextflow`, not the venv, so `uv run`
+buys nothing here beyond the implicit sync.
+
+## 12. Environment churn: fixed, and how to recognize it coming back
+
+The pipeline used to prefix every task with `uv run --project <path> biahub` (a
+`biahub_cmd()` helper, plus a `--extra stain` variant in `virtual_stain.nf`).
+With `maxForks = 30` that meant up to 30 concurrent processes each asking uv to
+re-materialize one shared `site-packages`. Every invocation reinstalled a package
+and never converged:
 
 ```
 Uninstalled 1 package in 54ms / Installed 1 package in 232ms
 ```
 
-With `maxForks = 30`, that is up to 30 concurrent processes writing the same
-`site-packages`. `virtual_stain.nf` compounds it by using a different environment
-spec (`--extra stain`) from every other step's plain `biahub_cmd()`, so successive
-tasks ask uv for different environments against one shared venv.
+Two changes removed this:
 
-`uv run --no-sync` eliminates the mutation entirely (verified: no churn across
-repeated runs). The pipeline does not pass it today — tracked in [biahub#308](https://github.com/czbiohub-sf/biahub/issues/308). Until
-that lands, expect this churn in a live run; it has not been observed to break a
-run, but it is the reason not to add any *further* environment mutation on top.
+1. **The wrapper is gone.** No `--biahub_project` parameter, no `biahub_cmd()`,
+   no `stain_cmd()`. Tasks call `biahub`/`viscy` bare and inherit the activated
+   environment (§ above, and the ENVIRONMENT CONTRACT comment in
+   `nextflow/modules/common.nf`).
+2. **The root cause of the churn was a stale `uv.lock` entry.** `uv.lock`
+   recorded `viscy-transforms==0.0.0.post215.dev0+4b62365`, but the wheel built
+   from that same pinned commit declares `0.1.0a0`. uv compared the two, decided
+   the install was not fresh, and reinstalled it — forever. Diagnose this class
+   of problem with:
+
+   ```bash
+   uv sync --dry-run -v 2>&1 | grep -i "does not match resolved version"
+   ```
+
+   The fix was `uv lock --refresh-package viscy-transforms`, a one-line lockfile
+   change. Expect it to recur whenever a git-sourced dependency's declared
+   version changes without the pinned rev changing.
+
+A healthy checkout now shows no churn at all — `uv sync --dry-run` reports
+"Would make no changes" and repeated runs install nothing. If you see
+`Uninstalled 1 package` on every invocation again, it is a version mismatch like
+the above, not something to work around with `--no-sync`.
+Was tracked in [biahub#308](https://github.com/czbiohub-sf/biahub/issues/308).
+
+## 13. A param passed on the command line is a String
+
+Nextflow types params declared in a config `params { }` block, but a param
+supplied as `--foo 1` on the command line arrives as the **String** `"1"`. Any
+operator or directive that needs a number must coerce it.
+
+This silently broke `--max_positions`, the flag the run script advertises for a
+quick smoke test. `positions.take("1")` matches no `take` overload, so Nextflow
+fell back to resolving `take` as a process and aborted the whole run at launch:
+
+```
+[ERROR] Missing process or function take([DataflowStream[?], 1])
+```
+
+The error names `take` and points at the `collect_positions(...)` call site, which
+reads like a broken channel wiring rather than a type problem — the quotes are not
+shown in the rendered arguments. The default path (`max_positions = 0`, from the
+config, already an int) never reaches `take`, so every production run worked and
+only the smoke-test path failed.
+
+Both sites are coerced now (`(params.max_positions ?: 0) as int` in
+`collect_positions`, and `queueSize` in the slurm profile). **When adding a
+numeric param, coerce it at the point of use** and test it via the CLI, not just
+via its config default — a config-default test cannot catch this.
+
+**What a `--max_positions N` run produces.** Only the per-position `run_*` tasks
+honour the limit. Every `init_*` step globs the whole input (`-i <store>/*/*/*`),
+so it scaffolds the output plate for *all* positions. A one-position smoke test
+therefore leaves a full-width plate in which only the first position holds data —
+correct and expected, not a partial-write bug. Do not treat such a store as a
+deliverable, and delete it before a real run so `-resume` cannot reuse it.

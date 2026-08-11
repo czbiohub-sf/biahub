@@ -4,7 +4,7 @@ Implements the convention in czbiohub-sf/biahub#291. Run ONCE, after
 ``5-assemble`` completes, from the directory holding the store::
 
     cd <OUTPUT>/5-assemble
-    DATASET=2026_07_14_A549_MAP4_ZIKV uv run --project <BIAHUB> python rename_channels.py
+    DATASET=2026_07_14_A549_MAP4_ZIKV <BIAHUB>/.venv/bin/python rename_channels.py
 
 Mapping (first match wins):
 

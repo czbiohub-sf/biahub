@@ -149,7 +149,7 @@ From `trace.txt`, report per step: tasks submitted, succeeded, failed, retried,
 total and max wall time. Then:
 
 ```bash
-uv run --project <BIAHUB> python -c "
+<BIAHUB>/.venv/bin/python -c "
 from iohub.ngff import open_ome_zarr
 with open_ome_zarr('<OUTPUT>/5-assemble/<DATASET>.zarr', mode='r') as p:
     pos = list(p.positions())

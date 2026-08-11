@@ -5729,7 +5729,7 @@ dependencies = [
 
 [[package]]
 name = "viscy-transforms"
-version = "0.0.0.post215.dev0+4b62365"
+version = "0.1.0a0"
 source = { git = "https://github.com/mehta-lab/VisCy?subdirectory=packages%2Fviscy-transforms&rev=4b62365c0df25929bffc7f01b3bb2d1c11d69cce#4b62365c0df25929bffc7f01b3bb2d1c11d69cce" }
 dependencies = [
     { name = "kornia" },

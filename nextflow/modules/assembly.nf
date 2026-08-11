@@ -22,7 +22,7 @@
 // concat_data_paths (resolve mode) — also a login-node step — before init/run
 // read the config.
 
-include { parse_resources; biahub_cmd; slurm_logs; slurm_log_dir } from './common'
+include { parse_resources; slurm_logs; slurm_log_dir } from './common'
 
 
 process resolve_concatenate_config {
@@ -48,7 +48,7 @@ process resolve_concatenate_config {
     """
     mkdir -p "${config_dir}"
     rm -f "${resolved}"
-    ${biahub_cmd()} concatenate \
+    biahub concatenate \
         -c "${config}" \
         -o "${resolved}" \
         --concat-data-paths "${deskew_zarr}/*/*/*" \
@@ -74,7 +74,7 @@ process init_concatenate {
     script:
     """
     mkdir -p "${slurm_log_dir('assemble')}"
-    ${biahub_cmd()} concatenate --init \
+    biahub concatenate --init \
         -c "${resolved_config}" \
         -o "${output_zarr}"
     """
@@ -109,7 +109,7 @@ process run_concatenate {
 
     script:
     """
-    ${biahub_cmd()} concatenate --cluster debug \
+    biahub concatenate --cluster debug \
         -c "${resolved_config_path}" \
         -o "${output_zarr}"
     """

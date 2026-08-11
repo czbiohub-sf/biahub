@@ -167,19 +167,27 @@ tmux send-keys -t "$SESSION" "bash ./run_mantis_v2.sh 2>&1 | tee -a nextflow/run
 Tell the user: `tmux attach -t nf_<DATASET>` to watch, `Ctrl-b d` to detach.
 
 **Do not edit the biahub checkout while a run is live** — it changes Nextflow
-task hashes and invalidates `-resume`.
+task hashes and invalidates `-resume`. (Editing this skill is fine; it is not
+part of the pipeline.)
 
-**Never run `uv sync` on the biahub checkout.** 27 packages in its `.venv` are not
-in `uv.lock`, and every `uv sync` variant deletes them — this has already broken a
-working environment once. Verify instead, and launch if both pass:
+**The environment is resolved once, before launch, and inherited.** The pipeline
+calls `biahub` and `viscy` as bare commands — there is no per-task `uv run`
+wrapper and no `--biahub_project` parameter. `run_mantis_v2.sh` already does
+this; it is here so you can recognize it:
 
 ```bash
-uv lock --check                                    # no error = lockfile current
-time uv run --project <BIAHUB> biahub nf --help    # ~0.5s = env materialized
+uv sync --project <BIAHUB>
+source <BIAHUB>/.venv/bin/activate
+nextflow run <BIAHUB>/nextflow/mantis-v2.nf ...
 ```
 
-If either looks wrong, stop and raise it with the user rather than syncing. Full
-detail and the repair procedure are in `references/caveats.md` §11.
+sbatch exports the submit environment (`--export=ALL` is the default) and the
+`.venv` is on shared storage, so every compute node resolves the same paths.
+`mantis-v2.nf` calls `check_environment()` and aborts at launch with an
+actionable message if `biahub`/`viscy` are missing, before any task is submitted.
+
+`uv sync` here is expected and safe — see `references/caveats.md` §11 for the one
+environment-specific hazard to check for first.
 
 ## 9. Monitor
 

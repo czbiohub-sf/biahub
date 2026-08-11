@@ -11,7 +11,11 @@
 #
 # Any extra arguments are forwarded to nextflow, e.g.
 #   ./run_mantis_v2.sh -profile local
-#   ./run_mantis_v2.sh --max_positions 2      # quick smoke test
+#   ./run_mantis_v2.sh --max_positions 1      # quick smoke test, one position
+#
+# Smoke-testing with --max_positions 1 first is worth the few minutes: it walks
+# all six steps on one position and catches config/schema errors before a
+# full-plate run spends hours reaching virtual-stain.
 
 module load nextflow
 module load uv
@@ -24,7 +28,9 @@ set -euo pipefail
 DATASET=""                 # e.g. 2026_07_14_A549_MAP4_ZIKV
 RAW_STORE=""               # basename of the raw store, e.g. ${DATASET}_1.ome.zarr
 PROJECT_DIR=""             # e.g. /hpc/projects/intracellular_dashboard/organelle_dynamics
-BIAHUB_PROJECT=""          # e.g. /hpc/mydata/taylla.theodoro/repo/biahub
+# The biahub checkout. Used to locate the pipeline files AND the venv this script
+# activates below — it is no longer passed to the pipeline as a parameter.
+BIAHUB_PROJECT=""          # e.g. /hpc/mydata/<user>/biahub
 
 # Output directory. Defaults to ${PROJECT_DIR}/${DATASET}; set it explicitly for
 # a sibling run — the convention for reprocessing the same data is
@@ -42,6 +48,18 @@ OUTPUT_DIR="${OUTPUT_DIR:-${PROJECT_DIR}/${DATASET}}"
 CONFIGS="${OUTPUT_DIR}/configs"
 PIPELINE="${BIAHUB_PROJECT}/nextflow/mantis-v2.nf"
 NF_CONFIG="${BIAHUB_PROJECT}/nextflow/nextflow.config"
+
+# Resolve the environment ONCE, here, and let it propagate. The pipeline calls
+# `biahub` and `viscy` as bare commands: sbatch exports this shell's environment
+# to every task (--export=ALL is the default) and the venv is on shared storage,
+# so the compute nodes resolve the same absolute paths. `uv sync` is the whole
+# provisioning step — no per-task `uv run`, so tasks never contend on
+# site-packages. mantis-v2.nf calls check_environment() and fails at launch if
+# this activation is missing.
+uv sync --project "${BIAHUB_PROJECT}"
+# shellcheck disable=SC1091
+set +u; source "${BIAHUB_PROJECT}/.venv/bin/activate"; set -u
+command -v biahub >/dev/null || { echo "biahub not on PATH after activation" >&2; exit 1; }
 
 # Default the converted plate to the conventional location if it exists there.
 if [[ -z "${CONVERTED_ZARR}" && -d "${OUTPUT_DIR}/0-convert/${DATASET}.zarr" ]]; then
@@ -65,6 +83,5 @@ nextflow run "${PIPELINE}" \
     --virtual_stain_config "${CONFIGS}/virtual_stain.yml" \
     --concatenate_config   "${CONFIGS}/concatenate.yml" \
     --track_config         "${CONFIGS}/track.yml" \
-    --biahub_project       "${BIAHUB_PROJECT}" \
     -resume \
     "$@"
