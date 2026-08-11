@@ -163,6 +163,27 @@ name in the **assembled** plate, because track reads `5-assemble`, not
 `3-virtual-stain` — and they must match the **pre-rename** names, since track
 runs inside the pipeline while the rename (§2) runs after it.
 
+**`z_slicing.focus_channel` resolves against `input_images`, not the store.**
+`apply_focus_slicing` (`biahub/track.py`) looks the focus channel up in the dict
+of channels `input_images` actually loaded and raises if it is missing:
+
+```
+ValueError: focus_channel 'Phase3D' not in loaded channels ['nuclei_prediction'].
+```
+
+So `method: focus` requires the focus channel to *also* appear in
+`input_images.channels`, even though it exists in the assembled plate. Observed
+for real: a zebrafish template declaring `focus_channel: Phase3D` while loading
+only `nuclei_prediction` failed all 8 positions × 5 retries — **after** flat-field,
+deskew, reconstruct, virtual-stain and assemble had all succeeded, i.e. the
+cheapest possible bug discovered at the most expensive possible moment. Both
+shipped templates now use `method: all`. When `focus_channel` is unset the code
+falls back to the first loaded channel, which is why `method: all` is the safe
+default.
+
+This is the argument for biahub#304 (validate every step's config up front): a
+one-line config error in the last step burned a whole run's compute.
+
 **`concatenate.yml` — `concat_data_paths` stay as `placeholder`.** The assemble
 subworkflow injects the three real source paths via `--concat-data-paths`. Three
 placeholder entries and three `channel_names` entries, one per source (deskew,

@@ -71,13 +71,29 @@ ls -t <OUTPUT>/nextflow/slurm_output/*/ | head
 tail -n 40 <OUTPUT>/nextflow/slurm_output/run_flat_field/*_<jobid>.out
 ```
 
-Progress by step, cheaply:
+Position count per step. The plate nests `<store>.zarr/<row>/<col>/<fov>`, so glob
+three levels **inside** the named store:
 
 ```bash
+DS=<DATASET>
 for d in 0-flatfield 1-deskew 2-reconstruct 3-virtual-stain 5-assemble 4-track; do
-  n=$(find "<OUTPUT>/$d" -mindepth 3 -maxdepth 3 -type d 2>/dev/null | wc -l)
-  echo "$d: $n positions"
+  printf "  %-16s %s\n" "$d" "$(ls -d "<OUTPUT>/$d/$DS.zarr"/*/*/*/ 2>/dev/null | wc -l)"
 done
+```
+
+Two traps, both hit for real:
+
+- **Name the store.** A bare `$d/*.zarr/*/*/*/` overcounts `2-reconstruct`, which
+  also holds `transfer_function.zarr` (10 instead of 8 for an 8-position plate).
+- **This counts scaffolds, not finished work.** Each step's cached `init-*` task
+  creates every position's metadata up front, so a step shows its full position
+  count from the moment it starts — a step whose every task *failed* still reads
+  8/8 here. Use it for "has this step started", never for "is this step done".
+  `trace.txt` is the only authoritative source for completion:
+
+```bash
+awk -F'\t' 'NR>1{split($4,a,":"); print a[length(a)], $5}' <OUTPUT>/nextflow/trace.txt \
+  | sort | uniq -c | sort -k2
 ```
 
 ## Rough expectations

@@ -27,12 +27,21 @@ output_mode: "2D"
 fov: "*/*/*"
 target_channel: nuclei_prediction
 
-# The old zebrafish configs used a 40-plane in-focus window
-# (focus_config.z_window: 40), which maps to the block below.
+# `method: all` — use every Z plane. input_images below projects Z with np.mean.
+#
+# DO NOT switch this to `method: focus` without also loading the focus channel.
+# `apply_focus_slicing` resolves focus_channel against the channels loaded by
+# `input_images`, NOT against the store, and raises if it is absent:
+#   ValueError: focus_channel 'Phase3D' not in loaded channels ['nuclei_prediction'].
+# An earlier version of this template had exactly that bug — it declared
+# `focus_channel: Phase3D` while input_images loaded only nuclei_prediction, and
+# every run_track task failed 5/5 retries after the whole reconstruction had
+# already succeeded. To use a focus window, add Phase3D to input_images as well.
+# (The old zebrafish configs' `focus_config.z_window: 40` maps to
+# `{method: focus, window_size: 40, focus_channel: Phase3D}` — plus that extra
+# input_images entry.)
 z_slicing:
-  method: focus
-  window_size: 40
-  focus_channel: Phase3D
+  method: all
 
 segmentation_method: cellpose
 cellpose_config:
