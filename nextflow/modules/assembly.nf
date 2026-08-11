@@ -108,8 +108,14 @@ process run_concatenate {
     val output_zarr
 
     script:
+    // --resume matters more here than for the per-position steps: this is a
+    // single job covering every position, so a preemption or walltime kill near
+    // the end would otherwise discard hours of copying. The retry recomputes
+    // only the (t, c) units that had not finished. The completion record is
+    // keyed by the resolved settings, so a config change recomputes instead of
+    // being skipped.
     """
-    biahub concatenate --cluster debug \
+    biahub concatenate --cluster debug --resume \
         -c "${resolved_config_path}" \
         -o "${output_zarr}"
     """

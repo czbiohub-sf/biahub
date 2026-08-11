@@ -56,8 +56,12 @@ process run_flat_field {
     val position
 
     script:
+    // --resume: a preempted task finishes the write it is in and stops early, so
+    // the retry (or a later `nextflow -resume`) recomputes only the (t, c) units
+    // this position had not finished. The completion record is keyed by the
+    // resolved settings, so a config change recomputes instead of being skipped.
     """
-    biahub flat-field --cluster debug \
+    biahub flat-field --cluster debug --resume \
         -i "${input_zarr}/${position}" \
         -o "${output_zarr}" \
         -c "${config}"

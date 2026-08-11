@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import os
@@ -14,6 +15,23 @@ from numpy.typing import DTypeLike
 from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
+
+#: ``fnmatch`` patterns for the per-position zattrs keys that steps carry
+#: forward into their output store, passed as ``create_empty_plate``'s
+#: ``metadata_keys``. These are the provenance records each step stamps on its
+#: output — keeping them means a derived plate still describes how it was made.
+#:
+#: This is deliberately an allowlist rather than a denylist. Everything else an
+#: upstream store happens to carry is dropped, which matters most for the
+#: acquisition writer's ``ome_writers`` blob: it holds one record per raw
+#: Z-frame (~18 MB per position on a mantis plate), and its frame indices stop
+#: describing the data as soon as a step changes the shape. Copying it forward
+#: made every ``--init`` step read and rewrite tens of MB per position, and
+#: taxed every subsequent read of the position for no benefit.
+#:
+#: ``normalization`` (written by the reconstruction step) is intentionally
+#: absent — it describes that step's inputs, not its output.
+PROVENANCE_METADATA_KEYS = ("biahub-*", "waveorder", "cytoland")
 
 
 def echo_resources(num_cpus: int, mem_gb: int, time_minutes: int) -> None:
@@ -43,6 +61,19 @@ def echo_resources(num_cpus: int, mem_gb: int, time_minutes: int) -> None:
     # cannot serialize.
     payload = {"cpus": int(num_cpus), "mem_gb": int(mem_gb), "time_minutes": int(time_minutes)}
     click.echo("RESOURCES:" + json.dumps(payload))
+
+
+def settings_fingerprint(settings) -> str:
+    """Stable short hash of a settings model.
+
+    Passed to ``process_single_position(resume_token=...)`` so that the
+    per-unit completion records a resumed run relies on belong to the settings
+    that produced them. Re-running a step with a changed config against an
+    existing output store then recomputes instead of skipping units whose data
+    would now be different.
+    """
+    payload = json.dumps(settings.model_dump(mode="json"), sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 
 def get_submitit_cluster(

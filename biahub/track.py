@@ -28,6 +28,7 @@ from biahub.cli.parsing import (
 )
 from biahub.cli.resolve_function import resolve_function
 from biahub.cli.utils import (
+    PROVENANCE_METADATA_KEYS,
     echo_resources,
     estimate_resources,
     get_submitit_cluster,
@@ -955,6 +956,7 @@ def _init_output_plate(
         ),
         dtype=np.uint32,
         metadata_sources=input_plate,
+        metadata_keys=PROVENANCE_METADATA_KEYS,
     )
 
     # Record provenance on each output position, mirroring the extra_metadata

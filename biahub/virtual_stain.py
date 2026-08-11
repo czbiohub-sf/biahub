@@ -25,6 +25,7 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.cli.utils import (
+    PROVENANCE_METADATA_KEYS,
     echo_resources,
     estimate_resources,
     get_submitit_cluster,
@@ -245,9 +246,15 @@ def _init_output_plate(
     ``output_ome_zarr_version`` dictates the output store's OME-Zarr version;
     when None the input store's version is preserved.
 
+    Upstream provenance zattrs are carried over from the input plate, as in
+    the other steps, so the output records the whole chain that produced it
+    and not just this step. See ``PROVENANCE_METADATA_KEYS`` for what is
+    inherited (and, as importantly, what is left behind).
+
     Each key of ``extra_metadata`` is written as a top-level zattr on every
     output position (mirroring ``process_single_position``), recording
-    provenance such as the validated predict config.
+    provenance such as the validated predict config. These are written after
+    the inherited keys, so this step's own record wins on a name collision.
 
     Returns the input ``(T, C, Z, Y, X)`` shape.
     """
@@ -256,6 +263,7 @@ def _init_output_plate(
         scale = input_dataset.scale
     T, C, Z, Y, X = input_shape
 
+    input_plate = Path(input_position_dirpaths[0]).parents[2]
     create_empty_plate(
         store_path=output_dirpath,
         position_keys=[Path(p).parts[-3:] for p in input_position_dirpaths],
@@ -263,6 +271,8 @@ def _init_output_plate(
         shape=(T, len(target_channels), Z, Y, X),
         scale=scale,
         version=resolve_ome_zarr_version(input_position_dirpaths[0], output_ome_zarr_version),
+        metadata_sources=input_plate,
+        metadata_keys=PROVENANCE_METADATA_KEYS,
     )
 
     if extra_metadata:
