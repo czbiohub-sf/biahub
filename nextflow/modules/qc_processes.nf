@@ -26,6 +26,29 @@ process plan_stage {
 }
 
 
+// Data-driven per-task memory: defer to imaging-qc's own `estimate-resources`
+// rather than reimplementing the estimate here. The CLI reads store metadata
+// and metric scopes and prints a JSON payload whose `estimate_gb` drives
+// `compute_step`'s dynamic `memory` (parsed in qc.nf and threaded through as
+// `meta.memory_gb`). `--num-workers 1` because Nextflow fans out one position
+// per compute task, so the relevant peak is per-position, not per-store.
+process estimate_resources {
+    label 'cpu_local'
+    tag "${zarr_path}"
+
+    input:
+    tuple val(zarr_path), val(config_path)
+
+    output:
+    tuple val(zarr_path), val(config_path), stdout
+
+    script:
+    """
+    ${qc_cmd()} estimate-resources --config ${config_path} --num-workers 1 ${zarr_path}
+    """
+}
+
+
 process compute_step {
     tag "${zarr_path}/${position ?: 'store'}/${step_id}"
     label 'cpu'

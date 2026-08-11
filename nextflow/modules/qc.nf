@@ -1,4 +1,5 @@
 include { plan_stage }                       from './qc_processes'
+include { estimate_resources }               from './qc_processes'
 include { compute_step as compute_step_w0 }  from './qc_processes'
 include { compute_step as compute_step_w1 }  from './qc_processes'
 include { compute_step as compute_step_w2 }  from './qc_processes'
@@ -25,22 +26,35 @@ workflow qc_stage_wf {
     main:
     plan_out = plan_stage(plan_inputs)
 
+    // Per-(zarr,config) memory estimate from imaging-qc's estimate-resources CLI.
+    // Keyed by [zarr, config] and joined 1:1 into the plan so every work item
+    // carries `mem` (GB), which becomes compute_step's meta.memory_gb.
+    est_mem = estimate_resources(plan_inputs)
+        .map { z, cfg, est_json ->
+            def line = est_json.trim().readLines().findAll { it.trim().startsWith('{') }.last()
+            def r = new groovy.json.JsonSlurper().parseText(line)
+            tuple([z, cfg], (r.estimate_gb ?: 16) as Double)
+        }
+
     // Parse plan JSON, flatten into work items, branch by wave_id
     items = plan_out
-        .flatMap { z, cfg, json_text ->
+        .map { z, cfg, json_text -> tuple([z, cfg], json_text) }
+        .join(est_mem)
+        .flatMap { key, json_text, mem ->
+            def (z, cfg) = key
             def plan = new groovy.json.JsonSlurper().parseText(json_text.trim())
             plan.waves.collectMany { w ->
                 (w.items ?: []).collect { i ->
                     [z, cfg, w.wave_id, i.step_id,
                      i.position ?: null, i.chunk_id ?: null,
-                     i.time_indices ?: null]
+                     i.time_indices ?: null, mem]
                 }
             }
         }
         .branch { w0: it[2] == 0; w1: it[2] == 1; w2: it[2] == 2 }
 
     // Wave 0: position-scoped (may be chunked)
-    w0_in = items.w0.map { z,c,wid,sid,pos,cid,ti -> [z,c,sid,pos,cid,ti,[:]] }
+    w0_in = items.w0.map { z,c,wid,sid,pos,cid,ti,mem -> [z,c,sid,pos,cid,ti,[memory_gb: mem]] }
     w0_done = compute_step_w0(w0_in)
     w0_count = w0_done.count()
 
@@ -55,14 +69,14 @@ workflow qc_stage_wf {
     // Wave 1: dependent-scoped (after finalize wave 0)
     w1_in = items.w1
         .combine(fw0_count)
-        .map { z,c,wid,sid,pos,cid,ti,n -> [z,c,sid,pos,null,null,[:]] }
+        .map { z,c,wid,sid,pos,cid,ti,mem,n -> [z,c,sid,pos,null,null,[memory_gb: mem]] }
     w1_done = compute_step_w1(w1_in)
     w1_count = w1_done.mix(fw0).count()
 
     // Wave 2: store-scoped (after wave 1)
     w2_in = items.w2
         .combine(w1_count)
-        .map { z,c,wid,sid,pos,cid,ti,n -> [z,c,sid,null,null,null,[:]] }
+        .map { z,c,wid,sid,pos,cid,ti,mem,n -> [z,c,sid,null,null,null,[memory_gb: mem]] }
     w2_done = compute_step_w2(w2_in)
 
     // Finalize stage: aggregate + gate + summary
