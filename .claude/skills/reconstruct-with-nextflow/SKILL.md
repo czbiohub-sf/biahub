@@ -104,10 +104,12 @@ ls -dt /hpc/projects/tlg2_mantis/*/configs                                  # ze
 ls -dt /hpc/projects/intracellular_dashboard/organelle_dynamics/*/configs   # A549
 ```
 
-Templates for both families are in `templates/configs/{zebrafish,a549}/`. Every
-value that must be checked per dataset is called out in `references/caveats.md`
-§3 — pixel size, scan step, BF channel name, VS checkpoint, and the tracking
-schema.
+Templates for both families live in the biahub checkout, not in this skill:
+`<BIAHUB>/nextflow/configs/{zebrafish,a549}/` — they are versioned alongside
+`mantis-v2.nf`, so a schema change to the pipeline and to its configs lands in
+one commit. Every value that must be checked per dataset is called out in
+`references/caveats.md` §3 — pixel size, scan step, BF channel name, VS
+checkpoint, and the tracking schema.
 
 ## 6. Present the plan
 
@@ -133,6 +135,8 @@ Get explicit approval.
 ```bash
 mkdir -p <OUTPUT>/configs <OUTPUT>/nextflow
 cp <REFERENCE>/configs/*.yml <OUTPUT>/configs/
+# or, with no suitable reference run:
+cp <BIAHUB>/nextflow/configs/<family>/*.yml <OUTPUT>/configs/
 ```
 
 Then edit the copies for this dataset. Copy `templates/run_mantis_v2.sh` to

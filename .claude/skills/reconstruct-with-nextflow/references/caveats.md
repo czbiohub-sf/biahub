@@ -205,7 +205,7 @@ that store is a by-product to discard.
 
 What this means in practice:
 
-- Pass `templates/configs/zebrafish/track.yml` (a marked placeholder) so the run
+- Pass `<BIAHUB>/nextflow/configs/zebrafish/track.yml` (a marked placeholder) so the run
   validates and starts.
 - Say in the plan that `5-assemble` is the deliverable and `4-track` is
   discarded, so the user is not surprised by the extra step's wall time.

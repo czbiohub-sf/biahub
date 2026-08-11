@@ -22,6 +22,10 @@ model:
       stem_kernel_size: [7, 4, 4]
       in_stack_depth: 21
       pretraining: false
+      # Keep all three: head_conv selects the head THIS checkpoint was trained
+      # with (dropping it mismatches 22 decoder weights), and head_conv_pool
+      # is parameter-free, so defaulting it loads cleanly but silently changes
+      # the predictions. expansion_ratio sets the decoder's 368-channel width.
       head_conv: true
       head_conv_expansion_ratio: 4
       head_conv_pool: false
