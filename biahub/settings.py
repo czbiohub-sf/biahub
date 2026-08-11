@@ -1,3 +1,5 @@
+import warnings
+
 from pathlib import Path
 from typing import Any, Literal
 
@@ -16,6 +18,26 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+
+
+
+def _coerce_yaml_off(value):
+    """Accept YAML's boolean `off` where the string "off" is meant.
+
+    YAML 1.1 resolves the bare words off/no/false to boolean False (and on/yes/true to True),
+    so `fallback: off` arrives here as False and fails a Literal["off", ...] check with a
+    message that does not mention quoting. Every field using this has "off" as a real option,
+    so mapping False onto it is unambiguous. True is rejected, because "on" is not a value any
+    of these fields takes -- there is always more than one way to be on.
+    """
+    if value is False:
+        return "off"
+    if value is True:
+        raise ValueError(
+            "got boolean true; YAML reads bare on/yes/true as a boolean. Quote the value you "
+            'meant, e.g. "always" or "on_flagged".'
+        )
+    return value
 
 
 # All settings classes inherit from MyBaseModel, which forbids extra parameters to guard against typos
@@ -289,6 +311,7 @@ class SweepFallbackSettings(MyBaseModel):
     # Enable it, with fallback_mode="parallel", when the tail matters more than the runtime --
     # on the worst dataset seen it beat repair at 5 of 20 timepoints, once by 0.455 -> 0.667.
     mode: Literal["off", "on_flagged", "on_low_score"] = "off"
+    _coerce_mode = field_validator("mode", mode="before")(_coerce_yaml_off)
     score_threshold: float = 0.75
     max_timepoints: int | None = 25
     # Which timepoints the sweep is allowed to touch, once the repair pass has run.
@@ -358,6 +381,7 @@ class RepairPassSettings(MyBaseModel):
     # a repair pass it did not before. The transforms can only improve, but the run takes
     # longer and writes repair_log.json.
     mode: Literal["off", "on_flagged"] = "on_flagged"
+    _coerce_mode = field_validator("mode", mode="before")(_coerce_yaml_off)
     try_config_seed: bool = True
     max_timepoints: int | None = 25
     # Seed a flagged timepoint from the run's own consensus geometry -- the element-wise
@@ -435,6 +459,63 @@ class BeadsMatchSettings(MyBaseModel):
     # Defaults to "always" (i.e. variant D) on the benchmark below. Set "off" to restore
     # the previous behaviour exactly.
     spectral_arm: Literal["off", "on_low_score", "always"] = "always"
+    _coerce_spectral_arm = field_validator("spectral_arm", mode="before")(_coerce_yaml_off)
+
+    # ---- WHAT runs. Two named fields; everything else in this block is HOW it runs. ----
+    #
+    # strategy expands into two low-level flags that live in different places --
+    # affine_transform_settings.use_prev_t_transform and spectral_arm above -- so that
+    # choosing a variant does not require knowing which flags combine to make it:
+    #
+    #   strategy                use_prev_t_transform   spectral_arm
+    #   propagate                       True              off
+    #   propagate_spectral              True              always
+    #   independent                     False             off
+    #   independent_spectral            False             always      <- default
+    #
+    # Benchmarked on 2025_09_17 (144 t) and 2025_09_18 (240 t):
+    #   propagate              median 0.864/0.875   min 0.000/0.667   1/0  below 0.40
+    #   independent            median ~0.826        min 0.000         6/33 below 0.40
+    #   independent_spectral   median 0.870/0.875   min 0.720/0.600   0/0  below 0.40
+    #
+    # independent_spectral is the default because the spectral cascade is insensitive to its
+    # initial transform -- measured identical results from seeds scoring 0.826 and 0.000 -- so
+    # propagation no longer earns its serial cost (~3-10 h against ~20 min), its lack of cheap
+    # resume, or its tendency to turn one failure into a cluster.
+    #
+    # Set to None to drive use_prev_t_transform and spectral_arm directly.
+    strategy: (
+        Literal["propagate", "propagate_spectral", "independent", "independent_spectral"]
+        | None
+    ) = "independent_spectral"
+
+    # fallback replaces three orchestration flags that used to be read together --
+    # repair_pass_settings.mode, sweep_fallback_settings.mode, and fallback_mode -- one of
+    # which was inert unless the other two were both on. That combination was misleading in
+    # its own right: the default read "parallel" while the sweep was off, so the config said
+    # one thing and the run did another.
+    #
+    #   off                 no fallback; flagged timepoints are reported, not touched
+    #   repair              reseed flagged timepoints from consensus/neighbours   <- default
+    #   sweep               grid-search the matching parameters instead
+    #   repair_then_sweep   staged, repair first, sweep whatever is still flagged
+    #   sweep_then_repair   staged, the other order
+    #   parallel            both from the same starting scores, better result wins
+    #
+    # Default "repair": measured across six datasets it recovered 3.654 score points against
+    # 4.309 for repair and sweep competing -- 85% of the total for roughly half the compute.
+    # Choose "parallel" when individual timepoints matter more than run statistics: the sweep
+    # rescued 6 of 72 flagged timepoints that repair could not touch at all, about one per
+    # dataset, which no run-level average shows.
+    #
+    # Set to None to drive the three low-level flags directly.
+    fallback: (
+        Literal[
+            "off", "repair", "sweep", "repair_then_sweep", "sweep_then_repair", "parallel"
+        ]
+        | None
+    ) = "repair"
+    _coerce_fallback = field_validator("fallback", mode="before")(_coerce_yaml_off)
     # How the two fallback passes relate. Only consulted when BOTH are enabled; each pass is
     # turned on or off by its own `mode`, so the five usable combinations are:
     #
@@ -463,6 +544,62 @@ class BeadsMatchSettings(MyBaseModel):
     fallback_mode: Literal["parallel", "repair_then_sweep", "sweep_then_repair"] = "parallel"
     sweep_fallback_settings: SweepFallbackSettings = SweepFallbackSettings()
     repair_pass_settings: RepairPassSettings = RepairPassSettings()
+
+    @model_validator(mode="after")
+    def expand_fallback(self) -> "BeadsMatchSettings":
+        """Turn `fallback` into the three low-level flags that drive estimate_tczyx.
+
+        An explicitly-set low-level flag outranks a DEFAULTED `fallback`, so a config written
+        against the older field names keeps working. Setting `fallback` and a contradicting
+        low-level flag together is rejected rather than silently resolved -- the same rule as
+        `strategy`, and for the same reason: one of the two is not what the author meant.
+        """
+        if self.fallback is None:
+            return self
+        repair, sweep, order = {
+            "off": ("off", "off", "parallel"),
+            "repair": ("on_flagged", "off", "parallel"),
+            "sweep": ("off", "on_flagged", "parallel"),
+            "repair_then_sweep": ("on_flagged", "on_flagged", "repair_then_sweep"),
+            "sweep_then_repair": ("on_flagged", "on_flagged", "sweep_then_repair"),
+            "parallel": ("on_flagged", "on_flagged", "parallel"),
+        }[self.fallback]
+
+        explicit = "fallback" in self.model_fields_set
+        conflicts = []
+        if explicit:
+            if "mode" in self.repair_pass_settings.model_fields_set and (
+                self.repair_pass_settings.mode != repair
+            ):
+                conflicts.append(
+                    f"repair_pass_settings.mode={self.repair_pass_settings.mode!r} "
+                    f"(fallback implies {repair!r})"
+                )
+            if "mode" in self.sweep_fallback_settings.model_fields_set and (
+                self.sweep_fallback_settings.mode != sweep
+            ):
+                conflicts.append(
+                    f"sweep_fallback_settings.mode="
+                    f"{self.sweep_fallback_settings.mode!r} (fallback implies {sweep!r})"
+                )
+            if "fallback_mode" in self.model_fields_set and self.fallback_mode != order:
+                conflicts.append(
+                    f"fallback_mode={self.fallback_mode!r} (fallback implies {order!r})"
+                )
+            if conflicts:
+                raise ValueError(
+                    f"fallback={self.fallback!r} contradicts " + " and ".join(conflicts)
+                    + ". Set fallback to null to drive the low-level flags directly, or "
+                    "remove the conflicting flag."
+                )
+
+        if explicit or "mode" not in self.repair_pass_settings.model_fields_set:
+            self.repair_pass_settings.mode = repair
+        if explicit or "mode" not in self.sweep_fallback_settings.model_fields_set:
+            self.sweep_fallback_settings.mode = sweep
+        if explicit or "fallback_mode" not in self.model_fields_set:
+            self.fallback_mode = order
+        return self
 
 
 class PhaseCrossCorrSettings(MyBaseModel):
@@ -588,33 +725,13 @@ class EstimateRegistrationSettings(MyBaseModel):
     eval_transform_settings: EvalTransformSettings | None = None
     ants_registration_settings: AntsRegistrationSettings | None = None
     manual_registration_settings: ManualRegistrationSettings | None = None
-    # One visible field to choose the beads strategy, rather than requiring the user to know
-    # that two low-level flags -- affine_transform_settings.use_prev_t_transform and
-    # beads_match_settings.spectral_arm, in two different blocks -- combine to produce it:
-    #
-    #   beads_strategy          use_prev_t_transform   spectral_arm
-    #   propagate                       True              off
-    #   propagate_spectral              True              always
-    #   independent                     False             off
-    #   independent_spectral            False             always     <- default
-    #
-    # Benchmarked on 2025_09_17 (144 t) and 2025_09_18 (240 t), scoring warped beads against
-    # the reference:
-    #
-    #   propagate              median 0.864/0.875   min 0.000/0.667   1/0  below 0.40
-    #   independent            median ~0.826        min 0.000         6/33 below 0.40
-    #   independent_spectral   median 0.870/0.875   min 0.720/0.600   0/0  below 0.40
-    #
-    # independent_spectral is the default because the spectral cascade is insensitive to its
-    # initial transform -- measured identical results from a seed scoring 0.826 and one
-    # scoring 0.000 -- so propagation no longer earns its serial cost (~3-10 h against
-    # ~20 min), its lack of cheap resume, or its tendency to turn one failure into a cluster.
-    #
-    # Set to None to drive use_prev_t_transform and spectral_arm directly instead.
+    # DEPRECATED: moved to beads_match_settings.strategy, because it configures beads and
+    # every other method keeps its configuration in its own block. Still accepted so existing
+    # configs do not hard-fail against extra="forbid"; it is copied inward and warned about.
     beads_strategy: (
         Literal["propagate", "propagate_spectral", "independent", "independent_spectral"]
         | None
-    ) = "independent_spectral"
+    ) = None
     verbose: bool = False
 
     @model_validator(mode="after")
@@ -626,27 +743,63 @@ class EstimateRegistrationSettings(MyBaseModel):
         elif self.estimation_method == "ants" and self.ants_registration_settings is None:
             self.ants_registration_settings = AntsRegistrationSettings()
 
-        # Expand the strategy into the two flags that actually drive estimate(). Runs after
-        # the block above so beads_match_settings exists. Skipped when beads_strategy is
-        # None, which leaves the low-level flags untouched for advanced use.
+        # A beads-only flag set on another method is silently ignored today, which is worse
+        # than an error: the ants path submits every timepoint in parallel, so it cannot
+        # propagate from t-1 at all, and a config asking for it gets no propagation and no
+        # warning. Say so instead.
+        if (
+            self.estimation_method != "beads"
+            and "use_prev_t_transform" in self.affine_transform_settings.model_fields_set
+            and self.affine_transform_settings.use_prev_t_transform
+        ):
+            raise ValueError(
+                "affine_transform_settings.use_prev_t_transform is only implemented for "
+                f"estimation_method='beads', not {self.estimation_method!r}. The ants path "
+                "submits all timepoints in parallel, so there is no previous timepoint to "
+                "propagate from; it takes a single static seed instead."
+            )
+
+        # The deprecated top-level field is copied into the beads block, which is where the
+        # setting now lives.
         if self.beads_strategy is not None and self.beads_match_settings is not None:
+            if "strategy" in self.beads_match_settings.model_fields_set and (
+                self.beads_match_settings.strategy != self.beads_strategy
+            ):
+                raise ValueError(
+                    f"top-level beads_strategy={self.beads_strategy!r} contradicts "
+                    f"beads_match_settings.strategy="
+                    f"{self.beads_match_settings.strategy!r}. Set only the latter."
+                )
+            warnings.warn(
+                "beads_strategy at the top level is deprecated; use "
+                "beads_match_settings.strategy instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            self.beads_match_settings.strategy = self.beads_strategy
+            self.beads_match_settings.model_fields_set.add("strategy")
+
+        # Expand the strategy into the two flags that actually drive estimate(). One of them
+        # lives outside beads_match_settings, which is why this expansion happens here rather
+        # than in that block's own validator.
+        bms = self.beads_match_settings
+        if bms is not None and bms.strategy is not None:
             propagate, spectral = {
                 "propagate": (True, "off"),
                 "propagate_spectral": (True, "always"),
                 "independent": (False, "off"),
                 "independent_spectral": (False, "always"),
-            }[self.beads_strategy]
+            }[bms.strategy]
 
-            # An explicit low-level flag always outranks the DEFAULT strategy. Without this,
-            # the default "independent_spectral" would silently flip a config that says
-            # use_prev_t_transform: true to false -- turning a propagation run into an
-            # independent one with no diagnostic, which every pre-existing config in the
-            # wild would hit, since they all set that flag directly and name no strategy.
-            strategy_explicit = "beads_strategy" in self.model_fields_set
+            # An explicit low-level flag always outranks a DEFAULTED strategy. Without this,
+            # the default independent_spectral would silently flip a config saying
+            # use_prev_t_transform: true into an independent run -- which every pre-existing
+            # config would hit, since they all set that flag directly and name no strategy.
+            strategy_explicit = "strategy" in bms.model_fields_set
             prop_explicit = (
                 "use_prev_t_transform" in self.affine_transform_settings.model_fields_set
             )
-            spectral_explicit = "spectral_arm" in self.beads_match_settings.model_fields_set
+            spectral_explicit = "spectral_arm" in bms.model_fields_set
 
             # Naming both a strategy and a flag that contradicts it is a config error, not a
             # precedence question: one of the two is not what the author meant.
@@ -661,23 +814,22 @@ class EstimateRegistrationSettings(MyBaseModel):
                         f"{self.affine_transform_settings.use_prev_t_transform} "
                         f"(strategy implies {propagate})"
                     )
-                if spectral_explicit and self.beads_match_settings.spectral_arm != spectral:
+                if spectral_explicit and bms.spectral_arm != spectral:
                     conflicts.append(
-                        f"spectral_arm={self.beads_match_settings.spectral_arm!r} "
+                        f"spectral_arm={bms.spectral_arm!r} "
                         f"(strategy implies {spectral!r})"
                     )
                 if conflicts:
                     raise ValueError(
-                        f"beads_strategy={self.beads_strategy!r} contradicts "
-                        + " and ".join(conflicts)
-                        + ". Set beads_strategy to null to drive the flags directly, or "
-                        "remove the conflicting flag."
+                        f"strategy={bms.strategy!r} contradicts " + " and ".join(conflicts)
+                        + ". Set strategy to null to drive the flags directly, or remove the "
+                        "conflicting flag."
                     )
 
             if strategy_explicit or not prop_explicit:
                 self.affine_transform_settings.use_prev_t_transform = propagate
             if strategy_explicit or not spectral_explicit:
-                self.beads_match_settings.spectral_arm = spectral
+                bms.spectral_arm = spectral
         return self
 
 
