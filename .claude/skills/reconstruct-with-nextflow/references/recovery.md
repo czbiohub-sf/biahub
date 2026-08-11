@@ -35,6 +35,38 @@ The real traceback is **not** in the work dir — see `caveats.md` §9. It is in
 | exit 1/2 with a Python traceback (pydantic validation, `TypeError`, `KeyError`) | bad config or a real bug | Nextflow terminates deliberately. Fix, then relaunch with `-resume`. |
 | `Expected a 'RESOURCES:' line in command output but none was found` | the underlying biahub CLI crashed during its init step | read the init step's `slurm_output` log; usually a config validation error |
 | `list_positions` returns nothing | the input has no HCS plate | build `0-convert` — `caveats.md` §1 |
+| task shows a `(Pdb)` prompt in `.command.out` and never exits | `--cluster debug` drops into a post-mortem debugger inside the SLURM job | **kill the run** — see below. Do not wait for it. |
+
+## A task stuck on `(Pdb)` — kill it, don't wait
+
+`biahub track` (and any step run with `--cluster debug`) can enter a post-mortem
+debugger *inside the SLURM job* when it raises. Nothing is attached to stdin, so
+the task sits at the prompt until the wall-time limit kills it, holding its
+allocation — a GPU allocation, for track. Signature in
+`nextflow/slurm_output/<step>/*.out` or the work dir's `.command.out`:
+
+```
+TypeError: ...
+> /.../work/80/9d98.../cupy/_core/core.pyx(1699)...
+(Pdb)
+```
+
+`errorStrategy` cannot save you: the task reports no exit status until SLURM kills
+it, and a time-limit kill lands in the retryable 130–145 range, so Nextflow retries
+a deterministic failure up to `maxRetries` times — 6 × the wall limit of wasted
+GPU time per position.
+
+Stop the run rather than letting it burn out:
+
+```bash
+tmux send-keys -t nf_<DATASET> C-c     # Nextflow cancels its own SLURM jobs
+squeue -u "$USER" -h -o "%j" | grep -c nf-   # confirm 0 remain
+```
+
+Then read the traceback *above* the `(Pdb)` line — that is the real error, and it
+is a genuine bug or config error, not an infrastructure blip. Fix it and `-resume`;
+completed upstream steps are cached, so only the failing step re-runs (verified:
+changing only `track.yml` re-ran track alone). Tracked in biahub#309.
 
 ## Lustre EIO / torn shards — the important one
 
