@@ -416,6 +416,32 @@ class BeadsMatchSettings(MyBaseModel):
     # Defaults to "always" (i.e. variant D) on the benchmark below. Set "off" to restore
     # the previous behaviour exactly.
     spectral_arm: Literal["off", "on_low_score", "always"] = "always"
+    # How the two fallback passes relate. Only consulted when BOTH are enabled; each pass is
+    # turned on or off by its own `mode`, so the five usable combinations are:
+    #
+    #   repair only          repair_pass=on_flagged, sweep_fallback=off
+    #   sweep only           repair_pass=off,        sweep_fallback=on_flagged
+    #   repair then sweep    both on, fallback_mode="repair_then_sweep"
+    #   sweep then repair    both on, fallback_mode="sweep_then_repair"
+    #   both, competing      both on, fallback_mode="parallel"        <- default
+    #
+    # "parallel" runs both from the SAME post-estimation scores and keeps whichever result is
+    # better per timepoint. It is the default because either sequential order measurably loses
+    # quality: whichever pass runs first lifts timepoints above the adaptive line, re-flagging
+    # then removes them, and the second pass never gets a turn on them. Measured at 09_17
+    # t=96, repair reached 0.773 while the sweep from the same start reached 0.864; run
+    # sequentially the sweep never ran there and the 0.091 was lost. The second pass is also
+    # judged against the first's improved score rather than the original, so fewer of its
+    # results are accepted.
+    #
+    # Head-to-head over 72 timepoints where both acted from the same starting transform:
+    # repair won 37, the sweep won 13, 22 tied, and taking the better of the two recovered
+    # 4.309 score points against 3.654 for repair alone -- 18% more. They are complementary,
+    # so neither ordering dominates and running both is what captures that.
+    #
+    # The sequential orders cost less and are kept for reproducing earlier runs and for when
+    # compute matters more than the tail.
+    fallback_mode: Literal["parallel", "repair_then_sweep", "sweep_then_repair"] = "parallel"
     sweep_fallback_settings: SweepFallbackSettings = SweepFallbackSettings()
     repair_pass_settings: RepairPassSettings = RepairPassSettings()
 

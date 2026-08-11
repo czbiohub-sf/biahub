@@ -946,6 +946,57 @@ def repair_flagged_timepoints(
     return transforms, scores
 
 
+def _merge_best(base_transforms, base_scores, arms, output_transforms_path):
+    """Keep, per timepoint, whichever competing pass scored highest.
+
+    Both passes were handed the same pre-fallback transforms and scores, so their results are
+    directly comparable and neither can be worse than the baseline at any timepoint. Taking
+    the per-timepoint maximum is therefore never worse than either pass alone, and never worse
+    than not running them.
+
+    Writes the winning transform back to its .npy so the on-disk record matches what is
+    returned, and logs which pass won where -- that record is the whole point, since it is
+    what says whether running both was worth the compute.
+    """
+    merged = list(base_transforms)
+    base = base_scores["quality_score"].to_numpy(dtype=float).copy()
+    scores = base_scores.copy()
+    winners: dict[str, list[int]] = {name: [] for name, _, _ in arms}
+    log = []
+
+    for t in range(len(base)):
+        best_name, best_score, best_matrix = None, base[t] if np.isfinite(base[t]) else -1.0, None
+        for name, arm_transforms, arm_scores in arms:
+            row = arm_scores.loc[arm_scores["t"] == t, "quality_score"]
+            if not len(row):
+                continue
+            v = float(row.iloc[0])
+            if np.isfinite(v) and v > best_score + 1e-9:
+                best_name, best_score, best_matrix = name, v, arm_transforms[t]
+        if best_matrix is None:
+            continue
+        merged[t] = best_matrix
+        matrix = np.asarray(best_matrix, dtype=float)
+        np.save(output_transforms_path / f"{t}.npy", matrix)
+        scores.loc[scores["t"] == t, "quality_score"] = best_score
+        if "fell_back_to_seed" in scores:
+            scores.loc[scores["t"] == t, "fell_back_to_seed"] = False
+        winners[best_name].append(t)
+        log.append({"t": t, "before": float(base[t]), "after": float(best_score),
+                    "winner": best_name})
+
+    click.echo("\nCompeting fallbacks, best per timepoint:")
+    for name in winners:
+        click.echo(f"  {name} won {len(winners[name])} timepoints: {winners[name]}")
+    if log:
+        total = sum(r["after"] - r["before"] for r in log if np.isfinite(r["before"]))
+        click.echo(f"  {len(log)} timepoints improved, total gain {total:+.3f}")
+    (output_transforms_path.parent / "fallback_merge_log.json").write_text(
+        json.dumps({"winners": winners, "merges": log}, indent=2)
+    )
+    return merged, scores
+
+
 def estimate_tczyx(
     mov_tczyx: da.Array,
     ref_tczyx: da.Array,
@@ -1066,42 +1117,101 @@ def estimate_tczyx(
     # timepoints are being estimated in parallel shards. The repair pass additionally needs
     # t+1, which likewise does not exist yet.
     #
-    # REPAIR FIRST, then sweep. They address different failure modes and the cheap, effective
-    # one should go first:
-    #   repair  reseeds from t-1/t+1, so it moves a transform between basins. Measured
-    #           0.429 -> 0.941 at one real timepoint.
-    #   sweep   re-tunes matching parameters, worth +0.058 on timepoints scoring 0.72-0.78
-    #           but only +0.006 on those below 0.72.
-    # Repairing first clears the hard failures, so whatever is still flagged afterwards is
-    # the mild tail -- precisely the population the sweep is good at -- and the sweep does
-    # not spend a full grid search on timepoints reseeding would have fixed for less.
+    # The two passes are COMPETING, not staged, and both see the same post-estimation scores.
     #
-    # Flags are RECOMPUTED between the two passes, so the sweep sees the post-repair
-    # distribution rather than a stale one. Each pass accepts a result only if it strictly
-    # beats the incumbent, so neither can make the run worse.
-    if beads_match_settings.repair_pass_settings.mode == "on_flagged":
-        transforms, scores = repair_flagged_timepoints(
+    # They were sequential -- repair, re-flag, then sweep on what survived -- on the reasoning
+    # that repair should clear the hard failures so the sweep only faced the mild tail. That
+    # reasoning cost real quality, for two compounding reasons:
+    #
+    #   1. A successful repair lifts a timepoint above the adaptive line, so re-flagging
+    #      removes it and the sweep never gets a turn. Measured at 09_17 t=96: repair reached
+    #      0.773 and the sweep, run from the same estimation, reached 0.864. Sequentially the
+    #      sweep never ran there and the 0.091 was simply lost.
+    #   2. Where the sweep did still run, it had to beat repair's improved score rather than
+    #      the original, so fewer of its results were accepted.
+    #
+    # Measured head-to-head over 72 timepoints where both acted, each from the same starting
+    # transform: repair won 37, the SWEEP won 13, 22 tied. Taking the better of the two
+    # recovered 4.309 score points against 3.654 for repair alone -- 18% more. The two are
+    # complementary, so whichever wins per timepoint should win.
+    #
+    # Running both costs more than staging them. That is the trade being made deliberately:
+    # the extra compute buys the 13 timepoints where re-tuning parameters beats reseeding, and
+    # some of those margins are large (0.455 -> 0.667 at one real timepoint).
+    #
+    # Each pass still accepts a result only if it strictly beats what it started from, and the
+    # transforms/scores handed to each are the SAME pre-fallback ones, so neither can regress
+    # and neither can hide the other.
+    repair_on = beads_match_settings.repair_pass_settings.mode == "on_flagged"
+    sweep_on = beads_match_settings.sweep_fallback_settings.mode == "on_flagged"
+    fb_mode = beads_match_settings.fallback_mode
+    parallel = fb_mode == "parallel"
+
+    if repair_on and sweep_on and parallel:
+        import copy
+
+        base_transforms = copy.deepcopy(transforms)
+        base_scores = scores.copy()
+
+        repaired, repaired_scores = repair_flagged_timepoints(
             mov_tzyx=mov_tzyx,
             ref_tzyx=ref_tzyx,
-            transforms=transforms,
-            scores=scores,
+            transforms=copy.deepcopy(base_transforms),
+            scores=base_scores.copy(),
             beads_match_settings=beads_match_settings,
             affine_transform_settings=affine_transform_settings,
             output_transforms_path=output_transforms_path,
             mode=mode,
             verbose=verbose,
         )
-    if beads_match_settings.sweep_fallback_settings.mode == "on_flagged":
-        transforms, scores = sweep_flagged_timepoints(
+        # The sweep sees the ORIGINAL scores, so it is flagged on the same population and
+        # judged against the same bar as the repair pass.
+        swept, swept_scores = sweep_flagged_timepoints(
             mov_tzyx=mov_tzyx,
             ref_tzyx=ref_tzyx,
-            transforms=transforms,
-            scores=scores,
+            transforms=copy.deepcopy(base_transforms),
+            scores=base_scores.copy(),
             beads_match_settings=beads_match_settings,
             affine_transform_settings=affine_transform_settings,
             output_transforms_path=output_transforms_path,
             verbose=verbose,
         )
+        transforms, scores = _merge_best(
+            base_transforms,
+            base_scores,
+            [("repair", repaired, repaired_scores), ("sweep", swept, swept_scores)],
+            output_transforms_path,
+        )
+    else:
+        def _run_repair(tr, sc):
+            return repair_flagged_timepoints(
+                mov_tzyx=mov_tzyx, ref_tzyx=ref_tzyx, transforms=tr, scores=sc,
+                beads_match_settings=beads_match_settings,
+                affine_transform_settings=affine_transform_settings,
+                output_transforms_path=output_transforms_path, mode=mode, verbose=verbose,
+            )
+
+        def _run_sweep(tr, sc):
+            return sweep_flagged_timepoints(
+                mov_tzyx=mov_tzyx, ref_tzyx=ref_tzyx, transforms=tr, scores=sc,
+                beads_match_settings=beads_match_settings,
+                affine_transform_settings=affine_transform_settings,
+                output_transforms_path=output_transforms_path, verbose=verbose,
+            )
+
+        # Flags are recomputed inside each pass, so whichever runs second sees the updated
+        # distribution -- which is exactly the effect that makes either ordering lose ground
+        # to "parallel". Kept because it is cheaper and reproduces the earlier benchmark arms.
+        stages = [("repair", _run_repair, repair_on), ("sweep", _run_sweep, sweep_on)]
+        if fb_mode == "sweep_then_repair":
+            stages.reverse()
+        click.echo(
+            "Fallback order: " + " -> ".join(n for n, _, on in stages if on)
+            if any(on for _, _, on in stages) else "Fallbacks: none enabled"
+        )
+        for _name, fn, on in stages:
+            if on:
+                transforms, scores = fn(transforms, scores)
 
     scores.to_csv(output_folder_path / "quality_scores.csv", index=False)
     plot_quality_scores(
