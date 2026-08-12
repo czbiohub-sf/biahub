@@ -1,0 +1,26 @@
+rules:
+  # Require every action to be pinned to a full commit SHA.
+  unpinned-uses:
+    config:
+      policies:
+        "*": hash-pin
+  # Only allow actions from these trusted owners; add new owners deliberately.
+  forbidden-uses:
+    config:
+      allow:
+        - actions/*
+        - astral-sh/*
+        - peter-evans/*
+        - zizmorcore/*
+  # python-version comes from the in-workflow matrix, not external input.
+  template-injection:
+    ignore:
+      - pull-request-ci.yml
+  # Requiring an explicit name on every job/step is stylistic noise for this repo.
+  anonymous-definition:
+    disable: true
+  # uv-lock.yml deliberately uses create-pull-request over a `gh pr create`
+  # script: it force-updates one long-lived PR instead of opening a new one.
+  superfluous-actions:
+    ignore:
+      - uv-lock.yml
