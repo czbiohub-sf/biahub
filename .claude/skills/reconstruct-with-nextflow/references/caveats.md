@@ -258,3 +258,25 @@ Do not treat such a store as a deliverable, and delete it before a real run so
 (Related, for pipeline developers: a param passed as `--foo 1` on the command
 line arrives as a String; coerce numeric params at the point of use and test
 via the CLI — see the comments in `nextflow/modules/common.nf`.)
+
+## 14. Tracking is not bitwise reproducible
+
+Two runs of `biahub track` on the same input, same config, same commit do **not**
+produce identical label arrays. Measured on one position of an assembled A549
+plate (T=10, 1600×1370), two back-to-back runs differed in **1.06% of voxels**
+while agreeing on everything summary-level: 13 objects, same max label id, same
+per-frame cellpose counts (`mean=7.5, min=0, max=12`), same shape and dtype.
+
+The sources are all inside tracking: cellpose GPU inference is not deterministic,
+ultrack's watershed hierarchy runs `n_workers=16` with `random_seed='frame'`, and
+the linking ILP can return any of several equally-optimal solutions.
+
+Consequences worth knowing:
+
+- **Do not diff label arrays to decide whether a change was harmful.** A 1–2%
+  voxel difference is the noise floor. Compare object counts, per-frame counts,
+  track lengths, and shape/dtype instead.
+- **A rerun is not a reproduction.** If a tracking result matters, keep the
+  output; you cannot regenerate the identical one later.
+- This does not apply to the earlier steps — deskew, reconstruct and assemble are
+  deterministic given the same input and config.
