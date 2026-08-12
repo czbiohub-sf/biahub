@@ -34,7 +34,11 @@ dependencies = [
   "tqdm",
   "waveorder>=3.0.4",
   "largestinteriorrectangle",
-  "antspyx",
+  # 0.6 is the first antspyx with cp313 wheels; below it, Python 3.13 falls back
+  # to building ANTs from source and fails. Every 0.6.x caps scipy<1.16, so this
+  # floor is also what holds scipy on the 1.15 series -- without it the resolver
+  # prefers newer scipy and silently drops antspyx back to a cp312-only 0.5.x.
+  "antspyx>=0.6",
   "pystackreg",
   "imageio-ffmpeg",
   "dask[array]",
@@ -68,7 +72,7 @@ doc = [
 dev = [
   "biahub[all,build]",
   "pre-commit~=4.5",
-  "pytest~=8.4",
+  "pytest~=9.0",
   "ruff~=0.15",
 ]
 
@@ -76,6 +80,16 @@ dev = [
 biahub = "biahub.cli.main:cli"
 
 [tool.uv]
+# zarr 3.3.0 regressed chunk normalization: normalize_chunks_1d narrows with
+# `isinstance(chunks, int)` while its caller normalize_chunks_nd uses
+# numbers.Integral, so a numpy integer chunk size falls through to a
+# `list(chunks)` branch and raises "'numpy.int64' object is not iterable".
+# ultrack's large_chunk_size returns np.int64 for the spatial dims, which
+# breaks every array_apply call in biahub track. Repro:
+#   zarr.zeros((4, 4), dtype="f4", chunks=(np.int64(2), np.int64(2)))
+# Drop this cap once zarr ships the fix.
+constraint-dependencies = ["zarr<3.3"]
+
 # Needed so that uv considers pypi (and not only the pytorch CPU extra index)
 # when resolving build-system requirements such as iohub's hatchling /
 # uv-dynamic-versioning chain, which pulls in packaging>=24.2.
@@ -115,7 +129,9 @@ packages = ["biahub"]
 line-length = 95
 target-version = "py312"
 
-exclude = ["archive", "examples", "scripts", "notebooks"]
+# .claude holds skill prompts whose fenced code blocks are deliberately
+# incomplete templates; ruff >=0.16 formats Markdown and would rewrite them.
+exclude = ["archive", "examples", "scripts", "notebooks", ".claude"]
 
 [tool.ruff.lint]
 select = ["F", "E", "W", "I", "N", "UP", "B", "D"]

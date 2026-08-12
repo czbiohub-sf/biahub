@@ -4,28 +4,33 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-permissions:
-  contents: read
-  pages: write
-  id-token: write
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read # checkout source; token is read-only
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0  # Fetch all history for hatch-vcs
-      - uses: astral-sh/setup-uv@v7
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v10.0.0
         with:
           enable-cache: true
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.12"
       - run: uv sync --extra doc
         env:
           UV_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
       - run: uv run zensical build --clean
-      - uses: actions/upload-pages-artifact@v4
+      - uses: actions/upload-pages-artifact@v5.0.0
         with:
           path: site
 
@@ -36,7 +41,10 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
+    permissions:
+      pages: write # publish the built site to GitHub Pages
+      id-token: write # OIDC token the Pages deployment is verified with
     steps:
-      - uses: actions/configure-pages@v5
-      - uses: actions/deploy-pages@v4
+      - uses: actions/configure-pages@v6.0.0
+      - uses: actions/deploy-pages@v5.0.0
         id: deployment
