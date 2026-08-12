@@ -1,0 +1,45 @@
+name: uv lock refresh
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  relock:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the branch holding the refreshed uv.lock
+      pull-requests: write # open/update the refresh PR
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@v10.0.0
+
+      # Bumps every dependency the pyproject constraints allow, in one commit,
+      # instead of one Dependabot PR per package.
+      - name: Upgrade the lockfile
+        run: uv lock --upgrade
+
+      # Opens (or force-updates) a single long-lived PR. Note that a PR created
+      # with GITHUB_TOKEN does not trigger the other workflows — close and
+      # reopen it, or push an empty commit, to run CI against the new lockfile.
+      - uses: peter-evans/create-pull-request@v8.1.1
+        with:
+          add-paths: uv.lock
+          branch: deps/uv-lock-refresh
+          delete-branch: true
+          commit-message: "build(deps): refresh uv.lock"
+          title: "build(deps): weekly uv.lock refresh"
+          body: |
+            Automated `uv lock --upgrade`. Review the version bumps, then close
+            and reopen this PR to run CI against the refreshed lockfile.
+          labels: dependencies
