@@ -1,9 +1,14 @@
 rules:
-  # Require every action to be pinned to a full commit SHA.
+  # Require every action to carry an explicit ref. We pin to exact release tags
+  # (@vX.Y.Z) so Dependabot still sees patch and minor bumps and opens a PR for
+  # them; a floating major like @v7 would silently absorb new code instead.
+  # Note ref-pin only rejects a bare `uses:` with no ref -- it accepts @v7 and
+  # @main too, so the exact-tag convention is on reviewers, not enforced here.
+  # Switch back to hash-pin to have zizmor require full commit SHAs.
   unpinned-uses:
     config:
       policies:
-        "*": hash-pin
+        "*": ref-pin
   # Only allow actions from these trusted owners; add new owners deliberately.
   forbidden-uses:
     config:

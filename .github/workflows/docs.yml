@@ -16,21 +16,21 @@ jobs:
     permissions:
       contents: read # checkout source; token is read-only
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0  # Fetch all history for hatch-vcs
           persist-credentials: false
-      - uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
+      - uses: astral-sh/setup-uv@v10.0.0
         with:
           enable-cache: true
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.12"
       - run: uv sync --extra doc
         env:
           UV_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
       - run: uv run zensical build --clean
-      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+      - uses: actions/upload-pages-artifact@v5.0.0
         with:
           path: site
 
@@ -45,6 +45,6 @@ jobs:
       pages: write # publish the built site to GitHub Pages
       id-token: write # OIDC token the Pages deployment is verified with
     steps:
-      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
-      - uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
+      - uses: actions/configure-pages@v6.0.0
+      - uses: actions/deploy-pages@v5.0.0
         id: deployment

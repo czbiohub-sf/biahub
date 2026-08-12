@@ -1,6 +1,6 @@
 version: 2
 updates:
-  # GitHub Actions only — keeps the SHA pins fresh. The Python side is covered
+  # GitHub Actions only — keeps the exact @vX.Y.Z tags fresh. The Python side is covered
   # by Dependabot security updates plus the weekly uv-lock workflow, so a
   # per-package uv ecosystem here would only add noise.
   - package-ecosystem: github-actions

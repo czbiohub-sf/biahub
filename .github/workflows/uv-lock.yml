@@ -18,11 +18,11 @@ jobs:
       contents: write # push the branch holding the refreshed uv.lock
       pull-requests: write # open/update the refresh PR
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
-      - uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
+      - uses: astral-sh/setup-uv@v10.0.0
 
       # Bumps every dependency the pyproject constraints allow, in one commit,
       # instead of one Dependabot PR per package.
@@ -32,7 +32,7 @@ jobs:
       # Opens (or force-updates) a single long-lived PR. Note that a PR created
       # with GITHUB_TOKEN does not trigger the other workflows — close and
       # reopen it, or push an empty commit, to run CI against the new lockfile.
-      - uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+      - uses: peter-evans/create-pull-request@v8.1.1
         with:
           add-paths: uv.lock
           branch: deps/uv-lock-refresh
