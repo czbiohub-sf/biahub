@@ -61,6 +61,21 @@ uv sync --project "${BIAHUB_PROJECT}"
 set +u; source "${BIAHUB_PROJECT}/.venv/bin/activate"; set -u
 command -v biahub >/dev/null || { echo "biahub not on PATH after activation" >&2; exit 1; }
 
+# Record which code is about to run. This lands in the tee'd run log, so the
+# output directory carries the answer to "which commit produced this?" without
+# depending on the checkout still being in the same state later. Runs should come
+# off `main`; a feature branch is legitimate but should be a deliberate choice, so
+# warn rather than fail.
+BIAHUB_BRANCH="$(git -C "${BIAHUB_PROJECT}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
+echo "biahub: ${BIAHUB_PROJECT}"
+echo "  branch ${BIAHUB_BRANCH}  $(git -C "${BIAHUB_PROJECT}" log -1 --format='%h %s' 2>/dev/null)"
+if [[ -n "$(git -C "${BIAHUB_PROJECT}" status --porcelain 2>/dev/null)" ]]; then
+    echo "  WARNING: uncommitted changes — this run is not reproducible from the commit above" >&2
+fi
+if [[ "${BIAHUB_BRANCH}" != "main" ]]; then
+    echo "  WARNING: not on main" >&2
+fi
+
 # Default the converted plate to the conventional location if it exists there.
 if [[ -z "${CONVERTED_ZARR}" && -d "${OUTPUT_DIR}/0-convert/${DATASET}.zarr" ]]; then
     CONVERTED_ZARR="${OUTPUT_DIR}/0-convert/${DATASET}.zarr"

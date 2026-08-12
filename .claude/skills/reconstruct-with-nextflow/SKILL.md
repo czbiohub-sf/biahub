@@ -28,7 +28,9 @@ before writing any config. The other references are read on demand:
 `references/recovery.md` when a run fails, `references/monitoring.md` when the
 run is live.
 
-## 1. Confirm you are on Bruno
+## 1. Confirm the environment — Bruno, and the biahub checkout
+
+### 1a. Bruno
 
 `hostname` — Bruno nodes are `login-*`, `gpu-sm*`, `cpu-*`, `preempted-*`. If the
 shell is not on Bruno, stop and tell the user to connect; do not attempt to ssh
@@ -38,6 +40,47 @@ Nextflow's head process is lightweight (it only submits SLURM jobs), so a **logi
 node is the right place for it**. Reserve a compute node only if the user asks,
 or if a login-node policy kills long-lived processes — see
 `references/monitoring.md`.
+
+### 1b. The biahub checkout — run from `main`, up to date
+
+**Runs should come off `main`.** The pipeline, the step CLIs and the config
+templates all version together, so `main` is the only combination that has been
+reviewed and tested as a set. A feature branch may carry a half-finished schema
+change on one side of that.
+
+```bash
+cd <BIAHUB>
+git fetch origin                              # refresh remote refs first
+git rev-parse --abbrev-ref HEAD               # current branch
+git rev-list --count HEAD..origin/main        # commits behind main
+git rev-list --count origin/main..HEAD        # commits ahead (i.e. not on main)
+git status --porcelain                        # uncommitted changes
+git log -1 --format='%h %s (%cr)'             # what is actually checked out
+```
+
+Act on the result:
+
+| state | what to do |
+|---|---|
+| on `main`, 0 behind, clean | Proceed. Report it in the plan. |
+| on `main`, N behind | **Suggest pulling before launching**, and say what would come in — `git log --oneline HEAD..origin/main` — calling out anything under `nextflow/`, `biahub/`, `pyproject.toml` or `uv.lock`. Let the user decide; do not pull unasked. |
+| not on `main` | **Say which branch, and why it is not `main`.** Running a feature branch is legitimate — that is how pipeline changes get tested — but it must be a deliberate, stated choice, not something the user discovers afterwards. Get explicit confirmation. |
+| uncommitted changes | Flag them. The run's provenance record points at a commit, so uncommitted work is not reproducible and cannot be recovered from the record later. List the files. |
+
+Pulling changes what the pipeline does, so pull **before** launching:
+
+```bash
+git pull --ff-only origin main    # from <BIAHUB>; refuse a merge you did not intend
+uv sync --project <BIAHUB>        # main may have moved dependencies
+```
+
+`--ff-only` is deliberate: if the pull cannot fast-forward, the checkout has local
+commits and the right response is to stop and ask, not to create a merge.
+
+**Never pull, switch branches, or edit the checkout while a run is live.** It
+changes Nextflow task hashes and invalidates `-resume` — see
+`references/caveats.md` §10. If a run is already going and `main` has moved, the
+change waits for the next run.
 
 ## 2. Find the raw acquisition
 
@@ -127,8 +170,16 @@ edits nobody intended to generalize.
 
 Then adjust for *this* dataset. Every value that must be checked per dataset is
 called out in `references/caveats.md` §3 — pixel size, scan step, BF channel
-name, VS checkpoint, and the tracking schema. Confirm the checkout is current
-(`git log -1 --oneline origin/main -- nextflow/configs`) before copying.
+name, VS checkpoint, and the tracking schema.
+
+These templates are only as current as the checkout, so step 1b's branch check
+applies here too: copying config templates from a checkout that is behind `main`
+copies stale ones. If step 1b found the checkout behind, check whether the
+missing commits touch `nextflow/configs/`:
+
+```bash
+git log --oneline HEAD..origin/main -- nextflow/configs
+```
 
 ### When the template itself is wrong, fix the template
 
@@ -149,20 +200,36 @@ test is whether the next dataset in this family would want the same value.
 
 Do not run anything yet. Show the user, concretely:
 
-1. Resolved input store, its size, position count, channel names, and
+1. **The biahub checkout it will run from** (from step 1b): its path, the current
+   branch, the HEAD commit, whether it is behind `origin/main` and by how many
+   commits, and whether the working tree is clean. State it even when everything
+   is fine — "which code produced this output" is the first question asked of any
+   result, and the plan is where it gets recorded.
+
+   Make anything other than *clean `main`, up to date* a **visible caveat, not a
+   footnote**, and say what you recommend:
+
+   ```
+   biahub: /hpc/mydata/<user>/biahub
+     branch  main            HEAD a198d85 "docs(skills): ..." (2 hours ago)
+     status  3 commits behind origin/main — recommend `git pull --ff-only` first
+             (includes nextflow/modules/reconstruct.nf); working tree clean
+   ```
+
+2. Resolved input store, its size, position count, channel names, and
    `(T, C, Z, Y, X)` shape.
-2. Whether a `0-convert` plate build is needed.
-3. Output project directory, and the full step layout that will be created.
-4. That the configs come from `<BIAHUB>/nextflow/configs/<family>/` at commit
+3. Whether a `0-convert` plate build is needed.
+4. Output project directory, and the full step layout that will be created.
+5. That the configs come from `<BIAHUB>/nextflow/configs/<family>/` at commit
    `<sha>`, every value you changed for this dataset, and any change you intend
    to send back to `main` as a PR.
-5. Pipeline steps that will run: flat-field → deskew → reconstruct →
+6. Pipeline steps that will run: flat-field → deskew → reconstruct →
    virtual-stain → assemble → track (the full `mantis-v2.nf` workflow).
    **For neuromast/zebrafish, say that the deliverable is `5-assemble` and that
    `4-track` is a discarded by-product** — tracking is an A549 step, but
    `mantis-v2.nf` cannot skip it today. See `references/caveats.md` §4.
-6. Known caveats that apply to this dataset (from `references/caveats.md`).
-7. Rough wall-time and whether `-resume` is on.
+7. Known caveats that apply to this dataset (from `references/caveats.md`).
+8. Rough wall-time and whether `-resume` is on.
 
 Get explicit approval.
 
