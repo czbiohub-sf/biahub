@@ -19,7 +19,12 @@
 
 module load nextflow
 module load uv
-module load cuda/12.8.0_570.86.10
+# No `module load cuda`. The torch wheel bundles its own CUDA runtime
+# (torch 2.13.0+cu130 -> CUDA 13.0), so the GPU steps need only the driver, which
+# is already on the GPU nodes. Verified on an L40S with no cuda module loaded:
+# torch.cuda.is_available() True, a GPU matmul, and a cellpose gpu=True eval all
+# succeed. Loading a system cuda would put a *different* version (12.8) on
+# LD_LIBRARY_PATH ahead of the bundled one — a mismatch to introduce, not fix.
 set -euo pipefail
 
 # --- fill in ---------------------------------------------------------------
