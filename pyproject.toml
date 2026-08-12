@@ -34,7 +34,11 @@ dependencies = [
   "tqdm",
   "waveorder>=3.0.4",
   "largestinteriorrectangle",
-  "antspyx",
+  # 0.6 is the first antspyx with cp313 wheels; below it, Python 3.13 falls back
+  # to building ANTs from source and fails. Every 0.6.x caps scipy<1.16, so this
+  # floor is also what holds scipy on the 1.15 series -- without it the resolver
+  # prefers newer scipy and silently drops antspyx back to a cp312-only 0.5.x.
+  "antspyx>=0.6",
   "pystackreg",
   "imageio-ffmpeg",
   "dask[array]",
