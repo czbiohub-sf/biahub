@@ -278,5 +278,11 @@ Consequences worth knowing:
   track lengths, and shape/dtype instead.
 - **A rerun is not a reproduction.** If a tracking result matters, keep the
   output; you cannot regenerate the identical one later.
-- This does not apply to the earlier steps — deskew, reconstruct and assemble are
-  deterministic given the same input and config.
+- **This applies to tracking only.** Every earlier step is deterministic given the
+  same input and config — including `virtual-stain`, despite it also running GPU
+  inference with test-time augmentation. Measured: the same position predicted on
+  two different GPU nodes, one of them with a different CUDA runtime on
+  `LD_LIBRARY_PATH`, produced **bitwise identical** output over three full
+  timepoints (0 differing voxels in 1,024,338,432). So a virtual-stain difference
+  between two runs is a real difference, not noise — worth investigating rather
+  than shrugging at.
