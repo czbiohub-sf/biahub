@@ -26,12 +26,12 @@ The real traceback is **not** in the work dir — see `caveats.md` §9. It is in
 |---|---|---|
 | exit 143 / 137 / 140, no traceback | SLURM preemption, timeout, or OOM | none — Nextflow retries (exit 130–145, `maxRetries = 5`). Expected on the `preempted` partition. |
 | exit 143 repeatedly on the *same* position until retries exhaust | task too slow or too large for its resource envelope | check `trace.txt` for that step's realized time/RSS; the run may need a wall-time or memory bump |
-| `RuntimeError: the checksum is invalid` | torn shard from a killed write | **job-io-error-repair agent** — see below |
+| `RuntimeError: the checksum is invalid` | torn shard from a killed write | **rerun with `-resume` first** — see below. Only propose a repair if it fails identically again. |
 | `RuntimeError: The encoded shard is smaller than the expected size of its index.` | same | same |
 | `RuntimeError: blosc encoded value is invalid` | same | same |
-| `OSError` / `IOError` / **"Input/output error"** on a `.zarr` path | Lustre EIO — usually the same torn-shard condition surfacing through the filesystem layer; occasionally a genuine Lustre hiccup | **job-io-error-repair agent** |
+| `OSError` / `IOError` / **"Input/output error"** on a `.zarr` path | Lustre EIO — usually the same torn-shard condition surfacing through the filesystem layer; occasionally a genuine Lustre hiccup | **rerun with `-resume` first**; propose a repair only if it recurs identically |
 | truncated / short read while decoding a chunk | same | same |
-| `FileNotFoundError: Dataset directory not found at .../<zarr>/ROW/COL/FOV` | a previous cleanup deleted the metadata scaffold too | **job-io-error-repair agent** (it recreates the scaffold from a sibling) |
+| `FileNotFoundError: Dataset directory not found at .../<zarr>/ROW/COL/FOV` | a previous cleanup deleted the metadata scaffold too | **job-io-error-repair agent** (it recreates the scaffold from a sibling) — this is why the skill never deletes zarr data itself |
 | exit 1/2 with a Python traceback (pydantic validation, `TypeError`, `KeyError`) | bad config or a real bug | Nextflow terminates deliberately. Fix, then relaunch with `-resume`. |
 | `Expected a 'RESOURCES:' line in command output but none was found` | the underlying biahub CLI crashed during its init step | read the init step's `slurm_output` log; usually a config validation error |
 | `list_positions` returns nothing | the input has no HCS plate | build `0-convert` — `caveats.md` §1 |
@@ -82,35 +82,57 @@ shard back, the CRC32C check fails, and it aborts.
 corrupt file and fail identically, forever. The run makes no further progress.
 A position stuck in a retry loop with the same error each time is this.
 
-**Fix.** Delete only the corrupt **chunk data**, keep the metadata scaffold, then
-resume. Delegate to the **job-io-error-repair** agent — it has the full
-procedure. The rule it enforces, worth knowing so you can sanity-check it:
+### Step 1 — rerun with `-resume` first
 
-- delete `<output.zarr>/ROW/COL/FOV/0/c/` — the zarr-v3 chunk directory
+**This is now the expected fix, and usually the only one needed.**
+[iohub#455](https://github.com/czbiohub-sf/iohub/pull/455) — on `main` since the
+iohub git pin — replaces a torn shard instead of reading it back, and records
+per-unit progress in a `.iohub-progress/` sibling of the output store. A retry
+skips the units that finished and recomputes only the ones that did not, so the
+read-modify-write that used to fail forever no longer happens.
+
+```bash
+bash ./run_mantis_v2.sh          # -resume is already in the script
+```
+
+A live preemption test on `2026_07_14_A549_MAP4_ZIKV_rerun` confirmed it: the
+retry skipped 120 units, recomputed 81, zero codec errors.
+
+Note the progress records sit **beside** the store, not inside it, so copying or
+deleting a store no longer carries or clears its progress state.
+
+### Step 2 — if it still fails identically, propose a repair; do not perform it
+
+**Never delete zarr data from this skill.** If a position still fails with the
+same checksum error after a clean `-resume`, stop and hand the user a written
+plan. Report:
+
+- the exact error and which position(s) it names,
+- the specific paths you believe are corrupt,
+- `du -sh` of each path so the user knows the volume at risk,
+- what would be lost, and what `-resume` would recompute afterwards.
+
+Then let the user decide and run it, or delegate to the **job-io-error-repair**
+agent, which owns this procedure. The rule either must follow — worth knowing so
+you can sanity-check a proposal:
+
+- delete `<output.zarr>/ROW/COL/FOV/0/c/` — the zarr-v3 chunk directory **only**
 - **keep** `<output.zarr>/ROW/COL/FOV/zarr.json` and
   `<output.zarr>/ROW/COL/FOV/0/zarr.json`
 
-The scaffold is created by a *separate, cached* `init-*` Nextflow task. `-resume`
+The scaffold comes from a *separate, cached* `init-*` Nextflow task. `-resume`
 will not re-run it, and the worker opens the output FOV in `mode="r"` expecting
 it to be there. Deleting the FOV directory wholesale turns a checksum error into
 a `FileNotFoundError` and makes things worse.
 
-Also delete the failed attempts' work dirs for those positions, but **keep the
+Failed attempts' work dirs for those positions can go too, but **keep the
 successful positions' work dirs and `.nextflow/`** so `-resume` reuses finished
-work.
+work. These deletes can be hundreds of GB and are slow on Lustre — run them in
+the background.
 
-Confirm the volume with the user before a large `rm -rf` (`du -sh` first); these
-deletes can be hundreds of GB, and on Lustre they are slow — run them in the
-background.
-
-**Prevention.** Newer iohub/biahub carry unlink-before-write repair plus per-unit
-resume markers under `<position>/0/.iohub-write-progress/`, which make a retry
-skip already-written units and replace torn ones wholesale instead of reading
-them back. A live preemption test on `2026_07_14_A549_MAP4_ZIKV_rerun` confirmed
-it works: the retry skipped 120 units, recomputed 81, and produced zero codec
-errors. If the biahub checkout predates that work, expect torn shards to need
-manual repair. Full write-up:
-`/hpc/projects/intracellular_dashboard/organelle_dynamics/2026_07_14_A549_MAP4_ZIKV_rerun/HANDOFF_torn_shard_resume.md`.
+If a repair is needed at all on a current checkout, say so explicitly in the
+report: it means the per-unit resume did not cover this case, which is worth
+knowing upstream.
 
 Note that the graceful-drain SIGTERM handler is **inert under Nextflow** —
 Nextflow's generated `.command.run` does not wait for the payload after the

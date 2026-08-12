@@ -12,8 +12,19 @@ root `zarr.json` carries `attributes.ome.plate` with rows `B`, `C`, …
 
 Neuromast, zebrafish and dynatrack acquisitions are **not**. They are flat
 `bioformats2raw.layout: 3` stores with positions named `{R}Pos{C}` at the root
-(`1Pos0`, `1Pos1`, `2Pos0`, …). Feeding one to the pipeline directly fails at
-`list_positions`.
+(`1Pos0`, `1Pos1`, `2Pos0`, …).
+
+**Being fixed at the source.** New zebrafish acquisitions will be written as HCS
+plates, which removes this whole section for data acquired from then on. Until
+that lands, and for all existing data, the 0-convert plate below is still
+required.
+
+Note that `list_positions` alone no longer fails on these stores — the pinned
+iohub reads `bioformats2raw.layout` and enumerates `1Pos0`, `1Pos1`, … directly
+(verified). That is not sufficient to skip 0-convert: the keys are one level
+deep, while every `init_*` step globs `-i <store>/*/*/*`, track configs use
+`fov: "*/*/*"`, and concatenate builds a plate. Fixing the acquisition is the
+cheaper path than teaching six steps two layouts.
 
 **Fix:** build a plate at `<OUTPUT>/0-convert/<DATASET>.zarr` that *symlinks* the
 raw arrays into a row/column/field layout — no pixel copy. Mapping is
@@ -245,7 +256,13 @@ ceil(1193/256)=5`.
 
 Larger T shards mean fewer, bigger files but a much larger RAM request and a much
 worse blast radius when one tears — a shard spanning 10 timepoints loses all 10.
-Leave the T ratio alone unless you have a measured reason.
+Leave the T ratio alone unless you have a measured reason. Note **channels cannot
+be sharded** — keep the C entry at 1.
+
+Auto-sizing this from a target (either ~2 GB per shard or a spatial extent),
+instead of a hand-computed multiplier, is requested in
+[iohub#458](https://github.com/czbiohub-sf/iohub/issues/458). Once it lands, most
+of this section goes away.
 
 ## 8. Preemption is expected, not an error
 

@@ -13,7 +13,7 @@ description: >-
 
 # Reconstruct a mantis-v2 dataset with Nextflow
 
-Invocation: `/reconstruct-with-nextflow dataset <DATASET_NAME>`, or any request to
+Invocation: `/reconstruct-with-nextflow <DATASET_NAME>`, or any request to
 run/reconstruct/process a mantis-v2 dataset by name.
 
 **Never launch before the user approves a plan.** Steps 1–5 are read-only
@@ -50,19 +50,29 @@ ls -1 /hpc/instruments/cm.mantis/ | grep -i <DATASET_NAME>
 ls -1 /hpc/instruments/cm.mantis/<DATASET_NAME>/
 ```
 
-The store is normally `<DATASET_NAME>_1.ome.zarr` (Micro-Manager appends an
-acquisition index). **The convention is `YYYY_MM_DD_<description>` and the store
-name usually matches the directory name — when it does not, say so explicitly
-and ask which store to use before continuing.** This is common: e.g. directory
-`2026_08_04_smart_fov_selection_test` contains
-`2026_08_04_test_fov_selection_*.ome.zarr`, and multiple numbered/`_epi`/
-`_prescan`/`_fov_debug` variants sit side by side. Never silently pick one.
+Micro-Manager appends an acquisition index, so a re-started acquisition leaves
+`<NAME>_1.ome.zarr`, `<NAME>_2.ome.zarr`, … side by side.
 
-Confirm the store is real, not an aborted acquisition:
+**Same stem, several indices → take the highest index.** The earlier ones are
+aborted or abandoned attempts; the last one is the acquisition that ran.
 
 ```bash
-du -sh /hpc/instruments/cm.mantis/<DATASET>/<STORE>.ome.zarr
+ls -1d /hpc/instruments/cm.mantis/<DATASET>/*.ome.zarr | sort -V | tail -1
 ```
+
+Do **not** `du -sh` the store to decide. It walks millions of chunk files on
+Lustre and takes minutes, and its answer does not mean what it looks like: a
+large aborted acquisition outweighs a small complete one, so size does not
+distinguish them. The index does.
+
+**Different stems, on the other hand, are ambiguous — stop and ask.** The
+convention is `YYYY_MM_DD_<description>` and the store name usually matches the
+directory name; when it does not, say so explicitly and ask which store to use.
+Directory `2026_08_04_smart_fov_selection_test` contains
+`2026_08_04_test_fov_selection_*.ome.zarr`; directory `2026_08_05_dynatrack_2dpf`
+contains `2026_08_05_dynatrack_2df_*.ome.zarr` (missing `p`). Where `_epi`,
+`_prescan` or `_fov_debug` variants sit alongside the real store, they are
+different acquisitions, not indices of one. Never silently pick between stems.
 
 `/hpc/instruments` is **read-only for this workflow**. Never write into it.
 
@@ -93,23 +103,47 @@ If the target directory already exists with step outputs in it, that is a
 touching anything. The established convention for a fresh reprocess of the same
 data is a `<DATASET>_rerun` sibling.
 
-## 5. Find a reference run to copy configs from
+## 5. Start from the configs on `main`
 
-Configs are per-dataset and drift with the schema. Prefer copying from the most
-recent **successful** run of the same family and diffing against the shipped
-template, rather than using the template blind:
+**The configs in the biahub checkout are the source of truth. Start there.**
+
+```bash
+<BIAHUB>/nextflow/configs/{a549,zebrafish}/
+```
+
+They live next to `mantis-v2.nf`, so a schema change to the pipeline and the
+matching change to its configs land in one commit, and they are reviewed. A
+previous run's `configs/` directory is a **fallback**, for when no template
+exists for the family or you need to see what a specific run actually used:
 
 ```bash
 ls -dt /hpc/projects/tlg2_mantis/*/configs                                  # zebrafish
 ls -dt /hpc/projects/intracellular_dashboard/organelle_dynamics/*/configs   # A549
 ```
 
-Templates for both families live in the biahub checkout, not in this skill:
-`<BIAHUB>/nextflow/configs/{zebrafish,a549}/` — they are versioned alongside
-`mantis-v2.nf`, so a schema change to the pipeline and to its configs lands in
-one commit. Every value that must be checked per dataset is called out in
-`references/caveats.md` §3 — pixel size, scan step, BF channel name, VS
-checkpoint, and the tracking schema.
+Treat a previous run's configs as evidence, not as the baseline — they are
+unreviewed snapshots that drift with the schema and often carry dataset-specific
+edits nobody intended to generalize.
+
+Then adjust for *this* dataset. Every value that must be checked per dataset is
+called out in `references/caveats.md` §3 — pixel size, scan step, BF channel
+name, VS checkpoint, and the tracking schema. Confirm the checkout is current
+(`git log -1 --oneline origin/main -- nextflow/configs`) before copying.
+
+### When the template itself is wrong, fix the template
+
+If a dataset needs a change that is **not** dataset-specific — a schema
+migration, a corrected default, a value the template simply has wrong — do not
+leave the fix in the run directory where the next dataset will miss it. Open a PR
+against `nextflow/configs/<family>/` that:
+
+- makes the change,
+- states in the description **which dataset exposed it and what failed**, and
+- says whether it applies to the other family too.
+
+Genuinely per-dataset values (pixel size, scan step, checkpoint choice for a
+one-off model) stay in the run directory and do **not** go back to `main`. The
+test is whether the next dataset in this family would want the same value.
 
 ## 6. Present the plan
 
@@ -119,7 +153,9 @@ Do not run anything yet. Show the user, concretely:
    `(T, C, Z, Y, X)` shape.
 2. Whether a `0-convert` plate build is needed.
 3. Output project directory, and the full step layout that will be created.
-4. Which reference run the configs come from, and every value you changed.
+4. That the configs come from `<BIAHUB>/nextflow/configs/<family>/` at commit
+   `<sha>`, every value you changed for this dataset, and any change you intend
+   to send back to `main` as a PR.
 5. Pipeline steps that will run: flat-field → deskew → reconstruct →
    virtual-stain → assemble → track (the full `mantis-v2.nf` workflow).
    **For neuromast/zebrafish, say that the deliverable is `5-assemble` and that
@@ -134,8 +170,6 @@ Get explicit approval.
 
 ```bash
 mkdir -p <OUTPUT>/configs <OUTPUT>/nextflow
-cp <REFERENCE>/configs/*.yml <OUTPUT>/configs/
-# or, with no suitable reference run:
 cp <BIAHUB>/nextflow/configs/<family>/*.yml <OUTPUT>/configs/
 ```
 
@@ -165,6 +199,15 @@ tmux send-keys -t "$SESSION" "bash ./run_mantis_v2.sh 2>&1 | tee -a nextflow/run
 ```
 
 Tell the user: `tmux attach -t nf_<DATASET>` to watch, `Ctrl-b d` to detach.
+
+**Run from `<OUTPUT>`** — that is what `-c "<OUTPUT>"` above is for. The *work*
+dir does not depend on it: `nextflow.config` pins
+`workDir = "${params.output}/nextflow/work"` regardless of where you launch
+(override with `-work-dir` to put it on faster scratch). What the cwd does
+control is where `.nextflow.log` and the `.nextflow/` **resume cache** land.
+Launching from somewhere else scatters those away from the run, and relaunching
+from a different directory means `-resume` finds no cache and recomputes
+everything.
 
 **Do not edit the biahub checkout while a run is live** — it changes Nextflow
 task hashes and invalidates `-resume`. (Editing this skill is fine; it is not
@@ -209,10 +252,11 @@ decision table. The one-line version:
 - **Exit 130–145** (preemption, timeout, OOM): Nextflow's `errorStrategy` already
   retries up to 5 times. Do nothing unless retries are exhausted.
 - **Lustre EIO / `RuntimeError: the checksum is invalid` / torn shard**: a killed
-  task left a half-written shard, and it now fails identically on every retry and
-  every `-resume`. This needs the **job-io-error-repair** agent — it deletes only
-  the corrupt chunk data (never the metadata scaffold) and sets up a clean
-  `-resume`. Do not delete zarr data by hand.
+  task left a half-written shard. **Rerun with `-resume` first** — iohub#455
+  replaces a torn shard rather than reading it back and resumes per unit, which
+  fixes this without any repair. Only if it fails *identically* again, write up a
+  repair proposal for the user (paths, `du -sh`, what is lost) or hand it to the
+  **job-io-error-repair** agent. **Never delete zarr data from this skill.**
 - **Exit 1/2 with a Python traceback**: a real bug or a bad config. Nextflow
   terminates on purpose. Read the traceback, fix, relaunch with `-resume`.
 
