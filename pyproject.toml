@@ -52,6 +52,32 @@ dependencies = [
 [project.optional-dependencies]
 segment = ["cellpose"]
 
+# Deliberately CPU-only: no cupy/cucim here.
+#
+# ultrack has an optional GPU path — it sets its array module to cupy whenever
+# cupy is importable, and sources GPU replacements for skimage/scipy from cucim.
+# ultrack's own pyproject suggests `cupy`/`cucim`/`pytorch-cuda` (a conda-only
+# feature; our torch is already a CUDA build). We measured it and are not
+# adopting it:
+#
+#   no cupy (xp=numpy)   track OK, 13 objects, 48s
+#   cupy + cucim         track OK, 13 objects, 67s / 46s
+#   cupy, no cucim       track FAILS, 0 objects
+#
+# No speedup — tracking is ~1 min per position against virtual-stain's ~46 min,
+# so it is not the bottleneck — identical results, and a new hard failure mode.
+# That last row is the trap: ultrack switches to cupy on cupy alone but needs
+# cucim for the matching skimage, and falls back to CPU skimage silently, so
+# `labels_to_contours` gets a cupy array and raises
+# `TypeError: Implicit conversion to a NumPy array is not allowed`. Installing
+# cupy WITHOUT cucim therefore breaks tracking outright (biahub#309), which is
+# what happened on a checkout carrying an out-of-band cupy.
+#
+# If this is revisited: add BOTH, never one alone, pin the CUDA major to match
+# the torch wheel (torch 2.13.0+cu130 -> cupy-cuda13x + cucim-cu13; ultrack
+# itself still targets CUDA 12), and benchmark on a full plate first.
+# Segmentation (cellpose) and virtual-stain (cytoland) use torch and are
+# unaffected either way.
 track = ["ultrack>=0.7"]
 
 # PyQt6>=6.10 does not provide wheels
