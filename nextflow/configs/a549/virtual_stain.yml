@@ -1,0 +1,58 @@
+# Virtual-stain config for `biahub virtual-stain` (--virtual_stain_config).
+# A549 infection-finetune model.
+#
+# Only `model`, `data` and `ckpt_path` are allowed at the top level (plus the
+# optional biahub knobs at the bottom). The `trainer:` and `return_predictions:`
+# blocks that viscy's predict.sh needed are REJECTED by build_predict_parser —
+# strip them when copying from an older predict.yml.
+#
+# `data.init_args.data_path` is injected per-position by biahub; leave it out.
+
+# Matches training config finetune_a549_infected_4gpu_batched.yml.
+model:
+  class_path: cytoland.engine.VSUNet
+  init_args:
+    architecture: fcmae
+    model_config:
+      in_channels: 1
+      out_channels: 2
+      encoder_blocks: [3, 3, 9, 3]
+      encoder_drop_path_rate: 0.1
+      dims: [96, 192, 384, 768]
+      decoder_conv_blocks: 2
+      stem_kernel_size: [5, 4, 4]
+      in_stack_depth: 15
+      pretraining: false
+    test_time_augmentations: true
+    tta_type: 'median'
+
+data:
+  class_path: viscy_data.hcs.HCSDataModule
+  init_args:
+    source_channel: Phase3D
+    target_channel:
+      - "nuclei_prediction"
+      - "membrane_prediction"
+
+    # MUST equal model.init_args.model_config.in_stack_depth (15). Training used
+    # z_window_size=20 with a (15, 384, 384) GPU centre-crop in the augmentation
+    # chain; predict has no such crop, so set the window to 15 directly. With 20
+    # the model stalls — a silent failure on the wrong Z dim.
+    z_window_size: 15
+    batch_size: 1
+    num_workers: 0
+
+    normalizations:
+      - class_path: viscy_transforms.NormalizeSampled
+        init_args:
+          keys: [Phase3D]
+          level: fov_statistics
+          subtrahend: median
+          divisor: iqr
+
+ckpt_path: "/hpc/projects/organelle_phenotyping/models/VSCyto3D-A549-infection-finetune/4gpu_bf16_bs16_to_ep7/checkpoints/epoch=7-step=832.ckpt"
+
+# Optional biahub orchestration knobs (defaults shown; uncomment to override).
+# sliding_window_step: 1
+# device: cuda
+# output_ome_zarr_version: null

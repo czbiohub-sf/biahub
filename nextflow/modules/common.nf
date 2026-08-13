@@ -34,9 +34,41 @@ def slurm_logs(step_name) {
     return "--output=${dir}/%x_%j.err --error=${dir}/%x_%j.out"
 }
 
-def biahub_cmd() {
-    return params.biahub_project ?
-        "uv run --project ${params.biahub_project} biahub" : "biahub"
+// ENVIRONMENT CONTRACT
+//
+// Every process calls `biahub` (and, in virtual_stain.nf, `viscy`) as a BARE
+// command. There is no per-task environment wrapper: the pipeline inherits the
+// environment of whatever shell launched it, and SLURM propagates that to the
+// compute nodes (sbatch defaults to --export=ALL, and the venv lives on shared
+// storage, so the same absolute paths resolve on every node). Activate once
+// before launching:
+//
+//     uv sync --project <BIAHUB>
+//     source <BIAHUB>/.venv/bin/activate
+//     nextflow run <BIAHUB>/nextflow/mantis-v2.nf ...
+//
+// This replaced a `biahub_cmd()` helper that prefixed every task with
+// `uv run --project <path>`. That wrapper made each of up to `maxForks` tasks
+// re-resolve and re-materialize the venv concurrently against one shared
+// site-packages. Resolving the environment once, up front, is both faster and
+// free of that write contention. `check_environment()` below turns a missing
+// activation into one clear launch-time error instead of N task failures.
+def check_environment() {
+    ['biahub', 'viscy'].each { tool ->
+        def proc = ['bash', '-c', "command -v ${tool}"].execute()
+        proc.waitFor()
+        if (proc.exitValue() != 0) {
+            error """
+                `${tool}` is not on PATH, so every task would fail with "command not found".
+
+                This pipeline expects an already-activated environment. Run:
+                    uv sync --project <BIAHUB>
+                    source <BIAHUB>/.venv/bin/activate
+                then relaunch. `viscy` comes from biahub's `stain` extra, which the
+                default `uv sync` installs via the dev dependency group.
+                """.stripIndent()
+        }
+    }
 }
 
 
@@ -52,7 +84,7 @@ process list_positions {
 
     script:
     """
-    ${biahub_cmd()} nf list-positions -i "${input_zarr}"
+    biahub nf list-positions -i "${input_zarr}"
     """
 }
 
@@ -72,9 +104,20 @@ workflow collect_positions {
         | map { it.trim() }
         | filter { it }
 
-    out = params.max_positions > 0
-        ? positions | take(params.max_positions) | collect
-        : positions | collect
+    // COERCE max_positions TO int, and call `take` as a method rather than
+    // through the `|` pipe. A param supplied on the command line arrives as a
+    // STRING ("1"), not a number — only the defaults in this repo's
+    // nextflow.config are typed. `take` has no String overload, so
+    // `positions.take(params.max_positions)` finds no matching operator and
+    // Nextflow falls back to resolving `take` as a process/function, aborting
+    // the run at launch with:
+    //   Missing process or function take([DataflowStream[?], 1])
+    // The default path (max_positions = 0, from config, an int) never reaches
+    // `take`, so this only ever broke the `--max_positions N` smoke-test path.
+    def n = (params.max_positions ?: 0) as int
+    out = n > 0
+        ? positions.take(n).collect()
+        : positions.collect()
 
     emit:
     out
