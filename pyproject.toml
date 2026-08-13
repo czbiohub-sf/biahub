@@ -78,7 +78,10 @@ segment = ["cellpose"]
 # itself still targets CUDA 12), and benchmark on a full plate first.
 # Segmentation (cellpose) and virtual-stain (cytoland) use torch and are
 # unaffected either way.
-track = ["ultrack>=0.7"]
+# 0.8 drops ultrack's pyarrow<20 cap (which pinned us to a pyarrow flagged by
+# GHSA-rgxp-2hwp-jwgg) and casts its computed chunk sizes to plain ints, so
+# zarr no longer needs capping below 3.3. See royerlab/ultrack#283 and #284.
+track = ["ultrack>=0.8"]
 
 # PyQt6>=6.10 does not provide wheels
 gui = ["napari[pyqt6]", "PyQt6<6.10", "napari-animation"]
@@ -106,16 +109,6 @@ dev = [
 biahub = "biahub.cli.main:cli"
 
 [tool.uv]
-# zarr 3.3.0 regressed chunk normalization: normalize_chunks_1d narrows with
-# `isinstance(chunks, int)` while its caller normalize_chunks_nd uses
-# numbers.Integral, so a numpy integer chunk size falls through to a
-# `list(chunks)` branch and raises "'numpy.int64' object is not iterable".
-# ultrack's large_chunk_size returns np.int64 for the spatial dims, which
-# breaks every array_apply call in biahub track. Repro:
-#   zarr.zeros((4, 4), dtype="f4", chunks=(np.int64(2), np.int64(2)))
-# Drop this cap once zarr ships the fix.
-constraint-dependencies = ["zarr<3.3"]
-
 # Needed so that uv considers pypi (and not only the pytorch CPU extra index)
 # when resolving build-system requirements such as iohub's hatchling /
 # uv-dynamic-versioning chain, which pulls in packaging>=24.2.
