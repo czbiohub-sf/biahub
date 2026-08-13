@@ -82,10 +82,10 @@ layout is defined once in `nextflow/mantis-v2.nf` (`directory_layout()`):
 ├── nextflow/
 │   ├── work/                       # Nextflow work dir (default: <OUTPUT>/nextflow/work)
 │   ├── slurm_output/<step>/%x_%j.{out,err}
-│   ├── report.html  timeline.html  trace.txt  dag.html
-│   └── run_<timestamp>.log         # tee'd console log
-├── .nextflow.log                   # rotates to .1, .2, ...
-└── run_mantis_v2.sh                # provenance: the exact command used
+│   ├── provenance.txt              # branch/commit/input per launch, appended
+│   └── report.html  timeline.html  trace.txt  dag.html
+├── .nextflow.log                   # the run record you read; rotates to .1, .2, ...
+└── run_mantis_v2.sh                # the exact command used
 ```
 
 The dataset stem comes from the *input* store name with `.ome.zarr`/`.zarr`

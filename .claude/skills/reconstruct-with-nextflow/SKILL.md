@@ -161,10 +161,25 @@ do **not** attach yourself:
 ```bash
 SESSION="nf_<DATASET>"
 tmux new-session -d -s "$SESSION" -c "<OUTPUT>"
-tmux send-keys -t "$SESSION" "bash ./run_mantis_v2.sh 2>&1 | tee -a nextflow/run_$(date +%Y%m%dT%H%M%S).log" Enter
+tmux send-keys -t "$SESSION" "bash ./run_mantis_v2.sh" Enter
 ```
 
 Tell the user: `tmux attach -t nf_<DATASET>` to watch, `Ctrl-b d` to detach.
+
+**Do not pipe the launch through `tee`** (or anything else). Nextflow renders its
+live progress table only when stdout is a terminal; a pipe downgrades it to one
+static line per task. Verified on the same Nextflow build: an otherwise identical
+run through `tee` produced plain output, and without it, the dynamic display.
+
+Nothing is lost by dropping it. Two files carry what the console used to:
+
+- `<OUTPUT>/.nextflow.log` — the run record you read to follow progress (step 9).
+- `<OUTPUT>/nextflow/provenance.txt` — written by `run_mantis_v2.sh` at each
+  launch: branch, full commit, input store, host, Nextflow version, and whether
+  the checkout was dirty or off `main`. Appended, so a `-resume` relaunch adds an
+  entry instead of erasing the first one. This is what answers "which commit
+  produced this output?" after the tmux pane is gone — `.nextflow.log` records the
+  launch command line but not the git state.
 
 **Launch from `<OUTPUT>`** (the `-c` above): the cwd controls where
 `.nextflow.log` and the `.nextflow/` resume cache land — relaunching from a

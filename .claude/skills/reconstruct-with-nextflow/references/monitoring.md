@@ -26,19 +26,34 @@ pane so the user sees live Nextflow output on attach:
 SESSION="nf_<DATASET>"
 tmux has-session -t "$SESSION" 2>/dev/null && echo "session exists — attach or kill it first"
 tmux new-session -d -s "$SESSION" -c "<OUTPUT>"
-tmux send-keys -t "$SESSION" \
-  "bash ./run_mantis_v2.sh 2>&1 | tee -a nextflow/run_$(date +%Y%m%dT%H%M%S).log" Enter
+tmux send-keys -t "$SESSION" "bash ./run_mantis_v2.sh" Enter
 ```
 
 Tell the user: `tmux attach -t nf_<DATASET>`, detach with `Ctrl-b d`.
 
+**Send the command bare — no `| tee`, no redirect.** Nextflow renders its live
+progress table only when stdout is a terminal, so any pipe downgrades the user's
+pane to one static line per task. The console is the user's view; yours is
+`.nextflow.log`.
+
 **Do not attach yourself** — attaching from a tool call gives you a terminal you
-cannot read usefully and can steal the user's pane. Read the tee'd log instead:
+cannot read usefully and can steal the user's pane. **Read `.nextflow.log`**,
+which Nextflow writes in the launch directory regardless of what the console
+shows:
 
 ```bash
-tail -n 50 <OUTPUT>/nextflow/run_*.log
-tmux capture-pane -p -t "$SESSION" | tail -40    # if the log is not yet flushed
+tail -n 50 <OUTPUT>/.nextflow.log
 ```
+
+It carries what you need to follow progress: the launch command line, each task's
+submission and completion with its work dir hash, exit statuses, retries, and the
+final `WorkflowStats[succeededCount=...; failedCount=...; retriesCount=...]`
+summary. Rotated per run as `.nextflow.log.1`, `.log.2`, … so the previous run's
+log survives a relaunch.
+
+`tmux capture-pane -p -t "$SESSION" | tail -40` still works as a last resort, but
+prefer the log: the pane holds only what fits on screen, and with the progress
+table redrawing in place it is not a transcript.
 
 To confirm the run is alive:
 
