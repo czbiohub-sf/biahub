@@ -13,7 +13,7 @@
 // the Nextflow task.  See also:
 // examples/submitit_debug_nextflow/2026-05-27-submitit-debug-nextflow-concerns.md
 
-include { parse_resources; biahub_cmd; slurm_logs; slurm_log_dir } from './common'
+include { parse_resources; slurm_logs; slurm_log_dir } from './common'
 
 
 process init_flat_field {
@@ -31,7 +31,7 @@ process init_flat_field {
     script:
     """
     mkdir -p "${slurm_log_dir('flat_field')}"
-    ${biahub_cmd()} flat-field --init \
+    biahub flat-field --init \
         -i "${input_zarr}"/*/*/* \
         -o "${output_zarr}" \
         -c "${config}"
@@ -61,7 +61,7 @@ process run_flat_field {
     // this position had not finished. The completion record is keyed by the
     // resolved settings, so a config change recomputes instead of being skipped.
     """
-    ${biahub_cmd()} flat-field --cluster debug --resume \
+    biahub flat-field --cluster debug --resume \
         -i "${input_zarr}/${position}" \
         -o "${output_zarr}" \
         -c "${config}"

@@ -34,7 +34,11 @@ dependencies = [
   "tqdm",
   "waveorder>=3.0.4",
   "largestinteriorrectangle",
-  "antspyx",
+  # 0.6 is the first antspyx with cp313 wheels; below it, Python 3.13 falls back
+  # to building ANTs from source and fails. Every 0.6.x caps scipy<1.16, so this
+  # floor is also what holds scipy on the 1.15 series -- without it the resolver
+  # prefers newer scipy and silently drops antspyx back to a cp312-only 0.5.x.
+  "antspyx>=0.6",
   "pystackreg",
   "imageio-ffmpeg",
   "dask[array]",
@@ -48,7 +52,36 @@ dependencies = [
 [project.optional-dependencies]
 segment = ["cellpose"]
 
-track = ["ultrack>=0.7"]
+# Deliberately CPU-only: no cupy/cucim here.
+#
+# ultrack has an optional GPU path — it sets its array module to cupy whenever
+# cupy is importable, and sources GPU replacements for skimage/scipy from cucim.
+# ultrack's own pyproject suggests `cupy`/`cucim`/`pytorch-cuda` (a conda-only
+# feature; our torch is already a CUDA build). We measured it and are not
+# adopting it:
+#
+#   no cupy (xp=numpy)   track OK, 13 objects, 48s
+#   cupy + cucim         track OK, 13 objects, 67s / 46s
+#   cupy, no cucim       track FAILS, 0 objects
+#
+# No speedup — tracking is ~1 min per position against virtual-stain's ~46 min,
+# so it is not the bottleneck — identical results, and a new hard failure mode.
+# That last row is the trap: ultrack switches to cupy on cupy alone but needs
+# cucim for the matching skimage, and falls back to CPU skimage silently, so
+# `labels_to_contours` gets a cupy array and raises
+# `TypeError: Implicit conversion to a NumPy array is not allowed`. Installing
+# cupy WITHOUT cucim therefore breaks tracking outright (biahub#309), which is
+# what happened on a checkout carrying an out-of-band cupy.
+#
+# If this is revisited: add BOTH, never one alone, pin the CUDA major to match
+# the torch wheel (torch 2.13.0+cu130 -> cupy-cuda13x + cucim-cu13; ultrack
+# itself still targets CUDA 12), and benchmark on a full plate first.
+# Segmentation (cellpose) and virtual-stain (cytoland) use torch and are
+# unaffected either way.
+# 0.8 drops ultrack's pyarrow<20 cap (which pinned us to a pyarrow flagged by
+# GHSA-rgxp-2hwp-jwgg) and casts its computed chunk sizes to plain ints, so
+# zarr no longer needs capping below 3.3. See royerlab/ultrack#283 and #284.
+track = ["ultrack>=0.8"]
 
 # PyQt6>=6.10 does not provide wheels
 gui = ["napari[pyqt6]", "PyQt6<6.10", "napari-animation"]
@@ -68,7 +101,7 @@ doc = [
 dev = [
   "biahub[all,build]",
   "pre-commit~=4.5",
-  "pytest~=8.4",
+  "pytest~=9.0",
   "ruff~=0.15",
 ]
 
@@ -115,7 +148,9 @@ packages = ["biahub"]
 line-length = 95
 target-version = "py312"
 
-exclude = ["archive", "examples", "scripts", "notebooks"]
+# .claude holds skill prompts whose fenced code blocks are deliberately
+# incomplete templates; ruff >=0.16 formats Markdown and would rewrite them.
+exclude = ["archive", "examples", "scripts", "notebooks", ".claude"]
 
 [tool.ruff.lint]
 select = ["F", "E", "W", "I", "N", "UP", "B", "D"]
