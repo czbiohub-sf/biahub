@@ -278,11 +278,21 @@ Consequences worth knowing:
   track lengths, and shape/dtype instead.
 - **A rerun is not a reproduction.** If a tracking result matters, keep the
   output; you cannot regenerate the identical one later.
-- **This applies to tracking only.** Every earlier step is deterministic given the
-  same input and config — including `virtual-stain`, despite it also running GPU
-  inference with test-time augmentation. Measured: the same position predicted on
-  two different GPU nodes, one of them with a different CUDA runtime on
-  `LD_LIBRARY_PATH`, produced **bitwise identical** output over three full
-  timepoints (0 differing voxels in 1,024,338,432). So a virtual-stain difference
-  between two runs is a real difference, not noise — worth investigating rather
-  than shrugging at.
+- **Tracking's instability is structural; virtual-stain's is not.** Both run GPU
+  inference, so the distinction matters:
+
+  | | tracking | virtual-stain |
+  |---|---|---|
+  | repeat run, same environment | 1.06% of voxels differ | bitwise identical (0 of 1,024,338,432) |
+  | different GPU node / different CUDA libraries installed | — | 99.87% of voxels differ, but `corr = 1.000000`, median abs diff `5.6e-06`, max abs diff `9.3e-04` on a ~39 range |
+
+  Virtual-stain's differences are float32 last-bit rounding from GPU kernel
+  selection — identical mean, std, min and max to four decimals. Tracking's are
+  *structural*: different label ids and boundaries, from cellpose
+  non-determinism, ultrack's `n_workers=16` watershed with `random_seed='frame'`,
+  and ILP solution ties.
+
+  So **judge virtual-stain on values, not voxel counts.** A bare "99% of voxels
+  differ" means nothing here; `corr` and max abs diff are the measures that do. A
+  real virtual-stain regression moves the distribution, not the last bit. Deskew,
+  reconstruct and assemble are fully deterministic.

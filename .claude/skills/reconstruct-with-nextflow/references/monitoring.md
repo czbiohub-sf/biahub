@@ -26,19 +26,40 @@ pane so the user sees live Nextflow output on attach:
 SESSION="nf_<DATASET>"
 tmux has-session -t "$SESSION" 2>/dev/null && echo "session exists — attach or kill it first"
 tmux new-session -d -s "$SESSION" -c "<OUTPUT>"
-tmux send-keys -t "$SESSION" \
-  "bash ./run_mantis_v2.sh 2>&1 | tee -a nextflow/run_$(date +%Y%m%dT%H%M%S).log" Enter
+tmux send-keys -t "$SESSION" "bash ./run_mantis_v2.sh" Enter
 ```
 
 Tell the user: `tmux attach -t nf_<DATASET>`, detach with `Ctrl-b d`.
 
+**Send the command bare — no `| tee`, no redirect.** A pipe buys nothing that
+`.nextflow.log` and `nextflow/provenance.txt` don't already record. The console is
+the user's view; yours is `.nextflow.log`.
+
+**The pane inherits `CLAUDECODE=1` from the tool call that created the session**,
+which puts Nextflow 26.04 into agent mode: one static `[PROCESS …]` line per task,
+no live table, for a run the user watches for days. `run_mantis_v2.sh` handles it
+with `unset CLAUDECODE`; if you ever launch Nextflow by hand, prefix it with
+`env -u CLAUDECODE`. `NXF_AGENT_MODE=false` and `-ansi-log true` do **not** work —
+see SKILL.md §8 and [nextflow#7478](https://github.com/nextflow-io/nextflow/issues/7478).
+
 **Do not attach yourself** — attaching from a tool call gives you a terminal you
-cannot read usefully and can steal the user's pane. Read the tee'd log instead:
+cannot read usefully and can steal the user's pane. **Read `.nextflow.log`**,
+which Nextflow writes in the launch directory regardless of what the console
+shows:
 
 ```bash
-tail -n 50 <OUTPUT>/nextflow/run_*.log
-tmux capture-pane -p -t "$SESSION" | tail -40    # if the log is not yet flushed
+tail -n 50 <OUTPUT>/.nextflow.log
 ```
+
+It carries what you need to follow progress: the launch command line, each task's
+submission and completion with its work dir hash, exit statuses, retries, and the
+final `WorkflowStats[succeededCount=...; failedCount=...; retriesCount=...]`
+summary. Rotated per run as `.nextflow.log.1`, `.log.2`, … so the previous run's
+log survives a relaunch.
+
+`tmux capture-pane -p -t "$SESSION" | tail -40` still works as a last resort, but
+prefer the log: the pane holds only what fits on screen, and with the progress
+table redrawing in place it is not a transcript.
 
 To confirm the run is alive:
 

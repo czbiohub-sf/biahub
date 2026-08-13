@@ -66,20 +66,9 @@ uv sync --project "${BIAHUB_PROJECT}"
 set +u; source "${BIAHUB_PROJECT}/.venv/bin/activate"; set -u
 command -v biahub >/dev/null || { echo "biahub not on PATH after activation" >&2; exit 1; }
 
-# Record which code is about to run. This lands in the tee'd run log, so the
-# output directory carries the answer to "which commit produced this?" without
-# depending on the checkout still being in the same state later. Runs should come
-# off `main`; a feature branch is legitimate but should be a deliberate choice, so
-# warn rather than fail.
 BIAHUB_BRANCH="$(git -C "${BIAHUB_PROJECT}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
-echo "biahub: ${BIAHUB_PROJECT}"
-echo "  branch ${BIAHUB_BRANCH}  $(git -C "${BIAHUB_PROJECT}" log -1 --format='%h %s' 2>/dev/null)"
-if [[ -n "$(git -C "${BIAHUB_PROJECT}" status --porcelain 2>/dev/null)" ]]; then
-    echo "  WARNING: uncommitted changes — this run is not reproducible from the commit above" >&2
-fi
-if [[ "${BIAHUB_BRANCH}" != "main" ]]; then
-    echo "  WARNING: not on main" >&2
-fi
+BIAHUB_COMMIT="$(git -C "${BIAHUB_PROJECT}" log -1 --format='%H %cI %s' 2>/dev/null || echo '?')"
+BIAHUB_DIRTY="$(git -C "${BIAHUB_PROJECT}" status --porcelain 2>/dev/null || true)"
 
 # Default the converted plate to the conventional location if it exists there.
 if [[ -z "${CONVERTED_ZARR}" && -d "${OUTPUT_DIR}/0-convert/${DATASET}.zarr" ]]; then
@@ -91,6 +80,56 @@ INPUT_ZARR="${CONVERTED_ZARR:-${DATA_DIR}/${DATASET}/${RAW_STORE}}"
 
 [[ -d "${INPUT_ZARR}" ]] || { echo "input not found: ${INPUT_ZARR}" >&2; exit 1; }
 [[ -d "${CONFIGS}"    ]] || { echo "configs not found: ${CONFIGS}"  >&2; exit 1; }
+
+# Record which code and inputs this run used, to a FILE as well as the console.
+#
+# The file is the durable record. The launch is deliberately not piped through
+# `tee`, and `.nextflow.log` captures the launch command line but not the git state — so
+# without this, "which commit produced this output?" is unanswerable once the tmux
+# pane is gone. Appends, so a `-resume` relaunch adds an entry rather than erasing
+# the original run's provenance.
+PROVENANCE="${OUTPUT_DIR}/nextflow/provenance.txt"
+mkdir -p "${OUTPUT_DIR}/nextflow"
+{
+    echo "=== $(date -Is) ==="
+    echo "dataset   ${DATASET}"
+    echo "input     ${INPUT_ZARR}"
+    echo "output    ${OUTPUT_DIR}"
+    echo "biahub    ${BIAHUB_PROJECT}"
+    echo "branch    ${BIAHUB_BRANCH}"
+    echo "commit    ${BIAHUB_COMMIT}"
+    echo "host      $(hostname)"
+    echo "nextflow  $(nextflow -version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+    if [[ -n "${BIAHUB_DIRTY}" ]]; then
+        echo "dirty     YES — not reproducible from the commit above:"
+        echo "${BIAHUB_DIRTY}" | sed 's/^/          /'
+    fi
+    if [[ "${BIAHUB_BRANCH}" != "main" ]]; then
+        echo "warning   not on main"
+    fi
+} >> "${PROVENANCE}"
+
+echo "biahub: ${BIAHUB_PROJECT}"
+echo "  branch ${BIAHUB_BRANCH}  ${BIAHUB_COMMIT%% *}"
+echo "  provenance appended to ${PROVENANCE}"
+if [[ -n "${BIAHUB_DIRTY}" ]]; then
+    echo "  WARNING: uncommitted changes — this run is not reproducible from the commit above" >&2
+fi
+if [[ "${BIAHUB_BRANCH}" != "main" ]]; then
+    echo "  WARNING: not on main" >&2
+fi
+
+# Nextflow 26.04 switches to "agent mode" — one static `[PROCESS …]` line per task
+# instead of the live progress table — when CLAUDECODE (or AGENT, or
+# NXF_AGENT_MODE) is truthy in the environment. When Claude Code creates the tmux
+# session, the pane inherits CLAUDECODE=1, so a run a HUMAN watches for days
+# renders as agent output. Unsetting the variable is the only way out: agent mode
+# ORs the three variables, so `NXF_AGENT_MODE=false` cannot disable it, and an
+# explicit `-ansi-log true` is silently dropped
+# (CmdRun.groovy: `session.ansiLog = options.ansiLog && !SysEnv.isAgentMode()`).
+# Reported upstream: https://github.com/nextflow-io/nextflow/issues/7478
+# Harmless when unset already, and nothing in the pipeline reads it.
+unset CLAUDECODE
 
 nextflow run "${PIPELINE}" \
     -c "${NF_CONFIG}" \

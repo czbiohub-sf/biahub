@@ -161,10 +161,39 @@ do **not** attach yourself:
 ```bash
 SESSION="nf_<DATASET>"
 tmux new-session -d -s "$SESSION" -c "<OUTPUT>"
-tmux send-keys -t "$SESSION" "bash ./run_mantis_v2.sh 2>&1 | tee -a nextflow/run_$(date +%Y%m%dT%H%M%S).log" Enter
+tmux send-keys -t "$SESSION" "bash ./run_mantis_v2.sh" Enter
 ```
 
 Tell the user: `tmux attach -t nf_<DATASET>` to watch, `Ctrl-b d` to detach.
+
+**Do not pipe the launch through `tee`** (or anything else) — a pipe costs the
+live progress table for nothing, since the two files below already carry the
+console's content.
+
+**The live table also needs `CLAUDECODE` unset.** Nextflow 26.04 has an "agent
+mode" that replaces the table with one static `[PROCESS …]` line per task, and it
+turns itself on whenever `CLAUDECODE`, `AGENT`, or `NXF_AGENT_MODE` is truthy. A
+tmux session created from a Claude Code tool call inherits `CLAUDECODE=1`, so the
+run a human then watches for days renders as agent output. `run_mantis_v2.sh`
+does `unset CLAUDECODE` before `nextflow run`; nothing else works, because agent
+mode ORs the three variables (`NXF_AGENT_MODE=false` cannot disable it) and
+`-ansi-log true` is accepted and silently dropped. Reported upstream as
+[nextflow#7478](https://github.com/nextflow-io/nextflow/issues/7478); drop the
+`unset` once it is fixed. Confirm after launching:
+
+```bash
+tmux capture-pane -p -t "$SESSION" | grep -q '^\[PROCESS ' && echo "agent mode — table lost"
+```
+
+Two files carry what the console used to:
+
+- `<OUTPUT>/.nextflow.log` — the run record you read to follow progress (step 9).
+- `<OUTPUT>/nextflow/provenance.txt` — written by `run_mantis_v2.sh` at each
+  launch: branch, full commit, input store, host, Nextflow version, and whether
+  the checkout was dirty or off `main`. Appended, so a `-resume` relaunch adds an
+  entry instead of erasing the first one. This is what answers "which commit
+  produced this output?" after the tmux pane is gone — `.nextflow.log` records the
+  launch command line but not the git state.
 
 **Launch from `<OUTPUT>`** (the `-c` above): the cwd controls where
 `.nextflow.log` and the `.nextflow/` resume cache land — relaunching from a
