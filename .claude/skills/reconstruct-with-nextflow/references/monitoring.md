@@ -31,10 +31,16 @@ tmux send-keys -t "$SESSION" "bash ./run_mantis_v2.sh" Enter
 
 Tell the user: `tmux attach -t nf_<DATASET>`, detach with `Ctrl-b d`.
 
-**Send the command bare — no `| tee`, no redirect.** Nextflow renders its live
-progress table only when stdout is a terminal, so any pipe downgrades the user's
-pane to one static line per task. The console is the user's view; yours is
-`.nextflow.log`.
+**Send the command bare — no `| tee`, no redirect.** A pipe buys nothing that
+`.nextflow.log` and `nextflow/provenance.txt` don't already record. The console is
+the user's view; yours is `.nextflow.log`.
+
+**The pane inherits `CLAUDECODE=1` from the tool call that created the session**,
+which puts Nextflow 26.04 into agent mode: one static `[PROCESS …]` line per task,
+no live table, for a run the user watches for days. `run_mantis_v2.sh` handles it
+with `unset CLAUDECODE`; if you ever launch Nextflow by hand, prefix it with
+`env -u CLAUDECODE`. `NXF_AGENT_MODE=false` and `-ansi-log true` do **not** work —
+see SKILL.md §8 and [nextflow#7478](https://github.com/nextflow-io/nextflow/issues/7478).
 
 **Do not attach yourself** — attaching from a tool call gives you a terminal you
 cannot read usefully and can steal the user's pane. **Read `.nextflow.log`**,

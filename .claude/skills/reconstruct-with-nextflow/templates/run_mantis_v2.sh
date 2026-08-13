@@ -84,8 +84,7 @@ INPUT_ZARR="${CONVERTED_ZARR:-${DATA_DIR}/${DATASET}/${RAW_STORE}}"
 # Record which code and inputs this run used, to a FILE as well as the console.
 #
 # The file is the durable record. The launch is deliberately not piped through
-# `tee` (Nextflow only renders its live progress table when stdout is a terminal),
-# and `.nextflow.log` captures the launch command line but not the git state — so
+# `tee`, and `.nextflow.log` captures the launch command line but not the git state — so
 # without this, "which commit produced this output?" is unanswerable once the tmux
 # pane is gone. Appends, so a `-resume` relaunch adds an entry rather than erasing
 # the original run's provenance.
@@ -119,6 +118,18 @@ fi
 if [[ "${BIAHUB_BRANCH}" != "main" ]]; then
     echo "  WARNING: not on main" >&2
 fi
+
+# Nextflow 26.04 switches to "agent mode" — one static `[PROCESS …]` line per task
+# instead of the live progress table — when CLAUDECODE (or AGENT, or
+# NXF_AGENT_MODE) is truthy in the environment. When Claude Code creates the tmux
+# session, the pane inherits CLAUDECODE=1, so a run a HUMAN watches for days
+# renders as agent output. Unsetting the variable is the only way out: agent mode
+# ORs the three variables, so `NXF_AGENT_MODE=false` cannot disable it, and an
+# explicit `-ansi-log true` is silently dropped
+# (CmdRun.groovy: `session.ansiLog = options.ansiLog && !SysEnv.isAgentMode()`).
+# Reported upstream: https://github.com/nextflow-io/nextflow/issues/7478
+# Harmless when unset already, and nothing in the pipeline reads it.
+unset CLAUDECODE
 
 nextflow run "${PIPELINE}" \
     -c "${NF_CONFIG}" \
