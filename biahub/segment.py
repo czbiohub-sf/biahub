@@ -3,7 +3,6 @@ from pathlib import Path
 import click
 import numpy as np
 import submitit
-import torch
 
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate, process_single_position
@@ -19,6 +18,7 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.settings import SegmentationSettings
+from biahub.utils.cellpose import cellpose_device
 from biahub.utils.cluster import estimate_resources, get_submitit_cluster
 from biahub.utils.config import yaml_to_model
 from biahub.utils.ngff import get_output_paths, resolve_ome_zarr_version
@@ -29,10 +29,8 @@ def segment_data(
     segmentation_models: dict,
     gpu: bool = True,
 ) -> np.ndarray:
-    from cellpose import models
-
     """
-    Segment a CZYX image using a Cellpose segmentation model
+    Segment a CZYX image using a Cellpose segmentation model.
 
     Parameters
     ----------
@@ -48,18 +46,12 @@ def segment_data(
     np.ndarray
         A CZYX segmentation image
     """
-
-    # Segmenetation in cpu or gpu
-    if gpu:
-        try:
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        except torch.cuda.CudaError:
-            click.echo("No GPU available. Using CPU")
-            device = torch.device("cpu")
-    else:
-        device = torch.device("cpu")
-
+    # Every job this step submits asks SLURM for a GPU, so an unusable one is a
+    # broken allocation, not a reason to fall back to a ~130x slower CPU run.
+    device = cellpose_device(gpu)
     click.echo(f"Using device: {device}")
+
+    from cellpose import models
 
     czyx_segmentation = []
     # Process each model in a loop
