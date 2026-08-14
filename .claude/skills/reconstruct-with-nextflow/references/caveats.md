@@ -180,6 +180,20 @@ sharded — keep C at 1. Auto-sizing is
 [iohub#458](https://github.com/czbiohub-sf/iohub/issues/458); most of this
 section goes away when it lands.
 
+**A T ratio above 1 needs iohub ≥ [#460](https://github.com/czbiohub-sf/iohub/pull/460).**
+Before it, `concatenate` aborted with a message that points nowhere near the
+cause — `numpy ... Unable to allocate 651. TiB for an array with shape
+(1048576, 86, 1664, 1193)`, whose first axis is not T, not a shard, not
+anything. It is **not** evidence that the shard buffer is too large, and
+unsetting `shards_ratio` "fixes" it for the wrong reason. What happens: a
+shard-aligned batch writes a whole shard's worth of timepoints in one call,
+iohub drops the blank ones (`Skipping t=1, c=0 due to all zeros or nans` in the
+step's `.command.out`), and the surviving indices are left with a *gap* — which
+a sharded write cannot express. Confirm it by grepping `.command.err` for
+`DiscontiguousArrayError`; the array it prints is the diff of the surviving
+indices (`[3 1]` for `[0, 3, 4]`, i.e. t=1 and t=2 were blank). If you see this
+signature, check the iohub pin rather than the shard geometry.
+
 ## 8. Preemption is expected, not an error
 
 Per-position work runs on the `preempted` partition; SLURM reclaims jobs
