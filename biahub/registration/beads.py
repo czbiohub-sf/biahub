@@ -46,14 +46,12 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.cli.slurm import wait_for_jobs_to_finish
-from biahub.cli.utils import (
-    _check_nan_n_zeros,
-    estimate_resources,
-)
 from biahub.core.graph_matching import Graph, GraphMatcher
 from biahub.core.transform import Transform
 from biahub.registration.utils import get_aprox_transform, load_transforms
 from biahub.settings import AffineTransformSettings, BeadsMatchSettings, DetectPeaksSettings
+from biahub.utils.array_ops import _check_nan_n_zeros
+from biahub.utils.cluster import estimate_resources
 
 
 def optimize_matches(

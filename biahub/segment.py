@@ -8,7 +8,6 @@ import torch
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate, process_single_position
 
-from biahub.cli import utils
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
     config_filepath,
@@ -19,13 +18,10 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import (
-    estimate_resources,
-    get_submitit_cluster,
-    resolve_ome_zarr_version,
-    yaml_to_model,
-)
 from biahub.settings import SegmentationSettings
+from biahub.utils.cluster import estimate_resources, get_submitit_cluster
+from biahub.utils.config import yaml_to_model
+from biahub.utils.ngff import get_output_paths, resolve_ome_zarr_version
 
 
 def segment_data(
@@ -135,7 +131,7 @@ def segment_cli(
         sbatch_filepath = Path(sbatch_filepath)
 
     # Handle single position or wildcard filepath
-    output_position_paths = utils.get_output_paths(input_position_dirpaths, output_dirpath)
+    output_position_paths = get_output_paths(input_position_dirpaths, output_dirpath)
 
     # Get the deskewing parameters
     # Load the first position to infer dataset information

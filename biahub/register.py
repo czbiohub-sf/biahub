@@ -22,14 +22,11 @@ from biahub.cli.parsing import (
     source_position_dirpaths,
     target_position_dirpaths,
 )
-from biahub.cli.utils import (
-    copy_n_paste_czyx,
-    estimate_resources,
-    get_submitit_cluster,
-    resolve_ome_zarr_version,
-    yaml_to_model,
-)
 from biahub.settings import RegistrationSettings
+from biahub.utils.array_ops import copy_n_paste_czyx
+from biahub.utils.cluster import estimate_resources, get_submitit_cluster
+from biahub.utils.config import yaml_to_model
+from biahub.utils.ngff import resolve_ome_zarr_version
 
 
 def get_3D_rescaling_matrix(start_shape_zyx, scaling_factor_zyx=(1, 1, 1), end_shape_zyx=None):

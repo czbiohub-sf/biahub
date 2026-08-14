@@ -12,7 +12,6 @@ import torch
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate
 
-from biahub.cli import utils
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
     cluster,
@@ -24,11 +23,10 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import (
+from biahub.utils.cluster import echo_resources, estimate_resources, get_submitit_cluster
+from biahub.utils.ngff import (
     PROVENANCE_METADATA_KEYS,
-    echo_resources,
-    estimate_resources,
-    get_submitit_cluster,
+    get_output_paths,
     resolve_ome_zarr_version,
 )
 
@@ -387,7 +385,7 @@ def virtual_stain(
         click.echo(f"Initialized {output_dirpath} ({len(input_position_dirpaths)} positions)")
         return
 
-    output_position_paths = utils.get_output_paths(input_position_dirpaths, output_dirpath)
+    output_position_paths = get_output_paths(input_position_dirpaths, output_dirpath)
 
     # Prepare SLURM arguments
     slurm_args = {
