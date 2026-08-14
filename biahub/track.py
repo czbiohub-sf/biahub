@@ -1,6 +1,10 @@
 import ast
+import getpass
 import logging
 import os
+import shutil
+import sys
+import time
 
 from pathlib import Path
 
@@ -9,6 +13,7 @@ import dask.array as da
 import numpy as np
 import pandas as pd
 import submitit
+import torch
 
 from iohub import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate
@@ -43,6 +48,11 @@ logger = logging.getLogger(__name__)
 # shared with biahub.estimate_stabilization.
 NA_DET = 1.35
 LAMBDA_ILL = 0.500
+
+# Attempts for each node-local cellpose weight copy. ESTALE on the NFS home export
+# is transient and is the very thing staging exists to avoid, so retry the copy
+# before giving up and reading the weights over NFS. See _stage_cellpose_weights.
+_CELLPOSE_STAGE_ATTEMPTS = 3
 
 # Lazy imports for ultrack - imported only when needed in specific functions
 
@@ -692,6 +702,135 @@ def detect_foreground_segmentation(
     raise ValueError("Foreground and contour channels are required for tracking.")
 
 
+def _cellpose_device(gpu: bool) -> torch.device:
+    """Resolve the torch device for cellpose, refusing a silent CPU fallback.
+
+    Left to itself, cellpose picks its device in ``cellpose.core.assign_device``,
+    which probes CUDA inside a bare ``except: pass`` and quietly returns the CPU
+    whenever the probe fails — a transient CUDA init error on a busy node included.
+    Nothing in the logs distinguishes the two devices, and on an A6000 against a
+    1664x1193 frame the CPU is 130x slower (2.0 s vs 264 s per frame), so a
+    three-minute tracking task silently runs for hours. Probing here surfaces the
+    real CUDA error and fails the task in seconds instead, which lets the caller
+    (or the workflow) retry the position on a fresh allocation.
+
+    Parameters
+    ----------
+    gpu : bool
+        Whether the config asked for GPU segmentation.
+
+    Returns
+    -------
+    torch.device
+        ``cuda:0`` — the GPU SLURM allocated, via CUDA_VISIBLE_DEVICES — when
+        ``gpu`` is set, ``cpu`` otherwise.
+
+    Raises
+    ------
+    RuntimeError
+        If ``gpu`` is set but CUDA cannot be used on this host.
+    """
+    if not gpu:
+        return torch.device("cpu")
+
+    device = torch.device("cuda:0")
+    try:
+        torch.zeros(1).to(device)
+    except Exception as exc:
+        raise RuntimeError(
+            "cellpose_config.gpu is true but CUDA is unusable on this host "
+            f"(CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES')!r}): {exc}. "
+            "Refusing to fall back to the CPU, which is ~130x slower on this data. "
+            "Set cellpose_config.gpu to false to segment on the CPU deliberately."
+        ) from exc
+    return device
+
+
+def _cellpose_models_dir() -> Path:
+    """Return the directory cellpose loads its weights from."""
+    env_dir = os.environ.get("CELLPOSE_LOCAL_MODELS_PATH")
+    return Path(env_dir) if env_dir else Path.home() / ".cellpose" / "models"
+
+
+def _copy_weight(source: Path, dest: Path) -> None:
+    """Copy ``source`` to ``dest``, skipping a copy that is already there.
+
+    The bytes land on a private temporary name and are renamed into place, so tasks
+    staging concurrently on the same node never read a half-written file and the
+    loser of the race just overwrites with identical content. Weights are matched
+    on size alone: they are ~1.2 GB and immutable once downloaded, so hashing them
+    on every task would cost more than the read this function avoids.
+    """
+    if dest.is_file() and dest.stat().st_size == source.stat().st_size:
+        return
+
+    partial = dest.with_name(f".{dest.name}.{os.getpid()}.partial")
+    for attempt in range(1, _CELLPOSE_STAGE_ATTEMPTS + 1):
+        try:
+            shutil.copyfile(source, partial)
+            break
+        except OSError as exc:
+            partial.unlink(missing_ok=True)
+            if attempt == _CELLPOSE_STAGE_ATTEMPTS:
+                raise
+            logger.warning("Retrying copy of %s to node-local scratch: %r", source, exc)
+            time.sleep(attempt)
+    os.replace(partial, dest)
+
+
+def _stage_cellpose_weights() -> Path | None:
+    """Cache the cellpose weights on node-local scratch and point cellpose at them.
+
+    A cellpose 4 checkpoint is ~1.2 GB and lives under ``~/.cellpose/models``, which
+    is an NFS export on Bruno. Every tracking task ``torch.load``s it at startup, so
+    a plate-wide fan-out reads that one file from dozens of nodes at once; five
+    positions of a 291-position run died that way with ``OSError: [Errno 116] Stale
+    file handle`` inside ``torch.load``. Copying the weights under ``$TMPDIR`` first
+    reduces the burst to one sequential read per node, and every later task landing
+    on the same node skips NFS entirely (``$TMPDIR`` is node-local scratch that
+    outlives the job, so the cache is warm for the rest of the run).
+
+    Weights cellpose has never downloaded cannot be staged, so on a cold cache it
+    downloads into node-local scratch instead of the shared directory: still one
+    download per node rather than dozens of writers racing on one NFS file, but not
+    persisted for the next run. Warm the shared cache once to avoid that.
+
+    Returns
+    -------
+    Path or None
+        The staging directory, or ``None`` if staging was skipped — nothing to copy,
+        cellpose already imported, or the copy failed. Cellpose then reads its usual
+        shared location, exactly as it did before.
+    """
+    if "cellpose.models" in sys.modules:
+        # cellpose.models reads CELLPOSE_LOCAL_MODELS_PATH into a module constant at
+        # import time, so redirecting it afterwards would have no effect.
+        return None
+
+    source = _cellpose_models_dir()
+    if not source.is_dir():
+        return None
+
+    dest = Path(os.environ.get("TMPDIR", "/tmp")) / f"cellpose-models-{getpass.getuser()}"
+    if dest == source:
+        return dest
+
+    try:
+        weights = sorted(path for path in source.iterdir() if path.is_file())
+        if not weights:
+            return None
+        dest.mkdir(parents=True, exist_ok=True)
+        for weight in weights:
+            _copy_weight(weight, dest / weight.name)
+    except OSError as exc:
+        logger.warning("Not staging cellpose weights from %s: %r", source, exc)
+        return None
+
+    os.environ["CELLPOSE_LOCAL_MODELS_PATH"] = os.fspath(dest)
+    click.echo(f"Staged cellpose weights from {source} in {dest}")
+    return dest
+
+
 def run_cellpose_per_frame(
     images: np.ndarray,
     model_type: str = "nuclei",
@@ -708,9 +847,17 @@ def run_cellpose_per_frame(
     Note: cellpose is imported lazily so that importing ``biahub.track`` does not
     require the ``segment`` extra unless cellpose segmentation is actually used.
     """
+    # Resolve the device before staging, so a host with no usable GPU fails in
+    # seconds rather than after copying 1.2 GB of weights, and stage before the
+    # import, which is when cellpose freezes the directory it loads them from.
+    device = _cellpose_device(gpu)
+    _stage_cellpose_weights()
+
     from cellpose import models as cp_models
 
-    model = cp_models.CellposeModel(model_type=model_type, gpu=gpu)
+    # device overrides gpu and skips cellpose's own CPU-falling-back probe.
+    model = cp_models.CellposeModel(model_type=model_type, gpu=gpu, device=device)
+    click.echo(f"cellpose device: {model.device}")
 
     T = images.shape[0]
     labels = np.zeros_like(images, dtype=np.int32)
