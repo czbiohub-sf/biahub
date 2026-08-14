@@ -21,13 +21,10 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import (
-    estimate_resources,
-    get_submitit_cluster,
-    resolve_ome_zarr_version,
-    yaml_to_model,
-)
 from biahub.settings import StitchSettings
+from biahub.utils.cluster import estimate_resources, get_submitit_cluster
+from biahub.utils.config import yaml_to_model
+from biahub.utils.ngff import resolve_ome_zarr_version
 
 
 def list_of_nd_slices_from_array_shape(

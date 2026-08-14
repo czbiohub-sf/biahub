@@ -9,7 +9,6 @@ import submitit
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate, process_single_position
 
-from biahub.cli import utils
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
     cluster,
@@ -22,16 +21,14 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import (
-    PROVENANCE_METADATA_KEYS,
-    echo_resources,
-    estimate_resources,
-    get_submitit_cluster,
-    resolve_ome_zarr_version,
-    settings_fingerprint,
-    yaml_to_model,
-)
 from biahub.settings import FlatFieldCorrectionSettings
+from biahub.utils.cluster import echo_resources, estimate_resources, get_submitit_cluster
+from biahub.utils.config import settings_fingerprint, yaml_to_model
+from biahub.utils.ngff import (
+    PROVENANCE_METADATA_KEYS,
+    get_output_paths,
+    resolve_ome_zarr_version,
+)
 
 # Byte budget for one median tile. The reduction below runs at DRAM latency when
 # its working set spills out of cache, so the tile is sized to fit in the smallest
@@ -286,7 +283,7 @@ def flat_field(
         click.echo(f"Initialized {output_dirpath} ({len(input_position_dirpaths)} positions)")
         return
 
-    output_position_paths = utils.get_output_paths(input_position_dirpaths, output_dirpath)
+    output_position_paths = get_output_paths(input_position_dirpaths, output_dirpath)
     target_indices = _resolve_target_indices(settings, all_channel_names)
 
     flat_field_args = {

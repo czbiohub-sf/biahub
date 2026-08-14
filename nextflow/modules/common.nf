@@ -8,7 +8,7 @@ def parse_resources(stdout_text, prefix = 'RESOURCES:') {
     if (!matching) {
         error "Expected a '${prefix}' line in command output but none was found. The underlying CLI may have failed."
     }
-    // The CLI emits a JSON payload (see biahub.cli.utils.echo_resources): cpus,
+    // The CLI emits a JSON payload (see biahub.utils.cluster.echo_resources): cpus,
     // total mem_gb, and per-position time_minutes. Parsing JSON keeps the contract
     // order-independent and extensible.
     def payload = matching.last().replace(prefix, '').trim()
