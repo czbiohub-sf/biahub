@@ -33,6 +33,11 @@ from biahub.settings import (
     TrackingSettings,
     ZSlicing,
 )
+from biahub.utils.cellpose import (
+    cellpose_device,
+    stage_cellpose_weights,
+    warm_cellpose_weights,
+)
 from biahub.utils.cluster import echo_resources, estimate_resources, get_submitit_cluster
 from biahub.utils.config import update_model, yaml_to_model
 from biahub.utils.ngff import PROVENANCE_METADATA_KEYS, resolve_ome_zarr_version
@@ -708,9 +713,17 @@ def run_cellpose_per_frame(
     Note: cellpose is imported lazily so that importing ``biahub.track`` does not
     require the ``segment`` extra unless cellpose segmentation is actually used.
     """
+    # Resolve the device before staging, so a host with no usable GPU fails in
+    # seconds rather than after copying 1.2 GB of weights, and stage before the
+    # import, which is when cellpose freezes the directory it loads them from.
+    device = cellpose_device(gpu)
+    stage_cellpose_weights()
+
     from cellpose import models as cp_models
 
-    model = cp_models.CellposeModel(model_type=model_type, gpu=gpu)
+    # device overrides gpu and skips cellpose's own CPU-falling-back probe.
+    model = cp_models.CellposeModel(model_type=model_type, gpu=gpu, device=device)
+    click.echo(f"cellpose device: {model.device}")
 
     T = images.shape[0]
     labels = np.zeros_like(images, dtype=np.int32)
@@ -1032,6 +1045,13 @@ def track(
     echo_resources(num_cpus, mem_gb, time_minutes)
 
     if init_only:
+        # --init runs once, on the head node, before the per-position fan-out, so it
+        # is the one place that can populate the shared weights cache without every
+        # worker racing to do it. Deliberately NOT done outside this branch: workers
+        # reach this code too, and importing cellpose here would fix the weights
+        # directory before stage_cellpose_weights could redirect it.
+        if settings.segmentation_method == "cellpose":
+            warm_cellpose_weights()
         click.echo(f"Initialized {output_dirpath} ({len(input_position_dirpaths)} positions)")
         return
 
