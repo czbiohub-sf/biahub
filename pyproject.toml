@@ -115,8 +115,7 @@ biahub = "biahub.cli.main:cli"
 index-strategy = "unsafe-best-match"
 
 [tool.uv.sources]
-# Pin cytoland to the commit from VisCy PR #465 (non-square TTA and helpers).
-# Revert to the PyPI release once that PR is merged and published.
+# No PyPI release yet
 cytoland = { git = "https://github.com/mehta-lab/VisCy", subdirectory = "applications/cytoland", rev = "4b62365c0df25929bffc7f01b3bb2d1c11d69cce" }
 
 [tool.hatch.metadata]
