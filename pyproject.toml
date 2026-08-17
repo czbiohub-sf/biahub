@@ -20,7 +20,7 @@ classifiers = [
 
 dependencies = [
   "click",
-  "iohub>=0.3.8",
+  "iohub>=0.3.11",
   "matplotlib",
   "natsort",
   "numpy",
@@ -118,23 +118,6 @@ index-strategy = "unsafe-best-match"
 # Pin cytoland to the commit from VisCy PR #465 (non-square TTA and helpers).
 # Revert to the PyPI release once that PR is merged and published.
 cytoland = { git = "https://github.com/mehta-lab/VisCy", subdirectory = "applications/cytoland", rev = "4b62365c0df25929bffc7f01b3bb2d1c11d69cce" }
-# Pin iohub to the three fixes this pipeline needs, none of them in the v0.3.10
-# release. The rev is the tip of the fix/contiguous-shard-writes branch, i.e.
-# main plus the one unmerged fix; repoint it at the main commit once #460 merges.
-#   #460  writes a gapped time selection as separate contiguous runs (UNMERGED).
-#     Without it any `shards_ratio` with a T entry above 1 aborts `concatenate`
-#     as soon as a blank timepoint lands mid-shard — see caveat 7 for the
-#     signature, which does not look like what it is.
-#   #455  replaces a shard torn by a preempted job instead of reading it back
-#     (the recurring "checksum is invalid" abort) and adds the per-unit resume
-#     this branch drives via --resume. Note the resume records sit BESIDE the
-#     store, in a `.iohub-progress/` sibling of the output zarr, so copying or
-#     deleting a store no longer carries or clears its progress state.
-#   #454  adds create_empty_plate's metadata_keys, so a step copies only the
-#     provenance zattrs it wants instead of every non-OME key (see
-#     PROVENANCE_METADATA_KEYS).
-# Drop this source and raise the iohub floor once a release includes all three.
-iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "719ba12c6932b23d84de86d87168777520c290d9" }
 
 [tool.hatch.metadata]
 allow-direct-references = true
