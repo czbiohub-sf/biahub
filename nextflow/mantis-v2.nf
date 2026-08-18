@@ -65,6 +65,23 @@ def directory_layout() {
 }
 
 
+// The reconstruction steps, in the order they run, as they are named in Slack.
+// One list so the run-start announcement cannot disagree with the per-step
+// messages. A function rather than a bare assignment for the same reason
+// directory_layout() is one: Nextflow's DSL2 parser allows only declarations at
+// script scope.
+def reconstruction_steps() {
+    return [
+        'flat-field',
+        'deskew',
+        'phase reconstruction',
+        'virtual staining',
+        'assemble',
+        'track',
+    ]
+}
+
+
 workflow {
     if (!params.input)              error "Provide --input"
     if (!params.output)             error "Provide --output"
@@ -81,10 +98,6 @@ workflow {
     def ds     = dataset_name()
     def out    = params.output
     def layout = directory_layout()
-
-    // Announce the run before submitting anything. Also the earliest possible
-    // check that the webhook still works, hours before the completion message.
-    notify_run_start(ds, 'mantis_v2')
 
     collect_positions(params.input)
     all_positions = collect_positions.out
@@ -171,26 +184,40 @@ workflow {
     track_done = track_wf(all_positions, track_input, track_input_images, track_output, params.track_config, track_trigger)
 
     // ----- Notifications ----------------------------------------------------
-    // One Slack message as each step finishes. Step ORDER and labels live here
-    // with the rest of the wiring, not in notify.nf — same reason the layout map
-    // does: this file owns the order steps run in.
+    // One Slack message as each step finishes, plus the run-start announcement.
+    // Step ORDER and labels live here with the rest of the wiring, not in
+    // notify.nf — same reason the layout map does: this file owns the order steps
+    // run in. reconstruction_steps() is the only list of labels, so the announced
+    // list cannot drift from what the per-step messages actually say.
     //
     // The six done channels are MIXED into one and notify_step is invoked ONCE:
     // a process can only be invoked a single time per workflow context, so six
     // separate notify_step(...) calls would not compile.
     //
-    // Note the literal 1 for assemble: unlike the per-position steps, whose
-    // `done` carries the collected position list, assemble_wf emits a single
-    // path String. `('a/b.zarr' as List)` would explode into characters, so this
-    // is deliberately not a polymorphic size helper.
-    notify_events = ff_done.done         .map { ['flat-field',           it.size(), ff_output,            '1/6'] }
-        .mix( deskew_done.done           .map { ['deskew',               it.size(), deskew_output,        '2/6'] } )
-        .mix( reconstruct_done.done      .map { ['phase reconstruction', it.size(), reconstruct_output,   '3/6'] } )
-        .mix( virtual_stain_done.done    .map { ['virtual staining',     it.size(), virtual_stain_output, '4/6'] } )
-        .mix( assemble_done.done         .map { ['assemble',             1,         assemble_output,      '5/6'] } )
-        .mix( track_done.done            .map { ['track',                it.size(), track_output,         '6/6'] } )
+    // Nothing here reads a position count. It is the same for every step, so
+    // saying it six times adds nothing; the run-start message reports it once.
+    // That also removes a trap: assemble_wf's `done` carries a single path
+    // String rather than the collected position list, and `('a/b.zarr' as List)`
+    // explodes into characters.
+    steps = reconstruction_steps()
+    n_steps = steps.size()
+
+    notify_events = ff_done.done      .map { [steps[0], ff_output,            "1/${n_steps}"] }
+        .mix( deskew_done.done        .map { [steps[1], deskew_output,        "2/${n_steps}"] } )
+        .mix( reconstruct_done.done   .map { [steps[2], reconstruct_output,   "3/${n_steps}"] } )
+        .mix( virtual_stain_done.done .map { [steps[3], virtual_stain_output, "4/${n_steps}"] } )
+        .mix( assemble_done.done      .map { [steps[4], assemble_output,      "5/${n_steps}"] } )
+        .mix( track_done.done         .map { [steps[5], track_output,         "6/${n_steps}"] } )
 
     notify_step(notify_events, ds)
+
+    // Announce the run once the position count is known. all_positions carries a
+    // single collected list, so this fires exactly once; registering the
+    // subscribe here rather than earlier is fine because the whole body is graph
+    // construction and nothing executes until it finishes.
+    all_positions.subscribe { positions ->
+        notify_run_start(ds, 'mantis_v2', positions.size(), steps)
+    }
 
     // Report the finished run to Slack, with an @-mention.
     //

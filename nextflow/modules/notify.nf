@@ -43,7 +43,7 @@ process notify_step {
     tag "${step}"
 
     input:
-    tuple val(step), val(n_positions), val(output_zarr), val(index)
+    tuple val(step), val(output_zarr), val(index)
     val dataset
 
     output:
@@ -52,29 +52,40 @@ process notify_step {
     script:
     // Emoji as a Slack shortcode rather than raw UTF-8: it renders the same and
     // keeps the payload ASCII.
-    def positions = n_positions > 1 ? " (${n_positions} positions)" : ""
-    // No --ping. Step messages post silently so the @-mention on the run-end
-    // message keeps meaning "this needs you".
+    //
+    // No position count here. The plate has the same number of positions for
+    // every step, so repeating it six times says nothing new — it is reported
+    // once, in the run-start message.
+    //
+    // No --ping either. Step messages post silently so the @-mention on the
+    // run-end message keeps meaning "this needs you".
+    //
     // `|| true` so nothing the notifier does can fail the task, independent of
     // the errorStrategy.
     """
     biahub nf notify \\
         --level good \\
-        --title ":white_check_mark: ${dataset} — ${step} complete [${index}]${positions}" \\
+        --title ":white_check_mark: ${dataset} — ${step} complete [${index}]" \\
         --detail "output: ${output_zarr}" || true
     """
 }
 
-// Announce the run before any work is submitted.
+// Announce the run.
 //
 // This doubles as a webhook smoke test: without it the first Slack message is
 // the completion one, hours or days later, so a revoked webhook would be
 // discovered far too late to be useful.
 //
+// Sent once the position count is known rather than at graph-construction time,
+// because the count comes from the list_positions task (about 40s) and the
+// message reports it. The consequence to know: a config error that kills
+// list_positions itself produces no start message — only the failure message
+// from onComplete.
+//
 // Rate-limited by key, because debugging a config produces relaunch storms —
 // five launches inside ten minutes is an observed pattern, which would otherwise
 // be five notifications.
-def notify_run_start(dataset, pipeline) {
+def notify_run_start(dataset, pipeline, n_positions, steps) {
     // Say once, at launch, that Slack is not configured. Without a webhook every
     // message still prints and every exit status is still 0, but only the
     // run-level messages reach the console: notify_step runs as a task, so its
@@ -89,10 +100,12 @@ def notify_run_start(dataset, pipeline) {
     }
 
     def detail = [
-        "pipeline: ${pipeline}",
-        "input:  ${params.input}",
-        "output: ${params.output}",
-        "host:   ${java.net.InetAddress.localHost.hostName}",
+        "pipeline:  ${pipeline}",
+        "positions: ${n_positions}",
+        "steps:     ${steps.size()} — ${steps.join(', ')}",
+        "input:     ${params.input}",
+        "output:    ${params.output}",
+        "host:      ${java.net.InetAddress.localHost.hostName}",
         // `as int` because a param given on the command line arrives as a
         // String, and the String "0" is truthy in Groovy (same trap as
         // queueSize in nextflow.config). `?: 0` because a bare `as int` on an

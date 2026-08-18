@@ -164,13 +164,19 @@ to Slack via `biahub nf notify` (`nextflow/modules/notify.nf`):
 
 | when | message | pings |
 |---|---|---|
-| run start | dataset, who launched it, pipeline, input, output, host, `max_positions` if capped | no |
-| each step completes | dataset, step name, `[n/6]`, position count, output path | no |
+| run start | dataset, operator, pipeline, position count, the 6 step names, input, output, host, `max_positions` if capped | no |
+| each step completes | dataset, step name, `[n/6]`, output path | no |
 | run end | succeeded / cached / failed / retries, wall time, assembled path | **yes** |
 | run end, failed | the error message, plus a truncated `errorReport` tail | **yes** |
 
 Only the run-end message @-mentions the operator, so a ping always means "this
 needs you". Step messages are informational and stay quiet.
+
+The position count and the step list are reported once, at run start — they are
+the same for every step, so repeating them per message would add nothing. Run
+start is therefore sent once `list_positions` has produced the count (about 40s
+in), not at graph-construction time; a config error that kills `list_positions`
+itself yields only the failure message.
 
 Two environment variables, both read from the launching shell and inherited by
 every task. Neither is a pipeline parameter:
