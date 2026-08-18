@@ -118,8 +118,8 @@ def notify(
     if operator:
         # First line of the detail: who to ask about this run. Comes from the
         # account database rather than Slack — see notify_utils.operator_label.
-        started_by = f"launched by: {notify_utils.operator_label()}"
-        detail = f"{started_by}\n{detail}" if detail else started_by
+        who = f"operator: {notify_utils.operator_label()}"
+        detail = f"{who}\n{detail}" if detail else who
 
     resolved_state_dir = str(state_dir) if state_dir is not None else tempfile.gettempdir()
 

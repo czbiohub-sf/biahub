@@ -101,7 +101,7 @@ def notify_run_start(dataset, pipeline) {
         ((params.max_positions ?: 0) as int) > 0 ? "max_positions: ${params.max_positions}" : null,
     ].findAll { it }.join('\n')
 
-    // --operator prepends the "launched by:" line, resolved from the account database
+    // --operator prepends the "operator:" line, resolved from the account database
     // by the Python. It is NOT taken from Slack: turning a member ID into a
     // display name needs a users.info call and a bot token, which an incoming
     // webhook cannot do — and an <@U…> mention would ping, while this message is
@@ -207,15 +207,22 @@ def notify_run_end(dataset, pipeline, wf) {
 // orphaned process keeps running. We wait only so a fast post is ordered before
 // shutdown; we do not depend on the wait succeeding.
 //
-// Nothing here reads the child's output. At teardown we may not survive long
-// enough to log it, so `--log-file` makes the notifier record its own delivery
-// problems instead.
+// inheritIO() rather than capturing the child's streams. The notifier is silent
+// on a clean post and only speaks up when something needs attention — no webhook
+// configured, a malformed member ID, a rejected POST — and inheriting sends that
+// straight to the console the user is watching, with no pipe for us to drain (an
+// unread pipe would also block the child once it filled) and nothing for us to
+// re-log at teardown, when the console is already gone. `--log-file` makes the
+// notifier record delivery problems itself, so the durable diagnostic does not
+// depend on this process being alive to write it.
 def notify_send(args) {
     def command = ['biahub', 'nf', 'notify'] +
         ['--log-file', "${params.output}/nextflow/.notify/notify.log".toString()] +
         args.collect { it.toString() }
     try {
-        def proc = command.execute()
+        def builder = new ProcessBuilder(command)
+        builder.inheritIO()
+        def proc = builder.start()
         proc.waitFor(30, java.util.concurrent.TimeUnit.SECONDS)
     }
     catch (Throwable t) {

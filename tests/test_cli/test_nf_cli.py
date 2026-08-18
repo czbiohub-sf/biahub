@@ -125,9 +125,9 @@ def test_notify_operator_flag_names_who_launched_the_run(monkeypatch):
     )
 
     assert result.exit_code == 0, result.output
-    assert "launched by: Ivan Ivanov (ivan.ivanov)" in result.output
+    assert "operator: Ivan Ivanov (ivan.ivanov)" in result.output
     # The operator line goes first, before the rest of the detail.
-    assert result.output.index("launched by:") < result.output.index("input: /x")
+    assert result.output.index("operator:") < result.output.index("input: /x")
 
 
 def test_notify_without_operator_flag_omits_it(monkeypatch):
@@ -137,4 +137,4 @@ def test_notify_without_operator_flag_omits_it(monkeypatch):
     result = runner.invoke(cli, ["nf", "notify", "--title", "started"])
 
     assert result.exit_code == 0, result.output
-    assert "launched by" not in result.output
+    assert "operator:" not in result.output
