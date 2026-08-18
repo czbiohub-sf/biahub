@@ -211,6 +211,6 @@ workflow {
     // the stats read at teardown are still the final ones.
     def wf = workflow
     workflow.onComplete {
-        notify_run_end(ds, wf)
+        notify_run_end(ds, 'mantis_v2', wf)
     }
 }

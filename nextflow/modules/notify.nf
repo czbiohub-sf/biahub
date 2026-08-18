@@ -122,9 +122,10 @@ def notify_run_start(dataset, pipeline) {
 // Called from a single `workflow.onComplete`, never from onComplete AND onError:
 // onError fires in ADDITION to onComplete, so implementing both double-posts
 // every failure.
-def notify_run_end(dataset, wf) {
+def notify_run_end(dataset, pipeline, wf) {
     def stats = wf.stats
     def summary = [
+        "pipeline:  ${pipeline}",
         "succeeded: ${stats.succeededCount}",
         "cached:    ${stats.cachedCount}",
         "failed:    ${stats.failedCount}",
@@ -136,7 +137,7 @@ def notify_run_end(dataset, wf) {
         notify_send([
             '--level', 'good',
             '--ping',
-            '--title', ":white_check_mark: ${dataset} — mantis-v2 complete",
+            '--title', ":white_check_mark: ${dataset} — reconstruction complete",
             '--detail', "${summary}\nassembled: ${params.output}/5-assemble/${dataset}.zarr",
         ])
         return
@@ -148,9 +149,18 @@ def notify_run_end(dataset, wf) {
     def aborted = wf.exitStatus == null
     def verb = aborted ? 'aborted' : 'FAILED'
     def icon = aborted ? ':warning:' : ':x:'
-    def title = "${icon} ${dataset} — mantis-v2 ${verb}"
-    if (wf.errorMessage) {
-        title += ": ${wf.errorMessage.readLines()[0]}"
+    def title = "${icon} ${dataset} — reconstruction ${verb}"
+    // LAST non-blank line, not the first. For a task that died in Python,
+    // errorMessage is the captured stderr, so the first line is
+    // "Traceback (most recent call last):" — true of every Python failure and
+    // therefore useless in a title, while the last line is the exception itself
+    // ("ValueError: bad config here"). For a non-Python failure it is a
+    // single-line "Process X terminated with an error exit status (3)", where
+    // first and last are the same. Same reasoning as keeping the tail when
+    // truncating a detail. The Python caps the title length.
+    def message = wf.errorMessage?.readLines()?.findAll { it.trim() }
+    if (message) {
+        title += ": ${message.last().trim()}"
     }
 
     // workflow.errorReport embeds the failing task's `Command executed:` block
@@ -184,51 +194,36 @@ def notify_run_end(dataset, wf) {
 // backticks. `biahub` resolves on PATH because check_environment() already
 // aborted the run at launch if it did not.
 //
-// Bounded and swallowed: a hung POST must not hold up the run's exit, and a
-// notification problem must never surface as a pipeline failure after two days
-// of compute.
-def notify_send(args) {
-    try {
-        def proc = (['biahub', 'nf', 'notify'] + args.collect { it.toString() }).execute()
-        // Drain both streams concurrently. The notifier is silent on a clean
-        // post and only speaks up when something needs attention — no webhook
-        // configured, a malformed member ID, a rejected POST — so anything it
-        // does say belongs on the console, where it is the terminal fallback for
-        // a message that did not reach Slack. Unlike notify_step, whose output
-        // lands in a task's .command.out, these run-level calls have nowhere
-        // else to surface.
-        def out = new StringBuffer()
-        def err = new StringBuffer()
-        proc.consumeProcessOutput(out, err)
-        proc.waitForOrKill(30000)
-
-        def said = [out.toString().trim(), err.toString().trim()].findAll { it }.join('\n')
-        if (said) {
-            log.info said
-            // Also append to a file. The run-end message is sent from
-            // onComplete, i.e. during session teardown, by which point
-            // Nextflow's console renderer has already been torn down and
-            // anything written to it is lost — so without this a failed
-            // run-end post would be invisible after the fact.
-            notify_log(said)
-        }
-    }
-    catch (Exception e) {
-        log.warn "Slack notification failed (continuing): ${e.message}"
-    }
-}
-
-// Append the notifier's own output to <output>/nextflow/.notify/notify.log.
+// NEVER USE waitForOrKill HERE. run-end is sent from onComplete, i.e. during JVM
+// shutdown, and there `waitForOrKill` returns before the child has exited and
+// then DESTROYS it — the notifier was SIGTERMed before it could POST, so the
+// failure message, the one that matters most, was silently never sent. Measured
+// against a local webhook: run start and run end on a successful run delivered,
+// a failed run delivered nothing.
 //
-// This is the only durable record of a notification problem: the run-end message
-// is sent during session teardown, when the console is already gone. Best-effort
-// by design — if it cannot be written there is nothing useful to do about it.
-def notify_log(message) {
+// `waitFor(timeout, unit)` does not kill the child, so it survives and completes
+// its POST even if this thread is interrupted (it is: AnsiLogObserver's own join
+// throws InterruptedException during teardown) or the JVM exits first — an
+// orphaned process keeps running. We wait only so a fast post is ordered before
+// shutdown; we do not depend on the wait succeeding.
+//
+// Nothing here reads the child's output. At teardown we may not survive long
+// enough to log it, so `--log-file` makes the notifier record its own delivery
+// problems instead.
+def notify_send(args) {
+    def command = ['biahub', 'nf', 'notify'] +
+        ['--log-file', "${params.output}/nextflow/.notify/notify.log".toString()] +
+        args.collect { it.toString() }
     try {
-        def file = new File("${params.output}/nextflow/.notify/notify.log")
-        file.parentFile.mkdirs()
-        file << "${new Date().format('yyyy-MM-dd HH:mm:ss')} ${message}\n"
+        def proc = command.execute()
+        proc.waitFor(30, java.util.concurrent.TimeUnit.SECONDS)
     }
-    catch (Exception e) {
+    catch (Throwable t) {
+        // Includes the InterruptedException thrown during shutdown. The child is
+        // already spawned and unaffected, so there is nothing to recover: a
+        // notification problem must never surface as a pipeline failure after two
+        // days of compute.
+        log.debug "notify: ${t.class.simpleName}: ${t.message}"
     }
 }
+

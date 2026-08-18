@@ -365,3 +365,56 @@ def test_operator_label_survives_an_unresolvable_account(monkeypatch):
     monkeypatch.delenv("USER", raising=False)
     monkeypatch.delenv("LOGNAME", raising=False)
     assert notify.operator_label() == "unknown"
+
+
+def test_append_log_records_a_delivery_problem(tmp_path):
+    log_file = tmp_path / "nested" / "notify.log"
+
+    notify.append_log(str(log_file), "post failed (HTTP 404)")
+
+    assert "post failed (HTTP 404)" in log_file.read_text()
+
+
+def test_append_log_survives_an_unwritable_path(tmp_path):
+    blocker = tmp_path / "blocked"
+    blocker.write_text("not a directory")
+
+    notify.append_log(str(blocker / "notify.log"), "anything")
+
+
+def test_send_records_a_failed_post_to_the_log_file(monkeypatch, tmp_path, capsys):
+    # The run-end message is sent during JVM shutdown, where the caller cannot
+    # capture our stdout, so the notifier must write its own record.
+    monkeypatch.setenv(notify.WEBHOOK_ENV, "http://hook")
+    monkeypatch.setattr(
+        notify.urllib.request,
+        "urlopen",
+        lambda *a, **k: (_ for _ in ()).throw(_http_error(404, b"no_service")),
+    )
+    log_file = tmp_path / "notify.log"
+
+    notify.send("2026_07_14 — failed", level="error", log_file=str(log_file))
+
+    recorded = log_file.read_text()
+    assert "no_service" in recorded
+    assert "2026_07_14 — failed" in recorded
+
+
+def test_send_records_a_missing_webhook_to_the_log_file(monkeypatch, tmp_path):
+    monkeypatch.delenv(notify.WEBHOOK_ENV, raising=False)
+    log_file = tmp_path / "notify.log"
+
+    notify.send("2026_07_14 — done", log_file=str(log_file))
+
+    assert notify.WEBHOOK_ENV in log_file.read_text()
+
+
+def test_send_stays_quiet_in_the_log_on_success(monkeypatch, tmp_path):
+    monkeypatch.setenv(notify.WEBHOOK_ENV, "http://hook")
+    monkeypatch.setattr(notify.urllib.request, "urlopen", lambda *a, **k: _FakeResponse())
+    log_file = tmp_path / "notify.log"
+
+    ok, _ = notify.send("fine", log_file=str(log_file))
+
+    assert ok
+    assert not log_file.exists()

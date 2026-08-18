@@ -370,6 +370,23 @@ def record_sent(state_dir: str, key: str) -> None:
         pass
 
 
+def append_log(log_file: str, message: str) -> None:
+    """Append a delivery problem to a log file, best-effort.
+
+    The pipeline's run-end message is sent from ``workflow.onComplete``, i.e.
+    during JVM shutdown, where the console is already torn down and the caller
+    may not survive long enough to record anything. So the notifier writes its
+    own record rather than relying on the caller to capture stdout.
+    """
+    try:
+        os.makedirs(os.path.dirname(log_file) or ".", exist_ok=True)
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        with open(log_file, "a") as handle:
+            handle.write(f"{stamp} {message}\n")
+    except OSError:
+        pass
+
+
 def send(
     title: str,
     detail: str = "",
@@ -378,6 +395,7 @@ def send(
     slack_id: str | None = None,
     max_detail: int = MAX_DETAIL_CHARS,
     dry_run: bool = False,
+    log_file: str | None = None,
 ) -> tuple[bool, str]:
     """Build and post one notification.
 
@@ -399,6 +417,10 @@ def send(
         Character budget for the detail block.
     dry_run : bool, optional
         Render and print without posting.
+    log_file : str or None, optional
+        Append a line here if the message could not be delivered. Written by
+        this process, not the caller, because the caller may be a JVM in
+        shutdown that cannot capture our output.
 
     Returns
     -------
@@ -424,15 +446,21 @@ def send(
         print(json.dumps(payload, indent=2))
         return False, "dry run"
 
+    rendered = render_for_terminal(payload)
+
     webhook = os.environ.get(WEBHOOK_ENV, "")
     if not webhook:
         print(f"[notify] {WEBHOOK_ENV} unset — printing instead of posting")
-        print(render_for_terminal(payload))
+        print(rendered)
+        if log_file:
+            append_log(log_file, f"{WEBHOOK_ENV} unset, not posted:\n{rendered}")
         return False, f"{WEBHOOK_ENV} unset"
 
     ok, status = post_with_retry(webhook, payload)
     if not ok:
-        # Print the message so it is not lost, and say why on stderr.
-        print(render_for_terminal(payload))
+        # Print the message so it is not lost, and say why.
+        print(rendered)
         print(f"[notify] Slack post failed ({status})", flush=True)
+        if log_file:
+            append_log(log_file, f"post failed ({status}), not delivered:\n{rendered}")
     return ok, status

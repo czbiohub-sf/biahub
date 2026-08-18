@@ -73,6 +73,13 @@ def list_positions(input_zarr: str):
     is_flag=True,
     help="Prepend who launched the run, from the account database (not Slack).",
 )
+@click.option(
+    "--log-file",
+    type=click.Path(dir_okay=False, path_type=pathlib.Path),
+    default=None,
+    help="Append delivery problems here. Use this when the caller cannot capture "
+    "stdout, e.g. a Nextflow onComplete handler running during JVM shutdown.",
+)
 @click.option("--dry-run", is_flag=True, help="Render the payload without posting.")
 def notify(
     title: str,
@@ -86,6 +93,7 @@ def notify(
     state_dir: pathlib.Path | None,
     max_detail: int,
     operator: bool,
+    log_file: pathlib.Path | None,
     dry_run: bool,
 ):
     r"""Post a pipeline notification to Slack, falling back to the terminal.
@@ -128,6 +136,7 @@ def notify(
         slack_id=slack_id,
         max_detail=max_detail,
         dry_run=dry_run,
+        log_file=str(log_file) if log_file is not None else None,
     )
 
     if ok and key:
