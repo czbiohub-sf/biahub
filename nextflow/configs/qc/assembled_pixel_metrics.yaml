@@ -4,8 +4,8 @@ defaults:
 
 # Pixel-value QC for an assembled (post-assembly) intensity store — the
 # `<name>_imaging.zarr` holding the raw acquired channels. Inherits the metric
-# set from `base.yaml` (intensity_stats, signal_to_noise, blank, tenengrad,
-# bleach_rate) and applies it across all channels.
+# set from `base.yaml` (intensity_stats, signal_to_noise, blank, tenengrad) and
+# applies it across all channels.
 
 stage: 5
 display_name: "Assembled Image — Pixel QC"
@@ -16,7 +16,7 @@ display_name: "Assembled Image — Pixel QC"
 # POINTS keyed to this store's channel names, NOT constants calibrated from any
 # dataset — set each from the channel's healthy SNR for the experiment at hand.
 signal_to_noise:
-  granularity: z
+  granularity: slice
   gate:
     # `granularity: channel` evaluates the gate per channel, which is what lets the
     # {channel: value} hard_floor key by name (a channel-pooled gate has no channel

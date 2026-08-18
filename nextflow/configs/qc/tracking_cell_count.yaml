@@ -1,8 +1,8 @@
 # Cell-count QC over a segmentation/tracking store (`<name>_tracking.zarr`)
 # rather than an intensity store. In the mantis/DynaCell layout the label classes
 # ARE the channels, so `channels:` selects the label class by name and the C
-# column in the output means the label class. Outputs land in
-# `<name>_tracking_qc/`, beside the label store.
+# column in the output means the label class. Outputs land in the store's own
+# `tables/qc/` group, since the pipeline passes no --output-dir.
 #
 # Self-contained on purpose: an external --config resolves Hydra defaults only
 # against its own directory, so this cannot reference imaging-qc's internal
@@ -44,7 +44,6 @@ instance_count:
     # rows per population (n >= 11 for n_std 3.0) or pool with pooling_scope: store.
 
 report:
-  mode: full
   max_timepoints: 5
   compact: false
   metric_archetypes:

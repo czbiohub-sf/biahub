@@ -12,7 +12,7 @@ include { run_report }                       from './qc_processes'
 // ---------------------------------------------------------------------------
 //  qc_stage_wf: plan-driven QC stage execution
 //
-//  plan-stage emits plan.json v3 to stdout. Nextflow parses JSON, branches
+//  plan-stage emits plan.json v4 to stdout. Nextflow parses JSON, branches
 //  items by wave_id, and uses .count() barriers between waves. Only the
 //  waves/items keys are read, so additive schema bumps stay compatible.
 //  Fixed 3-tier structure: wave 0 → finalize_wave → wave 1 → wave 2 →
