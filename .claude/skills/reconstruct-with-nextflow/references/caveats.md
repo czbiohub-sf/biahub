@@ -214,7 +214,11 @@ files.
 
 Editing files in `$BIAHUB_PROJECT` changes Nextflow task hashes and
 invalidates `-resume`. Get the branch right before launching, then leave it
-alone. (Editing this skill is fine; it is not part of the pipeline.)
+alone. (Editing this skill is *mostly* fine — but the notification path now runs
+through `biahub/utils/notify.py` and `nextflow/modules/notify.nf`, which ARE part
+of the pipeline, so fixing a notification bug mid-run is a pipeline edit. The
+notify task hashes are the only ones affected, and re-running six sub-second local
+tasks costs nothing.)
 
 ## 11. `uv sync` before launching — but check for out-of-band packages first
 

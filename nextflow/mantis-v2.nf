@@ -40,6 +40,7 @@ include { reconstruct_wf } from './modules/reconstruct'
 include { virtual_stain_wf } from './modules/virtual_stain'
 include { track_wf } from './modules/tracking'
 include { assemble_wf } from './modules/assembly'
+include { notify_step; notify_run_start; notify_run_end } from './modules/notify'
 
 // Output directory layout for the reconstruction steps — single source of
 // truth. Each entry is a subdirectory under params.output where that step
@@ -80,6 +81,10 @@ workflow {
     def ds     = dataset_name()
     def out    = params.output
     def layout = directory_layout()
+
+    // Announce the run before submitting anything. Also the earliest possible
+    // check that the webhook still works, hours before the completion message.
+    notify_run_start(ds)
 
     collect_positions(params.input)
     all_positions = collect_positions.out
@@ -163,5 +168,49 @@ workflow {
     track_input_images = assemble_output
     track_output       = "${out}/${layout.track}/${ds}.zarr"
 
-    track_wf(all_positions, track_input, track_input_images, track_output, params.track_config, track_trigger)
+    track_done = track_wf(all_positions, track_input, track_input_images, track_output, params.track_config, track_trigger)
+
+    // ----- Notifications ----------------------------------------------------
+    // One Slack message as each step finishes. Step ORDER and labels live here
+    // with the rest of the wiring, not in notify.nf — same reason the layout map
+    // does: this file owns the order steps run in.
+    //
+    // The six done channels are MIXED into one and notify_step is invoked ONCE:
+    // a process can only be invoked a single time per workflow context, so six
+    // separate notify_step(...) calls would not compile.
+    //
+    // Note the literal 1 for assemble: unlike the per-position steps, whose
+    // `done` carries the collected position list, assemble_wf emits a single
+    // path String. `('a/b.zarr' as List)` would explode into characters, so this
+    // is deliberately not a polymorphic size helper.
+    notify_events = ff_done.done         .map { ['flat-field',           it.size(), ff_output,            '1/6'] }
+        .mix( deskew_done.done           .map { ['deskew',               it.size(), deskew_output,        '2/6'] } )
+        .mix( reconstruct_done.done      .map { ['phase reconstruction', it.size(), reconstruct_output,   '3/6'] } )
+        .mix( virtual_stain_done.done    .map { ['virtual staining',     it.size(), virtual_stain_output, '4/6'] } )
+        .mix( assemble_done.done         .map { ['assemble',             1,         assemble_output,      '5/6'] } )
+        .mix( track_done.done            .map { ['track',                it.size(), track_output,         '6/6'] } )
+
+    notify_step(notify_events, ds)
+
+    // Report the finished run to Slack, with an @-mention.
+    //
+    // onComplete ONLY — onError fires in ADDITION to onComplete, so handling
+    // both would double-post every failure. notify_run_end branches on
+    // workflow.success instead.
+    //
+    // Registered inside the workflow body, not at script scope: Nextflow 26's
+    // strict syntax rejects statements outside a declaration, the same
+    // restriction that forces directory_layout() to be a function. The handler
+    // still runs at session teardown, not here.
+    //
+    // `wf` is captured OUT here on purpose. Inside the handler closure the
+    // implicit `workflow` resolves to null, so reading `workflow.stats` there
+    // throws an NPE that Nextflow swallows into a bare "Failed to invoke
+    // workflow.onComplete event handler" — and the run-end message is silently
+    // never sent. The captured reference is the same mutable metadata object, so
+    // the stats read at teardown are still the final ones.
+    def wf = workflow
+    workflow.onComplete {
+        notify_run_end(ds, wf)
+    }
 }

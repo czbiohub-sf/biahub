@@ -80,16 +80,32 @@ tail -n 30 <OUTPUT>/.nextflow.log                                  # head-proces
 column -t <OUTPUT>/nextflow/trace.txt | tail -20                   # per-task record
 ```
 
+**`ProcessFailedException` in the log is not a failure signal.** It is written
+for every *retried* task, immediately before the matching
+`NOTE: ... -- Execution is retried (N)` line — one healthy run's log holds 33 of
+them. Do not report a run as broken on the strength of that string. The terminal
+marker is `Session aborted -- Cause: ...` (which also covers a Ctrl-C).
+
 `trace.txt` is the authoritative per-task record: process name, tag (the
-position), status, exit code, realized time and RSS, and attempt number. Count
-failures and retries from there, not from the console.
+position), status, exit code, realized time and RSS, and — as of the `attempt`
+field added to `trace.fields` in `nextflow.config` — the attempt number, as
+column **15**. Count failures and retries from there, not from the console.
+
+The 14 default columns keep their original positions, so `$4` is still the name,
+`$5` the status and `$6` the exit code. Retried tasks also appear as repeated
+`name` rows (a `FAILED` row and then a `COMPLETED` one), which is how retries had
+to be counted before the column existed.
 
 Per-step task logs (remember `.out` holds the output, `.err` is empty — see
 `caveats.md` §9):
 
+The directory is named for the STEP, not the process: `flat_field`, `deskew`,
+`reconstruct`, `virtual_stain`, `assemble`, `track` (see `slurm_log_dir()` in
+`nextflow/modules/common.nf`). There is no `run_flat_field/` directory.
+
 ```bash
 ls -t <OUTPUT>/nextflow/slurm_output/*/ | head
-tail -n 40 <OUTPUT>/nextflow/slurm_output/run_flat_field/*_<jobid>.out
+tail -n 40 <OUTPUT>/nextflow/slurm_output/flat_field/*_<jobid>.out
 ```
 
 Position count per step. The plate nests `<store>.zarr/<row>/<col>/<fov>`, so glob
@@ -113,9 +129,14 @@ Two traps, both hit for real:
   `trace.txt` is the only authoritative source for completion:
 
 ```bash
-awk -F'\t' 'NR>1{split($4,a,":"); print a[length(a)], $5}' <OUTPUT>/nextflow/trace.txt \
-  | sort | uniq -c | sort -k2
+awk -F'\t' 'NR>1 && $4 !~ /notify_step/ {split($4,a,":"); print a[length(a)], $5}' \
+  <OUTPUT>/nextflow/trace.txt | sort | uniq -c | sort -k2
 ```
+
+The `notify_step` filter matters: the pipeline's Slack notifications are ordinary
+tasks, so six of them appear in `trace.txt` and in `report.html`/`timeline.html`
+alongside the real work. They are local, sub-second, and not part of any step's
+position count.
 
 ## Rough expectations
 
@@ -138,31 +159,70 @@ outside the reference run's time for a comparable dataset, say so.
 
 ## Notifications
 
-Use `templates/notify.sh`. It posts to the Slack webhook in
-`$BIAHUB_SLACK_WEBHOOK` and, when that is unset, prints to the terminal so
-nothing is lost.
+**The pipeline sends these itself — do not duplicate them.** `mantis-v2.nf` posts
+to Slack via `biahub nf notify` (`nextflow/modules/notify.nf`):
+
+| when | message | pings |
+|---|---|---|
+| run start | dataset, input, output, host, `max_positions` if capped | no |
+| each step completes | dataset, step name, `[n/6]`, position count, output path | no |
+| run end | succeeded / cached / failed / retries, wall time, assembled path | **yes** |
+| run end, failed | the error message, plus a truncated `errorReport` tail | **yes** |
+
+Only the run-end message @-mentions the operator, so a ping always means "this
+needs you". Step messages are informational and stay quiet.
+
+Two environment variables, both read from the launching shell and inherited by
+every task. Neither is a pipeline parameter:
 
 ```bash
-export BIAHUB_SLACK_WEBHOOK="https://hooks.slack.com/services/..."   # user sets this
-bash <SKILL>/templates/notify.sh "✅ <DATASET>: mantis-v2 complete — 5-assemble written"
+export BIAHUB_SLACK_WEBHOOK="https://hooks.slack.com/services/..."   # a CREDENTIAL
+export BIAHUB_SLACK_ID="U024BE7LH"    # Slack profile -> Copy member ID
 ```
 
-If the variable is unset, mention it once in the plan so the user can export it
-before launch; do not block on it.
+Put both in `~/.bashrc`, never in the repo, a config file, or a command line. A
+**display name** (`@ivan`) never pings via the API and is rejected with a warning;
+it must be the member ID.
 
-Send a message on:
+If either is unset, say so once in the plan so the user can export it before
+launch, but **do not block on it**: without a webhook every message still prints
+and every exit status is still 0. Note the asymmetry when reporting that — run
+start and run end print to the console, but step messages run as tasks, so their
+text goes only to `nextflow/slurm_output/<step>/*.out`. The pipeline warns about
+this at launch.
 
-- **Completion** — with the summary from the wrap-up step.
-- **A terminating error** — with the step, the position, and the first lines of
-  the traceback. Do not wait to finish diagnosing.
-- **Retries past a threshold** — e.g. a step whose retry count exceeds ~20% of
-  its tasks, or any position on attempt 4 of 5. This is the early warning for a
-  torn shard.
+If a notification itself fails, the reason is in
+`<OUTPUT>/nextflow/.notify/notify.log` — the run-end message is sent during
+session teardown, after Nextflow's console renderer is gone, so that file is the
+only durable record. Silence there means every message was delivered.
+
+### What is left for you to send
+
+`templates/notify.sh` is now only for messages the pipeline cannot know about:
+
+- **A terminating error you have diagnosed** — the step, the position, and the
+  first lines of the traceback. The automatic run-end message reports *that* the
+  run failed; you add *why*. Send it before you finish investigating.
+- **A step retrying past a reasonable threshold** — any position on attempt 4 of
+  `maxRetries = 5`, now readable straight from `trace.txt`'s `attempt` column.
+  This is the early warning for a torn shard. Do **not** use a retry-rate
+  percentage: retries measure preemption pressure on the `preempted` partition,
+  not dataset health, and a busy day crosses any such threshold routinely.
+- **The wrap-up** — channel rename result, iohub verification, shape/channels and
+  size on disk. The pipeline knows none of this.
+
+```bash
+bash <SKILL>/templates/notify.sh --level error --ping \
+  "❌ <DATASET>: run_deskew failed on C/4/001001" "$(tail -20 <OUTPUT>/nextflow/slurm_output/deskew/*_<jobid>.out)"
+```
+
+It takes `--level info|good|warn|error` and `--ping`, and delegates to
+`biahub nf notify`. Also use it for hand-rolled reruns that bypass Nextflow.
 
 Do not notify on individual preemptions; they are routine.
 
-Alongside Slack, surface the same information in the conversation, since the
-user may be watching the terminal instead.
+Alongside Slack, surface the same information in the conversation, since the user
+may be watching the terminal instead.
 
 ## Final summary
 
