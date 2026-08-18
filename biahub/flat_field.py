@@ -9,7 +9,6 @@ import submitit
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate, process_single_position
 
-from biahub.cli import utils
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
     cluster,
@@ -22,16 +21,85 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import (
-    PROVENANCE_METADATA_KEYS,
-    echo_resources,
-    estimate_resources,
-    get_submitit_cluster,
-    resolve_ome_zarr_version,
-    settings_fingerprint,
-    yaml_to_model,
-)
 from biahub.settings import FlatFieldCorrectionSettings
+from biahub.utils.cluster import echo_resources, estimate_resources, get_submitit_cluster
+from biahub.utils.config import settings_fingerprint, yaml_to_model
+from biahub.utils.ngff import (
+    PROVENANCE_METADATA_KEYS,
+    get_output_paths,
+    resolve_ome_zarr_version,
+)
+
+# Byte budget for one median tile. The reduction below runs at DRAM latency when
+# its working set spills out of cache, so the tile is sized to fit in the smallest
+# per-CCX L3 in the cluster (16 MiB on Zen 2), with headroom for the partition's
+# own scratch. See :func:`_median_tiled` for why this matters.
+_MEDIAN_TILE_BYTES = 8 * 1024**2
+
+
+def _median_tile_axis(data: np.ndarray, axis: int) -> int | None:
+    """Return the first axis that is not the reduction axis, or None for 1-D input."""
+    return next((a for a in range(data.ndim) if a != axis), None)
+
+
+def _median_tile_width(data: np.ndarray, axis: int, tile_bytes: int) -> int:
+    """Return how many indices along the tiled axis fit in ``tile_bytes``.
+
+    Never less than 1, never more than the axis length.
+    """
+    tile_axis = _median_tile_axis(data, axis)
+    bytes_per_step = data.itemsize * (data.size // data.shape[tile_axis])
+    width = tile_bytes // max(bytes_per_step, 1)
+    return int(min(max(width, 1), data.shape[tile_axis]))
+
+
+def _median_tiled(
+    data: np.ndarray, axis: int, tile_bytes: int = _MEDIAN_TILE_BYTES
+) -> np.ndarray:
+    """``np.median(data, axis=axis)``, evaluated over cache-resident tiles.
+
+    Output is identical to :func:`numpy.median` -- only the memory access pattern
+    changes. ``np.median`` partitions along ``axis``, whose stride in a ZYX volume
+    is ``Y * X * itemsize`` (852 KB for a mantis-v2 position), so every element
+    touched lands on its own cache line and the reduction runs at DRAM latency.
+    That cost is borne unevenly by the cluster: measured on one position, it is
+    11.5x worse on Zen 2 cores (EPYC 7742, 7302P) than on Zen 3 and newer, which
+    made flat-field spend ~139 CPU-s per (t, c) unit on ``gpu-a``/``gpu-sm`` nodes
+    against ~12 CPU-s on ``cpu-h``.
+
+    Copying a slim tile into a compact buffer first keeps the partition in cache.
+    Per-position medians measured before and after:
+
+    ==================  ===========  =========  ========
+    node                CPU          np.median  tiled
+    ==================  ===========  =========  ========
+    ``gpu-a-3``         EPYC 7742    134.33 s   5.52 s
+    ``gpu-sm02-19``     EPYC 7302P    99.26 s   5.72 s
+    ``cpu-e-1``         EPYC 7763      9.89 s   5.18 s
+    ==================  ===========  =========  ========
+
+    Transposing to make the reduction axis contiguous was also tried and is much
+    worse on the affected nodes (78.25 s on ``gpu-a-3``), because the transpose
+    copy is itself a strided read.
+    """
+    tile_axis = _median_tile_axis(data, axis)
+    if tile_axis is None:
+        return np.median(data, axis=axis)
+
+    tile = _median_tile_width(data, axis, tile_bytes)
+    tiles = []
+    for start in range(0, data.shape[tile_axis], tile):
+        index = [slice(None)] * data.ndim
+        index[tile_axis] = slice(start, start + tile)
+        # ascontiguousarray is what buys the locality: without the copy the tile
+        # is a view carrying the full array's strides, so the partition still
+        # walks the whole buffer.
+        tiles.append(np.median(np.ascontiguousarray(data[tuple(index)]), axis=axis))
+
+    if len(tiles) == 1:
+        return tiles[0]
+    # The reduction drops `axis`, shifting the tiled axis down when it sat after it.
+    return np.concatenate(tiles, axis=tile_axis - (1 if tile_axis > axis else 0))
 
 
 def flat_field_zyx(zyx_data: np.ndarray, axis: int = 0) -> np.ndarray:
@@ -50,7 +118,7 @@ def flat_field_zyx(zyx_data: np.ndarray, axis: int = 0) -> np.ndarray:
         Flat-field corrected data, normalised so the mean of the static pattern
         is preserved.
     """
-    static_pattern = np.median(zyx_data, axis=axis)
+    static_pattern = _median_tiled(zyx_data, axis=axis)
     return zyx_data / static_pattern * static_pattern.mean()
 
 
@@ -215,7 +283,7 @@ def flat_field(
         click.echo(f"Initialized {output_dirpath} ({len(input_position_dirpaths)} positions)")
         return
 
-    output_position_paths = utils.get_output_paths(input_position_dirpaths, output_dirpath)
+    output_position_paths = get_output_paths(input_position_dirpaths, output_dirpath)
     target_indices = _resolve_target_indices(settings, all_channel_names)
 
     flat_field_args = {

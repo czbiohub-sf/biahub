@@ -12,13 +12,14 @@ from biahub.cli.parsing import (
     source_position_dirpaths,
     target_position_dirpaths,
 )
-from biahub.cli.utils import _check_nan_n_zeros, model_to_yaml, yaml_to_model
 from biahub.register import (
     convert_transform_to_ants,
     convert_transform_to_numpy,
     find_lir,
 )
 from biahub.settings import RegistrationSettings
+from biahub.utils.array_ops import _check_nan_n_zeros
+from biahub.utils.config import model_to_yaml, yaml_to_model
 
 
 def _optimize_registration(

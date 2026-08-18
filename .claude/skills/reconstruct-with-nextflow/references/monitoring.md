@@ -132,7 +132,7 @@ Steps run strictly in sequence; within a step, positions fan out with
 | `run_track` | fan-out, GPU (cellpose) | reads the assembled plate |
 
 Per-step wall-time is derived from data volume (`estimate_time_minutes()` in
-`biahub/cli/utils.py`) and passed through the init step's `RESOURCES:` payload,
+`biahub/utils/cluster.py`) and passed through the init step's `RESOURCES:` payload,
 so it scales with the dataset rather than being hardcoded. If a step is far
 outside the reference run's time for a comparable dataset, say so.
 

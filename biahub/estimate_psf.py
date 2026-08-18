@@ -12,8 +12,8 @@ from iohub.ngff.models import TransformationMeta
 
 from biahub.characterize_psf import detect_peaks, extract_beads
 from biahub.cli.parsing import config_filepath, input_position_dirpaths, output_dirpath
-from biahub.cli.utils import yaml_to_model
 from biahub.settings import PsfFromBeadsSettings
+from biahub.utils.config import yaml_to_model
 
 
 @click.command("estimate-psf")

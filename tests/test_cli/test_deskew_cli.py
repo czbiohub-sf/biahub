@@ -5,7 +5,7 @@ from click.testing import CliRunner
 
 from biahub import deskew
 from biahub.cli.main import cli
-from biahub.cli.utils import estimate_resources
+from biahub.utils.cluster import estimate_resources
 
 
 def test_average_n_slices():
