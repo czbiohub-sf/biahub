@@ -11,8 +11,9 @@ A549/cell-line acquisitions already are one (root `zarr.json` has
 `attributes.ome.plate`). Neuromast/zebrafish/dynatrack acquisitions are flat
 `bioformats2raw.layout: 3` stores with positions named `{R}Pos{C}` at the root.
 
-The pinned iohub enumerates flat stores, so `list_positions` alone works — but
-every `init_*` step globs `-i <store>/*/*/*`, track configs use `fov: "*/*/*"`,
+iohub enumerates flat stores (`open_ome_zarr(..., layout="bf2raw")`), so
+`list_positions` alone works — but every `init_*` step globs
+`-i <store>/*/*/*`, track configs use `fov: "*/*/*"`,
 and concatenate builds a plate, so a plate is still required. (New zebrafish
 acquisitions will eventually be written as plates; until then 0-convert stands.)
 
@@ -180,8 +181,11 @@ sharded — keep C at 1. Auto-sizing is
 [iohub#458](https://github.com/czbiohub-sf/iohub/issues/458); most of this
 section goes away when it lands.
 
-**A T ratio above 1 needs iohub ≥ [#460](https://github.com/czbiohub-sf/iohub/pull/460).**
-Before it, `concatenate` aborted with a message that points nowhere near the
+**A T ratio above 1 needs [iohub#460](https://github.com/czbiohub-sf/iohub/pull/460),
+which shipped in iohub 0.3.11** — the floor `pyproject.toml` already requires, so a
+synced checkout has it.
+
+Before that fix, `concatenate` aborted with a message that points nowhere near the
 cause — `numpy ... Unable to allocate 651. TiB for an array with shape
 (1048576, 86, 1664, 1193)`, whose first axis is not T, not a shard, not
 anything. It is **not** evidence that the shard buffer is too large, and
@@ -192,7 +196,15 @@ step's `.command.out`), and the surviving indices are left with a *gap* — whic
 a sharded write cannot express. Confirm it by grepping `.command.err` for
 `DiscontiguousArrayError`; the array it prints is the diff of the surviving
 indices (`[3 1]` for `[0, 3, 4]`, i.e. t=1 and t=2 were blank). If you see this
-signature, check the iohub pin rather than the shard geometry.
+signature, check the installed iohub version rather than the shard geometry:
+
+```bash
+<BIAHUB>/.venv/bin/python -c "import iohub; print(iohub.__version__)"   # need >= 0.3.11
+```
+
+There is no git pin to check: `pyproject.toml` requires `iohub>=0.3.11` and
+`uv.lock` resolves it from PyPI, so `uv sync` is enough. An out-of-band install
+is the only way to end up below the floor — see §11.
 
 ## 8. Preemption is expected, not an error
 

@@ -227,8 +227,8 @@ Classify before acting — `references/recovery.md` has the decision table:
 
 - **Exit 130–145** (preemption, timeout, OOM): Nextflow retries up to 5 times.
   Do nothing unless retries are exhausted.
-- **Checksum / Lustre EIO / torn shard**: rerun with `-resume` first — the
-  pinned iohub replaces torn shards and resumes per unit. Only if it fails
+- **Checksum / Lustre EIO / torn shard**: rerun with `-resume` first — iohub
+  replaces torn shards and resumes per unit. Only if it fails
   identically again, write a repair proposal for the user or hand it to the
   **job-io-error-repair** agent. **Never delete zarr data from this skill.**
 - **Exit 1/2 with a Python traceback**: real bug or bad config. Fix, relaunch
