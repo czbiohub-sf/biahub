@@ -1,16 +1,16 @@
 defaults:
-  - qc_base
+  - base
   - _self_
 
 # Pixel-value QC for an assembled (post-assembly) intensity store — the
 # `<name>_imaging.zarr` holding the raw acquired channels. Inherits the metric
-# set from qc_base (intensity_stats, signal_to_noise, blank, tenengrad,
+# set from `base.yaml` (intensity_stats, signal_to_noise, blank, tenengrad,
 # bleach_rate) and applies it across all channels.
 
 stage: 5
 display_name: "Assembled Image — Pixel QC"
 
-# Per-channel SNR floors override qc_base's single scalar. Brightfield SNR is not
+# Per-channel SNR floors override `base.yaml`'s single scalar. Brightfield SNR is not
 # comparable to fluorescence, so "BF - Oblique" is left out of the mapping (an
 # unlisted channel gets no hard floor). The fluorescence values below are STARTING
 # POINTS keyed to this store's channel names, NOT constants calibrated from any
