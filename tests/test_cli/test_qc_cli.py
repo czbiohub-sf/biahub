@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import yaml
 
 from click.testing import CliRunner
@@ -113,6 +115,32 @@ def test_generate_report_spec_ome_suffix(tmp_path):
     assert result.exit_code == 0, result.output
     spec = yaml.safe_load(out.read_text())
     assert spec["tabs"][0]["qc_dir"] == str(tmp_path / "step" / "plate_qc")
+
+
+def test_generate_report_spec_bare_relative_path_labels_from_the_stem(tmp_path):
+    """A path with no parent directory name still gets a non-empty label.
+
+    `imaging-qc report` refuses a tab whose label is empty, so falling back to
+    the stem keeps a manifest written with bare relative paths renderable.
+    """
+    out = tmp_path / "spec.yaml"
+
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:
+        Path(cwd, "plate_imaging.zarr").mkdir()
+        result = runner.invoke(
+            cli,
+            [
+                "generate-report-spec",
+                "-o",
+                str(out),
+                "plate_imaging.zarr",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    spec = yaml.safe_load(out.read_text())
+    assert spec["tabs"][0]["label"] == "plate_imaging"
 
 
 def test_generate_report_spec_no_zarr_paths(tmp_path):

@@ -13,14 +13,27 @@ def generate_report_spec(
     """Generate a report-spec YAML for imaging-qc from completed zarr stores.
 
     Each zarr path becomes a tab. Labels are derived from the parent directory
-    name; qc_dir is the external sibling ``<stem>_qc/`` directory.
+    name — the pipeline step the store came out of — falling back to the store's
+    own stem when there is no parent name to read (a bare relative path). An
+    empty label is rejected downstream by ``imaging-qc report``, and it would be
+    rejected only after every compute task had already run.
+
+    ``qc_dir`` names where that store's tables actually are. Two locations are
+    possible: the store's own ``tables/qc/`` group, which is what a plain run
+    writes and therefore what nextflow/qc-standalone.nf produces, and the
+    external sibling ``<stem>_qc/``, which only appears when imaging-qc ran with
+    ``--output-dir``. A per-tab ``qc_dir`` is required, and it *overrides*
+    imaging-qc's own search of both locations — so naming the wrong one renders
+    an empty tab at exit 0 rather than failing. The in-store group therefore wins
+    when it exists, which is imaging-qc's own precedence in ``_stage_table_dir``.
     """
     tabs = []
     for zarr_path in zarr_paths:
         p = Path(zarr_path)
         stem = p.name.removesuffix(".zarr").removesuffix(".ome")
-        qc_dir = str(p.parent / f"{stem}_qc")
-        label = p.parent.name
+        in_store = p / "tables" / "qc"
+        qc_dir = str(in_store if in_store.is_dir() else p.parent / f"{stem}_qc")
+        label = p.parent.name or stem
         tab: dict[str, str] = {
             "label": label,
             "zarr_path": str(p),
