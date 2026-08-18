@@ -68,6 +68,11 @@ def list_positions(input_zarr: str):
     show_default=True,
     help="Character budget for the detail block; the tail is kept.",
 )
+@click.option(
+    "--operator",
+    is_flag=True,
+    help="Prepend who launched the run, from the account database (not Slack).",
+)
 @click.option("--dry-run", is_flag=True, help="Render the payload without posting.")
 def notify(
     title: str,
@@ -80,6 +85,7 @@ def notify(
     min_interval: float,
     state_dir: pathlib.Path | None,
     max_detail: int,
+    operator: bool,
     dry_run: bool,
 ):
     r"""Post a pipeline notification to Slack, falling back to the terminal.
@@ -100,6 +106,12 @@ def notify(
     """
     if detail_file is not None:
         detail = detail_file.read_text(errors="replace")
+
+    if operator:
+        # First line of the detail: who to ask about this run. Comes from the
+        # account database rather than Slack — see notify_utils.operator_label.
+        started_by = f"started by: {notify_utils.operator_label()}"
+        detail = f"{started_by}\n{detail}" if detail else started_by
 
     resolved_state_dir = str(state_dir) if state_dir is not None else tempfile.gettempdir()
 

@@ -100,8 +100,14 @@ def notify_run_start(dataset) {
         ((params.max_positions ?: 0) as int) > 0 ? "max_positions: ${params.max_positions}" : null,
     ].findAll { it }.join('\n')
 
+    // --operator names whoever launched this, resolved from the account database
+    // by the Python. It is NOT taken from Slack: turning a member ID into a
+    // display name needs a users.info call and a bot token, which an incoming
+    // webhook cannot do — and an <@U…> mention would ping, while this message is
+    // deliberately silent.
     notify_send([
         '--level', 'info',
+        '--operator',
         '--title', ":rocket: ${dataset} — mantis-v2 started",
         '--detail', detail,
         '--key', 'run-start',

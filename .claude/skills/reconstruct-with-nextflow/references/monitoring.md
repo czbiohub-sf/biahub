@@ -164,7 +164,7 @@ to Slack via `biahub nf notify` (`nextflow/modules/notify.nf`):
 
 | when | message | pings |
 |---|---|---|
-| run start | dataset, input, output, host, `max_positions` if capped | no |
+| run start | dataset, **who started it**, input, output, host, `max_positions` if capped | no |
 | each step completes | dataset, step name, `[n/6]`, position count, output path | no |
 | run end | succeeded / cached / failed / retries, wall time, assembled path | **yes** |
 | run end, failed | the error message, plus a truncated `errorReport` tail | **yes** |
@@ -183,6 +183,12 @@ export BIAHUB_SLACK_ID="U024BE7LH"    # Slack profile -> Copy member ID
 Put both in `~/.bashrc`, never in the repo, a config file, or a command line. A
 **display name** (`@ivan`) never pings via the API and is rejected with a warning;
 it must be the member ID.
+
+The *name* in the run-start message is separate from the mention: it comes from
+the account database on the cluster (the GECOS field, via `--operator`), not from
+Slack. Turning a member ID into a display name needs a `users.info` call and a bot
+token, which an incoming webhook cannot make — and an `<@U…>` mention would ping,
+while run start is deliberately silent.
 
 If either is unset, say so once in the plan so the user can export it before
 launch, but **do not block on it**: without a webhook every message still prints

@@ -112,3 +112,29 @@ def test_notify_min_interval_suppresses_a_repeat(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     assert "skipping" in result.output
     assert "launched" not in result.output
+
+
+def test_notify_operator_flag_names_who_launched_the_run(monkeypatch):
+    monkeypatch.delenv("BIAHUB_SLACK_WEBHOOK", raising=False)
+    monkeypatch.setattr(notify_utils, "operator_label", lambda: "Ivan Ivanov (ivan.ivanov)")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        ["nf", "notify", "--title", "started", "--detail", "input: /x", "--operator"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "started by: Ivan Ivanov (ivan.ivanov)" in result.output
+    # The operator line goes first, before the rest of the detail.
+    assert result.output.index("started by:") < result.output.index("input: /x")
+
+
+def test_notify_without_operator_flag_omits_it(monkeypatch):
+    monkeypatch.delenv("BIAHUB_SLACK_WEBHOOK", raising=False)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["nf", "notify", "--title", "started"])
+
+    assert result.exit_code == 0, result.output
+    assert "started by" not in result.output

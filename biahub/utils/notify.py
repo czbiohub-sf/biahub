@@ -92,6 +92,42 @@ def normalize_slack_id(raw: str | None) -> str | None:
     return f"<@{candidate}>"
 
 
+def operator_label() -> str:
+    """Name the person who launched the run, for the run-start message.
+
+    Returns
+    -------
+    str
+        ``"Ivan Ivanov (ivan.ivanov)"`` when the account has a real name,
+        ``"ivan.ivanov"`` when it does not, ``"unknown"`` if even the login name
+        is unavailable.
+
+    Notes
+    -----
+    Read from the account database (LDAP on the cluster, via ``pwd``), NOT from
+    Slack: resolving a member ID to a display name needs a ``users.info`` call,
+    which requires a bot token with ``users:read``. An incoming webhook cannot do
+    it. Embedding ``<@U…>`` would render as the display name but also pings, and
+    the run-start message is deliberately silent.
+
+    The GECOS field is comma-separated (``full name,room,work phone,home``), so
+    only the first component is a name.
+    """
+    try:
+        import pwd
+
+        entry = pwd.getpwuid(os.getuid())
+        login = entry.pw_name
+        full_name = entry.pw_gecos.split(",")[0].strip()
+    except Exception:
+        login = os.environ.get("USER") or os.environ.get("LOGNAME") or ""
+        full_name = ""
+
+    if full_name and full_name != login:
+        return f"{full_name} ({login})"
+    return login or "unknown"
+
+
 def clean_and_truncate(detail: str, max_chars: int = MAX_DETAIL_CHARS) -> str:
     """Make arbitrary log output safe and small enough for a Slack code fence.
 

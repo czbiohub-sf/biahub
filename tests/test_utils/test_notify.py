@@ -319,3 +319,49 @@ def test_record_sent_survives_an_unwritable_state_dir(tmp_path):
     blocker.write_text("not a directory")
 
     notify.record_sent(str(blocker / "nested"), "run-start")
+
+
+def test_operator_label_uses_the_account_full_name(monkeypatch):
+    import pwd
+
+    entry = pwd.struct_passwd(
+        ("ivan.ivanov", "*", 5011, 5011, "Ivan Ivanov", "/home/ivan.ivanov", "/bin/bash")
+    )
+    monkeypatch.setattr(pwd, "getpwuid", lambda _uid: entry)
+
+    assert notify.operator_label() == "Ivan Ivanov (ivan.ivanov)"
+
+
+def test_operator_label_takes_only_the_name_from_gecos(monkeypatch):
+    # GECOS is comma-separated: full name, room, work phone, home phone.
+    import pwd
+
+    entry = pwd.struct_passwd(
+        ("jdoe", "*", 1, 1, "Jane Doe,Bldg 4,x1234,", "/home/jdoe", "/bin/bash")
+    )
+    monkeypatch.setattr(pwd, "getpwuid", lambda _uid: entry)
+
+    assert notify.operator_label() == "Jane Doe (jdoe)"
+
+
+def test_operator_label_falls_back_to_the_login_name(monkeypatch):
+    import pwd
+
+    entry = pwd.struct_passwd(("svc-runner", "*", 1, 1, "", "/home/svc", "/bin/bash"))
+    monkeypatch.setattr(pwd, "getpwuid", lambda _uid: entry)
+
+    assert notify.operator_label() == "svc-runner"
+
+
+def test_operator_label_survives_an_unresolvable_account(monkeypatch):
+    # A container or a UID with no passwd entry must not break the notification.
+    import pwd
+
+    monkeypatch.setattr(pwd, "getpwuid", lambda _uid: (_ for _ in ()).throw(KeyError("uid")))
+    monkeypatch.setenv("USER", "fallback.user")
+
+    assert notify.operator_label() == "fallback.user"
+
+    monkeypatch.delenv("USER", raising=False)
+    monkeypatch.delenv("LOGNAME", raising=False)
+    assert notify.operator_label() == "unknown"
