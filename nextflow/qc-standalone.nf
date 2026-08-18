@@ -5,9 +5,13 @@
 // Python owns all dispatch logic via plan-stage (JSON); Nextflow owns fan-out,
 // barriers, and retries.
 //
-//   nextflow run nextflow/qc.nf -c nextflow/nextflow.config -profile slurm \
-//       --stages_manifest stages.csv --output <experiment-dir> \
-//       --qc_project /path/to/imaging-qc-pipeline -resume
+// Both CLIs are called bare, so activate one environment holding both before
+// launching (`imaging-qc` comes from the `qc` extra, which `all` leaves out):
+//
+//   uv sync --project <BIAHUB> --extra qc
+//   source <BIAHUB>/.venv/bin/activate
+//   nextflow run nextflow/qc-standalone.nf -c nextflow/nextflow.config -profile slurm \
+//       --stages_manifest stages.csv --output <experiment-dir> -resume
 //
 // Manifest is a CSV with header `zarr_path,config_path`; each row is one QC
 // stage (one config on one zarr). Rows run in parallel.
@@ -15,11 +19,15 @@
 
 nextflow.enable.dsl = 2
 
-include { qc_stage_wf }   from './modules/qc'
-include { qc_report_wf }  from './modules/qc'
+include { qc_stage_wf }        from './modules/qc'
+include { qc_report_wf }       from './modules/qc'
+include { check_environment }  from './modules/common'
 
 
 workflow {
+    // `imaging-qc` does the QC work; `biahub` builds the report spec.
+    check_environment(['biahub', 'imaging-qc'])
+
     if (!params.stages_manifest) {
         error "Provide --stages_manifest (CSV with header: zarr_path,config_path)"
     }

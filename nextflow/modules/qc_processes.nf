@@ -1,10 +1,4 @@
-include { slurm_logs; slurm_log_dir; biahub_cmd } from './common'
-
-def qc_cmd() {
-    return params.qc_project ?
-        "uv run --project ${params.qc_project} imaging-qc" :
-        "uv run --from 'imaging-qc-pipeline @ git+https://github.com/czbiohub-sf/imaging-qc-pipeline@v0.4.0a1' imaging-qc"
-}
+include { slurm_logs; slurm_log_dir } from './common'
 
 
 process plan_stage {
@@ -21,7 +15,7 @@ process plan_stage {
     def chunk_arg = params.qc_chunk_size ? "--chunk-size ${params.qc_chunk_size}" : ""
     """
     mkdir -p "${slurm_log_dir('qc')}"
-    ${qc_cmd()} plan-stage --config ${config_path} ${chunk_arg} ${zarr_path}
+    imaging-qc plan-stage --config ${config_path} ${chunk_arg} ${zarr_path}
     """
 }
 
@@ -44,7 +38,7 @@ process estimate_resources {
 
     script:
     """
-    ${qc_cmd()} estimate-resources --config ${config_path} --num-workers 1 ${zarr_path}
+    imaging-qc estimate-resources --config ${config_path} --num-workers 1 ${zarr_path}
     """
 }
 
@@ -69,7 +63,7 @@ process compute_step {
     def pos_arg = position ? "--positions '${position}'" : ""
     def chunk_arg = (chunk_id && time_indices) ? "--chunk-id ${chunk_id} --time-indices ${time_indices}" : ""
     """
-    ${qc_cmd()} compute --config ${config_path} --step-id ${step_id} \
+    imaging-qc compute --config ${config_path} --step-id ${step_id} \
         ${pos_arg} ${chunk_arg} ${zarr_path}
     """
 }
@@ -92,7 +86,7 @@ process finalize_wave {
 
     script:
     """
-    ${qc_cmd()} consolidate --config ${config_path} --wave-id ${wave_id} ${zarr_path}
+    imaging-qc consolidate --config ${config_path} --wave-id ${wave_id} ${zarr_path}
     """
 }
 
@@ -114,8 +108,8 @@ process finalize_stage {
 
     script:
     """
-    ${qc_cmd()} consolidate --config ${config_path} ${zarr_path}
-    ${qc_cmd()} gate --config ${config_path} ${zarr_path}
+    imaging-qc consolidate --config ${config_path} ${zarr_path}
+    imaging-qc gate --config ${config_path} ${zarr_path}
     """
 }
 
@@ -132,7 +126,7 @@ process generate_report_spec {
     def config_flag = params.qc_config_dir ? "--config-dir \"${params.qc_config_dir}\"" : ''
     def zarr_args = zarr_paths.collect { "\"${it}\"" }.join(' ')
     """
-    ${biahub_cmd()} generate-report-spec \
+    biahub generate-report-spec \
         -o report_spec.yaml \
         ${config_flag} \
         ${zarr_args}
@@ -155,7 +149,7 @@ process run_report {
     script:
     def static_flag = params.qc_report_static ? '--static' : ''
     """
-    ${qc_cmd()} report \
+    imaging-qc report \
         --report-spec "${report_spec}" \
         "${report_dir}" \
         ${static_flag}

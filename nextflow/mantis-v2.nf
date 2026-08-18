@@ -75,7 +75,7 @@ workflow {
     if (!params.concatenate_config) error "Provide --concatenate_config"
 
     // Tasks call `biahub`/`viscy` bare, so fail now if the env isn't activated.
-    check_environment()
+    check_environment(['biahub', 'viscy'])
 
     def ds     = dataset_name()
     def out    = params.output
