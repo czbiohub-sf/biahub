@@ -74,7 +74,7 @@ process notify_step {
 // Rate-limited by key, because debugging a config produces relaunch storms —
 // five launches inside ten minutes is an observed pattern, which would otherwise
 // be five notifications.
-def notify_run_start(dataset) {
+def notify_run_start(dataset, pipeline) {
     // Say once, at launch, that Slack is not configured. Without a webhook every
     // message still prints and every exit status is still 0, but only the
     // run-level messages reach the console: notify_step runs as a task, so its
@@ -89,6 +89,7 @@ def notify_run_start(dataset) {
     }
 
     def detail = [
+        "pipeline: ${pipeline}",
         "input:  ${params.input}",
         "output: ${params.output}",
         "host:   ${java.net.InetAddress.localHost.hostName}",
@@ -100,7 +101,7 @@ def notify_run_start(dataset) {
         ((params.max_positions ?: 0) as int) > 0 ? "max_positions: ${params.max_positions}" : null,
     ].findAll { it }.join('\n')
 
-    // --operator names whoever launched this, resolved from the account database
+    // --operator prepends the "launched by:" line, resolved from the account database
     // by the Python. It is NOT taken from Slack: turning a member ID into a
     // display name needs a users.info call and a bot token, which an incoming
     // webhook cannot do — and an <@U…> mention would ping, while this message is
@@ -108,7 +109,7 @@ def notify_run_start(dataset) {
     notify_send([
         '--level', 'info',
         '--operator',
-        '--title', ":rocket: ${dataset} — mantis-v2 started",
+        '--title', ":rocket: ${dataset} — reconstruction started",
         '--detail', detail,
         '--key', 'run-start',
         '--min-interval', '900',

@@ -164,7 +164,7 @@ to Slack via `biahub nf notify` (`nextflow/modules/notify.nf`):
 
 | when | message | pings |
 |---|---|---|
-| run start | dataset, **who started it**, input, output, host, `max_positions` if capped | no |
+| run start | dataset, who launched it, pipeline, input, output, host, `max_positions` if capped | no |
 | each step completes | dataset, step name, `[n/6]`, position count, output path | no |
 | run end | succeeded / cached / failed / retries, wall time, assembled path | **yes** |
 | run end, failed | the error message, plus a truncated `errorReport` tail | **yes** |

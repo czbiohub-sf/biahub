@@ -84,7 +84,7 @@ workflow {
 
     // Announce the run before submitting anything. Also the earliest possible
     // check that the webhook still works, hours before the completion message.
-    notify_run_start(ds)
+    notify_run_start(ds, 'mantis_v2')
 
     collect_positions(params.input)
     all_positions = collect_positions.out
