@@ -34,8 +34,9 @@ params.concatenate_config = null
 params.max_positions = 0
 // QC, off by default. Each param points at a stage config for one store; set
 // either, both, or neither. Both QC'd stores become tabs of ONE report.
-//   --qc_config       nextflow/configs/qc/stage5_assembled_pixel_metrics.yaml
-//   --qc_track_config nextflow/configs/qc/stage6_tracking_cell_count.yaml
+//   --qc_config       nextflow/configs/qc/assemble/pixel_metrics.yaml
+//   --qc_track_config nextflow/configs/qc/track/cell_count.yaml
+// Configs are grouped one directory per step; see qc_report_spec() for why.
 params.qc_config = null
 params.qc_track_config = null
 

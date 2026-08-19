@@ -2,12 +2,21 @@ defaults:
   - base
   - _self_
 
-# The `stage5_` filename prefix is load-bearing, not decoration. `imaging-qc
-# report` resolves a tab's report settings with `_discover_config_in_dir`, which
-# picks per-stage files matching `*stage{N}*` and otherwise falls back to any
-# YAML carrying a `report:` section — which is base.yaml. Without the prefix, the
-# stage-6 tab silently rendered stage 5's `report:` block: no instance_count
-# plot, and stage-5 metric labels in a cell-count tab, at exit 0.
+# ONE DIRECTORY PER PIPELINE STEP, and that is what makes the report correct.
+# `imaging-qc report` resolves a tab's report settings by scanning the directory
+# it is given and taking the first YAML with a `report:` section. Point every tab
+# at one shared directory and they all resolve to the same block — the stage-6 tab
+# silently rendered THIS file's block: no instance_count plot, and pixel metric
+# labels in a cell-count tab, at exit 0. A directory holding only the step's own
+# configs cannot do that.
+#
+# So the grouping is by STEP (`assemble/`, `track/`), not by stage number. The
+# `stage:` key below is the only place the number appears; renumbering a stage is
+# that one edit, with no files to rename.
+#
+# Note for future edits: a `report:` block added to THIS file would lose to
+# base.yaml's, because the scan prefers names containing "base"/"common" over
+# everything else. Put report changes for this step in base.yaml.
 
 # Pixel-value QC for an assembled (post-assembly) intensity store — the
 # `<name>_imaging.zarr` holding the raw acquired channels. Inherits the metric

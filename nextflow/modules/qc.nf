@@ -106,17 +106,28 @@ workflow qc_stage_wf {
 // its tables go, and a probe run before the tables exist would guess wrong.
 //
 // `tabs` is a list of maps: [label: <tab label>, zarr: <store>, config: <stage config>].
-// Labels must be unique within a spec; a step directory name gives that for free.
+// Labels must be unique within a spec; a step directory name gives that for free,
+// and it is also what identifies the tab to a reader — "5-assemble", "4-track" —
+// rather than the stage number, which is imaging-qc's internal table namespace.
 def qc_report_spec(tabs, spec_path, title) {
     def spec = file(spec_path)
     spec.parent.mkdirs()
 
     def lines = ["title: \"${title}\"", "tabs:"]
     tabs.each { t ->
-        // The config DIRECTORY, not the file: imaging-qc's report verb does not
-        // compose Hydra `defaults:`, so a stage config inheriting its `report:`
-        // block from base.yaml loses every metric plot when handed the file
-        // alone (imaging-qc-pipeline#201). The directory scan finds both.
+        // The config DIRECTORY, not the file, for two reasons that pull the same
+        // way. imaging-qc's report verb does not compose Hydra `defaults:`, so a
+        // config inheriting its `report:` block from base.yaml loses every metric
+        // plot when handed the file alone (imaging-qc-pipeline#201) — the
+        // directory scan finds both files. And the scan takes the FIRST YAML with
+        // a `report:` section, so the directory must hold only this step's
+        // configs: point two tabs at one shared directory and both render the
+        // same block, which is how a cell-count tab ends up with pixel metric
+        // labels and no instance_count plot, at exit 0.
+        //
+        // Hence `nextflow/configs/qc/<step>/`. Nothing here keys on the stage
+        // NUMBER: that lives only in each config's `stage:` key, so renumbering a
+        // stage renames no files and changes nothing in this function.
         def config_dir = file(t.config).parent
         lines << "  - label: \"${t.label}\""
         lines << "    qc_dir: ${t.zarr}/tables/qc"
