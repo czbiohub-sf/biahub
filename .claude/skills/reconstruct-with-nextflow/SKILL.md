@@ -36,6 +36,26 @@ not on Bruno, stop and tell the user to connect; do not ssh on their behalf.
 The Nextflow head process is lightweight, so a login node is the right place
 for it (see `references/monitoring.md` for the compute-node exception).
 
+### 1a-bis. Slack notifications — optional, offer to set up
+
+```bash
+printenv BIAHUB_SLACK_WEBHOOK >/dev/null && echo "webhook set" || echo "webhook MISSING"
+printenv BIAHUB_SLACK_ID      >/dev/null && echo "slack id set" || echo "slack id MISSING"
+```
+
+**Both are optional and neither gates the run** — without them every message is
+printed instead of posted and nothing else changes. Never block a launch on this.
+
+If either is missing, say so once, explain that they only enable Slack
+notifications, and **offer to append them to `~/.bashrc`**. The webhook is a
+credential the user cannot self-serve: tell them to **ask a biahub developer
+(Ivan, Taylla)** for it. For the ID, point them at Slack profile → **⋮ / More** →
+**Copy member ID**, and give the format explicitly — `U0A2ZH9CS8S`, not
+`@Ivan Ivanov`, which never pings. Write to `~/.bashrc` only if they agree, append
+rather than rewrite, and tell them to `source ~/.bashrc` before launching, since
+the value is read from the launching shell. Full instructions:
+`references/monitoring.md` § Setting it up.
+
 ### 1b. The biahub checkout — run from `main`, up to date
 
 The pipeline, step CLIs, and config templates version together, so runs should
@@ -135,6 +155,9 @@ Do not run anything yet. Show the user:
    deliverable and `4-track` is a discarded by-product** (`caveats.md` §4).
 7. Known caveats that apply to this dataset.
 8. Rough wall-time and that `-resume` is on.
+9. Whether Slack notifications are on, and who will be @-mentioned at run end.
+   If `$BIAHUB_SLACK_WEBHOOK` or `$BIAHUB_SLACK_ID` is missing, note it here as a
+   caveat with the offer from §1a-bis — not as a blocker.
 
 Get explicit approval.
 

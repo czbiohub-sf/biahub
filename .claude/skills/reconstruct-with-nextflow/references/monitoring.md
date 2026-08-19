@@ -178,17 +178,73 @@ start is therefore sent once `list_positions` has produced the count (about 40s
 in), not at graph-construction time; a config error that kills `list_positions`
 itself yields only the failure message.
 
-Two environment variables, both read from the launching shell and inherited by
-every task. Neither is a pipeline parameter:
+### Setting it up
+
+**Both variables are optional.** They only decide whether messages reach Slack.
+The pipeline runs identically without them: every message is printed instead of
+posted, every exit status is still 0, and no step behaves differently. Never
+block a launch on them, and never treat a missing one as an error.
+
+Two environment variables, read from the launching shell and inherited by every
+task. Neither is a pipeline parameter:
 
 ```bash
-export BIAHUB_SLACK_WEBHOOK="https://hooks.slack.com/services/..."   # a CREDENTIAL
-export BIAHUB_SLACK_ID="U024BE7LH"    # Slack profile -> Copy member ID
+# ~/.bashrc
+export BIAHUB_SLACK_WEBHOOK="https://hooks.slack.com/services/T.../B.../..."
+export BIAHUB_SLACK_ID="U0A2ZH9CS8S"
 ```
 
-Put both in `~/.bashrc`, never in the repo, a config file, or a command line. A
-**display name** (`@ivan`) never pings via the API and is rejected with a warning;
-it must be the member ID.
+`BIAHUB_SLACK_WEBHOOK` — the incoming-webhook URL for the channel the run should
+report to. **This is a credential**: it lets anyone holding it post to that
+channel, so it belongs in `~/.bashrc` only, never in the repo, a config file, a
+command line, or a commit. Users do not create it themselves — **ask a biahub
+developer (Ivan, Taylla) for the webhook URL.**
+
+`BIAHUB_SLACK_ID` — the member ID of the person to @-mention when a run finishes
+or fails. To find it: open Slack, click your avatar (or your name in a message)
+→ **View full profile** → the **⋮ / More** button → **Copy member ID**. In the
+Slack web app it is also the last path segment of your profile URL
+(`.../team/U0A2ZH9CS8S`).
+
+The format matters, and getting it wrong fails silently:
+
+| | |
+|---|---|
+| ✅ `U0A2ZH9CS8S` | a member ID — 9+ characters, starts with `U` (or `W`) |
+| ❌ `@Ivan Ivanov` | a display name; never pings via the API |
+| ❌ `ivan.ivanov` | a username or email local part |
+| ❌ `<@U0A2ZH9CS8S>` | already-wrapped mention — accepted, but write the bare ID |
+
+A display name posts as literal text and notifies nobody, which is why the
+notifier validates the ID against `^[UW][A-Z0-9]{6,}$` and warns rather than
+posting something that silently reaches no one.
+
+**If either variable is unset, offer to add it to the user's `~/.bashrc`** — say
+what each one does, that both are optional, and where to get the webhook. Only
+write the file if the user agrees, append rather than rewrite, and have them
+`source ~/.bashrc` (or open a new shell) before launching, since the pipeline
+reads the value from the launching shell:
+
+```bash
+cat >> ~/.bashrc <<'EOF'
+
+# biahub Nextflow pipeline -> Slack notifications (both optional)
+export BIAHUB_SLACK_WEBHOOK="https://hooks.slack.com/services/..."   # ask Ivan or Taylla
+export BIAHUB_SLACK_ID="U0A2ZH9CS8S"                                # Slack profile -> Copy member ID
+EOF
+```
+
+Check what is already set before offering, so an existing value is never
+clobbered:
+
+```bash
+printenv BIAHUB_SLACK_WEBHOOK >/dev/null && echo "webhook set" || echo "webhook MISSING"
+printenv BIAHUB_SLACK_ID      >/dev/null && echo "slack id set" || echo "slack id MISSING"
+grep -c 'BIAHUB_SLACK' ~/.bashrc
+```
+
+`run_mantis_v2.sh` warns about a missing variable at launch and records the Slack
+ID in `nextflow/provenance.txt`, so which was in effect is part of the run record.
 
 The *name* in the run-start message is separate from the mention: it comes from
 the account database on the cluster (the GECOS field, via `--operator`), not from
