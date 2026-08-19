@@ -198,13 +198,19 @@ def build_payload(
     Notes
     -----
     The mention goes in the top-level ``text`` field, not in the attachment:
-    mentions are only reliably delivered as a notification from ``text``.
+    mentions are only reliably delivered as a notification from ``text``. Position
+    within ``text`` does not affect delivery, so it sits at the end for symmetry
+    with the messages that do not ping.
 
     With ``level='info'`` and no detail the payload is byte-identical to the
     plain ``{"text": …}`` this module's shell predecessor sent, so existing
     call sites are unaffected by the richer formatting.
     """
-    text = " ".join(part for part in (mention, _one_line(title)) if part)
+    # Mention LAST, so every message opens with its emoji and dataset and reads
+    # the same whether or not it pings. Appended after _one_line() rather than
+    # inside it: the title is length-capped, and a long error message must not be
+    # able to truncate the mention away and silently drop the notification.
+    text = " ".join(part for part in (_one_line(title), mention) if part)
     payload: dict = {"text": text}
 
     body = clean_and_truncate(detail, max_detail)

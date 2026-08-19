@@ -170,7 +170,13 @@ to Slack via `biahub nf notify` (`nextflow/modules/notify.nf`):
 | run end, failed | the error message, plus a truncated `errorReport` tail | **yes** |
 
 Only the run-end message @-mentions the operator, so a ping always means "this
-needs you". Step messages are informational and stay quiet.
+needs you". Step messages are informational and stay quiet. The mention sits at
+the END of the title, so every message opens with its emoji and dataset whether or
+not it pings; position within `text` does not affect delivery.
+
+Each kind of message has its own emoji, so the one that needs you is not six
+lookalikes deep in a channel: :rocket: to start, :white_check_mark: per step,
+:checkered_flag: complete, :x: failed, :warning: aborted.
 
 The position count and the step list are reported once, at run start — they are
 the same for every step, so repeating them per message would add nothing. Run

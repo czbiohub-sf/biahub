@@ -280,7 +280,10 @@ def notify_run_end(dataset, pipeline, wf) {
         notify_send([
             '--level', 'good',
             '--ping',
-            '--title', ":white_check_mark: ${dataset} — reconstruction complete",
+            // :checkered_flag: rather than the :white_check_mark: the six step
+            // messages use — this is the one that pings, so it should not look
+            // identical to six that do not. Reads 🚀 start, ✅ per step, 🏁 done.
+            '--title', ":checkered_flag: ${dataset} — reconstruction complete",
             '--detail', "${summary}\nassembled: ${params.output}/5-assemble/${dataset}.zarr",
         ])
         return

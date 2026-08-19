@@ -70,7 +70,8 @@ def test_build_payload_puts_mention_in_text_not_attachment():
         "2026_07_14 — done", detail="stats", level="good", mention="<@U024BE7LH>"
     )
 
-    assert payload["text"].startswith("<@U024BE7LH> ")
+    # Mention last, so the message opens with its emoji and dataset.
+    assert payload["text"] == "2026_07_14 — done <@U024BE7LH>"
     assert "U024BE7LH" not in json.dumps(payload["attachments"])
 
 

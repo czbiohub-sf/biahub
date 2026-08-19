@@ -44,7 +44,7 @@ def test_notify_dry_run_renders_payload_without_posting(monkeypatch):
     assert result.exit_code == 0, result.output
 
     payload = json.loads(result.output)
-    assert payload["text"] == "<@U024BE7LH> 2026_07_14_A549 — deskew complete (2/6)"
+    assert payload["text"] == "2026_07_14_A549 — deskew complete (2/6) <@U024BE7LH>"
     assert payload["attachments"][0]["color"] == "#2eb886"
 
 
