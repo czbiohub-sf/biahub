@@ -129,3 +129,8 @@ ENV/
 # and a killed process leaves the directory behind. Root-anchored so it cannot
 # match anything intentional deeper in the tree.
 /tmp*/
+
+# Nextflow leaves these wherever it is launched from, including the repo root
+# when running `nextflow config` or a compile check.
+.nextflow/
+.nextflow.log*
