@@ -32,6 +32,9 @@ params.virtual_stain_config = null
 params.track_config = null
 params.concatenate_config = null
 params.max_positions = 0
+// QC of the assembled store, off by default. Point it at a stage config (e.g.
+// nextflow/configs/qc/assembled_pixel_metrics.yaml); null skips QC entirely.
+params.qc_config = null
 
 include { collect_positions; dataset_name; check_environment } from './modules/common'
 include { deskew_wf } from './modules/deskew'
@@ -40,6 +43,8 @@ include { reconstruct_wf } from './modules/reconstruct'
 include { virtual_stain_wf } from './modules/virtual_stain'
 include { track_wf } from './modules/tracking'
 include { assemble_wf } from './modules/assembly'
+include { qc_stage_wf } from './modules/qc'
+include { qc_report_wf } from './modules/qc'
 
 // Output directory layout for the reconstruction steps — single source of
 // truth. Each entry is a subdirectory under params.output where that step
@@ -74,8 +79,10 @@ workflow {
     if (!params.track_config)       error "Provide --track_config"
     if (!params.concatenate_config) error "Provide --concatenate_config"
 
-    // Tasks call `biahub`/`viscy` bare, so fail now if the env isn't activated.
-    check_environment(['biahub', 'viscy'])
+    // Tasks call `biahub`/`viscy`/`imaging-qc` bare, so fail now if the env isn't
+    // activated. `imaging-qc` is only required when QC is actually wired in.
+    def qc_on = params.qc_config as boolean
+    check_environment(qc_on ? ['biahub', 'viscy', 'imaging-qc'] : ['biahub', 'viscy'])
 
     def ds     = dataset_name()
     def out    = params.output
@@ -164,4 +171,24 @@ workflow {
     track_output       = "${out}/${layout.track}/${ds}.zarr"
 
     track_wf(all_positions, track_input, track_input_images, track_output, params.track_config, track_trigger)
+
+    // ----- QC ---------------------------------------------------------------
+    // QC reads the ASSEMBLED plate — the one store that carries every channel the
+    // pipeline produced — and gates on assemble_done, the same signal track waits
+    // on. So QC runs CONCURRENTLY with tracking and never extends the critical
+    // path; the report lands while tracking is still going.
+    //
+    // A QC verdict cannot fail the pipeline: `imaging-qc gate` exits 0 whether
+    // positions pass or fail, recording the verdict in the store's own
+    // `tables/qc/` tables and a QC_SUMMARY line. Only a broken config or a
+    // genuine compute error exits non-zero, and those are the ones that should
+    // stop a run.
+    if (qc_on) {
+        qc_input = Channel.of(tuple(assemble_output, params.qc_config))
+            .combine(assemble_done.done)
+            .map { z, cfg, done -> tuple(z, cfg) }
+
+        qc = qc_stage_wf(qc_input)
+        qc_report_wf(qc.done)
+    }
 }

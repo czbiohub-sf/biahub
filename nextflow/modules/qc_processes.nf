@@ -43,10 +43,16 @@ process estimate_resources {
 }
 
 
+// `cpus` is not decoration: imaging-qc dispatches a position's (T, C) units through
+// a ThreadPoolExecutor sized from `max_concurrent`, which — unset in our configs —
+// defaults to this process's CPU affinity (cli/composable.py). At one CPU the
+// timepoints of a position are walked serially, so this is the knob that decides
+// whether a per-position task uses the node it reserved.
 process compute_step {
     tag "${zarr_path}/${position ?: 'store'}/${step_id}"
     label 'cpu'
     clusterOptions { slurm_logs('qc') }
+    cpus { params.qc_cpus as int }
     memory { "${(meta?.memory_gb ?: 16).toFloat() * task.attempt} GB" }
     time '2h'
     maxRetries 1
@@ -104,7 +110,7 @@ process finalize_stage {
     tuple val(zarr_path), val(config_path)
 
     output:
-    tuple val(zarr_path), stdout
+    tuple val(zarr_path), val(config_path), stdout
 
     script:
     """
@@ -113,45 +119,37 @@ process finalize_stage {
     """
 }
 
-process generate_report_spec {
-    label 'cpu_local'
-
-    input:
-    val zarr_paths
-
-    output:
-    path 'report_spec.yaml'
-
-    script:
-    def config_flag = params.qc_config_dir ? "--config-dir \"${params.qc_config_dir}\"" : ''
-    def zarr_args = zarr_paths.collect { "\"${it}\"" }.join(' ')
-    """
-    biahub generate-report-spec \
-        -o report_spec.yaml \
-        ${config_flag} \
-        ${zarr_args}
-    """
-}
-
-process run_report {
+// One report per store, rendered from that store's own consolidated tables.
+//
+// `--config` is handed a DIRECTORY, not the stage config file. imaging-qc's report
+// verb does not compose Hydra `defaults:` from a single file, so a config that
+// inherits its `report:` block (metric_archetypes, metric_labels) from base.yaml
+// loses it: the run renders ONLY the outlier heatmap, at exit 0, with no error.
+// Pointing at the directory that holds base.yaml composes it and the metric plots
+// appear. Default is the stage config's own parent, which is that directory by
+// construction — Hydra resolved the same defaults relative to it during compute.
+process generate_report {
     label 'cpu'
     clusterOptions { slurm_logs('qc') }
+    cpus 2
     memory '32 GB'
     time '1h'
+    tag "${zarr_path}"
 
     input:
-    path report_spec
-    val report_dir
+    tuple val(zarr_path), val(config_path), val(report_dir)
 
     output:
-    val true
+    tuple val(zarr_path), val(report_dir)
 
     script:
+    def config_dir = params.qc_config_dir ?: file(config_path).parent
     def static_flag = params.qc_report_static ? '--static' : ''
     """
     imaging-qc report \
-        --report-spec "${report_spec}" \
-        "${report_dir}" \
-        ${static_flag}
+        --config "${config_dir}" \
+        ${static_flag} \
+        "${zarr_path}" \
+        "${report_dir}"
     """
 }

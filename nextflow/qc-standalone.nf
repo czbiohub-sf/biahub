@@ -5,8 +5,8 @@
 // Python owns all dispatch logic via plan-stage (JSON); Nextflow owns fan-out,
 // barriers, and retries.
 //
-// Both CLIs are called bare, so activate one environment holding both before
-// launching (`imaging-qc` comes from the `qc` extra, which `all` leaves out):
+// `imaging-qc` is called bare, so activate an environment holding it before
+// launching (it comes from biahub's `qc` extra, which `all` leaves out):
 //
 //   uv sync --project <BIAHUB> --extra qc
 //   source <BIAHUB>/.venv/bin/activate
@@ -14,7 +14,8 @@
 //       --stages_manifest stages.csv --output <experiment-dir> -resume
 //
 // Manifest is a CSV with header `zarr_path,config_path`; each row is one QC
-// stage (one config on one zarr). Rows run in parallel.
+// stage (one config on one zarr). Rows run in parallel, and each store gets its
+// own report beside it (`<store>_report/`).
 //
 
 nextflow.enable.dsl = 2
@@ -25,8 +26,9 @@ include { check_environment }  from './modules/common'
 
 
 workflow {
-    // `imaging-qc` does the QC work; `biahub` builds the report spec.
-    check_environment(['biahub', 'imaging-qc'])
+    // Nothing here calls `biahub` any more — the whole stage, report included, is
+    // imaging-qc verbs.
+    check_environment(['imaging-qc'])
 
     if (!params.stages_manifest) {
         error "Provide --stages_manifest (CSV with header: zarr_path,config_path)"
@@ -42,8 +44,7 @@ workflow {
 
     qc = qc_stage_wf(plan_inputs)
 
-    all_qc_done = qc.done.collect()
-
-    def report_dir = params.qc_report_dir ?: "${params.output}/qc/report"
-    qc_report_wf(all_qc_done, report_dir)
+    // Per-store reports: each row's report follows its own store as soon as that
+    // store finalizes, so one slow store does not hold the others' reports back.
+    qc_report_wf(qc.done)
 }

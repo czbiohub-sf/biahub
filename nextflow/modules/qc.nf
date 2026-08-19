@@ -5,8 +5,7 @@ include { compute_step as compute_step_w1 }  from './qc_processes'
 include { compute_step as compute_step_w2 }  from './qc_processes'
 include { finalize_wave }                    from './qc_processes'
 include { finalize_stage }                   from './qc_processes'
-include { generate_report_spec }             from './qc_processes'
-include { run_report }                       from './qc_processes'
+include { generate_report }                  from './qc_processes'
 
 
 // ---------------------------------------------------------------------------
@@ -87,19 +86,27 @@ workflow qc_stage_wf {
         | finalize_stage
 
     emit:
-    done = merged.map { z, summary -> z }
+    // (zarr, config) rather than the zarr alone: the report needs the config that
+    // produced the store's tables, and rediscovering it downstream would be a guess.
+    done = merged.map { z, cfg, summary -> tuple(z, cfg) }
 }
 
 
+// One report per store, from that store's own tables. `report_dir` defaults to a
+// `<store>_report` sibling — imaging-qc's own default — so a run covering several
+// stores gives each its own report instead of having them overwrite one another.
+// params.qc_report_dir overrides that, which only makes sense for a single store.
 workflow qc_report_wf {
     take:
-    all_qc_done      // collected list of zarr paths
-    report_dir
+    qc_done          // Channel of tuple(zarr_path, config_path)
 
     main:
-    spec = generate_report_spec(all_qc_done)
-    run_report(spec, report_dir)
+    report_in = qc_done.map { z, cfg ->
+        def stem = z.replaceAll(/\/$/, '').replaceAll(/(\.ome)?\.zarr$/, '')
+        tuple(z, cfg, params.qc_report_dir ?: "${stem}_report")
+    }
+    reports = generate_report(report_in)
 
     emit:
-    done = run_report.out
+    done = reports
 }

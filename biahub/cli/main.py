@@ -174,11 +174,6 @@ COMMANDS = [
         "import_path": "biahub.track.track_cli",
         "help": "Track objects in 2D/3D time-lapse microscopy",
     },
-    {
-        "name": "generate-report-spec",
-        "import_path": "biahub.qc.generate_report_spec_cli",
-        "help": "Generate a report-spec YAML for imaging-qc from completed zarr stores",
-    },
 ]
 
 
