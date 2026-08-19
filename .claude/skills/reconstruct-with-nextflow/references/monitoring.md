@@ -166,7 +166,7 @@ to Slack via `biahub nf notify` (`nextflow/modules/notify.nf`):
 |---|---|---|
 | run start | dataset, operator, pipeline, position count, the 6 step names, input, output, host, `max_positions` if capped | no |
 | each step completes | dataset, step name, `[n/6]`, output path | no |
-| run end | succeeded / cached / failed / retries, wall time, assembled path | **yes** |
+| run end | succeeded / cached / preempted / failed, wall time, assembled path | **yes** |
 | run end, failed | the error message, plus a truncated `errorReport` tail | **yes** |
 
 Only the run-end message @-mentions the operator, so a ping always means "this

@@ -130,6 +130,61 @@ def notify_run_start(dataset, pipeline, n_positions, steps) {
     ])
 }
 
+// Classify every failed ATTEMPT recorded in trace.txt as preemption or real failure.
+//
+// workflow.stats cannot do this: it reports failedCount and retriesCount with no
+// exit codes, so a position that was preempted once and then succeeded shows up as
+// "failed: 1, retries: 1" — which reads as a broken run when nothing went wrong.
+// The exit code is the only thing that distinguishes them, and trace.txt has it.
+//
+// Same rule the pipeline itself uses to decide whether to retry (errorStrategy in
+// nextflow.config): 130..145 is "128 + signal", i.e. the job was killed rather
+// than the code failing — SIGTERM 143 for preemption or a time limit, SIGKILL 137
+// for OOM, SIGUSR2 140 for Nextflow's near-limit warning. Anything else is the
+// program itself exiting non-zero.
+//
+// trace.txt is complete and readable by the time onComplete runs (verified). Its
+// path is set by `trace.file` in nextflow.config; returns null if it cannot be
+// read, and the caller then falls back to the raw counts.
+def signal_label(code) {
+    // Name each signal for what it actually is. 143 = SIGTERM, what SLURM sends
+    // when it reclaims a job on the `preempted` partition. 137 = SIGKILL, in
+    // practice an OOM kill. 140 = SIGUSR2, Nextflow's own near-the-time-limit
+    // warning. Anything else in the range is named by its code rather than
+    // guessed at — reporting an OOM as "preempted" would be its own lie.
+    if (code == 143) return 'preempted'
+    if (code == 137) return 'oom-killed'
+    if (code == 140) return 'time-limit'
+    return "killed (exit ${code})".toString()
+}
+
+def failed_attempts() {
+    try {
+        def trace = new File("${params.output}/nextflow/trace.txt")
+        if (!trace.exists()) {
+            return null
+        }
+        def outcome = [killed: [:], failed: 0]
+        trace.readLines().drop(1).each { line ->
+            def field = line.split('\t')
+            if (field.size() > 5 && field[4] == 'FAILED') {
+                def code = field[5].isInteger() ? field[5] as int : -1
+                if (code >= 130 && code <= 145) {
+                    def label = signal_label(code)
+                    outcome.killed[label] = (outcome.killed[label] ?: 0) + 1
+                }
+                else {
+                    outcome.failed = outcome.failed + 1
+                }
+            }
+        }
+        return outcome
+    }
+    catch (Exception e) {
+        return null
+    }
+}
+
 // Report the finished run, pinging the operator.
 //
 // Called from a single `workflow.onComplete`, never from onComplete AND onError:
@@ -137,14 +192,36 @@ def notify_run_start(dataset, pipeline, n_positions, steps) {
 // every failure.
 def notify_run_end(dataset, pipeline, wf) {
     def stats = wf.stats
-    def summary = [
+    def lines = [
         "pipeline:  ${pipeline}",
         "succeeded: ${stats.succeededCount}",
         "cached:    ${stats.cachedCount}",
-        "failed:    ${stats.failedCount}",
-        "retries:   ${stats.retriesCount}",
-        "duration:  ${wf.duration}",
-    ].join('\n')
+    ]
+
+    def outcome = failed_attempts()
+    if (outcome == null) {
+        // No trace.txt to classify against; report the raw counts rather than
+        // claim something we cannot substantiate.
+        lines += ["failed:    ${stats.failedCount}", "retries:   ${stats.retriesCount}"]
+    }
+    else {
+        // One line per kind of kill, e.g. "preempted: 3". Every one of these was
+        // retried, so they are not failures and must not be counted as any.
+        outcome.killed.sort().each { label, count ->
+            lines += ["${(label + ':').padRight(10)} ${count}".toString()]
+        }
+        if (outcome.failed) {
+            lines += ["failed:    ${outcome.failed}".toString()]
+        }
+        // A run that died with nothing but kills burnt through maxRetries. Say so,
+        // or the reader sees a FAILED title with no failures listed under it.
+        if (!wf.success && !outcome.failed && outcome.killed) {
+            lines += ["note:      retries exhausted, no code-level failure".toString()]
+        }
+    }
+
+    lines += ["duration:  ${wf.duration}"]
+    def summary = lines.join('\n')
 
     if (wf.success) {
         notify_send([
