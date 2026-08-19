@@ -227,6 +227,12 @@ def failed_attempts() {
 // "restarted: 3 (2 preempted, 1 out of memory)", or the exit codes when sacct
 // could not tell us.
 def restarted_line(outcome) {
+    // Always reported, including "restarted: 0", so a clean run says so outright
+    // instead of leaving the reader to infer it from an absent line. Nothing to
+    // ask sacct about in that case.
+    if (!outcome.restarted) {
+        return 'restarted: 0'
+    }
     def causes = restart_causes(outcome.job_ids)
     def detail = causes
         ? causes.sort { -it.value }.collect { label, n -> "${n} ${label}" }.join(', ')
@@ -255,10 +261,8 @@ def notify_run_end(dataset, pipeline, wf) {
     }
     else {
         // Restarted attempts were retried, so they are not failures and must
-        // not be counted as any.
-        if (outcome.restarted) {
-            lines += [restarted_line(outcome)]
-        }
+        // not be counted as any. Reported unconditionally — see restarted_line.
+        lines += [restarted_line(outcome)]
         if (outcome.failed) {
             lines += ["failed:    ${outcome.failed}".toString()]
         }
