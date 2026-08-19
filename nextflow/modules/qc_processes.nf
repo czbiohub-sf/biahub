@@ -119,37 +119,32 @@ process finalize_stage {
     """
 }
 
-// One report per store, rendered from that store's own consolidated tables.
+// ONE report over every QC'd store, driven by the report spec written at launch
+// (see `qc_report_spec()` in qc.nf). Each tab is one store; imaging-qc discovers
+// each tab's stage from its `qc_dir` and loads that stage's config, which is why
+// the configs carry `stage{N}_` filename prefixes.
 //
-// `--config` is handed a DIRECTORY, not the stage config file. imaging-qc's report
-// verb does not compose Hydra `defaults:` from a single file, so a config that
-// inherits its `report:` block (metric_archetypes, metric_labels) from base.yaml
-// loses it: the run renders ONLY the outlier heatmap, at exit 0, with no error.
-// Pointing at the directory that holds base.yaml composes it and the metric plots
-// appear. Default is the stage config's own parent, which is that directory by
-// construction — Hydra resolved the same defaults relative to it during compute.
-process generate_report {
+// `--report-spec` is mutually exclusive with a positional zarr path and with
+// `--qc-dir`: everything per-store lives in the spec.
+process generate_unified_report {
     label 'cpu'
     clusterOptions { slurm_logs('qc') }
     cpus 2
     memory '32 GB'
     time '1h'
-    tag "${zarr_path}"
 
     input:
-    tuple val(zarr_path), val(config_path), val(report_dir)
+    tuple path(report_spec), val(report_dir)
 
     output:
-    tuple val(zarr_path), val(report_dir)
+    val report_dir
 
     script:
-    def config_dir = params.qc_config_dir ?: file(config_path).parent
     def static_flag = params.qc_report_static ? '--static' : ''
     """
     imaging-qc report \
-        --config "${config_dir}" \
+        --report-spec "${report_spec}" \
         ${static_flag} \
-        "${zarr_path}" \
         "${report_dir}"
     """
 }

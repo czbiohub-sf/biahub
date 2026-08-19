@@ -2,6 +2,13 @@ defaults:
   - base
   - _self_
 
+# The `stage5_` filename prefix is load-bearing, not decoration. `imaging-qc
+# report` resolves a tab's report settings with `_discover_config_in_dir`, which
+# picks per-stage files matching `*stage{N}*` and otherwise falls back to any
+# YAML carrying a `report:` section — which is base.yaml. Without the prefix, the
+# stage-6 tab silently rendered stage 5's `report:` block: no instance_count
+# plot, and stage-5 metric labels in a cell-count tab, at exit 0.
+
 # Pixel-value QC for an assembled (post-assembly) intensity store — the
 # `<name>_imaging.zarr` holding the raw acquired channels. Inherits the metric
 # set from `base.yaml` (intensity_stats, signal_to_noise, blank, tenengrad) and

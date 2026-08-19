@@ -5,7 +5,7 @@ include { compute_step as compute_step_w1 }  from './qc_processes'
 include { compute_step as compute_step_w2 }  from './qc_processes'
 include { finalize_wave }                    from './qc_processes'
 include { finalize_stage }                   from './qc_processes'
-include { generate_report }                  from './qc_processes'
+include { generate_unified_report }          from './qc_processes'
 
 
 // ---------------------------------------------------------------------------
@@ -92,20 +92,54 @@ workflow qc_stage_wf {
 }
 
 
-// One report per store, from that store's own tables. `report_dir` defaults to a
-// `<store>_report` sibling — imaging-qc's own default — so a run covering several
-// stores gives each its own report instead of having them overwrite one another.
-// params.qc_report_dir overrides that, which only makes sense for a single store.
+// Write the report-spec manifest that `imaging-qc report --report-spec` consumes:
+// one tab per QC'd store, in the order given.
+//
+// A LAUNCH-TIME function, not a process. Its content is fully determined before
+// any compute runs — the store paths, the labels and the table location are all
+// known from params and the pipeline's own directory layout — so there is nothing
+// to schedule and nothing to wait for. Writing it here also means a malformed
+// spec (an empty label, a bad path) fails at launch instead of after every
+// compute task has already run, which is exactly how the two bugs this replaces
+// were found. `qc_dir` is DECLARED as the store's own `tables/qc/` group rather
+// than probed on disk: this pipeline passes no `--output-dir`, so that is where
+// its tables go, and a probe run before the tables exist would guess wrong.
+//
+// `tabs` is a list of maps: [label: <tab label>, zarr: <store>, config: <stage config>].
+// Labels must be unique within a spec; a step directory name gives that for free.
+def qc_report_spec(tabs, spec_path, title) {
+    def spec = file(spec_path)
+    spec.parent.mkdirs()
+
+    def lines = ["title: \"${title}\"", "tabs:"]
+    tabs.each { t ->
+        // The config DIRECTORY, not the file: imaging-qc's report verb does not
+        // compose Hydra `defaults:`, so a stage config inheriting its `report:`
+        // block from base.yaml loses every metric plot when handed the file
+        // alone (imaging-qc-pipeline#201). The directory scan finds both.
+        def config_dir = file(t.config).parent
+        lines << "  - label: \"${t.label}\""
+        lines << "    qc_dir: ${t.zarr}/tables/qc"
+        lines << "    zarr_path: ${t.zarr}"
+        lines << "    config: ${config_dir}"
+    }
+    spec.text = lines.join('\n') + '\n'
+    return spec
+}
+
+
+// One unified report over every store QC'd in this run.
 workflow qc_report_wf {
     take:
-    qc_done          // Channel of tuple(zarr_path, config_path)
+    qc_done          // Channel of tuple(zarr_path, config_path), one per finalized store
+    report_spec      // spec file from qc_report_spec()
+    report_dir
 
     main:
-    report_in = qc_done.map { z, cfg ->
-        def stem = z.replaceAll(/\/$/, '').replaceAll(/(\.ome)?\.zarr$/, '')
-        tuple(z, cfg, params.qc_report_dir ?: "${stem}_report")
-    }
-    reports = generate_report(report_in)
+    // The barrier: one report reads every store's consolidated tables, so all of
+    // them must be final first. `.count()` waits for the whole channel.
+    ready = qc_done.count().map { n -> tuple(report_spec, report_dir) }
+    reports = generate_unified_report(ready)
 
     emit:
     done = reports

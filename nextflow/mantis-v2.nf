@@ -32,9 +32,12 @@ params.virtual_stain_config = null
 params.track_config = null
 params.concatenate_config = null
 params.max_positions = 0
-// QC of the assembled store, off by default. Point it at a stage config (e.g.
-// nextflow/configs/qc/assembled_pixel_metrics.yaml); null skips QC entirely.
+// QC, off by default. Each param points at a stage config for one store; set
+// either, both, or neither. Both QC'd stores become tabs of ONE report.
+//   --qc_config       nextflow/configs/qc/stage5_assembled_pixel_metrics.yaml
+//   --qc_track_config nextflow/configs/qc/stage6_tracking_cell_count.yaml
 params.qc_config = null
+params.qc_track_config = null
 
 include { collect_positions; dataset_name; check_environment } from './modules/common'
 include { deskew_wf } from './modules/deskew'
@@ -43,8 +46,7 @@ include { reconstruct_wf } from './modules/reconstruct'
 include { virtual_stain_wf } from './modules/virtual_stain'
 include { track_wf } from './modules/tracking'
 include { assemble_wf } from './modules/assembly'
-include { qc_stage_wf } from './modules/qc'
-include { qc_report_wf } from './modules/qc'
+include { qc_stage_wf; qc_report_wf; qc_report_spec } from './modules/qc'
 
 // Output directory layout for the reconstruction steps — single source of
 // truth. Each entry is a subdirectory under params.output where that step
@@ -81,7 +83,7 @@ workflow {
 
     // Tasks call `biahub`/`viscy`/`imaging-qc` bare, so fail now if the env isn't
     // activated. `imaging-qc` is only required when QC is actually wired in.
-    def qc_on = params.qc_config as boolean
+    def qc_on = (params.qc_config ?: params.qc_track_config) as boolean
     check_environment(qc_on ? ['biahub', 'viscy', 'imaging-qc'] : ['biahub', 'viscy'])
 
     def ds     = dataset_name()
@@ -170,25 +172,47 @@ workflow {
     track_input_images = assemble_output
     track_output       = "${out}/${layout.track}/${ds}.zarr"
 
-    track_wf(all_positions, track_input, track_input_images, track_output, params.track_config, track_trigger)
+    track_done = track_wf(all_positions, track_input, track_input_images, track_output, params.track_config, track_trigger)
 
     // ----- QC ---------------------------------------------------------------
-    // QC reads the ASSEMBLED plate — the one store that carries every channel the
-    // pipeline produced — and gates on assemble_done, the same signal track waits
-    // on. So QC runs CONCURRENTLY with tracking and never extends the critical
-    // path; the report lands while tracking is still going.
+    // QC reads the finished stores, gated on the step that wrote each one:
+    // the ASSEMBLED plate on assemble_done (the same signal track waits on, so
+    // image QC runs CONCURRENTLY with tracking), and the tracking store on
+    // track_done. Neither extends the critical path ahead of itself.
     //
     // A QC verdict cannot fail the pipeline: `imaging-qc gate` exits 0 whether
-    // positions pass or fail, recording the verdict in the store's own
+    // positions pass or fail, recording the verdict in each store's own
     // `tables/qc/` tables and a QC_SUMMARY line. Only a broken config or a
-    // genuine compute error exits non-zero, and those are the ones that should
-    // stop a run.
+    // genuine compute error exits non-zero, which is what should stop a run.
     if (qc_on) {
-        qc_input = Channel.of(tuple(assemble_output, params.qc_config))
-            .combine(assemble_done.done)
-            .map { z, cfg, done -> tuple(z, cfg) }
+        // Tab label is the step directory, which is unique per store by
+        // construction — the spec requires unique labels.
+        def qc_stores = []
+        if (params.qc_config) {
+            qc_stores << [label: layout.assemble, zarr: assemble_output,
+                          config: params.qc_config, trigger: assemble_done.done]
+        }
+        if (params.qc_track_config) {
+            qc_stores << [label: layout.track, zarr: track_output,
+                          config: params.qc_track_config, trigger: track_done.done]
+        }
 
-        qc = qc_stage_wf(qc_input)
-        qc_report_wf(qc.done)
+        // Written at launch, before any QC task runs: everything in it is known
+        // from the layout above, so a malformed spec fails now rather than after
+        // hours of compute.
+        def report_dir = params.qc_report_dir ?: "${out}/qc/report"
+        def spec = qc_report_spec(qc_stores, "${out}/qc/report_spec.yaml", "QC — ${ds}")
+
+        // Each store waits only on its own producer, so they QC independently.
+        qc_inputs = Channel.empty()
+        qc_stores.each { st ->
+            def one = Channel.of(tuple(st.zarr, st.config))
+                .combine(st.trigger)
+                .map { z, cfg, done -> tuple(z, cfg) }
+            qc_inputs = qc_inputs.mix(one)
+        }
+
+        qc = qc_stage_wf(qc_inputs)
+        qc_report_wf(qc.done, spec, report_dir)
     }
 }

@@ -14,15 +14,14 @@
 //       --stages_manifest stages.csv --output <experiment-dir> -resume
 //
 // Manifest is a CSV with header `zarr_path,config_path`; each row is one QC
-// stage (one config on one zarr). Rows run in parallel, and each store gets its
-// own report beside it (`<store>_report/`).
+// stage (one config on one zarr). Rows run in parallel and every store becomes a
+// tab of ONE report at `<output>/qc/report`.
 //
 
 nextflow.enable.dsl = 2
 
-include { qc_stage_wf }        from './modules/qc'
-include { qc_report_wf }       from './modules/qc'
-include { check_environment }  from './modules/common'
+include { qc_stage_wf; qc_report_wf; qc_report_spec } from './modules/qc'
+include { check_environment }                             from './modules/common'
 
 
 workflow {
@@ -42,9 +41,26 @@ workflow {
         .splitCsv(header: true)
         .map { row -> tuple(row.zarr_path.trim(), row.config_path.trim()) }
 
-    qc = qc_stage_wf(plan_inputs)
+    // The manifest is read a SECOND time here, directly rather than through the
+    // channel above, because the report spec is written at launch — before any
+    // task runs — and a channel's contents are not available then. One CSV, two
+    // readers, no ordering dependency between them.
+    def rows = file(params.stages_manifest).readLines()
+        .findAll { it.trim() && !it.startsWith('zarr_path') }
+        .collect { it.split(',').collect { c -> c.trim() } }
 
-    // Per-store reports: each row's report follows its own store as soon as that
-    // store finalizes, so one slow store does not hold the others' reports back.
-    qc_report_wf(qc.done)
+    // Label each tab by the store's parent directory (`5-assemble`, `4-track`),
+    // which is what distinguishes stores of one dataset; fall back to the store
+    // name when two stores would otherwise collide.
+    def labels = rows.collect { file(it[0]).parent.name }
+    def qc_stores = [rows, labels].transpose().collect { row, label ->
+        [label: labels.count(label) > 1 ? "${label}/${file(row[0]).simpleName}" : label,
+         zarr: row[0], config: row[1]]
+    }
+
+    def report_dir = params.qc_report_dir ?: "${params.output}/qc/report"
+    def spec = qc_report_spec(qc_stores, "${params.output}/qc/report_spec.yaml", "QC report")
+
+    qc = qc_stage_wf(plan_inputs)
+    qc_report_wf(qc.done, spec, report_dir)
 }
