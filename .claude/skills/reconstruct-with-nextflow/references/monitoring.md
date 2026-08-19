@@ -166,7 +166,7 @@ to Slack via `biahub nf notify` (`nextflow/modules/notify.nf`):
 |---|---|---|
 | run start | dataset, operator, pipeline, position count, the 6 step names, input, output, host, `max_positions` if capped | no |
 | each step completes | dataset, step name, `[n/6]`, output path | no |
-| run end | succeeded / cached / preempted / failed, wall time, assembled path | **yes** |
+| run end | succeeded / cached / restarted (with SLURM's cause) / failed, wall time, assembled path | **yes** |
 | run end, failed | the error message, plus a truncated `errorReport` tail | **yes** |
 
 Only the run-end message @-mentions the operator, so a ping always means "this
@@ -287,7 +287,10 @@ bash <SKILL>/templates/notify.sh --level error --ping \
 It takes `--level info|good|warn|error` and `--ping`, and delegates to
 `biahub nf notify`. Also use it for hand-rolled reruns that bypass Nextflow.
 
-Do not notify on individual preemptions; they are routine.
+Do not notify on individual preemptions; they are routine. The run-end message
+already reports them as `restarted: N`, with the cause from `sacct` — a restarted
+attempt was retried and is not a failure, and `sacct` is what distinguishes
+preemption from a wall-time kill, since both exit 143.
 
 Alongside Slack, surface the same information in the conversation, since the user
 may be watching the terminal instead.

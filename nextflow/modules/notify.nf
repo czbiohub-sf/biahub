@@ -130,48 +130,87 @@ def notify_run_start(dataset, pipeline, n_positions, steps) {
     ])
 }
 
-// Classify every failed ATTEMPT recorded in trace.txt as preemption or real failure.
+// Ask SLURM what actually killed each attempt.
 //
-// workflow.stats cannot do this: it reports failedCount and retriesCount with no
-// exit codes, so a position that was preempted once and then succeeded shows up as
-// "failed: 1, retries: 1" — which reads as a broken run when nothing went wrong.
-// The exit code is the only thing that distinguishes them, and trace.txt has it.
+// The exit code alone CANNOT say. 143 is SIGTERM, which SLURM sends both when it
+// reclaims a job on the `preempted` partition and when a job hits its time limit
+// — nextflow.config says as much ("SIGTERM 143 (preempt/timeout)"). Calling every
+// 143 a preemption would send the reader after the wrong cause: preemption needs
+// no action, a time limit needs more --time. sacct knows the difference, and
+// trace.txt hands us the SLURM job id in native_id.
 //
-// Same rule the pipeline itself uses to decide whether to retry (errorStrategy in
-// nextflow.config): 130..145 is "128 + signal", i.e. the job was killed rather
-// than the code failing — SIGTERM 143 for preemption or a time limit, SIGKILL 137
-// for OOM, SIGUSR2 140 for Nextflow's near-limit warning. Anything else is the
-// program itself exiting non-zero.
-//
-// trace.txt is complete and readable by the time onComplete runs (verified). Its
-// path is set by `trace.file` in nextflow.config; returns null if it cannot be
-// read, and the caller then falls back to the raw counts.
-def signal_label(code) {
-    // Name each signal for what it actually is. 143 = SIGTERM, what SLURM sends
-    // when it reclaims a job on the `preempted` partition. 137 = SIGKILL, in
-    // practice an OOM kill. 140 = SIGUSR2, Nextflow's own near-the-time-limit
-    // warning. Anything else in the range is named by its code rather than
-    // guessed at — reporting an OOM as "preempted" would be its own lie.
-    if (code == 143) return 'preempted'
-    if (code == 137) return 'oom-killed'
-    if (code == 140) return 'time-limit'
-    return "killed (exit ${code})".toString()
+// One batched query for every restarted attempt. Returns a label -> count map, or
+// null when sacct cannot answer — no accounting records, not a SLURM run, or the
+// JVM shutting down under us — in which case the caller falls back to exit codes.
+// -X reports the allocation only, without the .batch/.extern sub-steps that would
+// otherwise double-count.
+def restart_causes(job_ids) {
+    if (!job_ids) {
+        return null
+    }
+    try {
+        def proc = ['sacct', '-X', '-n', '-P', '-o', 'JobID,State',
+                    '-j', job_ids.join(',')].execute()
+        def out = new StringBuffer()
+        def err = new StringBuffer()
+        proc.consumeProcessOutput(out, err)
+        proc.waitFor(15, java.util.concurrent.TimeUnit.SECONDS)
+
+        def causes = [:]
+        out.toString().readLines().each { line ->
+            def field = line.split('\\|')
+            if (field.size() > 1) {
+                def label = sacct_label(field[1])
+                causes[label] = (causes[label] ?: 0) + 1
+            }
+        }
+        return causes ?: null
+    }
+    catch (Throwable t) {
+        return null
+    }
 }
 
+def sacct_label(state) {
+    // "CANCELLED by 12345" carries the canceller's uid, so keep the first word.
+    def name = state.trim().split(/\s+/)[0]
+    if (name == 'PREEMPTED')     return 'preempted'
+    if (name == 'TIMEOUT')       return 'timed out'
+    if (name == 'OUT_OF_MEMORY') return 'out of memory'
+    if (name == 'NODE_FAIL')     return 'node failure'
+    return name.toLowerCase().replace('_', ' ')
+}
+
+// Split every failed ATTEMPT in trace.txt into "restarted" and "failed".
+//
+// workflow.stats cannot: it reports failedCount and retriesCount with no exit
+// codes, so a position that was preempted once and then succeeded reads as
+// "failed: 1, retries: 1" — as if the run were broken when nothing went wrong.
+//
+// Same rule the pipeline uses to decide whether to retry (errorStrategy in
+// nextflow.config): 130..145 is "128 + signal", i.e. the job was killed rather
+// than the code failing. Those attempts were restarted, so they are not failures.
+//
+// trace.txt is complete and readable by the time onComplete runs (verified); its
+// path comes from `trace.file` in nextflow.config. Returns null if it cannot be
+// read, and the caller then reports the raw counts instead.
 def failed_attempts() {
     try {
         def trace = new File("${params.output}/nextflow/trace.txt")
         if (!trace.exists()) {
             return null
         }
-        def outcome = [killed: [:], failed: 0]
+        def outcome = [restarted: 0, failed: 0, exits: [:], job_ids: []]
         trace.readLines().drop(1).each { line ->
-            def field = line.split('\t')
+            def field = line.split('\\t')
             if (field.size() > 5 && field[4] == 'FAILED') {
                 def code = field[5].isInteger() ? field[5] as int : -1
                 if (code >= 130 && code <= 145) {
-                    def label = signal_label(code)
-                    outcome.killed[label] = (outcome.killed[label] ?: 0) + 1
+                    outcome.restarted = outcome.restarted + 1
+                    outcome.exits[code] = (outcome.exits[code] ?: 0) + 1
+                    if (field[2] && field[2].isInteger()) {
+                        outcome.job_ids += field[2]
+                    }
                 }
                 else {
                     outcome.failed = outcome.failed + 1
@@ -183,6 +222,16 @@ def failed_attempts() {
     catch (Exception e) {
         return null
     }
+}
+
+// "restarted: 3 (2 preempted, 1 out of memory)", or the exit codes when sacct
+// could not tell us.
+def restarted_line(outcome) {
+    def causes = restart_causes(outcome.job_ids)
+    def detail = causes
+        ? causes.sort { -it.value }.collect { label, n -> "${n} ${label}" }.join(', ')
+        : outcome.exits.sort().collect { code, n -> "exit ${code}×${n}" }.join(', ')
+    return "restarted: ${outcome.restarted} (${detail})".toString()
 }
 
 // Report the finished run, pinging the operator.
@@ -205,17 +254,17 @@ def notify_run_end(dataset, pipeline, wf) {
         lines += ["failed:    ${stats.failedCount}", "retries:   ${stats.retriesCount}"]
     }
     else {
-        // One line per kind of kill, e.g. "preempted: 3". Every one of these was
-        // retried, so they are not failures and must not be counted as any.
-        outcome.killed.sort().each { label, count ->
-            lines += ["${(label + ':').padRight(10)} ${count}".toString()]
+        // Restarted attempts were retried, so they are not failures and must
+        // not be counted as any.
+        if (outcome.restarted) {
+            lines += [restarted_line(outcome)]
         }
         if (outcome.failed) {
             lines += ["failed:    ${outcome.failed}".toString()]
         }
-        // A run that died with nothing but kills burnt through maxRetries. Say so,
-        // or the reader sees a FAILED title with no failures listed under it.
-        if (!wf.success && !outcome.failed && outcome.killed) {
+        // A run that died with nothing but restarts burnt through maxRetries. Say
+        // so, or the reader sees a FAILED title with no failures listed under it.
+        if (!wf.success && !outcome.failed && outcome.restarted) {
             lines += ["note:      retries exhausted, no code-level failure".toString()]
         }
     }
