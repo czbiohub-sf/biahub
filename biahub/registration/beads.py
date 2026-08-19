@@ -718,6 +718,44 @@ def repair_flagged_timepoints(
     n_t = len(score_col)
 
     flagged, stats = select_flagged(score_col, "Repair pass", settings.max_timepoints)
+
+    # Freeze the flag list per pass and journal every attempt incrementally, so an
+    # interrupted run RESUMES the same work instead of re-deciding it. Without this,
+    # each resume re-flags against the partially repaired score distribution -- the
+    # adaptive line rises as repairs land, so every round discovers a new tier and the
+    # pass never converges -- and re-attempts timepoints that already failed, because
+    # repair_log.json is only written at the END of a completed pass. Measured on 09_12
+    # (848 t): three multi-day rounds, each redoing failed attempts at ~90 s each.
+    # Discovering the next tier is still possible, but as an explicit SECOND pass after
+    # this one completes, not as an implicit moving target inside one run.
+    flag_path = output_transforms_path.parent / "repair_flagged.json"
+    attempts_path = output_transforms_path.parent / "repair_attempts.jsonl"
+    if flag_path.exists():
+        frozen = json.loads(flag_path.read_text())
+        flagged_full = [t for t in frozen["flagged"] if t < n_t]
+        stats = frozen.get("stats", stats)
+        click.echo(
+            f"Repair pass: resuming the frozen flag list "
+            f"({len(flagged_full)} timepoints) from {flag_path.name}"
+        )
+    else:
+        flagged_full = list(flagged)
+        if flagged_full:
+            flag_path.write_text(json.dumps({"flagged": flagged_full, "stats": stats}))
+    attempted = set()
+    if attempts_path.exists():
+        attempted = {
+            json.loads(line)["t"]
+            for line in attempts_path.read_text().splitlines()
+            if line.strip()
+        }
+    flagged = [t for t in flagged_full if t not in attempted]
+    if attempted:
+        click.echo(
+            f"Repair pass: {len(attempted & set(flagged_full))} of "
+            f"{len(flagged_full)} flagged timepoints already attempted; "
+            f"{len(flagged)} remaining"
+        )
     if not flagged:
         return transforms, scores
 
@@ -745,7 +783,10 @@ def repair_flagged_timepoints(
             translation_spread = np.maximum(
                 1.4826 * np.median(np.abs(good_tr - np.median(good_tr, axis=0)), axis=0), 1.0
             )
-    flagged_set = set(flagged)
+    # Neighbour-seeding must distrust EVERY frozen-flagged timepoint, including ones this
+    # resume is skipping as already-attempted -- an attempted-but-unrescued neighbour is
+    # still not a transform to seed from.
+    flagged_set = set(flagged_full)
     good_median = float(np.nanmedian(score_col))
     log = []
 
@@ -922,6 +963,10 @@ def repair_flagged_timepoints(
                 "candidates_tried": [n for n, _ in candidates],
             }
         )
+        # Journal the attempt IMMEDIATELY: this line is what lets an interrupted run
+        # resume without redoing the ~90 s attempt, successful or not.
+        with attempts_path.open("a") as _f:
+            _f.write(json.dumps(log[-1]) + "\n")
 
     improved = sum(1 for r in log if r["after"] > r["before"] + 1e-9)
     unrescued = sorted(r["t"] for r in log if r["after"] <= r["before"] + 1e-9)
