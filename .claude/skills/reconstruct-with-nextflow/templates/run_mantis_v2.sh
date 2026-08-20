@@ -99,6 +99,7 @@ mkdir -p "${OUTPUT_DIR}/nextflow"
     echo "branch    ${BIAHUB_BRANCH}"
     echo "commit    ${BIAHUB_COMMIT}"
     echo "host      $(hostname)"
+    echo "slack_id  ${BIAHUB_SLACK_ID:-<unset>}"
     echo "nextflow  $(nextflow -version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
     if [[ -n "${BIAHUB_DIRTY}" ]]; then
         echo "dirty     YES — not reproducible from the commit above:"
@@ -117,6 +118,20 @@ if [[ -n "${BIAHUB_DIRTY}" ]]; then
 fi
 if [[ "${BIAHUB_BRANCH}" != "main" ]]; then
     echo "  WARNING: not on main" >&2
+fi
+
+# Slack notifications. The pipeline posts run start, each step's completion, and
+# run end via `biahub nf notify`; both variables are read from this shell's
+# environment (sbatch exports it to every task), so nothing needs passing on the
+# nextflow command line. Missing either one is not an error — messages fall back
+# to printing — so warn and continue.
+#   export BIAHUB_SLACK_WEBHOOK="https://hooks.slack.com/services/..."   # credential
+#   export BIAHUB_SLACK_ID="U024BE7LH"    # Slack profile -> Copy member ID
+# Put both in ~/.bashrc, never in the repo or in a config.
+if [[ -z "${BIAHUB_SLACK_WEBHOOK:-}" ]]; then
+    echo "  WARNING: BIAHUB_SLACK_WEBHOOK unset — no Slack notifications" >&2
+elif [[ -z "${BIAHUB_SLACK_ID:-}" ]]; then
+    echo "  WARNING: BIAHUB_SLACK_ID unset — run-end message will not @-mention you" >&2
 fi
 
 # Nextflow 26.04 switches to "agent mode" — one static `[PROCESS …]` line per task
