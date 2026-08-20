@@ -108,10 +108,11 @@ constraint-dependencies = ["wasmtime<48"]
 
 [tool.uv.sources]
 # Private repo, no PyPI release; ssh is the protocol a Biohub checkout is already
-# authenticated for. The rev is the merge commit of imaging-qc-pipeline#199,
-# which relaxed that project's `iohub==0.3.2` to a floor so both can share one
-# environment — biahub needs iohub>=0.3.11 for the gapped-shard-write fix.
-imaging_qc_pipeline = { git = "ssh://git@github.com/czbiohub-sf/imaging-qc-pipeline", rev = "062f3b3402cc4fdd46b14b8585744ceab84c1fc7" }
+# authenticated for. The rev is a commit on imaging-qc's main, currently the tip
+# of its Phase 22c simplification. That project relaxed `iohub==0.3.2` to a floor
+# in #199 so both can share one environment — biahub needs iohub>=0.3.11 for the
+# gapped-shard-write fix.
+imaging_qc_pipeline = { git = "ssh://git@github.com/czbiohub-sf/imaging-qc-pipeline", rev = "bd3e9831e671adc717ca735e515e98d6450c66ba" }
 
 [tool.hatch.metadata]
 allow-direct-references = true
