@@ -59,7 +59,7 @@ track = ["ultrack>=0.8"]
 # PyQt6>=6.10 does not provide wheels
 gui = ["napari[pyqt6]", "PyQt6<6.10", "napari-animation"]
 
-stain = ["cytoland"]
+stain = ["cytoland==0.1.0a0"]
 
 all = ["biahub[segment,track,gui,stain]"]
 
@@ -86,10 +86,6 @@ biahub = "biahub.cli.main:cli"
 # when resolving build-system requirements such as iohub's hatchling /
 # uv-dynamic-versioning chain, which pulls in packaging>=24.2.
 index-strategy = "unsafe-best-match"
-
-[tool.uv.sources]
-# No PyPI release yet
-cytoland = { git = "https://github.com/mehta-lab/VisCy", subdirectory = "applications/cytoland", rev = "4b62365c0df25929bffc7f01b3bb2d1c11d69cce" }
 
 [tool.hatch.metadata]
 allow-direct-references = true
