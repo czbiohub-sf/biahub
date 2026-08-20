@@ -245,7 +245,7 @@ def restarted_line(outcome) {
 // Called from a single `workflow.onComplete`, never from onComplete AND onError:
 // onError fires in ADDITION to onComplete, so implementing both double-posts
 // every failure.
-def notify_run_end(dataset, pipeline, wf) {
+def notify_run_end(dataset, pipeline, wf, assembled = null) {
     def stats = wf.stats
     def lines = [
         "pipeline:  ${pipeline}",
@@ -284,7 +284,11 @@ def notify_run_end(dataset, pipeline, wf) {
             // messages use — this is the one that pings, so it should not look
             // identical to six that do not. Reads 🚀 start, ✅ per step, 🏁 done.
             '--title', ":checkered_flag: ${dataset} — reconstruction complete",
-            '--detail', "${summary}\nassembled: ${params.output}/5-assemble/${dataset}.zarr",
+            // The assembled store's path is PASSED IN, not built here: its
+            // directory number is a position among the steps that ran, and the
+            // step is optional, so there is no constant to write down. Null when
+            // assemble was not performed, and then the line is simply absent.
+            '--detail', assembled ? "${summary}\nassembled: ${assembled}" : summary,
         ])
         return
     }

@@ -1,9 +1,9 @@
 """Normalize channel names on the assembled plate.
 
 Implements the convention in czbiohub-sf/biahub#291. Run ONCE, after
-``5-assemble`` completes, from the directory holding the store::
+assemble completes, from the directory holding the store::
 
-    cd <OUTPUT>/5-assemble
+    cd <OUTPUT>/<N>-assemble   # 4-assemble on a standard run
     DATASET=2026_07_14_A549_MAP4_ZIKV <BIAHUB>/.venv/bin/python rename_channels.py
 
 Mapping (first match wins):
@@ -34,7 +34,7 @@ plate would be correct the first time), and PRs #260 / #250 carry a
 ``rename-channels`` CLI and Nextflow subworkflow. Neither has landed on main —
 check before running this by hand.
 
-ORDERING: this runs after the whole Nextflow pipeline, so ``4-track`` reads the
+ORDERING: this runs after the whole Nextflow pipeline, so tracking reads the
 assembled plate under its PRE-rename channel names. Any channel a track config
 references must exist under the un-renamed name at track time.
 """

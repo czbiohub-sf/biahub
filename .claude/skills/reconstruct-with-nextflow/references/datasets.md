@@ -47,8 +47,8 @@ Which root depends on the dataset family:
 
 | family | cues in the name | output root | deliverable |
 |---|---|---|---|
-| zebrafish / neuromast / dynatrack | `dynatrack`, `hpf`, `dpf`, `neuromast`, `cldnb`, `she`, `myo6b`, `zebrafish` | `/hpc/projects/tlg2_mantis/<DATASET>` | `5-assemble` — **no tracking**, see `caveats.md` §4 |
-| cell line / organelle / infection | `A549`, `HEK`, `iPSC`, organelle genes (`SEC61B`, `TOMM20`, `G3BP1`, `MAP4`, `CAAX`, `H2B`), viruses (`DENV`, `ZIKV`, `HSV1`) | `/hpc/projects/intracellular_dashboard/organelle_dynamics/<DATASET>` | `5-assemble` + `4-track` |
+| zebrafish / neuromast / dynatrack | `dynatrack`, `hpf`, `dpf`, `neuromast`, `cldnb`, `she`, `myo6b`, `zebrafish` | `/hpc/projects/tlg2_mantis/<DATASET>` | assemble (`4-assemble`) — **no tracking**, see `caveats.md` §4 |
+| cell line / organelle / infection | `A549`, `HEK`, `iPSC`, organelle genes (`SEC61B`, `TOMM20`, `G3BP1`, `MAP4`, `CAAX`, `H2B`), viruses (`DENV`, `ZIKV`, `HSV1`) | `/hpc/projects/intracellular_dashboard/organelle_dynamics/<DATASET>` | assemble + track (`4-assemble`, `5-track`) |
 | instrument QC / calibration | `argolight`, `beads`, `psf`, `alignment`, `illumination`, `fluorescein`, `first_light`, `mantis_v2_*` | *no default* — ask. These are usually not reconstructed. | — |
 
 Neighbouring roots that exist and are **not** the default target — do not use
@@ -70,8 +70,8 @@ layout is defined once in `nextflow/mantis-v2.nf` (`directory_layout()`):
 ├── 1-deskew/<DATASET>.zarr
 ├── 2-reconstruct/<DATASET>.zarr
 ├── 3-virtual-stain/<DATASET>.zarr
-├── 4-track/<DATASET>.zarr          # A549 only — not run for neuromast
-├── 5-assemble/<DATASET>.zarr       # the deliverable
+├── 4-assemble/<DATASET>.zarr       # the deliverable
+├── 5-track/<DATASET>.zarr          # A549 only — not run for neuromast
 ├── qc/
 │   ├── report/index.html           # one report, one tab per QC'd store
 │   └── report_spec.yaml            # written at launch, before any QC task
@@ -110,5 +110,5 @@ layout — new runs put the step dirs directly under the project root.
 | `2026_07_24_dynatrack` | `/hpc/projects/tlg2_mantis/` | most recent zebrafish run; has `build_plate.py` |
 | `2026_06_25_dynatrack_48hpf` | `/hpc/projects/tlg2_mantis/` | canonical `build_plate_48hpf.py` with corrupt-metadata recovery |
 
-Check the run actually succeeded (a populated `5-assemble/` and a clean tail in
+Check the run actually succeeded (a populated assemble directory and a clean tail in
 `.nextflow.log`) before treating it as a reference.

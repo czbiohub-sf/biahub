@@ -215,7 +215,7 @@ workflow qc_stage_wf {
 //
 // `tabs` is a list of maps: [label: <tab label>, zarr: <store>, config: <stage config>].
 // Labels must be unique within a spec; a step directory name gives that for free,
-// and it is also what identifies the tab to a reader — "5-assemble", "4-track" —
+// and it is also what identifies the tab to a reader — "4-assemble", "5-track" —
 // rather than the stage number, which is imaging-qc's internal table namespace.
 def qc_report_spec(tabs, spec_path, title) {
     def spec = file(spec_path)

@@ -10,7 +10,10 @@
 # below. Keep it there: it is the run's provenance record of the exact command.
 #
 # --output is the project root, so each step writes a sibling directory:
-#   0-flatfield/ 1-deskew/ 2-reconstruct/ 3-virtual-stain/ 4-track/ 5-assemble/
+#   0-flatfield/ 1-deskew/ 2-reconstruct/ 3-virtual-stain/ 4-assemble/ 5-track/
+# The number is the step's POSITION among the steps this run performs, so a run
+# without tracking ends at 4-assemble and one that also skipped a step earlier
+# shifts everything after it down.
 # The work dir defaults to <output>/nextflow/work; override with `-work-dir`.
 #
 # Any extra arguments are forwarded to nextflow, e.g.

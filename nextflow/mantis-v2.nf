@@ -59,23 +59,46 @@ include { notify_step; notify_run_start; notify_run_end } from './modules/notify
 // Output directory layout for the reconstruction steps — single source of
 // truth. Each entry is a subdirectory under params.output where that step
 // writes its <dataset>.zarr. The pipeline's raw input/output live in the
-// workflow body, not here (input may not even be a zarr). A Dragonfly pipeline
-// would define its own map; reordering or renaming a step is a one-line edit.
+// workflow body, not here (input may not even be a zarr).
+//
+// THE NUMBER IS A POSITION, NOT A NAME. It is the step's index among the steps
+// THIS RUN PERFORMS, so it always describes the order a reader is looking at:
+// skip tracking and assemble is `4-assemble`, and a pipeline that skips
+// flat-field or deskew numbers everything after it accordingly instead of
+// leaving a hole. That is why the numbers appear nowhere in the source — only
+// the order does, and reordering a step is still a one-line edit.
+//
+// The trade-off, deliberately taken: a store's directory name now depends on
+// which steps ran, so `4-assemble` from a neuromast run and `4-assemble` from an
+// A549 run are the same step, but an older A549 run on disk says `5-assemble`
+// because tracking used to be numbered ahead of it. Numbering by execution order
+// is what makes the assembled store the SAME name in both families; the previous
+// fixed map gave it two different names depending on whether an unrelated later
+// step ran.
 //
 // Defined as a function rather than a bare top-level assignment: Nextflow's DSL2
 // parser only allows declarations (include/process/workflow/function) at script
 // scope, so a `DIRECTORY_LAYOUT = [...]` statement fails to compile. The workflow
-// body calls directory_layout() once to get the map.
-def directory_layout() {
-    return [
-        // convert    : '0-convert',     // first step when raw input isn't zarr
-        flat_field    : '0-flatfield',
-        deskew        : '1-deskew',
-        reconstruct   : '2-reconstruct',
-        virtual_stain : '3-virtual-stain',
-        track         : '4-track',
-        assemble      : '5-assemble',
+// body calls step_directories() once to get the map.
+def step_directories(performed) {
+    // Steps that write a directory, in EXECUTION order. Order here is the only
+    // thing that decides numbering; the numbers themselves are not written down.
+    def order = [
+        // convert    : 'convert',      // first step when raw input isn't zarr
+        flat_field    : 'flatfield',
+        deskew        : 'deskew',
+        reconstruct   : 'reconstruct',
+        virtual_stain : 'virtual-stain',
+        assemble      : 'assemble',
+        track         : 'track',
     ]
+    def layout = [:]
+    order.each { key, name ->
+        if (performed.contains(key)) {
+            layout[key] = "${layout.size()}-${name}"
+        }
+    }
+    return layout
 }
 
 
@@ -100,9 +123,9 @@ workflow {
     // how a run asks for the step; omitting it is how a run declines, with no
     // placeholder to author and no output to discard.
     //
-    // Skipping a step does NOT renumber the others: directory_layout() is still
-    // the single source of truth, so `5-assemble` is `5-assemble` whether or not
-    // track runs, and paths stay comparable across datasets.
+    // Skipping a step DOES renumber the ones after it: the number is a position
+    // among the steps performed, so a neuromast run's assembled store is
+    // `4-assemble` where an A549 run also has `5-track` after it.
     def assemble_on = params.concatenate_config as boolean
     def track_on    = params.track_config as boolean
     def qc_image_on = params.qc_config as boolean
@@ -126,9 +149,15 @@ workflow {
     // activated. `imaging-qc` is only required when QC is actually wired in.
     check_environment(qc_on ? ['biahub', 'viscy', 'imaging-qc'] : ['biahub', 'viscy'])
 
-    def ds     = dataset_name()
-    def out    = params.output
-    def layout = directory_layout()
+    def ds  = dataset_name()
+    def out = params.output
+
+    // The steps this run performs, in execution order — the list the directory
+    // numbering is derived from. Reconstruction proper is always in it.
+    def performed = ['flat_field', 'deskew', 'reconstruct', 'virtual_stain']
+    if (assemble_on) performed << 'assemble'
+    if (track_on)    performed << 'track'
+    def layout = step_directories(performed)
 
     collect_positions(params.input)
     all_positions = collect_positions.out
@@ -182,9 +211,8 @@ workflow {
     // channels/crops come from each source is set by the concatenate config, not
     // here. The config's concat_data_paths are placeholders — the subworkflow
     // injects the three source paths via --concat-data-paths (resolve mode).
-    assemble_output = "${out}/${layout.assemble}/${ds}.zarr"
-
     if (assemble_on) {
+        assemble_output = "${out}/${layout.assemble}/${ds}.zarr"
         assemble_done = assemble_wf(
             deskew_output,
             reconstruct_output,
@@ -208,9 +236,8 @@ workflow {
     // assemble is verified. To go back to the parallel wiring, point track_input
     // at reconstruct_output, track_input_images at virtual_stain_output, and gate
     // on virtual_stain_done.
-    track_output = "${out}/${layout.track}/${ds}.zarr"
-
     if (track_on) {
+        track_output = "${out}/${layout.track}/${ds}.zarr"
         track_done = track_wf(all_positions, assemble_output, assemble_output, track_output,
                               params.track_config, assemble_done.done)
     }
@@ -336,6 +363,6 @@ workflow {
     // the stats read at teardown are still the final ones.
     def wf = workflow
     workflow.onComplete {
-        notify_run_end(ds, 'mantis_v2', wf)
+        notify_run_end(ds, 'mantis_v2', wf, assemble_on ? assemble_output : null)
     }
 }

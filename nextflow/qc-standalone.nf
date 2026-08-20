@@ -49,7 +49,7 @@ workflow {
         .findAll { it.trim() && !it.startsWith('zarr_path') }
         .collect { it.split(',').collect { c -> c.trim() } }
 
-    // Label each tab by the store's parent directory (`5-assemble`, `4-track`),
+    // Label each tab by the store's parent directory (`4-assemble`, `5-track`),
     // which is what distinguishes stores of one dataset; fall back to the store
     // name when two stores would otherwise collide.
     def labels = rows.collect { file(it[0]).parent.name }

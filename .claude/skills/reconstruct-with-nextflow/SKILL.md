@@ -165,9 +165,16 @@ Do not run anything yet. Show the user:
    | A549 / cell-line / organelle | assemble, track, QC (image + tracking) |
    | neuromast / zebrafish / dynatrack | assemble, QC (image) — **no tracking** |
 
-   For neuromast/zebrafish say that `5-assemble` is the deliverable and that
-   tracking is simply not run — there is no `4-track` by-product any more
+   For neuromast/zebrafish say that the assembled store is the deliverable and
+   that tracking is simply not run — there is no tracking by-product any more
    (`caveats.md` §4).
+
+   **State the directory numbers this run will produce.** The number is the
+   step's position among the steps performed, not a fixed label, so a neuromast
+   run writes `4-assemble` as its last directory and an A549 run writes
+   `4-assemble` then `5-track`. Older A549 runs on disk say `5-assemble` /
+   `4-track`, from when the numbers were fixed — say so if the user is comparing
+   against one.
 7. Known caveats that apply to this dataset.
 8. Rough wall-time and that `-resume` is on.
 9. Whether Slack notifications are on, and who will be @-mentioned at run end.
@@ -284,9 +291,10 @@ Restarts are always `bash ./run_mantis_v2.sh` — the script passes `-resume`.
 1. Normalize channel names on the assembled plate with
    `templates/rename_channels.py` (idempotent; `caveats.md` §2 — check first
    whether a `rename-channels` CLI has landed on main, making this obsolete).
-2. Verify `5-assemble/<DATASET>.zarr` opens with iohub; report shape, channels,
-   size on disk. For neuromast/zebrafish this is the deliverable; report
-   `4-track` only as a discarded by-product.
+2. Verify the assembled store (`<N>-assemble/<DATASET>.zarr`, `4-assemble`
+   unless earlier steps were skipped) opens with iohub; report shape, channels,
+   size on disk. This is the deliverable for every family; tracking, when it
+   ran, is reported beside it rather than as a by-product.
 3. If QC ran, report its verdict: the `QC_SUMMARY` line per store from the
    pipeline log (`pass=`/`fail=`/`gates_fail=`), and point at the report at
    `<OUTPUT>/qc/report/index.html` — one page, one tab per QC'd store. A gate
