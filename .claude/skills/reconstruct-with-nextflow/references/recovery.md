@@ -56,8 +56,8 @@ plain retries fail identically, forever.
 ### Step 1 — rerun with `-resume` first
 
 **This is the expected fix, and usually the only one needed.**
-[iohub#455](https://github.com/czbiohub-sf/iohub/pull/455) (in the pinned
-iohub) replaces a torn shard instead of reading it back and records per-unit
+[iohub#455](https://github.com/czbiohub-sf/iohub/pull/455) (in iohub ≥ 0.3.11)
+replaces a torn shard instead of reading it back and records per-unit
 progress in a `.iohub-progress/` *sibling* of the output store, so a retry
 recomputes only the unfinished units.
 

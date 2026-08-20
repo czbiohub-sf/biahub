@@ -48,6 +48,7 @@ include { virtual_stain_wf } from './modules/virtual_stain'
 include { track_wf } from './modules/tracking'
 include { assemble_wf } from './modules/assembly'
 include { qc_stage_wf; qc_report_wf; qc_report_spec } from './modules/qc'
+include { notify_step; notify_run_start; notify_run_end } from './modules/notify'
 
 // Output directory layout for the reconstruction steps — single source of
 // truth. Each entry is a subdirectory under params.output where that step
@@ -68,6 +69,23 @@ def directory_layout() {
         virtual_stain : '3-virtual-stain',
         track         : '4-track',
         assemble      : '5-assemble',
+    ]
+}
+
+
+// The reconstruction steps, in the order they run, as they are named in Slack.
+// One list so the run-start announcement cannot disagree with the per-step
+// messages. A function rather than a bare assignment for the same reason
+// directory_layout() is one: Nextflow's DSL2 parser allows only declarations at
+// script scope.
+def reconstruction_steps() {
+    return [
+        'flat-field',
+        'deskew',
+        'phase reconstruction',
+        'virtual staining',
+        'assemble',
+        'track',
     ]
 }
 
@@ -215,5 +233,63 @@ workflow {
 
         qc = qc_stage_wf(qc_inputs)
         qc_report_wf(qc.done, spec, report_dir)
+    }
+
+    // ----- Notifications ----------------------------------------------------
+    // One Slack message as each step finishes, plus the run-start announcement.
+    // Step ORDER and labels live here with the rest of the wiring, not in
+    // notify.nf — same reason the layout map does: this file owns the order steps
+    // run in. reconstruction_steps() is the only list of labels, so the announced
+    // list cannot drift from what the per-step messages actually say.
+    //
+    // The six done channels are MIXED into one and notify_step is invoked ONCE:
+    // a process can only be invoked a single time per workflow context, so six
+    // separate notify_step(...) calls would not compile.
+    //
+    // Nothing here reads a position count. It is the same for every step, so
+    // saying it six times adds nothing; the run-start message reports it once.
+    // That also removes a trap: assemble_wf's `done` carries a single path
+    // String rather than the collected position list, and `('a/b.zarr' as List)`
+    // explodes into characters.
+    steps = reconstruction_steps()
+    n_steps = steps.size()
+
+    notify_events = ff_done.done      .map { [steps[0], ff_output,            "1/${n_steps}"] }
+        .mix( deskew_done.done        .map { [steps[1], deskew_output,        "2/${n_steps}"] } )
+        .mix( reconstruct_done.done   .map { [steps[2], reconstruct_output,   "3/${n_steps}"] } )
+        .mix( virtual_stain_done.done .map { [steps[3], virtual_stain_output, "4/${n_steps}"] } )
+        .mix( assemble_done.done      .map { [steps[4], assemble_output,      "5/${n_steps}"] } )
+        .mix( track_done.done         .map { [steps[5], track_output,         "6/${n_steps}"] } )
+
+    notify_step(notify_events, ds)
+
+    // Announce the run once the position count is known. all_positions carries a
+    // single collected list, so this fires exactly once; registering the
+    // subscribe here rather than earlier is fine because the whole body is graph
+    // construction and nothing executes until it finishes.
+    all_positions.subscribe { positions ->
+        notify_run_start(ds, 'mantis_v2', positions.size(), steps)
+    }
+
+    // Report the finished run to Slack, with an @-mention.
+    //
+    // onComplete ONLY — onError fires in ADDITION to onComplete, so handling
+    // both would double-post every failure. notify_run_end branches on
+    // workflow.success instead.
+    //
+    // Registered inside the workflow body, not at script scope: Nextflow 26's
+    // strict syntax rejects statements outside a declaration, the same
+    // restriction that forces directory_layout() to be a function. The handler
+    // still runs at session teardown, not here.
+    //
+    // `wf` is captured OUT here on purpose. Inside the handler closure the
+    // implicit `workflow` resolves to null, so reading `workflow.stats` there
+    // throws an NPE that Nextflow swallows into a bare "Failed to invoke
+    // workflow.onComplete event handler" — and the run-end message is silently
+    // never sent. The captured reference is the same mutable metadata object, so
+    // the stats read at teardown are still the final ones.
+    def wf = workflow
+    workflow.onComplete {
+        notify_run_end(ds, 'mantis_v2', wf)
     }
 }

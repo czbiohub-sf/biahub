@@ -59,7 +59,7 @@ track = ["ultrack>=0.8"]
 # PyQt6>=6.10 does not provide wheels
 gui = ["napari[pyqt6]", "PyQt6<6.10", "napari-animation"]
 
-stain = ["cytoland"]
+stain = ["cytoland==0.1.0a0"]
 
 # The external QC pipeline, whose `imaging-qc` CLI nextflow/qc-standalone.nf
 # calls as a bare command. `interactive` brings plotly, which the report step
@@ -97,13 +97,13 @@ biahub = "biahub.cli.main:cli"
 index-strategy = "unsafe-best-match"
 
 [tool.uv.sources]
-# No PyPI release yet
-cytoland = { git = "https://github.com/mehta-lab/VisCy", subdirectory = "applications/cytoland", rev = "4b62365c0df25929bffc7f01b3bb2d1c11d69cce" }
 # Private repo, no PyPI release; ssh is the protocol a Biohub checkout is already
-# authenticated for. The rev is the tip of the branch behind
-# imaging-qc-pipeline#199, which relaxes that project's `iohub==0.3.2` to a floor
-# so both can share one environment — biahub needs iohub>=0.3.11. Repoint at a
-# main commit once #199 merges.
+# authenticated for. The rev is the merge commit of imaging-qc-pipeline#199,
+# which relaxed that project's `iohub==0.3.2` to a floor so both can share one
+# environment — biahub needs iohub>=0.3.11 for the gapped-shard-write fix.
+#
+# cytoland used to sit here too; #323 moved it to a PyPI pin in the `stain`
+# extra, so imaging_qc_pipeline is the only source left.
 imaging_qc_pipeline = { git = "ssh://git@github.com/czbiohub-sf/imaging-qc-pipeline", rev = "062f3b3402cc4fdd46b14b8585744ceab84c1fc7" }
 
 [tool.hatch.metadata]
