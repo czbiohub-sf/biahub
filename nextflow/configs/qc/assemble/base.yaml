@@ -6,7 +6,6 @@ upstream_qc_dir: null
 
 metric_groups:
   default:
-    scope: position
     metrics:
       - intensity_stats
       - signal_to_noise

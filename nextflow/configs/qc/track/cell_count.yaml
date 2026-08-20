@@ -20,7 +20,6 @@ metrics: null  # derived from metric_groups; override via CLI to run a subset
 
 metric_groups:
   masks:
-    scope: position
     metrics:
       - instance_count
 

@@ -75,28 +75,6 @@ process compute_step {
 }
 
 
-process finalize_wave {
-    label 'cpu'
-    clusterOptions { slurm_logs('qc') }
-    memory { task.attempt == 1 ? '32 GB' : '48 GB' }
-    time '30m'
-    maxRetries 1
-    errorStrategy { task.exitStatus in [137, 140, 143] ? 'retry' : 'terminate' }
-    tag "${zarr_path}/wave${wave_id}"
-
-    input:
-    tuple val(zarr_path), val(config_path), val(wave_id)
-
-    output:
-    tuple val(zarr_path), val(wave_id)
-
-    script:
-    """
-    imaging-qc consolidate --config ${config_path} --wave-id ${wave_id} ${zarr_path}
-    """
-}
-
-
 process finalize_stage {
     label 'cpu'
     clusterOptions { slurm_logs('qc') }
