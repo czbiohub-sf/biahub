@@ -70,15 +70,19 @@ layout is defined once in `nextflow/mantis-v2.nf` (`directory_layout()`):
 ├── 1-deskew/<DATASET>.zarr
 ├── 2-reconstruct/<DATASET>.zarr
 ├── 3-virtual-stain/<DATASET>.zarr
-├── 4-track/<DATASET>.zarr
+├── 4-track/<DATASET>.zarr          # A549 only — not run for neuromast
 ├── 5-assemble/<DATASET>.zarr       # the deliverable
+├── qc/
+│   ├── report/index.html           # one report, one tab per QC'd store
+│   └── report_spec.yaml            # written at launch, before any QC task
 ├── configs/                        # copied + edited per dataset
 │   ├── flat_field.yml
 │   ├── deskew.yml
 │   ├── reconstruct.yml
 │   ├── virtual_stain.yml           # older runs name this predict.yml
 │   ├── concatenate.yml
-│   └── track.yml
+│   ├── track.yml                   # A549 only
+│   └── qc/{assemble,track}/        # QC configs, one dir per store kind
 ├── nextflow/
 │   ├── work/                       # Nextflow work dir (default: <OUTPUT>/nextflow/work)
 │   ├── slurm_output/<step>/%x_%j.{out,err}

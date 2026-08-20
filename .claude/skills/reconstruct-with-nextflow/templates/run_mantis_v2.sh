@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Run the mantis-v2 reconstruction pipeline (biahub nextflow/mantis-v2.nf):
-#   flat-field -> deskew -> reconstruct -> virtual-stain -> assemble -> track
+#   flat-field -> deskew -> reconstruct -> virtual-stain -> assemble -> track -> QC
+#
+# The last three are OPTIONAL: a step runs only if its config is passed. Set
+# STEPS below to the family's set — A549 runs assemble + track + QC, neuromast
+# runs assemble + QC and no tracking.
 #
 # Copy this into the project output directory and fill in the five variables
 # below. Keep it there: it is the run's provenance record of the exact command.
@@ -14,7 +18,7 @@
 #   ./run_mantis_v2.sh --max_positions 1      # quick smoke test, one position
 #
 # Smoke-testing with --max_positions 1 first is worth the few minutes: it walks
-# all six steps on one position and catches config/schema errors before a
+# every selected step on one position and catches config/schema errors before a
 # full-plate run spends hours reaching virtual-stain.
 
 module load nextflow
@@ -46,6 +50,17 @@ OUTPUT_DIR=""
 # zebrafish / dynatrack). Leave empty to read the raw store directly. Resolved
 # after OUTPUT_DIR below, so it may reference it.
 CONVERTED_ZARR=""          # e.g. ${OUTPUT_DIR}/0-convert/${DATASET}.zarr
+
+# Which optional steps this run performs. A step runs iff its config is passed,
+# so declining one is deleting a line — no placeholder config to author and no
+# output to discard (biahub#306).
+#
+#   A549       assemble track qc_image qc_track
+#   neuromast  assemble qc_image                 # tracking is an A549 step
+#
+# qc_track needs track, and both QC entries need assemble; the pipeline refuses
+# the combination at launch rather than failing hours in.
+STEPS="assemble track qc_image qc_track"
 # ---------------------------------------------------------------------------
 
 DATA_DIR="/hpc/instruments/cm.mantis"
@@ -146,6 +161,18 @@ fi
 # Harmless when unset already, and nothing in the pipeline reads it.
 unset CLAUDECODE
 
+STEP_ARGS=()
+for step in ${STEPS}; do
+    case "${step}" in
+        assemble) STEP_ARGS+=(--concatenate_config "${CONFIGS}/concatenate.yml") ;;
+        track)    STEP_ARGS+=(--track_config       "${CONFIGS}/track.yml") ;;
+        qc_image) STEP_ARGS+=(--qc_config          "${CONFIGS}/qc/assemble/pixel_metrics.yaml") ;;
+        qc_track) STEP_ARGS+=(--qc_track_config    "${CONFIGS}/qc/track/cell_count.yaml") ;;
+        *) echo "unknown step in STEPS: ${step}" >&2; exit 1 ;;
+    esac
+done
+echo "steps: flat-field deskew reconstruct virtual-stain ${STEPS}"
+
 nextflow run "${PIPELINE}" \
     -c "${NF_CONFIG}" \
     -profile slurm \
@@ -155,7 +182,6 @@ nextflow run "${PIPELINE}" \
     --deskew_config        "${CONFIGS}/deskew.yml" \
     --reconstruct_config   "${CONFIGS}/reconstruct.yml" \
     --virtual_stain_config "${CONFIGS}/virtual_stain.yml" \
-    --concatenate_config   "${CONFIGS}/concatenate.yml" \
-    --track_config         "${CONFIGS}/track.yml" \
+    "${STEP_ARGS[@]}" \
     -resume \
     "$@"

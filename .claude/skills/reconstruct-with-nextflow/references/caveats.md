@@ -146,16 +146,20 @@ reconstruct, virtual-stain). Do not "fix" them to real paths.
 ## 4. Neuromast/zebrafish datasets are not tracked
 
 Tracking is an A549 step; for neuromast/zebrafish the deliverable is
-`5-assemble`, and track's parameters are tuned for A549 cells. But
-`mantis-v2.nf` errors without `--track_config` and unconditionally wires
-`track_wf` after assemble (making steps optional is
-[biahub#306](https://github.com/czbiohub-sf/biahub/issues/306)). So:
+`5-assemble`, and track's parameters (cellpose `diameter`, `min_area`/
+`max_area`, linking `max_distance`) are tuned for A549 cells and do not
+transfer. So simply do not run it:
 
-- Pass `<BIAHUB>/nextflow/configs/zebrafish/track.yml` (a marked placeholder)
-  so the run validates and starts.
-- Say in the plan that `4-track` is a discarded by-product.
+- Omit `--track_config` — drop `track` (and `qc_track`) from `STEPS` in the run
+  script. A step runs only if its config is passed
+  ([biahub#306](https://github.com/czbiohub-sf/biahub/issues/306), fixed).
+- There is no `4-track` by-product to explain away any more, and the
+  `zebrafish/track.yml` placeholder that existed only to satisfy the old
+  hard requirement is deleted.
 - Do not report tracking results or tune the track config for these datasets
   unless the user asks for neuromast tracking explicitly.
+- QC still runs: a neuromast run does image QC of the assembled store
+  (`--qc_config`). Only the tracking tab is absent.
 
 ## 5. Track reads the assembled plate, not the intermediates
 

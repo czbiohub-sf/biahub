@@ -3,11 +3,13 @@ name: reconstruct-with-nextflow
 description: >-
   Run a mantis-v2 microscope dataset through the biahub Nextflow reconstruction
   pipeline (nextflow/mantis-v2.nf: flat-field → deskew → reconstruct →
-  virtual-stain → assemble → track) on the Bruno HPC cluster. Locates the raw
+  virtual-stain → assemble → track → QC) on the Bruno HPC cluster. Assemble,
+  track and QC are optional and selected per dataset family: A549 runs assemble
+  + track + QC, neuromast runs assemble + QC and no tracking. Locates the raw
   acquisition under /hpc/instruments/cm.mantis, picks the output project
   directory, scaffolds configs, launches the run in a tmux session in the
   foreground so it can be watched, recovers from Lustre/torn-shard I/O errors,
-  and reports a summary. Use when asked to "reconstruct", "run the pipeline
+  and reports a summary including the QC verdict. Use when asked to "reconstruct", "run the pipeline
   on", or "process" a named mantis-v2 dataset.
 ---
 
@@ -122,7 +124,11 @@ say which you think it is and let the user decide. A fresh reprocess goes to a
 ## 5. Start from the configs on `main`
 
 The templates in `<BIAHUB>/nextflow/configs/{a549,zebrafish}/` are the source
-of truth — they version with the pipeline and are reviewed. A previous run's
+of truth — they version with the pipeline and are reviewed. QC configs are
+shared across families and live in `<BIAHUB>/nextflow/configs/qc/`, one
+directory per store kind (`assemble/`, `track/`) — copy the tree, do not
+flatten it: each directory must hold only its own step's config, or every
+report tab renders the same one. A previous run's
 `configs/` directory is a fallback only: an unreviewed snapshot that drifts
 with the schema and carries dataset-specific edits.
 
@@ -150,9 +156,18 @@ Do not run anything yet. Show the user:
 5. That configs come from `<BIAHUB>/nextflow/configs/<family>/` at commit
    `<sha>`, every value changed for this dataset, and any template fix headed
    for a PR.
-6. Pipeline steps: flat-field → deskew → reconstruct → virtual-stain →
-   assemble → track. **For neuromast/zebrafish, say that `5-assemble` is the
-   deliverable and `4-track` is a discarded by-product** (`caveats.md` §4).
+6. Pipeline steps. Reconstruction proper — flat-field → deskew → reconstruct →
+   virtual-stain — always runs; assemble, track and QC run only if their config
+   is passed (biahub#306), so name the set this run performs:
+
+   | family | steps after virtual-stain |
+   |---|---|
+   | A549 / cell-line / organelle | assemble, track, QC (image + tracking) |
+   | neuromast / zebrafish / dynatrack | assemble, QC (image) — **no tracking** |
+
+   For neuromast/zebrafish say that `5-assemble` is the deliverable and that
+   tracking is simply not run — there is no `4-track` by-product any more
+   (`caveats.md` §4).
 7. Known caveats that apply to this dataset.
 8. Rough wall-time and that `-resume` is on.
 9. Whether Slack notifications are on, and who will be @-mentioned at run end.
@@ -166,7 +181,12 @@ Get explicit approval.
 ```bash
 mkdir -p <OUTPUT>/configs <OUTPUT>/nextflow
 cp <BIAHUB>/nextflow/configs/<family>/*.yml <OUTPUT>/configs/
+cp -r <BIAHUB>/nextflow/configs/qc <OUTPUT>/configs/qc     # keeps assemble/ and track/
 ```
+
+Then set `STEPS` in the run script to the family's set from §6 — that is the
+whole mechanism for skipping a step. For a neuromast run, drop `track` and
+`qc_track`; `track.yml` need not exist at all.
 
 Edit the copies for this dataset. Copy `templates/run_mantis_v2.sh` to
 `<OUTPUT>/run_mantis_v2.sh`, fill in `DATASET`, `DATA_DIR`, `PROJECT_DIR`,
@@ -267,10 +287,16 @@ Restarts are always `bash ./run_mantis_v2.sh` — the script passes `-resume`.
 2. Verify `5-assemble/<DATASET>.zarr` opens with iohub; report shape, channels,
    size on disk. For neuromast/zebrafish this is the deliverable; report
    `4-track` only as a discarded by-product.
-3. Report per-step task counts, failures, retries, and wall time from
+3. If QC ran, report its verdict: the `QC_SUMMARY` line per store from the
+   pipeline log (`pass=`/`fail=`/`gates_fail=`), and point at the report at
+   `<OUTPUT>/qc/report/index.html` — one page, one tab per QC'd store. A gate
+   failure does NOT fail the run: `imaging-qc gate` exits 0 either way, so a
+   failing verdict is only visible in the summary line, the report, and the
+   `tables/qc/` parquet inside each store.
+4. Report per-step task counts, failures, retries, and wall time from
    `<OUTPUT>/nextflow/trace.txt`; point at `report.html` and `timeline.html`.
-4. Confirm the pipeline's automatic run-end message landed, then send a wrap-up
+5. Confirm the pipeline's automatic run-end message landed, then send a wrap-up
    only for what the pipeline cannot know: the channel-rename result, the iohub
    verification, and size on disk.
-5. Flag anything needing a human eye: positions that passed only after many
+6. Flag anything needing a human eye: positions that passed only after many
    retries, steps far slower than the reference run, unexpected channel counts.
