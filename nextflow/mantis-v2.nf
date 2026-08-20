@@ -78,8 +78,8 @@ def directory_layout() {
 // messages. A function rather than a bare assignment for the same reason
 // directory_layout() is one: Nextflow's DSL2 parser allows only declarations at
 // script scope.
-def reconstruction_steps() {
-    return [
+def reconstruction_steps(with_qc) {
+    def steps = [
         'flat-field',
         'deskew',
         'phase reconstruction',
@@ -87,6 +87,9 @@ def reconstruction_steps() {
         'assemble',
         'track',
     ]
+    // QC is a step like any other when it is on, and absent when it is not, so
+    // the announced list and the per-step counters agree either way (N/7 or N/6).
+    return with_qc ? steps + ['QC'] : steps
 }
 
 
@@ -104,6 +107,12 @@ workflow {
     // activated. `imaging-qc` is only required when QC is actually wired in.
     def qc_on = (params.qc_config ?: params.qc_track_config) as boolean
     check_environment(qc_on ? ['biahub', 'viscy', 'imaging-qc'] : ['biahub', 'viscy'])
+
+    // Resolved here rather than beside the notification wiring below because the
+    // QC block needs its own label and the final index. Still one list, read by
+    // the run-start announcement and by every per-step message.
+    steps = reconstruction_steps(qc_on)
+    n_steps = steps.size()
 
     def ds     = dataset_name()
     def out    = params.output
@@ -203,6 +212,9 @@ workflow {
     // positions pass or fail, recording the verdict in each store's own
     // `tables/qc/` tables and a QC_SUMMARY line. Only a broken config or a
     // genuine compute error exits non-zero, which is what should stop a run.
+    // Empty when QC is off, so the mix below is unconditional either way.
+    qc_notify = Channel.empty()
+
     if (qc_on) {
         // Tab label is the step directory, which is unique per store by
         // construction — the spec requires unique labels.
@@ -232,7 +244,13 @@ workflow {
         }
 
         qc = qc_stage_wf(qc_inputs)
-        qc_report_wf(qc.done, spec, report_dir)
+        qc_report = qc_report_wf(qc.done, spec, report_dir)
+
+        // ONE message for the whole QC step, not one per store: the report is a
+        // single task gated on every store's finalize, so its completion is
+        // exactly "QC of all stores is done". The report directory is the
+        // artifact worth naming, so it stands in for the step's output zarr.
+        qc_notify = qc_report.done.map { rd -> [steps[-1], rd, "${n_steps}/${n_steps}"] }
     }
 
     // ----- Notifications ----------------------------------------------------
@@ -251,15 +269,13 @@ workflow {
     // That also removes a trap: assemble_wf's `done` carries a single path
     // String rather than the collected position list, and `('a/b.zarr' as List)`
     // explodes into characters.
-    steps = reconstruction_steps()
-    n_steps = steps.size()
-
     notify_events = ff_done.done      .map { [steps[0], ff_output,            "1/${n_steps}"] }
         .mix( deskew_done.done        .map { [steps[1], deskew_output,        "2/${n_steps}"] } )
         .mix( reconstruct_done.done   .map { [steps[2], reconstruct_output,   "3/${n_steps}"] } )
         .mix( virtual_stain_done.done .map { [steps[3], virtual_stain_output, "4/${n_steps}"] } )
         .mix( assemble_done.done      .map { [steps[4], assemble_output,      "5/${n_steps}"] } )
         .mix( track_done.done         .map { [steps[5], track_output,         "6/${n_steps}"] } )
+        .mix( qc_notify )
 
     notify_step(notify_events, ds)
 
@@ -272,6 +288,12 @@ workflow {
     }
 
     // Report the finished run to Slack, with an @-mention.
+    //
+    // This already fires AFTER QC and needs no wiring to say so: onComplete runs
+    // at session teardown, once every task in the DAG has finished, and the QC
+    // tasks are in the DAG like any other. Gating it on a QC channel would be
+    // both redundant and wrong — it has to fire on a failed run too, where no QC
+    // channel ever emits.
     //
     // onComplete ONLY — onError fires in ADDITION to onComplete, so handling
     // both would double-post every failure. notify_run_end branches on
