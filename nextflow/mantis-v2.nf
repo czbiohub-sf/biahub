@@ -17,10 +17,16 @@ nextflow.enable.dsl = 2
 //  (in some pipelines the first step converts raw input to zarr). To reorder
 //  steps, change where a step reads from here; the modules stay untouched.
 //
-//  Flat-field → deskew → reconstruct → virtual-stain → assemble → track is
-//  wired today: assemble concatenates the deskew/reconstruct/virtual-stain
-//  channels into one plate, and track reads that assembled plate as its single
-//  input. Follow the chaining below for the pattern.
+//  Flat-field → deskew → reconstruct → virtual-stain → assemble → track → QC is
+//  the full chain: assemble concatenates the deskew/reconstruct/virtual-stain
+//  channels into one plate, track reads that assembled plate as its single
+//  input, and QC reads the finished stores. Follow the chaining below for the
+//  pattern.
+//
+//  The last three are OPTIONAL and selected by whether their config is given, so
+//  a run performs the prefix it asks for: A549 wants assemble + track + QC, a
+//  neuromast run wants assemble + QC and no tracking (issue #306). A skipped step
+//  never renumbers the directories of the ones around it.
 // ---------------------------------------------------------------------------
 
 params.input = null   // raw source — may not be a zarr store
@@ -78,21 +84,6 @@ def directory_layout() {
 // messages. A function rather than a bare assignment for the same reason
 // directory_layout() is one: Nextflow's DSL2 parser allows only declarations at
 // script scope.
-def reconstruction_steps(with_qc) {
-    def steps = [
-        'flat-field',
-        'deskew',
-        'phase reconstruction',
-        'virtual staining',
-        'assemble',
-        'track',
-    ]
-    // QC is a step like any other when it is on, and absent when it is not, so
-    // the announced list and the per-step counters agree either way (N/7 or N/6).
-    return with_qc ? steps + ['QC'] : steps
-}
-
-
 workflow {
     if (!params.input)              error "Provide --input"
     if (!params.output)             error "Provide --output"
@@ -100,19 +91,40 @@ workflow {
     if (!params.deskew_config)      error "Provide --deskew_config"
     if (!params.reconstruct_config) error "Provide --reconstruct_config"
     if (!params.virtual_stain_config) error "Provide --virtual_stain_config"
-    if (!params.track_config)       error "Provide --track_config"
-    if (!params.concatenate_config) error "Provide --concatenate_config"
+
+    // A STEP IS SELECTED BY THE PRESENCE OF ITS CONFIG. Reconstruction proper —
+    // flat-field through virtual staining — is what this pipeline is for and is
+    // always run. Assemble, track and QC are deliverables some runs want and
+    // others do not: tracking is tuned for A549 and is not what a neuromast run
+    // is for, and its parameters do not transfer (issue #306). Naming a config is
+    // how a run asks for the step; omitting it is how a run declines, with no
+    // placeholder to author and no output to discard.
+    //
+    // Skipping a step does NOT renumber the others: directory_layout() is still
+    // the single source of truth, so `5-assemble` is `5-assemble` whether or not
+    // track runs, and paths stay comparable across datasets.
+    def assemble_on = params.concatenate_config as boolean
+    def track_on    = params.track_config as boolean
+    def qc_image_on = params.qc_config as boolean
+    def qc_track_on = params.qc_track_config as boolean
+    def qc_on       = qc_image_on || qc_track_on
+
+    // A step cannot outlive the step whose output it reads. Refuse the
+    // combination at launch, naming the config to add or the one to drop, rather
+    // than failing hours in with a missing store.
+    if (track_on && !assemble_on) {
+        error "--track_config needs --concatenate_config: tracking reads the assembled plate."
+    }
+    if (qc_image_on && !assemble_on) {
+        error "--qc_config needs --concatenate_config: it QCs the assembled store."
+    }
+    if (qc_track_on && !track_on) {
+        error "--qc_track_config needs --track_config: it QCs the tracking store."
+    }
 
     // Tasks call `biahub`/`viscy`/`imaging-qc` bare, so fail now if the env isn't
     // activated. `imaging-qc` is only required when QC is actually wired in.
-    def qc_on = (params.qc_config ?: params.qc_track_config) as boolean
     check_environment(qc_on ? ['biahub', 'viscy', 'imaging-qc'] : ['biahub', 'viscy'])
-
-    // Resolved here rather than beside the notification wiring below because the
-    // QC block needs its own label and the final index. Still one list, read by
-    // the run-start announcement and by every per-step message.
-    steps = reconstruction_steps(qc_on)
-    n_steps = steps.size()
 
     def ds     = dataset_name()
     def out    = params.output
@@ -170,17 +182,18 @@ workflow {
     // channels/crops come from each source is set by the concatenate config, not
     // here. The config's concat_data_paths are placeholders — the subworkflow
     // injects the three source paths via --concat-data-paths (resolve mode).
-    assemble_trigger = virtual_stain_done.done
-    assemble_output  = "${out}/${layout.assemble}/${ds}.zarr"
+    assemble_output = "${out}/${layout.assemble}/${ds}.zarr"
 
-    assemble_done = assemble_wf(
-        deskew_output,
-        reconstruct_output,
-        virtual_stain_output,
-        assemble_output,
-        params.concatenate_config,
-        assemble_trigger
-    )
+    if (assemble_on) {
+        assemble_done = assemble_wf(
+            deskew_output,
+            reconstruct_output,
+            virtual_stain_output,
+            assemble_output,
+            params.concatenate_config,
+            virtual_stain_done.done
+        )
+    }
 
     // ----- Track ------------------------------------------------------------
     // Track reads the ASSEMBLED plate for both of its inputs: assemble already
@@ -195,12 +208,12 @@ workflow {
     // assemble is verified. To go back to the parallel wiring, point track_input
     // at reconstruct_output, track_input_images at virtual_stain_output, and gate
     // on virtual_stain_done.
-    track_trigger      = assemble_done.done
-    track_input        = assemble_output
-    track_input_images = assemble_output
-    track_output       = "${out}/${layout.track}/${ds}.zarr"
+    track_output = "${out}/${layout.track}/${ds}.zarr"
 
-    track_done = track_wf(all_positions, track_input, track_input_images, track_output, params.track_config, track_trigger)
+    if (track_on) {
+        track_done = track_wf(all_positions, assemble_output, assemble_output, track_output,
+                              params.track_config, assemble_done.done)
+    }
 
     // ----- QC ---------------------------------------------------------------
     // QC reads the finished stores, gated on the step that wrote each one:
@@ -212,8 +225,7 @@ workflow {
     // positions pass or fail, recording the verdict in each store's own
     // `tables/qc/` tables and a QC_SUMMARY line. Only a broken config or a
     // genuine compute error exits non-zero, which is what should stop a run.
-    // Empty when QC is off, so the mix below is unconditional either way.
-    qc_notify = Channel.empty()
+    qc_report_dir = params.qc_report_dir ?: "${out}/qc/report"
 
     if (qc_on) {
         // Tab label is the step directory, which is unique per store by
@@ -231,7 +243,6 @@ workflow {
         // Written at launch, before any QC task runs: everything in it is known
         // from the layout above, so a malformed spec fails now rather than after
         // hours of compute.
-        def report_dir = params.qc_report_dir ?: "${out}/qc/report"
         def spec = qc_report_spec(qc_stores, "${out}/qc/report_spec.yaml", "QC — ${ds}")
 
         // Each store waits only on its own producer, so they QC independently.
@@ -244,38 +255,51 @@ workflow {
         }
 
         qc = qc_stage_wf(qc_inputs)
-        qc_report = qc_report_wf(qc.done, spec, report_dir)
-
-        // ONE message for the whole QC step, not one per store: the report is a
-        // single task gated on every store's finalize, so its completion is
-        // exactly "QC of all stores is done". The report directory is the
-        // artifact worth naming, so it stands in for the step's output zarr.
-        qc_notify = qc_report.done.map { rd -> [steps[-1], rd, "${n_steps}/${n_steps}"] }
+        qc_report = qc_report_wf(qc.done, spec, qc_report_dir)
     }
 
     // ----- Notifications ----------------------------------------------------
     // One Slack message as each step finishes, plus the run-start announcement.
     // Step ORDER and labels live here with the rest of the wiring, not in
     // notify.nf — same reason the layout map does: this file owns the order steps
-    // run in. reconstruction_steps() is the only list of labels, so the announced
-    // list cannot drift from what the per-step messages actually say.
+    // run in.
     //
-    // The six done channels are MIXED into one and notify_step is invoked ONCE:
-    // a process can only be invoked a single time per workflow context, so six
-    // separate notify_step(...) calls would not compile.
+    // The done channels are MIXED into one and notify_step is invoked ONCE: a
+    // process can only be invoked a single time per workflow context, so one
+    // notify_step(...) call per step would not compile.
     //
     // Nothing here reads a position count. It is the same for every step, so
     // saying it six times adds nothing; the run-start message reports it once.
     // That also removes a trap: assemble_wf's `done` carries a single path
     // String rather than the collected position list, and `('a/b.zarr' as List)`
     // explodes into characters.
-    notify_events = ff_done.done      .map { [steps[0], ff_output,            "1/${n_steps}"] }
-        .mix( deskew_done.done        .map { [steps[1], deskew_output,        "2/${n_steps}"] } )
-        .mix( reconstruct_done.done   .map { [steps[2], reconstruct_output,   "3/${n_steps}"] } )
-        .mix( virtual_stain_done.done .map { [steps[3], virtual_stain_output, "4/${n_steps}"] } )
-        .mix( assemble_done.done      .map { [steps[4], assemble_output,      "5/${n_steps}"] } )
-        .mix( track_done.done         .map { [steps[5], track_output,         "6/${n_steps}"] } )
-        .mix( qc_notify )
+    // ONE list of the steps this run actually performed, in order, each with the
+    // channel that says it finished and the artifact it produced. Both the
+    // run-start announcement and the per-step messages read it, so they cannot
+    // disagree about what ran — and the "i/n" counters are positions in it rather
+    // than hard-coded numbers, which is what lets a skipped step renumber the
+    // messages without renumbering any directory.
+    //
+    // QC contributes ONE entry, not one per store: the report is a single task
+    // gated on every store's finalize, so its completion is exactly "QC of all
+    // stores is done". Its report directory stands in for an output zarr.
+    def step_events = [
+        [label: 'flat-field',           done: ff_done.done,            output: ff_output],
+        [label: 'deskew',               done: deskew_done.done,        output: deskew_output],
+        [label: 'phase reconstruction', done: reconstruct_done.done,   output: reconstruct_output],
+        [label: 'virtual staining',     done: virtual_stain_done.done, output: virtual_stain_output],
+    ]
+    if (assemble_on) step_events << [label: 'assemble', done: assemble_done.done, output: assemble_output]
+    if (track_on)    step_events << [label: 'track',    done: track_done.done,    output: track_output]
+    if (qc_on)       step_events << [label: 'QC',       done: qc_report.done,     output: qc_report_dir]
+
+    steps = step_events.collect { it.label }
+    n_steps = steps.size()
+
+    notify_events = Channel.empty()
+    step_events.eachWithIndex { e, i ->
+        notify_events = notify_events.mix( e.done.map { [e.label, e.output, "${i + 1}/${n_steps}"] } )
+    }
 
     notify_step(notify_events, ds)
 
