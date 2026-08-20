@@ -150,9 +150,11 @@ assembled store, and track's parameters (cellpose `diameter`, `min_area`/
 `max_area`, linking `max_distance`) are tuned for A549 cells and do not
 transfer. So simply do not run it:
 
-- Omit `--track_config` — drop `track` (and `qc_track`) from `STEPS` in the run
-  script. A step runs only if its config is passed
-  ([biahub#306](https://github.com/czbiohub-sf/biahub/issues/306), fixed).
+- Omit `--track_config` — delete that line, and `--qc_track_config` with it,
+  from the `nextflow run` call in the run script. A step runs only if its config
+  is passed ([biahub#306](https://github.com/czbiohub-sf/biahub/issues/306),
+  fixed). Delete rather than comment: `#` inside a backslash-continued command
+  drops every flag below it, `-resume` included.
 - There is no tracking by-product to explain away any more, and the
   `zebrafish/track.yml` placeholder that existed only to satisfy the old
   hard requirement is deleted.

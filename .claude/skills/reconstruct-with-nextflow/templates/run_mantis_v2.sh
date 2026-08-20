@@ -2,9 +2,9 @@
 # Run the mantis-v2 reconstruction pipeline (biahub nextflow/mantis-v2.nf):
 #   flat-field -> deskew -> reconstruct -> virtual-stain -> assemble -> track -> QC
 #
-# The last three are OPTIONAL: a step runs only if its config is passed. Set
-# STEPS below to the family's set — A549 runs assemble + track + QC, neuromast
-# runs assemble + QC and no tracking.
+# The last three are OPTIONAL: a step runs only if its config is passed. A549
+# runs assemble + track + QC; neuromast runs assemble + QC and no tracking. See
+# the note above the `nextflow run` call at the bottom.
 #
 # Copy this into the project output directory and fill in the five variables
 # below. Keep it there: it is the run's provenance record of the exact command.
@@ -54,16 +54,6 @@ OUTPUT_DIR=""
 # after OUTPUT_DIR below, so it may reference it.
 CONVERTED_ZARR=""          # e.g. ${OUTPUT_DIR}/0-convert/${DATASET}.zarr
 
-# Which optional steps this run performs. A step runs iff its config is passed,
-# so declining one is deleting a line — no placeholder config to author and no
-# output to discard (biahub#306).
-#
-#   A549       assemble track qc_image qc_track
-#   neuromast  assemble qc_image                 # tracking is an A549 step
-#
-# qc_track needs track, and both QC entries need assemble; the pipeline refuses
-# the combination at launch rather than failing hours in.
-STEPS="assemble track qc_image qc_track"
 # ---------------------------------------------------------------------------
 
 DATA_DIR="/hpc/instruments/cm.mantis"
@@ -164,18 +154,18 @@ fi
 # Harmless when unset already, and nothing in the pipeline reads it.
 unset CLAUDECODE
 
-STEP_ARGS=()
-for step in ${STEPS}; do
-    case "${step}" in
-        assemble) STEP_ARGS+=(--concatenate_config "${CONFIGS}/concatenate.yml") ;;
-        track)    STEP_ARGS+=(--track_config       "${CONFIGS}/track.yml") ;;
-        qc_image) STEP_ARGS+=(--qc_config          "${CONFIGS}/qc/assemble/pixel_metrics.yaml") ;;
-        qc_track) STEP_ARGS+=(--qc_track_config    "${CONFIGS}/qc/track/cell_count.yaml") ;;
-        *) echo "unknown step in STEPS: ${step}" >&2; exit 1 ;;
-    esac
-done
-echo "steps: flat-field deskew reconstruct virtual-stain ${STEPS}"
-
+# The last four flags are the OPTIONAL steps: a step runs only if its config is
+# passed (biahub#306). Defaults by family —
+#
+#   A549 / cell-line   assemble + track + QC   (all four, as written)
+#   zebrafish / neuromast   assemble + QC      (delete --track_config and
+#                                               --qc_track_config)
+#
+# TO SKIP A STEP, DELETE ITS LINE. Do not comment it out: `#` inside a
+# backslash-continued command does not start a comment line — the continuation
+# swallows it, every flag below it is dropped including `-resume`, and bash then
+# tries to run the remainder as a command. Note the skip in a comment above this
+# call instead, so the provenance record still says what this run did and why.
 nextflow run "${PIPELINE}" \
     -c "${NF_CONFIG}" \
     -profile slurm \
@@ -185,6 +175,9 @@ nextflow run "${PIPELINE}" \
     --deskew_config        "${CONFIGS}/deskew.yml" \
     --reconstruct_config   "${CONFIGS}/reconstruct.yml" \
     --virtual_stain_config "${CONFIGS}/virtual_stain.yml" \
-    "${STEP_ARGS[@]}" \
+    --concatenate_config   "${CONFIGS}/concatenate.yml" \
+    --track_config         "${CONFIGS}/track.yml" \
+    --qc_config            "${CONFIGS}/qc/assemble/pixel_metrics.yaml" \
+    --qc_track_config      "${CONFIGS}/qc/track/cell_count.yaml" \
     -resume \
     "$@"

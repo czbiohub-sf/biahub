@@ -156,14 +156,19 @@ Do not run anything yet. Show the user:
 5. That configs come from `<BIAHUB>/nextflow/configs/<family>/` at commit
    `<sha>`, every value changed for this dataset, and any template fix headed
    for a PR.
-6. Pipeline steps. Reconstruction proper — flat-field → deskew → reconstruct →
-   virtual-stain — always runs; assemble, track and QC run only if their config
-   is passed (biahub#306), so name the set this run performs:
+6. **The steps this run will perform, listed in order.** Reconstruction proper —
+   flat-field → deskew → reconstruct → virtual-stain — always runs; assemble,
+   track and QC run only if their config is passed (biahub#306). Defaults by
+   family, which is what to present unless the user says otherwise:
 
-   | family | steps after virtual-stain |
+   | family | steps |
    |---|---|
-   | A549 / cell-line / organelle | assemble, track, QC (image + tracking) |
-   | neuromast / zebrafish / dynatrack | assemble, QC (image) — **no tracking** |
+   | A549 / cell-line / organelle | flat-field → deskew → reconstruct → virtual-stain → **assemble → track → QC** |
+   | neuromast / zebrafish / dynatrack | flat-field → deskew → reconstruct → virtual-stain → **assemble → QC** (no tracking) |
+
+   Write the list out in the plan rather than naming the family, and say which
+   optional steps are being skipped and why. If the user asks to skip anything
+   else, reflect that here — the plan is where the step set is agreed.
 
    For neuromast/zebrafish say that the assembled store is the deliverable and
    that tracking is simply not run — there is no tracking by-product any more
@@ -191,9 +196,17 @@ cp <BIAHUB>/nextflow/configs/<family>/*.yml <OUTPUT>/configs/
 cp -r <BIAHUB>/nextflow/configs/qc <OUTPUT>/configs/qc     # keeps assemble/ and track/
 ```
 
-Then set `STEPS` in the run script to the family's set from §6 — that is the
-whole mechanism for skipping a step. For a neuromast run, drop `track` and
-`qc_track`; `track.yml` need not exist at all.
+The run script passes all four optional configs — `--concatenate_config`,
+`--track_config`, `--qc_config`, `--qc_track_config` — so an A549 run needs no
+edit. **For a neuromast/zebrafish run, or any step the user asked to skip,
+DELETE that flag's line** from the `nextflow run` call and note the skip in a
+comment above it, so the script still records what this run did. A neuromast run
+deletes `--track_config` and `--qc_track_config`; `track.yml` need not exist at
+all, and there is no `qc` config directory to copy for a step that is not run.
+
+Delete rather than comment: a `#` inside a backslash-continued command does not
+start a comment line — the continuation swallows it, every flag below is dropped
+including `-resume`, and bash then tries to run the remainder as a command.
 
 Edit the copies for this dataset. Copy `templates/run_mantis_v2.sh` to
 `<OUTPUT>/run_mantis_v2.sh`, fill in `DATASET`, `DATA_DIR`, `PROJECT_DIR`,
