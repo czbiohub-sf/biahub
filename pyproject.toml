@@ -111,9 +111,6 @@ constraint-dependencies = ["wasmtime<48"]
 # authenticated for. The rev is the merge commit of imaging-qc-pipeline#199,
 # which relaxed that project's `iohub==0.3.2` to a floor so both can share one
 # environment — biahub needs iohub>=0.3.11 for the gapped-shard-write fix.
-#
-# cytoland used to sit here too; #323 moved it to a PyPI pin in the `stain`
-# extra, so imaging_qc_pipeline is the only source left.
 imaging_qc_pipeline = { git = "ssh://git@github.com/czbiohub-sf/imaging-qc-pipeline", rev = "062f3b3402cc4fdd46b14b8585744ceab84c1fc7" }
 
 [tool.hatch.metadata]
