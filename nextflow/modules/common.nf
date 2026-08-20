@@ -37,7 +37,7 @@ def slurm_logs(step_name) {
 // ENVIRONMENT CONTRACT
 //
 // Every process calls its CLI as a BARE command: `biahub`, plus `viscy` in
-// virtual_stain.nf and `imaging-qc` in qc_processes.nf. There is no per-task
+// virtual_stain.nf and `imaging-qc` in qc.nf. There is no per-task
 // environment wrapper: the pipeline inherits the environment of whatever shell
 // launched it, and SLURM propagates that to the compute nodes (sbatch defaults
 // to --export=ALL, and the venv lives on shared storage, so the same absolute
