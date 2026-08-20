@@ -96,6 +96,16 @@ biahub = "biahub.cli.main:cli"
 # uv-dynamic-versioning chain, which pulls in packaging>=24.2.
 index-strategy = "unsafe-best-match"
 
+# wasmtime 48 removed `DirPerms`, which itkwasm imports unconditionally, so any
+# resolution that takes it makes `imaging-qc` unimportable:
+#   ImportError: cannot import name 'DirPerms' from 'wasmtime'
+# itkwasm asks for `wasmtime>=28.0.0` with no ceiling and 1.0b200 is its latest,
+# so there is nothing to upgrade to — the bound has to come from here. A
+# constraint rather than a dependency: nothing in biahub imports wasmtime, it
+# arrives transitively via imaging-qc -> ngff-zarr -> itkwasm. Drop this once
+# itkwasm supports 48.
+constraint-dependencies = ["wasmtime<48"]
+
 [tool.uv.sources]
 # Private repo, no PyPI release; ssh is the protocol a Biohub checkout is already
 # authenticated for. The rev is the merge commit of imaging-qc-pipeline#199,
