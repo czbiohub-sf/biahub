@@ -104,7 +104,7 @@ cytoland = { git = "https://github.com/mehta-lab/VisCy", subdirectory = "applica
 # imaging-qc-pipeline#199, which relaxes that project's `iohub==0.3.2` to a floor
 # so both can share one environment — biahub needs iohub>=0.3.11. Repoint at a
 # main commit once #199 merges.
-imaging_qc_pipeline = { git = "ssh://git@github.com/czbiohub-sf/imaging-qc-pipeline", rev = "456bafc00e83ea90132564d92a0dd01766f650d1" }
+imaging_qc_pipeline = { git = "ssh://git@github.com/czbiohub-sf/imaging-qc-pipeline", rev = "062f3b3402cc4fdd46b14b8585744ceab84c1fc7" }
 
 [tool.hatch.metadata]
 allow-direct-references = true
