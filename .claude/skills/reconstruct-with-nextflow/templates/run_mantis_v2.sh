@@ -69,7 +69,21 @@ NF_CONFIG="${BIAHUB_PROJECT}/nextflow/nextflow.config"
 # provisioning step — no per-task `uv run`, so tasks never contend on
 # site-packages. mantis-v2.nf calls check_environment() and fails at launch if
 # this activation is missing.
-uv sync --project "${BIAHUB_PROJECT}"
+# QC calls `imaging-qc`, which comes from biahub's `qc` extra. That extra is
+# deliberately NOT in `all` — imaging-qc-pipeline is a private repo with no PyPI
+# release — and `uv sync` PRUNES anything outside the extras it is given. So a
+# bare `uv sync` here uninstalls imaging-qc on every relaunch and
+# check_environment() aborts, unrecoverably, however many times you retry.
+# Both families now run QC, so the extra is always wanted.
+#
+# Falls back to a bare sync when the private repo is unreachable (no SSH access
+# to czbiohub-sf/imaging-qc-pipeline), so a run that passes no QC config still
+# works; one that does will abort at launch with check_environment()'s message.
+if ! uv sync --project "${BIAHUB_PROJECT}" --extra qc; then
+    echo "  WARNING: 'uv sync --extra qc' failed — no access to imaging-qc-pipeline?" >&2
+    echo "  QC steps will abort at launch; other steps are unaffected." >&2
+    uv sync --project "${BIAHUB_PROJECT}"
+fi
 # shellcheck disable=SC1091
 set +u; source "${BIAHUB_PROJECT}/.venv/bin/activate"; set -u
 command -v biahub >/dev/null || { echo "biahub not on PATH after activation" >&2; exit 1; }
