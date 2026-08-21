@@ -61,6 +61,15 @@ gui = ["napari[pyqt6]", "PyQt6<6.10", "napari-animation"]
 
 stain = ["cytoland==0.1.0a0"]
 
+# The external QC pipeline, whose `imaging-qc` CLI nextflow/qc-standalone.nf
+# calls as a bare command. `interactive` brings plotly, which the report step
+# needs unless it runs with --qc_report_static.
+#
+# Deliberately NOT in `all`: imaging-qc-pipeline is a private repo with no PyPI
+# release, so resolving it needs credentials CI's `uv sync --group dev` does not
+# have. Install it explicitly with `uv sync --extra qc`.
+qc = ["imaging_qc_pipeline[interactive]"]
+
 all = ["biahub[segment,track,gui,stain]"]
 
 build = ["build", "twine"]
@@ -86,6 +95,29 @@ biahub = "biahub.cli.main:cli"
 # when resolving build-system requirements such as iohub's hatchling /
 # uv-dynamic-versioning chain, which pulls in packaging>=24.2.
 index-strategy = "unsafe-best-match"
+
+[tool.uv.sources]
+# Private repo, no PyPI release. HTTPS rather than ssh so that installing the
+# `qc` extra needs no SSH key: an org member authenticates once with the GitHub
+# CLI, which is already on Bruno, and uv picks the credential up through git.
+#
+#     gh auth login        # browser/device-code flow, SSO-aware
+#     gh auth setup-git    # installs gh as git's credential helper
+#
+# Anyone who prefers ssh keeps working with a local rewrite, so this costs the
+# key-holders nothing:
+#
+#     git config --global url."ssh://git@github.com/".insteadOf "https://github.com/"
+#
+# The rev is a commit on imaging-qc's main. This one carries two things biahub
+# depends on directly: a `wasmtime<48` ceiling, so no `constraint-dependencies`
+# entry is needed here (itkwasm imports a `DirPerms` that wasmtime 48 removed,
+# which made `imaging-qc` unimportable), and a report verb that composes Hydra
+# `defaults:`, which is what lets `qc_report_spec` name a config file rather
+# than its directory. That project also relaxed `iohub==0.3.2` to a floor so both
+# can share one environment — biahub needs iohub>=0.3.11 for the
+# gapped-shard-write fix.
+imaging_qc_pipeline = { git = "https://github.com/czbiohub-sf/imaging-qc-pipeline", rev = "2be2ee6529adfb990503e3289f19ecfa142b1b5a" }
 
 [tool.hatch.metadata]
 allow-direct-references = true

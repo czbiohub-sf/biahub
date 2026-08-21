@@ -113,8 +113,8 @@ three levels **inside** the named store:
 
 ```bash
 DS=<DATASET>
-for d in 0-flatfield 1-deskew 2-reconstruct 3-virtual-stain 5-assemble 4-track; do
-  printf "  %-16s %s\n" "$d" "$(ls -d "<OUTPUT>/$d/$DS.zarr"/*/*/*/ 2>/dev/null | wc -l)"
+for d in <OUTPUT>/[0-9]-*/; do   # numbered by position, so glob rather than list
+  printf "  %-16s %s\n" "$(basename "$d")" "$(ls -d "$d/$DS.zarr"/*/*/*/ 2>/dev/null | wc -l)"
 done
 ```
 
@@ -309,11 +309,11 @@ total and max wall time. Then:
 ```bash
 <BIAHUB>/.venv/bin/python -c "
 from iohub.ngff import open_ome_zarr
-with open_ome_zarr('<OUTPUT>/5-assemble/<DATASET>.zarr', mode='r') as p:
+with open_ome_zarr('<OUTPUT>/4-assemble/<DATASET>.zarr', mode='r') as p:
     pos = list(p.positions())
     print(len(pos), 'positions'); print(p.channel_names)
     print(pos[0][1].data.shape, pos[0][1].data.dtype)"
-du -sh <OUTPUT>/5-assemble/<DATASET>.zarr
+du -sh <OUTPUT>/4-assemble/<DATASET>.zarr
 ```
 
 Point the user at `<OUTPUT>/nextflow/report.html` (resource usage per process)

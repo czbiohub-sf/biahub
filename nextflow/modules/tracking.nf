@@ -82,10 +82,10 @@ workflow track_wf {
 
     main:
     init_out = init_track(input_zarr, output_zarr, config, prev_done.map { 'done' })
-    resources = init_out.map { parse_resources(it) }
+    resources = init_out.map { stdout_text -> parse_resources(stdout_text) }
 
     pos_meta = positions
-        .flatMap { it }
+        .flatMap { items -> items }
         .combine(resources)
 
     tk_done = run_track(pos_meta, input_zarr, input_images_zarr, output_zarr, config) | collect

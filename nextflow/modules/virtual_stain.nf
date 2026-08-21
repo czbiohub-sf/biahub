@@ -137,7 +137,7 @@ workflow virtual_stain_wf {
 
     main:
     init_out = init_virtual_stain(input_zarr, output_zarr, config, prev_done.map { 'done' })
-    resources = init_out.map { parse_resources(it) }
+    resources = init_out.map { stdout_text -> parse_resources(stdout_text) }
 
     // Preprocess the whole plate in parallel with init; both gate the fan-out.
     vs_preprocess = run_virtual_stain_preprocess(input_zarr, prev_done.map { 'done' })
@@ -145,9 +145,9 @@ workflow virtual_stain_wf {
     ready = resources.combine(vs_preprocess)
 
     pos_meta = positions
-        .flatMap { it }
+        .flatMap { items -> items }
         .combine(ready)
-        .map { pos, meta, preprocess_done -> [pos, meta] }
+        .map { pos, meta, _preprocess_done -> [pos, meta] }
 
     vs_done = run_virtual_stain(pos_meta, input_zarr, output_zarr, config) | collect
 

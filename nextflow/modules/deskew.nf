@@ -86,10 +86,10 @@ workflow deskew_wf {
 
     main:
     init_out = init_deskew(input_zarr, output_zarr, config, prev_done.map { 'done' })
-    resources = init_out.map { parse_resources(it) }
+    resources = init_out.map { stdout_text -> parse_resources(stdout_text) }
 
     pos_meta = positions
-        .flatMap { it }
+        .flatMap { items -> items }
         .combine(resources)
 
     dk_done = run_deskew(pos_meta, input_zarr, output_zarr, config) | collect

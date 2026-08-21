@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
 # Run the mantis-v2 reconstruction pipeline (biahub nextflow/mantis-v2.nf):
-#   flat-field -> deskew -> reconstruct -> virtual-stain -> assemble -> track
+#   flat-field -> deskew -> reconstruct -> virtual-stain -> assemble -> track -> QC
+#
+# The last three are OPTIONAL: a step runs only if its config is passed. A549
+# runs assemble + track + QC; neuromast runs assemble + QC and no tracking. See
+# the note above the `nextflow run` call at the bottom.
 #
 # Copy this into the project output directory and fill in the five variables
 # below. Keep it there: it is the run's provenance record of the exact command.
 #
 # --output is the project root, so each step writes a sibling directory:
-#   0-flatfield/ 1-deskew/ 2-reconstruct/ 3-virtual-stain/ 4-track/ 5-assemble/
+#   0-flatfield/ 1-deskew/ 2-reconstruct/ 3-virtual-stain/ 4-assemble/ 5-track/
+# The number is the step's POSITION among the steps this run performs, so a run
+# without tracking ends at 4-assemble and one that also skipped a step earlier
+# shifts everything after it down.
 # The work dir defaults to <output>/nextflow/work; override with `-work-dir`.
 #
 # Any extra arguments are forwarded to nextflow, e.g.
@@ -14,7 +21,7 @@
 #   ./run_mantis_v2.sh --max_positions 1      # quick smoke test, one position
 #
 # Smoke-testing with --max_positions 1 first is worth the few minutes: it walks
-# all six steps on one position and catches config/schema errors before a
+# every selected step on one position and catches config/schema errors before a
 # full-plate run spends hours reaching virtual-stain.
 
 module load nextflow
@@ -46,6 +53,7 @@ OUTPUT_DIR=""
 # zebrafish / dynatrack). Leave empty to read the raw store directly. Resolved
 # after OUTPUT_DIR below, so it may reference it.
 CONVERTED_ZARR=""          # e.g. ${OUTPUT_DIR}/0-convert/${DATASET}.zarr
+
 # ---------------------------------------------------------------------------
 
 DATA_DIR="/hpc/instruments/cm.mantis"
@@ -61,7 +69,21 @@ NF_CONFIG="${BIAHUB_PROJECT}/nextflow/nextflow.config"
 # provisioning step — no per-task `uv run`, so tasks never contend on
 # site-packages. mantis-v2.nf calls check_environment() and fails at launch if
 # this activation is missing.
-uv sync --project "${BIAHUB_PROJECT}"
+# QC calls `imaging-qc`, which comes from biahub's `qc` extra. That extra is
+# deliberately NOT in `all` — imaging-qc-pipeline is a private repo with no PyPI
+# release — and `uv sync` PRUNES anything outside the extras it is given. So a
+# bare `uv sync` here uninstalls imaging-qc on every relaunch and
+# check_environment() aborts, unrecoverably, however many times you retry.
+# Both families now run QC, so the extra is always wanted.
+#
+# Falls back to a bare sync when the private repo is unreachable (no SSH access
+# to czbiohub-sf/imaging-qc-pipeline), so a run that passes no QC config still
+# works; one that does will abort at launch with check_environment()'s message.
+if ! uv sync --project "${BIAHUB_PROJECT}" --extra qc; then
+    echo "  WARNING: 'uv sync --extra qc' failed — no access to imaging-qc-pipeline?" >&2
+    echo "  QC steps will abort at launch; other steps are unaffected." >&2
+    uv sync --project "${BIAHUB_PROJECT}"
+fi
 # shellcheck disable=SC1091
 set +u; source "${BIAHUB_PROJECT}/.venv/bin/activate"; set -u
 command -v biahub >/dev/null || { echo "biahub not on PATH after activation" >&2; exit 1; }
@@ -146,6 +168,18 @@ fi
 # Harmless when unset already, and nothing in the pipeline reads it.
 unset CLAUDECODE
 
+# The last four flags are the OPTIONAL steps: a step runs only if its config is
+# passed (biahub#306). Defaults by family —
+#
+#   A549 / cell-line   assemble + track + QC   (all four, as written)
+#   zebrafish / neuromast   assemble + QC      (delete --track_config and
+#                                               --qc_track_config)
+#
+# TO SKIP A STEP, DELETE ITS LINE. Do not comment it out: `#` inside a
+# backslash-continued command does not start a comment line — the continuation
+# swallows it, every flag below it is dropped including `-resume`, and bash then
+# tries to run the remainder as a command. Note the skip in a comment above this
+# call instead, so the provenance record still says what this run did and why.
 nextflow run "${PIPELINE}" \
     -c "${NF_CONFIG}" \
     -profile slurm \
@@ -157,5 +191,7 @@ nextflow run "${PIPELINE}" \
     --virtual_stain_config "${CONFIGS}/virtual_stain.yml" \
     --concatenate_config   "${CONFIGS}/concatenate.yml" \
     --track_config         "${CONFIGS}/track.yml" \
+    --qc_config            "${CONFIGS}/qc/assemble/pixel_metrics.yaml" \
+    --qc_track_config      "${CONFIGS}/qc/track/cell_count.yaml" \
     -resume \
     "$@"

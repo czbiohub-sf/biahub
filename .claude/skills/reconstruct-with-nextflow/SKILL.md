@@ -3,11 +3,13 @@ name: reconstruct-with-nextflow
 description: >-
   Run a mantis-v2 microscope dataset through the biahub Nextflow reconstruction
   pipeline (nextflow/mantis-v2.nf: flat-field → deskew → reconstruct →
-  virtual-stain → assemble → track) on the Bruno HPC cluster. Locates the raw
+  virtual-stain → assemble → track → QC) on the Bruno HPC cluster. Assemble,
+  track and QC are optional and selected per dataset family: A549 runs assemble
+  + track + QC, neuromast runs assemble + QC and no tracking. Locates the raw
   acquisition under /hpc/instruments/cm.mantis, picks the output project
   directory, scaffolds configs, launches the run in a tmux session in the
   foreground so it can be watched, recovers from Lustre/torn-shard I/O errors,
-  and reports a summary. Use when asked to "reconstruct", "run the pipeline
+  and reports a summary including the QC verdict. Use when asked to "reconstruct", "run the pipeline
   on", or "process" a named mantis-v2 dataset.
 ---
 
@@ -36,7 +38,56 @@ not on Bruno, stop and tell the user to connect; do not ssh on their behalf.
 The Nextflow head process is lightweight, so a login node is the right place
 for it (see `references/monitoring.md` for the compute-node exception).
 
-### 1a-bis. Slack notifications — optional, offer to set up
+### 1a-bis. GitHub access for the QC dependency — walk the user through it
+
+QC runs the external `imaging-qc` CLI, which comes from
+`czbiohub-sf/imaging-qc-pipeline`, a **private** org repo. `uv sync --extra qc`
+clones it over HTTPS, so the user needs a GitHub credential — but **not an SSH
+key**. Check before scaffolding, because the failure otherwise arrives as a raw
+git error in the middle of an install:
+
+```bash
+gh auth status 2>&1 | head -3
+```
+
+If it reports a logged-in account, run one more command to make git use it, and
+move on:
+
+```bash
+gh auth setup-git      # idempotent; installs gh as git's credential helper
+```
+
+If it reports no account, walk them through it — two commands, no key to
+generate or upload, and `gh` is already at `/usr/bin/gh` on Bruno:
+
+```bash
+gh auth login          # choose GitHub.com -> HTTPS -> login with a web browser
+gh auth setup-git
+```
+
+`gh auth login` prints a one-time code and a URL to open on their laptop; the
+Bruno session does not need a browser. If the org enforces SAML SSO the same
+browser flow authorizes it. Verify before continuing:
+
+```bash
+git ls-remote https://github.com/czbiohub-sf/imaging-qc-pipeline HEAD >/dev/null \
+  && echo "QC dependency reachable" || echo "still no access"
+```
+
+Still refused after logging in means their account lacks access to that repo,
+which no local setup can fix — **tell them to ask a biahub developer (Ivan,
+Taylla) to be added**, and offer to continue without QC by dropping `--qc_config`
+and `--qc_track_config` (§7). The rest of the pipeline needs no GitHub
+credential at all, so this never blocks a reconstruction.
+
+A user who already uses SSH keys for GitHub needs nothing here; if they would
+rather keep using them, one local rewrite makes the HTTPS URL resolve over ssh:
+
+```bash
+git config --global url."ssh://git@github.com/".insteadOf "https://github.com/"
+```
+
+### 1a-ter. Slack notifications — optional, offer to set up
 
 ```bash
 printenv BIAHUB_SLACK_WEBHOOK >/dev/null && echo "webhook set" || echo "webhook MISSING"
@@ -122,7 +173,11 @@ say which you think it is and let the user decide. A fresh reprocess goes to a
 ## 5. Start from the configs on `main`
 
 The templates in `<BIAHUB>/nextflow/configs/{a549,zebrafish}/` are the source
-of truth — they version with the pipeline and are reviewed. A previous run's
+of truth — they version with the pipeline and are reviewed. QC configs are
+shared across families and live in `<BIAHUB>/nextflow/configs/qc/`, one
+directory per store kind (`assemble/`, `track/`) — copy the tree, do not
+flatten it: each directory must hold only its own step's config, or every
+report tab renders the same one. A previous run's
 `configs/` directory is a fallback only: an unreviewed snapshot that drifts
 with the schema and carries dataset-specific edits.
 
@@ -150,14 +205,39 @@ Do not run anything yet. Show the user:
 5. That configs come from `<BIAHUB>/nextflow/configs/<family>/` at commit
    `<sha>`, every value changed for this dataset, and any template fix headed
    for a PR.
-6. Pipeline steps: flat-field → deskew → reconstruct → virtual-stain →
-   assemble → track. **For neuromast/zebrafish, say that `5-assemble` is the
-   deliverable and `4-track` is a discarded by-product** (`caveats.md` §4).
+6. **The steps this run will perform, listed in order.** Reconstruction proper —
+   flat-field → deskew → reconstruct → virtual-stain — always runs; assemble,
+   track and QC run only if their config is passed (biahub#306). Defaults by
+   family, which is what to present unless the user says otherwise:
+
+   | family | steps |
+   |---|---|
+   | A549 / cell-line / organelle | flat-field → deskew → reconstruct → virtual-stain → **assemble → track → QC** |
+   | neuromast / zebrafish / dynatrack | flat-field → deskew → reconstruct → virtual-stain → **assemble → QC** (no tracking) |
+
+   Write the list out in the plan rather than naming the family, and say which
+   optional steps are being skipped and why. If the user asks to skip anything
+   else, reflect that here — the plan is where the step set is agreed.
+
+   For neuromast/zebrafish say that the assembled store is the deliverable and
+   that tracking is simply not run — there is no tracking by-product any more
+   (`caveats.md` §4).
+
+   **State the directory numbers this run will produce.** The number is the
+   step's position among the steps performed, not a fixed label, so a neuromast
+   run writes `4-assemble` as its last directory and an A549 run writes
+   `4-assemble` then `5-track`. Older A549 runs on disk say `5-assemble` /
+   `4-track`, from when the numbers were fixed — say so if the user is comparing
+   against one.
 7. Known caveats that apply to this dataset.
 8. Rough wall-time and that `-resume` is on.
 9. Whether Slack notifications are on, and who will be @-mentioned at run end.
    If `$BIAHUB_SLACK_WEBHOOK` or `$BIAHUB_SLACK_ID` is missing, note it here as a
-   caveat with the offer from §1a-bis — not as a blocker.
+   caveat with the offer from §1a-ter — not as a blocker.
+10. If QC is in the step list, that the GitHub credential from §1a-bis is in
+    place. If it is not and cannot be, say the run will proceed without QC
+    rather than silently dropping it — the step set in item 6 has to match what
+    is actually going to run.
 
 Get explicit approval.
 
@@ -166,7 +246,20 @@ Get explicit approval.
 ```bash
 mkdir -p <OUTPUT>/configs <OUTPUT>/nextflow
 cp <BIAHUB>/nextflow/configs/<family>/*.yml <OUTPUT>/configs/
+cp -r <BIAHUB>/nextflow/configs/qc <OUTPUT>/configs/qc     # keeps assemble/ and track/
 ```
+
+The run script passes all four optional configs — `--concatenate_config`,
+`--track_config`, `--qc_config`, `--qc_track_config` — so an A549 run needs no
+edit. **For a neuromast/zebrafish run, or any step the user asked to skip,
+DELETE that flag's line** from the `nextflow run` call and note the skip in a
+comment above it, so the script still records what this run did. A neuromast run
+deletes `--track_config` and `--qc_track_config`; `track.yml` need not exist at
+all, and there is no `qc` config directory to copy for a step that is not run.
+
+Delete rather than comment: a `#` inside a backslash-continued command does not
+start a comment line — the continuation swallows it, every flag below is dropped
+including `-resume`, and bash then tries to run the remainder as a command.
 
 Edit the copies for this dataset. Copy `templates/run_mantis_v2.sh` to
 `<OUTPUT>/run_mantis_v2.sh`, fill in `DATASET`, `DATA_DIR`, `PROJECT_DIR`,
@@ -264,13 +357,20 @@ Restarts are always `bash ./run_mantis_v2.sh` — the script passes `-resume`.
 1. Normalize channel names on the assembled plate with
    `templates/rename_channels.py` (idempotent; `caveats.md` §2 — check first
    whether a `rename-channels` CLI has landed on main, making this obsolete).
-2. Verify `5-assemble/<DATASET>.zarr` opens with iohub; report shape, channels,
-   size on disk. For neuromast/zebrafish this is the deliverable; report
-   `4-track` only as a discarded by-product.
-3. Report per-step task counts, failures, retries, and wall time from
+2. Verify the assembled store (`<N>-assemble/<DATASET>.zarr`, `4-assemble`
+   unless earlier steps were skipped) opens with iohub; report shape, channels,
+   size on disk. This is the deliverable for every family; tracking, when it
+   ran, is reported beside it rather than as a by-product.
+3. If QC ran, report its verdict: the `QC_SUMMARY` line per store from the
+   pipeline log (`pass=`/`fail=`/`gates_fail=`), and point at the report at
+   `<OUTPUT>/qc/report/index.html` — one page, one tab per QC'd store. A gate
+   failure does NOT fail the run: `imaging-qc gate` exits 0 either way, so a
+   failing verdict is only visible in the summary line, the report, and the
+   `tables/qc/` parquet inside each store.
+4. Report per-step task counts, failures, retries, and wall time from
    `<OUTPUT>/nextflow/trace.txt`; point at `report.html` and `timeline.html`.
-4. Confirm the pipeline's automatic run-end message landed, then send a wrap-up
+5. Confirm the pipeline's automatic run-end message landed, then send a wrap-up
    only for what the pipeline cannot know: the channel-rename result, the iohub
    verification, and size on disk.
-5. Flag anything needing a human eye: positions that passed only after many
+6. Flag anything needing a human eye: positions that passed only after many
    retries, steps far slower than the reference run, unexpected channel counts.
