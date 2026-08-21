@@ -245,6 +245,34 @@ def restarted_line(outcome) {
 // Called from a single `workflow.onComplete`, never from onComplete AND onError:
 // onError fires in ADDITION to onComplete, so implementing both double-posts
 // every failure.
+// Lines that carry no information about what went wrong. Groovy appends a
+// `Possible solutions:` list to every MissingMethodException — that is what a
+// real run put in a Slack title, verbatim and alone: "reconstruction aborted:
+// Possible solutions: any(), any(), any(groovy.lang.Closure), …".
+def _is_boilerplate(line) {
+    def t = line.trim()
+    return t.startsWith('at ') || t.startsWith('Possible solutions:') ||
+           t ==~ /^\.\.\. \d+ more$/ || t.startsWith('Caused by:') && t.size() < 12
+}
+
+// The most informative single line, for the title.
+//
+// LAST non-boilerplate line, not the first. For a task that died in Python,
+// errorMessage is the captured stderr, so the first line is "Traceback (most
+// recent call last):" — true of every Python failure and useless in a title —
+// while the last is the exception itself ("ValueError: bad config here"). For a
+// Groovy error the informative line is followed by boilerplate, which is why the
+// filter runs before `.last()` rather than after. The Python caps the length.
+def error_headline(lines) {
+    def useful = lines.findAll { !_is_boilerplate(it) }
+    return useful ? useful.last().trim() : null
+}
+
+// Stack frames say where the interpreter was, not what the user must fix.
+def strip_stack_frames(text) {
+    return text.readLines().findAll { !_is_boilerplate(it) }.join('\n')
+}
+
 def notify_run_end(dataset, pipeline, wf, assembled = null) {
     def stats = wf.stats
     def lines = [
@@ -293,33 +321,46 @@ def notify_run_end(dataset, pipeline, wf, assembled = null) {
         return
     }
 
-    // Ctrl-C also lands here. Calling that a failure would make every debug
-    // relaunch read as a catastrophe, so distinguish it: an interrupt records no
-    // process exit status.
-    def aborted = wf.exitStatus == null
-    def verb = aborted ? 'aborted' : 'FAILED'
-    def icon = aborted ? ':warning:' : ':x:'
-    def title = "${icon} ${dataset} — reconstruction ${verb}"
-    // LAST non-blank line, not the first. For a task that died in Python,
-    // errorMessage is the captured stderr, so the first line is
-    // "Traceback (most recent call last):" — true of every Python failure and
-    // therefore useless in a title, while the last line is the exception itself
-    // ("ValueError: bad config here"). For a non-Python failure it is a
-    // single-line "Process X terminated with an error exit status (3)", where
-    // first and last are the same. Same reasoning as keeping the tail when
-    // truncating a detail. The Python caps the title length.
-    def message = wf.errorMessage?.readLines()?.findAll { it.trim() }
-    if (message) {
-        title += ": ${message.last().trim()}"
+    // THREE outcomes reach here, and they need different words. An interrupt
+    // (Ctrl-C) records no error message at all — calling that a failure would
+    // make every debug relaunch read as a catastrophe. A task failure names a
+    // process. Anything else is the pipeline's own code failing to wire itself,
+    // where NO task failed and there is nothing to retry: the run that prompted
+    // this had 288 successful tasks and every reconstruction step on disk, and
+    // still said "reconstruction aborted".
+    def message_lines = (wf.errorMessage ?: '').readLines().findAll { it.trim() }
+    def interrupted = message_lines.isEmpty()
+    def task_match = (wf.errorReport ?: '') =~ /Process `([^`]+)`/
+    def failed_task = task_match ? task_match[0][1] : null
+
+    def icon = interrupted ? ':warning:' : ':x:'
+    def title
+    if (interrupted) {
+        title = "${icon} ${dataset} — reconstruction interrupted"
+    }
+    else if (failed_task) {
+        title = "${icon} ${dataset} — ${failed_task} failed"
+    }
+    else {
+        title = "${icon} ${dataset} — pipeline error, no task failed"
+    }
+    def headline = error_headline(message_lines)
+    if (headline) {
+        title += ": ${headline}"
     }
 
     // workflow.errorReport embeds the failing task's `Command executed:` block
     // and a full Python traceback — backticks, quotes and newlines. Never build
     // a shell string out of it; write it to a file and pass the path.
-    def report = [summary, wf.errorReport ?: ''].findAll { it }.join('\n\n')
+    //
+    // Stack frames are stripped first. The detail is truncated from the FRONT
+    // (clean_and_truncate keeps the tail, where a Python diagnosis lives), so a
+    // hundred lines of `at java.base/...` would push the counts and the actual
+    // error out of the message and leave the reader with thread bookkeeping.
+    def report = [summary, strip_stack_frames(wf.errorReport ?: '')].findAll { it }.join('\n\n')
     def detail_file = new File("${params.output}/nextflow/.notify/run-end.txt")
     def args = [
-        '--level', aborted ? 'warn' : 'error',
+        '--level', interrupted ? 'warn' : 'error',
         '--ping',
         '--title', title,
     ]

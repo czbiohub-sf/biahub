@@ -272,12 +272,21 @@ workflow {
         def spec = qc_report_spec(qc_stores, "${out}/qc/report_spec.yaml", "QC — ${ds}")
 
         // Each store waits only on its own producer, so they QC independently.
+        //
+        // The trigger is mapped, NOT combined. `combine` concatenates the two
+        // items, so what the producer emits leaks into the tuple's arity: assemble
+        // emits one path and gave `[zarr, config, path]`, but tracking emits a
+        // COLLECTED LIST of every position's output, so the tuple became
+        // `[zarr, config, p1, p2, … p30]` and a three-parameter closure could not
+        // be spread across it — `MissingMethodException`, after seven hours, with
+        // every reconstruction step already finished. Mapping reads nothing out of
+        // the trigger, so no producer's payload shape can reach this.
+        //
+        // `.first()` because a trigger is a signal, not a stream: one QC run per
+        // store however many items its producer emits.
         qc_inputs = Channel.empty()
         qc_stores.each { st ->
-            def one = Channel.of(tuple(st.zarr, st.config))
-                .combine(st.trigger)
-                .map { z, cfg, done -> tuple(z, cfg) }
-            qc_inputs = qc_inputs.mix(one)
+            qc_inputs = qc_inputs.mix( st.trigger.first().map { tuple(st.zarr, st.config) } )
         }
 
         qc = qc_stage_wf(qc_inputs)
