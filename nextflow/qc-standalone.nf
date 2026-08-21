@@ -36,7 +36,7 @@ workflow {
         error "Provide --output (run/output directory)"
     }
 
-    plan_inputs = Channel
+    plan_inputs = channel
         .fromPath(params.stages_manifest)
         .splitCsv(header: true)
         .map { row -> tuple(row.zarr_path.trim(), row.config_path.trim()) }
@@ -46,13 +46,13 @@ workflow {
     // task runs — and a channel's contents are not available then. One CSV, two
     // readers, no ordering dependency between them.
     def rows = file(params.stages_manifest).readLines()
-        .findAll { it.trim() && !it.startsWith('zarr_path') }
-        .collect { it.split(',').collect { c -> c.trim() } }
+        .findAll { line -> line.trim() && !line.startsWith('zarr_path') }
+        .collect { line -> line.split(',').collect { cell -> cell.trim() } }
 
     // Label each tab by the store's parent directory (`4-assemble`, `5-track`),
     // which is what distinguishes stores of one dataset; fall back to the store
     // name when two stores would otherwise collide.
-    def labels = rows.collect { file(it[0]).parent.name }
+    def labels = rows.collect { row -> file(row[0]).parent.name }
     def qc_stores = [rows, labels].transpose().collect { row, label ->
         [label: labels.count(label) > 1 ? "${label}/${file(row[0]).simpleName}" : label,
          zarr: row[0], config: row[1]]
@@ -62,5 +62,5 @@ workflow {
     def spec = qc_report_spec(qc_stores, "${params.output}/qc/report_spec.yaml", "QC report")
 
     qc = qc_stage_wf(plan_inputs)
-    qc_report_wf(qc.done, spec, report_dir)
+    qc_report_wf(qc.out, spec, report_dir)
 }

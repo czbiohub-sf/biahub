@@ -4,7 +4,7 @@ def dataset_name() {
 }
 
 def parse_resources(stdout_text, prefix = 'RESOURCES:') {
-    def matching = stdout_text.trim().readLines().findAll { it.startsWith(prefix) }
+    def matching = stdout_text.trim().readLines().findAll { line -> line.startsWith(prefix) }
     if (!matching) {
         error "Expected a '${prefix}' line in command output but none was found. The underlying CLI may have failed."
     }
@@ -111,8 +111,8 @@ workflow collect_positions {
     main:
     positions = list_positions(input_zarr)
         | splitText
-        | map { it.trim() }
-        | filter { it }
+        | map { line -> line.trim() }
+        | filter { line -> line }
 
     // COERCE max_positions TO int, and call `take` as a method rather than
     // through the `|` pipe. A param supplied on the command line arrives as a
@@ -125,10 +125,9 @@ workflow collect_positions {
     // The default path (max_positions = 0, from config, an int) never reaches
     // `take`, so this only ever broke the `--max_positions N` smoke-test path.
     def n = (params.max_positions ?: 0) as int
-    out = n > 0
-        ? positions.take(n).collect()
-        : positions.collect()
 
     emit:
-    out
+    n > 0
+        ? positions.take(n).collect()
+        : positions.collect()
 }

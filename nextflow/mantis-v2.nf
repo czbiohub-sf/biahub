@@ -166,7 +166,7 @@ workflow {
     // writes the flat-field step directory. When a convert step is added ahead
     // of flat-field, point ff_input at the convert output instead — flat_field_wf
     // doesn't care where its input comes from.
-    ff_trigger = Channel.value(true)
+    ff_trigger = channel.value(true)
     ff_input  = params.input
     ff_output = "${out}/${layout.flat_field}/${ds}.zarr"
 
@@ -284,7 +284,7 @@ workflow {
         //
         // `.first()` because a trigger is a signal, not a stream: one QC run per
         // store however many items its producer emits.
-        qc_inputs = Channel.empty()
+        qc_inputs = channel.empty()
         qc_stores.each { st ->
             qc_inputs = qc_inputs.mix( st.trigger.first().map { tuple(st.zarr, st.config) } )
         }
@@ -305,7 +305,7 @@ workflow {
     //
     // Nothing here reads a position count. It is the same for every step, so
     // saying it six times adds nothing; the run-start message reports it once.
-    // That also removes a trap: assemble_wf's `done` carries a single path
+    // That also removes a trap: assemble_wf's output carries a single path
     // String rather than the collected position list, and `('a/b.zarr' as List)`
     // explodes into characters.
     // ONE list of the steps this run actually performed, in order, each with the
@@ -328,10 +328,10 @@ workflow {
     if (track_on)    step_events << [label: 'track',    done: track_done.done,    output: track_output]
     if (qc_on)       step_events << [label: 'QC',       done: qc_report.done,     output: qc_report_dir]
 
-    steps = step_events.collect { it.label }
+    steps = step_events.collect { event -> event.label }
     n_steps = steps.size()
 
-    notify_events = Channel.empty()
+    notify_events = channel.empty()
     step_events.eachWithIndex { e, i ->
         notify_events = notify_events.mix( e.done.map { [e.label, e.output, "${i + 1}/${n_steps}"] } )
     }

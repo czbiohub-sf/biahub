@@ -112,7 +112,7 @@ def notify_run_start(dataset, pipeline, n_positions, steps) {
         // unset param throws — mantis-v2.nf declares a default, but this module
         // must not blow up in a pipeline that doesn't.
         ((params.max_positions ?: 0) as int) > 0 ? "max_positions: ${params.max_positions}" : null,
-    ].findAll { it }.join('\n')
+    ].findAll { part -> part }.join('\n')
 
     // --operator prepends the "operator:" line, resolved from the account database
     // by the Python. It is NOT taken from Slack: turning a member ID into a
@@ -166,7 +166,7 @@ def restart_causes(job_ids) {
         }
         return causes ?: null
     }
-    catch (Throwable t) {
+    catch (Throwable _t) {
         return null
     }
 }
@@ -219,7 +219,7 @@ def failed_attempts() {
         }
         return outcome
     }
-    catch (Exception e) {
+    catch (Exception _e) {
         return null
     }
 }
@@ -235,7 +235,7 @@ def restarted_line(outcome) {
     }
     def causes = restart_causes(outcome.job_ids)
     def detail = causes
-        ? causes.sort { -it.value }.collect { label, n -> "${n} ${label}" }.join(', ')
+        ? causes.sort { entry -> -entry.value }.collect { label, n -> "${n} ${label}" }.join(', ')
         : outcome.exits.sort().collect { code, n -> "exit ${code}×${n}" }.join(', ')
     return "restarted: ${outcome.restarted} (${detail})".toString()
 }
@@ -264,13 +264,13 @@ def _is_boilerplate(line) {
 // Groovy error the informative line is followed by boilerplate, which is why the
 // filter runs before `.last()` rather than after. The Python caps the length.
 def error_headline(lines) {
-    def useful = lines.findAll { !_is_boilerplate(it) }
+    def useful = lines.findAll { line -> !_is_boilerplate(line) }
     return useful ? useful.last().trim() : null
 }
 
 // Stack frames say where the interpreter was, not what the user must fix.
 def strip_stack_frames(text) {
-    return text.readLines().findAll { !_is_boilerplate(it) }.join('\n')
+    return text.readLines().findAll { line -> !_is_boilerplate(line) }.join('\n')
 }
 
 def notify_run_end(dataset, pipeline, wf, assembled = null) {
@@ -328,7 +328,7 @@ def notify_run_end(dataset, pipeline, wf, assembled = null) {
     // where NO task failed and there is nothing to retry: the run that prompted
     // this had 288 successful tasks and every reconstruction step on disk, and
     // still said "reconstruction aborted".
-    def message_lines = (wf.errorMessage ?: '').readLines().findAll { it.trim() }
+    def message_lines = (wf.errorMessage ?: '').readLines().findAll { line -> line.trim() }
     def interrupted = message_lines.isEmpty()
     def task_match = (wf.errorReport ?: '') =~ /Process `([^`]+)`/
     def failed_task = task_match ? task_match[0][1] : null
@@ -357,7 +357,7 @@ def notify_run_end(dataset, pipeline, wf, assembled = null) {
     // (clean_and_truncate keeps the tail, where a Python diagnosis lives), so a
     // hundred lines of `at java.base/...` would push the counts and the actual
     // error out of the message and leave the reader with thread bookkeeping.
-    def report = [summary, strip_stack_frames(wf.errorReport ?: '')].findAll { it }.join('\n\n')
+    def report = [summary, strip_stack_frames(wf.errorReport ?: '')].findAll { part -> part }.join('\n\n')
     def detail_file = new File("${params.output}/nextflow/.notify/run-end.txt")
     def args = [
         '--level', interrupted ? 'warn' : 'error',
@@ -369,7 +369,7 @@ def notify_run_end(dataset, pipeline, wf, assembled = null) {
         detail_file.text = report
         args += ['--detail-file', detail_file.path]
     }
-    catch (Exception e) {
+    catch (Exception _e) {
         // An unwritable output dir is plausible here (it may be why the run
         // failed). Fall back to the counts, which need no file.
         args += ['--detail', summary]
@@ -409,7 +409,7 @@ def notify_run_end(dataset, pipeline, wf, assembled = null) {
 def notify_send(args) {
     def command = ['biahub', 'nf', 'notify'] +
         ['--log-file', "${params.output}/nextflow/.notify/notify.log".toString()] +
-        args.collect { it.toString() }
+        args.collect { arg -> arg.toString() }
     try {
         def builder = new ProcessBuilder(command)
         builder.inheritIO()

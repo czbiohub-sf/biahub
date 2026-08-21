@@ -156,7 +156,7 @@ workflow qc_stage_wf {
     // carries `mem` (GB), which becomes compute_step's meta.memory_gb.
     est_mem = estimate_resources(plan_inputs)
         .map { z, cfg, est_json ->
-            def line = est_json.trim().readLines().findAll { it.trim().startsWith('{') }.last()
+            def line = est_json.trim().readLines().findAll { line -> line.trim().startsWith('{') }.last()
             def r = new groovy.json.JsonSlurper().parseText(line)
             tuple([z, cfg], (r.estimate_gb ?: 16) as Double)
         }
@@ -188,15 +188,15 @@ workflow qc_stage_wf {
     // `.count()` is the barrier: every item's shard is on disk before the stage
     // merge reads them. finalize_stage consolidates, then gates — one merge per
     // stage, which is all there is now that waves are gone.
-    merged = plan_out.map { z, cfg, json -> [z, cfg] }
+    merged = plan_out.map { z, cfg, _json -> [z, cfg] }
         .combine(done.count())
-        .map { z, cfg, n -> [z, cfg] }
+        .map { z, cfg, _n -> [z, cfg] }
         | finalize_stage
 
     emit:
     // (zarr, config) rather than the zarr alone: the report needs the config that
     // produced the store's tables, and rediscovering it downstream would be a guess.
-    done = merged.map { z, cfg, summary -> tuple(z, cfg) }
+    done = merged.map { z, cfg, _summary -> tuple(z, cfg) }
 }
 
 
@@ -251,7 +251,7 @@ workflow qc_report_wf {
     main:
     // The barrier: one report reads every store's consolidated tables, so all of
     // them must be final first. `.count()` waits for the whole channel.
-    ready = qc_done.count().map { n -> tuple(report_spec, report_dir) }
+    ready = qc_done.count().map { _n -> tuple(report_spec, report_dir) }
     reports = generate_unified_report(ready)
 
     emit:
