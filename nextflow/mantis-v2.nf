@@ -42,7 +42,6 @@ params.max_positions = 0
 // either, both, or neither. Both QC'd stores become tabs of ONE report.
 //   --qc_config       nextflow/configs/qc/assemble/pixel_metrics.yaml
 //   --qc_track_config nextflow/configs/qc/track/cell_count.yaml
-// Configs are grouped one directory per step; see qc_report_spec() for why.
 params.qc_config = null
 params.qc_track_config = null
 

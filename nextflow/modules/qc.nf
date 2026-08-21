@@ -223,24 +223,18 @@ def qc_report_spec(tabs, spec_path, title) {
 
     def lines = ["title: \"${title}\"", "tabs:"]
     tabs.each { t ->
-        // The config DIRECTORY, not the file, for two reasons that pull the same
-        // way. imaging-qc's report verb does not compose Hydra `defaults:`, so a
-        // config inheriting its `report:` block from base.yaml loses every metric
-        // plot when handed the file alone (imaging-qc-pipeline#201) — the
-        // directory scan finds both files. And the scan takes the FIRST YAML with
-        // a `report:` section, so the directory must hold only this step's
-        // configs: point two tabs at one shared directory and both render the
-        // same block, which is how a cell-count tab ends up with pixel metric
-        // labels and no instance_count plot, at exit 0.
+        // The config FILE, which is the same file the compute steps are given,
+        // so a tab renders the settings that stage was actually run with. The
+        // report verb composes the file's Hydra `defaults:`, so a `report:` block
+        // inherited from base.yaml arrives intact and each tab resolves its own
+        // config independently of what sits beside it on disk.
         //
-        // Hence `nextflow/configs/qc/<step>/`. Nothing here keys on the stage
-        // NUMBER: that lives only in each config's `stage:` key, so renumbering a
-        // stage renames no files and changes nothing in this function.
-        def config_dir = file(t.config).parent
+        // Nothing here keys on the stage NUMBER: that lives only in each config's
+        // `stage:` key, so renumbering a stage changes nothing in this function.
         lines << "  - label: \"${t.label}\""
         lines << "    qc_dir: ${t.zarr}/tables/qc"
         lines << "    zarr_path: ${t.zarr}"
-        lines << "    config: ${config_dir}"
+        lines << "    config: ${file(t.config)}"
     }
     spec.text = lines.join('\n') + '\n'
     return spec
