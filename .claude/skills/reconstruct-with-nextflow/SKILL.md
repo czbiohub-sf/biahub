@@ -38,7 +38,56 @@ not on Bruno, stop and tell the user to connect; do not ssh on their behalf.
 The Nextflow head process is lightweight, so a login node is the right place
 for it (see `references/monitoring.md` for the compute-node exception).
 
-### 1a-bis. Slack notifications — optional, offer to set up
+### 1a-bis. GitHub access for the QC dependency — walk the user through it
+
+QC runs the external `imaging-qc` CLI, which comes from
+`czbiohub-sf/imaging-qc-pipeline`, a **private** org repo. `uv sync --extra qc`
+clones it over HTTPS, so the user needs a GitHub credential — but **not an SSH
+key**. Check before scaffolding, because the failure otherwise arrives as a raw
+git error in the middle of an install:
+
+```bash
+gh auth status 2>&1 | head -3
+```
+
+If it reports a logged-in account, run one more command to make git use it, and
+move on:
+
+```bash
+gh auth setup-git      # idempotent; installs gh as git's credential helper
+```
+
+If it reports no account, walk them through it — two commands, no key to
+generate or upload, and `gh` is already at `/usr/bin/gh` on Bruno:
+
+```bash
+gh auth login          # choose GitHub.com -> HTTPS -> login with a web browser
+gh auth setup-git
+```
+
+`gh auth login` prints a one-time code and a URL to open on their laptop; the
+Bruno session does not need a browser. If the org enforces SAML SSO the same
+browser flow authorizes it. Verify before continuing:
+
+```bash
+git ls-remote https://github.com/czbiohub-sf/imaging-qc-pipeline HEAD >/dev/null \
+  && echo "QC dependency reachable" || echo "still no access"
+```
+
+Still refused after logging in means their account lacks access to that repo,
+which no local setup can fix — **tell them to ask a biahub developer (Ivan,
+Taylla) to be added**, and offer to continue without QC by dropping `--qc_config`
+and `--qc_track_config` (§7). The rest of the pipeline needs no GitHub
+credential at all, so this never blocks a reconstruction.
+
+A user who already uses SSH keys for GitHub needs nothing here; if they would
+rather keep using them, one local rewrite makes the HTTPS URL resolve over ssh:
+
+```bash
+git config --global url."ssh://git@github.com/".insteadOf "https://github.com/"
+```
+
+### 1a-ter. Slack notifications — optional, offer to set up
 
 ```bash
 printenv BIAHUB_SLACK_WEBHOOK >/dev/null && echo "webhook set" || echo "webhook MISSING"
@@ -184,7 +233,11 @@ Do not run anything yet. Show the user:
 8. Rough wall-time and that `-resume` is on.
 9. Whether Slack notifications are on, and who will be @-mentioned at run end.
    If `$BIAHUB_SLACK_WEBHOOK` or `$BIAHUB_SLACK_ID` is missing, note it here as a
-   caveat with the offer from §1a-bis — not as a blocker.
+   caveat with the offer from §1a-ter — not as a blocker.
+10. If QC is in the step list, that the GitHub credential from §1a-bis is in
+    place. If it is not and cannot be, say the run will proceed without QC
+    rather than silently dropping it — the step set in item 6 has to match what
+    is actually going to run.
 
 Get explicit approval.
 

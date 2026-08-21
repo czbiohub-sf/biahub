@@ -107,12 +107,23 @@ index-strategy = "unsafe-best-match"
 constraint-dependencies = ["wasmtime<48"]
 
 [tool.uv.sources]
-# Private repo, no PyPI release; ssh is the protocol a Biohub checkout is already
-# authenticated for. The rev is a commit on imaging-qc's main, currently the tip
-# of its Phase 22c simplification. That project relaxed `iohub==0.3.2` to a floor
-# in #199 so both can share one environment — biahub needs iohub>=0.3.11 for the
+# Private repo, no PyPI release. HTTPS rather than ssh so that installing the
+# `qc` extra needs no SSH key: an org member authenticates once with the GitHub
+# CLI, which is already on Bruno, and uv picks the credential up through git.
+#
+#     gh auth login        # browser/device-code flow, SSO-aware
+#     gh auth setup-git    # installs gh as git's credential helper
+#
+# Anyone who prefers ssh keeps working with a local rewrite, so this costs the
+# key-holders nothing:
+#
+#     git config --global url."ssh://git@github.com/".insteadOf "https://github.com/"
+#
+# The rev is a commit on imaging-qc's main, currently the tip of its Phase 22c
+# simplification. That project relaxed `iohub==0.3.2` to a floor in #199 so both
+# can share one environment — biahub needs iohub>=0.3.11 for the
 # gapped-shard-write fix.
-imaging_qc_pipeline = { git = "ssh://git@github.com/czbiohub-sf/imaging-qc-pipeline", rev = "bd3e9831e671adc717ca735e515e98d6450c66ba" }
+imaging_qc_pipeline = { git = "https://github.com/czbiohub-sf/imaging-qc-pipeline", rev = "bd3e9831e671adc717ca735e515e98d6450c66ba" }
 
 [tool.hatch.metadata]
 allow-direct-references = true
