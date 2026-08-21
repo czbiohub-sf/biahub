@@ -96,16 +96,6 @@ biahub = "biahub.cli.main:cli"
 # uv-dynamic-versioning chain, which pulls in packaging>=24.2.
 index-strategy = "unsafe-best-match"
 
-# wasmtime 48 removed `DirPerms`, which itkwasm imports unconditionally, so any
-# resolution that takes it makes `imaging-qc` unimportable:
-#   ImportError: cannot import name 'DirPerms' from 'wasmtime'
-# itkwasm asks for `wasmtime>=28.0.0` with no ceiling and 1.0b200 is its latest,
-# so there is nothing to upgrade to — the bound has to come from here. A
-# constraint rather than a dependency: nothing in biahub imports wasmtime, it
-# arrives transitively via imaging-qc -> ngff-zarr -> itkwasm. Drop this once
-# itkwasm supports 48.
-constraint-dependencies = ["wasmtime<48"]
-
 [tool.uv.sources]
 # Private repo, no PyPI release. HTTPS rather than ssh so that installing the
 # `qc` extra needs no SSH key: an org member authenticates once with the GitHub
@@ -119,11 +109,15 @@ constraint-dependencies = ["wasmtime<48"]
 #
 #     git config --global url."ssh://git@github.com/".insteadOf "https://github.com/"
 #
-# The rev is a commit on imaging-qc's main, currently the tip of its Phase 22c
-# simplification. That project relaxed `iohub==0.3.2` to a floor in #199 so both
+# The rev is a commit on imaging-qc's main. This one carries two things biahub
+# depends on directly: a `wasmtime<48` ceiling, so no `constraint-dependencies`
+# entry is needed here (itkwasm imports a `DirPerms` that wasmtime 48 removed,
+# which made `imaging-qc` unimportable), and a report verb that composes Hydra
+# `defaults:`, which is what lets `qc_report_spec` name a config file rather
+# than its directory. That project also relaxed `iohub==0.3.2` to a floor so both
 # can share one environment — biahub needs iohub>=0.3.11 for the
 # gapped-shard-write fix.
-imaging_qc_pipeline = { git = "https://github.com/czbiohub-sf/imaging-qc-pipeline", rev = "bd3e9831e671adc717ca735e515e98d6450c66ba" }
+imaging_qc_pipeline = { git = "https://github.com/czbiohub-sf/imaging-qc-pipeline", rev = "2be2ee6529adfb990503e3289f19ecfa142b1b5a" }
 
 [tool.hatch.metadata]
 allow-direct-references = true
