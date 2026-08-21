@@ -30,9 +30,15 @@ signal_to_noise:
     # {channel: value} hard_floor key by name (a channel-pooled gate has no channel
     # to key by and refuses the mapping).
     granularity: channel
+    # PRE-rename channel names, deliberately. QC runs INSIDE the pipeline, on the
+    # store assemble just wrote, so it sees the acquisition's own channel names —
+    # the `raw ` prefix only appears after the manual rename_channels.py step that
+    # runs AFTER the pipeline (caveats.md 2, the same ordering trap that makes
+    # track read pre-rename names). Keying these on `raw ...` matched no channel
+    # and imaging-qc refused the config rather than enforce nothing.
     hard_floor:
-      "raw GFP EX488 EM525-45": 5.0
-      "raw mCherry EX561 EM600-37": 5.0
+      "GFP EX488 EM525-45": 5.0
+      "mCherry EX561 EM600-37": 5.0
     hard_ceiling: null
     outlier_method: zscore
     outlier_params:
