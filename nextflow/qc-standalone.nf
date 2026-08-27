@@ -62,5 +62,5 @@ workflow {
     def spec = qc_report_spec(qc_stores, "${params.output}/qc/report_spec.yaml", "QC report")
 
     qc = qc_stage_wf(plan_inputs)
-    qc_report_wf(qc.out, spec, report_dir)
+    qc_report_wf(qc.done, spec, report_dir)
 }
