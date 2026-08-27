@@ -1,9 +1,14 @@
+import builtins
 import json
+import sys
+import types
 import urllib.error
 
 import pytest
 
 from biahub.utils import notify
+
+_real_import = builtins.__import__
 
 
 @pytest.mark.parametrize(
@@ -121,6 +126,143 @@ class _BytesBody:
     def close(self):
         # HTTPError treats its fp as a file object and closes it on teardown.
         pass
+
+
+class _FakeContext:
+    """Stand-in for an ssl.SSLContext, recording what got loaded into it."""
+
+    def __init__(self, ca_certs):
+        self._ca_certs = list(ca_certs)
+        self.loaded = []
+
+    def get_ca_certs(self):
+        return self._ca_certs
+
+    def load_verify_locations(self, cafile=None, capath=None, cadata=None):
+        self.loaded.append(cafile)
+
+
+def _patch_default_context(monkeypatch, ca_certs):
+    context = _FakeContext(ca_certs)
+    monkeypatch.setattr(notify.ssl, "create_default_context", lambda *a, **k: context)
+    return context
+
+
+def test_build_ssl_context_leaves_a_populated_store_alone(monkeypatch):
+    # The interpreter already found a trust store, or the user set SSL_CERT_FILE
+    # and OpenSSL honoured it. Either way, do not touch it.
+    context = _patch_default_context(monkeypatch, [{"subject": ()}])
+
+    assert notify.build_ssl_context() is context
+    assert context.loaded == []
+
+
+def test_build_ssl_context_falls_back_to_certifi_when_the_store_is_empty(
+    monkeypatch, tmp_path
+):
+    # A Python built for another distro's layout loads zero CAs on this cluster.
+    context = _patch_default_context(monkeypatch, [])
+    bundle = tmp_path / "cacert.pem"
+    bundle.write_text("-----BEGIN CERTIFICATE-----\n")
+    monkeypatch.setattr(notify, "_fallback_ca_bundle", lambda: str(bundle))
+
+    assert notify.build_ssl_context() is context
+    # Additive: load_verify_locations adds to the store, so a capath configured
+    # by the default paths is still consulted.
+    assert context.loaded == [str(bundle)]
+
+
+def test_build_ssl_context_warns_when_no_bundle_exists(monkeypatch, capsys):
+    context = _patch_default_context(monkeypatch, [])
+    monkeypatch.setattr(notify, "_fallback_ca_bundle", lambda: None)
+
+    assert notify.build_ssl_context() is context
+    assert context.loaded == []
+    assert "no CA bundle found" in capsys.readouterr().out
+
+
+def test_build_ssl_context_survives_an_unreadable_bundle(monkeypatch, capsys, tmp_path):
+    context = _patch_default_context(monkeypatch, [])
+    monkeypatch.setattr(notify, "_fallback_ca_bundle", lambda: str(tmp_path / "gone.pem"))
+
+    def boom(cafile=None, capath=None, cadata=None):
+        raise OSError("no such file")
+
+    monkeypatch.setattr(context, "load_verify_locations", boom)
+
+    # A bad bundle must not raise out of the notifier: the POST is allowed to
+    # fail and be reported, but never to crash the caller.
+    assert notify.build_ssl_context() is context
+    assert "could not load CA bundle" in capsys.readouterr().out
+
+
+def test_fallback_ca_bundle_prefers_certifi(monkeypatch, tmp_path):
+    bundle = tmp_path / "certifi.pem"
+    bundle.write_text("x")
+    monkeypatch.setattr(notify, "SYSTEM_CA_BUNDLES", (str(tmp_path / "system.pem"),))
+    fake = types.SimpleNamespace(where=lambda: str(bundle))
+    monkeypatch.setitem(sys.modules, "certifi", fake)
+
+    assert notify._fallback_ca_bundle() == str(bundle)
+
+
+def test_fallback_ca_bundle_uses_a_system_path_without_certifi(monkeypatch, tmp_path):
+    system = tmp_path / "ca-bundle.crt"
+    system.write_text("x")
+    monkeypatch.setattr(
+        notify, "SYSTEM_CA_BUNDLES", (str(tmp_path / "absent.pem"), str(system))
+    )
+
+    def no_certifi(name, *args, **kwargs):
+        if name == "certifi":
+            raise ImportError("no certifi")
+        return _real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_certifi)
+
+    assert notify._fallback_ca_bundle() == str(system)
+
+
+def test_fallback_ca_bundle_returns_none_when_nothing_exists(monkeypatch, tmp_path):
+    monkeypatch.setattr(notify, "SYSTEM_CA_BUNDLES", (str(tmp_path / "absent.pem"),))
+    monkeypatch.setitem(
+        sys.modules, "certifi", types.SimpleNamespace(where=lambda: "/nope/cacert.pem")
+    )
+
+    assert notify._fallback_ca_bundle() is None
+
+
+def test_post_with_retry_passes_the_context_to_urlopen(monkeypatch):
+    sentinel = object()
+    monkeypatch.setattr(notify, "build_ssl_context", lambda: sentinel)
+    seen = {}
+
+    def urlopen(request, timeout=None, context=None):
+        seen["context"] = context
+        return _FakeResponse()
+
+    monkeypatch.setattr(notify.urllib.request, "urlopen", urlopen)
+
+    ok, _ = notify.post_with_retry("http://hook", {"text": "x"}, sleep=lambda _: None)
+
+    assert ok
+    assert seen["context"] is sentinel
+
+
+def test_post_with_retry_builds_the_context_once_not_per_attempt(monkeypatch):
+    # The bundle is a ~220 kB PEM and retries cannot change the outcome of
+    # loading it, so it must be read once per call.
+    builds = []
+    monkeypatch.setattr(notify, "build_ssl_context", lambda: builds.append(1) or object())
+    monkeypatch.setattr(
+        notify.urllib.request,
+        "urlopen",
+        lambda *a, **k: (_ for _ in ()).throw(_http_error(503, b"slow_down")),
+    )
+
+    notify.post_with_retry("http://hook", {"text": "x"}, sleep=lambda _: None)
+
+    assert len(builds) == 1
 
 
 def test_post_with_retry_succeeds_first_try(monkeypatch):

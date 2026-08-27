@@ -4,7 +4,9 @@ The Nextflow pipeline calls ``biahub nf notify`` at run start, after each step
 completes, and once at run end (see ``nextflow/modules/notify.nf``). Everything
 here is deliberately dependency-free (stdlib ``urllib``) and structured as pure
 functions so the payload shaping, truncation, and retry rules are unit-testable
-without a network.
+without a network. The one optional import is ``certifi``, used only as a CA
+bundle of last resort and guarded so its absence changes nothing --- see
+:func:`build_ssl_context`.
 
 Two environment variables drive it, both read at call time and never written to
 a file, a config default, or a process script:
@@ -21,6 +23,7 @@ a file, a config default, or a process script:
 import json
 import os
 import re
+import ssl
 import time
 import urllib.error
 import urllib.request
@@ -60,6 +63,14 @@ RETRYABLE_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
 RETRY_DELAYS = (2.0, 5.0)
 RETRY_AFTER_CAP = 30.0
 REQUEST_TIMEOUT = 10.0
+
+# Where to look for a CA bundle when the interpreter's own compiled-in default
+# turns up empty. RHEL first, since the cluster is RHEL 8.
+SYSTEM_CA_BUNDLES = (
+    "/etc/pki/tls/certs/ca-bundle.crt",  # RHEL / CentOS / Fedora
+    "/etc/ssl/certs/ca-certificates.crt",  # Debian / Ubuntu
+    "/etc/ssl/cert.pem",  # Alpine / BSD / Homebrew OpenSSL
+)
 
 
 def normalize_slack_id(raw: str | None) -> str | None:
@@ -234,6 +245,92 @@ def _one_line(title: str) -> str:
     return collapsed[: MAX_TITLE_CHARS - 1] + "…"
 
 
+def _fallback_ca_bundle() -> str | None:
+    """Name a CA bundle to use when the interpreter's default store is empty.
+
+    Returns
+    -------
+    str or None
+        Path to a readable PEM bundle, or ``None`` if none was found.
+
+    Notes
+    -----
+    ``certifi`` first: it is only a transitive dependency here (via ``requests``),
+    so the import is guarded — but when present it is the bundle every other HTTP
+    client in the venv already trusts, which makes it the least surprising choice.
+    The hard-coded system paths are the fallback for a venv without it.
+    """
+    try:
+        import certifi
+
+        bundle = certifi.where()
+        if os.path.exists(bundle):
+            return bundle
+    except Exception:
+        # Not installed, or a broken install. Either way, try the system paths.
+        pass
+
+    for bundle in SYSTEM_CA_BUNDLES:
+        if os.path.exists(bundle):
+            return bundle
+    return None
+
+
+def build_ssl_context() -> ssl.SSLContext:
+    """Build a TLS context that trusts a real CA store on any interpreter.
+
+    Returns
+    -------
+    ssl.SSLContext
+        A verifying client context.
+
+    Notes
+    -----
+    ``urlopen`` with no context uses OpenSSL's **compiled-in** ``openssldir``,
+    which is a property of how the interpreter was built, not of the machine it
+    runs on. A Python built for the Debian layout (``cafile=/etc/ssl/cert.pem``,
+    ``capath=/etc/ssl/certs``) finds no cafile on RHEL 8 and falls back to the
+    capath — which exists, as a symlink to ``/etc/pki/tls/certs``, but holds no
+    hash-named symlinks for OpenSSL to look up. The store loads zero CAs and
+    every POST dies with ``CERTIFICATE_VERIFY_FAILED``. Same outcome for a conda
+    env missing ``ca-certificates``, whose ``openssldir`` is the env prefix.
+
+    Users hit this and export ``SSL_CERT_FILE`` in their shell profile. That
+    works, but it is invisible to the next person and fixes only the shell it is
+    set in. So the notifier finds a bundle itself.
+
+    The fallback is **additive**: ``load_verify_locations`` adds to the store
+    rather than replacing it, so a capath configured by the default paths stays
+    in effect and an internal CA installed only there is not dropped. It is also
+    skipped entirely whenever the default store already has certificates, which
+    includes the case where the user set ``SSL_CERT_FILE`` themselves — OpenSSL
+    reads that variable in ``set_default_verify_paths``, so an explicit choice
+    still wins.
+
+    ``get_ca_certs()`` reports only what came from a cafile or cadata, never from
+    a capath, so "empty" here means "no bundle was loaded" rather than "nothing
+    is trusted". Treating a hashed-capath-only machine as empty costs one extra
+    bundle load and changes no verification outcome.
+    """
+    context = ssl.create_default_context()
+    if context.get_ca_certs():
+        return context
+
+    bundle = _fallback_ca_bundle()
+    if bundle is None:
+        print(
+            "[notify] no CA bundle found — TLS verification will fail. "
+            "Set SSL_CERT_FILE to a PEM bundle, or install certifi in the venv.",
+        )
+        return context
+
+    try:
+        context.load_verify_locations(cafile=bundle)
+    except OSError as error:
+        print(f"[notify] could not load CA bundle {bundle}: {error}")
+    return context
+
+
 def post_with_retry(
     webhook: str,
     payload: dict,
@@ -267,6 +364,9 @@ def post_with_retry(
     """
     body = json.dumps(payload).encode()
     status = "not attempted"
+    # Built once, outside the loop: the bundle is a ~220 kB PEM and the retries
+    # cannot change the outcome of loading it.
+    context = build_ssl_context()
 
     for attempt in range(attempts):
         try:
@@ -276,7 +376,9 @@ def post_with_retry(
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as response:
+            with urllib.request.urlopen(
+                request, timeout=REQUEST_TIMEOUT, context=context
+            ) as response:
                 return True, f"HTTP {response.status}"
         except urllib.error.HTTPError as error:
             detail = _read_error_body(error)

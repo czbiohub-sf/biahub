@@ -59,7 +59,7 @@ track = ["ultrack>=0.8"]
 # PyQt6>=6.10 does not provide wheels
 gui = ["napari[pyqt6]", "PyQt6<6.10", "napari-animation"]
 
-stain = ["cytoland==0.1.0a0"]
+stain = ["cytoland"]
 
 # The external QC pipeline, whose `imaging-qc` CLI nextflow/qc-standalone.nf
 # calls as a bare command. `interactive` brings plotly, which the report step
