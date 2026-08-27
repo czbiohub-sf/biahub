@@ -225,9 +225,11 @@ def qc_report_spec(tabs, spec_path, title) {
     tabs.each { t ->
         // The config FILE, which is the same file the compute steps are given,
         // so a tab renders the settings that stage was actually run with. The
-        // report verb composes the file's Hydra `defaults:`, so a `report:` block
-        // inherited from base.yaml arrives intact and each tab resolves its own
-        // config independently of what sits beside it on disk.
+        // report verb composes the file's Hydra `defaults:` (imaging-qc#201), so a
+        // tab resolves its own config independently of what sits beside it on
+        // disk — and keeps that config's `display_name` as the tab label, where
+        // the directory scan this replaced fell back to "Stage N". The configs are
+        // self-contained today, so there is nothing left to compose.
         //
         // Nothing here keys on the stage NUMBER: that lives only in each config's
         // `stage:` key, so renumbering a stage changes nothing in this function.

@@ -173,11 +173,11 @@ say which you think it is and let the user decide. A fresh reprocess goes to a
 ## 5. Start from the configs on `main`
 
 The templates in `<BIAHUB>/nextflow/configs/{a549,zebrafish}/` are the source
-of truth — they version with the pipeline and are reviewed. QC configs are
-shared across families and live in `<BIAHUB>/nextflow/configs/qc/`, one
-directory per store kind (`assemble/`, `track/`) — copy the tree, do not
-flatten it: each directory must hold only its own step's config, or every
-report tab renders the same one. A previous run's
+of truth — they version with the pipeline and are reviewed. QC configs sit with them,
+one self-contained file per store: `qc.yaml` for the assembled store and
+`qc_track.yaml` for the tracking store. They carry `.yaml` rather than `.yml`
+because imaging-qc loads a stage config through Hydra, which strips the
+extension and looks for `<stem>.yaml`. A previous run's
 `configs/` directory is a fallback only: an unreviewed snapshot that drifts
 with the schema and carries dataset-specific edits.
 
@@ -245,17 +245,19 @@ Get explicit approval.
 
 ```bash
 mkdir -p <OUTPUT>/configs <OUTPUT>/nextflow
-cp <BIAHUB>/nextflow/configs/<family>/*.yml <OUTPUT>/configs/
-cp -r <BIAHUB>/nextflow/configs/qc <OUTPUT>/configs/qc     # keeps assemble/ and track/
+cp <BIAHUB>/nextflow/configs/<family>/*.yml <BIAHUB>/nextflow/configs/<family>/*.yaml \
+   <OUTPUT>/configs/
 ```
 
+Both globs: the step configs are `.yml` and the QC configs are `.yaml`.
+
 The run script passes all four optional configs — `--concatenate_config`,
-`--track_config`, `--qc_config`, `--qc_track_config` — so an A549 run needs no
-edit. **For a neuromast/zebrafish run, or any step the user asked to skip,
+`--track_config`, `--qc_config` (`qc.yaml`), `--qc_track_config`
+(`qc_track.yaml`) — so an A549 run needs no edit. **For a neuromast/zebrafish run, or any step the user asked to skip,
 DELETE that flag's line** from the `nextflow run` call and note the skip in a
 comment above it, so the script still records what this run did. A neuromast run
-deletes `--track_config` and `--qc_track_config`; `track.yml` need not exist at
-all, and there is no `qc` config directory to copy for a step that is not run.
+deletes `--track_config` and `--qc_track_config`; neither `track.yml` nor
+`qc_track.yaml` need exist for that family, and neither does for zebrafish.
 
 Delete rather than comment: a `#` inside a backslash-continued command does not
 start a comment line — the continuation swallows it, every flag below is dropped

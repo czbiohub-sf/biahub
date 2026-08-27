@@ -191,7 +191,7 @@ nextflow run "${PIPELINE}" \
     --virtual_stain_config "${CONFIGS}/virtual_stain.yml" \
     --concatenate_config   "${CONFIGS}/concatenate.yml" \
     --track_config         "${CONFIGS}/track.yml" \
-    --qc_config            "${CONFIGS}/qc/assemble/pixel_metrics.yaml" \
-    --qc_track_config      "${CONFIGS}/qc/track/cell_count.yaml" \
+    --qc_config            "${CONFIGS}/qc.yaml" \
+    --qc_track_config      "${CONFIGS}/qc_track.yaml" \
     -resume \
     "$@"
