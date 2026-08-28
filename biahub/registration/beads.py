@@ -1966,6 +1966,168 @@ def optimize_transform(
         return transform, quality_score_approx
 
 
+def vote_correct_seed(
+    mov: ArrayLike,
+    ref: ArrayLike,
+    seed: np.ndarray,
+    beads_match_settings: BeadsMatchSettings,
+) -> tuple[np.ndarray, str]:
+    """Correct a per-timepoint seed by bead displacement voting, before estimation.
+
+    For use when the FOV geometry drifts over the series by more than the static
+    approx_transform's capture range AND the bead field is too thin for the matchers to
+    re-acquire from scratch -- the 2025_11_05 case: 15-35 voxels of mid-series drift
+    against ~12 detectable GFP beads left 54% of timepoints at score 0.000, and no
+    detection-knob change rescued them. This did (run median 0.000 -> ~0.5, every tested
+    0.000 timepoint recovered, good timepoints preserved).
+
+    The moving volume is warped with the seed, beads are detected densely
+    (seed_correction_settings.vote_peaks_settings), and each casts a vote for its
+    displacement to every reference bead within capture_radius. Real beads agree on the
+    residual drift, so the densest cluster_radius-ball of votes estimates it; the mean of
+    that cluster is composed into the seed. In "votefit" mode the cluster's members are
+    then reused as correspondences for an affine fit, accepted only when it improves the
+    peaks' median NN distance.
+
+    Candidates only ever compete against the unchanged seed, judged by NN-median under
+    the pipeline's own detection settings, so a bad vote cannot make the seed worse.
+
+    Parameters
+    ----------
+    mov : ArrayLike
+        Original (unregistered) moving volume (Z, Y, X).
+    ref : ArrayLike
+        Reference volume (Z, Y, X).
+    seed : np.ndarray
+        The 4x4 approx_transform to correct.
+    beads_match_settings : BeadsMatchSettings
+        Provides seed_correction_settings (voting tunables) and the source/target
+        detection settings used to judge candidates.
+
+    Returns
+    -------
+    tuple[np.ndarray, str]
+        The corrected (or unchanged) 4x4 seed, and a note describing what happened,
+        for the per-timepoint log.
+    """
+    settings = beads_match_settings.seed_correction_settings
+    src_peaks_settings = beads_match_settings.source_peaks_settings
+    tgt_peaks_settings = beads_match_settings.target_peaks_settings
+    vote_peaks_settings = settings.vote_peaks_settings
+
+    mov = np.asarray(mov, dtype=np.float32)
+    ref = np.asarray(ref, dtype=np.float32)
+    mov_ants, ref_ants = ants.from_numpy(mov), ants.from_numpy(ref)
+
+    ref_peaks = detect_peaks(
+        ref,
+        threshold_abs=tgt_peaks_settings.threshold_abs,
+        block_size=tuple(tgt_peaks_settings.block_size),
+        nms_distance=tgt_peaks_settings.nms_distance,
+        min_distance=tgt_peaks_settings.min_distance,
+    )
+    if len(ref_peaks) < settings.min_votes:
+        return seed, f"only {len(ref_peaks)} ref peaks; seed unchanged"
+    ref_tree = cKDTree(ref_peaks)
+
+    def warp(matrix):
+        return (
+            Transform(matrix=matrix)
+            .to_ants()
+            .apply_to_image(mov_ants, reference=ref_ants)
+            .numpy()
+        )
+
+    def nn_median(matrix):
+        # Judged with the pipeline's OWN detection settings, so "better" here means
+        # better for the estimation that consumes the seed.
+        peaks = detect_peaks(
+            warp(matrix),
+            threshold_abs=src_peaks_settings.threshold_abs,
+            block_size=tuple(src_peaks_settings.block_size),
+            nms_distance=src_peaks_settings.nms_distance,
+            min_distance=src_peaks_settings.min_distance,
+        )
+        if len(peaks) == 0:
+            return np.inf
+        dist, _ = ref_tree.query(peaks)
+        return float(np.median(dist))
+
+    def translation(d):
+        matrix = np.eye(4)
+        matrix[:3, 3] = d
+        return matrix
+
+    mov_peaks = detect_peaks(
+        warp(seed),
+        threshold_abs=vote_peaks_settings.threshold_abs,
+        block_size=tuple(vote_peaks_settings.block_size),
+        nms_distance=vote_peaks_settings.nms_distance,
+        min_distance=vote_peaks_settings.min_distance,
+    )
+    if len(mov_peaks) < settings.min_votes:
+        return seed, f"only {len(mov_peaks)} mov peaks; seed unchanged"
+
+    votes, pair_src = [], []
+    for p in mov_peaks:
+        for j in ref_tree.query_ball_point(p, r=settings.capture_radius):
+            votes.append(ref_peaks[j] - p)
+            pair_src.append((p, ref_peaks[j]))
+    votes = np.asarray(votes)
+    if len(votes) < settings.min_votes:
+        return seed, f"only {len(votes)} votes; seed unchanged"
+
+    vote_tree = cKDTree(votes)
+    counts = np.array(
+        [len(vote_tree.query_ball_point(v, r=settings.cluster_radius)) for v in votes]
+    )
+    members = vote_tree.query_ball_point(votes[np.argmax(counts)], r=settings.cluster_radius)
+    drift = votes[members].mean(axis=0)
+    vote_pairs = [pair_src[m] for m in members]
+
+    # The seed maps ref-space points to mov-space sample coordinates (ANTs fixed-to-moving),
+    # so undoing a ref-space image drift of +d composes as seed @ T(-d). Both signs are
+    # still tried, with the unchanged seed competing, and NN-median decides.
+    candidates = {
+        "keep": seed,
+        "minus": seed @ translation(-drift),
+        "plus": seed @ translation(drift),
+    }
+    nn = {name: nn_median(matrix) for name, matrix in candidates.items()}
+    best = min(nn, key=nn.get)
+    corrected = candidates[best]
+    notes = [
+        f"drift={np.round(drift, 1).tolist()} votes={int(counts.max())} "
+        f"nn={ {k: round(v, 1) for k, v in nn.items()} } pick={best}"
+    ]
+
+    if settings.mode == "votefit" and len(vote_pairs) >= 4:
+        # The winning cluster's votes ARE correspondences (warped mov peak p, ref peak q),
+        # valid in the warped space of the UNCORRECTED seed, so the fit composes onto that
+        # seed rather than onto the translation-corrected one. The re-warped image should
+        # place each bead at its ref peak q, i.e. sample point C(q) = p; the seed maps
+        # ref -> mov, hence seed @ C.
+        p = np.asarray([a for a, _ in vote_pairs], dtype=float)
+        q = np.asarray([b for _, b in vote_pairs], dtype=float)
+        if len(vote_pairs) >= 6:
+            A = np.hstack([q, np.ones((len(q), 1))])
+            X, *_ = np.linalg.lstsq(A, p, rcond=None)  # C(q) = q @ X[:3] + X[3]
+            C = np.eye(4)
+            C[:3, :3] = X[:3].T
+            C[:3, 3] = X[3]
+        else:
+            C = translation((p - q).mean(axis=0))
+        fitted = seed @ C
+        nn_old, nn_new = nn[best], nn_median(fitted)
+        if np.isfinite(nn_new) and nn_new < nn_old:
+            corrected = fitted
+            notes.append(f"fit accepted n={len(vote_pairs)} nn {nn_old:.1f}->{nn_new:.1f}")
+        else:
+            notes.append(f"fit rejected n={len(vote_pairs)} nn {nn_old:.1f}->{nn_new:.1f}")
+
+    return corrected, "; ".join(notes)
+
+
 def estimate(
     mov: da.Array,
     ref: da.Array,
@@ -2015,9 +2177,27 @@ def estimate(
         click.echo("Skipping: moving or reference data contains only NaN/zeros.")
         return
 
-    initial_transform = Transform(
-        matrix=np.asarray(affine_transform_settings.approx_transform)
-    )
+    # Opt-in per-timepoint seed correction, applied before any matching arm so every
+    # consumer of the seed -- including the repair pass, whose candidate seeds arrive
+    # here through approx_transform -- starts from the corrected geometry.
+    seed_matrix = np.asarray(affine_transform_settings.approx_transform, dtype=float)
+    seed_correction = beads_match_settings.seed_correction_settings
+    if seed_correction.mode != "none":
+        try:
+            seed_matrix, note = vote_correct_seed(
+                mov=mov,
+                ref=ref,
+                seed=seed_matrix,
+                beads_match_settings=beads_match_settings,
+            )
+            click.echo(f"Seed correction ({seed_correction.mode}): {note}")
+        except Exception as e:  # noqa: BLE001
+            # A seed corrector that can take down a timepoint is worse than none.
+            click.echo(
+                f"Seed correction failed ({type(e).__name__}: {e}); using the configured seed."
+            )
+
+    initial_transform = Transform(matrix=seed_matrix)
     transform = initial_transform
 
     current_iterations = 0

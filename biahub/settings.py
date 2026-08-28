@@ -248,6 +248,54 @@ class QCBeadsRegistrationSettings(MyBaseModel):
     score_centroid_mask_radius: int = 6
 
 
+class SeedCorrectionSettings(MyBaseModel):
+    """Per-timepoint correction of the approx_transform seed by bead displacement voting.
+
+    The static approx_transform assumes one geometry fits the whole series. When the FOV
+    geometry drifts over time by more than the matcher's capture range, the mid-series
+    timepoints start too far from the truth for any matching arm to recover -- and with a
+    thin bead field there are too few peaks for the graph matchers to re-acquire from
+    scratch. This corrects the seed per timepoint, BEFORE the standard estimation, by
+    letting every densely-detected bead in the seed-warped moving volume vote for its
+    displacement to nearby reference beads: the true residual drift collects the real
+    beads' votes in a tight cluster while random pairings spread diffusely.
+
+    Measured on 2025_11_05 (geometry drifts 15-35 voxels mid-series, ~12 detectable GFP
+    beads): the run median went 0.000 -> ~0.5 with "votefit", every previously-0.000 test
+    timepoint was rescued, and the good timepoints were preserved. Off by default; a run
+    whose seed is valid throughout does not need it and saves the extra warps.
+
+    Attributes
+    ----------
+    mode : Literal["none", "voteseed", "votefit"]
+        "none"      seed used as configured (existing behaviour, default).
+        "voteseed"  translation-only correction from the dominant vote cluster.
+        "votefit"   additionally fits an affine on the vote-cluster correspondences,
+                    accepted only when it improves the peaks' NN distance. This is the
+                    variant that won the 2025_11_05 sweep.
+    vote_peaks_settings : DetectPeaksSettings
+        Detection used on the warped moving volume for VOTING only -- denser than the
+        pipeline's own detection, because more (real) voters sharpen the cluster. The
+        defaults were measured on 2025_11_05 to add real beads, not background. The
+        estimation itself still uses source/target_peaks_settings unchanged.
+    capture_radius : float
+        Radius (voxels) within which a moving peak votes for reference peaks. Must
+        exceed the largest per-timepoint drift to be corrected.
+    cluster_radius : float
+        Radius (voxels) of the vote-density ball that defines the winning cluster.
+    min_votes : int
+        Minimum peaks/votes below which the correction abstains and keeps the seed.
+    """
+
+    mode: Literal["none", "voteseed", "votefit"] = "none"
+    vote_peaks_settings: DetectPeaksSettings = DetectPeaksSettings(
+        threshold_abs=200.0, nms_distance=8, min_distance=0, block_size=[16, 16, 16]
+    )
+    capture_radius: float = 80.0
+    cluster_radius: float = 10.0
+    min_votes: int = 3
+
+
 class SweepSettings(MyBaseModel):
     """Last-resort per-timepoint grid search over the matching parameters.
 
@@ -555,6 +603,11 @@ class BeadsMatchSettings(MyBaseModel):
     # Everything about the fallback lives in one nested block, named like every other block
     # here (*_settings) and containing both the choice and the tuning for each pass.
     fallback_settings: FallbackSettings = FallbackSettings()
+
+    # Opt-in per-timepoint seed correction by bead displacement voting, applied inside
+    # estimate() before any matching arm runs -- so the repair pass's candidate seeds get
+    # corrected too. Default mode "none" changes nothing. See SeedCorrectionSettings.
+    seed_correction_settings: SeedCorrectionSettings = SeedCorrectionSettings()
 
     # ---- DEPRECATED aliases. Accepted so configs written against the earlier field names
     # keep validating under extra="forbid"; each is copied into fallback_settings and warned
