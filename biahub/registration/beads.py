@@ -646,6 +646,12 @@ def sweep_flagged_timepoints(
             matrix = np.asarray(swept_transform.to_list(), dtype=float)
             transforms[t] = matrix.tolist()
             np.save(output_transforms_path / f"{t}.npy", matrix)
+            # Sidecar follows the transform; see the same write in the repair pass.
+            save_quality_score(
+                output_transforms_path / f"{t}.score",
+                score=swept_score,
+                fell_back_to_seed=False,
+            )
             score_col[t] = swept_score
             scores.loc[scores["t"] == t, "quality_score"] = swept_score
             if "fell_back_to_seed" in scores:
@@ -941,6 +947,15 @@ def repair_flagged_timepoints(
             # the downstream stabilize step.
             transforms[t] = matrix.tolist()
             np.save(output_transforms_path / f"{t}.npy", matrix)
+            # The sidecar must follow the transform: leaving the stale score on disk
+            # makes a repaired timepoint look failed to anything that reloads the run --
+            # a restarted driver re-flags it from the old sidecar and redoes (or, worse,
+            # journals away) the repair it already has.
+            save_quality_score(
+                output_transforms_path / f"{t}.score",
+                score=best_score,
+                fell_back_to_seed=False,
+            )
             score_col[t] = best_score
             scores.loc[scores["t"] == t, "quality_score"] = best_score
             if "fell_back_to_seed" in scores:
@@ -1023,6 +1038,14 @@ def _merge_best(base_transforms, base_scores, arms, output_transforms_path):
         merged[t] = best_matrix
         matrix = np.asarray(best_matrix, dtype=float)
         np.save(output_transforms_path / f"{t}.npy", matrix)
+        # Sidecar follows the transform. Both arms wrote their own sidecars as they
+        # accepted, so whichever wrote LAST is on disk; the merge must reassert the
+        # winner's score or the sidecar records the losing arm's.
+        save_quality_score(
+            output_transforms_path / f"{t}.score",
+            score=best_score,
+            fell_back_to_seed=False,
+        )
         scores.loc[scores["t"] == t, "quality_score"] = best_score
         if "fell_back_to_seed" in scores:
             scores.loc[scores["t"] == t, "fell_back_to_seed"] = False
@@ -1457,8 +1480,27 @@ def estimate_independently(
 
     # Submit jobs
     jobs = []
+    n_skipped = 0
     with submitit.helpers.clean_env(), executor.batch():
         for t in range(T):
+            # Resume: a timepoint already on disk is kept, exactly like the sequential
+            # path. Without this, a driver restart resubmits ALL T timepoints and
+            # OVERWRITES previously repaired {t}.npy/{t}.score with fresh base
+            # estimates -- and the repair pass's journal resume (repair_attempts.jsonl)
+            # then skips exactly those timepoints, so the repairs are lost permanently.
+            # Measured on 09_12 (848 t): one restart clobbered 268 journaled rescues
+            # at a median repaired score of ~0.85.
+            existing = output_folder_path / f"{t}.npy"
+            if existing.exists():
+                try:
+                    np.load(existing)
+                    n_skipped += 1
+                    if verbose:
+                        click.echo(f"Timepoint {t} already estimated, skipping")
+                    continue
+                except (OSError, ValueError):
+                    # A truncated file from a job killed mid-write: recompute it.
+                    click.echo(f"Timepoint {t} transform unreadable, recomputing")
             job = executor.submit(
                 estimate_tzyx,
                 t_idx=t,
@@ -1471,6 +1513,11 @@ def estimate_independently(
                 mode=mode,
             )
             jobs.append(job)
+    if n_skipped:
+        click.echo(
+            f"Reusing {n_skipped} of {T} timepoints already on disk; "
+            f"submitted {len(jobs)} jobs."
+        )
 
     # Save job IDs
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
