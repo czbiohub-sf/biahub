@@ -17,12 +17,42 @@ jobs:
     permissions:
       contents: write # push the branch holding the refreshed uv.lock
       pull-requests: write # open/update the refresh PR
+    env:
+      # Read-only credential for the PRIVATE imaging-qc-pipeline dependency of the
+      # `qc` extra. Reaches the script through env, never `${{ }}` inside `run:` —
+      # zizmor's template-injection rule is only ignored for pull-request-ci.yml.
+      # Empty when the secret is not configured, which the guard step reports.
+      IMAGING_QC_TOKEN: ${{ secrets.IMAGING_QC_TOKEN }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
       - uses: astral-sh/setup-uv@v10.0.1
+
+      # `uv lock --upgrade` discards the pinned rev and RE-RESOLVES every
+      # dependency, the private git one included, so this job needs a credential
+      # that PR CI does not: `uv sync --group dev` installs from the lockfile and
+      # never touches the `qc` extra, and GITHUB_TOKEN is scoped to this
+      # repository so it cannot read another private one.
+      #
+      # Rewrite is scoped to that ONE repository URL rather than all of
+      # github.com, so the token is offered nowhere else.
+      - name: Authenticate to the private imaging-qc dependency
+        if: env.IMAGING_QC_TOKEN != ''
+        run: |
+          git config --global \
+            url."https://x-access-token:${IMAGING_QC_TOKEN}@github.com/czbiohub-sf/imaging-qc-pipeline".insteadOf \
+            "https://github.com/czbiohub-sf/imaging-qc-pipeline"
+
+      # Fail with the cause named. Without this the run dies inside uv with a
+      # bare "Could not read from remote repository", which reads as an outage
+      # rather than a missing secret.
+      - name: Require the imaging-qc credential
+        if: env.IMAGING_QC_TOKEN == ''
+        run: |
+          echo "::error::IMAGING_QC_TOKEN is not set. 'uv lock --upgrade' re-resolves the private czbiohub-sf/imaging-qc-pipeline dependency and cannot read it without a read-only credential. Add the secret, or drop the qc extra's source from pyproject.toml."
+          exit 1
 
       # Bumps every dependency the pyproject constraints allow, in one commit,
       # instead of one Dependabot PR per package.
