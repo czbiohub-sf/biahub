@@ -11,6 +11,12 @@ from iohub import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate, process_single_position
 from natsort import natsorted
 
+from biahub.cli.direct_copy import (
+    copy_position_files,
+    echo_direct_copy_summary,
+    plan_position_copy,
+    summarize_direct_copy,
+)
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
     cluster,
@@ -35,6 +41,11 @@ from biahub.cli.utils import (
     yaml_to_model,
 )
 from biahub.settings import ConcatenateSettings
+
+#: Memory to request when every position source is a direct chunk copy. Placing
+#: files streams through the kernel rather than buffering a shard, so the shard-
+#: sized estimate ``estimate_resources`` produces does not apply.
+_DIRECT_COPY_MEM_GB = 8
 
 
 def _unique_source_plates(data_paths: list[Path]) -> list[Path]:
@@ -285,7 +296,11 @@ def _resolve_time_indices(settings: ConcatenateSettings, all_shapes: list[tuple]
     return list(range(T))
 
 
-def _prepare_concatenate(settings: ConcatenateSettings, output_dirpath: Path) -> dict:
+def _prepare_concatenate(
+    settings: ConcatenateSettings,
+    output_dirpath: Path,
+    direct_copy: bool = True,
+) -> dict:
     """Derive metadata and create the output plate.
 
     Runs the channel/slice metadata resolution (the expensive
@@ -293,6 +308,13 @@ def _prepare_concatenate(settings: ConcatenateSettings, output_dirpath: Path) ->
     returns everything the submit loop needs plus the input ``shape`` used by
     ``concatenate`` to estimate SLURM resources. ``create_empty_plate`` is
     idempotent, so calling this from both ``--init`` and the full run is safe.
+
+    Also decides, per input position, whether its stored chunk/shard files can be
+    placed into the output store verbatim instead of being read, cropped and
+    rewritten. That has to happen here rather than in ``concatenate`` because it
+    compares against the *output* array's metadata, which only exists once
+    ``create_empty_plate`` has run. Pass ``direct_copy=False`` to skip the check
+    and take the read-write path everywhere.
     """
     slicing_params = [settings.Z_slice, settings.Y_slice, settings.X_slice]
     (
@@ -314,6 +336,7 @@ def _prepare_concatenate(settings: ConcatenateSettings, output_dirpath: Path) ->
     all_shapes = []
     all_dtypes = []
     all_voxel_sizes = []
+    all_array_names = []
     for path in all_data_paths:
         with open_ome_zarr(path) as dataset:
             if len(dataset.array_keys()) > 1:
@@ -324,6 +347,9 @@ def _prepare_concatenate(settings: ConcatenateSettings, output_dirpath: Path) ->
             all_shapes.append(dataset.data.shape)
             all_dtypes.append(dataset.data.dtype)
             all_voxel_sizes.append(dataset.scale[-3:])
+            # Kept so the direct-copy planner can address the array directory;
+            # the single-array check above makes this unambiguous.
+            all_array_names.append(next(iter(dataset.array_keys())))
 
     # Only check for shape compatibility when using 'all' for slicing
     if (
@@ -389,15 +415,86 @@ def _prepare_concatenate(settings: ConcatenateSettings, output_dirpath: Path) ->
     )
     click.echo(f"Created {output_dirpath} ({len(output_position_paths)} positions)")
 
+    output_time_indices = list(range(len(input_time_indices)))
+    direct_copy_plans, direct_copy_reasons = _plan_direct_copies(
+        all_data_paths=all_data_paths,
+        all_array_names=all_array_names,
+        output_position_paths=output_position_paths,
+        input_channel_idx_list=input_channel_idx_list,
+        output_channel_idx_list=output_channel_idx_list,
+        all_slicing_params=all_slicing_params,
+        input_time_indices=input_time_indices,
+        output_time_indices=output_time_indices,
+        direct_copy=direct_copy,
+    )
+
     return {
         "all_data_paths": all_data_paths,
+        "all_array_names": all_array_names,
         "output_position_paths": output_position_paths,
         "input_channel_idx_list": input_channel_idx_list,
         "output_channel_idx_list": output_channel_idx_list,
         "all_slicing_params": all_slicing_params,
         "input_time_indices": input_time_indices,
+        "output_time_indices": output_time_indices,
+        "direct_copy_plans": direct_copy_plans,
+        "direct_copy_reasons": direct_copy_reasons,
         "shape": (T, C, Z, Y, X),
     }
+
+
+def _plan_direct_copies(
+    all_data_paths: list[Path],
+    all_array_names: list[str],
+    output_position_paths: list[Path],
+    input_channel_idx_list: list[list[int]],
+    output_channel_idx_list: list[list[int]],
+    all_slicing_params: list[list[slice]],
+    input_time_indices: list[int],
+    output_time_indices: list[int],
+    direct_copy: bool,
+) -> tuple[list, list[list[str]]]:
+    """Decide per input position whether its files can be placed verbatim.
+
+    Returns a plan-or-None per position alongside the reasons a plan was not
+    possible, both aligned with ``all_data_paths``. Only array metadata is read,
+    so this stays cheap even for a plate with hundreds of position sources.
+    """
+    if not direct_copy:
+        reason = ["disabled by --no-direct-copy"]
+        return [None] * len(all_data_paths), [reason] * len(all_data_paths)
+
+    plans = []
+    reasons = []
+    for (
+        input_position_path,
+        input_array_name,
+        output_position_path,
+        input_channel_idx,
+        output_channel_idx,
+        zyx_slicing_params,
+    ) in zip(
+        all_data_paths,
+        all_array_names,
+        output_position_paths,
+        input_channel_idx_list,
+        output_channel_idx_list,
+        all_slicing_params,
+        strict=True,
+    ):
+        plan, plan_reasons = plan_position_copy(
+            input_position_path=input_position_path,
+            output_position_path=output_position_path,
+            input_channel_indices=input_channel_idx,
+            output_channel_indices=output_channel_idx,
+            input_time_indices=input_time_indices,
+            output_time_indices=output_time_indices,
+            zyx_slicing_params=zyx_slicing_params,
+            input_array_name=input_array_name,
+        )
+        plans.append(plan)
+        reasons.append(plan_reasons)
+    return plans, reasons
 
 
 def _resolve_concatenate_config(
@@ -430,6 +527,8 @@ def concatenate(
     monitor: bool = True,
     init_only: bool = False,
     resume: bool = False,
+    direct_copy: bool = True,
+    link: bool = False,
 ):
     """Concatenate datasets (with optional cropping).
 
@@ -459,11 +558,30 @@ def concatenate(
         covering every position, so a preemption or walltime kill near the end
         otherwise discards hours of work. See
         ``iohub.ngff.utils.process_single_position``.
+    direct_copy : bool, optional
+        Place a position's stored chunk/shard files into the output store
+        verbatim when the output geometry matches the input and no ROI crop is
+        requested, instead of reading, cropping and rewriting every byte. Decided
+        per input position from the two arrays' metadata; anything that does not
+        match falls back to the read-write path. Note that a byte copy cannot
+        apply ``copy_n_paste``'s ``nan_to_num``, so NaNs are carried through
+        rather than zeroed. By default True.
+    link : bool, optional
+        Hard-link the files the direct copy places instead of copying their
+        bytes. Instant and free of disk, but the output store then shares its
+        data with the inputs, so writing into either would corrupt the other.
+        Only safe for write-once inputs. Ignored where the direct copy does not
+        apply, and downgraded to a byte copy across filesystem boundaries. By
+        default False.
     """
     slurm_out_path = output_dirpath.parent / "slurm_output"
 
-    prep = _prepare_concatenate(settings, output_dirpath)
+    prep = _prepare_concatenate(settings, output_dirpath, direct_copy=direct_copy)
     input_time_indices = prep["input_time_indices"]
+    direct_copy_plans = prep["direct_copy_plans"]
+
+    summary = summarize_direct_copy(direct_copy_plans, prep["direct_copy_reasons"])
+    echo_direct_copy_summary(summary)
 
     T, C, Z, Y, X = prep["shape"]
     batch_size = settings.shards_ratio[0] if settings.shards_ratio else 1
@@ -474,6 +592,19 @@ def concatenate(
     )
     mem_gb = num_cpus * gb_ram_per_cpu
     time_minutes = 360
+    if summary.all_direct:
+        # Nothing decodes a volume, so the estimate above — which sizes a shard
+        # buffer — no longer describes the job. Placing files needs concurrency,
+        # not memory, and a request of hundreds of GB would queue for one of the
+        # few nodes that large for no reason. (For the mantis-v2 assemble step
+        # this is the difference between 96 GB and 8 GB, or 816 GB and 8 GB with
+        # 10-timepoint shards.)
+        # A cap, not a fixed value, so this can only ever lower the request.
+        mem_gb = min(mem_gb, _DIRECT_COPY_MEM_GB)
+        click.echo(
+            "Every position source is a direct chunk copy; "
+            f"requesting {mem_gb} GB instead of {num_cpus * gb_ram_per_cpu} GB."
+        )
     echo_resources(num_cpus, mem_gb, time_minutes=time_minutes)
 
     if init_only:
@@ -503,16 +634,20 @@ def concatenate(
     with submitit.helpers.clean_env(), executor.batch():
         for (
             input_position_path,
+            input_array_name,
             output_position_path,
             input_channel_idx,
             output_channel_idx,
             zyx_slicing_params,
+            direct_copy_plan,
         ) in zip(
             prep["all_data_paths"],
+            prep["all_array_names"],
             prep["output_position_paths"],
             prep["input_channel_idx_list"],
             prep["output_channel_idx_list"],
             prep["all_slicing_params"],
+            direct_copy_plans,
             strict=True,
         ):
             # Preserve extra_metadata written by create_empty_plate's
@@ -526,21 +661,41 @@ def concatenate(
                 "biahub-concatenate": settings.model_dump(),
             }
 
-            job = executor.submit(
-                process_single_position,
-                copy_n_paste,
-                input_position_path=input_position_path,
-                output_position_path=output_position_path,
-                input_channel_indices=input_channel_idx,
-                output_channel_indices=output_channel_idx,
-                input_time_indices=input_time_indices,
-                output_time_indices=list(range(len(input_time_indices))),
-                num_workers=slurm_args["slurm_cpus_per_task"],
-                resume=resume,
-                resume_token=settings_fingerprint(settings),
-                extra_metadata=merged_extra,
-                zyx_slicing_params=zyx_slicing_params,
-            )
+            # A position whose stored files can be reused verbatim skips the
+            # decode/encode round trip entirely; anything else takes the
+            # read-write path, so the two can be mixed within one plate.
+            if direct_copy_plan is not None:
+                job = executor.submit(
+                    copy_position_files,
+                    input_position_path=input_position_path,
+                    output_position_path=output_position_path,
+                    input_channel_indices=input_channel_idx,
+                    output_channel_indices=output_channel_idx,
+                    input_time_indices=input_time_indices,
+                    output_time_indices=prep["output_time_indices"],
+                    zyx_slicing_params=zyx_slicing_params,
+                    input_array_name=input_array_name,
+                    mode="link" if link else "copy",
+                    num_workers=slurm_args["slurm_cpus_per_task"],
+                    resume=resume,
+                    extra_metadata=merged_extra,
+                )
+            else:
+                job = executor.submit(
+                    process_single_position,
+                    copy_n_paste,
+                    input_position_path=input_position_path,
+                    output_position_path=output_position_path,
+                    input_channel_indices=input_channel_idx,
+                    output_channel_indices=output_channel_idx,
+                    input_time_indices=input_time_indices,
+                    output_time_indices=prep["output_time_indices"],
+                    num_workers=slurm_args["slurm_cpus_per_task"],
+                    resume=resume,
+                    resume_token=settings_fingerprint(settings),
+                    extra_metadata=merged_extra,
+                    zyx_slicing_params=zyx_slicing_params,
+                )
             jobs.append(job)
 
     job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
@@ -575,6 +730,31 @@ def concatenate(
         "per source store."
     ),
 )
+@click.option(
+    "--direct-copy/--no-direct-copy",
+    "direct_copy",
+    default=True,
+    show_default=True,
+    help=(
+        "Place a position's stored chunk/shard files into the output verbatim "
+        "when the output geometry matches the input and no ROI crop is requested, "
+        "instead of decoding and re-encoding every byte. Decided per position; "
+        "anything that does not match falls back to the read-write path. NaNs are "
+        "carried through rather than zeroed, since a byte copy cannot inspect the "
+        "data."
+    ),
+)
+@click.option(
+    "--link",
+    is_flag=True,
+    default=False,
+    help=(
+        "Hard-link the files a direct copy places instead of copying their bytes: "
+        "instant and free of disk, but the output then shares its data with the "
+        "input stores, so writing into either would corrupt the other. Only pass "
+        "this for write-once inputs."
+    ),
+)
 def concatenate_cli(
     config_filepath: Path,
     output_dirpath: Path,
@@ -584,6 +764,8 @@ def concatenate_cli(
     init_only: bool = False,
     resume: bool = False,
     concat_data_paths: tuple[str, ...] = (),
+    direct_copy: bool = True,
+    link: bool = False,
 ):
     r"""Concatenate datasets (with optional cropping).
 
@@ -607,6 +789,12 @@ def concatenate_cli(
     Single-shot run on a reserved compute node (Nextflow assemble step):
     'debug' iterates every position in-process; the CLI blocks until done.
     >>> biahub concatenate --cluster debug -c resolved.yml -o output.zarr
+
+    \b
+    Same, hard-linking chunks instead of copying them. Near-instant, but the
+    output shares its data with the inputs, so only use it when they are
+    write-once and will not be edited in place:
+    >>> biahub concatenate --cluster debug --link -c resolved.yml -o output.zarr
     """
     config_path = config_filepath
     output_path = output_dirpath
@@ -637,6 +825,8 @@ def concatenate_cli(
         monitor=monitor,
         init_only=init_only,
         resume=resume,
+        direct_copy=direct_copy,
+        link=link,
     )
 
 
