@@ -10,7 +10,6 @@ models:
       diameter: 65
       channels: ['mem', 'nuc'] #The channel count for Cellpose starts at 1
       cellprob_threshold: 0.4
-      invert: false
       do_3D: false   # Optional, if false, 2D segmentation is performed.
       anisotropy: 3.26
       min_size: 8000
@@ -30,7 +29,6 @@ models:
       diameter: 60
       channels: ['nuc'] #For nucleus segmentation, only one channel is required. We populate the other channel with zero.
       cellprob_threshold: 0.0
-      invert: false
       do_3D: true
       anisotropy: 3.26
       min_size: 8000

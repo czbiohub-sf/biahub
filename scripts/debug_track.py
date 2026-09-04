@@ -7,7 +7,7 @@ from iohub import open_ome_zarr
 from rich import print
 from biahub.track import run_ultrack, resolve_z_slice, load_data, run_preprocessing_pipeline, fill_empty_frames_from_csv
 from ultrack import MainConfig
-from biahub.cli.utils import update_model
+from biahub.utils.config import update_model
 
 
 def main():

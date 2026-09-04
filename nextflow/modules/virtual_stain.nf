@@ -26,19 +26,13 @@
 // 3. run_virtual_stain: per-position GPU prediction using RESOURCES.
 //
 // Both `biahub virtual-stain` and `viscy` live in biahub's optional `stain`
-// extra (cytoland → viscy-utils provides the `viscy` console script), so the
-// tasks here run in that extra's environment rather than the plain biahub env.
+// extra (cytoland → viscy-utils provides the `viscy` console script). The
+// activated environment must therefore carry that extra — the default
+// `uv sync` does, because the `dev` dependency group depends on `biahub[all]`.
+// See the ENVIRONMENT CONTRACT note in common.nf; these tasks call `biahub` and
+// `viscy` bare, exactly like every other step.
 
 include { parse_resources; slurm_logs; slurm_log_dir } from './common'
-
-// Command prefix for tools that require biahub's `stain` extra. Both
-// `biahub virtual-stain` (it imports cytoland) and `viscy preprocess` need it.
-// Falls back to the bare tool on the active environment when biahub_project is
-// unset (assumes that env already has the stain extra installed).
-def stain_cmd(tool) {
-    return params.biahub_project ?
-        "uv run --project ${params.biahub_project} --extra stain ${tool}" : tool
-}
 
 
 process init_virtual_stain {
@@ -56,7 +50,7 @@ process init_virtual_stain {
     script:
     """
     mkdir -p "${slurm_log_dir('virtual_stain')}"
-    ${stain_cmd('biahub')} virtual-stain --init \
+    biahub virtual-stain --init \
         -i "${input_zarr}"/*/*/* \
         -o "${output_zarr}" \
         -c "${config}"
@@ -91,7 +85,7 @@ process run_virtual_stain_preprocess {
     script:
     """
     unset SLURM_NTASKS
-    ${stain_cmd('viscy')} preprocess \
+    viscy preprocess \
         --data_path "${input_zarr}" \
         --channel_names -1 \
         --num_workers ${task.cpus} \
@@ -119,7 +113,7 @@ process run_virtual_stain {
 
     script:
     """
-    ${stain_cmd('biahub')} virtual-stain --cluster debug \
+    biahub virtual-stain --cluster debug \
         -i "${input_zarr}/${position}" \
         -o "${output_zarr}" \
         -c "${config}"

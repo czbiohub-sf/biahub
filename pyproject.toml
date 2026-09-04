@@ -20,7 +20,7 @@ classifiers = [
 
 dependencies = [
   "click",
-  "iohub>=0.3.8",
+  "iohub>=0.3.11",
   "matplotlib",
   "natsort",
   "numpy",
@@ -34,7 +34,11 @@ dependencies = [
   "tqdm",
   "waveorder>=3.0.4",
   "largestinteriorrectangle",
-  "antspyx",
+  # 0.6 is the first antspyx with cp313 wheels; below it, Python 3.13 falls back
+  # to building ANTs from source and fails. Every 0.6.x caps scipy<1.16, so this
+  # floor is also what holds scipy on the 1.15 series -- without it the resolver
+  # prefers newer scipy and silently drops antspyx back to a cp312-only 0.5.x.
+  "antspyx>=0.6",
   "pystackreg",
   "imageio-ffmpeg",
   "dask[array]",
@@ -48,7 +52,9 @@ dependencies = [
 [project.optional-dependencies]
 segment = ["cellpose"]
 
-track = ["ultrack>=0.7"]
+# Deliberately CPU-only. ultrack has an optional GPU path when cupy and cucim
+# are installed, but it offers no speedup in tracking in our use cases.
+track = ["ultrack>=0.8"]
 
 # PyQt6>=6.10 does not provide wheels
 gui = ["napari[pyqt6]", "PyQt6<6.10", "napari-animation"]
@@ -68,7 +74,7 @@ doc = [
 dev = [
   "biahub[all,build]",
   "pre-commit~=4.5",
-  "pytest~=8.4",
+  "pytest~=9.0",
   "ruff~=0.15",
 ]
 
@@ -80,11 +86,6 @@ biahub = "biahub.cli.main:cli"
 # when resolving build-system requirements such as iohub's hatchling /
 # uv-dynamic-versioning chain, which pulls in packaging>=24.2.
 index-strategy = "unsafe-best-match"
-
-[tool.uv.sources]
-# Pin cytoland to the commit from VisCy PR #465 (non-square TTA and helpers).
-# Revert to the PyPI release once that PR is merged and published.
-cytoland = { git = "https://github.com/mehta-lab/VisCy", subdirectory = "applications/cytoland", rev = "4b62365c0df25929bffc7f01b3bb2d1c11d69cce" }
 
 [tool.hatch.metadata]
 allow-direct-references = true
@@ -103,7 +104,9 @@ packages = ["biahub"]
 line-length = 95
 target-version = "py312"
 
-exclude = ["archive", "examples", "scripts", "notebooks"]
+# .claude holds skill prompts whose fenced code blocks are deliberately
+# incomplete templates; ruff >=0.16 formats Markdown and would rewrite them.
+exclude = ["archive", "examples", "scripts", "notebooks", ".claude"]
 
 [tool.ruff.lint]
 select = ["F", "E", "W", "I", "N", "UP", "B", "D"]

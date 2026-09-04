@@ -7,7 +7,7 @@
 // Tracking is a 2-input step: reads reconstruct for plate structure and
 // virtual-stain for image data.
 
-include { parse_resources; biahub_cmd; slurm_logs; slurm_log_dir } from './common'
+include { parse_resources; slurm_logs; slurm_log_dir } from './common'
 
 
 process init_track {
@@ -25,7 +25,7 @@ process init_track {
     script:
     """
     mkdir -p "${slurm_log_dir('track')}"
-    ${biahub_cmd()} track --init \
+    biahub track --init \
         -i "${input_zarr}"/*/*/* \
         -o "${output_zarr}" \
         -c "${config}"
@@ -55,7 +55,7 @@ process run_track {
 
     script:
     """
-    ${biahub_cmd()} track --cluster debug \
+    biahub track --cluster debug \
         -i "${input_zarr}/${position}" \
         -o "${output_zarr}" \
         -c "${config}" \

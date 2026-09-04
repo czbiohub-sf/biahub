@@ -1,0 +1,24 @@
+# Assemble step: concatenate deskew + reconstruct + virtual-stain channel-wise
+# into one multichannel plate.
+#
+# concat_data_paths stay as placeholders — the assemble subworkflow injects the
+# three real source paths via --concat-data-paths (resolve mode). Do NOT replace
+# them with real paths. There must be exactly one entry per source, and
+# channel_names must have the same length.
+concat_data_paths:
+  - placeholder   # 1-deskew
+  - placeholder   # 2-reconstruct
+  - placeholder   # 3-virtual-stain
+time_indices: all
+channel_names:
+  - all
+  - all
+  - all
+chunks_czyx: [1, 16, 256, 256]
+output_ome_zarr_version: "0.5"
+
+# shards_ratio is a ratio over the CHUNK shape (shards = chunks * ratio,
+# elementwise TCZYX), not an absolute shard shape. Leave unset unless you have a
+# measured reason: raising the T entry multiplies the shard buffer and the RAM
+# request, and one torn shard then loses every timepoint in it.
+shards_ratio: [5, 1, 6, 7, 5]   # ZYX entries recomputed for THIS output shape: ceil(Z/16), ceil(Y/256), ceil(X/256)

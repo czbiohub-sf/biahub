@@ -1,10 +1,14 @@
 # Contributing guide
 
+<!-- Everything below is the single source of truth for docs/contributing.md,
+     which includes it verbatim via pymdownx.snippets. Keep links absolute so
+     they resolve both on GitHub and on the docs site. -->
+<!-- --8<-- [start:body] -->
 Thanks for your interest in contributing to `biahub`!
 
 ## Getting started
 
-Please read the [README](./README.md) for an overview of the project,
+Please read the [README](https://github.com/czbiohub-sf/biahub/blob/main/README.md) for an overview of the project,
 and how you can install and use the package.
 
 ## Making changes
@@ -33,7 +37,7 @@ The pre-commit hooks automatically run style checks (via `ruff`) when staged cha
 
 ## Makefile
 
-A [makefile](Makefile) is included to help with a few basic development commands. Currently, the following commands are available:
+A [makefile](https://github.com/czbiohub-sf/biahub/blob/main/Makefile) is included to help with a few basic development commands. Currently, the following commands are available:
 
 ```sh
 make setup-develop # setup the package in development mode
@@ -71,3 +75,4 @@ zensical build
 ```
 
 The built site will be in the `site/` directory.
+<!-- --8<-- [end:body] -->

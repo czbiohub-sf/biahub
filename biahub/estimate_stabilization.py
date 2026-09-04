@@ -28,7 +28,6 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.cli.slurm import wait_for_jobs_to_finish
-from biahub.cli.utils import estimate_resources, get_submitit_cluster, yaml_to_model
 from biahub.registration.utils import (
     evaluate_transforms,
     match_shape,
@@ -41,6 +40,8 @@ from biahub.settings import (
     StabilizationSettings,
     StackRegSettings,
 )
+from biahub.utils.cluster import estimate_resources, get_submitit_cluster
+from biahub.utils.config import yaml_to_model
 
 NA_DET = 1.35
 LAMBDA_ILL = 0.500

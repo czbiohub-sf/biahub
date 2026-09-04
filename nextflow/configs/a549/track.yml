@@ -1,0 +1,64 @@
+# Tracking config for the mantis-v2 pipeline (`biahub track`). A549.
+#
+# Track reads the ASSEMBLED plate (5-assemble/<dataset>.zarr), so target_channel
+# and cellpose_config.input_channel must name channels that exist THERE. If you
+# rename channels before tracking, update these to match.
+#
+# CURRENT SCHEMA. TrackingSettings forbids extra keys; the old fields `mode`,
+# `z_range` and `focus_config` are rejected. Mapping from the old schema:
+#   mode                            -> output_mode
+#   z_range + focus_config.z_window -> z_slicing.{method, window_size, focus_channel}
+# focus_config's NA_det / lambda_ill / pixel_size have no equivalent — focus
+# detection now runs waveorder's focus_from_transverse_band on
+# z_slicing.focus_channel internally.
+
+# 2D writes an output plate with Z=1; input_images below projects Z with np.mean.
+output_mode: "2D"
+fov: "*/*/*"
+target_channel: nuclei_prediction
+
+# Use every Z plane — no focus detection, no window. The other ZSlicing fields
+# (window_size / frac_below / frac_above / focus_channel) apply only to
+# method: focus and are omitted here.
+#
+# NOTE: input_images projects Z with np.mean, so this averages ALL planes rather
+# than an in-focus window — more out-of-focus signal in what cellpose segments.
+# Switch to `method: focus` with a window_size if that hurts segmentation.
+z_slicing:
+  method: all
+
+segmentation_method: cellpose
+cellpose_config:
+  model_type: nuclei
+  diameter: 80
+  cellprob_threshold: 0.0
+  flow_threshold: 0.4
+  gpu: true
+  min_size: 2500
+  input_channel: nuclei_prediction
+  labels_sigma: 5.0
+
+input_images:
+  - path: null
+    channels:
+      nuclei_prediction:
+        - function: np.mean
+          kwargs:
+            axis: 1
+          per_timepoint: false
+
+tracking_config:
+  segmentation_config:
+    min_area: 2500
+    max_area: 80000
+    min_frontier: 0.5
+    max_noise: 0.00
+  linking_config:
+    max_distance: 15
+    distance_weight: -0.0001
+    max_neighbors: 3
+  tracking_config:
+    disappear_weight: -0.0001
+    appear_weight: -0.001
+    division_weight: -0.0001
+    bias: 0.0001

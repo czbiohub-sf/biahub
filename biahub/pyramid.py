@@ -13,7 +13,7 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import estimate_resources, get_submitit_cluster
+from biahub.utils.cluster import estimate_resources, get_submitit_cluster
 
 
 def pyramid(fov_path: Path, levels: int, method: str) -> None:

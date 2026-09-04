@@ -122,3 +122,15 @@ ENV/
 # mypy
 .mypy_cache/
 .dmypy.json
+
+# Temp zarr stores left in the repo root by a test or CLI run. ultrack's
+# create_zarr (ultrack/utils/array.py) falls back to
+# tempfile.TemporaryDirectory() + LocalStore when a caller passes no store path,
+# and a killed process leaves the directory behind. Root-anchored so it cannot
+# match anything intentional deeper in the tree.
+/tmp*/
+
+# Nextflow leaves these wherever it is launched from, including the repo root
+# when running `nextflow config` or a compile check.
+.nextflow/
+.nextflow.log*

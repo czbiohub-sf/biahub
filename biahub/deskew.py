@@ -14,7 +14,6 @@ from iohub.ngff.utils import create_empty_plate, process_single_position
 from monai.transforms.spatial.array import Affine
 from scipy.ndimage import binary_dilation
 
-from biahub.cli import utils
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
     cluster,
@@ -23,17 +22,18 @@ from biahub.cli.parsing import (
     input_position_dirpaths,
     monitor,
     output_dirpath,
+    resume,
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import (
-    echo_resources,
-    estimate_resources,
-    get_submitit_cluster,
-    resolve_ome_zarr_version,
-    yaml_to_model,
-)
 from biahub.settings import DeskewSettings
+from biahub.utils.cluster import echo_resources, estimate_resources, get_submitit_cluster
+from biahub.utils.config import settings_fingerprint, yaml_to_model
+from biahub.utils.ngff import (
+    PROVENANCE_METADATA_KEYS,
+    get_output_paths,
+    resolve_ome_zarr_version,
+)
 
 # Needed for multiprocessing with GPUs
 # https://github.com/pytorch/pytorch/issues/40403#issuecomment-1422625325
@@ -636,6 +636,7 @@ def _init_output_plate(
             input_position_dirpaths[0], settings.output_ome_zarr_version
         ),
         metadata_sources=input_plate,
+        metadata_keys=PROVENANCE_METADATA_KEYS,
     )
 
     return (T, C, Z, Y, X), channel_names
@@ -649,6 +650,7 @@ def deskew(
     cluster: str = "slurm",
     monitor: bool = True,
     init_only: bool = False,
+    resume: bool = False,
 ):
     """Deskew oblique plane light-sheet dataset, processing time point and channels in parallel.
 
@@ -671,6 +673,10 @@ def deskew(
         Monitor of submitted SLURM jobs.
     init_only : bool, optional
         Only initialize the output store and exit; skip per-position processing.
+    resume : bool, optional
+        Skip the (time, channel) units a previous attempt already finished,
+        rather than recomputing the whole position. For retrying an interrupted
+        run; see ``iohub.ngff.utils.process_single_position``.
     """
     output_dirpath = Path(output_dirpath)
     slurm_out_path = output_dirpath.parent / "slurm_output"
@@ -694,7 +700,7 @@ def deskew(
         click.echo(f"Initialized {output_dirpath} ({len(input_position_dirpaths)} positions)")
         return
 
-    output_position_paths = utils.get_output_paths(input_position_dirpaths, output_dirpath)
+    output_position_paths = get_output_paths(input_position_dirpaths, output_dirpath)
 
     deskew_args = {
         "ls_angle_deg": settings.ls_angle_deg,
@@ -736,6 +742,8 @@ def deskew(
                     input_position_path,
                     output_position_path,
                     num_workers=slurm_args["slurm_cpus_per_task"],
+                    resume=resume,
+                    resume_token=settings_fingerprint(settings),
                     **deskew_args,
                 )
             )
@@ -769,6 +777,7 @@ def deskew(
 @cluster()
 @monitor()
 @init_only()
+@resume()
 def deskew_cli(
     input_position_dirpaths: list[Path],
     config_filepath: Path,
@@ -777,6 +786,7 @@ def deskew_cli(
     cluster: str = "slurm",
     monitor: bool = False,
     init_only: bool = False,
+    resume: bool = False,
 ):
     """Deskew oblique plane light-sheet dataset. Deskew parameters can be estimated with estimate-deskew.
 
@@ -802,6 +812,7 @@ def deskew_cli(
         cluster=cluster,
         monitor=monitor,
         init_only=init_only,
+        resume=resume,
     )
 
 

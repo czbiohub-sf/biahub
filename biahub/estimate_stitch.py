@@ -8,8 +8,8 @@ from iohub import open_ome_zarr
 from iohub.ngff.nodes import Plate
 
 from biahub.cli.parsing import input_position_dirpaths, local, monitor, output_filepath
-from biahub.cli.utils import model_to_yaml
 from biahub.settings import StitchSettings
+from biahub.utils.config import model_to_yaml
 from biahub.vendor.stitch.tile import optimal_positions, pairwise_shifts
 
 

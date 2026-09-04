@@ -18,11 +18,6 @@ from biahub.cli.parsing import (
     source_position_dirpaths,
     target_position_dirpaths,
 )
-from biahub.cli.utils import (
-    get_submitit_cluster,
-    model_to_yaml,
-    yaml_to_model,
-)
 from biahub.registration.utils import (
     convert_transform_to_ants,
     convert_transform_to_numpy,
@@ -37,6 +32,8 @@ from biahub.settings import (
     RegistrationSettings,
     StabilizationSettings,
 )
+from biahub.utils.cluster import get_submitit_cluster
+from biahub.utils.config import model_to_yaml, yaml_to_model
 
 # TODO: see if at some point these globals should be hidden or exposed.
 NA_DETECTION_SOURCE = 1.35

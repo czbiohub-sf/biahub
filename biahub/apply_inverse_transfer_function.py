@@ -23,12 +23,9 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import (
-    echo_resources,
-    estimate_resources,
-    get_submitit_cluster,
-    yaml_to_model,
-)
+from biahub.utils.cluster import echo_resources, estimate_resources, get_submitit_cluster
+from biahub.utils.config import yaml_to_model
+from biahub.utils.ngff import PROVENANCE_METADATA_KEYS
 
 
 def _init_output_plate(
@@ -68,6 +65,7 @@ def _init_output_plate(
         position_keys=[Path(p).parts[-3:] for p in input_position_dirpaths],
         **output_metadata,
         metadata_sources=input_plate,
+        metadata_keys=PROVENANCE_METADATA_KEYS,
     )
 
     return input_shape, channel_names

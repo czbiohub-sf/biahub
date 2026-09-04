@@ -18,20 +18,19 @@ from biahub.cli.parsing import (
     init_only,
     monitor,
     output_dirpath,
+    resume,
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.utils import (
-    copy_n_paste,
-    echo_resources,
-    estimate_resources,
-    get_output_paths,
-    get_submitit_cluster,
-    model_to_yaml,
-    resolve_ome_zarr_version,
-    yaml_to_model,
-)
 from biahub.settings import ConcatenateSettings
+from biahub.utils.array_ops import copy_n_paste
+from biahub.utils.cluster import echo_resources, estimate_resources, get_submitit_cluster
+from biahub.utils.config import model_to_yaml, settings_fingerprint, yaml_to_model
+from biahub.utils.ngff import (
+    PROVENANCE_METADATA_KEYS,
+    get_output_paths,
+    resolve_ome_zarr_version,
+)
 
 
 def _unique_source_plates(data_paths: list[Path]) -> list[Path]:
@@ -381,6 +380,7 @@ def _prepare_concatenate(settings: ConcatenateSettings, output_dirpath: Path) ->
         store_path=output_dirpath,
         position_keys=[p.parts[-3:] for p in output_position_paths],
         metadata_sources=list(reversed(source_plates)),
+        metadata_keys=PROVENANCE_METADATA_KEYS,
         **output_metadata,
     )
     click.echo(f"Created {output_dirpath} ({len(output_position_paths)} positions)")
@@ -425,6 +425,7 @@ def concatenate(
     block: bool = False,
     monitor: bool = True,
     init_only: bool = False,
+    resume: bool = False,
 ):
     """Concatenate datasets (with optional cropping).
 
@@ -448,6 +449,12 @@ def concatenate(
     init_only : bool, optional
         Only create the output store and emit RESOURCES, then exit; skip the
         per-position copy. By default False.
+    resume : bool, optional
+        Skip the (time, channel) units a previous attempt already finished,
+        rather than recopying the whole plate. This step is a single long job
+        covering every position, so a preemption or walltime kill near the end
+        otherwise discards hours of work. See
+        ``iohub.ngff.utils.process_single_position``.
     """
     slurm_out_path = output_dirpath.parent / "slurm_output"
 
@@ -462,7 +469,7 @@ def concatenate(
         max_num_cpus=16,
     )
     mem_gb = num_cpus * gb_ram_per_cpu
-    time_minutes = 60
+    time_minutes = 360
     echo_resources(num_cpus, mem_gb, time_minutes=time_minutes)
 
     if init_only:
@@ -525,6 +532,8 @@ def concatenate(
                 input_time_indices=input_time_indices,
                 output_time_indices=list(range(len(input_time_indices))),
                 num_workers=slurm_args["slurm_cpus_per_task"],
+                resume=resume,
+                resume_token=settings_fingerprint(settings),
                 extra_metadata=merged_extra,
                 zyx_slicing_params=zyx_slicing_params,
             )
@@ -551,6 +560,7 @@ def concatenate(
 @cluster()
 @monitor()
 @init_only()
+@resume()
 @click.option(
     "--concat-data-paths",
     multiple=True,
@@ -568,6 +578,7 @@ def concatenate_cli(
     cluster: str = "slurm",
     monitor: bool = False,
     init_only: bool = False,
+    resume: bool = False,
     concat_data_paths: tuple[str, ...] = (),
 ):
     r"""Concatenate datasets (with optional cropping).
@@ -621,6 +632,7 @@ def concatenate_cli(
         block=block,
         monitor=monitor,
         init_only=init_only,
+        resume=resume,
     )
 
 

@@ -1,0 +1,10 @@
+# CHECK PER DATASET against /hpc/instruments/cm.mantis/<DATASET>/config.yaml.
+#
+# pixel_size_um is the lateral (YX) pixel size of the INPUT store. DeskewSettings
+# needs it to derive px_to_scan_ratio (= pixel_size_um / scan_step_um); it is no
+# longer read from the zarr.
+pixel_size_um: 0.1133
+ls_angle_deg: 30.0
+scan_step_um: 0.150
+average_n_slices: 3
+keep_overhang: false

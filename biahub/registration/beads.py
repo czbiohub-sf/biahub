@@ -48,10 +48,6 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.cli.slurm import wait_for_jobs_to_finish
-from biahub.cli.utils import (
-    _check_nan_n_zeros,
-    estimate_resources,
-)
 from biahub.core.graph_matching import Graph, GraphMatcher
 from biahub.core.transform import Transform
 from biahub.registration.qc import flag_timepoints, write_qc_report
@@ -63,6 +59,8 @@ from biahub.registration.utils import (
     save_quality_score,
 )
 from biahub.settings import AffineTransformSettings, BeadsMatchSettings, DetectPeaksSettings
+from biahub.utils.array_ops import _check_nan_n_zeros
+from biahub.utils.cluster import estimate_resources
 
 
 # Default grid for the score-gated sweep fallback, distilled from a 432-combination
