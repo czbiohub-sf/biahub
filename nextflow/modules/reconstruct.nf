@@ -133,7 +133,7 @@ workflow reconstruct_wf {
     def tf_zarr     = "${output_dir}/transfer_function.zarr"
 
     init_out = init_apply_inv_tf(input_zarr, output_zarr, config, prev_done.map { 'done' })
-    run_resources = init_out.map { parse_resources(it) }
+    run_resources = init_out.map { stdout_text -> parse_resources(stdout_text) }
     // compute_transfer_function uses hardcoded resources (see process body),
     // but is gated on init so the output plate exists before the phases proceed.
     init_done = init_out.map { 'done' }
@@ -141,10 +141,10 @@ workflow reconstruct_wf {
     tf_done = compute_transfer_function(init_done, input_zarr, tf_zarr, config)
 
     pos_meta = positions
-        .flatMap { it }
+        .flatMap { items -> items }
         .combine(run_resources)
         .combine(tf_done)
-        .map { pos, meta, tf -> [pos, meta] }
+        .map { pos, meta, _tf -> [pos, meta] }
 
     rc_done = run_apply_inv_tf(pos_meta, input_zarr, output_zarr, tf_zarr, config) | collect
 

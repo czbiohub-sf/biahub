@@ -1,0 +1,101 @@
+# Pixel-value QC for the assembled intensity store — the plate assemble writes,
+# holding the acquired channels plus the derived ones.
+#
+# SELF-CONTAINED, with no Hydra `defaults:`. It used to inherit a base.yaml, which
+# existed to be shared and was shared by this one file; and the directory layout
+# around it (`assemble/`, `track/`) existed only because `imaging-qc report`
+# resolved a tab's settings by scanning a directory. imaging-qc#201 fixed that —
+# the report composes from the file it is given — so one file per store is the
+# whole story now, and the tab keeps the `display_name` below, which the
+# directory form dropped in favour of "Stage 5".
+#
+# The extension must be `.yaml`: imaging-qc loads a stage config through Hydra,
+# which strips the extension and looks for `<stem>.yaml`, so `.yml` fails with
+# "Cannot find primary config".
+#
+# `stage:` is the only place the stage number appears — renumbering is that one
+# edit, with no file to rename.
+
+stage: 5
+display_name: "Assembled Image — Pixel QC"
+
+backend: iohub
+positions: null
+metric_group: default
+log_level: INFO
+upstream_qc_dir: null
+
+metric_groups:
+  default:
+    metrics:
+      - intensity_stats
+      - signal_to_noise
+      - blank
+      - tenengrad
+
+intensity_stats:
+  grid: 16
+  quantiles: [0.01, 0.05, 0.25, 0.5, 0.75, 0.95, 0.99]
+
+# Per-channel SNR floors rather than one scalar. Brightfield SNR is not comparable
+# to fluorescence, so "BF - Oblique" is left out of the mapping (an unlisted
+# channel gets no hard floor), and the derived channels — Phase3D,
+# nuclei_prediction, membrane_prediction — are left out for the same reason: a
+# near-binary prediction reads an SNR in the hundreds. The fluorescence values
+# below are STARTING POINTS keyed to this store's channel names, NOT constants
+# calibrated from any dataset — set each from the channel's healthy SNR for the
+# experiment at hand.
+signal_to_noise:
+  granularity: slice
+  gate:
+    # `granularity: channel` evaluates the gate per channel, which is what lets the
+    # {channel: value} hard_floor key by name (a channel-pooled gate has no channel
+    # to key by and refuses the mapping).
+    granularity: channel
+    # PRE-rename channel names, deliberately. QC runs INSIDE the pipeline, on the
+    # store assemble just wrote, so it sees the acquisition's own channel names —
+    # the `raw ` prefix only appears after the manual rename_channels.py step that
+    # runs AFTER the pipeline (caveats.md 2, the same ordering trap that makes
+    # track read pre-rename names). Keying these on `raw ...` matched no channel
+    # and imaging-qc refused the config rather than enforce nothing.
+    hard_floor:
+      "GFP EX488 EM525-45": 5.0
+      "mCherry EX561 EM600-37": 5.0
+    hard_ceiling: null
+    outlier_method: zscore
+    outlier_params:
+      n_std: 3.0
+      tail: lower
+
+blank:
+  intensity_threshold: 0.01
+  variance_threshold: 1.0e-6
+  granularity: slice
+  channels: null
+  gate:
+    granularity: channel
+
+tenengrad:
+  threshold: 0.0
+  normalize: true
+  granularity: slice
+  gate:
+    hard_floor: 0.001
+    hard_ceiling: null
+    outlier_method: zscore
+    outlier_params:
+      n_std: 3.0
+      tail: lower
+
+report:
+  max_timepoints: 5
+  compact: false
+  metric_archetypes:
+    signal_to_noise: facetgrid
+    tenengrad: facetgrid
+    intensity_stats: range_drift
+  metric_labels:
+    signal_to_noise: "Signal-to-Noise Ratio"
+    blank: "Blank Detection"
+    tenengrad: "Tenengrad"
+    intensity_stats: "Intensity Statistics"

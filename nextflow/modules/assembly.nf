@@ -146,7 +146,7 @@ workflow assemble_wf {
         deskew_zarr, reconstruct_zarr, virtual_stain_zarr,
         config_dir, config, prev_done.map { 'done' }
     )
-    resources = init_concatenate(resolved, output_zarr).map { parse_resources(it) }
+    resources = init_concatenate(resolved, output_zarr).map { stdout_text -> parse_resources(stdout_text) }
     as_done = run_concatenate(output_zarr, resolved_config_path, resources)
 
     emit:
