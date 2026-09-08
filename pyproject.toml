@@ -117,7 +117,7 @@ index-strategy = "unsafe-best-match"
 # than its directory. That project also relaxed `iohub==0.3.2` to a floor so both
 # can share one environment — biahub needs iohub>=0.3.11 for the
 # gapped-shard-write fix.
-imaging_qc_pipeline = { git = "https://github.com/czbiohub-sf/imaging-qc-pipeline", rev = "2be2ee6529adfb990503e3289f19ecfa142b1b5a" }
+imaging_qc_pipeline = { git = "https://github.com/czbiohub-sf/imaging-qc-pipeline", rev = "bd0b494ed1edf8be629254344e6e4bd6df1b3141" }
 
 [tool.hatch.metadata]
 allow-direct-references = true
