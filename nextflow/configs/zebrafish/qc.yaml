@@ -61,9 +61,23 @@ blank:
   gate:
     granularity: channel
 
+# NORMALIZE OFF, measured rather than preferred. With `normalize: true` this
+# metric divides gradient energy by an intensity scale, and in the empty planes
+# that divisor is near zero — so noise becomes the largest value in the stack.
+# On 2026_08_11_A549_SEC61B_DENV it peaked at Z 3-19 (SNR ~5 there, i.e. no
+# signal) and ANTI-correlated with SNR across Z, rho -0.31 to -0.69. Raw, on the
+# same pixels, it peaks at Z 31-37 — inside the in-focus band where SNR peaks —
+# and correlates at rho +0.97 to +0.99. It is a focus metric again.
+#
+# ⚠ `hard_floor` below is a NORMALIZED bound and is inert against raw values,
+# which run 179-934 on GFP: it cannot fire. Recalibration is deliberately
+# deferred — the floor is channel-scale dependent (BF, Phase3D and the
+# predictions each sit on their own scale), so it needs reading off healthy runs
+# per channel, like the SNR floors. The relative outlier fence still gates this
+# metric in the meantime.
 tenengrad:
   threshold: 0.0
-  normalize: true
+  normalize: false
   granularity: slice
   gate:
     hard_floor: 0.001
@@ -76,9 +90,28 @@ tenengrad:
 report:
   max_timepoints: 5
   compact: false
+  # MAX over Z, not the default median, for both per-Z metrics. The question a
+  # reader asks of a Z stack is "is there usable signal / focus anywhere in it",
+  # and a median over 86 planes answers a different one: two thirds of this
+  # store's planes are out of focus, so the median is dragged toward the floor.
+  # Measured on GFP: median-over-Z SNR 12.0 against max-over-Z 26.7.
+  #
+  # REPORT-SIDE ONLY. Gates still collapse Z by mean (`any()` for booleans), so
+  # a panel and a verdict describe different reductions of the same rows — worth
+  # remembering before calibrating a bound against a plot.
+  #
+  # No `group_positions:` yet. It is report-level, so it would apply to every
+  # panel at once, and the right value differs by form: `range_drift` is
+  # unreadable at 972 traces and wants per-well medians, while a facetgrid's
+  # distribution is the point and collapsing 54 fields to 6 destroys it (the GFP
+  # panel's max falls 21.8 -> 15.3). Per-entry grouping is imaging-qc#221.
   metric_archetypes:
-    signal_to_noise: facetgrid
-    tenengrad: facetgrid
+    signal_to_noise:
+      archetype: facetgrid
+      aggregate: {Z: max}
+    tenengrad:
+      archetype: facetgrid
+      aggregate: {Z: max}
     intensity_stats: range_drift
   metric_labels:
     signal_to_noise: "Signal-to-Noise Ratio"
