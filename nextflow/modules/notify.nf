@@ -200,14 +200,38 @@ def failed_attempts() {
         if (!trace.exists()) {
             return null
         }
-        def outcome = [restarted: 0, failed: 0, exits: [:], job_ids: []]
+        def outcome = [restarted: 0, failed: 0, exits: [:], unknown: 0, job_ids: []]
         trace.readLines().drop(1).each { line ->
             def field = line.split('\\t')
             if (field.size() > 5 && field[4] == 'FAILED') {
-                def code = field[5].isInteger() ? field[5] as int : -1
-                if (code >= 130 && code <= 145) {
+                // An exit column of '-' is an attempt whose exit code Nextflow
+                // could NOT read, which on the `preempted` partition means SLURM
+                // cancelled the job before it could write .exitcode. That is an
+                // infrastructure kill exactly like a 143, and nextflow.config's
+                // errorStrategy retries it — so it must count as restarted.
+                // Counting it as a failure (what parsing '-' to -1 did) would
+                // report a healthy run as broken. When such a task does end the
+                // run it is because it burnt through maxRetries, which the
+                // "retries exhausted" note in notify_run_end covers.
+                //
+                // This is DELIBERATELY broader than the errorStrategy, which
+                // retries the Integer.MAX_VALUE sentinel but not a null status.
+                // trace.txt cannot tell those apart — TraceRecord.fmtString
+                // renders both as '-' — so no parsing here could separate them,
+                // and a null status is unreachable on the SLURM path anyway
+                // (GridTaskHandler assigns only after a non-null check). Treating
+                // every '-' as restarted is therefore exact for every case that
+                // can actually occur; do not try to "align" it with the config.
+                def unknown = !field[5].isInteger()
+                def code = unknown ? null : field[5] as int
+                if (unknown || (code >= 130 && code <= 145)) {
                     outcome.restarted = outcome.restarted + 1
-                    outcome.exits[code] = (outcome.exits[code] ?: 0) + 1
+                    if (unknown) {
+                        outcome.unknown = outcome.unknown + 1
+                    }
+                    else {
+                        outcome.exits[code] = (outcome.exits[code] ?: 0) + 1
+                    }
                     if (field[2] && field[2].isInteger()) {
                         outcome.job_ids += field[2]
                     }
@@ -234,9 +258,15 @@ def restarted_line(outcome) {
         return 'restarted: 0'
     }
     def causes = restart_causes(outcome.job_ids)
+    // Without sacct, fall back to exit codes — including the attempts that had
+    // none, which would otherwise contribute nothing and render "restarted: N ()".
+    def by_exit = outcome.exits.sort().collect { code, n -> "exit ${code}×${n}" }
+    if (outcome.unknown) {
+        by_exit += "no exit code×${outcome.unknown}"
+    }
     def detail = causes
         ? causes.sort { entry -> -entry.value }.collect { label, n -> "${n} ${label}" }.join(', ')
-        : outcome.exits.sort().collect { code, n -> "exit ${code}×${n}" }.join(', ')
+        : by_exit.join(', ')
     return "restarted: ${outcome.restarted} (${detail})".toString()
 }
 
