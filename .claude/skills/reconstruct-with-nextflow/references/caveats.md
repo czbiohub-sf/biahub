@@ -291,6 +291,12 @@ plate for *all* positions with data in only the first — correct and expected.
 Do not treat such a store as a deliverable, and delete it before a real run so
 `-resume` cannot reuse it.
 
+Since the init phase moved to the front of the run, this is visible sooner and
+for every step at once: a smoke test creates the full-width plate for
+flat-field, deskew, reconstruct, virtual-stain, assemble AND track within the
+first minutes, before a single position has been computed. Nothing changed
+about what ends up on disk — only when it appears.
+
 (Related, for pipeline developers: a param passed as `--foo 1` on the command
 line arrives as a String; coerce numeric params at the point of use and test
 via the CLI — see the comments in `nextflow/modules/common.nf`.)

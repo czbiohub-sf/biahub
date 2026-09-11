@@ -1,5 +1,5 @@
-// Assembly subworkflow: resolve concat config → init (RESOURCES) → single-shot
-// concatenate.
+// Assembly subworkflows: init (resolve concat config → scaffold → RESOURCES)
+// and run (single-shot concatenate).
 //
 // Unlike the per-position steps (deskew, reconstruct, …), concatenate combines
 // N source stores channel-wise at each position, so there is no single `-i` to
@@ -13,14 +13,19 @@
 // This is the "reserve a compute node + --cluster debug" approach. To parallelise
 // positions across the reserved node's cores later, switch the run step to
 // `--cluster local` (submitit spawns one subprocess per position) and size the
-// resources for the concurrent fan-out.
+// resources for the concurrent fan-out. Making this step work ACROSS positions
+// is biahub#301, and is also what a per-position pipeline DAG (biahub#304)
+// would need.
 //
-// Like the other steps, a cheap `--init` step on the login node creates the
-// output plate (create_empty_plate is idempotent) and emits the RESOURCES line
-// that sizes the compute node. Path injection: the source zarr paths are
-// Nextflow runtime values, so passing `--concat-data-paths` templates them into
-// concat_data_paths (resolve mode) — also a login-node step — before init/run
-// read the config.
+// BOTH init steps read only METADATA — `resolve_concatenate_config` templates
+// paths into the config, and `concatenate --init` reads each source position's
+// shape/dtype/channel names to resolve the output channel mapping and create
+// the plate (create_empty_plate is idempotent). Neither reads a pixel, so both
+// run against source stores that have been scaffolded but not yet filled, which
+// is what lets them join the pipeline's up-front init phase. Resolving the
+// channel mapping there is the point: a concatenate config naming a channel no
+// source store has now fails in the first minutes rather than after every
+// reconstruction step has completed.
 
 include { parse_resources; slurm_logs; slurm_log_dir } from './common'
 
@@ -42,7 +47,11 @@ process resolve_concatenate_config {
     // Write the resolved config alongside the source config (config_dir) so it
     // sits with the rest of the run's configs. `rm -f` first because resolve
     // mode's `-o` refuses to overwrite an existing file, so a rerun would
-    // otherwise fail on the stale copy.
+    // otherwise fail on the stale copy. NOTE: this is not hermetic — the file
+    // lands next to the user's configs rather than in the work dir, so two runs
+    // sharing a config directory overwrite each other's copy. Unchanged by the
+    // move into the init phase, except that it now happens in the run's first
+    // minutes rather than hours in.
     script:
     def resolved = "${config_dir}/concatenate_resolved.yml"
     """
@@ -122,33 +131,73 @@ process run_concatenate {
 }
 
 
+// The resolved config lives beside the source config. Both subworkflows need
+// the path and the pipeline invokes them separately, so derive it in one place.
+def resolved_config_path(config) {
+    return "${new File(config.toString()).parent}/concatenate_resolved.yml"
+}
+
+
+// Resolve the source paths into the config and scaffold the assembled plate.
+//
 // take:
 //   deskew_zarr        LF source store to concatenate
 //   reconstruct_zarr   phase source store to concatenate
 //   virtual_stain_zarr virtual-stain source store to concatenate
 //   output_zarr        path to the assembled output plate.zarr
 //   config             path to the concatenate settings YAML (placeholder paths)
-//   prev_done          gating channel — assembly starts once this emits
-workflow assemble_wf {
+//   trigger            gating channel — init starts once this emits
+// emit:
+//   resources    the RESOURCES payload sizing the single-shot task
+//   done         fires once the assembled plate exists
+workflow assemble_init_wf {
     take:
     deskew_zarr
     reconstruct_zarr
     virtual_stain_zarr
     output_zarr
     config
-    prev_done
+    trigger
 
     main:
     def config_dir = new File(config.toString()).parent
-    def resolved_config_path = "${config_dir}/concatenate_resolved.yml"
 
     resolved = resolve_concatenate_config(
         deskew_zarr, reconstruct_zarr, virtual_stain_zarr,
-        config_dir, config, prev_done.map { 'done' }
+        config_dir, config, trigger.map { 'done' }
     )
-    resources = init_concatenate(resolved, output_zarr).map { stdout_text -> parse_resources(stdout_text) }
-    as_done = run_concatenate(output_zarr, resolved_config_path, resources)
+    init_out = init_concatenate(resolved, output_zarr)
 
     emit:
-    done = as_done
+    resources = init_out.map { stdout_text -> parse_resources(stdout_text) }.first()
+    done      = init_out.map { 'done' }.first()
+}
+
+
+// Concatenate the whole plate in one task.
+//
+// take:
+//   output_zarr  path to the assembled output plate.zarr
+//   config       path to the concatenate settings YAML (locates the resolved copy)
+//   resources    RESOURCES payload from assemble_init_wf
+//   prev_done    gating channel — every source store holds data
+workflow assemble_run_wf {
+    take:
+    output_zarr
+    config
+    resources
+    prev_done
+
+    main:
+    ready = resources
+        .combine(prev_done)
+        .map { meta, _gate -> meta }
+
+    as_done = run_concatenate(output_zarr, resolved_config_path(config), ready)
+
+    emit:
+    // `.first()` so this is a VALUE channel like every other step's `done`:
+    // run_concatenate is single-shot, so its output is a one-item queue, and
+    // the steps gated on it would each have to re-signal it otherwise.
+    done = as_done.first()
 }

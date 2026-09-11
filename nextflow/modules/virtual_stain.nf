@@ -1,7 +1,8 @@
-// Virtual-stain subworkflow: init + preprocess → fan-out run × N positions.
+// Virtual-stain subworkflows: init (scaffold + resources) and run (preprocess +
+// fan-out × N).
 //
-// This subworkflow is PATH-AGNOSTIC. Callers pass the input zarr, output zarr,
-// and config explicitly; the module has no idea where it sits in the pipeline
+// This module is PATH-AGNOSTIC. Callers pass the input zarr, output zarr, and
+// config explicitly; the module has no idea where it sits in the pipeline
 // directory layout. The orchestrating pipeline (see mantis-v2.nf) owns the
 // layout and the order of steps; this module just virtually stains whatever
 // it's handed.
@@ -15,14 +16,18 @@
 // own SLURM jobs. See:
 // examples/submitit_debug_nextflow/2026-05-27-submitit-debug-nextflow-concerns.md
 //
-// Three-phase pattern:
-// 1. init_virtual_stain: validates the config, creates the output plate with
-//    the predicted channels, emits RESOURCES:
+// Three phases, split across TWO subworkflows by whether they need DATA:
+// 1. init_virtual_stain: validates the predict config against VisCy's schema,
+//    creates the output plate with the predicted channels, emits RESOURCES.
+//    Metadata-only, so it joins the pipeline's up-front init phase.
 // 2. run_virtual_stain_preprocess: `viscy preprocess` over the whole input
 //    plate. virtual_stain_position reads precomputed normalization statistics
 //    from the input store (viscy_data.read_norm_meta) and errors if they are
 //    missing, so this must run before fan-out. NOTE: this MUTATES the input
-//    store by writing normalization metadata into it.
+//    store by writing normalization metadata into it, and it reads every
+//    position's PIXELS — so unlike the other one-shot steps it cannot be
+//    hoisted, and it is what keeps a whole-plate barrier ahead of this step
+//    (biahub#304).
 // 3. run_virtual_stain: per-position GPU prediction using RESOURCES.
 //
 // Both `biahub virtual-stain` and `viscy` live in biahub's optional `stain`
@@ -121,32 +126,60 @@ process run_virtual_stain {
 }
 
 
+// Validate the predict config and scaffold the output plate. Metadata-only and
+// cheap, so it belongs in the pipeline's up-front init phase.
+//
+// take:
+//   input_zarr   path to the input plate.zarr (reconstruct output)
+//   output_zarr  path to the virtual-stain output plate.zarr
+//   config       path to the virtual-stain (viscy predict) settings YAML
+//   trigger      gating channel — init starts once this emits
+// emit:
+//   resources    the RESOURCES payload sizing one position's task
+//   done         fires once the output plate exists
+workflow virtual_stain_init_wf {
+    take:
+    input_zarr
+    output_zarr
+    config
+    trigger
+
+    main:
+    init_out = init_virtual_stain(input_zarr, output_zarr, config, trigger.map { 'done' })
+
+    emit:
+    resources = init_out.map { stdout_text -> parse_resources(stdout_text) }.first()
+    done      = init_out.map { 'done' }.first()
+}
+
+
+// Compute normalization statistics over the whole input plate, then fan out one
+// GPU prediction per position.
+//
 // take:
 //   positions    collected channel of position keys (e.g. ['A/1/0', 'B/1/0'])
 //   input_zarr   path to the input plate.zarr (reconstruct output)
 //   output_zarr  path to the virtual-stain output plate.zarr
 //   config       path to the virtual-stain (viscy predict) settings YAML
-//   prev_done    gating channel — virtual stain starts once this emits
-workflow virtual_stain_wf {
+//   resources    RESOURCES payload from virtual_stain_init_wf
+//   prev_done    gating channel — the input store holds data for EVERY position,
+//                which preprocess requires
+workflow virtual_stain_run_wf {
     take:
     positions
     input_zarr
     output_zarr
     config
+    resources
     prev_done
 
     main:
-    init_out = init_virtual_stain(input_zarr, output_zarr, config, prev_done.map { 'done' })
-    resources = init_out.map { stdout_text -> parse_resources(stdout_text) }
-
-    // Preprocess the whole plate in parallel with init; both gate the fan-out.
     vs_preprocess = run_virtual_stain_preprocess(input_zarr, prev_done.map { 'done' })
-
-    ready = resources.combine(vs_preprocess)
 
     pos_meta = positions
         .flatMap { items -> items }
-        .combine(ready)
+        .combine(resources)
+        .combine(vs_preprocess.first())
         .map { pos, meta, _preprocess_done -> [pos, meta] }
 
     vs_done = run_virtual_stain(pos_meta, input_zarr, output_zarr, config) | collect
