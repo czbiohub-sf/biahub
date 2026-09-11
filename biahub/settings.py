@@ -23,6 +23,72 @@ class MyBaseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class MovieTileSettings(MyBaseModel):
+    """One source movie placed in a `grid-movies` grid."""
+
+    mov_path: str
+    legend: str | None = None
+    crop_box: list[int] | None = None  # (y0, y1, x0, x1); None => auto non-black
+    rotation: float = 0
+    frame_step: int = 1  # keep every Nth source frame
+    frame_time_sampling_min: float | None = None  # minutes between source frames
+    legend_font_size: int = 20
+    timestamp_font_size: int = 16
+
+    @field_validator("crop_box")
+    @classmethod
+    def _check_crop_box(cls, v):
+        if v is not None and len(v) != 4:
+            raise ValueError("crop_box must be [y0, y1, x0, x1]")
+        return v
+
+
+class GridMoviesSettings(MyBaseModel):
+    """Tile a fixed set of movies (e.g. channels) into one grid movie."""
+
+    movs: list[MovieTileSettings]
+    output_dir: str
+    output_filename: str
+    grid: list[int] = [2, 2]
+    max_frames: int | None = None
+    fps: float | None = None
+    quality: int = 8
+    # Batch one grid per FOV by substituting `fov_placeholder` in paths/legends.
+    fov_list: list[str] | None = None
+    fov_placeholder: str = "{fov}"
+
+    @field_validator("grid")
+    @classmethod
+    def _check_grid(cls, v):
+        if len(v) != 2:
+            raise ValueError("grid must be [rows, cols]")
+        return v
+
+
+class GridPerWellSettings(MyBaseModel):
+    """Group per-FOV movies by well and tile each well onto a grid."""
+
+    mov_path: str
+    output_path: str
+    grid: list[int] = [2, 2]
+    time_sampling_min: float | None = None
+    rotation: float = 0
+    max_frames: int | None = None
+    frame_step: int = 1
+    legend_font_size: int = 20
+    timestamp_font_size: int = 24
+    add_legend: bool = True
+    fps: float | None = None
+    quality: int = 8
+
+    @field_validator("grid")
+    @classmethod
+    def _check_grid(cls, v):
+        if len(v) != 2:
+            raise ValueError("grid must be [rows, cols]")
+        return v
+
+
 class DetectPeaksSettings(MyBaseModel):
     threshold_abs: float = 110
     nms_distance: int = 16

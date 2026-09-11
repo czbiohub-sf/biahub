@@ -174,6 +174,16 @@ COMMANDS = [
         "import_path": "biahub.track.track_cli",
         "help": "Track objects in 2D/3D time-lapse microscopy",
     },
+    {
+        "name": "grid-per-well",
+        "import_path": "biahub.visualize.grid_per_well.grid_per_well_cli",
+        "help": "Tile per-FOV MP4s into per-well grid movies",
+    },
+    {
+        "name": "grid-movies",
+        "import_path": "biahub.visualize.grid_movies.grid_movies_cli",
+        "help": "Tile a set of movies (channels) into a grid, optionally one per FOV",
+    },
 ]
 
 

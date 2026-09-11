@@ -1,0 +1,42 @@
+# Tile a fixed set of movies (e.g. channels) into one grid movie.
+# Optionally batch one grid per FOV: list fov_list and embed `{fov}` in paths,
+# legends and output_filename. `{fov}` becomes `a_b_c` in paths/filenames and
+# `a/b/c` in legends.
+output_dir: /path/to/output/all_channels
+output_filename: BF_nuc_mem_{fov}.mp4
+grid: [1, 3]
+max_frames: null
+fps: null                 # null => inherit from the first source movie
+quality: 8
+fov_placeholder: "{fov}"
+fov_list:
+  - 0/1/000000
+  - 0/2/002000
+
+movs:
+  - mov_path: /path/to/BF/fov/{fov}.mp4
+    crop_box: [176, 1072, 970, 2166]   # [y0, y1, x0, x1]; null => auto non-black
+    legend: "BF - {fov}"
+    legend_font_size: 20
+    timestamp_font_size: 20
+    rotation: 0
+    frame_step: 12
+    frame_time_sampling_min: 5
+
+  - mov_path: /path/to/nuclei_projection/fov/{fov}.mp4
+    crop_box: [0, 784, 240, 881]
+    legend: "Nuclei max projection - {fov}"
+    legend_font_size: 20
+    timestamp_font_size: 20
+    rotation: -90
+    frame_step: 12
+    frame_time_sampling_min: 5
+
+  - mov_path: /path/to/membrane_projection/fov/{fov}.mp4
+    crop_box: [0, 1248, 976, 2168]
+    legend: "Membrane max projection - {fov}"
+    legend_font_size: 20
+    timestamp_font_size: 20
+    rotation: -90
+    frame_step: 12
+    frame_time_sampling_min: 5
