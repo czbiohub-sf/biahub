@@ -366,7 +366,7 @@ requires-dist = [
     { name = "dask", extras = ["array"] },
     { name = "humanize" },
     { name = "imageio-ffmpeg" },
-    { name = "imaging-qc-pipeline", extras = ["interactive"], marker = "extra == 'qc'", git = "https://github.com/czbiohub-sf/imaging-qc-pipeline?rev=2be2ee6529adfb990503e3289f19ecfa142b1b5a" },
+    { name = "imaging-qc-pipeline", extras = ["interactive"], marker = "extra == 'qc'", git = "https://github.com/czbiohub-sf/imaging-qc-pipeline?rev=bd0b494ed1edf8be629254344e6e4bd6df1b3141" },
     { name = "iohub", specifier = ">=0.3.11" },
     { name = "largestinteriorrectangle" },
     { name = "llvmlite", specifier = ">=0.41.0" },
@@ -1933,8 +1933,8 @@ wheels = [
 
 [[package]]
 name = "imaging-qc-pipeline"
-version = "0.4.0a2"
-source = { git = "https://github.com/czbiohub-sf/imaging-qc-pipeline?rev=2be2ee6529adfb990503e3289f19ecfa142b1b5a#2be2ee6529adfb990503e3289f19ecfa142b1b5a" }
+version = "0.5.0"
+source = { git = "https://github.com/czbiohub-sf/imaging-qc-pipeline?rev=bd0b494ed1edf8be629254344e6e4bd6df1b3141#bd0b494ed1edf8be629254344e6e4bd6df1b3141" }
 dependencies = [
     { name = "dask", extra = ["array"] },
     { name = "hydra-core" },
