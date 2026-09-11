@@ -58,8 +58,15 @@ process compute_step {
     cpus { params.qc_cpus as int }
     memory { "${(meta?.memory_gb ?: 16).toFloat() * task.attempt} GB" }
     time '2h'
+    // NO errorStrategy here on purpose — inherit the one in nextflow.config.
+    // This used to carry its own `task.exitStatus in [137, 140, 143]` copy, which
+    // is the same idea with a narrower list and, like the config rule before it,
+    // missed the case that matters most on the `preempted` partition: a job SLURM
+    // cancels before it can write .exitcode, whose status is unreadable rather
+    // than any code at all. A process-body directive BEATS the config selector,
+    // so the copy silently reintroduced the abort for QC even once config was
+    // fixed. `maxRetries` is still overridden — only the strategy is shared.
     maxRetries 1
-    errorStrategy { task.exitStatus in [137, 140, 143] ? 'retry' : 'terminate' }
 
     input:
     tuple val(zarr_path), val(config_path), val(step_id),
@@ -83,8 +90,8 @@ process finalize_stage {
     clusterOptions { slurm_logs('qc') }
     memory { task.attempt == 1 ? '32 GB' : '48 GB' }
     time '1h'
+    // Inherits nextflow.config's errorStrategy — see compute_step above.
     maxRetries 1
-    errorStrategy { task.exitStatus in [137, 140, 143] ? 'retry' : 'terminate' }
     tag "${zarr_path}"
 
     input:
