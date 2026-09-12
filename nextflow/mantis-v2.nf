@@ -417,11 +417,11 @@ workflow {
     // gated on every store's finalize, so its completion is exactly "QC of all
     // stores is done". Its report directory stands in for an output zarr.
     def step_events = [
-        [label: 'init (configs validated)', done: init_done,                 output: out],
-        [label: 'flat-field',               done: ff_done.done,              output: ff_output],
-        [label: 'deskew',                   done: deskew_done.done,          output: deskew_output],
-        [label: 'phase reconstruction',     done: reconstruct_done.done,     output: reconstruct_output],
-        [label: 'virtual staining',         done: virtual_stain_done.done,   output: virtual_stain_output],
+        [label: 'initialize',           done: init_done,                 output: out],
+        [label: 'flat-field',           done: ff_done.done,              output: ff_output],
+        [label: 'deskew',               done: deskew_done.done,          output: deskew_output],
+        [label: 'phase reconstruction', done: reconstruct_done.done,     output: reconstruct_output],
+        [label: 'virtual staining',     done: virtual_stain_done.done,   output: virtual_stain_output],
     ]
     if (assemble_on) step_events << [label: 'assemble', done: assemble_done.done, output: assemble_output]
     if (track_on)    step_events << [label: 'track',    done: track_done.done,    output: track_output]
