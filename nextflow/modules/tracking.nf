@@ -123,10 +123,17 @@ workflow track_run_wf {
     prev_done
 
     main:
+    // GATE CHANNELS ARE MAPPED TO A TOKEN BEFORE COMBINING, never combined raw.
+    // `combine` FLATTENS a list-valued item into the tuple, so what the producer
+    // happens to emit leaks into the tuple's arity: a step's `done` is a COLLECTED
+    // list of every position, which turned [pos, meta] into
+    // [pos, meta, p1, p2, … p54] and blew up a three-parameter closure with
+    // `MissingMethodException` — after the previous step had already run. Mapping
+    // reads nothing out of the gate, so no producer's payload shape can reach here.
     pos_meta = positions
         .flatMap { items -> items }
         .combine(resources)
-        .combine(prev_done)
+        .combine(prev_done.map { 'done' })
         .map { pos, meta, _gate -> [pos, meta] }
 
     tk_done = run_track(pos_meta, input_zarr, input_images_zarr, output_zarr, config) | collect
