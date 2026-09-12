@@ -119,6 +119,19 @@ index-strategy = "unsafe-best-match"
 # gapped-shard-write fix.
 imaging_qc_pipeline = { git = "https://github.com/czbiohub-sf/imaging-qc-pipeline", rev = "bd0b494ed1edf8be629254344e6e4bd6df1b3141" }
 
+# Pin iohub to czbiohub-sf/iohub#feat/create-empty-plate-extra-metadata, which
+# adds `create_empty_plate(extra_metadata=...)`. Drop this back to a PyPI floor
+# once that lands and is released.
+#
+# The Nextflow pipeline scaffolds every step's output store before any of them
+# holds data, so each step has to record its OWN provenance during `--init`:
+# `create_empty_plate` inherits an upstream store's `biahub-*` zattrs at
+# plate-creation time and only for positions it creates, so a record written at
+# compute time would never reach the next plate. Writing it through
+# `extra_metadata` rather than in a second pass afterwards is what makes that
+# free — the function already holds an open handle to every position.
+iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "2ee15ff77c3c345cbfe58d5ff8a29b914dd3dadb" }
+
 [tool.hatch.metadata]
 allow-direct-references = true
 

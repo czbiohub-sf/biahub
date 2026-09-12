@@ -187,6 +187,8 @@ nextflow/
 
 Each step module runs the same CLI you would run by hand, in two phases: `biahub <step> --init` creates the output store and reports the CPU/memory/time a single position needs, then Nextflow fans out one `biahub <step> --cluster debug` task per position with those resources. `--cluster debug` makes the CLI do the work in-process, so Nextflow — not `submitit` — owns job submission.
 
+**A run does every step's `--init` first, before any compute.** Each `--init` is metadata-only — it reads the input store's channel names, shape and scale, derives the output geometry from the config, and creates the output plate — so it needs its input store to exist, not to hold data. That lets the inits chain: flat-field's scaffolds the plate deskew's reads, and so on down to tracking, whose init reads the assembled plate `concatenate --init` created. The whole chain runs on the head node in the run's first minutes, so a typo in `track.yml` stops the run there instead of after every reconstruction step has been paid for. QC's `plan-stage` and `estimate-resources` join the same phase for the same reason.
+
 ### Running a pipeline
 
 Install [Nextflow](https://www.nextflow.io/docs/latest/install.html) (requires Java 17+), then launch from the `nextflow/` directory so that `nextflow.config` is picked up automatically:

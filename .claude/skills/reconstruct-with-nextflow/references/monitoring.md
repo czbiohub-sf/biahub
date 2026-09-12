@@ -122,10 +122,12 @@ Two traps, both hit for real:
 
 - **Name the store.** A bare `$d/*.zarr/*/*/*/` overcounts `2-reconstruct`, which
   also holds `transfer_function.zarr` (10 instead of 8 for an 8-position plate).
-- **This counts scaffolds, not finished work.** Each step's cached `init-*` task
-  creates every position's metadata up front, so a step shows its full position
-  count from the moment it starts — a step whose every task *failed* still reads
-  8/8 here. Use it for "has this step started", never for "is this step done".
+- **This counts scaffolds, not finished work.** Every step's `init_*` task runs
+  in the run's first minutes — the pipeline does the whole init chain before any
+  compute — and each creates every position's metadata up front. So EVERY step
+  reads its full position count from a few minutes into the run, including steps
+  that will not start for hours and steps whose every task later fails. Use this
+  only to confirm the init phase completed; it says nothing about progress.
   `trace.txt` is the only authoritative source for completion:
 
 ```bash

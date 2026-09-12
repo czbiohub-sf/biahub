@@ -964,13 +964,8 @@ def _init_output_plate(
         dtype=np.uint32,
         metadata_sources=input_plate,
         metadata_keys=PROVENANCE_METADATA_KEYS,
+        extra_metadata={"biahub-track": settings.model_dump(mode="json")},
     )
-
-    # Record provenance on each output position, mirroring the extra_metadata
-    # block that the process_single_position-based commands write.
-    with open_ome_zarr(output_dirpath, mode="r+") as output_plate:
-        for _, output_position in output_plate.positions():
-            output_position.zattrs["biahub-track"] = settings.model_dump(mode="json")
 
     click.echo(f"Created {output_dirpath} ({len(position_keys)} positions)")
 
