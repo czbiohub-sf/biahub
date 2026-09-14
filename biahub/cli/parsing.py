@@ -10,6 +10,13 @@ from natsort import natsorted
 from typer.core import TyperOption
 
 
+def _eat_all(callback):
+    """Mark options using this callback for greedy parsing."""
+    callback.__biahub_eat_all__ = True
+    return callback
+
+
+@_eat_all
 def _validate_and_process_paths(value: list[Path]) -> list[Path]:
     """Sort input positions and reject plate roots."""
     from iohub.ngff import Plate, open_ome_zarr
@@ -24,6 +31,7 @@ def _validate_and_process_paths(value: list[Path]) -> list[Path]:
     return input_paths
 
 
+@_eat_all
 def _validate_and_process_config_paths(value: list[Path]) -> list[Path]:
     matched_paths = []
     for pattern in value:
@@ -33,14 +41,14 @@ def _validate_and_process_config_paths(value: list[Path]) -> list[Path]:
         matched_paths.extend(expanded)
 
     validated = []
-    for path in natsorted(map(Path, matched_paths)):
-        if not path.exists():
-            raise typer.BadParameter(f"Path does not exist: {path}")
-        if not path.is_file():
-            raise typer.BadParameter(f"Expected a file, not a directory: {path}")
-        if path.suffix.lower() not in [".yml", ".yaml"]:
-            raise typer.BadParameter(f"Expected a .yml file, got: {path}")
-        validated.append(path)
+    for p in natsorted(map(Path, matched_paths)):
+        if not p.exists():
+            raise typer.BadParameter(f"Path does not exist: {p}")
+        if not p.is_file():
+            raise typer.BadParameter(f"Expected a file, not a directory: {p}")
+        if p.suffix.lower() not in [".yml", ".yaml"]:
+            raise typer.BadParameter(f"Expected a .yml file, got: {p}")
+        validated.append(p)
     return validated
 
 
@@ -173,18 +181,15 @@ SbatchFilepathPredict = Annotated[
 ]
 
 
-_GREEDY_OPTION_NAMES = {
-    "input_position_dirpaths",
-    "source_position_dirpaths",
-    "target_position_dirpaths",
-    "config_filepaths",
-}
-
-
 def install_eat_all_options(command) -> None:
-    """Install iohub's greedy parser on biahub list options."""
+    """Install greedy parsing on explicitly marked list options."""
     for param in command.params:
-        if isinstance(param, TyperOption) and param.name in _GREEDY_OPTION_NAMES:
+        if (
+            isinstance(param, TyperOption)
+            and param.multiple
+            and param.callback is not None
+            and getattr(param.callback, "__biahub_eat_all__", False)
+        ):
             param.__class__ = OptionEatAll
 
 
