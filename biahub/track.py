@@ -3,12 +3,13 @@ import logging
 import os
 
 from pathlib import Path
+from typing import Annotated
 
-import click
 import dask.array as da
 import numpy as np
 import pandas as pd
 import submitit
+import typer
 
 from iohub import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate
@@ -17,13 +18,13 @@ from tqdm import tqdm
 
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
+    ConfigFilepath,
+    InputPositionDirpaths,
+    OutputDirpath,
+    SbatchFilepath,
     cluster,
-    config_filepath,
     init_only,
-    input_position_dirpaths,
     monitor,
-    output_dirpath,
-    sbatch_filepath,
     sbatch_to_submitit,
 )
 from biahub.cli.resolve_function import resolve_function
@@ -397,7 +398,7 @@ def apply_focus_slicing(
     z_slices, _ = _focus_window(
         center, z_slicing.window_size, stack.shape[1], z_slicing.frac_below
     )
-    click.echo(f"Focus-resolved z-slice: {z_slices}")
+    typer.echo(f"Focus-resolved z-slice: {z_slices}")
 
     return {name: arr[:, z_slices] for name, arr in data_dict.items()}
 
@@ -456,7 +457,7 @@ def run_ultrack(
 
     cfg.data_config.working_dir = database_path
 
-    click.echo(str(cfg))
+    typer.echo(str(cfg))
 
     tracker = Tracker(cfg)
     tracker.track(**track_kwargs)
@@ -520,7 +521,7 @@ def run_preprocessing_pipeline(
     for image in input_images:
         for channel_name, pipeline in image.channels.items():
             for step in pipeline:
-                click.echo(f"Processing {channel_name} with {step.function}")
+                typer.echo(f"Processing {channel_name} with {step.function}")
                 f_name = step.function
                 run_function = resolve_function(f_name, custom_functions=CUSTOM_FUNCTIONS)
                 f_kwargs = step.kwargs
@@ -605,7 +606,7 @@ def load_data(
             with open_ome_zarr(image_path) as dataset:
                 image_channel_names = dataset.channel_names
                 for channel_name, _ in image.channels.items():
-                    click.echo(f"Loading data for channel {channel_name} from {image.path}")
+                    typer.echo(f"Loading data for channel {channel_name} from {image.path}")
                     data_dict[channel_name] = dataset.data.dask_array()[
                         :, image_channel_names.index(channel_name), z_slices, :, :
                     ]
@@ -723,7 +724,7 @@ def run_cellpose_per_frame(
 
     # device overrides gpu and skips cellpose's own CPU-falling-back probe.
     model = cp_models.CellposeModel(model_type=model_type, gpu=gpu, device=device)
-    click.echo(f"cellpose device: {model.device}")
+    typer.echo(f"cellpose device: {model.device}")
 
     T = images.shape[0]
     labels = np.zeros_like(images, dtype=np.int32)
@@ -761,14 +762,14 @@ def cellpose_segmentation(
     # Project Z BEFORE materialising: mean-reducing a dask array streams chunk-wise, so
     # peak memory is the (T, Y, X) result rather than the full (T, Z, Y, X) stack.
     if images.ndim == 4:
-        click.echo(f"Projecting Z-dimension via mean: {images.shape} -> (T, Y, X)")
+        typer.echo(f"Projecting Z-dimension via mean: {images.shape} -> (T, Y, X)")
         images = images.mean(axis=1)
 
     if isinstance(images, da.Array):
         images = images.compute()
     images = np.asarray(images)
 
-    click.echo(
+    typer.echo(
         f"Running cellpose ({cellpose_config.model_type}, "
         f"diameter={cellpose_config.diameter}) on channel '{channel_name}'..."
     )
@@ -783,7 +784,7 @@ def cellpose_segmentation(
     )
 
     n_cells = [len(np.unique(cellpose_labels[t])) - 1 for t in range(cellpose_labels.shape[0])]
-    click.echo(
+    typer.echo(
         f"Cellpose cells per frame: mean={np.mean(n_cells):.1f}, "
         f"min={np.min(n_cells)}, max={np.max(n_cells)}"
     )
@@ -857,7 +858,7 @@ def track_one_position(
         z_slicing = ZSlicing()
 
     fov = "_".join(position_key)
-    click.echo(f"Processing FOV: {fov.replace('_', '/')}")
+    typer.echo(f"Processing FOV: {fov.replace('_', '/')}")
 
     # Define path to save the tracking database and graph
     filename = output_dirpath.stem
@@ -875,7 +876,7 @@ def track_one_position(
     if cellpose_config is not None:
         cellpose_labels = cellpose_segmentation(data_dict, cellpose_config)
 
-        click.echo("Tracking with cellpose labels...")
+        typer.echo("Tracking with cellpose labels...")
         tracking_labels, tracks_df, _ = run_ultrack(
             tracking_config=tracking_config,
             database_path=database_path,
@@ -887,7 +888,7 @@ def track_one_position(
     else:
         foreground_mask, contour_gradient_map = detect_foreground_segmentation(data_dict)
 
-        click.echo("Tracking with foreground + contour...")
+        typer.echo("Tracking with foreground + contour...")
         tracking_labels, tracks_df, _ = run_ultrack(
             tracking_config=tracking_config,
             database_path=database_path,
@@ -903,7 +904,7 @@ def track_one_position(
 
     tracks_df.to_csv(csv_path, index=False)
 
-    click.echo(f"Saved tracks to: {output_dirpath / Path(*position_key)}")
+    typer.echo(f"Saved tracks to: {output_dirpath / Path(*position_key)}")
 
     # Save the tracking labels. The output plate stores (T, 1, Z_out, Y, X); in 2D
     # mode Z_out is 1 and labels are (T, Y, X); in 3D mode labels are (T, Z, Y, X).
@@ -972,7 +973,7 @@ def _init_output_plate(
         for _, output_position in output_plate.positions():
             output_position.zattrs["biahub-track"] = settings.model_dump(mode="json")
 
-    click.echo(f"Created {output_dirpath} ({len(position_keys)} positions)")
+    typer.echo(f"Created {output_dirpath} ({len(position_keys)} positions)")
 
     return (T, C, output_shape[2], Y, X)
 
@@ -1052,7 +1053,7 @@ def track(
         # directory before stage_cellpose_weights could redirect it.
         if settings.segmentation_method == "cellpose":
             warm_cellpose_weights()
-        click.echo(f"Initialized {output_dirpath} ({len(input_position_dirpaths)} positions)")
+        typer.echo(f"Initialized {output_dirpath} ({len(input_position_dirpaths)} positions)")
         return
 
     # Read shape/scale from the first input position for tracking parameters
@@ -1094,11 +1095,11 @@ def track(
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
     resolved_cluster = get_submitit_cluster(cluster=cluster)
-    click.echo(f"Preparing jobs on cluster='{resolved_cluster}': {slurm_args}")
+    typer.echo(f"Preparing jobs on cluster='{resolved_cluster}': {slurm_args}")
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=resolved_cluster)
     executor.update_parameters(**slurm_args)
 
-    click.echo("Submitting jobs...")
+    typer.echo("Submitting jobs...")
     jobs = []
     with submitit.helpers.clean_env(), executor.batch():
         for position_key in position_keys:
@@ -1130,37 +1131,32 @@ def track(
     if resolved_cluster == "debug":
         for job, pk in zip(jobs, position_keys, strict=True):
             job.wait()
-            click.echo(f"Tracking complete: {'/'.join(pk)}")
+            typer.echo(f"Tracking complete: {'/'.join(pk)}")
         return
 
     if monitor:
         monitor_jobs(jobs, input_position_dirpaths)
 
 
-@click.command("track")
-@input_position_dirpaths()
-@config_filepath()
-@output_dirpath()
-@sbatch_filepath()
-@cluster()
-@monitor()
-@init_only()
-@click.option(
-    "--input-images-path",
-    default=None,
-    type=click.Path(exists=True),
-    help="Pixel-data source filling the first null input_images path (used by "
-    "Nextflow). If omitted, that null path falls back to the -i input plate.",
-)
 def track_cli(
-    input_position_dirpaths: list[Path],
-    config_filepath: Path,
-    output_dirpath: Path,
-    sbatch_filepath: str | None = None,
-    cluster: str = "slurm",
-    monitor: bool = False,
-    init_only: bool = False,
-    input_images_path: str | None = None,
+    input_position_dirpaths: InputPositionDirpaths,
+    config_filepath: ConfigFilepath,
+    output_dirpath: OutputDirpath,
+    sbatch_filepath: SbatchFilepath = None,
+    cluster: cluster = "slurm",
+    monitor: monitor = False,
+    init_only: init_only = False,
+    input_images_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--input-images-path",
+            exists=True,
+            help=(
+                "Pixel-data source filling the first null input_images path (used by "
+                "Nextflow). If omitted, that null path falls back to the -i input plate."
+            ),
+        ),
+    ] = None,
 ):
     """Track objects in 2D or 3D time-lapse microscopy data using configurable preprocessing.
 
@@ -1187,7 +1183,3 @@ def track_cli(
         init_only=init_only,
         input_images_path=input_images_path,
     )
-
-
-if __name__ == "__main__":
-    track_cli()

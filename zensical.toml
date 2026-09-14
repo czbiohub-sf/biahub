@@ -318,7 +318,9 @@ link = "https://github.com/czbiohub-sf/biahub"
 # ----------------------------------------------------------------------------
 [project.markdown_extensions.attr_list]
 [project.markdown_extensions.md_in_html]
-[project.markdown_extensions.mkdocs-click]
+[project.markdown_extensions."mkdocs_typer2.markdown:makeExtension"]
+engine = "native"
+pretty = true
 
 
 [project.markdown_extensions.pymdownx.highlight]

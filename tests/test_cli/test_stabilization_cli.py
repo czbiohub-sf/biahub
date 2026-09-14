@@ -1,8 +1,8 @@
 import pytest
 
-from click.testing import CliRunner
+from typer.testing import CliRunner
 
-from biahub.cli.main import cli
+from biahub.cli.main import app
 
 
 # skip: fixture references missing settings file (example_estimate_stabilization_settings.yml)
@@ -15,7 +15,7 @@ def test_estimate_stabilization(
     config_path, _ = example_estimate_stabilization_settings
     runner = CliRunner()
     result = runner.invoke(
-        cli,
+        app,
         [
             "estimate-stabilization",
             "-i",
@@ -42,7 +42,7 @@ def test_apply_stabilization(
 
     runner = CliRunner()
     result = runner.invoke(
-        cli,
+        app,
         [
             "stabilize",
             "-i",

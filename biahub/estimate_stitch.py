@@ -1,13 +1,14 @@
 from collections import defaultdict
 from pathlib import Path
+from typing import Annotated
 
-import click
 import numpy as np
+import typer
 
 from iohub import open_ome_zarr
 from iohub.ngff.nodes import Plate
 
-from biahub.cli.parsing import input_position_dirpaths, local, monitor, output_filepath
+from biahub.cli.parsing import InputPositionDirpaths, OutputFilepath, local, monitor
 from biahub.settings import StitchSettings
 from biahub.utils.config import model_to_yaml
 from biahub.vendor.stitch.tile import optimal_positions, pairwise_shifts
@@ -64,42 +65,47 @@ def extract_stage_position(
     return zpos, ypos, xpos
 
 
-@click.command("estimate-stitch")
-@input_position_dirpaths()
-@output_filepath()
-@click.option("--fliplr", is_flag=True, help="Flip images left-right before stitching")
-@click.option("--flipud", is_flag=True, help="Flip images up-down before stitching")
-@click.option("--flipxy", is_flag=True, help="Flip images along the diagonal before stitching")
-@click.option(
-    "--pcc-channel-name",
-    default=None,
-    type=str,
-    help="Channel name to use for phase cross-correlation optimization (default: None, disables optimization)",
-)
-@click.option(
-    "--pcc-z-index",
-    default=0,
-    type=int,
-    help="Z slice index to use for phase cross-correlation optimization (default: 0)",
-)
-@click.option(
-    "--add_offset",
-    is_flag=True,
-    help="add the offset to estimated shifts, needed for OPS experiments",
-)
-@local()
-@monitor()
 def estimate_stitch_cli(
-    input_position_dirpaths: list[Path],
-    output_filepath: str,
-    fliplr: bool,
-    flipud: bool,
-    flipxy: bool,
-    pcc_channel_name: str,
-    pcc_z_index: int,
-    add_offset: bool,
-    local: bool,
-    monitor: bool,
+    input_position_dirpaths: InputPositionDirpaths,
+    output_filepath: OutputFilepath,
+    fliplr: Annotated[
+        bool,
+        typer.Option("--fliplr", help="Flip images left-right before stitching"),
+    ] = False,
+    flipud: Annotated[
+        bool,
+        typer.Option("--flipud", help="Flip images up-down before stitching"),
+    ] = False,
+    flipxy: Annotated[
+        bool,
+        typer.Option("--flipxy", help="Flip images along the diagonal before stitching"),
+    ] = False,
+    pcc_channel_name: Annotated[
+        str | None,
+        typer.Option(
+            "--pcc-channel-name",
+            help=(
+                "Channel name to use for phase cross-correlation optimization "
+                "(default: None, disables optimization)"
+            ),
+        ),
+    ] = None,
+    pcc_z_index: Annotated[
+        int,
+        typer.Option(
+            "--pcc-z-index",
+            help="Z slice index to use for phase cross-correlation optimization (default: 0)",
+        ),
+    ] = 0,
+    add_offset: Annotated[
+        bool,
+        typer.Option(
+            "--add_offset",
+            help="add the offset to estimated shifts, needed for OPS experiments",
+        ),
+    ] = False,
+    local: local = False,
+    monitor: monitor = False,
 ):
     """Estimate stitching parameters for positions in wells of a zarr store.
 
@@ -211,7 +217,3 @@ def estimate_stitch_cli(
         total_translation=final_translation_dict,
     )
     model_to_yaml(settings, output_filepath)
-
-
-if __name__ == "__main__":
-    estimate_stitch_cli()

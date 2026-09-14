@@ -1,8 +1,8 @@
 import json
 
-from click.testing import CliRunner
+from typer.testing import CliRunner
 
-from biahub.cli.main import cli
+from biahub.cli.main import app
 from biahub.utils import notify as notify_utils
 
 
@@ -11,7 +11,7 @@ def test_list_positions(example_plate):
     plate_dataset.close()
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["nf", "list-positions", "-i", str(plate_path)])
+    result = runner.invoke(app, ["nf", "list-positions", "-i", str(plate_path)])
     assert result.exit_code == 0, result.output
 
     lines = [line for line in result.output.strip().split("\n") if line]
@@ -27,7 +27,7 @@ def test_notify_dry_run_renders_payload_without_posting(monkeypatch):
 
     runner = CliRunner()
     result = runner.invoke(
-        cli,
+        app,
         [
             "nf",
             "notify",
@@ -54,7 +54,7 @@ def test_notify_exits_zero_without_a_webhook(monkeypatch):
     monkeypatch.delenv("BIAHUB_SLACK_WEBHOOK", raising=False)
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["nf", "notify", "--title", "hello"])
+    result = runner.invoke(app, ["nf", "notify", "--title", "hello"])
 
     assert result.exit_code == 0, result.output
     assert "hello" in result.output
@@ -69,7 +69,7 @@ def test_notify_reads_detail_from_a_file(tmp_path, monkeypatch):
 
     runner = CliRunner()
     result = runner.invoke(
-        cli,
+        app,
         [
             "nf",
             "notify",
@@ -94,7 +94,7 @@ def test_notify_min_interval_suppresses_a_repeat(tmp_path, monkeypatch):
 
     runner = CliRunner()
     result = runner.invoke(
-        cli,
+        app,
         [
             "nf",
             "notify",
@@ -120,7 +120,7 @@ def test_notify_operator_flag_names_who_launched_the_run(monkeypatch):
 
     runner = CliRunner()
     result = runner.invoke(
-        cli,
+        app,
         ["nf", "notify", "--title", "started", "--detail", "input: /x", "--operator"],
     )
 
@@ -134,7 +134,7 @@ def test_notify_without_operator_flag_omits_it(monkeypatch):
     monkeypatch.delenv("BIAHUB_SLACK_WEBHOOK", raising=False)
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["nf", "notify", "--title", "started"])
+    result = runner.invoke(app, ["nf", "notify", "--title", "started"])
 
     assert result.exit_code == 0, result.output
     assert "operator:" not in result.output

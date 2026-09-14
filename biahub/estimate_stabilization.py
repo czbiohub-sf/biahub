@@ -5,12 +5,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal, cast
 
-import click
 import dask.array as da
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import submitit
+import typer
 
 from iohub.ngff import open_ome_zarr
 from numpy.typing import ArrayLike
@@ -20,11 +20,11 @@ from tqdm import tqdm
 from waveorder.focus import focus_from_transverse_band
 
 from biahub.cli.parsing import (
-    config_filepath,
-    input_position_dirpaths,
+    ConfigFilepath,
+    InputPositionDirpaths,
+    OutputDirpath,
+    SbatchFilepath,
     local,
-    output_dirpath,
-    sbatch_filepath,
     sbatch_to_submitit,
 )
 from biahub.cli.slurm import wait_for_jobs_to_finish
@@ -67,7 +67,7 @@ def remove_beads_fov_from_path_list(
         Paths to the input position directories without the beads FOV.
     """
     if skip_beads_fov != "0":
-        click.echo(f"Removing beads FOV {skip_beads_fov} from input data paths")
+        typer.echo(f"Removing beads FOV {skip_beads_fov} from input data paths")
         position_dirpaths = [
             path for path in position_dirpaths if skip_beads_fov not in str(path)
         ]
@@ -160,7 +160,7 @@ def phase_cross_corr_padding(
     )
 
     if verbose:
-        click.echo(
+        typer.echo(
             f"phase cross corr. fft shape of {shape} for arrays of shape {ref_img.shape} and {mov_img.shape} "
             f"with maximum shift of {maximum_shift}"
         )
@@ -189,7 +189,7 @@ def phase_cross_corr_padding(
     peak = tuple(s // 2 - p for s, p in zip(corr.shape, peak, strict=True))
 
     if verbose:
-        click.echo(f"phase cross corr. peak at {peak}")
+        typer.echo(f"phase cross corr. peak at {peak}")
     if output_path:
         plot_cross_correlation(corr, title="Cross-Correlation", output_path=output_path)
 
@@ -296,7 +296,7 @@ def get_tform_from_pcc(
             target, source, normalization=normalization, output_path=output_path
         )
     if verbose:
-        click.echo(f"Time {t}: shift (dz,dy,dx) = {shift[0]}, {shift[1]}, {shift[2]}")
+        typer.echo(f"Time {t}: shift (dz,dy,dx) = {shift[0]}, {shift[1]}, {shift[2]}")
 
     dz, dy, dx = shift
 
@@ -305,7 +305,7 @@ def get_tform_from_pcc(
     transform[1, 3] = dy
     transform[2, 3] = dz
     if verbose:
-        click.echo(f"transform: {transform}")
+        typer.echo(f"transform: {transform}")
 
     return transform, shift, corr
 
@@ -526,7 +526,7 @@ def estimate_xyz_stabilization_pcc_per_position(
         output_path_corr.mkdir(parents=True, exist_ok=True)
 
         for t in range(T):
-            click.echo(f"Estimating PCC for timepoint {t}")
+            typer.echo(f"Estimating PCC for timepoint {t}")
             if t == 0:
                 transforms.append(np.eye(4).tolist())
                 corr_list.append((t, 0, 0, 0))
@@ -547,7 +547,7 @@ def estimate_xyz_stabilization_pcc_per_position(
                     corr_list.append((t, corr.max(), corr.min(), corr.sum()))
                 else:
                     corr_list.append((t, None, None, None))
-            click.echo(f"Transform for timepoint {t}: {transforms[-1]}")
+            typer.echo(f"Transform for timepoint {t}: {transforms[-1]}")
 
         np.save(
             output_folder_path / f"{position_filename}.npy",
@@ -582,7 +582,7 @@ def estimate_xyz_stabilization_pcc_per_position(
             output_path_corr_plots.mkdir(parents=True, exist_ok=True)
             plot_corr_max_min_sum(corr_df, output_path_corr_plots, label=position_filename)
 
-        click.echo(f"Saved transforms for {position_filename}.")
+        typer.echo(f"Saved transforms for {position_filename}.")
 
     return transforms
 
@@ -652,7 +652,7 @@ def estimate_xyz_stabilization_pcc(
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
 
-    click.echo(f"Submitting SLURM xyz PCC jobs with resources: {slurm_args}")
+    typer.echo(f"Submitting SLURM xyz PCC jobs with resources: {slurm_args}")
     transforms_out_path = output_folder_path / "transforms_per_position"
     transforms_out_path.mkdir(parents=True, exist_ok=True)
     shifts_out_path = output_folder_path / "shifts_per_position"
@@ -733,7 +733,7 @@ def estimate_xy_stabilization_per_position(
         y_idx = slice(Y // 2 - center_crop_xy[1] // 2, Y // 2 + center_crop_xy[1] // 2)
 
         if verbose:
-            click.echo(f"Reading focus index from {df_z_focus_path}")
+            typer.echo(f"Reading focus index from {df_z_focus_path}")
         df = pd.read_csv(df_z_focus_path)
         pos_idx = str(Path(*input_position_dirpath.parts[-3:]))
         focus_idx = df[df["position"] == pos_idx]["focus_idx"]
@@ -742,7 +742,7 @@ def estimate_xy_stabilization_per_position(
         z_idx = focus_idx.astype(int).to_list()
 
         if verbose:
-            click.echo("Calculating xy stabilization...")
+            typer.echo("Calculating xy stabilization...")
         # Get the data for the specified channel and crop
         tyx_data = np.stack(
             [
@@ -820,9 +820,9 @@ def estimate_xy_stabilization(
     df_focus_path = output_folder_path / "positions_focus.csv"
 
     if df_focus_path.exists():
-        click.echo("Using existing Z focus index file.")
+        typer.echo("Using existing Z focus index file.")
     else:
-        click.echo("Estimating Z focus positions...")
+        typer.echo("Estimating Z focus positions...")
 
         estimate_z_stabilization(
             input_position_dirpaths=input_position_dirpaths,
@@ -856,7 +856,7 @@ def estimate_xy_stabilization(
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
 
-    click.echo(f"Submitting SLURM focus estimation jobs with resources: {slurm_args}")
+    typer.echo(f"Submitting SLURM focus estimation jobs with resources: {slurm_args}")
     output_transforms_path = output_folder_path / "xy_transforms"
     output_transforms_path.mkdir(parents=True, exist_ok=True)
 
@@ -951,7 +951,7 @@ def estimate_z_focus_per_position(
                     lambda_ill=LAMBDA_ILL,
                     pixel_size=pixel_size,
                 )
-                click.echo(
+                typer.echo(
                     f"Estimating focus for timepoint {tc_idx[0]} and channel {tc_idx[1]}: {z_idx}"
                 )
 
@@ -971,7 +971,7 @@ def estimate_z_focus_per_position(
 
     output_path_focus_csv.mkdir(parents=True, exist_ok=True)
     if verbose:
-        click.echo(f"Saving focus finding results to {output_path_focus_csv}")
+        typer.echo(f"Saving focus finding results to {output_path_focus_csv}")
 
     position_filename = str(Path(*input_position_dirpath.parts[-3:])).replace("/", "_")
     output_csv = output_path_focus_csv / f"{position_filename}.csv"
@@ -997,7 +997,7 @@ def estimate_z_focus_per_position(
     np.save(output_path_transform / f"{position_filename}.npy", transform)
 
     if verbose:
-        click.echo(f"Saved Z transform matrices to {output_path_transform}")
+        typer.echo(f"Saved Z transform matrices to {output_path_transform}")
 
 
 def get_mean_z_positions(
@@ -1119,7 +1119,7 @@ def estimate_z_stabilization(
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
 
-    click.echo(f"Submitting SLURM focus estimation jobs with resources: {slurm_args}")
+    typer.echo(f"Submitting SLURM focus estimation jobs with resources: {slurm_args}")
     output_folder_focus_path = output_folder_path / "z_focus_positions"
     output_folder_focus_path.mkdir(parents=True, exist_ok=True)
 
@@ -1154,14 +1154,14 @@ def estimate_z_stabilization(
     # Load the focus CSV files and concatenate them
     focus_csvs_path = list(output_folder_focus_path.glob("*.csv"))
     if len(focus_csvs_path) != len(input_position_dirpaths):
-        click.echo(
+        typer.echo(
             f"Warning: {len(focus_csvs_path)} focus CSV files found for {len(input_position_dirpaths)} input data paths."
         )
     df = pd.concat([pd.read_csv(f) for f in focus_csvs_path])
 
     # Check if the existing focus CSV file exists
     if Path(output_folder_path / "positions_focus.csv").exists():
-        click.echo("Using existing focus CSV file.")
+        typer.echo("Using existing focus CSV file.")
         df_old = pd.read_csv(output_folder_path / "positions_focus.csv")
         df = pd.concat([df, df_old])
         df = df.drop_duplicates(subset=["position", "time_idx"])
@@ -1200,7 +1200,7 @@ def estimate_z_stabilization(
         transform["average"] = np.array(z_focus_shift).tolist()
 
         if verbose:
-            click.echo(f"Saving z focus shift matrices to {output_folder_path}")
+            typer.echo(f"Saving z focus shift matrices to {output_folder_path}")
             np.save(output_folder_path / "z_focus_shift.npy", transform["average"])
 
         return transform
@@ -1255,7 +1255,7 @@ def estimate_stabilization(
     config_filepath = Path(config_filepath)
 
     settings = yaml_to_model(config_filepath, EstimateStabilizationSettings)
-    click.echo(f"Settings: {settings}")
+    typer.echo(f"Settings: {settings}")
 
     verbose = settings.verbose
     stabilization_estimation_channel = settings.stabilization_estimation_channel
@@ -1280,7 +1280,7 @@ def estimate_stabilization(
 
     if "xyz" == stabilization_type:
         if stabilization_method == "focus-finding":
-            click.echo(
+            typer.echo(
                 "Estimating xyz stabilization parameters with focus finding and stack registration"
             )
 
@@ -1388,13 +1388,13 @@ def estimate_stabilization(
                     )
 
             except Exception as e:
-                click.echo(
+                typer.echo(
                     f"Error estimating {stabilization_type} stabilization parameters: {e}"
                 )
         elif stabilization_method == "beads":
             from biahub.registration.beads import estimate_tczyx
 
-            click.echo("Estimating xyz stabilization parameters with beads")
+            typer.echo("Estimating xyz stabilization parameters with beads")
             with open_ome_zarr(input_position_dirpaths[0], mode="r") as beads_position:
                 source_channels = beads_position.channel_names
                 source_channel_index = source_channels.index(stabilization_estimation_channel)
@@ -1444,7 +1444,7 @@ def estimate_stabilization(
             )
 
         elif stabilization_method == "phase-cross-corr":
-            click.echo("Estimating xyz stabilization parameters with phase cross correlation")
+            typer.echo("Estimating xyz stabilization parameters with phase cross correlation")
 
             xyz_transforms_dict = estimate_xyz_stabilization_pcc(
                 input_position_dirpaths=input_position_dirpaths,
@@ -1493,13 +1493,13 @@ def estimate_stabilization(
                         / f"{fov}.png",
                     )
             except Exception as e:
-                click.echo(
+                typer.echo(
                     f"Error estimating {stabilization_type} stabilization parameters: {e}"
                 )
 
     # Estimate z drift
     if "z" == stabilization_type and stabilization_method == "focus-finding":
-        click.echo("Estimating z stabilization parameters with focus finding")
+        typer.echo("Estimating z stabilization parameters with focus finding")
 
         z_transforms_dict = estimate_z_stabilization(
             input_position_dirpaths=input_position_dirpaths,
@@ -1544,12 +1544,12 @@ def estimate_stabilization(
                     output_filepath_plot=output_dirpath / "translation_plots" / f"{fov}.png",
                 )
         except Exception as e:
-            click.echo(f"Error estimating {stabilization_type} stabilization parameters: {e}")
+            typer.echo(f"Error estimating {stabilization_type} stabilization parameters: {e}")
 
     # Estimate yx drift
     if "xy" == stabilization_type:
         if stabilization_method == "focus-finding":
-            click.echo(
+            typer.echo(
                 "Estimating xy stabilization parameters with focus finding and stack registration"
             )
 
@@ -1599,23 +1599,17 @@ def estimate_stabilization(
                         / f"{fov}.png",
                     )
             except Exception as e:
-                click.echo(
+                typer.echo(
                     f"Error estimating {stabilization_type} stabilization parameters: {e}"
                 )
 
 
-@click.command("estimate-stabilization")
-@input_position_dirpaths()
-@output_dirpath()
-@config_filepath()
-@sbatch_filepath()
-@local()
 def estimate_stabilization_cli(
-    input_position_dirpaths: list[str],
-    output_dirpath: str,
-    config_filepath: Path,
-    sbatch_filepath: str = None,
-    local: bool = False,
+    input_position_dirpaths: InputPositionDirpaths,
+    output_dirpath: OutputDirpath,
+    config_filepath: ConfigFilepath,
+    sbatch_filepath: SbatchFilepath = None,
+    local: local = False,
 ):
     """Estimate translation matrices for XYZ stabilization of a timelapse dataset.
 
@@ -1636,7 +1630,3 @@ def estimate_stabilization_cli(
         sbatch_filepath=sbatch_filepath,
         local=local,
     )
-
-
-if __name__ == "__main__":
-    estimate_stabilization_cli()

@@ -28,10 +28,10 @@ from datetime import datetime
 from pathlib import Path
 
 import ants
-import click
 import dask.array as da
 import numpy as np
 import submitit
+import typer
 
 from skimage import filters
 
@@ -101,7 +101,7 @@ def estimate(
     ref_ants = ants.from_numpy(ref)
 
     if verbose:
-        click.echo(f"Optimizing registration parameters using ANTs with kwargs: {ants_kwargs}")
+        typer.echo(f"Optimizing registration parameters using ANTs with kwargs: {ants_kwargs}")
 
     reg = ants.registration(
         fixed=ref_ants,
@@ -196,7 +196,7 @@ def preprocess_czyx(
     mov_channels = []
     for idx in mov_channel_index:
         if verbose:
-            click.echo(f"Applying initial transform to moving channel {idx}...")
+            typer.echo(f"Applying initial transform to moving channel {idx}...")
         # Cropping, clipping, and filtering are applied after registration with initial_tform
         _mov_channel = np.asarray(mov_czyx[idx]).astype(np.float32)
         if _mov_channel.ndim != 3:
@@ -214,7 +214,7 @@ def preprocess_czyx(
     _offset = np.zeros(3, dtype=np.float32)
     if crop:
         if verbose:
-            click.echo(
+            typer.echo(
                 "Estimating crop for moving and reference channels to overlapping region..."
             )
         mask = (ref_zyx != 0) & (mov_channels[0] != 0)
@@ -231,7 +231,7 @@ def preprocess_czyx(
             mask *= ref_mask
 
         z_slice, y_slice, x_slice = find_lir(mask.astype(np.uint8))
-        click.echo(
+        typer.echo(
             f"Cropping to region z={z_slice.start}:{z_slice.stop}, "
             f"y={y_slice.start}:{y_slice.stop}, "
             f"x={x_slice.start}:{x_slice.stop}"
@@ -246,7 +246,7 @@ def preprocess_czyx(
     # TODO: hardcoded clipping limits
     if clip:
         if verbose:
-            click.echo("Clipping moving and reference channels to reasonable values...")
+            typer.echo("Clipping moving and reference channels to reasonable values...")
         ref_zyx = np.clip(ref_zyx, 0, 0.5)
         mov_channels = [
             np.clip(_channel, 110, np.quantile(_channel, 0.99)) for _channel in mov_channels
@@ -254,7 +254,7 @@ def preprocess_czyx(
 
     if sobel_filter:
         if verbose:
-            click.echo("Applying Sobel filter to moving and reference channels...")
+            typer.echo("Applying Sobel filter to moving and reference channels...")
         ref_zyx = filters.sobel(ref_zyx)
         mov_channels = [filters.sobel(_channel) for _channel in mov_channels]
 
@@ -347,10 +347,10 @@ def estimate_czyx(
         preprocess_offset=preprocess_offset,
     )
     if verbose:
-        click.echo(f"Initial transform: {initial_tform}")
-        click.echo(f"Forward transform: {fwd_transform}")
-        click.echo(f"Inverse transform: {inv_transform}")
-        click.echo(f"Composed transform: {composed_transform}")
+        typer.echo(f"Initial transform: {initial_tform}")
+        typer.echo(f"Forward transform: {fwd_transform}")
+        typer.echo(f"Inverse transform: {inv_transform}")
+        typer.echo(f"Composed transform: {composed_transform}")
 
     if composed_transform is None:
         raise ValueError("Failed to estimate registration transform for timepoint.")
@@ -358,7 +358,7 @@ def estimate_czyx(
     if output_folder_path:
         output_folder_path.mkdir(parents=True, exist_ok=True)
         if verbose:
-            click.echo(
+            typer.echo(
                 f"Saving registration transform for timepoint {t_idx} to {output_folder_path}"
             )
 
@@ -461,7 +461,7 @@ def estimate_tczyx(
     """
     T, C, Z, Y, X = mov_tczyx.shape
     initial_tform = np.asarray(affine_transform_settings.approx_transform)
-    click.echo(f"Initial transform: {initial_tform}")
+    typer.echo(f"Initial transform: {initial_tform}")
 
     _, num_cpus, gb_ram_per_cpu = estimate_resources(
         shape=(T, 2, Z, Y, X), ram_multiplier=16, max_num_cpus=16
@@ -488,11 +488,11 @@ def estimate_tczyx(
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
 
-    click.echo(f"Submitting SLURM estimate regstration jobs with resources: {slurm_args}")
+    typer.echo(f"Submitting SLURM estimate regstration jobs with resources: {slurm_args}")
     output_transforms_path = output_folder_path / "xyz_transforms"
     output_transforms_path.mkdir(parents=True, exist_ok=True)
 
-    click.echo("Computing registration transforms...")
+    typer.echo("Computing registration transforms...")
     # NOTE: ants is mulitthreaded so no need for multiprocessing here
     # Submit jobs
     jobs = []

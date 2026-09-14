@@ -1,10 +1,10 @@
 import numpy as np
 import yaml
 
-from click.testing import CliRunner
 from iohub.ngff import open_ome_zarr
+from typer.testing import CliRunner
 
-from biahub.cli.main import cli
+from biahub.cli.main import app
 
 
 def test_resolve_config_blank_concat_data_paths(tmp_path):
@@ -25,7 +25,7 @@ def test_resolve_config_blank_concat_data_paths(tmp_path):
     resolved = tmp_path / "concatenate_resolved.yml"
 
     result = CliRunner().invoke(
-        cli,
+        app,
         [
             "concatenate",
             "-c",
@@ -81,7 +81,7 @@ def test_cluster_debug_single_shot(create_custom_plate, tmp_path):
     output_zarr = tmp_path / "output.zarr"
 
     result = CliRunner().invoke(
-        cli,
+        app,
         [
             "concatenate",
             "--cluster",

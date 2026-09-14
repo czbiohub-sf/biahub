@@ -1,9 +1,9 @@
 from pathlib import Path
 
 import ants
-import click
 import numpy as np
 import submitit
+import typer
 
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate, process_single_position
@@ -13,12 +13,12 @@ from scipy.spatial.transform import Rotation as R  # noqa: N817
 from biahub.cli.disk import check_disk_space_with_du
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
-    config_filepaths,
-    input_position_dirpaths,
+    ConfigFilepaths,
+    InputPositionDirpaths,
+    OutputDirpath,
+    SbatchFilepath,
     local,
     monitor,
-    output_dirpath,
-    sbatch_filepath,
     sbatch_to_submitit,
 )
 from biahub.register import convert_transform_to_ants
@@ -75,7 +75,7 @@ def apply_stabilization_transform(
             )
         return stabilized_czyx
     else:
-        click.echo(
+        typer.echo(
             f"shifting matrix with input_time_index:{input_time_index} \n"
             f"{list_of_shifts[input_time_index]}"
         )
@@ -263,11 +263,11 @@ def stabilize(
     cluster = get_submitit_cluster(local)
 
     # Prepare and submit jobs
-    click.echo(f"Preparing jobs: {slurm_args}")
+    typer.echo(f"Preparing jobs: {slurm_args}")
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
 
-    click.echo("Submitting SLURM jobs...")
+    typer.echo("Submitting SLURM jobs...")
     jobs = []
     with submitit.helpers.clean_env(), executor.batch():
         # apply stabilization to channels in the chosen channels and else copy the rest
@@ -324,20 +324,13 @@ def stabilize(
         monitor_jobs(jobs, input_position_dirpaths)
 
 
-@click.command("stabilize")
-@input_position_dirpaths()
-@output_dirpath()
-@config_filepaths()
-@sbatch_filepath()
-@local()
-@monitor()
 def stabilize_cli(
-    input_position_dirpaths: list[str],
-    output_dirpath: str,
-    config_filepaths: list[str],
-    sbatch_filepath: str,
-    local: bool,
-    monitor: bool,
+    input_position_dirpaths: InputPositionDirpaths,
+    output_dirpath: OutputDirpath,
+    config_filepaths: ConfigFilepaths,
+    sbatch_filepath: SbatchFilepath = None,
+    local: local = False,
+    monitor: monitor = False,
 ):
     """Stabilize a timelapse dataset by applying spatial transformations estimated by estimate-stabilization.
 
@@ -355,7 +348,3 @@ def stabilize_cli(
         local=local,
         monitor=monitor,
     )
-
-
-if __name__ == "__main__":
-    stabilize_cli()

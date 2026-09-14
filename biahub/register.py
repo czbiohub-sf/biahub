@@ -1,26 +1,26 @@
 from pathlib import Path
 
 import ants
-import click
 import largestinteriorrectangle as lir
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy.ndimage
 import submitit
+import typer
 
 from iohub import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate, process_single_position
 
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
-    config_filepath,
+    ConfigFilepath,
+    OutputDirpath,
+    SbatchFilepath,
+    SourcePositionDirpaths,
+    TargetPositionDirpaths,
     local,
     monitor,
-    output_dirpath,
-    sbatch_filepath,
     sbatch_to_submitit,
-    source_position_dirpaths,
-    target_position_dirpaths,
 )
 from biahub.settings import RegistrationSettings
 from biahub.utils.array_ops import copy_n_paste_czyx
@@ -384,7 +384,7 @@ def find_overlapping_volume(
         moving_volume_ants, reference=fixed_volume_ants
     ).numpy()
     if method == "LIR":
-        click.echo("Starting Largest interior rectangle (LIR) search")
+        typer.echo("Starting Largest interior rectangle (LIR) search")
         mask = (registered_volume > 0) & (fixed_volume > 0)
         z_slice, y_slice, x_slice = find_lir(mask, plot=plot)
 
@@ -398,22 +398,14 @@ def rescale_voxel_size(affine_matrix, input_scale):
     return np.linalg.norm(affine_matrix, axis=1) * input_scale
 
 
-@click.command("register")
-@source_position_dirpaths()
-@target_position_dirpaths()
-@config_filepath()
-@output_dirpath()
-@local()
-@sbatch_filepath()
-@monitor()
 def register_cli(
-    source_position_dirpaths: list[str],
-    target_position_dirpaths: list[str],
-    config_filepath: Path,
-    output_dirpath: str,
-    local: bool,
-    sbatch_filepath: Path,
-    monitor: bool = True,
+    source_position_dirpaths: SourcePositionDirpaths,
+    target_position_dirpaths: TargetPositionDirpaths,
+    config_filepath: ConfigFilepath,
+    output_dirpath: OutputDirpath,
+    local: local = False,
+    sbatch_filepath: SbatchFilepath = None,
+    monitor: monitor = False,
 ):
     """Apply an affine transformation to a single position across T and C axes based on a registration config file.
 
@@ -445,9 +437,9 @@ def register_cli(
         target_channel_names = target_dataset.channel_names
         target_shape_zyx = target_dataset.data.shape[-3:]
 
-    click.echo("\nREGISTRATION PARAMETERS:")
-    click.echo(f"Transformation matrix:\n{matrix}")
-    click.echo(f"Voxel size: {output_voxel_size}")
+    typer.echo("\nREGISTRATION PARAMETERS:")
+    typer.echo(f"Transformation matrix:\n{matrix}")
+    typer.echo(f"Voxel size: {output_voxel_size}")
 
     # Logic to parse time indices
     if settings.time_indices == "all":
@@ -465,7 +457,7 @@ def register_cli(
 
     if not keep_overhang:
         # Find the largest interior rectangle
-        click.echo("\nFinding largest overlapping volume between source and target datasets")
+        typer.echo("\nFinding largest overlapping volume between source and target datasets")
         Z_slice, Y_slice, X_slice = find_overlapping_volume(
             source_shape_zyx, target_shape_zyx, matrix
         )
@@ -476,7 +468,7 @@ def register_cli(
             Y_slice.stop - Y_slice.start,
             X_slice.stop - X_slice.start,
         )
-        click.echo(f"Shape of cropped output dataset: {cropped_shape_zyx}\n")
+        typer.echo(f"Shape of cropped output dataset: {cropped_shape_zyx}\n")
     else:
         cropped_shape_zyx = target_shape_zyx
         Z_slice, Y_slice, X_slice = (
@@ -608,7 +600,3 @@ def register_cli(
 
     if monitor:
         monitor_jobs(affine_jobs + copy_jobs, affine_names + copy_names)
-
-
-if __name__ == "__main__":
-    register_cli()

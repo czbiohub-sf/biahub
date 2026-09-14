@@ -2,10 +2,10 @@ import numpy as np
 import pytest
 import yaml
 
-from click.testing import CliRunner
 from iohub.ngff import TransformationMeta, open_ome_zarr
+from typer.testing import CliRunner
 
-from biahub.cli.main import cli
+from biahub.cli.main import app
 
 
 @pytest.fixture()
@@ -69,7 +69,7 @@ def test_apply_inv_tf_cli_init_only(tmp_path, reconstruct_plate, reconstruct_con
 
     runner = CliRunner()
     result = runner.invoke(
-        cli,
+        app,
         [
             "apply-inv-tf",
             "--init",
@@ -86,6 +86,27 @@ def test_apply_inv_tf_cli_init_only(tmp_path, reconstruct_plate, reconstruct_con
     assert result.exit_code == 0, result.output
     assert output_path.exists()
     assert "RESOURCES:" in result.output
+
+
+def test_apply_inv_tf_requires_transfer_function(
+    tmp_path, reconstruct_plate, reconstruct_config
+):
+    result = CliRunner().invoke(
+        app,
+        [
+            "apply-inv-tf",
+            "-i",
+            str(reconstruct_plate / "A" / "1" / "0"),
+            "-c",
+            str(reconstruct_config),
+            "-o",
+            str(tmp_path / "output.zarr"),
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "--transfer-function-dirpath / -t is required" in result.stderr
+    assert "Traceback" not in result.output
 
 
 def test_apply_inv_tf_cli_debug_single_position(
@@ -124,12 +145,12 @@ def test_apply_inv_tf_cli_debug_single_position(
             str(tf_path),
         ],
     ):
-        result = runner.invoke(cli, cmd)
+        result = runner.invoke(app, cmd)
         assert result.exit_code == 0, result.output
 
     # Apply inv TF in debug mode (the biahub-specific in-process fan-out).
     result = runner.invoke(
-        cli,
+        app,
         [
             "apply-inv-tf",
             "--cluster",

@@ -2,23 +2,23 @@ import warnings
 
 from pathlib import Path
 
-import click
 import numpy as np
 import submitit
+import typer
 
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate, process_single_position
 
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
+    ConfigFilepath,
+    InputPositionDirpaths,
+    OutputDirpath,
+    SbatchFilepath,
     cluster,
-    config_filepath,
     init_only,
-    input_position_dirpaths,
     monitor,
-    output_dirpath,
     resume,
-    sbatch_filepath,
     sbatch_to_submitit,
 )
 from biahub.settings import FlatFieldCorrectionSettings
@@ -199,6 +199,10 @@ def _init_output_plate(
     return (T, C, Z, Y, X), all_channel_names
 
 
+class InvalidFlatFieldConfigError(ValueError):
+    """Invalid channel selection in flat-field settings."""
+
+
 def _resolve_target_indices(
     settings: FlatFieldCorrectionSettings,
     all_channel_names: list[str],
@@ -206,20 +210,20 @@ def _resolve_target_indices(
     """Resolve which channel indices to flat-field correct."""
     if settings.channel_names is None:
         target_channel_names = all_channel_names
-        click.echo(f"Flat fielding ALL channels: {all_channel_names}")
+        typer.echo(f"Flat fielding ALL channels: {all_channel_names}")
     elif settings.channel_names:
         for name in settings.channel_names:
             if name not in all_channel_names:
-                raise click.ClickException(
+                raise InvalidFlatFieldConfigError(
                     f"Channel '{name}' not found in input dataset. "
                     f"Available channels: {all_channel_names}"
                 )
         target_channel_names = settings.channel_names
-        click.echo(f"Input channels: {all_channel_names}")
-        click.echo(f"Flat field channels: {target_channel_names}")
-        click.echo("Other channels will be copied as-is")
+        typer.echo(f"Input channels: {all_channel_names}")
+        typer.echo(f"Flat field channels: {target_channel_names}")
+        typer.echo("Other channels will be copied as-is")
     else:
-        raise click.ClickException(
+        raise InvalidFlatFieldConfigError(
             "Must specify either 'channel_names' or set channel_names to null in config."
         )
     return [all_channel_names.index(name) for name in target_channel_names]
@@ -280,7 +284,7 @@ def flat_field(
     echo_resources(num_cpus, mem_gb, time_minutes)
 
     if init_only:
-        click.echo(f"Initialized {output_dirpath} ({len(input_position_dirpaths)} positions)")
+        typer.echo(f"Initialized {output_dirpath} ({len(input_position_dirpaths)} positions)")
         return
 
     output_position_paths = get_output_paths(input_position_dirpaths, output_dirpath)
@@ -304,11 +308,11 @@ def flat_field(
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
     resolved_cluster = get_submitit_cluster(cluster=cluster)
-    click.echo(f"Preparing jobs on cluster='{resolved_cluster}': {slurm_args}")
+    typer.echo(f"Preparing jobs on cluster='{resolved_cluster}': {slurm_args}")
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=resolved_cluster)
     executor.update_parameters(**slurm_args)
 
-    click.echo("Submitting jobs...")
+    typer.echo("Submitting jobs...")
     jobs = []
     with submitit.helpers.clean_env(), executor.batch():
         for input_position_path, output_position_path in zip(
@@ -340,31 +344,22 @@ def flat_field(
     if resolved_cluster == "debug":
         for job, path in zip(jobs, input_position_dirpaths, strict=True):
             job.wait()
-            click.echo(f"Flat-field complete: {path}")
+            typer.echo(f"Flat-field complete: {path}")
         return
 
     if monitor:
         monitor_jobs(jobs, input_position_dirpaths)
 
 
-@click.command("flat-field")
-@input_position_dirpaths()
-@config_filepath()
-@output_dirpath()
-@sbatch_filepath()
-@cluster()
-@monitor()
-@init_only()
-@resume()
 def flat_field_cli(
-    input_position_dirpaths: list[Path],
-    config_filepath: Path,
-    output_dirpath: Path,
-    sbatch_filepath: str | None = None,
-    cluster: str = "slurm",
-    monitor: bool = False,
-    init_only: bool = False,
-    resume: bool = False,
+    input_position_dirpaths: InputPositionDirpaths,
+    config_filepath: ConfigFilepath,
+    output_dirpath: OutputDirpath,
+    sbatch_filepath: SbatchFilepath = None,
+    cluster: cluster = "slurm",
+    monitor: monitor = False,
+    init_only: init_only = False,
+    resume: resume = False,
 ):
     """Apply flat field correction across T and selected C axes.
 
@@ -380,17 +375,17 @@ def flat_field_cli(
     In-process run of a single position (e.g. from a Nextflow worker):
     >>> biahub flat-field --cluster debug -i ./input.zarr/A/1/0 -c ./flat_field_params.yml -o ./output.zarr
     """  # noqa: D301
-    flat_field(
-        input_position_dirpaths=input_position_dirpaths,
-        config_filepath=config_filepath,
-        output_dirpath=output_dirpath,
-        sbatch_filepath=sbatch_filepath,
-        cluster=cluster,
-        monitor=monitor,
-        init_only=init_only,
-        resume=resume,
-    )
-
-
-if __name__ == "__main__":
-    flat_field_cli()
+    try:
+        flat_field(
+            input_position_dirpaths=input_position_dirpaths,
+            config_filepath=config_filepath,
+            output_dirpath=output_dirpath,
+            sbatch_filepath=sbatch_filepath,
+            cluster=cluster,
+            monitor=monitor,
+            init_only=init_only,
+            resume=resume,
+        )
+    except InvalidFlatFieldConfigError as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(1) from None

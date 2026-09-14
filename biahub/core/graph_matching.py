@@ -21,8 +21,8 @@ from collections import defaultdict
 from functools import cached_property
 from typing import Literal
 
-import click
 import numpy as np
+import typer
 
 from numpy.typing import NDArray
 from scipy.optimize import linear_sum_assignment
@@ -356,7 +356,7 @@ class GraphMatcher:
 
         if moving.n_nodes == 0 or reference.n_nodes == 0:
             if verbose:
-                click.echo("Warning: One or both graphs are empty")
+                typer.echo("Warning: One or both graphs are empty")
             return np.array([]).reshape(0, 2).astype(np.int32)
 
         # Dispatch to appropriate algorithm
@@ -402,20 +402,20 @@ class GraphMatcher:
     ) -> NDArray[np.integer]:
         """Hungarian matching with bidirectional consistency."""
         if verbose:
-            click.echo("Computing forward matches (A → B)...")
+            typer.echo("Computing forward matches (A → B)...")
 
         C_ab = self.compute_cost_matrix(moving, reference)
         matches_ab = self._solve_assignment(C_ab, False)
 
         if verbose:
-            click.echo(f"Forward: {len(matches_ab)} matches")
-            click.echo("Computing backward matches (B → A)...")
+            typer.echo(f"Forward: {len(matches_ab)} matches")
+            typer.echo("Computing backward matches (B → A)...")
 
         C_ba = self.compute_cost_matrix(reference, moving)
         matches_ba = self._solve_assignment(C_ba, False)
 
         if verbose:
-            click.echo(f"Backward: {len(matches_ba)} matches")
+            typer.echo(f"Backward: {len(matches_ba)} matches")
 
         # Keep only symmetric matches
         reverse_map = {(j, i) for i, j in matches_ba}
@@ -424,7 +424,7 @@ class GraphMatcher:
         )
 
         if verbose:
-            click.echo(f"Cross-check: {len(matches)} symmetric matches")
+            typer.echo(f"Cross-check: {len(matches)} symmetric matches")
 
         return matches
 
@@ -610,7 +610,7 @@ class GraphMatcher:
             matches.append((i, j))
 
         if verbose:
-            click.echo(f"Found {len(matches)} matches (cost_threshold={cost_thresh:.3f})")
+            typer.echo(f"Found {len(matches)} matches (cost_threshold={cost_thresh:.3f})")
 
         return np.array(matches, dtype=np.int32).reshape(-1, 2)
 
@@ -635,7 +635,7 @@ class GraphMatcher:
         ref_desc = reference.nodes
 
         if verbose:
-            click.echo(
+            typer.echo(
                 f"Matching {mov_desc.shape[0]} moving descriptors to {ref_desc.shape[0]} reference descriptors"
             )
 
@@ -649,7 +649,7 @@ class GraphMatcher:
         )
 
         if verbose:
-            click.echo(f"Found {len(matches)} descriptor matches")
+            typer.echo(f"Found {len(matches)} descriptor matches")
 
         return matches.astype(np.int32)
 
@@ -709,16 +709,16 @@ class GraphMatcher:
             high = np.quantile(dist, max_distance_quantile)
 
             if verbose:
-                click.echo(
+                typer.echo(
                     f"Distance filtering: quantiles [{min_distance_quantile}, {max_distance_quantile}]"
                 )
-                click.echo(f"Distance range: [{low:.3f}, {high:.3f}]")
+                typer.echo(f"Distance range: [{low:.3f}, {high:.3f}]")
 
             keep = (dist >= low) & (dist <= high)
             matches = matches[keep]
 
             if verbose:
-                click.echo(f"Matches after distance filtering: {len(matches)}")
+                typer.echo(f"Matches after distance filtering: {len(matches)}")
 
         # Direction filtering (2D/3D) - NEW
         if direction_threshold != 0:
@@ -741,9 +741,9 @@ class GraphMatcher:
             matches = matches[keep]
 
             if verbose:
-                click.echo(f"Dominant direction: {mean_direction}")
-                click.echo(f"Direction threshold: {direction_threshold}°")
-                click.echo(f"Matches after direction filtering: {len(matches)}")
+                typer.echo(f"Dominant direction: {mean_direction}")
+                typer.echo(f"Direction threshold: {direction_threshold}°")
+                typer.echo(f"Matches after direction filtering: {len(matches)}")
 
         # Angle filtering (2D only, legacy)
         if angle_threshold != 0 and moving.dim == 2:
@@ -762,7 +762,7 @@ class GraphMatcher:
             matches = matches[keep]
 
             if verbose:
-                click.echo(f"Dominant angle: {dominant_angle:.1f}°")
-                click.echo(f"Matches after 2D angle filtering: {len(matches)}")
+                typer.echo(f"Dominant angle: {dominant_angle:.1f}°")
+                typer.echo(f"Matches after 2D angle filtering: {len(matches)}")
 
         return matches

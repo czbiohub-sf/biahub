@@ -1,18 +1,14 @@
 import datetime
 
 from pathlib import Path
+from typing import Annotated, Literal
 
-import click
 import submitit
+import typer
 
 from iohub.ngff import open_ome_zarr
 
-from biahub.cli.parsing import (
-    input_position_dirpaths,
-    local,
-    sbatch_filepath,
-    sbatch_to_submitit,
-)
+from biahub.cli.parsing import InputPositionDirpaths, SbatchFilepath, local, sbatch_to_submitit
 from biahub.utils.cluster import estimate_resources, get_submitit_cluster
 
 
@@ -34,47 +30,37 @@ def pyramid(fov_path: Path, levels: int, method: str) -> None:
     method : str
         Downsampling method (e.g., 'mean', 'max', 'min')
     """
-    click.echo(f"Computing pyramid for FOV: {fov_path}")
+    typer.echo(f"Computing pyramid for FOV: {fov_path}")
 
     with open_ome_zarr(fov_path, mode="r+") as dataset:
         dataset.compute_pyramid(levels=levels, method=method)
 
 
-@click.command("pyramid")
-@input_position_dirpaths()
-@sbatch_filepath()
-@local()
-@click.option(
-    "--levels",
-    "-lv",
-    type=int,
-    default=4,
-    show_default=True,
-    help="Total number of resolution levels including level 0. E.g., levels=4 creates 0, 1, 2, 3.",
-)
-@click.option(
-    "--method",
-    "-m",
-    type=click.Choice(
-        [
-            "stride",
-            "median",
-            "mode",
-            "mean",
-            "min",
-            "max",
-        ]
-    ),
-    default="mean",
-    show_default=True,
-    help="Downsampling method to use.",
-)
 def pyramid_cli(
-    input_position_dirpaths: list[Path],
-    levels: int = 4,
-    method: str = "mean",
-    sbatch_filepath: Path | None = None,
-    local: bool = False,
+    input_position_dirpaths: InputPositionDirpaths,
+    sbatch_filepath: SbatchFilepath = None,
+    local: local = False,
+    levels: Annotated[
+        int,
+        typer.Option(
+            "--levels",
+            "-lv",
+            show_default=True,
+            help=(
+                "Total number of resolution levels including level 0. "
+                "E.g., levels=4 creates 0, 1, 2, 3."
+            ),
+        ),
+    ] = 4,
+    method: Annotated[
+        Literal["stride", "median", "mode", "mean", "min", "max"],
+        typer.Option(
+            "--method",
+            "-m",
+            show_default=True,
+            help="Downsampling method to use.",
+        ),
+    ] = "mean",
 ) -> None:
     """Create multi-scale pyramids for OME-Zarr datasets.
 
@@ -85,7 +71,7 @@ def pyramid_cli(
     >>> biahub pyramid -i ./data.zarr/*/*/* --levels 4 --local
     """
     if levels <= 1:
-        click.echo("No pyramid levels to create (levels must be > 1).")
+        typer.echo("No pyramid levels to create (levels must be > 1).")
         return
 
     # Estimate resources based on first FOV data shape
@@ -115,7 +101,7 @@ def pyramid_cli(
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
 
-    click.echo(
+    typer.echo(
         f"Submitting {len(input_position_dirpaths)} pyramid jobs with resources: {slurm_args}"
     )
 
@@ -130,7 +116,3 @@ def pyramid_cli(
     log_path = slurm_out_path / f"pyramid-jobs_{timestamp}.log"
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
-
-
-if __name__ == "__main__":
-    pyramid_cli()

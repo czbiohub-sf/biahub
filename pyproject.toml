@@ -19,8 +19,8 @@ classifiers = [
 ]
 
 dependencies = [
-  "click",
-  "iohub>=0.3.11",
+  "typer>=0.27.2",
+  "iohub",
   "matplotlib",
   "natsort",
   "numpy",
@@ -76,7 +76,7 @@ build = ["build", "twine"]
 
 doc = [
     "zensical>=0.0.32",
-    "mkdocs-click>=0.8",
+    "mkdocs-typer2[zensical]>=0.4.1",
 ]
 
 [dependency-groups]
@@ -88,7 +88,7 @@ dev = [
 ]
 
 [project.scripts]
-biahub = "biahub.cli.main:cli"
+biahub = "biahub.cli.main:app"
 
 [tool.uv]
 # Needed so that uv considers pypi (and not only the pytorch CPU extra index)
@@ -97,6 +97,7 @@ biahub = "biahub.cli.main:cli"
 index-strategy = "unsafe-best-match"
 
 [tool.uv.sources]
+iohub = { git = "https://github.com/czbiohub-sf/iohub", branch = "main" }
 # Private repo, no PyPI release. HTTPS rather than ssh so that installing the
 # `qc` extra needs no SSH key: an org member authenticates once with the GitHub
 # CLI, which is already on Bruno, and uv picks the credential up through git.

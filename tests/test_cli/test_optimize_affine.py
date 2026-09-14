@@ -1,6 +1,6 @@
-from click.testing import CliRunner
+from typer.testing import CliRunner
 
-from biahub.cli.main import cli
+from biahub.cli.main import app
 
 
 def test_optimize_affine_cli(tmp_path, example_plate, example_register_settings):
@@ -10,7 +10,7 @@ def test_optimize_affine_cli(tmp_path, example_plate, example_register_settings)
 
     runner = CliRunner()
     result = runner.invoke(
-        cli,
+        app,
         [
             "optimize-registration",
             "-s",

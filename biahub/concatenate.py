@@ -1,10 +1,11 @@
 import glob
 
 from pathlib import Path
+from typing import Annotated
 
-import click
 import numpy as np
 import submitit
+import typer
 import yaml
 
 from iohub import open_ome_zarr
@@ -13,13 +14,13 @@ from natsort import natsorted
 
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
+    ConfigFilepath,
+    OutputDirpath,
+    SbatchFilepath,
     cluster,
-    config_filepath,
     init_only,
     monitor,
-    output_dirpath,
     resume,
-    sbatch_filepath,
     sbatch_to_submitit,
 )
 from biahub.settings import ConcatenateSettings
@@ -169,7 +170,7 @@ def get_channel_combiner_metadata(
                     output_channel_indices.append(out_chan_idx_counter)
                     out_chan_idx_counter += 1
                 else:
-                    click.echo(
+                    typer.echo(
                         f"Warning: Channel {channel} already exists. Skipping and using index from the first entry."
                     )
                     # Set the out_chan_idx_counter to the index of the channel in the all_channel_names list
@@ -187,9 +188,9 @@ def get_channel_combiner_metadata(
     if len(all_slicing_params) > 1:
         validate_slicing_params_zyx(all_slicing_params)
 
-    click.echo(f"Channel names: {all_channel_names}")
-    click.echo(f"Input channel indices: {input_channel_idx}")
-    click.echo(f"Output channel indices: {output_channel_idx}")
+    typer.echo(f"Channel names: {all_channel_names}")
+    typer.echo(f"Input channel indices: {input_channel_idx}")
+    typer.echo(f"Output channel indices: {output_channel_idx}")
 
     return (
         all_data_paths,
@@ -258,7 +259,7 @@ def calculate_cropped_size(
     x_size = abs(slice_params_zyx[2].stop - slice_params_zyx[2].start)
 
     cropped_shape_zyx = (z_size, y_size, x_size)
-    click.echo(f"Output ZYX shape after cropping: {cropped_shape_zyx}")
+    typer.echo(f"Output ZYX shape after cropping: {cropped_shape_zyx}")
 
     return cropped_shape_zyx
 
@@ -268,7 +269,7 @@ def _resolve_time_indices(settings: ConcatenateSettings, all_shapes: list[tuple]
     T = all_shapes[0][0]
     if settings.time_indices == "all":
         if not all(s[0] == T for s in all_shapes):
-            click.echo(
+            typer.echo(
                 "Warning: Datasets have different number of time points. "
                 "Taking the smallest number of time points."
             )
@@ -333,7 +334,7 @@ def _prepare_concatenate(settings: ConcatenateSettings, output_dirpath: Path) ->
         )
 
     if not all(voxel_size == all_voxel_sizes[0] for voxel_size in all_voxel_sizes):
-        click.echo(
+        typer.echo(
             "Warning: Datasets have different voxel sizes. Taking the first voxel size."
         )
 
@@ -343,14 +344,14 @@ def _prepare_concatenate(settings: ConcatenateSettings, output_dirpath: Path) ->
     if all(dtype == all_dtypes[0] for dtype in all_dtypes):
         dtype = all_dtypes[0]
     else:
-        click.echo("Warning: not all dtypes match. Casting data at float32.")
+        typer.echo("Warning: not all dtypes match. Casting data at float32.")
         dtype = np.float32
 
     input_time_indices = _resolve_time_indices(settings, all_shapes)
 
     # If input shapes differ but slicing is specified, inform the user
     if not all(shape[-3:] == all_shapes[0][-3:] for shape in all_shapes):
-        click.echo(
+        typer.echo(
             "Warning: Datasets have different shapes, but slicing parameters are specified. Will validate output shapes after cropping."
         )
 
@@ -383,7 +384,7 @@ def _prepare_concatenate(settings: ConcatenateSettings, output_dirpath: Path) ->
         metadata_keys=PROVENANCE_METADATA_KEYS,
         **output_metadata,
     )
-    click.echo(f"Created {output_dirpath} ({len(output_position_paths)} positions)")
+    typer.echo(f"Created {output_dirpath} ({len(output_position_paths)} positions)")
 
     return {
         "all_data_paths": all_data_paths,
@@ -414,7 +415,7 @@ def _resolve_concatenate_config(
     raw["concat_data_paths"] = list(concat_data_paths)
     settings = ConcatenateSettings(**raw)
     model_to_yaml(settings, output_config)
-    click.echo(f"Resolved config written to {output_config}")
+    typer.echo(f"Resolved config written to {output_config}")
 
 
 def concatenate(
@@ -493,7 +494,7 @@ def concatenate(
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=resolved_cluster)
     executor.update_parameters(**slurm_args)
 
-    click.echo(f"Submitting {resolved_cluster} jobs...")
+    typer.echo(f"Submitting {resolved_cluster} jobs...")
     jobs = []
 
     with submitit.helpers.clean_env(), executor.batch():
@@ -553,33 +554,27 @@ def concatenate(
         monitor_jobs(jobs, prep["all_data_paths"])
 
 
-@click.command("concatenate")
-@config_filepath()
-@output_dirpath()
-@sbatch_filepath()
-@cluster()
-@monitor()
-@init_only()
-@resume()
-@click.option(
-    "--concat-data-paths",
-    multiple=True,
-    type=str,
-    help=(
-        "Resolve mode: inject these concat_data_paths into the config and write "
-        "the resolved config to -o (a YAML file), then exit. Repeat the flag once "
-        "per source store."
-    ),
-)
 def concatenate_cli(
-    config_filepath: Path,
-    output_dirpath: Path,
-    sbatch_filepath: str | None = None,
-    cluster: str = "slurm",
-    monitor: bool = False,
-    init_only: bool = False,
-    resume: bool = False,
-    concat_data_paths: tuple[str, ...] = (),
+    config_filepath: ConfigFilepath,
+    output_dirpath: OutputDirpath,
+    sbatch_filepath: SbatchFilepath = None,
+    cluster: cluster = "slurm",
+    monitor: monitor = False,
+    init_only: init_only = False,
+    resume: resume = False,
+    *,
+    concat_data_paths: Annotated[
+        list[str],
+        typer.Option(
+            "--concat-data-paths",
+            default_factory=list,
+            help=(
+                "Resolve mode: inject these concat_data_paths into the config and write "
+                "the resolved config to -o (a YAML file), then exit. Repeat the flag once "
+                "per source store."
+            ),
+        ),
+    ],
 ):
     r"""Concatenate datasets (with optional cropping).
 
@@ -634,7 +629,3 @@ def concatenate_cli(
         init_only=init_only,
         resume=resume,
     )
-
-
-if __name__ == "__main__":
-    concatenate_cli()

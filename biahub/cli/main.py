@@ -1,51 +1,61 @@
 import importlib
 
-import click
+import typer
+
+from typer.core import TyperCommand, TyperGroup
+from typer.main import get_command
+
+from biahub.cli.parsing import install_eat_all_options
 
 CONTEXT = {"help_option_names": ["-h", "--help"]}
 
 
-class NaturalOrderGroup(click.Group):
-    def list_commands(self, ctx):
-        return list(self.commands.keys())
+class LazyCommand(TyperCommand):
+    """Typer command that imports its callback only when used."""
 
-
-@click.group(context_settings=CONTEXT, cls=NaturalOrderGroup)
-def cli():
-    """command-line tools for biahub."""
-
-
-class LazyCommand(click.Command):
     def __init__(self, name, import_path, help=None, short_help=None):
         self.import_path = import_path
         self._real_command = None
+        self._placeholder_params = []
+        self._initializing = True
         super().__init__(name=name, help=help, short_help=short_help)
+        self._initializing = False
 
     def _load_real_command(self):
         if self._real_command is None:
             module_path, attr_name = self.import_path.rsplit(".", 1)
-            module = importlib.import_module(module_path)
-            self._real_command = getattr(module, attr_name)
+            callback = getattr(importlib.import_module(module_path), attr_name)
+            command_app = typer.Typer(add_completion=False)
+            command_app.command(name=self.name)(callback)
+            command = get_command(command_app)
+            install_eat_all_options(command)
+            self._real_command = command
+        return self._real_command
+
+    @property
+    def params(self):
+        if self._initializing:
+            return self._placeholder_params
+        return self._load_real_command().params
+
+    @params.setter
+    def params(self, value):
+        self._placeholder_params = value
 
     def invoke(self, ctx):
-        self._load_real_command()
-        return self._real_command.invoke(ctx)
+        return self._load_real_command().invoke(ctx)
 
     def get_help(self, ctx):
-        self._load_real_command()
-        return self._real_command.get_help(ctx)
+        return self._load_real_command().get_help(ctx)
 
     def get_params(self, ctx):
-        self._load_real_command()
-        return self._real_command.get_params(ctx)
+        return self._load_real_command().get_params(ctx)
 
     def format_usage(self, ctx, formatter):
-        self._load_real_command()
-        return self._real_command.format_usage(ctx, formatter)
+        return self._load_real_command().format_usage(ctx, formatter)
 
     def format_options(self, ctx, formatter):
-        self._load_real_command()
-        return self._real_command.format_options(ctx, formatter)
+        return self._load_real_command().format_options(ctx, formatter)
 
 
 COMMANDS = [
@@ -177,52 +187,89 @@ COMMANDS = [
 ]
 
 
-for cmd in COMMANDS:
-    cli.add_command(
-        LazyCommand(
-            name=cmd["name"],
-            import_path=cmd["import_path"],
-            help=cmd["help"],
-            short_help=cmd["help"].split(".")[0],
-        )
-    )
-
-
-class LazyGroup(click.Group):
-    """Click group that defers import until invoked."""
+class LazyGroup(TyperGroup):
+    """Typer group that imports its application only when used."""
 
     def __init__(self, name, import_path, **kwargs):
         self.import_path = import_path
         self._real_group = None
+        self._placeholder_commands = {}
+        self._initializing = True
         super().__init__(name=name, **kwargs)
+        self._initializing = False
 
     def _load(self):
         if self._real_group is None:
             module_path, attr_name = self.import_path.rsplit(".", 1)
-            module = importlib.import_module(module_path)
-            self._real_group = getattr(module, attr_name)
+            app = getattr(importlib.import_module(module_path), attr_name)
+            group = get_command(app)
+            if not isinstance(group, TyperGroup):
+                raise TypeError(f"{self.import_path} did not produce a Typer group")
+            self._real_group = group
+        return self._real_group
+
+    @property
+    def commands(self):
+        if self._initializing:
+            return self._placeholder_commands
+        return self._load().commands
+
+    @commands.setter
+    def commands(self, value):
+        self._placeholder_commands = value
 
     def list_commands(self, ctx):
-        self._load()
-        return self._real_group.list_commands(ctx)
+        return self._load().list_commands(ctx)
 
     def get_command(self, ctx, cmd_name):
-        self._load()
-        return self._real_group.get_command(ctx, cmd_name)
+        return self._load().get_command(ctx, cmd_name)
 
     def invoke(self, ctx):
-        self._load()
-        return self._real_group.invoke(ctx)
+        return self._load().invoke(ctx)
 
     def get_help(self, ctx):
-        self._load()
-        return self._real_group.get_help(ctx)
+        return self._load().get_help(ctx)
 
 
-cli.add_command(
-    LazyGroup(name="nf", import_path="biahub.cli.nf.nf_cli", help="Nextflow utilities")
+class RootGroup(TyperGroup):
+    """Root group that exposes lazy commands in their declared order."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for command in COMMANDS:
+            self.add_command(
+                LazyCommand(
+                    name=command["name"],
+                    import_path=command["import_path"],
+                    help=command["help"],
+                    short_help=command["help"].split(".")[0],
+                )
+            )
+        self.add_command(
+            LazyGroup(
+                name="nf",
+                import_path="biahub.cli.nf.cli",
+                help="Nextflow utilities",
+            )
+        )
+
+    def list_commands(self, ctx):
+        return list(self.commands)
+
+
+app = typer.Typer(
+    name="biahub",
+    cls=RootGroup,
+    context_settings=CONTEXT,
+    no_args_is_help=True,
+    add_completion=False,
 )
 
 
+@app.callback()
+def main():
+    """command-line tools for biahub."""
+
+
 if __name__ == "__main__":
-    cli()
+    app()

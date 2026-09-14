@@ -5,10 +5,10 @@ import pandas as pd
 import pytest
 import yaml
 
-from click.testing import CliRunner
 from iohub.ngff import open_ome_zarr
+from typer.testing import CliRunner
 
-from biahub.cli.main import cli
+from biahub.cli.main import app
 from biahub.settings import TrackingSettings, ZSlicing
 from biahub.track import _init_output_plate, resolve_z_slice, track
 
@@ -273,7 +273,7 @@ def test_track_cli_init_only(tmp_path, example_tracking_plate):
 
     runner = CliRunner()
     result = runner.invoke(
-        cli,
+        app,
         [
             "track",
             "-i",
@@ -307,7 +307,7 @@ def test_track_cli_debug_single_position(tmp_path, example_tracking_plate, monke
 
     runner = CliRunner()
     result = runner.invoke(
-        cli,
+        app,
         [
             "track",
             "-i",
@@ -482,7 +482,7 @@ def test_input_images_path_override(tmp_path, example_tracking_plate, monkeypatc
 
     runner = CliRunner()
     result = runner.invoke(
-        cli,
+        app,
         [
             "track",
             "-i",

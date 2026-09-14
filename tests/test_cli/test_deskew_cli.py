@@ -1,10 +1,10 @@
 import numpy as np
 import pytest
 
-from click.testing import CliRunner
+from typer.testing import CliRunner
 
 from biahub import deskew
-from biahub.cli.main import cli
+from biahub.cli.main import app
 from biahub.utils.cluster import estimate_resources
 
 
@@ -66,7 +66,7 @@ def test_deskew_cli(tmp_path, example_plate, example_deskew_settings):
 
     runner = CliRunner()
     result = runner.invoke(
-        cli,
+        app,
         [
             "deskew",
             "-i",
@@ -93,7 +93,7 @@ def test_deskew_cli_init_only(tmp_path, example_plate, example_deskew_settings):
 
     runner = CliRunner()
     result = runner.invoke(
-        cli,
+        app,
         [
             "deskew",
             "-i",
@@ -120,7 +120,7 @@ def test_deskew_cli_debug_single_position(tmp_path, example_plate, example_deske
 
     runner = CliRunner()
     result = runner.invoke(
-        cli,
+        app,
         [
             "deskew",
             "-i",
@@ -165,7 +165,7 @@ def test_deskew_cli_multiprocess(
 
     runner = CliRunner()
     result = runner.invoke(
-        cli,
+        app,
         [
             "deskew",
             "-i",

@@ -1,9 +1,10 @@
 from pathlib import Path
+from typing import Annotated
 
-import click
 import numpy as np
 import submitit
 import torch
+import typer
 
 from iohub import open_ome_zarr
 from iohub.ngff.models import TransformationMeta
@@ -12,13 +13,12 @@ from waveorder.models.isotropic_fluorescent_thick_3d import apply_inverse_transf
 
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
-    _str_to_path,
-    config_filepath,
-    input_position_dirpaths,
+    ConfigFilepath,
+    InputPositionDirpaths,
+    OutputDirpath,
+    SbatchFilepath,
     local,
     monitor,
-    output_dirpath,
-    sbatch_filepath,
     sbatch_to_submitit,
 )
 from biahub.settings import DeconvolveSettings
@@ -66,29 +66,24 @@ def deconvolve(
     return np.stack(output)
 
 
-@click.command("deconvolve")
-@input_position_dirpaths()
-@click.option(
-    "--psf-dirpath",
-    "-p",
-    required=True,
-    type=click.Path(exists=True, file_okay=False, dir_okay=True),
-    callback=_str_to_path,
-    help="Path to psf.zarr",
-)
-@config_filepath()
-@output_dirpath()
-@sbatch_filepath()
-@local()
-@monitor()
 def deconvolve_cli(
-    input_position_dirpaths: list[str],
-    psf_dirpath: str,
-    config_filepath: Path,
-    output_dirpath: str,
-    sbatch_filepath: str = None,
-    local: bool = False,
-    monitor: bool = True,
+    input_position_dirpaths: InputPositionDirpaths,
+    psf_dirpath: Annotated[
+        Path,
+        typer.Option(
+            "--psf-dirpath",
+            "-p",
+            exists=True,
+            file_okay=False,
+            dir_okay=True,
+            help="Path to psf.zarr",
+        ),
+    ],
+    config_filepath: ConfigFilepath,
+    output_dirpath: OutputDirpath,
+    sbatch_filepath: SbatchFilepath = None,
+    local: local = False,
+    monitor: monitor = False,
 ):
     """Deconvolve across T and C axes using a PSF and a configuration file.
 
@@ -115,7 +110,7 @@ def deconvolve_cli(
         T, C, Z, Y, X = shape
 
     # Create output zarr store
-    click.echo("Creating empty output zarr...")
+    typer.echo("Creating empty output zarr...")
     create_empty_plate(
         store_path=output_dirpath,
         position_keys=[p.parts[-3:] for p in input_position_dirpaths],
@@ -128,10 +123,10 @@ def deconvolve_cli(
     )
 
     # Compute transfer function
-    click.echo("Computing transfer function...")
+    typer.echo("Computing transfer function...")
     with open_ome_zarr(Path(psf_dirpath, "0/0/0"), mode="r") as psf_dataset:
         if scale[-3:] != psf_dataset.scale[-3:]:
-            click.echo(
+            typer.echo(
                 f"Warning: PSF scale: {scale[-3:]} does not match data scale: {scale[-3:]}. "
                 "Consider resampling the PSF."
             )
@@ -170,11 +165,11 @@ def deconvolve_cli(
     cluster = get_submitit_cluster(local)
 
     # Prepare and submit jobs
-    click.echo(f"Preparing jobs: {slurm_args}")
+    typer.echo(f"Preparing jobs: {slurm_args}")
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
 
-    click.echo("Submitting SLURM jobs...")
+    typer.echo("Submitting SLURM jobs...")
     jobs = []
     with submitit.helpers.clean_env(), executor.batch():
         for input_position_path, output_position_path in zip(
@@ -200,7 +195,3 @@ def deconvolve_cli(
 
     if monitor:
         monitor_jobs(jobs, input_position_dirpaths)
-
-
-if __name__ == "__main__":
-    deconvolve_cli()

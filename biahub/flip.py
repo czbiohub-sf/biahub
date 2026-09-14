@@ -1,15 +1,17 @@
-import click
+from typing import Annotated
+
+import typer
 
 from iohub import open_ome_zarr
 
-from biahub.cli.parsing import input_position_dirpaths
+from biahub.cli.parsing import InputPositionDirpaths
 
 
-@click.command("flip")
-@input_position_dirpaths()
-@click.option("-x", is_flag=True, help="Enable the x flag.")
-@click.option("-y", is_flag=True, help="Enable the y flag.")
-def flip_cli(input_position_dirpaths: list[str], x: bool, y: bool):
+def flip_cli(
+    input_position_dirpaths: InputPositionDirpaths,
+    x: Annotated[bool, typer.Option("-x", help="Enable the x flag.")] = False,
+    y: Annotated[bool, typer.Option("-y", help="Enable the y flag.")] = False,
+):
     """Flip the input position files in the specified direction.
 
     >>> biahub flip -i ./input.zarr/*/*/* --x
