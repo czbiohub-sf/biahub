@@ -20,7 +20,7 @@
 
 nextflow.enable.dsl = 2
 
-include { qc_stage_wf; qc_report_wf; qc_report_spec } from './modules/qc'
+include { qc_plan_wf; qc_compute_wf; qc_report_wf; qc_report_spec } from './modules/qc'
 include { check_environment }                             from './modules/common'
 
 
@@ -61,6 +61,11 @@ workflow {
     def report_dir = params.qc_report_dir ?: "${params.output}/qc/report"
     def spec = qc_report_spec(qc_stores, "${params.output}/qc/report_spec.yaml", "QC report")
 
-    qc = qc_stage_wf(plan_inputs)
+    // Plan and compute run back to back here: a standalone run is pointed at
+    // stores that already hold data, so `compute_ready` is just the manifest and
+    // there is no scaffolded-but-empty phase to wait out. mantis-v2 puts the two
+    // halves in different phases — see the qc_plan_wf header.
+    plan = qc_plan_wf(plan_inputs)
+    qc = qc_compute_wf(plan.items, plan.stores, plan_inputs)
     qc_report_wf(qc.done, spec, report_dir)
 }

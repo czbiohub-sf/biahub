@@ -109,15 +109,13 @@ index-strategy = "unsafe-best-match"
 #
 #     git config --global url."ssh://git@github.com/".insteadOf "https://github.com/"
 #
-# The rev is a commit on imaging-qc's main. This one carries two things biahub
-# depends on directly: a `wasmtime<48` ceiling, so no `constraint-dependencies`
-# entry is needed here (itkwasm imports a `DirPerms` that wasmtime 48 removed,
-# which made `imaging-qc` unimportable), and a report verb that composes Hydra
-# `defaults:`, which is what lets `qc_report_spec` name a config file rather
-# than its directory. That project also relaxed `iohub==0.3.2` to a floor so both
-# can share one environment — biahub needs iohub>=0.3.11 for the
-# gapped-shard-write fix.
-imaging_qc_pipeline = { git = "https://github.com/czbiohub-sf/imaging-qc-pipeline", rev = "bd0b494ed1edf8be629254344e6e4bd6df1b3141" }
+# Pinned at #266: feat: plan-stage refuses an unknown channels:/per_channel: name
+imaging_qc_pipeline = { git = "https://github.com/czbiohub-sf/imaging-qc-pipeline", rev = "c5c51dc700d0aa52388d6f6a08eec5bfe16a5766" }
+
+# Pin iohub to the main commit that merged czbiohub-sf/iohub#472, which adds
+# `create_empty_plate(extra_metadata=...)`. Drop this back to a PyPI floor once
+# iohub cuts a release containing it.
+iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "172ee926829300b42708edbf6c8e20f2fd642f78" }
 
 [tool.hatch.metadata]
 allow-direct-references = true

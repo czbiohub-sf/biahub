@@ -66,6 +66,15 @@ def _init_output_plate(
         **output_metadata,
         metadata_sources=input_plate,
         metadata_keys=PROVENANCE_METADATA_KEYS,
+        # The record waveorder itself writes once a position is reconstructed
+        # (waveorder/cli/apply_inverse_transfer_function.py, "Save metadata at
+        # position level, keyed by output channel names"), written here so the
+        # plate carries it from the moment it exists -- the next step's
+        # create_empty_plate inherits provenance at plate-creation time, and
+        # the pipeline scaffolds every store before any of them hold data.
+        # waveorder merges into whatever is already under "waveorder" and
+        # re-assigns the same key, so its own write stays idempotent.
+        extra_metadata={"waveorder": {",".join(channel_names): settings.model_dump()}},
     )
 
     return input_shape, channel_names

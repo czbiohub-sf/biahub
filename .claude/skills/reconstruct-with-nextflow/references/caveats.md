@@ -127,7 +127,9 @@ z_range + focus_config.z_window -> z_slicing.{method, window_size, focus_channel
 
 (`focus_config`'s `NA_det`/`lambda_ill`/`pixel_size` have no equivalent.)
 `target_channel` and `cellpose_config.input_channel` must match **pre-rename**
-names in the **assembled** plate (§2, §5).
+names in the **assembled** plate (§2, §5). `qc_track.yaml`'s `channels:` must
+then match `<target_channel>_labels`, which is what the tracking store actually
+holds — SKILL.md §5a checks both couplings before launch.
 
 **`z_slicing.focus_channel` resolves against `input_images`, not the store.**
 `apply_focus_slicing` raises if the focus channel is not among the loaded
@@ -290,6 +292,12 @@ step globs the whole input, so a one-position smoke test scaffolds the output
 plate for *all* positions with data in only the first — correct and expected.
 Do not treat such a store as a deliverable, and delete it before a real run so
 `-resume` cannot reuse it.
+
+Since the init phase moved to the front of the run, this is visible sooner and
+for every step at once: a smoke test creates the full-width plate for
+flat-field, deskew, reconstruct, virtual-stain, assemble AND track within the
+first minutes, before a single position has been computed. Nothing changed
+about what ends up on disk — only when it appears.
 
 (Related, for pipeline developers: a param passed as `--foo 1` on the command
 line arrives as a String; coerce numeric params at the point of use and test

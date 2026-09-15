@@ -1,11 +1,18 @@
-// Deskew subworkflow: init → parse_resources → fan-out run × N positions.
+// Deskew subworkflows: init (scaffold + resources) and run (fan-out × N).
 //
-// This subworkflow is PATH-AGNOSTIC. Callers pass the input zarr, output zarr,
-// and config explicitly; the module has no idea where it sits in the pipeline
+// This module is PATH-AGNOSTIC. Callers pass the input zarr, output zarr, and
+// config explicitly; the module has no idea where it sits in the pipeline
 // directory layout. That's deliberate — deskew can read raw input, a 0-convert
 // store, a flat-field corrected store, or anything else, and write anywhere.
 // The orchestrating pipeline (see mantis-v2.nf) owns the layout and
 // the order of steps; this module just deskews whatever it's handed.
+//
+// INIT AND RUN ARE SEPARATE SUBWORKFLOWS. The pipeline runs every step's init
+// ahead of every step's compute, so that a bad config fails in the first
+// minutes rather than hours in. `biahub deskew --init` reads only the input
+// plate's METADATA — channel names and shape, with the deskewed shape derived
+// analytically — so it runs happily against a store its upstream step has
+// scaffolded but not yet filled. See the INIT PHASE comment in mantis-v2.nf.
 //
 // run_deskew uses `--cluster debug` so that submitit's DebugExecutor runs the
 // work in-process.  Nextflow already handles per-position fan-out and resource
@@ -70,27 +77,64 @@ process run_deskew {
 }
 
 
+// Validate the config and scaffold the output plate. Metadata-only and cheap,
+// so it belongs in the pipeline's up-front init phase.
+//
 // take:
-//   positions    collected channel of position keys (e.g. ['A/1/0', 'B/1/0'])
 //   input_zarr   path to the input plate.zarr to deskew (any starting point)
 //   output_zarr  path to the deskewed output plate.zarr
 //   config       path to the deskew settings YAML
-//   prev_done    gating channel — deskew starts once this emits
-workflow deskew_wf {
+//   trigger      gating channel — init starts once this emits
+// emit:
+//   resources    the RESOURCES payload sizing one position's task
+//   done         fires once the output plate exists
+workflow deskew_init_wf {
+    take:
+    input_zarr
+    output_zarr
+    config
+    trigger
+
+    main:
+    init_out = init_deskew(input_zarr, output_zarr, config, trigger.map { 'done' })
+
+    emit:
+    resources = init_out.map { stdout_text -> parse_resources(stdout_text) }.first()
+    done      = init_out.map { 'done' }.first()
+}
+
+
+// Fan out one deskew task per position.
+//
+// take:
+//   positions    collected channel of position keys (e.g. ['A/1/0', 'B/1/0'])
+//   input_zarr   path to the input plate.zarr to deskew
+//   output_zarr  path to the deskewed output plate.zarr
+//   config       path to the deskew settings YAML
+//   resources    RESOURCES payload from deskew_init_wf
+//   prev_done    gating channel — compute starts once this emits
+workflow deskew_run_wf {
     take:
     positions
     input_zarr
     output_zarr
     config
+    resources
     prev_done
 
     main:
-    init_out = init_deskew(input_zarr, output_zarr, config, prev_done.map { 'done' })
-    resources = init_out.map { stdout_text -> parse_resources(stdout_text) }
-
+    // GATE CHANNELS ARE MAPPED TO A TOKEN BEFORE COMBINING, never combined raw.
+    // `combine` FLATTENS a list-valued item into the tuple, so what the producer
+    // happens to emit leaks into the tuple's arity: a step's `done` is a COLLECTED
+    // list of every position, which turned [pos, meta] into
+    // [pos, meta, p1, p2, … p54] and blew up a three-parameter closure with
+    // `MissingMethodException` — after the previous step had already run. Mapping
+    // reads nothing out of the gate, so no producer's payload shape can reach here.
     pos_meta = positions
         .flatMap { items -> items }
         .combine(resources)
+        .combine(prev_done.map { 'done' })
+        .map { pos, meta, _gate -> [pos, meta] }
 
     dk_done = run_deskew(pos_meta, input_zarr, output_zarr, config) | collect
 
