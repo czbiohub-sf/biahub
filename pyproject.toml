@@ -109,34 +109,12 @@ index-strategy = "unsafe-best-match"
 #
 #     git config --global url."ssh://git@github.com/".insteadOf "https://github.com/"
 #
-# The rev is a commit on imaging-qc's main. Three things below this line depend
-# on which one, so move it deliberately:
-#
-#   * a `wasmtime<48` ceiling, which is why no `constraint-dependencies` entry
-#     is needed here — itkwasm imports a `DirPerms` that wasmtime 48 removed,
-#     and that made `imaging-qc` unimportable.
-#   * a report verb that composes Hydra `defaults:`, which is what lets
-#     `qc_report_spec` name a config FILE rather than its directory.
-#   * imaging-qc#226: `plan-stage` refuses a `channels:` or `per_channel_params`
-#     name that no position in the store has. The pipeline plans up front, so
-#     this is what makes a mistyped channel fail at init rather than skip a
-#     metric silently — see the header of `nextflow/modules/qc.nf`.
-#
-# That project also relaxed `iohub==0.3.2` to a floor so both can share one
-# environment — biahub needs iohub>=0.3.11 for the gapped-shard-write fix.
+# Pinned at #266: feat: plan-stage refuses an unknown channels:/per_channel: name
 imaging_qc_pipeline = { git = "https://github.com/czbiohub-sf/imaging-qc-pipeline", rev = "c5c51dc700d0aa52388d6f6a08eec5bfe16a5766" }
 
 # Pin iohub to the main commit that merged czbiohub-sf/iohub#472, which adds
 # `create_empty_plate(extra_metadata=...)`. Drop this back to a PyPI floor once
 # iohub cuts a release containing it.
-#
-# The Nextflow pipeline scaffolds every step's output store before any of them
-# holds data, so each step has to record its OWN provenance during `--init`:
-# `create_empty_plate` inherits an upstream store's `biahub-*` zattrs at
-# plate-creation time and only for positions it creates, so a record written at
-# compute time would never reach the next plate. Writing it through
-# `extra_metadata` rather than in a second pass afterwards is what makes that
-# free — the function already holds an open handle to every position.
 iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "172ee926829300b42708edbf6c8e20f2fd642f78" }
 
 [tool.hatch.metadata]
