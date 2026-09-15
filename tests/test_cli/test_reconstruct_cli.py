@@ -107,7 +107,8 @@ def test_apply_inv_tf_requires_transfer_function(
     )
 
     assert result.exit_code == 2
-    error = re.sub(r"\x1b\[[0-9;]*m|[\u2500-\u257f]", " ", result.stderr)
+    error = re.sub(r"\x1b\[[0-9;]*m", "", result.stderr)
+    error = re.sub(r"[\u2500-\u257f]", " ", error)
     error = " ".join(error.split())
     assert "--transfer-function-dirpath / -t is required unless using --init." in error
     assert "Traceback" not in result.output
