@@ -109,19 +109,29 @@ index-strategy = "unsafe-best-match"
 #
 #     git config --global url."ssh://git@github.com/".insteadOf "https://github.com/"
 #
-# The rev is a commit on imaging-qc's main. This one carries two things biahub
+# The rev is a commit on imaging-qc's main. This one carries three things biahub
 # depends on directly: a `wasmtime<48` ceiling, so no `constraint-dependencies`
 # entry is needed here (itkwasm imports a `DirPerms` that wasmtime 48 removed,
-# which made `imaging-qc` unimportable), and a report verb that composes Hydra
+# which made `imaging-qc` unimportable); a report verb that composes Hydra
 # `defaults:`, which is what lets `qc_report_spec` name a config file rather
-# than its directory. That project also relaxed `iohub==0.3.2` to a floor so both
-# can share one environment — biahub needs iohub>=0.3.11 for the
-# gapped-shard-write fix.
-imaging_qc_pipeline = { git = "https://github.com/czbiohub-sf/imaging-qc-pipeline", rev = "bd0b494ed1edf8be629254344e6e4bd6df1b3141" }
+# than its directory; and imaging-qc#226, where `plan-stage` refuses a
+# `channels:` or `per_channel_params` name that no position in the store has.
+#
+# That last one is why this bump rides with the init-phase change rather than
+# waiting: the pipeline runs `plan-stage` up front, against a store its upstream
+# step has only scaffolded, so with #226 a mistyped channel name now fails in the
+# run's first minutes. Before it, that was the one QC config error the init phase
+# could not catch — imaging-qc treated an unmatched filter as a legitimate zero
+# (its `TestTheLegitimateZeros`), so the metric silently did not run and, if it
+# was ungated, never surfaced at all.
+#
+# That project also relaxed `iohub==0.3.2` to a floor so both can share one
+# environment — biahub needs iohub>=0.3.11 for the gapped-shard-write fix.
+imaging_qc_pipeline = { git = "https://github.com/czbiohub-sf/imaging-qc-pipeline", rev = "c5c51dc700d0aa52388d6f6a08eec5bfe16a5766" }
 
-# Pin iohub to czbiohub-sf/iohub#feat/create-empty-plate-extra-metadata, which
-# adds `create_empty_plate(extra_metadata=...)`. Drop this back to a PyPI floor
-# once that lands and is released.
+# Pin iohub to the main commit that merged czbiohub-sf/iohub#472, which adds
+# `create_empty_plate(extra_metadata=...)`. Drop this back to a PyPI floor once
+# iohub cuts a release containing it.
 #
 # The Nextflow pipeline scaffolds every step's output store before any of them
 # holds data, so each step has to record its OWN provenance during `--init`:
@@ -130,7 +140,7 @@ imaging_qc_pipeline = { git = "https://github.com/czbiohub-sf/imaging-qc-pipelin
 # compute time would never reach the next plate. Writing it through
 # `extra_metadata` rather than in a second pass afterwards is what makes that
 # free — the function already holds an open handle to every position.
-iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "2ee15ff77c3c345cbfe58d5ff8a29b914dd3dadb" }
+iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "172ee926829300b42708edbf6c8e20f2fd642f78" }
 
 [tool.hatch.metadata]
 allow-direct-references = true

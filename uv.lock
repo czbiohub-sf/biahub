@@ -366,8 +366,8 @@ requires-dist = [
     { name = "dask", extras = ["array"] },
     { name = "humanize" },
     { name = "imageio-ffmpeg" },
-    { name = "imaging-qc-pipeline", extras = ["interactive"], marker = "extra == 'qc'", git = "https://github.com/czbiohub-sf/imaging-qc-pipeline?rev=bd0b494ed1edf8be629254344e6e4bd6df1b3141" },
-    { name = "iohub", git = "https://github.com/czbiohub-sf/iohub?rev=2ee15ff77c3c345cbfe58d5ff8a29b914dd3dadb" },
+    { name = "imaging-qc-pipeline", extras = ["interactive"], marker = "extra == 'qc'", git = "https://github.com/czbiohub-sf/imaging-qc-pipeline?rev=c5c51dc700d0aa52388d6f6a08eec5bfe16a5766" },
+    { name = "iohub", git = "https://github.com/czbiohub-sf/iohub?rev=172ee926829300b42708edbf6c8e20f2fd642f78" },
     { name = "largestinteriorrectangle" },
     { name = "llvmlite", specifier = ">=0.41.0" },
     { name = "markdown" },
@@ -1934,7 +1934,7 @@ wheels = [
 [[package]]
 name = "imaging-qc-pipeline"
 version = "0.5.0"
-source = { git = "https://github.com/czbiohub-sf/imaging-qc-pipeline?rev=bd0b494ed1edf8be629254344e6e4bd6df1b3141#bd0b494ed1edf8be629254344e6e4bd6df1b3141" }
+source = { git = "https://github.com/czbiohub-sf/imaging-qc-pipeline?rev=c5c51dc700d0aa52388d6f6a08eec5bfe16a5766#c5c51dc700d0aa52388d6f6a08eec5bfe16a5766" }
 dependencies = [
     { name = "dask", extra = ["array"] },
     { name = "hydra-core" },
@@ -2007,11 +2007,12 @@ wheels = [
 
 [[package]]
 name = "iohub"
-version = "0.3.12.dev6+2ee15ff"
-source = { git = "https://github.com/czbiohub-sf/iohub?rev=2ee15ff77c3c345cbfe58d5ff8a29b914dd3dadb#2ee15ff77c3c345cbfe58d5ff8a29b914dd3dadb" }
+version = "0.3.12.dev9+172ee92"
+source = { git = "https://github.com/czbiohub-sf/iohub?rev=172ee926829300b42708edbf6c8e20f2fd642f78#172ee926829300b42708edbf6c8e20f2fd642f78" }
 dependencies = [
     { name = "blosc2" },
     { name = "dask", extra = ["array"] },
+    { name = "lazy-loader" },
     { name = "natsort" },
     { name = "nd2" },
     { name = "ndtiff" },
@@ -2022,6 +2023,7 @@ dependencies = [
     { name = "rich" },
     { name = "tifffile" },
     { name = "tqdm" },
+    { name = "typer" },
     { name = "xarray" },
     { name = "zarr" },
     { name = "zarrs" },
