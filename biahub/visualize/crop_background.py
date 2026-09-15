@@ -2,8 +2,11 @@ import os
 import re
 import subprocess
 
-import click
+from pathlib import Path
+from typing import Annotated
+
 import imageio_ffmpeg
+import typer
 
 
 def detect_crop_params(file_path):
@@ -63,15 +66,22 @@ def process_video(file_path, output_dir):
             output_path,
         ]
         subprocess.run(command)
-        click.echo(f"Processed {filename_no_ext}")
+        typer.echo(f"Processed {filename_no_ext}")
     else:
-        click.echo(f"Could not determine crop parameters for {filename_no_ext}")
+        typer.echo(f"Could not determine crop parameters for {filename_no_ext}")
 
 
-@click.command("crop-background")
-@click.argument("input-dir", type=click.Path(exists=True, file_okay=False))
-@click.argument("output-dir", type=click.Path())
-def main(input_dir, output_dir):
+cli = typer.Typer(add_completion=False)
+
+
+@cli.command("crop-background")
+def main(
+    input_dir: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=False),
+    ],
+    output_dir: Annotated[Path, typer.Argument()],
+):
     """Batch process videos in VIDEO-DIR and save the output to OUTPUT-DIR."""
     # Ensure output directory exists
     os.makedirs(output_dir, exist_ok=True)
@@ -84,4 +94,4 @@ def main(input_dir, output_dir):
 
 
 if __name__ == "__main__":
-    main()
+    cli()

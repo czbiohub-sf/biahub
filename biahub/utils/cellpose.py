@@ -22,8 +22,8 @@ import time
 
 from pathlib import Path
 
-import click
 import torch
+import typer
 
 logger = logging.getLogger(__name__)
 
@@ -163,7 +163,7 @@ def stage_cellpose_weights() -> Path | None:
         return None
 
     os.environ["CELLPOSE_LOCAL_MODELS_PATH"] = os.fspath(dest)
-    click.echo(f"Staged cellpose weights from {source} in {dest}")
+    typer.echo(f"Staged cellpose weights from {source} in {dest}")
     return dest
 
 
@@ -200,5 +200,5 @@ def warm_cellpose_weights() -> Path | None:
         logger.warning("Could not warm the cellpose weights cache in %s: %r", models_dir, exc)
         return None
 
-    click.echo(f"Cellpose weights ready: {weights}")
+    typer.echo(f"Cellpose weights ready: {weights}")
     return weights

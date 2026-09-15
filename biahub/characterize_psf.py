@@ -10,13 +10,13 @@ import webbrowser
 from pathlib import Path
 from typing import Literal
 
-import click
 import markdown
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F  # noqa: N812
+import typer
 
 from iohub.ngff import open_ome_zarr
 from numpy.typing import ArrayLike
@@ -25,7 +25,7 @@ from scipy.signal import peak_widths
 
 import biahub.artefacts
 
-from biahub.cli.parsing import config_filepath, input_position_dirpaths, output_dirpath
+from biahub.cli.parsing import ConfigFilepath, InputPositionDirpaths, OutputDirpath
 from biahub.settings import CharacterizeSettings
 from biahub.utils.config import yaml_to_model
 from biahub.vendor.napari_psf_analysis import PSF, BeadExtractor, Calibrated3DImage
@@ -726,7 +726,7 @@ def _characterize_psf(
     use_robust_1d_fwhm = settings_dict.pop("use_robust_1d_fwhm")
     fwhm_plot_type = settings_dict.pop("fwhm_plot_type")
 
-    click.echo("Detecting peaks...")
+    typer.echo("Detecting peaks...")
     t1 = time.time()
     peaks = detect_peaks(
         zyx_data,
@@ -736,7 +736,7 @@ def _characterize_psf(
     gc.collect()
     torch.cuda.empty_cache()
     t2 = time.time()
-    click.echo(f"Time to detect peaks: {t2 - t1}")
+    typer.echo(f"Time to detect peaks: {t2 - t1}")
 
     t1 = time.time()
     beads, peak_coordinates = extract_beads(
@@ -756,7 +756,7 @@ def _characterize_psf(
         patch_size_pix,
     )
 
-    click.echo("Analyzing PSFs...")
+    typer.echo("Analyzing PSFs...")
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         df_gaussian_fit, df_1d_peak_width = analyze_psf(
@@ -769,7 +769,7 @@ def _characterize_psf(
             use_robust_1d_fwhm=use_robust_1d_fwhm,
         )
     t2 = time.time()
-    click.echo(f"Time to analyze PSFs: {t2 - t1}")
+    typer.echo(f"Time to analyze PSFs: {t2 - t1}")
 
     # Generate HTML report
     generate_report(
@@ -788,14 +788,10 @@ def _characterize_psf(
     return peaks
 
 
-@click.command("characterize-psf")
-@input_position_dirpaths()
-@config_filepath()
-@output_dirpath()
 def characterize_psf_cli(
-    input_position_dirpaths: list[str],
-    config_filepath: Path,
-    output_dirpath: str,
+    input_position_dirpaths: InputPositionDirpaths,
+    config_filepath: ConfigFilepath,
+    output_dirpath: OutputDirpath,
 ):
     """Characterize the point spread function (PSF) from bead images and output an html report.
 
@@ -811,7 +807,7 @@ def characterize_psf_cli(
     settings = yaml_to_model(config_filepath, CharacterizeSettings)
     dataset_name = Path(input_position_dirpaths[0]).parts[-4]
 
-    click.echo("Loading data...")
+    typer.echo("Loading data...")
     with open_ome_zarr(str(input_position_dirpaths[0]), mode="r") as input_dataset:
         T, C, Z, Y, X = input_dataset.data.shape
         zyx_data = input_dataset["0"][0, 0]
@@ -820,7 +816,3 @@ def characterize_psf_cli(
     _ = _characterize_psf(
         zyx_data, zyx_scale, settings, output_dirpath, input_position_dirpaths[0], dataset_name
     )
-
-
-if __name__ == "__main__":
-    characterize_psf_cli()

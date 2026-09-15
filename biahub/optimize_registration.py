@@ -1,16 +1,18 @@
+from typing import Annotated
+
 import ants
-import click
 import napari
 import numpy as np
+import typer
 
 from iohub import open_ome_zarr
 from skimage import filters
 
 from biahub.cli.parsing import (
-    config_filepath,
-    output_filepath,
-    source_position_dirpaths,
-    target_position_dirpaths,
+    ConfigFilepath,
+    OutputFilepath,
+    SourcePositionDirpaths,
+    TargetPositionDirpaths,
 )
 from biahub.register import (
     convert_transform_to_ants,
@@ -120,7 +122,7 @@ def _optimize_registration(
 
     _offset = np.zeros(3, dtype=np.float32)
     if crop:
-        click.echo("Estimating crop for source and target channels to overlapping region...")
+        typer.echo("Estimating crop for source and target channels to overlapping region...")
         mask = (target_zyx != 0) & (source_channels[0] != 0)
 
         # Can be refactored with code in cropping PR #88
@@ -135,7 +137,7 @@ def _optimize_registration(
             mask *= target_mask
 
         z_slice, y_slice, x_slice = find_lir(mask.astype(np.uint8))
-        click.echo(
+        typer.echo(
             f"Cropping to region z={z_slice.start}:{z_slice.stop}, "
             f"y={y_slice.start}:{y_slice.stop}, "
             f"x={x_slice.start}:{x_slice.stop}"
@@ -149,14 +151,14 @@ def _optimize_registration(
 
     # TODO: hardcoded clipping limits
     if clip:
-        click.echo("Clipping source and target channels to reasonable values...")
+        typer.echo("Clipping source and target channels to reasonable values...")
         target_zyx = np.clip(target_zyx, 0, 0.5)
         source_channels = [
             np.clip(_channel, 110, np.quantile(_channel, 0.99)) for _channel in source_channels
         ]
 
     if sobel_fitler:
-        click.echo("Applying Sobel filter to source and target channels...")
+        typer.echo("Applying Sobel filter to source and target channels...")
         target_zyx = filters.sobel(target_zyx)
         source_channels = [filters.sobel(_channel) for _channel in source_channels]
 
@@ -164,7 +166,7 @@ def _optimize_registration(
     target_ants = ants.from_numpy(target_zyx)
     source_ants = ants.from_numpy(source_zyx)
 
-    click.echo("Optimizing registration parameters using ANTs...")
+    typer.echo("Optimizing registration parameters using ANTs...")
     reg = ants.registration(
         fixed=target_ants,
         moving=source_ants,
@@ -193,23 +195,19 @@ def _optimize_registration(
     return composed_matrix
 
 
-@click.command("optimize-registration")
-@source_position_dirpaths()
-@target_position_dirpaths()
-@config_filepath()
-@output_filepath()
-@click.option(
-    "--display-viewer",
-    "-d",
-    is_flag=True,
-    help="Display the registered channels in a napari viewer",
-)
 def optimize_registration_cli(
-    source_position_dirpaths,
-    target_position_dirpaths,
-    config_filepath,
-    output_filepath,
-    display_viewer,
+    source_position_dirpaths: SourcePositionDirpaths,
+    target_position_dirpaths: TargetPositionDirpaths,
+    config_filepath: ConfigFilepath,
+    output_filepath: OutputFilepath,
+    display_viewer: Annotated[
+        bool,
+        typer.Option(
+            "--display-viewer",
+            "-d",
+            help="Display the registered channels in a napari viewer",
+        ),
+    ] = False,
 ):
     """Optimize the affine transform between source and target channels using ANTs library.
 
@@ -244,7 +242,7 @@ def optimize_registration_cli(
         target_channel_index = target_channel_names.index(settings.target_channel_name)
         target_data_czyx = np.asarray(target_position.data[t_idx])
         print("Target data shape:", target_data_czyx.shape)
-    click.echo(
+    typer.echo(
         f"\nOptimizing registration using source channel {source_channel_names[source_channel_index]} and target channel {target_channel_names[target_channel_index]}"
     )
 
@@ -264,14 +262,14 @@ def optimize_registration_cli(
     )
 
     # Saving the parameters
-    click.echo(f"Writing registration parameters to {output_filepath}")
+    typer.echo(f"Writing registration parameters to {output_filepath}")
     # copy config settings and modify only ones that change
     output_settings = settings.model_copy()
     output_settings.affine_transform_zyx = composed_matrix.tolist()
     model_to_yaml(output_settings, output_filepath)
 
     if display_viewer:
-        click.echo("Initializing napari viewer...")
+        typer.echo("Initializing napari viewer...")
         approx_tform_ants = convert_transform_to_ants(approx_tform)
         composed_matrix_ants = convert_transform_to_ants(composed_matrix)
         source_zyx_ants = ants.from_numpy(source_data_zyx.astype(np.float32))
@@ -306,7 +304,3 @@ def optimize_registration_cli(
         )
 
         input("\n Displaying registered channels. Press <enter> to close...")
-
-
-if __name__ == "__main__":
-    optimize_registration_cli()

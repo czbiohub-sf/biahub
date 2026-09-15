@@ -8,8 +8,8 @@ and ``get_submitit_cluster`` picks the executor the CLI submits to.
 import json
 import os
 
-import click
 import numpy as np
+import typer
 
 from numpy.typing import DTypeLike
 
@@ -40,7 +40,7 @@ def echo_resources(num_cpus: int, mem_gb: int, time_minutes: int) -> None:
     # Coerce to plain int: estimators may return numpy integers, which json
     # cannot serialize.
     payload = {"cpus": int(num_cpus), "mem_gb": int(mem_gb), "time_minutes": int(time_minutes)}
-    click.echo("RESOURCES:" + json.dumps(payload))
+    typer.echo("RESOURCES:" + json.dumps(payload))
 
 
 def get_submitit_cluster(

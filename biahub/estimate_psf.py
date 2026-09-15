@@ -3,27 +3,23 @@ import time
 
 from pathlib import Path
 
-import click
 import numpy as np
 import torch
+import typer
 
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.models import TransformationMeta
 
 from biahub.characterize_psf import detect_peaks, extract_beads
-from biahub.cli.parsing import config_filepath, input_position_dirpaths, output_dirpath
+from biahub.cli.parsing import ConfigFilepath, InputPositionDirpaths, OutputDirpath
 from biahub.settings import PsfFromBeadsSettings
 from biahub.utils.config import yaml_to_model
 
 
-@click.command("estimate-psf")
-@input_position_dirpaths()
-@config_filepath()
-@output_dirpath()
 def estimate_psf_cli(
-    input_position_dirpaths: list[str],
-    config_filepath: Path,
-    output_dirpath: str,
+    input_position_dirpaths: InputPositionDirpaths,
+    config_filepath: ConfigFilepath,
+    output_dirpath: OutputDirpath,
 ):
     """Estimate the point spread function (PSF) from bead images.
 
@@ -33,7 +29,7 @@ def estimate_psf_cli(
     output_dirpath = Path(output_dirpath)
 
     # Load the first position
-    click.echo("Loading data...")
+    typer.echo("Loading data...")
     pzyx_data = []
     for input_position_dirpath in input_position_dirpaths:
         with open_ome_zarr(str(input_position_dirpath), mode="r") as input_dataset:
@@ -69,7 +65,7 @@ def estimate_psf_cli(
     pbzyx_data = []
     for zyx_data in pzyx_data:
         # Detect and extract bead patches
-        click.echo("Detecting beads...")
+        typer.echo("Detecting beads...")
         t1 = time.time()
         peaks = detect_peaks(
             zyx_data,
@@ -80,7 +76,7 @@ def estimate_psf_cli(
 
         torch.cuda.empty_cache()
         t2 = time.time()
-        click.echo(f"Time to detect peaks: {t2 - t1}")
+        typer.echo(f"Time to detect peaks: {t2 - t1}")
 
         beads, _ = extract_beads(
             zyx_data=zyx_data,
@@ -95,7 +91,7 @@ def estimate_psf_cli(
         pbzyx_data.append(bzyx_data)
 
     bzyx_data = np.concatenate(pbzyx_data)
-    click.echo(f"Total beads: {bzyx_data.shape[0]}")
+    typer.echo(f"Total beads: {bzyx_data.shape[0]}")
 
     normalized_bzyx_data = (
         bzyx_data / np.max(bzyx_data, axis=(-3, -2, -1))[:, None, None, None]

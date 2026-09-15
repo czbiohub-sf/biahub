@@ -1,9 +1,10 @@
 from pathlib import Path
+from typing import Annotated
 
 import ants
-import click
 import napari
 import numpy as np
+import typer
 
 from iohub import open_ome_zarr
 from numpy.typing import ArrayLike
@@ -11,12 +12,12 @@ from skimage.transform import EuclideanTransform, SimilarityTransform
 from waveorder.focus import focus_from_transverse_band
 
 from biahub.cli.parsing import (
-    config_filepath,
+    ConfigFilepath,
+    OutputFilepath,
+    SbatchFilepath,
+    SourcePositionDirpaths,
+    TargetPositionDirpaths,
     local,
-    output_filepath,
-    sbatch_filepath,
-    source_position_dirpaths,
-    target_position_dirpaths,
 )
 from biahub.registration.utils import (
     convert_transform_to_ants,
@@ -138,25 +139,25 @@ def user_assisted_registration(
     )
 
     if source_channel_focus_idx not in (0, source_channel_Z - 1):
-        click.echo(f"Best source channel focus slice: {source_channel_focus_idx}")
+        typer.echo(f"Best source channel focus slice: {source_channel_focus_idx}")
     else:
         source_channel_focus_idx = source_channel_Z // 2
-        click.echo(
+        typer.echo(
             f"Could not determine best source channel focus slice, using {source_channel_focus_idx}"
         )
 
     if target_channel_focus_idx not in (0, target_channel_Z - 1):
-        click.echo(f"Best target channel focus slice: {target_channel_focus_idx}")
+        typer.echo(f"Best target channel focus slice: {target_channel_focus_idx}")
     else:
         target_channel_focus_idx = target_channel_Z // 2
-        click.echo(
+        typer.echo(
             f"Could not determine best target channel focus slice, using {target_channel_focus_idx}"
         )
 
     # Calculate scaling factors for displaying data
     scaling_factor_z = source_channel_voxel_size[-3] / target_channel_voxel_size[-3]
     scaling_factor_yx = source_channel_voxel_size[-1] / target_channel_voxel_size[-1]
-    click.echo(
+    typer.echo(
         f"Z scaling factor: {scaling_factor_z:.3f}; XY scaling factor: {scaling_factor_yx:.3f}\n"
     )
 
@@ -333,7 +334,7 @@ def user_assisted_registration(
         source_zyx_ants, reference=target_zyx_ants
     )
 
-    click.echo("\nShowing registered source image in magenta")
+    typer.echo("\nShowing registered source image in magenta")
     viewer.grid.enabled = False
     viewer.add_image(
         source_zxy_manual_reg.numpy(),
@@ -348,7 +349,7 @@ def user_assisted_registration(
 
     # Ants affine transforms
     tform = convert_transform_to_numpy(tx_manual)
-    click.echo(f"Estimated affine transformation matrix:\n{tform}\n")
+    typer.echo(f"Estimated affine transformation matrix:\n{tform}\n")
     input("Press <Enter> to close the viewer and exit...")
     viewer.close()
 
@@ -396,7 +397,7 @@ def estimate_registration(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     settings = yaml_to_model(config_filepath, EstimateRegistrationSettings)
-    click.echo(f"Settings: {settings}")
+    typer.echo(f"Settings: {settings}")
 
     target_channel_name = settings.target_channel_name
     source_channel_name = settings.source_channel_name
@@ -407,8 +408,8 @@ def estimate_registration(
     if len(registration_source_channels) == 0:
         registration_source_channels = [source_channel_name]
 
-    click.echo(f"Target channel: {target_channel_name}")
-    click.echo(f"Source channel: {source_channel_name}")
+    typer.echo(f"Target channel: {target_channel_name}")
+    typer.echo(f"Source channel: {source_channel_name}")
 
     with open_ome_zarr(source_position_dirpaths[0], mode="r") as source_channel_position:
         source_channels = source_channel_position.channel_names
@@ -494,7 +495,7 @@ def estimate_registration(
 
     if len(transforms) == 1:
         if eval_transform_settings:
-            click.echo("One transform was estimated, no need to evaluate")
+            typer.echo("One transform was estimated, no need to evaluate")
         transform = transforms[0]
         model = RegistrationSettings(
             source_channel_names=registration_source_channels,
@@ -533,40 +534,41 @@ def estimate_registration(
 
     model_to_yaml(model, output_filepath)
 
-    click.echo(f"Registration settings saved to {output_dir.resolve()}")
+    typer.echo(f"Registration settings saved to {output_dir.resolve()}")
 
 
-@click.command("estimate-registration")
-@source_position_dirpaths()
-@target_position_dirpaths()
-@output_filepath()
-@config_filepath()
-@sbatch_filepath()
-@local()
-@click.option(
-    "--registration-target-channel",
-    "-rt",
-    type=str,
-    help="Name of the target channel to be used when registration params are applied. If not provided, the target channel from the config file will be used.",
-    required=False,
-)
-@click.option(
-    "--registration-source-channel",
-    "-rs",
-    type=str,
-    multiple=True,
-    help="Name of the source channels to be used when registration params are applied. May be passed multiple times. If not provided, the source channels from the config file will be used.",
-    required=False,
-)
 def estimate_registration_cli(
-    source_position_dirpaths: list[str],
-    target_position_dirpaths: list[str],
-    output_filepath: str,
-    config_filepath: Path,
-    registration_target_channel: str,
-    registration_source_channel: list[str],
-    sbatch_filepath: str = None,
-    local: bool = False,
+    source_position_dirpaths: SourcePositionDirpaths,
+    target_position_dirpaths: TargetPositionDirpaths,
+    output_filepath: OutputFilepath,
+    config_filepath: ConfigFilepath,
+    sbatch_filepath: SbatchFilepath = None,
+    local: local = False,
+    *,
+    registration_target_channel: Annotated[
+        str | None,
+        typer.Option(
+            "--registration-target-channel",
+            "-rt",
+            help=(
+                "Name of the target channel to be used when registration params are "
+                "applied. If not provided, the target channel from the config file will be used."
+            ),
+        ),
+    ] = None,
+    registration_source_channel: Annotated[
+        list[str],
+        typer.Option(
+            "--registration-source-channel",
+            "-rs",
+            default_factory=list,
+            help=(
+                "Name of the source channels to be used when registration params are applied. "
+                "May be passed multiple times. If not provided, the source channels from the "
+                "config file will be used."
+            ),
+        ),
+    ],
 ):
     """Estimate the affine transformation between a source and target image for registration.
 
@@ -598,7 +600,3 @@ def estimate_registration_cli(
         sbatch_filepath=sbatch_filepath,
         local=local,
     )
-
-
-if __name__ == "__main__":
-    estimate_registration_cli()

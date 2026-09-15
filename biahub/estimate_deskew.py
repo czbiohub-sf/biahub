@@ -1,20 +1,19 @@
 from dataclasses import asdict
 
-import click
 import napari
 import numpy as np
 import yaml
 
 from iohub.ngff import open_ome_zarr
 
-from biahub.cli.parsing import input_position_dirpaths, output_filepath
+from biahub.cli.parsing import InputPositionDirpaths, OutputFilepath
 from biahub.settings import DeskewSettings
 
 
-@click.command("estimate-deskew")
-@input_position_dirpaths()
-@output_filepath()
-def estimate_deskew_cli(input_position_dirpaths, output_filepath):
+def estimate_deskew_cli(
+    input_position_dirpaths: InputPositionDirpaths,
+    output_filepath: OutputFilepath,
+):
     """Routine for estimating deskewing parameters from calibration data.
 
     >>> biahub estimate-deskew -i ./input.zarr/0/0/0 -o ./deskew_params.yml

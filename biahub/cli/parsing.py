@@ -1,198 +1,196 @@
 import glob
 
-from collections.abc import Callable
 from pathlib import Path
+from typing import Annotated, Literal
 
-import click
+import typer
 
-from iohub.ngff import Plate, open_ome_zarr
+from iohub.cli import OptionEatAll
 from natsort import natsorted
+from typer.core import TyperOption
 
-from biahub.cli.option_eat_all import OptionEatAll
+
+def _eat_all(callback):
+    """Mark options using this callback for greedy parsing."""
+    callback.__biahub_eat_all__ = True
+    return callback
 
 
-def _validate_and_process_paths(
-    ctx: click.Context, opt: click.Option, value: str
-) -> list[Path]:
-    # Sort and validate the input paths
-    input_paths = [p for p in map(Path, natsorted(value)) if p.is_dir()]
+@_eat_all
+def _validate_and_process_paths(value: list[Path]) -> list[Path]:
+    """Sort input positions and reject plate roots."""
+    from iohub.ngff import Plate, open_ome_zarr
+
+    input_paths = [path for path in natsorted(value) if path.is_dir()]
     with open_ome_zarr(input_paths[0], mode="r") as dataset:
         if isinstance(dataset, Plate):
             raise ValueError(
-                "Please supply a single position instead of an HCS plate. Likely fix: replace 'input.zarr' with 'input.zarr/0/0/0'"
+                "Please supply a single position instead of an HCS plate. Likely fix: "
+                "replace 'input.zarr' with 'input.zarr/0/0/0'"
             )
     return input_paths
 
 
-def _str_to_path(ctx: click.Context, opt: click.Option, value: str) -> Path:
-    return Path(value)
-
-
-def _validate_and_process_config_paths(ctx, opt, value: tuple[str, ...]) -> list[Path]:
+@_eat_all
+def _validate_and_process_config_paths(value: list[Path]) -> list[Path]:
     matched_paths = []
     for pattern in value:
-        expanded = glob.glob(pattern)
+        expanded = glob.glob(str(pattern))
         if not expanded:
-            raise click.BadParameter(f"No files matched pattern: {pattern}")
+            raise typer.BadParameter(f"No files matched pattern: {pattern}")
         matched_paths.extend(expanded)
 
     validated = []
     for p in natsorted(map(Path, matched_paths)):
         if not p.exists():
-            raise click.BadParameter(f"Path does not exist: {p}")
+            raise typer.BadParameter(f"Path does not exist: {p}")
         if not p.is_file():
-            raise click.BadParameter(f"Expected a file, not a directory: {p}")
+            raise typer.BadParameter(f"Expected a file, not a directory: {p}")
         if p.suffix.lower() not in [".yml", ".yaml"]:
-            raise click.BadParameter(f"Expected a .yml file, got: {p}")
+            raise typer.BadParameter(f"Expected a .yml file, got: {p}")
         validated.append(p)
     return validated
 
 
-def input_position_dirpaths() -> Callable:
-    def decorator(f: Callable) -> Callable:
-        return click.option(
-            "--input-position-dirpaths",
-            "-i",
-            required=True,
-            cls=OptionEatAll,
-            type=tuple,
-            callback=_validate_and_process_paths,
-            help='Paths to input positions, for example: "input.zarr/0/0/0", "input.zarr/0/0/[0-9]", or "input.zarr/*/*/*"',
-        )(f)
+InputPositionDirpaths = Annotated[
+    list[Path],
+    typer.Option(
+        "--input-position-dirpaths",
+        "-i",
+        callback=_validate_and_process_paths,
+        help=(
+            'Paths to input positions, for example: "input.zarr/0/0/0", '
+            '"input.zarr/0/0/[0-9]", or "input.zarr/*/*/*"'
+        ),
+    ),
+]
 
-    return decorator
+SourcePositionDirpaths = Annotated[
+    list[Path],
+    typer.Option(
+        "--source-position-dirpaths",
+        "-s",
+        callback=_validate_and_process_paths,
+        help=(
+            'Paths to source positions, for example: "source.zarr/0/0/0" '
+            'or "source.zarr/*/*/*"'
+        ),
+    ),
+]
 
+TargetPositionDirpaths = Annotated[
+    list[Path],
+    typer.Option(
+        "--target-position-dirpaths",
+        "-t",
+        callback=_validate_and_process_paths,
+        help=(
+            'Paths to target positions, for example: "target.zarr/0/0/0" '
+            'or "target.zarr/*/*/*"'
+        ),
+    ),
+]
 
-def source_position_dirpaths() -> Callable:
-    def decorator(f: Callable) -> Callable:
-        return click.option(
-            "--source-position-dirpaths",
-            "-s",
-            required=True,
-            cls=OptionEatAll,
-            type=tuple,
-            callback=_validate_and_process_paths,
-            help='Paths to source positions, for example: "source.zarr/0/0/0" or "source.zarr/*/*/*"',
-        )(f)
+ConfigFilepaths = Annotated[
+    list[Path],
+    typer.Option(
+        "--config-filepaths",
+        "-c",
+        callback=_validate_and_process_config_paths,
+        help="Paths to YAML configuration files. All must be existing files with .yml extension.",
+    ),
+]
 
-    return decorator
+ConfigFilepath = Annotated[
+    Path,
+    typer.Option(
+        "--config-filepath",
+        "-c",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        help="Path to YAML configuration file.",
+    ),
+]
 
+OutputDirpath = Annotated[
+    Path,
+    typer.Option(
+        "--output-dirpath",
+        "-o",
+        file_okay=False,
+        dir_okay=True,
+        help="Path to output directory",
+    ),
+]
 
-def target_position_dirpaths() -> Callable:
-    def decorator(f: Callable) -> Callable:
-        return click.option(
-            "--target-position-dirpaths",
-            "-t",
-            required=True,
-            cls=OptionEatAll,
-            type=tuple,
-            callback=_validate_and_process_paths,
-            help='Paths to target positions, for example: "target.zarr/0/0/0" or "target.zarr/*/*/*"',
-        )(f)
+OutputFilepath = Annotated[
+    Path,
+    typer.Option(
+        "--output-filepath",
+        "-o",
+        file_okay=True,
+        dir_okay=False,
+        help="Path to output file",
+    ),
+]
 
-    return decorator
+SbatchFilepath = Annotated[
+    Path | None,
+    typer.Option(
+        "--sbatch-filepath",
+        "-sb",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        help=(
+            "SBATCH filepath that contains slurm parameters to overwrite defaults. "
+            "For example, '#SBATCH --mem-per-cpu=16G' will override the default memory per CPU."
+        ),
+    ),
+]
 
+SbatchFilepathPreprocess = Annotated[
+    Path | None,
+    typer.Option(
+        "--sbatch-filepath-preprocess",
+        "-sb-preprocess",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        help=(
+            "SBATCH filepath that contains slurm parameters to overwrite defaults. "
+            "For example, '#SBATCH --mem-per-cpu=16G' will override the default memory per CPU."
+        ),
+    ),
+]
 
-def config_filepaths() -> Callable:
-    def decorator(f: Callable) -> Callable:
-        return click.option(
-            "--config-filepaths",
-            "-c",
-            required=True,
-            cls=OptionEatAll,
-            type=tuple,
-            callback=_validate_and_process_config_paths,
-            help=(
-                "Paths to YAML configuration files. "
-                "All must be existing files with .yml extension."
-            ),
-        )(f)
-
-    return decorator
-
-
-def config_filepath() -> Callable:
-    def decorator(f: Callable) -> Callable:
-        return click.option(
-            "--config-filepath",
-            "-c",
-            required=True,
-            type=click.Path(exists=True, file_okay=True, dir_okay=False),
-            callback=_str_to_path,
-            help="Path to YAML configuration file.",
-        )(f)
-
-    return decorator
-
-
-def output_dirpath() -> Callable:
-    def decorator(f: Callable) -> Callable:
-        return click.option(
-            "--output-dirpath",
-            "-o",
-            required=True,
-            type=click.Path(exists=False, file_okay=False, dir_okay=True),
-            help="Path to output directory",
-            callback=_str_to_path,
-        )(f)
-
-    return decorator
-
-
-def output_filepath() -> Callable:
-    def decorator(f: Callable) -> Callable:
-        return click.option(
-            "--output-filepath",
-            "-o",
-            required=True,
-            type=click.Path(exists=False, file_okay=True, dir_okay=False),
-            callback=_str_to_path,
-            help="Path to output file",
-        )(f)
-
-    return decorator
-
-
-def sbatch_filepath() -> Callable:
-    def decorator(f: Callable) -> Callable:
-        return click.option(
-            "--sbatch-filepath",
-            "-sb",
-            default=None,
-            type=click.Path(exists=True, file_okay=True, dir_okay=False),
-            help="SBATCH filepath that contains slurm parameters to overwrite defaults. "
-            "For example, '#SBATCH --mem-per-cpu=16G' will override the default memory per CPU.",
-        )(f)
-
-    return decorator
-
-
-def sbatch_filepath_preprocess() -> Callable:
-    def decorator(f: Callable) -> Callable:
-        return click.option(
-            "--sbatch-filepath-preprocess",
-            "-sb-preprocess",
-            default=None,
-            type=click.Path(exists=True, file_okay=True, dir_okay=False),
-            help="SBATCH filepath that contains slurm parameters to overwrite defaults. "
-            "For example, '#SBATCH --mem-per-cpu=16G' will override the default memory per CPU.",
-        )(f)
-
-    return decorator
+SbatchFilepathPredict = Annotated[
+    Path | None,
+    typer.Option(
+        "--sbatch-filepath-predict",
+        "-sb-predict",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        help=(
+            "SBATCH filepath that contains slurm parameters to overwrite defaults. "
+            "For example, '#SBATCH --mem-per-cpu=16G' will override the default memory per CPU."
+        ),
+    ),
+]
 
 
-def sbatch_filepath_predict() -> Callable:
-    def decorator(f: Callable) -> Callable:
-        return click.option(
-            "--sbatch-filepath-predict",
-            "-sb-predict",
-            default=None,
-            type=click.Path(exists=True, file_okay=True, dir_okay=False),
-            help="SBATCH filepath that contains slurm parameters to overwrite defaults. "
-            "For example, '#SBATCH --mem-per-cpu=16G' will override the default memory per CPU.",
-        )(f)
-
-    return decorator
+def install_eat_all_options(command) -> None:
+    """Install greedy parsing on explicitly marked list options."""
+    for param in command.params:
+        if (
+            isinstance(param, TyperOption)
+            and param.multiple
+            and param.callback is not None
+            and getattr(param.callback, "__biahub_eat_all__", False)
+        ):
+            param.__class__ = OptionEatAll
 
 
 def sbatch_to_submitit(filepath: str) -> dict:
@@ -249,90 +247,66 @@ def sbatch_to_submitit(filepath: str) -> dict:
     return sbatch_dict
 
 
-def local() -> Callable:
-    def decorator(f: Callable) -> Callable:
-        return click.option(
-            "--local",
-            "-l",
-            is_flag=True,
-            default=False,
-            help="Run jobs locally instead of submitting to SLURM.",
-        )(f)
+local = Annotated[
+    bool,
+    typer.Option(
+        "--local",
+        "-l",
+        help="Run jobs locally instead of submitting to SLURM.",
+    ),
+]
 
-    return decorator
+cluster = Annotated[
+    Literal["slurm", "local", "debug"],
+    typer.Option(
+        "--cluster",
+        case_sensitive=False,
+        show_default=True,
+        help=(
+            "Execution cluster: 'slurm' submits to a Slurm cluster, "
+            "'local' runs jobs as subprocesses on this machine, "
+            "'debug' runs jobs in-process in the foreground."
+        ),
+    ),
+]
 
+init_only = Annotated[
+    bool,
+    typer.Option(
+        "--init",
+        help="Only initialize the output store and exit; skip per-position processing.",
+    ),
+]
 
-def cluster() -> Callable:
-    def decorator(f: Callable) -> Callable:
-        return click.option(
-            "--cluster",
-            type=click.Choice(["slurm", "local", "debug"], case_sensitive=False),
-            default="slurm",
-            show_default=True,
-            help=(
-                "Execution cluster: 'slurm' submits to a Slurm cluster, "
-                "'local' runs jobs as subprocesses on this machine, "
-                "'debug' runs jobs in-process in the foreground."
-            ),
-        )(f)
+monitor = Annotated[
+    bool,
+    typer.Option(
+        "--monitor",
+        "-m",
+        help="Monitor of submitted SLURM jobs.",
+    ),
+]
 
-    return decorator
+resume = Annotated[
+    bool,
+    typer.Option(
+        "--resume/--no-resume",
+        show_default=True,
+        help=(
+            "Skip the (time, channel) units this position already finished in an "
+            "earlier attempt instead of recomputing the whole position. For retrying "
+            "a run that was interrupted, e.g. by Slurm preemption. A finished unit is "
+            "skipped without re-deriving it, so pass --no-resume (or use a fresh "
+            "output store) when the settings changed."
+        ),
+    ),
+]
 
-
-def init_only() -> Callable:
-    def decorator(f: Callable) -> Callable:
-        return click.option(
-            "--init",
-            "init_only",
-            is_flag=True,
-            default=False,
-            help="Only initialize the output store and exit; skip per-position processing.",
-        )(f)
-
-    return decorator
-
-
-def monitor() -> Callable:
-    def decorator(f: Callable) -> Callable:
-        return click.option(
-            "--monitor",
-            "-m",
-            is_flag=True,
-            default=False,
-            help="Monitor of submitted SLURM jobs.",
-        )(f)
-
-    return decorator
-
-
-def resume() -> Callable:
-    def decorator(f: Callable) -> Callable:
-        return click.option(
-            "--resume/--no-resume",
-            "resume",
-            default=False,
-            show_default=True,
-            help=(
-                "Skip the (time, channel) units this position already finished in an "
-                "earlier attempt instead of recomputing the whole position. For retrying "
-                "a run that was interrupted, e.g. by Slurm preemption. A finished unit is "
-                "skipped without re-deriving it, so pass --no-resume (or use a fresh "
-                "output store) when the settings changed."
-            ),
-        )(f)
-
-    return decorator
-
-
-def num_processes() -> Callable:
-    def decorator(f: Callable) -> Callable:
-        return click.option(
-            "--num-processes",
-            "-j",
-            default=1,
-            help="Number of parallel processes",
-            required=False,
-            type=int,
-        )(f)
-
-    return decorator
+num_processes = Annotated[
+    int,
+    typer.Option(
+        "--num-processes",
+        "-j",
+        help="Number of parallel processes",
+    ),
+]

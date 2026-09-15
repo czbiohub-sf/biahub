@@ -2,10 +2,10 @@ import numpy as np
 import pytest
 import yaml
 
-from click.testing import CliRunner
 from iohub.ngff import open_ome_zarr
+from typer.testing import CliRunner
 
-from biahub.cli.main import cli
+from biahub.cli.main import app
 
 
 @pytest.fixture()
@@ -21,7 +21,7 @@ def test_flat_field_cli(tmp_path, example_plate, flat_field_config, sbatch_file)
 
     runner = CliRunner()
     result = runner.invoke(
-        cli,
+        app,
         [
             "flat-field",
             "-i",
@@ -49,7 +49,7 @@ def test_flat_field_cli_init_only(tmp_path, example_plate, flat_field_config):
 
     runner = CliRunner()
     result = runner.invoke(
-        cli,
+        app,
         [
             "flat-field",
             "-i",
@@ -75,7 +75,7 @@ def test_flat_field_cli_debug_single_position(tmp_path, example_plate, flat_fiel
 
     runner = CliRunner()
     result = runner.invoke(
-        cli,
+        app,
         [
             "flat-field",
             "-i",
@@ -97,3 +97,28 @@ def test_flat_field_cli_debug_single_position(tmp_path, example_plate, flat_fiel
         data = ds["0"][:]
         assert data.dtype == np.float32
         assert data.shape[0] > 0
+
+
+def test_flat_field_invalid_channel_is_a_clean_cli_error(tmp_path, example_plate):
+    plate_path, _ = example_plate
+    config_path = tmp_path / "invalid_flat_field.yml"
+    config_path.write_text(yaml.dump({"channel_names": ["missing"]}))
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "flat-field",
+            "-i",
+            str(plate_path / "A" / "1" / "0"),
+            "-c",
+            str(config_path),
+            "-o",
+            str(tmp_path / "output.zarr"),
+            "--cluster",
+            "debug",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Error: Channel 'missing' not found" in result.stderr
+    assert "Traceback" not in result.output

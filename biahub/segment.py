@@ -1,20 +1,20 @@
 from pathlib import Path
 
-import click
 import numpy as np
 import submitit
+import typer
 
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate, process_single_position
 
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
-    config_filepath,
-    input_position_dirpaths,
+    ConfigFilepath,
+    InputPositionDirpaths,
+    OutputDirpath,
+    SbatchFilepath,
     local,
     monitor,
-    output_dirpath,
-    sbatch_filepath,
     sbatch_to_submitit,
 )
 from biahub.settings import SegmentationSettings
@@ -49,14 +49,14 @@ def segment_data(
     # Every job this step submits asks SLURM for a GPU, so an unusable one is a
     # broken allocation, not a reason to fall back to a ~130x slower CPU run.
     device = cellpose_device(gpu)
-    click.echo(f"Using device: {device}")
+    typer.echo(f"Using device: {device}")
 
     from cellpose import models
 
     czyx_segmentation = []
     # Process each model in a loop
     for model_name, model_args in segmentation_models.items():
-        click.echo(f"Segmenting with model {model_name}")
+        typer.echo(f"Segmenting with model {model_name}")
         z_slice_2D = model_args.z_slice_2D
         czyx_data_to_segment = (
             czyx_data[:, z_slice_2D : z_slice_2D + 1] if z_slice_2D is not None else czyx_data
@@ -72,7 +72,7 @@ def segment_data(
             if "out_range" in kwargs and isinstance(kwargs["out_range"], list):
                 kwargs["out_range"] = tuple(kwargs["out_range"])
 
-            click.echo(
+            typer.echo(
                 f"Processing with {func.__name__} with kwargs {kwargs} to channel {c_idx}"
             )
             czyx_data[c_idx] = func(czyx_data[c_idx], **kwargs)
@@ -92,20 +92,13 @@ def segment_data(
     return czyx_segmentation
 
 
-@click.command("segment")
-@input_position_dirpaths()
-@config_filepath()
-@output_dirpath()
-@sbatch_filepath()
-@local()
-@monitor()
 def segment_cli(
-    input_position_dirpaths: list[str],
-    config_filepath: Path,
-    output_dirpath: str,
-    sbatch_filepath: str | None = None,
-    local: bool = False,
-    monitor: bool = True,
+    input_position_dirpaths: InputPositionDirpaths,
+    config_filepath: ConfigFilepath,
+    output_dirpath: OutputDirpath,
+    sbatch_filepath: SbatchFilepath = None,
+    local: local = False,
+    monitor: monitor = False,
 ):
     """Segment a single position across T axes using the configuration file.
 
@@ -155,7 +148,7 @@ def segment_cli(
         if len(model_args.eval_args["channels"]) < 2:
             model_args.eval_args["channels"].append(0)
 
-        click.echo(
+        typer.echo(
             f"Segmenting with model {model_name} using channels {model_args.eval_args['channels']}"
         )
         if (
@@ -164,11 +157,11 @@ def segment_cli(
         ):
             # Using dataset anisotropy
             model_args.eval_args["anisotropy"] = scale[-3] / scale[-1]
-            click.echo(
+            typer.echo(
                 f"Using anisotropy from scale metadata: {model_args.eval_args['anisotropy']}"
             )
         else:
-            click.echo(
+            typer.echo(
                 f"Using anisotropy from the config: {model_args.eval_args['anisotropy']}"
             )
 
@@ -220,7 +213,7 @@ def segment_cli(
     cluster = get_submitit_cluster(local)
 
     # Prepare and submit jobs
-    click.echo(f"Preparing jobs: {slurm_args}")
+    typer.echo(f"Preparing jobs: {slurm_args}")
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
 
@@ -244,7 +237,3 @@ def segment_cli(
 
     if monitor:
         monitor_jobs(jobs, input_position_dirpaths)
-
-
-if __name__ == "__main__":
-    segment_cli()

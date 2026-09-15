@@ -2,21 +2,21 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal
 
-import click
 import numpy as np
 import submitit
+import typer
 
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate, process_single_position
 
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
-    config_filepath,
-    input_position_dirpaths,
+    ConfigFilepath,
+    InputPositionDirpaths,
+    OutputDirpath,
+    SbatchFilepath,
     local,
     monitor,
-    output_dirpath,
-    sbatch_filepath,
     sbatch_to_submitit,
 )
 from biahub.cli.resolve_function import resolve_function
@@ -137,7 +137,7 @@ def process_czyx(
         else:
             raise ValueError("Only one input channel is supported for now")
 
-        click.echo(f"Processing with {func.__name__} with kwargs {kwargs} to channel {c_idx}")
+        typer.echo(f"Processing with {func.__name__} with kwargs {kwargs} to channel {c_idx}")
         czyx_data = func(czyx_data, **kwargs)
 
     return czyx_data
@@ -216,7 +216,7 @@ def process_with_config(
         for proc in settings.processing_functions:
             if proc.function == "biahub.process_data.binning_czyx":
                 binning_factor = proc.kwargs.get("binning_factor_zyx", (1, 4, 4))
-                click.echo(f"Binning factor: {binning_factor}")
+                typer.echo(f"Binning factor: {binning_factor}")
                 break
 
         # Calculate new dimensions after binning
@@ -285,7 +285,7 @@ def process_with_config(
     cluster = get_submitit_cluster(local)
 
     # Prepare and submit jobs
-    click.echo(f"Preparing jobs: {slurm_args}")
+    typer.echo(f"Preparing jobs: {slurm_args}")
     slurm_out_path = output_dirpath.parent / "slurm_output"
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
@@ -317,20 +317,13 @@ def process_with_config(
         monitor_jobs(jobs, input_position_dirpaths)
 
 
-@click.command("process-with-config")
-@input_position_dirpaths()
-@config_filepath()
-@output_dirpath()
-@sbatch_filepath()
-@local()
-@monitor()
 def process_with_config_cli(
-    input_position_dirpaths: Sequence[Path],
-    config_filepath: Path,
-    output_dirpath: Path,
-    sbatch_filepath: Path | None = None,
-    local: bool = False,
-    monitor: bool = True,
+    input_position_dirpaths: InputPositionDirpaths,
+    config_filepath: ConfigFilepath,
+    output_dirpath: OutputDirpath,
+    sbatch_filepath: SbatchFilepath = None,
+    local: local = False,
+    monitor: monitor = False,
 ) -> None:
     """Process data with functions specified in the config file.
 
@@ -347,7 +340,3 @@ def process_with_config_cli(
         local=local,
         monitor=monitor,
     )
-
-
-if __name__ == "__main__":
-    process_with_config_cli()

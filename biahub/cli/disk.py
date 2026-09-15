@@ -6,8 +6,9 @@ import warnings
 
 from datetime import datetime
 from pathlib import Path
+from typing import Annotated
 
-import click
+import typer
 
 from humanize import naturalsize
 
@@ -71,11 +72,11 @@ def check_disk_space_with_du(
         required_space_human = naturalsize(required_space, binary=True)
         available_space_human = naturalsize(available_space, binary=True)
 
-        click.echo("...........................................")
-        click.echo(f"Input Size: {input_size_human}")
-        click.echo(f"Estimated Ouput Size ({margin:.3f}x): {required_space_human}")
-        click.echo(f"Available Space: {available_space_human}")
-        click.echo("...........................................")
+        typer.echo("...........................................")
+        typer.echo(f"Input Size: {input_size_human}")
+        typer.echo(f"Estimated Ouput Size ({margin:.3f}x): {required_space_human}")
+        typer.echo(f"Available Space: {available_space_human}")
+        typer.echo("...........................................")
         # save as a txt file wih datetime
         report_path = (
             Path(output_path)
@@ -90,34 +91,39 @@ def check_disk_space_with_du(
     return available_space >= required_space
 
 
-@click.command("check-disk-space")
-@click.option(
-    "--input-path",
-    "-i",
-    type=str,
-    required=True,
-    help="Path to SLURM log directory.",
-)
-@click.option(
-    "--output-path",
-    "-o",
-    type=str,
-    required=True,
-    help="Output directory for the report CSV file.",
-)
-@click.option(
-    "--margin",
-    type=float,
-    default=1.1,
-    help="Safety margin for disk space check (default: 1.1, i.e., 10% extra space).",
-)
-@click.option(
-    "--verbose",
-    is_flag=True,
-    default=True,
-    help="Print detailed diagnostics.",
-)
-def check_disk_space_cli(input_path: str, output_path: str, margin: float, verbose: bool):
+cli = typer.Typer(add_completion=False)
+
+
+@cli.command("check-disk-space")
+def check_disk_space_cli(
+    input_path: Annotated[
+        str,
+        typer.Option(
+            "--input-path",
+            "-i",
+            help="Path to SLURM log directory.",
+        ),
+    ],
+    output_path: Annotated[
+        str,
+        typer.Option(
+            "--output-path",
+            "-o",
+            help="Output directory for the report CSV file.",
+        ),
+    ],
+    margin: Annotated[
+        float,
+        typer.Option(
+            "--margin",
+            help="Safety margin for disk space check (default: 1.1, i.e., 10% extra space).",
+        ),
+    ] = 1.1,
+    verbose: Annotated[
+        bool,
+        typer.Option("--verbose", help="Print detailed diagnostics."),
+    ] = True,
+):
     """Check disk space using `du -sb`.
 
     >>> biahub check-disk-space -i ./input.zarr -o ./output.zarr
@@ -129,10 +135,10 @@ def check_disk_space_cli(input_path: str, output_path: str, margin: float, verbo
         verbose=verbose,
     )
     if enough_space:
-        click.echo("Disk space check passed. Good to go!")
+        typer.echo("Disk space check passed. Good to go!")
     else:
-        click.echo("Disk space check failed. Not enough space available.")
+        typer.echo("Disk space check failed. Not enough space available.")
 
 
 if __name__ == "__main__":
-    check_disk_space_cli()
+    cli()

@@ -4,23 +4,23 @@ import time
 from pathlib import Path
 from typing import Literal
 
-import click
 import numpy as np
 import submitit
 import torch
+import typer
 
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate
 
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
+    ConfigFilepath,
+    InputPositionDirpaths,
+    OutputDirpath,
+    SbatchFilepath,
     cluster,
-    config_filepath,
     init_only,
-    input_position_dirpaths,
     monitor,
-    output_dirpath,
-    sbatch_filepath,
     sbatch_to_submitit,
 )
 from biahub.utils.cluster import echo_resources, estimate_resources, get_submitit_cluster
@@ -132,7 +132,7 @@ def virtual_stain_position(
     device = torch.device(
         cfg.device if (cfg.device == "cpu" or torch.cuda.is_available()) else "cpu"
     )
-    click.echo(f"[{position_name}] Starting virtual staining on device '{device}'")
+    typer.echo(f"[{position_name}] Starting virtual staining on device '{device}'")
 
     # Instantiate the VSUNet and the data module from VisCy's own classes.
     # Route the top-level ckpt_path into the model's init args so VSUNet loads
@@ -143,7 +143,7 @@ def virtual_stain_position(
     instances = parser.instantiate(cfg)
     vsunet = instances.model
     vsunet.eval().to(device)
-    click.echo(f"[{position_name}] Loaded checkpoint: {cfg.ckpt_path}")
+    typer.echo(f"[{position_name}] Loaded checkpoint: {cfg.ckpt_path}")
 
     # Test-time augmentation: reuse VisCy's rotation-TTA helper, which is
     # correct for non-square FOVs. Defaults follow the config's model flags.
@@ -154,12 +154,12 @@ def virtual_stain_position(
         predictor = AugmentedPredictionVSUNet.with_rotation_tta(
             vsunet.model, reduction=reduction
         )
-        click.echo(
+        typer.echo(
             f"[{position_name}] Test-time augmentation: on ({reduction} over 4 rotations)"
         )
     else:
         predictor = AugmentedPredictionVSUNet(model=vsunet.model)
-        click.echo(f"[{position_name}] Test-time augmentation: off")
+        typer.echo(f"[{position_name}] Test-time augmentation: off")
     predictor = predictor.eval().to(device)
 
     # Normalization: reuse the configured NormalizeSampled transforms directly.
@@ -195,7 +195,7 @@ def virtual_stain_position(
         # for even one window (predict_sliding_windows then raises).
         z_window_depth = getattr(vsunet.model, "out_stack_depth", None)
         n_windows = max(0, (Z - z_window_depth) // step + 1) if z_window_depth else "?"
-        click.echo(
+        typer.echo(
             f"[{position_name}] {T} timepoints, volume (Z,Y,X)=({Z},{Y},{X}), "
             f"'{source_channel}' -> {target_channels}, "
             f"{n_windows} sliding windows/timepoint (step={step})"
@@ -217,12 +217,12 @@ def virtual_stain_position(
                         source, out_channel=out_channel, step=step
                     )
                 output_dataset.data[t] = prediction[0].cpu().numpy()
-                click.echo(
+                typer.echo(
                     f"[{position_name}] timepoint {t + 1}/{T} done "
                     f"({time.perf_counter() - t_start:.1f}s)"
                 )
 
-    click.echo(
+    typer.echo(
         f"[{position_name}] Completed {T} timepoints in "
         f"{time.perf_counter() - position_start:.1f}s -> {output_position_path}"
     )
@@ -382,7 +382,7 @@ def virtual_stain(
     echo_resources(num_cpus, mem_gb, time_minutes)
 
     if init_only:
-        click.echo(f"Initialized {output_dirpath} ({len(input_position_dirpaths)} positions)")
+        typer.echo(f"Initialized {output_dirpath} ({len(input_position_dirpaths)} positions)")
         return
 
     output_position_paths = get_output_paths(input_position_dirpaths, output_dirpath)
@@ -403,11 +403,11 @@ def virtual_stain(
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
     resolved_cluster = get_submitit_cluster(cluster=cluster)
-    click.echo(f"Preparing jobs on cluster='{resolved_cluster}': {slurm_args}")
+    typer.echo(f"Preparing jobs on cluster='{resolved_cluster}': {slurm_args}")
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=resolved_cluster)
     executor.update_parameters(**slurm_args)
 
-    click.echo("Submitting jobs...")
+    typer.echo("Submitting jobs...")
     jobs = []
     with submitit.helpers.clean_env(), executor.batch():
         for input_position_path, output_position_path in zip(
@@ -436,29 +436,21 @@ def virtual_stain(
     if resolved_cluster == "debug":
         for job, path in zip(jobs, input_position_dirpaths, strict=True):
             job.wait()
-            click.echo(f"Virtual staining complete: {path}")
+            typer.echo(f"Virtual staining complete: {path}")
         return
 
     if monitor:
         monitor_jobs(jobs, input_position_dirpaths)
 
 
-@click.command("virtual-stain")
-@input_position_dirpaths()
-@config_filepath()
-@output_dirpath()
-@sbatch_filepath()
-@cluster()
-@monitor()
-@init_only()
 def virtual_stain_cli(
-    input_position_dirpaths: list[Path],
-    config_filepath: Path,
-    output_dirpath: Path,
-    sbatch_filepath: str | None = None,
-    cluster: str = "slurm",
-    monitor: bool = False,
-    init_only: bool = False,
+    input_position_dirpaths: InputPositionDirpaths,
+    config_filepath: ConfigFilepath,
+    output_dirpath: OutputDirpath,
+    sbatch_filepath: SbatchFilepath = None,
+    cluster: cluster = "slurm",
+    monitor: monitor = False,
+    init_only: init_only = False,
 ):
     """Virtually stain a label-free dataset using a cytoland (VisCy) model.
 
@@ -487,7 +479,3 @@ def virtual_stain_cli(
         monitor=monitor,
         init_only=init_only,
     )
-
-
-if __name__ == "__main__":
-    virtual_stain_cli()

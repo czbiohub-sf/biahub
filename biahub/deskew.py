@@ -3,11 +3,11 @@ import warnings
 from pathlib import Path
 from typing import Literal
 
-import click
 import numpy as np
 import submitit
 import torch
 import torch.nn.functional as F  # noqa: N812
+import typer
 
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate, process_single_position
@@ -16,14 +16,14 @@ from scipy.ndimage import binary_dilation
 
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
+    ConfigFilepath,
+    InputPositionDirpaths,
+    OutputDirpath,
+    SbatchFilepath,
     cluster,
-    config_filepath,
     init_only,
-    input_position_dirpaths,
     monitor,
-    output_dirpath,
     resume,
-    sbatch_filepath,
     sbatch_to_submitit,
 )
 from biahub.settings import DeskewSettings
@@ -697,7 +697,7 @@ def deskew(
     echo_resources(num_cpus, mem_gb, time_minutes)
 
     if init_only:
-        click.echo(f"Initialized {output_dirpath} ({len(input_position_dirpaths)} positions)")
+        typer.echo(f"Initialized {output_dirpath} ({len(input_position_dirpaths)} positions)")
         return
 
     output_position_paths = get_output_paths(input_position_dirpaths, output_dirpath)
@@ -724,11 +724,11 @@ def deskew(
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
     resolved_cluster = get_submitit_cluster(cluster=cluster)
-    click.echo(f"Preparing jobs on cluster='{resolved_cluster}': {slurm_args}")
+    typer.echo(f"Preparing jobs on cluster='{resolved_cluster}': {slurm_args}")
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=resolved_cluster)
     executor.update_parameters(**slurm_args)
 
-    click.echo("Submitting jobs...")
+    typer.echo("Submitting jobs...")
 
     jobs = []
     with submitit.helpers.clean_env(), executor.batch():
@@ -762,31 +762,22 @@ def deskew(
     if resolved_cluster == "debug":
         for job, path in zip(jobs, input_position_dirpaths, strict=True):
             job.wait()
-            click.echo(f"Deskew complete: {path}")
+            typer.echo(f"Deskew complete: {path}")
         return
 
     if monitor:
         monitor_jobs(jobs, input_position_dirpaths)
 
 
-@click.command("deskew")
-@input_position_dirpaths()
-@config_filepath()
-@output_dirpath()
-@sbatch_filepath()
-@cluster()
-@monitor()
-@init_only()
-@resume()
 def deskew_cli(
-    input_position_dirpaths: list[Path],
-    config_filepath: Path,
-    output_dirpath: Path,
-    sbatch_filepath: str | None = None,
-    cluster: str = "slurm",
-    monitor: bool = False,
-    init_only: bool = False,
-    resume: bool = False,
+    input_position_dirpaths: InputPositionDirpaths,
+    config_filepath: ConfigFilepath,
+    output_dirpath: OutputDirpath,
+    sbatch_filepath: SbatchFilepath = None,
+    cluster: cluster = "slurm",
+    monitor: monitor = False,
+    init_only: init_only = False,
+    resume: resume = False,
 ):
     """Deskew oblique plane light-sheet dataset. Deskew parameters can be estimated with estimate-deskew.
 
@@ -814,7 +805,3 @@ def deskew_cli(
         init_only=init_only,
         resume=resume,
     )
-
-
-if __name__ == "__main__":
-    deskew_cli()

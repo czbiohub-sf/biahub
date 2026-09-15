@@ -1,9 +1,9 @@
 import numpy as np
 
-from click.testing import CliRunner
 from numpy import testing
+from typer.testing import CliRunner
 
-from biahub.cli.main import cli
+from biahub.cli.main import app
 from biahub.register import find_lir, rescale_voxel_size
 
 
@@ -17,7 +17,7 @@ def test_register_cli(
 
     runner = CliRunner()
     result = runner.invoke(
-        cli,
+        app,
         [
             "register",
             "-s",

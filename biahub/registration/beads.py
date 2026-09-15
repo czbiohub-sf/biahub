@@ -31,10 +31,10 @@ from pathlib import Path
 from typing import Literal
 
 import ants
-import click
 import dask.array as da
 import numpy as np
 import submitit
+import typer
 
 from iohub import open_ome_zarr
 from numpy.typing import ArrayLike
@@ -112,7 +112,7 @@ def optimize_matches(
 
     # Apply approximate transform to moving volume and detect peaks once.
     # These peaks are reused for all parameter combinations in the grid search.
-    click.echo("Detecting peaks in approximately registered space for grid search...")
+    typer.echo("Detecting peaks in approximately registered space for grid search...")
     mov_reg_approx = (
         approx_transform.to_ants().apply_to_image(mov_ants, reference=ref_ants).numpy()
     )
@@ -124,10 +124,10 @@ def optimize_matches(
         verbose=False,
     )
     if mov_peaks is None or ref_peaks is None or len(mov_peaks) < 2 or len(ref_peaks) < 2:
-        click.echo("Not enough peaks detected for optimization, returning original settings.")
+        typer.echo("Not enough peaks detected for optimization, returning original settings.")
         return beads_match_settings
 
-    click.echo(
+    typer.echo(
         f"Starting grid search: {len(mov_peaks)} mov peaks, {len(ref_peaks)} ref peaks, "
         f"{np.prod([len(v) for v in param_grid.values()])} parameter combinations."
     )
@@ -217,7 +217,7 @@ def optimize_matches(
                 continue
 
             if verbose:
-                click.echo(f"  {trial_params} -> matches={len(matches)}, score={score:.4f}")
+                typer.echo(f"  {trial_params} -> matches={len(matches)}, score={score:.4f}")
 
             if score > best_score:
                 best_score = score
@@ -225,12 +225,12 @@ def optimize_matches(
 
         except Exception as e:
             if verbose:
-                click.echo(f"  {trial_params} -> failed: {e}")
+                typer.echo(f"  {trial_params} -> failed: {e}")
             continue
 
     if verbose:
-        click.echo(f"Best score: {best_score:.4f}")
-        click.echo(f"Best settings: {best_settings}")
+        typer.echo(f"Best score: {best_score:.4f}")
+        typer.echo(f"Best settings: {best_settings}")
 
     return best_settings
 
@@ -266,7 +266,7 @@ def overlap_score(
         Overlap fraction in [0, 1]. Returns np.nan if either peak set is empty.
     """
     if len(mov_peaks) == 0 or len(ref_peaks) == 0:
-        click.echo("No peaks found, returning nan metrics")
+        typer.echo("No peaks found, returning nan metrics")
         return np.nan
 
     # ---- Overlap counting using KDTree ----
@@ -287,10 +287,10 @@ def overlap_score(
     peaks_overlap_fraction = peaks_overlap_count / max(min(len(mov_peaks), len(ref_peaks)), 1)
 
     if verbose:
-        click.echo(f"Mov peaks: {len(mov_peaks)}")
-        click.echo(f"Ref peaks: {len(ref_peaks)}")
-        click.echo(f"Peaks overlap count: {peaks_overlap_count}")
-        click.echo(f"Peaks overlap fraction: {peaks_overlap_fraction}")
+        typer.echo(f"Mov peaks: {len(mov_peaks)}")
+        typer.echo(f"Ref peaks: {len(ref_peaks)}")
+        typer.echo(f"Peaks overlap count: {peaks_overlap_count}")
+        typer.echo(f"Peaks overlap fraction: {peaks_overlap_fraction}")
 
     return peaks_overlap_fraction
 
@@ -371,7 +371,7 @@ def estimate_tczyx(
             ref_voxel_size=ref_voxel_size,
             mov_voxel_size=mov_voxel_size,
         )
-        click.echo("Computed approx transform: ", approx_transform)
+        typer.echo("Computed approx transform: ", approx_transform)
         affine_transform_settings.approx_transform = approx_transform.to_list()
 
     if affine_transform_settings.use_prev_t_transform:
@@ -444,7 +444,7 @@ def estimate_with_propagation(
         if mode == "stabilization" and t == 0:
             continue
         if np.sum(mov_tzyx[t]) == 0 or np.sum(ref_tzyx[t]) == 0:
-            click.echo(f"Timepoint {t} has no data, skipping")
+            typer.echo(f"Timepoint {t} has no data, skipping")
         else:
             approx_transform = estimate_tzyx(
                 t_idx=t,
@@ -529,7 +529,7 @@ def estimate_independently(
     # Submitit executor
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
-    click.echo(f"Submitting SLURM focus estimation jobs with resources: {slurm_args}")
+    typer.echo(f"Submitting SLURM focus estimation jobs with resources: {slurm_args}")
 
     # Submit jobs
     jobs = []
@@ -590,7 +590,7 @@ def peaks_from_beads(
         Tuple of (mov_peaks, ref_peaks).
     """
     if verbose:
-        click.echo("Detecting beads in moving dataset")
+        typer.echo("Detecting beads in moving dataset")
     # TODO: detecte peaks in the zyx space, use skimage.feature.peak_local_max for 2D
     mov_peaks = detect_peaks(
         mov,
@@ -601,7 +601,7 @@ def peaks_from_beads(
         verbose=verbose,
     )
     if verbose:
-        click.echo("Detecting beads in reference dataset")
+        typer.echo("Detecting beads in reference dataset")
     # TODO: detecte peaks in the zyx space, use skimage.feature.peak_local_max for 2D
     ref_peaks = detect_peaks(
         ref,
@@ -612,14 +612,14 @@ def peaks_from_beads(
         verbose=verbose,
     )
     if verbose:
-        click.echo(f"Total of peaks in moving dataset: {len(mov_peaks)}")
-        click.echo(f"Total of peaks in reference dataset: {len(ref_peaks)}")
+        typer.echo(f"Total of peaks in moving dataset: {len(mov_peaks)}")
+        typer.echo(f"Total of peaks in reference dataset: {len(ref_peaks)}")
 
     if len(mov_peaks) < 2 or len(ref_peaks) < 2:
-        click.echo("Not enough beads detected")
+        typer.echo("Not enough beads detected")
         return
     if mask_path is not None:
-        click.echo("Filtering peaks with mask")
+        typer.echo("Filtering peaks with mask")
         with open_ome_zarr(mask_path) as mask_ds:
             mask_load = np.asarray(mask_ds.data[0, 0])
 
@@ -674,7 +674,7 @@ def matches_from_beads(
         (K, 2) array of matched index pairs [mov_idx, ref_idx].
     """
     if verbose:
-        click.echo(f"Getting matches from beads with settings: {beads_match_settings}")
+        typer.echo(f"Getting matches from beads with settings: {beads_match_settings}")
 
     if beads_match_settings.algorithm == "match_descriptor":
         mov_graph = Graph.from_nodes(mov_peaks)
@@ -723,7 +723,7 @@ def matches_from_beads(
     )
 
     if verbose:
-        click.echo(f"Total of matches: {len(matches)}")
+        typer.echo(f"Total of matches: {len(matches)}")
 
     return matches
 
@@ -762,7 +762,7 @@ def transform_from_matches(
         Tuple of forward and inverse transforms.
     """
     if verbose:
-        click.echo(f"Estimating transform with settings: {affine_transform_settings}")
+        typer.echo(f"Estimating transform with settings: {affine_transform_settings}")
     # Detect dimensionality from peaks
     if ndim not in (2, 3):
         raise ValueError(f"Peaks must be 2D or 3D, got {ndim}D")
@@ -832,13 +832,13 @@ def estimate_tzyx(
     Transform or None
         The estimated 4x4 affine transform, or None if estimation failed.
     """
-    click.echo("........................................................................")
-    click.echo(f"Processing timepoint: {t_idx}")
+    typer.echo("........................................................................")
+    typer.echo(f"Processing timepoint: {t_idx}")
 
     (T, Z, Y, X) = mov_tzyx.shape
 
     if mode == "stabilization":
-        click.echo("Performing stabilization, aka registration over time in the same file.")
+        typer.echo("Performing stabilization, aka registration over time in the same file.")
         if affine_transform_settings.t_reference == "first":
             ref_tzyx = np.broadcast_to(mov_tzyx[0], (T, Z, Y, X)).copy()
         elif affine_transform_settings.t_reference == "previous":
@@ -849,7 +849,7 @@ def estimate_tzyx(
                 "Invalid reference. Please use 'first' or 'previous' as reference."
             )
     elif mode == "registration":
-        click.echo("Performing registration between different files")
+        typer.echo("Performing registration between different files")
     mov_zyx = np.asarray(mov_tzyx[t_idx]).astype(np.float32)
     ref_zyx = np.asarray(ref_tzyx[t_idx]).astype(np.float32)
 
@@ -916,7 +916,7 @@ def optimize_transform(
 
     # Step 1: Score the current transform by applying it and measuring peak overlap
     if debug:
-        click.echo("Step 1: Scoring current transform (before bead matching)...")
+        typer.echo("Step 1: Scoring current transform (before bead matching)...")
     mov_reg_approx = transform.to_ants().apply_to_image(mov_ants, reference=ref_ants).numpy()
     mov_peaks, ref_peaks = peaks_from_beads(
         mov=mov_reg_approx,
@@ -937,7 +937,7 @@ def optimize_transform(
 
     # Step 2: Match beads and estimate a correction transform
     if debug:
-        click.echo("Step 2: Matching beads to estimate correction transform...")
+        typer.echo("Step 2: Matching beads to estimate correction transform...")
     matches = matches_from_beads(
         mov_peaks=mov_peaks,
         ref_peaks=ref_peaks,
@@ -946,7 +946,7 @@ def optimize_transform(
     )
 
     if len(matches) < 3:
-        click.echo("Not enough matches found, returning the current transform")
+        typer.echo("Not enough matches found, returning the current transform")
         return None, -1
 
     fwd_transform, inv_transform = transform_from_matches(
@@ -961,7 +961,7 @@ def optimize_transform(
 
     # Step 3: Score the composed (corrected) transform
     if debug:
-        click.echo("Step 3: Scoring composed transform (after bead matching)...")
+        typer.echo("Step 3: Scoring composed transform (after bead matching)...")
     mov_reg_optimized = (
         composed_transform.to_ants().apply_to_image(mov_ants, reference=ref_ants).numpy()
     )
@@ -980,14 +980,14 @@ def optimize_transform(
         verbose=debug,
     )
     if debug:
-        click.echo(f"Bead matches: {matches}")
-        click.echo(f"Forward transform: {fwd_transform}")
-        click.echo(f"Inverse transform: {inv_transform}")
-        click.echo(f"Composed transform: {composed_transform}")
+        typer.echo(f"Bead matches: {matches}")
+        typer.echo(f"Forward transform: {fwd_transform}")
+        typer.echo(f"Inverse transform: {inv_transform}")
+        typer.echo(f"Composed transform: {composed_transform}")
 
     if verbose:
-        click.echo(f"Quality score before beads matching: {quality_score_approx}")
-        click.echo(f"Quality score after beads matching: {quality_score_optimized}")
+        typer.echo(f"Quality score before beads matching: {quality_score_approx}")
+        typer.echo(f"Quality score after beads matching: {quality_score_optimized}")
 
     if quality_score_optimized >= quality_score_approx:
         return composed_transform, quality_score_optimized
@@ -1041,7 +1041,7 @@ def estimate(
         initial approximate transform if no valid optimization was found.
     """
     if _check_nan_n_zeros(mov) or _check_nan_n_zeros(ref):
-        click.echo("Skipping: moving or reference data contains only NaN/zeros.")
+        typer.echo("Skipping: moving or reference data contains only NaN/zeros.")
         return
 
     initial_transform = Transform(
@@ -1054,7 +1054,7 @@ def estimate(
     transform_iter_dict = {}
 
     while current_iterations < qc_iterations:
-        click.echo(
+        typer.echo(
             f"Iteration {current_iterations + 1}/{qc_iterations}: "
             "optimizing transform via bead matching..."
         )
@@ -1076,7 +1076,7 @@ def estimate(
         transform = optimized_transform
 
         if user_transform is not None and current_iterations == 0:
-            click.echo("Optimizing user transform:")
+            typer.echo("Optimizing user transform:")
             user_transform = Transform(matrix=np.asarray(user_transform))
             optimized_transform_user, quality_score_optimized_user = optimize_transform(
                 transform=user_transform,
@@ -1108,10 +1108,10 @@ def estimate(
     if best_transform is None:
         best_transform = initial_transform
     if verbose:
-        click.echo(f"Best transform: {best_transform}")
-        click.echo(f"Best quality score: {best_quality_score['quality_score']}")
+        typer.echo(f"Best transform: {best_transform}")
+        typer.echo(f"Best quality score: {best_quality_score['quality_score']}")
     if output_filepath:
-        click.echo(f"Saving transform to {output_filepath}")
+        typer.echo(f"Saving transform to {output_filepath}")
         np.save(output_filepath, best_transform.to_list())
 
     return best_transform

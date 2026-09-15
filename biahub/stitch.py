@@ -1,11 +1,12 @@
 from collections import defaultdict
 from itertools import product
 from pathlib import Path
+from typing import Annotated
 
-import click
 import numpy as np
 import scipy.ndimage
 import submitit
+import typer
 
 from iohub import open_ome_zarr
 from iohub.ngff import TransformationMeta
@@ -13,12 +14,12 @@ from iohub.ngff.nodes import Plate, Position
 
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
-    config_filepath,
-    input_position_dirpaths,
+    ConfigFilepath,
+    InputPositionDirpaths,
+    OutputDirpath,
+    SbatchFilepath,
     local,
     monitor,
-    output_dirpath,
-    sbatch_filepath,
     sbatch_to_submitit,
 )
 from biahub.settings import StitchSettings
@@ -277,12 +278,12 @@ def write_output_chunk(
         zip(fixed_slices, moving_slices, strict=True)
     ):
         if verbose:
-            click.echo(f"\t\tComputing distance map for {contributing_fov_names[i]}")
+            typer.echo(f"\t\tComputing distance map for {contributing_fov_names[i]}")
         distance_maps[(i, *fixed_slice)] = centered_distance_map[(*moving_slice,)]
 
     # Compute weight maps for each contributing fov
     if verbose:
-        click.echo("\t\tBuilding weight maps")
+        typer.echo("\t\tBuilding weight maps")
     w = np.power(distance_maps, blending_exponent, where=(distance_maps > 0))
     sum_w = np.sum(w, axis=0, keepdims=True)
     weight_maps = w / (sum_w + 1e-8)
@@ -292,7 +293,7 @@ def write_output_chunk(
         zip(contributing_fov_names, fixed_slices, moving_slices, strict=True)
     ):
         if verbose:
-            click.echo(f"\t\tApplying weight maps to {fov_name}")
+            typer.echo(f"\t\tApplying weight maps to {fov_name}")
         # Get the fov data
         fov_data = input_plate[fov_name].data
 
@@ -307,42 +308,40 @@ def write_output_chunk(
 
     # Write chunk to output array
     if verbose:
-        click.echo(f"\t\tWriting chunk to output array: {output_chunk_slices}")
+        typer.echo(f"\t\tWriting chunk to output array: {output_chunk_slices}")
     output_array[(slice(None), channel_idx, *output_chunk_slices)] = output_chunk
 
 
-@click.command("stitch")
-@input_position_dirpaths()
-@config_filepath()
-@output_dirpath()
-@sbatch_filepath()
-@local()
-@click.option(
-    "--verbose",
-    "-v",
-    is_flag=True,
-    type=bool,
-    help="Verbose stitching output. Default is False.",
-)
-@click.option(
-    "--blending-exponent",
-    "-b",
-    type=float,
-    default=1.0,
-    help="Exponent for blending weights. 0.0 is average blending, 1.0 is linear blending, and >1.0 is progressively sharper S-curve blending.",
-)
-@click.option("--debug", is_flag=True, help="Run in debug mode")
-@monitor()
 def stitch_cli(
-    input_position_dirpaths: list[str],
-    output_dirpath: str,
-    config_filepath: Path,
-    verbose: bool = False,
-    sbatch_filepath: str = None,
-    local: bool = False,
-    blending_exponent: float = 1.0,
-    debug: bool = False,
-    monitor: bool = False,
+    input_position_dirpaths: InputPositionDirpaths,
+    config_filepath: ConfigFilepath,
+    output_dirpath: OutputDirpath,
+    sbatch_filepath: SbatchFilepath = None,
+    local: local = False,
+    verbose: Annotated[
+        bool,
+        typer.Option(
+            "--verbose",
+            "-v",
+            help="Verbose stitching output. Default is False.",
+        ),
+    ] = False,
+    blending_exponent: Annotated[
+        float,
+        typer.Option(
+            "--blending-exponent",
+            "-b",
+            help=(
+                "Exponent for blending weights. 0.0 is average blending, 1.0 is "
+                "linear blending, and >1.0 is progressively sharper S-curve blending."
+            ),
+        ),
+    ] = 1.0,
+    debug: Annotated[
+        bool,
+        typer.Option("--debug", help="Run in debug mode"),
+    ] = False,
+    monitor: monitor = False,
 ) -> None:
     """Stitch FOVs in each well together into a single FOV.
 
@@ -350,7 +349,7 @@ def stitch_cli(
 
     >>> biahub stitch -i ./input.zarr/*/*/* -c ./config.yaml -o ./output.zarr
     """
-    click.echo("Starting stitching...")
+    typer.echo("Starting stitching...")
     settings = yaml_to_model(config_filepath, StitchSettings)
     input_plate = open_ome_zarr(input_position_dirpaths[0].parents[2], mode="r")
     all_shifts = settings.total_translation
@@ -387,7 +386,7 @@ def stitch_cli(
     job_args_list = []
     for well_name, fov_shifts in shifts_by_well.items():
         if verbose:
-            click.echo(
+            typer.echo(
                 f"Processing well {list(shifts_by_well.keys()).index(well_name) + 1}/{len(shifts_by_well)}: {well_name}"
             )
         first_fov_name = list(shifts_by_well[well_name].keys())[0]
@@ -431,7 +430,7 @@ def stitch_cli(
         # Append job arguments for each chunk
         for chunk in chunk_list:
             if verbose:
-                click.echo(
+                typer.echo(
                     f"\tPreparing job for chunk {chunk_list.index(chunk) + 1}/{len(chunk_list)}: {chunk}"
                 )
             job_args_list.append(
@@ -470,7 +469,7 @@ def stitch_cli(
     cluster = get_submitit_cluster(local)
 
     # Prepare and submit jobs
-    click.echo(f"Preparing jobs: {slurm_args}")
+    typer.echo(f"Preparing jobs: {slurm_args}")
     slurm_out_path = Path(output_dirpath).parent / "slurm_output"
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
@@ -494,7 +493,3 @@ def stitch_cli(
 
     if monitor:
         monitor_jobs(jobs, [])
-
-
-if __name__ == "__main__":
-    stitch_cli()

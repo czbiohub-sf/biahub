@@ -20,10 +20,10 @@ from pathlib import Path
 from typing import Literal
 
 import ants
-import click
 import largestinteriorrectangle as lir
 import numpy as np
 import scipy
+import typer
 
 from matplotlib import pyplot as plt
 from numpy.typing import ArrayLike
@@ -61,7 +61,7 @@ def get_aprox_transform(
     # Calculate scaling factors for displaying data     source_channel_voxel_size, target_channel_voxel_size
     scaling_factor_z = mov_voxel_size[-3] / ref_voxel_size[-3]
     scaling_factor_yx = mov_voxel_size[-1] / ref_voxel_size[-1]
-    click.echo(
+    typer.echo(
         f"Z scaling factor: {scaling_factor_z:.3f}; XY scaling factor: {scaling_factor_yx:.3f}\n"
     )
 
@@ -130,7 +130,7 @@ def validate_transforms(
                 valid_transforms.append(transform)
                 reference_transform = np.mean(valid_transforms, axis=0)
                 if verbose:
-                    click.echo(
+                    typer.echo(
                         f"[Bootstrap] Accepting transform at timepoint {i} (no validation)"
                     )
             elif check_transforms_difference(
@@ -141,17 +141,17 @@ def validate_transforms(
                     valid_transforms.pop(0)
                 reference_transform = np.mean(valid_transforms, axis=0)
                 if verbose:
-                    click.echo(f"Transform at timepoint {i} is valid")
+                    typer.echo(f"Transform at timepoint {i} is valid")
             else:
                 transforms[i] = None
                 if verbose:
-                    click.echo(
+                    typer.echo(
                         f"Transform at timepoint {i} is invalid and will be interpolated"
                     )
         else:
             transforms[i] = None
             if verbose:
-                click.echo(f"Transform at timepoint {i} is None and will be interpolated")
+                typer.echo(f"Transform at timepoint {i} is None and will be interpolated")
 
     return transforms
 
@@ -193,7 +193,7 @@ def interpolate_transforms(
     if not missing_indices:
         return transforms  # nothing to do
     if verbose:
-        click.echo(f"Interpolating missing transforms at timepoints: {missing_indices}")
+        typer.echo(f"Interpolating missing transforms at timepoints: {missing_indices}")
 
     if window_size > 0:
         for idx in missing_indices:
@@ -216,7 +216,7 @@ def interpolate_transforms(
                 ]
                 transforms[idx] = transforms[closest_valid_idx]
                 if verbose:
-                    click.echo(
+                    typer.echo(
                         f"Not enough interpolation neighbors were found for timepoint {idx} using closest valid transform at timepoint {closest_valid_idx}"
                     )
                 continue
@@ -226,7 +226,7 @@ def interpolate_transforms(
             )
             transforms[idx] = f(idx).tolist()
             if verbose:
-                click.echo(f"Interpolated timepoint {idx} using neighbors: {local_x}")
+                typer.echo(f"Interpolated timepoint {idx} using neighbors: {local_x}")
 
     else:
         # Global interpolation using all valid transforms
@@ -292,7 +292,7 @@ def check_transforms_difference(
     mse = np.mean(differences)
 
     if verbose:
-        click.echo(f"MSE of transformed points: {mse:.2f}; threshold: {threshold:.2f}")
+        typer.echo(f"MSE of transformed points: {mse:.2f}; threshold: {threshold:.2f}")
     return mse <= threshold
 
 
@@ -621,7 +621,7 @@ def find_overlapping_volume(
         moving_volume_ants, reference=fixed_volume_ants
     ).numpy()
     if method == "LIR":
-        click.echo("Starting Largest interior rectangle (LIR) search")
+        typer.echo("Starting Largest interior rectangle (LIR) search")
         mask = (registered_volume > 0) & (fixed_volume > 0)
         z_slice, y_slice, x_slice = find_lir(mask, plot=plot)
 
@@ -643,14 +643,14 @@ def load_transforms(transforms_path: Path, T: int, verbose: bool = False) -> lis
         if not os.path.exists(file_path):
             transforms.append(None)
             if verbose:
-                click.echo(f"Transform for timepoint {t} not found.")
+                typer.echo(f"Transform for timepoint {t} not found.")
 
         else:
             matrix = np.load(file_path)
             transforms.append(matrix.tolist())
 
             if verbose:
-                click.echo(f"Transform for timepoint {t}: {matrix}")
+                typer.echo(f"Transform for timepoint {t}: {matrix}")
 
     return transforms
 
@@ -889,7 +889,7 @@ def pad_to_shape(
     pad_width = [[s // 2, s - s // 2] for s in dif]
 
     if verbose:
-        click.echo(
+        typer.echo(
             f"padding: input shape {arr.shape}, output shape {shape}, padding {pad_width}"
         )
 
@@ -918,7 +918,7 @@ def center_crop(
 
     slicing = tuple(slice(s, s + d) for s, d in zip(starts, shape, strict=True))
     if verbose:
-        click.echo(
+        typer.echo(
             f"center crop: input shape {arr.shape}, output shape {shape}, slicing {slicing}"
         )
     return arr[slicing]
@@ -953,6 +953,6 @@ def match_shape(
         img = center_crop(img, shape)
 
     if verbose:
-        click.echo(f"matched shape: input shape {img.shape}, output shape {shape}")
+        typer.echo(f"matched shape: input shape {img.shape}, output shape {shape}")
 
     return img

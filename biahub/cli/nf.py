@@ -1,100 +1,127 @@
 import pathlib
 import tempfile
 
-import click
+from typing import Annotated, Literal
+
+import typer
 
 from iohub.ngff import open_ome_zarr
 
 from biahub.utils import notify as notify_utils
 
+cli = typer.Typer(
+    add_completion=False,
+    name="nf",
+    help=(
+        "Nextflow-oriented utility commands. Generic helpers shared across Nextflow "
+        "pipelines. Step-specific init/run logic lives on each step's own CLI command."
+    ),
+)
 
-@click.group("nf")
-def nf_cli():
-    """Nextflow-oriented utility commands.
 
-    Generic helpers shared across Nextflow pipelines. Step-specific init/run
-    logic lives on each step's own CLI command (e.g. ``biahub deskew``).
-    """
-
-
-@nf_cli.command("list-positions")
-@click.option("--input-zarr", "-i", required=True, type=click.Path(exists=True))
-def list_positions(input_zarr: str):
+@cli.command("list-positions")
+def list_positions(
+    input_zarr: Annotated[
+        pathlib.Path,
+        typer.Option("--input-zarr", "-i", exists=True),
+    ],
+):
     """List position keys in a plate zarr (one per line, for Nextflow fan-out)."""
     with open_ome_zarr(input_zarr, mode="r") as plate:
         for name, _ in plate.positions():
-            click.echo(name)
+            typer.echo(name)
 
 
-@nf_cli.command("notify")
-@click.option("--title", required=True, help="One-line summary; should name the dataset.")
-@click.option("--detail", default="", help="Supporting text, shown in a code fence.")
-@click.option(
-    "--detail-file",
-    type=click.Path(exists=True, dir_okay=False, path_type=pathlib.Path),
-    help="Read the detail from a file. Use this for anything containing quotes, "
-    "backticks, or newlines (e.g. a Nextflow error report) instead of --detail.",
-)
-@click.option(
-    "--level",
-    type=click.Choice(["info", "good", "warn", "error"]),
-    default="info",
-    show_default=True,
-    help="Severity, which selects the attachment's color bar.",
-)
-@click.option(
-    "--ping/--no-ping",
-    default=False,
-    help="@-mention $BIAHUB_SLACK_ID. Reserve for messages needing action.",
-)
-@click.option("--slack-id", default=None, help="Member ID override, for testing.")
-@click.option("--key", default=None, help="Rate-limit key, e.g. 'run-start'.")
-@click.option(
-    "--min-interval",
-    type=float,
-    default=0.0,
-    help="Skip if --key was already sent this recently, in seconds.",
-)
-@click.option(
-    "--state-dir",
-    type=click.Path(file_okay=False, path_type=pathlib.Path),
-    default=None,
-    help="Where --key markers live. Defaults to the temp dir.",
-)
-@click.option(
-    "--max-detail",
-    type=int,
-    default=notify_utils.MAX_DETAIL_CHARS,
-    show_default=True,
-    help="Character budget for the detail block; the tail is kept.",
-)
-@click.option(
-    "--operator",
-    is_flag=True,
-    help="Prepend who launched the run, from the account database (not Slack).",
-)
-@click.option(
-    "--log-file",
-    type=click.Path(dir_okay=False, path_type=pathlib.Path),
-    default=None,
-    help="Append delivery problems here. Use this when the caller cannot capture "
-    "stdout, e.g. a Nextflow onComplete handler running during JVM shutdown.",
-)
-@click.option("--dry-run", is_flag=True, help="Render the payload without posting.")
+@cli.command("notify")
 def notify(
-    title: str,
-    detail: str,
-    detail_file: pathlib.Path | None,
-    level: str,
-    ping: bool,
-    slack_id: str | None,
-    key: str | None,
-    min_interval: float,
-    state_dir: pathlib.Path | None,
-    max_detail: int,
-    operator: bool,
-    log_file: pathlib.Path | None,
-    dry_run: bool,
+    title: Annotated[
+        str,
+        typer.Option("--title", help="One-line summary; should name the dataset."),
+    ],
+    detail: Annotated[
+        str,
+        typer.Option("--detail", help="Supporting text, shown in a code fence."),
+    ] = "",
+    detail_file: Annotated[
+        pathlib.Path | None,
+        typer.Option(
+            "--detail-file",
+            exists=True,
+            dir_okay=False,
+            help=(
+                "Read the detail from a file. Use this for anything containing quotes, "
+                "backticks, or newlines (e.g. a Nextflow error report) instead of --detail."
+            ),
+        ),
+    ] = None,
+    level: Annotated[
+        Literal["info", "good", "warn", "error"],
+        typer.Option(
+            "--level",
+            show_default=True,
+            help="Severity, which selects the attachment's color bar.",
+        ),
+    ] = "info",
+    ping: Annotated[
+        bool,
+        typer.Option(
+            "--ping/--no-ping",
+            help="@-mention $BIAHUB_SLACK_ID. Reserve for messages needing action.",
+        ),
+    ] = False,
+    slack_id: Annotated[
+        str | None,
+        typer.Option("--slack-id", help="Member ID override, for testing."),
+    ] = None,
+    key: Annotated[
+        str | None,
+        typer.Option("--key", help="Rate-limit key, e.g. 'run-start'."),
+    ] = None,
+    min_interval: Annotated[
+        float,
+        typer.Option(
+            "--min-interval",
+            help="Skip if --key was already sent this recently, in seconds.",
+        ),
+    ] = 0.0,
+    state_dir: Annotated[
+        pathlib.Path | None,
+        typer.Option(
+            "--state-dir",
+            file_okay=False,
+            help="Where --key markers live. Defaults to the temp dir.",
+        ),
+    ] = None,
+    max_detail: Annotated[
+        int,
+        typer.Option(
+            "--max-detail",
+            show_default=True,
+            help="Character budget for the detail block; the tail is kept.",
+        ),
+    ] = notify_utils.MAX_DETAIL_CHARS,
+    operator: Annotated[
+        bool,
+        typer.Option(
+            "--operator",
+            help="Prepend who launched the run, from the account database (not Slack).",
+        ),
+    ] = False,
+    log_file: Annotated[
+        pathlib.Path | None,
+        typer.Option(
+            "--log-file",
+            dir_okay=False,
+            help=(
+                "Append delivery problems here. Use this when the caller cannot capture "
+                "stdout, e.g. a Nextflow onComplete handler running during JVM shutdown."
+            ),
+        ),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Render the payload without posting."),
+    ] = False,
 ):
     r"""Post a pipeline notification to Slack, falling back to the terminal.
 
@@ -125,7 +152,7 @@ def notify(
 
     if key and min_interval > 0:
         if not notify_utils.should_send(resolved_state_dir, key, min_interval):
-            click.echo(f"[notify] {key} sent less than {min_interval:g}s ago — skipping")
+            typer.echo(f"[notify] {key} sent less than {min_interval:g}s ago — skipping")
             return
 
     ok, status = notify_utils.send(
@@ -142,4 +169,4 @@ def notify(
     if ok and key:
         notify_utils.record_sent(resolved_state_dir, key)
     if not ok and not dry_run:
-        click.echo(f"[notify] not delivered: {status}")
+        typer.echo(f"[notify] not delivered: {status}")

@@ -2,20 +2,21 @@ import shutil
 
 from ast import literal_eval
 from pathlib import Path
+from typing import Annotated
 
-import click
 import dask.array as da
 import numpy as np
 import pandas as pd
 import submitit
+import typer
 
 from iohub import open_ome_zarr
 
 from biahub.cli.parsing import (
-    config_filepath,
+    ConfigFilepath,
+    OutputFilepath,
+    SbatchFilepath,
     local,
-    output_filepath,
-    sbatch_filepath,
     sbatch_to_submitit,
 )
 from biahub.cli.slurm import wait_for_jobs_to_finish
@@ -53,7 +54,7 @@ def estimate_crop_one_position(
     """
     fov = "/".join(lf_dir.parts[-3:])
 
-    click.echo(f"Processing FOV: {fov}")
+    typer.echo(f"Processing FOV: {fov}")
     with open_ome_zarr(lf_dir) as lf_dataset:
         lf_data = lf_dataset.data.dask_array()[:, :1]  # Pick only first channel
         lf_mask = ((lf_data != 0) & (~da.isnan(lf_data))).compute()
@@ -69,7 +70,7 @@ def estimate_crop_one_position(
     lf_shape = lf_mask.shape[-3:]
     ls_shape = ls_mask.shape[-3:]
     if lf_shape != ls_shape:
-        click.echo(
+        typer.echo(
             "WARNING: Phase and fluorescence datasets should have the same shape, got"
             f" phase shape: {lf_shape}, fluorescence shape: {ls_shape}"
         )
@@ -88,7 +89,7 @@ def estimate_crop_one_position(
     )
 
     if len(valid_T) == 0:
-        click.echo("No valid data found for current position, will not crop.")
+        typer.echo("No valid data found for current position, will not crop.")
         return tuple(zip((0, 0, 0), _max_zyx_dims, strict=True))
     valid_data = data[valid_T, valid_C]
 
@@ -97,7 +98,7 @@ def estimate_crop_one_position(
 
     # Create a circular boolean mask of radius phase_mask_radius to apply to the phase channel
     if lf_mask_radius is not None:
-        click.echo(f"Applying circular mask of radius {lf_mask_radius} to phase channel.")
+        typer.echo(f"Applying circular mask of radius {lf_mask_radius} to phase channel.")
         if not (0 < lf_mask_radius <= 1):
             raise ValueError(
                 "lf_mask_radius must be a fraction of image width (0 < lf_mask_radius <= 1)."
@@ -116,7 +117,7 @@ def estimate_crop_one_position(
     # Compute overlapping region
     z_slice, y_slice, x_slice = find_lir(combined_mask)
 
-    click.echo(
+    typer.echo(
         f"Estimated crop for FOV {fov}:\n"
         f"Z: {z_slice.start} - {z_slice.stop}\n"
         f"Y: {y_slice.start} - {y_slice.stop}\n"
@@ -182,10 +183,10 @@ def estimate_crop(
     # Assume phase dataset is first and fluor dataset is second in input_model.concat_data_paths
     lf_paths = config_filepath.parent.glob(settings.concat_data_paths[0])
     lf_position_dirpaths = [p for p in lf_paths if p.is_dir()]
-    click.echo(f"Found {len(lf_position_dirpaths)} phase channels.")
+    typer.echo(f"Found {len(lf_position_dirpaths)} phase channels.")
     ls_paths = config_filepath.parent.glob(settings.concat_data_paths[1])
     ls_position_dirpaths = [p for p in ls_paths if p.is_dir()]
-    click.echo(f"Found {len(ls_position_dirpaths)} fluorescence channels.")
+    typer.echo(f"Found {len(ls_position_dirpaths)} fluorescence channels.")
 
     if len(lf_position_dirpaths) != len(ls_position_dirpaths):
         raise ValueError("Number of phase and fluorescence channels must be the same.")
@@ -215,11 +216,11 @@ def estimate_crop(
     cluster = get_submitit_cluster(local)
 
     # Prepare and submit jobs
-    click.echo(f"Preparing jobs: {slurm_args}")
+    typer.echo(f"Preparing jobs: {slurm_args}")
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
 
-    click.echo("Submitting SLURM jobs...")
+    typer.echo("Submitting SLURM jobs...")
     jobs = []
 
     with submitit.helpers.clean_env(), executor.batch():
@@ -240,7 +241,7 @@ def estimate_crop(
     # Here we estimate the smallest common crop region across all positions.
     estimate_crop_csvs = list(output_path_csv.glob("*.csv"))
     if not estimate_crop_csvs:
-        click.echo("No crop CSV files found. Exiting.")
+        typer.echo("No crop CSV files found. Exiting.")
         return
 
     df = pd.concat(
@@ -265,7 +266,7 @@ def estimate_crop(
         ]
     )
 
-    click.echo(
+    typer.echo(
         f"Standardized ranges:\nZ: {standardized_ranges[:, 0].tolist()}\n"
         f"Y: {standardized_ranges[:, 1].tolist()}\n"
         f"X: {standardized_ranges[:, 2].tolist()}"
@@ -279,26 +280,24 @@ def estimate_crop(
     model_to_yaml(output_model, output_filepath)
 
     shutil.rmtree(output_path_csv)
-    click.echo("Done.")
+    typer.echo("Done.")
 
 
-@click.command("estimate-crop")
-@config_filepath()
-@output_filepath()
-@sbatch_filepath()
-@local()
-@click.option(
-    "--lf-mask-radius",
-    type=float,
-    help="(Optional) Radius of the circular mask given as fraction of image width to apply to the phase channel.",
-    required=False,
-)
 def estimate_crop_cli(
-    config_filepath: str,
-    output_filepath: str,
-    lf_mask_radius: float = 0.95,
-    sbatch_filepath: str = None,
-    local: bool = False,
+    config_filepath: ConfigFilepath,
+    output_filepath: OutputFilepath,
+    sbatch_filepath: SbatchFilepath = None,
+    local: local = False,
+    lf_mask_radius: Annotated[
+        float | None,
+        typer.Option(
+            "--lf-mask-radius",
+            help=(
+                "(Optional) Radius of the circular mask given as fraction of image "
+                "width to apply to the phase channel."
+            ),
+        ),
+    ] = None,
 ):
     """Estimate a crop region where both phase and fluorescence volumes are non-zero.
 
@@ -314,7 +313,3 @@ def estimate_crop_cli(
         sbatch_filepath=sbatch_filepath,
         local=local,
     )
-
-
-if __name__ == "__main__":
-    estimate_crop_cli()

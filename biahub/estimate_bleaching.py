@@ -3,7 +3,6 @@ import warnings
 
 from pathlib import Path
 
-import click
 import matplotlib.colors
 import matplotlib.pyplot as plt
 import numpy as np
@@ -13,7 +12,7 @@ from iohub.ngff.display import channel_display_settings
 from scipy.optimize import curve_fit
 from tqdm import tqdm
 
-from biahub.cli.parsing import input_position_dirpaths, output_dirpath
+from biahub.cli.parsing import InputPositionDirpaths, OutputDirpath
 
 MSECS_PER_MINUTE = 60000
 
@@ -102,10 +101,10 @@ def plot_bleaching_curves(times, tczyx_data, channel_names, output_file, title="
     plt.close()
 
 
-@click.command("estimate-bleaching")
-@input_position_dirpaths()
-@output_dirpath()
-def estimate_bleaching_cli(input_position_dirpaths, output_dirpath):
+def estimate_bleaching_cli(
+    input_position_dirpaths: InputPositionDirpaths,
+    output_dirpath: OutputDirpath,
+):
     """Estimate bleaching from raw data.
 
     >>> biahub estimate-bleaching -i ./input.zarr/0/0/0 -o ./bleaching-curves/
