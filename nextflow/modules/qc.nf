@@ -160,9 +160,13 @@ process generate_unified_report {
 //  in mantis-v2 is the run's first minutes rather than after the step that
 //  produces the store has finished. Only `compute` needs pixels.
 //
-//  What this does NOT catch is a channel name the store does not have:
-//  imaging-qc resolves `channels:` inside `compute` (io/subset.py), not at plan
-//  time. Worth an upstream issue; the store is already open there.
+//  Channel names are checked here too, as of imaging-qc#226: `plan-stage`
+//  refuses a `channels:` or `per_channel_params` name that no position in the
+//  store has, at exit 2 and writing nothing. That matters most for the tracking
+//  store, whose QC config names `<target_channel>_labels` — a name that only
+//  matches if it agrees with `track.yml`, two configs with no shared source of
+//  truth. Before #226 an unmatched filter was a legitimate zero: the metric
+//  silently did not run, and unless it was gated, nothing ever said so.
 // ---------------------------------------------------------------------------
 
 // take:
