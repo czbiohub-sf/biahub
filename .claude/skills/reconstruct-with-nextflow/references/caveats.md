@@ -127,7 +127,9 @@ z_range + focus_config.z_window -> z_slicing.{method, window_size, focus_channel
 
 (`focus_config`'s `NA_det`/`lambda_ill`/`pixel_size` have no equivalent.)
 `target_channel` and `cellpose_config.input_channel` must match **pre-rename**
-names in the **assembled** plate (§2, §5).
+names in the **assembled** plate (§2, §5). `qc_track.yaml`'s `channels:` must
+then match `<target_channel>_labels`, which is what the tracking store actually
+holds — SKILL.md §5a checks both couplings before launch.
 
 **`z_slicing.focus_channel` resolves against `input_images`, not the store.**
 `apply_focus_slicing` raises if the focus channel is not among the loaded

@@ -191,6 +191,37 @@ the next dataset in the family would also need), fix it in a PR against
 `nextflow/configs/<family>/`, stating which dataset exposed it. Genuinely
 per-dataset values stay in the run directory.
 
+### 5a. Check the QC channel filters against the stores they will QC
+
+Once the configs are edited, run this from the biahub checkout:
+
+```bash
+python .claude/skills/reconstruct-with-nextflow/templates/check_qc_channels.py \
+    <RAW_STORE.zarr> <OUTPUT>/configs
+```
+
+It exits 1 and names every `channels:` entry that the store will not have.
+
+The stores QC runs over do not exist yet — the pipeline's init phase creates
+them — so the script predicts their channels from the configs that produce
+them: raw channel names for the deskewed data, waveorder's
+`output_channel_names` for the phase channel, virtual-stain's `target_channel`
+for the predictions, and `<track.yml target_channel>_labels` for the tracking
+store.
+
+**That last one is the coupling that actually breaks.** `qc_track.yaml` names
+`nuclei_prediction_labels`, which only resolves if `track.yml` says
+`target_channel: nuclei_prediction` — two files with no shared source of truth,
+and changing one is the ordinary way to desynchronise them.
+
+Since imaging-qc#226 the pipeline refuses an unknown channel name itself, at
+`plan-stage`, so a mistake fails during the init phase rather than silently
+skipping a metric. This check is the earlier one: it catches the mistake while
+you are still editing, instead of costing a launch. A `MISS` is authoritative;
+a pass is not a proof, because the script assumes `concatenate.yml` takes `all`
+from each source (both shipped families do — a config selecting a subset will
+over-predict).
+
 ## 6. Present the plan
 
 Do not run anything yet. Show the user:
@@ -204,7 +235,8 @@ Do not run anything yet. Show the user:
 4. Output project directory and the step layout.
 5. That configs come from `<BIAHUB>/nextflow/configs/<family>/` at commit
    `<sha>`, every value changed for this dataset, and any template fix headed
-   for a PR.
+   for a PR. If QC is in the step list, that §5a passed — and if it did not,
+   what was mismatched and how it was resolved.
 6. **The steps this run will perform, listed in order.** Reconstruction proper —
    flat-field → deskew → reconstruct → virtual-stain — always runs; assemble,
    track and QC run only if their config is passed (biahub#306). Defaults by
