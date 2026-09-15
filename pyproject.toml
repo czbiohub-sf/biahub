@@ -109,21 +109,18 @@ index-strategy = "unsafe-best-match"
 #
 #     git config --global url."ssh://git@github.com/".insteadOf "https://github.com/"
 #
-# The rev is a commit on imaging-qc's main. This one carries three things biahub
-# depends on directly: a `wasmtime<48` ceiling, so no `constraint-dependencies`
-# entry is needed here (itkwasm imports a `DirPerms` that wasmtime 48 removed,
-# which made `imaging-qc` unimportable); a report verb that composes Hydra
-# `defaults:`, which is what lets `qc_report_spec` name a config file rather
-# than its directory; and imaging-qc#226, where `plan-stage` refuses a
-# `channels:` or `per_channel_params` name that no position in the store has.
+# The rev is a commit on imaging-qc's main. Three things below this line depend
+# on which one, so move it deliberately:
 #
-# That last one is why this bump rides with the init-phase change rather than
-# waiting: the pipeline runs `plan-stage` up front, against a store its upstream
-# step has only scaffolded, so with #226 a mistyped channel name now fails in the
-# run's first minutes. Before it, that was the one QC config error the init phase
-# could not catch — imaging-qc treated an unmatched filter as a legitimate zero
-# (its `TestTheLegitimateZeros`), so the metric silently did not run and, if it
-# was ungated, never surfaced at all.
+#   * a `wasmtime<48` ceiling, which is why no `constraint-dependencies` entry
+#     is needed here — itkwasm imports a `DirPerms` that wasmtime 48 removed,
+#     and that made `imaging-qc` unimportable.
+#   * a report verb that composes Hydra `defaults:`, which is what lets
+#     `qc_report_spec` name a config FILE rather than its directory.
+#   * imaging-qc#226: `plan-stage` refuses a `channels:` or `per_channel_params`
+#     name that no position in the store has. The pipeline plans up front, so
+#     this is what makes a mistyped channel fail at init rather than skip a
+#     metric silently — see the header of `nextflow/modules/qc.nf`.
 #
 # That project also relaxed `iohub==0.3.2` to a floor so both can share one
 # environment — biahub needs iohub>=0.3.11 for the gapped-shard-write fix.
