@@ -5,6 +5,7 @@ from iohub import open_ome_zarr
 
 from biahub.concatenate import concatenate
 from biahub.settings import ConcatenateSettings
+from biahub.utils.config import model_to_yaml
 
 # Single position for tests that don't need multiple positions
 _ONE_POS = [("A", "1", "0")]
@@ -34,12 +35,14 @@ def test_concatenate_channels(create_custom_plate, tmp_path, sbatch_file):
     )
 
     output_path = tmp_path / "output.zarr"
+    config_path = tmp_path / "concat.yml"
+    model_to_yaml(settings, config_path)
     concatenate(
-        settings=settings,
+        input_position_dirpaths=None,
+        config_filepath=config_path,
         output_dirpath=output_path,
         sbatch_filepath=sbatch_file,
-        cluster="local",
-        block=True,
+        cluster="debug",
         monitor=False,
     )
 
@@ -79,12 +82,14 @@ def test_concatenate_specific_channels(create_custom_plate, tmp_path, sbatch_fil
     )
 
     output_path = tmp_path / "output.zarr"
+    config_path = tmp_path / "concat.yml"
+    model_to_yaml(settings, config_path)
     concatenate(
-        settings=settings,
+        input_position_dirpaths=None,
+        config_filepath=config_path,
         output_dirpath=output_path,
         sbatch_filepath=sbatch_file,
-        cluster="local",
-        block=True,
+        cluster="debug",
         monitor=False,
     )
 
@@ -116,12 +121,14 @@ def test_concatenate_with_time_indices(create_custom_plate, tmp_path, sbatch_fil
     )
 
     output_path = tmp_path / "output.zarr"
+    config_path = tmp_path / "concat.yml"
+    model_to_yaml(settings, config_path)
     concatenate(
-        settings=settings,
+        input_position_dirpaths=None,
+        config_filepath=config_path,
         output_dirpath=output_path,
         sbatch_filepath=sbatch_file,
-        cluster="local",
-        block=True,
+        cluster="debug",
         monitor=False,
     )
 
@@ -166,12 +173,14 @@ def test_concatenate_with_single_slice_to_all(create_custom_plate, tmp_path, sba
     )
 
     output_path = tmp_path / "output.zarr"
+    config_path = tmp_path / "concat.yml"
+    model_to_yaml(settings, config_path)
     concatenate(
-        settings=settings,
+        input_position_dirpaths=None,
+        config_filepath=config_path,
         output_dirpath=output_path,
         sbatch_filepath=sbatch_file,
-        cluster="local",
-        block=True,
+        cluster="debug",
         monitor=False,
     )
 
@@ -218,12 +227,14 @@ def test_concatenate_with_cropping(create_custom_plate, tmp_path, sbatch_file):
     )
 
     output_path = tmp_path / "output.zarr"
+    config_path = tmp_path / "concat.yml"
+    model_to_yaml(settings, config_path)
     concatenate(
-        settings=settings,
+        input_position_dirpaths=None,
+        config_filepath=config_path,
         output_dirpath=output_path,
         sbatch_filepath=sbatch_file,
-        cluster="local",
-        block=True,
+        cluster="debug",
         monitor=False,
     )
 
@@ -286,13 +297,15 @@ def test_concatenate_with_custom_chunks(
     )
 
     output_path = tmp_path / "output.zarr"
+    config_path = tmp_path / "concat.yml"
+    model_to_yaml(settings, config_path)
     concatenate(
-        settings=settings,
+        input_position_dirpaths=None,
+        config_filepath=config_path,
         output_dirpath=output_path,
         sbatch_filepath=sbatch_file,
-        cluster="local",
+        cluster="debug",
         monitor=False,
-        block=True,
     )
 
     output_plate = open_ome_zarr(output_path)
@@ -346,12 +359,14 @@ def test_concatenate_multiple_plates(create_custom_plate, tmp_path, sbatch_file)
     )
 
     output_path = tmp_path / "output.zarr"
+    config_path = tmp_path / "concat.yml"
+    model_to_yaml(settings, config_path)
     concatenate(
-        settings=settings,
+        input_position_dirpaths=None,
+        config_filepath=config_path,
         output_dirpath=output_path,
         sbatch_filepath=sbatch_file,
-        cluster="local",
-        block=True,
+        cluster="debug",
         monitor=False,
     )
 
@@ -393,12 +408,14 @@ def test_concatenate_mismatched_with_cropping(create_custom_plate, tmp_path, sba
     )
 
     output_path = tmp_path / "output.zarr"
+    config_path = tmp_path / "concat.yml"
+    model_to_yaml(settings, config_path)
     concatenate(
-        settings=settings,
+        input_position_dirpaths=None,
+        config_filepath=config_path,
         output_dirpath=output_path,
         sbatch_filepath=sbatch_file,
-        cluster="local",
-        block=True,
+        cluster="debug",
         monitor=False,
     )
 
@@ -444,12 +461,14 @@ def test_concatenate_with_mixed_slice_formats(create_custom_plate, tmp_path, sba
     )
 
     output_path = tmp_path / "output_mixed_slice.zarr"
+    config_path = tmp_path / "concat.yml"
+    model_to_yaml(settings, config_path)
     concatenate(
-        settings=settings,
+        input_position_dirpaths=None,
+        config_filepath=config_path,
         output_dirpath=output_path,
         sbatch_filepath=sbatch_file,
-        cluster="local",
-        block=True,
+        cluster="debug",
         monitor=False,
     )
 
@@ -493,12 +512,14 @@ def test_concatenate_with_unique_positions(create_custom_plate, tmp_path, sbatch
     )
 
     output_path_unique = tmp_path / "output_unique.zarr"
+    config_path_unique = tmp_path / "concat_unique.yml"
+    model_to_yaml(settings_unique, config_path_unique)
     concatenate(
-        settings=settings_unique,
+        input_position_dirpaths=None,
+        config_filepath=config_path_unique,
         output_dirpath=output_path_unique,
         sbatch_filepath=sbatch_file,
-        cluster="local",
-        block=True,
+        cluster="debug",
         monitor=False,
     )
 
