@@ -1,81 +1,48 @@
-// Assembly subworkflows: init (resolve concat config → scaffold → RESOURCES)
-// and run (single-shot concatenate).
+// Assembly subworkflows: init (scaffold + resources) and run (fan-out × N).
 //
-// Unlike the per-position steps (deskew, reconstruct, …), concatenate combines
-// N source stores channel-wise at each position, so there is no single `-i` to
-// fan out over. Rather than Nextflow-managed per-position fan-out, this step
-// runs the WHOLE plate in ONE task: `concatenate --cluster debug` iterates
-// every position in-process (see biahub/concatenate.py). The task is a reserved
-// SLURM compute node (label 'cpu'), NOT the login node, so the login node stays
-// free. `--cluster debug` runs in-process and submits no SLURM jobs of its own,
-// so there is no scheduler-in-scheduler nesting.
+// Concatenate combines N source stores channel-wise at each position. The CLI
+// takes one `-i` per source store, in the order of the config's per-source
+// entries, so init passes each store's `*/*/*` glob and a worker passes the
+// same position of each store — the same `-i` idiom as deskew, just repeated.
+// The concatenate config itself holds only parameters (which channels, crop,
+// chunking); the source paths never enter it.
 //
-// This is the "reserve a compute node + --cluster debug" approach. To parallelise
-// positions across the reserved node's cores later, switch the run step to
-// `--cluster local` (submitit spawns one subprocess per position) and size the
-// resources for the concurrent fan-out. Making this step work ACROSS positions
-// is biahub#301, and is also what a per-position pipeline DAG (biahub#304)
-// would need.
+// INIT AND RUN ARE SEPARATE SUBWORKFLOWS. `concatenate --init` reads each
+// source position's shape/dtype/channel names to resolve the output channel
+// mapping and creates the plate, stamping the `biahub-concatenate` provenance
+// record on every position ONCE. It reads no pixel, so it runs against source
+// stores that have been scaffolded but not yet filled, which is what lets it
+// join the pipeline's up-front init phase — a concatenate config naming a
+// channel no source store has fails in the first minutes rather than after
+// every reconstruction step has completed. See the INIT PHASE comment in
+// mantis-v2.nf.
 //
-// BOTH init steps read only METADATA — `resolve_concatenate_config` templates
-// paths into the config, and `concatenate --init` reads each source position's
-// shape/dtype/channel names to resolve the output channel mapping and create
-// the plate (create_empty_plate is idempotent). Neither reads a pixel, so both
-// run against source stores that have been scaffolded but not yet filled, which
-// is what lets them join the pipeline's up-front init phase. Resolving the
-// channel mapping there is the point: a concatenate config naming a channel no
-// source store has now fails in the first minutes rather than after every
-// reconstruction step has completed.
+// run_concatenate uses `--cluster debug` so that submitit's DebugExecutor runs
+// the work in-process. Nextflow already handles per-position fan-out and
+// resource scheduling, so the CLI must NOT submit its own SLURM jobs. A worker
+// finds its output position already scaffolded and creates nothing, so the
+// provenance record is written by init alone, not once per worker.
+//
+// This replaced the single-shot design (biahub#279), in which one task copied
+// the whole plate: on the 2026_08_11 A549 SEC61B run that task took 4 h 19 min
+// for 54 positions, half the pipeline's wall-clock, CPU-bound on compressing
+// the sharded output (biahub#301).
 
 include { parse_resources; slurm_logs; slurm_log_dir } from './common'
 
 
-process resolve_concatenate_config {
+// Create the output plate and emit the RESOURCES line sizing one position's
+// task. Metadata-only, so it stays on the login node (cpu_local).
+process init_concatenate {
     label 'cpu_local'
 
     input:
     val deskew_zarr
     val reconstruct_zarr
     val virtual_stain_zarr
-    val config_dir
+    val output_zarr
     val config
     val trigger
-
-    output:
-    path "concatenate_resolved.yml"
-
-    // Write the resolved config alongside the source config (config_dir) so it
-    // sits with the rest of the run's configs. `rm -f` first because resolve
-    // mode's `-o` refuses to overwrite an existing file, so a rerun would
-    // otherwise fail on the stale copy. NOTE: this is not hermetic — the file
-    // lands next to the user's configs rather than in the work dir, so two runs
-    // sharing a config directory overwrite each other's copy. Unchanged by the
-    // move into the init phase, except that it now happens in the run's first
-    // minutes rather than hours in.
-    script:
-    def resolved = "${config_dir}/concatenate_resolved.yml"
-    """
-    mkdir -p "${config_dir}"
-    rm -f "${resolved}"
-    biahub concatenate \
-        -c "${config}" \
-        -o "${resolved}" \
-        --concat-data-paths "${deskew_zarr}/*/*/*" \
-        --concat-data-paths "${reconstruct_zarr}/*/*/*" \
-        --concat-data-paths "${virtual_stain_zarr}/*/*/*"
-    cp "${resolved}" concatenate_resolved.yml
-    """
-}
-
-
-// Create the output plate and emit the RESOURCES line used to size the compute
-// node. Cheap and metadata-only, so it stays on the login node (cpu_local).
-process init_concatenate {
-    label 'cpu_local'
-
-    input:
-    path resolved_config
-    val output_zarr
 
     output:
     stdout
@@ -84,71 +51,60 @@ process init_concatenate {
     """
     mkdir -p "${slurm_log_dir('assemble')}"
     biahub concatenate --init \
-        -c "${resolved_config}" \
+        -i "${deskew_zarr}"/*/*/* \
+        -i "${reconstruct_zarr}"/*/*/* \
+        -i "${virtual_stain_zarr}"/*/*/* \
+        -c "${config}" \
         -o "${output_zarr}"
     """
 }
 
-
-// Single-shot concatenation of the whole plate on a reserved compute node.
-// cpus/memory/time come from the RESOURCES payload emitted by init_concatenate
-// (parsed via parse_resources), matching the other CLIs.
-// NOTE: label 'cpu' routes to the 'preempted' partition; if the node is
-// reclaimed mid-run the whole task restarts (the global errorStrategy retries
-// it). Acceptable while the step is quick; route to a non-preempted partition
-// if it grows long.
-// The single-shot copy is memory-bandwidth-bound, so exclude the slow, small-
-// memory cpu-c nodes (2017 Intel Xeon Gold 6126, 24 cores, 128 GB/node) — they
-// ran this ~6x slower than the AMD EPYC nodes. All other cpu-* nodes are EPYC
-// with >=750 GB, so a plain --exclude of cpu-c is enough.
 process run_concatenate {
+    tag "${position}"
     label 'cpu'
-    clusterOptions { "${slurm_logs('assemble')} --exclude=cpu-c-[1-4]" }
-    cpus   { meta.cpus }
+    clusterOptions { slurm_logs('assemble') }
+    cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
-    time   { "${meta.time_minutes * task.attempt} min" }
+    time { "${meta.time_minutes * task.attempt} min" }
 
     input:
+    tuple val(position), val(meta)
+    val deskew_zarr
+    val reconstruct_zarr
+    val virtual_stain_zarr
     val output_zarr
-    val resolved_config_path
-    val meta
+    val config
 
     output:
-    val output_zarr
+    val position
 
     script:
-    // --resume matters more here than for the per-position steps: this is a
-    // single job covering every position, so a preemption or walltime kill near
-    // the end would otherwise discard hours of copying. The retry recomputes
-    // only the (t, c) units that had not finished. The completion record is
-    // keyed by the resolved settings, so a config change recomputes instead of
-    // being skipped.
+    // --resume: a preempted task finishes the write it is in and stops early, so
+    // the retry (or a later `nextflow -resume`) recopies only the (t, c) units
+    // this position had not finished. The completion record is keyed by the
+    // resolved settings, so a config change recopies instead of being skipped.
     """
     biahub concatenate --cluster debug --resume \
-        -c "${resolved_config_path}" \
+        -i "${deskew_zarr}/${position}" \
+        -i "${reconstruct_zarr}/${position}" \
+        -i "${virtual_stain_zarr}/${position}" \
+        -c "${config}" \
         -o "${output_zarr}"
     """
 }
 
 
-// The resolved config lives beside the source config. Both subworkflows need
-// the path and the pipeline invokes them separately, so derive it in one place.
-def resolved_config_path(config) {
-    return "${new File(config.toString()).parent}/concatenate_resolved.yml"
-}
-
-
-// Resolve the source paths into the config and scaffold the assembled plate.
+// Validate the config and scaffold the assembled plate.
 //
 // take:
 //   deskew_zarr        LF source store to concatenate
 //   reconstruct_zarr   phase source store to concatenate
 //   virtual_stain_zarr virtual-stain source store to concatenate
 //   output_zarr        path to the assembled output plate.zarr
-//   config             path to the concatenate settings YAML (placeholder paths)
+//   config             path to the concatenate settings YAML (parameters only)
 //   trigger            gating channel — init starts once this emits
 // emit:
-//   resources    the RESOURCES payload sizing the single-shot task
+//   resources    the RESOURCES payload sizing one position's task
 //   done         fires once the assembled plate exists
 workflow assemble_init_wf {
     take:
@@ -160,13 +116,8 @@ workflow assemble_init_wf {
     trigger
 
     main:
-    def config_dir = new File(config.toString()).parent
-
-    resolved = resolve_concatenate_config(
-        deskew_zarr, reconstruct_zarr, virtual_stain_zarr,
-        config_dir, config, trigger.map { 'done' }
-    )
-    init_out = init_concatenate(resolved, output_zarr)
+    init_out = init_concatenate(deskew_zarr, reconstruct_zarr, virtual_stain_zarr,
+                                output_zarr, config, trigger.map { 'done' })
 
     emit:
     resources = init_out.map { stdout_text -> parse_resources(stdout_text) }.first()
@@ -174,15 +125,23 @@ workflow assemble_init_wf {
 }
 
 
-// Concatenate the whole plate in one task.
+// Fan out one concatenate task per position.
 //
 // take:
-//   output_zarr  path to the assembled output plate.zarr
-//   config       path to the concatenate settings YAML (locates the resolved copy)
-//   resources    RESOURCES payload from assemble_init_wf
-//   prev_done    gating channel — every source store holds data
+//   positions          collected channel of position keys (e.g. ['A/1/0', 'B/1/0'])
+//   deskew_zarr        LF source store to concatenate
+//   reconstruct_zarr   phase source store to concatenate
+//   virtual_stain_zarr virtual-stain source store to concatenate
+//   output_zarr        path to the assembled output plate.zarr
+//   config             path to the concatenate settings YAML
+//   resources          RESOURCES payload from assemble_init_wf
+//   prev_done          gating channel — every source store holds data
 workflow assemble_run_wf {
     take:
+    positions
+    deskew_zarr
+    reconstruct_zarr
+    virtual_stain_zarr
     output_zarr
     config
     resources
@@ -196,15 +155,15 @@ workflow assemble_run_wf {
     // [pos, meta, p1, p2, … p54] and blew up a three-parameter closure with
     // `MissingMethodException` — after the previous step had already run. Mapping
     // reads nothing out of the gate, so no producer's payload shape can reach here.
-    ready = resources
+    pos_meta = positions
+        .flatMap { items -> items }
+        .combine(resources)
         .combine(prev_done.map { 'done' })
-        .map { meta, _gate -> meta }
+        .map { pos, meta, _gate -> [pos, meta] }
 
-    as_done = run_concatenate(output_zarr, resolved_config_path(config), ready)
+    as_done = run_concatenate(pos_meta, deskew_zarr, reconstruct_zarr, virtual_stain_zarr,
+                              output_zarr, config) | collect
 
     emit:
-    // `.first()` so this is a VALUE channel like every other step's `done`:
-    // run_concatenate is single-shot, so its output is a one-item queue, and
-    // the steps gated on it would each have to re-signal it otherwise.
-    done = as_done.first()
+    done = as_done
 }

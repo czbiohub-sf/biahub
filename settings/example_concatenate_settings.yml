@@ -2,7 +2,10 @@
 # This file demonstrates various ways to use the concatenation functionality
 
 # List of paths to concatenate - can use glob patterns
-# Each path will be treated as a separate input dataset
+# Each path will be treated as a separate input dataset.
+# Optional: `biahub concatenate -i a.zarr/*/*/* -i b.zarr/*/*/* ...` supplies the
+# sources on the command line (one -i per store, in this order) and takes
+# precedence, in which case this file holds only parameters.
 concat_data_paths:
   - "/path/to/data1.zarr/*/*/*" # First dataset
   - "/path/to/data2.zarr/*/*/*" # Second dataset
@@ -17,13 +20,11 @@ time_indices: "all"
 
 # Channel names to include from each dataset
 # Options:
-#   - "all": Include all channels from the dataset
-#   - ["DAPI", "GFP"]: Include only specific channels
-#   - For multiple datasets, specify channels for each:
+#   - "all" (default): Include all channels from every dataset
+#   - One entry per dataset, each "all" or a list of channel names:
 #     [["DAPI"], ["GFP", "RFP"]] - Take DAPI from first dataset, GFP and RFP from second
-channel_names:
-  - "all" # Include all channels from first dataset
-  - "all" # Include all channels from second dataset
+#     ["all", ["Phase3D"]]       - Everything from the first, only Phase3D from the second
+channel_names: "all"
 
 # Spatial cropping options for X dimension
 # Options:

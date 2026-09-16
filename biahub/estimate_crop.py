@@ -180,6 +180,11 @@ def estimate_crop(
     output_path_csv.mkdir(exist_ok=True, parents=True)
 
     # Assume phase dataset is first and fluor dataset is second in input_model.concat_data_paths
+    if not settings.concat_data_paths or len(settings.concat_data_paths) < 2:
+        raise ValueError(
+            "estimate-crop needs concat_data_paths in the config: the phase positions "
+            "first, the fluorescence positions second."
+        )
     lf_paths = config_filepath.parent.glob(settings.concat_data_paths[0])
     lf_position_dirpaths = [p for p in lf_paths if p.is_dir()]
     click.echo(f"Found {len(lf_position_dirpaths)} phase channels.")

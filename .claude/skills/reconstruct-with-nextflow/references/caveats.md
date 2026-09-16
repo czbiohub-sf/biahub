@@ -138,10 +138,11 @@ channels, even when it exists in the plate — a template declaring
 positions after every other step had succeeded. Both shipped templates use
 `method: all` (falls back to the first loaded channel), the safe default.
 
-**`concatenate.yml` — `concat_data_paths` stay as `placeholder`.** The
-assemble subworkflow injects the real source paths via `--concat-data-paths`.
-Three placeholder entries and three `channel_names` entries (deskew,
-reconstruct, virtual-stain). Do not "fix" them to real paths.
+**`concatenate.yml` holds parameters only — no source paths.** The assemble
+subworkflow passes the three source stores on the command line, one `-i` per
+store (deskew, reconstruct, virtual-stain), so there is no `concat_data_paths`
+to fill in. `channel_names: all` takes every channel of every source; to pick
+channels, give one entry per source in that order.
 
 ---
 
