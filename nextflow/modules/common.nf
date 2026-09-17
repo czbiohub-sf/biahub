@@ -16,6 +16,26 @@ def parse_resources(stdout_text, prefix = 'RESOURCES:') {
     return [cpus: res.cpus as int, mem_gb: res.mem_gb as int, time_minutes: res.time_minutes as int]
 }
 
+// RETRY RESOURCES. Preemption is the ordinary reason a task is retried on the
+// `preempted` partition, and it says nothing about the task's size, so a retry
+// must not keep asking for more: the request is the base on the first attempt
+// and DOUBLE the base on every later one — enough headroom for a genuine
+// time-limit or OOM kill, without the linear `* task.attempt` growth that made a
+// twice-preempted position wait for a triple-size slot. Time is also capped at
+// the partition's limit (2-00:00:00 = 2880 min): sbatch rejects a larger
+// request with exit 1, which the errorStrategy does not retry, so an estimate
+// above 24 h used to take the whole run down on its first preemption
+// (2026_08_14_dynatrack, flat-field base 27 h -> 54 h on attempt 2).
+def retry_time(base_minutes, task) {
+    def preempted_max_minutes = 2880.0d   // the partition's 2-00:00:00 limit
+    def minutes = (base_minutes as double) * (task.attempt == 1 ? 1 : 2)
+    return "${Math.min(minutes, preempted_max_minutes) as long} min"
+}
+
+def retry_memory(base_gb, task) {
+    return "${(base_gb as double) * (task.attempt == 1 ? 1 : 2)} GB"
+}
+
 def slurm_log_dir(step_name) {
     return "${params.output}/nextflow/slurm_output/${step_name}"
 }
