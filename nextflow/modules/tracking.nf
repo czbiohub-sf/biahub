@@ -94,11 +94,11 @@ workflow track_init_wf {
     trigger
 
     main:
-    init_out = init_track(input_zarr, output_zarr, config, trigger.map { 'done' })
+    init_out = init_track(input_zarr, output_zarr, config, trigger.collect().map { 'done' })
 
     emit:
-    resources = init_out.map { stdout_text -> parse_resources(stdout_text) }.first()
-    done      = init_out.map { 'done' }.first()
+    resources = init_out.map { stdout_text -> parse_resources(stdout_text) }
+    done      = init_out.map { 'done' }
 }
 
 

@@ -145,11 +145,11 @@ workflow virtual_stain_init_wf {
     trigger
 
     main:
-    init_out = init_virtual_stain(input_zarr, output_zarr, config, trigger.map { 'done' })
+    init_out = init_virtual_stain(input_zarr, output_zarr, config, trigger.collect().map { 'done' })
 
     emit:
-    resources = init_out.map { stdout_text -> parse_resources(stdout_text) }.first()
-    done      = init_out.map { 'done' }.first()
+    resources = init_out.map { stdout_text -> parse_resources(stdout_text) }
+    done      = init_out.map { 'done' }
 }
 
 
@@ -174,12 +174,12 @@ workflow virtual_stain_run_wf {
     prev_done
 
     main:
-    vs_preprocess = run_virtual_stain_preprocess(input_zarr, prev_done.map { 'done' })
+    vs_preprocess = run_virtual_stain_preprocess(input_zarr, prev_done.collect().map { 'done' })
 
     pos_meta = positions
         .flatMap { items -> items }
         .combine(resources)
-        .combine(vs_preprocess.first())
+        .combine(vs_preprocess)
         .map { pos, meta, _preprocess_done -> [pos, meta] }
 
     vs_done = run_virtual_stain(pos_meta, input_zarr, output_zarr, config) | collect

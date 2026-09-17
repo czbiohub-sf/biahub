@@ -25,6 +25,7 @@
 //   collected_done  `run_<step> | collect` — a LIST         (<step>_run_wf)
 //   single_done     run_concatenate's single output path    (assemble_run_wf)
 //   tf_done         compute_transfer_function's `val true`  (reconstruct_tf_wf)
+//   queue_trigger   an N-item queue fed to a step's init   (<step>_init_wf)
 
 nextflow.enable.dsl = 2
 
@@ -75,4 +76,21 @@ workflow {
         .map { pos, m, _gate -> [pos, m] }
         .collect()
         .subscribe { check('scalar gate', it.size(), keys.size() * 2) }
+
+    // <step>_init_wf / reconstruct_tf_wf / virtual_stain_run_wf — trigger
+    // normalisation. `trigger.collect().map { 'done' }` must yield exactly ONE
+    // token whatever the trigger is (a value, or a queue of N items), so the
+    // process it feeds runs once and emits value channels — which is what lets
+    // the module emits be combined as gates without `.first()`.
+    queue_trigger = channel.fromList(keys)
+    positions.flatMap { it }
+        .combine(queue_trigger.collect().map { 'done' })
+        .map { pos, _gate -> pos }
+        .collect()
+        .subscribe { check('normalised queue trigger', it.size(), keys.size()) }
+    positions.flatMap { it }
+        .combine(channel.value('start').collect().map { 'done' })
+        .map { pos, _gate -> pos }
+        .collect()
+        .subscribe { check('normalised value trigger', it.size(), keys.size()) }
 }
