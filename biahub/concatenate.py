@@ -576,26 +576,19 @@ def concatenate(
     _init_output_plate(prep, settings, output_dirpath)
     input_time_indices = prep["input_time_indices"]
 
-    # Resources for ONE output position, which is the unit both this CLI's
-    # SLURM fan-out and the Nextflow fan-out schedule. Every position costs the
-    # same, so the estimate is made once (and printed by --init), not per worker.
-    #
-    # RAM keys on the source ZYX volume (the read size, which the crop can only
-    # shrink). With sharding, a worker holds a whole shard of batch_size
-    # timepoints, so the per-CPU multiplier scales with batch_size and the
-    # parallel unit count drops by the same factor. Wall-time keys on the number
-    # of output volumes copied: time_multiplier = 0.1 min/volume is ~8x the rate
-    # observed on the 2026_08_11 A549 SEC61B run (0.012 min/volume at 16 CPUs:
-    # 54 positions x 67 T x 6 C in 4 h 19 min single-shot, CPU-bound on
-    # compression), leaving room for per-task startup and node contention.
+    # Per-position resources, estimated once. Calibrated on 2026_08_11 A549
+    # SEC61B (67 T x 6 C, 5-T shards): RAM tracks the worker count (~16 GB per
+    # in-flight shard unit), and the fan-out is bound by shared filesystem
+    # bandwidth, not cores (<3 of 16 busy), so 8 workers per task suffice.
+    # 16-worker tasks took 7-26 min; 0.15 min/volume budgets 60 min here.
     T_out, C_out, _, _, _ = prep["output_metadata"]["shape"]
     _, _, Z, Y, X = prep["shape"]
     batch_size = settings.shards_ratio[0] if settings.shards_ratio else 1
     time_minutes, num_cpus, gb_ram_per_cpu = estimate_resources(
         shape=(max(T_out // batch_size, 1), C_out, Z, Y, X),
         ram_multiplier=8 * batch_size,
-        time_multiplier=0.1 * batch_size,
-        max_num_cpus=16,
+        time_multiplier=0.15 * batch_size,
+        max_num_cpus=8,
     )
     mem_gb = num_cpus * gb_ram_per_cpu
     echo_resources(num_cpus, mem_gb, time_minutes)
