@@ -33,7 +33,7 @@ ants_registration_settings:
 # Settings for affine transformation estimation
 affine_transform_settings:
   t_reference: first # "first" or "previous"
-  use_prev_t_transform: True # Use the previous timepoint transform as the initial transform
+  use_prev_t_transform: False # beads-only: the ants path runs timepoints in parallel from a static seed
   compute_approx_transform: False # Compute the approximate transform before optimizing
   transform_type: affine # "euclidean", "similarity", or "affine"
   approx_transform: # Initial guess for the 4x4 affine transform
