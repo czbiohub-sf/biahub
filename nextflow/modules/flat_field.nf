@@ -93,21 +93,24 @@ workflow flat_field_init_wf {
     trigger
 
     main:
-    init_out = init_flat_field(input_zarr, output_zarr, config, trigger.map { 'done' })
+    init_out = init_flat_field(input_zarr, output_zarr, config, trigger.collect().map { 'done' })
 
     emit:
-    // `.first()` turns the init's one-shot stdout into a VALUE channel, which is
-    // the contract every step module here emits on: both outputs cross a
-    // subworkflow boundary and are combined against a per-position queue
-    // channel, and a value channel makes that a gate rather than a one-item
-    // cross product whose behaviour depends on how many consumers read it.
+    // Both emits are VALUE channels, which is the contract every step module
+    // here emits on: they cross a subworkflow boundary and are combined against
+    // a per-position queue channel, and a value channel makes that a gate rather
+    // than a one-item cross product whose behaviour depends on how many
+    // consumers read it.
     //
-    // Nextflow logs one deduplicated "operator `first` is useless when applied
-    // to a value channel" per run because THIS pipeline happens to trigger every
-    // init from a value channel, which already makes `stdout` one. That is a
-    // property of the caller, not of the module, so the guard stays.
-    resources = init_out.map { stdout_text -> parse_resources(stdout_text) }.first()
-    done      = init_out.map { 'done' }.first()
+    // The guarantee is made at the INPUT, not the output. A process whose inputs
+    // are all value channels emits value channels, and `trigger.collect()`
+    // above turns any trigger — value or queue, whatever its payload — into one
+    // value before the token is taken from it. The previous form, `.first()` on
+    // each emit, gave the same guarantee but logged "operator `first` is useless
+    // when applied to a value channel" on every run, because every caller in
+    // this pipeline already triggers init from a value channel.
+    resources = init_out.map { stdout_text -> parse_resources(stdout_text) }
+    done      = init_out.map { 'done' }
 }
 
 
