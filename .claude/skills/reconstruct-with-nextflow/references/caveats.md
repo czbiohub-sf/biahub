@@ -62,10 +62,10 @@ implemented by `templates/rename_channels.py` — first match wins, idempotent:
 | already canonical, or already `raw `-prefixed | left alone |
 | anything else | `raw <original>` |
 
-Run once after `5-assemble`, from the directory holding the store:
+Run once after assemble, from the directory holding the store:
 
 ```bash
-cd <OUTPUT>/5-assemble
+cd <OUTPUT>/<N>-assemble        # 4-assemble on a standard run
 DATASET=<DATASET> <BIAHUB>/.venv/bin/python rename_channels.py
 ```
 
@@ -73,7 +73,7 @@ DATASET=<DATASET> <BIAHUB>/.venv/bin/python rename_channels.py
 `biahub virtual-stain` names outputs verbatim from `target_channel`, but the
 rest of biahub keys off the `_prediction` suffix.
 
-**⚠ Ordering.** `4-track` runs *inside* the pipeline and reads the assembled
+**⚠ Ordering.** tracking runs *inside* the pipeline and reads the assembled
 plate, so **track sees the pre-rename names**. The shipped templates avoid the
 trap by putting the suffix directly in the VS `target_channel`
 (`nuclei_prediction`/`membrane_prediction`), making the rename a no-op for
@@ -127,7 +127,9 @@ z_range + focus_config.z_window -> z_slicing.{method, window_size, focus_channel
 
 (`focus_config`'s `NA_det`/`lambda_ill`/`pixel_size` have no equivalent.)
 `target_channel` and `cellpose_config.input_channel` must match **pre-rename**
-names in the **assembled** plate (§2, §5).
+names in the **assembled** plate (§2, §5). `qc_track.yaml`'s `channels:` must
+then match `<target_channel>_labels`, which is what the tracking store actually
+holds — SKILL.md §5a checks both couplings before launch.
 
 **`z_slicing.focus_channel` resolves against `input_images`, not the store.**
 `apply_focus_slicing` raises if the focus channel is not among the loaded
@@ -145,28 +147,34 @@ reconstruct, virtual-stain). Do not "fix" them to real paths.
 
 ## 4. Neuromast/zebrafish datasets are not tracked
 
-Tracking is an A549 step; for neuromast/zebrafish the deliverable is
-`5-assemble`, and track's parameters are tuned for A549 cells. But
-`mantis-v2.nf` errors without `--track_config` and unconditionally wires
-`track_wf` after assemble (making steps optional is
-[biahub#306](https://github.com/czbiohub-sf/biahub/issues/306)). So:
+Tracking is an A549 step; for neuromast/zebrafish the deliverable is the
+assembled store, and track's parameters (cellpose `diameter`, `min_area`/
+`max_area`, linking `max_distance`) are tuned for A549 cells and do not
+transfer. So simply do not run it:
 
-- Pass `<BIAHUB>/nextflow/configs/zebrafish/track.yml` (a marked placeholder)
-  so the run validates and starts.
-- Say in the plan that `4-track` is a discarded by-product.
+- Omit `--track_config` — delete that line, and `--qc_track_config` with it,
+  from the `nextflow run` call in the run script. A step runs only if its config
+  is passed ([biahub#306](https://github.com/czbiohub-sf/biahub/issues/306),
+  fixed). Delete rather than comment: `#` inside a backslash-continued command
+  drops every flag below it, `-resume` included.
+- There is no tracking by-product to explain away any more, and the
+  `zebrafish/track.yml` placeholder that existed only to satisfy the old
+  hard requirement is deleted.
 - Do not report tracking results or tune the track config for these datasets
   unless the user asks for neuromast tracking explicitly.
+- QC still runs: a neuromast run does image QC of the assembled store
+  (`--qc_config`). Only the tracking tab is absent.
 
 ## 5. Track reads the assembled plate, not the intermediates
 
-`track_wf` takes `5-assemble/<DATASET>.zarr` for *both* inputs. So any Z/Y/X
+`track_wf` takes the assembled `<DATASET>.zarr` for *both* inputs. So any Z/Y/X
 crop or `time_indices` subset in `concatenate.yml` is what tracking sees, and
 tracking starts only after the whole plate assembles.
 
 ## 6. Assemble is a single job on one reserved node
 
 `concatenate --cluster debug` iterates every position in-process, so
-`5-assemble` is one large SLURM job — the single longest step.
+Assemble is one large SLURM job — the single longest step.
 `biahub concatenate --resume` (passed by the Nextflow task) makes a late kill
 recoverable per (t, c) unit.
 
@@ -284,6 +292,12 @@ step globs the whole input, so a one-position smoke test scaffolds the output
 plate for *all* positions with data in only the first — correct and expected.
 Do not treat such a store as a deliverable, and delete it before a real run so
 `-resume` cannot reuse it.
+
+Since the init phase moved to the front of the run, this is visible sooner and
+for every step at once: a smoke test creates the full-width plate for
+flat-field, deskew, reconstruct, virtual-stain, assemble AND track within the
+first minutes, before a single position has been computed. Nothing changed
+about what ends up on disk — only when it appears.
 
 (Related, for pipeline developers: a param passed as `--foo 1` on the command
 line arrives as a String; coerce numeric params at the point of use and test

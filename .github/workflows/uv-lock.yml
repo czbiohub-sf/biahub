@@ -17,12 +17,63 @@ jobs:
     permissions:
       contents: write # push the branch holding the refreshed uv.lock
       pull-requests: write # open/update the refresh PR
+    env:
+      # Read-only DEPLOY KEY for the PRIVATE imaging-qc-pipeline dependency of the
+      # `qc` extra. A deploy key rather than a token because it cannot reach any
+      # other repository by construction — which matters here, since biahub is
+      # public — and because it is not tied to a person's account.
+      #
+      # Reaches the script through env, never `${{ }}` inside `run:`: zizmor runs
+      # the pedantic persona and only ignores template-injection for
+      # pull-request-ci.yml. Empty when unconfigured, which the guard step reports.
+      IMAGING_QC_DEPLOY_KEY: ${{ secrets.IMAGING_QC_DEPLOY_KEY }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
       - uses: astral-sh/setup-uv@v10.0.1
+
+      # `uv lock --upgrade` discards the pinned rev and RE-RESOLVES every
+      # dependency, the private git one included, so this job needs a credential
+      # that PR CI does not: `uv sync --group dev` installs from the lockfile and
+      # never touches the `qc` extra, and GITHUB_TOKEN is scoped to this
+      # repository so it cannot read another private one. A TARGETED upgrade does
+      # not avoid it either — `uv lock --upgrade-package pandas` on a cold cache
+      # still fetches the git source and fails without a credential (measured).
+      # `uv lock --check` is the one command that does not: it reads the metadata
+      # already in the lockfile, which is why PR CI stays credential-free.
+      #
+      # The dependency URL stays HTTPS so that a human needs only `gh auth login`
+      # and no SSH key; this rewrite is what lets a deploy key serve the same URL,
+      # and it is scoped to that ONE repository rather than all of github.com.
+      #
+      # No ssh-agent: each `run:` is a fresh shell, so the key goes to a file and
+      # GIT_SSH_COMMAND is exported through $GITHUB_ENV for the steps that follow.
+      # `IdentitiesOnly` stops ssh offering any other key it happens to find.
+      - name: Authenticate to the private imaging-qc dependency
+        if: env.IMAGING_QC_DEPLOY_KEY != ''
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$IMAGING_QC_DEPLOY_KEY" > ~/.ssh/imaging_qc
+          chmod 600 ~/.ssh/imaging_qc
+          # Trust on first use. Pinning GitHub's host keys here would be stronger,
+          # but they rotate (the RSA key was replaced in 2023) and a stale pin
+          # fails this job closed for a reason nobody will look for.
+          ssh-keyscan -t ed25519,rsa github.com >> ~/.ssh/known_hosts 2>/dev/null
+          echo "GIT_SSH_COMMAND=ssh -i $HOME/.ssh/imaging_qc -o IdentitiesOnly=yes" >> "$GITHUB_ENV"
+          git config --global \
+            url."ssh://git@github.com/czbiohub-sf/imaging-qc-pipeline".insteadOf \
+            "https://github.com/czbiohub-sf/imaging-qc-pipeline"
+
+      # Fail with the cause named. Without this the run dies inside uv with a
+      # bare "Could not read from remote repository", which reads as an outage
+      # rather than a missing secret.
+      - name: Require the imaging-qc deploy key
+        if: env.IMAGING_QC_DEPLOY_KEY == ''
+        run: |
+          echo "::error::IMAGING_QC_DEPLOY_KEY is not set. 'uv lock --upgrade' re-resolves the private czbiohub-sf/imaging-qc-pipeline dependency and cannot read it without a read-only deploy key. Add the secret (gh secret set IMAGING_QC_DEPLOY_KEY), or drop the qc extra's source from pyproject.toml."
+          exit 1
 
       # Bumps every dependency the pyproject constraints allow, in one commit,
       # instead of one Dependabot PR per package.

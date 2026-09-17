@@ -113,8 +113,8 @@ three levels **inside** the named store:
 
 ```bash
 DS=<DATASET>
-for d in 0-flatfield 1-deskew 2-reconstruct 3-virtual-stain 5-assemble 4-track; do
-  printf "  %-16s %s\n" "$d" "$(ls -d "<OUTPUT>/$d/$DS.zarr"/*/*/*/ 2>/dev/null | wc -l)"
+for d in <OUTPUT>/[0-9]-*/; do   # numbered by position, so glob rather than list
+  printf "  %-16s %s\n" "$(basename "$d")" "$(ls -d "$d/$DS.zarr"/*/*/*/ 2>/dev/null | wc -l)"
 done
 ```
 
@@ -122,10 +122,12 @@ Two traps, both hit for real:
 
 - **Name the store.** A bare `$d/*.zarr/*/*/*/` overcounts `2-reconstruct`, which
   also holds `transfer_function.zarr` (10 instead of 8 for an 8-position plate).
-- **This counts scaffolds, not finished work.** Each step's cached `init-*` task
-  creates every position's metadata up front, so a step shows its full position
-  count from the moment it starts — a step whose every task *failed* still reads
-  8/8 here. Use it for "has this step started", never for "is this step done".
+- **This counts scaffolds, not finished work.** Every step's `init_*` task runs
+  in the run's first minutes — the pipeline does the whole init chain before any
+  compute — and each creates every position's metadata up front. So EVERY step
+  reads its full position count from a few minutes into the run, including steps
+  that will not start for hours and steps whose every task later fails. Use this
+  only to confirm the init phase completed; it says nothing about progress.
   `trace.txt` is the only authoritative source for completion:
 
 ```bash
@@ -309,11 +311,11 @@ total and max wall time. Then:
 ```bash
 <BIAHUB>/.venv/bin/python -c "
 from iohub.ngff import open_ome_zarr
-with open_ome_zarr('<OUTPUT>/5-assemble/<DATASET>.zarr', mode='r') as p:
+with open_ome_zarr('<OUTPUT>/4-assemble/<DATASET>.zarr', mode='r') as p:
     pos = list(p.positions())
     print(len(pos), 'positions'); print(p.channel_names)
     print(pos[0][1].data.shape, pos[0][1].data.dtype)"
-du -sh <OUTPUT>/5-assemble/<DATASET>.zarr
+du -sh <OUTPUT>/4-assemble/<DATASET>.zarr
 ```
 
 Point the user at `<OUTPUT>/nextflow/report.html` (resource usage per process)

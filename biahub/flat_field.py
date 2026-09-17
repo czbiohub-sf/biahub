@@ -194,6 +194,7 @@ def _init_output_plate(
         dtype=np.float32,
         metadata_sources=input_plate,
         metadata_keys=PROVENANCE_METADATA_KEYS,
+        extra_metadata={"biahub-flat_field": settings.model_dump()},
     )
 
     return (T, C, Z, Y, X), all_channel_names
@@ -288,7 +289,6 @@ def flat_field(
 
     flat_field_args = {
         "target_indices": target_indices,
-        "extra_metadata": {"biahub-flat_field": settings.model_dump()},
     }
 
     slurm_args = {

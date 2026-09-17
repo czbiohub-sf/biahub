@@ -112,7 +112,7 @@ def notify_run_start(dataset, pipeline, n_positions, steps) {
         // unset param throws — mantis-v2.nf declares a default, but this module
         // must not blow up in a pipeline that doesn't.
         ((params.max_positions ?: 0) as int) > 0 ? "max_positions: ${params.max_positions}" : null,
-    ].findAll { it }.join('\n')
+    ].findAll { part -> part }.join('\n')
 
     // --operator prepends the "operator:" line, resolved from the account database
     // by the Python. It is NOT taken from Slack: turning a member ID into a
@@ -166,7 +166,7 @@ def restart_causes(job_ids) {
         }
         return causes ?: null
     }
-    catch (Throwable t) {
+    catch (Throwable _t) {
         return null
     }
 }
@@ -200,14 +200,38 @@ def failed_attempts() {
         if (!trace.exists()) {
             return null
         }
-        def outcome = [restarted: 0, failed: 0, exits: [:], job_ids: []]
+        def outcome = [restarted: 0, failed: 0, exits: [:], unknown: 0, job_ids: []]
         trace.readLines().drop(1).each { line ->
             def field = line.split('\\t')
             if (field.size() > 5 && field[4] == 'FAILED') {
-                def code = field[5].isInteger() ? field[5] as int : -1
-                if (code >= 130 && code <= 145) {
+                // An exit column of '-' is an attempt whose exit code Nextflow
+                // could NOT read, which on the `preempted` partition means SLURM
+                // cancelled the job before it could write .exitcode. That is an
+                // infrastructure kill exactly like a 143, and nextflow.config's
+                // errorStrategy retries it — so it must count as restarted.
+                // Counting it as a failure (what parsing '-' to -1 did) would
+                // report a healthy run as broken. When such a task does end the
+                // run it is because it burnt through maxRetries, which the
+                // "retries exhausted" note in notify_run_end covers.
+                //
+                // This is DELIBERATELY broader than the errorStrategy, which
+                // retries the Integer.MAX_VALUE sentinel but not a null status.
+                // trace.txt cannot tell those apart — TraceRecord.fmtString
+                // renders both as '-' — so no parsing here could separate them,
+                // and a null status is unreachable on the SLURM path anyway
+                // (GridTaskHandler assigns only after a non-null check). Treating
+                // every '-' as restarted is therefore exact for every case that
+                // can actually occur; do not try to "align" it with the config.
+                def unknown = !field[5].isInteger()
+                def code = unknown ? null : field[5] as int
+                if (unknown || (code >= 130 && code <= 145)) {
                     outcome.restarted = outcome.restarted + 1
-                    outcome.exits[code] = (outcome.exits[code] ?: 0) + 1
+                    if (unknown) {
+                        outcome.unknown = outcome.unknown + 1
+                    }
+                    else {
+                        outcome.exits[code] = (outcome.exits[code] ?: 0) + 1
+                    }
                     if (field[2] && field[2].isInteger()) {
                         outcome.job_ids += field[2]
                     }
@@ -219,7 +243,7 @@ def failed_attempts() {
         }
         return outcome
     }
-    catch (Exception e) {
+    catch (Exception _e) {
         return null
     }
 }
@@ -234,9 +258,15 @@ def restarted_line(outcome) {
         return 'restarted: 0'
     }
     def causes = restart_causes(outcome.job_ids)
+    // Without sacct, fall back to exit codes — including the attempts that had
+    // none, which would otherwise contribute nothing and render "restarted: N ()".
+    def by_exit = outcome.exits.sort().collect { code, n -> "exit ${code}×${n}" }
+    if (outcome.unknown) {
+        by_exit += "no exit code×${outcome.unknown}"
+    }
     def detail = causes
-        ? causes.sort { -it.value }.collect { label, n -> "${n} ${label}" }.join(', ')
-        : outcome.exits.sort().collect { code, n -> "exit ${code}×${n}" }.join(', ')
+        ? causes.sort { entry -> -entry.value }.collect { label, n -> "${n} ${label}" }.join(', ')
+        : by_exit.join(', ')
     return "restarted: ${outcome.restarted} (${detail})".toString()
 }
 
@@ -245,7 +275,35 @@ def restarted_line(outcome) {
 // Called from a single `workflow.onComplete`, never from onComplete AND onError:
 // onError fires in ADDITION to onComplete, so implementing both double-posts
 // every failure.
-def notify_run_end(dataset, pipeline, wf) {
+// Lines that carry no information about what went wrong. Groovy appends a
+// `Possible solutions:` list to every MissingMethodException — that is what a
+// real run put in a Slack title, verbatim and alone: "reconstruction aborted:
+// Possible solutions: any(), any(), any(groovy.lang.Closure), …".
+def _is_boilerplate(line) {
+    def t = line.trim()
+    return t.startsWith('at ') || t.startsWith('Possible solutions:') ||
+           t ==~ /^\.\.\. \d+ more$/ || t.startsWith('Caused by:') && t.size() < 12
+}
+
+// The most informative single line, for the title.
+//
+// LAST non-boilerplate line, not the first. For a task that died in Python,
+// errorMessage is the captured stderr, so the first line is "Traceback (most
+// recent call last):" — true of every Python failure and useless in a title —
+// while the last is the exception itself ("ValueError: bad config here"). For a
+// Groovy error the informative line is followed by boilerplate, which is why the
+// filter runs before `.last()` rather than after. The Python caps the length.
+def error_headline(lines) {
+    def useful = lines.findAll { line -> !_is_boilerplate(line) }
+    return useful ? useful.last().trim() : null
+}
+
+// Stack frames say where the interpreter was, not what the user must fix.
+def strip_stack_frames(text) {
+    return text.readLines().findAll { line -> !_is_boilerplate(line) }.join('\n')
+}
+
+def notify_run_end(dataset, pipeline, wf, assembled = null) {
     def stats = wf.stats
     def lines = [
         "pipeline:  ${pipeline}",
@@ -284,38 +342,55 @@ def notify_run_end(dataset, pipeline, wf) {
             // messages use — this is the one that pings, so it should not look
             // identical to six that do not. Reads 🚀 start, ✅ per step, 🏁 done.
             '--title', ":checkered_flag: ${dataset} — reconstruction complete",
-            '--detail', "${summary}\nassembled: ${params.output}/5-assemble/${dataset}.zarr",
+            // The assembled store's path is PASSED IN, not built here: its
+            // directory number is a position among the steps that ran, and the
+            // step is optional, so there is no constant to write down. Null when
+            // assemble was not performed, and then the line is simply absent.
+            '--detail', assembled ? "${summary}\nassembled: ${assembled}" : summary,
         ])
         return
     }
 
-    // Ctrl-C also lands here. Calling that a failure would make every debug
-    // relaunch read as a catastrophe, so distinguish it: an interrupt records no
-    // process exit status.
-    def aborted = wf.exitStatus == null
-    def verb = aborted ? 'aborted' : 'FAILED'
-    def icon = aborted ? ':warning:' : ':x:'
-    def title = "${icon} ${dataset} — reconstruction ${verb}"
-    // LAST non-blank line, not the first. For a task that died in Python,
-    // errorMessage is the captured stderr, so the first line is
-    // "Traceback (most recent call last):" — true of every Python failure and
-    // therefore useless in a title, while the last line is the exception itself
-    // ("ValueError: bad config here"). For a non-Python failure it is a
-    // single-line "Process X terminated with an error exit status (3)", where
-    // first and last are the same. Same reasoning as keeping the tail when
-    // truncating a detail. The Python caps the title length.
-    def message = wf.errorMessage?.readLines()?.findAll { it.trim() }
-    if (message) {
-        title += ": ${message.last().trim()}"
+    // THREE outcomes reach here, and they need different words. An interrupt
+    // (Ctrl-C) records no error message at all — calling that a failure would
+    // make every debug relaunch read as a catastrophe. A task failure names a
+    // process. Anything else is the pipeline's own code failing to wire itself,
+    // where NO task failed and there is nothing to retry: the run that prompted
+    // this had 288 successful tasks and every reconstruction step on disk, and
+    // still said "reconstruction aborted".
+    def message_lines = (wf.errorMessage ?: '').readLines().findAll { line -> line.trim() }
+    def interrupted = message_lines.isEmpty()
+    def task_match = (wf.errorReport ?: '') =~ /Process `([^`]+)`/
+    def failed_task = task_match ? task_match[0][1] : null
+
+    def icon = interrupted ? ':warning:' : ':x:'
+    def title
+    if (interrupted) {
+        title = "${icon} ${dataset} — reconstruction interrupted"
+    }
+    else if (failed_task) {
+        title = "${icon} ${dataset} — ${failed_task} failed"
+    }
+    else {
+        title = "${icon} ${dataset} — pipeline error, no task failed"
+    }
+    def headline = error_headline(message_lines)
+    if (headline) {
+        title += ": ${headline}"
     }
 
     // workflow.errorReport embeds the failing task's `Command executed:` block
     // and a full Python traceback — backticks, quotes and newlines. Never build
     // a shell string out of it; write it to a file and pass the path.
-    def report = [summary, wf.errorReport ?: ''].findAll { it }.join('\n\n')
+    //
+    // Stack frames are stripped first. The detail is truncated from the FRONT
+    // (clean_and_truncate keeps the tail, where a Python diagnosis lives), so a
+    // hundred lines of `at java.base/...` would push the counts and the actual
+    // error out of the message and leave the reader with thread bookkeeping.
+    def report = [summary, strip_stack_frames(wf.errorReport ?: '')].findAll { part -> part }.join('\n\n')
     def detail_file = new File("${params.output}/nextflow/.notify/run-end.txt")
     def args = [
-        '--level', aborted ? 'warn' : 'error',
+        '--level', interrupted ? 'warn' : 'error',
         '--ping',
         '--title', title,
     ]
@@ -324,7 +399,7 @@ def notify_run_end(dataset, pipeline, wf) {
         detail_file.text = report
         args += ['--detail-file', detail_file.path]
     }
-    catch (Exception e) {
+    catch (Exception _e) {
         // An unwritable output dir is plausible here (it may be why the run
         // failed). Fall back to the counts, which need no file.
         args += ['--detail', summary]
@@ -364,7 +439,7 @@ def notify_run_end(dataset, pipeline, wf) {
 def notify_send(args) {
     def command = ['biahub', 'nf', 'notify'] +
         ['--log-file', "${params.output}/nextflow/.notify/notify.log".toString()] +
-        args.collect { it.toString() }
+        args.collect { arg -> arg.toString() }
     try {
         def builder = new ProcessBuilder(command)
         builder.inheritIO()

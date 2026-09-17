@@ -1,0 +1,120 @@
+# Pixel-value QC for the assembled intensity store (zebrafish/neuromast) — the plate assemble writes,
+# holding the acquired channels plus the derived ones.
+#
+# SELF-CONTAINED, with no Hydra `defaults:`. It used to inherit a base.yaml, which
+# existed to be shared and was shared by this one file; and the directory layout
+# around it (`assemble/`, `track/`) existed only because `imaging-qc report`
+# resolved a tab's settings by scanning a directory. imaging-qc#201 fixed that —
+# the report composes from the file it is given — so one file per store is the
+# whole story now, and the tab keeps the `display_name` below, which the
+# directory form dropped in favour of "Stage 5".
+#
+# The extension must be `.yaml`: imaging-qc loads a stage config through Hydra,
+# which strips the extension and looks for `<stem>.yaml`, so `.yml` fails with
+# "Cannot find primary config".
+#
+# `stage:` is the only place the stage number appears — renumbering is that one
+# edit, with no file to rename.
+
+stage: 5
+display_name: "Assembled Image — Pixel QC"
+
+backend: iohub
+positions: null
+metric_group: default
+log_level: INFO
+upstream_qc_dir: null
+
+metric_groups:
+  default:
+    metrics:
+      - intensity_stats
+      - signal_to_noise
+      - blank
+      - tenengrad
+
+intensity_stats:
+  grid: 16
+  quantiles: [0.01, 0.05, 0.25, 0.5, 0.75, 0.95, 0.99]
+
+# NO per-channel SNR floor here, deliberately. A floor has to be keyed to this
+# family's channel names and set from a healthy value for them, and inventing
+# either would be a threshold nobody measured — the failure mode the a549 config
+# warns about. What still gates without it: the relative SNR outlier fence below,
+# the tenengrad floor, blank detection, and the intensity_stats trends. Add a
+# {channel: value} `hard_floor` once you have a run to read healthy SNR off.
+signal_to_noise:
+  granularity: slice
+  gate:
+    granularity: channel
+    hard_ceiling: null
+    outlier_method: zscore
+    outlier_params:
+      n_std: 3.0
+      tail: lower
+
+blank:
+  intensity_threshold: 0.01
+  variance_threshold: 1.0e-6
+  granularity: slice
+  channels: null
+  gate:
+    granularity: channel
+
+# NORMALIZE OFF, measured rather than preferred. With `normalize: true` this
+# metric divides gradient energy by an intensity scale, and in the empty planes
+# that divisor is near zero — so noise becomes the largest value in the stack.
+# On 2026_08_11_A549_SEC61B_DENV it peaked at Z 3-19 (SNR ~5 there, i.e. no
+# signal) and ANTI-correlated with SNR across Z, rho -0.31 to -0.69. Raw, on the
+# same pixels, it peaks at Z 31-37 — inside the in-focus band where SNR peaks —
+# and correlates at rho +0.97 to +0.99. It is a focus metric again.
+#
+# ⚠ `hard_floor` below is a NORMALIZED bound and is inert against raw values,
+# which run 179-934 on GFP: it cannot fire. Recalibration is deliberately
+# deferred — the floor is channel-scale dependent (BF, Phase3D and the
+# predictions each sit on their own scale), so it needs reading off healthy runs
+# per channel, like the SNR floors. The relative outlier fence still gates this
+# metric in the meantime.
+tenengrad:
+  threshold: 0.0
+  normalize: false
+  granularity: slice
+  gate:
+    hard_floor: 0.001
+    hard_ceiling: null
+    outlier_method: zscore
+    outlier_params:
+      n_std: 3.0
+      tail: lower
+
+report:
+  max_timepoints: 5
+  compact: false
+  # MAX over Z, not the default median, for both per-Z metrics. The question a
+  # reader asks of a Z stack is "is there usable signal / focus anywhere in it",
+  # and a median over 86 planes answers a different one: two thirds of this
+  # store's planes are out of focus, so the median is dragged toward the floor.
+  # Measured on GFP: median-over-Z SNR 12.0 against max-over-Z 26.7.
+  #
+  # REPORT-SIDE ONLY. Gates still collapse Z by mean (`any()` for booleans), so
+  # a panel and a verdict describe different reductions of the same rows — worth
+  # remembering before calibrating a bound against a plot.
+  #
+  # No `group_positions:` yet. It is report-level, so it would apply to every
+  # panel at once, and the right value differs by form: `range_drift` is
+  # unreadable at 972 traces and wants per-well medians, while a facetgrid's
+  # distribution is the point and collapsing 54 fields to 6 destroys it (the GFP
+  # panel's max falls 21.8 -> 15.3). Per-entry grouping is imaging-qc#221.
+  metric_archetypes:
+    signal_to_noise:
+      archetype: facetgrid
+      aggregate: {Z: max}
+    tenengrad:
+      archetype: facetgrid
+      aggregate: {Z: max}
+    intensity_stats: range_drift
+  metric_labels:
+    signal_to_noise: "Signal-to-Noise Ratio"
+    blank: "Blank Detection"
+    tenengrad: "Tenengrad"
+    intensity_stats: "Intensity Statistics"

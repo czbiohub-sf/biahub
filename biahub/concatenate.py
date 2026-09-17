@@ -381,6 +381,7 @@ def _prepare_concatenate(settings: ConcatenateSettings, output_dirpath: Path) ->
         position_keys=[p.parts[-3:] for p in output_position_paths],
         metadata_sources=list(reversed(source_plates)),
         metadata_keys=PROVENANCE_METADATA_KEYS,
+        extra_metadata={"biahub-concatenate": settings.model_dump()},
         **output_metadata,
     )
     click.echo(f"Created {output_dirpath} ({len(output_position_paths)} positions)")
@@ -511,17 +512,6 @@ def concatenate(
             prep["all_slicing_params"],
             strict=True,
         ):
-            # Preserve extra_metadata written by create_empty_plate's
-            # metadata_sources — process_single_position overwrites it with None
-            # when the kwarg is absent (iohub <= 0.3.7) — and record this step's
-            # own provenance alongside it.
-            with open_ome_zarr(str(output_position_path), layout="fov", mode="r") as pos:
-                existing_extra = pos.zattrs.get("extra_metadata")
-            merged_extra = {
-                **(existing_extra or {}),
-                "biahub-concatenate": settings.model_dump(),
-            }
-
             job = executor.submit(
                 process_single_position,
                 copy_n_paste,
@@ -534,7 +524,6 @@ def concatenate(
                 num_workers=slurm_args["slurm_cpus_per_task"],
                 resume=resume,
                 resume_token=settings_fingerprint(settings),
-                extra_metadata=merged_extra,
                 zyx_slicing_params=zyx_slicing_params,
             )
             jobs.append(job)

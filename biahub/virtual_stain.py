@@ -271,16 +271,8 @@ def _init_output_plate(
         version=resolve_ome_zarr_version(input_position_dirpaths[0], output_ome_zarr_version),
         metadata_sources=input_plate,
         metadata_keys=PROVENANCE_METADATA_KEYS,
+        extra_metadata=extra_metadata,
     )
-
-    if extra_metadata:
-        for input_position_dirpath in input_position_dirpaths:
-            position_key = Path(input_position_dirpath).parts[-3:]
-            with open_ome_zarr(
-                str(Path(output_dirpath).joinpath(*position_key)), mode="r+"
-            ) as output_position:
-                for key, value in extra_metadata.items():
-                    output_position.zattrs[key] = value
 
     return (T, C, Z, Y, X)
 

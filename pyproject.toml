@@ -61,6 +61,15 @@ gui = ["napari[pyqt6]", "PyQt6<6.10", "napari-animation"]
 
 stain = ["cytoland"]
 
+# The external QC pipeline, whose `imaging-qc` CLI nextflow/qc-standalone.nf
+# calls as a bare command. `interactive` brings plotly, which the report step
+# needs unless it runs with --qc_report_static.
+#
+# Deliberately NOT in `all`: imaging-qc-pipeline is a private repo with no PyPI
+# release, so resolving it needs credentials CI's `uv sync --group dev` does not
+# have. Install it explicitly with `uv sync --extra qc`.
+qc = ["imaging_qc_pipeline[interactive]"]
+
 all = ["biahub[segment,track,gui,stain]"]
 
 build = ["build", "twine"]
@@ -86,6 +95,27 @@ biahub = "biahub.cli.main:cli"
 # when resolving build-system requirements such as iohub's hatchling /
 # uv-dynamic-versioning chain, which pulls in packaging>=24.2.
 index-strategy = "unsafe-best-match"
+
+[tool.uv.sources]
+# Private repo, no PyPI release. HTTPS rather than ssh so that installing the
+# `qc` extra needs no SSH key: an org member authenticates once with the GitHub
+# CLI, which is already on Bruno, and uv picks the credential up through git.
+#
+#     gh auth login        # browser/device-code flow, SSO-aware
+#     gh auth setup-git    # installs gh as git's credential helper
+#
+# Anyone who prefers ssh keeps working with a local rewrite, so this costs the
+# key-holders nothing:
+#
+#     git config --global url."ssh://git@github.com/".insteadOf "https://github.com/"
+#
+# Pinned at #266: feat: plan-stage refuses an unknown channels:/per_channel: name
+imaging_qc_pipeline = { git = "https://github.com/czbiohub-sf/imaging-qc-pipeline", rev = "c5c51dc700d0aa52388d6f6a08eec5bfe16a5766" }
+
+# Pin iohub to the main commit that merged czbiohub-sf/iohub#472, which adds
+# `create_empty_plate(extra_metadata=...)`. Drop this back to a PyPI floor once
+# iohub cuts a release containing it.
+iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "172ee926829300b42708edbf6c8e20f2fd642f78" }
 
 [tool.hatch.metadata]
 allow-direct-references = true

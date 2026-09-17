@@ -1,7 +1,7 @@
 # input_channel_names must match the brightfield channel name in the DESKEWED
 # store exactly — a mismatch fails at compute_transfer_function, after
 # flat-field and deskew have already run.
-input_channel_names: ["BF - Oblique"]
+input_channel_names: ["BF"]
 time_indices: "all"
 reconstruction_dimension: 3
 phase:
