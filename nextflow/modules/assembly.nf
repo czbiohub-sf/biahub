@@ -117,11 +117,11 @@ workflow assemble_init_wf {
 
     main:
     init_out = init_concatenate(deskew_zarr, reconstruct_zarr, virtual_stain_zarr,
-                                output_zarr, config, trigger.map { 'done' })
+                                output_zarr, config, trigger.collect().map { 'done' })
 
     emit:
-    resources = init_out.map { stdout_text -> parse_resources(stdout_text) }.first()
-    done      = init_out.map { 'done' }.first()
+    resources = init_out.map { stdout_text -> parse_resources(stdout_text) }
+    done      = init_out.map { 'done' }
 }
 
 
