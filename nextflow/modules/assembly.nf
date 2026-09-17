@@ -27,7 +27,7 @@
 // source store has now fails in the first minutes rather than after every
 // reconstruction step has completed.
 
-include { parse_resources; slurm_logs; slurm_log_dir } from './common'
+include { parse_resources; slurm_logs; slurm_log_dir; retry_time } from './common'
 
 
 process resolve_concatenate_config {
@@ -106,7 +106,7 @@ process run_concatenate {
     clusterOptions { "${slurm_logs('assemble')} --exclude=cpu-c-[1-4]" }
     cpus   { meta.cpus }
     memory { "${meta.mem_gb} GB" }
-    time   { "${meta.time_minutes * task.attempt} min" }
+    time   { retry_time(meta.time_minutes, task) }
 
     input:
     val output_zarr

@@ -37,7 +37,7 @@
 // See the ENVIRONMENT CONTRACT note in common.nf; these tasks call `biahub` and
 // `viscy` bare, exactly like every other step.
 
-include { parse_resources; slurm_logs; slurm_log_dir } from './common'
+include { parse_resources; slurm_logs; slurm_log_dir; retry_time; retry_memory } from './common'
 
 
 process init_virtual_stain {
@@ -66,7 +66,7 @@ process run_virtual_stain_preprocess {
     label 'cpu'
     clusterOptions { slurm_logs('virtual_stain') }
     cpus 16
-    memory { "${64 * task.attempt} GB" }
+    memory { retry_memory(64, task) }
     time '1h'
 
     input:
@@ -105,7 +105,7 @@ process run_virtual_stain {
     clusterOptions { "--gres=gpu:1 " + slurm_logs('virtual_stain') }
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
-    time { "${meta.time_minutes * task.attempt} min" }
+    time { retry_time(meta.time_minutes, task) }
 
     input:
     tuple val(position), val(meta)
