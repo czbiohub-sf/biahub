@@ -47,18 +47,24 @@ def _unique_source_plates(data_paths: list[Path]) -> list[Path]:
     return plates
 
 
-def get_path_slice_param(slice_param, path_index, total_paths):
-    """
-    Determine the slice parameter for a specific path.
+def _path_slice_param(slice_param, path_index, total_paths):
+    """Select the slice specification that applies to one source.
 
-    Args:
-        slice_param: The slice parameter from settings (can be 'all', a single slice range, or per-path specifications)
-        path_index: The index of the current path
-        total_paths: The total number of paths
+    Parameters
+    ----------
+    slice_param : str | list
+        The setting for one axis: ``"all"``, a single ``[start, end]`` range that
+        applies to every source, or a list with one entry per source.
+    path_index : int
+        Index of the source among the per-source entries.
+    total_paths : int
+        Number of sources.
 
     Returns
     -------
-        The slice parameter for the current path
+    str | list
+        ``"all"`` or the ``[start, end]`` range for this source. A per-source list
+        shorter than ``total_paths`` repeats its last entry.
     """
     # Handle 'all' case
     if slice_param == "all":
@@ -77,23 +83,24 @@ def get_path_slice_param(slice_param, path_index, total_paths):
     return slice_param
 
 
-def create_path_slicing_params(path_z_slice, path_y_slice, path_x_slice, dataset_shape):
-    """
-    Create slicing parameters for a specific path.
+def _path_slicing_params(path_z_slice, path_y_slice, path_x_slice, dataset_shape):
+    """Build the ZYX slice objects for one source.
 
-    Args:
-        path_z_slice: The Z slice parameter for the path
-        path_y_slice: The Y slice parameter for the path
-        path_x_slice: The X slice parameter for the path
-        dataset_shape: The shape of the dataset
+    Parameters
+    ----------
+    path_z_slice, path_y_slice, path_x_slice : str | list
+        Per-axis specification for this source, ``"all"`` or ``[start, end]``.
+    dataset_shape : tuple[int, ...]
+        TCZYX shape of the source, which bounds an ``"all"`` slice.
 
     Returns
     -------
-        A list of slice objects [z_slice, y_slice, x_slice]
+    list[slice]
+        ``[z_slice, y_slice, x_slice]``.
     """
-    z_slice = get_slice(path_z_slice, dataset_shape[2])
-    y_slice = get_slice(path_y_slice, dataset_shape[3])
-    x_slice = get_slice(path_x_slice, dataset_shape[4])
+    z_slice = _slice(path_z_slice, dataset_shape[2])
+    y_slice = _slice(path_y_slice, dataset_shape[3])
+    x_slice = _slice(path_x_slice, dataset_shape[4])
     return [z_slice, y_slice, x_slice]
 
 
@@ -137,23 +144,29 @@ def _validate_per_source_lengths(settings: ConcatenateSettings, num_sources: int
             )
 
 
-def get_channel_combiner_metadata(
+def _channel_combiner_metadata(
     source_groups: list[list[Path]],
     processing_channel_names: list[str | list[str]] | str,
     slicing_params: list,
 ):
-    """
-    Get metadata for channel combination.
+    """Resolve which channels of which source go where in the output.
 
-    Args:
-        source_groups: One list of position paths per source store
-        processing_channel_names: "all" (every channel of every source) or one
-            entry per source: "all" or the channel names to take from it
-        slicing_params: List of slicing parameters [Z_slice, Y_slice, X_slice]
+    Parameters
+    ----------
+    source_groups : list[list[Path]]
+        One list of position paths per source store.
+    processing_channel_names : str | list[str | list[str]]
+        ``"all"`` (every channel of every source) or one entry per source, each
+        ``"all"`` or the channel names to take from it.
+    slicing_params : list
+        ``[Z_slice, Y_slice, X_slice]`` settings.
 
     Returns
     -------
-        Tuple of (all_data_paths, all_channel_names, input_channel_idx, output_channel_idx, all_slicing_params)
+    tuple
+        ``(all_data_paths, all_channel_names, input_channel_idx, output_channel_idx,
+        all_slicing_params)``, each per source position except the output
+        channel names.
     """
     all_data_paths = []
     all_channel_names = []
@@ -180,13 +193,13 @@ def get_channel_combiner_metadata(
         channel_names = dataset.channel_names
 
         # Determine the slice specifications for this path
-        path_z_slice = get_path_slice_param(z_slice_param, i, len(source_groups))
-        path_y_slice = get_path_slice_param(y_slice_param, i, len(source_groups))
-        path_x_slice = get_path_slice_param(x_slice_param, i, len(source_groups))
+        path_z_slice = _path_slice_param(z_slice_param, i, len(source_groups))
+        path_y_slice = _path_slice_param(y_slice_param, i, len(source_groups))
+        path_x_slice = _path_slice_param(x_slice_param, i, len(source_groups))
 
         # Create slicing parameters for each path in this group
         for _ in range(len(paths)):
-            slicing_params = create_path_slicing_params(
+            slicing_params = _path_slicing_params(
                 path_z_slice, path_y_slice, path_x_slice, dataset.data.shape
             )
             all_slicing_params.append(slicing_params)
@@ -222,7 +235,7 @@ def get_channel_combiner_metadata(
 
     # Validate that all slicing parameters produce the same output size
     if len(all_slicing_params) > 1:
-        validate_slicing_params_zyx(all_slicing_params)
+        _validate_slicing_params_zyx(all_slicing_params)
 
     click.echo(f"Channel names: {all_channel_names}")
     click.echo(f"Input channel indices: {input_channel_idx}")
@@ -237,17 +250,24 @@ def get_channel_combiner_metadata(
     )
 
 
-def get_slice(slice_param, max_value: int):
-    """
-    Convert slice parameters to slice objects.
+def _slice(slice_param, max_value: int) -> slice:
+    """Convert one axis specification to a slice object.
 
-    Args:
-        slice_param: Can be 'all' or a single slice range [start, end]
-        max_value: Maximum value for the dimension
+    Parameters
+    ----------
+    slice_param : str | list
+        ``"all"`` or a single ``[start, end]`` range.
+    max_value : int
+        Extent of the axis, the stop of an ``"all"`` slice.
 
     Returns
     -------
-        A slice object
+    slice
+
+    Raises
+    ------
+    ValueError
+        If ``slice_param`` is neither ``"all"`` nor a two-integer list.
     """
     # Handle 'all' case
     if slice_param == "all":
@@ -264,11 +284,22 @@ def get_slice(slice_param, max_value: int):
     raise ValueError(f"Invalid slice parameter: {slice_param}")
 
 
-def validate_slicing_params_zyx(slicing_params_zyx_list: list[list[slice, slice, slice]]):
-    """Validate that all slicing parameters are the same for a given dimension."""
-    first_slice_size = calculate_cropped_size(slicing_params_zyx_list[0])
+def _validate_slicing_params_zyx(slicing_params_zyx_list: list[list[slice]]) -> None:
+    """Check that every source crops to the same ZYX size.
+
+    Parameters
+    ----------
+    slicing_params_zyx_list : list[list[slice]]
+        One ``[z_slice, y_slice, x_slice]`` per source position.
+
+    Raises
+    ------
+    ValueError
+        If any source's cropped size differs from the first's.
+    """
+    first_slice_size = _cropped_size(slicing_params_zyx_list[0])
     for i, slice_obj in enumerate(slicing_params_zyx_list[1:], 1):
-        slice_size = calculate_cropped_size(slice_obj)
+        slice_size = _cropped_size(slice_obj)
         if slice_size != first_slice_size:
             raise ValueError(
                 f"Inconsistent slice sizes detected. Path 0 has size {first_slice_size}, "
@@ -276,18 +307,18 @@ def validate_slicing_params_zyx(slicing_params_zyx_list: list[list[slice, slice,
             )
 
 
-def calculate_cropped_size(
-    slice_params_zyx: list[slice, slice, slice],
-) -> tuple[int, int, int]:
-    """
-    Calculate the size of a dimension after cropping.
+def _cropped_size(slice_params_zyx: list[slice]) -> tuple[int, int, int]:
+    """Size of a volume after cropping.
 
-    Args:
-        slice_params_zyx: A list of slice parameters for the Z, Y, and X dimensions
+    Parameters
+    ----------
+    slice_params_zyx : list[slice]
+        ``[z_slice, y_slice, x_slice]``.
 
     Returns
     -------
-        A tuple of the size of the dimension after cropping for the Z, Y, and X dimensions
+    tuple[int, int, int]
+        The cropped ZYX shape.
     """
     # Calculate the size of each dimension by taking the absolute difference between stop and start
     z_size = abs(slice_params_zyx[0].stop - slice_params_zyx[0].start)
@@ -377,7 +408,7 @@ def _resolve_concatenate_inputs(
     """Resolve the per-source-position work list and the output plate geometry.
 
     Runs the channel/slice metadata resolution (the expensive
-    ``get_channel_combiner_metadata`` call) and reads each source position's
+    ``_channel_combiner_metadata`` call) and reads each source position's
     shape, dtype and scale. It reads METADATA only and writes nothing, so every
     mode calls it: the full run and ``--init`` hand the result to
     ``_init_output_plate``; a per-position worker (``-i`` naming one position
@@ -391,7 +422,7 @@ def _resolve_concatenate_inputs(
         input_channel_idx_list,
         output_channel_idx_list,
         all_slicing_params,
-    ) = get_channel_combiner_metadata(source_groups, settings.channel_names, slicing_params)
+    ) = _channel_combiner_metadata(source_groups, settings.channel_names, slicing_params)
 
     output_position_paths = get_output_paths(
         all_data_paths,
@@ -460,7 +491,7 @@ def _resolve_concatenate_inputs(
             "Warning: Datasets have different shapes, but slicing parameters are specified. Will validate output shapes after cropping."
         )
 
-    cropped_shape_zyx = calculate_cropped_size(all_slicing_params[0])
+    cropped_shape_zyx = _cropped_size(all_slicing_params[0])
     if cropped_shape_zyx[0] > Z or cropped_shape_zyx[1] > Y or cropped_shape_zyx[2] > X:
         raise ValueError("The cropped shape is larger than the original shape.")
 
