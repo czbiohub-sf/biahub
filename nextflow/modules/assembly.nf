@@ -164,13 +164,13 @@ workflow assemble_init_wf {
 
     resolved = resolve_concatenate_config(
         deskew_zarr, reconstruct_zarr, virtual_stain_zarr,
-        config_dir, config, trigger.map { 'done' }
+        config_dir, config, trigger.collect().map { 'done' }
     )
     init_out = init_concatenate(resolved, output_zarr)
 
     emit:
-    resources = init_out.map { stdout_text -> parse_resources(stdout_text) }.first()
-    done      = init_out.map { 'done' }.first()
+    resources = init_out.map { stdout_text -> parse_resources(stdout_text) }
+    done      = init_out.map { 'done' }
 }
 
 
