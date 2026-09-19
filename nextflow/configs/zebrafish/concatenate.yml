@@ -1,19 +1,13 @@
 # Assemble step: concatenate deskew + reconstruct + virtual-stain channel-wise
 # into one multichannel plate.
 #
-# concat_data_paths stay as placeholders — the assemble subworkflow injects the
-# three real source paths via --concat-data-paths (resolve mode). Do NOT replace
-# them with real paths. There must be exactly one entry per source, and
-# channel_names must have the same length.
-concat_data_paths:
-  - placeholder   # 1-deskew
-  - placeholder   # 2-reconstruct
-  - placeholder   # 3-virtual-stain
+# Parameters only. The source stores are passed on the command line, one `-i`
+# per store (the assemble subworkflow does this), so there is no
+# concat_data_paths here. `channel_names: all` takes every channel of every
+# source; to pick channels, give one entry per source in `-i` order, e.g.
+# [all, [Phase3D], all].
 time_indices: all
-channel_names:
-  - all
-  - all
-  - all
+channel_names: all
 chunks_czyx: null
 output_ome_zarr_version: "0.5"
 
