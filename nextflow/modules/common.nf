@@ -95,7 +95,7 @@ def slurm_logs(step_name) {
 //
 // This replaced the `biahub_cmd()` and `qc_cmd()` helpers that prefixed every
 // task with `uv run --project <path>` (and, for QC, `uv run --from <git-url>`).
-// Those wrappers made each of up to `maxForks` tasks re-resolve and
+// Those wrappers made each of up to `max_workers` concurrent tasks re-resolve and
 // re-materialize the environment concurrently against one shared site-packages
 // — the QC form additionally re-fetching a git dependency per task. Resolving
 // the environment once, up front, is both faster and free of that write
