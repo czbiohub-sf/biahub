@@ -112,10 +112,16 @@ index-strategy = "unsafe-best-match"
 # Pinned at #266: feat: plan-stage refuses an unknown channels:/per_channel: name
 imaging_qc_pipeline = { git = "https://github.com/czbiohub-sf/imaging-qc-pipeline", rev = "c5c51dc700d0aa52388d6f6a08eec5bfe16a5766" }
 
-# Pin iohub to the main commit that merged czbiohub-sf/iohub#472, which adds
-# `create_empty_plate(extra_metadata=...)`. Drop this back to a PyPI floor once
-# iohub cuts a release containing it.
-iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "172ee926829300b42708edbf6c8e20f2fd642f78" }
+# Pin iohub to czbiohub-sf/iohub#476, which syncs a write unit's shards before
+# recording it as done. Without it a preemption or a write-back error between
+# the write and the marker leaves a `.done` record beside a shard whose bytes
+# never landed, and every later `--resume` skips it: the resume probe reads one
+# element per shard, so corruption away from the origin reads back clean. That
+# silently cost several pipeline runs on 2026_08_14_dynatrack. Carries
+# czbiohub-sf/iohub#472 (`create_empty_plate(extra_metadata=...)`) in its
+# ancestry. Drop this back to a PyPI floor once iohub cuts a release containing
+# both.
+iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "ac4433985dcdf02603c395c3d51fffc4883a3c9a" }
 
 [tool.hatch.metadata]
 allow-direct-references = true
