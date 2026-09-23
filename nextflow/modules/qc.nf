@@ -65,11 +65,12 @@ process compute_step {
     // 2 h, both hit 140, and the run died having recomputed each position twice
     // from scratch. Memory already grew on OOM here; time now grows on timeout.
     //
-    // 240 min, up from 2 h, and hardcoded rather than a param: 4 h is a wide
-    // enough buffer for the stores we run QC on, and `retry_time` doubles it to
-    // 8 h if a position does hit the wall. A knob nobody would turn is one more
-    // thing to document.
-    time { retry_time(240, task) }
+    // 120 min, hardcoded rather than a param. An item is now a CHUNK of
+    // `params.qc_chunk_size` timepoints, not a whole position (see the note on
+    // that param), so the budget no longer has to scale with T — 2 h is a wide
+    // margin over a chunk, and `retry_time` doubles it to 4 h if one does hit
+    // the wall. A knob nobody would turn is one more thing to document.
+    time { retry_time(120, task) }
     // NO errorStrategy here on purpose — inherit the one in nextflow.config.
     // This used to carry its own `task.exitStatus in [137, 140, 143]` copy, which
     // is the same idea with a narrower list and, like the config rule before it,
