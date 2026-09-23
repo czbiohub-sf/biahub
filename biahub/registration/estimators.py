@@ -16,6 +16,7 @@ from numpy.typing import ArrayLike
 
 from biahub.characterize_psf import detect_peaks
 from biahub.core.transform import Transform
+from biahub.registration.ants import estimate as ants_estimate
 from biahub.registration.beads import matches_from_beads, transform_from_matches
 from biahub.registration.phase_cross_correlation import (
     phase_cross_corr,
@@ -147,3 +148,29 @@ class PCCEstimator:
         else:
             shift, _corr = phase_cross_corr(ref, mov, normalization=self.normalization)
         return Transform.from_translation(shift)
+
+
+class AntsEstimator:
+    """TransformEstimator using ANTs intensity-based optimization.
+
+    `biahub.registration.ants.estimate()`'s `fwd_transform` is, despite its name,
+    empirically the reference -> moving ("pull") direction, not moving -> reference --
+    confirmed against a real volume (rel. err 0.48 applied directly, vs 0.02 inverted;
+    baseline unregistered error is 0.35, so using it directly is worse than doing
+    nothing). Its own `inv_transform` isn't a genuine inverse either: ANTs doesn't write
+    a separately-inverted file for a single affine/similarity stage, so it reads back
+    nearly identical to `fwd_transform`. Invert `fwd_transform` ourselves so this
+    satisfies the TransformEstimator contract (true forward, moving -> reference).
+    """
+
+    def __init__(self, ants_kwargs: dict | None = None, verbose: bool = False):
+        self.ants_kwargs = ants_kwargs
+        self.verbose = verbose
+
+    def estimate(self, mov: ArrayLike, ref: ArrayLike) -> Transform:
+        mov = np.asarray(mov)
+        ref = np.asarray(ref)
+        pull_transform, _unused = ants_estimate(
+            ref=ref, mov=mov, verbose=self.verbose, ants_kwargs=self.ants_kwargs
+        )
+        return pull_transform.invert()

@@ -4,6 +4,7 @@ from scipy.ndimage import shift as ndi_shift
 
 from biahub.registration.beads import matches_from_beads, transform_from_matches
 from biahub.registration.estimators import (
+    AntsEstimator,
     BeadNodeDetector,
     NodeDetector,
     NodeGraphEstimator,
@@ -100,3 +101,44 @@ def test_pcc_estimator_recovers_known_translation_and_warps_mov_onto_ref():
     interior = tuple(slice(margin, s - margin) for s in shape)
     warped = transform.apply(mov, reference=ref, order=0, backend="scipy")
     np.testing.assert_allclose(warped[interior], ref[interior], atol=1e-3)
+
+
+def _synthetic_blob_volume(rng, shape, n_blobs=15, sigma=3.0, noise_std=5.0):
+    """Sharp Gaussian blobs (fake beads), not random noise -- ANTs' intensity-based
+    optimizer needs real structure to converge on; blurred noise wasn't enough."""
+    zz, yy, xx = np.meshgrid(*[np.arange(s) for s in shape], indexing="ij")
+    margin = int(sigma * 3)
+    centers = rng.uniform([margin] * 3, np.asarray(shape) - margin, size=(n_blobs, 3))
+    volume = np.zeros(shape, dtype=np.float32)
+    for cz, cy, cx in centers:
+        volume += 500 * np.exp(
+            -(((zz - cz) ** 2 + (yy - cy) ** 2 + (xx - cx) ** 2) / (2 * sigma**2))
+        )
+    volume += rng.normal(0, noise_std, size=shape).astype(np.float32)
+    return volume
+
+
+def test_ants_estimator_satisfies_protocol():
+    assert isinstance(AntsEstimator(), TransformEstimator)
+
+
+def test_ants_estimator_recovers_known_translation_and_warps_mov_onto_ref():
+    rng = np.random.default_rng(5)
+    shape = (24, 48, 48)
+    ref = _synthetic_blob_volume(rng, shape)
+
+    applied_zyx = (2, -3, 4)
+    mov = ndi_shift(ref, shift=applied_zyx, order=1, mode="constant", cval=0.0)
+
+    transform = AntsEstimator().estimate(mov, ref)
+    np.testing.assert_allclose(transform.matrix[:3, 3], [-a for a in applied_zyx], atol=0.5)
+
+    margin = 6
+    interior = tuple(slice(margin, s - margin) for s in shape)
+    warped = transform.apply(mov, reference=ref, order=1, backend="scipy")
+
+    def relerr(a, b):
+        return np.abs(a[interior] - b[interior]).mean() / (np.abs(b[interior]).mean() + 1e-8)
+
+    assert relerr(warped, ref) < relerr(mov, ref)
+    assert relerr(warped, ref) < 0.05
