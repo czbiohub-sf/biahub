@@ -18,6 +18,7 @@ from biahub.characterize_psf import detect_peaks
 from biahub.core.transform import Transform
 from biahub.registration.ants import estimate as ants_estimate
 from biahub.registration.beads import matches_from_beads, transform_from_matches
+from biahub.registration.manual import user_assisted_registration
 from biahub.registration.phase_cross_correlation import (
     phase_cross_corr,
     phase_cross_corr_padding,
@@ -174,3 +175,47 @@ class AntsEstimator:
             ref=ref, mov=mov, verbose=self.verbose, ants_kwargs=self.ants_kwargs
         )
         return pull_transform.invert()
+
+
+class ManualEstimator:
+    """TransformEstimator via user-assisted (napari) point annotation.
+
+    Interactive: `estimate()` opens a napari viewer and blocks on `input()` until you
+    annotate matching points. `user_assisted_registration` builds its transform
+    correctly (skimage point-fit composed with the pre-alignment matrix, true
+    moving -> reference), then explicitly inverts it before returning -- so, like
+    ants.py:estimate(), its return value is the reference -> moving ("pull") direction.
+    Invert once more here to satisfy the TransformEstimator contract.
+    """
+
+    def __init__(
+        self,
+        source_channel_name: str,
+        target_channel_name: str,
+        source_channel_voxel_size: tuple[float, float, float],
+        target_channel_voxel_size: tuple[float, float, float],
+        similarity: bool = False,
+        pre_affine_90degree_rotation: int = 0,
+        pre_affine_fliplr: bool = False,
+    ):
+        self.source_channel_name = source_channel_name
+        self.target_channel_name = target_channel_name
+        self.source_channel_voxel_size = source_channel_voxel_size
+        self.target_channel_voxel_size = target_channel_voxel_size
+        self.similarity = similarity
+        self.pre_affine_90degree_rotation = pre_affine_90degree_rotation
+        self.pre_affine_fliplr = pre_affine_fliplr
+
+    def estimate(self, mov: ArrayLike, ref: ArrayLike) -> Transform:
+        (pull_matrix,) = user_assisted_registration(
+            source_channel_volume=np.asarray(mov),
+            source_channel_name=self.source_channel_name,
+            source_channel_voxel_size=self.source_channel_voxel_size,
+            target_channel_volume=np.asarray(ref),
+            target_channel_name=self.target_channel_name,
+            target_channel_voxel_size=self.target_channel_voxel_size,
+            similarity=self.similarity,
+            pre_affine_90degree_rotation=self.pre_affine_90degree_rotation,
+            pre_affine_fliplr=self.pre_affine_fliplr,
+        )
+        return Transform(matrix=np.asarray(pull_matrix)).invert()

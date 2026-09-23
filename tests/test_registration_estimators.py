@@ -6,6 +6,7 @@ from biahub.registration.beads import matches_from_beads, transform_from_matches
 from biahub.registration.estimators import (
     AntsEstimator,
     BeadNodeDetector,
+    ManualEstimator,
     NodeDetector,
     NodeGraphEstimator,
     PCCEstimator,
@@ -142,3 +143,49 @@ def test_ants_estimator_recovers_known_translation_and_warps_mov_onto_ref():
 
     assert relerr(warped, ref) < relerr(mov, ref)
     assert relerr(warped, ref) < 0.05
+
+
+def test_manual_estimator_satisfies_protocol():
+    estimator = ManualEstimator(
+        source_channel_name="GFP",
+        target_channel_name="Phase3D",
+        source_channel_voxel_size=(1.0, 1.0, 1.0),
+        target_channel_voxel_size=(1.0, 1.0, 1.0),
+    )
+    assert isinstance(estimator, TransformEstimator)
+
+
+def test_manual_estimator_inverts_user_assisted_registrations_pull_output(monkeypatch):
+    # user_assisted_registration returns a pull (reference -> moving) matrix, per its own
+    # explicit internal .invert() before returning -- see estimators.py's docstring.
+    pull_matrix = np.eye(4)
+    pull_matrix[:3, 3] = [1.0, 2.0, 3.0]
+    captured_kwargs = {}
+
+    def fake_user_assisted_registration(**kwargs):
+        captured_kwargs.update(kwargs)
+        return [pull_matrix.tolist()]
+
+    monkeypatch.setattr(
+        "biahub.registration.estimators.user_assisted_registration",
+        fake_user_assisted_registration,
+    )
+
+    mov = np.zeros((5, 5, 5))
+    ref = np.zeros((5, 5, 5))
+    estimator = ManualEstimator(
+        source_channel_name="GFP",
+        target_channel_name="Phase3D",
+        source_channel_voxel_size=(1.0, 1.0, 1.0),
+        target_channel_voxel_size=(0.5, 0.5, 0.5),
+        similarity=True,
+    )
+    transform = estimator.estimate(mov, ref)
+
+    np.testing.assert_allclose(transform.matrix, np.linalg.inv(pull_matrix))
+    assert captured_kwargs["source_channel_name"] == "GFP"
+    assert captured_kwargs["target_channel_name"] == "Phase3D"
+    assert captured_kwargs["target_channel_voxel_size"] == (0.5, 0.5, 0.5)
+    assert captured_kwargs["similarity"] is True
+    np.testing.assert_array_equal(captured_kwargs["source_channel_volume"], mov)
+    np.testing.assert_array_equal(captured_kwargs["target_channel_volume"], ref)
