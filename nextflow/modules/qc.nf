@@ -1,7 +1,7 @@
 // QC stage execution and reporting: the processes that call the external
 // `imaging-qc` CLI, and the two workflows that wire them. One file, as every
 // other step module in this directory is.
-include { slurm_logs; slurm_log_dir; retry_memory } from './common'
+include { slurm_logs; slurm_log_dir; retry_memory; retry_time } from './common'
 
 
 process plan_stage {
@@ -57,7 +57,19 @@ process compute_step {
     clusterOptions { slurm_logs('qc') }
     cpus { params.qc_cpus as int }
     memory { retry_memory(meta?.memory_gb ?: 16, task) }
-    time '2h'
+    // `retry_time`, not a literal, for the same reason every other per-position
+    // fan-out uses it (deskew, flat_field, reconstruct, virtual_stain, assemble):
+    // a task killed at the wall (exit 140, SLURM's `--signal B:USR2@30`) needs a
+    // BIGGER budget on the retry, not the same one. compute_step was the one
+    // fan-out left on a literal, so on 2026_08_14_dynatrack both attempts got
+    // 2 h, both hit 140, and the run died having recomputed each position twice
+    // from scratch. Memory already grew on OOM here; time now grows on timeout.
+    //
+    // 240 min, up from 2 h, and hardcoded rather than a param: 4 h is a wide
+    // enough buffer for the stores we run QC on, and `retry_time` doubles it to
+    // 8 h if a position does hit the wall. A knob nobody would turn is one more
+    // thing to document.
+    time { retry_time(240, task) }
     // NO errorStrategy here on purpose — inherit the one in nextflow.config.
     // This used to carry its own `task.exitStatus in [137, 140, 143]` copy, which
     // is the same idea with a narrower list and, like the config rule before it,
@@ -89,7 +101,7 @@ process finalize_stage {
     label 'cpu'
     clusterOptions { slurm_logs('qc') }
     memory { retry_memory(32, task) }
-    time '1h'
+    time { retry_time(60, task) }
     // Inherits nextflow.config's errorStrategy — see compute_step above.
     maxRetries 1
     tag "${zarr_path}"
@@ -119,7 +131,7 @@ process generate_unified_report {
     clusterOptions { slurm_logs('qc') }
     cpus 2
     memory '32 GB'
-    time '1h'
+    time { retry_time(60, task) }
 
     input:
     tuple path(report_spec), val(report_dir)
