@@ -415,8 +415,13 @@ class Transform:
         else:
             reference_ants = moving_ants
 
-        # Convert transform to ANTs
-        transform_ants = self.to_ants()
+        # ants.ANTsTransform.apply_to_image does 'pull' (backward) resampling like
+        # scipy.ndimage.affine_transform: it needs the inverse of this forward
+        # (moving -> reference) transform, the same inversion _apply_scipy does
+        # explicitly. ants.apply_transforms' own `whichtoinvert` defaults to True for a
+        # matrix transform for the same reason -- apply_to_image is the lower-level call
+        # and does not invert for us.
+        transform_ants = self.invert().to_ants()
 
         # Apply
         result_ants = transform_ants.apply_to_image(moving_ants, reference=reference_ants)
