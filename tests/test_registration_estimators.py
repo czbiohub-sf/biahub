@@ -10,6 +10,7 @@ from biahub.registration.estimators import (
     NodeDetector,
     NodeGraphEstimator,
     PCCEstimator,
+    StackregEstimator,
     TransformEstimator,
 )
 from biahub.settings import AffineTransformSettings, BeadsMatchSettings, DetectPeaksSettings
@@ -189,3 +190,40 @@ def test_manual_estimator_inverts_user_assisted_registrations_pull_output(monkey
     assert captured_kwargs["similarity"] is True
     np.testing.assert_array_equal(captured_kwargs["source_channel_volume"], mov)
     np.testing.assert_array_equal(captured_kwargs["target_channel_volume"], ref)
+
+
+def _synthetic_blob_image(rng, shape, n_blobs=10, sigma=3.0, noise_std=5.0):
+    yy, xx = np.meshgrid(*[np.arange(s) for s in shape], indexing="ij")
+    margin = int(sigma * 3)
+    centers = rng.uniform([margin] * 2, np.asarray(shape) - margin, size=(n_blobs, 2))
+    image = np.zeros(shape, dtype=np.float32)
+    for cy, cx in centers:
+        image += 500 * np.exp(-(((yy - cy) ** 2 + (xx - cx) ** 2) / (2 * sigma**2)))
+    image += rng.normal(0, noise_std, size=shape).astype(np.float32)
+    return image
+
+
+def test_stackreg_estimator_satisfies_protocol():
+    assert isinstance(StackregEstimator(), TransformEstimator)
+
+
+def test_stackreg_estimator_recovers_known_translation_and_warps_mov_onto_ref():
+    rng = np.random.default_rng(6)
+    shape = (48, 48)
+    ref = _synthetic_blob_image(rng, shape)
+
+    applied_yx = (3, -5)  # distinct per-axis values so an axis mixup would show
+    mov = ndi_shift(ref, shift=applied_yx, order=1, mode="constant", cval=0.0)
+
+    transform = StackregEstimator().estimate(mov, ref)
+    np.testing.assert_allclose(transform.matrix[:2, 2], [-a for a in applied_yx], atol=0.5)
+
+    margin = 8
+    interior = tuple(slice(margin, s - margin) for s in shape)
+    warped = transform.apply(mov, reference=ref, order=1, backend="scipy")
+
+    def relerr(a, b):
+        return np.abs(a[interior] - b[interior]).mean() / (np.abs(b[interior]).mean() + 1e-8)
+
+    assert relerr(warped, ref) < relerr(mov, ref)
+    assert relerr(warped, ref) < 0.05

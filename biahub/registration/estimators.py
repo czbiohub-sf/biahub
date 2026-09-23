@@ -13,6 +13,7 @@ from typing import Literal, Protocol, runtime_checkable
 import numpy as np
 
 from numpy.typing import ArrayLike
+from pystackreg import StackReg
 
 from biahub.characterize_psf import detect_peaks
 from biahub.core.transform import Transform
@@ -219,3 +220,28 @@ class ManualEstimator:
             pre_affine_fliplr=self.pre_affine_fliplr,
         )
         return Transform(matrix=np.asarray(pull_matrix)).invert()
+
+
+class StackregEstimator:
+    """TransformEstimator using pystackreg (2D rigid/translation registration).
+
+    `StackReg.register(ref, mov)` returns a matrix in (X, Y) axis order -- not this
+    codebase's (Y, X) convention -- and in the reference -> moving ("pull") direction;
+    both confirmed empirically against a known synthetic shift (0 error after swapping
+    axes and inverting; ~0.44-1.15 relative error for every other combination). Swap
+    axes and invert before returning, to satisfy the TransformEstimator contract (true
+    forward, moving -> reference, (Y, X)).
+    """
+
+    _AXIS_SWAP = np.array([[0, 1, 0], [1, 0, 0], [0, 0, 1]], dtype=np.float64)
+
+    def __init__(self, transformation: int = StackReg.TRANSLATION):
+        self.transformation = transformation
+
+    def estimate(self, mov: ArrayLike, ref: ArrayLike) -> Transform:
+        mov = np.asarray(mov)
+        ref = np.asarray(ref)
+        sr = StackReg(self.transformation)
+        xy_pull_matrix = np.asarray(sr.register(ref, mov))
+        yx_matrix = self._AXIS_SWAP @ xy_pull_matrix @ self._AXIS_SWAP
+        return Transform(matrix=yx_matrix).invert()
