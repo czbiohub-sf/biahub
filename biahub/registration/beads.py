@@ -30,7 +30,7 @@ import json
 from datetime import datetime
 from itertools import product
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import ants
 import click
@@ -61,6 +61,9 @@ from biahub.registration.utils import (
 from biahub.settings import AffineTransformSettings, BeadsMatchSettings, DetectPeaksSettings
 from biahub.utils.array_ops import _check_nan_n_zeros
 from biahub.utils.cluster import estimate_resources
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 
 # Default grid for the score-gated sweep fallback, distilled from a 432-combination

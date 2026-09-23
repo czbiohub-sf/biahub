@@ -20,7 +20,6 @@ from pydantic import (
 )
 
 
-
 def _coerce_yaml_off(value):
     """Accept YAML's boolean `off` where the string "off" is meant.
 
