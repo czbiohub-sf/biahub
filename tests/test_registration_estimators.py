@@ -1,10 +1,13 @@
 import numpy as np
 
+from scipy.ndimage import shift as ndi_shift
+
 from biahub.registration.beads import matches_from_beads, transform_from_matches
 from biahub.registration.estimators import (
     BeadNodeDetector,
     NodeDetector,
     NodeGraphEstimator,
+    PCCEstimator,
     TransformEstimator,
 )
 from biahub.settings import AffineTransformSettings, BeadsMatchSettings, DetectPeaksSettings
@@ -75,3 +78,25 @@ def test_node_graph_estimator_recovers_known_translation():
 
     np.testing.assert_allclose(transform.matrix[:3, 3], translation, atol=1e-6)
     np.testing.assert_allclose(transform.matrix[:3, :3], np.eye(3), atol=1e-6)
+
+
+def test_pcc_estimator_satisfies_protocol():
+    assert isinstance(PCCEstimator(), TransformEstimator)
+
+
+def test_pcc_estimator_recovers_known_translation_and_warps_mov_onto_ref():
+    rng = np.random.default_rng(2)
+    shape = (30, 40, 50)
+    ref = rng.random(shape).astype(np.float32)
+
+    applied_zyx = (4, -6, 9)  # distinct per-axis values so an axis mixup would show
+    mov = ndi_shift(ref, shift=applied_zyx, order=0, mode="constant", cval=0.0)
+
+    transform = PCCEstimator().estimate(mov, ref)
+
+    # transform is forward (moving -> reference): applying it to mov via the scipy
+    # backend should warp mov's content back onto ref.
+    margin = int(max(abs(a) for a in applied_zyx)) + 1
+    interior = tuple(slice(margin, s - margin) for s in shape)
+    warped = transform.apply(mov, reference=ref, order=0, backend="scipy")
+    np.testing.assert_allclose(warped[interior], ref[interior], atol=1e-3)

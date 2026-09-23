@@ -8,7 +8,7 @@ estimator-independent concerns (see `biahub.core.transform.Transform.apply`).
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 import numpy as np
 
@@ -17,7 +17,16 @@ from numpy.typing import ArrayLike
 from biahub.characterize_psf import detect_peaks
 from biahub.core.transform import Transform
 from biahub.registration.beads import matches_from_beads, transform_from_matches
-from biahub.settings import AffineTransformSettings, BeadsMatchSettings, DetectPeaksSettings
+from biahub.registration.phase_cross_correlation import (
+    phase_cross_corr,
+    phase_cross_corr_padding,
+)
+from biahub.settings import (
+    AffineTransformSettings,
+    BeadsMatchSettings,
+    DetectPeaksSettings,
+    PhaseCrossCorrSettings,
+)
 
 
 @runtime_checkable
@@ -100,3 +109,41 @@ class NodeGraphEstimator:
             ndim=mov.ndim,
         )
         return fwd_transform
+
+
+class PCCEstimator:
+    """TransformEstimator using phase cross-correlation (rigid translation only).
+
+    `phase_cross_corr(ref, mov)`'s shift is already the forward (moving -> reference)
+    translation in the array's own axis order (see issue #356 for a case where an
+    existing caller of this function builds the wrong-axis matrix by hand instead).
+    """
+
+    def __init__(
+        self,
+        function_type: Literal["custom", "custom_padding"] = "custom",
+        normalization: Literal["magnitude", "classic"] | None = None,
+        maximum_shift: float = 1.2,
+    ):
+        self.function_type = function_type
+        self.normalization = normalization
+        self.maximum_shift = maximum_shift
+
+    @classmethod
+    def from_settings(cls, settings: PhaseCrossCorrSettings) -> PCCEstimator:
+        return cls(
+            function_type=settings.function_type,
+            normalization=settings.normalization,
+            maximum_shift=settings.maximum_shift,
+        )
+
+    def estimate(self, mov: ArrayLike, ref: ArrayLike) -> Transform:
+        mov = np.asarray(mov).astype(np.float32)
+        ref = np.asarray(ref).astype(np.float32)
+        if self.function_type == "custom_padding":
+            shift, _corr = phase_cross_corr_padding(
+                ref, mov, maximum_shift=self.maximum_shift, normalization=self.normalization
+            )
+        else:
+            shift, _corr = phase_cross_corr(ref, mov, normalization=self.normalization)
+        return Transform.from_translation(shift)
