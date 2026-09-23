@@ -24,7 +24,8 @@ def test_estimate_stabilization(
             str(output_path),
             "-c",
             str(config_path),
-            "--local",
+            "--cluster",
+            "debug",
         ],
     )
 

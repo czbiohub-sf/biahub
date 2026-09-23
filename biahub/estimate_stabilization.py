@@ -1,7 +1,6 @@
 import itertools
 import shutil
 
-from datetime import datetime
 from pathlib import Path
 from typing import Literal, cast
 
@@ -20,9 +19,9 @@ from tqdm import tqdm
 from waveorder.focus import focus_from_transverse_band
 
 from biahub.cli.parsing import (
+    cluster,
     config_filepath,
     input_position_dirpaths,
-    local,
     output_dirpath,
     sbatch_filepath,
     sbatch_to_submitit,
@@ -41,7 +40,7 @@ from biahub.settings import (
     StackRegSettings,
 )
 from biahub.utils.cluster import estimate_resources, get_submitit_cluster
-from biahub.utils.config import yaml_to_model
+from biahub.utils.config import model_to_yaml, yaml_to_model
 
 NA_DET = 1.35
 LAMBDA_ILL = 0.500
@@ -663,7 +662,7 @@ def estimate_xyz_stabilization_pcc(
 
     slurm_args = {
         "slurm_job_name": "estimate_xyz_pcc",
-        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
+        "slurm_mem": f"{num_cpus * gb_ram_per_cpu}G",
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,  # process up to 100 positions at a time
         "slurm_time": 60,
@@ -696,11 +695,11 @@ def estimate_xyz_stabilization_pcc(
             )
             jobs.append(job)
 
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    log_path = slurm_out_path / f"job_ids_{timestamp}.log"
-    with open(log_path, "w") as log_file:
-        for job in jobs:
-            log_file.write(f"{job.job_id}\n")
+    job_ids = [job.job_id for job in jobs]
+    # Several stages may submit into the same slurm_output/, so append.
+    log_path = slurm_out_path / "submitit_jobs_ids.log"
+    with log_path.open("a") as log_file:
+        log_file.write("\n".join(job_ids) + "\n")
 
     wait_for_jobs_to_finish(jobs)
 
@@ -866,7 +865,7 @@ def estimate_xy_stabilization(
     # Prepare SLURM arguments
     slurm_args = {
         "slurm_job_name": "estimate_stack_reg_xy",
-        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
+        "slurm_mem": f"{num_cpus * gb_ram_per_cpu}G",
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,  # process up to 100 positions at a time
         "slurm_time": 10,
@@ -901,11 +900,11 @@ def estimate_xy_stabilization(
             jobs.append(job)
 
     # Save job IDs
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    log_path = slurm_out_path / f"job_ids_{timestamp}.log"
-    with open(log_path, "w") as log_file:
-        for job in jobs:
-            log_file.write(f"{job.job_id}\n")
+    job_ids = [job.job_id for job in jobs]
+    # Several stages may submit into the same slurm_output/, so append.
+    log_path = slurm_out_path / "submitit_jobs_ids.log"
+    with log_path.open("a") as log_file:
+        log_file.write("\n".join(job_ids) + "\n")
 
     wait_for_jobs_to_finish(jobs)
 
@@ -1129,7 +1128,7 @@ def estimate_z_stabilization(
     # Prepare SLURM arguments
     slurm_args = {
         "slurm_job_name": "estimate_focus_z",
-        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
+        "slurm_mem": f"{num_cpus * gb_ram_per_cpu}G",
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,  # process up to 100 positions at a time
         "slurm_time": 30,
@@ -1167,11 +1166,11 @@ def estimate_z_stabilization(
             jobs.append(job)
 
     # Save job IDs
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    log_path = slurm_out_path / f"job_ids_{timestamp}.log"
-    with open(log_path, "w") as log_file:
-        for job in jobs:
-            log_file.write(f"{job.job_id}\n")
+    job_ids = [job.job_id for job in jobs]
+    # Several stages may submit into the same slurm_output/, so append.
+    log_path = slurm_out_path / "submitit_jobs_ids.log"
+    with log_path.open("a") as log_file:
+        log_file.write("\n".join(job_ids) + "\n")
 
     wait_for_jobs_to_finish(jobs)
 
@@ -1249,7 +1248,7 @@ def estimate_stabilization(
     output_dirpath: Path,
     config_filepath: Path,
     sbatch_filepath: str | None = None,
-    local: bool = False,
+    cluster: str = "slurm",
 ) -> None:
     """
     Estimate the stabilization matrices for a list of positions.
@@ -1264,8 +1263,8 @@ def estimate_stabilization(
         Path to the configuration file.
     sbatch_filepath : str | None
         Path to the sbatch file.
-    local : bool
-        If True, run locally.
+    cluster : str
+        Submitit cluster: "slurm", "local", or "debug".
 
     Returns
     -------
@@ -1289,6 +1288,9 @@ def estimate_stabilization(
     output_dirpath = Path(output_dirpath)
     output_dirpath.mkdir(parents=True, exist_ok=True)
 
+    # Provenance: record the estimation settings alongside the emitted transforms
+    model_to_yaml(settings, output_dirpath / "estimate_stabilization_settings.yml")
+
     # Channel names to process
     with open_ome_zarr(input_position_dirpaths[0]) as dataset:
         channel_names = dataset.channel_names
@@ -1296,8 +1298,8 @@ def estimate_stabilization(
         channel_index = channel_names.index(stabilization_estimation_channel)
         T, C, Z, Y, X = dataset.data.shape
 
-    # Run locally or submit to SLURM
-    cluster = get_submitit_cluster(local)
+    # Resolve the submitit cluster (CI forces "debug")
+    cluster = get_submitit_cluster(cluster=cluster)
 
     # Load the evaluation settings
     eval_transform_settings = settings.eval_transform_settings
@@ -1415,6 +1417,7 @@ def estimate_stabilization(
                 click.echo(
                     f"Error estimating {stabilization_type} stabilization parameters: {e}"
                 )
+                raise
         elif stabilization_method == "beads":
             from biahub.registration.beads import estimate_tczyx
 
@@ -1520,6 +1523,7 @@ def estimate_stabilization(
                 click.echo(
                     f"Error estimating {stabilization_type} stabilization parameters: {e}"
                 )
+                raise
 
     # Estimate z drift
     if "z" == stabilization_type and stabilization_method == "focus-finding":
@@ -1569,6 +1573,7 @@ def estimate_stabilization(
                 )
         except Exception as e:
             click.echo(f"Error estimating {stabilization_type} stabilization parameters: {e}")
+            raise
 
     # Estimate yx drift
     if "xy" == stabilization_type:
@@ -1626,6 +1631,7 @@ def estimate_stabilization(
                 click.echo(
                     f"Error estimating {stabilization_type} stabilization parameters: {e}"
                 )
+                raise
 
 
 @click.command("estimate-stabilization")
@@ -1633,13 +1639,13 @@ def estimate_stabilization(
 @output_dirpath()
 @config_filepath()
 @sbatch_filepath()
-@local()
+@cluster()
 def estimate_stabilization_cli(
     input_position_dirpaths: list[Path],
     output_dirpath: Path,
     config_filepath: Path,
     sbatch_filepath: str | None = None,
-    local: bool = False,
+    cluster: str = "slurm",
 ):
     """Estimate translation matrices for XYZ stabilization of a timelapse dataset.
 
@@ -1647,14 +1653,19 @@ def estimate_stabilization_cli(
     focus finding, beads, or phase cross correlation methods.
 
     \b
-    >>> biahub estimate-stabilization -i ./timelapse.zarr/0/0/0 -o ./stabilization_output -c ./config.yml -s ./sbatch.sh --local
+    SLURM fan-out of positions across a whole plate:
+    >>> biahub estimate-stabilization -i ./timelapse.zarr/*/*/* -c ./config.yml -o ./stabilization_output
+
+    \b
+    In-process run (e.g. on a workstation or from a Nextflow worker):
+    >>> biahub estimate-stabilization --cluster debug -i ./timelapse.zarr/A/1/0 -c ./config.yml -o ./stabilization_output
     """  # noqa: D301
     estimate_stabilization(
         input_position_dirpaths=input_position_dirpaths,
         output_dirpath=output_dirpath,
         config_filepath=config_filepath,
         sbatch_filepath=sbatch_filepath,
-        local=local,
+        cluster=cluster,
     )
 
 
