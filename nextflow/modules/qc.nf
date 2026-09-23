@@ -1,7 +1,7 @@
 // QC stage execution and reporting: the processes that call the external
 // `imaging-qc` CLI, and the two workflows that wire them. One file, as every
 // other step module in this directory is.
-include { slurm_logs; slurm_log_dir } from './common'
+include { slurm_logs; slurm_log_dir; retry_memory } from './common'
 
 
 process plan_stage {
@@ -56,7 +56,7 @@ process compute_step {
     label 'cpu'
     clusterOptions { slurm_logs('qc') }
     cpus { params.qc_cpus as int }
-    memory { "${(meta?.memory_gb ?: 16).toFloat() * task.attempt} GB" }
+    memory { retry_memory(meta?.memory_gb ?: 16, task) }
     time '2h'
     // NO errorStrategy here on purpose — inherit the one in nextflow.config.
     // This used to carry its own `task.exitStatus in [137, 140, 143]` copy, which
@@ -88,7 +88,7 @@ process compute_step {
 process finalize_stage {
     label 'cpu'
     clusterOptions { slurm_logs('qc') }
-    memory { task.attempt == 1 ? '32 GB' : '48 GB' }
+    memory { retry_memory(32, task) }
     time '1h'
     // Inherits nextflow.config's errorStrategy — see compute_step above.
     maxRetries 1

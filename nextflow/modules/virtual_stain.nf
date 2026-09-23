@@ -37,7 +37,7 @@
 // See the ENVIRONMENT CONTRACT note in common.nf; these tasks call `biahub` and
 // `viscy` bare, exactly like every other step.
 
-include { parse_resources; slurm_logs; slurm_log_dir } from './common'
+include { parse_resources; slurm_logs; slurm_log_dir; retry_time; retry_memory } from './common'
 
 
 process init_virtual_stain {
@@ -66,7 +66,7 @@ process run_virtual_stain_preprocess {
     label 'cpu'
     clusterOptions { slurm_logs('virtual_stain') }
     cpus 16
-    memory { "${64 * task.attempt} GB" }
+    memory { retry_memory(64, task) }
     time '1h'
 
     input:
@@ -105,7 +105,7 @@ process run_virtual_stain {
     clusterOptions { "--gres=gpu:1 " + slurm_logs('virtual_stain') }
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
-    time { "${meta.time_minutes * task.attempt} min" }
+    time { retry_time(meta.time_minutes, task) }
 
     input:
     tuple val(position), val(meta)
@@ -145,11 +145,11 @@ workflow virtual_stain_init_wf {
     trigger
 
     main:
-    init_out = init_virtual_stain(input_zarr, output_zarr, config, trigger.map { 'done' })
+    init_out = init_virtual_stain(input_zarr, output_zarr, config, trigger.collect().map { 'done' })
 
     emit:
-    resources = init_out.map { stdout_text -> parse_resources(stdout_text) }.first()
-    done      = init_out.map { 'done' }.first()
+    resources = init_out.map { stdout_text -> parse_resources(stdout_text) }
+    done      = init_out.map { 'done' }
 }
 
 
@@ -174,12 +174,12 @@ workflow virtual_stain_run_wf {
     prev_done
 
     main:
-    vs_preprocess = run_virtual_stain_preprocess(input_zarr, prev_done.map { 'done' })
+    vs_preprocess = run_virtual_stain_preprocess(input_zarr, prev_done.collect().map { 'done' })
 
     pos_meta = positions
         .flatMap { items -> items }
         .combine(resources)
-        .combine(vs_preprocess.first())
+        .combine(vs_preprocess)
         .map { pos, meta, _preprocess_done -> [pos, meta] }
 
     vs_done = run_virtual_stain(pos_meta, input_zarr, output_zarr, config) | collect

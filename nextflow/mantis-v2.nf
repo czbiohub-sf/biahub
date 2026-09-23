@@ -226,7 +226,7 @@ workflow {
 
     if (assemble_on) {
         // Assemble reads the deskew, reconstruct and virtual-stain stores. Its
-        // init resolves those three paths into the config and creates the
+        // init takes those three stores as `-i` groups and creates the
         // assembled plate from their metadata — which is how a concatenate
         // config naming a channel no source store has fails here rather than
         // after virtual staining.
@@ -297,8 +297,8 @@ workflow {
     //
     //  The per-step barriers are unchanged: each step waits for every position
     //  of the one before it. Letting a single position flow through the steps
-    //  independently is issue #304, and is blocked on two whole-plate steps —
-    //  `viscy preprocess` and single-shot `concatenate` — not on this wiring.
+    //  independently is issue #304, and is blocked on one whole-plate step —
+    //  `viscy preprocess` — not on this wiring.
     // ========================================================================
     ff_done = flat_field_run_wf(all_positions, ff_input, ff_output,
                                 params.flat_field_config, ff_init.resources, init_done)
@@ -328,12 +328,13 @@ workflow {
                                               vs_init.resources, reconstruct_done.done)
 
     // Concatenate the deskew, reconstruct and virtual-stain outputs channel-wise
-    // into a single multichannel plate. Unlike the per-position steps this runs
-    // single-shot on ONE reserved compute node (`concatenate --cluster debug`
-    // iterates every position in-process).
+    // into a single multichannel plate, one task per position like every other
+    // step (one `-i` per source store; see modules/assembly.nf).
     if (assemble_on) {
-        assemble_done = assemble_run_wf(assemble_output, params.concatenate_config,
-                                        as_init.resources, virtual_stain_done.done)
+        assemble_done = assemble_run_wf(all_positions, deskew_output, reconstruct_output,
+                                        virtual_stain_output, assemble_output,
+                                        params.concatenate_config, as_init.resources,
+                                        virtual_stain_done.done)
     }
 
     // Tracking runs AFTER assemble rather than in parallel with it — the
@@ -397,9 +398,6 @@ workflow {
     //
     // Nothing here reads a position count. It is the same for every step, so
     // saying it six times adds nothing; the run-start message reports it once.
-    // That also removes a trap: assemble's output carries a single path String
-    // rather than the collected position list, and `('a/b.zarr' as List)`
-    // explodes into characters.
     //
     // ONE list of the steps this run actually performed, in order, each with the
     // channel that says it finished and the artifact it produced. Both the

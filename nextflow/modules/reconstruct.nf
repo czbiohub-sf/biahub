@@ -26,7 +26,7 @@
 // resource scheduling, so the CLI must NOT submit its own SLURM jobs.
 // See: examples/submitit_debug_nextflow/2026-05-27-submitit-debug-nextflow-concerns.md
 
-include { parse_resources; slurm_logs; slurm_log_dir } from './common'
+include { parse_resources; slurm_logs; slurm_log_dir; retry_time } from './common'
 
 
 process init_apply_inv_tf {
@@ -97,7 +97,7 @@ process run_apply_inv_tf {
     clusterOptions { slurm_logs('reconstruct') }
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
-    time { "${meta.time_minutes * task.attempt} min" }
+    time { retry_time(meta.time_minutes, task) }
 
     input:
     tuple val(position), val(meta)
@@ -147,11 +147,11 @@ workflow reconstruct_init_wf {
     trigger
 
     main:
-    init_out = init_apply_inv_tf(input_zarr, output_zarr, config, trigger.map { 'done' })
+    init_out = init_apply_inv_tf(input_zarr, output_zarr, config, trigger.collect().map { 'done' })
 
     emit:
-    resources = init_out.map { stdout_text -> parse_resources(stdout_text) }.first()
-    done      = init_out.map { 'done' }.first()
+    resources = init_out.map { stdout_text -> parse_resources(stdout_text) }
+    done      = init_out.map { 'done' }
 }
 
 
@@ -172,10 +172,10 @@ workflow reconstruct_tf_wf {
 
     main:
     tf_zarr = transfer_function_path(output_zarr)
-    tf_done = compute_transfer_function(trigger.map { 'done' }, input_zarr, tf_zarr, config)
+    tf_done = compute_transfer_function(trigger.collect().map { 'done' }, input_zarr, tf_zarr, config)
 
     emit:
-    done = tf_done.first()
+    done = tf_done
 }
 
 

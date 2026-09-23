@@ -1072,9 +1072,14 @@ class CharacterizeSettings(MyBaseModel):
 
 
 class ConcatenateSettings(MyBaseModel):
-    concat_data_paths: list[str]
+    # Source positions, one glob or path per source store. Optional: the CLI's
+    # repeated `-i` supplies the sources (one `-i` per store) and takes
+    # precedence, in which case the config holds only parameters.
+    concat_data_paths: list[str] | None = None
     time_indices: int | list[int] | Literal["all"] = "all"
-    channel_names: list[str | list[str]]
+    # "all" takes every channel of every source, like time_indices. The list
+    # form has one entry per source: "all" or the channel names to take.
+    channel_names: Literal["all"] | list[str | list[str]] = "all"
     X_slice: list | list[list | Literal["all"]] | Literal["all"] = "all"
     Y_slice: list | list[list | Literal["all"]] | Literal["all"] = "all"
     Z_slice: list | list[list | Literal["all"]] | Literal["all"] = "all"
@@ -1089,6 +1094,8 @@ class ConcatenateSettings(MyBaseModel):
     @field_validator("concat_data_paths")
     @classmethod
     def check_concat_data_paths(cls, v):
+        if v is None:
+            return v
         if not isinstance(v, list) or not all(isinstance(path, str) for path in v):
             raise ValueError("concat_data_paths must be a list of positions.")
         return v
@@ -1096,8 +1103,12 @@ class ConcatenateSettings(MyBaseModel):
     @field_validator("channel_names")
     @classmethod
     def check_channel_names(cls, v):
+        if v == "all":
+            return v
         if not isinstance(v, list) or not all(isinstance(name, (str, list)) for name in v):
-            raise ValueError("channel_names must be a list of strings or lists of strings.")
+            raise ValueError(
+                "channel_names must be 'all' or a list of strings or lists of strings."
+            )
         return v
 
     @field_validator("X_slice", "Y_slice", "Z_slice")
@@ -1199,10 +1210,19 @@ class ConcatenateSettings(MyBaseModel):
 
     @model_validator(mode="after")
     def validate_slice_lengths(self):
-        # Get the length of concat_data_paths
+        # Per-source lists (channel_names, X/Y/Z_slice) must be one entry per
+        # source. This can only be checked here when the config names the
+        # sources; when they come from the CLI's `-i` the same check runs in
+        # biahub.concatenate against the resolved source count.
         data_paths = self.concat_data_paths
         if not data_paths:
             return self
+
+        if isinstance(self.channel_names, list) and len(self.channel_names) != len(data_paths):
+            raise ValueError(
+                f"channel_names must be 'all' or a list with the same length as "
+                f"concat_data_paths ({len(data_paths)})"
+            )
 
         # Check X_slice
         x_slice = self.X_slice
