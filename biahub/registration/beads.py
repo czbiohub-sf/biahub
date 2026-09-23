@@ -445,7 +445,9 @@ def score_transform(
     """
     warped = (
         transform.to_ants()
-        .apply_to_image(ants.from_numpy(np.asarray(mov)), reference=ants.from_numpy(np.asarray(ref)))
+        .apply_to_image(
+            ants.from_numpy(np.asarray(mov)), reference=ants.from_numpy(np.asarray(ref))
+        )
         .numpy()
     )
     mov_peaks, ref_peaks = peaks_from_beads(
@@ -1026,7 +1028,11 @@ def _merge_best(base_transforms, base_scores, arms, output_transforms_path):
     log = []
 
     for t in range(len(base)):
-        best_name, best_score, best_matrix = None, base[t] if np.isfinite(base[t]) else -1.0, None
+        best_name, best_score, best_matrix = (
+            None,
+            base[t] if np.isfinite(base[t]) else -1.0,
+            None,
+        )
         for name, arm_transforms, arm_scores in arms:
             row = arm_scores.loc[arm_scores["t"] == t, "quality_score"]
             if not len(row):
@@ -1051,8 +1057,9 @@ def _merge_best(base_transforms, base_scores, arms, output_transforms_path):
         if "fell_back_to_seed" in scores:
             scores.loc[scores["t"] == t, "fell_back_to_seed"] = False
         winners[best_name].append(t)
-        log.append({"t": t, "before": float(base[t]), "after": float(best_score),
-                    "winner": best_name})
+        log.append(
+            {"t": t, "before": float(base[t]), "after": float(best_score), "winner": best_name}
+        )
 
     click.echo("\nCompeting fallbacks, best per timepoint:")
     for name in winners:
@@ -1252,20 +1259,30 @@ def estimate_tczyx(
             output_transforms_path,
         )
     else:
+
         def _run_repair(tr, sc):
             return repair_flagged_timepoints(
-                mov_tzyx=mov_tzyx, ref_tzyx=ref_tzyx, transforms=tr, scores=sc,
+                mov_tzyx=mov_tzyx,
+                ref_tzyx=ref_tzyx,
+                transforms=tr,
+                scores=sc,
                 beads_match_settings=beads_match_settings,
                 affine_transform_settings=affine_transform_settings,
-                output_transforms_path=output_transforms_path, mode=mode, verbose=verbose,
+                output_transforms_path=output_transforms_path,
+                mode=mode,
+                verbose=verbose,
             )
 
         def _run_sweep(tr, sc):
             return sweep_flagged_timepoints(
-                mov_tzyx=mov_tzyx, ref_tzyx=ref_tzyx, transforms=tr, scores=sc,
+                mov_tzyx=mov_tzyx,
+                ref_tzyx=ref_tzyx,
+                transforms=tr,
+                scores=sc,
                 beads_match_settings=beads_match_settings,
                 affine_transform_settings=affine_transform_settings,
-                output_transforms_path=output_transforms_path, verbose=verbose,
+                output_transforms_path=output_transforms_path,
+                verbose=verbose,
             )
 
         # Flags are recomputed inside each pass, so whichever runs second sees the updated
@@ -1276,7 +1293,8 @@ def estimate_tczyx(
             stages.reverse()
         click.echo(
             "Fallback order: " + " -> ".join(n for n, _, on in stages if on)
-            if any(on for _, _, on in stages) else "Fallbacks: none enabled"
+            if any(on for _, _, on in stages)
+            else "Fallbacks: none enabled"
         )
         for _name, fn, on in stages:
             if on:

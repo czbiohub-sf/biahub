@@ -516,9 +516,7 @@ class FallbackSettings(MyBaseModel):
     """
 
     mode: (
-        Literal[
-            "off", "repair", "sweep", "repair_then_sweep", "sweep_then_repair", "parallel"
-        ]
+        Literal["off", "repair", "sweep", "repair_then_sweep", "sweep_then_repair", "parallel"]
         | None
     ) = "repair"
     _coerce_mode = field_validator("mode", mode="before")(_coerce_yaml_off)
@@ -536,7 +534,11 @@ class FallbackSettings(MyBaseModel):
     @property
     def order(self) -> str:
         """Which staged order to use; "parallel" when the passes compete."""
-        return self.mode if self.mode in ("repair_then_sweep", "sweep_then_repair") else "parallel"
+        return (
+            self.mode
+            if self.mode in ("repair_then_sweep", "sweep_then_repair")
+            else "parallel"
+        )
 
 
 class BeadsMatchSettings(MyBaseModel):
@@ -617,7 +619,6 @@ class BeadsMatchSettings(MyBaseModel):
     repair_pass_settings: RepairSettings | None = None
     sweep_fallback_settings: SweepSettings | None = None
 
-
     @model_validator(mode="after")
     def migrate_deprecated_fallback_fields(self) -> "BeadsMatchSettings":
         """Fold the old field names into fallback_settings, warning about each.
@@ -682,6 +683,7 @@ class BeadsMatchSettings(MyBaseModel):
         else:
             self.fallback_settings.mode = "off"
         return self
+
 
 class PhaseCrossCorrSettings(MyBaseModel):
     normalization: Literal["magnitude", "classic"] | None = None
@@ -897,12 +899,12 @@ class EstimateRegistrationSettings(MyBaseModel):
                     )
                 if spectral_explicit and bms.spectral_arm != spectral:
                     conflicts.append(
-                        f"spectral_arm={bms.spectral_arm!r} "
-                        f"(strategy implies {spectral!r})"
+                        f"spectral_arm={bms.spectral_arm!r} (strategy implies {spectral!r})"
                     )
                 if conflicts:
                     raise ValueError(
-                        f"strategy={bms.strategy!r} contradicts " + " and ".join(conflicts)
+                        f"strategy={bms.strategy!r} contradicts "
+                        + " and ".join(conflicts)
                         + ". Set strategy to null to drive the flags directly, or remove the "
                         "conflicting flag."
                     )
