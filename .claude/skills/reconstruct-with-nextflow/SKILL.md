@@ -222,6 +222,32 @@ a pass is not a proof, because the script assumes `concatenate.yml` takes `all`
 from each source (both shipped families do — a config selecting a subset will
 over-predict).
 
+### 5b. Check the reconstruct pixel sizes against the deskew geometry
+
+`reconstruct.yml`'s `yx_pixel_size` / `z_pixel_size` must describe the
+deskewed store, which `deskew.yml` determines (`references/caveats.md` §3).
+waveorder does not read them from the zarr, so a stale or missing value
+silently yields a wrong transfer function. Run from the biahub checkout:
+
+```bash
+.venv/bin/python - <OUTPUT>/configs <<'EOF'
+import math, sys, yaml
+d = yaml.safe_load(open(f"{sys.argv[1]}/deskew.yml"))
+tf = yaml.safe_load(open(f"{sys.argv[1]}/reconstruct.yml"))["phase"]["transfer_function"]
+px = d["pixel_size_um"]
+want = {"yx_pixel_size": px,
+        "z_pixel_size": d.get("average_n_slices", 3) * math.sin(math.radians(d["ls_angle_deg"])) * px}
+bad = [f"{k}: config={tf.get(k)} expected={v:.4f}" for k, v in want.items()
+       if tf.get(k) is None or not math.isclose(tf[k], v, rel_tol=0.01)]
+print("\n".join(bad) or "pixel sizes OK"); sys.exit(bool(bad))
+EOF
+```
+
+It exits 1 on a missing value or one more than 1% off. Fix `reconstruct.yml`,
+not `deskew.yml` — the deskew values come from the acquisition (§5, caveats
+§3). If the deskew geometry differs from the template, that is a per-dataset
+edit to both files.
+
 ## 6. Present the plan
 
 Do not run anything yet. Show the user:

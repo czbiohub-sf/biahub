@@ -98,6 +98,21 @@ channel exactly as it appears in the deskewed store (`["BF - Oblique"]`
 today). A mismatch fails at `compute_transfer_function`, after flat-field and
 deskew have already burned hours.
 
+**`reconstruct.yml` — `phase.transfer_function.{yx,z}_pixel_size`.** These are
+the voxel sizes of the *deskewed* store, so they follow from `deskew.yml`:
+
+```
+yx_pixel_size = pixel_size_um
+z_pixel_size  = average_n_slices * sin(ls_angle_deg) * pixel_size_um
+```
+
+(yx = 0.1133, z = 3 × sin 30° × 0.1133 ≈ 0.17 for the shipped templates; `scan_step_um`
+does not enter.) waveorder does **not** read pixel sizes from the zarr — if
+omitted they default to 0.1 / 0.25, and a mismatch only emits a
+`PixelSizeMismatchWarning` at apply time while the transfer function is
+already wrong. Every downstream store (VS, assemble, QC) inherits the error.
+SKILL.md §5b checks this before launch.
+
 **`virtual_stain.yml` — `ckpt_path` and model geometry.** The model/data
 fields must agree with the checkpoint:
 
