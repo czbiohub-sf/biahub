@@ -318,6 +318,7 @@ class EstimateRegistrationSettings(MyBaseModel):
     eval_transform_settings: EvalTransformSettings | None = None
     ants_registration_settings: AntsRegistrationSettings | None = None
     manual_registration_settings: ManualRegistrationSettings | None = None
+    time_indices: NonNegativeInt | list[NonNegativeInt] | Literal["all"] = "all"
     verbose: bool = False
 
     @model_validator(mode="after")
