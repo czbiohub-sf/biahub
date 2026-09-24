@@ -8,11 +8,11 @@
 # [all, [Phase3D], all].
 time_indices: all
 channel_names: all
-chunks_czyx: null
+chunks_czyx: [1, 16, 256, 256]
 output_ome_zarr_version: "0.5"
 
 # shards_ratio is a ratio over the CHUNK shape (shards = chunks * ratio,
 # elementwise TCZYX), not an absolute shard shape. Leave unset unless you have a
 # measured reason: raising the T entry multiplies the shard buffer and the RAM
 # request, and one torn shard then loses every timepoint in it.
-# shards_ratio: [1, 1, 6, 7, 5]
+shards_ratio: [10, 1, 11, 3, 4]
