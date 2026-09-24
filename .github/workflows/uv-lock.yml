@@ -32,7 +32,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: astral-sh/setup-uv@v10.1.0
 
       # `uv lock --upgrade` discards the pinned rev and RE-RESOLVES every
       # dependency, the private git one included, so this job needs a credential
