@@ -51,6 +51,13 @@ from biahub.settings import (
 from biahub.utils.array_ops import _check_nan_n_zeros
 from biahub.utils.cluster import estimate_resources
 
+DEFAULT_ANTS_KWARGS = {
+    "type_of_transform": "Similarity",
+    "aff_shrink_factors": (6, 3, 1),
+    "aff_iterations": (2100, 1200, 50),
+    "aff_smoothing_sigmas": (2, 1, 0),
+}
+
 
 def estimate(
     ref: np.ndarray,
@@ -90,12 +97,7 @@ def estimate(
         raise ValueError(f"Dimension mismatch: ref.ndim={ref.ndim}, mov.ndim={mov.ndim}")
 
     if ants_kwargs is None:
-        ants_kwargs = {
-            "type_of_transform": "Similarity",
-            "aff_shrink_factors": (6, 3, 1),
-            "aff_iterations": (2100, 1200, 50),
-            "aff_smoothing_sigmas": (2, 1, 0),
-        }
+        ants_kwargs = dict(DEFAULT_ANTS_KWARGS)
 
     mov_ants = ants.from_numpy(mov)
     ref_ants = ants.from_numpy(ref)
