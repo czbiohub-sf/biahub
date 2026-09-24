@@ -215,7 +215,7 @@ nextflow run mantis-v2.nf \
 | `--*_config` | Per-step YAML settings, as passed to the CLI via `-c` |
 | `--biahub_project` | Path to a `biahub` checkout to run tasks from |
 | `--max_positions` | Process only the first N positions (`0` = all) |
-| `--max_workers` | Cap on concurrently submitted Slurm jobs (default 100) |
+| `--max_jobs` | Cap on concurrently submitted Slurm jobs (default 30) |
 
 With `--biahub_project`, each task runs as `uv run --project <path> biahub ...`; omit it to use whatever `biahub` is on `PATH` on the compute node. `--max_positions` is useful for smoke tests on a handful of positions.
 
