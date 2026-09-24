@@ -98,6 +98,35 @@ def test_repair_skips_a_candidate_that_raises_without_failing_the_whole_pass():
     assert result.source == "good"
 
 
+def test_repair_skips_a_candidate_whose_seed_for_raises_without_failing_the_whole_pass():
+    """E.g. `ConsensusSeed` raises when too few timepoints score well enough yet --
+    that must be skipped like any other candidate failure, not crash `repair`."""
+    target = np.array([10.0, 10.0, 10.0])
+
+    class _RaisingSeedPolicy:
+        def seed_for(self, t):
+            raise ValueError("not enough good timepoints yet")
+
+    candidates = {
+        "not_ready": _RaisingSeedPolicy(),
+        "good": FixedSeed(Transform.from_translation([9.0, 9.0, 9.0])),
+    }
+
+    result = repair(
+        t=3,
+        mov=None,
+        ref=None,
+        estimator=_EchoEstimator(),
+        current_transform=Transform.from_translation([0.0, 0.0, 0.0]),
+        current_score=_score_by_closeness(Transform.from_translation([0.0, 0.0, 0.0]), target),
+        candidates=candidates,
+        score_fn=lambda t: _score_by_closeness(t, target),
+    )
+
+    assert result.accepted is True
+    assert result.source == "good"
+
+
 def test_repair_records_to_the_journal_when_given_one():
     journal = RunJournal()
     target = np.array([10.0, 10.0, 10.0])

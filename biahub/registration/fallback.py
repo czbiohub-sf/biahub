@@ -41,9 +41,10 @@ def repair(
 ) -> RepairResult:
     """Try each candidate seed for timepoint `t`; keep whichever scores best.
 
-    Every candidate is tried (in the given order; a candidate whose `estimate()` call
-    raises is skipped, not fatal to the whole repair, matching the existing per-
-    candidate `try/except` pattern in `beads.py`'s repair pass). The single
+    Every candidate is tried (in the given order; a candidate whose `seed_for()` or
+    `estimate()` call raises -- e.g. `ConsensusSeed` when too few timepoints score well
+    enough yet -- is skipped, not fatal to the whole repair, matching the existing
+    per-candidate `try/except` pattern in `beads.py`'s repair pass). The single
     best-scoring result wins ties by candidate order. Only reported `accepted=True` if
     it beats `current_score` -- otherwise the original transform/score are returned
     unchanged.
@@ -53,8 +54,8 @@ def repair(
     best_score = current_score
 
     for name, seed_policy in candidates.items():
-        seed = seed_policy.seed_for(t)
         try:
+            seed = seed_policy.seed_for(t)
             candidate_transform = estimator.estimate(mov, ref, seed=seed)
             candidate_score = score_fn(candidate_transform)
         except Exception:  # noqa: BLE001
