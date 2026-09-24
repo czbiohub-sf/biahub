@@ -70,6 +70,11 @@ COMMANDS = [
         "help": "Estimate affine transform between timepoints or arms",
     },
     {
+        "name": "estimate-transform",
+        "import_path": "biahub.estimate_transform.estimate_transform_cli",
+        "help": "Estimate a transform series with the registration engine (beads)",
+    },
+    {
         "name": "flat-field",
         "import_path": "biahub.flat_field.flat_field_cli",
         "help": "Apply flat field correction to selected channels",
