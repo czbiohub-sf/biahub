@@ -84,6 +84,86 @@ def test_node_graph_estimator_recovers_known_translation():
     np.testing.assert_allclose(transform.matrix[:3, :3], np.eye(3), atol=1e-6)
 
 
+def _synthetic_bead_volume(rng, shape, n_beads=15, sigma=2.0, amplitude=500, noise_std=5.0):
+    """Sharp, sparse peaks -- what BeadNodeDetector's peak detection actually needs,
+    as opposed to _synthetic_blob_volume's broader blobs (fine for ants/pcc/stackreg,
+    too broad for peak-based detection here)."""
+    zz, yy, xx = np.meshgrid(*[np.arange(s) for s in shape], indexing="ij")
+    margin = int(sigma * 4)
+    centers = rng.uniform([margin] * 3, np.asarray(shape) - margin, size=(n_beads, 3))
+    volume = np.zeros(shape, dtype=np.float32)
+    for cz, cy, cx in centers:
+        volume += amplitude * np.exp(
+            -(((zz - cz) ** 2 + (yy - cy) ** 2 + (xx - cx) ** 2) / (2 * sigma**2))
+        )
+    volume += rng.normal(0, noise_std, size=shape).astype(np.float32)
+    return np.clip(volume, 0, None)
+
+
+def _bead_estimator():
+    peaks_settings = DetectPeaksSettings(
+        threshold_abs=100, nms_distance=4, min_distance=0, block_size=[8, 8, 8]
+    )
+    beads_match_settings = BeadsMatchSettings(
+        source_peaks_settings=peaks_settings, target_peaks_settings=peaks_settings
+    )
+    return NodeGraphEstimator(
+        mov_detector=BeadNodeDetector(peaks_settings),
+        ref_detector=BeadNodeDetector(peaks_settings),
+        beads_match_settings=beads_match_settings,
+        affine_transform_settings=AffineTransformSettings(transform_type="euclidean"),
+    )
+
+
+def test_node_graph_estimator_seed_composition_is_self_consistent():
+    """Regression test for the seed composition math: pre-warping mov by the seed and
+    composing the residual correction with it (`correction @ seed`) must give the exact
+    same result as manually pre-warping mov, fitting the residual with no seed, and
+    composing by hand -- confirms Transform.compose's "apply other first, then self"
+    contract is used in the right order here.
+    """
+    rng = np.random.default_rng(11)
+    shape = (40, 60, 60)
+    ref = _synthetic_bead_volume(rng, shape)
+    applied_zyx = (2, -3, 4)
+    mov = ndi_shift(ref, shift=applied_zyx, order=1, mode="constant", cval=0.0)
+
+    estimator = _bead_estimator()
+    seed = Transform.from_translation([-1.5, 2.5, -3.5])  # plausible, not exact
+
+    mov_warped = seed.apply(mov, reference=ref, order=1, backend="scipy")
+    correction = estimator.estimate(mov_warped, ref)
+    expected_total = correction @ seed
+
+    actual_total = estimator.estimate(mov, ref, seed=seed)
+    np.testing.assert_allclose(actual_total.matrix, expected_total.matrix, atol=1e-6)
+
+
+def test_node_graph_estimator_seed_extends_matching_capture_range():
+    """A large offset that fails to match at all without a seed (NaN -- not enough/no
+    valid correspondences) succeeds exactly once a seed pre-aligns mov close enough for
+    point matching's limited capture range.
+    """
+    rng = np.random.default_rng(11)
+    shape = (40, 60, 60)
+    ref = _synthetic_bead_volume(rng, shape)
+    big_applied_zyx = (10, -15, 20)
+    mov = ndi_shift(ref, shift=big_applied_zyx, order=1, mode="constant", cval=0.0)
+
+    estimator = _bead_estimator()
+
+    no_seed_result = estimator.estimate(mov, ref)
+    assert np.any(np.isnan(no_seed_result.matrix)), (
+        "expected this large offset to fail without a seed"
+    )
+
+    good_seed = Transform.from_translation([-a for a in big_applied_zyx])
+    with_seed_result = estimator.estimate(mov, ref, seed=good_seed)
+    np.testing.assert_allclose(
+        with_seed_result.matrix[:3, 3], [-a for a in big_applied_zyx], atol=0.5
+    )
+
+
 def test_pcc_estimator_satisfies_protocol():
     assert isinstance(PCCEstimator(), TransformEstimator)
 

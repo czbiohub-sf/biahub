@@ -81,6 +81,15 @@ class NodeGraphEstimator:
 
     Composes a `NodeDetector` (beads today; segmentation centroids or other node
     sources later) with the existing graph-matching + transform-fitting steps.
+
+    `seed`, when given, pre-warps `mov` (via `Transform.apply`, so it uses the same
+    already-verified forward/pull inversion as everything else) into `ref`'s frame
+    before node detection -- point matching has a limited capture range, so this
+    extends how large a drift it can recover from. The residual correction fit in the
+    warped frame is composed with the seed via `correction @ seed`
+    (`Transform.compose`'s own documented contract: "apply `other` first, then
+    `self`" -- matches `composed.apply_points(p) == self.apply_points(other.apply_points(p))`,
+    i.e. this seed, then this correction).
     """
 
     def __init__(
@@ -115,22 +124,20 @@ class NodeGraphEstimator:
     def estimate(
         self, mov: ArrayLike, ref: ArrayLike, seed: Transform | None = None
     ) -> Transform:
-        # TODO: seed is not yet used -- beads seeding pre-warps mov before peak
-        # detection and composes the seed back in, which needs its own direction
-        # verification (like AntsEstimator's) before wiring up. Tracked in #349/#350.
         mov = np.asarray(mov)
         ref = np.asarray(ref)
-        mov_nodes = self.mov_detector.detect(mov)
+        mov_for_detection = seed.apply(mov, reference=ref) if seed is not None else mov
+        mov_nodes = self.mov_detector.detect(mov_for_detection)
         ref_nodes = self.ref_detector.detect(ref)
         matches = matches_from_beads(mov_nodes, ref_nodes, self.beads_match_settings)
-        fwd_transform, _inv_transform = transform_from_matches(
+        correction, _inv_correction = transform_from_matches(
             matches,
             mov_nodes,
             ref_nodes,
             self.affine_transform_settings,
             ndim=mov.ndim,
         )
-        return fwd_transform
+        return correction @ seed if seed is not None else correction
 
 
 class PCCEstimator:
