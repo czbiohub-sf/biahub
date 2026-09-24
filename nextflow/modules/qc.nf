@@ -1,7 +1,7 @@
 // QC stage execution and reporting: the processes that call the external
 // `imaging-qc` CLI, and the two workflows that wire them. One file, as every
 // other step module in this directory is.
-include { slurm_logs; slurm_log_dir; retry_memory } from './common'
+include { slurm_logs; slurm_log_dir; retry_memory; retry_time } from './common'
 
 
 process plan_stage {
@@ -57,16 +57,10 @@ process compute_step {
     clusterOptions { slurm_logs('qc') }
     cpus { params.qc_cpus as int }
     memory { retry_memory(meta?.memory_gb ?: 16, task) }
-    time '2h'
-    // NO errorStrategy here on purpose — inherit the one in nextflow.config.
-    // This used to carry its own `task.exitStatus in [137, 140, 143]` copy, which
-    // is the same idea with a narrower list and, like the config rule before it,
-    // missed the case that matters most on the `preempted` partition: a job SLURM
-    // cancels before it can write .exitcode, whose status is unreadable rather
-    // than any code at all. A process-body directive BEATS the config selector,
-    // so the copy silently reintroduced the abort for QC even once config was
-    // fixed. `maxRetries` is still overridden — only the strategy is shared.
-    maxRetries 1
+    // 120 min, hardcoded rather than a param. An item is now a CHUNK of
+    // `params.qc_chunk_size` timepoints, not a whole position (see the note on
+    // that param), so the budget no longer has to scale with T
+    time { retry_time(120, task) }
 
     input:
     tuple val(zarr_path), val(config_path), val(step_id),
@@ -89,7 +83,7 @@ process finalize_stage {
     label 'cpu'
     clusterOptions { slurm_logs('qc') }
     memory { retry_memory(32, task) }
-    time '1h'
+    time { retry_time(60, task) }
     // Inherits nextflow.config's errorStrategy — see compute_step above.
     maxRetries 1
     tag "${zarr_path}"
@@ -119,7 +113,7 @@ process generate_unified_report {
     clusterOptions { slurm_logs('qc') }
     cpus 2
     memory '32 GB'
-    time '1h'
+    time { retry_time(60, task) }
 
     input:
     tuple path(report_spec), val(report_dir)
