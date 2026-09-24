@@ -57,29 +57,10 @@ process compute_step {
     clusterOptions { slurm_logs('qc') }
     cpus { params.qc_cpus as int }
     memory { retry_memory(meta?.memory_gb ?: 16, task) }
-    // `retry_time`, not a literal, for the same reason every other per-position
-    // fan-out uses it (deskew, flat_field, reconstruct, virtual_stain, assemble):
-    // a task killed at the wall (exit 140, SLURM's `--signal B:USR2@30`) needs a
-    // BIGGER budget on the retry, not the same one. compute_step was the one
-    // fan-out left on a literal, so on 2026_08_14_dynatrack both attempts got
-    // 2 h, both hit 140, and the run died having recomputed each position twice
-    // from scratch. Memory already grew on OOM here; time now grows on timeout.
-    //
     // 120 min, hardcoded rather than a param. An item is now a CHUNK of
     // `params.qc_chunk_size` timepoints, not a whole position (see the note on
-    // that param), so the budget no longer has to scale with T — 2 h is a wide
-    // margin over a chunk, and `retry_time` doubles it to 4 h if one does hit
-    // the wall. A knob nobody would turn is one more thing to document.
+    // that param), so the budget no longer has to scale with T
     time { retry_time(120, task) }
-    // NO errorStrategy here on purpose — inherit the one in nextflow.config.
-    // This used to carry its own `task.exitStatus in [137, 140, 143]` copy, which
-    // is the same idea with a narrower list and, like the config rule before it,
-    // missed the case that matters most on the `preempted` partition: a job SLURM
-    // cancels before it can write .exitcode, whose status is unreadable rather
-    // than any code at all. A process-body directive BEATS the config selector,
-    // so the copy silently reintroduced the abort for QC even once config was
-    // fixed. `maxRetries` is still overridden — only the strategy is shared.
-    maxRetries 1
 
     input:
     tuple val(zarr_path), val(config_path), val(step_id),
