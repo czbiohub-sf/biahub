@@ -1,7 +1,6 @@
 import itertools
 import shutil
 
-from datetime import datetime
 from pathlib import Path
 from typing import Literal, cast
 
@@ -20,9 +19,9 @@ from tqdm import tqdm
 from waveorder.focus import focus_from_transverse_band
 
 from biahub.cli.parsing import (
+    cluster,
     config_filepath,
     input_position_dirpaths,
-    local,
     output_dirpath,
     sbatch_filepath,
     sbatch_to_submitit,
@@ -41,7 +40,7 @@ from biahub.settings import (
     StackRegSettings,
 )
 from biahub.utils.cluster import estimate_resources, get_submitit_cluster
-from biahub.utils.config import yaml_to_model
+from biahub.utils.config import model_to_yaml, yaml_to_model
 
 NA_DET = 1.35
 LAMBDA_ILL = 0.500
@@ -133,7 +132,7 @@ def phase_cross_corr_padding(
     normalization: Literal["magnitude", "classic"] | None = None,
     output_path: Path | None = None,
     verbose: bool = False,
-) -> tuple[int, ...]:
+) -> tuple[tuple[int, ...], np.ndarray]:
     """
     Borrowing from Jordao dexpv2.crosscorr https://github.com/royerlab/dexpv2.
 
@@ -147,12 +146,20 @@ def phase_cross_corr_padding(
     mov_img : ArrayLike
         Moved image.
     maximum_shift : float, optional
-        Maximum location shift normalized by axis size, by default 1.0
+        Maximum location shift normalized by axis size, by default 1.2
+    normalization : Literal["magnitude", "classic"] | None
+        Normalization method.
+    output_path : Path | None
+        If given, save a plot of the cross-correlation to this path.
+    verbose : bool
+        If True, print verbose output.
 
     Returns
     -------
-    Tuple[int, ...]
+    peak : tuple[int, ...]
         Shift between reference and moved image.
+    corr : np.ndarray
+        Cross-correlation array.
     """
     shape = tuple(
         cast(int, next_fast_len(int(max(s1, s2) * maximum_shift)))
@@ -202,7 +209,7 @@ def phase_cross_corr(
     normalization: Literal["magnitude", "classic"] | None = None,
     output_path: Path | None = None,
     verbose: bool = False,
-) -> tuple[int, ...]:
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Borrowing from Jordao dexpv2.crosscorr https://github.com/royerlab/dexpv2.
 
@@ -217,13 +224,17 @@ def phase_cross_corr(
         Moved image.
     normalization : Literal["magnitude", "classic"]
         Normalization method.
+    output_path : Path | None
+        If given, save a plot of the cross-correlation to this path.
     verbose : bool
         If True, print verbose output.
 
     Returns
     -------
-    Tuple[int, ...]
+    shift : np.ndarray
         Shift between reference and moved image.
+    corr_shifted : np.ndarray
+        Cross-correlation array, shifted so that zero shift is at the center.
     """
     Fimg1 = np.fft.rfftn(ref_img)
     Fimg2 = np.fft.rfftn(mov_img)
@@ -264,7 +275,7 @@ def get_tform_from_pcc(
     normalization: Literal["magnitude", "classic"] | None = None,
     output_path: Path | None = None,
     verbose: bool = False,
-) -> tuple[ArrayLike, tuple[int, int, int]]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Get the transformation matrix from phase cross correlation.
 
@@ -276,13 +287,23 @@ def get_tform_from_pcc(
         Source channel data.
     target_channel_tzyx : da.Array
         Target channel data.
+    function_type : Literal["custom_padding", "custom"]
+        Phase cross correlation implementation to use.
+    normalization : Literal["magnitude", "classic"] | None
+        Normalization method.
+    output_path : Path | None
+        If given, save a plot of the cross-correlation to this path.
     verbose : bool
         If True, print verbose output.
 
     Returns
     -------
-    ArrayLike
+    transform : np.ndarray
         Transformation matrix.
+    shift : np.ndarray
+        Shift between reference and moved image.
+    corr : np.ndarray
+        Cross-correlation array.
     """
     target = np.asarray(source_channel_tzyx[t]).astype(np.float32)
     source = np.asarray(target_channel_tzyx[t]).astype(np.float32)
@@ -331,6 +352,8 @@ def plot_pcc_drifts(
         Label for the plot.
     title : str
         Title for the plot.
+    unit : Literal["µm", "px"]
+        Unit for the drift axes.
     voxel_size : Tuple[float, float, float]
         Voxel size in microns.
 
@@ -458,12 +481,12 @@ def estimate_xyz_stabilization_pcc_per_position(
         Path to the input position directory.
     output_folder_path : Path
         Path to the output folder.
+    output_shifts_path : Path
+        Path to the folder where per-timepoint shifts are saved.
     channel_index : int
         Index of the channel to process.
-    center_crop_xy : list[int]
-        Size of the crop in the XY plane.
-    t_reference : str
-        Reference timepoint.
+    phase_cross_corr_settings : PhaseCrossCorrSettings
+        Settings for the phase cross correlation.
     verbose : bool
         If True, print verbose output.
 
@@ -592,7 +615,7 @@ def estimate_xyz_stabilization_pcc(
     output_folder_path: Path,
     phase_cross_corr_settings: PhaseCrossCorrSettings,
     channel_index: int = 0,
-    sbatch_filepath: Path = None,
+    sbatch_filepath: str | None = None,
     cluster: str = "local",
     verbose: bool = False,
 ) -> dict[str, list[ArrayLike]]:
@@ -609,7 +632,7 @@ def estimate_xyz_stabilization_pcc(
         Settings for the phase cross correlation.
     channel_index : int
         Index of the channel to process.
-    sbatch_filepath : Path
+    sbatch_filepath : str | None
         Path to the sbatch file.
     cluster : str
         Cluster to use.
@@ -639,9 +662,9 @@ def estimate_xyz_stabilization_pcc(
 
     slurm_args = {
         "slurm_job_name": "estimate_xyz_pcc",
-        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
+        "slurm_mem": f"{num_cpus * gb_ram_per_cpu}G",
         "slurm_cpus_per_task": num_cpus,
-        "slurm_array_parallelism": 100,
+        "slurm_array_parallelism": 100,  # process up to 100 positions at a time
         "slurm_time": 60,
         "slurm_partition": "preempted",
     }
@@ -672,11 +695,11 @@ def estimate_xyz_stabilization_pcc(
             )
             jobs.append(job)
 
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    log_path = slurm_out_path / f"job_ids_{timestamp}.log"
-    with open(log_path, "w") as log_file:
-        for job in jobs:
-            log_file.write(f"{job.job_id}\n")
+    job_ids = [job.job_id for job in jobs]
+    # Several stages may submit into the same slurm_output/, so append.
+    log_path = slurm_out_path / "submitit_jobs_ids.log"
+    with log_path.open("a") as log_file:
+        log_file.write("\n".join(job_ids) + "\n")
 
     wait_for_jobs_to_finish(jobs)
 
@@ -776,7 +799,7 @@ def estimate_xy_stabilization(
     output_folder_path: Path,
     stack_reg_settings: StackRegSettings,
     channel_index: int = 0,
-    sbatch_filepath: Path | None = None,
+    sbatch_filepath: str | None = None,
     cluster: str = "local",
     verbose: bool = False,
 ) -> dict[str, list[ArrayLike]]:
@@ -793,7 +816,7 @@ def estimate_xy_stabilization(
         Settings for the stack registration.
     channel_index : int
         Index of the channel to process.
-    sbatch_filepath : Path
+    sbatch_filepath : str | None
         Path to the sbatch file.
     cluster : str
         Cluster to use.
@@ -841,10 +864,10 @@ def estimate_xy_stabilization(
 
     # Prepare SLURM arguments
     slurm_args = {
-        "slurm_job_name": "estimate_focus_z",
-        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
+        "slurm_job_name": "estimate_stack_reg_xy",
+        "slurm_mem": f"{num_cpus * gb_ram_per_cpu}G",
         "slurm_cpus_per_task": num_cpus,
-        "slurm_array_parallelism": 100,
+        "slurm_array_parallelism": 100,  # process up to 100 positions at a time
         "slurm_time": 10,
         "slurm_partition": "preempted",
     }
@@ -877,11 +900,11 @@ def estimate_xy_stabilization(
             jobs.append(job)
 
     # Save job IDs
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    log_path = slurm_out_path / f"job_ids_{timestamp}.log"
-    with open(log_path, "w") as log_file:
-        for job in jobs:
-            log_file.write(f"{job.job_id}\n")
+    job_ids = [job.job_id for job in jobs]
+    # Several stages may submit into the same slurm_output/, so append.
+    log_path = slurm_out_path / "submitit_jobs_ids.log"
+    with log_path.open("a") as log_file:
+        log_file.write("\n".join(job_ids) + "\n")
 
     wait_for_jobs_to_finish(jobs)
 
@@ -1004,7 +1027,7 @@ def get_mean_z_positions(
     dataframe_path: Path,
     verbose: bool = False,
     method: Literal["mean", "median"] = "mean",
-) -> None:
+) -> np.ndarray:
     """
     Get the mean or median z-focus for each timepoint.
 
@@ -1054,7 +1077,7 @@ def estimate_z_stabilization(
     output_folder_path: Path,
     focus_finding_settings: FocusFindingSettings,
     channel_index: int,
-    sbatch_filepath: Path | None = None,
+    sbatch_filepath: str | None = None,
     cluster: str = "local",
     verbose: bool = False,
     estimate_z_index: bool = False,
@@ -1072,7 +1095,7 @@ def estimate_z_stabilization(
         Settings for the focus finding.
     channel_index : int
         Index of the channel to process.
-    sbatch_filepath : Path
+    sbatch_filepath : str | None
         Path to the sbatch file.
     cluster : str
         Cluster to use.
@@ -1105,9 +1128,9 @@ def estimate_z_stabilization(
     # Prepare SLURM arguments
     slurm_args = {
         "slurm_job_name": "estimate_focus_z",
-        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
+        "slurm_mem": f"{num_cpus * gb_ram_per_cpu}G",
         "slurm_cpus_per_task": num_cpus,
-        "slurm_array_parallelism": 100,
+        "slurm_array_parallelism": 100,  # process up to 100 positions at a time
         "slurm_time": 30,
         "slurm_partition": "preempted",
     }
@@ -1143,11 +1166,11 @@ def estimate_z_stabilization(
             jobs.append(job)
 
     # Save job IDs
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    log_path = slurm_out_path / f"job_ids_{timestamp}.log"
-    with open(log_path, "w") as log_file:
-        for job in jobs:
-            log_file.write(f"{job.job_id}\n")
+    job_ids = [job.job_id for job in jobs]
+    # Several stages may submit into the same slurm_output/, so append.
+    log_path = slurm_out_path / "submitit_jobs_ids.log"
+    with log_path.open("a") as log_file:
+        log_file.write("\n".join(job_ids) + "\n")
 
     wait_for_jobs_to_finish(jobs)
 
@@ -1221,27 +1244,27 @@ def estimate_z_stabilization(
 
 
 def estimate_stabilization(
-    input_position_dirpaths: list[str],
-    output_dirpath: str,
-    config_filepath: str,
-    sbatch_filepath: str = None,
-    local: bool = False,
+    input_position_dirpaths: list[Path],
+    output_dirpath: Path,
+    config_filepath: Path,
+    sbatch_filepath: str | None = None,
+    cluster: str = "slurm",
 ) -> None:
     """
     Estimate the stabilization matrices for a list of positions.
 
     Parameters
     ----------
-    input_position_dirpaths : list[str]
+    input_position_dirpaths : list[Path]
         Paths to the input position directories.
-    output_filepath : str
-        Path to the output file.
-    config_filepath : str
+    output_dirpath : Path
+        Directory where stabilization settings and plots are written.
+    config_filepath : Path
         Path to the configuration file.
-    sbatch_filepath : str
+    sbatch_filepath : str | None
         Path to the sbatch file.
-    local : bool
-        If True, run locally.
+    cluster : str
+        Submitit cluster: "slurm", "local", or "debug".
 
     Returns
     -------
@@ -1265,6 +1288,9 @@ def estimate_stabilization(
     output_dirpath = Path(output_dirpath)
     output_dirpath.mkdir(parents=True, exist_ok=True)
 
+    # Provenance: record the estimation settings alongside the emitted transforms
+    model_to_yaml(settings, output_dirpath / "estimate_stabilization_settings.yml")
+
     # Channel names to process
     with open_ome_zarr(input_position_dirpaths[0]) as dataset:
         channel_names = dataset.channel_names
@@ -1272,8 +1298,8 @@ def estimate_stabilization(
         channel_index = channel_names.index(stabilization_estimation_channel)
         T, C, Z, Y, X = dataset.data.shape
 
-    # Run locally or submit to SLURM
-    cluster = get_submitit_cluster(local)
+    # Resolve the submitit cluster (CI forces "debug")
+    cluster = get_submitit_cluster(cluster=cluster)
 
     # Load the evaluation settings
     eval_transform_settings = settings.eval_transform_settings
@@ -1391,6 +1417,7 @@ def estimate_stabilization(
                 click.echo(
                     f"Error estimating {stabilization_type} stabilization parameters: {e}"
                 )
+                raise
         elif stabilization_method == "beads":
             from biahub.registration.beads import estimate_tczyx
 
@@ -1496,6 +1523,7 @@ def estimate_stabilization(
                 click.echo(
                     f"Error estimating {stabilization_type} stabilization parameters: {e}"
                 )
+                raise
 
     # Estimate z drift
     if "z" == stabilization_type and stabilization_method == "focus-finding":
@@ -1545,6 +1573,7 @@ def estimate_stabilization(
                 )
         except Exception as e:
             click.echo(f"Error estimating {stabilization_type} stabilization parameters: {e}")
+            raise
 
     # Estimate yx drift
     if "xy" == stabilization_type:
@@ -1602,6 +1631,7 @@ def estimate_stabilization(
                 click.echo(
                     f"Error estimating {stabilization_type} stabilization parameters: {e}"
                 )
+                raise
 
 
 @click.command("estimate-stabilization")
@@ -1609,32 +1639,33 @@ def estimate_stabilization(
 @output_dirpath()
 @config_filepath()
 @sbatch_filepath()
-@local()
+@cluster()
 def estimate_stabilization_cli(
-    input_position_dirpaths: list[str],
-    output_dirpath: str,
+    input_position_dirpaths: list[Path],
+    output_dirpath: Path,
     config_filepath: Path,
-    sbatch_filepath: str = None,
-    local: bool = False,
+    sbatch_filepath: str | None = None,
+    cluster: str = "slurm",
 ):
     """Estimate translation matrices for XYZ stabilization of a timelapse dataset.
 
     Stabilization parameters may be computed for the XY, Z, or XYZ dimensions using
     focus finding, beads, or phase cross correlation methods.
 
-    >>> biahub estimate-stabilization \
-        -i ./timelapse.zarr/0/0/0 \
-        -o ./stabilization.yml \
-        -c ./config.yml \
-        -s ./sbatch.sh \
-        --local --verbose
-    """
+    \b
+    SLURM fan-out of positions across a whole plate:
+    >>> biahub estimate-stabilization -i ./timelapse.zarr/*/*/* -c ./config.yml -o ./stabilization_output
+
+    \b
+    In-process run (e.g. on a workstation or from a Nextflow worker):
+    >>> biahub estimate-stabilization --cluster debug -i ./timelapse.zarr/A/1/0 -c ./config.yml -o ./stabilization_output
+    """  # noqa: D301
     estimate_stabilization(
         input_position_dirpaths=input_position_dirpaths,
         output_dirpath=output_dirpath,
         config_filepath=config_filepath,
         sbatch_filepath=sbatch_filepath,
-        local=local,
+        cluster=cluster,
     )
 
 

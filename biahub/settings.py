@@ -1,3 +1,5 @@
+import warnings
+
 from pathlib import Path
 from typing import Any, Literal
 
@@ -16,6 +18,25 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+
+
+def _coerce_yaml_off(value):
+    """Accept YAML's boolean `off` where the string "off" is meant.
+
+    YAML 1.1 resolves the bare words off/no/false to boolean False (and on/yes/true to True),
+    so `fallback: off` arrives here as False and fails a Literal["off", ...] check with a
+    message that does not mention quoting. Every field using this has "off" as a real option,
+    so mapping False onto it is unambiguous. True is rejected, because "on" is not a value any
+    of these fields takes -- there is always more than one way to be on.
+    """
+    if value is False:
+        return "off"
+    if value is True:
+        raise ValueError(
+            "got boolean true; YAML reads bare on/yes/true as a boolean. Quote the value you "
+            'meant, e.g. "always" or "on_flagged".'
+        )
+    return value
 
 
 # All settings classes inherit from MyBaseModel, which forbids extra parameters to guard against typos
@@ -175,6 +196,44 @@ class MatchDescriptorSettings(MyBaseModel):
     cross_check: bool = False
 
 
+class SpectralMatchSettings(MyBaseModel):
+    """Settings for pairwise-consistency (Leordeanu-Hebert) spectral matching.
+
+    Attributes
+    ----------
+    sigma : float
+        Tolerance in voxels on pairwise-distance agreement between two candidate
+        correspondences. Roughly the bead-localisation uncertainty.
+    rel_cut : float
+        Keep candidates scoring above this fraction of the top eigenvector entry.
+        Higher is stricter: measured on real data, 0.5 gives recall ~0.90 at precision
+        ~0.74, and 0.7 gives recall ~0.64 at precision ~0.83.
+    max_iter : int
+        Power-iteration steps for the principal eigenvector.
+
+    These defaults are deliberately left where they are, despite a sweep appearing to beat
+    them. Over 24 stratified timepoints on two datasets, sigma=5.0/rel_cut=0.65 dominated
+    3.0/0.5 on every summary statistic when spectral matching ran ALONE -- mean 0.872 vs
+    0.856, worst case 0.720 vs 0.667. Rerunning the full cascade end-to-end with the tuned
+    pair then showed no improvement at all: 17 timepoints better, 21 worse, mean delta
+    -0.002, Wilcoxon p=0.20, and the run minimum fell from 0.720 to 0.708.
+
+    The reason is that spectral only has to land the transform inside the basin that the
+    subsequent hungarian refinement converges from; once it does, its own precision is
+    discarded. 106 of 144 timepoints came out bit-identical under the two settings. So a
+    single-pass spectral benchmark ranks these parameters for a job the cascade does not ask
+    them to do, and tuning them against it is measuring the wrong thing.
+
+    They do still matter where spectral matching is used on its own -- see
+    DEFAULT_SWEEP_GRID in biahub.registration.beads, whose ranges come from that same
+    stratified sweep.
+    """
+
+    sigma: float = 3.0
+    rel_cut: float = 0.5
+    max_iter: int = 60
+
+
 class FilterMatchesSettings(MyBaseModel):
     angle_threshold: float = 0
     direction_threshold: float = 0
@@ -188,8 +247,302 @@ class QCBeadsRegistrationSettings(MyBaseModel):
     score_centroid_mask_radius: int = 6
 
 
+class SeedCorrectionSettings(MyBaseModel):
+    """Per-timepoint correction of the approx_transform seed by bead displacement voting.
+
+    The static approx_transform assumes one geometry fits the whole series. When the FOV
+    geometry drifts over time by more than the matcher's capture range, the mid-series
+    timepoints start too far from the truth for any matching arm to recover -- and with a
+    thin bead field there are too few peaks for the graph matchers to re-acquire from
+    scratch. This corrects the seed per timepoint, BEFORE the standard estimation, by
+    letting every densely-detected bead in the seed-warped moving volume vote for its
+    displacement to nearby reference beads: the true residual drift collects the real
+    beads' votes in a tight cluster while random pairings spread diffusely.
+
+    Measured on 2025_11_05 (geometry drifts 15-35 voxels mid-series, ~12 detectable GFP
+    beads): the run median went 0.000 -> ~0.5 with "votefit", every previously-0.000 test
+    timepoint was rescued, and the good timepoints were preserved. Off by default; a run
+    whose seed is valid throughout does not need it and saves the extra warps.
+
+    Attributes
+    ----------
+    mode : Literal["none", "voteseed", "votefit"]
+        "none"      seed used as configured (existing behaviour, default).
+        "voteseed"  translation-only correction from the dominant vote cluster.
+        "votefit"   additionally fits an affine on the vote-cluster correspondences,
+                    accepted only when it improves the peaks' NN distance. This is the
+                    variant that won the 2025_11_05 sweep.
+    vote_peaks_settings : DetectPeaksSettings
+        Detection used on the warped moving volume for VOTING only -- denser than the
+        pipeline's own detection, because more (real) voters sharpen the cluster. The
+        defaults were measured on 2025_11_05 to add real beads, not background. The
+        estimation itself still uses source/target_peaks_settings unchanged.
+    capture_radius : float
+        Radius (voxels) within which a moving peak votes for reference peaks. Must
+        exceed the largest per-timepoint drift to be corrected.
+    cluster_radius : float
+        Radius (voxels) of the vote-density ball that defines the winning cluster.
+    min_votes : int
+        Minimum peaks/votes below which the correction abstains and keeps the seed.
+    """
+
+    mode: Literal["none", "voteseed", "votefit"] = "none"
+    vote_peaks_settings: DetectPeaksSettings = DetectPeaksSettings(
+        threshold_abs=200.0, nms_distance=8, min_distance=0, block_size=[16, 16, 16]
+    )
+    capture_radius: float = 80.0
+    cluster_radius: float = 10.0
+    min_votes: int = 3
+
+
+class SweepSettings(MyBaseModel):
+    """Last-resort per-timepoint grid search over the matching parameters.
+
+    The other arms all reuse one parameter set for the whole timelapse. That set is chosen
+    to be good on average, and a handful of timepoints are simply not well served by it.
+    This re-tunes those timepoints individually.
+
+    Off by default because it is the most expensive thing in the estimator: one ANTs warp
+    plus peak re-detection per surviving trial, roughly 18 s each. Gating it on score is
+    what makes it affordable -- it fires on the few percent of timepoints that need it.
+
+    Measured on 15 flagged timepoints across two datasets, with the default grid: 8 improved,
+    mean gain +0.041 over all 15 and +0.077 over those it helped. It cannot regress --
+    estimate() keeps the sweep result only if it strictly beats the incumbent -- so the
+    honest description is a modest rescue for a real cost, worth enabling when a few bad
+    timepoints matter more than runtime. Note it found nothing at 7 of the 15, so it is a
+    tail-risk reducer rather than a general improvement.
+
+    Attributes
+    ----------
+    mode : Literal["off", "on_low_score"]
+        "on_low_score" runs the sweep when every other arm came in below score_threshold.
+    mode : Literal["off", "on_flagged", "on_low_score"]
+        "on_flagged" is the recommended setting: the sweep runs as a post-pass after the
+        repair pass, on the timepoints the run's OWN adaptive median-2*MAD line flags.
+
+        "on_low_score" is the legacy behaviour -- the sweep runs inside estimate(), gated on
+        the fixed score_threshold below. It is kept for reproducing earlier runs and is NOT
+        recommended, because a fixed gate does not transfer between datasets. Measured with
+        the gate at 0.75: on a run whose median was 0.870 it fired 0 times out of 144, and on
+        a run whose median was 0.753 -- where 0.75 sits at the median -- it fired 556 times,
+        stopped being a fallback, and pushed the job past its 24 h walltime.
+
+        The reason the adaptive gate has to live in a post-pass is that inside estimate() the
+        run-wide distribution does not exist yet: in independent mode the other timepoints are
+        still being computed in other SLURM jobs.
+    score_threshold : float
+        Only used by the legacy "on_low_score" mode. Calibrated against two runs with medians
+        0.870 and 0.875: 0.70 fired on 0 and 2 timepoints (dead code), 0.75 on 5 and 5 (the
+        tail), 0.80 on 26 and 29 (~15%, hours of compute). Ignored by "on_flagged", which
+        derives its own line per dataset.
+    max_timepoints : int | None
+        Cap on how many flagged timepoints to sweep, since each costs a full grid search.
+        When the cap bites, the worst are swept and the skipped ones are logged by name.
+    grid : dict[str, list] | list[dict[str, list]] | None
+        Parameter grid; None uses DEFAULT_SWEEP_GRID in biahub.registration.beads. A list of
+        dicts is searched as the union of their cross products, which is how the hungarian
+        and spectral parameter sets are swept without paying for their cross product -- each
+        is inert while the other matcher is in use. Keys are validated against that module's
+        setter table, so a misspelled key raises instead of silently reading as a flat axis.
+    """
+
+    # Off by default, deliberately, even though it is complementary to the repair pass.
+    #
+    # Measured across six datasets, repair alone recovered 3.654 score points and repair plus
+    # sweep in competition recovered 4.309 -- so the sweep adds a real 18%, but repair already
+    # captures 85% of the total at roughly half the cost. And after a repair pass the sweep's
+    # remaining wins are small: of 18 accepted gains, none reached 0.10 and six were 0.004 to
+    # 0.008, at or below the score metric's own resolution.
+    #
+    # Enable it, with fallback_mode="parallel", when the tail matters more than the runtime --
+    # on the worst dataset seen it beat repair at 5 of 20 timepoints, once by 0.455 -> 0.667.
+    # Legacy in-estimate() arm: run the sweep per timepoint inside estimate(), gated on the
+    # fixed score_threshold below. NOT recommended -- a fixed gate does not transfer between
+    # datasets, and at 0.75 it fired 0 times on a run whose median was 0.870 and 556 times on
+    # one whose median was 0.753, where it stopped being a fallback and blew the walltime.
+    # Kept only to reproduce earlier runs. Whether the sweep runs as a POST-PASS is decided by
+    # FallbackSettings.mode, not here.
+    legacy_in_estimate: bool = False
+    # DEPRECATED: on/off moved to FallbackSettings.mode. Read only by the migration.
+    mode: str | None = None
+    _coerce_legacy_mode = field_validator("mode", mode="before")(_coerce_yaml_off)
+    score_threshold: float = 0.75
+    max_timepoints: int | None = 25
+    # Which timepoints the sweep is allowed to touch, once the repair pass has run.
+    #
+    #   "still_flagged"         everything the adaptive line flags on the POST-repair scores.
+    #                           Because repair raises the median and shrinks the MAD, that
+    #                           line rises -- so this set is repair's failures PLUS timepoints
+    #                           that only became outliers relative to a now-healthier run.
+    #   "repair_failures_only"  strictly the timepoints repair attempted and did not lift.
+    #
+    # Default is "still_flagged", against the intuition that the sweep should only clean up
+    # after repair, because the measurements point the other way: the sweep gains +0.058 on
+    # timepoints scoring 0.72-0.78 and only +0.006 below 0.72, and found nothing at all across
+    # 28 trials on the worst timepoint tested. Repair's failures are the collapsed fits near
+    # zero -- exactly where sweeping does not help -- while the timepoints the rising line
+    # newly catches sit in the 0.66-0.73 band, which is the sweep's useful range. Restricting
+    # to repair failures therefore spends the budget where it cannot pay off and skips where
+    # it can.
+    scope: Literal["still_flagged", "repair_failures_only"] = "still_flagged"
+    grid: dict[str, list] | list[dict[str, list]] | None = None
+
+
+class RepairSettings(MyBaseModel):
+    """Post-estimation reseeding of flagged timepoints from their neighbours.
+
+    The other half of the fallback, and it necessarily runs after the whole series exists
+    rather than inside estimate(): it seeds from t-1 AND t+1, and in independent mode t+1 is
+    still being computed in another shard while t is estimated. Reaching forwards is the
+    point -- propagation's built-in fallback can only reach back to t-1, and a timepoint that
+    failed because the sample jumped between t-1 and t is often fine from t+1.
+
+    It targets a different failure class from the sweep, which is why running both and keeping
+    the higher score is worth more than either alone:
+
+        sweep    right basin, suboptimal correspondence. Measured +0.058 on timepoints
+                 scoring 0.72-0.78, but only +0.006 on those below 0.72.
+        repair   wrong basin, or no usable transform at all -- which no amount of
+                 re-weighting the cost matrix fixes. At one real timepoint propagation gave
+                 0.429 where a reseed reached 0.778.
+
+    Gated on the run's own adaptive median-2*MAD line, not a second fixed threshold, so it
+    repairs exactly what the QC report flags. Every candidate is scored and accepted only if
+    it strictly beats the incumbent, so the pass cannot make a run worse.
+
+    Attributes
+    ----------
+    mode : Literal["off", "on_flagged"]
+        "on_flagged" repairs the timepoints the adaptive threshold flags.
+    try_config_seed : bool
+        Also try the static config approx_transform as a seed. Worth keeping for the case
+        both neighbours are themselves flagged, which is what a cluster of failures looks
+        like.
+    max_timepoints : int | None
+        Safety cap on how many timepoints to repair, since each costs up to one full
+        estimate() per candidate seed. None means no cap. When the cap bites, the worst
+        timepoints are repaired and the skipped ones are logged by name rather than
+        silently dropped.
+    """
+
+    # On by default. Measured across six datasets it improved 44-85% of the timepoints it
+    # fired on, was positive on every one, and cost 0.8-6.7 CPU-hours per run. It cannot
+    # regress a run -- a candidate is accepted only if it strictly beats the incumbent -- so
+    # the only argument against enabling it is compute, and the adaptive gate keeps that
+    # proportional: it fires on the tail, not on the run.
+    #
+    # NOTE this changes behaviour for a config that does not mention it: such a run now gets
+    # a repair pass it did not before. The transforms can only improve, but the run takes
+    # longer and writes repair_log.json.
+    # DEPRECATED: on/off moved to FallbackSettings.mode. Read only by the migration.
+    mode: str | None = None
+    _coerce_legacy_mode = field_validator("mode", mode="before")(_coerce_yaml_off)
+    try_config_seed: bool = True
+    max_timepoints: int | None = 25
+    # Seed a flagged timepoint from the run's own consensus geometry -- the element-wise
+    # median transform over the timepoints that scored well -- as well as from its
+    # neighbours. This repairs rather than discards a timepoint whose fit collapsed.
+    #
+    # It is what makes the geometry check actionable instead of merely diagnostic. Measured on
+    # one dataset, distance-from-consensus separated failed from good timepoints with AUC
+    # 1.000, and 15 failures were reflections (negative determinant) -- fits that collapsed
+    # outright. Those cannot be rescued by re-tuning matching parameters, but the run's own
+    # agreed geometry is a sound starting point for them.
+    use_consensus_seed: bool = True
+    # Only good timepoints define the consensus; including failures would contaminate the
+    # reference used to detect them.
+    consensus_score_threshold: float = 0.75
+    # Frobenius distance from the consensus linear part above which a timepoint's own linear
+    # part is treated as broken, so the consensus seeds are tried first. Measured: good
+    # timepoints sit at 0.021 and failures at 0.72, so anything in between separates them.
+    consensus_linear_tolerance: float = 0.25
+    # How many robust spreads (MAD) a flagged timepoint's translation may sit from the
+    # consensus and still be considered worth keeping. Beyond this, the full-consensus seed is
+    # tried first instead. Measured need: collapsed fits on one dataset had translations
+    # thousands of voxels out, one reaching -15000 in x, so a broken linear part does not
+    # imply an intact translation.
+    consensus_translation_tolerance: float = 10.0
+    # After a repair is accepted, re-seed the spectral/hungarian cascade FROM it and refine
+    # again, keeping the result only if it improves. 0 disables.
+    #
+    # Worth doing because the candidate seeds are all coarse -- the consensus geometry scores
+    # ~0.000 applied on its own -- and peak detection runs in warped space, so a cascade
+    # seeded from an already-good transform sees much better peaks than one seeded from
+    # scratch. It is also the cheaper answer to the gap the sweep targets: repair lands about
+    # a third of its rescues in 0.72-0.80, where the sweep gains ~+0.058 for 28 trials, while
+    # one polish round is a single estimate() call and changes no matching parameter.
+    #
+    # Rounds stop as soon as one fails to improve, so the cap bounds the WORST case rather
+    # than the typical one: a timepoint that converges after one round costs two calls no
+    # matter how high this is set. That asymmetry is why the default is not 1.
+    #
+    # A badly-broken timepoint has the most headroom, not the least, so it is the case most
+    # likely to keep climbing. The spectral cascade already demonstrates the mechanism over a
+    # large gap -- measured seed 0.000 -> spectral 0.778 -> refined 0.882 at one real
+    # timepoint -- and polish is that same re-seed-and-refine step applied again. There is no
+    # reason it should only pay off near the top of the range.
+    polish_rounds: int = 3
+
+
+class FallbackSettings(MyBaseModel):
+    """What happens to the timepoints the QC flags, and how each pass is tuned.
+
+    One field says WHAT runs; the two nested blocks say HOW. This replaces three flags that
+    used to be read together in two different places, one of which was inert unless the other
+    two were both on -- and whose default read "parallel" while the sweep was off, so the
+    config said one thing and the run did another.
+
+    Modes
+    -----
+    off                 flagged timepoints are reported, never modified.
+    repair              reseed them from the run's consensus geometry or their neighbours.
+                        Default: across six datasets this recovered 3.654 score points against
+                        4.309 for repair and sweep competing -- 85% of the total for roughly
+                        half the compute.
+    sweep               grid-search the matching parameters instead.
+    repair_then_sweep   staged; sweep only what repair left flagged.
+    sweep_then_repair   staged, the other way round.
+    parallel            both from the same starting scores, better result wins per timepoint.
+                        Choose this when individual timepoints matter more than run-level
+                        statistics: the sweep rescued 6 of 72 flagged timepoints that repair
+                        could not touch at all -- about one per dataset -- which no average
+                        shows. Either staged order loses ground to it, because whichever pass
+                        runs first lifts timepoints above the adaptive line, re-flagging then
+                        removes them, and the second pass never gets a turn.
+
+    Every pass accepts a result only if it strictly beats what it started from, so no mode can
+    make a run worse than "off".
+    """
+
+    mode: (
+        Literal["off", "repair", "sweep", "repair_then_sweep", "sweep_then_repair", "parallel"]
+        | None
+    ) = "repair"
+    _coerce_mode = field_validator("mode", mode="before")(_coerce_yaml_off)
+    repair_settings: RepairSettings = RepairSettings()
+    sweep_settings: SweepSettings = SweepSettings()
+
+    @property
+    def repair_enabled(self) -> bool:
+        return self.mode in ("repair", "repair_then_sweep", "sweep_then_repair", "parallel")
+
+    @property
+    def sweep_enabled(self) -> bool:
+        return self.mode in ("sweep", "repair_then_sweep", "sweep_then_repair", "parallel")
+
+    @property
+    def order(self) -> str:
+        """Which staged order to use; "parallel" when the passes compete."""
+        return (
+            self.mode
+            if self.mode in ("repair_then_sweep", "sweep_then_repair")
+            else "parallel"
+        )
+
+
 class BeadsMatchSettings(MyBaseModel):
-    algorithm: Literal["hungarian", "match_descriptor"] = "hungarian"
+    algorithm: Literal["hungarian", "match_descriptor", "spectral"] = "hungarian"
     source_peaks_settings: DetectPeaksSettings | None = Field(
         default_factory=DetectPeaksSettings
     )
@@ -198,8 +551,138 @@ class BeadsMatchSettings(MyBaseModel):
     )
     match_descriptor_settings: MatchDescriptorSettings = MatchDescriptorSettings()
     hungarian_match_settings: HungarianMatchSettings = HungarianMatchSettings()
+    spectral_match_settings: SpectralMatchSettings = SpectralMatchSettings()
     filter_matches_settings: FilterMatchesSettings = FilterMatchesSettings()
     qc_settings: QCBeadsRegistrationSettings = QCBeadsRegistrationSettings()
+    # Extra arm in estimate(): acquire the correspondence with spectral matching, then
+    # refine with the configured algorithm. estimate() keeps whichever arm scores higher,
+    # so enabling this cannot make the result worse than leaving it off.
+    #
+    #   "off"           existing behaviour, unchanged
+    #   "on_low_score"  only when the other arms fall below qc_settings.score_threshold.
+    #                   Cheap, but note it will rarely fire in practice: measured scores
+    #                   sit at 0.6-1.0 against a 0.40 threshold.
+    #   "always"        run it at every timepoint. This is what the benchmarked variant D
+    #                   does, and it is not merely a rescue: with a good initial transform
+    #                   the spectral cascade still won 93/144 and 117/240 timepoints on two
+    #                   real datasets, so gating it on failure gives up most of the gain.
+    #                   Costs one extra optimize_transform pair per timepoint.
+    #
+    # Defaults to "always" (i.e. variant D) on the benchmark below. Set "off" to restore
+    # the previous behaviour exactly.
+    spectral_arm: Literal["off", "on_low_score", "always"] = "always"
+    _coerce_spectral_arm = field_validator("spectral_arm", mode="before")(_coerce_yaml_off)
+
+    # ---- WHAT runs. Two named fields; everything else in this block is HOW it runs. ----
+    #
+    # strategy expands into two low-level flags that live in different places --
+    # affine_transform_settings.use_prev_t_transform and spectral_arm above -- so that
+    # choosing a variant does not require knowing which flags combine to make it:
+    #
+    #   strategy                use_prev_t_transform   spectral_arm
+    #   propagate                       True              off
+    #   propagate_spectral              True              always
+    #   independent                     False             off
+    #   independent_spectral            False             always      <- default
+    #
+    # Benchmarked on 2025_09_17 (144 t) and 2025_09_18 (240 t):
+    #   propagate              median 0.864/0.875   min 0.000/0.667   1/0  below 0.40
+    #   independent            median ~0.826        min 0.000         6/33 below 0.40
+    #   independent_spectral   median 0.870/0.875   min 0.720/0.600   0/0  below 0.40
+    #
+    # independent_spectral is the default because the spectral cascade is insensitive to its
+    # initial transform -- measured identical results from seeds scoring 0.826 and 0.000 -- so
+    # propagation no longer earns its serial cost (~3-10 h against ~20 min), its lack of cheap
+    # resume, or its tendency to turn one failure into a cluster.
+    #
+    # Set to None to drive use_prev_t_transform and spectral_arm directly.
+    strategy: (
+        Literal["propagate", "propagate_spectral", "independent", "independent_spectral"]
+        | None
+    ) = "independent_spectral"
+
+    # Everything about the fallback lives in one nested block, named like every other block
+    # here (*_settings) and containing both the choice and the tuning for each pass.
+    fallback_settings: FallbackSettings = FallbackSettings()
+
+    # Opt-in per-timepoint seed correction by bead displacement voting, applied inside
+    # estimate() before any matching arm runs -- so the repair pass's candidate seeds get
+    # corrected too. Default mode "none" changes nothing. See SeedCorrectionSettings.
+    seed_correction_settings: SeedCorrectionSettings = SeedCorrectionSettings()
+
+    # ---- DEPRECATED aliases. Accepted so configs written against the earlier field names
+    # keep validating under extra="forbid"; each is copied into fallback_settings and warned
+    # about. `fallback`/`fallback_mode` collapsed into fallback_settings.mode, and the two
+    # tuning blocks were renamed for consistency with their siblings.
+    fallback: str | None = None
+    fallback_mode: str | None = None
+    repair_pass_settings: RepairSettings | None = None
+    sweep_fallback_settings: SweepSettings | None = None
+
+    @model_validator(mode="after")
+    def migrate_deprecated_fallback_fields(self) -> "BeadsMatchSettings":
+        """Fold the old field names into fallback_settings, warning about each.
+
+        Mapping the legacy `fallback` + `fallback_mode` pair is not a straight copy: the two
+        together expressed what fallback_settings.mode now expresses alone, and `fallback_mode`
+        was inert unless both passes were enabled. The old per-pass `mode` fields are read for
+        their on/off meaning only.
+        """
+        legacy = {
+            "fallback": self.fallback,
+            "fallback_mode": self.fallback_mode,
+            "repair_pass_settings": self.repair_pass_settings,
+            "sweep_fallback_settings": self.sweep_fallback_settings,
+        }
+        used = [k for k, v in legacy.items() if v is not None]
+        if not used:
+            return self
+        warnings.warn(
+            f"{', '.join(used)} are deprecated; use beads_match_settings.fallback_settings "
+            "(mode / repair_settings / sweep_settings).",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
+        if self.repair_pass_settings is not None:
+            self.fallback_settings.repair_settings = self.repair_pass_settings
+        if self.sweep_fallback_settings is not None:
+            self.fallback_settings.sweep_settings = self.sweep_fallback_settings
+
+        # `fallback` named the whole combination, so it wins outright.
+        if self.fallback is not None:
+            self.fallback_settings.mode = _coerce_yaml_off(self.fallback)
+            return self
+
+        # Otherwise reconstruct the combination from the per-pass on/off flags plus the order,
+        # which is what those three fields expressed between them.
+        rp = self.fallback_settings.repair_settings.mode
+        sp = self.fallback_settings.sweep_settings.mode
+        if rp is None and sp is None:
+            if self.fallback_mode is not None:
+                self.fallback_settings.mode = self.fallback_mode
+            return self
+
+        repair_on = rp == "on_flagged"
+        sweep_on = sp == "on_flagged"
+        if sp == "on_low_score":
+            # The old in-estimate() arm is a different mechanism from the post-pass sweep, so
+            # it maps to its own flag rather than to sweep_enabled.
+            self.fallback_settings.sweep_settings.legacy_in_estimate = True
+        # repair_then_sweep, not parallel, when the order was not stated: a config using the
+        # per-pass flags predates fallback_mode, and what those runs actually executed was the
+        # staged order. Reconstructing them as "parallel" would silently change the behaviour
+        # of every benchmark arm on disk.
+        order = self.fallback_mode or "repair_then_sweep"
+        if repair_on and sweep_on:
+            self.fallback_settings.mode = order
+        elif repair_on:
+            self.fallback_settings.mode = "repair"
+        elif sweep_on:
+            self.fallback_settings.mode = "sweep"
+        else:
+            self.fallback_settings.mode = "off"
+        return self
 
 
 class PhaseCrossCorrSettings(MyBaseModel):
@@ -241,7 +724,14 @@ class AffineTransformSettings(MyBaseModel):
     t_reference: Literal["first", "previous"] = "first"
     transform_type: Literal["euclidean", "similarity", "affine"] = "euclidean"
     approx_transform: list = np.eye(4).tolist()
-    use_prev_t_transform: bool = True
+    # Defaults to False (independent per timepoint) rather than propagation. Propagation
+    # exists to supply each timepoint with a good initial transform, but the spectral
+    # cascade is insensitive to its initial transform -- measured identical results from a
+    # seed scoring 0.826 and one scoring 0.000 -- so propagation stops paying for itself
+    # while keeping three drawbacks: it is serial (~3-10 h against ~20 min), it cannot be
+    # resumed cheaply, and a single failure propagates forward as a cluster. Set True to
+    # restore it.
+    use_prev_t_transform: bool = False
     compute_approx_transform: bool = False
 
     @field_validator("approx_transform")
@@ -318,6 +808,13 @@ class EstimateRegistrationSettings(MyBaseModel):
     eval_transform_settings: EvalTransformSettings | None = None
     ants_registration_settings: AntsRegistrationSettings | None = None
     manual_registration_settings: ManualRegistrationSettings | None = None
+    # DEPRECATED: moved to beads_match_settings.strategy, because it configures beads and
+    # every other method keeps its configuration in its own block. Still accepted so existing
+    # configs do not hard-fail against extra="forbid"; it is copied inward and warned about.
+    beads_strategy: (
+        Literal["propagate", "propagate_spectral", "independent", "independent_spectral"]
+        | None
+    ) = None
     verbose: bool = False
 
     @model_validator(mode="after")
@@ -328,6 +825,94 @@ class EstimateRegistrationSettings(MyBaseModel):
             self.beads_match_settings = BeadsMatchSettings()
         elif self.estimation_method == "ants" and self.ants_registration_settings is None:
             self.ants_registration_settings = AntsRegistrationSettings()
+
+        # A beads-only flag set on another method is silently ignored today, which is worse
+        # than an error: the ants path submits every timepoint in parallel, so it cannot
+        # propagate from t-1 at all, and a config asking for it gets no propagation and no
+        # warning. Say so instead.
+        if (
+            self.estimation_method != "beads"
+            and "use_prev_t_transform" in self.affine_transform_settings.model_fields_set
+            and self.affine_transform_settings.use_prev_t_transform
+        ):
+            raise ValueError(
+                "affine_transform_settings.use_prev_t_transform is only implemented for "
+                f"estimation_method='beads', not {self.estimation_method!r}. The ants path "
+                "submits all timepoints in parallel, so there is no previous timepoint to "
+                "propagate from; it takes a single static seed instead."
+            )
+
+        # The deprecated top-level field is copied into the beads block, which is where the
+        # setting now lives.
+        if self.beads_strategy is not None and self.beads_match_settings is not None:
+            if "strategy" in self.beads_match_settings.model_fields_set and (
+                self.beads_match_settings.strategy != self.beads_strategy
+            ):
+                raise ValueError(
+                    f"top-level beads_strategy={self.beads_strategy!r} contradicts "
+                    f"beads_match_settings.strategy="
+                    f"{self.beads_match_settings.strategy!r}. Set only the latter."
+                )
+            warnings.warn(
+                "beads_strategy at the top level is deprecated; use "
+                "beads_match_settings.strategy instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            self.beads_match_settings.strategy = self.beads_strategy
+            self.beads_match_settings.model_fields_set.add("strategy")
+
+        # Expand the strategy into the two flags that actually drive estimate(). One of them
+        # lives outside beads_match_settings, which is why this expansion happens here rather
+        # than in that block's own validator.
+        bms = self.beads_match_settings
+        if bms is not None and bms.strategy is not None:
+            propagate, spectral = {
+                "propagate": (True, "off"),
+                "propagate_spectral": (True, "always"),
+                "independent": (False, "off"),
+                "independent_spectral": (False, "always"),
+            }[bms.strategy]
+
+            # An explicit low-level flag always outranks a DEFAULTED strategy. Without this,
+            # the default independent_spectral would silently flip a config saying
+            # use_prev_t_transform: true into an independent run -- which every pre-existing
+            # config would hit, since they all set that flag directly and name no strategy.
+            strategy_explicit = "strategy" in bms.model_fields_set
+            prop_explicit = (
+                "use_prev_t_transform" in self.affine_transform_settings.model_fields_set
+            )
+            spectral_explicit = "spectral_arm" in bms.model_fields_set
+
+            # Naming both a strategy and a flag that contradicts it is a config error, not a
+            # precedence question: one of the two is not what the author meant.
+            if strategy_explicit:
+                conflicts = []
+                if (
+                    prop_explicit
+                    and self.affine_transform_settings.use_prev_t_transform != propagate
+                ):
+                    conflicts.append(
+                        f"use_prev_t_transform="
+                        f"{self.affine_transform_settings.use_prev_t_transform} "
+                        f"(strategy implies {propagate})"
+                    )
+                if spectral_explicit and bms.spectral_arm != spectral:
+                    conflicts.append(
+                        f"spectral_arm={bms.spectral_arm!r} (strategy implies {spectral!r})"
+                    )
+                if conflicts:
+                    raise ValueError(
+                        f"strategy={bms.strategy!r} contradicts "
+                        + " and ".join(conflicts)
+                        + ". Set strategy to null to drive the flags directly, or remove the "
+                        "conflicting flag."
+                    )
+
+            if strategy_explicit or not prop_explicit:
+                self.affine_transform_settings.use_prev_t_transform = propagate
+            if strategy_explicit or not spectral_explicit:
+                bms.spectral_arm = spectral
         return self
 
 

@@ -151,7 +151,7 @@ biahub deskew          -i ./lightsheet.zarr/*/*/* -c ./deskew.yml -o ./lightshee
 biahub reconstruct -i ./labelfree.zarr/*/*/* -c ./recon.yml -o ./labelfree_reconstructed.zarr
 
 # STABILIZE
-biahub estimate-stabilization -i ./labelfree.zarr/*/*/* -o ./stabilization.yml \
+biahub estimate-stabilization -i ./labelfree.zarr/*/*/* -o ./stabilization_output \
                               --stabilize-xy --stabilize-z
 biahub stabilize              -i ./labelfree.zarr/*/*/* -c ./stabilization.yml \
                               -o ./labelfree_stabilized.zarr

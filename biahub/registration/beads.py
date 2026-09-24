@@ -25,10 +25,12 @@ Key conventions
 - Transforms map from moving space to reference space (forward direction).
 """
 
+import json
+
 from datetime import datetime
 from itertools import product
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import ants
 import click
@@ -48,10 +50,89 @@ from biahub.cli.parsing import (
 from biahub.cli.slurm import wait_for_jobs_to_finish
 from biahub.core.graph_matching import Graph, GraphMatcher
 from biahub.core.transform import Transform
-from biahub.registration.utils import get_aprox_transform, load_transforms
+from biahub.registration.qc import flag_timepoints, write_qc_report
+from biahub.registration.utils import (
+    get_aprox_transform,
+    load_quality_scores,
+    load_transforms,
+    plot_quality_scores,
+    save_quality_score,
+)
 from biahub.settings import AffineTransformSettings, BeadsMatchSettings, DetectPeaksSettings
 from biahub.utils.array_ops import _check_nan_n_zeros
 from biahub.utils.cluster import estimate_resources
+
+if TYPE_CHECKING:
+    import pandas as pd
+
+
+# Default grid for the score-gated sweep fallback, distilled from a 432-combination
+# hungarian search and a 200-combination spectral search over the same 15 flagged timepoints
+# on two real datasets.
+#
+# A LIST of sub-grids, not one dict, because the two matchers are separate regimes: the
+# hungarian cost/graph parameters are inert when spectral does the matching and vice versa,
+# so a single cross product would spend most of its trials re-measuring identical results.
+# The union is 16 + 12 = 28 trials; the equivalent cross product would be 192.
+#
+# Hungarian axes, kept only where one actually decided a winner:
+#   cost_threshold  0.05 won at all 15 timepoints, against a global default of 0.10.
+#   weights_dist    0.25 won at 9 of 15 -- de-weighting position distance is what helps when
+#                   the initial transform is off by more than a bead spacing.
+#   method          "full" won at 3, and was only discoverable once EdgeGraphSettings.method
+#                   stopped being ignored; the kNN graph can omit the correct edge outright.
+#   max_distance_quantile  the loosest useful filter axis on sparse match sets.
+# Excluded: k (never decided a winner once method was free) and angle_threshold /
+# weights_edge_angle (both 2D-only, hence flat on ZYX data).
+#
+# What this grid delivers, measured on the 15 flagged timepoints, taking max against the
+# incumbent: 8 of 15 improved, mean gain +0.041 over all 15 and +0.077 over those it helped.
+# That is 83% of what an exhaustive 632-trial search over the same axes achieves (11 of 15,
+# +0.049) for 4% of the trials, which is why the axes are trimmed this hard.
+#
+# The spectral sub-grid is what makes the fallback worth running at all: it supplies 8 of the
+# 9 rescues, and a hungarian-only sweep gets only 5 of 15.
+#
+# Its ranges are bounded by a SEPARATE stratified sweep over 24 evenly-spaced timepoints,
+# not by what won at the weak ones, because those two searches disagree and the stratified
+# one is the trustworthy guide to whether a value is safe. Per-timepoint argmax on the weak
+# set picked rel_cut 0.2 at 8 of 15 timepoints, yet across the stratified set rel_cut 0.2 is
+# the single worst choice available (mean 0.694, worst case 0.000 -- outright failure at some
+# timepoints), and sigma 8.0 likewise collapses (mean 0.624, worst 0.000). Those apparent
+# wins were selection noise: with ~20 beads the overlap metric quantises at ~0.045, so
+# picking the max of 200 trials reliably finds a lucky flat-metric tie.
+#
+# Restricting to the values that never collapse costs almost nothing at the weak timepoints
+# it is meant to rescue -- 10 of 15 improved instead of 11, mean gain +0.0466 against
+# +0.0490, a difference of one timepoint well inside one quantisation step -- so the safe
+# ranges are strictly the better trade.
+DEFAULT_SWEEP_GRID = [
+    {
+        "cost_threshold": [0.05, 0.10],
+        "weights_dist": [0.25, 1.0],
+        "method": ["knn", "full"],
+        "max_distance_quantile": [0.95, 0.99],
+    },
+    {
+        "algorithm": ["spectral"],
+        "spectral_sigma": [1.0, 3.0, 5.0],
+        "spectral_rel_cut": [0.35, 0.65, 0.80],
+    },
+]
+
+
+def _set_graph_method(edge_graph_settings, method: str) -> None:
+    """Switch graph mode, supplying the parameter that mode needs.
+
+    EdgeGraphSettings' validator nulls whichever of k/radius the chosen method does not use,
+    so setting method alone can leave the other unset and the matcher then fails. Defaults
+    here match that validator's.
+    """
+    edge_graph_settings.method = method
+    if method == "knn" and edge_graph_settings.k is None:
+        edge_graph_settings.k = 10
+    elif method == "radius" and edge_graph_settings.radius is None:
+        edge_graph_settings.radius = 60.0
 
 
 def optimize_matches(
@@ -62,13 +143,18 @@ def optimize_matches(
     affine_transform_settings: AffineTransformSettings,
     param_grid: dict = None,
     verbose: bool = False,
-) -> BeadsMatchSettings:
+) -> tuple[BeadsMatchSettings, Transform | None, float]:
     """
     Optimize BeadsMatchSettings by grid search over matching and filter parameters.
 
     For each parameter combination: detects peaks in approximately registered space,
     matches them, estimates a correction transform, composes it with the approx transform,
     applies to the full volume via ANTs, re-detects peaks, and scores the overlap.
+
+    Peaks are detected once and reused: they depend only on approx_transform, not on the
+    matching parameters. Trials whose filtered match set is identical to one already
+    evaluated reuse that score instead of repeating the ANTs warp and peak re-detection,
+    which is the dominant cost -- many filter combinations collapse to the same match set.
 
     Parameters
     ----------
@@ -82,27 +168,27 @@ def optimize_matches(
         Initial matching settings to use as baseline.
     affine_transform_settings : AffineTransformSettings
         Settings for the affine transform estimation.
-    param_grid : dict, optional
-        Dictionary of parameter names to lists of values to search.
-        Supported keys: 'min_distance_quantile', 'max_distance_quantile',
-        'direction_threshold', 'cost_threshold', 'max_ratio', 'k',
-        'weights_dist', 'weights_edge_angle', 'weights_edge_length',
-        'weights_pca_dir', 'weights_pca_aniso', 'weights_edge_descriptor'.
+    param_grid : dict | list[dict], optional
+        Parameter names to lists of values. A list of such dicts is searched as the UNION of
+        their cross products, which is how mutually inert parameter sets -- the hungarian
+        cost parameters and the spectral ones -- are swept without paying for their cross
+        product. Defaults to DEFAULT_SWEEP_GRID. Unsupported keys raise ValueError rather
+        than being ignored, so a typo cannot silently produce a flat axis. See the setter
+        table in the body for what is supported.
     verbose : bool
         If True, prints logs for each trial.
 
     Returns
     -------
-    BeadsMatchSettings
-        The settings that produced the best overlap score.
+    tuple[BeadsMatchSettings, Transform | None, float]
+        The settings that produced the best overlap score, the transform they produced
+        (already composed with approx_transform, so directly comparable with
+        optimize_transform's return), and that score. The transform is None and the score
+        -1 if no trial produced a scoreable transform, in which case the returned settings
+        are the unmodified input.
     """
     if param_grid is None:
-        param_grid = {
-            "min_distance_quantile": [0, 0.01],
-            "max_distance_quantile": [0, 0.99],
-            "direction_threshold": [0, 50],
-            "k": [5, 10],
-        }
+        param_grid = DEFAULT_SWEEP_GRID
 
     score_radius = beads_match_settings.qc_settings.score_centroid_mask_radius
 
@@ -125,32 +211,49 @@ def optimize_matches(
     )
     if mov_peaks is None or ref_peaks is None or len(mov_peaks) < 2 or len(ref_peaks) < 2:
         click.echo("Not enough peaks detected for optimization, returning original settings.")
-        return beads_match_settings
+        return beads_match_settings, None, -1.0
+
+    # A bare dict is the single-sub-grid case; normalising here keeps one loop below.
+    sub_grids = [param_grid] if isinstance(param_grid, dict) else list(param_grid)
+    trial_params_list = [
+        dict(zip(sub, combo, strict=True))
+        for sub in sub_grids
+        for combo in product(*(sub[k] for k in sub))
+    ]
 
     click.echo(
         f"Starting grid search: {len(mov_peaks)} mov peaks, {len(ref_peaks)} ref peaks, "
-        f"{np.prod([len(v) for v in param_grid.values()])} parameter combinations."
+        f"{len(trial_params_list)} parameter combinations"
+        + (f" over {len(sub_grids)} sub-grids." if len(sub_grids) > 1 else ".")
     )
 
     ndim = mov_peaks.shape[1]
     best_score = -1.0
     best_settings = beads_match_settings
-
-    grid_keys = list(param_grid.keys())
-    grid_values = [param_grid[k] for k in grid_keys]
+    best_transform = None
 
     def apply_trial_params(trial_settings, trial_params):
         """Apply parameter values from a grid search trial to a BeadsMatchSettings copy."""
         fm = trial_settings.filter_matches_settings
         hm = trial_settings.hungarian_match_settings
+        eg = hm.edge_graph_settings
+        sm = trial_settings.spectral_match_settings
         w = hm.cost_matrix_settings.weights
         param_map = {
             "min_distance_quantile": lambda v: setattr(fm, "min_distance_quantile", v),
             "max_distance_quantile": lambda v: setattr(fm, "max_distance_quantile", v),
             "direction_threshold": lambda v: setattr(fm, "direction_threshold", v),
+            "angle_threshold": lambda v: setattr(fm, "angle_threshold", v),
             "cost_threshold": lambda v: setattr(hm, "cost_threshold", v),
             "max_ratio": lambda v: setattr(hm, "max_ratio", v),
-            "k": lambda v: setattr(hm.edge_graph_settings, "k", v),
+            "k": lambda v: setattr(eg, "k", v),
+            # method needs k/radius set consistently or EdgeGraphSettings' validator
+            # nulls whichever one the new mode requires.
+            "method": lambda v: _set_graph_method(eg, v),
+            "radius": lambda v: setattr(eg, "radius", v),
+            "algorithm": lambda v: setattr(trial_settings, "algorithm", v),
+            "spectral_sigma": lambda v: setattr(sm, "sigma", v),
+            "spectral_rel_cut": lambda v: setattr(sm, "rel_cut", v),
             "weights_dist": lambda v: w.__setitem__("dist", v),
             "weights_edge_angle": lambda v: w.__setitem__("edge_angle", v),
             "weights_edge_length": lambda v: w.__setitem__("edge_length", v),
@@ -158,12 +261,21 @@ def optimize_matches(
             "weights_pca_aniso": lambda v: w.__setitem__("pca_aniso", v),
             "weights_edge_descriptor": lambda v: w.__setitem__("edge_descriptor", v),
         }
+        unsupported = set(trial_params) - set(param_map)
+        if unsupported:
+            raise ValueError(
+                f"Unsupported param_grid key(s) {sorted(unsupported)}. "
+                f"Supported: {sorted(param_map)}"
+            )
         for key, val in trial_params.items():
-            if key in param_map:
-                param_map[key](val)
+            param_map[key](val)
 
-    for combo in product(*grid_values):
-        trial_params = dict(zip(grid_keys, combo, strict=True))
+    # Score keyed on (algorithm, match set), so a trial can only reuse a score computed
+    # from an identical match set under the same matcher.
+    score_cache: dict[tuple, float] = {}
+    transform_cache: dict[tuple, Transform] = {}
+
+    for trial_params in trial_params_list:
         trial_settings = beads_match_settings.model_copy(deep=True)
         apply_trial_params(trial_settings, trial_params)
 
@@ -176,6 +288,22 @@ def optimize_matches(
             )
 
             if len(matches) < 3:
+                continue
+
+            cache_key = (
+                trial_settings.algorithm,
+                tuple(map(tuple, np.asarray(matches))),
+            )
+            if cache_key in score_cache:
+                if score_cache[cache_key] > best_score:
+                    best_score = score_cache[cache_key]
+                    best_settings = trial_settings
+                    best_transform = transform_cache[cache_key]
+                if verbose:
+                    click.echo(
+                        f"  {trial_params} -> matches={len(matches)}, "
+                        f"score={score_cache[cache_key]:.4f} (cached)"
+                    )
                 continue
 
             fwd_transform, inv_transform = transform_from_matches(
@@ -216,23 +344,30 @@ def optimize_matches(
             if np.isnan(score):
                 continue
 
+            score_cache[cache_key] = score
+            transform_cache[cache_key] = composed_transform
+
             if verbose:
                 click.echo(f"  {trial_params} -> matches={len(matches)}, score={score:.4f}")
 
             if score > best_score:
                 best_score = score
                 best_settings = trial_settings
+                best_transform = composed_transform
 
         except Exception as e:
             if verbose:
                 click.echo(f"  {trial_params} -> failed: {e}")
             continue
 
+    click.echo(
+        f"Grid search best score: {best_score:.4f} "
+        f"({len(score_cache)} distinct match sets scored)"
+    )
     if verbose:
-        click.echo(f"Best score: {best_score:.4f}")
         click.echo(f"Best settings: {best_settings}")
 
-    return best_settings
+    return best_settings, best_transform, best_score
 
 
 def overlap_score(
@@ -293,6 +428,649 @@ def overlap_score(
         click.echo(f"Peaks overlap fraction: {peaks_overlap_fraction}")
 
     return peaks_overlap_fraction
+
+
+def score_transform(
+    transform: Transform,
+    mov: ArrayLike,
+    ref: ArrayLike,
+    beads_match_settings: BeadsMatchSettings,
+) -> float:
+    """Overlap score of a transform, by the same path that produced the run's own scores.
+
+    Deliberately duplicates the warp / re-detect / overlap_score sequence from
+    optimize_transform's step 3 rather than calling optimize_transform, because that function
+    also refines the transform -- which would score something other than what was passed in.
+    Returns nan when the warp leaves too few detectable beads.
+    """
+    warped = (
+        transform.to_ants()
+        .apply_to_image(
+            ants.from_numpy(np.asarray(mov)), reference=ants.from_numpy(np.asarray(ref))
+        )
+        .numpy()
+    )
+    mov_peaks, ref_peaks = peaks_from_beads(
+        mov=warped,
+        ref=ref,
+        mov_peaks_settings=beads_match_settings.source_peaks_settings,
+        ref_peaks_settings=beads_match_settings.target_peaks_settings,
+        verbose=False,
+    )
+    if mov_peaks is None or ref_peaks is None:
+        return float("nan")
+    return overlap_score(
+        mov_peaks=mov_peaks,
+        ref_peaks=ref_peaks,
+        radius=beads_match_settings.qc_settings.score_centroid_mask_radius,
+        verbose=False,
+    )
+
+
+def consensus_geometry(
+    transforms: list,
+    scores: ArrayLike,
+    score_threshold: float = 0.75,
+) -> np.ndarray | None:
+    """Element-wise median transform over the timepoints that scored well.
+
+    The run's own consensus geometry, used as a repair seed. Built ONLY from good timepoints:
+    including the failures would contaminate the reference used to detect and fix them.
+
+    Why this is a good seed, and why its two halves are treated differently downstream:
+
+    The LINEAR part is optics -- rotation, scale, shear between the two arms. It is stable
+    across a timelapse and, on one instrument, across acquisitions. Measured on one dataset,
+    the linear parts of 345 good timepoints agree to a Frobenius distance of 0.021, while the
+    failures sit at 0.72; distance-from-consensus separated failed from good timepoints with
+    AUC 1.000, and 15 failures were outright reflections (negative determinant), i.e. fits
+    that collapsed rather than drifted.
+
+    The TRANSLATION is not comparable in that way, because it depends on the ROI selected on
+    the microscope. The same instrument with a slightly different ROI gives a translation
+    tens of voxels away while the linear part is unchanged -- measured 22 voxels in Y and 32
+    in X between one dataset's configured seed and its own consensus, at only 2.4 degrees of
+    rotation difference. So a timepoint's own translation is usually worth keeping even when
+    its linear part has to be replaced.
+
+    Returns None when too few timepoints score well enough to define a consensus.
+    """
+    scores = np.asarray(scores, dtype=float)
+    good = [
+        t
+        for t in range(min(len(transforms), len(scores)))
+        if transforms[t] is not None
+        and np.isfinite(scores[t])
+        and scores[t] >= score_threshold
+    ]
+    if len(good) < 5:
+        click.echo(
+            f"Consensus geometry: only {len(good)} timepoints score >= {score_threshold}; "
+            "not enough to define one."
+        )
+        return None
+    stack = np.asarray([np.asarray(transforms[t], dtype=float) for t in good])
+    med = np.median(stack, axis=0)
+    med[3] = [0.0, 0.0, 0.0, 1.0]
+    click.echo(
+        f"Consensus geometry from {len(good)} timepoints scoring >= {score_threshold} "
+        f"(det {np.linalg.det(med[:3, :3]):.4f})"
+    )
+    return med
+
+
+def select_flagged(
+    score_col: ArrayLike,
+    label: str,
+    max_timepoints: int | None = None,
+) -> tuple[list[int], dict]:
+    """Timepoints to act on, from the run's OWN adaptive median-2*MAD line.
+
+    Shared by both fallback passes so they cannot drift apart in how they choose work, and
+    so neither carries a fixed score threshold.
+
+    A fixed gate cannot work across datasets. Measured with a hardcoded 0.75: on a run whose
+    median was 0.870 it fired 0 times out of 144, while on a run whose median was 0.753 --
+    i.e. where 0.75 sat at the median -- it fired 556 times and drove the job into its 24 h
+    walltime. The adaptive line rescales with each run, so a fallback stays a fallback.
+
+    Returns (flagged timepoints, run statistics). The statistics are returned rather than
+    recomputed by callers so the number written to a log is provably the same one the
+    selection used.
+
+    Returns the worst `max_timepoints` when a cap is set, and says which ones it dropped.
+    """
+    score_col = np.asarray(score_col, dtype=float)
+    n_t = len(score_col)
+    try:
+        flags = flag_timepoints(score_col)
+    except ValueError:
+        click.echo(f"{label}: no finite scores to flag against; skipping.")
+        return [], {}
+    flagged = [int(t) for t in flags.loc[flags["flagged"], "t"]]
+    if not flagged:
+        click.echo(f"{label}: nothing flagged, nothing to do.")
+        return [], dict(flags.attrs)
+
+    click.echo(
+        f"{label}: {len(flagged)} of {n_t} timepoints flagged "
+        f"(adaptive line {flags.attrs['adaptive_line']:.3f}, median "
+        f"{flags.attrs['median']:.3f}) -> {flagged}"
+    )
+    if max_timepoints is not None and len(flagged) > max_timepoints:
+        # Announced, never silent: a capped pass that says nothing reads as full coverage.
+        worst = sorted(flagged, key=lambda t: np.nan_to_num(score_col[t], nan=-1.0))
+        dropped = sorted(worst[max_timepoints:])
+        flagged = sorted(worst[:max_timepoints])
+        click.echo(
+            f"  capped at max_timepoints={max_timepoints}; taking the worst {len(flagged)} "
+            f"and LEAVING {len(dropped)} untouched: {dropped}"
+        )
+    return flagged, dict(flags.attrs)
+
+
+def sweep_flagged_timepoints(
+    mov_tzyx: da.Array,
+    ref_tzyx: da.Array,
+    transforms: list,
+    scores: "pd.DataFrame",
+    beads_match_settings: BeadsMatchSettings,
+    affine_transform_settings: AffineTransformSettings,
+    output_transforms_path: Path,
+    verbose: bool = False,
+) -> tuple[list, "pd.DataFrame"]:
+    """Re-tune the matching parameters for the timepoints still flagged after repair.
+
+    Runs LAST, and as a post-pass rather than inside estimate(), for two reasons that turned
+    out to be the same reason:
+
+    It has to be gated on the run's own score distribution, and inside estimate() that
+    distribution does not exist yet -- in independent mode the other timepoints are still
+    being computed in other SLURM jobs. Only a fixed threshold is available there, and a fixed
+    threshold does not survive contact with a second dataset (see select_flagged).
+
+    And it belongs after the repair pass because the two are not interchangeable. Reseeding
+    fixes a transform that is in the wrong basin; re-tuning parameters is measured to gain
+    +0.058 on timepoints scoring 0.72-0.78 but only +0.006 on those below 0.72. So repairing
+    first moves the hard failures out of the way, and whatever is still flagged afterwards is
+    by definition the mild tail -- exactly the population the sweep is good at. It also means
+    the sweep is not paying to re-tune timepoints the cheaper pass would have fixed anyway.
+
+    Accepted only on a strict score win, so this cannot make a run worse.
+    """
+    settings = beads_match_settings.fallback_settings.sweep_settings
+    score_col = np.asarray(scores["quality_score"].to_numpy(dtype=float)).copy()
+    flagged, _stats = select_flagged(score_col, "Sweep fallback", settings.max_timepoints)
+    if settings.scope == "repair_failures_only":
+        # Restrict to what the repair pass attempted and could not lift. Note this excludes
+        # the 0.66-0.73 band the post-repair line newly catches, which is where the sweep is
+        # measured to help most -- see SweepFallbackSettings.scope.
+        log_path = output_transforms_path.parent / "repair_log.json"
+        if log_path.exists():
+            not_rescued = set(json.loads(log_path.read_text()).get("not_rescued", []))
+            dropped = [t for t in flagged if t not in not_rescued]
+            flagged = [t for t in flagged if t in not_rescued]
+            click.echo(
+                f"  scope=repair_failures_only: sweeping {len(flagged)} of the flagged "
+                f"timepoints and SKIPPING {len(dropped)} the repair pass never attempted "
+                f"or already rescued: {dropped}"
+            )
+        else:
+            click.echo(
+                "  scope=repair_failures_only but no repair_log.json found; the repair pass "
+                "did not run, so there are no failures to restrict to. Sweeping nothing."
+            )
+            flagged = []
+    if not flagged:
+        return transforms, scores
+
+    log = []
+    for t in flagged:
+        before = score_col[t] if np.isfinite(score_col[t]) else -1.0
+        mov_t, ref_t = np.asarray(mov_tzyx[t]), np.asarray(ref_tzyx[t])
+        try:
+            _, swept_transform, swept_score = optimize_matches(
+                mov=mov_t,
+                ref=ref_t,
+                approx_transform=Transform(
+                    matrix=np.asarray(affine_transform_settings.approx_transform)
+                ),
+                beads_match_settings=beads_match_settings,
+                affine_transform_settings=affine_transform_settings,
+                param_grid=settings.grid,
+                verbose=verbose,
+            )
+        except Exception as e:  # noqa: BLE001
+            click.echo(f"  t={t} sweep failed: {type(e).__name__}: {e}")
+            continue
+
+        accepted = swept_transform is not None and swept_score > before
+        if accepted:
+            matrix = np.asarray(swept_transform.to_list(), dtype=float)
+            transforms[t] = matrix.tolist()
+            np.save(output_transforms_path / f"{t}.npy", matrix)
+            # Sidecar follows the transform; see the same write in the repair pass.
+            save_quality_score(
+                output_transforms_path / f"{t}.score",
+                score=swept_score,
+                fell_back_to_seed=False,
+            )
+            score_col[t] = swept_score
+            scores.loc[scores["t"] == t, "quality_score"] = swept_score
+            if "fell_back_to_seed" in scores:
+                scores.loc[scores["t"] == t, "fell_back_to_seed"] = False
+        click.echo(
+            f"  t={t:4d} {before:.3f} -> {swept_score if swept_transform is not None else before:.3f}"
+            + ("" if accepted else "  (kept original)")
+        )
+        log.append(
+            {
+                "t": t,
+                "before": float(before),
+                "after": float(swept_score) if swept_transform is not None else float(before),
+                "accepted": bool(accepted),
+            }
+        )
+
+    improved = sum(1 for r in log if r["accepted"])
+    click.echo(f"Sweep fallback: {improved} of {len(log)} flagged timepoints improved")
+    (output_transforms_path.parent / "sweep_log.json").write_text(
+        json.dumps({"n_flagged": len(log), "n_improved": improved, "sweeps": log}, indent=2)
+    )
+    return transforms, scores
+
+
+def repair_flagged_timepoints(
+    mov_tzyx: da.Array,
+    ref_tzyx: da.Array,
+    transforms: list,
+    scores: "pd.DataFrame",
+    beads_match_settings: BeadsMatchSettings,
+    affine_transform_settings: AffineTransformSettings,
+    output_transforms_path: Path,
+    mode: str = "registration",
+    verbose: bool = False,
+) -> tuple[list, "pd.DataFrame"]:
+    """Re-estimate flagged timepoints from their neighbours' transforms.
+
+    This is the second half of the fallback, and it has to live here rather than inside
+    estimate() for a structural reason: it seeds from t-1 AND t+1, and t+1 does not exist
+    yet while t is being estimated -- in independent mode the timepoints are running in
+    parallel shards. So it can only run once the whole series is known.
+
+    That ordering is also what makes it strictly stronger than propagation's own fallback,
+    which can only ever reach backwards to t-1. A timepoint that failed because the sample
+    jumped between t-1 and t is often perfectly reachable from t+1.
+
+    It covers a different failure class from the sweep. The sweep re-tunes the matching
+    parameters and helps where the transform is already in the right basin but the
+    correspondence is suboptimal -- measured yield +0.058 on timepoints scoring 0.72-0.78,
+    and +0.006 on those below 0.72. Reseeding is what addresses a transform in the WRONG
+    basin, which no amount of re-weighting the cost matrix fixes: at one real timepoint that
+    had no usable transform at all, propagation gave 0.429 while a reseed reached 0.778.
+
+    Each candidate seed is run through the full estimate() rather than a bare
+    optimize_transform, so a reseed also gets the spectral cascade and the sweep fallback.
+    Candidates are scored and accepted only if they strictly beat what is already there, so
+    this pass cannot make a run worse.
+
+    Which timepoints to repair comes from the run's own adaptive threshold, so the gate is
+    the same median-2*MAD line the QC report flags on rather than a second fixed number.
+
+    Returns the possibly-updated transforms and scores; the repaired .npy files are rewritten
+    in place so the on-disk record matches what is returned.
+    """
+    settings = beads_match_settings.fallback_settings.repair_settings
+    # .copy(): to_numpy can hand back a read-only view onto the DataFrame's own buffer when
+    # the dtype already matches, and this array is written to as repairs are accepted.
+    score_col = scores["quality_score"].to_numpy(dtype=float).copy()
+    n_t = len(score_col)
+
+    flagged, stats = select_flagged(score_col, "Repair pass", settings.max_timepoints)
+
+    # Freeze the flag list per pass and journal every attempt incrementally, so an
+    # interrupted run RESUMES the same work instead of re-deciding it. Without this,
+    # each resume re-flags against the partially repaired score distribution -- the
+    # adaptive line rises as repairs land, so every round discovers a new tier and the
+    # pass never converges -- and re-attempts timepoints that already failed, because
+    # repair_log.json is only written at the END of a completed pass. Measured on 09_12
+    # (848 t): three multi-day rounds, each redoing failed attempts at ~90 s each.
+    # Discovering the next tier is still possible, but as an explicit SECOND pass after
+    # this one completes, not as an implicit moving target inside one run.
+    flag_path = output_transforms_path.parent / "repair_flagged.json"
+    attempts_path = output_transforms_path.parent / "repair_attempts.jsonl"
+    if flag_path.exists():
+        frozen = json.loads(flag_path.read_text())
+        flagged_full = [t for t in frozen["flagged"] if t < n_t]
+        stats = frozen.get("stats", stats)
+        click.echo(
+            f"Repair pass: resuming the frozen flag list "
+            f"({len(flagged_full)} timepoints) from {flag_path.name}"
+        )
+    else:
+        flagged_full = list(flagged)
+        if flagged_full:
+            flag_path.write_text(json.dumps({"flagged": flagged_full, "stats": stats}))
+    attempted = set()
+    if attempts_path.exists():
+        attempted = {
+            json.loads(line)["t"]
+            for line in attempts_path.read_text().splitlines()
+            if line.strip()
+        }
+    flagged = [t for t in flagged_full if t not in attempted]
+    if attempted:
+        click.echo(
+            f"Repair pass: {len(attempted & set(flagged_full))} of "
+            f"{len(flagged_full)} flagged timepoints already attempted; "
+            f"{len(flagged)} remaining"
+        )
+    if not flagged:
+        return transforms, scores
+
+    seed_matrix = np.asarray(affine_transform_settings.approx_transform, dtype=float)
+    consensus = (
+        consensus_geometry(transforms, score_col, settings.consensus_score_threshold)
+        if settings.use_consensus_seed
+        else None
+    )
+    # Robust spread of the GOOD timepoints' translations, per axis, used to judge whether a
+    # flagged timepoint's own translation is worth keeping. MAD rather than std, since the
+    # broken translations being screened out would dominate a standard deviation.
+    translation_spread = None
+    if consensus is not None:
+        good_tr = np.asarray(
+            [
+                np.asarray(transforms[t], dtype=float)[:3, 3]
+                for t in range(min(len(transforms), len(score_col)))
+                if transforms[t] is not None
+                and np.isfinite(score_col[t])
+                and score_col[t] >= settings.consensus_score_threshold
+            ]
+        )
+        if len(good_tr) >= 5:
+            translation_spread = np.maximum(
+                1.4826 * np.median(np.abs(good_tr - np.median(good_tr, axis=0)), axis=0), 1.0
+            )
+    # Neighbour-seeding must distrust EVERY frozen-flagged timepoint, including ones this
+    # resume is skipping as already-attempted -- an attempted-but-unrescued neighbour is
+    # still not a transform to seed from.
+    flagged_set = set(flagged_full)
+    good_median = float(np.nanmedian(score_col))
+    log = []
+
+    for t in flagged:
+        before = score_col[t] if np.isfinite(score_col[t]) else -1.0
+
+        # Only non-flagged neighbours are worth seeding from; a flagged neighbour is by
+        # definition not a transform we trust.
+        candidates = []
+
+        # Consensus-geometry seeds, tried FIRST when this timepoint's linear part is itself
+        # broken. A reflection (negative determinant) or a linear part far from the run's
+        # consensus is a collapsed fit, not a drifted one, and no neighbour is a better
+        # starting point than the run's own agreed geometry.
+        #
+        # consensus_linear keeps the timepoint's OWN translation, because translation depends
+        # on the ROI selected on the microscope and on stage drift, so it carries real
+        # information even when the linear part does not. consensus_full replaces both, for
+        # when the translation is broken too.
+        degenerate = False
+        if consensus is not None and transforms[t] is not None:
+            M = np.asarray(transforms[t], dtype=float)
+            L = M[:3, :3]
+            degenerate = (
+                np.linalg.det(L) <= 0
+                or np.linalg.norm(L - consensus[:3, :3]) > settings.consensus_linear_tolerance
+            )
+            if degenerate:
+                # Keeping the timepoint's own translation is only sensible if that translation
+                # is itself credible. On a real dataset the collapsed fits had translations
+                # thousands of voxels out -- one reached -15000 in x -- so the shift is not
+                # reliably the surviving half of a broken transform. Offer the timepoint's own
+                # translation first when it is within reach of the run's spread, and the full
+                # consensus first when it is not.
+                own_translation_ok = translation_spread is not None and bool(
+                    np.all(
+                        np.abs(M[:3, 3] - consensus[:3, 3])
+                        <= settings.consensus_translation_tolerance * translation_spread
+                    )
+                )
+                keep_translation = consensus.copy()
+                keep_translation[:3, 3] = M[:3, 3]
+                if own_translation_ok:
+                    candidates.append(("consensus_linear", keep_translation))
+                    candidates.append(("consensus_full", consensus.copy()))
+                else:
+                    candidates.append(("consensus_full", consensus.copy()))
+                    candidates.append(("consensus_linear", keep_translation))
+
+        for name, idx in (("t-1", t - 1), ("t+1", t + 1)):
+            if 0 <= idx < n_t and idx not in flagged_set and transforms[idx] is not None:
+                candidates.append((name, np.asarray(transforms[idx], dtype=float)))
+
+        # Also offered when the linear part looked fine: cheap, and it can still win.
+        if consensus is not None and not degenerate:
+            candidates.append(("consensus_full", consensus.copy()))
+        if settings.try_config_seed:
+            candidates.append(("config_seed", seed_matrix))
+
+        mov_t = np.asarray(mov_tzyx[t])
+        ref_t = np.asarray(ref_tzyx[t])
+
+        best_name, best_matrix, best_score = "unchanged", None, before
+        for name, seed in candidates:
+            trial_ats = affine_transform_settings.model_copy(deep=True)
+            trial_ats.approx_transform = seed.tolist()
+            # Reseeding is the point, so propagation must be off for the trial or estimate()
+            # would reintroduce the very previous-timepoint transform being replaced.
+            trial_ats.use_prev_t_transform = False
+            try:
+                candidate_transform = estimate(
+                    mov=mov_t,
+                    ref=ref_t,
+                    beads_match_settings=beads_match_settings,
+                    affine_transform_settings=trial_ats,
+                    verbose=False,
+                )
+                if candidate_transform is None:
+                    continue
+                # estimate() persists its score as a sidecar rather than returning it, so
+                # score here -- and scoring the returned transform directly is what makes
+                # this comparable to `before` in the first place.
+                candidate_score = score_transform(
+                    candidate_transform, mov_t, ref_t, beads_match_settings
+                )
+            except Exception as e:  # noqa: BLE001
+                click.echo(f"  t={t} seed {name} failed: {type(e).__name__}: {e}")
+                continue
+            if np.isfinite(candidate_score) and candidate_score > best_score:
+                best_name, best_matrix, best_score = name, candidate_transform, candidate_score
+            # Short-circuit: once a reseed is as good as a typical timepoint in this run,
+            # further candidates are unlikely to matter and each costs a full estimate().
+            if best_score >= good_median:
+                break
+
+        # Polish: re-seed the cascade from the transform just accepted and refine again.
+        #
+        # Not a repeat of the candidate loop, even though it calls the same function. Every
+        # candidate above started from a COARSE seed -- the consensus geometry scores ~0.000
+        # applied on its own, and a neighbour's transform is only approximately right here.
+        # Peak detection runs in WARPED space, so what the matcher sees depends on how good
+        # the starting transform already is: seeded from an accepted 0.78 rather than from
+        # something scoring nothing, it finds correspondences it could not find before.
+        #
+        # Preferred over sending these timepoints to the parameter sweep. Repair lands about a
+        # third of its rescues in 0.72-0.80, where the sweep gains ~+0.058 for 28 trials; one
+        # polish round is a single estimate() call and changes no matching parameter. Stops as
+        # soon as a round fails to improve, so a converged timepoint costs one wasted call.
+        score_after_reseed = best_score
+        for round_i in range(settings.polish_rounds):
+            if best_matrix is None:
+                break
+            polish_ats = affine_transform_settings.model_copy(deep=True)
+            polish_ats.approx_transform = np.asarray(
+                best_matrix.to_list() if hasattr(best_matrix, "to_list") else best_matrix,
+                dtype=float,
+            ).tolist()
+            polish_ats.use_prev_t_transform = False
+            try:
+                polished = estimate(
+                    mov=mov_t,
+                    ref=ref_t,
+                    beads_match_settings=beads_match_settings,
+                    affine_transform_settings=polish_ats,
+                    verbose=False,
+                )
+                if polished is None:
+                    break
+                polished_score = score_transform(polished, mov_t, ref_t, beads_match_settings)
+            except Exception as e:  # noqa: BLE001
+                click.echo(
+                    f"  t={t} polish round {round_i + 1} failed: {type(e).__name__}: {e}"
+                )
+                break
+            if not (np.isfinite(polished_score) and polished_score > best_score + 1e-9):
+                break
+            click.echo(
+                f"    t={t:4d} polish {round_i + 1}: {best_score:.3f} -> {polished_score:.3f}"
+            )
+            best_matrix, best_score = polished, polished_score
+            best_name = f"{best_name}+polish{round_i + 1}"
+
+        if best_matrix is not None:
+            matrix = np.asarray(
+                best_matrix.to_list() if hasattr(best_matrix, "to_list") else best_matrix,
+                dtype=float,
+            )
+            # .tolist() to match what load_transforms puts in this list. Leaving a raw
+            # ndarray here serialises into registration_settings.yml as a
+            # !!python/object/apply:numpy._core.multiarray._reconstruct blob, which then
+            # fails to load -- so the repaired timepoints were the only ones that broke
+            # the downstream stabilize step.
+            transforms[t] = matrix.tolist()
+            np.save(output_transforms_path / f"{t}.npy", matrix)
+            # The sidecar must follow the transform: leaving the stale score on disk
+            # makes a repaired timepoint look failed to anything that reloads the run --
+            # a restarted driver re-flags it from the old sidecar and redoes (or, worse,
+            # journals away) the repair it already has.
+            save_quality_score(
+                output_transforms_path / f"{t}.score",
+                score=best_score,
+                fell_back_to_seed=False,
+            )
+            score_col[t] = best_score
+            scores.loc[scores["t"] == t, "quality_score"] = best_score
+            if "fell_back_to_seed" in scores:
+                scores.loc[scores["t"] == t, "fell_back_to_seed"] = False
+        click.echo(
+            f"  t={t:4d} {before:.3f} -> {best_score:.3f} via {best_name}"
+            + ("" if best_matrix is not None else "  (kept original)")
+        )
+        log.append(
+            {
+                "t": t,
+                "before": float(before),
+                # Split so each step can be attributed on its own: reseeding and polishing
+                # are separate decisions with separate costs, and folding them into one
+                # before/after makes it impossible to tell which one earned the gain.
+                "after_reseed": float(score_after_reseed),
+                "after": float(best_score),
+                "polish_gain": float(best_score - score_after_reseed),
+                "source": best_name,
+                "candidates_tried": [n for n, _ in candidates],
+            }
+        )
+        # Journal the attempt IMMEDIATELY: this line is what lets an interrupted run
+        # resume without redoing the ~90 s attempt, successful or not.
+        with attempts_path.open("a") as _f:
+            _f.write(json.dumps(log[-1]) + "\n")
+
+    improved = sum(1 for r in log if r["after"] > r["before"] + 1e-9)
+    unrescued = sorted(r["t"] for r in log if r["after"] <= r["before"] + 1e-9)
+    click.echo(
+        f"Repair pass: {improved} of {len(log)} flagged timepoints improved"
+        + (f"; {len(unrescued)} not rescued: {unrescued}" if unrescued else "")
+    )
+    (output_transforms_path.parent / "repair_log.json").write_text(
+        json.dumps(
+            {
+                "adaptive_line": stats.get("adaptive_line"),
+                "median": stats.get("median"),
+                "mad": stats.get("mad"),
+                "n_flagged": len(log),
+                "n_improved": improved,
+                "not_rescued": unrescued,
+                "repairs": log,
+            },
+            indent=2,
+        )
+    )
+    return transforms, scores
+
+
+def _merge_best(base_transforms, base_scores, arms, output_transforms_path):
+    """Keep, per timepoint, whichever competing pass scored highest.
+
+    Both passes were handed the same pre-fallback transforms and scores, so their results are
+    directly comparable and neither can be worse than the baseline at any timepoint. Taking
+    the per-timepoint maximum is therefore never worse than either pass alone, and never worse
+    than not running them.
+
+    Writes the winning transform back to its .npy so the on-disk record matches what is
+    returned, and logs which pass won where -- that record is the whole point, since it is
+    what says whether running both was worth the compute.
+    """
+    merged = list(base_transforms)
+    base = base_scores["quality_score"].to_numpy(dtype=float).copy()
+    scores = base_scores.copy()
+    winners: dict[str, list[int]] = {name: [] for name, _, _ in arms}
+    log = []
+
+    for t in range(len(base)):
+        best_name, best_score, best_matrix = (
+            None,
+            base[t] if np.isfinite(base[t]) else -1.0,
+            None,
+        )
+        for name, arm_transforms, arm_scores in arms:
+            row = arm_scores.loc[arm_scores["t"] == t, "quality_score"]
+            if not len(row):
+                continue
+            v = float(row.iloc[0])
+            if np.isfinite(v) and v > best_score + 1e-9:
+                best_name, best_score, best_matrix = name, v, arm_transforms[t]
+        if best_matrix is None:
+            continue
+        merged[t] = best_matrix
+        matrix = np.asarray(best_matrix, dtype=float)
+        np.save(output_transforms_path / f"{t}.npy", matrix)
+        # Sidecar follows the transform. Both arms wrote their own sidecars as they
+        # accepted, so whichever wrote LAST is on disk; the merge must reassert the
+        # winner's score or the sidecar records the losing arm's.
+        save_quality_score(
+            output_transforms_path / f"{t}.score",
+            score=best_score,
+            fell_back_to_seed=False,
+        )
+        scores.loc[scores["t"] == t, "quality_score"] = best_score
+        if "fell_back_to_seed" in scores:
+            scores.loc[scores["t"] == t, "fell_back_to_seed"] = False
+        winners[best_name].append(t)
+        log.append(
+            {"t": t, "before": float(base[t]), "after": float(best_score), "winner": best_name}
+        )
+
+    click.echo("\nCompeting fallbacks, best per timepoint:")
+    for name in winners:
+        click.echo(f"  {name} won {len(winners[name])} timepoints: {winners[name]}")
+    if log:
+        total = sum(r["after"] - r["before"] for r in log if np.isfinite(r["before"]))
+        click.echo(f"  {len(log)} timepoints improved, total gain {total:+.3f}")
+    (output_transforms_path.parent / "fallback_merge_log.json").write_text(
+        json.dumps({"winners": winners, "merges": log}, indent=2)
+    )
+    return merged, scores
 
 
 def estimate_tczyx(
@@ -371,7 +1149,10 @@ def estimate_tczyx(
             ref_voxel_size=ref_voxel_size,
             mov_voxel_size=mov_voxel_size,
         )
-        click.echo("Computed approx transform: ", approx_transform)
+        # f-string, not a second positional: click.echo's second parameter is `file`, so
+        # the original passed the Transform as the output stream and died on .write().
+        # This path had evidently never been exercised.
+        click.echo(f"Computed approx transform:\n{approx_transform}")
         affine_transform_settings.approx_transform = approx_transform.to_list()
 
     if affine_transform_settings.use_prev_t_transform:
@@ -398,6 +1179,156 @@ def estimate_tczyx(
         )
 
     transforms = load_transforms(output_transforms_path, mov_tzyx.shape[0], verbose)
+
+    # Surface the per-timepoint quality score. It was previously only echoed as the run
+    # went, so there was no way to see where a run degraded without grepping the log --
+    # and no way at all for the independent arm, whose timepoints each log to their own
+    # submitit file.
+    scores = load_quality_scores(output_transforms_path, mov_tzyx.shape[0])
+
+    # Both fallbacks run here, after the whole series is known, and in this order.
+    #
+    # They must run here rather than inside estimate() because both are gated on the run's
+    # OWN adaptive median-2*MAD line, and that distribution does not exist while individual
+    # timepoints are being estimated in parallel shards. The repair pass additionally needs
+    # t+1, which likewise does not exist yet.
+    #
+    # The two passes are COMPETING, not staged, and both see the same post-estimation scores.
+    #
+    # They were sequential -- repair, re-flag, then sweep on what survived -- on the reasoning
+    # that repair should clear the hard failures so the sweep only faced the mild tail. That
+    # reasoning cost real quality, for two compounding reasons:
+    #
+    #   1. A successful repair lifts a timepoint above the adaptive line, so re-flagging
+    #      removes it and the sweep never gets a turn. Measured at 09_17 t=96: repair reached
+    #      0.773 and the sweep, run from the same estimation, reached 0.864. Sequentially the
+    #      sweep never ran there and the 0.091 was simply lost.
+    #   2. Where the sweep did still run, it had to beat repair's improved score rather than
+    #      the original, so fewer of its results were accepted.
+    #
+    # Measured head-to-head over 72 timepoints where both acted, each from the same starting
+    # transform: repair won 37, the SWEEP won 13, 22 tied. Taking the better of the two
+    # recovered 4.309 score points against 3.654 for repair alone -- 18% more. The two are
+    # complementary, so whichever wins per timepoint should win.
+    #
+    # Running both costs more than staging them. That is the trade being made deliberately:
+    # the extra compute buys the 13 timepoints where re-tuning parameters beats reseeding, and
+    # some of those margins are large (0.455 -> 0.667 at one real timepoint).
+    #
+    # Each pass still accepts a result only if it strictly beats what it started from, and the
+    # transforms/scores handed to each are the SAME pre-fallback ones, so neither can regress
+    # and neither can hide the other.
+    fb = beads_match_settings.fallback_settings
+    repair_on, sweep_on = fb.repair_enabled, fb.sweep_enabled
+    fb_mode = fb.order
+    parallel = fb_mode == "parallel"
+
+    if repair_on and sweep_on and parallel:
+        import copy
+
+        base_transforms = copy.deepcopy(transforms)
+        base_scores = scores.copy()
+
+        repaired, repaired_scores = repair_flagged_timepoints(
+            mov_tzyx=mov_tzyx,
+            ref_tzyx=ref_tzyx,
+            transforms=copy.deepcopy(base_transforms),
+            scores=base_scores.copy(),
+            beads_match_settings=beads_match_settings,
+            affine_transform_settings=affine_transform_settings,
+            output_transforms_path=output_transforms_path,
+            mode=mode,
+            verbose=verbose,
+        )
+        # The sweep sees the ORIGINAL scores, so it is flagged on the same population and
+        # judged against the same bar as the repair pass.
+        swept, swept_scores = sweep_flagged_timepoints(
+            mov_tzyx=mov_tzyx,
+            ref_tzyx=ref_tzyx,
+            transforms=copy.deepcopy(base_transforms),
+            scores=base_scores.copy(),
+            beads_match_settings=beads_match_settings,
+            affine_transform_settings=affine_transform_settings,
+            output_transforms_path=output_transforms_path,
+            verbose=verbose,
+        )
+        transforms, scores = _merge_best(
+            base_transforms,
+            base_scores,
+            [("repair", repaired, repaired_scores), ("sweep", swept, swept_scores)],
+            output_transforms_path,
+        )
+    else:
+
+        def _run_repair(tr, sc):
+            return repair_flagged_timepoints(
+                mov_tzyx=mov_tzyx,
+                ref_tzyx=ref_tzyx,
+                transforms=tr,
+                scores=sc,
+                beads_match_settings=beads_match_settings,
+                affine_transform_settings=affine_transform_settings,
+                output_transforms_path=output_transforms_path,
+                mode=mode,
+                verbose=verbose,
+            )
+
+        def _run_sweep(tr, sc):
+            return sweep_flagged_timepoints(
+                mov_tzyx=mov_tzyx,
+                ref_tzyx=ref_tzyx,
+                transforms=tr,
+                scores=sc,
+                beads_match_settings=beads_match_settings,
+                affine_transform_settings=affine_transform_settings,
+                output_transforms_path=output_transforms_path,
+                verbose=verbose,
+            )
+
+        # Flags are recomputed inside each pass, so whichever runs second sees the updated
+        # distribution -- which is exactly the effect that makes either ordering lose ground
+        # to "parallel". Kept because it is cheaper and reproduces the earlier benchmark arms.
+        stages = [("repair", _run_repair, repair_on), ("sweep", _run_sweep, sweep_on)]
+        if fb_mode == "sweep_then_repair":
+            stages.reverse()
+        click.echo(
+            "Fallback order: " + " -> ".join(n for n, _, on in stages if on)
+            if any(on for _, _, on in stages)
+            else "Fallbacks: none enabled"
+        )
+        for _name, fn, on in stages:
+            if on:
+                transforms, scores = fn(transforms, scores)
+
+    scores.to_csv(output_folder_path / "quality_scores.csv", index=False)
+    plot_quality_scores(
+        scores,
+        output_folder_path / "translation_plots" / "beads_quality_score.png",
+        score_threshold=beads_match_settings.qc_settings.score_threshold,
+    )
+    # Full QC report: adaptive flagging, transform plausibility, smoothness. Reports
+    # only -- nothing is modified, because interpolating weak timepoints was measured to
+    # make them worse.
+    try:
+        write_qc_report(
+            output_dir=output_folder_path,
+            scores=scores["quality_score"].to_numpy(),
+            transforms=[t for t in transforms if t is not None],
+        )
+    except Exception as e:  # noqa: BLE001
+        click.echo(f"QC report skipped: {type(e).__name__}: {e}")
+
+    scored = scores.dropna(subset=["quality_score"])
+    if len(scored):
+        n_low = int(
+            (scored["quality_score"] < beads_match_settings.qc_settings.score_threshold).sum()
+        )
+        click.echo(
+            f"Quality score: median {scored['quality_score'].median():.3f}, "
+            f"{n_low} of {len(scored)} timepoints below "
+            f"{beads_match_settings.qc_settings.score_threshold}, "
+            f"{int(scores['fell_back_to_seed'].sum())} fell back to the seed"
+        )
 
     return transforms
 
@@ -438,13 +1369,44 @@ def estimate_with_propagation(
         "registration": align moving to reference channel.
         "stabilization": align moving channel to itself over time.
     """
-    initial_transform = affine_transform_settings.approx_transform
+    # The static seed from the config. Kept as the `user_transform` competition arm for
+    # every timepoint, so a run that has drifted still gets a chance to snap back to it.
+    config_seed = affine_transform_settings.approx_transform
+    # The most recent transform that actually succeeded. This -- not the config seed --
+    # is what a failed timepoint falls back to. Resetting to the config seed makes a
+    # single failure self-sustaining: the seed is a deliberately coarse initialisation
+    # (measured at overlap score 0.000 on real bead data), so the next timepoint starts
+    # from somewhere the matcher cannot recover from, fails in turn, and the failure
+    # walks forward as a cluster.
+    last_good_transform = config_seed
+
     T, _, _, _ = mov_tzyx.shape
     for t in range(T):
         if mode == "stabilization" and t == 0:
             continue
+
+        # Resume: a timepoint already on disk is reloaded rather than recomputed, and its
+        # transform still propagates forward so the chain stays identical to an
+        # uninterrupted run. Without this, any interruption restarts at t=0 -- a 24 h
+        # walltime cut two 800-timepoint estimates at ~75% complete and would have
+        # discarded 23 h of finished work, even though every finished timepoint was
+        # already saved as {t}.npy.
+        existing = output_folder_path / f"{t}.npy" if output_folder_path else None
+        if existing is not None and existing.exists():
+            try:
+                last_good_transform = np.load(existing).tolist()
+                affine_transform_settings.approx_transform = last_good_transform
+                if verbose:
+                    click.echo(f"Timepoint {t} already estimated, reusing {existing.name}")
+                continue
+            except (OSError, ValueError):
+                # A truncated file from a job killed mid-write: recompute it.
+                click.echo(f"Timepoint {t} transform unreadable, recomputing")
+
         if np.sum(mov_tzyx[t]) == 0 or np.sum(ref_tzyx[t]) == 0:
             click.echo(f"Timepoint {t} has no data, skipping")
+            # approx_transform stays on the last good one, so a blank frame costs only
+            # itself rather than derailing every timepoint after it.
         else:
             approx_transform = estimate_tzyx(
                 t_idx=t,
@@ -455,13 +1417,17 @@ def estimate_with_propagation(
                 verbose=verbose,
                 output_folder_path=output_folder_path,
                 mode=mode,
-                user_transform=initial_transform,
+                user_transform=config_seed,
             )
 
             if approx_transform is not None:
-                affine_transform_settings.approx_transform = approx_transform.to_list()
-            else:
-                affine_transform_settings.approx_transform = initial_transform
+                last_good_transform = approx_transform.to_list()
+            elif verbose:
+                click.echo(
+                    f"Timepoint {t} produced no transform; propagating the last "
+                    "successful transform rather than the config seed."
+                )
+            affine_transform_settings.approx_transform = last_good_transform
 
 
 def estimate_independently(
@@ -533,8 +1499,27 @@ def estimate_independently(
 
     # Submit jobs
     jobs = []
+    n_skipped = 0
     with submitit.helpers.clean_env(), executor.batch():
         for t in range(T):
+            # Resume: a timepoint already on disk is kept, exactly like the sequential
+            # path. Without this, a driver restart resubmits ALL T timepoints and
+            # OVERWRITES previously repaired {t}.npy/{t}.score with fresh base
+            # estimates -- and the repair pass's journal resume (repair_attempts.jsonl)
+            # then skips exactly those timepoints, so the repairs are lost permanently.
+            # Measured on 09_12 (848 t): one restart clobbered 268 journaled rescues
+            # at a median repaired score of ~0.85.
+            existing = output_folder_path / f"{t}.npy"
+            if existing.exists():
+                try:
+                    np.load(existing)
+                    n_skipped += 1
+                    if verbose:
+                        click.echo(f"Timepoint {t} already estimated, skipping")
+                    continue
+                except (OSError, ValueError):
+                    # A truncated file from a job killed mid-write: recompute it.
+                    click.echo(f"Timepoint {t} transform unreadable, recomputing")
             job = executor.submit(
                 estimate_tzyx,
                 t_idx=t,
@@ -547,6 +1532,11 @@ def estimate_independently(
                 mode=mode,
             )
             jobs.append(job)
+    if n_skipped:
+        click.echo(
+            f"Reusing {n_skipped} of {T} timepoints already on disk; "
+            f"submitted {len(jobs)} jobs."
+        )
 
     # Save job IDs
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -617,7 +1607,13 @@ def peaks_from_beads(
 
     if len(mov_peaks) < 2 or len(ref_peaks) < 2:
         click.echo("Not enough beads detected")
-        return
+        # Return a pair, not a bare None. The annotation promises a 2-tuple and every
+        # call site unpacks into two names, so a bare `return` raised
+        # "cannot unpack non-iterable NoneType object" and killed the whole run on the
+        # first timepoint with too few beads -- it took out a 3 h estimate at t=92 of
+        # 288. The callers already test `if mov_peaks is None`, so they were written
+        # expecting this contract; the unpacking simply crashed before those guards ran.
+        return None, None
     if mask_path is not None:
         click.echo("Filtering peaks with mask")
         with open_ome_zarr(mask_path) as mask_ds:
@@ -693,12 +1689,23 @@ def matches_from_beads(
 
     elif beads_match_settings.algorithm == "hungarian":
         hungarian_match_settings = beads_match_settings.hungarian_match_settings
-        mov_graph = Graph.from_nodes(
-            mov_peaks, mode="knn", k=hungarian_match_settings.edge_graph_settings.k
-        )
-        ref_graph = Graph.from_nodes(
-            ref_peaks, mode="knn", k=hungarian_match_settings.edge_graph_settings.k
-        )
+        edge_graph_settings = hungarian_match_settings.edge_graph_settings
+        # Honour the configured graph mode. This was hardcoded to "knn", so `method` was
+        # silently ignored and "radius" / "full" did nothing. That matters here rather
+        # than being cosmetic: the two clouds have very different densities (~20 moving
+        # against ~54 reference peaks in the same volume), so a fixed k spans a 1.6x
+        # larger physical neighbourhood on the sparse side at every k tested. The
+        # edge-length cost then compares descriptors measured at different scales. A
+        # radius graph uses the same physical scale on both sides -- measured on synthetic
+        # clouds that took the edge-scale ratio from 1.46 to 0.99 and recall from 0.85 to
+        # 0.91. EdgeGraphSettings already validates and defaults k / radius per method.
+        graph_kwargs = {"mode": edge_graph_settings.method}
+        if edge_graph_settings.method == "knn":
+            graph_kwargs["k"] = edge_graph_settings.k
+        elif edge_graph_settings.method == "radius":
+            graph_kwargs["radius"] = edge_graph_settings.radius
+        mov_graph = Graph.from_nodes(mov_peaks, **graph_kwargs)
+        ref_graph = Graph.from_nodes(ref_peaks, **graph_kwargs)
 
         matcher = GraphMatcher(
             algorithm="hungarian",
@@ -710,6 +1717,27 @@ def matches_from_beads(
         )
 
         matches = matcher.match(mov_graph, ref_graph)
+
+    elif beads_match_settings.algorithm == "spectral":
+        spectral_match_settings = beads_match_settings.spectral_match_settings
+        # No graph features are used: spectral matching works from the raw point
+        # coordinates via pairwise distances, so the graph is just a node container and
+        # k is irrelevant here.
+        mov_graph = Graph.from_nodes(mov_peaks)
+        ref_graph = Graph.from_nodes(ref_peaks)
+
+        matcher = GraphMatcher(
+            algorithm="spectral",
+            spectral_sigma=spectral_match_settings.sigma,
+            spectral_rel_cut=spectral_match_settings.rel_cut,
+            spectral_max_iter=spectral_match_settings.max_iter,
+            verbose=verbose,
+        )
+
+        matches = matcher.match(mov_graph, ref_graph)
+
+    else:
+        raise ValueError(f"Unknown matching algorithm: {beads_match_settings.algorithm}")
 
     # Filter as part of the pipeline
     matches = matcher.filter_matches(
@@ -972,6 +2000,15 @@ def optimize_transform(
         ref_peaks_settings=beads_match_settings.target_peaks_settings,
         verbose=debug,
     )
+    if mov_peaks_optimized is None or ref_peaks_optimized is None:
+        # The correction warped the beads out of detectability, so the composed transform
+        # cannot be scored and must not be accepted -- returning the pre-correction
+        # transform and score leaves the caller exactly where it started, which is the
+        # same outcome as a refinement that failed to improve.
+        click.echo(
+            "Composed transform left too few detectable beads; keeping the input transform."
+        )
+        return transform, quality_score_approx
 
     quality_score_optimized = overlap_score(
         mov_peaks=mov_peaks_optimized,
@@ -993,6 +2030,168 @@ def optimize_transform(
         return composed_transform, quality_score_optimized
     else:
         return transform, quality_score_approx
+
+
+def vote_correct_seed(
+    mov: ArrayLike,
+    ref: ArrayLike,
+    seed: np.ndarray,
+    beads_match_settings: BeadsMatchSettings,
+) -> tuple[np.ndarray, str]:
+    """Correct a per-timepoint seed by bead displacement voting, before estimation.
+
+    For use when the FOV geometry drifts over the series by more than the static
+    approx_transform's capture range AND the bead field is too thin for the matchers to
+    re-acquire from scratch -- the 2025_11_05 case: 15-35 voxels of mid-series drift
+    against ~12 detectable GFP beads left 54% of timepoints at score 0.000, and no
+    detection-knob change rescued them. This did (run median 0.000 -> ~0.5, every tested
+    0.000 timepoint recovered, good timepoints preserved).
+
+    The moving volume is warped with the seed, beads are detected densely
+    (seed_correction_settings.vote_peaks_settings), and each casts a vote for its
+    displacement to every reference bead within capture_radius. Real beads agree on the
+    residual drift, so the densest cluster_radius-ball of votes estimates it; the mean of
+    that cluster is composed into the seed. In "votefit" mode the cluster's members are
+    then reused as correspondences for an affine fit, accepted only when it improves the
+    peaks' median NN distance.
+
+    Candidates only ever compete against the unchanged seed, judged by NN-median under
+    the pipeline's own detection settings, so a bad vote cannot make the seed worse.
+
+    Parameters
+    ----------
+    mov : ArrayLike
+        Original (unregistered) moving volume (Z, Y, X).
+    ref : ArrayLike
+        Reference volume (Z, Y, X).
+    seed : np.ndarray
+        The 4x4 approx_transform to correct.
+    beads_match_settings : BeadsMatchSettings
+        Provides seed_correction_settings (voting tunables) and the source/target
+        detection settings used to judge candidates.
+
+    Returns
+    -------
+    tuple[np.ndarray, str]
+        The corrected (or unchanged) 4x4 seed, and a note describing what happened,
+        for the per-timepoint log.
+    """
+    settings = beads_match_settings.seed_correction_settings
+    src_peaks_settings = beads_match_settings.source_peaks_settings
+    tgt_peaks_settings = beads_match_settings.target_peaks_settings
+    vote_peaks_settings = settings.vote_peaks_settings
+
+    mov = np.asarray(mov, dtype=np.float32)
+    ref = np.asarray(ref, dtype=np.float32)
+    mov_ants, ref_ants = ants.from_numpy(mov), ants.from_numpy(ref)
+
+    ref_peaks = detect_peaks(
+        ref,
+        threshold_abs=tgt_peaks_settings.threshold_abs,
+        block_size=tuple(tgt_peaks_settings.block_size),
+        nms_distance=tgt_peaks_settings.nms_distance,
+        min_distance=tgt_peaks_settings.min_distance,
+    )
+    if len(ref_peaks) < settings.min_votes:
+        return seed, f"only {len(ref_peaks)} ref peaks; seed unchanged"
+    ref_tree = cKDTree(ref_peaks)
+
+    def warp(matrix):
+        return (
+            Transform(matrix=matrix)
+            .to_ants()
+            .apply_to_image(mov_ants, reference=ref_ants)
+            .numpy()
+        )
+
+    def nn_median(matrix):
+        # Judged with the pipeline's OWN detection settings, so "better" here means
+        # better for the estimation that consumes the seed.
+        peaks = detect_peaks(
+            warp(matrix),
+            threshold_abs=src_peaks_settings.threshold_abs,
+            block_size=tuple(src_peaks_settings.block_size),
+            nms_distance=src_peaks_settings.nms_distance,
+            min_distance=src_peaks_settings.min_distance,
+        )
+        if len(peaks) == 0:
+            return np.inf
+        dist, _ = ref_tree.query(peaks)
+        return float(np.median(dist))
+
+    def translation(d):
+        matrix = np.eye(4)
+        matrix[:3, 3] = d
+        return matrix
+
+    mov_peaks = detect_peaks(
+        warp(seed),
+        threshold_abs=vote_peaks_settings.threshold_abs,
+        block_size=tuple(vote_peaks_settings.block_size),
+        nms_distance=vote_peaks_settings.nms_distance,
+        min_distance=vote_peaks_settings.min_distance,
+    )
+    if len(mov_peaks) < settings.min_votes:
+        return seed, f"only {len(mov_peaks)} mov peaks; seed unchanged"
+
+    votes, pair_src = [], []
+    for p in mov_peaks:
+        for j in ref_tree.query_ball_point(p, r=settings.capture_radius):
+            votes.append(ref_peaks[j] - p)
+            pair_src.append((p, ref_peaks[j]))
+    votes = np.asarray(votes)
+    if len(votes) < settings.min_votes:
+        return seed, f"only {len(votes)} votes; seed unchanged"
+
+    vote_tree = cKDTree(votes)
+    counts = np.array(
+        [len(vote_tree.query_ball_point(v, r=settings.cluster_radius)) for v in votes]
+    )
+    members = vote_tree.query_ball_point(votes[np.argmax(counts)], r=settings.cluster_radius)
+    drift = votes[members].mean(axis=0)
+    vote_pairs = [pair_src[m] for m in members]
+
+    # The seed maps ref-space points to mov-space sample coordinates (ANTs fixed-to-moving),
+    # so undoing a ref-space image drift of +d composes as seed @ T(-d). Both signs are
+    # still tried, with the unchanged seed competing, and NN-median decides.
+    candidates = {
+        "keep": seed,
+        "minus": seed @ translation(-drift),
+        "plus": seed @ translation(drift),
+    }
+    nn = {name: nn_median(matrix) for name, matrix in candidates.items()}
+    best = min(nn, key=nn.get)
+    corrected = candidates[best]
+    notes = [
+        f"drift={np.round(drift, 1).tolist()} votes={int(counts.max())} "
+        f"nn={ {k: round(v, 1) for k, v in nn.items()} } pick={best}"
+    ]
+
+    if settings.mode == "votefit" and len(vote_pairs) >= 4:
+        # The winning cluster's votes ARE correspondences (warped mov peak p, ref peak q),
+        # valid in the warped space of the UNCORRECTED seed, so the fit composes onto that
+        # seed rather than onto the translation-corrected one. The re-warped image should
+        # place each bead at its ref peak q, i.e. sample point C(q) = p; the seed maps
+        # ref -> mov, hence seed @ C.
+        p = np.asarray([a for a, _ in vote_pairs], dtype=float)
+        q = np.asarray([b for _, b in vote_pairs], dtype=float)
+        if len(vote_pairs) >= 6:
+            A = np.hstack([q, np.ones((len(q), 1))])
+            X, *_ = np.linalg.lstsq(A, p, rcond=None)  # C(q) = q @ X[:3] + X[3]
+            C = np.eye(4)
+            C[:3, :3] = X[:3].T
+            C[:3, 3] = X[3]
+        else:
+            C = translation((p - q).mean(axis=0))
+        fitted = seed @ C
+        nn_old, nn_new = nn[best], nn_median(fitted)
+        if np.isfinite(nn_new) and nn_new < nn_old:
+            corrected = fitted
+            notes.append(f"fit accepted n={len(vote_pairs)} nn {nn_old:.1f}->{nn_new:.1f}")
+        else:
+            notes.append(f"fit rejected n={len(vote_pairs)} nn {nn_old:.1f}->{nn_new:.1f}")
+
+    return corrected, "; ".join(notes)
 
 
 def estimate(
@@ -1044,9 +2243,27 @@ def estimate(
         click.echo("Skipping: moving or reference data contains only NaN/zeros.")
         return
 
-    initial_transform = Transform(
-        matrix=np.asarray(affine_transform_settings.approx_transform)
-    )
+    # Opt-in per-timepoint seed correction, applied before any matching arm so every
+    # consumer of the seed -- including the repair pass, whose candidate seeds arrive
+    # here through approx_transform -- starts from the corrected geometry.
+    seed_matrix = np.asarray(affine_transform_settings.approx_transform, dtype=float)
+    seed_correction = beads_match_settings.seed_correction_settings
+    if seed_correction.mode != "none":
+        try:
+            seed_matrix, note = vote_correct_seed(
+                mov=mov,
+                ref=ref,
+                seed=seed_matrix,
+                beads_match_settings=beads_match_settings,
+            )
+            click.echo(f"Seed correction ({seed_correction.mode}): {note}")
+        except Exception as e:  # noqa: BLE001
+            # A seed corrector that can take down a timepoint is worse than none.
+            click.echo(
+                f"Seed correction failed ({type(e).__name__}: {e}); using the configured seed."
+            )
+
+    initial_transform = Transform(matrix=seed_matrix)
     transform = initial_transform
 
     current_iterations = 0
@@ -1097,6 +2314,72 @@ def estimate(
                     break
                 transform = optimized_transform_user
 
+        # Third arm: acquire the correspondence with spectral matching, then refine.
+        # Opt-in, and gated on the other arms having done badly, because it costs a full
+        # optimize_transform call and is only useful when the initial transform is wrong by
+        # more than about one bead spacing -- exactly when the position-distance cost in
+        # the Hungarian matcher starts pairing a bead with its neighbour instead of itself.
+        # Spectral matching uses only relative distances, so it is unaffected by how wrong
+        # the initial transform is.
+        #
+        # Whichever arm scores highest wins, so enabling this can never make the result
+        # worse than leaving it off.
+        best_so_far = transform_iter_dict[current_iterations]["quality_score"]
+        spectral_mode = beads_match_settings.spectral_arm
+        run_spectral = current_iterations == 0 and (
+            spectral_mode == "always"
+            or (
+                spectral_mode == "on_low_score"
+                and best_so_far < beads_match_settings.qc_settings.score_threshold
+            )
+        )
+        if run_spectral:
+            click.echo(f"Spectral arm ({spectral_mode}), current best {best_so_far:.3f}:")
+            # Stage 1 -- ACQUIRE with spectral matching. This does not need the initial
+            # transform to be close, because only relative distances are used.
+            spectral_settings = beads_match_settings.model_copy(deep=True)
+            spectral_settings.algorithm = "spectral"
+            transform_spec, score_spec = optimize_transform(
+                transform=initial_transform,
+                mov=mov,
+                ref=ref,
+                beads_match_settings=spectral_settings,
+                affine_transform_settings=affine_transform_settings,
+                verbose=verbose,
+                debug=debug,
+            )
+
+            # Stage 2 -- REFINE from spectral's transform with the CONFIGURED matcher.
+            # This is the point of the cascade and not an optional extra: spectral
+            # acquires the correspondence but is the less precise of the two once the
+            # transform is already close, so handing its result back to the configured
+            # matcher is what recovers the last part. Measured at one real failing
+            # timepoint: seed 0.000 -> spectral 0.778 -> refined 0.882, which equals the
+            # best transform any variant found there. Stopping after stage 1 would have
+            # left 0.778 on the table.
+            if transform_spec is not None:
+                transform_refined, score_refined = optimize_transform(
+                    transform=transform_spec,
+                    mov=mov,
+                    ref=ref,
+                    beads_match_settings=beads_match_settings,
+                    affine_transform_settings=affine_transform_settings,
+                    verbose=verbose,
+                    debug=debug,
+                )
+                # optimize_transform only accepts a step that improves its own score, so
+                # a None here means refinement found nothing better -- keep stage 1.
+                if transform_refined is not None and score_refined > score_spec:
+                    transform_spec, score_spec = transform_refined, score_refined
+
+            if transform_spec is not None and score_spec > best_so_far:
+                click.echo(f"Spectral cascade wins: {best_so_far:.3f} -> {score_spec:.3f}")
+                transform_iter_dict[current_iterations] = {
+                    "transform": transform_spec,
+                    "quality_score": score_spec,
+                }
+                transform = transform_spec
+
         if transform is None:
             break
         current_iterations += 1
@@ -1105,7 +2388,61 @@ def estimate(
     best_quality_score = max(transform_iter_dict.values(), key=lambda x: x["quality_score"])
     best_transform = best_quality_score["transform"]
 
-    if best_transform is None:
+    # Fourth arm, last resort: re-tune the matching parameters for THIS timepoint. Every arm
+    # above shares one parameter set across the whole timelapse, and a few timepoints are
+    # simply not well served by it. Gated on score because it is the most expensive arm --
+    # one ANTs warp plus peak re-detection per distinct match set.
+    #
+    # Runs after the loop, on the best of all arms, so it only ever fires where everything
+    # else has already failed, and its result is accepted only if it strictly wins. It
+    # therefore cannot make any timepoint worse than leaving it off.
+    # legacy_in_estimate is the old per-timepoint arm, gated on a FIXED threshold because no
+    # run-wide distribution exists at this point. The adaptive replacement runs as a post-pass
+    # in estimate_tczyx, where the run's own median and MAD are known, and deliberately does
+    # not fire here.
+    sweep = beads_match_settings.fallback_settings.sweep_settings
+    incumbent_score = best_quality_score["quality_score"]
+    if sweep.legacy_in_estimate and incumbent_score < sweep.score_threshold:
+        click.echo(
+            f"Sweep fallback: best arm scored {incumbent_score:.3f} < "
+            f"{sweep.score_threshold}, grid-searching matching parameters for this timepoint"
+        )
+        try:
+            _, swept_transform, swept_score = optimize_matches(
+                mov=mov,
+                ref=ref,
+                approx_transform=initial_transform,
+                beads_match_settings=beads_match_settings,
+                affine_transform_settings=affine_transform_settings,
+                param_grid=sweep.grid,
+                verbose=verbose,
+            )
+        except Exception as e:  # noqa: BLE001
+            # A fallback that can take down a whole timelapse is worse than no fallback.
+            click.echo(f"Sweep fallback failed ({type(e).__name__}: {e}); keeping incumbent.")
+            swept_transform, swept_score = None, -1.0
+
+        if swept_transform is not None and swept_score > incumbent_score:
+            click.echo(f"Sweep fallback wins: {incumbent_score:.3f} -> {swept_score:.3f}")
+            best_transform = swept_transform
+            best_quality_score = {
+                "transform": swept_transform,
+                "quality_score": swept_score,
+            }
+            transform_iter_dict["sweep_fallback"] = best_quality_score
+        else:
+            click.echo(
+                f"Sweep fallback found nothing better than {incumbent_score:.3f}; "
+                "keeping incumbent."
+            )
+
+    # Every optimisation attempt failed, so the coarse initial transform is all we have.
+    # Recorded explicitly: the saved .npy is otherwise indistinguishable from a real fit,
+    # and such a transform can still pass validate_transforms, which only checks
+    # consistency against neighbouring timepoints -- and a propagated seed is perfectly
+    # self-consistent.
+    fell_back_to_seed = best_transform is None
+    if fell_back_to_seed:
         best_transform = initial_transform
     if verbose:
         click.echo(f"Best transform: {best_transform}")
@@ -1113,5 +2450,14 @@ def estimate(
     if output_filepath:
         click.echo(f"Saving transform to {output_filepath}")
         np.save(output_filepath, best_transform.to_list())
+        # Persist the score as a sidecar rather than returning it, so that estimate()
+        # keeps the same signature across every registration method. Written to disk
+        # because the independent arm runs each timepoint in its own submitit process,
+        # so an in-memory accumulator would not survive.
+        save_quality_score(
+            Path(output_filepath).with_suffix(".score"),
+            score=best_quality_score["quality_score"],
+            fell_back_to_seed=fell_back_to_seed,
+        )
 
     return best_transform
