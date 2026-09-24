@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from scipy.ndimage import shift as ndi_shift
 
@@ -7,6 +8,7 @@ from biahub.registration.beads import matches_from_beads, transform_from_matches
 from biahub.registration.estimators import (
     AntsEstimator,
     BeadNodeDetector,
+    EstimationError,
     ManualEstimator,
     NodeDetector,
     NodeGraphEstimator,
@@ -65,6 +67,60 @@ def test_node_graph_estimator_matches_direct_call():
     )
 
     np.testing.assert_allclose(transform.matrix, expected_transform.matrix)
+
+
+def test_node_graph_estimator_keeps_the_best_scoring_iteration_not_the_last():
+    rng = np.random.default_rng(3)
+    translation = np.array([5.0, -3.0, 2.0])
+    mov_nodes, ref_nodes = _make_matched_clouds(rng, translation=translation)
+    # Canned detectors return the same nodes every pass, so pass 2 re-applies the same
+    # correction on top of pass 1 and drifts to ~2x the true translation -- exactly the
+    # "later iteration is worse" case keep-best must reject.
+    scored = []
+
+    def score_fn(transform, mov, ref):
+        score = -float(np.abs(transform.translation - translation).sum())
+        scored.append(score)
+        return score
+
+    estimator = NodeGraphEstimator(
+        mov_detector=_FixedNodeDetector(mov_nodes),
+        ref_detector=_FixedNodeDetector(ref_nodes),
+        beads_match_settings=BeadsMatchSettings(),
+        affine_transform_settings=AffineTransformSettings(transform_type="euclidean"),
+        iterations=2,
+        score_fn=score_fn,
+    )
+    transform = estimator.estimate(np.zeros((10, 10, 10)), np.zeros((10, 10, 10)))
+
+    assert len(scored) == 2 and scored[0] > scored[1]
+    np.testing.assert_allclose(transform.translation, translation, atol=1e-6)
+
+
+def test_node_graph_estimator_fails_clearly_with_too_few_nodes():
+    estimator = NodeGraphEstimator(
+        mov_detector=_FixedNodeDetector(np.zeros((2, 3))),
+        ref_detector=_FixedNodeDetector(np.zeros((30, 3))),
+        beads_match_settings=BeadsMatchSettings(),
+        affine_transform_settings=AffineTransformSettings(),
+    )
+    with pytest.raises(EstimationError, match="2 moving, 30 reference"):
+        estimator.estimate(np.zeros((10, 10, 10)), np.zeros((10, 10, 10)))
+
+
+def test_node_graph_estimator_fails_clearly_when_no_iteration_scores():
+    rng = np.random.default_rng(4)
+    mov_nodes, ref_nodes = _make_matched_clouds(rng)
+    estimator = NodeGraphEstimator(
+        mov_detector=_FixedNodeDetector(mov_nodes),
+        ref_detector=_FixedNodeDetector(ref_nodes),
+        beads_match_settings=BeadsMatchSettings(),
+        affine_transform_settings=AffineTransformSettings(transform_type="euclidean"),
+        iterations=2,
+        score_fn=lambda transform, mov, ref: float("nan"),
+    )
+    with pytest.raises(EstimationError, match="no finite score in 2 iteration"):
+        estimator.estimate(np.zeros((10, 10, 10)), np.zeros((10, 10, 10)))
 
 
 def test_node_graph_estimator_recovers_known_translation():
@@ -140,9 +196,9 @@ def test_node_graph_estimator_seed_composition_is_self_consistent():
 
 
 def test_node_graph_estimator_seed_extends_matching_capture_range():
-    """A large offset that fails to match at all without a seed (NaN -- not enough/no
-    valid correspondences) succeeds exactly once a seed pre-aligns mov close enough for
-    point matching's limited capture range.
+    """A large offset that cannot be matched without a seed (too few valid
+    correspondences -> EstimationError, not a silent NaN matrix) succeeds exactly once a
+    seed pre-aligns mov close enough for point matching's limited capture range.
     """
     rng = np.random.default_rng(11)
     shape = (40, 60, 60)
@@ -152,10 +208,8 @@ def test_node_graph_estimator_seed_extends_matching_capture_range():
 
     estimator = _bead_estimator()
 
-    no_seed_result = estimator.estimate(mov, ref)
-    assert np.any(np.isnan(no_seed_result.matrix)), (
-        "expected this large offset to fail without a seed"
-    )
+    with pytest.raises(EstimationError, match="too few matches"):
+        estimator.estimate(mov, ref)
 
     good_seed = Transform.from_translation([-a for a in big_applied_zyx])
     with_seed_result = estimator.estimate(mov, ref, seed=good_seed)

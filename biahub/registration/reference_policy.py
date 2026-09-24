@@ -5,6 +5,9 @@ never decides how to start the optimizer (see `seed_policy.py`) or which method 
 the transform (see `estimators.py`). Registration (cross-channel) and stabilization
 (same channel over time) are the same operation under this abstraction, differing only
 in which `ReferencePolicy` is used.
+
+Series are indexed lazily (`series[t]` before `np.asarray`) so a dask- or zarr-backed
+(T, Z, Y, X) input only materializes the one frame requested.
 """
 
 from __future__ import annotations
@@ -30,7 +33,7 @@ class CrossChannel:
         self.ref = ref
 
     def reference_for(self, mov: ArrayLike, t: int) -> ArrayLike:
-        return np.asarray(self.ref)[t]
+        return np.asarray(self.ref[t])
 
 
 class FixedFrame:
@@ -40,12 +43,11 @@ class FixedFrame:
         self.t_ref = t_ref
 
     def reference_for(self, mov: ArrayLike, t: int) -> ArrayLike:
-        return np.asarray(mov)[self.t_ref]
+        return np.asarray(mov[self.t_ref])
 
 
 class PreviousFrame:
     """Stabilization `t_reference: "previous"`: t compares against t-1 (t=0 against itself)."""
 
     def reference_for(self, mov: ArrayLike, t: int) -> ArrayLike:
-        mov = np.asarray(mov)
-        return mov[max(t - 1, 0)]
+        return np.asarray(mov[max(t - 1, 0)])
