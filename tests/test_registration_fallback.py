@@ -96,6 +96,38 @@ def test_repair_skips_a_candidate_that_raises_without_failing_the_whole_pass():
 
     assert result.accepted is True
     assert result.source == "good"
+    assert result.failures == {"broken": "RuntimeError: simulated candidate failure"}
+    assert set(result.scores) == {"good"}
+
+
+def test_repair_journals_candidate_failures_and_they_round_trip_through_disk(tmp_path):
+    journal = RunJournal()
+    target = np.array([10.0, 10.0, 10.0])
+
+    class _RaisingSeedPolicy:
+        def seed_for(self, t):
+            raise ValueError("not enough good timepoints yet")
+
+    repair(
+        t=3,
+        mov=None,
+        ref=None,
+        estimator=_EchoEstimator(),
+        current_transform=Transform.from_translation([0.0, 0.0, 0.0]),
+        current_score=_score_by_closeness(Transform.from_translation([0.0, 0.0, 0.0]), target),
+        candidates={"consensus": _RaisingSeedPolicy()},
+        score_fn=lambda t: _score_by_closeness(t, target),
+        journal=journal,
+    )
+
+    (attempt,) = journal.attempts
+    assert attempt.accepted is False
+    assert attempt.failures == {"consensus": "ValueError: not enough good timepoints yet"}
+
+    path = tmp_path / "journal.json"
+    journal.save(path)
+    (reloaded,) = RunJournal.load(path).attempts
+    assert reloaded.failures == attempt.failures
 
 
 def test_repair_skips_a_candidate_whose_seed_for_raises_without_failing_the_whole_pass():

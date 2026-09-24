@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import uuid
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 
@@ -27,6 +27,8 @@ class Attempt:
     before_score: float
     after_score: float
     accepted: bool
+    # candidate name -> "ExceptionType: message" for candidates that raised
+    failures: dict[str, str] = field(default_factory=dict)
 
 
 class RunJournal:
@@ -47,10 +49,24 @@ class RunJournal:
         self.attempts: list[Attempt] = []
 
     def record(
-        self, t: int, pass_name: str, before_score: float, after_score: float, accepted: bool
+        self,
+        t: int,
+        pass_name: str,
+        before_score: float,
+        after_score: float,
+        accepted: bool,
+        failures: dict[str, str] | None = None,
     ) -> None:
         self.attempts.append(
-            Attempt(self.current_run_id, t, pass_name, before_score, after_score, accepted)
+            Attempt(
+                self.current_run_id,
+                t,
+                pass_name,
+                before_score,
+                after_score,
+                accepted,
+                failures=dict(failures or {}),
+            )
         )
 
     def attempted_this_run(self, t: int, pass_name: str | None = None) -> bool:

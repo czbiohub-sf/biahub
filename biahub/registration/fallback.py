@@ -10,7 +10,7 @@ it works the same way for beads, ants, or any future seeded estimator.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from numpy.typing import ArrayLike
 
@@ -26,6 +26,8 @@ class RepairResult:
     score: float
     accepted: bool
     source: str  # name of the winning candidate, or "unchanged"
+    scores: dict[str, float] = field(default_factory=dict)  # every candidate that ran
+    failures: dict[str, str] = field(default_factory=dict)  # candidate -> "Type: message"
 
 
 def repair(
@@ -41,25 +43,29 @@ def repair(
 ) -> RepairResult:
     """Try each candidate seed for timepoint `t`; keep whichever scores best.
 
-    Every candidate is tried (in the given order; a candidate whose `seed_for()` or
-    `estimate()` call raises -- e.g. `ConsensusSeed` when too few timepoints score well
-    enough yet -- is skipped, not fatal to the whole repair, matching the existing
-    per-candidate `try/except` pattern in `beads.py`'s repair pass). The single
-    best-scoring result wins ties by candidate order. Only reported `accepted=True` if
-    it beats `current_score` -- otherwise the original transform/score are returned
-    unchanged.
+    Every candidate is tried in the given order. A candidate whose `seed_for()` or
+    `estimate()` raises -- e.g. `ConsensusSeed` when too few timepoints score well enough
+    yet -- is skipped rather than aborting the repair, and the exception is kept in
+    `RepairResult.failures` (and the journal) so a silently-broken candidate is visible
+    rather than indistinguishable from one that merely lost. The best-scoring result
+    wins, ties broken by candidate order; `accepted=True` only if it strictly beats
+    `current_score`, otherwise the original transform/score are returned unchanged.
     """
     best_name = "unchanged"
     best_transform = current_transform
     best_score = current_score
+    scores: dict[str, float] = {}
+    failures: dict[str, str] = {}
 
     for name, seed_policy in candidates.items():
         try:
             seed = seed_policy.seed_for(t)
             candidate_transform = estimator.estimate(mov, ref, seed=seed)
             candidate_score = score_fn(candidate_transform)
-        except Exception:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
+            failures[name] = f"{type(e).__name__}: {e}"
             continue
+        scores[name] = candidate_score
         if candidate_score is not None and candidate_score > best_score:
             best_name, best_transform, best_score = name, candidate_transform, candidate_score
 
@@ -71,7 +77,13 @@ def repair(
             before_score=current_score,
             after_score=best_score,
             accepted=accepted,
+            failures=failures,
         )
     return RepairResult(
-        transform=best_transform, score=best_score, accepted=accepted, source=best_name
+        transform=best_transform,
+        score=best_score,
+        accepted=accepted,
+        source=best_name,
+        scores=scores,
+        failures=failures,
     )
