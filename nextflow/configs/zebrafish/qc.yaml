@@ -40,13 +40,38 @@ intensity_stats:
 # NO per-channel SNR floor here, deliberately. A floor has to be keyed to this
 # family's channel names and set from a healthy value for them, and inventing
 # either would be a threshold nobody measured — the failure mode the a549 config
-# warns about. What still gates without it: the relative SNR outlier fence below,
-# the tenengrad floor, blank detection, and the intensity_stats trends. Add a
-# {channel: value} `hard_floor` once you have a run to read healthy SNR off.
+# warns about.
+#
+# ⚠ `signal_to_noise` DOES NOT MEASURE the two acquired fluorescence channels on
+# an assembled store: it returns exactly 0.0 on 100% of their slices. Measured
+# over 11 neuromast datasets, 10440 slices per channel per dataset — GFP and
+# mCherry are identically 0.0, while BF (7.7-31.8), Phase3D (11.0-26.8) and the
+# predictions (22-4573) are populated. The tool says why: the wavelet noise
+# estimate needs a non-zero `median(|Laplacian|)`, and registered light-sheet
+# data is background-cleaned. Its recommended substitute, `michelson_contrast`,
+# is degenerate on those same channels (98.4% of slices within 1e-4 of 1.0,
+# IQR ~1e-9) because the contrast ratio saturates wherever background sits at 0.
+# So do NOT add GFP/mCherry SNR floors: there is no signal there to floor.
+# Upstream: czbiohub-sf/imaging-qc-pipeline#239.
+#
+# `pooling_scope: store` is set because a per-position fence cannot fire, but it
+# is NECESSARY AND NOT SUFFICIENT — measured, not assumed. A sample z-score is
+# bounded by (n-1)/sqrt(n), so `n_std: 3.0` is unreachable for n <= 10. The
+# default `pooling_scope: position` fits from ONE position's sampled timepoints
+# (5-10 in a sampled run); store pooling raises n to the position count, which is
+# 8-13 in this family — so 09_05 at n=8 gives a bound of 2.47 and the fence is
+# STILL inert. Re-gating the same metric tables with and without this change
+# produced byte-identical verdicts. Upstream: czbiohub-sf/imaging-qc-pipeline#238.
+#
+# It is kept anyway because an unpooled fence is wrong on its own terms, and
+# because it is the half of the fix that a later valid `hard_floor` needs. What it
+# is NOT is a working SNR gate — see the non-gating note at the bottom of this
+# file before reading any clean SNR verdict as health.
 signal_to_noise:
   granularity: slice
   gate:
     granularity: channel
+    pooling_scope: store
     hard_ceiling: null
     outlier_method: zscore
     outlier_params:
@@ -69,17 +94,34 @@ blank:
 # same pixels, it peaks at Z 31-37 — inside the in-focus band where SNR peaks —
 # and correlates at rho +0.97 to +0.99. It is a focus metric again.
 #
-# ⚠ `hard_floor` below is a NORMALIZED bound and is inert against raw values,
-# which run 179-934 on GFP: it cannot fire. Recalibration is deliberately
-# deferred — the floor is channel-scale dependent (BF, Phase3D and the
-# predictions each sit on their own scale), so it needs reading off healthy runs
-# per channel, like the SNR floors. The relative outlier fence still gates this
-# metric in the meantime.
+# ⚠ `hard_floor` below is a NORMALIZED bound and is inert against raw values:
+# measured per channel on an assembled store, raw tenengrad runs BF 1.4e4-8.3e4,
+# Phase3D 0.019-0.235, predictions 0.002-18.9, fluorescence 0-5.3e3. A single
+# 0.001 floor sits under every channel's healthy minimum, so it fires only on
+# exactly-zero planes, which the `blank` precondition already removes.
+# Recalibration stays deferred — the floor is channel-scale dependent, so it
+# needs reading off healthy runs per channel, like the SNR floors.
+#
+# ⚠ Do NOT set an absolute cross-dataset floor for BF from one run. BF exposure
+# varies ~7x across this family: 08_22 reads mean 277 where the other ten
+# datasets read 1400-2500, all with nz=1.0 and uniform across positions — an
+# acquisition setting, not a defect. A floor read off a bright dataset would
+# flag a healthy dim one wholesale.
+#
+# `granularity: channel` was MISSING and is a genuine defect independent of
+# everything else: without it the gate pools all six channels into ONE fence, and
+# raw tenengrad spans seven orders of magnitude across them (BF ~5e4 against
+# Phase3D ~0.13), so `mean - 3*sigma` lands below every channel's range and the
+# fence cannot fire for any of them. `pooling_scope: store` is added for the same
+# reachability reason as the SNR gate above — and with the same caveat that it is
+# not sufficient at this family's position counts.
 tenengrad:
   threshold: 0.0
   normalize: false
   granularity: slice
   gate:
+    granularity: channel
+    pooling_scope: store
     hard_floor: 0.001
     hard_ceiling: null
     outlier_method: zscore
@@ -118,3 +160,53 @@ report:
     blank: "Blank Detection"
     tenengrad: "Tenengrad"
     intensity_stats: "Intensity Statistics"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WHAT THIS CONFIG ACTUALLY GATES — read before treating a clean run as health.
+#
+# Measured over 11 assembled neuromast datasets (9-13 positions, 6 channels,
+# ~10k slices per channel per dataset): the ONLY gate that fires meaningfully is
+# `failed_blank`. Treat this file as an ACQUISITION-SANITY layer, not a quality
+# verdict.
+#
+# `failed_blank` itself reports two different things, and only the first is a
+# fault:
+#   1. the ragged final timepoint (t = T-1), on the subset of positions whose
+#      acquisition stopped mid-frame — a real, already-known condition;
+#   2. on the fluorescence channels, the empty top of the stack (e.g. Z=107..144)
+#      OUTSIDE the registered valid slab. That block is byte-identical across
+#      every position including beads and moves with the per-timepoint transform,
+#      because registration stores one transform per timepoint and none per
+#      position. It is CANVAS GEOMETRY, not data loss. Cropping the assembled
+#      store to the valid slab is a prerequisite for this gate to be readable.
+#
+# Why the two threshold gates do not discriminate here, all measured rather than
+# assumed:
+#   - SNR is identically 0.0 on the acquired fluorescence channels (see above), so
+#     there is nothing to fence.
+#   - z-fences are unreachable at this family's position counts (see above).
+#   - a relative quantile fence is not a substitute: switching to
+#     `lower_quantile: q 5.0` flags the bottom 5% unconditionally, and produced
+#     the SAME flag set on a known-degraded dataset and on the corpus's clean
+#     reference — no discriminative power, by construction.
+#   - an absolute floor cannot be shared across this family: BF exposure varies
+#     ~7x between datasets (see the tenengrad note).
+#   - and with the fixes above applied, a fence that DOES become reachable flags
+#     the clean reference first: on 10_27 (12 positions, bound 3.18 > n_std 3.0,
+#     zero flags from an independent VS/intensity scan) the store-pooled gates
+#     fire `low_signal_to_noise__phase3d`, `low_tenengrad__phase3d` and
+#     `low_tenengrad__mcherry`. A relative-only fence has no way to express
+#     "healthy": it flags the bottom of whatever population it is given. Absolute
+#     per-channel floors, read off healthy runs, are what would make these gates
+#     mean something — which is why the floors are deferred rather than invented.
+#   - raw tenengrad is intensity-confounded, so it is not a usable focus proxy:
+#     08_29, whose every embryo FOV is annotated excluded for blur/motion, scores
+#     HIGHER (BF 2355) than the clean reference 10_27 (1429), because gradient
+#     energy scales with brightness.
+#
+# Consequence for interpretation: this config is blind to the defocus, blur,
+# sample motion and misregistration that actually drive human exclusion of these
+# FOVs. Checked against 106 hand-annotated embryo FOVs (26 excluded), its flags
+# show no significant relationship to the human calls (AUC 0.55, p = 0.22). The
+# per-FOV annotations under `dataset_curation/annotations/` remain authoritative.
+# ─────────────────────────────────────────────────────────────────────────────
