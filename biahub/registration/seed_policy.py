@@ -18,7 +18,7 @@ class SeedPolicy(Protocol):
     def seed_for(self, t: int) -> Transform: ...
 
 
-class ConfigSeed:
+class FixedSeed:
     """A fixed seed for every t -- today's default.
 
     Also what `optimize-registration`'s "refine an existing transform" case is: pass the
@@ -33,7 +33,7 @@ class ConfigSeed:
         return self.transform
 
 
-class PreviousT:
+class PreviousSeed:
     """Propagation: seed t from the last accepted transform.
 
     Falls back to another policy for t=0 or whenever no previous result exists yet.

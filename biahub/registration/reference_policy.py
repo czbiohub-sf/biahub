@@ -43,7 +43,7 @@ class FixedFrame:
         return np.asarray(mov)[self.t_ref]
 
 
-class RollingPrevious:
+class PreviousFrame:
     """Stabilization `t_reference: "previous"`: t compares against t-1 (t=0 against itself)."""
 
     def reference_for(self, mov: ArrayLike, t: int) -> ArrayLike:
