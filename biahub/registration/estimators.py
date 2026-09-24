@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import tempfile
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
 
@@ -24,7 +25,11 @@ from biahub.characterize_psf import detect_peaks
 from biahub.core.transform import Transform
 from biahub.registration.ants import DEFAULT_ANTS_KWARGS
 from biahub.registration.ants import estimate as ants_estimate
-from biahub.registration.beads import matches_from_beads, transform_from_matches
+from biahub.registration.beads import (
+    matches_from_beads,
+    score_transform,
+    transform_from_matches,
+)
 from biahub.registration.manual import user_assisted_registration
 from biahub.registration.phase_cross_correlation import (
     phase_cross_corr,
@@ -76,20 +81,25 @@ class BeadNodeDetector:
         )
 
 
+class EstimationError(RuntimeError):
+    """`estimate()` could not produce a transform (too few nodes or matches, degenerate fit)."""
+
+
+ScoreFn = Callable[[Transform, np.ndarray, np.ndarray], float]
+
+
 class NodeGraphEstimator:
     """TransformEstimator over matched point correspondences.
 
     Composes a `NodeDetector` (beads today; segmentation centroids or other node
-    sources later) with the existing graph-matching + transform-fitting steps.
+    sources later) with graph matching and transform fitting.
 
-    `seed`, when given, pre-warps `mov` (via `Transform.apply`, so it uses the same
-    already-verified forward/pull inversion as everything else) into `ref`'s frame
-    before node detection -- point matching has a limited capture range, so this
-    extends how large a drift it can recover from. The residual correction fit in the
-    warped frame is composed with the seed via `correction @ seed`
-    (`Transform.compose`'s own documented contract: "apply `other` first, then
-    `self`" -- matches `composed.apply_points(p) == self.apply_points(other.apply_points(p))`,
-    i.e. this seed, then this correction).
+    One pass warps `mov` by the current guess (`Transform.apply`), detects nodes in the
+    warped frame, matches, fits the residual correction and composes it back
+    (`correction @ seed`: seed first, then correction). Nodes are detected in the warped
+    frame, so each pass sees a better-aligned image than the last; `iterations > 1` with
+    a `score_fn` repeats the pass from the previous result and returns the best-scoring
+    transform (never a later, worse one). Without a `score_fn` the last pass is returned.
     """
 
     def __init__(
@@ -98,27 +108,42 @@ class NodeGraphEstimator:
         ref_detector: NodeDetector,
         beads_match_settings: BeadsMatchSettings,
         affine_transform_settings: AffineTransformSettings,
+        iterations: int = 1,
+        score_fn: ScoreFn | None = None,
     ):
+        if iterations < 1:
+            raise ValueError(f"iterations must be >= 1, got {iterations}")
         self.mov_detector = mov_detector
         self.ref_detector = ref_detector
         self.beads_match_settings = beads_match_settings
         self.affine_transform_settings = affine_transform_settings
+        self.iterations = iterations
+        self.score_fn = score_fn
 
     @classmethod
     def from_beads_settings(
         cls,
         beads_match_settings: BeadsMatchSettings,
         affine_transform_settings: AffineTransformSettings,
+        iterations: int | None = None,
     ) -> NodeGraphEstimator:
-        """Build the estimator using today's beads settings shape.
+        """Bead-peak detection on both sides, scored by bead overlap.
 
-        Separate source/target peak-detection settings, both bead-based.
+        `iterations` defaults to `beads_match_settings.qc_settings.iterations`.
         """
         return cls(
             mov_detector=BeadNodeDetector(beads_match_settings.source_peaks_settings),
             ref_detector=BeadNodeDetector(beads_match_settings.target_peaks_settings),
             beads_match_settings=beads_match_settings,
             affine_transform_settings=affine_transform_settings,
+            iterations=(
+                beads_match_settings.qc_settings.iterations
+                if iterations is None
+                else iterations
+            ),
+            score_fn=lambda transform, mov, ref: score_transform(
+                transform, mov, ref, beads_match_settings
+            ),
         )
 
     def estimate(
@@ -126,10 +151,43 @@ class NodeGraphEstimator:
     ) -> Transform:
         mov = np.asarray(mov)
         ref = np.asarray(ref)
+        current = seed
+        best: Transform | None = None
+        best_score = -np.inf
+        for _ in range(self.iterations):
+            current = self._single_pass(mov, ref, current)
+            if self.score_fn is None:
+                best = current
+                continue
+            score = self.score_fn(current, mov, ref)
+            if np.isfinite(score) and score > best_score:
+                best, best_score = current, score
+        if best is None:
+            raise EstimationError(
+                f"no finite score in {self.iterations} iteration(s): nodes not detectable "
+                "after warping"
+            )
+        return best
+
+    def _single_pass(
+        self, mov: np.ndarray, ref: np.ndarray, seed: Transform | None
+    ) -> Transform:
         mov_for_detection = seed.apply(mov, reference=ref) if seed is not None else mov
-        mov_nodes = self.mov_detector.detect(mov_for_detection)
-        ref_nodes = self.ref_detector.detect(ref)
-        matches = matches_from_beads(mov_nodes, ref_nodes, self.beads_match_settings)
+        mov_nodes = np.asarray(self.mov_detector.detect(mov_for_detection))
+        ref_nodes = np.asarray(self.ref_detector.detect(ref))
+        if len(mov_nodes) < 3 or len(ref_nodes) < 3:
+            raise EstimationError(
+                f"too few nodes to fit a transform: {len(mov_nodes)} moving, "
+                f"{len(ref_nodes)} reference (need >= 3 each)"
+            )
+        matches = np.asarray(
+            matches_from_beads(mov_nodes, ref_nodes, self.beads_match_settings)
+        )
+        if matches.ndim != 2 or len(matches) < 3:
+            raise EstimationError(
+                f"too few matches to fit a transform: {len(matches)} from "
+                f"{len(mov_nodes)} x {len(ref_nodes)} nodes (need >= 3)"
+            )
         correction, _inv_correction = transform_from_matches(
             matches,
             mov_nodes,
@@ -137,6 +195,10 @@ class NodeGraphEstimator:
             self.affine_transform_settings,
             ndim=mov.ndim,
         )
+        if not np.all(np.isfinite(correction.matrix)):
+            raise EstimationError(
+                f"degenerate fit from {len(matches)} matches (non-finite matrix)"
+            )
         return correction @ seed if seed is not None else correction
 
 
