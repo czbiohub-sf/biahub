@@ -2,6 +2,7 @@ import numpy as np
 
 from scipy.ndimage import shift as ndi_shift
 
+from biahub.core.transform import Transform
 from biahub.registration.beads import matches_from_beads, transform_from_matches
 from biahub.registration.estimators import (
     AntsEstimator,
@@ -122,6 +123,48 @@ def _synthetic_blob_volume(rng, shape, n_blobs=15, sigma=3.0, noise_std=5.0):
 
 def test_ants_estimator_satisfies_protocol():
     assert isinstance(AntsEstimator(), TransformEstimator)
+
+
+def test_ants_estimator_seed_is_mechanically_used():
+    """Regression test: seeds must be inverted (forward -> pull) before being handed to
+    ants.registration's initial_transform, and passing a seed must not silently fall
+    back to ants.registration's own default (SyN, deformable -- Transform.from_ants
+    can't parse it), which happened once already when ants_kwargs was built as `{}`
+    instead of preserving DEFAULT_ANTS_KWARGS.
+
+    With near-zero optimizer iterations, the result should be (near-)indistinguishable
+    from the seed itself, per the interactive verification this is based on.
+    """
+    rng = np.random.default_rng(10)
+    shape = (24, 48, 48)
+    ref = _synthetic_blob_volume(rng, shape)
+    mov = ndi_shift(ref, shift=(2, -3, 4), order=1, mode="constant", cval=0.0)
+
+    huge_seed = Transform.from_translation([15.0, -10.0, 8.0])  # nowhere near the truth
+    estimator = AntsEstimator(
+        ants_kwargs={
+            "type_of_transform": "Similarity",
+            "aff_iterations": (1, 1, 1),
+            "aff_shrink_factors": (6, 3, 1),
+            "aff_smoothing_sigmas": (2, 1, 0),
+        }
+    )
+    result = estimator.estimate(mov, ref, seed=huge_seed)
+    # 1 iteration/level still moves slightly -- what matters is the result tracks the
+    # seed (~15, ~-10, ~8), not the true answer (-2, 3, -4).
+    np.testing.assert_allclose(result.matrix[:3, 3], huge_seed.matrix[:3, 3], atol=1.0)
+
+
+def test_ants_estimator_with_seed_still_recovers_translation():
+    rng = np.random.default_rng(5)
+    shape = (24, 48, 48)
+    ref = _synthetic_blob_volume(rng, shape)
+    applied_zyx = (2, -3, 4)
+    mov = ndi_shift(ref, shift=applied_zyx, order=1, mode="constant", cval=0.0)
+
+    close_seed = Transform.from_translation([-a for a in applied_zyx])
+    transform = AntsEstimator().estimate(mov, ref, seed=close_seed)
+    np.testing.assert_allclose(transform.matrix[:3, 3], [-a for a in applied_zyx], atol=0.5)
 
 
 def test_ants_estimator_recovers_known_translation_and_warps_mov_onto_ref():

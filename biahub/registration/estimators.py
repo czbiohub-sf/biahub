@@ -8,8 +8,13 @@ estimator-independent concerns (see `biahub.core.transform.Transform.apply`).
 
 from __future__ import annotations
 
+import contextlib
+import tempfile
+
+from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
 
+import ants
 import numpy as np
 
 from numpy.typing import ArrayLike
@@ -17,6 +22,7 @@ from pystackreg import StackReg
 
 from biahub.characterize_psf import detect_peaks
 from biahub.core.transform import Transform
+from biahub.registration.ants import DEFAULT_ANTS_KWARGS
 from biahub.registration.ants import estimate as ants_estimate
 from biahub.registration.beads import matches_from_beads, transform_from_matches
 from biahub.registration.manual import user_assisted_registration
@@ -34,9 +40,17 @@ from biahub.settings import (
 
 @runtime_checkable
 class TransformEstimator(Protocol):
-    """Computes the Transform that maps `mov` onto `ref`."""
+    """Computes the Transform that maps `mov` onto `ref`.
 
-    def estimate(self, mov: ArrayLike, ref: ArrayLike) -> Transform: ...
+    `seed`, when given, is an initial guess in this same contract's direction (true
+    forward, moving -> reference) -- e.g. a previous timepoint's accepted result via
+    `SeedPolicy`. Estimators that don't use a seed (correlation-based methods: PCC,
+    stackreg) ignore it.
+    """
+
+    def estimate(
+        self, mov: ArrayLike, ref: ArrayLike, seed: Transform | None = None
+    ) -> Transform: ...
 
 
 @runtime_checkable
@@ -98,7 +112,12 @@ class NodeGraphEstimator:
             affine_transform_settings=affine_transform_settings,
         )
 
-    def estimate(self, mov: ArrayLike, ref: ArrayLike) -> Transform:
+    def estimate(
+        self, mov: ArrayLike, ref: ArrayLike, seed: Transform | None = None
+    ) -> Transform:
+        # TODO: seed is not yet used -- beads seeding pre-warps mov before peak
+        # detection and composes the seed back in, which needs its own direction
+        # verification (like AntsEstimator's) before wiring up. Tracked in #349/#350.
         mov = np.asarray(mov)
         ref = np.asarray(ref)
         mov_nodes = self.mov_detector.detect(mov)
@@ -140,7 +159,10 @@ class PCCEstimator:
             maximum_shift=settings.maximum_shift,
         )
 
-    def estimate(self, mov: ArrayLike, ref: ArrayLike) -> Transform:
+    def estimate(
+        self, mov: ArrayLike, ref: ArrayLike, seed: Transform | None = None
+    ) -> Transform:
+        # PCC is correlation-based -- it finds the peak directly, no seed needed.
         mov = np.asarray(mov).astype(np.float32)
         ref = np.asarray(ref).astype(np.float32)
         if self.function_type == "custom_padding":
@@ -163,18 +185,45 @@ class AntsEstimator:
     a separately-inverted file for a single affine/similarity stage, so it reads back
     nearly identical to `fwd_transform`. Invert `fwd_transform` ourselves so this
     satisfies the TransformEstimator contract (true forward, moving -> reference).
+
+    `seed`, when given, is passed to `ants.registration` via its native
+    `initial_transform` (which only accepts on-disk transform files, hence the temp
+    file). Confirmed empirically: `initial_transform` must be in the reference ->
+    moving direction (the same "pull" direction as this class's own output before the
+    final invert) -- feeding it a bare, un-inverted forward seed silently steers the
+    optimizer toward the wrong answer instead of erroring. Also confirmed the returned
+    `fwdtransforms` is already the seed and correction fully composed (not just the
+    residual correction): with near-zero optimizer iterations, the output is
+    indistinguishable from the seed itself.
     """
 
     def __init__(self, ants_kwargs: dict | None = None, verbose: bool = False):
         self.ants_kwargs = ants_kwargs
         self.verbose = verbose
 
-    def estimate(self, mov: ArrayLike, ref: ArrayLike) -> Transform:
+    def estimate(
+        self, mov: ArrayLike, ref: ArrayLike, seed: Transform | None = None
+    ) -> Transform:
         mov = np.asarray(mov)
         ref = np.asarray(ref)
-        pull_transform, _unused = ants_estimate(
-            ref=ref, mov=mov, verbose=self.verbose, ants_kwargs=self.ants_kwargs
-        )
+        ants_kwargs = self.ants_kwargs
+
+        with contextlib.ExitStack() as stack:
+            if seed is not None:
+                # Once we set initial_transform, ants.py:estimate() no longer applies
+                # its own None-triggered defaults -- carry them over explicitly so this
+                # still runs an invertible affine/similarity fit, not ants.registration's
+                # own default (SyN, a deformable warp Transform.from_ants can't parse).
+                ants_kwargs = dict(ants_kwargs) if ants_kwargs else dict(DEFAULT_ANTS_KWARGS)
+                tmp_dir = stack.enter_context(tempfile.TemporaryDirectory())
+                seed_path = str(Path(tmp_dir) / "seed.mat")
+                ants.write_transform(seed.invert().to_ants(), seed_path)
+                ants_kwargs["initial_transform"] = [seed_path]
+
+            pull_transform, _unused = ants_estimate(
+                ref=ref, mov=mov, verbose=self.verbose, ants_kwargs=ants_kwargs
+            )
+
         return pull_transform.invert()
 
 
@@ -207,7 +256,11 @@ class ManualEstimator:
         self.pre_affine_90degree_rotation = pre_affine_90degree_rotation
         self.pre_affine_fliplr = pre_affine_fliplr
 
-    def estimate(self, mov: ArrayLike, ref: ArrayLike) -> Transform:
+    def estimate(
+        self, mov: ArrayLike, ref: ArrayLike, seed: Transform | None = None
+    ) -> Transform:
+        # No seed support -- napari display could pre-align with it, but that's not
+        # implemented, and the point-fit itself doesn't take an initial guess.
         (pull_matrix,) = user_assisted_registration(
             source_channel_volume=np.asarray(mov),
             source_channel_name=self.source_channel_name,
@@ -238,7 +291,10 @@ class StackregEstimator:
     def __init__(self, transformation: int = StackReg.TRANSLATION):
         self.transformation = transformation
 
-    def estimate(self, mov: ArrayLike, ref: ArrayLike) -> Transform:
+    def estimate(
+        self, mov: ArrayLike, ref: ArrayLike, seed: Transform | None = None
+    ) -> Transform:
+        # pystackreg's register() takes no initial guess -- correlation-based, like PCC.
         mov = np.asarray(mov)
         ref = np.asarray(ref)
         sr = StackReg(self.transformation)
