@@ -1068,4 +1068,29 @@ def estimate_transform_series(
     (output_dir / "estimate_transform_report.json").write_text(
         json.dumps(_report(result, time_indices), indent=2)
     )
-    return result, time_indices, _one_transform_per_timepoint(result, time_indices, seed)
+    transforms = _one_transform_per_timepoint(result, time_indices, seed)
+    if settings.reference == "previous":
+        transforms = chain_to_first_frame(transforms, time_indices)
+    return result, time_indices, transforms
+
+
+def chain_to_first_frame(
+    transforms: list[Transform], time_indices: list[int]
+) -> list[Transform]:
+    """Compose t -> t-1 transforms into t -> first-frame transforms.
+
+    `reference: previous` estimates each timepoint against the one before it, which is
+    what makes the estimate robust on slowly drifting data, but apply-transform puts
+    every timepoint on one grid, so the file must hold the cumulative transform:
+    F_t = F_{t-1} @ (t -> t-1). That needs every link, hence contiguous timepoints.
+    """
+    if list(time_indices) != list(range(time_indices[0], time_indices[-1] + 1)):
+        raise click.UsageError(
+            "reference 'previous' needs contiguous time_indices (each timepoint is chained "
+            f"through the one before it); got {time_indices}"
+        )
+    chained, cumulative = [], Transform.identity()
+    for transform in transforms:
+        cumulative = cumulative @ transform
+        chained.append(cumulative)
+    return chained

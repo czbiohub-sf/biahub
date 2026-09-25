@@ -232,7 +232,9 @@ def drifting_plate(tmp_path):
 
 @pytest.mark.parametrize(
     ("t_reference", "expected_pull_factor"),
-    [("first", [0, 1, 2]), ("previous", [0, 1, 1])],
+    # Both references must yield the transform onto the first frame's grid: the
+    # per-pair 'previous' estimates are chained.
+    [("first", [0, 1, 2]), ("previous", [0, 1, 2])],
 )
 def test_estimate_transform_stabilizes_a_channel_against_itself(
     drifting_plate, tmp_path, t_reference, expected_pull_factor
@@ -416,3 +418,9 @@ def test_estimate_transform_focus_finding_stabilizes_z_and_yx_against_the_first_
         np.testing.assert_allclose(
             np.asarray(matrix)[:3, 3], [-1 * t, -2 * t, 3 * t], atol=0.5
         )
+
+
+def test_previous_reference_needs_contiguous_timepoints(drifting_plate, tmp_path):
+    config = _write_config(tmp_path, source="GFP", reference="previous", time_indices=[0, 2])
+    with pytest.raises(Exception, match="contiguous"):
+        _run(drifting_plate, config, tmp_path / "out" / "transforms.yml")
