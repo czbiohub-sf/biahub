@@ -325,7 +325,7 @@ class Transform:
         order: int = 1,
         mode: str = "constant",
         cval: float = 0.0,
-        backend: Backend = "scipy",
+        backend: Backend = "ants",
     ) -> NDArray:
         """
         Apply transform to align moving image with reference space.
@@ -337,13 +337,16 @@ class Transform:
         reference : NDArray, optional
             Reference image defining output space. If None, uses moving image shape.
         order : int, default=1
-            Interpolation order (0=nearest, 1=linear, 3=cubic).
+            Interpolation order (0=nearest, 1=linear, 3=cubic). scipy backend only.
         mode : str, default='constant'
-            How to handle boundaries ('constant', 'edge', 'reflect', 'wrap').
+            How to handle boundaries ('constant', 'edge', 'reflect', 'wrap'). scipy only.
         cval : float, default=0.0
-            Fill value for constant mode.
-        backend : {'scipy', 'ants'}, default='scipy'
-            Backend to use for transformation.
+            Fill value for constant mode. scipy backend only.
+        backend : {'scipy', 'ants'}, default='ants'
+            Resampler. ANTs (linear interpolation) is the default because it is what the
+            registration pipeline has always warped with, so re-detected bead positions
+            and overlap scores stay comparable across the codebase. ANTs handles 3D only;
+            2D transforms fall back to scipy.
 
         Returns
         -------
@@ -364,6 +367,8 @@ class Transform:
         # Determine output shape
         output_shape = reference.shape if reference is not None else moving.shape
 
+        if backend == "ants" and self._ndim != 3:
+            backend = "scipy"
         if backend == "scipy":
             return self._apply_scipy(moving, output_shape, order, mode, cval)
         elif backend == "ants":
@@ -415,8 +420,13 @@ class Transform:
         else:
             reference_ants = moving_ants
 
-        # Convert transform to ANTs
-        transform_ants = self.to_ants()
+        # ants.ANTsTransform.apply_to_image does 'pull' (backward) resampling like
+        # scipy.ndimage.affine_transform: it needs the inverse of this forward
+        # (moving -> reference) transform, the same inversion _apply_scipy does
+        # explicitly. ants.apply_transforms' own `whichtoinvert` defaults to True for a
+        # matrix transform for the same reason -- apply_to_image is the lower-level call
+        # and does not invert for us.
+        transform_ants = self.invert().to_ants()
 
         # Apply
         result_ants = transform_ants.apply_to_image(moving_ants, reference=reference_ants)

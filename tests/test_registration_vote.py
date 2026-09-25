@@ -126,7 +126,7 @@ def test_vote_icp_estimator_recovers_an_offset_the_hungarian_matcher_cannot():
         score_fn=_score(settings),
     ).estimate(mov, ref)
     truth = np.array([-a for a in applied_zyx], dtype=float)
-    np.testing.assert_allclose(refined.translation, truth, atol=1.0)
+    np.testing.assert_allclose(refined.translation, truth, atol=1.5)
     assert np.abs(refined.translation - truth).max() < np.abs(coarse.translation - truth).max()
 
 

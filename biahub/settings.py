@@ -244,6 +244,10 @@ class QCBeadsRegistrationSettings(MyBaseModel):
     iterations: int = 2
     score_threshold: float = 0.40
     score_centroid_mask_radius: int = 6
+    # What the estimator, flagging and repair optimise. "overlap" is the bead-count ratio
+    # production runs on (comparable with existing quality scores); "residual" weights it by
+    # how tightly matched beads land (continuous); "mutual_information" needs no beads.
+    score_metric: Literal["overlap", "residual", "mutual_information"] = "overlap"
 
 
 class BeadsMatchSettings(MyBaseModel):
@@ -355,6 +359,10 @@ class AntsRegistrationSettings(MyBaseModel):
     crop: bool = False
     ref_mask_radius: float | None = None
     clip: bool = False
+    # "correlation": Pearson on intensities (Sobel magnitudes when sobel_filter is on);
+    # "mutual_information": normalized mutual information, for channels whose intensities
+    # do not correlate (phase vs fluorescence).
+    score_metric: Literal["correlation", "mutual_information"] = "correlation"
 
     @field_validator("ref_mask_radius")
     @classmethod

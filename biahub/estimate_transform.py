@@ -35,15 +35,16 @@ from biahub.cli.parsing import (
 )
 from biahub.core.transform import Transform
 from biahub.registration.ants import correlation_score
-from biahub.registration.beads import score_transform
 from biahub.registration.estimators import (
     AntsEstimator,
     NodeGraphEstimator,
     ScoreFn,
     TransformEstimator,
+    beads_score_fn,
 )
 from biahub.registration.fallback import RepairResult, neighbour_consensus_config_candidates
 from biahub.registration.legacy import forward_from_legacy_pull, legacy_pull_from_forward
+from biahub.registration.metrics import bead_alignment_metrics, normalized_mutual_information
 from biahub.registration.orchestrator import (
     SeriesResult,
     estimate_series,
@@ -110,16 +111,16 @@ def _engine(
             beads_match_settings, affine_transform_settings
         )
 
-        def score_fn(transform: Transform, mov_t: np.ndarray, ref_t: np.ndarray) -> float:
-            return score_transform(transform, mov_t, ref_t, beads_match_settings)
-
-        return estimator, score_fn, config_seed
+        return estimator, beads_score_fn(beads_match_settings), config_seed
 
     if settings.estimation_method == "ants":
         ants_settings = settings.ants_registration_settings
         estimator = AntsEstimator.from_settings(
             ants_settings, affine_transform_settings, verbose=settings.verbose
         )
+
+        if ants_settings.score_metric == "mutual_information":
+            return estimator, normalized_mutual_information, config_seed
 
         def score_fn(transform: Transform, mov_t: np.ndarray, ref_t: np.ndarray) -> float:
             return correlation_score(
@@ -166,10 +167,22 @@ def _estimate_timepoint_job(
         "score": _finite_or_none(result.scores.get(t)),
         "error": result.errors.get(t),
         "arm": getattr(estimator, "last_winner", None),
+        "metrics": _bead_metrics(settings, result, t, mov, ref, reference_kind),
     }
     record_path.parent.mkdir(parents=True, exist_ok=True)
     record_path.write_text(json.dumps(record))
     return record
+
+
+def _bead_metrics(settings, result, t, mov, ref, reference_kind) -> dict | None:
+    """Continuous bead residuals next to the score, for beads methods with a transform."""
+    if settings.estimation_method != "beads" or t not in result.transforms:
+        return None
+    ref_t = np.asarray(_reference_policy(reference_kind, ref).reference_for(mov, t))
+    metrics = bead_alignment_metrics(
+        result.transforms[t], np.asarray(mov[t]), ref_t, settings.beads_match_settings
+    )
+    return None if metrics is None else metrics.to_dict()
 
 
 def _load_series(

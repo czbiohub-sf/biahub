@@ -211,7 +211,9 @@ def test_ants_settings_defaults_match_preprocess_czyx():
 
     settings = AntsRegistrationSettings()
     params = inspect.signature(preprocess_czyx).parameters
-    for field in AntsRegistrationSettings.model_fields:
+    # score_metric configures how a result is judged, not how volumes are preprocessed.
+    preprocess_fields = set(AntsRegistrationSettings.model_fields) - {"score_metric"}
+    for field in preprocess_fields:
         assert field in params, f"{field} is not a preprocess_czyx parameter"
         assert getattr(settings, field) == params[field].default, (
             f"default mismatch for {field}: settings={getattr(settings, field)} "
