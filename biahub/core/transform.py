@@ -228,6 +228,20 @@ class Transform:
 
     # ==================== Algebraic Operations ====================
 
+    @classmethod
+    def from_legacy_pull(cls, matrix, transform_type: TransformType = "affine") -> Transform:
+        """Forward Transform from a legacy pull-direction (reference -> moving) matrix.
+
+        Every transform the legacy pipeline stored (`approx_transform`,
+        `affine_transform_zyx*`, `ants.estimate` results) is pull-direction; this is the
+        one place that becomes an engine (forward) Transform.
+        """
+        return cls(np.asarray(matrix, dtype=float), transform_type=transform_type).invert()
+
+    def to_legacy_pull(self) -> list[list[float]]:
+        """Legacy pull-direction matrix (nested list, YAML-ready) from this forward Transform."""
+        return self.invert().to_list()
+
     def invert(self) -> Transform:
         """
         Return the inverse transform.
