@@ -3,7 +3,6 @@ import re
 
 from pathlib import Path
 
-import numpy as np
 import pytest
 import yaml
 
@@ -13,16 +12,13 @@ from biahub.settings import (
     CharacterizeSettings,
     ConcatenateSettings,
     DeskewSettings,
-    EstimateRegistrationSettings,
-    EstimateStabilizationSettings,
     EstimateTransformSettings,
     FlatFieldCorrectionSettings,
     ProcessingImportFuncSettings,
-    RegistrationSettings,
     SegmentationSettings,
-    StabilizationSettings,
     StitchSettings,
     TrackingSettings,
+    TransformSettings,
 )
 
 settings_files_dir = (Path(__file__) / "../../settings").resolve()
@@ -33,29 +29,18 @@ example_settings_params = [
     ("example_concatenate_settings_organelle_dynamics.yml", ConcatenateSettings),
     ("example_concatenate_settings.yml", ConcatenateSettings),
     ("example_deskew_settings.yml", DeskewSettings),
-    ("example_estimate_registration_settings_ants.yml", EstimateRegistrationSettings),
-    ("example_estimate_registration_settings_beads.yml", EstimateRegistrationSettings),
-    ("example_estimate_registration_settings_manual.yml", EstimateRegistrationSettings),
-    ("example_estimate_registration_settings.yml", EstimateRegistrationSettings),
     ("example_estimate_transform_settings.yml", EstimateTransformSettings),
+    ("example_estimate_transform_settings_ants.yml", EstimateTransformSettings),
+    ("example_estimate_transform_settings_manual.yml", EstimateTransformSettings),
+    ("example_estimate_transform_settings_stabilization_pcc.yml", EstimateTransformSettings),
     (
-        "example_estimate_stabilization_settings_xy_focus-finding.yml",
-        EstimateStabilizationSettings,
+        "example_estimate_transform_settings_stabilization_focus_finding.yml",
+        EstimateTransformSettings,
     ),
-    ("example_estimate_stabilization_settings_xyz_beads.yml", EstimateStabilizationSettings),
-    (
-        "example_estimate_stabilization_settings_xyz_focus-finding.yml",
-        EstimateStabilizationSettings,
-    ),
-    ("example_estimate_stabilization_settings_xyz_pcc.yml", EstimateStabilizationSettings),
-    (
-        "example_estimate_stabilization_settings_z_focus-finding.yml",
-        EstimateStabilizationSettings,
-    ),
+    ("example_transform_settings.yml", TransformSettings),
+    ("example_transform_settings_stabilization.yml", TransformSettings),
     ("example_process_with_config_settings.yml", ProcessingImportFuncSettings),
-    ("example_registration_settings.yml", RegistrationSettings),
     ("example_segmentation_settings.yml", SegmentationSettings),
-    ("example_stabilize_timelapse_settings.yml", StabilizationSettings),
     ("example_stitch_settings.yml", StitchSettings),
     ("example_track_settings.yml", TrackingSettings),
     ("example_flat_field_settings.yml", FlatFieldCorrectionSettings),
@@ -136,50 +121,6 @@ def test_deskew_settings():
     # Test px_to_scan_ratio logic
     with pytest.raises(ValueError):
         DeskewSettings(pixel_size_um=0.116, ls_angle_deg=36, scan_step_um=None)
-
-
-def test_register_settings():
-    # Test extra parameter
-    with pytest.raises(ValidationError):
-        RegistrationSettings(
-            source_channel_index=0,
-            target_channel_index=0,
-            affine_transform_zyx=np.identity(4).tolist(),
-            typo_param="test",
-        )
-
-    # Test wrong output shape size
-    with pytest.raises(ValidationError):
-        RegistrationSettings(
-            source_channel_index=0,
-            target_channel_index=0,
-            affine_transform_zyx=np.identity(4).tolist(),
-            typo_param="test",
-        )
-
-    # Test wrong matrix shape
-    with pytest.raises(ValidationError):
-        RegistrationSettings(
-            source_channel_index=0,
-            target_channel_index=0,
-            affine_transform_zyx=np.identity(5).tolist(),
-            typo_param="test",
-        )
-
-
-def test_example_register_settings(example_register_settings):
-    _, settings = example_register_settings
-    RegistrationSettings(**settings)
-
-
-def test_example_stabilize_timelapse_settings(example_stabilize_timelapse_settings):
-    _, settings = example_stabilize_timelapse_settings
-    StabilizationSettings(**settings)
-
-
-def test_example_estimate_registration_settings(example_estimate_registration_settings):
-    _, settings = example_estimate_registration_settings
-    EstimateRegistrationSettings(**settings)
 
 
 def test_ants_settings_are_all_consumed_by_the_engine():

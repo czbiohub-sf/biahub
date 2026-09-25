@@ -127,12 +127,3 @@ def test_apply_transform_registers_source_channels_onto_a_target_store(
     np.testing.assert_allclose(
         result[:, 2], data[:, 0], atol=1e-2
     )  # identity-transformed source channel
-
-
-def test_apply_transform_accepts_legacy_register_configs(structured_plate, tmp_path):
-    position, _data = structured_plate
-    output = tmp_path / "out.zarr"
-    apply_transform(
-        [position], "settings/example_registration_settings.yml", output, cluster="debug"
-    )
-    assert (output / "A" / "1" / "0").exists()

@@ -305,29 +305,6 @@ class FocusSettings(MyBaseModel):
         return v
 
 
-class FocusFindingSettings(MyBaseModel):
-    average_across_wells: bool = False
-    average_across_wells_method: Literal["mean", "median"] = "mean"
-    skip_beads_fov: str = "0"
-    center_crop_xy: list[int, int] = [800, 800]
-
-
-class StackRegSettings(MyBaseModel):
-    center_crop_xy: list[int, int] = [800, 800]
-    skip_beads_fov: str = "0"
-    focus_finding_settings: FocusFindingSettings | None = Field(
-        default_factory=FocusFindingSettings
-    )
-    t_reference: Literal["first", "previous"] = "first"
-
-
-class EvalTransformSettings(MyBaseModel):
-    validation_window_size: int = 10
-    validation_tolerance: float = 1000.0
-    interpolation_window_size: int = 3
-    interpolation_type: Literal["linear", "cubic"] = "linear"
-
-
 class AffineTransformSettings(MyBaseModel):
     t_reference: Literal["first", "previous"] = "first"
     transform_type: Literal["euclidean", "similarity", "affine"] = "euclidean"
@@ -397,79 +374,6 @@ class ManualRegistrationSettings(MyBaseModel):
     affine_fliplr: bool = False
 
 
-class EstimateRegistrationSettings(MyBaseModel):
-    target_channel_name: str
-    source_channel_name: str
-    estimation_method: Literal["manual", "beads", "ants", "phase-cross-corr"] = "manual"
-    beads_match_settings: BeadsMatchSettings | None = None
-    phase_cross_corr_settings: PhaseCrossCorrSettings | None = None
-    focus_finding_settings: FocusFindingSettings | None = None
-    affine_transform_settings: AffineTransformSettings = Field(
-        default_factory=AffineTransformSettings
-    )
-    eval_transform_settings: EvalTransformSettings | None = None
-    ants_registration_settings: AntsRegistrationSettings | None = None
-    manual_registration_settings: ManualRegistrationSettings | None = None
-    time_indices: NonNegativeInt | list[NonNegativeInt] | Literal["all"] = "all"
-    verbose: bool = False
-
-    @model_validator(mode="after")
-    def set_defaults_and_validate(self) -> "EstimateRegistrationSettings":
-        if self.estimation_method == "manual" and self.manual_registration_settings is None:
-            self.manual_registration_settings = ManualRegistrationSettings()
-        elif self.estimation_method == "beads" and self.beads_match_settings is None:
-            self.beads_match_settings = BeadsMatchSettings()
-        elif self.estimation_method == "ants" and self.ants_registration_settings is None:
-            self.ants_registration_settings = AntsRegistrationSettings()
-        elif (
-            self.estimation_method == "phase-cross-corr"
-            and self.phase_cross_corr_settings is None
-        ):
-            self.phase_cross_corr_settings = PhaseCrossCorrSettings()
-        return self
-
-
-class EstimateStabilizationSettings(MyBaseModel):
-    stabilization_estimation_channel: str
-    stabilization_channels: list
-    stabilization_type: Literal["z", "xy", "xyz"]
-    stabilization_method: Literal["beads", "phase-cross-corr", "focus-finding"] = (
-        "focus-finding"
-    )
-    beads_match_settings: BeadsMatchSettings | None = None
-    phase_cross_corr_settings: PhaseCrossCorrSettings | None = None
-    stack_reg_settings: StackRegSettings | None = None
-    focus_finding_settings: FocusFindingSettings | None = None
-    affine_transform_settings: AffineTransformSettings = Field(
-        default_factory=AffineTransformSettings
-    )
-    eval_transform_settings: EvalTransformSettings | None = None
-    verbose: bool = False
-
-    @model_validator(mode="after")
-    def set_defaults_and_validate(self) -> "EstimateStabilizationSettings":
-        if self.stabilization_method == "beads" and self.beads_match_settings is None:
-            self.beads_match_settings = BeadsMatchSettings()
-        elif (
-            self.stabilization_method == "phase-cross-corr"
-            and self.phase_cross_corr_settings is None
-        ):
-            self.phase_cross_corr_settings = PhaseCrossCorrSettings()
-        elif self.stabilization_method == "focus-finding" and self.stabilization_type == "xyz":
-            if self.focus_finding_settings is None:
-                self.focus_finding_settings = FocusFindingSettings()
-            if self.stack_reg_settings is None:
-                self.stack_reg_settings = StackRegSettings()
-        elif self.stabilization_method == "focus-finding" and self.stabilization_type == "z":
-            if self.focus_finding_settings is None:
-                self.focus_finding_settings = FocusFindingSettings()
-        elif self.stabilization_method == "focus-finding" and self.stabilization_type == "xy":
-            if self.stack_reg_settings is None:
-                self.stack_reg_settings = StackRegSettings()
-
-        return self
-
-
 class FlatFieldCorrectionSettings(MyBaseModel):
     channel_names: list[str] | None = None
     # When None, preserve the OME-Zarr version of the input store.
@@ -518,38 +422,6 @@ class DeskewSettings(MyBaseModel):
                     "If px_to_scan_ratio is not provided, both pixel_size_um and scan_step_um must be provided"
                 )
         super().__init__(**data)
-
-
-class RegistrationSettings(MyBaseModel):
-    source_channel_names: list[str]
-    target_channel_name: str
-    affine_transform_zyx: list
-    keep_overhang: bool = False
-    interpolation: str = "linear"
-    time_indices: NonNegativeInt | list[NonNegativeInt] | Literal["all"] = "all"
-    verbose: bool = False
-    # When None, preserve the OME-Zarr version of the input store.
-    output_ome_zarr_version: Literal["0.4", "0.5"] | None = None
-
-    @field_validator("affine_transform_zyx")
-    @classmethod
-    def check_affine_transform(cls, v):
-        if not isinstance(v, list) or len(v) != 4:
-            raise ValueError("The input array must be a list of length 3.")
-
-        for row in v:
-            if not isinstance(row, list) or len(row) != 4:
-                raise ValueError("Each row of the array must be a list of length 3.")
-
-        try:
-            # Try converting the list to a 3x3 ndarray to check for valid shape and content
-            np_array = np.array(v)
-            if np_array.shape != (4, 4):
-                raise ValueError("The array must be a 3x3 ndarray.")
-        except ValueError:
-            raise ValueError("The array must contain valid numerical values.") from None
-
-        return v
 
 
 class PsfFromBeadsSettings(MyBaseModel):
@@ -778,35 +650,6 @@ class ConcatenateSettings(MyBaseModel):
         return self
 
 
-class StabilizationSettings(MyBaseModel):
-    stabilization_estimation_channel: str
-    stabilization_type: Literal["z", "xy", "xyz", "affine"]
-    stabilization_method: Literal[
-        "beads", "phase-cross-corr", "focus-finding", "manual", "ants", "beads"
-    ] = "focus-finding"
-    stabilization_channels: list
-    affine_transform_zyx_list: list
-    time_indices: NonNegativeInt | list[NonNegativeInt] | Literal["all"] = "all"
-    output_voxel_size: list[
-        PositiveFloat, PositiveFloat, PositiveFloat, PositiveFloat, PositiveFloat
-    ] = [1.0, 1.0, 1.0, 1.0, 1.0]
-    # When None, preserve the OME-Zarr version of the input store.
-    output_ome_zarr_version: Literal["0.4", "0.5"] | None = None
-
-    @field_validator("affine_transform_zyx_list")
-    @classmethod
-    def check_affine_transform_zyx_list(cls, v):
-        if not isinstance(v, list):
-            raise ValueError("affine_transform_list must be a list")
-
-        for arr in v:
-            arr = np.array(arr)
-            if arr.shape != (4, 4):
-                raise ValueError("Each element in affine_transform_list must be a 4x4 ndarray")
-
-        return v
-
-
 class StitchSettings(BaseModel):
     channels: list[str] | None = None
     total_translation: dict[str, list[float, float, float]] | None = None
@@ -996,7 +839,6 @@ class EstimateTransformSettings(MyBaseModel):
     # manual: gradient_correlation).
     score_metric: ScoreMetric | None = None
     fallback: FallbackSettings = FallbackSettings()
-    smoothing: EvalTransformSettings | None = None
     verbose: bool = False
 
     @model_validator(mode="after")
@@ -1027,80 +869,14 @@ class EstimateTransformSettings(MyBaseModel):
     def effective_score_metric(self) -> str:
         return self.score_metric or DEFAULT_SCORE_METRIC[self.method]
 
-    @classmethod
-    def from_legacy(
-        cls, legacy: "EstimateRegistrationSettings | EstimateStabilizationSettings"
-    ) -> "EstimateTransformSettings":
-        """Convert a legacy config to the same estimate.
-
-        `use_prev_t_transform` has no equivalent: timepoints are estimated independently
-        and neighbour information enters through the repair candidates.
-        """
-        ats = legacy.affine_transform_settings
-        fit = TransformFitSettings(
-            type=ats.transform_type,
-            seed=ats.approx_transform,
-            seed_direction="pull",
-            seed_from_shapes=ats.compute_approx_transform,
-        )
-        common = dict(
-            transform=fit, smoothing=legacy.eval_transform_settings, verbose=legacy.verbose
-        )
-        if isinstance(legacy, EstimateRegistrationSettings):
-            method = legacy.estimation_method
-            # The same channel on both sides only makes sense as stabilization against
-            # itself, which is how the legacy CLI treated it (t_reference decides which frame).
-            self_reference = legacy.source_channel_name == legacy.target_channel_name
-            return cls(
-                source=ChannelSettings(channel=legacy.source_channel_name),
-                target=None
-                if self_reference
-                else ChannelSettings(channel=legacy.target_channel_name),
-                reference=ats.t_reference if self_reference else "cross",
-                method=method,
-                beads=legacy.beads_match_settings,
-                ants=legacy.ants_registration_settings,
-                phase_cross_corr=legacy.phase_cross_corr_settings,
-                manual=legacy.manual_registration_settings,
-                time_indices=legacy.time_indices,
-                **common,
-            )
-        method = legacy.stabilization_method
-        focus_finding = None
-        if method == "focus-finding":
-            # `stabilization_type` becomes the method's axes; the crop comes from whichever
-            # block the legacy config filled in. average_across_wells / skip_beads_fov
-            # were per-plate orchestration, not part of the estimate.
-            stack_reg = legacy.stack_reg_settings
-            focus = legacy.focus_finding_settings or (
-                stack_reg.focus_finding_settings if stack_reg is not None else None
-            )
-            crop = (focus or stack_reg or FocusFindingSettings()).center_crop_xy
-            focus_finding = FocusSettings(axes=legacy.stabilization_type, center_crop_xy=crop)
-        if method == "phase-cross-corr" and legacy.phase_cross_corr_settings is not None:
-            reference = legacy.phase_cross_corr_settings.t_reference
-        elif method == "focus-finding" and legacy.stack_reg_settings is not None:
-            reference = legacy.stack_reg_settings.t_reference
-        else:
-            reference = ats.t_reference
-        return cls(
-            source=ChannelSettings(channel=legacy.stabilization_estimation_channel),
-            target=None,
-            reference=reference,
-            method=method,
-            beads=legacy.beads_match_settings,
-            phase_cross_corr=legacy.phase_cross_corr_settings,
-            focus_finding=focus_finding,
-            **common,
-        )
-
 
 class TransformSettings(MyBaseModel):
     """A transform series ready to apply: one 4x4 for every timepoint, or a single one.
 
     `direction` says what the matrices mean -- "forward" (moving -> reference, what the
-    engine estimates) or "pull" (reference -> moving, what the legacy `register` /
-    `stabilize` configs hold). Nothing here has to be guessed from a variable name.
+    engine estimates) or "pull" (reference -> moving, ready to resample with; what the
+    retired `register` / `stabilize` configs held). Nothing here has to be guessed from
+    a variable name.
     """
 
     direction: TransformDirection
@@ -1127,104 +903,33 @@ class TransformSettings(MyBaseModel):
             return [np.asarray(m, dtype=float).tolist() for m in self.matrices]
         return [np.linalg.inv(np.asarray(m, dtype=float)).tolist() for m in self.matrices]
 
-    def to_registration_settings(self) -> "RegistrationSettings":
-        """Legacy single-transform config (`register`); requires exactly one matrix."""
-        (matrix,) = self.as_direction("pull")
-        return RegistrationSettings(
-            source_channel_names=self.source_channels,
-            target_channel_name=self.target_channel or self.source_channels[0],
-            affine_transform_zyx=matrix,
-            keep_overhang=self.keep_overhang,
-            interpolation=self.interpolation,
-            time_indices=self.time_indices,
-            output_ome_zarr_version=self.output_ome_zarr_version,
-        )
 
-    def to_stabilization_settings(self) -> "StabilizationSettings":
-        """Legacy per-timepoint config (`stabilize`)."""
-        return StabilizationSettings(
-            stabilization_estimation_channel=self.target_channel or self.source_channels[0],
-            stabilization_type="affine",
-            stabilization_method=self.method,
-            stabilization_channels=sorted(
-                {
-                    *self.source_channels,
-                    *([self.target_channel] if self.target_channel else []),
-                }
-            ),
-            affine_transform_zyx_list=self.as_direction("pull"),
-            time_indices=self.time_indices,
-            output_voxel_size=self.voxel_size or [1.0] * 5,
-            output_ome_zarr_version=self.output_ome_zarr_version,
-        )
-
-    @classmethod
-    def from_legacy(
-        cls, legacy: "RegistrationSettings | StabilizationSettings"
-    ) -> "TransformSettings":
-        if isinstance(legacy, RegistrationSettings):
-            return cls(
-                direction="pull",
-                matrices=[legacy.affine_transform_zyx],
-                time_indices=legacy.time_indices,
-                source_channels=legacy.source_channel_names,
-                target_channel=legacy.target_channel_name,
-                keep_overhang=legacy.keep_overhang,
-                interpolation=legacy.interpolation,
-                output_ome_zarr_version=legacy.output_ome_zarr_version,
-            )
-        return cls(
-            direction="pull",
-            matrices=legacy.affine_transform_zyx_list,
-            time_indices=legacy.time_indices,
-            source_channels=list(legacy.stabilization_channels),
-            target_channel=legacy.stabilization_estimation_channel,
-            method=legacy.stabilization_method,
-            voxel_size=list(legacy.output_voxel_size),
-            output_ome_zarr_version=legacy.output_ome_zarr_version,
-        )
+_LEGACY_KEYS = {
+    "target_channel_name",
+    "source_channel_name",
+    "stabilization_estimation_channel",
+    "affine_transform_zyx",
+    "affine_transform_zyx_list",
+}
 
 
-def _load_first(path, models):
+def _load_unified(path, model):
     data = yaml.safe_load(open(path))
-    errors = []
-    for model in models:
-        try:
-            return model(**data)
-        except Exception as e:  # noqa: BLE001 -- try the next schema, report all if none fit
-            errors.append(f"{model.__name__}: {str(e).splitlines()[0]}")
-    raise ValueError(
-        f"{path} matches none of {[m.__name__ for m in models]}:\n  " + "\n  ".join(errors)
-    )
+    legacy_keys = sorted(_LEGACY_KEYS & set(data or {}))
+    if legacy_keys:
+        raise ValueError(
+            f"{path} is a retired estimate-registration / estimate-stabilization / register / "
+            f"stabilize config (keys {legacy_keys}); convert it once with "
+            f"`biahub convert-settings -c {path} -o <new>.yml`"
+        )
+    return model(**data)
 
 
 def load_estimate_transform_settings(path) -> EstimateTransformSettings:
-    """Read the unified estimate config.
-
-    A legacy estimate-registration / estimate-stabilization config is converted on the fly.
-    """
-    settings = _load_first(
-        path,
-        (
-            EstimateTransformSettings,
-            EstimateRegistrationSettings,
-            EstimateStabilizationSettings,
-        ),
-    )
-    return (
-        settings
-        if isinstance(settings, EstimateTransformSettings)
-        else EstimateTransformSettings.from_legacy(settings)
-    )
+    """Read an `estimate-transform` config."""
+    return _load_unified(path, EstimateTransformSettings)
 
 
 def load_transform_settings(path) -> TransformSettings:
-    """Read the unified transform config, or a legacy register / stabilize config."""
-    settings = _load_first(
-        path, (TransformSettings, RegistrationSettings, StabilizationSettings)
-    )
-    return (
-        settings
-        if isinstance(settings, TransformSettings)
-        else TransformSettings.from_legacy(settings)
-    )
+    """Read an `apply-transform` config."""
+    return _load_unified(path, TransformSettings)

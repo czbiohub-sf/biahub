@@ -1,0 +1,48 @@
+source:
+  channel: GFP EX488 EM525-45
+target:
+  channel: Phase3D
+reference: cross
+method: ants
+ants:
+  sobel_filter: true
+  crop: false
+  ref_mask_radius: null
+  clip: false
+transform:
+  type: affine
+  seed:
+  - - 1.0
+    - 0.0
+    - 0.0
+    - 0.0
+  - - 0.0
+    - 1.0
+    - 0.0
+    - 0.0
+  - - 0.0
+    - 0.0
+    - 1.0
+    - 0.0
+  - - 0.0
+    - 0.0
+    - 0.0
+    - 1.0
+  seed_direction: pull
+  seed_from_shapes: false
+time_indices: all
+fallback:
+  flag:
+    k_mad: 2.0
+    floor: 0.8
+    hard_fail: 0.4
+  repair:
+    candidates:
+    - t-1
+    - t+1
+    - consensus
+    - seed
+    consensus_threshold: 0.75
+    consensus_min_good: 5
+    max_timepoints: null
+verbose: true

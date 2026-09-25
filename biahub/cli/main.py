@@ -70,6 +70,11 @@ COMMANDS = [
         "help": "Estimate a transform series (registration or stabilization)",
     },
     {
+        "name": "convert-settings",
+        "import_path": "biahub.convert_settings.convert_settings_cli",
+        "help": "Convert a retired registration/stabilization config to the unified one",
+    },
+    {
         "name": "flat-field",
         "import_path": "biahub.flat_field.flat_field_cli",
         "help": "Apply flat field correction to selected channels",
