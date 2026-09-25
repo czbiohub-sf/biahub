@@ -23,10 +23,9 @@ from biahub.registration.utils import (
     find_overlapping_volume,
     rescale_voxel_size,
 )
-from biahub.settings import RegistrationSettings
+from biahub.settings import load_transform_settings
 from biahub.utils.array_ops import copy_n_paste_czyx
 from biahub.utils.cluster import estimate_resources, get_submitit_cluster
-from biahub.utils.config import yaml_to_model
 from biahub.utils.ngff import resolve_ome_zarr_version
 
 
@@ -61,7 +60,7 @@ def register_cli(
     output_dirpath = Path(output_dirpath)
 
     # Parse from the yaml file
-    settings = yaml_to_model(config_filepath, RegistrationSettings)
+    settings = load_transform_settings(config_filepath).to_registration_settings()
     matrix = np.array(settings.affine_transform_zyx)
     keep_overhang = settings.keep_overhang
 

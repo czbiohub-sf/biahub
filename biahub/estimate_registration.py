@@ -17,6 +17,7 @@ from biahub.registration.legacy import legacy_pull_from_forward
 from biahub.registration.utils import evaluate_transforms, plot_translations
 from biahub.settings import (
     EstimateRegistrationSettings,
+    EstimateTransformSettings,
     RegistrationSettings,
     StabilizationSettings,
 )
@@ -94,11 +95,10 @@ def estimate_registration(
     _result, _time_indices, forward_transforms = estimate_transform_series(
         source_position_dirpaths[0],
         target_position_dirpaths[0],
-        settings,
+        EstimateTransformSettings.from_legacy(settings),
         output_dir,
         sbatch_filepath=sbatch_filepath,
         cluster=cluster,
-        reference_kind="cross",
     )
     transforms = [legacy_pull_from_forward(transform) for transform in forward_transforms]
 

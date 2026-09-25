@@ -97,9 +97,10 @@ NodeMatcher = Callable[
 ]  # (mov_nodes, ref_nodes) -> (N, 2)
 
 
-def beads_score_fn(beads_match_settings: BeadsMatchSettings) -> ScoreFn:
-    """Build the score function the beads settings ask for (`qc_settings.score_metric`)."""
-    metric = beads_match_settings.qc_settings.score_metric
+def beads_score_fn(
+    beads_match_settings: BeadsMatchSettings, metric: str = "overlap"
+) -> ScoreFn:
+    """Build a bead score function: overlap (production's ratio), residual, or mutual information."""
     if metric == "overlap":
         return lambda transform, mov, ref: score_transform(
             transform, mov, ref, beads_match_settings
@@ -157,6 +158,7 @@ class NodeGraphEstimator:
         beads_match_settings: BeadsMatchSettings,
         affine_transform_settings: AffineTransformSettings,
         iterations: int | None = None,
+        score_fn: ScoreFn | None = None,
     ) -> TransformEstimator:
         """Bead-peak detection on both sides, scored by bead overlap.
 
@@ -168,7 +170,7 @@ class NodeGraphEstimator:
             beads_match_settings.qc_settings.iterations if iterations is None else iterations
         )
 
-        score_fn = beads_score_fn(beads_match_settings)
+        score_fn = score_fn or beads_score_fn(beads_match_settings)
 
         def node_graph(settings: BeadsMatchSettings, n_iterations: int) -> NodeGraphEstimator:
             return cls(

@@ -2,9 +2,10 @@
 
 Maps a moving channel onto a reference per timepoint -- another channel (registration)
 or the same channel at a fixed or previous timepoint (stabilization) -- and writes a
-config that `register` / `stabilize` can apply. Two SLURM fan-out phases: one job per
-timepoint to estimate, then one job per flagged timepoint to repair against the frozen
-whole-run history. Every job writes a small JSON record, so an interrupted run resumes.
+`TransformSettings` config that the apply steps consume. Two SLURM fan-out phases: one
+job per timepoint to estimate, then one job per flagged timepoint to repair against the
+frozen whole-run history. Every job writes a small JSON record, so an interrupted run
+resumes.
 """
 
 from __future__ import annotations
@@ -13,7 +14,6 @@ import json
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import Literal
 
 import click
 import numpy as np
@@ -35,6 +35,7 @@ from biahub.cli.parsing import (
 )
 from biahub.core.transform import Transform
 from biahub.registration.ants import correlation_score
+from biahub.registration.beads import score_transform
 from biahub.registration.estimators import (
     AntsEstimator,
     ManualEstimator,
@@ -42,14 +43,14 @@ from biahub.registration.estimators import (
     PCCEstimator,
     ScoreFn,
     TransformEstimator,
-    beads_score_fn,
 )
 from biahub.registration.fallback import RepairResult, neighbour_consensus_config_candidates
-from biahub.registration.legacy import forward_from_legacy_pull, legacy_pull_from_forward
+from biahub.registration.legacy import forward_from_legacy_pull
 from biahub.registration.metrics import (
     bead_alignment_metrics,
     gradient_correlation,
     normalized_mutual_information,
+    residual_score,
 )
 from biahub.registration.orchestrator import (
     SeriesResult,
@@ -66,16 +67,13 @@ from biahub.registration.reference_policy import (
 from biahub.registration.seed_policy import FixedSeed
 from biahub.registration.utils import get_aprox_transform
 from biahub.settings import (
-    EstimateRegistrationSettings,
-    RegistrationSettings,
-    StabilizationSettings,
+    AffineTransformSettings,
+    EstimateTransformSettings,
+    TransformSettings,
+    load_estimate_transform_settings,
 )
 from biahub.utils.cluster import estimate_resources, get_submitit_cluster
 from biahub.utils.config import model_to_yaml, yaml_to_model
-
-# "cross": register onto another channel; "first"/"previous": stabilize a channel against
-# its own first / previous timepoint.
-ReferenceKind = Literal["cross", "first", "previous"]
 
 ENGINE_SETTINGS_FILENAME = "estimate_transform_settings.yml"
 
@@ -95,97 +93,124 @@ def _open_series(position_dirpath: Path, channel_name: str):
         return series, tuple(position.scale[-3:])
 
 
-def _reference_policy(kind: ReferenceKind, ref) -> ReferencePolicy:
-    if kind == "cross":
+def _reference_policy(settings: EstimateTransformSettings, ref) -> ReferencePolicy:
+    if settings.reference == "cross":
         return CrossChannel(ref)
-    if kind == "first":
+    if settings.reference == "first":
         return FixedFrame(0)
-    if kind == "previous":
-        return PreviousFrame()
-    raise ValueError(f"unknown reference kind {kind!r}")
+    return PreviousFrame()
+
+
+def _seed(settings: EstimateTransformSettings) -> Transform:
+    fit = settings.transform
+    if fit.seed_direction == "forward":
+        return Transform(np.asarray(fit.seed, dtype=float), transform_type=fit.type)
+    return forward_from_legacy_pull(fit.seed, fit.type)
+
+
+def _score_fn(settings: EstimateTransformSettings) -> ScoreFn:
+    metric = settings.effective_score_metric
+    if metric == "overlap":
+        return lambda transform, mov, ref: score_transform(transform, mov, ref, settings.beads)
+    if metric == "residual":
+        return lambda transform, mov, ref: residual_score(transform, mov, ref, settings.beads)
+    if metric == "mutual_information":
+        return normalized_mutual_information
+    if metric == "correlation":
+        sobel = settings.method == "ants" and settings.ants.sobel_filter
+        return lambda transform, mov, ref: correlation_score(
+            transform, mov, ref, sobel_filter=sobel
+        )
+    if metric == "gradient_correlation":
+        return gradient_correlation
+    raise ValueError(f"unknown score_metric {metric!r}")
+
+
+def _affine_settings(settings: EstimateTransformSettings) -> AffineTransformSettings:
+    """Build the legacy `AffineTransformSettings` the estimators' constructors still take."""
+    fit = settings.transform
+    seed_pull = (
+        fit.seed
+        if fit.seed_direction == "pull"
+        else np.linalg.inv(np.asarray(fit.seed, dtype=float)).tolist()
+    )
+    return AffineTransformSettings(
+        transform_type=fit.type,
+        approx_transform=seed_pull,
+        use_prev_t_transform=False,
+        compute_approx_transform=fit.seed_from_shapes,
+        t_reference="first" if settings.reference == "cross" else settings.reference,
+    )
 
 
 def _engine(
-    settings: EstimateRegistrationSettings,
+    settings: EstimateTransformSettings,
     shape_zyx: tuple[int, int, int] | None = None,
     mov_voxel_size: tuple[float, float, float] | None = None,
     ref_voxel_size: tuple[float, float, float] | None = None,
 ) -> tuple[TransformEstimator, ScoreFn, Transform]:
-    """Estimator, score function and forward config seed for the settings' method."""
-    affine_transform_settings = settings.affine_transform_settings
-    config_seed = forward_from_legacy_pull(
-        affine_transform_settings.approx_transform, affine_transform_settings.transform_type
-    )
-    if settings.estimation_method == "phase-cross-corr":
-        estimator = PCCEstimator.from_settings(settings.phase_cross_corr_settings, shape_zyx)
-        return estimator, correlation_score, config_seed
-
-    if settings.estimation_method == "manual":
-        manual = settings.manual_registration_settings
+    """Estimator, score function and forward seed for the settings' method."""
+    score_fn = _score_fn(settings)
+    seed = _seed(settings)
+    affine = _affine_settings(settings)
+    if settings.method == "beads":
+        estimator: TransformEstimator = NodeGraphEstimator.from_beads_settings(
+            settings.beads, affine, score_fn=score_fn
+        )
+    elif settings.method == "ants":
+        estimator = AntsEstimator.from_settings(
+            settings.ants, affine, verbose=settings.verbose
+        )
+    elif settings.method == "phase-cross-corr":
+        estimator = PCCEstimator.from_settings(settings.phase_cross_corr, shape_zyx)
+    elif settings.method == "manual":
+        manual = settings.manual
         estimator = ManualEstimator(
-            source_channel_name=settings.source_channel_name,
-            target_channel_name=settings.target_channel_name,
+            source_channel_name=settings.source.channel,
+            target_channel_name=settings.target_channel,
             source_channel_voxel_size=mov_voxel_size or (1.0, 1.0, 1.0),
             target_channel_voxel_size=ref_voxel_size or (1.0, 1.0, 1.0),
-            similarity=affine_transform_settings.transform_type == "similarity",
+            similarity=settings.transform.type == "similarity",
             pre_affine_90degree_rotation=manual.affine_90degree_rotation,
             pre_affine_fliplr=manual.affine_fliplr,
         )
-        return estimator, gradient_correlation, config_seed
-    if settings.estimation_method == "beads":
-        beads_match_settings = settings.beads_match_settings
-        estimator = NodeGraphEstimator.from_beads_settings(
-            beads_match_settings, affine_transform_settings
-        )
-
-        return estimator, beads_score_fn(beads_match_settings), config_seed
-
-    if settings.estimation_method == "ants":
-        ants_settings = settings.ants_registration_settings
-        estimator = AntsEstimator.from_settings(
-            ants_settings, affine_transform_settings, verbose=settings.verbose
-        )
-
-        if ants_settings.score_metric == "mutual_information":
-            return estimator, normalized_mutual_information, config_seed
-
-        def score_fn(transform: Transform, mov_t: np.ndarray, ref_t: np.ndarray) -> float:
-            return correlation_score(
-                transform, mov_t, ref_t, sobel_filter=ants_settings.sobel_filter
-            )
-
-        return estimator, score_fn, config_seed
-
-    raise click.UsageError(f"unknown estimation_method '{settings.estimation_method}'")
+    else:
+        raise click.UsageError(f"unknown method '{settings.method}'")
+    return estimator, score_fn, seed
 
 
 def _finite_or_none(value: float | None) -> float | None:
     return None if value is None or not np.isfinite(value) else float(value)
 
 
+def _bead_metrics(settings, result, t, mov, ref) -> dict | None:
+    """Continuous bead residuals next to the score, for the beads method."""
+    if settings.method != "beads" or t not in result.transforms:
+        return None
+    ref_t = np.asarray(_reference_policy(settings, ref).reference_for(mov, t))
+    metrics = bead_alignment_metrics(
+        result.transforms[t], np.asarray(mov[t]), ref_t, settings.beads
+    )
+    return None if metrics is None else metrics.to_dict()
+
+
 def _estimate_timepoint_job(
     source_position_dirpath: Path,
     target_position_dirpath: Path,
     settings_path: Path,
-    reference_kind: ReferenceKind,
     t: int,
     record_path: Path,
 ) -> dict:
     """One independent estimate, from the config seed, written as a JSON record."""
-    settings = yaml_to_model(settings_path, EstimateRegistrationSettings)
-    mov, mov_voxel_size = _open_series(source_position_dirpath, settings.source_channel_name)
-    ref, ref_voxel_size = _open_series(target_position_dirpath, settings.target_channel_name)
-    estimator, score_fn, config_seed = _engine(
+    settings = yaml_to_model(settings_path, EstimateTransformSettings)
+    mov, mov_voxel_size = _open_series(source_position_dirpath, settings.source.channel)
+    ref, ref_voxel_size = _open_series(target_position_dirpath, settings.target_channel)
+    estimator, score_fn, seed = _engine(
         settings, tuple(mov.shape[-3:]), mov_voxel_size, ref_voxel_size
     )
 
     result = estimate_series(
-        mov,
-        _reference_policy(reference_kind, ref),
-        estimator,
-        FixedSeed(config_seed),
-        score_fn,
-        [t],
+        mov, _reference_policy(settings, ref), estimator, FixedSeed(seed), score_fn, [t]
     )
     record = {
         "t": t,
@@ -193,22 +218,11 @@ def _estimate_timepoint_job(
         "score": _finite_or_none(result.scores.get(t)),
         "error": result.errors.get(t),
         "arm": getattr(estimator, "last_winner", None),
-        "metrics": _bead_metrics(settings, result, t, mov, ref, reference_kind),
+        "metrics": _bead_metrics(settings, result, t, mov, ref),
     }
     record_path.parent.mkdir(parents=True, exist_ok=True)
     record_path.write_text(json.dumps(record))
     return record
-
-
-def _bead_metrics(settings, result, t, mov, ref, reference_kind) -> dict | None:
-    """Continuous bead residuals next to the score, for beads methods with a transform."""
-    if settings.estimation_method != "beads" or t not in result.transforms:
-        return None
-    ref_t = np.asarray(_reference_policy(reference_kind, ref).reference_for(mov, t))
-    metrics = bead_alignment_metrics(
-        result.transforms[t], np.asarray(mov[t]), ref_t, settings.beads_match_settings
-    )
-    return None if metrics is None else metrics.to_dict()
 
 
 def _load_series(
@@ -247,7 +261,6 @@ def _repair_timepoint_job(
     source_position_dirpath: Path,
     target_position_dirpath: Path,
     settings_path: Path,
-    reference_kind: ReferenceKind,
     t: int,
     time_indices: list[int],
     flagged: list[int],
@@ -255,25 +268,29 @@ def _repair_timepoint_job(
     record_path: Path,
 ) -> dict:
     """Repair one flagged timepoint against the frozen whole-run history."""
-    settings = yaml_to_model(settings_path, EstimateRegistrationSettings)
-    mov, mov_voxel_size = _open_series(source_position_dirpath, settings.source_channel_name)
-    ref, ref_voxel_size = _open_series(target_position_dirpath, settings.target_channel_name)
-    estimator, score_fn, config_seed = _engine(
+    settings = yaml_to_model(settings_path, EstimateTransformSettings)
+    mov, mov_voxel_size = _open_series(source_position_dirpath, settings.source.channel)
+    ref, ref_voxel_size = _open_series(target_position_dirpath, settings.target_channel)
+    estimator, score_fn, seed = _engine(
         settings, tuple(mov.shape[-3:]), mov_voxel_size, ref_voxel_size
     )
+    repair_settings = settings.fallback.repair
 
-    series = _load_series(
-        records_dir, time_indices, settings.affine_transform_settings.transform_type
-    )
+    series = _load_series(records_dir, time_indices, settings.transform.type)
     series.flagged = list(flagged)
     outcome = repair_timepoint(
         t,
         mov,
-        _reference_policy(reference_kind, ref),
+        _reference_policy(settings, ref),
         estimator,
         score_fn,
         series,
-        neighbour_consensus_config_candidates(config_seed),
+        neighbour_consensus_config_candidates(
+            seed,
+            consensus_score_threshold=repair_settings.consensus_threshold,
+            consensus_min_good=repair_settings.consensus_min_good,
+            order=tuple(repair_settings.candidates),
+        ),
     )
     record = {
         "t": t,
@@ -386,20 +403,18 @@ def _report(result: SeriesResult, time_indices: list[int]) -> dict:
 def estimate_transform_series(
     source_position_dirpath: Path,
     target_position_dirpath: Path,
-    settings: EstimateRegistrationSettings,
+    settings: EstimateTransformSettings,
     output_dir: Path,
     sbatch_filepath: str | None = None,
     cluster: str = "slurm",
     monitor: bool = False,
     resume: bool = False,
-    reference_kind: ReferenceKind = "cross",
 ) -> tuple[SeriesResult, list[int], list[Transform]]:
     """Run both fan-out phases; return the series, its timepoints and one forward transform per timepoint.
 
     Writes the settings the jobs read (`estimate_transform_settings.yml`), the per-timepoint
     records (`timepoints/`, `repairs/`), `run_journal.json` and
-    `estimate_transform_report.json` under `output_dir`. This is what `estimate-transform`,
-    and the beads branches of `estimate-registration` / `estimate-stabilization`, run.
+    `estimate_transform_report.json` under `output_dir`.
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -417,8 +432,7 @@ def estimate_transform_series(
         ref_voxel_size = tuple(position.scale[-3:])
 
     settings = settings.model_copy(deep=True)
-    affine_transform_settings = settings.affine_transform_settings
-    if affine_transform_settings.compute_approx_transform:
+    if settings.transform.seed_from_shapes:
         approx = get_aprox_transform(
             mov_shape=(Z, Y, X),
             ref_shape=tuple(ref_shape),
@@ -428,25 +442,24 @@ def estimate_transform_series(
             ref_voxel_size=ref_voxel_size,
             mov_voxel_size=mov_voxel_size,
         )
-        affine_transform_settings.approx_transform = approx.to_list()
-        click.echo(f"Computed approx transform:\n{approx.matrix}")
-    _estimator, _score_fn, config_seed = _engine(
-        settings, (Z, Y, X), mov_voxel_size, ref_voxel_size
-    )
-    transform_type = affine_transform_settings.transform_type
-    if settings.estimation_method == "manual":
+        settings.transform.seed = approx.to_list()
+        settings.transform.seed_direction = "pull"
+        click.echo(f"Computed seed from the store shapes:\n{approx.matrix}")
+    _estimator, _score_fn, seed = _engine(settings, (Z, Y, X), mov_voxel_size, ref_voxel_size)
+    if settings.method == "manual":
         # Interactive (napari); one timepoint, in this process.
-        settings.time_indices = settings.manual_registration_settings.time_index
+        settings.time_indices = settings.manual.time_index
         cluster = "debug"
     settings_path = output_dir / ENGINE_SETTINGS_FILENAME
     model_to_yaml(settings, settings_path)
     time_indices = _resolve_time_indices(settings.time_indices, T)
+    transform_type = settings.transform.type
 
     # Bead matching is single-threaded; ANTs' optimizer uses ITK threads.
     _, num_cpus, gb_ram_per_cpu = estimate_resources(
         shape=(1, 2, Z, Y, X),
         ram_multiplier=5,
-        max_num_cpus=8 if settings.estimation_method == "ants" else 4,
+        max_num_cpus=8 if settings.method == "ants" else 4,
     )
     slurm_args = {
         "slurm_job_name": "estimate_transform",
@@ -464,12 +477,6 @@ def estimate_transform_series(
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=resolved_cluster)
     executor.update_parameters(**slurm_args)
 
-    if affine_transform_settings.use_prev_t_transform:
-        click.echo(
-            "use_prev_t_transform is set, but timepoints are estimated independently under "
-            "fan-out; neighbour information enters through the repair phase instead."
-        )
-
     to_estimate = [
         t for t in time_indices if not (resume and (timepoints_dir / f"{t}.json").exists())
     ]
@@ -486,14 +493,7 @@ def estimate_transform_series(
             (
                 t,
                 _estimate_timepoint_job,
-                (
-                    source,
-                    target,
-                    settings_path,
-                    reference_kind,
-                    t,
-                    timepoints_dir / f"{t}.json",
-                ),
+                (source, target, settings_path, t, timepoints_dir / f"{t}.json"),
             )
             for t in to_estimate
         ],
@@ -510,9 +510,21 @@ def estimate_transform_series(
             line += f"  estimate failed: {result.errors[t]}"
         click.echo(line)
 
-    flagged = flag_series(result)
+    repair_settings = settings.fallback.repair
+    flag = settings.fallback.flag
+    flagged = flag_series(
+        result,
+        max_timepoints=repair_settings.max_timepoints if repair_settings else None,
+        k_mad=flag.k_mad,
+        floor=flag.floor,
+        hard_fail=flag.hard_fail,
+    )
+    to_repair = (
+        [t for t in flagged if not (resume and (repairs_dir / f"{t}.json").exists())]
+        if repair_settings is not None
+        else []
+    )
     executor.update_parameters(slurm_time=60, slurm_job_name="estimate_transform_repair")
-    to_repair = [t for t in flagged if not (resume and (repairs_dir / f"{t}.json").exists())]
     repair_records, _repair_failures = _run_jobs(
         executor,
         resolved_cluster,
@@ -526,7 +538,6 @@ def estimate_transform_series(
                     source,
                     target,
                     settings_path,
-                    reference_kind,
                     t,
                     time_indices,
                     flagged,
@@ -537,16 +548,14 @@ def estimate_transform_series(
             for t in to_repair
         ],
     )
-    for t in flagged:
+    for t in flagged if repair_settings is not None else []:
         record = repair_records.get(t)
         if record is None:
             record_path = repairs_dir / f"{t}.json"
             if not record_path.exists():
                 continue
             record = json.loads(record_path.read_text())
-        outcome = _load_repair(
-            record, transform_type, fallback=result.transforms.get(t, config_seed)
-        )
+        outcome = _load_repair(record, transform_type, fallback=result.transforms.get(t, seed))
         result.repairs[t] = outcome
         result.journal.record(
             t=t,
@@ -566,23 +575,7 @@ def estimate_transform_series(
     (output_dir / "estimate_transform_report.json").write_text(
         json.dumps(_report(result, time_indices), indent=2)
     )
-    return (
-        result,
-        time_indices,
-        _one_transform_per_timepoint(result, time_indices, config_seed),
-    )
-
-
-def _reference_kind(
-    source: Path, target: Path, settings: EstimateRegistrationSettings
-) -> ReferenceKind:
-    """Pick the reference: the same position and channel on both sides is stabilization."""
-    if (
-        Path(source) == Path(target)
-        and settings.source_channel_name == settings.target_channel_name
-    ):
-        return settings.affine_transform_settings.t_reference
-    return "cross"
+    return result, time_indices, _one_transform_per_timepoint(result, time_indices, seed)
 
 
 def estimate_transform(
@@ -595,23 +588,22 @@ def estimate_transform(
     monitor: bool = False,
     resume: bool = False,
 ) -> None:
-    """Estimate one transform per timepoint mapping the source channel onto the target.
+    """Estimate one transform per timepoint mapping the source channel onto its reference.
 
-    Reads an `EstimateRegistrationSettings` YAML (the same file `estimate-registration`
-    takes; `estimation_method` beads or ants). When source and target are the same
-    position and channel, this is stabilization: each timepoint is registered onto the
-    channel's own first or previous timepoint per `affine_transform_settings.t_reference`.
-    Writes a `RegistrationSettings` (single timepoint) or `StabilizationSettings` (series)
-    YAML next to the engine's records; see `estimate_transform_series`.
+    Reads an `EstimateTransformSettings` YAML (legacy `estimate-registration` /
+    `estimate-stabilization` configs are accepted and converted). Writes a
+    `TransformSettings` YAML -- forward matrices, one per timepoint -- next to the engine's
+    records; see `estimate_transform_series`.
     """
     output_filepath = Path(output_filepath)
     output_dir = output_filepath.parent
-    settings = yaml_to_model(config_filepath, EstimateRegistrationSettings)
-    source, target = Path(source_position_dirpaths[0]), Path(target_position_dirpaths[0])
+    settings = load_estimate_transform_settings(config_filepath)
+    source = Path(source_position_dirpaths[0])
+    target = Path(target_position_dirpaths[0]) if settings.reference == "cross" else source
     with open_ome_zarr(target, mode="r") as position:
-        voxel_size = list(position.scale)
+        voxel_size = [float(v) for v in position.scale]
 
-    _result, time_indices, transforms = estimate_transform_series(
+    _result, _time_indices, transforms = estimate_transform_series(
         source,
         target,
         settings,
@@ -620,28 +612,17 @@ def estimate_transform(
         cluster=cluster,
         monitor=monitor,
         resume=resume,
-        reference_kind=_reference_kind(source, target, settings),
     )
 
-    pull_matrices = [legacy_pull_from_forward(transform) for transform in transforms]
-    if len(pull_matrices) == 1:
-        model = RegistrationSettings(
-            source_channel_names=[settings.source_channel_name],
-            target_channel_name=settings.target_channel_name,
-            affine_transform_zyx=pull_matrices[0],
-        )
-    else:
-        model = StabilizationSettings(
-            stabilization_estimation_channel=settings.target_channel_name,
-            stabilization_type="affine",
-            stabilization_method=settings.estimation_method,
-            stabilization_channels=sorted(
-                {settings.source_channel_name, settings.target_channel_name}
-            ),
-            affine_transform_zyx_list=pull_matrices,
-            time_indices=settings.time_indices,
-            output_voxel_size=voxel_size,
-        )
+    model = TransformSettings(
+        direction="forward",
+        matrices=[transform.to_list() for transform in transforms],
+        time_indices=settings.time_indices,
+        source_channels=[settings.source.channel],
+        target_channel=settings.target.channel if settings.target is not None else None,
+        method=settings.method,
+        voxel_size=voxel_size,
+    )
     model_to_yaml(model, output_filepath)
     click.echo(f"Transform settings saved to {output_filepath.resolve()}")
 
@@ -665,27 +646,27 @@ def estimate_transform_cli(
     monitor: bool,
     resume: bool,
 ) -> None:
-    """Estimate a transform series from source onto target with the registration engine.
+    """Estimate a transform series from source onto its reference with the registration engine.
 
-    Takes the same YAML as `estimate-registration` (beads or ants) and writes a config
-    for `register` / `stabilize`, plus a run journal and a per-timepoint report. One
-    SLURM job per timepoint, then one per flagged timepoint for repair. Passing the same
-    position and channel as source and target stabilizes that channel against its own
-    first or previous timepoint (`affine_transform_settings.t_reference`).
+    Takes an `EstimateTransformSettings` YAML (or a legacy `estimate-registration` /
+    `estimate-stabilization` one) and writes a `TransformSettings` config for `register` /
+    `stabilize`, plus a run journal and a per-timepoint report. One SLURM job per
+    timepoint, then one per flagged timepoint for repair. With `reference: first` or
+    `previous` the source channel is stabilized against itself and `-t` is ignored.
 
     \b
     Registration (source channel onto target channel):
     >>> biahub estimate-transform -s source.zarr/0/0/0 -t target.zarr/0/0/0 \\
-        -c estimate-registration-beads.yml -o ./registration_settings.yml
+        -c estimate-transform-beads.yml -o ./transforms.yml
 
     \b
-    Stabilization (a channel onto itself over time):
+    Stabilization (a channel onto its own first / previous timepoint):
     >>> biahub estimate-transform -s data.zarr/0/0/0 -t data.zarr/0/0/0 \\
-        -c estimate-stabilization-beads.yml -o ./stabilization_settings.yml
+        -c estimate-transform-stabilize.yml -o ./transforms.yml
 
     \b
     Retry an interrupted run, keeping finished timepoints:
-    >>> biahub estimate-transform --resume -s ... -t ... -c ... -o ./registration_settings.yml
+    >>> biahub estimate-transform --resume -s ... -t ... -c ... -o ./transforms.yml
     """  # noqa: D301
     estimate_transform(
         source_position_dirpaths=source_position_dirpaths,

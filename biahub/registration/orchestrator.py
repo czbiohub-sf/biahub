@@ -80,7 +80,13 @@ def estimate_series(
     return result
 
 
-def flag_series(result: SeriesResult, max_timepoints: int | None = None) -> list[int]:
+def flag_series(
+    result: SeriesResult,
+    max_timepoints: int | None = None,
+    k_mad: float = 2.0,
+    floor: float = 0.80,
+    hard_fail: float = 0.40,
+) -> list[int]:
     """Flag attempted timepoints against the run's own score distribution.
 
     Only timepoints that were attempted can be flagged; gaps in `time_indices` are not
@@ -94,6 +100,9 @@ def flag_series(result: SeriesResult, max_timepoints: int | None = None) -> list
         np.array([result.scores[t] for t in attempted]),
         label="repair",
         max_timepoints=max_timepoints,
+        k_mad=k_mad,
+        floor=floor,
+        hard_fail=hard_fail,
     )
     result.flagged = [attempted[i] for i in flagged_positions]
     return result.flagged
