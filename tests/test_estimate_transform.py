@@ -8,12 +8,10 @@ from scipy.ndimage import shift as ndi_shift
 
 from biahub.estimate_transform import estimate_transform
 from biahub.settings import (
-    AffineTransformSettings,
     AntsRegistrationSettings,
     BeadsMatchSettings,
     ChannelSettings,
     DetectPeaksSettings,
-    EstimateRegistrationSettings,
     EstimateTransformSettings,
     FocusSettings,
     ManualRegistrationSettings,
@@ -68,23 +66,40 @@ def beads_plate_with_a_blank_timepoint(tmp_path):
     return _write_plate(tmp_path / "beads_blank.zarr", [(ref, mov), (ref, mov), (ref, blank)])
 
 
-def _write_config(tmp_path, **overrides):
+def _write_config(
+    tmp_path,
+    *,
+    source="GFP",
+    target="Phase3D",
+    reference="cross",
+    method="beads",
+    transform_type="euclidean",
+    **blocks,
+):
     peaks = DetectPeaksSettings(
         threshold_abs=100, nms_distance=4, min_distance=0, block_size=[8, 8, 8]
     )
-    fields = {
-        "target_channel_name": "Phase3D",
-        "source_channel_name": "GFP",
-        "estimation_method": "beads",
-        "beads_match_settings": BeadsMatchSettings(
-            source_peaks_settings=peaks, target_peaks_settings=peaks
-        ),
-        "affine_transform_settings": AffineTransformSettings(transform_type="euclidean"),
-        **overrides,
-    }
+    if method == "beads":
+        blocks.setdefault(
+            "beads",
+            BeadsMatchSettings(source_peaks_settings=peaks, target_peaks_settings=peaks),
+        )
+    settings = EstimateTransformSettings(
+        source=ChannelSettings(channel=source),
+        target=ChannelSettings(channel=target) if reference == "cross" else None,
+        reference=reference,
+        method=method,
+        transform={"type": transform_type},
+        **blocks,
+    )
     path = tmp_path / "estimate.yml"
-    model_to_yaml(EstimateRegistrationSettings(**fields), path)
+    model_to_yaml(settings, path)
     return path
+
+
+def _pull_translations(output):
+    """Per-timepoint translation in the legacy pull direction (+APPLIED_SHIFT for a hit)."""
+    return np.asarray(load_transform_settings(output).as_direction("pull"))[:, :3, 3]
 
 
 def _run(plate, config, output, **kwargs):
@@ -96,12 +111,12 @@ def test_estimate_transform_writes_a_register_compatible_series(beads_plate, tmp
 
     _run(beads_plate, _write_config(tmp_path), output)
 
-    model = load_transform_settings(output).to_stabilization_settings()
-    assert len(model.affine_transform_zyx_list) == 2
-    for matrix in model.affine_transform_zyx_list:
-        # Stored in the legacy pull direction: from the reference grid back to where the
-        # content sits in the moving image, i.e. +APPLIED_SHIFT.
-        np.testing.assert_allclose(np.asarray(matrix)[:3, 3], APPLIED_SHIFT_ZYX, atol=0.5)
+    pull = _pull_translations(output)
+    assert len(pull) == 2
+    for row in pull:
+        # In the pull direction: from the reference grid back to where the content sits
+        # in the moving image, i.e. +APPLIED_SHIFT.
+        np.testing.assert_allclose(row, APPLIED_SHIFT_ZYX, atol=0.5)
 
     report = json.loads((output.parent / "estimate_transform_report.json").read_text())
     assert set(report["scores"]) == {"0", "1"}
@@ -121,10 +136,8 @@ def test_estimate_transform_single_timepoint_writes_registration_settings(
 
     _run(beads_plate, _write_config(tmp_path, time_indices=1), output)
 
-    model = load_transform_settings(output).to_registration_settings()
-    np.testing.assert_allclose(
-        np.asarray(model.affine_transform_zyx)[:3, 3], APPLIED_SHIFT_ZYX, atol=0.5
-    )
+    (row,) = _pull_translations(output)
+    np.testing.assert_allclose(row, APPLIED_SHIFT_ZYX, atol=0.5)
 
 
 def test_estimate_transform_resume_keeps_existing_records(beads_plate, tmp_path):
@@ -139,14 +152,10 @@ def test_estimate_transform_resume_keeps_existing_records(beads_plate, tmp_path)
 
     _run(beads_plate, _write_config(tmp_path), output, resume=True)
 
-    model = load_transform_settings(output).to_stabilization_settings()
+    pull = _pull_translations(output)
     # t=0 came from the planted record (forward +7 -> pull -7), t=1 was estimated.
-    np.testing.assert_allclose(
-        np.asarray(model.affine_transform_zyx_list[0])[:3, 3], [-7.0, -7.0, -7.0]
-    )
-    np.testing.assert_allclose(
-        np.asarray(model.affine_transform_zyx_list[1])[:3, 3], APPLIED_SHIFT_ZYX, atol=0.5
-    )
+    np.testing.assert_allclose(pull[0], [-7.0, -7.0, -7.0])
+    np.testing.assert_allclose(pull[1], APPLIED_SHIFT_ZYX, atol=0.5)
 
 
 def test_estimate_transform_flags_and_tries_to_repair_a_failed_timepoint(
@@ -177,29 +186,25 @@ def test_estimate_transform_flags_and_tries_to_repair_a_failed_timepoint(
     (attempt,) = journal["attempts"]
     assert attempt["t"] == 2 and attempt["accepted"] is False and attempt["failures"]
 
-    model = load_transform_settings(output).to_stabilization_settings()
-    assert len(model.affine_transform_zyx_list) == 3
-    np.testing.assert_allclose(  # filled from t=1
-        model.affine_transform_zyx_list[2], model.affine_transform_zyx_list[1]
-    )
+    matrices = load_transform_settings(output).matrices
+    assert len(matrices) == 3
+    np.testing.assert_allclose(matrices[2], matrices[1])  # filled from t=1
 
 
 def test_estimate_transform_ants_method_recovers_the_shift(beads_plate, tmp_path):
     output = tmp_path / "out" / "registration_settings.yml"
     config = _write_config(
         tmp_path,
-        estimation_method="ants",
-        ants_registration_settings=AntsRegistrationSettings(),
-        affine_transform_settings=AffineTransformSettings(transform_type="similarity"),
+        method="ants",
+        ants=AntsRegistrationSettings(),
+        transform_type="similarity",
         time_indices=0,
     )
 
     _run(beads_plate, config, output)
 
-    model = load_transform_settings(output).to_registration_settings()
-    np.testing.assert_allclose(
-        np.asarray(model.affine_transform_zyx)[:3, 3], APPLIED_SHIFT_ZYX, atol=0.5
-    )
+    (row,) = _pull_translations(output)
+    np.testing.assert_allclose(row, APPLIED_SHIFT_ZYX, atol=0.5)
     report = json.loads((output.parent / "estimate_transform_report.json").read_text())
     assert report["scores"]["0"] > 0.9  # correlation score
 
@@ -230,47 +235,14 @@ def test_estimate_transform_stabilizes_a_channel_against_itself(
     drifting_plate, tmp_path, t_reference, expected_pull_factor
 ):
     output = tmp_path / "out" / "stabilization_settings.yml"
-    config = _write_config(
-        tmp_path,
-        source_channel_name="GFP",
-        target_channel_name="GFP",
-        affine_transform_settings=AffineTransformSettings(
-            transform_type="euclidean", t_reference=t_reference
-        ),
-    )
+    config = _write_config(tmp_path, source="GFP", reference=t_reference)
 
     _run(drifting_plate, config, output)
 
-    model = load_transform_settings(output).to_stabilization_settings()
-    assert model.stabilization_channels == ["GFP"]
-    for matrix, factor in zip(
-        model.affine_transform_zyx_list, expected_pull_factor, strict=True
-    ):
-        np.testing.assert_allclose(
-            np.asarray(matrix)[:3, 3], [factor * s for s in APPLIED_SHIFT_ZYX], atol=0.5
-        )
-
-
-def test_estimate_registration_beads_path_runs_through_the_engine(beads_plate, tmp_path):
-    from biahub.estimate_registration import estimate_registration
-
-    output = tmp_path / "out" / "registration_settings.yml"
-    estimate_registration(
-        source_position_dirpaths=[beads_plate],
-        target_position_dirpaths=[beads_plate],
-        output_filepath=output,
-        config_filepath=_write_config(tmp_path),
-        registration_target_channel=None,
-        registration_source_channel=[],
-        local=True,
-    )
-
-    model = load_transform_settings(output).to_stabilization_settings()
-    assert len(model.affine_transform_zyx_list) == 2
-    np.testing.assert_allclose(
-        np.asarray(model.affine_transform_zyx_list[1])[:3, 3], APPLIED_SHIFT_ZYX, atol=0.5
-    )
-    assert (output.parent / "estimate_transform_report.json").exists()
+    model = load_transform_settings(output)
+    assert model.source_channels == ["GFP"] and model.target_channel is None
+    for row, factor in zip(_pull_translations(output), expected_pull_factor, strict=True):
+        np.testing.assert_allclose(row, [factor * s for s in APPLIED_SHIFT_ZYX], atol=0.5)
 
 
 def test_estimate_transform_phase_cross_corr_stabilizes_against_the_first_frame(
@@ -279,23 +251,17 @@ def test_estimate_transform_phase_cross_corr_stabilizes_against_the_first_frame(
     output = tmp_path / "out" / "stabilization_settings.yml"
     config = _write_config(
         tmp_path,
-        source_channel_name="GFP",
-        target_channel_name="GFP",
-        estimation_method="phase-cross-corr",
-        phase_cross_corr_settings=PhaseCrossCorrSettings(
-            t_reference="first", center_crop_xy=[40, 40]
-        ),
-        affine_transform_settings=AffineTransformSettings(transform_type="euclidean"),
+        source="GFP",
+        reference="first",
+        method="phase-cross-corr",
+        phase_cross_corr=PhaseCrossCorrSettings(t_reference="first", center_crop_xy=[40, 40]),
     )
 
     _run(drifting_plate, config, output)
 
-    model = load_transform_settings(output).to_stabilization_settings()
-    assert model.stabilization_method == "phase-cross-corr"
-    for matrix, factor in zip(model.affine_transform_zyx_list, [0, 1, 2], strict=True):
-        np.testing.assert_allclose(
-            np.asarray(matrix)[:3, 3], [factor * s for s in APPLIED_SHIFT_ZYX], atol=0.5
-        )
+    assert load_transform_settings(output).method == "phase-cross-corr"
+    for row, factor in zip(_pull_translations(output), [0, 1, 2], strict=True):
+        np.testing.assert_allclose(row, [factor * s for s in APPLIED_SHIFT_ZYX], atol=0.5)
 
 
 def test_estimate_transform_manual_runs_in_process_on_one_timepoint(
@@ -316,19 +282,15 @@ def test_estimate_transform_manual_runs_in_process_on_one_timepoint(
     output = tmp_path / "out" / "registration_settings.yml"
     config = _write_config(
         tmp_path,
-        estimation_method="manual",
-        manual_registration_settings=ManualRegistrationSettings(
-            time_index=1, affine_90degree_rotation=1
-        ),
+        method="manual",
+        manual=ManualRegistrationSettings(time_index=1, affine_90degree_rotation=1),
     )
 
     estimate_transform([beads_plate], [beads_plate], config, output, cluster="slurm")
 
     assert len(calls) == 1 and calls[0]["pre_affine_90degree_rotation"] == 1
-    model = load_transform_settings(output).to_registration_settings()
-    np.testing.assert_allclose(
-        np.asarray(model.affine_transform_zyx)[:3, 3], APPLIED_SHIFT_ZYX
-    )
+    (row,) = _pull_translations(output)
+    np.testing.assert_allclose(row, APPLIED_SHIFT_ZYX)
 
 
 def test_estimate_transform_accepts_the_unified_config_and_writes_forward_matrices(

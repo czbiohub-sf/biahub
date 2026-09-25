@@ -112,13 +112,10 @@ Some steps include an `estimate-*` command that writes a YAML of parameters you 
 | `apply-inv-tf` | Apply an inverse transfer function to a dataset |
 | `reconstruct` | Reconstruct phase/birefringence in one step |
 | | |
-| `estimate-registration` | Estimate the affine transform between arms or timepoints |
-| `optimize-registration` | Refine a transform via match filtering |
-| `register` | Apply an affine transform to positions |
+| `estimate-transform` | Estimate a transform series: registration between arms or stabilization over time |
+| `apply-transform` | Apply a transform series to positions |
+| `convert-settings` | Convert a retired `estimate-registration` / `estimate-stabilization` / `register` / `stabilize` config |
 | `estimate-crop` | Estimate the crop region for dual-channel alignment |
-| | |
-| `estimate-stabilization` | Estimate XYZ translation matrices |
-| `stabilize` | Apply stabilization transforms |
 | | |
 | `estimate-stitch` | Estimate stitching parameters for positions |
 | `stitch` | Stitch positions within wells |
@@ -150,21 +147,20 @@ biahub deskew          -i ./lightsheet.zarr/*/*/* -c ./deskew.yml -o ./lightshee
 # RECONSTRUCT PHASE/BIREFRINGENCE
 biahub reconstruct -i ./labelfree.zarr/*/*/* -c ./recon.yml -o ./labelfree_reconstructed.zarr
 
-# STABILIZE
-biahub estimate-stabilization -i ./labelfree.zarr/*/*/* -o ./stabilization.yml \
-                              --stabilize-xy --stabilize-z
-biahub stabilize              -i ./labelfree.zarr/*/*/* -c ./stabilization.yml \
-                              -o ./labelfree_stabilized.zarr
+# STABILIZE (the source channel against its own first / previous timepoint)
+biahub estimate-transform -s ./labelfree.zarr/0/0/0 -c ./estimate-stabilization.yml \
+                          -o ./stabilization/transforms.yml
+biahub apply-transform    -s ./labelfree.zarr/*/*/* -c ./stabilization/transforms.yml \
+                          -o ./labelfree_stabilized.zarr
 
-# REGISTER
-biahub estimate-registration -s ./labelfree_reconstructed.zarr/0/0/0 \
-                             -t ./lightsheet_deskewed.zarr/0/0/0 -o ./register.yml
-biahub optimize-registration -s ./labelfree_reconstructed.zarr/0/0/0 \
-                             -t ./lightsheet_deskewed.zarr/0/0/0 \
-                             -c ./register.yml -o ./register_optimized.yml
-biahub register              -s ./labelfree_reconstructed.zarr/*/*/* \
-                             -t ./lightsheet_deskewed.zarr/*/*/* \
-                             -c ./register_optimized.yml -o ./registered.zarr
+# REGISTER (light-sheet source onto the label-free target; refine an existing transform
+# by giving it as `transform.seed` in the config)
+biahub estimate-transform -s ./lightsheet_deskewed.zarr/0/0/0 \
+                          -t ./labelfree_reconstructed.zarr/0/0/0 \
+                          -c ./estimate-registration.yml -o ./registration/transforms.yml
+biahub apply-transform    -s ./lightsheet_deskewed.zarr/*/*/* \
+                          -t ./labelfree_reconstructed.zarr/*/*/* \
+                          -c ./registration/transforms.yml -o ./registered.zarr
 
 # CONCATENATE CHANNELS
 biahub concatenate -c ./concatenate.yml -o ./concatenated.zarr

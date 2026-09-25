@@ -45,7 +45,7 @@ from biahub.utils.ngff import PROVENANCE_METADATA_KEYS, resolve_ome_zarr_version
 logger = logging.getLogger(__name__)
 
 # Optical parameters for waveorder focus finding (focus_from_transverse_band),
-# shared with biahub.estimate_stabilization.
+# the mantis label-free arm; the same values as biahub.settings.FocusSettings' defaults.
 NA_DET = 1.35
 LAMBDA_ILL = 0.500
 
