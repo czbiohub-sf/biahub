@@ -138,6 +138,9 @@ def test_estimate_transform_single_timepoint_writes_registration_settings(
 
     (row,) = _pull_translations(output)
     np.testing.assert_allclose(row, APPLIED_SHIFT_ZYX, atol=0.5)
+    # A single estimated matrix is the series' transform: apply-transform must write
+    # every timepoint with it, not just the one it was estimated from.
+    assert load_transform_settings(output).time_indices == "all"
 
 
 def test_estimate_transform_resume_keeps_existing_records(beads_plate, tmp_path):
