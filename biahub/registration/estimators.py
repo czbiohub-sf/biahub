@@ -566,8 +566,8 @@ class PCCEstimator:
     """TransformEstimator using phase cross-correlation (rigid translation only).
 
     `phase_cross_corr(ref, mov)`'s shift is already the forward (moving -> reference)
-    translation in the array's own axis order (see issue #356 for a case where an
-    existing caller of this function builds the wrong-axis matrix by hand instead).
+    translation in the array's own axis order. `crop_zyx` restricts the correlation to a
+    sub-volume (a translation measured on a crop holds for the whole volume).
     """
 
     def __init__(
@@ -575,17 +575,23 @@ class PCCEstimator:
         function_type: Literal["custom", "custom_padding"] = "custom",
         normalization: Literal["magnitude", "classic"] | None = None,
         maximum_shift: float = 1.2,
+        crop_zyx: tuple[slice, slice, slice] | None = None,
     ):
         self.function_type = function_type
         self.normalization = normalization
         self.maximum_shift = maximum_shift
+        self.crop_zyx = crop_zyx
 
     @classmethod
-    def from_settings(cls, settings: PhaseCrossCorrSettings) -> PCCEstimator:
+    def from_settings(
+        cls, settings: PhaseCrossCorrSettings, shape_zyx: tuple[int, int, int] | None = None
+    ) -> PCCEstimator:
+        """Build from the settings; with `shape_zyx`, resolve the crop the settings describe."""
         return cls(
             function_type=settings.function_type,
             normalization=settings.normalization,
             maximum_shift=settings.maximum_shift,
+            crop_zyx=pcc_crop(settings, shape_zyx) if shape_zyx is not None else None,
         )
 
     def estimate(
@@ -594,6 +600,8 @@ class PCCEstimator:
         # PCC is correlation-based -- it finds the peak directly, no seed needed.
         mov = np.asarray(mov).astype(np.float32)
         ref = np.asarray(ref).astype(np.float32)
+        if self.crop_zyx is not None:
+            mov, ref = mov[self.crop_zyx], ref[self.crop_zyx]
         if self.function_type == "custom_padding":
             shift, _corr = phase_cross_corr_padding(
                 ref, mov, maximum_shift=self.maximum_shift, normalization=self.normalization
@@ -601,6 +609,32 @@ class PCCEstimator:
         else:
             shift, _corr = phase_cross_corr(ref, mov, normalization=self.normalization)
         return Transform.from_translation(shift)
+
+
+def pcc_crop(
+    settings: PhaseCrossCorrSettings, shape_zyx: tuple[int, int, int]
+) -> tuple[slice, slice, slice]:
+    """Resolve the sub-volume `PhaseCrossCorrSettings` asks to correlate on.
+
+    Explicit `Z_slice` / `Y_slice` / `X_slice` win; otherwise `center_crop_xy` takes a
+    centred window; otherwise the full extent.
+    """
+    Z, Y, X = shape_zyx
+    y_idx, x_idx = slice(0, Y), slice(0, X)
+    if settings.center_crop_xy:
+        cx, cy = settings.center_crop_xy
+        x_idx = slice(X // 2 - cx // 2, X // 2 + cx // 2)
+        y_idx = slice(Y // 2 - cy // 2, Y // 2 + cy // 2)
+    if settings.X_slice != "all":
+        x_idx = slice(settings.X_slice[0], settings.X_slice[1])
+    if settings.Y_slice != "all":
+        y_idx = slice(settings.Y_slice[0], settings.Y_slice[1])
+    z_idx = (
+        slice(0, Z)
+        if settings.Z_slice == "all"
+        else slice(settings.Z_slice[0], settings.Z_slice[1])
+    )
+    return z_idx, y_idx, x_idx
 
 
 _ANTS_TRANSFORM_TYPE = {
@@ -618,7 +652,7 @@ class AntsEstimator:
     (`ants.preprocess_zyx`: optional crop to their overlap, reference mask, clip, Sobel),
     register, and compose the correction back through the crop offset --
     `shift(+offset) @ correction @ shift(-offset) @ seed`. This is the legacy
-    `ants.estimate_czyx` pipeline in the engine's forward (moving -> reference)
+    legacy ANTs pipeline in the engine's forward (moving -> reference)
     convention.
 
     `ants.estimate()`'s `fwd_transform` is, despite its name, the reference -> moving
