@@ -147,19 +147,19 @@ biahub deskew          -i ./lightsheet.zarr/*/*/* -c ./deskew.yml -o ./lightshee
 # RECONSTRUCT PHASE/BIREFRINGENCE
 biahub reconstruct -i ./labelfree.zarr/*/*/* -c ./recon.yml -o ./labelfree_reconstructed.zarr
 
-# STABILIZE (the source channel against its own first / previous timepoint)
-biahub estimate-transform -s ./labelfree.zarr/0/0/0 -c ./estimate-stabilization.yml \
+# STABILIZE (the moving channel against its own first / previous timepoint)
+biahub estimate-transform -m ./labelfree.zarr/0/0/0 -c ./estimate-stabilization.yml \
                           -o ./stabilization/transforms.yml
-biahub apply-transform    -s ./labelfree.zarr/*/*/* -c ./stabilization/transforms.yml \
+biahub apply-transform    -m ./labelfree.zarr/*/*/* -c ./stabilization/transforms.yml \
                           -o ./labelfree_stabilized.zarr
 
-# REGISTER (light-sheet source onto the label-free target; refine an existing transform
+# REGISTER (moving light-sheet onto the label-free reference; refine an existing transform
 # by giving it as `transform.seed` in the config)
-biahub estimate-transform -s ./lightsheet_deskewed.zarr/0/0/0 \
-                          -t ./labelfree_reconstructed.zarr/0/0/0 \
+biahub estimate-transform -m ./lightsheet_deskewed.zarr/0/0/0 \
+                          -r ./labelfree_reconstructed.zarr/0/0/0 \
                           -c ./estimate-registration.yml -o ./registration/transforms.yml
-biahub apply-transform    -s ./lightsheet_deskewed.zarr/*/*/* \
-                          -t ./labelfree_reconstructed.zarr/*/*/* \
+biahub apply-transform    -m ./lightsheet_deskewed.zarr/*/*/* \
+                          -r ./labelfree_reconstructed.zarr/*/*/* \
                           -c ./registration/transforms.yml -o ./registered.zarr
 
 # CONCATENATE CHANNELS
