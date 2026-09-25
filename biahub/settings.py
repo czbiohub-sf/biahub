@@ -1064,13 +1064,23 @@ class EstimateTransformSettings(MyBaseModel):
                 **common,
             )
         method = legacy.stabilization_method
+        focus_finding = None
         if method == "focus-finding":
-            raise ValueError("focus-finding stabilization has no engine estimator yet")
-        reference = (
-            legacy.phase_cross_corr_settings.t_reference
-            if method == "phase-cross-corr" and legacy.phase_cross_corr_settings is not None
-            else ats.t_reference
-        )
+            # `stabilization_type` becomes the method's axes; the crop comes from whichever
+            # block the legacy config filled in. average_across_wells / skip_beads_fov
+            # were per-plate orchestration, not part of the estimate.
+            stack_reg = legacy.stack_reg_settings
+            focus = legacy.focus_finding_settings or (
+                stack_reg.focus_finding_settings if stack_reg is not None else None
+            )
+            crop = (focus or stack_reg or FocusFindingSettings()).center_crop_xy
+            focus_finding = FocusSettings(axes=legacy.stabilization_type, center_crop_xy=crop)
+        if method == "phase-cross-corr" and legacy.phase_cross_corr_settings is not None:
+            reference = legacy.phase_cross_corr_settings.t_reference
+        elif method == "focus-finding" and legacy.stack_reg_settings is not None:
+            reference = legacy.stack_reg_settings.t_reference
+        else:
+            reference = ats.t_reference
         return cls(
             source=ChannelSettings(channel=legacy.stabilization_estimation_channel),
             target=None,
@@ -1078,6 +1088,7 @@ class EstimateTransformSettings(MyBaseModel):
             method=method,
             beads=legacy.beads_match_settings,
             phase_cross_corr=legacy.phase_cross_corr_settings,
+            focus_finding=focus_finding,
             **common,
         )
 

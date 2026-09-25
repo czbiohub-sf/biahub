@@ -57,16 +57,15 @@ def test_every_legacy_estimate_registration_example_converts(example):
     "example",
     sorted(p.name for p in SETTINGS_DIR.glob("example_estimate_stabilization_settings*.yml")),
 )
-def test_every_legacy_estimate_stabilization_example_converts_or_says_why_not(example):
+def test_every_legacy_estimate_stabilization_example_converts(example):
     legacy = yaml_to_model(SETTINGS_DIR / example, EstimateStabilizationSettings)
-    if legacy.stabilization_method == "focus-finding":
-        with pytest.raises(ValueError, match="focus-finding"):
-            EstimateTransformSettings.from_legacy(legacy)
-        return
     unified = EstimateTransformSettings.from_legacy(legacy)
     assert unified.target is None and unified.reference in ("first", "previous")
     assert unified.source.channel == legacy.stabilization_estimation_channel
     assert unified.method == legacy.stabilization_method
+    if legacy.stabilization_method == "focus-finding":
+        assert unified.focus_finding.axes == legacy.stabilization_type
+        assert unified.focus_finding.center_crop_xy == [800, 800]
 
 
 def test_loader_accepts_unified_and_legacy_estimate_configs(tmp_path):
