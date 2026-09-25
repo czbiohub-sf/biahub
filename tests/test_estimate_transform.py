@@ -13,11 +13,13 @@ from biahub.settings import (
     BeadsMatchSettings,
     DetectPeaksSettings,
     EstimateRegistrationSettings,
+    RegistrationSettings,
     StabilizationSettings,
 )
 from biahub.utils.config import model_to_yaml, yaml_to_model
 
 APPLIED_SHIFT_ZYX = (2.0, -3.0, 4.0)
+SHAPE = (40, 60, 60)
 
 
 def _synthetic_bead_volume(rng, shape, n_beads=15, sigma=2.0, amplitude=500.0, noise_std=5.0):
@@ -32,21 +34,33 @@ def _synthetic_bead_volume(rng, shape, n_beads=15, sigma=2.0, amplitude=500.0, n
     return volume
 
 
-@pytest.fixture
-def beads_plate(tmp_path):
-    """Two timepoints; the GFP channel is Phase3D shifted by APPLIED_SHIFT_ZYX."""
-    rng = np.random.default_rng(11)
-    shape = (40, 60, 60)
-    ref = _synthetic_bead_volume(rng, shape)
-    mov = ndi_shift(ref, shift=APPLIED_SHIFT_ZYX, order=1, mode="constant", cval=0.0)
-    data = np.stack([np.stack([ref, mov])] * 2).astype(np.float32)  # (T=2, C=2, Z, Y, X)
-
-    plate_path = tmp_path / "beads.zarr"
+def _write_plate(path, frames):
+    """frames: list of (ref, mov) per timepoint -> channels ["Phase3D", "GFP"]."""
+    data = np.stack([np.stack(pair) for pair in frames]).astype(np.float32)
     with open_ome_zarr(
-        plate_path, layout="hcs", mode="w", channel_names=["Phase3D", "GFP"]
+        path, layout="hcs", mode="w", channel_names=["Phase3D", "GFP"]
     ) as plate:
         plate.create_position("A", "1", "0")["0"] = data
-    return plate_path / "A" / "1" / "0"
+    return path / "A" / "1" / "0"
+
+
+@pytest.fixture
+def beads_plate(tmp_path):
+    """Two timepoints; GFP is Phase3D shifted by APPLIED_SHIFT_ZYX."""
+    rng = np.random.default_rng(11)
+    ref = _synthetic_bead_volume(rng, SHAPE)
+    mov = ndi_shift(ref, shift=APPLIED_SHIFT_ZYX, order=1, mode="constant", cval=0.0)
+    return _write_plate(tmp_path / "beads.zarr", [(ref, mov), (ref, mov)])
+
+
+@pytest.fixture
+def beads_plate_with_a_blank_timepoint(tmp_path):
+    """Three timepoints; the last GFP frame has no beads, only noise."""
+    rng = np.random.default_rng(11)
+    ref = _synthetic_bead_volume(rng, SHAPE)
+    mov = ndi_shift(ref, shift=APPLIED_SHIFT_ZYX, order=1, mode="constant", cval=0.0)
+    blank = rng.normal(0, 5.0, size=SHAPE).astype(np.float32)
+    return _write_plate(tmp_path / "beads_blank.zarr", [(ref, mov), (ref, mov), (ref, blank)])
 
 
 def _write_config(tmp_path, **overrides):
@@ -63,22 +77,25 @@ def _write_config(tmp_path, **overrides):
         "affine_transform_settings": AffineTransformSettings(transform_type="euclidean"),
         **overrides,
     }
-    settings = EstimateRegistrationSettings(**fields)
     path = tmp_path / "estimate.yml"
-    model_to_yaml(settings, path)
+    model_to_yaml(EstimateRegistrationSettings(**fields), path)
     return path
+
+
+def _run(plate, config, output, **kwargs):
+    estimate_transform([plate], [plate], config, output, cluster="debug", **kwargs)
 
 
 def test_estimate_transform_writes_a_register_compatible_series(beads_plate, tmp_path):
     output = tmp_path / "out" / "registration_settings.yml"
 
-    estimate_transform([beads_plate], [beads_plate], _write_config(tmp_path), output)
+    _run(beads_plate, _write_config(tmp_path), output)
 
     model = yaml_to_model(output, StabilizationSettings)
     assert len(model.affine_transform_zyx_list) == 2
     for matrix in model.affine_transform_zyx_list:
-        # The stored matrix is the legacy pull direction: it points from the reference
-        # grid back to where the content sits in the moving image, i.e. +APPLIED_SHIFT.
+        # Stored in the legacy pull direction: from the reference grid back to where the
+        # content sits in the moving image, i.e. +APPLIED_SHIFT.
         np.testing.assert_allclose(np.asarray(matrix)[:3, 3], APPLIED_SHIFT_ZYX, atol=0.5)
 
     report = json.loads((output.parent / "estimate_transform_report.json").read_text())
@@ -86,17 +103,18 @@ def test_estimate_transform_writes_a_register_compatible_series(beads_plate, tmp
     assert all(score > 0.5 for score in report["scores"].values())
     assert report["errors"] == {} and report["filled_from_neighbour"] == []
     assert (output.parent / "run_journal.json").exists()
+    assert sorted(p.name for p in (output.parent / "timepoints").iterdir()) == [
+        "0.json",
+        "1.json",
+    ]
 
 
 def test_estimate_transform_single_timepoint_writes_registration_settings(
     beads_plate, tmp_path
 ):
-    from biahub.settings import RegistrationSettings
-
     output = tmp_path / "out" / "registration_settings.yml"
-    estimate_transform(
-        [beads_plate], [beads_plate], _write_config(tmp_path, time_indices=1), output
-    )
+
+    _run(beads_plate, _write_config(tmp_path, time_indices=1), output)
 
     model = yaml_to_model(output, RegistrationSettings)
     np.testing.assert_allclose(
@@ -104,7 +122,64 @@ def test_estimate_transform_single_timepoint_writes_registration_settings(
     )
 
 
+def test_estimate_transform_resume_keeps_existing_records(beads_plate, tmp_path):
+    output = tmp_path / "out" / "registration_settings.yml"
+    planted = np.eye(4)
+    planted[:3, 3] = [7.0, 7.0, 7.0]
+    timepoints = output.parent / "timepoints"
+    timepoints.mkdir(parents=True)
+    (timepoints / "0.json").write_text(
+        json.dumps({"t": 0, "matrix": planted.tolist(), "score": 0.9, "error": None})
+    )
+
+    _run(beads_plate, _write_config(tmp_path), output, resume=True)
+
+    model = yaml_to_model(output, StabilizationSettings)
+    # t=0 came from the planted record (forward +7 -> pull -7), t=1 was estimated.
+    np.testing.assert_allclose(
+        np.asarray(model.affine_transform_zyx_list[0])[:3, 3], [-7.0, -7.0, -7.0]
+    )
+    np.testing.assert_allclose(
+        np.asarray(model.affine_transform_zyx_list[1])[:3, 3], APPLIED_SHIFT_ZYX, atol=0.5
+    )
+
+
+def test_estimate_transform_flags_and_tries_to_repair_a_failed_timepoint(
+    beads_plate_with_a_blank_timepoint, tmp_path
+):
+    output = tmp_path / "out" / "registration_settings.yml"
+
+    _run(beads_plate_with_a_blank_timepoint, _write_config(tmp_path), output)
+
+    report = json.loads((output.parent / "estimate_transform_report.json").read_text())
+    assert "2" in report["errors"] and "EstimationError" in report["errors"]["2"]
+    assert report["flagged"] == [2]
+    repair = report["repairs"]["2"]
+    assert repair["accepted"] is False
+    # No beads in the frame: every candidate fails the same way, and each failure is named.
+    assert set(repair["candidate_failures"]) == {"t-1", "consensus_full", "config_seed"}
+    failures = repair["candidate_failures"]
+    assert (
+        "EstimationError" in failures["t-1"] and "EstimationError" in failures["config_seed"]
+    )
+    assert failures["consensus_full"].startswith(
+        "ValueError: Consensus seed: only 2 timepoints"
+    )
+    assert report["filled_from_neighbour"] == [2]
+    assert (output.parent / "repairs" / "2.json").exists()
+
+    journal = json.loads((output.parent / "run_journal.json").read_text())
+    (attempt,) = journal["attempts"]
+    assert attempt["t"] == 2 and attempt["accepted"] is False and attempt["failures"]
+
+    model = yaml_to_model(output, StabilizationSettings)
+    assert len(model.affine_transform_zyx_list) == 3
+    np.testing.assert_allclose(  # filled from t=1
+        model.affine_transform_zyx_list[2], model.affine_transform_zyx_list[1]
+    )
+
+
 def test_estimate_transform_rejects_non_beads_methods(beads_plate, tmp_path):
     config = _write_config(tmp_path, estimation_method="manual")
     with pytest.raises(click.UsageError, match="'beads'"):
-        estimate_transform([beads_plate], [beads_plate], config, tmp_path / "out.yml")
+        _run(beads_plate, config, tmp_path / "out.yml")
