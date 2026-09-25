@@ -5,9 +5,9 @@ from scipy.ndimage import gaussian_filter
 from scipy.ndimage import shift as ndi_shift
 
 from biahub.core.transform import Transform
-from biahub.registration.ants import correlation_score
 from biahub.registration.metrics import (
     bead_alignment_metrics,
+    correlation_score,
     gradient_correlation,
     normalized_mutual_information,
     residual_score,

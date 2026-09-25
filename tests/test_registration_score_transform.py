@@ -1,7 +1,7 @@
 import numpy as np
 
 from biahub.core.transform import Transform
-from biahub.registration.beads import score_transform
+from biahub.registration.metrics import score_transform
 from biahub.settings import BeadsMatchSettings
 
 
@@ -18,7 +18,7 @@ def test_score_transform_warps_mov_then_scores_peak_overlap(monkeypatch):
         seen["ref"] = ref
         return np.array([[0.0, 0.0, 0.0]]), np.array([[0.0, 0.0, 0.0]])
 
-    monkeypatch.setattr("biahub.registration.beads.peaks_from_beads", _fake_peaks_from_beads)
+    monkeypatch.setattr("biahub.registration.metrics.peaks_from_beads", _fake_peaks_from_beads)
 
     score = score_transform(transform, mov, ref, BeadsMatchSettings())
 
@@ -34,7 +34,7 @@ def test_score_transform_returns_nan_when_not_enough_peaks_detected(monkeypatch)
     transform = Transform.from_translation([0.0, 0.0, 0.0])
 
     monkeypatch.setattr(
-        "biahub.registration.beads.peaks_from_beads",
+        "biahub.registration.metrics.peaks_from_beads",
         lambda *args, **kwargs: None,
     )
 
