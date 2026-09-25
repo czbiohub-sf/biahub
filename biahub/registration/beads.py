@@ -473,6 +473,23 @@ def matches_from_beads(
         matches = matcher.match(mov_graph, ref_graph)
 
     # Filter as part of the pipeline
+    elif beads_match_settings.algorithm == "spectral":
+        spectral_match_settings = beads_match_settings.spectral_match_settings
+        # Spectral matching works from pairwise distances of the raw coordinates; the
+        # graph is only a node container here.
+        mov_graph = Graph.from_nodes(mov_peaks)
+        ref_graph = Graph.from_nodes(ref_peaks)
+        matcher = GraphMatcher(
+            algorithm="spectral",
+            spectral_sigma=spectral_match_settings.sigma,
+            spectral_rel_cut=spectral_match_settings.rel_cut,
+            spectral_max_iter=spectral_match_settings.max_iter,
+            verbose=verbose,
+        )
+        matches = matcher.match(mov_graph, ref_graph)
+    else:
+        raise ValueError(f"Unknown matching algorithm: {beads_match_settings.algorithm}")
+
     matches = matcher.filter_matches(
         matches,
         mov_graph,
