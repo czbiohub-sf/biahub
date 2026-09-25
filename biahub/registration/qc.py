@@ -79,6 +79,9 @@ def select_flagged(
     score_col: ArrayLike,
     label: str,
     max_timepoints: int | None = None,
+    k_mad: float = FLAG_K_MAD,
+    floor: float = FLAG_FLOOR_SCORE,
+    hard_fail: float = HARD_FAIL_SCORE,
 ) -> tuple[list[int], dict]:
     """Timepoints for a fallback pass to act on, from the adaptive median-2*MAD line.
 
@@ -95,7 +98,7 @@ def select_flagged(
     score_col = np.asarray(score_col, dtype=float)
     n_t = len(score_col)
     try:
-        flags = flag_timepoints(score_col)
+        flags = flag_timepoints(score_col, k_mad=k_mad, floor=floor, hard_fail=hard_fail)
     except ValueError:
         click.echo(f"{label}: no finite scores to flag against; skipping.")
         return [], {}
