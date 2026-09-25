@@ -1,0 +1,86 @@
+# biahub estimate-transform -- beads registration of a mantis dataset (light-sheet GFP beads
+# onto label-free Phase3D). Production beads settings of 2025_09_18_72hpf_cldnb-she-myo6b reduced
+# to the fields EstimateRegistrationSettings accepts, plus:
+#   spectral_arm: always      -- acquire-then-refine second arm; measured better than hungarian-only
+#   seed_correction votefit    -- corrects a drifted approx_transform by bead displacement voting
+# Replace approx_transform with the dataset's previous seed when one exists. Same instrument
+# geometry -> same linear part; only the translation moves between acquisitions.
+target_channel_name: Phase3D
+source_channel_name: GFP EX488 EM525-45
+estimation_method: beads
+beads_match_settings:
+  algorithm: hungarian
+  source_peaks_settings:
+    threshold_abs: 110
+    nms_distance: 16
+    min_distance: 0
+    block_size:
+    - 8
+    - 8
+    - 8
+  target_peaks_settings:
+    threshold_abs: 0.8
+    nms_distance: 16
+    min_distance: 0
+    block_size:
+    - 8
+    - 8
+    - 8
+  hungarian_match_settings:
+    distance_metric: euclidean
+    cost_threshold: 0.1
+    cross_check: true
+    max_ratio: 0.95
+    edge_graph_settings:
+      method: knn
+      k: 10
+    cost_matrix_settings:
+      normalize: false
+      weights:
+        dist: 0.5
+        edge_angle: 1.0
+        edge_length: 1.0
+        pca_dir: 0.0
+        pca_aniso: 0.0
+        edge_descriptor: 0.0
+  filter_matches_settings:
+    min_distance_quantile: 0.01
+    max_distance_quantile: 0.95
+    angle_threshold: 0
+    direction_threshold: 0.0
+  qc_settings:
+    iterations: 2
+    score_threshold: 0.4
+    score_centroid_mask_radius: 6
+  spectral_arm: always
+  seed_correction_settings:
+    mode: votefit
+affine_transform_settings:
+  t_reference: first
+  transform_type: affine
+  compute_approx_transform: false
+  use_prev_t_transform: true
+  approx_transform:
+  - - 0.9907113909721375
+    - 0.01176353357732296
+    - -0.0023756297305226326
+    - 11.669376373291016
+  - - -0.0027884417213499546
+    - -0.022817790508270264
+    - -1.2758545875549316
+    - 1199.9306640625
+  - - -0.015202872455120087
+    - 1.2757678031921387
+    - -0.022782862186431885
+    - -5.484277725219727
+  - - 0.0
+    - 0.0
+    - 0.0
+    - 1.0
+eval_transform_settings:
+  validation_window_size: 10
+  validation_tolerance: 100.0
+  interpolation_window_size: 3
+  interpolation_type: linear
+verbose: false
+time_indices: all
