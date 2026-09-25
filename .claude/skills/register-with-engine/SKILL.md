@@ -62,8 +62,8 @@ If `--well` was given, use it.
 ## 4. Build the config
 
 Start from `templates/estimate-transform-beads.yml` in this skill. It is the
-production beads config reduced to the fields the engine's `EstimateRegistrationSettings`
-accepts, with `spectral_arm: always` (measured on 2025_09_18: median score 0.875 vs
+production beads config in the engine's `EstimateTransformSettings` schema (an old
+`estimate-registration` config converts with `biahub convert-settings`), with `spectral_arm: always` (measured on 2025_09_18: median score 0.875 vs
 0.857 without, 187/240 timepoints identical to production).
 
 Adjust:

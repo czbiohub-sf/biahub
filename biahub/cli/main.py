@@ -65,14 +65,14 @@ COMMANDS = [
         "help": "Deskew a single position across T and C axes",
     },
     {
-        "name": "estimate-registration",
-        "import_path": "biahub.estimate_registration.estimate_registration_cli",
-        "help": "Estimate affine transform between timepoints or arms",
-    },
-    {
         "name": "estimate-transform",
         "import_path": "biahub.estimate_transform.estimate_transform_cli",
-        "help": "Estimate a transform series with the registration engine (beads)",
+        "help": "Estimate a transform series (registration or stabilization)",
+    },
+    {
+        "name": "convert-settings",
+        "import_path": "biahub.convert_settings.convert_settings_cli",
+        "help": "Convert a retired registration/stabilization config to the unified one",
     },
     {
         "name": "flat-field",
@@ -83,11 +83,6 @@ COMMANDS = [
         "name": "flip",
         "import_path": "biahub.flip.flip_cli",
         "help": "Flip images in a dataset",
-    },
-    {
-        "name": "optimize-registration",
-        "import_path": "biahub.optimize_registration.optimize_registration_cli",
-        "help": "Optimize transform based on match filtering",
     },
     {
         "name": "pyramid",
@@ -113,11 +108,6 @@ COMMANDS = [
         "name": "concatenate",
         "import_path": "biahub.concatenate.concatenate_cli",
         "help": "Concatenate datasets (with optional cropping)",
-    },
-    {
-        "name": "estimate-stabilization",
-        "import_path": "biahub.estimate_stabilization.estimate_stabilization_cli",
-        "help": "Estimate translation matrices for XYZ stabilization",
     },
     {
         "name": "estimate-crop",

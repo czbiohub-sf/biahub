@@ -1,9 +1,16 @@
 import numpy as np
 import pytest
 
+from click.testing import CliRunner
 from iohub import open_ome_zarr
 
-from biahub.apply_transform import apply_transform, canvas, overlap_slices
+from biahub.apply_transform import (
+    apply_transform,
+    apply_transform_cli,
+    canvas,
+    largest_box,
+    overlap_slices,
+)
 from biahub.settings import TransformSettings
 from biahub.utils.config import model_to_yaml
 
@@ -21,6 +28,22 @@ def test_overlap_slices_of_a_translation_is_the_shifted_box():
         (20, 40, 40), (20, 40, 40), np.array(_translation(0, 3, 0)), downsample=1
     )
     assert (z, y, x) == (slice(0, 20), slice(0, 37), slice(0, 40))
+
+
+def test_largest_box_is_exact_on_a_sheared_mask():
+    # A full box sheared along x by one voxel per z: the slice-at-middle heuristic keeps
+    # the middle rectangle and clips z; the exact box trades a little x for all of z.
+    z, y, x = 12, 20, 40
+    mask = np.zeros((z, y, x), dtype=bool)
+    for k in range(z):
+        mask[k, :, k : k + 24] = True
+    zs, ys, xs = largest_box(mask)
+    assert mask[zs, ys, xs].all()
+    assert (zs.stop - zs.start) * (ys.stop - ys.start) * (xs.stop - xs.start) == z * y * (
+        24 - (z - 1)
+    )
+    with pytest.raises(ValueError):
+        largest_box(np.zeros((2, 2, 2), dtype=bool))
 
 
 def test_canvas_intersects_over_timepoints_and_keep_overhang_keeps_the_grid():
@@ -129,10 +152,70 @@ def test_apply_transform_registers_source_channels_onto_a_target_store(
     )  # identity-transformed source channel
 
 
-def test_apply_transform_accepts_legacy_register_configs(structured_plate, tmp_path):
-    position, _data = structured_plate
-    output = tmp_path / "out.zarr"
-    apply_transform(
-        [position], "settings/example_registration_settings.yml", output, cluster="debug"
+def test_apply_transform_time_indices_subset_uses_each_timepoints_own_matrix(
+    structured_plate, tmp_path
+):
+    position, data = structured_plate
+    forward = [_translation(0, 0, 0), _translation(0, 2, 0), _translation(0, 4, 0)]
+    config = tmp_path / "transforms.yml"
+    model_to_yaml(
+        TransformSettings(
+            direction="forward",
+            matrices=forward,
+            source_channels=["GFP"],
+            time_indices=[0, 2],
+            keep_overhang=True,
+        ),
+        config,
     )
-    assert (output / "A" / "1" / "0").exists()
+    output = tmp_path / "out.zarr"
+
+    apply_transform([position], config, output, cluster="debug")
+
+    with open_ome_zarr(output / "A" / "1" / "0", mode="r") as out:
+        result = np.asarray(out.data)
+    assert result.shape[0] == 2
+    # Output t=1 is input t=2 moved by its own matrix (+4 rows), not by matrices[1].
+    moved = _block_centre(result[1, 0])[1] - _block_centre(data[2, 0])[1]
+    assert moved == pytest.approx(4, abs=0.6)
+
+
+def test_apply_transform_cli_takes_source_and_target_position_paths(
+    structured_plate, tmp_path
+):
+    position, data = structured_plate
+    target = tmp_path / "target.zarr"
+    with open_ome_zarr(target, layout="hcs", mode="w", channel_names=["Phase3D"]) as plate:
+        plate.create_position("A", "1", "0")["0"] = data[:, :1]
+    config = tmp_path / "transforms.yml"
+    model_to_yaml(
+        TransformSettings(
+            direction="forward",
+            matrices=[_translation(0, 0, 0)],
+            source_channels=["GFP"],
+            target_channel="Phase3D",
+            keep_overhang=True,
+        ),
+        config,
+    )
+    output = tmp_path / "out.zarr"
+
+    result = CliRunner().invoke(
+        apply_transform_cli,
+        [
+            "-s",
+            str(position),
+            "-t",
+            str(target / "A" / "1" / "0"),
+            "-c",
+            str(config),
+            "-o",
+            str(output),
+            "--cluster",
+            "debug",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    with open_ome_zarr(output / "A" / "1" / "0", mode="r") as out:
+        assert out.channel_names == ["Phase3D", "GFP"]

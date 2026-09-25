@@ -70,10 +70,13 @@ def estimate_transform(
         resume=resume,
     )
 
+    # One matrix (a single timepoint, e.g. manual or `time_indices: 0`) is the transform
+    # for the whole series and applies to every timepoint; several matrices for a subset
+    # keep the subset so apply-transform pairs each with its timepoint.
     model = TransformSettings(
         direction="forward",
         matrices=[transform.to_list() for transform in transforms],
-        time_indices=settings.time_indices,
+        time_indices="all" if len(transforms) == 1 else settings.time_indices,
         source_channels=[settings.source.channel],
         target_channel=settings.target.channel if settings.target is not None else None,
         method=settings.method,
