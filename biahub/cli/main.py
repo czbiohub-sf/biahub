@@ -95,9 +95,9 @@ COMMANDS = [
         "help": "Create pyramid levels for a dataset",
     },
     {
-        "name": "register",
-        "import_path": "biahub.register.register_cli",
-        "help": "Apply an affine transformation to a single position",
+        "name": "apply-transform",
+        "import_path": "biahub.apply_transform.apply_transform_cli",
+        "help": "Apply a transform series to positions (registration or stabilization)",
     },
     {
         "name": "estimate-stitch",
@@ -118,11 +118,6 @@ COMMANDS = [
         "name": "estimate-stabilization",
         "import_path": "biahub.estimate_stabilization.estimate_stabilization_cli",
         "help": "Estimate translation matrices for XYZ stabilization",
-    },
-    {
-        "name": "stabilize",
-        "import_path": "biahub.stabilize.stabilize_cli",
-        "help": "Apply stabilization transforms to dataset",
     },
     {
         "name": "estimate-crop",
