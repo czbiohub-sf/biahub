@@ -283,6 +283,28 @@ class PhaseCrossCorrSettings(MyBaseModel):
     Z_slice: list | list[list | Literal["all"]] | Literal["all"] = "all"
 
 
+class FocusSettings(MyBaseModel):
+    """The engine's focus-finding method (same-channel stabilization).
+
+    `axes` is the legacy `stabilization_type`: "z" is the focus index alone, "xy" is a
+    stackreg translation between the in-focus slices, "xyz" both. The focus criterion is
+    waveorder's transverse band with the detection NA and illumination wavelength below
+    (in micrometres; the pixel size comes from the store). `center_crop_xy` is (X, Y).
+    """
+
+    axes: Literal["z", "xy", "xyz"] = "xyz"
+    center_crop_xy: list[int] = [800, 800]
+    na_det: float = 1.35
+    lambda_ill: float = 0.5
+
+    @field_validator("center_crop_xy")
+    @classmethod
+    def check_center_crop_xy(cls, v):
+        if len(v) != 2 or any(c <= 0 for c in v):
+            raise ValueError("center_crop_xy must be two positive integers (X, Y)")
+        return v
+
+
 class FocusFindingSettings(MyBaseModel):
     average_across_wells: bool = False
     average_across_wells_method: Literal["mean", "median"] = "mean"
@@ -933,7 +955,7 @@ class FallbackSettings(MyBaseModel):
     repair: RepairSettings | None = RepairSettings()
 
 
-EstimationMethod = Literal["beads", "ants", "phase-cross-corr", "manual"]
+EstimationMethod = Literal["beads", "ants", "phase-cross-corr", "manual", "focus-finding"]
 ScoreMetric = Literal[
     "overlap", "residual", "mutual_information", "correlation", "gradient_correlation"
 ]
@@ -942,6 +964,7 @@ DEFAULT_SCORE_METRIC: dict[str, str] = {
     "ants": "correlation",
     "phase-cross-corr": "correlation",
     "manual": "gradient_correlation",
+    "focus-finding": "correlation",
 }
 
 
@@ -964,6 +987,7 @@ class EstimateTransformSettings(MyBaseModel):
     ants: AntsRegistrationSettings | None = None
     phase_cross_corr: PhaseCrossCorrSettings | None = None
     manual: ManualRegistrationSettings | None = None
+    focus_finding: FocusSettings | None = None
     transform: TransformFitSettings = TransformFitSettings()
     time_indices: NonNegativeInt | list[NonNegativeInt] | Literal["all"] = "all"
     # None: the method's default (beads: overlap, ants / phase-cross-corr: correlation,
@@ -986,6 +1010,7 @@ class EstimateTransformSettings(MyBaseModel):
             "ants": ("ants", AntsRegistrationSettings),
             "phase-cross-corr": ("phase_cross_corr", PhaseCrossCorrSettings),
             "manual": ("manual", ManualRegistrationSettings),
+            "focus-finding": ("focus_finding", FocusSettings),
         }
         field, model = defaults[self.method]
         if getattr(self, field) is None:

@@ -15,6 +15,7 @@ from biahub.settings import (
     DetectPeaksSettings,
     EstimateRegistrationSettings,
     EstimateTransformSettings,
+    FocusSettings,
     ManualRegistrationSettings,
     PhaseCrossCorrSettings,
     TransformSettings,
@@ -390,3 +391,63 @@ def test_estimate_transform_fallback_settings_reach_flagging_and_repair(
     assert set(report["repairs"]["2"]["candidate_failures"]) | set(
         report["repairs"]["2"]["candidate_scores"]
     ) == {"config_seed"}
+
+
+@pytest.fixture
+def defocusing_plate(tmp_path):
+    """One channel whose in-focus plane drifts by (1 slice, 2 rows, -3 columns) per timepoint."""
+    from iohub.ngff.models import TransformationMeta
+    from scipy.ndimage import gaussian_filter
+
+    rng = np.random.default_rng(5)
+    z, y, x = 12, 64, 64
+    yy, xx = np.meshgrid(np.arange(y), np.arange(x), indexing="ij")
+    plane = np.zeros((y, x), dtype=np.float32)
+    for cy, cx in rng.uniform(10, 54, size=(10, 2)):
+        plane += 500 * np.exp(-(((yy - cy) ** 2 + (xx - cx) ** 2) / 18.0))
+    frames = []
+    for t in range(3):
+        shifted = ndi_shift(plane, shift=(2 * t, -3 * t), order=1, mode="wrap")
+        frames.append(
+            np.stack(
+                [
+                    gaussian_filter(shifted, sigma=0.4 * abs(k - (4 + t)) + 1e-3)
+                    for k in range(z)
+                ]
+            )
+        )
+    data = np.stack([np.stack([f, f]) for f in frames]).astype(np.float32)
+    pixel = 6.5 / 40
+    with open_ome_zarr(
+        tmp_path / "defocus.zarr", layout="hcs", mode="w", channel_names=["Phase3D", "GFP"]
+    ) as plate:
+        plate.create_position("A", "1", "0").create_image(
+            "0",
+            data,
+            transform=[TransformationMeta(type="scale", scale=[1, 1, 1, pixel, pixel])],
+        )
+    return tmp_path / "defocus.zarr" / "A" / "1" / "0"
+
+
+def test_estimate_transform_focus_finding_stabilizes_z_and_yx_against_the_first_frame(
+    defocusing_plate, tmp_path
+):
+    unified = EstimateTransformSettings(
+        source=ChannelSettings(channel="Phase3D"),
+        reference="first",
+        method="focus-finding",
+        focus_finding=FocusSettings(axes="xyz", center_crop_xy=[48, 48]),
+    )
+    config = tmp_path / "unified.yml"
+    model_to_yaml(unified, config)
+    output = tmp_path / "out" / "transforms.yml"
+
+    _run(defocusing_plate, config, output)
+
+    written = yaml_to_model(output, TransformSettings)
+    assert written.method == "focus-finding" and written.target_channel is None
+    assert written.source_channels == ["Phase3D"]
+    for t, matrix in enumerate(written.matrices):  # forward: undo the drift
+        np.testing.assert_allclose(
+            np.asarray(matrix)[:3, 3], [-1 * t, -2 * t, 3 * t], atol=0.5
+        )

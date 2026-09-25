@@ -2,7 +2,8 @@
 # Registration: source channel onto target channel at every timepoint (reference: cross).
 # Stabilization: drop `target` and set `reference: first` or `previous` -- same estimate,
 # the source channel aligned onto its own first / previous timepoint.
-# Only the block of the chosen `method` is needed (beads / ants / phase_cross_corr / manual).
+# Only the block of the chosen `method` is needed (beads / ants / phase_cross_corr / manual /
+# focus_finding).
 # `fallback` holds what used to be hidden constants: the adaptive flagging line and the
 # repair candidates tried, in order, for flagged timepoints.
 source:
