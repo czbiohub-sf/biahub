@@ -973,9 +973,11 @@ class EstimateTransformSettings(MyBaseModel):
 
     What to align onto what, how, and what to do when a timepoint comes out badly.
 
-    Registration and stabilization are the same estimate with a different `reference`:
-    "cross" aligns `source` onto `target` at each timepoint; "first" / "previous" align the
-    source channel onto its own first / previous timepoint (then `target` is omitted).
+    `source` is the moving side and `target` the reference (the engine's `mov` / `ref`).
+    Registration and stabilization are the same estimate with a different `reference`,
+    i.e. which array is the reference: "cross" aligns `source` onto `target` at each
+    timepoint; "first" / "previous" align the source channel onto its own first /
+    previous timepoint (then `target` is omitted).
     Only the settings block of the chosen `method` is required.
     """
 
