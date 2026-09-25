@@ -4,7 +4,7 @@ from click.testing import CliRunner
 from numpy import testing
 
 from biahub.cli.main import cli
-from biahub.register import find_lir, rescale_voxel_size
+from biahub.registration.utils import find_lir, rescale_voxel_size
 
 
 def test_register_cli(

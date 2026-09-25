@@ -21,7 +21,7 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.register import convert_transform_to_ants
+from biahub.registration.utils import convert_transform_to_ants
 from biahub.settings import StabilizationSettings
 from biahub.utils.array_ops import copy_n_paste_czyx
 from biahub.utils.cluster import estimate_resources, get_submitit_cluster
