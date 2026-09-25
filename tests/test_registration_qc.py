@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from biahub.registration.qc import flag_timepoints, select_flagged
+from biahub.registration.engine import flag_timepoints, select_flagged
 
 
 def test_flag_timepoints_flags_nothing_on_a_uniformly_good_run():

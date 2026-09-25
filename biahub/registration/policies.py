@@ -1,7 +1,12 @@
-"""Seed policies: what initial transform guess to start the optimizer from.
+"""Policies: what a moving frame is compared against, and where the optimizer starts.
 
-Orthogonal to `ReferencePolicy` (what to compare against) and `TransformEstimator` (how
-the transform is computed).
+A `ReferencePolicy` answers "what does `mov` at time `t` register against": another
+channel (registration) or the channel's own first / previous frame (stabilization) --
+the same estimate, differing only here. A `SeedPolicy` answers "what initial transform
+does the estimator start from" and never decides how the transform is computed.
+
+Series are indexed lazily (`series[t]` before `np.asarray`) so dask- or zarr-backed
+inputs only materialize the frame requested.
 """
 
 from __future__ import annotations
@@ -10,7 +15,43 @@ from typing import Protocol, runtime_checkable
 
 import numpy as np
 
+from numpy.typing import ArrayLike
+
 from biahub.core.transform import Transform
+
+
+@runtime_checkable
+class ReferencePolicy(Protocol):
+    """Returns the reference array for timepoint `t`, given the full moving series."""
+
+    def reference_for(self, mov: ArrayLike, t: int) -> ArrayLike: ...
+
+
+class CrossChannel:
+    """Registration: a fixed external reference series (a different channel)."""
+
+    def __init__(self, ref: ArrayLike):
+        self.ref = ref
+
+    def reference_for(self, mov: ArrayLike, t: int) -> ArrayLike:
+        return np.asarray(self.ref[t])
+
+
+class FixedFrame:
+    """Stabilization `t_reference: "first"`: every t compares against one fixed frame."""
+
+    def __init__(self, t_ref: int = 0):
+        self.t_ref = t_ref
+
+    def reference_for(self, mov: ArrayLike, t: int) -> ArrayLike:
+        return np.asarray(mov[self.t_ref])
+
+
+class PreviousFrame:
+    """Stabilization `t_reference: "previous"`: t compares against t-1 (t=0 against itself)."""
+
+    def reference_for(self, mov: ArrayLike, t: int) -> ArrayLike:
+        return np.asarray(mov[max(t - 1, 0)])
 
 
 @runtime_checkable
@@ -66,7 +107,7 @@ class ConsensusSeed:
     detect and fix them.
 
     Raises `ValueError` when fewer than `min_good` timepoints qualify, so a caller
-    trying this as one of several candidates (e.g. `registration.fallback.repair`,
+    trying this as one of several candidates (e.g. `registration.engine.repair`,
     whose per-candidate try/except already skips a candidate that raises) treats "no
     consensus yet" the same as any other failed candidate rather than crashing.
     """

@@ -1,9 +1,8 @@
 import numpy as np
 
 from biahub.core.transform import Transform
-from biahub.registration.fallback import repair
-from biahub.registration.run_journal import RunJournal
-from biahub.registration.seed_policy import FixedSeed
+from biahub.registration.engine import RunJournal, repair
+from biahub.registration.policies import FixedSeed
 
 
 class _EchoEstimator:

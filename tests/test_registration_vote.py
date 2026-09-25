@@ -4,17 +4,20 @@ import pytest
 from scipy.ndimage import shift as ndi_shift
 
 from biahub.core.transform import Transform
-from biahub.registration.beads import score_transform
+from biahub.registration.engine import build_beads_estimator
 from biahub.registration.estimators import (
-    BeadNodeDetector,
     ChainedEstimator,
     EstimationError,
-    NodeGraphEstimator,
     TransformEstimator,
+)
+from biahub.registration.methods.beads import BeadNodeDetector, NodeGraphEstimator
+from biahub.registration.methods.vote_icp import (
     VoteIcpEstimator,
     VoteSeedCorrection,
+    vote_drift,
+    vote_icp_register,
 )
-from biahub.registration.pointcloud import vote_drift, vote_icp_register
+from biahub.registration.metrics import score_transform
 from biahub.settings import (
     AffineTransformSettings,
     BeadsMatchSettings,
@@ -130,14 +133,12 @@ def test_vote_icp_estimator_recovers_an_offset_the_hungarian_matcher_cannot():
     assert np.abs(refined.translation - truth).max() < np.abs(coarse.translation - truth).max()
 
 
-def test_from_beads_settings_wires_vote_icp_mode_and_seed_correction():
-    plain = NodeGraphEstimator.from_beads_settings(
-        _beads_settings(), AffineTransformSettings()
-    )
-    vote = NodeGraphEstimator.from_beads_settings(
+def test_build_beads_estimator_wires_vote_icp_mode_and_seed_correction():
+    plain = build_beads_estimator(_beads_settings(), AffineTransformSettings())
+    vote = build_beads_estimator(
         _beads_settings(estimation_mode="vote_icp"), AffineTransformSettings()
     )
-    corrected = NodeGraphEstimator.from_beads_settings(
+    corrected = build_beads_estimator(
         _beads_settings(seed_correction_settings=SeedCorrectionSettings(mode="votefit")),
         AffineTransformSettings(),
     )

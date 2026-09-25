@@ -186,11 +186,12 @@ def test_ants_settings_are_all_consumed_by_the_engine():
     """Every AntsRegistrationSettings field must be read by AntsEstimator.from_settings
     (which is what the config-driven ANTs path runs), so a config knob can't be silently
     ignored."""
-    from biahub.registration.estimators import AntsEstimator
+    from biahub.registration.engine import build_estimator
+    from biahub.registration.methods.ants import AntsEstimator
     from biahub.settings import AntsRegistrationSettings
 
     source = inspect.getsource(AntsEstimator.from_settings) + inspect.getsource(
-        __import__("biahub.estimate_transform", fromlist=["_engine"])._engine
+        build_estimator
     )
     read = set(re.findall(r"ants_(?:registration_)?settings\.(\w+)", source))
     missing = set(AntsRegistrationSettings.model_fields) - read
@@ -199,7 +200,7 @@ def test_ants_settings_are_all_consumed_by_the_engine():
 
 def test_ants_settings_defaults_match_preprocess_zyx():
     """Preprocessing defaults must agree with ``preprocess_zyx``, which consumes them."""
-    from biahub.registration.ants import preprocess_zyx
+    from biahub.registration.methods.ants import preprocess_zyx
     from biahub.settings import AntsRegistrationSettings
 
     settings = AntsRegistrationSettings()
