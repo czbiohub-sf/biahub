@@ -5,13 +5,16 @@
 #   seed_correction votefit    -- corrects a drifted approx_transform by bead displacement voting
 # Replace approx_transform with the dataset's previous seed when one exists. Same instrument
 # geometry -> same linear part; only the translation moves between acquisitions.
-target_channel_name: Phase3D
-source_channel_name: GFP EX488 EM525-45
-estimation_method: beads
-beads_match_settings:
+source:
+  channel: GFP EX488 EM525-45
+target:
+  channel: Phase3D
+reference: cross
+method: beads
+beads:
   algorithm: hungarian
   source_peaks_settings:
-    threshold_abs: 110
+    threshold_abs: 110.0
     nms_distance: 16
     min_distance: 0
     block_size:
@@ -26,16 +29,20 @@ beads_match_settings:
     - 8
     - 8
     - 8
+  match_descriptor_settings:
+    distance_metric: euclidean
+    max_ratio: 0.8
+    cross_check: false
   hungarian_match_settings:
     distance_metric: euclidean
     cost_threshold: 0.1
-    cross_check: true
     max_ratio: 0.95
+    cross_check: true
     edge_graph_settings:
       method: knn
       k: 10
+      radius: null
     cost_matrix_settings:
-      normalize: false
       weights:
         dist: 0.5
         edge_angle: 1.0
@@ -43,24 +50,54 @@ beads_match_settings:
         pca_dir: 0.0
         pca_aniso: 0.0
         edge_descriptor: 0.0
+      normalize: false
+  spectral_match_settings:
+    sigma: 3.0
+    rel_cut: 0.5
+    max_iter: 60
+  spectral_arm: always
+  estimation_mode: matching
+  vote_icp_settings:
+    vote_peaks_settings:
+      threshold_abs: 200.0
+      nms_distance: 8
+      min_distance: 0
+      block_size:
+      - 16
+      - 16
+      - 16
+    initial_capture_radius: 80.0
+    min_capture_radius: 10.0
+    radius_decay: 0.5
+    cluster_radius: 10.0
+    min_votes: 3
+    max_iterations: 20
+    convergence_translation: 0.5
+  seed_correction_settings:
+    mode: votefit
+    vote_peaks_settings:
+      threshold_abs: 200.0
+      nms_distance: 8
+      min_distance: 0
+      block_size:
+      - 16
+      - 16
+      - 16
+    capture_radius: 80.0
+    cluster_radius: 10.0
+    min_votes: 3
   filter_matches_settings:
+    angle_threshold: 0.0
+    direction_threshold: 0.0
     min_distance_quantile: 0.01
     max_distance_quantile: 0.95
-    angle_threshold: 0
-    direction_threshold: 0.0
   qc_settings:
     iterations: 2
     score_threshold: 0.4
     score_centroid_mask_radius: 6
-  spectral_arm: always
-  seed_correction_settings:
-    mode: votefit
-affine_transform_settings:
-  t_reference: first
-  transform_type: affine
-  compute_approx_transform: false
-  use_prev_t_transform: true
-  approx_transform:
+transform:
+  type: affine
+  seed:
   - - 0.9907113909721375
     - 0.01176353357732296
     - -0.0023756297305226326
@@ -77,10 +114,27 @@ affine_transform_settings:
     - 0.0
     - 0.0
     - 1.0
-eval_transform_settings:
+  seed_direction: pull
+  seed_from_shapes: false
+time_indices: all
+score_metric: overlap
+fallback:
+  flag:
+    k_mad: 2.0
+    floor: 0.8
+    hard_fail: 0.4
+  repair:
+    candidates:
+    - t-1
+    - t+1
+    - consensus
+    - seed
+    consensus_threshold: 0.75
+    consensus_min_good: 5
+    max_timepoints: null
+smoothing:
   validation_window_size: 10
   validation_tolerance: 100.0
   interpolation_window_size: 3
   interpolation_type: linear
 verbose: false
-time_indices: all

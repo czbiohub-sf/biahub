@@ -30,8 +30,8 @@ from biahub.registration.utils import (
     save_transforms,
 )
 from biahub.settings import (
-    EstimateRegistrationSettings,
     EstimateStabilizationSettings,
+    EstimateTransformSettings,
     FocusFindingSettings,
     StabilizationSettings,
     StackRegSettings,
@@ -773,14 +773,7 @@ def estimate_stabilization(
             from biahub.registration.legacy import legacy_pull_from_forward
 
             click.echo("Estimating xyz stabilization parameters with beads")
-            engine_settings = EstimateRegistrationSettings(
-                target_channel_name=stabilization_estimation_channel,
-                source_channel_name=stabilization_estimation_channel,
-                estimation_method="beads",
-                beads_match_settings=settings.beads_match_settings,
-                affine_transform_settings=settings.affine_transform_settings,
-                verbose=verbose,
-            )
+            engine_settings = EstimateTransformSettings.from_legacy(settings)
             _result, _time_indices, forward_transforms = estimate_transform_series(
                 input_position_dirpaths[0],
                 input_position_dirpaths[0],
@@ -788,7 +781,6 @@ def estimate_stabilization(
                 output_dirpath,
                 sbatch_filepath=sbatch_filepath,
                 cluster=cluster,
-                reference_kind=settings.affine_transform_settings.t_reference,
             )
             xyz_transforms = [
                 legacy_pull_from_forward(transform) for transform in forward_transforms
@@ -832,14 +824,7 @@ def estimate_stabilization(
             from biahub.registration.legacy import legacy_pull_from_forward
 
             pcc_settings = settings.phase_cross_corr_settings
-            engine_settings = EstimateRegistrationSettings(
-                target_channel_name=stabilization_estimation_channel,
-                source_channel_name=stabilization_estimation_channel,
-                estimation_method="phase-cross-corr",
-                phase_cross_corr_settings=pcc_settings,
-                affine_transform_settings=settings.affine_transform_settings,
-                verbose=verbose,
-            )
+            engine_settings = EstimateTransformSettings.from_legacy(settings)
             positions = remove_beads_fov_from_path_list(
                 input_position_dirpaths, pcc_settings.skip_beads_fov
             )
@@ -853,7 +838,6 @@ def estimate_stabilization(
                     output_dirpath / "estimate_transform" / fov,
                     sbatch_filepath=sbatch_filepath,
                     cluster=cluster,
-                    reference_kind=pcc_settings.t_reference,
                 )
                 return fov, [legacy_pull_from_forward(t) for t in forward]
 
