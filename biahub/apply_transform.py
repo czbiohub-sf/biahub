@@ -22,15 +22,14 @@ from iohub.ngff.utils import create_empty_plate, process_single_position
 
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
-    OptionEatAll,
-    _validate_and_process_paths,
     cluster,
     config_filepath,
     monitor,
+    moving_position_dirpaths,
     output_dirpath,
+    reference_position_dirpaths,
     sbatch_filepath,
     sbatch_to_submitit,
-    source_position_dirpaths,
 )
 from biahub.registration.utils import (
     apply_affine_transform,
@@ -192,84 +191,95 @@ def _apply_transform_czyx(
     )
 
 
+def parse_time_indices(value: str) -> int | list[int] | str:
+    """'all', one index, or a comma-separated list, as typed on the command line."""
+    value = value.strip()
+    if value == "all":
+        return "all"
+    indices = [int(v) for v in value.split(",") if v.strip()]
+    return indices[0] if len(indices) == 1 else indices
+
+
 def apply_transform(
-    source_position_dirpaths: list[Path],
+    moving_position_dirpaths: list[Path],
     config_filepath: Path,
     output_dirpath: Path,
-    target_position_dirpaths: list[Path] | None = None,
+    reference_position_dirpaths: list[Path] | None = None,
+    time_indices: int | list[int] | str = "all",
+    keep_overhang: bool = False,
+    interpolation: str = "linear",
+    output_ome_zarr_version: str | None = None,
     sbatch_filepath: str | None = None,
     cluster: str = "slurm",
     monitor: bool = False,
 ) -> None:
-    """Apply a `TransformSettings` series (or a legacy register / stabilize config).
+    """Apply a `TransformSettings` series to positions.
 
-    With target positions: the output lives on the target grid and holds every target
-    channel copied plus the config's `source_channels` transformed from the source store
-    (registration). Without: every channel of the source store is transformed onto its
-    own grid (stabilization). One matrix is applied to every timepoint; a list is applied
-    per timepoint.
+    With reference positions: the output lives on the reference grid and holds every
+    reference channel copied plus the file's `moving_channels` transformed from the
+    moving store (registration). Without: every channel of the moving store is
+    transformed onto its own grid (stabilization). Each timepoint takes its own entry's
+    matrix (`TransformSettings.matrix_for`); a series-wide entry applies to all. The
+    canvas is the largest box inside the overlap shared by the applied transforms, or
+    the full reference grid with `keep_overhang`.
     """
     output_dirpath = Path(output_dirpath)
     settings: TransformSettings = load_transform_settings(config_filepath)
-    pull_matrices = [np.asarray(m, dtype=float) for m in settings.as_direction("pull")]
 
-    with open_ome_zarr(source_position_dirpaths[0], mode="r") as source:
-        T, _C, *source_shape = source.data.shape
-        source_channel_names = list(source.channel_names)
-        source_voxel_size = tuple(source.scale[-3:])
-    time_indices = _resolve_time_indices(settings.time_indices, T)
-    if len(pull_matrices) not in (1, T) and len(pull_matrices) != len(time_indices):
-        raise click.UsageError(
-            f"{len(pull_matrices)} matrices for {T} timepoints ({len(time_indices)} selected): "
-            "give one matrix, or one per timepoint"
-        )
+    with open_ome_zarr(moving_position_dirpaths[0], mode="r") as moving:
+        T, _C, *moving_shape = moving.data.shape
+        moving_channel_names = list(moving.channel_names)
+        moving_voxel_size = tuple(moving.scale[-3:])
+    time_indices = _resolve_time_indices(time_indices, T)
+    pull_by_t = {t: settings.matrix_for(t, "pull") for t in time_indices}
 
-    if target_position_dirpaths:
-        with open_ome_zarr(target_position_dirpaths[0], mode="r") as target:
-            target_shape = tuple(target.data.shape[-3:])
-            target_channel_names = list(target.channel_names)
-            target_voxel_size = list(target.scale)
-        transformed = [c for c in settings.source_channels if c in source_channel_names]
-        missing = set(settings.source_channels) - set(transformed)
+    if reference_position_dirpaths:
+        with open_ome_zarr(reference_position_dirpaths[0], mode="r") as reference:
+            reference_shape = tuple(reference.data.shape[-3:])
+            reference_channel_names = list(reference.channel_names)
+            reference_voxel_size = list(reference.scale)
+        transformed = [c for c in settings.moving_channels if c in moving_channel_names]
+        missing = set(settings.moving_channels) - set(transformed)
         if missing:
             raise click.UsageError(
-                f"source channels not in the source store: {sorted(missing)}"
+                f"moving channels not in the moving store: {sorted(missing)}"
             )
-        copied = target_channel_names
+        copied = reference_channel_names
         output_channel_names = copied + [c for c in transformed if c not in copied]
-        output_voxel_size = tuple(target_voxel_size[-3:])
+        output_voxel_size = tuple(reference_voxel_size[-3:])
     else:
-        target_shape = tuple(source_shape)
-        transformed, copied = source_channel_names, []
-        output_channel_names = source_channel_names
+        reference_shape = tuple(moving_shape)
+        transformed, copied = moving_channel_names, []
+        output_channel_names = moving_channel_names
         output_voxel_size = (
             tuple(settings.voxel_size[-3:])
             if settings.voxel_size
-            else tuple(rescale_voxel_size(pull_matrices[0][:3, :3], source_voxel_size))
+            else tuple(
+                rescale_voxel_size(next(iter(pull_by_t.values()))[:3, :3], moving_voxel_size)
+            )
         )
 
-    crop = canvas(tuple(source_shape), target_shape, pull_matrices, settings.keep_overhang)
+    applied = list(pull_by_t.values())
+    crop = canvas(tuple(moving_shape), reference_shape, applied, keep_overhang)
     cropped_shape = tuple(s.stop - s.start for s in crop)
     click.echo(
-        f"Output canvas {cropped_shape} (target grid {target_shape}, "
-        f"{'kept overhang' if settings.keep_overhang else 'overlap intersected over ' + str(len(pull_matrices)) + ' transform(s)'})"
+        f"Output canvas {cropped_shape} (reference grid {reference_shape}, "
+        f"{'kept overhang' if keep_overhang else 'overlap shared by the applied transforms'})"
     )
 
     create_empty_plate(
         store_path=output_dirpath,
-        position_keys=[p.parts[-3:] for p in source_position_dirpaths],
+        position_keys=[p.parts[-3:] for p in moving_position_dirpaths],
         shape=(len(time_indices), len(output_channel_names)) + cropped_shape,
         chunks=None,
         scale=(1, 1) + tuple(output_voxel_size),
         channel_names=output_channel_names,
         dtype=np.float32,
-        version=resolve_ome_zarr_version(
-            source_position_dirpaths[0], settings.output_ome_zarr_version
-        ),
+        version=resolve_ome_zarr_version(moving_position_dirpaths[0], output_ome_zarr_version),
     )
 
     _, num_cpus, gb_ram = estimate_resources(
-        shape=(T, len(output_channel_names), *source_shape), ram_multiplier=5
+        shape=(T, len(output_channel_names), *moving_shape), ram_multiplier=5
     )
     slurm_out_path = output_dirpath.parent / "slurm_output"
     slurm_args = {
@@ -288,54 +298,59 @@ def apply_transform(
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=resolved_cluster)
     executor.update_parameters(**slurm_args)
 
-    extra_metadata = {"biahub-apply-transform": settings.model_dump()}
+    extra_metadata = {
+        "biahub-apply-transform": {
+            "transforms": settings.model_dump(),
+            "time_indices": time_indices,
+            "keep_overhang": keep_overhang,
+            "interpolation": interpolation,
+        }
+    }
     output_time_indices = list(range(len(time_indices)))
-    # Jobs index the matrices by the input timepoint, so hand them a T-long list whether
-    # the config gave one matrix per timepoint or one per selected timepoint.
-    if len(pull_matrices) == 1:
-        matrices_for_jobs = [pull_matrices[0].tolist()]
-    else:
-        matrices_for_jobs = [None] * T
-        for i, t in enumerate(time_indices):
-            matrices_for_jobs[t] = pull_matrices[t if len(pull_matrices) == T else i].tolist()
+    # Jobs look a matrix up by input timepoint: a T-long list, filled for the selected t.
+    matrices_for_jobs = [None] * T
+    for t, matrix in pull_by_t.items():
+        matrices_for_jobs[t] = matrix.tolist()
     jobs, labels = [], []
     with submitit.helpers.clean_env(), executor.batch():
-        for index, source_path in enumerate(source_position_dirpaths):
-            output_position_path = output_dirpath / Path(*source_path.parts[-3:])
+        for index, moving_path in enumerate(moving_position_dirpaths):
+            output_position_path = output_dirpath / Path(*moving_path.parts[-3:])
             for channel_name in transformed:
                 jobs.append(
                     executor.submit(
                         process_single_position,
                         _apply_transform_czyx,
-                        input_position_path=source_path,
+                        input_position_path=moving_path,
                         output_position_path=output_position_path,
                         input_time_indices=time_indices,
                         output_time_indices=output_time_indices,
-                        input_channel_indices=[[source_channel_names.index(channel_name)]],
+                        input_channel_indices=[[moving_channel_names.index(channel_name)]],
                         output_channel_indices=[[output_channel_names.index(channel_name)]],
                         num_workers=int(slurm_args["slurm_cpus_per_task"]),
                         matrices=matrices_for_jobs,
-                        output_shape_zyx=target_shape,
+                        output_shape_zyx=reference_shape,
                         crop_output_slicing=list(crop),
-                        interpolation=settings.interpolation,
+                        interpolation=interpolation,
                         extra_metadata=extra_metadata,
                     )
                 )
-                labels.append(Path(f"{source_path.parts[-3:]} {channel_name}"))
-            if copied and target_position_dirpaths:
-                target_path = target_position_dirpaths[
-                    min(index, len(target_position_dirpaths) - 1)
+                labels.append(Path(f"{moving_path.parts[-3:]} {channel_name}"))
+            if copied and reference_position_dirpaths:
+                reference_path = reference_position_dirpaths[
+                    min(index, len(reference_position_dirpaths) - 1)
                 ]
                 for channel_name in copied:
                     jobs.append(
                         executor.submit(
                             process_single_position,
                             copy_n_paste_czyx,
-                            input_position_path=target_path,
+                            input_position_path=reference_path,
                             output_position_path=output_position_path,
                             input_time_indices=time_indices,
                             output_time_indices=output_time_indices,
-                            input_channel_indices=[[target_channel_names.index(channel_name)]],
+                            input_channel_indices=[
+                                [reference_channel_names.index(channel_name)]
+                            ],
                             output_channel_indices=[
                                 [output_channel_names.index(channel_name)]
                             ],
@@ -343,7 +358,7 @@ def apply_transform(
                             czyx_slicing_params=list(crop),
                         )
                     )
-                    labels.append(Path(f"{target_path.parts[-3:]} {channel_name} (copy)"))
+                    labels.append(Path(f"{reference_path.parts[-3:]} {channel_name} (copy)"))
 
     slurm_out_path.mkdir(exist_ok=True)
     (slurm_out_path / "submitit_jobs_ids.log").write_text(
@@ -357,58 +372,77 @@ def apply_transform(
         monitor_jobs(jobs, labels)
 
 
-def _optional_target_position_dirpaths():
-    return click.option(
-        "--target-position-dirpaths",
-        "-t",
-        required=False,
-        cls=OptionEatAll,
-        type=tuple,
-        callback=_validate_and_process_paths,
-        help='Optional reference positions, e.g. "target.zarr/*/*/*": the output takes their '
-        "grid and channels (registration). Omit to transform the source onto its own grid "
-        "(stabilization).",
-    )
-
-
 @click.command("apply-transform")
-@source_position_dirpaths()
-@_optional_target_position_dirpaths()
+@moving_position_dirpaths()
+@reference_position_dirpaths(required=False)
 @config_filepath()
 @output_dirpath()
+@click.option(
+    "--time-indices",
+    default="all",
+    show_default=True,
+    help="Timepoints to write: 'all', one index, or a comma-separated list (e.g. 0,82,239).",
+)
+@click.option(
+    "--keep-overhang",
+    is_flag=True,
+    default=False,
+    help="Keep the full reference grid instead of cropping to the overlap shared by the applied transforms.",
+)
+@click.option(
+    "--interpolation",
+    default="linear",
+    show_default=True,
+    type=click.Choice(["linear", "nearest"]),
+    help="Resampling interpolation.",
+)
+@click.option(
+    "--ome-zarr-version",
+    default=None,
+    type=click.Choice(["0.4", "0.5"]),
+    help="OME-Zarr version of the output store (default: the moving store's).",
+)
 @sbatch_filepath()
 @cluster()
-@monitor()
+@monitor(short=False)
 def apply_transform_cli(
-    source_position_dirpaths: list[Path],
-    target_position_dirpaths: list[Path] | None,
+    moving_position_dirpaths: list[Path],
+    reference_position_dirpaths: list[Path] | None,
     config_filepath: Path,
     output_dirpath: Path,
+    time_indices: str,
+    keep_overhang: bool,
+    interpolation: str,
+    ome_zarr_version: str | None,
     sbatch_filepath: str | None,
     cluster: str,
     monitor: bool,
 ) -> None:
     """Apply a transform series to positions -- one matrix for all timepoints or one per timepoint.
 
-    Takes the `TransformSettings` written by `estimate-transform` (legacy `register` /
-    `stabilize` configs are accepted). The output canvas is the overlap of the warped
-    source and the reference, intersected over every timepoint's transform, unless the
-    config sets `keep_overhang: true`.
+    Takes the `TransformSettings` file written by `estimate-transform`. How it is applied
+    is decided here, not in the file: which timepoints, the canvas (overlap shared by the
+    applied transforms, or `--keep-overhang` for the full reference grid), the
+    interpolation and the output OME-Zarr version.
 
     \b
-    Registration (source channels onto the target store's grid and channels):
-    >>> biahub apply-transform -s source.zarr/*/*/* -t target.zarr/*/*/* \\
+    Registration (moving channels onto the reference store's grid and channels):
+    >>> biahub apply-transform -m moving.zarr/*/*/* -r reference.zarr/*/*/* \\
         -c transforms.yml -o registered.zarr
 
     \b
     Stabilization (every channel of a store onto its own grid, per-timepoint matrices):
-    >>> biahub apply-transform -s data.zarr/*/*/* -c transforms.yml -o stabilized.zarr
+    >>> biahub apply-transform -m data.zarr/*/*/* -c transforms.yml -o stabilized.zarr
     """  # noqa: D301
     apply_transform(
-        source_position_dirpaths=source_position_dirpaths,
+        moving_position_dirpaths=moving_position_dirpaths,
+        reference_position_dirpaths=reference_position_dirpaths,
         config_filepath=config_filepath,
         output_dirpath=output_dirpath,
-        target_position_dirpaths=target_position_dirpaths or None,
+        time_indices=parse_time_indices(time_indices),
+        keep_overhang=keep_overhang,
+        interpolation=interpolation,
+        output_ome_zarr_version=ome_zarr_version,
         sbatch_filepath=sbatch_filepath,
         cluster=cluster,
         monitor=monitor,

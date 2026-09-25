@@ -811,22 +811,44 @@ DEFAULT_SCORE_METRIC: dict[str, str] = {
 }
 
 
+ReferenceFrame = Literal["cross", "first", "previous"]
+
+
+class ReferenceSettings(MyBaseModel):
+    """What the moving channel is aligned onto.
+
+    `frame: cross` -- `channel` of the reference store at the same timepoint
+    (registration). `frame: first` / `previous` -- the moving channel's own first /
+    previous timepoint (stabilization); `channel` is then omitted.
+    """
+
+    frame: ReferenceFrame = "cross"
+    channel: str | None = None
+
+    @model_validator(mode="after")
+    def check_channel(self) -> "ReferenceSettings":
+        if self.frame == "cross" and self.channel is None:
+            raise ValueError("reference frame 'cross' needs a reference channel")
+        if self.frame != "cross" and self.channel is not None:
+            raise ValueError(
+                f"reference frame '{self.frame}' aligns the moving channel onto itself; "
+                "drop reference.channel"
+            )
+        return self
+
+
 class EstimateTransformSettings(MyBaseModel):
     """Everything `estimate-transform` needs.
 
     What to align onto what, how, and what to do when a timepoint comes out badly.
-
-    `source` is the moving side and `target` the reference (the engine's `mov` / `ref`).
-    Registration and stabilization are the same estimate with a different `reference`,
-    i.e. which array is the reference: "cross" aligns `source` onto `target` at each
-    timepoint; "first" / "previous" align the source channel onto its own first /
-    previous timepoint (then `target` is omitted).
-    Only the settings block of the chosen `method` is required.
+    `moving` is the channel being aligned (the engine's `mov`), `reference` what it is
+    aligned onto (`ref`). Registration and stabilization are the same estimate with a
+    different `reference.frame`. Only the settings block of the chosen `method` is
+    required.
     """
 
-    source: ChannelSettings
-    target: ChannelSettings | None = None
-    reference: Literal["cross", "first", "previous"] = "cross"
+    moving: ChannelSettings
+    reference: ReferenceSettings
     method: EstimationMethod
     beads: BeadsMatchSettings | None = None
     ants: AntsRegistrationSettings | None = None
@@ -835,20 +857,14 @@ class EstimateTransformSettings(MyBaseModel):
     focus_finding: FocusSettings | None = None
     transform: TransformFitSettings = TransformFitSettings()
     time_indices: NonNegativeInt | list[NonNegativeInt] | Literal["all"] = "all"
-    # None: the method's default (beads: overlap, ants / phase-cross-corr: correlation,
-    # manual: gradient_correlation).
+    # None: the method's default (beads: overlap, ants / phase-cross-corr /
+    # focus-finding: correlation, manual: gradient_correlation).
     score_metric: ScoreMetric | None = None
     fallback: FallbackSettings = FallbackSettings()
     verbose: bool = False
 
     @model_validator(mode="after")
-    def check_consistency(self) -> "EstimateTransformSettings":
-        if self.reference == "cross" and self.target is None:
-            raise ValueError("reference 'cross' needs a target channel")
-        if self.reference != "cross" and self.target is not None:
-            raise ValueError(
-                f"reference '{self.reference}' aligns the source onto itself; drop target"
-            )
+    def fill_method_block(self) -> "EstimateTransformSettings":
         defaults = {
             "beads": ("beads", BeadsMatchSettings),
             "ants": ("ants", AntsRegistrationSettings),
@@ -862,46 +878,92 @@ class EstimateTransformSettings(MyBaseModel):
         return self
 
     @property
-    def target_channel(self) -> str:
-        return self.target.channel if self.target is not None else self.source.channel
+    def reference_channel(self) -> str:
+        """The channel read on the reference side (the moving channel itself for first / previous)."""
+        return self.reference.channel or self.moving.channel
 
     @property
     def effective_score_metric(self) -> str:
         return self.score_metric or DEFAULT_SCORE_METRIC[self.method]
 
 
+class TransformEntry(MyBaseModel):
+    """One 4x4 matrix: the series' transform (no `t`) or timepoint `t`'s, with provenance."""
+
+    t: NonNegativeInt | None = None
+    matrix: list
+    score: float | None = None
+    repaired_from: str | None = None  # the repair candidate that won, when one did
+
+    @field_validator("matrix")
+    @classmethod
+    def check_matrix(cls, v):
+        if np.asarray(v, dtype=float).shape != (4, 4):
+            raise ValueError("matrix must be 4x4")
+        return v
+
+
 class TransformSettings(MyBaseModel):
-    """A transform series ready to apply: one 4x4 for every timepoint, or a single one.
+    """What `estimate-transform` estimated, as `apply-transform` consumes it.
 
     `direction` says what the matrices mean -- "forward" (moving -> reference, what the
     engine estimates) or "pull" (reference -> moving, ready to resample with; what the
-    retired `register` / `stabilize` configs held). Nothing here has to be guessed from
-    a variable name.
+    retired `register` / `stabilize` configs held). `transforms` is either one entry
+    without `t`, the transform for the whole series, or one entry per estimated
+    timepoint; a timepoint without an entry takes the nearest earlier one. How the
+    series is applied (canvas, interpolation, which timepoints) is not stored here --
+    those are `apply-transform` options.
     """
 
     direction: TransformDirection
-    matrices: list
-    time_indices: NonNegativeInt | list[NonNegativeInt] | Literal["all"] = "all"
-    source_channels: list[str]
-    target_channel: str | None = None
+    moving_channels: list[str]
+    reference_channel: str | None = None  # None: stabilization onto the moving store's grid
     method: str = "beads"
     voxel_size: list[float] | None = None
-    keep_overhang: bool = False
-    interpolation: str = "linear"
-    output_ome_zarr_version: Literal["0.4", "0.5"] | None = None
+    transforms: list[TransformEntry]
 
-    @field_validator("matrices")
-    @classmethod
-    def check_matrices(cls, v):
-        arr = np.asarray(v, dtype=float)
-        if arr.ndim != 3 or arr.shape[1:] != (4, 4) or len(arr) == 0:
-            raise ValueError("matrices must be a non-empty list of 4x4 matrices")
-        return v
+    @model_validator(mode="after")
+    def check_entries(self) -> "TransformSettings":
+        if not self.transforms:
+            raise ValueError("transforms must hold at least one entry")
+        ts = [e.t for e in self.transforms]
+        if len(ts) == 1 and ts[0] is None:
+            return self
+        if any(t is None for t in ts):
+            raise ValueError("either one entry without t (whole series) or every entry with t")
+        if len(set(ts)) != len(ts) or ts != sorted(ts):
+            raise ValueError("transform entries must have unique, increasing t")
+        return self
 
-    def as_direction(self, direction: TransformDirection) -> list:
-        if direction == self.direction:
-            return [np.asarray(m, dtype=float).tolist() for m in self.matrices]
-        return [np.linalg.inv(np.asarray(m, dtype=float)).tolist() for m in self.matrices]
+    @property
+    def series_wide(self) -> bool:
+        return self.transforms[0].t is None
+
+    def timepoints(self) -> list[int] | None:
+        return None if self.series_wide else [e.t for e in self.transforms]
+
+    def matrix_for(self, t: int, direction: TransformDirection) -> np.ndarray:
+        """Return the matrix for timepoint `t` in `direction`: its own, else the nearest earlier."""
+        if self.series_wide:
+            entry = self.transforms[0]
+        else:
+            earlier = [e for e in self.transforms if e.t <= t]
+            entry = earlier[-1] if earlier else self.transforms[0]
+        return self._as(entry.matrix, direction)
+
+    def unique_matrices(self, direction: TransformDirection) -> list[np.ndarray]:
+        seen, out = set(), []
+        for entry in self.transforms:
+            m = self._as(entry.matrix, direction)
+            key = m.round(9).tobytes()
+            if key not in seen:
+                seen.add(key)
+                out.append(m)
+        return out
+
+    def _as(self, matrix, direction: TransformDirection) -> np.ndarray:
+        m = np.asarray(matrix, dtype=float)
+        return m if direction == self.direction else np.linalg.inv(m)
 
 
 _LEGACY_KEYS = {
@@ -910,6 +972,11 @@ _LEGACY_KEYS = {
     "stabilization_estimation_channel",
     "affine_transform_zyx",
     "affine_transform_zyx_list",
+    # the first unified schema (source / target, matrices + time_indices)
+    "source",
+    "target",
+    "matrices",
+    "source_channels",
 }
 
 

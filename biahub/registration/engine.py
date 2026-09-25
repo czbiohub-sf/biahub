@@ -532,9 +532,9 @@ def _open_series(position_dirpath: Path, channel_name: str):
 
 
 def _reference_policy(settings: EstimateTransformSettings, ref) -> ReferencePolicy:
-    if settings.reference == "cross":
+    if settings.reference.frame == "cross":
         return CrossChannel(ref)
-    if settings.reference == "first":
+    if settings.reference.frame == "first":
         return FixedFrame(0)
     return PreviousFrame()
 
@@ -577,7 +577,9 @@ def _affine_settings(settings: EstimateTransformSettings) -> AffineTransformSett
         approx_transform=seed_pull,
         use_prev_t_transform=False,
         compute_approx_transform=fit.seed_from_shapes,
-        t_reference="first" if settings.reference == "cross" else settings.reference,
+        t_reference="first"
+        if settings.reference.frame == "cross"
+        else settings.reference.frame,
     )
 
 
@@ -657,8 +659,8 @@ def build_estimator(
     elif settings.method == "manual":
         manual = settings.manual
         estimator = ManualEstimator(
-            source_channel_name=settings.source.channel,
-            target_channel_name=settings.target_channel,
+            source_channel_name=settings.moving.channel,
+            target_channel_name=settings.reference_channel,
             source_channel_voxel_size=mov_voxel_size or (1.0, 1.0, 1.0),
             target_channel_voxel_size=ref_voxel_size or (1.0, 1.0, 1.0),
             similarity=settings.transform.type == "similarity",
@@ -686,16 +688,16 @@ def _bead_metrics(settings, result, t, mov, ref) -> dict | None:
 
 
 def _estimate_timepoint_job(
-    source_position_dirpath: Path,
-    target_position_dirpath: Path,
+    moving_position_dirpath: Path,
+    reference_position_dirpath: Path,
     settings_path: Path,
     t: int,
     record_path: Path,
 ) -> dict:
     """One independent estimate, from the config seed, written as a JSON record."""
     settings = yaml_to_model(settings_path, EstimateTransformSettings)
-    mov, mov_voxel_size = _open_series(source_position_dirpath, settings.source.channel)
-    ref, ref_voxel_size = _open_series(target_position_dirpath, settings.target_channel)
+    mov, mov_voxel_size = _open_series(moving_position_dirpath, settings.moving.channel)
+    ref, ref_voxel_size = _open_series(reference_position_dirpath, settings.reference_channel)
     estimator, score_fn, seed = build_estimator(
         settings, tuple(mov.shape[-3:]), mov_voxel_size, ref_voxel_size
     )
@@ -749,8 +751,8 @@ def _load_series(
 
 
 def _repair_timepoint_job(
-    source_position_dirpath: Path,
-    target_position_dirpath: Path,
+    moving_position_dirpath: Path,
+    reference_position_dirpath: Path,
     settings_path: Path,
     t: int,
     time_indices: list[int],
@@ -760,8 +762,8 @@ def _repair_timepoint_job(
 ) -> dict:
     """Repair one flagged timepoint against the frozen whole-run history."""
     settings = yaml_to_model(settings_path, EstimateTransformSettings)
-    mov, mov_voxel_size = _open_series(source_position_dirpath, settings.source.channel)
-    ref, ref_voxel_size = _open_series(target_position_dirpath, settings.target_channel)
+    mov, mov_voxel_size = _open_series(moving_position_dirpath, settings.moving.channel)
+    ref, ref_voxel_size = _open_series(reference_position_dirpath, settings.reference_channel)
     estimator, score_fn, seed = build_estimator(
         settings, tuple(mov.shape[-3:]), mov_voxel_size, ref_voxel_size
     )
@@ -892,8 +894,8 @@ def _report(result: SeriesResult, time_indices: list[int]) -> dict:
 
 
 def estimate_transform_series(
-    source_position_dirpath: Path,
-    target_position_dirpath: Path,
+    moving_position_dirpath: Path,
+    reference_position_dirpath: Path,
     settings: EstimateTransformSettings,
     output_dir: Path,
     sbatch_filepath: str | None = None,
@@ -913,7 +915,7 @@ def estimate_transform_series(
     repairs_dir = output_dir / "repairs"
     slurm_out_path = output_dir / "slurm_output"
     slurm_out_path.mkdir(exist_ok=True)
-    source, target = Path(source_position_dirpath), Path(target_position_dirpath)
+    source, target = Path(moving_position_dirpath), Path(reference_position_dirpath)
 
     with open_ome_zarr(source, mode="r") as position:
         T, _C, Z, Y, X = position.data.shape
@@ -1069,7 +1071,7 @@ def estimate_transform_series(
         json.dumps(_report(result, time_indices), indent=2)
     )
     transforms = _one_transform_per_timepoint(result, time_indices, seed)
-    if settings.reference == "previous":
+    if settings.reference.frame == "previous":
         transforms = chain_to_first_frame(transforms, time_indices)
     return result, time_indices, transforms
 
