@@ -1,9 +1,15 @@
 import numpy as np
 import pytest
 
+from click.testing import CliRunner
 from iohub import open_ome_zarr
 
-from biahub.apply_transform import apply_transform, canvas, overlap_slices
+from biahub.apply_transform import (
+    apply_transform,
+    apply_transform_cli,
+    canvas,
+    overlap_slices,
+)
 from biahub.settings import TransformSettings
 from biahub.utils.config import model_to_yaml
 
@@ -127,3 +133,72 @@ def test_apply_transform_registers_source_channels_onto_a_target_store(
     np.testing.assert_allclose(
         result[:, 2], data[:, 0], atol=1e-2
     )  # identity-transformed source channel
+
+
+def test_apply_transform_time_indices_subset_uses_each_timepoints_own_matrix(
+    structured_plate, tmp_path
+):
+    position, data = structured_plate
+    forward = [_translation(0, 0, 0), _translation(0, 2, 0), _translation(0, 4, 0)]
+    config = tmp_path / "transforms.yml"
+    model_to_yaml(
+        TransformSettings(
+            direction="forward",
+            matrices=forward,
+            source_channels=["GFP"],
+            time_indices=[0, 2],
+            keep_overhang=True,
+        ),
+        config,
+    )
+    output = tmp_path / "out.zarr"
+
+    apply_transform([position], config, output, cluster="debug")
+
+    with open_ome_zarr(output / "A" / "1" / "0", mode="r") as out:
+        result = np.asarray(out.data)
+    assert result.shape[0] == 2
+    # Output t=1 is input t=2 moved by its own matrix (+4 rows), not by matrices[1].
+    moved = _block_centre(result[1, 0])[1] - _block_centre(data[2, 0])[1]
+    assert moved == pytest.approx(4, abs=0.6)
+
+
+def test_apply_transform_cli_takes_source_and_target_position_paths(
+    structured_plate, tmp_path
+):
+    position, data = structured_plate
+    target = tmp_path / "target.zarr"
+    with open_ome_zarr(target, layout="hcs", mode="w", channel_names=["Phase3D"]) as plate:
+        plate.create_position("A", "1", "0")["0"] = data[:, :1]
+    config = tmp_path / "transforms.yml"
+    model_to_yaml(
+        TransformSettings(
+            direction="forward",
+            matrices=[_translation(0, 0, 0)],
+            source_channels=["GFP"],
+            target_channel="Phase3D",
+            keep_overhang=True,
+        ),
+        config,
+    )
+    output = tmp_path / "out.zarr"
+
+    result = CliRunner().invoke(
+        apply_transform_cli,
+        [
+            "-s",
+            str(position),
+            "-t",
+            str(target / "A" / "1" / "0"),
+            "-c",
+            str(config),
+            "-o",
+            str(output),
+            "--cluster",
+            "debug",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    with open_ome_zarr(output / "A" / "1" / "0", mode="r") as out:
+        assert out.channel_names == ["Phase3D", "GFP"]

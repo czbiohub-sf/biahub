@@ -20,6 +20,7 @@ from iohub.ngff.utils import create_empty_plate, process_single_position
 
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
+    OptionEatAll,
     _validate_and_process_paths,
     cluster,
     config_filepath,
@@ -231,11 +232,14 @@ def apply_transform(
 
     extra_metadata = {"biahub-apply-transform": settings.model_dump()}
     output_time_indices = list(range(len(time_indices)))
-    matrices_for_jobs = (
-        [pull_matrices[0].tolist()]
-        if len(pull_matrices) == 1
-        else [pull_matrices[t].tolist() for t in time_indices]
-    )
+    # Jobs index the matrices by the input timepoint, so hand them a T-long list whether
+    # the config gave one matrix per timepoint or one per selected timepoint.
+    if len(pull_matrices) == 1:
+        matrices_for_jobs = [pull_matrices[0].tolist()]
+    else:
+        matrices_for_jobs = [None] * T
+        for i, t in enumerate(time_indices):
+            matrices_for_jobs[t] = pull_matrices[t if len(pull_matrices) == T else i].tolist()
     jobs, labels = [], []
     with submitit.helpers.clean_env(), executor.batch():
         for index, source_path in enumerate(source_position_dirpaths):
@@ -300,6 +304,7 @@ def _optional_target_position_dirpaths():
         "--target-position-dirpaths",
         "-t",
         required=False,
+        cls=OptionEatAll,
         type=tuple,
         callback=_validate_and_process_paths,
         help='Optional reference positions, e.g. "target.zarr/*/*/*": the output takes their '
