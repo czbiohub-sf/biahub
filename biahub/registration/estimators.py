@@ -15,6 +15,7 @@ import numpy as np
 
 from numpy.typing import ArrayLike
 from pystackreg import StackReg
+from scipy.spatial import cKDTree
 
 from biahub.characterize_psf import detect_peaks
 from biahub.core.transform import Transform
@@ -30,12 +31,20 @@ from biahub.registration.phase_cross_correlation import (
     phase_cross_corr,
     phase_cross_corr_padding,
 )
+from biahub.registration.pointcloud import (
+    fit_affine,
+    translation_matrix,
+    vote_drift,
+    vote_icp_register,
+)
 from biahub.settings import (
     AffineTransformSettings,
     AntsRegistrationSettings,
     BeadsMatchSettings,
     DetectPeaksSettings,
     PhaseCrossCorrSettings,
+    SeedCorrectionSettings,
+    VoteIcpSettings,
 )
 
 
@@ -155,7 +164,17 @@ class NodeGraphEstimator:
                 score_fn=score_fn,
             )
 
-        configured = node_graph(beads_match_settings, iterations)
+        if beads_match_settings.estimation_mode == "vote_icp":
+            configured: TransformEstimator = VoteIcpEstimator.from_beads_settings(
+                beads_match_settings, score_fn=score_fn
+            )
+        else:
+            configured = node_graph(beads_match_settings, iterations)
+        if beads_match_settings.seed_correction_settings.mode != "none":
+            configured = ChainedEstimator(
+                [VoteSeedCorrection.from_beads_settings(beads_match_settings), configured],
+                score_fn=score_fn,
+            )
         if beads_match_settings.spectral_arm == "off":
             return configured
         spectral_settings = beads_match_settings.model_copy(deep=True)
@@ -262,7 +281,12 @@ class ChainedEstimator:
         best: Transform | None = None
         best_score = -np.inf
         for stage in self.stages:
-            current = stage.estimate(mov, ref, seed=current)
+            try:
+                current = stage.estimate(mov, ref, seed=current)
+            except EstimationError:
+                if best is not None:
+                    break
+                raise
             if self.score_fn is None:
                 best = current
                 continue
@@ -329,6 +353,197 @@ class CompetingEstimator:
                 "every arm failed: " + "; ".join(f"{k}: {v}" for k, v in failures.items())
             )
         return best
+
+
+class VoteIcpEstimator:
+    """TransformEstimator over peak clouds by iterated displacement voting.
+
+    Reach stage: dense detection on the raw moving volume (`vote_peaks_settings`), voted
+    ICP from the seed with a wide, shrinking capture radius. Precision stage: re-run at
+    short range from that result with the pipeline's own moving detection, kept only on a
+    strict score win. Raises `EstimationError` when voting abstains before any fit.
+    """
+
+    def __init__(
+        self,
+        dense_detector: NodeDetector,
+        precise_detector: NodeDetector,
+        ref_detector: NodeDetector,
+        settings: VoteIcpSettings,
+        score_fn: ScoreFn,
+    ):
+        self.dense_detector = dense_detector
+        self.precise_detector = precise_detector
+        self.ref_detector = ref_detector
+        self.settings = settings
+        self.score_fn = score_fn
+
+    @classmethod
+    def from_beads_settings(
+        cls, beads_match_settings: BeadsMatchSettings, score_fn: ScoreFn
+    ) -> VoteIcpEstimator:
+        settings = beads_match_settings.vote_icp_settings
+        return cls(
+            dense_detector=BeadNodeDetector(settings.vote_peaks_settings),
+            precise_detector=BeadNodeDetector(beads_match_settings.source_peaks_settings),
+            ref_detector=BeadNodeDetector(beads_match_settings.target_peaks_settings),
+            settings=settings,
+            score_fn=score_fn,
+        )
+
+    def _register(self, mov_peaks, ref_peaks, pull_seed, initial_radius):
+        s = self.settings
+        return vote_icp_register(
+            mov_peaks=mov_peaks,
+            ref_peaks=ref_peaks,
+            initial_transform=pull_seed,
+            initial_capture_radius=initial_radius,
+            min_capture_radius=s.min_capture_radius,
+            radius_decay=s.radius_decay,
+            cluster_radius=s.cluster_radius,
+            min_votes=s.min_votes,
+            max_iterations=s.max_iterations,
+            convergence_translation=s.convergence_translation,
+        )
+
+    def estimate(
+        self, mov: ArrayLike, ref: ArrayLike, seed: Transform | None = None
+    ) -> Transform:
+        mov = np.asarray(mov, dtype=np.float32)
+        ref = np.asarray(ref, dtype=np.float32)
+        ndim = mov.ndim
+        pull_seed = (seed.invert() if seed is not None else Transform.identity(ndim)).matrix
+        ref_peaks = np.asarray(self.ref_detector.detect(ref))
+        dense_peaks = np.asarray(self.dense_detector.detect(mov))
+        if min(len(dense_peaks), len(ref_peaks)) < self.settings.min_votes:
+            raise EstimationError(
+                f"vote_icp: {len(dense_peaks)} dense moving / {len(ref_peaks)} reference "
+                f"peaks (need >= {self.settings.min_votes})"
+            )
+        pull, info = self._register(
+            dense_peaks, ref_peaks, pull_seed, self.settings.initial_capture_radius
+        )
+        if pull is None:
+            raise EstimationError(
+                f"vote_icp: voting abstained after {info['iterations']} iteration(s)"
+            )
+        best = Transform(
+            pull, transform_type=seed.transform_type if seed else "affine"
+        ).invert()
+        best_score = self.score_fn(best, mov, ref)
+
+        precise_peaks = np.asarray(self.precise_detector.detect(mov))
+        if len(precise_peaks) >= self.settings.min_votes:
+            precise_pull, _info = self._register(
+                precise_peaks, ref_peaks, pull, self.settings.min_capture_radius
+            )
+            if precise_pull is not None:
+                precise = Transform(precise_pull, transform_type=best.transform_type).invert()
+                precise_score = self.score_fn(precise, mov, ref)
+                if np.isfinite(precise_score) and precise_score > best_score:
+                    best = precise
+        return best
+
+
+class VoteSeedCorrection:
+    """A stage that corrects a seed by bead displacement voting, for a chain's first slot.
+
+    Warps `mov` by the seed, detects beads densely and votes for the residual drift;
+    "voteseed" composes the densest cluster's mean displacement into the seed, "votefit"
+    also fits an affine on the cluster's pairs. Every candidate competes against the
+    unchanged seed on the median nearest-neighbour distance of the pipeline's own
+    detection, so a bad vote leaves the seed unchanged. Returns the (possibly unchanged)
+    seed; without a seed, the identity.
+    """
+
+    def __init__(
+        self,
+        settings: SeedCorrectionSettings,
+        mov_detector: NodeDetector,
+        ref_detector: NodeDetector,
+    ):
+        self.settings = settings
+        self.mov_detector = mov_detector
+        self.ref_detector = ref_detector
+        self.dense_detector = BeadNodeDetector(settings.vote_peaks_settings)
+        self.last_note: str = ""
+
+    @classmethod
+    def from_beads_settings(
+        cls, beads_match_settings: BeadsMatchSettings
+    ) -> VoteSeedCorrection:
+        return cls(
+            settings=beads_match_settings.seed_correction_settings,
+            mov_detector=BeadNodeDetector(beads_match_settings.source_peaks_settings),
+            ref_detector=BeadNodeDetector(beads_match_settings.target_peaks_settings),
+        )
+
+    def estimate(
+        self, mov: ArrayLike, ref: ArrayLike, seed: Transform | None = None
+    ) -> Transform:
+        mov = np.asarray(mov, dtype=np.float32)
+        ref = np.asarray(ref, dtype=np.float32)
+        seed = seed if seed is not None else Transform.identity(mov.ndim)
+        settings = self.settings
+        ref_peaks = np.asarray(self.ref_detector.detect(ref))
+        if len(ref_peaks) < settings.min_votes:
+            self.last_note = f"only {len(ref_peaks)} ref peaks; seed unchanged"
+            return seed
+        ref_tree = cKDTree(ref_peaks)
+
+        def nn_median(transform: Transform) -> float:
+            peaks = np.asarray(self.mov_detector.detect(transform.apply(mov, reference=ref)))
+            if len(peaks) == 0:
+                return np.inf
+            return float(np.median(ref_tree.query(peaks)[0]))
+
+        warped = seed.apply(mov, reference=ref)
+        dense_peaks = np.asarray(self.dense_detector.detect(warped))
+        drift, pairs, n_votes = vote_drift(
+            dense_peaks,
+            ref_peaks,
+            settings.capture_radius,
+            settings.cluster_radius,
+            settings.min_votes,
+        )
+        if drift is None:
+            self.last_note = (
+                f"only {len(dense_peaks)} dense peaks / too few votes; seed unchanged"
+            )
+            return seed
+        # Work in the pull convention the vote was measured in: the seed maps reference
+        # coordinates to moving sample coordinates, so undoing an image drift of +d in the
+        # reference frame composes as pull @ T(-d). Both signs compete with the unchanged seed.
+        pull = seed.invert().matrix
+        candidates = {
+            "keep": seed,
+            "minus": Transform(pull @ translation_matrix(-drift)).invert(),
+            "plus": Transform(pull @ translation_matrix(drift)).invert(),
+        }
+        nn = {name: nn_median(t) for name, t in candidates.items()}
+        best = min(nn, key=nn.get)
+        corrected = candidates[best]
+        note = f"drift={np.round(drift, 1).tolist()} votes={n_votes} pick={best}"
+        if settings.mode == "votefit" and len(pairs) >= 4:
+            # The cluster's votes are correspondences (warped moving peak p, reference peak
+            # q) in the uncorrected seed's warped frame; re-warping should put p at q, i.e.
+            # sample point C(q) = p, so the fit composes onto the seed as pull @ C.
+            p = np.asarray([a for a, _ in pairs], dtype=float)
+            q = np.asarray([b for _, b in pairs], dtype=float)
+            correction = (
+                fit_affine(q, p)
+                if len(pairs) >= 6
+                else translation_matrix((p - q).mean(axis=0))
+            )
+            fitted = Transform(pull @ correction).invert()
+            nn_fitted = nn_median(fitted)
+            if np.isfinite(nn_fitted) and nn_fitted < nn[best]:
+                corrected = fitted
+                note += f"; fit accepted n={len(pairs)} nn {nn[best]:.1f}->{nn_fitted:.1f}"
+            else:
+                note += f"; fit rejected n={len(pairs)} nn {nn[best]:.1f}->{nn_fitted:.1f}"
+        self.last_note = note
+        return corrected
 
 
 class PCCEstimator:
