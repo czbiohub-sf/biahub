@@ -165,6 +165,7 @@ def _estimate_timepoint_job(
         "matrix": result.transforms[t].to_list() if t in result.transforms else None,
         "score": _finite_or_none(result.scores.get(t)),
         "error": result.errors.get(t),
+        "arm": getattr(estimator, "last_winner", None),
     }
     record_path.parent.mkdir(parents=True, exist_ok=True)
     record_path.write_text(json.dumps(record))
@@ -172,17 +173,27 @@ def _estimate_timepoint_job(
 
 
 def _load_series(
-    records_dir: Path, time_indices: list[int], transform_type: str
+    records_dir: Path,
+    time_indices: list[int],
+    transform_type: str,
+    records: dict[int, dict] | None = None,
 ) -> SeriesResult:
-    """Rebuild the series from the per-timepoint records (a missing record is an error)."""
+    """Rebuild the series from per-timepoint records.
+
+    In-memory records first, then the files on disk (resumed timepoints); a timepoint
+    with neither is an error.
+    """
+    records = dict(records or {})
     result = SeriesResult()
     for t in time_indices:
-        path = records_dir / f"{t}.json"
-        if not path.exists():
-            result.scores[t] = float("nan")
-            result.errors[t] = "no record: job did not finish"
-            continue
-        record = json.loads(path.read_text())
+        record = records.get(t)
+        if record is None:
+            path = records_dir / f"{t}.json"
+            if not path.exists():
+                result.scores[t] = float("nan")
+                result.errors[t] = "no record: job did not finish"
+                continue
+            record = json.loads(path.read_text())
         if record["matrix"] is not None:
             result.transforms[t] = Transform(
                 np.asarray(record["matrix"], dtype=float), transform_type=transform_type
@@ -237,8 +248,7 @@ def _repair_timepoint_job(
     return record
 
 
-def _load_repair(record_path: Path, transform_type: str, fallback: Transform) -> RepairResult:
-    record = json.loads(record_path.read_text())
+def _load_repair(record: dict, transform_type: str, fallback: Transform) -> RepairResult:
     return RepairResult(
         transform=(
             Transform(np.asarray(record["matrix"], dtype=float), transform_type=transform_type)
@@ -262,10 +272,15 @@ def _run_jobs(
     monitor_flag: bool,
     label: str,
     submissions: list[tuple[int, Callable, tuple]],
-) -> dict[int, str]:
-    """Submit one job per (t, fn, args); return {t: error} for jobs that raised."""
+) -> tuple[dict[int, dict], dict[int, str]]:
+    """Submit one job per (t, fn, args); return ({t: record}, {t: error}).
+
+    Records come back through submitit's own result channel rather than being re-read
+    from the job's JSON file: on a shared filesystem the driver can observe a job as
+    finished before the file it wrote is visible.
+    """
     if not submissions:
-        return {}
+        return {}, {}
     jobs = []
     with submitit.helpers.clean_env(), executor.batch():
         for _t, fn, args in submissions:
@@ -277,14 +292,15 @@ def _run_jobs(
     if monitor_flag and resolved_cluster == "slurm":
         monitor_jobs(jobs, [Path(f"t={t}") for t, _fn, _args in submissions])
 
+    records: dict[int, dict] = {}
     failures: dict[int, str] = {}
     for (t, _fn, _args), job in zip(submissions, jobs, strict=True):
         try:
-            job.result()
+            records[t] = job.result()
         except Exception as e:  # noqa: BLE001 -- one job's infrastructure failure must not abort the run
             failures[t] = f"job failed: {type(e).__name__}: {str(e).splitlines()[-1][:200]}"
             click.echo(f"{label} t={t}: {failures[t]}")
-    return failures
+    return records, failures
 
 
 def _one_transform_per_timepoint(
@@ -414,7 +430,7 @@ def estimate_transform_series(
         click.echo(
             f"resume: {len(time_indices) - len(to_estimate)} timepoint(s) already estimated"
         )
-    job_failures = _run_jobs(
+    estimate_records, job_failures = _run_jobs(
         executor,
         resolved_cluster,
         monitor,
@@ -436,7 +452,9 @@ def estimate_transform_series(
         ],
     )
 
-    result = _load_series(timepoints_dir, time_indices, transform_type)
+    result = _load_series(
+        timepoints_dir, time_indices, transform_type, records=estimate_records
+    )
     for t, error in job_failures.items():
         result.errors[t] = error
     for t in time_indices:
@@ -448,7 +466,7 @@ def estimate_transform_series(
     flagged = flag_series(result)
     executor.update_parameters(slurm_time=60, slurm_job_name="estimate_transform_repair")
     to_repair = [t for t in flagged if not (resume and (repairs_dir / f"{t}.json").exists())]
-    _run_jobs(
+    repair_records, _repair_failures = _run_jobs(
         executor,
         resolved_cluster,
         monitor,
@@ -473,11 +491,14 @@ def estimate_transform_series(
         ],
     )
     for t in flagged:
-        record_path = repairs_dir / f"{t}.json"
-        if not record_path.exists():
-            continue
+        record = repair_records.get(t)
+        if record is None:
+            record_path = repairs_dir / f"{t}.json"
+            if not record_path.exists():
+                continue
+            record = json.loads(record_path.read_text())
         outcome = _load_repair(
-            record_path, transform_type, fallback=result.transforms.get(t, config_seed)
+            record, transform_type, fallback=result.transforms.get(t, config_seed)
         )
         result.repairs[t] = outcome
         result.journal.record(
