@@ -12,8 +12,7 @@ from biahub.cli.parsing import (
     source_position_dirpaths,
     target_position_dirpaths,
 )
-from biahub.estimate_transform import estimate_transform_series
-from biahub.registration.legacy import legacy_pull_from_forward
+from biahub.registration.engine import estimate_transform_series
 from biahub.registration.utils import evaluate_transforms, plot_translations
 from biahub.settings import (
     EstimateRegistrationSettings,
@@ -100,7 +99,7 @@ def estimate_registration(
         sbatch_filepath=sbatch_filepath,
         cluster=cluster,
     )
-    transforms = [legacy_pull_from_forward(transform) for transform in forward_transforms]
+    transforms = [transform.to_legacy_pull() for transform in forward_transforms]
 
     if len(transforms) == 1:
         if eval_transform_settings:

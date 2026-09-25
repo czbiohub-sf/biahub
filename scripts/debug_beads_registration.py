@@ -22,7 +22,7 @@ from iohub import open_ome_zarr
 from biahub.core.transform import Transform
 import napari
 from biahub.settings import EstimateRegistrationSettings
-from biahub.registration.beads import (
+from biahub.registration.methods.beads import (
     transform_from_matches,
     matches_from_beads,
     peaks_from_beads,
