@@ -127,11 +127,11 @@ scores with different matrices are expected at the metric's resolution; a system
 
 ## 9. Optional: apply
 
-`--apply`: the output is a `StabilizationSettings` (one 4x4 per timepoint), consumed by
-`biahub stabilize` (per-timepoint list) -- use it for the embryo wells with the same
-`-c <out>/registration_settings.yml`. Canvas sizing of the merged apply path is still an
-open design item; until `apply-transform` exists, apply exactly as the previous
-registration of this dataset did (see its `sbatch_file_stabilize.sh`).
+`--apply`: `biahub apply-transform -s <deskew.zarr>/*/*/* -t <reconstruct.zarr>/*/*/* -c <out>/transforms.yml -o <dataset>/1-preprocess/light-sheet/raw/1-register-engine/<DATASET>.zarr`
+registers every light-sheet position onto the phase grid with the estimated per-timepoint
+transforms (target channels copied, source channels transformed; canvas = overlap
+intersected over timepoints, `keep_overhang: true` in the config to keep the full grid).
+Without `-t` the same command stabilizes a store onto its own grid.
 
 ## 10. Wrap up
 
