@@ -35,6 +35,7 @@ from biahub.registration.utils import (
     save_transforms,
 )
 from biahub.settings import (
+    EstimateRegistrationSettings,
     EstimateStabilizationSettings,
     FocusFindingSettings,
     PhaseCrossCorrSettings,
@@ -1026,27 +1027,30 @@ def estimate_stabilization(
                     f"Error estimating {stabilization_type} stabilization parameters: {e}"
                 )
         elif stabilization_method == "beads":
-            from biahub.registration.beads import estimate_tczyx
+            from biahub.estimate_transform import estimate_transform_series
+            from biahub.registration.legacy import legacy_pull_from_forward
 
             click.echo("Estimating xyz stabilization parameters with beads")
-            with open_ome_zarr(input_position_dirpaths[0], mode="r") as beads_position:
-                source_channels = beads_position.channel_names
-                source_channel_index = source_channels.index(stabilization_estimation_channel)
-                channel_tczyx = beads_position.data.dask_array()
-
-            xyz_transforms = estimate_tczyx(
-                mov_tczyx=channel_tczyx,
-                ref_tczyx=channel_tczyx,
-                mov_channel_index=source_channel_index,
-                ref_channel_index=source_channel_index,
+            engine_settings = EstimateRegistrationSettings(
+                target_channel_name=stabilization_estimation_channel,
+                source_channel_name=stabilization_estimation_channel,
+                estimation_method="beads",
                 beads_match_settings=settings.beads_match_settings,
                 affine_transform_settings=settings.affine_transform_settings,
                 verbose=verbose,
-                output_folder_path=output_dirpath,
-                mode="stabilization",
-                cluster=cluster,
-                sbatch_filepath=sbatch_filepath,
             )
+            _result, _time_indices, forward_transforms = estimate_transform_series(
+                input_position_dirpaths[0],
+                input_position_dirpaths[0],
+                engine_settings,
+                output_dirpath,
+                sbatch_filepath=sbatch_filepath,
+                cluster=cluster,
+                reference_kind=settings.affine_transform_settings.t_reference,
+            )
+            xyz_transforms = [
+                legacy_pull_from_forward(transform) for transform in forward_transforms
+            ]
 
             model = StabilizationSettings(
                 stabilization_type=settings.stabilization_type,

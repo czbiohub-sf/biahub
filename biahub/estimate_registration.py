@@ -101,22 +101,19 @@ def estimate_registration(
     eval_transform_settings = settings.eval_transform_settings
 
     if settings.estimation_method == "beads":
-        from biahub.registration.beads import estimate_tczyx
+        from biahub.estimate_transform import estimate_transform_series
+        from biahub.registration.legacy import legacy_pull_from_forward
 
-        transforms = estimate_tczyx(
-            mov_tczyx=source_data,
-            ref_tczyx=target_data,
-            mov_channel_index=source_channel_index,
-            ref_channel_index=target_channel_index,
-            beads_match_settings=settings.beads_match_settings,
-            affine_transform_settings=settings.affine_transform_settings,
-            verbose=settings.verbose,
-            cluster=cluster,
+        _result, _time_indices, forward_transforms = estimate_transform_series(
+            source_position_dirpaths[0],
+            target_position_dirpaths[0],
+            settings,
+            output_dir,
             sbatch_filepath=sbatch_filepath,
-            output_folder_path=output_dir,
-            ref_voxel_size=target_channel_voxel_size,
-            mov_voxel_size=source_channel_voxel_size,
+            cluster=cluster,
+            reference_kind="cross",
         )
+        transforms = [legacy_pull_from_forward(transform) for transform in forward_transforms]
 
     elif settings.estimation_method == "ants":
         from biahub.registration.ants import estimate_tczyx
