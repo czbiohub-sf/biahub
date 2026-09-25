@@ -1,6 +1,7 @@
-source:
+moving:
   channel: Phase3D
-reference: first
+reference:
+  frame: first
 method: phase-cross-corr
 phase_cross_corr:
   normalization: magnitude

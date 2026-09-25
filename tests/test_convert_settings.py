@@ -36,8 +36,8 @@ def test_estimate_registration_converts_to_a_cross_reference_estimate():
     )
     unified, notes = convert_settings(legacy)
     assert isinstance(unified, EstimateTransformSettings)
-    assert unified.reference == "cross" and unified.target.channel == "Phase3D"
-    assert unified.source.channel == "GFP" and unified.method == "beads"
+    assert unified.reference.frame == "cross" and unified.reference.channel == "Phase3D"
+    assert unified.moving.channel == "GFP" and unified.method == "beads"
     assert (
         unified.transform.seed == PULL.tolist() and unified.transform.seed_direction == "pull"
     )
@@ -55,7 +55,7 @@ def test_same_channel_estimate_registration_is_self_stabilization():
         eval_transform_settings={"validation_window_size": 5},
     )
     unified, notes = convert_settings(legacy)
-    assert unified.target is None and unified.reference == "previous"
+    assert unified.reference.channel is None and unified.reference.frame == "previous"
     assert unified.method == "phase-cross-corr"
     assert [n for n in notes] == [n for n in notes if "eval_transform_settings" in n]
 
@@ -72,7 +72,7 @@ def test_focus_finding_stabilization_converts_type_to_axes(stabilization_type):
         affine_transform_settings={"use_prev_t_transform": False},
     )
     unified, notes = convert_settings(legacy)
-    assert unified.method == "focus-finding" and unified.reference == "previous"
+    assert unified.method == "focus-finding" and unified.reference.frame == "previous"
     assert unified.focus_finding.axes == stabilization_type
     assert unified.focus_finding.center_crop_xy == [600, 500]
     assert notes == []
@@ -85,16 +85,16 @@ def test_register_config_converts_to_a_single_pull_matrix():
         affine_transform_zyx=PULL.tolist(),
         keep_overhang=True,
     )
-    unified, _ = convert_settings(legacy)
+    unified, notes = convert_settings(legacy)
     assert isinstance(unified, TransformSettings)
-    assert unified.direction == "pull" and unified.matrices == [PULL.tolist()]
+    assert unified.direction == "pull" and unified.series_wide
+    assert unified.transforms[0].matrix == PULL.tolist()
     assert (
-        unified.source_channels == ["GFP", "mCherry"] and unified.target_channel == "Phase3D"
+        unified.moving_channels == ["GFP", "mCherry"]
+        and unified.reference_channel == "Phase3D"
     )
-    assert unified.keep_overhang is True
-    np.testing.assert_allclose(
-        np.asarray(unified.as_direction("forward"))[0, :3, 3], [-2, 3, -4]
-    )
+    assert any("--keep-overhang" in n for n in notes)
+    np.testing.assert_allclose(unified.matrix_for(0, "forward")[:3, 3], [-2, 3, -4])
 
 
 def test_stabilize_config_converts_to_a_self_grid_series():
@@ -107,8 +107,8 @@ def test_stabilize_config_converts_to_a_self_grid_series():
         output_voxel_size=[1, 1, 2, 0.5, 0.5],
     )
     unified, _ = convert_settings(legacy)
-    assert unified.direction == "pull" and len(unified.matrices) == 3
-    assert unified.source_channels == ["GFP", "Phase3D"] and unified.target_channel is None
+    assert unified.direction == "pull" and unified.timepoints() == [0, 1, 2]
+    assert unified.moving_channels == ["GFP", "Phase3D"] and unified.reference_channel is None
     assert unified.method == "phase-cross-corr" and unified.voxel_size == [1, 1, 2, 0.5, 0.5]
 
 
