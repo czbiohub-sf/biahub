@@ -277,7 +277,7 @@ class PhaseCrossCorrSettings(MyBaseModel):
     function_type: Literal["custom_padding", "custom"] = "custom"
     t_reference: Literal["first", "previous"] = "first"
     skip_beads_fov: str = "0"
-    center_crop_xy: list[int, int] = None
+    center_crop_xy: list[int] | None = None
     X_slice: list | list[list | Literal["all"]] | Literal["all"] = "all"
     Y_slice: list | list[list | Literal["all"]] | Literal["all"] = "all"
     Z_slice: list | list[list | Literal["all"]] | Literal["all"] = "all"
