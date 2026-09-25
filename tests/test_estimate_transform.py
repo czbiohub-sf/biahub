@@ -204,3 +204,72 @@ def test_estimate_transform_ants_method_recovers_the_shift(beads_plate, tmp_path
     )
     report = json.loads((output.parent / "estimate_transform_report.json").read_text())
     assert report["scores"]["0"] > 0.9  # correlation score
+
+
+@pytest.fixture
+def drifting_plate(tmp_path):
+    """Three timepoints of one channel drifting by APPLIED_SHIFT_ZYX per timepoint."""
+    rng = np.random.default_rng(11)
+    ref = _synthetic_bead_volume(rng, SHAPE)
+    frames = [
+        ndi_shift(
+            ref,
+            shift=tuple(t * s for s in APPLIED_SHIFT_ZYX),
+            order=1,
+            mode="constant",
+            cval=0.0,
+        )
+        for t in range(3)
+    ]
+    return _write_plate(tmp_path / "drift.zarr", [(f, f) for f in frames])
+
+
+@pytest.mark.parametrize(
+    ("t_reference", "expected_pull_factor"),
+    [("first", [0, 1, 2]), ("previous", [0, 1, 1])],
+)
+def test_estimate_transform_stabilizes_a_channel_against_itself(
+    drifting_plate, tmp_path, t_reference, expected_pull_factor
+):
+    output = tmp_path / "out" / "stabilization_settings.yml"
+    config = _write_config(
+        tmp_path,
+        source_channel_name="GFP",
+        target_channel_name="GFP",
+        affine_transform_settings=AffineTransformSettings(
+            transform_type="euclidean", t_reference=t_reference
+        ),
+    )
+
+    _run(drifting_plate, config, output)
+
+    model = yaml_to_model(output, StabilizationSettings)
+    assert model.stabilization_channels == ["GFP"]
+    for matrix, factor in zip(
+        model.affine_transform_zyx_list, expected_pull_factor, strict=True
+    ):
+        np.testing.assert_allclose(
+            np.asarray(matrix)[:3, 3], [factor * s for s in APPLIED_SHIFT_ZYX], atol=0.5
+        )
+
+
+def test_estimate_registration_beads_path_runs_through_the_engine(beads_plate, tmp_path):
+    from biahub.estimate_registration import estimate_registration
+
+    output = tmp_path / "out" / "registration_settings.yml"
+    estimate_registration(
+        source_position_dirpaths=[beads_plate],
+        target_position_dirpaths=[beads_plate],
+        output_filepath=output,
+        config_filepath=_write_config(tmp_path),
+        registration_target_channel=None,
+        registration_source_channel=[],
+        local=True,
+    )
+
+    model = yaml_to_model(output, StabilizationSettings)
+    assert len(model.affine_transform_zyx_list) == 2
+    np.testing.assert_allclose(
+        np.asarray(model.affine_transform_zyx_list[1])[:3, 3], APPLIED_SHIFT_ZYX, atol=0.5
+    )
+    assert (output.parent / "estimate_transform_report.json").exists()

@@ -40,12 +40,8 @@ class PreviousSeed:
 
     Falls back to another policy for t=0 or whenever no previous result exists yet.
     Reads from an explicit, caller-owned history mapping rather than mutating any
-    settings object in place. `beads.py`'s `estimate_with_propagation` currently mutates
-    `affine_transform_settings.approx_transform` directly, which the repair/sweep
-    fallback passes also read, expecting the ORIGINAL config value -- so the
-    "config_seed" reseed candidate ends up being whatever timepoint propagation last
-    visited, not the config's actual seed (PR #339 review finding 4). The caller is
-    responsible for writing `history[t] = accepted_transform` after each accepted
+    settings object in place, so a "config seed" elsewhere keeps meaning the config's
+    seed. The caller writes `history[t] = accepted_transform` after each accepted
     estimate; this policy never mutates it.
     """
 
