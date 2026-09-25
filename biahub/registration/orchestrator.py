@@ -80,6 +80,61 @@ def estimate_series(
     return result
 
 
+def flag_series(result: SeriesResult, max_timepoints: int | None = None) -> list[int]:
+    """Flag attempted timepoints against the run's own score distribution.
+
+    Only timepoints that were attempted can be flagged; gaps in `time_indices` are not
+    "missing scores". Sets and returns `result.flagged`.
+    """
+    attempted = sorted(result.scores)
+    if not attempted:
+        result.flagged = []
+        return result.flagged
+    flagged_positions, _stats = select_flagged(
+        np.array([result.scores[t] for t in attempted]),
+        label="repair",
+        max_timepoints=max_timepoints,
+    )
+    result.flagged = [attempted[i] for i in flagged_positions]
+    return result.flagged
+
+
+def repair_timepoint(
+    t: int,
+    mov,
+    reference_policy: ReferencePolicy,
+    estimator: TransformEstimator,
+    score_fn: ScoreFn,
+    result: SeriesResult,
+    candidates: RepairCandidates,
+) -> RepairResult:
+    """Offer one flagged timepoint to `repair` and fold an accepted result back in.
+
+    A timepoint whose estimate failed has no current transform, so any candidate with a
+    finite score is an improvement for it.
+    """
+    mov_t = np.asarray(mov[t])
+    ref_t = np.asarray(reference_policy.reference_for(mov, t))
+    current = result.transforms.get(t)
+    outcome = repair(
+        t=t,
+        mov=mov_t,
+        ref=ref_t,
+        estimator=estimator,
+        current_transform=current if current is not None else Transform.identity(mov_t.ndim),
+        current_score=result.scores[t] if current is not None else -np.inf,
+        candidates=candidates(t, result.transforms, result.scores, set(result.flagged)),
+        score_fn=lambda transform, m=mov_t, r=ref_t: score_fn(transform, m, r),
+        journal=result.journal,
+    )
+    result.repairs[t] = outcome
+    if outcome.accepted:
+        result.transforms[t] = outcome.transform
+        result.scores[t] = outcome.score
+        result.errors.pop(t, None)
+    return outcome
+
+
 def repair_series(
     mov,
     reference_policy: ReferencePolicy,
@@ -90,44 +145,12 @@ def repair_series(
     max_timepoints: int | None = None,
     on_timepoint: OnTimepoint | None = None,
 ) -> SeriesResult:
-    """Flag attempted timepoints against the run's own scores and offer each to `repair`.
+    """Flag attempted timepoints and offer each to `repair`, in-process and in order.
 
-    A timepoint whose estimate failed has no current transform, so any candidate with a
-    finite score is an improvement for it. Unflagged timepoints are never touched.
+    Unflagged timepoints are never touched.
     """
-    attempted = sorted(result.scores)
-    if not attempted:
-        return result
-    flagged_positions, _stats = select_flagged(
-        np.array([result.scores[t] for t in attempted]),
-        label="repair",
-        max_timepoints=max_timepoints,
-    )
-    result.flagged = [attempted[i] for i in flagged_positions]
-    flagged_set = set(result.flagged)
-
-    for t in result.flagged:
-        mov_t = np.asarray(mov[t])
-        ref_t = np.asarray(reference_policy.reference_for(mov, t))
-        current = result.transforms.get(t)
-        outcome = repair(
-            t=t,
-            mov=mov_t,
-            ref=ref_t,
-            estimator=estimator,
-            current_transform=current
-            if current is not None
-            else Transform.identity(mov_t.ndim),
-            current_score=result.scores[t] if current is not None else -np.inf,
-            candidates=candidates(t, result.transforms, result.scores, flagged_set),
-            score_fn=lambda transform, m=mov_t, r=ref_t: score_fn(transform, m, r),
-            journal=result.journal,
-        )
-        result.repairs[t] = outcome
-        if outcome.accepted:
-            result.transforms[t] = outcome.transform
-            result.scores[t] = outcome.score
-            result.errors.pop(t, None)
+    for t in flag_series(result, max_timepoints):
+        repair_timepoint(t, mov, reference_policy, estimator, score_fn, result, candidates)
         if on_timepoint is not None:
             on_timepoint(t, result)
     return result
