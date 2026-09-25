@@ -124,6 +124,75 @@ def estimate(
     return fwd_transform, inv_transform
 
 
+def preprocess_zyx(
+    mov_zyx: np.ndarray,
+    ref_zyx: np.ndarray,
+    crop: bool = False,
+    ref_mask_radius: float | None = None,
+    clip: bool = False,
+    sobel_filter: bool = False,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Prepare one already-aligned moving volume and its reference for intensity registration.
+
+    `mov_zyx` must already be warped into `ref_zyx`'s frame. Returns `(ref, mov, offset)`
+    where `offset` is the ZYX origin of the crop within the full volume (zeros without
+    `crop`), so a correction estimated on the crop can be composed back into full-volume
+    coordinates.
+    """
+    ref = np.asarray(ref_zyx, dtype=np.float32)
+    mov = np.asarray(mov_zyx, dtype=np.float32)
+    offset = np.zeros(3, dtype=np.float32)
+    if crop:
+        mask = (ref != 0) & (mov != 0)
+        if ref_mask_radius is not None:
+            ref_mask = np.zeros(ref.shape[-2:], dtype=bool)
+            y, x = np.ogrid[: ref_mask.shape[-2], : ref_mask.shape[-1]]
+            center = (ref_mask.shape[-2] // 2, ref_mask.shape[-1] // 2)
+            radius = int(ref_mask_radius * min(center))
+            ref_mask[(x - center[0]) ** 2 + (y - center[1]) ** 2 <= radius**2] = True
+            mask &= ref_mask
+        z_slice, y_slice, x_slice = find_lir(mask.astype(np.uint8))
+        offset = np.asarray([s.start for s in (z_slice, y_slice, x_slice)], dtype=np.float32)
+        ref = ref[z_slice, y_slice, x_slice]
+        mov = mov[z_slice, y_slice, x_slice]
+    if clip:
+        # Limits assume a phase reference; see AntsRegistrationSettings.clip.
+        ref = np.clip(ref, 0, 0.5)
+        mov = np.clip(mov, 110, np.quantile(mov, 0.99))
+    if sobel_filter:
+        ref = filters.sobel(ref)
+        mov = filters.sobel(mov)
+    return ref, mov, offset
+
+
+def correlation_score(
+    transform: Transform,
+    mov: np.ndarray,
+    ref: np.ndarray,
+    sobel_filter: bool = False,
+) -> float:
+    """Pearson correlation between `mov` warped by `transform` and `ref`, over their overlap.
+
+    An intensity analogue of the bead overlap score: continuous in [-1, 1], nan when
+    the warped volume and the reference do not overlap. Optionally compares Sobel
+    magnitudes instead, for cross-modality pairs registered that way.
+    """
+    ref = np.asarray(ref, dtype=np.float32)
+    warped = transform.apply(np.asarray(mov, dtype=np.float32), reference=ref)
+    mask = (warped != 0) & (ref != 0)
+    if mask.sum() < 2:
+        return float("nan")
+    a, b = warped[mask], ref[mask]
+    if sobel_filter:
+        a, b = filters.sobel(warped)[mask], filters.sobel(ref)[mask]
+    a = a - a.mean()
+    b = b - b.mean()
+    denominator = np.sqrt((a * a).sum() * (b * b).sum())
+    if denominator == 0:
+        return float("nan")
+    return float((a * b).sum() / denominator)
+
+
 def preprocess_czyx(
     mov_czyx: np.ndarray,
     ref_czyx: np.ndarray,
