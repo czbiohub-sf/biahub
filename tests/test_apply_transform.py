@@ -8,6 +8,7 @@ from biahub.apply_transform import (
     apply_transform,
     apply_transform_cli,
     canvas,
+    largest_box,
     overlap_slices,
 )
 from biahub.settings import TransformSettings
@@ -27,6 +28,22 @@ def test_overlap_slices_of_a_translation_is_the_shifted_box():
         (20, 40, 40), (20, 40, 40), np.array(_translation(0, 3, 0)), downsample=1
     )
     assert (z, y, x) == (slice(0, 20), slice(0, 37), slice(0, 40))
+
+
+def test_largest_box_is_exact_on_a_sheared_mask():
+    # A full box sheared along x by one voxel per z: the slice-at-middle heuristic keeps
+    # the middle rectangle and clips z; the exact box trades a little x for all of z.
+    z, y, x = 12, 20, 40
+    mask = np.zeros((z, y, x), dtype=bool)
+    for k in range(z):
+        mask[k, :, k : k + 24] = True
+    zs, ys, xs = largest_box(mask)
+    assert mask[zs, ys, xs].all()
+    assert (zs.stop - zs.start) * (ys.stop - ys.start) * (xs.stop - xs.start) == z * y * (
+        24 - (z - 1)
+    )
+    with pytest.raises(ValueError):
+        largest_box(np.zeros((2, 2, 2), dtype=bool))
 
 
 def test_canvas_intersects_over_timepoints_and_keep_overhang_keeps_the_grid():
