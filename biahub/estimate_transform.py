@@ -37,14 +37,20 @@ from biahub.core.transform import Transform
 from biahub.registration.ants import correlation_score
 from biahub.registration.estimators import (
     AntsEstimator,
+    ManualEstimator,
     NodeGraphEstimator,
+    PCCEstimator,
     ScoreFn,
     TransformEstimator,
     beads_score_fn,
 )
 from biahub.registration.fallback import RepairResult, neighbour_consensus_config_candidates
 from biahub.registration.legacy import forward_from_legacy_pull, legacy_pull_from_forward
-from biahub.registration.metrics import bead_alignment_metrics, normalized_mutual_information
+from biahub.registration.metrics import (
+    bead_alignment_metrics,
+    gradient_correlation,
+    normalized_mutual_information,
+)
 from biahub.registration.orchestrator import (
     SeriesResult,
     estimate_series,
@@ -83,8 +89,10 @@ def _resolve_time_indices(time_indices, n_t: int) -> list[int]:
 
 
 def _open_series(position_dirpath: Path, channel_name: str):
+    """Open one channel as a (T, Z, Y, X) dask series, with its ZYX voxel size."""
     with open_ome_zarr(position_dirpath, mode="r") as position:
-        return position.data.dask_array()[:, position.channel_names.index(channel_name)]
+        series = position.data.dask_array()[:, position.channel_names.index(channel_name)]
+        return series, tuple(position.scale[-3:])
 
 
 def _reference_policy(kind: ReferenceKind, ref) -> ReferencePolicy:
@@ -99,12 +107,31 @@ def _reference_policy(kind: ReferenceKind, ref) -> ReferencePolicy:
 
 def _engine(
     settings: EstimateRegistrationSettings,
+    shape_zyx: tuple[int, int, int] | None = None,
+    mov_voxel_size: tuple[float, float, float] | None = None,
+    ref_voxel_size: tuple[float, float, float] | None = None,
 ) -> tuple[TransformEstimator, ScoreFn, Transform]:
     """Estimator, score function and forward config seed for the settings' method."""
     affine_transform_settings = settings.affine_transform_settings
     config_seed = forward_from_legacy_pull(
         affine_transform_settings.approx_transform, affine_transform_settings.transform_type
     )
+    if settings.estimation_method == "phase-cross-corr":
+        estimator = PCCEstimator.from_settings(settings.phase_cross_corr_settings, shape_zyx)
+        return estimator, correlation_score, config_seed
+
+    if settings.estimation_method == "manual":
+        manual = settings.manual_registration_settings
+        estimator = ManualEstimator(
+            source_channel_name=settings.source_channel_name,
+            target_channel_name=settings.target_channel_name,
+            source_channel_voxel_size=mov_voxel_size or (1.0, 1.0, 1.0),
+            target_channel_voxel_size=ref_voxel_size or (1.0, 1.0, 1.0),
+            similarity=affine_transform_settings.transform_type == "similarity",
+            pre_affine_90degree_rotation=manual.affine_90degree_rotation,
+            pre_affine_fliplr=manual.affine_fliplr,
+        )
+        return estimator, gradient_correlation, config_seed
     if settings.estimation_method == "beads":
         beads_match_settings = settings.beads_match_settings
         estimator = NodeGraphEstimator.from_beads_settings(
@@ -129,10 +156,7 @@ def _engine(
 
         return estimator, score_fn, config_seed
 
-    raise click.UsageError(
-        f"estimate-transform supports estimation_method 'beads' and 'ants'; got "
-        f"'{settings.estimation_method}'. Use estimate-registration for the others."
-    )
+    raise click.UsageError(f"unknown estimation_method '{settings.estimation_method}'")
 
 
 def _finite_or_none(value: float | None) -> float | None:
@@ -149,9 +173,11 @@ def _estimate_timepoint_job(
 ) -> dict:
     """One independent estimate, from the config seed, written as a JSON record."""
     settings = yaml_to_model(settings_path, EstimateRegistrationSettings)
-    mov = _open_series(source_position_dirpath, settings.source_channel_name)
-    ref = _open_series(target_position_dirpath, settings.target_channel_name)
-    estimator, score_fn, config_seed = _engine(settings)
+    mov, mov_voxel_size = _open_series(source_position_dirpath, settings.source_channel_name)
+    ref, ref_voxel_size = _open_series(target_position_dirpath, settings.target_channel_name)
+    estimator, score_fn, config_seed = _engine(
+        settings, tuple(mov.shape[-3:]), mov_voxel_size, ref_voxel_size
+    )
 
     result = estimate_series(
         mov,
@@ -230,9 +256,11 @@ def _repair_timepoint_job(
 ) -> dict:
     """Repair one flagged timepoint against the frozen whole-run history."""
     settings = yaml_to_model(settings_path, EstimateRegistrationSettings)
-    mov = _open_series(source_position_dirpath, settings.source_channel_name)
-    ref = _open_series(target_position_dirpath, settings.target_channel_name)
-    estimator, score_fn, config_seed = _engine(settings)
+    mov, mov_voxel_size = _open_series(source_position_dirpath, settings.source_channel_name)
+    ref, ref_voxel_size = _open_series(target_position_dirpath, settings.target_channel_name)
+    estimator, score_fn, config_seed = _engine(
+        settings, tuple(mov.shape[-3:]), mov_voxel_size, ref_voxel_size
+    )
 
     series = _load_series(
         records_dir, time_indices, settings.affine_transform_settings.transform_type
@@ -402,8 +430,14 @@ def estimate_transform_series(
         )
         affine_transform_settings.approx_transform = approx.to_list()
         click.echo(f"Computed approx transform:\n{approx.matrix}")
-    _estimator, _score_fn, config_seed = _engine(settings)  # validates the method up front
+    _estimator, _score_fn, config_seed = _engine(
+        settings, (Z, Y, X), mov_voxel_size, ref_voxel_size
+    )
     transform_type = affine_transform_settings.transform_type
+    if settings.estimation_method == "manual":
+        # Interactive (napari); one timepoint, in this process.
+        settings.time_indices = settings.manual_registration_settings.time_index
+        cluster = "debug"
     settings_path = output_dir / ENGINE_SETTINGS_FILENAME
     model_to_yaml(settings, settings_path)
     time_indices = _resolve_time_indices(settings.time_indices, T)

@@ -180,44 +180,34 @@ def test_example_estimate_registration_settings(example_estimate_registration_se
     EstimateRegistrationSettings(**settings)
 
 
-def test_ants_settings_cover_estimate_tczyx_reads():
-    """`AntsRegistrationSettings` must expose every field `estimate_tczyx` reads.
-
-    Regression test: the model previously defined only ``sobel_filter`` while
-    ``estimate_tczyx`` also read ``crop``, ``ref_mask_radius`` and ``clip``, so
-    the config-driven ANTs path raised ``AttributeError`` before reaching ANTs.
-    """
-    from biahub.registration.ants import estimate_tczyx
+def test_ants_settings_are_all_consumed_by_the_engine():
+    """Every AntsRegistrationSettings field must be read by AntsEstimator.from_settings
+    (which is what the config-driven ANTs path runs), so a config knob can't be silently
+    ignored."""
+    from biahub.registration.estimators import AntsEstimator
     from biahub.settings import AntsRegistrationSettings
 
-    source = inspect.getsource(estimate_tczyx)
-    read = set(re.findall(r"ants_registration_settings\.(\w+)", source))
-    assert read, "no ants_registration_settings reads found -- update this test"
-
-    missing = read - set(AntsRegistrationSettings.model_fields)
-    assert not missing, (
-        f"AntsRegistrationSettings is missing fields read by estimate_tczyx: {missing}"
+    source = inspect.getsource(AntsEstimator.from_settings) + inspect.getsource(
+        __import__("biahub.estimate_transform", fromlist=["_engine"])._engine
     )
+    read = set(re.findall(r"ants_(?:registration_)?settings\.(\w+)", source))
+    missing = set(AntsRegistrationSettings.model_fields) - read
+    assert not missing, f"AntsRegistrationSettings fields nothing reads: {missing}"
 
 
-def test_ants_settings_defaults_match_preprocess_czyx():
-    """Defaults must agree with ``preprocess_czyx``, which consumes them.
-
-    Config-driven and direct calls should behave identically when the user
-    sets nothing.
-    """
-    from biahub.registration.ants import preprocess_czyx
+def test_ants_settings_defaults_match_preprocess_zyx():
+    """Preprocessing defaults must agree with ``preprocess_zyx``, which consumes them."""
+    from biahub.registration.ants import preprocess_zyx
     from biahub.settings import AntsRegistrationSettings
 
     settings = AntsRegistrationSettings()
-    params = inspect.signature(preprocess_czyx).parameters
+    params = inspect.signature(preprocess_zyx).parameters
     # score_metric configures how a result is judged, not how volumes are preprocessed.
-    preprocess_fields = set(AntsRegistrationSettings.model_fields) - {"score_metric"}
-    for field in preprocess_fields:
-        assert field in params, f"{field} is not a preprocess_czyx parameter"
+    for field in set(AntsRegistrationSettings.model_fields) - {"score_metric"}:
+        assert field in params, f"{field} is not a preprocess_zyx parameter"
         assert getattr(settings, field) == params[field].default, (
             f"default mismatch for {field}: settings={getattr(settings, field)} "
-            f"preprocess_czyx={params[field].default}"
+            f"preprocess_zyx={params[field].default}"
         )
 
 

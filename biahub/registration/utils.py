@@ -635,26 +635,6 @@ def rescale_voxel_size(affine_matrix, input_scale):
     return np.linalg.norm(affine_matrix, axis=1) * input_scale
 
 
-def load_transforms(transforms_path: Path, T: int, verbose: bool = False) -> list[ArrayLike]:
-    # Load the transforms
-    transforms = []
-    for t in range(T):
-        file_path = transforms_path / f"{t}.npy"
-        if not os.path.exists(file_path):
-            transforms.append(None)
-            if verbose:
-                click.echo(f"Transform for timepoint {t} not found.")
-
-        else:
-            matrix = np.load(file_path)
-            transforms.append(matrix.tolist())
-
-            if verbose:
-                click.echo(f"Transform for timepoint {t}: {matrix}")
-
-    return transforms
-
-
 def get_3D_rescaling_matrix(start_shape_zyx, scaling_factor_zyx=(1, 1, 1), end_shape_zyx=None):
     center_Y_start, center_X_start = np.array(start_shape_zyx)[-2:] / 2
     if end_shape_zyx is None:
