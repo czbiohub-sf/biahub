@@ -15,6 +15,7 @@ from biahub.settings import (
     DeskewSettings,
     EstimateRegistrationSettings,
     EstimateStabilizationSettings,
+    EstimateTransformSettings,
     FlatFieldCorrectionSettings,
     ProcessingImportFuncSettings,
     RegistrationSettings,
@@ -36,6 +37,7 @@ example_settings_params = [
     ("example_estimate_registration_settings_beads.yml", EstimateRegistrationSettings),
     ("example_estimate_registration_settings_manual.yml", EstimateRegistrationSettings),
     ("example_estimate_registration_settings.yml", EstimateRegistrationSettings),
+    ("example_estimate_transform_settings.yml", EstimateTransformSettings),
     (
         "example_estimate_stabilization_settings_xy_focus-finding.yml",
         EstimateStabilizationSettings,
@@ -202,8 +204,7 @@ def test_ants_settings_defaults_match_preprocess_zyx():
 
     settings = AntsRegistrationSettings()
     params = inspect.signature(preprocess_zyx).parameters
-    # score_metric configures how a result is judged, not how volumes are preprocessed.
-    for field in set(AntsRegistrationSettings.model_fields) - {"score_metric"}:
+    for field in AntsRegistrationSettings.model_fields:
         assert field in params, f"{field} is not a preprocess_zyx parameter"
         assert getattr(settings, field) == params[field].default, (
             f"default mismatch for {field}: settings={getattr(settings, field)} "

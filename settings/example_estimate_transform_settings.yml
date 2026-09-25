@@ -1,0 +1,140 @@
+# Unified estimate config for `biahub estimate-transform` (registration engine).
+# Registration: source channel onto target channel at every timepoint (reference: cross).
+# Stabilization: drop `target` and set `reference: first` or `previous` -- same estimate,
+# the source channel aligned onto its own first / previous timepoint.
+# Only the block of the chosen `method` is needed (beads / ants / phase_cross_corr / manual).
+# `fallback` holds what used to be hidden constants: the adaptive flagging line and the
+# repair candidates tried, in order, for flagged timepoints.
+source:
+  channel: GFP EX488 EM525-45
+target:
+  channel: Phase3D
+reference: cross
+method: beads
+beads:
+  algorithm: hungarian
+  source_peaks_settings:
+    threshold_abs: 110.0
+    nms_distance: 16
+    min_distance: 0
+    block_size:
+    - 8
+    - 8
+    - 8
+  target_peaks_settings:
+    threshold_abs: 0.8
+    nms_distance: 16
+    min_distance: 0
+    block_size:
+    - 8
+    - 8
+    - 8
+  match_descriptor_settings:
+    distance_metric: euclidean
+    max_ratio: 0.8
+    cross_check: true
+  hungarian_match_settings:
+    distance_metric: euclidean
+    cost_threshold: 0.1
+    max_ratio: 0.8
+    cross_check: true
+    edge_graph_settings:
+      method: knn
+      k: 5
+      radius: null
+    cost_matrix_settings:
+      weights:
+        dist: 0.5
+        edge_angle: 1.0
+        edge_length: 1.0
+        pca_dir: 0.0
+        pca_aniso: 0.0
+        edge_descriptor: 0.0
+      normalize: false
+  spectral_match_settings:
+    sigma: 3.0
+    rel_cut: 0.5
+    max_iter: 60
+  spectral_arm: 'off'
+  estimation_mode: matching
+  vote_icp_settings:
+    vote_peaks_settings:
+      threshold_abs: 200.0
+      nms_distance: 8
+      min_distance: 0
+      block_size:
+      - 16
+      - 16
+      - 16
+    initial_capture_radius: 80.0
+    min_capture_radius: 10.0
+    radius_decay: 0.5
+    cluster_radius: 10.0
+    min_votes: 3
+    max_iterations: 20
+    convergence_translation: 0.5
+  seed_correction_settings:
+    mode: none
+    vote_peaks_settings:
+      threshold_abs: 200.0
+      nms_distance: 8
+      min_distance: 0
+      block_size:
+      - 16
+      - 16
+      - 16
+    capture_radius: 80.0
+    cluster_radius: 10.0
+    min_votes: 3
+  filter_matches_settings:
+    angle_threshold: 0.0
+    direction_threshold: 0.0
+    min_distance_quantile: 0.01
+    max_distance_quantile: 0.99
+  qc_settings:
+    iterations: 1
+    score_threshold: 0.4
+    score_centroid_mask_radius: 6
+transform:
+  type: affine
+  seed:
+  - - 1
+    - 0
+    - 0
+    - 0
+  - - 0
+    - 0
+    - -1.288
+    - 1960
+  - - 0
+    - 1.288
+    - 0
+    - -460
+  - - 0.0
+    - 0.0
+    - 0.0
+    - 1.0
+  seed_direction: pull
+  seed_from_shapes: false
+time_indices: all
+score_metric: overlap
+fallback:
+  flag:
+    k_mad: 2.0
+    floor: 0.8
+    hard_fail: 0.4
+  repair:
+    candidates:
+    - t-1
+    - t+1
+    - consensus
+    - seed
+    consensus_threshold: 0.75
+    consensus_min_good: 5
+    max_timepoints: null
+smoothing:
+  validation_window_size: 10
+  validation_tolerance: 100.0
+  interpolation_window_size: 3
+  interpolation_type: linear
+verbose: true
