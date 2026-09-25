@@ -205,7 +205,7 @@ class NodeGraphEstimator:
             score_fn=score_fn,
         )
         return CompetingEstimator(
-            {beads_match_settings.algorithm: configured, "spectral": cascade},
+            {beads_match_settings.algorithm: configured, "spectral+hungarian": cascade},
             score_fn=score_fn,
             escalate_below=(
                 beads_match_settings.qc_settings.score_threshold

@@ -172,9 +172,9 @@ def test_from_beads_settings_builds_the_competing_cascade_when_the_spectral_arm_
     assert isinstance(plain, NodeGraphEstimator)
     assert isinstance(competing, CompetingEstimator) and list(competing.arms) == [
         "hungarian",
-        "spectral",
+        "spectral+hungarian",
     ]
-    assert isinstance(competing.arms["spectral"], ChainedEstimator)
+    assert isinstance(competing.arms["spectral+hungarian"], ChainedEstimator)
     assert competing.escalate_below is None
     assert gated.escalate_below == _beads_settings().qc_settings.score_threshold
 
@@ -202,7 +202,7 @@ def test_spectral_arm_recovers_an_offset_beyond_the_hungarian_capture_range():
     competing = NodeGraphEstimator.from_beads_settings(settings, affine)
     transform = competing.estimate(mov, ref)
 
-    assert competing.last_winner == "spectral"
+    assert competing.last_winner == "spectral+hungarian"
     # Capture-range test, not a precision test: on integer peak positions the matcher's
     # fit lands within ~1 vox (the same precision the legacy pipeline has).
     np.testing.assert_allclose(transform.translation, [-a for a in applied_zyx], atol=1.5)
