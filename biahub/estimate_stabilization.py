@@ -25,11 +25,6 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.cli.slurm import wait_for_jobs_to_finish
-from biahub.registration.phase_cross_correlation import (
-    get_tform_from_pcc,
-    plot_corr_max_min_sum,
-    plot_pcc_drifts,
-)
 from biahub.registration.utils import (
     evaluate_transforms,
     save_transforms,
@@ -38,7 +33,6 @@ from biahub.settings import (
     EstimateRegistrationSettings,
     EstimateStabilizationSettings,
     FocusFindingSettings,
-    PhaseCrossCorrSettings,
     StabilizationSettings,
     StackRegSettings,
 )
@@ -74,258 +68,6 @@ def remove_beads_fov_from_path_list(
             path for path in position_dirpaths if skip_beads_fov not in str(path)
         ]
     return position_dirpaths
-
-
-def estimate_xyz_stabilization_pcc_per_position(
-    input_position_dirpath: Path,
-    output_folder_path: Path,
-    output_shifts_path: Path,
-    channel_index: int,
-    phase_cross_corr_settings: PhaseCrossCorrSettings,
-    verbose: bool = False,
-) -> list[ArrayLike]:
-    """
-    Estimate the xyz stabilization for a single position.
-
-    Parameters
-    ----------
-    input_position_dirpath : Path
-        Path to the input position directory.
-    output_folder_path : Path
-        Path to the output folder.
-    channel_index : int
-        Index of the channel to process.
-    center_crop_xy : list[int]
-        Size of the crop in the XY plane.
-    t_reference : str
-        Reference timepoint.
-    verbose : bool
-        If True, print verbose output.
-
-    Returns
-    -------
-    list[ArrayLike]
-        List of the xyz stabilization for each timepoint.
-    """
-    with open_ome_zarr(input_position_dirpath) as input_position:
-        channel_tzyx = input_position.data.dask_array()[:, channel_index]
-        T, Z, Y, X = channel_tzyx.shape
-        X_slice = phase_cross_corr_settings.X_slice
-        Y_slice = phase_cross_corr_settings.Y_slice
-        Z_slice = phase_cross_corr_settings.Z_slice
-
-        if phase_cross_corr_settings.center_crop_xy:
-            x_idx = slice(
-                X // 2 - phase_cross_corr_settings.center_crop_xy[0] // 2,
-                X // 2 + phase_cross_corr_settings.center_crop_xy[0] // 2,
-            )
-            y_idx = slice(
-                Y // 2 - phase_cross_corr_settings.center_crop_xy[1] // 2,
-                Y // 2 + phase_cross_corr_settings.center_crop_xy[1] // 2,
-            )
-        else:
-            x_idx = slice(0, X)
-            y_idx = slice(0, Y)
-        if X_slice == "all":
-            x_idx = slice(0, X)
-        else:
-            x_idx = slice(X_slice[0], X_slice[1])
-        if Y_slice == "all":
-            y_idx = slice(0, Y)
-        else:
-            y_idx = slice(Y_slice[0], Y_slice[1])
-        if Z_slice == "all":
-            z_idx = slice(0, Z)
-        else:
-            z_idx = slice(Z_slice[0], Z_slice[1])
-
-        print(f"x_idx: {x_idx}, y_idx: {y_idx}, z_idx: {z_idx}")
-
-        channel_tzyx_cropped = channel_tzyx[:, z_idx, y_idx, x_idx]
-
-        if phase_cross_corr_settings.t_reference == "first":
-            target_channel_tzyx = np.broadcast_to(
-                channel_tzyx_cropped[0], channel_tzyx_cropped.shape
-            ).copy()
-        elif phase_cross_corr_settings.t_reference == "previous":
-            target_channel_tzyx = np.roll(channel_tzyx_cropped, shift=1, axis=0)
-            target_channel_tzyx[0] = channel_tzyx_cropped[0]
-        source_channel_tzyx = channel_tzyx_cropped
-
-        position_filename = str(Path(*input_position_dirpath.parts[-3:])).replace("/", "_")
-
-        transforms = []
-        shifts = []
-        corr_list = []
-        output_path_corr = output_folder_path.parent / "corr_plots" / position_filename
-        output_path_corr.mkdir(parents=True, exist_ok=True)
-
-        for t in range(T):
-            click.echo(f"Estimating PCC for timepoint {t}")
-            if t == 0:
-                transforms.append(np.eye(4).tolist())
-                corr_list.append((t, 0, 0, 0))
-                shifts.append((t, 0, 0, 0))
-            else:
-                transform, shift, corr = get_tform_from_pcc(
-                    t=t,
-                    source_channel_tzyx=source_channel_tzyx,
-                    target_channel_tzyx=target_channel_tzyx,
-                    verbose=verbose,
-                    function_type=phase_cross_corr_settings.function_type,
-                    normalization=phase_cross_corr_settings.normalization,
-                    output_path=output_path_corr / f"{t}.png",
-                )
-                transforms.append(transform)
-                shifts.append((t, *shift))
-                if corr is not None:
-                    corr_list.append((t, corr.max(), corr.min(), corr.sum()))
-                else:
-                    corr_list.append((t, None, None, None))
-            click.echo(f"Transform for timepoint {t}: {transforms[-1]}")
-
-        np.save(
-            output_folder_path / f"{position_filename}.npy",
-            np.array(transforms, dtype=np.float32),
-        )
-        # save the shifts as a csv
-        if verbose:
-            shifts_df = pd.DataFrame(
-                shifts, columns=["TimepointID", "ShiftZ", "ShiftY", "ShiftX"]
-            )
-            shifts_df["TimepointID"] = shifts_df["TimepointID"].astype(int)
-            shifts_df["ShiftZ"] = shifts_df["ShiftZ"].astype(float)
-            shifts_df["ShiftY"] = shifts_df["ShiftY"].astype(float)
-            shifts_df["ShiftX"] = shifts_df["ShiftX"].astype(float)
-            shifts_df.to_csv(output_shifts_path / f"{position_filename}.csv", index=False)
-
-            output_path_shift_plots = output_shifts_path / "plots"
-            output_path_shift_plots.mkdir(parents=True, exist_ok=True)
-            plot_pcc_drifts(shifts_df, output_path_shift_plots, label=position_filename)
-
-            output_path_corr_csv = output_folder_path.parent / "corr_max_min_sum"
-            output_path_corr_csv.mkdir(parents=True, exist_ok=True)
-
-            corr_df = pd.DataFrame(corr_list, columns=["TimepointID", "max", "min", "sum"])
-            corr_df["TimepointID"] = corr_df["TimepointID"].astype(int)
-            corr_df["max"] = corr_df["max"].astype(float)
-            corr_df["min"] = corr_df["min"].astype(float)
-            corr_df["sum"] = corr_df["sum"].astype(float)
-            corr_df.to_csv(output_path_corr_csv / f"{position_filename}.csv", index=False)
-
-            output_path_corr_plots = output_path_corr_csv / "plots"
-            output_path_corr_plots.mkdir(parents=True, exist_ok=True)
-            plot_corr_max_min_sum(corr_df, output_path_corr_plots, label=position_filename)
-
-        click.echo(f"Saved transforms for {position_filename}.")
-
-    return transforms
-
-
-def estimate_xyz_stabilization_pcc(
-    input_position_dirpaths: list[Path],
-    output_folder_path: Path,
-    phase_cross_corr_settings: PhaseCrossCorrSettings,
-    channel_index: int = 0,
-    sbatch_filepath: Path = None,
-    cluster: str = "local",
-    verbose: bool = False,
-) -> dict[str, list[ArrayLike]]:
-    """
-    Estimate the xyz stabilization for a list of positions.
-
-    Parameters
-    ----------
-    input_position_dirpaths : list[Path]
-        Paths to the input position directories.
-    output_folder_path : Path
-        Path to the output folder.
-    phase_cross_corr_settings : PhaseCrossCorrSettings
-        Settings for the phase cross correlation.
-    channel_index : int
-        Index of the channel to process.
-    sbatch_filepath : Path
-        Path to the sbatch file.
-    cluster : str
-        Cluster to use.
-    verbose : bool
-        If True, print verbose output.
-
-    Returns
-    -------
-    dict[str, list[ArrayLike]]
-        Dictionary of the xyz stabilization for each position.
-    """
-    input_position_dirpaths = remove_beads_fov_from_path_list(
-        input_position_dirpaths, phase_cross_corr_settings.skip_beads_fov
-    )
-
-    output_folder_path.mkdir(parents=True, exist_ok=True)
-    slurm_out_path = output_folder_path / "slurm_output"
-    slurm_out_path.mkdir(exist_ok=True)
-
-    with open_ome_zarr(input_position_dirpaths[0]) as dataset:
-        shape = dataset.data.shape
-        T, C, Z, Y, X = shape
-
-    _, num_cpus, gb_ram_per_cpu = estimate_resources(
-        shape=(T, C, Z, Y, X), ram_multiplier=16, max_num_cpus=16
-    )
-
-    slurm_args = {
-        "slurm_job_name": "estimate_xyz_pcc",
-        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
-        "slurm_cpus_per_task": num_cpus,
-        "slurm_array_parallelism": 100,
-        "slurm_time": 60,
-        "slurm_partition": "preempted",
-    }
-
-    if sbatch_filepath:
-        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
-
-    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
-    executor.update_parameters(**slurm_args)
-
-    click.echo(f"Submitting SLURM xyz PCC jobs with resources: {slurm_args}")
-    transforms_out_path = output_folder_path / "transforms_per_position"
-    transforms_out_path.mkdir(parents=True, exist_ok=True)
-    shifts_out_path = output_folder_path / "shifts_per_position"
-    shifts_out_path.mkdir(parents=True, exist_ok=True)
-
-    jobs = []
-    with submitit.helpers.clean_env(), executor.batch():
-        for input_position_dirpath in input_position_dirpaths:
-            job = executor.submit(
-                estimate_xyz_stabilization_pcc_per_position,
-                input_position_dirpath=input_position_dirpath,
-                output_folder_path=transforms_out_path,
-                output_shifts_path=shifts_out_path,
-                channel_index=channel_index,
-                phase_cross_corr_settings=phase_cross_corr_settings,
-                verbose=verbose,
-            )
-            jobs.append(job)
-
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    log_path = slurm_out_path / f"job_ids_{timestamp}.log"
-    with open(log_path, "w") as log_file:
-        for job in jobs:
-            log_file.write(f"{job.job_id}\n")
-
-    wait_for_jobs_to_finish(jobs)
-
-    transform_files = list(transforms_out_path.glob("*.npy"))
-
-    fov_transforms = {}
-    for file_path in transform_files:
-        fov_filename = file_path.stem
-        fov_transforms[fov_filename] = np.load(file_path).tolist()
-
-    # Remove the output folder
-    shutil.rmtree(transforms_out_path)
-
-    return fov_transforms
 
 
 def estimate_xy_stabilization_per_position(
@@ -1084,15 +826,40 @@ def estimate_stabilization(
         elif stabilization_method == "phase-cross-corr":
             click.echo("Estimating xyz stabilization parameters with phase cross correlation")
 
-            xyz_transforms_dict = estimate_xyz_stabilization_pcc(
-                input_position_dirpaths=input_position_dirpaths,
-                output_folder_path=output_dirpath,
-                channel_index=channel_index,
-                phase_cross_corr_settings=settings.phase_cross_corr_settings,
-                sbatch_filepath=sbatch_filepath,
-                cluster=cluster,
+            from concurrent.futures import ThreadPoolExecutor
+
+            from biahub.estimate_transform import estimate_transform_series
+            from biahub.registration.legacy import legacy_pull_from_forward
+
+            pcc_settings = settings.phase_cross_corr_settings
+            engine_settings = EstimateRegistrationSettings(
+                target_channel_name=stabilization_estimation_channel,
+                source_channel_name=stabilization_estimation_channel,
+                estimation_method="phase-cross-corr",
+                phase_cross_corr_settings=pcc_settings,
+                affine_transform_settings=settings.affine_transform_settings,
                 verbose=verbose,
             )
+            positions = remove_beads_fov_from_path_list(
+                input_position_dirpaths, pcc_settings.skip_beads_fov
+            )
+
+            def estimate_position(position_dirpath):
+                fov = "_".join(Path(position_dirpath).parts[-3:])
+                _result, _time_indices, forward = estimate_transform_series(
+                    position_dirpath,
+                    position_dirpath,
+                    engine_settings,
+                    output_dirpath / "estimate_transform" / fov,
+                    sbatch_filepath=sbatch_filepath,
+                    cluster=cluster,
+                    reference_kind=pcc_settings.t_reference,
+                )
+                return fov, [legacy_pull_from_forward(t) for t in forward]
+
+            # One driver per position, concurrently: each fans its own timepoints out.
+            with ThreadPoolExecutor(max_workers=max(1, len(positions))) as pool:
+                xyz_transforms_dict = dict(pool.map(estimate_position, positions))
 
             model = StabilizationSettings(
                 stabilization_type=settings.stabilization_type,
