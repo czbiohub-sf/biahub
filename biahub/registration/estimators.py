@@ -8,14 +8,9 @@ estimator-independent concerns (see `biahub.core.transform.Transform.apply`).
 
 from __future__ import annotations
 
-import contextlib
-import tempfile
-
 from collections.abc import Callable
-from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
 
-import ants
 import numpy as np
 
 from numpy.typing import ArrayLike
@@ -23,7 +18,7 @@ from pystackreg import StackReg
 
 from biahub.characterize_psf import detect_peaks
 from biahub.core.transform import Transform
-from biahub.registration.ants import DEFAULT_ANTS_KWARGS
+from biahub.registration.ants import DEFAULT_ANTS_KWARGS, preprocess_zyx
 from biahub.registration.ants import estimate as ants_estimate
 from biahub.registration.beads import (
     matches_from_beads,
@@ -37,6 +32,7 @@ from biahub.registration.phase_cross_correlation import (
 )
 from biahub.settings import (
     AffineTransformSettings,
+    AntsRegistrationSettings,
     BeadsMatchSettings,
     DetectPeaksSettings,
     PhaseCrossCorrSettings,
@@ -243,57 +239,93 @@ class PCCEstimator:
         return Transform.from_translation(shift)
 
 
+_ANTS_TRANSFORM_TYPE = {
+    "euclidean": "Rigid",
+    "rigid": "Rigid",
+    "similarity": "Similarity",
+    "affine": "Affine",
+}
+
+
 class AntsEstimator:
     """TransformEstimator using ANTs intensity-based optimization.
 
-    `biahub.registration.ants.estimate()`'s `fwd_transform` is, despite its name,
-    empirically the reference -> moving ("pull") direction, not moving -> reference --
-    confirmed against a real volume (rel. err 0.48 applied directly, vs 0.02 inverted;
-    baseline unregistered error is 0.35, so using it directly is worse than doing
-    nothing). Its own `inv_transform` isn't a genuine inverse either: ANTs doesn't write
-    a separately-inverted file for a single affine/similarity stage, so it reads back
-    nearly identical to `fwd_transform`. Invert `fwd_transform` ourselves so this
-    satisfies the TransformEstimator contract (true forward, moving -> reference).
+    One pass: pre-warp `mov` by the seed into `ref`'s frame, prepare both volumes
+    (`ants.preprocess_zyx`: optional crop to their overlap, reference mask, clip, Sobel),
+    register, and compose the correction back through the crop offset --
+    `shift(+offset) @ correction @ shift(-offset) @ seed`. This is the legacy
+    `ants.estimate_czyx` pipeline in the engine's forward (moving -> reference)
+    convention.
 
-    `seed`, when given, is passed to `ants.registration` via its native
-    `initial_transform` (which only accepts on-disk transform files, hence the temp
-    file). Confirmed empirically: `initial_transform` must be in the reference ->
-    moving direction (the same "pull" direction as this class's own output before the
-    final invert) -- feeding it a bare, un-inverted forward seed silently steers the
-    optimizer toward the wrong answer instead of erroring. Also confirmed the returned
-    `fwdtransforms` is already the seed and correction fully composed (not just the
-    residual correction): with near-zero optimizer iterations, the output is
-    indistinguishable from the seed itself.
+    `ants.estimate()`'s `fwd_transform` is, despite its name, the reference -> moving
+    ("pull") direction (see `tests/test_registration_estimators.py`); it is inverted here.
     """
 
-    def __init__(self, ants_kwargs: dict | None = None, verbose: bool = False):
-        self.ants_kwargs = ants_kwargs
+    def __init__(
+        self,
+        ants_kwargs: dict | None = None,
+        crop: bool = False,
+        ref_mask_radius: float | None = None,
+        clip: bool = False,
+        sobel_filter: bool = False,
+        verbose: bool = False,
+    ):
+        self.ants_kwargs = dict(ants_kwargs) if ants_kwargs else dict(DEFAULT_ANTS_KWARGS)
+        self.crop = crop
+        self.ref_mask_radius = ref_mask_radius
+        self.clip = clip
+        self.sobel_filter = sobel_filter
         self.verbose = verbose
+
+    @classmethod
+    def from_settings(
+        cls,
+        ants_registration_settings: AntsRegistrationSettings,
+        affine_transform_settings: AffineTransformSettings,
+        verbose: bool = False,
+    ) -> AntsEstimator:
+        """Preprocessing from the ANTs settings, transform family from the affine settings."""
+        ants_kwargs = dict(DEFAULT_ANTS_KWARGS)
+        ants_kwargs["type_of_transform"] = _ANTS_TRANSFORM_TYPE[
+            affine_transform_settings.transform_type
+        ]
+        return cls(
+            ants_kwargs=ants_kwargs,
+            crop=ants_registration_settings.crop,
+            ref_mask_radius=ants_registration_settings.ref_mask_radius,
+            clip=ants_registration_settings.clip,
+            sobel_filter=ants_registration_settings.sobel_filter,
+            verbose=verbose,
+        )
 
     def estimate(
         self, mov: ArrayLike, ref: ArrayLike, seed: Transform | None = None
     ) -> Transform:
-        mov = np.asarray(mov)
-        ref = np.asarray(ref)
-        ants_kwargs = self.ants_kwargs
-
-        with contextlib.ExitStack() as stack:
-            if seed is not None:
-                # Once we set initial_transform, ants.py:estimate() no longer applies
-                # its own None-triggered defaults -- carry them over explicitly so this
-                # still runs an invertible affine/similarity fit, not ants.registration's
-                # own default (SyN, a deformable warp Transform.from_ants can't parse).
-                ants_kwargs = dict(ants_kwargs) if ants_kwargs else dict(DEFAULT_ANTS_KWARGS)
-                tmp_dir = stack.enter_context(tempfile.TemporaryDirectory())
-                seed_path = str(Path(tmp_dir) / "seed.mat")
-                ants.write_transform(seed.invert().to_ants(), seed_path)
-                ants_kwargs["initial_transform"] = [seed_path]
-
-            pull_transform, _unused = ants_estimate(
-                ref=ref, mov=mov, verbose=self.verbose, ants_kwargs=ants_kwargs
+        mov = np.asarray(mov, dtype=np.float32)
+        ref = np.asarray(ref, dtype=np.float32)
+        aligned = seed.apply(mov, reference=ref) if seed is not None else mov
+        ref_prepared, mov_prepared, offset = preprocess_zyx(
+            aligned,
+            ref,
+            crop=self.crop,
+            ref_mask_radius=self.ref_mask_radius,
+            clip=self.clip,
+            sobel_filter=self.sobel_filter,
+        )
+        pull_correction, _unused = ants_estimate(
+            ref=ref_prepared,
+            mov=mov_prepared,
+            verbose=self.verbose,
+            ants_kwargs=self.ants_kwargs,
+        )
+        correction = pull_correction.invert()
+        if np.any(offset):
+            correction = (
+                Transform.from_translation(offset)
+                @ correction
+                @ Transform.from_translation(-offset)
             )
-
-        return pull_transform.invert()
+        return correction @ seed if seed is not None else correction
 
 
 class ManualEstimator:
