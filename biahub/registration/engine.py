@@ -39,6 +39,7 @@ from biahub.registration.estimators import (
 )
 from biahub.registration.methods.ants import AntsEstimator
 from biahub.registration.methods.beads import NodeGraphEstimator
+from biahub.registration.methods.focus import FocusEstimator
 from biahub.registration.methods.manual import ManualEstimator
 from biahub.registration.methods.pcc import PCCEstimator
 from biahub.registration.methods.vote_icp import VoteIcpEstimator, VoteSeedCorrection
@@ -649,6 +650,10 @@ def build_estimator(
         )
     elif settings.method == "phase-cross-corr":
         estimator = PCCEstimator.from_settings(settings.phase_cross_corr, shape_zyx)
+    elif settings.method == "focus-finding":
+        estimator = FocusEstimator.from_settings(
+            settings.focus_finding, pixel_size=(mov_voxel_size or (1.0, 1.0, 1.0))[-1]
+        )
     elif settings.method == "manual":
         manual = settings.manual
         estimator = ManualEstimator(
