@@ -23,6 +23,8 @@ Key conventions
 - Transforms map from moving space to reference space (forward direction).
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 
 import ants
@@ -38,6 +40,12 @@ from skimage.transform import AffineTransform, EuclideanTransform, SimilarityTra
 from biahub.characterize_psf import detect_peaks
 from biahub.core.graph_matching import Graph, GraphMatcher
 from biahub.core.transform import Transform
+from biahub.registration.estimators import (
+    EstimationError,
+    NodeDetector,
+    NodeMatcher,
+    ScoreFn,
+)
 from biahub.settings import AffineTransformSettings, BeadsMatchSettings, DetectPeaksSettings
 
 
@@ -179,40 +187,6 @@ def peaks_from_beads(
                 ref_peaks_filtered.append(peak)
         ref_peaks = np.array(ref_peaks_filtered)
     return mov_peaks, ref_peaks
-
-
-def score_transform(
-    transform: Transform,
-    mov: ArrayLike,
-    ref: ArrayLike,
-    beads_match_settings: BeadsMatchSettings,
-) -> float:
-    """Overlap score of a candidate transform, independent of any estimator's own scoring.
-
-    Warps `mov` with `transform`, re-detects beads, and scores their overlap against
-    `ref` -- the same sequence `optimize_transform` uses internally, duplicated here
-    (rather than calling `optimize_transform`) because that function also refines the
-    transform, which would score something other than what was passed in. Used as the
-    `score_fn` a fallback pass (e.g. `registration.fallback.repair`) needs to compare
-    candidate seeds against each other and against the current transform.
-    """
-    warped = transform.apply(np.asarray(mov), reference=np.asarray(ref))
-    peaks = peaks_from_beads(
-        mov=warped,
-        ref=np.asarray(ref),
-        mov_peaks_settings=beads_match_settings.source_peaks_settings,
-        ref_peaks_settings=beads_match_settings.target_peaks_settings,
-        verbose=False,
-    )
-    if peaks is None:
-        return float("nan")
-    mov_peaks, ref_peaks = peaks
-    return overlap_score(
-        mov_peaks=mov_peaks,
-        ref_peaks=ref_peaks,
-        radius=beads_match_settings.qc_settings.score_centroid_mask_radius,
-        verbose=False,
-    )
 
 
 def matches_from_beads(
@@ -502,3 +476,145 @@ def optimize_transform(
         return composed_transform, quality_score_optimized
     else:
         return transform, quality_score_approx
+
+
+class BeadNodeDetector:
+    """Detects bead centroids as local-maxima peaks -- today's only node source."""
+
+    def __init__(self, settings: DetectPeaksSettings):
+        self.settings = settings
+
+    def detect(self, array: ArrayLike) -> ArrayLike:
+        return detect_peaks(
+            np.asarray(array),
+            block_size=self.settings.block_size,
+            threshold_abs=self.settings.threshold_abs,
+            nms_distance=self.settings.nms_distance,
+            min_distance=self.settings.min_distance,
+        )
+
+
+class NodeGraphEstimator:
+    """TransformEstimator over matched point correspondences.
+
+    Composes a `NodeDetector` (beads today; segmentation centroids or other node
+    sources later) with graph matching and transform fitting.
+
+    One pass warps `mov` by the current guess (`Transform.apply`), detects nodes in the
+    warped frame, matches, fits the residual correction and composes it back
+    (`correction @ seed`: seed first, then correction). Nodes are detected in the warped
+    frame, so each pass sees a better-aligned image than the last; `iterations > 1` with
+    a `score_fn` repeats the pass from the previous result and returns the best-scoring
+    transform (never a later, worse one). Without a `score_fn` the last pass is returned.
+    """
+
+    def __init__(
+        self,
+        mov_detector: NodeDetector,
+        ref_detector: NodeDetector,
+        beads_match_settings: BeadsMatchSettings,
+        affine_transform_settings: AffineTransformSettings,
+        iterations: int = 1,
+        score_fn: ScoreFn | None = None,
+        matcher: NodeMatcher | None = None,
+    ):
+        if iterations < 1:
+            raise ValueError(f"iterations must be >= 1, got {iterations}")
+        self.mov_detector = mov_detector
+        self.ref_detector = ref_detector
+        self.beads_match_settings = beads_match_settings
+        self.affine_transform_settings = affine_transform_settings
+        self.iterations = iterations
+        self.score_fn = score_fn
+        self.matcher = matcher or (
+            lambda mov_nodes, ref_nodes: matches_from_beads(
+                mov_nodes, ref_nodes, beads_match_settings
+            )
+        )
+
+    @classmethod
+    def from_beads_settings(
+        cls,
+        beads_match_settings: BeadsMatchSettings,
+        affine_transform_settings: AffineTransformSettings,
+        iterations: int | None = None,
+        score_fn: ScoreFn | None = None,
+    ) -> NodeGraphEstimator:
+        """Bead-peak detection on both sides with the settings' matcher.
+
+        `iterations` defaults to `beads_match_settings.qc_settings.iterations`. This is
+        the single-arm estimator; `engine.build_beads_estimator` composes the vote-ICP
+        mode, seed correction and the spectral arm around it.
+        """
+        return cls(
+            mov_detector=BeadNodeDetector(beads_match_settings.source_peaks_settings),
+            ref_detector=BeadNodeDetector(beads_match_settings.target_peaks_settings),
+            beads_match_settings=beads_match_settings,
+            affine_transform_settings=affine_transform_settings,
+            iterations=(
+                beads_match_settings.qc_settings.iterations
+                if iterations is None
+                else iterations
+            ),
+            score_fn=score_fn,
+        )
+
+    def estimate(
+        self, mov: ArrayLike, ref: ArrayLike, seed: Transform | None = None
+    ) -> Transform:
+        mov = np.asarray(mov)
+        ref = np.asarray(ref)
+        current = seed
+        best: Transform | None = None
+        best_score = -np.inf
+        for _ in range(self.iterations):
+            try:
+                current = self._single_pass(mov, ref, current)
+            except EstimationError:
+                # A later pass that cannot match (e.g. the previous pass drifted) must not
+                # throw away an earlier usable result.
+                if best is not None:
+                    break
+                raise
+            if self.score_fn is None:
+                best = current
+                continue
+            score = self.score_fn(current, mov, ref)
+            if np.isfinite(score) and score > best_score:
+                best, best_score = current, score
+        if best is None:
+            raise EstimationError(
+                f"no finite score in {self.iterations} iteration(s): nodes not detectable "
+                "after warping"
+            )
+        return best
+
+    def _single_pass(
+        self, mov: np.ndarray, ref: np.ndarray, seed: Transform | None
+    ) -> Transform:
+        mov_for_detection = seed.apply(mov, reference=ref) if seed is not None else mov
+        mov_nodes = np.asarray(self.mov_detector.detect(mov_for_detection))
+        ref_nodes = np.asarray(self.ref_detector.detect(ref))
+        if len(mov_nodes) < 3 or len(ref_nodes) < 3:
+            raise EstimationError(
+                f"too few nodes to fit a transform: {len(mov_nodes)} moving, "
+                f"{len(ref_nodes)} reference (need >= 3 each)"
+            )
+        matches = np.asarray(self.matcher(mov_nodes, ref_nodes))
+        if matches.ndim != 2 or len(matches) < 3:
+            raise EstimationError(
+                f"too few matches to fit a transform: {len(matches)} from "
+                f"{len(mov_nodes)} x {len(ref_nodes)} nodes (need >= 3)"
+            )
+        correction, _inv_correction = transform_from_matches(
+            matches,
+            mov_nodes,
+            ref_nodes,
+            self.affine_transform_settings,
+            ndim=mov.ndim,
+        )
+        if not np.all(np.isfinite(correction.matrix)):
+            raise EstimationError(
+                f"degenerate fit from {len(matches)} matches (non-finite matrix)"
+            )
+        return correction @ seed if seed is not None else correction

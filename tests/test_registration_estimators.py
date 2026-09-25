@@ -4,19 +4,18 @@ import pytest
 from scipy.ndimage import shift as ndi_shift
 
 from biahub.core.transform import Transform
-from biahub.registration.ants import DEFAULT_ANTS_KWARGS, correlation_score
-from biahub.registration.beads import matches_from_beads, transform_from_matches
-from biahub.registration.estimators import (
-    AntsEstimator,
+from biahub.registration.estimators import EstimationError, NodeDetector, TransformEstimator
+from biahub.registration.methods.ants import DEFAULT_ANTS_KWARGS, AntsEstimator
+from biahub.registration.methods.beads import (
     BeadNodeDetector,
-    EstimationError,
-    ManualEstimator,
-    NodeDetector,
     NodeGraphEstimator,
-    PCCEstimator,
-    StackregEstimator,
-    TransformEstimator,
+    matches_from_beads,
+    transform_from_matches,
 )
+from biahub.registration.methods.manual import ManualEstimator
+from biahub.registration.methods.pcc import PCCEstimator
+from biahub.registration.methods.stackreg import StackregEstimator
+from biahub.registration.metrics import correlation_score
 from biahub.settings import (
     AffineTransformSettings,
     AntsRegistrationSettings,
@@ -405,7 +404,7 @@ def test_manual_estimator_inverts_user_assisted_registrations_pull_output(monkey
         return [pull_matrix.tolist()]
 
     monkeypatch.setattr(
-        "biahub.registration.estimators.user_assisted_registration",
+        "biahub.registration.methods.manual.user_assisted_registration",
         fake_user_assisted_registration,
     )
 
