@@ -12,7 +12,7 @@ from biahub.cli.parsing import (
     source_position_dirpaths,
     target_position_dirpaths,
 )
-from biahub.register import (
+from biahub.registration.utils import (
     convert_transform_to_ants,
     convert_transform_to_numpy,
     find_lir,
