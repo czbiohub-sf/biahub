@@ -82,6 +82,9 @@ class EstimationError(RuntimeError):
 
 
 ScoreFn = Callable[[Transform, np.ndarray, np.ndarray], float]
+NodeMatcher = Callable[
+    [np.ndarray, np.ndarray], np.ndarray
+]  # (mov_nodes, ref_nodes) -> (N, 2)
 
 
 class NodeGraphEstimator:
@@ -106,6 +109,7 @@ class NodeGraphEstimator:
         affine_transform_settings: AffineTransformSettings,
         iterations: int = 1,
         score_fn: ScoreFn | None = None,
+        matcher: NodeMatcher | None = None,
     ):
         if iterations < 1:
             raise ValueError(f"iterations must be >= 1, got {iterations}")
@@ -115,6 +119,11 @@ class NodeGraphEstimator:
         self.affine_transform_settings = affine_transform_settings
         self.iterations = iterations
         self.score_fn = score_fn
+        self.matcher = matcher or (
+            lambda mov_nodes, ref_nodes: matches_from_beads(
+                mov_nodes, ref_nodes, beads_match_settings
+            )
+        )
 
     @classmethod
     def from_beads_settings(
@@ -122,23 +131,49 @@ class NodeGraphEstimator:
         beads_match_settings: BeadsMatchSettings,
         affine_transform_settings: AffineTransformSettings,
         iterations: int | None = None,
-    ) -> NodeGraphEstimator:
+    ) -> TransformEstimator:
         """Bead-peak detection on both sides, scored by bead overlap.
 
-        `iterations` defaults to `beads_match_settings.qc_settings.iterations`.
+        `iterations` defaults to `beads_match_settings.qc_settings.iterations`. With
+        `spectral_arm` on, returns a `CompetingEstimator` of the configured matcher and a
+        spectral-acquire-then-refine cascade; the higher-scoring arm wins.
         """
-        return cls(
-            mov_detector=BeadNodeDetector(beads_match_settings.source_peaks_settings),
-            ref_detector=BeadNodeDetector(beads_match_settings.target_peaks_settings),
-            beads_match_settings=beads_match_settings,
-            affine_transform_settings=affine_transform_settings,
-            iterations=(
-                beads_match_settings.qc_settings.iterations
-                if iterations is None
-                else iterations
-            ),
-            score_fn=lambda transform, mov, ref: score_transform(
-                transform, mov, ref, beads_match_settings
+        iterations = (
+            beads_match_settings.qc_settings.iterations if iterations is None else iterations
+        )
+
+        def score_fn(transform: Transform, mov: np.ndarray, ref: np.ndarray) -> float:
+            return score_transform(transform, mov, ref, beads_match_settings)
+
+        def node_graph(settings: BeadsMatchSettings, n_iterations: int) -> NodeGraphEstimator:
+            return cls(
+                mov_detector=BeadNodeDetector(settings.source_peaks_settings),
+                ref_detector=BeadNodeDetector(settings.target_peaks_settings),
+                beads_match_settings=settings,
+                affine_transform_settings=affine_transform_settings,
+                iterations=n_iterations,
+                score_fn=score_fn,
+            )
+
+        configured = node_graph(beads_match_settings, iterations)
+        if beads_match_settings.spectral_arm == "off":
+            return configured
+        spectral_settings = beads_match_settings.model_copy(deep=True)
+        spectral_settings.algorithm = "spectral"
+        cascade = ChainedEstimator(
+            [
+                node_graph(spectral_settings, iterations),
+                node_graph(beads_match_settings, iterations),
+            ],
+            score_fn=score_fn,
+        )
+        return CompetingEstimator(
+            {beads_match_settings.algorithm: configured, "spectral": cascade},
+            score_fn=score_fn,
+            escalate_below=(
+                beads_match_settings.qc_settings.score_threshold
+                if beads_match_settings.spectral_arm == "on_low_score"
+                else None
             ),
         )
 
@@ -151,7 +186,14 @@ class NodeGraphEstimator:
         best: Transform | None = None
         best_score = -np.inf
         for _ in range(self.iterations):
-            current = self._single_pass(mov, ref, current)
+            try:
+                current = self._single_pass(mov, ref, current)
+            except EstimationError:
+                # A later pass that cannot match (e.g. the previous pass drifted) must not
+                # throw away an earlier usable result.
+                if best is not None:
+                    break
+                raise
             if self.score_fn is None:
                 best = current
                 continue
@@ -176,9 +218,7 @@ class NodeGraphEstimator:
                 f"too few nodes to fit a transform: {len(mov_nodes)} moving, "
                 f"{len(ref_nodes)} reference (need >= 3 each)"
             )
-        matches = np.asarray(
-            matches_from_beads(mov_nodes, ref_nodes, self.beads_match_settings)
-        )
+        matches = np.asarray(self.matcher(mov_nodes, ref_nodes))
         if matches.ndim != 2 or len(matches) < 3:
             raise EstimationError(
                 f"too few matches to fit a transform: {len(matches)} from "
@@ -196,6 +236,99 @@ class NodeGraphEstimator:
                 f"degenerate fit from {len(matches)} matches (non-finite matrix)"
             )
         return correction @ seed if seed is not None else correction
+
+
+class ChainedEstimator:
+    """Run estimators in sequence, each seeded by the previous result.
+
+    Acquire-then-refine: e.g. a spectral matcher that can find the correspondence from a
+    poor seed, followed by the Hungarian matcher that is more precise once close. With a
+    `score_fn`, the best-scoring stage output is returned (a refinement that makes things
+    worse is dropped); without one, the last stage's output.
+    """
+
+    def __init__(self, stages: list[TransformEstimator], score_fn: ScoreFn | None = None):
+        if not stages:
+            raise ValueError("ChainedEstimator needs at least one stage")
+        self.stages = list(stages)
+        self.score_fn = score_fn
+
+    def estimate(
+        self, mov: ArrayLike, ref: ArrayLike, seed: Transform | None = None
+    ) -> Transform:
+        mov = np.asarray(mov)
+        ref = np.asarray(ref)
+        current = seed
+        best: Transform | None = None
+        best_score = -np.inf
+        for stage in self.stages:
+            current = stage.estimate(mov, ref, seed=current)
+            if self.score_fn is None:
+                best = current
+                continue
+            score = self.score_fn(current, mov, ref)
+            if np.isfinite(score) and score > best_score:
+                best, best_score = current, score
+        if best is None:
+            raise EstimationError("no stage of the chain produced a finite score")
+        return best
+
+
+class CompetingEstimator:
+    """Run several estimators on the same input and keep the best-scoring result.
+
+    An arm that raises `EstimationError` is skipped; only when every arm fails does the
+    whole estimate fail, with each arm's reason. With `escalate_below`, arms after the
+    first run only while the best score so far is below it. `last_winner` names the arm
+    whose result was returned.
+    """
+
+    def __init__(
+        self,
+        arms: dict[str, TransformEstimator],
+        score_fn: ScoreFn,
+        escalate_below: float | None = None,
+    ):
+        if not arms:
+            raise ValueError("CompetingEstimator needs at least one arm")
+        self.arms = dict(arms)
+        self.score_fn = score_fn
+        self.escalate_below = escalate_below
+        self.last_winner: str | None = None
+        self.last_scores: dict[str, float] = {}
+
+    def estimate(
+        self, mov: ArrayLike, ref: ArrayLike, seed: Transform | None = None
+    ) -> Transform:
+        mov = np.asarray(mov)
+        ref = np.asarray(ref)
+        best: Transform | None = None
+        best_score = -np.inf
+        self.last_winner = None
+        self.last_scores = {}
+        failures: dict[str, str] = {}
+        for index, (name, arm) in enumerate(self.arms.items()):
+            if (
+                index > 0
+                and self.escalate_below is not None
+                and best is not None
+                and best_score >= self.escalate_below
+            ):
+                break
+            try:
+                transform = arm.estimate(mov, ref, seed=seed)
+            except EstimationError as e:
+                failures[name] = str(e)
+                continue
+            score = self.score_fn(transform, mov, ref)
+            self.last_scores[name] = float(score)
+            if np.isfinite(score) and score > best_score:
+                best, best_score, self.last_winner = transform, score, name
+        if best is None:
+            raise EstimationError(
+                "every arm failed: " + "; ".join(f"{k}: {v}" for k, v in failures.items())
+            )
+        return best
 
 
 class PCCEstimator:

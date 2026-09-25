@@ -175,6 +175,19 @@ class MatchDescriptorSettings(MyBaseModel):
     cross_check: bool = False
 
 
+class SpectralMatchSettings(MyBaseModel):
+    """Leordeanu-Hebert pairwise-consistency matching (GraphMatcher algorithm "spectral").
+
+    sigma is the tolerance, in voxels, on how well a pair of candidates must preserve
+    pairwise distance to reinforce each other; rel_cut drops candidates scoring below this
+    fraction of the top eigenvector entry (the precision/recall dial).
+    """
+
+    sigma: float = 3.0
+    rel_cut: float = 0.5
+    max_iter: int = 60
+
+
 class FilterMatchesSettings(MyBaseModel):
     angle_threshold: float = 0
     direction_threshold: float = 0
@@ -189,7 +202,7 @@ class QCBeadsRegistrationSettings(MyBaseModel):
 
 
 class BeadsMatchSettings(MyBaseModel):
-    algorithm: Literal["hungarian", "match_descriptor"] = "hungarian"
+    algorithm: Literal["hungarian", "match_descriptor", "spectral"] = "hungarian"
     source_peaks_settings: DetectPeaksSettings | None = Field(
         default_factory=DetectPeaksSettings
     )
@@ -198,6 +211,11 @@ class BeadsMatchSettings(MyBaseModel):
     )
     match_descriptor_settings: MatchDescriptorSettings = MatchDescriptorSettings()
     hungarian_match_settings: HungarianMatchSettings = HungarianMatchSettings()
+    spectral_match_settings: SpectralMatchSettings = SpectralMatchSettings()
+    # Second arm of the estimate: acquire the correspondence with spectral matching, then
+    # refine with `algorithm`; the higher-scoring arm wins. "on_low_score" runs it only when
+    # the first arm scores below qc_settings.score_threshold.
+    spectral_arm: Literal["off", "on_low_score", "always"] = "off"
     filter_matches_settings: FilterMatchesSettings = FilterMatchesSettings()
     qc_settings: QCBeadsRegistrationSettings = QCBeadsRegistrationSettings()
 
