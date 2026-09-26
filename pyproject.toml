@@ -123,6 +123,13 @@ imaging_qc_pipeline = { git = "https://github.com/czbiohub-sf/imaging-qc-pipelin
 # both.
 iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "ac4433985dcdf02603c395c3d51fffc4883a3c9a" }
 
+# Pin waveorder to mehta-lab/waveorder#583, which runs apply-inv-tf through
+# iohub's process_single_position with resume (stacked on mehta-lab/waveorder#582,
+# which shares one transfer function across workers). `biahub apply-inv-tf
+# --resume` passes resume= through to it. Drop this back to a PyPI floor once
+# waveorder cuts a release containing both.
+waveorder = { git = "https://github.com/mehta-lab/waveorder", rev = "1374f40c58c7894cce1e402c8afdf6cd87074332" }
+
 [tool.hatch.metadata]
 allow-direct-references = true
 

@@ -110,8 +110,14 @@ process run_apply_inv_tf {
     val position
 
     script:
+    // --resume: a preempted task finishes the timepoint it is writing and stops
+    // early, so the retry (or a later `nextflow -resume`) recomputes only the
+    // timepoints this position had not finished. waveorder keys each finished
+    // timepoint on the reconstruction settings and on the transfer function, so
+    // a config change or a recomputed transfer function recomputes instead of
+    // being skipped.
     """
-    biahub apply-inv-tf --cluster debug \
+    biahub apply-inv-tf --cluster debug --resume \
         -i "${input_zarr}/${position}" \
         -t "${tf_zarr}" \
         -o "${output_zarr}" \
