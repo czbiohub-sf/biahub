@@ -146,3 +146,90 @@ def test_apply_inv_tf_cli_debug_single_position(
     )
     assert result.exit_code == 0, result.output
     assert "Apply-inv-tf complete:" in result.output
+
+
+@pytest.mark.parametrize(
+    "flag, expected", [([], False), (["--resume"], True), (["--no-resume"], False)]
+)
+def test_apply_inv_tf_cli_passes_resume(
+    tmp_path, reconstruct_plate, reconstruct_config, monkeypatch, flag, expected
+):
+    """--resume reaches waveorder's per-position call, which does the skipping."""
+    calls = []
+    monkeypatch.setattr(
+        "biahub.apply_inverse_transfer_function.apply_inverse_transfer_function_single_position",
+        lambda *args, **kwargs: calls.append(kwargs),
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "apply-inv-tf",
+            "--cluster",
+            "debug",
+            "-i",
+            str(reconstruct_plate) + "/A/1/0",
+            "-t",
+            str(tmp_path / "tf.zarr"),
+            "-c",
+            str(reconstruct_config),
+            "-o",
+            str(tmp_path / "output.zarr"),
+            *flag,
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert [call["resume"] for call in calls] == [expected]
+
+
+def test_apply_inv_tf_cli_resume_skips_finished_timepoints(tmp_path, reconstruct_config):
+    """End to end through biahub's init and --cluster debug path: a --resume rerun
+    keeps the timepoints an earlier run finished instead of recomputing them."""
+    plate_path = tmp_path / "input.zarr"
+    with open_ome_zarr(plate_path, layout="hcs", mode="w", channel_names=["Phase3D"]) as plate:
+        plate.create_position("A", "1", "0").create_image(
+            "0",
+            np.random.default_rng(0)
+            .uniform(1.0, 100.0, size=(3, 1, 5, 8, 8))
+            .astype(np.float32),
+            transform=[TransformationMeta(type="scale", scale=(1, 1, 0.25, 0.1, 0.1))],
+        )
+    position = str(plate_path) + "/A/1/0"
+    output_path = tmp_path / "output.zarr"
+    tf_path = tmp_path / "tf.zarr"
+    runner = CliRunner()
+
+    def run(*args):
+        result = runner.invoke(cli, list(args))
+        assert result.exit_code == 0, result.output
+        return result
+
+    run(
+        "apply-inv-tf",
+        "--init",
+        "-i",
+        position,
+        "-c",
+        str(reconstruct_config),
+        "-o",
+        str(output_path),
+    )
+    run("compute-tf", "-i", position, "-c", str(reconstruct_config), "-o", str(tf_path))
+    apply = (
+        "apply-inv-tf", "--cluster", "debug", "-i", position, "-t", str(tf_path),
+        "-c", str(reconstruct_config), "-o", str(output_path),
+    )  # fmt: skip
+    run(*apply)
+    with open_ome_zarr(output_path / "A" / "1" / "0", mode="r+") as result:
+        first = result["0"][:]
+        result["0"][0] = 123.0  # stands in for "already finished; must not be recomputed"
+
+    run(*apply, "--resume")
+    with open_ome_zarr(output_path / "A" / "1" / "0") as result:
+        np.testing.assert_array_equal(result["0"][0], 123.0)
+        np.testing.assert_array_equal(result["0"][1:], first[1:])
+
+    run(*apply, "--no-resume")
+    with open_ome_zarr(output_path / "A" / "1" / "0") as result:
+        np.testing.assert_array_equal(result["0"][:], first)

@@ -13,6 +13,7 @@ from biahub.cli.parsing import (
     input_position_dirpaths,
     monitor,
     output_dirpath,
+    resume,
     sbatch_filepath,
 )
 
@@ -24,6 +25,7 @@ from biahub.cli.parsing import (
 @sbatch_filepath()
 @cluster()
 @monitor()
+@resume()
 def reconstruct_cli(
     input_position_dirpaths: list[Path],
     config_filepath: Path,
@@ -31,6 +33,7 @@ def reconstruct_cli(
     sbatch_filepath: str | None = None,
     cluster: str = "slurm",
     monitor: bool = False,
+    resume: bool = False,
 ):
     """Reconstruct a dataset using a configuration file.
 
@@ -71,6 +74,7 @@ def reconstruct_cli(
         sbatch_filepath,
         cluster,
         monitor,
+        resume=resume,
     )
 
 

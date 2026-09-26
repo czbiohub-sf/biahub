@@ -20,6 +20,7 @@ from biahub.cli.parsing import (
     input_position_dirpaths,
     monitor,
     output_dirpath,
+    resume,
     sbatch_filepath,
     sbatch_to_submitit,
 )
@@ -89,6 +90,7 @@ def apply_inverse_transfer_function(
     cluster: str = "slurm",
     monitor: bool = True,
     init_only: bool = False,
+    resume: bool = False,
 ) -> None:
     """Apply an inverse transfer function to a dataset.
 
@@ -110,6 +112,11 @@ def apply_inverse_transfer_function(
         Monitor submitted SLURM jobs.
     init_only : bool
         Only initialize the output store and exit.
+    resume : bool
+        Skip the timepoints this position already finished in an earlier,
+        interrupted attempt. waveorder keys each finished timepoint on the
+        reconstruction settings and the transfer function, so a changed config
+        or a recomputed transfer function recomputes instead of being skipped.
     """
     output_dirpath = Path(output_dirpath)
     slurm_out_path = output_dirpath.parent / "slurm_output"
@@ -183,6 +190,7 @@ def apply_inverse_transfer_function(
                     output_dirpath / Path(*pos_path.parts[-3:]),
                     num_cpus,
                     channel_names,
+                    resume=resume,
                 )
             )
 
@@ -221,6 +229,7 @@ def apply_inverse_transfer_function(
 @cluster()
 @monitor()
 @init_only()
+@resume()
 def apply_inverse_transfer_function_cli(
     input_position_dirpaths: list[Path],
     transfer_function_dirpath: str | None,
@@ -230,6 +239,7 @@ def apply_inverse_transfer_function_cli(
     cluster: str = "slurm",
     monitor: bool = False,
     init_only: bool = False,
+    resume: bool = False,
 ):
     r"""Apply an inverse transfer function to a dataset using a configuration file.
 
@@ -264,6 +274,7 @@ def apply_inverse_transfer_function_cli(
         cluster=cluster,
         monitor=monitor,
         init_only=init_only,
+        resume=resume,
     )
 
 
