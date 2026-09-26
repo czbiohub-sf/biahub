@@ -8,6 +8,7 @@ from iohub.ngff.utils import create_empty_plate
 from waveorder.cli.apply_inverse_transfer_function import (
     apply_inverse_transfer_function_single_position,
     get_reconstruction_output_metadata,
+    get_reconstruction_provenance,
 )
 from waveorder.cli.settings import ReconstructionSettings
 from waveorder.cli.utils import estimate_resources as wo_estimate_resources
@@ -67,15 +68,15 @@ def _init_output_plate(
         **output_metadata,
         metadata_sources=input_plate,
         metadata_keys=PROVENANCE_METADATA_KEYS,
-        # The record waveorder itself writes once a position is reconstructed
-        # (waveorder/cli/apply_inverse_transfer_function.py, "Save metadata at
-        # position level, keyed by output channel names"), written here so the
-        # plate carries it from the moment it exists -- the next step's
-        # create_empty_plate inherits provenance at plate-creation time, and
-        # the pipeline scaffolds every store before any of them hold data.
-        # waveorder merges into whatever is already under "waveorder" and
-        # re-assigns the same key, so its own write stays idempotent.
-        extra_metadata={"waveorder": {",".join(channel_names): settings.model_dump()}},
+        # The reconstruction's settings, under its own top-level key
+        # (`waveorder-Phase3D`, `waveorder-Birefringence`, ...) beside the
+        # `biahub-<step>` keys, recorded when the plate is created as for every
+        # other step: the next step's create_empty_plate inherits provenance at
+        # plate-creation time, and the pipeline scaffolds every store before any
+        # of them hold data. waveorder writes the same record when it creates a
+        # plate itself and never per position, and one key per reconstruction
+        # means a config appending channels to the plate overwrites only its own.
+        extra_metadata=get_reconstruction_provenance(settings),
     )
 
     return input_shape, channel_names

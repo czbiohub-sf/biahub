@@ -395,7 +395,7 @@ requires-dist = [
     { name = "twine", marker = "extra == 'build'" },
     { name = "ultrack", marker = "extra == 'all'", specifier = ">=0.8" },
     { name = "ultrack", marker = "extra == 'track'", specifier = ">=0.8" },
-    { name = "waveorder", git = "https://github.com/mehta-lab/waveorder?rev=0c21a27f1ae5f982c132f6cc216047c860263703" },
+    { name = "waveorder", git = "https://github.com/mehta-lab/waveorder?rev=1374f40c58c7894cce1e402c8afdf6cd87074332" },
     { name = "zensical", marker = "extra == 'doc'", specifier = ">=0.0.32" },
 ]
 provides-extras = ["all", "build", "doc", "gui", "qc", "segment", "stain", "track"]
@@ -6672,8 +6672,8 @@ wheels = [
 
 [[package]]
 name = "waveorder"
-version = "3.0.6.dev11+0c21a27"
-source = { git = "https://github.com/mehta-lab/waveorder?rev=0c21a27f1ae5f982c132f6cc216047c860263703#0c21a27f1ae5f982c132f6cc216047c860263703" }
+version = "3.0.6.dev12+1374f40"
+source = { git = "https://github.com/mehta-lab/waveorder?rev=1374f40c58c7894cce1e402c8afdf6cd87074332#1374f40c58c7894cce1e402c8afdf6cd87074332" }
 dependencies = [
     { name = "click" },
     { name = "colorspacious" },

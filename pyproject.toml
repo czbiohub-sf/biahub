@@ -128,7 +128,7 @@ iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "ac4433985dcdf0260
 # which shares one transfer function across workers). `biahub apply-inv-tf
 # --resume` passes resume= through to it. Drop this back to a PyPI floor once
 # waveorder cuts a release containing both.
-waveorder = { git = "https://github.com/mehta-lab/waveorder", rev = "0c21a27f1ae5f982c132f6cc216047c860263703" }
+waveorder = { git = "https://github.com/mehta-lab/waveorder", rev = "1374f40c58c7894cce1e402c8afdf6cd87074332" }
 
 [tool.hatch.metadata]
 allow-direct-references = true
