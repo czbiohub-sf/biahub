@@ -1,0 +1,65 @@
+# Organelle feature extraction settings
+# Extract morphological and intensity features from segmented organelles
+
+# Channel containing the instance labels
+labels_channel: "mito_labels"
+
+# Channel containing the original intensity data
+intensity_channel: "mito"
+
+# Optional: Channel containing Frangi vesselness response
+# Set to null if not available
+frangi_channel: null
+
+# Optional: Path to tracking CSV with columns: fov_name, track_id, t, x, y
+# If provided, features will be extracted per tracked cell
+# If null, features will be extracted for all objects per timepoint
+tracking_csv_path: null
+
+# Note: Pixel spacing (Z, Y, X) is automatically extracted from the zarr metadata
+
+# Base properties to extract (standard regionprops features)
+# If null, uses default set from extract_features_zyx
+# Available options:
+#   - 'label', 'area', 'perimeter', 'axis_major_length', 'axis_minor_length'
+#   - 'solidity', 'extent', 'orientation', 'equivalent_diameter_area'
+#   - 'convex_area', 'eccentricity'
+#   - 'mean_intensity', 'min_intensity', 'max_intensity' (require intensity_channel)
+properties:
+  - "label"
+  - "area"
+  - "perimeter"
+  - "axis_major_length"
+  - "axis_minor_length"
+  - "solidity"
+  - "extent"
+  - "orientation"
+  - "equivalent_diameter_area"
+  - "convex_area"
+  - "eccentricity"
+  - "mean_intensity"
+  - "min_intensity"
+  - "max_intensity"
+
+# Additional features beyond standard regionprops
+# Available options:
+#   - 'moments_hu': Hu moments (shape descriptors, 7 features)
+#   - 'texture': Haralick texture features (4 features: contrast, homogeneity, energy, correlation)
+#   - 'aspect_ratio': Major axis / minor axis ratio
+#   - 'circularity': 4π × area / perimeter²
+#   - 'frangi_intensity': Mean/min/max/sum/std of Frangi vesselness (requires frangi_channel)
+#   - 'feret_diameter_max': Maximum Feret diameter (expensive computation)
+#   - 'sum_intensity': Sum of intensity values
+#   - 'std_intensity': Standard deviation of intensity values
+extra_properties:
+  - "aspect_ratio"
+  - "circularity"
+  - "sum_intensity"
+  - "std_intensity"
+  - "moments_hu"
+  - "texture"
+  # Uncomment if frangi_channel is provided:
+  # - "frangi_intensity"
+
+# Path where the output CSV will be saved
+output_csv_path: "./organelle_features.csv"
