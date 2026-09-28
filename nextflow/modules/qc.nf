@@ -112,7 +112,7 @@ process generate_unified_report {
     label 'cpu'
     clusterOptions { slurm_logs('qc') }
     cpus 2
-    memory '32 GB'
+    memory { retry_memory(64, task) }
     time { retry_time(60, task) }
 
     input:
