@@ -18,7 +18,7 @@
 // warms the shared cellpose weights cache, which is strictly better done before
 // any GPU worker exists to race for it.
 
-include { parse_resources; slurm_logs; slurm_log_dir } from './common'
+include { parse_resources; slurm_logs; slurm_log_dir; slurm_output_readme } from './common'
 
 
 process init_track {
@@ -36,6 +36,7 @@ process init_track {
     script:
     """
     mkdir -p "${slurm_log_dir('track')}"
+    ${slurm_output_readme('track', output_zarr)}
     biahub track --init \
         -i "${input_zarr}"/*/*/* \
         -o "${output_zarr}" \

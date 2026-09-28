@@ -66,6 +66,32 @@ def slurm_log_dir(step_name) {
     return "${params.output}/nextflow/slurm_output/${step_name}"
 }
 
+// Shell snippet for a step's init process: writes a README into the
+// `slurm_output/` the CLI creates next to its output store. Tasks run the CLI
+// with `--cluster debug`, so that directory only ever holds submitit's
+// DebugJob placeholder logs; the real per-task logs land in slurm_log_dir().
+// The heredoc body sits at column 0 so its terminator is found after the
+// script's indentation is stripped.
+def slurm_output_readme(step_name, output_zarr) {
+    def step_slurm_dir = "${new File(output_zarr as String).parent}/slurm_output"
+    def log_dir = slurm_log_dir(step_name)
+    return """mkdir -p "${step_slurm_dir}"
+cat > "${step_slurm_dir}/README.md" <<'EOF'
+# Where are the logs?
+
+This step was run by the biahub Nextflow pipeline, which calls the biahub CLI
+with `--cluster debug` so that the work runs inside the Nextflow task. In that
+mode submitit writes only placeholder files here (`DEBUG_*_log.out/.err`), and
+they contain no progress or tracebacks.
+
+The real per-task logs are in:
+
+    ${log_dir}/
+
+one `<job-name>_<slurm-job-id>.out` / `.err` pair per task.
+EOF"""
+}
+
 def slurm_logs(step_name) {
     def dir = slurm_log_dir(step_name)
     // NOTE: the --output/--error targets are intentionally CROSSED.
