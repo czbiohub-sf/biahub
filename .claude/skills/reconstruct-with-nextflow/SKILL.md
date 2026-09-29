@@ -494,6 +494,10 @@ have deleted, so the delete stays refused until it is fixed and re-verified.
 `delete --yes` renames each store to `*.deleting-<stamp>` before removing it,
 so a half-deleted store never looks valid; rerunning `delete --yes` finishes an
 interrupted delete. It writes `<OUTPUT>/INTERMEDIATES_CLEANED.txt`, and
-`run_mantis_v2.sh` refuses to `-resume` in a directory that has that file:
-reprocess into a new output directory instead. Removing tens of TB on Lustre
+`run_mantis_v2.sh` warns when it sees that file. `-resume` still re-runs the
+steps after assemble (track, QC): flat-field through assemble come back
+CACHED, because their inputs are path strings and nothing opens the deleted
+stores. If any of them shows as re-running instead (a changed process script
+or param, or a cleaned `nextflow/work`), stop the run; it will fail on a missing
+store or recompute from raw. Removing tens of TB on Lustre
 takes a while, so run it in tmux.

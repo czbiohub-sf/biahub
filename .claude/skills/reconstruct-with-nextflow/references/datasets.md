@@ -101,7 +101,8 @@ stripped (`dataset_name()` in `nextflow/modules/common.nf`). So if the input is
 After `clean_intermediates.py` (SKILL.md §12), `0-flatfield/` through
 `3-virtual-stain/` hold only `slurm_output/` (and `2-reconstruct/` its
 `transfer_function.zarr`), and `INTERMEDIATES_CLEANED.txt` at the root records
-what was removed and how it was verified. Such a project cannot be resumed.
+what was removed and how it was verified. `-resume` there still runs the steps
+after assemble (track, QC), as long as flat-field..assemble come back cached.
 
 Some older projects nest the step directories under a `1-preprocess/`
 subdirectory (e.g. `2026_05_27_A549_SEC61B_TOMM20_G3BP1_ZIKV`). That is a legacy

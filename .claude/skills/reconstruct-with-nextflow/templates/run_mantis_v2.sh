@@ -104,12 +104,14 @@ INPUT_ZARR="${CONVERTED_ZARR:-${DATA_DIR}/${DATASET}/${RAW_STORE}}"
 [[ -d "${CONFIGS}"    ]] || { echo "configs not found: ${CONFIGS}"  >&2; exit 1; }
 
 # clean_intermediates.py deleted the flat-field/deskew/reconstruct/virtual-stain
-# stores. A -resume here would treat those steps as cached and hand their missing
-# stores to whatever step reruns. Reprocess into a new OUTPUT_DIR instead.
+# stores. -resume still works for the steps after assemble (track, QC): the steps
+# up to assemble come back CACHED and never open the deleted stores. That holds
+# only while their cache entries match — if the output shows any of them
+# re-running (a changed process script or param, a cleaned nextflow/work),
+# stop the run: it will either fail on a missing store or recompute from raw.
 if [[ -f "${OUTPUT_DIR}/INTERMEDIATES_CLEANED.txt" ]]; then
-    echo "intermediates were deleted from ${OUTPUT_DIR} (see INTERMEDIATES_CLEANED.txt)." >&2
-    echo "This run cannot be resumed; reprocess into a new OUTPUT_DIR." >&2
-    exit 1
+    echo "  WARNING: intermediates were deleted (see INTERMEDIATES_CLEANED.txt)." >&2
+    echo "  Only steps after assemble can run; flat-field..assemble must show as cached." >&2
 fi
 
 # Record which code and inputs this run used, to a FILE as well as the console.

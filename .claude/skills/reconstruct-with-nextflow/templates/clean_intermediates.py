@@ -558,9 +558,9 @@ def cmd_delete(args) -> int:
         "removed",
         *[f"          {t}" for t in targets],
         "",
-        "The pipeline cannot be resumed in this directory: the cached deskew/reconstruct/",
-        "virtual-stain tasks point at stores that no longer exist. Reprocess into a new",
-        "output directory.",
+        "-resume still runs the steps after assemble (track, QC): flat-field..assemble",
+        "come back cached and never open the deleted stores. If any of them re-runs",
+        "instead, stop the run.",
     ]
     (output / MARKER).write_text("\n".join(lines) + "\n")
 
