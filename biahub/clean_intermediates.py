@@ -90,8 +90,17 @@ def _step_stores(output_dirpath: Path) -> dict[str, Path]:
             raise click.ClickException(
                 f"{d}: expected one step store, found {[z.name for z in zarrs]}"
             )
-        if zarrs:
-            stores[m.group(2)] = zarrs[0]
+        if not zarrs:
+            continue
+        # Step numbers depend on which steps a run performed, so a project can
+        # hold a stale 4-reconstruct beside a current 3-reconstruct. Refuse
+        # rather than pick one: verifying or deleting the wrong set is silent.
+        if m.group(2) in stores:
+            raise click.ClickException(
+                f"two stores for step '{m.group(2)}': {stores[m.group(2)]} and {zarrs[0]}; "
+                "move the stale one out of the project first"
+            )
+        stores[m.group(2)] = zarrs[0]
     return stores
 
 
@@ -225,6 +234,7 @@ def check_intermediates(output_dirpath: Path) -> tuple[list[str], list[str], lis
         ``(errors, warnings, positions)``: blocking problems, informational
         notes, and the assembled plate's position keys. Reads no pixels.
     """
+    output_dirpath = Path(output_dirpath).resolve()
     errors, warnings = [], []
 
     if (output_dirpath / MARKER).exists():
@@ -387,7 +397,7 @@ def verify_position(
         The result record; ``status`` is ``"pass"`` when every compared voxel
         matched and every volume could be read.
     """
-    output_dirpath = Path(output_dirpath)
+    output_dirpath = Path(output_dirpath).resolve()
     stores = _step_stores(output_dirpath)
     started = dt.datetime.now().isoformat(timespec="seconds")
 
@@ -488,7 +498,7 @@ def submit_verification(
     list
         The submitted submitit jobs (empty when there was nothing to do).
     """
-    output_dirpath = Path(output_dirpath)
+    output_dirpath = Path(output_dirpath).resolve()
     reason = already_cleaned(output_dirpath)
     if reason:
         click.echo(reason)
@@ -576,7 +586,7 @@ def verification_status(output_dirpath: Path, verify_dirpath: Path | None = None
     bool
         True when every assembled position is verified and passed.
     """
-    output_dirpath = Path(output_dirpath)
+    output_dirpath = Path(output_dirpath).resolve()
     stores = _step_stores(output_dirpath)
     if "assemble" not in stores:
         raise click.ClickException("no assembled store")
@@ -646,21 +656,37 @@ def delete_intermediates(
     bool
         False when the delete is refused, True otherwise (including dry runs).
     """
-    output_dirpath = Path(output_dirpath)
+    output_dirpath = Path(output_dirpath).resolve()
     vdir = _verify_dirpath(output_dirpath, verify_dirpath)
 
     # An interrupted delete: the stores were already renamed, i.e. the decision
     # was made and recorded. Finish removing them; nothing to re-check.
+    # An interrupted delete: the marker is written, listing the stores to
+    # remove, BEFORE any of them is renamed, so the decision is on record.
+    # Finish it, renaming whatever the interruption left unrenamed; nothing to
+    # re-check, since the verification it was based on is gone with the stores.
     leftovers = sorted(output_dirpath.glob("*-*/*.zarr.deleting-*"))
     stores = _step_stores(output_dirpath)
     targets = [stores[s] for s in DELETABLE if s in stores]
-    if leftovers and not targets:
+    marker = output_dirpath / MARKER
+    if leftovers:
+        if not marker.exists():
+            raise click.ClickException(
+                f"*.deleting-* stores but no {marker}: not left by this command, inspect by hand"
+            )
+        listed = {ln.strip() for ln in marker.read_text().splitlines()}
+        unrenamed = [t for t in targets if str(t) in listed]
         click.echo("finishing an interrupted delete:")
-        for d in leftovers:
+        for d in [*unrenamed, *leftovers]:
             click.echo(f"  delete  {d}")
         if not yes:
             click.echo("delete: dry run, rerun with --yes")
             return True
+        stamp = dt.datetime.now().strftime("%Y%m%dT%H%M%S")
+        for t in unrenamed:
+            d = t.with_name(f"{t.name}.deleting-{stamp}")
+            t.rename(d)
+            leftovers.append(d)
         for d in leftovers:
             shutil.rmtree(d)
         click.echo("done")
@@ -722,15 +748,6 @@ def delete_intermediates(
         click.echo("delete: dry run, rerun with --yes to delete")
         return True
 
-    # Rename first: a half-deleted store must never look like a valid one, and an
-    # interrupted delete is found and finished by the leftovers path above.
-    stamp = dt.datetime.now().strftime("%Y%m%dT%H%M%S")
-    doomed = []
-    for t in targets:
-        d = t.with_name(f"{t.name}.deleting-{stamp}")
-        t.rename(d)
-        doomed.append(d)
-
     lines = [
         f"date      {dt.datetime.now().isoformat(timespec='seconds')}",
         f"user      {getpass.getuser()}",
@@ -746,12 +763,21 @@ def delete_intermediates(
         "come back cached and never open the deleted stores. If any of them re-runs",
         "instead, stop the run.",
     ]
-    (output_dirpath / MARKER).write_text("\n".join(lines) + "\n")
+    # Marker first, then rename, then remove. The marker records the decision, so
+    # an interruption anywhere after it is finished by the leftovers path above;
+    # renaming means a half-deleted store never looks like a valid one.
+    marker.write_text("\n".join(lines) + "\n")
+    stamp = dt.datetime.now().strftime("%Y%m%dT%H%M%S")
+    doomed = []
+    for t in targets:
+        d = t.with_name(f"{t.name}.deleting-{stamp}")
+        t.rename(d)
+        doomed.append(d)
 
     for d in doomed:
         click.echo(f"  removing {d} ...")
         shutil.rmtree(d)
-    click.echo(f"done, wrote {output_dirpath / MARKER}")
+    click.echo(f"done, wrote {marker}")
     return True
 
 

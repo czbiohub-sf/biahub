@@ -215,6 +215,7 @@ def test_check_refuses_channel_subset(project):
 
 def test_interrupted_delete_is_finished(project):
     _run("submit", project, "--cluster", "debug")
+    (project / "nextflow" / "intermediates_cleaned.txt").write_text("date x\n")
     for step in SOURCES:
         store = project / step / f"{DS}.zarr"
         store.rename(store.with_name(f"{DS}.zarr.deleting-20260101T000000"))
@@ -265,3 +266,49 @@ def test_hand_cleaned_project_has_nothing_to_do(project):
     result = _run("delete", project, "--yes")
     assert result.exit_code == 0
     assert "no intermediate stores left" in result.output
+
+
+def test_delete_interrupted_between_renames_is_finished(project, monkeypatch):
+    _run("submit", project, "--cluster", "debug")
+    real_rename = type(project).rename
+    calls = []
+
+    def rename_then_fail(self, target):
+        calls.append(self)
+        if len(calls) == 3:
+            raise PermissionError("interrupted")
+        return real_rename(self, target)
+
+    monkeypatch.setattr(type(project), "rename", rename_then_fail)
+    assert _run("delete", project, "--yes").exit_code != 0
+    monkeypatch.undo()
+    assert len(list(project.glob("*-*/*.deleting-*"))) == 2  # two renamed, two not
+
+    result = _run("delete", project, "--yes")
+    assert result.exit_code == 0 and "interrupted delete" in result.output
+    assert _step_zarrs(project) == ["4-assemble"]
+    assert not list(project.glob("*-*/*.deleting-*"))
+
+
+def test_two_stores_for_one_step_refused(project):
+    stale = project / "5-reconstruct" / f"{DS}.zarr"
+    shutil.copytree(project / "2-reconstruct" / f"{DS}.zarr", stale)
+    result = _run("check", project)
+    assert result.exit_code != 0
+    assert "two stores for step 'reconstruct'" in result.output
+
+
+def test_relative_and_absolute_paths_agree(project, monkeypatch):
+    monkeypatch.chdir(project.parent)
+    assert _run("submit", project.name, "--cluster", "debug").exit_code == 0
+    assert _run("delete", project, "--yes").exit_code == 0
+    assert _step_zarrs(project) == ["4-assemble"]
+
+
+def test_deleting_stores_without_marker_refused(project):
+    store = project / "1-deskew" / f"{DS}.zarr"
+    store.rename(store.with_name(f"{DS}.zarr.deleting-20260101T000000"))
+    result = _run("delete", project, "--yes")
+    assert result.exit_code != 0
+    assert "not left by this command" in result.output
+    assert len(_step_zarrs(project)) == 4  # nothing removed
