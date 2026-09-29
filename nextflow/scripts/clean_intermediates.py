@@ -18,6 +18,7 @@ Run with the biahub venv's python (needs iohub + numpy)::
 
     $PY $T check  <OUTPUT>             # metadata checks, head node, seconds
     $PY $T submit <OUTPUT>             # SLURM array: pixel-verify every position
+    $PY $T submit <OUTPUT> --timepoints 3   # faster: first, middle, last timepoint only
     $PY $T status <OUTPUT>             # summarize the verify results
     $PY $T delete <OUTPUT>             # dry run: what would go, and why it is safe
     $PY $T delete <OUTPUT> --yes       # actually delete
@@ -37,6 +38,12 @@ transfer, and so is a volume that cannot be read. Source volumes that are
 entirely zero or NaN are reported but do not block: blank wells and dropped
 frames are empty in the acquisition, and zarr skips writing all-zero shards, so
 their gaps in the assembled plate are correct.
+
+``--timepoints N`` compares N evenly spaced timepoints per position (always the
+first and last) instead of all of them: about T/N times faster, since the check
+is bound by Lustre reads. The trade-off is that a volume that transferred wrong
+at an unchecked timepoint is not seen. The default is all timepoints, and
+``status``, the ``delete`` dry run and the marker file all say which was used.
 
 The delete also waits for the whole Nextflow run to finish, not just assemble:
 tracking reads the assembled plate and QC writes tables into it.
@@ -127,6 +134,32 @@ def uncompressed_bytes(store: Path) -> int:
         meta = array_meta(store / pos)
         total += int(np.prod(meta["shape"])) * np.dtype(meta["dtype"]).itemsize
     return total
+
+
+def sample_timepoints(n_t: int, n: int) -> list[int]:
+    """N evenly spaced timepoints, always the first and last; all when n <= 0 or n >= n_t."""
+    if n <= 0 or n >= n_t:
+        return list(range(n_t))
+    if n == 1:
+        return [0]
+    return sorted({round(i * (n_t - 1) / (n - 1)) for i in range(n)})
+
+
+def coverage(results: list[dict]) -> str:
+    """'all timepoints' or how many were sampled, over a set of verify results."""
+
+    # Results without the field predate sampling and compared every timepoint.
+    def n_checked(r):
+        return len(r.get("timepoints_checked", range(r["n_timepoints"])))
+
+    sampled = [r for r in results if n_checked(r) < r["n_timepoints"]]
+    if not sampled:
+        return "all timepoints"
+    counts = sorted({n_checked(r) for r in sampled})
+    return (
+        f"SAMPLED ({len(sampled)}/{len(results)} positions checked at "
+        f"{'/'.join(map(str, counts))} timepoints, not all)"
+    )
 
 
 def human(n: float) -> str:
@@ -322,9 +355,10 @@ def cmd_verify(args) -> int:
 
     mismatches, empty = [], []
     n_t = asm_array.shape[0]
+    timepoints = sample_timepoints(n_t, args.timepoints)
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         for mm, em in pool.map(
-            lambda t: _compare_timepoint(t, src_arrays, asm_array, dtype), range(n_t)
+            lambda t: _compare_timepoint(t, src_arrays, asm_array, dtype), timepoints
         ):
             mismatches += mm
             empty += em
@@ -333,6 +367,7 @@ def cmd_verify(args) -> int:
         "position": pos,
         "status": "pass" if not mismatches else "fail",
         "n_timepoints": n_t,
+        "timepoints_checked": timepoints,
         "assembled_shape": list(asm_array.shape),
         "assembled_dtype": str(dtype),
         "mismatches": mismatches,
@@ -397,7 +432,7 @@ def cmd_submit(args) -> int:
         "--requeue",  # idempotent per position: a preempted task just reruns
         f"--output={wd}/slurm/%x_%A_%a.out",
         f"--error={wd}/slurm/%x_%A_%a.err",
-        f"--wrap={sys.executable} {Path(__file__).resolve()} verify {output} --workers {args.workers}",
+        f"--wrap={sys.executable} {Path(__file__).resolve()} verify {output} --workers {args.workers} --timepoints {args.timepoints}",
     ]
     if args.dry_run:
         print(" ".join(cmd))
@@ -429,7 +464,7 @@ def cmd_status(args) -> int:
     passed, failed, missing = verify_summary(output, asm_positions)
     print(
         f"verified {len(passed)}/{len(asm_positions)} pass, {len(failed)} fail, "
-        f"{len(missing)} not verified"
+        f"{len(missing)} not verified — {coverage(passed + failed) if passed or failed else '-'}"
     )
     for r in failed:
         mm = r["mismatches"]
@@ -523,7 +558,10 @@ def cmd_delete(args) -> int:
     print(
         "  keep    every step's slurm_output/, transfer_function.zarr, nextflow/, qc/, configs/"
     )
-    print(f"pixel verification: {len(passed)}/{len(asm_positions)} positions pass")
+    print(
+        f"pixel verification: {len(passed)}/{len(asm_positions)} positions pass, "
+        f"{coverage(passed) if passed else '-'}"
+    )
     for w in warnings:
         print(f"  WARNING  {w}")
     for e in errors[:30]:
@@ -554,7 +592,7 @@ def cmd_delete(args) -> int:
         f"script    {Path(__file__).resolve()}",
         f"verified  {len(passed)}/{len(asm_positions)} positions: every source "
         "voxel equals the assembled voxel",
-        f"          in {stores['assemble']}",
+        f"          in {stores['assemble']}, {coverage(passed)}",
         "removed",
         *[f"          {t}" for t in targets],
         "",
@@ -586,6 +624,13 @@ def main() -> int:
     p.add_argument("output", type=Path)
     p.add_argument("--position", help="e.g. A/1/000; default: from SLURM_ARRAY_TASK_ID")
     p.add_argument("--workers", type=int, default=8, help="timepoints compared in parallel")
+    p.add_argument(
+        "--timepoints",
+        type=int,
+        default=0,
+        help="compare N evenly spaced timepoints per position (incl. first and last); "
+        "0 = all (default)",
+    )
     p.set_defaults(func=cmd_verify)
 
     p = sub.add_parser("submit", help="SLURM array verifying every position")
@@ -595,6 +640,13 @@ def main() -> int:
     )
     p.add_argument("--partition", default="preempted")
     p.add_argument("--workers", type=int, default=8)
+    p.add_argument(
+        "--timepoints",
+        type=int,
+        default=0,
+        help="compare N evenly spaced timepoints per position (incl. first and last); "
+        "0 = all (default)",
+    )
     p.add_argument("--mem", default="64G")
     p.add_argument("--time", default="4:00:00")
     p.add_argument("--max-jobs", type=int, default=50, help="array tasks running at once")

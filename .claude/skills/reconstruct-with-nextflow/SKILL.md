@@ -457,6 +457,7 @@ PY=<BIAHUB>/.venv/bin/python
 T=<BIAHUB>/nextflow/scripts/clean_intermediates.py
 $PY $T check  <OUTPUT>        # metadata: stores, positions, geometry, trace.txt
 $PY $T submit <OUTPUT>        # SLURM array (preempted): pixel-compare every position
+                              #   add --timepoints 3 for first/middle/last only
 $PY $T status <OUTPUT>        # after `squeue` empties: pass / fail per position
 $PY $T delete <OUTPUT>        # dry run: lists what goes and why it is safe
 $PY $T delete <OUTPUT> --yes  # only after the user has read the dry run
@@ -479,6 +480,11 @@ What each gate refuses:
   Source volumes that are entirely zero or NaN are REPORTED, not blocking: blank
   wells and dropped frames are empty in the acquisition, zarr skips all-zero
   shards, and the comparison already proves the plate is empty in the same places.
+  The full comparison reads every voxel twice and is bound by Lustre: about
+  1.5 h for an 84-position, 91-timepoint plate. `--timepoints N` compares N
+  evenly spaced timepoints (always first and last), about T/N times faster, but
+  a volume that transferred wrong at an unchecked timepoint goes unseen. Default
+  is all; ask the user which, and `status`/`delete` print `SAMPLED` when used.
 - `delete`: any position not verified, or with mismatched pixels; a result from
   before the last pipeline launch, or against a different store.
 
