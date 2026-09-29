@@ -103,6 +103,15 @@ INPUT_ZARR="${CONVERTED_ZARR:-${DATA_DIR}/${DATASET}/${RAW_STORE}}"
 [[ -d "${INPUT_ZARR}" ]] || { echo "input not found: ${INPUT_ZARR}" >&2; exit 1; }
 [[ -d "${CONFIGS}"    ]] || { echo "configs not found: ${CONFIGS}"  >&2; exit 1; }
 
+# clean_intermediates.py deleted the flat-field/deskew/reconstruct/virtual-stain
+# stores. A -resume here would treat those steps as cached and hand their missing
+# stores to whatever step reruns. Reprocess into a new OUTPUT_DIR instead.
+if [[ -f "${OUTPUT_DIR}/INTERMEDIATES_CLEANED.txt" ]]; then
+    echo "intermediates were deleted from ${OUTPUT_DIR} (see INTERMEDIATES_CLEANED.txt)." >&2
+    echo "This run cannot be resumed; reprocess into a new OUTPUT_DIR." >&2
+    exit 1
+fi
+
 # Record which code and inputs this run used, to a FILE as well as the console.
 #
 # The file is the durable record. The launch is deliberately not piped through
