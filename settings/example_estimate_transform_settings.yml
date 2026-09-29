@@ -4,8 +4,9 @@
 # the source channel aligned onto its own first / previous timepoint.
 # Only the block of the chosen `method` is needed (beads / ants / phase_cross_corr / manual /
 # focus_finding).
-# `fallback` holds what used to be hidden constants: the adaptive flagging line and the
-# repair candidates tried, in order, for flagged timepoints.
+# `fallback` holds what used to be hidden constants: the adaptive flagging line, the
+# repair candidates tried, in order, for flagged timepoints (then polished), and the
+# optional parameter sweep, which competes with repair on the same flagged timepoints.
 moving:
   channel: GFP EX488 EM525-45
 reference:
@@ -135,4 +136,18 @@ fallback:
     consensus_min_good: 5
     max_timepoints: null
     polish_rounds: 3
+  # Off unless given. Each sub-grid is a cross product of dotted paths into this config;
+  # the trials are the union of the sub-grids. This is production's default beads grid
+  # (25 trials, about 1-2 min each per flagged timepoint).
+  sweep: null
+  # sweep:
+  #   max_timepoints: 25
+  #   grid:
+  #   - beads.hungarian_match_settings.cost_threshold: [0.05, 0.10]
+  #     beads.hungarian_match_settings.cost_matrix_settings.weights.dist: [0.25, 1.0]
+  #     beads.hungarian_match_settings.edge_graph_settings.method: [knn, full]
+  #     beads.filter_matches_settings.max_distance_quantile: [0.95, 0.99]
+  #   - beads.algorithm: [spectral]
+  #     beads.spectral_match_settings.sigma: [1.0, 3.0, 5.0]
+  #     beads.spectral_match_settings.rel_cut: [0.35, 0.65, 0.80]
 verbose: true

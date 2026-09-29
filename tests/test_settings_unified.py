@@ -64,3 +64,83 @@ def test_transform_settings_series_wide_entry_and_direction():
     np.testing.assert_allclose(series.matrix_for(17, "pull")[:3, 3], [2, -3, 4])
     with pytest.raises(ValueError, match="at least one entry"):
         TransformSettings(direction="forward", moving_channels=["GFP"], transforms=[])
+
+
+def _beads_settings(sweep):
+    return EstimateTransformSettings(
+        moving=ChannelSettings(channel="GFP"),
+        reference=ReferenceSettings(frame="cross", channel="Phase3D"),
+        method="beads",
+        fallback={"sweep": sweep},
+    )
+
+
+def test_sweep_trials_are_the_union_of_each_sub_grids_product():
+    settings = _beads_settings(
+        {
+            "grid": [
+                {
+                    "beads.hungarian_match_settings.cost_threshold": [0.05, 0.1],
+                    "beads.hungarian_match_settings.cost_matrix_settings.weights.dist": [
+                        0.25,
+                        1.0,
+                    ],
+                },
+                {
+                    "beads.algorithm": ["spectral"],
+                    "beads.spectral_match_settings.sigma": [1, 5],
+                },
+            ]
+        }
+    )
+    trials = settings.sweep_trials()
+
+    assert len(trials) == 4 + 2
+    trial = trials[
+        "beads.hungarian_match_settings.cost_threshold=0.05,"
+        "beads.hungarian_match_settings.cost_matrix_settings.weights.dist=1.0"
+    ]
+    assert trial.beads.hungarian_match_settings.cost_threshold == 0.05
+    assert trial.beads.hungarian_match_settings.cost_matrix_settings.weights["dist"] == 1.0
+    assert trial.fallback.sweep is None, "a trial does not sweep again"
+    spectral = trials["beads.algorithm=spectral,beads.spectral_match_settings.sigma=5"]
+    assert spectral.beads.algorithm == "spectral"
+    assert spectral.beads.spectral_match_settings.sigma == 5
+    assert settings.beads.algorithm == "hungarian", "the base settings are untouched"
+
+
+def test_sweep_trials_revalidate_so_dependent_defaults_follow():
+    trials = _beads_settings(
+        {
+            "grid": [
+                {
+                    "beads.hungarian_match_settings.edge_graph_settings.method": [
+                        "full",
+                        "radius",
+                    ]
+                }
+            ]
+        }
+    ).sweep_trials()
+    graphs = [t.beads.hungarian_match_settings.edge_graph_settings for t in trials.values()]
+    assert [(g.method, g.k, g.radius) for g in graphs] == [
+        ("full", None, None),
+        ("radius", None, 30.0),
+    ]
+
+
+@pytest.mark.parametrize(
+    "grid, message",
+    [
+        (
+            [{"beads.hungarian_match_settings.cost_treshold": [0.1]}],
+            "no setting 'cost_treshold'",
+        ),
+        ([{"ants.sobel_filter": [True]}], "'ants' is not a settings block"),
+        ([{"beads.algorithm": []}], "each with values"),
+        ([], "at least 1 item"),
+    ],
+)
+def test_sweep_grid_is_checked_when_the_config_loads(grid, message):
+    with pytest.raises(ValueError, match=message):
+        _beads_settings({"grid": grid})

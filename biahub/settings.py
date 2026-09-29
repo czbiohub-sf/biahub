@@ -1,3 +1,4 @@
+from itertools import product
 from pathlib import Path
 from typing import Any, Literal
 
@@ -798,9 +799,56 @@ class RepairSettings(MyBaseModel):
     polish_rounds: NonNegativeInt = 3
 
 
+class SweepSettings(MyBaseModel):
+    """Sweep pass: re-estimate flagged timepoints under alternative method settings.
+
+    `grid` is a list of sub-grids; each maps a dotted path into the estimate config (e.g.
+    `beads.hungarian_match_settings.cost_threshold`) to the values to try. The trials are
+    the union of each sub-grid's cross product, so parameters that are inert together
+    (hungarian vs spectral) are swept without paying for their product. Paths are checked
+    when the config loads. Each flagged timepoint keeps the best of its original, repaired
+    and swept transforms; `max_timepoints` caps the sweep to the worst flagged timepoints.
+    """
+
+    grid: list[dict[str, list]] = Field(min_length=1)
+    max_timepoints: int | None = 25
+
+    @field_validator("grid")
+    @classmethod
+    def check_grid(cls, v):
+        for sub in v:
+            if not sub or any(not values for values in sub.values()):
+                raise ValueError("every sub-grid needs at least one path, each with values")
+        return v
+
+    def trials(self) -> list[dict[str, Any]]:
+        return [
+            dict(zip(sub, combo, strict=True))
+            for sub in self.grid
+            for combo in product(*sub.values())
+        ]
+
+
+def _set_path(data: dict, path: str, value) -> None:
+    *parents, leaf = path.split(".")
+    node = data
+    for key in parents:
+        if not isinstance(node, dict) or not isinstance(node.get(key), dict):
+            raise ValueError(f"sweep path {path!r}: {key!r} is not a settings block here")
+        node = node[key]
+    if leaf not in node:
+        raise ValueError(f"sweep path {path!r}: no setting {leaf!r}")
+    node[leaf] = value
+
+
+def trial_name(overrides: dict[str, Any]) -> str:
+    return ",".join(f"{path}={value}" for path, value in overrides.items())
+
+
 class FallbackSettings(MyBaseModel):
     flag: FlagSettings = FlagSettings()
     repair: RepairSettings | None = RepairSettings()
+    sweep: SweepSettings | None = None
 
 
 EstimationMethod = Literal["beads", "ants", "phase-cross-corr", "manual", "focus-finding"]
@@ -882,6 +930,23 @@ class EstimateTransformSettings(MyBaseModel):
             setattr(self, field, model())
         return self
 
+    @model_validator(mode="after")
+    def check_sweep_paths(self) -> "EstimateTransformSettings":
+        if self.fallback.sweep is not None:
+            self.sweep_trials()
+        return self
+
+    def sweep_trials(self) -> dict[str, "EstimateTransformSettings"]:
+        """Build each sweep trial's config, by name: these settings plus its overrides."""
+        trials = {}
+        for overrides in self.fallback.sweep.trials():
+            data = self.model_dump()
+            data["fallback"]["sweep"] = None
+            for path, value in overrides.items():
+                _set_path(data, path, value)
+            trials[trial_name(overrides)] = EstimateTransformSettings.model_validate(data)
+        return trials
+
     @property
     def reference_channel(self) -> str:
         """The channel read on the reference side (the moving channel itself for first / previous)."""
@@ -898,7 +963,9 @@ class TransformEntry(MyBaseModel):
     t: NonNegativeInt | None = None
     matrix: list
     score: float | None = None
-    repaired_from: str | None = None  # the repair candidate that won, when one did
+    # How a fallback pass reached this matrix: the winning repair candidate (plus any
+    # polish rounds, "consensus_full+polish1") or "sweep:<trial>".
+    repaired_from: str | None = None
 
     @field_validator("matrix")
     @classmethod
