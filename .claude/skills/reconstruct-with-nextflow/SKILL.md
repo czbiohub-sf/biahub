@@ -469,16 +469,18 @@ What each gate refuses:
   sources, or a T/Z/Y/X mismatch (a channel subset, crop or time subset in
   `concatenate.yml`, meaning the intermediates hold data the plate does not); any
   assembled position without a `COMPLETED`/`CACHED` `run_concatenate` in
-  `trace.txt` (this catches an unfinished run and a `--max_positions` smoke test);
-  a `run_concatenate` still running.
+  `trace.txt` (this catches a `--max_positions` smoke test); a last launch that
+  is still running or failed (`.nextflow.log`). The WHOLE run must be over, not
+  just assemble: tracking reads the assembled plate and QC writes tables into it.
 - `verify` (per position): every source volume, cast to the assembled dtype,
   must equal the assembled volume voxel for voxel, NaN equal to NaN. Channels are
   matched by position in `-i` order, not by name, because `rename_channels.py`
-  renames them. It also flags any source volume that is entirely zero or NaN.
-- `delete`: any position not verified, or with mismatched pixels; empty source
-  volumes unless `--accept-empty` (e.g. an acquisition that was cut short, where
-  the user confirms the empties are expected); a result from before the last
-  pipeline launch, or against a different store.
+  renames them. An unreadable volume (torn shard, checksum) counts as a failure.
+  Source volumes that are entirely zero or NaN are REPORTED, not blocking: blank
+  wells and dropped frames are empty in the acquisition, zarr skips all-zero
+  shards, and the comparison already proves the plate is empty in the same places.
+- `delete`: any position not verified, or with mismatched pixels; a result from
+  before the last pipeline launch, or against a different store.
 
 Do not base the decision on the QC verdict. QC measures image quality, not
 whether the copy is complete; the pixel comparison is the only gate.

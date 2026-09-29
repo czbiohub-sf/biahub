@@ -33,9 +33,13 @@ volume (deskew, reconstruct, virtual-stain, in ``-i`` order) cast to the
 assembled dtype must equal the assembled volume exactly — NaN equal to NaN.
 ``concatenate`` copies pixels unchanged (it casts to float32 only when source
 dtypes differ, which is lossless for uint16), so any difference is a failed
-transfer. It also flags any source volume that is entirely zero or entirely
-NaN: an equal copy of an empty volume is still an empty volume, and the
-intermediate it came from is what you would regenerate it from.
+transfer, and so is a volume that cannot be read. Source volumes that are
+entirely zero or NaN are reported but do not block: blank wells and dropped
+frames are empty in the acquisition, and zarr skips writing all-zero shards, so
+their gaps in the assembled plate are correct.
+
+The delete also waits for the whole Nextflow run to finish, not just assemble:
+tracking reads the assembled plate and QC writes tables into it.
 
 Flat-field is not in the assembled plate. It is deleted on the strength of
 deskew — which is computed from it — being verified complete.
@@ -217,16 +221,19 @@ def run_check(output: Path) -> tuple[list[str], list[str], list[str]]:
                 f"run_concatenate in trace.txt, e.g. {not_done[:5]}"
             )
 
-    # Assemble must not be running anymore. Tracking and QC may still be: they
-    # read only the assembled/track stores.
+    # The whole run must be over, not just assemble: tracking reads the
+    # assembled plate and QC writes tables into it. `.nextflow.log` is always the
+    # latest launch; it ends with "Execution complete" once the head process has
+    # exited, and logs "Session aborted" when that launch failed.
     log = output / ".nextflow.log"
-    if log.exists():
-        tail = log.read_text(errors="replace")[-200_000:]
-        if re.search(
-            r"name: assemble_run_wf:run_concatenate \([^)]*\); status: (RUNNING|SUBMITTED)",
-            tail,
-        ):
-            errors.append("run_concatenate tasks still running in .nextflow.log")
+    if not log.exists():
+        errors.append(f"{log} missing — cannot confirm the run finished")
+    else:
+        text = log.read_text(errors="replace")
+        if "Execution complete -- Goodbye" not in text[-5_000:]:
+            errors.append("the last Nextflow launch has not finished (still running?)")
+        elif "Session aborted" in text:
+            errors.append("the last Nextflow launch failed (Session aborted in .nextflow.log)")
 
     return errors, warnings, asm_positions
 
@@ -324,7 +331,7 @@ def cmd_verify(args) -> int:
 
     result = {
         "position": pos,
-        "status": "pass" if not mismatches and not empty else "fail",
+        "status": "pass" if not mismatches else "fail",
         "n_timepoints": n_t,
         "assembled_shape": list(asm_array.shape),
         "assembled_dtype": str(dtype),
@@ -425,11 +432,9 @@ def cmd_status(args) -> int:
         f"{len(missing)} not verified"
     )
     for r in failed:
-        mm, em = r["mismatches"], r["empty_source_volumes"]
-        print(
-            f"  FAIL {r['position']}: {len(mm)} mismatched volumes, {len(em)} empty source volumes"
-        )
-        for m in mm[:3]:
+        mm = r["mismatches"]
+        print(f"  FAIL {r['position']}: {len(mm)} volumes did not transfer")
+        for m in mm[:5]:
             if "read_error" in m:
                 print(
                     f"       t={m['t']} {m['source']}[c{m['source_channel']}]: "
@@ -441,9 +446,16 @@ def cmd_status(args) -> int:
                 f"c{m['assembled_channel']}: {m['n_diff']}/{m['n_voxels']} voxels differ"
                 + (" (assembled volume all zero)" if m["assembled_all_zero"] else "")
             )
-        for e in em[:3]:
+    # Informational: blank wells and dropped frames are empty in the source and,
+    # correctly, in the assembled plate too. Summarized per position and channel.
+    for r in passed + failed:
+        per_channel = {}
+        for e in r["empty_source_volumes"]:
+            per_channel.setdefault(f"{e['source']}[c{e['source_channel']}]", []).append(e["t"])
+        for ch, ts in sorted(per_channel.items()):
             print(
-                f"       t={e['t']} {e['source']}[c{e['source_channel']}] is empty in the source"
+                f"  empty in source (copied as empty): {r['position']} {ch} "
+                f"{len(ts)}/{r['n_timepoints']} timepoints, e.g. t={ts[:5]}"
             )
     if missing:
         print(f"  not verified: {missing[:10]}{' …' if len(missing) > 10 else ''}")
@@ -479,16 +491,9 @@ def cmd_delete(args) -> int:
     passed, failed, missing = (
         verify_summary(output, asm_positions) if asm_positions else ([], [], [])
     )
-    mismatched = [r for r in failed if r["mismatches"]]
-    empty_only = [r for r in failed if not r["mismatches"]]
-    if mismatched:
+    if failed:
         errors.append(
-            f"{len(mismatched)} positions have pixels that did not transfer — run `status`"
-        )
-    if empty_only and not args.accept_empty:
-        errors.append(
-            f"{len(empty_only)} positions have empty source volumes (copied faithfully, "
-            "but empty) — run `status`; --accept-empty to delete anyway"
+            f"{len(failed)} positions have pixels that did not transfer — run `status`"
         )
     if missing:
         errors.append(f"{len(missing)} positions not pixel-verified — run `submit`")
@@ -497,7 +502,7 @@ def cmd_delete(args) -> int:
     # came after it: a relaunch rewrites trace.txt and may have rewritten data.
     trace = output / "nextflow" / "trace.txt"
     trace_mtime = trace.stat().st_mtime if trace.exists() else 0
-    for r in passed + empty_only:
+    for r in passed:
         for s, path in r["stores"].items():
             if stores.get(s) and str(stores[s]) != path:
                 errors.append(
@@ -547,17 +552,9 @@ def cmd_delete(args) -> int:
         f"user      {getpass.getuser()}",
         f"host      {socket.gethostname()}",
         f"script    {Path(__file__).resolve()}",
-        f"verified  {len(passed) + len(empty_only)}/{len(asm_positions)} positions: every source "
+        f"verified  {len(passed)}/{len(asm_positions)} positions: every source "
         "voxel equals the assembled voxel",
         f"          in {stores['assemble']}",
-        *(
-            [
-                f"          {len(empty_only)} positions had empty source volumes, accepted "
-                "with --accept-empty"
-            ]
-            if empty_only
-            else []
-        ),
         "removed",
         *[f"          {t}" for t in targets],
         "",
@@ -611,11 +608,6 @@ def main() -> int:
     p = sub.add_parser("delete", help="delete the step stores (dry run without --yes)")
     p.add_argument("output", type=Path)
     p.add_argument("--yes", action="store_true")
-    p.add_argument(
-        "--accept-empty",
-        action="store_true",
-        help="delete even if some source volumes are empty (e.g. acquisition cut short)",
-    )
     p.set_defaults(func=cmd_delete)
 
     args = ap.parse_args()
