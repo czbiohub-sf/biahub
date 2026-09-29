@@ -8,6 +8,7 @@ from biahub.registration.engine import (
     neighbour_consensus_config_candidates,
     polish,
     repair_series,
+    sweep_timepoint,
 )
 from biahub.registration.estimators import EstimationError
 from biahub.registration.policies import (
@@ -304,3 +305,79 @@ def test_repair_series_polishes_only_accepted_repairs():
     assert result.scores[5] == pytest.approx(0.5)
     assert result.transforms[5].translation[0] == 3.0
     assert list(result.repairs) == [5]
+
+
+class _FixedEstimator:
+    def __init__(self, x: float):
+        self.x = x
+
+    def estimate(self, mov, ref, seed=None):
+        return Transform.from_translation([self.x, 0.0, 0.0])
+
+
+def _score_by_x_on_frame(transform, mov, ref):
+    return 0.1 * float(transform.translation[0])
+
+
+def _series_with_one_poor_timepoint():
+    mov = _constant_frames(4)
+    result = estimate_series(
+        mov,
+        FixedFrame(0),
+        _FixedEstimator(1.0),
+        FixedSeed(IDENTITY),
+        _score_by_x_on_frame,
+        range(4),
+    )
+    return mov, result
+
+
+def test_sweep_timepoint_keeps_the_best_trial_that_beats_the_estimate():
+    mov, result = _series_with_one_poor_timepoint()
+    trials = {"a": _FixedEstimator(0.5), "b": _FixedEstimator(4.0), "c": _FixedEstimator(3.0)}
+
+    outcome = sweep_timepoint(
+        2, mov, FixedFrame(0), trials, IDENTITY, _score_by_x_on_frame, result
+    )
+
+    assert outcome.accepted and outcome.source == "b"
+    assert outcome.scores == pytest.approx({"a": 0.05, "b": 0.4, "c": 0.3})
+    assert result.scores[2] == pytest.approx(0.4)
+    assert result.provenance[2] == "sweep:b"
+    assert result.journal.accepted_this_run(2, pass_name="sweep")
+
+
+def test_sweep_competes_with_repair_from_the_pre_fallback_score():
+    mov, result = _series_with_one_poor_timepoint()
+    baseline = result.scores[2]
+    result.transforms[2] = Transform.from_translation([6.0, 0.0, 0.0])  # a repair landed
+    result.scores[2], result.provenance[2] = 0.6, "t-1"
+
+    outcome = sweep_timepoint(
+        2,
+        mov,
+        FixedFrame(0),
+        {"b": _FixedEstimator(4.0)},
+        IDENTITY,
+        _score_by_x_on_frame,
+        result,
+        baseline_score=baseline,
+    )
+
+    assert outcome.accepted, "the sweep beat the estimate it started from"
+    assert result.provenance[2] == "t-1" and result.scores[2] == 0.6, "but not the repair"
+    assert result.sweeps[2] is outcome
+
+
+def test_sweep_skips_a_raising_trial_and_names_it():
+    class _Raises:
+        def estimate(self, mov, ref, seed=None):
+            raise EstimationError("too few matches")
+
+    mov, result = _series_with_one_poor_timepoint()
+    outcome = sweep_timepoint(
+        2, mov, FixedFrame(0), {"bad": _Raises()}, IDENTITY, _score_by_x_on_frame, result
+    )
+    assert not outcome.accepted and outcome.source == "unchanged"
+    assert outcome.failures == {"bad": "EstimationError: too few matches"}
+    assert 2 not in result.provenance

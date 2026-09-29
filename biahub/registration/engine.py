@@ -255,15 +255,24 @@ def select_flagged(
         f"(adaptive line {flags.attrs['adaptive_line']:.3f}, median "
         f"{flags.attrs['median']:.3f}) -> {flagged}"
     )
-    if max_timepoints is not None and len(flagged) > max_timepoints:
-        worst = sorted(flagged, key=lambda t: np.nan_to_num(score_col[t], nan=-1.0))
-        dropped = sorted(worst[max_timepoints:])
-        flagged = sorted(worst[:max_timepoints])
-        click.echo(
-            f"  capped at max_timepoints={max_timepoints}; taking the worst {len(flagged)} "
-            f"and LEAVING {len(dropped)} untouched: {dropped}"
-        )
+    flagged = cap_worst(flagged, dict(enumerate(score_col)), max_timepoints)
     return flagged, dict(flags.attrs)
+
+
+def cap_worst(
+    timepoints: list[int], scores: dict[int, float], max_timepoints: int | None
+) -> list[int]:
+    """Keep the worst `max_timepoints` of `timepoints` by score, naming the ones left out."""
+    if max_timepoints is None or len(timepoints) <= max_timepoints:
+        return list(timepoints)
+    worst = sorted(timepoints, key=lambda t: np.nan_to_num(scores[t], nan=-1.0))
+    dropped = sorted(worst[max_timepoints:])
+    kept = sorted(worst[:max_timepoints])
+    click.echo(
+        f"  capped at max_timepoints={max_timepoints}; taking the worst {len(kept)} "
+        f"and LEAVING {len(dropped)} untouched: {dropped}"
+    )
+    return kept
 
 
 RepairCandidates = Callable[
@@ -309,7 +318,9 @@ def neighbour_consensus_config_candidates(
 
 
 @dataclass
-class RepairResult:
+class PassResult:
+    """Outcome of one fallback pass (repair or sweep) at one timepoint."""
+
     transform: Transform
     score: float
     accepted: bool
@@ -320,26 +331,20 @@ class RepairResult:
     reseed_score: float | None = None  # the accepted candidate's score before polish
 
 
-def repair(
+def _best_of(
     t: int,
-    mov: ArrayLike,
-    ref: ArrayLike,
-    estimator: TransformEstimator,
+    pass_name: str,
+    attempts: dict[str, Callable[[], Transform]],
     current_transform: Transform,
     current_score: float,
-    candidates: dict[str, SeedPolicy],
     score_fn: Callable[[Transform], float],
-    journal: RunJournal | None = None,
-) -> RepairResult:
-    """Try each candidate seed for timepoint `t`; keep whichever scores best.
+    journal: RunJournal | None,
+) -> PassResult:
+    """Run each attempt in order; keep the best-scoring one if it strictly beats current.
 
-    Every candidate is tried in the given order. A candidate whose `seed_for()` or
-    `estimate()` raises -- e.g. `ConsensusSeed` when too few timepoints score well enough
-    yet -- is skipped rather than aborting the repair, and the exception is kept in
-    `RepairResult.failures` (and the journal) so a silently-broken candidate is visible
-    rather than indistinguishable from one that merely lost. The best-scoring result
-    wins, ties broken by candidate order; `accepted=True` only if it strictly beats
-    `current_score`, otherwise the original transform/score are returned unchanged.
+    An attempt that raises is skipped, not fatal, and its exception is kept in
+    `PassResult.failures` (and the journal) so a broken candidate is distinguishable
+    from one that merely lost. Ties go to the earlier attempt.
     """
     best_name = "unchanged"
     best_transform = current_transform
@@ -347,10 +352,9 @@ def repair(
     scores: dict[str, float] = {}
     failures: dict[str, str] = {}
 
-    for name, seed_policy in candidates.items():
+    for name, attempt in attempts.items():
         try:
-            seed = seed_policy.seed_for(t)
-            candidate_transform = estimator.estimate(mov, ref, seed=seed)
+            candidate_transform = attempt()
             candidate_score = score_fn(candidate_transform)
         except Exception as e:  # noqa: BLE001
             failures[name] = f"{type(e).__name__}: {e}"
@@ -363,19 +367,80 @@ def repair(
     if journal is not None:
         journal.record(
             t=t,
-            pass_name="repair",
+            pass_name=pass_name,
             before_score=current_score,
             after_score=best_score,
             accepted=accepted,
             failures=failures,
         )
-    return RepairResult(
+    return PassResult(
         transform=best_transform,
         score=best_score,
         accepted=accepted,
         source=best_name,
         scores=scores,
         failures=failures,
+    )
+
+
+def repair(
+    t: int,
+    mov: ArrayLike,
+    ref: ArrayLike,
+    estimator: TransformEstimator,
+    current_transform: Transform,
+    current_score: float,
+    candidates: dict[str, SeedPolicy],
+    score_fn: Callable[[Transform], float],
+    journal: RunJournal | None = None,
+) -> PassResult:
+    """Re-estimate timepoint `t` from each candidate seed; keep whichever scores best.
+
+    A candidate whose `seed_for()` raises -- e.g. `ConsensusSeed` when too few timepoints
+    score well enough yet -- is skipped like one whose `estimate()` raises.
+    """
+    return _best_of(
+        t,
+        "repair",
+        {
+            name: (lambda policy=policy: estimator.estimate(mov, ref, seed=policy.seed_for(t)))
+            for name, policy in candidates.items()
+        },
+        current_transform,
+        current_score,
+        score_fn,
+        journal,
+    )
+
+
+def sweep(
+    t: int,
+    mov: ArrayLike,
+    ref: ArrayLike,
+    trials: dict[str, TransformEstimator],
+    seed: Transform,
+    current_transform: Transform,
+    current_score: float,
+    score_fn: Callable[[Transform], float],
+    journal: RunJournal | None = None,
+) -> PassResult:
+    """Re-estimate timepoint `t` with each trial's estimator from `seed`; keep the best.
+
+    Repair changes the seed and keeps the method; the sweep keeps the seed and changes the
+    method's settings, for the timepoints the run's one parameter set does not serve.
+    `score_fn` is the run's own, so every trial is judged on the same scale.
+    """
+    return _best_of(
+        t,
+        "sweep",
+        {
+            name: (lambda estimator=estimator: estimator.estimate(mov, ref, seed=seed))
+            for name, estimator in trials.items()
+        },
+        current_transform,
+        current_score,
+        score_fn,
+        journal,
     )
 
 
@@ -426,7 +491,10 @@ class SeriesResult:
     scores: dict[int, float] = field(default_factory=dict)
     errors: dict[int, str] = field(default_factory=dict)
     flagged: list[int] = field(default_factory=list)
-    repairs: dict[int, RepairResult] = field(default_factory=dict)
+    repairs: dict[int, PassResult] = field(default_factory=dict)
+    sweeps: dict[int, PassResult] = field(default_factory=dict)
+    # How an accepted fallback transform was reached, e.g. "consensus_full+polish1".
+    provenance: dict[int, str] = field(default_factory=dict)
     journal: RunJournal = field(default_factory=RunJournal)
 
 
@@ -509,7 +577,7 @@ def repair_timepoint(
     result: SeriesResult,
     candidates: RepairCandidates,
     polish_rounds: int = 0,
-) -> RepairResult:
+) -> PassResult:
     """Offer one flagged timepoint to `repair`, `polish` an accepted result, fold it in.
 
     A timepoint whose estimate failed has no current transform, so any candidate with a
@@ -546,10 +614,58 @@ def repair_timepoint(
             outcome.source += f"+polish{outcome.polish_rounds}"
     result.repairs[t] = outcome
     if outcome.accepted:
-        result.transforms[t] = outcome.transform
-        result.scores[t] = outcome.score
-        result.errors.pop(t, None)
+        _accept(result, t, outcome.transform, outcome.score, outcome.source)
     return outcome
+
+
+def _accept(result: SeriesResult, t: int, transform: Transform, score: float, source: str):
+    result.transforms[t] = transform
+    result.scores[t] = score
+    result.errors.pop(t, None)
+    result.provenance[t] = source
+
+
+def sweep_timepoint(
+    t: int,
+    mov,
+    reference_policy: ReferencePolicy,
+    trials: dict[str, TransformEstimator],
+    seed: Transform,
+    score_fn: ScoreFn,
+    result: SeriesResult,
+    baseline_score: float | None = None,
+) -> PassResult:
+    """Offer one flagged timepoint to `sweep`; fold the result in if it beats the current one.
+
+    The sweep is judged against `baseline_score` (the timepoint's score before any
+    fallback, so it competes with repair rather than following it; default: its current
+    score), and folded in only if it also beats whatever the timepoint holds now.
+    """
+    mov_t = np.asarray(mov[t])
+    ref_t = np.asarray(reference_policy.reference_for(mov, t))
+    current = result.transforms.get(t)
+    if baseline_score is None:
+        baseline_score = result.scores[t] if current is not None else -np.inf
+    outcome = sweep(
+        t=t,
+        mov=mov_t,
+        ref=ref_t,
+        trials=trials,
+        seed=seed,
+        current_transform=current if current is not None else Transform.identity(mov_t.ndim),
+        current_score=-np.inf if not np.isfinite(baseline_score) else baseline_score,
+        score_fn=lambda transform, m=mov_t, r=ref_t: score_fn(transform, m, r),
+        journal=result.journal,
+    )
+    _fold_sweep(result, t, outcome)
+    return outcome
+
+
+def _fold_sweep(result: SeriesResult, t: int, outcome: PassResult) -> None:
+    result.sweeps[t] = outcome
+    current_score = result.scores.get(t, float("nan"))
+    if outcome.accepted and not outcome.score <= current_score:
+        _accept(result, t, outcome.transform, outcome.score, f"sweep:{outcome.source}")
 
 
 def repair_series(
@@ -862,8 +978,47 @@ def _repair_timepoint_job(
     return record
 
 
-def _load_repair(record: dict, transform_type: str, fallback: Transform) -> RepairResult:
-    return RepairResult(
+def _sweep_timepoint_job(
+    moving_position_dirpath: Path,
+    reference_position_dirpath: Path,
+    settings_path: Path,
+    t: int,
+    records_dir: Path,
+    record_path: Path,
+) -> dict:
+    """Sweep one flagged timepoint against its own pre-fallback estimate."""
+    settings = yaml_to_model(settings_path, EstimateTransformSettings)
+    mov, mov_voxel_size = _open_series(moving_position_dirpath, settings.moving.channel)
+    ref, ref_voxel_size = _open_series(reference_position_dirpath, settings.reference_channel)
+    shape_zyx = tuple(mov.shape[-3:])
+    _estimator, score_fn, seed = build_estimator(
+        settings, shape_zyx, mov_voxel_size, ref_voxel_size
+    )
+    trials = {
+        name: build_estimator(trial, shape_zyx, mov_voxel_size, ref_voxel_size)[0]
+        for name, trial in settings.sweep_trials().items()
+    }
+
+    series = _load_series(records_dir, [t], settings.transform.type)
+    outcome = sweep_timepoint(
+        t, mov, _reference_policy(settings, ref), trials, seed, score_fn, series
+    )
+    record = {
+        "t": t,
+        "accepted": outcome.accepted,
+        "source": outcome.source,
+        "score": _finite_or_none(outcome.score),
+        "matrix": outcome.transform.to_list() if outcome.accepted else None,
+        "candidate_scores": {k: _finite_or_none(v) for k, v in outcome.scores.items()},
+        "candidate_failures": outcome.failures,
+    }
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+    record_path.write_text(json.dumps(record))
+    return record
+
+
+def _load_pass(record: dict, transform_type: str, fallback: Transform) -> PassResult:
+    return PassResult(
         transform=(
             Transform(np.asarray(record["matrix"], dtype=float), transform_type=transform_type)
             if record["matrix"] is not None
@@ -933,6 +1088,16 @@ def _one_transform_per_timepoint(
     return out
 
 
+def _pass_report(outcome: PassResult) -> dict:
+    return {
+        "accepted": outcome.accepted,
+        "source": outcome.source,
+        "score": _finite_or_none(outcome.score),
+        "candidate_scores": {k: _finite_or_none(v) for k, v in outcome.scores.items()},
+        "candidate_failures": outcome.failures,
+    }
+
+
 def _report(result: SeriesResult, time_indices: list[int]) -> dict:
     return {
         "run_id": result.journal.current_run_id,
@@ -946,16 +1111,14 @@ def _report(result: SeriesResult, time_indices: list[int]) -> dict:
         "flagged": result.flagged,
         "repairs": {
             str(t): {
-                "accepted": r.accepted,
-                "source": r.source,
-                "score": _finite_or_none(r.score),
-                "candidate_scores": {k: _finite_or_none(v) for k, v in r.scores.items()},
-                "candidate_failures": r.failures,
+                **_pass_report(r),
                 "polish_rounds": r.polish_rounds,
                 "reseed_score": _finite_or_none(r.reseed_score),
             }
             for t, r in result.repairs.items()
         },
+        "sweeps": {str(t): _pass_report(r) for t, r in result.sweeps.items()},
+        "provenance": {str(t): source for t, source in sorted(result.provenance.items())},
         "filled_from_neighbour": [t for t in time_indices if t not in result.transforms],
     }
 
@@ -980,6 +1143,7 @@ def estimate_transform_series(
     output_dir.mkdir(parents=True, exist_ok=True)
     timepoints_dir = output_dir / "timepoints"
     repairs_dir = output_dir / "repairs"
+    sweeps_dir = output_dir / "sweeps"
     slurm_out_path = output_dir / "slurm_output"
     slurm_out_path.mkdir(exist_ok=True)
     source, target = Path(moving_position_dirpath), Path(reference_position_dirpath)
@@ -1074,18 +1238,14 @@ def estimate_transform_series(
 
     repair_settings = settings.fallback.repair
     flag = settings.fallback.flag
-    flagged = flag_series(
-        result,
-        max_timepoints=repair_settings.max_timepoints if repair_settings else None,
-        k_mad=flag.k_mad,
-        floor=flag.floor,
-        hard_fail=flag.hard_fail,
-    )
-    to_repair = (
-        [t for t in flagged if not (resume and (repairs_dir / f"{t}.json").exists())]
+    flagged = flag_series(result, k_mad=flag.k_mad, floor=flag.floor, hard_fail=flag.hard_fail)
+    base_scores = dict(result.scores)
+    repair_ts = (
+        cap_worst(flagged, base_scores, repair_settings.max_timepoints)
         if repair_settings is not None
         else []
     )
+    to_repair = [t for t in repair_ts if not (resume and (repairs_dir / f"{t}.json").exists())]
     executor.update_parameters(slurm_time=60, slurm_job_name="estimate_transform_repair")
     repair_records, _repair_failures = _run_jobs(
         executor,
@@ -1110,14 +1270,14 @@ def estimate_transform_series(
             for t in to_repair
         ],
     )
-    for t in flagged if repair_settings is not None else []:
+    for t in repair_ts:
         record = repair_records.get(t)
         if record is None:
             record_path = repairs_dir / f"{t}.json"
             if not record_path.exists():
                 continue
             record = json.loads(record_path.read_text())
-        outcome = _load_repair(record, transform_type, fallback=result.transforms.get(t, seed))
+        outcome = _load_pass(record, transform_type, fallback=result.transforms.get(t, seed))
         result.repairs[t] = outcome
         reseed_score = outcome.score if outcome.reseed_score is None else outcome.reseed_score
         result.journal.record(
@@ -1137,10 +1297,57 @@ def estimate_transform_series(
                 accepted=outcome.polish_rounds > 0,
             )
         if outcome.accepted:
-            result.transforms[t] = outcome.transform
-            result.scores[t] = outcome.score
-            result.errors.pop(t, None)
+            _accept(result, t, outcome.transform, outcome.score, outcome.source)
         click.echo(f"repair t={t}: {outcome.source} -> {outcome.score:.4f}")
+
+    # The sweep competes with repair rather than following it: it starts from each
+    # timepoint's pre-fallback estimate, and the better of the two is kept.
+    sweep_settings = settings.fallback.sweep
+    sweep_ts = (
+        cap_worst(flagged, base_scores, sweep_settings.max_timepoints)
+        if sweep_settings is not None
+        else []
+    )
+    to_sweep = [t for t in sweep_ts if not (resume and (sweeps_dir / f"{t}.json").exists())]
+    n_trials = len(settings.sweep_trials()) if sweep_settings is not None else 0
+    executor.update_parameters(
+        slurm_time=30 + 3 * n_trials, slurm_job_name="estimate_transform_sweep"
+    )
+    sweep_records, _sweep_failures = _run_jobs(
+        executor,
+        resolved_cluster,
+        monitor,
+        "sweep",
+        [
+            (
+                t,
+                _sweep_timepoint_job,
+                (source, target, settings_path, t, timepoints_dir, sweeps_dir / f"{t}.json"),
+            )
+            for t in to_sweep
+        ],
+    )
+    for t in sweep_ts:
+        record = sweep_records.get(t)
+        if record is None:
+            record_path = sweeps_dir / f"{t}.json"
+            if not record_path.exists():
+                continue
+            record = json.loads(record_path.read_text())
+        outcome = _load_pass(record, transform_type, fallback=result.transforms.get(t, seed))
+        result.journal.record(
+            t=t,
+            pass_name="sweep",
+            before_score=base_scores[t],
+            after_score=outcome.score,
+            accepted=outcome.accepted,
+            failures=outcome.failures,
+        )
+        _fold_sweep(result, t, outcome)
+        click.echo(
+            f"sweep t={t}: {outcome.source} -> {outcome.score:.4f}"
+            + ("" if result.provenance.get(t, "").startswith("sweep:") else " (not kept)")
+        )
 
     result.journal.save(output_dir / "run_journal.json")
     (output_dir / "estimate_transform_report.json").write_text(

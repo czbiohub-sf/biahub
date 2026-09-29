@@ -47,15 +47,12 @@ def transform_entries(
     entries = []
     for t, transform in zip(time_indices, transforms, strict=True):
         score = result.scores.get(t)
-        repair = result.repairs.get(t)
         entries.append(
             TransformEntry(
                 t=None if len(time_indices) == 1 else t,
                 matrix=transform.to_list(),
                 score=None if score is None or not np.isfinite(score) else float(score),
-                repaired_from=repair.source
-                if repair is not None and repair.accepted
-                else None,
+                repaired_from=result.provenance.get(t),
             )
         )
     return entries

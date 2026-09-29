@@ -439,3 +439,52 @@ def test_previous_reference_needs_contiguous_timepoints(drifting_plate, tmp_path
     config = _write_config(tmp_path, source="GFP", reference="previous", time_indices=[0, 2])
     with pytest.raises(Exception, match="contiguous"):
         _run(drifting_plate, config, tmp_path / "out" / "transforms.yml")
+
+
+def test_estimate_transform_sweep_runs_on_flagged_timepoints_and_resumes(
+    beads_plate_with_a_blank_timepoint, tmp_path, monkeypatch
+):
+    peaks = DetectPeaksSettings(
+        threshold_abs=100, nms_distance=4, min_distance=0, block_size=[8, 8, 8]
+    )
+    unified = EstimateTransformSettings(
+        moving=ChannelSettings(channel="GFP"),
+        reference=ReferenceSettings(frame="cross", channel="Phase3D"),
+        method="beads",
+        beads=BeadsMatchSettings(source_peaks_settings=peaks, target_peaks_settings=peaks),
+        fallback={
+            "repair": None,
+            "sweep": {
+                "grid": [{"beads.hungarian_match_settings.cost_threshold": [0.05, 0.2]}]
+            },
+        },
+    )
+    config = tmp_path / "unified.yml"
+    model_to_yaml(unified, config)
+    output = tmp_path / "out" / "transforms.yml"
+
+    _run(beads_plate_with_a_blank_timepoint, config, output)
+
+    report = json.loads((output.parent / "estimate_transform_report.json").read_text())
+    assert report["flagged"] == [2] and report["repairs"] == {}
+    swept = report["sweeps"]["2"]
+    # A blank frame: both trials fail, each by name, and nothing is kept.
+    assert swept["accepted"] is False
+    assert set(swept["candidate_failures"]) == {
+        "beads.hungarian_match_settings.cost_threshold=0.05",
+        "beads.hungarian_match_settings.cost_threshold=0.2",
+    }
+    assert report["provenance"] == {}
+    assert (output.parent / "sweeps" / "2.json").exists()
+    journal = json.loads((output.parent / "run_journal.json").read_text())
+    assert [(a["t"], a["pass_name"]) for a in journal["attempts"]] == [(2, "sweep")]
+
+    import biahub.registration.engine as engine
+
+    def _must_not_run(*args, **kwargs):
+        raise AssertionError("resume must reuse the sweep record")
+
+    monkeypatch.setattr(engine, "_sweep_timepoint_job", _must_not_run)
+    _run(beads_plate_with_a_blank_timepoint, config, output, resume=True)
+    resumed = json.loads((output.parent / "estimate_transform_report.json").read_text())
+    assert resumed["sweeps"] == report["sweeps"]
