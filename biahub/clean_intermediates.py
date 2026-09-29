@@ -67,7 +67,9 @@ STEP_RE = re.compile(r"^(\d+)-(flatfield|deskew|reconstruct|virtual-stain|assemb
 # in the order `concatenate` receives them as `-i` groups.
 DELETABLE = ["flatfield", "deskew", "reconstruct", "virtual-stain"]
 SOURCES = ["deskew", "reconstruct", "virtual-stain"]
-MARKER = "INTERMEDIATES_CLEANED.txt"
+# Beside nextflow/provenance.txt, at a fixed path: run_mantis_v2.sh looks for it,
+# so it cannot live under the (overridable) verify directory.
+MARKER = Path("nextflow") / "intermediates_cleaned.txt"
 DONE_STATUSES = {"COMPLETED", "CACHED"}
 
 
@@ -95,6 +97,13 @@ def _step_stores(output_dirpath: Path) -> dict[str, Path]:
 
 def _verify_dirpath(output_dirpath: Path, verify_dirpath: Path | None) -> Path:
     return verify_dirpath or output_dirpath / "nextflow" / "clean_intermediates"
+
+
+def _log_dirpath(output_dirpath: Path, verify_dirpath: Path | None) -> Path:
+    """SLURM logs, beside every other step's: nextflow/slurm_output/<step>/."""
+    if verify_dirpath:
+        return verify_dirpath / "slurm_output"
+    return output_dirpath / "nextflow" / "slurm_output" / "clean_intermediates"
 
 
 def _result_path(verify_dirpath: Path, position: str) -> Path:
@@ -441,8 +450,9 @@ def submit_verification(
     num_workers : int, optional
         Timepoints compared in parallel within a job. Default 8.
     verify_dirpath : Path, optional
-        Where results and job logs go. Default
-        ``<output_dirpath>/nextflow/clean_intermediates``.
+        Where results and job logs go. Default: results in
+        ``<output_dirpath>/nextflow/clean_intermediates``, logs in
+        ``<output_dirpath>/nextflow/slurm_output/clean_intermediates``.
     sbatch_filepath : str, optional
         SBATCH file overriding the default SLURM parameters.
     cluster : str, optional
@@ -491,7 +501,8 @@ def submit_verification(
 
     resolved_cluster = get_submitit_cluster(cluster=cluster)
     click.echo(f"Preparing jobs on cluster='{resolved_cluster}': {slurm_args}")
-    executor = submitit.AutoExecutor(folder=vdir / "slurm", cluster=resolved_cluster)
+    log_dirpath = _log_dirpath(output_dirpath, verify_dirpath)
+    executor = submitit.AutoExecutor(folder=log_dirpath, cluster=resolved_cluster)
     executor.update_parameters(**slurm_args)
 
     jobs = []
@@ -516,7 +527,7 @@ def submit_verification(
 
     click.echo(
         f"submitted {len(todo)} verify jobs ({jobs[0].job_id.split('_')[0]}), "
-        f"logs in {vdir / 'slurm'}; when they finish, run `status`"
+        f"logs in {log_dirpath}; when they finish, run `status`"
     )
     return jobs
 
@@ -728,8 +739,10 @@ def _verify_dirpath_option() -> click.Option:
         "--verify-dirpath",
         type=click.Path(file_okay=False, path_type=Path),
         default=None,
-        help="Where verify results and job logs go. "
-        "Default: <OUTPUT_DIRPATH>/nextflow/clean_intermediates.",
+        help="Where verify results and job logs go, for trying the command on a "
+        "project you should not write into. Default: results in "
+        "<OUTPUT_DIRPATH>/nextflow/clean_intermediates, logs in "
+        "<OUTPUT_DIRPATH>/nextflow/slurm_output/clean_intermediates.",
     )
 
 

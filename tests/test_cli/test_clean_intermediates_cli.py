@@ -7,7 +7,7 @@ import pytest
 from click.testing import CliRunner
 from iohub.ngff import open_ome_zarr
 
-from biahub.clean_intermediates import MARKER, _sample_timepoints
+from biahub.clean_intermediates import _sample_timepoints
 from biahub.cli.main import cli
 
 DS = "DS"
@@ -101,9 +101,11 @@ def test_verified_project_is_cleaned(project):
 
     assert _run("delete", project, "--yes").exit_code == 0
     assert _step_zarrs(project) == ["4-assemble"]
-    assert (project / MARKER).exists()
+    assert (project / "nextflow" / "intermediates_cleaned.txt").exists()
+    assert not list(project.glob("*.txt"))  # nothing written at the project root
     assert (project / "2-reconstruct" / "transfer_function.zarr").exists()
     assert all((project / step / "slurm_output").exists() for step in SOURCES)
+    assert list((project / "nextflow" / "slurm_output" / "clean_intermediates").iterdir())
 
 
 def test_changed_voxel_refuses_delete(project):

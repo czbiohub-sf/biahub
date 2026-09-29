@@ -109,8 +109,8 @@ INPUT_ZARR="${CONVERTED_ZARR:-${DATA_DIR}/${DATASET}/${RAW_STORE}}"
 # only while their cache entries match — if the output shows any of them
 # re-running (a changed process script or param, a cleaned nextflow/work),
 # stop the run: it will either fail on a missing store or recompute from raw.
-if [[ -f "${OUTPUT_DIR}/INTERMEDIATES_CLEANED.txt" ]]; then
-    echo "  WARNING: intermediates were deleted (see INTERMEDIATES_CLEANED.txt)." >&2
+if [[ -f "${OUTPUT_DIR}/nextflow/intermediates_cleaned.txt" ]]; then
+    echo "  WARNING: intermediates were deleted (see nextflow/intermediates_cleaned.txt)." >&2
     echo "  Only steps after assemble can run; flat-field..assemble must show as cached." >&2
 fi
 

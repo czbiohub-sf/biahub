@@ -505,7 +505,7 @@ have deleted, so the delete stays refused until it is fixed and re-verified.
 
 `delete --yes` renames each store to `*.deleting-<stamp>` before removing it,
 so a half-deleted store never looks valid; rerunning `delete --yes` finishes an
-interrupted delete. It writes `<OUTPUT>/INTERMEDIATES_CLEANED.txt`, and
+interrupted delete. It writes `<OUTPUT>/nextflow/intermediates_cleaned.txt`, and
 `run_mantis_v2.sh` warns when it sees that file. `-resume` still re-runs the
 steps after assemble (track, QC): flat-field through assemble come back
 CACHED, because their inputs are path strings and nothing opens the deleted
