@@ -40,3 +40,19 @@ def test_command_help(command: str):
     runner = CliRunner()
     result = runner.invoke(cli, [command, "--help"])
     assert result.exit_code == 0
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["nf", "clean-intermediates"],
+        ["nf", "clean-intermediates", "check"],
+        ["nf", "clean-intermediates", "submit"],
+        ["nf", "clean-intermediates", "status"],
+        ["nf", "clean-intermediates", "delete"],
+    ],
+)
+def test_nf_command_help(command: list[str]):
+    runner = CliRunner()
+    result = runner.invoke(cli, [*command, "--help"])
+    assert result.exit_code == 0
