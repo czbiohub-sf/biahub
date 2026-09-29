@@ -98,6 +98,11 @@ stripped (`dataset_name()` in `nextflow/modules/common.nf`). So if the input is
 `<DATASET>_1.ome.zarr`, every step writes `<DATASET>_1.zarr`. Build the
 `0-convert` plate under the clean name to keep the outputs clean.
 
+After `clean_intermediates.py` (SKILL.md §12), `0-flatfield/` through
+`3-virtual-stain/` hold only `slurm_output/` (and `2-reconstruct/` its
+`transfer_function.zarr`), and `INTERMEDIATES_CLEANED.txt` at the root records
+what was removed and how it was verified. Such a project cannot be resumed.
+
 Some older projects nest the step directories under a `1-preprocess/`
 subdirectory (e.g. `2026_05_27_A549_SEC61B_TOMM20_G3BP1_ZIKV`). That is a legacy
 layout — new runs put the step dirs directly under the project root.
