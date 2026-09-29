@@ -445,7 +445,7 @@ Restarts are always `bash ./run_mantis_v2.sh` — the script passes `-resume`.
 
 The flat-field, deskew, reconstruct and virtual-stain stores are tens of TB and
 nothing reads them once assemble is done (track and QC read only the assembled
-and tracking stores). `nextflow/scripts/clean_intermediates.py` deletes **only those
+and tracking stores). `biahub nf clean-intermediates` deletes **only those
 four `<DATASET>.zarr` stores**. Each step's `slurm_output/`,
 `2-reconstruct/transfer_function.zarr`, `nextflow/`, `qc/`, `configs/`, and the
 assembled and tracking stores all stay.
@@ -460,14 +460,13 @@ shapes prove nothing, because `concatenate --init` scaffolds the full-shape plat
 before any copy, and an unwritten or torn shard reads back as the fill value.
 
 ```bash
-PY=<BIAHUB>/.venv/bin/python
-T=<BIAHUB>/nextflow/scripts/clean_intermediates.py
-$PY $T check  <OUTPUT>        # metadata: stores, positions, geometry, trace.txt
-$PY $T submit <OUTPUT>        # SLURM array (preempted): pixel-compare every position
-                              #   add --timepoints 3 for first/middle/last only
-$PY $T status <OUTPUT>        # after `squeue` empties: pass / fail per position
-$PY $T delete <OUTPUT>        # dry run: lists what goes and why it is safe
-$PY $T delete <OUTPUT> --yes  # only after the user has read the dry run
+# with the biahub venv active (source <BIAHUB>/.venv/bin/activate)
+biahub nf clean-intermediates check  <OUTPUT>        # metadata: stores, positions, geometry, trace.txt
+biahub nf clean-intermediates submit <OUTPUT>        # one SLURM job per position (preempted, requeued)
+                                                     #   add --timepoints 3 for first/middle/last only
+biahub nf clean-intermediates status <OUTPUT>        # after the jobs finish: pass / fail per position
+biahub nf clean-intermediates delete <OUTPUT>        # dry run: lists what goes and why it is safe
+biahub nf clean-intermediates delete <OUTPUT> --yes  # only after the user has read the dry run
 ```
 
 What each gate refuses:
@@ -480,7 +479,7 @@ What each gate refuses:
   `trace.txt` (this catches a `--max_positions` smoke test); a last launch that
   is still running or failed (`.nextflow.log`). The WHOLE run must be over, not
   just assemble: tracking reads the assembled plate and QC writes tables into it.
-- `verify` (per position): every source volume, cast to the assembled dtype,
+- `submit` (one job per position): every source volume, cast to the assembled dtype,
   must equal the assembled volume voxel for voxel, NaN equal to NaN. Channels are
   matched by position in `-i` order, not by name, because `rename_channels.py`
   renames them. An unreadable volume (torn shard, checksum) counts as a failure.
