@@ -186,6 +186,31 @@ def _verify_summary(verify_dirpath: Path, positions: list[str]):
 # ----------------------------------------------------------------------------
 
 
+def already_cleaned(output_dirpath: Path) -> str | None:
+    """Say why there is nothing to clean, or None if there is.
+
+    Parameters
+    ----------
+    output_dirpath : Path
+        The mantis-v2 project root.
+
+    Returns
+    -------
+    str | None
+        A one-line reason (cleaned by this command, or by hand with no step
+        store left), or None when intermediates remain.
+    """
+    stores = _step_stores(output_dirpath)
+    if any(s in stores for s in DELETABLE):
+        return None
+    marker = output_dirpath / MARKER
+    if marker.exists():
+        first = marker.read_text().splitlines()[0].split()
+        when = first[1] if len(first) > 1 else "?"
+        return f"already cleaned on {when}, see {marker}: nothing to do"
+    return "no intermediate stores left: nothing to do"
+
+
 def check_intermediates(output_dirpath: Path) -> tuple[list[str], list[str], list[str]]:
     """Check, from metadata alone, that a project's intermediates may be verified.
 
@@ -464,6 +489,10 @@ def submit_verification(
         The submitted submitit jobs (empty when there was nothing to do).
     """
     output_dirpath = Path(output_dirpath)
+    reason = already_cleaned(output_dirpath)
+    if reason:
+        click.echo(reason)
+        return []
     errors, _, positions = check_intermediates(output_dirpath)
     if errors:
         raise click.ClickException(
@@ -637,6 +666,10 @@ def delete_intermediates(
         click.echo("done")
         return True
 
+    reason = already_cleaned(output_dirpath)
+    if reason:
+        click.echo(reason)
+        return True
     errors, warnings, positions = check_intermediates(output_dirpath)
     passed, failed, missing = _verify_summary(vdir, positions) if positions else ([], [], [])
     if failed:
@@ -767,6 +800,10 @@ def clean_intermediates_cli():
 @_output_dirpath()
 def check_cli(output_dirpath: Path):
     """Metadata checks only: stores, positions, geometry, trace.txt, run finished."""
+    reason = already_cleaned(output_dirpath)
+    if reason:
+        click.echo(reason)
+        return
     errors, warnings, positions = check_intermediates(output_dirpath)
     stores = _step_stores(output_dirpath)
     click.echo(f"output: {output_dirpath}")

@@ -1,4 +1,7 @@
 import os
+import shutil
+import subprocess
+import sys
 import time
 
 import numpy as np
@@ -196,7 +199,7 @@ def test_check_refuses_unassembled_position(project):
     assert "no finished run_concatenate" in check.output
 
 
-def test_check_refuses_channel_subset(project, tmp_path_factory):
+def test_check_refuses_channel_subset(project):
     store = project / "4-assemble" / f"{DS}.zarr"
     with open_ome_zarr(
         store, layout="hcs", mode="w", channel_names=["BF", "Phase3D"]
@@ -218,3 +221,47 @@ def test_interrupted_delete_is_finished(project):
     result = _run("delete", project, "--yes")
     assert result.exit_code == 0 and "interrupted delete" in result.output
     assert not list(project.glob("*-*/*.deleting-*"))
+
+
+def test_biahub_process_exit_codes(project):
+    """The command as a shell runs it: a real process, real exit codes."""
+
+    def biahub(*args):
+        return subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "biahub.cli.main",
+                "nf",
+                "clean-intermediates",
+                *map(str, args),
+            ],
+            capture_output=True,
+            text=True,
+        )
+
+    assert biahub("check", project).returncode == 0
+    assert biahub("delete", project, "--yes").returncode == 1  # nothing verified yet
+    assert biahub("submit", project, "--cluster", "debug").returncode == 0
+    assert biahub("status", project).returncode == 0
+    result = biahub("delete", project, "--yes")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _step_zarrs(project) == ["4-assemble"]
+
+
+def test_cleaned_project_has_nothing_to_do(project):
+    _run("submit", project, "--cluster", "debug")
+    assert _run("delete", project, "--yes").exit_code == 0
+    for command in [("check",), ("submit", "--cluster", "debug"), ("delete", "--yes")]:
+        result = _run(command[0], project, *command[1:])
+        assert result.exit_code == 0
+        assert "already cleaned on" in result.output
+    assert "verified 2/2 pass" in _run("status", project).output
+
+
+def test_hand_cleaned_project_has_nothing_to_do(project):
+    for step in SOURCES:
+        shutil.rmtree(project / step / f"{DS}.zarr")
+    result = _run("delete", project, "--yes")
+    assert result.exit_code == 0
+    assert "no intermediate stores left" in result.output
