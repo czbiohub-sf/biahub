@@ -785,12 +785,17 @@ RepairCandidate = Literal["t-1", "t+1", "consensus", "seed"]
 
 
 class RepairSettings(MyBaseModel):
-    """Repair pass over flagged timepoints: candidate seeds in the order they are tried."""
+    """Repair pass over flagged timepoints: candidate seeds in the order they are tried.
+
+    `polish_rounds`: after a candidate is accepted, re-estimate seeded from it up to this
+    many times, keeping a round only on a strict score gain (0 disables).
+    """
 
     candidates: list[RepairCandidate] = ["t-1", "t+1", "consensus", "seed"]
     consensus_threshold: float = 0.75
     consensus_min_good: int = 5
     max_timepoints: int | None = None
+    polish_rounds: NonNegativeInt = 3
 
 
 class FallbackSettings(MyBaseModel):

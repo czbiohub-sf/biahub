@@ -316,6 +316,8 @@ class RepairResult:
     source: str  # name of the winning candidate, or "unchanged"
     scores: dict[str, float] = field(default_factory=dict)  # every candidate that ran
     failures: dict[str, str] = field(default_factory=dict)  # candidate -> "Type: message"
+    polish_rounds: int = 0  # polish rounds that improved the accepted candidate
+    reseed_score: float | None = None  # the accepted candidate's score before polish
 
 
 def repair(
@@ -375,6 +377,45 @@ def repair(
         scores=scores,
         failures=failures,
     )
+
+
+def polish(
+    t: int,
+    mov: ArrayLike,
+    ref: ArrayLike,
+    estimator: TransformEstimator,
+    transform: Transform,
+    score: float,
+    score_fn: Callable[[Transform], float],
+    rounds: int,
+    journal: RunJournal | None = None,
+) -> tuple[Transform, float, int]:
+    """Re-seed the estimator from `transform` and refine again, up to `rounds` times.
+
+    Repair candidates are coarse seeds and detection runs in the seed-warped space, so an
+    estimate seeded from the accepted transform sees better nodes than the one that
+    produced it. A round is kept only on a strict score gain; the first round that fails
+    to improve (or raises) ends the pass. Returns (transform, score, improving rounds).
+    """
+    before, improved = score, 0
+    for _ in range(rounds):
+        try:
+            candidate = estimator.estimate(mov, ref, seed=transform)
+            candidate_score = score_fn(candidate)
+        except Exception:  # noqa: BLE001 -- a failed round keeps the accepted transform
+            break
+        if candidate_score is None or not candidate_score > score:
+            break
+        transform, score, improved = candidate, candidate_score, improved + 1
+    if journal is not None and rounds:
+        journal.record(
+            t=t,
+            pass_name="polish",
+            before_score=before,
+            after_score=score,
+            accepted=improved > 0,
+        )
+    return transform, score, improved
 
 
 @dataclass
@@ -467,8 +508,9 @@ def repair_timepoint(
     score_fn: ScoreFn,
     result: SeriesResult,
     candidates: RepairCandidates,
+    polish_rounds: int = 0,
 ) -> RepairResult:
-    """Offer one flagged timepoint to `repair` and fold an accepted result back in.
+    """Offer one flagged timepoint to `repair`, `polish` an accepted result, fold it in.
 
     A timepoint whose estimate failed has no current transform, so any candidate with a
     finite score is an improvement for it.
@@ -487,6 +529,21 @@ def repair_timepoint(
         score_fn=lambda transform, m=mov_t, r=ref_t: score_fn(transform, m, r),
         journal=result.journal,
     )
+    if outcome.accepted and polish_rounds:
+        outcome.reseed_score = outcome.score
+        outcome.transform, outcome.score, outcome.polish_rounds = polish(
+            t,
+            mov_t,
+            ref_t,
+            estimator,
+            outcome.transform,
+            outcome.score,
+            lambda transform, m=mov_t, r=ref_t: score_fn(transform, m, r),
+            polish_rounds,
+            journal=result.journal,
+        )
+        if outcome.polish_rounds:
+            outcome.source += f"+polish{outcome.polish_rounds}"
     result.repairs[t] = outcome
     if outcome.accepted:
         result.transforms[t] = outcome.transform
@@ -504,13 +561,16 @@ def repair_series(
     candidates: RepairCandidates,
     max_timepoints: int | None = None,
     on_timepoint: OnTimepoint | None = None,
+    polish_rounds: int = 0,
 ) -> SeriesResult:
     """Flag attempted timepoints and offer each to `repair`, in-process and in order.
 
     Unflagged timepoints are never touched.
     """
     for t in flag_series(result, max_timepoints):
-        repair_timepoint(t, mov, reference_policy, estimator, score_fn, result, candidates)
+        repair_timepoint(
+            t, mov, reference_policy, estimator, score_fn, result, candidates, polish_rounds
+        )
         if on_timepoint is not None:
             on_timepoint(t, result)
     return result
@@ -784,6 +844,7 @@ def _repair_timepoint_job(
             consensus_min_good=repair_settings.consensus_min_good,
             order=tuple(repair_settings.candidates),
         ),
+        polish_rounds=repair_settings.polish_rounds,
     )
     record = {
         "t": t,
@@ -793,6 +854,8 @@ def _repair_timepoint_job(
         "matrix": outcome.transform.to_list() if outcome.accepted else None,
         "candidate_scores": {k: _finite_or_none(v) for k, v in outcome.scores.items()},
         "candidate_failures": outcome.failures,
+        "polish_rounds": outcome.polish_rounds,
+        "reseed_score": _finite_or_none(outcome.reseed_score),
     }
     record_path.parent.mkdir(parents=True, exist_ok=True)
     record_path.write_text(json.dumps(record))
@@ -814,6 +877,8 @@ def _load_repair(record: dict, transform_type: str, fallback: Transform) -> Repa
             for k, v in record["candidate_scores"].items()
         },
         failures=record["candidate_failures"],
+        polish_rounds=record.get("polish_rounds", 0),
+        reseed_score=record.get("reseed_score"),
     )
 
 
@@ -886,6 +951,8 @@ def _report(result: SeriesResult, time_indices: list[int]) -> dict:
                 "score": _finite_or_none(r.score),
                 "candidate_scores": {k: _finite_or_none(v) for k, v in r.scores.items()},
                 "candidate_failures": r.failures,
+                "polish_rounds": r.polish_rounds,
+                "reseed_score": _finite_or_none(r.reseed_score),
             }
             for t, r in result.repairs.items()
         },
@@ -1052,14 +1119,23 @@ def estimate_transform_series(
             record = json.loads(record_path.read_text())
         outcome = _load_repair(record, transform_type, fallback=result.transforms.get(t, seed))
         result.repairs[t] = outcome
+        reseed_score = outcome.score if outcome.reseed_score is None else outcome.reseed_score
         result.journal.record(
             t=t,
             pass_name="repair",
             before_score=result.scores[t],
-            after_score=outcome.score,
+            after_score=reseed_score,
             accepted=outcome.accepted,
             failures=outcome.failures,
         )
+        if outcome.reseed_score is not None:
+            result.journal.record(
+                t=t,
+                pass_name="polish",
+                before_score=reseed_score,
+                after_score=outcome.score,
+                accepted=outcome.polish_rounds > 0,
+            )
         if outcome.accepted:
             result.transforms[t] = outcome.transform
             result.scores[t] = outcome.score

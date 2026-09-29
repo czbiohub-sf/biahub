@@ -1,9 +1,12 @@
 import numpy as np
+import pytest
 
 from biahub.core.transform import Transform
 from biahub.registration.engine import (
+    RunJournal,
     estimate_series,
     neighbour_consensus_config_candidates,
+    polish,
     repair_series,
 )
 from biahub.registration.estimators import EstimationError
@@ -225,3 +228,79 @@ def test_neighbour_consensus_config_candidates_skips_flagged_neighbours():
 
     first = factory(0, history, scores, flagged={0})
     assert list(first) == ["t+1", "consensus_full", "config_seed"]
+
+
+class _StepEstimator:
+    """Moves the seed's x translation one step towards `target` per call."""
+
+    def __init__(self, target: float):
+        self.target = target
+        self.calls = 0
+
+    def estimate(self, mov, ref, seed=None):
+        self.calls += 1
+        x = seed.translation[0]
+        return Transform.from_translation([min(x + 1.0, self.target), 0.0, 0.0])
+
+
+def _score_by_x(transform):
+    return float(transform.translation[0])
+
+
+def test_polish_keeps_improving_rounds_and_stops_at_the_first_flat_one():
+    estimator = _StepEstimator(target=2.0)
+    start = Transform.from_translation([0.0, 0.0, 0.0])
+    journal = RunJournal()
+
+    transform, score, rounds = polish(
+        3, None, None, estimator, start, 0.0, _score_by_x, rounds=5, journal=journal
+    )
+
+    assert (score, rounds) == (2.0, 2)
+    assert transform.translation[0] == 2.0
+    assert estimator.calls == 3, "the third round did not improve, so polish stops there"
+    assert journal.accepted_this_run(3, pass_name="polish")
+
+
+def test_polish_is_capped_and_a_raising_round_keeps_the_accepted_transform():
+    start = Transform.from_translation([0.0, 0.0, 0.0])
+    capped = polish(0, None, None, _StepEstimator(9.0), start, 0.0, _score_by_x, rounds=1)
+    assert capped[1:] == (1.0, 1)
+
+    class _Raises:
+        def estimate(self, mov, ref, seed=None):
+            raise EstimationError("too few matches")
+
+    transform, score, rounds = polish(0, None, None, _Raises(), start, 0.5, _score_by_x, 3)
+    assert transform is start and (score, rounds) == (0.5, 0)
+
+
+def test_repair_series_polishes_only_accepted_repairs():
+    mov = _constant_frames(8)
+
+    def score(transform, mov_t, ref_t):
+        if round(float(mov_t.mean())) != 5:
+            return 0.9
+        return 0.2 + 0.1 * transform.translation[0]
+
+    result = estimate_series(
+        mov, FixedFrame(0), _StepEstimator(3.0), FixedSeed(IDENTITY), score, range(8)
+    )
+    result.transforms = {t: IDENTITY for t in result.transforms}
+    result.scores[5] = 0.2
+    result = repair_series(
+        mov,
+        FixedFrame(0),
+        _StepEstimator(3.0),
+        score,
+        result,
+        candidates=lambda t, history, scores, flagged: {"fix": FixedSeed(IDENTITY)},
+        polish_rounds=3,
+    )
+
+    repair = result.repairs[5]
+    assert repair.accepted and repair.reseed_score == pytest.approx(0.3)
+    assert repair.polish_rounds == 2 and repair.source == "fix+polish2"
+    assert result.scores[5] == pytest.approx(0.5)
+    assert result.transforms[5].translation[0] == 3.0
+    assert list(result.repairs) == [5]
