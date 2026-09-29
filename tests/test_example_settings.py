@@ -91,8 +91,17 @@ def test_all_example_settings_tested():
     )
 
 
+def _write_config_with_ckpt(src: Path, dst: Path, ckpt_path: Path) -> Path:
+    with open(src) as file:
+        config = yaml.safe_load(file)
+    config["ckpt_path"] = str(ckpt_path)
+    with open(dst, "w") as file:
+        yaml.safe_dump(config, file)
+    return dst
+
+
 @pytest.mark.parametrize("path", jsonargparse_settings_files)
-def test_example_jsonargparse_settings(path):
+def test_example_jsonargparse_settings(path, tmp_path):
     # These configs are validated against VisCy's VSUNet/HCSDataModule classes,
     # which require the optional `stain` extra (cytoland).
     if not cytoland_available:
@@ -100,8 +109,31 @@ def test_example_jsonargparse_settings(path):
 
     from biahub.virtual_stain import load_predict_config
 
+    # The example's checkpoint only exists on the cluster; point ckpt_path at a
+    # stand-in file so the schema validates anywhere.
+    ckpt_path = tmp_path / "model.ckpt"
+    ckpt_path.touch()
+    config_path = _write_config_with_ckpt(
+        settings_files_dir / path, tmp_path / path, ckpt_path
+    )
+
     # data_path is injected per position at runtime; any placeholder validates.
-    load_predict_config(settings_files_dir / path, Path("/placeholder.zarr/A/1/0"))
+    load_predict_config(config_path, Path("/placeholder.zarr/A/1/0"))
+
+
+def test_virtual_stain_missing_ckpt_path(tmp_path):
+    if not cytoland_available:
+        pytest.skip("cytoland not installed; skipping VisCy-config validation.")
+
+    from biahub.virtual_stain import load_predict_config
+
+    config_path = _write_config_with_ckpt(
+        settings_files_dir / "example_virtual_stain_settings.yml",
+        tmp_path / "virtual_stain.yml",
+        tmp_path / "missing.ckpt",
+    )
+    with pytest.raises(FileNotFoundError, match="missing.ckpt"):
+        load_predict_config(config_path, Path("/placeholder.zarr/A/1/0"))
 
 
 @pytest.mark.parametrize("path,settings_cls", example_settings_params)

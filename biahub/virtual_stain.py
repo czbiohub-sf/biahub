@@ -81,6 +81,12 @@ def load_predict_config(config_filepath: Path, data_path: Path):
     -------
     tuple
         ``(parser, cfg)`` where ``cfg`` is the validated config namespace.
+
+    Raises
+    ------
+    FileNotFoundError
+        If ``ckpt_path`` does not point to an existing file. Checked here so a
+        stale path fails at submit time rather than on the GPU node.
     """
     parser = build_predict_parser()
     cfg = parser.parse_args(
@@ -91,6 +97,11 @@ def load_predict_config(config_filepath: Path, data_path: Path):
             str(data_path),
         ]
     )
+    if not Path(cfg.ckpt_path).is_file():
+        raise FileNotFoundError(
+            f"ckpt_path does not exist or is not a file: {cfg.ckpt_path} "
+            f"(from {config_filepath})"
+        )
     return parser, cfg
 
 
