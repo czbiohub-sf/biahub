@@ -442,7 +442,7 @@ Restarts are always `bash ./run_mantis_v2.sh` — the script passes `-resume`.
 
 The flat-field, deskew, reconstruct and virtual-stain stores are tens of TB and
 nothing reads them once assemble is done (track and QC read only the assembled
-and tracking stores). `templates/clean_intermediates.py` deletes **only those
+and tracking stores). `nextflow/scripts/clean_intermediates.py` deletes **only those
 four `<DATASET>.zarr` stores**. Each step's `slurm_output/`,
 `2-reconstruct/transfer_function.zarr`, `nextflow/`, `qc/`, `configs/`, and the
 assembled and tracking stores all stay.
@@ -454,7 +454,7 @@ before any copy, and an unwritten or torn shard reads back as the fill value.
 
 ```bash
 PY=<BIAHUB>/.venv/bin/python
-T=<BIAHUB>/.claude/skills/reconstruct-with-nextflow/templates/clean_intermediates.py
+T=<BIAHUB>/nextflow/scripts/clean_intermediates.py
 $PY $T check  <OUTPUT>        # metadata: stores, positions, geometry, trace.txt
 $PY $T submit <OUTPUT>        # SLURM array (preempted): pixel-compare every position
 $PY $T status <OUTPUT>        # after `squeue` empties: pass / fail per position

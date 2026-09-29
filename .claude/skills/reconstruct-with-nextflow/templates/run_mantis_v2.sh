@@ -103,7 +103,7 @@ INPUT_ZARR="${CONVERTED_ZARR:-${DATA_DIR}/${DATASET}/${RAW_STORE}}"
 [[ -d "${INPUT_ZARR}" ]] || { echo "input not found: ${INPUT_ZARR}" >&2; exit 1; }
 [[ -d "${CONFIGS}"    ]] || { echo "configs not found: ${CONFIGS}"  >&2; exit 1; }
 
-# clean_intermediates.py deleted the flat-field/deskew/reconstruct/virtual-stain
+# nextflow/scripts/clean_intermediates.py deleted the flat-field/deskew/reconstruct/virtual-stain
 # stores. -resume still works for the steps after assemble (track, QC): the steps
 # up to assemble come back CACHED and never open the deleted stores. That holds
 # only while their cache entries match — if the output shows any of them

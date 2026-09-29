@@ -14,7 +14,7 @@ provenance), the assembled and tracking stores, QC.
 Run with the biahub venv's python (needs iohub + numpy)::
 
     PY=<BIAHUB>/.venv/bin/python
-    T=<BIAHUB>/.claude/skills/reconstruct-with-nextflow/templates/clean_intermediates.py
+    T=<BIAHUB>/nextflow/scripts/clean_intermediates.py
 
     $PY $T check  <OUTPUT>             # metadata checks, head node, seconds
     $PY $T submit <OUTPUT>             # SLURM array: pixel-verify every position
