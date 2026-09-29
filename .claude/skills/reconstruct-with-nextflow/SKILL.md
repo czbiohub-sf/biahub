@@ -9,8 +9,9 @@ description: >-
   acquisition under /hpc/instruments/cm.mantis, picks the output project
   directory, scaffolds configs, launches the run in a tmux session in the
   foreground so it can be watched, recovers from Lustre/torn-shard I/O errors,
-  and reports a summary including the QC verdict. On request, deletes the
-  intermediate step stores after pixel-verifying the assembled plate. Use when
+  and reports a summary including the QC verdict. Every run ends by
+  pixel-verifying the assembled plate and, once the user confirms, deleting the
+  intermediate step stores. Use when
   asked to "reconstruct", "run the pipeline on", or "process" a named mantis-v2
   dataset, or to "clean the intermediates" of a finished run.
 ---
@@ -437,8 +438,10 @@ Restarts are always `bash ./run_mantis_v2.sh` — the script passes `-resume`.
    verification, and size on disk.
 6. Flag anything needing a human eye: positions that passed only after many
    retries, steps far slower than the reference run, unexpected channel counts.
+7. Clean the intermediates (§12). This is part of every run, not optional
+   follow-up: verify, show the dry run, delete on the user's yes.
 
-## 12. Clean intermediates — only when the user asks
+## 12. Clean intermediates — every run, delete on confirmation
 
 The flat-field, deskew, reconstruct and virtual-stain stores are tens of TB and
 nothing reads them once assemble is done (track and QC read only the assembled
@@ -447,8 +450,12 @@ four `<DATASET>.zarr` stores**. Each step's `slurm_output/`,
 `2-reconstruct/transfer_function.zarr`, `nextflow/`, `qc/`, `configs/`, and the
 assembled and tracking stores all stay.
 
-Offer it at wrap-up; never run the delete unprompted. It is irreversible, so
-every step is gated on proof that the assembled plate holds the pixels. Matching
+Do this at the end of EVERY run, once the whole pipeline (track and QC
+included) has finished: run `check`, `submit` and `status` without asking, then
+show the user the `delete` dry run and ask before `delete --yes`. Ask whether
+to verify all timepoints or a sample (`--timepoints 3`) when you submit, and
+say which in the wrap-up. The delete is irreversible, so every step is gated
+on proof that the assembled plate holds the pixels. Matching
 shapes prove nothing, because `concatenate --init` scaffolds the full-shape plate
 before any copy, and an unwritten or torn shard reads back as the fill value.
 
