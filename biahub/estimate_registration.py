@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import click
-import numpy as np
 
 from iohub import open_ome_zarr
 
@@ -13,7 +12,8 @@ from biahub.cli.parsing import (
     source_position_dirpaths,
     target_position_dirpaths,
 )
-from biahub.registration.manual import user_assisted_registration
+from biahub.estimate_transform import estimate_transform_series
+from biahub.registration.legacy import legacy_pull_from_forward
 from biahub.registration.utils import evaluate_transforms, plot_translations
 from biahub.settings import (
     EstimateRegistrationSettings,
@@ -79,84 +79,28 @@ def estimate_registration(
     click.echo(f"Target channel: {target_channel_name}")
     click.echo(f"Source channel: {source_channel_name}")
 
-    with open_ome_zarr(source_position_dirpaths[0], mode="r") as source_channel_position:
-        source_channels = source_channel_position.channel_names
-        source_channel_index = source_channels.index(source_channel_name)
-        source_channel_name = source_channels[source_channel_index]
-        source_data = source_channel_position.data.dask_array()
-        source_channel_data = source_data[:, source_channel_index]
-        source_channel_voxel_size = source_channel_position.scale[-3:]
-
-    with open_ome_zarr(target_position_dirpaths[0], mode="r") as target_channel_position:
-        target_channels = target_channel_position.channel_names
-        target_channel_index = target_channels.index(target_channel_name)
-        target_channel_name = target_channels[target_channel_index]
-        target_data = target_channel_position.data.dask_array()
-        target_channel_data = target_data[:, target_channel_index]
-        voxel_size = target_channel_position.scale
-        target_channel_voxel_size = voxel_size[-3:]
+    with open_ome_zarr(source_position_dirpaths[0], mode="r") as source_position:
+        source_channel_names = source_position.channel_names
+        source_channel_data = source_position.data.dask_array()[
+            :, source_channel_names.index(source_channel_name)
+        ]
+    with open_ome_zarr(target_position_dirpaths[0], mode="r") as target_position:
+        voxel_size = target_position.scale
 
     # Run locally or submit to SLURM
     cluster = get_submitit_cluster(local)
     eval_transform_settings = settings.eval_transform_settings
 
-    if settings.estimation_method == "beads":
-        from biahub.estimate_transform import estimate_transform_series
-        from biahub.registration.legacy import legacy_pull_from_forward
-
-        _result, _time_indices, forward_transforms = estimate_transform_series(
-            source_position_dirpaths[0],
-            target_position_dirpaths[0],
-            settings,
-            output_dir,
-            sbatch_filepath=sbatch_filepath,
-            cluster=cluster,
-            reference_kind="cross",
-        )
-        transforms = [legacy_pull_from_forward(transform) for transform in forward_transforms]
-
-    elif settings.estimation_method == "ants":
-        from biahub.registration.ants import estimate_tczyx
-
-        transforms = estimate_tczyx(
-            mov_tczyx=source_data,
-            ref_tczyx=target_data,
-            mov_channel_index=source_channel_index,
-            ref_channel_index=target_channel_index,
-            ants_registration_settings=settings.ants_registration_settings,
-            affine_transform_settings=settings.affine_transform_settings,
-            sbatch_filepath=sbatch_filepath,
-            cluster=cluster,
-            verbose=settings.verbose,
-            output_folder_path=output_dir,
-        )
-
-    elif settings.estimation_method == "manual":
-        transforms = user_assisted_registration(
-            source_channel_volume=np.asarray(
-                source_channel_data[settings.manual_registration_settings.time_index]
-            ),
-            source_channel_name=source_channel_name,
-            source_channel_voxel_size=source_channel_voxel_size,
-            target_channel_volume=np.asarray(
-                target_channel_data[settings.manual_registration_settings.time_index]
-            ),
-            target_channel_name=target_channel_name,
-            target_channel_voxel_size=target_channel_voxel_size,
-            similarity=(
-                True
-                if settings.affine_transform_settings.transform_type == "similarity"
-                else False
-            ),
-            pre_affine_90degree_rotation=settings.manual_registration_settings.affine_90degree_rotation,
-            pre_affine_fliplr=settings.manual_registration_settings.affine_fliplr,
-        )
-
-    else:
-        raise ValueError(
-            f"Unknown estimation method: {settings.estimation_method}. "
-            "Supported methods are 'beads', 'ants', and 'manual'."
-        )
+    _result, _time_indices, forward_transforms = estimate_transform_series(
+        source_position_dirpaths[0],
+        target_position_dirpaths[0],
+        settings,
+        output_dir,
+        sbatch_filepath=sbatch_filepath,
+        cluster=cluster,
+        reference_kind="cross",
+    )
+    transforms = [legacy_pull_from_forward(transform) for transform in forward_transforms]
 
     if len(transforms) == 1:
         if eval_transform_settings:

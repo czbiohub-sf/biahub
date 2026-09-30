@@ -1,6 +1,5 @@
 import json
 
-import click
 import numpy as np
 import pytest
 
@@ -14,6 +13,8 @@ from biahub.settings import (
     BeadsMatchSettings,
     DetectPeaksSettings,
     EstimateRegistrationSettings,
+    ManualRegistrationSettings,
+    PhaseCrossCorrSettings,
     RegistrationSettings,
     StabilizationSettings,
 )
@@ -180,12 +181,6 @@ def test_estimate_transform_flags_and_tries_to_repair_a_failed_timepoint(
     )
 
 
-def test_estimate_transform_rejects_non_beads_methods(beads_plate, tmp_path):
-    config = _write_config(tmp_path, estimation_method="manual")
-    with pytest.raises(click.UsageError, match="'beads'"):
-        _run(beads_plate, config, tmp_path / "out.yml")
-
-
 def test_estimate_transform_ants_method_recovers_the_shift(beads_plate, tmp_path):
     output = tmp_path / "out" / "registration_settings.yml"
     config = _write_config(
@@ -273,3 +268,61 @@ def test_estimate_registration_beads_path_runs_through_the_engine(beads_plate, t
         np.asarray(model.affine_transform_zyx_list[1])[:3, 3], APPLIED_SHIFT_ZYX, atol=0.5
     )
     assert (output.parent / "estimate_transform_report.json").exists()
+
+
+def test_estimate_transform_phase_cross_corr_stabilizes_against_the_first_frame(
+    drifting_plate, tmp_path
+):
+    output = tmp_path / "out" / "stabilization_settings.yml"
+    config = _write_config(
+        tmp_path,
+        source_channel_name="GFP",
+        target_channel_name="GFP",
+        estimation_method="phase-cross-corr",
+        phase_cross_corr_settings=PhaseCrossCorrSettings(
+            t_reference="first", center_crop_xy=[40, 40]
+        ),
+        affine_transform_settings=AffineTransformSettings(transform_type="euclidean"),
+    )
+
+    _run(drifting_plate, config, output)
+
+    model = yaml_to_model(output, StabilizationSettings)
+    assert model.stabilization_method == "phase-cross-corr"
+    for matrix, factor in zip(model.affine_transform_zyx_list, [0, 1, 2], strict=True):
+        np.testing.assert_allclose(
+            np.asarray(matrix)[:3, 3], [factor * s for s in APPLIED_SHIFT_ZYX], atol=0.5
+        )
+
+
+def test_estimate_transform_manual_runs_in_process_on_one_timepoint(
+    beads_plate, tmp_path, monkeypatch
+):
+    pull = np.eye(4)
+    pull[:3, 3] = APPLIED_SHIFT_ZYX  # the annotation tool returns the pull matrix
+    calls = []
+
+    def fake_user_assisted_registration(**kwargs):
+        calls.append(kwargs)
+        return (pull,)
+
+    monkeypatch.setattr(
+        "biahub.registration.estimators.user_assisted_registration",
+        fake_user_assisted_registration,
+    )
+    output = tmp_path / "out" / "registration_settings.yml"
+    config = _write_config(
+        tmp_path,
+        estimation_method="manual",
+        manual_registration_settings=ManualRegistrationSettings(
+            time_index=1, affine_90degree_rotation=1
+        ),
+    )
+
+    estimate_transform([beads_plate], [beads_plate], config, output, cluster="slurm")
+
+    assert len(calls) == 1 and calls[0]["pre_affine_90degree_rotation"] == 1
+    model = yaml_to_model(output, RegistrationSettings)
+    np.testing.assert_allclose(
+        np.asarray(model.affine_transform_zyx)[:3, 3], APPLIED_SHIFT_ZYX
+    )

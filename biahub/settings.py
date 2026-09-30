@@ -333,7 +333,7 @@ class AntsRegistrationSettings(MyBaseModel):
     """Settings for the ANTs registration backend.
 
     Field names and defaults mirror the keyword arguments of
-    ``biahub.registration.ants.preprocess_czyx``, which is what consumes them.
+    ``biahub.registration.ants.preprocess_zyx``, which is what consumes them.
 
     Attributes
     ----------
@@ -367,7 +367,7 @@ class AntsRegistrationSettings(MyBaseModel):
     @field_validator("ref_mask_radius")
     @classmethod
     def check_ref_mask_radius(cls, v):
-        # preprocess_czyx raises on this too, but only after the data is
+        # preprocess_zyx raises on this too, but only after the data is
         # loaded -- catching it at config-parse time is much cheaper.
         if v is not None and not (0 < v <= 1):
             raise ValueError(
@@ -385,8 +385,9 @@ class ManualRegistrationSettings(MyBaseModel):
 class EstimateRegistrationSettings(MyBaseModel):
     target_channel_name: str
     source_channel_name: str
-    estimation_method: Literal["manual", "beads", "ants"] = "manual"
+    estimation_method: Literal["manual", "beads", "ants", "phase-cross-corr"] = "manual"
     beads_match_settings: BeadsMatchSettings | None = None
+    phase_cross_corr_settings: PhaseCrossCorrSettings | None = None
     focus_finding_settings: FocusFindingSettings | None = None
     affine_transform_settings: AffineTransformSettings = Field(
         default_factory=AffineTransformSettings
@@ -405,6 +406,11 @@ class EstimateRegistrationSettings(MyBaseModel):
             self.beads_match_settings = BeadsMatchSettings()
         elif self.estimation_method == "ants" and self.ants_registration_settings is None:
             self.ants_registration_settings = AntsRegistrationSettings()
+        elif (
+            self.estimation_method == "phase-cross-corr"
+            and self.phase_cross_corr_settings is None
+        ):
+            self.phase_cross_corr_settings = PhaseCrossCorrSettings()
         return self
 
 
