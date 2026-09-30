@@ -27,6 +27,7 @@ from biahub.registration.beads import (
     transform_from_matches,
 )
 from biahub.registration.manual import user_assisted_registration
+from biahub.registration.metrics import normalized_mutual_information, residual_score
 from biahub.registration.phase_cross_correlation import (
     phase_cross_corr,
     phase_cross_corr_padding,
@@ -96,6 +97,22 @@ NodeMatcher = Callable[
 ]  # (mov_nodes, ref_nodes) -> (N, 2)
 
 
+def beads_score_fn(beads_match_settings: BeadsMatchSettings) -> ScoreFn:
+    """Build the score function the beads settings ask for (`qc_settings.score_metric`)."""
+    metric = beads_match_settings.qc_settings.score_metric
+    if metric == "overlap":
+        return lambda transform, mov, ref: score_transform(
+            transform, mov, ref, beads_match_settings
+        )
+    if metric == "residual":
+        return lambda transform, mov, ref: residual_score(
+            transform, mov, ref, beads_match_settings
+        )
+    if metric == "mutual_information":
+        return normalized_mutual_information
+    raise ValueError(f"unknown score_metric {metric!r}")
+
+
 class NodeGraphEstimator:
     """TransformEstimator over matched point correspondences.
 
@@ -151,8 +168,7 @@ class NodeGraphEstimator:
             beads_match_settings.qc_settings.iterations if iterations is None else iterations
         )
 
-        def score_fn(transform: Transform, mov: np.ndarray, ref: np.ndarray) -> float:
-            return score_transform(transform, mov, ref, beads_match_settings)
+        score_fn = beads_score_fn(beads_match_settings)
 
         def node_graph(settings: BeadsMatchSettings, n_iterations: int) -> NodeGraphEstimator:
             return cls(
