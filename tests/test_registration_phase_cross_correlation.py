@@ -3,8 +3,8 @@ import numpy as np
 from scipy.ndimage import shift as ndi_shift
 
 from biahub.core.transform import Transform
-from biahub.register import apply_affine_transform
 from biahub.registration.phase_cross_correlation import get_tform_from_pcc
+from biahub.registration.utils import apply_affine_transform
 
 
 def _synthetic_blob_volume(rng, shape, n_blobs=12, sigma=3.0, noise_std=5.0):
