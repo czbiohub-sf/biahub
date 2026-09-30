@@ -17,7 +17,42 @@ from numpy.typing import ArrayLike
 from biahub.core.transform import Transform
 from biahub.registration.estimators import TransformEstimator
 from biahub.registration.run_journal import RunJournal
-from biahub.registration.seed_policy import SeedPolicy
+from biahub.registration.seed_policy import ConsensusSeed, FixedSeed, SeedPolicy
+
+# (t, history, scores, flagged) -> named candidate seed policies for timepoint t
+RepairCandidates = Callable[
+    [int, dict[int, Transform], dict[int, float], set[int]], dict[str, SeedPolicy]
+]
+
+
+def neighbour_consensus_config_candidates(
+    config_seed: Transform,
+    consensus_score_threshold: float = 0.75,
+    consensus_min_good: int = 5,
+) -> RepairCandidates:
+    """Build the production repair candidate set.
+
+    In order: non-flagged neighbours (t-1, t+1), the run's consensus geometry, then the
+    config seed as a last resort.
+    """
+
+    def candidates(
+        t: int, history: dict[int, Transform], scores: dict[int, float], flagged: set[int]
+    ) -> dict[str, SeedPolicy]:
+        out: dict[str, SeedPolicy] = {}
+        for name, idx in (("t-1", t - 1), ("t+1", t + 1)):
+            if idx in history and idx not in flagged:
+                out[name] = FixedSeed(history[idx])
+        out["consensus_full"] = ConsensusSeed(
+            history=history,
+            scores=scores,
+            score_threshold=consensus_score_threshold,
+            min_good=consensus_min_good,
+        )
+        out["config_seed"] = FixedSeed(config_seed)
+        return out
+
+    return candidates
 
 
 @dataclass
