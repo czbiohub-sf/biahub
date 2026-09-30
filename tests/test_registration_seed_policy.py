@@ -1,13 +1,20 @@
 import numpy as np
+import pytest
 
 from biahub.core.transform import Transform
-from biahub.registration.seed_policy import FixedSeed, PreviousSeed, SeedPolicy
+from biahub.registration.seed_policy import (
+    ConsensusSeed,
+    FixedSeed,
+    PreviousSeed,
+    SeedPolicy,
+)
 
 
 def test_all_variants_satisfy_protocol():
     identity = Transform.from_translation([0.0, 0.0, 0.0])
     assert isinstance(FixedSeed(identity), SeedPolicy)
     assert isinstance(PreviousSeed(history={}, fallback=FixedSeed(identity)), SeedPolicy)
+    assert isinstance(ConsensusSeed(history={}, scores={}), SeedPolicy)
 
 
 def test_fixed_seed_returns_the_same_transform_for_every_t():
@@ -55,3 +62,45 @@ def test_previous_seed_never_mutates_the_fallback_or_history():
     assert history.keys() == history_before.keys()
     for t in history:
         np.testing.assert_array_equal(history[t].matrix, history_before[t].matrix)
+
+
+def test_consensus_seed_raises_when_too_few_timepoints_score_well():
+    history = {0: Transform.from_translation([1.0, 1.0, 1.0])}
+    scores = {0: 0.9}
+    policy = ConsensusSeed(history=history, scores=scores, score_threshold=0.75)
+    with pytest.raises(ValueError, match="only 1 timepoints"):
+        policy.seed_for(3)
+
+
+def test_consensus_seed_is_the_median_transform_over_good_timepoints():
+    history = {
+        0: Transform.from_translation([1.0, 0.0, 0.0]),
+        1: Transform.from_translation([2.0, 0.0, 0.0]),
+        2: Transform.from_translation([3.0, 0.0, 0.0]),
+        3: Transform.from_translation([100.0, 0.0, 0.0]),  # poorly scored, excluded
+        4: Transform.from_translation([4.0, 0.0, 0.0]),
+        5: Transform.from_translation([5.0, 0.0, 0.0]),
+    }
+    scores = {0: 0.9, 1: 0.9, 2: 0.9, 3: 0.1, 4: 0.9, 5: 0.9}
+    policy = ConsensusSeed(history=history, scores=scores, score_threshold=0.75, min_good=5)
+
+    seed = policy.seed_for(t=3)
+
+    np.testing.assert_allclose(seed.matrix[:3, 3], [3.0, 0.0, 0.0])
+
+
+def test_consensus_seed_excludes_t_itself_even_if_it_scores_well():
+    history = {
+        0: Transform.from_translation([1.0, 0.0, 0.0]),
+        1: Transform.from_translation([2.0, 0.0, 0.0]),
+        2: Transform.from_translation([3.0, 0.0, 0.0]),
+        3: Transform.from_translation([-1000.0, 0.0, 0.0]),
+        4: Transform.from_translation([4.0, 0.0, 0.0]),
+    }
+    # t=3 has a (spuriously) good score but must never contaminate its own consensus seed.
+    scores = {0: 0.9, 1: 0.9, 2: 0.9, 3: 0.99, 4: 0.9}
+    policy = ConsensusSeed(history=history, scores=scores, score_threshold=0.75, min_good=4)
+
+    seed = policy.seed_for(t=3)
+
+    np.testing.assert_allclose(seed.matrix[:3, 3], [2.5, 0.0, 0.0])

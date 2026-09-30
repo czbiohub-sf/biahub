@@ -638,6 +638,40 @@ def peaks_from_beads(
     return mov_peaks, ref_peaks
 
 
+def score_transform(
+    transform: Transform,
+    mov: ArrayLike,
+    ref: ArrayLike,
+    beads_match_settings: BeadsMatchSettings,
+) -> float:
+    """Overlap score of a candidate transform, independent of any estimator's own scoring.
+
+    Warps `mov` with `transform`, re-detects beads, and scores their overlap against
+    `ref` -- the same sequence `optimize_transform` uses internally, duplicated here
+    (rather than calling `optimize_transform`) because that function also refines the
+    transform, which would score something other than what was passed in. Used as the
+    `score_fn` a fallback pass (e.g. `registration.fallback.repair`) needs to compare
+    candidate seeds against each other and against the current transform.
+    """
+    warped = transform.apply(np.asarray(mov), reference=np.asarray(ref))
+    peaks = peaks_from_beads(
+        mov=warped,
+        ref=np.asarray(ref),
+        mov_peaks_settings=beads_match_settings.source_peaks_settings,
+        ref_peaks_settings=beads_match_settings.target_peaks_settings,
+        verbose=False,
+    )
+    if peaks is None:
+        return float("nan")
+    mov_peaks, ref_peaks = peaks
+    return overlap_score(
+        mov_peaks=mov_peaks,
+        ref_peaks=ref_peaks,
+        radius=beads_match_settings.qc_settings.score_centroid_mask_radius,
+        verbose=False,
+    )
+
+
 def matches_from_beads(
     mov_peaks: ArrayLike,
     ref_peaks: ArrayLike,
