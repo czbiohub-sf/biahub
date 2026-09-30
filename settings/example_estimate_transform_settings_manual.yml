@@ -1,8 +1,8 @@
-source:
+moving:
   channel: GFP EX488 EM525-45
-target:
+reference:
+  frame: cross
   channel: Phase3D
-reference: cross
 method: manual
 manual:
   time_index: 0

@@ -1,15 +1,15 @@
 # biahub estimate-transform -- beads registration of a mantis dataset (light-sheet GFP beads
 # onto label-free Phase3D). Production beads settings of 2025_09_18_72hpf_cldnb-she-myo6b reduced
-# to the fields EstimateRegistrationSettings accepts, plus:
+# to the fields EstimateTransformSettings accepts, plus:
 #   spectral_arm: always      -- acquire-then-refine second arm; measured better than hungarian-only
 #   seed_correction votefit    -- corrects a drifted approx_transform by bead displacement voting
 # Replace approx_transform with the dataset's previous seed when one exists. Same instrument
 # geometry -> same linear part; only the translation moves between acquisitions.
-source:
+moving:
   channel: GFP EX488 EM525-45
-target:
+reference:
+  frame: cross
   channel: Phase3D
-reference: cross
 method: beads
 beads:
   algorithm: hungarian

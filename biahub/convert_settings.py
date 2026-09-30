@@ -35,6 +35,8 @@ from biahub.settings import (
     ManualRegistrationSettings,
     MyBaseModel,
     PhaseCrossCorrSettings,
+    ReferenceSettings,
+    TransformEntry,
     TransformFitSettings,
     TransformSettings,
 )
@@ -220,11 +222,10 @@ def estimate_settings_from_legacy(
         # itself, which is how the legacy CLI treated it (t_reference picks the frame).
         self_reference = legacy.source_channel_name == legacy.target_channel_name
         settings = EstimateTransformSettings(
-            source=ChannelSettings(channel=legacy.source_channel_name),
-            target=None
+            moving=ChannelSettings(channel=legacy.source_channel_name),
+            reference=ReferenceSettings(frame=ats.t_reference)
             if self_reference
-            else ChannelSettings(channel=legacy.target_channel_name),
-            reference=ats.t_reference if self_reference else "cross",
+            else ReferenceSettings(frame="cross", channel=legacy.target_channel_name),
             method=legacy.estimation_method,
             beads=legacy.beads_match_settings,
             ants=legacy.ants_registration_settings,
@@ -267,9 +268,8 @@ def estimate_settings_from_legacy(
     elif method == "phase-cross-corr" and legacy.phase_cross_corr_settings is not None:
         reference = legacy.phase_cross_corr_settings.t_reference
     settings = EstimateTransformSettings(
-        source=ChannelSettings(channel=legacy.stabilization_estimation_channel),
-        target=None,
-        reference=reference,
+        moving=ChannelSettings(channel=legacy.stabilization_estimation_channel),
+        reference=ReferenceSettings(frame=reference),
         method=method,
         beads=legacy.beads_match_settings,
         phase_cross_corr=legacy.phase_cross_corr_settings,
@@ -283,34 +283,50 @@ def estimate_settings_from_legacy(
 def transform_settings_from_legacy(
     legacy: RegistrationSettings | StabilizationSettings,
 ) -> tuple[TransformSettings, list[str]]:
-    """Convert a legacy register / stabilize config to a pull-direction transform series."""
+    """Convert a legacy register / stabilize config to a pull-direction transform series.
+
+    How the series is applied (timepoints, canvas, interpolation, output version) is no
+    longer stored with the transforms: those are `apply-transform` options, noted here.
+    """
+    notes = []
+    if legacy.time_indices != "all":
+        notes.append(
+            f"time_indices {legacy.time_indices!r} dropped: pass --time-indices to apply-transform"
+        )
+    if legacy.output_ome_zarr_version is not None:
+        notes.append(
+            "output_ome_zarr_version dropped: pass --ome-zarr-version to apply-transform"
+        )
     if isinstance(legacy, RegistrationSettings):
+        if legacy.keep_overhang:
+            notes.append("keep_overhang dropped: pass --keep-overhang to apply-transform")
+        if legacy.interpolation != "linear":
+            notes.append(
+                f"interpolation {legacy.interpolation!r} dropped: pass --interpolation to apply-transform"
+            )
         settings = TransformSettings(
             direction="pull",
-            matrices=[legacy.affine_transform_zyx],
-            time_indices=legacy.time_indices,
-            source_channels=legacy.source_channel_names,
-            target_channel=legacy.target_channel_name,
-            keep_overhang=legacy.keep_overhang,
-            interpolation=legacy.interpolation,
-            output_ome_zarr_version=legacy.output_ome_zarr_version,
+            moving_channels=legacy.source_channel_names,
+            reference_channel=legacy.target_channel_name,
+            transforms=[TransformEntry(matrix=legacy.affine_transform_zyx)],
         )
-        return settings, []
+        return settings, notes
     # stabilize transformed every listed channel onto the estimation channel's own grid,
-    # so the estimation channel is one of the sources and there is no separate target.
+    # so the estimation channel is one of the moving channels and there is no reference.
     settings = TransformSettings(
         direction="pull",
-        matrices=legacy.affine_transform_zyx_list,
-        time_indices=legacy.time_indices,
-        source_channels=sorted(
+        moving_channels=sorted(
             {*legacy.stabilization_channels, legacy.stabilization_estimation_channel}
         ),
-        target_channel=None,
+        reference_channel=None,
         method=legacy.stabilization_method,
         voxel_size=list(legacy.output_voxel_size),
-        output_ome_zarr_version=legacy.output_ome_zarr_version,
+        transforms=[
+            TransformEntry(t=t, matrix=matrix)
+            for t, matrix in enumerate(legacy.affine_transform_zyx_list)
+        ],
     )
-    return settings, []
+    return settings, notes
 
 
 def load_legacy_settings(path: Path) -> LegacySettings:

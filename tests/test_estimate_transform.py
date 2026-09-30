@@ -16,6 +16,7 @@ from biahub.settings import (
     FocusSettings,
     ManualRegistrationSettings,
     PhaseCrossCorrSettings,
+    ReferenceSettings,
     TransformSettings,
     load_transform_settings,
 )
@@ -85,9 +86,10 @@ def _write_config(
             BeadsMatchSettings(source_peaks_settings=peaks, target_peaks_settings=peaks),
         )
     settings = EstimateTransformSettings(
-        source=ChannelSettings(channel=source),
-        target=ChannelSettings(channel=target) if reference == "cross" else None,
-        reference=reference,
+        moving=ChannelSettings(channel=source),
+        reference=ReferenceSettings(
+            frame=reference, channel=target if reference == "cross" else None
+        ),
         method=method,
         transform={"type": transform_type},
         **blocks,
@@ -98,12 +100,15 @@ def _write_config(
 
 
 def _pull_translations(output):
-    """Per-timepoint translation in the legacy pull direction (+APPLIED_SHIFT for a hit)."""
-    return np.asarray(load_transform_settings(output).as_direction("pull"))[:, :3, 3]
+    """Per-entry translation in the legacy pull direction (+APPLIED_SHIFT for a hit)."""
+    model = load_transform_settings(output)
+    return np.asarray([model._as(e.matrix, "pull") for e in model.transforms])[:, :3, 3]
 
 
 def _run(plate, config, output, **kwargs):
-    estimate_transform([plate], [plate], config, output, cluster="debug", **kwargs)
+    estimate_transform(
+        [plate], config, output, reference_position_dirpaths=[plate], cluster="debug", **kwargs
+    )
 
 
 def test_estimate_transform_writes_a_register_compatible_series(beads_plate, tmp_path):
@@ -138,9 +143,9 @@ def test_estimate_transform_single_timepoint_writes_registration_settings(
 
     (row,) = _pull_translations(output)
     np.testing.assert_allclose(row, APPLIED_SHIFT_ZYX, atol=0.5)
-    # A single estimated matrix is the series' transform: apply-transform must write
-    # every timepoint with it, not just the one it was estimated from.
-    assert load_transform_settings(output).time_indices == "all"
+    # A single estimated matrix is the series' transform (an entry without t), so
+    # apply-transform applies it to every timepoint, not just the one it came from.
+    assert load_transform_settings(output).series_wide
 
 
 def test_estimate_transform_resume_keeps_existing_records(beads_plate, tmp_path):
@@ -189,9 +194,10 @@ def test_estimate_transform_flags_and_tries_to_repair_a_failed_timepoint(
     (attempt,) = journal["attempts"]
     assert attempt["t"] == 2 and attempt["accepted"] is False and attempt["failures"]
 
-    matrices = load_transform_settings(output).matrices
-    assert len(matrices) == 3
-    np.testing.assert_allclose(matrices[2], matrices[1])  # filled from t=1
+    entries = load_transform_settings(output).transforms
+    assert [e.t for e in entries] == [0, 1, 2]
+    np.testing.assert_allclose(entries[2].matrix, entries[1].matrix)  # filled from t=1
+    assert entries[2].score is None and entries[0].score > 0.5
 
 
 def test_estimate_transform_ants_method_recovers_the_shift(beads_plate, tmp_path):
@@ -245,7 +251,7 @@ def test_estimate_transform_stabilizes_a_channel_against_itself(
     _run(drifting_plate, config, output)
 
     model = load_transform_settings(output)
-    assert model.source_channels == ["GFP"] and model.target_channel is None
+    assert model.moving_channels == ["GFP"] and model.reference_channel is None
     for row, factor in zip(_pull_translations(output), expected_pull_factor, strict=True):
         np.testing.assert_allclose(row, [factor * s for s in APPLIED_SHIFT_ZYX], atol=0.5)
 
@@ -291,7 +297,13 @@ def test_estimate_transform_manual_runs_in_process_on_one_timepoint(
         manual=ManualRegistrationSettings(time_index=1, affine_90degree_rotation=1),
     )
 
-    estimate_transform([beads_plate], [beads_plate], config, output, cluster="slurm")
+    estimate_transform(
+        [beads_plate],
+        config,
+        output,
+        reference_position_dirpaths=[beads_plate],
+        cluster="slurm",
+    )
 
     assert len(calls) == 1 and calls[0]["pre_affine_90degree_rotation"] == 1
     (row,) = _pull_translations(output)
@@ -305,8 +317,8 @@ def test_estimate_transform_accepts_the_unified_config_and_writes_forward_matric
         threshold_abs=100, nms_distance=4, min_distance=0, block_size=[8, 8, 8]
     )
     unified = EstimateTransformSettings(
-        source=ChannelSettings(channel="GFP"),
-        target=ChannelSettings(channel="Phase3D"),
+        moving=ChannelSettings(channel="GFP"),
+        reference=ReferenceSettings(frame="cross", channel="Phase3D"),
         method="beads",
         beads=BeadsMatchSettings(source_peaks_settings=peaks, target_peaks_settings=peaks),
         score_metric="residual",
@@ -319,11 +331,13 @@ def test_estimate_transform_accepts_the_unified_config_and_writes_forward_matric
 
     written = yaml_to_model(output, TransformSettings)
     assert written.direction == "forward" and written.method == "beads"
-    assert written.source_channels == ["GFP"] and written.target_channel == "Phase3D"
-    for matrix in written.matrices:  # forward: content moves by -APPLIED_SHIFT
+    assert written.moving_channels == ["GFP"] and written.reference_channel == "Phase3D"
+    assert [e.t for e in written.transforms] == [0, 1]
+    for entry in written.transforms:  # forward: content moves by -APPLIED_SHIFT
         np.testing.assert_allclose(
-            np.asarray(matrix)[:3, 3], [-s for s in APPLIED_SHIFT_ZYX], atol=0.5
+            np.asarray(entry.matrix)[:3, 3], [-s for s in APPLIED_SHIFT_ZYX], atol=0.5
         )
+        assert entry.score is not None and entry.repaired_from is None
     engine_settings = yaml_to_model(
         output.parent / "estimate_transform_settings.yml", EstimateTransformSettings
     )
@@ -337,8 +351,8 @@ def test_estimate_transform_fallback_settings_reach_flagging_and_repair(
         threshold_abs=100, nms_distance=4, min_distance=0, block_size=[8, 8, 8]
     )
     unified = EstimateTransformSettings(
-        source=ChannelSettings(channel="GFP"),
-        target=ChannelSettings(channel="Phase3D"),
+        moving=ChannelSettings(channel="GFP"),
+        reference=ReferenceSettings(frame="cross", channel="Phase3D"),
         method="beads",
         beads=BeadsMatchSettings(source_peaks_settings=peaks, target_peaks_settings=peaks),
         fallback={
@@ -400,8 +414,8 @@ def test_estimate_transform_focus_finding_stabilizes_z_and_yx_against_the_first_
     defocusing_plate, tmp_path
 ):
     unified = EstimateTransformSettings(
-        source=ChannelSettings(channel="Phase3D"),
-        reference="first",
+        moving=ChannelSettings(channel="Phase3D"),
+        reference=ReferenceSettings(frame="first"),
         method="focus-finding",
         focus_finding=FocusSettings(axes="xyz", center_crop_xy=[48, 48]),
     )
@@ -412,11 +426,12 @@ def test_estimate_transform_focus_finding_stabilizes_z_and_yx_against_the_first_
     _run(defocusing_plate, config, output)
 
     written = yaml_to_model(output, TransformSettings)
-    assert written.method == "focus-finding" and written.target_channel is None
-    assert written.source_channels == ["Phase3D"]
-    for t, matrix in enumerate(written.matrices):  # forward: undo the drift
+    assert written.method == "focus-finding" and written.reference_channel is None
+    assert written.moving_channels == ["Phase3D"]
+    for t, entry in enumerate(written.transforms):  # forward: undo the drift
+        assert entry.t == t
         np.testing.assert_allclose(
-            np.asarray(matrix)[:3, 3], [-1 * t, -2 * t, 3 * t], atol=0.5
+            np.asarray(entry.matrix)[:3, 3], [-1 * t, -2 * t, 3 * t], atol=0.5
         )
 
 

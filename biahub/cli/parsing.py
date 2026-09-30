@@ -63,31 +63,31 @@ def input_position_dirpaths() -> Callable:
     return decorator
 
 
-def source_position_dirpaths() -> Callable:
+def moving_position_dirpaths() -> Callable:
     def decorator(f: Callable) -> Callable:
         return click.option(
-            "--source-position-dirpaths",
-            "-s",
+            "--moving-position-dirpaths",
+            "-m",
             required=True,
             cls=OptionEatAll,
             type=tuple,
             callback=_validate_and_process_paths,
-            help='Paths to source positions, for example: "source.zarr/0/0/0" or "source.zarr/*/*/*"',
+            help='Positions of the moving store, for example: "moving.zarr/0/0/0" or "moving.zarr/*/*/*"',
         )(f)
 
     return decorator
 
 
-def target_position_dirpaths() -> Callable:
+def reference_position_dirpaths(required: bool = True) -> Callable:
     def decorator(f: Callable) -> Callable:
         return click.option(
-            "--target-position-dirpaths",
-            "-t",
-            required=True,
+            "--reference-position-dirpaths",
+            "-r",
+            required=required,
             cls=OptionEatAll,
             type=tuple,
             callback=_validate_and_process_paths,
-            help='Paths to target positions, for example: "target.zarr/0/0/0" or "target.zarr/*/*/*"',
+            help='Positions of the reference store, for example: "reference.zarr/0/0/0" or "reference.zarr/*/*/*"',
         )(f)
 
     return decorator
@@ -292,11 +292,12 @@ def init_only() -> Callable:
     return decorator
 
 
-def monitor() -> Callable:
+def monitor(short: bool = True) -> Callable:
+    """`--monitor` / `-m`; `short=False` frees `-m` for CLIs whose moving store takes it."""
+
     def decorator(f: Callable) -> Callable:
         return click.option(
-            "--monitor",
-            "-m",
+            *(["--monitor", "-m"] if short else ["--monitor"]),
             is_flag=True,
             default=False,
             help="Monitor of submitted SLURM jobs.",

@@ -11,7 +11,7 @@ from biahub.apply_transform import (
     largest_box,
     overlap_slices,
 )
-from biahub.settings import TransformSettings
+from biahub.settings import TransformEntry, TransformSettings
 from biahub.utils.config import model_to_yaml
 
 
@@ -87,7 +87,11 @@ def test_apply_transform_stabilizes_every_channel_with_per_timepoint_matrices(
     forward = [_translation(0, 0, 0), _translation(0, 2, 0), _translation(0, 4, 0)]
     config = tmp_path / "transforms.yml"
     model_to_yaml(
-        TransformSettings(direction="forward", matrices=forward, source_channels=["GFP"]),
+        TransformSettings(
+            direction="forward",
+            moving_channels=["GFP"],
+            transforms=[TransformEntry(t=t, matrix=m) for t, m in enumerate(forward)],
+        ),
         config,
     )
     output = tmp_path / "out.zarr"
@@ -123,10 +127,9 @@ def test_apply_transform_registers_source_channels_onto_a_target_store(
     model_to_yaml(
         TransformSettings(
             direction="forward",
-            matrices=[_translation(0, 0, 0)],
-            source_channels=["GFP"],
-            target_channel="Phase3D",
-            keep_overhang=True,
+            moving_channels=["GFP"],
+            reference_channel="Phase3D",
+            transforms=[TransformEntry(matrix=_translation(0, 0, 0))],  # series-wide
         ),
         config,
     )
@@ -136,13 +139,14 @@ def test_apply_transform_registers_source_channels_onto_a_target_store(
         [position],
         config,
         output,
-        target_position_dirpaths=[target / "A" / "1" / "0"],
+        reference_position_dirpaths=[target / "A" / "1" / "0"],
+        keep_overhang=True,
         cluster="debug",
     )
 
     with open_ome_zarr(output / "A" / "1" / "0", mode="r") as out:
         assert out.channel_names == ["Phase3D", "Retardance", "GFP"], (
-            "target channels copied, source channel transformed"
+            "reference channels copied, moving channel transformed"
         )
         result = np.asarray(out.data)
     assert result.shape == data.shape[:1] + (3,) + data.shape[2:]
@@ -161,16 +165,16 @@ def test_apply_transform_time_indices_subset_uses_each_timepoints_own_matrix(
     model_to_yaml(
         TransformSettings(
             direction="forward",
-            matrices=forward,
-            source_channels=["GFP"],
-            time_indices=[0, 2],
-            keep_overhang=True,
+            moving_channels=["GFP"],
+            transforms=[TransformEntry(t=t, matrix=m) for t, m in enumerate(forward)],
         ),
         config,
     )
     output = tmp_path / "out.zarr"
 
-    apply_transform([position], config, output, cluster="debug")
+    apply_transform(
+        [position], config, output, time_indices=[0, 2], keep_overhang=True, cluster="debug"
+    )
 
     with open_ome_zarr(output / "A" / "1" / "0", mode="r") as out:
         result = np.asarray(out.data)
@@ -180,7 +184,7 @@ def test_apply_transform_time_indices_subset_uses_each_timepoints_own_matrix(
     assert moved == pytest.approx(4, abs=0.6)
 
 
-def test_apply_transform_cli_takes_source_and_target_position_paths(
+def test_apply_transform_cli_takes_moving_and_reference_position_paths(
     structured_plate, tmp_path
 ):
     position, data = structured_plate
@@ -191,10 +195,9 @@ def test_apply_transform_cli_takes_source_and_target_position_paths(
     model_to_yaml(
         TransformSettings(
             direction="forward",
-            matrices=[_translation(0, 0, 0)],
-            source_channels=["GFP"],
-            target_channel="Phase3D",
-            keep_overhang=True,
+            moving_channels=["GFP"],
+            reference_channel="Phase3D",
+            transforms=[TransformEntry(matrix=_translation(0, 0, 0))],  # series-wide
         ),
         config,
     )
@@ -203,14 +206,17 @@ def test_apply_transform_cli_takes_source_and_target_position_paths(
     result = CliRunner().invoke(
         apply_transform_cli,
         [
-            "-s",
+            "-m",
             str(position),
-            "-t",
+            "-r",
             str(target / "A" / "1" / "0"),
             "-c",
             str(config),
             "-o",
             str(output),
+            "--keep-overhang",
+            "--time-indices",
+            "0,2",
             "--cluster",
             "debug",
         ],
@@ -219,3 +225,37 @@ def test_apply_transform_cli_takes_source_and_target_position_paths(
     assert result.exit_code == 0, result.output
     with open_ome_zarr(output / "A" / "1" / "0", mode="r") as out:
         assert out.channel_names == ["Phase3D", "GFP"]
+        assert out.data.shape[0] == 2  # --time-indices 0,2
+
+
+def test_transform_settings_matrix_for_uses_own_entry_else_nearest_earlier():
+    series = TransformSettings(
+        direction="forward",
+        moving_channels=["GFP"],
+        transforms=[
+            TransformEntry(t=0, matrix=_translation(0, 0, 0)),
+            TransformEntry(t=5, matrix=_translation(0, 5, 0)),
+        ],
+    )
+    assert series.matrix_for(5, "forward")[1, 3] == 5
+    assert series.matrix_for(7, "forward")[1, 3] == 5  # nearest earlier entry
+    assert series.matrix_for(5, "pull")[1, 3] == -5  # inverted on request
+    assert len(series.unique_matrices("pull")) == 2
+    with pytest.raises(ValueError, match="unique, increasing"):
+        TransformSettings(
+            direction="forward",
+            moving_channels=["GFP"],
+            transforms=[
+                TransformEntry(t=5, matrix=_translation(0, 0, 0)),
+                TransformEntry(t=0, matrix=_translation(0, 0, 0)),
+            ],
+        )
+    with pytest.raises(ValueError, match="one entry without t"):
+        TransformSettings(
+            direction="forward",
+            moving_channels=["GFP"],
+            transforms=[
+                TransformEntry(matrix=_translation(0, 0, 0)),
+                TransformEntry(t=1, matrix=_translation(0, 0, 0)),
+            ],
+        )

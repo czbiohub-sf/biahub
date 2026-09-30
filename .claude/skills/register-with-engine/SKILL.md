@@ -44,8 +44,8 @@ bead-overlap ratio (quantized at ~1/N per bead); treat differences of one bead a
 
 Under `/hpc/projects/tlg2_mantis/<DATASET>/1-preprocess/`:
 
-- moving (source): `light-sheet/raw/0-deskew/<DATASET>.zarr` -- channel `GFP EX488 EM525-45`
-- reference (target): `label-free/0-reconstruct/<DATASET>.zarr` -- channel `Phase3D`
+- moving: `light-sheet/raw/0-deskew/<DATASET>.zarr` -- channel `GFP EX488 EM525-45`
+- reference: `label-free/0-reconstruct/<DATASET>.zarr` -- channel `Phase3D`
 
 Both stores must exist and be intact for the beads well (check `.zarray`/`zarr.json`
 and one chunk read). Several intracellular_dashboard datasets have had `1-preprocess`
@@ -81,7 +81,7 @@ Write it to `<DATASET>/1-preprocess/light-sheet/raw/1-register-engine/estimate-t
 
 ## 5. Present the plan
 
-Show: dataset, beads well, source/target stores and channels, T and volume shape, the
+Show: dataset, beads well, moving/reference stores and channels, T and volume shape, the
 config path with the non-default fields, the output directory, expected cost
 (~2 min per timepoint per job, 100 concurrent; repair jobs afterwards, one per flagged
 timepoint), and what will be compared against (a previous `registration_settings.yml`
@@ -92,7 +92,7 @@ if one exists). Wait for a go.
 ```bash
 tmux new-session -d -s register-<DATASET> -c /hpc/mydata/taylla.theodoro/repo/biahub
 tmux send-keys -t register-<DATASET> "source .venv/bin/activate && time biahub estimate-transform --cluster slurm \
-  -s <deskew.zarr>/<beads well> -t <reconstruct.zarr>/<beads well> \
+  -m <deskew.zarr>/<beads well> -r <reconstruct.zarr>/<beads well> \
   -c <config> -o <out>/registration_settings.yml 2>&1 \
   | grep -v 'FutureWarning\|transform.estimate(mov_peaks\|Please use' | tee <out>/estimate_transform.log" Enter
 ```
@@ -127,11 +127,11 @@ scores with different matrices are expected at the metric's resolution; a system
 
 ## 9. Optional: apply
 
-`--apply`: `biahub apply-transform -s <deskew.zarr>/*/*/* -t <reconstruct.zarr>/*/*/* -c <out>/transforms.yml -o <dataset>/1-preprocess/light-sheet/raw/1-register-engine/<DATASET>.zarr`
+`--apply`: `biahub apply-transform -m <deskew.zarr>/*/*/* -r <reconstruct.zarr>/*/*/* -c <out>/transforms.yml -o <dataset>/1-preprocess/light-sheet/raw/1-register-engine/<DATASET>.zarr`
 registers every light-sheet position onto the phase grid with the estimated per-timepoint
-transforms (target channels copied, source channels transformed; canvas = overlap
-intersected over timepoints, `keep_overhang: true` in the config to keep the full grid).
-Without `-t` the same command stabilizes a store onto its own grid.
+transforms (reference channels copied, moving channels transformed; canvas = overlap shared by
+the applied transforms, `--keep-overhang` to keep the full grid). Without `-r` the same
+command stabilizes a store onto its own grid.
 
 ## 10. Wrap up
 

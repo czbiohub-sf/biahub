@@ -1,28 +1,26 @@
 direction: pull
-matrices:
-- - - 1.0
-    - 0.0
-    - 0.0
-    - 0.0
-  - - 0.0
-    - 1.0
-    - 0.0
-    - 0.0
-  - - 0.0
-    - 0.0
-    - 1.0
-    - 0.0
-  - - 0.0
-    - 0.0
-    - 0.0
-    - 1.0
-time_indices: all
-source_channels:
+moving_channels:
 - Phase3D
 - Orientation
 - Retardance
 - Birefringence
-target_channel: GFP
+reference_channel: GFP
 method: beads
-keep_overhang: false
-interpolation: linear
+transforms:
+- matrix:
+  - - 1.0
+    - 0.0
+    - 0.0
+    - 0.0
+  - - 0.0
+    - 1.0
+    - 0.0
+    - 0.0
+  - - 0.0
+    - 0.0
+    - 1.0
+    - 0.0
+  - - 0.0
+    - 0.0
+    - 0.0
+    - 1.0

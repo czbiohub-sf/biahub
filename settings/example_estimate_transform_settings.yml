@@ -6,11 +6,12 @@
 # focus_finding).
 # `fallback` holds what used to be hidden constants: the adaptive flagging line and the
 # repair candidates tried, in order, for flagged timepoints.
-source:
+moving:
   channel: GFP EX488 EM525-45
-target:
+reference:
+  frame: cross   # cross: the reference channel at the same timepoint (registration);
+                 # first / previous: the moving channel's own first / previous timepoint (stabilization)
   channel: Phase3D
-reference: cross
 method: beads
 beads:
   algorithm: hungarian

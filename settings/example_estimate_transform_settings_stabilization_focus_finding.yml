@@ -1,6 +1,7 @@
-source:
+moving:
   channel: Phase3D
-reference: first
+reference:
+  frame: first
 method: focus-finding
 focus_finding:
   axes: xyz
