@@ -1,10 +1,10 @@
-# biahub estimate-transform -- beads registration of a mantis dataset (light-sheet GFP beads
-# onto label-free Phase3D). Production beads settings of 2025_09_18_72hpf_cldnb-she-myo6b reduced
-# to the fields EstimateRegistrationSettings accepts, plus:
-#   spectral_arm: always      -- acquire-then-refine second arm; measured better than hungarian-only
-#   seed_correction votefit    -- corrects a drifted approx_transform by bead displacement voting
-# Replace approx_transform with the dataset's previous seed when one exists. Same instrument
-# geometry -> same linear part; only the translation moves between acquisitions.
+# Unified estimate config for `biahub estimate-transform` (registration engine).
+# Registration: source channel onto target channel at every timepoint (reference: cross).
+# Stabilization: drop `target` and set `reference: first` or `previous` -- same estimate,
+# the source channel aligned onto its own first / previous timepoint.
+# Only the block of the chosen `method` is needed (beads / ants / phase_cross_corr / manual).
+# `fallback` holds what used to be hidden constants: the adaptive flagging line and the
+# repair candidates tried, in order, for flagged timepoints.
 source:
   channel: GFP EX488 EM525-45
 target:
@@ -32,15 +32,15 @@ beads:
   match_descriptor_settings:
     distance_metric: euclidean
     max_ratio: 0.8
-    cross_check: false
+    cross_check: true
   hungarian_match_settings:
     distance_metric: euclidean
     cost_threshold: 0.1
-    max_ratio: 0.95
+    max_ratio: 0.8
     cross_check: true
     edge_graph_settings:
       method: knn
-      k: 10
+      k: 5
       radius: null
     cost_matrix_settings:
       weights:
@@ -55,7 +55,7 @@ beads:
     sigma: 3.0
     rel_cut: 0.5
     max_iter: 60
-  spectral_arm: always
+  spectral_arm: 'off'
   estimation_mode: matching
   vote_icp_settings:
     vote_peaks_settings:
@@ -74,7 +74,7 @@ beads:
     max_iterations: 20
     convergence_translation: 0.5
   seed_correction_settings:
-    mode: votefit
+    mode: none
     vote_peaks_settings:
       threshold_abs: 200.0
       nms_distance: 8
@@ -90,26 +90,26 @@ beads:
     angle_threshold: 0.0
     direction_threshold: 0.0
     min_distance_quantile: 0.01
-    max_distance_quantile: 0.95
+    max_distance_quantile: 0.99
   qc_settings:
-    iterations: 2
+    iterations: 1
     score_threshold: 0.4
     score_centroid_mask_radius: 6
 transform:
   type: affine
   seed:
-  - - 0.9907113909721375
-    - 0.01176353357732296
-    - -0.0023756297305226326
-    - 11.669376373291016
-  - - -0.0027884417213499546
-    - -0.022817790508270264
-    - -1.2758545875549316
-    - 1199.9306640625
-  - - -0.015202872455120087
-    - 1.2757678031921387
-    - -0.022782862186431885
-    - -5.484277725219727
+  - - 1
+    - 0
+    - 0
+    - 0
+  - - 0
+    - 0
+    - -1.288
+    - 1960
+  - - 0
+    - 1.288
+    - 0
+    - -460
   - - 0.0
     - 0.0
     - 0.0
@@ -137,4 +137,4 @@ smoothing:
   validation_tolerance: 100.0
   interpolation_window_size: 3
   interpolation_type: linear
-verbose: false
+verbose: true

@@ -22,10 +22,9 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.registration.utils import convert_transform_to_ants
-from biahub.settings import StabilizationSettings
+from biahub.settings import load_transform_settings
 from biahub.utils.array_ops import copy_n_paste_czyx
 from biahub.utils.cluster import estimate_resources, get_submitit_cluster
-from biahub.utils.config import yaml_to_model
 from biahub.utils.ngff import resolve_ome_zarr_version
 
 
@@ -134,7 +133,7 @@ def stabilize(
     """
     # Single config file for all FOVs
 
-    settings = yaml_to_model(config_filepaths[0], StabilizationSettings)
+    settings = load_transform_settings(config_filepaths[0]).to_stabilization_settings()
 
     output_dirpath = Path(output_dirpath)
     slurm_out_path = output_dirpath.parent / "slurm_output"
@@ -277,7 +276,7 @@ def stabilize(
                 config_filepath = [p for p in config_filepaths if fov in p.name][0]
             else:
                 config_filepath = config_filepaths[0]
-            settings = yaml_to_model(config_filepath, StabilizationSettings)
+            settings = load_transform_settings(config_filepath).to_stabilization_settings()
             # Use settings for this FOV
             combined_mats = np.array(settings.affine_transform_zyx_list)
             stabilize_zyx_args = {"list_of_shifts": combined_mats}

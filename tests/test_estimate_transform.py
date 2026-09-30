@@ -11,12 +11,14 @@ from biahub.settings import (
     AffineTransformSettings,
     AntsRegistrationSettings,
     BeadsMatchSettings,
+    ChannelSettings,
     DetectPeaksSettings,
     EstimateRegistrationSettings,
+    EstimateTransformSettings,
     ManualRegistrationSettings,
     PhaseCrossCorrSettings,
-    RegistrationSettings,
-    StabilizationSettings,
+    TransformSettings,
+    load_transform_settings,
 )
 from biahub.utils.config import model_to_yaml, yaml_to_model
 
@@ -93,7 +95,7 @@ def test_estimate_transform_writes_a_register_compatible_series(beads_plate, tmp
 
     _run(beads_plate, _write_config(tmp_path), output)
 
-    model = yaml_to_model(output, StabilizationSettings)
+    model = load_transform_settings(output).to_stabilization_settings()
     assert len(model.affine_transform_zyx_list) == 2
     for matrix in model.affine_transform_zyx_list:
         # Stored in the legacy pull direction: from the reference grid back to where the
@@ -118,7 +120,7 @@ def test_estimate_transform_single_timepoint_writes_registration_settings(
 
     _run(beads_plate, _write_config(tmp_path, time_indices=1), output)
 
-    model = yaml_to_model(output, RegistrationSettings)
+    model = load_transform_settings(output).to_registration_settings()
     np.testing.assert_allclose(
         np.asarray(model.affine_transform_zyx)[:3, 3], APPLIED_SHIFT_ZYX, atol=0.5
     )
@@ -136,7 +138,7 @@ def test_estimate_transform_resume_keeps_existing_records(beads_plate, tmp_path)
 
     _run(beads_plate, _write_config(tmp_path), output, resume=True)
 
-    model = yaml_to_model(output, StabilizationSettings)
+    model = load_transform_settings(output).to_stabilization_settings()
     # t=0 came from the planted record (forward +7 -> pull -7), t=1 was estimated.
     np.testing.assert_allclose(
         np.asarray(model.affine_transform_zyx_list[0])[:3, 3], [-7.0, -7.0, -7.0]
@@ -174,7 +176,7 @@ def test_estimate_transform_flags_and_tries_to_repair_a_failed_timepoint(
     (attempt,) = journal["attempts"]
     assert attempt["t"] == 2 and attempt["accepted"] is False and attempt["failures"]
 
-    model = yaml_to_model(output, StabilizationSettings)
+    model = load_transform_settings(output).to_stabilization_settings()
     assert len(model.affine_transform_zyx_list) == 3
     np.testing.assert_allclose(  # filled from t=1
         model.affine_transform_zyx_list[2], model.affine_transform_zyx_list[1]
@@ -193,7 +195,7 @@ def test_estimate_transform_ants_method_recovers_the_shift(beads_plate, tmp_path
 
     _run(beads_plate, config, output)
 
-    model = yaml_to_model(output, RegistrationSettings)
+    model = load_transform_settings(output).to_registration_settings()
     np.testing.assert_allclose(
         np.asarray(model.affine_transform_zyx)[:3, 3], APPLIED_SHIFT_ZYX, atol=0.5
     )
@@ -238,7 +240,7 @@ def test_estimate_transform_stabilizes_a_channel_against_itself(
 
     _run(drifting_plate, config, output)
 
-    model = yaml_to_model(output, StabilizationSettings)
+    model = load_transform_settings(output).to_stabilization_settings()
     assert model.stabilization_channels == ["GFP"]
     for matrix, factor in zip(
         model.affine_transform_zyx_list, expected_pull_factor, strict=True
@@ -262,7 +264,7 @@ def test_estimate_registration_beads_path_runs_through_the_engine(beads_plate, t
         local=True,
     )
 
-    model = yaml_to_model(output, StabilizationSettings)
+    model = load_transform_settings(output).to_stabilization_settings()
     assert len(model.affine_transform_zyx_list) == 2
     np.testing.assert_allclose(
         np.asarray(model.affine_transform_zyx_list[1])[:3, 3], APPLIED_SHIFT_ZYX, atol=0.5
@@ -287,7 +289,7 @@ def test_estimate_transform_phase_cross_corr_stabilizes_against_the_first_frame(
 
     _run(drifting_plate, config, output)
 
-    model = yaml_to_model(output, StabilizationSettings)
+    model = load_transform_settings(output).to_stabilization_settings()
     assert model.stabilization_method == "phase-cross-corr"
     for matrix, factor in zip(model.affine_transform_zyx_list, [0, 1, 2], strict=True):
         np.testing.assert_allclose(
@@ -322,7 +324,69 @@ def test_estimate_transform_manual_runs_in_process_on_one_timepoint(
     estimate_transform([beads_plate], [beads_plate], config, output, cluster="slurm")
 
     assert len(calls) == 1 and calls[0]["pre_affine_90degree_rotation"] == 1
-    model = yaml_to_model(output, RegistrationSettings)
+    model = load_transform_settings(output).to_registration_settings()
     np.testing.assert_allclose(
         np.asarray(model.affine_transform_zyx)[:3, 3], APPLIED_SHIFT_ZYX
     )
+
+
+def test_estimate_transform_accepts_the_unified_config_and_writes_forward_matrices(
+    beads_plate, tmp_path
+):
+    peaks = DetectPeaksSettings(
+        threshold_abs=100, nms_distance=4, min_distance=0, block_size=[8, 8, 8]
+    )
+    unified = EstimateTransformSettings(
+        source=ChannelSettings(channel="GFP"),
+        target=ChannelSettings(channel="Phase3D"),
+        method="beads",
+        beads=BeadsMatchSettings(source_peaks_settings=peaks, target_peaks_settings=peaks),
+        score_metric="residual",
+    )
+    config = tmp_path / "unified.yml"
+    model_to_yaml(unified, config)
+    output = tmp_path / "out" / "transforms.yml"
+
+    _run(beads_plate, config, output)
+
+    written = yaml_to_model(output, TransformSettings)
+    assert written.direction == "forward" and written.method == "beads"
+    assert written.source_channels == ["GFP"] and written.target_channel == "Phase3D"
+    for matrix in written.matrices:  # forward: content moves by -APPLIED_SHIFT
+        np.testing.assert_allclose(
+            np.asarray(matrix)[:3, 3], [-s for s in APPLIED_SHIFT_ZYX], atol=0.5
+        )
+    engine_settings = yaml_to_model(
+        output.parent / "estimate_transform_settings.yml", EstimateTransformSettings
+    )
+    assert engine_settings.score_metric == "residual"
+
+
+def test_estimate_transform_fallback_settings_reach_flagging_and_repair(
+    beads_plate_with_a_blank_timepoint, tmp_path
+):
+    peaks = DetectPeaksSettings(
+        threshold_abs=100, nms_distance=4, min_distance=0, block_size=[8, 8, 8]
+    )
+    unified = EstimateTransformSettings(
+        source=ChannelSettings(channel="GFP"),
+        target=ChannelSettings(channel="Phase3D"),
+        method="beads",
+        beads=BeadsMatchSettings(source_peaks_settings=peaks, target_peaks_settings=peaks),
+        fallback={
+            "flag": {"k_mad": 2.0, "floor": 0.8, "hard_fail": 0.4},
+            "repair": {"candidates": ["seed"]},
+        },
+    )
+    config = tmp_path / "unified.yml"
+    model_to_yaml(unified, config)
+    output = tmp_path / "out" / "transforms.yml"
+
+    _run(beads_plate_with_a_blank_timepoint, config, output)
+
+    report = json.loads((output.parent / "estimate_transform_report.json").read_text())
+    assert report["flagged"] == [2]
+    # Only the seed candidate was configured, so only it was tried.
+    assert set(report["repairs"]["2"]["candidate_failures"]) | set(
+        report["repairs"]["2"]["candidate_scores"]
+    ) == {"config_seed"}

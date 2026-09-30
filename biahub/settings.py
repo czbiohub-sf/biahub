@@ -3,6 +3,7 @@ from typing import Any, Literal
 
 import numpy as np
 import torch
+import yaml
 
 from pydantic import (
     BaseModel,
@@ -244,10 +245,6 @@ class QCBeadsRegistrationSettings(MyBaseModel):
     iterations: int = 2
     score_threshold: float = 0.40
     score_centroid_mask_radius: int = 6
-    # What the estimator, flagging and repair optimise. "overlap" is the bead-count ratio
-    # production runs on (comparable with existing quality scores); "residual" weights it by
-    # how tightly matched beads land (continuous); "mutual_information" needs no beads.
-    score_metric: Literal["overlap", "residual", "mutual_information"] = "overlap"
 
 
 class BeadsMatchSettings(MyBaseModel):
@@ -359,10 +356,6 @@ class AntsRegistrationSettings(MyBaseModel):
     crop: bool = False
     ref_mask_radius: float | None = None
     clip: bool = False
-    # "correlation": Pearson on intensities (Sobel magnitudes when sobel_filter is on);
-    # "mutual_information": normalized mutual information, for channels whose intensities
-    # do not correlate (phase vs fluorescence).
-    score_metric: Literal["correlation", "mutual_information"] = "correlation"
 
     @field_validator("ref_mask_radius")
     @classmethod
@@ -877,3 +870,323 @@ class SegmentationSettings(BaseModel):
     # When None, preserve the OME-Zarr version of the input store.
     output_ome_zarr_version: Literal["0.4", "0.5"] | None = None
     model_config = {"extra": "forbid", "protected_namespaces": ()}
+
+
+# --------------------------------------------------------------------------------------
+# Unified transform estimation / application settings (registration engine)
+# --------------------------------------------------------------------------------------
+
+TransformDirection = Literal["forward", "pull"]
+
+
+class ChannelSettings(MyBaseModel):
+    channel: str
+
+
+class TransformFitSettings(MyBaseModel):
+    """What kind of transform to fit and where to start.
+
+    `seed` is a 4x4 matrix in `seed_direction`: "pull" (reference -> moving, the
+    convention of every transform on disk and of the legacy `approx_transform`) or
+    "forward" (moving -> reference, the engine's own convention).
+    """
+
+    type: Literal["euclidean", "similarity", "affine"] = "euclidean"
+    seed: list = np.eye(4).tolist()
+    seed_direction: TransformDirection = "pull"
+    seed_from_shapes: bool = False
+
+    @field_validator("seed")
+    @classmethod
+    def check_seed(cls, v):
+        if np.asarray(v, dtype=float).shape != (4, 4):
+            raise ValueError("seed must be a 4x4 matrix")
+        return v
+
+
+class FlagSettings(MyBaseModel):
+    """Adaptive flagging line.
+
+    A timepoint is flagged below median - k_mad * MAD AND below `floor`, or below
+    `hard_fail` regardless.
+    """
+
+    k_mad: float = 2.0
+    floor: float = 0.80
+    hard_fail: float = 0.40
+
+
+RepairCandidate = Literal["t-1", "t+1", "consensus", "seed"]
+
+
+class RepairSettings(MyBaseModel):
+    """Repair pass over flagged timepoints: candidate seeds in the order they are tried."""
+
+    candidates: list[RepairCandidate] = ["t-1", "t+1", "consensus", "seed"]
+    consensus_threshold: float = 0.75
+    consensus_min_good: int = 5
+    max_timepoints: int | None = None
+
+
+class FallbackSettings(MyBaseModel):
+    flag: FlagSettings = FlagSettings()
+    repair: RepairSettings | None = RepairSettings()
+
+
+EstimationMethod = Literal["beads", "ants", "phase-cross-corr", "manual"]
+ScoreMetric = Literal[
+    "overlap", "residual", "mutual_information", "correlation", "gradient_correlation"
+]
+DEFAULT_SCORE_METRIC: dict[str, str] = {
+    "beads": "overlap",
+    "ants": "correlation",
+    "phase-cross-corr": "correlation",
+    "manual": "gradient_correlation",
+}
+
+
+class EstimateTransformSettings(MyBaseModel):
+    """Everything `estimate-transform` needs.
+
+    What to align onto what, how, and what to do when a timepoint comes out badly.
+
+    Registration and stabilization are the same estimate with a different `reference`:
+    "cross" aligns `source` onto `target` at each timepoint; "first" / "previous" align the
+    source channel onto its own first / previous timepoint (then `target` is omitted).
+    Only the settings block of the chosen `method` is required.
+    """
+
+    source: ChannelSettings
+    target: ChannelSettings | None = None
+    reference: Literal["cross", "first", "previous"] = "cross"
+    method: EstimationMethod
+    beads: BeadsMatchSettings | None = None
+    ants: AntsRegistrationSettings | None = None
+    phase_cross_corr: PhaseCrossCorrSettings | None = None
+    manual: ManualRegistrationSettings | None = None
+    transform: TransformFitSettings = TransformFitSettings()
+    time_indices: NonNegativeInt | list[NonNegativeInt] | Literal["all"] = "all"
+    # None: the method's default (beads: overlap, ants / phase-cross-corr: correlation,
+    # manual: gradient_correlation).
+    score_metric: ScoreMetric | None = None
+    fallback: FallbackSettings = FallbackSettings()
+    smoothing: EvalTransformSettings | None = None
+    verbose: bool = False
+
+    @model_validator(mode="after")
+    def check_consistency(self) -> "EstimateTransformSettings":
+        if self.reference == "cross" and self.target is None:
+            raise ValueError("reference 'cross' needs a target channel")
+        if self.reference != "cross" and self.target is not None:
+            raise ValueError(
+                f"reference '{self.reference}' aligns the source onto itself; drop target"
+            )
+        defaults = {
+            "beads": ("beads", BeadsMatchSettings),
+            "ants": ("ants", AntsRegistrationSettings),
+            "phase-cross-corr": ("phase_cross_corr", PhaseCrossCorrSettings),
+            "manual": ("manual", ManualRegistrationSettings),
+        }
+        field, model = defaults[self.method]
+        if getattr(self, field) is None:
+            setattr(self, field, model())
+        return self
+
+    @property
+    def target_channel(self) -> str:
+        return self.target.channel if self.target is not None else self.source.channel
+
+    @property
+    def effective_score_metric(self) -> str:
+        return self.score_metric or DEFAULT_SCORE_METRIC[self.method]
+
+    @classmethod
+    def from_legacy(
+        cls, legacy: "EstimateRegistrationSettings | EstimateStabilizationSettings"
+    ) -> "EstimateTransformSettings":
+        """Convert a legacy config to the same estimate.
+
+        `use_prev_t_transform` has no equivalent: timepoints are estimated independently
+        and neighbour information enters through the repair candidates.
+        """
+        ats = legacy.affine_transform_settings
+        fit = TransformFitSettings(
+            type=ats.transform_type,
+            seed=ats.approx_transform,
+            seed_direction="pull",
+            seed_from_shapes=ats.compute_approx_transform,
+        )
+        common = dict(
+            transform=fit, smoothing=legacy.eval_transform_settings, verbose=legacy.verbose
+        )
+        if isinstance(legacy, EstimateRegistrationSettings):
+            method = legacy.estimation_method
+            # The same channel on both sides only makes sense as stabilization against
+            # itself, which is how the legacy CLI treated it (t_reference decides which frame).
+            self_reference = legacy.source_channel_name == legacy.target_channel_name
+            return cls(
+                source=ChannelSettings(channel=legacy.source_channel_name),
+                target=None
+                if self_reference
+                else ChannelSettings(channel=legacy.target_channel_name),
+                reference=ats.t_reference if self_reference else "cross",
+                method=method,
+                beads=legacy.beads_match_settings,
+                ants=legacy.ants_registration_settings,
+                phase_cross_corr=legacy.phase_cross_corr_settings,
+                manual=legacy.manual_registration_settings,
+                time_indices=legacy.time_indices,
+                **common,
+            )
+        method = legacy.stabilization_method
+        if method == "focus-finding":
+            raise ValueError("focus-finding stabilization has no engine estimator yet")
+        reference = (
+            legacy.phase_cross_corr_settings.t_reference
+            if method == "phase-cross-corr" and legacy.phase_cross_corr_settings is not None
+            else ats.t_reference
+        )
+        return cls(
+            source=ChannelSettings(channel=legacy.stabilization_estimation_channel),
+            target=None,
+            reference=reference,
+            method=method,
+            beads=legacy.beads_match_settings,
+            phase_cross_corr=legacy.phase_cross_corr_settings,
+            **common,
+        )
+
+
+class TransformSettings(MyBaseModel):
+    """A transform series ready to apply: one 4x4 for every timepoint, or a single one.
+
+    `direction` says what the matrices mean -- "forward" (moving -> reference, what the
+    engine estimates) or "pull" (reference -> moving, what the legacy `register` /
+    `stabilize` configs hold). Nothing here has to be guessed from a variable name.
+    """
+
+    direction: TransformDirection
+    matrices: list
+    time_indices: NonNegativeInt | list[NonNegativeInt] | Literal["all"] = "all"
+    source_channels: list[str]
+    target_channel: str | None = None
+    method: str = "beads"
+    voxel_size: list[float] | None = None
+    keep_overhang: bool = False
+    interpolation: str = "linear"
+    output_ome_zarr_version: Literal["0.4", "0.5"] | None = None
+
+    @field_validator("matrices")
+    @classmethod
+    def check_matrices(cls, v):
+        arr = np.asarray(v, dtype=float)
+        if arr.ndim != 3 or arr.shape[1:] != (4, 4) or len(arr) == 0:
+            raise ValueError("matrices must be a non-empty list of 4x4 matrices")
+        return v
+
+    def as_direction(self, direction: TransformDirection) -> list:
+        if direction == self.direction:
+            return [np.asarray(m, dtype=float).tolist() for m in self.matrices]
+        return [np.linalg.inv(np.asarray(m, dtype=float)).tolist() for m in self.matrices]
+
+    def to_registration_settings(self) -> "RegistrationSettings":
+        """Legacy single-transform config (`register`); requires exactly one matrix."""
+        (matrix,) = self.as_direction("pull")
+        return RegistrationSettings(
+            source_channel_names=self.source_channels,
+            target_channel_name=self.target_channel or self.source_channels[0],
+            affine_transform_zyx=matrix,
+            keep_overhang=self.keep_overhang,
+            interpolation=self.interpolation,
+            time_indices=self.time_indices,
+            output_ome_zarr_version=self.output_ome_zarr_version,
+        )
+
+    def to_stabilization_settings(self) -> "StabilizationSettings":
+        """Legacy per-timepoint config (`stabilize`)."""
+        return StabilizationSettings(
+            stabilization_estimation_channel=self.target_channel or self.source_channels[0],
+            stabilization_type="affine",
+            stabilization_method=self.method,
+            stabilization_channels=sorted(
+                {
+                    *self.source_channels,
+                    *([self.target_channel] if self.target_channel else []),
+                }
+            ),
+            affine_transform_zyx_list=self.as_direction("pull"),
+            time_indices=self.time_indices,
+            output_voxel_size=self.voxel_size or [1.0] * 5,
+            output_ome_zarr_version=self.output_ome_zarr_version,
+        )
+
+    @classmethod
+    def from_legacy(
+        cls, legacy: "RegistrationSettings | StabilizationSettings"
+    ) -> "TransformSettings":
+        if isinstance(legacy, RegistrationSettings):
+            return cls(
+                direction="pull",
+                matrices=[legacy.affine_transform_zyx],
+                time_indices=legacy.time_indices,
+                source_channels=legacy.source_channel_names,
+                target_channel=legacy.target_channel_name,
+                keep_overhang=legacy.keep_overhang,
+                interpolation=legacy.interpolation,
+                output_ome_zarr_version=legacy.output_ome_zarr_version,
+            )
+        return cls(
+            direction="pull",
+            matrices=legacy.affine_transform_zyx_list,
+            time_indices=legacy.time_indices,
+            source_channels=list(legacy.stabilization_channels),
+            target_channel=legacy.stabilization_estimation_channel,
+            method=legacy.stabilization_method,
+            voxel_size=list(legacy.output_voxel_size),
+            output_ome_zarr_version=legacy.output_ome_zarr_version,
+        )
+
+
+def _load_first(path, models):
+    data = yaml.safe_load(open(path))
+    errors = []
+    for model in models:
+        try:
+            return model(**data)
+        except Exception as e:  # noqa: BLE001 -- try the next schema, report all if none fit
+            errors.append(f"{model.__name__}: {str(e).splitlines()[0]}")
+    raise ValueError(
+        f"{path} matches none of {[m.__name__ for m in models]}:\n  " + "\n  ".join(errors)
+    )
+
+
+def load_estimate_transform_settings(path) -> EstimateTransformSettings:
+    """Read the unified estimate config.
+
+    A legacy estimate-registration / estimate-stabilization config is converted on the fly.
+    """
+    settings = _load_first(
+        path,
+        (
+            EstimateTransformSettings,
+            EstimateRegistrationSettings,
+            EstimateStabilizationSettings,
+        ),
+    )
+    return (
+        settings
+        if isinstance(settings, EstimateTransformSettings)
+        else EstimateTransformSettings.from_legacy(settings)
+    )
+
+
+def load_transform_settings(path) -> TransformSettings:
+    """Read the unified transform config, or a legacy register / stabilize config."""
+    settings = _load_first(
+        path, (TransformSettings, RegistrationSettings, StabilizationSettings)
+    )
+    return (
+        settings
+        if isinstance(settings, TransformSettings)
+        else TransformSettings.from_legacy(settings)
+    )
