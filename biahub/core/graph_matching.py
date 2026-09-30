@@ -289,7 +289,7 @@ class GraphMatcher:
 
     def __init__(
         self,
-        algorithm: Literal["hungarian", "descriptor"] = "hungarian",
+        algorithm: Literal["hungarian", "descriptor", "spectral"] = "hungarian",
         weights: dict[str, float] | None = None,
         distance_metric: str = "euclidean",
         normalize: bool = False,
@@ -297,6 +297,9 @@ class GraphMatcher:
         cross_check: bool = False,
         max_ratio: float | None = None,
         metric: str = "euclidean",  # for descriptor matching
+        spectral_sigma: float = 3.0,
+        spectral_rel_cut: float = 0.5,
+        spectral_max_iter: int = 60,
         verbose: bool = False,
     ):
         self.algorithm = algorithm
@@ -322,6 +325,11 @@ class GraphMatcher:
 
         # Descriptor matching parameters
         self.metric = metric
+
+        # Spectral matching parameters
+        self.spectral_sigma = spectral_sigma
+        self.spectral_rel_cut = spectral_rel_cut
+        self.spectral_max_iter = spectral_max_iter
 
     def match(
         self,
@@ -364,12 +372,79 @@ class GraphMatcher:
             return self._match_hungarian(moving, reference, verbose)
         elif self.algorithm == "descriptor":
             return self._match_descriptor(moving, reference, verbose)
+        elif self.algorithm == "spectral":
+            return self._match_spectral(moving, reference, verbose)
         else:
             raise ValueError(f"Unknown algorithm: {self.algorithm}")
 
     # ============================================================
     # HUNGARIAN MATCHING
     # ============================================================
+
+    def _match_spectral(
+        self,
+        moving: Graph,
+        reference: Graph,
+        verbose: bool,
+    ) -> NDArray[np.integer]:
+        """Leordeanu-Hebert spectral matching.
+
+        Scores each candidate correspondence by how many OTHER candidates agree with it
+        under rigid geometry: (i, j) and (i', j') agree when the distance between moving
+        points i and i' matches the distance between reference points j and j'. Only
+        relative distances enter, so the result is invariant to translation and rotation
+        -- which is what lets it acquire a correspondence from a poor initial transform,
+        where the position-dominated Hungarian cost pairs beads with the wrong neighbour.
+        Given a good initial transform the Hungarian matcher is more precise: acquire with
+        this, then refine.
+
+        Memory is O((n_mov * n_ref)^2) for the affinity matrix: tens of beads, not
+        thousands of points.
+        """
+        n_m, n_r = moving.n_nodes, reference.n_nodes
+        n_cand = n_m * n_r
+        if n_cand > 40000:
+            raise ValueError(
+                f"spectral matching would need a {n_cand}x{n_cand} affinity matrix "
+                f"({n_m} x {n_r} candidates). Restrict the candidate set first."
+            )
+        ii = np.repeat(np.arange(n_m), n_r)
+        jj = np.tile(np.arange(n_r), n_m)
+        d_mov = cdist(moving.nodes, moving.nodes)
+        d_ref = cdist(reference.nodes, reference.nodes)
+        diff = np.abs(d_mov[np.ix_(ii, ii)] - d_ref[np.ix_(jj, jj)])
+        M = np.exp(-(diff**2) / (2 * self.spectral_sigma**2))
+        # A point cannot take two partners: candidates sharing a row or a column must not
+        # reinforce one another, or the eigenvector concentrates on one point matched to all.
+        M[ii[:, None] == ii[None, :]] = 0
+        M[jj[:, None] == jj[None, :]] = 0
+        np.fill_diagonal(M, 0)
+
+        x = np.ones(n_cand) / np.sqrt(n_cand)
+        for _ in range(self.spectral_max_iter):
+            x = M @ x
+            norm = np.linalg.norm(x)
+            if norm == 0:
+                break
+            x /= norm
+
+        threshold = self.spectral_rel_cut * x.max()
+        used_i, used_j, matches = set(), set(), []
+        for idx in np.argsort(-x):
+            if x[idx] <= threshold:
+                break
+            i, j = int(ii[idx]), int(jj[idx])
+            if i in used_i or j in used_j:
+                continue
+            used_i.add(i)
+            used_j.add(j)
+            matches.append((i, j))
+        if verbose:
+            click.echo(
+                f"Spectral matching: {len(matches)} matches from {n_cand} candidates "
+                f"(sigma={self.spectral_sigma}, rel_cut={self.spectral_rel_cut})"
+            )
+        return np.asarray(matches, dtype=np.int32).reshape(-1, 2)
 
     def _match_hungarian(
         self,
