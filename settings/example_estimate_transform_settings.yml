@@ -133,9 +133,4 @@ fallback:
     consensus_threshold: 0.75
     consensus_min_good: 5
     max_timepoints: null
-smoothing:
-  validation_window_size: 10
-  validation_tolerance: 100.0
-  interpolation_window_size: 3
-  interpolation_type: linear
 verbose: true

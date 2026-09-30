@@ -1,22 +1,14 @@
-from pathlib import Path
-
 import numpy as np
 import pytest
 
 from biahub.settings import (
     ChannelSettings,
-    EstimateRegistrationSettings,
-    EstimateStabilizationSettings,
     EstimateTransformSettings,
-    RegistrationSettings,
-    StabilizationSettings,
     TransformSettings,
     load_estimate_transform_settings,
     load_transform_settings,
 )
-from biahub.utils.config import model_to_yaml, yaml_to_model
-
-SETTINGS_DIR = Path("settings")
+from biahub.utils.config import model_to_yaml
 
 
 def test_cross_reference_needs_a_target_and_self_reference_forbids_one():
@@ -38,37 +30,7 @@ def test_cross_reference_needs_a_target_and_self_reference_forbids_one():
     assert stabilization.effective_score_metric == "correlation"
 
 
-@pytest.mark.parametrize(
-    "example",
-    sorted(p.name for p in SETTINGS_DIR.glob("example_estimate_registration_settings*.yml")),
-)
-def test_every_legacy_estimate_registration_example_converts(example):
-    legacy = yaml_to_model(SETTINGS_DIR / example, EstimateRegistrationSettings)
-    unified = EstimateTransformSettings.from_legacy(legacy)
-    assert unified.reference == "cross"
-    assert unified.source.channel == legacy.source_channel_name
-    assert unified.target.channel == legacy.target_channel_name
-    assert unified.method == legacy.estimation_method
-    assert unified.transform.seed == legacy.affine_transform_settings.approx_transform
-    assert unified.transform.seed_direction == "pull"
-
-
-@pytest.mark.parametrize(
-    "example",
-    sorted(p.name for p in SETTINGS_DIR.glob("example_estimate_stabilization_settings*.yml")),
-)
-def test_every_legacy_estimate_stabilization_example_converts(example):
-    legacy = yaml_to_model(SETTINGS_DIR / example, EstimateStabilizationSettings)
-    unified = EstimateTransformSettings.from_legacy(legacy)
-    assert unified.target is None and unified.reference in ("first", "previous")
-    assert unified.source.channel == legacy.stabilization_estimation_channel
-    assert unified.method == legacy.stabilization_method
-    if legacy.stabilization_method == "focus-finding":
-        assert unified.focus_finding.axes == legacy.stabilization_type
-        assert unified.focus_finding.center_crop_xy == [800, 800]
-
-
-def test_loader_accepts_unified_and_legacy_estimate_configs(tmp_path):
+def test_loader_reads_unified_configs_and_points_legacy_ones_at_convert_settings(tmp_path):
     unified = EstimateTransformSettings(
         source=ChannelSettings(channel="GFP"),
         target=ChannelSettings(channel="Phase3D"),
@@ -78,56 +40,27 @@ def test_loader_accepts_unified_and_legacy_estimate_configs(tmp_path):
     model_to_yaml(unified, tmp_path / "unified.yml")
     assert load_estimate_transform_settings(tmp_path / "unified.yml") == unified
 
-    legacy = SETTINGS_DIR / "example_estimate_registration_settings_beads.yml"
-    converted = load_estimate_transform_settings(legacy)
-    assert converted.method == "beads" and converted.reference == "cross"
+    (tmp_path / "legacy.yml").write_text(
+        "source_channel_name: GFP\ntarget_channel_name: Phase3D\nestimation_method: beads\n"
+    )
+    with pytest.raises(ValueError, match="convert-settings"):
+        load_estimate_transform_settings(tmp_path / "legacy.yml")
+    (tmp_path / "stabilize.yml").write_text(
+        "stabilization_estimation_channel: GFP\naffine_transform_zyx_list: []\n"
+    )
+    with pytest.raises(ValueError, match="convert-settings"):
+        load_transform_settings(tmp_path / "stabilize.yml")
 
-    (tmp_path / "junk.yml").write_text("nonsense: 1\n")
-    with pytest.raises(ValueError, match="matches none of"):
-        load_estimate_transform_settings(tmp_path / "junk.yml")
 
-
-def test_transform_settings_round_trip_to_legacy_inverts_the_direction():
+def test_transform_settings_as_direction_inverts_when_asked():
     forward = np.eye(4)
     forward[:3, 3] = [-2.0, 3.0, -4.0]
     series = TransformSettings(
-        direction="forward",
-        matrices=[forward.tolist()] * 3,
-        source_channels=["GFP"],
-        target_channel="Phase3D",
-        voxel_size=[1, 1, 1, 1, 1],
+        direction="forward", matrices=[forward.tolist()] * 3, source_channels=["GFP"]
     )
-
-    stabilization = series.to_stabilization_settings()
-    assert isinstance(stabilization, StabilizationSettings)
+    assert series.as_direction("forward") == [forward.tolist()] * 3
     np.testing.assert_allclose(
-        np.asarray(stabilization.affine_transform_zyx_list[0])[:3, 3], [2.0, -3.0, 4.0]
+        np.asarray(series.as_direction("pull"))[:, :3, 3], [[2, -3, 4]] * 3
     )
-    assert stabilization.stabilization_channels == ["GFP", "Phase3D"]
-
-    single = TransformSettings(
-        direction="forward",
-        matrices=[forward.tolist()],
-        source_channels=["GFP"],
-        target_channel="Phase3D",
-    )
-    registration = single.to_registration_settings()
-    assert isinstance(registration, RegistrationSettings)
-    np.testing.assert_allclose(
-        np.asarray(registration.affine_transform_zyx)[:3, 3], [2.0, -3.0, 4.0]
-    )
-    with pytest.raises(ValueError):
-        series.to_registration_settings()  # three matrices are not one transform
-
-    back = TransformSettings.from_legacy(stabilization)
-    assert back.direction == "pull"
-    np.testing.assert_allclose(back.as_direction("forward"), series.as_direction("forward"))
-
-
-def test_loader_reads_legacy_register_and_stabilize_configs():
-    registration = load_transform_settings(SETTINGS_DIR / "example_registration_settings.yml")
-    assert registration.direction == "pull" and len(registration.matrices) == 1
-    stabilization = load_transform_settings(
-        SETTINGS_DIR / "example_stabilize_timelapse_settings.yml"
-    )
-    assert stabilization.direction == "pull" and len(stabilization.matrices) >= 1
+    with pytest.raises(ValueError, match="4x4"):
+        TransformSettings(direction="forward", matrices=[], source_channels=["GFP"])

@@ -55,40 +55,8 @@ def example_deskew_settings():
 
 
 @pytest.fixture(scope="function")
-def example_register_settings():
-    settings_path = "./settings/example_registration_settings.yml"
-    with open(settings_path) as file:
-        settings = yaml.safe_load(file)
-    yield settings_path, settings
-
-
-@pytest.fixture(scope="function")
-def example_estimate_stabilization_settings():
-    settings_path = "./settings/example_estimate_stabilization_settings.yml"
-    with open(settings_path) as file:
-        settings = yaml.safe_load(file)
-    yield settings_path, settings
-
-
-@pytest.fixture(scope="function")
-def example_stabilize_timelapse_settings():
-    settings_path = "./settings/example_stabilize_timelapse_settings.yml"
-    with open(settings_path) as file:
-        settings = yaml.safe_load(file)
-    yield settings_path, settings
-
-
-@pytest.fixture(scope="function")
 def example_concatenate_settings():
     settings_path = "./settings/example_concatenate_settings.yml"
-    with open(settings_path) as file:
-        settings = yaml.safe_load(file)
-    yield settings_path, settings
-
-
-@pytest.fixture(scope="function")
-def example_estimate_registration_settings():
-    settings_path = "./settings/example_estimate_registration_settings.yml"
     with open(settings_path) as file:
         settings = yaml.safe_load(file)
     yield settings_path, settings
