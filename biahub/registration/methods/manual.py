@@ -1,5 +1,7 @@
 """User-assisted (napari point-annotation) registration."""
 
+from __future__ import annotations
+
 import ants
 import click
 import napari
@@ -9,6 +11,7 @@ from numpy.typing import ArrayLike
 from skimage.transform import EuclideanTransform, SimilarityTransform
 from waveorder.focus import focus_from_transverse_band
 
+from biahub.core.transform import Transform
 from biahub.registration.utils import (
     convert_transform_to_ants,
     convert_transform_to_numpy,
@@ -17,12 +20,20 @@ from biahub.registration.utils import (
     get_3D_rotation_matrix,
 )
 
-# TODO: see if at some point these globals should be hidden or exposed.
 NA_DETECTION_SOURCE = 1.35
+
+
 NA_DETECTION_TARGET = 1.35
+
+
 WAVELENGTH_EMISSION_SOURCE_CHANNEL = 0.45  # in um
+
+
 WAVELENGTH_EMISSION_TARGET_CHANNEL = 0.6  # in um
+
+
 FOCUS_SLICE_ROI_WIDTH = 150  # size of central ROI used to find focal slice
+
 
 COLOR_CYCLE = [
     "white",
@@ -335,3 +346,51 @@ def user_assisted_registration(
     viewer.close()
 
     return [tform.tolist()]
+
+
+class ManualEstimator:
+    """TransformEstimator via user-assisted (napari) point annotation.
+
+    Interactive: `estimate()` opens a napari viewer and blocks on `input()` until you
+    annotate matching points. `user_assisted_registration` builds its transform
+    correctly (skimage point-fit composed with the pre-alignment matrix, true
+    moving -> reference), then explicitly inverts it before returning -- so, like
+    ants.py:estimate(), its return value is the reference -> moving ("pull") direction.
+    Invert once more here to satisfy the TransformEstimator contract.
+    """
+
+    def __init__(
+        self,
+        source_channel_name: str,
+        target_channel_name: str,
+        source_channel_voxel_size: tuple[float, float, float],
+        target_channel_voxel_size: tuple[float, float, float],
+        similarity: bool = False,
+        pre_affine_90degree_rotation: int = 0,
+        pre_affine_fliplr: bool = False,
+    ):
+        self.source_channel_name = source_channel_name
+        self.target_channel_name = target_channel_name
+        self.source_channel_voxel_size = source_channel_voxel_size
+        self.target_channel_voxel_size = target_channel_voxel_size
+        self.similarity = similarity
+        self.pre_affine_90degree_rotation = pre_affine_90degree_rotation
+        self.pre_affine_fliplr = pre_affine_fliplr
+
+    def estimate(
+        self, mov: ArrayLike, ref: ArrayLike, seed: Transform | None = None
+    ) -> Transform:
+        # No seed support -- napari display could pre-align with it, but that's not
+        # implemented, and the point-fit itself doesn't take an initial guess.
+        (pull_matrix,) = user_assisted_registration(
+            source_channel_volume=np.asarray(mov),
+            source_channel_name=self.source_channel_name,
+            source_channel_voxel_size=self.source_channel_voxel_size,
+            target_channel_volume=np.asarray(ref),
+            target_channel_name=self.target_channel_name,
+            target_channel_voxel_size=self.target_channel_voxel_size,
+            similarity=self.similarity,
+            pre_affine_90degree_rotation=self.pre_affine_90degree_rotation,
+            pre_affine_fliplr=self.pre_affine_fliplr,
+        )
+        return Transform(matrix=np.asarray(pull_matrix)).invert()

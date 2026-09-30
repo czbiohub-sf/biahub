@@ -25,8 +25,9 @@ from scipy.spatial import cKDTree
 from skimage import filters
 
 from biahub.core.transform import Transform
-from biahub.registration.beads import overlap_score, peaks_from_beads
-from biahub.registration.phase_cross_correlation import phase_cross_corr
+from biahub.registration.estimators import ScoreFn
+from biahub.registration.methods.beads import overlap_score, peaks_from_beads
+from biahub.registration.methods.pcc import phase_cross_corr
 from biahub.settings import BeadsMatchSettings
 
 
@@ -185,3 +186,82 @@ def residual_shift(transform: Transform, mov: ArrayLike, ref: ArrayLike) -> floa
         filters.sobel(ref).astype(np.float32), filters.sobel(warped).astype(np.float32)
     )
     return float(np.linalg.norm(shift))
+
+
+def score_transform(
+    transform: Transform,
+    mov: ArrayLike,
+    ref: ArrayLike,
+    beads_match_settings: BeadsMatchSettings,
+) -> float:
+    """Overlap score of a candidate transform, independent of any estimator's own scoring.
+
+    Warps `mov` with `transform`, re-detects beads, and scores their overlap against
+    `ref` -- the same sequence `optimize_transform` uses internally, duplicated here
+    (rather than calling `optimize_transform`) because that function also refines the
+    transform, which would score something other than what was passed in. Used as the
+    `score_fn` a fallback pass (e.g. `registration.engine.repair`) needs to compare
+    candidate seeds against each other and against the current transform.
+    """
+    warped = transform.apply(np.asarray(mov), reference=np.asarray(ref))
+    peaks = peaks_from_beads(
+        mov=warped,
+        ref=np.asarray(ref),
+        mov_peaks_settings=beads_match_settings.source_peaks_settings,
+        ref_peaks_settings=beads_match_settings.target_peaks_settings,
+        verbose=False,
+    )
+    if peaks is None:
+        return float("nan")
+    mov_peaks, ref_peaks = peaks
+    return overlap_score(
+        mov_peaks=mov_peaks,
+        ref_peaks=ref_peaks,
+        radius=beads_match_settings.qc_settings.score_centroid_mask_radius,
+        verbose=False,
+    )
+
+
+def correlation_score(
+    transform: Transform,
+    mov: np.ndarray,
+    ref: np.ndarray,
+    sobel_filter: bool = False,
+) -> float:
+    """Pearson correlation between `mov` warped by `transform` and `ref`, over their overlap.
+
+    An intensity analogue of the bead overlap score: continuous in [-1, 1], nan when
+    the warped volume and the reference do not overlap. Optionally compares Sobel
+    magnitudes instead, for cross-modality pairs registered that way.
+    """
+    ref = np.asarray(ref, dtype=np.float32)
+    warped = transform.apply(np.asarray(mov, dtype=np.float32), reference=ref)
+    mask = (warped != 0) & (ref != 0)
+    if mask.sum() < 2:
+        return float("nan")
+    a, b = warped[mask], ref[mask]
+    if sobel_filter:
+        a, b = filters.sobel(warped)[mask], filters.sobel(ref)[mask]
+    a = a - a.mean()
+    b = b - b.mean()
+    denominator = np.sqrt((a * a).sum() * (b * b).sum())
+    if denominator == 0:
+        return float("nan")
+    return float((a * b).sum() / denominator)
+
+
+def beads_score_fn(
+    beads_match_settings: BeadsMatchSettings, metric: str = "overlap"
+) -> ScoreFn:
+    """Build a bead score function: overlap (production's ratio), residual, or mutual information."""
+    if metric == "overlap":
+        return lambda transform, mov, ref: score_transform(
+            transform, mov, ref, beads_match_settings
+        )
+    if metric == "residual":
+        return lambda transform, mov, ref: residual_score(
+            transform, mov, ref, beads_match_settings
+        )
+    if metric == "mutual_information":
+        return normalized_mutual_information
+    raise ValueError(f"unknown score_metric {metric!r}")

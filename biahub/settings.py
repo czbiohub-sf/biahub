@@ -330,7 +330,7 @@ class AntsRegistrationSettings(MyBaseModel):
     """Settings for the ANTs registration backend.
 
     Field names and defaults mirror the keyword arguments of
-    ``biahub.registration.ants.preprocess_zyx``, which is what consumes them.
+    ``biahub.registration.methods.ants.preprocess_zyx``, which is what consumes them.
 
     Attributes
     ----------

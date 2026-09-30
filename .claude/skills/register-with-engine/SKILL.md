@@ -29,7 +29,7 @@ bead-overlap ratio (quantized at ~1/N per bead); treat differences of one bead a
 - The transform direction rule: everything the engine returns is forward
   (moving -> reference); everything on disk (`registration_settings.yml`,
   `approx_transform`) is the legacy pull direction. Cross that boundary only with
-  `biahub.registration.legacy`.
+  `Transform.from_legacy_pull` / `Transform.to_legacy_pull`.
 
 ## 1. Confirm the environment
 

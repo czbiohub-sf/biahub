@@ -6,14 +6,14 @@ from scipy.spatial.transform import Rotation
 
 from biahub.core.graph_matching import Graph, GraphMatcher
 from biahub.core.transform import Transform
+from biahub.registration.engine import build_beads_estimator
 from biahub.registration.estimators import (
-    BeadNodeDetector,
     ChainedEstimator,
     CompetingEstimator,
     EstimationError,
-    NodeGraphEstimator,
     TransformEstimator,
 )
+from biahub.registration.methods.beads import BeadNodeDetector, NodeGraphEstimator
 from biahub.settings import (
     AffineTransformSettings,
     BeadsMatchSettings,
@@ -158,14 +158,12 @@ def _beads_settings(**overrides):
     )
 
 
-def test_from_beads_settings_builds_the_competing_cascade_when_the_spectral_arm_is_on():
-    plain = NodeGraphEstimator.from_beads_settings(
-        _beads_settings(), AffineTransformSettings()
-    )
-    competing = NodeGraphEstimator.from_beads_settings(
+def test_build_beads_estimator_builds_the_competing_cascade_when_the_spectral_arm_is_on():
+    plain = build_beads_estimator(_beads_settings(), AffineTransformSettings())
+    competing = build_beads_estimator(
         _beads_settings(spectral_arm="always"), AffineTransformSettings()
     )
-    gated = NodeGraphEstimator.from_beads_settings(
+    gated = build_beads_estimator(
         _beads_settings(spectral_arm="on_low_score"), AffineTransformSettings()
     )
 
@@ -199,7 +197,7 @@ def test_spectral_arm_recovers_an_offset_beyond_the_hungarian_capture_range():
     with pytest.raises(EstimationError):
         hungarian_only.estimate(mov, ref)
 
-    competing = NodeGraphEstimator.from_beads_settings(settings, affine)
+    competing = build_beads_estimator(settings, affine)
     transform = competing.estimate(mov, ref)
 
     assert competing.last_winner == "spectral+hungarian"

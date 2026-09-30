@@ -25,10 +25,7 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.cli.slurm import wait_for_jobs_to_finish
-from biahub.registration.utils import (
-    evaluate_transforms,
-    save_transforms,
-)
+from biahub.registration.utils import evaluate_transforms, save_transforms
 from biahub.settings import (
     EstimateStabilizationSettings,
     EstimateTransformSettings,
@@ -770,7 +767,6 @@ def estimate_stabilization(
                 )
         elif stabilization_method == "beads":
             from biahub.estimate_transform import estimate_transform_series
-            from biahub.registration.legacy import legacy_pull_from_forward
 
             click.echo("Estimating xyz stabilization parameters with beads")
             engine_settings = EstimateTransformSettings.from_legacy(settings)
@@ -782,9 +778,7 @@ def estimate_stabilization(
                 sbatch_filepath=sbatch_filepath,
                 cluster=cluster,
             )
-            xyz_transforms = [
-                legacy_pull_from_forward(transform) for transform in forward_transforms
-            ]
+            xyz_transforms = [transform.to_legacy_pull() for transform in forward_transforms]
 
             model = StabilizationSettings(
                 stabilization_type=settings.stabilization_type,
@@ -821,7 +815,6 @@ def estimate_stabilization(
             from concurrent.futures import ThreadPoolExecutor
 
             from biahub.estimate_transform import estimate_transform_series
-            from biahub.registration.legacy import legacy_pull_from_forward
 
             pcc_settings = settings.phase_cross_corr_settings
             engine_settings = EstimateTransformSettings.from_legacy(settings)
@@ -839,7 +832,7 @@ def estimate_stabilization(
                     sbatch_filepath=sbatch_filepath,
                     cluster=cluster,
                 )
-                return fov, [legacy_pull_from_forward(t) for t in forward]
+                return fov, [t.to_legacy_pull() for t in forward]
 
             # One driver per position, concurrently: each fans its own timepoints out.
             with ThreadPoolExecutor(max_workers=max(1, len(positions))) as pool:

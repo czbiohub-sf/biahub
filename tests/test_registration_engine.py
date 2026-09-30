@@ -1,11 +1,20 @@
 import numpy as np
 
 from biahub.core.transform import Transform
+from biahub.registration.engine import (
+    estimate_series,
+    neighbour_consensus_config_candidates,
+    repair_series,
+)
 from biahub.registration.estimators import EstimationError
-from biahub.registration.fallback import neighbour_consensus_config_candidates
-from biahub.registration.orchestrator import estimate_series, repair_series
-from biahub.registration.reference_policy import CrossChannel, FixedFrame, PreviousFrame
-from biahub.registration.seed_policy import ConsensusSeed, FixedSeed, PreviousSeed
+from biahub.registration.policies import (
+    ConsensusSeed,
+    CrossChannel,
+    FixedFrame,
+    FixedSeed,
+    PreviousFrame,
+    PreviousSeed,
+)
 
 IDENTITY = Transform.identity(3)
 

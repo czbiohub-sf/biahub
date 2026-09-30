@@ -13,16 +13,18 @@ Key conventions
 - Transforms are 4x4 homogeneous matrices stored as Transform objects.
 """
 
+from __future__ import annotations
+
 import ants
 import click
 import numpy as np
 
+from numpy.typing import ArrayLike
 from skimage import filters
 
 from biahub.core.transform import Transform
-from biahub.registration.utils import (
-    find_lir,
-)
+from biahub.registration.utils import find_lir
+from biahub.settings import AffineTransformSettings, AntsRegistrationSettings
 
 DEFAULT_ANTS_KWARGS = {
     "type_of_transform": "Similarity",
@@ -138,29 +140,90 @@ def preprocess_zyx(
     return ref, mov, offset
 
 
-def correlation_score(
-    transform: Transform,
-    mov: np.ndarray,
-    ref: np.ndarray,
-    sobel_filter: bool = False,
-) -> float:
-    """Pearson correlation between `mov` warped by `transform` and `ref`, over their overlap.
+_ANTS_TRANSFORM_TYPE = {
+    "euclidean": "Rigid",
+    "rigid": "Rigid",
+    "similarity": "Similarity",
+    "affine": "Affine",
+}
 
-    An intensity analogue of the bead overlap score: continuous in [-1, 1], nan when
-    the warped volume and the reference do not overlap. Optionally compares Sobel
-    magnitudes instead, for cross-modality pairs registered that way.
+
+class AntsEstimator:
+    """TransformEstimator using ANTs intensity-based optimization.
+
+    One pass: pre-warp `mov` by the seed into `ref`'s frame, prepare both volumes
+    (`ants.preprocess_zyx`: optional crop to their overlap, reference mask, clip, Sobel),
+    register, and compose the correction back through the crop offset --
+    `shift(+offset) @ correction @ shift(-offset) @ seed`. This is the legacy
+    ANTs pipeline in the engine's forward (moving -> reference)
+    convention.
+
+    `ants.estimate()`'s `fwd_transform` is, despite its name, the reference -> moving
+    ("pull") direction (see `tests/test_registration_estimators.py`); it is inverted here.
     """
-    ref = np.asarray(ref, dtype=np.float32)
-    warped = transform.apply(np.asarray(mov, dtype=np.float32), reference=ref)
-    mask = (warped != 0) & (ref != 0)
-    if mask.sum() < 2:
-        return float("nan")
-    a, b = warped[mask], ref[mask]
-    if sobel_filter:
-        a, b = filters.sobel(warped)[mask], filters.sobel(ref)[mask]
-    a = a - a.mean()
-    b = b - b.mean()
-    denominator = np.sqrt((a * a).sum() * (b * b).sum())
-    if denominator == 0:
-        return float("nan")
-    return float((a * b).sum() / denominator)
+
+    def __init__(
+        self,
+        ants_kwargs: dict | None = None,
+        crop: bool = False,
+        ref_mask_radius: float | None = None,
+        clip: bool = False,
+        sobel_filter: bool = False,
+        verbose: bool = False,
+    ):
+        self.ants_kwargs = dict(ants_kwargs) if ants_kwargs else dict(DEFAULT_ANTS_KWARGS)
+        self.crop = crop
+        self.ref_mask_radius = ref_mask_radius
+        self.clip = clip
+        self.sobel_filter = sobel_filter
+        self.verbose = verbose
+
+    @classmethod
+    def from_settings(
+        cls,
+        ants_registration_settings: AntsRegistrationSettings,
+        affine_transform_settings: AffineTransformSettings,
+        verbose: bool = False,
+    ) -> AntsEstimator:
+        """Preprocessing from the ANTs settings, transform family from the affine settings."""
+        ants_kwargs = dict(DEFAULT_ANTS_KWARGS)
+        ants_kwargs["type_of_transform"] = _ANTS_TRANSFORM_TYPE[
+            affine_transform_settings.transform_type
+        ]
+        return cls(
+            ants_kwargs=ants_kwargs,
+            crop=ants_registration_settings.crop,
+            ref_mask_radius=ants_registration_settings.ref_mask_radius,
+            clip=ants_registration_settings.clip,
+            sobel_filter=ants_registration_settings.sobel_filter,
+            verbose=verbose,
+        )
+
+    def estimate(
+        self, mov: ArrayLike, ref: ArrayLike, seed: Transform | None = None
+    ) -> Transform:
+        mov = np.asarray(mov, dtype=np.float32)
+        ref = np.asarray(ref, dtype=np.float32)
+        aligned = seed.apply(mov, reference=ref) if seed is not None else mov
+        ref_prepared, mov_prepared, offset = preprocess_zyx(
+            aligned,
+            ref,
+            crop=self.crop,
+            ref_mask_radius=self.ref_mask_radius,
+            clip=self.clip,
+            sobel_filter=self.sobel_filter,
+        )
+        pull_correction, _unused = estimate(
+            ref=ref_prepared,
+            mov=mov_prepared,
+            verbose=self.verbose,
+            ants_kwargs=self.ants_kwargs,
+        )
+        correction = pull_correction.invert()
+        if np.any(offset):
+            correction = (
+                Transform.from_translation(offset)
+                @ correction
+                @ Transform.from_translation(-offset)
+            )
+        return correction @ seed if seed is not None else correction

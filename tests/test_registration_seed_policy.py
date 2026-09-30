@@ -2,12 +2,7 @@ import numpy as np
 import pytest
 
 from biahub.core.transform import Transform
-from biahub.registration.seed_policy import (
-    ConsensusSeed,
-    FixedSeed,
-    PreviousSeed,
-    SeedPolicy,
-)
+from biahub.registration.policies import ConsensusSeed, FixedSeed, PreviousSeed, SeedPolicy
 
 
 def test_all_variants_satisfy_protocol():

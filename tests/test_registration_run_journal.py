@@ -1,4 +1,4 @@
-from biahub.registration.run_journal import RunJournal
+from biahub.registration.engine import RunJournal
 
 
 def test_fresh_journal_has_a_run_id_and_no_attempts():

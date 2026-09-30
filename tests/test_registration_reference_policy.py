@@ -1,6 +1,6 @@
 import numpy as np
 
-from biahub.registration.reference_policy import (
+from biahub.registration.policies import (
     CrossChannel,
     FixedFrame,
     PreviousFrame,
