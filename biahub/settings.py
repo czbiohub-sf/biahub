@@ -188,6 +188,51 @@ class SpectralMatchSettings(MyBaseModel):
     max_iter: int = 60
 
 
+class SeedCorrectionSettings(MyBaseModel):
+    """Correct a per-timepoint seed by bead displacement voting before estimating.
+
+    For a series whose geometry drifts beyond the static seed's capture range while the
+    bead field is too thin for the matchers to re-acquire from scratch. The moving volume
+    is warped with the seed, beads are detected densely (`vote_peaks_settings`) and each
+    votes for its displacement to every reference bead within `capture_radius`; the mean
+    of the densest `cluster_radius`-ball of votes is the residual drift. "voteseed"
+    composes that translation into the seed; "votefit" additionally fits an affine on the
+    cluster's members, kept only if it lowers the peaks' median nearest-neighbour distance.
+    Candidates only compete against the unchanged seed, so a bad vote cannot make it worse.
+    """
+
+    mode: Literal["none", "voteseed", "votefit"] = "none"
+    vote_peaks_settings: DetectPeaksSettings = DetectPeaksSettings(
+        threshold_abs=200.0, nms_distance=8, min_distance=0, block_size=[16, 16, 16]
+    )
+    capture_radius: float = 80.0
+    cluster_radius: float = 10.0
+    min_votes: int = 3
+
+
+class VoteIcpSettings(MyBaseModel):
+    """Tunables for `estimation_mode: vote_icp` (see `pointcloud.vote_icp_register`).
+
+    The capture radius starts wide enough to reach a badly drifted seed and shrinks
+    geometrically each iteration (default 80 -> 40 -> 20 -> 10, then held), so early
+    rounds recover the bulk misalignment and late rounds only see unambiguous neighbours.
+    `vote_peaks_settings` is the dense detection on the raw moving volume for the reach
+    stage; a precision stage re-runs at short range with the pipeline's own
+    `source_peaks_settings` and is kept only on a strict score win.
+    """
+
+    vote_peaks_settings: DetectPeaksSettings = DetectPeaksSettings(
+        threshold_abs=200.0, nms_distance=8, min_distance=0, block_size=[16, 16, 16]
+    )
+    initial_capture_radius: float = 80.0
+    min_capture_radius: float = 10.0
+    radius_decay: float = 0.5
+    cluster_radius: float = 10.0
+    min_votes: int = 3
+    max_iterations: int = 20
+    convergence_translation: float = 0.5
+
+
 class FilterMatchesSettings(MyBaseModel):
     angle_threshold: float = 0
     direction_threshold: float = 0
@@ -216,6 +261,11 @@ class BeadsMatchSettings(MyBaseModel):
     # refine with `algorithm`; the higher-scoring arm wins. "on_low_score" runs it only when
     # the first arm scores below qc_settings.score_threshold.
     spectral_arm: Literal["off", "on_low_score", "always"] = "off"
+    # "matching": detect -> match -> fit (the configured algorithm, plus the spectral arm);
+    # "vote_icp": correspond-by-voting ICP over the peak clouds (pointcloud.vote_icp_register).
+    estimation_mode: Literal["matching", "vote_icp"] = "matching"
+    vote_icp_settings: VoteIcpSettings = VoteIcpSettings()
+    seed_correction_settings: SeedCorrectionSettings = SeedCorrectionSettings()
     filter_matches_settings: FilterMatchesSettings = FilterMatchesSettings()
     qc_settings: QCBeadsRegistrationSettings = QCBeadsRegistrationSettings()
 
