@@ -4,6 +4,7 @@ import pytest
 from scipy.ndimage import shift as ndi_shift
 
 from biahub.core.transform import Transform
+from biahub.registration.ants import DEFAULT_ANTS_KWARGS, correlation_score
 from biahub.registration.beads import matches_from_beads, transform_from_matches
 from biahub.registration.estimators import (
     AntsEstimator,
@@ -16,7 +17,12 @@ from biahub.registration.estimators import (
     StackregEstimator,
     TransformEstimator,
 )
-from biahub.settings import AffineTransformSettings, BeadsMatchSettings, DetectPeaksSettings
+from biahub.settings import (
+    AffineTransformSettings,
+    AntsRegistrationSettings,
+    BeadsMatchSettings,
+    DetectPeaksSettings,
+)
 
 
 class _FixedNodeDetector:
@@ -259,22 +265,74 @@ def test_ants_estimator_satisfies_protocol():
     assert isinstance(AntsEstimator(), TransformEstimator)
 
 
-def test_ants_estimator_seed_is_mechanically_used():
-    """Regression test: seeds must be inverted (forward -> pull) before being handed to
-    ants.registration's initial_transform, and passing a seed must not silently fall
-    back to ants.registration's own default (SyN, deformable -- Transform.from_ants
-    can't parse it), which happened once already when ants_kwargs was built as `{}`
-    instead of preserving DEFAULT_ANTS_KWARGS.
+def test_ants_estimator_from_settings_maps_transform_type_and_preprocessing():
+    estimator = AntsEstimator.from_settings(
+        AntsRegistrationSettings(sobel_filter=True, crop=True, ref_mask_radius=0.9),
+        AffineTransformSettings(transform_type="affine"),
+    )
+    assert estimator.ants_kwargs["type_of_transform"] == "Affine"
+    assert estimator.ants_kwargs["aff_iterations"] == DEFAULT_ANTS_KWARGS["aff_iterations"]
+    assert (
+        estimator.sobel_filter,
+        estimator.crop,
+        estimator.ref_mask_radius,
+        estimator.clip,
+    ) == (
+        True,
+        True,
+        0.9,
+        False,
+    )
+    assert isinstance(estimator, TransformEstimator)
 
-    With near-zero optimizer iterations, the result should be (near-)indistinguishable
-    from the seed itself, per the interactive verification this is based on.
-    """
+
+def test_ants_estimator_composes_the_crop_offset_back_into_full_volume_coordinates():
+    """With `crop`, ANTs sees a sub-volume; the correction it returns is in that
+    sub-volume's coordinates and must be shifted back, or the result is off by the crop
+    origin."""
+    rng = np.random.default_rng(7)
+    shape = (24, 48, 48)
+    ref = _synthetic_blob_volume(rng, shape)
+    applied_zyx = (2, -3, 4)
+    mov = ndi_shift(ref, shift=applied_zyx, order=1, mode="constant", cval=0.0)
+    # Zero out a border so the overlap crop has a non-zero origin.
+    ref[:, :8, :] = 0
+    mov[:, :8, :] = 0
+
+    transform = AntsEstimator(crop=True).estimate(mov, ref)
+    np.testing.assert_allclose(transform.matrix[:3, 3], [-a for a in applied_zyx], atol=0.5)
+
+
+def test_correlation_score_prefers_the_correct_transform():
+    rng = np.random.default_rng(8)
+    shape = (24, 48, 48)
+    ref = _synthetic_blob_volume(rng, shape)
+    applied_zyx = (2, -3, 4)
+    mov = ndi_shift(ref, shift=applied_zyx, order=1, mode="constant", cval=0.0)
+
+    right = correlation_score(Transform.from_translation([-a for a in applied_zyx]), mov, ref)
+    wrong = correlation_score(Transform.from_translation([5.0, 5.0, 5.0]), mov, ref)
+    perfect = correlation_score(Transform.identity(3), ref, ref)
+
+    assert perfect == pytest.approx(1.0)
+    assert right > 0.9 > wrong
+    assert correlation_score(
+        Transform.identity(3), ref, ref, sobel_filter=True
+    ) == pytest.approx(1.0)
+
+
+def test_ants_estimator_seed_is_mechanically_used():
+    """With a correct seed and near-zero optimizer iterations the correction is
+    ~identity, so the result must track the seed -- proving the seed pre-warp and the
+    `correction @ seed` composition are wired, and that the pass runs an invertible
+    transform family (not ants.registration's default SyN, which Transform.from_ants
+    cannot parse). A wildly wrong seed must still return a finite transform."""
     rng = np.random.default_rng(10)
     shape = (24, 48, 48)
     ref = _synthetic_blob_volume(rng, shape)
-    mov = ndi_shift(ref, shift=(2, -3, 4), order=1, mode="constant", cval=0.0)
+    applied_zyx = (2, -3, 4)
+    mov = ndi_shift(ref, shift=applied_zyx, order=1, mode="constant", cval=0.0)
 
-    huge_seed = Transform.from_translation([15.0, -10.0, 8.0])  # nowhere near the truth
     estimator = AntsEstimator(
         ants_kwargs={
             "type_of_transform": "Similarity",
@@ -283,10 +341,12 @@ def test_ants_estimator_seed_is_mechanically_used():
             "aff_smoothing_sigmas": (2, 1, 0),
         }
     )
-    result = estimator.estimate(mov, ref, seed=huge_seed)
-    # 1 iteration/level still moves slightly -- what matters is the result tracks the
-    # seed (~15, ~-10, ~8), not the true answer (-2, 3, -4).
-    np.testing.assert_allclose(result.matrix[:3, 3], huge_seed.matrix[:3, 3], atol=1.0)
+    true_seed = Transform.from_translation([-a for a in applied_zyx])
+    result = estimator.estimate(mov, ref, seed=true_seed)
+    np.testing.assert_allclose(result.matrix[:3, 3], true_seed.matrix[:3, 3], atol=1.0)
+
+    huge_seed = Transform.from_translation([15.0, -10.0, 8.0])
+    assert np.all(np.isfinite(estimator.estimate(mov, ref, seed=huge_seed).matrix))
 
 
 def test_ants_estimator_with_seed_still_recovers_translation():

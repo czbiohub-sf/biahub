@@ -10,6 +10,7 @@ from scipy.ndimage import shift as ndi_shift
 from biahub.estimate_transform import estimate_transform
 from biahub.settings import (
     AffineTransformSettings,
+    AntsRegistrationSettings,
     BeadsMatchSettings,
     DetectPeaksSettings,
     EstimateRegistrationSettings,
@@ -183,3 +184,23 @@ def test_estimate_transform_rejects_non_beads_methods(beads_plate, tmp_path):
     config = _write_config(tmp_path, estimation_method="manual")
     with pytest.raises(click.UsageError, match="'beads'"):
         _run(beads_plate, config, tmp_path / "out.yml")
+
+
+def test_estimate_transform_ants_method_recovers_the_shift(beads_plate, tmp_path):
+    output = tmp_path / "out" / "registration_settings.yml"
+    config = _write_config(
+        tmp_path,
+        estimation_method="ants",
+        ants_registration_settings=AntsRegistrationSettings(),
+        affine_transform_settings=AffineTransformSettings(transform_type="similarity"),
+        time_indices=0,
+    )
+
+    _run(beads_plate, config, output)
+
+    model = yaml_to_model(output, RegistrationSettings)
+    np.testing.assert_allclose(
+        np.asarray(model.affine_transform_zyx)[:3, 3], APPLIED_SHIFT_ZYX, atol=0.5
+    )
+    report = json.loads((output.parent / "estimate_transform_report.json").read_text())
+    assert report["scores"]["0"] > 0.9  # correlation score

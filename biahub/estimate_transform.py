@@ -32,8 +32,14 @@ from biahub.cli.parsing import (
     target_position_dirpaths,
 )
 from biahub.core.transform import Transform
+from biahub.registration.ants import correlation_score
 from biahub.registration.beads import score_transform
-from biahub.registration.estimators import NodeGraphEstimator, ScoreFn, TransformEstimator
+from biahub.registration.estimators import (
+    AntsEstimator,
+    NodeGraphEstimator,
+    ScoreFn,
+    TransformEstimator,
+)
 from biahub.registration.fallback import RepairResult, neighbour_consensus_config_candidates
 from biahub.registration.legacy import forward_from_legacy_pull, legacy_pull_from_forward
 from biahub.registration.orchestrator import (
@@ -70,24 +76,38 @@ def _engine(
     settings: EstimateRegistrationSettings,
 ) -> tuple[TransformEstimator, ScoreFn, Transform]:
     """Estimator, score function and forward config seed for the settings' method."""
-    if settings.estimation_method != "beads":
-        raise click.UsageError(
-            f"estimate-transform supports estimation_method 'beads'; got "
-            f"'{settings.estimation_method}'. Use estimate-registration for the others."
-        )
-    beads_match_settings = settings.beads_match_settings
     affine_transform_settings = settings.affine_transform_settings
-    estimator = NodeGraphEstimator.from_beads_settings(
-        beads_match_settings, affine_transform_settings
-    )
-
-    def score_fn(transform: Transform, mov_t: np.ndarray, ref_t: np.ndarray) -> float:
-        return score_transform(transform, mov_t, ref_t, beads_match_settings)
-
     config_seed = forward_from_legacy_pull(
         affine_transform_settings.approx_transform, affine_transform_settings.transform_type
     )
-    return estimator, score_fn, config_seed
+    if settings.estimation_method == "beads":
+        beads_match_settings = settings.beads_match_settings
+        estimator = NodeGraphEstimator.from_beads_settings(
+            beads_match_settings, affine_transform_settings
+        )
+
+        def score_fn(transform: Transform, mov_t: np.ndarray, ref_t: np.ndarray) -> float:
+            return score_transform(transform, mov_t, ref_t, beads_match_settings)
+
+        return estimator, score_fn, config_seed
+
+    if settings.estimation_method == "ants":
+        ants_settings = settings.ants_registration_settings
+        estimator = AntsEstimator.from_settings(
+            ants_settings, affine_transform_settings, verbose=settings.verbose
+        )
+
+        def score_fn(transform: Transform, mov_t: np.ndarray, ref_t: np.ndarray) -> float:
+            return correlation_score(
+                transform, mov_t, ref_t, sobel_filter=ants_settings.sobel_filter
+            )
+
+        return estimator, score_fn, config_seed
+
+    raise click.UsageError(
+        f"estimate-transform supports estimation_method 'beads' and 'ants'; got "
+        f"'{settings.estimation_method}'. Use estimate-registration for the others."
+    )
 
 
 def _finite_or_none(value: float | None) -> float | None:
@@ -316,8 +336,11 @@ def estimate_transform(
         voxel_size = list(position.scale)
     time_indices = _resolve_time_indices(settings.time_indices, T)
 
+    # Bead matching is single-threaded; ANTs' optimizer uses ITK threads.
     _, num_cpus, gb_ram_per_cpu = estimate_resources(
-        shape=(1, 2, Z, Y, X), ram_multiplier=5, max_num_cpus=4
+        shape=(1, 2, Z, Y, X),
+        ram_multiplier=5,
+        max_num_cpus=8 if settings.estimation_method == "ants" else 4,
     )
     slurm_args = {
         "slurm_job_name": "estimate_transform",
