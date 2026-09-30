@@ -1,9 +1,10 @@
 """Estimate a transform series with the registration engine.
 
-Maps a moving channel onto a reference channel per timepoint and writes a config that
-`register` / `stabilize` can apply. Two SLURM fan-out phases: one job per timepoint to
-estimate, then one job per flagged timepoint to repair against the frozen whole-run
-history. Every job writes a small JSON record, so an interrupted run resumes.
+Maps a moving channel onto a reference per timepoint -- another channel (registration)
+or the same channel at a fixed or previous timepoint (stabilization) -- and writes a
+config that `register` / `stabilize` can apply. Two SLURM fan-out phases: one job per
+timepoint to estimate, then one job per flagged timepoint to repair against the frozen
+whole-run history. Every job writes a small JSON record, so an interrupted run resumes.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import json
 
 from collections.abc import Callable
 from pathlib import Path
+from typing import Literal
 
 import click
 import numpy as np
@@ -48,8 +50,14 @@ from biahub.registration.orchestrator import (
     flag_series,
     repair_timepoint,
 )
-from biahub.registration.reference_policy import CrossChannel
+from biahub.registration.reference_policy import (
+    CrossChannel,
+    FixedFrame,
+    PreviousFrame,
+    ReferencePolicy,
+)
 from biahub.registration.seed_policy import FixedSeed
+from biahub.registration.utils import get_aprox_transform
 from biahub.settings import (
     EstimateRegistrationSettings,
     RegistrationSettings,
@@ -57,6 +65,12 @@ from biahub.settings import (
 )
 from biahub.utils.cluster import estimate_resources, get_submitit_cluster
 from biahub.utils.config import model_to_yaml, yaml_to_model
+
+# "cross": register onto another channel; "first"/"previous": stabilize a channel against
+# its own first / previous timepoint.
+ReferenceKind = Literal["cross", "first", "previous"]
+
+ENGINE_SETTINGS_FILENAME = "estimate_transform_settings.yml"
 
 
 def _resolve_time_indices(time_indices, n_t: int) -> list[int]:
@@ -70,6 +84,16 @@ def _resolve_time_indices(time_indices, n_t: int) -> list[int]:
 def _open_series(position_dirpath: Path, channel_name: str):
     with open_ome_zarr(position_dirpath, mode="r") as position:
         return position.data.dask_array()[:, position.channel_names.index(channel_name)]
+
+
+def _reference_policy(kind: ReferenceKind, ref) -> ReferencePolicy:
+    if kind == "cross":
+        return CrossChannel(ref)
+    if kind == "first":
+        return FixedFrame(0)
+    if kind == "previous":
+        return PreviousFrame()
+    raise ValueError(f"unknown reference kind {kind!r}")
 
 
 def _engine(
@@ -117,18 +141,24 @@ def _finite_or_none(value: float | None) -> float | None:
 def _estimate_timepoint_job(
     source_position_dirpath: Path,
     target_position_dirpath: Path,
-    config_filepath: Path,
+    settings_path: Path,
+    reference_kind: ReferenceKind,
     t: int,
     record_path: Path,
 ) -> dict:
     """One independent estimate, from the config seed, written as a JSON record."""
-    settings = yaml_to_model(config_filepath, EstimateRegistrationSettings)
+    settings = yaml_to_model(settings_path, EstimateRegistrationSettings)
     mov = _open_series(source_position_dirpath, settings.source_channel_name)
     ref = _open_series(target_position_dirpath, settings.target_channel_name)
     estimator, score_fn, config_seed = _engine(settings)
 
     result = estimate_series(
-        mov, CrossChannel(ref), estimator, FixedSeed(config_seed), score_fn, [t]
+        mov,
+        _reference_policy(reference_kind, ref),
+        estimator,
+        FixedSeed(config_seed),
+        score_fn,
+        [t],
     )
     record = {
         "t": t,
@@ -166,7 +196,8 @@ def _load_series(
 def _repair_timepoint_job(
     source_position_dirpath: Path,
     target_position_dirpath: Path,
-    config_filepath: Path,
+    settings_path: Path,
+    reference_kind: ReferenceKind,
     t: int,
     time_indices: list[int],
     flagged: list[int],
@@ -174,7 +205,7 @@ def _repair_timepoint_job(
     record_path: Path,
 ) -> dict:
     """Repair one flagged timepoint against the frozen whole-run history."""
-    settings = yaml_to_model(config_filepath, EstimateRegistrationSettings)
+    settings = yaml_to_model(settings_path, EstimateRegistrationSettings)
     mov = _open_series(source_position_dirpath, settings.source_channel_name)
     ref = _open_series(target_position_dirpath, settings.target_channel_name)
     estimator, score_fn, config_seed = _engine(settings)
@@ -186,7 +217,7 @@ def _repair_timepoint_job(
     outcome = repair_timepoint(
         t,
         mov,
-        CrossChannel(ref),
+        _reference_policy(reference_kind, ref),
         estimator,
         score_fn,
         series,
@@ -295,45 +326,57 @@ def _report(result: SeriesResult, time_indices: list[int]) -> dict:
     }
 
 
-def estimate_transform(
-    source_position_dirpaths: list[Path],
-    target_position_dirpaths: list[Path],
-    config_filepath: Path,
-    output_filepath: Path,
+def estimate_transform_series(
+    source_position_dirpath: Path,
+    target_position_dirpath: Path,
+    settings: EstimateRegistrationSettings,
+    output_dir: Path,
     sbatch_filepath: str | None = None,
     cluster: str = "slurm",
     monitor: bool = False,
     resume: bool = False,
-) -> None:
-    """Estimate one transform per timepoint mapping the source channel onto the target.
+    reference_kind: ReferenceKind = "cross",
+) -> tuple[SeriesResult, list[int], list[Transform]]:
+    """Run both fan-out phases; return the series, its timepoints and one forward transform per timepoint.
 
-    Reads an `EstimateRegistrationSettings` YAML (the same file `estimate-registration`
-    takes; `estimation_method: beads` only). Phase 1 estimates every timepoint
-    independently from the config seed, one job each. Phase 2 flags timepoints against
-    the run's own score distribution and repairs each flagged one in its own job, seeded
-    from non-flagged neighbours, the whole-run consensus geometry and the config seed.
-    Writes a `RegistrationSettings` (single timepoint) or `StabilizationSettings` (series)
-    YAML, plus `run_journal.json` and `estimate_transform_report.json`, next to the
-    per-timepoint records in `timepoints/` and `repairs/`. With `resume`, timepoints
-    that already have a record are not re-estimated.
+    Writes the settings the jobs read (`estimate_transform_settings.yml`), the per-timepoint
+    records (`timepoints/`, `repairs/`), `run_journal.json` and
+    `estimate_transform_report.json` under `output_dir`. This is what `estimate-transform`,
+    and the beads branches of `estimate-registration` / `estimate-stabilization`, run.
     """
-    output_filepath = Path(output_filepath)
-    output_dir = output_filepath.parent
+    output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     timepoints_dir = output_dir / "timepoints"
     repairs_dir = output_dir / "repairs"
     slurm_out_path = output_dir / "slurm_output"
     slurm_out_path.mkdir(exist_ok=True)
-
-    settings = yaml_to_model(config_filepath, EstimateRegistrationSettings)
-    _estimator, _score_fn, config_seed = _engine(settings)  # validates the method up front
-    transform_type = settings.affine_transform_settings.transform_type
-    source, target = Path(source_position_dirpaths[0]), Path(target_position_dirpaths[0])
+    source, target = Path(source_position_dirpath), Path(target_position_dirpath)
 
     with open_ome_zarr(source, mode="r") as position:
         T, _C, Z, Y, X = position.data.shape
+        mov_voxel_size = tuple(position.scale[-3:])
     with open_ome_zarr(target, mode="r") as position:
-        voxel_size = list(position.scale)
+        ref_shape = position.data.shape[-3:]
+        ref_voxel_size = tuple(position.scale[-3:])
+
+    settings = settings.model_copy(deep=True)
+    affine_transform_settings = settings.affine_transform_settings
+    if affine_transform_settings.compute_approx_transform:
+        approx = get_aprox_transform(
+            mov_shape=(Z, Y, X),
+            ref_shape=tuple(ref_shape),
+            pre_affine_90degree_rotation=-1,
+            pre_affine_fliplr=False,
+            verbose=settings.verbose,
+            ref_voxel_size=ref_voxel_size,
+            mov_voxel_size=mov_voxel_size,
+        )
+        affine_transform_settings.approx_transform = approx.to_list()
+        click.echo(f"Computed approx transform:\n{approx.matrix}")
+    _estimator, _score_fn, config_seed = _engine(settings)  # validates the method up front
+    transform_type = affine_transform_settings.transform_type
+    settings_path = output_dir / ENGINE_SETTINGS_FILENAME
+    model_to_yaml(settings, settings_path)
     time_indices = _resolve_time_indices(settings.time_indices, T)
 
     # Bead matching is single-threaded; ANTs' optimizer uses ITK threads.
@@ -358,7 +401,7 @@ def estimate_transform(
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=resolved_cluster)
     executor.update_parameters(**slurm_args)
 
-    if settings.affine_transform_settings.use_prev_t_transform:
+    if affine_transform_settings.use_prev_t_transform:
         click.echo(
             "use_prev_t_transform is set, but timepoints are estimated independently under "
             "fan-out; neighbour information enters through the repair phase instead."
@@ -380,7 +423,14 @@ def estimate_transform(
             (
                 t,
                 _estimate_timepoint_job,
-                (source, target, config_filepath, t, timepoints_dir / f"{t}.json"),
+                (
+                    source,
+                    target,
+                    settings_path,
+                    reference_kind,
+                    t,
+                    timepoints_dir / f"{t}.json",
+                ),
             )
             for t in to_estimate
         ],
@@ -410,7 +460,8 @@ def estimate_transform(
                 (
                     source,
                     target,
-                    config_filepath,
+                    settings_path,
+                    reference_kind,
                     t,
                     time_indices,
                     flagged,
@@ -443,7 +494,67 @@ def estimate_transform(
             result.errors.pop(t, None)
         click.echo(f"repair t={t}: {outcome.source} -> {outcome.score:.4f}")
 
-    transforms = _one_transform_per_timepoint(result, time_indices, config_seed)
+    result.journal.save(output_dir / "run_journal.json")
+    (output_dir / "estimate_transform_report.json").write_text(
+        json.dumps(_report(result, time_indices), indent=2)
+    )
+    return (
+        result,
+        time_indices,
+        _one_transform_per_timepoint(result, time_indices, config_seed),
+    )
+
+
+def _reference_kind(
+    source: Path, target: Path, settings: EstimateRegistrationSettings
+) -> ReferenceKind:
+    """Pick the reference: the same position and channel on both sides is stabilization."""
+    if (
+        Path(source) == Path(target)
+        and settings.source_channel_name == settings.target_channel_name
+    ):
+        return settings.affine_transform_settings.t_reference
+    return "cross"
+
+
+def estimate_transform(
+    source_position_dirpaths: list[Path],
+    target_position_dirpaths: list[Path],
+    config_filepath: Path,
+    output_filepath: Path,
+    sbatch_filepath: str | None = None,
+    cluster: str = "slurm",
+    monitor: bool = False,
+    resume: bool = False,
+) -> None:
+    """Estimate one transform per timepoint mapping the source channel onto the target.
+
+    Reads an `EstimateRegistrationSettings` YAML (the same file `estimate-registration`
+    takes; `estimation_method` beads or ants). When source and target are the same
+    position and channel, this is stabilization: each timepoint is registered onto the
+    channel's own first or previous timepoint per `affine_transform_settings.t_reference`.
+    Writes a `RegistrationSettings` (single timepoint) or `StabilizationSettings` (series)
+    YAML next to the engine's records; see `estimate_transform_series`.
+    """
+    output_filepath = Path(output_filepath)
+    output_dir = output_filepath.parent
+    settings = yaml_to_model(config_filepath, EstimateRegistrationSettings)
+    source, target = Path(source_position_dirpaths[0]), Path(target_position_dirpaths[0])
+    with open_ome_zarr(target, mode="r") as position:
+        voxel_size = list(position.scale)
+
+    _result, time_indices, transforms = estimate_transform_series(
+        source,
+        target,
+        settings,
+        output_dir,
+        sbatch_filepath=sbatch_filepath,
+        cluster=cluster,
+        monitor=monitor,
+        resume=resume,
+        reference_kind=_reference_kind(source, target, settings),
+    )
+
     pull_matrices = [legacy_pull_from_forward(transform) for transform in transforms]
     if len(pull_matrices) == 1:
         model = RegistrationSettings(
@@ -455,20 +566,15 @@ def estimate_transform(
         model = StabilizationSettings(
             stabilization_estimation_channel=settings.target_channel_name,
             stabilization_type="affine",
-            stabilization_method="beads",
-            stabilization_channels=[
-                settings.source_channel_name,
-                settings.target_channel_name,
-            ],
+            stabilization_method=settings.estimation_method,
+            stabilization_channels=sorted(
+                {settings.source_channel_name, settings.target_channel_name}
+            ),
             affine_transform_zyx_list=pull_matrices,
             time_indices=settings.time_indices,
             output_voxel_size=voxel_size,
         )
     model_to_yaml(model, output_filepath)
-    result.journal.save(output_dir / "run_journal.json")
-    (output_dir / "estimate_transform_report.json").write_text(
-        json.dumps(_report(result, time_indices), indent=2)
-    )
     click.echo(f"Transform settings saved to {output_filepath.resolve()}")
 
 
@@ -493,16 +599,21 @@ def estimate_transform_cli(
 ) -> None:
     """Estimate a transform series from source onto target with the registration engine.
 
-    Takes the same YAML as `estimate-registration` (beads method only for now) and writes
-    a config for `register` / `stabilize`, plus a run journal and a per-timepoint report.
-    One SLURM job per timepoint, then one per flagged timepoint for repair.
+    Takes the same YAML as `estimate-registration` (beads or ants) and writes a config
+    for `register` / `stabilize`, plus a run journal and a per-timepoint report. One
+    SLURM job per timepoint, then one per flagged timepoint for repair. Passing the same
+    position and channel as source and target stabilizes that channel against its own
+    first or previous timepoint (`affine_transform_settings.t_reference`).
 
     \b
-    >>> biahub estimate-transform \\
-        -s source.zarr/0/0/0 \\
-        -t target.zarr/0/0/0 \\
-        -c estimate-registration-beads.yml \\
-        -o ./registration_settings.yml
+    Registration (source channel onto target channel):
+    >>> biahub estimate-transform -s source.zarr/0/0/0 -t target.zarr/0/0/0 \\
+        -c estimate-registration-beads.yml -o ./registration_settings.yml
+
+    \b
+    Stabilization (a channel onto itself over time):
+    >>> biahub estimate-transform -s data.zarr/0/0/0 -t data.zarr/0/0/0 \\
+        -c estimate-stabilization-beads.yml -o ./stabilization_settings.yml
 
     \b
     Retry an interrupted run, keeping finished timepoints:

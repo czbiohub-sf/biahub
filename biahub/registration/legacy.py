@@ -3,7 +3,7 @@
 The legacy pipeline stores matrices in the pull direction (reference -> moving, ready to
 hand straight to a resampler): `AffineTransformSettings.approx_transform`,
 `RegistrationSettings.affine_transform_zyx`, `StabilizationSettings.affine_transform_zyx_list`,
-and the return values of `beads.estimate_tzyx` / `ants.estimate` / `optimize_transform`.
+and the return values of `ants.estimate` / `ants.estimate_czyx` / `beads.optimize_transform`.
 The engine's contract (`TransformEstimator`, `SeedPolicy`, `fallback.repair`,
 `Transform.apply`) is forward (moving -> reference). Variable names on the legacy side
 ("fwd_transform") do not reliably indicate direction; only this boundary does.
