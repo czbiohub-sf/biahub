@@ -12,6 +12,7 @@ from biahub.registration.methods.beads import (
     matches_from_beads,
     transform_from_matches,
 )
+from biahub.registration.methods.focus import FocusEstimator, find_focus
 from biahub.registration.methods.manual import ManualEstimator
 from biahub.registration.methods.pcc import PCCEstimator
 from biahub.registration.methods.stackreg import StackregEstimator
@@ -21,6 +22,7 @@ from biahub.settings import (
     AntsRegistrationSettings,
     BeadsMatchSettings,
     DetectPeaksSettings,
+    FocusSettings,
 )
 
 
@@ -463,3 +465,59 @@ def test_stackreg_estimator_recovers_known_translation_and_warps_mov_onto_ref():
 
     assert relerr(warped, ref) < relerr(mov, ref)
     assert relerr(warped, ref) < 0.05
+
+
+def _synthetic_focus_volume(rng, shape, z_focus, yx_shift=(0, 0)):
+    """A textured plane in focus at `z_focus`, blurrier the further a slice is from it."""
+    from scipy.ndimage import gaussian_filter
+
+    z, y, x = shape
+    # Blobs, not white noise: pystackreg's pyramid needs coarse structure to lock onto.
+    plane = ndi_shift(_synthetic_blob_image(rng, (y, x)), shift=yx_shift, order=1, mode="wrap")
+    return np.stack(
+        [gaussian_filter(plane, sigma=0.4 * abs(k - z_focus) + 1e-3) for k in range(z)]
+    ).astype(np.float32)
+
+
+FOCUS_PIXEL_SIZE = 6.5 / 40  # micrometres, a 40x mantis-like sampling
+
+
+def test_focus_estimator_satisfies_protocol():
+    assert isinstance(FocusEstimator(pixel_size=FOCUS_PIXEL_SIZE), TransformEstimator)
+
+
+def test_find_focus_picks_the_sharpest_slice_and_rejects_empty_volumes():
+    rng = np.random.default_rng(3)
+    assert find_focus(_synthetic_focus_volume(rng, (12, 64, 64), 7), FOCUS_PIXEL_SIZE) == 7
+    with pytest.raises(EstimationError, match="empty"):
+        find_focus(np.zeros((12, 64, 64), dtype=np.float32), FOCUS_PIXEL_SIZE)
+
+
+@pytest.mark.parametrize(
+    "axes, expected_mask", [("z", (1, 0, 0)), ("xy", (0, 1, 1)), ("xyz", (1, 1, 1))]
+)
+def test_focus_estimator_recovers_z_and_yx_drift_on_the_selected_axes(axes, expected_mask):
+    rng = np.random.default_rng(4)
+    shape = (12, 64, 64)
+    ref = _synthetic_focus_volume(rng, shape, z_focus=5)
+    applied_z, applied_yx = 3, (2, -4)
+    mov = _synthetic_focus_volume(
+        np.random.default_rng(4), shape, z_focus=5 + applied_z, yx_shift=applied_yx
+    )
+
+    transform = FocusEstimator(
+        pixel_size=FOCUS_PIXEL_SIZE, axes=axes, center_crop_xy=(48, 48)
+    ).estimate(mov, ref)
+
+    truth = np.array([-applied_z, -applied_yx[0], -applied_yx[1]], dtype=float)
+    np.testing.assert_allclose(
+        transform.translation, truth * np.array(expected_mask), atol=0.5
+    )
+    np.testing.assert_array_equal(transform.linear, np.eye(3))
+
+
+def test_focus_estimator_from_settings_reads_axes_crop_and_optics():
+    settings = FocusSettings(axes="z", center_crop_xy=[100, 200], na_det=1.2, lambda_ill=0.45)
+    estimator = FocusEstimator.from_settings(settings, pixel_size=FOCUS_PIXEL_SIZE)
+    assert (estimator.axes, estimator.center_crop_xy) == ("z", (100, 200))
+    assert (estimator.na_det, estimator.lambda_ill) == (1.2, 0.45)

@@ -1,7 +1,10 @@
 """Transform estimators: the protocol, its errors, and the compositions.
 
 A `TransformEstimator` only promises `estimate(mov, ref, seed=None) -> Transform` in the
-forward (moving -> reference) direction. Each method's estimator lives with the method in
+forward (moving -> reference) direction. Vocabulary, fixed across the package: at the
+array level `mov` / `ref`; at the channel and CLI level `source` / `target`. `source` is
+always the moving side and `target` always the reference -- the two pairs are the same
+thing at two levels, never mixed within one signature. Each method's estimator lives with the method in
 `biahub.registration.methods`; this module holds what they share -- the protocols, the
 failure type, and the two compositions (`ChainedEstimator`: acquire then refine;
 `CompetingEstimator`: several arms, keep the best score).

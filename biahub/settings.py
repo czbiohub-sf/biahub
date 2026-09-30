@@ -283,6 +283,28 @@ class PhaseCrossCorrSettings(MyBaseModel):
     Z_slice: list | list[list | Literal["all"]] | Literal["all"] = "all"
 
 
+class FocusSettings(MyBaseModel):
+    """The engine's focus-finding method (same-channel stabilization).
+
+    `axes` is the legacy `stabilization_type`: "z" is the focus index alone, "xy" is a
+    stackreg translation between the in-focus slices, "xyz" both. The focus criterion is
+    waveorder's transverse band with the detection NA and illumination wavelength below
+    (in micrometres; the pixel size comes from the store). `center_crop_xy` is (X, Y).
+    """
+
+    axes: Literal["z", "xy", "xyz"] = "xyz"
+    center_crop_xy: list[int] = [800, 800]
+    na_det: float = 1.35
+    lambda_ill: float = 0.5
+
+    @field_validator("center_crop_xy")
+    @classmethod
+    def check_center_crop_xy(cls, v):
+        if len(v) != 2 or any(c <= 0 for c in v):
+            raise ValueError("center_crop_xy must be two positive integers (X, Y)")
+        return v
+
+
 class FocusFindingSettings(MyBaseModel):
     average_across_wells: bool = False
     average_across_wells_method: Literal["mean", "median"] = "mean"
@@ -933,7 +955,7 @@ class FallbackSettings(MyBaseModel):
     repair: RepairSettings | None = RepairSettings()
 
 
-EstimationMethod = Literal["beads", "ants", "phase-cross-corr", "manual"]
+EstimationMethod = Literal["beads", "ants", "phase-cross-corr", "manual", "focus-finding"]
 ScoreMetric = Literal[
     "overlap", "residual", "mutual_information", "correlation", "gradient_correlation"
 ]
@@ -942,6 +964,7 @@ DEFAULT_SCORE_METRIC: dict[str, str] = {
     "ants": "correlation",
     "phase-cross-corr": "correlation",
     "manual": "gradient_correlation",
+    "focus-finding": "correlation",
 }
 
 
@@ -950,9 +973,11 @@ class EstimateTransformSettings(MyBaseModel):
 
     What to align onto what, how, and what to do when a timepoint comes out badly.
 
-    Registration and stabilization are the same estimate with a different `reference`:
-    "cross" aligns `source` onto `target` at each timepoint; "first" / "previous" align the
-    source channel onto its own first / previous timepoint (then `target` is omitted).
+    `source` is the moving side and `target` the reference (the engine's `mov` / `ref`).
+    Registration and stabilization are the same estimate with a different `reference`,
+    i.e. which array is the reference: "cross" aligns `source` onto `target` at each
+    timepoint; "first" / "previous" align the source channel onto its own first /
+    previous timepoint (then `target` is omitted).
     Only the settings block of the chosen `method` is required.
     """
 
@@ -964,6 +989,7 @@ class EstimateTransformSettings(MyBaseModel):
     ants: AntsRegistrationSettings | None = None
     phase_cross_corr: PhaseCrossCorrSettings | None = None
     manual: ManualRegistrationSettings | None = None
+    focus_finding: FocusSettings | None = None
     transform: TransformFitSettings = TransformFitSettings()
     time_indices: NonNegativeInt | list[NonNegativeInt] | Literal["all"] = "all"
     # None: the method's default (beads: overlap, ants / phase-cross-corr: correlation,
@@ -986,6 +1012,7 @@ class EstimateTransformSettings(MyBaseModel):
             "ants": ("ants", AntsRegistrationSettings),
             "phase-cross-corr": ("phase_cross_corr", PhaseCrossCorrSettings),
             "manual": ("manual", ManualRegistrationSettings),
+            "focus-finding": ("focus_finding", FocusSettings),
         }
         field, model = defaults[self.method]
         if getattr(self, field) is None:
@@ -1039,13 +1066,23 @@ class EstimateTransformSettings(MyBaseModel):
                 **common,
             )
         method = legacy.stabilization_method
+        focus_finding = None
         if method == "focus-finding":
-            raise ValueError("focus-finding stabilization has no engine estimator yet")
-        reference = (
-            legacy.phase_cross_corr_settings.t_reference
-            if method == "phase-cross-corr" and legacy.phase_cross_corr_settings is not None
-            else ats.t_reference
-        )
+            # `stabilization_type` becomes the method's axes; the crop comes from whichever
+            # block the legacy config filled in. average_across_wells / skip_beads_fov
+            # were per-plate orchestration, not part of the estimate.
+            stack_reg = legacy.stack_reg_settings
+            focus = legacy.focus_finding_settings or (
+                stack_reg.focus_finding_settings if stack_reg is not None else None
+            )
+            crop = (focus or stack_reg or FocusFindingSettings()).center_crop_xy
+            focus_finding = FocusSettings(axes=legacy.stabilization_type, center_crop_xy=crop)
+        if method == "phase-cross-corr" and legacy.phase_cross_corr_settings is not None:
+            reference = legacy.phase_cross_corr_settings.t_reference
+        elif method == "focus-finding" and legacy.stack_reg_settings is not None:
+            reference = legacy.stack_reg_settings.t_reference
+        else:
+            reference = ats.t_reference
         return cls(
             source=ChannelSettings(channel=legacy.stabilization_estimation_channel),
             target=None,
@@ -1053,6 +1090,7 @@ class EstimateTransformSettings(MyBaseModel):
             method=method,
             beads=legacy.beads_match_settings,
             phase_cross_corr=legacy.phase_cross_corr_settings,
+            focus_finding=focus_finding,
             **common,
         )
 
