@@ -137,3 +137,46 @@ def test_convert_settings_cli_writes_a_config_the_strict_loaders_accept(tmp_path
     (tmp_path / "junk.yml").write_text("nonsense: 1\n")
     with pytest.raises(ValueError, match="not a legacy"):
         load_legacy_settings(tmp_path / "junk.yml")
+
+
+def test_convert_settings_folds_per_position_stabilize_configs(tmp_path):
+    from biahub.utils.config import model_to_yaml
+
+    folder = tmp_path / "xyz_stabilization_settings"
+    folder.mkdir()
+    for fov, dx in (("000", 1.0), ("001", 5.0)):
+        pull = PULL.copy()
+        pull[2, 3] = dx
+        model_to_yaml(
+            StabilizationSettings(
+                stabilization_estimation_channel="GFP",
+                stabilization_type="xyz",
+                stabilization_method="phase-cross-corr",
+                stabilization_channels=["GFP"],
+                affine_transform_zyx_list=[pull.tolist()] * 2,
+                output_voxel_size=[1, 1, 2, 0.5, 0.5],
+            ),
+            folder / f"0_8_{fov}.yml",
+        )
+    output = tmp_path / "transforms.yml"
+
+    result = CliRunner().invoke(
+        convert_settings_cli, ["-c", str(folder / "*.yml"), "-o", str(output)]
+    )
+
+    assert result.exit_code == 0, result.output
+    transforms = load_transform_settings(output)
+    assert sorted(transforms.positions) == ["0/8/000", "0/8/001"]
+    assert transforms.matrix_for(1, "pull", "0/8/001")[2, 3] == 5.0
+    assert transforms.matrix_for(1, "pull", "0/8/000")[2, 3] == 1.0
+
+
+def test_convert_settings_refuses_to_fold_files_that_are_not_per_position_stabilize(tmp_path):
+    for name in ("0_8_000", "0_8_001"):
+        (tmp_path / f"{name}.yml").write_text(
+            "source_channel_name: GFP\ntarget_channel_name: Phase3D\nestimation_method: ants\n"
+        )
+    result = CliRunner().invoke(
+        convert_settings_cli, ["-c", str(tmp_path / "*.yml"), "-o", str(tmp_path / "out.yml")]
+    )
+    assert result.exit_code != 0 and "per-position stabilize" in result.output

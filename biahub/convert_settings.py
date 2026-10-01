@@ -24,7 +24,7 @@ import yaml
 
 from pydantic import Field, NonNegativeInt, PositiveFloat, field_validator, model_validator
 
-from biahub.cli.parsing import config_filepath, output_filepath
+from biahub.cli.parsing import config_filepaths, output_filepath
 from biahub.settings import (
     AffineTransformSettings,
     AntsRegistrationSettings,
@@ -356,9 +356,50 @@ def convert_settings(
     return transform_settings_from_legacy(legacy)
 
 
-def convert_settings_file(config_filepath: Path, output_filepath: Path) -> None:
-    legacy = load_legacy_settings(config_filepath)
-    settings, notes = convert_settings(legacy)
+def per_position_stabilization(paths: list[Path]) -> tuple[TransformSettings, list[str]]:
+    """Fold legacy per-FOV stabilize configs (`<row>_<col>_<fov>.yml`) into one file.
+
+    Legacy estimate-stabilization wrote one stabilize config per position; the unified
+    transforms file holds them as `positions`, keyed "row/col/fov".
+    """
+    positions, notes, first = {}, [], None
+    for path in paths:
+        legacy = load_legacy_settings(path)
+        if not isinstance(legacy, StabilizationSettings):
+            raise click.UsageError(
+                f"{path}: several -c files are folded as per-position stabilize configs, "
+                f"but this is a {type(legacy).__name__}"
+            )
+        parts = path.stem.split("_")
+        if len(parts) != 3:
+            raise click.UsageError(
+                f"{path}: per-position stabilize configs are named <row>_<col>_<fov>.yml"
+            )
+        settings, file_notes = transform_settings_from_legacy(legacy)
+        if first is None:
+            first = settings
+        elif (settings.moving_channels, settings.voxel_size) != (
+            first.moving_channels,
+            first.voxel_size,
+        ):
+            raise click.UsageError(
+                f"{path}: channels / voxel size differ from {paths[0]}; these are not one plate"
+            )
+        positions["/".join(parts)] = settings.transforms
+        notes.extend(n for n in file_notes if n not in notes)
+    merged = first.model_copy(update={"transforms": None, "positions": positions})
+    return TransformSettings.model_validate(merged.model_dump()), notes
+
+
+def convert_settings_file(config_filepaths: list[Path], output_filepath: Path) -> None:
+    config_filepaths = [Path(p) for p in config_filepaths]
+    if len(config_filepaths) == 1:
+        legacy = load_legacy_settings(config_filepaths[0])
+        settings, notes = convert_settings(legacy)
+        source = f"{config_filepaths[0]} ({type(legacy).__name__})"
+    else:
+        settings, notes = per_position_stabilization(config_filepaths)
+        source = f"{len(config_filepaths)} per-position stabilize configs"
     Path(output_filepath).parent.mkdir(parents=True, exist_ok=True)
     model_to_yaml(settings, output_filepath)
     command = (
@@ -367,22 +408,25 @@ def convert_settings_file(config_filepath: Path, output_filepath: Path) -> None:
         else "apply-transform"
     )
     click.echo(
-        f"{config_filepath} ({type(legacy).__name__}) -> {output_filepath} "
-        f"({type(settings).__name__}, for `biahub {command}`)"
+        f"{source} -> {output_filepath} ({type(settings).__name__}, for `biahub {command}`)"
     )
     for note in notes:
         click.echo(f"  note: {note}")
 
 
 @click.command("convert-settings")
-@config_filepath()
+@config_filepaths()
 @output_filepath()
-def convert_settings_cli(config_filepath: str, output_filepath: str) -> None:
+def convert_settings_cli(config_filepaths: list[Path], output_filepath: str) -> None:
     """Convert a retired registration / stabilization config to the unified one.
 
     estimate-registration / estimate-stabilization -> estimate-transform;
-    register / stabilize -> apply-transform.
+    register / stabilize -> apply-transform. Several stabilize configs, one per position
+    (`<row>_<col>_<fov>.yml`, as estimate-stabilization wrote them), fold into one
+    transforms file with a list per position.
 
     >> biahub convert-settings -c estimate-registration.yml -o estimate-transform.yml
+
+    >> biahub convert-settings -c "xyz_stabilization_settings/*.yml" -o transforms.yml
     """
-    convert_settings_file(Path(config_filepath), Path(output_filepath))
+    convert_settings_file(config_filepaths, Path(output_filepath))
