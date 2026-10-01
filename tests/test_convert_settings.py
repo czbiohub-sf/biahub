@@ -46,7 +46,7 @@ def test_estimate_registration_converts_to_a_cross_reference_estimate():
     assert any("use_prev_t_transform" in n for n in notes)
 
 
-def test_same_channel_estimate_registration_is_self_stabilization():
+def test_same_channel_estimate_registration_stays_a_cross_registration():
     legacy = EstimateRegistrationSettings(
         source_channel_name="GFP",
         target_channel_name="GFP",
@@ -55,9 +55,11 @@ def test_same_channel_estimate_registration_is_self_stabilization():
         eval_transform_settings={"validation_window_size": 5},
     )
     unified, notes = convert_settings(legacy)
-    assert unified.reference.channel is None and unified.reference.frame == "previous"
+    # Legacy estimate-registration read GFP from the source store and GFP from the target
+    # store: a cross-store registration, not stabilization against itself.
+    assert unified.reference.frame == "cross" and unified.reference.channel == "GFP"
     assert unified.method == "phase-cross-corr"
-    assert [n for n in notes] == [n for n in notes if "eval_transform_settings" in n]
+    assert any("kept as a cross-store registration" in n for n in notes)
 
 
 @pytest.mark.parametrize("stabilization_type", ["z", "xy", "xyz"])

@@ -218,14 +218,18 @@ def estimate_settings_from_legacy(
         seed_from_shapes=ats.compute_approx_transform,
     )
     if isinstance(legacy, EstimateRegistrationSettings):
-        # The same channel on both sides only makes sense as stabilization against
-        # itself, which is how the legacy CLI treated it (t_reference picks the frame).
-        self_reference = legacy.source_channel_name == legacy.target_channel_name
+        # estimate-registration always read the source channel from the source store and
+        # the target channel from the target store, so this is a cross estimate even when
+        # the two channels share a name (e.g. Phase3D of store A onto Phase3D of store B).
+        if legacy.source_channel_name == legacy.target_channel_name:
+            notes.append(
+                f"source and target channel are both {legacy.source_channel_name!r}: kept as "
+                "a cross-store registration; to stabilize a channel against itself, set "
+                "reference.frame to 'first' or 'previous' and drop reference.channel"
+            )
         settings = EstimateTransformSettings(
             moving=ChannelSettings(channel=legacy.source_channel_name),
-            reference=ReferenceSettings(frame=ats.t_reference)
-            if self_reference
-            else ReferenceSettings(frame="cross", channel=legacy.target_channel_name),
+            reference=ReferenceSettings(frame="cross", channel=legacy.target_channel_name),
             method=legacy.estimation_method,
             beads=legacy.beads_match_settings,
             ants=legacy.ants_registration_settings,
