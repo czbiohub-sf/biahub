@@ -294,3 +294,46 @@ def test_transform_settings_matrix_for_uses_own_entry_else_nearest_earlier():
                 TransformEntry(t=1, matrix=_translation(0, 0, 0)),
             ],
         )
+
+
+def test_transform_settings_holds_a_shared_list_or_one_per_position_not_both():
+    entry = [TransformEntry(matrix=_translation(0, 0, 0))]
+    with pytest.raises(ValueError, match="exactly one of transforms"):
+        TransformSettings(direction="forward", moving_channels=["GFP"])
+    with pytest.raises(ValueError, match="exactly one of transforms"):
+        TransformSettings(
+            direction="forward",
+            moving_channels=["GFP"],
+            transforms=entry,
+            positions={"A/1/0": entry},
+        )
+    with pytest.raises(ValueError, match="row/col/fov"):
+        TransformSettings(direction="forward", moving_channels=["GFP"], positions={"A1": entry})
+
+
+def test_transform_settings_per_position_lists_each_with_its_own_time_layout():
+    settings = TransformSettings(
+        direction="forward",
+        moving_channels=["GFP"],
+        positions={
+            # one FOV: a transform per timepoint; the other: one transform for every t
+            "A/1/0": [
+                TransformEntry(t=0, matrix=_translation(0, 1, 0)),
+                TransformEntry(t=2, matrix=_translation(0, 3, 0)),
+            ],
+            "A/1/1": [TransformEntry(matrix=_translation(0, 0, 9), estimated_at=4)],
+        },
+    )
+    assert settings.per_position and not settings.series_wide
+    assert settings.matrix_for(1, "forward", "A/1/0")[1, 3] == 1  # nearest earlier
+    assert settings.matrix_for(2, "forward", "A/1/0")[1, 3] == 3
+    assert settings.matrix_for(7, "forward", "A/1/1")[2, 3] == 9  # whole series
+    assert settings.timepoints("A/1/0") == [0, 2] and settings.timepoints("A/1/1") is None
+    with pytest.raises(ValueError, match="no transforms for position 'B/2/0'"):
+        settings.matrix_for(0, "forward", "B/2/0")
+
+
+def test_transform_entry_estimated_at_is_only_for_a_whole_series_entry():
+    TransformEntry(matrix=_translation(0, 0, 0), estimated_at=5)
+    with pytest.raises(ValueError, match="estimated_at"):
+        TransformEntry(t=5, matrix=_translation(0, 0, 0), estimated_at=5)

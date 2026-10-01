@@ -978,6 +978,8 @@ class TransformEntry(MyBaseModel):
     # How a fallback pass reached this matrix: the winning repair candidate (plus any
     # polish rounds, "consensus_full+polish1") or "sweep:<trial>".
     repaired_from: str | None = None
+    # For an entry without `t`: the timepoint it was estimated on (provenance only).
+    estimated_at: NonNegativeInt | None = None
 
     @field_validator("matrix")
     @classmethod
@@ -986,17 +988,39 @@ class TransformEntry(MyBaseModel):
             raise ValueError("matrix must be 4x4")
         return v
 
+    @model_validator(mode="after")
+    def check_estimated_at(self) -> "TransformEntry":
+        if self.estimated_at is not None and self.t is not None:
+            raise ValueError("estimated_at is only for an entry without t (the whole series)")
+        return self
+
+
+def _check_series(entries: list[TransformEntry], where: str) -> None:
+    """One entry without `t` (every timepoint), or every entry with a unique, increasing `t`."""
+    if not entries:
+        raise ValueError(f"{where} must hold at least one entry")
+    ts = [e.t for e in entries]
+    if len(ts) == 1 and ts[0] is None:
+        return
+    if any(t is None for t in ts):
+        raise ValueError(f"{where}: either one entry without t (whole series) or every entry with t")
+    if len(set(ts)) != len(ts) or ts != sorted(ts):
+        raise ValueError(f"{where}: entries must have unique, increasing t")
+
 
 class TransformSettings(MyBaseModel):
     """What `estimate-transform` estimated, as `apply-transform` consumes it.
 
     `direction` says what the matrices mean -- "forward" (moving -> reference, what the
     engine estimates) or "pull" (reference -> moving, ready to resample with; what the
-    retired `register` / `stabilize` configs held). `transforms` is either one entry
-    without `t`, the transform for the whole series, or one entry per estimated
-    timepoint; a timepoint without an entry takes the nearest earlier one. How the
-    series is applied (canvas, interpolation, which timepoints) is not stored here --
-    those are `apply-transform` options.
+    retired `register` / `stabilize` configs held).
+
+    Two independent axes. Positions: `transforms` is one list shared by every position,
+    `positions` maps each position ("row/col/fov") to its own list -- exactly one of the
+    two. Time: within any list, one entry without `t` is the transform for every
+    timepoint, otherwise every entry has a `t` and a timepoint without one takes the
+    nearest earlier entry. How the series is applied (canvas, interpolation, which
+    timepoints) is not stored here -- those are `apply-transform` options.
     """
 
     direction: TransformDirection
@@ -1004,45 +1028,74 @@ class TransformSettings(MyBaseModel):
     reference_channel: str | None = None  # None: stabilization onto the moving store's grid
     method: str = "beads"
     voxel_size: list[float] | None = None
-    transforms: list[TransformEntry]
+    transforms: list[TransformEntry] | None = None
+    positions: dict[str, list[TransformEntry]] | None = None
 
     @model_validator(mode="after")
     def check_entries(self) -> "TransformSettings":
-        if not self.transforms:
-            raise ValueError("transforms must hold at least one entry")
-        ts = [e.t for e in self.transforms]
-        if len(ts) == 1 and ts[0] is None:
+        if (self.transforms is None) == (self.positions is None):
+            raise ValueError(
+                "give exactly one of transforms (one list for every position) or "
+                "positions (a list per position)"
+            )
+        if self.transforms is not None:
+            _check_series(self.transforms, "transforms")
             return self
-        if any(t is None for t in ts):
-            raise ValueError("either one entry without t (whole series) or every entry with t")
-        if len(set(ts)) != len(ts) or ts != sorted(ts):
-            raise ValueError("transform entries must have unique, increasing t")
+        if not self.positions:
+            raise ValueError("positions must hold at least one position")
+        for key, entries in self.positions.items():
+            if len(key.split("/")) != 3:
+                raise ValueError(f"position key {key!r} must be 'row/col/fov'")
+            _check_series(entries, f"positions[{key!r}]")
         return self
 
     @property
+    def per_position(self) -> bool:
+        return self.positions is not None
+
+    @property
     def series_wide(self) -> bool:
-        return self.transforms[0].t is None
+        """Every list is one entry without `t`: the same transform for every timepoint."""
+        lists = [self.transforms] if self.transforms is not None else self.positions.values()
+        return all(entries[0].t is None for entries in lists)
 
-    def timepoints(self) -> list[int] | None:
-        return None if self.series_wide else [e.t for e in self.transforms]
+    def timepoints(self, position: str | None = None) -> list[int] | None:
+        entries = self.entries_for(position)
+        return None if entries[0].t is None else [e.t for e in entries]
 
-    def matrix_for(self, t: int, direction: TransformDirection) -> np.ndarray:
-        """Return the matrix for timepoint `t` in `direction`: its own, else the nearest earlier."""
-        if self.series_wide:
-            entry = self.transforms[0]
+    def entries_for(self, position: str | None = None) -> list[TransformEntry]:
+        """The list that applies to `position` ("row/col/fov"); the shared list ignores it."""
+        if self.transforms is not None:
+            return self.transforms
+        if position not in self.positions:
+            raise ValueError(
+                f"no transforms for position {position!r}; the file has "
+                f"{sorted(self.positions)}"
+            )
+        return self.positions[position]
+
+    def matrix_for(
+        self, t: int, direction: TransformDirection, position: str | None = None
+    ) -> np.ndarray:
+        """Matrix for timepoint `t` of `position` in `direction`: its own, else the nearest earlier."""
+        entries = self.entries_for(position)
+        if entries[0].t is None:
+            entry = entries[0]
         else:
-            earlier = [e for e in self.transforms if e.t <= t]
-            entry = earlier[-1] if earlier else self.transforms[0]
+            earlier = [e for e in entries if e.t <= t]
+            entry = earlier[-1] if earlier else entries[0]
         return self._as(entry.matrix, direction)
 
     def unique_matrices(self, direction: TransformDirection) -> list[np.ndarray]:
+        lists = [self.transforms] if self.transforms is not None else self.positions.values()
         seen, out = set(), []
-        for entry in self.transforms:
-            m = self._as(entry.matrix, direction)
-            key = m.round(9).tobytes()
-            if key not in seen:
-                seen.add(key)
-                out.append(m)
+        for entries in lists:
+            for entry in entries:
+                m = self._as(entry.matrix, direction)
+                key = m.round(9).tobytes()
+                if key not in seen:
+                    seen.add(key)
+                    out.append(m)
         return out
 
     def _as(self, matrix, direction: TransformDirection) -> np.ndarray:
