@@ -156,6 +156,41 @@ def test_apply_transform_registers_source_channels_onto_a_target_store(
     )  # identity-transformed source channel
 
 
+def test_apply_transform_writes_a_channel_both_copied_and_transformed_once(
+    structured_plate, tmp_path
+):
+    # Moving store == reference store: GFP is a reference channel and the transformed one.
+    # It must hold the transformed data, written by one job, not also a raw copy.
+    position, data = structured_plate
+    config = tmp_path / "transforms.yml"
+    model_to_yaml(
+        TransformSettings(
+            direction="forward",
+            moving_channels=["GFP"],
+            reference_channel="Phase3D",
+            transforms=[TransformEntry(matrix=_translation(0, 4, 0))],
+        ),
+        config,
+    )
+    output = tmp_path / "out.zarr"
+
+    apply_transform(
+        [position],
+        config,
+        output,
+        reference_position_dirpaths=[position],
+        keep_overhang=True,
+        cluster="debug",
+    )
+
+    with open_ome_zarr(output / "A" / "1" / "0", mode="r") as out:
+        assert out.channel_names == ["GFP", "Phase3D"]
+        result = np.asarray(out.data)
+    np.testing.assert_allclose(result[:, 1], data[:, 1], atol=1e-3)  # copied
+    shift = _block_centre(result[0, 0]) - _block_centre(data[0, 0])
+    np.testing.assert_allclose(shift, [0, 4, 0], atol=0.5)  # transformed, not copied
+
+
 def test_apply_transform_time_indices_subset_uses_each_timepoints_own_matrix(
     structured_plate, tmp_path
 ):

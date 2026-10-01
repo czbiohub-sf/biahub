@@ -244,8 +244,11 @@ def apply_transform(
             raise click.UsageError(
                 f"moving channels not in the moving store: {sorted(missing)}"
             )
-        copied = reference_channel_names
-        output_channel_names = copied + [c for c in transformed if c not in copied]
+        # A reference channel that is also transformed is written once, by its transform job.
+        copied = [c for c in reference_channel_names if c not in transformed]
+        output_channel_names = reference_channel_names + [
+            c for c in transformed if c not in reference_channel_names
+        ]
         output_voxel_size = tuple(reference_voxel_size[-3:])
     else:
         reference_shape = tuple(moving_shape)
