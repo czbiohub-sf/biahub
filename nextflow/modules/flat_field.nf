@@ -18,7 +18,7 @@
 // the Nextflow task.  See also:
 // examples/submitit_debug_nextflow/2026-05-27-submitit-debug-nextflow-concerns.md
 
-include { parse_resources; slurm_logs; slurm_log_dir; retry_time } from './common'
+include { parse_resources; slurm_logs; slurm_log_dir; slurm_output_readme; retry_time } from './common'
 
 
 process init_flat_field {
@@ -36,6 +36,7 @@ process init_flat_field {
     script:
     """
     mkdir -p "${slurm_log_dir('flat_field')}"
+    ${slurm_output_readme('flat_field', output_zarr)}
     biahub flat-field --init \
         -i "${input_zarr}"/*/*/* \
         -o "${output_zarr}" \
