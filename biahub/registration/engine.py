@@ -791,7 +791,9 @@ def build_beads_estimator(
 
     if beads_match_settings.estimation_mode == "vote_icp":
         configured: TransformEstimator = VoteIcpEstimator.from_beads_settings(
-            beads_match_settings, score_fn=score_fn
+            beads_match_settings,
+            score_fn=score_fn,
+            transform_type=affine_transform_settings.transform_type,
         )
     else:
         configured = node_graph(beads_match_settings)

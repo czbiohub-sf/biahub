@@ -41,6 +41,28 @@ def test_vote_icp_register_recovers_a_large_offset_with_clutter():
     np.testing.assert_allclose(pull[:3, :3], np.eye(3), atol=0.02)
 
 
+@pytest.mark.parametrize("transform_type", ["euclidean", "similarity", "affine"])
+def test_vote_icp_register_fits_the_configured_transform_type(transform_type):
+    # The clouds differ by an anisotropic scale plus an offset: only an affine can take
+    # the scale; a euclidean fit must stay a rotation, a similarity a uniform scaling.
+    rng = np.random.default_rng(3)
+    ref = rng.uniform(0, 200, size=(30, 3))
+    mov = ref * np.array([1.0, 1.04, 0.97]) + np.array([12.0, -9.0, 15.0])
+
+    pull, _info = vote_icp_register(
+        mov, ref, np.eye(4), initial_capture_radius=80.0, transform_type=transform_type
+    )
+
+    linear = pull[:3, :3]
+    gram = linear.T @ linear
+    if transform_type == "euclidean":
+        np.testing.assert_allclose(gram, np.eye(3), atol=1e-9)
+    elif transform_type == "similarity":
+        np.testing.assert_allclose(gram, gram[0, 0] * np.eye(3), atol=1e-9)
+    else:
+        np.testing.assert_allclose(np.diag(linear), [1.0, 1.04, 0.97], atol=1e-6)
+
+
 def test_vote_icp_register_abstains_without_votes():
     ref = np.array([[0.0, 0.0, 0.0], [50.0, 0.0, 0.0], [0.0, 50.0, 0.0]])
     mov = ref + 500.0  # far outside any capture radius

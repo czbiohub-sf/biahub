@@ -12,6 +12,7 @@ import numpy as np
 
 from numpy.typing import ArrayLike
 from scipy.spatial import cKDTree
+from skimage.transform import AffineTransform, EuclideanTransform, SimilarityTransform
 
 from biahub.core.transform import Transform
 from biahub.registration.estimators import (
@@ -42,6 +43,25 @@ def fit_affine(src: ArrayLike, dst: ArrayLike) -> np.ndarray:
     return matrix
 
 
+_MODELS = {
+    "affine": AffineTransform,
+    "similarity": SimilarityTransform,
+    "euclidean": EuclideanTransform,
+    "rigid": EuclideanTransform,
+}
+
+
+def fit_model(src: ArrayLike, dst: ArrayLike, transform_type: str = "affine") -> np.ndarray:
+    """Least-squares fit of `transform_type` with C(src_i) ~ dst_i, as a homogeneous matrix."""
+    if transform_type == "affine":
+        return fit_affine(src, dst)
+    src = np.asarray(src, dtype=float)
+    model = _MODELS[transform_type].from_estimate(src, np.asarray(dst, dtype=float))
+    if not model:
+        raise EstimationError(f"vote_icp: {transform_type} fit failed on {len(src)} pairs")
+    return np.asarray(model.params, dtype=float)
+
+
 def vote_icp_register(
     mov_peaks: ArrayLike,
     ref_peaks: ArrayLike,
@@ -53,6 +73,7 @@ def vote_icp_register(
     min_votes: int = 3,
     max_iterations: int = 20,
     convergence_translation: float = 0.5,
+    transform_type: str = "affine",
 ) -> tuple[np.ndarray | None, dict]:
     """Register two peak clouds by iterated displacement voting.
 
@@ -104,7 +125,7 @@ def vote_icp_register(
         # A full affine needs a margin over its degrees of freedom; with fewer inliers the
         # translation update is the only fit that cannot hallucinate.
         if len(members) >= ndim + 3:
-            new_matrix = fit_affine(ref_peaks[inlier_ref], mov_peaks[inlier_mov])
+            new_matrix = fit_model(ref_peaks[inlier_ref], mov_peaks[inlier_mov], transform_type)
         else:
             drift = votes[members].mean(axis=0)
             new_matrix = matrix @ translation_matrix(-drift)
@@ -167,7 +188,9 @@ class VoteIcpEstimator:
         ref_detector: NodeDetector,
         settings: VoteIcpSettings,
         score_fn: ScoreFn,
+        transform_type: str = "affine",
     ):
+        self.transform_type = transform_type
         self.dense_detector = dense_detector
         self.precise_detector = precise_detector
         self.ref_detector = ref_detector
@@ -176,10 +199,14 @@ class VoteIcpEstimator:
 
     @classmethod
     def from_beads_settings(
-        cls, beads_match_settings: BeadsMatchSettings, score_fn: ScoreFn
+        cls,
+        beads_match_settings: BeadsMatchSettings,
+        score_fn: ScoreFn,
+        transform_type: str = "affine",
     ) -> VoteIcpEstimator:
         settings = beads_match_settings.vote_icp_settings
         return cls(
+            transform_type=transform_type,
             dense_detector=BeadNodeDetector(settings.vote_peaks_settings),
             precise_detector=BeadNodeDetector(beads_match_settings.source_peaks_settings),
             ref_detector=BeadNodeDetector(beads_match_settings.target_peaks_settings),
@@ -200,6 +227,7 @@ class VoteIcpEstimator:
             min_votes=s.min_votes,
             max_iterations=s.max_iterations,
             convergence_translation=s.convergence_translation,
+            transform_type=self.transform_type,
         )
 
     def estimate(
@@ -223,9 +251,7 @@ class VoteIcpEstimator:
             raise EstimationError(
                 f"vote_icp: voting abstained after {info['iterations']} iteration(s)"
             )
-        best = Transform(
-            pull, transform_type=seed.transform_type if seed else "affine"
-        ).invert()
+        best = Transform(pull, transform_type=self.transform_type).invert()
         best_score = self.score_fn(best, mov, ref)
 
         precise_peaks = np.asarray(self.precise_detector.detect(mov))
