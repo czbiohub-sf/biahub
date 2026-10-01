@@ -50,6 +50,7 @@ def transform_entries(
         entries.append(
             TransformEntry(
                 t=None if len(time_indices) == 1 else t,
+                estimated_at=t if len(time_indices) == 1 else None,
                 matrix=transform.to_list(),
                 score=None if score is None or not np.isfinite(score) else float(score),
                 repaired_from=result.provenance.get(t),

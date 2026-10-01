@@ -145,7 +145,9 @@ def test_estimate_transform_single_timepoint_writes_registration_settings(
     np.testing.assert_allclose(row, APPLIED_SHIFT_ZYX, atol=0.5)
     # A single estimated matrix is the series' transform (an entry without t), so
     # apply-transform applies it to every timepoint, not just the one it came from.
-    assert load_transform_settings(output).series_wide
+    model = load_transform_settings(output)
+    assert model.series_wide
+    assert model.transforms[0].estimated_at == 1  # where the series' transform came from
 
 
 def test_estimate_transform_resume_keeps_existing_records(beads_plate, tmp_path):
