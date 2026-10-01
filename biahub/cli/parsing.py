@@ -14,8 +14,12 @@ from biahub.cli.option_eat_all import OptionEatAll
 def _validate_and_process_paths(
     ctx: click.Context, opt: click.Option, value: str
 ) -> list[Path]:
+    if value is None:  # an optional path option that was not given
+        return []
     # Sort and validate the input paths
     input_paths = [p for p in map(Path, natsorted(value)) if p.is_dir()]
+    if not input_paths:
+        raise click.BadParameter(f"no position directory found in {list(value)}")
     with open_ome_zarr(input_paths[0], mode="r") as dataset:
         if isinstance(dataset, Plate):
             raise ValueError(
