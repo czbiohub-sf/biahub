@@ -450,10 +450,12 @@ def test_transforms_for_file_previous_treats_a_missing_step_as_identity():
     assert result.filled_from == {2: "identity"}
 
 
-def test_transforms_for_file_absolute_frames_fill_from_the_nearest_earlier():
+def test_transforms_for_file_absolute_frames_fill_with_the_input_seed():
+    # As the legacy pipeline did when refinement failed: the input seed (e.g. the
+    # approximate transform), not a neighbour's transform.
     from biahub.registration.engine import SeriesResult
 
     result = SeriesResult(transforms={0: _shift_x(5), 2: _shift_x(7)})
-    filled = transforms_for_file(result, [0, 1, 2], IDENTITY, "first")
-    assert [t.translation[2] for t in filled] == [5.0, 5.0, 7.0]
-    assert result.filled_from == {1: "t=0"}
+    filled = transforms_for_file(result, [0, 1, 2], _shift_x(-3), "first")
+    assert [t.translation[2] for t in filled] == [5.0, -3.0, 7.0]
+    assert result.filled_from == {1: "seed"}

@@ -126,7 +126,7 @@ def test_estimate_transform_writes_a_register_compatible_series(beads_plate, tmp
     report = json.loads((output.parent / "estimate_transform_report.json").read_text())
     assert set(report["scores"]) == {"0", "1"}
     assert all(score > 0.5 for score in report["scores"].values())
-    assert report["errors"] == {} and report["filled_from_neighbour"] == []
+    assert report["errors"] == {} and report["stand_ins"] == {}
     assert (output.parent / "run_journal.json").exists()
     assert sorted(p.name for p in (output.parent / "timepoints").iterdir()) == [
         "0.json",
@@ -229,7 +229,7 @@ def test_estimate_transform_flags_and_tries_to_repair_a_failed_timepoint(
     assert failures["consensus_full"].startswith(
         "ValueError: Consensus seed: only 2 timepoints"
     )
-    assert report["filled_from_neighbour"] == [2]
+    assert report["stand_ins"] == {"2": "seed"}
     assert (output.parent / "repairs" / "2.json").exists()
 
     journal = json.loads((output.parent / "run_journal.json").read_text())
@@ -238,10 +238,11 @@ def test_estimate_transform_flags_and_tries_to_repair_a_failed_timepoint(
 
     entries = load_transform_settings(output).transforms
     assert [e.t for e in entries] == [0, 1, 2]
-    np.testing.assert_allclose(entries[2].matrix, entries[1].matrix)  # filled from t=1
+    np.testing.assert_allclose(entries[2].matrix, np.eye(4))  # the input seed (identity here)
     assert entries[2].score is None and entries[0].score > 0.5
-    # ... and the file says so, instead of the stand-in passing as an estimate
-    assert entries[2].status == "unreliable" and entries[2].filled_from == "t=1"
+    # ... and the file says so, with the failure, instead of passing as an estimate
+    assert entries[2].status == "unreliable" and entries[2].filled_from == "seed"
+    assert "EstimationError" in entries[2].note
     assert [e.status for e in entries[:2]] == ["accepted", "accepted"]
 
 

@@ -45,8 +45,8 @@ def transform_entries(
     """One entry per estimated timepoint with its score, repair provenance and status.
 
     A timepoint is `unreliable` when the pipeline found no good transform for it: none
-    at all (the entry is a stand-in, `filled_from` says which), no score, or flagged and
-    still below `hard_fail` after repair and sweep. Otherwise `accepted`.
+    at all (the entry is a stand-in -- the input seed -- and `note` says why), no score,
+    or flagged and still below `hard_fail` after repair and sweep. Otherwise `accepted`.
 
     A single timepoint (manual, `time_indices: 0`) is the series' transform: one entry
     without `t`, which `apply-transform` applies to every timepoint.
@@ -70,6 +70,8 @@ def transform_entries(
                 repaired_from=result.provenance.get(t),
                 status="unreliable" if unreliable else "accepted",
                 filled_from=filled_from,
+                # why there is no transform of its own (estimate error, job cancelled, ...)
+                note=result.errors.get(t) if filled_from is not None else None,
             )
         )
     return entries

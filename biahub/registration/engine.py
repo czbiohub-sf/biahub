@@ -1137,16 +1137,17 @@ def _one_transform_per_timepoint(
 ) -> list[Transform]:
     """Return one transform per requested timepoint.
 
-    The accepted transform, else the nearest earlier accepted one, else `fallback` (the
-    seed); each stand-in's source is recorded in `result.filled_from`.
+    The accepted transform, else `fallback` -- the input seed (e.g. the approximate
+    transform), as the legacy pipeline returned when refinement failed. Each stand-in is
+    recorded in `result.filled_from`.
     """
-    out, last, source = [], fallback, "seed"
+    out = []
     for t in time_indices:
         if t in result.transforms:
-            last, source = result.transforms[t], f"t={t}"
+            out.append(result.transforms[t])
         else:
-            result.filled_from[t] = source
-        out.append(last)
+            result.filled_from[t] = "seed"
+            out.append(fallback)
     return out
 
 
@@ -1181,7 +1182,7 @@ def _report(result: SeriesResult, time_indices: list[int]) -> dict:
         },
         "sweeps": {str(t): _pass_report(r) for t, r in result.sweeps.items()},
         "provenance": {str(t): source for t, source in sorted(result.provenance.items())},
-        "filled_from_neighbour": [t for t in time_indices if t not in result.transforms],
+        "stand_ins": {str(t): source for t, source in sorted(result.filled_from.items())},
     }
 
 
@@ -1416,13 +1417,13 @@ def estimate_transform_series(
             + ("" if result.provenance.get(t, "").startswith("sweep:") else " (not kept)")
         )
 
+    # Before the report: this records which timepoints got a stand-in.
+    transforms = transforms_for_file(result, time_indices, seed, settings.reference.frame)
     result.journal.save(output_dir / "run_journal.json")
     (output_dir / "estimate_transform_report.json").write_text(
         json.dumps(_report(result, time_indices), indent=2)
     )
-    return result, time_indices, transforms_for_file(
-        result, time_indices, seed, settings.reference.frame
-    )
+    return result, time_indices, transforms
 
 
 def transforms_for_file(
@@ -1430,8 +1431,8 @@ def transforms_for_file(
 ) -> list[Transform]:
     """One transform per timepoint, onto the reference grid, for the transforms file.
 
-    `cross` / `first` transforms are absolute, so a timepoint with none takes the nearest
-    earlier one (else the seed). `previous` transforms are relative steps (t -> t-1): a
+    `cross` / `first` transforms are absolute, so a timepoint with none takes the input
+    seed. `previous` transforms are relative steps (t -> t-1): a
     missing step is identity -- reusing a neighbour's step would add its drift again to
     every later timepoint -- and the steps are chained onto the first frame.
     """
