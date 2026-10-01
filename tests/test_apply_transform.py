@@ -407,3 +407,15 @@ def test_reference_positions_are_paired_by_key_not_by_order():
     }
     with pytest.raises(Exception, match="no reference position"):
         pair_reference_positions(["B/2/0"], refs)
+
+
+def test_transform_entry_status_defaults_to_accepted_and_a_stand_in_is_never_accepted():
+    assert TransformEntry(matrix=_translation(0, 0, 0)).status == "accepted"
+    stand_in = TransformEntry(
+        t=3, matrix=_translation(0, 0, 0), status="unreliable", filled_from="t=2"
+    )
+    assert stand_in.filled_from == "t=2"
+    with pytest.raises(ValueError, match="stand-in"):
+        TransformEntry(t=3, matrix=_translation(0, 0, 0), filled_from="t=2")
+    with pytest.raises(ValueError):
+        TransformEntry(matrix=_translation(0, 0, 0), status="maybe")

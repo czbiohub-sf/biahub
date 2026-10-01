@@ -969,8 +969,17 @@ class EstimateTransformSettings(MyBaseModel):
         return self.score_metric or DEFAULT_SCORE_METRIC[self.method]
 
 
+EntryStatus = Literal["accepted", "unreliable", "rejected"]
+
+
 class TransformEntry(MyBaseModel):
-    """One 4x4 matrix: the series' transform (no `t`) or timepoint `t`'s, with provenance."""
+    """One 4x4 matrix: the series' transform (no `t`) or timepoint `t`'s, with provenance.
+
+    `status` says how far to trust it: `accepted`; `unreliable` (the pipeline found no
+    good transform -- the matrix is its best result, or a stand-in when `filled_from` is
+    set); `rejected` (a person judged it bad and chose a stand-in). A timepoint is never
+    dropped, so even a rejected entry holds the matrix to apply.
+    """
 
     t: NonNegativeInt | None = None
     matrix: list
@@ -983,6 +992,10 @@ class TransformEntry(MyBaseModel):
     # The method that produced this entry when it differs from the file's `method`
     # (an entry substituted in from another method's run by `substitute-transforms`).
     method: str | None = None
+    status: EntryStatus = "accepted"
+    # Where a stand-in matrix came from, e.g. "t=81", "seed", "identity".
+    filled_from: str | None = None
+    note: str | None = None
 
     @field_validator("matrix")
     @classmethod
@@ -995,6 +1008,15 @@ class TransformEntry(MyBaseModel):
     def check_estimated_at(self) -> "TransformEntry":
         if self.estimated_at is not None and self.t is not None:
             raise ValueError("estimated_at is only for an entry without t (the whole series)")
+        return self
+
+    @model_validator(mode="after")
+    def check_stand_in(self) -> "TransformEntry":
+        if self.status == "accepted" and self.filled_from is not None:
+            raise ValueError(
+                f"an accepted entry is a real estimate; filled_from={self.filled_from!r} "
+                "marks a stand-in, which is unreliable or rejected"
+            )
         return self
 
 
