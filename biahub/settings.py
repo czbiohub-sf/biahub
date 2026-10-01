@@ -980,6 +980,9 @@ class TransformEntry(MyBaseModel):
     repaired_from: str | None = None
     # For an entry without `t`: the timepoint it was estimated on (provenance only).
     estimated_at: NonNegativeInt | None = None
+    # The method that produced this entry when it differs from the file's `method`
+    # (an entry substituted in from another method's run by `substitute-transforms`).
+    method: str | None = None
 
     @field_validator("matrix")
     @classmethod
