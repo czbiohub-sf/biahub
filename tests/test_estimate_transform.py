@@ -240,6 +240,9 @@ def test_estimate_transform_flags_and_tries_to_repair_a_failed_timepoint(
     assert [e.t for e in entries] == [0, 1, 2]
     np.testing.assert_allclose(entries[2].matrix, entries[1].matrix)  # filled from t=1
     assert entries[2].score is None and entries[0].score > 0.5
+    # ... and the file says so, instead of the stand-in passing as an estimate
+    assert entries[2].status == "unreliable" and entries[2].filled_from == "t=1"
+    assert [e.status for e in entries[:2]] == ["accepted", "accepted"]
 
 
 def test_estimate_transform_ants_method_recovers_the_shift(beads_plate, tmp_path):

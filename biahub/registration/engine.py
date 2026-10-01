@@ -505,6 +505,9 @@ class SeriesResult:
     sweeps: dict[int, PassResult] = field(default_factory=dict)
     # How an accepted fallback transform was reached, e.g. "consensus_full+polish1".
     provenance: dict[int, str] = field(default_factory=dict)
+    # Timepoints with no transform of their own, and where the stand-in written for them
+    # came from ("t=81", "seed", "identity"); set by `transforms_for_file`.
+    filled_from: dict[int, str] = field(default_factory=dict)
     journal: RunJournal = field(default_factory=RunJournal)
 
 
@@ -1134,11 +1137,15 @@ def _one_transform_per_timepoint(
 ) -> list[Transform]:
     """Return one transform per requested timepoint.
 
-    The accepted transform, else the nearest earlier accepted one, else `fallback`.
+    The accepted transform, else the nearest earlier accepted one, else `fallback` (the
+    seed); each stand-in's source is recorded in `result.filled_from`.
     """
-    out, last = [], fallback
+    out, last, source = [], fallback, "seed"
     for t in time_indices:
-        last = result.transforms.get(t, last)
+        if t in result.transforms:
+            last, source = result.transforms[t], f"t={t}"
+        else:
+            result.filled_from[t] = source
         out.append(last)
     return out
 
@@ -1430,6 +1437,9 @@ def transforms_for_file(
     """
     if frame != "previous":
         return _one_transform_per_timepoint(result, time_indices, seed)
+    for t in time_indices:
+        if t not in result.transforms:
+            result.filled_from[t] = "identity"
     steps = [result.transforms.get(t, Transform.identity()) for t in time_indices]
     return chain_to_first_frame(steps, time_indices)
 

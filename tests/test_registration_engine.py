@@ -447,6 +447,7 @@ def test_transforms_for_file_previous_treats_a_missing_step_as_identity():
     chained = transforms_for_file(result, [0, 1, 2, 3], IDENTITY, "previous")
     # t=2 adds no drift; t=3 adds its own single step: 0, 1, 1, 2 -- not 0, 1, 2, 3.
     assert [t.translation[2] for t in chained] == [0.0, 1.0, 1.0, 2.0]
+    assert result.filled_from == {2: "identity"}
 
 
 def test_transforms_for_file_absolute_frames_fill_from_the_nearest_earlier():
@@ -455,3 +456,4 @@ def test_transforms_for_file_absolute_frames_fill_from_the_nearest_earlier():
     result = SeriesResult(transforms={0: _shift_x(5), 2: _shift_x(7)})
     filled = transforms_for_file(result, [0, 1, 2], IDENTITY, "first")
     assert [t.translation[2] for t in filled] == [5.0, 5.0, 7.0]
+    assert result.filled_from == {1: "t=0"}

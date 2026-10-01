@@ -40,9 +40,13 @@ from biahub.utils.config import model_to_yaml
 
 
 def transform_entries(
-    result: SeriesResult, time_indices: list[int], transforms
+    result: SeriesResult, time_indices: list[int], transforms, hard_fail: float
 ) -> list[TransformEntry]:
-    """One entry per estimated timepoint with its score and repair provenance.
+    """One entry per estimated timepoint with its score, repair provenance and status.
+
+    A timepoint is `unreliable` when the pipeline found no good transform for it: none
+    at all (the entry is a stand-in, `filled_from` says which), no score, or flagged and
+    still below `hard_fail` after repair and sweep. Otherwise `accepted`.
 
     A single timepoint (manual, `time_indices: 0`) is the series' transform: one entry
     without `t`, which `apply-transform` applies to every timepoint.
@@ -50,13 +54,22 @@ def transform_entries(
     entries = []
     for t, transform in zip(time_indices, transforms, strict=True):
         score = result.scores.get(t)
+        finite = score is not None and np.isfinite(score)
+        filled_from = result.filled_from.get(t)
+        unreliable = (
+            filled_from is not None
+            or not finite
+            or (t in result.flagged and score < hard_fail)
+        )
         entries.append(
             TransformEntry(
                 t=None if len(time_indices) == 1 else t,
                 estimated_at=t if len(time_indices) == 1 else None,
                 matrix=transform.to_list(),
-                score=None if score is None or not np.isfinite(score) else float(score),
+                score=float(score) if finite else None,
                 repaired_from=result.provenance.get(t),
+                status="unreliable" if unreliable else "accepted",
+                filled_from=filled_from,
             )
         )
     return entries
@@ -114,7 +127,9 @@ def estimate_transform(
             monitor=monitor,
             resume=resume,
         )
-        return transform_entries(result, time_indices, transforms)
+        return transform_entries(
+            result, time_indices, transforms, settings.fallback.flag.hard_fail
+        )
 
     common = dict(
         direction="forward",
