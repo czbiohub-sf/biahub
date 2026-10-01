@@ -317,6 +317,40 @@ def test_estimate_transform_phase_cross_corr_stabilizes_against_the_first_frame(
         np.testing.assert_allclose(row, [factor * s for s in APPLIED_SHIFT_ZYX], atol=0.5)
 
 
+def test_estimate_transform_several_positions_each_get_their_own_transforms(tmp_path):
+    # Two FOVs drifting in opposite directions: one shared list cannot stabilize both.
+    rng = np.random.default_rng(11)
+    ref = _synthetic_bead_volume(rng, SHAPE)
+    drift = {"0": np.array(APPLIED_SHIFT_ZYX), "1": -np.array(APPLIED_SHIFT_ZYX)}
+    path = tmp_path / "two.zarr"
+    with open_ome_zarr(path, layout="hcs", mode="w", channel_names=["Phase3D", "GFP"]) as plate:
+        for fov, d in drift.items():
+            frames = [ndi_shift(ref, shift=tuple(t * d), order=1, mode="constant") for t in range(3)]
+            plate.create_position("A", "1", fov)["0"] = np.stack(
+                [np.stack([f, f]) for f in frames]
+            ).astype(np.float32)
+    config = _write_config(
+        tmp_path,
+        source="GFP",
+        reference="first",
+        method="phase-cross-corr",
+        # full extent: a centre crop lets beads drift out of the window and biases PCC
+        phase_cross_corr=PhaseCrossCorrSettings(center_crop_xy=[SHAPE[1], SHAPE[2]]),
+    )
+    output = tmp_path / "out" / "stabilization_settings.yml"
+
+    estimate_transform([path / "A" / "1" / "0", path / "A" / "1" / "1"], config, output, cluster="debug")
+
+    model = load_transform_settings(output)
+    assert model.per_position and sorted(model.positions) == ["A/1/0", "A/1/1"]
+    for fov, d in drift.items():
+        pulls = [model.matrix_for(t, "pull", f"A/1/{fov}")[:3, 3] for t in range(3)]
+        for t, row in enumerate(pulls):
+            np.testing.assert_allclose(row, t * d, atol=0.5)
+    # each position kept its own records, so --resume works per position
+    assert (output.parent / "positions" / "A" / "1" / "1" / "timepoints" / "2.json").exists()
+
+
 def test_estimate_transform_manual_runs_in_process_on_one_timepoint(
     beads_plate, tmp_path, monkeypatch
 ):

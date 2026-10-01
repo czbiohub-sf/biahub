@@ -10,6 +10,7 @@ resumes.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import click
@@ -23,6 +24,8 @@ from biahub.cli.parsing import (
     monitor,
     moving_position_dirpaths,
     output_filepath,
+    pair_reference_positions,
+    position_key,
     reference_position_dirpaths,
     resume,
     sbatch_filepath,
@@ -59,6 +62,10 @@ def transform_entries(
     return entries
 
 
+# Positions estimated at once; each driver fans its own timepoints out to SLURM.
+MAX_CONCURRENT_POSITIONS = 8
+
+
 def estimate_transform(
     moving_position_dirpaths: list[Path],
     config_filepath: Path,
@@ -73,43 +80,77 @@ def estimate_transform(
 
     Reads an `EstimateTransformSettings` YAML and writes a `TransformSettings` YAML --
     forward matrices with their scores -- next to the engine's records; see
-    `estimate_transform_series`. The reference positions are only read for
-    `reference.frame: cross`.
+    `estimate_transform_series`. One moving position writes a list shared by every
+    position (e.g. beads registration estimated on the bead FOV); several moving
+    positions are each estimated on their own and written per position (e.g.
+    stabilization, where every FOV drifts differently). The reference positions are only
+    read for `reference.frame: cross`: one serves every moving position, several are
+    paired with them by row/col/fov.
     """
     output_filepath = Path(output_filepath)
     output_dir = output_filepath.parent
     settings = load_estimate_transform_settings(config_filepath)
-    moving = Path(moving_position_dirpaths[0])
+    movings = [Path(p) for p in moving_position_dirpaths]
+    keys = [position_key(p) for p in movings]
     if settings.reference.frame == "cross":
         if not reference_position_dirpaths:
             raise click.UsageError(
                 "reference frame 'cross' needs the reference positions (-r)"
             )
-        reference = Path(reference_position_dirpaths[0])
+        reference_for = pair_reference_positions(keys, reference_position_dirpaths)
     else:
-        reference = moving
-    with open_ome_zarr(reference, mode="r") as position:
+        reference_for = dict(zip(keys, movings, strict=True))
+    with open_ome_zarr(reference_for[keys[0]], mode="r") as position:
         voxel_size = [float(v) for v in position.scale]
 
-    result, time_indices, transforms = estimate_transform_series(
-        moving,
-        reference,
-        settings,
-        output_dir,
-        sbatch_filepath=sbatch_filepath,
-        cluster=cluster,
-        monitor=monitor,
-        resume=resume,
-    )
+    def estimate_position(key: str, moving: Path, work_dir: Path) -> list[TransformEntry]:
+        result, time_indices, transforms = estimate_transform_series(
+            moving,
+            reference_for[key],
+            settings,
+            work_dir,
+            sbatch_filepath=sbatch_filepath,
+            cluster=cluster,
+            monitor=monitor,
+            resume=resume,
+        )
+        return transform_entries(result, time_indices, transforms)
 
-    model = TransformSettings(
+    common = dict(
         direction="forward",
         moving_channels=[settings.moving.channel],
         reference_channel=settings.reference.channel,
         method=settings.method,
         voxel_size=voxel_size,
-        transforms=transform_entries(result, time_indices, transforms),
     )
+    if len(movings) == 1:
+        model = TransformSettings(
+            **common, transforms=estimate_position(keys[0], movings[0], output_dir)
+        )
+    else:
+        click.echo(f"Estimating {len(movings)} positions, each with its own transforms")
+        workers = min(len(movings), MAX_CONCURRENT_POSITIONS)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                key: pool.submit(
+                    estimate_position, key, moving, output_dir / "positions" / key
+                )
+                for key, moving in zip(keys, movings, strict=True)
+            }
+        failed = {}
+        positions = {}
+        for key, future in futures.items():
+            try:
+                positions[key] = future.result()
+            except Exception as e:  # noqa: BLE001 -- report every failed position at once
+                failed[key] = f"{type(e).__name__}: {e}"
+        if failed:
+            listing = "\n".join(f"  {k}: {v}" for k, v in failed.items())
+            raise click.ClickException(
+                f"{len(failed)} of {len(movings)} positions failed; no transforms file "
+                f"written (rerun with --resume to redo only what is missing):\n{listing}"
+            )
+        model = TransformSettings(**common, positions=positions)
     model_to_yaml(model, output_filepath)
     click.echo(f"Transform settings saved to {output_filepath.resolve()}")
 

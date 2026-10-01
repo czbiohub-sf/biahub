@@ -28,6 +28,30 @@ def _validate_and_process_paths(
     return input_paths
 
 
+def position_key(position_dirpath: Path) -> str:
+    """'row/col/fov' of a position directory."""
+    return "/".join(Path(position_dirpath).parts[-3:])
+
+
+def pair_reference_positions(
+    position_keys: list[str], reference_position_dirpaths: list[Path] | None
+) -> dict[str, Path]:
+    """The reference position each moving position is registered onto.
+
+    One reference position serves every moving position; several are paired by position
+    key, and a moving position without its reference is an error.
+    """
+    if not reference_position_dirpaths:
+        return {}
+    if len(reference_position_dirpaths) == 1:
+        return {key: Path(reference_position_dirpaths[0]) for key in position_keys}
+    by_key = {position_key(p): Path(p) for p in reference_position_dirpaths}
+    missing = sorted(set(position_keys) - set(by_key))
+    if missing:
+        raise click.UsageError(f"no reference position for moving positions {missing}")
+    return {key: by_key[key] for key in position_keys}
+
+
 def _str_to_path(ctx: click.Context, opt: click.Option, value: str) -> Path:
     return Path(value)
 

@@ -27,6 +27,8 @@ from biahub.cli.parsing import (
     monitor,
     moving_position_dirpaths,
     output_dirpath,
+    pair_reference_positions,
+    position_key,
     reference_position_dirpaths,
     sbatch_filepath,
     sbatch_to_submitit,
@@ -200,30 +202,6 @@ def parse_time_indices(value: str) -> int | list[int] | str:
     return indices[0] if len(indices) == 1 else indices
 
 
-def _position_key(position_dirpath: Path) -> str:
-    """'row/col/fov' of a position directory."""
-    return "/".join(Path(position_dirpath).parts[-3:])
-
-
-def _pair_reference_positions(
-    position_keys: list[str], reference_position_dirpaths: list[Path] | None
-) -> dict[str, Path]:
-    """The reference position each moving position is registered onto.
-
-    One reference position serves every moving position; several are paired by position
-    key, and a moving position without its reference is an error.
-    """
-    if not reference_position_dirpaths:
-        return {}
-    if len(reference_position_dirpaths) == 1:
-        return {key: Path(reference_position_dirpaths[0]) for key in position_keys}
-    by_key = {_position_key(p): Path(p) for p in reference_position_dirpaths}
-    missing = sorted(set(position_keys) - set(by_key))
-    if missing:
-        raise click.UsageError(f"no reference position for moving positions {missing}")
-    return {key: by_key[key] for key in position_keys}
-
-
 def apply_transform(
     moving_position_dirpaths: list[Path],
     config_filepath: Path,
@@ -256,7 +234,7 @@ def apply_transform(
         moving_voxel_size = tuple(moving.scale[-3:])
     time_indices = _resolve_time_indices(time_indices, T)
     # Each moving position's matrices by timepoint: its own list, or the shared one.
-    position_keys = [_position_key(p) for p in moving_position_dirpaths]
+    position_keys = [position_key(p) for p in moving_position_dirpaths]
     if settings.per_position:
         missing = sorted(set(position_keys) - set(settings.positions))
         if missing:
@@ -268,7 +246,7 @@ def apply_transform(
         key: {t: settings.matrix_for(t, "pull", key) for t in time_indices}
         for key in position_keys
     }
-    reference_for = _pair_reference_positions(position_keys, reference_position_dirpaths)
+    reference_for = pair_reference_positions(position_keys, reference_position_dirpaths)
     pull_by_t = pulls[position_keys[0]]
 
     if reference_position_dirpaths:

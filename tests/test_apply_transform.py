@@ -396,14 +396,14 @@ def test_apply_transform_refuses_a_position_missing_from_a_per_position_file(
 def test_reference_positions_are_paired_by_key_not_by_order():
     from pathlib import Path
 
-    from biahub.apply_transform import _pair_reference_positions
+    from biahub.cli.parsing import pair_reference_positions
 
     refs = [Path("ref.zarr/A/1/1"), Path("ref.zarr/A/1/0")]
-    paired = _pair_reference_positions(["A/1/0", "A/1/1"], refs)
+    paired = pair_reference_positions(["A/1/0", "A/1/1"], refs)
     assert paired == {"A/1/0": refs[1], "A/1/1": refs[0]}
-    assert _pair_reference_positions(["A/1/0", "A/1/1"], refs[:1]) == {
+    assert pair_reference_positions(["A/1/0", "A/1/1"], refs[:1]) == {
         "A/1/0": refs[0],
         "A/1/1": refs[0],
     }
     with pytest.raises(Exception, match="no reference position"):
-        _pair_reference_positions(["B/2/0"], refs)
+        pair_reference_positions(["B/2/0"], refs)
