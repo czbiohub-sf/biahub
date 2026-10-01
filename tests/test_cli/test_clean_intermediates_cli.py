@@ -1,0 +1,314 @@
+import os
+import shutil
+import subprocess
+import sys
+import time
+
+import numpy as np
+import pytest
+
+from click.testing import CliRunner
+from iohub.ngff import open_ome_zarr
+
+from biahub.clean_intermediates import _sample_timepoints
+from biahub.cli.main import cli
+
+DS = "DS"
+POSITIONS = [("A", "1", "000"), ("A", "1", "001")]
+SOURCES = {
+    "0-flatfield": ["raw BF"],
+    "1-deskew": ["BF", "GFP"],
+    "2-reconstruct": ["Phase3D"],
+    "3-virtual-stain": ["nuclei", "membrane"],
+}
+
+
+@pytest.fixture()
+def project(tmp_path):
+    """A finished mantis-v2 project whose assembled plate is an exact copy."""
+    rng = np.random.default_rng(0)
+    data = {}
+    for step, channels in SOURCES.items():
+        (tmp_path / step / "slurm_output").mkdir(parents=True)
+        with open_ome_zarr(
+            tmp_path / step / f"{DS}.zarr", layout="hcs", mode="w", channel_names=channels
+        ) as plate:
+            for row, col, fov in POSITIONS:
+                arr = rng.random((5, len(channels), 2, 8, 8)).astype(np.float32) + 0.1
+                plate.create_position(row, col, fov).create_image("0", arr)
+                data[step, row, col, fov] = arr
+    (tmp_path / "2-reconstruct" / "transfer_function.zarr").mkdir()
+
+    assembled = [
+        c for step in ["1-deskew", "2-reconstruct", "3-virtual-stain"] for c in SOURCES[step]
+    ]
+    with open_ome_zarr(
+        tmp_path / "4-assemble" / f"{DS}.zarr", layout="hcs", mode="w", channel_names=assembled
+    ) as plate:
+        for row, col, fov in POSITIONS:
+            arr = np.concatenate(
+                [
+                    data[s, row, col, fov]
+                    for s in ["1-deskew", "2-reconstruct", "3-virtual-stain"]
+                ],
+                axis=1,
+            )
+            plate.create_position(row, col, fov).create_image("0", arr)
+
+    (tmp_path / "nextflow").mkdir()
+    trace = tmp_path / "nextflow" / "trace.txt"
+    rows = ["task_id\thash\tnative_id\tname\tstatus"] + [
+        f"1\tx\t1\tassemble_run_wf:run_concatenate ({r}/{c}/{f})\tCOMPLETED"
+        for r, c, f in POSITIONS
+    ]
+    trace.write_text("\n".join(rows) + "\n")
+    # The pipeline launch happened before any verification.
+    past = time.time() - 120
+    os.utime(trace, (past, past))
+    (tmp_path / ".nextflow.log").write_text("...\n> Execution complete -- Goodbye\n")
+    return tmp_path
+
+
+def _run(*args):
+    return CliRunner().invoke(cli, ["nf", "clean-intermediates", *map(str, args)])
+
+
+def _edit(project, store, position, fn):
+    with open_ome_zarr(project / store / f"{DS}.zarr" / position, mode="r+") as pos:
+        fn(pos["0"])
+
+
+def _step_zarrs(project):
+    return sorted(p.parent.name for p in project.glob("*-*/DS.zarr"))
+
+
+def test_sample_timepoints():
+    assert _sample_timepoints(91, 3) == [0, 45, 90]
+    assert _sample_timepoints(91, 0) == list(range(91))
+    assert _sample_timepoints(4, 10) == [0, 1, 2, 3]
+    assert _sample_timepoints(91, 1) == [0]
+
+
+def test_verified_project_is_cleaned(project):
+    assert _run("check", project).exit_code == 0
+    assert _run("submit", project, "--cluster", "debug").exit_code == 0
+
+    status = _run("status", project)
+    assert status.exit_code == 0
+    assert "verified 2/2 pass" in status.output
+    assert "all timepoints" in status.output
+
+    dry = _run("delete", project)
+    assert dry.exit_code == 0 and "dry run" in dry.output
+    assert len(_step_zarrs(project)) == 5  # nothing deleted yet
+
+    assert _run("delete", project, "--yes").exit_code == 0
+    assert _step_zarrs(project) == ["4-assemble"]
+    assert (project / "nextflow" / "intermediates_cleaned.txt").exists()
+    assert not list(project.glob("*.txt"))  # nothing written at the project root
+    assert (project / "2-reconstruct" / "transfer_function.zarr").exists()
+    assert all((project / step / "slurm_output").exists() for step in SOURCES)
+    assert list((project / "nextflow" / "slurm_output" / "clean_intermediates").iterdir())
+
+
+def test_changed_voxel_refuses_delete(project):
+    def change_one_voxel(arr):
+        arr[2, 3, 1, 1, 1] = 99.0
+
+    _edit(project, "4-assemble", "A/1/001", change_one_voxel)
+    _run("submit", project, "--cluster", "debug")
+
+    status = _run("status", project)
+    assert status.exit_code == 1
+    assert "FAIL A/1/001" in status.output
+    assert "1/128 voxels differ" in status.output
+
+    delete = _run("delete", project, "--yes")
+    assert delete.exit_code == 1 and "REFUSED" in delete.output
+    assert len(_step_zarrs(project)) == 5
+
+
+def test_unwritten_assembled_volume_is_caught(project):
+    def never_written(arr):
+        arr[1, 4] = 0.0
+
+    _edit(project, "4-assemble", "A/1/000", never_written)
+    _run("submit", project, "--cluster", "debug")
+    status = _run("status", project)
+    assert status.exit_code == 1
+    assert "assembled volume all zero" in status.output
+
+
+def test_blank_source_volume_is_reported_not_blocking(project):
+    def blank_frame(arr):
+        arr[3, 0] = 0.0
+
+    _edit(project, "1-deskew", "A/1/000", blank_frame)
+    _edit(project, "4-assemble", "A/1/000", blank_frame)
+    _run("submit", project, "--cluster", "debug")
+
+    status = _run("status", project)
+    assert status.exit_code == 0
+    assert "empty in source (copied as empty): A/1/000 deskew[c0]" in status.output
+    assert _run("delete", project, "--yes").exit_code == 0
+
+
+def test_sampling_is_labelled_and_can_miss(project):
+    def change_t1(arr):
+        arr[1, 0] = 5.0
+
+    _edit(project, "4-assemble", "A/1/000", change_t1)
+    # 3 of 5 timepoints: t = 0, 2, 4, so the bad t=1 is not seen.
+    _run("submit", project, "--cluster", "debug", "--timepoints", 3)
+    status = _run("status", project)
+    assert status.exit_code == 0
+    assert "SAMPLED" in status.output
+    assert "SAMPLED" in _run("delete", project).output
+
+    _run("submit", project, "--cluster", "debug", "--reverify")
+    assert _run("status", project).exit_code == 1
+
+
+def test_unverified_positions_refuse_delete(project):
+    delete = _run("delete", project, "--yes")
+    assert delete.exit_code == 1
+    assert "not pixel-verified" in delete.output
+
+
+def test_verification_before_last_launch_refuses_delete(project):
+    _run("submit", project, "--cluster", "debug")
+    future = time.time() + 120
+    os.utime(project / "nextflow" / "trace.txt", (future, future))
+    delete = _run("delete", project, "--yes")
+    assert delete.exit_code == 1
+    assert "verified before the last pipeline launch" in delete.output
+
+
+def test_check_refuses_running_run(project):
+    (project / ".nextflow.log").write_text("... still running\n")
+    check = _run("check", project)
+    assert check.exit_code == 1
+    assert "has not finished" in check.output
+
+
+def test_check_refuses_unassembled_position(project):
+    trace = project / "nextflow" / "trace.txt"
+    trace.write_text("\n".join(trace.read_text().splitlines()[:-1]) + "\n")
+    check = _run("check", project)
+    assert check.exit_code == 1
+    assert "no finished run_concatenate" in check.output
+
+
+def test_check_refuses_channel_subset(project):
+    store = project / "4-assemble" / f"{DS}.zarr"
+    with open_ome_zarr(
+        store, layout="hcs", mode="w", channel_names=["BF", "Phase3D"]
+    ) as plate:
+        for row, col, fov in POSITIONS:
+            plate.create_position(row, col, fov).create_image(
+                "0", np.zeros((5, 2, 2, 8, 8), np.float32)
+            )
+    check = _run("check", project)
+    assert check.exit_code == 1
+    assert "sources sum to 5" in check.output
+
+
+def test_interrupted_delete_is_finished(project):
+    _run("submit", project, "--cluster", "debug")
+    (project / "nextflow" / "intermediates_cleaned.txt").write_text("date x\n")
+    for step in SOURCES:
+        store = project / step / f"{DS}.zarr"
+        store.rename(store.with_name(f"{DS}.zarr.deleting-20260101T000000"))
+    result = _run("delete", project, "--yes")
+    assert result.exit_code == 0 and "interrupted delete" in result.output
+    assert not list(project.glob("*-*/*.deleting-*"))
+
+
+def test_biahub_process_exit_codes(project):
+    """The command as a shell runs it: a real process, real exit codes."""
+
+    def biahub(*args):
+        return subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "biahub.cli.main",
+                "nf",
+                "clean-intermediates",
+                *map(str, args),
+            ],
+            capture_output=True,
+            text=True,
+        )
+
+    assert biahub("check", project).returncode == 0
+    assert biahub("delete", project, "--yes").returncode == 1  # nothing verified yet
+    assert biahub("submit", project, "--cluster", "debug").returncode == 0
+    assert biahub("status", project).returncode == 0
+    result = biahub("delete", project, "--yes")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _step_zarrs(project) == ["4-assemble"]
+
+
+def test_cleaned_project_has_nothing_to_do(project):
+    _run("submit", project, "--cluster", "debug")
+    assert _run("delete", project, "--yes").exit_code == 0
+    for command in [("check",), ("submit", "--cluster", "debug"), ("delete", "--yes")]:
+        result = _run(command[0], project, *command[1:])
+        assert result.exit_code == 0
+        assert "already cleaned on" in result.output
+    assert "verified 2/2 pass" in _run("status", project).output
+
+
+def test_hand_cleaned_project_has_nothing_to_do(project):
+    for step in SOURCES:
+        shutil.rmtree(project / step / f"{DS}.zarr")
+    result = _run("delete", project, "--yes")
+    assert result.exit_code == 0
+    assert "no intermediate stores left" in result.output
+
+
+def test_delete_interrupted_between_renames_is_finished(project, monkeypatch):
+    _run("submit", project, "--cluster", "debug")
+    real_rename = type(project).rename
+    calls = []
+
+    def rename_then_fail(self, target):
+        calls.append(self)
+        if len(calls) == 3:
+            raise PermissionError("interrupted")
+        return real_rename(self, target)
+
+    monkeypatch.setattr(type(project), "rename", rename_then_fail)
+    assert _run("delete", project, "--yes").exit_code != 0
+    monkeypatch.undo()
+    assert len(list(project.glob("*-*/*.deleting-*"))) == 2  # two renamed, two not
+
+    result = _run("delete", project, "--yes")
+    assert result.exit_code == 0 and "interrupted delete" in result.output
+    assert _step_zarrs(project) == ["4-assemble"]
+    assert not list(project.glob("*-*/*.deleting-*"))
+
+
+def test_two_stores_for_one_step_refused(project):
+    stale = project / "5-reconstruct" / f"{DS}.zarr"
+    shutil.copytree(project / "2-reconstruct" / f"{DS}.zarr", stale)
+    result = _run("check", project)
+    assert result.exit_code != 0
+    assert "two stores for step 'reconstruct'" in result.output
+
+
+def test_relative_and_absolute_paths_agree(project, monkeypatch):
+    monkeypatch.chdir(project.parent)
+    assert _run("submit", project.name, "--cluster", "debug").exit_code == 0
+    assert _run("delete", project, "--yes").exit_code == 0
+    assert _step_zarrs(project) == ["4-assemble"]
+
+
+def test_deleting_stores_without_marker_refused(project):
+    store = project / "1-deskew" / f"{DS}.zarr"
+    store.rename(store.with_name(f"{DS}.zarr.deleting-20260101T000000"))
+    result = _run("delete", project, "--yes")
+    assert result.exit_code != 0
+    assert "not left by this command" in result.output
+    assert len(_step_zarrs(project)) == 4  # nothing removed

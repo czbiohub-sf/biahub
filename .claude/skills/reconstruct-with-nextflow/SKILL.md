@@ -9,8 +9,11 @@ description: >-
   acquisition under /hpc/instruments/cm.mantis, picks the output project
   directory, scaffolds configs, launches the run in a tmux session in the
   foreground so it can be watched, recovers from Lustre/torn-shard I/O errors,
-  and reports a summary including the QC verdict. Use when asked to "reconstruct", "run the pipeline
-  on", or "process" a named mantis-v2 dataset.
+  and reports a summary including the QC verdict. Every run ends by
+  pixel-verifying the assembled plate and, once the user confirms, deleting the
+  intermediate step stores. Use when
+  asked to "reconstruct", "run the pipeline on", or "process" a named mantis-v2
+  dataset, or to "clean the intermediates" of a finished run.
 ---
 
 # Reconstruct a mantis-v2 dataset with Nextflow
@@ -406,7 +409,8 @@ Classify before acting — `references/recovery.md` has the decision table:
 - **Checksum / Lustre EIO / torn shard**: rerun with `-resume` first — iohub
   replaces torn shards and resumes per unit. Only if it fails
   identically again, write a repair proposal for the user or hand it to the
-  **job-io-error-repair** agent. **Never delete zarr data from this skill.**
+  **job-io-error-repair** agent. **Never delete zarr data while handling an
+  error.** The only deletion this skill performs is §12, after the run.
 - **Exit 1/2 with a Python traceback**: real bug or bad config. Fix, relaunch
   with `-resume`.
 
@@ -434,3 +438,78 @@ Restarts are always `bash ./run_mantis_v2.sh` — the script passes `-resume`.
    verification, and size on disk.
 6. Flag anything needing a human eye: positions that passed only after many
    retries, steps far slower than the reference run, unexpected channel counts.
+7. Clean the intermediates (§12). This is part of every run, not optional
+   follow-up: verify, show the dry run, delete on the user's yes.
+
+## 12. Clean intermediates — every run, delete on confirmation
+
+The flat-field, deskew, reconstruct and virtual-stain stores are tens of TB and
+nothing reads them once assemble is done (track and QC read only the assembled
+and tracking stores). `biahub nf clean-intermediates` deletes **only those
+four `<DATASET>.zarr` stores**. Each step's `slurm_output/`,
+`2-reconstruct/transfer_function.zarr`, `nextflow/`, `qc/`, `configs/`, and the
+assembled and tracking stores all stay.
+
+Do this at the end of EVERY run, once the whole pipeline (track and QC
+included) has finished: run `check`, `submit` and `status` without asking, then
+show the user the `delete` dry run and ask before `delete --yes`. Ask whether
+to verify all timepoints or a sample (`--timepoints 3`) when you submit, and
+say which in the wrap-up. The delete is irreversible, so every step is gated
+on proof that the assembled plate holds the pixels. Matching
+shapes prove nothing, because `concatenate --init` scaffolds the full-shape plate
+before any copy, and an unwritten or torn shard reads back as the fill value.
+
+```bash
+# with the biahub venv active (source <BIAHUB>/.venv/bin/activate)
+biahub nf clean-intermediates check  <OUTPUT>        # metadata: stores, positions, geometry, trace.txt
+biahub nf clean-intermediates submit <OUTPUT>        # one SLURM job per position (preempted, requeued)
+                                                     #   add --timepoints 3 for first/middle/last only
+biahub nf clean-intermediates status <OUTPUT>        # after the jobs finish: pass / fail per position
+biahub nf clean-intermediates delete <OUTPUT>        # dry run: lists what goes and why it is safe
+biahub nf clean-intermediates delete <OUTPUT> --yes  # only after the user has read the dry run
+```
+
+What each gate refuses:
+
+- `check`: a missing source store; a position set that differs between a source
+  and the assembled plate; an assembled channel count that is not the sum of the
+  sources, or a T/Z/Y/X mismatch (a channel subset, crop or time subset in
+  `concatenate.yml`, meaning the intermediates hold data the plate does not); any
+  assembled position without a `COMPLETED`/`CACHED` `run_concatenate` in
+  `trace.txt` (this catches a `--max_positions` smoke test); a last launch that
+  is still running or failed (`.nextflow.log`). The WHOLE run must be over, not
+  just assemble: tracking reads the assembled plate and QC writes tables into it.
+- `submit` (one job per position): every source volume, cast to the assembled dtype,
+  must equal the assembled volume voxel for voxel, NaN equal to NaN. Channels are
+  matched by position in `-i` order, not by name, because `rename_channels.py`
+  renames them. An unreadable volume (torn shard, checksum) counts as a failure.
+  Source volumes that are entirely zero or NaN are REPORTED, not blocking: blank
+  wells and dropped frames are empty in the acquisition, zarr skips all-zero
+  shards, and the comparison already proves the plate is empty in the same places.
+  The full comparison reads every voxel twice and is bound by Lustre: about
+  1.5 h for an 84-position, 91-timepoint plate. `--timepoints N` compares N
+  evenly spaced timepoints (always first and last), about T/N times faster, but
+  a volume that transferred wrong at an unchecked timepoint goes unseen. Default
+  is all; ask the user which, and `status`/`delete` print `SAMPLED` when used.
+- `delete`: any position not verified, or with mismatched pixels; a result from
+  before the last pipeline launch, or against a different store.
+
+Do not base the decision on the QC verdict. QC measures image quality, not
+whether the copy is complete; the pixel comparison is the only gate.
+
+Report `status` failures to the user as they are: for each position, which
+source and channel, which timepoints, and how many voxels differ, and whether
+the assembled volume is all zero (the transfer never happened). A mismatch
+means that position must be re-assembled from the intermediates this step would
+have deleted, so the delete stays refused until it is fixed and re-verified.
+
+`delete --yes` renames each store to `*.deleting-<stamp>` before removing it,
+so a half-deleted store never looks valid; rerunning `delete --yes` finishes an
+interrupted delete. It writes `<OUTPUT>/nextflow/intermediates_cleaned.txt`, and
+`run_mantis_v2.sh` warns when it sees that file. `-resume` still re-runs the
+steps after assemble (track, QC): flat-field through assemble come back
+CACHED, because their inputs are path strings and nothing opens the deleted
+stores. If any of them shows as re-running instead (a changed process script
+or param, or a cleaned `nextflow/work`), stop the run; it will fail on a missing
+store or recompute from raw. Removing tens of TB on Lustre
+takes a while, so run it in tmux.

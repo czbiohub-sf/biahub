@@ -103,6 +103,17 @@ INPUT_ZARR="${CONVERTED_ZARR:-${DATA_DIR}/${DATASET}/${RAW_STORE}}"
 [[ -d "${INPUT_ZARR}" ]] || { echo "input not found: ${INPUT_ZARR}" >&2; exit 1; }
 [[ -d "${CONFIGS}"    ]] || { echo "configs not found: ${CONFIGS}"  >&2; exit 1; }
 
+# `biahub nf clean-intermediates` deleted the flat-field/deskew/reconstruct/virtual-stain
+# stores. -resume still works for the steps after assemble (track, QC): the steps
+# up to assemble come back CACHED and never open the deleted stores. That holds
+# only while their cache entries match — if the output shows any of them
+# re-running (a changed process script or param, a cleaned nextflow/work),
+# stop the run: it will either fail on a missing store or recompute from raw.
+if [[ -f "${OUTPUT_DIR}/nextflow/intermediates_cleaned.txt" ]]; then
+    echo "  WARNING: intermediates were deleted (see nextflow/intermediates_cleaned.txt)." >&2
+    echo "  Only steps after assemble can run; flat-field..assemble must show as cached." >&2
+fi
+
 # Record which code and inputs this run used, to a FILE as well as the console.
 #
 # The file is the durable record. The launch is deliberately not piped through

@@ -5,6 +5,7 @@ import click
 
 from iohub.ngff import open_ome_zarr
 
+from biahub.clean_intermediates import clean_intermediates_cli
 from biahub.utils import notify as notify_utils
 
 
@@ -15,6 +16,9 @@ def nf_cli():
     Generic helpers shared across Nextflow pipelines. Step-specific init/run
     logic lives on each step's own CLI command (e.g. ``biahub deskew``).
     """
+
+
+nf_cli.add_command(clean_intermediates_cli)
 
 
 @nf_cli.command("list-positions")
