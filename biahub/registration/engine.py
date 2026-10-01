@@ -331,6 +331,13 @@ class PassResult:
     reseed_score: float | None = None  # the accepted candidate's score before polish
 
 
+def _beats(candidate: float | None, current: float | None) -> bool:
+    """A finite candidate beats a missing / NaN current score, or a strictly lower one."""
+    if candidate is None or not np.isfinite(candidate):
+        return False
+    return current is None or not np.isfinite(current) or candidate > current
+
+
 def _best_of(
     t: int,
     pass_name: str,
@@ -360,7 +367,7 @@ def _best_of(
             failures[name] = f"{type(e).__name__}: {e}"
             continue
         scores[name] = candidate_score
-        if candidate_score is not None and candidate_score > best_score:
+        if _beats(candidate_score, best_score):
             best_name, best_transform, best_score = name, candidate_transform, candidate_score
 
     accepted = best_name != "unchanged"
@@ -469,7 +476,7 @@ def polish(
             candidate_score = score_fn(candidate)
         except Exception:  # noqa: BLE001 -- a failed round keeps the accepted transform
             break
-        if candidate_score is None or not candidate_score > score:
+        if not _beats(candidate_score, score):
             break
         transform, score, improved = candidate, candidate_score, improved + 1
     if journal is not None and rounds:

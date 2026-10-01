@@ -215,6 +215,57 @@ def test_repair_series_rescues_a_timepoint_whose_estimate_failed():
     assert 2 not in result.errors
 
 
+def test_repair_series_replaces_a_transform_whose_score_is_nan():
+    # Estimation succeeded but scoring found nothing to score (e.g. no beads): the
+    # timepoint holds a transform with a NaN score, and any finite candidate must win.
+    fix = Transform.from_translation([1.0, 0.0, 0.0])
+
+    def score(transform, mov, ref):  # t=1 (mean 1) finds nothing to score unless fixed
+        if transform is fix:
+            return 0.7
+        return float("nan") if round(float(mov.mean())) == 1 else 0.9
+
+    class _EchoSeed:
+        def estimate(self, mov, ref, seed=None):
+            return seed
+
+    mov = _constant_frames(3)
+    result = estimate_series(mov, FixedFrame(0), _EchoSeed(), FixedSeed(IDENTITY), score, range(3))
+    assert np.isnan(result.scores[1]) and 1 in result.transforms
+
+    result = repair_series(
+        mov,
+        FixedFrame(0),
+        _EchoSeed(),
+        score,
+        result,
+        candidates=lambda t, history, scores, flagged: {"fix": FixedSeed(fix)},
+    )
+
+    assert result.transforms[1] is fix
+    assert result.scores[1] == 0.7
+
+
+def test_polish_improves_on_a_nan_score():
+    better = Transform.from_translation([2.0, 0.0, 0.0])
+
+    class _Refines:
+        def estimate(self, mov, ref, seed=None):
+            return better
+
+    transform, score, rounds = polish(
+        t=0,
+        mov=np.zeros((2, 2, 2)),
+        ref=np.zeros((2, 2, 2)),
+        estimator=_Refines(),
+        transform=IDENTITY,
+        score=float("nan"),
+        score_fn=lambda transform: 0.5 if transform is better else float("nan"),
+        rounds=1,
+    )
+    assert transform is better and score == 0.5 and rounds == 1
+
+
 def test_neighbour_consensus_config_candidates_skips_flagged_neighbours():
     history = {t: Transform.from_translation([float(t), 0.0, 0.0]) for t in range(7)}
     scores = {t: 0.9 for t in range(7)}
