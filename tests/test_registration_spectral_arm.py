@@ -4,7 +4,12 @@ import pytest
 from scipy.ndimage import shift as ndi_shift
 from scipy.spatial.transform import Rotation
 
-from biahub.core.graph_matching import Graph, GraphMatcher
+from biahub.core.graph_matching import (
+    Graph,
+    GraphMatcher,
+    MatchingTooLargeError,
+    spectral_affinity,
+)
 from biahub.core.transform import Transform
 from biahub.registration.engine import build_beads_estimator
 from biahub.registration.estimators import (
@@ -57,8 +62,71 @@ def test_spectral_matching_recovers_correspondence_under_rotation_and_large_shif
 def test_spectral_matching_refuses_an_affinity_matrix_it_cannot_hold():
     nodes = np.random.default_rng(1).uniform(0, 100, size=(250, 3))
     matcher = GraphMatcher(algorithm="spectral")
-    with pytest.raises(ValueError, match="affinity matrix"):
+    with pytest.raises(MatchingTooLargeError, match="affinity entries"):
         matcher.match(Graph.from_nodes(nodes), Graph.from_nodes(nodes))
+
+
+def _dense_affinity(d_mov, d_ref, sigma):
+    """The original dense construction, kept here as the reference implementation."""
+    n_m, n_r = len(d_mov), len(d_ref)
+    ii = np.repeat(np.arange(n_m), n_r)
+    jj = np.tile(np.arange(n_r), n_m)
+    diff = np.abs(d_mov[np.ix_(ii, ii)] - d_ref[np.ix_(jj, jj)])
+    M = np.exp(-(diff**2) / (2 * sigma**2))
+    M[ii[:, None] == ii[None, :]] = 0
+    M[jj[:, None] == jj[None, :]] = 0
+    np.fill_diagonal(M, 0)
+    return M
+
+
+def test_sparse_spectral_affinity_equals_the_dense_one_and_matches_identically():
+    from scipy.spatial.distance import cdist
+
+    rng = np.random.default_rng(4)
+    ref = rng.uniform(0, 150, size=(25, 3))
+    rotation = Rotation.from_euler("zyx", [20, -10, 35], degrees=True).as_matrix()
+    mov = np.vstack([ref[:22] @ rotation.T + [40.0, -30.0, 55.0], rng.uniform(0, 150, (5, 3))])
+    mov += rng.normal(0, 0.5, mov.shape)
+    sigma = 3.0
+
+    dense = _dense_affinity(cdist(mov, mov), cdist(ref, ref), sigma)
+    sparse = spectral_affinity(cdist(mov, mov), cdist(ref, ref), sigma).toarray()
+    assert np.abs(dense - sparse).max() < 1e-7
+
+    matcher = GraphMatcher(algorithm="spectral", spectral_sigma=sigma)
+    matches = matcher.match(Graph.from_nodes(mov), Graph.from_nodes(ref))
+    x = np.ones(dense.shape[0]) / np.sqrt(dense.shape[0])
+    for _ in range(matcher.spectral_max_iter):
+        x = dense @ x
+        x /= np.linalg.norm(x)
+    order = np.argsort(-x)
+    expected, used_i, used_j = [], set(), set()
+    for idx in order:
+        if x[idx] <= matcher.spectral_rel_cut * x.max():
+            break
+        i, j = divmod(int(idx), len(ref))
+        if i not in used_i and j not in used_j:
+            used_i.add(i), used_j.add(j), expected.append((i, j))
+    assert sorted(map(tuple, matches.tolist())) == sorted(expected)
+
+
+def test_a_matcher_that_cannot_run_is_an_estimation_error():
+    settings = _beads_settings()
+
+    def too_large(mov_nodes, ref_nodes):
+        raise MatchingTooLargeError("too many candidates")
+
+    rng = np.random.default_rng(5)
+    volume = _synthetic_bead_volume(rng, (24, 48, 48), n_beads=12)
+    estimator = NodeGraphEstimator(
+        mov_detector=BeadNodeDetector(settings.source_peaks_settings),
+        ref_detector=BeadNodeDetector(settings.target_peaks_settings),
+        beads_match_settings=settings,
+        affine_transform_settings=AffineTransformSettings(transform_type="euclidean"),
+        matcher=too_large,
+    )
+    with pytest.raises(EstimationError, match="too many candidates"):
+        estimator.estimate(volume, volume)
 
 
 class _FixedEstimator:

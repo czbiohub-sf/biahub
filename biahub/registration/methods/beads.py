@@ -38,7 +38,7 @@ from scipy.spatial import cKDTree
 from skimage.transform import AffineTransform, EuclideanTransform, SimilarityTransform
 
 from biahub.characterize_psf import detect_peaks
-from biahub.core.graph_matching import Graph, GraphMatcher
+from biahub.core.graph_matching import Graph, GraphMatcher, MatchingTooLargeError
 from biahub.core.transform import Transform
 from biahub.registration.estimators import (
     EstimationError,
@@ -600,7 +600,10 @@ class NodeGraphEstimator:
                 f"too few nodes to fit a transform: {len(mov_nodes)} moving, "
                 f"{len(ref_nodes)} reference (need >= 3 each)"
             )
-        matches = np.asarray(self.matcher(mov_nodes, ref_nodes))
+        try:
+            matches = np.asarray(self.matcher(mov_nodes, ref_nodes))
+        except MatchingTooLargeError as e:  # this matcher can't run here; others may
+            raise EstimationError(str(e)) from e
         if matches.ndim != 2 or len(matches) < 3:
             raise EstimationError(
                 f"too few matches to fit a transform: {len(matches)} from "

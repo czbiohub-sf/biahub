@@ -26,9 +26,63 @@ import numpy as np
 
 from numpy.typing import NDArray
 from scipy.optimize import linear_sum_assignment
+from scipy.sparse import csr_matrix
 from scipy.spatial.distance import cdist
 from skimage.feature import match_descriptors
 from sklearn.neighbors import NearestNeighbors, radius_neighbors_graph
+
+# Spectral affinity entries kept: candidate pairs whose distances agree within this many
+# sigmas (beyond it the Gaussian weight is < 1.5e-8, numerically irrelevant).
+SPECTRAL_CUTOFF_SIGMAS = 6.0
+# Largest sparse affinity the spectral matcher builds (~12 bytes per entry).
+SPECTRAL_MAX_NONZEROS = 200_000_000
+
+
+class MatchingTooLargeError(ValueError):
+    """The candidate set is too large for the requested matching algorithm."""
+
+
+def spectral_affinity(
+    d_mov: NDArray, d_ref: NDArray, sigma: float, cutoff_sigmas: float = SPECTRAL_CUTOFF_SIGMAS
+) -> csr_matrix:
+    """Sparse Leordeanu-Hebert affinity between candidate correspondences.
+
+    Candidate a = (i, j) is index i * n_ref + j. Entry (a, b) = exp(-(d_mov[i, i'] -
+    d_ref[j, j'])^2 / 2 sigma^2) for i != i' and j != j' (a point takes one partner, so
+    candidates sharing a row or a column never reinforce one another), kept only where
+    the distances agree within `cutoff_sigmas`.
+    """
+    n_m, n_r = len(d_mov), len(d_ref)
+    off_diagonal = ~np.eye(n_r, dtype=bool)
+    ref_j, ref_j2 = np.nonzero(off_diagonal)
+    ref_d = d_ref[off_diagonal]
+    order = np.argsort(ref_d, kind="stable")
+    ref_j, ref_j2, ref_d = ref_j[order], ref_j2[order], ref_d[order]
+    window = cutoff_sigmas * sigma
+
+    mov_i, mov_i2 = np.nonzero(~np.eye(n_m, dtype=bool))
+    mov_d = d_mov[mov_i, mov_i2]
+    lo = np.searchsorted(ref_d, mov_d - window, side="left")
+    hi = np.searchsorted(ref_d, mov_d + window, side="right")
+    nnz = int((hi - lo).sum())
+    if nnz > SPECTRAL_MAX_NONZEROS:
+        raise MatchingTooLargeError(
+            f"spectral matching would need {nnz} affinity entries ({n_m} x {n_r} nodes, "
+            f"sigma={sigma}); restrict the candidate set or lower sigma"
+        )
+    rows = np.empty(nnz, dtype=np.int64)
+    cols = np.empty(nnz, dtype=np.int64)
+    vals = np.empty(nnz, dtype=np.float64)
+    at = 0
+    for i, i2, d, a, b in zip(mov_i, mov_i2, mov_d, lo, hi, strict=True):
+        if a == b:
+            continue
+        n = b - a
+        rows[at : at + n] = i * n_r + ref_j[a:b]
+        cols[at : at + n] = i2 * n_r + ref_j2[a:b]
+        vals[at : at + n] = np.exp(-((ref_d[a:b] - d) ** 2) / (2 * sigma**2))
+        at += n
+    return csr_matrix((vals, (rows, cols)), shape=(n_m * n_r, n_m * n_r))
 
 # ============================================================
 # GRAPH CLASS
@@ -398,27 +452,19 @@ class GraphMatcher:
         Given a good initial transform the Hungarian matcher is more precise: acquire with
         this, then refine.
 
-        Memory is O((n_mov * n_ref)^2) for the affinity matrix: tens of beads, not
-        thousands of points.
+        The affinity is sparse (`spectral_affinity`): only candidate pairs whose distances
+        agree within a few sigma are stored, so memory follows the geometric agreement,
+        not (n_mov * n_ref)^2. Raises `MatchingTooLargeError` past a fixed entry budget.
         """
         n_m, n_r = moving.n_nodes, reference.n_nodes
         n_cand = n_m * n_r
-        if n_cand > 40000:
-            raise ValueError(
-                f"spectral matching would need a {n_cand}x{n_cand} affinity matrix "
-                f"({n_m} x {n_r} candidates). Restrict the candidate set first."
-            )
         ii = np.repeat(np.arange(n_m), n_r)
         jj = np.tile(np.arange(n_r), n_m)
-        d_mov = cdist(moving.nodes, moving.nodes)
-        d_ref = cdist(reference.nodes, reference.nodes)
-        diff = np.abs(d_mov[np.ix_(ii, ii)] - d_ref[np.ix_(jj, jj)])
-        M = np.exp(-(diff**2) / (2 * self.spectral_sigma**2))
-        # A point cannot take two partners: candidates sharing a row or a column must not
-        # reinforce one another, or the eigenvector concentrates on one point matched to all.
-        M[ii[:, None] == ii[None, :]] = 0
-        M[jj[:, None] == jj[None, :]] = 0
-        np.fill_diagonal(M, 0)
+        M = spectral_affinity(
+            cdist(moving.nodes, moving.nodes),
+            cdist(reference.nodes, reference.nodes),
+            self.spectral_sigma,
+        )
 
         x = np.ones(n_cand) / np.sqrt(n_cand)
         for _ in range(self.spectral_max_iter):
