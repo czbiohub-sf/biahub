@@ -70,6 +70,11 @@ COMMANDS = [
         "help": "Estimate a transform series (registration or stabilization)",
     },
     {
+        "name": "substitute-transforms",
+        "import_path": "biahub.substitute_transforms.substitute_transforms_cli",
+        "help": "Replace chosen timepoints of a transforms file with another run's",
+    },
+    {
         "name": "convert-settings",
         "import_path": "biahub.convert_settings.convert_settings_cli",
         "help": "Convert a retired registration/stabilization config to the unified one",
