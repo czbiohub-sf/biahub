@@ -1099,17 +1099,19 @@ class TransformSettings(MyBaseModel):
             )
         return self.positions[position]
 
+    def entry_for(self, t: int, position: str | None = None) -> TransformEntry:
+        """The entry timepoint `t` of `position` uses: its own, else the nearest earlier."""
+        entries = self.entries_for(position)
+        if entries[0].t is None:
+            return entries[0]
+        earlier = [e for e in entries if e.t <= t]
+        return earlier[-1] if earlier else entries[0]
+
     def matrix_for(
         self, t: int, direction: TransformDirection, position: str | None = None
     ) -> np.ndarray:
         """Matrix for timepoint `t` of `position` in `direction`: its own, else the nearest earlier."""
-        entries = self.entries_for(position)
-        if entries[0].t is None:
-            entry = entries[0]
-        else:
-            earlier = [e for e in entries if e.t <= t]
-            entry = earlier[-1] if earlier else entries[0]
-        return self._as(entry.matrix, direction)
+        return self._as(self.entry_for(t, position).matrix, direction)
 
     def unique_matrices(self, direction: TransformDirection) -> list[np.ndarray]:
         lists = [self.transforms] if self.transforms is not None else self.positions.values()

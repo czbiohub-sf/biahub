@@ -419,3 +419,32 @@ def test_transform_entry_status_defaults_to_accepted_and_a_stand_in_is_never_acc
         TransformEntry(t=3, matrix=_translation(0, 0, 0), filled_from="t=2")
     with pytest.raises(ValueError):
         TransformEntry(matrix=_translation(0, 0, 0), status="maybe")
+
+
+def test_apply_transform_writes_every_timepoint_and_records_the_not_accepted_ones(
+    structured_plate, tmp_path
+):
+    position, data = structured_plate
+    config = tmp_path / "transforms.yml"
+    model_to_yaml(
+        TransformSettings(
+            direction="forward",
+            moving_channels=["GFP"],
+            transforms=[
+                TransformEntry(t=0, matrix=_translation(0, 0, 0)),
+                TransformEntry(
+                    t=1, matrix=_translation(0, 0, 0), status="unreliable", filled_from="t=0"
+                ),
+                TransformEntry(t=2, matrix=_translation(0, 0, 0)),
+            ],
+        ),
+        config,
+    )
+    output = tmp_path / "out.zarr"
+
+    apply_transform([position], config, output, keep_overhang=True, cluster="debug")
+
+    with open_ome_zarr(output / "A" / "1" / "0", mode="r") as out:
+        assert out.data.shape[0] == 3  # the unreliable timepoint is written, not dropped
+        recorded = out.zattrs["biahub-apply-transform"]["timepoints_not_accepted"]
+    assert recorded == {"unreliable": [1]}

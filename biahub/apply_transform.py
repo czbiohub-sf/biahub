@@ -247,6 +247,20 @@ def apply_transform(
         for key in position_keys
     }
     reference_for = pair_reference_positions(position_keys, reference_position_dirpaths)
+    # Timepoints written with a transform that is not `accepted`, per position.
+    not_accepted = {}
+    for key in position_keys:
+        by_status = {}
+        for t in time_indices:
+            status = settings.entry_for(t, key).status
+            if status != "accepted":
+                by_status.setdefault(status, []).append(t)
+        if by_status:
+            not_accepted[key] = by_status
+            click.echo(
+                f"{key}: written with transforms that are not accepted -- "
+                + "; ".join(f"{s} t={ts}" for s, ts in by_status.items())
+            )
     pull_by_t = pulls[position_keys[0]]
 
     if reference_position_dirpaths:
@@ -317,7 +331,7 @@ def apply_transform(
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=resolved_cluster)
     executor.update_parameters(**slurm_args)
 
-    extra_metadata = {
+    run_metadata = {
         "biahub-apply-transform": {
             "transforms": settings.model_dump(),
             "time_indices": time_indices,
@@ -330,6 +344,12 @@ def apply_transform(
     with submitit.helpers.clean_env(), executor.batch():
         for key, moving_path in zip(position_keys, moving_position_dirpaths, strict=True):
             output_position_path = output_dirpath / Path(*moving_path.parts[-3:])
+            extra_metadata = {
+                "biahub-apply-transform": {
+                    **run_metadata["biahub-apply-transform"],
+                    "timepoints_not_accepted": not_accepted.get(key, {}),
+                }
+            }
             # Jobs look a matrix up by input timepoint: a T-long list, filled for the selected t.
             matrices_for_jobs = [None] * T
             for t, matrix in pulls[key].items():
