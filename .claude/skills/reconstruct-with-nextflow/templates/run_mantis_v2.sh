@@ -58,10 +58,12 @@ CONVERTED_ZARR=""          # e.g. ${OUTPUT_DIR}/0-convert/${DATASET}.zarr
 # deskew, reconstruct and virtual-stain directories, the resume markers beside
 # the final stores, and the Nextflow work directory (biahub#292). A cleaned run
 # is FINAL — any rerun recomputes everything from the raw input.
-#   ""      auto: on when concatenate.yml takes all the data, off if it crops
+#   auto    on when concatenate.yml takes all the data, off if it crops
 #   true    on, even if concatenate.yml crops (the cropped-out data is lost)
 #   false   off: keep every intermediate
-CLEANUP_INTERMEDIATES=""
+# The pipeline resolves `auto` at launch (cleanup_decision in
+# nextflow/modules/cleanup.nf) and logs the outcome and why.
+CLEANUP_INTERMEDIATES="auto"
 
 # ---------------------------------------------------------------------------
 
@@ -112,49 +114,6 @@ INPUT_ZARR="${CONVERTED_ZARR:-${DATA_DIR}/${DATASET}/${RAW_STORE}}"
 [[ -d "${INPUT_ZARR}" ]] || { echo "input not found: ${INPUT_ZARR}" >&2; exit 1; }
 [[ -d "${CONFIGS}"    ]] || { echo "configs not found: ${CONFIGS}"  >&2; exit 1; }
 
-# Resolve CLEANUP_INTERMEDIATES. Auto turns cleanup on only when assemble keeps
-# ALL the data, because the intermediates are then fully duplicated in the
-# assembled store. Any crop — time_indices, channel_names, or an X/Y/Z slice
-# other than "all" (or a per-source list of "all") — means the intermediates
-# hold data nothing else does, so auto leaves them alone.
-CONCATENATE_CONFIG="${CONFIGS}/concatenate.yml"
-case "${CLEANUP_INTERMEDIATES}" in
-    true)  CLEANUP_REASON="set explicitly" ;;
-    false) CLEANUP_REASON="set explicitly" ;;
-    "")
-        if [[ ! -f "${CONCATENATE_CONFIG}" ]]; then
-            CLEANUP_INTERMEDIATES=false
-            CLEANUP_REASON="auto: no concatenate.yml, so no assembled store"
-        else
-            CROPPED_FIELDS="$(python - "${CONCATENATE_CONFIG}" <<'EOF'
-import sys
-
-import yaml
-
-with open(sys.argv[1]) as f:
-    config = yaml.safe_load(f) or {}
-
-def takes_all(value):
-    if value is None or value == "all":
-        return True
-    return isinstance(value, list) and len(value) > 0 and all(v == "all" for v in value)
-
-fields = ("time_indices", "channel_names", "X_slice", "Y_slice", "Z_slice")
-print(" ".join(field for field in fields if not takes_all(config.get(field))))
-EOF
-)"
-            if [[ -z "${CROPPED_FIELDS}" ]]; then
-                CLEANUP_INTERMEDIATES=true
-                CLEANUP_REASON="auto: concatenate.yml takes all the data"
-            else
-                CLEANUP_INTERMEDIATES=false
-                CLEANUP_REASON="auto: concatenate.yml crops ${CROPPED_FIELDS}"
-            fi
-        fi
-        ;;
-    *) echo "CLEANUP_INTERMEDIATES must be empty, true or false, not '${CLEANUP_INTERMEDIATES}'" >&2; exit 1 ;;
-esac
-
 # Record which code and inputs this run used, to a FILE as well as the console.
 #
 # The file is the durable record. The launch is deliberately not piped through
@@ -174,7 +133,7 @@ mkdir -p "${OUTPUT_DIR}/nextflow"
     echo "commit    ${BIAHUB_COMMIT}"
     echo "host      $(hostname)"
     echo "slack_id  ${BIAHUB_SLACK_ID:-<unset>}"
-    echo "cleanup   ${CLEANUP_INTERMEDIATES} (${CLEANUP_REASON})"
+    echo "cleanup   ${CLEANUP_INTERMEDIATES} (requested; resolved in .nextflow.log)"
     echo "nextflow  $(nextflow -version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
     if [[ -n "${BIAHUB_DIRTY}" ]]; then
         echo "dirty     YES — not reproducible from the commit above:"
@@ -188,7 +147,7 @@ mkdir -p "${OUTPUT_DIR}/nextflow"
 echo "biahub: ${BIAHUB_PROJECT}"
 echo "  branch ${BIAHUB_BRANCH}  ${BIAHUB_COMMIT%% *}"
 echo "  provenance appended to ${PROVENANCE}"
-echo "cleanup intermediates: ${CLEANUP_INTERMEDIATES} (${CLEANUP_REASON})"
+echo "cleanup intermediates: ${CLEANUP_INTERMEDIATES} (requested)"
 if [[ -n "${BIAHUB_DIRTY}" ]]; then
     echo "  WARNING: uncommitted changes — this run is not reproducible from the commit above" >&2
 fi

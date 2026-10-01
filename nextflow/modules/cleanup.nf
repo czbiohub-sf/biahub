@@ -1,8 +1,10 @@
 // Cleanup of a finished run's intermediates (biahub#292).
 //
-// Opt-in via `--cleanup_intermediates`. The pipeline hands this module the
-// directories to delete and a trigger that fires only once the run's last step
-// has finished; this module knows nothing about which steps those are.
+// Opt-in via `--cleanup_intermediates auto|true|false` (default false).
+// cleanup_decision() turns that into on/off at launch; the pipeline then hands
+// this module the directories to delete and a trigger that fires only once the
+// run's last step has finished. This module knows nothing about which steps
+// those are.
 //
 // NO VERIFICATION, ON PURPOSE. The issue proposed checking the assembled plate
 // against each source before deleting it, but most of what could be checked —
@@ -15,10 +17,64 @@
 //
 // A CLEANED RUN IS FINAL. The pipeline deletes the intermediate stores, the
 // resume markers (`.iohub-progress`) beside the final stores, and — through
-// nextflow.config's `cleanup` — the work directory. A later run in the same
-// output directory therefore recomputes everything from the raw input rather
-// than resuming: no Nextflow task is cached, and no concatenate write unit is
-// skipped as already written.
+// Nextflow's `cleanup`, which it switches on alongside — the work directory.
+// A later run in the same output directory therefore recomputes everything
+// from the raw input rather than resuming: no Nextflow task is cached, and no
+// concatenate write unit is skipped as already written.
+
+
+// The concatenate settings in `concatenate_config` that select a SUBSET of the
+// source data. Anything other than "all" (or a per-source list made only of
+// "all") means the assembled plate holds less than the intermediates, so they
+// are not duplicates and `auto` keeps them. Mirrors ConcatenateSettings, where
+// every one of these defaults to "all".
+def cropped_fields(concatenate_config) {
+    def config = new org.yaml.snakeyaml.Yaml().load(new File(concatenate_config as String).text) ?: [:]
+    def fields = ['time_indices', 'channel_names', 'X_slice', 'Y_slice', 'Z_slice']
+    return fields.findAll { field ->
+        def value = config[field]
+        def takes_all = value == null || value == 'all' ||
+            (value instanceof List && !value.isEmpty() && value.every { entry -> entry == 'all' })
+        !takes_all
+    }
+}
+
+// Resolve --cleanup_intermediates into [on: boolean, reason: String] at launch.
+//
+//   false (default)  off
+//   true             on, even if concatenate.yml crops; needs --concatenate_config
+//   auto             on only when concatenate.yml takes ALL the data, i.e. the
+//                    intermediates are fully duplicated in the assembled plate;
+//                    off if it crops or there is no assemble step
+//
+// The value is compared as text, never truth-tested: a param given on the
+// command line arrives as a String, and the String "false" is truthy in Groovy.
+// Decided while the graph is built rather than in a task, because the step
+// list, the run-start message and the work-directory cleanup all depend on it,
+// and a typo should fail before anything is submitted.
+def cleanup_decision(value, concatenate_config) {
+    def requested = value == null ? 'false' : value.toString().trim().toLowerCase()
+    if (!(requested in ['auto', 'true', 'false'])) {
+        error "--cleanup_intermediates must be auto, true or false, not '${value}'"
+    }
+    if (requested == 'false') {
+        return [on: false, reason: 'off: --cleanup_intermediates false']
+    }
+    if (!concatenate_config) {
+        if (requested == 'true') {
+            error "--cleanup_intermediates true needs --concatenate_config: without assemble the reconstruction stores are the output."
+        }
+        return [on: false, reason: 'auto: no --concatenate_config, so the reconstruction stores are the output']
+    }
+    if (requested == 'true') {
+        return [on: true, reason: 'on: --cleanup_intermediates true']
+    }
+    def cropped = cropped_fields(concatenate_config)
+    if (cropped) {
+        return [on: false, reason: "auto: concatenate.yml crops ${cropped.join(', ')}"]
+    }
+    return [on: true, reason: 'auto: concatenate.yml takes all the data']
+}
 
 
 // Validate and normalise the paths to delete. Called while the graph is built,

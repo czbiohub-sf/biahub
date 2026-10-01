@@ -302,15 +302,19 @@ Do not run anything yet. Show the user:
     directories, the `.iohub-progress/` resume markers beside the final stores,
     and the Nextflow work directory. Only the assembled store, the tracking
     store, the QC report and the logs remain, and the run is final: any rerun
-    recomputes from raw. Check `concatenate.yml`:
+    recomputes from raw. The template's `CLEANUP_INTERMEDIATES="auto"` lets the
+    pipeline decide at launch (`cleanup_decision` in
+    `nextflow/modules/cleanup.nf`); check `concatenate.yml` now so the plan says
+    what it will decide:
     - **No cropping** — `time_indices`, `channel_names`, `X_slice`, `Y_slice`
       and `Z_slice` are all absent or `all` (or a per-source list of `all`):
-      leave `CLEANUP_INTERMEDIATES=""`; the script turns cleanup on. Say so in
-      the plan.
-    - **Any cropping**: set `CLEANUP_INTERMEDIATES=false`, name the cropping
-      fields, and **ask the user explicitly** whether to delete the intermediates
-      anyway — the data cropped out of the assembled store exists nowhere else.
-      Set `true` only on a clear yes; no answer means `false`.
+      leave `auto`; the pipeline turns cleanup on. Say so in the plan.
+    - **Any cropping**: `auto` would leave the intermediates, but set
+      `CLEANUP_INTERMEDIATES=false` explicitly so the script records the
+      decision. Name the cropping fields and **ask the user explicitly** whether
+      to delete the intermediates anyway — the data cropped out of the assembled
+      store exists nowhere else. Set `true` only on a clear yes; no answer means
+      `false`.
 
 Get explicit approval.
 
@@ -341,10 +345,12 @@ Edit the copies for this dataset. Copy `templates/run_mantis_v2.sh` to
 `BIAHUB_PROJECT`, `chmod +x`. The script stays in the output directory as the
 run's provenance record.
 
-Set `CLEANUP_INTERMEDIATES` as agreed in §6 item 11: leave it empty (auto) when
+Set `CLEANUP_INTERMEDIATES` as agreed in §6 item 11: leave `auto` when
 `concatenate.yml` does not crop, `false` when it crops and the user did not opt
-in, `true` only when they did. The script prints and records in
-`provenance.txt` what it resolved and why — check that line at launch.
+in, `true` only when they did. `provenance.txt` records the requested value;
+the pipeline logs what it resolved at launch, as
+`cleanup_intermediates: on|off (<reason>)` in `.nextflow.log` and on the
+`cleanup:` line of the run-start Slack message — check it matches the plan.
 
 If a plate build is needed, do it now via the **build-hcs-plate** agent
 (`caveats.md` §1) and verify the plate opens with iohub before launching.

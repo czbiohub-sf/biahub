@@ -60,7 +60,7 @@ include { assemble_init_wf; assemble_run_wf } from './modules/assembly'
 include { track_init_wf; track_run_wf } from './modules/tracking'
 include { qc_plan_wf; qc_compute_wf; qc_report_wf; qc_report_spec } from './modules/qc'
 include { notify_step; notify_run_start; notify_run_end } from './modules/notify'
-include { cleanup_targets; cleanup_intermediates_wf } from './modules/cleanup'
+include { cleanup_decision; cleanup_targets; cleanup_intermediates_wf } from './modules/cleanup'
 
 // Output directory layout for the reconstruction steps — single source of
 // truth. Each entry is a subdirectory under params.output where that step
@@ -131,7 +131,6 @@ workflow {
     def qc_image_on = params.qc_config as boolean
     def qc_track_on = params.qc_track_config as boolean
     def qc_on       = qc_image_on || qc_track_on
-    def cleanup_on  = params.cleanup_intermediates as boolean
 
     // A step cannot outlive the step whose output it reads. Refuse the
     // combination at launch, naming the config to add or the one to drop, rather
@@ -145,10 +144,19 @@ workflow {
     if (qc_track_on && !track_on) {
         error "--qc_track_config needs --track_config: it QCs the tracking store."
     }
-    // Without assemble, the virtual-stain store IS the deliverable, so there are
-    // no intermediates to clean up.
-    if (cleanup_on && !assemble_on) {
-        error "--cleanup_intermediates needs --concatenate_config: without assemble the reconstruction stores are the output."
+
+    // Whether this run deletes its intermediates once it finishes. Resolved now
+    // from --cleanup_intermediates and concatenate.yml (see cleanup_decision),
+    // so `true` without assemble, or a bad value, fails before anything runs.
+    // When on, also switch on Nextflow's own `cleanup`, which empties the work
+    // directory at the end of a SUCCESSFUL run: with the intermediate stores
+    // gone, every cached task would point at deleted data. This is set here
+    // rather than in nextflow.config because `auto` is only resolved here.
+    def cleanup_plan = cleanup_decision(params.cleanup_intermediates, params.concatenate_config)
+    def cleanup_on   = cleanup_plan.on
+    log.info "cleanup_intermediates: ${cleanup_on ? 'on' : 'off'} (${cleanup_plan.reason})"
+    if (cleanup_on) {
+        workflow.session.config.cleanup = true
     }
 
     // Tasks call `biahub`/`viscy`/`imaging-qc` bare, so fail now if the env isn't
@@ -479,7 +487,8 @@ workflow {
     // subscribe here rather than earlier is fine because the whole body is graph
     // construction and nothing executes until it finishes.
     all_positions.subscribe { positions ->
-        notify_run_start(ds, 'mantis_v2', positions.size(), steps)
+        notify_run_start(ds, 'mantis_v2', positions.size(), steps,
+                         "${cleanup_on ? 'on' : 'off'} (${cleanup_plan.reason})")
     }
 
     // Report the finished run to Slack, with an @-mention.

@@ -216,7 +216,7 @@ nextflow run mantis-v2.nf \
 | `--biahub_project` | Path to a `biahub` checkout to run tasks from |
 | `--max_positions` | Process only the first N positions (`0` = all) |
 | `--max_jobs` | Cap on concurrently submitted Slurm jobs (default 30) |
-| `--cleanup_intermediates` | Once the last step finishes, delete the intermediate stores and the work directory (default `false`; needs `--concatenate_config`) |
+| `--cleanup_intermediates` | `auto`, `true` or `false` (default). Once the last step finishes, delete the intermediate stores and the work directory; `auto` does so only when `concatenate.yml` takes all the data |
 
 With `--biahub_project`, each task runs as `uv run --project <path> biahub ...`; omit it to use whatever `biahub` is on `PATH` on the compute node. `--max_positions` is useful for smoke tests on a handful of positions.
 
@@ -241,7 +241,7 @@ output/
     └── work/                       # Nextflow work directory
 ```
 
-With `--cleanup_intermediates true`, once the last step (QC, when it runs) has finished, the pipeline deletes the flat-field, deskew, reconstruct and virtual-stain directories, the `.iohub-progress/` resume markers beside the assembled and tracking stores, and the contents of `nextflow/work`. Assemble copies those stores' channels, so when `concatenate.yml` keeps all the data this only removes the duplicate copy; if it crops, the cropped-out data is lost. A cleaned run is final: with no cached tasks and no resume markers left, rerunning it, even with `-resume`, recomputes everything from the raw input.
+With cleanup on (`--cleanup_intermediates true`, or `auto` when `concatenate.yml` crops nothing), once the last step (QC, when it runs) has finished, the pipeline deletes the flat-field, deskew, reconstruct and virtual-stain directories, the `.iohub-progress/` resume markers beside the assembled and tracking stores, and the contents of `nextflow/work`. Assemble copies those stores' channels, so when `concatenate.yml` keeps all the data this only removes the duplicate copy; if it crops, the cropped-out data is lost. A cleaned run is final: with no cached tasks and no resume markers left, rerunning it, even with `-resume`, recomputes everything from the raw input.
 
 The pipeline runs flat-field → deskew → reconstruct → virtual-stain → assemble → track; `5-assemble` concatenates the deskew, reconstruct, and virtual-stain channels into one plate, which tracking then consumes.
 
