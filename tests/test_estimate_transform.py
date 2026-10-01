@@ -475,10 +475,10 @@ def test_estimate_transform_focus_finding_stabilizes_z_and_yx_against_the_first_
         )
 
 
-def test_previous_reference_needs_contiguous_timepoints(drifting_plate, tmp_path):
-    config = _write_config(tmp_path, source="GFP", reference="previous", time_indices=[0, 2])
+def test_previous_reference_needs_contiguous_timepoints(tmp_path):
+    # Rejected when the settings are read, before any job is submitted.
     with pytest.raises(Exception, match="contiguous"):
-        _run(drifting_plate, config, tmp_path / "out" / "transforms.yml")
+        _write_config(tmp_path, source="GFP", reference="previous", time_indices=[0, 2])
 
 
 def test_estimate_transform_sweep_runs_on_flagged_timepoints_and_resumes(

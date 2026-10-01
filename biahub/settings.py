@@ -931,6 +931,18 @@ class EstimateTransformSettings(MyBaseModel):
         return self
 
     @model_validator(mode="after")
+    def check_previous_is_contiguous(self) -> "EstimateTransformSettings":
+        # Each timepoint is chained through the one before it, so no link may be missing.
+        ts = self.time_indices
+        if self.reference.frame == "previous" and isinstance(ts, list) and ts:
+            if sorted(ts) != list(range(min(ts), max(ts) + 1)):
+                raise ValueError(
+                    "reference.frame 'previous' needs contiguous time_indices (each "
+                    f"timepoint is chained through the one before it); got {ts}"
+                )
+        return self
+
+    @model_validator(mode="after")
     def check_sweep_paths(self) -> "EstimateTransformSettings":
         if self.fallback.sweep is not None:
             self.sweep_trials()

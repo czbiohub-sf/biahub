@@ -1411,10 +1411,25 @@ def estimate_transform_series(
     (output_dir / "estimate_transform_report.json").write_text(
         json.dumps(_report(result, time_indices), indent=2)
     )
-    transforms = _one_transform_per_timepoint(result, time_indices, seed)
-    if settings.reference.frame == "previous":
-        transforms = chain_to_first_frame(transforms, time_indices)
-    return result, time_indices, transforms
+    return result, time_indices, transforms_for_file(
+        result, time_indices, seed, settings.reference.frame
+    )
+
+
+def transforms_for_file(
+    result: SeriesResult, time_indices: list[int], seed: Transform, frame: str
+) -> list[Transform]:
+    """One transform per timepoint, onto the reference grid, for the transforms file.
+
+    `cross` / `first` transforms are absolute, so a timepoint with none takes the nearest
+    earlier one (else the seed). `previous` transforms are relative steps (t -> t-1): a
+    missing step is identity -- reusing a neighbour's step would add its drift again to
+    every later timepoint -- and the steps are chained onto the first frame.
+    """
+    if frame != "previous":
+        return _one_transform_per_timepoint(result, time_indices, seed)
+    steps = [result.transforms.get(t, Transform.identity()) for t in time_indices]
+    return chain_to_first_frame(steps, time_indices)
 
 
 def chain_to_first_frame(

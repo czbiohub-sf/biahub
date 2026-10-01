@@ -9,6 +9,7 @@ from biahub.registration.engine import (
     polish,
     repair_series,
     sweep_timepoint,
+    transforms_for_file,
 )
 from biahub.registration.estimators import EstimationError
 from biahub.registration.policies import (
@@ -432,3 +433,25 @@ def test_sweep_skips_a_raising_trial_and_names_it():
     assert not outcome.accepted and outcome.source == "unchanged"
     assert outcome.failures == {"bad": "EstimationError: too few matches"}
     assert 2 not in result.provenance
+
+
+def _shift_x(dx):
+    return Transform.from_translation([0.0, 0.0, float(dx)])
+
+
+def test_transforms_for_file_previous_treats_a_missing_step_as_identity():
+    # Steps of +1 in x per timepoint; t=2's step is missing (estimate failed, not repaired).
+    from biahub.registration.engine import SeriesResult
+
+    result = SeriesResult(transforms={0: IDENTITY, 1: _shift_x(1), 3: _shift_x(1)})
+    chained = transforms_for_file(result, [0, 1, 2, 3], IDENTITY, "previous")
+    # t=2 adds no drift; t=3 adds its own single step: 0, 1, 1, 2 -- not 0, 1, 2, 3.
+    assert [t.translation[2] for t in chained] == [0.0, 1.0, 1.0, 2.0]
+
+
+def test_transforms_for_file_absolute_frames_fill_from_the_nearest_earlier():
+    from biahub.registration.engine import SeriesResult
+
+    result = SeriesResult(transforms={0: _shift_x(5), 2: _shift_x(7)})
+    filled = transforms_for_file(result, [0, 1, 2], IDENTITY, "first")
+    assert [t.translation[2] for t in filled] == [5.0, 5.0, 7.0]
