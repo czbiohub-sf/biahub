@@ -166,6 +166,46 @@ def test_estimate_transform_resume_keeps_existing_records(beads_plate, tmp_path)
     np.testing.assert_allclose(pull[1], APPLIED_SHIFT_ZYX, atol=0.5)
 
 
+def test_a_fresh_run_clears_an_earlier_runs_records(beads_plate, tmp_path):
+    output = tmp_path / "out" / "registration_settings.yml"
+    for name in ("timepoints", "repairs", "sweeps"):
+        (output.parent / name).mkdir(parents=True)
+        (output.parent / name / "99.json").write_text("{}")
+
+    _run(beads_plate, _write_config(tmp_path), output)
+
+    for name in ("timepoints", "repairs", "sweeps"):
+        assert not (output.parent / name / "99.json").exists()
+    assert (output.parent / "run_manifest.json").exists()
+
+
+def test_a_failed_job_is_never_filled_from_a_record_on_disk(tmp_path):
+    from biahub.registration.engine import _load_series
+
+    stale = {"t": 1, "matrix": np.eye(4).tolist(), "score": 0.9, "error": None}
+    (tmp_path / "1.json").write_text(json.dumps(stale))
+    fresh = {0: {"t": 0, "matrix": np.eye(4).tolist(), "score": 0.8, "error": None}}
+
+    failed = _load_series(tmp_path, [0, 1], "affine", records=fresh)
+    assert 1 not in failed.transforms and "did not finish" in failed.errors[1]
+
+    resumed = _load_series(tmp_path, [0, 1], "affine", records=fresh, resumed=[1])
+    assert resumed.scores[1] == 0.9 and 1 in resumed.transforms
+
+
+def test_resume_refuses_changed_settings(beads_plate, tmp_path):
+    output = tmp_path / "out" / "registration_settings.yml"
+    _run(beads_plate, _write_config(tmp_path), output)
+
+    with pytest.raises(Exception, match="settings_sha256 changed"):
+        _run(
+            beads_plate,
+            _write_config(tmp_path, transform_type="similarity"),
+            output,
+            resume=True,
+        )
+
+
 def test_estimate_transform_flags_and_tries_to_repair_a_failed_timepoint(
     beads_plate_with_a_blank_timepoint, tmp_path
 ):

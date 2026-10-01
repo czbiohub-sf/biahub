@@ -12,7 +12,9 @@ timepoint while repair waits for every score.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import shutil
 import uuid
 
 from collections.abc import Callable, Iterable
@@ -71,6 +73,7 @@ from biahub.utils.cluster import estimate_resources, get_submitit_cluster
 from biahub.utils.config import model_to_yaml, yaml_to_model
 
 ENGINE_SETTINGS_FILENAME = "estimate_transform_settings.yml"
+RUN_MANIFEST_FILENAME = "run_manifest.json"
 
 
 @dataclass
@@ -901,24 +904,66 @@ def _estimate_timepoint_job(
     return record
 
 
+def _run_fingerprint(settings: EstimateTransformSettings, source: Path, target: Path) -> dict:
+    """What a resumed run must share with the run it resumes."""
+    digest = hashlib.sha256(settings.model_dump_json().encode()).hexdigest()
+    return {"settings_sha256": digest, "moving": str(source), "reference": str(target)}
+
+
+def _start_run(
+    output_dir: Path,
+    settings: EstimateTransformSettings,
+    source: Path,
+    target: Path,
+    resume: bool,
+) -> None:
+    """Begin a run in `output_dir`: clear earlier records, or check a resume is compatible.
+
+    Without `resume`, the record dirs of any earlier run are removed so none of their
+    files can stand in for a job of this run. With `resume`, the settings and inputs must
+    match the manifest of the run being resumed.
+    """
+    manifest_path = output_dir / RUN_MANIFEST_FILENAME
+    fingerprint = _run_fingerprint(settings, source, target)
+    if resume:
+        if not manifest_path.exists():
+            click.echo(f"resume: no {RUN_MANIFEST_FILENAME} in {output_dir}; cannot verify the "
+                       "earlier run used the same settings and inputs")
+        else:
+            previous = json.loads(manifest_path.read_text())
+            changed = sorted(k for k in fingerprint if previous.get(k) != fingerprint[k])
+            if changed:
+                raise click.UsageError(
+                    f"--resume: {', '.join(changed)} changed since the run in {output_dir}; "
+                    "rerun without --resume"
+                )
+        return
+    for name in ("timepoints", "repairs", "sweeps"):
+        shutil.rmtree(output_dir / name, ignore_errors=True)
+    manifest_path.write_text(json.dumps(fingerprint, indent=2))
+
+
 def _load_series(
     records_dir: Path,
     time_indices: list[int],
     transform_type: str,
     records: dict[int, dict] | None = None,
+    resumed: Iterable[int] = (),
 ) -> SeriesResult:
     """Rebuild the series from per-timepoint records.
 
-    In-memory records first, then the files on disk (resumed timepoints); a timepoint
-    with neither is an error.
+    In-memory records (this run's jobs) first; the files on disk only for `resumed`
+    timepoints, which this run skipped. A timepoint with neither is an error -- a job
+    that failed this run is never filled from an earlier run's record.
     """
     records = dict(records or {})
+    resumed = set(resumed)
     result = SeriesResult()
     for t in time_indices:
         record = records.get(t)
         if record is None:
             path = records_dir / f"{t}.json"
-            if not path.exists():
+            if t not in resumed or not path.exists():
                 result.scores[t] = float("nan")
                 result.errors[t] = "no record: job did not finish"
                 continue
@@ -952,7 +997,8 @@ def _repair_timepoint_job(
     )
     repair_settings = settings.fallback.repair
 
-    series = _load_series(records_dir, time_indices, settings.transform.type)
+    # This run's estimate records (the driver cleared any earlier run's).
+    series = _load_series(records_dir, time_indices, settings.transform.type, resumed=time_indices)
     series.flagged = list(flagged)
     outcome = repair_timepoint(
         t,
@@ -1006,7 +1052,7 @@ def _sweep_timepoint_job(
         for name, trial in settings.sweep_trials().items()
     }
 
-    series = _load_series(records_dir, [t], settings.transform.type)
+    series = _load_series(records_dir, [t], settings.transform.type, resumed=[t])
     outcome = sweep_timepoint(
         t, mov, _reference_policy(settings, ref), trials, seed, score_fn, series
     )
@@ -1184,6 +1230,7 @@ def estimate_transform_series(
         settings.time_indices = settings.manual.time_index
         cluster = "debug"
     settings_path = output_dir / ENGINE_SETTINGS_FILENAME
+    _start_run(output_dir, settings, source, target, resume)
     model_to_yaml(settings, settings_path)
     time_indices = resolve_time_indices(settings.time_indices, T)
     transform_type = settings.transform.type
@@ -1233,7 +1280,11 @@ def estimate_transform_series(
     )
 
     result = _load_series(
-        timepoints_dir, time_indices, transform_type, records=estimate_records
+        timepoints_dir,
+        time_indices,
+        transform_type,
+        records=estimate_records,
+        resumed=set(time_indices) - set(to_estimate),
     )
     for t, error in job_failures.items():
         result.errors[t] = error
@@ -1281,7 +1332,7 @@ def estimate_transform_series(
         record = repair_records.get(t)
         if record is None:
             record_path = repairs_dir / f"{t}.json"
-            if not record_path.exists():
+            if t in to_repair or not record_path.exists():  # failed this run, or never ran
                 continue
             record = json.loads(record_path.read_text())
         outcome = _load_pass(record, transform_type, fallback=result.transforms.get(t, seed))
@@ -1338,7 +1389,7 @@ def estimate_transform_series(
         record = sweep_records.get(t)
         if record is None:
             record_path = sweeps_dir / f"{t}.json"
-            if not record_path.exists():
+            if t in to_sweep or not record_path.exists():  # failed this run, or never ran
                 continue
             record = json.loads(record_path.read_text())
         outcome = _load_pass(record, transform_type, fallback=result.transforms.get(t, seed))
