@@ -229,7 +229,8 @@ def test_pcc_estimator_satisfies_protocol():
     assert isinstance(PCCEstimator(), TransformEstimator)
 
 
-def test_pcc_estimator_recovers_known_translation_and_warps_mov_onto_ref():
+@pytest.mark.parametrize("function_type", ["custom", "custom_padding"])
+def test_pcc_estimator_recovers_known_translation_and_warps_mov_onto_ref(function_type):
     rng = np.random.default_rng(2)
     shape = (30, 40, 50)
     ref = rng.random(shape).astype(np.float32)
@@ -237,7 +238,7 @@ def test_pcc_estimator_recovers_known_translation_and_warps_mov_onto_ref():
     applied_zyx = (4, -6, 9)  # distinct per-axis values so an axis mixup would show
     mov = ndi_shift(ref, shift=applied_zyx, order=0, mode="constant", cval=0.0)
 
-    transform = PCCEstimator().estimate(mov, ref)
+    transform = PCCEstimator(function_type=function_type).estimate(mov, ref)
 
     # transform is forward (moving -> reference): applying it to mov via the scipy
     # backend should warp mov's content back onto ref.

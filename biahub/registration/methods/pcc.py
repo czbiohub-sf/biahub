@@ -94,8 +94,9 @@ def phase_cross_corr_padding(
 
     Returns
     -------
-    Tuple[int, ...]
-        Shift between reference and moved image.
+    tuple[tuple[int, ...], np.ndarray]
+        Shift of the moved image relative to the reference (same convention as
+        `phase_cross_corr`), and the shifted correlation volume.
     """
     shape = tuple(
         cast(int, next_fast_len(int(max(s1, s2) * maximum_shift)))
@@ -129,7 +130,8 @@ def phase_cross_corr_padding(
 
     argmax = np.argmax(corr)
     peak = np.unravel_index(argmax, corr.shape)
-    peak = tuple(s // 2 - p for s, p in zip(corr.shape, peak, strict=True))
+    # Same sign convention as `phase_cross_corr`: the shift of mov relative to ref.
+    peak = tuple(p - s // 2 for s, p in zip(corr.shape, peak, strict=True))
 
     if verbose:
         click.echo(f"phase cross corr. peak at {peak}")
