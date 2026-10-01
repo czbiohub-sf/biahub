@@ -60,6 +60,7 @@ include { assemble_init_wf; assemble_run_wf } from './modules/assembly'
 include { track_init_wf; track_run_wf } from './modules/tracking'
 include { qc_plan_wf; qc_compute_wf; qc_report_wf; qc_report_spec } from './modules/qc'
 include { notify_step; notify_run_start; notify_run_end } from './modules/notify'
+include { cleanup_targets; cleanup_intermediates_wf } from './modules/cleanup'
 
 // Output directory layout for the reconstruction steps — single source of
 // truth. Each entry is a subdirectory under params.output where that step
@@ -130,6 +131,7 @@ workflow {
     def qc_image_on = params.qc_config as boolean
     def qc_track_on = params.qc_track_config as boolean
     def qc_on       = qc_image_on || qc_track_on
+    def cleanup_on  = params.cleanup_intermediates as boolean
 
     // A step cannot outlive the step whose output it reads. Refuse the
     // combination at launch, naming the config to add or the one to drop, rather
@@ -142,6 +144,11 @@ workflow {
     }
     if (qc_track_on && !track_on) {
         error "--qc_track_config needs --track_config: it QCs the tracking store."
+    }
+    // Without assemble, the virtual-stain store IS the deliverable, so there are
+    // no intermediates to clean up.
+    if (cleanup_on && !assemble_on) {
+        error "--cleanup_intermediates needs --concatenate_config: without assemble the reconstruction stores are the output."
     }
 
     // Tasks call `biahub`/`viscy`/`imaging-qc` bare, so fail now if the env isn't
@@ -386,6 +393,37 @@ workflow {
         qc_report = qc_report_wf(qc.done, spec, qc_report_dir)
     }
 
+    // ----- Cleanup of intermediates (--cleanup_intermediates) ---------------
+    // Once the LAST step has finished, delete what only existed to feed the
+    // assembled plate: the flat-field, deskew, reconstruct and virtual-stain step
+    // directories (store, slurm_output/ and .iohub-progress/ alike). Also delete
+    // the .iohub-progress/ resume markers beside the final stores: they only
+    // serve an interrupted run, and left behind they would make concatenate skip
+    // every write unit of a later run into this directory, keeping data built
+    // from the old intermediates. nextflow.config's `cleanup` empties the work
+    // directory at the end of the same successful run, so a cleaned run is
+    // final: rerunning it recomputes everything. See modules/cleanup.nf.
+    //
+    // The gate is every final step's `done`, so QC — when it runs — must have
+    // FINISHED, whatever its verdict: `imaging-qc gate` exits 0 on a failing
+    // verdict. A step that fails terminates the run, so none of these emit.
+    // The targets are checked now, at launch, not when the gate opens.
+    if (cleanup_on) {
+        def cleanup_paths = [ff_output, deskew_output, reconstruct_output, virtual_stain_output]
+            .collect { zarr -> new File(zarr).parent }
+        cleanup_paths << "${new File(assemble_output).parent}/.iohub-progress"
+        if (track_on) cleanup_paths << "${new File(track_output).parent}/.iohub-progress"
+        def cleanup_list = cleanup_targets(cleanup_paths, out)
+
+        def final_signals = [assemble_done.done]
+        if (track_on) final_signals << track_done.done
+        if (qc_on)    final_signals << qc_report.done
+        final_gate = channel.empty()
+        final_signals.each { signal -> final_gate = final_gate.mix(signal) }
+
+        cleanup_run = cleanup_intermediates_wf(cleanup_list, final_gate)
+    }
+
     // ----- Notifications ----------------------------------------------------
     // One Slack message as each step finishes, plus the run-start announcement.
     // Step ORDER and labels live here with the rest of the wiring, not in
@@ -424,6 +462,7 @@ workflow {
     if (assemble_on) step_events << [label: 'assemble', done: assemble_done.done, output: assemble_output]
     if (track_on)    step_events << [label: 'track',    done: track_done.done,    output: track_output]
     if (qc_on)       step_events << [label: 'QC',       done: qc_report.done,     output: qc_report_dir]
+    if (cleanup_on)  step_events << [label: 'cleanup intermediates', done: cleanup_run.done, output: out]
 
     steps = step_events.collect { event -> event.label }
     n_steps = steps.size()
