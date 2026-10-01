@@ -200,6 +200,30 @@ def parse_time_indices(value: str) -> int | list[int] | str:
     return indices[0] if len(indices) == 1 else indices
 
 
+def _position_key(position_dirpath: Path) -> str:
+    """'row/col/fov' of a position directory."""
+    return "/".join(Path(position_dirpath).parts[-3:])
+
+
+def _pair_reference_positions(
+    position_keys: list[str], reference_position_dirpaths: list[Path] | None
+) -> dict[str, Path]:
+    """The reference position each moving position is registered onto.
+
+    One reference position serves every moving position; several are paired by position
+    key, and a moving position without its reference is an error.
+    """
+    if not reference_position_dirpaths:
+        return {}
+    if len(reference_position_dirpaths) == 1:
+        return {key: Path(reference_position_dirpaths[0]) for key in position_keys}
+    by_key = {_position_key(p): Path(p) for p in reference_position_dirpaths}
+    missing = sorted(set(position_keys) - set(by_key))
+    if missing:
+        raise click.UsageError(f"no reference position for moving positions {missing}")
+    return {key: by_key[key] for key in position_keys}
+
+
 def apply_transform(
     moving_position_dirpaths: list[Path],
     config_filepath: Path,
@@ -231,7 +255,21 @@ def apply_transform(
         moving_channel_names = list(moving.channel_names)
         moving_voxel_size = tuple(moving.scale[-3:])
     time_indices = _resolve_time_indices(time_indices, T)
-    pull_by_t = {t: settings.matrix_for(t, "pull") for t in time_indices}
+    # Each moving position's matrices by timepoint: its own list, or the shared one.
+    position_keys = [_position_key(p) for p in moving_position_dirpaths]
+    if settings.per_position:
+        missing = sorted(set(position_keys) - set(settings.positions))
+        if missing:
+            raise click.UsageError(
+                f"the transforms file has no list for positions {missing}; it has "
+                f"{sorted(settings.positions)}"
+            )
+    pulls = {
+        key: {t: settings.matrix_for(t, "pull", key) for t in time_indices}
+        for key in position_keys
+    }
+    reference_for = _pair_reference_positions(position_keys, reference_position_dirpaths)
+    pull_by_t = pulls[position_keys[0]]
 
     if reference_position_dirpaths:
         with open_ome_zarr(reference_position_dirpaths[0], mode="r") as reference:
@@ -262,7 +300,7 @@ def apply_transform(
             )
         )
 
-    applied = list(pull_by_t.values())
+    applied = [m for by_t in pulls.values() for m in by_t.values()]
     crop = canvas(tuple(moving_shape), reference_shape, applied, keep_overhang)
     cropped_shape = tuple(s.stop - s.start for s in crop)
     click.echo(
@@ -310,14 +348,14 @@ def apply_transform(
         }
     }
     output_time_indices = list(range(len(time_indices)))
-    # Jobs look a matrix up by input timepoint: a T-long list, filled for the selected t.
-    matrices_for_jobs = [None] * T
-    for t, matrix in pull_by_t.items():
-        matrices_for_jobs[t] = matrix.tolist()
     jobs, labels = [], []
     with submitit.helpers.clean_env(), executor.batch():
-        for index, moving_path in enumerate(moving_position_dirpaths):
+        for key, moving_path in zip(position_keys, moving_position_dirpaths, strict=True):
             output_position_path = output_dirpath / Path(*moving_path.parts[-3:])
+            # Jobs look a matrix up by input timepoint: a T-long list, filled for the selected t.
+            matrices_for_jobs = [None] * T
+            for t, matrix in pulls[key].items():
+                matrices_for_jobs[t] = matrix.tolist()
             for channel_name in transformed:
                 jobs.append(
                     executor.submit(
@@ -339,9 +377,7 @@ def apply_transform(
                 )
                 labels.append(Path(f"{moving_path.parts[-3:]} {channel_name}"))
             if copied and reference_position_dirpaths:
-                reference_path = reference_position_dirpaths[
-                    min(index, len(reference_position_dirpaths) - 1)
-                ]
+                reference_path = reference_for[key]
                 for channel_name in copied:
                     jobs.append(
                         executor.submit(

@@ -337,3 +337,73 @@ def test_transform_entry_estimated_at_is_only_for_a_whole_series_entry():
     TransformEntry(matrix=_translation(0, 0, 0), estimated_at=5)
     with pytest.raises(ValueError, match="estimated_at"):
         TransformEntry(t=5, matrix=_translation(0, 0, 0), estimated_at=5)
+
+
+@pytest.fixture
+def two_position_plate(tmp_path):
+    """Two FOVs, 2 timepoints, a bright block at the same place in both."""
+    rng = np.random.default_rng(1)
+    data = rng.random((2, 1, 16, 32, 32)).astype(np.float32) * 10
+    data[:, :, 6:10, 12:20, 12:20] = 1000.0
+    path = tmp_path / "two.zarr"
+    with open_ome_zarr(path, layout="hcs", mode="w", channel_names=["GFP"]) as plate:
+        for fov in ("0", "1"):
+            plate.create_position("A", "1", fov)["0"] = data
+    return [path / "A" / "1" / fov for fov in ("0", "1")], data
+
+
+def test_apply_transform_applies_each_positions_own_list(two_position_plate, tmp_path):
+    positions, data = two_position_plate
+    config = tmp_path / "transforms.yml"
+    model_to_yaml(
+        TransformSettings(
+            direction="forward",
+            moving_channels=["GFP"],
+            positions={
+                "A/1/0": [TransformEntry(matrix=_translation(0, 3, 0))],
+                "A/1/1": [TransformEntry(matrix=_translation(0, 0, -4))],
+            },
+        ),
+        config,
+    )
+    output = tmp_path / "out.zarr"
+
+    apply_transform(positions, config, output, keep_overhang=True, cluster="debug")
+
+    for fov, expected in (("0", [0, 3, 0]), ("1", [0, 0, -4])):
+        with open_ome_zarr(output / "A" / "1" / fov, mode="r") as out:
+            moved = _block_centre(np.asarray(out.data)[1, 0]) - _block_centre(data[1, 0])
+        np.testing.assert_allclose(moved, expected, atol=0.5)
+
+
+def test_apply_transform_refuses_a_position_missing_from_a_per_position_file(
+    two_position_plate, tmp_path
+):
+    positions, _ = two_position_plate
+    config = tmp_path / "transforms.yml"
+    model_to_yaml(
+        TransformSettings(
+            direction="forward",
+            moving_channels=["GFP"],
+            positions={"A/1/0": [TransformEntry(matrix=_translation(0, 0, 0))]},
+        ),
+        config,
+    )
+    with pytest.raises(Exception, match=r"no list for positions \['A/1/1'\]"):
+        apply_transform(positions, config, tmp_path / "out.zarr", cluster="debug")
+
+
+def test_reference_positions_are_paired_by_key_not_by_order():
+    from pathlib import Path
+
+    from biahub.apply_transform import _pair_reference_positions
+
+    refs = [Path("ref.zarr/A/1/1"), Path("ref.zarr/A/1/0")]
+    paired = _pair_reference_positions(["A/1/0", "A/1/1"], refs)
+    assert paired == {"A/1/0": refs[1], "A/1/1": refs[0]}
+    assert _pair_reference_positions(["A/1/0", "A/1/1"], refs[:1]) == {
+        "A/1/0": refs[0],
+        "A/1/1": refs[0],
+    }
+    with pytest.raises(Exception, match="no reference position"):
+        _pair_reference_positions(["B/2/0"], refs)
