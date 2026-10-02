@@ -755,12 +755,18 @@ class TransformFitSettings(MyBaseModel):
     `seed` is a 4x4 matrix in `seed_direction`: "pull" (reference -> moving, the
     convention of every transform on disk and of the legacy `approx_transform`) or
     "forward" (moving -> reference, the engine's own convention).
+
+    `seed_from` says where each timepoint starts: `input` -- the seed, for every
+    timepoint (independent estimates, fanned out per timepoint); `previous_timepoint` --
+    the previous timepoint's result, with the input seed competing on the first pass
+    (sequential, as the legacy `use_prev_t_transform`).
     """
 
     type: Literal["euclidean", "similarity", "affine"] = "euclidean"
     seed: list = np.eye(4).tolist()
     seed_direction: TransformDirection = "pull"
     seed_from_shapes: bool = False
+    seed_from: Literal["input", "previous_timepoint"] = "input"
 
     @field_validator("seed")
     @classmethod

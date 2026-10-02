@@ -13,6 +13,7 @@ timepoint while repair waits for every score.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import shutil
 import uuid
@@ -508,6 +509,9 @@ class SeriesResult:
     # Timepoints with no transform of their own, and where the stand-in written for them
     # came from ("t=81", "seed", "identity"); set by `transforms_for_file`.
     filled_from: dict[int, str] = field(default_factory=dict)
+    # A stand-in decided while estimating (propagation: a failed timepoint returns the
+    # seed it started from), with its source; used instead of the input seed.
+    stand_ins: dict[int, tuple[Transform, str]] = field(default_factory=dict)
     journal: RunJournal = field(default_factory=RunJournal)
 
 
@@ -551,6 +555,111 @@ def estimate_series(
         if on_timepoint is not None:
             on_timepoint(t, result)
     return result
+
+
+def _empty(volume: np.ndarray) -> bool:
+    """A frame with no data: all zeros or all NaN."""
+    return not np.any(np.nan_to_num(volume))
+
+
+def _estimate_competing(estimator, mov, ref, seed, competitor, score_fn) -> Transform:
+    """Estimate from `seed`, with `competitor` competing (ties to the seed).
+
+    An estimator that takes a competitor refines both on its first pass (the legacy
+    rule); any other estimator is run from both seeds and the better score is kept.
+    """
+    if competitor is None:
+        return estimator.estimate(mov, ref, seed=seed)
+    if "competitor" in inspect.signature(estimator.estimate).parameters:
+        return estimator.estimate(mov, ref, seed=seed, competitor=competitor)
+    results, errors = [], []
+    for start in (seed, competitor):
+        try:
+            transform = estimator.estimate(mov, ref, seed=start)
+        except EstimationError as e:
+            errors.append(str(e))
+            continue
+        score = score_fn(transform, mov, ref)
+        results.append((transform, float(score) if np.isfinite(score) else -np.inf))
+    if not results:
+        raise EstimationError(
+            f"failed from both the previous result and the input seed: {'; '.join(errors)}"
+        )
+    best = results[0]
+    for candidate in results[1:]:
+        if candidate[1] > best[1]:
+            best = candidate
+    return best[0]
+
+
+def estimate_propagated(
+    mov,
+    reference_policy: ReferencePolicy,
+    estimator: TransformEstimator,
+    input_seed: Transform,
+    score_fn: ScoreFn,
+    time_indices: Iterable[int],
+    done: dict[int, dict] | None = None,
+    on_timepoint: OnTimepoint | None = None,
+) -> SeriesResult:
+    """Estimate timepoints in order, each starting from the previous one's result.
+
+    The legacy `use_prev_t_transform` rules: timepoint t starts from what t-1 returned,
+    with `input_seed` competing on the first pass; a timepoint that fails returns the
+    seed it started from (recorded as a stand-in, the error kept) and that seed is
+    passed on; an empty frame (no data) restarts the chain from `input_seed`. `done`
+    holds records of timepoints already estimated (resume): they are not redone, only
+    used to continue the chain.
+    """
+    done = done or {}
+    result = SeriesResult()
+    previous: Transform | None = None  # what the next timepoint starts from
+    for t in time_indices:
+        if t in done:
+            record = done[t]
+            previous = _record_into(result, t, record)
+        else:
+            mov_t = np.asarray(mov[t])
+            ref_t = np.asarray(reference_policy.reference_for(mov, t))
+            if _empty(mov_t) or _empty(ref_t):
+                result.scores[t] = float("nan")
+                result.errors[t] = "empty frame (no data)"
+                previous = None
+            else:
+                seed = previous if previous is not None else input_seed
+                competitor = input_seed if previous is not None else None
+                try:
+                    transform = _estimate_competing(
+                        estimator, mov_t, ref_t, seed, competitor, score_fn
+                    )
+                except EstimationError as e:
+                    result.scores[t] = float("nan")
+                    result.errors[t] = f"{type(e).__name__}: {e}"
+                    source = f"t={t - 1}" if previous is not None else "seed"
+                    result.stand_ins[t] = (seed, source)
+                    previous = seed
+                else:
+                    result.transforms[t] = transform
+                    result.scores[t] = float(score_fn(transform, mov_t, ref_t))
+                    previous = transform
+        if on_timepoint is not None:
+            on_timepoint(t, result)
+    return result
+
+
+def _record_into(result: SeriesResult, t: int, record: dict) -> Transform | None:
+    """Fold a timepoint record into `result`; return what the next timepoint starts from."""
+    result.scores[t] = float("nan") if record.get("score") is None else record["score"]
+    if record.get("error"):
+        result.errors[t] = record["error"]
+    if record.get("matrix") is not None:
+        result.transforms[t] = Transform(np.asarray(record["matrix"], dtype=float))
+        return result.transforms[t]
+    if record.get("stand_in") is not None:
+        stand_in = Transform(np.asarray(record["stand_in"], dtype=float))
+        result.stand_ins[t] = (stand_in, record.get("stand_in_from", "seed"))
+        return stand_in
+    return None
 
 
 def flag_series(
@@ -1145,6 +1254,10 @@ def _one_transform_per_timepoint(
     for t in time_indices:
         if t in result.transforms:
             out.append(result.transforms[t])
+        elif t in result.stand_ins:
+            transform, source = result.stand_ins[t]
+            result.filled_from[t] = source
+            out.append(transform)
         else:
             result.filled_from[t] = "seed"
             out.append(fallback)

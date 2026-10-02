@@ -459,3 +459,68 @@ def test_transforms_for_file_absolute_frames_fill_with_the_input_seed():
     filled = transforms_for_file(result, [0, 1, 2], _shift_x(-3), "first")
     assert [t.translation[2] for t in filled] == [5.0, -3.0, 7.0]
     assert result.filled_from == {1: "seed"}
+
+
+class _StepX:
+    """Moves its seed by +1 in x; fails on frames whose value is in `fail_on`."""
+
+    def __init__(self, fail_on=()):
+        self.fail_on = set(fail_on)
+        self.seeds = []
+
+    def estimate(self, mov, ref, seed=None):
+        self.seeds.append(seed)
+        if round(float(np.asarray(mov).mean())) in self.fail_on:
+            raise EstimationError("too few matches")
+        return (seed or IDENTITY) @ _shift_x(1)
+
+
+def _frames(values):
+    return np.stack([np.full((2, 2, 2), float(v)) for v in values])
+
+
+def test_estimate_propagated_follows_the_legacy_rules():
+    from biahub.registration.engine import estimate_propagated
+
+    # frame values 1..6; the frame at t=4 is empty (all zeros)
+    mov = _frames([1, 2, 3, 4, 0, 6])
+    result = estimate_propagated(
+        mov, FixedFrame(0), _StepX(fail_on={3}), IDENTITY, _finite_score, range(6)
+    )
+    x = {t: tr.translation[2] for t, tr in result.transforms.items()}
+    # t0 from the input seed (+1); t1 from t0 (+1) -> 2
+    assert x[0] == 1.0 and x[1] == 2.0
+    # t2 fails: it returns the seed it started from (t1's result), recorded as a stand-in
+    assert 2 not in result.transforms and "too few matches" in result.errors[2]
+    stand_in, source = result.stand_ins[2]
+    assert stand_in.translation[2] == 2.0 and source == "t=1"
+    # t3 starts from that stand-in: 2 + 1
+    assert x[3] == 3.0
+    # t4 is empty: no transform, and the chain restarts from the input seed at t5
+    assert 4 not in result.transforms and "empty" in result.errors[4]
+    assert x[5] == 1.0
+
+
+def test_estimate_propagated_lets_the_input_seed_compete_and_resumes_the_chain():
+    from biahub.registration.engine import estimate_propagated
+
+    mov = _frames([1, 2, 3])
+    # The input seed is at x=10; scores favour transforms near x=11, so from t=1 the
+    # estimate started from the input seed beats the one from the previous result.
+    def score(transform, m, r):
+        return -abs(transform.translation[2] - 11.0)
+
+    result = estimate_propagated(
+        mov, FixedFrame(0), _StepX(), _shift_x(10), score, range(3)
+    )
+    assert [result.transforms[t].translation[2] for t in range(3)] == [11.0, 11.0, 11.0]
+
+    # Resume: t0 and t1 are done; t2 continues from t1's recorded result.
+    done = {
+        0: {"t": 0, "matrix": _shift_x(4).matrix.tolist(), "score": 0.9, "error": None},
+        1: {"t": 1, "matrix": _shift_x(5).matrix.tolist(), "score": 0.9, "error": None},
+    }
+    estimator = _StepX()
+    resumed = estimate_propagated(mov, FixedFrame(0), estimator, IDENTITY, _finite_score, range(3), done=done)
+    assert len(estimator.seeds) == 2  # only t2 estimated: from t1 (x=5), then the input seed
+    assert estimator.seeds[0].translation[2] == 5.0 and resumed.transforms[2].translation[2] == 6.0
