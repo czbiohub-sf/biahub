@@ -9,8 +9,8 @@
 // and the guard in cleanup_targets(), which keeps every path inside --output.
 // The first two blocks check those directly; the third runs
 // cleanup_intermediates_wf on a stand-in run directory and checks that the
-// targets are gone and the final store next to them is not. Runs locally in
-// seconds:
+// targets are gone, the final store next to them is not, and the record file
+// says so. Runs locally in seconds:
 //     nextflow run nextflow/tests/cleanup_intermediates.nf
 // It exits non-zero if either regresses.
 
@@ -98,21 +98,38 @@ workflow {
     check('refuses with no output dir',    refused(["${root}/0-flatfield"], null))
 
     // End to end on a stand-in run: two intermediates and the assembled store's
-    // resume markers go, the assembled store itself stays, and a target that was
-    // never created is reported rather than failing the task.
+    // slurm_output/ and resume markers go, the assembled store itself stays, a
+    // target that was never created is recorded rather than failing the task,
+    // and the record is appended to, not overwritten.
     touch("${root}/0-flatfield/ds.zarr/zarr.json")
     touch("${root}/0-flatfield/slurm_output/README.md")
     touch("${root}/1-deskew/.iohub-progress/ds.zarr/A/1/0/t0-4_c0-0_abc.done")
     touch("${root}/4-assemble/ds.zarr/zarr.json")
+    touch("${root}/4-assemble/slurm_output/DEBUG_1_0_log.out")
     touch("${root}/4-assemble/.iohub-progress/ds.zarr/A/1/0/t0-4_c0-0_abc.done")
+    def record = new File("${root}/nextflow/intermediates_cleaned.txt")
+    record.parentFile.mkdirs()
+    record.text = "=== an earlier cleanup ===\n"
 
     def targets = cleanup_targets(["${root}/0-flatfield", "${root}/1-deskew",
-                                   "${root}/4-assemble/.iohub-progress", "${root}/9-never-made"], root)
-    cleanup = cleanup_intermediates_wf(targets, channel.of('assemble', 'qc'))
+                                   "${root}/4-assemble/slurm_output", "${root}/4-assemble/.iohub-progress",
+                                   "${root}/9-never-made"], root)
+    cleanup = cleanup_intermediates_wf(targets, record.path, 'on (auto: concatenate.yml takes all the data)',
+                                       channel.of('assemble', 'qc'))
     cleanup.done.subscribe { _token ->
         check('deletes a whole step directory',         !new File("${root}/0-flatfield").exists())
         check('deletes a hidden-file-only directory',   !new File("${root}/1-deskew").exists())
+        check('deletes the final store\'s slurm_output', !new File("${root}/4-assemble/slurm_output").exists())
         check('deletes the final store\'s markers',     !new File("${root}/4-assemble/.iohub-progress").exists())
         check('keeps the final store',                  new File("${root}/4-assemble/ds.zarr/zarr.json").exists())
+
+        def lines = record.readLines()
+        check('record keeps the earlier section',       lines[0] == '=== an earlier cleanup ===')
+        check('record opens a timestamped section',     lines.count { line -> line.startsWith('=== 20') } == 1)
+        check('record states the decision',             lines.contains('decision  on (auto: concatenate.yml takes all the data)'))
+        check('record lists each removed target',
+              ['0-flatfield', '1-deskew', '4-assemble/slurm_output', '4-assemble/.iohub-progress']
+                  .every { t -> lines.contains("removed   ${root}/${t}".toString()) })
+        check('record marks a missing target absent',   lines.contains("absent    ${root}/9-never-made".toString()))
     }
 }

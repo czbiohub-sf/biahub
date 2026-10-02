@@ -404,11 +404,16 @@ workflow {
     // ----- Cleanup of intermediates (--cleanup_intermediates) ---------------
     // Once the LAST step has finished, delete what only existed to feed the
     // assembled plate: the flat-field, deskew, reconstruct and virtual-stain step
-    // directories (store, slurm_output/ and .iohub-progress/ alike). Also delete
-    // the .iohub-progress/ resume markers beside the final stores: they only
-    // serve an interrupted run, and left behind they would make concatenate skip
-    // every write unit of a later run into this directory, keeping data built
-    // from the old intermediates. nextflow.config's `cleanup` empties the work
+    // directories (store, slurm_output/ and .iohub-progress/ alike). Beside the
+    // final stores, delete what only served the run: slurm_output/ (submitit
+    // placeholders and a pointer README; the real logs are in
+    // nextflow/slurm_output/) and the assembled store's .iohub-progress/ resume
+    // markers, which left behind would make concatenate skip every write unit
+    // of a later run into this directory, keeping data built from the old
+    // intermediates. Tracking writes no resume markers.
+    //
+    // What was removed is appended to nextflow/intermediates_cleaned.txt rather
+    // than logged. Nextflow's `cleanup`, switched on above, empties the work
     // directory at the end of the same successful run, so a cleaned run is
     // final: rerunning it recomputes everything. See modules/cleanup.nf.
     //
@@ -419,9 +424,11 @@ workflow {
     if (cleanup_on) {
         def cleanup_paths = [ff_output, deskew_output, reconstruct_output, virtual_stain_output]
             .collect { zarr -> new File(zarr).parent }
-        cleanup_paths << "${new File(assemble_output).parent}/.iohub-progress"
-        if (track_on) cleanup_paths << "${new File(track_output).parent}/.iohub-progress"
+        def assemble_dir = new File(assemble_output).parent
+        cleanup_paths << "${assemble_dir}/slurm_output" << "${assemble_dir}/.iohub-progress"
+        if (track_on) cleanup_paths << "${new File(track_output).parent}/slurm_output"
         def cleanup_list = cleanup_targets(cleanup_paths, out)
+        cleanup_record = "${out}/nextflow/intermediates_cleaned.txt"
 
         def final_signals = [assemble_done.done]
         if (track_on) final_signals << track_done.done
@@ -429,7 +436,8 @@ workflow {
         final_gate = channel.empty()
         final_signals.each { signal -> final_gate = final_gate.mix(signal) }
 
-        cleanup_run = cleanup_intermediates_wf(cleanup_list, final_gate)
+        cleanup_run = cleanup_intermediates_wf(cleanup_list, cleanup_record,
+                                               "on (${cleanup_plan.reason})", final_gate)
     }
 
     // ----- Notifications ----------------------------------------------------
@@ -470,7 +478,7 @@ workflow {
     if (assemble_on) step_events << [label: 'assemble', done: assemble_done.done, output: assemble_output]
     if (track_on)    step_events << [label: 'track',    done: track_done.done,    output: track_output]
     if (qc_on)       step_events << [label: 'QC',       done: qc_report.done,     output: qc_report_dir]
-    if (cleanup_on)  step_events << [label: 'cleanup intermediates', done: cleanup_run.done, output: out]
+    if (cleanup_on)  step_events << [label: 'cleanup intermediates', done: cleanup_run.done, output: cleanup_record]
 
     steps = step_events.collect { event -> event.label }
     n_steps = steps.size()

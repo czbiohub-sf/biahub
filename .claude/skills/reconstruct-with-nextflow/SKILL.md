@@ -299,9 +299,10 @@ Do not run anything yet. Show the user:
 11. **Whether intermediates will be deleted** (`CLEANUP_INTERMEDIATES` in the run
     script, biahub#292). With cleanup on, once the last step (QC) finishes the
     pipeline deletes the flat-field, deskew, reconstruct and virtual-stain
-    directories, the `.iohub-progress/` resume markers beside the final stores,
-    and the Nextflow work directory. Only the assembled store, the tracking
-    store, the QC report and the logs remain, and the run is final: any rerun
+    directories, the `slurm_output/` placeholders and `.iohub-progress/` resume
+    markers beside the final stores, and the Nextflow work directory. Only the
+    assembled store, the tracking store, the QC report and the logs under
+    `nextflow/` remain, and the run is final: any rerun
     recomputes from raw. The template's `CLEANUP_INTERMEDIATES="auto"` lets the
     pipeline decide at launch (`cleanup_decision` in
     `nextflow/modules/cleanup.nf`); check `concatenate.yml` now so the plan says
@@ -462,9 +463,11 @@ directory (`<DATASET>_rerun`) over relaunching in place.
    `tables/qc/` parquet inside each store.
 4. Report per-step task counts, failures, retries, and wall time from
    `<OUTPUT>/nextflow/trace.txt`; point at `report.html` and `timeline.html`.
-   If cleanup was on, confirm from the `cleanup_intermediates:` block in
-   `<OUTPUT>/.nextflow.log` which directories were removed, and that
-   `<OUTPUT>/nextflow/work` is empty. Do not `du` the run directory to report
+   If cleanup was on, report what `<OUTPUT>/nextflow/intermediates_cleaned.txt`
+   records — the decision and one `removed`/`absent` line per target — and
+   confirm `<OUTPUT>/nextflow/work` holds no task directories (Nextflow leaves
+   its empty two-character prefix directories behind; that is expected). Do
+   not `du` the run directory to report
    space freed — it runs to terabytes; use `df` on the filesystem if a number
    is wanted.
 5. Confirm the pipeline's automatic run-end message landed, then send a wrap-up

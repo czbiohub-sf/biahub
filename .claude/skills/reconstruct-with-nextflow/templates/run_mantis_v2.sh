@@ -55,8 +55,9 @@ OUTPUT_DIR=""
 CONVERTED_ZARR=""          # e.g. ${OUTPUT_DIR}/0-convert/${DATASET}.zarr
 
 # Delete the intermediates once the last step (QC) finishes: the flat-field,
-# deskew, reconstruct and virtual-stain directories, the resume markers beside
-# the final stores, and the Nextflow work directory (biahub#292). A cleaned run
+# deskew, reconstruct and virtual-stain directories, the final stores'
+# slurm_output/ and resume markers, and the Nextflow work directory
+# (biahub#292), recorded in nextflow/intermediates_cleaned.txt. A cleaned run
 # is FINAL — any rerun recomputes everything from the raw input.
 #   auto    on when concatenate.yml takes all the data, off if it crops
 #   true    on, even if concatenate.yml crops (the cropped-out data is lost)

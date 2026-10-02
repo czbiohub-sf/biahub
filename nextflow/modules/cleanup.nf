@@ -16,7 +16,8 @@
 // fire when every task of every step succeeded.
 //
 // A CLEANED RUN IS FINAL. The pipeline deletes the intermediate stores, the
-// resume markers (`.iohub-progress`) beside the final stores, and — through
+// final stores' leftover `slurm_output/` and `.iohub-progress` resume markers,
+// and — through
 // Nextflow's `cleanup`, which it switches on alongside — the work directory.
 // A later run in the same output directory therefore recomputes everything
 // from the raw input rather than resuming: no Nextflow task is cached, and no
@@ -97,29 +98,44 @@ def cleanup_targets(targets, root) {
 }
 
 
+// Delete each target and append what happened to `record`: a timestamped
+// section with the decision and one `removed`/`absent` line per target. The
+// record is the durable account of the cleanup — the task's own logs go with
+// the work directory — so it is appended to, like provenance.txt, and a
+// from-scratch rerun that cleans up again adds a section. Each line is written
+// as its target is handled, so an interrupted cleanup leaves a record of what
+// it got through.
 process cleanup_intermediates {
     label 'cpu_local'
 
     input:
     val targets
+    val record
+    val decision
     val trigger
 
     output:
-    stdout
+    val record
 
     script:
     // No size report: these stores run to terabytes, and walking them to add up
     // their size costs longer than deleting them.
     def quoted = targets.collect { target -> "\"${target}\"" }.join(' ')
+    def decision_text = decision.toString().replace("'", '')
     """
-    for target in ${quoted}; do
-        if [ -e "\$target" ]; then
-            rm -rf "\$target"
-            echo "removed \$target"
-        else
-            echo "absent  \$target"
-        fi
-    done
+    mkdir -p "\$(dirname "${record}")"
+    {
+        echo "=== \$(date -Is) ==="
+        echo 'decision  ${decision_text}'
+        for target in ${quoted}; do
+            if [ -e "\$target" ]; then
+                rm -rf "\$target"
+                echo "removed   \$target"
+            else
+                echo "absent    \$target"
+            fi
+        done
+    } >> "${record}"
     """
 }
 
@@ -128,17 +144,20 @@ process cleanup_intermediates {
 //
 // take:
 //   targets   list of paths, already checked by cleanup_targets()
+//   record    file the cleanup appends its account to
+//   decision  the on/off decision and its reason, copied into the record
 //   trigger   gating channel — the mix of every final step's `done`
 // emit:
 //   done      fires once every target is gone
 workflow cleanup_intermediates_wf {
     take:
     targets
+    record
+    decision
     trigger
 
     main:
-    cleanup_out = cleanup_intermediates(targets, trigger.collect().map { 'done' })
-    cleanup_out.subscribe { stdout_text -> log.info "cleanup_intermediates:\n${stdout_text.trim()}" }
+    cleanup_out = cleanup_intermediates(targets, record, decision, trigger.collect().map { 'done' })
 
     emit:
     done = cleanup_out.map { 'done' }

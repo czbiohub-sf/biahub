@@ -241,7 +241,7 @@ output/
     └── work/                       # Nextflow work directory
 ```
 
-With cleanup on (`--cleanup_intermediates true`, or `auto` when `concatenate.yml` crops nothing), once the last step (QC, when it runs) has finished, the pipeline deletes the flat-field, deskew, reconstruct and virtual-stain directories, the `.iohub-progress/` resume markers beside the assembled and tracking stores, and the contents of `nextflow/work`. Assemble copies those stores' channels, so when `concatenate.yml` keeps all the data this only removes the duplicate copy; if it crops, the cropped-out data is lost. A cleaned run is final: with no cached tasks and no resume markers left, rerunning it, even with `-resume`, recomputes everything from the raw input.
+With cleanup on (`--cleanup_intermediates true`, or `auto` when `concatenate.yml` crops nothing), once the last step (QC, when it runs) has finished, the pipeline deletes the flat-field, deskew, reconstruct and virtual-stain directories, the `slurm_output/` placeholders beside the assembled and tracking stores, the assembled store's `.iohub-progress/` resume markers, and the task directories in `nextflow/work`. What it removed is appended to `nextflow/intermediates_cleaned.txt`. Assemble copies those stores' channels, so when `concatenate.yml` keeps all the data this only removes the duplicate copy; if it crops, the cropped-out data is lost. A cleaned run is final: with no cached tasks and no resume markers left, rerunning it, even with `-resume`, recomputes everything from the raw input.
 
 The pipeline runs flat-field → deskew → reconstruct → virtual-stain → assemble → track; `5-assemble` concatenates the deskew, reconstruct, and virtual-stain channels into one plate, which tracking then consumes.
 
