@@ -565,3 +565,42 @@ def test_focus_estimator_from_settings_reads_axes_crop_and_optics():
     estimator = FocusEstimator.from_settings(settings, pixel_size=FOCUS_PIXEL_SIZE)
     assert (estimator.axes, estimator.center_crop_xy) == ("z", (100, 200))
     assert (estimator.na_det, estimator.lambda_ill) == (1.2, 0.45)
+
+
+def _identity_pass_estimator(score_of, fail_from=()):
+    """A NodeGraphEstimator whose pass returns its start unchanged (or fails from a start)."""
+    estimator = _drifting_estimator(np.zeros(3), lambda t, m, r: score_of(t), iterations=1)
+
+    def single_pass(mov, ref, start):
+        if any(start is f for f in fail_from):
+            raise EstimationError("too few matches")
+        return start
+
+    estimator._single_pass = single_pass
+    return estimator
+
+
+def test_a_competitor_seed_wins_only_when_it_scores_strictly_higher():
+    seed, competitor = Transform.from_translation([1, 0, 0]), Transform.from_translation([2, 0, 0])
+    vol = np.zeros((4, 4, 4))
+    better = _identity_pass_estimator(lambda t: t.translation[0] / 10)  # competitor 0.2 > 0.1
+    assert better.estimate(vol, vol, seed=seed, competitor=competitor) is competitor
+    tie = _identity_pass_estimator(lambda t: 0.5)
+    assert tie.estimate(vol, vol, seed=seed, competitor=competitor) is seed
+
+
+def test_a_competitor_seed_rescues_a_failed_first_pass():
+    seed, competitor = Transform.from_translation([1, 0, 0]), Transform.from_translation([2, 0, 0])
+    vol = np.zeros((4, 4, 4))
+    estimator = _identity_pass_estimator(lambda t: 0.3, fail_from=(seed,))
+    assert estimator.estimate(vol, vol, seed=seed, competitor=competitor) is competitor
+    with pytest.raises(EstimationError):
+        estimator.estimate(vol, vol, seed=seed)
+
+
+def test_a_competitor_seed_needs_a_score_fn():
+    estimator = _drifting_estimator(np.zeros(3), None, iterations=1)
+    with pytest.raises(ValueError, match="competitor"):
+        estimator.estimate(
+            np.zeros((4, 4, 4)), np.zeros((4, 4, 4)), competitor=Transform.identity(3)
+        )

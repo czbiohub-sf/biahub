@@ -563,50 +563,76 @@ class NodeGraphEstimator:
         )
 
     def estimate(
-        self, mov: ArrayLike, ref: ArrayLike, seed: Transform | None = None
+        self,
+        mov: ArrayLike,
+        ref: ArrayLike,
+        seed: Transform | None = None,
+        competitor: Transform | None = None,
     ) -> Transform:
+        """Refine `seed` over the configured passes; return the best-scoring result.
+
+        `competitor`, when given, is refined too on the first pass and replaces the
+        seed's result only if it scores strictly higher; later passes continue from the
+        winner. This is the legacy `user_transform` competition, used by propagation to
+        let the input seed compete with the previous timepoint's result.
+        """
         mov = np.asarray(mov)
         ref = np.asarray(ref)
-        current = seed
-        current_score: float | None = None  # score of `current`, once computed
+        if self.score_fn is None:
+            if competitor is not None:
+                raise ValueError("a competitor seed needs a score_fn to compete")
+            current = seed
+            for _ in range(self.iterations):
+                current = self._single_pass(mov, ref, current)
+            return current
+        current, current_score = seed, None
         best: Transform | None = None
         best_score = -np.inf
-        for _ in range(self.iterations):
+        for i in range(self.iterations):
+            candidates, error = [], None
             try:
-                refined = self._single_pass(mov, ref, current)
-            except EstimationError:
+                candidates.append(self._pass_keeping_input(mov, ref, current, current_score))
+            except EstimationError as e:
+                error = e
+            if i == 0 and competitor is not None:
+                try:
+                    candidates.append(self._pass_keeping_input(mov, ref, competitor, None))
+                except EstimationError:
+                    pass
+            if not candidates:
                 # A later pass that cannot match (e.g. the previous pass drifted) must not
                 # throw away an earlier usable result.
                 if best is not None:
                     break
-                raise
-            if self.score_fn is None:
-                best = current = refined
-                continue
-            refined_score = self._finite(self.score_fn(refined, mov, ref))
-            if current_score is None:
-                current_score = self._finite(
-                    self.score_fn(
-                        current if current is not None else Transform.identity(mov.ndim),
-                        mov,
-                        ref,
-                    )
-                )
-            # Keep the pass's input when the refinement is worse (ties: the refinement).
-            if refined_score >= current_score:
-                current, current_score = refined, refined_score
-            elif current is None:
-                current = Transform.identity(mov.ndim)
+                raise error
+            current, current_score = candidates[0]
+            for transform, score in candidates[1:]:
+                if score > current_score:  # ties: the seed's result
+                    current, current_score = transform, score
             if current_score > best_score:
                 best, best_score = current, current_score
             if current_score >= 1.0:
                 break
-        if best is None:
+        if best is None or not np.isfinite(best_score):
             raise EstimationError(
                 f"no finite score in {self.iterations} iteration(s): nodes not detectable "
                 "after warping"
             )
         return best
+
+    def _pass_keeping_input(
+        self, mov, ref, start: Transform | None, start_score: float | None
+    ) -> tuple[Transform, float]:
+        """One pass from `start`; keep `start` when the refinement scores lower (ties: refinement)."""
+        refined = self._single_pass(mov, ref, start)
+        refined_score = self._finite(self.score_fn(refined, mov, ref))
+        if start is None:
+            start = Transform.identity(mov.ndim)
+        if start_score is None:
+            start_score = self._finite(self.score_fn(start, mov, ref))
+        if refined_score >= start_score:
+            return refined, refined_score
+        return start, start_score
 
     @staticmethod
     def _finite(score: float | None) -> float:
