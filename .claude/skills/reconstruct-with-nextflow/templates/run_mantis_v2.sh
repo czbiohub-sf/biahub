@@ -54,6 +54,18 @@ OUTPUT_DIR=""
 # after OUTPUT_DIR below, so it may reference it.
 CONVERTED_ZARR=""          # e.g. ${OUTPUT_DIR}/0-convert/${DATASET}.zarr
 
+# Delete the intermediates once the last step (QC) finishes: the flat-field,
+# deskew, reconstruct and virtual-stain directories, the final stores'
+# slurm_output/ and resume markers, and the Nextflow work directory
+# (biahub#292), recorded in nextflow/intermediates_cleaned.txt. A cleaned run
+# is FINAL — any rerun recomputes everything from the raw input.
+#   auto    on when concatenate.yml takes all the data, off if it crops
+#   true    on, even if concatenate.yml crops (the cropped-out data is lost)
+#   false   off: keep every intermediate
+# The pipeline resolves `auto` at launch (cleanup_decision in
+# nextflow/modules/cleanup.nf) and logs the outcome and why.
+CLEANUP_INTERMEDIATES="auto"
+
 # ---------------------------------------------------------------------------
 
 DATA_DIR="/hpc/instruments/cm.mantis"
@@ -122,6 +134,7 @@ mkdir -p "${OUTPUT_DIR}/nextflow"
     echo "commit    ${BIAHUB_COMMIT}"
     echo "host      $(hostname)"
     echo "slack_id  ${BIAHUB_SLACK_ID:-<unset>}"
+    echo "cleanup   ${CLEANUP_INTERMEDIATES} (requested; resolved in .nextflow.log)"
     echo "nextflow  $(nextflow -version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
     if [[ -n "${BIAHUB_DIRTY}" ]]; then
         echo "dirty     YES — not reproducible from the commit above:"
@@ -135,6 +148,7 @@ mkdir -p "${OUTPUT_DIR}/nextflow"
 echo "biahub: ${BIAHUB_PROJECT}"
 echo "  branch ${BIAHUB_BRANCH}  ${BIAHUB_COMMIT%% *}"
 echo "  provenance appended to ${PROVENANCE}"
+echo "cleanup intermediates: ${CLEANUP_INTERMEDIATES} (requested)"
 if [[ -n "${BIAHUB_DIRTY}" ]]; then
     echo "  WARNING: uncommitted changes — this run is not reproducible from the commit above" >&2
 fi
@@ -168,8 +182,8 @@ fi
 # Harmless when unset already, and nothing in the pipeline reads it.
 unset CLAUDECODE
 
-# The last four flags are the OPTIONAL steps: a step runs only if its config is
-# passed (biahub#306). Defaults by family —
+# The four config flags from --concatenate_config down are the OPTIONAL steps:
+# a step runs only if its config is passed (biahub#306). Defaults by family —
 #
 #   A549 / cell-line   assemble + track + QC   (all four, as written)
 #   zebrafish / neuromast   assemble + QC      (delete --track_config and
@@ -180,6 +194,7 @@ unset CLAUDECODE
 # swallows it, every flag below it is dropped including `-resume`, and bash then
 # tries to run the remainder as a command. Note the skip in a comment above this
 # call instead, so the provenance record still says what this run did and why.
+# --cleanup_intermediates is not a step: set CLEANUP_INTERMEDIATES above instead.
 nextflow run "${PIPELINE}" \
     -c "${NF_CONFIG}" \
     -profile slurm \
@@ -193,5 +208,6 @@ nextflow run "${PIPELINE}" \
     --track_config         "${CONFIGS}/track.yml" \
     --qc_config            "${CONFIGS}/qc.yaml" \
     --qc_track_config      "${CONFIGS}/qc_track.yaml" \
+    --cleanup_intermediates "${CLEANUP_INTERMEDIATES}" \
     -resume \
     "$@"

@@ -85,7 +85,7 @@ process notify_step {
 // Rate-limited by key, because debugging a config produces relaunch storms —
 // five launches inside ten minutes is an observed pattern, which would otherwise
 // be five notifications.
-def notify_run_start(dataset, pipeline, n_positions, steps) {
+def notify_run_start(dataset, pipeline, n_positions, steps, cleanup) {
     // Say once, at launch, that Slack is not configured. Without a webhook every
     // message still prints and every exit status is still 0, but only the
     // run-level messages reach the console: notify_step runs as a task, so its
@@ -103,6 +103,7 @@ def notify_run_start(dataset, pipeline, n_positions, steps) {
         "pipeline:  ${pipeline}",
         "positions: ${n_positions}",
         "steps:     ${steps.size()} — ${steps.join(', ')}",
+        "cleanup:   ${cleanup}",
         "input:     ${params.input}",
         "output:    ${params.output}",
         "host:      ${java.net.InetAddress.localHost.hostName}",
