@@ -508,7 +508,7 @@ class NodeGraphEstimator:
     transform (never a later, worse one). Without a `score_fn` the last pass is returned.
 
     As in the legacy pipeline, a pass keeps its input when the refinement scores lower
-    (ties go to the refinement), and a perfect score (1.0) ends the passes early.
+    (ties go to the refinement), and a score of exactly 1.0 ends the passes early.
     """
 
     def __init__(
@@ -611,7 +611,7 @@ class NodeGraphEstimator:
                     current, current_score = transform, score
             if current_score > best_score:
                 best, best_score = current, current_score
-            if current_score >= 1.0:
+            if current_score == 1.0:  # legacy stops on exactly 1 (overlap can exceed 1)
                 break
         if best is None or not np.isfinite(best_score):
             raise EstimationError(
