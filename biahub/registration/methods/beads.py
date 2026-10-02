@@ -506,6 +506,9 @@ class NodeGraphEstimator:
     frame, so each pass sees a better-aligned image than the last; `iterations > 1` with
     a `score_fn` repeats the pass from the previous result and returns the best-scoring
     transform (never a later, worse one). Without a `score_fn` the last pass is returned.
+
+    As in the legacy pipeline, a pass keeps its input when the refinement scores lower
+    (ties go to the refinement), and a perfect score (1.0) ends the passes early.
     """
 
     def __init__(
@@ -565,11 +568,12 @@ class NodeGraphEstimator:
         mov = np.asarray(mov)
         ref = np.asarray(ref)
         current = seed
+        current_score: float | None = None  # score of `current`, once computed
         best: Transform | None = None
         best_score = -np.inf
         for _ in range(self.iterations):
             try:
-                current = self._single_pass(mov, ref, current)
+                refined = self._single_pass(mov, ref, current)
             except EstimationError:
                 # A later pass that cannot match (e.g. the previous pass drifted) must not
                 # throw away an earlier usable result.
@@ -577,17 +581,36 @@ class NodeGraphEstimator:
                     break
                 raise
             if self.score_fn is None:
-                best = current
+                best = current = refined
                 continue
-            score = self.score_fn(current, mov, ref)
-            if np.isfinite(score) and score > best_score:
-                best, best_score = current, score
+            refined_score = self._finite(self.score_fn(refined, mov, ref))
+            if current_score is None:
+                current_score = self._finite(
+                    self.score_fn(
+                        current if current is not None else Transform.identity(mov.ndim),
+                        mov,
+                        ref,
+                    )
+                )
+            # Keep the pass's input when the refinement is worse (ties: the refinement).
+            if refined_score >= current_score:
+                current, current_score = refined, refined_score
+            elif current is None:
+                current = Transform.identity(mov.ndim)
+            if current_score > best_score:
+                best, best_score = current, current_score
+            if current_score >= 1.0:
+                break
         if best is None:
             raise EstimationError(
                 f"no finite score in {self.iterations} iteration(s): nodes not detectable "
                 "after warping"
             )
         return best
+
+    @staticmethod
+    def _finite(score: float | None) -> float:
+        return float(score) if score is not None and np.isfinite(score) else -np.inf
 
     def _single_pass(
         self, mov: np.ndarray, ref: np.ndarray, seed: Transform | None

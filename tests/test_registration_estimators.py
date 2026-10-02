@@ -100,8 +100,51 @@ def test_node_graph_estimator_keeps_the_best_scoring_iteration_not_the_last():
     )
     transform = estimator.estimate(np.zeros((10, 10, 10)), np.zeros((10, 10, 10)))
 
-    assert len(scored) == 2 and scored[0] > scored[1]
+    # pass-1 refinement, then its input (scored once), then the worse pass-2 refinement
+    assert len(scored) == 3 and scored[0] > scored[2]
     np.testing.assert_allclose(transform.translation, translation, atol=1e-6)
+
+
+def _drifting_estimator(translation, score_fn, iterations):
+    """Canned nodes: every pass re-applies the same correction (drifts by `translation`)."""
+    rng = np.random.default_rng(3)
+    mov_nodes, ref_nodes = _make_matched_clouds(rng, translation=translation)
+    return NodeGraphEstimator(
+        mov_detector=_FixedNodeDetector(mov_nodes),
+        ref_detector=_FixedNodeDetector(ref_nodes),
+        beads_match_settings=BeadsMatchSettings(),
+        affine_transform_settings=AffineTransformSettings(transform_type="euclidean"),
+        iterations=iterations,
+        score_fn=score_fn,
+    )
+
+
+def test_node_graph_estimator_keeps_its_input_when_the_refinement_scores_lower():
+    # The seed is already right; the pass's refinement drifts away and scores lower, so
+    # (as in the legacy pipeline) the pass keeps its input.
+    translation = np.array([5.0, -3.0, 2.0])
+    seed = Transform.from_translation(translation)
+
+    def score_fn(transform, mov, ref):
+        return -float(np.abs(transform.translation - translation).sum())
+
+    estimator = _drifting_estimator(translation, score_fn, iterations=1)
+    transform = estimator.estimate(np.zeros((10, 10, 10)), np.zeros((10, 10, 10)), seed=seed)
+    np.testing.assert_allclose(transform.matrix, seed.matrix)
+
+
+def test_node_graph_estimator_stops_at_a_perfect_score():
+    passes = []
+    estimator = _drifting_estimator(np.array([1.0, 0.0, 0.0]), lambda t, m, r: 1.0, iterations=3)
+    original = estimator._single_pass
+
+    def counting_pass(*args, **kwargs):
+        passes.append(1)
+        return original(*args, **kwargs)
+
+    estimator._single_pass = counting_pass
+    estimator.estimate(np.zeros((10, 10, 10)), np.zeros((10, 10, 10)))
+    assert len(passes) == 1
 
 
 def test_node_graph_estimator_fails_clearly_with_too_few_nodes():
