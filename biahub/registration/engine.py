@@ -562,6 +562,15 @@ def _empty(volume: np.ndarray) -> bool:
     return not np.any(np.nan_to_num(volume))
 
 
+def _compares_with_itself(reference_policy: ReferencePolicy, t: int) -> bool:
+    """Whether timepoint t is its own reference (the stabilization reference frame)."""
+    if isinstance(reference_policy, FixedFrame):
+        return t == reference_policy.t_ref
+    if isinstance(reference_policy, PreviousFrame):
+        return t == 0
+    return False
+
+
 def _estimate_competing(estimator, mov, ref, seed, competitor, score_fn) -> Transform:
     """Estimate from `seed`, with `competitor` competing (ties to the seed).
 
@@ -607,9 +616,10 @@ def estimate_propagated(
     The legacy `use_prev_t_transform` rules: timepoint t starts from what t-1 returned,
     with `input_seed` competing on the first pass; a timepoint that fails returns the
     seed it started from (recorded as a stand-in, the error kept) and that seed is
-    passed on; an empty frame (no data) restarts the chain from `input_seed`. `done`
-    holds records of timepoints already estimated (resume): they are not redone, only
-    used to continue the chain.
+    passed on; an empty frame (no data) restarts the chain from `input_seed`; the
+    stabilization reference frame is not estimated against itself -- it is identity, and
+    the chain starts after it from `input_seed`. `done` holds records of timepoints
+    already estimated (resume): they are not redone, only used to continue the chain.
     """
     done = done or {}
     result = SeriesResult()
@@ -624,6 +634,11 @@ def estimate_propagated(
             if _empty(mov_t) or _empty(ref_t):
                 result.scores[t] = float("nan")
                 result.errors[t] = "empty frame (no data)"
+                previous = None
+            elif _compares_with_itself(reference_policy, t):
+                identity = Transform.identity(mov_t.ndim)
+                result.transforms[t] = identity
+                result.scores[t] = float(score_fn(identity, mov_t, ref_t))
                 previous = None
             else:
                 seed = previous if previous is not None else input_seed

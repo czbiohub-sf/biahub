@@ -485,7 +485,7 @@ def test_estimate_propagated_follows_the_legacy_rules():
     # frame values 1..6; the frame at t=4 is empty (all zeros)
     mov = _frames([1, 2, 3, 4, 0, 6])
     result = estimate_propagated(
-        mov, FixedFrame(0), _StepX(fail_on={3}), IDENTITY, _finite_score, range(6)
+        mov, CrossChannel(mov), _StepX(fail_on={3}), IDENTITY, _finite_score, range(6)
     )
     x = {t: tr.translation[2] for t, tr in result.transforms.items()}
     # t0 from the input seed (+1); t1 from t0 (+1) -> 2
@@ -511,7 +511,7 @@ def test_estimate_propagated_lets_the_input_seed_compete_and_resumes_the_chain()
         return -abs(transform.translation[2] - 11.0)
 
     result = estimate_propagated(
-        mov, FixedFrame(0), _StepX(), _shift_x(10), score, range(3)
+        mov, CrossChannel(mov), _StepX(), _shift_x(10), score, range(3)
     )
     assert [result.transforms[t].translation[2] for t in range(3)] == [11.0, 11.0, 11.0]
 
@@ -521,6 +521,27 @@ def test_estimate_propagated_lets_the_input_seed_compete_and_resumes_the_chain()
         1: {"t": 1, "matrix": _shift_x(5).matrix.tolist(), "score": 0.9, "error": None},
     }
     estimator = _StepX()
-    resumed = estimate_propagated(mov, FixedFrame(0), estimator, IDENTITY, _finite_score, range(3), done=done)
+    resumed = estimate_propagated(
+        mov, CrossChannel(mov), estimator, IDENTITY, _finite_score, range(3), done=done
+    )
     assert len(estimator.seeds) == 2  # only t2 estimated: from t1 (x=5), then the input seed
     assert estimator.seeds[0].translation[2] == 5.0 and resumed.transforms[2].translation[2] == 6.0
+
+
+@pytest.mark.parametrize("reference_policy", [FixedFrame(0), PreviousFrame()])
+def test_estimate_propagated_does_not_estimate_the_stabilization_reference_frame(
+    reference_policy,
+):
+    from biahub.registration.engine import estimate_propagated
+
+    estimator = _StepX()
+    result = estimate_propagated(
+        _frames([1, 2, 3]), reference_policy, estimator, _shift_x(10), _finite_score, range(3)
+    )
+    assert result.transforms[0].is_identity  # t=0 is the reference itself
+    # t=0 never estimated: t=1 from the input seed; t=2 from t=1's result, with the input
+    # seed competing (a generic estimator is run from both)
+    assert [seed.translation[2] for seed in estimator.seeds] == [10.0, 11.0, 10.0]
+    # the chain starts after the reference from the input seed (x=10), as legacy did
+    assert result.transforms[1].translation[2] == 11.0
+    assert result.transforms[2].translation[2] == 12.0
