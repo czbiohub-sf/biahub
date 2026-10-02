@@ -616,7 +616,8 @@ def estimate_propagated(
     The legacy `use_prev_t_transform` rules: timepoint t starts from what t-1 returned,
     with `input_seed` competing on the first pass; a timepoint that fails returns the
     seed it started from (recorded as a stand-in, the error kept) and that seed is
-    passed on; an empty frame (no data) restarts the chain from `input_seed`; the
+    passed on; an empty frame (no data) is skipped and the chain carries on from the last
+    result before it; the
     stabilization reference frame is not estimated against itself -- it is identity, and
     the chain starts after it from `input_seed`. `done` holds records of timepoints
     already estimated (resume): they are not redone, only used to continue the chain.
@@ -632,9 +633,9 @@ def estimate_propagated(
             mov_t = np.asarray(mov[t])
             ref_t = np.asarray(reference_policy.reference_for(mov, t))
             if _empty(mov_t) or _empty(ref_t):
+                # Legacy skipped empty frames without touching the propagated transform.
                 result.scores[t] = float("nan")
                 result.errors[t] = "empty frame (no data)"
-                previous = None
             elif _compares_with_itself(reference_policy, t):
                 identity = Transform.identity(mov_t.ndim)
                 result.transforms[t] = identity

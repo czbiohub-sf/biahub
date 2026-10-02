@@ -496,9 +496,9 @@ def test_estimate_propagated_follows_the_legacy_rules():
     assert stand_in.translation[2] == 2.0 and source == "t=1"
     # t3 starts from that stand-in: 2 + 1
     assert x[3] == 3.0
-    # t4 is empty: no transform, and the chain restarts from the input seed at t5
+    # t4 is empty: skipped, and t5 carries on from the last result before it (t3: 3) + 1
     assert 4 not in result.transforms and "empty" in result.errors[4]
-    assert x[5] == 1.0
+    assert x[5] == 4.0
 
 
 def test_estimate_propagated_lets_the_input_seed_compete_and_resumes_the_chain():
