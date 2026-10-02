@@ -43,7 +43,9 @@ def test_estimate_registration_converts_to_a_cross_reference_estimate():
     )
     assert unified.transform.type == "affine" and unified.time_indices == [0, 5]
     assert unified.beads is not None
-    assert any("use_prev_t_transform" in n for n in notes)
+    # legacy use_prev_t_transform (default true) is propagation, no longer dropped
+    assert unified.transform.seed_from == "previous_timepoint"
+    assert not any("use_prev_t_transform" in n for n in notes)
 
 
 def test_same_channel_estimate_registration_stays_a_cross_registration():
@@ -180,3 +182,14 @@ def test_convert_settings_refuses_to_fold_files_that_are_not_per_position_stabil
         convert_settings_cli, ["-c", str(tmp_path / "*.yml"), "-o", str(tmp_path / "out.yml")]
     )
     assert result.exit_code != 0 and "per-position stabilize" in result.output
+
+
+def test_estimate_registration_without_propagation_converts_to_independent_estimates():
+    legacy = EstimateRegistrationSettings(
+        source_channel_name="GFP",
+        target_channel_name="Phase3D",
+        estimation_method="beads",
+        affine_transform_settings={"use_prev_t_transform": False},
+    )
+    unified, _ = convert_settings(legacy)
+    assert unified.transform.seed_from == "input"

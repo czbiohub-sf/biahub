@@ -201,11 +201,7 @@ def estimate_settings_from_legacy(
     """Convert a legacy estimate-* config to the same estimate; also return what was dropped."""
     notes = []
     ats = legacy.affine_transform_settings
-    if ats.use_prev_t_transform:
-        notes.append(
-            "use_prev_t_transform dropped: timepoints are estimated independently and "
-            "neighbours enter through fallback.repair.candidates"
-        )
+    seed_from = "previous_timepoint" if ats.use_prev_t_transform else "input"
     if legacy.eval_transform_settings is not None:
         notes.append(
             "eval_transform_settings dropped: the engine flags and repairs outlying "
@@ -216,6 +212,7 @@ def estimate_settings_from_legacy(
         seed=ats.approx_transform,
         seed_direction="pull",
         seed_from_shapes=ats.compute_approx_transform,
+        seed_from=seed_from,
     )
     if isinstance(legacy, EstimateRegistrationSettings):
         # estimate-registration always read the source channel from the source store and

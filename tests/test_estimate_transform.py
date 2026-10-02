@@ -75,6 +75,7 @@ def _write_config(
     reference="cross",
     method="beads",
     transform_type="euclidean",
+    seed_from="input",
     **blocks,
 ):
     peaks = DetectPeaksSettings(
@@ -91,7 +92,7 @@ def _write_config(
             frame=reference, channel=target if reference == "cross" else None
         ),
         method=method,
-        transform={"type": transform_type},
+        transform={"type": transform_type, "seed_from": seed_from},
         **blocks,
     )
     path = tmp_path / "estimate.yml"
@@ -353,6 +354,37 @@ def test_estimate_transform_several_positions_each_get_their_own_transforms(tmp_
             np.testing.assert_allclose(row, t * d, atol=0.5)
     # each position kept its own records, so --resume works per position
     assert (output.parent / "positions" / "A" / "1" / "1" / "timepoints" / "2.json").exists()
+
+
+def test_estimate_transform_previous_timepoint_runs_one_sequential_job(tmp_path):
+    rng = np.random.default_rng(11)
+    ref = _synthetic_bead_volume(rng, SHAPE)
+    # the moving channel drifts two whole voxels further on each axis every timepoint
+    step = np.array([2.0, -2.0, 2.0])
+    frames = [
+        (ref, ndi_shift(ref, shift=tuple((t + 1) * step), order=1, mode="constant"))
+        for t in range(3)
+    ]
+    plate = _write_plate(tmp_path / "drift_reg.zarr", frames)
+    peaks = DetectPeaksSettings(threshold_abs=100, nms_distance=4, min_distance=0, block_size=[8, 8, 8])
+    # A 1-voxel scoring radius, so a pass's unrefined input does not tie with its refinement
+    # (the default 6-voxel radius cannot tell a 2-voxel misalignment from none).
+    beads = BeadsMatchSettings(
+        source_peaks_settings=peaks,
+        target_peaks_settings=peaks,
+        qc_settings={"iterations": 2, "score_threshold": 0.4, "score_centroid_mask_radius": 1},
+    )
+    config = _write_config(tmp_path, seed_from="previous_timepoint", beads=beads)
+    output = tmp_path / "out" / "transforms.yml"
+
+    _run(plate, config, output)
+
+    job_ids = (output.parent / "slurm_output" / "estimate_job_ids.log").read_text().split()
+    assert len(job_ids) == 1  # one sequential job, not one per timepoint
+    for t, row in enumerate(_pull_translations(output)):
+        np.testing.assert_allclose(row, (t + 1) * step, atol=0.5)
+    record = json.loads((output.parent / "timepoints" / "2.json").read_text())
+    assert {"stand_in", "stand_in_from"} <= set(record)
 
 
 def test_estimate_transform_manual_runs_in_process_on_one_timepoint(

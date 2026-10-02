@@ -1018,6 +1018,64 @@ def _estimate_timepoint_job(
     return record
 
 
+def _estimate_propagated_job(
+    moving_position_dirpath: Path,
+    reference_position_dirpath: Path,
+    settings_path: Path,
+    time_indices: list[int],
+    records_dir: Path,
+    resume: bool,
+) -> dict[int, dict]:
+    """All timepoints in order (`seed_from: previous_timepoint`), one record per timepoint.
+
+    Each record is written as soon as its timepoint is done, so an interrupted job
+    resumes the chain where it stopped.
+    """
+    settings = yaml_to_model(settings_path, EstimateTransformSettings)
+    mov, mov_voxel_size = _open_series(moving_position_dirpath, settings.moving.channel)
+    ref, ref_voxel_size = _open_series(reference_position_dirpath, settings.reference_channel)
+    estimator, score_fn, seed = build_estimator(
+        settings, tuple(mov.shape[-3:]), mov_voxel_size, ref_voxel_size
+    )
+    done = {}
+    if resume:
+        for t in time_indices:
+            path = records_dir / f"{t}.json"
+            if path.exists():
+                done[t] = json.loads(path.read_text())
+    records = dict(done)
+    records_dir.mkdir(parents=True, exist_ok=True)
+
+    def write_record(t: int, result: SeriesResult) -> None:
+        if t in done:
+            return
+        stand_in = result.stand_ins.get(t)
+        record = {
+            "t": t,
+            "matrix": result.transforms[t].to_list() if t in result.transforms else None,
+            "score": _finite_or_none(result.scores.get(t)),
+            "error": result.errors.get(t),
+            "stand_in": stand_in[0].to_list() if stand_in else None,
+            "stand_in_from": stand_in[1] if stand_in else None,
+            "arm": getattr(estimator, "last_winner", None),
+            "metrics": _bead_metrics(settings, result, t, mov, ref),
+        }
+        (records_dir / f"{t}.json").write_text(json.dumps(record))
+        records[t] = record
+
+    estimate_propagated(
+        mov,
+        _reference_policy(settings, ref),
+        estimator,
+        seed,
+        score_fn,
+        time_indices,
+        done=done,
+        on_timepoint=write_record,
+    )
+    return records
+
+
 def _run_fingerprint(settings: EstimateTransformSettings, source: Path, target: Path) -> dict:
     """What a resumed run must share with the run it resumes."""
     digest = hashlib.sha256(settings.model_dump_json().encode()).hexdigest()
@@ -1085,6 +1143,11 @@ def _load_series(
         if record["matrix"] is not None:
             result.transforms[t] = Transform(
                 np.asarray(record["matrix"], dtype=float), transform_type=transform_type
+            )
+        elif record.get("stand_in") is not None:
+            result.stand_ins[t] = (
+                Transform(np.asarray(record["stand_in"], dtype=float), transform_type=transform_type),
+                record.get("stand_in_from") or "seed",
             )
         result.scores[t] = float("nan") if record["score"] is None else record["score"]
         if record["error"]:
@@ -1241,6 +1304,38 @@ def _run_jobs(
     return records, failures
 
 
+# Wall-clock budget per timepoint for the sequential (propagation) job, in minutes.
+PROPAGATION_MINUTES_PER_TIMEPOINT = 5
+
+
+def _run_propagated(
+    executor, resolved_cluster, monitor_flag, job_args, to_estimate, records_dir, user_set_time
+) -> tuple[dict[int, dict], dict[int, str]]:
+    """Run the sequential estimate as one job; return ({t: record}, {t: error}).
+
+    If the job dies part-way, the records it already wrote (this run's -- the record dirs
+    were cleared at the start) are kept; only the timepoints it never reached fail.
+    """
+    if not to_estimate:
+        return {}, {}
+    if not user_set_time:
+        minutes = max(30, PROPAGATION_MINUTES_PER_TIMEPOINT * len(to_estimate))
+        executor.update_parameters(slurm_time=minutes)
+    executor.update_parameters(slurm_job_name="estimate_transform_propagated")
+    by_job, failures = _run_jobs(
+        executor, resolved_cluster, monitor_flag, "estimate", [(-1, _estimate_propagated_job, job_args)]
+    )
+    if -1 in by_job:
+        return {int(t): r for t, r in by_job[-1].items()}, {}
+    records = {}
+    for t in to_estimate:
+        path = records_dir / f"{t}.json"
+        if path.exists():
+            records[t] = json.loads(path.read_text())
+    error = failures.get(-1, "sequential job failed")
+    return records, {t: error for t in to_estimate if t not in records}
+
+
 def _one_transform_per_timepoint(
     result: SeriesResult, time_indices: list[int], fallback: Transform
 ) -> list[Transform]:
@@ -1387,20 +1482,33 @@ def estimate_transform_series(
         click.echo(
             f"resume: {len(time_indices) - len(to_estimate)} timepoint(s) already estimated"
         )
-    estimate_records, job_failures = _run_jobs(
-        executor,
-        resolved_cluster,
-        monitor,
-        "estimate",
-        [
-            (
-                t,
-                _estimate_timepoint_job,
-                (source, target, settings_path, t, timepoints_dir / f"{t}.json"),
-            )
-            for t in to_estimate
-        ],
-    )
+    if settings.transform.seed_from == "previous_timepoint":
+        estimate_records, job_failures = _run_propagated(
+            executor,
+            resolved_cluster,
+            monitor,
+            (source, target, settings_path, time_indices, timepoints_dir, resume),
+            to_estimate,
+            timepoints_dir,
+            user_set_time=bool(
+                sbatch_filepath and "slurm_time" in sbatch_to_submitit(sbatch_filepath)
+            ),
+        )
+    else:
+        estimate_records, job_failures = _run_jobs(
+            executor,
+            resolved_cluster,
+            monitor,
+            "estimate",
+            [
+                (
+                    t,
+                    _estimate_timepoint_job,
+                    (source, target, settings_path, t, timepoints_dir / f"{t}.json"),
+                )
+                for t in to_estimate
+            ],
+        )
 
     result = _load_series(
         timepoints_dir,
