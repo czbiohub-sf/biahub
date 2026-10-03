@@ -142,6 +142,7 @@ def test_apply_transform_registers_source_channels_onto_a_target_store(
         reference_position_dirpaths=[target / "A" / "1" / "0"],
         keep_overhang=True,
         cluster="debug",
+        channels=["GFP"],
     )
 
     with open_ome_zarr(output / "A" / "1" / "0", mode="r") as out:
@@ -181,6 +182,7 @@ def test_apply_transform_writes_a_channel_both_copied_and_transformed_once(
         reference_position_dirpaths=[position],
         keep_overhang=True,
         cluster="debug",
+        channels=["GFP"],
     )
 
     with open_ome_zarr(output / "A" / "1" / "0", mode="r") as out:
@@ -448,3 +450,36 @@ def test_apply_transform_writes_every_timepoint_and_records_the_not_accepted_one
         assert out.data.shape[0] == 3  # the unreliable timepoint is written, not dropped
         recorded = out.zattrs["biahub-apply-transform"]["timepoints_not_accepted"]
     assert recorded == {"unreliable": [1]}
+
+
+def test_apply_transform_registers_every_moving_channel_by_default(structured_plate, tmp_path):
+    # The file was estimated on GFP, but the transform holds for every channel of the
+    # moving store (shared optics and stage), so both are registered unless told otherwise.
+    position, data = structured_plate
+    target = tmp_path / "target.zarr"
+    with open_ome_zarr(target, layout="hcs", mode="w", channel_names=["Retardance"]) as plate:
+        plate.create_position("A", "1", "0")["0"] = data[:, :1]
+    config = tmp_path / "transforms.yml"
+    model_to_yaml(
+        TransformSettings(
+            direction="forward",
+            moving_channels=["GFP"],
+            reference_channel="Retardance",
+            transforms=[TransformEntry(matrix=_translation(0, 0, 0))],
+        ),
+        config,
+    )
+
+    apply_transform(
+        [position], config, tmp_path / "all.zarr",
+        reference_position_dirpaths=[target / "A" / "1" / "0"], keep_overhang=True, cluster="debug",
+    )
+    with open_ome_zarr(tmp_path / "all.zarr" / "A" / "1" / "0", mode="r") as out:
+        assert out.channel_names == ["Retardance", "GFP", "Phase3D"]
+
+    with pytest.raises(Exception, match="channels not in the moving store"):
+        apply_transform(
+            [position], config, tmp_path / "bad.zarr",
+            reference_position_dirpaths=[target / "A" / "1" / "0"], cluster="debug",
+            channels=["DAPI"],
+        )

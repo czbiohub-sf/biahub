@@ -214,8 +214,14 @@ def apply_transform(
     sbatch_filepath: str | None = None,
     cluster: str = "slurm",
     monitor: bool = False,
+    channels: list[str] | None = None,
 ) -> None:
     """Apply a `TransformSettings` series to positions.
+
+    `channels` picks which moving-store channels are transformed; by default all of them
+    (a registration or stabilization comes from the shared optics and stage, so it holds
+    for every channel -- the file's `moving_channels` only records the channel it was
+    estimated on).
 
     With reference positions: the output lives on the reference grid and holds every
     reference channel copied plus the file's `moving_channels` transformed from the
@@ -232,6 +238,12 @@ def apply_transform(
         T, _C, *moving_shape = moving.data.shape
         moving_channel_names = list(moving.channel_names)
         moving_voxel_size = tuple(moving.scale[-3:])
+    unknown = sorted(set(channels or []) - set(moving_channel_names))
+    if unknown:
+        raise click.UsageError(
+            f"channels not in the moving store: {unknown} (it has {moving_channel_names})"
+        )
+    to_transform = [c for c in moving_channel_names if channels is None or c in channels]
     time_indices = _resolve_time_indices(time_indices, T)
     # Each moving position's matrices by timepoint: its own list, or the shared one.
     position_keys = [position_key(p) for p in moving_position_dirpaths]
@@ -268,12 +280,7 @@ def apply_transform(
             reference_shape = tuple(reference.data.shape[-3:])
             reference_channel_names = list(reference.channel_names)
             reference_voxel_size = list(reference.scale)
-        transformed = [c for c in settings.moving_channels if c in moving_channel_names]
-        missing = set(settings.moving_channels) - set(transformed)
-        if missing:
-            raise click.UsageError(
-                f"moving channels not in the moving store: {sorted(missing)}"
-            )
+        transformed = to_transform
         # A reference channel that is also transformed is written once, by its transform job.
         copied = [c for c in reference_channel_names if c not in transformed]
         output_channel_names = reference_channel_names + [
@@ -282,8 +289,8 @@ def apply_transform(
         output_voxel_size = tuple(reference_voxel_size[-3:])
     else:
         reference_shape = tuple(moving_shape)
-        transformed, copied = moving_channel_names, []
-        output_channel_names = moving_channel_names
+        transformed, copied = to_transform, []
+        output_channel_names = to_transform
         output_voxel_size = (
             tuple(settings.voxel_size[-3:])
             if settings.voxel_size
@@ -439,6 +446,11 @@ def apply_transform(
     type=click.Choice(["0.4", "0.5"]),
     help="OME-Zarr version of the output store (default: the moving store's).",
 )
+@click.option(
+    "--channels",
+    multiple=True,
+    help="Moving-store channel to transform (repeat for several); default: every channel.",
+)
 @sbatch_filepath()
 @cluster()
 @monitor(short=False)
@@ -454,13 +466,15 @@ def apply_transform_cli(
     sbatch_filepath: str | None,
     cluster: str,
     monitor: bool,
+    channels: tuple[str, ...],
 ) -> None:
     """Apply a transform series to positions -- one matrix for all timepoints or one per timepoint.
 
     Takes the `TransformSettings` file written by `estimate-transform`. How it is applied
     is decided here, not in the file: which timepoints, the canvas (overlap shared by the
     applied transforms, or `--keep-overhang` for the full reference grid), the
-    interpolation and the output OME-Zarr version.
+    interpolation, the output OME-Zarr version, and which moving channels are
+    transformed (`--channels`; default all of them).
 
     \b
     Registration (moving channels onto the reference store's grid and channels):
@@ -482,6 +496,7 @@ def apply_transform_cli(
         output_ome_zarr_version=ome_zarr_version,
         sbatch_filepath=sbatch_filepath,
         cluster=cluster,
+        channels=list(channels) or None,
         monitor=monitor,
     )
 
