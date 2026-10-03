@@ -858,6 +858,14 @@ class FallbackSettings(MyBaseModel):
 
 
 EstimationMethod = Literal["beads", "ants", "phase-cross-corr", "manual", "focus-finding"]
+# The settings block each method reads.
+METHOD_BLOCKS: dict[str, str] = {
+    "beads": "beads",
+    "ants": "ants",
+    "phase-cross-corr": "phase_cross_corr",
+    "manual": "manual",
+    "focus-finding": "focus_finding",
+}
 ScoreMetric = Literal[
     "overlap", "residual", "mutual_information", "correlation", "gradient_correlation"
 ]
@@ -950,8 +958,20 @@ class EstimateTransformSettings(MyBaseModel):
 
     @model_validator(mode="after")
     def check_sweep_paths(self) -> "EstimateTransformSettings":
-        if self.fallback.sweep is not None:
-            self.sweep_trials()
+        if self.fallback.sweep is None:
+            return self
+        # A sweep trial only rebuilds the estimator: the score, seed and reference come
+        # from these settings, so only the method's own block and the fit type can change.
+        block = METHOD_BLOCKS[self.method]
+        for overrides in self.fallback.sweep.trials():
+            for path in overrides:
+                if not (path.startswith(f"{block}.") or path == "transform.type"):
+                    raise ValueError(
+                        f"sweep path {path!r} would be ignored: a sweep trial varies the "
+                        f"estimator only, i.e. paths under {block!r} (the {self.method!r} "
+                        "method's settings) or 'transform.type'"
+                    )
+        self.sweep_trials()
         return self
 
     def sweep_trials(self) -> dict[str, "EstimateTransformSettings"]:
