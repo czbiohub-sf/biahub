@@ -21,6 +21,9 @@ class StackregEstimator:
     forward, moving -> reference, (Y, X)).
     """
 
+    # Ignores the seed: repair from other seeds would return the same answer.
+    uses_seed = False
+
     _AXIS_SWAP = np.array([[0, 1, 0], [1, 0, 0], [0, 0, 1]], dtype=np.float64)
 
     def __init__(self, transformation: int = StackReg.TRANSLATION):

@@ -359,6 +359,9 @@ class ManualEstimator:
     Invert once more here to satisfy the TransformEstimator contract.
     """
 
+    # Ignores the seed: repair from other seeds would return the same answer.
+    uses_seed = False
+
     def __init__(
         self,
         source_channel_name: str,

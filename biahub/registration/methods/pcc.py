@@ -209,6 +209,9 @@ class PCCEstimator:
     sub-volume (a translation measured on a crop holds for the whole volume).
     """
 
+    # Ignores the seed: repair from other seeds would return the same answer.
+    uses_seed = False
+
     def __init__(
         self,
         function_type: Literal["custom", "custom_padding"] = "custom",

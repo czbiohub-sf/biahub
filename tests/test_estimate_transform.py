@@ -414,6 +414,29 @@ def test_estimate_transform_previous_timepoint_runs_one_sequential_job(tmp_path)
     assert {"stand_in", "stand_in_from"} <= set(record)
 
 
+def test_repair_is_skipped_for_a_method_that_ignores_seeds(tmp_path, capsys):
+    rng = np.random.default_rng(11)
+    ref = _synthetic_bead_volume(rng, SHAPE)
+    blank = rng.normal(0, 5.0, size=SHAPE).astype(np.float32)
+    frames = [ref, ndi_shift(ref, shift=APPLIED_SHIFT_ZYX, order=1, mode="constant"), blank]
+    plate = _write_plate(tmp_path / "pcc_blank.zarr", [(f, f) for f in frames])
+    config = _write_config(
+        tmp_path,
+        source="GFP",
+        reference="first",
+        method="phase-cross-corr",
+        phase_cross_corr=PhaseCrossCorrSettings(center_crop_xy=[SHAPE[1], SHAPE[2]]),
+    )
+    output = tmp_path / "out" / "transforms.yml"
+
+    _run(plate, config, output)
+
+    report = json.loads((output.parent / "estimate_transform_report.json").read_text())
+    assert report["flagged"]  # the noise frame is still flagged ...
+    assert report["repairs"] == {}  # ... but PCC is not re-run from other seeds
+    assert "repair skipped" in capsys.readouterr().out
+
+
 def test_estimate_transform_manual_runs_in_process_on_one_timepoint(
     beads_plate, tmp_path, monkeypatch
 ):

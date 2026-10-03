@@ -58,6 +58,9 @@ class FocusEstimator:
     is a pure translation in the forward (moving -> reference) direction.
     """
 
+    # Ignores the seed: repair from other seeds would return the same answer.
+    uses_seed = False
+
     def __init__(
         self,
         pixel_size: float,

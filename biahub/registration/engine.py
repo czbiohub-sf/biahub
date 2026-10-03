@@ -1550,6 +1550,12 @@ def estimate_transform_series(
         if repair_settings is not None
         else []
     )
+    if repair_ts and not getattr(_estimator, "uses_seed", True):
+        click.echo(
+            f"repair skipped: method {settings.method!r} ignores seeds, so re-seeding "
+            f"would return the same transforms ({len(repair_ts)} flagged timepoint(s) stay flagged)"
+        )
+        repair_ts = []
     to_repair = [t for t in repair_ts if not (resume and (repairs_dir / f"{t}.json").exists())]
     executor.update_parameters(slurm_job_name="estimate_transform_repair")
     if not user_set_time:
