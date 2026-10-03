@@ -202,3 +202,14 @@ def test_example_stitch_settings(example_stitch_settings):
     for value in validated_settings.total_translation.values():
         assert len(value) == 3
         assert value[0] == 0.0
+
+
+def test_skill_config_templates_load():
+    # Skill templates are copied into production runs; keep them on the current schema.
+    from biahub.settings import load_estimate_transform_settings
+
+    root = Path(__file__).resolve().parents[1] / ".claude" / "skills"
+    templates = sorted(root.glob("*/templates/estimate-transform*.yml"))
+    assert templates
+    for template in templates:
+        load_estimate_transform_settings(template)

@@ -119,6 +119,11 @@ transform:
     - 1.0
   seed_direction: pull
   seed_from_shapes: false
+  # Where each timepoint starts: `input` -- the seed above, every timepoint estimated
+  # independently (one job per timepoint); `previous_timepoint` -- the previous
+  # timepoint's result, with the seed competing on the first pass (legacy
+  # use_prev_t_transform; one sequential job, contiguous time_indices).
+  seed_from: input
 time_indices: all
 score_metric: overlap
 fallback:

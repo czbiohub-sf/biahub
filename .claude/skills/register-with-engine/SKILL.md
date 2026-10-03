@@ -9,7 +9,7 @@ description: >-
   the production template, launches the run in a tmux session, monitors the
   per-timepoint records, reads the report and run journal, compares against any
   previous registration_settings.yml, and reports a verdict. Optionally applies the
-  result with `biahub stabilize`. Use when asked to "register", "estimate the
+  result with `biahub apply-transform`. Use when asked to "register", "estimate the
   registration for", or "run registration on" a named mantis dataset.
 ---
 
@@ -34,8 +34,8 @@ bead-overlap ratio (quantized at ~1/N per bead); treat differences of one bead a
 ## 1. Confirm the environment
 
 - On Bruno (`hostname` shows `gpu-*`/`cpu-*`/login node; `squeue` works).
-- The biahub checkout: run from `main` once the engine stack (#366-#378) has merged;
-  until then from `refactor-registration-engine/12-cleanup` (or the top of the stack).
+- The biahub checkout: run from `main` once the registration refactor has merged; until
+  then from `refactor-registration-engine/integration`.
   `git status` clean apart from untracked scratch; `source .venv/bin/activate`;
   `biahub estimate-transform --help` renders.
 - Run the driver inside tmux. SSH drops have killed sessions before.
@@ -67,11 +67,19 @@ production beads config in the engine's `EstimateTransformSettings` schema (an o
 0.857 without, 187/240 timepoints identical to production).
 
 Adjust:
-- `approx_transform`: reuse the previous run's seed if `1-register/estimate-registration-beads.yml`
-  exists for this dataset (same instrument geometry); otherwise the template's seed
-  from 2025_09_18 is a reasonable start -- the vote seed correction
-  (`seed_correction_settings.mode: votefit`) recovers tens of voxels of drift.
-- `time_indices`: `"all"` for production; a short list (e.g. `[0, 82, 200]`) for a smoke.
+- `transform.seed`: reuse the previous run's `approx_transform` (pull direction, as on
+  disk) if `1-register/estimate-registration-beads.yml` exists for this dataset (same
+  instrument geometry) -- `biahub convert-settings -c <that file> -o <new>.yml` converts
+  the whole config; otherwise the template's seed from 2025_09_18 is a reasonable start
+  -- the vote seed correction (`seed_correction_settings.mode: votefit`) recovers tens of
+  voxels of drift.
+- `transform.seed_from`: `input` (default) estimates every timepoint independently from
+  the seed, fanned out one job per timepoint. `previous_timepoint` starts each timepoint
+  from the previous one's result (the input seed still competes on the first pass), as
+  legacy `use_prev_t_transform: true` did -- what most production configs used; it runs
+  as ONE sequential job, ~5 min per timepoint by default.
+- `time_indices`: `"all"` for production; a short list (e.g. `[0, 82, 200]`) for a smoke
+  (with `previous_timepoint` the list must be contiguous).
 - Do NOT add fields from the hardened production YAML (`beads_strategy`,
   `repair_pass_settings`, `sweep_fallback_settings`, `hungarian_match_settings.qc_settings`):
   the model is `extra="forbid"` and will reject them.
@@ -90,15 +98,21 @@ if one exists). Wait for a go.
 ## 6. Launch in tmux
 
 ```bash
-tmux new-session -d -s register-<DATASET> -c /hpc/mydata/taylla.theodoro/repo/biahub
+tmux new-session -d -s register-<DATASET> -c <biahub checkout>
 tmux send-keys -t register-<DATASET> "source .venv/bin/activate && time biahub estimate-transform --cluster slurm \
   -m <deskew.zarr>/<beads well> -r <reconstruct.zarr>/<beads well> \
-  -c <config> -o <out>/registration_settings.yml 2>&1 \
+  -c <config> -o <out>/transforms.yml 2>&1 \
   | grep -v 'FutureWarning\|transform.estimate(mov_peaks\|Please use' | tee <out>/estimate_transform.log" Enter
 ```
 
 `--resume` on a relaunch keeps finished timepoints (records in `<out>/timepoints/`,
-`<out>/repairs/`). Do not run two drivers on the same output directory.
+`<out>/repairs/`) and refuses if the settings or inputs changed; without it a run
+starts clean. Do not run two drivers on the same output directory.
+
+Time limits: an `-sb` sbatch file that sets `--time` wins over every phase's default,
+including the sequential `previous_timepoint` job -- give large volumes enough
+(e.g. 8 min per timepoint for 100x2048x1252 A549 volumes). Keep the number of jobs you
+have on the queue modest: an overloaded partition makes jobs hit their time limit.
 
 ## 7. Monitor
 
@@ -114,8 +128,12 @@ tmux send-keys -t register-<DATASET> "source .venv/bin/activate && time biahub e
 
 From `estimate_transform_report.json` and `run_journal.json`:
 - score distribution (median, min), `flagged`, `repairs` (`accepted`, `source`,
-  before -> after from the journal, `candidate_failures`), `filled_from_neighbour`
-  (timepoints with no transform at all -- these got a neighbour's matrix).
+  before -> after from the journal, `candidate_failures`), `stand_ins` (timepoints with
+  no transform of their own and what was written instead).
+- In `transforms.yml` each entry has a `status`: `accepted`, or `unreliable` (no good
+  transform -- the pipeline's best result, or a stand-in when `filled_from` is set,
+  e.g. `seed` = the approximate transform, with the error in `note`). Empty frames
+  (no data) are reported as such. A timepoint is never dropped.
 - per-timepoint `metrics.median_residual` (voxels): should sit well under 1 for good
   timepoints; `n_matched` should be close to the detected bead count.
 
@@ -129,14 +147,21 @@ scores with different matrices are expected at the metric's resolution; a system
 
 `--apply`: `biahub apply-transform -m <deskew.zarr>/*/*/* -r <reconstruct.zarr>/*/*/* -c <out>/transforms.yml -o <dataset>/1-preprocess/light-sheet/raw/1-register-engine/<DATASET>.zarr`
 registers every light-sheet position onto the phase grid with the estimated per-timepoint
-transforms (reference channels copied, moving channels transformed; canvas = overlap shared by
-the applied transforms, `--keep-overhang` to keep the full grid). Without `-r` the same
-command stabilizes a store onto its own grid.
+transforms: reference channels copied, and every moving channel transformed
+(`--channels` to pick); canvas = overlap shared by the applied transforms,
+`--keep-overhang` to keep the full grid. Timepoints written with a non-accepted
+transform are printed and recorded in the output metadata. Without `-r` the same command
+stabilizes a store onto its own grid; estimating several `-m` positions writes a
+transforms list per position, applied per position.
+
+To replace a few bad timepoints with another method's result (e.g. beads failed, manual
+or ants worked): estimate those timepoints alone, then
+`biahub substitute-transforms -c <out>/transforms.yml -s <other>/transforms.yml -o <final>.yml`.
 
 ## 10. Wrap up
 
 Report: beads well, T, wall time, score median/min, flagged and rescued counts (with
-the largest before -> after), any `filled_from_neighbour`, the comparison against the
+the largest before -> after), any `stand_ins` / unreliable timepoints, the comparison against the
 previous registration, and the output paths. Leave the tmux session for inspection;
 kill it only after the summary. Record anything surprising in memory
 (`registration-engine-refactor`) with the dataset name.
