@@ -201,7 +201,15 @@ def estimate_settings_from_legacy(
     """Convert a legacy estimate-* config to the same estimate; also return what was dropped."""
     notes = []
     ats = legacy.affine_transform_settings
-    seed_from = "previous_timepoint" if ats.use_prev_t_transform else "input"
+    # Only the legacy beads path read use_prev_t_transform (propagation); every other
+    # method estimated each timepoint independently whatever the flag said.
+    legacy_method = (
+        legacy.estimation_method
+        if isinstance(legacy, EstimateRegistrationSettings)
+        else legacy.stabilization_method
+    )
+    propagate = ats.use_prev_t_transform and legacy_method == "beads"
+    seed_from = "previous_timepoint" if propagate else "input"
     if legacy.eval_transform_settings is not None:
         notes.append(
             "eval_transform_settings dropped: the engine flags and repairs outlying "
