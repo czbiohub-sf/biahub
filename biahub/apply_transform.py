@@ -318,8 +318,10 @@ def apply_transform(
         version=resolve_ome_zarr_version(moving_position_dirpaths[0], output_ome_zarr_version),
     )
 
-    _, num_cpus, gb_ram = estimate_resources(
-        shape=(T, len(output_channel_names), *moving_shape), ram_multiplier=5
+    # Wall time scales with the volumes written (0.5 min each, deskew's margin);
+    # an sbatch file's time overrides it.
+    time_minutes, num_cpus, gb_ram = estimate_resources(
+        shape=(T, len(output_channel_names), *moving_shape), ram_multiplier=5, time_multiplier=0.5
     )
     slurm_out_path = output_dirpath.parent / "slurm_output"
     slurm_args = {
@@ -327,7 +329,7 @@ def apply_transform(
         "slurm_mem_per_cpu": f"{gb_ram}G",
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,  # process up to N positions at a time
-        "slurm_time": 60,
+        "slurm_time": time_minutes,
         "slurm_partition": "preempted",
         "slurm_use_srun": False,
     }

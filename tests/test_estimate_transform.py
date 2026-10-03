@@ -209,6 +209,33 @@ def test_resume_refuses_changed_settings(beads_plate, tmp_path):
         )
 
 
+def test_an_sbatch_time_limit_is_kept_by_every_phase(
+    beads_plate_with_a_blank_timepoint, tmp_path, monkeypatch
+):
+    import submitit
+
+    from biahub.registration import engine
+
+    times = []
+
+    class RecordingExecutor(submitit.AutoExecutor):
+        def update_parameters(self, **kwargs):
+            if "slurm_time" in kwargs:
+                times.append(kwargs["slurm_time"])
+            return super().update_parameters(**kwargs)
+
+    monkeypatch.setattr(engine.submitit, "AutoExecutor", RecordingExecutor)
+    sbatch = tmp_path / "time.sbatch"
+    sbatch.write_text("#!/bin/bash\n#SBATCH --time=7\n")
+    output = tmp_path / "out" / "transforms.yml"
+
+    _run(beads_plate_with_a_blank_timepoint, _write_config(tmp_path), output, sbatch_filepath=str(sbatch))
+
+    report = json.loads((output.parent / "estimate_transform_report.json").read_text())
+    assert report["flagged"] == [2]  # the repair phase ran
+    assert times and set(times) == {7}
+
+
 def test_estimate_transform_flags_and_tries_to_repair_a_failed_timepoint(
     beads_plate_with_a_blank_timepoint, tmp_path
 ):

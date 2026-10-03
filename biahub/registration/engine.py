@@ -1498,6 +1498,8 @@ def estimate_transform_series(
         click.echo(
             f"resume: {len(time_indices) - len(to_estimate)} timepoint(s) already estimated"
         )
+    # An sbatch file that sets a time limit wins over every phase's default below.
+    user_set_time = bool(sbatch_filepath and "slurm_time" in sbatch_to_submitit(sbatch_filepath))
     if settings.transform.seed_from == "previous_timepoint":
         estimate_records, job_failures = _run_propagated(
             executor,
@@ -1506,9 +1508,7 @@ def estimate_transform_series(
             (source, target, settings_path, time_indices, timepoints_dir, resume),
             to_estimate,
             timepoints_dir,
-            user_set_time=bool(
-                sbatch_filepath and "slurm_time" in sbatch_to_submitit(sbatch_filepath)
-            ),
+            user_set_time=user_set_time,
         )
     else:
         estimate_records, job_failures = _run_jobs(
@@ -1551,7 +1551,9 @@ def estimate_transform_series(
         else []
     )
     to_repair = [t for t in repair_ts if not (resume and (repairs_dir / f"{t}.json").exists())]
-    executor.update_parameters(slurm_time=60, slurm_job_name="estimate_transform_repair")
+    executor.update_parameters(slurm_job_name="estimate_transform_repair")
+    if not user_set_time:
+        executor.update_parameters(slurm_time=60)
     repair_records, _repair_failures = _run_jobs(
         executor,
         resolved_cluster,
@@ -1615,9 +1617,9 @@ def estimate_transform_series(
     )
     to_sweep = [t for t in sweep_ts if not (resume and (sweeps_dir / f"{t}.json").exists())]
     n_trials = len(settings.sweep_trials()) if sweep_settings is not None else 0
-    executor.update_parameters(
-        slurm_time=30 + 3 * n_trials, slurm_job_name="estimate_transform_sweep"
-    )
+    executor.update_parameters(slurm_job_name="estimate_transform_sweep")
+    if not user_set_time:
+        executor.update_parameters(slurm_time=30 + 3 * n_trials)
     sweep_records, _sweep_failures = _run_jobs(
         executor,
         resolved_cluster,
