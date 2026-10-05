@@ -47,11 +47,32 @@ class FixedFrame:
         return np.asarray(mov[self.t_ref])
 
 
+def is_empty(volume: ArrayLike) -> bool:
+    """A frame with no data: all zeros or all NaN."""
+    return not np.any(np.nan_to_num(np.asarray(volume)))
+
+
 class PreviousFrame:
-    """Stabilization `t_reference: "previous"`: t compares against t-1 (t=0 against itself)."""
+    """Stabilization `t_reference: "previous"`: t compares against the previous frame with data.
+
+    Usually t-1. Empty frames (no data) are skipped, so after a gap the first frame with
+    data is compared against the last frame before the gap and the accumulated chain
+    keeps the movement that happened during it. A frame with no earlier frame with data
+    (t=0, or after leading empty frames) is compared against itself: it starts the chain.
+    """
+
+    def reference_index(self, mov: ArrayLike, t: int) -> int | None:
+        for earlier in range(t - 1, -1, -1):
+            if not is_empty(mov[earlier]):
+                return earlier
+        return None
 
     def reference_for(self, mov: ArrayLike, t: int) -> ArrayLike:
-        return np.asarray(mov[max(t - 1, 0)])
+        for earlier in range(t - 1, -1, -1):
+            frame = np.asarray(mov[earlier])  # read once: checked, then returned
+            if not is_empty(frame):
+                return frame
+        return np.asarray(mov[t])
 
 
 @runtime_checkable

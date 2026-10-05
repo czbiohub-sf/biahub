@@ -63,6 +63,7 @@ from biahub.registration.policies import (
     PreviousFrame,
     ReferencePolicy,
     SeedPolicy,
+    is_empty,
 )
 from biahub.registration.utils import get_aprox_transform
 from biahub.settings import (
@@ -557,17 +558,12 @@ def estimate_series(
     return result
 
 
-def _empty(volume: np.ndarray) -> bool:
-    """A frame with no data: all zeros or all NaN."""
-    return not np.any(np.nan_to_num(volume))
-
-
-def _compares_with_itself(reference_policy: ReferencePolicy, t: int) -> bool:
-    """Whether timepoint t is its own reference (the stabilization reference frame)."""
+def _compares_with_itself(reference_policy: ReferencePolicy, mov, t: int) -> bool:
+    """Whether timepoint t is its own reference (it starts the stabilization chain)."""
     if isinstance(reference_policy, FixedFrame):
         return t == reference_policy.t_ref
     if isinstance(reference_policy, PreviousFrame):
-        return t == 0
+        return reference_policy.reference_index(mov, t) is None
     return False
 
 
@@ -632,11 +628,11 @@ def estimate_propagated(
         else:
             mov_t = np.asarray(mov[t])
             ref_t = np.asarray(reference_policy.reference_for(mov, t))
-            if _empty(mov_t) or _empty(ref_t):
+            if is_empty(mov_t) or is_empty(ref_t):
                 # Legacy skipped empty frames without touching the propagated transform.
                 result.scores[t] = float("nan")
                 result.errors[t] = "empty frame (no data)"
-            elif _compares_with_itself(reference_policy, t):
+            elif _compares_with_itself(reference_policy, mov, t):
                 identity = Transform.identity(mov_t.ndim)
                 result.transforms[t] = identity
                 result.scores[t] = float(score_fn(identity, mov_t, ref_t))

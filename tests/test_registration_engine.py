@@ -63,7 +63,7 @@ def test_reference_policy_decides_what_each_timepoint_registers_against():
         mov, FixedFrame(0), _MeanShiftEstimator(), FixedSeed(IDENTITY), _finite_score, range(4)
     )
     previous = estimate_series(
-        mov,
+        mov + 1.0,  # frame values 1..4: a frame of zeros would be an empty frame
         PreviousFrame(),
         _MeanShiftEstimator(),
         FixedSeed(IDENTITY),
@@ -545,3 +545,29 @@ def test_estimate_propagated_does_not_estimate_the_stabilization_reference_frame
     # the chain starts after the reference from the input seed (x=10), as legacy did
     assert result.transforms[1].translation[2] == 11.0
     assert result.transforms[2].translation[2] == 12.0
+
+
+def test_previous_frame_reference_skips_empty_frames():
+    # frames 1, 2, empty, empty, 5: t=4 is compared with t=1 (the last frame with data)
+    mov = np.stack([np.full((2, 2, 2), v) for v in (1.0, 2.0, 0.0, 0.0, 5.0)])
+    policy = PreviousFrame()
+    assert policy.reference_index(mov, 4) == 1
+    assert float(policy.reference_for(mov, 4).mean()) == 2.0
+    assert policy.reference_index(mov, 0) is None
+    leading = np.stack([np.full((2, 2, 2), v) for v in (0.0, 0.0, 3.0)])
+    assert policy.reference_index(leading, 2) is None  # nothing earlier with data: starts the chain
+
+
+def test_previous_chain_keeps_the_movement_across_a_gap_of_empty_frames():
+    from biahub.registration.engine import transforms_for_file
+
+    # frame values = position; empty at t=2,3. Steps: t1 vs t0 (+1), t4 vs t1 (+3).
+    mov = np.stack([np.full((2, 2, 2), v) for v in (1.0, 2.0, 0.0, 0.0, 5.0)])
+    result = estimate_series(
+        mov, PreviousFrame(), _MeanShiftEstimator(fail_for_mov_means={0}), FixedSeed(IDENTITY),
+        _finite_score, range(5),
+    )
+    chained = transforms_for_file(result, list(range(5)), IDENTITY, "previous")
+    x = [t.translation[0] for t in chained]
+    # empty frames do not move; t=4 carries the whole drift since t=1 (-1 - 3 = -4)
+    assert x[2] == x[3] == x[1] and x[4] == -4.0
