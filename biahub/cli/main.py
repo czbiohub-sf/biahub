@@ -16,10 +16,10 @@ def cli():
 
 
 class LazyCommand(click.Command):
-    def __init__(self, name, import_path, help=None, short_help=None):
+    def __init__(self, name, import_path, help=None, short_help=None, hidden=False):
         self.import_path = import_path
         self._real_command = None
-        super().__init__(name=name, help=help, short_help=short_help)
+        super().__init__(name=name, help=help, short_help=short_help, hidden=hidden)
 
     def _load_real_command(self):
         if self._real_command is None:
@@ -172,6 +172,23 @@ COMMANDS = [
 ]
 
 
+# Deprecated registration command names, hidden from --help (see biahub.legacy_aliases).
+for name, attr in (
+    ("estimate-registration", "estimate_registration_alias"),
+    ("estimate-stabilization", "estimate_stabilization_alias"),
+    ("register", "register_alias"),
+    ("stabilize", "stabilize_alias"),
+    ("optimize-registration", "optimize_registration_alias"),
+):
+    COMMANDS.append(
+        {
+            "name": name,
+            "import_path": f"biahub.legacy_aliases.{attr}",
+            "help": "Deprecated: use estimate-transform / apply-transform.",
+            "hidden": True,
+        }
+    )
+
 for cmd in COMMANDS:
     cli.add_command(
         LazyCommand(
@@ -179,6 +196,7 @@ for cmd in COMMANDS:
             import_path=cmd["import_path"],
             help=cmd["help"],
             short_help=cmd["help"].split(".")[0],
+            hidden=cmd.get("hidden", False),
         )
     )
 
