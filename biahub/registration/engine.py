@@ -551,11 +551,34 @@ def estimate_series(
             result.scores[t] = float("nan")
             result.errors[t] = f"{type(e).__name__}: {e}"
         else:
+            transform = _gap_rule(estimator, reference_policy, mov, t, transform)
             result.transforms[t] = transform
             result.scores[t] = float(score_fn(transform, mov_t, ref_t))
         if on_timepoint is not None:
             on_timepoint(t, result)
     return result
+
+
+def _across_gap(reference_policy: ReferencePolicy, mov, t: int) -> bool:
+    """Whether t's 'previous' reference reaches back over empty frames (t-1 has no data)."""
+    if not isinstance(reference_policy, PreviousFrame):
+        return False
+    index = reference_policy.reference_index(mov, t)
+    return index is not None and index != t - 1
+
+
+def _hold_xy(transform: Transform) -> Transform:
+    """Keep the z part of a step; the yx part becomes identity."""
+    matrix = np.array(transform.matrix)
+    matrix[1:3, :] = np.eye(4)[1:3, :]
+    return Transform(matrix, transform_type=transform.transform_type)
+
+
+def _gap_rule(estimator, reference_policy, mov, t: int, transform: Transform) -> Transform:
+    """Legacy focus-finding across a gap: z measured, yx held (see FocusEstimator)."""
+    if getattr(estimator, "holds_xy_across_gaps", False) and _across_gap(reference_policy, mov, t):
+        return _hold_xy(transform)
+    return transform
 
 
 def _compares_with_itself(reference_policy: ReferencePolicy, mov, t: int) -> bool:
@@ -651,6 +674,7 @@ def estimate_propagated(
                     result.stand_ins[t] = (seed, source)
                     previous = seed
                 else:
+                    transform = _gap_rule(estimator, reference_policy, mov, t, transform)
                     result.transforms[t] = transform
                     result.scores[t] = float(score_fn(transform, mov_t, ref_t))
                     previous = transform

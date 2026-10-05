@@ -571,3 +571,34 @@ def test_previous_chain_keeps_the_movement_across_a_gap_of_empty_frames():
     x = [t.translation[0] for t in chained]
     # empty frames do not move; t=4 carries the whole drift since t=1 (-1 - 3 = -4)
     assert x[2] == x[3] == x[1] and x[4] == -4.0
+
+
+class _FocusLike:
+    """Step z = ref mean - mov mean (like a focus index), y = 5, x = 7 (like stackreg)."""
+
+    holds_xy_across_gaps = True
+
+    def __init__(self, holds=True):
+        self.holds_xy_across_gaps = holds
+
+    def estimate(self, mov, ref, seed=None):
+        if not np.any(mov):
+            raise EstimationError("empty field of view")
+        return Transform.from_translation([float(ref.mean() - mov.mean()), 5.0, 7.0])
+
+
+@pytest.mark.parametrize("propagated", [False, True])
+def test_focus_finding_holds_yx_but_measures_z_across_a_gap(propagated):
+    from biahub.registration.engine import estimate_propagated
+
+    mov = np.stack([np.full((2, 2, 2), v) for v in (1.0, 2.0, 0.0, 0.0, 5.0)])
+    run = (
+        (lambda est: estimate_propagated(mov, PreviousFrame(), est, IDENTITY, _finite_score, range(5)))
+        if propagated
+        else (lambda est: estimate_series(mov, PreviousFrame(), est, FixedSeed(IDENTITY), _finite_score, range(5)))
+    )
+    legacy = run(_FocusLike(holds=True))
+    assert list(legacy.transforms[1].translation) == [-1.0, 5.0, 7.0]  # no gap: yx kept
+    assert list(legacy.transforms[4].translation) == [-3.0, 0.0, 0.0]  # gap: z vs t=1, yx held
+    general = run(_FocusLike(holds=False))
+    assert list(general.transforms[4].translation) == [-3.0, 5.0, 7.0]  # other estimators keep yx

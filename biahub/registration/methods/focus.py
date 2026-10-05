@@ -60,6 +60,10 @@ class FocusEstimator:
 
     # Ignores the seed: repair from other seeds would return the same answer.
     uses_seed = False
+    # With reference 'previous', across a gap of empty frames the legacy pipeline measured
+    # z against the last frame with data but held yx (stackreg had nothing to compare with);
+    # the engine reproduces that for estimators that set this.
+    holds_xy_across_gaps = True
 
     def __init__(
         self,
