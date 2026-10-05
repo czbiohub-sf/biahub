@@ -135,7 +135,9 @@ def test_node_graph_estimator_keeps_its_input_when_the_refinement_scores_lower()
 
 def test_node_graph_estimator_stops_at_a_perfect_score():
     passes = []
-    estimator = _drifting_estimator(np.array([1.0, 0.0, 0.0]), lambda t, m, r: 1.0, iterations=3)
+    estimator = _drifting_estimator(
+        np.array([1.0, 0.0, 0.0]), lambda t, m, r: 1.0, iterations=3
+    )
     original = estimator._single_pass
 
     def counting_pass(*args, **kwargs):
@@ -581,7 +583,10 @@ def _identity_pass_estimator(score_of, fail_from=()):
 
 
 def test_a_competitor_seed_wins_only_when_it_scores_strictly_higher():
-    seed, competitor = Transform.from_translation([1, 0, 0]), Transform.from_translation([2, 0, 0])
+    seed, competitor = (
+        Transform.from_translation([1, 0, 0]),
+        Transform.from_translation([2, 0, 0]),
+    )
     vol = np.zeros((4, 4, 4))
     better = _identity_pass_estimator(lambda t: t.translation[0] / 10)  # competitor 0.2 > 0.1
     assert better.estimate(vol, vol, seed=seed, competitor=competitor) is competitor
@@ -590,7 +595,10 @@ def test_a_competitor_seed_wins_only_when_it_scores_strictly_higher():
 
 
 def test_a_competitor_seed_rescues_a_failed_first_pass():
-    seed, competitor = Transform.from_translation([1, 0, 0]), Transform.from_translation([2, 0, 0])
+    seed, competitor = (
+        Transform.from_translation([1, 0, 0]),
+        Transform.from_translation([2, 0, 0]),
+    )
     vol = np.zeros((4, 4, 4))
     estimator = _identity_pass_estimator(lambda t: 0.3, fail_from=(seed,))
     assert estimator.estimate(vol, vol, seed=seed, competitor=competitor) is competitor

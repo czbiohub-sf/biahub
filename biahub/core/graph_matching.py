@@ -84,6 +84,7 @@ def spectral_affinity(
         at += n
     return csr_matrix((vals, (rows, cols)), shape=(n_m * n_r, n_m * n_r))
 
+
 # ============================================================
 # GRAPH CLASS
 # ============================================================

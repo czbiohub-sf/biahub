@@ -125,7 +125,9 @@ def vote_icp_register(
         # A full affine needs a margin over its degrees of freedom; with fewer inliers the
         # translation update is the only fit that cannot hallucinate.
         if len(members) >= ndim + 3:
-            new_matrix = fit_model(ref_peaks[inlier_ref], mov_peaks[inlier_mov], transform_type)
+            new_matrix = fit_model(
+                ref_peaks[inlier_ref], mov_peaks[inlier_mov], transform_type
+            )
         else:
             drift = votes[members].mean(axis=0)
             new_matrix = matrix @ translation_matrix(-drift)

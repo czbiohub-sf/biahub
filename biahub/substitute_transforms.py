@@ -70,7 +70,9 @@ def _substitute_list(
             if old is None
             else f"{old.method or base.method} (score {old.score if old.score is not None else 'n/a'})"
         )
-        log.append(f"{where} t={t}: {before} -> {method} (score {entry.score if entry.score is not None else 'n/a'}) from {source}")
+        log.append(
+            f"{where} t={t}: {before} -> {method} (score {entry.score if entry.score is not None else 'n/a'}) from {source}"
+        )
     return [by_t[t] for t in sorted(by_t)]
 
 

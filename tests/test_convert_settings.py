@@ -199,16 +199,35 @@ def test_estimate_registration_without_propagation_converts_to_independent_estim
     "legacy, expected",
     [
         # beads honoured use_prev_t_transform (default true): propagation
-        (EstimateRegistrationSettings(source_channel_name="GFP", target_channel_name="Phase3D",
-                                      estimation_method="beads"), "previous_timepoint"),
+        (
+            EstimateRegistrationSettings(
+                source_channel_name="GFP",
+                target_channel_name="Phase3D",
+                estimation_method="beads",
+            ),
+            "previous_timepoint",
+        ),
         # ants ignored it: independent, whatever the flag says
-        (EstimateRegistrationSettings(source_channel_name="GFP", target_channel_name="Phase3D",
-                                      estimation_method="ants",
-                                      affine_transform_settings={"use_prev_t_transform": True}), "input"),
+        (
+            EstimateRegistrationSettings(
+                source_channel_name="GFP",
+                target_channel_name="Phase3D",
+                estimation_method="ants",
+                affine_transform_settings={"use_prev_t_transform": True},
+            ),
+            "input",
+        ),
         # stabilization by phase cross-correlation ignored it too
-        (EstimateStabilizationSettings(stabilization_estimation_channel="GFP", stabilization_channels=["GFP"],
-                                       stabilization_type="xyz", stabilization_method="phase-cross-corr",
-                                       phase_cross_corr_settings={}), "input"),
+        (
+            EstimateStabilizationSettings(
+                stabilization_estimation_channel="GFP",
+                stabilization_channels=["GFP"],
+                stabilization_type="xyz",
+                stabilization_method="phase-cross-corr",
+                phase_cross_corr_settings={},
+            ),
+            "input",
+        ),
     ],
 )
 def test_use_prev_t_transform_maps_to_propagation_only_for_beads(legacy, expected):

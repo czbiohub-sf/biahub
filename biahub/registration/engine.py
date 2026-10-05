@@ -583,7 +583,9 @@ def _hold_xy(transform: Transform) -> Transform:
 
 def _gap_rule(estimator, reference_policy, mov, t: int, transform: Transform) -> Transform:
     """Legacy focus-finding across a gap: z measured, yx held (see FocusEstimator)."""
-    if getattr(estimator, "holds_xy_across_gaps", False) and _across_gap(reference_policy, mov, t):
+    if getattr(estimator, "holds_xy_across_gaps", False) and _across_gap(
+        reference_policy, mov, t
+    ):
         return _hold_xy(transform)
     return transform
 
@@ -1142,8 +1144,10 @@ def _start_run(
     fingerprint = _run_fingerprint(settings, source, target)
     if resume:
         if not manifest_path.exists():
-            click.echo(f"resume: no {RUN_MANIFEST_FILENAME} in {output_dir}; cannot verify the "
-                       "earlier run used the same settings and inputs")
+            click.echo(
+                f"resume: no {RUN_MANIFEST_FILENAME} in {output_dir}; cannot verify the "
+                "earlier run used the same settings and inputs"
+            )
         else:
             previous = json.loads(manifest_path.read_text())
             changed = sorted(k for k in fingerprint if previous.get(k) != fingerprint[k])
@@ -1189,7 +1193,9 @@ def _load_series(
             )
         elif record.get("stand_in") is not None:
             result.stand_ins[t] = (
-                Transform(np.asarray(record["stand_in"], dtype=float), transform_type=transform_type),
+                Transform(
+                    np.asarray(record["stand_in"], dtype=float), transform_type=transform_type
+                ),
                 record.get("stand_in_from") or "seed",
             )
         result.scores[t] = float("nan") if record["score"] is None else record["score"]
@@ -1218,7 +1224,9 @@ def _repair_timepoint_job(
     repair_settings = settings.fallback.repair
 
     # This run's estimate records (the driver cleared any earlier run's).
-    series = _load_series(records_dir, time_indices, settings.transform.type, resumed=time_indices)
+    series = _load_series(
+        records_dir, time_indices, settings.transform.type, resumed=time_indices
+    )
     series.flagged = list(flagged)
     outcome = repair_timepoint(
         t,
@@ -1366,7 +1374,11 @@ def _run_propagated(
         executor.update_parameters(slurm_time=minutes)
     executor.update_parameters(slurm_job_name="estimate_transform_propagated")
     by_job, failures = _run_jobs(
-        executor, resolved_cluster, monitor_flag, "estimate", [(-1, _estimate_propagated_job, job_args)]
+        executor,
+        resolved_cluster,
+        monitor_flag,
+        "estimate",
+        [(-1, _estimate_propagated_job, job_args)],
     )
     if -1 in by_job:
         return {int(t): r for t, r in by_job[-1].items()}, {}
@@ -1526,7 +1538,9 @@ def estimate_transform_series(
             f"resume: {len(time_indices) - len(to_estimate)} timepoint(s) already estimated"
         )
     # An sbatch file that sets a time limit wins over every phase's default below.
-    user_set_time = bool(sbatch_filepath and "slurm_time" in sbatch_to_submitit(sbatch_filepath))
+    user_set_time = bool(
+        sbatch_filepath and "slurm_time" in sbatch_to_submitit(sbatch_filepath)
+    )
     if settings.transform.seed_from == "previous_timepoint":
         estimate_records, job_failures = _run_propagated(
             executor,

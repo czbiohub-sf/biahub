@@ -310,7 +310,9 @@ def test_transform_settings_holds_a_shared_list_or_one_per_position_not_both():
             positions={"A/1/0": entry},
         )
     with pytest.raises(ValueError, match="row/col/fov"):
-        TransformSettings(direction="forward", moving_channels=["GFP"], positions={"A1": entry})
+        TransformSettings(
+            direction="forward", moving_channels=["GFP"], positions={"A1": entry}
+        )
 
 
 def test_transform_settings_per_position_lists_each_with_its_own_time_layout():
@@ -471,15 +473,22 @@ def test_apply_transform_registers_every_moving_channel_by_default(structured_pl
     )
 
     apply_transform(
-        [position], config, tmp_path / "all.zarr",
-        reference_position_dirpaths=[target / "A" / "1" / "0"], keep_overhang=True, cluster="debug",
+        [position],
+        config,
+        tmp_path / "all.zarr",
+        reference_position_dirpaths=[target / "A" / "1" / "0"],
+        keep_overhang=True,
+        cluster="debug",
     )
     with open_ome_zarr(tmp_path / "all.zarr" / "A" / "1" / "0", mode="r") as out:
         assert out.channel_names == ["Retardance", "GFP", "Phase3D"]
 
     with pytest.raises(Exception, match="channels not in the moving store"):
         apply_transform(
-            [position], config, tmp_path / "bad.zarr",
-            reference_position_dirpaths=[target / "A" / "1" / "0"], cluster="debug",
+            [position],
+            config,
+            tmp_path / "bad.zarr",
+            reference_position_dirpaths=[target / "A" / "1" / "0"],
+            cluster="debug",
             channels=["DAPI"],
         )

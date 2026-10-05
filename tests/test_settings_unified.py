@@ -136,7 +136,10 @@ def test_sweep_trials_revalidate_so_dependent_defaults_follow():
             [{"beads.hungarian_match_settings.cost_treshold": [0.1]}],
             "no setting 'cost_treshold'",
         ),
-        ([{"ants.sobel_filter": [True]}], "would be ignored"),  # beads method: ants block unused
+        (
+            [{"ants.sobel_filter": [True]}],
+            "would be ignored",
+        ),  # beads method: ants block unused
         ([{"reference.frame": ["first"]}], "would be ignored"),
         ([{"score_metric": ["correlation"]}], "would be ignored"),
         ([{"transform.seed_from": ["previous_timepoint"]}], "would be ignored"),
@@ -151,7 +154,14 @@ def test_sweep_grid_is_checked_when_the_config_loads(grid, message):
 
 def test_sweep_accepts_the_method_block_and_the_transform_type():
     trials = _beads_settings(
-        {"grid": [{"beads.hungarian_match_settings.cost_threshold": [0.05], "transform.type": ["affine"]}]}
+        {
+            "grid": [
+                {
+                    "beads.hungarian_match_settings.cost_threshold": [0.05],
+                    "transform.type": ["affine"],
+                }
+            ]
+        }
     ).sweep_trials()
     (trial,) = trials.values()
     assert trial.transform.type == "affine"

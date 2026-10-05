@@ -232,7 +232,9 @@ def test_repair_series_replaces_a_transform_whose_score_is_nan():
             return seed
 
     mov = _constant_frames(3)
-    result = estimate_series(mov, FixedFrame(0), _EchoSeed(), FixedSeed(IDENTITY), score, range(3))
+    result = estimate_series(
+        mov, FixedFrame(0), _EchoSeed(), FixedSeed(IDENTITY), score, range(3)
+    )
     assert np.isnan(result.scores[1]) and 1 in result.transforms
 
     result = repair_series(
@@ -506,6 +508,7 @@ def test_estimate_propagated_lets_the_input_seed_compete_and_resumes_the_chain()
     from biahub.registration.engine import estimate_propagated
 
     mov = _frames([1, 2, 3])
+
     # The input seed is at x=10; scores favour transforms near x=11, so from t=1 the
     # estimate started from the input seed beats the one from the previous result.
     def score(transform, m, r):
@@ -526,7 +529,10 @@ def test_estimate_propagated_lets_the_input_seed_compete_and_resumes_the_chain()
         mov, CrossChannel(mov), estimator, IDENTITY, _finite_score, range(3), done=done
     )
     assert len(estimator.seeds) == 2  # only t2 estimated: from t1 (x=5), then the input seed
-    assert estimator.seeds[0].translation[2] == 5.0 and resumed.transforms[2].translation[2] == 6.0
+    assert (
+        estimator.seeds[0].translation[2] == 5.0
+        and resumed.transforms[2].translation[2] == 6.0
+    )
 
 
 @pytest.mark.parametrize("reference_policy", [FixedFrame(0), PreviousFrame()])
@@ -556,7 +562,9 @@ def test_previous_frame_reference_skips_empty_frames():
     assert float(policy.reference_for(mov, 4).mean()) == 2.0
     assert policy.reference_index(mov, 0) is None
     leading = np.stack([np.full((2, 2, 2), v) for v in (0.0, 0.0, 3.0)])
-    assert policy.reference_index(leading, 2) is None  # nothing earlier with data: starts the chain
+    assert (
+        policy.reference_index(leading, 2) is None
+    )  # nothing earlier with data: starts the chain
 
 
 def test_previous_chain_keeps_the_movement_across_a_gap_of_empty_frames():
@@ -565,8 +573,12 @@ def test_previous_chain_keeps_the_movement_across_a_gap_of_empty_frames():
     # frame values = position; empty at t=2,3. Steps: t1 vs t0 (+1), t4 vs t1 (+3).
     mov = np.stack([np.full((2, 2, 2), v) for v in (1.0, 2.0, 0.0, 0.0, 5.0)])
     result = estimate_series(
-        mov, PreviousFrame(), _MeanShiftEstimator(fail_for_mov_means={0}), FixedSeed(IDENTITY),
-        _finite_score, range(5),
+        mov,
+        PreviousFrame(),
+        _MeanShiftEstimator(fail_for_mov_means={0}),
+        FixedSeed(IDENTITY),
+        _finite_score,
+        range(5),
     )
     chained = transforms_for_file(result, list(range(5)), IDENTITY, "previous")
     x = [t.translation[0] for t in chained]
@@ -594,15 +606,27 @@ def test_focus_finding_holds_yx_but_measures_z_across_a_gap(propagated):
 
     mov = np.stack([np.full((2, 2, 2), v) for v in (1.0, 2.0, 0.0, 0.0, 5.0)])
     run = (
-        (lambda est: estimate_propagated(mov, PreviousFrame(), est, IDENTITY, _finite_score, range(5)))
+        (
+            lambda est: estimate_propagated(
+                mov, PreviousFrame(), est, IDENTITY, _finite_score, range(5)
+            )
+        )
         if propagated
-        else (lambda est: estimate_series(mov, PreviousFrame(), est, FixedSeed(IDENTITY), _finite_score, range(5)))
+        else (
+            lambda est: estimate_series(
+                mov, PreviousFrame(), est, FixedSeed(IDENTITY), _finite_score, range(5)
+            )
+        )
     )
     legacy = run(_FocusLike(holds=True))
     assert list(legacy.transforms[1].translation) == [-1.0, 5.0, 7.0]  # no gap: yx kept
     assert list(legacy.transforms[4].translation) == [-3.0, 0.0, 0.0]  # gap: z vs t=1, yx held
     general = run(_FocusLike(holds=False))
-    assert list(general.transforms[4].translation) == [-3.0, 5.0, 7.0]  # other estimators keep yx
+    assert list(general.transforms[4].translation) == [
+        -3.0,
+        5.0,
+        7.0,
+    ]  # other estimators keep yx
 
 
 def test_estimate_series_reports_an_empty_frame_without_estimating():
@@ -612,4 +636,7 @@ def test_estimate_series_reports_an_empty_frame_without_estimating():
         mov, CrossChannel(mov + 0.0), estimator, FixedSeed(IDENTITY), _finite_score, range(3)
     )
     assert result.errors[1] == "empty frame (no data)" and 1 not in result.transforms
-    assert [c["mov"] for c in estimator.calls] == [1.0, 3.0]  # the empty frame is never estimated
+    assert [c["mov"] for c in estimator.calls] == [
+        1.0,
+        3.0,
+    ]  # the empty frame is never estimated

@@ -321,7 +321,9 @@ def apply_transform(
     # Wall time scales with the volumes written (0.5 min each, deskew's margin);
     # an sbatch file's time overrides it.
     time_minutes, num_cpus, gb_ram = estimate_resources(
-        shape=(T, len(output_channel_names), *moving_shape), ram_multiplier=5, time_multiplier=0.5
+        shape=(T, len(output_channel_names), *moving_shape),
+        ram_multiplier=5,
+        time_multiplier=0.5,
     )
     slurm_out_path = output_dirpath.parent / "slurm_output"
     slurm_args = {

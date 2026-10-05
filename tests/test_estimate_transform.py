@@ -229,7 +229,12 @@ def test_an_sbatch_time_limit_is_kept_by_every_phase(
     sbatch.write_text("#!/bin/bash\n#SBATCH --time=7\n")
     output = tmp_path / "out" / "transforms.yml"
 
-    _run(beads_plate_with_a_blank_timepoint, _write_config(tmp_path), output, sbatch_filepath=str(sbatch))
+    _run(
+        beads_plate_with_a_blank_timepoint,
+        _write_config(tmp_path),
+        output,
+        sbatch_filepath=str(sbatch),
+    )
 
     report = json.loads((output.parent / "estimate_transform_report.json").read_text())
     assert report["flagged"] == [2]  # the repair phase ran
@@ -355,9 +360,13 @@ def test_estimate_transform_several_positions_each_get_their_own_transforms(tmp_
     ref = _synthetic_bead_volume(rng, SHAPE)
     drift = {"0": np.array(APPLIED_SHIFT_ZYX), "1": -np.array(APPLIED_SHIFT_ZYX)}
     path = tmp_path / "two.zarr"
-    with open_ome_zarr(path, layout="hcs", mode="w", channel_names=["Phase3D", "GFP"]) as plate:
+    with open_ome_zarr(
+        path, layout="hcs", mode="w", channel_names=["Phase3D", "GFP"]
+    ) as plate:
         for fov, d in drift.items():
-            frames = [ndi_shift(ref, shift=tuple(t * d), order=1, mode="constant") for t in range(3)]
+            frames = [
+                ndi_shift(ref, shift=tuple(t * d), order=1, mode="constant") for t in range(3)
+            ]
             plate.create_position("A", "1", fov)["0"] = np.stack(
                 [np.stack([f, f]) for f in frames]
             ).astype(np.float32)
@@ -371,7 +380,9 @@ def test_estimate_transform_several_positions_each_get_their_own_transforms(tmp_
     )
     output = tmp_path / "out" / "stabilization_settings.yml"
 
-    estimate_transform([path / "A" / "1" / "0", path / "A" / "1" / "1"], config, output, cluster="debug")
+    estimate_transform(
+        [path / "A" / "1" / "0", path / "A" / "1" / "1"], config, output, cluster="debug"
+    )
 
     model = load_transform_settings(output)
     assert model.per_position and sorted(model.positions) == ["A/1/0", "A/1/1"]
@@ -393,7 +404,9 @@ def test_estimate_transform_previous_timepoint_runs_one_sequential_job(tmp_path)
         for t in range(3)
     ]
     plate = _write_plate(tmp_path / "drift_reg.zarr", frames)
-    peaks = DetectPeaksSettings(threshold_abs=100, nms_distance=4, min_distance=0, block_size=[8, 8, 8])
+    peaks = DetectPeaksSettings(
+        threshold_abs=100, nms_distance=4, min_distance=0, block_size=[8, 8, 8]
+    )
     # A 1-voxel scoring radius, so a pass's unrefined input does not tie with its refinement
     # (the default 6-voxel radius cannot tell a 2-voxel misalignment from none).
     beads = BeadsMatchSettings(

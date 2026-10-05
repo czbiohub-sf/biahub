@@ -1054,7 +1054,9 @@ def _check_series(entries: list[TransformEntry], where: str) -> None:
     if len(ts) == 1 and ts[0] is None:
         return
     if any(t is None for t in ts):
-        raise ValueError(f"{where}: either one entry without t (whole series) or every entry with t")
+        raise ValueError(
+            f"{where}: either one entry without t (whole series) or every entry with t"
+        )
     if len(set(ts)) != len(ts) or ts != sorted(ts):
         raise ValueError(f"{where}: entries must have unique, increasing t")
 

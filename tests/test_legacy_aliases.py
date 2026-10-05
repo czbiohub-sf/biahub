@@ -41,7 +41,10 @@ def _legacy_registration_config(path):
                     "source_peaks_settings": PEAKS,
                     "target_peaks_settings": PEAKS,
                 },
-                "affine_transform_settings": {"transform_type": "euclidean", "use_prev_t_transform": False},
+                "affine_transform_settings": {
+                    "transform_type": "euclidean",
+                    "use_prev_t_transform": False,
+                },
             }
         )
     )
@@ -61,8 +64,17 @@ def test_estimate_registration_alias_runs_estimate_transform_and_warns(beads_pla
 
     result = CliRunner().invoke(
         cli,
-        ["estimate-registration", "-s", str(beads_plate), "-t", str(beads_plate),
-         "-c", str(config), "-o", str(output)],
+        [
+            "estimate-registration",
+            "-s",
+            str(beads_plate),
+            "-t",
+            str(beads_plate),
+            "-c",
+            str(config),
+            "-o",
+            str(output),
+        ],
     )
 
     assert result.exit_code == 0, result.output
@@ -89,7 +101,17 @@ def test_register_alias_applies_a_legacy_registration_config(beads_plate, tmp_pa
 
     result = CliRunner().invoke(
         cli,
-        ["register", "-s", str(beads_plate), "-t", str(beads_plate), "-c", str(config), "-o", str(output)],
+        [
+            "register",
+            "-s",
+            str(beads_plate),
+            "-t",
+            str(beads_plate),
+            "-c",
+            str(config),
+            "-o",
+            str(output),
+        ],
     )
 
     assert result.exit_code == 0, result.output
@@ -106,7 +128,10 @@ def test_optimize_registration_points_to_the_replacement():
 def drifting_plate(tmp_path):
     rng = np.random.default_rng(11)
     ref = _synthetic_bead_volume(rng, SHAPE)
-    frames = [ndi_shift(ref, shift=tuple(t * np.array(APPLIED_SHIFT_ZYX)), order=1, mode="constant") for t in range(3)]
+    frames = [
+        ndi_shift(ref, shift=tuple(t * np.array(APPLIED_SHIFT_ZYX)), order=1, mode="constant")
+        for t in range(3)
+    ]
     return _write_plate(tmp_path / "drift.zarr", [(f, f) for f in frames])
 
 
@@ -119,19 +144,33 @@ def test_estimate_stabilization_alias_converts_a_legacy_pcc_config(drifting_plat
                 "stabilization_channels": ["GFP"],
                 "stabilization_type": "xyz",
                 "stabilization_method": "phase-cross-corr",
-                "phase_cross_corr_settings": {"t_reference": "first", "center_crop_xy": [SHAPE[1], SHAPE[2]]},
+                "phase_cross_corr_settings": {
+                    "t_reference": "first",
+                    "center_crop_xy": [SHAPE[1], SHAPE[2]],
+                },
             }
         )
     )
     result = CliRunner().invoke(
-        cli, ["estimate-stabilization", "-i", str(drifting_plate), "-c", str(config), "-o", str(tmp_path / "stab")]
+        cli,
+        [
+            "estimate-stabilization",
+            "-i",
+            str(drifting_plate),
+            "-c",
+            str(config),
+            "-o",
+            str(tmp_path / "stab"),
+        ],
     )
 
     assert result.exit_code == 0, result.output
     assert "DeprecationWarning" in result.output
     model = load_transform_settings(tmp_path / "stab" / "transforms.yml")
     for t, entry in enumerate(model.transforms):
-        np.testing.assert_allclose(model._as(entry.matrix, "pull")[:3, 3], t * np.array(APPLIED_SHIFT_ZYX), atol=0.5)
+        np.testing.assert_allclose(
+            model._as(entry.matrix, "pull")[:3, 3], t * np.array(APPLIED_SHIFT_ZYX), atol=0.5
+        )
 
 
 def test_stabilize_alias_applies_a_legacy_stabilization_config(drifting_plate, tmp_path):
@@ -149,7 +188,9 @@ def test_stabilize_alias_applies_a_legacy_stabilization_config(drifting_plate, t
         )
     )
     output = tmp_path / "stabilized.zarr"
-    result = CliRunner().invoke(cli, ["stabilize", "-i", str(drifting_plate), "-c", str(config), "-o", str(output)])
+    result = CliRunner().invoke(
+        cli, ["stabilize", "-i", str(drifting_plate), "-c", str(config), "-o", str(output)]
+    )
 
     assert result.exit_code == 0, result.output
     assert "DeprecationWarning" in result.output and (output / "A" / "1" / "0").exists()

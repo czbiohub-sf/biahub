@@ -89,7 +89,9 @@ def test_a_per_position_base_takes_a_shared_substitute_on_the_named_positions():
     with pytest.raises(Exception, match="--positions"):
         substitute_transforms(base, [("x.yml", _single(1, 40.0))])
 
-    combined, _ = substitute_transforms(base, [("x.yml", _single(1, 40.0))], positions=["0/2/001"])
+    combined, _ = substitute_transforms(
+        base, [("x.yml", _single(1, 40.0))], positions=["0/2/001"]
+    )
 
     assert combined.matrix_for(1, "forward", "0/2/001")[2, 3] == 40.0
     assert combined.matrix_for(1, "forward", "0/2/000")[2, 3] == 1.0
@@ -103,8 +105,16 @@ def test_substitute_transforms_cli_writes_the_combined_file(tmp_path):
 
     result = CliRunner().invoke(
         substitute_transforms_cli,
-        ["-c", str(tmp_path / "beads.yml"), "-s", str(tmp_path / "manual.yml"),
-         "-s", str(tmp_path / "ants.yml"), "-o", str(output)],
+        [
+            "-c",
+            str(tmp_path / "beads.yml"),
+            "-s",
+            str(tmp_path / "manual.yml"),
+            "-s",
+            str(tmp_path / "ants.yml"),
+            "-o",
+            str(output),
+        ],
     )
 
     assert result.exit_code == 0, result.output

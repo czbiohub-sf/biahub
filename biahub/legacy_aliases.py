@@ -108,8 +108,14 @@ def _transforms_config(config_filepaths: list[Path], next_to: Path) -> tuple[Pat
 @click.option("--registration-target-channel", "-rt", default=None, hidden=True)
 @click.option("--registration-source-channels", "-rs", multiple=True, hidden=True)
 def estimate_registration_alias(
-    source_position_dirpaths, target_position_dirpaths, output_filepath, config_filepath,
-    sbatch_filepath, local, registration_target_channel, registration_source_channels,
+    source_position_dirpaths,
+    target_position_dirpaths,
+    output_filepath,
+    config_filepath,
+    sbatch_filepath,
+    local,
+    registration_target_channel,
+    registration_source_channels,
 ):
     """Run `estimate-transform` on a converted estimate-registration config (deprecated)."""
     _warn("estimate-registration", "estimate-transform")
@@ -160,8 +166,13 @@ def estimate_stabilization_alias(
 @sbatch_filepath()
 @monitor()
 def register_alias(
-    source_position_dirpaths, target_position_dirpaths, config_filepath, output_dirpath,
-    local, sbatch_filepath, monitor,
+    source_position_dirpaths,
+    target_position_dirpaths,
+    config_filepath,
+    output_dirpath,
+    local,
+    sbatch_filepath,
+    monitor,
 ):
     """Run `apply-transform` onto the target grid (deprecated)."""
     _warn("register", "apply-transform")

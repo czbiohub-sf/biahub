@@ -15,7 +15,9 @@ def _echo(moving_position_dirpaths, reference_position_dirpaths):
 
 
 def _position(tmp_path):
-    with open_ome_zarr(tmp_path / "in.zarr", layout="hcs", mode="w", channel_names=["GFP"]) as p:
+    with open_ome_zarr(
+        tmp_path / "in.zarr", layout="hcs", mode="w", channel_names=["GFP"]
+    ) as p:
         p.create_position("A", "1", "0")["0"] = np.zeros((1, 1, 2, 4, 4), dtype=np.float32)
     return str(tmp_path / "in.zarr" / "A" / "1" / "0")
 
@@ -27,6 +29,8 @@ def test_an_omitted_optional_reference_parses_to_an_empty_list(tmp_path):
 
 
 def test_a_path_matching_no_position_is_a_usage_error(tmp_path):
-    result = CliRunner().invoke(_echo, ["-m", str(tmp_path / "missing.zarr" / "A" / "1" / "0")])
+    result = CliRunner().invoke(
+        _echo, ["-m", str(tmp_path / "missing.zarr" / "A" / "1" / "0")]
+    )
     assert result.exit_code == 2
     assert "no position directory found" in result.output
