@@ -544,6 +544,13 @@ def estimate_series(
     for t in time_indices:
         mov_t = np.asarray(mov[t])
         ref_t = np.asarray(reference_policy.reference_for(mov, t))
+        if is_empty(mov_t) or is_empty(ref_t):
+            # Nothing to estimate from; reported like propagation does, not as a failed fit.
+            result.scores[t] = float("nan")
+            result.errors[t] = "empty frame (no data)"
+            if on_timepoint is not None:
+                on_timepoint(t, result)
+            continue
         seed = seed_policy.seed_for(t)
         try:
             transform = estimator.estimate(mov_t, ref_t, seed=seed)

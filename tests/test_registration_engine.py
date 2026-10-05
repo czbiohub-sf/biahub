@@ -25,8 +25,9 @@ IDENTITY = Transform.identity(3)
 
 
 def _constant_frames(n_t: int, scale: float = 1.0) -> np.ndarray:
-    """Frame t is filled with the value scale*t, so a frame's mean identifies it."""
-    return np.stack([np.full((2, 2, 2), scale * t, dtype=float) for t in range(n_t)])
+    """Frame t is filled with scale*t + 0.25, so a frame's mean identifies it (round(mean)
+    gives back scale*t) and no frame is all zeros, i.e. an empty frame."""
+    return np.stack([np.full((2, 2, 2), scale * t + 0.25, dtype=float) for t in range(n_t)])
 
 
 class _MeanShiftEstimator:
@@ -602,3 +603,13 @@ def test_focus_finding_holds_yx_but_measures_z_across_a_gap(propagated):
     assert list(legacy.transforms[4].translation) == [-3.0, 0.0, 0.0]  # gap: z vs t=1, yx held
     general = run(_FocusLike(holds=False))
     assert list(general.transforms[4].translation) == [-3.0, 5.0, 7.0]  # other estimators keep yx
+
+
+def test_estimate_series_reports_an_empty_frame_without_estimating():
+    estimator = _MeanShiftEstimator()
+    mov = np.stack([np.full((2, 2, 2), v) for v in (1.0, 0.0, 3.0)])
+    result = estimate_series(
+        mov, CrossChannel(mov + 0.0), estimator, FixedSeed(IDENTITY), _finite_score, range(3)
+    )
+    assert result.errors[1] == "empty frame (no data)" and 1 not in result.transforms
+    assert [c["mov"] for c in estimator.calls] == [1.0, 3.0]  # the empty frame is never estimated
