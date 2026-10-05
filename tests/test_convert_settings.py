@@ -3,7 +3,7 @@ import pytest
 
 from click.testing import CliRunner
 
-from biahub.convert_settings import (
+from biahub.registration.legacy.convert_settings import (
     EstimateRegistrationSettings,
     EstimateStabilizationSettings,
     RegistrationSettings,

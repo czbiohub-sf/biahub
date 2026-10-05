@@ -2,7 +2,7 @@
 
 `estimate-registration` and `estimate-stabilization` run `estimate-transform`;
 `register` and `stabilize` run `apply-transform`. Each converts a retired config on the
-fly (what `biahub convert-settings` does), warns that the name is deprecated, and writes
+fly (what the hidden `biahub convert-settings` does), warns that the name is deprecated, and writes
 the new transforms file. `optimize-registration` has no direct equivalent.
 """
 
@@ -25,12 +25,12 @@ from biahub.cli.parsing import (
     output_filepath,
     sbatch_filepath,
 )
-from biahub.convert_settings import (
+from biahub.estimate_transform import estimate_transform
+from biahub.registration.legacy.convert_settings import (
     convert_settings,
     load_legacy_settings,
     per_position_stabilization,
 )
-from biahub.estimate_transform import estimate_transform
 from biahub.settings import TransformSettings, load_transform_settings
 from biahub.utils.config import model_to_yaml
 

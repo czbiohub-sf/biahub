@@ -114,7 +114,6 @@ Some steps include an `estimate-*` command that writes a YAML of parameters you 
 | | |
 | `estimate-transform` | Estimate a transform series: registration between arms or stabilization over time |
 | `apply-transform` | Apply a transform series to positions |
-| `convert-settings` | Convert a retired `estimate-registration` / `estimate-stabilization` / `register` / `stabilize` config |
 | `estimate-crop` | Estimate the crop region for dual-channel alignment |
 | | |
 | `estimate-stitch` | Estimate stitching parameters for positions |
@@ -161,6 +160,10 @@ biahub estimate-transform -m ./lightsheet_deskewed.zarr/0/0/0 \
 biahub apply-transform    -m ./lightsheet_deskewed.zarr/*/*/* \
                           -r ./labelfree_reconstructed.zarr/*/*/* \
                           -c ./registration/transforms.yml -o ./registered.zarr
+
+# Old estimate-registration / estimate-stabilization / register / stabilize configs and
+# command names still run (deprecated); convert a config once with
+biahub convert-settings -c ./old-estimate-registration.yml -o ./estimate-registration.yml
 
 # CONCATENATE CHANNELS
 biahub concatenate -c ./concatenate.yml -o ./concatenated.zarr

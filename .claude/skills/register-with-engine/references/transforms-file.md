@@ -45,5 +45,6 @@ transforms:                                  # one list shared by every position
 
 `biahub convert-settings -c old.yml -o new.yml` converts any retired estimate / register /
 stabilize config; several per-position stabilize files fold into one
-(`-c "xyz_stabilization_settings/*.yml"`). The deprecated command names still run and
-convert on the fly.
+(`-c "xyz_stabilization_settings/*.yml"`). It is hidden from `biahub --help` and lives with
+the deprecated command aliases in `biahub/registration/legacy/`; those old names still run
+and convert on the fly.

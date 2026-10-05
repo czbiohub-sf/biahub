@@ -76,8 +76,9 @@ COMMANDS = [
     },
     {
         "name": "convert-settings",
-        "import_path": "biahub.convert_settings.convert_settings_cli",
+        "import_path": "biahub.registration.legacy.convert_settings.convert_settings_cli",
         "help": "Convert a retired registration/stabilization config to the unified one",
+        "hidden": True,
     },
     {
         "name": "flat-field",
@@ -172,7 +173,7 @@ COMMANDS = [
 ]
 
 
-# Deprecated registration command names, hidden from --help (see biahub.legacy_aliases).
+# Deprecated registration command names, hidden from --help (see biahub.registration.legacy.aliases).
 for name, attr in (
     ("estimate-registration", "estimate_registration_alias"),
     ("estimate-stabilization", "estimate_stabilization_alias"),
@@ -183,7 +184,7 @@ for name, attr in (
     COMMANDS.append(
         {
             "name": name,
-            "import_path": f"biahub.legacy_aliases.{attr}",
+            "import_path": f"biahub.registration.legacy.aliases.{attr}",
             "help": "Deprecated: use estimate-transform / apply-transform.",
             "hidden": True,
         }

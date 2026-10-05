@@ -53,7 +53,8 @@ def _legacy_registration_config(path):
 
 def test_aliases_are_hidden_from_help():
     output = CliRunner().invoke(cli, ["--help"]).output
-    for name in ("estimate-registration", "estimate-stabilization", "register ", "stabilize "):
+    hidden = ("estimate-registration", "estimate-stabilization", "register ", "stabilize ")
+    for name in (*hidden, "convert-settings"):
         assert name not in output
     assert "estimate-transform" in output and "apply-transform" in output
 
