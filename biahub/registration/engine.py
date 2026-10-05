@@ -337,7 +337,7 @@ class PassResult:
 
 
 def _beats(candidate: float | None, current: float | None) -> bool:
-    """A finite candidate beats a missing / NaN current score, or a strictly lower one."""
+    """Return whether a finite candidate beats a missing / NaN or strictly lower score."""
     if candidate is None or not np.isfinite(candidate):
         return False
     return current is None or not np.isfinite(current) or candidate > current
@@ -1120,7 +1120,7 @@ def _estimate_propagated_job(
 
 
 def _run_fingerprint(settings: EstimateTransformSettings, source: Path, target: Path) -> dict:
-    """What a resumed run must share with the run it resumes."""
+    """Return what a resumed run must share with the run it resumes."""
     digest = hashlib.sha256(settings.model_dump_json().encode()).hexdigest()
     return {"settings_sha256": digest, "moving": str(source), "reference": str(target)}
 

@@ -48,7 +48,7 @@ class FixedFrame:
 
 
 def is_empty(volume: ArrayLike) -> bool:
-    """A frame with no data: all zeros or all NaN."""
+    """Return whether a frame has no data (all zeros or all NaN)."""
     return not np.any(np.nan_to_num(np.asarray(volume)))
 
 

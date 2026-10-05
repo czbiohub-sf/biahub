@@ -1115,7 +1115,7 @@ class TransformSettings(MyBaseModel):
         return None if entries[0].t is None else [e.t for e in entries]
 
     def entries_for(self, position: str | None = None) -> list[TransformEntry]:
-        """The list that applies to `position` ("row/col/fov"); the shared list ignores it."""
+        """Return the list for `position` ("row/col/fov"); the shared list ignores it."""
         if self.transforms is not None:
             return self.transforms
         if position not in self.positions:
@@ -1126,7 +1126,7 @@ class TransformSettings(MyBaseModel):
         return self.positions[position]
 
     def entry_for(self, t: int, position: str | None = None) -> TransformEntry:
-        """The entry timepoint `t` of `position` uses: its own, else the nearest earlier."""
+        """Return the entry timepoint `t` of `position` uses: its own, else the nearest earlier."""
         entries = self.entries_for(position)
         if entries[0].t is None:
             return entries[0]

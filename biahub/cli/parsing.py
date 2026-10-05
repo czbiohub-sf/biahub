@@ -36,7 +36,7 @@ def position_key(position_dirpath: Path) -> str:
 def pair_reference_positions(
     position_keys: list[str], reference_position_dirpaths: list[Path] | None
 ) -> dict[str, Path]:
-    """The reference position each moving position is registered onto.
+    """Pair each moving position with the reference position it is registered onto.
 
     One reference position serves every moving position; several are paired by position
     key, and a moving position without its reference is an error.

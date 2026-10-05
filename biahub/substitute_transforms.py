@@ -22,7 +22,7 @@ from biahub.utils.config import model_to_yaml
 
 
 def _timepoint_of(entry: TransformEntry, source: str) -> int:
-    """The timepoint a substitute entry replaces: its `t`, else where it was estimated."""
+    """Return the timepoint a substitute entry replaces: its `t`, else where it was estimated."""
     if entry.t is not None:
         return entry.t
     if entry.estimated_at is not None:
