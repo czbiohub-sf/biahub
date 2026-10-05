@@ -61,7 +61,7 @@ def _coarse(shape_zyx: tuple[int, int, int], f: int) -> tuple[int, int, int]:
 def overlap_mask(
     source_shape_zyx: tuple[int, int, int],
     target_shape_zyx: tuple[int, int, int],
-    pull_matrix: np.ndarray,
+    inverse_matrix: np.ndarray,
     downsample: int = 4,
 ) -> np.ndarray:
     """Target-grid voxels the warped source covers, on a `downsample`-times coarser grid.
@@ -71,7 +71,7 @@ def overlap_mask(
     """
     f = max(1, int(downsample))
     scale = np.diag([1.0 / f, 1.0 / f, 1.0 / f, 1.0])
-    coarse = scale @ np.asarray(pull_matrix, dtype=float) @ np.linalg.inv(scale)
+    coarse = scale @ np.asarray(inverse_matrix, dtype=float) @ np.linalg.inv(scale)
     ones_source = ants.from_numpy(np.ones(_coarse(source_shape_zyx, f), dtype=np.float32))
     ones_target = ants.from_numpy(np.ones(_coarse(target_shape_zyx, f), dtype=np.float32))
     warped = convert_transform_to_ants(coarse).apply_to_image(
@@ -132,18 +132,18 @@ def _mask_box(
 def overlap_slices(
     source_shape_zyx: tuple[int, int, int],
     target_shape_zyx: tuple[int, int, int],
-    pull_matrix: np.ndarray,
+    inverse_matrix: np.ndarray,
     downsample: int = 4,
 ) -> Slices:
     """Largest box inside the overlap of the warped source and the target grid."""
-    mask = overlap_mask(source_shape_zyx, target_shape_zyx, pull_matrix, downsample)
+    mask = overlap_mask(source_shape_zyx, target_shape_zyx, inverse_matrix, downsample)
     return _mask_box(mask, target_shape_zyx, downsample)
 
 
 def canvas(
     source_shape_zyx: tuple[int, int, int],
     target_shape_zyx: tuple[int, int, int],
-    pull_matrices: list[np.ndarray],
+    inverse_matrices: list[np.ndarray],
     keep_overhang: bool,
     downsample: int = 4,
 ) -> Slices:
@@ -160,7 +160,7 @@ def canvas(
         return tuple(slice(0, dim) for dim in target_shape_zyx)
     unique = {
         np.asarray(m, dtype=float).round(9).tobytes(): np.asarray(m, dtype=float)
-        for m in pull_matrices
+        for m in inverse_matrices
     }
     mask = None
     for matrix in unique.values():
@@ -254,8 +254,8 @@ def apply_transform(
                 f"the transforms file has no list for positions {missing}; it has "
                 f"{sorted(settings.positions)}"
             )
-    pulls = {
-        key: {t: settings.matrix_for(t, "pull", key) for t in time_indices}
+    inverses = {
+        key: {t: settings.matrix_for(t, "inverse", key) for t in time_indices}
         for key in position_keys
     }
     reference_for = pair_reference_positions(position_keys, reference_position_dirpaths)
@@ -273,7 +273,7 @@ def apply_transform(
                 f"{key}: written with transforms that are not accepted -- "
                 + "; ".join(f"{s} t={ts}" for s, ts in by_status.items())
             )
-    pull_by_t = pulls[position_keys[0]]
+    inverse_by_t = inverses[position_keys[0]]
 
     if reference_position_dirpaths:
         with open_ome_zarr(reference_position_dirpaths[0], mode="r") as reference:
@@ -295,11 +295,13 @@ def apply_transform(
             tuple(settings.voxel_size[-3:])
             if settings.voxel_size
             else tuple(
-                rescale_voxel_size(next(iter(pull_by_t.values()))[:3, :3], moving_voxel_size)
+                rescale_voxel_size(
+                    next(iter(inverse_by_t.values()))[:3, :3], moving_voxel_size
+                )
             )
         )
 
-    applied = [m for by_t in pulls.values() for m in by_t.values()]
+    applied = [m for by_t in inverses.values() for m in by_t.values()]
     crop = canvas(tuple(moving_shape), reference_shape, applied, keep_overhang)
     cropped_shape = tuple(s.stop - s.start for s in crop)
     click.echo(
@@ -363,7 +365,7 @@ def apply_transform(
             }
             # Jobs look a matrix up by input timepoint: a T-long list, filled for the selected t.
             matrices_for_jobs = [None] * T
-            for t, matrix in pulls[key].items():
+            for t, matrix in inverses[key].items():
                 matrices_for_jobs[t] = matrix.tolist()
             for channel_name in transformed:
                 jobs.append(

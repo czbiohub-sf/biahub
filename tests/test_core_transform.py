@@ -13,7 +13,7 @@ def test_apply_scipy_and_ants_backends_agree_on_same_transform():
     """A single Transform must warp identically regardless of backend.
 
     Regression test: `_apply_ants` used to feed `apply_to_image` the forward
-    (moving -> reference) matrix directly, but ants' `apply_to_image` does 'pull'
+    (moving -> reference) matrix directly, but ants' `apply_to_image` does 'inverse'
     (backward) resampling like scipy's `affine_transform` -- it needs the inverse.
     `_apply_scipy` already inverted; `_apply_ants` did not, so the two backends silently
     disagreed for the same Transform object.

@@ -100,10 +100,10 @@ def _write_config(
     return path
 
 
-def _pull_translations(output):
-    """Per-entry translation in the legacy pull direction (+APPLIED_SHIFT for a hit)."""
+def _inverse_translations(output):
+    """Per-entry translation in the legacy inverse direction (+APPLIED_SHIFT for a hit)."""
     model = load_transform_settings(output)
-    return np.asarray([model._as(e.matrix, "pull") for e in model.transforms])[:, :3, 3]
+    return np.asarray([model._as(e.matrix, "inverse") for e in model.transforms])[:, :3, 3]
 
 
 def _run(plate, config, output, **kwargs):
@@ -117,10 +117,10 @@ def test_estimate_transform_writes_a_register_compatible_series(beads_plate, tmp
 
     _run(beads_plate, _write_config(tmp_path), output)
 
-    pull = _pull_translations(output)
-    assert len(pull) == 2
-    for row in pull:
-        # In the pull direction: from the reference grid back to where the content sits
+    inverse = _inverse_translations(output)
+    assert len(inverse) == 2
+    for row in inverse:
+        # In the inverse direction: from the reference grid back to where the content sits
         # in the moving image, i.e. +APPLIED_SHIFT.
         np.testing.assert_allclose(row, APPLIED_SHIFT_ZYX, atol=0.5)
 
@@ -142,7 +142,7 @@ def test_estimate_transform_single_timepoint_writes_registration_settings(
 
     _run(beads_plate, _write_config(tmp_path, time_indices=1), output)
 
-    (row,) = _pull_translations(output)
+    (row,) = _inverse_translations(output)
     np.testing.assert_allclose(row, APPLIED_SHIFT_ZYX, atol=0.5)
     # A single estimated matrix is the series' transform (an entry without t), so
     # apply-transform applies it to every timepoint, not just the one it came from.
@@ -163,10 +163,10 @@ def test_estimate_transform_resume_keeps_existing_records(beads_plate, tmp_path)
 
     _run(beads_plate, _write_config(tmp_path), output, resume=True)
 
-    pull = _pull_translations(output)
-    # t=0 came from the planted record (forward +7 -> pull -7), t=1 was estimated.
-    np.testing.assert_allclose(pull[0], [-7.0, -7.0, -7.0])
-    np.testing.assert_allclose(pull[1], APPLIED_SHIFT_ZYX, atol=0.5)
+    inverse = _inverse_translations(output)
+    # t=0 came from the planted record (forward +7 -> inverse -7), t=1 was estimated.
+    np.testing.assert_allclose(inverse[0], [-7.0, -7.0, -7.0])
+    np.testing.assert_allclose(inverse[1], APPLIED_SHIFT_ZYX, atol=0.5)
 
 
 def test_a_fresh_run_clears_an_earlier_runs_records(beads_plate, tmp_path):
@@ -291,7 +291,7 @@ def test_estimate_transform_ants_method_recovers_the_shift(beads_plate, tmp_path
 
     _run(beads_plate, config, output)
 
-    (row,) = _pull_translations(output)
+    (row,) = _inverse_translations(output)
     np.testing.assert_allclose(row, APPLIED_SHIFT_ZYX, atol=0.5)
     report = json.loads((output.parent / "estimate_transform_report.json").read_text())
     assert report["scores"]["0"] > 0.9  # correlation score
@@ -316,13 +316,13 @@ def drifting_plate(tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("t_reference", "expected_pull_factor"),
+    ("t_reference", "expected_inverse_factor"),
     # Both references must yield the transform onto the first frame's grid: the
     # per-pair 'previous' estimates are chained.
     [("first", [0, 1, 2]), ("previous", [0, 1, 2])],
 )
 def test_estimate_transform_stabilizes_a_channel_against_itself(
-    drifting_plate, tmp_path, t_reference, expected_pull_factor
+    drifting_plate, tmp_path, t_reference, expected_inverse_factor
 ):
     output = tmp_path / "out" / "stabilization_settings.yml"
     config = _write_config(tmp_path, source="GFP", reference=t_reference)
@@ -331,7 +331,9 @@ def test_estimate_transform_stabilizes_a_channel_against_itself(
 
     model = load_transform_settings(output)
     assert model.moving_channels == ["GFP"] and model.reference_channel is None
-    for row, factor in zip(_pull_translations(output), expected_pull_factor, strict=True):
+    for row, factor in zip(
+        _inverse_translations(output), expected_inverse_factor, strict=True
+    ):
         np.testing.assert_allclose(row, [factor * s for s in APPLIED_SHIFT_ZYX], atol=0.5)
 
 
@@ -350,7 +352,7 @@ def test_estimate_transform_phase_cross_corr_stabilizes_against_the_first_frame(
     _run(drifting_plate, config, output)
 
     assert load_transform_settings(output).method == "phase-cross-corr"
-    for row, factor in zip(_pull_translations(output), [0, 1, 2], strict=True):
+    for row, factor in zip(_inverse_translations(output), [0, 1, 2], strict=True):
         np.testing.assert_allclose(row, [factor * s for s in APPLIED_SHIFT_ZYX], atol=0.5)
 
 
@@ -387,8 +389,8 @@ def test_estimate_transform_several_positions_each_get_their_own_transforms(tmp_
     model = load_transform_settings(output)
     assert model.per_position and sorted(model.positions) == ["A/1/0", "A/1/1"]
     for fov, d in drift.items():
-        pulls = [model.matrix_for(t, "pull", f"A/1/{fov}")[:3, 3] for t in range(3)]
-        for t, row in enumerate(pulls):
+        inverses = [model.matrix_for(t, "inverse", f"A/1/{fov}")[:3, 3] for t in range(3)]
+        for t, row in enumerate(inverses):
             np.testing.assert_allclose(row, t * d, atol=0.5)
     # each position kept its own records, so --resume works per position
     assert (output.parent / "positions" / "A" / "1" / "1" / "timepoints" / "2.json").exists()
@@ -421,7 +423,7 @@ def test_estimate_transform_previous_timepoint_runs_one_sequential_job(tmp_path)
 
     job_ids = (output.parent / "slurm_output" / "estimate_job_ids.log").read_text().split()
     assert len(job_ids) == 1  # one sequential job, not one per timepoint
-    for t, row in enumerate(_pull_translations(output)):
+    for t, row in enumerate(_inverse_translations(output)):
         np.testing.assert_allclose(row, (t + 1) * step, atol=0.5)
     record = json.loads((output.parent / "timepoints" / "2.json").read_text())
     assert {"stand_in", "stand_in_from"} <= set(record)
@@ -453,13 +455,13 @@ def test_repair_is_skipped_for_a_method_that_ignores_seeds(tmp_path, capsys):
 def test_estimate_transform_manual_runs_in_process_on_one_timepoint(
     beads_plate, tmp_path, monkeypatch
 ):
-    pull = np.eye(4)
-    pull[:3, 3] = APPLIED_SHIFT_ZYX  # the annotation tool returns the pull matrix
+    inverse = np.eye(4)
+    inverse[:3, 3] = APPLIED_SHIFT_ZYX  # the annotation tool returns the inverse matrix
     calls = []
 
     def fake_user_assisted_registration(**kwargs):
         calls.append(kwargs)
-        return (pull,)
+        return (inverse,)
 
     monkeypatch.setattr(
         "biahub.registration.methods.manual.user_assisted_registration",
@@ -481,7 +483,7 @@ def test_estimate_transform_manual_runs_in_process_on_one_timepoint(
     )
 
     assert len(calls) == 1 and calls[0]["pre_affine_90degree_rotation"] == 1
-    (row,) = _pull_translations(output)
+    (row,) = _inverse_translations(output)
     np.testing.assert_allclose(row, APPLIED_SHIFT_ZYX)
 
 

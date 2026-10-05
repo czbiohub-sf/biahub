@@ -1,4 +1,4 @@
-direction: pull
+direction: inverse
 moving_channels:
 - Phase3D
 - Orientation

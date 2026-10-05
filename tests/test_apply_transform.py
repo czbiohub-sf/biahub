@@ -22,7 +22,7 @@ def _translation(dz, dy, dx):
 
 
 def test_overlap_slices_of_a_translation_is_the_shifted_box():
-    # pull: reference voxel r reads moving voxel r + 3 along y, so the last 3 rows of the
+    # inverse: reference voxel r reads moving voxel r + 3 along y, so the last 3 rows of the
     # reference grid read outside the moving volume.
     z, y, x = overlap_slices(
         (20, 40, 40), (20, 40, 40), np.array(_translation(0, 3, 0)), downsample=1
@@ -83,7 +83,7 @@ def test_apply_transform_stabilizes_every_channel_with_per_timepoint_matrices(
     structured_plate, tmp_path
 ):
     position, data = structured_plate
-    # Forward translation: move content by +dy per timepoint (pull = -dy).
+    # Forward translation: move content by +dy per timepoint (inverse = -dy).
     forward = [_translation(0, 0, 0), _translation(0, 2, 0), _translation(0, 4, 0)]
     config = tmp_path / "transforms.yml"
     model_to_yaml(
@@ -276,8 +276,8 @@ def test_transform_settings_matrix_for_uses_own_entry_else_nearest_earlier():
     )
     assert series.matrix_for(5, "forward")[1, 3] == 5
     assert series.matrix_for(7, "forward")[1, 3] == 5  # nearest earlier entry
-    assert series.matrix_for(5, "pull")[1, 3] == -5  # inverted on request
-    assert len(series.unique_matrices("pull")) == 2
+    assert series.matrix_for(5, "inverse")[1, 3] == -5  # inverted on request
+    assert len(series.unique_matrices("inverse")) == 2
     with pytest.raises(ValueError, match="unique, increasing"):
         TransformSettings(
             direction="forward",
@@ -492,3 +492,13 @@ def test_apply_transform_registers_every_moving_channel_by_default(structured_pl
             cluster="debug",
             channels=["DAPI"],
         )
+
+
+def test_transforms_written_with_the_old_pull_name_load_as_inverse():
+    settings = TransformSettings(
+        direction="pull",
+        moving_channels=["GFP"],
+        transforms=[TransformEntry(matrix=_translation(0, 0, 3))],
+    )
+    assert settings.direction == "inverse"
+    np.testing.assert_allclose(settings.matrix_for(0, "forward")[2, 3], -3.0)

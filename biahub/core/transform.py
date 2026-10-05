@@ -229,17 +229,17 @@ class Transform:
     # ==================== Algebraic Operations ====================
 
     @classmethod
-    def from_legacy_pull(cls, matrix, transform_type: TransformType = "affine") -> Transform:
-        """Forward Transform from a legacy pull-direction (reference -> moving) matrix.
+    def from_inverse(cls, matrix, transform_type: TransformType = "affine") -> Transform:
+        """Forward Transform from a legacy inverse-direction (reference -> moving) matrix.
 
         Every transform the legacy pipeline stored (`approx_transform`,
-        `affine_transform_zyx*`, `ants.estimate` results) is pull-direction; this is the
+        `affine_transform_zyx*`, `ants.estimate` results) is inverse-direction; this is the
         one place that becomes an engine (forward) Transform.
         """
         return cls(np.asarray(matrix, dtype=float), transform_type=transform_type).invert()
 
-    def to_legacy_pull(self) -> list[list[float]]:
-        """Legacy pull-direction matrix (nested list, YAML-ready) from this forward Transform."""
+    def to_inverse(self) -> list[list[float]]:
+        """Legacy inverse-direction matrix (nested list, YAML-ready) from this forward Transform."""
         return self.invert().to_list()
 
     def invert(self) -> Transform:
@@ -434,7 +434,7 @@ class Transform:
         else:
             reference_ants = moving_ants
 
-        # ants.ANTsTransform.apply_to_image does 'pull' (backward) resampling like
+        # ants.ANTsTransform.apply_to_image does inverse (backward) resampling like
         # scipy.ndimage.affine_transform: it needs the inverse of this forward
         # (moving -> reference) transform, the same inversion _apply_scipy does
         # explicitly. ants.apply_transforms' own `whichtoinvert` defaults to True for a

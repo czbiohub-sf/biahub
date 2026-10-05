@@ -14,7 +14,7 @@ class StackregEstimator:
     """TransformEstimator using pystackreg (2D rigid/translation registration).
 
     `StackReg.register(ref, mov)` returns a matrix in (X, Y) axis order -- not this
-    codebase's (Y, X) convention -- and in the reference -> moving ("pull") direction;
+    codebase's (Y, X) convention -- and in the reference -> moving ("inverse") direction;
     both confirmed empirically against a known synthetic shift (0 error after swapping
     axes and inverting; ~0.44-1.15 relative error for every other combination). Swap
     axes and invert before returning, to satisfy the TransformEstimator contract (true
@@ -36,6 +36,6 @@ class StackregEstimator:
         mov = np.asarray(mov)
         ref = np.asarray(ref)
         sr = StackReg(self.transformation)
-        xy_pull_matrix = np.asarray(sr.register(ref, mov))
-        yx_matrix = self._AXIS_SWAP @ xy_pull_matrix @ self._AXIS_SWAP
+        xy_inverse_matrix = np.asarray(sr.register(ref, mov))
+        yx_matrix = self._AXIS_SWAP @ xy_inverse_matrix @ self._AXIS_SWAP
         return Transform(matrix=yx_matrix).invert()

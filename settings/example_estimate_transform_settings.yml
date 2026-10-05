@@ -117,7 +117,7 @@ transform:
     - 0.0
     - 0.0
     - 1.0
-  seed_direction: pull
+  seed_direction: inverse
   seed_from_shapes: false
   # Where each timepoint starts: `input` -- the seed above, every timepoint estimated
   # independently (one job per timepoint); `previous_timepoint` -- the previous

@@ -218,7 +218,7 @@ def estimate_settings_from_legacy(
     fit = TransformFitSettings(
         type=ats.transform_type,
         seed=ats.approx_transform,
-        seed_direction="pull",
+        seed_direction="inverse",
         seed_from_shapes=ats.compute_approx_transform,
         seed_from=seed_from,
     )
@@ -292,7 +292,7 @@ def estimate_settings_from_legacy(
 def transform_settings_from_legacy(
     legacy: RegistrationSettings | StabilizationSettings,
 ) -> tuple[TransformSettings, list[str]]:
-    """Convert a legacy register / stabilize config to a pull-direction transform series.
+    """Convert a legacy register / stabilize config to a inverse-direction transform series.
 
     How the series is applied (timepoints, canvas, interpolation, output version) is no
     longer stored with the transforms: those are `apply-transform` options, noted here.
@@ -314,7 +314,7 @@ def transform_settings_from_legacy(
                 f"interpolation {legacy.interpolation!r} dropped: pass --interpolation to apply-transform"
             )
         settings = TransformSettings(
-            direction="pull",
+            direction="inverse",
             moving_channels=legacy.source_channel_names,
             reference_channel=legacy.target_channel_name,
             transforms=[TransformEntry(matrix=legacy.affine_transform_zyx)],
@@ -323,7 +323,7 @@ def transform_settings_from_legacy(
     # stabilize transformed every listed channel onto the estimation channel's own grid,
     # so the estimation channel is one of the moving channels and there is no reference.
     settings = TransformSettings(
-        direction="pull",
+        direction="inverse",
         moving_channels=sorted(
             {*legacy.stabilization_channels, legacy.stabilization_estimation_channel}
         ),

@@ -355,7 +355,7 @@ class ManualEstimator:
     annotate matching points. `user_assisted_registration` builds its transform
     correctly (skimage point-fit composed with the pre-alignment matrix, true
     moving -> reference), then explicitly inverts it before returning -- so, like
-    ants.py:estimate(), its return value is the reference -> moving ("pull") direction.
+    ants.py:estimate(), its return value is the reference -> moving ("inverse") direction.
     Invert once more here to satisfy the TransformEstimator contract.
     """
 
@@ -385,7 +385,7 @@ class ManualEstimator:
     ) -> Transform:
         # No seed support -- napari display could pre-align with it, but that's not
         # implemented, and the point-fit itself doesn't take an initial guess.
-        (pull_matrix,) = user_assisted_registration(
+        (inverse_matrix,) = user_assisted_registration(
             source_channel_volume=np.asarray(mov),
             source_channel_name=self.source_channel_name,
             source_channel_voxel_size=self.source_channel_voxel_size,
@@ -396,4 +396,4 @@ class ManualEstimator:
             pre_affine_90degree_rotation=self.pre_affine_90degree_rotation,
             pre_affine_fliplr=self.pre_affine_fliplr,
         )
-        return Transform(matrix=np.asarray(pull_matrix)).invert()
+        return Transform(matrix=np.asarray(inverse_matrix)).invert()

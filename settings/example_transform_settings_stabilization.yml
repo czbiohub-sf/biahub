@@ -1,4 +1,4 @@
-direction: pull
+direction: inverse
 moving_channels:
 - GFP
 reference_channel: null

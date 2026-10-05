@@ -28,8 +28,8 @@ bead-overlap ratio (quantized at ~1/N per bead); treat differences of one bead a
   `.local/registration-refactor/CONTEXT.md` if present.
 - The transform direction rule: everything the engine returns is forward
   (moving -> reference); everything on disk (`registration_settings.yml`,
-  `approx_transform`) is the legacy pull direction. Cross that boundary only with
-  `Transform.from_legacy_pull` / `Transform.to_legacy_pull`.
+  `approx_transform`) is the legacy inverse direction. Cross that boundary only with
+  `Transform.from_inverse` / `Transform.to_inverse`.
 
 ## 1. Confirm the environment
 
@@ -67,7 +67,7 @@ production beads config in the engine's `EstimateTransformSettings` schema (an o
 0.857 without, 187/240 timepoints identical to production).
 
 Adjust:
-- `transform.seed`: reuse the previous run's `approx_transform` (pull direction, as on
+- `transform.seed`: reuse the previous run's `approx_transform` (inverse direction, as on
   disk) if `1-register/estimate-registration-beads.yml` exists for this dataset (same
   instrument geometry) -- `biahub convert-settings -c <that file> -o <new>.yml` converts
   the whole config; otherwise the template's seed from 2025_09_18 is a reasonable start
@@ -138,7 +138,7 @@ From `estimate_transform_report.json` and `run_journal.json`:
   timepoints; `n_matched` should be close to the detected bead count.
 
 If a previous `1-register/registration_settings.yml` exists: per-timepoint |dT| against
-it (median, p95; both files are pull-direction so compare directly), and per-timepoint
+it (median, p95; both files are inverse-direction so compare directly), and per-timepoint
 scores against `quality_scores.csv` or `xyz_transforms/*.score` when present. Equal
 scores with different matrices are expected at the metric's resolution; a systematic
 |dT| above ~2 voxels on unflagged timepoints needs a look.

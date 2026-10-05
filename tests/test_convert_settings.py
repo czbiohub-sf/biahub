@@ -19,8 +19,8 @@ from biahub.settings import (
     load_transform_settings,
 )
 
-PULL = np.eye(4)
-PULL[:3, 3] = [2.0, -3.0, 4.0]
+INVERSE = np.eye(4)
+INVERSE[:3, 3] = [2.0, -3.0, 4.0]
 
 
 def test_estimate_registration_converts_to_a_cross_reference_estimate():
@@ -29,7 +29,7 @@ def test_estimate_registration_converts_to_a_cross_reference_estimate():
         target_channel_name="Phase3D",
         estimation_method="beads",
         affine_transform_settings={
-            "approx_transform": PULL.tolist(),
+            "approx_transform": INVERSE.tolist(),
             "transform_type": "affine",
         },
         time_indices=[0, 5],
@@ -39,7 +39,8 @@ def test_estimate_registration_converts_to_a_cross_reference_estimate():
     assert unified.reference.frame == "cross" and unified.reference.channel == "Phase3D"
     assert unified.moving.channel == "GFP" and unified.method == "beads"
     assert (
-        unified.transform.seed == PULL.tolist() and unified.transform.seed_direction == "pull"
+        unified.transform.seed == INVERSE.tolist()
+        and unified.transform.seed_direction == "inverse"
     )
     assert unified.transform.type == "affine" and unified.time_indices == [0, 5]
     assert unified.beads is not None
@@ -82,17 +83,17 @@ def test_focus_finding_stabilization_converts_type_to_axes(stabilization_type):
     assert notes == []
 
 
-def test_register_config_converts_to_a_single_pull_matrix():
+def test_register_config_converts_to_a_single_inverse_matrix():
     legacy = RegistrationSettings(
         source_channel_names=["GFP", "mCherry"],
         target_channel_name="Phase3D",
-        affine_transform_zyx=PULL.tolist(),
+        affine_transform_zyx=INVERSE.tolist(),
         keep_overhang=True,
     )
     unified, notes = convert_settings(legacy)
     assert isinstance(unified, TransformSettings)
-    assert unified.direction == "pull" and unified.series_wide
-    assert unified.transforms[0].matrix == PULL.tolist()
+    assert unified.direction == "inverse" and unified.series_wide
+    assert unified.transforms[0].matrix == INVERSE.tolist()
     assert (
         unified.moving_channels == ["GFP", "mCherry"]
         and unified.reference_channel == "Phase3D"
@@ -107,11 +108,11 @@ def test_stabilize_config_converts_to_a_self_grid_series():
         stabilization_type="xyz",
         stabilization_method="phase-cross-corr",
         stabilization_channels=["GFP"],
-        affine_transform_zyx_list=[PULL.tolist()] * 3,
+        affine_transform_zyx_list=[INVERSE.tolist()] * 3,
         output_voxel_size=[1, 1, 2, 0.5, 0.5],
     )
     unified, _ = convert_settings(legacy)
-    assert unified.direction == "pull" and unified.timepoints() == [0, 1, 2]
+    assert unified.direction == "inverse" and unified.timepoints() == [0, 1, 2]
     assert unified.moving_channels == ["GFP", "Phase3D"] and unified.reference_channel is None
     assert unified.method == "phase-cross-corr" and unified.voxel_size == [1, 1, 2, 0.5, 0.5]
 
@@ -122,7 +123,7 @@ def test_convert_settings_cli_writes_a_config_the_strict_loaders_accept(tmp_path
     )
     (tmp_path / "register.yml").write_text(
         "source_channel_names: [GFP]\ntarget_channel_name: Phase3D\n"
-        f"affine_transform_zyx: {PULL.tolist()}\n"
+        f"affine_transform_zyx: {INVERSE.tolist()}\n"
     )
     runner = CliRunner()
     for name in ("estimate", "register"):
@@ -134,7 +135,7 @@ def test_convert_settings_cli_writes_a_config_the_strict_loaders_accept(tmp_path
     estimate = load_estimate_transform_settings(tmp_path / "estimate.unified.yml")
     assert estimate.method == "ants" and estimate.ants is not None
     transform = load_transform_settings(tmp_path / "register.unified.yml")
-    assert transform.direction == "pull"
+    assert transform.direction == "inverse"
 
     (tmp_path / "junk.yml").write_text("nonsense: 1\n")
     with pytest.raises(ValueError, match="not a legacy"):
@@ -147,15 +148,15 @@ def test_convert_settings_folds_per_position_stabilize_configs(tmp_path):
     folder = tmp_path / "xyz_stabilization_settings"
     folder.mkdir()
     for fov, dx in (("000", 1.0), ("001", 5.0)):
-        pull = PULL.copy()
-        pull[2, 3] = dx
+        inverse = INVERSE.copy()
+        inverse[2, 3] = dx
         model_to_yaml(
             StabilizationSettings(
                 stabilization_estimation_channel="GFP",
                 stabilization_type="xyz",
                 stabilization_method="phase-cross-corr",
                 stabilization_channels=["GFP"],
-                affine_transform_zyx_list=[pull.tolist()] * 2,
+                affine_transform_zyx_list=[inverse.tolist()] * 2,
                 output_voxel_size=[1, 1, 2, 0.5, 0.5],
             ),
             folder / f"0_8_{fov}.yml",
@@ -169,8 +170,8 @@ def test_convert_settings_folds_per_position_stabilize_configs(tmp_path):
     assert result.exit_code == 0, result.output
     transforms = load_transform_settings(output)
     assert sorted(transforms.positions) == ["0/8/000", "0/8/001"]
-    assert transforms.matrix_for(1, "pull", "0/8/001")[2, 3] == 5.0
-    assert transforms.matrix_for(1, "pull", "0/8/000")[2, 3] == 1.0
+    assert transforms.matrix_for(1, "inverse", "0/8/001")[2, 3] == 5.0
+    assert transforms.matrix_for(1, "inverse", "0/8/000")[2, 3] == 1.0
 
 
 def test_convert_settings_refuses_to_fold_files_that_are_not_per_position_stabilize(tmp_path):

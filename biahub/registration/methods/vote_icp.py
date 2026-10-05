@@ -2,7 +2,7 @@
 
 Numpy/scipy algorithms over (N, 3) ZYX peak coordinates, kept apart from the volume code
 in `methods.beads` so each stage is testable on its own. Returned transforms are
-homogeneous (D+1, D+1) matrices in the pull convention used by `vote_icp_register`'s
+homogeneous (D+1, D+1) matrices in the inverse convention used by `vote_icp_register`'s
 `initial_transform`: they map reference-space points to moving-space sample coordinates.
 """
 
@@ -216,12 +216,12 @@ class VoteIcpEstimator:
             score_fn=score_fn,
         )
 
-    def _register(self, mov_peaks, ref_peaks, pull_seed, initial_radius):
+    def _register(self, mov_peaks, ref_peaks, inverse_seed, initial_radius):
         s = self.settings
         return vote_icp_register(
             mov_peaks=mov_peaks,
             ref_peaks=ref_peaks,
-            initial_transform=pull_seed,
+            initial_transform=inverse_seed,
             initial_capture_radius=initial_radius,
             min_capture_radius=s.min_capture_radius,
             radius_decay=s.radius_decay,
@@ -238,7 +238,7 @@ class VoteIcpEstimator:
         mov = np.asarray(mov, dtype=np.float32)
         ref = np.asarray(ref, dtype=np.float32)
         ndim = mov.ndim
-        pull_seed = (seed.invert() if seed is not None else Transform.identity(ndim)).matrix
+        inverse_seed = (seed.invert() if seed is not None else Transform.identity(ndim)).matrix
         ref_peaks = np.asarray(self.ref_detector.detect(ref))
         dense_peaks = np.asarray(self.dense_detector.detect(mov))
         if min(len(dense_peaks), len(ref_peaks)) < self.settings.min_votes:
@@ -246,23 +246,25 @@ class VoteIcpEstimator:
                 f"vote_icp: {len(dense_peaks)} dense moving / {len(ref_peaks)} reference "
                 f"peaks (need >= {self.settings.min_votes})"
             )
-        pull, info = self._register(
-            dense_peaks, ref_peaks, pull_seed, self.settings.initial_capture_radius
+        inverse, info = self._register(
+            dense_peaks, ref_peaks, inverse_seed, self.settings.initial_capture_radius
         )
-        if pull is None:
+        if inverse is None:
             raise EstimationError(
                 f"vote_icp: voting abstained after {info['iterations']} iteration(s)"
             )
-        best = Transform(pull, transform_type=self.transform_type).invert()
+        best = Transform(inverse, transform_type=self.transform_type).invert()
         best_score = self.score_fn(best, mov, ref)
 
         precise_peaks = np.asarray(self.precise_detector.detect(mov))
         if len(precise_peaks) >= self.settings.min_votes:
-            precise_pull, _info = self._register(
-                precise_peaks, ref_peaks, pull, self.settings.min_capture_radius
+            precise_inverse, _info = self._register(
+                precise_peaks, ref_peaks, inverse, self.settings.min_capture_radius
             )
-            if precise_pull is not None:
-                precise = Transform(precise_pull, transform_type=best.transform_type).invert()
+            if precise_inverse is not None:
+                precise = Transform(
+                    precise_inverse, transform_type=best.transform_type
+                ).invert()
                 precise_score = self.score_fn(precise, mov, ref)
                 if np.isfinite(precise_score) and precise_score > best_score:
                     best = precise
@@ -335,14 +337,14 @@ class VoteSeedCorrection:
                 f"only {len(dense_peaks)} dense peaks / too few votes; seed unchanged"
             )
             return seed
-        # Work in the pull convention the vote was measured in: the seed maps reference
+        # Work in the inverse convention the vote was measured in: the seed maps reference
         # coordinates to moving sample coordinates, so undoing an image drift of +d in the
-        # reference frame composes as pull @ T(-d). Both signs compete with the unchanged seed.
-        pull = seed.invert().matrix
+        # reference frame composes as inverse @ T(-d). Both signs compete with the unchanged seed.
+        inverse = seed.invert().matrix
         candidates = {
             "keep": seed,
-            "minus": Transform(pull @ translation_matrix(-drift)).invert(),
-            "plus": Transform(pull @ translation_matrix(drift)).invert(),
+            "minus": Transform(inverse @ translation_matrix(-drift)).invert(),
+            "plus": Transform(inverse @ translation_matrix(drift)).invert(),
         }
         nn = {name: nn_median(t) for name, t in candidates.items()}
         best = min(nn, key=nn.get)
@@ -351,7 +353,7 @@ class VoteSeedCorrection:
         if settings.mode == "votefit" and len(pairs) >= 4:
             # The cluster's votes are correspondences (warped moving peak p, reference peak
             # q) in the uncorrected seed's warped frame; re-warping should put p at q, i.e.
-            # sample point C(q) = p, so the fit composes onto the seed as pull @ C.
+            # sample point C(q) = p, so the fit composes onto the seed as inverse @ C.
             p = np.asarray([a for a, _ in pairs], dtype=float)
             q = np.asarray([b for _, b in pairs], dtype=float)
             correction = (
@@ -359,7 +361,7 @@ class VoteSeedCorrection:
                 if len(pairs) >= 6
                 else translation_matrix((p - q).mean(axis=0))
             )
-            fitted = Transform(pull @ correction).invert()
+            fitted = Transform(inverse @ correction).invert()
             nn_fitted = nn_median(fitted)
             if np.isfinite(nn_fitted) and nn_fitted < nn[best]:
                 corrected = fitted

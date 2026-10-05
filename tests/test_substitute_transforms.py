@@ -49,11 +49,13 @@ def test_a_single_timepoint_run_replaces_only_its_timepoint():
 
 
 def test_substitutes_are_converted_to_the_base_direction_and_applied_in_order():
-    pull = _single(1, -7.0, method="ants", direction="pull")  # pull -7 == forward +7
+    inverse = _single(1, -7.0, method="ants", direction="inverse")  # inverse -7 == forward +7
     later = _single(1, 9.0, method="manual")
-    combined, _ = substitute_transforms(_beads(), [("ants.yml", pull)])
+    combined, _ = substitute_transforms(_beads(), [("ants.yml", inverse)])
     assert combined.matrix_for(1, "forward")[2, 3] == pytest.approx(7.0)
-    combined, _ = substitute_transforms(_beads(), [("ants.yml", pull), ("manual.yml", later)])
+    combined, _ = substitute_transforms(
+        _beads(), [("ants.yml", inverse), ("manual.yml", later)]
+    )
     assert combined.matrix_for(1, "forward")[2, 3] == 9.0
     assert combined.transforms[1].method == "manual"
 

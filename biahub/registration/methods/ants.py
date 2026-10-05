@@ -159,7 +159,7 @@ class AntsEstimator:
     convention.
 
     `ants.estimate()`'s `fwd_transform` is, despite its name, the reference -> moving
-    ("pull") direction (see `tests/test_registration_estimators.py`); it is inverted here.
+    ("inverse") direction (see `tests/test_registration_estimators.py`); it is inverted here.
     """
 
     def __init__(
@@ -213,13 +213,13 @@ class AntsEstimator:
             clip=self.clip,
             sobel_filter=self.sobel_filter,
         )
-        pull_correction, _unused = estimate(
+        inverse_correction, _unused = estimate(
             ref=ref_prepared,
             mov=mov_prepared,
             verbose=self.verbose,
             ants_kwargs=self.ants_kwargs,
         )
-        correction = pull_correction.invert()
+        correction = inverse_correction.invert()
         if np.any(offset):
             correction = (
                 Transform.from_translation(offset)

@@ -80,8 +80,8 @@ def test_estimate_registration_alias_runs_estimate_transform_and_warns(beads_pla
     assert result.exit_code == 0, result.output
     assert "DeprecationWarning" in result.output and "estimate-transform" in result.output
     model = load_transform_settings(output)  # the new transforms file, at the old path
-    pull = [model._as(e.matrix, "pull")[:3, 3] for e in model.transforms]
-    for row in pull:
+    inverse = [model._as(e.matrix, "inverse")[:3, 3] for e in model.transforms]
+    for row in inverse:
         np.testing.assert_allclose(row, APPLIED_SHIFT_ZYX, atol=0.5)
 
 
@@ -169,7 +169,9 @@ def test_estimate_stabilization_alias_converts_a_legacy_pcc_config(drifting_plat
     model = load_transform_settings(tmp_path / "stab" / "transforms.yml")
     for t, entry in enumerate(model.transforms):
         np.testing.assert_allclose(
-            model._as(entry.matrix, "pull")[:3, 3], t * np.array(APPLIED_SHIFT_ZYX), atol=0.5
+            model._as(entry.matrix, "inverse")[:3, 3],
+            t * np.array(APPLIED_SHIFT_ZYX),
+            atol=0.5,
         )
 
 

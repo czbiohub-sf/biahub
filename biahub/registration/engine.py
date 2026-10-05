@@ -886,7 +886,7 @@ def _seed(settings: EstimateTransformSettings) -> Transform:
     fit = settings.transform
     if fit.seed_direction == "forward":
         return Transform(np.asarray(fit.seed, dtype=float), transform_type=fit.type)
-    return Transform.from_legacy_pull(fit.seed, fit.type)
+    return Transform.from_inverse(fit.seed, fit.type)
 
 
 def _score_fn(settings: EstimateTransformSettings) -> ScoreFn:
@@ -910,14 +910,14 @@ def _score_fn(settings: EstimateTransformSettings) -> ScoreFn:
 def _affine_settings(settings: EstimateTransformSettings) -> AffineTransformSettings:
     """Build the legacy `AffineTransformSettings` the estimators' constructors still take."""
     fit = settings.transform
-    seed_pull = (
+    seed_inverse = (
         fit.seed
-        if fit.seed_direction == "pull"
+        if fit.seed_direction == "inverse"
         else np.linalg.inv(np.asarray(fit.seed, dtype=float)).tolist()
     )
     return AffineTransformSettings(
         transform_type=fit.type,
-        approx_transform=seed_pull,
+        approx_transform=seed_inverse,
         use_prev_t_transform=False,
         compute_approx_transform=fit.seed_from_shapes,
         t_reference="first"
@@ -1493,7 +1493,7 @@ def estimate_transform_series(
             mov_voxel_size=mov_voxel_size,
         )
         settings.transform.seed = approx.to_list()
-        settings.transform.seed_direction = "pull"
+        settings.transform.seed_direction = "inverse"
         click.echo(f"Computed seed from the store shapes:\n{approx.matrix}")
     _estimator, _score_fn, seed = build_estimator(
         settings, (Z, Y, X), mov_voxel_size, ref_voxel_size

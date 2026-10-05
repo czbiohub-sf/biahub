@@ -1,6 +1,6 @@
 from itertools import product
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import numpy as np
 import torch
@@ -8,6 +8,7 @@ import yaml
 
 from pydantic import (
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     ImportString,
@@ -742,7 +743,17 @@ class SegmentationSettings(BaseModel):
 # Unified transform estimation / application settings (registration engine)
 # --------------------------------------------------------------------------------------
 
-TransformDirection = Literal["forward", "pull"]
+
+def _inverse_from_pull(value):
+    # "pull" was this direction's first name; files written with it still load.
+    return "inverse" if value == "pull" else value
+
+
+# "forward": moving -> reference. "inverse": reference -> moving, the matrix resampling uses
+# (ANTs calls these the forward and inverse transforms).
+TransformDirection = Annotated[
+    Literal["forward", "inverse"], BeforeValidator(_inverse_from_pull)
+]
 
 
 class ChannelSettings(MyBaseModel):
@@ -752,7 +763,7 @@ class ChannelSettings(MyBaseModel):
 class TransformFitSettings(MyBaseModel):
     """What kind of transform to fit and where to start.
 
-    `seed` is a 4x4 matrix in `seed_direction`: "pull" (reference -> moving, the
+    `seed` is a 4x4 matrix in `seed_direction`: "inverse" (reference -> moving, the
     convention of every transform on disk and of the legacy `approx_transform`) or
     "forward" (moving -> reference, the engine's own convention).
 
@@ -764,7 +775,7 @@ class TransformFitSettings(MyBaseModel):
 
     type: Literal["euclidean", "similarity", "affine"] = "euclidean"
     seed: list = np.eye(4).tolist()
-    seed_direction: TransformDirection = "pull"
+    seed_direction: TransformDirection = "inverse"
     seed_from_shapes: bool = False
     seed_from: Literal["input", "previous_timepoint"] = "input"
 
@@ -1065,7 +1076,7 @@ class TransformSettings(MyBaseModel):
     """What `estimate-transform` estimated, as `apply-transform` consumes it.
 
     `direction` says what the matrices mean -- "forward" (moving -> reference, what the
-    engine estimates) or "pull" (reference -> moving, ready to resample with; what the
+    engine estimates) or "inverse" (reference -> moving, ready to resample with; what the
     retired `register` / `stabilize` configs held).
 
     Two independent axes. Positions: `transforms` is one list shared by every position,

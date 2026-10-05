@@ -61,7 +61,7 @@ def test_transform_settings_series_wide_entry_and_direction():
     )
     assert series.series_wide and series.timepoints() is None
     np.testing.assert_allclose(series.matrix_for(17, "forward"), forward)
-    np.testing.assert_allclose(series.matrix_for(17, "pull")[:3, 3], [2, -3, 4])
+    np.testing.assert_allclose(series.matrix_for(17, "inverse")[:3, 3], [2, -3, 4])
     with pytest.raises(ValueError, match="at least one entry"):
         TransformSettings(direction="forward", moving_channels=["GFP"], transforms=[])
 
