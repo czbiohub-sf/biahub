@@ -325,8 +325,11 @@ def transform_settings_from_legacy(
             "output_ome_zarr_version dropped: pass --ome-zarr-version to apply-transform"
         )
     if isinstance(legacy, RegistrationSettings):
-        if legacy.keep_overhang:
-            notes.append("keep_overhang dropped: pass --keep-overhang to apply-transform")
+        if not legacy.keep_overhang:
+            notes.append(
+                "register cropped to the overlap: pass --crop-to-overlap to apply-transform "
+                "(it keeps the full grid by default)"
+            )
         if legacy.interpolation != "linear":
             notes.append(
                 f"interpolation {legacy.interpolation!r} dropped: pass --interpolation to apply-transform"

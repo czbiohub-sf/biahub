@@ -88,7 +88,7 @@ def test_register_config_converts_to_a_single_inverse_matrix():
         source_channel_names=["GFP", "mCherry"],
         target_channel_name="Phase3D",
         affine_transform_zyx=INVERSE.tolist(),
-        keep_overhang=True,
+        keep_overhang=False,
     )
     unified, notes = convert_settings(legacy)
     assert isinstance(unified, TransformSettings)
@@ -98,7 +98,7 @@ def test_register_config_converts_to_a_single_inverse_matrix():
         unified.moving_channels == ["GFP", "mCherry"]
         and unified.reference_channel == "Phase3D"
     )
-    assert any("--keep-overhang" in n for n in notes)
+    assert any("--crop-to-overlap" in n for n in notes)
     np.testing.assert_allclose(unified.matrix_for(0, "forward")[:3, 3], [-2, 3, -4])
 
 

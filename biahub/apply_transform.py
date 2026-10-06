@@ -2,9 +2,10 @@
 
 Replaces `register` (one transform, source onto a target store) and `stabilize` (one
 transform per timepoint, a store onto itself). The output canvas is decided once, before
-the output store is allocated: the largest box inside the overlap of the warped source
-and the reference, intersected over every timepoint's transform -- or, with
-`keep_overhang`, the reference grid as is.
+the output store is allocated: by default the reference grid as is (`keep_overhang`), so
+one wrong transform cannot shrink every timepoint's field of view; or, cropped to the
+overlap, the largest box inside the overlap of the warped source and the reference,
+intersected over every timepoint's transform.
 """
 
 from __future__ import annotations
@@ -125,7 +126,7 @@ def _mask_box(
     if not mask.any():
         raise click.UsageError(
             "the transform leaves no overlapping region between source and target; "
-            "use keep_overhang: true or check the transform"
+            "drop --crop-to-overlap or check the transform"
         )
     z, y, x = largest_box(mask)
     return tuple(
@@ -174,7 +175,7 @@ def canvas(
     if mask is None or not mask.any():
         raise click.UsageError(
             "the transforms share no overlapping region across timepoints; "
-            "use keep_overhang: true or check the transforms"
+            "drop --crop-to-overlap or check the transforms"
         )
     return _mask_box(mask, target_shape_zyx, downsample)
 
@@ -213,7 +214,7 @@ def apply_transform(
     output_dirpath: Path,
     reference_position_dirpaths: list[Path] | None = None,
     time_indices: int | list[int] | str = "all",
-    keep_overhang: bool = False,
+    keep_overhang: bool = True,
     interpolation: str = "linear",
     output_ome_zarr_version: str | None = None,
     sbatch_filepath: str | None = None,
@@ -235,10 +236,10 @@ def apply_transform(
     reference channels copied plus the transformed moving channels (registration). Without:
     the moving channels are transformed onto their own grid (stabilization). Each timepoint
     takes its own entry's matrix (`TransformSettings.matrix_for`); a series-wide entry
-    applies to all. The canvas is the largest box inside the overlap shared by every
-    transform in the file at the chosen timepoints -- all positions, not only the ones
-    applied, so each position can be written by its own task -- or the full reference grid
-    with `keep_overhang`.
+    applies to all. The canvas is the full reference grid (`keep_overhang`, the default),
+    or else the largest box inside the overlap shared by every transform in the file at the
+    chosen timepoints -- all positions, not only the ones applied, so each position can be
+    written by its own task.
 
     `init_only` creates the output plate and prints `RESOURCES:` (one position's task)
     without writing data; a later call for some positions writes into it. `resume` skips
@@ -492,10 +493,11 @@ def apply_transform(
     help="Timepoints to write: 'all', one index, or a comma-separated list (e.g. 0,82,239).",
 )
 @click.option(
-    "--keep-overhang",
-    is_flag=True,
-    default=False,
-    help="Keep the full reference grid instead of cropping to the overlap shared by the applied transforms.",
+    "--keep-overhang/--crop-to-overlap",
+    default=True,
+    show_default=True,
+    help="Keep the full reference grid, or crop to the largest box every transform in the "
+    "file covers (one wrong transform can shrink that box for every timepoint).",
 )
 @click.option(
     "--interpolation",
@@ -540,8 +542,8 @@ def apply_transform_cli(
     """Apply a transform series to positions -- one matrix for all timepoints or one per timepoint.
 
     Takes the `TransformSettings` file written by `estimate-transform`. How it is applied
-    is decided here, not in the file: which timepoints, the canvas (overlap shared by the
-    applied transforms, or `--keep-overhang` for the full reference grid), the
+    is decided here, not in the file: which timepoints, the canvas (the full reference
+    grid, or `--crop-to-overlap` for the box every transform covers), the
     interpolation, the output OME-Zarr version, and which moving channels are
     transformed (`--channels`; default all of them, except that a channel the reference
     store also has is copied unless the file names it in `moving_channels`).

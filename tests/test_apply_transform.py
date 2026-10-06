@@ -96,7 +96,7 @@ def test_apply_transform_stabilizes_every_channel_with_per_timepoint_matrices(
     )
     output = tmp_path / "out.zarr"
 
-    apply_transform([position], config, output, cluster="debug")
+    apply_transform([position], config, output, keep_overhang=False, cluster="debug")
 
     with open_ome_zarr(output / "A" / "1" / "0", mode="r") as out:
         assert out.channel_names == ["GFP", "Phase3D"], (
@@ -622,14 +622,23 @@ def test_init_then_one_position_per_task_writes_what_one_call_writes(
 ):
     positions, config = two_position_stabilization
     one_call = tmp_path / "one.zarr"
-    apply_transform(positions, config, one_call, cluster="debug")
+    apply_transform(positions, config, one_call, keep_overhang=False, cluster="debug")
 
     by_position = tmp_path / "steps.zarr"
     runner = CliRunner()
     paths = [str(p) for p in positions]
     init = runner.invoke(
         apply_transform_cli,
-        ["--init", "-m", *paths, "-c", str(config), "-o", str(by_position)],
+        [
+            "--init",
+            "--crop-to-overlap",
+            "-m",
+            *paths,
+            "-c",
+            str(config),
+            "-o",
+            str(by_position),
+        ],
     )
     assert init.exit_code == 0, init.output
     assert any(line.startswith("RESOURCES:") for line in init.output.splitlines())
@@ -637,7 +646,17 @@ def test_init_then_one_position_per_task_writes_what_one_call_writes(
     for path in paths:
         result = runner.invoke(
             apply_transform_cli,
-            ["--cluster", "debug", "-m", path, "-c", str(config), "-o", str(by_position)],
+            [
+                "--cluster",
+                "debug",
+                "--crop-to-overlap",
+                "-m",
+                path,
+                "-c",
+                str(config),
+                "-o",
+                str(by_position),
+            ],
         )
         assert result.exit_code == 0, result.output
 
@@ -653,8 +672,12 @@ def test_the_canvas_does_not_depend_on_the_positions_applied(
     # The canvas is the overlap of every transform in the file, so a task applying one
     # position writes into the same grid --init created for all of them.
     positions, config = two_position_stabilization
-    apply_transform(positions, config, tmp_path / "all.zarr", cluster="debug")
-    apply_transform(positions[1:], config, tmp_path / "one.zarr", cluster="debug")
+    apply_transform(
+        positions, config, tmp_path / "all.zarr", keep_overhang=False, cluster="debug"
+    )
+    apply_transform(
+        positions[1:], config, tmp_path / "one.zarr", keep_overhang=False, cluster="debug"
+    )
     np.testing.assert_array_equal(
         _read(tmp_path / "one.zarr")["1"], _read(tmp_path / "all.zarr")["1"]
     )
@@ -694,3 +717,14 @@ def test_resources_are_sized_from_the_timepoints_written(
         positions[:1], config, tmp_path / "out.zarr", time_indices=[0], init_only=True
     )
     assert shapes[-1][0] == 1  # one timepoint written, not the store's 3
+
+
+def test_the_full_reference_grid_is_kept_by_default(two_position_stabilization, tmp_path):
+    # One wrong transform must not shrink every timepoint's field of view unless asked.
+    positions, config = two_position_stabilization
+    apply_transform(positions, config, tmp_path / "kept.zarr", cluster="debug")
+    apply_transform(
+        positions, config, tmp_path / "cropped.zarr", keep_overhang=False, cluster="debug"
+    )
+    assert _read(tmp_path / "kept.zarr")["0"].shape[-3:] == (16, 32, 32)
+    assert _read(tmp_path / "cropped.zarr")["0"].shape[-2] < 32

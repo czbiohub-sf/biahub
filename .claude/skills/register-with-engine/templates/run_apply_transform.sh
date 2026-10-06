@@ -18,7 +18,7 @@ REFERENCE="/path/to/reconstruct.zarr/*/*/*"    # leave empty to stabilize
 TRANSFORMS=./transforms.yml
 OUTPUT=/path/to/registered.zarr
 CHANNELS=()                                    # e.g. ("GFP EX488 EM525-45"); empty = all
-KEEP_OVERHANG=false                            # true: full reference grid instead of the overlap
+CROP_TO_OVERLAP=false                          # true: crop to the box every transform covers
 SBATCH=""                                      # optional sbatch file with a time limit
 
 source "$BIAHUB/.venv/bin/activate"
@@ -26,7 +26,7 @@ source "$BIAHUB/.venv/bin/activate"
 args=(-m $MOVING -c "$TRANSFORMS" -o "$OUTPUT" --cluster slurm --monitor)
 [[ -n "$REFERENCE" ]] && args+=(-r $REFERENCE)
 for channel in "${CHANNELS[@]}"; do args+=(--channels "$channel"); done
-[[ "$KEEP_OVERHANG" == true ]] && args+=(--keep-overhang)
+[[ "$CROP_TO_OVERLAP" == true ]] && args+=(--crop-to-overlap)
 [[ -n "$SBATCH" ]] && args+=(-sb "$SBATCH")
 
 biahub apply-transform "${args[@]}" "$@"

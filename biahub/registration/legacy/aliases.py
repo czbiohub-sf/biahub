@@ -240,7 +240,8 @@ def register_alias(
         output_dirpath,
         reference_position_dirpaths=target_position_dirpaths,
         time_indices=options.get("time_indices", "all"),
-        keep_overhang=options.get("keep_overhang", False),
+        # a legacy config keeps its own (register cropped by default); else the new default
+        keep_overhang=options.get("keep_overhang", True),
         interpolation=options.get("interpolation", "linear"),
         sbatch_filepath=sbatch_filepath,
         cluster="local" if local else "slurm",
