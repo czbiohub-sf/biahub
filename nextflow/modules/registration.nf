@@ -26,12 +26,22 @@ include { parse_resources; slurm_logs; slurm_log_dir; retry_time; retry_memory }
 
 
 // The JSON payload of the last `PLAN:` line the CLI printed.
+//
+// JsonSlurperClassic, not JsonSlurper: the latter returns LazyMaps, which are filled
+// in on first access and are not thread-safe, and Nextflow hashes the inputs of
+// concurrent tasks that share one -- an intermittent "error while creating task
+// hash" with a corrupted map in the log.
 def parse_plan(stdout_text) {
     def matching = stdout_text.trim().readLines().findAll { line -> line.startsWith('PLAN:') }
     if (!matching) {
         error "Expected a 'PLAN:' line in estimate-transform output but none was found."
     }
-    return new groovy.json.JsonSlurper().parseText(matching.last().replace('PLAN:', '').trim())
+    return new groovy.json.JsonSlurperClassic().parseText(matching.last().replace('PLAN:', '').trim())
+}
+
+// One task's resources as a plain map of ints, the shape parse_resources returns.
+def task_resources(res) {
+    return [cpus: res.cpus as int, mem_gb: res.mem_gb as int, time_minutes: res.time_minutes as int]
 }
 
 // `-r <reference store>/<positions>` for a cross registration; nothing for a
@@ -296,8 +306,8 @@ workflow estimate_transform_run_wf {
         .flatMap { p, _gate ->
             p.positions.collectMany { pos ->
                 p.propagated
-                    ? [[pos, -1, p.resources.estimate]]
-                    : p.time_indices.collect { t -> [pos, t, p.resources.estimate] }
+                    ? [[pos, -1, task_resources(p.resources.estimate)]]
+                    : p.time_indices.collect { t -> [pos, t, task_resources(p.resources.estimate)] }
             }
         }
     estimated = estimate_timepoints(
@@ -314,8 +324,8 @@ workflow estimate_transform_run_wf {
         .combine(plan)
         .flatMap { pos, stdout_text, p ->
             def f = parse_plan(stdout_text)[pos]
-            f.repair.collect { t -> ['repair', pos, t, p.resources.repair] } +
-                f.sweep.collect { t -> ['sweep', pos, t, p.resources.sweep] }
+            f.repair.collect { t -> ['repair', pos, t, task_resources(p.resources.repair)] } +
+                f.sweep.collect { t -> ['sweep', pos, t, task_resources(p.resources.sweep)] }
         }
     refined = refine_timepoint(
         refine_items, moving_zarr, reference_zarr, positions, config, transforms

@@ -589,6 +589,10 @@ def test_estimate_transform_fallback_settings_reach_flagging_and_repair(
 @pytest.fixture
 def defocusing_plate(tmp_path):
     """One channel whose in-focus plane drifts by (1 slice, 2 rows, -3 columns) per timepoint."""
+    return _write_defocusing_plate(tmp_path)
+
+
+def _write_defocusing_plate(tmp_path):
     from iohub.ngff.models import TransformationMeta
     from scipy.ndimage import gaussian_filter
 
