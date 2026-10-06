@@ -11,6 +11,10 @@ Two problems this module exists to solve, both observed in one overnight run:
 
 ``cellpose_device`` addresses the first, ``warm_cellpose_weights`` (once, on the
 head node) and ``stage_cellpose_weights`` (per worker) the second.
+
+A third: cellpose 4 ignores ``model_type`` and falls back to ``cpsam_v2`` with only a
+log warning when ``pretrained_model`` names a model it does not know.
+``load_cellpose_model`` refuses unknown names instead.
 """
 
 import getpass
@@ -167,7 +171,35 @@ def stage_cellpose_weights() -> Path | None:
     return dest
 
 
-def warm_cellpose_weights() -> Path | None:
+def load_cellpose_model(pretrained_model: str, device: torch.device):
+    """Build a cellpose 4 model, failing on a model cellpose cannot find.
+
+    ``pretrained_model`` is a built-in name (``cpsam_v2``, ``cpsam``, ``cpdino``,
+    ``cpdino-vitb``), a user model installed through the cellpose GUI, or a path to
+    weights. Cellpose itself would quietly substitute ``cpsam_v2`` for any other value,
+    which is how ``model_type: nuclei`` ran Cellpose-SAM without anyone noticing.
+
+    Call ``stage_cellpose_weights`` first: this imports ``cellpose.models``.
+    """
+    from cellpose import models
+
+    if not Path(pretrained_model).exists():
+        known = [*models.MODEL_NAMES, *models.get_user_models()]
+        if pretrained_model not in known:
+            raise ValueError(
+                f"Unknown cellpose model {pretrained_model!r}: not a file and not one of "
+                f"{known}. Cellpose 4 dropped the cellpose 3 models (nuclei, cyto3, ...)."
+            )
+
+    # device overrides gpu and skips cellpose's own CPU-falling-back probe.
+    model = models.CellposeModel(
+        pretrained_model=pretrained_model, gpu=device.type != "cpu", device=device
+    )
+    click.echo(f"cellpose model: {model.pretrained_model} on {model.device}")
+    return model
+
+
+def warm_cellpose_weights(pretrained_model: str = "cpsam_v2") -> Path | None:
     """Ensure the shared weights cache is populated, downloading it if it is not.
 
     Meant for a step's ``--init``, which runs once on the head node before the
@@ -195,7 +227,11 @@ def warm_cellpose_weights() -> Path | None:
 
         # gpu=False: --init runs on the head node, which has no GPU. Only the weights
         # matter here, and they are the same either way.
-        weights = Path(cp_models.CellposeModel(gpu=False).pretrained_model)
+        weights = Path(
+            cp_models.CellposeModel(
+                gpu=False, pretrained_model=pretrained_model
+            ).pretrained_model
+        )
     except Exception as exc:
         logger.warning("Could not warm the cellpose weights cache in %s: %r", models_dir, exc)
         return None
