@@ -1379,10 +1379,17 @@ MAX_MINUTES = 2880
 
 
 def _propagation_minutes(n_timepoints: int) -> int:
-    """Return the sequential job's budget for this many timepoints, within the partition."""
-    return min(
-        MAX_MINUTES, max(ESTIMATE_MINUTES, PROPAGATION_MINUTES_PER_TIMEPOINT * n_timepoints)
+    """Return the sequential job's budget for this many timepoints, within the partition.
+
+    As every step sizes its time: `estimate_resources` counts the ZYX volumes processed
+    (one channel per timepoint) times the step's calibrated minutes per volume.
+    """
+    time_minutes, _, _ = estimate_resources(
+        shape=(n_timepoints, 1, 1, 1, 1),
+        time_multiplier=PROPAGATION_MINUTES_PER_TIMEPOINT,
+        min_time_minutes=ESTIMATE_MINUTES,
     )
+    return min(MAX_MINUTES, time_minutes)
 
 
 def _run_propagated(
