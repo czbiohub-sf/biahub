@@ -68,6 +68,26 @@ def _converted_estimate_config(config_filepath: Path, next_to: Path) -> Path:
     return path
 
 
+def _stabilization_positions(config_filepath: Path, positions: list) -> list:
+    """Pick the positions legacy estimate-stabilization estimated on.
+
+    Beads: the first one (the beads FOV), into one shared file. The other methods: every
+    position except the methods' `skip_beads_fov` (matched as a substring of the path).
+    """
+    legacy = load_legacy_settings(config_filepath)
+    if legacy.stabilization_method == "beads":
+        return list(positions[:1])
+    if legacy.stabilization_method == "phase-cross-corr":
+        blocks = (legacy.phase_cross_corr_settings,)
+    else:
+        blocks = (legacy.focus_finding_settings, legacy.stack_reg_settings)
+    skips = {b.skip_beads_fov for b in blocks if b is not None and b.skip_beads_fov != "0"}
+    kept = [p for p in positions if not any(skip in str(p) for skip in skips)]
+    if len(kept) < len(positions):
+        click.echo(f"  note: skipping the beads FOV {sorted(skips)}", err=True)
+    return kept
+
+
 def _transforms_config(config_filepaths: list[Path], next_to: Path) -> tuple[Path, dict]:
     """Return a unified transforms file for register / stabilize and the legacy apply options.
 
@@ -126,11 +146,12 @@ def estimate_registration_alias(
             err=True,
         )
     output = Path(output_filepath)
+    # legacy estimate-registration read only the first source and target position
     estimate_transform(
-        source_position_dirpaths,
+        source_position_dirpaths[:1],
         _converted_estimate_config(config_filepath, output),
         output,
-        reference_position_dirpaths=target_position_dirpaths,
+        reference_position_dirpaths=target_position_dirpaths[:1],
         sbatch_filepath=sbatch_filepath,
         cluster="local" if local else "slurm",
     )
@@ -149,7 +170,7 @@ def estimate_stabilization_alias(
     _warn("estimate-stabilization", "estimate-transform")
     output = Path(output_dirpath) / "transforms.yml"
     estimate_transform(
-        input_position_dirpaths,
+        _stabilization_positions(config_filepath, input_position_dirpaths),
         _converted_estimate_config(config_filepath, output),
         output,
         sbatch_filepath=sbatch_filepath,

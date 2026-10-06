@@ -6,11 +6,14 @@ become a `TransformSettings` for `apply-transform`. The retired schemas are defi
 and nowhere else: the rest of biahub reads only the unified models, and its loaders point
 at this command when they meet a legacy file.
 
+`use_prev_t_transform` becomes `transform.seed_from: previous_timepoint` for beads, the
+only method that read it.
+
 What has no equivalent and is dropped, with a note printed at conversion time:
-`use_prev_t_transform` (timepoints are estimated independently; neighbours enter through
-the repair candidates), `eval_transform_settings` (the engine flags and repairs outlying
-timepoints instead of smoothing the series afterwards), `average_across_wells` and
-`skip_beads_fov` (per-plate orchestration, not part of the estimate).
+`eval_transform_settings` (the engine flags and repairs outlying timepoints instead of
+smoothing the series afterwards), `average_across_wells` and `skip_beads_fov`
+(per-plate orchestration, not part of the estimate; the deprecated
+`estimate-stabilization` alias still leaves the beads FOV out).
 """
 
 from __future__ import annotations
@@ -272,7 +275,7 @@ def estimate_settings_from_legacy(
         ):
             notes.append(
                 "average_across_wells / skip_beads_fov dropped: per-plate orchestration, "
-                "not part of the estimate"
+                "not part of the estimate (leave the beads FOV out of -m)"
             )
     elif method == "phase-cross-corr" and legacy.phase_cross_corr_settings is not None:
         reference = legacy.phase_cross_corr_settings.t_reference

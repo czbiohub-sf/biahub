@@ -210,3 +210,86 @@ def test_stabilize_alias_applies_a_legacy_stabilization_config(drifting_plate, t
 
     assert result.exit_code == 0, result.output
     assert "DeprecationWarning" in result.output and (output / "A" / "1" / "0").exists()
+
+
+@pytest.fixture
+def three_positions(tmp_path):
+    """A plate with positions A/1/0 (beads), A/1/1 and A/2/0 (cells)."""
+    data = np.zeros((1, 2, 4, 8, 8), dtype=np.float32)
+    path = tmp_path / "plate.zarr"
+    with open_ome_zarr(path, layout="hcs", mode="w", channel_names=list(CHANNELS)) as plate:
+        for row, col, fov in (("A", "1", "0"), ("A", "1", "1"), ("A", "2", "0")):
+            plate.create_position(row, col, fov)["0"] = data
+    return [path / "A" / "1" / "0", path / "A" / "1" / "1", path / "A" / "2" / "0"]
+
+
+@pytest.fixture
+def estimated_positions(monkeypatch):
+    """Record the positions each alias hands to estimate-transform, without running it."""
+    calls = []
+
+    def record(moving, config, output, reference_position_dirpaths=None, **kwargs):
+        calls.append(
+            {
+                "moving": [str(p) for p in moving],
+                "reference": [str(p) for p in reference_position_dirpaths or []],
+            }
+        )
+
+    monkeypatch.setattr("biahub.registration.legacy.aliases.estimate_transform", record)
+    return calls
+
+
+def test_estimate_registration_alias_estimates_on_the_first_position_only(
+    three_positions, estimated_positions, tmp_path
+):
+    # Legacy estimate-registration read only the first source and target position.
+    config = _legacy_registration_config(tmp_path / "estimate-registration.yml")
+    paths = [str(p) for p in three_positions]
+    result = CliRunner().invoke(
+        cli,
+        ["estimate-registration", "-s", *paths, "-t", *paths, "-c", str(config)]
+        + ["-o", str(tmp_path / "registration.yml")],
+    )
+    assert result.exit_code == 0, result.output
+    assert estimated_positions == [{"moving": paths[:1], "reference": paths[:1]}]
+
+
+@pytest.mark.parametrize(
+    "method, block, expected",
+    [
+        # beads: the beads FOV only (the first position), one shared transforms file
+        ("beads", {}, [0]),
+        # the others: every position except skip_beads_fov (a substring of the path)
+        (
+            "phase-cross-corr",
+            {"phase_cross_corr_settings": {"skip_beads_fov": "A/1/0"}},
+            [1, 2],
+        ),
+        ("focus-finding", {"focus_finding_settings": {"skip_beads_fov": "A/1/0"}}, [1, 2]),
+        ("focus-finding", {"stack_reg_settings": {"skip_beads_fov": "A/1/0"}}, [1, 2]),
+        ("focus-finding", {}, [0, 1, 2]),
+    ],
+)
+def test_estimate_stabilization_alias_picks_positions_as_legacy_did(
+    three_positions, estimated_positions, tmp_path, method, block, expected
+):
+    config = tmp_path / "estimate-stabilization.yml"
+    config.write_text(
+        yaml.safe_dump(
+            {
+                "stabilization_estimation_channel": "GFP",
+                "stabilization_channels": ["GFP"],
+                "stabilization_type": "xyz",
+                "stabilization_method": method,
+                **block,
+            }
+        )
+    )
+    paths = [str(p) for p in three_positions]
+    result = CliRunner().invoke(
+        cli,
+        ["estimate-stabilization", "-i", *paths, "-c", str(config), "-o", str(tmp_path / "s")],
+    )
+    assert result.exit_code == 0, result.output
+    assert estimated_positions[0]["moving"] == [paths[i] for i in expected]
