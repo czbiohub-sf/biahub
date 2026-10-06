@@ -71,6 +71,10 @@ process run_track {
         -o "${output_zarr}" \
         -c "${config}" \
         --input-images-path "${input_images_zarr}"
+    # Ultrack's SQLite database is created 0644, and under the project dirs'
+    # default ACL the group mask follows that mode — so the group can't write
+    # the FOV's data.db. Grant it explicitly; -f because only the owner can.
+    chmod -Rf g+w "\$(dirname "${output_zarr}")/\$(basename "${output_zarr}" .zarr)_config_tracking/${position.replace('/', '_')}" || true
     """
 }
 
