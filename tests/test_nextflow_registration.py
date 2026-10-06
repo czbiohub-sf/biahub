@@ -271,3 +271,39 @@ def test_registration_nf_resolves_relative_inputs_and_wants_an_absolute_output(t
     )
     assert result.returncode != 0
     assert "--output must be an absolute path" in result.stdout + result.stderr
+
+
+def test_registration_nf_reruns_when_a_file_is_rewritten_in_place(tmp_path):
+    # Nextflow caches tasks by their inputs; a file's name alone would let -resume reuse
+    # tasks after the file was rewritten (e.g. by substitute-transforms -o <same file>).
+    from biahub.settings import TransformEntry, TransformSettings
+
+    plate = _drifting_plate(tmp_path)
+    store = plate.parents[2]
+    transforms = tmp_path / "final.yml"
+
+    def write(dy):
+        matrix = np.eye(4)
+        matrix[1, 3] = dy
+        model_to_yaml(
+            TransformSettings(
+                direction="forward",
+                moving_channels=["GFP"],
+                transforms=[TransformEntry(matrix=matrix.tolist())],
+            ),
+            transforms,
+        )
+
+    def run():
+        _nextflow(
+            tmp_path,
+            "--moving", store, "--transforms", transforms, "--output", tmp_path / "run",
+            "-resume",
+        )  # fmt: skip
+        return _data(tmp_path / "run" / "data.zarr" / "A" / "1" / "0")[1]
+
+    write(0.0)
+    first = run()
+    write(3.0)  # same path, new contents
+    second = run()
+    assert not np.array_equal(first, second)

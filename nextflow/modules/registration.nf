@@ -17,6 +17,12 @@
 // the timepoints it already finished -- what matters for the sequential task on the
 // preemptible partition.
 //
+// CACHE KEYS ON CONTENT, NOT NAMES. Nextflow caches a task by its inputs, and a path
+// passed as `val` is just a string: a config or transforms file rewritten in place (e.g.
+// `substitute-transforms -o <same file>`) would let -resume reuse every task. So the
+// estimate tasks take the config's content hash, and the apply tasks the transforms
+// file's (finalize prints the hash of the file it writes).
+//
 // apply-transform follows deskew: `--init` creates the output plate and prints
 // RESOURCES for one position's task; each task writes one position into it. Its
 // init reads the transforms file, so it runs after estimation, not in an up-front
@@ -71,6 +77,7 @@ process init_estimate_transform {
     val reference_zarr
     val positions
     val config
+    val config_hash
     val transforms
     val trigger
 
@@ -102,6 +109,7 @@ process estimate_timepoints {
     val reference_zarr
     val positions
     val config
+    val config_hash
     val transforms
 
     output:
@@ -122,6 +130,7 @@ process flag_position {
     val reference_zarr
     val positions
     val config
+    val config_hash
     val transforms
 
     output:
@@ -151,6 +160,7 @@ process refine_timepoint {
     val reference_zarr
     val positions
     val config
+    val config_hash
     val transforms
 
     output:
@@ -169,17 +179,20 @@ process finalize_estimate_transform {
     val reference_zarr
     val positions
     val config
+    val config_hash
     val transforms
 
     output:
-    val transforms
+    stdout
 
     script:
+    // the last line is the written file's content hash, for the apply tasks' cache key
     """
     biahub estimate-transform --step finalize \\
         -m "${moving_zarr}"/${positions} ${reference_arg(reference_zarr, positions)} \\
         -c "${config}" \\
         -o "${transforms}"
+    sha256sum "${transforms}" | cut -d' ' -f1
     """
 }
 
@@ -192,9 +205,9 @@ process init_apply_transform {
     val reference_zarr
     val positions
     val transforms
+    val transforms_hash
     val output_zarr
     val extra_args
-    val trigger
 
     output:
     stdout
@@ -223,6 +236,7 @@ process run_apply_transform {
     val reference_zarr
     val positions
     val transforms
+    val transforms_hash
     val output_zarr
     val extra_args
 
@@ -250,6 +264,7 @@ process run_apply_transform {
 //   positions       position glob to estimate on, e.g. 'C/1/000000' (one shared
 //                   transform list, e.g. the beads well) or '*/*/*' (one list each)
 //   config          estimate-transform settings YAML
+//   config_hash     its content hash (the tasks' cache key; see the header)
 //   transforms      the transforms file to write
 //   trigger         gating channel -- init starts once this emits
 // emit:
@@ -260,12 +275,14 @@ workflow estimate_transform_init_wf {
     reference_zarr
     positions
     config
+    config_hash
     transforms
     trigger
 
     main:
     init_out = init_estimate_transform(
-        moving_zarr, reference_zarr, positions, config, transforms, trigger.collect().map { 'done' }
+        moving_zarr, reference_zarr, positions, config, config_hash, transforms,
+        trigger.collect().map { 'done' }
     )
     plan = init_out.map { stdout_text ->
         def p = parse_plan(stdout_text)
@@ -285,10 +302,10 @@ workflow estimate_transform_init_wf {
 // Estimate every position's timepoints, flag, repair / sweep, and write the file.
 //
 // take:
-//   plan, moving_zarr, reference_zarr, positions, config, transforms  as above
+//   plan, moving_zarr, reference_zarr, positions, config, config_hash, transforms  as above
 //   prev_done   gating channel -- estimation starts once this emits
 // emit:
-//   done        the transforms file, once written
+//   done        the written transforms file's content hash (the apply tasks' cache key)
 workflow estimate_transform_run_wf {
     take:
     plan
@@ -296,6 +313,7 @@ workflow estimate_transform_run_wf {
     reference_zarr
     positions
     config
+    config_hash
     transforms
     prev_done
 
@@ -311,14 +329,16 @@ workflow estimate_transform_run_wf {
             }
         }
     estimated = estimate_timepoints(
-        estimate_items, moving_zarr, reference_zarr, positions, config, transforms
+        estimate_items, moving_zarr, reference_zarr, positions, config, config_hash, transforms
     ) | collect
 
     // Flagging reads the whole run's scores, so it waits for every estimate.
     to_flag = plan
         .combine(estimated.map { 'done' })
         .flatMap { p, _gate -> p.positions }
-    flags = flag_position(to_flag, moving_zarr, reference_zarr, positions, config, transforms)
+    flags = flag_position(
+        to_flag, moving_zarr, reference_zarr, positions, config, config_hash, transforms
+    )
 
     refine_items = flags
         .combine(plan)
@@ -328,7 +348,7 @@ workflow estimate_transform_run_wf {
                 f.sweep.collect { t -> ['sweep', pos, t, task_resources(p.resources.sweep)] }
         }
     refined = refine_timepoint(
-        refine_items, moving_zarr, reference_zarr, positions, config, transforms
+        refine_items, moving_zarr, reference_zarr, positions, config, config_hash, transforms
     )
 
     // Finalize after every position is flagged and every repair / sweep is done
@@ -337,11 +357,11 @@ workflow estimate_transform_run_wf {
         .combine(refined.collect().ifEmpty(['none']).map { 'refined' })
         .map { _flagged, _refined -> 'done' }
     written = finalize_estimate_transform(
-        gate, moving_zarr, reference_zarr, positions, config, transforms
+        gate, moving_zarr, reference_zarr, positions, config, config_hash, transforms
     )
 
     emit:
-    done = written
+    done = written.map { stdout_text -> stdout_text.trim().readLines().last().trim() }
 }
 
 
@@ -350,10 +370,10 @@ workflow estimate_transform_run_wf {
 // take:
 //   moving_zarr, reference_zarr  as above ('' reference: stabilization)
 //   positions     position glob to apply to, e.g. '*/*/*'
-//   transforms    the transforms file
-//   output_zarr   the output plate
-//   extra_args    further apply-transform options (e.g. '--crop-to-overlap')
-//   trigger       gating channel -- init starts once this emits
+//   transforms       the transforms file
+//   transforms_hash  its content hash, once it exists (the cache key; see the header)
+//   output_zarr      the output plate
+//   extra_args       further apply-transform options (e.g. '--crop-to-overlap')
 // emit:
 //   resources     the RESOURCES payload sizing one position's task
 //   done          fires once the output plate exists
@@ -363,14 +383,14 @@ workflow apply_transform_init_wf {
     reference_zarr
     positions
     transforms
+    transforms_hash
     output_zarr
     extra_args
-    trigger
 
     main:
     init_out = init_apply_transform(
-        moving_zarr, reference_zarr, positions, transforms, output_zarr, extra_args,
-        trigger.collect().map { 'done' }
+        moving_zarr, reference_zarr, positions, transforms, transforms_hash, output_zarr,
+        extra_args
     )
 
     emit:
@@ -383,7 +403,8 @@ workflow apply_transform_init_wf {
 //
 // take:
 //   position_keys  collected channel of the position keys to write
-//   moving_zarr, reference_zarr, positions, transforms, output_zarr, extra_args  as above
+//   moving_zarr, reference_zarr, positions, transforms, transforms_hash, output_zarr,
+//   extra_args     as above
 //   resources      RESOURCES payload from apply_transform_init_wf
 //   prev_done      gating channel -- compute starts once this emits
 workflow apply_transform_run_wf {
@@ -393,6 +414,7 @@ workflow apply_transform_run_wf {
     reference_zarr
     positions
     transforms
+    transforms_hash
     output_zarr
     extra_args
     resources
@@ -406,7 +428,8 @@ workflow apply_transform_run_wf {
         .map { pos, meta, _gate -> [pos, meta] }
 
     applied = run_apply_transform(
-        pos_meta, moving_zarr, reference_zarr, positions, transforms, output_zarr, extra_args
+        pos_meta, moving_zarr, reference_zarr, positions, transforms,
+        transforms_hash.first(), output_zarr, extra_args
     ) | collect
 
     emit:

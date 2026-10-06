@@ -82,18 +82,20 @@ workflow {
     def transforms = absolute_path(params.transforms) ?: "${out}/transforms.yml"
     def start = channel.value('start')
 
+    // Content hashes, so a file rewritten in place re-runs what reads it under -resume.
     if (params.estimate_config) {
+        def config_hash = file(estimate_config).text.md5()
         estimate_init = estimate_transform_init_wf(
-            moving, reference, params.estimate_positions, estimate_config,
+            moving, reference, params.estimate_positions, estimate_config, config_hash,
             transforms, start
         )
         estimated = estimate_transform_run_wf(
             estimate_init.plan, moving, reference, params.estimate_positions,
-            estimate_config, transforms, start
+            estimate_config, config_hash, transforms, start
         )
-        transforms_ready = estimated.done
+        transforms_hash = estimated.done
     } else {
-        transforms_ready = start
+        transforms_hash = channel.value(file(transforms).text.md5())
     }
 
     if (apply) {
@@ -111,12 +113,12 @@ workflow {
         apply_positions = collect_positions(moving)
             .map { keys -> keys.findAll { key -> matcher.matches(java.nio.file.Paths.get(key)) } }
         apply_init = apply_transform_init_wf(
-            moving, reference, params.apply_positions, transforms, output_zarr,
-            extra_args, transforms_ready
+            moving, reference, params.apply_positions, transforms, transforms_hash,
+            output_zarr, extra_args
         )
         apply_transform_run_wf(
             apply_positions, moving, reference, params.apply_positions, transforms,
-            output_zarr, extra_args, apply_init.resources, apply_init.done
+            transforms_hash, output_zarr, extra_args, apply_init.resources, apply_init.done
         )
     }
 }
