@@ -69,6 +69,10 @@ cd <OUTPUT>/<N>-assemble        # 4-assemble on a standard run
 DATASET=<DATASET> <BIAHUB>/.venv/bin/python rename_channels.py
 ```
 
+Copy the template in with `cp` then `chmod 664 rename_channels.py`, so the
+copy is group-writable like every other file the skill places in `<OUTPUT>`
+(SKILL.md §7).
+
 `nuclei` → `nuclei_prediction` bridges [biahub#288](https://github.com/czbiohub-sf/biahub/issues/288):
 `biahub virtual-stain` names outputs verbatim from `target_channel`, but the
 rest of biahub keys off the `_prediction` suffix.

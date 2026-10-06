@@ -305,9 +305,17 @@ Get explicit approval.
 mkdir -p <OUTPUT>/configs <OUTPUT>/nextflow
 cp <BIAHUB>/nextflow/configs/<family>/*.yml <BIAHUB>/nextflow/configs/<family>/*.yaml \
    <OUTPUT>/configs/
+chmod g+w <OUTPUT>/configs/*
 ```
 
 Both globs: the step configs are `.yml` and the QC configs are `.yaml`.
+
+**Every file you place in `<OUTPUT>` must be group-writable** so the rest of
+the lab can edit configs and relaunch. The project directories are setgid with
+a default ACL: setgid supplies the group, but the ACL overrides umask, so a
+copied file's group bits follow the *source* file's mode — `cp` from the repo
+(644) yields `rw-r--r--`. Hence the `chmod` after every copy. Plain `cp` only:
+`cp -p`/`-a` would also carry over the checkout's group.
 
 The run script passes all four optional configs — `--concatenate_config`,
 `--track_config`, `--qc_config` (`qc.yaml`), `--qc_track_config`
@@ -323,8 +331,9 @@ including `-resume`, and bash then tries to run the remainder as a command.
 
 Edit the copies for this dataset. Copy `templates/run_mantis_v2.sh` to
 `<OUTPUT>/run_mantis_v2.sh`, fill in `DATASET`, `DATA_DIR`, `PROJECT_DIR`,
-`BIAHUB_PROJECT`, `chmod +x`. The script stays in the output directory as the
-run's provenance record.
+`BIAHUB_PROJECT`, `chmod 775` (not `+x` — it must also be group-writable).
+The script stays in the output directory as the run's provenance record, and
+re-grants `g+w` on itself and the configs at every launch.
 
 If a plate build is needed, do it now via the **build-hcs-plate** agent
 (`caveats.md` §1) and verify the plate opens with iohub before launching.
