@@ -127,7 +127,9 @@ From `transforms.yml`, `estimate_transform_report.json` and `run_journal.json`:
 
 `--apply`: copy `templates/run_apply_transform.sh` next to the transforms file, fill it in
 and run it in tmux. With `-r` it registers every moving position onto the reference grid
-(reference channels copied, every moving channel transformed, `--channels` to pick);
+(reference channels copied, every moving channel transformed -- but a channel the
+reference store also has is copied unless it is in the file's `moving_channels`, so with
+both arms in one store only the estimated channel moves; `--channels` to pick);
 without `-r` it stabilizes each store onto its own grid. Timepoints written with a
 non-accepted transform are printed and recorded in the output metadata.
 

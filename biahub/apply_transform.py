@@ -218,15 +218,15 @@ def apply_transform(
 ) -> None:
     """Apply a `TransformSettings` series to positions.
 
-    `channels` picks which moving-store channels are transformed; by default all of them
+    `channels` picks which moving-store channels are transformed. By default all of them
     (a registration or stabilization comes from the shared optics and stage, so it holds
-    for every channel -- the file's `moving_channels` only records the channel it was
-    estimated on).
+    for every channel), except that with reference positions a channel the reference
+    store also has is copied from it unless it is one of the file's `moving_channels`
+    (so with moving and reference in one store only the estimated channels move).
 
-    With reference positions: the output lives on the reference grid and holds every
-    reference channel copied plus the file's `moving_channels` transformed from the
-    moving store (registration). Without: every channel of the moving store is
-    transformed onto its own grid (stabilization). Each timepoint takes its own entry's
+    With reference positions: the output lives on the reference grid and holds the
+    reference channels copied plus the transformed moving channels (registration).
+    Without: the moving channels are transformed onto their own grid (stabilization). Each timepoint takes its own entry's
     matrix (`TransformSettings.matrix_for`); a series-wide entry applies to all. The
     canvas is the largest box inside the overlap shared by the applied transforms, or
     the full reference grid with `keep_overhang`.
@@ -280,7 +280,27 @@ def apply_transform(
             reference_shape = tuple(reference.data.shape[-3:])
             reference_channel_names = list(reference.channel_names)
             reference_voxel_size = list(reference.scale)
-        transformed = to_transform
+        if channels is None:
+            transformed = [
+                c
+                for c in to_transform
+                if c not in reference_channel_names or c in settings.moving_channels
+            ]
+            if not transformed:
+                raise click.UsageError(
+                    f"every moving channel is also in the reference store and none is the "
+                    f"file's moving_channels {settings.moving_channels}; choose them with "
+                    f"--channels"
+                )
+        else:
+            transformed = to_transform
+            replaced = [
+                c
+                for c in transformed
+                if c in reference_channel_names and c not in settings.moving_channels
+            ]
+            if replaced:
+                click.echo(f"transforming {replaced} replaces the reference store's copy")
         # A reference channel that is also transformed is written once, by its transform job.
         copied = [c for c in reference_channel_names if c not in transformed]
         output_channel_names = reference_channel_names + [
@@ -455,7 +475,8 @@ def apply_transform(
 @click.option(
     "--channels",
     multiple=True,
-    help="Moving-store channel to transform (repeat for several); default: every channel.",
+    help="Moving-store channel to transform (repeat for several); default: every channel, "
+    "but one the reference store also has is copied unless it is in the file's moving_channels.",
 )
 @sbatch_filepath()
 @cluster()
@@ -480,7 +501,8 @@ def apply_transform_cli(
     is decided here, not in the file: which timepoints, the canvas (overlap shared by the
     applied transforms, or `--keep-overhang` for the full reference grid), the
     interpolation, the output OME-Zarr version, and which moving channels are
-    transformed (`--channels`; default all of them).
+    transformed (`--channels`; default all of them, except that a channel the reference
+    store also has is copied unless the file names it in `moving_channels`).
 
     \b
     Registration (moving channels onto the reference store's grid and channels):

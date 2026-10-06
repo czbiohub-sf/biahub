@@ -5,8 +5,9 @@
 # it is the record of how the output was produced.
 #
 # With REFERENCE set: registration -- every moving position is transformed onto the
-# reference grid; the reference channels are copied and every moving channel transformed
-# (set CHANNELS to transform only some). Without REFERENCE: stabilization -- each store is
+# reference grid; the reference channels are copied and every moving channel transformed,
+# except one the reference store also has and the file does not list in moving_channels
+# (set CHANNELS to choose). Without REFERENCE: stabilization -- each store is
 # transformed onto its own grid. Timepoints written with a non-accepted transform are
 # printed and recorded in the output metadata.
 set -euo pipefail

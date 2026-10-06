@@ -193,6 +193,78 @@ def test_apply_transform_writes_a_channel_both_copied_and_transformed_once(
     np.testing.assert_allclose(shift, [0, 4, 0], atol=0.5)  # transformed, not copied
 
 
+def test_apply_transform_copies_reference_channels_by_default(
+    structured_plate, tmp_path, capsys
+):
+    # Without --channels, a channel the reference store has is copied unless the file says
+    # it is the moving channel: the reference (Phase3D) stays put.
+    position, data = structured_plate
+    config = tmp_path / "transforms.yml"
+    model_to_yaml(
+        TransformSettings(
+            direction="forward",
+            moving_channels=["GFP"],
+            reference_channel="Phase3D",
+            transforms=[TransformEntry(matrix=_translation(0, 4, 0))],
+        ),
+        config,
+    )
+    other = tmp_path / "other.zarr"
+    with open_ome_zarr(other, layout="hcs", mode="w", channel_names=["Phase3D"]) as plate:
+        plate.create_position("A", "1", "0")["0"] = data[:, 1:]
+
+    # Moving store == reference store, and separate stores sharing a channel name.
+    for name, reference in (("same", position), ("other", other / "A" / "1" / "0")):
+        output = tmp_path / f"{name}.zarr"
+        apply_transform(
+            [position],
+            config,
+            output,
+            reference_position_dirpaths=[reference],
+            keep_overhang=True,
+            cluster="debug",
+        )
+        with open_ome_zarr(output / "A" / "1" / "0", mode="r") as out:
+            channels = list(out.channel_names)
+            result = np.asarray(out.data)
+        phase, gfp = channels.index("Phase3D"), channels.index("GFP")
+        np.testing.assert_allclose(result[:, phase], data[:, 1], atol=1e-3)  # copied
+        shift = _block_centre(result[0, gfp]) - _block_centre(data[0, 0])
+        np.testing.assert_allclose(shift, [0, 4, 0], atol=0.5)  # transformed
+    assert "replaces the reference" not in capsys.readouterr().out
+
+    # Asking for a reference channel transforms it, and says so.
+    apply_transform(
+        [position],
+        config,
+        tmp_path / "asked.zarr",
+        reference_position_dirpaths=[position],
+        keep_overhang=True,
+        cluster="debug",
+        channels=["Phase3D"],
+    )
+    assert "replaces the reference" in capsys.readouterr().out
+
+    # Nothing left to transform by default: say how to choose.
+    model_to_yaml(
+        TransformSettings(
+            direction="forward",
+            moving_channels=["mCherry"],
+            reference_channel="Phase3D",
+            transforms=[TransformEntry(matrix=_translation(0, 4, 0))],
+        ),
+        config,
+    )
+    with pytest.raises(Exception, match="--channels"):
+        apply_transform(
+            [position],
+            config,
+            tmp_path / "none.zarr",
+            reference_position_dirpaths=[position],
+            cluster="debug",
+        )
+
+
 def test_apply_transform_time_indices_subset_uses_each_timepoints_own_matrix(
     structured_plate, tmp_path
 ):

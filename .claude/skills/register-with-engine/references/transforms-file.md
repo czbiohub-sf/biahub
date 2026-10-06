@@ -20,7 +20,7 @@ the old name `pull` load as `inverse`.
 ```yaml
 direction: forward
 method: beads
-moving_channels: [mCherry EX561 EM600-37]   # the estimation channel (provenance)
+moving_channels: [mCherry EX561 EM600-37]   # the estimation channel
 reference_channel: Phase3D                   # null for stabilization
 transforms:                                  # one list shared by every position ...
   - {t: 0, matrix: [...], score: 0.71, status: accepted}
