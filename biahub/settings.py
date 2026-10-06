@@ -511,8 +511,11 @@ class ConcatenateSettings(MyBaseModel):
     # precedence, in which case the config holds only parameters.
     concat_data_paths: list[str] | None = None
     # "all" takes every time point and requires every source to have the same
-    # number; a TimeRange ({start, stop}) or a list of indices takes a subset.
-    time_indices: int | list[int] | TimeRange | Literal["all"] = "all"
+    # number. When they differ, "min" crops to the shortest source and "max"
+    # keeps the longest, leaving the missing end of the shorter ones at the
+    # fill value (0). A TimeRange ({start, stop, step}) or a list of indices
+    # takes a subset.
+    time_indices: int | list[int] | TimeRange | Literal["all", "min", "max"] = "all"
     # "all" takes every channel of every source, like time_indices. The list
     # form has one entry per source: "all" or the channel names to take.
     channel_names: Literal["all"] | list[str | list[str]] = "all"

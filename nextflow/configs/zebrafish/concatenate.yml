@@ -9,7 +9,8 @@
 #
 # `time_indices: all` requires every position of every source to have the
 # same number of time points and errors otherwise. To crop on purpose, use
-# a range: {start: 0, stop: <T>} (stop exclusive), with an optional step.
+# a range: {start: 0, stop: <T>} (stop exclusive), with an optional step, or
+# `min` for the shortest; `max` keeps the longest and pads the rest with zeros.
 time_indices: all
 channel_names: all
 chunks_czyx: [1, 16, 256, 256]

@@ -253,8 +253,8 @@ edit to both files.
 Assemble concatenates every position of the deskew, reconstruct and
 virtual-stain stores, and with `time_indices: all` (both shipped templates)
 `biahub concatenate` **refuses sources with different numbers of time
-points**: taking only the ones they share is a crop, and it no longer does that
-silently. Each step keeps a position's full T, so a mismatch in the raw store
+points**: it no longer crops or pads silently, so the choice has to be written
+into `concatenate.yml`. Each step keeps a position's full T, so a mismatch in the raw store
 reaches assemble and fails the run during the init phase. Check the raw store
 now. From the biahub checkout, with the position glob for the layout from §3:
 `'*/*/*'` for an HCS plate, `'*'` for flat positions:
@@ -288,7 +288,14 @@ offer:
   store (they stay in the intermediates), and tracking and QC see only the
   cropped range (`references/caveats.md` §5). If the user also wants to
   subsample, add `step`, e.g. `{start: 0, stop: <smallest T>, step: 2}` for
-  every other time point.
+  every other time point. (`time_indices: min` crops the same way, but the
+  range records the number in the config.)
+- **Keep every time point and pad with zeros**: `time_indices: max`. The
+  assembled store takes the longest T, and the missing end of each shorter
+  position stays at zero. Nothing is lost, but the padded frames are blank:
+  tracks end there, QC may flag them, and nothing in the store marks them as
+  padding — say which positions are padded from which time point in the plan,
+  and the assemble log lists them (`time_indices max: padding ...`).
 - **Stop and investigate** the acquisition before reconstructing.
 
 Do not pick for them, and record the choice and the reason in the plan (§6).

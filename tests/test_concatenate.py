@@ -167,6 +167,103 @@ def test_concatenate_refuses_unequal_time_points(create_custom_plate, tmp_path, 
         )
 
 
+@pytest.mark.parametrize("mode, expected_T", [("min", 4), ("max", 5)])
+def test_concatenate_uneven_time_points(
+    create_custom_plate, tmp_path, sbatch_file, mode, expected_T
+):
+    """
+    time_indices "min" crops uneven sources to the shortest; "max" keeps the
+    longest and leaves the shorter source's missing end at zero
+    """
+    plate_1_path, plate_1 = create_custom_plate(
+        tmp_path / "zarr1", position_list=_ONE_POS, channel_names=["DAPI"], time_points=5
+    )
+    plate_2_path, plate_2 = create_custom_plate(
+        tmp_path / "zarr2", position_list=_ONE_POS, channel_names=["GFP"], time_points=4
+    )
+
+    settings = ConcatenateSettings(
+        concat_data_paths=[str(plate_1_path) + "/*/*/*", str(plate_2_path) + "/*/*/*"],
+        time_indices=mode,
+    )
+    output_path = tmp_path / "output.zarr"
+    config_path = tmp_path / "concat.yml"
+    model_to_yaml(settings, config_path)
+    concatenate(
+        input_position_dirpaths=None,
+        config_filepath=config_path,
+        output_dirpath=output_path,
+        sbatch_filepath=sbatch_file,
+        cluster="debug",
+        monitor=False,
+    )
+
+    output = open_ome_zarr(output_path)["A/1/0"].data[:]
+    assert output.shape[0] == expected_T
+    np.testing.assert_array_equal(output[:, 0], plate_1["A/1/0"].data[:expected_T, 0])
+    np.testing.assert_array_equal(output[:4, 1], plate_2["A/1/0"].data[:4, 0])
+    if mode == "max":
+        assert not output[4, 1].any()
+
+
+def _plate_with_time_points(path, channel_names, time_points_per_position):
+    """An HCS plate whose positions have different numbers of time points."""
+    with open_ome_zarr(path, layout="hcs", mode="w", channel_names=channel_names) as plate:
+        for name, num_t in time_points_per_position.items():
+            plate.create_position(*name.split("/"))["0"] = np.random.randint(
+                1, 1000, size=(num_t, len(channel_names), 2, 3, 3), dtype=np.uint16
+            )
+    return open_ome_zarr(path)
+
+
+@pytest.mark.parametrize("mode, expected_T", [("min", 3), ("max", 5)])
+def test_concatenate_uneven_per_position_workers(tmp_path, sbatch_file, mode, expected_T):
+    """
+    With time_indices "min" or "max", --init sizes T over every position and
+    each per-position worker follows the plate's T rather than its own sources':
+    under "min" position A has 5 time points but the plate keeps 3, under "max"
+    every source of position B is shorter than the plate's 5
+    """
+    t_by_source = [{"A/1/0": 5, "B/1/0": 4}, {"A/1/0": 5, "B/1/0": 3}]
+    plates = [
+        _plate_with_time_points(tmp_path / f"s{i}.zarr", [name], t_by_position)
+        for i, (name, t_by_position) in enumerate(
+            zip(["DAPI", "GFP"], t_by_source, strict=True)
+        )
+    ]
+    sources = [tmp_path / "s0.zarr", tmp_path / "s1.zarr"]
+
+    config_path = tmp_path / "concat.yml"
+    model_to_yaml(ConcatenateSettings(time_indices=mode), config_path)
+    output_path = tmp_path / "output.zarr"
+    common = dict(
+        config_filepath=config_path,
+        output_dirpath=output_path,
+        sbatch_filepath=sbatch_file,
+        cluster="debug",
+        monitor=False,
+    )
+    concatenate(
+        input_position_dirpaths=[[src / "A/1/0", src / "B/1/0"] for src in sources],
+        init_only=True,
+        **common,
+    )
+    # One worker per position, given that position from every source
+    for position in ["A/1/0", "B/1/0"]:
+        concatenate(input_position_dirpaths=[[src / position] for src in sources], **common)
+
+    output_plate = open_ome_zarr(output_path)
+    for position in ["A/1/0", "B/1/0"]:
+        output = output_plate[position].data[:]
+        assert output.shape[0] == expected_T
+        for channel, plate in enumerate(plates):
+            num_t = min(plate[position].data.shape[0], expected_T)
+            np.testing.assert_array_equal(
+                output[:num_t, channel], plate[position].data[:num_t, 0]
+            )
+            assert not output[num_t:, channel].any()
+
+
 def test_concatenate_with_time_range(create_custom_plate, tmp_path, sbatch_file):
     """
     A time range crops sources of different lengths to the time points asked for

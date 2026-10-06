@@ -336,12 +336,13 @@ def _cropped_size(slice_params_zyx: list[slice]) -> tuple[int, int, int]:
 def _resolve_time_indices(
     settings: ConcatenateSettings, all_shapes: list[tuple], all_data_paths: list[Path]
 ) -> list[int]:
-    """Resolve input time indices from settings and shapes.
+    """Resolve the output plate's time points from settings and shapes.
 
     ``"all"`` means every time point of every source, so the sources must all
-    have the same number. Taking only the time points they share would drop
-    the rest of the longer sources, which is a crop and has to be asked for
-    with an explicit range or list.
+    have the same number. When they differ, the choice has to be explicit:
+    ``"min"`` crops to the shortest source, ``"max"`` keeps the longest and
+    leaves the missing end of the shorter ones unwritten (the fill value, 0),
+    and a range or list picks the time points.
 
     Raises
     ------
@@ -362,11 +363,21 @@ def _resolve_time_indices(
             )
             raise ValueError(
                 "time_indices is 'all' but the sources have different numbers of time "
-                f"points:\n{listing}\nTaking only the first {T} would drop the rest of "
-                "the longer sources. To do that on purpose, set "
-                f"time_indices: {{start: 0, stop: {T}}}."
+                f"points:\n{listing}\nSet time_indices: min to crop to the first {T}, "
+                f"or time_indices: {{start: 0, stop: {T}}} (with an optional step); or "
+                "time_indices: max to keep them all and pad the shorter sources with "
+                "zeros."
             )
         return list(range(T))
+    if settings.time_indices == "min":
+        if len(set(source_T)) > 1:
+            click.echo(
+                f"time_indices min: cropping to the shortest source's {T} time points; "
+                f"longer sources (up to {max(source_T)}) lose the rest."
+            )
+        return list(range(T))
+    if settings.time_indices == "max":
+        return list(range(max(source_T)))
     if isinstance(settings.time_indices, TimeRange):
         time_range = settings.time_indices
         time_indices = list(range(time_range.start, time_range.stop, time_range.step))
@@ -544,17 +555,36 @@ def _resolve_concatenate_inputs(
     input_time_indices = _resolve_time_indices(settings, all_shapes, all_data_paths)
 
     # A per-position worker only sees its own sources, so with time_indices
-    # "all" it cannot tell whether other positions have a different T. The
-    # plate that --init created over every position is the authority: a
-    # mismatch means the plate was not made from these sources.
+    # "all", "min" or "max" it cannot tell what T the other positions have. The
+    # plate that --init created over every position is the authority. Its own
+    # sources may have fewer time points than the plate under "max" (padded
+    # below) and more under "min"; anything else means the plate was not made
+    # from these sources.
     first_output = output_position_paths[0]
-    if settings.time_indices == "all" and first_output.is_dir():
+    if settings.time_indices in ("all", "min", "max") and first_output.is_dir():
         with open_ome_zarr(first_output, mode="r") as existing:
             plate_T = existing.data.shape[0]
-        if len(input_time_indices) != plate_T:
+        num_t = len(input_time_indices)
+        mismatch = {"all": num_t != plate_T, "min": num_t < plate_T, "max": num_t > plate_T}
+        if mismatch[settings.time_indices]:
             raise ValueError(
-                f"Sources have {len(input_time_indices)} time points but "
-                f"{output_dirpath} was created with {plate_T}."
+                f"Sources have {num_t} time points with time_indices "
+                f"{settings.time_indices} but {output_dirpath} was created with {plate_T}."
+            )
+        input_time_indices = list(range(plate_T))
+
+    # Each source position copies the plate's time points it has. Only "max"
+    # asks for more than a source may have; the rest stays at the fill value.
+    input_time_indices_list = []
+    output_time_indices_list = []
+    for path, shape in zip(all_data_paths, all_shapes, strict=True):
+        kept = [(t, i) for i, t in enumerate(input_time_indices) if t < shape[0]]
+        input_time_indices_list.append([t for t, _ in kept])
+        output_time_indices_list.append([i for _, i in kept])
+        if len(kept) < len(input_time_indices):
+            click.echo(
+                f"time_indices max: padding {path}: it has {shape[0]} of "
+                f"{len(input_time_indices)} time points, the rest stay zero."
             )
 
     # If input shapes differ but slicing is specified, inform the user
@@ -590,7 +620,8 @@ def _resolve_concatenate_inputs(
         "input_channel_idx_list": input_channel_idx_list,
         "output_channel_idx_list": output_channel_idx_list,
         "all_slicing_params": all_slicing_params,
-        "input_time_indices": input_time_indices,
+        "input_time_indices_list": input_time_indices_list,
+        "output_time_indices_list": output_time_indices_list,
         "shape": (T, C, Z, Y, X),
         "output_metadata": output_metadata,
     }
@@ -677,7 +708,6 @@ def concatenate(
 
     prep = _resolve_concatenate_inputs(settings, output_dirpath, source_groups)
     _init_output_plate(prep, settings, output_dirpath)
-    input_time_indices = prep["input_time_indices"]
 
     # Per-position resources, estimated once. Calibrated on 2026_08_11 A549
     # SEC61B (67 T x 6 C, 5-T shards): RAM tracks the worker count (~16 GB per
@@ -733,12 +763,16 @@ def concatenate(
             input_channel_idx,
             output_channel_idx,
             zyx_slicing_params,
+            input_time_indices,
+            output_time_indices,
         ) in zip(
             prep["all_data_paths"],
             prep["output_position_paths"],
             prep["input_channel_idx_list"],
             prep["output_channel_idx_list"],
             prep["all_slicing_params"],
+            prep["input_time_indices_list"],
+            prep["output_time_indices_list"],
             strict=True,
         ):
             job = executor.submit(
@@ -749,7 +783,7 @@ def concatenate(
                 input_channel_indices=input_channel_idx,
                 output_channel_indices=output_channel_idx,
                 input_time_indices=input_time_indices,
-                output_time_indices=list(range(len(input_time_indices))),
+                output_time_indices=output_time_indices,
                 num_workers=slurm_args["slurm_cpus_per_task"],
                 resume=resume,
                 resume_token=settings_fingerprint(settings),
