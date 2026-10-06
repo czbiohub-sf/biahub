@@ -15,6 +15,8 @@ Key conventions
 
 from __future__ import annotations
 
+import os
+
 import ants
 import click
 import numpy as np
@@ -32,6 +34,23 @@ DEFAULT_ANTS_KWARGS = {
     "aff_iterations": (2100, 1200, 50),
     "aff_smoothing_sigmas": (2, 1, 0),
 }
+
+
+# ANTs samples voxels at random in its affine stage (aff_random_sampling_rate): a
+# fixed seed makes a run repeatable for a given thread count.
+ANTS_RANDOM_SEED = 1  # as ANTsPy's reproducible mode; 0 would mean a random seed
+
+
+def _itk_threads() -> str:
+    """Return the threads ITK may use: the user's setting, else this task's CPUs.
+
+    ANTs parallelizes inside a task on ITK threads; left alone, ITK sizes its pool from
+    the cores it can see, which on a cluster node can exceed the CPUs reserved for the
+    task (and changes the result between machines).
+    """
+    if os.environ.get("ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS"):
+        return os.environ["ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS"]
+    return os.environ.get("SLURM_CPUS_PER_TASK") or str(len(os.sched_getaffinity(0)))
 
 
 def estimate(
@@ -71,8 +90,9 @@ def estimate(
     if ref.ndim != mov.ndim:
         raise ValueError(f"Dimension mismatch: ref.ndim={ref.ndim}, mov.ndim={mov.ndim}")
 
-    if ants_kwargs is None:
-        ants_kwargs = dict(DEFAULT_ANTS_KWARGS)
+    ants_kwargs = dict(DEFAULT_ANTS_KWARGS if ants_kwargs is None else ants_kwargs)
+    ants_kwargs.setdefault("random_seed", ANTS_RANDOM_SEED)
+    os.environ["ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS"] = _itk_threads()
 
     mov_ants = ants.from_numpy(mov)
     ref_ants = ants.from_numpy(ref)
