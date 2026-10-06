@@ -37,7 +37,7 @@
 // See the ENVIRONMENT CONTRACT note in common.nf; these tasks call `biahub` and
 // `viscy` bare, exactly like every other step.
 
-include { parse_resources; slurm_logs; slurm_log_dir; retry_time; retry_memory } from './common'
+include { parse_resources; slurm_logs; slurm_log_dir; slurm_output_readme; retry_time; retry_memory } from './common'
 
 
 process init_virtual_stain {
@@ -55,6 +55,7 @@ process init_virtual_stain {
     script:
     """
     mkdir -p "${slurm_log_dir('virtual_stain')}"
+    ${slurm_output_readme('virtual_stain', output_zarr)}
     biahub virtual-stain --init \
         -i "${input_zarr}"/*/*/* \
         -o "${output_zarr}" \
