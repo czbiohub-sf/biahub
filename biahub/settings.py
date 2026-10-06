@@ -515,7 +515,9 @@ class ConcatenateSettings(MyBaseModel):
     # keeps the longest, leaving the missing end of the shorter ones at the
     # fill value (0). A TimeRange ({start, stop, step}) or a list of indices
     # takes a subset.
-    time_indices: int | list[int] | TimeRange | Literal["all", "min", "max"] = "all"
+    time_indices: (
+        NonNegativeInt | list[NonNegativeInt] | TimeRange | Literal["all", "min", "max"]
+    ) = "all"
     # "all" takes every channel of every source, like time_indices. The list
     # form has one entry per source: "all" or the channel names to take.
     channel_names: Literal["all"] | list[str | list[str]] = "all"
