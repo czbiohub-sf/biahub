@@ -13,7 +13,11 @@ concat_data_paths:
 
 # Time indices to include in the output
 # Options:
-#   - "all": Include all time points (default)
+#   - "all": Include all time points (default). Every dataset must have the
+#     same number of time points; if they differ, concatenate errors rather
+#     than silently dropping the extra ones. Use a range to crop on purpose.
+#   - {start: 0, stop: 48}: Include time points 0 to 47 (stop is exclusive)
+#   - {start: 0, stop: 48, step: 2}: Include every other time point of 0 to 47
 #   - [0, 1, 2]: Include only specific time points
 #   - 5: Include only a single time point
 time_indices: "all"
@@ -70,7 +74,9 @@ output_ome_zarr_version: "0.4"
 
 # Whether to ensure unique position names in the output
 # Options:
-#   - false or null: Positions with the same name will overwrite each other
+#   - false or null: Positions with the same name are merged into one output
+#     position. Datasets may share a channel name only if they write different
+#     positions; writing the same channel of the same position twice is an error.
 #   - true: Ensure unique position names by adding suffixes (e.g., A/1d1/0)
 ensure_unique_positions: null
 # EXAMPLE USE CASES:

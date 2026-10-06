@@ -248,6 +248,54 @@ not `deskew.yml` — the deskew values come from the acquisition (§5, caveats
 §3). If the deskew geometry differs from the template, that is a per-dataset
 edit to both files.
 
+### 5c. Check that every position has the same number of time points
+
+Assemble concatenates every position of the deskew, reconstruct and
+virtual-stain stores, and with `time_indices: all` (both shipped templates)
+`biahub concatenate` **refuses sources with different numbers of time
+points**: taking only the ones they share is a crop, and it no longer does that
+silently. Each step keeps a position's full T, so a mismatch in the raw store
+reaches assemble and fails the run during the init phase. Check the raw store
+now. From the biahub checkout, with the position glob for the layout from §3:
+`'*/*/*'` for an HCS plate, `'*'` for flat positions:
+
+```bash
+.venv/bin/python - <RAW_STORE.zarr> '<POSITION_GLOB>' <<'EOF'
+import collections, json, pathlib, sys
+store, pattern = pathlib.Path(sys.argv[1]), sys.argv[2]
+by_t = collections.defaultdict(list)
+for meta in sorted(store.glob(f"{pattern}/0/zarr.json")):
+    by_t[json.loads(meta.read_text())["shape"][0]].append(str(meta.parent.parent.relative_to(store)))
+for t, positions in sorted(by_t.items()):
+    print(f"T={t}: {len(positions)} positions, e.g. {', '.join(positions[:3])}")
+sys.exit(len(by_t) != 1)
+EOF
+```
+
+It exits 1 if the positions disagree, or if none were found (check the glob).
+**If they disagree, stop and ask the user.** A short position usually means the
+acquisition was stopped partway through a time point. Show the counts per T and
+offer:
+
+- **Crop in time to what every position has.** In
+  `<OUTPUT>/configs/concatenate.yml`, replace `time_indices: all` with
+
+  ```yaml
+  time_indices: {start: 0, stop: <smallest T>}   # stop is exclusive
+  ```
+
+  The extra time points of the longer positions are left out of the assembled
+  store (they stay in the intermediates), and tracking and QC see only the
+  cropped range (`references/caveats.md` §5). If the user also wants to
+  subsample, add `step`, e.g. `{start: 0, stop: <smallest T>, step: 2}` for
+  every other time point.
+- **Stop and investigate** the acquisition before reconstructing.
+
+Do not pick for them, and record the choice and the reason in the plan (§6).
+The same refusal at assemble's init, `time_indices is 'all' but the sources
+have different numbers of time points`, means this check was skipped or the
+stores no longer match the raw data; it is answered the same way.
+
 ## 6. Present the plan
 
 Do not run anything yet. Show the user:
@@ -256,7 +304,8 @@ Do not run anything yet. Show the user:
    state. Make anything other than *clean `main`, up to date* a visible caveat
    with a recommendation.
 2. Resolved input store, its size, position count, channel names, and
-   `(T, C, Z, Y, X)` shape.
+   `(T, C, Z, Y, X)` shape. Say that every position has the same T (§5c), or
+   how many differ and the `time_indices` the user chose for that.
 3. Whether a `0-convert` plate build is needed.
 4. Output project directory and the step layout.
 5. That configs come from `<BIAHUB>/nextflow/configs/<family>/` at commit

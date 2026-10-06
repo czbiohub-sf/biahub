@@ -6,6 +6,10 @@
 # concat_data_paths here. `channel_names: all` takes every channel of every
 # source; to pick channels, give one entry per source in `-i` order, e.g.
 # [all, [Phase3D], all].
+#
+# `time_indices: all` requires every position of every source to have the
+# same number of time points and errors otherwise. To crop on purpose, use
+# a range: {start: 0, stop: <T>} (stop exclusive), with an optional step.
 time_indices: all
 channel_names: all
 chunks_czyx: [1, 16, 256, 256]

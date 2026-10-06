@@ -24,7 +24,7 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.settings import ConcatenateSettings
+from biahub.settings import ConcatenateSettings, TimeRange
 from biahub.utils.array_ops import copy_n_paste
 from biahub.utils.cluster import echo_resources, estimate_resources, get_submitit_cluster
 from biahub.utils.config import settings_fingerprint, yaml_to_model
@@ -219,12 +219,14 @@ def _channel_combiner_metadata(
                     output_channel_indices.append(out_chan_idx_counter)
                     out_chan_idx_counter += 1
                 else:
+                    # A channel name seen in an earlier source shares that
+                    # source's output channel. Only valid when the two write
+                    # different positions; _check_no_overwrites() enforces it.
                     click.echo(
-                        f"Warning: Channel {channel} already exists. Skipping and using index from the first entry."
+                        f"Warning: Channel {channel} appears in more than one source; "
+                        "they share one output channel."
                     )
-                    # Set the out_chan_idx_counter to the index of the channel in the all_channel_names list
-                    out_chan_idx_counter = all_channel_names.index(channel)
-                    output_channel_indices.append(out_chan_idx_counter)
+                    output_channel_indices.append(all_channel_names.index(channel))
                 input_channel_indices.append(channel_names.index(channel))
 
         dataset.close()
@@ -331,22 +333,89 @@ def _cropped_size(slice_params_zyx: list[slice]) -> tuple[int, int, int]:
     return cropped_shape_zyx
 
 
-def _resolve_time_indices(settings: ConcatenateSettings, all_shapes: list[tuple]) -> list[int]:
-    """Resolve input time indices from settings and shapes."""
-    T = all_shapes[0][0]
+def _resolve_time_indices(
+    settings: ConcatenateSettings, all_shapes: list[tuple], all_data_paths: list[Path]
+) -> list[int]:
+    """Resolve input time indices from settings and shapes.
+
+    ``"all"`` means every time point of every source, so the sources must all
+    have the same number. Taking only the time points they share would drop
+    the rest of the longer sources, which is a crop and has to be asked for
+    with an explicit range or list.
+
+    Raises
+    ------
+    ValueError
+        If ``time_indices`` is ``"all"`` and the sources' numbers of time points
+        differ, or if an explicit index is past the end of a source.
+    """
+    source_T = [shape[0] for shape in all_shapes]
+    T = min(source_T)
     if settings.time_indices == "all":
-        if not all(s[0] == T for s in all_shapes):
-            click.echo(
-                "Warning: Datasets have different number of time points. "
-                "Taking the smallest number of time points."
+        if len(set(source_T)) > 1:
+            example_path = {}
+            for path, num_t in zip(all_data_paths, source_T, strict=True):
+                example_path.setdefault(num_t, path)
+            listing = "\n".join(
+                f"  {num_t} time points, e.g. {path}"
+                for num_t, path in sorted(example_path.items())
             )
-        T = min(s[0] for s in all_shapes)
+            raise ValueError(
+                "time_indices is 'all' but the sources have different numbers of time "
+                f"points:\n{listing}\nTaking only the first {T} would drop the rest of "
+                "the longer sources. To do that on purpose, set "
+                f"time_indices: {{start: 0, stop: {T}}}."
+            )
         return list(range(T))
+    if isinstance(settings.time_indices, TimeRange):
+        time_range = settings.time_indices
+        time_indices = list(range(time_range.start, time_range.stop, time_range.step))
     elif isinstance(settings.time_indices, list):
-        return settings.time_indices
-    elif isinstance(settings.time_indices, int):
-        return [settings.time_indices]
-    return list(range(T))
+        time_indices = settings.time_indices
+    else:
+        time_indices = [settings.time_indices]
+    out_of_range = [t for t in time_indices if not 0 <= t < T]
+    if out_of_range:
+        raise ValueError(
+            f"time_indices {out_of_range} are out of range: the shortest source has {T} "
+            f"time points (0 to {T - 1})."
+        )
+    return time_indices
+
+
+def _check_no_overwrites(
+    all_data_paths: list[Path],
+    output_position_paths: list[Path],
+    output_channel_idx_list: list[list[int]],
+    all_channel_names: list[str],
+) -> None:
+    """Refuse a mapping that writes one channel of one output position twice.
+
+    Sources may share a channel name: they then share that output channel,
+    which is how positions from several stores are merged into one plate. When
+    two of them also land on the same output position, the second write would
+    silently overwrite the first.
+
+    Raises
+    ------
+    ValueError
+        If two source positions write the same channel of the same output position.
+    """
+    writer = {}
+    for source, output_position, output_channels in zip(
+        all_data_paths, output_position_paths, output_channel_idx_list, strict=True
+    ):
+        for channel_idx in output_channels:
+            key = (output_position, channel_idx)
+            if key in writer:
+                raise ValueError(
+                    f"Channel {all_channel_names[channel_idx]!r} of output position "
+                    f"{'/'.join(output_position.parts[-3:])} would be written by both "
+                    f"{writer[key]} and {source}, and the second would overwrite the "
+                    "first. Take the channel from only one source (channel_names), or "
+                    "set ensure_unique_positions: true to keep them as separate positions."
+                )
+            writer[key] = source
 
 
 def _validate_source_groups(
@@ -429,6 +498,9 @@ def _resolve_concatenate_inputs(
         output_dirpath,
         ensure_unique_positions=settings.ensure_unique_positions,
     )
+    _check_no_overwrites(
+        all_data_paths, output_position_paths, output_channel_idx_list, all_channel_names
+    )
 
     all_shapes = []
     all_dtypes = []
@@ -469,21 +541,21 @@ def _resolve_concatenate_inputs(
         click.echo("Warning: not all dtypes match. Casting data at float32.")
         dtype = np.float32
 
-    input_time_indices = _resolve_time_indices(settings, all_shapes)
+    input_time_indices = _resolve_time_indices(settings, all_shapes, all_data_paths)
 
     # A per-position worker only sees its own sources, so with time_indices
-    # "all" its T is the minimum over those, not over the plate. The plate that
-    # --init created is the authority: never write past its T.
+    # "all" it cannot tell whether other positions have a different T. The
+    # plate that --init created over every position is the authority: a
+    # mismatch means the plate was not made from these sources.
     first_output = output_position_paths[0]
     if settings.time_indices == "all" and first_output.is_dir():
         with open_ome_zarr(first_output, mode="r") as existing:
             plate_T = existing.data.shape[0]
-        if len(input_time_indices) > plate_T:
-            click.echo(
-                f"Warning: sources have {len(input_time_indices)} time points but "
-                f"{output_dirpath} was created with {plate_T}. Writing the first {plate_T}."
+        if len(input_time_indices) != plate_T:
+            raise ValueError(
+                f"Sources have {len(input_time_indices)} time points but "
+                f"{output_dirpath} was created with {plate_T}."
             )
-            input_time_indices = input_time_indices[:plate_T]
 
     # If input shapes differ but slicing is specified, inform the user
     if not all(shape[-3:] == all_shapes[0][-3:] for shape in all_shapes):

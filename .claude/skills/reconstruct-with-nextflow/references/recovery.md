@@ -25,6 +25,7 @@ The real traceback is **not** in the work dir (`caveats.md` §9) — it is in
 | `OSError` / `IOError` / "Input/output error" on a `.zarr` path, or a truncated read while decoding a chunk | Lustre EIO — usually the same torn-shard condition | same |
 | `FileNotFoundError: Dataset directory not found at .../<zarr>/ROW/COL/FOV` | a previous cleanup deleted the metadata scaffold too | **job-io-error-repair agent** (recreates the scaffold from a sibling) |
 | exit 1/2 with a Python traceback (pydantic validation, `TypeError`, `KeyError`) | bad config or a real bug | Nextflow terminates deliberately. Fix, relaunch with `-resume`. |
+| `time_indices is 'all' but the sources have different numbers of time points` at assemble's init | positions (or stores) disagree on T, and concatenate refuses to crop silently | ask the user whether to crop to the smallest T with `time_indices: {start: 0, stop: <T>}` in `configs/concatenate.yml` — `SKILL.md` §5c. Relaunch with `-resume`. |
 | `Expected a 'RESOURCES:' line in command output but none was found` | the biahub CLI crashed during its init step | read the init step's `slurm_output` log; usually a config validation error |
 | `list_positions` returns nothing | input has no HCS plate | build `0-convert` — `caveats.md` §1 |
 | a `(Pdb)` prompt in the task output, task never exits | `--cluster debug` post-mortem debugger inside the SLURM job | **kill the run** — see below |

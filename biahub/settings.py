@@ -488,12 +488,31 @@ class CharacterizeSettings(MyBaseModel):
         return "cuda" if torch.cuda.is_available() else "cpu"
 
 
+class TimeRange(MyBaseModel):
+    # A run of time points, [start, stop) every `step`, like a Python range:
+    # `{start: 0, stop: 48}` takes time points 0 to 47, and
+    # `{start: 0, stop: 48, step: 2}` every other one of them.
+    start: NonNegativeInt = 0
+    stop: PositiveInt
+    step: PositiveInt = 1
+
+    @model_validator(mode="after")
+    def check_order(self):
+        if self.stop <= self.start:
+            raise ValueError(
+                f"time range stop ({self.stop}) must be greater than start ({self.start})"
+            )
+        return self
+
+
 class ConcatenateSettings(MyBaseModel):
     # Source positions, one glob or path per source store. Optional: the CLI's
     # repeated `-i` supplies the sources (one `-i` per store) and takes
     # precedence, in which case the config holds only parameters.
     concat_data_paths: list[str] | None = None
-    time_indices: int | list[int] | Literal["all"] = "all"
+    # "all" takes every time point and requires every source to have the same
+    # number; a TimeRange ({start, stop}) or a list of indices takes a subset.
+    time_indices: int | list[int] | TimeRange | Literal["all"] = "all"
     # "all" takes every channel of every source, like time_indices. The list
     # form has one entry per source: "all" or the channel names to take.
     channel_names: Literal["all"] | list[str | list[str]] = "all"
