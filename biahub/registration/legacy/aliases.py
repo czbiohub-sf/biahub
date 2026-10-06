@@ -8,6 +8,9 @@ the new transforms file. `optimize-registration` has no direct equivalent.
 
 from __future__ import annotations
 
+import glob
+import re
+
 from pathlib import Path
 
 import click
@@ -15,9 +18,9 @@ import click
 from biahub.apply_transform import apply_transform
 from biahub.cli.option_eat_all import OptionEatAll
 from biahub.cli.parsing import (
+    _validate_and_process_config_paths,
     _validate_and_process_paths,
     config_filepath,
-    config_filepaths,
     input_position_dirpaths,
     local,
     monitor,
@@ -55,6 +58,33 @@ def _positions(flag: str, long: str, help: str) -> click.Option:
         callback=_validate_and_process_paths,
         help=help,
     )
+
+
+# What legacy estimate-stabilization wrote: <dir>/<type>_stabilization_settings/<fov>.yml,
+# or <dir>/<type>_stabilization_settings.yml for beads.
+_LEGACY_STABILIZATION_OUTPUT = re.compile(r"^(xyz|xy|z)_stabilization_settings(\.ya?ml)?$")
+
+
+def _stabilize_config_paths(ctx, opt, value):
+    """Validate the -c paths, finding the alias's transforms.yml behind a legacy output path.
+
+    The estimate-stabilization alias writes <dir>/transforms.yml where legacy wrote
+    <dir>/<type>_stabilization_settings*, so an old `stabilize -c` that matches nothing
+    there is pointed at it.
+    """
+    resolved = []
+    for pattern in value:
+        path = Path(pattern)
+        legacy = next(
+            (p for p in (path, *path.parents) if _LEGACY_STABILIZATION_OUTPUT.match(p.name)),
+            None,
+        )
+        replacement = legacy.parent / "transforms.yml" if legacy is not None else None
+        if not glob.glob(pattern) and replacement is not None and replacement.is_file():
+            click.echo(f"  note: {pattern} not found; using {replacement}", err=True)
+            pattern = str(replacement)
+        resolved.append(pattern)
+    return _validate_and_process_config_paths(ctx, opt, tuple(resolved))
 
 
 def _converted_estimate_config(config_filepath: Path, next_to: Path) -> Path:
@@ -176,6 +206,12 @@ def estimate_stabilization_alias(
         sbatch_filepath=sbatch_filepath,
         cluster="local" if local else "slurm",
     )
+    # Legacy wrote <type>_stabilization_settings*; the stabilize alias still finds this.
+    click.echo(
+        f"  note: transforms written to {output} (apply with "
+        f"`biahub apply-transform -m ... -c {output}`)",
+        err=True,
+    )
 
 
 @click.command("register", hidden=True)
@@ -217,7 +253,15 @@ def register_alias(
 @click.command("stabilize", hidden=True)
 @input_position_dirpaths()
 @output_dirpath()
-@config_filepaths()
+@click.option(
+    "--config-filepaths",
+    "-c",
+    required=True,
+    cls=OptionEatAll,
+    type=tuple,
+    callback=_stabilize_config_paths,
+    help="Transforms file, or retired stabilize config(s).",
+)
 @sbatch_filepath()
 @local()
 @monitor()

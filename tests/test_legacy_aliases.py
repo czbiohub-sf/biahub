@@ -187,6 +187,31 @@ def test_estimate_stabilization_alias_converts_a_legacy_pcc_config(drifting_plat
             t * np.array(APPLIED_SHIFT_ZYX),
             atol=0.5,
         )
+    assert str(tmp_path / "stab" / "transforms.yml") in result.output
+
+    # The old second step still finds it: legacy wrote per-FOV files (or, for beads, one
+    # file) under these names, next to which the alias now writes transforms.yml.
+    stab = tmp_path / "stab"
+    for old_path in (
+        stab / "xyz_stabilization_settings" / "*.yml",
+        stab / "xy_stabilization_settings.yml",
+    ):
+        output = tmp_path / f"stabilized_{old_path.parent.name}.zarr"
+        result = CliRunner().invoke(
+            cli,
+            ["stabilize", "-i", str(drifting_plate), "-c", str(old_path), "-o", str(output)],
+        )
+        assert result.exit_code == 0, result.output
+        assert f"using {stab / 'transforms.yml'}" in result.output
+        assert (output / "A" / "1" / "0").exists()
+
+    # Anything else that matches nothing is still an error.
+    result = CliRunner().invoke(
+        cli,
+        ["stabilize", "-i", str(drifting_plate), "-c", str(stab / "other" / "*.yml")]
+        + ["-o", str(tmp_path / "x.zarr")],
+    )
+    assert result.exit_code != 0 and "No files matched" in result.output
 
 
 def test_stabilize_alias_applies_a_legacy_stabilization_config(drifting_plate, tmp_path):
