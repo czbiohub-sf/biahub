@@ -354,6 +354,27 @@ Do not run anything yet. Show the user:
     place. If it is not and cannot be, say the run will proceed without QC
     rather than silently dropping it — the step set in item 6 has to match what
     is actually going to run.
+11. **Whether intermediates will be deleted** (`CLEANUP_INTERMEDIATES` in the run
+    script, biahub#292). With cleanup on, once the last step (QC) finishes the
+    pipeline deletes the flat-field, deskew, reconstruct and virtual-stain
+    directories, the `slurm_output/` placeholders and `.iohub-progress/` resume
+    markers beside the final stores, and the Nextflow work directory. Only the
+    assembled store, the tracking store, the QC report and the logs under
+    `nextflow/` remain, and the run is final: any rerun
+    recomputes from raw. The template's `CLEANUP_INTERMEDIATES="auto"` lets the
+    pipeline decide at launch (`cleanup_decision` in
+    `nextflow/modules/cleanup.nf`); check `concatenate.yml` now so the plan says
+    what it will decide:
+    - **No cropping** — `time_indices`, `channel_names`, `X_slice`, `Y_slice`
+      and `Z_slice` are all absent or `all` (or a per-source list of `all`),
+      with `time_indices: max` also counting as no cropping (it pads, §5c):
+      leave `auto`; the pipeline turns cleanup on. Say so in the plan.
+    - **Any cropping**: `auto` would leave the intermediates, but set
+      `CLEANUP_INTERMEDIATES=false` explicitly so the script records the
+      decision. Name the cropping fields and **ask the user explicitly** whether
+      to delete the intermediates anyway — the data cropped out of the assembled
+      store exists nowhere else. Set `true` only on a clear yes; no answer means
+      `false`.
 
 Get explicit approval.
 
@@ -392,6 +413,13 @@ Edit the copies for this dataset. Copy `templates/run_mantis_v2.sh` to
 `BIAHUB_PROJECT`, `chmod 775` (not `+x` — it must also be group-writable).
 The script stays in the output directory as the run's provenance record, and
 re-grants `g+w` on itself and the configs at every launch.
+
+Set `CLEANUP_INTERMEDIATES` as agreed in §6 item 11: leave `auto` when
+`concatenate.yml` does not crop, `false` when it crops and the user did not opt
+in, `true` only when they did. `provenance.txt` records the requested value;
+the pipeline logs what it resolved at launch, as
+`cleanup_intermediates: on|off (<reason>)` in `.nextflow.log` and on the
+`cleanup:` line of the run-start Slack message — check it matches the plan.
 
 If a plate build is needed, do it now via the **build-hcs-plate** agent
 (`caveats.md` §1) and verify the plate opens with iohub before launching.
@@ -474,10 +502,17 @@ Classify before acting — `references/recovery.md` has the decision table:
   replaces torn shards and resumes per unit. Only if it fails
   identically again, write a repair proposal for the user or hand it to the
   **job-io-error-repair** agent. **Never delete zarr data from this skill.**
+  The pipeline's own `--cleanup_intermediates` step is the one sanctioned
+  deletion, and it only runs after every step has succeeded.
 - **Exit 1/2 with a Python traceback**: real bug or bad config. Fix, relaunch
   with `-resume`.
 
 Restarts are always `bash ./run_mantis_v2.sh` — the script passes `-resume`.
+
+**Once cleanup has run, the run is final.** Its intermediates, work directory
+and resume markers are gone, so relaunching the script reruns everything from
+raw and rewrites the final stores. To reprocess, prefer a fresh output
+directory (`<DATASET>_rerun`) over relaunching in place.
 
 ## 11. Wrap up
 
@@ -496,6 +531,13 @@ Restarts are always `bash ./run_mantis_v2.sh` — the script passes `-resume`.
    `tables/qc/` parquet inside each store.
 4. Report per-step task counts, failures, retries, and wall time from
    `<OUTPUT>/nextflow/trace.txt`; point at `report.html` and `timeline.html`.
+   If cleanup was on, report what `<OUTPUT>/nextflow/intermediates_cleaned.txt`
+   records — the decision and one `removed`/`absent` line per target — and
+   confirm `<OUTPUT>/nextflow/work` holds no task directories (Nextflow leaves
+   its empty two-character prefix directories behind; that is expected). Do
+   not `du` the run directory to report
+   space freed — it runs to terabytes; use `df` on the filesystem if a number
+   is wanted.
 5. Confirm the pipeline's automatic run-end message landed, then send a wrap-up
    only for what the pipeline cannot know: the channel-rename result, the iohub
    verification, and size on disk.
