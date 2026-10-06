@@ -218,6 +218,7 @@ if monitor:
 @cluster()
 @monitor()
 @init_only()
+@resume()
 def <verb>_cli(...):
     """One-line summary.
 
@@ -241,10 +242,24 @@ def <verb>_cli(...):
         cluster=cluster,
         monitor=monitor,
         init_only=init_only,
+        resume=resume,
     )
 ```
 
 The `_cli` delegates with **keyword** arguments and does no logic of its own.
+
+`@resume()` (`--resume/--no-resume`, default off) belongs on every command whose
+per-position work records its finished units, so an interrupted position can be
+retried without recomputing it: the ones that run through iohub's
+`process_single_position` (flat-field, deskew, concatenate), and apply-inv-tf,
+whose per-position work is waveorder's `apply_inverse_transfer_function_single_position`
+(itself built on `process_single_position`). The layer-2 function takes
+`resume: bool = False` and passes it, with a `resume_token` fingerprinting
+whatever determines the output, to the per-position call; waveorder computes its
+own token. A command that writes without recording units (virtual_stain, track)
+has no `@resume()`. The Nextflow module of a command with `@resume()` passes
+`--resume` unconditionally: the token makes a config change recompute rather
+than skip.
 
 ## Registration (biahub/cli/main.py)
 

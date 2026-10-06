@@ -21,7 +21,12 @@ from tqdm import tqdm
 #:
 #: ``normalization`` (written by the reconstruction step) is intentionally
 #: absent — it describes that step's inputs, not its output.
-PROVENANCE_METADATA_KEYS = ("biahub-*", "waveorder", "cytoland")
+#:
+#: ``waveorder-*`` is one key per reconstruction (``waveorder-Phase3D``,
+#: ``waveorder-Birefringence``, ...). ``waveorder`` is the older nested form,
+#: ``{"waveorder": {<output channel names>: settings}}``, kept so stores written
+#: before the switch still carry their reconstruction settings forward.
+PROVENANCE_METADATA_KEYS = ("biahub-*", "waveorder-*", "waveorder", "cytoland")
 
 
 def resolve_ome_zarr_version(
