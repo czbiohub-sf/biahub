@@ -289,13 +289,15 @@ offer:
   cropped range (`references/caveats.md` §5). If the user also wants to
   subsample, add `step`, e.g. `{start: 0, stop: <smallest T>, step: 2}` for
   every other time point. (`time_indices: min` crops the same way, but the
-  range records the number in the config.)
-- **Keep every time point and pad with zeros**: `time_indices: max`. The
+  range records the number in the config.) Use the smallest T as `stop`: a
+  range that runs past the shorter positions pads them, as below.
+- **Keep every time point and pad with zeros**: `time_indices: max`, or
+  equivalently `{start: 0, stop: <largest T>}` (add `step` to subsample). The
   assembled store takes the longest T, and the missing end of each shorter
   position stays at zero. Nothing is lost, but the padded frames are blank:
   tracks end there, QC may flag them, and nothing in the store marks them as
   padding — say which positions are padded from which time point in the plan,
-  and the assemble log lists them (`time_indices max: padding ...`).
+  and the assemble log lists them (`time_indices ...: padding ...`).
 - **Stop and investigate** the acquisition before reconstructing.
 
 Do not pick for them, and record the choice and the reason in the plan (§6).

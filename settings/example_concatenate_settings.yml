@@ -23,6 +23,9 @@ concat_data_paths:
 #   - {start: 0, stop: 48, step: 2}: Include every other time point of 0 to 47
 #   - [0, 1, 2]: Include only specific time points
 #   - 5: Include only a single time point
+#   A range, list or single index may go past the end of the shorter datasets
+#   (up to the longest): like "max", the time points they lack stay at zero.
+#   Every mode logs the source positions it crops or pads.
 time_indices: "all"
 
 # Channel names to include from each dataset

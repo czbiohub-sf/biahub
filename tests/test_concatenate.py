@@ -167,13 +167,24 @@ def test_concatenate_refuses_unequal_time_points(create_custom_plate, tmp_path, 
         )
 
 
-@pytest.mark.parametrize("mode, expected_T", [("min", 4), ("max", 5)])
+@pytest.mark.parametrize(
+    "mode, taken, log",
+    [
+        ("min", [0, 1, 2, 3], "cropping"),
+        ("max", [0, 1, 2, 3, 4], "padding"),
+        ({"start": 0, "stop": 4}, [0, 1, 2, 3], "cropping"),
+        ({"start": 0, "stop": 5}, [0, 1, 2, 3, 4], "padding"),
+        ({"start": 0, "stop": 5, "step": 2}, [0, 2, 4], "padding"),
+        ([1, 4], [1, 4], "padding"),
+        (4, [4], "padding"),
+    ],
+)
 def test_concatenate_uneven_time_points(
-    create_custom_plate, tmp_path, sbatch_file, mode, expected_T
+    create_custom_plate, tmp_path, sbatch_file, capsys, mode, taken, log
 ):
     """
-    time_indices "min" crops uneven sources to the shortest; "max" keeps the
-    longest and leaves the shorter source's missing end at zero
+    With uneven sources, every mode but "all" takes its time points from each
+    source that has them and leaves the rest at zero, and logs a crop or a pad
     """
     plate_1_path, plate_1 = create_custom_plate(
         tmp_path / "zarr1", position_list=_ONE_POS, channel_names=["DAPI"], time_points=5
@@ -199,11 +210,14 @@ def test_concatenate_uneven_time_points(
     )
 
     output = open_ome_zarr(output_path)["A/1/0"].data[:]
-    assert output.shape[0] == expected_T
-    np.testing.assert_array_equal(output[:, 0], plate_1["A/1/0"].data[:expected_T, 0])
-    np.testing.assert_array_equal(output[:4, 1], plate_2["A/1/0"].data[:4, 0])
-    if mode == "max":
-        assert not output[4, 1].any()
+    assert output.shape[0] == len(taken)
+    np.testing.assert_array_equal(output[:, 0], plate_1["A/1/0"].data[taken, 0])
+    for i, t in enumerate(taken):
+        if t < 4:
+            np.testing.assert_array_equal(output[i, 1], plate_2["A/1/0"].data[t, 0])
+        else:
+            assert not output[i, 1].any()
+    assert f"{log}" in capsys.readouterr().out
 
 
 def _plate_with_time_points(path, channel_names, time_points_per_position):
@@ -216,13 +230,16 @@ def _plate_with_time_points(path, channel_names, time_points_per_position):
     return open_ome_zarr(path)
 
 
-@pytest.mark.parametrize("mode, expected_T", [("min", 3), ("max", 5)])
+@pytest.mark.parametrize(
+    "mode, expected_T", [("min", 3), ("max", 5), ({"start": 0, "stop": 5}, 5)]
+)
 def test_concatenate_uneven_per_position_workers(tmp_path, sbatch_file, mode, expected_T):
     """
-    With time_indices "min" or "max", --init sizes T over every position and
-    each per-position worker follows the plate's T rather than its own sources':
-    under "min" position A has 5 time points but the plate keeps 3, under "max"
-    every source of position B is shorter than the plate's 5
+    With uneven positions, --init sizes T over every position and each
+    per-position worker follows the plate's T rather than its own sources':
+    under "min" position A has 5 time points but the plate keeps 3; under
+    "max" and the range every source of position B is shorter than the plate's
+    5, and its worker pads instead of refusing time point 4
     """
     t_by_source = [{"A/1/0": 5, "B/1/0": 4}, {"A/1/0": 5, "B/1/0": 3}]
     plates = [
@@ -327,7 +344,7 @@ def test_concatenate_with_time_range_step(create_custom_plate, tmp_path, sbatch_
 
 def test_concatenate_refuses_time_range_past_end(create_custom_plate, tmp_path, sbatch_file):
     """
-    A time range past the end of the shortest source is refused
+    A time range past the end of the longest source is refused
     """
     plate_1_path, _ = create_custom_plate(
         tmp_path / "zarr1", position_list=_ONE_POS, channel_names=["DAPI"], time_points=3
@@ -339,7 +356,7 @@ def test_concatenate_refuses_time_range_past_end(create_custom_plate, tmp_path, 
     )
     config_path = tmp_path / "concat.yml"
     model_to_yaml(settings, config_path)
-    with pytest.raises(ValueError, match=r"\[3, 4\] are out of range"):
+    with pytest.raises(ValueError, match=r"\[3, 4\] are out of range: the longest"):
         concatenate(
             input_position_dirpaths=None,
             config_filepath=config_path,

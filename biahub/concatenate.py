@@ -333,6 +333,14 @@ def _cropped_size(slice_params_zyx: list[slice]) -> tuple[int, int, int]:
     return cropped_shape_zyx
 
 
+def _time_indices_label(time_indices) -> str:
+    """``time_indices`` as written in the config, for log messages."""
+    if isinstance(time_indices, TimeRange):
+        step = f", step: {time_indices.step}" if time_indices.step != 1 else ""
+        return f"{{start: {time_indices.start}, stop: {time_indices.stop}{step}}}"
+    return str(time_indices)
+
+
 def _resolve_time_indices(
     settings: ConcatenateSettings, all_shapes: list[tuple], all_data_paths: list[Path]
 ) -> list[int]:
@@ -340,15 +348,17 @@ def _resolve_time_indices(
 
     ``"all"`` means every time point of every source, so the sources must all
     have the same number. When they differ, the choice has to be explicit:
-    ``"min"`` crops to the shortest source, ``"max"`` keeps the longest and
-    leaves the missing end of the shorter ones unwritten (the fill value, 0),
-    and a range or list picks the time points.
+    ``"min"`` crops to the shortest source, ``"max"`` keeps the longest, and a
+    range, list or single index picks the time points. A source that lacks a
+    time point the plate has leaves it unwritten (the fill value, 0); see
+    ``_resolve_concatenate_inputs``, which also checks explicit indices
+    against the longest source.
 
     Raises
     ------
     ValueError
         If ``time_indices`` is ``"all"`` and the sources' numbers of time points
-        differ, or if an explicit index is past the end of a source.
+        differ.
     """
     source_T = [shape[0] for shape in all_shapes]
     T = min(source_T)
@@ -370,28 +380,15 @@ def _resolve_time_indices(
             )
         return list(range(T))
     if settings.time_indices == "min":
-        if len(set(source_T)) > 1:
-            click.echo(
-                f"time_indices min: cropping to the shortest source's {T} time points; "
-                f"longer sources (up to {max(source_T)}) lose the rest."
-            )
         return list(range(T))
     if settings.time_indices == "max":
         return list(range(max(source_T)))
     if isinstance(settings.time_indices, TimeRange):
         time_range = settings.time_indices
-        time_indices = list(range(time_range.start, time_range.stop, time_range.step))
-    elif isinstance(settings.time_indices, list):
-        time_indices = settings.time_indices
-    else:
-        time_indices = [settings.time_indices]
-    out_of_range = [t for t in time_indices if not 0 <= t < T]
-    if out_of_range:
-        raise ValueError(
-            f"time_indices {out_of_range} are out of range: the shortest source has {T} "
-            f"time points (0 to {T - 1})."
-        )
-    return time_indices
+        return list(range(time_range.start, time_range.stop, time_range.step))
+    if isinstance(settings.time_indices, list):
+        return settings.time_indices
+    return [settings.time_indices]
 
 
 def _check_no_overwrites(
@@ -554,38 +551,68 @@ def _resolve_concatenate_inputs(
 
     input_time_indices = _resolve_time_indices(settings, all_shapes, all_data_paths)
 
-    # A per-position worker only sees its own sources, so with time_indices
-    # "all", "min" or "max" it cannot tell what T the other positions have. The
-    # plate that --init created over every position is the authority. Its own
-    # sources may have fewer time points than the plate under "max" (padded
-    # below) and more under "min"; anything else means the plate was not made
-    # from these sources.
+    # Explicit indices are checked against the longest source when the plate
+    # is created. A per-position worker only sees its own sources, so it
+    # cannot tell what T the other positions have: the plate that --init
+    # created over every position is the authority. Its own sources may have
+    # fewer time points than the plate under "max" or an explicit selection
+    # (padded below) and more under "min"; anything else means the plate was
+    # not made from these sources.
+    label = _time_indices_label(settings.time_indices)
+    mode = settings.time_indices if settings.time_indices in ("all", "min", "max") else None
     first_output = output_position_paths[0]
-    if settings.time_indices in ("all", "min", "max") and first_output.is_dir():
+    if not first_output.is_dir():
+        longest = max(shape[0] for shape in all_shapes)
+        out_of_range = [t for t in input_time_indices if not 0 <= t < longest]
+        if out_of_range:
+            raise ValueError(
+                f"time_indices {out_of_range} are out of range: the longest source has "
+                f"{longest} time points (0 to {longest - 1})."
+            )
+    else:
         with open_ome_zarr(first_output, mode="r") as existing:
             plate_T = existing.data.shape[0]
         num_t = len(input_time_indices)
-        mismatch = {"all": num_t != plate_T, "min": num_t < plate_T, "max": num_t > plate_T}
-        if mismatch[settings.time_indices]:
+        mismatch = {
+            "all": num_t != plate_T,
+            "min": num_t < plate_T,
+            "max": num_t > plate_T,
+            None: num_t != plate_T,
+        }
+        if mismatch[mode]:
             raise ValueError(
-                f"Sources have {num_t} time points with time_indices "
-                f"{settings.time_indices} but {output_dirpath} was created with {plate_T}."
+                f"Sources have {num_t} time points with time_indices {label} but "
+                f"{output_dirpath} was created with {plate_T}."
             )
-        input_time_indices = list(range(plate_T))
+        if mode is not None:
+            input_time_indices = list(range(plate_T))
 
-    # Each source position copies the plate's time points it has. Only "max"
-    # asks for more than a source may have; the rest stays at the fill value.
+    # Each source position copies the plate's time points it has; the ones it
+    # lacks stay at the fill value. Log both ways data does not go one-to-one:
+    # a source padded at the end, and time points a source has that are not
+    # taken.
     input_time_indices_list = []
     output_time_indices_list = []
+    num_cropped = 0
     for path, shape in zip(all_data_paths, all_shapes, strict=True):
         kept = [(t, i) for i, t in enumerate(input_time_indices) if t < shape[0]]
         input_time_indices_list.append([t for t, _ in kept])
         output_time_indices_list.append([i for _, i in kept])
         if len(kept) < len(input_time_indices):
             click.echo(
-                f"time_indices max: padding {path}: it has {shape[0]} of "
-                f"{len(input_time_indices)} time points, the rest stay zero."
+                f"time_indices {label}: padding {path}: it has {shape[0]} time points, "
+                f"so {len(input_time_indices) - len(kept)} of the {len(input_time_indices)} "
+                "taken stay zero."
             )
+        if len(kept) < shape[0]:
+            num_cropped += 1
+    if num_cropped:
+        click.echo(
+            f"time_indices {label}: cropping: {num_cropped} of {len(all_data_paths)} source "
+            f"positions have time points that are not taken (up to "
+            f"{max(shape[0] for shape in all_shapes)}; {len(input_time_indices)} taken), "
+            "and those are left out."
+        )
 
     # If input shapes differ but slicing is specified, inform the user
     if not all(shape[-3:] == all_shapes[0][-3:] for shape in all_shapes):
@@ -752,6 +779,7 @@ def concatenate(
 
     click.echo("Submitting jobs...")
     jobs = []
+    job_paths = []
 
     # One job per SOURCE position: with three source stores an output position
     # is written by three jobs, each owning the disjoint channel range it
@@ -775,6 +803,9 @@ def concatenate(
             prep["output_time_indices_list"],
             strict=True,
         ):
+            if not input_time_indices:
+                # The source has none of the time points taken: all padding.
+                continue
             job = executor.submit(
                 process_single_position,
                 copy_n_paste,
@@ -790,6 +821,7 @@ def concatenate(
                 zyx_slicing_params=zyx_slicing_params,
             )
             jobs.append(job)
+            job_paths.append(input_position_path)
 
     job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 
@@ -803,13 +835,13 @@ def concatenate(
     # called. Run each one in the foreground and stream progress; monitor's
     # async polling UI is pointless against synchronous in-process jobs.
     if resolved_cluster == "debug":
-        for job, path in zip(jobs, prep["all_data_paths"], strict=True):
+        for job, path in zip(jobs, job_paths, strict=True):
             job.wait()
             click.echo(f"Concatenate complete: {path}")
         return
 
     if monitor:
-        monitor_jobs(jobs, prep["all_data_paths"])
+        monitor_jobs(jobs, job_paths)
 
 
 @click.command("concatenate")
