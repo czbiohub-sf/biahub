@@ -9,8 +9,9 @@
 // and the guard in cleanup_targets(), which keeps every path inside --output.
 // The first two blocks check those directly; the third runs
 // cleanup_intermediates_wf on a stand-in run directory and checks that the
-// targets are gone, the final store next to them is not, and the record file
-// says so. Runs locally in seconds:
+// targets are gone, the final store next to them is not, a target reached
+// through a symlink leading outside the run is refused, a path full of shell
+// syntax is deleted rather than run, and the record file says so. Runs locally in seconds:
 //     nextflow run nextflow/tests/cleanup_intermediates.nf
 // It exits non-zero if either regresses.
 
@@ -107,14 +108,24 @@ workflow {
     touch("${root}/4-assemble/ds.zarr/zarr.json")
     touch("${root}/4-assemble/slurm_output/DEBUG_1_0_log.out")
     touch("${root}/4-assemble/.iohub-progress/ds.zarr/A/1/0/t0-4_c0-0_abc.done")
+    // A symlinked directory that leads outside the run passes the lexical
+    // check at launch; the task must refuse it and leave the outside data be.
+    touch("${root}_outside/slurm_output/keep.txt")
+    def link = java.nio.file.Paths.get("${root}/5-link")
+    java.nio.file.Files.deleteIfExists(link)  // refused, so a previous run left it
+    java.nio.file.Files.createSymbolicLink(link, java.nio.file.Paths.get("${root}_outside"))
+    // A name full of shell syntax must be deleted as written, never run.
+    def odd_name = '6-odd "$(echo INJECTED)" `echo x` \'q\' $HOME'
+    touch("${root}/${odd_name}/zarr.json")
     def record = new File("${root}/nextflow/intermediates_cleaned.txt")
     record.parentFile.mkdirs()
     record.text = "=== an earlier cleanup ===\n"
 
     def targets = cleanup_targets(["${root}/0-flatfield", "${root}/1-deskew",
                                    "${root}/4-assemble/slurm_output", "${root}/4-assemble/.iohub-progress",
+                                   "${root}/5-link/slurm_output", "${root}/${odd_name}",
                                    "${root}/9-never-made"], root)
-    cleanup = cleanup_intermediates_wf(targets, record.path, 'on (auto: concatenate.yml takes all the data)',
+    cleanup = cleanup_intermediates_wf(targets, root, record.path, 'on (auto: concatenate.yml takes all the data)',
                                        channel.of('assemble', 'qc'))
     cleanup.done.subscribe { _token ->
         check('deletes a whole step directory',         !new File("${root}/0-flatfield").exists())
@@ -131,5 +142,10 @@ workflow {
               ['0-flatfield', '1-deskew', '4-assemble/slurm_output', '4-assemble/.iohub-progress']
                   .every { t -> lines.contains("removed   ${root}/${t}".toString()) })
         check('record marks a missing target absent',   lines.contains("absent    ${root}/9-never-made".toString()))
+        check('keeps data behind a symlink escape',     new File("${root}_outside/slurm_output/keep.txt").exists())
+        check('record marks a symlink escape refused',
+              lines.any { line -> line.startsWith("refused   ${root}/5-link/slurm_output (".toString()) })
+        check('deletes a name with shell syntax',       !new File("${root}/${odd_name}").exists())
+        check('records that name verbatim',             lines.contains("removed   ${root}/${odd_name}".toString()))
     }
 }

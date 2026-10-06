@@ -82,8 +82,9 @@ def cleanup_decision(value, concatenate_config) {
 // so a bad path fails the run at launch rather than after days of compute.
 //
 // Every target must sit strictly INSIDE `root` (the run's --output): never the
-// output directory itself, never anything outside it. That is the only thing
-// standing between a wiring mistake and an `rm -rf` of someone else's data.
+// output directory itself, never anything outside it. This check is lexical;
+// cleanup_intermediates repeats it on the resolved paths just before deleting,
+// so a symlinked directory cannot carry an `rm -rf` outside the run.
 def cleanup_targets(targets, root) {
     if (!root) error "cleanup_targets: no output directory to confine the cleanup to"
     def root_path = java.nio.file.Paths.get(root as String).toAbsolutePath().normalize()
@@ -98,18 +99,35 @@ def cleanup_targets(targets, root) {
 }
 
 
+// Quote a value as one shell word: single quotes, with any embedded quote
+// closed, escaped and reopened. Paths go into the script as source text, so
+// double quotes would still expand `$(...)`, backticks and `"`.
+def shell_quote(value) {
+    return "'" + value.toString().replace("'", "'\\''") + "'"
+}
+
+
 // Delete each target and append what happened to `record`: a timestamped
-// section with the decision and one `removed`/`absent` line per target. The
-// record is the durable account of the cleanup — the task's own logs go with
-// the work directory — so it is appended to, like provenance.txt, and a
-// from-scratch rerun that cleans up again adds a section. Each line is written
-// as its target is handled, so an interrupted cleanup leaves a record of what
-// it got through.
+// section with the decision and one `removed`/`absent`/`refused` line per
+// target. The record is the durable account of the cleanup — the task's own
+// logs go with the work directory — so it is appended to, like provenance.txt,
+// and a from-scratch rerun that cleans up again adds a section. Each line is
+// written as its target is handled, so an interrupted cleanup leaves a record
+// of what it got through.
+//
+// SYMLINKS. cleanup_targets() confined the targets to `root` by their text at
+// launch; a symlinked directory on the way, there then or created since, could
+// still point outside it. So just before each deletion the target's parent is
+// resolved and must be `root` or inside it, also resolved. The target itself is
+// not resolved: if it is a symlink, `rm -rf` removes the link, not what it
+// points to. A target that fails this is recorded as `refused` and skipped, not
+// fatal: every compute step has already succeeded by now.
 process cleanup_intermediates {
     label 'cpu_local'
 
     input:
     val targets
+    val root
     val record
     val decision
     val trigger
@@ -120,22 +138,31 @@ process cleanup_intermediates {
     script:
     // No size report: these stores run to terabytes, and walking them to add up
     // their size costs longer than deleting them.
-    def quoted = targets.collect { target -> "\"${target}\"" }.join(' ')
-    def decision_text = decision.toString().replace("'", '')
+    def quoted = targets.collect { target -> shell_quote(target) }.join(' ')
     """
-    mkdir -p "\$(dirname "${record}")"
+    root_real=\$(realpath -e ${shell_quote(root)})
+    mkdir -p "\$(dirname ${shell_quote(record)})"
     {
         echo "=== \$(date -Is) ==="
-        echo 'decision  ${decision_text}'
+        printf 'decision  %s\\n' ${shell_quote(decision)}
         for target in ${quoted}; do
-            if [ -e "\$target" ]; then
-                rm -rf "\$target"
-                echo "removed   \$target"
-            else
-                echo "absent    \$target"
+            if [ ! -e "\$target" ] && [ ! -L "\$target" ]; then
+                printf 'absent    %s\\n' "\$target"
+                continue
             fi
+            parent_real=\$(realpath -e "\$(dirname "\$target")")
+            case "\$parent_real/" in
+                "\$root_real"/*)
+                    rm -rf "\$target"
+                    printf 'removed   %s\\n' "\$target"
+                    ;;
+                *)
+                    printf 'refused   %s (resolves to %s, outside %s)\\n' "\$target" "\$parent_real" "\$root_real"
+                    echo "cleanup_intermediates: refused \$target: resolves outside \$root_real" >&2
+                    ;;
+            esac
         done
-    } >> "${record}"
+    } >> ${shell_quote(record)}
     """
 }
 
@@ -144,6 +171,7 @@ process cleanup_intermediates {
 //
 // take:
 //   targets   list of paths, already checked by cleanup_targets()
+//   root      the run's --output, which every target must resolve inside
 //   record    file the cleanup appends its account to
 //   decision  the on/off decision and its reason, copied into the record
 //   trigger   gating channel — the mix of every final step's `done`
@@ -152,12 +180,13 @@ process cleanup_intermediates {
 workflow cleanup_intermediates_wf {
     take:
     targets
+    root
     record
     decision
     trigger
 
     main:
-    cleanup_out = cleanup_intermediates(targets, record, decision, trigger.collect().map { 'done' })
+    cleanup_out = cleanup_intermediates(targets, root, record, decision, trigger.collect().map { 'done' })
 
     emit:
     done = cleanup_out.map { 'done' }

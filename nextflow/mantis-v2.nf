@@ -436,7 +436,7 @@ workflow {
         final_gate = channel.empty()
         final_signals.each { signal -> final_gate = final_gate.mix(signal) }
 
-        cleanup_run = cleanup_intermediates_wf(cleanup_list, cleanup_record,
+        cleanup_run = cleanup_intermediates_wf(cleanup_list, out, cleanup_record,
                                                "on (${cleanup_plan.reason})", final_gate)
     }
 
