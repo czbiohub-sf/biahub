@@ -94,7 +94,8 @@ def estimate_transform(
     """Estimate one transform per timepoint mapping the moving channel onto its reference.
 
     Reads an `EstimateTransformSettings` YAML and writes a `TransformSettings` YAML --
-    forward matrices with their scores -- next to the engine's records; see
+    forward matrices with their scores -- and keeps the engine's records in a folder named
+    after it (`<output stem>/`); see
     `estimate_transform_series`. One moving position writes a list shared by every
     position (e.g. beads registration estimated on the bead FOV); several moving
     positions are each estimated on their own and written per position (e.g.
@@ -103,7 +104,9 @@ def estimate_transform(
     paired with them by row/col/fov.
     """
     output_filepath = Path(output_filepath)
-    output_dir = output_filepath.parent
+    # The run's records live in a folder named after the output (reg/transforms.yml ->
+    # reg/transforms/), so estimates written to one folder never share or clear them.
+    output_dir = output_filepath.with_suffix("")
     settings = load_estimate_transform_settings(config_filepath)
     movings = [Path(p) for p in moving_position_dirpaths]
     keys = [position_key(p) for p in movings]
@@ -194,8 +197,9 @@ def estimate_transform_cli(
     """Estimate a transform series mapping a moving channel onto its reference.
 
     Takes an `EstimateTransformSettings` YAML and writes a `TransformSettings` file for
-    `apply-transform` (forward matrices with their scores), plus a run journal and a
-    per-timepoint report. One SLURM job per timepoint, then one per flagged timepoint
+    `apply-transform` (forward matrices with their scores). The run's report, journal and
+    per-timepoint records (what --resume continues from) go in a folder named after the
+    output (`-o reg/transforms.yml` -> `reg/transforms/`). One SLURM job per timepoint, then one per flagged timepoint
     for repair. With `reference.frame: first` or `previous` the moving channel is
     stabilized against itself and `-r` is not needed.
 

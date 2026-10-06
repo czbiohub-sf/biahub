@@ -124,12 +124,14 @@ def test_estimate_transform_writes_a_register_compatible_series(beads_plate, tmp
         # in the moving image, i.e. +APPLIED_SHIFT.
         np.testing.assert_allclose(row, APPLIED_SHIFT_ZYX, atol=0.5)
 
-    report = json.loads((output.parent / "estimate_transform_report.json").read_text())
+    report = json.loads(
+        (output.with_suffix("") / "estimate_transform_report.json").read_text()
+    )
     assert set(report["scores"]) == {"0", "1"}
     assert all(score > 0.5 for score in report["scores"].values())
     assert report["errors"] == {} and report["stand_ins"] == {}
-    assert (output.parent / "run_journal.json").exists()
-    assert sorted(p.name for p in (output.parent / "timepoints").iterdir()) == [
+    assert (output.with_suffix("") / "run_journal.json").exists()
+    assert sorted(p.name for p in (output.with_suffix("") / "timepoints").iterdir()) == [
         "0.json",
         "1.json",
     ]
@@ -155,7 +157,7 @@ def test_estimate_transform_resume_keeps_existing_records(beads_plate, tmp_path)
     output = tmp_path / "out" / "registration_settings.yml"
     planted = np.eye(4)
     planted[:3, 3] = [7.0, 7.0, 7.0]
-    timepoints = output.parent / "timepoints"
+    timepoints = output.with_suffix("") / "timepoints"
     timepoints.mkdir(parents=True)
     (timepoints / "0.json").write_text(
         json.dumps({"t": 0, "matrix": planted.tolist(), "score": 0.9, "error": None})
@@ -171,15 +173,31 @@ def test_estimate_transform_resume_keeps_existing_records(beads_plate, tmp_path)
 
 def test_a_fresh_run_clears_an_earlier_runs_records(beads_plate, tmp_path):
     output = tmp_path / "out" / "registration_settings.yml"
-    for name in ("timepoints", "repairs", "sweeps"):
-        (output.parent / name).mkdir(parents=True)
-        (output.parent / name / "99.json").write_text("{}")
+    # Another estimate written to the same folder keeps its own records.
+    other = tmp_path / "out" / "stabilization.yml"
+    for run in (output, other):
+        for name in ("timepoints", "repairs", "sweeps"):
+            (run.with_suffix("") / name).mkdir(parents=True)
+            (run.with_suffix("") / name / "99.json").write_text("{}")
 
     _run(beads_plate, _write_config(tmp_path), output)
 
     for name in ("timepoints", "repairs", "sweeps"):
-        assert not (output.parent / name / "99.json").exists()
-    assert (output.parent / "run_manifest.json").exists()
+        assert not (output.with_suffix("") / name / "99.json").exists()
+        assert (other.with_suffix("") / name / "99.json").exists()
+    assert (output.with_suffix("") / "run_manifest.json").exists()
+
+
+def test_resume_accepts_the_same_inputs_written_another_way(
+    beads_plate, tmp_path, monkeypatch
+):
+    output = tmp_path / "out" / "registration_settings.yml"
+    config = _write_config(tmp_path)
+    _run(beads_plate, config, output)
+
+    monkeypatch.chdir(tmp_path)
+    relative = beads_plate.relative_to(tmp_path)
+    _run(relative, config, output, resume=True)  # not refused as changed inputs
 
 
 def test_a_failed_job_is_never_filled_from_a_record_on_disk(tmp_path):
@@ -236,7 +254,9 @@ def test_an_sbatch_time_limit_is_kept_by_every_phase(
         sbatch_filepath=str(sbatch),
     )
 
-    report = json.loads((output.parent / "estimate_transform_report.json").read_text())
+    report = json.loads(
+        (output.with_suffix("") / "estimate_transform_report.json").read_text()
+    )
     assert report["flagged"] == [2]  # the repair phase ran
     assert times and set(times) == {7}
 
@@ -248,7 +268,9 @@ def test_estimate_transform_flags_and_tries_to_repair_a_failed_timepoint(
 
     _run(beads_plate_with_a_blank_timepoint, _write_config(tmp_path), output)
 
-    report = json.loads((output.parent / "estimate_transform_report.json").read_text())
+    report = json.loads(
+        (output.with_suffix("") / "estimate_transform_report.json").read_text()
+    )
     assert "2" in report["errors"] and "EstimationError" in report["errors"]["2"]
     assert report["flagged"] == [2]
     repair = report["repairs"]["2"]
@@ -263,9 +285,9 @@ def test_estimate_transform_flags_and_tries_to_repair_a_failed_timepoint(
         "ValueError: Consensus seed: only 2 timepoints"
     )
     assert report["stand_ins"] == {"2": "seed"}
-    assert (output.parent / "repairs" / "2.json").exists()
+    assert (output.with_suffix("") / "repairs" / "2.json").exists()
 
-    journal = json.loads((output.parent / "run_journal.json").read_text())
+    journal = json.loads((output.with_suffix("") / "run_journal.json").read_text())
     (attempt,) = journal["attempts"]
     assert attempt["t"] == 2 and attempt["accepted"] is False and attempt["failures"]
 
@@ -293,7 +315,9 @@ def test_estimate_transform_ants_method_recovers_the_shift(beads_plate, tmp_path
 
     (row,) = _inverse_translations(output)
     np.testing.assert_allclose(row, APPLIED_SHIFT_ZYX, atol=0.5)
-    report = json.loads((output.parent / "estimate_transform_report.json").read_text())
+    report = json.loads(
+        (output.with_suffix("") / "estimate_transform_report.json").read_text()
+    )
     assert report["scores"]["0"] > 0.9  # correlation score
 
 
@@ -393,7 +417,9 @@ def test_estimate_transform_several_positions_each_get_their_own_transforms(tmp_
         for t, row in enumerate(inverses):
             np.testing.assert_allclose(row, t * d, atol=0.5)
     # each position kept its own records, so --resume works per position
-    assert (output.parent / "positions" / "A" / "1" / "1" / "timepoints" / "2.json").exists()
+    assert (
+        output.with_suffix("") / "positions" / "A" / "1" / "1" / "timepoints" / "2.json"
+    ).exists()
 
 
 def test_estimate_transform_previous_timepoint_runs_one_sequential_job(tmp_path):
@@ -421,11 +447,13 @@ def test_estimate_transform_previous_timepoint_runs_one_sequential_job(tmp_path)
 
     _run(plate, config, output)
 
-    job_ids = (output.parent / "slurm_output" / "estimate_job_ids.log").read_text().split()
+    job_ids = (
+        (output.with_suffix("") / "slurm_output" / "estimate_job_ids.log").read_text().split()
+    )
     assert len(job_ids) == 1  # one sequential job, not one per timepoint
     for t, row in enumerate(_inverse_translations(output)):
         np.testing.assert_allclose(row, (t + 1) * step, atol=0.5)
-    record = json.loads((output.parent / "timepoints" / "2.json").read_text())
+    record = json.loads((output.with_suffix("") / "timepoints" / "2.json").read_text())
     assert {"stand_in", "stand_in_from"} <= set(record)
 
 
@@ -446,7 +474,9 @@ def test_repair_is_skipped_for_a_method_that_ignores_seeds(tmp_path, capsys):
 
     _run(plate, config, output)
 
-    report = json.loads((output.parent / "estimate_transform_report.json").read_text())
+    report = json.loads(
+        (output.with_suffix("") / "estimate_transform_report.json").read_text()
+    )
     assert report["flagged"]  # the noise frame is still flagged ...
     assert report["repairs"] == {}  # ... but PCC is not re-run from other seeds
     assert "repair skipped" in capsys.readouterr().out
@@ -516,7 +546,7 @@ def test_estimate_transform_accepts_the_unified_config_and_writes_forward_matric
         )
         assert entry.score is not None and entry.repaired_from is None
     engine_settings = yaml_to_model(
-        output.parent / "estimate_transform_settings.yml", EstimateTransformSettings
+        output.with_suffix("") / "estimate_transform_settings.yml", EstimateTransformSettings
     )
     assert engine_settings.score_metric == "residual"
 
@@ -543,7 +573,9 @@ def test_estimate_transform_fallback_settings_reach_flagging_and_repair(
 
     _run(beads_plate_with_a_blank_timepoint, config, output)
 
-    report = json.loads((output.parent / "estimate_transform_report.json").read_text())
+    report = json.loads(
+        (output.with_suffix("") / "estimate_transform_report.json").read_text()
+    )
     assert report["flagged"] == [2]
     # Only the seed candidate was configured, so only it was tried.
     assert set(report["repairs"]["2"]["candidate_failures"]) | set(
@@ -642,7 +674,9 @@ def test_estimate_transform_sweep_runs_on_flagged_timepoints_and_resumes(
 
     _run(beads_plate_with_a_blank_timepoint, config, output)
 
-    report = json.loads((output.parent / "estimate_transform_report.json").read_text())
+    report = json.loads(
+        (output.with_suffix("") / "estimate_transform_report.json").read_text()
+    )
     assert report["flagged"] == [2] and report["repairs"] == {}
     swept = report["sweeps"]["2"]
     # A blank frame: both trials fail, each by name, and nothing is kept.
@@ -652,8 +686,8 @@ def test_estimate_transform_sweep_runs_on_flagged_timepoints_and_resumes(
         "beads.hungarian_match_settings.cost_threshold=0.2",
     }
     assert report["provenance"] == {}
-    assert (output.parent / "sweeps" / "2.json").exists()
-    journal = json.loads((output.parent / "run_journal.json").read_text())
+    assert (output.with_suffix("") / "sweeps" / "2.json").exists()
+    journal = json.loads((output.with_suffix("") / "run_journal.json").read_text())
     assert [(a["t"], a["pass_name"]) for a in journal["attempts"]] == [(2, "sweep")]
 
     import biahub.registration.engine as engine
@@ -663,5 +697,7 @@ def test_estimate_transform_sweep_runs_on_flagged_timepoints_and_resumes(
 
     monkeypatch.setattr(engine, "_sweep_timepoint_job", _must_not_run)
     _run(beads_plate_with_a_blank_timepoint, config, output, resume=True)
-    resumed = json.loads((output.parent / "estimate_transform_report.json").read_text())
+    resumed = json.loads(
+        (output.with_suffix("") / "estimate_transform_report.json").read_text()
+    )
     assert resumed["sweeps"] == report["sweeps"]

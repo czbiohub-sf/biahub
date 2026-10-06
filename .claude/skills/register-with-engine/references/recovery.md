@@ -17,7 +17,8 @@
 - Keep the number of jobs you have on the queue modest: an overloaded partition makes jobs
   hit their time limit, and a cancelled timepoint looks like a failed estimate.
 - An sbatch time limit wins over every phase's default.
-- Never delete `timepoints/` or `repairs/` to "clean up" a run that may be resumed; a fresh
-  run (without `--resume`) clears them itself.
+- Never delete a run folder's `timepoints/` or `repairs/` (`<out>/transforms/` for
+  `-o <out>/transforms.yml`) to "clean up" a run that may be resumed; a fresh run (without
+  `--resume`) clears them itself, and only its own.
 - Results at timepoints with very few beads can differ by node (floating point): compare
   runs at the score's resolution.

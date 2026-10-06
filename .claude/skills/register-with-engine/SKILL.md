@@ -97,26 +97,29 @@ tmux new-session -d -s register-<DATASET> -c <output dir> \
 ```
 
 Relaunching with `--resume` keeps finished timepoints and refuses if the settings or inputs
-changed. Never run two drivers on the same output directory. For large volumes set a time
+changed. The run's records go in a folder named after the output (`-o <out>/transforms.yml`
+-> `<run> = <out>/transforms/`), so several estimates can share `<out>`; never run two
+drivers on the same output file at once. For large volumes set a time
 limit in an sbatch file (`-sb`); it wins over every default (`references/recovery.md`).
 
 ## 8. Monitor
 
-- `ls <out>/timepoints | wc -l` against T;
+- `ls <run>/timepoints | wc -l` against T;
   `squeue -u $USER -h -o "%j %t" | grep estimate_transform | sort | uniq -c`.
 - The repair phase starts when the driver prints `repair: N of T timepoints flagged`. Done
-  when `<out>/estimate_transform_report.json` exists.
+  when `<run>/estimate_transform_report.json` exists.
 - A record with `"error"` set is a timepoint with no transform of its own (too few beads, an
   empty frame, or a cancelled job); its entry in `transforms.yml` is `unreliable` and its
   `note` says which.
 
 ## 9. Read the result
 
-From `transforms.yml`, `estimate_transform_report.json` and `run_journal.json`:
+From `transforms.yml`, `<run>/estimate_transform_report.json`, `<run>/run_journal.json` and
+the per-timepoint records `<run>/timepoints/<t>.json`:
 
 - score distribution (median, min), `flagged`, `repairs` (accepted, source, before ->
   after), `stand_ins`, and the `unreliable` entries with their notes.
-- per-timepoint `metrics` (`median_residual` in voxels should sit well under 1 on good
+- per-timepoint `metrics`, in the records (`median_residual` in voxels should sit well under 1 on good
   timepoints; `n_matched` close to the detected bead count).
 - If a previous registration exists: per-timepoint translation difference (read both in the
   inverse direction: `references/transforms-file.md`). Equal scores with slightly different

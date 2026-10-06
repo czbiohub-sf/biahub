@@ -1129,7 +1129,15 @@ def _estimate_propagated_job(
 def _run_fingerprint(settings: EstimateTransformSettings, source: Path, target: Path) -> dict:
     """Return what a resumed run must share with the run it resumes."""
     digest = hashlib.sha256(settings.model_dump_json().encode()).hexdigest()
-    return {"settings_sha256": digest, "moving": str(source), "reference": str(target)}
+
+    def resolved(path):
+        return None if path is None else str(Path(path).resolve())
+
+    return {
+        "settings_sha256": digest,
+        "moving": resolved(source),
+        "reference": resolved(target),
+    }
 
 
 def _start_run(

@@ -4,11 +4,12 @@
 # Copy this into the run's output directory next to the config and fill in the
 # variables below. Keep it there: it is the run's provenance record of the exact command.
 #
-# Outputs, next to OUTPUT:
-#   transforms.yml                 one transform per timepoint, with score and status
-#   estimate_transform_report.json scores, flagged, repairs, stand-ins
-#   run_journal.json               every repair / sweep attempt
-#   timepoints/ repairs/           per-timepoint records (what --resume continues from)
+# Outputs:
+#   OUTPUT (transforms.yml)        one transform per timepoint, with score and status
+#   and in a folder named after it (transforms/):
+#     estimate_transform_report.json scores, flagged, repairs, stand-ins
+#     run_journal.json               every repair / sweep attempt
+#     timepoints/ repairs/           per-timepoint records (what --resume continues from)
 #
 # Any extra arguments are forwarded, e.g. `./run_estimate_transform.sh --resume`.
 set -euo pipefail
