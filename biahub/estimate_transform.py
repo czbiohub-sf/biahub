@@ -264,8 +264,8 @@ def estimate_transform_init(
     """Start a run for the steps: check the config, plan every position, print the plan.
 
     Reads only store metadata. Prints `RESOURCES:` (one estimate task) and
-    `PLAN:{positions, time_indices, propagated, resources}` for Nextflow, and returns
-    the plan.
+    `PLAN:{positions, time_indices, propagated, interactive, resources}` for Nextflow, and
+    returns the plan.
     """
     run = _Run(
         moving_position_dirpaths, config_filepath, output_filepath, reference_position_dirpaths
@@ -282,6 +282,8 @@ def estimate_transform_init(
         "positions": run.keys,
         "time_indices": first["time_indices"],
         "propagated": first["propagated"],
+        # manual registration needs a display and a terminal: not a batch task
+        "interactive": first["interactive"],
         "resources": first["resources"],
     }
     estimate = first["resources"]["estimate"]
