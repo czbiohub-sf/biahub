@@ -3,6 +3,7 @@ import pytest
 import yaml
 
 from click.testing import CliRunner
+from iohub import open_ome_zarr
 from scipy.ndimage import shift as ndi_shift
 
 from biahub.cli.main import cli
@@ -14,6 +15,7 @@ from tests.test_estimate_transform import (
     _write_plate,
 )
 
+CHANNELS = ("Phase3D", "GFP")
 PEAKS = {"threshold_abs": 100, "nms_distance": 4, "min_distance": 0, "block_size": [8, 8, 8]}
 
 
@@ -87,13 +89,17 @@ def test_estimate_registration_alias_runs_estimate_transform_and_warns(beads_pla
 
 
 def test_register_alias_applies_a_legacy_registration_config(beads_plate, tmp_path):
+    # Source and target are the same store, as in main's register: only the source channels
+    # move, the target channel is copied.
+    shift_y = np.eye(4)
+    shift_y[1, 3] = 4.0
     config = tmp_path / "register.yml"
     config.write_text(
         yaml.safe_dump(
             {
                 "source_channel_names": ["GFP"],
                 "target_channel_name": "Phase3D",
-                "affine_transform_zyx": np.eye(4).tolist(),
+                "affine_transform_zyx": shift_y.tolist(),
                 "keep_overhang": True,
             }
         )
@@ -117,7 +123,14 @@ def test_register_alias_applies_a_legacy_registration_config(beads_plate, tmp_pa
 
     assert result.exit_code == 0, result.output
     assert "DeprecationWarning" in result.output and "apply-transform" in result.output
-    assert (output / "A" / "1" / "0").exists()
+    with open_ome_zarr(beads_plate) as source:
+        phase, gfp = (
+            np.asarray(source.data[0, source.get_channel_index(c)]) for c in CHANNELS
+        )
+    with open_ome_zarr(output / "A" / "1" / "0") as registered:
+        assert registered.channel_names == list(CHANNELS)
+        np.testing.assert_array_equal(registered.data[0, 0], phase)
+        assert not np.allclose(registered.data[0, 1], gfp)
 
 
 def test_optimize_registration_points_to_the_replacement():

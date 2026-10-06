@@ -84,7 +84,7 @@ def _transforms_config(config_filepaths: list[Path], next_to: Path) -> tuple[Pat
     legacy = [load_legacy_settings(p) for p in paths]
     options = {
         key: getattr(legacy[0], key)
-        for key in ("time_indices", "keep_overhang", "interpolation")
+        for key in ("time_indices", "keep_overhang", "interpolation", "source_channel_names")
         if hasattr(legacy[0], key)
     }
     if len(paths) == 1:
@@ -188,6 +188,8 @@ def register_alias(
         sbatch_filepath=sbatch_filepath,
         cluster="local" if local else "slurm",
         monitor=monitor,
+        # legacy register moved only these; the target's channels were copied
+        channels=options.get("source_channel_names"),
     )
 
 
