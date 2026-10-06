@@ -629,11 +629,14 @@ def test_ants_estimates_are_repeatable():
 import numpy as np
 from scipy.ndimage import shift as ndi_shift
 from tests.test_registration_estimators import _synthetic_blob_volume
+from biahub.core.transform import Transform
 from biahub.registration.methods.ants import AntsEstimator
 rng = np.random.default_rng(5)
 ref = _synthetic_blob_volume(rng, (24, 48, 48))
 mov = ndi_shift(ref, shift=(2, -3, 4), order=1, mode="constant", cval=0.0)
-first, second = (AntsEstimator().estimate(mov, ref).matrix for _ in range(2))
+# with a seed, as the engine always calls it: the seed is applied (an ITK resample) first
+seed = Transform.identity(3)
+first, second = (AntsEstimator().estimate(mov, ref, seed=seed).matrix for _ in range(2))
 assert np.array_equal(first, second), np.abs(first - second).max()
 """
     env = {**os.environ, "SLURM_CPUS_PER_TASK": "1"}

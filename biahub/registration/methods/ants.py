@@ -53,6 +53,15 @@ def _itk_threads() -> str:
     return os.environ.get("SLURM_CPUS_PER_TASK") or str(len(os.sched_getaffinity(0)))
 
 
+def use_task_threads() -> None:
+    """Give ITK this task's CPUs (`_itk_threads`). Call before any ITK operation in the process.
+
+    ITK reads the thread count once, at its first threaded operation (e.g. warping the
+    moving volume onto the seed), and keeps it.
+    """
+    os.environ["ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS"] = _itk_threads()
+
+
 def estimate(
     ref: np.ndarray,
     mov: np.ndarray,
@@ -92,7 +101,7 @@ def estimate(
 
     ants_kwargs = dict(DEFAULT_ANTS_KWARGS if ants_kwargs is None else ants_kwargs)
     ants_kwargs.setdefault("random_seed", ANTS_RANDOM_SEED)
-    os.environ["ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS"] = _itk_threads()
+    use_task_threads()
 
     mov_ants = ants.from_numpy(mov)
     ref_ants = ants.from_numpy(ref)
@@ -222,6 +231,7 @@ class AntsEstimator:
     def estimate(
         self, mov: ArrayLike, ref: ArrayLike, seed: Transform | None = None
     ) -> Transform:
+        use_task_threads()  # before the seed warp, ITK's first threaded operation
         mov = np.asarray(mov, dtype=np.float32)
         ref = np.asarray(ref, dtype=np.float32)
         aligned = seed.apply(mov, reference=ref) if seed is not None else mov

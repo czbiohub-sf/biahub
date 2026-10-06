@@ -40,7 +40,7 @@ from biahub.registration.estimators import (
     ScoreFn,
     TransformEstimator,
 )
-from biahub.registration.methods.ants import AntsEstimator
+from biahub.registration.methods.ants import AntsEstimator, use_task_threads
 from biahub.registration.methods.beads import NodeGraphEstimator
 from biahub.registration.methods.focus import FocusEstimator
 from biahub.registration.methods.manual import ManualEstimator
@@ -1045,6 +1045,7 @@ def _estimate_timepoint_job(
     record_path: Path,
 ) -> dict:
     """One independent estimate, from the config seed, written as a JSON record."""
+    use_task_threads()  # a fresh job process: before any ITK operation
     settings = yaml_to_model(settings_path, EstimateTransformSettings)
     mov, mov_voxel_size = _open_series(moving_position_dirpath, settings.moving.channel)
     ref, ref_voxel_size = _open_series(reference_position_dirpath, settings.reference_channel)
@@ -1081,6 +1082,7 @@ def _estimate_propagated_job(
     Each record is written as soon as its timepoint is done, so an interrupted job
     resumes the chain where it stopped.
     """
+    use_task_threads()  # a fresh job process: before any ITK operation
     settings = yaml_to_model(settings_path, EstimateTransformSettings)
     mov, mov_voxel_size = _open_series(moving_position_dirpath, settings.moving.channel)
     ref, ref_voxel_size = _open_series(reference_position_dirpath, settings.reference_channel)
@@ -1228,6 +1230,7 @@ def _repair_timepoint_job(
     record_path: Path,
 ) -> dict:
     """Repair one flagged timepoint against the frozen whole-run history."""
+    use_task_threads()  # a fresh job process: before any ITK operation
     settings = yaml_to_model(settings_path, EstimateTransformSettings)
     mov, mov_voxel_size = _open_series(moving_position_dirpath, settings.moving.channel)
     ref, ref_voxel_size = _open_series(reference_position_dirpath, settings.reference_channel)
@@ -1281,6 +1284,7 @@ def _sweep_timepoint_job(
     record_path: Path,
 ) -> dict:
     """Sweep one flagged timepoint against its own pre-fallback estimate."""
+    use_task_threads()  # a fresh job process: before any ITK operation
     settings = yaml_to_model(settings_path, EstimateTransformSettings)
     mov, mov_voxel_size = _open_series(moving_position_dirpath, settings.moving.channel)
     ref, ref_voxel_size = _open_series(reference_position_dirpath, settings.reference_channel)
