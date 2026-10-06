@@ -18,7 +18,7 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.settings import SegmentationSettings
-from biahub.utils.cellpose import cellpose_device
+from biahub.utils.cellpose import cellpose_device, load_cellpose_model
 from biahub.utils.cluster import estimate_resources, get_submitit_cluster
 from biahub.utils.config import yaml_to_model
 from biahub.utils.ngff import get_output_paths, resolve_ome_zarr_version
@@ -51,13 +51,15 @@ def segment_data(
     device = cellpose_device(gpu)
     click.echo(f"Using device: {device}")
 
-    from cellpose import models
-
     czyx_segmentation = []
     # Process each model in a loop
     for model_name, model_args in segmentation_models.items():
         click.echo(f"Segmenting with model {model_name}")
         z_slice_2D = model_args.z_slice_2D
+        eval_args = dict(model_args.eval_args)
+        # cellpose 4 ignores `channels` and keeps the first 3 channels it is given, so
+        # pass only the configured ones (segment_cli turned the names into indices).
+        channel_indices = eval_args.pop("channels")
         czyx_data_to_segment = (
             czyx_data[:, z_slice_2D : z_slice_2D + 1] if z_slice_2D is not None else czyx_data
         )
@@ -78,11 +80,9 @@ def segment_data(
             czyx_data[c_idx] = func(czyx_data[c_idx], **kwargs)
 
         # Apply the segmentation
-        model = models.CellposeModel(
-            model_type=model_args.path_to_model, gpu=gpu, device=device
-        )
+        model = load_cellpose_model(model_args.path_to_model, device)
         segmentation, _, _ = model.eval(
-            czyx_data_to_segment, channel_axis=0, z_axis=1, **model_args.eval_args
+            czyx_data_to_segment[channel_indices], channel_axis=0, z_axis=1, **eval_args
         )
         if z_slice_2D is not None and isinstance(z_slice_2D, int):
             segmentation = segmentation[np.newaxis, ...]
@@ -145,15 +145,16 @@ def segment_cli(
             raise ValueError(
                 f"Channels {model_args.eval_args['channels']} not found in dataset {channel_names}"
             )
-        # Channel strings to indices with the cellpose offset of 1
+        # Channel names to dataset channel indices; segment_data slices these out, as
+        # cellpose 4 takes up to 3 channels in any order and has no `channels` argument.
+        if len(model_args.eval_args["channels"]) > 3:
+            raise ValueError(
+                f"Model {model_name}: cellpose 4 uses at most 3 channels, "
+                f"got {model_args.eval_args['channels']}"
+            )
         model_args.eval_args["channels"] = [
-            channel_names.index(channel) + 1 for channel in model_args.eval_args["channels"]
+            channel_names.index(channel) for channel in model_args.eval_args["channels"]
         ]
-        # NOTE:List of channels, either of length 2 or of length number of images by 2.
-        # First element of list is the channel to segment (0=grayscale, 1=red, 2=green, 3=blue).
-        # Second element of list is the optional nuclear channel (0=none, 1=red, 2=green, 3=blue).
-        if len(model_args.eval_args["channels"]) < 2:
-            model_args.eval_args["channels"].append(0)
 
         click.echo(
             f"Segmenting with model {model_name} using channels {model_args.eval_args['channels']}"

@@ -57,6 +57,35 @@ def fake_cellpose(monkeypatch, tmp_path):
     return RecordingModel
 
 
+def _segment(czyx, **model_args):
+    from biahub.segment import segment_data
+    from biahub.settings import SegmentationModel
+
+    segment_data(czyx, {"nuc": SegmentationModel(**model_args)}, gpu=False)
+
+
+def test_segment_uses_the_requested_model(fake_cellpose):
+    _segment(
+        np.zeros((1, 1, 8, 8), dtype=np.float32),
+        path_to_model="cpdino",
+        eval_args={"channels": [0], "diameter": None},
+    )
+
+    assert fake_cellpose.built == ["cpdino"]
+
+
+def test_segment_passes_only_the_configured_channel(fake_cellpose):
+    # Three channels with distinct constant values; the config asks for channel 2 only
+    # (segment_cli has already turned the channel name into this index).
+    czyx = np.stack([np.full((1, 8, 8), c, dtype=np.float32) for c in (10, 20, 30)])
+
+    _segment(czyx, path_to_model="cpsam_v2", eval_args={"channels": [2], "diameter": None})
+
+    (seen,) = fake_cellpose.evaluated
+    assert seen.shape[0] == 1
+    assert np.all(seen == 30)
+
+
 def test_track_cellpose_uses_the_requested_model(fake_cellpose):
     from biahub.track import run_cellpose_per_frame
 
