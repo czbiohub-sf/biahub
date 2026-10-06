@@ -1,3 +1,4 @@
+import click
 import numpy as np
 import pytest
 
@@ -215,7 +216,7 @@ def test_apply_transform_copies_reference_channels_by_default(
 
     # Moving store == reference store, and separate stores sharing a channel name.
     for name, reference in (("same", position), ("other", other / "A" / "1" / "0")):
-        output = tmp_path / f"{name}.zarr"
+        output = tmp_path / f"{name}_out.zarr"
         apply_transform(
             [position],
             config,
@@ -728,3 +729,19 @@ def test_the_full_reference_grid_is_kept_by_default(two_position_stabilization, 
     )
     assert _read(tmp_path / "kept.zarr")["0"].shape[-3:] == (16, 32, 32)
     assert _read(tmp_path / "cropped.zarr")["0"].shape[-2] < 32
+
+
+def test_applying_into_an_output_of_another_shape_says_so(
+    two_position_stabilization, tmp_path
+):
+    # An existing output keeps its arrays (create_empty_plate does not resize them), so a
+    # different canvas, timepoints or channels cannot be written into it: say that plainly.
+    positions, config = two_position_stabilization
+    output = tmp_path / "out.zarr"
+    apply_transform(positions, config, output, cluster="debug")  # full grid
+    with pytest.raises(click.UsageError, match="already holds A/1/0 with shape"):
+        apply_transform(
+            positions, config, output, keep_overhang=False, resume=True, cluster="debug"
+        )
+    # the same apply again is fine (a retry)
+    apply_transform(positions, config, output, resume=True, cluster="debug")

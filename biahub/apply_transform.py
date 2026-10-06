@@ -208,6 +208,36 @@ def parse_time_indices(value: str) -> int | list[int] | str:
     return indices[0] if len(indices) == 1 else indices
 
 
+def _check_existing_output(
+    output_dirpath: Path,
+    position_keys: list[str],
+    shape: tuple[int, ...],
+    channel_names: list[str],
+) -> None:
+    """Refuse an existing output position this apply cannot write into.
+
+    `create_empty_plate` keeps an existing position's array as it is, so a different
+    canvas, timepoints or channels (e.g. `--crop-to-overlap` after a full-grid run) cannot
+    be written into it.
+    """
+    for key in position_keys:
+        position = Path(output_dirpath) / key
+        if not (position / "0").exists():
+            continue
+        with open_ome_zarr(position, mode="r") as existing:
+            have_shape, have_channels = (
+                tuple(existing.data.shape),
+                list(existing.channel_names),
+            )
+        if (have_shape, have_channels) != (tuple(shape), list(channel_names)):
+            raise click.UsageError(
+                f"{output_dirpath} already holds {key} with shape {have_shape} and channels "
+                f"{have_channels}; this apply writes shape {tuple(shape)} and channels "
+                f"{list(channel_names)} (another canvas, timepoints or channels). Write to a "
+                "new output, or remove that one."
+            )
+
+
 def apply_transform(
     moving_position_dirpaths: list[Path],
     config_filepath: Path,
@@ -347,6 +377,8 @@ def apply_transform(
         f"{'kept overhang' if keep_overhang else 'overlap shared by the applied transforms'})"
     )
 
+    output_shape = (len(time_indices), len(output_channel_names)) + cropped_shape
+    _check_existing_output(output_dirpath, position_keys, output_shape, output_channel_names)
     create_empty_plate(
         store_path=output_dirpath,
         position_keys=[p.parts[-3:] for p in moving_position_dirpaths],
