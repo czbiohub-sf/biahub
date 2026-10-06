@@ -1,3 +1,5 @@
+import warnings
+
 from pathlib import Path
 from typing import Any, Literal
 
@@ -61,14 +63,31 @@ class ProcessingInputChannel(MyBaseModel):
 class CellposeConfig(MyBaseModel):
     """Configuration for Cellpose segmentation used as input to tracking."""
 
-    model_type: str = "nuclei"
-    diameter: float = 80
+    # cellpose 4 model: cpsam_v2, cpsam, cpdino, cpdino-vitb, or a path to weights.
+    pretrained_model: str = "cpsam_v2"
+    # Deprecated: cellpose 4 ignores it (``model_type: nuclei`` always ran cpsam_v2).
+    model_type: str | None = None
+    # Cellpose 4 resizes each frame by 30 / diameter before inference (80 -> 37.5%),
+    # which shrinks small objects such as rounded mitotic nuclei. None = native size.
+    diameter: float | None = 80
     cellprob_threshold: float = 0.0
     flow_threshold: float = 0.4
     gpu: bool = True
     min_size: int = 500
     input_channel: str = "nuclei_prediction"
     labels_sigma: float = 5.0
+
+    @field_validator("model_type")
+    @classmethod
+    def warn_model_type_ignored(cls, v):
+        if v is not None:
+            warnings.warn(
+                f"cellpose_config.model_type={v!r} is ignored by cellpose 4, which runs "
+                "pretrained_model (default cpsam_v2). Remove model_type from the config.",
+                UserWarning,
+                stacklevel=2,
+            )
+        return v
 
 
 class ZSlicing(MyBaseModel):
