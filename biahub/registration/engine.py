@@ -1368,6 +1368,9 @@ def _run_jobs(
     return records, failures
 
 
+# Default wall-clock budgets per phase, in minutes (an sbatch file's time wins).
+ESTIMATE_MINUTES = 30
+REPAIR_MINUTES = 60
 # Wall-clock budget per timepoint for the sequential (propagation) job, in minutes.
 PROPAGATION_MINUTES_PER_TIMEPOINT = 5
 
@@ -1383,7 +1386,7 @@ def _run_propagated(
     if not to_estimate:
         return {}, {}
     if not user_set_time:
-        minutes = max(30, PROPAGATION_MINUTES_PER_TIMEPOINT * len(to_estimate))
+        minutes = max(ESTIMATE_MINUTES, PROPAGATION_MINUTES_PER_TIMEPOINT * len(to_estimate))
         executor.update_parameters(slurm_time=minutes)
     executor.update_parameters(slurm_job_name="estimate_transform_propagated")
     by_job, failures = _run_jobs(
@@ -1462,31 +1465,37 @@ def _report(result: SeriesResult, time_indices: list[int]) -> dict:
     }
 
 
-def estimate_transform_series(
+RUN_PLAN_FILENAME = "run_plan.json"
+FLAGS_FILENAME = "flags.json"
+
+
+def _sweep_minutes(n_trials: int) -> int:
+    return 30 + 3 * n_trials
+
+
+def _record_dirs(output_dir: Path) -> tuple[Path, Path, Path]:
+    """Return the run's per-timepoint record dirs: estimates, repairs, sweeps."""
+    return output_dir / "timepoints", output_dir / "repairs", output_dir / "sweeps"
+
+
+def init_run(
     moving_position_dirpath: Path,
     reference_position_dirpath: Path,
     settings: EstimateTransformSettings,
     output_dir: Path,
-    sbatch_filepath: str | None = None,
-    cluster: str = "slurm",
-    monitor: bool = False,
     resume: bool = False,
-) -> tuple[SeriesResult, list[int], list[Transform]]:
-    """Run both fan-out phases; return the series, its timepoints and one forward transform per timepoint.
+) -> dict:
+    """Start a run in `output_dir` and return its plan (also written as `run_plan.json`).
 
-    Writes the settings the jobs read (`estimate_transform_settings.yml`), the per-timepoint
-    records (`timepoints/`, `repairs/`), `run_journal.json` and
-    `estimate_transform_report.json` under `output_dir`.
+    Resolves the settings the jobs read (a seed from the store shapes is computed once,
+    here), writes them with the run manifest -- clearing an earlier run's records unless
+    `resume` -- and plans the run: the timepoints, whether they are estimated in one
+    sequential job (`seed_from: previous_timepoint`), whether the method uses a seed
+    (repair needs one), and each phase's resources. Reads only store metadata.
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    timepoints_dir = output_dir / "timepoints"
-    repairs_dir = output_dir / "repairs"
-    sweeps_dir = output_dir / "sweeps"
-    slurm_out_path = output_dir / "slurm_output"
-    slurm_out_path.mkdir(exist_ok=True)
     source, target = Path(moving_position_dirpath), Path(reference_position_dirpath)
-
     with open_ome_zarr(source, mode="r") as position:
         T, _C, Z, Y, X = position.data.shape
         mov_voxel_size = tuple(position.scale[-3:])
@@ -1508,36 +1517,277 @@ def estimate_transform_series(
         settings.transform.seed = approx.to_list()
         settings.transform.seed_direction = "inverse"
         click.echo(f"Computed seed from the store shapes:\n{approx.matrix}")
-    _estimator, _score_fn, seed = build_estimator(
+    estimator, _score_fn, _seed_transform = build_estimator(
         settings, (Z, Y, X), mov_voxel_size, ref_voxel_size
     )
-    if settings.method == "manual":
-        # Interactive (napari), in this process; time_indices is its one timepoint.
-        cluster = "debug"
-    settings_path = output_dir / ENGINE_SETTINGS_FILENAME
     _start_run(output_dir, settings, source, target, resume)
-    model_to_yaml(settings, settings_path)
-    time_indices = resolve_time_indices(settings.time_indices, T)
-    transform_type = settings.transform.type
+    model_to_yaml(settings, output_dir / ENGINE_SETTINGS_FILENAME)
 
+    time_indices = resolve_time_indices(settings.time_indices, T)
+    propagated = settings.transform.seed_from == "previous_timepoint"
     # Bead matching is single-threaded; ANTs' optimizer uses ITK threads.
     _, num_cpus, gb_ram_per_cpu = estimate_resources(
         shape=(1, 2, Z, Y, X),
         ram_multiplier=5,
         max_num_cpus=8 if settings.method == "ants" else 4,
     )
+    n_trials = len(settings.sweep_trials()) if settings.fallback.sweep is not None else 0
+    estimate_minutes = (
+        max(ESTIMATE_MINUTES, PROPAGATION_MINUTES_PER_TIMEPOINT * len(time_indices))
+        if propagated
+        else ESTIMATE_MINUTES
+    )
+
+    def resources(minutes: int) -> dict:
+        return {
+            "cpus": num_cpus,
+            "mem_gb": num_cpus * gb_ram_per_cpu,
+            "gb_ram_per_cpu": gb_ram_per_cpu,
+            "time_minutes": minutes,
+        }
+
+    plan = {
+        "time_indices": time_indices,
+        "propagated": propagated,
+        "uses_seed": bool(getattr(estimator, "uses_seed", True)),
+        "interactive": settings.method == "manual",
+        "resources": {
+            "estimate": resources(estimate_minutes),
+            "repair": resources(REPAIR_MINUTES),
+            "sweep": resources(_sweep_minutes(n_trials)),
+        },
+    }
+    (output_dir / RUN_PLAN_FILENAME).write_text(json.dumps(plan, indent=2))
+    return plan
+
+
+def _run_settings(output_dir: Path) -> EstimateTransformSettings:
+    """Return the settings `init_run` resolved for this run."""
+    path = Path(output_dir) / ENGINE_SETTINGS_FILENAME
+    if not path.exists():
+        raise click.UsageError(f"no run in {output_dir}: run with --init first")
+    return yaml_to_model(path, EstimateTransformSettings)
+
+
+def _run_plan(output_dir: Path) -> dict:
+    path = Path(output_dir) / RUN_PLAN_FILENAME
+    if not path.exists():
+        raise click.UsageError(f"no run in {output_dir}: run with --init first")
+    return json.loads(path.read_text())
+
+
+def flag_run(
+    output_dir: Path,
+    records: dict[int, dict] | None = None,
+    failures: dict[int, str] | None = None,
+    from_disk: Iterable[int] | None = None,
+) -> tuple[SeriesResult, dict]:
+    """Load the estimates and decide which timepoints to repair and sweep.
+
+    Records come from `records` (this call's jobs) and, for the timepoints in
+    `from_disk` (all of them when None), from the run's record files. Writes and returns
+    the flags (`flags.json`): flagged, repair and sweep timepoints, and the scores they
+    were decided on.
+    """
+    output_dir = Path(output_dir)
+    settings, plan = _run_settings(output_dir), _run_plan(output_dir)
+    time_indices = plan["time_indices"]
+    timepoints_dir, _, _ = _record_dirs(output_dir)
+    result = _load_series(
+        timepoints_dir,
+        time_indices,
+        settings.transform.type,
+        records=records,
+        resumed=time_indices if from_disk is None else from_disk,
+    )
+    for t, error in (failures or {}).items():
+        result.errors[t] = error
+    for t in time_indices:
+        line = f"t={t}: score={result.scores[t]:.4f}"
+        if t in result.errors:
+            line += f"  estimate failed: {result.errors[t]}"
+        click.echo(line)
+
+    flag = settings.fallback.flag
+    flagged = flag_series(result, k_mad=flag.k_mad, floor=flag.floor, hard_fail=flag.hard_fail)
+    base_scores = dict(result.scores)
+    repair_settings, sweep_settings = settings.fallback.repair, settings.fallback.sweep
+    repair_ts = (
+        cap_worst(flagged, base_scores, repair_settings.max_timepoints)
+        if repair_settings is not None
+        else []
+    )
+    if repair_ts and not plan["uses_seed"]:
+        click.echo(
+            f"repair skipped: method {settings.method!r} ignores seeds, so re-seeding "
+            f"would return the same transforms ({len(repair_ts)} flagged timepoint(s) stay flagged)"
+        )
+        repair_ts = []
+    sweep_ts = (
+        cap_worst(flagged, base_scores, sweep_settings.max_timepoints)
+        if sweep_settings is not None
+        else []
+    )
+    flags = {
+        "flagged": flagged,
+        "repair": repair_ts,
+        "sweep": sweep_ts,
+        "base_scores": {str(t): _finite_or_none(v) for t, v in base_scores.items()},
+    }
+    (output_dir / FLAGS_FILENAME).write_text(json.dumps(flags, indent=2))
+    return result, flags
+
+
+def _flags(output_dir: Path) -> dict:
+    path = Path(output_dir) / FLAGS_FILENAME
+    if not path.exists():
+        raise click.UsageError(f"no flags in {output_dir}: run --step flag first")
+    return json.loads(path.read_text())
+
+
+def finalize_run(
+    output_dir: Path,
+    result: SeriesResult | None = None,
+    flags: dict | None = None,
+    repair_records: dict[int, dict] | None = None,
+    sweep_records: dict[int, dict] | None = None,
+    repaired: Iterable[int] = (),
+    swept: Iterable[int] = (),
+) -> tuple[SeriesResult, list[int], list[Transform]]:
+    """Fold the repairs and sweeps into the series; write the report and journal.
+
+    `result` and `flags` default to what is on disk (the estimates, `flags.json`).
+    Repair and sweep outcomes come from the records given, else from the record files --
+    except for the timepoints `repaired` / `swept` by this call: a job that failed this
+    call is never filled from an earlier record. Returns the series, its
+    timepoints and one forward transform per timepoint.
+    """
+    output_dir = Path(output_dir)
+    settings, plan = _run_settings(output_dir), _run_plan(output_dir)
+    time_indices = plan["time_indices"]
+    transform_type = settings.transform.type
+    seed = _seed(settings)
+    _, repairs_dir, sweeps_dir = _record_dirs(output_dir)
+    if flags is None:
+        flags = _flags(output_dir)
+    if result is None:
+        timepoints_dir, _, _ = _record_dirs(output_dir)
+        result = _load_series(
+            timepoints_dir, time_indices, transform_type, resumed=time_indices
+        )
+        result.flagged = list(flags["flagged"])
+    base_scores = {
+        int(t): float("nan") if v is None else v for t, v in flags["base_scores"].items()
+    }
+
+    def outcome_for(t: int, records: dict[int, dict] | None, records_dir: Path, ran: set):
+        record = (records or {}).get(t)
+        if record is None:
+            path = records_dir / f"{t}.json"
+            if t in ran or not path.exists():  # failed this call, or never ran
+                return None
+            record = json.loads(path.read_text())
+        return _load_pass(record, transform_type, fallback=result.transforms.get(t, seed))
+
+    for t in flags["repair"]:
+        outcome = outcome_for(t, repair_records, repairs_dir, set(repaired))
+        if outcome is None:
+            continue
+        result.repairs[t] = outcome
+        reseed_score = outcome.score if outcome.reseed_score is None else outcome.reseed_score
+        result.journal.record(
+            t=t,
+            pass_name="repair",
+            before_score=result.scores[t],
+            after_score=reseed_score,
+            accepted=outcome.accepted,
+            failures=outcome.failures,
+        )
+        if outcome.reseed_score is not None:
+            result.journal.record(
+                t=t,
+                pass_name="polish",
+                before_score=reseed_score,
+                after_score=outcome.score,
+                accepted=outcome.polish_rounds > 0,
+            )
+        if outcome.accepted:
+            _accept(result, t, outcome.transform, outcome.score, outcome.source)
+        click.echo(f"repair t={t}: {outcome.source} -> {outcome.score:.4f}")
+
+    # The sweep competes with repair rather than following it: it starts from each
+    # timepoint's pre-fallback estimate, and the better of the two is kept.
+    for t in flags["sweep"]:
+        outcome = outcome_for(t, sweep_records, sweeps_dir, set(swept))
+        if outcome is None:
+            continue
+        result.journal.record(
+            t=t,
+            pass_name="sweep",
+            before_score=base_scores[t],
+            after_score=outcome.score,
+            accepted=outcome.accepted,
+            failures=outcome.failures,
+        )
+        _fold_sweep(result, t, outcome)
+        click.echo(
+            f"sweep t={t}: {outcome.source} -> {outcome.score:.4f}"
+            + ("" if result.provenance.get(t, "").startswith("sweep:") else " (not kept)")
+        )
+
+    # Before the report: this records which timepoints got a stand-in.
+    transforms = transforms_for_file(result, time_indices, seed, settings.reference.frame)
+    result.journal.save(output_dir / "run_journal.json")
+    (output_dir / "estimate_transform_report.json").write_text(
+        json.dumps(_report(result, time_indices), indent=2)
+    )
+    return result, time_indices, transforms
+
+
+def estimate_transform_series(
+    moving_position_dirpath: Path,
+    reference_position_dirpath: Path,
+    settings: EstimateTransformSettings,
+    output_dir: Path,
+    sbatch_filepath: str | None = None,
+    cluster: str = "slurm",
+    monitor: bool = False,
+    resume: bool = False,
+) -> tuple[SeriesResult, list[int], list[Transform]]:
+    """Run every phase through submitit; return the series, its timepoints and one forward transform per timepoint.
+
+    `init_run`, then one job per timepoint (or one sequential job), `flag_run`, one job
+    per timepoint to repair and to sweep, and `finalize_run` -- the steps
+    `estimate-transform --init / --step` runs one at a time. Writes the resolved settings
+    (`estimate_transform_settings.yml`), the per-timepoint records (`timepoints/`,
+    `repairs/`, `sweeps/`), `run_journal.json` and `estimate_transform_report.json` under
+    `output_dir`.
+    """
+    output_dir = Path(output_dir)
+    source, target = Path(moving_position_dirpath), Path(reference_position_dirpath)
+    plan = init_run(source, target, settings, output_dir, resume)
+    settings_path = output_dir / ENGINE_SETTINGS_FILENAME
+    time_indices = plan["time_indices"]
+    timepoints_dir, repairs_dir, sweeps_dir = _record_dirs(output_dir)
+    slurm_out_path = output_dir / "slurm_output"
+    slurm_out_path.mkdir(exist_ok=True)
+
+    estimate = plan["resources"]["estimate"]
     slurm_args = {
         "slurm_job_name": "estimate_transform",
-        "slurm_mem_per_cpu": f"{gb_ram_per_cpu}G",
-        "slurm_cpus_per_task": num_cpus,
+        "slurm_mem_per_cpu": f"{estimate['gb_ram_per_cpu']}G",
+        "slurm_cpus_per_task": estimate["cpus"],
         "slurm_array_parallelism": 100,  # process up to N timepoints at a time
-        "slurm_time": 30,
+        "slurm_time": ESTIMATE_MINUTES,
         "slurm_partition": "preempted",
         "slurm_use_srun": False,
     }
     if sbatch_filepath:
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
-    resolved_cluster = get_submitit_cluster(cluster=cluster)
+    # Manual registration is interactive (napari): in this process.
+    resolved_cluster = (
+        "debug" if plan["interactive"] else get_submitit_cluster(cluster=cluster)
+    )
     click.echo(f"Preparing jobs on cluster='{resolved_cluster}': {slurm_args}")
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=resolved_cluster)
     executor.update_parameters(**slurm_args)
@@ -1553,7 +1803,7 @@ def estimate_transform_series(
     user_set_time = bool(
         sbatch_filepath and "slurm_time" in sbatch_to_submitit(sbatch_filepath)
     )
-    if settings.transform.seed_from == "previous_timepoint":
+    if plan["propagated"]:
         estimate_records, job_failures = _run_propagated(
             executor,
             resolved_cluster,
@@ -1579,40 +1829,19 @@ def estimate_transform_series(
             ],
         )
 
-    result = _load_series(
-        timepoints_dir,
-        time_indices,
-        transform_type,
+    result, flags = flag_run(
+        output_dir,
         records=estimate_records,
-        resumed=set(time_indices) - set(to_estimate),
+        failures=job_failures,
+        from_disk=set(time_indices) - set(to_estimate),
     )
-    for t, error in job_failures.items():
-        result.errors[t] = error
-    for t in time_indices:
-        line = f"t={t}: score={result.scores[t]:.4f}"
-        if t in result.errors:
-            line += f"  estimate failed: {result.errors[t]}"
-        click.echo(line)
 
-    repair_settings = settings.fallback.repair
-    flag = settings.fallback.flag
-    flagged = flag_series(result, k_mad=flag.k_mad, floor=flag.floor, hard_fail=flag.hard_fail)
-    base_scores = dict(result.scores)
-    repair_ts = (
-        cap_worst(flagged, base_scores, repair_settings.max_timepoints)
-        if repair_settings is not None
-        else []
-    )
-    if repair_ts and not getattr(_estimator, "uses_seed", True):
-        click.echo(
-            f"repair skipped: method {settings.method!r} ignores seeds, so re-seeding "
-            f"would return the same transforms ({len(repair_ts)} flagged timepoint(s) stay flagged)"
-        )
-        repair_ts = []
-    to_repair = [t for t in repair_ts if not (resume and (repairs_dir / f"{t}.json").exists())]
+    to_repair = [
+        t for t in flags["repair"] if not (resume and (repairs_dir / f"{t}.json").exists())
+    ]
     executor.update_parameters(slurm_job_name="estimate_transform_repair")
     if not user_set_time:
-        executor.update_parameters(slurm_time=60)
+        executor.update_parameters(slurm_time=plan["resources"]["repair"]["time_minutes"])
     repair_records, _repair_failures = _run_jobs(
         executor,
         resolved_cluster,
@@ -1628,7 +1857,7 @@ def estimate_transform_series(
                     settings_path,
                     t,
                     time_indices,
-                    flagged,
+                    flags["flagged"],
                     timepoints_dir,
                     repairs_dir / f"{t}.json",
                 ),
@@ -1636,49 +1865,13 @@ def estimate_transform_series(
             for t in to_repair
         ],
     )
-    for t in repair_ts:
-        record = repair_records.get(t)
-        if record is None:
-            record_path = repairs_dir / f"{t}.json"
-            if t in to_repair or not record_path.exists():  # failed this run, or never ran
-                continue
-            record = json.loads(record_path.read_text())
-        outcome = _load_pass(record, transform_type, fallback=result.transforms.get(t, seed))
-        result.repairs[t] = outcome
-        reseed_score = outcome.score if outcome.reseed_score is None else outcome.reseed_score
-        result.journal.record(
-            t=t,
-            pass_name="repair",
-            before_score=result.scores[t],
-            after_score=reseed_score,
-            accepted=outcome.accepted,
-            failures=outcome.failures,
-        )
-        if outcome.reseed_score is not None:
-            result.journal.record(
-                t=t,
-                pass_name="polish",
-                before_score=reseed_score,
-                after_score=outcome.score,
-                accepted=outcome.polish_rounds > 0,
-            )
-        if outcome.accepted:
-            _accept(result, t, outcome.transform, outcome.score, outcome.source)
-        click.echo(f"repair t={t}: {outcome.source} -> {outcome.score:.4f}")
 
-    # The sweep competes with repair rather than following it: it starts from each
-    # timepoint's pre-fallback estimate, and the better of the two is kept.
-    sweep_settings = settings.fallback.sweep
-    sweep_ts = (
-        cap_worst(flagged, base_scores, sweep_settings.max_timepoints)
-        if sweep_settings is not None
-        else []
-    )
-    to_sweep = [t for t in sweep_ts if not (resume and (sweeps_dir / f"{t}.json").exists())]
-    n_trials = len(settings.sweep_trials()) if sweep_settings is not None else 0
+    to_sweep = [
+        t for t in flags["sweep"] if not (resume and (sweeps_dir / f"{t}.json").exists())
+    ]
     executor.update_parameters(slurm_job_name="estimate_transform_sweep")
     if not user_set_time:
-        executor.update_parameters(slurm_time=30 + 3 * n_trials)
+        executor.update_parameters(slurm_time=plan["resources"]["sweep"]["time_minutes"])
     sweep_records, _sweep_failures = _run_jobs(
         executor,
         resolved_cluster,
@@ -1693,35 +1886,16 @@ def estimate_transform_series(
             for t in to_sweep
         ],
     )
-    for t in sweep_ts:
-        record = sweep_records.get(t)
-        if record is None:
-            record_path = sweeps_dir / f"{t}.json"
-            if t in to_sweep or not record_path.exists():  # failed this run, or never ran
-                continue
-            record = json.loads(record_path.read_text())
-        outcome = _load_pass(record, transform_type, fallback=result.transforms.get(t, seed))
-        result.journal.record(
-            t=t,
-            pass_name="sweep",
-            before_score=base_scores[t],
-            after_score=outcome.score,
-            accepted=outcome.accepted,
-            failures=outcome.failures,
-        )
-        _fold_sweep(result, t, outcome)
-        click.echo(
-            f"sweep t={t}: {outcome.source} -> {outcome.score:.4f}"
-            + ("" if result.provenance.get(t, "").startswith("sweep:") else " (not kept)")
-        )
 
-    # Before the report: this records which timepoints got a stand-in.
-    transforms = transforms_for_file(result, time_indices, seed, settings.reference.frame)
-    result.journal.save(output_dir / "run_journal.json")
-    (output_dir / "estimate_transform_report.json").write_text(
-        json.dumps(_report(result, time_indices), indent=2)
+    return finalize_run(
+        output_dir,
+        result,
+        flags,
+        repair_records=repair_records,
+        sweep_records=sweep_records,
+        repaired=to_repair,
+        swept=to_sweep,
     )
-    return result, time_indices, transforms
 
 
 def transforms_for_file(
