@@ -334,14 +334,15 @@ def monitor(short: bool = True) -> Callable:
     return decorator
 
 
-def resume() -> Callable:
+def resume(help: str | None = None) -> Callable:
     def decorator(f: Callable) -> Callable:
         return click.option(
             "--resume/--no-resume",
             "resume",
             default=False,
             show_default=True,
-            help=(
+            help=help
+            or (
                 "Skip the (time, channel) units this position already finished in an "
                 "earlier attempt instead of recomputing the whole position. For retrying "
                 "a run that was interrupted, e.g. by Slurm preemption. A finished unit is "

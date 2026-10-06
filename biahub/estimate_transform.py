@@ -183,7 +183,11 @@ def estimate_transform(
 @sbatch_filepath()
 @cluster()
 @monitor(short=False)
-@resume()
+@resume(
+    help="Keep the timepoints an earlier run of this output already finished and estimate "
+    "only the rest (e.g. after jobs hit their time limit). Refused if the settings or "
+    "inputs changed since that run."
+)
 def estimate_transform_cli(
     moving_position_dirpaths: list[Path],
     reference_position_dirpaths: list[Path] | None,
@@ -199,9 +203,9 @@ def estimate_transform_cli(
     Takes an `EstimateTransformSettings` YAML and writes a `TransformSettings` file for
     `apply-transform` (forward matrices with their scores). The run's report, journal and
     per-timepoint records (what --resume continues from) go in a folder named after the
-    output (`-o reg/transforms.yml` -> `reg/transforms/`). One SLURM job per timepoint, then one per flagged timepoint
-    for repair. With `reference.frame: first` or `previous` the moving channel is
-    stabilized against itself and `-r` is not needed.
+    output (`-o reg/transforms.yml` -> `reg/transforms/`). One SLURM job per timepoint,
+    then one per flagged timepoint for repair. With `reference.frame: first` or `previous`
+    the moving channel is stabilized against itself and `-r` is not needed.
 
     \b
     Registration (moving channel onto the reference channel):

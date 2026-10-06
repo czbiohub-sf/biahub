@@ -218,18 +218,18 @@ def apply_transform(
 ) -> None:
     """Apply a `TransformSettings` series to positions.
 
-    `channels` picks which moving-store channels are transformed. By default all of them
-    (a registration or stabilization comes from the shared optics and stage, so it holds
-    for every channel), except that with reference positions a channel the reference
-    store also has is copied from it unless it is one of the file's `moving_channels`
-    (so with moving and reference in one store only the estimated channels move).
+    `channels` picks which moving-store channels are transformed. By default all of them (a
+    registration or stabilization comes from the shared optics and stage, so it holds for
+    every channel), except that with reference positions a channel the reference store also
+    has is copied from it unless it is one of the file's `moving_channels` (so with moving
+    and reference in one store only the estimated channels move).
 
     With reference positions: the output lives on the reference grid and holds the
-    reference channels copied plus the transformed moving channels (registration).
-    Without: the moving channels are transformed onto their own grid (stabilization). Each timepoint takes its own entry's
-    matrix (`TransformSettings.matrix_for`); a series-wide entry applies to all. The
-    canvas is the largest box inside the overlap shared by the applied transforms, or
-    the full reference grid with `keep_overhang`.
+    reference channels copied plus the transformed moving channels (registration). Without:
+    the moving channels are transformed onto their own grid (stabilization). Each timepoint
+    takes its own entry's matrix (`TransformSettings.matrix_for`); a series-wide entry
+    applies to all. The canvas is the largest box inside the overlap shared by the applied
+    transforms, or the full reference grid with `keep_overhang`.
     """
     output_dirpath = Path(output_dirpath)
     settings: TransformSettings = load_transform_settings(config_filepath)
