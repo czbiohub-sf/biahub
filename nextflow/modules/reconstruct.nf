@@ -26,7 +26,7 @@
 // resource scheduling, so the CLI must NOT submit its own SLURM jobs.
 // See: examples/submitit_debug_nextflow/2026-05-27-submitit-debug-nextflow-concerns.md
 
-include { parse_resources; slurm_logs; slurm_log_dir; retry_time } from './common'
+include { parse_resources; slurm_logs; slurm_log_dir; slurm_output_readme; retry_time } from './common'
 
 
 process init_apply_inv_tf {
@@ -44,6 +44,7 @@ process init_apply_inv_tf {
     script:
     """
     mkdir -p "${slurm_log_dir('reconstruct')}"
+    ${slurm_output_readme('reconstruct', output_zarr)}
     biahub apply-inv-tf --init \
         -i "${input_zarr}"/*/*/* \
         -o "${output_zarr}" \
