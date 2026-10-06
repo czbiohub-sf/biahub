@@ -60,6 +60,7 @@ include { assemble_init_wf; assemble_run_wf } from './modules/assembly'
 include { track_init_wf; track_run_wf } from './modules/tracking'
 include { qc_plan_wf; qc_compute_wf; qc_report_wf; qc_report_spec } from './modules/qc'
 include { notify_step; notify_run_start; notify_run_end } from './modules/notify'
+include { cleanup_decision; cleanup_targets; cleanup_intermediates_wf } from './modules/cleanup'
 
 // Output directory layout for the reconstruction steps — single source of
 // truth. Each entry is a subdirectory under params.output where that step
@@ -142,6 +143,20 @@ workflow {
     }
     if (qc_track_on && !track_on) {
         error "--qc_track_config needs --track_config: it QCs the tracking store."
+    }
+
+    // Whether this run deletes its intermediates once it finishes. Resolved now
+    // from --cleanup_intermediates and concatenate.yml (see cleanup_decision),
+    // so `true` without assemble, or a bad value, fails before anything runs.
+    // When on, also switch on Nextflow's own `cleanup`, which empties the work
+    // directory at the end of a SUCCESSFUL run: with the intermediate stores
+    // gone, every cached task would point at deleted data. This is set here
+    // rather than in nextflow.config because `auto` is only resolved here.
+    def cleanup_plan = cleanup_decision(params.cleanup_intermediates, params.concatenate_config)
+    def cleanup_on   = cleanup_plan.on
+    log.info "cleanup_intermediates: ${cleanup_on ? 'on' : 'off'} (${cleanup_plan.reason})"
+    if (cleanup_on) {
+        workflow.session.config.cleanup = true
     }
 
     // Tasks call `biahub`/`viscy`/`imaging-qc` bare, so fail now if the env isn't
@@ -386,6 +401,45 @@ workflow {
         qc_report = qc_report_wf(qc.done, spec, qc_report_dir)
     }
 
+    // ----- Cleanup of intermediates (--cleanup_intermediates) ---------------
+    // Once the LAST step has finished, delete what only existed to feed the
+    // assembled plate: the flat-field, deskew, reconstruct and virtual-stain step
+    // directories (store, slurm_output/ and .iohub-progress/ alike). Beside the
+    // final stores, delete what only served the run: slurm_output/ (submitit
+    // placeholders and a pointer README; the real logs are in
+    // nextflow/slurm_output/) and the assembled store's .iohub-progress/ resume
+    // markers, which left behind would make concatenate skip every write unit
+    // of a later run into this directory, keeping data built from the old
+    // intermediates. Tracking writes no resume markers.
+    //
+    // What was removed is appended to nextflow/intermediates_cleaned.txt rather
+    // than logged. Nextflow's `cleanup`, switched on above, empties the work
+    // directory at the end of the same successful run, so a cleaned run is
+    // final: rerunning it recomputes everything. See modules/cleanup.nf.
+    //
+    // The gate is every final step's `done`, so QC — when it runs — must have
+    // FINISHED, whatever its verdict: `imaging-qc gate` exits 0 on a failing
+    // verdict. A step that fails terminates the run, so none of these emit.
+    // The targets are checked now, at launch, not when the gate opens.
+    if (cleanup_on) {
+        def cleanup_paths = [ff_output, deskew_output, reconstruct_output, virtual_stain_output]
+            .collect { zarr -> new File(zarr).parent }
+        def assemble_dir = new File(assemble_output).parent
+        cleanup_paths << "${assemble_dir}/slurm_output" << "${assemble_dir}/.iohub-progress"
+        if (track_on) cleanup_paths << "${new File(track_output).parent}/slurm_output"
+        def cleanup_list = cleanup_targets(cleanup_paths, out)
+        cleanup_record = "${out}/nextflow/intermediates_cleaned.txt"
+
+        def final_signals = [assemble_done.done]
+        if (track_on) final_signals << track_done.done
+        if (qc_on)    final_signals << qc_report.done
+        final_gate = channel.empty()
+        final_signals.each { signal -> final_gate = final_gate.mix(signal) }
+
+        cleanup_run = cleanup_intermediates_wf(cleanup_list, out, cleanup_record,
+                                               "on (${cleanup_plan.reason})", final_gate)
+    }
+
     // ----- Notifications ----------------------------------------------------
     // One Slack message as each step finishes, plus the run-start announcement.
     // Step ORDER and labels live here with the rest of the wiring, not in
@@ -424,6 +478,7 @@ workflow {
     if (assemble_on) step_events << [label: 'assemble', done: assemble_done.done, output: assemble_output]
     if (track_on)    step_events << [label: 'track',    done: track_done.done,    output: track_output]
     if (qc_on)       step_events << [label: 'QC',       done: qc_report.done,     output: qc_report_dir]
+    if (cleanup_on)  step_events << [label: 'cleanup intermediates', done: cleanup_run.done, output: cleanup_record]
 
     steps = step_events.collect { event -> event.label }
     n_steps = steps.size()
@@ -440,7 +495,8 @@ workflow {
     // subscribe here rather than earlier is fine because the whole body is graph
     // construction and nothing executes until it finishes.
     all_positions.subscribe { positions ->
-        notify_run_start(ds, 'mantis_v2', positions.size(), steps)
+        notify_run_start(ds, 'mantis_v2', positions.size(), steps,
+                         "${cleanup_on ? 'on' : 'off'} (${cleanup_plan.reason})")
     }
 
     // Report the finished run to Slack, with an @-mention.

@@ -248,6 +248,63 @@ not `deskew.yml` — the deskew values come from the acquisition (§5, caveats
 §3). If the deskew geometry differs from the template, that is a per-dataset
 edit to both files.
 
+### 5c. Check that every position has the same number of time points
+
+Assemble concatenates every position of the deskew, reconstruct and
+virtual-stain stores, and with `time_indices: all` (both shipped templates)
+`biahub concatenate` **refuses sources with different numbers of time
+points**: it no longer crops or pads silently, so the choice has to be written
+into `concatenate.yml`. Each step keeps a position's full T, so a mismatch in the raw store
+reaches assemble and fails the run during the init phase. Check the raw store
+now. From the biahub checkout, with the position glob for the layout from §3:
+`'*/*/*'` for an HCS plate, `'*'` for flat positions:
+
+```bash
+.venv/bin/python - <RAW_STORE.zarr> '<POSITION_GLOB>' <<'EOF'
+import collections, json, pathlib, sys
+store, pattern = pathlib.Path(sys.argv[1]), sys.argv[2]
+by_t = collections.defaultdict(list)
+for meta in sorted(store.glob(f"{pattern}/0/zarr.json")):
+    by_t[json.loads(meta.read_text())["shape"][0]].append(str(meta.parent.parent.relative_to(store)))
+for t, positions in sorted(by_t.items()):
+    print(f"T={t}: {len(positions)} positions, e.g. {', '.join(positions[:3])}")
+sys.exit(len(by_t) != 1)
+EOF
+```
+
+It exits 1 if the positions disagree, or if none were found (check the glob).
+**If they disagree, stop and ask the user.** A short position usually means the
+acquisition was stopped partway through a time point. Show the counts per T and
+offer:
+
+- **Crop in time to what every position has.** In
+  `<OUTPUT>/configs/concatenate.yml`, replace `time_indices: all` with
+
+  ```yaml
+  time_indices: {start: 0, stop: <smallest T>}   # stop is exclusive
+  ```
+
+  The extra time points of the longer positions are left out of the assembled
+  store (they stay in the intermediates), and tracking and QC see only the
+  cropped range (`references/caveats.md` §5). If the user also wants to
+  subsample, add `step`, e.g. `{start: 0, stop: <smallest T>, step: 2}` for
+  every other time point. (`time_indices: min` crops the same way, but the
+  range records the number in the config.) Use the smallest T as `stop`: a
+  range that runs past the shorter positions pads them, as below.
+- **Keep every time point and pad with zeros**: `time_indices: max`, or
+  equivalently `{start: 0, stop: <largest T>}` (add `step` to subsample). The
+  assembled store takes the longest T, and the missing end of each shorter
+  position stays at zero. Nothing is lost, but the padded frames are blank:
+  tracks end there, QC may flag them, and nothing in the store marks them as
+  padding — say which positions are padded from which time point in the plan,
+  and the assemble log lists them (`time_indices ...: padding ...`).
+- **Stop and investigate** the acquisition before reconstructing.
+
+Do not pick for them, and record the choice and the reason in the plan (§6).
+The same refusal at assemble's init, `time_indices is 'all' but the sources
+have different numbers of time points`, means this check was skipped or the
+stores no longer match the raw data; it is answered the same way.
+
 ## 6. Present the plan
 
 Do not run anything yet. Show the user:
@@ -256,7 +313,8 @@ Do not run anything yet. Show the user:
    state. Make anything other than *clean `main`, up to date* a visible caveat
    with a recommendation.
 2. Resolved input store, its size, position count, channel names, and
-   `(T, C, Z, Y, X)` shape.
+   `(T, C, Z, Y, X)` shape. Say that every position has the same T (§5c), or
+   how many differ and the `time_indices` the user chose for that.
 3. Whether a `0-convert` plate build is needed.
 4. Output project directory and the step layout.
 5. That configs come from `<BIAHUB>/nextflow/configs/<family>/` at commit
@@ -296,6 +354,27 @@ Do not run anything yet. Show the user:
     place. If it is not and cannot be, say the run will proceed without QC
     rather than silently dropping it — the step set in item 6 has to match what
     is actually going to run.
+11. **Whether intermediates will be deleted** (`CLEANUP_INTERMEDIATES` in the run
+    script, biahub#292). With cleanup on, once the last step (QC) finishes the
+    pipeline deletes the flat-field, deskew, reconstruct and virtual-stain
+    directories, the `slurm_output/` placeholders and `.iohub-progress/` resume
+    markers beside the final stores, and the Nextflow work directory. Only the
+    assembled store, the tracking store, the QC report and the logs under
+    `nextflow/` remain, and the run is final: any rerun
+    recomputes from raw. The template's `CLEANUP_INTERMEDIATES="auto"` lets the
+    pipeline decide at launch (`cleanup_decision` in
+    `nextflow/modules/cleanup.nf`); check `concatenate.yml` now so the plan says
+    what it will decide:
+    - **No cropping** — `time_indices`, `channel_names`, `X_slice`, `Y_slice`
+      and `Z_slice` are all absent or `all` (or a per-source list of `all`),
+      with `time_indices: max` also counting as no cropping (it pads, §5c):
+      leave `auto`; the pipeline turns cleanup on. Say so in the plan.
+    - **Any cropping**: `auto` would leave the intermediates, but set
+      `CLEANUP_INTERMEDIATES=false` explicitly so the script records the
+      decision. Name the cropping fields and **ask the user explicitly** whether
+      to delete the intermediates anyway — the data cropped out of the assembled
+      store exists nowhere else. Set `true` only on a clear yes; no answer means
+      `false`.
 
 Get explicit approval.
 
@@ -334,6 +413,13 @@ Edit the copies for this dataset. Copy `templates/run_mantis_v2.sh` to
 `BIAHUB_PROJECT`, `chmod 775` (not `+x` — it must also be group-writable).
 The script stays in the output directory as the run's provenance record, and
 re-grants `g+w` on itself and the configs at every launch.
+
+Set `CLEANUP_INTERMEDIATES` as agreed in §6 item 11: leave `auto` when
+`concatenate.yml` does not crop, `false` when it crops and the user did not opt
+in, `true` only when they did. `provenance.txt` records the requested value;
+the pipeline logs what it resolved at launch, as
+`cleanup_intermediates: on|off (<reason>)` in `.nextflow.log` and on the
+`cleanup:` line of the run-start Slack message — check it matches the plan.
 
 If a plate build is needed, do it now via the **build-hcs-plate** agent
 (`caveats.md` §1) and verify the plate opens with iohub before launching.
@@ -416,10 +502,17 @@ Classify before acting — `references/recovery.md` has the decision table:
   replaces torn shards and resumes per unit. Only if it fails
   identically again, write a repair proposal for the user or hand it to the
   **job-io-error-repair** agent. **Never delete zarr data from this skill.**
+  The pipeline's own `--cleanup_intermediates` step is the one sanctioned
+  deletion, and it only runs after every step has succeeded.
 - **Exit 1/2 with a Python traceback**: real bug or bad config. Fix, relaunch
   with `-resume`.
 
 Restarts are always `bash ./run_mantis_v2.sh` — the script passes `-resume`.
+
+**Once cleanup has run, the run is final.** Its intermediates, work directory
+and resume markers are gone, so relaunching the script reruns everything from
+raw and rewrites the final stores. To reprocess, prefer a fresh output
+directory (`<DATASET>_rerun`) over relaunching in place.
 
 ## 11. Wrap up
 
@@ -438,6 +531,13 @@ Restarts are always `bash ./run_mantis_v2.sh` — the script passes `-resume`.
    `tables/qc/` parquet inside each store.
 4. Report per-step task counts, failures, retries, and wall time from
    `<OUTPUT>/nextflow/trace.txt`; point at `report.html` and `timeline.html`.
+   If cleanup was on, report what `<OUTPUT>/nextflow/intermediates_cleaned.txt`
+   records — the decision and one `removed`/`absent` line per target — and
+   confirm `<OUTPUT>/nextflow/work` holds no task directories (Nextflow leaves
+   its empty two-character prefix directories behind; that is expected). Do
+   not `du` the run directory to report
+   space freed — it runs to terabytes; use `df` on the filesystem if a number
+   is wanted.
 5. Confirm the pipeline's automatic run-end message landed, then send a wrap-up
    only for what the pipeline cannot know: the channel-rename result, the iohub
    verification, and size on disk.
