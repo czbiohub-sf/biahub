@@ -64,6 +64,10 @@ def _substitute_list(
             score=entry.score,
             repaired_from=entry.repaired_from,
             method=method if method != base.method else None,
+            # a stand-in stays one, so apply-transform still reports it
+            status=entry.status,
+            filled_from=entry.filled_from,
+            note=entry.note,
         )
         before = (
             "new"

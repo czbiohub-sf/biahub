@@ -48,6 +48,22 @@ def test_a_single_timepoint_run_replaces_only_its_timepoint():
     assert log == ["transforms t=2: beads (score 0.8) -> manual (score n/a) from manual.yml"]
 
 
+def test_a_substituted_entry_keeps_its_status():
+    # A stand-in from the other run stays unreliable, so apply-transform still reports it.
+    stand_in = _single(2, 50.0, method="ants")
+    stand_in.transforms[0] = stand_in.transforms[0].model_copy(
+        update={"status": "unreliable", "filled_from": "seed", "note": "job failed"}
+    )
+    combined, _ = substitute_transforms(_beads(), [("ants.yml", stand_in)])
+
+    entry = combined.transforms[2]
+    assert (entry.status, entry.filled_from, entry.note) == (
+        "unreliable",
+        "seed",
+        "job failed",
+    )
+
+
 def test_substitutes_are_converted_to_the_base_direction_and_applied_in_order():
     inverse = _single(1, -7.0, method="ants", direction="inverse")  # inverse -7 == forward +7
     later = _single(1, 9.0, method="manual")
