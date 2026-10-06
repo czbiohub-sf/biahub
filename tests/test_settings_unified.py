@@ -165,3 +165,18 @@ def test_sweep_accepts_the_method_block_and_the_transform_type():
     ).sweep_trials()
     (trial,) = trials.values()
     assert trial.transform.type == "affine"
+
+
+def test_manual_needs_one_timepoint():
+    def manual(time_indices):
+        return EstimateTransformSettings(
+            moving=ChannelSettings(channel="GFP"),
+            reference=ReferenceSettings(frame="cross", channel="Phase3D"),
+            method="manual",
+            time_indices=time_indices,
+        )
+
+    assert manual(82).time_indices == 82
+    for several in ("all", [3, 4]):
+        with pytest.raises(ValueError, match="manual registers one timepoint"):
+            manual(several)

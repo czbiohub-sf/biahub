@@ -1512,8 +1512,7 @@ def estimate_transform_series(
         settings, (Z, Y, X), mov_voxel_size, ref_voxel_size
     )
     if settings.method == "manual":
-        # Interactive (napari); one timepoint, in this process.
-        settings.time_indices = settings.manual.time_index
+        # Interactive (napari), in this process; time_indices is its one timepoint.
         cluster = "debug"
     settings_path = output_dir / ENGINE_SETTINGS_FILENAME
     _start_run(output_dir, settings, source, target, resume)

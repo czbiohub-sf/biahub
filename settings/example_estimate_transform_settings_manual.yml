@@ -5,7 +5,6 @@ reference:
   channel: Phase3D
 method: manual
 manual:
-  time_index: 0
   affine_90degree_rotation: 0
   affine_fliplr: false
 transform:
@@ -29,7 +28,7 @@ transform:
     - 1.0
   seed_direction: inverse
   seed_from_shapes: false
-time_indices: all
+time_indices: 0
 fallback:
   flag:
     k_mad: 2.0

@@ -14,7 +14,7 @@ from biahub.settings import (
     DetectPeaksSettings,
     EstimateTransformSettings,
     FocusSettings,
-    ManualRegistrationSettings,
+    ManualSettings,
     PhaseCrossCorrSettings,
     ReferenceSettings,
     TransformSettings,
@@ -501,7 +501,8 @@ def test_estimate_transform_manual_runs_in_process_on_one_timepoint(
     config = _write_config(
         tmp_path,
         method="manual",
-        manual=ManualRegistrationSettings(time_index=1, affine_90degree_rotation=1),
+        manual=ManualSettings(affine_90degree_rotation=1),
+        time_indices=1,
     )
 
     estimate_transform(
@@ -515,6 +516,8 @@ def test_estimate_transform_manual_runs_in_process_on_one_timepoint(
     assert len(calls) == 1 and calls[0]["pre_affine_90degree_rotation"] == 1
     (row,) = _inverse_translations(output)
     np.testing.assert_allclose(row, APPLIED_SHIFT_ZYX)
+    # registered at the timepoint asked for, so substitute-transforms replaces that one
+    assert load_transform_settings(output).transforms[0].estimated_at == 1
 
 
 def test_estimate_transform_accepts_the_unified_config_and_writes_forward_matrices(

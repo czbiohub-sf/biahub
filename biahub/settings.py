@@ -370,8 +370,9 @@ class AntsRegistrationSettings(MyBaseModel):
         return v
 
 
-class ManualRegistrationSettings(MyBaseModel):
-    time_index: int = 0
+class ManualSettings(MyBaseModel):
+    """Manual registration in napari, on the one timepoint given by `time_indices`."""
+
     affine_90degree_rotation: int = 0
     affine_fliplr: bool = False
 
@@ -931,7 +932,7 @@ class EstimateTransformSettings(MyBaseModel):
     beads: BeadsMatchSettings | None = None
     ants: AntsRegistrationSettings | None = None
     phase_cross_corr: PhaseCrossCorrSettings | None = None
-    manual: ManualRegistrationSettings | None = None
+    manual: ManualSettings | None = None
     focus_finding: FocusSettings | None = None
     transform: TransformFitSettings = TransformFitSettings()
     time_indices: NonNegativeInt | list[NonNegativeInt] | Literal["all"] = "all"
@@ -947,12 +948,21 @@ class EstimateTransformSettings(MyBaseModel):
             "beads": ("beads", BeadsMatchSettings),
             "ants": ("ants", AntsRegistrationSettings),
             "phase-cross-corr": ("phase_cross_corr", PhaseCrossCorrSettings),
-            "manual": ("manual", ManualRegistrationSettings),
+            "manual": ("manual", ManualSettings),
             "focus-finding": ("focus_finding", FocusSettings),
         }
         field, model = defaults[self.method]
         if getattr(self, field) is None:
             setattr(self, field, model())
+        return self
+
+    @model_validator(mode="after")
+    def check_manual_is_one_timepoint(self) -> "EstimateTransformSettings":
+        if self.method == "manual" and not isinstance(self.time_indices, int):
+            raise ValueError(
+                "manual registers one timepoint (in napari): set time_indices to it, e.g. "
+                f"time_indices: 0; got {self.time_indices!r}"
+            )
         return self
 
     @model_validator(mode="after")

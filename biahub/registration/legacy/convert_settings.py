@@ -35,7 +35,7 @@ from biahub.settings import (
     ChannelSettings,
     EstimateTransformSettings,
     FocusSettings,
-    ManualRegistrationSettings,
+    ManualSettings,
     MyBaseModel,
     PhaseCrossCorrSettings,
     ReferenceSettings,
@@ -55,6 +55,12 @@ class FocusFindingSettings(MyBaseModel):
     average_across_wells_method: Literal["mean", "median"] = "mean"
     skip_beads_fov: str = "0"
     center_crop_xy: list[int, int] = [800, 800]
+
+
+class ManualRegistrationSettings(MyBaseModel):
+    time_index: int = 0
+    affine_90degree_rotation: int = 0
+    affine_fliplr: bool = False
 
 
 class StackRegSettings(MyBaseModel):
@@ -235,6 +241,7 @@ def estimate_settings_from_legacy(
                 "a cross-store registration; to stabilize a channel against itself, set "
                 "reference.frame to 'first' or 'previous' and drop reference.channel"
             )
+        manual = legacy.manual_registration_settings
         settings = EstimateTransformSettings(
             moving=ChannelSettings(channel=legacy.source_channel_name),
             reference=ReferenceSettings(frame="cross", channel=legacy.target_channel_name),
@@ -242,9 +249,17 @@ def estimate_settings_from_legacy(
             beads=legacy.beads_match_settings,
             ants=legacy.ants_registration_settings,
             phase_cross_corr=legacy.phase_cross_corr_settings,
-            manual=legacy.manual_registration_settings,
+            manual=None
+            if manual is None
+            else ManualSettings(
+                affine_90degree_rotation=manual.affine_90degree_rotation,
+                affine_fliplr=manual.affine_fliplr,
+            ),
             transform=fit,
-            time_indices=legacy.time_indices,
+            # legacy manual registered manual_registration_settings.time_index
+            time_indices=manual.time_index
+            if legacy.estimation_method == "manual"
+            else legacy.time_indices,
             verbose=legacy.verbose,
         )
         return settings, notes

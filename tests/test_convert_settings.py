@@ -234,3 +234,15 @@ def test_estimate_registration_without_propagation_converts_to_independent_estim
 def test_use_prev_t_transform_maps_to_propagation_only_for_beads(legacy, expected):
     unified, _ = convert_settings(legacy)
     assert unified.transform.seed_from == expected
+
+
+def test_legacy_manual_time_index_becomes_time_indices():
+    legacy = EstimateRegistrationSettings(
+        source_channel_name="GFP",
+        target_channel_name="Phase3D",
+        estimation_method="manual",
+        manual_registration_settings={"time_index": 82, "affine_fliplr": True},
+    )
+    unified, _ = convert_settings(legacy)
+    assert unified.time_indices == 82
+    assert unified.manual.affine_fliplr is True
