@@ -2,13 +2,18 @@
 
 Maps a moving channel onto a reference per timepoint -- another channel (registration)
 or the same channel at its first or previous timepoint (stabilization) -- and writes the
-`TransformSettings` file that `apply-transform` consumes. Two SLURM fan-out phases: one
-job per timepoint to estimate, then one job per flagged timepoint to repair against the
-frozen whole-run history. Every job writes a small JSON record, so an interrupted run
-resumes.
+`TransformSettings` file that `apply-transform` consumes. The phases: one job per
+timepoint to estimate (or one sequential job), flagging, one job per flagged timepoint to
+repair (and sweep) against the frozen whole-run history, and writing the file. Every job
+writes a small JSON record, so an interrupted run resumes. Run in one call, the phases go
+through submitit; `--init` and `--step` run them one at a time, in process, so a
+Nextflow workflow can own the fan-out like it does for every other step.
 """
 
 from __future__ import annotations
+
+import hashlib
+import json
 
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -21,6 +26,7 @@ from iohub import open_ome_zarr
 from biahub.cli.parsing import (
     cluster,
     config_filepath,
+    init_only,
     monitor,
     moving_position_dirpaths,
     output_filepath,
@@ -30,12 +36,20 @@ from biahub.cli.parsing import (
     resume,
     sbatch_filepath,
 )
-from biahub.registration.engine import SeriesResult, estimate_transform_series
+from biahub.registration.engine import (
+    SeriesResult,
+    estimate_transform_series,
+    finalize_run,
+    flag_run,
+    init_run,
+    run_timepoint_jobs,
+)
 from biahub.settings import (
     TransformEntry,
     TransformSettings,
     load_estimate_transform_settings,
 )
+from biahub.utils.cluster import echo_resources
 from biahub.utils.config import model_to_yaml
 
 
@@ -80,6 +94,101 @@ def transform_entries(
 # Positions estimated at once; each driver fans its own timepoints out to SLURM.
 MAX_CONCURRENT_POSITIONS = 8
 
+# At the top of a run folder: the positions and the config `--init` started the run with.
+RUN_FILENAME = "run.json"
+
+STEPS = ("estimate", "flag", "repair", "sweep", "finalize")
+
+
+class _Run:
+    """One estimate's positions, references and per-position run folders."""
+
+    def __init__(
+        self,
+        moving_position_dirpaths: list[Path],
+        config_filepath: Path,
+        output_filepath: Path,
+        reference_position_dirpaths: list[Path] | None,
+    ):
+        self.output_filepath = Path(output_filepath)
+        # The run's records live in a folder named after the output (reg/transforms.yml ->
+        # reg/transforms/), so estimates written to one folder never share or clear them.
+        self.output_dir = self.output_filepath.with_suffix("")
+        self.settings = load_estimate_transform_settings(config_filepath)
+        self.config_sha256 = hashlib.sha256(
+            self.settings.model_dump_json().encode()
+        ).hexdigest()
+        self.movings = [Path(p) for p in moving_position_dirpaths]
+        self.keys = [position_key(p) for p in self.movings]
+        if self.settings.reference.frame == "cross":
+            if not reference_position_dirpaths:
+                raise click.UsageError(
+                    "reference frame 'cross' needs the reference positions (-r)"
+                )
+            self.reference_for = pair_reference_positions(
+                self.keys, reference_position_dirpaths
+            )
+        else:
+            self.reference_for = dict(zip(self.keys, self.movings, strict=True))
+
+    def start(self) -> None:
+        """Record the run's positions and config (what later steps check against)."""
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        (self.output_dir / RUN_FILENAME).write_text(
+            json.dumps({"positions": self.keys, "config_sha256": self.config_sha256}, indent=2)
+        )
+        self.run_positions = list(self.keys)
+
+    def load(self) -> None:
+        """Read what `--init` recorded; refuse positions or a config it did not start."""
+        path = self.output_dir / RUN_FILENAME
+        if not path.exists():
+            raise click.UsageError(f"no run for {self.output_filepath}: run with --init first")
+        run = json.loads(path.read_text())
+        if run["config_sha256"] != self.config_sha256:
+            raise click.UsageError(
+                f"the config changed since --init started {self.output_dir}; run --init again"
+            )
+        unknown = sorted(set(self.keys) - set(run["positions"]))
+        if unknown:
+            raise click.UsageError(
+                f"positions {unknown} are not in the run --init started (it has "
+                f"{run['positions']})"
+            )
+        self.run_positions = run["positions"]
+
+    def work_dir(self, key: str) -> Path:
+        """One position's run folder: the run folder itself, or `positions/<key>/`."""
+        if len(self.run_positions) == 1:
+            return self.output_dir
+        return self.output_dir / "positions" / key
+
+    def moving(self, key: str) -> Path:
+        return self.movings[self.keys.index(key)]
+
+    def write(self, entries_by_key: dict[str, list[TransformEntry]]) -> None:
+        """Write the transforms file: one shared list, or one list per position."""
+        with open_ome_zarr(self.reference_for[self.keys[0]], mode="r") as position:
+            voxel_size = [float(v) for v in position.scale]
+        common = dict(
+            direction="forward",
+            moving_channels=[self.settings.moving.channel],
+            reference_channel=self.settings.reference.channel,
+            method=self.settings.method,
+            voxel_size=voxel_size,
+        )
+        if len(self.run_positions) == 1:
+            model = TransformSettings(**common, transforms=entries_by_key[self.keys[0]])
+        else:
+            model = TransformSettings(**common, positions=entries_by_key)
+        model_to_yaml(model, self.output_filepath)
+        click.echo(f"Transform settings saved to {self.output_filepath.resolve()}")
+
+    def entries(self, result, time_indices, transforms) -> list[TransformEntry]:
+        return transform_entries(
+            result, time_indices, transforms, self.settings.fallback.flag.hard_fail
+        )
+
 
 def estimate_transform(
     moving_position_dirpaths: list[Path],
@@ -95,84 +204,135 @@ def estimate_transform(
 
     Reads an `EstimateTransformSettings` YAML and writes a `TransformSettings` YAML --
     forward matrices with their scores -- and keeps the engine's records in a folder named
-    after it (`<output stem>/`); see
-    `estimate_transform_series`. One moving position writes a list shared by every
-    position (e.g. beads registration estimated on the bead FOV); several moving
-    positions are each estimated on their own and written per position (e.g.
-    stabilization, where every FOV drifts differently). The reference positions are only
-    read for `reference.frame: cross`: one serves every moving position, several are
-    paired with them by row/col/fov.
+    after it (`<output stem>/`); see `estimate_transform_series`. One moving position
+    writes a list shared by every position (e.g. beads registration estimated on the bead
+    FOV); several moving positions are each estimated on their own and written per
+    position (e.g. stabilization, where every FOV drifts differently). The reference
+    positions are only read for `reference.frame: cross`: one serves every moving
+    position, several are paired with them by row/col/fov. `estimate_transform_init` and
+    `estimate_transform_step` run the same phases one at a time (for Nextflow).
     """
-    output_filepath = Path(output_filepath)
-    # The run's records live in a folder named after the output (reg/transforms.yml ->
-    # reg/transforms/), so estimates written to one folder never share or clear them.
-    output_dir = output_filepath.with_suffix("")
-    settings = load_estimate_transform_settings(config_filepath)
-    movings = [Path(p) for p in moving_position_dirpaths]
-    keys = [position_key(p) for p in movings]
-    if settings.reference.frame == "cross":
-        if not reference_position_dirpaths:
-            raise click.UsageError(
-                "reference frame 'cross' needs the reference positions (-r)"
-            )
-        reference_for = pair_reference_positions(keys, reference_position_dirpaths)
-    else:
-        reference_for = dict(zip(keys, movings, strict=True))
-    with open_ome_zarr(reference_for[keys[0]], mode="r") as position:
-        voxel_size = [float(v) for v in position.scale]
+    run = _Run(
+        moving_position_dirpaths, config_filepath, output_filepath, reference_position_dirpaths
+    )
+    run.start()
 
-    def estimate_position(key: str, moving: Path, work_dir: Path) -> list[TransformEntry]:
-        result, time_indices, transforms = estimate_transform_series(
-            moving,
-            reference_for[key],
-            settings,
-            work_dir,
-            sbatch_filepath=sbatch_filepath,
-            cluster=cluster,
-            monitor=monitor,
+    def estimate_position(key: str) -> list[TransformEntry]:
+        return run.entries(
+            *estimate_transform_series(
+                run.moving(key),
+                run.reference_for[key],
+                run.settings,
+                run.work_dir(key),
+                sbatch_filepath=sbatch_filepath,
+                cluster=cluster,
+                monitor=monitor,
+                resume=resume,
+            )
+        )
+
+    if len(run.keys) == 1:
+        run.write({run.keys[0]: estimate_position(run.keys[0])})
+        return
+    click.echo(f"Estimating {len(run.keys)} positions, each with its own transforms")
+    workers = min(len(run.keys), MAX_CONCURRENT_POSITIONS)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {key: pool.submit(estimate_position, key) for key in run.keys}
+    failed = {}
+    positions = {}
+    for key, future in futures.items():
+        try:
+            positions[key] = future.result()
+        except Exception as e:  # noqa: BLE001 -- report every failed position at once
+            failed[key] = f"{type(e).__name__}: {e}"
+    if failed:
+        listing = "\n".join(f"  {k}: {v}" for k, v in failed.items())
+        raise click.ClickException(
+            f"{len(failed)} of {len(run.keys)} positions failed; no transforms file "
+            f"written (rerun with --resume to redo only what is missing):\n{listing}"
+        )
+    run.write(positions)
+
+
+def estimate_transform_init(
+    moving_position_dirpaths: list[Path],
+    config_filepath: Path,
+    output_filepath: Path,
+    reference_position_dirpaths: list[Path] | None = None,
+    resume: bool = False,
+) -> dict:
+    """Start a run for the steps: check the config, plan every position, print the plan.
+
+    Reads only store metadata. Prints `RESOURCES:` (one estimate task) and
+    `PLAN:{positions, time_indices, propagated, resources}` for Nextflow, and returns
+    the plan.
+    """
+    run = _Run(
+        moving_position_dirpaths, config_filepath, output_filepath, reference_position_dirpaths
+    )
+    run.start()
+    plans = {
+        key: init_run(
+            run.moving(key), run.reference_for[key], run.settings, run.work_dir(key), resume
+        )
+        for key in run.keys
+    }
+    first = plans[run.keys[0]]
+    plan = {
+        "positions": run.keys,
+        "time_indices": first["time_indices"],
+        "propagated": first["propagated"],
+        "resources": first["resources"],
+    }
+    estimate = first["resources"]["estimate"]
+    echo_resources(estimate["cpus"], estimate["mem_gb"], estimate["time_minutes"])
+    click.echo("PLAN:" + json.dumps(plan))
+    return plan
+
+
+def estimate_transform_step(
+    step: str,
+    moving_position_dirpaths: list[Path],
+    config_filepath: Path,
+    output_filepath: Path,
+    reference_position_dirpaths: list[Path] | None = None,
+    timepoints: list[int] | None = None,
+    resume: bool = False,
+) -> dict | None:
+    """Run one step of a run `--init` started, in this process, for the given positions.
+
+    `estimate`, `repair` and `sweep` do the given `timepoints` (default: all the step
+    has); `estimate` of a `seed_from: previous_timepoint` run does the whole series, in
+    order. `flag` prints `PLAN:{position: {repair, sweep}}`. `finalize` writes the
+    transforms file and needs every position of the run.
+    """
+    run = _Run(
+        moving_position_dirpaths, config_filepath, output_filepath, reference_position_dirpaths
+    )
+    run.load()
+    if step == "finalize":
+        missing = sorted(set(run.run_positions) - set(run.keys))
+        if missing:
+            raise click.UsageError(f"finalize writes every position; missing {missing}")
+        run.write({key: run.entries(*finalize_run(run.work_dir(key))) for key in run.keys})
+        return None
+    if step == "flag":
+        flags = {}
+        for key in run.keys:
+            _result, position_flags = flag_run(run.work_dir(key))
+            flags[key] = {"repair": position_flags["repair"], "sweep": position_flags["sweep"]}
+        click.echo("PLAN:" + json.dumps(flags))
+        return flags
+    for key in run.keys:
+        run_timepoint_jobs(
+            step,
+            run.moving(key),
+            run.reference_for[key],
+            run.work_dir(key),
+            timepoints=timepoints,
             resume=resume,
         )
-        return transform_entries(
-            result, time_indices, transforms, settings.fallback.flag.hard_fail
-        )
-
-    common = dict(
-        direction="forward",
-        moving_channels=[settings.moving.channel],
-        reference_channel=settings.reference.channel,
-        method=settings.method,
-        voxel_size=voxel_size,
-    )
-    if len(movings) == 1:
-        model = TransformSettings(
-            **common, transforms=estimate_position(keys[0], movings[0], output_dir)
-        )
-    else:
-        click.echo(f"Estimating {len(movings)} positions, each with its own transforms")
-        workers = min(len(movings), MAX_CONCURRENT_POSITIONS)
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = {
-                key: pool.submit(
-                    estimate_position, key, moving, output_dir / "positions" / key
-                )
-                for key, moving in zip(keys, movings, strict=True)
-            }
-        failed = {}
-        positions = {}
-        for key, future in futures.items():
-            try:
-                positions[key] = future.result()
-            except Exception as e:  # noqa: BLE001 -- report every failed position at once
-                failed[key] = f"{type(e).__name__}: {e}"
-        if failed:
-            listing = "\n".join(f"  {k}: {v}" for k, v in failed.items())
-            raise click.ClickException(
-                f"{len(failed)} of {len(movings)} positions failed; no transforms file "
-                f"written (rerun with --resume to redo only what is missing):\n{listing}"
-            )
-        model = TransformSettings(**common, positions=positions)
-    model_to_yaml(model, output_filepath)
-    click.echo(f"Transform settings saved to {output_filepath.resolve()}")
+    return None
 
 
 @click.command("estimate-transform")
@@ -188,6 +348,20 @@ def estimate_transform(
     "only the rest (e.g. after jobs hit their time limit). Refused if the settings or "
     "inputs changed since that run."
 )
+@init_only()
+@click.option(
+    "--step",
+    type=click.Choice(STEPS),
+    default=None,
+    help="Run one step of a run --init started, in this process (for Nextflow): "
+    "estimate -> flag -> repair / sweep -> finalize.",
+)
+@click.option(
+    "--timepoints",
+    default=None,
+    help="Timepoints for --step estimate / repair / sweep, comma-separated (e.g. 5 or "
+    "5,6); default: every timepoint the step has.",
+)
 def estimate_transform_cli(
     moving_position_dirpaths: list[Path],
     reference_position_dirpaths: list[Path] | None,
@@ -197,6 +371,9 @@ def estimate_transform_cli(
     cluster: str,
     monitor: bool,
     resume: bool,
+    init_only: bool,
+    step: str | None,
+    timepoints: str | None,
 ) -> None:
     """Estimate a transform series mapping a moving channel onto its reference.
 
@@ -220,7 +397,39 @@ def estimate_transform_cli(
     \b
     Retry an interrupted run, keeping finished timepoints:
     >>> biahub estimate-transform --resume -m ... -r ... -c ... -o ./transforms.yml
+
+    \b
+    The same phases one step at a time, as the Nextflow module runs them (each step in
+    this process; --init prints the plan as PLAN:{...}):
+    >>> biahub estimate-transform --init -m ... -r ... -c ... -o ./transforms.yml
+    >>> biahub estimate-transform --step estimate --timepoints 5 -m <one position> ...
+    >>> biahub estimate-transform --step flag -m <one position> ...
+    >>> biahub estimate-transform --step repair --timepoints 12 -m <one position> ...
+    >>> biahub estimate-transform --step finalize -m <every position> ...
     """  # noqa: D301
+    if init_only and step:
+        raise click.UsageError("--init and --step are separate calls")
+    if timepoints is not None and step not in ("estimate", "repair", "sweep"):
+        raise click.UsageError("--timepoints goes with --step estimate / repair / sweep")
+    common = dict(
+        moving_position_dirpaths=moving_position_dirpaths,
+        reference_position_dirpaths=reference_position_dirpaths,
+        config_filepath=config_filepath,
+        output_filepath=output_filepath,
+    )
+    if init_only:
+        estimate_transform_init(**common, resume=resume)
+        return
+    if step:
+        estimate_transform_step(
+            step,
+            **common,
+            timepoints=None
+            if timepoints is None
+            else [int(t) for t in timepoints.split(",") if t.strip()],
+            resume=resume,
+        )
+        return
     estimate_transform(
         moving_position_dirpaths=moving_position_dirpaths,
         reference_position_dirpaths=reference_position_dirpaths,

@@ -1744,6 +1744,78 @@ def finalize_run(
     return result, time_indices, transforms
 
 
+def run_timepoint_jobs(
+    step: str,
+    moving_position_dirpath: Path,
+    reference_position_dirpath: Path,
+    output_dir: Path,
+    timepoints: list[int] | None = None,
+    resume: bool = False,
+) -> dict[int, dict]:
+    """Run one phase's jobs for the given timepoints in this process; return their records.
+
+    `step` is `estimate`, `repair` or `sweep`; `timepoints` defaults to every timepoint
+    the phase has (all for estimate, the flagged ones for repair / sweep). A propagated
+    estimate (`seed_from: previous_timepoint`) is one job over the whole series. With
+    `resume`, timepoints that already have a record are skipped.
+    """
+    output_dir = Path(output_dir)
+    plan = _run_plan(output_dir)
+    settings_path = output_dir / ENGINE_SETTINGS_FILENAME
+    source, target = Path(moving_position_dirpath), Path(reference_position_dirpath)
+    time_indices = plan["time_indices"]
+    timepoints_dir, repairs_dir, sweeps_dir = _record_dirs(output_dir)
+
+    if step == "estimate" and plan["propagated"]:
+        if timepoints is not None:
+            raise click.UsageError(
+                "seed_from: previous_timepoint estimates the whole series in one job, in "
+                "order; drop --timepoints"
+            )
+        return _estimate_propagated_job(
+            source, target, settings_path, time_indices, timepoints_dir, resume
+        )
+
+    if step == "estimate":
+        available, records_dir = time_indices, timepoints_dir
+    elif step in ("repair", "sweep"):
+        available = _flags(output_dir)[step]
+        records_dir = repairs_dir if step == "repair" else sweeps_dir
+    else:
+        raise ValueError(f"unknown step {step!r}")
+    wanted = available if timepoints is None else list(timepoints)
+    unknown = sorted(set(wanted) - set(available))
+    if unknown:
+        raise click.UsageError(
+            f"{step}: timepoints {unknown} are not in this run's {step} list {available}"
+        )
+    flagged = _flags(output_dir)["flagged"] if step == "repair" else None
+    records = {}
+    for t in wanted:
+        record_path = records_dir / f"{t}.json"
+        if resume and record_path.exists():
+            continue
+        if step == "estimate":
+            records[t] = _estimate_timepoint_job(source, target, settings_path, t, record_path)
+        elif step == "repair":
+            records[t] = _repair_timepoint_job(
+                source,
+                target,
+                settings_path,
+                t,
+                time_indices,
+                flagged,
+                timepoints_dir,
+                record_path,
+            )
+        else:
+            records[t] = _sweep_timepoint_job(
+                source, target, settings_path, t, timepoints_dir, record_path
+            )
+        click.echo(f"{step} t={t}: score={records[t].get('score')}")
+    return records
+
+
 def estimate_transform_series(
     moving_position_dirpath: Path,
     reference_position_dirpath: Path,
