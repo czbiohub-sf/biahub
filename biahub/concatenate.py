@@ -24,7 +24,7 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.settings import ConcatenateSettings
+from biahub.settings import ConcatenateSettings, TimeRange
 from biahub.utils.array_ops import copy_n_paste
 from biahub.utils.cluster import echo_resources, estimate_resources, get_submitit_cluster
 from biahub.utils.config import settings_fingerprint, yaml_to_model
@@ -219,12 +219,14 @@ def _channel_combiner_metadata(
                     output_channel_indices.append(out_chan_idx_counter)
                     out_chan_idx_counter += 1
                 else:
+                    # A channel name seen in an earlier source shares that
+                    # source's output channel. Only valid when the two write
+                    # different positions; _check_no_overwrites() enforces it.
                     click.echo(
-                        f"Warning: Channel {channel} already exists. Skipping and using index from the first entry."
+                        f"Warning: Channel {channel} appears in more than one source; "
+                        "they share one output channel."
                     )
-                    # Set the out_chan_idx_counter to the index of the channel in the all_channel_names list
-                    out_chan_idx_counter = all_channel_names.index(channel)
-                    output_channel_indices.append(out_chan_idx_counter)
+                    output_channel_indices.append(all_channel_names.index(channel))
                 input_channel_indices.append(channel_names.index(channel))
 
         dataset.close()
@@ -331,22 +333,97 @@ def _cropped_size(slice_params_zyx: list[slice]) -> tuple[int, int, int]:
     return cropped_shape_zyx
 
 
-def _resolve_time_indices(settings: ConcatenateSettings, all_shapes: list[tuple]) -> list[int]:
-    """Resolve input time indices from settings and shapes."""
-    T = all_shapes[0][0]
+def _time_indices_label(time_indices) -> str:
+    """``time_indices`` as written in the config, for log messages."""
+    if isinstance(time_indices, TimeRange):
+        step = f", step: {time_indices.step}" if time_indices.step != 1 else ""
+        return f"{{start: {time_indices.start}, stop: {time_indices.stop}{step}}}"
+    return str(time_indices)
+
+
+def _resolve_time_indices(
+    settings: ConcatenateSettings, all_shapes: list[tuple], all_data_paths: list[Path]
+) -> list[int]:
+    """Resolve the output plate's time points from settings and shapes.
+
+    ``"all"`` means every time point of every source, so the sources must all
+    have the same number. When they differ, the choice has to be explicit:
+    ``"min"`` crops to the shortest source, ``"max"`` keeps the longest, and a
+    range, list or single index picks the time points. A source that lacks a
+    time point the plate has leaves it unwritten (the fill value, 0); see
+    ``_resolve_concatenate_inputs``, which also checks explicit indices
+    against the longest source.
+
+    Raises
+    ------
+    ValueError
+        If ``time_indices`` is ``"all"`` and the sources' numbers of time points
+        differ.
+    """
+    source_T = [shape[0] for shape in all_shapes]
+    T = min(source_T)
     if settings.time_indices == "all":
-        if not all(s[0] == T for s in all_shapes):
-            click.echo(
-                "Warning: Datasets have different number of time points. "
-                "Taking the smallest number of time points."
+        if len(set(source_T)) > 1:
+            example_path = {}
+            for path, num_t in zip(all_data_paths, source_T, strict=True):
+                example_path.setdefault(num_t, path)
+            listing = "\n".join(
+                f"  {num_t} time points, e.g. {path}"
+                for num_t, path in sorted(example_path.items())
             )
-        T = min(s[0] for s in all_shapes)
+            raise ValueError(
+                "time_indices is 'all' but the sources have different numbers of time "
+                f"points:\n{listing}\nSet time_indices: min to crop to the first {T}, "
+                f"or time_indices: {{start: 0, stop: {T}}} (with an optional step); or "
+                "time_indices: max to keep them all and pad the shorter sources with "
+                "zeros."
+            )
         return list(range(T))
-    elif isinstance(settings.time_indices, list):
+    if settings.time_indices == "min":
+        return list(range(T))
+    if settings.time_indices == "max":
+        return list(range(max(source_T)))
+    if isinstance(settings.time_indices, TimeRange):
+        time_range = settings.time_indices
+        return list(range(time_range.start, time_range.stop, time_range.step))
+    if isinstance(settings.time_indices, list):
         return settings.time_indices
-    elif isinstance(settings.time_indices, int):
-        return [settings.time_indices]
-    return list(range(T))
+    return [settings.time_indices]
+
+
+def _check_no_overwrites(
+    all_data_paths: list[Path],
+    output_position_paths: list[Path],
+    output_channel_idx_list: list[list[int]],
+    all_channel_names: list[str],
+) -> None:
+    """Refuse a mapping that writes one channel of one output position twice.
+
+    Sources may share a channel name: they then share that output channel,
+    which is how positions from several stores are merged into one plate. When
+    two of them also land on the same output position, the second write would
+    silently overwrite the first.
+
+    Raises
+    ------
+    ValueError
+        If two source positions write the same channel of the same output position.
+    """
+    writer = {}
+    for source, output_position, output_channels in zip(
+        all_data_paths, output_position_paths, output_channel_idx_list, strict=True
+    ):
+        for channel_idx in output_channels:
+            key = (output_position, channel_idx)
+            if key in writer:
+                raise ValueError(
+                    f"Channel {all_channel_names[channel_idx]!r} of output position "
+                    f"{'/'.join(output_position.parts[-3:])} would be written by both "
+                    f"{writer[key]} and {source}, and the second would overwrite the "
+                    "first. Take the channel from only one source (channel_names), or "
+                    "set ensure_unique_positions: true to keep them as separate positions."
+                )
+            writer[key] = source
 
 
 def _validate_source_groups(
@@ -429,6 +506,9 @@ def _resolve_concatenate_inputs(
         output_dirpath,
         ensure_unique_positions=settings.ensure_unique_positions,
     )
+    _check_no_overwrites(
+        all_data_paths, output_position_paths, output_channel_idx_list, all_channel_names
+    )
 
     all_shapes = []
     all_dtypes = []
@@ -469,21 +549,84 @@ def _resolve_concatenate_inputs(
         click.echo("Warning: not all dtypes match. Casting data at float32.")
         dtype = np.float32
 
-    input_time_indices = _resolve_time_indices(settings, all_shapes)
+    input_time_indices = _resolve_time_indices(settings, all_shapes, all_data_paths)
 
-    # A per-position worker only sees its own sources, so with time_indices
-    # "all" its T is the minimum over those, not over the plate. The plate that
-    # --init created is the authority: never write past its T.
+    # Explicit indices are checked against the longest source when the plate
+    # is created. A per-position worker only sees its own sources, so it
+    # cannot tell what T the other positions have: the plate that --init
+    # created over every position is the authority. Its own sources may have
+    # fewer time points than the plate under "max" or an explicit selection
+    # (padded below) and more under "min"; anything else means the plate was
+    # not made from these sources.
+    #
+    # The upper bound is only relaxed for the selection the plate was created
+    # with, which its `biahub-concatenate` record holds: that one was checked
+    # against every source. Any other selection into an existing plate (a
+    # changed config, or a plate from before the record) is checked against
+    # the sources this run sees.
+    label = _time_indices_label(settings.time_indices)
+    mode = settings.time_indices if settings.time_indices in ("all", "min", "max") else None
     first_output = output_position_paths[0]
-    if settings.time_indices == "all" and first_output.is_dir():
+    validated_at_init = False
+    if first_output.is_dir():
         with open_ome_zarr(first_output, mode="r") as existing:
             plate_T = existing.data.shape[0]
-        if len(input_time_indices) > plate_T:
-            click.echo(
-                f"Warning: sources have {len(input_time_indices)} time points but "
-                f"{output_dirpath} was created with {plate_T}. Writing the first {plate_T}."
+            record = existing.zattrs.get("biahub-concatenate") or {}
+        validated_at_init = record.get("time_indices") == settings.model_dump()["time_indices"]
+    if not validated_at_init:
+        longest = max(shape[0] for shape in all_shapes)
+        out_of_range = [t for t in input_time_indices if t >= longest]
+        if out_of_range:
+            raise ValueError(
+                f"time_indices {out_of_range} are out of range: the longest source has "
+                f"{longest} time points (0 to {longest - 1})."
             )
-            input_time_indices = input_time_indices[:plate_T]
+    if first_output.is_dir():
+        num_t = len(input_time_indices)
+        mismatch = {
+            "all": num_t != plate_T,
+            "min": num_t < plate_T,
+            "max": num_t > plate_T,
+            None: num_t != plate_T,
+        }
+        if mismatch[mode]:
+            raise ValueError(
+                f"Sources have {num_t} time points with time_indices {label} but "
+                f"{output_dirpath} was created with {plate_T}."
+            )
+        if mode is not None:
+            input_time_indices = list(range(plate_T))
+
+    # Each source position copies the plate's time points it has; the ones it
+    # lacks stay at the fill value. Log both ways data does not go one-to-one:
+    # a source padded at the end, and time points a source has that are not
+    # taken.
+    input_time_indices_list = []
+    output_time_indices_list = []
+    padded_time_indices_list = []
+    num_cropped = 0
+    for path, shape in zip(all_data_paths, all_shapes, strict=True):
+        kept = [(t, i) for i, t in enumerate(input_time_indices) if t < shape[0]]
+        input_time_indices_list.append([t for t, _ in kept])
+        output_time_indices_list.append([i for _, i in kept])
+        padded_time_indices_list.append(
+            [i for i, t in enumerate(input_time_indices) if t >= shape[0]]
+        )
+        if len(kept) < len(input_time_indices):
+            click.echo(
+                f"time_indices {label}: padding {path}: it has {shape[0]} time points, "
+                f"so {len(input_time_indices) - len(kept)} of the {len(input_time_indices)} "
+                "taken stay zero."
+            )
+        if len(kept) < shape[0]:
+            num_cropped += 1
+    if num_cropped:
+        click.echo(
+            f"time_indices {label}: cropping: {num_cropped} of {len(all_data_paths)} source "
+            f"positions have time points that are not taken (up to "
+            f"{max(shape[0] for shape in all_shapes)}; {len(input_time_indices)} taken), "
+            "and those are left out."
+        )
 
     # If input shapes differ but slicing is specified, inform the user
     if not all(shape[-3:] == all_shapes[0][-3:] for shape in all_shapes):
@@ -518,7 +661,12 @@ def _resolve_concatenate_inputs(
         "input_channel_idx_list": input_channel_idx_list,
         "output_channel_idx_list": output_channel_idx_list,
         "all_slicing_params": all_slicing_params,
-        "input_time_indices": input_time_indices,
+        "input_time_indices_list": input_time_indices_list,
+        "output_time_indices_list": output_time_indices_list,
+        "padded_time_indices_list": padded_time_indices_list,
+        # Before this run touches the plate: only a position that already
+        # existed can hold data in a slot this run pads.
+        "preexisting_outputs": {p for p in output_position_paths if p.is_dir()},
         "shape": (T, C, Z, Y, X),
         "output_metadata": output_metadata,
     }
@@ -549,6 +697,33 @@ def _init_output_plate(
         **prep["output_metadata"],
     )
     click.echo(f"Created {len(missing)} positions in {output_dirpath}")
+
+
+def _clear_padding(prep: dict) -> None:
+    """Zero the padded slots of output positions that existed before this run.
+
+    Padding is the time points a source lacks, left unwritten so they read as
+    the fill value. That only holds in a fresh position: one written by an
+    earlier run, with another time selection or a source that has since
+    shrunk, keeps whatever that run put there. So in an existing position each
+    source's output channels are cleared at the time points it pads.
+    """
+    for output_position_path, output_channel_idx, padded_time_indices in zip(
+        prep["output_position_paths"],
+        prep["output_channel_idx_list"],
+        prep["padded_time_indices_list"],
+        strict=True,
+    ):
+        if not padded_time_indices or output_position_path not in prep["preexisting_outputs"]:
+            continue
+        with open_ome_zarr(output_position_path, mode="r+") as position:
+            for t in padded_time_indices:
+                for c in output_channel_idx:
+                    position.data[t, c] = 0
+        click.echo(
+            f"Cleared padded time points {padded_time_indices} of channels "
+            f"{output_channel_idx} in existing {output_position_path}"
+        )
 
 
 def concatenate(
@@ -605,7 +780,6 @@ def concatenate(
 
     prep = _resolve_concatenate_inputs(settings, output_dirpath, source_groups)
     _init_output_plate(prep, settings, output_dirpath)
-    input_time_indices = prep["input_time_indices"]
 
     # Per-position resources, estimated once. Calibrated on 2026_08_11 A549
     # SEC61B (67 T x 6 C, 5-T shards): RAM tracks the worker count (~16 GB per
@@ -629,6 +803,8 @@ def concatenate(
         click.echo(f"Initialized {output_dirpath} ({num_positions} positions)")
         return
 
+    _clear_padding(prep)
+
     # Prepare SLURM arguments
     slurm_args = {
         "slurm_job_name": "concatenate",
@@ -650,6 +826,7 @@ def concatenate(
 
     click.echo("Submitting jobs...")
     jobs = []
+    job_paths = []
 
     # One job per SOURCE position: with three source stores an output position
     # is written by three jobs, each owning the disjoint channel range it
@@ -661,14 +838,21 @@ def concatenate(
             input_channel_idx,
             output_channel_idx,
             zyx_slicing_params,
+            input_time_indices,
+            output_time_indices,
         ) in zip(
             prep["all_data_paths"],
             prep["output_position_paths"],
             prep["input_channel_idx_list"],
             prep["output_channel_idx_list"],
             prep["all_slicing_params"],
+            prep["input_time_indices_list"],
+            prep["output_time_indices_list"],
             strict=True,
         ):
+            if not input_time_indices:
+                # The source has none of the time points taken: all padding.
+                continue
             job = executor.submit(
                 process_single_position,
                 copy_n_paste,
@@ -677,13 +861,14 @@ def concatenate(
                 input_channel_indices=input_channel_idx,
                 output_channel_indices=output_channel_idx,
                 input_time_indices=input_time_indices,
-                output_time_indices=list(range(len(input_time_indices))),
+                output_time_indices=output_time_indices,
                 num_workers=slurm_args["slurm_cpus_per_task"],
                 resume=resume,
                 resume_token=settings_fingerprint(settings),
                 zyx_slicing_params=zyx_slicing_params,
             )
             jobs.append(job)
+            job_paths.append(input_position_path)
 
     job_ids = [job.job_id for job in jobs]  # Access job IDs after batch submission
 
@@ -697,13 +882,13 @@ def concatenate(
     # called. Run each one in the foreground and stream progress; monitor's
     # async polling UI is pointless against synchronous in-process jobs.
     if resolved_cluster == "debug":
-        for job, path in zip(jobs, prep["all_data_paths"], strict=True):
+        for job, path in zip(jobs, job_paths, strict=True):
             job.wait()
             click.echo(f"Concatenate complete: {path}")
         return
 
     if monitor:
-        monitor_jobs(jobs, prep["all_data_paths"])
+        monitor_jobs(jobs, job_paths)
 
 
 @click.command("concatenate")

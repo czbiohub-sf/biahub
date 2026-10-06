@@ -248,6 +248,63 @@ not `deskew.yml` — the deskew values come from the acquisition (§5, caveats
 §3). If the deskew geometry differs from the template, that is a per-dataset
 edit to both files.
 
+### 5c. Check that every position has the same number of time points
+
+Assemble concatenates every position of the deskew, reconstruct and
+virtual-stain stores, and with `time_indices: all` (both shipped templates)
+`biahub concatenate` **refuses sources with different numbers of time
+points**: it no longer crops or pads silently, so the choice has to be written
+into `concatenate.yml`. Each step keeps a position's full T, so a mismatch in the raw store
+reaches assemble and fails the run during the init phase. Check the raw store
+now. From the biahub checkout, with the position glob for the layout from §3:
+`'*/*/*'` for an HCS plate, `'*'` for flat positions:
+
+```bash
+.venv/bin/python - <RAW_STORE.zarr> '<POSITION_GLOB>' <<'EOF'
+import collections, json, pathlib, sys
+store, pattern = pathlib.Path(sys.argv[1]), sys.argv[2]
+by_t = collections.defaultdict(list)
+for meta in sorted(store.glob(f"{pattern}/0/zarr.json")):
+    by_t[json.loads(meta.read_text())["shape"][0]].append(str(meta.parent.parent.relative_to(store)))
+for t, positions in sorted(by_t.items()):
+    print(f"T={t}: {len(positions)} positions, e.g. {', '.join(positions[:3])}")
+sys.exit(len(by_t) != 1)
+EOF
+```
+
+It exits 1 if the positions disagree, or if none were found (check the glob).
+**If they disagree, stop and ask the user.** A short position usually means the
+acquisition was stopped partway through a time point. Show the counts per T and
+offer:
+
+- **Crop in time to what every position has.** In
+  `<OUTPUT>/configs/concatenate.yml`, replace `time_indices: all` with
+
+  ```yaml
+  time_indices: {start: 0, stop: <smallest T>}   # stop is exclusive
+  ```
+
+  The extra time points of the longer positions are left out of the assembled
+  store (they stay in the intermediates), and tracking and QC see only the
+  cropped range (`references/caveats.md` §5). If the user also wants to
+  subsample, add `step`, e.g. `{start: 0, stop: <smallest T>, step: 2}` for
+  every other time point. (`time_indices: min` crops the same way, but the
+  range records the number in the config.) Use the smallest T as `stop`: a
+  range that runs past the shorter positions pads them, as below.
+- **Keep every time point and pad with zeros**: `time_indices: max`, or
+  equivalently `{start: 0, stop: <largest T>}` (add `step` to subsample). The
+  assembled store takes the longest T, and the missing end of each shorter
+  position stays at zero. Nothing is lost, but the padded frames are blank:
+  tracks end there, QC may flag them, and nothing in the store marks them as
+  padding — say which positions are padded from which time point in the plan,
+  and the assemble log lists them (`time_indices ...: padding ...`).
+- **Stop and investigate** the acquisition before reconstructing.
+
+Do not pick for them, and record the choice and the reason in the plan (§6).
+The same refusal at assemble's init, `time_indices is 'all' but the sources
+have different numbers of time points`, means this check was skipped or the
+stores no longer match the raw data; it is answered the same way.
+
 ## 6. Present the plan
 
 Do not run anything yet. Show the user:
@@ -256,7 +313,8 @@ Do not run anything yet. Show the user:
    state. Make anything other than *clean `main`, up to date* a visible caveat
    with a recommendation.
 2. Resolved input store, its size, position count, channel names, and
-   `(T, C, Z, Y, X)` shape.
+   `(T, C, Z, Y, X)` shape. Say that every position has the same T (§5c), or
+   how many differ and the `time_indices` the user chose for that.
 3. Whether a `0-convert` plate build is needed.
 4. Output project directory and the step layout.
 5. That configs come from `<BIAHUB>/nextflow/configs/<family>/` at commit
@@ -326,9 +384,17 @@ Get explicit approval.
 mkdir -p <OUTPUT>/configs <OUTPUT>/nextflow
 cp <BIAHUB>/nextflow/configs/<family>/*.yml <BIAHUB>/nextflow/configs/<family>/*.yaml \
    <OUTPUT>/configs/
+chmod g+w <OUTPUT>/configs/*
 ```
 
 Both globs: the step configs are `.yml` and the QC configs are `.yaml`.
+
+**Every file you place in `<OUTPUT>` must be group-writable** so the rest of
+the lab can edit configs and relaunch. The project directories are setgid with
+a default ACL: setgid supplies the group, but the ACL overrides umask, so a
+copied file's group bits follow the *source* file's mode — `cp` from the repo
+(644) yields `rw-r--r--`. Hence the `chmod` after every copy. Plain `cp` only:
+`cp -p`/`-a` would also carry over the checkout's group.
 
 The run script passes all four optional configs — `--concatenate_config`,
 `--track_config`, `--qc_config` (`qc.yaml`), `--qc_track_config`
@@ -344,8 +410,9 @@ including `-resume`, and bash then tries to run the remainder as a command.
 
 Edit the copies for this dataset. Copy `templates/run_mantis_v2.sh` to
 `<OUTPUT>/run_mantis_v2.sh`, fill in `DATASET`, `DATA_DIR`, `PROJECT_DIR`,
-`BIAHUB_PROJECT`, `chmod +x`. The script stays in the output directory as the
-run's provenance record.
+`BIAHUB_PROJECT`, `chmod 775` (not `+x` — it must also be group-writable).
+The script stays in the output directory as the run's provenance record, and
+re-grants `g+w` on itself and the configs at every launch.
 
 Set `CLEANUP_INTERMEDIATES` as agreed in §6 item 11: leave `auto` when
 `concatenate.yml` does not crop, `false` when it crops and the user did not opt

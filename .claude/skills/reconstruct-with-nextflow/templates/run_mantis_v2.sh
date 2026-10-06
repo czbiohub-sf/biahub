@@ -116,6 +116,13 @@ INPUT_ZARR="${CONVERTED_ZARR:-${DATA_DIR}/${DATASET}/${RAW_STORE}}"
 [[ -d "${INPUT_ZARR}" ]] || { echo "input not found: ${INPUT_ZARR}" >&2; exit 1; }
 [[ -d "${CONFIGS}"    ]] || { echo "configs not found: ${CONFIGS}"  >&2; exit 1; }
 
+# Keep the scaffolded files group-writable so the rest of the lab can edit and
+# relaunch. The project dirs carry a default ACL, which overrides umask: a copied
+# file's group bits follow the SOURCE file's mode, so `cp` from the repo (644)
+# yields rw-r--r--. Setgid on the dirs already supplies the group. -f because
+# only the owner can chmod; a teammate's relaunch must not fail here.
+chmod -f g+w "${BASH_SOURCE[0]}" "${CONFIGS}"/* "${OUTPUT_DIR}"/*.py 2>/dev/null || true
+
 # Record which code and inputs this run used, to a FILE as well as the console.
 #
 # The file is the durable record. The launch is deliberately not piped through
