@@ -233,11 +233,14 @@ Each step writes `<dataset>.zarr` into its own numbered subdirectory of `--outpu
 output/
 ├── 0-flatfield/     1-deskew/     2-reconstruct/
 ├── 3-virtual-stain/ 4-track/      5-assemble/
+│   └── slurm_output/README.md      # (in each step) points to the real logs
 └── nextflow/
     ├── report.html  timeline.html  dag.html  trace.txt
     ├── slurm_output/<step>/        # per-task Slurm logs
     └── work/                       # Nextflow work directory
 ```
+
+Per-task logs (progress and tracebacks) are in `nextflow/slurm_output/<step>/`. The `slurm_output/` inside each step directory is created by the CLI, but because tasks run it with `--cluster debug`, it only holds submitit placeholder files; each step's init writes a `README.md` there that points to the real logs.
 
 The pipeline runs flat-field → deskew → reconstruct → virtual-stain → assemble → track; `5-assemble` concatenates the deskew, reconstruct, and virtual-stain channels into one plate, which tracking then consumes.
 

@@ -28,7 +28,7 @@
 // for 54 positions, half the pipeline's wall-clock, CPU-bound on compressing
 // the sharded output (biahub#301).
 
-include { parse_resources; slurm_logs; slurm_log_dir; retry_time } from './common'
+include { parse_resources; slurm_logs; slurm_log_dir; slurm_output_readme; retry_time } from './common'
 
 
 // Create the output plate and emit the RESOURCES line sizing one position's
@@ -50,6 +50,7 @@ process init_concatenate {
     script:
     """
     mkdir -p "${slurm_log_dir('assemble')}"
+    ${slurm_output_readme('assemble', output_zarr)}
     biahub concatenate --init \
         -i "${deskew_zarr}"/*/*/* \
         -i "${reconstruct_zarr}"/*/*/* \

@@ -18,7 +18,7 @@
 // warms the shared cellpose weights cache, which is strictly better done before
 // any GPU worker exists to race for it.
 
-include { parse_resources; slurm_logs; slurm_log_dir } from './common'
+include { parse_resources; slurm_logs; slurm_log_dir; slurm_output_readme } from './common'
 
 
 process init_track {
@@ -36,6 +36,7 @@ process init_track {
     script:
     """
     mkdir -p "${slurm_log_dir('track')}"
+    ${slurm_output_readme('track', output_zarr)}
     biahub track --init \
         -i "${input_zarr}"/*/*/* \
         -o "${output_zarr}" \
@@ -70,6 +71,10 @@ process run_track {
         -o "${output_zarr}" \
         -c "${config}" \
         --input-images-path "${input_images_zarr}"
+    # Ultrack's SQLite database is created 0644, and under the project dirs'
+    # default ACL the group mask follows that mode — so the group can't write
+    # the FOV's data.db. Grant it explicitly; -f because only the owner can.
+    chmod -Rf g+w "\$(dirname "${output_zarr}")/\$(basename "${output_zarr}" .zarr)_config_tracking/${position.replace('/', '_')}" || true
     """
 }
 
