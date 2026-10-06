@@ -1331,6 +1331,31 @@ def _load_pass(record: dict, transform_type: str, fallback: Transform) -> PassRe
     )
 
 
+def _job_failure(error: Exception) -> str:
+    """Return how a job that raised is recorded: 'job failed: <type>: <last line>'."""
+    message = str(error).splitlines()[-1][:200] if str(error) else ""
+    return f"job failed: {type(error).__name__}: {message}"
+
+
+def _failed_record(t: int, error: Exception) -> dict:
+    """Return an estimate record for a timepoint whose job raised (as the driver records it).
+
+    `failed` marks it as not finished, so a retry with resume does it again.
+    """
+    return {
+        "t": t,
+        "matrix": None,
+        "score": None,
+        "error": _job_failure(error),
+        "failed": True,
+    }
+
+
+def _finished(record_path: Path) -> bool:
+    """Whether a record exists for a timepoint that did not fail (what resume skips)."""
+    return record_path.exists() and not json.loads(record_path.read_text()).get("failed")
+
+
 def _run_jobs(
     executor: submitit.AutoExecutor,
     resolved_cluster: str,
@@ -1363,7 +1388,7 @@ def _run_jobs(
         try:
             records[t] = job.result()
         except Exception as e:  # noqa: BLE001 -- one job's infrastructure failure must not abort the run
-            failures[t] = f"job failed: {type(e).__name__}: {str(e).splitlines()[-1][:200]}"
+            failures[t] = _job_failure(e)
             click.echo(f"{label} t={t}: {failures[t]}")
     return records, failures
 
@@ -1787,9 +1812,21 @@ def run_timepoint_jobs(
                 "seed_from: previous_timepoint estimates the whole series in one job, in "
                 "order; drop --timepoints"
             )
-        return _estimate_propagated_job(
-            source, target, settings_path, time_indices, timepoints_dir, resume
-        )
+        try:
+            return _estimate_propagated_job(
+                source, target, settings_path, time_indices, timepoints_dir, resume
+            )
+        except Exception as e:  # noqa: BLE001 -- recorded per timepoint, as the driver does
+            # The timepoints it reached keep their records; the rest failed with it.
+            click.echo(f"estimate: {_job_failure(e)}")
+            timepoints_dir.mkdir(parents=True, exist_ok=True)
+            records = {}
+            for t in time_indices:
+                path = timepoints_dir / f"{t}.json"
+                if not path.exists():
+                    path.write_text(json.dumps(_failed_record(t, e)))
+                records[t] = json.loads(path.read_text())
+            return records
 
     if step == "estimate":
         available, records_dir = time_indices, timepoints_dir
@@ -1808,27 +1845,51 @@ def run_timepoint_jobs(
     records = {}
     for t in wanted:
         record_path = records_dir / f"{t}.json"
-        if resume and record_path.exists():
+        if resume and _finished(record_path):
             continue
-        if step == "estimate":
-            records[t] = _estimate_timepoint_job(source, target, settings_path, t, record_path)
-        elif step == "repair":
-            records[t] = _repair_timepoint_job(
+        try:
+            records[t] = _run_timepoint_job(
+                step,
                 source,
                 target,
                 settings_path,
                 t,
-                time_indices,
-                flagged,
-                timepoints_dir,
                 record_path,
+                time_indices,
+                timepoints_dir,
+                flagged,
             )
-        else:
-            records[t] = _sweep_timepoint_job(
-                source, target, settings_path, t, timepoints_dir, record_path
-            )
+        except Exception as e:  # noqa: BLE001 -- one timepoint's failure must not end the run
+            # As the driver records a job that raised: an estimate becomes a failed record
+            # (the timepoint gets a stand-in, the error in its note); a repair / sweep
+            # leaves no record, so the timepoint keeps its estimate.
+            click.echo(f"{step} t={t}: {_job_failure(e)}")
+            if step == "estimate":
+                record_path.parent.mkdir(parents=True, exist_ok=True)
+                record_path.write_text(json.dumps(_failed_record(t, e)))
+            continue
         click.echo(f"{step} t={t}: score={records[t].get('score')}")
     return records
+
+
+def _run_timepoint_job(
+    step, source, target, settings_path, t, record_path, time_indices, timepoints_dir, flagged
+) -> dict:
+    """Run one timepoint's job of `step` in this process; return its record."""
+    if step == "estimate":
+        return _estimate_timepoint_job(source, target, settings_path, t, record_path)
+    if step == "repair":
+        return _repair_timepoint_job(
+            source,
+            target,
+            settings_path,
+            t,
+            time_indices,
+            flagged,
+            timepoints_dir,
+            record_path,
+        )
+    return _sweep_timepoint_job(source, target, settings_path, t, timepoints_dir, record_path)
 
 
 def estimate_transform_series(

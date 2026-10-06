@@ -213,3 +213,50 @@ def test_a_retried_step_with_resume_keeps_finished_timepoints(
 
     monkeypatch.setattr(engine, f"_{step}_timepoint_job", _must_not_run)
     _ok("--step", step, "--resume", *common)
+
+
+def test_a_crashing_timepoint_is_recorded_as_the_plain_run_does(
+    beads_plate_with_a_blank_timepoint, tmp_path, monkeypatch
+):
+    # An unexpected error on one timepoint (e.g. an unreadable chunk) must not stop the
+    # steps -- under Nextflow that would end the run -- but be recorded as a failed job,
+    # as the plain run does: the file is written, that timepoint unreliable with the error.
+    import biahub.registration.engine as engine
+
+    real = engine._estimate_timepoint_job
+
+    def crash_at_t1(source, target, settings_path, t, record_path):
+        if t == 1:
+            raise RuntimeError("blosc encoded value is invalid")
+        return real(source, target, settings_path, t, record_path)
+
+    real_repair = engine._repair_timepoint_job
+
+    def repair_crashes_at_t1(source, target, settings_path, t, *args):
+        if t == 1:
+            raise RuntimeError("blosc encoded value is invalid")
+        return real_repair(source, target, settings_path, t, *args)
+
+    monkeypatch.setattr(engine, "_estimate_timepoint_job", crash_at_t1)
+    monkeypatch.setattr(engine, "_repair_timepoint_job", repair_crashes_at_t1)
+    # submitit's in-process (debug) executor opens pdb on a failed job; no debugger here.
+    monkeypatch.setattr("pdb.post_mortem", lambda *args, **kwargs: None)
+    plate = beads_plate_with_a_blank_timepoint
+    config = _write_config(tmp_path)
+    one_call = tmp_path / "one" / "transforms.yml"
+    estimate_transform(
+        [plate], config, one_call, reference_position_dirpaths=[plate], cluster="debug"
+    )
+    by_steps = tmp_path / "steps" / "transforms.yml"
+    _by_steps([plate], config, by_steps, references=[plate])
+
+    assert load_transform_settings(by_steps) == load_transform_settings(one_call)
+    entry = load_transform_settings(by_steps).transforms[1]
+    assert entry.status == "unreliable" and "blosc encoded value is invalid" in entry.note
+
+    # A failed timepoint is not "finished": a retry with --resume does it again.
+    monkeypatch.setattr(engine, "_estimate_timepoint_job", real)
+    common = ["-m", plate, "-r", plate, "-c", config, "-o", by_steps]
+    _ok("--step", "estimate", "--timepoints", "1", "--resume", *common)
+    record = json.loads((by_steps.with_suffix("") / "timepoints" / "1.json").read_text())
+    assert record["error"] is None and record["matrix"] is not None
