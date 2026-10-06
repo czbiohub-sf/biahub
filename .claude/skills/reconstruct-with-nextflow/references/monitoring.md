@@ -150,7 +150,7 @@ Steps run strictly in sequence; within a step, positions fan out with
 | `run_flat_field` | fan-out, CPU (`preempted`) | first, so it absorbs most preemption |
 | `run_deskew` | fan-out, CPU | CPU on current main, not GPU |
 | `compute_transfer_function` + `run_apply_inv_tf` | one-shot + fan-out, CPU | TF is quick; apply is the bulk |
-| `run_virtual_stain_preprocess` + `run_virtual_stain` | one-shot + fan-out, **GPU** | `gpu` partition, effectively not preempted; longest per-position step |
+| `run_virtual_stain_preprocess` + `run_virtual_stain` | one-shot + fan-out, **GPU** | `preempted` partition on the `gpu` partition's nodes (`--constraint=gpu`); a reclaimed task resumes at the timepoint it lost; longest per-position step |
 | `run_concatenate` | **single job**, one reserved node | longest single job; whole-plate I/O |
 | `run_track` | fan-out, GPU (cellpose) | reads the assembled plate |
 

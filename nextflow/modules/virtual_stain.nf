@@ -103,8 +103,13 @@ process run_virtual_stain_preprocess {
 
 process run_virtual_stain {
     tag "${position}"
-    label 'gpu'
-    clusterOptions { "--gres=gpu:1 " + slurm_logs('virtual_stain') }
+    // Preemptable: `--resume` (below) makes a reclaimed task cost at most the
+    // timepoint it was predicting. See the slurm profile in nextflow.config.
+    label 'gpu_preempted'
+    // `--constraint=gpu` keeps it on the nodes of the `gpu` partition: the
+    // `preempted` partition also holds the single-A40 workstations (16 CPUs),
+    // which lack the `gpu` feature. Drop the constraint to use them too.
+    clusterOptions { "--gres=gpu:1 --constraint=gpu " + slurm_logs('virtual_stain') }
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time { retry_time(meta.time_minutes, task) }
