@@ -28,13 +28,19 @@
 // source data. Anything other than "all" (or a per-source list made only of
 // "all") means the assembled plate holds less than the intermediates, so they
 // are not duplicates and `auto` keeps them. Mirrors ConcatenateSettings, where
-// every one of these defaults to "all".
+// every one of these defaults to "all". `time_indices: max` also takes every
+// time point: shorter sources are padded, not cropped.
+//
+// Reading "all" as "everything was copied" relies on concatenate refusing what
+// would lose data under it: two sources writing the same channel of the same
+// position, and sources with different numbers of time points (biahub#404).
 def cropped_fields(concatenate_config) {
     def config = new org.yaml.snakeyaml.Yaml().load(new File(concatenate_config as String).text) ?: [:]
     def fields = ['time_indices', 'channel_names', 'X_slice', 'Y_slice', 'Z_slice']
     return fields.findAll { field ->
         def value = config[field]
         def takes_all = value == null || value == 'all' ||
+            (field == 'time_indices' && value == 'max') ||
             (value instanceof List && !value.isEmpty() && value.every { entry -> entry == 'all' })
         !takes_all
     }

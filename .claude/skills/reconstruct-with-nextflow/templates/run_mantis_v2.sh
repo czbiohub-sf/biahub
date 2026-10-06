@@ -59,7 +59,8 @@ CONVERTED_ZARR=""          # e.g. ${OUTPUT_DIR}/0-convert/${DATASET}.zarr
 # slurm_output/ and resume markers, and the Nextflow work directory
 # (biahub#292), recorded in nextflow/intermediates_cleaned.txt. A cleaned run
 # is FINAL — any rerun recomputes everything from the raw input.
-#   auto    on when concatenate.yml takes all the data, off if it crops
+#   auto    on when concatenate.yml takes all the data (all, or time_indices:
+#           max), off if it crops
 #   true    on, even if concatenate.yml crops (the cropped-out data is lost)
 #   false   off: keep every intermediate
 # The pipeline resolves `auto` at launch (cleanup_decision in

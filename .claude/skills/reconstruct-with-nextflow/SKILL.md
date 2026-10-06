@@ -308,7 +308,8 @@ Do not run anything yet. Show the user:
     `nextflow/modules/cleanup.nf`); check `concatenate.yml` now so the plan says
     what it will decide:
     - **No cropping** — `time_indices`, `channel_names`, `X_slice`, `Y_slice`
-      and `Z_slice` are all absent or `all` (or a per-source list of `all`):
+      and `Z_slice` are all absent or `all` (or a per-source list of `all`),
+      with `time_indices: max` also counting as no cropping (it pads, §5c):
       leave `auto`; the pipeline turns cleanup on. Say so in the plan.
     - **Any cropping**: `auto` would leave the intermediates, but set
       `CLEANUP_INTERMEDIATES=false` explicitly so the script records the

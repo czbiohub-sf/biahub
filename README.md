@@ -216,7 +216,7 @@ nextflow run mantis-v2.nf \
 | `--biahub_project` | Path to a `biahub` checkout to run tasks from |
 | `--max_positions` | Process only the first N positions (`0` = all) |
 | `--max_jobs` | Cap on concurrently submitted Slurm jobs (default 30) |
-| `--cleanup_intermediates` | `auto`, `true` or `false` (default). Once the last step finishes, delete the intermediate stores and the work directory; `auto` does so only when `concatenate.yml` takes all the data |
+| `--cleanup_intermediates` | `auto`, `true` or `false` (default). Once the last step finishes, delete the intermediate stores and the work directory; `auto` does so only when `concatenate.yml` takes all the data (every field `all`; `time_indices: max` also counts) |
 
 With `--biahub_project`, each task runs as `uv run --project <path> biahub ...`; omit it to use whatever `biahub` is on `PATH` on the compute node. `--max_positions` is useful for smoke tests on a handful of positions.
 
