@@ -9,6 +9,9 @@ and the reference, intersected over every timepoint's transform -- or, with
 
 from __future__ import annotations
 
+import hashlib
+import json
+
 from pathlib import Path
 
 import ants
@@ -24,12 +27,14 @@ from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
     cluster,
     config_filepath,
+    init_only,
     monitor,
     moving_position_dirpaths,
     output_dirpath,
     pair_reference_positions,
     position_key,
     reference_position_dirpaths,
+    resume,
     sbatch_filepath,
     sbatch_to_submitit,
 )
@@ -40,7 +45,7 @@ from biahub.registration.utils import (
 )
 from biahub.settings import TransformSettings, load_transform_settings
 from biahub.utils.array_ops import copy_n_paste_czyx
-from biahub.utils.cluster import estimate_resources, get_submitit_cluster
+from biahub.utils.cluster import echo_resources, estimate_resources, get_submitit_cluster
 from biahub.utils.ngff import resolve_ome_zarr_version
 
 Slices = tuple[slice, slice, slice]
@@ -215,6 +220,8 @@ def apply_transform(
     cluster: str = "slurm",
     monitor: bool = False,
     channels: list[str] | None = None,
+    init_only: bool = False,
+    resume: bool = False,
 ) -> None:
     """Apply a `TransformSettings` series to positions.
 
@@ -228,8 +235,14 @@ def apply_transform(
     reference channels copied plus the transformed moving channels (registration). Without:
     the moving channels are transformed onto their own grid (stabilization). Each timepoint
     takes its own entry's matrix (`TransformSettings.matrix_for`); a series-wide entry
-    applies to all. The canvas is the largest box inside the overlap shared by the applied
-    transforms, or the full reference grid with `keep_overhang`.
+    applies to all. The canvas is the largest box inside the overlap shared by every
+    transform in the file at the chosen timepoints -- all positions, not only the ones
+    applied, so each position can be written by its own task -- or the full reference grid
+    with `keep_overhang`.
+
+    `init_only` creates the output plate and prints `RESOURCES:` (one position's task)
+    without writing data; a later call for some positions writes into it. `resume` skips
+    the (time, channel) units a previous attempt of the same apply already wrote.
     """
     output_dirpath = Path(output_dirpath)
     settings: TransformSettings = load_transform_settings(config_filepath)
@@ -273,7 +286,8 @@ def apply_transform(
                 f"{key}: written with transforms that are not accepted -- "
                 + "; ".join(f"{s} t={ts}" for s, ts in by_status.items())
             )
-    inverse_by_t = inverses[position_keys[0]]
+    file_first_key = next(iter(settings.positions)) if settings.per_position else None
+    applied_first = settings.matrix_for(time_indices[0], "inverse", file_first_key)
 
     if reference_position_dirpaths:
         with open_ome_zarr(reference_position_dirpaths[0], mode="r") as reference:
@@ -315,13 +329,16 @@ def apply_transform(
             tuple(settings.voxel_size[-3:])
             if settings.voxel_size
             else tuple(
-                rescale_voxel_size(
-                    next(iter(inverse_by_t.values()))[:3, :3], moving_voxel_size
-                )
+                # the file's first transform, whichever positions are applied
+                rescale_voxel_size(applied_first[:3, :3], moving_voxel_size)
             )
         )
 
-    applied = [m for by_t in inverses.values() for m in by_t.values()]
+    # Every transform in the file at these timepoints, whichever positions are applied.
+    file_keys = list(settings.positions) if settings.per_position else [position_keys[0]]
+    applied = [
+        settings.matrix_for(t, "inverse", key) for key in file_keys for t in time_indices
+    ]
     crop = canvas(tuple(moving_shape), reference_shape, applied, keep_overhang)
     cropped_shape = tuple(s.stop - s.start for s in crop)
     click.echo(
@@ -340,13 +357,17 @@ def apply_transform(
         version=resolve_ome_zarr_version(moving_position_dirpaths[0], output_ome_zarr_version),
     )
 
-    # Wall time scales with the volumes written (0.5 min each, deskew's margin);
-    # an sbatch file's time overrides it.
+    # Wall time scales with the volumes one position writes (0.5 min each, deskew's
+    # margin); an sbatch file's time overrides it.
     time_minutes, num_cpus, gb_ram = estimate_resources(
-        shape=(T, len(output_channel_names), *moving_shape),
+        shape=(len(time_indices), len(output_channel_names), *moving_shape),
         ram_multiplier=5,
         time_multiplier=0.5,
     )
+    echo_resources(num_cpus, num_cpus * gb_ram, time_minutes)
+    if init_only:
+        click.echo(f"Initialized {output_dirpath} ({len(moving_position_dirpaths)} positions)")
+        return
     slurm_out_path = output_dirpath.parent / "slurm_output"
     slurm_args = {
         "slurm_job_name": "apply_transform",
@@ -373,6 +394,19 @@ def apply_transform(
         }
     }
     output_time_indices = list(range(len(time_indices)))
+    # The units a resumed attempt may skip must come from this same apply.
+    resume_token = hashlib.sha256(
+        json.dumps(
+            {
+                "transforms": settings.model_dump(mode="json"),
+                "time_indices": time_indices,
+                "channels": output_channel_names,
+                "keep_overhang": keep_overhang,
+                "interpolation": interpolation,
+            },
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()[:16]
     jobs, labels = [], []
     with submitit.helpers.clean_env(), executor.batch():
         for key, moving_path in zip(position_keys, moving_position_dirpaths, strict=True):
@@ -404,6 +438,8 @@ def apply_transform(
                         crop_output_slicing=list(crop),
                         interpolation=interpolation,
                         extra_metadata=extra_metadata,
+                        resume=resume,
+                        resume_token=resume_token,
                     )
                 )
                 labels.append(Path(f"{moving_path.parts[-3:]} {channel_name}"))
@@ -426,6 +462,8 @@ def apply_transform(
                             ],
                             num_workers=int(slurm_args["slurm_cpus_per_task"]),
                             czyx_slicing_params=list(crop),
+                            resume=resume,
+                            resume_token=resume_token,
                         )
                     )
                     labels.append(Path(f"{reference_path.parts[-3:]} {channel_name} (copy)"))
@@ -481,6 +519,8 @@ def apply_transform(
 @sbatch_filepath()
 @cluster()
 @monitor(short=False)
+@init_only()
+@resume()
 def apply_transform_cli(
     moving_position_dirpaths: list[Path],
     reference_position_dirpaths: list[Path] | None,
@@ -494,6 +534,8 @@ def apply_transform_cli(
     cluster: str,
     monitor: bool,
     channels: tuple[str, ...],
+    init_only: bool,
+    resume: bool,
 ) -> None:
     """Apply a transform series to positions -- one matrix for all timepoints or one per timepoint.
 
@@ -512,6 +554,11 @@ def apply_transform_cli(
     \b
     Stabilization (every channel of a store onto its own grid, per-timepoint matrices):
     >>> biahub apply-transform -m data.zarr/*/*/* -c transforms.yml -o stabilized.zarr
+
+    \b
+    As the Nextflow module runs it: create the plate once, then one task per position:
+    >>> biahub apply-transform --init -m data.zarr/*/*/* -c transforms.yml -o out.zarr
+    >>> biahub apply-transform --cluster debug --resume -m data.zarr/A/1/0 -c ... -o out.zarr
     """  # noqa: D301
     apply_transform(
         moving_position_dirpaths=moving_position_dirpaths,
@@ -526,6 +573,8 @@ def apply_transform_cli(
         cluster=cluster,
         channels=list(channels) or None,
         monitor=monitor,
+        init_only=init_only,
+        resume=resume,
     )
 
 

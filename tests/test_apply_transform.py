@@ -574,3 +574,123 @@ def test_transforms_written_with_the_old_pull_name_load_as_inverse():
     )
     assert settings.direction == "inverse"
     np.testing.assert_allclose(settings.matrix_for(0, "forward")[2, 3], -3.0)
+
+
+@pytest.fixture
+def two_position_stabilization(tmp_path):
+    """Two positions of the structured volume and a per-position transforms file (shifts in y)."""
+    rng = np.random.default_rng(0)
+    data = rng.random((3, 2, 16, 32, 32)).astype(np.float32) * 10
+    data[:, :, 6:10, 12:20, 12:20] = 1000.0
+    path = tmp_path / "in.zarr"
+    with open_ome_zarr(
+        path, layout="hcs", mode="w", channel_names=["GFP", "Phase3D"]
+    ) as plate:
+        for fov in ("0", "1"):
+            plate.create_position("A", "1", fov)["0"] = data
+    shifts = {"A/1/0": [0, 2, 4], "A/1/1": [0, -3, -6]}
+    config = tmp_path / "transforms.yml"
+    model_to_yaml(
+        TransformSettings(
+            direction="forward",
+            moving_channels=["GFP"],
+            positions={
+                key: [
+                    TransformEntry(t=t, matrix=_translation(0, dy, 0))
+                    for t, dy in enumerate(dys)
+                ]
+                for key, dys in shifts.items()
+            },
+        ),
+        config,
+    )
+    return [path / "A" / "1" / "0", path / "A" / "1" / "1"], config
+
+
+def _read(output):
+    out = {}
+    for fov in ("0", "1"):
+        position = output / "A" / "1" / fov
+        if position.exists():
+            with open_ome_zarr(position, mode="r") as p:
+                out[fov] = np.asarray(p.data)
+    return out
+
+
+def test_init_then_one_position_per_task_writes_what_one_call_writes(
+    two_position_stabilization, tmp_path
+):
+    positions, config = two_position_stabilization
+    one_call = tmp_path / "one.zarr"
+    apply_transform(positions, config, one_call, cluster="debug")
+
+    by_position = tmp_path / "steps.zarr"
+    runner = CliRunner()
+    paths = [str(p) for p in positions]
+    init = runner.invoke(
+        apply_transform_cli,
+        ["--init", "-m", *paths, "-c", str(config), "-o", str(by_position)],
+    )
+    assert init.exit_code == 0, init.output
+    assert any(line.startswith("RESOURCES:") for line in init.output.splitlines())
+    assert not np.any(_read(by_position)["0"])  # --init writes no data
+    for path in paths:
+        result = runner.invoke(
+            apply_transform_cli,
+            ["--cluster", "debug", "-m", path, "-c", str(config), "-o", str(by_position)],
+        )
+        assert result.exit_code == 0, result.output
+
+    expected, got = _read(one_call), _read(by_position)
+    assert got.keys() == expected.keys() == {"0", "1"}
+    for fov in expected:
+        np.testing.assert_array_equal(got[fov], expected[fov])
+
+
+def test_the_canvas_does_not_depend_on_the_positions_applied(
+    two_position_stabilization, tmp_path
+):
+    # The canvas is the overlap of every transform in the file, so a task applying one
+    # position writes into the same grid --init created for all of them.
+    positions, config = two_position_stabilization
+    apply_transform(positions, config, tmp_path / "all.zarr", cluster="debug")
+    apply_transform(positions[1:], config, tmp_path / "one.zarr", cluster="debug")
+    np.testing.assert_array_equal(
+        _read(tmp_path / "one.zarr")["1"], _read(tmp_path / "all.zarr")["1"]
+    )
+
+
+def test_a_retried_position_with_resume_skips_finished_work(
+    two_position_stabilization, tmp_path, monkeypatch
+):
+    positions, config = two_position_stabilization
+    output = tmp_path / "out.zarr"
+    apply_transform(positions[:1], config, output, cluster="debug")
+
+    import biahub.apply_transform as module
+
+    def _must_not_run(*args, **kwargs):
+        raise AssertionError("a finished timepoint was redone")
+
+    monkeypatch.setattr(module, "_apply_transform_czyx", _must_not_run)
+    apply_transform(positions[:1], config, output, cluster="debug", resume=True)
+
+
+def test_resources_are_sized_from_the_timepoints_written(
+    two_position_stabilization, tmp_path, monkeypatch
+):
+    import biahub.apply_transform as module
+
+    positions, config = two_position_stabilization
+    shapes = []
+    real = module.estimate_resources
+
+    def recording(shape, **kwargs):
+        shapes.append(shape)
+        return real(shape, **kwargs)
+
+    monkeypatch.setattr(module, "estimate_resources", recording)
+    apply_transform(
+        positions[:1], config, tmp_path / "out.zarr", time_indices=[0], init_only=True
+    )
+    assert shapes[-1][0] == 1  # one timepoint written, not the store's 3
