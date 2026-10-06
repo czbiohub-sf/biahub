@@ -119,8 +119,8 @@ def slurm_logs(step_name) {
 // with `--resume`, keyed by the hash of the VALIDATED settings model
 // (biahub.utils.config.settings_fingerprint), so after a comment-only edit they
 // find their units finished and skip them. Steps without `--resume` recompute:
-// track, QC and compute-tf by design, reconstruct and virtual-stain until their
-// CLIs gain it.
+// track, QC and compute-tf by design, reconstruct until its CLI gains it
+// (biahub#387).
 //
 // Why not `path config` alone: the staged copy is a symlink under the work dir.
 // The command would then record that path in its logs and provenance, and QC

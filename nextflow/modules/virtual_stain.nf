@@ -120,8 +120,13 @@ process run_virtual_stain {
     val position
 
     script:
+    // --resume: the retry of an interrupted task (or a later `nextflow -resume`)
+    // recomputes only the timepoints this position had not finished; a timepoint
+    // torn by the kill is replaced, not read back. The completion record is keyed
+    // by the validated predict config, so a config change recomputes instead of
+    // being skipped.
     """
-    biahub virtual-stain --cluster debug \
+    biahub virtual-stain --cluster debug --resume \
         -i "${input_zarr}/${position}" \
         -o "${output_zarr}" \
         -c "${config}"
