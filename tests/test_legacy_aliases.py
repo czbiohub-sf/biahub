@@ -1,3 +1,5 @@
+import shlex
+
 import numpy as np
 import pytest
 import yaml
@@ -131,6 +133,17 @@ def test_register_alias_applies_a_legacy_registration_config(beads_plate, tmp_pa
         assert registered.channel_names == list(CHANNELS)
         np.testing.assert_array_equal(registered.data[0, 0], phase)
         assert not np.allclose(registered.data[0, 1], gfp)
+        aliased = np.asarray(registered.data)
+
+    # The new command it printed does the same, written elsewhere.
+    (line,) = [line for line in result.output.splitlines() if "instead, next time:" in line]
+    words = shlex.split(line.split("instead, next time:")[1])
+    assert words[:2] == ["biahub", "apply-transform"] and "--channels" in words
+    words[words.index("-o") + 1] = str(tmp_path / "new.zarr")
+    rerun = CliRunner().invoke(cli, words[1:] + ["--cluster", "debug"])
+    assert rerun.exit_code == 0, rerun.output
+    with open_ome_zarr(tmp_path / "new.zarr" / "A" / "1" / "0") as new:
+        np.testing.assert_array_equal(np.asarray(new.data), aliased)
 
 
 def test_optimize_registration_points_to_the_replacement():

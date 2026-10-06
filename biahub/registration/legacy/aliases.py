@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import glob
 import re
+import shlex
 
 from pathlib import Path
 
@@ -46,6 +47,36 @@ def _warn(old: str, new: str) -> None:
         fg="yellow",
         err=True,
     )
+
+
+def _instead(command: str, *options) -> None:
+    """Print the new command that does what this alias is about to do."""
+
+    def paths(flag, values):
+        values = [str(v) for v in values]
+        if len(values) > 3:  # a plate's worth: the first ones, and how many
+            return [flag, *values[:2], f"... ({len(values)} positions)"]
+        return [flag, *values]
+
+    words = ["biahub", command]
+    for option in options:
+        if option is None:
+            continue
+        flag, value = option
+        if isinstance(value, (list, tuple)):
+            words += paths(flag, value)
+        elif value is True:
+            words.append(flag)
+        else:
+            words += [flag, shlex.quote(str(value))]
+    click.secho("  instead, next time: " + " ".join(words), fg="yellow", err=True)
+
+
+def _time_indices_arg(time_indices) -> str:
+    """Return `--time-indices` as apply-transform takes it: 'all', one index, or 'a,b,c'."""
+    if isinstance(time_indices, (list, tuple)):
+        return ",".join(str(t) for t in time_indices)
+    return str(time_indices)
 
 
 def _positions(flag: str, long: str, help: str) -> click.Option:
@@ -176,10 +207,18 @@ def estimate_registration_alias(
             err=True,
         )
     output = Path(output_filepath)
+    config = _converted_estimate_config(config_filepath, output)
     # legacy estimate-registration read only the first source and target position
+    _instead(
+        "estimate-transform",
+        ("-m", source_position_dirpaths[:1]),
+        ("-r", target_position_dirpaths[:1]),
+        ("-c", config),
+        ("-o", output),
+    )
     estimate_transform(
         source_position_dirpaths[:1],
-        _converted_estimate_config(config_filepath, output),
+        config,
         output,
         reference_position_dirpaths=target_position_dirpaths[:1],
         sbatch_filepath=sbatch_filepath,
@@ -199,9 +238,12 @@ def estimate_stabilization_alias(
     """Run `estimate-transform` on a converted estimate-stabilization config (deprecated)."""
     _warn("estimate-stabilization", "estimate-transform")
     output = Path(output_dirpath) / "transforms.yml"
+    positions = _stabilization_positions(config_filepath, input_position_dirpaths)
+    config = _converted_estimate_config(config_filepath, output)
+    _instead("estimate-transform", ("-m", positions), ("-c", config), ("-o", output))
     estimate_transform(
-        _stabilization_positions(config_filepath, input_position_dirpaths),
-        _converted_estimate_config(config_filepath, output),
+        positions,
+        config,
         output,
         sbatch_filepath=sbatch_filepath,
         cluster="local" if local else "slurm",
@@ -234,6 +276,23 @@ def register_alias(
     """Run `apply-transform` onto the target grid (deprecated)."""
     _warn("register", "apply-transform")
     config, options = _transforms_config([config_filepath], Path(output_dirpath))
+    keep_overhang = options.get("keep_overhang", True)
+    channels = options.get("source_channel_names")
+    _instead(
+        "apply-transform",
+        ("-m", source_position_dirpaths),
+        ("-r", target_position_dirpaths),
+        ("-c", config),
+        ("-o", output_dirpath),
+        *[("--channels", c) for c in channels or []],
+        None if keep_overhang else ("--crop-to-overlap", True),
+        None
+        if options.get("time_indices", "all") == "all"
+        else ("--time-indices", _time_indices_arg(options["time_indices"])),
+        None
+        if options.get("interpolation", "linear") == "linear"
+        else ("--interpolation", options["interpolation"]),
+    )
     apply_transform(
         source_position_dirpaths,
         config,
@@ -241,13 +300,13 @@ def register_alias(
         reference_position_dirpaths=target_position_dirpaths,
         time_indices=options.get("time_indices", "all"),
         # a legacy config keeps its own (register cropped by default); else the new default
-        keep_overhang=options.get("keep_overhang", True),
+        keep_overhang=keep_overhang,
         interpolation=options.get("interpolation", "linear"),
         sbatch_filepath=sbatch_filepath,
         cluster="local" if local else "slurm",
         monitor=monitor,
         # legacy register moved only these; the target's channels were copied
-        channels=options.get("source_channel_names"),
+        channels=channels,
     )
 
 
@@ -272,6 +331,15 @@ def stabilize_alias(
     """Run `apply-transform` without a reference, onto each store's own grid (deprecated)."""
     _warn("stabilize", "apply-transform")
     config, options = _transforms_config(config_filepaths, Path(output_dirpath))
+    _instead(
+        "apply-transform",
+        ("-m", input_position_dirpaths),
+        ("-c", config),
+        ("-o", output_dirpath),
+        None
+        if options.get("time_indices", "all") == "all"
+        else ("--time-indices", _time_indices_arg(options["time_indices"])),
+    )
     apply_transform(
         input_position_dirpaths,
         config,
