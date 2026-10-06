@@ -243,3 +243,31 @@ def test_registration_nf_stabilizes_each_position_and_refuses_manual(tmp_path):
     )
     assert result.returncode != 0
     assert "Manual registration is interactive" in result.stdout + result.stderr
+
+
+def test_registration_nf_resolves_relative_inputs_and_wants_an_absolute_output(tmp_path):
+    # Tasks run in their own work directory: relative inputs are resolved at launch, and a
+    # relative --output (which the shared log paths read as given) is refused up front.
+    plate = _beads_plate(tmp_path)
+    _write_config(tmp_path)
+    _nextflow(
+        tmp_path,
+        "--moving", "data.zarr", "--reference", "data.zarr",
+        "--estimate_config", "estimate.yml", "--estimate_positions", "A/1/0",
+        "--output", tmp_path / "run",
+    )  # fmt: skip
+    assert load_transform_settings(tmp_path / "run" / "transforms.yml").transforms
+    assert plate.exists()
+
+    result = subprocess.run(
+        ["nextflow", "run", str(NEXTFLOW_DIR / "registration.nf")]
+        + ["-c", str(NEXTFLOW_DIR / "nextflow.config"), "-work-dir", str(tmp_path / "w2")]
+        + ["--moving", "data.zarr", "--estimate_config", "estimate.yml"]
+        + ["--estimate_positions", "A/1/0", "--output", "relative_run"],
+        cwd=tmp_path,
+        env=_env(),
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "--output must be an absolute path" in result.stdout + result.stderr

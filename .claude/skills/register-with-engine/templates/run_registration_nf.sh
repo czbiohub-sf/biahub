@@ -36,6 +36,13 @@ CHANNELS=""                                  # comma-separated moving channels; 
 OUTPUT=.                                     # this run directory
 # ---------------------------------------------------------------------------
 
+# Nextflow tasks run in their own work directory: pass absolute paths.
+OUTPUT=$(realpath "${OUTPUT}")
+MOVING=$(realpath "${MOVING}")
+[[ -n "${REFERENCE}" ]] && REFERENCE=$(realpath "${REFERENCE}")
+[[ -n "${CONFIG}" ]] && CONFIG=$(realpath "${CONFIG}")
+[[ -n "${TRANSFORMS}" ]] && TRANSFORMS=$(realpath "${TRANSFORMS}")
+
 # The tasks call `biahub` bare; sbatch exports this shell's environment to them.
 # shellcheck disable=SC1091
 set +u; source "${BIAHUB}/.venv/bin/activate"; set -u

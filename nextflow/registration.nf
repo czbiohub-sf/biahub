@@ -40,6 +40,12 @@ include {
 } from './modules/registration'
 
 
+// A path as given, made absolute against the launch directory (null stays null).
+def absolute_path(path) {
+    return path ? file(path.toString()).toAbsolutePath().toString() : path
+}
+
+
 workflow {
     check_environment(['biahub'])
 
@@ -57,25 +63,33 @@ workflow {
         error "--estimate_config and --transforms are alternatives: estimate a new file, " +
             "or apply an existing one"
     }
+    // Tasks run in their own work directory, so a relative path would point there. The
+    // output must be absolute (common.nf's log paths and the work dir read it as given);
+    // the inputs are resolved here, against the launch directory.
+    if (!new File(params.output.toString()).isAbsolute()) {
+        error "--output must be an absolute path (got '${params.output}'): e.g. \$(realpath ${params.output})"
+    }
     if (params.estimate_config && !params.estimate_positions) {
         error "Provide --estimate_positions: e.g. the beads well ('C/1/000000') for a " +
             "registration shared by every position, or '*/*/*' to stabilize each position"
     }
 
     def out = params.output
-    def reference = params.reference ?: ''
+    def moving = absolute_path(params.moving)
+    def reference = absolute_path(params.reference) ?: ''
+    def estimate_config = absolute_path(params.estimate_config)
     def apply = params.apply || params.transforms
-    def transforms = params.transforms ?: "${out}/transforms.yml"
+    def transforms = absolute_path(params.transforms) ?: "${out}/transforms.yml"
     def start = channel.value('start')
 
     if (params.estimate_config) {
         estimate_init = estimate_transform_init_wf(
-            params.moving, reference, params.estimate_positions, params.estimate_config,
+            moving, reference, params.estimate_positions, estimate_config,
             transforms, start
         )
         estimated = estimate_transform_run_wf(
-            estimate_init.plan, params.moving, reference, params.estimate_positions,
-            params.estimate_config, transforms, start
+            estimate_init.plan, moving, reference, params.estimate_positions,
+            estimate_config, transforms, start
         )
         transforms_ready = estimated.done
     } else {
@@ -83,7 +97,7 @@ workflow {
     }
 
     if (apply) {
-        def store_name = new File(params.moving.toString()).name.replaceAll(/(\.ome)?\.zarr$/, '')
+        def store_name = new File(moving).name.replaceAll(/(\.ome)?\.zarr$/, '')
         def output_zarr = params.apply_output ?: "${out}/${store_name}.zarr"
         def extra = []
         if (params.crop_to_overlap) extra << '--crop-to-overlap'
@@ -94,14 +108,14 @@ workflow {
         def matcher = java.nio.file.FileSystems.getDefault()
             .getPathMatcher("glob:${params.apply_positions}")
 
-        apply_positions = collect_positions(params.moving)
+        apply_positions = collect_positions(moving)
             .map { keys -> keys.findAll { key -> matcher.matches(java.nio.file.Paths.get(key)) } }
         apply_init = apply_transform_init_wf(
-            params.moving, reference, params.apply_positions, transforms, output_zarr,
+            moving, reference, params.apply_positions, transforms, output_zarr,
             extra_args, transforms_ready
         )
         apply_transform_run_wf(
-            apply_positions, params.moving, reference, params.apply_positions, transforms,
+            apply_positions, moving, reference, params.apply_positions, transforms,
             output_zarr, extra_args, apply_init.resources, apply_init.done
         )
     }
