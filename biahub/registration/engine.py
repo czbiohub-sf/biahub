@@ -655,8 +655,13 @@ def estimate_propagated(
     previous: Transform | None = None  # what the next timepoint starts from
     for t in time_indices:
         if t in done:
-            record = done[t]
-            previous = _record_into(result, t, record)
+            # Carry the chain on as the fresh run did: the reference frame restarts it, an
+            # empty frame (no transform, no stand-in) leaves it alone.
+            carried = _record_into(result, t, done[t])
+            if _compares_with_itself(reference_policy, mov, t):
+                previous = None
+            elif carried is not None:
+                previous = carried
         else:
             mov_t = np.asarray(mov[t])
             ref_t = np.asarray(reference_policy.reference_for(mov, t))

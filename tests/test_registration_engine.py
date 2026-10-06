@@ -535,6 +535,48 @@ def test_estimate_propagated_lets_the_input_seed_compete_and_resumes_the_chain()
     )
 
 
+def _records(result, upto):
+    """Timepoint records as the engine writes them, for the timepoints before `upto`."""
+    records = {}
+    for t in [t for t in result.scores if t < upto]:
+        stand_in = result.stand_ins.get(t)
+        records[t] = {
+            "t": t,
+            "matrix": result.transforms[t].matrix.tolist() if t in result.transforms else None,
+            "score": result.scores[t],
+            "error": result.errors.get(t),
+            "stand_in": stand_in[0].matrix.tolist() if stand_in else None,
+            "stand_in_from": stand_in[1] if stand_in else None,
+        }
+    return records
+
+
+@pytest.mark.parametrize(
+    "reference_policy", [CrossChannel, lambda mov: FixedFrame(0)], ids=["cross", "first"]
+)
+def test_estimate_propagated_resumes_to_the_same_chain_from_any_timepoint(reference_policy):
+    from biahub.registration.engine import estimate_propagated
+
+    # t=2 is empty; with FixedFrame(0), t=0 is the reference frame (identity).
+    mov = _frames([1, 2, 0, 4, 5])
+    fresh = estimate_propagated(
+        mov, reference_policy(mov), _StepX(), _shift_x(10), _finite_score, range(5)
+    )
+    expected = {t: tr.translation[2] for t, tr in fresh.transforms.items()}
+    for upto in range(1, 5):
+        resumed = estimate_propagated(
+            mov,
+            reference_policy(mov),
+            _StepX(),
+            _shift_x(10),
+            _finite_score,
+            range(5),
+            done=_records(fresh, upto),
+        )
+        got = {t: tr.translation[2] for t, tr in resumed.transforms.items()}
+        assert got == expected, f"resumed after t={upto - 1}"
+
+
 @pytest.mark.parametrize("reference_policy", [FixedFrame(0), PreviousFrame()])
 def test_estimate_propagated_does_not_estimate_the_stabilization_reference_frame(
     reference_policy,
