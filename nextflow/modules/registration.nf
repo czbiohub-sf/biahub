@@ -28,7 +28,9 @@
 // init reads the transforms file, so it runs after estimation, not in an up-front
 // init phase.
 
-include { parse_resources; slurm_logs; slurm_log_dir; retry_time; retry_memory } from './common'
+include {
+    parse_resources; slurm_logs; slurm_log_dir; slurm_output_readme; retry_time; retry_memory
+} from './common'
 
 
 // The JSON payload of the last `PLAN:` line the CLI printed.
@@ -215,6 +217,7 @@ process init_apply_transform {
     script:
     """
     mkdir -p "${slurm_log_dir('apply_transform')}"
+    ${slurm_output_readme('apply_transform', output_zarr)}
     biahub apply-transform --init \\
         -m "${moving_zarr}"/${positions} ${reference_arg(reference_zarr, positions)} \\
         -c "${transforms}" \\

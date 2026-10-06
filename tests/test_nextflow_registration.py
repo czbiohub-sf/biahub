@@ -181,6 +181,8 @@ def test_registration_nf_runs_every_method_as_the_cli_does(tmp_path, case):
     assert _report(out / "transforms") == _report(cli.with_suffix(""))
 
     apply_transform([plate], cli, tmp_path / "cli.zarr", reference, cluster="debug")
+    # where the logs are, as every step's init writes it (main's convention)
+    assert "Where are the logs?" in (out / "slurm_output" / "README.md").read_text()
     names, data = _data(out / f"{store.stem}.zarr" / "A" / "1" / "0")
     cli_names, cli_data = _data(tmp_path / "cli.zarr" / "A" / "1" / "0")
     assert names == cli_names
