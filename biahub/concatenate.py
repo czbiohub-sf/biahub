@@ -558,20 +558,30 @@ def _resolve_concatenate_inputs(
     # fewer time points than the plate under "max" or an explicit selection
     # (padded below) and more under "min"; anything else means the plate was
     # not made from these sources.
+    #
+    # The upper bound is only relaxed for the selection the plate was created
+    # with, which its `biahub-concatenate` record holds: that one was checked
+    # against every source. Any other selection into an existing plate (a
+    # changed config, or a plate from before the record) is checked against
+    # the sources this run sees.
     label = _time_indices_label(settings.time_indices)
     mode = settings.time_indices if settings.time_indices in ("all", "min", "max") else None
     first_output = output_position_paths[0]
-    if not first_output.is_dir():
+    validated_at_init = False
+    if first_output.is_dir():
+        with open_ome_zarr(first_output, mode="r") as existing:
+            plate_T = existing.data.shape[0]
+            record = existing.zattrs.get("biahub-concatenate") or {}
+        validated_at_init = record.get("time_indices") == settings.model_dump()["time_indices"]
+    if not validated_at_init:
         longest = max(shape[0] for shape in all_shapes)
-        out_of_range = [t for t in input_time_indices if not 0 <= t < longest]
+        out_of_range = [t for t in input_time_indices if t >= longest]
         if out_of_range:
             raise ValueError(
                 f"time_indices {out_of_range} are out of range: the longest source has "
                 f"{longest} time points (0 to {longest - 1})."
             )
-    else:
-        with open_ome_zarr(first_output, mode="r") as existing:
-            plate_T = existing.data.shape[0]
+    if first_output.is_dir():
         num_t = len(input_time_indices)
         mismatch = {
             "all": num_t != plate_T,
@@ -593,11 +603,15 @@ def _resolve_concatenate_inputs(
     # taken.
     input_time_indices_list = []
     output_time_indices_list = []
+    padded_time_indices_list = []
     num_cropped = 0
     for path, shape in zip(all_data_paths, all_shapes, strict=True):
         kept = [(t, i) for i, t in enumerate(input_time_indices) if t < shape[0]]
         input_time_indices_list.append([t for t, _ in kept])
         output_time_indices_list.append([i for _, i in kept])
+        padded_time_indices_list.append(
+            [i for i, t in enumerate(input_time_indices) if t >= shape[0]]
+        )
         if len(kept) < len(input_time_indices):
             click.echo(
                 f"time_indices {label}: padding {path}: it has {shape[0]} time points, "
@@ -649,6 +663,10 @@ def _resolve_concatenate_inputs(
         "all_slicing_params": all_slicing_params,
         "input_time_indices_list": input_time_indices_list,
         "output_time_indices_list": output_time_indices_list,
+        "padded_time_indices_list": padded_time_indices_list,
+        # Before this run touches the plate: only a position that already
+        # existed can hold data in a slot this run pads.
+        "preexisting_outputs": {p for p in output_position_paths if p.is_dir()},
         "shape": (T, C, Z, Y, X),
         "output_metadata": output_metadata,
     }
@@ -679,6 +697,33 @@ def _init_output_plate(
         **prep["output_metadata"],
     )
     click.echo(f"Created {len(missing)} positions in {output_dirpath}")
+
+
+def _clear_padding(prep: dict) -> None:
+    """Zero the padded slots of output positions that existed before this run.
+
+    Padding is the time points a source lacks, left unwritten so they read as
+    the fill value. That only holds in a fresh position: one written by an
+    earlier run, with another time selection or a source that has since
+    shrunk, keeps whatever that run put there. So in an existing position each
+    source's output channels are cleared at the time points it pads.
+    """
+    for output_position_path, output_channel_idx, padded_time_indices in zip(
+        prep["output_position_paths"],
+        prep["output_channel_idx_list"],
+        prep["padded_time_indices_list"],
+        strict=True,
+    ):
+        if not padded_time_indices or output_position_path not in prep["preexisting_outputs"]:
+            continue
+        with open_ome_zarr(output_position_path, mode="r+") as position:
+            for t in padded_time_indices:
+                for c in output_channel_idx:
+                    position.data[t, c] = 0
+        click.echo(
+            f"Cleared padded time points {padded_time_indices} of channels "
+            f"{output_channel_idx} in existing {output_position_path}"
+        )
 
 
 def concatenate(
@@ -757,6 +802,8 @@ def concatenate(
         num_positions = len({p.parts[-3:] for p in prep["output_position_paths"]})
         click.echo(f"Initialized {output_dirpath} ({num_positions} positions)")
         return
+
+    _clear_padding(prep)
 
     # Prepare SLURM arguments
     slurm_args = {

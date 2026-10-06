@@ -839,3 +839,105 @@ def test_concatenate_with_unique_positions(create_custom_plate, tmp_path, sbatch
     for _pos_name, pos in output_plate_unique.positions():
         # Both positions should have all channels
         assert set(pos.channel_names) == {"DAPI", "Cy5", "GFP", "RFP"}
+
+
+def _run(sources, settings, output_path, tmp_path, sbatch_file, name="concat"):
+    """Concatenate one position per source store with the given settings."""
+    config_path = tmp_path / f"{name}.yml"
+    model_to_yaml(settings, config_path)
+    concatenate(
+        input_position_dirpaths=[[src / "A/1/0"] for src in sources],
+        config_filepath=config_path,
+        output_dirpath=output_path,
+        sbatch_filepath=sbatch_file,
+        cluster="debug",
+        monitor=False,
+    )
+
+
+def test_time_indices_refuses_negative():
+    """
+    Negative time indices are refused by the settings, in every explicit form
+    """
+    for time_indices in (-1, [0, -1]):
+        with pytest.raises(ValidationError):
+            ConcatenateSettings(time_indices=time_indices)
+
+
+def test_rerun_checks_changed_selection_against_sources(tmp_path, sbatch_file):
+    """
+    A changed time selection into an existing plate is checked against the
+    sources: index 5 past T=5 sources is refused, not taken as all padding
+    """
+    plates = [
+        _plate_with_time_points(tmp_path / f"s{i}.zarr", [name], {"A/1/0": 5})
+        for i, name in enumerate(["DAPI", "GFP"])
+    ]
+    sources = [tmp_path / "s0.zarr", tmp_path / "s1.zarr"]
+    output_path = tmp_path / "output.zarr"
+    _run(sources, ConcatenateSettings(time_indices=0), output_path, tmp_path, sbatch_file)
+
+    with pytest.raises(ValueError, match=r"\[5\] are out of range"):
+        _run(sources, ConcatenateSettings(time_indices=5), output_path, tmp_path, sbatch_file)
+    # The plate still holds the first run's data
+    np.testing.assert_array_equal(
+        open_ome_zarr(output_path)["A/1/0"].data[0, 0], plates[0]["A/1/0"].data[0, 0]
+    )
+
+
+@pytest.mark.parametrize(
+    "first, second, padded",
+    [
+        # All padding: the T=4 source has nothing at index 4, so it gets no job
+        ([1], [4], [0]),
+        # Partial padding: index 4 is padded, index 2 is copied
+        ([1, 3], [2, 4], [1]),
+    ],
+)
+def test_rerun_clears_padded_slots(tmp_path, sbatch_file, first, second, padded):
+    """
+    A rerun into an existing plate zeroes the slots it pads, instead of
+    keeping what the earlier run wrote there
+    """
+    plate_1 = _plate_with_time_points(tmp_path / "s0.zarr", ["DAPI"], {"A/1/0": 5})
+    plate_2 = _plate_with_time_points(tmp_path / "s1.zarr", ["GFP"], {"A/1/0": 4})
+    sources = [tmp_path / "s0.zarr", tmp_path / "s1.zarr"]
+    output_path = tmp_path / "output.zarr"
+    _run(sources, ConcatenateSettings(time_indices=first), output_path, tmp_path, sbatch_file)
+    _run(
+        sources,
+        ConcatenateSettings(time_indices=second),
+        output_path,
+        tmp_path,
+        sbatch_file,
+        name="second",
+    )
+
+    output = open_ome_zarr(output_path)["A/1/0"].data[:]
+    np.testing.assert_array_equal(output[:, 0], plate_1["A/1/0"].data[second, 0])
+    for i, t in enumerate(second):
+        if i in padded:
+            assert not output[i, 1].any()
+        else:
+            np.testing.assert_array_equal(output[i, 1], plate_2["A/1/0"].data[t, 0])
+
+
+def test_rerun_max_clears_after_source_shrinks(tmp_path, sbatch_file):
+    """
+    A "max" rerun into an existing plate zeroes the end of a source that has
+    shrunk since the first run
+    """
+    _plate_with_time_points(tmp_path / "s0.zarr", ["DAPI"], {"A/1/0": 5})
+    _plate_with_time_points(tmp_path / "s1.zarr", ["GFP"], {"A/1/0": 5})
+    sources = [tmp_path / "s0.zarr", tmp_path / "s1.zarr"]
+    output_path = tmp_path / "output.zarr"
+    settings = ConcatenateSettings(time_indices="max")
+    _run(sources, settings, output_path, tmp_path, sbatch_file)
+    assert open_ome_zarr(output_path)["A/1/0"].data[4, 1].any()
+
+    shrunk = _plate_with_time_points(tmp_path / "s1.zarr", ["GFP"], {"A/1/0": 4})
+    _run(sources, settings, output_path, tmp_path, sbatch_file)
+
+    output = open_ome_zarr(output_path)["A/1/0"].data[:]
+    np.testing.assert_array_equal(output[:4, 1], shrunk["A/1/0"].data[:, 0])
+    assert not output[4, 1].any()
