@@ -1371,8 +1371,18 @@ def _run_jobs(
 # Default wall-clock budgets per phase, in minutes (an sbatch file's time wins).
 ESTIMATE_MINUTES = 30
 REPAIR_MINUTES = 60
-# Wall-clock budget per timepoint for the sequential (propagation) job, in minutes.
-PROPAGATION_MINUTES_PER_TIMEPOINT = 5
+# Wall-clock budget per timepoint for the sequential (propagation) job, in minutes:
+# 2024_11_07 A549 beads took 7-8 min per timepoint (two passes from two seeds), so ~1.3x.
+PROPAGATION_MINUTES_PER_TIMEPOINT = 10
+# The `preempted` partition's limit: sbatch rejects a longer request outright.
+MAX_MINUTES = 2880
+
+
+def _propagation_minutes(n_timepoints: int) -> int:
+    """Return the sequential job's budget for this many timepoints, within the partition."""
+    return min(
+        MAX_MINUTES, max(ESTIMATE_MINUTES, PROPAGATION_MINUTES_PER_TIMEPOINT * n_timepoints)
+    )
 
 
 def _run_propagated(
@@ -1386,7 +1396,7 @@ def _run_propagated(
     if not to_estimate:
         return {}, {}
     if not user_set_time:
-        minutes = max(ESTIMATE_MINUTES, PROPAGATION_MINUTES_PER_TIMEPOINT * len(to_estimate))
+        minutes = _propagation_minutes(len(to_estimate))
         executor.update_parameters(slurm_time=minutes)
     executor.update_parameters(slurm_job_name="estimate_transform_propagated")
     by_job, failures = _run_jobs(
@@ -1533,9 +1543,7 @@ def init_run(
     )
     n_trials = len(settings.sweep_trials()) if settings.fallback.sweep is not None else 0
     estimate_minutes = (
-        max(ESTIMATE_MINUTES, PROPAGATION_MINUTES_PER_TIMEPOINT * len(time_indices))
-        if propagated
-        else ESTIMATE_MINUTES
+        _propagation_minutes(len(time_indices)) if propagated else ESTIMATE_MINUTES
     )
 
     def resources(minutes: int) -> dict:

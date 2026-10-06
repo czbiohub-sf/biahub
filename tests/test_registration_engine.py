@@ -682,3 +682,11 @@ def test_estimate_series_reports_an_empty_frame_without_estimating():
         1.0,
         3.0,
     ]  # the empty frame is never estimated
+
+
+def test_the_propagation_budget_scales_with_timepoints_within_the_partition():
+    from biahub.registration.engine import MAX_MINUTES, _propagation_minutes
+
+    assert _propagation_minutes(1) == 30  # the floor
+    assert _propagation_minutes(125) == 1250  # 10 min per timepoint
+    assert _propagation_minutes(1000) == MAX_MINUTES == 2880  # sbatch rejects more
