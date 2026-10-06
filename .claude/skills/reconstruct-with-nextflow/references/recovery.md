@@ -90,11 +90,22 @@ input may need re-export from the instrument.
 ## Restarting
 
 Always: `cd <OUTPUT> && bash ./run_mantis_v2.sh`, relaunched in the tmux
-session. `-resume` is invalidated by editing the biahub checkout, editing a
-config, or changing a `--param` — if a resume unexpectedly recomputes
-everything, one of those changed. To force one step to recompute, delete that
-step's output for the affected positions and their work dirs — not the whole
-`.nextflow/` cache.
+session. What `-resume` does after a change:
+
+- **Editing a step's config** (any byte, even a comment, or a `touch`) reruns
+  that step's tasks. Steps whose CLI runs with `--resume` (flat-field, deskew,
+  assemble) key their per-unit progress on the validated settings, so after an
+  edit that changes no setting they skip every unit and finish in seconds.
+  Reconstruct, virtual-stain, track and QC recompute.
+- **The steps downstream of an edited config are NOT rerun**: they stay cached
+  on the old upstream output (biahub#406). After changing a step's config,
+  delete the outputs and work dirs of every step after it before relaunching.
+- **Changing a `--param`** that a task takes reruns that task.
+- **Editing biahub's Python code** invalidates nothing; only editing a
+  `script:` block in `nextflow/modules/*.nf` does.
+
+To force one step to recompute, delete that step's output for the affected
+positions and their work dirs — not the whole `.nextflow/` cache.
 
 ## When to escalate to the user
 

@@ -36,6 +36,7 @@ process init_apply_inv_tf {
     val input_zarr
     val output_zarr
     val config
+    path config_file  // staged only for the task hash: see common.nf, #397
     val trigger
 
     output:
@@ -79,6 +80,7 @@ process compute_transfer_function {
     val input_zarr
     val tf_zarr
     val config
+    path config_file  // staged only for the task hash: see common.nf, #397
 
     output:
     val true
@@ -106,6 +108,7 @@ process run_apply_inv_tf {
     val output_zarr
     val tf_zarr
     val config
+    path config_file  // staged only for the task hash: see common.nf, #397
 
     output:
     val position
@@ -148,7 +151,7 @@ workflow reconstruct_init_wf {
     trigger
 
     main:
-    init_out = init_apply_inv_tf(input_zarr, output_zarr, config, trigger.collect().map { 'done' })
+    init_out = init_apply_inv_tf(input_zarr, output_zarr, config, file(config), trigger.collect().map { 'done' })
 
     emit:
     resources = init_out.map { stdout_text -> parse_resources(stdout_text) }
@@ -173,7 +176,7 @@ workflow reconstruct_tf_wf {
 
     main:
     tf_zarr = transfer_function_path(output_zarr)
-    tf_done = compute_transfer_function(trigger.collect().map { 'done' }, input_zarr, tf_zarr, config)
+    tf_done = compute_transfer_function(trigger.collect().map { 'done' }, input_zarr, tf_zarr, config, file(config))
 
     emit:
     done = tf_done
@@ -217,7 +220,7 @@ workflow reconstruct_run_wf {
         .combine(prev_done.map { 'done' })
         .map { pos, meta, _tf, _gate -> [pos, meta] }
 
-    rc_done = run_apply_inv_tf(pos_meta, input_zarr, output_zarr, tf_zarr, config) | collect
+    rc_done = run_apply_inv_tf(pos_meta, input_zarr, output_zarr, tf_zarr, config, file(config)) | collect
 
     emit:
     done = rc_done
