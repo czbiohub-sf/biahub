@@ -38,6 +38,10 @@ For correlation-based scores (ants, phase cross-correlation, focus finding) a co
 transform often scores 0.1-0.3, so many timepoints come out `unreliable`: read them as
 "check", not as "wrong".
 
+ANTs runs with a fixed random seed and as many ITK threads as the task has CPUs
+(`ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS` overrides): one thread repeats exactly, several to
+~0.01 voxel, so two ants runs agree to that, not bit for bit.
+
 The bead-overlap score counts beads within `qc_settings.score_centroid_mask_radius` (6 voxels)
 and quantizes at ~1/N beads: it cannot see misregistration below that radius, and score
 differences of one bead are noise.
