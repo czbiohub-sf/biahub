@@ -203,3 +203,21 @@ def test_time_indices_are_checked_when_the_config_is_read():
         config(frame="previous", channel=None, time_indices=5)
     assert config(time_indices=[2, 5, 9]).time_indices == [2, 5, 9]
     assert config(frame="first", channel=None, time_indices=5).time_indices == 5
+
+
+def test_the_unified_pcc_block_refuses_fields_the_engine_does_not_read():
+    def pcc(**fields):
+        return EstimateTransformSettings(
+            moving=ChannelSettings(channel="GFP"),
+            reference=ReferenceSettings(frame="first"),
+            method="phase-cross-corr",
+            phase_cross_corr=fields,
+        )
+
+    with pytest.raises(ValueError, match="reference.frame"):
+        pcc(t_reference="previous")
+    with pytest.raises(ValueError, match="positions"):
+        pcc(skip_beads_fov="0/2/000000")
+    with pytest.raises(ValueError, match=r"\[start, stop\]"):
+        pcc(X_slice=[[0, 10], [5, 15]])  # legacy per-position lists
+    assert pcc(X_slice=[0, 10], center_crop_xy=[8, 8]).phase_cross_corr.X_slice == [0, 10]

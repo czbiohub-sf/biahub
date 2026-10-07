@@ -990,6 +990,33 @@ class EstimateTransformSettings(MyBaseModel):
         return self
 
     @model_validator(mode="after")
+    def check_phase_cross_corr_block(self) -> "EstimateTransformSettings":
+        # The block is shared with the retired schema; refuse what the engine does not read.
+        pcc = self.phase_cross_corr
+        if pcc is None:
+            return self
+        if pcc.t_reference != "first":
+            raise ValueError(
+                "phase_cross_corr.t_reference is not read: set reference.frame "
+                f"('{pcc.t_reference}') instead"
+            )
+        if pcc.skip_beads_fov != "0":
+            raise ValueError(
+                "phase_cross_corr.skip_beads_fov is not read: leave the beads FOV out of "
+                "the positions you pass"
+            )
+        for name in ("X_slice", "Y_slice", "Z_slice"):
+            value = getattr(pcc, name)
+            if value != "all" and not (
+                len(value) == 2 and all(isinstance(v, int) for v in value)
+            ):
+                raise ValueError(
+                    f"phase_cross_corr.{name} must be 'all' or [start, stop]; got {value!r} "
+                    "(per-position lists are not supported: estimate positions separately)"
+                )
+        return self
+
+    @model_validator(mode="after")
     def check_time_indices(self) -> "EstimateTransformSettings":
         # The transforms file needs unique, increasing timepoints: say so now, not after
         # the whole run when the file is written.

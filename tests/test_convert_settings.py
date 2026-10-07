@@ -246,3 +246,18 @@ def test_legacy_manual_time_index_becomes_time_indices():
     unified, _ = convert_settings(legacy)
     assert unified.time_indices == 82
     assert unified.manual.affine_fliplr is True
+
+
+def test_legacy_pcc_reference_and_beads_fov_convert_to_the_unified_fields():
+    legacy = EstimateStabilizationSettings(
+        stabilization_estimation_channel="GFP",
+        stabilization_channels=["GFP"],
+        stabilization_type="xyz",
+        stabilization_method="phase-cross-corr",
+        phase_cross_corr_settings={"t_reference": "previous", "skip_beads_fov": "0/2/000000"},
+    )
+    unified, notes = convert_settings(legacy)
+    assert unified.reference.frame == "previous"
+    assert unified.phase_cross_corr.t_reference == "first"
+    assert unified.phase_cross_corr.skip_beads_fov == "0"
+    assert any("skip_beads_fov" in note for note in notes)

@@ -248,7 +248,7 @@ def estimate_settings_from_legacy(
             method=legacy.estimation_method,
             beads=legacy.beads_match_settings,
             ants=legacy.ants_registration_settings,
-            phase_cross_corr=legacy.phase_cross_corr_settings,
+            phase_cross_corr=_unified_pcc(legacy.phase_cross_corr_settings, notes),
             manual=None
             if manual is None
             else ManualSettings(
@@ -299,7 +299,7 @@ def estimate_settings_from_legacy(
         reference=ReferenceSettings(frame=reference),
         method=method,
         beads=legacy.beads_match_settings,
-        phase_cross_corr=legacy.phase_cross_corr_settings,
+        phase_cross_corr=_unified_pcc(legacy.phase_cross_corr_settings, notes),
         focus_finding=focus_finding,
         transform=fit,
         verbose=legacy.verbose,
@@ -372,6 +372,22 @@ def load_legacy_settings(path: Path) -> LegacySettings:
         f"{path} is not a legacy estimate-registration / estimate-stabilization / register / "
         "stabilize config:\n  " + "\n  ".join(errors)
     )
+
+
+def _unified_pcc(pcc, notes: list[str]):
+    """Return a legacy PCC block without the fields the unified config does not read.
+
+    `t_reference` is mapped to `reference.frame` by the caller; `skip_beads_fov` is a choice
+    of positions, not part of the estimate.
+    """
+    if pcc is None:
+        return None
+    if pcc.skip_beads_fov != "0":
+        notes.append(
+            f"phase_cross_corr.skip_beads_fov ({pcc.skip_beads_fov!r}) dropped: leave the "
+            "beads FOV out of the positions you pass"
+        )
+    return pcc.model_copy(update={"t_reference": "first", "skip_beads_fov": "0"})
 
 
 def convert_settings(
