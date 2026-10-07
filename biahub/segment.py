@@ -153,9 +153,10 @@ def segment_cli(
             )
         # Channel names to dataset channel indices; segment_data slices these out, as
         # cellpose 4 takes up to 3 channels in any order and has no `channels` argument.
-        if len(model_args.eval_args["channels"]) > 3:
+        channel_count = len(model_args.eval_args["channels"])
+        if not 1 <= channel_count <= 3:
             raise ValueError(
-                f"Model {model_name}: cellpose 4 uses at most 3 channels, "
+                f"Model {model_name}: cellpose 4 requires 1 to 3 channels, "
                 f"got {model_args.eval_args['channels']}"
             )
         model_args.eval_args["channels"] = [
