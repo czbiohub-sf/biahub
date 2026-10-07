@@ -12,19 +12,31 @@ from iohub.ngff.utils import create_empty_plate, process_single_position
 
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
+    cluster,
     config_filepath,
+    init_only,
     input_position_dirpaths,
-    local,
     monitor,
     output_dirpath,
+    resume,
     sbatch_filepath,
     sbatch_to_submitit,
 )
 from biahub.settings import SegmentationSettings
-from biahub.utils.cellpose import cellpose_device, load_cellpose_model, stage_cellpose_weights
-from biahub.utils.cluster import estimate_resources, get_submitit_cluster
-from biahub.utils.config import yaml_to_model
-from biahub.utils.ngff import get_output_paths, resolve_ome_zarr_version
+from biahub.utils.cellpose import (
+    cellpose_device,
+    check_cellpose_model_name,
+    load_cellpose_model,
+    stage_cellpose_weights,
+    warm_cellpose_weights,
+)
+from biahub.utils.cluster import echo_resources, estimate_resources, get_submitit_cluster
+from biahub.utils.config import settings_fingerprint, yaml_to_model
+from biahub.utils.ngff import (
+    PROVENANCE_METADATA_KEYS,
+    get_output_paths,
+    resolve_ome_zarr_version,
+)
 
 
 @dataclass(frozen=True)
@@ -146,96 +158,132 @@ def segment_data(
     return np.stack(czyx_segmentation, axis=0)
 
 
-@click.command("segment")
-@input_position_dirpaths()
-@config_filepath()
-@output_dirpath()
-@sbatch_filepath()
-@local()
-@monitor()
-def segment_cli(
-    input_position_dirpaths: list[str],
-    config_filepath: Path,
-    output_dirpath: str,
-    sbatch_filepath: str | None = None,
-    local: bool = False,
-    monitor: bool = True,
-):
-    """Segment a single position across T axes using the configuration file.
+def _init_output_plate(
+    input_position_dirpaths: list[Path],
+    output_dirpath: Path,
+    settings: SegmentationSettings,
+) -> tuple[tuple[int, int, int, int, int], list[ResolvedModel]]:
+    """Create (or extend) the empty label plate and resolve the models against the input.
 
-    >>> biahub segment \
-        -i ./input.zarr/*/*/* \
-        -c ./segment_params.yml \
-        -o ./output.zarr
+    create_empty_plate is idempotent: re-running with the same positions is a no-op and
+    new positions are appended, so both --init and per-position workers can call it.
+    The settings are recorded as provenance exactly as written (names, not indices).
+
+    Returns the input (T, C, Z, Y, X) shape and the resolved models.
     """
-    # Convert string paths to Path objects
-    output_dirpath = Path(output_dirpath)
-    config_filepath = Path(config_filepath)
-    slurm_out_path = output_dirpath.parent / "slurm_output"
-
-    if sbatch_filepath is not None:
-        sbatch_filepath = Path(sbatch_filepath)
-
-    # Handle single position or wildcard filepath
-    output_position_paths = get_output_paths(input_position_dirpaths, output_dirpath)
-
-    # Get the deskewing parameters
-    # Load the first position to infer dataset information
     with open_ome_zarr(str(input_position_dirpaths[0]), mode="r") as input_dataset:
         T, C, Z, Y, X = input_dataset.data.shape
-        settings = yaml_to_model(config_filepath, SegmentationSettings)
         scale = input_dataset.scale
         channel_names = input_dataset.channel_names
 
     models = resolve_models(settings, channel_names, scale, Z)
-    for m in models:
-        click.echo(f"Segmenting with model {m.name} using channels {m.channel_indices}")
-    C_segment = len(models)
     Z_out = 1 if models[0].z_slice_2D is not None else Z
 
-    segmentation_shape = (T, C_segment, Z_out, Y, X)
-
-    # Create a zarr store output to mirror the input
+    input_plate = Path(input_position_dirpaths[0]).parents[2]
     create_empty_plate(
         store_path=output_dirpath,
-        position_keys=[path.parts[-3:] for path in input_position_dirpaths],
+        position_keys=[Path(p).parts[-3:] for p in input_position_dirpaths],
         channel_names=[m.name + "_labels" for m in models],
-        shape=segmentation_shape,
-        chunks=None,
+        shape=(T, len(models), Z_out, Y, X),
+        dtype=np.uint32,
         scale=scale,
         version=resolve_ome_zarr_version(
             input_position_dirpaths[0], settings.output_ome_zarr_version
         ),
+        metadata_sources=input_plate,
+        metadata_keys=PROVENANCE_METADATA_KEYS,
+        extra_metadata={"biahub-segment": settings.model_dump(mode="json")},
+    )
+    return (T, C, Z, Y, X), models
+
+
+def segment(
+    input_position_dirpaths: list[Path],
+    config_filepath: Path,
+    output_dirpath: Path,
+    sbatch_filepath: str | None = None,
+    cluster: str = "slurm",
+    monitor: bool = True,
+    init_only: bool = False,
+    resume: bool = False,
+):
+    """Segment positions with cellpose 4 models (one GPU job per position).
+
+    Parameters
+    ----------
+    input_position_dirpaths : list[Path]
+        Paths to input positions, for example: "input.zarr/0/0/0", "input.zarr/0/0/[0-9]",
+        or "input.zarr/*/*/*".
+    config_filepath : Path
+        Path to the segmentation YAML configuration file.
+    output_dirpath : Path
+        Path to the "output.zarr" label plate.
+    sbatch_filepath : str, optional
+        SBATCH filepath that contains slurm parameters to overwrite defaults.
+    cluster : str, optional
+        Execution cluster: 'slurm' submits to a Slurm cluster, 'local' runs jobs as
+        subprocesses on this machine, 'debug' runs jobs in-process in the foreground.
+    monitor : bool, optional
+        Monitor of submitted SLURM jobs.
+    init_only : bool, optional
+        Only initialize the output store (and check/warm the models) and exit.
+    resume : bool, optional
+        Skip the (time, channel) units a previous attempt already finished; see
+        ``iohub.ngff.utils.process_single_position``.
+    """
+    output_dirpath = Path(output_dirpath)
+    slurm_out_path = output_dirpath.parent / "slurm_output"
+
+    settings = yaml_to_model(config_filepath, SegmentationSettings)
+    (T, C, Z, Y, X), models = _init_output_plate(
+        input_position_dirpaths, output_dirpath, settings
     )
 
-    # Estimate resources
-    _, num_cpus, gb_ram_request = estimate_resources(
-        shape=segmentation_shape, ram_multiplier=20
+    # RAM: one input timepoint plus cellpose buffers (ram_multiplier=20, as before).
+    # Time: ~2.5 min per timepoint per model on the GPU, at least 80 min (as before).
+    time_minutes, num_cpus, gb_ram_per_cpu = estimate_resources(
+        shape=(T, len(models), Z, Y, X),
+        ram_multiplier=20,
+        time_multiplier=2.5,
+        max_num_cpus=8,
+        min_time_minutes=80,
     )
-    num_gpus = 1
-    slurm_time = np.ceil(np.max([80, T * 2.5])).astype(int)
-    slurm_array_parallelism = 100
-    # Prepare SLURM arguments
+    mem_gb = num_cpus * gb_ram_per_cpu
+    echo_resources(num_cpus, mem_gb, time_minutes)
+
+    if init_only:
+        # --init runs once on the head node: fail on a bad model name here, not in every
+        # worker, and populate the shared weights cache once. Workers must not do this
+        # (importing cellpose would fix the weights directory before staging).
+        for name in dict.fromkeys(m.pretrained_model for m in models):
+            check_cellpose_model_name(name)
+            warm_cellpose_weights(name)
+        click.echo(f"Initialized {output_dirpath} ({len(input_position_dirpaths)} positions)")
+        return
+
+    output_position_paths = get_output_paths(input_position_dirpaths, output_dirpath)
+
     slurm_args = {
         "slurm_job_name": "segment",
-        "slurm_gres": f"gpu:{num_gpus}",
-        "slurm_mem_per_cpu": f"{gb_ram_request}G",
-        "slurm_cpus_per_task": np.max([int(20 * 1.3), num_cpus]),
-        "slurm_array_parallelism": slurm_array_parallelism,  # process up to 20 positions at a time
-        "slurm_time": slurm_time,
+        "slurm_mem": f"{mem_gb}G",
+        "slurm_cpus_per_task": num_cpus,
+        "slurm_array_parallelism": 100,  # process up to 100 positions at a time
+        "slurm_time": time_minutes,
+        # cellpose runs on the GPU; the non-preemptible `gpu` partition keeps long
+        # per-position jobs from being evicted. Override via --sbatch-filepath.
         "slurm_partition": "gpu",
+        "slurm_gpus_per_node": 1,
+        "slurm_use_srun": False,
     }
     if sbatch_filepath:
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
-    # Run locally or submit to SLURM
-    cluster = get_submitit_cluster(local)
-
-    # Prepare and submit jobs
-    click.echo(f"Preparing jobs: {slurm_args}")
-    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
+    resolved_cluster = get_submitit_cluster(cluster=cluster)
+    click.echo(f"Preparing jobs on cluster='{resolved_cluster}': {slurm_args}")
+    executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=resolved_cluster)
     executor.update_parameters(**slurm_args)
 
+    click.echo("Submitting jobs...")
     jobs = []
     with submitit.helpers.clean_env(), executor.batch():
         for input_position_path, output_position_path in zip(
@@ -248,16 +296,78 @@ def segment_cli(
                     input_position_path,
                     output_position_path,
                     input_channel_indices=[list(range(C))],
-                    output_channel_indices=[list(range(C_segment))],
+                    output_channel_indices=[list(range(len(models)))],
                     # One process per position: timepoints share the loaded model and
                     # the GPU, which is the bottleneck.
                     num_workers=1,
+                    resume=resume,
+                    resume_token=settings_fingerprint(settings),
                     models=models,
                 )
             )
 
+    job_ids = [job.job_id for job in jobs]
+    slurm_out_path.mkdir(exist_ok=True)
+    with (slurm_out_path / "submitit_jobs_ids.log").open("w") as log_file:
+        log_file.write("\n".join(job_ids))
+
+    # submitit's DebugExecutor is lazy: .submit() wraps the callable in a DebugJob but
+    # execution only happens on .wait()/.done()/.result(). On the Nextflow path
+    # (--cluster debug) run each position in the foreground.
+    if resolved_cluster == "debug":
+        for job, path in zip(jobs, input_position_dirpaths, strict=True):
+            job.wait()
+            click.echo(f"Segmentation complete: {path}")
+        return
+
     if monitor:
         monitor_jobs(jobs, input_position_dirpaths)
+
+
+@click.command("segment")
+@input_position_dirpaths()
+@config_filepath()
+@output_dirpath()
+@sbatch_filepath()
+@cluster()
+@monitor()
+@init_only()
+@resume()
+def segment_cli(
+    input_position_dirpaths: list[Path],
+    config_filepath: Path,
+    output_dirpath: Path,
+    sbatch_filepath: str | None = None,
+    cluster: str = "slurm",
+    monitor: bool = False,
+    init_only: bool = False,
+    resume: bool = False,
+):
+    """Segment positions with cellpose 4 models configured in a YAML file.
+
+    \b
+    SLURM fan-out of positions across a whole plate:
+    >>> biahub segment -i ./input.zarr/*/*/* -c ./segment.yml -o ./segment.zarr
+
+    \b
+    Initialize the output plate only (Nextflow init step):
+    >>> biahub segment --init -i ./input.zarr/*/*/* -c ./segment.yml -o ./segment.zarr
+
+    \b
+    In-process run of a single position (Nextflow per-position worker):
+    >>> biahub segment --cluster debug -i ./input.zarr/B/3/000000 -c ./segment.yml \\
+        -o ./segment.zarr --resume
+    """  # noqa: D301
+    segment(
+        input_position_dirpaths=input_position_dirpaths,
+        config_filepath=config_filepath,
+        output_dirpath=output_dirpath,
+        sbatch_filepath=sbatch_filepath,
+        cluster=cluster,
+        monitor=monitor,
+        init_only=init_only,
+        resume=resume,
+    )
 
 
 if __name__ == "__main__":
