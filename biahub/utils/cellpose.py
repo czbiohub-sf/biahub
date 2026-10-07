@@ -171,6 +171,24 @@ def stage_cellpose_weights() -> Path | None:
     return dest
 
 
+def check_cellpose_model_name(pretrained_model: str) -> None:
+    """Raise if cellpose 4 cannot find ``pretrained_model`` (it would substitute cpsam_v2).
+
+    Imports ``cellpose.models``: call it on the head node (``--init``) or after
+    ``stage_cellpose_weights`` in a worker.
+    """
+    from cellpose import models
+
+    if Path(pretrained_model).exists():
+        return
+    known = [*models.MODEL_NAMES, *models.get_user_models()]
+    if pretrained_model not in known:
+        raise ValueError(
+            f"Unknown cellpose model {pretrained_model!r}: not a file and not one of "
+            f"{known}. Cellpose 4 dropped the cellpose 3 models (nuclei, cyto3, ...)."
+        )
+
+
 def load_cellpose_model(pretrained_model: str, device: torch.device):
     """Build a cellpose 4 model, failing on a model cellpose cannot find.
 
@@ -183,13 +201,7 @@ def load_cellpose_model(pretrained_model: str, device: torch.device):
     """
     from cellpose import models
 
-    if not Path(pretrained_model).exists():
-        known = [*models.MODEL_NAMES, *models.get_user_models()]
-        if pretrained_model not in known:
-            raise ValueError(
-                f"Unknown cellpose model {pretrained_model!r}: not a file and not one of "
-                f"{known}. Cellpose 4 dropped the cellpose 3 models (nuclei, cyto3, ...)."
-            )
+    check_cellpose_model_name(pretrained_model)
 
     # device overrides gpu and skips cellpose's own CPU-falling-back probe.
     model = models.CellposeModel(

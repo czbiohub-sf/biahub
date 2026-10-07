@@ -35,6 +35,7 @@ from biahub.settings import (
 )
 from biahub.utils.cellpose import (
     cellpose_device,
+    check_cellpose_model_name,
     load_cellpose_model,
     stage_cellpose_weights,
     warm_cellpose_weights,
@@ -1042,6 +1043,8 @@ def track(
         # reach this code too, and importing cellpose here would fix the weights
         # directory before stage_cellpose_weights could redirect it.
         if settings.segmentation_method == "cellpose":
+            # Fail here, once, rather than in every worker of the fan-out.
+            check_cellpose_model_name(settings.cellpose_config.pretrained_model)
             warm_cellpose_weights(settings.cellpose_config.pretrained_model)
         click.echo(f"Initialized {output_dirpath} ({len(input_position_dirpaths)} positions)")
         return
