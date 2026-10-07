@@ -22,6 +22,8 @@ direction: forward
 method: beads
 moving_channels: [mCherry EX561 EM600-37]   # the estimation channel
 reference_channel: Phase3D                   # null for stabilization
+reference_frame: cross                       # cross | first | previous (previous: chained
+                                             # onto the first frame; cannot take substitutes)
 transforms:                                  # one list shared by every position ...
   - {t: 0, matrix: [...], score: 0.71, status: accepted}
   - {t: 1, matrix: [...], score: null, status: unreliable, filled_from: seed,

@@ -179,6 +179,7 @@ class _Run:
             moving_channels=[self.settings.moving.channel],
             reference_channel=self.settings.reference.channel,
             method=self.settings.method,
+            reference_frame=self.settings.reference.frame,
             voxel_size=voxel_size,
         )
         if len(self.run_positions) == 1:

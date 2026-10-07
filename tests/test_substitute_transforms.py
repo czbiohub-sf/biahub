@@ -1,3 +1,4 @@
+import click
 import numpy as np
 import pytest
 
@@ -140,3 +141,18 @@ def test_substitute_transforms_cli_writes_the_combined_file(tmp_path):
     assert [e.method for e in final.transforms] == [None, None, "manual", "ants"]
     assert "t=3: beads (score 0.8) -> ants" in result.output
     assert load_transform_settings(tmp_path / "beads.yml").transforms[2].matrix == _shift(2)
+
+
+def test_a_previous_frame_file_cannot_take_or_give_substitutes():
+    # Its matrices are cumulative (each timepoint chained onto the first frame): a
+    # substitute at t cannot fix the later timepoints chained through the bad step, and a
+    # one-timepoint 'previous' estimate holds a single step, not the accumulated drift.
+    chained = _beads(reference_frame="previous")
+    with pytest.raises(click.UsageError, match="reference frame 'previous'"):
+        substitute_transforms(chained, [("manual.yml", _single(2, 50.0))])
+    step_only = _single(2, 50.0)
+    step_only.reference_frame = "previous"
+    with pytest.raises(click.UsageError, match="reference frame 'previous'"):
+        substitute_transforms(_beads(), [("prev.yml", step_only)])
+    # an older file says nothing about its frame: allowed, as before
+    substitute_transforms(_beads(), [("manual.yml", _single(2, 50.0))])

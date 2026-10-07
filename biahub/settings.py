@@ -1125,6 +1125,9 @@ class TransformSettings(MyBaseModel):
     moving_channels: list[str]
     reference_channel: str | None = None  # None: stabilization onto the moving store's grid
     method: str = "beads"
+    # What the matrices are relative to: 'previous' means each was chained onto the first
+    # frame (cumulative). None: not recorded (files written before this field).
+    reference_frame: Literal["cross", "first", "previous"] | None = None
     voxel_size: list[float] | None = None
     transforms: list[TransformEntry] | None = None
     positions: dict[str, list[TransformEntry]] | None = None

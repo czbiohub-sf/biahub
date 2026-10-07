@@ -98,6 +98,14 @@ def substitute_transforms(
     per_position = (
         {k: list(v) for k, v in base.positions.items()} if base.positions is not None else None
     )
+    for name, model in (("the base", base), *substitutes):
+        if model.reference_frame == "previous":
+            raise click.UsageError(
+                f"{name} was estimated with reference frame 'previous': its matrices are "
+                "chained onto the first frame, so a substitute at one timepoint cannot fix "
+                "the later ones chained through it, and a one-timepoint 'previous' estimate "
+                "holds a single step. Re-estimate with reference frame 'first' instead."
+            )
     for source, sub in substitutes:
         if (sub.moving_channels, sub.reference_channel) != (
             base.moving_channels,
