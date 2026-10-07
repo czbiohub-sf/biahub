@@ -179,7 +179,7 @@ def check_cellpose_model_name(pretrained_model: str) -> None:
     """
     from cellpose import models
 
-    if Path(pretrained_model).exists():
+    if Path(pretrained_model).is_file():
         return
     known = [*models.MODEL_NAMES, *models.get_user_models()]
     if pretrained_model not in known:
