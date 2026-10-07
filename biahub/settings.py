@@ -834,9 +834,11 @@ class SegmentationModel(BaseModel):
     def check_3d_settings(self):
         # A model without z_slice_2D segments the Z stack, which cellpose 4 only accepts
         # with do_3D or stitching (it raises "2D image processing selected, but z_axis...").
+        stitch_threshold = self.eval_args.get("stitch_threshold")
         if self.z_slice_2D is None and not (
-            self.eval_args.get("do_3D") or self.eval_args.get("stitch_threshold")
-        ):
+            self.eval_args.get("do_3D")
+            or (stitch_threshold is not None and stitch_threshold > 0)
+        )
             raise ValueError(
                 "A model without z_slice_2D segments in 3D: set eval_args.do_3D: true (or a "
                 "stitch_threshold), or set z_slice_2D for 2D segmentation."
