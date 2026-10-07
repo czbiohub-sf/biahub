@@ -121,7 +121,7 @@ def phase_cross_corr_padding(
     if normalization == "magnitude":
         prod /= np.fmax(np.abs(prod), eps)
     elif normalization == "classic":
-        prod /= np.abs(Fimg1) * np.abs(Fimg2)
+        prod /= np.fmax(np.abs(Fimg1) * np.abs(Fimg2), eps)
 
     corr = np.fft.irfftn(prod)
     del prod, Fimg1, Fimg2
