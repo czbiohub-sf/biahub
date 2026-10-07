@@ -352,3 +352,20 @@ def test_a_stale_repair_does_not_replace_a_better_redone_estimate(
 
     entry = load_transform_settings(output).transforms[2]
     assert entry.score == 0.9 and entry.repaired_from is None
+
+
+def test_a_half_written_record_is_redone_not_fatal(
+    beads_plate_with_a_blank_timepoint, tmp_path
+):
+    # A job killed mid-write (preemption) could leave a truncated record; --resume must
+    # redo that timepoint rather than crash on it.
+    plate = beads_plate_with_a_blank_timepoint
+    config = _write_config(tmp_path)
+    output = tmp_path / "out" / "transforms.yml"
+    common = ["-m", plate, "-r", plate, "-c", config, "-o", output]
+    _ok("--init", *common)
+    _ok("--step", "estimate", "--timepoints", "0", *common)
+    record = output.with_suffix("") / "timepoints" / "1.json"
+    record.write_text('{"t": 1, "matrix": [[1.0, 0')  # truncated
+    _ok("--step", "estimate", "--timepoints", "1", "--resume", *common)
+    assert json.loads(record.read_text())["matrix"] is not None

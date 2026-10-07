@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import os
 import shutil
 import uuid
 
@@ -155,7 +156,7 @@ class RunJournal:
         return journal
 
     def save(self, path: Path) -> None:
-        path.write_text(json.dumps(self.to_dict(), indent=2))
+        _write_json(path, self.to_dict(), indent=2)
 
     @classmethod
     def load(cls, path: Path, run_id: str | None = None) -> RunJournal:
@@ -1065,7 +1066,7 @@ def _estimate_timepoint_job(
         "metrics": _bead_metrics(settings, result, t, mov, ref),
     }
     record_path.parent.mkdir(parents=True, exist_ok=True)
-    record_path.write_text(json.dumps(record))
+    _write_json(record_path, record)
     return record
 
 
@@ -1112,7 +1113,7 @@ def _estimate_propagated_job(
             "arm": getattr(estimator, "last_winner", None),
             "metrics": _bead_metrics(settings, result, t, mov, ref),
         }
-        (records_dir / f"{t}.json").write_text(json.dumps(record))
+        _write_json(records_dir / f"{t}.json", record)
         records[t] = record
 
     estimate_propagated(
@@ -1174,7 +1175,7 @@ def _start_run(
         return
     for name in ("timepoints", "repairs", "sweeps"):
         shutil.rmtree(output_dir / name, ignore_errors=True)
-    manifest_path.write_text(json.dumps(fingerprint, indent=2))
+    _write_json(manifest_path, fingerprint, indent=2)
 
 
 def _load_series(
@@ -1197,11 +1198,11 @@ def _load_series(
         record = records.get(t)
         if record is None:
             path = records_dir / f"{t}.json"
-            if t not in resumed or not path.exists():
+            record = _read_record(path) if t in resumed else None
+            if record is None:  # missing, unreadable, or not this run's to reuse
                 result.scores[t] = float("nan")
                 result.errors[t] = "no record: job did not finish"
                 continue
-            record = json.loads(path.read_text())
         if record["matrix"] is not None:
             result.transforms[t] = Transform(
                 np.asarray(record["matrix"], dtype=float), transform_type=transform_type
@@ -1271,7 +1272,7 @@ def _repair_timepoint_job(
         "reseed_score": _finite_or_none(outcome.reseed_score),
     }
     record_path.parent.mkdir(parents=True, exist_ok=True)
-    record_path.write_text(json.dumps(record))
+    _write_json(record_path, record)
     return record
 
 
@@ -1311,7 +1312,7 @@ def _sweep_timepoint_job(
         "candidate_failures": outcome.failures,
     }
     record_path.parent.mkdir(parents=True, exist_ok=True)
-    record_path.write_text(json.dumps(record))
+    _write_json(record_path, record)
     return record
 
 
@@ -1333,6 +1334,22 @@ def _load_pass(record: dict, transform_type: str, fallback: Transform) -> PassRe
         polish_rounds=record.get("polish_rounds", 0),
         reseed_score=record.get("reseed_score"),
     )
+
+
+def _write_json(path: Path, obj, indent: int | None = None) -> None:
+    """Write JSON atomically: a job killed mid-write leaves the old file or none, never half."""
+    path = Path(path)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(obj, indent=indent))
+    os.replace(tmp, path)
+
+
+def _read_record(path: Path) -> dict | None:
+    """Return a record, or None if it is missing or unreadable (e.g. half-written before)."""
+    try:
+        return json.loads(Path(path).read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
 
 
 def _job_failure(error: Exception) -> str:
@@ -1357,7 +1374,8 @@ def _failed_record(t: int, error: Exception) -> dict:
 
 def _finished(record_path: Path) -> bool:
     """Whether a record exists for a timepoint that did not fail (what resume skips)."""
-    return record_path.exists() and not json.loads(record_path.read_text()).get("failed")
+    record = _read_record(record_path)
+    return record is not None and not record.get("failed")
 
 
 def _run_jobs(
@@ -1446,9 +1464,9 @@ def _run_propagated(
         return {int(t): r for t, r in by_job[-1].items()}, {}
     records = {}
     for t in to_estimate:
-        path = records_dir / f"{t}.json"
-        if path.exists():
-            records[t] = json.loads(path.read_text())
+        record = _read_record(records_dir / f"{t}.json")
+        if record is not None:
+            records[t] = record
     error = failures.get(-1, "sequential job failed")
     return records, {t: error for t in to_estimate if t not in records}
 
@@ -1601,7 +1619,7 @@ def init_run(
             "sweep": resources(_sweep_minutes(n_trials)),
         },
     }
-    (output_dir / RUN_PLAN_FILENAME).write_text(json.dumps(plan, indent=2))
+    _write_json(output_dir / RUN_PLAN_FILENAME, plan, indent=2)
     return plan
 
 
@@ -1678,7 +1696,7 @@ def flag_run(
         "sweep": sweep_ts,
         "base_scores": {str(t): _finite_or_none(v) for t, v in base_scores.items()},
     }
-    (output_dir / FLAGS_FILENAME).write_text(json.dumps(flags, indent=2))
+    _write_json(output_dir / FLAGS_FILENAME, flags, indent=2)
     return result, flags
 
 
@@ -1727,10 +1745,11 @@ def finalize_run(
     def outcome_for(t: int, records: dict[int, dict] | None, records_dir: Path, ran: set):
         record = (records or {}).get(t)
         if record is None:
-            path = records_dir / f"{t}.json"
-            if t in ran or not path.exists():  # failed this call, or never ran
+            if t in ran:  # failed this call
                 return None
-            record = json.loads(path.read_text())
+            record = _read_record(records_dir / f"{t}.json")
+            if record is None:  # never ran (or unreadable)
+                return None
         return _load_pass(record, transform_type, fallback=result.transforms.get(t, seed))
 
     for t in flags["repair"]:
@@ -1784,8 +1803,8 @@ def finalize_run(
     # Before the report: this records which timepoints got a stand-in.
     transforms = transforms_for_file(result, time_indices, seed, settings.reference.frame)
     result.journal.save(output_dir / "run_journal.json")
-    (output_dir / "estimate_transform_report.json").write_text(
-        json.dumps(_report(result, time_indices), indent=2)
+    _write_json(
+        output_dir / "estimate_transform_report.json", _report(result, time_indices), indent=2
     )
     return result, time_indices, transforms
 
@@ -1836,7 +1855,7 @@ def run_timepoint_jobs(
             for t in time_indices:
                 path = timepoints_dir / f"{t}.json"
                 if not _finished(path):
-                    path.write_text(json.dumps(_failed_record(t, e)))
+                    _write_json(path, _failed_record(t, e))
                     failed.append(t)
                 records[t] = json.loads(path.read_text())
             return records, failed
@@ -1879,7 +1898,7 @@ def run_timepoint_jobs(
             click.echo(f"{step} t={t}: {_job_failure(e)}")
             if step == "estimate":
                 record_path.parent.mkdir(parents=True, exist_ok=True)
-                record_path.write_text(json.dumps(_failed_record(t, e)))
+                _write_json(record_path, _failed_record(t, e))
             failed.append(t)
             continue
         click.echo(f"{step} t={t}: score={records[t].get('score')}")
