@@ -838,7 +838,7 @@ class SegmentationModel(BaseModel):
         if self.z_slice_2D is None and not (
             self.eval_args.get("do_3D")
             or (stitch_threshold is not None and stitch_threshold > 0)
-        )
+        ):
             raise ValueError(
                 "A model without z_slice_2D segments in 3D: set eval_args.do_3D: true (or a "
                 "stitch_threshold), or set z_slice_2D for 2D segmentation."
