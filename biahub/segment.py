@@ -239,10 +239,13 @@ def segment(
     output_dirpath = Path(output_dirpath)
     slurm_out_path = output_dirpath.parent / "slurm_output"
 
-    if not init_only:
-        # Validating the settings imports cellpose.models (eval_args are checked against
-        # its signature), which fixes the weights directory. Stage first, so an in-process
-        # worker (--cluster debug) reads the checkpoint from node-local scratch, not NFS.
+    resolved_cluster = get_submitit_cluster(cluster=cluster)
+    if not init_only and resolved_cluster == "debug":
+        # An in-process worker (Nextflow) segments in this process, and validating the
+        # settings imports cellpose.models, which fixes the weights directory: stage first
+        # so the checkpoint is read from node-local scratch, not NFS. Never on a submitting
+        # node: the staged path would be exported to SLURM/local workers, which stage their
+        # own copy inside the job (segment_data).
         stage_cellpose_weights()
     settings = yaml_to_model(config_filepath, SegmentationSettings)
     if init_only:
@@ -254,10 +257,12 @@ def segment(
     )
 
     # Calibrated on a real 2D run (2026_04_28 SEC61B, 67 x 1664 x 1193, 6 input channels,
-    # cpsam_v2 on one GPU): ~5 s per frame (6 min per position) and 6.1 GB peak RSS with one
-    # busy CPU. RAM: the input timepoint (C volumes) plus cellpose buffers. Time: 0.2 min per
-    # 2D frame per model (~2x margin); 3D cellpose runs per plane in 3 orientations and has
-    # not been measured, so it keeps the earlier conservative 2.5 min per frame.
+    # cpsam_v2 on one GPU): ~5 s per frame (6-10 min per position, incl. weight staging) and
+    # 6.1 GB peak RSS with one busy CPU. Time: 0.2 min per 2D frame per model (~2x margin);
+    # 3D cellpose runs per plane in 3 orientations and has not been measured, so it keeps the
+    # earlier conservative 2.5 min per frame. CPUs and RAM (the input timepoint, C volumes,
+    # plus cellpose buffers, x up to 4 CPUs) deliberately keep a margin over the 2D run,
+    # which also covers the unmeasured 3D path (~20-30 GB for an A549 plate).
     is_2d = models[0].z_slice_2D is not None
     time_minutes, num_cpus, gb_ram_per_cpu = estimate_resources(
         shape=(T, len(models), Z, Y, X),
@@ -270,9 +275,8 @@ def segment(
     echo_resources(num_cpus, mem_gb, time_minutes)
 
     if init_only:
-        # --init runs once on the head node: fail on a bad model name here, not in every
-        # worker, and populate the shared weights cache once. Workers must not do this
-        # (importing cellpose would fix the weights directory before staging).
+        # --init runs once on the head node: populate the shared weights cache once, rather
+        # than N workers racing for it. Workers must not (staging needs cellpose unimported).
         for name in dict.fromkeys(m.pretrained_model for m in models):
             warm_cellpose_weights(name)
         click.echo(f"Initialized {output_dirpath} ({len(input_position_dirpaths)} positions)")
@@ -295,7 +299,6 @@ def segment(
     if sbatch_filepath:
         slurm_args.update(sbatch_to_submitit(sbatch_filepath))
 
-    resolved_cluster = get_submitit_cluster(cluster=cluster)
     click.echo(f"Preparing jobs on cluster='{resolved_cluster}': {slurm_args}")
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=resolved_cluster)
     executor.update_parameters(

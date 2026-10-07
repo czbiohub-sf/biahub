@@ -252,6 +252,32 @@ def test_segment_requests_less_time_for_2d_than_3d(fake_cellpose, example_plate,
     assert res["2d"]["time_minutes"] < res["3d"]["time_minutes"]
 
 
+def test_segment_slurm_head_does_not_stage_weights(
+    fake_cellpose, example_plate, segment_config, tmp_path, monkeypatch
+):
+    """Staging on the submitting node would export its CELLPOSE_LOCAL_MODELS_PATH to every
+    SLURM worker, which then skips its own staging. Only in-process workers stage early."""
+    staged = []
+    monkeypatch.setattr("biahub.segment.stage_cellpose_weights", lambda: staged.append(1))
+    monkeypatch.setattr("biahub.segment.submitit.AutoExecutor", _RecordingExecutor)
+    monkeypatch.delenv("CI", raising=False)
+    plate_path, _ = example_plate
+
+    result = _run(
+        "--cluster",
+        "slurm",
+        "-i",
+        plate_path / "A" / "1" / "0",
+        "-o",
+        tmp_path / "s.zarr",
+        "-c",
+        segment_config(),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert staged == []
+
+
 def test_segment_local_jobs_get_the_step_time_limit(
     fake_cellpose, example_plate, segment_config, tmp_path, monkeypatch
 ):
