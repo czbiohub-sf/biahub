@@ -71,6 +71,7 @@ from biahub.settings import (
     AffineTransformSettings,
     BeadsMatchSettings,
     EstimateTransformSettings,
+    FlagSettings,
 )
 from biahub.utils.cluster import estimate_resources, get_submitit_cluster
 from biahub.utils.config import model_to_yaml, yaml_to_model
@@ -165,13 +166,11 @@ class RunJournal:
         return cls.from_dict(json.loads(path.read_text()), run_id=run_id)
 
 
-HARD_FAIL_SCORE = 0.40
-
-
-FLAG_FLOOR_SCORE = 0.80
-
-
-FLAG_K_MAD = 2.0
+# The flagging defaults are FlagSettings' (what a config sets); one source for both.
+_FLAG_DEFAULTS = FlagSettings()
+HARD_FAIL_SCORE = _FLAG_DEFAULTS.hard_fail
+FLAG_FLOOR_SCORE = _FLAG_DEFAULTS.floor
+FLAG_K_MAD = _FLAG_DEFAULTS.k_mad
 
 
 def flag_timepoints(
@@ -716,9 +715,9 @@ def _record_into(result: SeriesResult, t: int, record: dict) -> Transform | None
 def flag_series(
     result: SeriesResult,
     max_timepoints: int | None = None,
-    k_mad: float = 2.0,
-    floor: float = 0.80,
-    hard_fail: float = 0.40,
+    k_mad: float = FLAG_K_MAD,
+    floor: float = FLAG_FLOOR_SCORE,
+    hard_fail: float = HARD_FAIL_SCORE,
 ) -> list[int]:
     """Flag attempted timepoints against the run's own score distribution.
 
