@@ -190,3 +190,63 @@ def test_segment_gives_local_jobs_a_gpu(
     assert result.exit_code == 0, result.output
     assert _RecordingExecutor.parameters["cluster"] == cluster
     assert _RecordingExecutor.parameters.get("gpus_per_node") == expected
+
+
+def test_segment_worker_stages_weights_before_cellpose_is_imported(
+    fake_cellpose, cpu_cellpose, example_plate, segment_config, tmp_path, monkeypatch
+):
+    """Validating eval_args imports cellpose.models, which fixes the weights directory;
+    staging after that is a no-op and every worker reads the checkpoint over NFS."""
+    import biahub.segment
+    import biahub.settings
+
+    calls = []
+    real_valid_args = biahub.settings.get_valid_eval_args
+    monkeypatch.setattr(
+        biahub.segment, "stage_cellpose_weights", lambda: calls.append("stage")
+    )
+    monkeypatch.setattr(
+        biahub.settings,
+        "get_valid_eval_args",
+        lambda: calls.append("import cellpose") or real_valid_args(),
+    )
+    plate_path, _ = example_plate
+    out, config = tmp_path / "seg.zarr", segment_config()
+    position = plate_path / "B" / "1" / "0"
+    assert _run("--init", "-i", position, "-o", out, "-c", config).exit_code == 0
+    calls.clear()
+
+    assert _run("--cluster", "debug", "-i", position, "-o", out, "-c", config).exit_code == 0
+
+    assert calls and calls[0] == "stage", calls
+
+
+def _resources(output):
+    line = next(ln for ln in output.splitlines() if ln.startswith("RESOURCES:"))
+    return json.loads(line.removeprefix("RESOURCES:"))
+
+
+def test_segment_requests_less_time_for_2d_than_3d(fake_cellpose, example_plate, tmp_path):
+    """Calibrated on a real 2D run (~5 s/frame, 6 GB); 3D keeps the conservative rate."""
+    plate_path, _ = example_plate
+    position = plate_path / "A" / "1" / "0"
+    res = {}
+    for kind, model in {
+        "2d": {"z_slice_2D": 1, "eval_args": {}},
+        "3d": {"eval_args": {"do_3D": True}},
+    }.items():
+        cfg = tmp_path / f"{kind}.yml"
+        cfg.write_text(
+            yaml.safe_dump(
+                {
+                    "models": {
+                        "nuc": {"pretrained_model": "cpsam_v2", "channels": ["GFP"], **model}
+                    }
+                }
+            )
+        )
+        result = _run("--init", "-i", position, "-o", tmp_path / f"{kind}.zarr", "-c", cfg)
+        assert result.exit_code == 0, result.output
+        res[kind] = _resources(result.output)
+    assert res["2d"]["cpus"] <= 4
+    assert res["2d"]["time_minutes"] < res["3d"]["time_minutes"]

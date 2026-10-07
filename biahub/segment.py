@@ -239,19 +239,28 @@ def segment(
     output_dirpath = Path(output_dirpath)
     slurm_out_path = output_dirpath.parent / "slurm_output"
 
+    if not init_only:
+        # Validating the settings imports cellpose.models (eval_args are checked against
+        # its signature), which fixes the weights directory. Stage first, so an in-process
+        # worker (--cluster debug) reads the checkpoint from node-local scratch, not NFS.
+        stage_cellpose_weights()
     settings = yaml_to_model(config_filepath, SegmentationSettings)
     (T, C, Z, Y, X), models = _init_output_plate(
         input_position_dirpaths, output_dirpath, settings
     )
 
-    # RAM: one input timepoint plus cellpose buffers (ram_multiplier=20, as before).
-    # Time: ~2.5 min per timepoint per model on the GPU, at least 80 min (as before).
+    # Calibrated on a real 2D run (2026_04_28 SEC61B, 67 x 1664 x 1193, 6 input channels,
+    # cpsam_v2 on one GPU): ~5 s per frame (6 min per position) and 6.1 GB peak RSS with one
+    # busy CPU. RAM: the input timepoint (C volumes) plus cellpose buffers. Time: 0.2 min per
+    # 2D frame per model (~2x margin); 3D cellpose runs per plane in 3 orientations and has
+    # not been measured, so it keeps the earlier conservative 2.5 min per frame.
+    is_2d = models[0].z_slice_2D is not None
     time_minutes, num_cpus, gb_ram_per_cpu = estimate_resources(
         shape=(T, len(models), Z, Y, X),
-        ram_multiplier=20,
-        time_multiplier=2.5,
-        max_num_cpus=8,
-        min_time_minutes=80,
+        ram_multiplier=C + 4,
+        time_multiplier=0.2 if is_2d else 2.5,
+        max_num_cpus=4,
+        min_time_minutes=30 if is_2d else 80,
     )
     mem_gb = num_cpus * gb_ram_per_cpu
     echo_resources(num_cpus, mem_gb, time_minutes)
