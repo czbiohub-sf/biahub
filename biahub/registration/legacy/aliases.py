@@ -50,21 +50,14 @@ def _warn(old: str, new: str) -> None:
 
 
 def _instead(command: str, *options) -> None:
-    """Print the new command that does what this alias is about to do."""
-
-    def paths(flag, values):
-        values = [str(v) for v in values]
-        if len(values) > 3:  # a plate's worth: the first ones, and how many
-            return [flag, *values[:2], f"... ({len(values)} positions)"]
-        return [flag, *values]
-
+    """Print the new command that does what this alias is about to do, ready to paste."""
     words = ["biahub", command]
     for option in options:
         if option is None:
             continue
         flag, value = option
         if isinstance(value, (list, tuple)):
-            words += paths(flag, value)
+            words += [flag, *(shlex.quote(str(v)) for v in value)]
         elif value is True:
             words.append(flag)
         else:

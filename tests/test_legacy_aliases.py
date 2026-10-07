@@ -331,3 +331,17 @@ def test_estimate_stabilization_alias_picks_positions_as_legacy_did(
     )
     assert result.exit_code == 0, result.output
     assert estimated_positions[0]["moving"] == [paths[i] for i in expected]
+
+
+def test_the_printed_command_is_copy_pasteable(capsys):
+    # Every path, quoted: a plate's worth of positions, one with a space in its name.
+    from biahub.registration.legacy.aliases import _instead
+
+    paths = [f"/data/my plate.zarr/A/1/{i}" for i in range(5)]
+    _instead(
+        "apply-transform", ("-m", paths), ("-c", "/cfg/t.yml"), ("--crop-to-overlap", True)
+    )
+    line = capsys.readouterr().err.split("instead, next time:")[1].strip()
+    words = shlex.split(line)
+    assert words[words.index("-m") + 1 : words.index("-c")] == paths
+    assert words[-1] == "--crop-to-overlap"
