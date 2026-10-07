@@ -671,3 +671,15 @@ def test_ants_reference_mask_is_centred_on_a_non_square_volume():
     centre_y = offset[1] + ref.shape[1] / 2
     centre_x = offset[2] + ref.shape[2] / 2
     assert abs(centre_y - 20) <= 1 and abs(centre_x - 50) <= 1
+
+
+@pytest.mark.parametrize("padding", [False, True])
+def test_classic_pcc_normalization_stays_finite_where_the_spectrum_is_zero(padding):
+    # A volume with zero-magnitude frequencies (here: constant) must not turn the
+    # correlation into NaNs, as the 'magnitude' normalization already guards against.
+    from biahub.registration.methods.pcc import phase_cross_corr, phase_cross_corr_padding
+
+    vol = np.full((8, 16, 16), 3.0, dtype=np.float32)
+    fn = phase_cross_corr_padding if padding else phase_cross_corr
+    shift, corr = fn(vol, vol, normalization="classic")
+    assert np.all(np.isfinite(corr)) and np.all(np.isfinite(np.asarray(shift, dtype=float)))
