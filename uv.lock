@@ -358,8 +358,8 @@ dev = [
 requires-dist = [
     { name = "antspyx", specifier = ">=0.6" },
     { name = "build", marker = "extra == 'build'" },
-    { name = "cellpose", marker = "extra == 'all'" },
-    { name = "cellpose", marker = "extra == 'segment'" },
+    { name = "cellpose", marker = "extra == 'all'", specifier = ">=4.0.1" },
+    { name = "cellpose", marker = "extra == 'segment'", specifier = ">=4.0.1" },
     { name = "click" },
     { name = "cytoland", marker = "extra == 'all'" },
     { name = "cytoland", marker = "extra == 'stain'" },

@@ -50,7 +50,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-segment = ["cellpose"]
+segment = ["cellpose>=4.0.1"]
 
 # Deliberately CPU-only. ultrack has an optional GPU path when cupy and cucim
 # are installed, but it offers no speedup in tracking in our use cases.
