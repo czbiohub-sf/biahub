@@ -125,6 +125,25 @@ def test_segment_slices_the_configured_plane(fake_cellpose):
     assert np.all(seen == 30)
 
 
+def test_mixing_2d_and_3d_models_is_refused(fake_cellpose):
+    from biahub.settings import SegmentationSettings
+
+    with pytest.raises(ValueError, match="2D and 3D"):
+        SegmentationSettings(
+            models={
+                "flat": {
+                    "path_to_model": "cpsam_v2",
+                    "eval_args": {"channels": ["GFP"]},
+                    "z_slice_2D": 1,
+                },
+                "volume": {
+                    "path_to_model": "cpsam_v2",
+                    "eval_args": {"channels": ["RFP"], "do_3D": True},
+                },
+            }
+        )
+
+
 def test_segment_cli_rejects_a_plane_outside_the_stack(fake_cellpose, example_plate, tmp_path):
     import yaml
 

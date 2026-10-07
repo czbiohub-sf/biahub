@@ -29,7 +29,9 @@ models:
       diameter: 60
       channels: ['nuc']
       cellprob_threshold: 0.0
-      do_3D: true
+      do_3D: false
       anisotropy: 3.26
       min_size: 8000
-    z_slice_2D: null  # Optional, if null, 3D segmentation is performed and checks eval_args.do_3D=True
+    # All models in one config must be either 2D (z_slice_2D set) or 3D (z_slice_2D: null with
+    # eval_args.do_3D: true), because they share one output array. Run 3D models separately.
+    z_slice_2D: 10

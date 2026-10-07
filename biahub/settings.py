@@ -836,3 +836,14 @@ class SegmentationSettings(BaseModel):
     # When None, preserve the OME-Zarr version of the input store.
     output_ome_zarr_version: Literal["0.4", "0.5"] | None = None
     model_config = {"extra": "forbid", "protected_namespaces": ()}
+
+    @model_validator(mode="after")
+    def check_models_share_z(self):
+        # All models write into one output array, so its Z size must suit every model.
+        flat = [name for name, m in self.models.items() if m.z_slice_2D is not None]
+        if flat and len(flat) != len(self.models):
+            raise ValueError(
+                f"Cannot mix 2D and 3D models in one config: {flat} set z_slice_2D, the "
+                "others do not. Segment them in separate runs."
+            )
+        return self
