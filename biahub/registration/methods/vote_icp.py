@@ -266,7 +266,9 @@ class VoteIcpEstimator:
                     precise_inverse, transform_type=best.transform_type
                 ).invert()
                 precise_score = self.score_fn(precise, mov, ref)
-                if np.isfinite(precise_score) and precise_score > best_score:
+                if np.isfinite(precise_score) and (
+                    not np.isfinite(best_score) or precise_score > best_score
+                ):
                     best = precise
         return best
 
