@@ -34,7 +34,9 @@ from sklearn.neighbors import NearestNeighbors, radius_neighbors_graph
 # Spectral affinity entries kept: candidate pairs whose distances agree within this many
 # sigmas (beyond it the Gaussian weight is < 1.5e-8, numerically irrelevant).
 SPECTRAL_CUTOFF_SIGMAS = 6.0
-# Largest sparse affinity the spectral matcher builds (~12 bytes per entry).
+# Largest sparse affinity the spectral matcher builds. Construction holds int64 rows and
+# columns and float64 values (24 bytes per entry), then the CSR copy, so the peak is about
+# twice that: ~10 GB at this cap (200 x 200 beads measured 3 GB).
 SPECTRAL_MAX_NONZEROS = 200_000_000
 
 
