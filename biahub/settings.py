@@ -14,7 +14,6 @@ from pydantic import (
     NonNegativeInt,
     PositiveFloat,
     PositiveInt,
-    ValidationInfo,
     field_validator,
     model_validator,
 )
@@ -797,41 +796,67 @@ class PreprocessingFunctions(BaseModel):
     kwargs: dict[str, Any] = {}
 
 
+# Arguments biahub sets itself when calling CellposeModel.eval.
+_BIAHUB_EVAL_ARGS = ("channels", "channel_axis", "z_axis")
+
+
 class SegmentationModel(BaseModel):
-    path_to_model: str
-    eval_args: dict[str, Any]
+    """One cellpose 4 model and how to apply it.
+
+    ``channels`` are dataset channel names (1-3, any order: cellpose 4 takes up to 3
+    channels). ``z_slice_2D`` selects the plane for 2D segmentation; without it the model
+    segments the Z stack, which needs ``eval_args.do_3D`` (or ``stitch_threshold``).
+    ``eval_args`` are the remaining ``CellposeModel.eval`` keyword arguments.
+    """
+
+    pretrained_model: str
+    channels: list[str] = Field(min_length=1)
+    eval_args: dict[str, Any] = {}
     z_slice_2D: NonNegativeInt | None = None
     preprocessing: list[PreprocessingFunctions] = []
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())
 
-    @field_validator("eval_args", mode="before")
+    @model_validator(mode="before")
+    @classmethod
+    def reject_old_keys(cls, data):
+        # The config schema changed once (cellpose 4): say exactly what to rename.
+        if isinstance(data, dict):
+            if "path_to_model" in data:
+                raise ValueError("path_to_model was renamed to pretrained_model.")
+            if "channels" in (data.get("eval_args") or {}):
+                raise ValueError(
+                    "eval_args.channels moved to the model's own `channels` field "
+                    "(dataset channel names)."
+                )
+        return data
+
+    @field_validator("channels")
+    @classmethod
+    def check_channel_count(cls, channels):
+        if len(channels) > 3:
+            raise ValueError(f"cellpose 4 uses at most 3 channels, got {channels}.")
+        return channels
+
+    @field_validator("eval_args")
     @classmethod
     def validate_eval_args(cls, value):
-        # Retrieve valid arguments dynamically if cellpose is required
+        for key in _BIAHUB_EVAL_ARGS:
+            if key in value:
+                raise ValueError(f"{key} is set by biahub; remove it from eval_args.")
         valid_args = get_valid_eval_args()
-
-        # Check that all keys in eval_args are valid arguments for cellpose_eval
-        invalid_args = [arg for arg in value.keys() if arg not in valid_args]
+        invalid_args = [arg for arg in value if arg not in valid_args]
         if invalid_args:
             raise ValueError(
                 f"Invalid eval arguments provided: {invalid_args}. Allowed arguments are {valid_args}"
             )
-
         return value
 
-    @field_validator("z_slice_2D")
-    @classmethod
-    def check_z_slice_with_do_3D(cls, z_slice_2D, info: ValidationInfo):
-        if z_slice_2D is not None:
-            eval_args = info.data.get("eval_args", {})
-            do_3D = eval_args.get("do_3D", None)
-            if do_3D:
-                raise ValueError(
-                    "If 'z_slice_2D' is provided, 'do_3D' in 'eval_args' must be set to False."
-                )
-        return z_slice_2D
-
     @model_validator(mode="after")
-    def check_3d_settings(self):
+    def check_2d_3d_settings(self):
+        if self.z_slice_2D is not None and self.eval_args.get("do_3D"):
+            raise ValueError(
+                "If 'z_slice_2D' is provided, 'do_3D' in 'eval_args' must be False."
+            )
         # A model without z_slice_2D segments the Z stack, which cellpose 4 only accepts
         # with do_3D or stitching (it raises "2D image processing selected, but z_axis...").
         stitch_threshold = self.eval_args.get("stitch_threshold")

@@ -62,18 +62,25 @@ def fake_cellpose(monkeypatch, tmp_path):
     return RecordingModel
 
 
-def _segment(czyx, **model_args):
-    from biahub.segment import segment_data
-    from biahub.settings import SegmentationModel
+def _segment(czyx, channels, **model):
+    """Run segment_data on ``czyx`` whose channels are named c0, c1, ..."""
+    from biahub.segment import resolve_models, segment_data
+    from biahub.settings import SegmentationSettings
 
-    segment_data(czyx, {"nuc": SegmentationModel(**model_args)}, gpu=False)
+    names = [f"c{i}" for i in range(czyx.shape[0])]
+    settings = SegmentationSettings(
+        models={"nuc": {"channels": [names[c] for c in channels], **model}}
+    )
+    models = resolve_models(settings, names, scale=(1,) * 5, z_size=czyx.shape[1])
+    return segment_data(czyx, models, gpu=False)
 
 
 def test_segment_uses_the_requested_model(fake_cellpose):
     _segment(
         np.zeros((1, 1, 8, 8), dtype=np.float32),
-        path_to_model="cpdino",
-        eval_args={"channels": [0], "diameter": None, "do_3D": False},
+        channels=[0],
+        pretrained_model="cpdino",
+        eval_args={"diameter": None, "do_3D": False},
         z_slice_2D=0,
     )
 
@@ -87,8 +94,9 @@ def test_segment_passes_only_the_configured_channel(fake_cellpose):
 
     _segment(
         czyx,
-        path_to_model="cpsam_v2",
-        eval_args={"channels": [2], "diameter": None, "do_3D": False},
+        channels=[2],
+        pretrained_model="cpsam_v2",
+        eval_args={"diameter": None, "do_3D": False},
         z_slice_2D=0,
     )
 
@@ -126,8 +134,9 @@ def test_segment_slices_the_configured_plane(fake_cellpose):
 
     _segment(
         czyx,
-        path_to_model="cpsam_v2",
-        eval_args={"channels": [0], "diameter": None, "do_3D": False},
+        channels=[0],
+        pretrained_model="cpsam_v2",
+        eval_args={"diameter": None, "do_3D": False},
         z_slice_2D=3,
     )
 
@@ -143,13 +152,14 @@ def test_mixing_2d_and_3d_models_is_refused(fake_cellpose):
         SegmentationSettings(
             models={
                 "flat": {
-                    "path_to_model": "cpsam_v2",
-                    "eval_args": {"channels": ["GFP"]},
+                    "pretrained_model": "cpsam_v2",
+                    "channels": ["GFP"],
                     "z_slice_2D": 1,
                 },
                 "volume": {
-                    "path_to_model": "cpsam_v2",
-                    "eval_args": {"channels": ["RFP"], "do_3D": True},
+                    "pretrained_model": "cpsam_v2",
+                    "channels": ["RFP"],
+                    "eval_args": {"do_3D": True},
                 },
             }
         )
@@ -169,8 +179,9 @@ def test_segment_cli_rejects_a_plane_outside_the_stack(fake_cellpose, example_pl
             {
                 "models": {
                     "nuc": {
-                        "path_to_model": "cpsam_v2",
-                        "eval_args": {"channels": ["GFP"], "do_3D": False},
+                        "pretrained_model": "cpsam_v2",
+                        "channels": ["GFP"],
+                        "eval_args": {"do_3D": False},
                         "z_slice_2D": 10,
                     }
                 }
@@ -201,7 +212,7 @@ def test_segment_cli_rejects_a_plane_outside_the_stack(fake_cellpose, example_pl
 def test_segment_3d_passes_the_z_stack(fake_cellpose):
     czyx = np.zeros((2, 5, 8, 8), dtype=np.float32)
 
-    _segment(czyx, path_to_model="cpsam_v2", eval_args={"channels": [0], "do_3D": True})
+    _segment(czyx, channels=[0], pretrained_model="cpsam_v2", eval_args={"do_3D": True})
 
     (seen,) = fake_cellpose.evaluated
     assert seen.shape == (1, 5, 8, 8)
@@ -212,4 +223,4 @@ def test_3d_model_without_do_3d_is_refused(fake_cellpose):
     from biahub.settings import SegmentationModel
 
     with pytest.raises(ValueError, match="do_3D"):
-        SegmentationModel(path_to_model="cpsam_v2", eval_args={"channels": ["GFP"]})
+        SegmentationModel(pretrained_model="cpsam_v2", channels=["GFP"])

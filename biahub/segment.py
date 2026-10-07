@@ -1,4 +1,7 @@
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import click
 import numpy as np
@@ -24,27 +27,79 @@ from biahub.utils.config import yaml_to_model
 from biahub.utils.ngff import get_output_paths, resolve_ome_zarr_version
 
 
+@dataclass(frozen=True)
+class ResolvedModel:
+    """A segmentation model resolved against one input plate (indices instead of names)."""
+
+    name: str
+    pretrained_model: str
+    channel_indices: list[int]
+    eval_args: dict[str, Any]
+    z_slice_2D: int | None
+    # (function, channel index, kwargs), applied in order
+    preprocessing: list[tuple[Callable, int, dict[str, Any]]] = field(default_factory=list)
+
+
+def resolve_models(
+    settings: SegmentationSettings,
+    channel_names: list[str],
+    scale: tuple[float, ...],
+    z_size: int,
+) -> list[ResolvedModel]:
+    """Resolve each configured model against the input plate, without touching ``settings``.
+
+    Channel names become dataset indices, 3D models get the dataset anisotropy unless the
+    config sets one, and ``z_slice_2D`` is checked against the stack. ``settings`` is left
+    exactly as written, so it can be recorded as provenance.
+    """
+
+    def index(name: str, what: str) -> int:
+        if name not in channel_names:
+            raise ValueError(
+                f"{what} channel {name!r} is not in the input channels {channel_names}."
+            )
+        return channel_names.index(name)
+
+    resolved = []
+    for name, model in settings.models.items():
+        if model.z_slice_2D is not None and model.z_slice_2D >= z_size:
+            raise ValueError(
+                f"Model {name}: z_slice_2D={model.z_slice_2D} is outside the input stack (Z={z_size})."
+            )
+        eval_args = dict(model.eval_args)
+        if model.z_slice_2D is None and eval_args.get("anisotropy") is None:
+            eval_args["anisotropy"] = scale[-3] / scale[-1]
+        resolved.append(
+            ResolvedModel(
+                name=name,
+                pretrained_model=model.pretrained_model,
+                channel_indices=[index(c, f"Model {name}:") for c in model.channels],
+                eval_args=eval_args,
+                z_slice_2D=model.z_slice_2D,
+                preprocessing=[
+                    (
+                        p.function,
+                        index(p.channel, f"Model {name} preprocessing:"),
+                        {
+                            k: tuple(v) if k == "out_range" and isinstance(v, list) else v
+                            for k, v in p.kwargs.items()
+                        },
+                    )
+                    for p in model.preprocessing
+                ],
+            )
+        )
+    return resolved
+
+
 def segment_data(
     czyx_data: np.ndarray,
-    segmentation_models: dict,
+    models: list[ResolvedModel],
     gpu: bool = True,
 ) -> np.ndarray:
-    """
-    Segment a CZYX image using a Cellpose segmentation model.
+    """Segment a CZYX image with each resolved cellpose model.
 
-    Parameters
-    ----------
-    czyx_data : np.ndarray
-        A CZYX image to segment
-    segmentation_models : dict
-        A dictionary of segmentation models to use
-    gpu : bool, optional
-        Whether to use a GPU for segmentation
-
-    Returns
-    -------
-    np.ndarray
-        A CZYX segmentation image
+    Returns an array of shape (n_models, Z or 1, Y, X).
     """
     # Every job this step submits asks SLURM for a GPU, so an unusable one is a
     # broken allocation, not a reason to fall back to a ~130x slower CPU run.
@@ -52,44 +107,29 @@ def segment_data(
     click.echo(f"Using device: {device}")
 
     czyx_segmentation = []
-    # Process each model in a loop
-    for model_name, model_args in segmentation_models.items():
-        click.echo(f"Segmenting with model {model_name}")
-        z_slice_2D = model_args.z_slice_2D
-        eval_args = dict(model_args.eval_args)
-        # cellpose 4 ignores `channels` and keeps the first 3 channels it is given, so
-        # pass only the configured ones (segment_cli turned the names into indices).
-        channel_indices = eval_args.pop("channels")
-        # Apply preprocessing functions
-        preprocessing_functions = model_args.preprocessing
-        for preproc in preprocessing_functions:
-            func = preproc.function
-            kwargs = preproc.kwargs
-            c_idx = preproc.channel
-
-            # Convert list to tuple for out_range if needed
-            if "out_range" in kwargs and isinstance(kwargs["out_range"], list):
-                kwargs["out_range"] = tuple(kwargs["out_range"])
-
+    for model in models:
+        click.echo(f"Segmenting with model {model.name}")
+        for func, c_idx, kwargs in model.preprocessing:
             click.echo(
                 f"Processing with {func.__name__} with kwargs {kwargs} to channel {c_idx}"
             )
             czyx_data[c_idx] = func(czyx_data[c_idx], **kwargs)
 
-        # Apply the segmentation. Cellpose 4 refuses a z axis for 2D processing, so a 2D
-        # model gets the (C, Y, X) plane and a 3D model the (C, Z, Y, X) stack.
-        model = load_cellpose_model(model_args.path_to_model, device)
-        if z_slice_2D is not None:
-            image, z_axis = czyx_data[channel_indices, z_slice_2D], None
+        # Cellpose 4 refuses a z axis for 2D processing, so a 2D model gets the (C, Y, X)
+        # plane and a 3D model the (C, Z, Y, X) stack. It also ignores `channels` and keeps
+        # the first 3 channels it is given, so pass only the configured ones.
+        cellpose_model = load_cellpose_model(model.pretrained_model, device)
+        if model.z_slice_2D is not None:
+            image, z_axis = czyx_data[model.channel_indices, model.z_slice_2D], None
         else:
-            image, z_axis = czyx_data[channel_indices], 1
-        segmentation, _, _ = model.eval(image, channel_axis=0, z_axis=z_axis, **eval_args)
-        if z_slice_2D is not None:
+            image, z_axis = czyx_data[model.channel_indices], 1
+        segmentation, _, _ = cellpose_model.eval(
+            image, channel_axis=0, z_axis=z_axis, **model.eval_args
+        )
+        if model.z_slice_2D is not None:
             segmentation = segmentation[np.newaxis, ...]
         czyx_segmentation.append(segmentation)
-    czyx_segmentation = np.stack(czyx_segmentation, axis=0)
-
-    return czyx_segmentation
+    return np.stack(czyx_segmentation, axis=0)
 
 
 @click.command("segment")
@@ -133,61 +173,11 @@ def segment_cli(
         scale = input_dataset.scale
         channel_names = input_dataset.channel_names
 
-    # Load the segmentation models with their respective configurations
-    # TODO: implement logic for 2D segmentation. Have a slicing parameter
-    segment_args = settings.models
-    C_segment = len(segment_args)
-    Z_out = Z
-    for model_name, model_args in segment_args.items():
-        if model_args.z_slice_2D is not None:
-            if model_args.z_slice_2D >= Z:
-                raise ValueError(
-                    f"Model {model_name}: z_slice_2D={model_args.z_slice_2D} is outside the "
-                    f"input stack (Z={Z})."
-                )
-            Z_out = 1
-        # Ensure channel names exist in the dataset
-        if not all(channel in channel_names for channel in model_args.eval_args["channels"]):
-            raise ValueError(
-                f"Channels {model_args.eval_args['channels']} not found in dataset {channel_names}"
-            )
-        # Channel names to dataset channel indices; segment_data slices these out, as
-        # cellpose 4 takes up to 3 channels in any order and has no `channels` argument.
-        channel_count = len(model_args.eval_args["channels"])
-        if not 1 <= channel_count <= 3:
-            raise ValueError(
-                f"Model {model_name}: cellpose 4 requires 1 to 3 channels, "
-                f"got {model_args.eval_args['channels']}"
-            )
-        model_args.eval_args["channels"] = [
-            channel_names.index(channel) for channel in model_args.eval_args["channels"]
-        ]
-
-        click.echo(
-            f"Segmenting with model {model_name} using channels {model_args.eval_args['channels']}"
-        )
-        if (
-            "anisotropy" not in model_args.eval_args
-            or model_args.eval_args["anisotropy"] is None
-        ):
-            # Using dataset anisotropy
-            model_args.eval_args["anisotropy"] = scale[-3] / scale[-1]
-            click.echo(
-                f"Using anisotropy from scale metadata: {model_args.eval_args['anisotropy']}"
-            )
-        else:
-            click.echo(
-                f"Using anisotropy from the config: {model_args.eval_args['anisotropy']}"
-            )
-
-        # Check if preprocessing functions exist and replace channel name with channel index
-        if model_args.preprocessing is not None:
-            for preproc in model_args.preprocessing:
-                # Replace the channel name with the channel index
-                if preproc.channel is not None:
-                    preproc.channel = channel_names.index(preproc.channel)
-                else:
-                    raise ValueError("Channel must be specified for preprocessing functions")
+    models = resolve_models(settings, channel_names, scale, Z)
+    for m in models:
+        click.echo(f"Segmenting with model {m.name} using channels {m.channel_indices}")
+    C_segment = len(models)
+    Z_out = 1 if models[0].z_slice_2D is not None else Z
 
     segmentation_shape = (T, C_segment, Z_out, Y, X)
 
@@ -195,7 +185,7 @@ def segment_cli(
     create_empty_plate(
         store_path=output_dirpath,
         position_keys=[path.parts[-3:] for path in input_position_dirpaths],
-        channel_names=[model_name + "_labels" for model_name in segment_args.keys()],
+        channel_names=[m.name + "_labels" for m in models],
         shape=segmentation_shape,
         chunks=None,
         scale=scale,
@@ -246,7 +236,7 @@ def segment_cli(
                     input_channel_indices=[list(range(C))],
                     output_channel_indices=[list(range(C_segment))],
                     num_workers=np.min([20, int(num_cpus * 0.8)]),
-                    segmentation_models=segment_args,
+                    models=models,
                 )
             )
 
