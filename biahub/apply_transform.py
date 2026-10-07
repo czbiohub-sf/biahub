@@ -420,8 +420,11 @@ def apply_transform(
     # margin); an sbatch file's time overrides it. Memory: one worker per CPU, each
     # holding a volume, its output and the resampling buffers -- measured ~5.2 GB for a
     # 1 GB volume on 2024_11_07, so 8x; at most 32 workers (64 x 8 GB fits few nodes).
+    # The larger of the two grids: each worker holds a moving volume and an output volume
+    # on the reference grid.
+    volume_shape = max(tuple(moving_shape), tuple(reference_shape), key=np.prod)
     time_minutes, num_cpus, gb_ram = estimate_resources(
-        shape=(len(time_indices), len(output_channel_names), *moving_shape),
+        shape=(len(time_indices), len(output_channel_names), *volume_shape),
         ram_multiplier=8,
         time_multiplier=0.5,
         max_num_cpus=32,

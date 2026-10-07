@@ -831,3 +831,41 @@ def test_apply_transform_sizes_workers_for_the_measured_memory(
     monkeypatch.setattr(module, "estimate_resources", recording)
     apply_transform(positions[:1], config, tmp_path / "out.zarr", init_only=True)
     assert calls[-1]["ram_multiplier"] == 8 and calls[-1]["max_num_cpus"] == 32
+
+
+def test_apply_transform_sizes_memory_from_the_larger_grid(
+    structured_plate, tmp_path, monkeypatch
+):
+    # Each worker holds the moving volume and an output volume on the reference grid.
+    import biahub.apply_transform as module
+
+    position, data = structured_plate  # moving: (16, 32, 32)
+    reference = tmp_path / "big.zarr"
+    with open_ome_zarr(reference, layout="hcs", mode="w", channel_names=["Phase3D"]) as plate:
+        plate.create_position("A", "1", "0")["0"] = np.zeros((3, 1, 16, 64, 64), np.float32)
+    config = tmp_path / "transforms.yml"
+    model_to_yaml(
+        TransformSettings(
+            direction="forward",
+            moving_channels=["GFP"],
+            reference_channel="Phase3D",
+            transforms=[TransformEntry(matrix=_translation(0, 0, 0))],
+        ),
+        config,
+    )
+    shapes = []
+    real = module.estimate_resources
+
+    def recording(shape, **kwargs):
+        shapes.append(tuple(shape))
+        return real(shape, **kwargs)
+
+    monkeypatch.setattr(module, "estimate_resources", recording)
+    apply_transform(
+        [position],
+        config,
+        tmp_path / "out.zarr",
+        [reference / "A" / "1" / "0"],
+        init_only=True,
+    )
+    assert shapes[-1][-3:] == (16, 64, 64)
