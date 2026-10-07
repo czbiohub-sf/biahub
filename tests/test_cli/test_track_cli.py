@@ -549,3 +549,49 @@ def test_track_init_rejects_an_unknown_cellpose_model(
 
     assert result.exit_code != 0
     assert "Unknown cellpose model 'nuclei'" in str(result.exception) + result.output
+
+
+def test_track_gives_local_jobs_a_gpu(tmp_path, example_tracking_plate, monkeypatch):
+    """Same as segment: submitit's local executor hides GPUs without gpus_per_node."""
+    import contextlib
+
+    recorded = {}
+
+    class Executor:
+        def __init__(self, folder, cluster):
+            recorded["cluster"] = cluster
+
+        def update_parameters(self, **kwargs):
+            recorded.update(kwargs)
+
+        def batch(self):
+            return contextlib.nullcontext()
+
+        def submit(self, *args, **kwargs):
+            return types.SimpleNamespace(job_id="0", wait=lambda: None)
+
+    import types
+
+    monkeypatch.setattr("biahub.track.submitit.AutoExecutor", Executor)
+    monkeypatch.delenv("CI", raising=False)
+    plate_path, _ = example_tracking_plate
+    config_path = _make_tracking_config(plate_path, tmp_path)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "track",
+            "--cluster",
+            "local",
+            "-i",
+            str(plate_path / "A" / "1" / "0"),
+            "-o",
+            str(tmp_path / "out.zarr"),
+            "-c",
+            str(config_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert recorded["cluster"] == "local"
+    assert recorded.get("gpus_per_node") == 1

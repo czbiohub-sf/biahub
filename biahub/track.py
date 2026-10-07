@@ -40,7 +40,12 @@ from biahub.utils.cellpose import (
     stage_cellpose_weights,
     warm_cellpose_weights,
 )
-from biahub.utils.cluster import echo_resources, estimate_resources, get_submitit_cluster
+from biahub.utils.cluster import (
+    echo_resources,
+    estimate_resources,
+    get_submitit_cluster,
+    gpu_executor_parameters,
+)
 from biahub.utils.config import update_model, yaml_to_model
 from biahub.utils.ngff import PROVENANCE_METADATA_KEYS, resolve_ome_zarr_version
 
@@ -1090,7 +1095,7 @@ def track(
     resolved_cluster = get_submitit_cluster(cluster=cluster)
     click.echo(f"Preparing jobs on cluster='{resolved_cluster}': {slurm_args}")
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=resolved_cluster)
-    executor.update_parameters(**slurm_args)
+    executor.update_parameters(**slurm_args, **gpu_executor_parameters(resolved_cluster))
 
     click.echo("Submitting jobs...")
     jobs = []

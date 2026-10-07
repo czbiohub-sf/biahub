@@ -43,6 +43,17 @@ def echo_resources(num_cpus: int, mem_gb: int, time_minutes: int) -> None:
     click.echo("RESOURCES:" + json.dumps(payload))
 
 
+def gpu_executor_parameters(cluster: str) -> dict:
+    """Extra submitit parameters that give a GPU step's jobs a GPU on ``cluster``.
+
+    SLURM jobs get theirs from ``slurm_gpus_per_node``/gres, and ``debug`` runs in-process
+    with the caller's GPU. submitit's local executor, however, sets
+    ``CUDA_VISIBLE_DEVICES`` only from the generic ``gpus_per_node`` and otherwise hides
+    every GPU, so ``cellpose_device`` refuses to run.
+    """
+    return {"gpus_per_node": 1} if cluster == "local" else {}
+
+
 def get_submitit_cluster(
     local: bool = False,
     cluster: str | None = None,

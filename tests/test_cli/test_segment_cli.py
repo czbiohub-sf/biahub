@@ -137,3 +137,56 @@ def test_segment_legacy_local_flag_is_gone(example_plate, segment_config, tmp_pa
     )
     assert result.exit_code == 2
     assert "No such option '--local'" in result.output
+
+
+class _RecordingExecutor:
+    """Stand-in for submitit.AutoExecutor that records parameters and runs nothing."""
+
+    parameters: dict = {}
+
+    def __init__(self, folder, cluster):
+        _RecordingExecutor.parameters = {"cluster": cluster}
+
+    def update_parameters(self, **kwargs):
+        _RecordingExecutor.parameters.update(kwargs)
+
+    def batch(self):
+        import contextlib
+
+        return contextlib.nullcontext()
+
+    def submit(self, *args, **kwargs):
+        class Job:
+            job_id = "0"
+
+            def wait(self):
+                pass
+
+        return Job()
+
+
+@pytest.mark.parametrize("cluster, expected", [("local", 1), ("slurm", None), ("debug", None)])
+def test_segment_gives_local_jobs_a_gpu(
+    fake_cellpose, example_plate, segment_config, tmp_path, monkeypatch, cluster, expected
+):
+    """submitit's local executor only exposes GPUs through gpus_per_node; without it the
+    local subprocess runs with CUDA_VISIBLE_DEVICES='' and cellpose_device refuses."""
+    monkeypatch.setattr("biahub.segment.submitit.AutoExecutor", _RecordingExecutor)
+    monkeypatch.delenv("CI", raising=False)  # CI forces cluster=debug
+    plate_path, _ = example_plate
+    out = tmp_path / "seg.zarr"
+
+    result = _run(
+        "--cluster",
+        cluster,
+        "-i",
+        plate_path / "A" / "1" / "0",
+        "-o",
+        out,
+        "-c",
+        segment_config(),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert _RecordingExecutor.parameters["cluster"] == cluster
+    assert _RecordingExecutor.parameters.get("gpus_per_node") == expected
