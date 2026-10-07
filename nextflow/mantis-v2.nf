@@ -452,7 +452,11 @@ workflow {
             .collect { zarr -> new File(zarr).parent }
         def assemble_dir = new File(assemble_output).parent
         cleanup_paths << "${assemble_dir}/slurm_output" << "${assemble_dir}/.iohub-progress"
-        if (segment_on) cleanup_paths << "${new File(segment_output).parent}/slurm_output"
+        if (segment_on) {
+            // segment workers run with --resume, so iohub leaves progress markers too
+            def segment_dir = new File(segment_output).parent
+            cleanup_paths << "${segment_dir}/slurm_output" << "${segment_dir}/.iohub-progress"
+        }
         if (track_on) cleanup_paths << "${new File(track_output).parent}/slurm_output"
         def cleanup_list = cleanup_targets(cleanup_paths, out)
         cleanup_record = "${out}/nextflow/intermediates_cleaned.txt"

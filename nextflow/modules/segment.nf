@@ -44,6 +44,11 @@ process run_segment {
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time { retry_time(meta.time_minutes, task) }
+    // Like track: retry once on ANY failure. A transient CUDA init error exits 1, which
+    // the pipeline-wide rule (exit codes 130-145) would not retry; --resume makes the
+    // retry continue from the timepoints already written.
+    maxRetries 1
+    errorStrategy 'retry'
 
     input:
     tuple val(position), val(meta)
