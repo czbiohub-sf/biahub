@@ -47,7 +47,7 @@ from biahub.registration.utils import (
 from biahub.settings import TransformSettings, load_transform_settings
 from biahub.utils.array_ops import copy_n_paste_czyx
 from biahub.utils.cluster import echo_resources, estimate_resources, get_submitit_cluster
-from biahub.utils.ngff import resolve_ome_zarr_version
+from biahub.utils.ngff import PROVENANCE_METADATA_KEYS, resolve_ome_zarr_version
 
 Slices = tuple[slice, slice, slice]
 
@@ -379,16 +379,41 @@ def apply_transform(
 
     output_shape = (len(time_indices), len(output_channel_names)) + cropped_shape
     _check_existing_output(output_dirpath, position_keys, output_shape, output_channel_names)
-    create_empty_plate(
-        store_path=output_dirpath,
-        position_keys=[p.parts[-3:] for p in moving_position_dirpaths],
-        shape=(len(time_indices), len(output_channel_names)) + cropped_shape,
-        chunks=None,
-        scale=(1, 1) + tuple(output_voxel_size),
-        channel_names=output_channel_names,
-        dtype=np.float32,
-        version=resolve_ome_zarr_version(moving_position_dirpaths[0], output_ome_zarr_version),
-    )
+    # What this step did, as every step records it (deskew: its settings): the options and
+    # the transforms file it read (path and hash, not the matrices), plus each position's
+    # timepoints written with a transform that is not accepted. With the upstream steps'
+    # provenance from the moving plate. One position per call: each gets its own list.
+    record = {
+        "transforms_file": str(Path(config_filepath).resolve()),
+        "transforms_sha256": hashlib.sha256(Path(config_filepath).read_bytes()).hexdigest(),
+        "time_indices": time_indices,
+        "keep_overhang": keep_overhang,
+        "interpolation": interpolation,
+        "channels_transformed": transformed,
+        "channels_copied": copied,
+    }
+    version = resolve_ome_zarr_version(moving_position_dirpaths[0], output_ome_zarr_version)
+    for key, moving_path in zip(position_keys, moving_position_dirpaths, strict=True):
+        create_empty_plate(
+            store_path=output_dirpath,
+            position_keys=[moving_path.parts[-3:]],
+            shape=(len(time_indices), len(output_channel_names)) + cropped_shape,
+            chunks=None,
+            scale=(1, 1) + tuple(output_voxel_size),
+            channel_names=output_channel_names,
+            dtype=np.float32,
+            version=version,
+            # both arms' upstream steps (e.g. biahub-deskew and the reconstruction's)
+            metadata_sources=[Path(moving_path).parents[2]]
+            + ([Path(reference_for[key]).parents[2]] if reference_position_dirpaths else []),
+            metadata_keys=PROVENANCE_METADATA_KEYS,
+            extra_metadata={
+                "biahub-apply-transform": {
+                    **record,
+                    "timepoints_not_accepted": not_accepted.get(key, {}),
+                }
+            },
+        )
 
     # Wall time scales with the volumes one position writes (0.5 min each, deskew's
     # margin); an sbatch file's time overrides it.
@@ -418,14 +443,6 @@ def apply_transform(
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=resolved_cluster)
     executor.update_parameters(**slurm_args)
 
-    run_metadata = {
-        "biahub-apply-transform": {
-            "transforms": settings.model_dump(),
-            "time_indices": time_indices,
-            "keep_overhang": keep_overhang,
-            "interpolation": interpolation,
-        }
-    }
     output_time_indices = list(range(len(time_indices)))
     # The units a resumed attempt may skip must come from this same apply.
     resume_token = hashlib.sha256(
@@ -444,12 +461,6 @@ def apply_transform(
     with submitit.helpers.clean_env(), executor.batch():
         for key, moving_path in zip(position_keys, moving_position_dirpaths, strict=True):
             output_position_path = output_dirpath / Path(*moving_path.parts[-3:])
-            extra_metadata = {
-                "biahub-apply-transform": {
-                    **run_metadata["biahub-apply-transform"],
-                    "timepoints_not_accepted": not_accepted.get(key, {}),
-                }
-            }
             # Jobs look a matrix up by input timepoint: a T-long list, filled for the selected t.
             matrices_for_jobs = [None] * T
             for t, matrix in inverses[key].items():
@@ -470,7 +481,6 @@ def apply_transform(
                         output_shape_zyx=reference_shape,
                         crop_output_slicing=list(crop),
                         interpolation=interpolation,
-                        extra_metadata=extra_metadata,
                         resume=resume,
                         resume_token=resume_token,
                     )

@@ -745,3 +745,39 @@ def test_applying_into_an_output_of_another_shape_says_so(
         )
     # the same apply again is fine (a retry)
     apply_transform(positions, config, output, resume=True, cluster="debug")
+
+
+def test_apply_transform_records_what_it_did_like_the_other_steps(structured_plate, tmp_path):
+    # As deskew does: its own options (and a pointer to the transforms file, not the
+    # matrices) plus the upstream steps' provenance from the input plate.
+    import hashlib
+    import json
+
+    position, data = structured_plate
+    with open_ome_zarr(position, mode="r+") as source:
+        source.zattrs["biahub-deskew"] = {"ls_angle_deg": 30.0}
+    config = tmp_path / "transforms.yml"
+    model_to_yaml(
+        TransformSettings(
+            direction="forward",
+            moving_channels=["GFP"],
+            transforms=[
+                TransformEntry(t=t, matrix=_translation(0, t, 0), status=s)
+                for t, s in ((0, "accepted"), (1, "unreliable"), (2, "accepted"))
+            ],
+        ),
+        config,
+    )
+    output = tmp_path / "out.zarr"
+    apply_transform([position], config, output, cluster="debug")
+
+    with open_ome_zarr(output / "A" / "1" / "0", mode="r") as out:
+        record = dict(out.zattrs["biahub-apply-transform"])
+        inherited = dict(out.zattrs.get("biahub-deskew", {}))
+    assert "transforms" not in record  # no matrices in the metadata
+    assert record["transforms_file"] == str(config.resolve())
+    assert record["transforms_sha256"] == hashlib.sha256(config.read_bytes()).hexdigest()
+    assert record["time_indices"] == [0, 1, 2] and record["keep_overhang"] is True
+    assert record["timepoints_not_accepted"] == {"unreliable": [1]}
+    assert len(json.dumps(record)) < 2000
+    assert inherited == {"ls_angle_deg": 30.0}
