@@ -103,7 +103,12 @@ process run_virtual_stain_preprocess {
 
 process run_virtual_stain {
     tag "${position}"
-    label 'gpu'
+    // Preemptable: `--resume` (below) makes a reclaimed task cost at most the
+    // timepoint it was predicting. See the slurm profile in nextflow.config.
+    label 'gpu_preempted'
+    // Any GPU node of `preempted`, including the single-A40 workstations
+    // (48 GB, the same GA102 as the A6000s A549 and dynatrack prediction already
+    // ran on). Add `--constraint=gpu` to stay on the `gpu` partition's nodes.
     clusterOptions { "--gres=gpu:1 " + slurm_logs('virtual_stain') }
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
