@@ -213,3 +213,22 @@ def test_chained_estimator_keeps_an_earlier_scored_stage_when_a_later_stage_fail
         [_Fixed(first), _Fixed(None, fail=True)], score_fn=lambda t, m, r: 1.0
     )
     assert chain.estimate(np.zeros((2, 2, 2)), np.zeros((2, 2, 2))) is first
+
+
+def test_vote_icp_keeps_a_finite_precise_score_over_a_nan_coarse_one():
+    # A coarse result the score cannot measure (NaN) must give way to a refinement it can:
+    # every comparison with NaN is false, so a plain '>' kept the coarse one.
+    rng = np.random.default_rng(11)
+    shape = (40, 60, 60)
+    ref = _synthetic_bead_volume(rng, shape)
+    mov = ndi_shift(ref, shift=(8, -12, 16), order=1, mode="constant", cval=0.0)
+    settings = _beads_settings()
+    scored = []
+
+    def score(transform, mov, ref):
+        scored.append(transform)
+        return float("nan") if len(scored) == 1 else 0.5  # the coarse stage scores NaN
+
+    result = VoteIcpEstimator.from_beads_settings(settings, score_fn=score).estimate(mov, ref)
+    assert len(scored) == 2  # the precise stage ran
+    np.testing.assert_array_equal(result.matrix, scored[1].matrix)

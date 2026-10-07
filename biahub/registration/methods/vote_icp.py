@@ -266,6 +266,7 @@ class VoteIcpEstimator:
                     precise_inverse, transform_type=best.transform_type
                 ).invert()
                 precise_score = self.score_fn(precise, mov, ref)
+                # a finite refinement beats a NaN coarse score (a NaN compares false)
                 if np.isfinite(precise_score) and (
                     not np.isfinite(best_score) or precise_score > best_score
                 ):
