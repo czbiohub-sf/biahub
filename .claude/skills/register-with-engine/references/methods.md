@@ -39,8 +39,10 @@ transform often scores 0.1-0.3, so many timepoints come out `unreliable`: read t
 "check", not as "wrong".
 
 ANTs runs with a fixed random seed and as many ITK threads as the task has CPUs
-(`ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS` overrides): one thread repeats exactly, several to
-~0.01 voxel, so two ants runs agree to that, not bit for bit.
+(`ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS` overrides). One thread repeats exactly; with
+several, runs agree to ~0.01 voxel at the same thread count and to ~0.1 voxel across
+different thread counts. For exact repeats (e.g. comparing two runs), set
+`ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS=1`.
 
 The bead-overlap score counts beads within `qc_settings.score_centroid_mask_radius` (6 voxels)
 and quantizes at ~1/N beads: it cannot see misregistration below that radius, and score

@@ -15,7 +15,6 @@ from iohub import open_ome_zarr
 from scipy.ndimage import shift as ndi_shift
 
 from biahub.apply_transform import apply_transform
-from biahub.estimate_transform import estimate_transform
 from biahub.settings import (
     AntsRegistrationSettings,
     ChannelSettings,
@@ -41,17 +40,17 @@ NEXTFLOW_DIR = REPO / "nextflow"
 pytestmark = pytest.mark.skipif(shutil.which("nextflow") is None, reason="needs nextflow")
 
 
-def _env():
+def _env(**extra):
     """This checkout's biahub on the tasks' PATH, whichever checkout the venv installed."""
-    env = dict(os.environ)
+    env = dict(os.environ, **extra)
     env["PATH"] = f"{Path(sys.executable).parent}{os.pathsep}{env['PATH']}"
     env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(REPO), env.get("PYTHONPATH")]))
     env.pop("CLAUDECODE", None)  # Nextflow's agent mode changes its output
     return env
 
 
-def _nextflow(tmp_path, *params):
-    env = _env()
+def _nextflow(tmp_path, *params, env=None):
+    env = env or _env()
     result = subprocess.run(
         ["nextflow", "run", str(NEXTFLOW_DIR / "registration.nf")]
         + ["-c", str(NEXTFLOW_DIR / "nextflow.config"), "-work-dir", str(tmp_path / "work")]
@@ -156,27 +155,32 @@ def test_registration_nf_runs_every_method_as_the_cli_does(tmp_path, case):
     config = make_config(tmp_path)
     reference = [plate] if cross else None
     out = tmp_path / "run"
+    # One ITK thread on both sides: ANTs repeats exactly then, while different thread
+    # counts (the task's CPUs vs this node's) differ by up to ~0.1 voxel.
+    env = _env(ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS="1")
 
     _nextflow(
         tmp_path,
         "--moving", store, *(["--reference", store] if cross else []),
         "--estimate_config", config, "--estimate_positions", "A/1/0",
         "--apply", "--output", out,
+        env=env,
     )  # fmt: skip
 
+    # The plain CLI in a fresh process, so the thread count is set before ITK starts.
     cli = tmp_path / "cli" / "transforms.yml"
-    estimate_transform(
-        [plate], config, cli, reference_position_dirpaths=reference, cluster="debug"
+    ref_args = ["-r", str(plate)] if cross else []
+    result = subprocess.run(
+        [sys.executable, "-m", "biahub.cli.main", "estimate-transform", "--cluster", "debug"]
+        + ["-m", str(plate), *ref_args, "-c", str(config), "-o", str(cli)],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
     )
+    assert result.returncode == 0, result.stdout[-3000:] + result.stderr[-3000:]
     nf_model = load_transform_settings(out / "transforms.yml")
     cli_model = load_transform_settings(cli)
-    if case.startswith("ants"):
-        # Multithreaded ANTs repeats to ~0.01 voxel, not bit for bit (the Nextflow task
-        # and this process may run different thread counts).
-        for nf_entry, cli_entry in zip(nf_model.transforms, cli_model.transforms, strict=True):
-            np.testing.assert_allclose(nf_entry.matrix, cli_entry.matrix, atol=0.05)
-            assert nf_entry.status == cli_entry.status
-        return
     assert nf_model == cli_model
     assert _report(out / "transforms") == _report(cli.with_suffix(""))
 
