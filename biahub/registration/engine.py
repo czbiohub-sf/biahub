@@ -22,6 +22,7 @@ import uuid
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import NamedTuple
 
 import click
 import numpy as np
@@ -1029,6 +1030,33 @@ def _bead_metrics(settings, result, t, mov, ref) -> dict | None:
     return None if metrics is None else metrics.to_dict()
 
 
+class _JobInputs(NamedTuple):
+    settings: EstimateTransformSettings
+    mov: object
+    ref: object
+    mov_voxel_size: tuple
+    ref_voxel_size: tuple
+    estimator: TransformEstimator
+    score_fn: ScoreFn
+    seed: Transform
+
+
+def _job_inputs(
+    moving_position_dirpath: Path, reference_position_dirpath: Path, settings_path: Path
+) -> _JobInputs:
+    """Return what every job starts from: the run's settings, both series, estimator, seed."""
+    use_task_threads()  # a fresh job process: before any ITK operation
+    settings = yaml_to_model(settings_path, EstimateTransformSettings)
+    mov, mov_voxel_size = _open_series(moving_position_dirpath, settings.moving.channel)
+    ref, ref_voxel_size = _open_series(reference_position_dirpath, settings.reference_channel)
+    estimator, score_fn, seed = build_estimator(
+        settings, tuple(mov.shape[-3:]), mov_voxel_size, ref_voxel_size
+    )
+    return _JobInputs(
+        settings, mov, ref, mov_voxel_size, ref_voxel_size, estimator, score_fn, seed
+    )
+
+
 def _estimate_timepoint_job(
     moving_position_dirpath: Path,
     reference_position_dirpath: Path,
@@ -1037,13 +1065,9 @@ def _estimate_timepoint_job(
     record_path: Path,
 ) -> dict:
     """One independent estimate, from the config seed, written as a JSON record."""
-    use_task_threads()  # a fresh job process: before any ITK operation
-    settings = yaml_to_model(settings_path, EstimateTransformSettings)
-    mov, mov_voxel_size = _open_series(moving_position_dirpath, settings.moving.channel)
-    ref, ref_voxel_size = _open_series(reference_position_dirpath, settings.reference_channel)
-    estimator, score_fn, seed = build_estimator(
-        settings, tuple(mov.shape[-3:]), mov_voxel_size, ref_voxel_size
-    )
+    job = _job_inputs(moving_position_dirpath, reference_position_dirpath, settings_path)
+    settings, mov, ref = job.settings, job.mov, job.ref
+    estimator, score_fn, seed = job.estimator, job.score_fn, job.seed
 
     result = estimate_series(
         mov, _reference_policy(settings, ref), estimator, FixedSeed(seed), score_fn, [t]
@@ -1074,13 +1098,9 @@ def _estimate_propagated_job(
     Each record is written as soon as its timepoint is done, so an interrupted job
     resumes the chain where it stopped.
     """
-    use_task_threads()  # a fresh job process: before any ITK operation
-    settings = yaml_to_model(settings_path, EstimateTransformSettings)
-    mov, mov_voxel_size = _open_series(moving_position_dirpath, settings.moving.channel)
-    ref, ref_voxel_size = _open_series(reference_position_dirpath, settings.reference_channel)
-    estimator, score_fn, seed = build_estimator(
-        settings, tuple(mov.shape[-3:]), mov_voxel_size, ref_voxel_size
-    )
+    job = _job_inputs(moving_position_dirpath, reference_position_dirpath, settings_path)
+    settings, mov, ref = job.settings, job.mov, job.ref
+    estimator, score_fn, seed = job.estimator, job.score_fn, job.seed
     done = {}
     if resume:
         for t in time_indices:
@@ -1222,13 +1242,9 @@ def _repair_timepoint_job(
     record_path: Path,
 ) -> dict:
     """Repair one flagged timepoint against the frozen whole-run history."""
-    use_task_threads()  # a fresh job process: before any ITK operation
-    settings = yaml_to_model(settings_path, EstimateTransformSettings)
-    mov, mov_voxel_size = _open_series(moving_position_dirpath, settings.moving.channel)
-    ref, ref_voxel_size = _open_series(reference_position_dirpath, settings.reference_channel)
-    estimator, score_fn, seed = build_estimator(
-        settings, tuple(mov.shape[-3:]), mov_voxel_size, ref_voxel_size
-    )
+    job = _job_inputs(moving_position_dirpath, reference_position_dirpath, settings_path)
+    settings, mov, ref = job.settings, job.mov, job.ref
+    estimator, score_fn, seed = job.estimator, job.score_fn, job.seed
     repair_settings = settings.fallback.repair
 
     # This run's estimate records (the driver cleared any earlier run's).
@@ -1276,16 +1292,13 @@ def _sweep_timepoint_job(
     record_path: Path,
 ) -> dict:
     """Sweep one flagged timepoint against its own pre-fallback estimate."""
-    use_task_threads()  # a fresh job process: before any ITK operation
-    settings = yaml_to_model(settings_path, EstimateTransformSettings)
-    mov, mov_voxel_size = _open_series(moving_position_dirpath, settings.moving.channel)
-    ref, ref_voxel_size = _open_series(reference_position_dirpath, settings.reference_channel)
-    shape_zyx = tuple(mov.shape[-3:])
-    _estimator, score_fn, seed = build_estimator(
-        settings, shape_zyx, mov_voxel_size, ref_voxel_size
-    )
+    job = _job_inputs(moving_position_dirpath, reference_position_dirpath, settings_path)
+    settings, mov, ref = job.settings, job.mov, job.ref
+    score_fn, seed = job.score_fn, job.seed
     trials = {
-        name: build_estimator(trial, shape_zyx, mov_voxel_size, ref_voxel_size)[0]
+        name: build_estimator(
+            trial, tuple(mov.shape[-3:]), job.mov_voxel_size, job.ref_voxel_size
+        )[0]
         for name, trial in settings.sweep_trials().items()
     }
 
