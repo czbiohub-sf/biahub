@@ -21,7 +21,8 @@ from pathlib import Path
 from iohub import open_ome_zarr
 from biahub.core.transform import Transform
 import napari
-from biahub.settings import EstimateRegistrationSettings
+# the retired estimate-registration schema this script reads its config with
+from biahub.registration.legacy.convert_settings import EstimateRegistrationSettings
 from biahub.registration.methods.beads import (
     transform_from_matches,
     matches_from_beads,

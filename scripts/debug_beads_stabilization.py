@@ -3,8 +3,10 @@ import ants
 import numpy as np
 from pathlib import Path
 from iohub import open_ome_zarr
-from biahub.core.transform import convert_transform_to_ants, Transform
+from biahub.core.transform import Transform
+from biahub.registration.utils import convert_transform_to_ants
 import napari
+# the retired estimate-registration schema this script reads its config with
 from biahub.registration.legacy.convert_settings import EstimateRegistrationSettings
 import numpy as np
 
