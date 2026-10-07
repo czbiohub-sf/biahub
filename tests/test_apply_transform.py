@@ -781,3 +781,33 @@ def test_apply_transform_records_what_it_did_like_the_other_steps(structured_pla
     assert record["timepoints_not_accepted"] == {"unreliable": [1]}
     assert len(json.dumps(record)) < 2000
     assert inherited == {"ls_angle_deg": 30.0}
+
+
+def test_apply_transform_writes_ome_zarr_0_5_by_default(structured_plate, tmp_path):
+    # Whatever the input's version: v0.5 (Zarr v3) is what lets --resume track progress.
+    position, _data = structured_plate
+    config = tmp_path / "transforms.yml"
+    model_to_yaml(
+        TransformSettings(
+            direction="forward",
+            moving_channels=["GFP"],
+            transforms=[TransformEntry(matrix=_translation(0, 0, 0))],
+        ),
+        config,
+    )
+    old = tmp_path / "v04.zarr"
+    with open_ome_zarr(position, mode="r") as source:
+        data = np.asarray(source.data)
+    with open_ome_zarr(
+        old, layout="hcs", mode="w", channel_names=["GFP", "Phase3D"], version="0.4"
+    ) as plate:
+        plate.create_position("A", "1", "0")["0"] = data
+    apply_transform([old / "A" / "1" / "0"], config, tmp_path / "out.zarr", cluster="debug")
+    with open_ome_zarr(tmp_path / "out.zarr" / "A" / "1" / "0", mode="r") as out:
+        assert out.version == "0.5"
+    apply_transform(
+        [old / "A" / "1" / "0"], config, tmp_path / "kept.zarr",
+        output_ome_zarr_version="0.4", cluster="debug",
+    )  # fmt: skip
+    with open_ome_zarr(tmp_path / "kept.zarr" / "A" / "1" / "0", mode="r") as out:
+        assert out.version == "0.4"

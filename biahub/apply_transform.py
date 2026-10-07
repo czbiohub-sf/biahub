@@ -246,7 +246,7 @@ def apply_transform(
     time_indices: int | list[int] | str = "all",
     keep_overhang: bool = True,
     interpolation: str = "linear",
-    output_ome_zarr_version: str | None = None,
+    output_ome_zarr_version: str = "0.5",
     sbatch_filepath: str | None = None,
     cluster: str = "slurm",
     monitor: bool = False,
@@ -392,6 +392,7 @@ def apply_transform(
         "channels_transformed": transformed,
         "channels_copied": copied,
     }
+    # OME-Zarr 0.5 (Zarr v3) unless asked otherwise: what lets --resume track progress.
     version = resolve_ome_zarr_version(moving_position_dirpaths[0], output_ome_zarr_version)
     for key, moving_path in zip(position_keys, moving_position_dirpaths, strict=True):
         create_empty_plate(
@@ -550,9 +551,10 @@ def apply_transform(
 )
 @click.option(
     "--ome-zarr-version",
-    default=None,
+    default="0.5",
+    show_default=True,
     type=click.Choice(["0.4", "0.5"]),
-    help="OME-Zarr version of the output store (default: the moving store's).",
+    help="OME-Zarr version of the output store (0.5 lets --resume track progress).",
 )
 @click.option(
     "--channels",
@@ -573,7 +575,7 @@ def apply_transform_cli(
     time_indices: str,
     keep_overhang: bool,
     interpolation: str,
-    ome_zarr_version: str | None,
+    ome_zarr_version: str,
     sbatch_filepath: str | None,
     cluster: str,
     monitor: bool,
