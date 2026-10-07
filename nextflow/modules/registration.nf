@@ -47,6 +47,17 @@ def parse_plan(stdout_text) {
     return new groovy.json.JsonSlurperClassic().parseText(matching.last().replace('PLAN:', '').trim())
 }
 
+// A step whose jobs raised exits 3 after recording them: retry it (a transient read error
+// recovers), then let the run finish with those timepoints as stand-ins ('ignore': the run
+// goes on, and a failed task is never cached, so a later -resume redoes it). Every other
+// exit follows main's rule (nextflow.config): retry signal exits, terminate on errors.
+def step_error_strategy(task) {
+    if (task.exitStatus == 3) {
+        return task.attempt <= 2 ? 'retry' : 'ignore'
+    }
+    return task.exitStatus in (130..145) + [Integer.MAX_VALUE] ? 'retry' : 'terminate'
+}
+
 // One task's resources as a plain map of ints, the shape parse_resources returns.
 def task_resources(res) {
     return [cpus: res.cpus as int, mem_gb: res.mem_gb as int, time_minutes: res.time_minutes as int]
@@ -100,6 +111,7 @@ process init_estimate_transform {
 process estimate_timepoints {
     tag "${position} t=${t >= 0 ? t : 'all'}"
     label 'cpu'
+    errorStrategy { step_error_strategy(task) }
     clusterOptions { slurm_logs('estimate_transform') }
     cpus { meta.cpus }
     memory { retry_memory(meta.mem_gb, task) }
@@ -125,6 +137,8 @@ process estimate_timepoints {
 process flag_position {
     tag "${position}"
     label 'cpu_local'
+    // Never cached: it reads the estimates, which a -resume may have redone. Cheap.
+    cache false
 
     input:
     val position
@@ -151,6 +165,10 @@ process flag_position {
 process refine_timepoint {
     tag "${step} ${position} t=${t}"
     label 'cpu'
+    errorStrategy { step_error_strategy(task) }
+    // Never cached: it depends on the estimates, which a -resume may have redone. It runs
+    // with --resume, so a timepoint already repaired / swept returns at once.
+    cache false
     clusterOptions { slurm_logs('estimate_transform') }
     cpus { meta.cpus }
     memory { retry_memory(meta.mem_gb, task) }
@@ -174,6 +192,8 @@ process refine_timepoint {
 
 process finalize_estimate_transform {
     label 'cpu_local'
+    // Never cached: it reads every record, which a -resume may have changed. Cheap.
+    cache false
 
     input:
     val gate

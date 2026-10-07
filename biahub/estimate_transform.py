@@ -99,6 +99,10 @@ RUN_FILENAME = "run.json"
 
 STEPS = ("estimate", "flag", "repair", "sweep", "finalize")
 
+# A --step whose jobs raised exits with this after recording them (registration.nf
+# retries it, then lets the run finish with those timepoints as stand-ins).
+JOBS_FAILED_EXIT_CODE = 3
+
 
 class _Run:
     """One estimate's positions, references and per-position run folders."""
@@ -305,8 +309,9 @@ def estimate_transform_step(
 
     `estimate`, `repair` and `sweep` do the given `timepoints` (default: all the step
     has); `estimate` of a `seed_from: previous_timepoint` run does the whole series, in
-    order. `flag` prints `PLAN:{position: {repair, sweep}}`. `finalize` writes the
-    transforms file and needs every position of the run.
+    order; they return `{"failed": {position: [t, ...]}}` for jobs that raised (recorded,
+    so the run can carry on). `flag` prints `PLAN:{position: {repair, sweep}}`.
+    `finalize` writes the transforms file and needs every position of the run.
     """
     run = _Run(
         moving_position_dirpaths, config_filepath, output_filepath, reference_position_dirpaths
@@ -325,8 +330,9 @@ def estimate_transform_step(
             flags[key] = {"repair": position_flags["repair"], "sweep": position_flags["sweep"]}
         click.echo("PLAN:" + json.dumps(flags))
         return flags
+    failed = {}
     for key in run.keys:
-        run_timepoint_jobs(
+        _records, failed_ts = run_timepoint_jobs(
             step,
             run.moving(key),
             run.reference_for[key],
@@ -334,7 +340,9 @@ def estimate_transform_step(
             timepoints=timepoints,
             resume=resume,
         )
-    return None
+        if failed_ts:
+            failed[key] = failed_ts
+    return {"failed": failed}
 
 
 @click.command("estimate-transform")
@@ -423,7 +431,7 @@ def estimate_transform_cli(
         estimate_transform_init(**common, resume=resume)
         return
     if step:
-        estimate_transform_step(
+        result = estimate_transform_step(
             step,
             **common,
             timepoints=None
@@ -431,6 +439,11 @@ def estimate_transform_cli(
             else [int(t) for t in timepoints.split(",") if t.strip()],
             resume=resume,
         )
+        if result and result.get("failed"):
+            # Recorded (the run can carry on), but not a success: a distinct exit code
+            # lets a workflow retry it and keep it out of its cache (registration.nf).
+            click.echo(f"{step}: jobs failed at {result['failed']}", err=True)
+            raise SystemExit(JOBS_FAILED_EXIT_CODE)
         return
     estimate_transform(
         moving_position_dirpaths=moving_position_dirpaths,

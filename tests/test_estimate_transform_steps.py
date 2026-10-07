@@ -10,7 +10,7 @@ from iohub import open_ome_zarr
 from scipy.ndimage import shift as ndi_shift
 
 from biahub.cli.main import cli
-from biahub.estimate_transform import estimate_transform
+from biahub.estimate_transform import JOBS_FAILED_EXIT_CODE, estimate_transform
 from biahub.settings import PhaseCrossCorrSettings, load_transform_settings
 from tests.test_estimate_transform import (
     APPLIED_SHIFT_ZYX,
@@ -58,7 +58,15 @@ def _report(output):
     return report
 
 
-def _by_steps(movings, config, output, references=()):
+def _job_step(*args, crashes_ok=False):
+    """Run an estimate / repair / sweep step: 0, or 3 when its jobs raised (if allowed)."""
+    result = _cli(*args)
+    allowed = (0, JOBS_FAILED_EXIT_CODE) if crashes_ok else (0,)
+    assert result.exit_code in allowed, result.output
+    return result.output
+
+
+def _by_steps(movings, config, output, references=(), crashes_ok=False):
     """Run every step the way the Nextflow module does; return the init plan."""
     common = ["-c", config, "-o", output]
     if references:
@@ -68,14 +76,20 @@ def _by_steps(movings, config, output, references=()):
     plan = _plan(init)
     for moving, key in zip(movings, plan["positions"], strict=True):
         if plan["propagated"]:
-            _ok("--step", "estimate", "-m", moving, *common)
+            _job_step("--step", "estimate", "-m", moving, *common, crashes_ok=crashes_ok)
         else:
             for t in plan["time_indices"]:
-                _ok("--step", "estimate", "--timepoints", t, "-m", moving, *common)
+                _job_step(
+                    "--step", "estimate", "--timepoints", t, "-m", moving, *common,
+                    crashes_ok=crashes_ok,
+                )  # fmt: skip
         flags = _plan(_ok("--step", "flag", "-m", moving, *common))[key]
         for step in ("repair", "sweep"):
             for t in flags[step]:
-                _ok("--step", step, "--timepoints", t, "-m", moving, *common)
+                _job_step(
+                    "--step", step, "--timepoints", t, "-m", moving, *common,
+                    crashes_ok=crashes_ok,
+                )  # fmt: skip
     _ok("--step", "finalize", "-m", *movings, *common)
     return plan
 
@@ -248,11 +262,16 @@ def test_a_crashing_timepoint_is_recorded_as_the_plain_run_does(
         [plate], config, one_call, reference_position_dirpaths=[plate], cluster="debug"
     )
     by_steps = tmp_path / "steps" / "transforms.yml"
-    _by_steps([plate], config, by_steps, references=[plate])
+    _by_steps([plate], config, by_steps, references=[plate], crashes_ok=True)
 
     assert load_transform_settings(by_steps) == load_transform_settings(one_call)
     entry = load_transform_settings(by_steps).transforms[1]
     assert entry.status == "unreliable" and "blosc encoded value is invalid" in entry.note
+
+    # The crashing step exits 3 (recorded, but not a success: a workflow retries it).
+    common = ["-m", plate, "-r", plate, "-c", config, "-o", by_steps]
+    monkeypatch.setattr(engine, "_estimate_timepoint_job", crash_at_t1)
+    assert _cli("--step", "estimate", "--timepoints", "1", *common).exit_code == 3
 
     # A failed timepoint is not "finished": a retry with --resume does it again.
     monkeypatch.setattr(engine, "_estimate_timepoint_job", real)

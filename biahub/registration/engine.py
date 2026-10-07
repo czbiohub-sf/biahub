@@ -1795,8 +1795,11 @@ def run_timepoint_jobs(
     output_dir: Path,
     timepoints: list[int] | None = None,
     resume: bool = False,
-) -> dict[int, dict]:
-    """Run one phase's jobs for the given timepoints in this process; return their records.
+) -> tuple[dict[int, dict], list[int]]:
+    """Run one phase's jobs for the given timepoints in this process.
+
+    Returns their records and the timepoints whose job raised (recorded as the driver
+    records a failed job, so the run can carry on; the caller decides how to report them).
 
     `step` is `estimate`, `repair` or `sweep`; `timepoints` defaults to every timepoint
     the phase has (all for estimate, the flagged ones for repair / sweep). A propagated
@@ -1817,20 +1820,24 @@ def run_timepoint_jobs(
                 "order; drop --timepoints"
             )
         try:
-            return _estimate_propagated_job(
-                source, target, settings_path, time_indices, timepoints_dir, resume
+            return (
+                _estimate_propagated_job(
+                    source, target, settings_path, time_indices, timepoints_dir, resume
+                ),
+                [],
             )
         except Exception as e:  # noqa: BLE001 -- recorded per timepoint, as the driver does
             # The timepoints it reached keep their records; the rest failed with it.
             click.echo(f"estimate: {_job_failure(e)}")
             timepoints_dir.mkdir(parents=True, exist_ok=True)
-            records = {}
+            records, failed = {}, []
             for t in time_indices:
                 path = timepoints_dir / f"{t}.json"
-                if not path.exists():
+                if not _finished(path):
                     path.write_text(json.dumps(_failed_record(t, e)))
+                    failed.append(t)
                 records[t] = json.loads(path.read_text())
-            return records
+            return records, failed
 
     if step == "estimate":
         available, records_dir = time_indices, timepoints_dir
@@ -1846,7 +1853,7 @@ def run_timepoint_jobs(
             f"{step}: timepoints {unknown} are not in this run's {step} list {available}"
         )
     flagged = _flags(output_dir)["flagged"] if step == "repair" else None
-    records = {}
+    records, failed = {}, []
     for t in wanted:
         record_path = records_dir / f"{t}.json"
         if resume and _finished(record_path):
@@ -1871,9 +1878,10 @@ def run_timepoint_jobs(
             if step == "estimate":
                 record_path.parent.mkdir(parents=True, exist_ok=True)
                 record_path.write_text(json.dumps(_failed_record(t, e)))
+            failed.append(t)
             continue
         click.echo(f"{step} t={t}: score={records[t].get('score')}")
-    return records
+    return records, failed
 
 
 def _run_timepoint_job(

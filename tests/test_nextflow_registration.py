@@ -309,3 +309,32 @@ def test_registration_nf_reruns_when_a_file_is_rewritten_in_place(tmp_path):
     write(3.0)  # same path, new contents
     second = run()
     assert not np.array_equal(first, second)
+
+
+def test_registration_nf_finishes_past_a_broken_chunk_and_resume_redoes_it(tmp_path):
+    # A timepoint whose data cannot be read: the run retries it, then finishes with that
+    # timepoint as a stand-in (the error in its note); once the data is fixed, -resume
+    # redoes it (a failed task is never cached).
+    rng = np.random.default_rng(11)
+    ref = _synthetic_bead_volume(rng, SHAPE)
+    mov = ndi_shift(ref, shift=APPLIED_SHIFT_ZYX, order=1, mode="constant", cval=0.0)
+    plate = _write_plate(tmp_path / "data.zarr", [(ref, mov)] * 3)
+    store = plate.parents[2]
+    chunk = plate / "0" / "c" / "1" / "1" / "0" / "0" / "0"  # t=1, the moving channel
+    assert chunk.is_file()
+    chunk.write_bytes(b"not a chunk")
+    config = _write_config(tmp_path)
+    params = (
+        "--moving", store, "--reference", store, "--estimate_config", config,
+        "--estimate_positions", "A/1/0", "--output", tmp_path / "run", "-resume",
+    )  # fmt: skip
+
+    _nextflow(tmp_path, *params)
+    entry = load_transform_settings(tmp_path / "run" / "transforms.yml").transforms[1]
+    assert entry.status == "unreliable" and "job failed" in entry.note
+
+    with open_ome_zarr(plate, mode="r+") as position:
+        position["0"][1, 1] = mov  # the data is fixed
+    _nextflow(tmp_path, *params)
+    entry = load_transform_settings(tmp_path / "run" / "transforms.yml").transforms[1]
+    assert entry.status == "accepted" and entry.note is None
