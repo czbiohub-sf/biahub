@@ -153,7 +153,8 @@ def preprocess_zyx(
             y, x = np.ogrid[: ref_mask.shape[-2], : ref_mask.shape[-1]]
             center = (ref_mask.shape[-2] // 2, ref_mask.shape[-1] // 2)
             radius = int(ref_mask_radius * min(center))
-            ref_mask[(x - center[0]) ** 2 + (y - center[1]) ** 2 <= radius**2] = True
+            # center is (y, x): y against the Y centre, x against the X centre
+            ref_mask[(y - center[0]) ** 2 + (x - center[1]) ** 2 <= radius**2] = True
             mask &= ref_mask
         z_slice, y_slice, x_slice = find_lir(mask.astype(np.uint8))
         offset = np.asarray([s.start for s in (z_slice, y_slice, x_slice)], dtype=np.float32)

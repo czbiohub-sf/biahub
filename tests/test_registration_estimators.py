@@ -659,3 +659,15 @@ def test_ants_threads_follow_the_task_cpus_unless_set(monkeypatch):
     assert int(_itk_threads()) >= 1  # the cores this process may use
     monkeypatch.setenv("ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS", "3")
     assert _itk_threads() == "3"  # set by the user: kept
+
+
+def test_ants_reference_mask_is_centred_on_a_non_square_volume():
+    # The circular reference mask must sit at the volume's centre (Y, X), whatever its
+    # aspect: a swapped centre puts it off the volume and leaves nothing to register.
+    from biahub.registration.methods.ants import preprocess_zyx
+
+    vol = np.ones((4, 40, 100), dtype=np.float32)
+    ref, _mov, offset = preprocess_zyx(vol, vol, crop=True, ref_mask_radius=0.5)
+    centre_y = offset[1] + ref.shape[1] / 2
+    centre_x = offset[2] + ref.shape[2] / 2
+    assert abs(centre_y - 20) <= 1 and abs(centre_x - 50) <= 1
