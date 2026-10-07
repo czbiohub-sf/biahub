@@ -180,3 +180,26 @@ def test_manual_needs_one_timepoint():
     for several in ("all", [3, 4]):
         with pytest.raises(ValueError, match="manual registers one timepoint"):
             manual(several)
+
+
+def test_time_indices_are_checked_when_the_config_is_read():
+    # Caught at load, not when the transforms file is written after the whole run.
+    def config(**kwargs):
+        return EstimateTransformSettings(
+            moving=ChannelSettings(channel="GFP"),
+            reference=ReferenceSettings(
+                frame=kwargs.pop("frame", "cross"), channel=kwargs.pop("channel", "Phase3D")
+            ),
+            method="phase-cross-corr",
+            **kwargs,
+        )
+
+    with pytest.raises(ValueError, match="increasing"):
+        config(time_indices=[5, 3, 7])
+    with pytest.raises(ValueError, match="increasing"):
+        config(time_indices=[3, 3, 4])
+    # one 'previous' step is not a transform for the series: refuse a single timepoint
+    with pytest.raises(ValueError, match="previous"):
+        config(frame="previous", channel=None, time_indices=5)
+    assert config(time_indices=[2, 5, 9]).time_indices == [2, 5, 9]
+    assert config(frame="first", channel=None, time_indices=5).time_indices == 5

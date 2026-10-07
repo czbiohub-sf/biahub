@@ -990,6 +990,23 @@ class EstimateTransformSettings(MyBaseModel):
         return self
 
     @model_validator(mode="after")
+    def check_time_indices(self) -> "EstimateTransformSettings":
+        # The transforms file needs unique, increasing timepoints: say so now, not after
+        # the whole run when the file is written.
+        ts = self.time_indices
+        if isinstance(ts, list) and ts != sorted(set(ts)):
+            raise ValueError(f"time_indices must be increasing, without repeats; got {ts}")
+        # A single 'previous' step is a transform t -> t-1, not one for the series (the
+        # file would apply it to every timepoint).
+        single = isinstance(ts, int) or (isinstance(ts, list) and len(ts) == 1)
+        if self.reference.frame == "previous" and single:
+            raise ValueError(
+                "reference.frame 'previous' needs several timepoints (each is a step from "
+                f"the one before it); got time_indices {ts!r}. Use 'first' for one timepoint."
+            )
+        return self
+
+    @model_validator(mode="after")
     def check_previous_is_contiguous(self) -> "EstimateTransformSettings":
         # Each timepoint is chained through the one before it, so no link may be missing.
         ts = self.time_indices
