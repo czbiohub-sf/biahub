@@ -31,6 +31,7 @@ process init_deskew {
     val input_zarr
     val output_zarr
     val config
+    path config_file  // staged only for the task hash: see common.nf, #397
     val trigger
 
     output:
@@ -60,6 +61,7 @@ process run_deskew {
     val input_zarr
     val output_zarr
     val config
+    path config_file  // staged only for the task hash: see common.nf, #397
 
     output:
     val position
@@ -97,7 +99,7 @@ workflow deskew_init_wf {
     trigger
 
     main:
-    init_out = init_deskew(input_zarr, output_zarr, config, trigger.collect().map { 'done' })
+    init_out = init_deskew(input_zarr, output_zarr, config, file(config), trigger.collect().map { 'done' })
 
     emit:
     resources = init_out.map { stdout_text -> parse_resources(stdout_text) }
@@ -137,7 +139,7 @@ workflow deskew_run_wf {
         .combine(prev_done.map { 'done' })
         .map { pos, meta, _gate -> [pos, meta] }
 
-    dk_done = run_deskew(pos_meta, input_zarr, output_zarr, config) | collect
+    dk_done = run_deskew(pos_meta, input_zarr, output_zarr, config, file(config)) | collect
 
     emit:
     done = dk_done

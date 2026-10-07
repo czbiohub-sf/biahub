@@ -131,7 +131,7 @@ To pull: `git pull --ff-only origin main && uv sync --project <BIAHUB>`
 (`--ff-only` because a non-fast-forward means local commits — stop and ask).
 
 **Never pull, switch branches, or edit the checkout while a run is live** — it
-invalidates `-resume` (`references/caveats.md` §10).
+changes code under live tasks or invalidates `-resume` (`references/caveats.md` §10).
 
 ## 2. Find the raw acquisition
 

@@ -47,6 +47,7 @@ process init_virtual_stain {
     val input_zarr
     val output_zarr
     val config
+    path config_file  // staged only for the task hash: see common.nf, #397
     val trigger
 
     output:
@@ -113,6 +114,7 @@ process run_virtual_stain {
     val input_zarr
     val output_zarr
     val config
+    path config_file  // staged only for the task hash: see common.nf, #397
 
     output:
     val position
@@ -146,7 +148,7 @@ workflow virtual_stain_init_wf {
     trigger
 
     main:
-    init_out = init_virtual_stain(input_zarr, output_zarr, config, trigger.collect().map { 'done' })
+    init_out = init_virtual_stain(input_zarr, output_zarr, config, file(config), trigger.collect().map { 'done' })
 
     emit:
     resources = init_out.map { stdout_text -> parse_resources(stdout_text) }
@@ -183,7 +185,7 @@ workflow virtual_stain_run_wf {
         .combine(vs_preprocess)
         .map { pos, meta, _preprocess_done -> [pos, meta] }
 
-    vs_done = run_virtual_stain(pos_meta, input_zarr, output_zarr, config) | collect
+    vs_done = run_virtual_stain(pos_meta, input_zarr, output_zarr, config, file(config)) | collect
 
     emit:
     done = vs_done

@@ -42,6 +42,7 @@ process init_concatenate {
     val virtual_stain_zarr
     val output_zarr
     val config
+    path config_file  // staged only for the task hash: see common.nf, #397
     val trigger
 
     output:
@@ -75,6 +76,7 @@ process run_concatenate {
     val virtual_stain_zarr
     val output_zarr
     val config
+    path config_file  // staged only for the task hash: see common.nf, #397
 
     output:
     val position
@@ -118,7 +120,7 @@ workflow assemble_init_wf {
 
     main:
     init_out = init_concatenate(deskew_zarr, reconstruct_zarr, virtual_stain_zarr,
-                                output_zarr, config, trigger.collect().map { 'done' })
+                                output_zarr, config, file(config), trigger.collect().map { 'done' })
 
     emit:
     resources = init_out.map { stdout_text -> parse_resources(stdout_text) }
@@ -163,7 +165,7 @@ workflow assemble_run_wf {
         .map { pos, meta, _gate -> [pos, meta] }
 
     as_done = run_concatenate(pos_meta, deskew_zarr, reconstruct_zarr, virtual_stain_zarr,
-                              output_zarr, config) | collect
+                              output_zarr, config, file(config)) | collect
 
     emit:
     done = as_done

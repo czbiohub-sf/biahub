@@ -28,6 +28,7 @@ process init_flat_field {
     val input_zarr
     val output_zarr
     val config
+    path config_file  // staged only for the task hash: see common.nf, #397
     val trigger
 
     output:
@@ -57,6 +58,7 @@ process run_flat_field {
     val input_zarr
     val output_zarr
     val config
+    path config_file  // staged only for the task hash: see common.nf, #397
 
     output:
     val position
@@ -94,7 +96,7 @@ workflow flat_field_init_wf {
     trigger
 
     main:
-    init_out = init_flat_field(input_zarr, output_zarr, config, trigger.collect().map { 'done' })
+    init_out = init_flat_field(input_zarr, output_zarr, config, file(config), trigger.collect().map { 'done' })
 
     emit:
     // Both emits are VALUE channels, which is the contract every step module
@@ -147,7 +149,7 @@ workflow flat_field_run_wf {
         .combine(prev_done.map { 'done' })
         .map { pos, meta, _gate -> [pos, meta] }
 
-    ff_done = run_flat_field(pos_meta, input_zarr, output_zarr, config) | collect
+    ff_done = run_flat_field(pos_meta, input_zarr, output_zarr, config, file(config)) | collect
 
     emit:
     done = ff_done
