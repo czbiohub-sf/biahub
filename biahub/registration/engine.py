@@ -5,9 +5,9 @@ repair them from seeds the run itself provides, and journal every attempt under 
 explicit run identity.
 
 Layout of this module, top to bottom: the run journal, adaptive flagging, the repair
-pass, and the series drivers (`estimate_series`, `flag_series`, `repair_timepoint`,
-`repair_series`). The two passes are separate so estimation can be fanned out per
-timepoint while repair waits for every score.
+pass, and the series drivers (`estimate_series`, `flag_series`, `repair_timepoint`). The
+two passes are separate so estimation can be fanned out per timepoint while repair waits
+for every score.
 """
 
 from __future__ import annotations
@@ -839,30 +839,6 @@ def _fold_sweep(result: SeriesResult, t: int, outcome: PassResult) -> None:
     current_score = result.scores.get(t, float("nan"))
     if outcome.accepted and not outcome.score <= current_score:
         _accept(result, t, outcome.transform, outcome.score, f"sweep:{outcome.source}")
-
-
-def repair_series(
-    mov,
-    reference_policy: ReferencePolicy,
-    estimator: TransformEstimator,
-    score_fn: ScoreFn,
-    result: SeriesResult,
-    candidates: RepairCandidates,
-    max_timepoints: int | None = None,
-    on_timepoint: OnTimepoint | None = None,
-    polish_rounds: int = 0,
-) -> SeriesResult:
-    """Flag attempted timepoints and offer each to `repair`, in-process and in order.
-
-    Unflagged timepoints are never touched.
-    """
-    for t in flag_series(result, max_timepoints):
-        repair_timepoint(
-            t, mov, reference_policy, estimator, score_fn, result, candidates, polish_rounds
-        )
-        if on_timepoint is not None:
-            on_timepoint(t, result)
-    return result
 
 
 def _open_series(position_dirpath: Path, channel_name: str):

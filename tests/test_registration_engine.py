@@ -5,9 +5,10 @@ from biahub.core.transform import Transform
 from biahub.registration.engine import (
     RunJournal,
     estimate_series,
+    flag_series,
     neighbour_consensus_config_candidates,
     polish,
-    repair_series,
+    repair_timepoint,
     sweep_timepoint,
     transforms_for_file,
 )
@@ -157,7 +158,18 @@ def _score_penalising_frame_5(transform, mov, ref):
     return 0.2 if round(float(mov.mean())) == 5 else 0.9
 
 
-def test_repair_series_touches_only_flagged_timepoints_and_journals_them():
+def _repair_flagged(
+    mov, reference_policy, estimator, score_fn, result, candidates, polish_rounds=0
+):
+    """Flag the series and repair each flagged timepoint, as the driver does."""
+    for t in flag_series(result):
+        repair_timepoint(
+            t, mov, reference_policy, estimator, score_fn, result, candidates, polish_rounds
+        )
+    return result
+
+
+def test_repair_touches_only_flagged_timepoints_and_journals_them():
     mov = _constant_frames(8)
     result = estimate_series(
         mov,
@@ -170,7 +182,7 @@ def test_repair_series_touches_only_flagged_timepoints_and_journals_them():
     assert result.scores[5] == 0.2
 
     fix = Transform.from_translation([1.0, 0.0, 0.0])
-    result = repair_series(
+    result = _repair_flagged(
         mov,
         FixedFrame(0),
         _EchoEstimator(),
@@ -188,7 +200,7 @@ def test_repair_series_touches_only_flagged_timepoints_and_journals_them():
     assert not result.journal.attempted_this_run(4)
 
 
-def test_repair_series_rescues_a_timepoint_whose_estimate_failed():
+def test_repair_rescues_a_timepoint_whose_estimate_failed():
     class _FailsUnseeded:
         def estimate(self, mov, ref, seed=None):
             if round(float(mov.mean())) == 2 and seed.is_identity:
@@ -202,7 +214,7 @@ def test_repair_series_rescues_a_timepoint_whose_estimate_failed():
     assert 2 in result.errors
 
     fix = Transform.from_translation([1.0, 0.0, 0.0])
-    result = repair_series(
+    result = _repair_flagged(
         mov,
         FixedFrame(0),
         _FailsUnseeded(),
@@ -217,7 +229,7 @@ def test_repair_series_rescues_a_timepoint_whose_estimate_failed():
     assert 2 not in result.errors
 
 
-def test_repair_series_replaces_a_transform_whose_score_is_nan():
+def test_repair_replaces_a_transform_whose_score_is_nan():
     # Estimation succeeded but scoring found nothing to score (e.g. no beads): the
     # timepoint holds a transform with a NaN score, and any finite candidate must win.
     fix = Transform.from_translation([1.0, 0.0, 0.0])
@@ -237,7 +249,7 @@ def test_repair_series_replaces_a_transform_whose_score_is_nan():
     )
     assert np.isnan(result.scores[1]) and 1 in result.transforms
 
-    result = repair_series(
+    result = _repair_flagged(
         mov,
         FixedFrame(0),
         _EchoSeed(),
@@ -331,7 +343,7 @@ def test_polish_is_capped_and_a_raising_round_keeps_the_accepted_transform():
     assert transform is start and (score, rounds) == (0.5, 0)
 
 
-def test_repair_series_polishes_only_accepted_repairs():
+def test_repair_polishes_only_accepted_repairs():
     mov = _constant_frames(8)
 
     def score(transform, mov_t, ref_t):
@@ -344,7 +356,7 @@ def test_repair_series_polishes_only_accepted_repairs():
     )
     result.transforms = {t: IDENTITY for t in result.transforms}
     result.scores[5] = 0.2
-    result = repair_series(
+    result = _repair_flagged(
         mov,
         FixedFrame(0),
         _StepEstimator(3.0),
