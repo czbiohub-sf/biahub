@@ -276,3 +276,21 @@ def test_segment_local_jobs_get_the_step_time_limit(
         _RecordingExecutor.parameters["timeout_min"]
         == _resources(result.output)["time_minutes"]
     )
+
+
+def test_segment_init_checks_models_before_creating_the_plate(
+    fake_cellpose, example_plate, segment_config, tmp_path
+):
+    plate_path, _ = example_plate
+    out = tmp_path / "seg.zarr"
+    result = _run(
+        "--init",
+        "-i",
+        plate_path / "A" / "1" / "0",
+        "-o",
+        out,
+        "-c",
+        segment_config(pretrained_model="nuclei"),
+    )
+    assert result.exit_code != 0
+    assert not out.exists()

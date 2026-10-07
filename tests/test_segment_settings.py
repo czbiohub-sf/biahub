@@ -134,3 +134,10 @@ def test_resolve_models_rejects_unknown_channels_and_planes():
         resolve_models(
             _settings(z_slice_2D=9), channel_names=["nuc"], scale=(1,) * 5, z_size=5
         )
+
+
+def test_a_config_needs_at_least_one_model():
+    from biahub.settings import SegmentationSettings
+
+    with pytest.raises(ValueError):
+        SegmentationSettings(models={})

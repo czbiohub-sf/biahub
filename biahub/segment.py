@@ -245,6 +245,10 @@ def segment(
         # worker (--cluster debug) reads the checkpoint from node-local scratch, not NFS.
         stage_cellpose_weights()
     settings = yaml_to_model(config_filepath, SegmentationSettings)
+    if init_only:
+        # Fail on a bad model name before scaffolding anything.
+        for name in dict.fromkeys(m.pretrained_model for m in settings.models.values()):
+            check_cellpose_model_name(name)
     (T, C, Z, Y, X), models = _init_output_plate(
         input_position_dirpaths, output_dirpath, settings
     )
@@ -270,7 +274,6 @@ def segment(
         # worker, and populate the shared weights cache once. Workers must not do this
         # (importing cellpose would fix the weights directory before staging).
         for name in dict.fromkeys(m.pretrained_model for m in models):
-            check_cellpose_model_name(name)
             warm_cellpose_weights(name)
         click.echo(f"Initialized {output_dirpath} ({len(input_position_dirpaths)} positions)")
         return

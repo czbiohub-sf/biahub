@@ -872,7 +872,7 @@ class SegmentationModel(BaseModel):
 
 
 class SegmentationSettings(BaseModel):
-    models: dict[str, SegmentationModel]
+    models: dict[str, SegmentationModel] = Field(min_length=1)
     # When None, preserve the OME-Zarr version of the input store.
     output_ome_zarr_version: Literal["0.4", "0.5"] | None = None
     model_config = {"extra": "forbid", "protected_namespaces": ()}
