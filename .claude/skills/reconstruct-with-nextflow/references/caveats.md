@@ -252,9 +252,11 @@ files.
 
 ## 10. Do not edit the biahub checkout during a live run
 
-Editing files in `$BIAHUB_PROJECT` changes Nextflow task hashes and
-invalidates `-resume`. Get the branch right before launching, then leave it
-alone. (Editing this skill is *mostly* fine — but the notification path now runs
+Editing a `script:` block in `nextflow/modules/*.nf` changes Nextflow task
+hashes and invalidates `-resume` for that process. Editing biahub's Python code
+invalidates nothing, which is worse: tasks started after the edit run the new
+code, cached ones keep the old results, and the run silently mixes the two. Get
+the branch right before launching, then leave it alone. (Editing this skill is *mostly* fine — but the notification path now runs
 through `biahub/utils/notify.py` and `nextflow/modules/notify.nf`, which ARE part
 of the pipeline, so fixing a notification bug mid-run is a pipeline edit. The
 notify task hashes are the only ones affected, and re-running six sub-second local

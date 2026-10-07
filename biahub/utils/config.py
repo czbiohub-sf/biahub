@@ -14,15 +14,21 @@ import yaml
 
 
 def settings_fingerprint(settings) -> str:
-    """Stable short hash of a settings model.
+    """Stable short hash of a settings model, or of a validated config mapping.
 
     Passed to ``process_single_position(resume_token=...)`` so that the
     per-unit completion records a resumed run relies on belong to the settings
     that produced them. Re-running a step with a changed config against an
     existing output store then recomputes instead of skipping units whose data
     would now be different.
+
+    Hashing the validated settings rather than the file means an edit that
+    changes no setting -- a comment, a blank line, key order -- keeps the
+    fingerprint. A plain mapping is accepted for configs validated by something
+    other than pydantic, e.g. virtual-stain's VisCy (jsonargparse) config.
     """
-    payload = json.dumps(settings.model_dump(mode="json"), sort_keys=True, default=str)
+    fields = settings.model_dump(mode="json") if hasattr(settings, "model_dump") else settings
+    payload = json.dumps(fields, sort_keys=True, default=str)
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 

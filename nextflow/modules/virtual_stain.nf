@@ -47,6 +47,7 @@ process init_virtual_stain {
     val input_zarr
     val output_zarr
     val config
+    path config_file  // staged only for the task hash: see common.nf, #397
     val trigger
 
     output:
@@ -102,7 +103,12 @@ process run_virtual_stain_preprocess {
 
 process run_virtual_stain {
     tag "${position}"
-    label 'gpu'
+    // Preemptable: `--resume` (below) makes a reclaimed task cost at most the
+    // timepoint it was predicting. See the slurm profile in nextflow.config.
+    label 'gpu_preempted'
+    // Any GPU node of `preempted`, including the single-A40 workstations
+    // (48 GB, the same GA102 as the A6000s A549 and dynatrack prediction already
+    // ran on). Add `--constraint=gpu` to stay on the `gpu` partition's nodes.
     clusterOptions { "--gres=gpu:1 " + slurm_logs('virtual_stain') }
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
@@ -113,13 +119,19 @@ process run_virtual_stain {
     val input_zarr
     val output_zarr
     val config
+    path config_file  // staged only for the task hash: see common.nf, #397
 
     output:
     val position
 
     script:
+    // --resume: the retry of an interrupted task (or a later `nextflow -resume`)
+    // recomputes only the timepoints this position had not finished; a timepoint
+    // torn by the kill is replaced, not read back. The completion record is keyed
+    // by the validated predict config, so a config change recomputes instead of
+    // being skipped.
     """
-    biahub virtual-stain --cluster debug \
+    biahub virtual-stain --cluster debug --resume \
         -i "${input_zarr}/${position}" \
         -o "${output_zarr}" \
         -c "${config}"
@@ -146,7 +158,7 @@ workflow virtual_stain_init_wf {
     trigger
 
     main:
-    init_out = init_virtual_stain(input_zarr, output_zarr, config, trigger.collect().map { 'done' })
+    init_out = init_virtual_stain(input_zarr, output_zarr, config, file(config), trigger.collect().map { 'done' })
 
     emit:
     resources = init_out.map { stdout_text -> parse_resources(stdout_text) }
@@ -183,7 +195,7 @@ workflow virtual_stain_run_wf {
         .combine(vs_preprocess)
         .map { pos, meta, _preprocess_done -> [pos, meta] }
 
-    vs_done = run_virtual_stain(pos_meta, input_zarr, output_zarr, config) | collect
+    vs_done = run_virtual_stain(pos_meta, input_zarr, output_zarr, config, file(config)) | collect
 
     emit:
     done = vs_done
