@@ -35,6 +35,8 @@ from biahub.settings import (
 )
 from biahub.utils.cellpose import (
     cellpose_device,
+    check_cellpose_model_name,
+    load_cellpose_model,
     stage_cellpose_weights,
     warm_cellpose_weights,
 )
@@ -699,8 +701,8 @@ def detect_foreground_segmentation(
 
 def run_cellpose_per_frame(
     images: np.ndarray,
-    model_type: str = "nuclei",
-    diameter: float = 80,
+    pretrained_model: str = "cpsam_v2",
+    diameter: float | None = 80,
     cellprob_threshold: float = 0.0,
     flow_threshold: float = 0.4,
     gpu: bool = True,
@@ -719,11 +721,7 @@ def run_cellpose_per_frame(
     device = cellpose_device(gpu)
     stage_cellpose_weights()
 
-    from cellpose import models as cp_models
-
-    # device overrides gpu and skips cellpose's own CPU-falling-back probe.
-    model = cp_models.CellposeModel(model_type=model_type, gpu=gpu, device=device)
-    click.echo(f"cellpose device: {model.device}")
+    model = load_cellpose_model(pretrained_model, device)
 
     T = images.shape[0]
     labels = np.zeros_like(images, dtype=np.int32)
@@ -731,7 +729,6 @@ def run_cellpose_per_frame(
         mask, _, _ = model.eval(
             images[t],
             diameter=diameter,
-            channels=[0, 0],  # grayscale
             cellprob_threshold=cellprob_threshold,
             flow_threshold=flow_threshold,
             min_size=min_size,
@@ -769,12 +766,12 @@ def cellpose_segmentation(
     images = np.asarray(images)
 
     click.echo(
-        f"Running cellpose ({cellpose_config.model_type}, "
+        f"Running cellpose ({cellpose_config.pretrained_model}, "
         f"diameter={cellpose_config.diameter}) on channel '{channel_name}'..."
     )
     cellpose_labels = run_cellpose_per_frame(
         images,
-        model_type=cellpose_config.model_type,
+        pretrained_model=cellpose_config.pretrained_model,
         diameter=cellpose_config.diameter,
         cellprob_threshold=cellpose_config.cellprob_threshold,
         flow_threshold=cellpose_config.flow_threshold,
@@ -1046,7 +1043,9 @@ def track(
         # reach this code too, and importing cellpose here would fix the weights
         # directory before stage_cellpose_weights could redirect it.
         if settings.segmentation_method == "cellpose":
-            warm_cellpose_weights()
+            # Fail here, once, rather than in every worker of the fan-out.
+            check_cellpose_model_name(settings.cellpose_config.pretrained_model)
+            warm_cellpose_weights(settings.cellpose_config.pretrained_model)
         click.echo(f"Initialized {output_dirpath} ({len(input_position_dirpaths)} positions)")
         return
 

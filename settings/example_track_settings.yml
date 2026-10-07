@@ -32,8 +32,8 @@ segmentation_method: cellpose
 
 # Cellpose model parameters (used only when segmentation_method: cellpose).
 cellpose_config:
-  model_type: nuclei
-  diameter: 80
+  pretrained_model: cpsam_v2  # cellpose 4: cpsam_v2, cpsam, cpdino, cpdino-vitb, or a path
+  diameter: 80  # frames are resized by 30/diameter before inference; null = native size
   cellprob_threshold: 0.0
   flow_threshold: 0.4
   gpu: true

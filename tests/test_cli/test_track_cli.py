@@ -500,3 +500,52 @@ def test_input_images_path_override(tmp_path, example_tracking_plate, monkeypatc
 
     assert result.exit_code == 0, result.output
     assert output_path.exists()
+
+
+def test_track_init_rejects_an_unknown_cellpose_model(
+    tmp_path, example_tracking_plate, monkeypatch
+):
+    """A bad model name must fail once at --init, not later in every worker."""
+    import sys
+    import types
+
+    class Model:
+        def __init__(self, gpu=False, pretrained_model="cpsam_v2", device=None):
+            # Cellpose 4 would silently substitute cpsam_v2 here.
+            self.pretrained_model = str(tmp_path / "cpsam_v2")
+
+    models = types.ModuleType("cellpose.models")
+    models.CellposeModel = Model
+    models.MODEL_NAMES = ["cpsam_v2", "cpsam", "cpdino", "cpdino-vitb"]
+    models.get_user_models = lambda: []
+    package = types.ModuleType("cellpose")
+    package.models = models
+    monkeypatch.setitem(sys.modules, "cellpose", package)
+    monkeypatch.setitem(sys.modules, "cellpose.models", models)
+
+    plate_path, _ = example_tracking_plate
+    config_path = _make_tracking_config(plate_path, tmp_path)
+    config = yaml.safe_load(config_path.read_text())
+    config["segmentation_method"] = "cellpose"
+    config["cellpose_config"] = {
+        "pretrained_model": "nuclei",
+        "input_channel": "nuclei_prediction",
+    }
+    config_path.write_text(yaml.safe_dump(config))
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "track",
+            "-i",
+            str(plate_path / "A" / "1" / "0"),
+            "-o",
+            str(tmp_path / "out.zarr"),
+            "-c",
+            str(config_path),
+            "--init",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Unknown cellpose model 'nuclei'" in str(result.exception) + result.output
