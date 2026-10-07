@@ -59,6 +59,9 @@ def fake_cellpose(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "cellpose.models", models)
     monkeypatch.setenv("CELLPOSE_LOCAL_MODELS_PATH", str(tmp_path / "no-weights"))
     RecordingModel.built, RecordingModel.evaluated = [], []
+    from biahub import segment
+
+    segment._MODEL_CACHE.clear()  # models are cached per process
     return RecordingModel
 
 
@@ -224,3 +227,20 @@ def test_3d_model_without_do_3d_is_refused(fake_cellpose):
 
     with pytest.raises(ValueError, match="do_3D"):
         SegmentationModel(pretrained_model="cpsam_v2", channels=["GFP"])
+
+
+def test_segment_loads_each_model_once_across_timepoints(fake_cellpose):
+    """process_single_position calls segment_data once per timepoint; reloading the
+    1.2 GB model every frame is what made segment slow and GPU-hungry."""
+    from biahub.segment import resolve_models, segment_data
+    from biahub.settings import SegmentationSettings
+
+    settings = SegmentationSettings(
+        models={"nuc": {"pretrained_model": "cpdino", "channels": ["c0"], "z_slice_2D": 0}}
+    )
+    models = resolve_models(settings, ["c0"], scale=(1,) * 5, z_size=1)
+    for _ in range(3):
+        segment_data(np.zeros((1, 1, 8, 8), dtype=np.float32), models, gpu=False)
+
+    assert fake_cellpose.built == ["cpdino"]
+    assert len(fake_cellpose.evaluated) == 3

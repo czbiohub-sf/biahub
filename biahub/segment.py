@@ -21,7 +21,7 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.settings import SegmentationSettings
-from biahub.utils.cellpose import cellpose_device, load_cellpose_model
+from biahub.utils.cellpose import cellpose_device, load_cellpose_model, stage_cellpose_weights
 from biahub.utils.cluster import estimate_resources, get_submitit_cluster
 from biahub.utils.config import yaml_to_model
 from biahub.utils.ngff import get_output_paths, resolve_ome_zarr_version
@@ -92,6 +92,19 @@ def resolve_models(
     return resolved
 
 
+# Loaded cellpose models of this process, keyed by (pretrained_model, device). A position
+# runs one segment_data call per timepoint; without the cache every frame reloaded the
+# ~1.2 GB checkpoint.
+_MODEL_CACHE: dict[tuple[str, str], Any] = {}
+
+
+def _cached_model(pretrained_model: str, device):
+    key = (pretrained_model, str(device))
+    if key not in _MODEL_CACHE:
+        _MODEL_CACHE[key] = load_cellpose_model(pretrained_model, device)
+    return _MODEL_CACHE[key]
+
+
 def segment_data(
     czyx_data: np.ndarray,
     models: list[ResolvedModel],
@@ -104,7 +117,8 @@ def segment_data(
     # Every job this step submits asks SLURM for a GPU, so an unusable one is a
     # broken allocation, not a reason to fall back to a ~130x slower CPU run.
     device = cellpose_device(gpu)
-    click.echo(f"Using device: {device}")
+    # Stage weights on node-local scratch before cellpose is first imported (no-op after).
+    stage_cellpose_weights()
 
     czyx_segmentation = []
     for model in models:
@@ -118,7 +132,7 @@ def segment_data(
         # Cellpose 4 refuses a z axis for 2D processing, so a 2D model gets the (C, Y, X)
         # plane and a 3D model the (C, Z, Y, X) stack. It also ignores `channels` and keeps
         # the first 3 channels it is given, so pass only the configured ones.
-        cellpose_model = load_cellpose_model(model.pretrained_model, device)
+        cellpose_model = _cached_model(model.pretrained_model, device)
         if model.z_slice_2D is not None:
             image, z_axis = czyx_data[model.channel_indices, model.z_slice_2D], None
         else:
@@ -235,7 +249,9 @@ def segment_cli(
                     output_position_path,
                     input_channel_indices=[list(range(C))],
                     output_channel_indices=[list(range(C_segment))],
-                    num_workers=np.min([20, int(num_cpus * 0.8)]),
+                    # One process per position: timepoints share the loaded model and
+                    # the GPU, which is the bottleneck.
+                    num_workers=1,
                     models=models,
                 )
             )
