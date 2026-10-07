@@ -811,3 +811,23 @@ def test_apply_transform_writes_ome_zarr_0_5_by_default(structured_plate, tmp_pa
     )  # fmt: skip
     with open_ome_zarr(tmp_path / "kept.zarr" / "A" / "1" / "0", mode="r") as out:
         assert out.version == "0.4"
+
+
+def test_apply_transform_sizes_workers_for_the_measured_memory(
+    two_position_stabilization, tmp_path, monkeypatch
+):
+    # Measured on 2024_11_07: ~5.2 GB per worker for a 1 GB volume, so 8x a volume per
+    # worker, and at most 32 workers (64 x 8 GB would not fit most nodes).
+    import biahub.apply_transform as module
+
+    positions, config = two_position_stabilization
+    calls = []
+    real = module.estimate_resources
+
+    def recording(shape, **kwargs):
+        calls.append(kwargs)
+        return real(shape, **kwargs)
+
+    monkeypatch.setattr(module, "estimate_resources", recording)
+    apply_transform(positions[:1], config, tmp_path / "out.zarr", init_only=True)
+    assert calls[-1]["ram_multiplier"] == 8 and calls[-1]["max_num_cpus"] == 32

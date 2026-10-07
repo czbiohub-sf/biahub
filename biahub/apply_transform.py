@@ -417,11 +417,14 @@ def apply_transform(
         )
 
     # Wall time scales with the volumes one position writes (0.5 min each, deskew's
-    # margin); an sbatch file's time overrides it.
+    # margin); an sbatch file's time overrides it. Memory: one worker per CPU, each
+    # holding a volume, its output and the resampling buffers -- measured ~5.2 GB for a
+    # 1 GB volume on 2024_11_07, so 8x; at most 32 workers (64 x 8 GB fits few nodes).
     time_minutes, num_cpus, gb_ram = estimate_resources(
         shape=(len(time_indices), len(output_channel_names), *moving_shape),
-        ram_multiplier=5,
+        ram_multiplier=8,
         time_multiplier=0.5,
+        max_num_cpus=32,
     )
     echo_resources(num_cpus, num_cpus * gb_ram, time_minutes)
     if init_only:
