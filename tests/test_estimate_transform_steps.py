@@ -316,3 +316,39 @@ def test_a_crashed_propagated_step_is_redone_on_resume(tmp_path, monkeypatch):
     for t in range(3):
         record = json.loads((records / f"{t}.json").read_text())
         assert not record.get("failed") and record["matrix"] is not None, t
+
+
+def test_a_stale_repair_does_not_replace_a_better_redone_estimate(
+    beads_plate_with_a_blank_timepoint, tmp_path
+):
+    # Run 1 repaired t=2 (accepted against a failed estimate). After fixing the data the
+    # estimate is redone and scores higher, but t=2 is still flagged and its old repair
+    # record is kept by --resume: finalize must keep the better estimate.
+    plate = beads_plate_with_a_blank_timepoint
+    config = _write_config(tmp_path)
+    output = tmp_path / "out" / "transforms.yml"
+    common = ["-m", plate, "-r", plate, "-c", config, "-o", output]
+    _ok("--init", *common)
+    _ok("--step", "estimate", *common)
+    _ok("--step", "flag", *common)
+    run = output.with_suffix("")
+    shift = np.eye(4)
+    shift[0, 3] = 7.0
+    (run / "repairs").mkdir(exist_ok=True)
+    (run / "repairs" / "2.json").write_text(
+        json.dumps(
+            {
+                "t": 2, "accepted": True, "source": "t-1", "score": 0.3,
+                "matrix": shift.tolist(), "candidate_scores": {"t-1": 0.3},
+                "candidate_failures": {}, "polish_rounds": 0, "reseed_score": 0.3,
+            }
+        )
+    )  # fmt: skip
+    redone = json.loads((run / "timepoints" / "1.json").read_text())  # a good estimate
+    (run / "timepoints" / "2.json").write_text(
+        json.dumps({**redone, "t": 2, "score": 0.9, "error": None})
+    )
+    _ok("--step", "finalize", *common)
+
+    entry = load_transform_settings(output).transforms[2]
+    assert entry.score == 0.9 and entry.repaired_from is None

@@ -1755,7 +1755,9 @@ def finalize_run(
                 after_score=outcome.score,
                 accepted=outcome.polish_rounds > 0,
             )
-        if outcome.accepted:
+        # As a fresh repair is judged (and as the sweep fold does): only if it beats the
+        # current estimate -- a repair kept by resume may predate a redone, better one.
+        if outcome.accepted and _beats(outcome.score, result.scores.get(t)):
             _accept(result, t, outcome.transform, outcome.score, outcome.source)
         click.echo(f"repair t={t}: {outcome.source} -> {outcome.score:.4f}")
 
