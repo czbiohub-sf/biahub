@@ -250,3 +250,29 @@ def test_segment_requests_less_time_for_2d_than_3d(fake_cellpose, example_plate,
         res[kind] = _resources(result.output)
     assert res["2d"]["cpus"] <= 4
     assert res["2d"]["time_minutes"] < res["3d"]["time_minutes"]
+
+
+def test_segment_local_jobs_get_the_step_time_limit(
+    fake_cellpose, example_plate, segment_config, tmp_path, monkeypatch
+):
+    """submitit's local executor kills jobs after timeout_min (default 2 min)."""
+    monkeypatch.setattr("biahub.segment.submitit.AutoExecutor", _RecordingExecutor)
+    monkeypatch.delenv("CI", raising=False)
+    plate_path, _ = example_plate
+
+    result = _run(
+        "--cluster",
+        "local",
+        "-i",
+        plate_path / "A" / "1" / "0",
+        "-o",
+        tmp_path / "s.zarr",
+        "-c",
+        segment_config(),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (
+        _RecordingExecutor.parameters["timeout_min"]
+        == _resources(result.output)["time_minutes"]
+    )

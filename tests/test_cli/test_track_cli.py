@@ -595,3 +595,6 @@ def test_track_gives_local_jobs_a_gpu(tmp_path, example_tracking_plate, monkeypa
     assert result.exit_code == 0, result.output
     assert recorded["cluster"] == "local"
     assert recorded.get("gpus_per_node") == 1
+    assert (
+        recorded.get("timeout_min") == recorded["slurm_time"]
+    )  # local default kills at 2 min

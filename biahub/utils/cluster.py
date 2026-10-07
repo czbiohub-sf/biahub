@@ -43,15 +43,17 @@ def echo_resources(num_cpus: int, mem_gb: int, time_minutes: int) -> None:
     click.echo("RESOURCES:" + json.dumps(payload))
 
 
-def gpu_executor_parameters(cluster: str) -> dict:
-    """Extra submitit parameters that give a GPU step's jobs a GPU on ``cluster``.
+def gpu_executor_parameters(cluster: str, timeout_min: float) -> dict:
+    """Extra submitit parameters for a GPU step's jobs on ``cluster``.
 
-    SLURM jobs get theirs from ``slurm_gpus_per_node``/gres, and ``debug`` runs in-process
-    with the caller's GPU. submitit's local executor, however, sets
-    ``CUDA_VISIBLE_DEVICES`` only from the generic ``gpus_per_node`` and otherwise hides
-    every GPU, so ``cellpose_device`` refuses to run.
+    SLURM jobs get their GPU from ``slurm_gpus_per_node``/gres and their limit from
+    ``slurm_time``, and ``debug`` runs in-process with the caller's GPU. submitit's local
+    executor ignores both: it sets ``CUDA_VISIBLE_DEVICES`` only from the generic
+    ``gpus_per_node`` (otherwise every GPU is hidden and ``cellpose_device`` refuses), and
+    kills jobs after the generic ``timeout_min`` (default 2 minutes). Note that local jobs
+    all run at once on the same GPU, so keep local runs to a few positions.
     """
-    return {"gpus_per_node": 1} if cluster == "local" else {}
+    return {"gpus_per_node": 1, "timeout_min": timeout_min} if cluster == "local" else {}
 
 
 def get_submitit_cluster(

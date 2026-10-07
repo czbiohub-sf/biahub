@@ -1095,7 +1095,9 @@ def track(
     resolved_cluster = get_submitit_cluster(cluster=cluster)
     click.echo(f"Preparing jobs on cluster='{resolved_cluster}': {slurm_args}")
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=resolved_cluster)
-    executor.update_parameters(**slurm_args, **gpu_executor_parameters(resolved_cluster))
+    executor.update_parameters(
+        **slurm_args, **gpu_executor_parameters(resolved_cluster, slurm_args["slurm_time"])
+    )
 
     click.echo("Submitting jobs...")
     jobs = []
