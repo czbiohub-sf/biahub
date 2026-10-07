@@ -36,10 +36,15 @@ class RecordingModel:
         do_3D=False,
         anisotropy=None,
         min_size=15,
+        stitch_threshold=0.0,
     ):
+        # Cellpose 4 refuses a z axis for 2D processing (cellpose/transforms.py:491).
+        if z_axis is not None and not do_3D and not stitch_threshold:
+            raise ValueError("2D image processing selected, but z_axis is not None.")
         RecordingModel.evaluated.append(np.array(x))
+        # Like cellpose: masks drop the channel axis and come back squeezed.
         shape = x.shape[1:] if channel_axis == 0 else x.shape
-        return np.ones(shape, dtype=np.uint16), None, None
+        return np.ones(shape, dtype=np.uint16).squeeze(), None, None
 
 
 @pytest.fixture
@@ -68,7 +73,8 @@ def test_segment_uses_the_requested_model(fake_cellpose):
     _segment(
         np.zeros((1, 1, 8, 8), dtype=np.float32),
         path_to_model="cpdino",
-        eval_args={"channels": [0], "diameter": None},
+        eval_args={"channels": [0], "diameter": None, "do_3D": False},
+        z_slice_2D=0,
     )
 
     assert fake_cellpose.built == ["cpdino"]
@@ -79,7 +85,12 @@ def test_segment_passes_only_the_configured_channel(fake_cellpose):
     # (segment_cli has already turned the channel name into this index).
     czyx = np.stack([np.full((1, 8, 8), c, dtype=np.float32) for c in (10, 20, 30)])
 
-    _segment(czyx, path_to_model="cpsam_v2", eval_args={"channels": [2], "diameter": None})
+    _segment(
+        czyx,
+        path_to_model="cpsam_v2",
+        eval_args={"channels": [2], "diameter": None, "do_3D": False},
+        z_slice_2D=0,
+    )
 
     (seen,) = fake_cellpose.evaluated
     assert seen.shape[0] == 1
@@ -121,7 +132,7 @@ def test_segment_slices_the_configured_plane(fake_cellpose):
     )
 
     (seen,) = fake_cellpose.evaluated
-    assert seen.shape == (1, 1, 8, 8)
+    assert seen.shape == (1, 8, 8)  # (C, Y, X): 2D input carries no z axis
     assert np.all(seen == 30)
 
 
@@ -185,3 +196,20 @@ def test_segment_cli_rejects_a_plane_outside_the_stack(fake_cellpose, example_pl
     assert result.exit_code != 0
     assert "z_slice_2D" in str(result.exception) + result.output
     assert not (tmp_path / "out.zarr").exists()
+
+
+def test_segment_3d_passes_the_z_stack(fake_cellpose):
+    czyx = np.zeros((2, 5, 8, 8), dtype=np.float32)
+
+    _segment(czyx, path_to_model="cpsam_v2", eval_args={"channels": [0], "do_3D": True})
+
+    (seen,) = fake_cellpose.evaluated
+    assert seen.shape == (1, 5, 8, 8)
+
+
+def test_3d_model_without_do_3d_is_refused(fake_cellpose):
+    """Cellpose 4 would raise on a z stack with do_3D False and no stitching."""
+    from biahub.settings import SegmentationModel
+
+    with pytest.raises(ValueError, match="do_3D"):
+        SegmentationModel(path_to_model="cpsam_v2", eval_args={"channels": ["GFP"]})

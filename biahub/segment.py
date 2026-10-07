@@ -60,9 +60,6 @@ def segment_data(
         # cellpose 4 ignores `channels` and keeps the first 3 channels it is given, so
         # pass only the configured ones (segment_cli turned the names into indices).
         channel_indices = eval_args.pop("channels")
-        czyx_data_to_segment = (
-            czyx_data[:, z_slice_2D : z_slice_2D + 1] if z_slice_2D is not None else czyx_data
-        )
         # Apply preprocessing functions
         preprocessing_functions = model_args.preprocessing
         for preproc in preprocessing_functions:
@@ -79,12 +76,15 @@ def segment_data(
             )
             czyx_data[c_idx] = func(czyx_data[c_idx], **kwargs)
 
-        # Apply the segmentation
+        # Apply the segmentation. Cellpose 4 refuses a z axis for 2D processing, so a 2D
+        # model gets the (C, Y, X) plane and a 3D model the (C, Z, Y, X) stack.
         model = load_cellpose_model(model_args.path_to_model, device)
-        segmentation, _, _ = model.eval(
-            czyx_data_to_segment[channel_indices], channel_axis=0, z_axis=1, **eval_args
-        )
-        if z_slice_2D is not None and isinstance(z_slice_2D, int):
+        if z_slice_2D is not None:
+            image, z_axis = czyx_data[channel_indices, z_slice_2D], None
+        else:
+            image, z_axis = czyx_data[channel_indices], 1
+        segmentation, _, _ = model.eval(image, channel_axis=0, z_axis=z_axis, **eval_args)
+        if z_slice_2D is not None:
             segmentation = segmentation[np.newaxis, ...]
         czyx_segmentation.append(segmentation)
     czyx_segmentation = np.stack(czyx_segmentation, axis=0)
