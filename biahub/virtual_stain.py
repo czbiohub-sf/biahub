@@ -464,8 +464,14 @@ def virtual_stain(
 
     # Timepoints are processed sequentially on a single GPU, so CPU and RAM
     # needs are fixed (independent of dataset size); only wall-time scales with
-    # the data (see the T*Z budget below).
-    num_cpus, mem_gb = 16, 64
+    # the data (see the T*Z budget below). Measured: ~1 core (0.94-1.14 cores
+    # averaged over each job, from `sacct` TotalCPU/Elapsed and the Nextflow
+    # trace) and <= 6.1 GB peak RSS, on A549 (67 x 86 x 1664 x 1193) and
+    # dynatrack (1418 x 171 x 768 x 794, 14-22 h jobs). There is no DataLoader
+    # here -- each timepoint is read directly -- so `data.init_args.num_workers`
+    # does not apply. 4 CPUs / 16 GB keeps ~4x / ~2.5x headroom and lets a job
+    # fit beside other work on a 16-CPU GPU workstation.
+    num_cpus, mem_gb = 4, 16
     # Wall-clock budget for GPU prediction, on the same min/volume currency as
     # the CPU steps. A per-window (T*Z) budget was tried first and fits worse:
     # seconds/window spans 0.31 (neuromast) to 1.58 (A549) because a window's
