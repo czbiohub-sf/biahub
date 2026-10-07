@@ -116,8 +116,10 @@ tmux new-session -d -s register-<DATASET> -c <output dir> \
 ```
 
 Relaunching the same script resumes: Nextflow's `-resume` skips finished tasks (the script
-passes it), the plain CLI's `--resume` keeps finished timepoints; both refuse if the
-settings or inputs changed. The run's records go in a folder named after the output
+passes it) and, if the config or transforms file changed, reruns what reads it (from init:
+a changed config starts the estimate over); the plain CLI's `--resume` keeps finished
+timepoints and refuses if the settings or inputs changed. Either way a timepoint whose
+job failed is redone. The run's records go in a folder named after the output
 (`<out>/transforms.yml` -> `<run> = <out>/transforms/`), so several estimates can share
 `<out>`; never run two launches on the same output at once. Nextflow retries preempted and
 timed-out tasks itself (doubling the time after a time limit); for the plain CLI on large

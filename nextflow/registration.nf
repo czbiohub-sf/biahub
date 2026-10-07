@@ -69,6 +69,11 @@ workflow {
     if (!new File(params.output.toString()).isAbsolute()) {
         error "--output must be an absolute path (got '${params.output}'): e.g. \$(realpath ${params.output})"
     }
+    ['estimate_config', 'transforms'].each { name ->
+        if (params[name] && !file(params[name].toString()).exists()) {
+            error "--${name} not found: ${params[name]}"
+        }
+    }
     if (params.estimate_config && !params.estimate_positions) {
         error "Provide --estimate_positions: e.g. the beads well ('C/1/000000') for a " +
             "registration shared by every position, or '*/*/*' to stabilize each position"
