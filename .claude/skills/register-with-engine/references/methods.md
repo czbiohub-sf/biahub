@@ -19,7 +19,7 @@ or `previous` (the channel's own first / previous frame with data: stabilization
   transform) and is estimated independently, one SLURM job per timepoint.
 - `previous_timepoint`: each timepoint starts from the previous one's result, with the seed
   competing on the first pass; a failed timepoint passes its own seed on; empty frames are
-  skipped. One sequential job (~5 min per timepoint by default; set an sbatch time limit for
+  skipped. One sequential job (budgeted ~10 min per timepoint, capped at 48 h; set an sbatch time limit for
   large volumes). This is the legacy `use_prev_t_transform: true`, which most production
   beads configs used; `convert-settings` maps it for beads only.
 

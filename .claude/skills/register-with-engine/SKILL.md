@@ -97,7 +97,7 @@ Show: dataset, beads well, moving/reference stores and channels, T and volume sh
 config path and its non-default fields, the positions to estimate on and to apply to, how
 it runs (Nextflow or the plain CLI), the output directory, expected cost (independent: one
 task per position x timepoint, ~2 min each, then one per flagged timepoint to repair;
-propagation: one sequential task per position, ~5 min per timepoint by default), and what
+propagation: one sequential task per position, budgeted ~10 min per timepoint), and what
 will be compared against. Wait for a go.
 
 ## 6. Scaffold the output directory

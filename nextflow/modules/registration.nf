@@ -18,10 +18,12 @@
 // preemptible partition.
 //
 // CACHE KEYS ON CONTENT, NOT NAMES. Nextflow caches a task by its inputs, and a path
-// passed as `val` is just a string: a config or transforms file rewritten in place (e.g.
-// `substitute-transforms -o <same file>`) would let -resume reuse every task. So the
+// passed as `val` is just a string: a config or a `--transforms` file rewritten in place
+// (e.g. `substitute-transforms -o <same file>`) would let -resume reuse every task. So the
 // estimate tasks take the config's content hash, and the apply tasks the transforms
-// file's (finalize prints the hash of the file it writes).
+// file's (finalize prints the hash of the file it writes). Note that an estimate run
+// rewrites its own transforms.yml at finalize (never cached): to apply a substituted file,
+// write it elsewhere and pass it with --transforms.
 //
 // apply-transform follows deskew: `--init` creates the output plate and prints
 // RESOURCES for one position's task; each task writes one position into it. Its

@@ -146,8 +146,9 @@ biahub deskew          -i ./lightsheet.zarr/*/*/* -c ./deskew.yml -o ./lightshee
 # RECONSTRUCT PHASE/BIREFRINGENCE
 biahub reconstruct -i ./labelfree.zarr/*/*/* -c ./recon.yml -o ./labelfree_reconstructed.zarr
 
-# STABILIZE (the moving channel against its own first / previous timepoint)
-biahub estimate-transform -m ./labelfree.zarr/0/0/0 -c ./estimate-stabilization.yml \
+# STABILIZE (the moving channel against its own first / previous timepoint; every position
+# drifts differently, so each gets its own transform list)
+biahub estimate-transform -m ./labelfree.zarr/*/*/* -c ./estimate-stabilization.yml \
                           -o ./stabilization/transforms.yml
 biahub apply-transform    -m ./labelfree.zarr/*/*/* -c ./stabilization/transforms.yml \
                           -o ./labelfree_stabilized.zarr
