@@ -261,3 +261,19 @@ def test_legacy_pcc_reference_and_beads_fov_convert_to_the_unified_fields():
     assert unified.phase_cross_corr.t_reference == "first"
     assert unified.phase_cross_corr.skip_beads_fov == "0"
     assert any("skip_beads_fov" in note for note in notes)
+
+
+def test_converting_different_focus_and_stackreg_crops_says_which_one_is_used():
+    # The unified method has one crop; legacy xyz could crop Z (focus) and XY (stackreg)
+    # differently -- converting must say so, not silently change the XY result.
+    legacy = EstimateStabilizationSettings(
+        stabilization_estimation_channel="Phase3D",
+        stabilization_channels=["Phase3D"],
+        stabilization_type="xyz",
+        stabilization_method="focus-finding",
+        focus_finding_settings={"center_crop_xy": [600, 600]},
+        stack_reg_settings={"center_crop_xy": [900, 900]},
+    )
+    unified, notes = convert_settings(legacy)
+    assert unified.focus_finding.center_crop_xy == [600, 600]
+    assert any("center_crop_xy" in note and "900" in note for note in notes)

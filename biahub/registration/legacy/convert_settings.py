@@ -280,6 +280,17 @@ def estimate_settings_from_legacy(
         crop = next(
             b.center_crop_xy for b in (*blocks, FocusFindingSettings()) if b is not None
         )
+        if (
+            legacy.stabilization_type == "xyz"
+            and focus is not None
+            and stack_reg is not None
+            and list(focus.center_crop_xy) != list(stack_reg.center_crop_xy)
+        ):
+            notes.append(
+                f"center_crop_xy: the focus block's {list(focus.center_crop_xy)} is used for "
+                f"z and yx; the stack_reg block's {list(stack_reg.center_crop_xy)} (yx) is "
+                "dropped, so the yx estimate may differ from the legacy run"
+            )
         focus_finding = FocusSettings(axes=legacy.stabilization_type, center_crop_xy=crop)
         if stack_reg is not None:
             reference = stack_reg.t_reference
