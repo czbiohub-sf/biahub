@@ -256,9 +256,10 @@ def test_registration_nf_resolves_relative_inputs_and_wants_an_absolute_output(t
         tmp_path,
         "--moving", "data.zarr", "--reference", "data.zarr",
         "--estimate_config", "estimate.yml", "--estimate_positions", "A/1/0",
-        "--output", tmp_path / "run",
+        "--apply", "--apply_output", "registered.zarr", "--output", tmp_path / "run",
     )  # fmt: skip
     assert load_transform_settings(tmp_path / "run" / "transforms.yml").transforms
+    assert (tmp_path / "registered.zarr" / "A" / "1" / "0").exists()  # where it was asked for
     assert plate.exists()
 
     result = subprocess.run(

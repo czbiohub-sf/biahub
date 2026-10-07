@@ -105,7 +105,7 @@ workflow {
 
     if (apply) {
         def store_name = new File(moving).name.replaceAll(/(\.ome)?\.zarr$/, '')
-        def output_zarr = params.apply_output ?: "${out}/${store_name}.zarr"
+        def output_zarr = absolute_path(params.apply_output) ?: "${out}/${store_name}.zarr"
         def extra = []
         if (params.crop_to_overlap) extra << '--crop-to-overlap'
         if (params.channels) {
