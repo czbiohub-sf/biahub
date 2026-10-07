@@ -260,3 +260,40 @@ def test_a_crashing_timepoint_is_recorded_as_the_plain_run_does(
     _ok("--step", "estimate", "--timepoints", "1", "--resume", *common)
     record = json.loads((by_steps.with_suffix("") / "timepoints" / "1.json").read_text())
     assert record["error"] is None and record["matrix"] is not None
+
+
+def test_a_crashed_propagated_step_is_redone_on_resume(tmp_path, monkeypatch):
+    # The sequential job raising records every unreached timepoint as failed; a retry with
+    # --resume must estimate them again, not keep the stand-ins.
+    import biahub.registration.engine as engine
+
+    rng = np.random.default_rng(11)
+    ref = _synthetic_bead_volume(rng, SHAPE)
+    step = np.array([2.0, -2.0, 2.0])
+    plate = _write_plate(
+        tmp_path / "drift.zarr",
+        [
+            (ref, ndi_shift(ref, shift=tuple((t + 1) * step), order=1, mode="constant"))
+            for t in range(3)
+        ],
+    )
+    config = _write_config(tmp_path, seed_from="previous_timepoint")
+    output = tmp_path / "out" / "transforms.yml"
+    common = ["-m", plate, "-r", plate, "-c", config, "-o", output]
+    _ok("--init", *common)
+
+    real = engine.estimate_propagated
+
+    def crash(*args, **kwargs):
+        raise RuntimeError("blosc encoded value is invalid")
+
+    monkeypatch.setattr(engine, "estimate_propagated", crash)
+    _cli("--step", "estimate", *common)
+    records = output.with_suffix("") / "timepoints"
+    assert all(json.loads((records / f"{t}.json").read_text()).get("failed") for t in range(3))
+
+    monkeypatch.setattr(engine, "estimate_propagated", real)
+    _ok("--step", "estimate", "--resume", *common)
+    for t in range(3):
+        record = json.loads((records / f"{t}.json").read_text())
+        assert not record.get("failed") and record["matrix"] is not None, t

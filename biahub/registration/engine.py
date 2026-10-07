@@ -1093,7 +1093,7 @@ def _estimate_propagated_job(
     if resume:
         for t in time_indices:
             path = records_dir / f"{t}.json"
-            if path.exists():
+            if _finished(path):  # a failed record is redone
                 done[t] = json.loads(path.read_text())
     records = dict(done)
     records_dir.mkdir(parents=True, exist_ok=True)
@@ -1945,7 +1945,7 @@ def estimate_transform_series(
     executor.update_parameters(**slurm_args)
 
     to_estimate = [
-        t for t in time_indices if not (resume and (timepoints_dir / f"{t}.json").exists())
+        t for t in time_indices if not (resume and _finished(timepoints_dir / f"{t}.json"))
     ]
     if resume:
         click.echo(
