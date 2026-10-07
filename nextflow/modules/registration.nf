@@ -355,9 +355,11 @@ workflow estimate_transform_run_wf {
         estimate_items, moving_zarr, reference_zarr, positions, config, config_hash, transforms
     ) | collect
 
-    // Flagging reads the whole run's scores, so it waits for every estimate.
+    // Flagging reads the whole run's scores, so it waits for every estimate. Some or all
+    // estimate tasks may have been ignored (their jobs raised, the failure recorded): then
+    // `collect` emits nothing, hence ifEmpty -- the run still flags and writes the file.
     to_flag = plan
-        .combine(estimated.map { 'done' })
+        .combine(estimated.ifEmpty(['none']).map { 'done' })
         .flatMap { p, _gate -> p.positions }
     flags = flag_position(
         to_flag, moving_zarr, reference_zarr, positions, config, config_hash, transforms
