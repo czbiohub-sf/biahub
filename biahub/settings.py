@@ -800,7 +800,7 @@ class PreprocessingFunctions(BaseModel):
 class SegmentationModel(BaseModel):
     path_to_model: str
     eval_args: dict[str, Any]
-    z_slice_2D: int | None = None
+    z_slice_2D: NonNegativeInt | None = None
     preprocessing: list[PreprocessingFunctions] = []
 
     @field_validator("eval_args", mode="before")
@@ -828,7 +828,6 @@ class SegmentationModel(BaseModel):
                 raise ValueError(
                     "If 'z_slice_2D' is provided, 'do_3D' in 'eval_args' must be set to False."
                 )
-            return 0  # force it to 0 as per your logic
         return z_slice_2D
 
 

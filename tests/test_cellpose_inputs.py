@@ -107,3 +107,62 @@ def test_model_type_in_a_track_config_warns():
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         CellposeConfig()
+
+
+def test_segment_slices_the_configured_plane(fake_cellpose):
+    # Channel 0 holds the plane index (x10) so the plane cellpose receives is visible.
+    czyx = np.stack([np.full((1, 8, 8), 10 * z, dtype=np.float32) for z in range(6)], axis=1)
+
+    _segment(
+        czyx,
+        path_to_model="cpsam_v2",
+        eval_args={"channels": [0], "diameter": None, "do_3D": False},
+        z_slice_2D=3,
+    )
+
+    (seen,) = fake_cellpose.evaluated
+    assert seen.shape == (1, 1, 8, 8)
+    assert np.all(seen == 30)
+
+
+def test_segment_cli_rejects_a_plane_outside_the_stack(fake_cellpose, example_plate, tmp_path):
+    import yaml
+
+    from click.testing import CliRunner
+
+    from biahub.cli.main import cli
+
+    plate_path, _ = example_plate  # Z = 4
+    config = tmp_path / "segment.yml"
+    config.write_text(
+        yaml.safe_dump(
+            {
+                "models": {
+                    "nuc": {
+                        "path_to_model": "cpsam_v2",
+                        "eval_args": {"channels": ["GFP"], "do_3D": False},
+                        "z_slice_2D": 10,
+                    }
+                }
+            }
+        )
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        # --local: never submit to SLURM from a test, even if the check is missing.
+        [
+            "segment",
+            "-i",
+            str(plate_path / "A" / "1" / "0"),
+            "-o",
+            str(tmp_path / "out.zarr"),
+            "-c",
+            str(config),
+            "--local",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "z_slice_2D" in str(result.exception) + result.output
+    assert not (tmp_path / "out.zarr").exists()

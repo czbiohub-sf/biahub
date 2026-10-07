@@ -137,9 +137,15 @@ def segment_cli(
     # TODO: implement logic for 2D segmentation. Have a slicing parameter
     segment_args = settings.models
     C_segment = len(segment_args)
+    Z_out = Z
     for model_name, model_args in segment_args.items():
-        if model_args.z_slice_2D is not None and isinstance(model_args.z_slice_2D, int):
-            Z = 1
+        if model_args.z_slice_2D is not None:
+            if model_args.z_slice_2D >= Z:
+                raise ValueError(
+                    f"Model {model_name}: z_slice_2D={model_args.z_slice_2D} is outside the "
+                    f"input stack (Z={Z})."
+                )
+            Z_out = 1
         # Ensure channel names exist in the dataset
         if not all(channel in channel_names for channel in model_args.eval_args["channels"]):
             raise ValueError(
@@ -182,7 +188,7 @@ def segment_cli(
                 else:
                     raise ValueError("Channel must be specified for preprocessing functions")
 
-    segmentation_shape = (T, C_segment, Z, Y, X)
+    segmentation_shape = (T, C_segment, Z_out, Y, X)
 
     # Create a zarr store output to mirror the input
     create_empty_plate(
