@@ -66,7 +66,7 @@ from biahub.registration.policies import (
     SeedPolicy,
     is_empty,
 )
-from biahub.registration.utils import get_aprox_transform
+from biahub.registration.utils import get_aprox_transform, resolve_time_indices
 from biahub.settings import (
     AffineTransformSettings,
     BeadsMatchSettings,
@@ -863,14 +863,6 @@ def repair_series(
         if on_timepoint is not None:
             on_timepoint(t, result)
     return result
-
-
-def resolve_time_indices(time_indices, n_t: int) -> list[int]:
-    if time_indices == "all":
-        return list(range(n_t))
-    if isinstance(time_indices, int):
-        return [time_indices]
-    return list(time_indices)
 
 
 def _open_series(position_dirpath: Path, channel_name: str):

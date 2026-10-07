@@ -550,3 +550,12 @@ def match_shape(
         click.echo(f"matched shape: input shape {img.shape}, output shape {shape}")
 
     return img
+
+
+def resolve_time_indices(time_indices, n_t: int) -> list[int]:
+    """Return the timepoints a `time_indices` setting names: 'all', one index, or a list."""
+    if time_indices == "all":
+        return list(range(n_t))
+    if isinstance(time_indices, int):
+        return [time_indices]
+    return list(time_indices)

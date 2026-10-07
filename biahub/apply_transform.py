@@ -43,6 +43,7 @@ from biahub.registration.utils import (
     apply_affine_transform,
     convert_transform_to_ants,
     rescale_voxel_size,
+    resolve_time_indices,
 )
 from biahub.settings import TransformSettings, load_transform_settings
 from biahub.utils.array_ops import copy_n_paste_czyx
@@ -50,14 +51,6 @@ from biahub.utils.cluster import echo_resources, estimate_resources, get_submiti
 from biahub.utils.ngff import PROVENANCE_METADATA_KEYS, resolve_ome_zarr_version
 
 Slices = tuple[slice, slice, slice]
-
-
-def _resolve_time_indices(time_indices, n_t: int) -> list[int]:
-    if time_indices == "all":
-        return list(range(n_t))
-    if isinstance(time_indices, int):
-        return [time_indices]
-    return list(time_indices)
 
 
 def _coarse(shape_zyx: tuple[int, int, int], f: int) -> tuple[int, int, int]:
@@ -288,7 +281,7 @@ def apply_transform(
             f"channels not in the moving store: {unknown} (it has {moving_channel_names})"
         )
     to_transform = [c for c in moving_channel_names if channels is None or c in channels]
-    time_indices = _resolve_time_indices(time_indices, T)
+    time_indices = resolve_time_indices(time_indices, T)
     # Each moving position's matrices by timepoint: its own list, or the shared one.
     position_keys = [position_key(p) for p in moving_position_dirpaths]
     if settings.per_position:
