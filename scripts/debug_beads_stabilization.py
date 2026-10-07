@@ -5,7 +5,7 @@ from pathlib import Path
 from iohub import open_ome_zarr
 from biahub.core.transform import convert_transform_to_ants, Transform
 import napari
-from biahub.settings import EstimateRegistrationSettings
+from biahub.registration.legacy.convert_settings import EstimateRegistrationSettings
 import numpy as np
 
 from biahub.registration.methods.beads import transform_from_matches, matches_from_beads, peaks_from_beads, optimize_transform
