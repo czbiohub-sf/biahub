@@ -94,9 +94,9 @@ session. What `-resume` does after a change:
 
 - **Editing a step's config** (any byte, even a comment, or a `touch`) reruns
   that step's tasks. Steps whose CLI runs with `--resume` (flat-field, deskew,
-  assemble) key their per-unit progress on the validated settings, so after an
-  edit that changes no setting they skip every unit and finish in seconds.
-  Reconstruct, virtual-stain, track and QC recompute.
+  virtual-stain, assemble) key their per-unit progress on the validated
+  settings, so after an edit that changes no setting they skip every unit and
+  finish in seconds. Reconstruct, track and QC recompute.
 - **The steps downstream of an edited config are NOT rerun**: they stay cached
   on the old upstream output (biahub#406). After changing a step's config,
   delete the outputs and work dirs of every step after it before relaunching.
