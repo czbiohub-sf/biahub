@@ -79,6 +79,8 @@ from biahub.utils.config import model_to_yaml, yaml_to_model
 
 ENGINE_SETTINGS_FILENAME = "estimate_transform_settings.yml"
 RUN_MANIFEST_FILENAME = "run_manifest.json"
+# A position's --initial-transforms, by timepoint, in its run folder (the jobs read it).
+INITIAL_FILENAME = "initial.json"
 
 
 @dataclass
@@ -1072,6 +1074,7 @@ class _JobInputs(NamedTuple):
     estimator: TransformEstimator
     score_fn: ScoreFn
     seed: Transform
+    initial: dict[int, Transform] | None
 
 
 def _job_inputs(
@@ -1085,8 +1088,19 @@ def _job_inputs(
     estimator, score_fn, seed = build_estimator(
         settings, tuple(mov.shape[-3:]), mov_voxel_size, ref_voxel_size
     )
+    initial_path = Path(settings_path).parent / INITIAL_FILENAME
+    initial = (
+        {
+            int(t): Transform(
+                np.asarray(m, dtype=float), transform_type=settings.transform.type
+            )
+            for t, m in json.loads(initial_path.read_text()).items()
+        }
+        if initial_path.exists()
+        else None
+    )
     return _JobInputs(
-        settings, mov, ref, mov_voxel_size, ref_voxel_size, estimator, score_fn, seed
+        settings, mov, ref, mov_voxel_size, ref_voxel_size, estimator, score_fn, seed, initial
     )
 
 
@@ -1103,8 +1117,9 @@ def _estimate_timepoint_job(
     estimator, score_fn, seed = job.estimator, job.score_fn, job.seed
 
     result = estimate_series(
-        mov, _reference_policy(settings, ref), estimator, FixedSeed(seed), score_fn, [t]
-    )
+        mov, _reference_policy(settings, ref), estimator, FixedSeed(seed), score_fn, [t],
+        initial=job.initial,
+    )  # fmt: skip
     record = {
         "t": t,
         "matrix": result.transforms[t].to_list() if t in result.transforms else None,
@@ -1171,13 +1186,26 @@ def _estimate_propagated_job(
         time_indices,
         done=done,
         on_timepoint=write_record,
+        initial=job.initial,
     )
     return records
 
 
-def _run_fingerprint(settings: EstimateTransformSettings, source: Path, target: Path) -> dict:
+def _run_fingerprint(
+    settings: EstimateTransformSettings,
+    source: Path,
+    target: Path,
+    initial: dict[int, Transform] | None = None,
+) -> dict:
     """Return what a resumed run must share with the run it resumes."""
     digest = hashlib.sha256(settings.model_dump_json().encode()).hexdigest()
+    initial_digest = (
+        None
+        if not initial
+        else hashlib.sha256(
+            json.dumps(_initial_json(initial), sort_keys=True).encode()
+        ).hexdigest()
+    )
 
     def resolved(path):
         return None if path is None else str(Path(path).resolve())
@@ -1186,7 +1214,12 @@ def _run_fingerprint(settings: EstimateTransformSettings, source: Path, target: 
         "settings_sha256": digest,
         "moving": resolved(source),
         "reference": resolved(target),
+        "initial_sha256": initial_digest,
     }
+
+
+def _initial_json(initial: dict[int, Transform]) -> dict[str, list]:
+    return {str(t): transform.to_list() for t, transform in sorted(initial.items())}
 
 
 def _start_run(
@@ -1195,6 +1228,7 @@ def _start_run(
     source: Path,
     target: Path,
     resume: bool,
+    initial: dict[int, Transform] | None = None,
 ) -> None:
     """Begin a run in `output_dir`: clear earlier records, or check a resume is compatible.
 
@@ -1203,7 +1237,7 @@ def _start_run(
     match the manifest of the run being resumed.
     """
     manifest_path = output_dir / RUN_MANIFEST_FILENAME
-    fingerprint = _run_fingerprint(settings, source, target)
+    fingerprint = _run_fingerprint(settings, source, target, initial)
     if resume:
         if not manifest_path.exists():
             click.echo(
@@ -1589,6 +1623,7 @@ def init_run(
     settings: EstimateTransformSettings,
     output_dir: Path,
     resume: bool = False,
+    initial: dict[int, Transform] | None = None,
 ) -> dict:
     """Start a run in `output_dir` and return its plan (also written as `run_plan.json`).
 
@@ -1625,8 +1660,18 @@ def init_run(
     estimator, _score_fn, _seed_transform = build_estimator(
         settings, (Z, Y, X), mov_voxel_size, ref_voxel_size
     )
-    _start_run(output_dir, settings, source, target, resume)
+    if initial and not getattr(estimator, "uses_seed", True):
+        raise click.UsageError(
+            f"method {settings.method!r} ignores seeds, so initial transforms would not be "
+            "used; drop --initial-transforms"
+        )
+    _start_run(output_dir, settings, source, target, resume, initial)
     model_to_yaml(settings, output_dir / ENGINE_SETTINGS_FILENAME)
+    initial_path = output_dir / INITIAL_FILENAME
+    if initial:
+        _write_json(initial_path, _initial_json(initial))
+    else:
+        initial_path.unlink(missing_ok=True)
 
     time_indices = resolve_time_indices(settings.time_indices, T)
     propagated = settings.transform.seed_from == "previous_timepoint"
@@ -1975,6 +2020,7 @@ def estimate_transform_series(
     cluster: str = "slurm",
     monitor: bool = False,
     resume: bool = False,
+    initial: dict[int, Transform] | None = None,
 ) -> tuple[SeriesResult, list[int], list[Transform]]:
     """Run every phase through submitit; return the series, its timepoints and one forward transform per timepoint.
 
@@ -1987,7 +2033,7 @@ def estimate_transform_series(
     """
     output_dir = Path(output_dir)
     source, target = Path(moving_position_dirpath), Path(reference_position_dirpath)
-    plan = init_run(source, target, settings, output_dir, resume)
+    plan = init_run(source, target, settings, output_dir, resume, initial)
     settings_path = output_dir / ENGINE_SETTINGS_FILENAME
     time_indices = plan["time_indices"]
     timepoints_dir, repairs_dir, sweeps_dir = _record_dirs(output_dir)

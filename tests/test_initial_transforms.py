@@ -125,3 +125,76 @@ def test_records_keep_seeded_from_through_a_reload(tmp_path):
     )  # fmt: skip
     result = _load_series(tmp_path, [0], "euclidean", resumed=[0])
     assert result.seeded_from == {0: "initial"}
+
+
+def _blank_plate(tmp_path):
+    """Three timepoints of beads; the last moving frame has none (its estimate fails)."""
+    from scipy.ndimage import shift as ndi_shift
+
+    from tests.test_estimate_transform import (
+        APPLIED_SHIFT_ZYX,
+        SHAPE,
+        _synthetic_bead_volume,
+        _write_plate,
+    )
+
+    rng = np.random.default_rng(11)
+    ref = _synthetic_bead_volume(rng, SHAPE)
+    mov = ndi_shift(ref, shift=APPLIED_SHIFT_ZYX, order=1, mode="constant", cval=0.0)
+    blank = rng.normal(0, 5.0, size=SHAPE).astype(np.float32)
+    return _write_plate(tmp_path / "plate.zarr", [(ref, mov), (ref, mov), (ref, blank)])
+
+
+def test_the_driver_reads_initial_transforms_from_the_run_folder(tmp_path):
+    # A plain run given initial transforms: every job reads them (the run folder's
+    # initial.json), and where the estimate fails (t=2) the initial transform stands in.
+    from biahub.registration.engine import estimate_transform_series
+    from biahub.settings import load_estimate_transform_settings
+    from tests.test_estimate_transform import APPLIED_SHIFT_ZYX, _write_config
+
+    plate = _blank_plate(tmp_path)
+    settings = load_estimate_transform_settings(_write_config(tmp_path))
+    truth = Transform.from_translation([-a for a in APPLIED_SHIFT_ZYX])  # forward
+    run = tmp_path / "run"
+    result, _ts, _transforms = estimate_transform_series(
+        plate, plate, settings, run, cluster="debug", initial={2: truth}
+    )
+    assert (run / "initial.json").exists()
+    assert result.seeded_from.get(2) == "initial"
+    np.testing.assert_allclose(result.transforms[2].matrix, truth.matrix)
+
+
+def test_methods_that_ignore_seeds_refuse_initial_transforms(tmp_path):
+    import click
+
+    from biahub.registration.engine import init_run
+    from biahub.settings import PhaseCrossCorrSettings, load_estimate_transform_settings
+    from tests.test_estimate_transform import SHAPE, _write_config
+
+    plate = _blank_plate(tmp_path)
+    settings = load_estimate_transform_settings(
+        _write_config(
+            tmp_path,
+            reference="first",
+            method="phase-cross-corr",
+            phase_cross_corr=PhaseCrossCorrSettings(center_crop_xy=[SHAPE[1], SHAPE[2]]),
+        )
+    )
+    with pytest.raises(click.UsageError, match="ignores seeds"):
+        init_run(plate, plate, settings, tmp_path / "run", initial={0: IDENTITY})
+
+
+def test_resume_refuses_different_initial_transforms(tmp_path):
+    import click
+
+    from biahub.registration.engine import init_run
+    from biahub.settings import load_estimate_transform_settings
+    from tests.test_estimate_transform import _write_config
+
+    plate = _blank_plate(tmp_path)
+    settings = load_estimate_transform_settings(_write_config(tmp_path))
+    run = tmp_path / "run"
+    init_run(plate, plate, settings, run, initial={2: _shift_x(1)})
+    init_run(plate, plate, settings, run, resume=True, initial={2: _shift_x(1)})  # same: fine
+    with pytest.raises(click.UsageError, match="initial_sha256"):
+        init_run(plate, plate, settings, run, resume=True, initial={2: _shift_x(2)})
