@@ -1,0 +1,96 @@
+"""--initial-transforms: per timepoint, the estimate, a refinement from the initial
+transform and the initial transform as-is compete; ties keep the earlier one."""
+
+import numpy as np
+import pytest
+
+from biahub.core.transform import Transform
+from biahub.registration.engine import estimate_propagated, estimate_series
+from biahub.registration.estimators import EstimationError
+from biahub.registration.policies import CrossChannel, FixedSeed
+
+IDENTITY = Transform.identity(3)
+
+
+def _shift_x(dx):
+    return Transform.from_translation([0.0, 0.0, float(dx)])
+
+
+def _frames(n):
+    return np.stack([np.full((2, 2, 2), float(t + 1)) for t in range(n)])
+
+
+class _AddOne:
+    """Moves its seed by +1 in x; fails when started from x == `fail_from`."""
+
+    def __init__(self, fail_from=None):
+        self.fail_from = fail_from
+
+    def estimate(self, mov, ref, seed=None):
+        start = seed or IDENTITY
+        if self.fail_from is not None and start.translation[2] == self.fail_from:
+            raise EstimationError("too few matches")
+        return start @ _shift_x(1)
+
+
+def _score_near(target):
+    """Higher the closer a transform's x is to `target`."""
+    return lambda transform, mov, ref: -abs(transform.translation[2] - target)
+
+
+@pytest.mark.parametrize(
+    "target, expected_x, seeded_from",
+    [
+        (1.0, 1.0, None),  # the estimate (seed 0 -> 1) is best
+        (11.0, 11.0, "initial+refined"),  # refined from the initial (10 -> 11) is best
+        (10.0, 10.0, "initial"),  # the initial transform as-is is best
+    ],
+)
+def test_the_best_of_estimate_refined_and_initial_wins(target, expected_x, seeded_from):
+    mov = _frames(1)
+    result = estimate_series(
+        mov, CrossChannel(mov), _AddOne(), FixedSeed(IDENTITY), _score_near(target), [0],
+        initial={0: _shift_x(10)},
+    )  # fmt: skip
+    assert result.transforms[0].translation[2] == expected_x
+    assert result.seeded_from.get(0) == seeded_from
+
+
+def test_a_tie_keeps_the_estimate():
+    mov = _frames(1)
+    result = estimate_series(
+        mov, CrossChannel(mov), _AddOne(), FixedSeed(IDENTITY),
+        lambda transform, mov, ref: 1.0, [0], initial={0: _shift_x(10)},
+    )  # fmt: skip
+    assert result.transforms[0].translation[2] == 1.0 and 0 not in result.seeded_from
+
+
+def test_an_initial_transform_rescues_a_failed_estimate():
+    mov = _frames(1)
+    result = estimate_series(
+        mov, CrossChannel(mov), _AddOne(fail_from=0.0), FixedSeed(IDENTITY),
+        _score_near(11.0), [0], initial={0: _shift_x(10)},
+    )  # fmt: skip
+    assert result.transforms[0].translation[2] == 11.0 and 0 not in result.errors
+    assert result.seeded_from[0] == "initial+refined"
+
+
+def test_timepoints_without_an_initial_transform_are_estimated_as_before():
+    mov = _frames(2)
+    result = estimate_series(
+        mov, CrossChannel(mov), _AddOne(), FixedSeed(IDENTITY), _score_near(10.0), [0, 1],
+        initial={1: _shift_x(10)},
+    )  # fmt: skip
+    assert result.transforms[0].translation[2] == 1.0 and 0 not in result.seeded_from
+    assert result.transforms[1].translation[2] == 10.0 and result.seeded_from[1] == "initial"
+
+
+def test_propagation_lets_the_initial_transform_compete_and_passes_the_winner_on():
+    mov = _frames(2)
+    result = estimate_propagated(
+        mov, CrossChannel(mov), _AddOne(), IDENTITY, _score_near(10.0), [0, 1],
+        initial={0: _shift_x(10)},
+    )  # fmt: skip
+    assert result.transforms[0].translation[2] == 10.0 and result.seeded_from[0] == "initial"
+    # t=1 starts from t=0's winner (x=10): 10 + 1 = 11, against the input seed's 0 + 1
+    assert result.transforms[1].translation[2] == 11.0

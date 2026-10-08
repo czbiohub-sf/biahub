@@ -514,6 +514,9 @@ class SeriesResult:
     # A stand-in decided while estimating (propagation: a failed timepoint returns the
     # seed it started from), with its source; used instead of the input seed.
     stand_ins: dict[int, tuple[Transform, str]] = field(default_factory=dict)
+    # Timepoints whose transform came from --initial-transforms: "initial" (as given) or
+    # "initial+refined" (estimated starting from it).
+    seeded_from: dict[int, str] = field(default_factory=dict)
     journal: RunJournal = field(default_factory=RunJournal)
 
 
@@ -530,13 +533,16 @@ def estimate_series(
     history: dict[int, Transform] | None = None,
     journal: RunJournal | None = None,
     on_timepoint: OnTimepoint | None = None,
+    initial: dict[int, Transform] | None = None,
 ) -> SeriesResult:
     """One estimate per timepoint, in the given order.
 
     `history` is the caller-owned mapping a `PreviousSeed` reads from. It is filled here
     as timepoints are accepted, so handing the same dict to the seed policy is what makes
     propagation work; the result's `transforms` IS that dict. An `EstimationError` records
-    nan plus the message for that timepoint and moves on.
+    nan plus the message for that timepoint and moves on. `initial` holds initial
+    transforms by t (--initial-transforms): each competes with the estimate
+    (`_compete_with_initial`).
     """
     result = SeriesResult(
         transforms=history if history is not None else {},
@@ -553,18 +559,54 @@ def estimate_series(
                 on_timepoint(t, result)
             continue
         seed = seed_policy.seed_for(t)
+        primary, error = None, None
         try:
             transform = estimator.estimate(mov_t, ref_t, seed=seed)
         except EstimationError as e:
-            result.scores[t] = float("nan")
-            result.errors[t] = f"{type(e).__name__}: {e}"
+            error = f"{type(e).__name__}: {e}"
         else:
             transform = _gap_rule(estimator, reference_policy, mov, t, transform)
-            result.transforms[t] = transform
-            result.scores[t] = float(score_fn(transform, mov_t, ref_t))
+            primary = (transform, float(score_fn(transform, mov_t, ref_t)))
+        if initial is not None and t in initial:
+            transform, score, source = _compete_with_initial(
+                estimator, mov_t, ref_t, primary, initial[t], score_fn,
+                lambda found, t=t: _gap_rule(estimator, reference_policy, mov, t, found),
+            )  # fmt: skip
+            primary, error = (transform, score), None
+            if source is not None:
+                result.seeded_from[t] = source
+        if primary is None:
+            result.scores[t] = float("nan")
+            result.errors[t] = error
+        else:
+            result.transforms[t], result.scores[t] = primary
         if on_timepoint is not None:
             on_timepoint(t, result)
     return result
+
+
+def _compete_with_initial(estimator, mov, ref, primary, initial, score_fn, finish):
+    """Return the best of the estimate, a refinement from `initial`, and `initial` itself.
+
+    `primary` is the estimate as (transform, score), or None if it failed. The others
+    are tried in that order and a later one wins only with a strictly better score
+    (`_beats`), so a tie keeps the estimate. Returns (transform, score, source), source
+    None for the estimate, else "initial+refined" or "initial". `finish` applies what the
+    estimate's own result gets (the gap rule) to the refinement.
+    """
+    candidates = [] if primary is None else [(*primary, None)]
+    try:
+        refined = finish(estimator.estimate(mov, ref, seed=initial))
+    except EstimationError:
+        pass
+    else:
+        candidates.append((refined, float(score_fn(refined, mov, ref)), "initial+refined"))
+    candidates.append((initial, float(score_fn(initial, mov, ref)), "initial"))
+    best = candidates[0]
+    for candidate in candidates[1:]:
+        if _beats(candidate[1], best[1]):
+            best = candidate
+    return best
 
 
 def _across_gap(reference_policy: ReferencePolicy, mov, t: int) -> bool:
@@ -639,6 +681,7 @@ def estimate_propagated(
     time_indices: Iterable[int],
     done: dict[int, dict] | None = None,
     on_timepoint: OnTimepoint | None = None,
+    initial: dict[int, Transform] | None = None,
 ) -> SeriesResult:
     """Estimate timepoints in order, each starting from the previous one's result.
 
@@ -650,6 +693,8 @@ def estimate_propagated(
     stabilization reference frame is not estimated against itself -- it is identity, and
     the chain starts after it from `input_seed`. `done` holds records of timepoints
     already estimated (resume): they are not redone, only used to continue the chain.
+    `initial` holds initial transforms by t, each competing with t's estimate
+    (`_compete_with_initial`); the winner is what the next timepoint starts from.
     """
     done = done or {}
     result = SeriesResult()
@@ -678,21 +723,33 @@ def estimate_propagated(
             else:
                 seed = previous if previous is not None else input_seed
                 competitor = input_seed if previous is not None else None
+                primary, error = None, None
                 try:
                     transform = _estimate_competing(
                         estimator, mov_t, ref_t, seed, competitor, score_fn
                     )
                 except EstimationError as e:
+                    error = f"{type(e).__name__}: {e}"
+                else:
+                    transform = _gap_rule(estimator, reference_policy, mov, t, transform)
+                    primary = (transform, float(score_fn(transform, mov_t, ref_t)))
+                if initial is not None and t in initial:
+                    transform, score, source = _compete_with_initial(
+                        estimator, mov_t, ref_t, primary, initial[t], score_fn,
+                        lambda found, t=t: _gap_rule(estimator, reference_policy, mov, t, found),
+                    )  # fmt: skip
+                    primary = (transform, score)
+                    if source is not None:
+                        result.seeded_from[t] = source
+                if primary is None:
                     result.scores[t] = float("nan")
-                    result.errors[t] = f"{type(e).__name__}: {e}"
+                    result.errors[t] = error
                     source = f"t={t - 1}" if previous is not None else "seed"
                     result.stand_ins[t] = (seed, source)
                     previous = seed
                 else:
-                    transform = _gap_rule(estimator, reference_policy, mov, t, transform)
-                    result.transforms[t] = transform
-                    result.scores[t] = float(score_fn(transform, mov_t, ref_t))
-                    previous = transform
+                    result.transforms[t], result.scores[t] = primary
+                    previous = primary[0]
         if on_timepoint is not None:
             on_timepoint(t, result)
     return result
