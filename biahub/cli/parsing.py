@@ -345,9 +345,10 @@ def resume(help: str | None = None) -> Callable:
             or (
                 "Skip the (time, channel) units this position already finished in an "
                 "earlier attempt instead of recomputing the whole position. For retrying "
-                "a run that was interrupted, e.g. by Slurm preemption. A finished unit is "
-                "skipped without re-deriving it, so pass --no-resume (or use a fresh "
-                "output store) when the settings changed."
+                "a run that was interrupted, e.g. by Slurm preemption. Finished units are "
+                "keyed by the step's validated settings, so a settings change recomputes "
+                "them; a change to the input data does not, so use a fresh output store "
+                "(or --no-resume) after an upstream step was rerun."
             ),
         )(f)
 

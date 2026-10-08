@@ -8,6 +8,7 @@ import torch
 
 from biahub.utils.cellpose import (
     cellpose_device,
+    load_cellpose_model,
     stage_cellpose_weights,
     warm_cellpose_weights,
 )
@@ -108,23 +109,54 @@ def test_warm_cellpose_weights_returns_the_resolved_checkpoint(tmp_path, monkeyp
     checkpoint.write_bytes(b"downloaded by warming")
 
     class FakeModel:
-        def __init__(self, gpu=False):
+        def __init__(self, gpu=False, pretrained_model="cpsam_v2"):
             # --init runs on the head node, which has no GPU to ask for.
             assert gpu is False
+            assert pretrained_model == "cpdino"
             self.pretrained_model = str(checkpoint)
 
     _fake_cellpose(monkeypatch, FakeModel)
 
-    assert warm_cellpose_weights() == checkpoint
+    assert warm_cellpose_weights("cpdino") == checkpoint
 
 
 def test_warm_cellpose_weights_survives_an_unusable_cellpose(monkeypatch):
     """Warming is an optimisation: --init must not fail when it cannot happen."""
 
     class Unavailable:
-        def __init__(self, gpu=False):
+        def __init__(self, gpu=False, pretrained_model="cpsam_v2"):
             raise RuntimeError("checkpoint is corrupt")
 
     _fake_cellpose(monkeypatch, Unavailable)
 
     assert warm_cellpose_weights() is None
+
+
+def test_load_cellpose_model_rejects_unknown_names(monkeypatch):
+    """Cellpose 4 would silently run cpsam_v2 for a cellpose 3 name such as nuclei."""
+
+    def unreachable(**kwargs):
+        raise AssertionError("must not build a model for an unknown name")
+
+    _fake_cellpose(monkeypatch, unreachable)
+    sys.modules["cellpose.models"].MODEL_NAMES = ["cpsam_v2", "cpdino"]
+    sys.modules["cellpose.models"].get_user_models = lambda: []
+
+    with pytest.raises(ValueError, match="Unknown cellpose model 'nuclei'"):
+        load_cellpose_model("nuclei", torch.device("cpu"))
+
+
+def test_load_cellpose_model_passes_the_requested_model(monkeypatch):
+    built = {}
+
+    class FakeModel:
+        def __init__(self, pretrained_model, gpu, device):
+            built.update(pretrained_model=pretrained_model, gpu=gpu)
+            self.pretrained_model, self.device = pretrained_model, device
+
+    _fake_cellpose(monkeypatch, FakeModel)
+    sys.modules["cellpose.models"].MODEL_NAMES = ["cpsam_v2", "cpdino"]
+    sys.modules["cellpose.models"].get_user_models = lambda: []
+
+    load_cellpose_model("cpdino", torch.device("cpu"))
+    assert built == {"pretrained_model": "cpdino", "gpu": False}

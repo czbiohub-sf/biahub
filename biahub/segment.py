@@ -18,7 +18,7 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.settings import SegmentationSettings
-from biahub.utils.cellpose import cellpose_device
+from biahub.utils.cellpose import cellpose_device, load_cellpose_model
 from biahub.utils.cluster import estimate_resources, get_submitit_cluster
 from biahub.utils.config import yaml_to_model
 from biahub.utils.ngff import get_output_paths, resolve_ome_zarr_version
@@ -51,16 +51,15 @@ def segment_data(
     device = cellpose_device(gpu)
     click.echo(f"Using device: {device}")
 
-    from cellpose import models
-
     czyx_segmentation = []
     # Process each model in a loop
     for model_name, model_args in segmentation_models.items():
         click.echo(f"Segmenting with model {model_name}")
         z_slice_2D = model_args.z_slice_2D
-        czyx_data_to_segment = (
-            czyx_data[:, z_slice_2D : z_slice_2D + 1] if z_slice_2D is not None else czyx_data
-        )
+        eval_args = dict(model_args.eval_args)
+        # cellpose 4 ignores `channels` and keeps the first 3 channels it is given, so
+        # pass only the configured ones (segment_cli turned the names into indices).
+        channel_indices = eval_args.pop("channels")
         # Apply preprocessing functions
         preprocessing_functions = model_args.preprocessing
         for preproc in preprocessing_functions:
@@ -77,14 +76,15 @@ def segment_data(
             )
             czyx_data[c_idx] = func(czyx_data[c_idx], **kwargs)
 
-        # Apply the segmentation
-        model = models.CellposeModel(
-            model_type=model_args.path_to_model, gpu=gpu, device=device
-        )
-        segmentation, _, _ = model.eval(
-            czyx_data_to_segment, channel_axis=0, z_axis=1, **model_args.eval_args
-        )
-        if z_slice_2D is not None and isinstance(z_slice_2D, int):
+        # Apply the segmentation. Cellpose 4 refuses a z axis for 2D processing, so a 2D
+        # model gets the (C, Y, X) plane and a 3D model the (C, Z, Y, X) stack.
+        model = load_cellpose_model(model_args.path_to_model, device)
+        if z_slice_2D is not None:
+            image, z_axis = czyx_data[channel_indices, z_slice_2D], None
+        else:
+            image, z_axis = czyx_data[channel_indices], 1
+        segmentation, _, _ = model.eval(image, channel_axis=0, z_axis=z_axis, **eval_args)
+        if z_slice_2D is not None:
             segmentation = segmentation[np.newaxis, ...]
         czyx_segmentation.append(segmentation)
     czyx_segmentation = np.stack(czyx_segmentation, axis=0)
@@ -137,23 +137,31 @@ def segment_cli(
     # TODO: implement logic for 2D segmentation. Have a slicing parameter
     segment_args = settings.models
     C_segment = len(segment_args)
+    Z_out = Z
     for model_name, model_args in segment_args.items():
-        if model_args.z_slice_2D is not None and isinstance(model_args.z_slice_2D, int):
-            Z = 1
+        if model_args.z_slice_2D is not None:
+            if model_args.z_slice_2D >= Z:
+                raise ValueError(
+                    f"Model {model_name}: z_slice_2D={model_args.z_slice_2D} is outside the "
+                    f"input stack (Z={Z})."
+                )
+            Z_out = 1
         # Ensure channel names exist in the dataset
         if not all(channel in channel_names for channel in model_args.eval_args["channels"]):
             raise ValueError(
                 f"Channels {model_args.eval_args['channels']} not found in dataset {channel_names}"
             )
-        # Channel strings to indices with the cellpose offset of 1
+        # Channel names to dataset channel indices; segment_data slices these out, as
+        # cellpose 4 takes up to 3 channels in any order and has no `channels` argument.
+        channel_count = len(model_args.eval_args["channels"])
+        if not 1 <= channel_count <= 3:
+            raise ValueError(
+                f"Model {model_name}: cellpose 4 requires 1 to 3 channels, "
+                f"got {model_args.eval_args['channels']}"
+            )
         model_args.eval_args["channels"] = [
-            channel_names.index(channel) + 1 for channel in model_args.eval_args["channels"]
+            channel_names.index(channel) for channel in model_args.eval_args["channels"]
         ]
-        # NOTE:List of channels, either of length 2 or of length number of images by 2.
-        # First element of list is the channel to segment (0=grayscale, 1=red, 2=green, 3=blue).
-        # Second element of list is the optional nuclear channel (0=none, 1=red, 2=green, 3=blue).
-        if len(model_args.eval_args["channels"]) < 2:
-            model_args.eval_args["channels"].append(0)
 
         click.echo(
             f"Segmenting with model {model_name} using channels {model_args.eval_args['channels']}"
@@ -181,7 +189,7 @@ def segment_cli(
                 else:
                     raise ValueError("Channel must be specified for preprocessing functions")
 
-    segmentation_shape = (T, C_segment, Z, Y, X)
+    segmentation_shape = (T, C_segment, Z_out, Y, X)
 
     # Create a zarr store output to mirror the input
     create_empty_plate(

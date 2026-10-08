@@ -7,12 +7,12 @@ resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'darwin'",
     "python_full_version >= '3.14' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'win32'",
-    "python_full_version < '3.13' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'emscripten'",
-    "python_full_version < '3.13' and sys_platform == 'emscripten'",
     "python_full_version == '3.13.*' and sys_platform == 'darwin'",
-    "python_full_version < '3.13' and sys_platform == 'darwin'",
     "python_full_version == '3.13.*' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version < '3.13' and sys_platform == 'win32'",
+    "python_full_version < '3.13' and sys_platform == 'emscripten'",
+    "python_full_version < '3.13' and sys_platform == 'darwin'",
     "python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 
@@ -358,8 +358,8 @@ dev = [
 requires-dist = [
     { name = "antspyx", specifier = ">=0.6" },
     { name = "build", marker = "extra == 'build'" },
-    { name = "cellpose", marker = "extra == 'all'" },
-    { name = "cellpose", marker = "extra == 'segment'" },
+    { name = "cellpose", marker = "extra == 'all'", specifier = ">=4.0.1" },
+    { name = "cellpose", marker = "extra == 'segment'", specifier = ">=4.0.1" },
     { name = "click" },
     { name = "cytoland", marker = "extra == 'all'" },
     { name = "cytoland", marker = "extra == 'stain'" },
@@ -367,7 +367,7 @@ requires-dist = [
     { name = "humanize" },
     { name = "imageio-ffmpeg" },
     { name = "imaging-qc-pipeline", extras = ["interactive"], marker = "extra == 'qc'", git = "https://github.com/czbiohub-sf/imaging-qc-pipeline?rev=c5c51dc700d0aa52388d6f6a08eec5bfe16a5766" },
-    { name = "iohub", git = "https://github.com/czbiohub-sf/iohub?rev=b7bc648fc375c708161ed620b99fbb75317ecdcd" },
+    { name = "iohub", git = "https://github.com/czbiohub-sf/iohub?rev=d1f9e89294529d365719cf87a9b29622ca77a992" },
     { name = "largestinteriorrectangle" },
     { name = "llvmlite", specifier = ">=0.41.0" },
     { name = "markdown" },
@@ -2010,8 +2010,8 @@ wheels = [
 
 [[package]]
 name = "iohub"
-version = "0.3.12.dev15+b7bc648"
-source = { git = "https://github.com/czbiohub-sf/iohub?rev=b7bc648fc375c708161ed620b99fbb75317ecdcd#b7bc648fc375c708161ed620b99fbb75317ecdcd" }
+version = "0.3.12.dev16+d1f9e89"
+source = { git = "https://github.com/czbiohub-sf/iohub?rev=d1f9e89294529d365719cf87a9b29622ca77a992#d1f9e89294529d365719cf87a9b29622ca77a992" }
 dependencies = [
     { name = "blosc2" },
     { name = "dask", extra = ["array"] },

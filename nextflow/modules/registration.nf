@@ -17,18 +17,16 @@
 // the timepoints it already finished -- what matters for the sequential task on the
 // preemptible partition.
 //
-// CACHE KEYS ON CONTENT, NOT NAMES. Nextflow caches a task by its inputs, and a path
-// passed as `val` is just a string: a config or a `--transforms` file rewritten in place
-// (e.g. `substitute-transforms -o <same file>`) would let -resume reuse every task. So the
-// estimate tasks take the config's content hash, and the apply tasks the transforms
-// file's (finalize prints the hash of the file it writes). Note that an estimate run
-// rewrites its own transforms.yml at finalize (never cached): to apply a substituted file,
-// write it elsewhere and pass it with --transforms.
-//
-// apply-transform follows deskew: `--init` creates the output plate and prints
-// RESOURCES for one position's task; each task writes one position into it. Its
-// init reads the transforms file, so it runs after estimation, not in an up-front
-// init phase.
+// WHAT RERUNS A TASK. The estimate config follows main's convention (common.nf, #397):
+// every estimate process takes it twice, `val config` for the command line and `path
+// config_file`, the same file staged only so its size and mtime enter the task hash -- an
+// edited config reruns the estimate. The transforms file the apply tasks read is keyed on
+// its CONTENT instead (`transforms_hash`): an estimate run's finalize is never cached and
+// rewrites transforms.yml on every -resume, so a staged path's new mtime would rerun every
+// apply task each time even when nothing changed. Finalize prints the hash of the file it
+// writes; an existing --transforms file is hashed at launch. Note that an estimate run
+// rewrites its own transforms.yml: to apply a substituted file, write it elsewhere and pass
+// it with --transforms.
 
 include {
     parse_resources; slurm_logs; slurm_log_dir; slurm_output_readme; retry_time; retry_memory
@@ -92,7 +90,7 @@ process init_estimate_transform {
     val reference_zarr
     val positions
     val config
-    val config_hash
+    path config_file  // staged only for the task hash: see common.nf, #397
     val transforms
     val init_args
     val trigger
@@ -126,7 +124,7 @@ process estimate_timepoints {
     val reference_zarr
     val positions
     val config
-    val config_hash
+    path config_file  // staged only for the task hash: see common.nf, #397
     val transforms
 
     output:
@@ -149,7 +147,7 @@ process flag_position {
     val reference_zarr
     val positions
     val config
-    val config_hash
+    path config_file  // staged only for the task hash: see common.nf, #397
     val transforms
 
     output:
@@ -183,7 +181,7 @@ process refine_timepoint {
     val reference_zarr
     val positions
     val config
-    val config_hash
+    path config_file  // staged only for the task hash: see common.nf, #397
     val transforms
 
     output:
@@ -204,7 +202,7 @@ process finalize_estimate_transform {
     val reference_zarr
     val positions
     val config
-    val config_hash
+    path config_file  // staged only for the task hash: see common.nf, #397
     val transforms
 
     output:
@@ -290,8 +288,8 @@ process run_apply_transform {
 //   positions       position glob to estimate on, e.g. 'C/1/000000' (one shared
 //                   transform list, e.g. the beads well) or '*/*/*' (one list each)
 //   config          estimate-transform settings YAML
-//   config_hash     its content hash, with any initial transforms' (the tasks' cache
-//                   key; see the header)
+//   config_file     the config, and any initial transforms, as files: staged so an
+//                   edit to either reruns the tasks (#397)
 //   transforms      the transforms file to write
 //   init_args       further --init options (e.g. '--initial-transforms <file>')
 //   trigger         gating channel -- init starts once this emits
@@ -303,14 +301,14 @@ workflow estimate_transform_init_wf {
     reference_zarr
     positions
     config
-    config_hash
+    config_file
     transforms
     init_args
     trigger
 
     main:
     init_out = init_estimate_transform(
-        moving_zarr, reference_zarr, positions, config, config_hash, transforms, init_args,
+        moving_zarr, reference_zarr, positions, config, config_file, transforms, init_args,
         trigger.collect().map { 'done' }
     )
     plan = init_out.map { stdout_text ->
@@ -331,7 +329,7 @@ workflow estimate_transform_init_wf {
 // Estimate every position's timepoints, flag, repair / sweep, and write the file.
 //
 // take:
-//   plan, moving_zarr, reference_zarr, positions, config, config_hash, transforms  as above
+//   plan, moving_zarr, reference_zarr, positions, config, config_file, transforms  as above
 //   prev_done   gating channel -- estimation starts once this emits
 // emit:
 //   done        the written transforms file's content hash (the apply tasks' cache key)
@@ -342,7 +340,7 @@ workflow estimate_transform_run_wf {
     reference_zarr
     positions
     config
-    config_hash
+    config_file
     transforms
     prev_done
 
@@ -358,7 +356,7 @@ workflow estimate_transform_run_wf {
             }
         }
     estimated = estimate_timepoints(
-        estimate_items, moving_zarr, reference_zarr, positions, config, config_hash, transforms
+        estimate_items, moving_zarr, reference_zarr, positions, config, config_file, transforms
     ) | collect
 
     // Flagging reads the whole run's scores, so it waits for every estimate. Some or all
@@ -368,7 +366,7 @@ workflow estimate_transform_run_wf {
         .combine(estimated.ifEmpty(['none']).map { 'done' })
         .flatMap { p, _gate -> p.positions }
     flags = flag_position(
-        to_flag, moving_zarr, reference_zarr, positions, config, config_hash, transforms
+        to_flag, moving_zarr, reference_zarr, positions, config, config_file, transforms
     )
 
     refine_items = flags
@@ -379,7 +377,7 @@ workflow estimate_transform_run_wf {
                 f.sweep.collect { t -> ['sweep', pos, t, task_resources(p.resources.sweep)] }
         }
     refined = refine_timepoint(
-        refine_items, moving_zarr, reference_zarr, positions, config, config_hash, transforms
+        refine_items, moving_zarr, reference_zarr, positions, config, config_file, transforms
     )
 
     // Finalize after every position is flagged and every repair / sweep is done
@@ -388,7 +386,7 @@ workflow estimate_transform_run_wf {
         .combine(refined.collect().ifEmpty(['none']).map { 'refined' })
         .map { _flagged, _refined -> 'done' }
     written = finalize_estimate_transform(
-        gate, moving_zarr, reference_zarr, positions, config, config_hash, transforms
+        gate, moving_zarr, reference_zarr, positions, config, config_file, transforms
     )
 
     emit:

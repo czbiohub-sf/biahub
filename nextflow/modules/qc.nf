@@ -9,7 +9,7 @@ process plan_stage {
     tag "${zarr_path}"
 
     input:
-    tuple val(zarr_path), val(config_path)
+    tuple val(zarr_path), val(config_path), path(config_file)  // config_file: staged only for the task hash, see common.nf (#397)
 
     output:
     tuple val(zarr_path), val(config_path), stdout
@@ -34,7 +34,7 @@ process estimate_resources {
     tag "${zarr_path}"
 
     input:
-    tuple val(zarr_path), val(config_path)
+    tuple val(zarr_path), val(config_path), path(config_file)  // config_file: staged only for the task hash, see common.nf (#397)
 
     output:
     tuple val(zarr_path), val(config_path), stdout
@@ -64,7 +64,8 @@ process compute_step {
 
     input:
     tuple val(zarr_path), val(config_path), val(step_id),
-          val(position), val(chunk_id), val(time_indices), val(meta)
+          val(position), val(chunk_id), val(time_indices), val(meta),
+          path(config_file)  // config_file: staged only for the task hash, see common.nf (#397)
 
     output:
     tuple val(zarr_path), val(step_id), val(position)
@@ -89,7 +90,7 @@ process finalize_stage {
     tag "${zarr_path}"
 
     input:
-    tuple val(zarr_path), val(config_path)
+    tuple val(zarr_path), val(config_path), path(config_file)  // config_file: staged only for the task hash, see common.nf (#397)
 
     output:
     tuple val(zarr_path), val(config_path), stdout
@@ -176,12 +177,13 @@ workflow qc_plan_wf {
     plan_inputs
 
     main:
-    plan_out = plan_stage(plan_inputs)
+    staged_inputs = plan_inputs.map { z, cfg -> tuple(z, cfg, file(cfg)) }
+    plan_out = plan_stage(staged_inputs)
 
     // Per-(zarr,config) memory estimate from imaging-qc's estimate-resources CLI.
     // Keyed by [zarr, config] and joined 1:1 into the plan so every work item
     // carries `mem` (GB), which becomes compute_step's meta.memory_gb.
-    est_mem = estimate_resources(plan_inputs)
+    est_mem = estimate_resources(staged_inputs)
         .map { z, cfg, est_json ->
             def line = est_json.trim().readLines().findAll { line -> line.trim().startsWith('{') }.last()
             def r = new groovy.json.JsonSlurper().parseText(line)
@@ -239,7 +241,7 @@ workflow qc_compute_wf {
             tuple([z, cfg], [step_id, position, chunk_id, time_indices, meta])
         }
         .combine(compute_ready.map { z, cfg -> tuple([z, cfg], 'ready') }, by: 0)
-        .map { key, item, _ready -> [key[0], key[1]] + item }
+        .map { key, item, _ready -> [key[0], key[1]] + item + [file(key[1])] }
 
     done = compute_step(ready_items)
 
@@ -248,7 +250,7 @@ workflow qc_compute_wf {
     // stage, which is all there is now that waves are gone.
     merged = stores
         .combine(done.count())
-        .map { z, cfg, _n -> [z, cfg] }
+        .map { z, cfg, _n -> [z, cfg, file(cfg)] }
         | finalize_stage
 
     emit:
