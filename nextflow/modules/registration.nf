@@ -94,6 +94,7 @@ process init_estimate_transform {
     val config
     val config_hash
     val transforms
+    val init_args
     val trigger
 
     output:
@@ -105,7 +106,7 @@ process init_estimate_transform {
     biahub estimate-transform --init \\
         -m "${moving_zarr}"/${positions} ${reference_arg(reference_zarr, positions)} \\
         -c "${config}" \\
-        -o "${transforms}"
+        -o "${transforms}" ${init_args}
     """
 }
 
@@ -289,8 +290,10 @@ process run_apply_transform {
 //   positions       position glob to estimate on, e.g. 'C/1/000000' (one shared
 //                   transform list, e.g. the beads well) or '*/*/*' (one list each)
 //   config          estimate-transform settings YAML
-//   config_hash     its content hash (the tasks' cache key; see the header)
+//   config_hash     its content hash, with any initial transforms' (the tasks' cache
+//                   key; see the header)
 //   transforms      the transforms file to write
+//   init_args       further --init options (e.g. '--initial-transforms <file>')
 //   trigger         gating channel -- init starts once this emits
 // emit:
 //   plan            the PLAN payload (positions, time_indices, propagated, resources)
@@ -302,11 +305,12 @@ workflow estimate_transform_init_wf {
     config
     config_hash
     transforms
+    init_args
     trigger
 
     main:
     init_out = init_estimate_transform(
-        moving_zarr, reference_zarr, positions, config, config_hash, transforms,
+        moving_zarr, reference_zarr, positions, config, config_hash, transforms, init_args,
         trigger.collect().map { 'done' }
     )
     plan = init_out.map { stdout_text ->
