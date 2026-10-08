@@ -134,6 +134,11 @@ class TrackingSettings(MyBaseModel):
     input_images: list[ProcessingInputChannel]
     tracking_config: dict[str, Any] = {}
     segmentation_method: Literal["foreground_contour", "cellpose"] = "foreground_contour"
+    # Post-processing: at a division, drop a daughter track of this many frames or fewer
+    # and merge the other daughter into the parent (ultrack's filter_short_sibling_tracks,
+    # same meaning). Removes short false divisions, e.g. a virtual-staining hallucination
+    # linked as a daughter. None (default) keeps every division.
+    min_sibling_length: PositiveInt | None = None
     cellpose_config: CellposeConfig | None = None
     # When None, preserve the OME-Zarr version of the input store.
     output_ome_zarr_version: Literal["0.4", "0.5"] | None = None
