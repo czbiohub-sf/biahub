@@ -43,13 +43,13 @@ params.virtual_stain_config = null
 params.track_config = null
 params.concatenate_config = null
 params.max_positions = 0
-// QC, off by default. Each param points at a stage config for one store; set
-// either, both, or neither. Both QC'd stores become tabs of ONE report.
-//   --qc_config       nextflow/configs/<family>/qc.yaml        (assembled store)
-//   --qc_track_config nextflow/configs/<family>/qc_track.yaml  (tracking store)
-// One self-contained file per store, beside that family's other step configs.
+// QC, off by default. Points at the stage config for the assembled store:
+//   --qc_config nextflow/configs/<family>/qc.yaml
+// Tracking writes its labels into that store, so a family that tracks counts
+// instances in the same config (a549/qc.yaml) — there is no separate tracking
+// store to QC any more.
 params.qc_config = null
-params.qc_track_config = null
+params.qc_track_config = null  // removed; refused below
 
 include { collect_positions; dataset_name; check_environment } from './modules/common'
 include { flat_field_init_wf; flat_field_run_wf } from './modules/flat_field'
@@ -128,9 +128,7 @@ workflow {
     // `4-assemble` where an A549 run also has `5-track` after it.
     def assemble_on = params.concatenate_config as boolean
     def track_on    = params.track_config as boolean
-    def qc_image_on = params.qc_config as boolean
-    def qc_track_on = params.qc_track_config as boolean
-    def qc_on       = qc_image_on || qc_track_on
+    def qc_on       = params.qc_config as boolean
 
     // A step cannot outlive the step whose output it reads. Refuse the
     // combination at launch, naming the config to add or the one to drop, rather
@@ -138,11 +136,12 @@ workflow {
     if (track_on && !assemble_on) {
         error "--track_config needs --concatenate_config: tracking reads the assembled plate."
     }
-    if (qc_image_on && !assemble_on) {
+    if (qc_on && !assemble_on) {
         error "--qc_config needs --concatenate_config: it QCs the assembled store."
     }
-    if (qc_track_on && !track_on) {
-        error "--qc_track_config needs --track_config: it QCs the tracking store."
+    if (params.qc_track_config) {
+        error "--qc_track_config was removed: tracking writes its labels into the assembled " +
+              "store, and --qc_config counts them (see nextflow/configs/a549/qc.yaml)."
     }
 
     // Whether this run deletes its intermediates once it finishes. Resolved now
@@ -188,7 +187,9 @@ workflow {
     reconstruct_output   = "${out}/${layout.reconstruct}/${ds}.zarr"
     virtual_stain_output = "${out}/${layout.virtual_stain}/${ds}.zarr"
     assemble_output      = assemble_on ? "${out}/${layout.assemble}/${ds}.zarr" : null
-    track_output         = track_on    ? "${out}/${layout.track}/${ds}.zarr"    : null
+    // Tracking writes its labels and tracks INTO the assembled plate; its own
+    // directory holds only the per-FOV Ultrack databases and SLURM placeholders.
+    track_dir            = track_on    ? "${out}/${layout.track}"               : null
 
     // ========================================================================
     //  INIT PHASE — every config parsed, every output store scaffolded, before
@@ -255,28 +256,26 @@ workflow {
         // already carries the phase and virtual-stain channels (concatenate
         // preserves channel names, so the track config's channel names resolve
         // unchanged), so the plate structure and the image data come from the
-        // same store. Its init also warms the shared cellpose weights cache,
-        // which is better done here than with N GPU workers racing for it.
-        tk_init = track_init_wf(assemble_output, track_output, params.track_config,
+        // same store. Its init creates the empty label image tracking fills in
+        // every position of that plate, and warms the shared cellpose weights
+        // cache, which is better done here than with N GPU workers racing for it.
+        tk_init = track_init_wf(assemble_output, track_dir, params.track_config,
                                 as_init.done)
         init_signals << tk_init.done
     }
 
     // QC's planning verbs belong in this phase for the same reason the step
     // inits do — `plan-stage` and `estimate-resources` read the store's
-    // structure and validate the config, and read no pixels. Each store's plan
-    // is gated on the init that scaffolded it. The tab label is the step
-    // directory, which is unique per store by construction.
+    // structure and validate the config, and read no pixels. The plan is gated
+    // on the init that scaffolded what it reads: with tracking on that is
+    // track's init, because a config counting instances in `labels/` is refused
+    // at plan time until the label image exists. The tab label is the step
+    // directory.
     def qc_stores = []
     if (qc_on) {
-        if (qc_image_on) {
-            qc_stores << [label: layout.assemble, zarr: assemble_output,
-                          config: params.qc_config, scaffolded: as_init.done]
-        }
-        if (qc_track_on) {
-            qc_stores << [label: layout.track, zarr: track_output,
-                          config: params.qc_track_config, scaffolded: tk_init.done]
-        }
+        qc_stores << [label: layout.assemble, zarr: assemble_output,
+                      config: params.qc_config,
+                      scaffolded: track_on ? tk_init.done : as_init.done]
 
         // The trigger is mapped, NOT combined. `combine` concatenates the two
         // items, so what the producer emits leaks into the tuple's arity: an
@@ -361,16 +360,16 @@ workflow {
     // virtual_stain_output, and gate on virtual_stain_done.
     if (track_on) {
         track_done = track_run_wf(all_positions, assemble_output, assemble_output,
-                                  track_output, params.track_config,
+                                  track_dir, params.track_config,
                                   tk_init.resources, assemble_done.done)
     }
 
     // ----- QC compute -------------------------------------------------------
-    // Planned in the init phase; the compute it planned is gated on the step
-    // that wrote each store — the ASSEMBLED plate on assemble_done (the same
-    // signal track waits on, so image QC runs CONCURRENTLY with tracking), and
-    // the tracking store on track_done. Neither extends the critical path ahead
-    // of itself.
+    // Planned in the init phase; the compute it planned is gated on the last
+    // step that writes the assembled plate — track_done when tracking is on
+    // (its labels are counted in the same pass as the pixel metrics), else
+    // assemble_done. Waiting for tracking puts QC after it rather than beside
+    // it, the price of one QC pass and one table per store.
     //
     // A QC verdict cannot fail the pipeline: `imaging-qc gate` exits 0 whether
     // positions pass or fail, recording the verdict in each store's own
@@ -387,15 +386,8 @@ workflow {
         // Keyed [zarr, config] to match what qc_plan_wf emitted, so each store's
         // planned work is released by its own producer and no other. Mapped, not
         // combined, for the reason spelled out at qc_plan_inputs above.
-        qc_compute_ready = channel.empty()
-        if (qc_image_on) {
-            qc_compute_ready = qc_compute_ready.mix(
-                assemble_done.done.map { tuple(assemble_output, params.qc_config) } )
-        }
-        if (qc_track_on) {
-            qc_compute_ready = qc_compute_ready.mix(
-                track_done.done.map { tuple(track_output, params.qc_track_config) } )
-        }
+        def plate_written = track_on ? track_done.done : assemble_done.done
+        qc_compute_ready = plate_written.map { tuple(assemble_output, params.qc_config) }
 
         qc = qc_compute_wf(qc_plan.items, qc_plan.stores, qc_compute_ready)
         qc_report = qc_report_wf(qc.done, spec, qc_report_dir)
@@ -426,7 +418,7 @@ workflow {
             .collect { zarr -> new File(zarr).parent }
         def assemble_dir = new File(assemble_output).parent
         cleanup_paths << "${assemble_dir}/slurm_output" << "${assemble_dir}/.iohub-progress"
-        if (track_on) cleanup_paths << "${new File(track_output).parent}/slurm_output"
+        if (track_on) cleanup_paths << "${track_dir}/slurm_output"
         def cleanup_list = cleanup_targets(cleanup_paths, out)
         cleanup_record = "${out}/nextflow/intermediates_cleaned.txt"
 
@@ -476,7 +468,7 @@ workflow {
         [label: 'virtual staining',     done: virtual_stain_done.done,   output: virtual_stain_output],
     ]
     if (assemble_on) step_events << [label: 'assemble', done: assemble_done.done, output: assemble_output]
-    if (track_on)    step_events << [label: 'track',    done: track_done.done,    output: track_output]
+    if (track_on)    step_events << [label: 'track',    done: track_done.done,    output: assemble_output]
     if (qc_on)       step_events << [label: 'QC',       done: qc_report.done,     output: qc_report_dir]
     if (cleanup_on)  step_events << [label: 'cleanup intermediates', done: cleanup_run.done, output: cleanup_record]
 

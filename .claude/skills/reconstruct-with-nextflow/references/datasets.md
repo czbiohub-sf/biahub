@@ -70,10 +70,14 @@ layout is defined once in `nextflow/mantis-v2.nf` (`directory_layout()`):
 ├── 1-deskew/<DATASET>.zarr
 ├── 2-reconstruct/<DATASET>.zarr
 ├── 3-virtual-stain/<DATASET>.zarr
-├── 4-assemble/<DATASET>.zarr       # the deliverable
-├── 5-track/<DATASET>.zarr          # A549 only — not run for neuromast
+├── 4-assemble/<DATASET>.zarr       # the deliverable; with tracking, each position
+│                                   #   also holds labels/<target_channel>, tracks.geff,
+│                                   #   tracks_<row>_<col>_<fov>.csv
+├── 5-track/                        # A549 only — tracking's work dir, not a store
+│   ├── <row>_<col>_<fov>/          #   per-FOV Ultrack database
+│   └── slurm_output/
 ├── qc/
-│   ├── report/index.html           # one report, one tab per QC'd store
+│   ├── report/index.html           # one report, one tab: the assembled store
 │   └── report_spec.yaml            # written at launch, before any QC task
 ├── configs/                        # copied + edited per dataset
 │   ├── flat_field.yml
@@ -82,7 +86,7 @@ layout is defined once in `nextflow/mantis-v2.nf` (`directory_layout()`):
 │   ├── virtual_stain.yml           # older runs name this predict.yml
 │   ├── concatenate.yml
 │   ├── track.yml                   # A549 only
-│   └── qc/{assemble,track}/        # QC configs, one dir per store kind
+│   └── qc.yaml                     # QC config for the assembled store
 ├── nextflow/
 │   ├── work/                       # Nextflow work dir (default: <OUTPUT>/nextflow/work)
 │   ├── slurm_output/<step>/%x_%j.{out,err}

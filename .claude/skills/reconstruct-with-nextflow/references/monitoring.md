@@ -152,7 +152,7 @@ Steps run strictly in sequence; within a step, positions fan out with
 | `compute_transfer_function` + `run_apply_inv_tf` | one-shot + fan-out, CPU | TF is quick; apply is the bulk |
 | `run_virtual_stain_preprocess` + `run_virtual_stain` | one-shot + fan-out, **GPU** | `preempted` partition, any GPU node (A40 workstations included); a reclaimed task resumes at the timepoint it lost; longest per-position step |
 | `run_concatenate` | **single job**, one reserved node | longest single job; whole-plate I/O |
-| `run_track` | fan-out, GPU (cellpose) | reads the assembled plate |
+| `run_track` | fan-out, GPU (cellpose) | reads the assembled plate and writes `labels/<target_channel>`, `tracks.geff` and a tracks CSV into each position; `5-track/` holds only the Ultrack databases |
 
 Per-step wall-time is derived from data volume (`estimate_time_minutes()` in
 `biahub/utils/cluster.py`) and passed through the init step's `RESOURCES:` payload,

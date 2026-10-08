@@ -10,7 +10,17 @@ from iohub.ngff import open_ome_zarr
 
 from biahub.cli.main import cli
 from biahub.settings import TrackingSettings, ZSlicing
-from biahub.track import _init_output_plate, resolve_z_slice, track
+from biahub.track import (
+    _init_labels,
+    _tracked_shape,
+    label_chunks_and_shards,
+    resolve_z_slice,
+    track,
+    tracked_z_window,
+    write_tracking_labels,
+)
+
+LABEL = "nuclei_prediction"
 
 
 @pytest.fixture(scope="function")
@@ -79,6 +89,28 @@ def example_blank_frames_csv(tmp_path):
     df.to_csv(csv_path, index=False)
 
     yield csv_path
+
+
+def _assert_tracking_outputs(position_path, z_index):
+    """Labels at z_index only, a valid GEFF linked to them, and the CSV."""
+    import geff
+
+    with open_ome_zarr(str(position_path), mode="r") as pos:
+        labels = pos.get_label(LABEL)["0"][:]
+    assert labels.dtype == np.uint32
+    assert labels[:, z_index].any()
+    assert not np.delete(labels, z_index, axis=1).any()
+
+    geff_path = position_path / "tracks.geff"
+    geff.validate_structure(str(geff_path))
+    _, metadata = geff.read(str(geff_path), backend="networkx")
+    (related,) = metadata.related_objects
+    assert related.path == f"../labels/{LABEL}"
+    assert related.node_prop == "seg_id"
+
+    (csv_path,) = position_path.glob("tracks_*.csv")
+    tracks = pd.read_csv(csv_path)
+    assert set(tracks["track_id"]) <= set(np.unique(labels)) - {0}
 
 
 def _make_tracking_config(plate_path, tmp_path):
@@ -175,7 +207,7 @@ def test_track_cli_local(
 
     plate_path, _ = example_tracking_plate
     config_path = _make_tracking_config(plate_path, tmp_path)
-    output_path = tmp_path / "tracking_output.zarr"
+    output_path = tmp_path / "tracking_output"
 
     track(
         input_position_dirpaths=[
@@ -189,10 +221,10 @@ def test_track_cli_local(
         cluster="local",
     )
 
-    assert output_path.exists()
+    # central z_slicing on Z=3 tracks planes [0, 3), so the 2D labels sit at z=1.
     for position in ["A/1/0", "B/1/0", "B/2/0"]:
-        position_path = output_path / position
-        assert position_path.exists()
+        _assert_tracking_outputs(plate_path / position, z_index=1)
+        assert (output_path / position.replace("/", "_")).is_dir()  # Ultrack database
 
 
 def test_track_cli_with_blank_frames(
@@ -207,7 +239,7 @@ def test_track_cli_with_blank_frames(
 
     plate_path, _ = example_tracking_plate
     config_path = _make_tracking_config(plate_path, tmp_path)
-    output_path = tmp_path / "tracking_output_blank_frames.zarr"
+    output_path = tmp_path / "tracking_output_blank_frames"
 
     # Add blank_frames_path to config
     with open(config_path) as f:
@@ -228,7 +260,7 @@ def test_track_cli_with_blank_frames(
         cluster="local",
     )
 
-    assert output_path.exists()
+    _assert_tracking_outputs(plate_path / "A" / "1" / "0", z_index=1)
 
 
 def test_track_cli_invalid_config(tmp_path, monkeypatch):
@@ -266,9 +298,9 @@ def test_track_cli_missing_input_path(tmp_path, example_track_settings, monkeypa
 
 
 def test_track_cli_init_only(tmp_path, example_tracking_plate):
-    """Test that --init creates the output store and emits RESOURCES."""
+    """--init creates empty full-Z label images in the -i positions and emits RESOURCES."""
     plate_path, _ = example_tracking_plate
-    output_path = tmp_path / "track_output.zarr"
+    output_path = tmp_path / "track_output"
     config_path = _make_tracking_config(plate_path, tmp_path)
 
     runner = CliRunner()
@@ -289,12 +321,26 @@ def test_track_cli_init_only(tmp_path, example_tracking_plate):
     )
 
     assert result.exit_code == 0, result.output
-    assert output_path.exists()
     assert "RESOURCES:" in result.output
 
-    with open_ome_zarr(str(output_path / "A" / "1" / "0"), mode="r") as ds:
-        assert ds.data.dtype == np.uint32
-        assert ds.channel_names == ["nuclei_prediction_labels"]
+    for position in ["A/1/0", "B/1/0", "B/2/0"]:
+        with open_ome_zarr(str(plate_path / position), mode="r") as pos:
+            assert pos.label_names() == [LABEL]
+            assert pos.channel_names == ["nuclei_prediction", "membrane_prediction"]
+            label = pos.get_label(LABEL)
+            assert label["0"].shape == (5, 3, 64, 64)
+            assert label["0"].dtype == np.uint32
+            assert not label["0"][:].any()
+            assert [ax.name.lower() for ax in label.axes] == ["t", "z", "y", "x"]
+        label_attrs = yaml.safe_load(
+            (plate_path / position / "labels" / LABEL / "zarr.json").read_text()
+        )["attributes"]
+        assert label_attrs["biahub-track"]["target_channel"] == LABEL
+        # The labels listing lives on the labels group (OME-NGFF 0.5).
+        labels_attrs = yaml.safe_load(
+            (plate_path / position / "labels" / "zarr.json").read_text()
+        )["attributes"]
+        assert labels_attrs["ome"]["labels"] == [LABEL]
 
 
 def test_track_cli_debug_single_position(tmp_path, example_tracking_plate, monkeypatch):
@@ -302,33 +348,34 @@ def test_track_cli_debug_single_position(tmp_path, example_tracking_plate, monke
     monkeypatch.setenv("ULTRACK_ARRAY_MODULE", "numpy")
 
     plate_path, _ = example_tracking_plate
-    output_path = tmp_path / "track_output.zarr"
+    output_path = tmp_path / "track_output"
     config_path = _make_tracking_config(plate_path, tmp_path)
 
-    runner = CliRunner()
-    result = runner.invoke(
-        cli,
-        [
-            "track",
-            "-i",
-            str(plate_path / "A" / "1" / "0"),
-            "-o",
-            str(output_path),
-            "-c",
-            str(config_path),
-            "--cluster",
-            "debug",
-        ],
-    )
+    def run():
+        return CliRunner().invoke(
+            cli,
+            [
+                "track",
+                "-i",
+                str(plate_path / "A" / "1" / "0"),
+                "-o",
+                str(output_path),
+                "-c",
+                str(config_path),
+                "--cluster",
+                "debug",
+            ],
+        )
 
+    result = run()
     assert result.exit_code == 0, result.output
-    assert output_path.exists()
     assert "Tracking complete:" in result.output
+    _assert_tracking_outputs(plate_path / "A" / "1" / "0", z_index=1)
 
-    with open_ome_zarr(str(output_path / "A" / "1" / "0"), mode="r") as ds:
-        data = ds["0"][:]
-        assert data.dtype == np.uint32
-        assert data.shape[0] > 0
+    # A retry overwrites the same outputs.
+    result = run()
+    assert result.exit_code == 0, result.output
+    _assert_tracking_outputs(plate_path / "A" / "1" / "0", z_index=1)
 
 
 # ---------------------------------------------------------------------------
@@ -394,9 +441,10 @@ def test_apply_focus_slicing_uniform_window(monkeypatch):
         "b": np.zeros((T, Z, Y, X)),
     }
     z = ZSlicing(method="focus", window_size=6, frac_below=1 / 3)
-    out = track_mod.apply_focus_slicing(data_dict, z, pixel_size=0.5)
+    out, window = track_mod.apply_focus_slicing(data_dict, z, pixel_size=0.5)
 
     # Same fixed window applied to every channel (center=15 -> slice(13, 19)).
+    assert window == slice(13, 19)
     assert out["a"].shape == (T, 6, Y, X)
     assert out["b"].shape == (T, 6, Y, X)
     assert np.array_equal(out["a"], data_dict["a"][:, 13:19])
@@ -449,22 +497,95 @@ def _minimal_settings(**overrides):
     [
         ("2D", {"method": "central"}, 1),
         ("3D", {"method": "range", "range": (0, 2)}, 2),
-        # Regression: focus + 3D output Z equals the fixed focus window, not the
-        # full stack -- this is the shape-mismatch bug _init_output_plate had.
+        # Regression: focus + 3D tracked Z equals the fixed focus window, not the
+        # full stack.
         ("3D", {"method": "focus", "window_size": 2}, 2),
     ],
 )
-def test_init_output_plate_shape(
+def test_init_labels_shape(
     tmp_path, example_tracking_plate, output_mode, z_slicing, expected_z
 ):
     plate_path, _ = example_tracking_plate
-    output_path = tmp_path / "init_shape.zarr"
+    position_path = plate_path / "A" / "1" / "0"
     settings = _minimal_settings(output_mode=output_mode, z_slicing=z_slicing)
 
-    shape = _init_output_plate([str(plate_path / "A" / "1" / "0")], output_path, settings)
-    assert shape[2] == expected_z
-    with open_ome_zarr(str(output_path / "A" / "1" / "0"), mode="r") as ds:
-        assert ds.data.shape[2] == expected_z
+    assert _tracked_shape(position_path, settings)[2] == expected_z
+    # The label image always spans the image's full Z.
+    _init_labels([position_path], settings)
+    with open_ome_zarr(str(position_path), mode="r") as pos:
+        assert pos.get_label(LABEL)["0"].shape == (5, 3, 64, 64)
+
+
+def test_init_labels_leaves_existing_labels(tmp_path, example_tracking_plate):
+    plate_path, _ = example_tracking_plate
+    position_path = plate_path / "A" / "1" / "0"
+    settings = _minimal_settings()
+
+    _init_labels([position_path], settings)
+    with open_ome_zarr(str(position_path), mode="r+") as pos:
+        pos.get_label(LABEL)["0"][0, 1, 0, 0] = 7
+        image = pos["0"][:]
+    _init_labels([position_path], settings)
+    with open_ome_zarr(str(position_path), mode="r") as pos:
+        assert pos.get_label(LABEL)["0"][0, 1, 0, 0] == 7
+        assert np.array_equal(pos["0"][:], image)
+
+
+def test_label_chunks_and_shards():
+    # 1 MB uint32 chunks (DCA SHOULD); shards cover YX up to 16 chunks.
+    chunks, shards = label_chunks_and_shards((67, 86, 1664, 1193))
+    assert chunks == (16, 1, 128, 128)
+    assert shards == (1, 1, 13, 10)
+    assert label_chunks_and_shards((67, 86, 4096, 300))[1] == (1, 1, 16, 3)
+    # Clamped to small arrays.
+    assert label_chunks_and_shards((5, 3, 64, 64))[0] == (5, 1, 64, 64)
+
+
+@pytest.mark.parametrize(
+    "read_slice, focus_slice, z_shape, expected",
+    [
+        (slice(None), None, 30, (0, 30)),  # all
+        (slice(9, 12), None, 21, (9, 12)),  # central / range
+        (slice(10, 11), None, 30, (10, 11)),  # one plane
+        (slice(None), slice(13, 19), 30, (13, 19)),  # focus window
+    ],
+)
+def test_tracked_z_window(read_slice, focus_slice, z_shape, expected):
+    assert tracked_z_window(read_slice, focus_slice, z_shape) == expected
+
+
+@pytest.mark.parametrize(
+    "z_window, expected_z",
+    [
+        ((0, 30), 15),  # projection of the whole volume -> middle of the volume
+        ((10, 11), 10),  # one plane -> that plane
+        ((13, 19), 16),  # projected section -> middle of the section
+    ],
+)
+def test_write_tracking_labels_2d_placement(z_window, expected_z):
+    label_array = np.zeros((2, 30, 4, 4), dtype=np.uint32)
+    labels = np.ones((2, 4, 4), dtype=np.int64)
+
+    assert write_tracking_labels(label_array, labels, z_window, "2D") == expected_z
+    assert label_array[:, expected_z].all()
+    assert label_array.sum() == labels.sum()
+
+
+def test_write_tracking_labels_2d_unprojected_single_plane():
+    label_array = np.zeros((2, 30, 4, 4), dtype=np.uint32)
+    write_tracking_labels(label_array, np.ones((2, 1, 4, 4)), (10, 11), "2D")
+    assert label_array[:, 10].all()
+
+
+def test_write_tracking_labels_3d_fills_window():
+    label_array = np.zeros((2, 30, 4, 4), dtype=np.uint32)
+    labels = np.ones((2, 6, 4, 4), dtype=np.int64)
+
+    assert write_tracking_labels(label_array, labels, (13, 19), "3D") == slice(13, 19)
+    assert label_array[:, 13:19].all()
+    assert label_array.sum() == labels.sum()
+    with pytest.raises(ValueError, match="3D"):
+        write_tracking_labels(label_array, np.ones((2, 5, 4, 4)), (13, 19), "3D")
 
 
 # ---------------------------------------------------------------------------
@@ -477,7 +598,7 @@ def test_input_images_path_override(tmp_path, example_tracking_plate, monkeypatc
     monkeypatch.setenv("ULTRACK_ARRAY_MODULE", "numpy")
 
     plate_path, _ = example_tracking_plate
-    output_path = tmp_path / "override_output.zarr"
+    output_path = tmp_path / "override_output"
     config_path = _make_tracking_config(plate_path, tmp_path)
 
     runner = CliRunner()
@@ -499,7 +620,7 @@ def test_input_images_path_override(tmp_path, example_tracking_plate, monkeypatc
     )
 
     assert result.exit_code == 0, result.output
-    assert output_path.exists()
+    _assert_tracking_outputs(plate_path / "A" / "1" / "0", z_index=1)
 
 
 def test_track_init_rejects_an_unknown_cellpose_model(
@@ -540,7 +661,7 @@ def test_track_init_rejects_an_unknown_cellpose_model(
             "-i",
             str(plate_path / "A" / "1" / "0"),
             "-o",
-            str(tmp_path / "out.zarr"),
+            str(tmp_path / "out"),
             "-c",
             str(config_path),
             "--init",

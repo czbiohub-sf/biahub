@@ -1,20 +1,23 @@
-// Tracking subworkflows: init (scaffold + resources + weights cache) and run
-// (fan-out × N positions).
+// Tracking subworkflows: init (label scaffold + resources + weights cache) and
+// run (fan-out × N positions).
 //
 // This module is PATH-AGNOSTIC. Callers pass the input zarr (plate structure),
-// input images zarr (image data for tracking), output zarr, and config
+// input images zarr (image data for tracking), work directory, and config
 // explicitly.
 //
 // Tracking is a 2-input step: `input_zarr` supplies the plate structure and
 // `input_images_zarr` the pixels. mantis-v2.nf passes the assembled plate for
-// both.
+// both. The outputs go INTO `input_zarr`'s positions — `labels/<target_channel>`,
+// `tracks.geff` and a tracks CSV — so there is no tracking store; `work_dir`
+// holds only the per-FOV Ultrack databases and SLURM placeholders.
 //
 // INIT AND RUN ARE SEPARATE SUBWORKFLOWS, and hoisting init is worth more here
 // than anywhere else: the tracking config is the LAST one a run would otherwise
 // parse, so a typo in it used to surface after every reconstruction step and
 // the assembly had finished. `biahub track --init` reads only the input plate's
-// shape and scale (z-slice resolution is data-free), so it runs against the
-// assembled plate as soon as `concatenate --init` has scaffolded it. It also
+// shape and scale (z-slice resolution is data-free) and creates an empty label
+// image in each position, so it runs against the assembled plate as soon as
+// `concatenate --init` has scaffolded it. It also
 // warms the shared cellpose weights cache, which is strictly better done before
 // any GPU worker exists to race for it.
 
@@ -26,7 +29,7 @@ process init_track {
 
     input:
     val input_zarr
-    val output_zarr
+    val work_dir
     val config
     path config_file  // staged only for the task hash: see common.nf, #397
     val trigger
@@ -34,13 +37,15 @@ process init_track {
     output:
     stdout
 
+    // slurm_output_readme writes to <parent of its argument>/slurm_output, so
+    // "<work_dir>/." lands it in <work_dir>/slurm_output, beside track's placeholders.
     script:
     """
     mkdir -p "${slurm_log_dir('track')}"
-    ${slurm_output_readme('track', output_zarr)}
+    ${slurm_output_readme('track', "${work_dir}/.")}
     biahub track --init \
         -i "${input_zarr}"/*/*/* \
-        -o "${output_zarr}" \
+        -o "${work_dir}" \
         -c "${config}"
     """
 }
@@ -59,7 +64,7 @@ process run_track {
     tuple val(position), val(meta)
     val input_zarr
     val input_images_zarr
-    val output_zarr
+    val work_dir
     val config
     path config_file  // staged only for the task hash: see common.nf, #397
 
@@ -70,37 +75,37 @@ process run_track {
     """
     biahub track --cluster debug \
         -i "${input_zarr}/${position}" \
-        -o "${output_zarr}" \
+        -o "${work_dir}" \
         -c "${config}" \
         --input-images-path "${input_images_zarr}"
     # Ultrack's SQLite database is created 0644, and under the project dirs'
     # default ACL the group mask follows that mode — so the group can't write
     # the FOV's data.db. Grant it explicitly; -f because only the owner can.
-    chmod -Rf g+w "\$(dirname "${output_zarr}")/\$(basename "${output_zarr}" .zarr)_config_tracking/${position.replace('/', '_')}" || true
+    chmod -Rf g+w "${work_dir}/${position.replace('/', '_')}" || true
     """
 }
 
 
-// Validate the config, scaffold the output plate, warm the cellpose weights.
+// Validate the config, create the empty label images, warm the cellpose weights.
 // Metadata-only and cheap, so it belongs in the pipeline's up-front init phase.
 //
 // take:
-//   input_zarr   path to the input plate.zarr (plate structure)
-//   output_zarr  path to the tracking output plate.zarr
+//   input_zarr   path to the input plate.zarr (plate structure; receives the labels)
+//   work_dir     tracking work directory (Ultrack databases, SLURM placeholders)
 //   config       path to the track settings YAML
 //   trigger      gating channel — init starts once this emits
 // emit:
 //   resources    the RESOURCES payload sizing one position's task
-//   done         fires once the output plate exists
+//   done         fires once every position has its empty label image
 workflow track_init_wf {
     take:
     input_zarr
-    output_zarr
+    work_dir
     config
     trigger
 
     main:
-    init_out = init_track(input_zarr, output_zarr, config, file(config), trigger.collect().map { 'done' })
+    init_out = init_track(input_zarr, work_dir, config, file(config), trigger.collect().map { 'done' })
 
     emit:
     resources = init_out.map { stdout_text -> parse_resources(stdout_text) }
@@ -114,7 +119,7 @@ workflow track_init_wf {
 //   positions          collected channel of position keys
 //   input_zarr         plate structure store
 //   input_images_zarr  image data store
-//   output_zarr        path to the tracking output plate.zarr
+//   work_dir           tracking work directory
 //   config             path to the track settings YAML
 //   resources          RESOURCES payload from track_init_wf
 //   prev_done          gating channel — the input stores hold data
@@ -123,7 +128,7 @@ workflow track_run_wf {
     positions
     input_zarr
     input_images_zarr
-    output_zarr
+    work_dir
     config
     resources
     prev_done
@@ -142,7 +147,7 @@ workflow track_run_wf {
         .combine(prev_done.map { 'done' })
         .map { pos, meta, _gate -> [pos, meta] }
 
-    tk_done = run_track(pos_meta, input_zarr, input_images_zarr, output_zarr, config, file(config)) | collect
+    tk_done = run_track(pos_meta, input_zarr, input_images_zarr, work_dir, config, file(config)) | collect
 
     emit:
     done = tk_done

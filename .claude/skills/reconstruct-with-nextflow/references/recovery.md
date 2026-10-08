@@ -105,7 +105,12 @@ session. What `-resume` does after a change:
   `script:` block in `nextflow/modules/*.nf` does.
 
 To force one step to recompute, delete that step's output for the affected
-positions and their work dirs — not the whole `.nextflow/` cache.
+positions and their work dirs — not the whole `.nextflow/` cache. Track's
+output is inside the assembled plate, not under `5-track/`: per position,
+`labels/<target_channel>`, `tracks.geff` and `tracks_<row>_<col>_<fov>.csv`,
+plus its Ultrack database at `5-track/<row>_<col>_<fov>/`. A rerun overwrites
+all of these in place, so for track deleting the work dirs is what forces it;
+never delete the assembled plate to clear tracking output.
 
 ## When to escalate to the user
 

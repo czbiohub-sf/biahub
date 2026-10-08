@@ -136,19 +136,27 @@ deliberately (§2).
 
 **`track.yml` — schema.** `TrackingSettings` forbids extra keys. Current
 fields: `output_mode`, `z_slicing`, `target_channel`, `fov`, `input_images`,
-`segmentation_method`, `cellpose_config`, `tracking_config`. Old configs under
-`/hpc/projects/tlg2_mantis/` still carry rejected fields — migrate:
+`blank_frames_path`, `segmentation_method`, `cellpose_config`,
+`tracking_config`. Old configs under `/hpc/projects/tlg2_mantis/` still carry
+rejected fields — migrate:
 
 ```
 mode                            -> output_mode
 z_range + focus_config.z_window -> z_slicing.{method, window_size, focus_channel}
+output_ome_zarr_version         -> (delete: labels take the assembled store's version)
 ```
 
 (`focus_config`'s `NA_det`/`lambda_ill`/`pixel_size` have no equivalent.)
 `target_channel` and `cellpose_config.input_channel` must match **pre-rename**
-names in the **assembled** plate (§2, §5). `qc_track.yaml`'s `channels:` must
-then match `<target_channel>_labels`, which is what the tracking store actually
-holds — SKILL.md §5a checks both couplings before launch.
+names in the **assembled** plate (§2, §5). `target_channel` also names the
+label image tracking writes into each position, `labels/<target_channel>` (no
+`_labels` suffix), so `qc.yaml`'s `instance_count.label` and its anchor
+`channels:` entry must equal it — SKILL.md §5a checks both couplings before
+launch.
+
+**QC configs reject `upstream_qc_dir`.** The imaging-qc pin (f5ae656) dropped
+the key; a `qc.yaml` copied from an older run that still carries
+`upstream_qc_dir: null` fails at `plan-stage`. Delete the line.
 
 **`z_slicing.focus_channel` resolves against `input_images`, not the store.**
 `apply_focus_slicing` raises if the focus channel is not among the loaded
@@ -172,8 +180,8 @@ assembled store, and track's parameters (cellpose `diameter`, `min_area`/
 `max_area`, linking `max_distance`) are tuned for A549 cells and do not
 transfer. So simply do not run it:
 
-- Omit `--track_config` — delete that line, and `--qc_track_config` with it,
-  from the `nextflow run` call in the run script. A step runs only if its config
+- Omit `--track_config` — delete that line from the `nextflow run` call in
+  the run script. A step runs only if its config
   is passed ([biahub#306](https://github.com/czbiohub-sf/biahub/issues/306),
   fixed). Delete rather than comment: `#` inside a backslash-continued command
   drops every flag below it, `-resume` included.
@@ -183,13 +191,24 @@ transfer. So simply do not run it:
 - Do not report tracking results or tune the track config for these datasets
   unless the user asks for neuromast tracking explicitly.
 - QC still runs: a neuromast run does image QC of the assembled store
-  (`--qc_config`). Only the tracking tab is absent.
+  (`--qc_config`). `zebrafish/qc.yaml` has no `instance_count` block, since
+  there are no labels to count; do not copy A549's `qc.yaml` over it — its
+  `instance_count` names a label image that only tracking creates, and
+  `plan-stage` refuses it.
 
 ## 5. Track reads the assembled plate, not the intermediates
 
-`track_wf` takes the assembled `<DATASET>.zarr` for *both* inputs. So any Z/Y/X
-crop or `time_indices` subset in `concatenate.yml` is what tracking sees, and
-tracking starts only after the whole plate assembles.
+`track_wf` takes the assembled `<DATASET>.zarr` for *both* inputs, and writes
+its output back INTO it: per position, `labels/<target_channel>` (uint32, TZYX
+at the image's full Z; 2D-tracking masks sit in the middle plane of the tracked
+z-window), `tracks.geff`, and `tracks_<row>_<col>_<fov>.csv`. `5-track/` is only
+the work directory (`-o`): per-FOV Ultrack databases at `<row>_<col>_<fov>/` and
+`slurm_output/`. So any Z/Y/X crop or `time_indices` subset in
+`concatenate.yml` is what tracking sees, and tracking starts only after the
+whole plate assembles. `track --init` creates the empty label image in every
+position during the init phase, and with tracking on, QC is planned after that
+init and computes after tracking finishes — not concurrently with it, so QC
+now sits on the critical path behind tracking.
 
 ## 6. Assemble is a single job on one reserved node
 

@@ -126,8 +126,9 @@ class TrackingSettings(MyBaseModel):
     target_channel: str = "nuclei_prediction"
     fov: str = "*/*/*"
     blank_frames_path: Path | None = None
-    # 2D writes an output plate with Z=1 (input must be projected); 3D keeps the
-    # selected z-window. Does not itself project the data.
+    # 2D tracks a projection (input must be projected) and writes its labels into the
+    # middle plane of the selected z-window; 3D writes them across the window. Does not
+    # itself project the data.
     output_mode: Literal["2D", "3D"] = "2D"
     # Which Z-planes to select for tracking. See ZSlicing.
     z_slicing: ZSlicing = ZSlicing()
@@ -135,8 +136,6 @@ class TrackingSettings(MyBaseModel):
     tracking_config: dict[str, Any] = {}
     segmentation_method: Literal["foreground_contour", "cellpose"] = "foreground_contour"
     cellpose_config: CellposeConfig | None = None
-    # When None, preserve the OME-Zarr version of the input store.
-    output_ome_zarr_version: Literal["0.4", "0.5"] | None = None
 
     @field_validator("blank_frames_path")
     @classmethod

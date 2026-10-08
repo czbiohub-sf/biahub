@@ -77,7 +77,7 @@ git ls-remote https://github.com/czbiohub-sf/imaging-qc-pipeline HEAD >/dev/null
 Still refused after logging in means their account lacks access to that repo,
 which no local setup can fix — **tell them to ask a biahub developer (Ivan,
 Taylla) to be added**, and offer to continue without QC by dropping `--qc_config`
-and `--qc_track_config` (§7). The rest of the pipeline needs no GitHub
+(§7). The rest of the pipeline needs no GitHub
 credential at all, so this never blocks a reconstruction.
 
 A user who already uses SSH keys for GitHub needs nothing here; if they would
@@ -173,10 +173,10 @@ say which you think it is and let the user decide. A fresh reprocess goes to a
 ## 5. Start from the configs on `main`
 
 The templates in `<BIAHUB>/nextflow/configs/{a549,zebrafish}/` are the source
-of truth — they version with the pipeline and are reviewed. QC configs sit with them,
-one self-contained file per store: `qc.yaml` for the assembled store and
-`qc_track.yaml` for the tracking store. They carry `.yaml` rather than `.yml`
-because imaging-qc loads a stage config through Hydra, which strips the
+of truth — they version with the pipeline and are reviewed. The QC config sits with
+them, one self-contained `qc.yaml` for the assembled store; A549's also counts
+cells in the label image tracking writes into that store. It carries `.yaml`
+rather than `.yml` because imaging-qc loads a stage config through Hydra, which strips the
 extension and looks for `<stem>.yaml`. A previous run's
 `configs/` directory is a fallback only: an unreviewed snapshot that drifts
 with the schema and carries dataset-specific edits.
@@ -191,7 +191,7 @@ the next dataset in the family would also need), fix it in a PR against
 `nextflow/configs/<family>/`, stating which dataset exposed it. Genuinely
 per-dataset values stay in the run directory.
 
-### 5a. Check the QC channel filters against the stores they will QC
+### 5a. Check the QC channel filters against the store they will QC
 
 Once the configs are edited, run this from the biahub checkout:
 
@@ -202,17 +202,20 @@ python .claude/skills/reconstruct-with-nextflow/templates/check_qc_channels.py \
 
 It exits 1 and names every `channels:` entry that the store will not have.
 
-The stores QC runs over do not exist yet — the pipeline's init phase creates
-them — so the script predicts their channels from the configs that produce
+The assembled store QC runs over does not exist yet — the pipeline's init phase
+creates it — so the script predicts its channels from the configs that produce
 them: raw channel names for the deskewed data, waveorder's
-`output_channel_names` for the phase channel, virtual-stain's `target_channel`
-for the predictions, and `<track.yml target_channel>_labels` for the tracking
-store.
+`output_channel_names` for the phase channel, and virtual-stain's
+`target_channel` for the predictions. When `qc.yaml` has an `instance_count`
+block and `track.yml` exists, it also checks that block against tracking.
 
-**That last one is the coupling that actually breaks.** `qc_track.yaml` names
-`nuclei_prediction_labels`, which only resolves if `track.yml` says
-`target_channel: nuclei_prediction` — two files with no shared source of truth,
-and changing one is the ordinary way to desynchronise them.
+**That last one is the coupling that actually breaks.** Tracking writes its
+labels into each position at `labels/<track.yml target_channel>`, and
+`qc.yaml`'s `instance_count` names them twice: `label: nuclei_prediction` and
+its anchor `channels: [nuclei_prediction]`, the channel they were segmented
+from. Both only resolve if `track.yml` says `target_channel: nuclei_prediction`
+— two files with no shared source of truth, and changing one is the ordinary
+way to desynchronise them.
 
 Since imaging-qc#226 the pipeline refuses an unknown channel name itself, at
 `plan-stage`, so a mistake fails during the init phase rather than silently
@@ -342,7 +345,8 @@ Do not run anything yet. Show the user:
    **State the directory numbers this run will produce.** The number is the
    step's position among the steps performed, not a fixed label, so a neuromast
    run writes `4-assemble` as its last directory and an A549 run writes
-   `4-assemble` then `5-track`. Older A549 runs on disk say `5-assemble` /
+   `4-assemble` then `5-track` (tracking's work directory — its labels and
+   tracks go into the assembled plate). Older A549 runs on disk say `5-assemble` /
    `4-track`, from when the numbers were fixed — say so if the user is comparing
    against one.
 7. Known caveats that apply to this dataset.
@@ -359,7 +363,8 @@ Do not run anything yet. Show the user:
     pipeline deletes the flat-field, deskew, reconstruct and virtual-stain
     directories, the `slurm_output/` placeholders and `.iohub-progress/` resume
     markers beside the final stores, and the Nextflow work directory. Only the
-    assembled store, the tracking store, the QC report and the logs under
+    assembled store (with tracking's labels and tracks inside it), tracking's
+    per-FOV Ultrack databases in `5-track/`, the QC report and the logs under
     `nextflow/` remain, and the run is final: any rerun
     recomputes from raw. The template's `CLEANUP_INTERMEDIATES="auto"` lets the
     pipeline decide at launch (`cleanup_decision` in
@@ -396,13 +401,12 @@ copied file's group bits follow the *source* file's mode — `cp` from the repo
 (644) yields `rw-r--r--`. Hence the `chmod` after every copy. Plain `cp` only:
 `cp -p`/`-a` would also carry over the checkout's group.
 
-The run script passes all four optional configs — `--concatenate_config`,
-`--track_config`, `--qc_config` (`qc.yaml`), `--qc_track_config`
-(`qc_track.yaml`) — so an A549 run needs no edit. **For a neuromast/zebrafish run, or any step the user asked to skip,
+The run script passes all three optional configs — `--concatenate_config`,
+`--track_config`, `--qc_config` (`qc.yaml`) — so an A549 run needs no edit. **For a neuromast/zebrafish run, or any step the user asked to skip,
 DELETE that flag's line** from the `nextflow run` call and note the skip in a
 comment above it, so the script still records what this run did. A neuromast run
-deletes `--track_config` and `--qc_track_config`; neither `track.yml` nor
-`qc_track.yaml` need exist for that family, and neither does for zebrafish.
+deletes `--track_config`; `track.yml` need not exist for that family, and does
+not for zebrafish. `--qc_track_config` is gone: passing it errors at launch.
 
 Delete rather than comment: a `#` inside a backslash-continued command does not
 start a comment line — the continuation swallows it, every flag below is dropped
@@ -521,14 +525,18 @@ directory (`<DATASET>_rerun`) over relaunching in place.
    whether a `rename-channels` CLI has landed on main, making this obsolete).
 2. Verify the assembled store (`<N>-assemble/<DATASET>.zarr`, `4-assemble`
    unless earlier steps were skipped) opens with iohub; report shape, channels,
-   size on disk. This is the deliverable for every family; tracking, when it
-   ran, is reported beside it rather than as a by-product.
-3. If QC ran, report its verdict: the `QC_SUMMARY` line per store from the
+   size on disk. This is the deliverable for every family. When tracking ran,
+   its output is inside it: check a position has `labels/nuclei_prediction`
+   (the track config's `target_channel`; uint32 TZYX at the image's full Z),
+   `tracks.geff` and `tracks_<row>_<col>_<fov>.csv`, and report them beside
+   the image data.
+3. If QC ran, report its verdict: the `QC_SUMMARY` line from the
    pipeline log (`pass=`/`fail=`/`gates_fail=`), and point at the report at
-   `<OUTPUT>/qc/report/index.html` — one page, one tab per QC'd store. A gate
-   failure does NOT fail the run: `imaging-qc gate` exits 0 either way, so a
-   failing verdict is only visible in the summary line, the report, and the
-   `tables/qc/` parquet inside each store.
+   `<OUTPUT>/qc/report/index.html` — one page, one tab: the assembled store
+   (A549's includes the cell counts). A gate failure does NOT fail the run:
+   `imaging-qc gate` exits 0 either way, so a failing verdict is only visible
+   in the summary line, the report, and the `tables/qc/` parquet inside the
+   store.
 4. Report per-step task counts, failures, retries, and wall time from
    `<OUTPUT>/nextflow/trace.txt`; point at `report.html` and `timeline.html`.
    If cleanup was on, report what `<OUTPUT>/nextflow/intermediates_cleaned.txt`

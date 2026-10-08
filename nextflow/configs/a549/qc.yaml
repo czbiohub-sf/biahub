@@ -1,5 +1,8 @@
 # Pixel-value QC for the assembled intensity store — the plate assemble writes,
-# holding the acquired channels plus the derived ones.
+# holding the acquired channels plus the derived ones — and instance counts of the
+# segmentation tracking writes into it at `<position>/labels/nuclei_prediction`.
+# The counts need that label image, so this config is for runs that track: the
+# pipeline plans it after `track --init` and computes it after tracking.
 #
 # SELF-CONTAINED, with no Hydra `defaults:`. It used to inherit a base.yaml, which
 # existed to be shared and was shared by this one file; and the directory layout
@@ -23,7 +26,6 @@ backend: iohub
 positions: null
 metric_group: default
 log_level: INFO
-upstream_qc_dir: null
 
 metric_groups:
   default:
@@ -32,6 +34,7 @@ metric_groups:
       - signal_to_noise
       - blank
       - tenengrad
+      - instance_count
 
 intensity_stats:
   grid: 16
@@ -101,6 +104,25 @@ tenengrad:
       n_std: 3.0
       tail: lower
 
+# Cells per frame, from the label image tracking writes (`label:`, named after the
+# track config's `target_channel`). `channels:` is the ONE anchor channel the labels
+# were segmented from: the count rows carry its C, so `blank` on that channel masks
+# the count's verdict on a blank frame instead of failing it twice. `volume`
+# granularity because 2D tracking writes its labels into a single Z plane of the
+# full-Z label image; a per-slice count would read zero on every other plane.
+instance_count:
+  label: nuclei_prediction
+  channels:
+    - nuclei_prediction
+  granularity: volume
+  gate:
+    # A count of zero on a frame that is not blank: the segmentation found nothing.
+    # The degenerate structural boundary, not a constant calibrated from a dataset.
+    hard_floor: 1
+    # Put the verdict on the anchor channel (`low_instance_count__nuclei_prediction`)
+    # rather than repeating a channel-averaged flag on every channel.
+    granularity: channel
+
 report:
   max_timepoints: 5
   compact: false
@@ -132,3 +154,4 @@ report:
     blank: "Blank Detection"
     tenengrad: "Tenengrad"
     intensity_stats: "Intensity Statistics"
+    instance_count: "Cell Count"
