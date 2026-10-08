@@ -198,3 +198,95 @@ def test_resume_refuses_different_initial_transforms(tmp_path):
     init_run(plate, plate, settings, run, resume=True, initial={2: _shift_x(1)})  # same: fine
     with pytest.raises(click.UsageError, match="initial_sha256"):
         init_run(plate, plate, settings, run, resume=True, initial={2: _shift_x(2)})
+
+
+def _truth_file(tmp_path, name="initial.yml", t=2):
+    """A transforms file holding the true transform at one timepoint."""
+    from biahub.settings import TransformEntry, TransformSettings
+    from biahub.utils.config import model_to_yaml
+    from tests.test_estimate_transform import APPLIED_SHIFT_ZYX
+
+    truth = Transform.from_translation([-a for a in APPLIED_SHIFT_ZYX])
+    path = tmp_path / name
+    model_to_yaml(
+        TransformSettings(
+            direction="forward",
+            moving_channels=["GFP"],
+            reference_channel="Phase3D",
+            transforms=[TransformEntry(t=t, matrix=truth.to_list(), score=0.9)],
+        ),
+        path,
+    )
+    return path, truth
+
+
+def _cli(*args):
+    from click.testing import CliRunner
+
+    from biahub.cli.main import cli
+
+    return CliRunner().invoke(cli, ["estimate-transform", *map(str, args)])
+
+
+def test_estimate_transform_takes_initial_transforms_in_one_call_and_by_steps(tmp_path):
+    from biahub.settings import load_transform_settings
+    from tests.test_estimate_transform import _write_config
+
+    plate = _blank_plate(tmp_path)
+    config = _write_config(tmp_path)
+    initial, truth = _truth_file(tmp_path)
+    one = tmp_path / "one" / "transforms.yml"
+    result = _cli("-m", plate, "-r", plate, "-c", config, "-o", one,
+                  "--initial-transforms", initial, "--cluster", "debug")  # fmt: skip
+    assert result.exit_code == 0, result.output
+    entry = load_transform_settings(one).transforms[2]
+    # t=2's moving frame is blank: the initial transform is used (not the config seed as
+    # a stand-in), and still unreliable, since nothing in the frame can confirm it
+    assert entry.seeded_from == "initial" and entry.filled_from is None
+    assert entry.status == "unreliable"
+    np.testing.assert_allclose(np.asarray(entry.matrix), truth.matrix)
+    report = (one.with_suffix("") / "estimate_transform_report.json").read_text()
+    assert '"seeded_from"' in report
+
+    steps = tmp_path / "steps" / "transforms.yml"
+    common = ["-m", plate, "-r", plate, "-c", config, "-o", steps]
+    for args in (["--init", "--initial-transforms", initial], ["--step", "estimate"],
+                 ["--step", "flag"], ["--step", "finalize"]):  # fmt: skip
+        result = _cli(*args, *common)
+        assert result.exit_code == 0, result.output
+    assert load_transform_settings(steps) == load_transform_settings(one)
+
+
+def test_initial_transforms_are_never_overwritten_or_misplaced(tmp_path):
+    from tests.test_estimate_transform import _write_config
+
+    plate = _blank_plate(tmp_path)
+    config = _write_config(tmp_path)
+    initial, _truth = _truth_file(tmp_path, name="transforms.yml")
+    common = ["-m", plate, "-r", plate, "-c", config]
+
+    result = _cli(*common, "-o", initial, "--initial-transforms", initial)
+    assert result.exit_code != 0 and "new file" in result.output
+    result = _cli(*common, "-o", tmp_path / "x.yml", "--step", "estimate",
+                  "--initial-transforms", initial)  # fmt: skip
+    assert result.exit_code != 0 and "--init" in result.output
+
+
+def test_a_per_position_initial_file_must_cover_the_positions(tmp_path):
+    from biahub.settings import TransformEntry, TransformSettings
+    from biahub.utils.config import model_to_yaml
+    from tests.test_estimate_transform import _write_config
+
+    plate = _blank_plate(tmp_path)  # position A/1/0
+    other = tmp_path / "other.yml"
+    model_to_yaml(
+        TransformSettings(
+            direction="forward",
+            moving_channels=["GFP"],
+            positions={"B/2/0": [TransformEntry(t=0, matrix=IDENTITY.to_list())]},
+        ),
+        other,
+    )
+    result = _cli("-m", plate, "-r", plate, "-c", _write_config(tmp_path),
+                  "-o", tmp_path / "out.yml", "--initial-transforms", other)  # fmt: skip
+    assert result.exit_code != 0 and "no list for positions ['A/1/0']" in result.output

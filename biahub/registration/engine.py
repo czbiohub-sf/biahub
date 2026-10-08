@@ -1601,6 +1601,7 @@ def _report(result: SeriesResult, time_indices: list[int]) -> dict:
         "sweeps": {str(t): _pass_report(r) for t, r in result.sweeps.items()},
         "provenance": {str(t): source for t, source in sorted(result.provenance.items())},
         "stand_ins": {str(t): source for t, source in sorted(result.filled_from.items())},
+        "seeded_from": {str(t): source for t, source in sorted(result.seeded_from.items())},
     }
 
 
