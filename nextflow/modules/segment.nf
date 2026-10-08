@@ -21,6 +21,7 @@ process init_segment {
     val input_zarr
     val output_zarr
     val config
+    path config_file  // staged only for the task hash: see common.nf, #397
     val trigger
 
     output:
@@ -55,6 +56,7 @@ process run_segment {
     val input_zarr
     val output_zarr
     val config
+    path config_file  // staged only for the task hash: see common.nf, #397
 
     output:
     val position
@@ -90,7 +92,7 @@ workflow segment_init_wf {
     trigger
 
     main:
-    init_out = init_segment(input_zarr, output_zarr, config, trigger.collect().map { 'done' })
+    init_out = init_segment(input_zarr, output_zarr, config, file(config), trigger.collect().map { 'done' })
 
     emit:
     resources = init_out.map { stdout_text -> parse_resources(stdout_text) }
@@ -125,7 +127,7 @@ workflow segment_run_wf {
         .combine(prev_done.map { 'done' })
         .map { pos, meta, _gate -> [pos, meta] }
 
-    sg_done = run_segment(pos_meta, input_zarr, output_zarr, config) | collect
+    sg_done = run_segment(pos_meta, input_zarr, output_zarr, config, file(config)) | collect
 
     emit:
     done = sg_done
