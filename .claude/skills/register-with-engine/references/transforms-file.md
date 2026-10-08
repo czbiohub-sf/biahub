@@ -42,6 +42,9 @@ transforms:                                  # one list shared by every position
 - `repaired_from`: which repair candidate won (e.g. `consensus_full+polish1`).
 - `method` on an entry: set when it came from another method's run
   (`substitute-transforms`).
+- `seeded_from`: set when the entry came from `--initial-transforms`: `initial` (the earlier
+  transform as given) or `initial+refined` (estimated starting from it); unset when the
+  run's own estimate, or a later repair, won.
 
 ## Old configs
 

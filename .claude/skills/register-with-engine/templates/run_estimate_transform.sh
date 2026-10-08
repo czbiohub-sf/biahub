@@ -20,6 +20,7 @@ REFERENCE=/path/to/reconstruct.zarr/R/C/FOV        # phase, same well; leave emp
 CONFIG=./estimate-transform-beads.yml
 OUTPUT=./transforms.yml
 SBATCH=""                         # optional: a file with `#SBATCH --time=...` for large volumes
+INITIAL=""                        # optional: an earlier transforms.yml to start from (never overwritten)
 
 source "$BIAHUB/.venv/bin/activate"
 export PYTHONWARNINGS="ignore::FutureWarning"   # scikit-image deprecation noise per timepoint
@@ -27,5 +28,6 @@ export PYTHONWARNINGS="ignore::FutureWarning"   # scikit-image deprecation noise
 args=(-m "$MOVING" -c "$CONFIG" -o "$OUTPUT" --cluster slurm)
 [[ -n "$REFERENCE" ]] && args+=(-r "$REFERENCE")
 [[ -n "$SBATCH" ]] && args+=(-sb "$SBATCH")
+[[ -n "$INITIAL" ]] && args+=(--initial-transforms "$INITIAL")
 
 biahub estimate-transform "${args[@]}" "$@"

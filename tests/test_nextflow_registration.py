@@ -349,6 +349,36 @@ def test_registration_nf_finishes_past_a_broken_chunk_and_resume_redoes_it(
     assert entry.status == "accepted" and entry.note is None
 
 
+def test_registration_nf_takes_initial_transforms_as_the_cli_does(tmp_path):
+    # t=2's moving frame has no beads: the initial transform stands there, as in one call.
+    from tests.test_initial_transforms import _truth_file
+
+    plate = _beads_plate(tmp_path, blank_last=True)
+    store = plate.parents[2]
+    config = _write_config(tmp_path)
+    initial, _truth = _truth_file(tmp_path)
+    out = tmp_path / "run"
+    env = _env(ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS="1")
+    _nextflow(
+        tmp_path,
+        "--moving", store, "--reference", store, "--estimate_config", config,
+        "--estimate_positions", "A/1/0", "--initial_transforms", initial, "--output", out,
+        env=env,
+    )  # fmt: skip
+
+    cli = tmp_path / "cli" / "transforms.yml"
+    result = subprocess.run(
+        [sys.executable, "-m", "biahub.cli.main", "estimate-transform", "--cluster", "debug"]
+        + ["-m", str(plate), "-r", str(plate), "-c", str(config), "-o", str(cli)]
+        + ["--initial-transforms", str(initial)],
+        cwd=tmp_path, env=env, capture_output=True, text=True,
+    )  # fmt: skip
+    assert result.returncode == 0, result.stderr[-3000:]
+    nf_model = load_transform_settings(out / "transforms.yml")
+    assert nf_model == load_transform_settings(cli)
+    assert nf_model.transforms[2].seeded_from == "initial"
+
+
 def test_registration_nf_reruns_the_estimate_when_its_config_is_edited(tmp_path):
     # main's convention (#397): the config is staged into every estimate task, so an
     # edit in place reruns them under -resume instead of reusing results of the old one.

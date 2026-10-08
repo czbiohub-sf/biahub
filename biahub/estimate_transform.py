@@ -36,6 +36,7 @@ from biahub.cli.parsing import (
     resume,
     sbatch_filepath,
 )
+from biahub.core.transform import Transform
 from biahub.registration.engine import (
     SeriesResult,
     estimate_transform_series,
@@ -44,10 +45,12 @@ from biahub.registration.engine import (
     init_run,
     run_timepoint_jobs,
 )
+from biahub.registration.utils import resolve_time_indices
 from biahub.settings import (
     TransformEntry,
     TransformSettings,
     load_estimate_transform_settings,
+    load_transform_settings,
 )
 from biahub.utils.cluster import echo_resources
 from biahub.utils.config import model_to_yaml
@@ -84,6 +87,8 @@ def transform_entries(
                 repaired_from=result.provenance.get(t),
                 status="unreliable" if unreliable else "accepted",
                 filled_from=filled_from,
+                # from --initial-transforms, unless a repair / sweep replaced it since
+                seeded_from=None if t in result.provenance else result.seeded_from.get(t),
                 # why there is no transform of its own (estimate error, job cancelled, ...)
                 note=result.errors.get(t) if filled_from is not None else None,
             )
@@ -189,6 +194,46 @@ class _Run:
         model_to_yaml(model, self.output_filepath)
         click.echo(f"Transform settings saved to {self.output_filepath.resolve()}")
 
+    def initial_for(self, initial_filepath: Path | None) -> dict[str, dict | None]:
+        """Return each position's initial transforms by timepoint (forward), from a file.
+
+        Only timepoints the file has its own entry for: a borrowed neighbour is a guess, not
+        an initial transform. A file with one entry for every timepoint applies to all. A
+        shared list serves every position; a per-position file must cover them.
+        """
+        if initial_filepath is None:
+            return dict.fromkeys(self.keys)
+        if Path(initial_filepath).resolve() == self.output_filepath.resolve():
+            raise click.UsageError(
+                f"--initial-transforms and -o are the same file ({self.output_filepath}): "
+                "write the result to a new file, so the initial transforms are kept"
+            )
+        model = load_transform_settings(initial_filepath)
+        if model.per_position:
+            missing = sorted(set(self.keys) - set(model.positions))
+            if missing:
+                raise click.UsageError(
+                    f"--initial-transforms has no list for positions {missing}; it has "
+                    f"{sorted(model.positions)}"
+                )
+        initial = {}
+        for key in self.keys:
+            with open_ome_zarr(self.moving(key), mode="r") as position:
+                n_t = position.data.shape[0]
+            time_indices = resolve_time_indices(self.settings.time_indices, n_t)
+            entries = model.entries_for(key)
+            if entries[0].t is None:  # one transform for every timepoint
+                by_t = dict.fromkeys(time_indices, entries[0].matrix)
+            else:
+                by_t = {e.t: e.matrix for e in entries if e.t in set(time_indices)}
+            initial[key] = {
+                t: Transform(
+                    model._as(m, "forward"), transform_type=self.settings.transform.type
+                )
+                for t, m in by_t.items()
+            }
+        return initial
+
     def entries(self, result, time_indices, transforms) -> list[TransformEntry]:
         return transform_entries(
             result, time_indices, transforms, self.settings.fallback.flag.hard_fail
@@ -204,6 +249,7 @@ def estimate_transform(
     cluster: str = "slurm",
     monitor: bool = False,
     resume: bool = False,
+    initial_filepath: Path | None = None,
 ) -> None:
     """Estimate one transform per timepoint mapping the moving channel onto its reference.
 
@@ -216,10 +262,13 @@ def estimate_transform(
     positions are only read for `reference.frame: cross`: one serves every moving
     position, several are paired with them by row/col/fov. `estimate_transform_init` and
     `estimate_transform_step` run the same phases one at a time (for Nextflow).
+    `initial_filepath` (--initial-transforms): a transforms file whose entries compete
+    with each timepoint's estimate (see `_compete_with_initial`); it is only read.
     """
     run = _Run(
         moving_position_dirpaths, config_filepath, output_filepath, reference_position_dirpaths
     )
+    initial = run.initial_for(initial_filepath)
     run.start()
 
     def estimate_position(key: str) -> list[TransformEntry]:
@@ -233,6 +282,7 @@ def estimate_transform(
                 cluster=cluster,
                 monitor=monitor,
                 resume=resume,
+                initial=initial[key],
             )
         )
 
@@ -265,6 +315,7 @@ def estimate_transform_init(
     output_filepath: Path,
     reference_position_dirpaths: list[Path] | None = None,
     resume: bool = False,
+    initial_filepath: Path | None = None,
 ) -> dict:
     """Start a run for the steps: check the config, plan every position, print the plan.
 
@@ -275,10 +326,16 @@ def estimate_transform_init(
     run = _Run(
         moving_position_dirpaths, config_filepath, output_filepath, reference_position_dirpaths
     )
+    initial = run.initial_for(initial_filepath)
     run.start()
     plans = {
         key: init_run(
-            run.moving(key), run.reference_for[key], run.settings, run.work_dir(key), resume
+            run.moving(key),
+            run.reference_for[key],
+            run.settings,
+            run.work_dir(key),
+            resume,
+            initial[key],
         )
         for key in run.keys
     }
@@ -368,6 +425,15 @@ def estimate_transform_step(
     "estimate -> flag -> repair / sweep -> finalize.",
 )
 @click.option(
+    "--initial-transforms",
+    "initial_filepath",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="A transforms file (e.g. an earlier run's) whose entries compete with each "
+    "timepoint's estimate; the better one is kept, a tie keeps the estimate. Only read: "
+    "write the result to a new -o. With a one-call run or --init.",
+)
+@click.option(
     "--timepoints",
     default=None,
     help="Timepoints for --step estimate / repair / sweep, comma-separated (e.g. 5 or "
@@ -385,6 +451,7 @@ def estimate_transform_cli(
     init_only: bool,
     step: str | None,
     timepoints: str | None,
+    initial_filepath: str | None,
 ) -> None:
     """Estimate a transform series mapping a moving channel onto its reference.
 
@@ -406,6 +473,11 @@ def estimate_transform_cli(
         -c estimate-transform-stabilize.yml -o ./transforms.yml
 
     \b
+    Start from an earlier result (its entries compete with each new estimate):
+    >>> biahub estimate-transform ... -o ./v2/transforms.yml \\
+        --initial-transforms ./v1/transforms.yml
+
+    \b
     Retry an interrupted run, keeping finished timepoints:
     >>> biahub estimate-transform --resume -m ... -r ... -c ... -o ./transforms.yml
 
@@ -422,6 +494,11 @@ def estimate_transform_cli(
         raise click.UsageError("--init and --step are separate calls")
     if timepoints is not None and step not in ("estimate", "repair", "sweep"):
         raise click.UsageError("--timepoints goes with --step estimate / repair / sweep")
+    if initial_filepath and step:
+        raise click.UsageError(
+            "--initial-transforms goes with a one-call run or --init (the steps read the "
+            "copy --init made)"
+        )
     common = dict(
         moving_position_dirpaths=moving_position_dirpaths,
         reference_position_dirpaths=reference_position_dirpaths,
@@ -429,7 +506,7 @@ def estimate_transform_cli(
         output_filepath=output_filepath,
     )
     if init_only:
-        estimate_transform_init(**common, resume=resume)
+        estimate_transform_init(**common, resume=resume, initial_filepath=initial_filepath)
         return
     if step:
         result = estimate_transform_step(
@@ -455,6 +532,7 @@ def estimate_transform_cli(
         cluster=cluster,
         monitor=monitor,
         resume=resume,
+        initial_filepath=initial_filepath,
     )
 
 

@@ -79,6 +79,8 @@ from biahub.utils.config import model_to_yaml, yaml_to_model
 
 ENGINE_SETTINGS_FILENAME = "estimate_transform_settings.yml"
 RUN_MANIFEST_FILENAME = "run_manifest.json"
+# A position's --initial-transforms, by timepoint, in its run folder (the jobs read it).
+INITIAL_FILENAME = "initial.json"
 
 
 @dataclass
@@ -514,6 +516,9 @@ class SeriesResult:
     # A stand-in decided while estimating (propagation: a failed timepoint returns the
     # seed it started from), with its source; used instead of the input seed.
     stand_ins: dict[int, tuple[Transform, str]] = field(default_factory=dict)
+    # Timepoints whose transform came from --initial-transforms: "initial" (as given) or
+    # "initial+refined" (estimated starting from it).
+    seeded_from: dict[int, str] = field(default_factory=dict)
     journal: RunJournal = field(default_factory=RunJournal)
 
 
@@ -530,13 +535,16 @@ def estimate_series(
     history: dict[int, Transform] | None = None,
     journal: RunJournal | None = None,
     on_timepoint: OnTimepoint | None = None,
+    initial: dict[int, Transform] | None = None,
 ) -> SeriesResult:
     """One estimate per timepoint, in the given order.
 
     `history` is the caller-owned mapping a `PreviousSeed` reads from. It is filled here
     as timepoints are accepted, so handing the same dict to the seed policy is what makes
     propagation work; the result's `transforms` IS that dict. An `EstimationError` records
-    nan plus the message for that timepoint and moves on.
+    nan plus the message for that timepoint and moves on. `initial` holds initial
+    transforms by t (--initial-transforms): each competes with the estimate
+    (`_compete_with_initial`).
     """
     result = SeriesResult(
         transforms=history if history is not None else {},
@@ -553,18 +561,54 @@ def estimate_series(
                 on_timepoint(t, result)
             continue
         seed = seed_policy.seed_for(t)
+        primary, error = None, None
         try:
             transform = estimator.estimate(mov_t, ref_t, seed=seed)
         except EstimationError as e:
-            result.scores[t] = float("nan")
-            result.errors[t] = f"{type(e).__name__}: {e}"
+            error = f"{type(e).__name__}: {e}"
         else:
             transform = _gap_rule(estimator, reference_policy, mov, t, transform)
-            result.transforms[t] = transform
-            result.scores[t] = float(score_fn(transform, mov_t, ref_t))
+            primary = (transform, float(score_fn(transform, mov_t, ref_t)))
+        if initial is not None and t in initial:
+            transform, score, source = _compete_with_initial(
+                estimator, mov_t, ref_t, primary, initial[t], score_fn,
+                lambda found, t=t: _gap_rule(estimator, reference_policy, mov, t, found),
+            )  # fmt: skip
+            primary, error = (transform, score), None
+            if source is not None:
+                result.seeded_from[t] = source
+        if primary is None:
+            result.scores[t] = float("nan")
+            result.errors[t] = error
+        else:
+            result.transforms[t], result.scores[t] = primary
         if on_timepoint is not None:
             on_timepoint(t, result)
     return result
+
+
+def _compete_with_initial(estimator, mov, ref, primary, initial, score_fn, finish):
+    """Return the best of the estimate, a refinement from `initial`, and `initial` itself.
+
+    `primary` is the estimate as (transform, score), or None if it failed. The others
+    are tried in that order and a later one wins only with a strictly better score
+    (`_beats`), so a tie keeps the estimate. Returns (transform, score, source), source
+    None for the estimate, else "initial+refined" or "initial". `finish` applies what the
+    estimate's own result gets (the gap rule) to the refinement.
+    """
+    candidates = [] if primary is None else [(*primary, None)]
+    try:
+        refined = finish(estimator.estimate(mov, ref, seed=initial))
+    except EstimationError:
+        pass
+    else:
+        candidates.append((refined, float(score_fn(refined, mov, ref)), "initial+refined"))
+    candidates.append((initial, float(score_fn(initial, mov, ref)), "initial"))
+    best = candidates[0]
+    for candidate in candidates[1:]:
+        if _beats(candidate[1], best[1]):
+            best = candidate
+    return best
 
 
 def _across_gap(reference_policy: ReferencePolicy, mov, t: int) -> bool:
@@ -639,6 +683,7 @@ def estimate_propagated(
     time_indices: Iterable[int],
     done: dict[int, dict] | None = None,
     on_timepoint: OnTimepoint | None = None,
+    initial: dict[int, Transform] | None = None,
 ) -> SeriesResult:
     """Estimate timepoints in order, each starting from the previous one's result.
 
@@ -650,6 +695,8 @@ def estimate_propagated(
     stabilization reference frame is not estimated against itself -- it is identity, and
     the chain starts after it from `input_seed`. `done` holds records of timepoints
     already estimated (resume): they are not redone, only used to continue the chain.
+    `initial` holds initial transforms by t, each competing with t's estimate
+    (`_compete_with_initial`); the winner is what the next timepoint starts from.
     """
     done = done or {}
     result = SeriesResult()
@@ -678,21 +725,33 @@ def estimate_propagated(
             else:
                 seed = previous if previous is not None else input_seed
                 competitor = input_seed if previous is not None else None
+                primary, error = None, None
                 try:
                     transform = _estimate_competing(
                         estimator, mov_t, ref_t, seed, competitor, score_fn
                     )
                 except EstimationError as e:
+                    error = f"{type(e).__name__}: {e}"
+                else:
+                    transform = _gap_rule(estimator, reference_policy, mov, t, transform)
+                    primary = (transform, float(score_fn(transform, mov_t, ref_t)))
+                if initial is not None and t in initial:
+                    transform, score, source = _compete_with_initial(
+                        estimator, mov_t, ref_t, primary, initial[t], score_fn,
+                        lambda found, t=t: _gap_rule(estimator, reference_policy, mov, t, found),
+                    )  # fmt: skip
+                    primary = (transform, score)
+                    if source is not None:
+                        result.seeded_from[t] = source
+                if primary is None:
                     result.scores[t] = float("nan")
-                    result.errors[t] = f"{type(e).__name__}: {e}"
+                    result.errors[t] = error
                     source = f"t={t - 1}" if previous is not None else "seed"
                     result.stand_ins[t] = (seed, source)
                     previous = seed
                 else:
-                    transform = _gap_rule(estimator, reference_policy, mov, t, transform)
-                    result.transforms[t] = transform
-                    result.scores[t] = float(score_fn(transform, mov_t, ref_t))
-                    previous = transform
+                    result.transforms[t], result.scores[t] = primary
+                    previous = primary[0]
         if on_timepoint is not None:
             on_timepoint(t, result)
     return result
@@ -1015,6 +1074,7 @@ class _JobInputs(NamedTuple):
     estimator: TransformEstimator
     score_fn: ScoreFn
     seed: Transform
+    initial: dict[int, Transform] | None
 
 
 def _job_inputs(
@@ -1028,8 +1088,19 @@ def _job_inputs(
     estimator, score_fn, seed = build_estimator(
         settings, tuple(mov.shape[-3:]), mov_voxel_size, ref_voxel_size
     )
+    initial_path = Path(settings_path).parent / INITIAL_FILENAME
+    initial = (
+        {
+            int(t): Transform(
+                np.asarray(m, dtype=float), transform_type=settings.transform.type
+            )
+            for t, m in json.loads(initial_path.read_text()).items()
+        }
+        if initial_path.exists()
+        else None
+    )
     return _JobInputs(
-        settings, mov, ref, mov_voxel_size, ref_voxel_size, estimator, score_fn, seed
+        settings, mov, ref, mov_voxel_size, ref_voxel_size, estimator, score_fn, seed, initial
     )
 
 
@@ -1046,14 +1117,16 @@ def _estimate_timepoint_job(
     estimator, score_fn, seed = job.estimator, job.score_fn, job.seed
 
     result = estimate_series(
-        mov, _reference_policy(settings, ref), estimator, FixedSeed(seed), score_fn, [t]
-    )
+        mov, _reference_policy(settings, ref), estimator, FixedSeed(seed), score_fn, [t],
+        initial=job.initial,
+    )  # fmt: skip
     record = {
         "t": t,
         "matrix": result.transforms[t].to_list() if t in result.transforms else None,
         "score": _finite_or_none(result.scores.get(t)),
         "error": result.errors.get(t),
         "arm": getattr(estimator, "last_winner", None),
+        "seeded_from": result.seeded_from.get(t),
         "metrics": _bead_metrics(settings, result, t, mov, ref),
     }
     record_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1098,6 +1171,7 @@ def _estimate_propagated_job(
             "stand_in": stand_in[0].to_list() if stand_in else None,
             "stand_in_from": stand_in[1] if stand_in else None,
             "arm": getattr(estimator, "last_winner", None),
+            "seeded_from": result.seeded_from.get(t),
             "metrics": _bead_metrics(settings, result, t, mov, ref),
         }
         _write_json(records_dir / f"{t}.json", record)
@@ -1112,13 +1186,26 @@ def _estimate_propagated_job(
         time_indices,
         done=done,
         on_timepoint=write_record,
+        initial=job.initial,
     )
     return records
 
 
-def _run_fingerprint(settings: EstimateTransformSettings, source: Path, target: Path) -> dict:
+def _run_fingerprint(
+    settings: EstimateTransformSettings,
+    source: Path,
+    target: Path,
+    initial: dict[int, Transform] | None = None,
+) -> dict:
     """Return what a resumed run must share with the run it resumes."""
     digest = hashlib.sha256(settings.model_dump_json().encode()).hexdigest()
+    initial_digest = (
+        None
+        if not initial
+        else hashlib.sha256(
+            json.dumps(_initial_json(initial), sort_keys=True).encode()
+        ).hexdigest()
+    )
 
     def resolved(path):
         return None if path is None else str(Path(path).resolve())
@@ -1127,7 +1214,12 @@ def _run_fingerprint(settings: EstimateTransformSettings, source: Path, target: 
         "settings_sha256": digest,
         "moving": resolved(source),
         "reference": resolved(target),
+        "initial_sha256": initial_digest,
     }
+
+
+def _initial_json(initial: dict[int, Transform]) -> dict[str, list]:
+    return {str(t): transform.to_list() for t, transform in sorted(initial.items())}
 
 
 def _start_run(
@@ -1136,6 +1228,7 @@ def _start_run(
     source: Path,
     target: Path,
     resume: bool,
+    initial: dict[int, Transform] | None = None,
 ) -> None:
     """Begin a run in `output_dir`: clear earlier records, or check a resume is compatible.
 
@@ -1144,7 +1237,7 @@ def _start_run(
     match the manifest of the run being resumed.
     """
     manifest_path = output_dir / RUN_MANIFEST_FILENAME
-    fingerprint = _run_fingerprint(settings, source, target)
+    fingerprint = _run_fingerprint(settings, source, target, initial)
     if resume:
         if not manifest_path.exists():
             click.echo(
@@ -1202,6 +1295,8 @@ def _load_series(
                 record.get("stand_in_from") or "seed",
             )
         result.scores[t] = float("nan") if record["score"] is None else record["score"]
+        if record.get("seeded_from"):
+            result.seeded_from[t] = record["seeded_from"]
         if record["error"]:
             result.errors[t] = record["error"]
     return result
@@ -1506,6 +1601,7 @@ def _report(result: SeriesResult, time_indices: list[int]) -> dict:
         "sweeps": {str(t): _pass_report(r) for t, r in result.sweeps.items()},
         "provenance": {str(t): source for t, source in sorted(result.provenance.items())},
         "stand_ins": {str(t): source for t, source in sorted(result.filled_from.items())},
+        "seeded_from": {str(t): source for t, source in sorted(result.seeded_from.items())},
     }
 
 
@@ -1528,6 +1624,7 @@ def init_run(
     settings: EstimateTransformSettings,
     output_dir: Path,
     resume: bool = False,
+    initial: dict[int, Transform] | None = None,
 ) -> dict:
     """Start a run in `output_dir` and return its plan (also written as `run_plan.json`).
 
@@ -1564,8 +1661,18 @@ def init_run(
     estimator, _score_fn, _seed_transform = build_estimator(
         settings, (Z, Y, X), mov_voxel_size, ref_voxel_size
     )
-    _start_run(output_dir, settings, source, target, resume)
+    if initial and not getattr(estimator, "uses_seed", True):
+        raise click.UsageError(
+            f"method {settings.method!r} ignores seeds, so initial transforms would not be "
+            "used; drop --initial-transforms"
+        )
+    _start_run(output_dir, settings, source, target, resume, initial)
     model_to_yaml(settings, output_dir / ENGINE_SETTINGS_FILENAME)
+    initial_path = output_dir / INITIAL_FILENAME
+    if initial:
+        _write_json(initial_path, _initial_json(initial))
+    else:
+        initial_path.unlink(missing_ok=True)
 
     time_indices = resolve_time_indices(settings.time_indices, T)
     propagated = settings.transform.seed_from == "previous_timepoint"
@@ -1914,6 +2021,7 @@ def estimate_transform_series(
     cluster: str = "slurm",
     monitor: bool = False,
     resume: bool = False,
+    initial: dict[int, Transform] | None = None,
 ) -> tuple[SeriesResult, list[int], list[Transform]]:
     """Run every phase through submitit; return the series, its timepoints and one forward transform per timepoint.
 
@@ -1926,7 +2034,7 @@ def estimate_transform_series(
     """
     output_dir = Path(output_dir)
     source, target = Path(moving_position_dirpath), Path(reference_position_dirpath)
-    plan = init_run(source, target, settings, output_dir, resume)
+    plan = init_run(source, target, settings, output_dir, resume, initial)
     settings_path = output_dir / ENGINE_SETTINGS_FILENAME
     time_indices = plan["time_indices"]
     timepoints_dir, repairs_dir, sweeps_dir = _record_dirs(output_dir)

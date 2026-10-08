@@ -20,6 +20,11 @@
 //       --moving <data.zarr> --estimate_config estimate-transform-focus-finding.yml \
 //       --estimate_positions '*/*/*' --apply --output <dir> -resume
 //
+//   # start from an earlier result: its entries compete with each new estimate
+//   nextflow run registration.nf -profile slurm ... --estimate_config beads.yml \
+//       --estimate_positions 'C/1/000000' --initial_transforms <v1/transforms.yml> \
+//       --output <v2 dir> -resume
+//
 //   # apply an existing transforms file (e.g. after substitute-transforms)
 //   nextflow run registration.nf -profile slurm \
 //       --moving <deskewed.zarr> --reference <reconstructed.zarr> \
@@ -69,7 +74,7 @@ workflow {
     if (!new File(params.output.toString()).isAbsolute()) {
         error "--output must be an absolute path (got '${params.output}'): e.g. \$(realpath ${params.output})"
     }
-    ['estimate_config', 'transforms'].each { name ->
+    ['estimate_config', 'transforms', 'initial_transforms'].each { name ->
         if (params[name] && !file(params[name].toString()).exists()) {
             error "--${name} not found: ${params[name]}"
         }
@@ -83,6 +88,10 @@ workflow {
     def moving = absolute_path(params.moving)
     def reference = absolute_path(params.reference) ?: ''
     def estimate_config = absolute_path(params.estimate_config)
+    def initial_transforms = absolute_path(params.initial_transforms)
+    if (initial_transforms && !params.estimate_config) {
+        error "--initial_transforms seeds an estimate: it goes with --estimate_config"
+    }
     def apply = params.apply || params.transforms
     def transforms = absolute_path(params.transforms) ?: "${out}/transforms.yml"
     def start = channel.value('start')
@@ -90,13 +99,17 @@ workflow {
     // An edited config reruns the estimate (staged file, main's #397); the transforms file
     // is keyed on its content (see the module header).
     if (params.estimate_config) {
+        // staged into every estimate task (main's #397): editing the config or the initial
+        // transforms reruns the estimate
+        def staged = [file(estimate_config)] + (initial_transforms ? [file(initial_transforms)] : [])
+        def init_args = initial_transforms ? "--initial-transforms '${initial_transforms}'" : ''
         estimate_init = estimate_transform_init_wf(
-            moving, reference, params.estimate_positions, estimate_config,
-            file(estimate_config), transforms, start
+            moving, reference, params.estimate_positions, estimate_config, staged,
+            transforms, init_args, start
         )
         estimated = estimate_transform_run_wf(
             estimate_init.plan, moving, reference, params.estimate_positions,
-            estimate_config, file(estimate_config), transforms, start
+            estimate_config, staged, transforms, start
         )
         transforms_hash = estimated.done
     } else {

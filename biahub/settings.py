@@ -1155,6 +1155,9 @@ class TransformEntry(MyBaseModel):
     # Where a stand-in matrix came from, e.g. "t=81", "seed", "identity".
     filled_from: str | None = None
     note: str | None = None
+    # From --initial-transforms: "initial" (as given) or "initial+refined" (estimated
+    # starting from it); None when the run's own estimate (or a repair) won.
+    seeded_from: str | None = None
 
     @field_validator("matrix")
     @classmethod
