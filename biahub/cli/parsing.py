@@ -14,14 +14,42 @@ from biahub.cli.option_eat_all import OptionEatAll
 def _validate_and_process_paths(
     ctx: click.Context, opt: click.Option, value: str
 ) -> list[Path]:
+    if value is None:  # an optional path option that was not given
+        return []
     # Sort and validate the input paths
     input_paths = [p for p in map(Path, natsorted(value)) if p.is_dir()]
+    if not input_paths:
+        raise click.BadParameter(f"no position directory found in {list(value)}")
     with open_ome_zarr(input_paths[0], mode="r") as dataset:
         if isinstance(dataset, Plate):
             raise ValueError(
                 "Please supply a single position instead of an HCS plate. Likely fix: replace 'input.zarr' with 'input.zarr/0/0/0'"
             )
     return input_paths
+
+
+def position_key(position_dirpath: Path) -> str:
+    """'row/col/fov' of a position directory."""
+    return "/".join(Path(position_dirpath).parts[-3:])
+
+
+def pair_reference_positions(
+    position_keys: list[str], reference_position_dirpaths: list[Path] | None
+) -> dict[str, Path]:
+    """Pair each moving position with the reference position it is registered onto.
+
+    One reference position serves every moving position; several are paired by position
+    key, and a moving position without its reference is an error.
+    """
+    if not reference_position_dirpaths:
+        return {}
+    if len(reference_position_dirpaths) == 1:
+        return {key: Path(reference_position_dirpaths[0]) for key in position_keys}
+    by_key = {position_key(p): Path(p) for p in reference_position_dirpaths}
+    missing = sorted(set(position_keys) - set(by_key))
+    if missing:
+        raise click.UsageError(f"no reference position for moving positions {missing}")
+    return {key: by_key[key] for key in position_keys}
 
 
 def _str_to_path(ctx: click.Context, opt: click.Option, value: str) -> Path:
@@ -63,31 +91,31 @@ def input_position_dirpaths() -> Callable:
     return decorator
 
 
-def source_position_dirpaths() -> Callable:
+def moving_position_dirpaths() -> Callable:
     def decorator(f: Callable) -> Callable:
         return click.option(
-            "--source-position-dirpaths",
-            "-s",
+            "--moving-position-dirpaths",
+            "-m",
             required=True,
             cls=OptionEatAll,
             type=tuple,
             callback=_validate_and_process_paths,
-            help='Paths to source positions, for example: "source.zarr/0/0/0" or "source.zarr/*/*/*"',
+            help='Positions of the moving store, for example: "moving.zarr/0/0/0" or "moving.zarr/*/*/*"',
         )(f)
 
     return decorator
 
 
-def target_position_dirpaths() -> Callable:
+def reference_position_dirpaths(required: bool = True) -> Callable:
     def decorator(f: Callable) -> Callable:
         return click.option(
-            "--target-position-dirpaths",
-            "-t",
-            required=True,
+            "--reference-position-dirpaths",
+            "-r",
+            required=required,
             cls=OptionEatAll,
             type=tuple,
             callback=_validate_and_process_paths,
-            help='Paths to target positions, for example: "target.zarr/0/0/0" or "target.zarr/*/*/*"',
+            help='Positions of the reference store, for example: "reference.zarr/0/0/0" or "reference.zarr/*/*/*"',
         )(f)
 
     return decorator
@@ -292,11 +320,12 @@ def init_only() -> Callable:
     return decorator
 
 
-def monitor() -> Callable:
+def monitor(short: bool = True) -> Callable:
+    """`--monitor` / `-m`; `short=False` frees `-m` for CLIs whose moving store takes it."""
+
     def decorator(f: Callable) -> Callable:
         return click.option(
-            "--monitor",
-            "-m",
+            *(["--monitor", "-m"] if short else ["--monitor"]),
             is_flag=True,
             default=False,
             help="Monitor of submitted SLURM jobs.",
@@ -305,14 +334,15 @@ def monitor() -> Callable:
     return decorator
 
 
-def resume() -> Callable:
+def resume(help: str | None = None) -> Callable:
     def decorator(f: Callable) -> Callable:
         return click.option(
             "--resume/--no-resume",
             "resume",
             default=False,
             show_default=True,
-            help=(
+            help=help
+            or (
                 "Skip the (time, channel) units this position already finished in an "
                 "earlier attempt instead of recomputing the whole position. For retrying "
                 "a run that was interrupted, e.g. by Slurm preemption. Finished units are "

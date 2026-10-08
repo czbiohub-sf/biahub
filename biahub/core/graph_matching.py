@@ -26,9 +26,66 @@ import numpy as np
 
 from numpy.typing import NDArray
 from scipy.optimize import linear_sum_assignment
+from scipy.sparse import csr_matrix
 from scipy.spatial.distance import cdist
 from skimage.feature import match_descriptors
 from sklearn.neighbors import NearestNeighbors, radius_neighbors_graph
+
+# Spectral affinity entries kept: candidate pairs whose distances agree within this many
+# sigmas (beyond it the Gaussian weight is < 1.5e-8, numerically irrelevant).
+SPECTRAL_CUTOFF_SIGMAS = 6.0
+# Largest sparse affinity the spectral matcher builds. Construction holds int64 rows and
+# columns and float64 values (24 bytes per entry), then the CSR copy, so the peak is about
+# twice that: ~10 GB at this cap (200 x 200 beads measured 3 GB).
+SPECTRAL_MAX_NONZEROS = 200_000_000
+
+
+class MatchingTooLargeError(ValueError):
+    """The candidate set is too large for the requested matching algorithm."""
+
+
+def spectral_affinity(
+    d_mov: NDArray, d_ref: NDArray, sigma: float, cutoff_sigmas: float = SPECTRAL_CUTOFF_SIGMAS
+) -> csr_matrix:
+    """Sparse Leordeanu-Hebert affinity between candidate correspondences.
+
+    Candidate a = (i, j) is index i * n_ref + j. Entry (a, b) = exp(-(d_mov[i, i'] -
+    d_ref[j, j'])^2 / 2 sigma^2) for i != i' and j != j' (a point takes one partner, so
+    candidates sharing a row or a column never reinforce one another), kept only where
+    the distances agree within `cutoff_sigmas`.
+    """
+    n_m, n_r = len(d_mov), len(d_ref)
+    off_diagonal = ~np.eye(n_r, dtype=bool)
+    ref_j, ref_j2 = np.nonzero(off_diagonal)
+    ref_d = d_ref[off_diagonal]
+    order = np.argsort(ref_d, kind="stable")
+    ref_j, ref_j2, ref_d = ref_j[order], ref_j2[order], ref_d[order]
+    window = cutoff_sigmas * sigma
+
+    mov_i, mov_i2 = np.nonzero(~np.eye(n_m, dtype=bool))
+    mov_d = d_mov[mov_i, mov_i2]
+    lo = np.searchsorted(ref_d, mov_d - window, side="left")
+    hi = np.searchsorted(ref_d, mov_d + window, side="right")
+    nnz = int((hi - lo).sum())
+    if nnz > SPECTRAL_MAX_NONZEROS:
+        raise MatchingTooLargeError(
+            f"spectral matching would need {nnz} affinity entries ({n_m} x {n_r} nodes, "
+            f"sigma={sigma}); restrict the candidate set or lower sigma"
+        )
+    rows = np.empty(nnz, dtype=np.int64)
+    cols = np.empty(nnz, dtype=np.int64)
+    vals = np.empty(nnz, dtype=np.float64)
+    at = 0
+    for i, i2, d, a, b in zip(mov_i, mov_i2, mov_d, lo, hi, strict=True):
+        if a == b:
+            continue
+        n = b - a
+        rows[at : at + n] = i * n_r + ref_j[a:b]
+        cols[at : at + n] = i2 * n_r + ref_j2[a:b]
+        vals[at : at + n] = np.exp(-((ref_d[a:b] - d) ** 2) / (2 * sigma**2))
+        at += n
+    return csr_matrix((vals, (rows, cols)), shape=(n_m * n_r, n_m * n_r))
+
 
 # ============================================================
 # GRAPH CLASS
@@ -289,7 +346,7 @@ class GraphMatcher:
 
     def __init__(
         self,
-        algorithm: Literal["hungarian", "descriptor"] = "hungarian",
+        algorithm: Literal["hungarian", "descriptor", "spectral"] = "hungarian",
         weights: dict[str, float] | None = None,
         distance_metric: str = "euclidean",
         normalize: bool = False,
@@ -297,6 +354,9 @@ class GraphMatcher:
         cross_check: bool = False,
         max_ratio: float | None = None,
         metric: str = "euclidean",  # for descriptor matching
+        spectral_sigma: float = 3.0,
+        spectral_rel_cut: float = 0.5,
+        spectral_max_iter: int = 60,
         verbose: bool = False,
     ):
         self.algorithm = algorithm
@@ -322,6 +382,11 @@ class GraphMatcher:
 
         # Descriptor matching parameters
         self.metric = metric
+
+        # Spectral matching parameters
+        self.spectral_sigma = spectral_sigma
+        self.spectral_rel_cut = spectral_rel_cut
+        self.spectral_max_iter = spectral_max_iter
 
     def match(
         self,
@@ -364,12 +429,71 @@ class GraphMatcher:
             return self._match_hungarian(moving, reference, verbose)
         elif self.algorithm == "descriptor":
             return self._match_descriptor(moving, reference, verbose)
+        elif self.algorithm == "spectral":
+            return self._match_spectral(moving, reference, verbose)
         else:
             raise ValueError(f"Unknown algorithm: {self.algorithm}")
 
     # ============================================================
     # HUNGARIAN MATCHING
     # ============================================================
+
+    def _match_spectral(
+        self,
+        moving: Graph,
+        reference: Graph,
+        verbose: bool,
+    ) -> NDArray[np.integer]:
+        """Leordeanu-Hebert spectral matching.
+
+        Scores each candidate correspondence by how many OTHER candidates agree with it
+        under rigid geometry: (i, j) and (i', j') agree when the distance between moving
+        points i and i' matches the distance between reference points j and j'. Only
+        relative distances enter, so the result is invariant to translation and rotation
+        -- which is what lets it acquire a correspondence from a poor initial transform,
+        where the position-dominated Hungarian cost pairs beads with the wrong neighbour.
+        Given a good initial transform the Hungarian matcher is more precise: acquire with
+        this, then refine.
+
+        The affinity is sparse (`spectral_affinity`): only candidate pairs whose distances
+        agree within a few sigma are stored, so memory follows the geometric agreement,
+        not (n_mov * n_ref)^2. Raises `MatchingTooLargeError` past a fixed entry budget.
+        """
+        n_m, n_r = moving.n_nodes, reference.n_nodes
+        n_cand = n_m * n_r
+        ii = np.repeat(np.arange(n_m), n_r)
+        jj = np.tile(np.arange(n_r), n_m)
+        M = spectral_affinity(
+            cdist(moving.nodes, moving.nodes),
+            cdist(reference.nodes, reference.nodes),
+            self.spectral_sigma,
+        )
+
+        x = np.ones(n_cand) / np.sqrt(n_cand)
+        for _ in range(self.spectral_max_iter):
+            x = M @ x
+            norm = np.linalg.norm(x)
+            if norm == 0:
+                break
+            x /= norm
+
+        threshold = self.spectral_rel_cut * x.max()
+        used_i, used_j, matches = set(), set(), []
+        for idx in np.argsort(-x):
+            if x[idx] <= threshold:
+                break
+            i, j = int(ii[idx]), int(jj[idx])
+            if i in used_i or j in used_j:
+                continue
+            used_i.add(i)
+            used_j.add(j)
+            matches.append((i, j))
+        if verbose:
+            click.echo(
+                f"Spectral matching: {len(matches)} matches from {n_cand} candidates "
+                f"(sigma={self.spectral_sigma}, rel_cut={self.spectral_rel_cut})"
+            )
+        return np.asarray(matches, dtype=np.int32).reshape(-1, 2)
 
     def _match_hungarian(
         self,

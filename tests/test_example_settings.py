@@ -3,7 +3,6 @@ import re
 
 from pathlib import Path
 
-import numpy as np
 import pytest
 import yaml
 
@@ -13,15 +12,13 @@ from biahub.settings import (
     CharacterizeSettings,
     ConcatenateSettings,
     DeskewSettings,
-    EstimateRegistrationSettings,
-    EstimateStabilizationSettings,
+    EstimateTransformSettings,
     FlatFieldCorrectionSettings,
     ProcessingImportFuncSettings,
-    RegistrationSettings,
     SegmentationSettings,
-    StabilizationSettings,
     StitchSettings,
     TrackingSettings,
+    TransformSettings,
 )
 
 settings_files_dir = (Path(__file__) / "../../settings").resolve()
@@ -32,28 +29,18 @@ example_settings_params = [
     ("example_concatenate_settings_organelle_dynamics.yml", ConcatenateSettings),
     ("example_concatenate_settings.yml", ConcatenateSettings),
     ("example_deskew_settings.yml", DeskewSettings),
-    ("example_estimate_registration_settings_ants.yml", EstimateRegistrationSettings),
-    ("example_estimate_registration_settings_beads.yml", EstimateRegistrationSettings),
-    ("example_estimate_registration_settings_manual.yml", EstimateRegistrationSettings),
-    ("example_estimate_registration_settings.yml", EstimateRegistrationSettings),
+    ("example_estimate_transform_settings.yml", EstimateTransformSettings),
+    ("example_estimate_transform_settings_ants.yml", EstimateTransformSettings),
+    ("example_estimate_transform_settings_manual.yml", EstimateTransformSettings),
+    ("example_estimate_transform_settings_stabilization_pcc.yml", EstimateTransformSettings),
     (
-        "example_estimate_stabilization_settings_xy_focus-finding.yml",
-        EstimateStabilizationSettings,
+        "example_estimate_transform_settings_stabilization_focus_finding.yml",
+        EstimateTransformSettings,
     ),
-    ("example_estimate_stabilization_settings_xyz_beads.yml", EstimateStabilizationSettings),
-    (
-        "example_estimate_stabilization_settings_xyz_focus-finding.yml",
-        EstimateStabilizationSettings,
-    ),
-    ("example_estimate_stabilization_settings_xyz_pcc.yml", EstimateStabilizationSettings),
-    (
-        "example_estimate_stabilization_settings_z_focus-finding.yml",
-        EstimateStabilizationSettings,
-    ),
+    ("example_transform_settings.yml", TransformSettings),
+    ("example_transform_settings_stabilization.yml", TransformSettings),
     ("example_process_with_config_settings.yml", ProcessingImportFuncSettings),
-    ("example_registration_settings.yml", RegistrationSettings),
     ("example_segmentation_settings.yml", SegmentationSettings),
-    ("example_stabilize_timelapse_settings.yml", StabilizationSettings),
     ("example_stitch_settings.yml", StitchSettings),
     ("example_track_settings.yml", TrackingSettings),
     ("example_flat_field_settings.yml", FlatFieldCorrectionSettings),
@@ -168,86 +155,34 @@ def test_deskew_settings():
         DeskewSettings(pixel_size_um=0.116, ls_angle_deg=36, scan_step_um=None)
 
 
-def test_register_settings():
-    # Test extra parameter
-    with pytest.raises(ValidationError):
-        RegistrationSettings(
-            source_channel_index=0,
-            target_channel_index=0,
-            affine_transform_zyx=np.identity(4).tolist(),
-            typo_param="test",
-        )
-
-    # Test wrong output shape size
-    with pytest.raises(ValidationError):
-        RegistrationSettings(
-            source_channel_index=0,
-            target_channel_index=0,
-            affine_transform_zyx=np.identity(4).tolist(),
-            typo_param="test",
-        )
-
-    # Test wrong matrix shape
-    with pytest.raises(ValidationError):
-        RegistrationSettings(
-            source_channel_index=0,
-            target_channel_index=0,
-            affine_transform_zyx=np.identity(5).tolist(),
-            typo_param="test",
-        )
-
-
-def test_example_register_settings(example_register_settings):
-    _, settings = example_register_settings
-    RegistrationSettings(**settings)
-
-
-def test_example_stabilize_timelapse_settings(example_stabilize_timelapse_settings):
-    _, settings = example_stabilize_timelapse_settings
-    StabilizationSettings(**settings)
-
-
-def test_example_estimate_registration_settings(example_estimate_registration_settings):
-    _, settings = example_estimate_registration_settings
-    EstimateRegistrationSettings(**settings)
-
-
-def test_ants_settings_cover_estimate_tczyx_reads():
-    """`AntsRegistrationSettings` must expose every field `estimate_tczyx` reads.
-
-    Regression test: the model previously defined only ``sobel_filter`` while
-    ``estimate_tczyx`` also read ``crop``, ``ref_mask_radius`` and ``clip``, so
-    the config-driven ANTs path raised ``AttributeError`` before reaching ANTs.
-    """
-    from biahub.registration.ants import estimate_tczyx
+def test_ants_settings_are_all_consumed_by_the_engine():
+    """Every AntsRegistrationSettings field must be read by AntsEstimator.from_settings
+    (which is what the config-driven ANTs path runs), so a config knob can't be silently
+    ignored."""
+    from biahub.registration.engine import build_estimator
+    from biahub.registration.methods.ants import AntsEstimator
     from biahub.settings import AntsRegistrationSettings
 
-    source = inspect.getsource(estimate_tczyx)
-    read = set(re.findall(r"ants_registration_settings\.(\w+)", source))
-    assert read, "no ants_registration_settings reads found -- update this test"
-
-    missing = read - set(AntsRegistrationSettings.model_fields)
-    assert not missing, (
-        f"AntsRegistrationSettings is missing fields read by estimate_tczyx: {missing}"
+    source = inspect.getsource(AntsEstimator.from_settings) + inspect.getsource(
+        build_estimator
     )
+    read = set(re.findall(r"ants_(?:registration_)?settings\.(\w+)", source))
+    missing = set(AntsRegistrationSettings.model_fields) - read
+    assert not missing, f"AntsRegistrationSettings fields nothing reads: {missing}"
 
 
-def test_ants_settings_defaults_match_preprocess_czyx():
-    """Defaults must agree with ``preprocess_czyx``, which consumes them.
-
-    Config-driven and direct calls should behave identically when the user
-    sets nothing.
-    """
-    from biahub.registration.ants import preprocess_czyx
+def test_ants_settings_defaults_match_preprocess_zyx():
+    """Preprocessing defaults must agree with ``preprocess_zyx``, which consumes them."""
+    from biahub.registration.methods.ants import preprocess_zyx
     from biahub.settings import AntsRegistrationSettings
 
     settings = AntsRegistrationSettings()
-    params = inspect.signature(preprocess_czyx).parameters
+    params = inspect.signature(preprocess_zyx).parameters
     for field in AntsRegistrationSettings.model_fields:
-        assert field in params, f"{field} is not a preprocess_czyx parameter"
+        assert field in params, f"{field} is not a preprocess_zyx parameter"
         assert getattr(settings, field) == params[field].default, (
             f"default mismatch for {field}: settings={getattr(settings, field)} "
-            f"preprocess_czyx={params[field].default}"
+            f"preprocess_zyx={params[field].default}"
         )
 
 
@@ -267,3 +202,14 @@ def test_example_stitch_settings(example_stitch_settings):
     for value in validated_settings.total_translation.values():
         assert len(value) == 3
         assert value[0] == 0.0
+
+
+def test_skill_config_templates_load():
+    # Skill templates are copied into production runs; keep them on the current schema.
+    from biahub.settings import load_estimate_transform_settings
+
+    root = Path(__file__).resolve().parents[1] / ".claude" / "skills"
+    templates = sorted(root.glob("*/templates/estimate-transform*.yml"))
+    assert templates
+    for template in templates:
+        load_estimate_transform_settings(template)

@@ -1,13 +1,16 @@
 import warnings
 
+from itertools import product
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import numpy as np
 import torch
+import yaml
 
 from pydantic import (
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     ImportString,
@@ -194,6 +197,64 @@ class MatchDescriptorSettings(MyBaseModel):
     cross_check: bool = False
 
 
+class SpectralMatchSettings(MyBaseModel):
+    """Leordeanu-Hebert pairwise-consistency matching (GraphMatcher algorithm "spectral").
+
+    sigma is the tolerance, in voxels, on how well a pair of candidates must preserve
+    pairwise distance to reinforce each other; rel_cut drops candidates scoring below this
+    fraction of the top eigenvector entry (the precision/recall dial).
+    """
+
+    sigma: float = 3.0
+    rel_cut: float = 0.5
+    max_iter: int = 60
+
+
+class SeedCorrectionSettings(MyBaseModel):
+    """Correct a per-timepoint seed by bead displacement voting before estimating.
+
+    For a series whose geometry drifts beyond the static seed's capture range while the
+    bead field is too thin for the matchers to re-acquire from scratch. The moving volume
+    is warped with the seed, beads are detected densely (`vote_peaks_settings`) and each
+    votes for its displacement to every reference bead within `capture_radius`; the mean
+    of the densest `cluster_radius`-ball of votes is the residual drift. "voteseed"
+    composes that translation into the seed; "votefit" additionally fits an affine on the
+    cluster's members, kept only if it lowers the peaks' median nearest-neighbour distance.
+    Candidates only compete against the unchanged seed, so a bad vote cannot make it worse.
+    """
+
+    mode: Literal["none", "voteseed", "votefit"] = "none"
+    vote_peaks_settings: DetectPeaksSettings = DetectPeaksSettings(
+        threshold_abs=200.0, nms_distance=8, min_distance=0, block_size=[16, 16, 16]
+    )
+    capture_radius: float = 80.0
+    cluster_radius: float = 10.0
+    min_votes: int = 3
+
+
+class VoteIcpSettings(MyBaseModel):
+    """Tunables for `estimation_mode: vote_icp` (see `pointcloud.vote_icp_register`).
+
+    The capture radius starts wide enough to reach a badly drifted seed and shrinks
+    geometrically each iteration (default 80 -> 40 -> 20 -> 10, then held), so early
+    rounds recover the bulk misalignment and late rounds only see unambiguous neighbours.
+    `vote_peaks_settings` is the dense detection on the raw moving volume for the reach
+    stage; a precision stage re-runs at short range with the pipeline's own
+    `source_peaks_settings` and is kept only on a strict score win.
+    """
+
+    vote_peaks_settings: DetectPeaksSettings = DetectPeaksSettings(
+        threshold_abs=200.0, nms_distance=8, min_distance=0, block_size=[16, 16, 16]
+    )
+    initial_capture_radius: float = 80.0
+    min_capture_radius: float = 10.0
+    radius_decay: float = 0.5
+    cluster_radius: float = 10.0
+    min_votes: int = 3
+    max_iterations: int = 20
+    convergence_translation: float = 0.5
+
+
 class FilterMatchesSettings(MyBaseModel):
     angle_threshold: float = 0
     direction_threshold: float = 0
@@ -208,7 +269,7 @@ class QCBeadsRegistrationSettings(MyBaseModel):
 
 
 class BeadsMatchSettings(MyBaseModel):
-    algorithm: Literal["hungarian", "match_descriptor"] = "hungarian"
+    algorithm: Literal["hungarian", "match_descriptor", "spectral"] = "hungarian"
     source_peaks_settings: DetectPeaksSettings | None = Field(
         default_factory=DetectPeaksSettings
     )
@@ -217,6 +278,16 @@ class BeadsMatchSettings(MyBaseModel):
     )
     match_descriptor_settings: MatchDescriptorSettings = MatchDescriptorSettings()
     hungarian_match_settings: HungarianMatchSettings = HungarianMatchSettings()
+    spectral_match_settings: SpectralMatchSettings = SpectralMatchSettings()
+    # Second arm of the estimate: acquire the correspondence with spectral matching, then
+    # refine with `algorithm`; the higher-scoring arm wins. "on_low_score" runs it only when
+    # the first arm scores below qc_settings.score_threshold.
+    spectral_arm: Literal["off", "on_low_score", "always"] = "off"
+    # "matching": detect -> match -> fit (the configured algorithm, plus the spectral arm);
+    # "vote_icp": correspond-by-voting ICP over the peak clouds (pointcloud.vote_icp_register).
+    estimation_mode: Literal["matching", "vote_icp"] = "matching"
+    vote_icp_settings: VoteIcpSettings = VoteIcpSettings()
+    seed_correction_settings: SeedCorrectionSettings = SeedCorrectionSettings()
     filter_matches_settings: FilterMatchesSettings = FilterMatchesSettings()
     qc_settings: QCBeadsRegistrationSettings = QCBeadsRegistrationSettings()
 
@@ -227,33 +298,32 @@ class PhaseCrossCorrSettings(MyBaseModel):
     function_type: Literal["custom_padding", "custom"] = "custom"
     t_reference: Literal["first", "previous"] = "first"
     skip_beads_fov: str = "0"
-    center_crop_xy: list[int, int] = None
+    center_crop_xy: list[int] | None = None
     X_slice: list | list[list | Literal["all"]] | Literal["all"] = "all"
     Y_slice: list | list[list | Literal["all"]] | Literal["all"] = "all"
     Z_slice: list | list[list | Literal["all"]] | Literal["all"] = "all"
 
 
-class FocusFindingSettings(MyBaseModel):
-    average_across_wells: bool = False
-    average_across_wells_method: Literal["mean", "median"] = "mean"
-    skip_beads_fov: str = "0"
-    center_crop_xy: list[int, int] = [800, 800]
+class FocusSettings(MyBaseModel):
+    """The engine's focus-finding method (same-channel stabilization).
 
+    `axes` is the legacy `stabilization_type`: "z" is the focus index alone, "xy" is a
+    stackreg translation between the in-focus slices, "xyz" both. The focus criterion is
+    waveorder's transverse band with the detection NA and illumination wavelength below
+    (in micrometres; the pixel size comes from the store). `center_crop_xy` is (X, Y).
+    """
 
-class StackRegSettings(MyBaseModel):
-    center_crop_xy: list[int, int] = [800, 800]
-    skip_beads_fov: str = "0"
-    focus_finding_settings: FocusFindingSettings | None = Field(
-        default_factory=FocusFindingSettings
-    )
-    t_reference: Literal["first", "previous"] = "first"
+    axes: Literal["z", "xy", "xyz"] = "xyz"
+    center_crop_xy: list[int] = [800, 800]
+    na_det: float = 1.35
+    lambda_ill: float = 0.5
 
-
-class EvalTransformSettings(MyBaseModel):
-    validation_window_size: int = 10
-    validation_tolerance: float = 1000.0
-    interpolation_window_size: int = 3
-    interpolation_type: Literal["linear", "cubic"] = "linear"
+    @field_validator("center_crop_xy")
+    @classmethod
+    def check_center_crop_xy(cls, v):
+        if len(v) != 2 or any(c <= 0 for c in v):
+            raise ValueError("center_crop_xy must be two positive integers (X, Y)")
+        return v
 
 
 class AffineTransformSettings(MyBaseModel):
@@ -280,7 +350,7 @@ class AntsRegistrationSettings(MyBaseModel):
     """Settings for the ANTs registration backend.
 
     Field names and defaults mirror the keyword arguments of
-    ``biahub.registration.ants.preprocess_czyx``, which is what consumes them.
+    ``biahub.registration.methods.ants.preprocess_zyx``, which is what consumes them.
 
     Attributes
     ----------
@@ -310,7 +380,7 @@ class AntsRegistrationSettings(MyBaseModel):
     @field_validator("ref_mask_radius")
     @classmethod
     def check_ref_mask_radius(cls, v):
-        # preprocess_czyx raises on this too, but only after the data is
+        # preprocess_zyx raises on this too, but only after the data is
         # loaded -- catching it at config-parse time is much cheaper.
         if v is not None and not (0 < v <= 1):
             raise ValueError(
@@ -319,76 +389,11 @@ class AntsRegistrationSettings(MyBaseModel):
         return v
 
 
-class ManualRegistrationSettings(MyBaseModel):
-    time_index: int = 0
+class ManualSettings(MyBaseModel):
+    """Manual registration in napari, on the one timepoint given by `time_indices`."""
+
     affine_90degree_rotation: int = 0
     affine_fliplr: bool = False
-
-
-class EstimateRegistrationSettings(MyBaseModel):
-    target_channel_name: str
-    source_channel_name: str
-    estimation_method: Literal["manual", "beads", "ants"] = "manual"
-    beads_match_settings: BeadsMatchSettings | None = None
-    focus_finding_settings: FocusFindingSettings | None = None
-    affine_transform_settings: AffineTransformSettings = Field(
-        default_factory=AffineTransformSettings
-    )
-    eval_transform_settings: EvalTransformSettings | None = None
-    ants_registration_settings: AntsRegistrationSettings | None = None
-    manual_registration_settings: ManualRegistrationSettings | None = None
-    verbose: bool = False
-
-    @model_validator(mode="after")
-    def set_defaults_and_validate(self) -> "EstimateRegistrationSettings":
-        if self.estimation_method == "manual" and self.manual_registration_settings is None:
-            self.manual_registration_settings = ManualRegistrationSettings()
-        elif self.estimation_method == "beads" and self.beads_match_settings is None:
-            self.beads_match_settings = BeadsMatchSettings()
-        elif self.estimation_method == "ants" and self.ants_registration_settings is None:
-            self.ants_registration_settings = AntsRegistrationSettings()
-        return self
-
-
-class EstimateStabilizationSettings(MyBaseModel):
-    stabilization_estimation_channel: str
-    stabilization_channels: list
-    stabilization_type: Literal["z", "xy", "xyz"]
-    stabilization_method: Literal["beads", "phase-cross-corr", "focus-finding"] = (
-        "focus-finding"
-    )
-    beads_match_settings: BeadsMatchSettings | None = None
-    phase_cross_corr_settings: PhaseCrossCorrSettings | None = None
-    stack_reg_settings: StackRegSettings | None = None
-    focus_finding_settings: FocusFindingSettings | None = None
-    affine_transform_settings: AffineTransformSettings = Field(
-        default_factory=AffineTransformSettings
-    )
-    eval_transform_settings: EvalTransformSettings | None = None
-    verbose: bool = False
-
-    @model_validator(mode="after")
-    def set_defaults_and_validate(self) -> "EstimateStabilizationSettings":
-        if self.stabilization_method == "beads" and self.beads_match_settings is None:
-            self.beads_match_settings = BeadsMatchSettings()
-        elif (
-            self.stabilization_method == "phase-cross-corr"
-            and self.phase_cross_corr_settings is None
-        ):
-            self.phase_cross_corr_settings = PhaseCrossCorrSettings()
-        elif self.stabilization_method == "focus-finding" and self.stabilization_type == "xyz":
-            if self.focus_finding_settings is None:
-                self.focus_finding_settings = FocusFindingSettings()
-            if self.stack_reg_settings is None:
-                self.stack_reg_settings = StackRegSettings()
-        elif self.stabilization_method == "focus-finding" and self.stabilization_type == "z":
-            if self.focus_finding_settings is None:
-                self.focus_finding_settings = FocusFindingSettings()
-        elif self.stabilization_method == "focus-finding" and self.stabilization_type == "xy":
-            if self.stack_reg_settings is None:
-                self.stack_reg_settings = StackRegSettings()
-
-        return self
 
 
 class FlatFieldCorrectionSettings(MyBaseModel):
@@ -439,38 +444,6 @@ class DeskewSettings(MyBaseModel):
                     "If px_to_scan_ratio is not provided, both pixel_size_um and scan_step_um must be provided"
                 )
         super().__init__(**data)
-
-
-class RegistrationSettings(MyBaseModel):
-    source_channel_names: list[str]
-    target_channel_name: str
-    affine_transform_zyx: list
-    keep_overhang: bool = False
-    interpolation: str = "linear"
-    time_indices: NonNegativeInt | list[NonNegativeInt] | Literal["all"] = "all"
-    verbose: bool = False
-    # When None, preserve the OME-Zarr version of the input store.
-    output_ome_zarr_version: Literal["0.4", "0.5"] | None = None
-
-    @field_validator("affine_transform_zyx")
-    @classmethod
-    def check_affine_transform(cls, v):
-        if not isinstance(v, list) or len(v) != 4:
-            raise ValueError("The input array must be a list of length 3.")
-
-        for row in v:
-            if not isinstance(row, list) or len(row) != 4:
-                raise ValueError("Each row of the array must be a list of length 3.")
-
-        try:
-            # Try converting the list to a 3x3 ndarray to check for valid shape and content
-            np_array = np.array(v)
-            if np_array.shape != (4, 4):
-                raise ValueError("The array must be a 3x3 ndarray.")
-        except ValueError:
-            raise ValueError("The array must contain valid numerical values.") from None
-
-        return v
 
 
 class PsfFromBeadsSettings(MyBaseModel):
@@ -723,35 +696,6 @@ class ConcatenateSettings(MyBaseModel):
         return self
 
 
-class StabilizationSettings(MyBaseModel):
-    stabilization_estimation_channel: str
-    stabilization_type: Literal["z", "xy", "xyz", "affine"]
-    stabilization_method: Literal[
-        "beads", "phase-cross-corr", "focus-finding", "manual", "ants", "beads"
-    ] = "focus-finding"
-    stabilization_channels: list
-    affine_transform_zyx_list: list
-    time_indices: NonNegativeInt | list[NonNegativeInt] | Literal["all"] = "all"
-    output_voxel_size: list[
-        PositiveFloat, PositiveFloat, PositiveFloat, PositiveFloat, PositiveFloat
-    ] = [1.0, 1.0, 1.0, 1.0, 1.0]
-    # When None, preserve the OME-Zarr version of the input store.
-    output_ome_zarr_version: Literal["0.4", "0.5"] | None = None
-
-    @field_validator("affine_transform_zyx_list")
-    @classmethod
-    def check_affine_transform_zyx_list(cls, v):
-        if not isinstance(v, list):
-            raise ValueError("affine_transform_list must be a list")
-
-        for arr in v:
-            arr = np.array(arr)
-            if arr.shape != (4, 4):
-                raise ValueError("Each element in affine_transform_list must be a 4x4 ndarray")
-
-        return v
-
-
 class StitchSettings(BaseModel):
     channels: list[str] | None = None
     total_translation: dict[str, list[float, float, float]] | None = None
@@ -862,3 +806,525 @@ class SegmentationSettings(BaseModel):
                 "others do not. Segment them in separate runs."
             )
         return self
+
+
+# --------------------------------------------------------------------------------------
+# Unified transform estimation / application settings (registration engine)
+# --------------------------------------------------------------------------------------
+
+
+def _inverse_from_pull(value):
+    # "pull" was this direction's first name; files written with it still load.
+    return "inverse" if value == "pull" else value
+
+
+# "forward": moving -> reference. "inverse": reference -> moving, the matrix resampling uses
+# (ANTs calls these the forward and inverse transforms).
+TransformDirection = Annotated[
+    Literal["forward", "inverse"], BeforeValidator(_inverse_from_pull)
+]
+
+
+class ChannelSettings(MyBaseModel):
+    channel: str
+
+
+class TransformFitSettings(MyBaseModel):
+    """What kind of transform to fit and where to start.
+
+    `seed` is a 4x4 matrix in `seed_direction`: "inverse" (reference -> moving, the
+    convention of every transform on disk and of the legacy `approx_transform`) or
+    "forward" (moving -> reference, the engine's own convention).
+
+    `seed_from` says where each timepoint starts: `input` -- the seed, for every
+    timepoint (independent estimates, fanned out per timepoint); `previous_timepoint` --
+    the previous timepoint's result, with the input seed competing on the first pass
+    (sequential, as the legacy `use_prev_t_transform`).
+    """
+
+    type: Literal["euclidean", "similarity", "affine"] = "euclidean"
+    seed: list = np.eye(4).tolist()
+    seed_direction: TransformDirection = "inverse"
+    seed_from_shapes: bool = False
+    seed_from: Literal["input", "previous_timepoint"] = "input"
+
+    @field_validator("seed")
+    @classmethod
+    def check_seed(cls, v):
+        if np.asarray(v, dtype=float).shape != (4, 4):
+            raise ValueError("seed must be a 4x4 matrix")
+        return v
+
+
+class FlagSettings(MyBaseModel):
+    """Adaptive flagging line.
+
+    A timepoint is flagged below median - k_mad * MAD AND below `floor`, or below
+    `hard_fail` regardless.
+    """
+
+    k_mad: float = 2.0
+    floor: float = 0.80
+    hard_fail: float = 0.40
+
+
+RepairCandidate = Literal["t-1", "t+1", "consensus", "seed"]
+
+
+class RepairSettings(MyBaseModel):
+    """Repair pass over flagged timepoints: candidate seeds in the order they are tried.
+
+    `polish_rounds`: after a candidate is accepted, re-estimate seeded from it up to this
+    many times, keeping a round only on a strict score gain (0 disables).
+    """
+
+    candidates: list[RepairCandidate] = ["t-1", "t+1", "consensus", "seed"]
+    consensus_threshold: float = 0.75
+    consensus_min_good: int = 5
+    max_timepoints: int | None = None
+    polish_rounds: NonNegativeInt = 3
+
+
+class SweepSettings(MyBaseModel):
+    """Sweep pass: re-estimate flagged timepoints under alternative method settings.
+
+    `grid` is a list of sub-grids; each maps a dotted path into the estimate config (e.g.
+    `beads.hungarian_match_settings.cost_threshold`) to the values to try. The trials are
+    the union of each sub-grid's cross product, so parameters that are inert together
+    (hungarian vs spectral) are swept without paying for their product. Paths are checked
+    when the config loads. Each flagged timepoint keeps the best of its original, repaired
+    and swept transforms; `max_timepoints` caps the sweep to the worst flagged timepoints.
+    """
+
+    grid: list[dict[str, list]] = Field(min_length=1)
+    max_timepoints: int | None = 25
+
+    @field_validator("grid")
+    @classmethod
+    def check_grid(cls, v):
+        for sub in v:
+            if not sub or any(not values for values in sub.values()):
+                raise ValueError("every sub-grid needs at least one path, each with values")
+        return v
+
+    def trials(self) -> list[dict[str, Any]]:
+        return [
+            dict(zip(sub, combo, strict=True))
+            for sub in self.grid
+            for combo in product(*sub.values())
+        ]
+
+
+def _set_path(data: dict, path: str, value) -> None:
+    *parents, leaf = path.split(".")
+    node = data
+    for key in parents:
+        if not isinstance(node, dict) or not isinstance(node.get(key), dict):
+            raise ValueError(f"sweep path {path!r}: {key!r} is not a settings block here")
+        node = node[key]
+    if leaf not in node:
+        raise ValueError(f"sweep path {path!r}: no setting {leaf!r}")
+    node[leaf] = value
+
+
+def trial_name(overrides: dict[str, Any]) -> str:
+    return ",".join(f"{path}={value}" for path, value in overrides.items())
+
+
+class FallbackSettings(MyBaseModel):
+    flag: FlagSettings = FlagSettings()
+    repair: RepairSettings | None = RepairSettings()
+    sweep: SweepSettings | None = None
+
+
+EstimationMethod = Literal["beads", "ants", "phase-cross-corr", "manual", "focus-finding"]
+# The settings block each method reads.
+METHOD_BLOCKS: dict[str, str] = {
+    "beads": "beads",
+    "ants": "ants",
+    "phase-cross-corr": "phase_cross_corr",
+    "manual": "manual",
+    "focus-finding": "focus_finding",
+}
+ScoreMetric = Literal[
+    "overlap", "residual", "mutual_information", "correlation", "gradient_correlation"
+]
+DEFAULT_SCORE_METRIC: dict[str, str] = {
+    "beads": "overlap",
+    "ants": "correlation",
+    "phase-cross-corr": "correlation",
+    "manual": "gradient_correlation",
+    "focus-finding": "correlation",
+}
+
+
+ReferenceFrame = Literal["cross", "first", "previous"]
+
+
+class ReferenceSettings(MyBaseModel):
+    """What the moving channel is aligned onto.
+
+    `frame: cross` -- `channel` of the reference store at the same timepoint
+    (registration). `frame: first` / `previous` -- the moving channel's own first /
+    previous timepoint (stabilization); `channel` is then omitted.
+    """
+
+    frame: ReferenceFrame = "cross"
+    channel: str | None = None
+
+    @model_validator(mode="after")
+    def check_channel(self) -> "ReferenceSettings":
+        if self.frame == "cross" and self.channel is None:
+            raise ValueError("reference frame 'cross' needs a reference channel")
+        if self.frame != "cross" and self.channel is not None:
+            raise ValueError(
+                f"reference frame '{self.frame}' aligns the moving channel onto itself; "
+                "drop reference.channel"
+            )
+        return self
+
+
+class EstimateTransformSettings(MyBaseModel):
+    """Everything `estimate-transform` needs.
+
+    What to align onto what, how, and what to do when a timepoint comes out badly.
+    `moving` is the channel being aligned (the engine's `mov`), `reference` what it is
+    aligned onto (`ref`). Registration and stabilization are the same estimate with a
+    different `reference.frame`. Only the settings block of the chosen `method` is
+    required.
+    """
+
+    moving: ChannelSettings
+    reference: ReferenceSettings
+    method: EstimationMethod
+    beads: BeadsMatchSettings | None = None
+    ants: AntsRegistrationSettings | None = None
+    phase_cross_corr: PhaseCrossCorrSettings | None = None
+    manual: ManualSettings | None = None
+    focus_finding: FocusSettings | None = None
+    transform: TransformFitSettings = TransformFitSettings()
+    time_indices: NonNegativeInt | list[NonNegativeInt] | Literal["all"] = "all"
+    # None: the method's default (beads: overlap, ants / phase-cross-corr /
+    # focus-finding: correlation, manual: gradient_correlation).
+    score_metric: ScoreMetric | None = None
+    fallback: FallbackSettings = FallbackSettings()
+    verbose: bool = False
+
+    @model_validator(mode="after")
+    def fill_method_block(self) -> "EstimateTransformSettings":
+        defaults = {
+            "beads": ("beads", BeadsMatchSettings),
+            "ants": ("ants", AntsRegistrationSettings),
+            "phase-cross-corr": ("phase_cross_corr", PhaseCrossCorrSettings),
+            "manual": ("manual", ManualSettings),
+            "focus-finding": ("focus_finding", FocusSettings),
+        }
+        field, model = defaults[self.method]
+        if getattr(self, field) is None:
+            setattr(self, field, model())
+        return self
+
+    @model_validator(mode="after")
+    def check_manual_is_one_timepoint(self) -> "EstimateTransformSettings":
+        if self.method == "manual" and not isinstance(self.time_indices, int):
+            raise ValueError(
+                "manual registers one timepoint (in napari): set time_indices to it, e.g. "
+                f"time_indices: 0; got {self.time_indices!r}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def check_phase_cross_corr_block(self) -> "EstimateTransformSettings":
+        # The block is shared with the retired schema; refuse what the engine does not read.
+        pcc = self.phase_cross_corr
+        if pcc is None:
+            return self
+        if pcc.t_reference != "first":
+            raise ValueError(
+                "phase_cross_corr.t_reference is not read: set reference.frame "
+                f"('{pcc.t_reference}') instead"
+            )
+        if pcc.skip_beads_fov != "0":
+            raise ValueError(
+                "phase_cross_corr.skip_beads_fov is not read: leave the beads FOV out of "
+                "the positions you pass"
+            )
+        for name in ("X_slice", "Y_slice", "Z_slice"):
+            value = getattr(pcc, name)
+            if value != "all" and not (
+                len(value) == 2 and all(isinstance(v, int) for v in value)
+            ):
+                raise ValueError(
+                    f"phase_cross_corr.{name} must be 'all' or [start, stop]; got {value!r} "
+                    "(per-position lists are not supported: estimate positions separately)"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def check_time_indices(self) -> "EstimateTransformSettings":
+        # The transforms file needs unique, increasing timepoints: say so now, not after
+        # the whole run when the file is written.
+        ts = self.time_indices
+        if isinstance(ts, list) and ts != sorted(set(ts)):
+            raise ValueError(f"time_indices must be increasing, without repeats; got {ts}")
+        # A single 'previous' step is a transform t -> t-1, not one for the series (the
+        # file would apply it to every timepoint).
+        single = isinstance(ts, int) or (isinstance(ts, list) and len(ts) == 1)
+        if self.reference.frame == "previous" and single:
+            raise ValueError(
+                "reference.frame 'previous' needs several timepoints (each is a step from "
+                f"the one before it); got time_indices {ts!r}. Use 'first' for one timepoint."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def check_previous_is_contiguous(self) -> "EstimateTransformSettings":
+        # Each timepoint is chained through the one before it, so no link may be missing.
+        ts = self.time_indices
+        if self.reference.frame == "previous" and isinstance(ts, list) and ts:
+            if sorted(ts) != list(range(min(ts), max(ts) + 1)):
+                raise ValueError(
+                    "reference.frame 'previous' needs contiguous time_indices (each "
+                    f"timepoint is chained through the one before it); got {ts}"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def check_sweep_paths(self) -> "EstimateTransformSettings":
+        if self.fallback.sweep is None:
+            return self
+        # A sweep trial only rebuilds the estimator: the score, seed and reference come
+        # from these settings, so only the method's own block and the fit type can change.
+        block = METHOD_BLOCKS[self.method]
+        for overrides in self.fallback.sweep.trials():
+            for path in overrides:
+                if not (path.startswith(f"{block}.") or path == "transform.type"):
+                    raise ValueError(
+                        f"sweep path {path!r} would be ignored: a sweep trial varies the "
+                        f"estimator only, i.e. paths under {block!r} (the {self.method!r} "
+                        "method's settings) or 'transform.type'"
+                    )
+        self.sweep_trials()
+        return self
+
+    def sweep_trials(self) -> dict[str, "EstimateTransformSettings"]:
+        """Build each sweep trial's config, by name: these settings plus its overrides."""
+        trials = {}
+        for overrides in self.fallback.sweep.trials():
+            data = self.model_dump()
+            data["fallback"]["sweep"] = None
+            for path, value in overrides.items():
+                _set_path(data, path, value)
+            trials[trial_name(overrides)] = EstimateTransformSettings.model_validate(data)
+        return trials
+
+    @property
+    def reference_channel(self) -> str:
+        """The channel read on the reference side (the moving channel itself for first / previous)."""
+        return self.reference.channel or self.moving.channel
+
+    @property
+    def effective_score_metric(self) -> str:
+        return self.score_metric or DEFAULT_SCORE_METRIC[self.method]
+
+
+EntryStatus = Literal["accepted", "unreliable", "rejected"]
+
+
+class TransformEntry(MyBaseModel):
+    """One 4x4 matrix: the series' transform (no `t`) or timepoint `t`'s, with provenance.
+
+    `status` says how far to trust it: `accepted`; `unreliable` (the pipeline found no
+    good transform -- the matrix is its best result, or a stand-in when `filled_from` is
+    set); `rejected` (a person judged it bad and chose a stand-in). A timepoint is never
+    dropped, so even a rejected entry holds the matrix to apply.
+    """
+
+    t: NonNegativeInt | None = None
+    matrix: list
+    score: float | None = None
+    # How a fallback pass reached this matrix: the winning repair candidate (plus any
+    # polish rounds, "consensus_full+polish1") or "sweep:<trial>".
+    repaired_from: str | None = None
+    # For an entry without `t`: the timepoint it was estimated on (provenance only).
+    estimated_at: NonNegativeInt | None = None
+    # The method that produced this entry when it differs from the file's `method`
+    # (an entry substituted in from another method's run by `substitute-transforms`).
+    method: str | None = None
+    status: EntryStatus = "accepted"
+    # Where a stand-in matrix came from, e.g. "t=81", "seed", "identity".
+    filled_from: str | None = None
+    note: str | None = None
+
+    @field_validator("matrix")
+    @classmethod
+    def check_matrix(cls, v):
+        if np.asarray(v, dtype=float).shape != (4, 4):
+            raise ValueError("matrix must be 4x4")
+        return v
+
+    @model_validator(mode="after")
+    def check_estimated_at(self) -> "TransformEntry":
+        if self.estimated_at is not None and self.t is not None:
+            raise ValueError("estimated_at is only for an entry without t (the whole series)")
+        return self
+
+    @model_validator(mode="after")
+    def check_stand_in(self) -> "TransformEntry":
+        if self.status == "accepted" and self.filled_from is not None:
+            raise ValueError(
+                f"an accepted entry is a real estimate; filled_from={self.filled_from!r} "
+                "marks a stand-in, which is unreliable or rejected"
+            )
+        return self
+
+
+def _check_series(entries: list[TransformEntry], where: str) -> None:
+    """One entry without `t` (every timepoint), or every entry with a unique, increasing `t`."""
+    if not entries:
+        raise ValueError(f"{where} must hold at least one entry")
+    ts = [e.t for e in entries]
+    if len(ts) == 1 and ts[0] is None:
+        return
+    if any(t is None for t in ts):
+        raise ValueError(
+            f"{where}: either one entry without t (whole series) or every entry with t"
+        )
+    if len(set(ts)) != len(ts) or ts != sorted(ts):
+        raise ValueError(f"{where}: entries must have unique, increasing t")
+
+
+class TransformSettings(MyBaseModel):
+    """What `estimate-transform` estimated, as `apply-transform` consumes it.
+
+    `direction` says what the matrices mean -- "forward" (moving -> reference, what the
+    engine estimates) or "inverse" (reference -> moving, ready to resample with; what the
+    retired `register` / `stabilize` configs held).
+
+    Two independent axes. Positions: `transforms` is one list shared by every position,
+    `positions` maps each position ("row/col/fov") to its own list -- exactly one of the
+    two. Time: within any list, one entry without `t` is the transform for every
+    timepoint, otherwise every entry has a `t` and a timepoint without one takes the
+    nearest earlier entry. How the series is applied (canvas, interpolation, which
+    timepoints) is not stored here -- those are `apply-transform` options.
+    """
+
+    direction: TransformDirection
+    moving_channels: list[str]
+    reference_channel: str | None = None  # None: stabilization onto the moving store's grid
+    method: str = "beads"
+    # What the matrices are relative to: 'previous' means each was chained onto the first
+    # frame (cumulative). None: not recorded (files written before this field).
+    reference_frame: Literal["cross", "first", "previous"] | None = None
+    voxel_size: list[float] | None = None
+    transforms: list[TransformEntry] | None = None
+    positions: dict[str, list[TransformEntry]] | None = None
+
+    @model_validator(mode="after")
+    def check_entries(self) -> "TransformSettings":
+        if (self.transforms is None) == (self.positions is None):
+            raise ValueError(
+                "give exactly one of transforms (one list for every position) or "
+                "positions (a list per position)"
+            )
+        if self.transforms is not None:
+            _check_series(self.transforms, "transforms")
+            return self
+        if not self.positions:
+            raise ValueError("positions must hold at least one position")
+        for key, entries in self.positions.items():
+            if len(key.split("/")) != 3:
+                raise ValueError(f"position key {key!r} must be 'row/col/fov'")
+            _check_series(entries, f"positions[{key!r}]")
+        return self
+
+    @property
+    def per_position(self) -> bool:
+        return self.positions is not None
+
+    @property
+    def series_wide(self) -> bool:
+        """Every list is one entry without `t`: the same transform for every timepoint."""
+        lists = [self.transforms] if self.transforms is not None else self.positions.values()
+        return all(entries[0].t is None for entries in lists)
+
+    def timepoints(self, position: str | None = None) -> list[int] | None:
+        entries = self.entries_for(position)
+        return None if entries[0].t is None else [e.t for e in entries]
+
+    def entries_for(self, position: str | None = None) -> list[TransformEntry]:
+        """Return the list for `position` ("row/col/fov"); the shared list ignores it."""
+        if self.transforms is not None:
+            return self.transforms
+        if position not in self.positions:
+            raise ValueError(
+                f"no transforms for position {position!r}; the file has "
+                f"{sorted(self.positions)}"
+            )
+        return self.positions[position]
+
+    def entry_for(self, t: int, position: str | None = None) -> TransformEntry:
+        """Return the entry timepoint `t` of `position` uses: its own, else the nearest earlier."""
+        entries = self.entries_for(position)
+        if entries[0].t is None:
+            return entries[0]
+        earlier = [e for e in entries if e.t <= t]
+        return earlier[-1] if earlier else entries[0]
+
+    def matrix_for(
+        self, t: int, direction: TransformDirection, position: str | None = None
+    ) -> np.ndarray:
+        """Matrix for timepoint `t` of `position` in `direction`: its own, else the nearest earlier."""
+        return self._as(self.entry_for(t, position).matrix, direction)
+
+    def unique_matrices(self, direction: TransformDirection) -> list[np.ndarray]:
+        lists = [self.transforms] if self.transforms is not None else self.positions.values()
+        seen, out = set(), []
+        for entries in lists:
+            for entry in entries:
+                m = self._as(entry.matrix, direction)
+                key = m.round(9).tobytes()
+                if key not in seen:
+                    seen.add(key)
+                    out.append(m)
+        return out
+
+    def _as(self, matrix, direction: TransformDirection) -> np.ndarray:
+        m = np.asarray(matrix, dtype=float)
+        return m if direction == self.direction else np.linalg.inv(m)
+
+
+_LEGACY_KEYS = {
+    "target_channel_name",
+    "source_channel_name",
+    "stabilization_estimation_channel",
+    "affine_transform_zyx",
+    "affine_transform_zyx_list",
+    # the first unified schema (source / target, matrices + time_indices)
+    "source",
+    "target",
+    "matrices",
+    "source_channels",
+}
+
+
+def _load_unified(path, model):
+    data = yaml.safe_load(open(path))
+    legacy_keys = sorted(_LEGACY_KEYS & set(data or {}))
+    if legacy_keys:
+        raise ValueError(
+            f"{path} is a retired estimate-registration / estimate-stabilization / register / "
+            f"stabilize config (keys {legacy_keys}); convert it once with "
+            f"`biahub convert-settings -c {path} -o <new>.yml`"
+        )
+    return model(**data)
+
+
+def load_estimate_transform_settings(path) -> EstimateTransformSettings:
+    """Read an `estimate-transform` config."""
+    return _load_unified(path, EstimateTransformSettings)
+
+
+def load_transform_settings(path) -> TransformSettings:
+    """Read an `apply-transform` config."""
+    return _load_unified(path, TransformSettings)
