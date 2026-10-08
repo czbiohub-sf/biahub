@@ -94,3 +94,34 @@ def test_propagation_lets_the_initial_transform_compete_and_passes_the_winner_on
     assert result.transforms[0].translation[2] == 10.0 and result.seeded_from[0] == "initial"
     # t=1 starts from t=0's winner (x=10): 10 + 1 = 11, against the input seed's 0 + 1
     assert result.transforms[1].translation[2] == 11.0
+
+
+def test_the_transforms_file_says_which_entries_came_from_the_initial_file():
+    from biahub.estimate_transform import transform_entries
+    from biahub.registration.engine import SeriesResult
+
+    result = SeriesResult(
+        transforms={0: _shift_x(1), 1: _shift_x(10), 2: _shift_x(11)},
+        scores={0: 0.9, 1: 0.9, 2: 0.9},
+        seeded_from={1: "initial", 2: "initial+refined"},
+        provenance={2: "t-1"},  # t=2 was then replaced by a repair
+    )
+    entries = transform_entries(
+        result, [0, 1, 2], [_shift_x(1), _shift_x(10), _shift_x(11)], 0.4
+    )
+    assert [e.seeded_from for e in entries] == [None, "initial", None]
+
+
+def test_records_keep_seeded_from_through_a_reload(tmp_path):
+    import json
+
+    from biahub.registration.engine import _load_series
+
+    (tmp_path / "0.json").write_text(
+        json.dumps(
+            {"t": 0, "matrix": _shift_x(10).matrix.tolist(), "score": 0.9, "error": None,
+             "seeded_from": "initial"}
+        )
+    )  # fmt: skip
+    result = _load_series(tmp_path, [0], "euclidean", resumed=[0])
+    assert result.seeded_from == {0: "initial"}

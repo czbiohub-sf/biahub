@@ -1111,6 +1111,7 @@ def _estimate_timepoint_job(
         "score": _finite_or_none(result.scores.get(t)),
         "error": result.errors.get(t),
         "arm": getattr(estimator, "last_winner", None),
+        "seeded_from": result.seeded_from.get(t),
         "metrics": _bead_metrics(settings, result, t, mov, ref),
     }
     record_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1155,6 +1156,7 @@ def _estimate_propagated_job(
             "stand_in": stand_in[0].to_list() if stand_in else None,
             "stand_in_from": stand_in[1] if stand_in else None,
             "arm": getattr(estimator, "last_winner", None),
+            "seeded_from": result.seeded_from.get(t),
             "metrics": _bead_metrics(settings, result, t, mov, ref),
         }
         _write_json(records_dir / f"{t}.json", record)
@@ -1259,6 +1261,8 @@ def _load_series(
                 record.get("stand_in_from") or "seed",
             )
         result.scores[t] = float("nan") if record["score"] is None else record["score"]
+        if record.get("seeded_from"):
+            result.seeded_from[t] = record["seeded_from"]
         if record["error"]:
             result.errors[t] = record["error"]
     return result

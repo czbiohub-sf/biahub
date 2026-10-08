@@ -84,6 +84,8 @@ def transform_entries(
                 repaired_from=result.provenance.get(t),
                 status="unreliable" if unreliable else "accepted",
                 filled_from=filled_from,
+                # from --initial-transforms, unless a repair / sweep replaced it since
+                seeded_from=None if t in result.provenance else result.seeded_from.get(t),
                 # why there is no transform of its own (estimate error, job cancelled, ...)
                 note=result.errors.get(t) if filled_from is not None else None,
             )
