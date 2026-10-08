@@ -1,3 +1,5 @@
+import warnings
+
 from itertools import product
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -64,14 +66,31 @@ class ProcessingInputChannel(MyBaseModel):
 class CellposeConfig(MyBaseModel):
     """Configuration for Cellpose segmentation used as input to tracking."""
 
-    model_type: str = "nuclei"
-    diameter: float = 80
+    # cellpose 4 model: cpsam_v2, cpsam, cpdino, cpdino-vitb, or a path to weights.
+    pretrained_model: str = "cpsam_v2"
+    # Deprecated: cellpose 4 ignores it (``model_type: nuclei`` always ran cpsam_v2).
+    model_type: str | None = None
+    # Cellpose 4 resizes each frame by 30 / diameter before inference (80 -> 37.5%),
+    # which shrinks small objects such as rounded mitotic nuclei. None = native size.
+    diameter: float | None = 80
     cellprob_threshold: float = 0.0
     flow_threshold: float = 0.4
     gpu: bool = True
     min_size: int = 500
     input_channel: str = "nuclei_prediction"
     labels_sigma: float = 5.0
+
+    @field_validator("model_type")
+    @classmethod
+    def warn_model_type_ignored(cls, v):
+        if v is not None:
+            warnings.warn(
+                f"cellpose_config.model_type={v!r} is ignored by cellpose 4, which runs "
+                "pretrained_model (default cpsam_v2). Remove model_type from the config.",
+                UserWarning,
+                stacklevel=2,
+            )
+        return v
 
 
 class ZSlicing(MyBaseModel):
@@ -725,7 +744,7 @@ class PreprocessingFunctions(BaseModel):
 class SegmentationModel(BaseModel):
     path_to_model: str
     eval_args: dict[str, Any]
-    z_slice_2D: int | None = None
+    z_slice_2D: NonNegativeInt | None = None
     preprocessing: list[PreprocessingFunctions] = []
 
     @field_validator("eval_args", mode="before")
@@ -753,8 +772,22 @@ class SegmentationModel(BaseModel):
                 raise ValueError(
                     "If 'z_slice_2D' is provided, 'do_3D' in 'eval_args' must be set to False."
                 )
-            return 0  # force it to 0 as per your logic
         return z_slice_2D
+
+    @model_validator(mode="after")
+    def check_3d_settings(self):
+        # A model without z_slice_2D segments the Z stack, which cellpose 4 only accepts
+        # with do_3D or stitching (it raises "2D image processing selected, but z_axis...").
+        stitch_threshold = self.eval_args.get("stitch_threshold")
+        if self.z_slice_2D is None and not (
+            self.eval_args.get("do_3D")
+            or (stitch_threshold is not None and stitch_threshold > 0)
+        ):
+            raise ValueError(
+                "A model without z_slice_2D segments in 3D: set eval_args.do_3D: true (or a "
+                "stitch_threshold), or set z_slice_2D for 2D segmentation."
+            )
+        return self
 
 
 class SegmentationSettings(BaseModel):
@@ -762,6 +795,17 @@ class SegmentationSettings(BaseModel):
     # When None, preserve the OME-Zarr version of the input store.
     output_ome_zarr_version: Literal["0.4", "0.5"] | None = None
     model_config = {"extra": "forbid", "protected_namespaces": ()}
+
+    @model_validator(mode="after")
+    def check_models_share_z(self):
+        # All models write into one output array, so its Z size must suit every model.
+        flat = [name for name, m in self.models.items() if m.z_slice_2D is not None]
+        if flat and len(flat) != len(self.models):
+            raise ValueError(
+                f"Cannot mix 2D and 3D models in one config: {flat} set z_slice_2D, the "
+                "others do not. Segment them in separate runs."
+            )
+        return self
 
 
 # --------------------------------------------------------------------------------------

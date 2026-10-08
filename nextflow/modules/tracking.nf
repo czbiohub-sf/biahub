@@ -28,6 +28,7 @@ process init_track {
     val input_zarr
     val output_zarr
     val config
+    path config_file  // staged only for the task hash: see common.nf, #397
     val trigger
 
     output:
@@ -60,6 +61,7 @@ process run_track {
     val input_images_zarr
     val output_zarr
     val config
+    path config_file  // staged only for the task hash: see common.nf, #397
 
     output:
     val position
@@ -98,7 +100,7 @@ workflow track_init_wf {
     trigger
 
     main:
-    init_out = init_track(input_zarr, output_zarr, config, trigger.collect().map { 'done' })
+    init_out = init_track(input_zarr, output_zarr, config, file(config), trigger.collect().map { 'done' })
 
     emit:
     resources = init_out.map { stdout_text -> parse_resources(stdout_text) }
@@ -140,7 +142,7 @@ workflow track_run_wf {
         .combine(prev_done.map { 'done' })
         .map { pos, meta, _gate -> [pos, meta] }
 
-    tk_done = run_track(pos_meta, input_zarr, input_images_zarr, output_zarr, config) | collect
+    tk_done = run_track(pos_meta, input_zarr, input_images_zarr, output_zarr, config, file(config)) | collect
 
     emit:
     done = tk_done

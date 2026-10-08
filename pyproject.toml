@@ -50,7 +50,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-segment = ["cellpose"]
+segment = ["cellpose>=4.0.1"]
 
 # Deliberately CPU-only. ultrack has an optional GPU path when cupy and cucim
 # are installed, but it offers no speedup in tracking in our use cases.
@@ -119,9 +119,12 @@ imaging_qc_pipeline = { git = "https://github.com/czbiohub-sf/imaging-qc-pipelin
 # the resume probe reads one element per shard, so corruption away from the
 # origin reads back clean. That silently cost several pipeline runs on
 # 2026_08_14_dynatrack. Also carries czbiohub-sf/iohub#472
-# (`create_empty_plate(extra_metadata=...)`). Drop this back to a PyPI floor
-# once iohub cuts a release containing both.
-iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "b7bc648fc375c708161ed620b99fbb75317ecdcd" }
+# (`create_empty_plate(extra_metadata=...)`) and czbiohub-sf/iohub#479, which
+# creates a plate's positions in one batch instead of rewriting the well's
+# metadata per position (quadratic in FOVs per well: hours for a ~40k-FOV
+# plate's init). Drop this back to a PyPI floor once iohub cuts a release
+# containing all three.
+iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "d1f9e89294529d365719cf87a9b29622ca77a992" }
 
 [tool.hatch.metadata]
 allow-direct-references = true

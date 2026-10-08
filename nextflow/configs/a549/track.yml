@@ -29,7 +29,7 @@ z_slicing:
 
 segmentation_method: cellpose
 cellpose_config:
-  model_type: nuclei
+  pretrained_model: cpsam_v2
   diameter: 80
   cellprob_threshold: 0.0
   flow_threshold: 0.4

@@ -106,6 +106,32 @@ def slurm_logs(step_name) {
     return "--output=${dir}/%x_%j.err --error=${dir}/%x_%j.out"
 }
 
+// A CONFIG EDIT INVALIDATES THE TASK (biahub#397)
+//
+// Every process that reads a step config takes it TWICE: `val config`, the path
+// the command line uses, and `path config_file`, the same file staged into the
+// task directory and never read. Nextflow hashes a `val` path as a string, so an
+// edited config used to come back CACHED with results made from the old one. A
+// `path` input's size and mtime are part of the task hash, so an edit (or a
+// `touch`) now reruns every task that reads the file.
+//
+// Rerunning is cheap where nothing really changed: the per-position commands run
+// with `--resume`, keyed by the hash of the VALIDATED settings model
+// (biahub.utils.config.settings_fingerprint), so after a comment-only edit they
+// find their units finished and skip them. Steps without `--resume` recompute:
+// track, QC and compute-tf by design, reconstruct until its CLI gains it
+// (biahub#387).
+//
+// Why not `path config` alone: the staged copy is a symlink under the work dir.
+// The command would then record that path in its logs and provenance, and QC
+// uses [zarr, config] as a join key across processes, so a staged path there
+// would stop matching the plain string the pipeline passes and silently drop
+// work items.
+//
+// What this does NOT cover: an edit to a step's config does not invalidate the
+// steps downstream of it (biahub#406), and an edit to biahub's code invalidates
+// nothing.
+
 // ENVIRONMENT CONTRACT
 //
 // Every process calls its CLI as a BARE command: `biahub`, plus `viscy` in
