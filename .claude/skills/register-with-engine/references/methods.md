@@ -13,6 +13,17 @@
 `reference.frame`: `cross` (another channel at the same timepoint: registration), `first`
 or `previous` (the channel's own first / previous frame with data: stabilization).
 
+## Starting from an earlier result: `--initial-transforms`
+
+`estimate-transform --initial-transforms <file>` (Nextflow: `--initial_transforms`) offers
+an earlier transforms file per timepoint. Three candidates compete, in this order: the new
+estimate, a refinement starting from the earlier transform, and the earlier transform
+as-is; a later one wins only with a strictly better score, so a tie keeps the new estimate.
+An earlier transform can rescue a timepoint whose estimate fails (e.g. too few beads), but
+the entry stays `unreliable` when its score cannot confirm it. Only timepoints the file has
+its own entry for are used (one series-wide entry applies to all); a per-position file
+must cover the positions. Beads and ants only.
+
 ## Where each timepoint starts: `transform.seed_from`
 
 - `input` (default): every timepoint starts from `transform.seed` (the approximate

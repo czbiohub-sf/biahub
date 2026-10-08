@@ -29,6 +29,7 @@ REFERENCE=/path/to/reconstruct.zarr          # plate with the reference (phase);
 CONFIG=./estimate-transform-beads.yml        # estimate config; empty when TRANSFORMS is set
 ESTIMATE_POSITIONS='C/1/000000'              # beads well (one shared list) or '*/*/*' (one each)
 TRANSFORMS=""                                # apply this existing file instead of estimating
+INITIAL=""                                   # an earlier transforms.yml to start the estimate from
 APPLY=true                                   # apply after estimating
 APPLY_POSITIONS='*/*/*'
 CROP_TO_OVERLAP=false                        # true: crop to the box every transform covers
@@ -59,6 +60,7 @@ if [[ -n "${TRANSFORMS}" ]]; then
     args+=(--transforms "${TRANSFORMS}")
 else
     args+=(--estimate_config "${CONFIG}" --estimate_positions "${ESTIMATE_POSITIONS}")
+    [[ -n "${INITIAL}" ]] && args+=(--initial_transforms "$(realpath "${INITIAL}")")
     [[ "${APPLY}" == true ]] && args+=(--apply)
 fi
 [[ "${CROP_TO_OVERLAP}" == true ]] && args+=(--crop_to_overlap)

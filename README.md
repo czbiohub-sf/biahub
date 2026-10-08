@@ -161,6 +161,10 @@ biahub estimate-transform -m ./lightsheet_deskewed.zarr/0/0/0 \
 biahub apply-transform    -m ./lightsheet_deskewed.zarr/*/*/* \
                           -r ./labelfree_reconstructed.zarr/*/*/* \
                           -c ./registration/transforms.yml -o ./registered.zarr
+# ...or start again from that result: each earlier entry competes with the new estimate
+biahub estimate-transform -m ... -r ... -c ./estimate-registration.yml \
+                          -o ./registration_v2/transforms.yml \
+                          --initial-transforms ./registration/transforms.yml
 
 # Old estimate-registration / estimate-stabilization / register / stabilize configs and
 # command names still run (deprecated); convert a config once with

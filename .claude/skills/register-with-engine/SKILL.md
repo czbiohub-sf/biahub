@@ -167,6 +167,14 @@ both arms in one store only the estimated channel moves; `--channels` to pick);
 without `-r` it stabilizes each store onto its own grid. Timepoints written with a
 non-accepted transform are printed and recorded in the output metadata.
 
+To start again from an earlier result (e.g. after changing a setting, or to give a hard
+series a better start), estimate into a **new** output with `--initial-transforms
+<earlier>/transforms.yml` (templates: `INITIAL=`): at every timepoint the earlier entry,
+a refinement from it and the new estimate compete, and the best is kept (a tie keeps the
+new estimate). Entries that came from it say `seeded_from: initial` / `initial+refined`.
+Only timepoints with their own entry are used; beads and ants only (pcc, focus-finding and
+manual ignore seeds and refuse it). The earlier file is never modified (`-o` must differ).
+
 To replace a few bad timepoints with another method's result (beads failed, manual or ants
 worked): estimate those timepoints alone (manual: `time_indices: <t>`, plain CLI, with a
 display), then
