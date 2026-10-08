@@ -347,3 +347,21 @@ def test_registration_nf_finishes_past_a_broken_chunk_and_resume_redoes_it(
     _nextflow(tmp_path, *params)
     entry = load_transform_settings(tmp_path / "run" / "transforms.yml").transforms[1]
     assert entry.status == "accepted" and entry.note is None
+
+
+def test_registration_nf_reruns_the_estimate_when_its_config_is_edited(tmp_path):
+    # main's convention (#397): the config is staged into every estimate task, so an
+    # edit in place reruns them under -resume instead of reusing results of the old one.
+    plate = _beads_plate(tmp_path)
+    store = plate.parents[2]
+    config = _write_config(tmp_path)
+    params = (
+        "--moving", store, "--reference", store, "--estimate_config", config,
+        "--estimate_positions", "A/1/0", "--output", tmp_path / "run", "-resume",
+    )  # fmt: skip
+    _nextflow(tmp_path, *params)
+    assert len(load_transform_settings(tmp_path / "run" / "transforms.yml").transforms) == 3
+
+    _write_config(tmp_path, time_indices=[0, 1])  # same path, new contents
+    _nextflow(tmp_path, *params)
+    assert len(load_transform_settings(tmp_path / "run" / "transforms.yml").transforms) == 2

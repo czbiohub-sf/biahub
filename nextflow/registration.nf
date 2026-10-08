@@ -87,16 +87,16 @@ workflow {
     def transforms = absolute_path(params.transforms) ?: "${out}/transforms.yml"
     def start = channel.value('start')
 
-    // Content hashes, so a file rewritten in place re-runs what reads it under -resume.
+    // An edited config reruns the estimate (staged file, main's #397); the transforms file
+    // is keyed on its content (see the module header).
     if (params.estimate_config) {
-        def config_hash = file(estimate_config).text.md5()
         estimate_init = estimate_transform_init_wf(
-            moving, reference, params.estimate_positions, estimate_config, config_hash,
-            transforms, start
+            moving, reference, params.estimate_positions, estimate_config,
+            file(estimate_config), transforms, start
         )
         estimated = estimate_transform_run_wf(
             estimate_init.plan, moving, reference, params.estimate_positions,
-            estimate_config, config_hash, transforms, start
+            estimate_config, file(estimate_config), transforms, start
         )
         transforms_hash = estimated.done
     } else {
