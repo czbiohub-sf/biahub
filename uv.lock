@@ -375,7 +375,7 @@ requires-dist = [
     { name = "humanize" },
     { name = "imageio-ffmpeg" },
     { name = "imaging-qc-pipeline", extras = ["interactive"], marker = "extra == 'qc'", git = "https://github.com/czbiohub-sf/imaging-qc-pipeline?rev=f5ae656e0e37320ead74f7c1f95ab1ed304c1829" },
-    { name = "iohub", git = "https://github.com/czbiohub-sf/iohub?rev=2ab6667f93903f6e1036c1ddd1f35c74f58444de" },
+    { name = "iohub", git = "https://github.com/czbiohub-sf/iohub?rev=6f29e64e6b9979328d38a3b08a3355732f59d7e9" },
     { name = "largestinteriorrectangle" },
     { name = "llvmlite", specifier = ">=0.41.0" },
     { name = "markdown" },
@@ -2018,8 +2018,8 @@ wheels = [
 
 [[package]]
 name = "iohub"
-version = "0.3.12.dev20+2ab6667"
-source = { git = "https://github.com/czbiohub-sf/iohub?rev=2ab6667f93903f6e1036c1ddd1f35c74f58444de#2ab6667f93903f6e1036c1ddd1f35c74f58444de" }
+version = "0.3.12.dev23+6f29e64"
+source = { git = "https://github.com/czbiohub-sf/iohub?rev=6f29e64e6b9979328d38a3b08a3355732f59d7e9#6f29e64e6b9979328d38a3b08a3355732f59d7e9" }
 dependencies = [
     { name = "blosc2" },
     { name = "dask", extra = ["array"] },
