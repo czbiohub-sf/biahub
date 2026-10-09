@@ -320,3 +320,32 @@ def test_segment_init_checks_models_before_creating_the_plate(
     )
     assert result.exit_code != 0
     assert not out.exists()
+
+
+def test_segment_local_sbatch_file_overrides_computed_parameters(
+    fake_cellpose, example_plate, segment_config, tmp_path, monkeypatch
+):
+    """A '#LOCAL --timeout-min' line and the computed local timeout used to collide
+    (TypeError: multiple values for keyword argument 'timeout_min')."""
+    monkeypatch.setattr("biahub.segment.submitit.AutoExecutor", _RecordingExecutor)
+    monkeypatch.delenv("CI", raising=False)  # conftest forces CI (debug) otherwise
+    sbatch = tmp_path / "local.sbatch"
+    sbatch.write_text("#LOCAL --timeout-min=5\n")
+    plate_path, _ = example_plate
+
+    result = _run(
+        "--cluster",
+        "local",
+        "-sb",
+        sbatch,
+        "-i",
+        plate_path / "A" / "1" / "0",
+        "-o",
+        tmp_path / "s.zarr",
+        "-c",
+        segment_config(),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert _RecordingExecutor.parameters["timeout_min"] == 5  # the explicit setting wins
+    assert _RecordingExecutor.parameters["gpus_per_node"] == 1

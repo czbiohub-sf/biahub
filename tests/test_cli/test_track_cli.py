@@ -598,3 +598,55 @@ def test_track_gives_local_jobs_a_gpu(tmp_path, example_tracking_plate, monkeypa
     assert (
         recorded.get("timeout_min") == recorded["slurm_time"]
     )  # local default kills at 2 min
+
+
+def test_track_local_sbatch_file_overrides_computed_parameters(
+    tmp_path, example_tracking_plate, monkeypatch
+):
+    """'#LOCAL --timeout-min' must win over the computed local timeout, not collide
+    (TypeError: multiple values for keyword argument 'timeout_min')."""
+    import contextlib
+    import types
+
+    recorded = {}
+
+    class Executor:
+        def __init__(self, folder, cluster):
+            recorded["cluster"] = cluster
+
+        def update_parameters(self, **kwargs):
+            recorded.update(kwargs)
+
+        def batch(self):
+            return contextlib.nullcontext()
+
+        def submit(self, *args, **kwargs):
+            return types.SimpleNamespace(job_id="0", wait=lambda: None)
+
+    monkeypatch.setattr("biahub.track.submitit.AutoExecutor", Executor)
+    monkeypatch.delenv("CI", raising=False)  # conftest forces CI (debug) otherwise
+    plate_path, _ = example_tracking_plate
+    config_path = _make_tracking_config(plate_path, tmp_path)
+    sbatch = tmp_path / "local.sbatch"
+    sbatch.write_text("#LOCAL --timeout-min=5\n")
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "track",
+            "--cluster",
+            "local",
+            "-i",
+            str(plate_path / "A" / "1" / "0"),
+            "-o",
+            str(tmp_path / "out.zarr"),
+            "-c",
+            str(config_path),
+            "-sb",
+            str(sbatch),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert recorded["timeout_min"] == 5
+    assert recorded["gpus_per_node"] == 1
