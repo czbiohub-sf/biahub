@@ -30,9 +30,10 @@ blank_frames_path: blank_frames.csv
 # - foreground_contour: derive a foreground mask + contour map (ultrack segments).
 segmentation_method: cellpose
 
-# Optional post-processing: at a division, drop a daughter track of N frames or fewer
-# and merge the other daughter into the parent (ultrack filter_short_sibling_tracks).
-# Removes short false divisions. Off by default.
+# Optional post-processing (ultrack filter_short_sibling_tracks): at a division where
+# exactly one daughter lives N frames or fewer and does not divide again, drop that
+# daughter and merge the other into the parent; a division whose two daughters are
+# both that short is kept. Removes short false divisions. Off by default.
 # min_sibling_length: 3
 
 # Cellpose model parameters (used only when segmentation_method: cellpose).
