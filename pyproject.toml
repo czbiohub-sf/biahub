@@ -124,15 +124,12 @@ imaging_qc_pipeline = { git = "https://github.com/czbiohub-sf/imaging-qc-pipelin
 # inside the assembled OME-NGFF 0.5 plate (#361). Repoint at a release once merged.
 ultrack = { git = "https://github.com/ieivanov/ultrack", rev = "3cd1b090307cfb13ac62d72df78ef4555ce0ffa3" }
 
-# Pin iohub to dev/dca-labels: main (d1f9e89, which carries czbiohub-sf/iohub#476,
-# #472 and #479 — see below) merged with two unmerged branches that track needs to
-# write OME-NGFF label images into the assembled plate (#360):
-#   - fix/labels-group-metadata (czbiohub-sf/iohub#485): the labels list goes on
-#     <fov>/labels/zarr.json, not the position, so ome-zarr-models (and so
-#     dca-validate) can open a field that has labels;
-#   - feat/create-empty-plate-labels (czbiohub-sf/iohub#486):
-#     create_empty_plate(label_names=...) scaffolds empty label images.
-# Repoint at main once both merge, then at a PyPI release.
+# Pin iohub to feat/create-empty-plate-labels (czbiohub-sf/iohub#486), which is
+# main plus create_empty_plate(label_names=...): track --init scaffolds the empty
+# label images with it (#360). Main already carries czbiohub-sf/iohub#485 (the
+# labels list on <fov>/labels/zarr.json, so ome-zarr-models and dca-validate can
+# open a field that has labels). Repoint at main once #486 merges, then at a PyPI
+# release.
 #
 # Main's own reasons: #476 syncs a write unit's shards before recording it as
 # done (without it a preemption between the write and the marker leaves a `.done`
@@ -140,7 +137,7 @@ ultrack = { git = "https://github.com/ieivanov/ultrack", rev = "3cd1b090307cfb13
 # 2026_08_14_dynatrack); #472 adds create_empty_plate(extra_metadata=...); #479
 # creates a plate's positions in one batch instead of rewriting the well's
 # metadata per position (hours for a ~40k-FOV plate's init).
-iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "82ef216b059351a95f16d802f2667573dd59e1db" }
+iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "c18e5ff4be0d963078b15f359f1734d0f6ae3213" }
 
 [tool.hatch.metadata]
 allow-direct-references = true
