@@ -40,16 +40,16 @@ process init_segment {
 
 process run_segment {
     tag "${position}"
-    label 'gpu'
+    // Preemptable, like virtual staining: `--resume` (below) makes a reclaimed task
+    // cost at most the timepoint it was segmenting, so it runs on the `preempted`
+    // partition (any GPU node) rather than `gpu`, which is reserved for tracking
+    // because ultrack cannot resume. It inherits nextflow.config's errorStrategy,
+    // which retries preemptions; no SLURM --requeue (see nextflow.config).
+    label 'gpu_preempted'
     clusterOptions { "--gres=gpu:1 " + slurm_logs('segment') }
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time { retry_time(meta.time_minutes, task) }
-    // Like track: retry once on ANY failure. A transient CUDA init error exits 1, which
-    // the pipeline-wide rule (exit codes 130-145) would not retry; --resume makes the
-    // retry continue from the timepoints already written.
-    maxRetries 1
-    errorStrategy 'retry'
 
     input:
     tuple val(position), val(meta)
