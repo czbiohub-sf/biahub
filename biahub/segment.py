@@ -157,8 +157,12 @@ def segment_data(
         segmentation, _, _ = cellpose_model.eval(
             image, channel_axis=0, z_axis=z_axis, **model.eval_args
         )
-        if model.z_slice_2D is not None:
-            segmentation = segmentation[np.newaxis, ...]
+        # Cellpose squeezes singleton axes (e.g. a 3D model on a single-plane input);
+        # restore the (Z or 1, Y, X) shape the output plate expects.
+        segmentation = np.reshape(
+            segmentation,
+            (1, *image.shape[-2:]) if model.z_slice_2D is not None else image.shape[1:],
+        )
         czyx_segmentation.append(segmentation)
     return np.stack(czyx_segmentation, axis=0)
 

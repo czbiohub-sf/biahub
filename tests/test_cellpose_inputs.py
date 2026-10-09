@@ -190,3 +190,14 @@ def test_segment_loads_each_model_once_across_timepoints(fake_cellpose):
 
     assert fake_cellpose.built == ["cpdino"]
     assert len(fake_cellpose.evaluated) == 3
+
+
+def test_segment_3d_keeps_z_on_a_single_plane_input(fake_cellpose):
+    """Cellpose squeezes singleton axes, so a 3D model on Z=1 returned (Y, X)."""
+    out = _segment(
+        np.zeros((1, 1, 8, 8), dtype=np.float32),
+        channels=[0],
+        pretrained_model="cpsam_v2",
+        eval_args={"do_3D": True},
+    )
+    assert out.shape == (1, 1, 8, 8)
