@@ -10,13 +10,11 @@
 # below. Keep it there: it is the run's provenance record of the exact command.
 #
 # --output is the project root, so each step writes a sibling directory:
-#   0-flatfield/ 1-deskew/ 2-reconstruct/ 3-virtual-stain/ 4-assemble/ 5-track/
-# 5-track/ is tracking's work directory (per-FOV Ultrack databases), not a
-# store: tracking writes labels/<target_channel>, tracks.geff and a tracks CSV
-# into each position of 4-assemble/<dataset>.zarr.
-# The number is the step's POSITION among the steps this run performs, so a run
-# without tracking ends at 4-assemble and one that also skipped a step earlier
-# shifts everything after it down.
+#   0-flatfield/ 1-deskew/ 2-reconstruct/ 3-virtual-stain/ 4-assemble/
+# Tracking has no directory: it writes labels/<target_channel>, tracks.geff and
+# a tracks CSV into each position of 4-assemble/<dataset>.zarr.
+# The number is the step's POSITION among the steps this run performs that
+# write a directory, so a run that skips a step shifts everything after it down.
 # The work dir defaults to <output>/nextflow/work; override with `-work-dir`.
 #
 # Any extra arguments are forwarded to nextflow, e.g.

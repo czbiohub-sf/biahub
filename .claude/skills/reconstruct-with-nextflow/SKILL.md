@@ -344,11 +344,10 @@ Do not run anything yet. Show the user:
 
    **State the directory numbers this run will produce.** The number is the
    step's position among the steps performed, not a fixed label, so a neuromast
-   run writes `4-assemble` as its last directory and an A549 run writes
-   `4-assemble` then `5-track` (tracking's work directory — its labels and
-   tracks go into the assembled plate). Older A549 runs on disk say `5-assemble` /
-   `4-track`, from when the numbers were fixed — say so if the user is comparing
-   against one.
+   run and an A549 run both end at `4-assemble`: tracking writes its labels and
+   tracks into the assembled plate and has no directory of its own. Older A549
+   runs on disk also have `5-track` (or `5-assemble` / `4-track`, from when the
+   numbers were fixed) — say so if the user is comparing against one.
 7. Known caveats that apply to this dataset.
 8. Rough wall-time and that `-resume` is on.
 9. Whether Slack notifications are on, and who will be @-mentioned at run end.
@@ -363,9 +362,8 @@ Do not run anything yet. Show the user:
     pipeline deletes the flat-field, deskew, reconstruct and virtual-stain
     directories, the `slurm_output/` placeholders and `.iohub-progress/` resume
     markers beside the final stores, and the Nextflow work directory. Only the
-    assembled store (with tracking's labels and tracks inside it), tracking's
-    per-FOV Ultrack databases in `5-track/`, the QC report and the logs under
-    `nextflow/` remain, and the run is final: any rerun
+    assembled store (with tracking's labels and tracks inside it), the QC report
+    and the logs under `nextflow/` remain, and the run is final: any rerun
     recomputes from raw. The template's `CLEANUP_INTERMEDIATES="auto"` lets the
     pipeline decide at launch (`cleanup_decision` in
     `nextflow/modules/cleanup.nf`); check `concatenate.yml` now so the plan says

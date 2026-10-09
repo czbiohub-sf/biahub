@@ -1,4 +1,5 @@
 import os
+import tempfile
 
 import numpy as np
 import pandas as pd
@@ -111,6 +112,12 @@ def _assert_tracking_outputs(position_path, z_index):
     (csv_path,) = position_path.glob("tracks_*.csv")
     tracks = pd.read_csv(csv_path)
     assert set(tracks["track_id"]) <= set(np.unique(labels)) - {0}
+
+    # The full Ultrack config is provenance on the label image, not a file beside it.
+    label_attrs = yaml.safe_load((position_path / "labels" / LABEL / "zarr.json").read_text())
+    ultrack_config = label_attrs["attributes"]["biahub-track"]["ultrack_config"]
+    assert "solution_gap" in ultrack_config["tracking"]
+    assert "working_dir" not in ultrack_config["data"]
 
 
 def _make_tracking_config(plate_path, tmp_path):
@@ -300,7 +307,6 @@ def test_track_cli_missing_input_path(tmp_path, example_track_settings, monkeypa
 def test_track_cli_init_only(tmp_path, example_tracking_plate):
     """--init creates empty full-Z label images in the -i positions and emits RESOURCES."""
     plate_path, _ = example_tracking_plate
-    output_path = tmp_path / "track_output"
     config_path = _make_tracking_config(plate_path, tmp_path)
 
     runner = CliRunner()
@@ -312,8 +318,6 @@ def test_track_cli_init_only(tmp_path, example_tracking_plate):
             str(plate_path / "A" / "1" / "0"),
             str(plate_path / "B" / "1" / "0"),
             str(plate_path / "B" / "2" / "0"),
-            "-o",
-            str(output_path),
             "-c",
             str(config_path),
             "--init",
@@ -348,8 +352,12 @@ def test_track_cli_debug_single_position(tmp_path, example_tracking_plate, monke
     monkeypatch.setenv("ULTRACK_ARRAY_MODULE", "numpy")
 
     plate_path, _ = example_tracking_plate
-    output_path = tmp_path / "track_output"
     config_path = _make_tracking_config(plate_path, tmp_path)
+    # No -o: the Ultrack database goes to $TMPDIR and the submitit folder to ./
+    temp_dir = tmp_path / "tmpdir"
+    temp_dir.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(temp_dir))
+    monkeypatch.chdir(tmp_path)
 
     def run():
         return CliRunner().invoke(
@@ -358,8 +366,6 @@ def test_track_cli_debug_single_position(tmp_path, example_tracking_plate, monke
                 "track",
                 "-i",
                 str(plate_path / "A" / "1" / "0"),
-                "-o",
-                str(output_path),
                 "-c",
                 str(config_path),
                 "--cluster",
@@ -371,6 +377,8 @@ def test_track_cli_debug_single_position(tmp_path, example_tracking_plate, monke
     assert result.exit_code == 0, result.output
     assert "Tracking complete:" in result.output
     _assert_tracking_outputs(plate_path / "A" / "1" / "0", z_index=1)
+    assert not any(temp_dir.iterdir())  # the temporary database was deleted
+    assert (tmp_path / "slurm_output").is_dir()
 
     # A retry overwrites the same outputs.
     result = run()

@@ -48,7 +48,7 @@ Which root depends on the dataset family:
 | family | cues in the name | output root | deliverable |
 |---|---|---|---|
 | zebrafish / neuromast / dynatrack | `dynatrack`, `hpf`, `dpf`, `neuromast`, `cldnb`, `she`, `myo6b`, `zebrafish` | `/hpc/projects/tlg2_mantis/<DATASET>` | assemble (`4-assemble`) — **no tracking**, see `caveats.md` §4 |
-| cell line / organelle / infection | `A549`, `HEK`, `iPSC`, organelle genes (`SEC61B`, `TOMM20`, `G3BP1`, `MAP4`, `CAAX`, `H2B`), viruses (`DENV`, `ZIKV`, `HSV1`) | `/hpc/projects/intracellular_dashboard/organelle_dynamics/<DATASET>` | assemble + track (`4-assemble`, `5-track`) |
+| cell line / organelle / infection | `A549`, `HEK`, `iPSC`, organelle genes (`SEC61B`, `TOMM20`, `G3BP1`, `MAP4`, `CAAX`, `H2B`), viruses (`DENV`, `ZIKV`, `HSV1`) | `/hpc/projects/intracellular_dashboard/organelle_dynamics/<DATASET>` | assemble + track (`4-assemble`; tracking writes into it) |
 | instrument QC / calibration | `argolight`, `beads`, `psf`, `alignment`, `illumination`, `fluorescein`, `first_light`, `mantis_v2_*` | *no default* — ask. These are usually not reconstructed. | — |
 
 Neighbouring roots that exist and are **not** the default target — do not use
@@ -73,9 +73,6 @@ layout is defined once in `nextflow/mantis-v2.nf` (`directory_layout()`):
 ├── 4-assemble/<DATASET>.zarr       # the deliverable; with tracking, each position
 │                                   #   also holds labels/<target_channel>, tracks.geff,
 │                                   #   tracks_<row>_<col>_<fov>.csv
-├── 5-track/                        # A549 only — tracking's work dir, not a store
-│   ├── <row>_<col>_<fov>/          #   per-FOV Ultrack database
-│   └── slurm_output/
 ├── qc/
 │   ├── report/index.html           # one report, one tab: the assembled store
 │   └── report_spec.yaml            # written at launch, before any QC task

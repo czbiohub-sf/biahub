@@ -96,7 +96,8 @@ def step_directories(performed) {
         reconstruct   : 'reconstruct',
         virtual_stain : 'virtual-stain',
         assemble      : 'assemble',
-        track         : 'track',
+        // track writes into the assembled plate and keeps nothing else, so it
+        // has no directory and takes no number.
     ]
     def layout = [:]
     order.each { key, name ->
@@ -124,8 +125,8 @@ workflow {
     // placeholder to author and no output to discard.
     //
     // Skipping a step DOES renumber the ones after it: the number is a position
-    // among the steps performed, so a neuromast run's assembled store is
-    // `4-assemble` where an A549 run also has `5-track` after it.
+    // among the steps that write a directory. Track writes into the assembled
+    // plate, so A549 and neuromast runs both end at `4-assemble`.
     def assemble_on = params.concatenate_config as boolean
     def track_on    = params.track_config as boolean
     def qc_on       = params.qc_config as boolean
@@ -169,7 +170,6 @@ workflow {
     // numbering is derived from. Reconstruction proper is always in it.
     def performed = ['flat_field', 'deskew', 'reconstruct', 'virtual_stain']
     if (assemble_on) performed << 'assemble'
-    if (track_on)    performed << 'track'
     def layout = step_directories(performed)
 
     collect_positions(params.input)
@@ -187,9 +187,6 @@ workflow {
     reconstruct_output   = "${out}/${layout.reconstruct}/${ds}.zarr"
     virtual_stain_output = "${out}/${layout.virtual_stain}/${ds}.zarr"
     assemble_output      = assemble_on ? "${out}/${layout.assemble}/${ds}.zarr" : null
-    // Tracking writes its labels and tracks INTO the assembled plate; its own
-    // directory holds only the per-FOV Ultrack databases and SLURM placeholders.
-    track_dir            = track_on    ? "${out}/${layout.track}"               : null
 
     // ========================================================================
     //  INIT PHASE — every config parsed, every output store scaffolded, before
@@ -259,7 +256,7 @@ workflow {
         // same store. Its init creates the empty label image tracking fills in
         // every position of that plate, and warms the shared cellpose weights
         // cache, which is better done here than with N GPU workers racing for it.
-        tk_init = track_init_wf(assemble_output, track_dir, params.track_config,
+        tk_init = track_init_wf(assemble_output, params.track_config,
                                 as_init.done)
         init_signals << tk_init.done
     }
@@ -360,7 +357,7 @@ workflow {
     // virtual_stain_output, and gate on virtual_stain_done.
     if (track_on) {
         track_done = track_run_wf(all_positions, assemble_output, assemble_output,
-                                  track_dir, params.track_config,
+                                  params.track_config,
                                   tk_init.resources, assemble_done.done)
     }
 
@@ -418,7 +415,6 @@ workflow {
             .collect { zarr -> new File(zarr).parent }
         def assemble_dir = new File(assemble_output).parent
         cleanup_paths << "${assemble_dir}/slurm_output" << "${assemble_dir}/.iohub-progress"
-        if (track_on) cleanup_paths << "${track_dir}/slurm_output"
         def cleanup_list = cleanup_targets(cleanup_paths, out)
         cleanup_record = "${out}/nextflow/intermediates_cleaned.txt"
 

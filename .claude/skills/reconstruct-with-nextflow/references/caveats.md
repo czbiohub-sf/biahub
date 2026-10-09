@@ -201,9 +201,12 @@ transfer. So simply do not run it:
 `track_wf` takes the assembled `<DATASET>.zarr` for *both* inputs, and writes
 its output back INTO it: per position, `labels/<target_channel>` (uint32, TZYX
 at the image's full Z; 2D-tracking masks sit in the middle plane of the tracked
-z-window), `tracks.geff`, and `tracks_<row>_<col>_<fov>.csv`. `5-track/` is only
-the work directory (`-o`): per-FOV Ultrack databases at `<row>_<col>_<fov>/` and
-`slurm_output/`. So any Z/Y/X crop or `time_indices` subset in
+z-window), `tracks.geff`, and `tracks_<row>_<col>_<fov>.csv`. Nothing else is
+kept: the pipeline passes no `-o`, so each worker builds its Ultrack database in
+the node's `$TMPDIR` and deletes it after export, and track has no step
+directory (pass `-o` to `biahub track` by hand to keep the databases, e.g. to
+re-solve with other weights). The full Ultrack config is recorded under
+`biahub-track.ultrack_config` on each label image. So any Z/Y/X crop or `time_indices` subset in
 `concatenate.yml` is what tracking sees, and tracking starts only after the
 whole plate assembles. `track --init` creates the empty label image in every
 position during the init phase, and with tracking on, QC is planned after that

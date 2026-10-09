@@ -24,8 +24,8 @@ def _validate_and_process_paths(
     return input_paths
 
 
-def _str_to_path(ctx: click.Context, opt: click.Option, value: str) -> Path:
-    return Path(value)
+def _str_to_path(ctx: click.Context, opt: click.Option, value: str | None) -> Path | None:
+    return None if value is None else Path(value)
 
 
 def _validate_and_process_config_paths(ctx, opt, value: tuple[str, ...]) -> list[Path]:
@@ -125,14 +125,15 @@ def config_filepath() -> Callable:
     return decorator
 
 
-def output_dirpath() -> Callable:
+def output_dirpath(required: bool = True, help: str = "Path to output directory") -> Callable:
     def decorator(f: Callable) -> Callable:
         return click.option(
             "--output-dirpath",
             "-o",
-            required=True,
+            required=required,
+            default=None,
             type=click.Path(exists=False, file_okay=False, dir_okay=True),
-            help="Path to output directory",
+            help=help,
             callback=_str_to_path,
         )(f)
 
