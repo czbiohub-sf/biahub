@@ -23,7 +23,6 @@ backend: iohub
 positions: null
 metric_group: default
 log_level: INFO
-upstream_qc_dir: null
 
 metric_groups:
   default:

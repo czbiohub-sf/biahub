@@ -1,7 +1,10 @@
 import ast
+import json
 import logging
-import os
+import shutil
+import tempfile
 
+from contextlib import contextmanager
 from pathlib import Path
 
 import click
@@ -9,6 +12,7 @@ import dask.array as da
 import numpy as np
 import pandas as pd
 import submitit
+import zarr
 
 from iohub import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate
@@ -42,7 +46,6 @@ from biahub.utils.cellpose import (
 )
 from biahub.utils.cluster import echo_resources, estimate_resources, get_submitit_cluster
 from biahub.utils.config import update_model, yaml_to_model
-from biahub.utils.ngff import PROVENANCE_METADATA_KEYS, resolve_ome_zarr_version
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +53,9 @@ logger = logging.getLogger(__name__)
 # shared with biahub.estimate_stabilization.
 NA_DET = 1.35
 LAMBDA_ILL = 0.500
+
+# Provenance key on each label image: the track settings, plus where the labels sit in Z.
+PROVENANCE_KEY = "biahub-track"
 
 # Lazy imports for ultrack - imported only when needed in specific functions
 
@@ -373,7 +379,7 @@ def resolve_z_slice(z: ZSlicing, z_shape: int) -> tuple[slice, int]:
 
 def apply_focus_slicing(
     data_dict: dict[str, ArrayLike], z_slicing: ZSlicing, pixel_size: float
-) -> dict[str, ArrayLike]:
+) -> tuple[dict[str, ArrayLike], slice]:
     """Slice every loaded channel to a focus window (``method='focus'``).
 
     The in-focus plane is found once per FOV on ``z_slicing.focus_channel`` (or the
@@ -382,6 +388,9 @@ def apply_focus_slicing(
     Channel arrays are (T, Z, Y, X). Focus finding reads the focus channel one timepoint
     at a time; every channel stays lazy, so only the resolved window is materialised
     downstream.
+
+    Returns the sliced ``data_dict`` and the resolved window, which locates the tracked
+    planes in the full stack (see :func:`tracked_z_window`).
     """
     focus_channel = z_slicing.focus_channel or next(iter(data_dict))
     if focus_channel not in data_dict:
@@ -401,12 +410,30 @@ def apply_focus_slicing(
     )
     click.echo(f"Focus-resolved z-slice: {z_slices}")
 
-    return {name: arr[:, z_slices] for name, arr in data_dict.items()}
+    return {name: arr[:, z_slices] for name, arr in data_dict.items()}, z_slices
+
+
+def tracked_z_window(
+    read_slice: slice, focus_slice: slice | None, z_shape: int
+) -> tuple[int, int]:
+    """Locate the tracked planes in the full stack as a ``[start, stop)`` window.
+
+    ``read_slice`` is the read-time slice from :func:`resolve_z_slice`;
+    ``focus_slice`` is the per-FOV window from :func:`apply_focus_slicing`, relative to
+    the planes that were read, or None when ``method`` is not ``focus``.
+    """
+    start, stop, _ = read_slice.indices(z_shape)
+    if focus_slice is not None:
+        focus_start, focus_stop, _ = focus_slice.indices(stop - start)
+        start, stop = start + focus_start, start + focus_stop
+    return start, stop
 
 
 def run_ultrack(
     tracking_config,
     database_path,
+    geff_path: Path | None = None,
+    geff_kwargs: dict | None = None,
     **track_kwargs,
 ):
     """
@@ -426,6 +453,11 @@ def run_ultrack(
         Ultrack configuration object defining segmentation, linking, and optimization parameters.
     database_path : Path
         Directory where tracking results, configuration files, and output data will be saved.
+    geff_path : Path, optional
+        If set, the solved tracks are also exported there as GEFF via
+        ``Tracker.to_geff`` (overwriting any previous export).
+    geff_kwargs : dict, optional
+        Extra keyword arguments for ``Tracker.to_geff``.
     **track_kwargs
         Keyword arguments forwarded to ``Tracker.track()``. E.g. ``detection``, ``edges``
         (foreground+contour mode), or ``labels``, ``sigma`` (cellpose mode), plus ``scale``
@@ -467,6 +499,8 @@ def run_ultrack(
     labels = tracker.to_zarr(
         tracks_df=tracks_df,
     )
+    if geff_path is not None:
+        tracker.to_geff(str(geff_path), overwrite=True, **(geff_kwargs or {}))
 
     with open(database_path / "config.toml", mode="w") as f:
         toml.dump(cfg.dict(by_alias=True), f)
@@ -665,10 +699,11 @@ def _load_and_preprocess(
     z_slicing: ZSlicing | None,
     pixel_size: float | None,
     visualize: bool = False,
-) -> dict[str, ArrayLike]:
+) -> tuple[dict[str, ArrayLike], slice | None]:
     """Load, focus-slice, run the processing pipeline, and fill blank frames for one FOV.
 
-    Shared by the foreground+contour and cellpose segmentation paths.
+    Shared by the foreground+contour and cellpose segmentation paths. Also returns the
+    per-FOV focus window (None unless ``z_slicing.method`` is ``focus``).
     """
     fov = "/".join(position_key)
     data_dict = load_data(
@@ -677,10 +712,11 @@ def _load_and_preprocess(
         z_slices=z_slices,
         visualize=visualize,
     )
+    focus_slice = None
     if z_slicing is not None and z_slicing.method == "focus":
-        data_dict = apply_focus_slicing(data_dict, z_slicing, pixel_size)
+        data_dict, focus_slice = apply_focus_slicing(data_dict, z_slicing, pixel_size)
     data_dict = run_preprocessing_pipeline(data_dict, input_images, visualize=visualize)
-    return fill_empty_frames_from_csv(fov, data_dict, blank_frames_path)
+    return fill_empty_frames_from_csv(fov, data_dict, blank_frames_path), focus_slice
 
 
 def detect_foreground_segmentation(
@@ -787,11 +823,107 @@ def cellpose_segmentation(
     return cellpose_labels
 
 
+# Label chunks, TZYX. 16 x 1 x 128 x 128 uint32 is 1 MB, the DCA v0.2 SHOULD (512 KB
+# is the MUST) and its "2D+time" example; growing T keeps per-plane reads cheap.
+LABEL_CHUNKS = (16, 1, 128, 128)
+# Shards span one time chunk (16 timepoints, the DCA SHOULD) and the whole YX plane,
+# capped at 16 chunks (2048 px, the DCA spatial-shard SHOULD).
+MAX_LABEL_SHARD_CHUNKS = 16
+
+
+def label_chunks_and_shards(
+    shape: tuple[int, int, int, int],
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    """Chunks and shards ratio for a (T, Z, Y, X) label array of ``shape``."""
+    chunks = tuple(min(c, s) for c, s in zip(LABEL_CHUNKS, shape, strict=True))
+    shards_ratio = (1, 1) + tuple(
+        min(-(-s // c), MAX_LABEL_SHARD_CHUNKS)
+        for c, s in zip(chunks[2:], shape[2:], strict=True)
+    )
+    return chunks, shards_ratio
+
+
+def write_tracking_labels(
+    label_array,
+    labels: ArrayLike,
+    z_window: tuple[int, int],
+    output_mode: str,
+) -> int | slice:
+    """Write tracked labels into the full-Z (T, Z, Y, X) label array.
+
+    In 2D mode the (T, Y, X) labels go in the middle plane of the tracked window: the
+    middle of the volume for a full-stack projection, the plane itself for a one-plane
+    window, the middle of the section for a projected sub-volume. In 3D mode the
+    (T, Z, Y, X) labels fill the window. Returns the z index or slice written.
+    """
+    start, stop = z_window
+    labels = np.asarray(labels, dtype=np.uint32)
+    if output_mode == "2D":
+        # A one-plane window that wasn't projected still has its Z axis.
+        if labels.ndim == 4 and labels.shape[1] == 1:
+            labels = labels[:, 0]
+        if labels.ndim != 3:
+            raise ValueError(
+                f"output_mode='2D' expects (T, Y, X) labels but tracking produced "
+                f"shape {labels.shape}. Ensure input_images projects Z (e.g. np.mean)."
+            )
+        z_index = start + (stop - start) // 2
+        label_array[:, z_index] = labels
+        return z_index
+
+    if labels.ndim != 4 or labels.shape[1] != stop - start:
+        raise ValueError(
+            f"output_mode='3D' expects (T, {stop - start}, Y, X) labels for z-window "
+            f"[{start}, {stop}) but tracking produced shape {labels.shape}."
+        )
+    label_array[:, start:stop] = labels
+    return slice(start, stop)
+
+
+@contextmanager
+def _fov_scratch(output_dirpath: Path | None, fov: str):
+    """Yield the Ultrack database directory for one FOV, inside a scratch directory.
+
+    The scratch directory is fresh in this worker's ``$TMPDIR``, one per FOV because
+    ``$TMPDIR`` can be shared by all of a user's jobs on a node, and deleted on exit.
+    The database goes in it unless ``output_dirpath`` is given, in which case it is
+    kept in ``{output_dirpath}/{fov}``.
+
+    While the context is open, ``tempfile`` also points into the scratch directory:
+    ultrack's ``create_zarr`` backs its default store with a ``TemporaryDirectory``
+    that it lets go out of scope, so the directory is deleted, recreated by the first
+    chunk write, and never cleaned up. Kept in here, those arrays go with the rest.
+    """
+    scratch = Path(tempfile.mkdtemp(prefix=f"biahub-track-{fov}-"))
+    previous_tempdir = tempfile.tempdir
+    tempfile.tempdir = str(scratch)
+    try:
+        if output_dirpath is not None:
+            database_path = Path(output_dirpath) / fov
+        else:
+            database_path = scratch / "database"
+        database_path.mkdir(parents=True, exist_ok=True)
+        yield database_path
+    finally:
+        tempfile.tempdir = previous_tempdir
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _resolved_ultrack_config(tracking_config) -> dict:
+    """Return the full Ultrack config, defaults included, as JSON-safe provenance."""
+    config = json.loads(json.dumps(tracking_config.dict(by_alias=True), default=str))
+    # The working directory is the per-FOV database, often a deleted temp directory.
+    config.get("data", {}).pop("working_dir", None)
+    return config
+
+
 def track_one_position(
-    position_key: str,
+    position_key: tuple[str, str, str],
+    position_dirpath: Path,
     input_images: list[ProcessingInputChannel],
-    output_dirpath: Path,
+    output_dirpath: Path | None,
     tracking_config,
+    label_name: str,
     blank_frames_path: Path | None = None,
     z_slices: slice | None = None,
     scale: tuple[float, ...] = (1, 1, 1, 1, 1),
@@ -810,15 +942,22 @@ def track_one_position(
 
     Parameters
     ----------
-    position_key : str
-        A string identifier for the field of view (e.g., "A_1_3"), typically composed of
-        Plate, Well, and Position joined by underscores.
+    position_key : tuple of str
+        (row, column, fov) of the field of view.
+    position_dirpath : Path
+        The ``-i`` position the outputs are written into. ``track --init`` has already
+        created its empty ``labels/<label_name>`` image.
     input_images : list of ProcessingInputChannel
         Configuration describing which channels to load and how to preprocess them.
-    output_dirpath : Path
-        Output directory where labeled Zarr volumes and track CSVs will be stored.
+    output_dirpath : Path or None
+        Where to keep the Ultrack database and config for this FOV, in
+        ``{output_dirpath}/{row}_{col}_{fov}/``. If None they live in a scratch
+        directory in this worker's ``$TMPDIR`` and are deleted after export (see
+        :func:`_fov_scratch`).
     tracking_config : MainConfig
         Ultrack configuration containing segmentation, linking, and optimization settings.
+    label_name : str
+        Name of the label image under ``{position_dirpath}/labels/``.
     blank_frames_path : Path, optional
         Path to CSV file indicating empty frames for the current FOV. If None, blank frame
         filling is skipped.
@@ -834,145 +973,172 @@ def track_one_position(
         Z-plane selection config. For ``method='focus'`` the in-focus window is resolved
         per-FOV from the loaded data (see :func:`apply_focus_slicing`).
     output_mode : str, optional
-        "2D" writes (T, Y, X) labels into the Z=0 plane; "3D" writes (T, Z, Y, X)
-        labels across the z-window. Default is "2D".
+        "2D" writes (T, Y, X) labels into the middle plane of the tracked z-window; "3D"
+        writes (T, Z, Y, X) labels across the window. Default is "2D".
 
     Returns
     -------
     None
-        Outputs are saved directly to disk:
-        - Tracked object labels in Zarr format
-        - CSV file containing the track graph (IDs, positions, parents)
+        Outputs are saved into ``position_dirpath``:
+        - ``labels/<label_name>``: the tracked labels, painted with ``track_id``
+        - ``tracks.geff``: the track graph, linked to the labels by ``seg_id``
+        - ``tracks_<row>_<col>_<fov>.csv``: the same tracks as a CSV, kept for now
 
     Notes
     -----
-    - Output is saved to `{output_dirpath}/{position_key}/tracks_{position_key}.csv`.
-    - The Ultrack config is also saved as TOML in a `_config_tracking/{FOV}/` subdirectory.
     - In foreground+contour mode, missing "foreground"/"contour" channels raise a ValueError.
     """
     if z_slicing is None:
         z_slicing = ZSlicing()
 
+    position_dirpath = Path(position_dirpath)
     fov = "_".join(position_key)
     click.echo(f"Processing FOV: {fov.replace('_', '/')}")
 
-    # Define path to save the tracking database and graph
-    filename = output_dirpath.stem
-    database_path = output_dirpath.parent / f"{filename}_config_tracking" / f"{fov}"
-    os.makedirs(database_path, exist_ok=True)
+    with open_ome_zarr(position_dirpath, mode="r") as position:
+        z_shape = position.data.shape[2]
+        time_scale = position.scale[0]
+        units = {axis.name.lower(): getattr(axis, "unit", None) for axis in position.axes}
 
-    # Load, focus-slice (method='focus'), run the processing pipeline, and fill blank
-    # frames once; both segmentation methods consume the resulting data_dict.
-    # pixel_size is the transverse pixel size = last element of the (trimmed) scale.
-    pixel_size = scale[-1]
-    data_dict = _load_and_preprocess(
-        position_key, input_images, z_slices, blank_frames_path, z_slicing, pixel_size
+    with _fov_scratch(output_dirpath, fov) as database_path:
+        # Load, focus-slice (method='focus'), run the processing pipeline, and fill blank
+        # frames once; both segmentation methods consume the resulting data_dict.
+        # pixel_size is the transverse pixel size = last element of the (trimmed) scale.
+        pixel_size = scale[-1]
+        data_dict, focus_slice = _load_and_preprocess(
+            position_key, input_images, z_slices, blank_frames_path, z_slicing, pixel_size
+        )
+        z_window = tracked_z_window(z_slices or slice(None), focus_slice, z_shape)
+
+        geff_kwargs = {
+            "zarr_format": 3,
+            "include_masks": False,
+            "include_overlaps": False,
+            "segmentation_path": f"../labels/{label_name}",
+            "scale": tuple(scale),
+            "spatial_unit": units.get("x"),
+            "time_scale": time_scale if units.get("t") else None,
+            "time_unit": units.get("t"),
+        }
+        if cellpose_config is not None:
+            cellpose_labels = cellpose_segmentation(data_dict, cellpose_config)
+            detection_kwargs = {
+                "labels": cellpose_labels,
+                "sigma": cellpose_config.labels_sigma,
+            }
+            click.echo("Tracking with cellpose labels...")
+        else:
+            foreground_mask, contour_gradient_map = detect_foreground_segmentation(data_dict)
+            detection_kwargs = {"detection": foreground_mask, "edges": contour_gradient_map}
+            click.echo("Tracking with foreground + contour...")
+
+        tracking_labels, tracks_df, _ = run_ultrack(
+            tracking_config=tracking_config,
+            database_path=database_path,
+            geff_path=position_dirpath / "tracks.geff",
+            geff_kwargs=geff_kwargs,
+            scale=scale,
+            overwrite=True,
+            **detection_kwargs,
+        )
+
+        # Kept alongside tracks.geff for downstream readers that still expect a CSV.
+        tracks_df.to_csv(position_dirpath / f"tracks_{fov}.csv", index=False)
+
+        with open_ome_zarr(position_dirpath, mode="r+") as position:
+            label_image = position.get_label(label_name)
+            z_written = write_tracking_labels(
+                label_image["0"], tracking_labels, z_window, output_mode
+            )
+
+    # Record where the labels sit in Z (the 2D GEFF has no z axis) and the full Ultrack
+    # config, so provenance does not depend on the (usually deleted) database directory.
+    label_group = zarr.open_group(position_dirpath / "labels" / label_name, mode="r+")
+    provenance = dict(label_group.attrs.get(PROVENANCE_KEY, {}))
+    provenance["z_window"] = list(z_window)
+    if isinstance(z_written, int):
+        provenance["z_index"] = z_written
+    provenance["ultrack_config"] = _resolved_ultrack_config(tracking_config)
+    label_group.attrs[PROVENANCE_KEY] = provenance
+
+    click.echo(f"Saved labels and tracks to: {position_dirpath}")
+
+
+def _tracked_shape(
+    input_position_dirpath: Path, settings: TrackingSettings
+) -> tuple[int, int, int, int, int]:
+    """Return the (T, C, Z_tracked, Y, X) shape one position's tracking works on."""
+    with open_ome_zarr(str(input_position_dirpath), mode="r") as dataset:
+        T, C, Z, Y, X = dataset.data.shape
+    # Data-free resolution: for focus this returns the fixed window size (min(total, Z)).
+    _, Z_win = resolve_z_slice(settings.z_slicing, Z)
+    return (T, C, 1 if settings.output_mode == "2D" else Z_win, Y, X)
+
+
+def _labels_exist(input_position_dirpaths: list[Path], label_name: str) -> bool:
+    return all(
+        (Path(p) / "labels" / label_name / "zarr.json").exists()
+        or (Path(p) / "labels" / label_name / ".zattrs").exists()
+        for p in input_position_dirpaths
     )
 
-    if cellpose_config is not None:
-        cellpose_labels = cellpose_segmentation(data_dict, cellpose_config)
 
-        click.echo("Tracking with cellpose labels...")
-        tracking_labels, tracks_df, _ = run_ultrack(
-            tracking_config=tracking_config,
-            database_path=database_path,
-            labels=cellpose_labels,
-            sigma=cellpose_config.labels_sigma,
-            scale=scale,
-            overwrite=True,
-        )
-    else:
-        foreground_mask, contour_gradient_map = detect_foreground_segmentation(data_dict)
-
-        click.echo("Tracking with foreground + contour...")
-        tracking_labels, tracks_df, _ = run_ultrack(
-            tracking_config=tracking_config,
-            database_path=database_path,
-            detection=foreground_mask,
-            edges=contour_gradient_map,
-            scale=scale,
-            overwrite=True,
-        )
-
-    # Save the tracks graph to a CSV file
-    csv_path = output_dirpath / Path(*position_key) / f"tracks_{fov}.csv"
-    os.makedirs(csv_path.parent, exist_ok=True)
-
-    tracks_df.to_csv(csv_path, index=False)
-
-    click.echo(f"Saved tracks to: {output_dirpath / Path(*position_key)}")
-
-    # Save the tracking labels. The output plate stores (T, 1, Z_out, Y, X); in 2D
-    # mode Z_out is 1 and labels are (T, Y, X); in 3D mode labels are (T, Z, Y, X).
-    labels = np.asarray(tracking_labels, dtype=np.uint32)
-    with open_ome_zarr(output_dirpath / Path(*position_key), mode="r+") as output_dataset:
-        if output_mode == "2D":
-            if labels.ndim != 3:
-                raise ValueError(
-                    f"output_mode='2D' expects (T, Y, X) labels but tracking produced "
-                    f"shape {labels.shape}. Ensure input_images projects Z (e.g. np.mean)."
-                )
-            output_dataset[0][:, 0, 0] = labels
-        else:
-            if labels.ndim != 4:
-                raise ValueError(
-                    f"output_mode='3D' expects (T, Z, Y, X) labels but tracking produced "
-                    f"shape {labels.shape}."
-                )
-            output_dataset[0][:, 0] = labels
-    return tracking_labels, tracks_df
-
-
-def _init_output_plate(
+def _init_labels(
     input_position_dirpaths: list[Path],
-    output_dirpath: Path,
     settings: TrackingSettings,
-) -> tuple[int, int, int, int, int]:
-    """Create the empty tracking output plate.
+) -> None:
+    """Create the empty ``labels/<target_channel>`` image in every input position.
 
-    Returns the (T, C, Z_out, Y, X) shape used for resource estimation.
+    The labels are (T, Z, Y, X) with the image's full Z, so both 2D and 3D tracking
+    write into the planes they tracked. Positions that already have the label are left
+    untouched, and the track settings are recorded on each label image.
     """
     with open_ome_zarr(str(input_position_dirpaths[0]), mode="r") as dataset:
         T, C, Z, Y, X = dataset.data.shape
         scale = dataset.scale
-
-    # Data-free resolution: for focus this returns the fixed window size (min(total, Z)),
-    # so the plate Z matches the per-FOV tracked Z.
-    _, Z_win = resolve_z_slice(settings.z_slicing, Z)
-
-    if settings.output_mode == "2D":
-        output_shape = (T, 1, 1, Y, X)
-    else:
-        output_shape = (T, 1, Z_win, Y, X)
-
-    position_keys = [Path(p).parts[-3:] for p in input_position_dirpaths]
+        channel_names = dataset.channel_names
+        dtype = dataset.data.dtype
+        version = dataset.version
 
     input_plate = Path(input_position_dirpaths[0]).parents[2]
+    position_keys = [Path(p).parts[-3:] for p in input_position_dirpaths]
+    label_chunks, label_shards_ratio = label_chunks_and_shards((T, Z, Y, X))
+
     create_empty_plate(
-        store_path=output_dirpath,
+        store_path=input_plate,
         position_keys=position_keys,
-        channel_names=[f"{settings.target_channel}_labels"],
-        shape=output_shape,
-        chunks=None,
+        channel_names=channel_names,
+        shape=(T, C, Z, Y, X),
         scale=scale,
-        version=resolve_ome_zarr_version(
-            input_position_dirpaths[0], settings.output_ome_zarr_version
-        ),
-        dtype=np.uint32,
-        metadata_sources=input_plate,
-        metadata_keys=PROVENANCE_METADATA_KEYS,
-        extra_metadata={"biahub-track": settings.model_dump(mode="json")},
+        version=version,
+        dtype=dtype,
+        label_names=[settings.target_channel],
+        label_dtype=np.uint32,
+        label_chunks=label_chunks,
+        label_shards_ratio=label_shards_ratio if version == "0.5" else None,
     )
 
-    click.echo(f"Created {output_dirpath} ({len(position_keys)} positions)")
+    provenance = settings.model_dump(mode="json")
+    for position_dirpath in input_position_dirpaths:
+        label_group = zarr.open_group(
+            Path(position_dirpath) / "labels" / settings.target_channel, mode="r+"
+        )
+        # Merge so a re-run init keeps the z placement the workers recorded.
+        label_group.attrs[PROVENANCE_KEY] = {
+            **label_group.attrs.get(PROVENANCE_KEY, {}),
+            **provenance,
+        }
 
-    return (T, C, output_shape[2], Y, X)
+    click.echo(
+        f"Created labels/{settings.target_channel} in {input_plate} "
+        f"({len(position_keys)} positions)"
+    )
 
 
 def track(
     input_position_dirpaths: list[Path],
     config_filepath: Path,
-    output_dirpath: Path,
+    output_dirpath: Path | None = None,
     sbatch_filepath: str | None = None,
     cluster: str = "slurm",
     monitor: bool = True,
@@ -987,8 +1153,12 @@ def track(
         Paths to input position directories (used for plate structure and metadata).
     config_filepath : Path
         Path to the tracking configuration YAML.
-    output_dirpath : Path
-        Path to the output Zarr store.
+    output_dirpath : Path, optional
+        Where to keep the per-FOV Ultrack databases (``{output_dirpath}/{row}_{col}_{fov}/``)
+        and the SLURM logs (``{output_dirpath}/slurm_output``). If None, each worker
+        builds its database in its own ``$TMPDIR`` and deletes it after export, and the
+        SLURM logs go to ``./slurm_output``. The labels and tracks themselves are
+        always written into the ``-i`` positions.
     sbatch_filepath : str, optional
         Path to a SLURM batch file to override defaults.
     cluster : str, optional
@@ -996,13 +1166,16 @@ def track(
     monitor : bool, optional
         If True, monitor submitted jobs.
     init_only : bool, optional
-        Only initialize the output store and exit.
+        Only create the empty label images in the ``-i`` positions and exit.
     input_images_path : str, optional
         Explicit pixel-data source filling the first null ``input_images`` path
         (Nextflow). If unset, that null path falls back to the ``-i`` plate (see Notes).
 
     Notes
     -----
+    Outputs go into each ``-i`` position: ``labels/<target_channel>`` (OME-NGFF label
+    image), ``tracks.geff`` and ``tracks_<row>_<col>_<fov>.csv``.
+
     Two input sources: ``-i`` (``input_position_dirpaths``) gives the plate structure
     and shape/scale, while ``input_images[].path`` gives the pixel data. The first null
     ``path`` is the primary source (``--input-images-path`` if given, else the ``-i``
@@ -1010,8 +1183,13 @@ def track(
     """
     from ultrack import MainConfig
 
-    output_dirpath = Path(output_dirpath)
-    slurm_out_path = output_dirpath.parent / "slurm_output"
+    if output_dirpath is not None:
+        output_dirpath = Path(output_dirpath)
+        slurm_out_path = output_dirpath / "slurm_output"
+    else:
+        # Not $TMPDIR: submitit's folder must be visible from the compute nodes.
+        slurm_out_path = Path("slurm_output").absolute()
+    slurm_out_path.mkdir(parents=True, exist_ok=True)
 
     settings = yaml_to_model(config_filepath, TrackingSettings)
 
@@ -1024,8 +1202,10 @@ def track(
             image.path = primary_path
             break
 
-    output_shape = _init_output_plate(input_position_dirpaths, output_dirpath, settings)
-    T, C, Z_out, Y, X = output_shape
+    # Workers skip the scaffold --init already made: they all share the -i plate.
+    if init_only or not _labels_exist(input_position_dirpaths, settings.target_channel):
+        _init_labels(input_position_dirpaths, settings)
+    T, C, Z_out, Y, X = _tracked_shape(input_position_dirpaths[0], settings)
 
     _, num_cpus, gb_ram_per_cpu = estimate_resources(
         shape=[T, C, Z_out, Y, X], ram_multiplier=16, max_num_cpus=16
@@ -1046,7 +1226,7 @@ def track(
             # Fail here, once, rather than in every worker of the fan-out.
             check_cellpose_model_name(settings.cellpose_config.pretrained_model)
             warm_cellpose_weights(settings.cellpose_config.pretrained_model)
-        click.echo(f"Initialized {output_dirpath} ({len(input_position_dirpaths)} positions)")
+        click.echo(f"Initialized tracking ({len(input_position_dirpaths)} positions)")
         return
 
     # Read shape/scale from the first input position for tracking parameters
@@ -1095,12 +1275,16 @@ def track(
     click.echo("Submitting jobs...")
     jobs = []
     with submitit.helpers.clean_env(), executor.batch():
-        for position_key in position_keys:
+        for position_key, position_dirpath in zip(
+            position_keys, input_position_dirpaths, strict=True
+        ):
             job = executor.submit(
                 track_one_position,
                 position_key=position_key,
+                position_dirpath=Path(position_dirpath),
                 output_dirpath=output_dirpath,
                 tracking_config=tracking_cfg,
+                label_name=settings.target_channel,
                 input_images=settings.input_images,
                 blank_frames_path=settings.blank_frames_path,
                 z_slices=z_slices,
@@ -1112,7 +1296,6 @@ def track(
             jobs.append(job)
 
     job_ids = [job.job_id for job in jobs]
-    slurm_out_path.mkdir(exist_ok=True)
     log_path = Path(slurm_out_path / "submitit_jobs_ids.log")
     with log_path.open("w") as log_file:
         log_file.write("\n".join(job_ids))
@@ -1134,7 +1317,12 @@ def track(
 @click.command("track")
 @input_position_dirpaths()
 @config_filepath()
-@output_dirpath()
+@output_dirpath(
+    required=False,
+    help="Directory to keep the per-FOV Ultrack databases and the SLURM logs in. "
+    "If omitted, each worker builds its database in its own $TMPDIR and deletes it "
+    "after export, and the SLURM logs go to ./slurm_output.",
+)
 @sbatch_filepath()
 @cluster()
 @monitor()
@@ -1149,7 +1337,7 @@ def track(
 def track_cli(
     input_position_dirpaths: list[Path],
     config_filepath: Path,
-    output_dirpath: Path,
+    output_dirpath: Path | None = None,
     sbatch_filepath: str | None = None,
     cluster: str = "slurm",
     monitor: bool = False,
@@ -1158,18 +1346,25 @@ def track_cli(
 ):
     """Track objects in 2D or 3D time-lapse microscopy data using configurable preprocessing.
 
-    \b
-    Full SLURM fan-out:
-    >>> biahub track -i ./reconstruct.zarr/*/*/* -o ./track.zarr -c config.yml
+    Writes into each -i position: the labels as an OME-NGFF label image
+    (labels/<target_channel>), the tracks as tracks.geff, and a tracks CSV. The
+    Ultrack databases are temporary unless -o names a directory to keep them in.
 
     \b
-    Initialize the output plate only (Nextflow init step):
-    >>> biahub track --init -i ./reconstruct.zarr/*/*/* -o ./track.zarr -c config.yml
+    Full SLURM fan-out:
+    >>> biahub track -i ./assemble.zarr/*/*/* -c config.yml
+
+    \b
+    Keep the Ultrack databases (e.g. to re-solve with other weights):
+    >>> biahub track -i ./assemble.zarr/*/*/* -o ./track -c config.yml
+
+    \b
+    Create the empty label images only (Nextflow init step):
+    >>> biahub track --init -i ./assemble.zarr/*/*/* -c config.yml
 
     \b
     In-process run of a single position (Nextflow per-position worker):
-    >>> biahub track --cluster debug -i ./reconstruct.zarr/B/3/000000 \\
-        -o ./track.zarr -c config.yml --input-images-path ./virtual-stain.zarr
+    >>> biahub track --cluster debug -i ./assemble.zarr/B/3/000000 -c config.yml
     """  # noqa: D301
     track(
         input_position_dirpaths=input_position_dirpaths,

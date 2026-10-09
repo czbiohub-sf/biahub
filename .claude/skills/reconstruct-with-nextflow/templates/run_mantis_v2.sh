@@ -10,10 +10,11 @@
 # below. Keep it there: it is the run's provenance record of the exact command.
 #
 # --output is the project root, so each step writes a sibling directory:
-#   0-flatfield/ 1-deskew/ 2-reconstruct/ 3-virtual-stain/ 4-assemble/ 5-track/
-# The number is the step's POSITION among the steps this run performs, so a run
-# without tracking ends at 4-assemble and one that also skipped a step earlier
-# shifts everything after it down.
+#   0-flatfield/ 1-deskew/ 2-reconstruct/ 3-virtual-stain/ 4-assemble/
+# Tracking has no directory: it writes labels/<target_channel>, tracks.geff and
+# a tracks CSV into each position of 4-assemble/<dataset>.zarr.
+# The number is the step's POSITION among the steps this run performs that
+# write a directory, so a run that skips a step shifts everything after it down.
 # The work dir defaults to <output>/nextflow/work; override with `-work-dir`.
 #
 # Any extra arguments are forwarded to nextflow, e.g.
@@ -190,12 +191,14 @@ fi
 # Harmless when unset already, and nothing in the pipeline reads it.
 unset CLAUDECODE
 
-# The four config flags from --concatenate_config down are the OPTIONAL steps:
+# The three config flags from --concatenate_config down are the OPTIONAL steps:
 # a step runs only if its config is passed (biahub#306). Defaults by family —
 #
-#   A549 / cell-line   assemble + track + QC   (all four, as written)
-#   zebrafish / neuromast   assemble + QC      (delete --track_config and
-#                                               --qc_track_config)
+#   A549 / cell-line        assemble + track + QC   (all three, as written)
+#   zebrafish / neuromast   assemble + QC           (delete --track_config)
+#
+# --qc_track_config was removed: qc.yaml counts the labels tracking writes into
+# the assembled store, so passing it errors at launch.
 #
 # TO SKIP A STEP, DELETE ITS LINE. Do not comment it out: `#` inside a
 # backslash-continued command does not start a comment line — the continuation
@@ -215,7 +218,6 @@ nextflow run "${PIPELINE}" \
     --concatenate_config   "${CONFIGS}/concatenate.yml" \
     --track_config         "${CONFIGS}/track.yml" \
     --qc_config            "${CONFIGS}/qc.yaml" \
-    --qc_track_config      "${CONFIGS}/qc_track.yaml" \
     --cleanup_intermediates "${CLEANUP_INTERMEDIATES}" \
     -resume \
     "$@"

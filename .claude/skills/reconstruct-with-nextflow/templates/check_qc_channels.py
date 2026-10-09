@@ -4,19 +4,22 @@
 
 Exits 1 and names every miss, 0 if every filter resolves.
 
-WHY PREDICT RATHER THAN READ. The stores QC runs over — the assembled plate and
-the tracking plate — do not exist when configs are scaffolded; the pipeline's
-init phase creates them. So this derives their channel lists from the configs
-that will produce them, which is exactly the coupling that goes wrong:
+WHY PREDICT RATHER THAN READ. The store QC runs over — the assembled plate —
+does not exist when configs are scaffolded; the pipeline's init phase creates
+it. So this derives its channel list from the configs that will produce it,
+which is exactly the coupling that goes wrong:
 
     assembled = raw channels (flat-field and deskew preserve names)
               + reconstruct's output_channel_names (waveorder derives these,
                 so they are read from the settings model, not the YAML text)
               + virtual-stain's data.init_args.target_channel
-    tracking  = ["<track.yml target_channel>_labels"]
+    labels    = <track.yml target_channel>   (<fov>/labels/<target_channel>)
 
-`qc_track.yaml` naming `nuclei_prediction_labels` only matches if `track.yml`
-says `target_channel: nuclei_prediction`. Two files, no shared source of truth.
+Tracking writes its labels INTO the assembled plate, so `qc.yaml`'s
+`instance_count.label` — and its one anchor channel, the channel the labels
+were segmented from — only resolve if both equal `track.yml`'s
+`target_channel`. Two files, no shared source of truth. Checked when `qc.yaml`
+has an `instance_count` block and `track.yml` exists.
 
 RELATIONSHIP TO imaging-qc#226. Since that landed, `plan-stage` refuses an
 unknown channel name itself, so the pipeline fails at init rather than skipping
@@ -71,26 +74,41 @@ def assembled_channels(raw_zarr, reconstruct_cfg, virtual_stain_cfg):
     return raw + list(rc.output_channel_names) + tgt
 
 
-def tracking_channels(track_cfg):
-    t = yaml.safe_load(Path(track_cfg).read_text())
-    return [f"{t['target_channel']}_labels"]
+def tracking_entries(qc_cfg, track_cfg):
+    """`instance_count`'s label and anchor channels, and track's target_channel.
+
+    None when there is nothing to compare: no `instance_count` block, or no track.yml.
+    """
+    ic = (yaml.safe_load(Path(qc_cfg).read_text()) or {}).get("instance_count")
+    if not isinstance(ic, dict) or not Path(track_cfg).exists():
+        return None
+    target = yaml.safe_load(Path(track_cfg).read_text())["target_channel"]
+    entries = [("instance_count.label", ic.get("label"))]
+    entries += [("instance_count.channels", c) for c in ic.get("channels") or []]
+    return target, entries
 
 
 if __name__ == "__main__":
+    if sys.argv[1:2] in (["-h"], ["--help"]):
+        sys.exit(print(__doc__))
+    if len(sys.argv) != 3:
+        sys.exit(__doc__.split("\n\n")[1])
     raw, cfgs = sys.argv[1], Path(sys.argv[2])
-    checks = [
-        (
-            "qc.yaml",
-            assembled_channels(raw, cfgs / "reconstruct.yml", cfgs / "virtual_stain.yml"),
-        )
-    ]
-    if (cfgs / "qc_track.yaml").exists():
-        checks.append(("qc_track.yaml", tracking_channels(cfgs / "track.yml")))
     bad = 0
-    for name, predicted in checks:
-        print(f"{name}: store will have {predicted}")
-        for owner, ch in qc_filters(cfgs / name):
-            ok = ch in predicted
+
+    predicted = assembled_channels(raw, cfgs / "reconstruct.yml", cfgs / "virtual_stain.yml")
+    print(f"qc.yaml: store will have {predicted}")
+    for owner, ch in qc_filters(cfgs / "qc.yaml"):
+        ok = ch in predicted
+        bad += not ok
+        print(f"   {'ok  ' if ok else 'MISS'} {owner}.channels: {ch!r}")
+
+    tracking = tracking_entries(cfgs / "qc.yaml", cfgs / "track.yml")
+    if tracking:
+        target, entries = tracking
+        print(f"qc.yaml vs track.yml: tracking writes labels/{target}")
+        for key, value in entries:
+            ok = value == target
             bad += not ok
-            print(f"   {'ok  ' if ok else 'MISS'} {owner}.channels: {ch!r}")
+            print(f"   {'ok  ' if ok else 'MISS'} {key}: {value!r}")
     sys.exit(1 if bad else 0)
