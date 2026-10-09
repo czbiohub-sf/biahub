@@ -141,3 +141,9 @@ def test_a_config_needs_at_least_one_model():
 
     with pytest.raises(ValueError):
         SegmentationSettings(models={})
+
+
+@pytest.mark.parametrize("key", ["x", "self"])
+def test_eval_args_cannot_set_the_image_or_self(key):
+    with pytest.raises(ValueError, match=key):
+        _settings(eval_args={key: 0})

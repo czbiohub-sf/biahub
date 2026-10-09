@@ -796,8 +796,9 @@ class PreprocessingFunctions(BaseModel):
     kwargs: dict[str, Any] = {}
 
 
-# Arguments biahub sets itself when calling CellposeModel.eval.
-_BIAHUB_EVAL_ARGS = ("channels", "channel_axis", "z_axis")
+# Arguments biahub sets itself when calling CellposeModel.eval (self and the image x
+# are positional; get_valid_eval_args lists them too).
+_BIAHUB_EVAL_ARGS = ("self", "x", "channels", "channel_axis", "z_axis")
 
 
 class SegmentationModel(BaseModel):
