@@ -137,7 +137,7 @@ ultrack = { git = "https://github.com/ieivanov/ultrack", rev = "3cd1b090307cfb13
 # 2026_08_14_dynatrack); #472 adds create_empty_plate(extra_metadata=...); #479
 # creates a plate's positions in one batch instead of rewriting the well's
 # metadata per position (hours for a ~40k-FOV plate's init).
-iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "41964963348a2785f7339122c295893698c50eee" }
+iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "7bf91f1e7a4d4cf95f9c22cf32eb894cb6d28dbd" }
 
 [tool.hatch.metadata]
 allow-direct-references = true
