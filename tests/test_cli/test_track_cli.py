@@ -549,3 +549,161 @@ def test_track_init_rejects_an_unknown_cellpose_model(
 
     assert result.exit_code != 0
     assert "Unknown cellpose model 'nuclei'" in str(result.exception) + result.output
+
+
+def test_filter_short_siblings_merges_a_one_frame_daughter():
+    """A daughter that lives 1 frame (e.g. a VS hallucination linked as a division) is
+    removed and its sibling continues the parent track, in the tracks and the labels."""
+    from biahub.track import filter_short_siblings
+
+    labels = np.zeros((6, 8, 8), dtype=np.int32)
+    rows = []
+    for t in range(3):  # parent, track 1
+        labels[t, 1:3, 1:3] = 1
+        rows.append((1, t, 2.0, 2.0, -1))
+    for t in range(3, 6):  # long daughter, track 2
+        labels[t, 1:3, 1:3] = 2
+        rows.append((2, t, 2.0, 2.0, 1))
+    labels[3, 5:7, 5:7] = 3  # one-frame daughter, track 3
+    rows.append((3, 3, 6.0, 6.0, 1))
+    tracks = pd.DataFrame(rows, columns=["track_id", "t", "y", "x", "parent_track_id"])
+
+    new_tracks, new_labels = filter_short_siblings(tracks, labels, min_length=2)
+
+    assert set(new_tracks.track_id) == {1}
+    assert (new_tracks.parent_track_id == -1).all()
+    assert not (new_labels == 3).any()
+    assert (new_labels[:, 1:3, 1:3] == 1).all()  # the parent continues through t=5
+
+
+def test_min_sibling_length_is_off_by_default(example_track_settings):
+    _, settings = example_track_settings
+    settings.pop("min_sibling_length", None)
+    assert TrackingSettings(**settings).min_sibling_length is None
+
+
+def test_track_passes_min_sibling_length_to_each_position(
+    tmp_path, example_tracking_plate, monkeypatch
+):
+    import contextlib
+    import types
+
+    submitted = {}
+
+    class Executor:
+        def __init__(self, folder, cluster):
+            pass
+
+        def update_parameters(self, **kwargs):
+            pass
+
+        def batch(self):
+            return contextlib.nullcontext()
+
+        def submit(self, fn, **kwargs):
+            submitted.update(kwargs)
+            return types.SimpleNamespace(job_id="0", wait=lambda: None)
+
+    monkeypatch.setattr("biahub.track.submitit.AutoExecutor", Executor)
+    plate_path, _ = example_tracking_plate
+    config_path = _make_tracking_config(plate_path, tmp_path)
+    config = yaml.safe_load(config_path.read_text())
+    config["min_sibling_length"] = 3
+    config_path.write_text(yaml.safe_dump(config))
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "track",
+            "--cluster",
+            "debug",
+            "-i",
+            str(plate_path / "A" / "1" / "0"),
+            "-o",
+            str(tmp_path / "out.zarr"),
+            "-c",
+            str(config_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert submitted["min_sibling_length"] == 3
+
+
+def _lineage(short_len, long_len=3, parent_len=3):
+    """Parent track 1, daughters 2 (long_len frames) and 3 (short_len frames)."""
+    T = parent_len + max(long_len, short_len)
+    labels = np.zeros((T, 8, 8), dtype=np.int32)
+    rows = []
+    for t in range(parent_len):
+        labels[t, 1:3, 1:3] = 1
+        rows.append((1, t, 2.0, 2.0, -1))
+    for t in range(parent_len, parent_len + long_len):
+        labels[t, 1:3, 1:3] = 2
+        rows.append((2, t, 2.0, 2.0, 1))
+    for t in range(parent_len, parent_len + short_len):
+        labels[t, 5:7, 5:7] = 3
+        rows.append((3, t, 6.0, 6.0, 1))
+    return pd.DataFrame(rows, columns=["track_id", "t", "y", "x", "parent_track_id"]), labels
+
+
+def test_filter_removes_daughters_of_min_length_or_fewer():
+    """Same meaning as ultrack: a daughter of exactly ``min_length`` frames is removed."""
+    from biahub.track import filter_short_siblings
+
+    tracks, labels = _lineage(short_len=3, long_len=5)
+    new_tracks, new_labels = filter_short_siblings(tracks, labels, min_length=3)
+    assert set(new_tracks.track_id) == {1}
+    assert not (new_labels == 3).any()
+
+    tracks, labels = _lineage(short_len=4, long_len=5)
+    new_tracks, _ = filter_short_siblings(tracks, labels, min_length=3)
+    assert set(new_tracks.track_id) == {1, 2, 3}
+
+
+def test_filter_keeps_a_division_when_both_daughters_are_short():
+    from biahub.track import filter_short_siblings
+
+    tracks, labels = _lineage(short_len=2, long_len=2)
+    new_tracks, _ = filter_short_siblings(tracks, labels, min_length=3)
+    assert set(new_tracks.track_id) == {1, 2, 3}
+
+
+def test_filter_leaves_no_temporary_files_and_sorts_rows(tmp_path, monkeypatch):
+    import tempfile
+
+    from biahub.track import filter_short_siblings
+
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setattr(tempfile, "tempdir", None)  # re-read TMPDIR
+    tracks, labels = _lineage(short_len=1, long_len=4)
+
+    new_tracks, _ = filter_short_siblings(tracks, labels, min_length=2)
+
+    assert list(tmp_path.iterdir()) == []
+    assert new_tracks[["track_id", "t"]].equals(
+        new_tracks[["track_id", "t"]].sort_values(["track_id", "t"]).reset_index(drop=True)
+    )
+
+
+def test_track_debug_run_applies_the_sibling_filter(tmp_path, example_tracking_plate):
+    plate_path, _ = example_tracking_plate
+    config_path = _make_tracking_config(plate_path, tmp_path)
+    config = yaml.safe_load(config_path.read_text())
+    config["min_sibling_length"] = 3
+    config_path.write_text(yaml.safe_dump(config))
+    position = str(plate_path / "A" / "1" / "0")
+    out = str(tmp_path / "out.zarr")
+
+    assert (
+        CliRunner()
+        .invoke(cli, ["track", "--init", "-i", position, "-o", out, "-c", str(config_path)])
+        .exit_code
+        == 0
+    )
+    result = CliRunner().invoke(
+        cli, ["track", "--cluster", "debug", "-i", position, "-o", out, "-c", str(config_path)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Sibling filter (min_length=3)" in result.output

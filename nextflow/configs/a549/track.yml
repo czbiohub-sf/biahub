@@ -28,6 +28,16 @@ z_slicing:
   method: all
 
 segmentation_method: cellpose
+
+# Sibling filter (ultrack filter_short_sibling_tracks, same meaning): at a division
+# where exactly one daughter lives 3 frames or fewer and does not divide again, drop
+# that daughter and merge the other into the parent; a division whose two daughters
+# are both that short is kept. Most false divisions in the A549 benchmark against
+# TrackEdit annotations were 1-2-frame "daughters" (virtual-staining hallucinations,
+# a neighbour linked as a daughter). Division F1 rose by ~0.08-0.10 in the benchmark,
+# and from 0.58 to 0.63-0.64 with this config on the annotated 2026_04_28 FOVs.
+# Remove the line to keep every division.
+min_sibling_length: 3
 cellpose_config:
   pretrained_model: cpsam_v2
   diameter: 80

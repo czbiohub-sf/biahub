@@ -30,6 +30,12 @@ blank_frames_path: blank_frames.csv
 # - foreground_contour: derive a foreground mask + contour map (ultrack segments).
 segmentation_method: cellpose
 
+# Optional post-processing (ultrack filter_short_sibling_tracks): at a division where
+# exactly one daughter lives N frames or fewer and does not divide again, drop that
+# daughter and merge the other into the parent; a division whose two daughters are
+# both that short is kept. Removes short false divisions. Off by default.
+# min_sibling_length: 3
+
 # Cellpose model parameters (used only when segmentation_method: cellpose).
 cellpose_config:
   pretrained_model: cpsam_v2  # cellpose 4: cpsam_v2, cpsam, cpdino, cpdino-vitb, or a path
