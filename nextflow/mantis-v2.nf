@@ -22,13 +22,13 @@ nextflow.enable.dsl = 2
 //  all the inits before any of the runs. See the INIT PHASE comment in the
 //  workflow body for why that is possible and what it buys.
 //
-//  Flat-field → deskew → reconstruct → virtual-stain → assemble → track → QC is
-//  the full chain: assemble concatenates the deskew/reconstruct/virtual-stain
-//  channels into one plate, track reads that assembled plate as its single
-//  input, and QC reads the finished stores. Follow the chaining below for the
-//  pattern.
+//  Flat-field → deskew → reconstruct → virtual-stain → assemble → segment → track
+//  → QC is the full chain: assemble concatenates the deskew/reconstruct/virtual-stain
+//  channels into one plate, segment and track each read that assembled plate as
+//  their single input (in parallel), and QC reads the finished stores. Follow the
+//  chaining below for the pattern.
 //
-//  The last three are OPTIONAL and selected by whether their config is given, so
+//  The steps from assemble on are OPTIONAL and selected by whether their config is given, so
 //  a run performs the prefix it asks for: A549 wants assemble + track + QC, a
 //  neuromast run wants assemble + QC and no tracking (issue #306). A skipped step
 //  never renumbers the directories of the ones around it.
@@ -40,6 +40,7 @@ params.deskew_config = null
 params.flat_field_config = null
 params.reconstruct_config = null
 params.virtual_stain_config = null
+params.segment_config = null
 params.track_config = null
 params.concatenate_config = null
 params.max_positions = 0
@@ -57,6 +58,7 @@ include { deskew_init_wf; deskew_run_wf } from './modules/deskew'
 include { reconstruct_init_wf; reconstruct_tf_wf; reconstruct_run_wf } from './modules/reconstruct'
 include { virtual_stain_init_wf; virtual_stain_run_wf } from './modules/virtual_stain'
 include { assemble_init_wf; assemble_run_wf } from './modules/assembly'
+include { segment_init_wf; segment_run_wf } from './modules/segment'
 include { track_init_wf; track_run_wf } from './modules/tracking'
 include { qc_plan_wf; qc_compute_wf; qc_report_wf; qc_report_spec } from './modules/qc'
 include { notify_step; notify_run_start; notify_run_end } from './modules/notify'
@@ -96,6 +98,7 @@ def step_directories(performed) {
         reconstruct   : 'reconstruct',
         virtual_stain : 'virtual-stain',
         assemble      : 'assemble',
+        segment       : 'segment',
         track         : 'track',
     ]
     def layout = [:]
@@ -127,6 +130,7 @@ workflow {
     // among the steps performed, so a neuromast run's assembled store is
     // `4-assemble` where an A549 run also has `5-track` after it.
     def assemble_on = params.concatenate_config as boolean
+    def segment_on  = params.segment_config as boolean
     def track_on    = params.track_config as boolean
     def qc_image_on = params.qc_config as boolean
     def qc_track_on = params.qc_track_config as boolean
@@ -135,6 +139,9 @@ workflow {
     // A step cannot outlive the step whose output it reads. Refuse the
     // combination at launch, naming the config to add or the one to drop, rather
     // than failing hours in with a missing store.
+    if (segment_on && !assemble_on) {
+        error "--segment_config needs --concatenate_config: segmentation reads the assembled plate."
+    }
     if (track_on && !assemble_on) {
         error "--track_config needs --concatenate_config: tracking reads the assembled plate."
     }
@@ -170,6 +177,7 @@ workflow {
     // numbering is derived from. Reconstruction proper is always in it.
     def performed = ['flat_field', 'deskew', 'reconstruct', 'virtual_stain']
     if (assemble_on) performed << 'assemble'
+    if (segment_on)  performed << 'segment'
     if (track_on)    performed << 'track'
     def layout = step_directories(performed)
 
@@ -188,6 +196,7 @@ workflow {
     reconstruct_output   = "${out}/${layout.reconstruct}/${ds}.zarr"
     virtual_stain_output = "${out}/${layout.virtual_stain}/${ds}.zarr"
     assemble_output      = assemble_on ? "${out}/${layout.assemble}/${ds}.zarr" : null
+    segment_output       = segment_on  ? "${out}/${layout.segment}/${ds}.zarr"  : null
     track_output         = track_on    ? "${out}/${layout.track}/${ds}.zarr"    : null
 
     // ========================================================================
@@ -248,6 +257,15 @@ workflow {
         as_init = assemble_init_wf(deskew_output, reconstruct_output, virtual_stain_output,
                                    assemble_output, params.concatenate_config, vs_init.done)
         init_signals << as_init.done
+    }
+
+    if (segment_on) {
+        // Segment reads the ASSEMBLED plate (its virtual-stain channels). Its init
+        // validates the models and channels against that plate and warms the
+        // cellpose weights cache before any GPU worker exists.
+        sg_init = segment_init_wf(assemble_output, segment_output, params.segment_config,
+                                  as_init.done)
+        init_signals << sg_init.done
     }
 
     if (track_on) {
@@ -359,6 +377,14 @@ workflow {
     // stores are no longer needed once assemble is verified. To go back to the
     // parallel wiring, point the first input at reconstruct_output, the second at
     // virtual_stain_output, and gate on virtual_stain_done.
+    // Segmentation also reads the assembled plate, so it runs after assemble and
+    // in parallel with tracking (segment comes before track in the step order).
+    if (segment_on) {
+        segment_done = segment_run_wf(all_positions, assemble_output, segment_output,
+                                      params.segment_config, sg_init.resources,
+                                      assemble_done.done)
+    }
+
     if (track_on) {
         track_done = track_run_wf(all_positions, assemble_output, assemble_output,
                                   track_output, params.track_config,
@@ -426,11 +452,17 @@ workflow {
             .collect { zarr -> new File(zarr).parent }
         def assemble_dir = new File(assemble_output).parent
         cleanup_paths << "${assemble_dir}/slurm_output" << "${assemble_dir}/.iohub-progress"
+        if (segment_on) {
+            // segment workers run with --resume, so iohub leaves progress markers too
+            def segment_dir = new File(segment_output).parent
+            cleanup_paths << "${segment_dir}/slurm_output" << "${segment_dir}/.iohub-progress"
+        }
         if (track_on) cleanup_paths << "${new File(track_output).parent}/slurm_output"
         def cleanup_list = cleanup_targets(cleanup_paths, out)
         cleanup_record = "${out}/nextflow/intermediates_cleaned.txt"
 
         def final_signals = [assemble_done.done]
+        if (segment_on) final_signals << segment_done.done
         if (track_on) final_signals << track_done.done
         if (qc_on)    final_signals << qc_report.done
         final_gate = channel.empty()
@@ -476,6 +508,7 @@ workflow {
         [label: 'virtual staining',     done: virtual_stain_done.done,   output: virtual_stain_output],
     ]
     if (assemble_on) step_events << [label: 'assemble', done: assemble_done.done, output: assemble_output]
+    if (segment_on)  step_events << [label: 'segment',  done: segment_done.done,  output: segment_output]
     if (track_on)    step_events << [label: 'track',    done: track_done.done,    output: track_output]
     if (qc_on)       step_events << [label: 'QC',       done: qc_report.done,     output: qc_report_dir]
     if (cleanup_on)  step_events << [label: 'cleanup intermediates', done: cleanup_run.done, output: cleanup_record]
