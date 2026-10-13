@@ -79,6 +79,9 @@ Start from a template in `templates/` (all load with the current schema; a test 
 so):
 
 - `estimate-transform-beads.yml`: beads registration (production settings, spectral arm on).
+- `estimate-transform-ants.yml`: registration without usable beads (intensity-based, e.g.
+  fluorescence onto virtual staining); its header lists the fields to decide.
+- `estimate-transform-manual.yml`: a hand-picked registration in napari (plain CLI only).
 - `estimate-transform-focus-finding.yml`, `estimate-transform-pcc.yml`: stabilization.
 
 If the project has an old `estimate-registration` / `estimate-stabilization` config,

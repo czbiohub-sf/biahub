@@ -5,8 +5,8 @@
 | Job | Method | Notes |
 |---|---|---|
 | light-sheet -> label-free registration on a beads well | `beads` | the default; graph matching on detected beads, optional spectral arm for large offsets |
-| registration without usable beads, or cross-modal fine-tuning | `ants` | intensity-based; `ants.sobel_filter: true` matches edges (cross-modal pairs) |
-| a single hand-picked registration | `manual` | napari point annotation on one timepoint (`time_indices: <t>`), applied to all |
+| registration without usable beads, or cross-modal fine-tuning | `ants` | intensity-based; `ants.sobel_filter: true` matches edges (cross-modal pairs); `templates/estimate-transform-ants.yml` |
+| a single hand-picked registration | `manual` | napari point annotation on one timepoint (`time_indices: <t>`), applied to all; `templates/estimate-transform-manual.yml` |
 | stabilization of a channel over time (drift) | `phase-cross-corr` | translation only; crop with `center_crop_xy` |
 | stabilization of phase (focus z + stackreg yx) | `focus-finding` | what the A549 projects used (`label-free/2-stabilize`) |
 
