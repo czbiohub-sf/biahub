@@ -683,3 +683,15 @@ def test_classic_pcc_normalization_stays_finite_where_the_spectrum_is_zero(paddi
     fn = phase_cross_corr_padding if padding else phase_cross_corr
     shift, corr = fn(vol, vol, normalization="classic")
     assert np.all(np.isfinite(corr)) and np.all(np.isfinite(np.asarray(shift, dtype=float)))
+
+
+def test_pcc_center_crop_is_clamped_to_the_image():
+    # A crop larger than an axis takes the whole axis; a negative start would wrap around
+    # and keep only the far end.
+    from biahub.registration.methods.pcc import pcc_crop
+    from biahub.settings import PhaseCrossCorrSettings
+
+    _, y, x = pcc_crop(PhaseCrossCorrSettings(center_crop_xy=[150, 150]), (10, 100, 80))
+    assert (y, x) == (slice(0, 100), slice(0, 80))
+    _, y, x = pcc_crop(PhaseCrossCorrSettings(center_crop_xy=[40, 20]), (10, 100, 80))
+    assert (y, x) == (slice(40, 60), slice(20, 60))  # a crop that fits stays centred
