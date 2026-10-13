@@ -15,6 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import click
+import numpy as np
 
 from biahub.cli.parsing import config_filepath, output_filepath
 from biahub.settings import TransformEntry, TransformSettings, load_transform_settings
@@ -114,6 +115,15 @@ def substitute_transforms(
             raise click.UsageError(
                 f"{source}: maps {sub.moving_channels} onto {sub.reference_channel!r}, the "
                 f"base maps {base.moving_channels} onto {base.reference_channel!r}"
+            )
+        # Matrices are in voxels, so they only carry over between the same grids.
+        if None not in (sub.voxel_size, base.voxel_size) and (
+            len(sub.voxel_size) != len(base.voxel_size)
+            or not np.allclose(sub.voxel_size, base.voxel_size)
+        ):
+            raise click.UsageError(
+                f"{source}: estimated on voxel size {sub.voxel_size}, the base on "
+                f"{base.voxel_size}; its matrices would be wrong on the base's grid"
             )
         if per_position is None:
             if sub.positions is not None:

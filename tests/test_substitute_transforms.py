@@ -156,3 +156,17 @@ def test_a_previous_frame_file_cannot_take_or_give_substitutes():
         substitute_transforms(_beads(), [("prev.yml", step_only)])
     # an older file says nothing about its frame: allowed, as before
     substitute_transforms(_beads(), [("manual.yml", _single(2, 50.0))])
+
+
+def test_a_substitute_from_another_voxel_grid_is_refused():
+    # Matrices are in voxels: a run on a differently sampled grid would install a
+    # transform that loads fine and is physically wrong.
+    base = _beads(voxel_size=[1.0, 1.0, 0.174, 0.1494, 0.1494])
+    other_grid = _single(1, 0.0).model_copy(
+        update={"voxel_size": [1.0, 1.0, 0.2, 0.103, 0.103]}
+    )
+    with pytest.raises(click.UsageError, match="voxel size"):
+        substitute_transforms(base, [("x.yml", other_grid)])
+    same_grid = _single(1, 0.0).model_copy(update={"voxel_size": base.voxel_size})
+    substitute_transforms(base, [("x.yml", same_grid)])  # same grid: fine
+    substitute_transforms(base, [("x.yml", _single(1, 0.0))])  # undeclared: not checked
