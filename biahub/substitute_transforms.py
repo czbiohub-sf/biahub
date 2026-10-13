@@ -169,7 +169,7 @@ def substitute_transforms(
 def substitute_transforms_cli(
     config_filepath: Path,
     substitute_filepaths: tuple[str, ...],
-    output_filepath: str,
+    output_filepath: Path,
     positions: tuple[str, ...],
     allow_new: bool,
 ) -> None:

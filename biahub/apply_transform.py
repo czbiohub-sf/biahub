@@ -569,7 +569,7 @@ def apply_transform(
 @resume()
 def apply_transform_cli(
     moving_position_dirpaths: list[Path],
-    reference_position_dirpaths: list[Path] | None,
+    reference_position_dirpaths: list[Path],
     config_filepath: Path,
     output_dirpath: Path,
     time_indices: str,

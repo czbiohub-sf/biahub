@@ -376,7 +376,7 @@ def estimate_transform_step(
 )
 def estimate_transform_cli(
     moving_position_dirpaths: list[Path],
-    reference_position_dirpaths: list[Path] | None,
+    reference_position_dirpaths: list[Path],
     config_filepath: Path,
     output_filepath: Path,
     sbatch_filepath: str | None,

@@ -470,7 +470,7 @@ def convert_settings_file(config_filepaths: list[Path], output_filepath: Path) -
 @click.command("convert-settings")
 @config_filepaths()
 @output_filepath()
-def convert_settings_cli(config_filepaths: list[Path], output_filepath: str) -> None:
+def convert_settings_cli(config_filepaths: list[Path], output_filepath: Path) -> None:
     """Convert a retired registration / stabilization config to the unified one.
 
     estimate-registration / estimate-stabilization -> estimate-transform;
