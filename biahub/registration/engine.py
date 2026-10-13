@@ -1547,8 +1547,18 @@ def init_run(
         T, _C, Z, Y, X = position.data.shape
         mov_voxel_size = tuple(position.scale[-3:])
     with open_ome_zarr(target, mode="r") as position:
+        ref_T = position.data.shape[0]
         ref_shape = position.data.shape[-3:]
         ref_voxel_size = tuple(position.scale[-3:])
+    # Checked before anything is written: a refused run must not clear an earlier one's records.
+    time_indices = resolve_time_indices(settings.time_indices, T)
+    if settings.reference.frame == "cross":
+        beyond = [t for t in time_indices if t >= ref_T]
+        if beyond:
+            raise click.UsageError(
+                f"timepoints {beyond} are past the reference store, which has {ref_T} "
+                f"timepoints ({target})"
+            )
 
     settings = settings.model_copy(deep=True)
     if settings.transform.seed_from_shapes:
@@ -1570,7 +1580,6 @@ def init_run(
     _start_run(output_dir, settings, source, target, resume)
     model_to_yaml(settings, output_dir / ENGINE_SETTINGS_FILENAME)
 
-    time_indices = resolve_time_indices(settings.time_indices, T)
     propagated = settings.transform.seed_from == "previous_timepoint"
     # Bead matching is single-threaded; ANTs' optimizer uses ITK threads.
     _, num_cpus, gb_ram_per_cpu = estimate_resources(

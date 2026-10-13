@@ -241,6 +241,34 @@ def test_resume_with_nothing_to_reuse_starts_a_checked_run(beads_plate, tmp_path
     assert (output.with_suffix("") / "run_manifest.json").exists()
 
 
+def test_a_bad_time_selection_is_refused_before_earlier_records_are_cleared(
+    beads_plate, tmp_path
+):
+    output = tmp_path / "out" / "registration_settings.yml"
+    _run(beads_plate, _write_config(tmp_path), output)
+    records = sorted((output.with_suffix("") / "timepoints").iterdir())
+
+    with pytest.raises(click.UsageError, match="out of range"):
+        _run(beads_plate, _write_config(tmp_path, time_indices=[5]), output)
+    assert sorted((output.with_suffix("") / "timepoints").iterdir()) == records
+
+
+def test_a_reference_with_fewer_timepoints_is_refused_at_init(
+    beads_plate_with_a_blank_timepoint, beads_plate, tmp_path
+):
+    # A cross estimate reads timepoint t of the reference too: a 3-timepoint moving store
+    # against a 2-timepoint reference must not start and fail at t=2.
+    output = tmp_path / "out" / "registration_settings.yml"
+    with pytest.raises(click.UsageError, match="reference.*2 timepoints"):
+        estimate_transform(
+            [beads_plate_with_a_blank_timepoint],
+            _write_config(tmp_path),
+            output,
+            reference_position_dirpaths=[beads_plate],
+            cluster="debug",
+        )
+
+
 def test_resume_refuses_changed_settings(beads_plate, tmp_path):
     output = tmp_path / "out" / "registration_settings.yml"
     _run(beads_plate, _write_config(tmp_path), output)
