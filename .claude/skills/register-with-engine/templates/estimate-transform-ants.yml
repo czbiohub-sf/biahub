@@ -1,17 +1,25 @@
 # biahub estimate-transform -- ANTs (intensity-based) registration, for pairs without usable
 # beads, e.g. fluorescence onto a virtual-staining prediction or phase. Set moving.channel and
 # reference.channel. Fields to decide:
+#   transform.type: similarity -- rotation, translation and one scale (e.g. two cameras of
+#                                different magnification). euclidean is ANTs Rigid (no scale);
+#                                affine can diverge in z on thin stacks (few z slices)
 #   ants.sobel_filter: true   -- match edges, not raw intensity: needed for cross-modal pairs
+#   ants.crop: false          -- set true with a non-identity seed: the seed's pre-warp leaves a
+#                                zero-filled border whose edge Sobel would otherwise match
 #   ants.clip: false          -- its limits assume a phase reference (0-0.5); keep it off for
 #                                virtual staining or fluorescence references
-#   transform.seed            -- ANTs refines from the seed, so it must start close: identity
-#                                when both channels come from the same camera grid; otherwise
-#                                an earlier run's approx_transform (inverse direction)
+#   transform.seed            -- currently only its rotation and scale steer ANTs: ANTs starts by
+#                                aligning the two volumes' intensity centres of mass, which
+#                                replaces the seed's translation
 #   transform.seed_from_shapes: false -- true builds the seed from the store shapes with the
 #                                mantis light-sheet rotation built in; only for mantis data
+#   fallback.repair           -- for a single timepoint, set it to null: there is nothing to
+#                                repair from, and each repair is another full ANTs run
 # The score is a correlation: a correct transform often scores 0.1-0.3, below the bead-tuned
-# fallback.flag thresholds, so `unreliable` here means "check", not "wrong"
-# (references/methods.md).
+# fallback.flag thresholds, so `unreliable` here means "check", not "wrong"; check the result
+# with overlays rather than the score (references/methods.md). Size the job for ANTs: a
+# 66 x 2048 x 2048 pair peaks at 15-20 GB (pass an sbatch file with more memory).
 moving:
   channel: <moving channel>
 reference:
@@ -24,7 +32,7 @@ ants:
   ref_mask_radius: null
   clip: false
 transform:
-  type: affine
+  type: similarity
   seed:
   - - 1.0
     - 0.0
