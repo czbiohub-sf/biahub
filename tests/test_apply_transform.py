@@ -913,3 +913,30 @@ def test_a_time_selection_outside_the_store_is_refused_up_front(
     with pytest.raises(click.UsageError, match=message):
         apply_transform(positions, config, output, time_indices=time_indices, cluster="debug")
     assert not output.exists()
+
+
+def test_copying_from_a_reference_with_fewer_timepoints_is_refused_up_front(
+    two_position_stabilization, tmp_path
+):
+    # The reference's channels are copied at the selected timepoints: a 2-timepoint
+    # reference cannot serve a 3-timepoint apply.
+    positions, config = two_position_stabilization
+    reference = tmp_path / "ref.zarr"
+    with open_ome_zarr(reference, layout="hcs", mode="w", channel_names=["Phase3D"]) as plate:
+        for fov in ("0", "1"):
+            plate.create_position("A", "1", fov)["0"] = np.zeros(
+                (2, 1, 16, 32, 32), dtype=np.float32
+            )
+    output = tmp_path / "out.zarr"
+    with pytest.raises(click.UsageError, match="reference.*2 timepoints"):
+        apply_transform(
+            positions,
+            config,
+            output,
+            reference_position_dirpaths=[
+                reference / "A" / "1" / "0",
+                reference / "A" / "1" / "1",
+            ],
+            cluster="debug",
+        )
+    assert not output.exists()

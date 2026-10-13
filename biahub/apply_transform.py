@@ -315,6 +315,7 @@ def apply_transform(
 
     if reference_position_dirpaths:
         with open_ome_zarr(reference_position_dirpaths[0], mode="r") as reference:
+            reference_T = reference.data.shape[0]
             reference_shape = tuple(reference.data.shape[-3:])
             reference_channel_names = list(reference.channel_names)
             reference_voxel_size = list(reference.scale)
@@ -341,6 +342,12 @@ def apply_transform(
                 click.echo(f"transforming {replaced} replaces the reference store's copy")
         # A reference channel that is also transformed is written once, by its transform job.
         copied = [c for c in reference_channel_names if c not in transformed]
+        beyond = [t for t in time_indices if t >= reference_T]
+        if copied and beyond:
+            raise click.UsageError(
+                f"timepoints {beyond} are past the reference store, which has {reference_T} "
+                f"timepoints, so its channels {copied} cannot be copied there"
+            )
         output_channel_names = reference_channel_names + [
             c for c in transformed if c not in reference_channel_names
         ]
