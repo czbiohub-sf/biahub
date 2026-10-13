@@ -897,3 +897,19 @@ def test_apply_transform_sizes_memory_from_the_larger_grid(
         init_only=True,
     )
     assert shapes[-1][-3:] == (16, 64, 64)
+
+
+@pytest.mark.parametrize(
+    "time_indices, message",
+    [([3], r"out of range.*3 timepoints"), ([-1], "out of range"), ([], "no timepoints")],
+)
+def test_a_time_selection_outside_the_store_is_refused_up_front(
+    two_position_stabilization, tmp_path, time_indices, message
+):
+    # The store has 3 timepoints: say so before allocating the output, not with an
+    # IndexError deep in a job.
+    positions, config = two_position_stabilization
+    output = tmp_path / "out.zarr"
+    with pytest.raises(click.UsageError, match=message):
+        apply_transform(positions, config, output, time_indices=time_indices, cluster="debug")
+    assert not output.exists()

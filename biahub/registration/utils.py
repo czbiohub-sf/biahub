@@ -553,9 +553,20 @@ def match_shape(
 
 
 def resolve_time_indices(time_indices, n_t: int) -> list[int]:
-    """Return the timepoints a `time_indices` setting names: 'all', one index, or a list."""
+    """Return the timepoints a `time_indices` setting names: 'all', one index, or a list.
+
+    Refuses a selection with no timepoints or one outside the store's `n_t`, so it fails
+    here rather than as an index error inside a job.
+    """
     if time_indices == "all":
         return list(range(n_t))
-    if isinstance(time_indices, int):
-        return [time_indices]
-    return list(time_indices)
+    indices = [time_indices] if isinstance(time_indices, int) else list(time_indices)
+    if not indices:
+        raise click.UsageError("time_indices selects no timepoints")
+    outside = sorted({t for t in indices if not 0 <= t < n_t})
+    if outside:
+        raise click.UsageError(
+            f"time_indices {outside} out of range: the store has {n_t} timepoints "
+            f"(0-{n_t - 1})"
+        )
+    return indices
