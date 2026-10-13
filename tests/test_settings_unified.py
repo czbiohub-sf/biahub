@@ -221,3 +221,16 @@ def test_the_unified_pcc_block_refuses_fields_the_engine_does_not_read():
     with pytest.raises(ValueError, match=r"\[start, stop\]"):
         pcc(X_slice=[[0, 10], [5, 15]])  # legacy per-position lists
     assert pcc(X_slice=[0, 10], center_crop_xy=[8, 8]).phase_cross_corr.X_slice == [0, 10]
+
+
+@pytest.mark.parametrize(
+    "field, value", [("sigma", 0.0), ("max_iter", 0), ("rel_cut", -0.1), ("rel_cut", 1.5)]
+)
+def test_spectral_matcher_settings_refuse_values_that_break_it(field, value):
+    # sigma=0 divides by zero; max_iter=0 skips the power iteration; rel_cut is a fraction.
+    from pydantic import ValidationError
+
+    from biahub.settings import SpectralMatchSettings
+
+    with pytest.raises(ValidationError):
+        SpectralMatchSettings(**{field: value})

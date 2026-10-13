@@ -205,9 +205,9 @@ class SpectralMatchSettings(MyBaseModel):
     fraction of the top eigenvector entry (the precision/recall dial).
     """
 
-    sigma: float = 3.0
-    rel_cut: float = 0.5
-    max_iter: int = 60
+    sigma: float = Field(3.0, gt=0)
+    rel_cut: float = Field(0.5, ge=0, le=1)
+    max_iter: int = Field(60, ge=1)
 
 
 class SeedCorrectionSettings(MyBaseModel):
