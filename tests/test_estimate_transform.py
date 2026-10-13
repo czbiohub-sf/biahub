@@ -1,5 +1,7 @@
 import json
 
+import click
+
 import numpy as np
 import pytest
 
@@ -155,15 +157,17 @@ def test_estimate_transform_single_timepoint_writes_registration_settings(
 
 def test_estimate_transform_resume_keeps_existing_records(beads_plate, tmp_path):
     output = tmp_path / "out" / "registration_settings.yml"
+    config = _write_config(tmp_path)
+    _run(beads_plate, config, output)  # the run being resumed, with its manifest
     planted = np.eye(4)
     planted[:3, 3] = [7.0, 7.0, 7.0]
     timepoints = output.with_suffix("") / "timepoints"
-    timepoints.mkdir(parents=True)
     (timepoints / "0.json").write_text(
         json.dumps({"t": 0, "matrix": planted.tolist(), "score": 0.9, "error": None})
     )
+    (timepoints / "1.json").unlink()
 
-    _run(beads_plate, _write_config(tmp_path), output, resume=True)
+    _run(beads_plate, config, output, resume=True)
 
     inverse = _inverse_translations(output)
     # t=0 came from the planted record (forward +7 -> inverse -7), t=1 was estimated.
@@ -212,6 +216,30 @@ def test_a_failed_job_is_never_filled_from_a_record_on_disk(tmp_path):
 
     resumed = _load_series(tmp_path, [0, 1], "affine", records=fresh, resumed=[1])
     assert resumed.scores[1] == 0.9 and 1 in resumed.transforms
+
+
+def test_resume_refuses_records_it_cannot_check(beads_plate, tmp_path):
+    # Records without the manifest of the run that wrote them could come from any settings
+    # or inputs: resuming would mix them in unchecked.
+    output = tmp_path / "out" / "registration_settings.yml"
+    timepoints = output.with_suffix("") / "timepoints"
+    timepoints.mkdir(parents=True)
+    (timepoints / "0.json").write_text(
+        json.dumps({"t": 0, "matrix": np.eye(4).tolist(), "score": 0.9, "error": None})
+    )
+
+    with pytest.raises(click.UsageError, match="no run_manifest.json"):
+        _run(beads_plate, _write_config(tmp_path), output, resume=True)
+
+
+def test_resume_with_nothing_to_reuse_starts_a_checked_run(beads_plate, tmp_path):
+    # Nothing to reuse, so nothing to refuse: the run starts fresh and records its manifest,
+    # so a later resume of it can be checked.
+    output = tmp_path / "out" / "registration_settings.yml"
+
+    _run(beads_plate, _write_config(tmp_path), output, resume=True)
+
+    assert (output.with_suffix("") / "run_manifest.json").exists()
 
 
 def test_resume_refuses_changed_settings(beads_plate, tmp_path):

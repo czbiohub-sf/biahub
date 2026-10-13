@@ -1141,25 +1141,28 @@ def _start_run(
 
     Without `resume`, the record dirs of any earlier run are removed so none of their
     files can stand in for a job of this run. With `resume`, the settings and inputs must
-    match the manifest of the run being resumed.
+    match the manifest of the run being resumed; records with no manifest to check them
+    against are refused, and with no records at all the run simply starts fresh.
     """
     manifest_path = output_dir / RUN_MANIFEST_FILENAME
     fingerprint = _run_fingerprint(settings, source, target)
-    if resume:
-        if not manifest_path.exists():
-            click.echo(
-                f"resume: no {RUN_MANIFEST_FILENAME} in {output_dir}; cannot verify the "
-                "earlier run used the same settings and inputs"
+    if resume and manifest_path.exists():
+        previous = json.loads(manifest_path.read_text())
+        changed = sorted(k for k in fingerprint if previous.get(k) != fingerprint[k])
+        if changed:
+            raise click.UsageError(
+                f"--resume: {', '.join(changed)} changed since the run in {output_dir}; "
+                "rerun without --resume"
             )
-        else:
-            previous = json.loads(manifest_path.read_text())
-            changed = sorted(k for k in fingerprint if previous.get(k) != fingerprint[k])
-            if changed:
-                raise click.UsageError(
-                    f"--resume: {', '.join(changed)} changed since the run in {output_dir}; "
-                    "rerun without --resume"
-                )
         return
+    if resume and any(
+        (output_dir / name).is_dir() and any((output_dir / name).iterdir())
+        for name in ("timepoints", "repairs", "sweeps")
+    ):
+        raise click.UsageError(
+            f"--resume: no {RUN_MANIFEST_FILENAME} in {output_dir}, so its records cannot be "
+            "checked against these settings and inputs; rerun without --resume"
+        )
     for name in ("timepoints", "repairs", "sweeps"):
         shutil.rmtree(output_dir / name, ignore_errors=True)
     _write_json(manifest_path, fingerprint, indent=2)
