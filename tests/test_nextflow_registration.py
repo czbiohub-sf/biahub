@@ -1,4 +1,4 @@
-"""nextflow/registration.nf end to end, local executor (skipped where Nextflow is absent)."""
+"""nextflow/registration_wf.nf end to end, local executor (skipped where Nextflow is absent)."""
 
 import json
 import os
@@ -52,7 +52,7 @@ def _env(**extra):
 def _nextflow(tmp_path, *params, env=None):
     env = env or _env()
     result = subprocess.run(
-        ["nextflow", "run", str(NEXTFLOW_DIR / "registration.nf")]
+        ["nextflow", "run", str(NEXTFLOW_DIR / "registration_wf.nf")]
         + ["-c", str(NEXTFLOW_DIR / "nextflow.config"), "-work-dir", str(tmp_path / "work")]
         + [str(p) for p in params],
         cwd=tmp_path,
@@ -238,7 +238,7 @@ def test_registration_nf_stabilizes_each_position_and_refuses_manual(tmp_path):
     manual = _write_config(tmp_path, method="manual", time_indices=0)
     env = _env()
     result = subprocess.run(
-        ["nextflow", "run", str(NEXTFLOW_DIR / "registration.nf")]
+        ["nextflow", "run", str(NEXTFLOW_DIR / "registration_wf.nf")]
         + ["-c", str(NEXTFLOW_DIR / "nextflow.config"), "-work-dir", str(tmp_path / "work2")]
         + ["--moving", str(store), "--reference", str(store), "--estimate_config", str(manual)]
         + ["--estimate_positions", "A/1/0", "--output", str(tmp_path / "manual")],
@@ -267,7 +267,7 @@ def test_registration_nf_resolves_relative_inputs_and_wants_an_absolute_output(t
     assert plate.exists()
 
     result = subprocess.run(
-        ["nextflow", "run", str(NEXTFLOW_DIR / "registration.nf")]
+        ["nextflow", "run", str(NEXTFLOW_DIR / "registration_wf.nf")]
         + ["-c", str(NEXTFLOW_DIR / "nextflow.config"), "-work-dir", str(tmp_path / "w2")]
         + ["--moving", "data.zarr", "--estimate_config", "estimate.yml"]
         + ["--estimate_positions", "A/1/0", "--output", "relative_run"],

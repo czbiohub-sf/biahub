@@ -99,8 +99,9 @@ RUN_FILENAME = "run.json"
 
 STEPS = ("estimate", "flag", "repair", "sweep", "finalize")
 
-# A --step whose jobs raised exits with this after recording them (registration.nf
-# retries it, then lets the run finish with those timepoints as stand-ins).
+# A --step whose jobs raised exits with this after recording them
+# (nextflow/modules/registration.nf retries it, then lets the run finish with those
+# timepoints as stand-ins).
 JOBS_FAILED_EXIT_CODE = 3
 
 
@@ -442,7 +443,7 @@ def estimate_transform_cli(
         )
         if result and result.get("failed"):
             # Recorded (the run can carry on), but not a success: a distinct exit code
-            # lets a workflow retry it and keep it out of its cache (registration.nf).
+            # lets a workflow retry it and keep it out of its cache (nextflow/modules/registration.nf).
             click.echo(f"{step}: jobs failed at {result['failed']}", err=True)
             raise SystemExit(JOBS_FAILED_EXIT_CODE)
         return

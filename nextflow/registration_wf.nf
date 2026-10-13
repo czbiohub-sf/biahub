@@ -10,18 +10,18 @@
 //   cd <BIAHUB>/nextflow
 //
 //   # registration: estimate on the beads well, apply to every position
-//   nextflow run registration.nf -profile slurm \
+//   nextflow run registration_wf.nf -profile slurm \
 //       --moving <deskewed.zarr> --reference <reconstructed.zarr> \
 //       --estimate_config estimate-transform-beads.yml --estimate_positions 'C/1/000000' \
 //       --apply --output <dir> -resume
 //
 //   # stabilization: one transform list per position, applied to the same positions
-//   nextflow run registration.nf -profile slurm \
+//   nextflow run registration_wf.nf -profile slurm \
 //       --moving <data.zarr> --estimate_config estimate-transform-focus-finding.yml \
 //       --estimate_positions '*/*/*' --apply --output <dir> -resume
 //
 //   # apply an existing transforms file (e.g. after substitute-transforms)
-//   nextflow run registration.nf -profile slurm \
+//   nextflow run registration_wf.nf -profile slurm \
 //       --moving <deskewed.zarr> --reference <reconstructed.zarr> \
 //       --transforms final.yml --output <dir> -resume
 //

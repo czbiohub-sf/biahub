@@ -4,7 +4,7 @@ description: >-
   Estimate and apply the light-sheet -> label-free registration (or the stabilization)
   of a mantis dataset with biahub's registration engine (`biahub estimate-transform`
   then `biahub apply-transform`) on the Bruno HPC cluster, through the Nextflow workflow
-  `nextflow/registration.nf` (or the plain CLI for quick or interactive runs). Finds the
+  `nextflow/registration_wf.nf` (or the plain CLI for quick or interactive runs). Finds the
   deskewed light-sheet and reconstructed phase stores, identifies the beads well, builds
   the config from a template, scaffolds a run script, launches it in tmux, monitors it,
   reads the report (scores, flagged and unreliable timepoints), compares against a
@@ -30,7 +30,7 @@ method -- for ants, pick one FOV with good structure); several give one list eac
 
 **Two ways to run it** (same code, same results):
 
-- `templates/run_registration_nf.sh` -> `nextflow/registration.nf` (default for production):
+- `templates/run_registration_nf.sh` -> `nextflow/registration_wf.nf` (default for production):
   Nextflow fans out one task per position x timepoint, retries preempted / timed-out /
   OOM tasks, sizes resources from the plan, and `-resume`s; it can apply in the same run.
 - `templates/run_estimate_transform.sh` / `run_apply_transform.sh` -> the plain CLI, which

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Estimate a registration (or stabilization) and apply it with biahub's Nextflow
-# workflow (nextflow/registration.nf): one task per position x timepoint, then
+# workflow (nextflow/registration_wf.nf): one task per position x timepoint, then
 # flagging, repair, the transforms file, and one apply task per position. Nextflow
 # owns the fan-out, retries (preemption, time limit, memory) and -resume.
 #
@@ -64,7 +64,7 @@ fi
 [[ "${CROP_TO_OVERLAP}" == true ]] && args+=(--crop_to_overlap)
 [[ -n "${CHANNELS}" ]] && args+=(--channels "${CHANNELS}")
 
-nextflow run "${BIAHUB}/nextflow/registration.nf" \
+nextflow run "${BIAHUB}/nextflow/registration_wf.nf" \
     -c "${BIAHUB}/nextflow/nextflow.config" \
     -profile slurm \
     "${args[@]}" \
