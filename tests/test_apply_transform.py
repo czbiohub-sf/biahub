@@ -700,6 +700,34 @@ def test_a_retried_position_with_resume_skips_finished_work(
     apply_transform(positions[:1], config, output, cluster="debug", resume=True)
 
 
+def test_resume_redoes_the_work_when_the_input_plate_changed(
+    two_position_stabilization, tmp_path, monkeypatch
+):
+    # A same-shaped plate at another path is other data: its units are not finished.
+    import functools
+    import shutil
+
+    import biahub.apply_transform as module
+
+    positions, config = two_position_stabilization
+    other = tmp_path / "other.zarr"
+    shutil.copytree(positions[0].parents[2], other)
+    output = tmp_path / "out.zarr"
+    apply_transform(positions[:1], config, output, cluster="debug")
+
+    calls = []
+    real = module._apply_transform_czyx
+
+    @functools.wraps(real)  # the caller reads its signature
+    def counting(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(module, "_apply_transform_czyx", counting)
+    apply_transform([other / "A" / "1" / "0"], config, output, cluster="debug", resume=True)
+    assert calls, "a unit written from in.zarr was kept for other.zarr"
+
+
 def test_resources_are_sized_from_the_timepoints_written(
     two_position_stabilization, tmp_path, monkeypatch
 ):

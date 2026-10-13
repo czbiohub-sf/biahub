@@ -444,23 +444,24 @@ def apply_transform(
     executor.update_parameters(**slurm_args)
 
     output_time_indices = list(range(len(time_indices)))
-    # The units a resumed attempt may skip must come from this same apply.
-    resume_token = hashlib.sha256(
-        json.dumps(
-            {
-                "transforms": settings.model_dump(mode="json"),
-                "time_indices": time_indices,
-                "channels": output_channel_names,
-                "keep_overhang": keep_overhang,
-                "interpolation": interpolation,
-            },
-            sort_keys=True,
-        ).encode()
-    ).hexdigest()[:16]
+    # The units a resumed attempt may skip must come from this same apply, of the same inputs.
+    apply_options = {
+        "transforms": settings.model_dump(mode="json"),
+        "time_indices": time_indices,
+        "channels": output_channel_names,
+        "keep_overhang": keep_overhang,
+        "interpolation": interpolation,
+    }
     jobs, labels = [], []
     with submitit.helpers.clean_env(), executor.batch():
         for key, moving_path in zip(position_keys, moving_position_dirpaths, strict=True):
             output_position_path = output_dirpath / Path(*moving_path.parts[-3:])
+            inputs = {"moving": str(Path(moving_path).resolve())}
+            if reference_position_dirpaths:
+                inputs["reference"] = str(Path(reference_for[key]).resolve())
+            resume_token = hashlib.sha256(
+                json.dumps({**apply_options, **inputs}, sort_keys=True).encode()
+            ).hexdigest()[:16]
             # Jobs look a matrix up by input timepoint: a T-long list, filled for the selected t.
             matrices_for_jobs = [None] * T
             for t, matrix in inverses[key].items():
