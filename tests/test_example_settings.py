@@ -267,3 +267,16 @@ def test_example_stitch_settings(example_stitch_settings):
     for value in validated_settings.total_translation.values():
         assert len(value) == 3
         assert value[0] == 0.0
+
+
+def test_nextflow_a549_track_config_validates():
+    """The mantis-v2 A549 track config must parse against the current schema."""
+    import yaml
+
+    from biahub.settings import TrackingSettings
+
+    with open("nextflow/configs/a549/track.yml") as f:
+        settings = TrackingSettings(**yaml.safe_load(f))
+    assert settings.z_slicing.method == "focus"
+    assert settings.z_slicing.window_size == 60
+    assert settings.z_slicing.focus_channel in settings.input_images[0].channels

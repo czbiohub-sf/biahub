@@ -17,15 +17,18 @@ output_mode: "2D"
 fov: "*/*/*"
 target_channel: nuclei_prediction
 
-# Use every Z plane — no focus detection, no window. The other ZSlicing fields
-# (window_size / frac_below / frac_above / focus_channel) apply only to
-# method: focus and are omitted here.
-#
-# NOTE: input_images projects Z with np.mean, so this averages ALL planes rather
-# than an in-focus window — more out-of-focus signal in what cellpose segments.
-# Switch to `method: focus` with a window_size if that hurts segmentation.
+# Segment a window of 60 planes around the in-focus plane rather than all planes:
+# focus is found on the phase channel (median over timepoints), and the window is
+# split 1/3 below / 2/3 above it (frac_below default). input_images below mean-
+# projects the virtual-stain nuclei over that window. Against TrackEdit annotations
+# (with min_sibling_length 3): division F1 0.63 -> 0.68 on 2026_04_28, with fewer
+# false divisions and fragmented tracks on 2026_04_21 at the same mitotic-cell
+# detection as all planes (0.95). A narrower 40-plane window lost mitotic cells
+# that drift in Z (0.89).
 z_slicing:
-  method: all
+  method: focus
+  window_size: 60
+  focus_channel: Phase3D
 
 segmentation_method: cellpose
 
@@ -56,6 +59,8 @@ input_images:
           kwargs:
             axis: 1
           per_timepoint: false
+      # Loaded only for focus finding (z_slicing.focus_channel); not processed.
+      Phase3D: []
 
 tracking_config:
   segmentation_config:
