@@ -472,44 +472,10 @@ PreprocessBlocks = list[PreprocessBlock]
 class AntsRegistrationSettings(MyBaseModel):
     """Settings for the ANTs registration backend.
 
-    Field names and defaults mirror the keyword arguments of
-    ``biahub.registration.methods.ants.preprocess_zyx``, which is what consumes them.
-
-    Attributes
-    ----------
-    sobel_filter : bool
-        Apply a Sobel filter (3D gradient magnitude) to both volumes before
-        registering, so ANTs matches structural edges rather than raw
-        intensity. Needed for cross-modality pairs such as fluorescence
-        against a virtual-staining prediction.
-    crop : bool
-        Crop both volumes to their overlapping region with the LIR algorithm
-        before registering.
-    ref_mask_radius : float | None
-        Radius of a circular mask applied to the reference channel, as a
-        fraction of image width in ``(0, 1]``. ``None`` applies no mask.
-    clip : bool
-        Clip both volumes to hardcoded intensity limits. Those limits assume a
-        **phase** reference (``np.clip(ref, 0, 0.5)``); leave this off for any
-        other reference, e.g. a virtual-staining prediction whose values range
-        well above 0.5.
+    The transform family comes from `transform.type`; preparation (Sobel, clipping,
+    masks) is the config's `preprocess` blocks. ANTs' search (iterations, shrink factors,
+    smoothing) uses `biahub.registration.methods.ants.DEFAULT_ANTS_KWARGS`.
     """
-
-    sobel_filter: bool = False
-    crop: bool = False
-    ref_mask_radius: float | None = None
-    clip: bool = False
-
-    @field_validator("ref_mask_radius")
-    @classmethod
-    def check_ref_mask_radius(cls, v):
-        # preprocess_zyx raises on this too, but only after the data is
-        # loaded -- catching it at config-parse time is much cheaper.
-        if v is not None and not (0 < v <= 1):
-            raise ValueError(
-                "ref_mask_radius must be given as a fraction of image width, i.e. (0, 1]."
-            )
-        return v
 
 
 class ManualSettings(MyBaseModel):

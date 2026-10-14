@@ -137,9 +137,9 @@ def test_sweep_trials_revalidate_so_dependent_defaults_follow():
             "no setting 'cost_treshold'",
         ),
         (
-            [{"ants.sobel_filter": [True]}],
+            [{"phase_cross_corr.normalization": ["classic"]}],
             "would be ignored",
-        ),  # beads method: ants block unused
+        ),  # beads method: phase_cross_corr block unused
         ([{"reference.frame": ["first"]}], "would be ignored"),
         ([{"score.metric": ["correlation"]}], "would be ignored"),
         ([{"transform.seed_from": ["previous_timepoint"]}], "would be ignored"),

@@ -4,11 +4,12 @@
 #   transform.type: similarity -- rotation, translation and one scale (e.g. two cameras of
 #                                different magnification). euclidean is ANTs Rigid (no scale);
 #                                affine can diverge in z on thin stacks (few z slices)
-#   ants.sobel_filter: true   -- match edges, not raw intensity: needed for cross-modal pairs
-#   ants.crop: false          -- set true with a non-identity seed: the seed's pre-warp leaves a
-#                                zero-filled border whose edge Sobel would otherwise match
-#   ants.clip: false          -- its limits assume a phase reference (0-0.5); keep it off for
-#                                virtual staining or fluorescence references
+#   preprocess                -- what is done to the volumes before ANTs (empty: raw):
+#                                clip_percentiles (outliers), sobel (match edges, not raw
+#                                intensity: needed for cross-modal pairs), mask_circle /
+#                                mask_box (compare only inside; e.g. a bright well edge)
+#   score.preprocess: sobel   -- the score compares edges too; score.report adds metrics
+#                                written next to it (raw pair), e.g. mutual_information
 #   transform.seed            -- ANTs refines from the seed, so it decides which solution ANTs
 #                                finds: identity when both channels share a camera grid, else
 #                                an estimate of the offset and scale (inverse direction)
@@ -24,12 +25,27 @@ moving:
 reference:
   frame: cross
   channel: <reference channel>
+preprocess:
+- clip_percentiles:
+    target:
+    - moving
+    - reference
+    low: 1.0
+    high: 99.5
+- sobel:
+    target:
+    - moving
+    - reference
 method: ants
-ants:
-  sobel_filter: true
-  crop: false
-  ref_mask_radius: null
-  clip: false
+ants: {}
+score:
+  preprocess:
+  - sobel:
+      target:
+      - moving
+      - reference
+  report:
+  - mutual_information
 transform:
   type: similarity
   seed:

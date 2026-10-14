@@ -291,3 +291,26 @@ def test_a_converted_ants_config_keeps_scoring_the_way_it_did(sobel):
     )
     converted, _notes = convert_settings(legacy)
     assert [b.kind for b in converted.score.preprocess] == (["sobel"] if sobel else [])
+
+
+def test_a_converted_ants_config_gets_its_preparation_as_blocks():
+    legacy = EstimateRegistrationSettings(
+        source_channel_name="GFP",
+        target_channel_name="Phase3D",
+        estimation_method="ants",
+        ants_registration_settings={
+            "sobel_filter": True,
+            "clip": True,
+            "ref_mask_radius": 0.9,
+            "crop": True,
+        },
+    )
+    converted, notes = convert_settings(legacy)
+    assert [type(b).__name__ for b in converted.preprocess] == [
+        "ClipPercentiles",
+        "Sobel",
+        "MaskCircle",
+    ]
+    assert converted.preprocess[2].target == ["reference"]
+    assert converted.preprocess[2].radius == 0.9
+    assert any("clip" in n for n in notes) and any("crop dropped" in n for n in notes)

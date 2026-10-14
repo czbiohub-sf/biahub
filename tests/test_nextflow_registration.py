@@ -128,7 +128,8 @@ CASES = {
         lambda tmp: _write_config(
             tmp,
             method="ants",
-            ants=AntsRegistrationSettings(sobel_filter=True),
+            preprocess=[{"sobel": {}}],
+            score={"preprocess": [{"sobel": {}}]},
             transform_type="similarity",
         ),
         True,
