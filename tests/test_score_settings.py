@@ -83,3 +83,10 @@ def test_the_methods_blocks_do_not_change_the_score():
     plain = _score_fn(_settings("ants"))
     method_blocks = _score_fn(_settings("ants", preprocess=[{"sobel": {}}]))
     assert method_blocks(transform, mov, ref) == plain(transform, mov, ref)
+
+
+def test_report_metrics_default_to_none_and_bead_metrics_need_beads():
+    assert _settings("ants").score.report == []
+    _settings("beads", score={"report": ["overlap", "mutual_information"]})
+    with pytest.raises(ValidationError, match="bead"):
+        _settings("ants", score={"report": ["overlap"]})

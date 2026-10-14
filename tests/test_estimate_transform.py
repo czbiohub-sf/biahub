@@ -791,3 +791,95 @@ def test_image_blocks_run_before_the_method_end_to_end(beads_plate, tmp_path):
     assert [e.matrix for e in load_transform_settings(with_blocks).transforms] == [
         e.matrix for e in load_transform_settings(plain).transforms
     ]
+
+
+def test_every_own_transform_reports_raw_metrics_next_to_its_score(
+    beads_plate_with_a_blank_timepoint, tmp_path
+):
+    # Report metrics are computed on the raw warped pair, whatever the score's own blocks:
+    # a fixed yardstick across runs. A stand-in has none.
+    from biahub.core.transform import Transform
+    from biahub.registration.metrics import correlation_score, normalized_mutual_information
+
+    plate = beads_plate_with_a_blank_timepoint
+    config = _write_config(
+        tmp_path,
+        score={
+            "metric": "correlation",
+            "preprocess": [{"sobel": {}}],
+            "report": ["correlation", "mutual_information"],
+        },
+    )
+    output = tmp_path / "out" / "transforms.yml"
+    _run(plate, config, output)
+
+    with open_ome_zarr(plate) as position:
+        data = np.asarray(position.data)
+        gfp, phase = (
+            position.channel_names.index("GFP"),
+            position.channel_names.index("Phase3D"),
+        )
+    entries = load_transform_settings(output).transforms
+    for entry in entries[:2]:
+        transform = Transform(np.asarray(entry.matrix, dtype=float))
+        mov, ref = data[entry.t, gfp], data[entry.t, phase]
+        assert entry.report == {
+            "correlation": correlation_score(transform, mov, ref),
+            "mutual_information": normalized_mutual_information(transform, mov, ref),
+        }
+        assert entry.report["correlation"] != entry.score  # the score compares Sobel edges
+    assert entries[2].filled_from is not None and entries[2].report is None
+
+
+def test_a_repaired_timepoint_reports_the_repairs_transform(
+    beads_plate, tmp_path, monkeypatch
+):
+    # The report follows the transform that wins: a repair job records the metrics of its
+    # own transform, and folding it in replaces the estimate's.
+    import biahub.registration.engine as engine
+
+    from biahub.core.transform import Transform
+    from biahub.registration.metrics import correlation_score
+    from biahub.utils.config import yaml_to_model
+
+    config = _write_config(tmp_path, score={"report": ["correlation"]})
+    run = tmp_path / "run"
+    engine.init_run(
+        beads_plate, beads_plate, yaml_to_model(config, EstimateTransformSettings), run
+    )
+    settings_path = run / "estimate_transform_settings.yml"
+    for t in (0, 1):
+        engine._estimate_timepoint_job(
+            beads_plate, beads_plate, settings_path, t, run / "timepoints" / f"{t}.json"
+        )
+    repaired = Transform.from_translation([-1.0, 3.0, -4.0])  # 1 voxel off the estimate
+
+    def accepted_repair(t, *args, **kwargs):
+        return engine.PassResult(transform=repaired, score=2.0, accepted=True, source="t-1")
+
+    monkeypatch.setattr(engine, "repair_timepoint", accepted_repair)
+    record = engine._repair_timepoint_job(
+        beads_plate,
+        beads_plate,
+        settings_path,
+        1,
+        [0, 1],
+        [1],
+        run / "timepoints",
+        run / "repairs" / "1.json",
+    )
+    with open_ome_zarr(beads_plate) as position:
+        data = np.asarray(position.data)
+        gfp, phase = (
+            position.channel_names.index("GFP"),
+            position.channel_names.index("Phase3D"),
+        )
+    assert record["report"] == {
+        "correlation": correlation_score(repaired, data[1, gfp], data[1, phase])
+    }
+
+    series = engine._load_series(run / "timepoints", [0, 1], "euclidean", resumed=[0, 1])
+    estimate_report = series.reports[1]
+    outcome = engine._load_pass(record, "euclidean", fallback=series.transforms[1])
+    engine._accept(series, 1, outcome.transform, outcome.score, outcome.source, outcome.report)
+    assert series.reports[1] == record["report"] != estimate_report

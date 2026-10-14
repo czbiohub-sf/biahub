@@ -1088,6 +1088,9 @@ class ScoreSettings(MyBaseModel):
 
     metric: ScoreMetric | None = None
     preprocess: PreprocessBlocks = []
+    # Also computed for every transform and written next to its score, on the raw warped
+    # pair (no score blocks): a fixed yardstick across runs. Never used for decisions.
+    report: list[ScoreMetric] = []
 
     @field_validator("preprocess")
     @classmethod
@@ -1176,6 +1179,15 @@ class EstimateTransformSettings(MyBaseModel):
             raise ValueError(
                 f"score preprocess needs an intensity metric ({sorted(INTENSITY_METRICS)}); "
                 f"{metric!r} detects beads on the raw volumes"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def check_bead_report_metrics_have_beads(self) -> "EstimateTransformSettings":
+        bead_metrics = [m for m in self.score.report if m not in INTENSITY_METRICS]
+        if bead_metrics and self.method != "beads":
+            raise ValueError(
+                f"report metrics {bead_metrics} detect beads: they need method beads"
             )
         return self
 
@@ -1322,6 +1334,8 @@ class TransformEntry(MyBaseModel):
     t: NonNegativeInt | None = None
     matrix: list
     score: float | None = None
+    # score.report metrics for this transform (raw warped pair); None for a stand-in.
+    report: dict[str, float] | None = None
     # How a fallback pass reached this matrix: the winning repair candidate (plus any
     # polish rounds, "consensus_full+polish1") or "sweep:<trial>".
     repaired_from: str | None = None

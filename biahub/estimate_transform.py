@@ -82,6 +82,7 @@ def transform_entries(
                 estimated_at=t if len(time_indices) == 1 else None,
                 matrix=transform.to_list(),
                 score=float(score) if finite else None,
+                report=result.reports.get(t) if filled_from is None else None,
                 repaired_from=result.provenance.get(t),
                 status="unreliable" if unreliable else "accepted",
                 filled_from=filled_from,

@@ -336,6 +336,7 @@ class PassResult:
     failures: dict[str, str] = field(default_factory=dict)  # candidate -> "Type: message"
     polish_rounds: int = 0  # polish rounds that improved the accepted candidate
     reseed_score: float | None = None  # the accepted candidate's score before polish
+    report: dict[str, float] | None = None  # score.report metrics of the accepted transform
 
 
 def _beats(candidate: float | None, current: float | None) -> bool:
@@ -504,6 +505,8 @@ class SeriesResult:
     # Every attempted t; nan where estimation failed and nothing repaired it.
     scores: dict[int, float] = field(default_factory=dict)
     errors: dict[int, str] = field(default_factory=dict)
+    # score.report metrics of each accepted transform, from the job that produced it.
+    reports: dict[int, dict[str, float]] = field(default_factory=dict)
     flagged: list[int] = field(default_factory=list)
     repairs: dict[int, PassResult] = field(default_factory=dict)
     sweeps: dict[int, PassResult] = field(default_factory=dict)
@@ -788,15 +791,26 @@ def repair_timepoint(
             outcome.source += f"+polish{outcome.polish_rounds}"
     result.repairs[t] = outcome
     if outcome.accepted:
-        _accept(result, t, outcome.transform, outcome.score, outcome.source)
+        _accept(result, t, outcome.transform, outcome.score, outcome.source, outcome.report)
     return outcome
 
 
-def _accept(result: SeriesResult, t: int, transform: Transform, score: float, source: str):
+def _accept(
+    result: SeriesResult,
+    t: int,
+    transform: Transform,
+    score: float,
+    source: str,
+    report: dict | None = None,
+):
     result.transforms[t] = transform
     result.scores[t] = score
     result.errors.pop(t, None)
     result.provenance[t] = source
+    if report is None:
+        result.reports.pop(t, None)
+    else:
+        result.reports[t] = report
 
 
 def sweep_timepoint(
@@ -839,7 +853,14 @@ def _fold_sweep(result: SeriesResult, t: int, outcome: PassResult) -> None:
     result.sweeps[t] = outcome
     current_score = result.scores.get(t, float("nan"))
     if outcome.accepted and not outcome.score <= current_score:
-        _accept(result, t, outcome.transform, outcome.score, f"sweep:{outcome.source}")
+        _accept(
+            result,
+            t,
+            outcome.transform,
+            outcome.score,
+            f"sweep:{outcome.source}",
+            outcome.report,
+        )
 
 
 def _open_series(position_dirpath: Path, channel_name: str):
@@ -866,11 +887,6 @@ def _seed(settings: EstimateTransformSettings) -> Transform:
 
 def _score_fn(settings: EstimateTransformSettings) -> ScoreFn:
     """Return the score every decision uses: `settings.score`, never the method's blocks."""
-    metric = settings.effective_score_metric
-    if metric == "overlap":
-        return lambda transform, mov, ref: score_transform(transform, mov, ref, settings.beads)
-    if metric == "residual":
-        return lambda transform, mov, ref: residual_score(transform, mov, ref, settings.beads)
     blocks = settings.score.preprocess
     prepare = (
         (
@@ -882,14 +898,26 @@ def _score_fn(settings: EstimateTransformSettings) -> ScoreFn:
         if blocks
         else None
     )
-    intensity = {
-        "mutual_information": normalized_mutual_information,
-        "correlation": correlation_score,
-        "gradient_correlation": gradient_correlation,
-    }
-    if metric not in intensity:
+    return _metric_fn(settings, settings.effective_score_metric, prepare)
+
+
+_INTENSITY_METRIC_FNS = {
+    "mutual_information": normalized_mutual_information,
+    "correlation": correlation_score,
+    "gradient_correlation": gradient_correlation,
+}
+
+
+def _metric_fn(settings: EstimateTransformSettings, metric: str, prepare=None) -> ScoreFn:
+    """Return one metric as a score function; `prepare` runs after the warp (intensity only)."""
+    if metric == "overlap":
+        return lambda transform, mov, ref: score_transform(transform, mov, ref, settings.beads)
+    if metric == "residual":
+        return lambda transform, mov, ref: residual_score(transform, mov, ref, settings.beads)
+    if metric not in _INTENSITY_METRIC_FNS:
         raise ValueError(f"unknown score metric {metric!r}")
-    return lambda transform, mov, ref: intensity[metric](transform, mov, ref, prepare=prepare)
+    fn = _INTENSITY_METRIC_FNS[metric]
+    return lambda transform, mov, ref: fn(transform, mov, ref, prepare=prepare)
 
 
 def _affine_settings(settings: EstimateTransformSettings) -> AffineTransformSettings:
@@ -1019,6 +1047,18 @@ def _bead_metrics(settings, result, t, mov, ref) -> dict | None:
     return None if metrics is None else metrics.to_dict()
 
 
+def _report_metrics(settings, transform, t, mov, ref) -> dict | None:
+    """Return score.report metrics of `transform` at `t`, on the raw warped pair."""
+    if not settings.score.report or transform is None:
+        return None
+    ref_t = np.asarray(_reference_policy(settings, ref).reference_for(mov, t))
+    mov_t = np.asarray(mov[t])
+    return {
+        metric: _finite_or_none(_metric_fn(settings, metric)(transform, mov_t, ref_t))
+        for metric in settings.score.report
+    }
+
+
 class _JobInputs(NamedTuple):
     settings: EstimateTransformSettings
     mov: object
@@ -1068,6 +1108,7 @@ def _estimate_timepoint_job(
         "error": result.errors.get(t),
         "arm": getattr(estimator, "last_winner", None),
         "metrics": _bead_metrics(settings, result, t, mov, ref),
+        "report": _report_metrics(settings, result.transforms.get(t), t, mov, ref),
     }
     record_path.parent.mkdir(parents=True, exist_ok=True)
     _write_json(record_path, record)
@@ -1112,6 +1153,7 @@ def _estimate_propagated_job(
             "stand_in_from": stand_in[1] if stand_in else None,
             "arm": getattr(estimator, "last_winner", None),
             "metrics": _bead_metrics(settings, result, t, mov, ref),
+            "report": _report_metrics(settings, result.transforms.get(t), t, mov, ref),
         }
         _write_json(records_dir / f"{t}.json", record)
         records[t] = record
@@ -1210,6 +1252,8 @@ def _load_series(
             result.transforms[t] = Transform(
                 np.asarray(record["matrix"], dtype=float), transform_type=transform_type
             )
+            if record.get("report"):
+                result.reports[t] = record["report"]
         elif record.get("stand_in") is not None:
             result.stand_ins[t] = (
                 Transform(
@@ -1269,6 +1313,9 @@ def _repair_timepoint_job(
         "candidate_failures": outcome.failures,
         "polish_rounds": outcome.polish_rounds,
         "reseed_score": _finite_or_none(outcome.reseed_score),
+        "report": _report_metrics(
+            settings, outcome.transform if outcome.accepted else None, t, mov, ref
+        ),
     }
     record_path.parent.mkdir(parents=True, exist_ok=True)
     _write_json(record_path, record)
@@ -1306,6 +1353,9 @@ def _sweep_timepoint_job(
         "matrix": outcome.transform.to_list() if outcome.accepted else None,
         "candidate_scores": {k: _finite_or_none(v) for k, v in outcome.scores.items()},
         "candidate_failures": outcome.failures,
+        "report": _report_metrics(
+            settings, outcome.transform if outcome.accepted else None, t, mov, ref
+        ),
     }
     record_path.parent.mkdir(parents=True, exist_ok=True)
     _write_json(record_path, record)
@@ -1329,6 +1379,7 @@ def _load_pass(record: dict, transform_type: str, fallback: Transform) -> PassRe
         failures=record["candidate_failures"],
         polish_rounds=record.get("polish_rounds", 0),
         reseed_score=record.get("reseed_score"),
+        report=record.get("report"),
     )
 
 
@@ -1800,7 +1851,9 @@ def finalize_run(
         # As a fresh repair is judged (and as the sweep fold does): only if it beats the
         # current estimate -- a repair kept by resume may predate a redone, better one.
         if outcome.accepted and _beats(outcome.score, result.scores.get(t)):
-            _accept(result, t, outcome.transform, outcome.score, outcome.source)
+            _accept(
+                result, t, outcome.transform, outcome.score, outcome.source, outcome.report
+            )
         click.echo(f"repair t={t}: {outcome.source} -> {outcome.score:.4f}")
 
     # The sweep competes with repair rather than following it: it starts from each
