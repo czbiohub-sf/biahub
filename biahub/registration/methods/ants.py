@@ -16,6 +16,7 @@ Key conventions
 from __future__ import annotations
 
 import os
+import tempfile
 
 import ants
 import click
@@ -69,37 +70,26 @@ def use_task_threads() -> None:
 def estimate(
     ref: np.ndarray,
     mov: np.ndarray,
+    initial: Transform,
+    mask: np.ndarray | None = None,
+    moving_mask: np.ndarray | None = None,
     verbose: bool = False,
-    ants_kwargs: dict = None,
-) -> tuple[Transform, Transform]:
-    """
-    Estimate affine transformation using ANTs registration.
+    ants_kwargs: dict | None = None,
+) -> Transform:
+    """Register `mov` onto `ref` with ANTs, starting from `initial`.
 
-    Works for both 2D (Y, X) and 3D (Z, Y, X) arrays.
+    Works for 2D (Y, X) and 3D (Z, Y, X) arrays. `initial` and the result are forward
+    (moving -> reference, the engine's direction); ANTs works in the inverse direction
+    (reference -> moving, the one it resamples with), converted here and nowhere else.
+    ANTs holds `initial` fixed and optimizes on top of it; the result includes it.
 
-    Parameters
-    ----------
-    ref : np.ndarray
-        Reference image (2D or 3D)
-    mov : np.ndarray
-        Moving image (2D or 3D)
-    verbose : bool
-        Print optimization progress
-    ants_kwargs : dict, optional
-        Additional ANTs parameters
-
-    Returns
-    -------
-    fwd_transform : Transform
-        Forward transformation (mov → ref)
-    inv_transform : Transform
-        Inverse transformation (ref → mov)
+    `mask` / `moving_mask` (boolean, the shape of `ref` / `mov`) restrict the comparison
+    to where they are True; points outside either volume never count.
     """
     if ref.ndim not in (2, 3) or mov.ndim not in (2, 3):
         raise ValueError(
             f"Images must be 2D or 3D, got ref.ndim={ref.ndim}, mov.ndim={mov.ndim}"
         )
-
     if ref.ndim != mov.ndim:
         raise ValueError(f"Dimension mismatch: ref.ndim={ref.ndim}, mov.ndim={mov.ndim}")
 
@@ -107,29 +97,29 @@ def estimate(
     ants_kwargs.setdefault("random_seed", ANTS_RANDOM_SEED)
     use_task_threads()
 
-    mov_ants = ants.from_numpy(mov)
-    ref_ants = ants.from_numpy(ref)
+    def as_ants_mask(m):
+        return None if m is None else ants.from_numpy(np.asarray(m, dtype=np.float32))
 
     if verbose:
         click.echo(f"Optimizing registration parameters using ANTs with kwargs: {ants_kwargs}")
-
-    reg = ants.registration(
-        fixed=ref_ants,
-        moving=mov_ants,
-        **ants_kwargs,
-        verbose=verbose,
-    )
-
-    fwd_transform_mat = ants.read_transform(reg["fwdtransforms"][0])
-    inv_transform_mat = ants.read_transform(reg["invtransforms"][0])
-
-    fwd_transform = Transform.from_ants(fwd_transform_mat)
-    inv_transform = Transform.from_ants(inv_transform_mat)
-
-    if fwd_transform.matrix is None or inv_transform.matrix is None:
+    with tempfile.TemporaryDirectory() as tmp:
+        # Without an initial transform ANTsPy would first align the intensity centres of
+        # mass, replacing where `initial` starts.
+        initial_path = os.path.join(tmp, "initial.mat")
+        ants.write_transform(initial.invert().to_ants(), initial_path)
+        reg = ants.registration(
+            fixed=ants.from_numpy(np.asarray(ref, dtype=np.float32)),
+            moving=ants.from_numpy(np.asarray(mov, dtype=np.float32)),
+            initial_transform=[initial_path],
+            mask=as_ants_mask(mask),
+            moving_mask=as_ants_mask(moving_mask),
+            verbose=verbose,
+            **ants_kwargs,
+        )
+    inverse = Transform.from_ants(ants.read_transform(reg["fwdtransforms"][0]))
+    if inverse.matrix is None:
         raise ValueError("Failed to estimate registration transform.")
-
-    return fwd_transform, inv_transform
+    return inverse.invert()
 
 
 def preprocess_zyx(
@@ -248,16 +238,14 @@ class AntsEstimator:
             clip=self.clip,
             sobel_filter=self.sobel_filter,
         )
-        # Start ANTs where the seed put the volume: its default would first align the
-        # intensity centres of mass, replacing the seed's translation.
-        ants_kwargs = {"initial_transform": "Identity", **self.ants_kwargs}
-        inverse_correction, _unused = estimate(
+        # The volume is already pre-warped by the seed: ANTs starts from there.
+        correction = estimate(
             ref=ref_prepared,
             mov=mov_prepared,
+            initial=Transform.identity(ref_prepared.ndim),
             verbose=self.verbose,
-            ants_kwargs=ants_kwargs,
+            ants_kwargs=self.ants_kwargs,
         )
-        correction = inverse_correction.invert()
         if np.any(offset):
             correction = (
                 Transform.from_translation(offset)

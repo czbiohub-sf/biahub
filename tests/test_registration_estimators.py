@@ -729,12 +729,77 @@ def test_ants_starts_from_the_seed_not_the_centres_of_mass():
     from_seed = AntsEstimator(ants_kwargs=few_iterations).estimate(mov, ref, seed=true_seed)
     np.testing.assert_allclose(from_seed.matrix[:3, 3], true_seed.matrix[:3, 3], atol=1.0)
 
-    # ANTsPy's own default (no initial transform) is what used to replace the seed's shift
-    com_start = AntsEstimator(ants_kwargs={**few_iterations, "initial_transform": None})
-    moved = (
-        com_start.estimate(mov, ref, seed=true_seed).matrix[:3, 3] - true_seed.matrix[:3, 3]
+
+# --- ants.estimate: the wrapper around ants.registration --------------------------------
+
+_FEW_ITERATIONS = {
+    "type_of_transform": "Similarity",
+    "aff_iterations": (1, 1, 1),
+    "aff_shrink_factors": (6, 3, 1),
+    "aff_smoothing_sigmas": (2, 1, 0),
+}
+
+
+def test_ants_estimate_starts_from_initial_and_returns_the_full_forward_transform():
+    # With near-zero iterations the result is where ANTs started: `initial` itself (used
+    # once, not twice), even with a bright blob that moves the moving volume's centre of
+    # mass (ANTsPy's own default start).
+    from biahub.registration.methods.ants import estimate
+
+    rng = np.random.default_rng(10)
+    ref = _synthetic_blob_volume(rng, (24, 48, 48))
+    applied_zyx = (2, -3, 4)
+    mov = _off_centre_blob(ndi_shift(ref, shift=applied_zyx, order=1, mode="constant"))
+    initial = Transform.from_translation([-a for a in applied_zyx])  # forward: mov -> ref
+
+    result = estimate(ref, mov, initial=initial, ants_kwargs=_FEW_ITERATIONS)
+    # one iteration per pyramid level still nudges it (~0.2 voxel); a centre-of-mass
+    # start would be off by more than a voxel
+    np.testing.assert_allclose(result.matrix[:3, 3], initial.matrix[:3, 3], atol=0.5)
+    np.testing.assert_allclose(result.matrix[:3, :3], initial.matrix[:3, :3], atol=0.02)
+
+
+def test_ants_estimate_returns_the_forward_direction():
+    from biahub.registration.methods.ants import estimate
+
+    rng = np.random.default_rng(5)
+    ref = _synthetic_blob_volume(rng, (24, 48, 48))
+    applied_zyx = (2, -3, 4)
+    mov = ndi_shift(ref, shift=applied_zyx, order=1, mode="constant")
+
+    result = estimate(ref, mov, initial=Transform.identity(3))
+    # forward (mov -> ref) undoes the shift that made mov
+    np.testing.assert_allclose(result.matrix[:3, 3], [-a for a in applied_zyx], atol=0.5)
+
+
+def test_ants_estimate_passes_the_masks_to_ants(monkeypatch):
+    import ants
+
+    from biahub.registration.methods import ants as ants_method
+
+    seen = {}
+    real = ants.registration
+
+    def recording(**kwargs):
+        seen.update(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr(ants_method.ants, "registration", recording)
+    rng = np.random.default_rng(5)
+    ref = _synthetic_blob_volume(rng, (24, 48, 48))
+    ref_mask = np.zeros(ref.shape, dtype=bool)
+    ref_mask[4:20, 8:40, 8:40] = True
+    mov_mask = np.ones(ref.shape, dtype=bool)
+    ants_method.estimate(
+        ref,
+        ref,
+        initial=Transform.identity(3),
+        mask=ref_mask,
+        moving_mask=mov_mask,
+        ants_kwargs=_FEW_ITERATIONS,
     )
-    assert np.abs(moved).max() > 1.0
+    np.testing.assert_array_equal(seen["mask"].numpy() > 0, ref_mask)
+    np.testing.assert_array_equal(seen["moving_mask"].numpy() > 0, mov_mask)
 
 
 @pytest.mark.parametrize("x", [24, 21])
