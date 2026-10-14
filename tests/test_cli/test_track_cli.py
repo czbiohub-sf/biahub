@@ -650,3 +650,55 @@ def test_track_local_sbatch_file_overrides_computed_parameters(
     assert result.exit_code == 0, result.output
     assert recorded["timeout_min"] == 5
     assert recorded["gpus_per_node"] == 1
+
+
+def test_track_local_timeout_ignores_a_slurm_time_string(
+    tmp_path, example_tracking_plate, monkeypatch
+):
+    """'#SBATCH --time=3:00:00' sets slurm_time to a string; the local timeout_min must
+    stay the computed number of minutes."""
+    import contextlib
+    import types
+
+    recorded = {}
+
+    class Executor:
+        def __init__(self, folder, cluster):
+            recorded["cluster"] = cluster
+
+        def update_parameters(self, **kwargs):
+            recorded.update(kwargs)
+
+        def batch(self):
+            return contextlib.nullcontext()
+
+        def submit(self, *args, **kwargs):
+            return types.SimpleNamespace(job_id="0", wait=lambda: None)
+
+    monkeypatch.setattr("biahub.track.submitit.AutoExecutor", Executor)
+    monkeypatch.delenv("CI", raising=False)  # conftest forces CI (debug) otherwise
+    plate_path, _ = example_tracking_plate
+    config_path = _make_tracking_config(plate_path, tmp_path)
+    sbatch = tmp_path / "slurm.sbatch"
+    sbatch.write_text("#SBATCH --time=3:00:00\n")
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "track",
+            "--cluster",
+            "local",
+            "-i",
+            str(plate_path / "A" / "1" / "0"),
+            "-o",
+            str(tmp_path / "out.zarr"),
+            "-c",
+            str(config_path),
+            "-sb",
+            str(sbatch),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert recorded["slurm_time"] == "3:00:00"
+    assert recorded["timeout_min"] == 60  # track's computed time, in minutes

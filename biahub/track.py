@@ -1098,7 +1098,7 @@ def track(
     # Explicit --sbatch-filepath values (e.g. '#LOCAL --timeout-min') win over the
     # computed local GPU parameters.
     executor.update_parameters(
-        **{**gpu_executor_parameters(resolved_cluster, slurm_args["slurm_time"]), **slurm_args}
+        **{**gpu_executor_parameters(resolved_cluster, time_minutes), **slurm_args}
     )
 
     click.echo("Submitting jobs...")
