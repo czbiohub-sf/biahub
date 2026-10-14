@@ -71,8 +71,8 @@ def estimate(
     ref: np.ndarray,
     mov: np.ndarray,
     initial: Transform,
-    mask: np.ndarray | None = None,
-    moving_mask: np.ndarray | None = None,
+    ref_mask: np.ndarray | None = None,
+    mov_mask: np.ndarray | None = None,
     verbose: bool = False,
     ants_kwargs: dict | None = None,
 ) -> Transform:
@@ -83,7 +83,7 @@ def estimate(
     (reference -> moving, the one it resamples with), converted here and nowhere else.
     ANTs holds `initial` fixed and optimizes on top of it; the result includes it.
 
-    `mask` / `moving_mask` (boolean, the shape of `ref` / `mov`) restrict the comparison
+    `ref_mask` / `mov_mask` (boolean, the shape of `ref` / `mov`) restrict the comparison
     to where they are True; points outside either volume never count.
     """
     if ref.ndim not in (2, 3) or mov.ndim not in (2, 3):
@@ -111,8 +111,8 @@ def estimate(
             fixed=ants.from_numpy(np.asarray(ref, dtype=np.float32)),
             moving=ants.from_numpy(np.asarray(mov, dtype=np.float32)),
             initial_transform=[initial_path],
-            mask=as_ants_mask(mask),
-            moving_mask=as_ants_mask(moving_mask),
+            mask=as_ants_mask(ref_mask),
+            moving_mask=as_ants_mask(mov_mask),
             verbose=verbose,
             **ants_kwargs,
         )

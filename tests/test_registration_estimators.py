@@ -794,8 +794,8 @@ def test_ants_estimate_passes_the_masks_to_ants(monkeypatch):
         ref,
         ref,
         initial=Transform.identity(3),
-        mask=ref_mask,
-        moving_mask=mov_mask,
+        ref_mask=ref_mask,
+        mov_mask=mov_mask,
         ants_kwargs=_FEW_ITERATIONS,
     )
     np.testing.assert_array_equal(seen["mask"].numpy() > 0, ref_mask)

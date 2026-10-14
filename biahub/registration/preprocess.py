@@ -93,8 +93,8 @@ class PreprocessedEstimator:
         @functools.wraps(method.estimate)
         def estimate(mov, ref, seed=None, **kwargs):
             masks = {
-                "mask": build_mask(np.shape(ref), self.blocks, "reference"),
-                "moving_mask": build_mask(np.shape(mov), self.blocks, "moving"),
+                "ref_mask": build_mask(np.shape(ref), self.blocks, "reference"),
+                "mov_mask": build_mask(np.shape(mov), self.blocks, "moving"),
             }
             return self.method.estimate(
                 apply_image_blocks(mov, self.blocks, "moving"),

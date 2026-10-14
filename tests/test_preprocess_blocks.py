@@ -136,14 +136,14 @@ class _Recording:
     def __init__(self):
         self.seen = {}
 
-    def estimate(self, mov, ref, seed=None, competitor=None, mask=None, moving_mask=None):
+    def estimate(self, mov, ref, seed=None, competitor=None, ref_mask=None, mov_mask=None):
         self.seen = dict(
             mov=mov,
             ref=ref,
             seed=seed,
             competitor=competitor,
-            mask=mask,
-            moving_mask=moving_mask,
+            ref_mask=ref_mask,
+            mov_mask=mov_mask,
         )
         from biahub.core.transform import Transform
 
@@ -167,8 +167,8 @@ def test_the_method_gets_prepared_volumes_and_masks_and_keeps_its_interface():
     wrapped.estimate(mov, ref, seed="s", competitor="c")
     assert inner.seen["mov"].max() == pytest.approx(np.percentile(mov, 50))
     np.testing.assert_array_equal(inner.seen["ref"], ref)  # no image block on the reference
-    assert inner.seen["mask"][:, :8].all() and not inner.seen["mask"][:, 8:].any()
-    assert inner.seen["moving_mask"] is None
+    assert inner.seen["ref_mask"][:, :8].all() and not inner.seen["ref_mask"][:, 8:].any()
+    assert inner.seen["mov_mask"] is None
     assert (inner.seen["seed"], inner.seen["competitor"]) == ("s", "c")
     # the engine reads the method's signature and attributes through the wrapper
     assert "competitor" in inspect.signature(wrapped.estimate).parameters
