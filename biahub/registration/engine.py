@@ -1335,10 +1335,14 @@ def _read_record(path: Path) -> dict | None:
         return None
 
 
+# How a job that raised is recorded, so a caller can tell it from an estimate that failed.
+JOB_FAILED_PREFIX = "job failed"
+
+
 def _job_failure(error: Exception) -> str:
     """Return how a job that raised is recorded: 'job failed: <type>: <last line>'."""
     message = str(error).splitlines()[-1][:200] if str(error) else ""
-    return f"job failed: {type(error).__name__}: {message}"
+    return f"{JOB_FAILED_PREFIX}: {type(error).__name__}: {message}"
 
 
 def _failed_record(t: int, error: Exception) -> dict:
@@ -1450,7 +1454,7 @@ def _run_propagated(
         record = _read_record(records_dir / f"{t}.json")
         if record is not None:
             records[t] = record
-    error = failures.get(-1, "sequential job failed")
+    error = failures.get(-1, f"{JOB_FAILED_PREFIX}: the sequential job did not finish")
     return records, {t: error for t in to_estimate if t not in records}
 
 

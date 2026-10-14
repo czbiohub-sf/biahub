@@ -258,9 +258,13 @@ def test_a_crashing_timepoint_is_recorded_as_the_plain_run_does(
     plate = beads_plate_with_a_blank_timepoint
     config = _write_config(tmp_path)
     one_call = tmp_path / "one" / "transforms.yml"
-    estimate_transform(
-        [plate], config, one_call, reference_position_dirpaths=[plate], cluster="debug"
-    )
+    # The plain run writes the file too, but a failed job is not a success: it exits 3, as a
+    # step does, so an out-of-memory job cannot pass for a finished registration.
+    with pytest.raises(SystemExit) as exited:
+        estimate_transform(
+            [plate], config, one_call, reference_position_dirpaths=[plate], cluster="debug"
+        )
+    assert exited.value.code == 3
     by_steps = tmp_path / "steps" / "transforms.yml"
     _by_steps([plate], config, by_steps, references=[plate], crashes_ok=True)
 

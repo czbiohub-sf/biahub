@@ -37,6 +37,7 @@ from biahub.cli.parsing import (
     sbatch_filepath,
 )
 from biahub.registration.engine import (
+    JOB_FAILED_PREFIX,
     SeriesResult,
     estimate_transform_series,
     finalize_run,
@@ -238,7 +239,9 @@ def estimate_transform(
         )
 
     if len(run.keys) == 1:
-        run.write({run.keys[0]: estimate_position(run.keys[0])})
+        entries_by_key = {run.keys[0]: estimate_position(run.keys[0])}
+        run.write(entries_by_key)
+        _exit_if_jobs_failed(entries_by_key)
         return
     click.echo(f"Estimating {len(run.keys)} positions, each with its own transforms")
     workers = min(len(run.keys), MAX_CONCURRENT_POSITIONS)
@@ -258,6 +261,28 @@ def estimate_transform(
             f"written (rerun with --resume to redo only what is missing):\n{listing}"
         )
     run.write(positions)
+    _exit_if_jobs_failed(positions)
+
+
+def _exit_if_jobs_failed(entries_by_key: dict[str, list[TransformEntry]]) -> None:
+    """Exit with JOBS_FAILED_EXIT_CODE if any timepoint's job raised (out of memory, ...).
+
+    The file is written with those timepoints as stand-ins, as a step records them; but a
+    crashed job is not an estimate, so the run must not end as a success.
+    """
+    failed = {
+        key: [e.t for e in entries if e.note and e.note.startswith(JOB_FAILED_PREFIX)]
+        for key, entries in entries_by_key.items()
+    }
+    failed = {key: ts for key, ts in failed.items() if ts}
+    if failed:
+        listing = "\n".join(f"  {key}: t={ts}" for key, ts in failed.items())
+        click.echo(
+            f"jobs failed (their timepoints hold stand-ins; rerun with --resume to redo "
+            f"them):\n{listing}",
+            err=True,
+        )
+        raise SystemExit(JOBS_FAILED_EXIT_CODE)
 
 
 def estimate_transform_init(
