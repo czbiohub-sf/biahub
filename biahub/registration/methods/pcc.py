@@ -124,7 +124,8 @@ def phase_cross_corr_padding(
         # guarded as 'magnitude' is: zero-magnitude frequencies would give NaNs
         prod /= np.fmax(np.abs(Fimg1) * np.abs(Fimg2), eps)
 
-    corr = np.fft.irfftn(prod)
+    # the spatial shape: without it an odd last axis comes back one sample short
+    corr = np.fft.irfftn(prod, s=shape)
     del prod, Fimg1, Fimg2
 
     corr = np.fft.fftshift(np.abs(corr))
@@ -184,7 +185,8 @@ def phase_cross_corr(
     else:
         norm = 1.0
 
-    corr = np.fft.irfftn(prod / norm)
+    # the spatial shape: without it an odd last axis comes back one sample short
+    corr = np.fft.irfftn(prod / norm, s=np.shape(ref_img))
     corr_shifted = np.fft.fftshift(np.abs(corr))
     if output_path:
         plot_cross_correlation(

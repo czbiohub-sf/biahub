@@ -731,3 +731,18 @@ def test_ants_starts_from_the_seed_not_the_centres_of_mass():
         com_start.estimate(mov, ref, seed=true_seed).matrix[:3, 3] - true_seed.matrix[:3, 3]
     )
     assert np.abs(moved).max() > 1.0
+
+
+@pytest.mark.parametrize("x", [24, 21])
+def test_pcc_correlation_keeps_the_input_grid_on_odd_widths(x):
+    # Without the spatial shape, irfftn returns 2 * (n // 2 + 1) - 2 samples on the last
+    # axis: n - 1 for an odd n, so the correlation peak sits on the wrong grid. The padded
+    # path pads to next_fast_len sizes, which can be odd too.
+    from biahub.registration.methods import pcc
+
+    rng = np.random.default_rng(3)
+    ref = rng.random((6, 20, x)).astype(np.float32)
+    _shift, corr = pcc.phase_cross_corr(ref, ref)
+    assert corr.shape == ref.shape
+    _shift, corr = pcc.phase_cross_corr_padding(ref, ref, maximum_shift=1.2)
+    assert corr.shape == tuple(pcc.next_fast_len(int(s * 1.2)) for s in ref.shape)
