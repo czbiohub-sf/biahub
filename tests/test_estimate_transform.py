@@ -763,3 +763,14 @@ def test_estimate_transform_sweep_runs_on_flagged_timepoints_and_resumes(
         (output.with_suffix("") / "estimate_transform_report.json").read_text()
     )
     assert resumed["sweeps"] == report["sweeps"]
+
+
+def test_an_ants_estimate_is_sized_for_its_measured_peak_memory():
+    # ANTs on a 66 x 2048 x 2048 DragonFly pair peaked at 14.5-22.6 GB (SLURM MaxRSS over
+    # 12 jobs); the plan once asked for 12 GB and every first attempt ran out of memory.
+    from biahub.registration.engine import _estimate_job_resources
+
+    cpus, gb_ram_per_cpu = _estimate_job_resources("ants", (66, 2048, 2048))
+    assert cpus * gb_ram_per_cpu >= 1.25 * 22.6
+    beads_cpus, beads_gb = _estimate_job_resources("beads", (66, 2048, 2048))
+    assert beads_cpus * beads_gb < cpus * gb_ram_per_cpu  # beads keeps its smaller footprint

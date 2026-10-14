@@ -1529,6 +1529,25 @@ def _record_dirs(output_dir: Path) -> tuple[Path, Path, Path]:
     return output_dir / "timepoints", output_dir / "repairs", output_dir / "sweeps"
 
 
+# Memory of one estimate job, in volumes of the moving store, whatever its CPU count (the
+# peak is the job's copies, not per thread). ANTs copies both volumes several times (Sobel,
+# crop, its image pyramid): on a 66 x 2048 x 2048 pair it peaked at 14.5-22.6 GB (SLURM
+# MaxRSS, 12 jobs), i.e. ~22 volumes; 30 leaves ~30% headroom. The other methods fit in 10.
+RAM_VOLUMES_PER_JOB = {"ants": 30}
+DEFAULT_RAM_VOLUMES_PER_JOB = 10
+
+
+def _estimate_job_resources(method: str, zyx_shape: tuple[int, int, int]) -> tuple[int, int]:
+    """Return (cpus, GB of RAM per CPU) for one estimate job of `method` on this volume."""
+    # Bead matching is single-threaded; ANTs' optimizer uses ITK threads.
+    _, num_cpus, min_gb_per_cpu = estimate_resources(
+        shape=(1, 2, *zyx_shape), max_num_cpus=8 if method == "ants" else 4
+    )
+    gb_per_volume = np.prod(zyx_shape) * np.dtype(np.float32).itemsize / 2**30
+    job_gb = gb_per_volume * RAM_VOLUMES_PER_JOB.get(method, DEFAULT_RAM_VOLUMES_PER_JOB)
+    return num_cpus, int(max(min_gb_per_cpu, np.ceil(job_gb / num_cpus)))
+
+
 def init_run(
     moving_position_dirpath: Path,
     reference_position_dirpath: Path,
@@ -1585,12 +1604,7 @@ def init_run(
     model_to_yaml(settings, output_dir / ENGINE_SETTINGS_FILENAME)
 
     propagated = settings.transform.seed_from == "previous_timepoint"
-    # Bead matching is single-threaded; ANTs' optimizer uses ITK threads.
-    _, num_cpus, gb_ram_per_cpu = estimate_resources(
-        shape=(1, 2, Z, Y, X),
-        ram_multiplier=5,
-        max_num_cpus=8 if settings.method == "ants" else 4,
-    )
+    num_cpus, gb_ram_per_cpu = _estimate_job_resources(settings.method, (Z, Y, X))
     n_trials = len(settings.sweep_trials()) if settings.fallback.sweep is not None else 0
     estimate_minutes = (
         _propagation_minutes(len(time_indices)) if propagated else ESTIMATE_MINUTES
