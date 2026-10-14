@@ -586,7 +586,7 @@ def test_estimate_transform_accepts_the_unified_config_and_writes_forward_matric
         reference=ReferenceSettings(frame="cross", channel="Phase3D"),
         method="beads",
         beads=BeadsMatchSettings(source_peaks_settings=peaks, target_peaks_settings=peaks),
-        score_metric="residual",
+        score={"metric": "residual"},
     )
     config = tmp_path / "unified.yml"
     model_to_yaml(unified, config)
@@ -606,7 +606,7 @@ def test_estimate_transform_accepts_the_unified_config_and_writes_forward_matric
     engine_settings = yaml_to_model(
         output.with_suffix("") / "estimate_transform_settings.yml", EstimateTransformSettings
     )
-    assert engine_settings.score_metric == "residual"
+    assert engine_settings.score.metric == "residual"
 
 
 def test_estimate_transform_fallback_settings_reach_flagging_and_repair(

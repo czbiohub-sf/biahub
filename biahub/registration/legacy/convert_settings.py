@@ -248,6 +248,12 @@ def estimate_settings_from_legacy(
             method=legacy.estimation_method,
             beads=legacy.beads_match_settings,
             ants=legacy.ants_registration_settings,
+            # the legacy ANTs score compared Sobel edges when sobel_filter was on
+            score={"preprocess": [{"sobel": {}}]}
+            if legacy.estimation_method == "ants"
+            and legacy.ants_registration_settings is not None
+            and legacy.ants_registration_settings.sobel_filter
+            else {},
             phase_cross_corr=_unified_pcc(legacy.phase_cross_corr_settings, notes),
             manual=None
             if manual is None

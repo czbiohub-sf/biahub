@@ -1072,6 +1072,32 @@ METHOD_BLOCKS: dict[str, str] = {
 ScoreMetric = Literal[
     "overlap", "residual", "mutual_information", "correlation", "gradient_correlation"
 ]
+# Metrics that compare intensities after the candidate warp; the bead metrics detect beads
+# on the raw volumes instead.
+INTENSITY_METRICS = {"mutual_information", "correlation", "gradient_correlation"}
+
+
+class ScoreSettings(MyBaseModel):
+    """How a candidate transform is judged: the one number every decision uses.
+
+    `metric`: None is the method's default (DEFAULT_SCORE_METRIC). `preprocess`: image
+    blocks applied to the two volumes after the candidate warp, inside their raw overlap,
+    just before comparing (e.g. sobel to compare edges); intensity metrics only. The
+    method's own `preprocess` never changes the score.
+    """
+
+    metric: ScoreMetric | None = None
+    preprocess: PreprocessBlocks = []
+
+    @field_validator("preprocess")
+    @classmethod
+    def _image_blocks_only(cls, v):
+        masks = [b.kind for b in v if not isinstance(b, IMAGE_BLOCKS)]
+        if masks:
+            raise ValueError(f"score preprocess takes image blocks only, not {masks}")
+        return v
+
+
 DEFAULT_SCORE_METRIC: dict[str, str] = {
     "beads": "overlap",
     "ants": "correlation",
@@ -1129,11 +1155,29 @@ class EstimateTransformSettings(MyBaseModel):
     focus_finding: FocusSettings | None = None
     transform: TransformFitSettings = TransformFitSettings()
     time_indices: NonNegativeInt | list[NonNegativeInt] | Literal["all"] = "all"
-    # None: the method's default (beads: overlap, ants / phase-cross-corr /
-    # focus-finding: correlation, manual: gradient_correlation).
-    score_metric: ScoreMetric | None = None
+    score: ScoreSettings = ScoreSettings()
     fallback: FallbackSettings = FallbackSettings()
     verbose: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def point_score_metric_to_score(cls, data):
+        if isinstance(data, dict) and "score_metric" in data:
+            raise ValueError(
+                f"score_metric is now score.metric: write "
+                f"score: {{metric: {data['score_metric']}}}"
+            )
+        return data
+
+    @model_validator(mode="after")
+    def check_score_blocks_have_an_intensity_metric(self) -> "EstimateTransformSettings":
+        metric = self.effective_score_metric
+        if self.score.preprocess and metric not in INTENSITY_METRICS:
+            raise ValueError(
+                f"score preprocess needs an intensity metric ({sorted(INTENSITY_METRICS)}); "
+                f"{metric!r} detects beads on the raw volumes"
+            )
+        return self
 
     @model_validator(mode="after")
     def check_masks_have_a_method_that_uses_them(self) -> "EstimateTransformSettings":
@@ -1260,7 +1304,7 @@ class EstimateTransformSettings(MyBaseModel):
 
     @property
     def effective_score_metric(self) -> str:
-        return self.score_metric or DEFAULT_SCORE_METRIC[self.method]
+        return self.score.metric or DEFAULT_SCORE_METRIC[self.method]
 
 
 EntryStatus = Literal["accepted", "unreliable", "rejected"]

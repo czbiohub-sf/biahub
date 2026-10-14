@@ -126,7 +126,8 @@ transform:
   # use_prev_t_transform; one sequential job, contiguous time_indices).
   seed_from: input
 time_indices: all
-score_metric: overlap
+score:
+  metric: overlap
 fallback:
   flag:
     k_mad: 2.0

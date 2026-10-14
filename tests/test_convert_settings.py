@@ -277,3 +277,17 @@ def test_converting_different_focus_and_stackreg_crops_says_which_one_is_used():
     unified, notes = convert_settings(legacy)
     assert unified.focus_finding.center_crop_xy == [600, 600]
     assert any("center_crop_xy" in note and "900" in note for note in notes)
+
+
+@pytest.mark.parametrize("sobel", [True, False])
+def test_a_converted_ants_config_keeps_scoring_the_way_it_did(sobel):
+    # The legacy ANTs score compared Sobel edges when sobel_filter was on; the converted
+    # config says so in its score blocks.
+    legacy = EstimateRegistrationSettings(
+        source_channel_name="GFP",
+        target_channel_name="Phase3D",
+        estimation_method="ants",
+        ants_registration_settings={"sobel_filter": sobel},
+    )
+    converted, _notes = convert_settings(legacy)
+    assert [b.kind for b in converted.score.preprocess] == (["sobel"] if sobel else [])

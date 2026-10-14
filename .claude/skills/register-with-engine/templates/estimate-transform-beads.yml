@@ -117,7 +117,8 @@ transform:
   seed_direction: inverse
   seed_from_shapes: false
 time_indices: all
-score_metric: overlap
+score:
+  metric: overlap
 fallback:
   flag:
     k_mad: 2.0

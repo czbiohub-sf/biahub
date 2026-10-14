@@ -34,7 +34,7 @@ def test_loader_reads_unified_configs_and_points_old_ones_at_convert_settings(tm
         moving=ChannelSettings(channel="GFP"),
         reference=ReferenceSettings(frame="cross", channel="Phase3D"),
         method="beads",
-        score_metric="residual",
+        score={"metric": "residual"},
     )
     model_to_yaml(unified, tmp_path / "unified.yml")
     assert load_estimate_transform_settings(tmp_path / "unified.yml") == unified
@@ -141,7 +141,7 @@ def test_sweep_trials_revalidate_so_dependent_defaults_follow():
             "would be ignored",
         ),  # beads method: ants block unused
         ([{"reference.frame": ["first"]}], "would be ignored"),
-        ([{"score_metric": ["correlation"]}], "would be ignored"),
+        ([{"score.metric": ["correlation"]}], "would be ignored"),
         ([{"transform.seed_from": ["previous_timepoint"]}], "would be ignored"),
         ([{"beads.algorithm": []}], "each with values"),
         ([], "at least 1 item"),

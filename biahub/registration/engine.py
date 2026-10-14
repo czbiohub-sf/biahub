@@ -67,7 +67,7 @@ from biahub.registration.policies import (
     SeedPolicy,
     is_empty,
 )
-from biahub.registration.preprocess import PreprocessedEstimator
+from biahub.registration.preprocess import PreprocessedEstimator, apply_image_blocks
 from biahub.registration.utils import get_aprox_transform, resolve_time_indices
 from biahub.settings import (
     AffineTransformSettings,
@@ -865,21 +865,31 @@ def _seed(settings: EstimateTransformSettings) -> Transform:
 
 
 def _score_fn(settings: EstimateTransformSettings) -> ScoreFn:
+    """Return the score every decision uses: `settings.score`, never the method's blocks."""
     metric = settings.effective_score_metric
     if metric == "overlap":
         return lambda transform, mov, ref: score_transform(transform, mov, ref, settings.beads)
     if metric == "residual":
         return lambda transform, mov, ref: residual_score(transform, mov, ref, settings.beads)
-    if metric == "mutual_information":
-        return normalized_mutual_information
-    if metric == "correlation":
-        sobel = settings.method == "ants" and settings.ants.sobel_filter
-        return lambda transform, mov, ref: correlation_score(
-            transform, mov, ref, sobel_filter=sobel
+    blocks = settings.score.preprocess
+    prepare = (
+        (
+            lambda warped, ref: (
+                apply_image_blocks(warped, blocks, "moving"),
+                apply_image_blocks(ref, blocks, "reference"),
+            )
         )
-    if metric == "gradient_correlation":
-        return gradient_correlation
-    raise ValueError(f"unknown score_metric {metric!r}")
+        if blocks
+        else None
+    )
+    intensity = {
+        "mutual_information": normalized_mutual_information,
+        "correlation": correlation_score,
+        "gradient_correlation": gradient_correlation,
+    }
+    if metric not in intensity:
+        raise ValueError(f"unknown score metric {metric!r}")
+    return lambda transform, mov, ref: intensity[metric](transform, mov, ref, prepare=prepare)
 
 
 def _affine_settings(settings: EstimateTransformSettings) -> AffineTransformSettings:
