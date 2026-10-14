@@ -349,3 +349,53 @@ def test_segment_local_sbatch_file_overrides_computed_parameters(
     assert result.exit_code == 0, result.output
     assert _RecordingExecutor.parameters["timeout_min"] == 5  # the explicit setting wins
     assert _RecordingExecutor.parameters["gpus_per_node"] == 1
+
+
+def _two_model_config(path, order):
+    models = {
+        "nuc": {"pretrained_model": "cpsam_v2", "channels": ["GFP"], "z_slice_2D": 1},
+        "mem": {"pretrained_model": "cpsam_v2", "channels": ["RFP"], "z_slice_2D": 1},
+    }
+    config = {
+        "models": {name: models[name] for name in order},
+        "output_ome_zarr_version": "0.5",
+    }
+    path.write_text(yaml.safe_dump(config, sort_keys=False))
+    return path
+
+
+def test_segment_refuses_an_output_with_a_different_model_order(
+    fake_cellpose, cpu_cellpose, example_plate, tmp_path
+):
+    """Reordering the models used to resume into swapped label channels."""
+    plate_path, _ = example_plate
+    out, position = tmp_path / "seg.zarr", plate_path / "B" / "1" / "0"
+    first = _two_model_config(tmp_path / "first.yml", ["nuc", "mem"])
+    assert _run("--init", "-i", position, "-o", out, "-c", first).exit_code == 0
+    assert _run("--cluster", "debug", "-i", position, "-o", out, "-c", first).exit_code == 0
+    n_first = len(fake_cellpose.evaluated)
+
+    swapped = _two_model_config(tmp_path / "swapped.yml", ["mem", "nuc"])
+    result = _run("--cluster", "debug", "--resume", "-i", position, "-o", out, "-c", swapped)
+
+    assert result.exit_code != 0
+    assert "['nuc_labels', 'mem_labels']" in str(result.exception)
+    assert len(fake_cellpose.evaluated) == n_first  # nothing was segmented into it
+    with open_ome_zarr(out / "B" / "1" / "0", mode="r") as ds:
+        assert ds.channel_names == ["nuc_labels", "mem_labels"]
+
+
+def test_segment_resume_token_depends_on_model_order(tmp_path):
+    from biahub.segment import _resume_token
+    from biahub.settings import SegmentationSettings
+    from biahub.utils.config import yaml_to_model
+
+    a = yaml_to_model(
+        _two_model_config(tmp_path / "a.yml", ["nuc", "mem"]), SegmentationSettings
+    )
+    b = yaml_to_model(
+        _two_model_config(tmp_path / "b.yml", ["mem", "nuc"]), SegmentationSettings
+    )
+
+    assert _resume_token(a) != _resume_token(b)
+    assert _resume_token(a) == _resume_token(a.model_copy(deep=True))

@@ -167,6 +167,17 @@ def segment_data(
     return np.stack(czyx_segmentation, axis=0)
 
 
+def _resume_token(settings: SegmentationSettings) -> str:
+    """Fingerprint the settings, including the order of the models.
+
+    settings_fingerprint sorts keys, but model order decides which label channel each
+    model writes, so finished work from another order must not be skipped.
+    """
+    return settings_fingerprint(
+        {"settings": settings.model_dump(mode="json"), "model_order": list(settings.models)}
+    )
+
+
 def _init_output_plate(
     input_position_dirpaths: list[Path],
     output_dirpath: Path,
@@ -188,11 +199,28 @@ def _init_output_plate(
     models = resolve_models(settings, channel_names, scale, Z)
     Z_out = 1 if models[0].z_slice_2D is not None else Z
 
+    # Label channel i belongs to model i. On an existing output, create_empty_plate keeps
+    # the stored channel order, so a reordered config would write into swapped channels.
+    label_channels = [m.name + "_labels" for m in models]
+    position_keys = [Path(p).parts[-3:] for p in input_position_dirpaths]
+    for key in position_keys:
+        output_position = Path(output_dirpath, *key)
+        if not output_position.exists():
+            continue
+        with open_ome_zarr(str(output_position), mode="r") as output_dataset:
+            existing = output_dataset.channel_names
+        if existing != label_channels:
+            raise ValueError(
+                f"{output_position} has label channels {existing}, but this config "
+                f"writes {label_channels}. Keep the models in the same order, or "
+                "segment into a new output."
+            )
+
     input_plate = Path(input_position_dirpaths[0]).parents[2]
     create_empty_plate(
         store_path=output_dirpath,
-        position_keys=[Path(p).parts[-3:] for p in input_position_dirpaths],
-        channel_names=[m.name + "_labels" for m in models],
+        position_keys=position_keys,
+        channel_names=label_channels,
         shape=(T, len(models), Z_out, Y, X),
         dtype=np.uint32,
         scale=scale,
@@ -329,7 +357,7 @@ def segment(
                     # the GPU, which is the bottleneck.
                     num_workers=1,
                     resume=resume,
-                    resume_token=settings_fingerprint(settings),
+                    resume_token=_resume_token(settings),
                     models=models,
                 )
             )
