@@ -7,6 +7,8 @@ models in `biahub.settings`).
 
 from __future__ import annotations
 
+import functools
+
 import numpy as np
 
 from skimage import filters
@@ -73,3 +75,36 @@ def _mask(block, shape_zyx: tuple) -> np.ndarray:
         mask[tuple(slices)] = True
         return mask
     raise TypeError(f"no mask for {type(block).__name__}")
+
+
+class PreprocessedEstimator:
+    """A method with a config's `preprocess:` blocks in front of it.
+
+    Every estimate (timepoint jobs, repair, sweeps) goes through here, so the method always
+    sees the same prepared volumes, and the reference / moving masks when there are any.
+    `estimate` keeps the method's signature, and its attributes (`uses_seed`, ...) read
+    through, so the engine treats it as the method itself.
+    """
+
+    def __init__(self, method, blocks: PreprocessBlocks):
+        self.method = method
+        self.blocks = list(blocks)
+
+        @functools.wraps(method.estimate)
+        def estimate(mov, ref, seed=None, **kwargs):
+            masks = {
+                "mask": build_mask(np.shape(ref), self.blocks, "reference"),
+                "moving_mask": build_mask(np.shape(mov), self.blocks, "moving"),
+            }
+            return self.method.estimate(
+                apply_image_blocks(mov, self.blocks, "moving"),
+                apply_image_blocks(ref, self.blocks, "reference"),
+                seed=seed,
+                **{k: m for k, m in masks.items() if m is not None},
+                **kwargs,
+            )
+
+        self.estimate = estimate
+
+    def __getattr__(self, name):
+        return getattr(self.method, name)

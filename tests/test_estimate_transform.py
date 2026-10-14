@@ -774,3 +774,20 @@ def test_an_ants_estimate_is_sized_for_its_measured_peak_memory():
     assert cpus * gb_ram_per_cpu >= 1.25 * 22.6
     beads_cpus, beads_gb = _estimate_job_resources("beads", (66, 2048, 2048))
     assert beads_cpus * beads_gb < cpus * gb_ram_per_cpu  # beads keeps its smaller footprint
+
+
+def test_image_blocks_run_before_the_method_end_to_end(beads_plate, tmp_path):
+    # A clip that keeps every value changes nothing: the run matches one without blocks.
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    plain = tmp_path / "plain" / "transforms.yml"
+    _run(beads_plate, _write_config(tmp_path / "a"), plain)
+    with_blocks = tmp_path / "blocks" / "transforms.yml"
+    config = _write_config(
+        tmp_path / "b", preprocess=[{"clip_percentiles": {"low": 0, "high": 100}}]
+    )
+    assert "clip_percentiles" in config.read_text()  # written back as a named block
+    _run(beads_plate, config, with_blocks)
+    assert [e.matrix for e in load_transform_settings(with_blocks).transforms] == [
+        e.matrix for e in load_transform_settings(plain).transforms
+    ]

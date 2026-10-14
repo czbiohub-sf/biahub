@@ -122,3 +122,67 @@ def test_a_box_outside_its_volume_is_refused():
     blocks = _parse("- mask_box: {target: [reference], box: [all, [0, 100], all]}")
     with pytest.raises(ValueError, match="outside"):
         build_mask((3, 40, 60), blocks, "reference")
+
+
+# --- applied before the method --------------------------------------------------------------
+
+
+class _Recording:
+    """A method that records what it was given (and takes a competitor, like beads)."""
+
+    uses_seed = True
+    last_winner = "hungarian"
+
+    def __init__(self):
+        self.seen = {}
+
+    def estimate(self, mov, ref, seed=None, competitor=None, mask=None, moving_mask=None):
+        self.seen = dict(
+            mov=mov,
+            ref=ref,
+            seed=seed,
+            competitor=competitor,
+            mask=mask,
+            moving_mask=moving_mask,
+        )
+        from biahub.core.transform import Transform
+
+        return Transform.identity(3)
+
+
+def test_the_method_gets_prepared_volumes_and_masks_and_keeps_its_interface():
+    import inspect
+
+    from biahub.registration.preprocess import PreprocessedEstimator
+
+    blocks = _parse(
+        "- clip_percentiles: {target: [moving], low: 0, high: 50}\n"
+        "- mask_box: {target: [reference], box: [all, [0, 8], all]}"
+    )
+    inner = _Recording()
+    wrapped = PreprocessedEstimator(inner, blocks)
+    mov = np.arange(4 * 16 * 16, dtype=np.float32).reshape(4, 16, 16)
+    ref = mov.copy()
+
+    wrapped.estimate(mov, ref, seed="s", competitor="c")
+    assert inner.seen["mov"].max() == pytest.approx(np.percentile(mov, 50))
+    np.testing.assert_array_equal(inner.seen["ref"], ref)  # no image block on the reference
+    assert inner.seen["mask"][:, :8].all() and not inner.seen["mask"][:, 8:].any()
+    assert inner.seen["moving_mask"] is None
+    assert (inner.seen["seed"], inner.seen["competitor"]) == ("s", "c")
+    # the engine reads the method's signature and attributes through the wrapper
+    assert "competitor" in inspect.signature(wrapped.estimate).parameters
+    assert (wrapped.uses_seed, wrapped.last_winner) == (True, "hungarian")
+
+
+@pytest.mark.parametrize("method", ["beads", "phase-cross-corr", "focus-finding", "manual"])
+def test_mask_blocks_are_refused_for_methods_that_cannot_use_them(method, tmp_path):
+    from biahub.settings import EstimateTransformSettings
+
+    with pytest.raises(ValidationError, match="mask blocks need"):
+        EstimateTransformSettings(
+            moving={"channel": "GFP"},
+            reference={"frame": "cross", "channel": "Phase3D"},
+            method=method,
+            preprocess=[{"mask_circle": {"target": ["reference"], "radius": 0.9}}],
+        )

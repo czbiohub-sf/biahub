@@ -441,6 +441,8 @@ class MaskBox(_Block):
 
 IMAGE_BLOCKS = (ClipPercentiles, Sobel)
 MASK_BLOCKS = (MaskCircle, MaskBox)
+# Methods that can restrict their comparison to a mask.
+MASK_METHODS = {"ants"}
 _BLOCK_TYPES = {b.model_fields["kind"].default: b for b in IMAGE_BLOCKS + MASK_BLOCKS}
 
 
@@ -1117,6 +1119,8 @@ class EstimateTransformSettings(MyBaseModel):
 
     moving: ChannelSettings
     reference: ReferenceSettings
+    # Applied, in order, before the method (see the preprocessing blocks above).
+    preprocess: PreprocessBlocks = []
     method: EstimationMethod
     beads: BeadsMatchSettings | None = None
     ants: AntsRegistrationSettings | None = None
@@ -1130,6 +1134,16 @@ class EstimateTransformSettings(MyBaseModel):
     score_metric: ScoreMetric | None = None
     fallback: FallbackSettings = FallbackSettings()
     verbose: bool = False
+
+    @model_validator(mode="after")
+    def check_masks_have_a_method_that_uses_them(self) -> "EstimateTransformSettings":
+        masks = [b.kind for b in self.preprocess if isinstance(b, MASK_BLOCKS)]
+        if masks and self.method not in MASK_METHODS:
+            raise ValueError(
+                f"mask blocks need a method that can use them ({sorted(MASK_METHODS)}); "
+                f"method {self.method!r} cannot use {masks}"
+            )
+        return self
 
     @model_validator(mode="after")
     def fill_method_block(self) -> "EstimateTransformSettings":

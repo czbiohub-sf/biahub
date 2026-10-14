@@ -67,6 +67,7 @@ from biahub.registration.policies import (
     SeedPolicy,
     is_empty,
 )
+from biahub.registration.preprocess import PreprocessedEstimator
 from biahub.registration.utils import get_aprox_transform, resolve_time_indices
 from biahub.settings import (
     AffineTransformSettings,
@@ -988,6 +989,8 @@ def build_estimator(
         )
     else:
         raise click.UsageError(f"unknown method '{settings.method}'")
+    if settings.preprocess:
+        estimator = PreprocessedEstimator(estimator, settings.preprocess)
     return estimator, score_fn, seed
 
 
