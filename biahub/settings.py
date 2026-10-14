@@ -19,6 +19,7 @@ from pydantic import (
     PositiveInt,
     ValidationInfo,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -344,6 +345,126 @@ class AffineTransformSettings(MyBaseModel):
                 raise ValueError("approx_transform must be a 4x4 array")
 
         return v
+
+
+# --- preprocessing blocks ---------------------------------------------------------------
+# Named steps applied before a method, each to the volumes it names: image blocks change
+# pixels, mask blocks say where to compare. A config writes them as a list of
+# `- <name>: {<parameters>}` and a run's resolved settings write them back the same way.
+
+Volume = Literal["moving", "reference"]
+
+
+class _Block(MyBaseModel):
+    """One preprocessing step on the volumes in `target`; `kind` is its name in the config."""
+
+    kind: str
+    target: list[Volume]
+
+    @field_validator("target")
+    @classmethod
+    def _check_target(cls, v):
+        if not v:
+            raise ValueError("target needs at least one of moving, reference")
+        if len(set(v)) != len(v):
+            raise ValueError(f"target names a volume more than once: {v}")
+        return v
+
+    @model_serializer(mode="wrap")
+    def _as_named(self, handler):
+        fields = handler(self)
+        return {fields.pop("kind"): fields}
+
+
+class ClipPercentiles(_Block):
+    """Clip each target volume to its own `low`-`high` percentiles (outliers, background)."""
+
+    kind: Literal["clip_percentiles"] = "clip_percentiles"
+    target: list[Volume] = ["moving", "reference"]
+    low: float = Field(1.0, ge=0, le=100)
+    high: float = Field(99.5, ge=0, le=100)
+
+    @model_validator(mode="after")
+    def _low_below_high(self):
+        if self.low >= self.high:
+            raise ValueError(f"low ({self.low}) must be below high ({self.high})")
+        return self
+
+
+class Sobel(_Block):
+    """Edge strength (3D gradient magnitude): match structure, not intensity (cross-modal)."""
+
+    kind: Literal["sobel"] = "sobel"
+    target: list[Volume] = ["moving", "reference"]
+
+
+class MaskCircle(_Block):
+    """Compare only inside a circle in yx, the same on every z slice, centred on the volume.
+
+    `radius` is a fraction of the half-width of the shorter yx axis, e.g. 0.9 to leave out
+    a bright well edge (mantis v1).
+    """
+
+    kind: Literal["mask_circle"] = "mask_circle"
+    target: list[Volume]
+    radius: float = Field(gt=0, le=1)
+
+
+AxisRange = Literal["all"] | Annotated[list[NonNegativeInt], Field(min_length=2, max_length=2)]
+
+
+class MaskBox(_Block):
+    """Compare only inside a box: one `[start, stop]` voxel range (or `all`) per z, y, x.
+
+    Its voxels belong to one volume's grid, so it names exactly one target.
+    """
+
+    kind: Literal["mask_box"] = "mask_box"
+    target: list[Volume]
+    box: Annotated[list[AxisRange], Field(min_length=3, max_length=3)]
+
+    @field_validator("target")
+    @classmethod
+    def _one_target(cls, v):
+        if len(v) != 1:
+            raise ValueError(f"a box is in one volume's voxels: give one target, not {v}")
+        return v
+
+    @field_validator("box")
+    @classmethod
+    def _ranges(cls, v):
+        for axis, r in zip("zyx", v, strict=True):
+            if r != "all" and r[0] >= r[1]:
+                raise ValueError(f"box {axis} range {r}: start must be below stop")
+        return v
+
+
+IMAGE_BLOCKS = (ClipPercentiles, Sobel)
+MASK_BLOCKS = (MaskCircle, MaskBox)
+_BLOCK_TYPES = {b.model_fields["kind"].default: b for b in IMAGE_BLOCKS + MASK_BLOCKS}
+
+
+def _named_block(item):
+    """`{<name>: {<parameters>}}` as written in a config -> the block's fields."""
+    if isinstance(item, _Block):
+        return item
+    if not isinstance(item, dict) or len(item) != 1:
+        raise ValueError(
+            f"each preprocessing entry is one block, `- <name>: {{...}}`; got {item}"
+        )
+    ((name, params),) = item.items()
+    if name not in _BLOCK_TYPES:
+        raise ValueError(
+            f"unknown preprocessing block {name!r}; known: {sorted(_BLOCK_TYPES)}"
+        )
+    return {"kind": name, **(params or {})}
+
+
+PreprocessBlock = Annotated[
+    Annotated[ClipPercentiles | Sobel | MaskCircle | MaskBox, Field(discriminator="kind")],
+    BeforeValidator(_named_block),
+]
+PreprocessBlocks = list[PreprocessBlock]
 
 
 class AntsRegistrationSettings(MyBaseModel):
