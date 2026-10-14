@@ -23,8 +23,15 @@ SBATCH=""                                      # optional sbatch file with a tim
 
 source "$BIAHUB/.venv/bin/activate"
 
-args=(-m $MOVING -c "$TRANSFORMS" -o "$OUTPUT" --cluster slurm --monitor)
-[[ -n "$REFERENCE" ]] && args+=(-r $REFERENCE)
+# Expand each glob into one argument per position, keeping spaces inside a path.
+mapfile -t moving < <(compgen -G "$MOVING")
+[[ ${#moving[@]} -gt 0 ]] || { echo "no positions match MOVING=$MOVING" >&2; exit 1; }
+args=(-m "${moving[@]}" -c "$TRANSFORMS" -o "$OUTPUT" --cluster slurm --monitor)
+if [[ -n "$REFERENCE" ]]; then
+    mapfile -t reference < <(compgen -G "$REFERENCE")
+    [[ ${#reference[@]} -gt 0 ]] || { echo "no positions match REFERENCE=$REFERENCE" >&2; exit 1; }
+    args+=(-r "${reference[@]}")
+fi
 for channel in "${CHANNELS[@]}"; do args+=(--channels "$channel"); done
 [[ "$CROP_TO_OVERLAP" == true ]] && args+=(--crop-to-overlap)
 [[ -n "$SBATCH" ]] && args+=(-sb "$SBATCH")
