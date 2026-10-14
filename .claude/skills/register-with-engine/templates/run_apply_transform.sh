@@ -18,10 +18,16 @@ REFERENCE="/path/to/reconstruct.zarr/*/*/*"    # leave empty to stabilize
 TRANSFORMS=./transforms.yml
 OUTPUT=/path/to/registered.zarr
 CHANNELS=()                                    # e.g. ("GFP EX488 EM525-45"); empty = all
+                                               # -- set it when the moving store mixes cameras
+                                               #    (DragonFly: the BF is on the reference camera)
 CROP_TO_OVERLAP=false                          # true: crop to the box every transform covers
 SBATCH=""                                      # optional sbatch file with a time limit
+VENV=""                           # empty: $BIAHUB/.venv; or another biahub venv (runs BIAHUB's code)
 
-source "$BIAHUB/.venv/bin/activate"
+# Relative paths are next to this script, wherever it is launched from.
+cd "$(dirname "$0")"
+source "${VENV:-$BIAHUB/.venv}/bin/activate"
+export PYTHONPATH="$BIAHUB${PYTHONPATH:+:$PYTHONPATH}"   # run this checkout, whatever the venv
 
 # Expand each glob into one argument per position, keeping spaces inside a path.
 mapfile -t moving < <(compgen -G "$MOVING")

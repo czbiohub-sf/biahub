@@ -20,8 +20,12 @@ REFERENCE=/path/to/reconstruct.zarr/R/C/FOV        # phase, same well; leave emp
 CONFIG=./estimate-transform-beads.yml
 OUTPUT=./transforms.yml
 SBATCH=""                         # optional: a file with `#SBATCH --time=...` for large volumes
+VENV=""                           # empty: $BIAHUB/.venv; or another biahub venv (runs BIAHUB's code)
 
-source "$BIAHUB/.venv/bin/activate"
+# Relative paths are next to this script, wherever it is launched from.
+cd "$(dirname "$0")"
+source "${VENV:-$BIAHUB/.venv}/bin/activate"
+export PYTHONPATH="$BIAHUB${PYTHONPATH:+:$PYTHONPATH}"   # run this checkout, whatever the venv
 export PYTHONWARNINGS="ignore::FutureWarning"   # scikit-image deprecation noise per timepoint
 
 args=(-m "$MOVING" -c "$CONFIG" -o "$OUTPUT" --cluster slurm)
@@ -29,3 +33,5 @@ args=(-m "$MOVING" -c "$CONFIG" -o "$OUTPUT" --cluster slurm)
 [[ -n "$SBATCH" ]] && args+=(-sb "$SBATCH")
 
 biahub estimate-transform "${args[@]}" "$@"
+# Exit 3: a job crashed (e.g. out of memory) and its timepoints hold the seed -- do not apply
+# the file; see references/recovery.md.

@@ -40,6 +40,8 @@ transforms:                                  # one list shared by every position
   never dropped; `apply-transform` writes every one and records the non-accepted ones in
   the output metadata.
 - `repaired_from`: which repair candidate won (e.g. `consensus_full+polish1`).
+- `report`: the config's `score.report` metrics for this transform, on the raw warped pair
+  (e.g. `{correlation: 0.72, mutual_information: 0.10}`); none for a stand-in.
 - `method` on an entry: set when it came from another method's run
   (`substitute-transforms`).
 
