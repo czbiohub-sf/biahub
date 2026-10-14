@@ -9,17 +9,16 @@
 #                                zero-filled border whose edge Sobel would otherwise match
 #   ants.clip: false          -- its limits assume a phase reference (0-0.5); keep it off for
 #                                virtual staining or fluorescence references
-#   transform.seed            -- currently only its rotation and scale steer ANTs: ANTs starts by
-#                                aligning the two volumes' intensity centres of mass, which
-#                                replaces the seed's translation
+#   transform.seed            -- ANTs refines from the seed, so it decides which solution ANTs
+#                                finds: identity when both channels share a camera grid, else
+#                                an estimate of the offset and scale (inverse direction)
 #   transform.seed_from_shapes: false -- true builds the seed from the store shapes with the
 #                                mantis light-sheet rotation built in; only for mantis data
 #   fallback.repair           -- for a single timepoint, set it to null: there is nothing to
 #                                repair from, and each repair is another full ANTs run
 # The score is a correlation: a correct transform often scores 0.1-0.3, below the bead-tuned
 # fallback.flag thresholds, so `unreliable` here means "check", not "wrong"; check the result
-# with overlays rather than the score (references/methods.md). Size the job for ANTs: a
-# 66 x 2048 x 2048 pair peaks at 15-20 GB (pass an sbatch file with more memory).
+# with overlays rather than the score (references/methods.md).
 moving:
   channel: <moving channel>
 reference:

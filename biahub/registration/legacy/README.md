@@ -74,6 +74,9 @@ What has no equivalent is dropped, with a note printed at conversion time:
 
 - **Outliers** are flagged against the run's own score distribution and repaired
   (re-estimated from good neighbours), instead of being smoothed out afterwards.
+- **ANTs starts from the seed.** The old pipeline let ANTs first align the volumes'
+  intensity centres of mass, which replaced the seed's translation, so a converted ANTs
+  config can give a different (seeded) result than the old run.
 - **A failed timepoint** is recorded as `status: unreliable` with `filled_from` and a
   `note` in the transforms file, rather than silently holding the previous transform.
 - **The transforms file** holds one matrix per timepoint with its score and status: one

@@ -38,6 +38,9 @@ For correlation-based scores (ants, phase cross-correlation, focus finding) a co
 transform often scores 0.1-0.3, so many timepoints come out `unreliable`: read them as
 "check", not as "wrong".
 
+ANTs starts from the seed: the moving volume is warped by it and ANTs refines from there,
+so the seed decides which solution it finds.
+
 ANTs runs with a fixed random seed and as many ITK threads as the task has CPUs
 (`ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS` overrides). One thread repeats exactly; with
 several, runs agree to ~0.01 voxel at the same thread count and to ~0.1 voxel across

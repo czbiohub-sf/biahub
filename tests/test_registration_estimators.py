@@ -695,3 +695,39 @@ def test_pcc_center_crop_is_clamped_to_the_image():
     assert (y, x) == (slice(0, 100), slice(0, 80))
     _, y, x = pcc_crop(PhaseCrossCorrSettings(center_crop_xy=[40, 20]), (10, 100, 80))
     assert (y, x) == (slice(40, 60), slice(20, 60))  # a crop that fits stays centred
+
+
+def _off_centre_blob(volume, centre=(4, 6, 6), brightness=20000.0, sigma=2.0):
+    """`volume` plus one bright blob in a corner: moves its intensity centre of mass."""
+    zz, yy, xx = np.meshgrid(*[np.arange(s) for s in volume.shape], indexing="ij")
+    cz, cy, cx = centre
+    blob = np.exp(-(((zz - cz) ** 2 + (yy - cy) ** 2 + (xx - cx) ** 2) / (2 * sigma**2)))
+    return volume + brightness * blob.astype(np.float32)
+
+
+def test_ants_starts_from_the_seed_not_the_centres_of_mass():
+    # A bright structure in one channel only moves its centre of mass. ANTs' default
+    # initialisation aligns the centres of mass, replacing the seed's translation; with
+    # near-zero iterations the result shows where it started.
+    rng = np.random.default_rng(10)
+    shape = (24, 48, 48)
+    ref = _synthetic_blob_volume(rng, shape)
+    applied_zyx = (2, -3, 4)
+    mov = _off_centre_blob(ndi_shift(ref, shift=applied_zyx, order=1, mode="constant"))
+    few_iterations = {
+        "type_of_transform": "Similarity",
+        "aff_iterations": (1, 1, 1),
+        "aff_shrink_factors": (6, 3, 1),
+        "aff_smoothing_sigmas": (2, 1, 0),
+    }
+    true_seed = Transform.from_translation([-a for a in applied_zyx])
+
+    from_seed = AntsEstimator(ants_kwargs=few_iterations).estimate(mov, ref, seed=true_seed)
+    np.testing.assert_allclose(from_seed.matrix[:3, 3], true_seed.matrix[:3, 3], atol=1.0)
+
+    # ANTsPy's own default (no initial transform) is what used to replace the seed's shift
+    com_start = AntsEstimator(ants_kwargs={**few_iterations, "initial_transform": None})
+    moved = (
+        com_start.estimate(mov, ref, seed=true_seed).matrix[:3, 3] - true_seed.matrix[:3, 3]
+    )
+    assert np.abs(moved).max() > 1.0

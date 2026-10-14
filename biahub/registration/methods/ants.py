@@ -244,11 +244,14 @@ class AntsEstimator:
             clip=self.clip,
             sobel_filter=self.sobel_filter,
         )
+        # Start ANTs where the seed put the volume: its default would first align the
+        # intensity centres of mass, replacing the seed's translation.
+        ants_kwargs = {"initial_transform": "Identity", **self.ants_kwargs}
         inverse_correction, _unused = estimate(
             ref=ref_prepared,
             mov=mov_prepared,
             verbose=self.verbose,
-            ants_kwargs=self.ants_kwargs,
+            ants_kwargs=ants_kwargs,
         )
         correction = inverse_correction.invert()
         if np.any(offset):
