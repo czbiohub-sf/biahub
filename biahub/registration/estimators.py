@@ -145,7 +145,9 @@ class CompetingEstimator:
                 continue
             score = self.score_fn(transform, mov, ref)
             self.last_scores[name] = float(score)
-            if np.isfinite(score) and score > best_score:
+            if not np.isfinite(score):
+                failures[name] = f"its transform scored {score}"
+            elif score > best_score:
                 best, best_score, self.last_winner = transform, score, name
         if best is None:
             raise EstimationError(
