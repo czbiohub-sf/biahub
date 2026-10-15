@@ -13,6 +13,7 @@ from numpy.typing import ArrayLike
 from scipy.fftpack import next_fast_len
 
 from biahub.core.transform import Transform
+from biahub.registration.estimators import EstimationError
 from biahub.registration.utils import match_shape, match_shape_origin
 from biahub.settings import PhaseCrossCorrSettings
 
@@ -259,6 +260,12 @@ class PCCEstimator:
                 ref, mov, maximum_shift=self.maximum_shift, normalization=self.normalization
             )
         else:
+            if mov.shape != ref.shape:
+                raise EstimationError(
+                    f"phase cross-correlation without padding needs equal grids, got moving "
+                    f"{mov.shape} and reference {ref.shape}: set phase_cross_corr.function_type: "
+                    "custom_padding"
+                )
             shift, _corr = phase_cross_corr(ref, mov, normalization=self.normalization)
         return Transform.from_translation(shift)
 

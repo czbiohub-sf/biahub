@@ -788,3 +788,15 @@ def test_center_crops_keep_the_requested_size(crop):
     _, y, x = pcc_crop(PhaseCrossCorrSettings(center_crop_xy=list(crop)), shape)
     assert (y.stop - y.start, x.stop - x.start) == expected
     assert y.start >= 0 and x.start >= 0 and y.stop <= 9 and x.stop <= 7
+
+
+def test_unpadded_pcc_refuses_unequal_shapes_with_guidance():
+    # The unpadded correlation needs equal grids; unequal ones raised deep in numpy.
+    from biahub.registration.methods.pcc import PCCEstimator
+
+    rng = np.random.default_rng(0)
+    ref = rng.random((8, 32, 64)).astype(np.float32)
+    mov = rng.random((8, 32, 72)).astype(np.float32)
+    with pytest.raises(EstimationError, match="custom_padding"):
+        PCCEstimator(function_type="custom").estimate(mov, ref)
+    PCCEstimator(function_type="custom_padding").estimate(mov, ref)  # pads to one grid
