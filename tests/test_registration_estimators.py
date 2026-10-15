@@ -822,3 +822,15 @@ def test_itk_threads_fall_back_where_cpu_affinity_is_unavailable(monkeypatch):
     monkeypatch.delenv("SLURM_CPUS_PER_TASK", raising=False)
     monkeypatch.delattr(ants_method.os, "sched_getaffinity", raising=False)
     assert int(ants_method._itk_threads()) >= 1
+
+
+def test_focus_xy_translation_is_in_full_volume_coordinates_for_unequal_shapes():
+    # Each volume is centre-cropped on its own: with unequal shapes the crops start at
+    # different origins, and the crop-local translation must be mapped back to the volumes.
+    rng = np.random.default_rng(4)
+    big = _synthetic_blob_volume(rng, (24, 64, 72), n_blobs=60)
+    ref, mov = big[:, :, :64], big  # same content from x=0; mov is 8 px wider
+    estimator = FocusEstimator(pixel_size=0.1, axes="xy", center_crop_xy=(40, 40))
+    estimator._focus = lambda zyx: 12  # isolate the yx step
+    result = estimator.estimate(mov, ref)
+    np.testing.assert_allclose(result.matrix[1:3, 3], [0.0, 0.0], atol=0.5)

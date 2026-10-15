@@ -25,11 +25,22 @@ from biahub.settings import FocusSettings
 FocusAxes = Literal["z", "xy", "xyz"]
 
 
+def center_crop_yx_origin(
+    yx_shape: tuple[int, int], crop_xy: tuple[int, int]
+) -> tuple[int, int]:
+    """Return the (y, x) start of `center_crop_yx`'s crop in a plane of `yx_shape`."""
+    y, x = yx_shape
+    cx, cy = min(crop_xy[0], x), min(crop_xy[1], y)
+    return y // 2 - cy // 2, x // 2 - cx // 2
+
+
 def center_crop_yx(zyx: np.ndarray, crop_xy: tuple[int, int]) -> np.ndarray:
     """Centre crop of at most `crop_xy` (X, Y) pixels, the legacy `center_crop_xy` convention."""
     _, y, x = zyx.shape
     cx, cy = min(crop_xy[0], x), min(crop_xy[1], y)
-    y0, x0 = y // 2 - cy // 2, x // 2 - cx // 2  # the stop is start + size: odd sizes keep it
+    y0, x0 = center_crop_yx_origin(
+        (y, x), crop_xy
+    )  # the stop is start + size: odd sizes keep it
     return zyx[:, y0 : y0 + cy, x0 : x0 + cx]
 
 
@@ -118,5 +129,13 @@ class FocusEstimator:
             ref_yx = np.clip(
                 center_crop_yx(ref[z_ref : z_ref + 1], self.center_crop_xy)[0], 0, None
             )
-            matrix[1:, 1:] = self._stackreg.estimate(mov_yx, ref_yx).matrix
+            # stackreg maps the moving crop onto the reference crop; the crops start at each
+            # volume's own centre, so map back through both origins.
+            crop_matrix = self._stackreg.estimate(mov_yx, ref_yx).matrix
+            to_ref, from_mov = np.eye(3), np.eye(3)
+            to_ref[:2, 2] = center_crop_yx_origin(ref.shape[-2:], self.center_crop_xy)
+            from_mov[:2, 2] = np.negative(
+                center_crop_yx_origin(mov.shape[-2:], self.center_crop_xy)
+            )
+            matrix[1:, 1:] = to_ref @ crop_matrix @ from_mov
         return Transform(matrix, transform_type="euclidean")
