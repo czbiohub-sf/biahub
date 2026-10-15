@@ -13,7 +13,7 @@ from numpy.typing import ArrayLike
 from scipy.fftpack import next_fast_len
 
 from biahub.core.transform import Transform
-from biahub.registration.utils import match_shape
+from biahub.registration.utils import match_shape, match_shape_origin
 from biahub.settings import PhaseCrossCorrSettings
 
 
@@ -109,6 +109,11 @@ def phase_cross_corr_padding(
             f"with maximum shift of {maximum_shift}"
         )
 
+    # Resizing moves each origin; with unequal shapes by different amounts, which is not a
+    # shift of the content: removed from the peak below.
+    origin_offset = match_shape_origin(mov_img.shape, shape) - match_shape_origin(
+        ref_img.shape, shape
+    )
     ref_img = match_shape(ref_img, shape)
     mov_img = match_shape(mov_img, shape)
     Fimg1 = np.fft.rfftn(ref_img)
@@ -133,7 +138,9 @@ def phase_cross_corr_padding(
     argmax = np.argmax(corr)
     peak = np.unravel_index(argmax, corr.shape)
     # Same sign convention as `phase_cross_corr`: the shift of mov relative to ref.
-    peak = tuple(p - s // 2 for s, p in zip(corr.shape, peak, strict=True))
+    peak = tuple(
+        int(p - s // 2 + o) for s, p, o in zip(corr.shape, peak, origin_offset, strict=True)
+    )
 
     if verbose:
         click.echo(f"phase cross corr. peak at {peak}")

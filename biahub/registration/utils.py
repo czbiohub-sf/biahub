@@ -552,6 +552,19 @@ def match_shape(
     return img
 
 
+def match_shape_origin(in_shape: tuple[int, ...], out_shape: tuple[int, ...]) -> np.ndarray:
+    """Where `match_shape` puts the input's origin in its output: the leading pad minus the crop.
+
+    Mirrors `match_shape` (pad to the larger shape, half the difference before; then centre
+    crop), so two volumes resized to one shape can be compared in their own coordinates.
+    """
+    in_shape, out_shape = np.asarray(in_shape), np.asarray(out_shape)
+    padded = np.maximum(in_shape, out_shape)
+    leading_pad = (padded - in_shape) // 2
+    crop_start = (padded - out_shape) // 2
+    return leading_pad - crop_start
+
+
 def resolve_time_indices(time_indices, n_t: int) -> list[int]:
     """Return the timepoints a `time_indices` setting names: 'all', one index, or a list.
 

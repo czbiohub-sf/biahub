@@ -746,3 +746,30 @@ def test_pcc_correlation_keeps_the_input_grid_on_odd_widths(x):
     assert corr.shape == ref.shape
     _shift, corr = pcc.phase_cross_corr_padding(ref, ref, maximum_shift=1.2)
     assert corr.shape == tuple(pcc.next_fast_len(int(s * 1.2)) for s in ref.shape)
+
+
+@pytest.mark.parametrize("mov_width", [72, 68, 64])
+def test_padded_pcc_measures_no_shift_from_unequal_shapes(mov_width):
+    # Padding / cropping both volumes to one shape moves their origins by different amounts
+    # when their shapes differ; that difference is not a shift of the content.
+    from biahub.registration.methods.pcc import phase_cross_corr_padding
+
+    rng = np.random.default_rng(2)
+    ref = _synthetic_blob_volume(rng, (24, 64, 72), n_blobs=40)
+    aligned = ref[:, :, :mov_width]  # same content from x=0, narrower
+    shift, _ = phase_cross_corr_padding(
+        ref, aligned, maximum_shift=1.2, normalization="magnitude"
+    )
+    assert tuple(int(s) for s in shift) == (0, 0, 0)
+
+    moved = ndi_shift(ref, (0, 3, -5), order=1, mode="constant")[:, :, :mov_width]
+    unequal, _ = phase_cross_corr_padding(
+        ref, moved, maximum_shift=1.2, normalization="magnitude"
+    )
+    equal, _ = phase_cross_corr_padding(
+        ref,
+        ndi_shift(ref, (0, 3, -5), order=1, mode="constant"),
+        maximum_shift=1.2,
+        normalization="magnitude",
+    )
+    assert tuple(int(s) for s in unequal) == tuple(int(s) for s in equal)
