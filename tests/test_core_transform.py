@@ -51,3 +51,16 @@ def test_ants_point_conversion_is_direction_preserving():
     via_ants_point = np.array(transform.to_ants().apply_to_point(tuple(point)))
 
     np.testing.assert_allclose(via_apply_points, via_ants_point)
+
+
+def test_non_default_resampling_options_are_honoured_by_the_default_backend():
+    # The ANTs backend resamples linearly only; asking for nearest-neighbour (labels) or a
+    # fill value must not be ignored silently.
+    labels = np.zeros((8, 16, 16), dtype=np.float32)
+    labels[2:6, 4:12, 4:12] = 3.0
+    labels[3:5, 6:10, 6:10] = 7.0
+    shift = Transform.from_translation([0.0, 0.5, 0.5])
+    out = shift.apply(labels, order=0)
+    assert set(np.unique(out)) <= {0.0, 3.0, 7.0}  # no blended label values
+    filled = shift.apply(labels, cval=-1.0)
+    assert filled.min() == -1.0  # the fill value outside the moved volume

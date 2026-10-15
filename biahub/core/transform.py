@@ -381,7 +381,11 @@ class Transform:
         # Determine output shape
         output_shape = reference.shape if reference is not None else moving.shape
 
-        if backend == "ants" and self._ndim != 3:
+        # ANTs resamples linearly with a zero fill only: other options go to scipy rather
+        # than being ignored (e.g. order=0 for labels).
+        if backend == "ants" and (
+            self._ndim != 3 or order != 1 or mode != "constant" or cval != 0
+        ):
             backend = "scipy"
         if backend == "scipy":
             return self._apply_scipy(moving, output_shape, order, mode, cval)
