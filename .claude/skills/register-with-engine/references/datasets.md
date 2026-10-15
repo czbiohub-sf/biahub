@@ -9,13 +9,16 @@
 | mantis v2 (`0-flatfield` ... `4-assemble`) | `1-deskew/<DATASET>_1.zarr` (BF + fluorescence in one store) | `2-reconstruct/<DATASET>_1.zarr` | none: the arms are aligned on acquisition |
 | DragonFly spinning disk, organelle_box (`/hpc/projects/intracellular_dashboard/organelle_box/<DATASET>`) | `0-convert/<plate>.zarr`, a `*-Prime_*` channel (fluorescence camera; the store also holds `*-Zyla_BF`) | `1-reconstruct*/<plate>_Phase.zarr` (`Phase3D`) or `2-VS/VS_<plate>.zarr` (`nuclei_prediction`), both from the Zyla BF | some projects have `0-convert/beads.zarr` (one position, both cameras); most have none: register on the cells (`ants`) |
 
-**DragonFly.** The two cameras differ in magnification by ~5% in y/x (2025_04_18: scale
-0.950/0.952, z ~1.0, a ~6 voxel z offset) although both stores claim 0.103 µm pixels, so the
-transform is a camera-to-camera geometry and needs a seed that carries that scale (an
-earlier registration of the same instrument, or a measured one: `references/methods.md`,
-"ANTs"). Often T=1 (set `fallback.repair: null`). The z offset can differ between wells by
-~±2 voxels. Applying: pass `--channels` with the fluorescence channels only -- the moving
-store also holds the BF channel, which is already on the reference camera.
+**DragonFly.** The two cameras differ in magnification by a few percent in y/x, although both
+stores claim the same pixel size, and the ratio changes between setups: measure it for each
+dataset rather than reuse one. So the transform is a camera-to-camera geometry and needs a
+seed that carries that scale (measured, or an earlier registration of the same setup:
+`references/methods.md`, "ANTs"). Expect a z offset of several slices between the cameras,
+which can differ between wells by a couple of slices -- and between fluorescence channels:
+beads in one colour register that colour only, so check other channels' z (e.g. their z
+profiles against phase in a few cells). Often T=1 (set `fallback.repair: null`). Applying:
+pass `--channels` with the fluorescence channels only -- the moving store also holds the BF
+channel, which is already on the reference camera.
 
 Previous registrations live in `1-preprocess/light-sheet/raw/1-register/` (the
 `estimate-registration*.sh` script names the beads well; the
