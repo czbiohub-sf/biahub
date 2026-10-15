@@ -1,9 +1,10 @@
 # Unified estimate config for `biahub estimate-transform` (registration engine).
-# Registration: source channel onto target channel at every timepoint (reference: cross).
-# Stabilization: drop `target` and set `reference: first` or `previous` -- same estimate,
-# the source channel aligned onto its own first / previous timepoint.
-# Only the block of the chosen `method` is needed (beads / ants / phase_cross_corr / manual /
-# focus_finding).
+# Registration: the moving channel onto the reference channel at every timepoint
+# (reference.frame: cross). Stabilization: drop reference.channel and set reference.frame to
+# first or previous -- the moving channel aligned onto its own first / previous timepoint.
+# Only the block of the chosen `method` is needed: method beads / ants / phase-cross-corr /
+# manual / focus-finding uses the block beads / ants / phase_cross_corr / manual /
+# focus_finding.
 # `fallback` holds what used to be hidden constants: the adaptive flagging line, the
 # repair candidates tried, in order, for flagged timepoints (then polished), and the
 # optional parameter sweep, which competes with repair on the same flagged timepoints.
