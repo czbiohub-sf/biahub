@@ -201,8 +201,10 @@ def _init_output_plate(
     Z_out = 1 if models[0].z_slice_2D is not None else Z
 
     # Label channel i belongs to model i. On an existing output, create_empty_plate keeps
-    # the stored channel order, so a reordered config would write into swapped channels.
+    # the stored channels and array shape, so a reordered config would write into swapped
+    # channels and a 3D -> 2D switch would keep the old Z planes.
     label_channels = [m.name + "_labels" for m in models]
+    output_shape = (T, len(models), Z_out, Y, X)
     position_keys = [Path(p).parts[-3:] for p in input_position_dirpaths]
     for key in position_keys:
         output_position = Path(output_dirpath, *key)
@@ -210,11 +212,13 @@ def _init_output_plate(
             continue
         with open_ome_zarr(str(output_position), mode="r") as output_dataset:
             existing = output_dataset.channel_names
-        if existing != label_channels:
+            existing_shape = tuple(output_dataset.data.shape)
+        if existing != label_channels or existing_shape != output_shape:
             raise ValueError(
-                f"{output_position} has label channels {existing}, but this config "
-                f"writes {label_channels}. Keep the models in the same order, or "
-                "segment into a new output."
+                f"{output_position} has label channels {existing} and shape "
+                f"{existing_shape}, but this config writes {label_channels} with shape "
+                f"{output_shape}. Keep the models and their settings, or segment into "
+                "a new output."
             )
 
     input_plate = Path(input_position_dirpaths[0]).parents[2]
@@ -222,7 +226,7 @@ def _init_output_plate(
         store_path=output_dirpath,
         position_keys=position_keys,
         channel_names=label_channels,
-        shape=(T, len(models), Z_out, Y, X),
+        shape=output_shape,
         dtype=np.uint32,
         scale=scale,
         version=resolve_ome_zarr_version(

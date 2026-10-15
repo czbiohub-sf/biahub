@@ -428,3 +428,26 @@ def test_segment_mem_per_cpu_override_drops_the_computed_total(
     assert result.exit_code == 0, result.output
     assert _RecordingExecutor.parameters["slurm_mem_per_cpu"] == "16G"
     assert "slurm_mem" not in _RecordingExecutor.parameters
+
+
+def test_segment_refuses_an_output_with_a_different_shape(
+    fake_cellpose, example_plate, tmp_path
+):
+    """Switching a same-named model from 3D to 2D kept the old multi-plane array."""
+    plate_path, _ = example_plate
+    out, position = tmp_path / "seg.zarr", plate_path / "B" / "1" / "0"
+    model = {"pretrained_model": "cpsam_v2", "channels": ["GFP"]}
+    three_d = tmp_path / "3d.yml"
+    three_d.write_text(
+        yaml.safe_dump({"models": {"nuc": {**model, "eval_args": {"do_3D": True}}}})
+    )
+    two_d = tmp_path / "2d.yml"
+    two_d.write_text(yaml.safe_dump({"models": {"nuc": {**model, "z_slice_2D": 1}}}))
+    assert _run("--init", "-i", position, "-o", out, "-c", three_d).exit_code == 0
+
+    result = _run("--init", "-i", position, "-o", out, "-c", two_d)
+
+    assert result.exit_code != 0
+    assert "(3, 1, 4, 5, 6)" in str(result.exception)
+    with open_ome_zarr(out / "B" / "1" / "0", mode="r") as ds:
+        assert ds.data.shape == (3, 1, 4, 5, 6)
