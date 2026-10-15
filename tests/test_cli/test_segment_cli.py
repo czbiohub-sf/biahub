@@ -399,3 +399,32 @@ def test_segment_resume_token_depends_on_model_order(tmp_path):
 
     assert _resume_token(a) != _resume_token(b)
     assert _resume_token(a) == _resume_token(a.model_copy(deep=True))
+
+
+def test_segment_mem_per_cpu_override_drops_the_computed_total(
+    fake_cellpose, example_plate, segment_config, tmp_path, monkeypatch
+):
+    """The --sbatch-filepath help's own example, '#SBATCH --mem-per-cpu=16G', left
+    --mem set too, and SLURM rejects jobs with both."""
+    monkeypatch.setattr("biahub.segment.submitit.AutoExecutor", _RecordingExecutor)
+    monkeypatch.delenv("CI", raising=False)  # conftest forces CI (debug) otherwise
+    sbatch = tmp_path / "mem.sbatch"
+    sbatch.write_text("#SBATCH --mem-per-cpu=16G\n")
+    plate_path, _ = example_plate
+
+    result = _run(
+        "--cluster",
+        "slurm",
+        "-sb",
+        sbatch,
+        "-i",
+        plate_path / "A" / "1" / "0",
+        "-o",
+        tmp_path / "s.zarr",
+        "-c",
+        segment_config(),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert _RecordingExecutor.parameters["slurm_mem_per_cpu"] == "16G"
+    assert "slurm_mem" not in _RecordingExecutor.parameters

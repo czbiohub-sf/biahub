@@ -56,6 +56,24 @@ def gpu_executor_parameters(cluster: str, timeout_min: float) -> dict:
     return {"gpus_per_node": 1, "timeout_min": timeout_min} if cluster == "local" else {}
 
 
+_SLURM_MEMORY_KEYS = ("slurm_mem", "slurm_mem_per_cpu", "slurm_mem_per_gpu")
+
+
+def apply_sbatch_overrides(slurm_args: dict, overrides: dict) -> dict:
+    """Merge ``--sbatch-filepath`` overrides into the computed submitit parameters.
+
+    SLURM rejects jobs that set more than one of ``--mem``, ``--mem-per-cpu`` and
+    ``--mem-per-gpu``, so a memory override replaces the computed memory request
+    whichever form it takes. Returns a new dict.
+    """
+    merged = dict(slurm_args)
+    if any(key in overrides for key in _SLURM_MEMORY_KEYS):
+        for key in _SLURM_MEMORY_KEYS:
+            merged.pop(key, None)
+    merged.update(overrides)
+    return merged
+
+
 def get_submitit_cluster(
     local: bool = False,
     cluster: str | None = None,

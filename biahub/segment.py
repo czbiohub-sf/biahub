@@ -31,6 +31,7 @@ from biahub.utils.cellpose import (
     warm_cellpose_weights,
 )
 from biahub.utils.cluster import (
+    apply_sbatch_overrides,
     echo_resources,
     estimate_resources,
     get_submitit_cluster,
@@ -329,7 +330,7 @@ def segment(
         "slurm_use_srun": False,
     }
     if sbatch_filepath:
-        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
+        slurm_args = apply_sbatch_overrides(slurm_args, sbatch_to_submitit(sbatch_filepath))
 
     click.echo(f"Preparing jobs on cluster='{resolved_cluster}': {slurm_args}")
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=resolved_cluster)
