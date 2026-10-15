@@ -49,6 +49,7 @@ from biahub.registration.methods.manual import ManualEstimator
 from biahub.registration.methods.pcc import PCCEstimator
 from biahub.registration.methods.vote_icp import VoteIcpEstimator, VoteSeedCorrection
 from biahub.registration.metrics import (
+    SOBEL_FOOTPRINT,
     bead_alignment_metrics,
     beads_score_fn,
     correlation_score,
@@ -74,6 +75,7 @@ from biahub.settings import (
     BeadsMatchSettings,
     EstimateTransformSettings,
     FlagSettings,
+    Sobel,
 )
 from biahub.utils.cluster import estimate_resources, get_submitit_cluster
 from biahub.utils.config import model_to_yaml, yaml_to_model
@@ -888,16 +890,17 @@ def _seed(settings: EstimateTransformSettings) -> Transform:
 def _score_fn(settings: EstimateTransformSettings) -> ScoreFn:
     """Return the score every decision uses: `settings.score`, never the method's blocks."""
     blocks = settings.score.preprocess
-    prepare = (
-        (
-            lambda warped, ref: (
+    prepare = None
+    if blocks:
+
+        def prepare(warped, ref):
+            return (
                 apply_image_blocks(warped, blocks, "moving"),
                 apply_image_blocks(ref, blocks, "reference"),
             )
-        )
-        if blocks
-        else None
-    )
+
+        # how far the blocks reach: the score leaves that margin by the empty padding
+        prepare.footprint = SOBEL_FOOTPRINT * sum(isinstance(b, Sobel) for b in blocks)
     return _metric_fn(settings, settings.effective_score_metric, prepare)
 
 

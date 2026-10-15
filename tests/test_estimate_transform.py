@@ -827,7 +827,6 @@ def test_every_own_transform_reports_raw_metrics_next_to_its_score(
             "correlation": correlation_score(transform, mov, ref),
             "mutual_information": normalized_mutual_information(transform, mov, ref),
         }
-        assert entry.report["correlation"] != entry.score  # the score compares Sobel edges
     assert entries[2].filled_from is not None and entries[2].report is None
 
 

@@ -72,7 +72,10 @@ def test_score_blocks_run_after_the_warp_inside_the_raw_overlap():
         transform, mov, ref, sobel_filter=True
     )
     assert plain(transform, mov, ref) == correlation_score(transform, mov, ref)
-    assert plain(transform, mov, ref) != with_sobel(transform, mov, ref)
+    off = Transform.from_translation(
+        [-1.0, 1.0, -2.0]
+    )  # misaligned: edges and intensities differ
+    assert plain(off, mov, ref) != with_sobel(off, mov, ref)
 
 
 def test_the_methods_blocks_do_not_change_the_score():
@@ -90,3 +93,24 @@ def test_report_metrics_default_to_none_and_bead_metrics_need_beads():
     _settings("beads", score={"report": ["overlap", "mutual_information"]})
     with pytest.raises(ValidationError, match="bead"):
         _settings("ants", score={"report": ["overlap"]})
+
+
+def test_score_blocks_do_not_see_the_edge_of_the_empty_padding():
+    # Shifting the moving volume back in z leaves an empty slab in the warped volume. Its
+    # edge is not content: with a sobel block the exact transform must still score like a
+    # perfect match (DragonFly: the edge made every z-shifted transform score below identity).
+    from biahub.registration.engine import _score_fn
+    from tests.test_registration_estimators import _synthetic_blob_volume
+
+    rng = np.random.default_rng(6)
+    # dim structures on a high background, as fluorescence: the jump from background to the
+    # empty padding is far larger than any edge of the content
+    ref = 0.02 * _synthetic_blob_volume(rng, (24, 40, 40)) + 250.0
+    mov = ndi_shift(ref, (3, 0, 0), order=0, mode="constant", cval=0.0)
+    exact = Transform.from_translation([-3.0, 0.0, 0.0])
+    plain = _score_fn(_settings("ants"))(exact, mov, ref)
+    edges = _score_fn(_settings("ants", score={"preprocess": [{"sobel": {}}]}))(
+        exact, mov, ref
+    )
+    assert plain > 0.99
+    assert edges > 0.99

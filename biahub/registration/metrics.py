@@ -21,6 +21,7 @@ from dataclasses import asdict, dataclass
 import numpy as np
 
 from numpy.typing import ArrayLike
+from scipy.ndimage import binary_erosion
 from scipy.spatial import cKDTree
 from skimage import filters
 
@@ -107,6 +108,27 @@ def _overlap_pair(transform: Transform, mov: ArrayLike, ref: ArrayLike):
     return warped, ref, mask
 
 
+# Voxels a 3x3x3 filter (Sobel) reaches: one on each side.
+SOBEL_FOOTPRINT = 1
+
+
+def _away_from_padding(mask: np.ndarray, footprint: int) -> np.ndarray:
+    """Return `mask` without the voxels a filter of `footprint` reaches from outside it.
+
+    A filter run on the warped volume sees the edge of the empty padding (or of empty data)
+    as a strong edge; those voxels compare an artefact, not content. The volume's own
+    borders are not padding and are kept.
+    """
+    if footprint <= 0:
+        return mask
+    return binary_erosion(mask, iterations=footprint, border_value=1)
+
+
+def _footprint(prepare, *, sobel: bool = False) -> int:
+    """Return how far the score's blocks (and any built-in Sobel) reach, in voxels."""
+    return getattr(prepare, "footprint", 0) + (SOBEL_FOOTPRINT if sobel else 0)
+
+
 def normalized_mutual_information(
     transform: Transform,
     mov: ArrayLike,
@@ -134,6 +156,9 @@ def normalized_mutual_information(
         # MI of edge magnitudes: what the fault detectors in registration-eval found most
         # reliable between fluorescence and virtual staining.
         warped, ref = filters.sobel(warped), filters.sobel(ref)
+    mask = _away_from_padding(mask, _footprint(prepare, sobel=sobel))
+    if mask.sum() < bins:
+        return float("nan")
     a, b = warped[mask], ref[mask]
     a_lo, a_hi = np.percentile(a, percentiles)
     b_lo, b_hi = np.percentile(b, percentiles)
@@ -171,6 +196,9 @@ def gradient_correlation(
         return float("nan")
     if prepare is not None:
         warped, ref = prepare(warped, ref)
+    mask = _away_from_padding(mask, _footprint(prepare, sobel=True))
+    if mask.sum() < 2:
+        return float("nan")
     a = filters.sobel(warped)[mask]
     b = filters.sobel(ref)[mask]
     a = a - a.mean()
@@ -188,11 +216,13 @@ def residual_shift(transform: Transform, mov: ArrayLike, ref: ArrayLike) -> floa
     `mch_eshift`), and 0 means aligned regardless of modality.
     """
     warped, ref, mask = _overlap_pair(transform, mov, ref)
-    if mask.sum() < 8:
+    inside = _away_from_padding(mask, SOBEL_FOOTPRINT)
+    if inside.sum() < 8:
         return float("nan")
-    shift, _ = phase_cross_corr(
-        filters.sobel(ref).astype(np.float32), filters.sobel(warped).astype(np.float32)
-    )
+    # edges of the content only: the padding's edge would dominate the correlation
+    ref_edges = np.where(inside, filters.sobel(ref), 0).astype(np.float32)
+    warped_edges = np.where(inside, filters.sobel(warped), 0).astype(np.float32)
+    shift, _ = phase_cross_corr(ref_edges, warped_edges)
     return float(np.linalg.norm(shift))
 
 
@@ -251,9 +281,12 @@ def correlation_score(
         return float("nan")
     if prepare is not None:
         warped, ref = prepare(warped, ref)
-    a, b = warped[mask], ref[mask]
     if sobel_filter:
-        a, b = filters.sobel(warped)[mask], filters.sobel(ref)[mask]
+        warped, ref = filters.sobel(warped), filters.sobel(ref)
+    mask = _away_from_padding(mask, _footprint(prepare, sobel=sobel_filter))
+    if mask.sum() < 2:
+        return float("nan")
+    a, b = warped[mask], ref[mask]
     a = a - a.mean()
     b = b - b.mean()
     denominator = np.sqrt((a * a).sum() * (b * b).sum())
