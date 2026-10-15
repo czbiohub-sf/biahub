@@ -102,7 +102,7 @@ def test_sparse_spectral_affinity_equals_the_dense_one_and_matches_identically()
     order = np.argsort(-x)
     expected, used_i, used_j = [], set(), set()
     for idx in order:
-        if x[idx] <= matcher.spectral_rel_cut * x.max():
+        if x[idx] < matcher.spectral_rel_cut * x.max() or x[idx] <= 0:
             break
         i, j = divmod(int(idx), len(ref))
         if i not in used_i and j not in used_j:
@@ -272,3 +272,13 @@ def test_spectral_arm_recovers_an_offset_beyond_the_hungarian_capture_range():
     # Capture-range test, not a precision test: on integer peak positions the matcher's
     # fit lands within ~1 vox (the same precision the legacy pipeline has).
     np.testing.assert_allclose(transform.translation, [-a for a in applied_zyx], atol=1.5)
+
+
+def test_spectral_rel_cut_of_one_keeps_the_top_correspondence():
+    # rel_cut is a fraction of the top eigenvector entry and the settings accept 1.0: that
+    # keeps the best-scoring candidate(s), it does not reject everything.
+    rng = np.random.default_rng(0)
+    nodes = rng.uniform(0, 100, size=(12, 3))
+    matcher = GraphMatcher(algorithm="spectral", spectral_sigma=3.0, spectral_rel_cut=1.0)
+    matches = matcher.match(Graph.from_nodes(nodes), Graph.from_nodes(nodes + 5.0))
+    assert len(matches) >= 1

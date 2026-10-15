@@ -480,7 +480,8 @@ class GraphMatcher:
         threshold = self.spectral_rel_cut * x.max()
         used_i, used_j, matches = set(), set(), []
         for idx in np.argsort(-x):
-            if x[idx] <= threshold:
+            # keep scores at the cut (rel_cut 1.0 keeps the top one), never a zero score
+            if x[idx] < threshold or x[idx] <= 0:
                 break
             i, j = int(ii[idx]), int(jj[idx])
             if i in used_i or j in used_j:
