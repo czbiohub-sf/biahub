@@ -131,7 +131,7 @@ def phase_cross_corr_padding(
         prod /= np.fmax(np.abs(Fimg1) * np.abs(Fimg2), eps)
 
     # the spatial shape: without it an odd last axis comes back one sample short
-    corr = np.fft.irfftn(prod, s=shape)
+    corr = np.fft.irfftn(prod, s=shape, axes=tuple(range(len(shape))))
     del prod, Fimg1, Fimg2
 
     corr = np.fft.fftshift(np.abs(corr))
@@ -194,7 +194,7 @@ def phase_cross_corr(
         norm = 1.0
 
     # the spatial shape: without it an odd last axis comes back one sample short
-    corr = np.fft.irfftn(prod / norm, s=np.shape(ref_img))
+    corr = np.fft.irfftn(prod / norm, s=np.shape(ref_img), axes=tuple(range(np.ndim(ref_img))))
     corr_shifted = np.fft.fftshift(np.abs(corr))
     if output_path:
         plot_cross_correlation(
