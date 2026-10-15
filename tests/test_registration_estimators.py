@@ -412,10 +412,10 @@ def test_ants_estimator_with_seed_still_recovers_translation():
     np.testing.assert_allclose(transform.matrix[:3, 3], [-a for a in applied_zyx], atol=0.5)
 
 
-def test_ants_estimator_recovers_known_translation_and_warps_mov_onto_ref(monkeypatch):
-    # One ITK thread repeats exactly; with several the result varies by ~0.01 voxel between
-    # machines, enough to cross the 5% bound below on a CI runner.
-    monkeypatch.setenv("ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS", "1")
+def test_ants_estimator_recovers_known_translation_and_warps_mov_onto_ref():
+    # Dense metric sampling: ANTs' default samples 20% of the voxels at random, and on a
+    # volume this small the result then varies by up to ~0.4-0.6 px between platforms
+    # (CI runners crossed the bounds below); dense sampling stays within ~0.16 px.
     rng = np.random.default_rng(5)
     shape = (24, 48, 48)
     ref = _synthetic_blob_volume(rng, shape)
@@ -423,7 +423,8 @@ def test_ants_estimator_recovers_known_translation_and_warps_mov_onto_ref(monkey
     applied_zyx = (2, -3, 4)
     mov = ndi_shift(ref, shift=applied_zyx, order=1, mode="constant", cval=0.0)
 
-    transform = AntsEstimator().estimate(mov, ref)
+    dense = {**DEFAULT_ANTS_KWARGS, "aff_random_sampling_rate": 1.0}
+    transform = AntsEstimator(ants_kwargs=dense).estimate(mov, ref)
     np.testing.assert_allclose(transform.matrix[:3, 3], [-a for a in applied_zyx], atol=0.5)
 
     margin = 6
