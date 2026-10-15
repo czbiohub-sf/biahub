@@ -108,6 +108,20 @@ def _overlap_pair(transform: Transform, mov: ArrayLike, ref: ArrayLike):
     return warped, ref, mask
 
 
+class Prewarped:
+    """Stands in for a transform when the moving volume is already warped onto the reference.
+
+    Lets several metrics share one warp: each calls `transform.apply`, which hands the
+    volume back unchanged.
+    """
+
+    def apply(self, moving, reference=None, **kwargs):
+        return np.asarray(moving)
+
+
+PREWARPED = Prewarped()
+
+
 # Voxels a 3x3x3 filter (Sobel) reaches: one on each side.
 SOBEL_FOOTPRINT = 1
 

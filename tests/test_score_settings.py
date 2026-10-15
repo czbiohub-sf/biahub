@@ -114,3 +114,27 @@ def test_score_blocks_do_not_see_the_edge_of_the_empty_padding():
     )
     assert plain > 0.99
     assert edges > 0.99
+
+
+def test_report_metrics_share_one_warp(monkeypatch):
+    # Every report metric used to warp the volume again (~100 s each on a 2048 x 2048 pair).
+    from biahub.registration import engine
+    from biahub.registration.metrics import correlation_score, normalized_mutual_information
+
+    mov, ref = _pair()
+    transform = Transform.from_translation([-1.0, 2.0, -3.0])
+    settings = _settings(
+        "ants", score={"report": ["correlation", "mutual_information", "gradient_correlation"]}
+    )
+    expected = {
+        "correlation": correlation_score(transform, mov, ref),
+        "mutual_information": normalized_mutual_information(transform, mov, ref),
+    }
+    warps = []
+    real = Transform.apply
+    monkeypatch.setattr(
+        Transform, "apply", lambda self, *a, **k: warps.append(1) or real(self, *a, **k)
+    )
+    report = engine._report_metrics(settings, transform, 0, mov[None], ref[None])
+    assert len(warps) == 1
+    assert {k: report[k] for k in expected} == expected

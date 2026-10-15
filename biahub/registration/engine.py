@@ -49,6 +49,7 @@ from biahub.registration.methods.manual import ManualEstimator
 from biahub.registration.methods.pcc import PCCEstimator
 from biahub.registration.methods.vote_icp import VoteIcpEstimator, VoteSeedCorrection
 from biahub.registration.metrics import (
+    PREWARPED,
     SOBEL_FOOTPRINT,
     bead_alignment_metrics,
     beads_score_fn,
@@ -1055,9 +1056,11 @@ def _report_metrics(settings, transform, t, mov, ref) -> dict | None:
     if not settings.score.report or transform is None:
         return None
     ref_t = np.asarray(_reference_policy(settings, ref).reference_for(mov, t))
-    mov_t = np.asarray(mov[t])
+    click.echo(f"t={t}: report metrics {settings.score.report} (one warp)")
+    # one warp for every metric: each would otherwise warp the volume again
+    warped = transform.apply(np.asarray(mov[t]), reference=ref_t)
     return {
-        metric: _finite_or_none(_metric_fn(settings, metric)(transform, mov_t, ref_t))
+        metric: _finite_or_none(_metric_fn(settings, metric)(PREWARPED, warped, ref_t))
         for metric in settings.score.report
     }
 
