@@ -143,14 +143,13 @@ fallback:
     polish_rounds: 3
   # Off unless given. Each sub-grid is a cross product of dotted paths into this config;
   # the trials are the union of the sub-grids. This is production's default beads grid
-  # (25 trials, about 1-2 min each per flagged timepoint).
+  # (17 trials, about 1-2 min each per flagged timepoint).
   sweep: null
   # sweep:
   #   max_timepoints: 25
   #   grid:
   #   - beads.hungarian_match_settings.cost_threshold: [0.05, 0.10]
   #     beads.hungarian_match_settings.cost_matrix_settings.weights.dist: [0.25, 1.0]
-  #     beads.hungarian_match_settings.edge_graph_settings.method: [knn, full]
   #     beads.filter_matches_settings.max_distance_quantile: [0.95, 0.99]
   #   - beads.algorithm: [spectral]
   #     beads.spectral_match_settings.sigma: [1.0, 3.0, 5.0]
