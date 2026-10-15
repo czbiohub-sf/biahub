@@ -29,8 +29,10 @@ def test_apply_scipy_and_ants_backends_agree_on_same_transform():
     # produce it: mov is `applied_zyx` away from ref, so undoing that lands mov on ref.
     forward_transform = Transform.from_translation([-a for a in applied_zyx])
 
-    warped_scipy = forward_transform.apply(mov, reference=ref, order=0, backend="scipy")
-    warped_ants = forward_transform.apply(mov, reference=ref, order=0, backend="ants")
+    # order=1: other orders resample with scipy whatever the backend, which would compare
+    # scipy with itself (the integer translation keeps linear interpolation exact).
+    warped_scipy = forward_transform.apply(mov, reference=ref, order=1, backend="scipy")
+    warped_ants = forward_transform.apply(mov, reference=ref, order=1, backend="ants")
 
     interior = _interior(shape, margin=int(max(abs(a) for a in applied_zyx)) + 1)
     np.testing.assert_allclose(warped_scipy[interior], warped_ants[interior], atol=1e-3)
