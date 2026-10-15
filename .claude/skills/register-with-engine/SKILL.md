@@ -144,7 +144,9 @@ job failed is redone. The run's records go in a folder named after the output
 `<out>`; never run two launches on the same output at once. Nextflow retries preempted and
 timed-out tasks itself (doubling the time after a time limit); for the plain CLI on large
 volumes set a time limit in an sbatch file (`-sb`), which wins over every default
-(`references/recovery.md`).
+(`references/recovery.md`). The plain CLI submits to the `preempted` partition unless the
+sbatch file sets `#SBATCH --partition=...`; set only what you need there -- a
+`--mem-per-cpu` applies per CPU, and apply-transform asks for up to 8 CPUs per task.
 
 ## 8. Monitor
 

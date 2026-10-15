@@ -19,7 +19,8 @@ MOVING=/path/to/deskew.zarr/R/C/FOV                # light-sheet, beads well
 REFERENCE=/path/to/reconstruct.zarr/R/C/FOV        # phase, same well; leave empty to stabilize
 CONFIG=./estimate-transform-beads.yml
 OUTPUT=./transforms.yml
-SBATCH=""                         # optional: a file with `#SBATCH --time=...` for large volumes
+SBATCH=""                         # optional sbatch file: `#SBATCH --time=...` for large volumes,
+                                  # `#SBATCH --partition=...` (default: preempted)
 VENV=""                           # empty: $BIAHUB/.venv; or another biahub venv (runs BIAHUB's code)
 
 # Relative paths are next to this script, wherever it is launched from.
