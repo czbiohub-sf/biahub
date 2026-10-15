@@ -738,7 +738,7 @@ def flag_series(
         return result.flagged
     flagged_positions, _stats = select_flagged(
         np.array([result.scores[t] for t in attempted]),
-        label="repair",
+        label="flag",  # flagging decides `unreliable` whether or not repair runs
         max_timepoints=max_timepoints,
         k_mad=k_mad,
         floor=floor,
@@ -1796,6 +1796,11 @@ def flag_run(
         if sweep_settings is not None
         else []
     )
+    if flagged and repair_settings is None and sweep_settings is None:
+        click.echo(
+            f"flag: repair and sweep are off; the {len(flagged)} flagged timepoint(s) are "
+            "written as they are, marked unreliable where below hard_fail"
+        )
     flags = {
         "flagged": flagged,
         "repair": repair_ts,

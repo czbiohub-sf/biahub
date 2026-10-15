@@ -883,3 +883,16 @@ def test_a_repaired_timepoint_reports_the_repairs_transform(
     outcome = engine._load_pass(record, "euclidean", fallback=series.transforms[1])
     engine._accept(series, 1, outcome.transform, outcome.score, outcome.source, outcome.report)
     assert series.reports[1] == record["report"] != estimate_report
+
+
+def test_flagging_with_repair_off_does_not_announce_a_repair(
+    beads_plate_with_a_blank_timepoint, tmp_path, capsys
+):
+    # Flagging runs whether or not repair does (it decides `unreliable`); with repair and
+    # sweep off the log said "repair: 1 of 3 timepoints flagged" and then nothing ran.
+    plate = beads_plate_with_a_blank_timepoint
+    config = _write_config(tmp_path, fallback={"repair": None, "sweep": None})
+    _run(plate, config, tmp_path / "out" / "transforms.yml")
+    out = capsys.readouterr().out
+    assert "repair:" not in out
+    assert "repair and sweep are off" in out

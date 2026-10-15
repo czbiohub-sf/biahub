@@ -153,7 +153,8 @@ volumes set a time limit in an sbatch file (`-sb`), which wins over every defaul
   `<out>/nextflow/slurm_output/{estimate_transform,apply_transform}/`; `nextflow log` for
   past runs; `<out>/nextflow/report.html` and `trace.txt` when it ends.
 - Plain CLI: `squeue -u $USER -h -o "%j %t" | grep estimate_transform | sort | uniq -c`; the
-  repair phase starts when it prints `repair: N of T timepoints flagged`.
+  flagging has run when it prints `flag: N of T timepoints flagged` (repair and sweep follow,
+  when they are on).
 - Done when `<run>/estimate_transform_report.json` exists (and, applying, the plate).
 - A record with `"error"` set is a timepoint with no transform of its own (too few beads, an
   empty frame, or a cancelled job); its entry in `transforms.yml` is `unreliable` and its
