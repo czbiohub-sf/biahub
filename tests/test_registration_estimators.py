@@ -773,3 +773,18 @@ def test_padded_pcc_measures_no_shift_from_unequal_shapes(mov_width):
         normalization="magnitude",
     )
     assert tuple(int(s) for s in unequal) == tuple(int(s) for s in equal)
+
+
+@pytest.mark.parametrize("crop", [(3, 5), (1, 1), (6, 4), (800, 800)])
+def test_center_crops_keep_the_requested_size(crop):
+    # An odd size lost a pixel at each crop (both bounds halved) and [1, 1] was empty.
+    from biahub.registration.methods.focus import center_crop_yx
+    from biahub.registration.methods.pcc import pcc_crop
+    from biahub.settings import PhaseCrossCorrSettings
+
+    shape = (4, 9, 7)  # odd Y and X
+    expected = (min(crop[1], 9), min(crop[0], 7))  # crop is (X, Y)
+    assert center_crop_yx(np.zeros(shape), crop).shape[1:] == expected
+    _, y, x = pcc_crop(PhaseCrossCorrSettings(center_crop_xy=list(crop)), shape)
+    assert (y.stop - y.start, x.stop - x.start) == expected
+    assert y.start >= 0 and x.start >= 0 and y.stop <= 9 and x.stop <= 7

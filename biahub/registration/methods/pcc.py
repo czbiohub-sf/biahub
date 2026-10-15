@@ -274,10 +274,11 @@ def pcc_crop(
     Z, Y, X = shape_zyx
     y_idx, x_idx = slice(0, Y), slice(0, X)
     if settings.center_crop_xy:
-        # A crop larger than the axis takes the whole axis (a negative start would wrap).
-        cx, cy = settings.center_crop_xy
-        x_idx = slice(X // 2 - cx // 2, X // 2 + cx // 2) if cx < X else slice(0, X)
-        y_idx = slice(Y // 2 - cy // 2, Y // 2 + cy // 2) if cy < Y else slice(0, Y)
+        # A crop larger than the axis takes the whole axis (a negative start would wrap);
+        # the stop is start + size, so an odd size keeps its last pixel.
+        cx, cy = (min(c, n) for c, n in zip(settings.center_crop_xy, (X, Y), strict=True))
+        x0, y0 = X // 2 - cx // 2, Y // 2 - cy // 2
+        x_idx, y_idx = slice(x0, x0 + cx), slice(y0, y0 + cy)
     if settings.X_slice != "all":
         x_idx = slice(settings.X_slice[0], settings.X_slice[1])
     if settings.Y_slice != "all":

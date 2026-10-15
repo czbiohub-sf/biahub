@@ -29,7 +29,8 @@ def center_crop_yx(zyx: np.ndarray, crop_xy: tuple[int, int]) -> np.ndarray:
     """Centre crop of at most `crop_xy` (X, Y) pixels, the legacy `center_crop_xy` convention."""
     _, y, x = zyx.shape
     cx, cy = min(crop_xy[0], x), min(crop_xy[1], y)
-    return zyx[:, y // 2 - cy // 2 : y // 2 + cy // 2, x // 2 - cx // 2 : x // 2 + cx // 2]
+    y0, x0 = y // 2 - cy // 2, x // 2 - cx // 2  # the stop is start + size: odd sizes keep it
+    return zyx[:, y0 : y0 + cy, x0 : x0 + cx]
 
 
 def find_focus(
