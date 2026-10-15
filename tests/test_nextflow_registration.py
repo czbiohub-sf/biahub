@@ -365,3 +365,35 @@ def test_registration_nf_reruns_the_estimate_when_its_config_is_edited(tmp_path)
     _write_config(tmp_path, time_indices=[0, 1])  # same path, new contents
     _nextflow(tmp_path, *params)
     assert len(load_transform_settings(tmp_path / "run" / "transforms.yml").transforms) == 2
+
+
+def test_registration_nf_applies_a_channel_whose_name_has_an_apostrophe(tmp_path):
+    # --channels names go into the tasks' shell commands; a quote in a name (5'EU) must not
+    # end the shell argument.
+    from biahub.settings import TransformEntry, TransformSettings
+
+    rng = np.random.default_rng(11)
+    volume = _synthetic_bead_volume(rng, SHAPE)
+    store = tmp_path / "data.zarr"
+    with open_ome_zarr(
+        store, layout="hcs", mode="w", channel_names=["Phase3D", "5'EU"]
+    ) as plate:
+        plate.create_position("A", "1", "0")["0"] = np.stack([[volume, volume]]).astype(
+            np.float32
+        )
+    transforms = tmp_path / "t.yml"
+    model_to_yaml(
+        TransformSettings(
+            direction="forward",
+            moving_channels=["5'EU"],
+            transforms=[TransformEntry(matrix=np.eye(4).tolist())],
+        ),
+        transforms,
+    )
+    _nextflow(
+        tmp_path,
+        "--moving", store, "--transforms", transforms, "--channels", "5'EU",
+        "--output", tmp_path / "run",
+    )  # fmt: skip
+    with open_ome_zarr(tmp_path / "run" / "data.zarr" / "A" / "1" / "0") as position:
+        assert "5'EU" in position.channel_names

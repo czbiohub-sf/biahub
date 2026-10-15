@@ -109,7 +109,10 @@ workflow {
         def extra = []
         if (params.crop_to_overlap) extra << '--crop-to-overlap'
         if (params.channels) {
-            params.channels.toString().split(',').each { c -> extra << "--channels '${c.trim()}'" }
+            // single-quoted for the tasks' shell: a quote in a name (5'EU) becomes '\''
+            params.channels.toString().split(',').each { c ->
+                extra << "--channels '${c.trim().replace("'", "'\\''")}'"
+            }
         }
         def extra_args = extra.join(' ')
         def matcher = java.nio.file.FileSystems.getDefault()
