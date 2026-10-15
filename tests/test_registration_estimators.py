@@ -800,3 +800,25 @@ def test_unpadded_pcc_refuses_unequal_shapes_with_guidance():
     with pytest.raises(EstimationError, match="custom_padding"):
         PCCEstimator(function_type="custom").estimate(mov, ref)
     PCCEstimator(function_type="custom_padding").estimate(mov, ref)  # pads to one grid
+
+
+def test_competing_arms_report_a_non_finite_score():
+    from biahub.registration.estimators import CompetingEstimator
+
+    class Arm:
+        def estimate(self, mov, ref, seed=None):
+            return Transform.identity(3)
+
+    competing = CompetingEstimator({"a": Arm(), "b": Arm()}, score_fn=lambda t, m, r: np.nan)
+    with pytest.raises(EstimationError, match=r"a: .*nan.*b: .*nan"):
+        competing.estimate(np.zeros((4, 4, 4)), np.zeros((4, 4, 4)))
+
+
+def test_itk_threads_fall_back_where_cpu_affinity_is_unavailable(monkeypatch):
+    # macOS has no os.sched_getaffinity.
+    from biahub.registration.methods import ants as ants_method
+
+    monkeypatch.delenv("ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS", raising=False)
+    monkeypatch.delenv("SLURM_CPUS_PER_TASK", raising=False)
+    monkeypatch.delattr(ants_method.os, "sched_getaffinity", raising=False)
+    assert int(ants_method._itk_threads()) >= 1

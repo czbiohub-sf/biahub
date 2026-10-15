@@ -50,7 +50,11 @@ def _itk_threads() -> str:
     """
     if os.environ.get("ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS"):
         return os.environ["ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS"]
-    return os.environ.get("SLURM_CPUS_PER_TASK") or str(len(os.sched_getaffinity(0)))
+    if os.environ.get("SLURM_CPUS_PER_TASK"):
+        return os.environ["SLURM_CPUS_PER_TASK"]
+    if hasattr(os, "sched_getaffinity"):  # not on macOS
+        return str(len(os.sched_getaffinity(0)))
+    return str(os.cpu_count() or 1)
 
 
 def use_task_threads() -> None:
