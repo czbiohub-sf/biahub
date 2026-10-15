@@ -135,6 +135,12 @@ def substitute_transforms(
             )
             continue
         if sub.positions is not None:
+            missing = sorted(set(positions or ()) - set(sub.positions))
+            if missing:
+                raise click.UsageError(
+                    f"{source} has no list for positions {missing}; it has "
+                    f"{sorted(sub.positions)}"
+                )
             targets = {key: sub.positions[key] for key in (positions or sub.positions)}
         elif positions:
             targets = {key: sub.transforms for key in positions}

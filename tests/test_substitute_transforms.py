@@ -170,3 +170,23 @@ def test_a_substitute_from_another_voxel_grid_is_refused():
     same_grid = _single(1, 0.0).model_copy(update={"voxel_size": base.voxel_size})
     substitute_transforms(base, [("x.yml", same_grid)])  # same grid: fine
     substitute_transforms(base, [("x.yml", _single(1, 0.0))])  # undeclared: not checked
+
+
+def test_a_selected_position_missing_from_a_substitute_is_named():
+    # --positions picks a position the per-position substitute does not have: say which.
+    base = TransformSettings(
+        direction="forward",
+        moving_channels=["GFP"],
+        reference_channel="Phase3D",
+        method="beads",
+        positions={k: [TransformEntry(t=0, matrix=_shift(0))] for k in ("A/1/0", "A/1/1")},
+    )
+    sub = TransformSettings(
+        direction="forward",
+        moving_channels=["GFP"],
+        reference_channel="Phase3D",
+        method="manual",
+        positions={"A/1/0": [TransformEntry(t=0, matrix=_shift(1))]},
+    )
+    with pytest.raises(click.UsageError, match=r"sub.yml.*A/1/1"):
+        substitute_transforms(base, [("sub.yml", sub)], positions=("A/1/1",))
