@@ -1051,18 +1051,40 @@ def _bead_metrics(settings, result, t, mov, ref) -> dict | None:
     return None if metrics is None else metrics.to_dict()
 
 
-def _report_metrics(settings, transform, t, mov, ref) -> dict | None:
-    """Return score.report metrics of `transform` at `t`, on the raw warped pair."""
+def _report_metrics(
+    settings, transform, t, mov, ref, score: float | None = None
+) -> dict | None:
+    """Return score.report metrics of `transform` at `t`, on the raw warped pair.
+
+    Also the unregistered pair's (identity): its score and each report metric, as
+    `unregistered_<name>`, so a result can be read against doing nothing; a warning when
+    the unregistered pair scores at least as high as the result's `score`.
+    """
     if not settings.score.report or transform is None:
         return None
     ref_t = np.asarray(_reference_policy(settings, ref).reference_for(mov, t))
-    click.echo(f"t={t}: report metrics {settings.score.report} (one warp)")
-    # one warp for every metric: each would otherwise warp the volume again
-    warped = transform.apply(np.asarray(mov[t]), reference=ref_t)
-    return {
-        metric: _finite_or_none(_metric_fn(settings, metric)(PREWARPED, warped, ref_t))
-        for metric in settings.score.report
-    }
+    mov_t = np.asarray(mov[t])
+    click.echo(f"t={t}: report metrics {settings.score.report}, and the unregistered pair's")
+    report = {}
+    # one warp for every metric, for the result and for the unregistered pair
+    for prefix, candidate in (("", transform), ("unregistered_", Transform.identity(3))):
+        warped = candidate.apply(mov_t, reference=ref_t)
+        for metric in settings.score.report:
+            fn = _metric_fn(settings, metric)
+            report[prefix + metric] = _finite_or_none(fn(PREWARPED, warped, ref_t))
+        if prefix:
+            report["unregistered_score"] = _finite_or_none(
+                _score_fn(settings)(PREWARPED, warped, ref_t)
+            )
+    unregistered = report["unregistered_score"]
+    if score is not None and unregistered is not None and np.isfinite(score):
+        if unregistered >= score:
+            click.echo(
+                f"t={t}: the unregistered pair scores {unregistered:.4g}, at least the "
+                f"result's {score:.4g}: check that the score metric suits this pair",
+                err=False,
+            )
+    return report
 
 
 class _JobInputs(NamedTuple):
@@ -1114,7 +1136,9 @@ def _estimate_timepoint_job(
         "error": result.errors.get(t),
         "arm": getattr(estimator, "last_winner", None),
         "metrics": _bead_metrics(settings, result, t, mov, ref),
-        "report": _report_metrics(settings, result.transforms.get(t), t, mov, ref),
+        "report": _report_metrics(
+            settings, result.transforms.get(t), t, mov, ref, score=result.scores.get(t)
+        ),
     }
     record_path.parent.mkdir(parents=True, exist_ok=True)
     _write_json(record_path, record)
@@ -1159,7 +1183,9 @@ def _estimate_propagated_job(
             "stand_in_from": stand_in[1] if stand_in else None,
             "arm": getattr(estimator, "last_winner", None),
             "metrics": _bead_metrics(settings, result, t, mov, ref),
-            "report": _report_metrics(settings, result.transforms.get(t), t, mov, ref),
+            "report": _report_metrics(
+                settings, result.transforms.get(t), t, mov, ref, score=result.scores.get(t)
+            ),
         }
         _write_json(records_dir / f"{t}.json", record)
         records[t] = record

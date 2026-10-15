@@ -823,10 +823,11 @@ def test_every_own_transform_reports_raw_metrics_next_to_its_score(
     for entry in entries[:2]:
         transform = Transform(np.asarray(entry.matrix, dtype=float))
         mov, ref = data[entry.t, gfp], data[entry.t, phase]
-        assert entry.report == {
+        assert {k: entry.report[k] for k in ("correlation", "mutual_information")} == {
             "correlation": correlation_score(transform, mov, ref),
             "mutual_information": normalized_mutual_information(transform, mov, ref),
         }
+        assert "unregistered_correlation" in entry.report
     assert entries[2].filled_from is not None and entries[2].report is None
 
 
@@ -873,9 +874,9 @@ def test_a_repaired_timepoint_reports_the_repairs_transform(
             position.channel_names.index("GFP"),
             position.channel_names.index("Phase3D"),
         )
-    assert record["report"] == {
-        "correlation": correlation_score(repaired, data[1, gfp], data[1, phase])
-    }
+    assert record["report"]["correlation"] == correlation_score(
+        repaired, data[1, gfp], data[1, phase]
+    )
 
     series = engine._load_series(run / "timepoints", [0, 1], "euclidean", resumed=[0, 1])
     estimate_report = series.reports[1]

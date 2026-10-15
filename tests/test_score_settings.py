@@ -136,5 +136,28 @@ def test_report_metrics_share_one_warp(monkeypatch):
         Transform, "apply", lambda self, *a, **k: warps.append(1) or real(self, *a, **k)
     )
     report = engine._report_metrics(settings, transform, 0, mov[None], ref[None])
-    assert len(warps) == 1
+    assert (
+        len(warps) == 2
+    )  # one for the result, one for the unregistered pair -- not per metric
     assert {k: report[k] for k in expected} == expected
+
+
+def test_the_report_compares_with_the_unregistered_pair_and_warns_when_it_scores_higher(
+    capsys,
+):
+    from biahub.registration import engine
+    from biahub.registration.metrics import correlation_score
+
+    mov, ref = _pair()
+    settings = _settings("ants", score={"report": ["correlation"]})
+    good = Transform.from_translation([-1.0, 2.0, -3.0])  # undoes the pair's shift
+    report = engine._report_metrics(settings, good, 0, mov[None], ref[None], score=0.99)
+    identity = Transform.identity(3)
+    assert report["unregistered_correlation"] == correlation_score(identity, mov, ref)
+    assert report["unregistered_score"] == engine._score_fn(settings)(identity, mov, ref)
+    assert "unregistered pair scores" not in capsys.readouterr().out
+
+    engine._report_metrics(settings, good, 0, mov[None], ref[None], score=-1.0)
+    assert (
+        "unregistered pair scores" in capsys.readouterr().out
+    )  # a score that ranks it higher
