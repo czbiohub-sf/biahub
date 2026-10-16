@@ -1,0 +1,70 @@
+# biahub estimate-transform -- ANTs (intensity-based) registration, for pairs without usable
+# beads, e.g. fluorescence onto a virtual-staining prediction or phase. Set moving.channel and
+# reference.channel. Fields to decide:
+#   transform.type: similarity -- rotation, translation and one scale (e.g. two cameras of
+#                                different magnification). euclidean is ANTs Rigid (no scale);
+#                                affine can diverge in z on thin stacks (few z slices)
+#   ants.sobel_filter: true   -- match edges, not raw intensity: needed for cross-modal pairs
+#   ants.crop: false          -- set true with a non-identity seed: the seed's pre-warp leaves a
+#                                zero-filled border whose edge Sobel would otherwise match
+#   ants.clip: false          -- its limits assume a phase reference (0-0.5); keep it off for
+#                                virtual staining or fluorescence references
+#   transform.seed            -- ANTs refines from the seed, so it decides which solution ANTs
+#                                finds: identity when both channels share a camera grid, else
+#                                an estimate of the offset and scale (inverse direction)
+#   transform.seed_from_shapes: false -- true builds the seed from the store shapes with the
+#                                mantis light-sheet rotation built in; only for mantis data
+#   fallback.repair           -- for a single timepoint, set it to null: there is nothing to
+#                                repair from, and each repair is another full ANTs run
+# The score is a correlation: a correct transform often scores 0.1-0.3, below the bead-tuned
+# fallback.flag thresholds, so `unreliable` here means "check", not "wrong"; check the result
+# with overlays rather than the score (references/methods.md).
+moving:
+  channel: <moving channel>
+reference:
+  frame: cross
+  channel: <reference channel>
+method: ants
+ants:
+  sobel_filter: true
+  crop: false
+  ref_mask_radius: null
+  clip: false
+transform:
+  type: similarity
+  seed:
+  - - 1.0
+    - 0.0
+    - 0.0
+    - 0.0
+  - - 0.0
+    - 1.0
+    - 0.0
+    - 0.0
+  - - 0.0
+    - 0.0
+    - 1.0
+    - 0.0
+  - - 0.0
+    - 0.0
+    - 0.0
+    - 1.0
+  seed_direction: inverse
+  seed_from_shapes: false
+time_indices: all
+fallback:
+  flag:
+    k_mad: 2.0
+    floor: 0.8
+    hard_fail: 0.4
+  repair:
+    candidates:
+    - t-1
+    - t+1
+    - consensus
+    - seed
+    consensus_threshold: 0.75
+    consensus_min_good: 5
+    max_timepoints: null
+    polish_rounds: 3
+verbose: true
