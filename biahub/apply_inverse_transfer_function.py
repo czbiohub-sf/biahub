@@ -8,6 +8,7 @@ from iohub.ngff.utils import create_empty_plate
 from waveorder.cli.apply_inverse_transfer_function import (
     apply_inverse_transfer_function_single_position,
     get_reconstruction_output_metadata,
+    get_reconstruction_provenance,
 )
 from waveorder.cli.settings import ReconstructionSettings
 from waveorder.cli.utils import estimate_resources as wo_estimate_resources
@@ -20,6 +21,7 @@ from biahub.cli.parsing import (
     input_position_dirpaths,
     monitor,
     output_dirpath,
+    resume,
     sbatch_filepath,
     sbatch_to_submitit,
 )
@@ -66,15 +68,15 @@ def _init_output_plate(
         **output_metadata,
         metadata_sources=input_plate,
         metadata_keys=PROVENANCE_METADATA_KEYS,
-        # The record waveorder itself writes once a position is reconstructed
-        # (waveorder/cli/apply_inverse_transfer_function.py, "Save metadata at
-        # position level, keyed by output channel names"), written here so the
-        # plate carries it from the moment it exists -- the next step's
-        # create_empty_plate inherits provenance at plate-creation time, and
-        # the pipeline scaffolds every store before any of them hold data.
-        # waveorder merges into whatever is already under "waveorder" and
-        # re-assigns the same key, so its own write stays idempotent.
-        extra_metadata={"waveorder": {",".join(channel_names): settings.model_dump()}},
+        # The reconstruction's settings, under its own top-level key
+        # (`waveorder-Phase3D`, `waveorder-Birefringence`, ...) beside the
+        # `biahub-<step>` keys, recorded when the plate is created as for every
+        # other step: the next step's create_empty_plate inherits provenance at
+        # plate-creation time, and the pipeline scaffolds every store before any
+        # of them hold data. waveorder writes the same record when it creates a
+        # plate itself and never per position, and one key per reconstruction
+        # means a config appending channels to the plate overwrites only its own.
+        extra_metadata=get_reconstruction_provenance(settings),
     )
 
     return input_shape, channel_names
@@ -89,6 +91,7 @@ def apply_inverse_transfer_function(
     cluster: str = "slurm",
     monitor: bool = True,
     init_only: bool = False,
+    resume: bool = False,
 ) -> None:
     """Apply an inverse transfer function to a dataset.
 
@@ -110,6 +113,11 @@ def apply_inverse_transfer_function(
         Monitor submitted SLURM jobs.
     init_only : bool
         Only initialize the output store and exit.
+    resume : bool
+        Skip the timepoints this position already finished in an earlier,
+        interrupted attempt. waveorder keys each finished timepoint on the
+        reconstruction settings and the transfer function, so a changed config
+        or a recomputed transfer function recomputes instead of being skipped.
     """
     output_dirpath = Path(output_dirpath)
     slurm_out_path = output_dirpath.parent / "slurm_output"
@@ -183,6 +191,7 @@ def apply_inverse_transfer_function(
                     output_dirpath / Path(*pos_path.parts[-3:]),
                     num_cpus,
                     channel_names,
+                    resume=resume,
                 )
             )
 
@@ -221,6 +230,7 @@ def apply_inverse_transfer_function(
 @cluster()
 @monitor()
 @init_only()
+@resume()
 def apply_inverse_transfer_function_cli(
     input_position_dirpaths: list[Path],
     transfer_function_dirpath: str | None,
@@ -230,6 +240,7 @@ def apply_inverse_transfer_function_cli(
     cluster: str = "slurm",
     monitor: bool = False,
     init_only: bool = False,
+    resume: bool = False,
 ):
     r"""Apply an inverse transfer function to a dataset using a configuration file.
 
@@ -264,6 +275,7 @@ def apply_inverse_transfer_function_cli(
         cluster=cluster,
         monitor=monitor,
         init_only=init_only,
+        resume=resume,
     )
 
 
