@@ -95,6 +95,13 @@ biahub = "biahub.cli.main:cli"
 # when resolving build-system requirements such as iohub's hatchling /
 # uv-dynamic-versioning chain, which pulls in packaging>=24.2.
 index-strategy = "unsafe-best-match"
+# waveorder's own [tool.uv.sources] pins iohub to an older main commit
+# (b7bc648, the czbiohub-sf/iohub#476 merge) than the one biahub needs below
+# (d1f9e89, which adds #479). uv refuses two git URLs for one package, so
+# force the whole graph onto biahub's rev. Drop together with the iohub pin.
+override-dependencies = [
+  "iohub @ git+https://github.com/czbiohub-sf/iohub@d1f9e89294529d365719cf87a9b29622ca77a992",
+]
 
 [tool.uv.sources]
 # Private repo, no PyPI release. HTTPS rather than ssh so that installing the
@@ -126,12 +133,12 @@ imaging_qc_pipeline = { git = "https://github.com/czbiohub-sf/imaging-qc-pipelin
 # containing all three.
 iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "d1f9e89294529d365719cf87a9b29622ca77a992" }
 
-# Pin waveorder to mehta-lab/waveorder#583, which runs apply-inv-tf through
-# iohub's process_single_position with resume (stacked on mehta-lab/waveorder#582,
-# which shares one transfer function across workers). `biahub apply-inv-tf
-# --resume` passes resume= through to it. Drop this back to a PyPI floor once
-# waveorder cuts a release containing both.
-waveorder = { git = "https://github.com/mehta-lab/waveorder", rev = "1374f40c58c7894cce1e402c8afdf6cd87074332" }
+# Pin waveorder to the main commit that merged mehta-lab/waveorder#583, which
+# runs apply-inv-tf through iohub's process_single_position with resume (on top
+# of mehta-lab/waveorder#582, which shares one transfer function across
+# workers). `biahub apply-inv-tf --resume` passes resume= through to it. Drop
+# this back to a PyPI floor once waveorder cuts a release containing both.
+waveorder = { git = "https://github.com/mehta-lab/waveorder", rev = "8d796509b88bafc46a31b81889f6b8034a9050db" }
 
 [tool.hatch.metadata]
 allow-direct-references = true
