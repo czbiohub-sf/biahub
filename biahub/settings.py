@@ -19,6 +19,7 @@ from pydantic import (
     PositiveInt,
     ValidationInfo,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -346,47 +347,135 @@ class AffineTransformSettings(MyBaseModel):
         return v
 
 
+# --- preprocessing blocks ---------------------------------------------------------------
+# Named steps applied before a method, each to the volumes it names: image blocks change
+# pixels, mask blocks say where to compare. A config writes them as a list of
+# `- <name>: {<parameters>}` and a run's resolved settings write them back the same way.
+
+Volume = Literal["moving", "reference"]
+
+
+class _Block(MyBaseModel):
+    """One preprocessing step on the volumes in `target`; `kind` is its name in the config."""
+
+    kind: str
+    target: list[Volume]
+
+    @field_validator("target")
+    @classmethod
+    def _check_target(cls, v):
+        if not v:
+            raise ValueError("target needs at least one of moving, reference")
+        if len(set(v)) != len(v):
+            raise ValueError(f"target names a volume more than once: {v}")
+        return v
+
+    @model_serializer(mode="wrap")
+    def _as_named(self, handler):
+        fields = handler(self)
+        return {fields.pop("kind"): fields}
+
+
+class ClipPercentiles(_Block):
+    """Clip each target volume to its own `low`-`high` percentiles (outliers, background)."""
+
+    kind: Literal["clip_percentiles"] = "clip_percentiles"
+    target: list[Volume] = ["moving", "reference"]
+    low: float = Field(1.0, ge=0, le=100)
+    high: float = Field(99.5, ge=0, le=100)
+
+    @model_validator(mode="after")
+    def _low_below_high(self):
+        if self.low >= self.high:
+            raise ValueError(f"low ({self.low}) must be below high ({self.high})")
+        return self
+
+
+class Sobel(_Block):
+    """Edge strength (3D gradient magnitude): match structure, not intensity (cross-modal)."""
+
+    kind: Literal["sobel"] = "sobel"
+    target: list[Volume] = ["moving", "reference"]
+
+
+class MaskCircle(_Block):
+    """Compare only inside a circle in yx, the same on every z slice, centred on the volume.
+
+    `radius` is a fraction of the half-width of the shorter yx axis, e.g. 0.9 to leave out
+    a bright well edge (mantis v1).
+    """
+
+    kind: Literal["mask_circle"] = "mask_circle"
+    target: list[Volume]
+    radius: float = Field(gt=0, le=1)
+
+
+AxisRange = Literal["all"] | Annotated[list[NonNegativeInt], Field(min_length=2, max_length=2)]
+
+
+class MaskBox(_Block):
+    """Compare only inside a box: one `[start, stop]` voxel range (or `all`) per z, y, x.
+
+    Its voxels belong to one volume's grid, so it names exactly one target.
+    """
+
+    kind: Literal["mask_box"] = "mask_box"
+    target: list[Volume]
+    box: Annotated[list[AxisRange], Field(min_length=3, max_length=3)]
+
+    @field_validator("target")
+    @classmethod
+    def _one_target(cls, v):
+        if len(v) != 1:
+            raise ValueError(f"a box is in one volume's voxels: give one target, not {v}")
+        return v
+
+    @field_validator("box")
+    @classmethod
+    def _ranges(cls, v):
+        for axis, r in zip("zyx", v, strict=True):
+            if r != "all" and r[0] >= r[1]:
+                raise ValueError(f"box {axis} range {r}: start must be below stop")
+        return v
+
+
+IMAGE_BLOCKS = (ClipPercentiles, Sobel)
+MASK_BLOCKS = (MaskCircle, MaskBox)
+# Methods that can restrict their comparison to a mask.
+MASK_METHODS = {"ants"}
+_BLOCK_TYPES = {b.model_fields["kind"].default: b for b in IMAGE_BLOCKS + MASK_BLOCKS}
+
+
+def _named_block(item):
+    """`{<name>: {<parameters>}}` as written in a config -> the block's fields."""
+    if isinstance(item, _Block):
+        return item
+    if not isinstance(item, dict) or len(item) != 1:
+        raise ValueError(
+            f"each preprocessing entry is one block, `- <name>: {{...}}`; got {item}"
+        )
+    ((name, params),) = item.items()
+    if name not in _BLOCK_TYPES:
+        raise ValueError(
+            f"unknown preprocessing block {name!r}; known: {sorted(_BLOCK_TYPES)}"
+        )
+    return {"kind": name, **(params or {})}
+
+
+PreprocessBlock = Annotated[
+    Annotated[ClipPercentiles | Sobel | MaskCircle | MaskBox, Field(discriminator="kind")],
+    BeforeValidator(_named_block),
+]
+PreprocessBlocks = list[PreprocessBlock]
+
+
 class AntsRegistrationSettings(MyBaseModel):
     """Settings for the ANTs registration backend.
 
-    Field names and defaults mirror the keyword arguments of
-    ``biahub.registration.methods.ants.preprocess_zyx``, which is what consumes them.
-
-    Attributes
-    ----------
-    sobel_filter : bool
-        Apply a Sobel filter (3D gradient magnitude) to both volumes before
-        registering, so ANTs matches structural edges rather than raw
-        intensity. Needed for cross-modality pairs such as fluorescence
-        against a virtual-staining prediction.
-    crop : bool
-        Crop both volumes to their overlapping region with the LIR algorithm
-        before registering.
-    ref_mask_radius : float | None
-        Radius of a circular mask applied to the reference channel, as a
-        fraction of image width in ``(0, 1]``. ``None`` applies no mask.
-    clip : bool
-        Clip both volumes to hardcoded intensity limits. Those limits assume a
-        **phase** reference (``np.clip(ref, 0, 0.5)``); leave this off for any
-        other reference, e.g. a virtual-staining prediction whose values range
-        well above 0.5.
+    The transform family comes from `transform.type`; preparation (Sobel, clipping,
+    masks) is the config's `preprocess` blocks. ANTs' search (iterations, shrink factors,
+    smoothing) uses `biahub.registration.methods.ants.DEFAULT_ANTS_KWARGS`.
     """
-
-    sobel_filter: bool = False
-    crop: bool = False
-    ref_mask_radius: float | None = None
-    clip: bool = False
-
-    @field_validator("ref_mask_radius")
-    @classmethod
-    def check_ref_mask_radius(cls, v):
-        # preprocess_zyx raises on this too, but only after the data is
-        # loaded -- catching it at config-parse time is much cheaper.
-        if v is not None and not (0 < v <= 1):
-            raise ValueError(
-                "ref_mask_radius must be given as a fraction of image width, i.e. (0, 1]."
-            )
-        return v
 
 
 class ManualSettings(MyBaseModel):
@@ -949,6 +1038,35 @@ METHOD_BLOCKS: dict[str, str] = {
 ScoreMetric = Literal[
     "overlap", "residual", "mutual_information", "correlation", "gradient_correlation"
 ]
+# Metrics that compare intensities after the candidate warp; the bead metrics detect beads
+# on the raw volumes instead.
+INTENSITY_METRICS = {"mutual_information", "correlation", "gradient_correlation"}
+
+
+class ScoreSettings(MyBaseModel):
+    """How a candidate transform is judged: the one number every decision uses.
+
+    `metric`: None is the method's default (DEFAULT_SCORE_METRIC). `preprocess`: image
+    blocks applied to the two volumes after the candidate warp, inside their raw overlap,
+    just before comparing (e.g. sobel to compare edges); intensity metrics only. The
+    method's own `preprocess` never changes the score.
+    """
+
+    metric: ScoreMetric | None = None
+    preprocess: PreprocessBlocks = []
+    # Also computed for every transform and written next to its score, on the raw warped
+    # pair (no score blocks): a fixed yardstick across runs. Never used for decisions.
+    report: list[ScoreMetric] = []
+
+    @field_validator("preprocess")
+    @classmethod
+    def _image_blocks_only(cls, v):
+        masks = [b.kind for b in v if not isinstance(b, IMAGE_BLOCKS)]
+        if masks:
+            raise ValueError(f"score preprocess takes image blocks only, not {masks}")
+        return v
+
+
 DEFAULT_SCORE_METRIC: dict[str, str] = {
     "beads": "overlap",
     "ants": "correlation",
@@ -996,6 +1114,8 @@ class EstimateTransformSettings(MyBaseModel):
 
     moving: ChannelSettings
     reference: ReferenceSettings
+    # Applied, in order, before the method (see the preprocessing blocks above).
+    preprocess: PreprocessBlocks = []
     method: EstimationMethod
     beads: BeadsMatchSettings | None = None
     ants: AntsRegistrationSettings | None = None
@@ -1004,11 +1124,48 @@ class EstimateTransformSettings(MyBaseModel):
     focus_finding: FocusSettings | None = None
     transform: TransformFitSettings = TransformFitSettings()
     time_indices: NonNegativeInt | list[NonNegativeInt] | Literal["all"] = "all"
-    # None: the method's default (beads: overlap, ants / phase-cross-corr /
-    # focus-finding: correlation, manual: gradient_correlation).
-    score_metric: ScoreMetric | None = None
+    score: ScoreSettings = ScoreSettings()
     fallback: FallbackSettings = FallbackSettings()
     verbose: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def point_score_metric_to_score(cls, data):
+        if isinstance(data, dict) and "score_metric" in data:
+            raise ValueError(
+                f"score_metric is now score.metric: write "
+                f"score: {{metric: {data['score_metric']}}}"
+            )
+        return data
+
+    @model_validator(mode="after")
+    def check_score_blocks_have_an_intensity_metric(self) -> "EstimateTransformSettings":
+        metric = self.effective_score_metric
+        if self.score.preprocess and metric not in INTENSITY_METRICS:
+            raise ValueError(
+                f"score preprocess needs an intensity metric ({sorted(INTENSITY_METRICS)}); "
+                f"{metric!r} detects beads on the raw volumes"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def check_bead_report_metrics_have_beads(self) -> "EstimateTransformSettings":
+        bead_metrics = [m for m in self.score.report if m not in INTENSITY_METRICS]
+        if bead_metrics and self.method != "beads":
+            raise ValueError(
+                f"report metrics {bead_metrics} detect beads: they need method beads"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def check_masks_have_a_method_that_uses_them(self) -> "EstimateTransformSettings":
+        masks = [b.kind for b in self.preprocess if isinstance(b, MASK_BLOCKS)]
+        if masks and self.method not in MASK_METHODS:
+            raise ValueError(
+                f"mask blocks need a method that can use them ({sorted(MASK_METHODS)}); "
+                f"method {self.method!r} cannot use {masks}"
+            )
+        return self
 
     @model_validator(mode="after")
     def fill_method_block(self) -> "EstimateTransformSettings":
@@ -1125,7 +1282,7 @@ class EstimateTransformSettings(MyBaseModel):
 
     @property
     def effective_score_metric(self) -> str:
-        return self.score_metric or DEFAULT_SCORE_METRIC[self.method]
+        return self.score.metric or DEFAULT_SCORE_METRIC[self.method]
 
 
 EntryStatus = Literal["accepted", "unreliable", "rejected"]
@@ -1143,6 +1300,8 @@ class TransformEntry(MyBaseModel):
     t: NonNegativeInt | None = None
     matrix: list
     score: float | None = None
+    # score.report metrics for this transform (raw warped pair); None for a stand-in.
+    report: dict[str, float] | None = None
     # How a fallback pass reached this matrix: the winning repair candidate (plus any
     # polish rounds, "consensus_full+polish1") or "sweep:<trial>".
     repaired_from: str | None = None

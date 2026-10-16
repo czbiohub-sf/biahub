@@ -277,3 +277,40 @@ def test_converting_different_focus_and_stackreg_crops_says_which_one_is_used():
     unified, notes = convert_settings(legacy)
     assert unified.focus_finding.center_crop_xy == [600, 600]
     assert any("center_crop_xy" in note and "900" in note for note in notes)
+
+
+@pytest.mark.parametrize("sobel", [True, False])
+def test_a_converted_ants_config_keeps_scoring_the_way_it_did(sobel):
+    # The legacy ANTs score compared Sobel edges when sobel_filter was on; the converted
+    # config says so in its score blocks.
+    legacy = EstimateRegistrationSettings(
+        source_channel_name="GFP",
+        target_channel_name="Phase3D",
+        estimation_method="ants",
+        ants_registration_settings={"sobel_filter": sobel},
+    )
+    converted, _notes = convert_settings(legacy)
+    assert [b.kind for b in converted.score.preprocess] == (["sobel"] if sobel else [])
+
+
+def test_a_converted_ants_config_gets_its_preparation_as_blocks():
+    legacy = EstimateRegistrationSettings(
+        source_channel_name="GFP",
+        target_channel_name="Phase3D",
+        estimation_method="ants",
+        ants_registration_settings={
+            "sobel_filter": True,
+            "clip": True,
+            "ref_mask_radius": 0.9,
+            "crop": True,
+        },
+    )
+    converted, notes = convert_settings(legacy)
+    assert [type(b).__name__ for b in converted.preprocess] == [
+        "ClipPercentiles",
+        "Sobel",
+        "MaskCircle",
+    ]
+    assert converted.preprocess[2].target == ["reference"]
+    assert converted.preprocess[2].radius == 0.9
+    assert any("clip" in n for n in notes) and any("crop dropped" in n for n in notes)

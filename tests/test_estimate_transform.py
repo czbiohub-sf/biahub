@@ -586,7 +586,7 @@ def test_estimate_transform_accepts_the_unified_config_and_writes_forward_matric
         reference=ReferenceSettings(frame="cross", channel="Phase3D"),
         method="beads",
         beads=BeadsMatchSettings(source_peaks_settings=peaks, target_peaks_settings=peaks),
-        score_metric="residual",
+        score={"metric": "residual"},
     )
     config = tmp_path / "unified.yml"
     model_to_yaml(unified, config)
@@ -606,7 +606,7 @@ def test_estimate_transform_accepts_the_unified_config_and_writes_forward_matric
     engine_settings = yaml_to_model(
         output.with_suffix("") / "estimate_transform_settings.yml", EstimateTransformSettings
     )
-    assert engine_settings.score_metric == "residual"
+    assert engine_settings.score.metric == "residual"
 
 
 def test_estimate_transform_fallback_settings_reach_flagging_and_repair(
@@ -774,3 +774,125 @@ def test_an_ants_estimate_is_sized_for_its_measured_peak_memory():
     assert cpus * gb_ram_per_cpu >= 1.25 * 22.6
     beads_cpus, beads_gb = _estimate_job_resources("beads", (66, 2048, 2048))
     assert beads_cpus * beads_gb < cpus * gb_ram_per_cpu  # beads keeps its smaller footprint
+
+
+def test_image_blocks_run_before_the_method_end_to_end(beads_plate, tmp_path):
+    # A clip that keeps every value changes nothing: the run matches one without blocks.
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    plain = tmp_path / "plain" / "transforms.yml"
+    _run(beads_plate, _write_config(tmp_path / "a"), plain)
+    with_blocks = tmp_path / "blocks" / "transforms.yml"
+    config = _write_config(
+        tmp_path / "b", preprocess=[{"clip_percentiles": {"low": 0, "high": 100}}]
+    )
+    assert "clip_percentiles" in config.read_text()  # written back as a named block
+    _run(beads_plate, config, with_blocks)
+    assert [e.matrix for e in load_transform_settings(with_blocks).transforms] == [
+        e.matrix for e in load_transform_settings(plain).transforms
+    ]
+
+
+def test_every_own_transform_reports_raw_metrics_next_to_its_score(
+    beads_plate_with_a_blank_timepoint, tmp_path
+):
+    # Report metrics are computed on the raw warped pair, whatever the score's own blocks:
+    # a fixed yardstick across runs. A stand-in has none.
+    from biahub.core.transform import Transform
+    from biahub.registration.metrics import correlation_score, normalized_mutual_information
+
+    plate = beads_plate_with_a_blank_timepoint
+    config = _write_config(
+        tmp_path,
+        score={
+            "metric": "correlation",
+            "preprocess": [{"sobel": {}}],
+            "report": ["correlation", "mutual_information"],
+        },
+    )
+    output = tmp_path / "out" / "transforms.yml"
+    _run(plate, config, output)
+
+    with open_ome_zarr(plate) as position:
+        data = np.asarray(position.data)
+        gfp, phase = (
+            position.channel_names.index("GFP"),
+            position.channel_names.index("Phase3D"),
+        )
+    entries = load_transform_settings(output).transforms
+    for entry in entries[:2]:
+        transform = Transform(np.asarray(entry.matrix, dtype=float))
+        mov, ref = data[entry.t, gfp], data[entry.t, phase]
+        assert {k: entry.report[k] for k in ("correlation", "mutual_information")} == {
+            "correlation": correlation_score(transform, mov, ref),
+            "mutual_information": normalized_mutual_information(transform, mov, ref),
+        }
+        assert "unregistered_correlation" in entry.report
+    assert entries[2].filled_from is not None and entries[2].report is None
+
+
+def test_a_repaired_timepoint_reports_the_repairs_transform(
+    beads_plate, tmp_path, monkeypatch
+):
+    # The report follows the transform that wins: a repair job records the metrics of its
+    # own transform, and folding it in replaces the estimate's.
+    import biahub.registration.engine as engine
+
+    from biahub.core.transform import Transform
+    from biahub.registration.metrics import correlation_score
+    from biahub.utils.config import yaml_to_model
+
+    config = _write_config(tmp_path, score={"report": ["correlation"]})
+    run = tmp_path / "run"
+    engine.init_run(
+        beads_plate, beads_plate, yaml_to_model(config, EstimateTransformSettings), run
+    )
+    settings_path = run / "estimate_transform_settings.yml"
+    for t in (0, 1):
+        engine._estimate_timepoint_job(
+            beads_plate, beads_plate, settings_path, t, run / "timepoints" / f"{t}.json"
+        )
+    repaired = Transform.from_translation([-1.0, 3.0, -4.0])  # 1 voxel off the estimate
+
+    def accepted_repair(t, *args, **kwargs):
+        return engine.PassResult(transform=repaired, score=2.0, accepted=True, source="t-1")
+
+    monkeypatch.setattr(engine, "repair_timepoint", accepted_repair)
+    record = engine._repair_timepoint_job(
+        beads_plate,
+        beads_plate,
+        settings_path,
+        1,
+        [0, 1],
+        [1],
+        run / "timepoints",
+        run / "repairs" / "1.json",
+    )
+    with open_ome_zarr(beads_plate) as position:
+        data = np.asarray(position.data)
+        gfp, phase = (
+            position.channel_names.index("GFP"),
+            position.channel_names.index("Phase3D"),
+        )
+    assert record["report"]["correlation"] == correlation_score(
+        repaired, data[1, gfp], data[1, phase]
+    )
+
+    series = engine._load_series(run / "timepoints", [0, 1], "euclidean", resumed=[0, 1])
+    estimate_report = series.reports[1]
+    outcome = engine._load_pass(record, "euclidean", fallback=series.transforms[1])
+    engine._accept(series, 1, outcome.transform, outcome.score, outcome.source, outcome.report)
+    assert series.reports[1] == record["report"] != estimate_report
+
+
+def test_flagging_with_repair_off_does_not_announce_a_repair(
+    beads_plate_with_a_blank_timepoint, tmp_path, capsys
+):
+    # Flagging runs whether or not repair does (it decides `unreliable`); with repair and
+    # sweep off the log said "repair: 1 of 3 timepoints flagged" and then nothing ran.
+    plate = beads_plate_with_a_blank_timepoint
+    config = _write_config(tmp_path, fallback={"repair": None, "sweep": None})
+    _run(plate, config, tmp_path / "out" / "transforms.yml")
+    out = capsys.readouterr().out
+    assert "repair:" not in out
+    assert "repair and sweep are off" in out
