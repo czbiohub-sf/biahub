@@ -12,8 +12,8 @@ import pytest
 
 
 def _segment(czyx, channels, **model):
-    """Run segment_data on ``czyx`` whose channels are named c0, c1, ..."""
-    from biahub.segment import resolve_models, segment_data
+    """Run _segment_czyx on ``czyx`` whose channels are named c0, c1, ..."""
+    from biahub.segment import _segment_czyx, resolve_models
     from biahub.settings import SegmentationSettings
 
     names = [f"c{i}" for i in range(czyx.shape[0])]
@@ -21,7 +21,7 @@ def _segment(czyx, channels, **model):
         models={"nuc": {"channels": [names[c] for c in channels], **model}}
     )
     models = resolve_models(settings, names, scale=(1,) * 5, z_size=czyx.shape[1])
-    return segment_data(czyx, models, gpu=False)
+    return _segment_czyx(czyx, models, gpu=False)
 
 
 def test_segment_uses_the_requested_model(fake_cellpose):
@@ -176,9 +176,9 @@ def test_3d_model_without_do_3d_is_refused(fake_cellpose):
 
 
 def test_segment_loads_each_model_once_across_timepoints(fake_cellpose):
-    """process_single_position calls segment_data once per timepoint; reloading the
+    """process_single_position calls _segment_czyx once per timepoint; reloading the
     1.2 GB model every frame is what made segment slow and GPU-hungry."""
-    from biahub.segment import resolve_models, segment_data
+    from biahub.segment import _segment_czyx, resolve_models
     from biahub.settings import SegmentationSettings
 
     settings = SegmentationSettings(
@@ -186,7 +186,7 @@ def test_segment_loads_each_model_once_across_timepoints(fake_cellpose):
     )
     models = resolve_models(settings, ["c0"], scale=(1,) * 5, z_size=1)
     for _ in range(3):
-        segment_data(np.zeros((1, 1, 8, 8), dtype=np.float32), models, gpu=False)
+        _segment_czyx(np.zeros((1, 1, 8, 8), dtype=np.float32), models, gpu=False)
 
     assert fake_cellpose.built == ["cpdino"]
     assert len(fake_cellpose.evaluated) == 3

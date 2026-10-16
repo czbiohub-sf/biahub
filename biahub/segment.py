@@ -6,6 +6,7 @@ from typing import Any
 import click
 import numpy as np
 import submitit
+import torch
 
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate, process_single_position
@@ -35,7 +36,7 @@ from biahub.utils.cluster import (
     echo_resources,
     estimate_resources,
     get_submitit_cluster,
-    gpu_executor_parameters,
+    local_executor_parameters,
 )
 from biahub.utils.config import settings_fingerprint, yaml_to_model
 from biahub.utils.ngff import (
@@ -111,19 +112,19 @@ def resolve_models(
 
 
 # Loaded cellpose models of this process, keyed by (pretrained_model, device). A position
-# runs one segment_data call per timepoint; without the cache every frame reloaded the
+# runs one _segment_czyx call per timepoint; without the cache every frame reloaded the
 # ~1.2 GB checkpoint.
 _MODEL_CACHE: dict[tuple[str, str], Any] = {}
 
 
-def _cached_model(pretrained_model: str, device):
+def _cached_model(pretrained_model: str, device: torch.device) -> Any:
     key = (pretrained_model, str(device))
     if key not in _MODEL_CACHE:
         _MODEL_CACHE[key] = load_cellpose_model(pretrained_model, device)
     return _MODEL_CACHE[key]
 
 
-def segment_data(
+def _segment_czyx(
     czyx_data: np.ndarray,
     models: list[ResolvedModel],
     gpu: bool = True,
@@ -166,17 +167,6 @@ def segment_data(
         )
         czyx_segmentation.append(segmentation)
     return np.stack(czyx_segmentation, axis=0)
-
-
-def _resume_token(settings: SegmentationSettings) -> str:
-    """Fingerprint the settings, including the order of the models.
-
-    settings_fingerprint sorts keys, but model order decides which label channel each
-    model writes, so finished work from another order must not be skipped.
-    """
-    return settings_fingerprint(
-        {"settings": settings.model_dump(mode="json"), "model_order": list(settings.models)}
-    )
 
 
 def _init_output_plate(
@@ -239,6 +229,17 @@ def _init_output_plate(
     return (T, C, Z, Y, X), models
 
 
+def _resume_token(settings: SegmentationSettings) -> str:
+    """Fingerprint the settings, including the order of the models.
+
+    settings_fingerprint sorts keys, but model order decides which label channel each
+    model writes, so finished work from another order must not be skipped.
+    """
+    return settings_fingerprint(
+        {"settings": settings.model_dump(mode="json"), "model_order": list(settings.models)}
+    )
+
+
 def segment(
     input_position_dirpaths: list[Path],
     config_filepath: Path,
@@ -282,7 +283,7 @@ def segment(
         # settings imports cellpose.models, which fixes the weights directory: stage first
         # so the checkpoint is read from node-local scratch, not NFS. Never on a submitting
         # node: the staged path would be exported to SLURM/local workers, which stage their
-        # own copy inside the job (segment_data).
+        # own copy inside the job (_segment_czyx).
         stage_cellpose_weights()
     settings = yaml_to_model(config_filepath, SegmentationSettings)
     if init_only:
@@ -338,11 +339,11 @@ def segment(
 
     click.echo(f"Preparing jobs on cluster='{resolved_cluster}': {slurm_args}")
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=resolved_cluster)
-    # Explicit --sbatch-filepath values (e.g. '#LOCAL --timeout-min') win over the
-    # computed local GPU parameters.
-    executor.update_parameters(
-        **{**gpu_executor_parameters(resolved_cluster, time_minutes), **slurm_args}
-    )
+    if resolved_cluster == "local":
+        # Explicit --sbatch-filepath values (e.g. '#LOCAL --timeout-min') win over
+        # the computed local executor parameters.
+        slurm_args = {**local_executor_parameters(time_minutes), **slurm_args}
+    executor.update_parameters(**slurm_args)
 
     click.echo("Submitting jobs...")
     jobs = []
@@ -353,7 +354,7 @@ def segment(
             jobs.append(
                 executor.submit(
                     process_single_position,
-                    segment_data,
+                    _segment_czyx,
                     input_position_path,
                     output_position_path,
                     input_channel_indices=[list(range(C))],
