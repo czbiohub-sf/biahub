@@ -6,11 +6,15 @@ import numpy as np
 from pathlib import Path
 from iohub import open_ome_zarr
 import napari
-from biahub.cli.register import find_overlapping_volume, find_overlapping_volume
-from biahub.analysis.register import convert_transform_to_ants, convert_transform_to_numpy
+from biahub.registration.utils import (
+    convert_transform_to_ants,
+    convert_transform_to_numpy,
+    find_overlapping_volume,
+)
 from skimage import exposure, filters
 from biahub.utils.config import model_to_yaml, yaml_to_model
-from biahub.analysis.AnalysisSettings import StabilizationSettings
+# the retired stabilize schema (apply-transform and the stabilize alias convert it)
+from biahub.registration.legacy.convert_settings import StabilizationSettings
 
 os.environ['DISPLAY'] = ':1'
 
