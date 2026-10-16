@@ -1,37 +1,31 @@
-# Segmentation settings for cellpose
-# The model's names will be used for channel names in the output store. (i.e membrane -> membrane_label)
+# Segmentation settings for cellpose 4 (`biahub segment`).
+# Model names become the output channel names (e.g. membrane -> membrane_labels).
+# All models in one config must be either 2D (z_slice_2D set) or 3D (z_slice_2D: null with
+# eval_args.do_3D: true), because they share one output array. Run 3D models separately.
 models:
-  # One can instantiate as many models
   membrane:
-    path_to_model: "cpsam_v2"  # cellpose 4 model (cpsam_v2, cpsam, cpdino, cpdino-vitb) or path to weights
-    # These are the common model.CellposeModel().eval() arguments used, but one can add more.
-    # For more information, see https://cellpose.readthedocs.io/en/latest/api.html#id0
+    pretrained_model: cpsam_v2  # cellpose 4 model (cpsam_v2, cpsam, cpdino, cpdino-vitb) or path to weights
+    channels: ['mem', 'nuc']    # dataset channel names passed to cellpose (at most 3, any order)
+    z_slice_2D: 10              # plane for 2D segmentation; null = 3D (needs eval_args.do_3D: true)
+    # Other CellposeModel.eval() arguments; see https://cellpose.readthedocs.io/en/latest/api.html
     eval_args:
-      diameter: 65
-      channels: ['mem', 'nuc'] # dataset channels passed to cellpose (at most 3, any order)
+      diameter: 65              # cellpose 4 resizes by 30 / diameter; null = native resolution
       cellprob_threshold: 0.4
-      do_3D: false   # Optional, if false, 2D segmentation is performed.
-      anisotropy: 3.26
+      do_3D: false
       min_size: 8000
-    z_slice_2D: 10  # Optional, if null, 3D segmentation is performed and checks eval_args.do_3D=True
     preprocessing:
-      - function: skimage.exposure.rescale_intensity  #configurable callables like rescaling intensity
+      - function: skimage.exposure.rescale_intensity  # configurable callables, applied per channel
         kwargs: {"out_range": [0, 1]}
         channel: 'mem'
       - function: skimage.exposure.equalize_adapthist
-        kwargs: {"clip_limit": 0.01,"kernel_size":[5, 32, 32]}
+        kwargs: {"clip_limit": 0.01, "kernel_size": [5, 32, 32]}
         channel: 'mem'
   nucleus:
-    path_to_model: "cpsam_v2"  # cellpose 4 model (cpsam_v2, cpsam, cpdino, cpdino-vitb) or path to weights
-    # These are the common model.CellposeModel().eval() arguments used, but one can add more.
-    # For more information, see https://cellpose.readthedocs.io/en/latest/api.html#id0
+    pretrained_model: cpsam_v2
+    channels: ['nuc']
+    z_slice_2D: 10
     eval_args:
       diameter: 60
-      channels: ['nuc']
       cellprob_threshold: 0.0
       do_3D: false
-      anisotropy: 3.26
       min_size: 8000
-    # All models in one config must be either 2D (z_slice_2D set) or 3D (z_slice_2D: null with
-    # eval_args.do_3D: true), because they share one output array. Run 3D models separately.
-    z_slice_2D: 10

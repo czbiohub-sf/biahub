@@ -47,7 +47,12 @@ from biahub.registration.utils import (
 )
 from biahub.settings import TransformSettings, load_transform_settings
 from biahub.utils.array_ops import copy_n_paste_czyx
-from biahub.utils.cluster import echo_resources, estimate_resources, get_submitit_cluster
+from biahub.utils.cluster import (
+    apply_sbatch_overrides,
+    echo_resources,
+    estimate_resources,
+    get_submitit_cluster,
+)
 from biahub.utils.ngff import PROVENANCE_METADATA_KEYS, resolve_ome_zarr_version
 
 Slices = tuple[slice, slice, slice]
@@ -444,7 +449,7 @@ def apply_transform(
         "slurm_use_srun": False,
     }
     if sbatch_filepath:
-        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
+        slurm_args = apply_sbatch_overrides(slurm_args, sbatch_to_submitit(sbatch_filepath))
     resolved_cluster = get_submitit_cluster(cluster=cluster)
     click.echo(f"Preparing jobs on cluster='{resolved_cluster}': {slurm_args}")
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=resolved_cluster)
