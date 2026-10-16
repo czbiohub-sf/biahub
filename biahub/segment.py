@@ -1,12 +1,11 @@
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import click
 import numpy as np
 import submitit
-import torch
 
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate, process_single_position
@@ -44,6 +43,9 @@ from biahub.utils.ngff import (
     get_output_paths,
     resolve_ome_zarr_version,
 )
+
+if TYPE_CHECKING:
+    import torch
 
 
 @dataclass(frozen=True)
@@ -117,7 +119,7 @@ def resolve_models(
 _MODEL_CACHE: dict[tuple[str, str], Any] = {}
 
 
-def _cached_model(pretrained_model: str, device: torch.device) -> Any:
+def _cached_model(pretrained_model: str, device: "torch.device") -> Any:
     key = (pretrained_model, str(device))
     if key not in _MODEL_CACHE:
         _MODEL_CACHE[key] = load_cellpose_model(pretrained_model, device)
