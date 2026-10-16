@@ -13,7 +13,11 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.utils.cluster import estimate_resources, get_submitit_cluster
+from biahub.utils.cluster import (
+    apply_sbatch_overrides,
+    estimate_resources,
+    get_submitit_cluster,
+)
 
 
 def pyramid(fov_path: Path, levels: int, method: str) -> None:
@@ -107,7 +111,7 @@ def pyramid_cli(
 
     # Override with sbatch file parameters if provided
     if sbatch_filepath:
-        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
+        slurm_args = apply_sbatch_overrides(slurm_args, sbatch_to_submitit(sbatch_filepath))
 
     slurm_out_path = Path("slurm_output")
     slurm_out_path.mkdir(exist_ok=True)

@@ -23,7 +23,12 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.utils.cluster import echo_resources, estimate_resources, get_submitit_cluster
+from biahub.utils.cluster import (
+    apply_sbatch_overrides,
+    echo_resources,
+    estimate_resources,
+    get_submitit_cluster,
+)
 from biahub.utils.config import yaml_to_model
 from biahub.utils.ngff import PROVENANCE_METADATA_KEYS
 
@@ -163,7 +168,7 @@ def apply_inverse_transfer_function(
     }
 
     if sbatch_filepath:
-        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
+        slurm_args = apply_sbatch_overrides(slurm_args, sbatch_to_submitit(sbatch_filepath))
 
     resolved_cluster = get_submitit_cluster(cluster=cluster)
     click.echo(f"Preparing jobs on cluster='{resolved_cluster}': {slurm_args}")

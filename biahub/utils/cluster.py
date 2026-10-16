@@ -43,8 +43,8 @@ def echo_resources(num_cpus: int, mem_gb: int, time_minutes: int) -> None:
     click.echo("RESOURCES:" + json.dumps(payload))
 
 
-def gpu_executor_parameters(cluster: str, timeout_min: float) -> dict:
-    """Extra submitit parameters for a GPU step's jobs on ``cluster``.
+def local_executor_parameters(timeout_min: float, gpu: bool = True) -> dict:
+    """Extra submitit parameters for a step's jobs on the ``local`` executor.
 
     SLURM jobs get their GPU from ``slurm_gpus_per_node``/gres and their limit from
     ``slurm_time``, and ``debug`` runs in-process with the caller's GPU. submitit's local
@@ -52,8 +52,18 @@ def gpu_executor_parameters(cluster: str, timeout_min: float) -> dict:
     ``gpus_per_node`` (otherwise every GPU is hidden and ``cellpose_device`` refuses), and
     kills jobs after the generic ``timeout_min`` (default 2 minutes). Note that local jobs
     all run at once on the same GPU, so keep local runs to a few positions.
+
+    Parameters
+    ----------
+    timeout_min : float
+        Wall-clock limit per job in minutes (the same budget as ``slurm_time``).
+    gpu : bool, optional
+        Give each job one GPU. Leave ``False`` for CPU-only steps.
     """
-    return {"gpus_per_node": 1, "timeout_min": timeout_min} if cluster == "local" else {}
+    parameters = {"timeout_min": timeout_min}
+    if gpu:
+        parameters["gpus_per_node"] = 1
+    return parameters
 
 
 _SLURM_MEMORY_KEYS = ("slurm_mem", "slurm_mem_per_cpu", "slurm_mem_per_gpu")

@@ -31,7 +31,13 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.utils.cluster import echo_resources, estimate_resources, get_submitit_cluster
+from biahub.utils.cluster import (
+    apply_sbatch_overrides,
+    echo_resources,
+    estimate_resources,
+    get_submitit_cluster,
+    local_executor_parameters,
+)
 from biahub.utils.config import settings_fingerprint
 from biahub.utils.ngff import (
     PROVENANCE_METADATA_KEYS,
@@ -508,11 +514,15 @@ def virtual_stain(
 
     # Override defaults if sbatch_filepath is provided
     if sbatch_filepath:
-        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
+        slurm_args = apply_sbatch_overrides(slurm_args, sbatch_to_submitit(sbatch_filepath))
 
     resolved_cluster = get_submitit_cluster(cluster=cluster)
     click.echo(f"Preparing jobs on cluster='{resolved_cluster}': {slurm_args}")
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=resolved_cluster)
+    if resolved_cluster == "local":
+        # Explicit --sbatch-filepath values (e.g. '#LOCAL --timeout-min') win over
+        # the computed local executor parameters.
+        slurm_args = {**local_executor_parameters(time_minutes), **slurm_args}
     executor.update_parameters(**slurm_args)
 
     click.echo("Submitting jobs...")

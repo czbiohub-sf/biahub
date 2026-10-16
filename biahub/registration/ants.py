@@ -49,7 +49,7 @@ from biahub.settings import (
     AntsRegistrationSettings,
 )
 from biahub.utils.array_ops import _check_nan_n_zeros
-from biahub.utils.cluster import estimate_resources
+from biahub.utils.cluster import apply_sbatch_overrides, estimate_resources
 
 
 def estimate(
@@ -478,7 +478,7 @@ def estimate_tczyx(
     }
 
     if sbatch_filepath:
-        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
+        slurm_args = apply_sbatch_overrides(slurm_args, sbatch_to_submitit(sbatch_filepath))
 
     output_folder_path.mkdir(parents=True, exist_ok=True)
     slurm_out_path = output_folder_path / "slurm_output"

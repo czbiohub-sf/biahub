@@ -51,7 +51,7 @@ from biahub.core.transform import Transform
 from biahub.registration.utils import get_aprox_transform, load_transforms
 from biahub.settings import AffineTransformSettings, BeadsMatchSettings, DetectPeaksSettings
 from biahub.utils.array_ops import _check_nan_n_zeros
-from biahub.utils.cluster import estimate_resources
+from biahub.utils.cluster import apply_sbatch_overrides, estimate_resources
 
 
 def optimize_matches(
@@ -521,7 +521,7 @@ def estimate_independently(
     }
 
     if sbatch_filepath:
-        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
+        slurm_args = apply_sbatch_overrides(slurm_args, sbatch_to_submitit(sbatch_filepath))
 
     slurm_out_path = output_folder_path.parent / "slurm_output"
     slurm_out_path.mkdir(exist_ok=True)

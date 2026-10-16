@@ -40,7 +40,11 @@ from biahub.settings import (
     StabilizationSettings,
     StackRegSettings,
 )
-from biahub.utils.cluster import estimate_resources, get_submitit_cluster
+from biahub.utils.cluster import (
+    apply_sbatch_overrides,
+    estimate_resources,
+    get_submitit_cluster,
+)
 from biahub.utils.config import yaml_to_model
 
 NA_DET = 1.35
@@ -647,7 +651,7 @@ def estimate_xyz_stabilization_pcc(
     }
 
     if sbatch_filepath:
-        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
+        slurm_args = apply_sbatch_overrides(slurm_args, sbatch_to_submitit(sbatch_filepath))
 
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
     executor.update_parameters(**slurm_args)
@@ -850,7 +854,7 @@ def estimate_xy_stabilization(
     }
 
     if sbatch_filepath:
-        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
+        slurm_args = apply_sbatch_overrides(slurm_args, sbatch_to_submitit(sbatch_filepath))
 
     # Submitit executor
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
@@ -1113,7 +1117,7 @@ def estimate_z_stabilization(
     }
 
     if sbatch_filepath:
-        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
+        slurm_args = apply_sbatch_overrides(slurm_args, sbatch_to_submitit(sbatch_filepath))
 
     # Submitit executor
     executor = submitit.AutoExecutor(folder=slurm_out_path, cluster=cluster)
