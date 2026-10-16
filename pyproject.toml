@@ -117,12 +117,15 @@ index-strategy = "unsafe-best-match"
 # Its #235 removed the `upstream_qc_dir` config key, so configs must not carry it.
 imaging_qc_pipeline = { git = "https://github.com/czbiohub-sf/imaging-qc-pipeline", rev = "f5ae656e0e37320ead74f7c1f95ab1ed304c1829" }
 
-# Pin ultrack to feat/geff-export-tracks on the ieivanov fork (royerlab/ultrack#288):
-# Tracker.to_geff gains track_id/lineage_id/seg_id node props, related_objects
-# pointing at the label image, axes with units and scale (no z in 2D),
-# include_masks/include_overlaps and zarr_format=3, so track can write tracks.geff
-# inside the assembled OME-NGFF 0.5 plate (#361). Repoint at a release once merged.
-ultrack = { git = "https://github.com/ieivanov/ultrack", rev = "3cd1b090307cfb13ac62d72df78ef4555ce0ffa3" }
+# Pin ultrack to royerlab/ultrack main at the #289 merge. #288 gives
+# Tracker.to_geff track_id/lineage_id/seg_id node props, related_objects pointing
+# at the label image, axes with units and scale (no z in 2D),
+# include_masks/include_overlaps and zarr_format=3, so track can write
+# tracks.geff inside the assembled OME-NGFF 0.5 plate (#361); #289 stops
+# create_zarr from leaking its temporary stores. Neither is in a PyPI release
+# yet (0.8.0 predates both, and main's __version__ still reads 0.7.3, which this
+# git pin overrides). Repoint at a release once one contains them.
+ultrack = { git = "https://github.com/royerlab/ultrack", rev = "afbe2d6064aafa6dc25210353bb84239aace5102" }
 
 # Pin iohub to feat/create-empty-plate-labels (czbiohub-sf/iohub#486), which is
 # main plus create_empty_plate(label_names=...): track --init scaffolds the empty
