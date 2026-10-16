@@ -1,0 +1,14 @@
+# biahub segment: cellpose 4 nuclei labels from the virtual-stain nuclei channel of the
+# assembled plate (mantis v2, 0.1133 um/px). Enable with --segment_config.
+models:
+  nuclei:
+    pretrained_model: cpsam_v2      # cellpose 4: cpsam_v2, cpsam, cpdino, cpdino-vitb, or a path
+    channels: [nuclei_prediction]   # assembled-plate channel name(s), at most 3
+    # 2D on one plane. Pick an in-focus plane of the virtual-stain stack for the dataset
+    # (selecting the plane per FOV from the data is planned, not implemented yet).
+    z_slice_2D: 30
+    eval_args:
+      diameter: null                # native resolution (cellpose 4 resizes by 30 / diameter)
+      cellprob_threshold: 0.0
+      flow_threshold: 0.4
+      min_size: 300                 # px; small mitotic nuclei are ~300-2500 px

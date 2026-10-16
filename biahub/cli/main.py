@@ -16,10 +16,10 @@ def cli():
 
 
 class LazyCommand(click.Command):
-    def __init__(self, name, import_path, help=None, short_help=None):
+    def __init__(self, name, import_path, help=None, short_help=None, hidden=False):
         self.import_path = import_path
         self._real_command = None
-        super().__init__(name=name, help=help, short_help=short_help)
+        super().__init__(name=name, help=help, short_help=short_help, hidden=hidden)
 
     def _load_real_command(self):
         if self._real_command is None:
@@ -65,9 +65,20 @@ COMMANDS = [
         "help": "Deskew a single position across T and C axes",
     },
     {
-        "name": "estimate-registration",
-        "import_path": "biahub.estimate_registration.estimate_registration_cli",
-        "help": "Estimate affine transform between timepoints or arms",
+        "name": "estimate-transform",
+        "import_path": "biahub.estimate_transform.estimate_transform_cli",
+        "help": "Estimate a transform series (registration or stabilization)",
+    },
+    {
+        "name": "substitute-transforms",
+        "import_path": "biahub.substitute_transforms.substitute_transforms_cli",
+        "help": "Replace chosen timepoints of a transforms file with another run's",
+    },
+    {
+        "name": "convert-settings",
+        "import_path": "biahub.registration.legacy.convert_settings.convert_settings_cli",
+        "help": "Convert a retired registration/stabilization config to the unified one",
+        "hidden": True,
     },
     {
         "name": "flat-field",
@@ -80,19 +91,14 @@ COMMANDS = [
         "help": "Flip images in a dataset",
     },
     {
-        "name": "optimize-registration",
-        "import_path": "biahub.optimize_registration.optimize_registration_cli",
-        "help": "Optimize transform based on match filtering",
-    },
-    {
         "name": "pyramid",
         "import_path": "biahub.pyramid.pyramid_cli",
         "help": "Create pyramid levels for a dataset",
     },
     {
-        "name": "register",
-        "import_path": "biahub.register.register_cli",
-        "help": "Apply an affine transformation to a single position",
+        "name": "apply-transform",
+        "import_path": "biahub.apply_transform.apply_transform_cli",
+        "help": "Apply a transform series to positions (registration or stabilization)",
     },
     {
         "name": "estimate-stitch",
@@ -108,16 +114,6 @@ COMMANDS = [
         "name": "concatenate",
         "import_path": "biahub.concatenate.concatenate_cli",
         "help": "Concatenate datasets (with optional cropping)",
-    },
-    {
-        "name": "estimate-stabilization",
-        "import_path": "biahub.estimate_stabilization.estimate_stabilization_cli",
-        "help": "Estimate translation matrices for XYZ stabilization",
-    },
-    {
-        "name": "stabilize",
-        "import_path": "biahub.stabilize.stabilize_cli",
-        "help": "Apply stabilization transforms to dataset",
     },
     {
         "name": "estimate-crop",
@@ -177,6 +173,23 @@ COMMANDS = [
 ]
 
 
+# Deprecated registration command names, hidden from --help (see biahub.registration.legacy.aliases).
+for name, attr in (
+    ("estimate-registration", "estimate_registration_alias"),
+    ("estimate-stabilization", "estimate_stabilization_alias"),
+    ("register", "register_alias"),
+    ("stabilize", "stabilize_alias"),
+    ("optimize-registration", "optimize_registration_alias"),
+):
+    COMMANDS.append(
+        {
+            "name": name,
+            "import_path": f"biahub.registration.legacy.aliases.{attr}",
+            "help": "Deprecated: use estimate-transform / apply-transform.",
+            "hidden": True,
+        }
+    )
+
 for cmd in COMMANDS:
     cli.add_command(
         LazyCommand(
@@ -184,6 +197,7 @@ for cmd in COMMANDS:
             import_path=cmd["import_path"],
             help=cmd["help"],
             short_help=cmd["help"].split(".")[0],
+            hidden=cmd.get("hidden", False),
         )
     )
 

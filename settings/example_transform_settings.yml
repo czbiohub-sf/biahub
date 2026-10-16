@@ -1,0 +1,26 @@
+direction: inverse
+moving_channels:
+- Phase3D
+- Orientation
+- Retardance
+- Birefringence
+reference_channel: GFP
+method: beads
+transforms:
+- matrix:
+  - - 1.0
+    - 0.0
+    - 0.0
+    - 0.0
+  - - 0.0
+    - 1.0
+    - 0.0
+    - 0.0
+  - - 0.0
+    - 0.0
+    - 1.0
+    - 0.0
+  - - 0.0
+    - 0.0
+    - 0.0
+    - 1.0

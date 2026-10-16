@@ -707,3 +707,207 @@ def test_track_debug_run_applies_the_sibling_filter(tmp_path, example_tracking_p
 
     assert result.exit_code == 0, result.output
     assert "Sibling filter (min_length=3)" in result.output
+
+
+def test_track_gives_local_jobs_a_gpu(tmp_path, example_tracking_plate, monkeypatch):
+    """Same as segment: submitit's local executor hides GPUs without gpus_per_node."""
+    import contextlib
+
+    recorded = {}
+
+    class Executor:
+        def __init__(self, folder, cluster):
+            recorded["cluster"] = cluster
+
+        def update_parameters(self, **kwargs):
+            recorded.update(kwargs)
+
+        def batch(self):
+            return contextlib.nullcontext()
+
+        def submit(self, *args, **kwargs):
+            return types.SimpleNamespace(job_id="0", wait=lambda: None)
+
+    import types
+
+    monkeypatch.setattr("biahub.track.submitit.AutoExecutor", Executor)
+    monkeypatch.delenv("CI", raising=False)
+    plate_path, _ = example_tracking_plate
+    config_path = _make_tracking_config(plate_path, tmp_path)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "track",
+            "--cluster",
+            "local",
+            "-i",
+            str(plate_path / "A" / "1" / "0"),
+            "-o",
+            str(tmp_path / "out.zarr"),
+            "-c",
+            str(config_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert recorded["cluster"] == "local"
+    assert recorded.get("gpus_per_node") == 1
+    assert (
+        recorded.get("timeout_min") == recorded["slurm_time"]
+    )  # local default kills at 2 min
+
+
+def test_track_local_sbatch_file_overrides_computed_parameters(
+    tmp_path, example_tracking_plate, monkeypatch
+):
+    """'#LOCAL --timeout-min' must win over the computed local timeout, not collide
+    (TypeError: multiple values for keyword argument 'timeout_min')."""
+    import contextlib
+    import types
+
+    recorded = {}
+
+    class Executor:
+        def __init__(self, folder, cluster):
+            recorded["cluster"] = cluster
+
+        def update_parameters(self, **kwargs):
+            recorded.update(kwargs)
+
+        def batch(self):
+            return contextlib.nullcontext()
+
+        def submit(self, *args, **kwargs):
+            return types.SimpleNamespace(job_id="0", wait=lambda: None)
+
+    monkeypatch.setattr("biahub.track.submitit.AutoExecutor", Executor)
+    monkeypatch.delenv("CI", raising=False)  # conftest forces CI (debug) otherwise
+    plate_path, _ = example_tracking_plate
+    config_path = _make_tracking_config(plate_path, tmp_path)
+    sbatch = tmp_path / "local.sbatch"
+    sbatch.write_text("#LOCAL --timeout-min=5\n")
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "track",
+            "--cluster",
+            "local",
+            "-i",
+            str(plate_path / "A" / "1" / "0"),
+            "-o",
+            str(tmp_path / "out.zarr"),
+            "-c",
+            str(config_path),
+            "-sb",
+            str(sbatch),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert recorded["timeout_min"] == 5
+    assert recorded["gpus_per_node"] == 1
+
+
+def test_track_local_timeout_ignores_a_slurm_time_string(
+    tmp_path, example_tracking_plate, monkeypatch
+):
+    """'#SBATCH --time=3:00:00' sets slurm_time to a string; the local timeout_min must
+    stay the computed number of minutes."""
+    import contextlib
+    import types
+
+    recorded = {}
+
+    class Executor:
+        def __init__(self, folder, cluster):
+            recorded["cluster"] = cluster
+
+        def update_parameters(self, **kwargs):
+            recorded.update(kwargs)
+
+        def batch(self):
+            return contextlib.nullcontext()
+
+        def submit(self, *args, **kwargs):
+            return types.SimpleNamespace(job_id="0", wait=lambda: None)
+
+    monkeypatch.setattr("biahub.track.submitit.AutoExecutor", Executor)
+    monkeypatch.delenv("CI", raising=False)  # conftest forces CI (debug) otherwise
+    plate_path, _ = example_tracking_plate
+    config_path = _make_tracking_config(plate_path, tmp_path)
+    sbatch = tmp_path / "slurm.sbatch"
+    sbatch.write_text("#SBATCH --time=3:00:00\n")
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "track",
+            "--cluster",
+            "local",
+            "-i",
+            str(plate_path / "A" / "1" / "0"),
+            "-o",
+            str(tmp_path / "out.zarr"),
+            "-c",
+            str(config_path),
+            "-sb",
+            str(sbatch),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert recorded["slurm_time"] == "3:00:00"
+    assert recorded["timeout_min"] == 60  # track's computed time, in minutes
+
+
+def test_track_mem_per_cpu_override_drops_the_computed_total(
+    tmp_path, example_tracking_plate, monkeypatch
+):
+    """'#SBATCH --mem-per-cpu=16G' left --mem set too, and SLURM rejects both."""
+    import contextlib
+    import types
+
+    recorded = {}
+
+    class Executor:
+        def __init__(self, folder, cluster):
+            recorded["cluster"] = cluster
+
+        def update_parameters(self, **kwargs):
+            recorded.update(kwargs)
+
+        def batch(self):
+            return contextlib.nullcontext()
+
+        def submit(self, *args, **kwargs):
+            return types.SimpleNamespace(job_id="0", wait=lambda: None)
+
+    monkeypatch.setattr("biahub.track.submitit.AutoExecutor", Executor)
+    monkeypatch.delenv("CI", raising=False)  # conftest forces CI (debug) otherwise
+    plate_path, _ = example_tracking_plate
+    config_path = _make_tracking_config(plate_path, tmp_path)
+    sbatch = tmp_path / "mem.sbatch"
+    sbatch.write_text("#SBATCH --mem-per-cpu=16G\n")
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "track",
+            "--cluster",
+            "slurm",
+            "-i",
+            str(plate_path / "A" / "1" / "0"),
+            "-o",
+            str(tmp_path / "out.zarr"),
+            "-c",
+            str(config_path),
+            "-sb",
+            str(sbatch),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert recorded["slurm_mem_per_cpu"] == "16G"
+    assert "slurm_mem" not in recorded
