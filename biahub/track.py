@@ -410,6 +410,29 @@ def apply_focus_slicing(
     return {name: arr[:, z_slices] for name, arr in data_dict.items()}
 
 
+def filter_short_siblings(
+    tracks_df: pd.DataFrame, labels: ArrayLike, min_length: int
+) -> tuple[pd.DataFrame, np.ndarray]:
+    """Remove short daughter tracks at divisions, in tracks and labels.
+
+    At each division where exactly one daughter lives ``min_length`` frames or fewer
+    and does not divide again, that daughter is dropped (its labels set to 0) and the
+    other daughter is merged into the parent. If both daughters are that short, both
+    are kept. This is ultrack's ``filter_short_sibling_tracks``, which counts a
+    daughter of exactly ``min_length`` frames as short.
+    """
+    from ultrack.tracks import filter_short_sibling_tracks
+
+    n_before = tracks_df.track_id.nunique()
+    tracks_df, labels = filter_short_sibling_tracks(tracks_df, min_length, segments=labels)
+    tracks_df = tracks_df.sort_values(["track_id", "t"]).reset_index(drop=True)
+    click.echo(
+        f"Sibling filter (min_length={min_length}): {n_before} -> "
+        f"{tracks_df.track_id.nunique()} tracks"
+    )
+    return tracks_df, np.asarray(labels)
+
+
 def run_ultrack(
     tracking_config,
     database_path,
@@ -804,6 +827,7 @@ def track_one_position(
     cellpose_config: CellposeConfig | None = None,
     z_slicing: ZSlicing | None = None,
     output_mode: str = "2D",
+    min_sibling_length: int | None = None,
 ) -> None:
     """
     Run tracking on a single field of view.
@@ -842,6 +866,9 @@ def track_one_position(
     output_mode : str, optional
         "2D" writes (T, Y, X) labels into the Z=0 plane; "3D" writes (T, Z, Y, X)
         labels across the z-window. Default is "2D".
+    min_sibling_length : int, optional
+        If set, remove daughter tracks of this many frames or fewer before writing
+        (see :func:`filter_short_siblings`). Default None keeps every division.
 
     Returns
     -------
@@ -898,6 +925,11 @@ def track_one_position(
             edges=contour_gradient_map,
             scale=scale,
             overwrite=True,
+        )
+
+    if min_sibling_length is not None:
+        tracks_df, tracking_labels = filter_short_siblings(
+            tracks_df, tracking_labels, min_sibling_length
         )
 
     # Save the tracks graph to a CSV file
@@ -1118,6 +1150,7 @@ def track(
                 cellpose_config=cellpose_cfg,
                 z_slicing=settings.z_slicing,
                 output_mode=settings.output_mode,
+                min_sibling_length=settings.min_sibling_length,
             )
             jobs.append(job)
 
