@@ -377,7 +377,9 @@ def test_track_cli_debug_single_position(tmp_path, example_tracking_plate, monke
     assert result.exit_code == 0, result.output
     assert "Tracking complete:" in result.output
     _assert_tracking_outputs(plate_path / "A" / "1" / "0", z_index=1)
-    assert not any(temp_dir.iterdir())  # the temporary database was deleted
+    # The temporary database was deleted. (ultrack's own temporary arrays go when
+    # they are garbage collected, at the latest when the worker process exits.)
+    assert not list(temp_dir.glob("biahub-track-*"))
     assert (tmp_path / "slurm_output").is_dir()
 
     # A retry overwrites the same outputs.

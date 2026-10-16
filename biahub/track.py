@@ -881,32 +881,23 @@ def write_tracking_labels(
 
 
 @contextmanager
-def _fov_scratch(output_dirpath: Path | None, fov: str):
-    """Yield the Ultrack database directory for one FOV, inside a scratch directory.
+def _database_dirpath(output_dirpath: Path | None, fov: str):
+    """Yield the Ultrack working directory (database and config) for one FOV.
 
-    The scratch directory is fresh in this worker's ``$TMPDIR``, one per FOV because
-    ``$TMPDIR`` can be shared by all of a user's jobs on a node, and deleted on exit.
-    The database goes in it unless ``output_dirpath`` is given, in which case it is
-    kept in ``{output_dirpath}/{fov}``.
-
-    While the context is open, ``tempfile`` also points into the scratch directory:
-    ultrack's ``create_zarr`` backs its default store with a ``TemporaryDirectory``
-    that it lets go out of scope, so the directory is deleted, recreated by the first
-    chunk write, and never cleaned up. Kept in here, those arrays go with the rest.
+    ``{output_dirpath}/{fov}`` when ``output_dirpath`` is given, and kept. Otherwise a
+    fresh directory in this worker's ``$TMPDIR``, deleted on exit: one per FOV,
+    because ``$TMPDIR`` can be shared by all of a user's jobs on a node.
     """
-    scratch = Path(tempfile.mkdtemp(prefix=f"biahub-track-{fov}-"))
-    previous_tempdir = tempfile.tempdir
-    tempfile.tempdir = str(scratch)
+    if output_dirpath is not None:
+        dirpath = Path(output_dirpath) / fov
+        dirpath.mkdir(parents=True, exist_ok=True)
+        yield dirpath
+        return
+    dirpath = Path(tempfile.mkdtemp(prefix=f"biahub-track-{fov}-"))
     try:
-        if output_dirpath is not None:
-            database_path = Path(output_dirpath) / fov
-        else:
-            database_path = scratch / "database"
-        database_path.mkdir(parents=True, exist_ok=True)
-        yield database_path
+        yield dirpath
     finally:
-        tempfile.tempdir = previous_tempdir
-        shutil.rmtree(scratch, ignore_errors=True)
+        shutil.rmtree(dirpath, ignore_errors=True)
 
 
 def _resolved_ultrack_config(tracking_config) -> dict:
@@ -953,7 +944,7 @@ def track_one_position(
         Where to keep the Ultrack database and config for this FOV, in
         ``{output_dirpath}/{row}_{col}_{fov}/``. If None they live in a scratch
         directory in this worker's ``$TMPDIR`` and are deleted after export (see
-        :func:`_fov_scratch`).
+        :func:`_database_dirpath`).
     tracking_config : MainConfig
         Ultrack configuration containing segmentation, linking, and optimization settings.
     label_name : str
@@ -1000,7 +991,7 @@ def track_one_position(
         time_scale = position.scale[0]
         units = {axis.name.lower(): getattr(axis, "unit", None) for axis in position.axes}
 
-    with _fov_scratch(output_dirpath, fov) as database_path:
+    with _database_dirpath(output_dirpath, fov) as database_path:
         # Load, focus-slice (method='focus'), run the processing pipeline, and fill blank
         # frames once; both segmentation methods consume the resulting data_dict.
         # pixel_size is the transverse pixel size = last element of the (trimmed) scale.
