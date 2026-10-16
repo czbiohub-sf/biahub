@@ -421,19 +421,10 @@ def filter_short_siblings(
     are kept. This is ultrack's ``filter_short_sibling_tracks``, which counts a
     daughter of exactly ``min_length`` frames as short.
     """
-    import zarr
-
     from ultrack.tracks import filter_short_sibling_tracks
 
     n_before = tracks_df.track_id.nunique()
-    # An in-memory store: by default ultrack writes the relabeled copy to a temporary
-    # directory that is never removed (~0.5 GB per 2D FOV before compression).
-    tracks_df, labels = filter_short_sibling_tracks(
-        tracks_df,
-        min_length,
-        segments=labels,
-        segments_store_or_path=zarr.storage.MemoryStore(),
-    )
+    tracks_df, labels = filter_short_sibling_tracks(tracks_df, min_length, segments=labels)
     tracks_df = tracks_df.sort_values(["track_id", "t"]).reset_index(drop=True)
     click.echo(
         f"Sibling filter (min_length={min_length}): {n_before} -> "
