@@ -151,3 +151,69 @@ def test_nuclei_centroids_skip_objects_cut_by_the_frame():
         np.sort(found.points_vox, axis=0) - np.sort(np.array(inside), axis=0), axis=1
     )
     assert np.max(d) < 1.0
+
+
+# --- layer 3: image-based residuals -----------------------------------------------------
+
+from scipy.ndimage import affine_transform as _affine  # noqa: E402
+from scipy.ndimage import shift as _ndi_shift  # noqa: E402
+
+from biahub.registration.evaluate import tile_residuals, z_residuals  # noqa: E402
+
+VOX3 = (0.2, 0.103, 0.103)
+
+
+def _cells(seed=0, shape=(24, 256, 256)):
+    """Blobs of several sizes on a background: structure everywhere, as cells."""
+    from tests.test_registration_estimators import _synthetic_blob_volume
+
+    rng = np.random.default_rng(seed)
+    return _synthetic_blob_volume(rng, shape, n_blobs=120, sigma=3.0) + 100.0
+
+
+def test_tile_residuals_measure_a_known_shift_with_the_point_sign_convention():
+    ref = _cells()
+    shift_zyx = (0.0, 3.0, -2.0)
+    mov = _ndi_shift(ref, shift_zyx, order=1, mode="nearest")  # content at p + shift
+    exact = Transform.from_translation([-s for s in shift_zyx])
+    off = tile_residuals(Transform.identity(3), mov, ref, VOX3, tile_px=64)
+    on = tile_residuals(exact, mov, ref, VOX3, tile_px=64)
+    assert off["stats"]["n"] >= 6
+    # reference minus mapped moving, as point_residuals: -shift
+    np.testing.assert_allclose(
+        off["stats"]["median_zyx_um"][1:], [-3 * 0.103, 2 * 0.103], atol=0.05
+    )
+    assert on["stats"]["median_um"] < 0.05
+
+
+def test_tile_residuals_expose_a_scale_error():
+    ref = _cells(1)
+    c = (np.array(ref.shape) - 1) / 2
+    scale = np.diag([1.0, 1.01, 1.01])
+    # mov content sits at c + 1.01 (p - c): sample ref there by the inverse map
+    inv = np.linalg.inv(scale)
+    mov = _affine(ref, inv, offset=c - inv @ c, order=1, mode="nearest")
+    r = tile_residuals(Transform.identity(3), mov, ref, VOX3, tile_px=64)
+    np.testing.assert_allclose(r["affine"]["scale_zyx"][1:], [1 / 1.01, 1 / 1.01], atol=2e-3)
+
+
+def test_z_residuals_recover_a_z_shift_in_every_crop():
+    ref = _cells(2, shape=(40, 256, 256))
+    mov = _ndi_shift(ref, (2.0, 0.0, 0.0), order=1, mode="nearest")
+    r = z_residuals(Transform.identity(3), mov, ref, VOX3, crop_px=96)
+    dz = [v[0] for v in r["crops_um"].values() if v is not None]
+    assert len(dz) == 5
+    np.testing.assert_allclose(dz, -2 * 0.2, atol=0.05)
+
+
+def test_edges_register_inverted_contrast_where_intensities_do_not():
+    # Cross-modal stand-in: the moving channel shows the same structures dark on bright.
+    ref = _cells(3)
+    mov = 2 * ref.mean() - _ndi_shift(ref, (0.0, 2.0, 0.0), order=1, mode="nearest")
+    edges = tile_residuals(Transform.identity(3), mov, ref, VOX3, tile_px=64)
+    intensity = tile_residuals(
+        Transform.identity(3), mov, ref, VOX3, tile_px=64, compare="intensity"
+    )
+    assert edges["stats"]["n"] >= 6
+    np.testing.assert_allclose(edges["stats"]["median_zyx_um"][1], -2 * 0.103, atol=0.05)
+    assert intensity["stats"]["n"] < edges["stats"]["n"]

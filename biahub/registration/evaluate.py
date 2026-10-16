@@ -12,7 +12,10 @@ from dataclasses import dataclass
 import numpy as np
 
 from numpy.typing import ArrayLike
+from scipy.ndimage import shift as ndi_shift
 from scipy.spatial import cKDTree
+from skimage import filters
+from skimage.registration import phase_cross_correlation
 
 from biahub.characterize_psf import detect_peaks
 from biahub.core.transform import Transform
@@ -265,3 +268,133 @@ def detect_nuclei(
         z = float((np.arange(len(profile))[top] * profile[top]).sum() / profile[top].sum())
         points.append((z, *region.centroid))
     return Landmarks(np.array(points, dtype=float).reshape(-1, 3), tuple(voxel_um), "nuclei")
+
+
+# --- layer 3: image-based residuals -----------------------------------------------------
+# For data without landmarks: local shifts between the warped moving volume and the
+# reference, measured by phase correlation and summarised like matched points.
+
+
+def _comparable_pair(transform, mov, ref, compare: str):
+    """Return (warped moving, reference, coverage) prepared for `compare`.
+
+    `edges` takes the Sobel magnitude in each volume's own grid before warping, so the
+    empty padding carries no edges and cross-modal pairs compare structure; `intensity`
+    compares the volumes as they are. `coverage` marks where the moving volume has data.
+    """
+    if compare not in ("edges", "intensity"):
+        raise ValueError(f"compare must be 'edges' or 'intensity', got {compare!r}")
+    mov = np.nan_to_num(np.asarray(mov, dtype=np.float32))
+    ref = np.nan_to_num(np.asarray(ref, dtype=np.float32))
+    if compare == "edges":
+        mov, ref = filters.sobel(mov).astype(np.float32), filters.sobel(ref).astype(np.float32)
+    warped = transform.apply(mov, reference=ref)
+    coverage = transform.apply(np.ones_like(mov), reference=ref) > 0.5
+    return warped, ref, coverage
+
+
+def _zscore(a: np.ndarray) -> np.ndarray:
+    return (a - a.mean()) / (a.std() + 1e-9)
+
+
+def tile_residuals(
+    transform: Transform,
+    mov: ArrayLike,
+    ref: ArrayLike,
+    voxel_um: tuple,
+    compare: str = "edges",
+    tile_px: int = 256,
+    grid: int = 7,
+    min_ncc: float = 0.5,
+    max_shift_px: float | None = None,
+    min_coverage: float = 0.95,
+) -> dict:
+    """Return local yx residuals over a grid of tiles of the max projections, in µm.
+
+    Each tile of the warped moving projection is phase-correlated with the reference's; a
+    tile counts when it is mostly real data, its shift is plausible (under `max_shift_px`,
+    default a quarter tile) and its shifted copy correlates above `min_ncc`. Displacements
+    follow `point_residuals`' convention (reference minus mapped moving) and are summarised
+    by `displacement_stats` and `residual_affine` (a radial pattern = a scale error).
+    """
+    warped, ref_p, coverage = _comparable_pair(transform, mov, ref, compare)
+    w_mip, r_mip = warped.max(axis=0), ref_p.max(axis=0)
+    covered = coverage.mean(axis=0) >= 0.5
+    max_shift = tile_px / 4 if max_shift_px is None else max_shift_px
+    h = tile_px // 2
+    _, ny, nx = ref_p.shape
+    window = np.outer(np.hanning(tile_px), np.hanning(tile_px))
+    points, diffs = [], []
+    for cy in np.linspace(h, ny - h, grid).astype(int):
+        for cx in np.linspace(h, nx - h, grid).astype(int):
+            tile = (slice(cy - h, cy + h), slice(cx - h, cx + h))
+            if covered[tile].mean() < min_coverage:
+                continue
+            r, w = r_mip[tile], w_mip[tile]
+            if r.std() == 0 or w.std() == 0:
+                continue
+            r, w = _zscore(r), _zscore(w)
+            shift, _error, _phase = phase_cross_correlation(
+                r * window, w * window, upsample_factor=10, normalization=None
+            )
+            if np.abs(shift).max() > max_shift:
+                continue
+            moved = ndi_shift(w, shift, order=1, mode="nearest")
+            if np.corrcoef(r.ravel(), moved.ravel())[0, 1] < min_ncc:
+                continue
+            points.append((ref_p.shape[0] / 2, cy, cx))
+            diffs.append((0.0, *shift))  # moving shifted by `shift` matches: ref - mapped
+    points, diffs = np.array(points).reshape(-1, 3), np.array(diffs).reshape(-1, 3)
+    return {
+        "compare": compare,
+        "n_tiles": int(len(points)),
+        "stats": displacement_stats(diffs, voxel_um),
+        "affine": residual_affine(points, diffs, voxel_um),
+    }
+
+
+def z_residuals(
+    transform: Transform,
+    mov: ArrayLike,
+    ref: ArrayLike,
+    voxel_um: tuple,
+    compare: str = "edges",
+    crop_px: int = 768,
+    min_coverage: float = 0.5,
+) -> dict:
+    """Return the residual shift in the centre and 4 corner crops (3D phase correlation), µm.
+
+    Different corners show a tilt (`tilt_dz_um`: the spread of their z residuals). A crop
+    that is mostly padding is skipped; in intensity mode the padding is filled with the
+    crop's median so its edge does not dominate the correlation.
+    """
+    warped, ref_p, coverage = _comparable_pair(transform, mov, ref, compare)
+    _, ny, nx = ref_p.shape
+    cy, cx = min(crop_px, ny), min(crop_px, nx)
+    starts = {
+        "centre": ((ny - cy) // 2, (nx - cx) // 2),
+        "top_left": (0, 0),
+        "top_right": (0, nx - cx),
+        "bottom_left": (ny - cy, 0),
+        "bottom_right": (ny - cy, nx - cx),
+    }
+    um = np.asarray(voxel_um, float)
+    crops = {}
+    for name, (y0, x0) in starts.items():
+        box = (slice(None), slice(y0, y0 + cy), slice(x0, x0 + cx))
+        w, r, cov = warped[box], ref_p[box], coverage[box]
+        if cov.mean() < min_coverage or r.std() == 0 or w[cov].std() == 0:
+            crops[name] = None
+            continue
+        if compare == "intensity":
+            w = np.where(cov, w, np.median(w[cov]))
+        shift, _error, _phase = phase_cross_correlation(
+            _zscore(r), _zscore(w), upsample_factor=10, normalization=None
+        )
+        crops[name] = (np.asarray(shift) * um).tolist()
+    corner_dz = [v[0] for k, v in crops.items() if k != "centre" and v is not None]
+    return {
+        "compare": compare,
+        "crops_um": crops,
+        "tilt_dz_um": float(max(corner_dz) - min(corner_dz)) if len(corner_dz) > 1 else None,
+    }
