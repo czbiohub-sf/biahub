@@ -11,6 +11,14 @@ from iohub.ngff import TransformationMeta, open_ome_zarr
 # Use submitit debug executor (in-process, no forking) for fast tests
 os.environ["CI"] = "true"
 
+# Run ITK (ANTs) on one thread for the whole suite. ITK reads this once, at its
+# first threaded operation, so it must be set before any test module imports
+# ants. The test volumes are tiny, so threading buys nothing, and with one
+# thread a seeded ANTs registration is bit-repeatable -- which is what
+# test_ants_estimates_are_repeatable checks in-process instead of in a fresh
+# interpreter.
+os.environ["ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS"] = "1"
+
 # iohub's default zarr implementation is a *process-global*. biahub relies on
 # the ``zarrs-python`` (Rust) pipeline for its sharded zarr-v3 writes
 # (flat-field, concatenate, ...). Importing ``cytoland``/``viscy_data`` runs
