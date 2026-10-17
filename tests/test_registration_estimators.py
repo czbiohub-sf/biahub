@@ -1,7 +1,5 @@
 import os
 
-from pathlib import Path
-
 import numpy as np
 import pytest
 
@@ -624,33 +622,20 @@ def test_a_competitor_seed_needs_a_score_fn():
 
 def test_ants_estimates_are_repeatable():
     # ANTs samples voxels at random in its affine stage: without a fixed seed two runs on
-    # the same data differ. With it, one thread repeats exactly (more threads add ~0.01
-    # voxel of noise). A fresh process: ITK keeps its thread count once it has started.
-    import subprocess
-    import sys
-
-    script = """
-import numpy as np
-from scipy.ndimage import shift as ndi_shift
-from tests.test_registration_estimators import _synthetic_blob_volume
-from biahub.core.transform import Transform
-from biahub.registration.methods.ants import AntsEstimator
-rng = np.random.default_rng(5)
-ref = _synthetic_blob_volume(rng, (24, 48, 48))
-mov = ndi_shift(ref, shift=(2, -3, 4), order=1, mode="constant", cval=0.0)
-# with a seed, as the engine always calls it: the seed is applied (an ITK resample) first
-seed = Transform.identity(3)
-first, second = (AntsEstimator().estimate(mov, ref, seed=seed).matrix for _ in range(2))
-assert np.array_equal(first, second), np.abs(first - second).max()
-"""
-    env = {**os.environ, "SLURM_CPUS_PER_TASK": "1"}
-    env.pop("ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS", None)
-    root = str(Path(__file__).resolve().parents[1])
-    env["PYTHONPATH"] = os.pathsep.join(filter(None, [root, env.get("PYTHONPATH")]))
-    result = subprocess.run(
-        [sys.executable, "-c", script], env=env, cwd=root, capture_output=True, text=True
+    # the same data differ. With it, one thread repeats exactly (more threads add ~0.05
+    # voxel of noise). ITK keeps its thread count once it has started, so the suite pins
+    # it to one in conftest.py before ants is imported; check that pin is in place.
+    assert os.environ.get("ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS") == "1", (
+        "tests/conftest.py must set ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS=1 before "
+        "any test module imports ants"
     )
-    assert result.returncode == 0, result.stderr[-2000:]
+    rng = np.random.default_rng(5)
+    ref = _synthetic_blob_volume(rng, (24, 48, 48))
+    mov = ndi_shift(ref, shift=(2, -3, 4), order=1, mode="constant", cval=0.0)
+    # with a seed, as the engine always calls it: the seed is applied (an ITK resample) first
+    seed = Transform.identity(3)
+    first, second = (AntsEstimator().estimate(mov, ref, seed=seed).matrix for _ in range(2))
+    assert np.array_equal(first, second), np.abs(first - second).max()
 
 
 def test_ants_threads_follow_the_task_cpus_unless_set(monkeypatch):
