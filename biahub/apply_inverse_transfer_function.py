@@ -1,3 +1,5 @@
+import os
+
 from pathlib import Path
 
 import click
@@ -132,7 +134,11 @@ def apply_inverse_transfer_function(
         input_position_dirpaths, output_dirpath, config_filepath, settings
     )
 
-    max_num_cpus = 16
+    # waveorder sizes its per-position worker pool from this cap. In CI/tests run
+    # serially, as biahub's own estimate_resources does: the test data is tiny,
+    # so spawning a pool (one re-import of the stack per worker) costs far more
+    # than the work itself.
+    max_num_cpus = 1 if os.environ.get("CI") == "true" else 16
     num_cpus, mem_per_cpu = wo_estimate_resources(list(input_shape), settings, max_num_cpus)
     mem_gb = num_cpus * mem_per_cpu
     # CPUs/RAM come from waveorder above. Wall-time scales with the number of
