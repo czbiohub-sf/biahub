@@ -1,3 +1,4 @@
+import importlib.util
 import inspect
 import re
 
@@ -59,12 +60,10 @@ try:
 except ImportError:
     cellpose_available = False
 
-try:
-    import cytoland  # noqa: F401
-
-    cytoland_available = True
-except ImportError:
-    cytoland_available = False
+# Only check that cytoland is installed; importing it costs ~40 s (lightning,
+# torchmetrics, transformers) and would be paid at collection by every pytest
+# run. The two virtual-stain tests below import it lazily when they execute.
+cytoland_available = importlib.util.find_spec("cytoland") is not None
 
 
 def test_all_example_settings_tested():
