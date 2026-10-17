@@ -11,8 +11,6 @@ import torch.nn.functional as F  # noqa: N812
 
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate, process_single_position
-from monai.transforms.spatial.array import Affine
-from scipy.ndimage import binary_dilation
 
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
@@ -71,34 +69,6 @@ def _average_n_slices(data, average_window_width=1):
     data_averaged = np.mean(data.reshape(new_shape), axis=1)
 
     return data_averaged
-
-
-def _average_n_slices_torch(data: torch.Tensor, average_window_width: int) -> torch.Tensor:
-    """Average a tensor over its first axis (GPU-compatible).
-
-    Parameters
-    ----------
-    data : torch.Tensor
-
-    average_window_width : int
-        Averaging window applied to the first axis.
-
-    Returns
-    -------
-    torch.Tensor
-
-    """
-    if average_window_width == 1:
-        return data
-
-    remainder = data.shape[0] % average_window_width
-    if remainder > 0:
-        padding_width = average_window_width - remainder
-        pad = data[-1:].expand(padding_width, *data.shape[1:])
-        data = torch.cat([data, pad], dim=0)
-
-    new_shape = (data.shape[0] // average_window_width, average_window_width) + data.shape[1:]
-    return data.reshape(new_shape).mean(dim=1)
 
 
 def _rearrange_axes(data: torch.Tensor) -> torch.Tensor:
@@ -182,39 +152,6 @@ def _get_averaged_shape(deskewed_data_shape: tuple, average_window_width: int) -
     return averaged_shape
 
 
-def _get_transform_matrix(ls_angle_deg: float, px_to_scan_ratio: float):
-    """
-    Compute affine transformation matrix used to deskew data.
-
-    Parameters
-    ----------
-    ls_angle_deg : float
-    px_to_scan_ratio : float
-
-    Returns
-    -------
-    matrix : np.array
-        Affine transformation matrix.
-    """
-    ct = np.cos(ls_angle_deg * np.pi / 180)
-
-    matrix = np.array(
-        [
-            [
-                -px_to_scan_ratio * ct,
-                0,
-                px_to_scan_ratio,
-                0,
-            ],
-            [-1, 0, 0, 0],
-            [0, -1, 0, 0],
-            [0, 0, 0, 1],
-        ]
-    )
-
-    return matrix
-
-
 def get_deskewed_data_shape(
     raw_data_shape: tuple,
     ls_angle_deg: float,
@@ -279,68 +216,6 @@ def get_deskewed_data_shape(
     return averaged_output_shape, voxel_size
 
 
-def _fill_overhang_with_mean(
-    data: np.ndarray,
-    dilation_iterations: int = 3,
-    debug_plot_path: Path | None = None,
-) -> np.ndarray:
-    """Replace zero-padded overhang regions with the mean of the valid signal.
-
-    After deskewing with padding_mode="zeros", overhang voxels are exactly 0.
-    Bilinear interpolation at the boundary produces a gradient from signal to 0,
-    so the mask is dilated inward to also cover those blended voxels.
-
-    Parameters
-    ----------
-    data : np.ndarray
-        Deskewed 3D volume with zero-padded overhangs.
-    dilation_iterations : int
-        Number of binary dilation iterations to grow the zero-mask inward,
-        capturing interpolation artifacts at the overhang boundary.
-    debug_plot_path : Path, optional
-        If provided, saves a diagnostic figure showing the masks and result.
-
-    Returns
-    -------
-    filled : np.ndarray
-        Volume with overhang regions replaced by the mean of the valid signal.
-    """
-    zero_mask = data == 0
-    dilated_mask = binary_dilation(zero_mask, iterations=dilation_iterations)
-    valid_mean = data[~dilated_mask].mean()
-    filled = data.copy()
-    filled[dilated_mask] = valid_mean
-
-    if debug_plot_path is not None:
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
-        mid_z = data.shape[0] // 2
-        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-
-        axes[0, 0].imshow(data[mid_z], cmap="gray")
-        axes[0, 0].set_title(f"Deskewed (z={mid_z})")
-
-        axes[0, 1].imshow(zero_mask[mid_z], cmap="gray")
-        axes[0, 1].set_title("Zero mask")
-
-        axes[1, 0].imshow(dilated_mask[mid_z], cmap="gray")
-        axes[1, 0].set_title(f"Dilated mask (iterations={dilation_iterations})")
-
-        im = axes[1, 1].imshow(filled[mid_z], cmap="gray")
-        axes[1, 1].set_title(f"Filled (mean={valid_mean:.1f})")
-
-        fig.colorbar(im, ax=axes[1, 1], fraction=0.046)
-        fig.tight_layout()
-        fig.savefig(debug_plot_path, dpi=150)
-        plt.close(fig)
-        print(f"Overhang mask debug plot saved to {debug_plot_path}")
-
-    return filled
-
-
 def _fill_overhang_torch(
     data: torch.Tensor,
     fill_value: float | None = None,
@@ -373,91 +248,6 @@ def _fill_overhang_torch(
     return torch.where(dilated_mask, fill_value, data)
 
 
-def deskew_zyx(
-    raw_data: np.ndarray,
-    ls_angle_deg: float,
-    px_to_scan_ratio: float,
-    keep_overhang: bool,
-    device: str = "cpu",
-    average_n_slices: int = 1,
-    overhang_fill: Literal["zero", "mean"] = "zero",
-    debug_plot_path: Path | None = None,
-) -> np.ndarray:
-    """Deskews fluorescence data from the mantis microscope.
-
-    Parameters
-    ----------
-    raw_data : NDArray with ndim == 3
-        raw data from the mantis microscope
-        - axis 0 corresponds to the scanning axis
-        - axis 1 corresponds to the "tilted" axis
-        - axis 2 corresponds to the axis in the plane of the coverslip
-    ls_angle_deg : float
-        angle of light sheet with respect to the optical axis in degrees
-    px_to_scan_ratio : float
-        (pixel spacing / scan spacing) in object space
-        e.g. if camera pixels = 6.5 um and mag = 1.4*40, then the pixel spacing
-        is 6.5/(1.4*40) = 0.116 um. If the scan spacing is 0.3 um, then
-        px_to_scan_ratio = 0.116 / 0.3 = 0.386
-    keep_overhang : bool
-        If true, compute the whole volume within the tilted parallelepiped.
-        If false, only compute the deskewed volume within a cuboid region.
-    average_n_slices : int, optional
-        after deskewing, averages every n slices (default = 1 applies no averaging)
-    device : str, optional
-        torch device to use for computation. Default is 'cpu'.
-    overhang_fill : "zero" or "mean", optional
-        How to fill overhang regions (only used when keep_overhang=True).
-        "mean" replaces with the mean of the valid signal, "zero" leaves the
-        zero-padded overhang as-is. Default is "zero".
-    debug_plot_path : Path, optional
-        If provided, saves a diagnostic figure showing the masks and result.
-
-    Returns
-    -------
-    deskewed_data : NDArray with ndim == 3
-        axis 0 is the Z axis, normal to the coverslip
-        axis 1 is the Y axis, input axis 2 in the plane of the coverslip
-        axis 2 is the X axis, the scanning axis
-    """
-    # Prepare transforms
-    matrix = _get_transform_matrix(ls_angle_deg, px_to_scan_ratio)
-
-    output_shape, _ = get_deskewed_data_shape(
-        raw_data.shape, ls_angle_deg, px_to_scan_ratio, keep_overhang
-    )
-
-    # convert to tensor on GPU
-    # convert raw_data to int32 if it is uint16
-    raw_data_tensor = torch.from_numpy(raw_data.astype(np.float32)).to(device)
-
-    # Returns callable
-    affine_func = Affine(affine=matrix, padding_mode="zeros", image_only=True)
-
-    # affine_func accepts CZYX array, so for ZYX input we need [None] and for ZYX output we need [0]
-    deskewed_data = affine_func(
-        raw_data_tensor[None], mode="bilinear", spatial_size=output_shape
-    )[0]
-
-    # Apply averaging on GPU before transferring to CPU
-    deskewed_data = _average_n_slices_torch(
-        deskewed_data, average_window_width=average_n_slices
-    )
-
-    # to numpy array on CPU
-    deskewed_data = deskewed_data.cpu().numpy()
-
-    averaged_deskewed_data = deskewed_data
-
-    # Fill overhang regions after averaging
-    if keep_overhang and overhang_fill == "mean":
-        averaged_deskewed_data = _fill_overhang_with_mean(
-            averaged_deskewed_data, debug_plot_path=debug_plot_path
-        )
-
-    return averaged_deskewed_data
-
-
 def fast_deskew_zyx(
     raw_data: torch.Tensor,
     ls_angle_deg: float,
@@ -471,8 +261,8 @@ def fast_deskew_zyx(
     Exploits the structure of the deskew affine: two of the three input axes
     map to output axes via integer permutations/flips (no interpolation
     needed), and only the scan axis (Z) requires fractional resampling.
-    A 2-D `grid_sample` with Y_out as the channel dimension replaces the
-    full 3-D trilinear `grid_sample` used by MONAI `Affine`.
+    A 2-D `grid_sample` with Y_out as the channel dimension replaces a full
+    3-D trilinear `grid_sample` of the deskew affine.
 
     Parameters
     ----------
@@ -547,12 +337,47 @@ def fast_deskew_zyx(
     return result
 
 
+def deskew_zyx(
+    raw_data: np.ndarray,
+    ls_angle_deg: float,
+    px_to_scan_ratio: float,
+    keep_overhang: bool,
+    device: str = "cpu",
+    average_n_slices: int = 1,
+    overhang_fill: Literal["zero", "mean"] = "zero",
+    debug_plot_path: Path | None = None,
+) -> np.ndarray:
+    """Deskew a numpy volume through `fast_deskew_zyx` (deprecated).
+
+    Kept for callers of the original MONAI-based implementation: casts the
+    numpy input to a float32 tensor on `device`, deskews with `fast_deskew_zyx`,
+    and returns a numpy array. New code should call `fast_deskew_zyx` directly.
+    """
+    warnings.warn(
+        "deskew_zyx is deprecated and will be removed; call fast_deskew_zyx with a "
+        "torch tensor instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    if debug_plot_path is not None:
+        warnings.warn(
+            "deskew_zyx no longer writes a debug plot; debug_plot_path is ignored.",
+            stacklevel=2,
+        )
+    tensor = torch.from_numpy(np.asarray(raw_data, dtype=np.float32)).to(device)
+    deskewed = fast_deskew_zyx(
+        tensor,
+        ls_angle_deg,
+        px_to_scan_ratio,
+        keep_overhang,
+        average_n_slices=average_n_slices,
+        overhang_fill="mean" if overhang_fill == "mean" else 0,
+    )
+    return deskewed.cpu().numpy()
+
+
 # Adapt ZYX function to CZYX
 # Needs to be a top-level function for multiprocessing pickling
-def _deskew_czyx(data, **kwargs):
-    return deskew_zyx(data[0], **kwargs)[None]
-
-
 def _fast_deskew_czyx(data, device="cuda", num_splits=1, **kwargs):
     """CZYX wrapper for `fast_deskew_zyx`. Handles numpy↔torch conversion.
 

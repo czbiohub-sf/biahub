@@ -25,7 +25,6 @@ dependencies = [
   "natsort",
   "numpy",
   "markdown",
-  "monai",
   "pandas",
   "pydantic>2",
   "scipy",
