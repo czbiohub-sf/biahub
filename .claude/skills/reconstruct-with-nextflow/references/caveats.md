@@ -135,27 +135,32 @@ per-position — leave it out. `target_channel` carries the `_prediction` suffix
 deliberately (§2).
 
 **`track.yml` — schema.** `TrackingSettings` forbids extra keys. Current
-fields: `output_mode`, `z_slicing`, `target_channel`, `fov`, `input_images`,
-`segmentation_method`, `cellpose_config`, `tracking_config`. Old configs under
+fields: `output_mode`, `target_channel`, `fov`, `input_images`,
+`segmentation_method`, `min_sibling_length`, `cellpose_config`,
+`tracking_config`. Track no longer selects or projects Z-planes: it reads the
+**projected** (Z=1) plate that `biahub project` writes from `project.yml`, and a
+3D input with `output_mode: 2D` is an error. Old configs under
 `/hpc/projects/tlg2_mantis/` still carry rejected fields — migrate:
 
 ```
-mode                            -> output_mode
-z_range + focus_config.z_window -> z_slicing.{method, window_size, focus_channel}
+mode                                  -> output_mode
+z_slicing / z_range / focus_config    -> project.yml: channels.<name>.z {center: focus, range: [below, above)}, focus.channel
+input_images np.mean step             -> project.yml: channels.<name>.method: mean
 ```
 
-(`focus_config`'s `NA_det`/`lambda_ill`/`pixel_size` have no equivalent.)
-`target_channel` and `cellpose_config.input_channel` must match **pre-rename**
-names in the **assembled** plate (§2, §5). `qc_track.yaml`'s `channels:` must
-then match `<target_channel>_labels`, which is what the tracking store actually
-holds — SKILL.md §5a checks both couplings before launch.
+(`focus_config`'s `NA_det`/`lambda_ill` are `project.yml`'s `focus.na_det` /
+`focus.lambda_ill`; the pixel size comes from the store.) `target_channel` and
+`cellpose_config.input_channel` must match channels `project.yml` writes, which
+carry the **pre-rename** names of the **assembled** plate (§2, §5).
+`qc_track.yaml`'s `channels:` must then match `<target_channel>_labels`, which
+is what the tracking store actually holds — SKILL.md §5a checks both couplings
+before launch.
 
-**`z_slicing.focus_channel` resolves against `input_images`, not the store.**
-`apply_focus_slicing` raises if the focus channel is not among the loaded
-channels, even when it exists in the plate — a template declaring
-`focus_channel: Phase3D` while loading only `nuclei_prediction` failed all
-positions after every other step had succeeded. Both shipped templates use
-`method: all` (falls back to the first loaded channel), the safe default.
+**`project.yml` — `focus.channel` must be in the assembled plate.** `biahub
+project --init` resolves every channel name against the plate and fails there,
+in the init phase, rather than after every other step. The A549 template finds
+the focus on `Phase3D` and writes only `nuclei_prediction`; the focus channel
+need not be an output.
 
 **`concatenate.yml` holds parameters only — no source paths.** The assemble
 subworkflow passes the three source stores on the command line, one `-i` per
@@ -172,8 +177,8 @@ assembled store, and track's parameters (cellpose `diameter`, `min_area`/
 `max_area`, linking `max_distance`) are tuned for A549 cells and do not
 transfer. So simply do not run it:
 
-- Omit `--track_config` — delete that line, and `--qc_track_config` with it,
-  from the `nextflow run` call in the run script. A step runs only if its config
+- Omit `--track_config` — delete that line, and `--project_config` and
+  `--qc_track_config` with it, from the `nextflow run` call in the run script. A step runs only if its config
   is passed ([biahub#306](https://github.com/czbiohub-sf/biahub/issues/306),
   fixed). Delete rather than comment: `#` inside a backslash-continued command
   drops every flag below it, `-resume` included.

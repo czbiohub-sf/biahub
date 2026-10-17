@@ -56,7 +56,7 @@ class ResolvedModel:
     pretrained_model: str
     channel_indices: list[int]
     eval_args: dict[str, Any]
-    z_slice_2D: int | None
+    is_3d: bool
     # (function, channel index, kwargs), applied in order
     preprocessing: list[tuple[Callable, int, dict[str, Any]]] = field(default_factory=list)
 
@@ -69,9 +69,10 @@ def resolve_models(
 ) -> list[ResolvedModel]:
     """Resolve each configured model against the input plate, without touching ``settings``.
 
-    Channel names become dataset indices, 3D models get the dataset anisotropy unless the
-    config sets one, and ``z_slice_2D`` is checked against the stack. ``settings`` is left
-    exactly as written, so it can be recorded as provenance.
+    Channel names become dataset indices and 3D models get the dataset anisotropy unless
+    the config sets one. The models' dimensionality must match the input: 2D models need
+    a Z=1 plate (see `biahub project`), 3D models a stack. ``settings`` is left exactly as
+    written, so it can be recorded as provenance.
     """
 
     def index(name: str, what: str) -> int:
@@ -81,14 +82,22 @@ def resolve_models(
             )
         return channel_names.index(name)
 
+    if settings.is_3d and z_size == 1:
+        raise ValueError(
+            "The input has one Z-plane but the models segment in 3D (eval_args.do_3D or "
+            "stitch_threshold); remove those arguments to segment in 2D."
+        )
+    if not settings.is_3d and z_size > 1:
+        raise ValueError(
+            f"The input is 3D (Z={z_size}) but the models segment in 2D. Project the plate "
+            "with `biahub project` and segment the projected (Z=1) plate, or set "
+            "eval_args.do_3D: true to segment the stack."
+        )
+
     resolved = []
     for name, model in settings.models.items():
-        if model.z_slice_2D is not None and model.z_slice_2D >= z_size:
-            raise ValueError(
-                f"Model {name}: z_slice_2D={model.z_slice_2D} is outside the input stack (Z={z_size})."
-            )
         eval_args = dict(model.eval_args)
-        if model.z_slice_2D is None and eval_args.get("anisotropy") is None:
+        if model.is_3d and eval_args.get("anisotropy") is None:
             eval_args["anisotropy"] = scale[-3] / scale[-1]
         resolved.append(
             ResolvedModel(
@@ -96,7 +105,7 @@ def resolve_models(
                 pretrained_model=model.pretrained_model,
                 channel_indices=[index(c, f"Model {name}:") for c in model.channels],
                 eval_args=eval_args,
-                z_slice_2D=model.z_slice_2D,
+                is_3d=model.is_3d,
                 preprocessing=[
                     (
                         p.function,
@@ -133,7 +142,7 @@ def _segment_czyx(
 ) -> np.ndarray:
     """Segment a CZYX image with each resolved cellpose model.
 
-    Returns an array of shape (n_models, Z or 1, Y, X).
+    Returns an array of shape (n_models, Z, Y, X); Z is 1 for 2D models.
     """
     # Every job this step submits asks SLURM for a GPU, so an unusable one is a
     # broken allocation, not a reason to fall back to a ~130x slower CPU run.
@@ -151,21 +160,21 @@ def _segment_czyx(
             czyx_data[c_idx] = func(czyx_data[c_idx], **kwargs)
 
         # Cellpose 4 refuses a z axis for 2D processing, so a 2D model gets the (C, Y, X)
-        # plane and a 3D model the (C, Z, Y, X) stack. It also ignores `channels` and keeps
-        # the first 3 channels it is given, so pass only the configured ones.
+        # plane of the Z=1 input and a 3D model the (C, Z, Y, X) stack. It also ignores
+        # `channels` and keeps the first 3 channels it is given, so pass only the
+        # configured ones.
         cellpose_model = _cached_model(model.pretrained_model, device)
-        if model.z_slice_2D is not None:
-            image, z_axis = czyx_data[model.channel_indices, model.z_slice_2D], None
-        else:
+        if model.is_3d:
             image, z_axis = czyx_data[model.channel_indices], 1
+        else:
+            image, z_axis = czyx_data[model.channel_indices, 0], None
         segmentation, _, _ = cellpose_model.eval(
             image, channel_axis=0, z_axis=z_axis, **model.eval_args
         )
-        # Cellpose squeezes singleton axes (e.g. a 3D model on a single-plane input);
-        # restore the (Z or 1, Y, X) shape the output plate expects.
+        # Cellpose squeezes singleton axes; restore the (Z, Y, X) shape the output
+        # plate expects (Z is 1 for a 2D model).
         segmentation = np.reshape(
-            segmentation,
-            (1, *image.shape[-2:]) if model.z_slice_2D is not None else image.shape[1:],
+            segmentation, image.shape[1:] if model.is_3d else (1, *image.shape[-2:])
         )
         czyx_segmentation.append(segmentation)
     return np.stack(czyx_segmentation, axis=0)
@@ -190,13 +199,12 @@ def _init_output_plate(
         channel_names = input_dataset.channel_names
 
     models = resolve_models(settings, channel_names, scale, Z)
-    Z_out = 1 if models[0].z_slice_2D is not None else Z
 
     # Label channel i belongs to model i. On an existing output, create_empty_plate keeps
     # the stored channels and array shape, so a reordered config would write into swapped
-    # channels and a 3D -> 2D switch would keep the old Z planes.
+    # channels. The labels have the input's Z (1 for a 2D plate).
     label_channels = [m.name + "_labels" for m in models]
-    output_shape = (T, len(models), Z_out, Y, X)
+    output_shape = (T, len(models), Z, Y, X)
     position_keys = [Path(p).parts[-3:] for p in input_position_dirpaths]
     for key in position_keys:
         output_position = Path(output_dirpath, *key)
@@ -303,7 +311,7 @@ def segment(
     # earlier conservative 2.5 min per frame. CPUs and RAM (the input timepoint, C volumes,
     # plus cellpose buffers, x up to 4 CPUs) deliberately keep a margin over the 2D run,
     # which also covers the unmeasured 3D path (~20-30 GB for an A549 plate).
-    is_2d = models[0].z_slice_2D is not None
+    is_2d = not settings.is_3d
     time_minutes, num_cpus, gb_ram_per_cpu = estimate_resources(
         shape=(T, len(models), Z, Y, X),
         ram_multiplier=C + 4,

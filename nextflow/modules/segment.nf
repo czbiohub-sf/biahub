@@ -2,13 +2,13 @@
 // (fan-out × N positions), the same split as tracking.
 //
 // This module is PATH-AGNOSTIC. Callers pass the input zarr, output zarr and
-// config explicitly. mantis-v2.nf passes the assembled plate, which carries the
-// virtual-stain channels the segment config names.
+// config explicitly. For 2D models the input is the PROJECTED (Z=1) plate that
+// `biahub project` writes from the assembled plate; segment does not project.
 //
 // `biahub segment --init` reads only the input plate's channels, shape and scale,
-// so it runs as soon as the assembled plate is scaffolded: a config naming a
-// channel the plate lacks, a z_slice_2D outside the stack, or an unknown cellpose
-// model fails before any GPU job. It also warms the shared cellpose weights
+// so it runs as soon as the input plate is scaffolded: a config naming a channel
+// the plate lacks, 2D models on a 3D plate (or 3D models on a Z=1 plate), or an
+// unknown cellpose model fails before any GPU job. It also warms the shared cellpose weights
 // cache, better done once here than by N GPU workers racing for it.
 
 include { parse_resources; slurm_logs; slurm_log_dir; slurm_output_readme; retry_time } from './common'

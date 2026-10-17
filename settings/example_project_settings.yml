@@ -1,0 +1,60 @@
+# biahub project: 3D plate -> 2D plate (Z=1). One entry per OUTPUT channel, in output
+# order; the key is the input channel's name. Input channels not listed here are dropped
+# (the command prints which).
+#
+# method: max | mean | sum | slice
+#   max/mean/sum reduce the selected planes; mean and sum write float32, max and slice
+#   keep the input dtype. slice keeps one plane.
+# z: which planes feed the projection. Omit it for max/mean/sum over the whole stack.
+#   range: [start, stop)  half-open, like Z_slice in concatenate. With `center` the bounds
+#                         are offsets from the center.
+#   step:  keep every step-th plane of the range (default 1)
+#   center: a plane index, or "focus" for the in-focus plane found on focus.channel.
+#           slice takes center alone; max/mean/sum take center with a range.
+# A range that runs past the stack is clipped to it.
+
+channels:
+  # max over the whole stack
+  membrane_prediction:
+    method: max
+
+  # max over an explicit range, every 2nd plane: z = 10, 12, ..., 48
+  nuclei_prediction:
+    method: max
+    z: {range: [10, 50], step: 2}
+
+  # sum over 21 planes around a manually chosen center: z = 20 .. 40
+  GFP:
+    method: sum
+    z: {center: 30, range: [-10, 11]}
+
+  # mean over 60 planes starting 20 below the in-focus plane: z = focus-20 .. focus+39
+  RFP:
+    method: mean
+    z: {center: focus, range: [-20, 40]}
+
+  # single plane, chosen manually
+  mCherry:
+    method: slice
+    z: {center: 42}
+
+  # single plane, the in-focus plane
+  Phase3D:
+    method: slice
+    z: {center: focus}
+
+# Required when any channel uses `center: focus`. The focus criterion is the registration
+# engine's (FocusSettings): waveorder's transverse band on a centre crop, with the
+# detection NA and illumination wavelength in micrometres; the pixel size comes from the
+# store. The plane of each timepoint is recorded in the output position's
+# `biahub-project` metadata.
+focus:
+  channel: Phase3D           # input channel the focus is found on (need not be an output)
+  per: fov                   # fov: one plane per position, the median over timepoints
+                             # timepoint: one plane per timepoint, so the window follows Z drift
+  center_crop_xy: [800, 800] # (X, Y) centre crop the focus is measured on
+  na_det: 1.35
+  lambda_ill: 0.5
+
+# When null, keep the OME-Zarr version of the input store.
+output_ome_zarr_version: null

@@ -92,47 +92,14 @@ class CellposeConfig(MyBaseModel):
         return v
 
 
-class ZSlicing(MyBaseModel):
-    """How to SELECT the Z-planes used for tracking.
-
-    The ``method`` decides which of the other fields are used; fields that belong to a
-    different method are simply ignored (all have defaults). The block selects a
-    z-window; the actual reduction to 2D is governed separately by
-    ``TrackingSettings.output_mode`` (plus any Z-projection step, e.g. ``np.mean``, in
-    ``input_images``).
-
-    Methods
-    -------
-    all
-        Use every plane (``slice(None)``).
-    central
-        Use an automatically centred window (see ``central_z_slice``).
-    range
-        Use the explicit ``range`` ``[start, stop]`` slice (falls back to all planes
-        if ``range`` is left unset).
-    focus
-        Detect the in-focus plane per-FOV (waveorder ``focus_from_transverse_band``
-        on ``focus_channel``) and take a fixed window of ``window_size`` planes around it,
-        split ``frac_below``/``frac_above``.
-    """
-
-    method: Literal["all", "central", "range", "focus"] = "all"
-    range: tuple[int, int] | None = None  # method: range
-    window_size: int = 48  # method: focus (fixed window size, in z-planes)
-    frac_below: float = 1 / 3  # method: focus
-    frac_above: float = 2 / 3  # method: focus
-    focus_channel: str | None = None  # method: focus -- channel focus-finding runs on
-
-
 class TrackingSettings(MyBaseModel):
     target_channel: str = "nuclei_prediction"
     fov: str = "*/*/*"
     blank_frames_path: Path | None = None
-    # 2D writes an output plate with Z=1 (input must be projected); 3D keeps the
-    # selected z-window. Does not itself project the data.
+    # The dimensionality of the tracking. Track neither projects nor selects Z-planes:
+    # "2D" needs a Z=1 input (project the plate with `biahub project` first) and "3D"
+    # a Z>1 input; a mismatch is an error.
     output_mode: Literal["2D", "3D"] = "2D"
-    # Which Z-planes to select for tracking. See ZSlicing.
-    z_slicing: ZSlicing = ZSlicing()
     input_images: list[ProcessingInputChannel]
     tracking_config: dict[str, Any] = {}
     segmentation_method: Literal["foreground_contour", "cellpose"] = "foreground_contour"
@@ -145,6 +112,17 @@ class TrackingSettings(MyBaseModel):
     cellpose_config: CellposeConfig | None = None
     # When None, preserve the OME-Zarr version of the input store.
     output_ome_zarr_version: Literal["0.4", "0.5"] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_z_slicing(cls, data):
+        # Z-plane selection moved out of track into `biahub project`.
+        if isinstance(data, dict) and "z_slicing" in data:
+            raise ValueError(
+                "z_slicing was removed from track: select and project the Z-planes with "
+                "`biahub project` and track the projected (Z=1) plate."
+            )
+        return data
 
     @field_validator("blank_frames_path")
     @classmethod
@@ -329,6 +307,126 @@ class FocusSettings(MyBaseModel):
         if len(v) != 2 or any(c <= 0 for c in v):
             raise ValueError("center_crop_xy must be two positive integers (X, Y)")
         return v
+
+
+# --------------------------------------------------------------------------------------
+# Projection settings (`biahub project`)
+
+
+class ZSelection(MyBaseModel):
+    """Which Z-planes of a stack feed one channel's projection.
+
+    `range` is a half-open ``[start, stop)`` like concatenate's ``Z_slice``. With `center`
+    the bounds are offsets from the center (``[-20, 40]`` is 60 planes starting 20 below
+    it); `center` is a plane index or ``"focus"``, the in-focus plane found on
+    ``ProjectionSettings.focus.channel``. `step` keeps every step-th plane of the range.
+    A range that runs past the stack is clipped to it.
+    """
+
+    center: NonNegativeInt | Literal["focus"] | None = None
+    range: tuple[int, int] | None = None
+    step: PositiveInt = 1
+
+    @model_validator(mode="after")
+    def check_range(self):
+        if self.range is not None:
+            start, stop = self.range
+            if stop <= start:
+                raise ValueError(f"range {list(self.range)} is empty: stop must exceed start.")
+            if self.center is None and start < 0:
+                raise ValueError(
+                    f"range {list(self.range)} is negative; offsets need a center."
+                )
+        elif self.step != 1:
+            raise ValueError("step needs a range.")
+        return self
+
+
+class ChannelProjection(MyBaseModel):
+    """How one output channel is projected from the input stack.
+
+    ``max``, ``mean`` and ``sum`` reduce the selected planes (the whole stack when `z` is
+    unset); ``slice`` keeps the one plane ``z.center``.
+    """
+
+    method: Literal["max", "mean", "sum", "slice"]
+    z: ZSelection | None = None
+
+    @model_validator(mode="after")
+    def check_z_for_method(self):
+        if self.method == "slice":
+            if self.z is None or self.z.center is None:
+                raise ValueError("method slice needs z.center (a plane index or 'focus').")
+            if self.z.range is not None:
+                raise ValueError(
+                    "method slice selects one plane and takes no range; use max, mean or "
+                    "sum to project a window."
+                )
+        elif self.z is not None and self.z.center is not None and self.z.range is None:
+            raise ValueError(
+                f"method {self.method} needs z.range with z.center; use method slice to "
+                "keep the one plane."
+            )
+        return self
+
+    @property
+    def uses_focus(self) -> bool:
+        return self.z is not None and self.z.center == "focus"
+
+
+class ProjectionFocusSettings(FocusSettings):
+    """Focus finding for `biahub project`: the engine's criterion, on one channel.
+
+    `channel` is the input channel the focus is measured on (it need not be an output).
+    `per` is how the in-focus plane is resolved across time: ``fov`` takes one plane per
+    position, the median over timepoints; ``timepoint`` keeps one plane per timepoint, so
+    the window follows Z drift.
+    """
+
+    channel: str
+    per: Literal["fov", "timepoint"] = "fov"
+    # Projection has no drift axes to choose; the inherited field is fixed.
+    axes: Literal["z"] = "z"
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_axes(cls, data):
+        if isinstance(data, dict) and "axes" in data:
+            raise ValueError("axes is a stabilization setting; projection has none.")
+        return data
+
+
+class ProjectionSettings(MyBaseModel):
+    """`biahub project`: a 3D plate to a 2D (Z=1) plate, one projection per output channel.
+
+    `channels` maps each OUTPUT channel (an input channel name, in output order) to its
+    projection; input channels not listed are dropped. `focus` is required when any
+    channel uses ``z.center: focus``.
+    """
+
+    channels: dict[str, ChannelProjection] = Field(min_length=1)
+    focus: ProjectionFocusSettings | None = None
+    # When None, preserve the OME-Zarr version of the input store.
+    output_ome_zarr_version: Literal["0.4", "0.5"] | None = None
+
+    @model_validator(mode="after")
+    def check_focus(self):
+        focus_users = [name for name, c in self.channels.items() if c.uses_focus]
+        if focus_users and self.focus is None:
+            raise ValueError(
+                f"{focus_users} use z.center: focus; add a `focus` block naming the channel "
+                "the focus is found on."
+            )
+        if self.focus is not None and not focus_users:
+            warnings.warn(
+                "`focus` is set but no channel uses z.center: focus; it is ignored.",
+                stacklevel=2,
+            )
+        return self
+
+    @property
+    def uses_focus(self) -> bool:
+        return any(c.uses_focus for c in self.channels.values())
 
 
 class AffineTransformSettings(MyBaseModel):
@@ -755,15 +853,15 @@ class SegmentationModel(BaseModel):
     """One cellpose 4 model and how to apply it.
 
     ``channels`` are dataset channel names (1-3, any order: cellpose 4 takes up to 3
-    channels). ``z_slice_2D`` selects the plane for 2D segmentation; without it the model
-    segments the Z stack, which needs ``eval_args.do_3D`` (or ``stitch_threshold``).
-    ``eval_args`` are the remaining ``CellposeModel.eval`` keyword arguments.
+    channels). The model segments in 2D unless ``eval_args.do_3D`` (or a
+    ``stitch_threshold``) is set; a 2D model needs a Z=1 input, which `biahub project`
+    makes from a stack. ``eval_args`` are the remaining ``CellposeModel.eval`` keyword
+    arguments.
     """
 
     pretrained_model: str
     channels: list[str] = Field(min_length=1)
     eval_args: dict[str, Any] = {}
-    z_slice_2D: NonNegativeInt | None = None
     preprocessing: list[PreprocessingFunctions] = []
     model_config = ConfigDict(extra="forbid", protected_namespaces=())
 
@@ -778,6 +876,12 @@ class SegmentationModel(BaseModel):
                 raise ValueError(
                     "eval_args.channels moved to the model's own `channels` field "
                     "(dataset channel names)."
+                )
+            if "z_slice_2D" in data:
+                raise ValueError(
+                    "z_slice_2D was removed: select or project the plane with "
+                    "`biahub project` and segment the 2D (Z=1) plate. A model without "
+                    "eval_args.do_3D segments in 2D."
                 )
         return data
 
@@ -802,24 +906,17 @@ class SegmentationModel(BaseModel):
             )
         return value
 
-    @model_validator(mode="after")
-    def check_2d_3d_settings(self):
-        if self.z_slice_2D is not None and self.eval_args.get("do_3D"):
-            raise ValueError(
-                "If 'z_slice_2D' is provided, 'do_3D' in 'eval_args' must be False."
-            )
-        # A model without z_slice_2D segments the Z stack, which cellpose 4 only accepts
-        # with do_3D or stitching (it raises "2D image processing selected, but z_axis...").
+    @property
+    def is_3d(self) -> bool:
+        """Whether the model segments the Z stack.
+
+        Cellpose 4 segments a stack only with do_3D or stitching; otherwise it refuses a
+        z axis ("2D image processing selected, but z_axis..."), so the model is 2D.
+        """
         stitch_threshold = self.eval_args.get("stitch_threshold")
-        if self.z_slice_2D is None and not (
-            self.eval_args.get("do_3D")
-            or (stitch_threshold is not None and stitch_threshold > 0)
-        ):
-            raise ValueError(
-                "A model without z_slice_2D segments in 3D: set eval_args.do_3D: true (or a "
-                "stitch_threshold), or set z_slice_2D for 2D segmentation."
-            )
-        return self
+        return bool(self.eval_args.get("do_3D")) or (
+            stitch_threshold is not None and stitch_threshold > 0
+        )
 
 
 class SegmentationSettings(BaseModel):
@@ -829,15 +926,19 @@ class SegmentationSettings(BaseModel):
     model_config = {"extra": "forbid", "protected_namespaces": ()}
 
     @model_validator(mode="after")
-    def check_models_share_z(self):
-        # All models write into one output array, so its Z size must suit every model.
-        flat = [name for name, m in self.models.items() if m.z_slice_2D is not None]
-        if flat and len(flat) != len(self.models):
+    def check_models_share_dimensionality(self):
+        # One input plate is either 2D (Z=1) or 3D (Z>1), so it suits only one kind.
+        three_d = [name for name, m in self.models.items() if m.is_3d]
+        if three_d and len(three_d) != len(self.models):
             raise ValueError(
-                f"Cannot mix 2D and 3D models in one config: {flat} set z_slice_2D, the "
-                "others do not. Segment them in separate runs."
+                f"Cannot mix 2D and 3D models in one config: {three_d} set do_3D (or a "
+                "stitch_threshold), the others do not. Segment them in separate runs."
             )
         return self
+
+    @property
+    def is_3d(self) -> bool:
+        return next(iter(self.models.values())).is_3d
 
 
 # --------------------------------------------------------------------------------------

@@ -21,7 +21,6 @@ def segment_config(tmp_path):
                 "nuc": {
                     "pretrained_model": pretrained_model,
                     "channels": ["GFP"],
-                    "z_slice_2D": 1,
                     "eval_args": {"diameter": None},
                 }
             }
@@ -36,6 +35,12 @@ def segment_config(tmp_path):
 
 
 @pytest.fixture
+def plate_2d(create_custom_plate, tmp_path):
+    """A projected (Z=1) plate, what 2D models segment: (T=3, C=3, Z=1, Y=5, X=6)."""
+    return create_custom_plate(tmp_path, z_size=1)
+
+
+@pytest.fixture
 def cpu_cellpose(monkeypatch):
     """Workers ask for the GPU; run the (fake) model on the CPU instead."""
     monkeypatch.setattr("biahub.segment.cellpose_device", lambda gpu: torch.device("cpu"))
@@ -46,9 +51,9 @@ def _run(*args):
 
 
 def test_segment_init_prints_resources_and_stamps_provenance(
-    fake_cellpose, example_plate, segment_config, tmp_path
+    fake_cellpose, plate_2d, segment_config, tmp_path
 ):
-    plate_path, _ = example_plate  # (T=3, C=6, Z=4, Y=5, X=6)
+    plate_path, _ = plate_2d  # (T=3, C=3, Z=1, Y=5, X=6)
     out = tmp_path / "seg.zarr"
 
     result = _run(
@@ -73,9 +78,9 @@ def test_segment_init_prints_resources_and_stamps_provenance(
 
 
 def test_segment_init_rejects_an_unknown_model(
-    fake_cellpose, example_plate, segment_config, tmp_path
+    fake_cellpose, plate_2d, segment_config, tmp_path
 ):
-    plate_path, _ = example_plate
+    plate_path, _ = plate_2d
     result = _run(
         "--init",
         "-i",
@@ -90,9 +95,9 @@ def test_segment_init_rejects_an_unknown_model(
 
 
 def test_segment_debug_runs_one_position_in_process(
-    fake_cellpose, cpu_cellpose, example_plate, segment_config, tmp_path
+    fake_cellpose, cpu_cellpose, plate_2d, segment_config, tmp_path
 ):
-    plate_path, _ = example_plate
+    plate_path, _ = plate_2d
     out, config = tmp_path / "seg.zarr", segment_config()
     position = plate_path / "B" / "1" / "0"
     assert _run("--init", "-i", position, "-o", out, "-c", config).exit_code == 0
@@ -109,9 +114,9 @@ def test_segment_debug_runs_one_position_in_process(
 
 
 def test_segment_resume_skips_finished_work(
-    fake_cellpose, cpu_cellpose, example_plate, segment_config, tmp_path
+    fake_cellpose, cpu_cellpose, plate_2d, segment_config, tmp_path
 ):
-    plate_path, _ = example_plate
+    plate_path, _ = plate_2d
     out, config = tmp_path / "seg.zarr", segment_config(version="0.5")  # resume needs Zarr v3
     position = plate_path / "B" / "1" / "0"
     assert _run("--init", "-i", position, "-o", out, "-c", config).exit_code == 0
@@ -124,8 +129,8 @@ def test_segment_resume_skips_finished_work(
     assert len(fake_cellpose.evaluated) == n_first
 
 
-def test_segment_legacy_local_flag_is_gone(example_plate, segment_config, tmp_path):
-    plate_path, _ = example_plate
+def test_segment_legacy_local_flag_is_gone(plate_2d, segment_config, tmp_path):
+    plate_path, _ = plate_2d
     result = _run(
         "--local",
         "-i",
@@ -167,13 +172,13 @@ class _RecordingExecutor:
 
 @pytest.mark.parametrize("cluster, expected", [("local", 1), ("slurm", None), ("debug", None)])
 def test_segment_gives_local_jobs_a_gpu(
-    fake_cellpose, example_plate, segment_config, tmp_path, monkeypatch, cluster, expected
+    fake_cellpose, plate_2d, segment_config, tmp_path, monkeypatch, cluster, expected
 ):
     """submitit's local executor only exposes GPUs through gpus_per_node; without it the
     local subprocess runs with CUDA_VISIBLE_DEVICES='' and cellpose_device refuses."""
     monkeypatch.setattr("biahub.segment.submitit.AutoExecutor", _RecordingExecutor)
     monkeypatch.delenv("CI", raising=False)  # CI forces cluster=debug
-    plate_path, _ = example_plate
+    plate_path, _ = plate_2d
     out = tmp_path / "seg.zarr"
 
     result = _run(
@@ -193,7 +198,7 @@ def test_segment_gives_local_jobs_a_gpu(
 
 
 def test_segment_worker_stages_weights_before_cellpose_is_imported(
-    fake_cellpose, cpu_cellpose, example_plate, segment_config, tmp_path, monkeypatch
+    fake_cellpose, cpu_cellpose, plate_2d, segment_config, tmp_path, monkeypatch
 ):
     """Validating eval_args imports cellpose.models, which fixes the weights directory;
     staging after that is a no-op and every worker reads the checkpoint over NFS."""
@@ -210,7 +215,7 @@ def test_segment_worker_stages_weights_before_cellpose_is_imported(
         "get_valid_eval_args",
         lambda: calls.append("import cellpose") or real_valid_args(),
     )
-    plate_path, _ = example_plate
+    plate_path, _ = plate_2d
     out, config = tmp_path / "seg.zarr", segment_config()
     position = plate_path / "B" / "1" / "0"
     assert _run("--init", "-i", position, "-o", out, "-c", config).exit_code == 0
@@ -226,15 +231,20 @@ def _resources(output):
     return json.loads(line.removeprefix("RESOURCES:"))
 
 
-def test_segment_requests_less_time_for_2d_than_3d(fake_cellpose, example_plate, tmp_path):
+def test_segment_requests_less_time_for_2d_than_3d(
+    fake_cellpose, plate_2d, example_plate, tmp_path
+):
     """Calibrated on a real 2D run (~5 s/frame, 6 GB); 3D keeps the conservative rate."""
-    plate_path, _ = example_plate
-    position = plate_path / "A" / "1" / "0"
+    positions = {
+        "2d": plate_2d[0] / "A" / "1" / "0",  # Z=1
+        "3d": example_plate[0] / "A" / "1" / "0",  # Z=4
+    }
     res = {}
     for kind, model in {
-        "2d": {"z_slice_2D": 1, "eval_args": {}},
+        "2d": {"eval_args": {}},
         "3d": {"eval_args": {"do_3D": True}},
     }.items():
+        position = positions[kind]
         cfg = tmp_path / f"{kind}.yml"
         cfg.write_text(
             yaml.safe_dump(
@@ -253,7 +263,7 @@ def test_segment_requests_less_time_for_2d_than_3d(fake_cellpose, example_plate,
 
 
 def test_segment_slurm_head_does_not_stage_weights(
-    fake_cellpose, example_plate, segment_config, tmp_path, monkeypatch
+    fake_cellpose, plate_2d, segment_config, tmp_path, monkeypatch
 ):
     """Staging on the submitting node would export its CELLPOSE_LOCAL_MODELS_PATH to every
     SLURM worker, which then skips its own staging. Only in-process workers stage early."""
@@ -261,7 +271,7 @@ def test_segment_slurm_head_does_not_stage_weights(
     monkeypatch.setattr("biahub.segment.stage_cellpose_weights", lambda: staged.append(1))
     monkeypatch.setattr("biahub.segment.submitit.AutoExecutor", _RecordingExecutor)
     monkeypatch.delenv("CI", raising=False)
-    plate_path, _ = example_plate
+    plate_path, _ = plate_2d
 
     result = _run(
         "--cluster",
@@ -279,12 +289,12 @@ def test_segment_slurm_head_does_not_stage_weights(
 
 
 def test_segment_local_jobs_get_the_step_time_limit(
-    fake_cellpose, example_plate, segment_config, tmp_path, monkeypatch
+    fake_cellpose, plate_2d, segment_config, tmp_path, monkeypatch
 ):
     """submitit's local executor kills jobs after timeout_min (default 2 min)."""
     monkeypatch.setattr("biahub.segment.submitit.AutoExecutor", _RecordingExecutor)
     monkeypatch.delenv("CI", raising=False)
-    plate_path, _ = example_plate
+    plate_path, _ = plate_2d
 
     result = _run(
         "--cluster",
@@ -305,9 +315,9 @@ def test_segment_local_jobs_get_the_step_time_limit(
 
 
 def test_segment_init_checks_models_before_creating_the_plate(
-    fake_cellpose, example_plate, segment_config, tmp_path
+    fake_cellpose, plate_2d, segment_config, tmp_path
 ):
-    plate_path, _ = example_plate
+    plate_path, _ = plate_2d
     out = tmp_path / "seg.zarr"
     result = _run(
         "--init",
@@ -323,7 +333,7 @@ def test_segment_init_checks_models_before_creating_the_plate(
 
 
 def test_segment_local_sbatch_file_overrides_computed_parameters(
-    fake_cellpose, example_plate, segment_config, tmp_path, monkeypatch
+    fake_cellpose, plate_2d, segment_config, tmp_path, monkeypatch
 ):
     """A '#LOCAL --timeout-min' line and the computed local timeout used to collide
     (TypeError: multiple values for keyword argument 'timeout_min')."""
@@ -331,7 +341,7 @@ def test_segment_local_sbatch_file_overrides_computed_parameters(
     monkeypatch.delenv("CI", raising=False)  # conftest forces CI (debug) otherwise
     sbatch = tmp_path / "local.sbatch"
     sbatch.write_text("#LOCAL --timeout-min=5\n")
-    plate_path, _ = example_plate
+    plate_path, _ = plate_2d
 
     result = _run(
         "--cluster",
@@ -353,8 +363,8 @@ def test_segment_local_sbatch_file_overrides_computed_parameters(
 
 def _two_model_config(path, order):
     models = {
-        "nuc": {"pretrained_model": "cpsam_v2", "channels": ["GFP"], "z_slice_2D": 1},
-        "mem": {"pretrained_model": "cpsam_v2", "channels": ["RFP"], "z_slice_2D": 1},
+        "nuc": {"pretrained_model": "cpsam_v2", "channels": ["GFP"]},
+        "mem": {"pretrained_model": "cpsam_v2", "channels": ["RFP"]},
     }
     config = {
         "models": {name: models[name] for name in order},
@@ -365,10 +375,10 @@ def _two_model_config(path, order):
 
 
 def test_segment_refuses_an_output_with_a_different_model_order(
-    fake_cellpose, cpu_cellpose, example_plate, tmp_path
+    fake_cellpose, cpu_cellpose, plate_2d, tmp_path
 ):
     """Reordering the models used to resume into swapped label channels."""
-    plate_path, _ = example_plate
+    plate_path, _ = plate_2d
     out, position = tmp_path / "seg.zarr", plate_path / "B" / "1" / "0"
     first = _two_model_config(tmp_path / "first.yml", ["nuc", "mem"])
     assert _run("--init", "-i", position, "-o", out, "-c", first).exit_code == 0
@@ -402,7 +412,7 @@ def test_segment_resume_token_depends_on_model_order(tmp_path):
 
 
 def test_segment_mem_per_cpu_override_drops_the_computed_total(
-    fake_cellpose, example_plate, segment_config, tmp_path, monkeypatch
+    fake_cellpose, plate_2d, segment_config, tmp_path, monkeypatch
 ):
     """The --sbatch-filepath help's own example, '#SBATCH --mem-per-cpu=16G', left
     --mem set too, and SLURM rejects jobs with both."""
@@ -410,7 +420,7 @@ def test_segment_mem_per_cpu_override_drops_the_computed_total(
     monkeypatch.delenv("CI", raising=False)  # conftest forces CI (debug) otherwise
     sbatch = tmp_path / "mem.sbatch"
     sbatch.write_text("#SBATCH --mem-per-cpu=16G\n")
-    plate_path, _ = example_plate
+    plate_path, _ = plate_2d
 
     result = _run(
         "--cluster",
@@ -431,21 +441,21 @@ def test_segment_mem_per_cpu_override_drops_the_computed_total(
 
 
 def test_segment_refuses_an_output_with_a_different_shape(
-    fake_cellpose, example_plate, tmp_path
+    fake_cellpose, plate_2d, example_plate, tmp_path
 ):
     """Switching a same-named model from 3D to 2D kept the old multi-plane array."""
-    plate_path, _ = example_plate
-    out, position = tmp_path / "seg.zarr", plate_path / "B" / "1" / "0"
+    out = tmp_path / "seg.zarr"
     model = {"pretrained_model": "cpsam_v2", "channels": ["GFP"]}
     three_d = tmp_path / "3d.yml"
     three_d.write_text(
         yaml.safe_dump({"models": {"nuc": {**model, "eval_args": {"do_3D": True}}}})
     )
     two_d = tmp_path / "2d.yml"
-    two_d.write_text(yaml.safe_dump({"models": {"nuc": {**model, "z_slice_2D": 1}}}))
-    assert _run("--init", "-i", position, "-o", out, "-c", three_d).exit_code == 0
+    two_d.write_text(yaml.safe_dump({"models": {"nuc": model}}))
+    stack = example_plate[0] / "B" / "1" / "0"  # Z=4
+    assert _run("--init", "-i", stack, "-o", out, "-c", three_d).exit_code == 0
 
-    result = _run("--init", "-i", position, "-o", out, "-c", two_d)
+    result = _run("--init", "-i", plate_2d[0] / "B" / "1" / "0", "-o", out, "-c", two_d)
 
     assert result.exit_code != 0
     assert "(3, 1, 4, 5, 6)" in str(result.exception)

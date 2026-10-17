@@ -3,7 +3,7 @@ name: reconstruct-with-nextflow
 description: >-
   Run a mantis-v2 microscope dataset through the biahub Nextflow reconstruction
   pipeline (nextflow/mantis-v2.nf: flat-field → deskew → reconstruct →
-  virtual-stain → assemble → track → QC) on the Bruno HPC cluster. Assemble,
+  virtual-stain → assemble → project → track → QC) on the Bruno HPC cluster. Assemble,
   track and QC are optional and selected per dataset family: A549 runs assemble
   + track + QC, neuromast runs assemble + QC and no tracking. Locates the raw
   acquisition under /hpc/instruments/cm.mantis, picks the output project
@@ -323,13 +323,16 @@ Do not run anything yet. Show the user:
    what was mismatched and how it was resolved.
 6. **The steps this run will perform, listed in order.** Reconstruction proper —
    flat-field → deskew → reconstruct → virtual-stain — always runs; assemble,
-   track and QC run only if their config is passed (biahub#306). Defaults by
-   family, which is what to present unless the user says otherwise:
+   project, track and QC run only if their config is passed (biahub#306).
+   Project turns the assembled 3D plate into the 2D (Z=1) plate that 2D
+   tracking reads (`biahub track` no longer selects or projects Z-planes), so
+   `--track_config` goes with `--project_config`. Defaults by family, which is
+   what to present unless the user says otherwise:
 
    | family | steps |
    |---|---|
-   | A549 / cell-line / organelle | flat-field → deskew → reconstruct → virtual-stain → **assemble → track → QC** |
-   | neuromast / zebrafish / dynatrack | flat-field → deskew → reconstruct → virtual-stain → **assemble → QC** (no tracking) |
+   | A549 / cell-line / organelle | flat-field → deskew → reconstruct → virtual-stain → **assemble → project → track → QC** |
+   | neuromast / zebrafish / dynatrack | flat-field → deskew → reconstruct → virtual-stain → **assemble → QC** (no projection or tracking) |
 
    Write the list out in the plan rather than naming the family, and say which
    optional steps are being skipped and why. If the user asks to skip anything
@@ -342,9 +345,9 @@ Do not run anything yet. Show the user:
    **State the directory numbers this run will produce.** The number is the
    step's position among the steps performed, not a fixed label, so a neuromast
    run writes `4-assemble` as its last directory and an A549 run writes
-   `4-assemble` then `5-track`. Older A549 runs on disk say `5-assemble` /
-   `4-track`, from when the numbers were fixed — say so if the user is comparing
-   against one.
+   `4-assemble`, `5-project` then `6-track`. Older A549 runs on disk say
+   `5-track` (before the project step) or `5-assemble` / `4-track` (from when
+   the numbers were fixed) — say so if the user is comparing against one.
 7. Known caveats that apply to this dataset.
 8. Rough wall-time and that `-resume` is on.
 9. Whether Slack notifications are on, and who will be @-mentioned at run end.
@@ -396,13 +399,15 @@ copied file's group bits follow the *source* file's mode — `cp` from the repo
 (644) yields `rw-r--r--`. Hence the `chmod` after every copy. Plain `cp` only:
 `cp -p`/`-a` would also carry over the checkout's group.
 
-The run script passes all four optional configs — `--concatenate_config`,
-`--track_config`, `--qc_config` (`qc.yaml`), `--qc_track_config`
-(`qc_track.yaml`) — so an A549 run needs no edit. **For a neuromast/zebrafish run, or any step the user asked to skip,
-DELETE that flag's line** from the `nextflow run` call and note the skip in a
-comment above it, so the script still records what this run did. A neuromast run
-deletes `--track_config` and `--qc_track_config`; neither `track.yml` nor
-`qc_track.yaml` need exist for that family, and neither does for zebrafish.
+The run script passes all five optional configs — `--concatenate_config`,
+`--project_config`, `--track_config`, `--qc_config` (`qc.yaml`),
+`--qc_track_config` (`qc_track.yaml`) — so an A549 run needs no edit. **For a
+neuromast/zebrafish run, or any step the user asked to skip, DELETE that flag's
+line** from the `nextflow run` call and note the skip in a comment above it, so
+the script still records what this run did. A neuromast run deletes
+`--project_config`, `--track_config` and `--qc_track_config`; none of
+`project.yml`, `track.yml` or `qc_track.yaml` need exist for that family, and
+none does for zebrafish.
 
 Delete rather than comment: a `#` inside a backslash-continued command does not
 start a comment line — the continuation swallows it, every flag below is dropped

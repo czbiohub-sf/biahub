@@ -1,0 +1,22 @@
+# Projection config for the mantis-v2 pipeline (`biahub project`). A549.
+#
+# Project reads the ASSEMBLED plate (<N>-assemble/<dataset>.zarr) and writes the 2D
+# plate that track reads, so the channels below must exist THERE, and track.yml's
+# target_channel / cellpose_config.input_channel must be among the channels written here.
+#
+# Mean of the virtual-stain nuclei over 60 planes around the in-focus plane of the
+# phase channel: the window starts 20 planes below focus and ends 39 above it. This is
+# the window track's own z_slicing selected before projection moved here (#418): against
+# TrackEdit annotations (with min_sibling_length 3) division F1 rose 0.63 -> 0.68 on
+# 2026_04_28, with fewer false divisions and fragmented tracks on 2026_04_21 at the same
+# mitotic-cell detection as all planes (0.95); a narrower 40-plane window lost mitotic
+# cells that drift in Z (0.89). The focus is found once per FOV (median over timepoints)
+# on the 800x800 centre crop of the phase channel.
+channels:
+  nuclei_prediction:
+    method: mean
+    z: {center: focus, range: [-20, 40]}
+
+focus:
+  channel: Phase3D
+  per: fov

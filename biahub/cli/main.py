@@ -156,6 +156,11 @@ COMMANDS = [
         "help": "Segment a position using pretrained model or pipeline",
     },
     {
+        "name": "project",
+        "import_path": "biahub.project.project_cli",
+        "help": "Project a 3D plate to 2D (max, mean, sum or one plane per channel)",
+    },
+    {
         "name": "virtual-stain",
         "import_path": "biahub.virtual_stain.virtual_stain_cli",
         "help": "Run VisCy virtual staining",

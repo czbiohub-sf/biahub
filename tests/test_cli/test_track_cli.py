@@ -9,8 +9,8 @@ from click.testing import CliRunner
 from iohub.ngff import open_ome_zarr
 
 from biahub.cli.main import cli
-from biahub.settings import TrackingSettings, ZSlicing
-from biahub.track import _init_output_plate, resolve_z_slice, track
+from biahub.settings import TrackingSettings
+from biahub.track import _init_output_plate, track
 
 
 @pytest.fixture(scope="function")
@@ -33,21 +33,26 @@ def example_tracking_plate(tmp_path):
         channel_names=["nuclei_prediction", "membrane_prediction"],
     )
 
+    # Deterministic spots: on random data ultrack occasionally finds no solution, and
+    # the failing in-process job drops submitit into pdb (which pytest reports as a
+    # read from stdin).
+    np.random.seed(0)
     for row, col, fov in position_list:
         position = plate_dataset.create_position(row, col, fov)
-        # Shape: (T, C, Z, Y, X) = (5, 2, 3, 64, 64)
-        data = np.random.uniform(0.1, 0.3, size=(5, 2, 3, 64, 64)).astype(np.float32)
+        # A projected (Z=1) plate, what 2D tracking reads: (T, C, Z, Y, X) = (5, 2, 1, 64, 64)
+        data = np.random.uniform(0.1, 0.3, size=(5, 2, 1, 64, 64)).astype(np.float32)
 
-        # Add some bright nuclei spots to channel 0
+        # Add some bright nuclei spots to channel 0 (11 x 11 px, above the configs'
+        # min_area of 100; a single plane no longer merges spots across Z)
         for t in range(5):
-            for z in range(3):
+            for z in range(1):
                 for _ in range(np.random.randint(3, 6)):
                     y, x = np.random.randint(10, 54, 2)
-                    data[t, 0, z, y - 3 : y + 4, x - 3 : x + 4] = np.random.uniform(0.7, 1.0)
+                    data[t, 0, z, y - 5 : y + 6, x - 5 : x + 6] = np.random.uniform(0.7, 1.0)
 
         # Add some membrane boundaries to channel 1
         for t in range(5):
-            for z in range(3):
+            for z in range(1):
                 for _ in range(np.random.randint(2, 4)):
                     y, x = np.random.randint(15, 49, 2)
                     yy, xx = np.ogrid[:64, :64]
@@ -87,28 +92,13 @@ def _make_tracking_config(plate_path, tmp_path):
     config = {
         "output_mode": "2D",
         "fov": "*/*/*",
-        "z_slicing": {"method": "central"},
         "target_channel": "nuclei_prediction",
         "input_images": [
             {
                 # Primary data source left null -> resolved from the -i input plate.
+                # The plate is projected (Z=1), so the channels need no processing.
                 "path": None,
-                "channels": {
-                    "nuclei_prediction": [
-                        {
-                            "function": "np.mean",
-                            "kwargs": {"axis": 1},
-                            "per_timepoint": False,
-                        },
-                    ],
-                    "membrane_prediction": [
-                        {
-                            "function": "np.mean",
-                            "kwargs": {"axis": 1},
-                            "per_timepoint": False,
-                        },
-                    ],
-                },
+                "channels": {"nuclei_prediction": [], "membrane_prediction": []},
             },
             {
                 "path": None,
@@ -332,139 +322,81 @@ def test_track_cli_debug_single_position(tmp_path, example_tracking_plate, monke
 
 
 # ---------------------------------------------------------------------------
-# Z-slicing resolution
-# ---------------------------------------------------------------------------
-
-
-def test_resolve_z_slice_all():
-    z_slices, n = resolve_z_slice(ZSlicing(method="all"), z_shape=30)
-    assert z_slices == slice(None)
-    assert n == 30
-
-
-def test_resolve_z_slice_central():
-    z_slices, n = resolve_z_slice(ZSlicing(method="central"), z_shape=21)
-    assert n == z_slices.stop - z_slices.start
-    assert n >= 3
-
-
-def test_resolve_z_slice_range():
-    z_slices, n = resolve_z_slice(ZSlicing(method="range", range=(5, 10)), z_shape=30)
-    assert z_slices == slice(5, 10)
-    assert n == 5
-
-
-def test_resolve_z_slice_range_invalid():
-    with pytest.raises(ValueError):
-        resolve_z_slice(ZSlicing(method="range", range=(10, 5)), z_shape=30)
-
-
-def test_resolve_z_slice_focus_loads_full_reports_window():
-    # focus loads the full stack at read time; the count is the fixed window size.
-    z_slices, n = resolve_z_slice(ZSlicing(method="focus", window_size=15), z_shape=30)
-    assert z_slices == slice(None)
-    assert n == 15
-    # window larger than the stack collapses the count to the full depth.
-    _, n = resolve_z_slice(ZSlicing(method="focus", window_size=50), z_shape=30)
-    assert n == 30
-
-
-def test_focus_window_fixed_size_and_shifts_at_edges():
-    from biahub.track import _focus_window
-
-    # centred window of the requested size.
-    assert _focus_window(15, 6, 30, 1 / 3) == (slice(13, 19), 6)
-    # window bigger than the stack collapses to the full range.
-    assert _focus_window(15, 50, 30, 1 / 3) == (slice(0, 30), 30)
-    # a window that would spill past an edge is shifted, not clipped.
-    z_slices, n = _focus_window(29, 6, 30, 0.0)
-    assert n == 6
-    assert 0 <= z_slices.start and z_slices.stop <= 30
-
-
-def test_apply_focus_slicing_uniform_window(monkeypatch):
-    from biahub import track as track_mod
-
-    # Deterministic focus centre so the test doesn't depend on waveorder.
-    monkeypatch.setattr(track_mod, "_median_focus_plane", lambda stack, pixel_size: 15)
-
-    T, Z, Y, X = 4, 30, 8, 8
-    data_dict = {
-        "a": np.arange(T * Z * Y * X).reshape(T, Z, Y, X).astype(float),
-        "b": np.zeros((T, Z, Y, X)),
-    }
-    z = ZSlicing(method="focus", window_size=6, frac_below=1 / 3)
-    out = track_mod.apply_focus_slicing(data_dict, z, pixel_size=0.5)
-
-    # Same fixed window applied to every channel (center=15 -> slice(13, 19)).
-    assert out["a"].shape == (T, 6, Y, X)
-    assert out["b"].shape == (T, 6, Y, X)
-    assert np.array_equal(out["a"], data_dict["a"][:, 13:19])
-
-
-def test_zslicing_focus_defaults_window_size():
-    # focus works without an explicit window_size (defaults to 48).
-    z = ZSlicing(method="focus")
-    assert z.window_size == 48
-
-
-def test_zslicing_ignores_irrelevant_fields():
-    # method decides which fields are used; the rest are ignored, not rejected.
-    z_slices, n = resolve_z_slice(
-        ZSlicing(method="all", range=(0, 5), window_size=10), z_shape=30
-    )
-    assert z_slices == slice(None)
-    assert n == 30
-
-
-def test_resolve_z_slice_range_unset_falls_back_to_all():
-    z_slices, n = resolve_z_slice(ZSlicing(method="range"), z_shape=30)
-    assert z_slices == slice(None)
-    assert n == 30
-
-
-# ---------------------------------------------------------------------------
-# Output plate shape matches tracked Z
+# Dimensionality: track neither projects nor selects Z (that is `biahub project`)
 # ---------------------------------------------------------------------------
 
 
 def _minimal_settings(**overrides):
     base = {
         "target_channel": "nuclei_prediction",
-        "input_images": [
-            {
-                "path": None,
-                "channels": {
-                    "nuclei_prediction": [{"function": "np.mean", "kwargs": {"axis": 1}}]
-                },
-            }
-        ],
+        "input_images": [{"path": None, "channels": {"nuclei_prediction": []}}],
     }
     base.update(overrides)
     return TrackingSettings(**base)
 
 
-@pytest.mark.parametrize(
-    "output_mode, z_slicing, expected_z",
-    [
-        ("2D", {"method": "central"}, 1),
-        ("3D", {"method": "range", "range": (0, 2)}, 2),
-        # Regression: focus + 3D output Z equals the fixed focus window, not the
-        # full stack -- this is the shape-mismatch bug _init_output_plate had.
-        ("3D", {"method": "focus", "window_size": 2}, 2),
-    ],
-)
-def test_init_output_plate_shape(
-    tmp_path, example_tracking_plate, output_mode, z_slicing, expected_z
+def test_init_output_plate_takes_the_input_z(
+    tmp_path, example_tracking_plate, create_custom_plate
 ):
-    plate_path, _ = example_tracking_plate
-    output_path = tmp_path / "init_shape.zarr"
-    settings = _minimal_settings(output_mode=output_mode, z_slicing=z_slicing)
+    flat_path, _ = example_tracking_plate  # Z=1
+    shape = _init_output_plate(
+        [str(flat_path / "A" / "1" / "0")], tmp_path / "flat.zarr", _minimal_settings()
+    )
+    assert shape[2] == 1
+    with open_ome_zarr(str(tmp_path / "flat.zarr" / "A" / "1" / "0"), mode="r") as ds:
+        assert ds.data.shape[2] == 1
 
-    shape = _init_output_plate([str(plate_path / "A" / "1" / "0")], output_path, settings)
-    assert shape[2] == expected_z
-    with open_ome_zarr(str(output_path / "A" / "1" / "0"), mode="r") as ds:
-        assert ds.data.shape[2] == expected_z
+    stack_path, _ = create_custom_plate(tmp_path, z_size=3)
+    shape = _init_output_plate(
+        [str(stack_path / "A" / "1" / "0")],
+        tmp_path / "stack.zarr",
+        _minimal_settings(output_mode="3D"),
+    )
+    assert shape[2] == 3
+
+
+@pytest.mark.parametrize(
+    "output_mode, z_size, message",
+    [("2D", 3, "input is 3D.*biahub project"), ("3D", 1, "one Z-plane")],
+)
+def test_init_output_plate_refuses_a_dimensionality_mismatch(
+    tmp_path, create_custom_plate, output_mode, z_size, message
+):
+    plate_path, _ = create_custom_plate(tmp_path, z_size=z_size)
+    with pytest.raises(ValueError, match=message):
+        _init_output_plate(
+            [str(plate_path / "A" / "1" / "0")],
+            tmp_path / "o.zarr",
+            _minimal_settings(output_mode=output_mode),
+        )
+    assert not (tmp_path / "o.zarr").exists()
+
+
+def test_track_cli_refuses_a_3d_input_for_2d_tracking(tmp_path, create_custom_plate):
+    plate_path, _ = create_custom_plate(tmp_path, z_size=3)
+    config_path = _make_tracking_config(plate_path, tmp_path)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "track",
+            "-i",
+            str(plate_path / "A/1/0"),
+            "-o",
+            str(tmp_path / "o.zarr"),
+            "-c",
+            str(config_path),
+            "--init",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "biahub project" in str(result.exception)
+
+
+def test_z_slicing_is_rejected_with_a_pointer_to_project():
+    with pytest.raises(ValueError, match="z_slicing was removed.*biahub project"):
+        _minimal_settings(z_slicing={"method": "focus"})
 
 
 # ---------------------------------------------------------------------------

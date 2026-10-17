@@ -16,6 +16,7 @@ from biahub.settings import (
     EstimateTransformSettings,
     FlatFieldCorrectionSettings,
     ProcessingImportFuncSettings,
+    ProjectionSettings,
     SegmentationSettings,
     StitchSettings,
     TrackingSettings,
@@ -41,6 +42,7 @@ example_settings_params = [
     ("example_transform_settings.yml", TransformSettings),
     ("example_transform_settings_stabilization.yml", TransformSettings),
     ("example_process_with_config_settings.yml", ProcessingImportFuncSettings),
+    ("example_project_settings.yml", ProjectionSettings),
     ("example_segmentation_settings.yml", SegmentationSettings),
     ("example_stitch_settings.yml", StitchSettings),
     ("example_track_settings.yml", TrackingSettings),
@@ -211,9 +213,24 @@ def test_nextflow_a549_track_config_validates():
 
     with open("nextflow/configs/a549/track.yml") as f:
         settings = TrackingSettings(**yaml.safe_load(f))
-    assert settings.z_slicing.method == "focus"
-    assert settings.z_slicing.window_size == 60
-    assert settings.z_slicing.focus_channel in settings.input_images[0].channels
+    # Track reads the projected plate: 2D, no processing step on the nuclei channel.
+    assert settings.output_mode == "2D"
+    assert settings.input_images[0].channels == {"nuclei_prediction": []}
+    assert settings.cellpose_config.input_channel == "nuclei_prediction"
+
+
+def test_nextflow_a549_project_config_validates():
+    """The A549 projection keeps track's old 60-plane focus window (#418) and mean."""
+    import yaml
+
+    from biahub.settings import ProjectionSettings
+
+    with open("nextflow/configs/a549/project.yml") as f:
+        settings = ProjectionSettings(**yaml.safe_load(f))
+    nuclei = settings.channels["nuclei_prediction"]
+    assert nuclei.method == "mean"
+    assert nuclei.z.center == "focus" and nuclei.z.range == (-20, 40)
+    assert settings.focus.channel == "Phase3D" and settings.focus.per == "fov"
 
 
 def test_skill_config_templates_load():
