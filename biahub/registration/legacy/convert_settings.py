@@ -228,10 +228,13 @@ def _ants_blocks(legacy, notes: list[str]) -> list[dict]:
         )
     if ants.sobel_filter:
         blocks.append({"sobel": {}})
-    if ants.ref_mask_radius is not None:
+    # the old pipeline used ref_mask_radius only to choose its crop
+    if ants.ref_mask_radius is not None and ants.crop:
         blocks.append(
             {"mask_circle": {"target": ["reference"], "radius": ants.ref_mask_radius}}
         )
+    elif ants.ref_mask_radius is not None:
+        notes.append("ants ref_mask_radius dropped: without crop it was never applied")
     if ants.crop:
         notes.append(
             "ants crop dropped: ANTs no longer warps the moving volume first, so there is no "

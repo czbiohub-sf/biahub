@@ -314,3 +314,16 @@ def test_a_converted_ants_config_gets_its_preparation_as_blocks():
     assert converted.preprocess[2].target == ["reference"]
     assert converted.preprocess[2].radius == 0.9
     assert any("clip" in n for n in notes) and any("crop dropped" in n for n in notes)
+
+
+def test_a_mask_radius_without_crop_converts_to_no_mask():
+    # the old pipeline used ref_mask_radius only to choose its crop
+    legacy = EstimateRegistrationSettings(
+        source_channel_name="GFP",
+        target_channel_name="Phase3D",
+        estimation_method="ants",
+        ants_registration_settings={"ref_mask_radius": 0.9, "crop": False},
+    )
+    converted, notes = convert_settings(legacy)
+    assert converted.preprocess == []
+    assert any("ref_mask_radius" in n for n in notes)
