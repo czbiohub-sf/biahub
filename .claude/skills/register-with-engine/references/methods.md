@@ -40,7 +40,9 @@ Every decision -- accept or flag, repair, the competitions -- uses one score per
 - `score.preprocess`: image blocks applied to the warped moving volume and the reference
   just before comparing (after the overlap is found on the raw volumes), e.g. `sobel` to
   compare edges. Intensity metrics only. The method's own `preprocess` never changes the
-  score, so scores from configs with different blocks stay comparable.
+  score -- not even inside the method: the bead estimators' own choices (which arm, which
+  pass) score the raw volumes too -- so scores from configs with different blocks stay
+  comparable.
 - `score.report`: more metrics computed for every transform on the raw warped pair (no
   score blocks) and written next to its score in `transforms.yml` (`report: {...}`): a fixed
   yardstick across runs, never used for decisions.

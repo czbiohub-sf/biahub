@@ -209,3 +209,43 @@ def test_the_old_ants_fields_point_to_preprocess_blocks(ants, message):
             method="ants",
             ants=ants,
         )
+
+
+def test_a_methods_own_score_judges_the_raw_volumes(monkeypatch):
+    # Blocks change what a method estimates from, not what it is judged on: the bead
+    # estimators' internal choices (which arm, which pass) score the raw volumes, like the
+    # engine's decision -- a clipped copy could pick a different winner.
+    from biahub.registration import engine
+    from biahub.settings import (
+        BeadsMatchSettings,
+        DetectPeaksSettings,
+        EstimateTransformSettings,
+    )
+    from tests.test_estimate_transform import _synthetic_bead_volume
+
+    seen = []
+
+    def recording_score(transform, mov, ref):
+        seen.append((np.asarray(mov), np.asarray(ref)))
+        return 1.0
+
+    monkeypatch.setattr(engine, "_score_fn", lambda settings: recording_score)
+    peaks = DetectPeaksSettings(
+        threshold_abs=100, nms_distance=4, min_distance=0, block_size=[8, 8, 8]
+    )
+    settings = EstimateTransformSettings(
+        moving={"channel": "GFP"},
+        reference={"frame": "cross", "channel": "Phase3D"},
+        method="beads",
+        beads=BeadsMatchSettings(source_peaks_settings=peaks, target_peaks_settings=peaks),
+        preprocess=[{"clip_percentiles": {"low": 0, "high": 99.9}}],
+    )
+    estimator, _score, _seed = engine.build_estimator(settings, (32, 48, 48))
+    rng = np.random.default_rng(11)
+    ref = _synthetic_bead_volume(rng, (32, 48, 48))
+    mov = np.roll(ref, 2, axis=2)
+    estimator.estimate(mov, ref)
+    assert seen  # the estimator scored its candidates
+    for m, r in seen:
+        np.testing.assert_array_equal(m, mov)
+        np.testing.assert_array_equal(r, ref)

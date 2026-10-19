@@ -70,6 +70,7 @@ from biahub.registration.policies import (
 )
 from biahub.registration.preprocess import (
     PreprocessedEstimator,
+    RawVolumeScore,
     apply_image_blocks,
     blocks_footprint,
 )
@@ -1005,11 +1006,13 @@ def build_estimator(
 ) -> tuple[TransformEstimator, ScoreFn, Transform]:
     """Estimator, score function and forward seed for the settings' method."""
     score_fn = _score_fn(settings)
+    # the bead estimators' own choices score the raw volumes, not the prepared ones
+    method_score = RawVolumeScore(score_fn) if settings.preprocess else score_fn
     seed = _seed(settings)
     affine = _affine_settings(settings)
     if settings.method == "beads":
         estimator: TransformEstimator = build_beads_estimator(
-            settings.beads, affine, score_fn=score_fn
+            settings.beads, affine, score_fn=method_score
         )
     elif settings.method == "ants":
         estimator = AntsEstimator.from_settings(
@@ -1035,7 +1038,7 @@ def build_estimator(
     else:
         raise click.UsageError(f"unknown method '{settings.method}'")
     if settings.preprocess:
-        estimator = PreprocessedEstimator(estimator, settings.preprocess)
+        estimator = PreprocessedEstimator(estimator, settings.preprocess, method_score)
     return estimator, score_fn, seed
 
 

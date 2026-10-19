@@ -104,18 +104,41 @@ def _mask(block, shape_zyx: tuple) -> np.ndarray:
     raise TypeError(f"no mask for {type(block).__name__}")
 
 
+class RawVolumeScore:
+    """A method's own score function, held to the raw volumes while its input is prepared.
+
+    Blocks change what a method estimates from, not what it is judged on: during a
+    `PreprocessedEstimator` estimate, every internal choice (which arm, which pass) scores
+    the raw volumes, as the engine's decision does.
+    """
+
+    def __init__(self, score_fn):
+        self.score_fn = score_fn
+        self.raw = None  # (mov, ref) of the estimate in progress
+
+    def __call__(self, transform, mov, ref):
+        if self.raw is not None:
+            mov, ref = self.raw
+        return self.score_fn(transform, mov, ref)
+
+
 class PreprocessedEstimator:
     """A method with a config's `preprocess:` blocks in front of it.
 
     Every estimate (timepoint jobs, repair, sweeps) goes through here, so the method always
     sees the same prepared volumes, and the reference / moving masks when there are any.
     `estimate` keeps the method's signature, and its attributes (`uses_seed`, ...) read
-    through, so the engine treats it as the method itself.
+    through, so the engine treats it as the method itself. A method that scores its own
+    candidates gets `raw_score`, so those scores see the raw volumes.
     """
 
-    def __init__(self, method, blocks: PreprocessBlocks):
+    def __init__(
+        self, method, blocks: PreprocessBlocks, raw_score: RawVolumeScore | None = None
+    ):
         self.method = method
         self.blocks = list(blocks)
+        # the score the method was built with, if it scores internally (beads)
+        self.raw_score = raw_score
 
         @functools.wraps(method.estimate)
         def estimate(mov, ref, seed=None, **kwargs):
@@ -123,13 +146,19 @@ class PreprocessedEstimator:
                 "ref_mask": build_mask(np.shape(ref), self.blocks, "reference"),
                 "mov_mask": build_mask(np.shape(mov), self.blocks, "moving"),
             }
-            return self.method.estimate(
-                apply_image_blocks(mov, self.blocks, "moving"),
-                apply_image_blocks(ref, self.blocks, "reference"),
-                seed=seed,
-                **{k: m for k, m in masks.items() if m is not None},
-                **kwargs,
-            )
+            if self.raw_score is not None:
+                self.raw_score.raw = (mov, ref)
+            try:
+                return self.method.estimate(
+                    apply_image_blocks(mov, self.blocks, "moving"),
+                    apply_image_blocks(ref, self.blocks, "reference"),
+                    seed=seed,
+                    **{k: m for k, m in masks.items() if m is not None},
+                    **kwargs,
+                )
+            finally:
+                if self.raw_score is not None:
+                    self.raw_score.raw = None
 
         self.estimate = estimate
 
