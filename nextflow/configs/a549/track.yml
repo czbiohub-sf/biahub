@@ -1,6 +1,6 @@
 # Tracking config for the mantis-v2 pipeline (`biahub track`). A549.
 #
-# Track reads the PROJECTED plate (<N>-project/<dataset>.zarr, Z=1), so target_channel
+# Track reads the PROJECTED plate (<N>-assemble/<dataset>_proj.zarr, Z=1), so target_channel
 # and cellpose_config.input_channel must name channels that `biahub project` wrote
 # (project.yml's `channels`). If you rename channels before tracking, update these.
 #

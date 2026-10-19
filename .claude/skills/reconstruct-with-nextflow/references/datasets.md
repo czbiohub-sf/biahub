@@ -48,7 +48,7 @@ Which root depends on the dataset family:
 | family | cues in the name | output root | deliverable |
 |---|---|---|---|
 | zebrafish / neuromast / dynatrack | `dynatrack`, `hpf`, `dpf`, `neuromast`, `cldnb`, `she`, `myo6b`, `zebrafish` | `/hpc/projects/tlg2_mantis/<DATASET>` | assemble (`4-assemble`) — **no tracking**, see `caveats.md` §4 |
-| cell line / organelle / infection | `A549`, `HEK`, `iPSC`, organelle genes (`SEC61B`, `TOMM20`, `G3BP1`, `MAP4`, `CAAX`, `H2B`), viruses (`DENV`, `ZIKV`, `HSV1`) | `/hpc/projects/intracellular_dashboard/organelle_dynamics/<DATASET>` | assemble + project + track (`4-assemble`, `5-project`, `6-track`) |
+| cell line / organelle / infection | `A549`, `HEK`, `iPSC`, organelle genes (`SEC61B`, `TOMM20`, `G3BP1`, `MAP4`, `CAAX`, `H2B`), viruses (`DENV`, `ZIKV`, `HSV1`) | `/hpc/projects/intracellular_dashboard/organelle_dynamics/<DATASET>` | assemble + project + track (`4-assemble/<DATASET>.zarr`, `4-assemble/<DATASET>_proj.zarr`, `5-track`) |
 | instrument QC / calibration | `argolight`, `beads`, `psf`, `alignment`, `illumination`, `fluorescein`, `first_light`, `mantis_v2_*` | *no default* — ask. These are usually not reconstructed. | — |
 
 Neighbouring roots that exist and are **not** the default target — do not use
@@ -71,8 +71,8 @@ layout is defined once in `nextflow/mantis-v2.nf` (`directory_layout()`):
 ├── 2-reconstruct/<DATASET>.zarr
 ├── 3-virtual-stain/<DATASET>.zarr
 ├── 4-assemble/<DATASET>.zarr       # the deliverable
-├── 5-project/<DATASET>.zarr        # A549 only — the 2D (Z=1) plate track reads
-├── 6-track/<DATASET>.zarr          # A549 only — not run for neuromast
+├── 4-assemble/<DATASET>_proj.zarr  # A549 only — the 2D (Z=1) companion plate track reads
+├── 5-track/<DATASET>.zarr          # A549 only — not run for neuromast
 ├── qc/
 │   ├── report/index.html           # one report, one tab per QC'd store
 │   └── report_spec.yaml            # written at launch, before any QC task

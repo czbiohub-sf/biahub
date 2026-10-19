@@ -99,7 +99,8 @@ def step_directories(performed) {
         reconstruct   : 'reconstruct',
         virtual_stain : 'virtual-stain',
         assemble      : 'assemble',
-        project       : 'project',
+        // project writes beside the assembled plate (<assemble>/<ds>_proj.zarr),
+        // not in a directory of its own, so it is not in this list.
         track         : 'track',
     ]
     def layout = [:]
@@ -129,12 +130,15 @@ workflow {
     //
     // Skipping a step DOES renumber the ones after it: the number is a position
     // among the steps performed, so a neuromast run's assembled store is
-    // `4-assemble` where an A549 run also has `5-project` and `6-track` after it.
+    // `4-assemble` where an A549 run also has `5-track` after it.
     //
     // Project turns the assembled 3D plate into the 2D (Z=1) plate that 2D
     // tracking reads: `biahub track` no longer selects or projects Z-planes, so
     // an A549 run names --project_config as well as --track_config. Tracking
     // without it reads the assembled plate itself, which suits 3D tracking.
+    // The projected plate is a companion of the assembled one and lives beside
+    // it as `<N>-assemble/<ds>_proj.zarr`, so project has no step directory
+    // and does not renumber anything.
     def assemble_on = params.concatenate_config as boolean
     def project_on  = params.project_config as boolean
     def track_on    = params.track_config as boolean
@@ -183,7 +187,6 @@ workflow {
     // numbering is derived from. Reconstruction proper is always in it.
     def performed = ['flat_field', 'deskew', 'reconstruct', 'virtual_stain']
     if (assemble_on) performed << 'assemble'
-    if (project_on)  performed << 'project'
     if (track_on)    performed << 'track'
     def layout = step_directories(performed)
 
@@ -202,7 +205,9 @@ workflow {
     reconstruct_output   = "${out}/${layout.reconstruct}/${ds}.zarr"
     virtual_stain_output = "${out}/${layout.virtual_stain}/${ds}.zarr"
     assemble_output      = assemble_on ? "${out}/${layout.assemble}/${ds}.zarr" : null
-    project_output       = project_on  ? "${out}/${layout.project}/${ds}.zarr"  : null
+    // Beside the assembled plate, with a `_proj` suffix: the 2D companion of
+    // that store, not a step of its own.
+    project_output       = project_on  ? "${out}/${layout.assemble}/${ds}_proj.zarr" : null
     track_output         = track_on    ? "${out}/${layout.track}/${ds}.zarr"    : null
     // What tracking reads: the projected (Z=1) plate when project runs, else the
     // assembled plate. Both the plate structure and the pixels come from it.
@@ -463,11 +468,9 @@ workflow {
         def cleanup_paths = [ff_output, deskew_output, reconstruct_output, virtual_stain_output]
             .collect { zarr -> new File(zarr).parent }
         def assemble_dir = new File(assemble_output).parent
+        // The projected plate shares the assemble directory, so these two paths
+        // cover its slurm_output/ and .iohub-progress/ as well.
         cleanup_paths << "${assemble_dir}/slurm_output" << "${assemble_dir}/.iohub-progress"
-        if (project_on) {
-            def project_dir = new File(project_output).parent
-            cleanup_paths << "${project_dir}/slurm_output" << "${project_dir}/.iohub-progress"
-        }
         if (track_on) cleanup_paths << "${new File(track_output).parent}/slurm_output"
         def cleanup_list = cleanup_targets(cleanup_paths, out)
         cleanup_record = "${out}/nextflow/intermediates_cleaned.txt"

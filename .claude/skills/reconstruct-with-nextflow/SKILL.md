@@ -367,9 +367,10 @@ Do not run anything yet. Show the user:
    **State the directory numbers this run will produce.** The number is the
    step's position among the steps performed, not a fixed label, so a neuromast
    run writes `4-assemble` as its last directory and an A549 run writes
-   `4-assemble`, `5-project` then `6-track`. Older A549 runs on disk say
-   `5-track` (before the project step) or `5-assemble` / `4-track` (from when
-   the numbers were fixed) — say so if the user is comparing against one.
+   `4-assemble` then `5-track`. Project has no directory of its own: its plate
+   is `4-assemble/<DATASET>_proj.zarr`, beside the assembled plate. Older A549
+   runs on disk say `5-assemble` / `4-track`, from when the numbers were fixed
+   — say so if the user is comparing against one.
 7. Known caveats that apply to this dataset.
 8. Rough wall-time and that `-resume` is on.
 9. Whether Slack notifications are on, and who will be @-mentioned at run end.
@@ -544,9 +545,9 @@ directory (`<DATASET>_rerun`) over relaunching in place.
 ## 11. Wrap up
 
 1. Normalize channel names on the assembled plate, and on the projected plate
-   when project ran, with `templates/rename_channels.py` (idempotent;
-   `caveats.md` §2 — check first whether a `rename-channels` CLI has landed on
-   main, making this obsolete).
+   beside it when project ran (`DATASET=<DATASET>_proj`, same directory), with
+   `templates/rename_channels.py` (idempotent; `caveats.md` §2 — check first
+   whether a `rename-channels` CLI has landed on main, making this obsolete).
 2. Verify the assembled store (`<N>-assemble/<DATASET>.zarr`, `4-assemble`
    unless earlier steps were skipped) opens with iohub; report shape, channels,
    size on disk. This is the deliverable for every family; tracking, when it

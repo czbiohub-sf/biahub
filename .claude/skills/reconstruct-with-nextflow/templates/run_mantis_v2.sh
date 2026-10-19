@@ -10,7 +10,9 @@
 # below. Keep it there: it is the run's provenance record of the exact command.
 #
 # --output is the project root, so each step writes a sibling directory:
-#   0-flatfield/ 1-deskew/ 2-reconstruct/ 3-virtual-stain/ 4-assemble/ 5-project/ 6-track/
+#   0-flatfield/ 1-deskew/ 2-reconstruct/ 3-virtual-stain/ 4-assemble/ 5-track/
+# The projected plate is written beside the assembled one as
+# 4-assemble/<DATASET>_proj.zarr, not in a directory of its own.
 # The number is the step's POSITION among the steps this run performs, so a run
 # without tracking ends at 4-assemble and one that also skipped a step earlier
 # shifts everything after it down.

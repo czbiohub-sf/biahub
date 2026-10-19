@@ -83,8 +83,9 @@ assembled plate, so **project.yml and track.yml see the pre-rename names**
 shipped templates avoid the trap for the predictions by putting the suffix
 directly in the VS `target_channel` (`nuclei_prediction`/`membrane_prediction`),
 making the rename a no-op for those channels. The projected plate inherits the
-pre-rename names too: run `rename_channels.py` on `<N>-project` as well as on
-`<N>-assemble` (same command, from the directory holding the store).
+pre-rename names too: it lives beside the assembled plate as
+`<N>-assemble/<DATASET>_proj.zarr`, so run `rename_channels.py` a second time
+from the same directory with `DATASET=<DATASET>_proj`.
 
 **Stopgap:** PRs [#260](https://github.com/czbiohub-sf/biahub/pull/260) and
 [#250](https://github.com/czbiohub-sf/biahub/pull/250) carry a `rename-channels`

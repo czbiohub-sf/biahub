@@ -1,5 +1,5 @@
 # biahub segment: cellpose 4 nuclei labels from the virtual-stain nuclei channel of the
-# PROJECTED plate (<N>-project/<dataset>.zarr, Z=1; mantis v2, 0.1133 um/px). Segment
+# PROJECTED plate (<N>-assemble/<dataset>_proj.zarr, Z=1; mantis v2, 0.1133 um/px). Segment
 # does not project: a model without eval_args.do_3D segments in 2D and needs a Z=1
 # input, which `biahub project` (project.yml) makes from the assembled plate.
 # Not wired into mantis-v2.nf yet.
