@@ -203,3 +203,17 @@ def test_the_report_compares_with_the_unregistered_pair_and_warns_when_it_scores
     identity_score = report["unregistered_score"]
     engine._report_metrics(settings, identity, 0, mov[None], ref[None], score=identity_score)
     assert "unregistered pair scores" not in capsys.readouterr().out
+
+
+def test_scores_with_a_padding_margin_work_on_2d_images():
+    from biahub.registration.metrics import (
+        correlation_score,
+        gradient_correlation,
+        normalized_mutual_information,
+    )
+
+    image = np.random.default_rng(8).random((40, 40)).astype(np.float32) + 1.0
+    identity = Transform.identity(2)
+    assert gradient_correlation(identity, image, image) == pytest.approx(1.0)
+    assert correlation_score(identity, image, image, sobel_filter=True) == pytest.approx(1.0)
+    assert np.isfinite(normalized_mutual_information(identity, image, image, sobel=True))
