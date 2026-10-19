@@ -13,6 +13,7 @@ import numpy as np
 
 from skimage import filters
 
+from biahub.registration.metrics import SOBEL_FOOTPRINT
 from biahub.settings import (
     MASK_BLOCKS,
     ClipPercentiles,
@@ -44,6 +45,18 @@ def apply_image_blocks(
         else:
             raise TypeError(f"no image operation for {type(block).__name__}")
     return out
+
+
+def blocks_footprint(blocks: PreprocessBlocks) -> int:
+    """Return how far `blocks` reach on the most filtered volume, in voxels.
+
+    Each volume is filtered only by the blocks that target it, so filters on different
+    volumes do not add up.
+    """
+    return max(
+        SOBEL_FOOTPRINT * sum(isinstance(b, Sobel) and which in b.target for b in blocks)
+        for which in ("moving", "reference")
+    )
 
 
 def build_mask(shape_zyx: tuple, blocks: PreprocessBlocks, which: str) -> np.ndarray | None:

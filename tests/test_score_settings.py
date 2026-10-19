@@ -217,3 +217,20 @@ def test_scores_with_a_padding_margin_work_on_2d_images():
     assert gradient_correlation(identity, image, image) == pytest.approx(1.0)
     assert correlation_score(identity, image, image, sobel_filter=True) == pytest.approx(1.0)
     assert np.isfinite(normalized_mutual_information(identity, image, image, sobel=True))
+
+
+@pytest.mark.parametrize(
+    "blocks, footprint",
+    [
+        ([{"sobel": {}}], 1),
+        # each volume filtered once, as with one block on both
+        ([{"sobel": {"target": ["moving"]}}, {"sobel": {"target": ["reference"]}}], 1),
+        ([{"sobel": {}}, {"sobel": {"target": ["moving"]}}], 2),
+    ],
+)
+def test_the_score_margin_is_the_reach_on_the_most_filtered_volume(blocks, footprint):
+    from biahub.registration.preprocess import blocks_footprint
+
+    assert blocks_footprint(
+        _settings("ants", score={"preprocess": blocks}).score.preprocess
+    ) == (footprint)

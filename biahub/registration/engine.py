@@ -50,7 +50,6 @@ from biahub.registration.methods.pcc import PCCEstimator
 from biahub.registration.methods.vote_icp import VoteIcpEstimator, VoteSeedCorrection
 from biahub.registration.metrics import (
     PREWARPED,
-    SOBEL_FOOTPRINT,
     bead_alignment_metrics,
     beads_score_fn,
     correlation_score,
@@ -69,14 +68,17 @@ from biahub.registration.policies import (
     SeedPolicy,
     is_empty,
 )
-from biahub.registration.preprocess import PreprocessedEstimator, apply_image_blocks
+from biahub.registration.preprocess import (
+    PreprocessedEstimator,
+    apply_image_blocks,
+    blocks_footprint,
+)
 from biahub.registration.utils import get_aprox_transform, resolve_time_indices
 from biahub.settings import (
     AffineTransformSettings,
     BeadsMatchSettings,
     EstimateTransformSettings,
     FlagSettings,
-    Sobel,
 )
 from biahub.utils.cluster import estimate_resources, get_submitit_cluster
 from biahub.utils.config import model_to_yaml, yaml_to_model
@@ -902,7 +904,7 @@ def _score_fn(settings: EstimateTransformSettings) -> ScoreFn:
             )
 
         # how far the blocks reach: the score leaves that margin by the empty padding
-        prepare.footprint = SOBEL_FOOTPRINT * sum(isinstance(b, Sobel) for b in blocks)
+        prepare.footprint = blocks_footprint(blocks)
     return _metric_fn(settings, settings.effective_score_metric, prepare)
 
 
