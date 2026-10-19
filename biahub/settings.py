@@ -1301,7 +1301,8 @@ class TransformEntry(MyBaseModel):
     matrix: list
     score: float | None = None
     # score.report metrics for this transform (raw warped pair); None for a stand-in.
-    report: dict[str, float] | None = None
+    # A metric with no value (nan: no overlap, a flat pair, no beads) is None.
+    report: dict[str, float | None] | None = None
     # How a fallback pass reached this matrix: the winning repair candidate (plus any
     # polish rounds, "consensus_full+polish1") or "sweep:<trial>".
     repaired_from: str | None = None

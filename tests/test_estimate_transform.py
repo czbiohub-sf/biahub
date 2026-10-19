@@ -885,6 +885,20 @@ def test_a_repaired_timepoint_reports_the_repairs_transform(
     assert series.reports[1] == record["report"] != estimate_report
 
 
+def test_a_report_metric_with_no_value_is_written_to_the_transforms_file():
+    # a nan report metric (e.g. correlation on a zero-variance pair) is recorded as
+    # None; finalize must still write the entry
+    from biahub.core.transform import Transform
+    from biahub.estimate_transform import transform_entries
+    from biahub.registration.engine import SeriesResult
+
+    report = {"correlation": None, "unregistered_correlation": 0.5, "unregistered_score": None}
+    result = SeriesResult(scores={0: 0.9, 1: 0.8}, reports={0: report})
+    entries = transform_entries(result, [0, 1], [Transform.identity(3)] * 2, hard_fail=0.0)
+    assert entries[0].report == report
+    assert entries[0].status == "accepted"
+
+
 def test_flagging_with_repair_off_does_not_announce_a_repair(
     beads_plate_with_a_blank_timepoint, tmp_path, capsys
 ):

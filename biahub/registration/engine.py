@@ -339,7 +339,8 @@ class PassResult:
     failures: dict[str, str] = field(default_factory=dict)  # candidate -> "Type: message"
     polish_rounds: int = 0  # polish rounds that improved the accepted candidate
     reseed_score: float | None = None  # the accepted candidate's score before polish
-    report: dict[str, float] | None = None  # score.report metrics of the accepted transform
+    # score.report metrics of the accepted transform
+    report: dict[str, float | None] | None = None
 
 
 def _beats(candidate: float | None, current: float | None) -> bool:
@@ -509,7 +510,7 @@ class SeriesResult:
     scores: dict[int, float] = field(default_factory=dict)
     errors: dict[int, str] = field(default_factory=dict)
     # score.report metrics of each accepted transform, from the job that produced it.
-    reports: dict[int, dict[str, float]] = field(default_factory=dict)
+    reports: dict[int, dict[str, float | None]] = field(default_factory=dict)
     flagged: list[int] = field(default_factory=list)
     repairs: dict[int, PassResult] = field(default_factory=dict)
     sweeps: dict[int, PassResult] = field(default_factory=dict)
