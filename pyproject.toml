@@ -115,8 +115,9 @@ override-dependencies = [
 #
 #     git config --global url."ssh://git@github.com/".insteadOf "https://github.com/"
 #
-# Pinned at #266: feat: plan-stage refuses an unknown channels:/per_channel: name
-imaging_qc_pipeline = { git = "https://github.com/czbiohub-sf/imaging-qc-pipeline", rev = "c5c51dc700d0aa52388d6f6a08eec5bfe16a5766" }
+# Pinned at v0.6.0: metric `granularity:` is `split_by:` and gate
+# `granularity: channel` is `per_channel: true`; the old spellings exit 2.
+imaging_qc_pipeline = { git = "https://github.com/czbiohub-sf/imaging-qc-pipeline", tag = "v0.6.0" }
 
 # Pin iohub to main at the czbiohub-sf/iohub#476 merge, which syncs a write
 # unit's shards before recording it as done. Without it a preemption or a
