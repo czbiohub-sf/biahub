@@ -225,6 +225,31 @@ def test_project_refuses_a_plate_that_is_already_2d(create_custom_plate, tmp_pat
     assert "already has one Z-plane" in str(result.exception)
 
 
+def test_project_writes_the_configured_chunks_and_shards(plate, tmp_path):
+    """Shards spanning timepoints: iohub writes one shard's timepoints per unit."""
+    plate_path, _ = plate
+    out = tmp_path / "proj.zarr"
+    config = _config(
+        tmp_path,
+        {"GFP": {"method": "max"}, "Phase3D": {"method": "slice", "z": {"center": 1}}},
+        output_ome_zarr_version="0.5",
+        chunks_czyx=[1, 1, 4, 4],
+        shards_ratio=[2, 1, 1, 2, 2],  # (2, 1, 1, 8, 8): two timepoints per shard
+    )
+    position = plate_path / "A" / "1" / "0"
+
+    result = _run("--cluster", "debug", "-i", position, "-o", out, "-c", config)
+
+    assert result.exit_code == 0, result.output
+    with open_ome_zarr(str(out / "A" / "1" / "0"), mode="r") as ds:
+        assert ds.data.chunks == (1, 1, 1, 4, 4)
+        assert ds.data.shards == (2, 1, 1, 8, 8)
+    source, _, _ = _read(position)
+    data, _, _ = _read(out / "A" / "1" / "0")
+    assert np.array_equal(data[:, 0, 0], source[:, 0].max(axis=1))  # all 3 timepoints
+    assert np.array_equal(data[:, 1, 0], source[:, 2, 1])
+
+
 def test_project_resume_skips_finished_timepoints(plate, tmp_path):
     plate_path, _ = plate
     out = tmp_path / "proj.zarr"

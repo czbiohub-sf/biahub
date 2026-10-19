@@ -125,6 +125,21 @@ def test_focus_has_no_axes():
         )
 
 
+def test_chunks_and_shards_are_validated():
+    s = ProjectionSettings(
+        channels={"a": {"method": "max"}},
+        chunks_czyx=[1, 1, 256, 256],
+        shards_ratio=[16, 1, 1, 7, 5],
+    )
+    assert s.chunks_czyx == [1, 1, 256, 256] and s.shards_ratio == [16, 1, 1, 7, 5]
+    with pytest.raises(ValueError, match="4 positive integers"):
+        ProjectionSettings(channels={"a": {"method": "max"}}, chunks_czyx=[1, 256, 256])
+    with pytest.raises(ValueError, match="5 positive integers"):
+        ProjectionSettings(channels={"a": {"method": "max"}}, shards_ratio=[16, 1, 7, 5])
+    with pytest.raises(ValueError, match="C entry must be 1"):
+        ProjectionSettings(channels={"a": {"method": "max"}}, shards_ratio=[16, 2, 1, 7, 5])
+
+
 def test_unknown_keys_are_refused():
     with pytest.raises(ValueError, match="Extra inputs"):
         ProjectionSettings(channels={"a": {"method": "max", "mode": "max"}})

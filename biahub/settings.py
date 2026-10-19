@@ -428,8 +428,31 @@ class ProjectionSettings(MyBaseModel):
 
     channels: dict[str, ChannelProjection] = Field(min_length=1)
     focus: ProjectionFocusSettings | None = None
+    # Output chunk shape (C, Z, Y, X) and shards ratio (T, C, Z, Y, X), as in concatenate:
+    # a shard is chunks * ratio, elementwise. None takes iohub's defaults (one-frame
+    # 256 x 256 chunks, one (t, c) frame per shard). Sharding needs OME-Zarr 0.5.
+    chunks_czyx: list[int] | None = None
+    shards_ratio: list[int] | None = None
     # When None, preserve the OME-Zarr version of the input store.
     output_ome_zarr_version: Literal["0.4", "0.5"] | None = None
+
+    @field_validator("chunks_czyx")
+    @classmethod
+    def check_chunk_size(cls, v):
+        if v is not None and (len(v) != 4 or any(i < 1 for i in v)):
+            raise ValueError("chunks_czyx must be 4 positive integers (C, Z, Y, X)")
+        return v
+
+    @field_validator("shards_ratio")
+    @classmethod
+    def check_shards_ratio(cls, v):
+        if v is not None and (len(v) != 5 or any(i < 1 for i in v)):
+            raise ValueError("shards_ratio must be 5 positive integers (T, C, Z, Y, X)")
+        if v is not None and v[1] != 1:
+            raise ValueError(
+                "shards_ratio: iohub does not shard along C; the C entry must be 1"
+            )
+        return v
 
     @model_validator(mode="after")
     def check_focus(self):

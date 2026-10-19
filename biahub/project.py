@@ -197,6 +197,8 @@ def _init_output_plate(
             input_position_dirpaths[0], settings.output_ome_zarr_version
         ),
         dtype=dtype,
+        chunks=(1, *settings.chunks_czyx) if settings.chunks_czyx else None,
+        shards_ratio=tuple(settings.shards_ratio) if settings.shards_ratio else None,
         metadata_sources=input_plate,
         metadata_keys=PROVENANCE_METADATA_KEYS,
         extra_metadata={PROVENANCE_KEY: settings.model_dump(mode="json")},

@@ -232,7 +232,11 @@ recoverable per (t, c) unit.
 shape — changing T without recomputing ZYX silently changes the spatial extent.
 Larger T shards mean a larger RAM request and a worse blast radius when one
 tears; leave the T ratio alone without a measured reason. Channels cannot be
-sharded — keep C at 1. Auto-sizing is
+sharded — keep C at 1. The same two keys exist in `project.yml`: the A549
+template uses one-frame `256 x 256` chunks (the assembled and tracking grid)
+and `shards_ratio: [16, 1, 1, 7, 5]`, 16-timepoint full-frame shards; its YX
+entries are `ceil(Y/256), ceil(X/256)` and must be recomputed for a different
+frame size, exactly as for `concatenate.yml`. Auto-sizing is
 [iohub#458](https://github.com/czbiohub-sf/iohub/issues/458); most of this
 section goes away when it lands.
 
