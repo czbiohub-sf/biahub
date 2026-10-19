@@ -71,7 +71,7 @@ searches near where it starts, so **the seed decides which answer it finds**.
   ANTs Rigid (no scale); `affine` can drift in z on stacks with few z slices.
 - `preprocess`: `sobel` (both) for cross-modal pairs; `clip_percentiles` against bright
   outliers; masks as in the table above.
-- `score.preprocess: [sobel]` to score edges like the estimate; `score.report:
+- `score.preprocess: [{sobel: {}}]` to score edges like the estimate; `score.report:
   [correlation, mutual_information]` to see raw-pair metrics next to it.
 - `fallback.repair: null` for a single timepoint: there is nothing to repair from, and each
   repair is another full ANTs run.
