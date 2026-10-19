@@ -66,7 +66,7 @@ def test_project_init_scaffolds_a_z1_plate_and_names_dropped_channels(plate, tmp
     data, channel_names, zattrs = _read(out / "A" / "1" / "0")
     assert channel_names == ["RFP", "GFP"]  # config order, not input order
     assert data.shape == (3, 2, 1, 5, 6)
-    assert data.dtype == np.uint16  # max and slice keep the input dtype
+    assert data.dtype == np.float32  # any max/mean/sum channel makes the plate float32
     assert zattrs["biahub-project"]["channels"]["GFP"]["z"]["center"] == 2
     assert np.all(data == 0)  # --init projects nothing
 
@@ -186,6 +186,7 @@ def test_project_focus_channel_need_not_be_an_output(plate, tmp_path, monkeypatc
     source, _, _ = _read(plate_path / "A/1/0")
     data, channel_names, _ = _read(out / "A" / "1" / "0")
     assert channel_names == ["GFP"]
+    assert data.dtype == np.uint16  # an all-slice plate keeps the input dtype
     assert np.array_equal(data[:, 0, 0], source[:, 0, 5])
 
 

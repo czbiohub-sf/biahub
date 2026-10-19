@@ -45,8 +45,9 @@ from biahub.utils.ngff import (
 
 PROVENANCE_KEY = "biahub-project"
 
-# Methods whose result is not one of the input values, so the output is float32.
-_FLOAT_METHODS = ("mean", "sum")
+# Methods that compute a new value; a plate with any of them is float32 (the common
+# case is float32 in and out). Only an all-`slice` plate keeps the input dtype.
+_FLOAT_METHODS = ("max", "mean", "sum")
 
 
 def resolve_z_indices(
@@ -90,9 +91,9 @@ def project_zyx(zyx: np.ndarray, method: str, z_indices: np.ndarray) -> np.ndarr
     if method == "max":
         return planes.max(axis=0)
     if method == "mean":
-        return planes.mean(axis=0, dtype=np.float64).astype(np.float32)
+        return planes.mean(axis=0).astype(np.float32, copy=False)
     if method == "sum":
-        return planes.sum(axis=0, dtype=np.float64).astype(np.float32)
+        return planes.sum(axis=0).astype(np.float32, copy=False)
     raise ValueError(f"Unknown projection method {method!r}.")
 
 
@@ -326,7 +327,7 @@ def project(
     slurm_out_path = output_dirpath.parent / "slurm_output"
 
     settings = yaml_to_model(config_filepath, ProjectionSettings)
-    (T, C, Z, Y, X), channel_names, _ = _init_output_plate(
+    (T, _, Z, Y, X), channel_names, _ = _init_output_plate(
         input_position_dirpaths, output_dirpath, settings
     )
     plans, read_indices, focus_index = _resolve_channels(settings, channel_names, Z)
