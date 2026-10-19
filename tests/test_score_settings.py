@@ -116,6 +116,24 @@ def test_score_blocks_do_not_see_the_edge_of_the_empty_padding():
     assert edges > 0.99
 
 
+def test_a_clip_score_block_takes_its_percentiles_inside_the_overlap():
+    # Percentiles over the whole warped volume counted its empty padding, so the exact
+    # transform scored lower the more padding it left.
+    from biahub.registration.engine import _score_fn
+    from tests.test_registration_estimators import _synthetic_blob_volume
+
+    rng = np.random.default_rng(7)
+    ref = _synthetic_blob_volume(rng, (24, 40, 40)) + 100.0
+    score = _score_fn(
+        _settings(
+            "ants", score={"preprocess": [{"clip_percentiles": {"low": 20, "high": 80}}]}
+        )
+    )
+    for dz in (2, 8):
+        mov = ndi_shift(ref, (dz, 0, 0), order=0, mode="constant", cval=0.0)
+        assert score(Transform.from_translation([-dz, 0.0, 0.0]), mov, ref) > 0.999
+
+
 def test_the_padding_margin_covers_diagonal_neighbours():
     # Sobel reaches the 26 neighbours of a voxel; a margin of face neighbours only left
     # voxels by a rotated padding edge in the score.

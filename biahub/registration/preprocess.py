@@ -23,14 +23,21 @@ from biahub.settings import (
 )
 
 
-def apply_image_blocks(volume: np.ndarray, blocks: PreprocessBlocks, which: str) -> np.ndarray:
-    """Return `volume` (the `which` one: "moving" or "reference") after its image blocks."""
+def apply_image_blocks(
+    volume: np.ndarray, blocks: PreprocessBlocks, which: str, where: np.ndarray | None = None
+) -> np.ndarray:
+    """Return `volume` (the `which` one: "moving" or "reference") after its image blocks.
+
+    `where` (the score's overlap) limits the voxels a block measures, e.g. the clip
+    percentiles, so empty padding does not count; the whole volume is still changed.
+    """
     out = np.asarray(volume, dtype=np.float32)
     for block in blocks:
         if which not in block.target or isinstance(block, MASK_BLOCKS):
             continue
         if isinstance(block, ClipPercentiles):
-            low, high = np.nanpercentile(out, [block.low, block.high])
+            sample = out if where is None else out[where]
+            low, high = np.nanpercentile(sample, [block.low, block.high])
             out = np.clip(out, low, high)
         elif isinstance(block, Sobel):
             out = filters.sobel(out).astype(np.float32)

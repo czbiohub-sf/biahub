@@ -161,14 +161,14 @@ def normalized_mutual_information(
     clipped to `percentiles` before binning so a few hot voxels do not collapse the
     histogram. Independent of the intensity relation between the two channels, which is
     what makes it usable across modalities; `sobel` compares edge magnitudes instead of
-    intensities. nan when the volumes do not overlap. `prepare(warped, ref)` (the score's
-    blocks) runs after the overlap is found, before comparing.
+    intensities. nan when the volumes do not overlap. `prepare(warped, ref, overlap)`
+    (the score's blocks) runs after the overlap is found, before comparing.
     """
     warped, ref, mask = _overlap_pair(transform, mov, ref)
     if mask.sum() < bins:
         return float("nan")
     if prepare is not None:
-        warped, ref = prepare(warped, ref)
+        warped, ref = prepare(warped, ref, mask)
     if sobel:
         # MI of edge magnitudes: what the fault detectors in registration-eval found most
         # reliable between fluorescence and virtual staining.
@@ -212,7 +212,7 @@ def gradient_correlation(
     if mask.sum() < 2:
         return float("nan")
     if prepare is not None:
-        warped, ref = prepare(warped, ref)
+        warped, ref = prepare(warped, ref, mask)
     mask = _away_from_padding(mask, _footprint(prepare, sobel=True))
     if mask.sum() < 2:
         return float("nan")
@@ -289,7 +289,7 @@ def correlation_score(
     An intensity analogue of the bead overlap score: continuous in [-1, 1], nan when
     the warped volume and the reference do not overlap. Optionally compares Sobel
     magnitudes instead, for cross-modality pairs registered that way. `prepare(warped,
-    ref)` (the score's blocks) runs after the overlap is found, before comparing.
+    ref, overlap)` (the score's blocks) runs after the overlap is found, before comparing.
     """
     ref = np.asarray(ref, dtype=np.float32)
     warped = transform.apply(np.asarray(mov, dtype=np.float32), reference=ref)
@@ -297,7 +297,7 @@ def correlation_score(
     if mask.sum() < 2:
         return float("nan")
     if prepare is not None:
-        warped, ref = prepare(warped, ref)
+        warped, ref = prepare(warped, ref, mask)
     if sobel_filter:
         warped, ref = filters.sobel(warped), filters.sobel(ref)
     mask = _away_from_padding(mask, _footprint(prepare, sobel=sobel_filter))

@@ -895,10 +895,10 @@ def _score_fn(settings: EstimateTransformSettings) -> ScoreFn:
     prepare = None
     if blocks:
 
-        def prepare(warped, ref):
+        def prepare(warped, ref, overlap):
             return (
-                apply_image_blocks(warped, blocks, "moving"),
-                apply_image_blocks(ref, blocks, "reference"),
+                apply_image_blocks(warped, blocks, "moving", where=overlap),
+                apply_image_blocks(ref, blocks, "reference", where=overlap),
             )
 
         # how far the blocks reach: the score leaves that margin by the empty padding
