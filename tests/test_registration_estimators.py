@@ -424,6 +424,36 @@ def test_ants_estimator_seed_is_mechanically_used():
     assert np.all(np.isfinite(estimator.estimate(mov, ref, seed=huge_seed).matrix))
 
 
+def test_ants_keeps_a_seed_with_rotation_scale_and_shear():
+    # With no iterations ANTs returns its initial transform, so the result must be the seed
+    # itself: a seed with every linear part pins the direction and axis order at the ANTs
+    # boundary, which translation-only seeds cannot (a translation inverts to its negative).
+    rng = np.random.default_rng(12)
+    ref = _synthetic_blob_volume(rng, (24, 48, 48))
+    angle = np.deg2rad(4)
+    linear = np.array(
+        [
+            [1.03, 0.0, 0.05],  # z scale and a z-x shear
+            [0.0, np.cos(angle), -np.sin(angle)],
+            [0.0, np.sin(angle), np.cos(angle)],
+        ]
+    ) @ np.diag([1.0, 0.97, 0.97])
+    matrix = np.eye(4)
+    matrix[:3, :3] = linear
+    matrix[:3, 3] = [1.5, -2.0, 3.0]
+    seed = Transform(matrix)
+    estimator = AntsEstimator(
+        ants_kwargs={
+            "type_of_transform": "Affine",
+            "aff_iterations": (0, 0, 0),
+            "aff_shrink_factors": (4, 2, 1),
+            "aff_smoothing_sigmas": (2, 1, 0),
+        }
+    )
+    result = estimator.estimate(ref, ref, seed=seed)
+    np.testing.assert_allclose(result.matrix, seed.matrix, atol=1e-5)
+
+
 def test_ants_estimator_with_seed_still_recovers_translation():
     rng = np.random.default_rng(5)
     shape = (24, 48, 48)
