@@ -197,3 +197,9 @@ def test_the_report_compares_with_the_unregistered_pair_and_warns_when_it_scores
     assert (
         "unregistered pair scores" in capsys.readouterr().out
     )  # a score that ranks it higher
+
+    # an identity result (a stabilization reference frame) is the unregistered pair: the
+    # tie is expected, not a sign of a poor metric
+    identity_score = report["unregistered_score"]
+    engine._report_metrics(settings, identity, 0, mov[None], ref[None], score=identity_score)
+    assert "unregistered pair scores" not in capsys.readouterr().out

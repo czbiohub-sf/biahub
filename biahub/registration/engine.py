@@ -1059,7 +1059,8 @@ def _report_metrics(
 
     Also the unregistered pair's (identity): its score and each report metric, as
     `unregistered_<name>`, so a result can be read against doing nothing; a warning when
-    the unregistered pair scores at least as high as the result's `score`.
+    the unregistered pair scores at least as high as the result's `score` (not for an
+    identity result, e.g. a stabilization reference frame, which is that pair).
     """
     if not settings.score.report or transform is None:
         return None
@@ -1079,7 +1080,7 @@ def _report_metrics(
             )
     unregistered = report["unregistered_score"]
     if score is not None and unregistered is not None and np.isfinite(score):
-        if unregistered >= score:
+        if unregistered >= score and not transform.is_identity:
             click.echo(
                 f"t={t}: the unregistered pair scores {unregistered:.4g}, at least the "
                 f"result's {score:.4g}: check that the score metric suits this pair",
