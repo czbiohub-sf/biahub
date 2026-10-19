@@ -1348,7 +1348,12 @@ def _repair_timepoint_job(
         "polish_rounds": outcome.polish_rounds,
         "reseed_score": _finite_or_none(outcome.reseed_score),
         "report": _report_metrics(
-            settings, outcome.transform if outcome.accepted else None, t, mov, ref
+            settings,
+            outcome.transform if outcome.accepted else None,
+            t,
+            mov,
+            ref,
+            score=outcome.score,
         ),
     }
     record_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1388,7 +1393,12 @@ def _sweep_timepoint_job(
         "candidate_scores": {k: _finite_or_none(v) for k, v in outcome.scores.items()},
         "candidate_failures": outcome.failures,
         "report": _report_metrics(
-            settings, outcome.transform if outcome.accepted else None, t, mov, ref
+            settings,
+            outcome.transform if outcome.accepted else None,
+            t,
+            mov,
+            ref,
+            score=outcome.score,
         ),
     }
     record_path.parent.mkdir(parents=True, exist_ok=True)

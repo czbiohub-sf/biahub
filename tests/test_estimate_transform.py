@@ -885,6 +885,62 @@ def test_a_repaired_timepoint_reports_the_repairs_transform(
     assert series.reports[1] == record["report"] != estimate_report
 
 
+def test_repair_and_sweep_reports_get_the_score_to_compare_with_unregistered(
+    beads_plate, tmp_path, monkeypatch
+):
+    # Without the score the report cannot warn that a fallback's transform scores below
+    # the unregistered pair.
+    import biahub.registration.engine as engine
+
+    from biahub.core.transform import Transform
+    from biahub.utils.config import yaml_to_model
+
+    config = _write_config(
+        tmp_path,
+        score={"report": ["correlation"]},
+        fallback={
+            "sweep": {"grid": [{"beads.hungarian_match_settings.cost_threshold": [0.05]}]}
+        },
+    )
+    run = tmp_path / "run"
+    engine.init_run(
+        beads_plate, beads_plate, yaml_to_model(config, EstimateTransformSettings), run
+    )
+    settings_path = run / "estimate_transform_settings.yml"
+    for t in (0, 1):
+        engine._estimate_timepoint_job(
+            beads_plate, beads_plate, settings_path, t, run / "timepoints" / f"{t}.json"
+        )
+    accepted = engine.PassResult(
+        transform=Transform.identity(3), score=-1.0, accepted=True, source="t-1"
+    )
+    monkeypatch.setattr(engine, "repair_timepoint", lambda *a, **k: accepted)
+    monkeypatch.setattr(engine, "sweep_timepoint", lambda *a, **k: accepted)
+    scores = []
+    monkeypatch.setattr(
+        engine, "_report_metrics", lambda *a, score=None, **k: scores.append(score) or {}
+    )
+    engine._repair_timepoint_job(
+        beads_plate,
+        beads_plate,
+        settings_path,
+        1,
+        [0, 1],
+        [1],
+        run / "timepoints",
+        run / "repairs" / "1.json",
+    )
+    engine._sweep_timepoint_job(
+        beads_plate,
+        beads_plate,
+        settings_path,
+        1,
+        run / "timepoints",
+        run / "sweeps" / "1.json",
+    )
+    assert scores == [-1.0, -1.0]
+
+
 def test_a_report_metric_with_no_value_is_written_to_the_transforms_file():
     # a nan report metric (e.g. correlation on a zero-variance pair) is recorded as
     # None; finalize must still write the entry
