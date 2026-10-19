@@ -47,10 +47,10 @@ channels:
   # FOV (the median over timepoints); per-timepoint focus follows Z drift instead.
   nuclei_prediction:
     method: mean
-    z: {center: focus, range: [-20, 40]}
+    z: {center: focus, below: 20, above: 40}
   membrane_prediction:
     method: mean
-    z: {center: focus, range: [-20, 40]}
+    z: {center: focus, below: 20, above: 40}
 
 focus:
   channel: Phase3D

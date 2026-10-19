@@ -77,7 +77,7 @@ def test_project_methods_match_numpy(plate, tmp_path):
     config = _config(
         tmp_path,
         {
-            "GFP": {"method": "max", "z": {"range": [2, 7], "step": 2}},
+            "GFP": {"method": "max", "z": {"start": 2, "stop": 7, "step": 2}},
             "RFP": {"method": "mean"},
             "Phase3D": {"method": "slice", "z": {"center": 3}},
         },
@@ -101,7 +101,7 @@ def test_project_sum_over_a_window_around_a_center(plate, tmp_path):
     plate_path, _ = plate
     out = tmp_path / "proj.zarr"
     config = _config(
-        tmp_path, {"GFP": {"method": "sum", "z": {"center": 6, "range": [-2, 5]}}}
+        tmp_path, {"GFP": {"method": "sum", "z": {"center": 6, "below": 2, "above": 5}}}
     )
     position = plate_path / "A" / "1" / "0"
 
@@ -120,7 +120,7 @@ def test_project_focus_per_fov_takes_the_median_plane(plate, tmp_path, monkeypat
     config = _config(
         tmp_path,
         {
-            "GFP": {"method": "mean", "z": {"center": "focus", "range": [-1, 2]}},
+            "GFP": {"method": "mean", "z": {"center": "focus", "below": 1, "above": 2}},
             "Phase3D": {"method": "slice", "z": {"center": "focus"}},
         },
         focus={"channel": "Phase3D", "per": "fov"},
@@ -149,7 +149,7 @@ def test_project_focus_per_timepoint_follows_the_plane(plate, tmp_path, monkeypa
     config = _config(
         tmp_path,
         {
-            "GFP": {"method": "max", "z": {"center": "focus", "range": [-1, 2]}},
+            "GFP": {"method": "max", "z": {"center": "focus", "below": 1, "above": 2}},
             "Phase3D": {"method": "slice", "z": {"center": "focus"}},
         },
         focus={"channel": "Phase3D", "per": "timepoint"},
@@ -193,7 +193,7 @@ def test_project_focus_channel_need_not_be_an_output(plate, tmp_path, monkeypatc
 @pytest.mark.parametrize(
     "channels, message",
     [
-        ({"GFP": {"method": "max", "z": {"range": [10, 20]}}}, "select nothing"),
+        ({"GFP": {"method": "max", "z": {"start": 10, "stop": 20}}}, "select nothing"),
         ({"GFP": {"method": "slice", "z": {"center": 42}}}, "select nothing"),
         ({"DAPI": {"method": "max"}}, "not in the input channels"),
     ],

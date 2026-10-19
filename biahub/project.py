@@ -55,24 +55,25 @@ def resolve_z_indices(
 ) -> np.ndarray:
     """Return the plane indices one channel's projection reads from a ``z_size``-plane stack.
 
-    An unset ``z`` is the whole stack. A ``range`` without ``center`` is absolute; with a
-    ``center`` (``focus_z`` when it is ``"focus"``) the bounds are offsets from it, and
-    ``slice`` is the center alone. ``step`` thins the range. Indices outside the stack
-    are dropped; a selection that keeps none is an error.
+    An unset ``z`` is the whole stack. ``start``/``stop`` are absolute planes; with a
+    ``center`` (``focus_z`` when it is ``"focus"``) the planes are
+    ``[center - below, center + above)``, or the center alone for ``slice``. ``step``
+    thins the selection. Indices outside the stack are dropped; a selection that keeps
+    none is an error.
     """
     z = projection.z
     if z is None:
         return np.arange(z_size)
-    if z.center is None:
-        start, stop = z.range
+    if z.is_absolute:
+        start, stop = z.start, z.stop
     else:
         center = focus_z if z.center == "focus" else z.center
         if center is None:
             raise ValueError("z.center is 'focus' but no focus plane was given.")
-        if z.range is None:
-            start, stop = center, center + 1
+        if z.is_window:
+            start, stop = center - z.below, center + z.above
         else:
-            start, stop = center + z.range[0], center + z.range[1]
+            start, stop = center, center + 1
     indices = np.arange(start, stop, z.step)
     indices = indices[(indices >= 0) & (indices < z_size)]
     if indices.size == 0:

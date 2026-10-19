@@ -6,12 +6,13 @@
 #   max/mean/sum reduce the selected planes; slice keeps one plane. The output plate is
 #   float32 unless every channel is a slice, in which case it keeps the input dtype.
 # z: which planes feed the projection. Omit it for max/mean/sum over the whole stack.
-#   range: [start, stop)  half-open, like Z_slice in concatenate. With `center` the bounds
-#                         are offsets from the center.
-#   step:  keep every step-th plane of the range (default 1)
-#   center: a plane index, or "focus" for the in-focus plane found on focus.channel.
-#           slice takes center alone; max/mean/sum take center with a range.
-# A range that runs past the stack is clipped to it.
+#   start, stop:   absolute planes, half-open [start, stop) like time_indices in concatenate
+#   center:        a plane index, or "focus" for the in-focus plane found on focus.channel.
+#                  slice takes center alone; max/mean/sum take center with below/above.
+#   below, above:  the window [center - below, center + above); `above` counts the
+#                  center plane itself, so the window has below + above planes.
+#   step:          keep every step-th plane of the selection (default 1)
+# A selection that runs past the stack is clipped to it.
 
 channels:
   # max over the whole stack
@@ -21,17 +22,17 @@ channels:
   # max over an explicit range, every 2nd plane: z = 10, 12, ..., 48
   nuclei_prediction:
     method: max
-    z: {range: [10, 50], step: 2}
+    z: {start: 10, stop: 50, step: 2}
 
   # sum over 21 planes around a manually chosen center: z = 20 .. 40
   GFP:
     method: sum
-    z: {center: 30, range: [-10, 11]}
+    z: {center: 30, below: 10, above: 11}
 
   # mean over 60 planes starting 20 below the in-focus plane: z = focus-20 .. focus+39
   RFP:
     method: mean
-    z: {center: focus, range: [-20, 40]}
+    z: {center: focus, below: 20, above: 40}
 
   # single plane, chosen manually
   mCherry:

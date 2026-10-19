@@ -229,7 +229,7 @@ def test_nextflow_a549_project_config_validates():
         settings = ProjectionSettings(**yaml.safe_load(f))
     nuclei = settings.channels["nuclei_prediction"]
     assert nuclei.method == "mean"
-    assert nuclei.z.center == "focus" and nuclei.z.range == (-20, 40)
+    assert nuclei.z.center == "focus" and (nuclei.z.below, nuclei.z.above) == (20, 40)
     # Every channel of a typical A549 assembled plate, in plate order, under the
     # PRE-rename names project sees inside the pipeline.
     assert list(settings.channels) == [

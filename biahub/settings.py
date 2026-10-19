@@ -316,29 +316,51 @@ class FocusSettings(MyBaseModel):
 class ZSelection(MyBaseModel):
     """Which Z-planes of a stack feed one channel's projection.
 
-    `range` is a half-open ``[start, stop)`` like concatenate's ``Z_slice``. With `center`
-    the bounds are offsets from the center (``[-20, 40]`` is 60 planes starting 20 below
-    it); `center` is a plane index or ``"focus"``, the in-focus plane found on
-    ``ProjectionSettings.focus.channel``. `step` keeps every step-th plane of the range.
-    A range that runs past the stack is clipped to it.
+    Two forms. Absolute: `start`/`stop`, a half-open ``[start, stop)`` like concatenate's
+    ``time_indices``. Around a plane: `center` with `below`/`above`, the planes
+    ``[center - below, center + above)`` (``below: 20, above: 40`` is 60 planes starting
+    20 below the center; `above` counts the center plane itself). `center` is a plane
+    index or ``"focus"``, the in-focus plane found on ``ProjectionSettings.focus.channel``;
+    `center` alone is the one plane (``slice``). `step` keeps every step-th plane. A
+    selection that runs past the stack is clipped to it.
     """
 
     center: NonNegativeInt | Literal["focus"] | None = None
-    range: tuple[int, int] | None = None
+    start: NonNegativeInt | None = None
+    stop: PositiveInt | None = None
+    below: NonNegativeInt | None = None
+    above: NonNegativeInt | None = None
     step: PositiveInt = 1
 
+    @property
+    def is_absolute(self) -> bool:
+        return self.start is not None or self.stop is not None
+
+    @property
+    def is_window(self) -> bool:
+        return self.below is not None or self.above is not None
+
     @model_validator(mode="after")
-    def check_range(self):
-        if self.range is not None:
-            start, stop = self.range
-            if stop <= start:
-                raise ValueError(f"range {list(self.range)} is empty: stop must exceed start.")
-            if self.center is None and start < 0:
+    def check_form(self):
+        if self.is_absolute:
+            if self.start is None or self.stop is None:
+                raise ValueError("start and stop go together.")
+            if self.center is not None or self.is_window:
                 raise ValueError(
-                    f"range {list(self.range)} is negative; offsets need a center."
+                    "start/stop are absolute planes; use center with below/above for a "
+                    "window around a plane."
                 )
+            if self.stop <= self.start:
+                raise ValueError(f"start {self.start}, stop {self.stop} is empty.")
+        elif self.is_window:
+            if self.below is None or self.above is None:
+                raise ValueError("below and above go together.")
+            if self.center is None:
+                raise ValueError("below/above need a center.")
+            if self.below + self.above == 0:
+                raise ValueError("below and above select no plane.")
         elif self.step != 1:
-            raise ValueError("step needs a range.")
+            raise ValueError("step needs start/stop or below/above.")
         return self
 
 
@@ -357,15 +379,15 @@ class ChannelProjection(MyBaseModel):
         if self.method == "slice":
             if self.z is None or self.z.center is None:
                 raise ValueError("method slice needs z.center (a plane index or 'focus').")
-            if self.z.range is not None:
+            if self.z.is_window:
                 raise ValueError(
-                    "method slice selects one plane and takes no range; use max, mean or "
-                    "sum to project a window."
+                    "method slice selects one plane and takes no below/above; use max, "
+                    "mean or sum to project a window."
                 )
-        elif self.z is not None and self.z.center is not None and self.z.range is None:
+        elif self.z is not None and self.z.center is not None and not self.z.is_window:
             raise ValueError(
-                f"method {self.method} needs z.range with z.center; use method slice to "
-                "keep the one plane."
+                f"method {self.method} needs z.below/above with z.center; use method slice "
+                "to keep the one plane."
             )
         return self
 

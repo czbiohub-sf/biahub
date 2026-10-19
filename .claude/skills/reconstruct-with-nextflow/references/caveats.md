@@ -152,7 +152,7 @@ fields: `output_mode`, `target_channel`, `fov`, `input_images`,
 
 ```
 mode                                  -> output_mode
-z_slicing / z_range / focus_config    -> project.yml: channels.<name>.z {center: focus, range: [below, above)}, focus.channel
+z_slicing / z_range / focus_config    -> project.yml: channels.<name>.z {center: focus, below, above}, focus.channel
 input_images np.mean step             -> project.yml: channels.<name>.method: mean
 ```
 
