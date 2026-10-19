@@ -7,6 +7,10 @@ with the registration engine's focus criterion (see ``ProjectionSettings``). Seg
 track take the projected plate as their 2D input; neither projects by itself.
 """
 
+import multiprocessing as mp
+
+from concurrent.futures import ProcessPoolExecutor
+from itertools import repeat
 from pathlib import Path
 
 import click
@@ -206,30 +210,66 @@ def _init_output_plate(
     return (T, C, Z, Y, X), channel_names, dtype
 
 
-def _find_focus_per_t(
-    position_path: Path, channel_index: int, focus: ProjectionFocusSettings, pixel_size: float
-) -> np.ndarray:
-    """Find the in-focus plane of every timepoint of one position, on ``focus.channel``.
+def _focus_of_timepoint(
+    position_path: Path,
+    t: int,
+    channel_index: int,
+    crop_xy: tuple[int, int],
+    pixel_size: float,
+    na_det: float,
+    lambda_ill: float,
+) -> int | None:
+    """Find the in-focus plane of one timepoint, or None when the frame has no focus.
 
-    Measured on the centre crop with waveorder's transverse band like the engine's
-    FocusEstimator; an empty frame, or one without a focus, takes the middle plane. One
-    (Z, Y, X) volume is read at a time.
+    Top-level so a process pool can pickle it; each call reads its own (Z, Y, X) volume.
     """
     from biahub.registration.estimators import EstimationError
     from biahub.registration.methods.focus import center_crop_yx, find_focus
 
-    crop_xy = (focus.center_crop_xy[0], focus.center_crop_xy[1])
+    with open_ome_zarr(str(position_path), mode="r") as dataset:
+        zyx = np.asarray(dataset.data[t, channel_index])
+    try:
+        return find_focus(center_crop_yx(zyx, crop_xy), pixel_size, na_det, lambda_ill)
+    except EstimationError:
+        return None
+
+
+def _find_focus_per_t(
+    position_path: Path,
+    channel_index: int,
+    focus: ProjectionFocusSettings,
+    pixel_size: float,
+    num_workers: int = 1,
+) -> np.ndarray:
+    """Find the in-focus plane of every timepoint of one position, on ``focus.channel``.
+
+    Measured on the centre crop with waveorder's transverse band like the engine's
+    FocusEstimator; an empty frame, or one without a focus, takes the middle plane. The
+    timepoints are independent, so with ``num_workers > 1`` they run in a process pool
+    (spawned, like iohub's, so a worker killed by the cgroup surfaces as an error);
+    each worker reads one (Z, Y, X) volume at a time.
+    """
     with open_ome_zarr(str(position_path), mode="r") as dataset:
         T, _, Z, _, _ = dataset.data.shape
-        focus_z = np.empty(T, dtype=int)
-        for t in range(T):
-            zyx = np.asarray(dataset.data[t, channel_index])
-            try:
-                focus_z[t] = find_focus(
-                    center_crop_yx(zyx, crop_xy), pixel_size, focus.na_det, focus.lambda_ill
+    crop_xy = (focus.center_crop_xy[0], focus.center_crop_xy[1])
+    constants = (channel_index, crop_xy, pixel_size, focus.na_det, focus.lambda_ill)
+
+    if num_workers > 1 and T > 1:
+        with ProcessPoolExecutor(
+            max_workers=min(num_workers, T), mp_context=mp.get_context("spawn")
+        ) as pool:
+            planes = list(
+                pool.map(
+                    _focus_of_timepoint,
+                    repeat(position_path),
+                    range(T),
+                    *(repeat(value) for value in constants),
                 )
-            except EstimationError:
-                focus_z[t] = Z // 2
+            )
+    else:
+        planes = [_focus_of_timepoint(position_path, t, *constants) for t in range(T)]
+
+    focus_z = np.array([Z // 2 if plane is None else plane for plane in planes], dtype=int)
     return np.clip(focus_z, 0, Z - 1)
 
 
@@ -254,7 +294,11 @@ def _project_position(
         with open_ome_zarr(str(input_position_path), mode="r") as dataset:
             pixel_size = dataset.scale[-1]
         focus_per_t = _find_focus_per_t(
-            input_position_path, focus_channel_index, settings.focus, pixel_size
+            input_position_path,
+            focus_channel_index,
+            settings.focus,
+            pixel_size,
+            num_workers=num_workers,
         )
         if settings.focus.per == "fov":
             focus_z = int(round(float(np.median(focus_per_t))))

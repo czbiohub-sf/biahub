@@ -225,6 +225,23 @@ def test_project_refuses_a_plate_that_is_already_2d(create_custom_plate, tmp_pat
     assert "already has one Z-plane" in str(result.exception)
 
 
+def test_focus_pre_pass_in_parallel_matches_serial(plate):
+    """The timepoints are independent; the pool gives the same planes as the loop."""
+    from biahub.project import _find_focus_per_t
+    from biahub.settings import ProjectionFocusSettings
+
+    plate_path, _ = plate
+    position = plate_path / "A" / "1" / "0"
+    focus = ProjectionFocusSettings(channel="Phase3D")
+
+    serial = _find_focus_per_t(position, 2, focus, pixel_size=0.1, num_workers=1)
+    parallel = _find_focus_per_t(position, 2, focus, pixel_size=0.1, num_workers=2)
+
+    assert serial.shape == (3,)
+    assert np.array_equal(serial, parallel)
+    assert np.all((0 <= serial) & (serial < Z))
+
+
 def test_project_writes_the_configured_chunks_and_shards(plate, tmp_path):
     """Shards spanning timepoints: iohub writes one shard's timepoints per unit."""
     plate_path, _ = plate
