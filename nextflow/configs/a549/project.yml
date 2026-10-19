@@ -1,22 +1,57 @@
 # Projection config for the mantis-v2 pipeline (`biahub project`). A549.
 #
 # Project reads the ASSEMBLED plate (<N>-assemble/<dataset>.zarr) and writes the 2D
-# plate that track reads, so the channels below must exist THERE, and track.yml's
-# target_channel / cellpose_config.input_channel must be among the channels written here.
+# (Z=1) plate that track reads and that downstream model training / embedding
+# inference consume (biahub#400). The intention is that EVERY channel of the assembled
+# plate is projected: a channel listed here that the plate lacks fails `--init`; a plate
+# channel not listed here is dropped with a warning, so list it or decide to leave it
+# out on purpose (the reconstruct-with-nextflow skill asks before launch). track.yml's
+# target_channel / cellpose_config.input_channel must be among the channels here.
 #
-# Mean of the virtual-stain nuclei over 60 planes around the in-focus plane of the
-# phase channel: the window starts 20 planes below focus and ends 39 above it. This is
-# the window track's own z_slicing selected before projection moved here (#418): against
-# TrackEdit annotations (with min_sibling_length 3) division F1 rose 0.63 -> 0.68 on
-# 2026_04_28, with fewer false divisions and fragmented tracks on 2026_04_21 at the same
-# mitotic-cell detection as all planes (0.95); a narrower 40-plane window lost mitotic
-# cells that drift in Z (0.89). The focus is found once per FOV (median over timepoints)
-# on the 800x800 centre crop of the phase channel.
+# CHANNEL NAMES ARE THE PRE-RENAME NAMES. Project runs inside the pipeline, before
+# rename_channels.py normalises the assembled plate (caveats section 2), so the keys
+# are the raw store's names. The brightfield channel is `BF` here, matching
+# reconstruct.yml's input_channel_names; older acquisitions name it `BF - Oblique`, and
+# then BOTH files need the edit. The fluorescence channels are the camera/filter
+# strings (one or two markers per dataset). Edit them to match the raw store
+# (`references/caveats.md` section 3). Phase3D, nuclei_prediction and
+# membrane_prediction are fixed by reconstruct.yml and virtual_stain.yml. Run
+# rename_channels.py on the projected plate as well.
+#
+# Focus: the in-focus plane of Phase3D is found for every position AND timepoint
+# (`per: timepoint`, as biahub#400 asks for inference), on the 800x800 centre crop, and
+# recorded per timepoint in each output position's `biahub-project` metadata. The
+# light-sheet arm is registered to the label-free arm before assembly, so the phase
+# focus applies to every channel.
 channels:
+  # Label-free: the one in-focus plane.
+  BF:
+    method: slice
+    z: {center: focus}
+  # Raw fluorescence (organelle markers): max over the whole stack. The marker signal
+  # is sparse and in focus wherever the organelle is, so the full-volume maximum keeps
+  # it through the cell's depth without the out-of-focus haze phase has.
+  GFP EX488 EM525-45:
+    method: max
+  mCherry EX561 EM600-37:
+    method: max
+  Phase3D:
+    method: slice
+    z: {center: focus}
+  # Virtual stain: mean over 60 planes starting 20 below the in-focus plane. This is
+  # the window track's own z_slicing selected before projection moved here (#418):
+  # against TrackEdit annotations (with min_sibling_length 3) division F1 rose 0.63 ->
+  # 0.68 on 2026_04_28, with fewer false divisions and fragmented tracks on 2026_04_21
+  # at the same mitotic-cell detection as all planes (0.95); a narrower 40-plane window
+  # lost mitotic cells that drift in Z (0.89). That benchmark used one focus plane per
+  # FOV (the median over timepoints); per-timepoint focus follows Z drift instead.
   nuclei_prediction:
+    method: mean
+    z: {center: focus, range: [-20, 40]}
+  membrane_prediction:
     method: mean
     z: {center: focus, range: [-20, 40]}
 
 focus:
   channel: Phase3D
-  per: fov
+  per: timepoint

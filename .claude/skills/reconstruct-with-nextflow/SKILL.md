@@ -191,7 +191,7 @@ the next dataset in the family would also need), fix it in a PR against
 `nextflow/configs/<family>/`, stating which dataset exposed it. Genuinely
 per-dataset values stay in the run directory.
 
-### 5a. Check the QC channel filters against the stores they will QC
+### 5a. Check the channel couplings: QC filters, project.yml, track.yml
 
 Once the configs are edited, run this from the biahub checkout:
 
@@ -208,6 +208,20 @@ them: raw channel names for the deskewed data, waveorder's
 `output_channel_names` for the phase channel, virtual-stain's `target_channel`
 for the predictions, and `<track.yml target_channel>_labels` for the tracking
 store.
+
+**`project.yml` against the assembled plate.** When `configs/project.yml`
+exists the script also checks it both ways. A channel in `project.yml` that the
+assembled plate will not have is a `MISS` (exit 1): `biahub project --init`
+refuses it, so fix the name now — the raw fluorescence names are the camera
+strings of this acquisition and are the usual mismatch. An assembled channel
+that `project.yml` does not list is printed as `NOT PROJECTED`; that is a
+warning, not a failure (`biahub project` drops it with a warning), **but the
+intention of the pipeline is that every assembled channel is projected unless
+the user decided otherwise**, so carry the list into the pre-run plan (step 6
+of §7) and ask the user whether to add each one or leave it out on purpose.
+The script also checks that `track.yml`'s `target_channel` and
+`cellpose_config.input_channel` are channels `project.yml` writes, since track
+reads the projected plate.
 
 **That last one is the coupling that actually breaks.** `qc_track.yaml` names
 `nuclei_prediction_labels`, which only resolves if `track.yml` says
@@ -341,6 +355,14 @@ Do not run anything yet. Show the user:
    For neuromast/zebrafish say that the assembled store is the deliverable and
    that tracking is simply not run — there is no tracking by-product any more
    (`caveats.md` §4).
+
+   **When project runs, list what it projects.** State each assembled channel
+   with its `project.yml` method, and name any assembled channel the config
+   does not list (§5a's `NOT PROJECTED` lines). Those need a decision from the
+   user before launch: add the channel to `project.yml`, or confirm it is left
+   out on purpose. Do not launch with an unprojected channel the user has not
+   seen — the pipeline's intention is that every assembled channel is
+   projected unless the user explicitly decided otherwise.
 
    **State the directory numbers this run will produce.** The number is the
    step's position among the steps performed, not a fixed label, so a neuromast
@@ -521,9 +543,10 @@ directory (`<DATASET>_rerun`) over relaunching in place.
 
 ## 11. Wrap up
 
-1. Normalize channel names on the assembled plate with
-   `templates/rename_channels.py` (idempotent; `caveats.md` §2 — check first
-   whether a `rename-channels` CLI has landed on main, making this obsolete).
+1. Normalize channel names on the assembled plate, and on the projected plate
+   when project ran, with `templates/rename_channels.py` (idempotent;
+   `caveats.md` §2 — check first whether a `rename-channels` CLI has landed on
+   main, making this obsolete).
 2. Verify the assembled store (`<N>-assemble/<DATASET>.zarr`, `4-assemble`
    unless earlier steps were skipped) opens with iohub; report shape, channels,
    size on disk. This is the deliverable for every family; tracking, when it

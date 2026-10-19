@@ -1,8 +1,20 @@
-"""Check a QC config's `channels:` against the store it will actually QC.
+"""Check the channel couplings between the step configs and the stores they read.
 
     python check_qc_channels.py <RAW_STORE.zarr> <OUTPUT>/configs
 
-Exits 1 and names every miss, 0 if every filter resolves.
+Exits 1 and names every miss, 0 if every filter resolves. Three couplings:
+
+1. Each QC config's `channels:` against the store it will QC.
+2. `project.yml` (when present) against the assembled plate, both ways: a listed
+   channel the plate will not have is a MISS (`biahub project --init` refuses
+   it); an assembled channel the config does not list is printed as
+   NOT PROJECTED. That one is a warning, not a failure -- the CLI drops the
+   channel with a warning -- but the pipeline's intention is that every
+   assembled channel is projected unless the user decided otherwise, so the
+   skill carries these lines into the pre-run plan for the user to decide.
+3. `track.yml`'s `target_channel` and `cellpose_config.input_channel` against
+   the plate track reads: the projected plate when `project.yml` exists, else
+   the assembled plate.
 
 WHY PREDICT RATHER THAN READ. The stores QC runs over — the assembled plate and
 the tracking plate — do not exist when configs are scaffolded; the pipeline's
@@ -76,14 +88,25 @@ def tracking_channels(track_cfg):
     return [f"{t['target_channel']}_labels"]
 
 
+def projected_channels(project_cfg):
+    """Return the channels `biahub project` writes, in output order (the config's keys)."""
+    return list(yaml.safe_load(Path(project_cfg).read_text())["channels"])
+
+
+def track_inputs(track_cfg):
+    """Return the channel names track reads from its input plate, keyed by the setting."""
+    t = yaml.safe_load(Path(track_cfg).read_text())
+    inputs = [("target_channel", t["target_channel"])]
+    cellpose = t.get("cellpose_config") or {}
+    if t.get("segmentation_method") == "cellpose" and "input_channel" in cellpose:
+        inputs.append(("cellpose_config.input_channel", cellpose["input_channel"]))
+    return inputs
+
+
 if __name__ == "__main__":
     raw, cfgs = sys.argv[1], Path(sys.argv[2])
-    checks = [
-        (
-            "qc.yaml",
-            assembled_channels(raw, cfgs / "reconstruct.yml", cfgs / "virtual_stain.yml"),
-        )
-    ]
+    assembled = assembled_channels(raw, cfgs / "reconstruct.yml", cfgs / "virtual_stain.yml")
+    checks = [("qc.yaml", assembled)]
     if (cfgs / "qc_track.yaml").exists():
         checks.append(("qc_track.yaml", tracking_channels(cfgs / "track.yml")))
     bad = 0
@@ -93,4 +116,27 @@ if __name__ == "__main__":
             ok = ch in predicted
             bad += not ok
             print(f"   {'ok  ' if ok else 'MISS'} {owner}.channels: {ch!r}")
+
+    # project.yml reads the assembled plate and writes the plate track reads.
+    track_reads = assembled
+    if (cfgs / "project.yml").exists():
+        projected = projected_channels(cfgs / "project.yml")
+        track_reads = projected
+        print(f"project.yml: assembled plate will have {assembled}")
+        for ch in projected:
+            ok = ch in assembled
+            bad += not ok
+            print(f"   {'ok  ' if ok else 'MISS'} channels: {ch!r}")
+        for ch in assembled:
+            if ch not in projected:
+                # Not a failure: the CLI drops it with a warning. The skill asks the
+                # user about every such channel in the pre-run plan.
+                print(f"   NOT PROJECTED {ch!r}: not in project.yml, will be dropped")
+    if (cfgs / "track.yml").exists():
+        source = "projected" if (cfgs / "project.yml").exists() else "assembled"
+        print(f"track.yml: {source} plate will have {track_reads}")
+        for key, ch in track_inputs(cfgs / "track.yml"):
+            ok = ch in track_reads
+            bad += not ok
+            print(f"   {'ok  ' if ok else 'MISS'} {key}: {ch!r}")
     sys.exit(1 if bad else 0)

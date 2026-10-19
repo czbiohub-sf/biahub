@@ -230,7 +230,19 @@ def test_nextflow_a549_project_config_validates():
     nuclei = settings.channels["nuclei_prediction"]
     assert nuclei.method == "mean"
     assert nuclei.z.center == "focus" and nuclei.z.range == (-20, 40)
-    assert settings.focus.channel == "Phase3D" and settings.focus.per == "fov"
+    # Every channel of a typical A549 assembled plate, in plate order, under the
+    # PRE-rename names project sees inside the pipeline.
+    assert list(settings.channels) == [
+        "BF",
+        "GFP EX488 EM525-45",
+        "mCherry EX561 EM600-37",
+        "Phase3D",
+        "nuclei_prediction",
+        "membrane_prediction",
+    ]
+    assert settings.channels["Phase3D"].method == "slice"
+    assert settings.channels["GFP EX488 EM525-45"].method == "max"
+    assert settings.focus.channel == "Phase3D" and settings.focus.per == "timepoint"
 
 
 def test_skill_config_templates_load():

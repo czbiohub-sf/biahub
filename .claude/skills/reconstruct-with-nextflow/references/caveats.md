@@ -77,11 +77,14 @@ copy is group-writable like every other file the skill places in `<OUTPUT>`
 `biahub virtual-stain` names outputs verbatim from `target_channel`, but the
 rest of biahub keys off the `_prediction` suffix.
 
-**⚠ Ordering.** tracking runs *inside* the pipeline and reads the assembled
-plate, so **track sees the pre-rename names**. The shipped templates avoid the
-trap by putting the suffix directly in the VS `target_channel`
-(`nuclei_prediction`/`membrane_prediction`), making the rename a no-op for
-those channels.
+**⚠ Ordering.** project and tracking run *inside* the pipeline and read the
+assembled plate, so **project.yml and track.yml see the pre-rename names**
+(`project.yml`'s keys are `BF`, `GFP EX488 EM525-45`, ...). The
+shipped templates avoid the trap for the predictions by putting the suffix
+directly in the VS `target_channel` (`nuclei_prediction`/`membrane_prediction`),
+making the rename a no-op for those channels. The projected plate inherits the
+pre-rename names too: run `rename_channels.py` on `<N>-project` as well as on
+`<N>-assemble` (same command, from the directory holding the store).
 
 **Stopgap:** PRs [#260](https://github.com/czbiohub-sf/biahub/pull/260) and
 [#250](https://github.com/czbiohub-sf/biahub/pull/250) carry a `rename-channels`
@@ -97,10 +100,15 @@ lateral pixel size of the *input* store (no longer read from the zarr);
 `scan_step_um` comes from the acquisition — read
 `/hpc/instruments/cm.mantis/<DATASET>/config.yaml`, do not assume 0.150.
 
-**`reconstruct.yml` — `input_channel_names`.** Must name the brightfield
-channel exactly as it appears in the deskewed store (`["BF - Oblique"]`
-today). A mismatch fails at `compute_transfer_function`, after flat-field and
-deskew have already burned hours.
+**`reconstruct.yml` — `input_channel_names`, and `project.yml`'s brightfield
+key.** Must name the brightfield channel exactly as it appears in the deskewed
+store. The templates say `BF` (current acquisitions); older acquisitions name it
+`BF - Oblique` (e.g. `2026_08_11_A549_SEC61B_DENV`, so a v9 rerun of it too).
+Read the raw store's channel names and, when it says `BF - Oblique`, suggest
+that edit in **both** `reconstruct.yml` and `project.yml` — §5a's check flags
+the project.yml side; a reconstruct.yml mismatch fails at
+`compute_transfer_function`, after flat-field and deskew have already burned
+hours.
 
 **`reconstruct.yml` — `phase.transfer_function.{yx,z}_pixel_size`.** These are
 the voxel sizes of the *deskewed* store, so they follow from `deskew.yml`:
@@ -156,11 +164,25 @@ carry the **pre-rename** names of the **assembled** plate (§2, §5).
 is what the tracking store actually holds — SKILL.md §5a checks both couplings
 before launch.
 
-**`project.yml` — `focus.channel` must be in the assembled plate.** `biahub
-project --init` resolves every channel name against the plate and fails there,
-in the init phase, rather than after every other step. The A549 template finds
-the focus on `Phase3D` and writes only `nuclei_prediction`; the focus channel
-need not be an output.
+**`project.yml` — every channel name must be in the assembled plate, and every
+assembled channel should be in `project.yml`.** `biahub project --init`
+resolves every listed channel (and `focus.channel`) against the plate and fails
+there, in the init phase, rather than after every other step; a plate channel
+the config does not list is dropped with a warning. The pipeline's intention is
+that every assembled channel is projected unless the user decided otherwise, so
+SKILL.md §5a's check prints the unlisted ones and the pre-run plan asks about
+them. The A549 template lists a typical plate (brightfield, two raw
+fluorescence channels, Phase3D, the two predictions) under the **PRE-rename
+names**, because project runs inside the pipeline before the §2 rename: the
+brightfield key is `BF`, the same name as `reconstruct.yml`'s
+`input_channel_names` (edit both to `BF - Oblique` for the older acquisitions,
+see above), and **the fluorescence names are the camera/filter strings**
+(`GFP EX488 EM525-45`, `mCherry EX561 EM600-37` on the reference datasets, one
+or two markers per dataset) — edit or remove them to match the raw store.
+Label-free channels take the
+one in-focus plane, fluorescence the full-stack max, the virtual-stain
+predictions the mean over the 60-plane focus window; the focus is found per
+timepoint on `Phase3D`.
 
 **`concatenate.yml` holds parameters only — no source paths.** The assemble
 subworkflow passes the three source stores on the command line, one `-i` per
