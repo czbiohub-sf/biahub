@@ -138,8 +138,8 @@ def test_project_focus_per_fov_takes_the_median_plane(plate, tmp_path, monkeypat
     assert zattrs["biahub-project"]["focus"] == {
         "channel": "Phase3D",
         "per": "fov",
-        "focus_z": 2,
-        "focus_z_per_t": [1, 6, 2],
+        "z": 2,
+        "z_per_t": [1, 6, 2],
     }
 
 
@@ -166,8 +166,8 @@ def test_project_focus_per_timepoint_follows_the_plane(plate, tmp_path, monkeypa
     for t, plane in enumerate(planes):
         assert np.array_equal(data[t, 0, 0], source[t, 0, plane - 1 : plane + 2].max(axis=0))
         assert np.array_equal(data[t, 1, 0], source[t, 2, plane])
-    assert zattrs["biahub-project"]["focus"]["focus_z"] is None
-    assert zattrs["biahub-project"]["focus"]["focus_z_per_t"] == planes
+    assert zattrs["biahub-project"]["focus"]["z"] is None
+    assert zattrs["biahub-project"]["focus"]["z_per_t"] == planes
 
 
 def test_project_focus_channel_need_not_be_an_output(plate, tmp_path, monkeypatch):

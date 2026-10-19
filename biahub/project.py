@@ -270,8 +270,8 @@ def _project_position(
             record["focus"] = {
                 "channel": settings.focus.channel,
                 "per": settings.focus.per,
-                "focus_z": focus_z if settings.focus.per == "fov" else None,
-                "focus_z_per_t": focus_per_t.tolist(),
+                "z": focus_z if settings.focus.per == "fov" else None,
+                "z_per_t": focus_per_t.tolist(),
             }
             output_dataset.zattrs[PROVENANCE_KEY] = record
 
