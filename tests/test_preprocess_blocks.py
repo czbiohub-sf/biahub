@@ -186,3 +186,26 @@ def test_mask_blocks_are_refused_for_methods_that_cannot_use_them(method, tmp_pa
             method=method,
             preprocess=[{"mask_circle": {"target": ["reference"], "radius": 0.9}}],
         )
+
+
+@pytest.mark.parametrize(
+    "ants, message",
+    [
+        # what #402 wrote into every resolved ANTs config, even with all defaults
+        ({"sobel_filter": False, "crop": False, "clip": False}, "remove them"),
+        ({"sobel_filter": True}, "- sobel: {}"),
+        ({"clip": True}, "- clip_percentiles: {}"),
+        ({"ref_mask_radius": 0.9, "crop": True}, "radius: 0.9"),
+        ({"crop": True}, "mask_box"),
+    ],
+)
+def test_the_old_ants_fields_point_to_preprocess_blocks(ants, message):
+    from biahub.settings import EstimateTransformSettings
+
+    with pytest.raises(ValidationError, match=message):
+        EstimateTransformSettings(
+            moving={"channel": "GFP"},
+            reference={"frame": "cross", "channel": "Phase3D"},
+            method="ants",
+            ants=ants,
+        )

@@ -477,6 +477,40 @@ class AntsRegistrationSettings(MyBaseModel):
     smoothing) uses `biahub.registration.methods.ants.DEFAULT_ANTS_KWARGS`.
     """
 
+    @model_validator(mode="before")
+    @classmethod
+    def point_old_fields_to_preprocess(cls, data):
+        # The fields this block had before preprocess blocks; every resolved config of
+        # that version holds them, even with all defaults.
+        if not isinstance(data, dict):
+            return data
+        old = [k for k in ("sobel_filter", "crop", "ref_mask_radius", "clip") if k in data]
+        if not old:
+            return data
+        blocks, notes = [], []
+        if data.get("clip"):
+            blocks.append("- clip_percentiles: {}")
+            notes.append(
+                "clip_percentiles clips each volume to its own 1st-99.5th percentiles, "
+                "not the old fixed limits"
+            )
+        if data.get("sobel_filter"):
+            blocks.append("- sobel: {}")
+        # the old mask was applied only when cropping
+        if data.get("crop") and data.get("ref_mask_radius") is not None:
+            blocks.append(
+                f"- mask_circle: {{target: [reference], radius: {data['ref_mask_radius']}}}"
+            )
+        if data.get("crop"):
+            notes.append(
+                "crop is gone: ANTs no longer warps the moving volume first, so there is no "
+                "empty border to crop; to use only part of the field, add a mask_box block"
+            )
+        message = f"ants {old} are no longer settings: remove them"
+        if blocks:
+            message += "; under preprocess:, write " + ", ".join(blocks)
+        raise ValueError(". ".join([message, *notes]))
+
 
 class ManualSettings(MyBaseModel):
     """Manual registration in napari, on the one timepoint given by `time_indices`."""
