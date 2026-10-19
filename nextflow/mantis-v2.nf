@@ -440,13 +440,15 @@ workflow {
     // ----- Cleanup of intermediates (--cleanup_intermediates) ---------------
     // Once the LAST step has finished, delete what only existed to feed the
     // assembled plate: the flat-field, deskew, reconstruct and virtual-stain step
-    // directories (store, slurm_output/ and .iohub-progress/ alike). Beside the
-    // final stores, delete what only served the run: slurm_output/ (submitit
-    // placeholders and a pointer README; the real logs are in
-    // nextflow/slurm_output/) and the assembled store's .iohub-progress/ resume
-    // markers, which left behind would make concatenate skip every write unit
-    // of a later run into this directory, keeping data built from the old
-    // intermediates. Tracking writes no resume markers.
+    // directories (store, slurm_output/ and .iohub-progress/ alike). The
+    // assembled and projected plates and the tracking store are DELIVERABLES and
+    // are never targets. Beside them, delete only what served the run:
+    // slurm_output/ (submitit placeholders and a pointer README; the real logs
+    // are in nextflow/slurm_output/) and the assembled and projected stores'
+    // .iohub-progress/ resume markers, which left behind would make concatenate
+    // or project skip every write unit of a later run into this directory,
+    // keeping data built from the old intermediates. Tracking writes no resume
+    // markers.
     //
     // What was removed is appended to nextflow/intermediates_cleaned.txt rather
     // than logged. Nextflow's `cleanup`, switched on above, empties the work
