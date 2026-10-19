@@ -13,7 +13,7 @@ import numpy as np
 
 from skimage import filters
 
-from biahub.registration.metrics import SOBEL_FOOTPRINT
+from biahub.registration.metrics import SOBEL_FOOTPRINT, _away_from_padding
 from biahub.settings import (
     MASK_BLOCKS,
     ClipPercentiles,
@@ -30,18 +30,25 @@ def apply_image_blocks(
     """Return `volume` (the `which` one: "moving" or "reference") after its image blocks.
 
     `where` (the score's overlap) limits the voxels a block measures, e.g. the clip
-    percentiles, so empty padding does not count; the whole volume is still changed.
+    percentiles, so empty padding does not count -- nor the band an earlier filter drew
+    along its edge; the whole volume is still changed.
     """
     out = np.asarray(volume, dtype=np.float32)
+    reach = 0  # how far the filters so far reach from outside `where`
     for block in blocks:
         if which not in block.target or isinstance(block, MASK_BLOCKS):
             continue
         if isinstance(block, ClipPercentiles):
-            sample = out if where is None else out[where]
+            sample = out
+            if where is not None:
+                inside = _away_from_padding(where, reach)
+                # a thin overlap left with nothing: measure the whole overlap
+                sample = out[inside if inside.any() else where]
             low, high = np.nanpercentile(sample, [block.low, block.high])
             out = np.clip(out, low, high)
         elif isinstance(block, Sobel):
             out = filters.sobel(out).astype(np.float32)
+            reach += SOBEL_FOOTPRINT
         else:
             raise TypeError(f"no image operation for {type(block).__name__}")
     return out

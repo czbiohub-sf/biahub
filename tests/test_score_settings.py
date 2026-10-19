@@ -234,3 +234,24 @@ def test_the_score_margin_is_the_reach_on_the_most_filtered_volume(blocks, footp
     assert blocks_footprint(
         _settings("ants", score={"preprocess": blocks}).score.preprocess
     ) == (footprint)
+
+
+def test_a_clip_after_a_filter_does_not_sample_the_filters_padding_edge():
+    # After a sobel block the voxels by the padding hold an artificial edge; clip
+    # percentiles taken over them clipped the warped volume differently from the reference.
+    from biahub.registration.engine import _score_fn
+    from tests.test_registration_estimators import _synthetic_blob_volume
+
+    rng = np.random.default_rng(9)
+    ref = 0.02 * _synthetic_blob_volume(rng, (24, 40, 40)) + 250.0
+    score = _score_fn(
+        _settings(
+            "ants",
+            score={
+                "preprocess": [{"sobel": {}}, {"clip_percentiles": {"low": 1, "high": 90}}]
+            },
+        )
+    )
+    for dz in (2, 8):
+        mov = ndi_shift(ref, (dz, 0, 0), order=0, mode="constant", cval=0.0)
+        assert score(Transform.from_translation([-dz, 0.0, 0.0]), mov, ref) > 0.9999
