@@ -135,7 +135,10 @@ def _away_from_padding(mask: np.ndarray, footprint: int) -> np.ndarray:
     """
     if footprint <= 0:
         return mask
-    return binary_erosion(mask, iterations=footprint, border_value=1)
+    # all 26 neighbours: a 3x3x3 filter reaches diagonally too
+    return binary_erosion(
+        mask, structure=np.ones((3, 3, 3), dtype=bool), iterations=footprint, border_value=1
+    )
 
 
 def _footprint(prepare, *, sobel: bool = False) -> int:

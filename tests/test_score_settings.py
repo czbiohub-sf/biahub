@@ -116,6 +116,24 @@ def test_score_blocks_do_not_see_the_edge_of_the_empty_padding():
     assert edges > 0.99
 
 
+def test_the_padding_margin_covers_diagonal_neighbours():
+    # Sobel reaches the 26 neighbours of a voxel; a margin of face neighbours only left
+    # voxels by a rotated padding edge in the score.
+    from skimage import filters
+
+    from biahub.registration.metrics import SOBEL_FOOTPRINT, _away_from_padding
+
+    flat = np.full((16, 48, 48), 100.0, dtype=np.float32)
+    angle = np.deg2rad(10)
+    matrix = np.eye(4)
+    matrix[1:3, 1:3] = [[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]]
+    matrix[1:3, 3] = [4.0, -3.0]
+    warped = Transform(matrix).apply(flat, reference=flat, order=0)
+    kept = _away_from_padding(warped != 0, SOBEL_FOOTPRINT)
+    assert kept.any()
+    assert np.abs(filters.sobel(warped)[kept]).max() == 0
+
+
 def test_report_metrics_share_one_warp(monkeypatch):
     # Every report metric used to warp the volume again (~100 s each on a 2048 x 2048 pair).
     from biahub.registration import engine
