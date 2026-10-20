@@ -137,7 +137,7 @@ imaging_qc_pipeline = { git = "https://github.com/czbiohub-sf/imaging-qc-pipelin
 # are painted from, so tracks.geff, the labels and the CSV agree after
 # `filter_short_sibling_tracks` (track's min_sibling_length). Repoint at
 # royerlab/ultrack main once #290 merges, and at a release once one contains them.
-ultrack = { git = "https://github.com/ieivanov/ultrack", rev = "81415ae53570b095c11dd62286063e45bf887ca5" }
+ultrack = { git = "https://github.com/ieivanov/ultrack", rev = "69e7589a050b0aa5f84ccda3bdf072f5289f939c" }
 
 # Pin iohub to main at the czbiohub-sf/iohub#486 merge, for
 # create_empty_plate(label_names=...), with which track --init scaffolds the empty

@@ -448,8 +448,8 @@ requires-dist = [
     { name = "torch" },
     { name = "tqdm" },
     { name = "twine", marker = "extra == 'build'" },
-    { name = "ultrack", marker = "extra == 'all'", git = "https://github.com/ieivanov/ultrack?rev=81415ae53570b095c11dd62286063e45bf887ca5" },
-    { name = "ultrack", marker = "extra == 'track'", git = "https://github.com/ieivanov/ultrack?rev=81415ae53570b095c11dd62286063e45bf887ca5" },
+    { name = "ultrack", marker = "extra == 'all'", git = "https://github.com/ieivanov/ultrack?rev=69e7589a050b0aa5f84ccda3bdf072f5289f939c" },
+    { name = "ultrack", marker = "extra == 'track'", git = "https://github.com/ieivanov/ultrack?rev=69e7589a050b0aa5f84ccda3bdf072f5289f939c" },
     { name = "waveorder", git = "https://github.com/mehta-lab/waveorder?rev=8d796509b88bafc46a31b81889f6b8034a9050db" },
     { name = "zensical", marker = "extra == 'doc'", specifier = ">=0.0.32" },
 ]
@@ -6878,7 +6878,7 @@ wheels = [
 [[package]]
 name = "ultrack"
 version = "0.7.3"
-source = { git = "https://github.com/ieivanov/ultrack?rev=81415ae53570b095c11dd62286063e45bf887ca5#81415ae53570b095c11dd62286063e45bf887ca5" }
+source = { git = "https://github.com/ieivanov/ultrack?rev=69e7589a050b0aa5f84ccda3bdf072f5289f939c#69e7589a050b0aa5f84ccda3bdf072f5289f939c" }
 dependencies = [
     { name = "blosc2" },
     { name = "click" },
