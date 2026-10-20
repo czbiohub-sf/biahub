@@ -487,6 +487,41 @@ def _solve_tracksdata(labels: np.ndarray, config: TracksdataConfig, pixel_size: 
     return graph
 
 
+def _merge_single_children(
+    tracks: pd.DataFrame, labels: np.ndarray
+) -> tuple[pd.DataFrame, np.ndarray]:
+    """Merge every track that is its parent's only child into the parent.
+
+    Linking across skipped frames (HOCT's ``max_delta_t``, CTC conversion at gaps)
+    splits one track into parent -> one child. ultrack's tables, and the sibling filter
+    built on them, allow only 0 or 2 children, so the child takes its parent's id in the
+    tracks and the labels; chains collapse to their first track.
+    """
+    linked = tracks[tracks.parent_track_id != -1]
+    kids = linked.groupby("parent_track_id").track_id.unique()
+    into = {int(k[0]): int(parent) for parent, k in kids.items() if len(k) == 1}
+    if not into:
+        return tracks, labels
+
+    def root(track_id: int) -> int:
+        while track_id in into:
+            track_id = into[track_id]
+        return track_id
+
+    original_parent = tracks.groupby("track_id").parent_track_id.first().astype(int)
+    tracks = tracks.copy()
+    tracks["track_id"] = tracks.track_id.map(lambda k: root(int(k)))
+    tracks["parent_track_id"] = tracks.track_id.map(
+        lambda k: -1 if original_parent[k] == -1 else root(int(original_parent[k]))
+    )
+    lut = np.arange(int(labels.max()) + 1, dtype=labels.dtype)
+    for child in into:
+        if child < len(lut):
+            lut[child] = root(child)
+    tracks = tracks.sort_values(["track_id", "t"]).reset_index(drop=True)
+    return tracks, lut[labels]
+
+
 def _solution_to_tracks(graph, shape: tuple[int, ...]) -> tuple[np.ndarray, pd.DataFrame]:
     """Convert a solved tracksdata graph to labels (value = track_id) and ultrack-like tracks.
 
@@ -512,7 +547,8 @@ def _solution_to_tracks(graph, shape: tuple[int, ...]) -> tuple[np.ndarray, pd.D
     tracks["parent_track_id"] = tracks.track_id.map(parent_of)
     tracks = tracks.sort_values(["track_id", "t"]).reset_index(drop=True)
     labels = np.stack([np.asarray(labels_view[t]) for t in range(shape[0])])
-    return labels.reshape(shape).astype(np.int32), tracks
+    tracks, labels = _merge_single_children(tracks, labels.reshape(shape).astype(np.int32))
+    return labels, tracks
 
 
 def run_tracksdata(
@@ -612,7 +648,7 @@ def run_trackastra(
     # graph_to_ctc's table is CTC's res_track.txt: label, t1, t2, parent.
     parent = dict(zip(ctc["label"].astype(int), ctc["parent"].astype(int), strict=True))
     tracks["parent_track_id"] = tracks.track_id.map(lambda k: parent.get(int(k), 0) or -1)
-    tracks = tracks.sort_values(["track_id", "t"]).reset_index(drop=True)
+    tracks, tracked = _merge_single_children(tracks, tracked)
     return tracked, tracks
 
 

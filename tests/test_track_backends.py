@@ -320,3 +320,54 @@ def test_track_debug_run_with_a_label_tracker(tracker, dividing_plate, tmp_path,
     with open_ome_zarr(tmp_path / "out.zarr" / "A" / "1" / "0", mode="r") as ds:
         tracked = np.asarray(ds.data[:, 0, 0])
     _check_one_division(tracks, tracked)
+
+
+def test_a_one_child_link_is_merged_into_its_parent():
+    """Linking across a skipped frame splits a track into parent -> one child; the sibling
+    filter (and ultrack's tables) only allow 0 or 2 children."""
+    from biahub.track import _merge_single_children
+
+    labels = np.zeros((5, 16, 16), dtype=np.int32)
+    labels[0:2, 2:6, 2:6] = 1  # track 1, frames 0-1
+    labels[3:5, 2:6, 2:6] = 2  # track 2 continues it after a skipped frame
+    labels[0:5, 10:14, 10:14] = 3  # an unrelated track
+    tracks = pd.DataFrame(
+        {
+            "track_id": [1, 1, 2, 2, 3, 3, 3, 3, 3],
+            "t": [0, 1, 3, 4, 0, 1, 2, 3, 4],
+            "y": [3.5] * 4 + [11.5] * 5,
+            "x": [3.5] * 4 + [11.5] * 5,
+            "parent_track_id": [-1, -1, 1, 1, -1, -1, -1, -1, -1],
+        }
+    )
+
+    merged, relabeled = _merge_single_children(tracks, labels)
+
+    assert sorted(merged.track_id.unique()) == [1, 3]
+    assert (merged.parent_track_id == -1).all()
+    assert merged[merged.track_id == 1].t.tolist() == [0, 1, 3, 4]
+    assert set(np.unique(relabeled[3:5, 2:6, 2:6])) == {1}
+    assert set(np.unique(relabeled[:, 10:14, 10:14])) == {3}
+
+
+def test_merge_keeps_divisions_and_follows_chains():
+    from biahub.track import _merge_single_children
+
+    labels = np.zeros((4, 8, 8), dtype=np.int32)
+    tracks = pd.DataFrame(
+        {
+            "track_id": [1, 2, 3, 4, 5],
+            "t": [0, 1, 2, 2, 3],
+            "y": [0.0] * 5,
+            "x": [0.0] * 5,
+            # 1 -> 2 (one child), 2 -> 3 and 4 (a division), 4 -> 5 (one child)
+            "parent_track_id": [-1, 1, 2, 2, 4],
+        }
+    )
+
+    merged, _ = _merge_single_children(tracks, labels)
+
+    parents = dict(zip(merged.track_id, merged.parent_track_id, strict=False))
+    assert sorted(merged.track_id.unique()) == [1, 3, 4]
+    assert parents[3] == 1 and parents[4] == 1  # the division survives, on the merged root
+    assert merged[merged.track_id == 4].t.tolist() == [2, 3]
