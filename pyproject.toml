@@ -51,9 +51,12 @@ dependencies = [
 [project.optional-dependencies]
 segment = ["cellpose>=4.0.1"]
 
-# Deliberately CPU-only. ultrack has an optional GPU path when cupy and cucim
-# are installed, but it offers no speedup in tracking in our use cases.
-track = ["ultrack>=0.8"]
+# The trackers `biahub track` can select with `tracker:`: ultrack (default),
+# tracksdata (ILP on fixed labels) and HOCT (learned edge scores + ILP). ultrack is
+# deliberately CPU-only: its optional cupy/cucim GPU path offers no speedup in our use
+# cases. HOCT brings torch and pins gurobipy<13; the ILPs use Gurobi when licensed,
+# otherwise SCIP.
+track = ["ultrack>=0.8", "tracksdata", "hoct>=0.3"]
 
 # PyQt6>=6.10 does not provide wheels
 gui = ["napari[pyqt6]", "PyQt6<6.10", "napari-animation"]
@@ -131,6 +134,10 @@ imaging_qc_pipeline = { git = "https://github.com/czbiohub-sf/imaging-qc-pipelin
 # plate's init). Drop this back to a PyPI floor once iohub cuts a release
 # containing all three.
 iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "d1f9e89294529d365719cf87a9b29622ca77a992" }
+
+# tracksdata has no stable release yet (0.1.0 release candidates); pin the commit the
+# A549 benchmark used.
+tracksdata = { git = "https://github.com/royerlab/tracksdata", rev = "e13cf379b5127deeb8301ce56410fda35b5a3cf9" }
 
 # Pin ultrack to main at the royerlab/ultrack#289 merge, which stops create_zarr
 # from deleting and then leaking its temporary store (the default store behind
