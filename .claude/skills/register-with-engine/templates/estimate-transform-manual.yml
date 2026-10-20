@@ -1,0 +1,56 @@
+# biahub estimate-transform -- manual registration: pick matching points in napari on one
+# timepoint (time_indices), applied to the whole series. Interactive: run it with the plain
+# CLI (templates/run_estimate_transform.sh) in a session with a display, not through Nextflow;
+# then apply its file, or refine it with ants: copy its matrix into the ants config's
+# transform.seed with seed_direction: forward (the direction transforms files store).
+#   manual.affine_90degree_rotation / affine_fliplr -- pre-orient the moving volume so the
+#                                points are easy to find (mantis light-sheet: see the seed below)
+#   transform.seed            -- shown as the starting overlay; the example is the mantis
+#                                light-sheet -> label-free geometry (inverse direction)
+moving:
+  channel: <moving channel>
+reference:
+  frame: cross
+  channel: <reference channel>
+method: manual
+manual:
+  affine_90degree_rotation: 0
+  affine_fliplr: false
+transform:
+  type: euclidean
+  seed:
+  - - 1
+    - 0
+    - 0
+    - 0
+  - - 0
+    - 0
+    - -1.288
+    - 1960
+  - - 0
+    - 1.288
+    - 0
+    - -460
+  - - 0.0
+    - 0.0
+    - 0.0
+    - 1.0
+  seed_direction: inverse
+  seed_from_shapes: false
+time_indices: 0
+fallback:
+  flag:
+    k_mad: 2.0
+    floor: 0.8
+    hard_fail: 0.4
+  repair:
+    candidates:
+    - t-1
+    - t+1
+    - consensus
+    - seed
+    consensus_threshold: 0.75
+    consensus_min_good: 5
+    max_timepoints: null
+    polish_rounds: 3
+verbose: true

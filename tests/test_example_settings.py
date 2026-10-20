@@ -1,9 +1,9 @@
+import importlib.util
 import inspect
 import re
 
 from pathlib import Path
 
-import numpy as np
 import pytest
 import yaml
 
@@ -13,15 +13,14 @@ from biahub.settings import (
     CharacterizeSettings,
     ConcatenateSettings,
     DeskewSettings,
-    EstimateRegistrationSettings,
-    EstimateStabilizationSettings,
+    EstimateTransformSettings,
     FlatFieldCorrectionSettings,
     ProcessingImportFuncSettings,
-    RegistrationSettings,
+    ProjectionSettings,
     SegmentationSettings,
-    StabilizationSettings,
     StitchSettings,
     TrackingSettings,
+    TransformSettings,
 )
 
 settings_files_dir = (Path(__file__) / "../../settings").resolve()
@@ -32,28 +31,19 @@ example_settings_params = [
     ("example_concatenate_settings_organelle_dynamics.yml", ConcatenateSettings),
     ("example_concatenate_settings.yml", ConcatenateSettings),
     ("example_deskew_settings.yml", DeskewSettings),
-    ("example_estimate_registration_settings_ants.yml", EstimateRegistrationSettings),
-    ("example_estimate_registration_settings_beads.yml", EstimateRegistrationSettings),
-    ("example_estimate_registration_settings_manual.yml", EstimateRegistrationSettings),
-    ("example_estimate_registration_settings.yml", EstimateRegistrationSettings),
+    ("example_estimate_transform_settings.yml", EstimateTransformSettings),
+    ("example_estimate_transform_settings_ants.yml", EstimateTransformSettings),
+    ("example_estimate_transform_settings_manual.yml", EstimateTransformSettings),
+    ("example_estimate_transform_settings_stabilization_pcc.yml", EstimateTransformSettings),
     (
-        "example_estimate_stabilization_settings_xy_focus-finding.yml",
-        EstimateStabilizationSettings,
+        "example_estimate_transform_settings_stabilization_focus_finding.yml",
+        EstimateTransformSettings,
     ),
-    ("example_estimate_stabilization_settings_xyz_beads.yml", EstimateStabilizationSettings),
-    (
-        "example_estimate_stabilization_settings_xyz_focus-finding.yml",
-        EstimateStabilizationSettings,
-    ),
-    ("example_estimate_stabilization_settings_xyz_pcc.yml", EstimateStabilizationSettings),
-    (
-        "example_estimate_stabilization_settings_z_focus-finding.yml",
-        EstimateStabilizationSettings,
-    ),
+    ("example_transform_settings.yml", TransformSettings),
+    ("example_transform_settings_stabilization.yml", TransformSettings),
     ("example_process_with_config_settings.yml", ProcessingImportFuncSettings),
-    ("example_registration_settings.yml", RegistrationSettings),
+    ("example_project_settings.yml", ProjectionSettings),
     ("example_segmentation_settings.yml", SegmentationSettings),
-    ("example_stabilize_timelapse_settings.yml", StabilizationSettings),
     ("example_stitch_settings.yml", StitchSettings),
     ("example_track_settings.yml", TrackingSettings),
     ("example_flat_field_settings.yml", FlatFieldCorrectionSettings),
@@ -72,12 +62,10 @@ try:
 except ImportError:
     cellpose_available = False
 
-try:
-    import cytoland  # noqa: F401
-
-    cytoland_available = True
-except ImportError:
-    cytoland_available = False
+# Only check that cytoland is installed; importing it costs ~40 s (lightning,
+# torchmetrics, transformers) and would be paid at collection by every pytest
+# run. The two virtual-stain tests below import it lazily when they execute.
+cytoland_available = importlib.util.find_spec("cytoland") is not None
 
 
 def test_all_example_settings_tested():
@@ -168,86 +156,34 @@ def test_deskew_settings():
         DeskewSettings(pixel_size_um=0.116, ls_angle_deg=36, scan_step_um=None)
 
 
-def test_register_settings():
-    # Test extra parameter
-    with pytest.raises(ValidationError):
-        RegistrationSettings(
-            source_channel_index=0,
-            target_channel_index=0,
-            affine_transform_zyx=np.identity(4).tolist(),
-            typo_param="test",
-        )
-
-    # Test wrong output shape size
-    with pytest.raises(ValidationError):
-        RegistrationSettings(
-            source_channel_index=0,
-            target_channel_index=0,
-            affine_transform_zyx=np.identity(4).tolist(),
-            typo_param="test",
-        )
-
-    # Test wrong matrix shape
-    with pytest.raises(ValidationError):
-        RegistrationSettings(
-            source_channel_index=0,
-            target_channel_index=0,
-            affine_transform_zyx=np.identity(5).tolist(),
-            typo_param="test",
-        )
-
-
-def test_example_register_settings(example_register_settings):
-    _, settings = example_register_settings
-    RegistrationSettings(**settings)
-
-
-def test_example_stabilize_timelapse_settings(example_stabilize_timelapse_settings):
-    _, settings = example_stabilize_timelapse_settings
-    StabilizationSettings(**settings)
-
-
-def test_example_estimate_registration_settings(example_estimate_registration_settings):
-    _, settings = example_estimate_registration_settings
-    EstimateRegistrationSettings(**settings)
-
-
-def test_ants_settings_cover_estimate_tczyx_reads():
-    """`AntsRegistrationSettings` must expose every field `estimate_tczyx` reads.
-
-    Regression test: the model previously defined only ``sobel_filter`` while
-    ``estimate_tczyx`` also read ``crop``, ``ref_mask_radius`` and ``clip``, so
-    the config-driven ANTs path raised ``AttributeError`` before reaching ANTs.
-    """
-    from biahub.registration.ants import estimate_tczyx
+def test_ants_settings_are_all_consumed_by_the_engine():
+    """Every AntsRegistrationSettings field must be read by AntsEstimator.from_settings
+    (which is what the config-driven ANTs path runs), so a config knob can't be silently
+    ignored."""
+    from biahub.registration.engine import build_estimator
+    from biahub.registration.methods.ants import AntsEstimator
     from biahub.settings import AntsRegistrationSettings
 
-    source = inspect.getsource(estimate_tczyx)
-    read = set(re.findall(r"ants_registration_settings\.(\w+)", source))
-    assert read, "no ants_registration_settings reads found -- update this test"
-
-    missing = read - set(AntsRegistrationSettings.model_fields)
-    assert not missing, (
-        f"AntsRegistrationSettings is missing fields read by estimate_tczyx: {missing}"
+    source = inspect.getsource(AntsEstimator.from_settings) + inspect.getsource(
+        build_estimator
     )
+    read = set(re.findall(r"ants_(?:registration_)?settings\.(\w+)", source))
+    missing = set(AntsRegistrationSettings.model_fields) - read
+    assert not missing, f"AntsRegistrationSettings fields nothing reads: {missing}"
 
 
-def test_ants_settings_defaults_match_preprocess_czyx():
-    """Defaults must agree with ``preprocess_czyx``, which consumes them.
-
-    Config-driven and direct calls should behave identically when the user
-    sets nothing.
-    """
-    from biahub.registration.ants import preprocess_czyx
+def test_ants_settings_defaults_match_preprocess_zyx():
+    """Preprocessing defaults must agree with ``preprocess_zyx``, which consumes them."""
+    from biahub.registration.methods.ants import preprocess_zyx
     from biahub.settings import AntsRegistrationSettings
 
     settings = AntsRegistrationSettings()
-    params = inspect.signature(preprocess_czyx).parameters
+    params = inspect.signature(preprocess_zyx).parameters
     for field in AntsRegistrationSettings.model_fields:
-        assert field in params, f"{field} is not a preprocess_czyx parameter"
+        assert field in params, f"{field} is not a preprocess_zyx parameter"
         assert getattr(settings, field) == params[field].default, (
             f"default mismatch for {field}: settings={getattr(settings, field)} "
-            f"preprocess_czyx={params[field].default}"
+            f"preprocess_zyx={params[field].default}"
         )
 
 
@@ -267,3 +203,57 @@ def test_example_stitch_settings(example_stitch_settings):
     for value in validated_settings.total_translation.values():
         assert len(value) == 3
         assert value[0] == 0.0
+
+
+def test_nextflow_a549_track_config_validates():
+    """The mantis-v2 A549 track config must parse against the current schema."""
+    import yaml
+
+    from biahub.settings import TrackingSettings
+
+    with open("nextflow/configs/a549/track.yml") as f:
+        settings = TrackingSettings(**yaml.safe_load(f))
+    # Track reads the projected plate: 2D, no processing step on the nuclei channel.
+    assert settings.output_mode == "2D"
+    assert settings.input_images[0].channels == {"nuclei_prediction": []}
+    assert settings.cellpose_config.input_channel == "nuclei_prediction"
+
+
+def test_nextflow_a549_project_config_validates():
+    """The A549 projection keeps track's old 60-plane focus window (#418) and mean."""
+    import yaml
+
+    from biahub.settings import ProjectionSettings
+
+    with open("nextflow/configs/a549/project.yml") as f:
+        settings = ProjectionSettings(**yaml.safe_load(f))
+    nuclei = settings.channels["nuclei_prediction"]
+    assert nuclei.method == "mean"
+    assert nuclei.z.center == "focus" and (nuclei.z.below, nuclei.z.above) == (20, 40)
+    # Every channel of a typical A549 assembled plate, in plate order, under the
+    # PRE-rename names project sees inside the pipeline.
+    assert list(settings.channels) == [
+        "BF",
+        "GFP EX488 EM525-45",
+        "mCherry EX561 EM600-37",
+        "Phase3D",
+        "nuclei_prediction",
+        "membrane_prediction",
+    ]
+    assert settings.channels["Phase3D"].method == "slice"
+    # One-frame 256 x 256 chunks (the assembled/track grid), 16-timepoint full-frame shards.
+    assert settings.chunks_czyx == [1, 1, 256, 256]
+    assert settings.shards_ratio == [16, 1, 1, 7, 5]
+    assert settings.channels["GFP EX488 EM525-45"].method == "max"
+    assert settings.focus.channel == "Phase3D" and settings.focus.per == "timepoint"
+
+
+def test_skill_config_templates_load():
+    # Skill templates are copied into production runs; keep them on the current schema.
+    from biahub.settings import load_estimate_transform_settings
+
+    root = Path(__file__).resolve().parents[1] / ".claude" / "skills"
+    templates = sorted(root.glob("*/templates/estimate-transform*.yml"))
+    assert templates
+    for template in templates:
+        load_estimate_transform_settings(template)

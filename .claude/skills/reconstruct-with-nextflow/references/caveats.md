@@ -77,11 +77,15 @@ copy is group-writable like every other file the skill places in `<OUTPUT>`
 `biahub virtual-stain` names outputs verbatim from `target_channel`, but the
 rest of biahub keys off the `_prediction` suffix.
 
-**⚠ Ordering.** tracking runs *inside* the pipeline and reads the assembled
-plate, so **track sees the pre-rename names**. The shipped templates avoid the
-trap by putting the suffix directly in the VS `target_channel`
-(`nuclei_prediction`/`membrane_prediction`), making the rename a no-op for
-those channels.
+**⚠ Ordering.** project and tracking run *inside* the pipeline and read the
+assembled plate, so **project.yml and track.yml see the pre-rename names**
+(`project.yml`'s keys are `BF`, `GFP EX488 EM525-45`, ...). The
+shipped templates avoid the trap for the predictions by putting the suffix
+directly in the VS `target_channel` (`nuclei_prediction`/`membrane_prediction`),
+making the rename a no-op for those channels. The projected plate inherits the
+pre-rename names too: it lives beside the assembled plate as
+`<N>-assemble/<DATASET>_proj.zarr`, so run `rename_channels.py` a second time
+from the same directory with `DATASET=<DATASET>_proj`.
 
 **Stopgap:** PRs [#260](https://github.com/czbiohub-sf/biahub/pull/260) and
 [#250](https://github.com/czbiohub-sf/biahub/pull/250) carry a `rename-channels`
@@ -97,10 +101,15 @@ lateral pixel size of the *input* store (no longer read from the zarr);
 `scan_step_um` comes from the acquisition — read
 `/hpc/instruments/cm.mantis/<DATASET>/config.yaml`, do not assume 0.150.
 
-**`reconstruct.yml` — `input_channel_names`.** Must name the brightfield
-channel exactly as it appears in the deskewed store (`["BF - Oblique"]`
-today). A mismatch fails at `compute_transfer_function`, after flat-field and
-deskew have already burned hours.
+**`reconstruct.yml` — `input_channel_names`, and `project.yml`'s brightfield
+key.** Must name the brightfield channel exactly as it appears in the deskewed
+store. The templates say `BF` (current acquisitions); older acquisitions name it
+`BF - Oblique` (e.g. `2026_08_11_A549_SEC61B_DENV`, so a v9 rerun of it too).
+Read the raw store's channel names and, when it says `BF - Oblique`, suggest
+that edit in **both** `reconstruct.yml` and `project.yml` — §5a's check flags
+the project.yml side; a reconstruct.yml mismatch fails at
+`compute_transfer_function`, after flat-field and deskew have already burned
+hours.
 
 **`reconstruct.yml` — `phase.transfer_function.{yx,z}_pixel_size`.** These are
 the voxel sizes of the *deskewed* store, so they follow from `deskew.yml`:
@@ -135,35 +144,53 @@ per-position — leave it out. `target_channel` carries the `_prediction` suffix
 deliberately (§2).
 
 **`track.yml` — schema.** `TrackingSettings` forbids extra keys. Current
-fields: `output_mode`, `z_slicing`, `target_channel`, `fov`, `input_images`,
-`blank_frames_path`, `segmentation_method`, `cellpose_config`,
-`tracking_config`. Old configs under `/hpc/projects/tlg2_mantis/` still carry
-rejected fields — migrate:
+fields: `output_mode`, `target_channel`, `fov`, `input_images`,
+`blank_frames_path`, `segmentation_method`, `min_sibling_length`,
+`cellpose_config`, `tracking_config`. Track no longer selects or projects
+Z-planes: it reads the **projected** (Z=1) plate that `biahub project` writes
+from `project.yml`, writes its labels and tracks into that plate, and a 3D input
+with `output_mode: 2D` is an error. Old configs under
+`/hpc/projects/tlg2_mantis/` still carry rejected fields — migrate:
 
 ```
-mode                            -> output_mode
-z_range + focus_config.z_window -> z_slicing.{method, window_size, focus_channel}
-output_ome_zarr_version         -> (delete: labels take the assembled store's version)
+mode                                  -> output_mode
+z_slicing / z_range / focus_config    -> project.yml: channels.<name>.z {center: focus, below, above}, focus.channel
+input_images np.mean step             -> project.yml: channels.<name>.method: mean
+output_ome_zarr_version               -> (delete: labels take the projected plate's version)
 ```
 
-(`focus_config`'s `NA_det`/`lambda_ill`/`pixel_size` have no equivalent.)
-`target_channel` and `cellpose_config.input_channel` must match **pre-rename**
-names in the **assembled** plate (§2, §5). `target_channel` also names the
-label image tracking writes into each position, `labels/<target_channel>` (no
-`_labels` suffix), so `qc.yaml`'s `instance_count.label` and its anchor
-`channels:` entry must equal it — SKILL.md §5a checks both couplings before
-launch.
+(`focus_config`'s `NA_det`/`lambda_ill` are `project.yml`'s `focus.na_det` /
+`focus.lambda_ill`; the pixel size comes from the store.) `target_channel` and
+`cellpose_config.input_channel` must match channels `project.yml` writes, which
+carry the **pre-rename** names of the **assembled** plate (§2, §5).
+`target_channel` also names the label image tracking writes into each position
+of the projected plate, `labels/<target_channel>` (no `_labels` suffix), so
+`qc_project.yaml`'s `instance_count.label` and its anchor `channels:` entry must
+equal it — SKILL.md §5a checks these couplings before launch.
 
 **QC configs reject `upstream_qc_dir`.** The imaging-qc pin (f5ae656) dropped
 the key; a `qc.yaml` copied from an older run that still carries
 `upstream_qc_dir: null` fails at `plan-stage`. Delete the line.
 
-**`z_slicing.focus_channel` resolves against `input_images`, not the store.**
-`apply_focus_slicing` raises if the focus channel is not among the loaded
-channels, even when it exists in the plate — a template declaring
-`focus_channel: Phase3D` while loading only `nuclei_prediction` failed all
-positions after every other step had succeeded. Both shipped templates use
-`method: all` (falls back to the first loaded channel), the safe default.
+**`project.yml` — every channel name must be in the assembled plate, and every
+assembled channel should be in `project.yml`.** `biahub project --init`
+resolves every listed channel (and `focus.channel`) against the plate and fails
+there, in the init phase, rather than after every other step; a plate channel
+the config does not list is dropped with a warning. The pipeline's intention is
+that every assembled channel is projected unless the user decided otherwise, so
+SKILL.md §5a's check prints the unlisted ones and the pre-run plan asks about
+them. The A549 template lists a typical plate (brightfield, two raw
+fluorescence channels, Phase3D, the two predictions) under the **PRE-rename
+names**, because project runs inside the pipeline before the §2 rename: the
+brightfield key is `BF`, the same name as `reconstruct.yml`'s
+`input_channel_names` (edit both to `BF - Oblique` for the older acquisitions,
+see above), and **the fluorescence names are the camera/filter strings**
+(`GFP EX488 EM525-45`, `mCherry EX561 EM600-37` on the reference datasets, one
+or two markers per dataset) — edit or remove them to match the raw store.
+Label-free channels take the
+one in-focus plane, fluorescence the full-stack max, the virtual-stain
+predictions the mean over the 60-plane focus window; the focus is found per
+timepoint on `Phase3D`.
 
 **`concatenate.yml` holds parameters only — no source paths.** The assemble
 subworkflow passes the three source stores on the command line, one `-i` per
@@ -180,8 +207,9 @@ assembled store, and track's parameters (cellpose `diameter`, `min_area`/
 `max_area`, linking `max_distance`) are tuned for A549 cells and do not
 transfer. So simply do not run it:
 
-- Omit `--track_config` — delete that line from the `nextflow run` call in
-  the run script. A step runs only if its config
+- Omit `--track_config` — delete that line, and `--project_config` and
+  `--qc_project_config` with it, from the `nextflow run` call in the run
+  script. A step runs only if its config
   is passed ([biahub#306](https://github.com/czbiohub-sf/biahub/issues/306),
   fixed). Delete rather than comment: `#` inside a backslash-continued command
   drops every flag below it, `-resume` included.
@@ -227,7 +255,11 @@ recoverable per (t, c) unit.
 shape — changing T without recomputing ZYX silently changes the spatial extent.
 Larger T shards mean a larger RAM request and a worse blast radius when one
 tears; leave the T ratio alone without a measured reason. Channels cannot be
-sharded — keep C at 1. Auto-sizing is
+sharded — keep C at 1. The same two keys exist in `project.yml`: the A549
+template uses one-frame `256 x 256` chunks (the assembled and tracking grid)
+and `shards_ratio: [16, 1, 1, 7, 5]`, 16-timepoint full-frame shards; its YX
+entries are `ceil(Y/256), ceil(X/256)` and must be recomputed for a different
+frame size, exactly as for `concatenate.yml`. Auto-sizing is
 [iohub#458](https://github.com/czbiohub-sf/iohub/issues/458); most of this
 section goes away when it lands.
 

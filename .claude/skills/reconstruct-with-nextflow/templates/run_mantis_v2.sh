@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
 # Run the mantis-v2 reconstruction pipeline (biahub nextflow/mantis-v2.nf):
-#   flat-field -> deskew -> reconstruct -> virtual-stain -> assemble -> track -> QC
+#   flat-field -> deskew -> reconstruct -> virtual-stain -> assemble -> project -> track -> QC
 #
-# The last three are OPTIONAL: a step runs only if its config is passed. A549
-# runs assemble + track + QC; neuromast runs assemble + QC and no tracking. See
-# the note above the `nextflow run` call at the bottom.
+# The last four are OPTIONAL: a step runs only if its config is passed. A549
+# runs assemble + project + track + QC; neuromast runs assemble + QC and no
+# projection or tracking. See the note above the `nextflow run` call at the bottom.
 #
 # Copy this into the project output directory and fill in the five variables
 # below. Keep it there: it is the run's provenance record of the exact command.
 #
 # --output is the project root, so each step writes a sibling directory:
 #   0-flatfield/ 1-deskew/ 2-reconstruct/ 3-virtual-stain/ 4-assemble/
-# Tracking has no directory: it writes labels/<target_channel>, tracks.geff and
-# a tracks CSV into each position of 4-assemble/<dataset>.zarr.
+# Project writes its plate beside the assembled one as 4-assemble/<DATASET>_proj.zarr,
+# and tracking writes labels/<target_channel>, tracks.geff and a tracks CSV into
+# each position of that plate; neither has a directory of its own.
 # The number is the step's POSITION among the steps this run performs that
 # write a directory, so a run that skips a step shifts everything after it down.
 # The work dir defaults to <output>/nextflow/work; override with `-work-dir`.
@@ -191,14 +192,15 @@ fi
 # Harmless when unset already, and nothing in the pipeline reads it.
 unset CLAUDECODE
 
-# The three config flags from --concatenate_config down are the OPTIONAL steps:
+# The five config flags from --concatenate_config down are the OPTIONAL steps:
 # a step runs only if its config is passed (biahub#306). Defaults by family —
 #
-#   A549 / cell-line        assemble + track + QC   (all three, as written)
-#   zebrafish / neuromast   assemble + QC           (delete --track_config)
+#   A549 / cell-line        assemble + project + track + QC   (all five, as written)
+#   zebrafish / neuromast   assemble + QC   (delete --project_config, --track_config
+#                                            and --qc_project_config)
 #
-# --qc_track_config was removed: qc.yaml counts the labels tracking writes into
-# the assembled store, so passing it errors at launch.
+# --qc_track_config was removed: qc_project.yaml counts the labels tracking writes
+# into the projected plate, so passing the old flag errors at launch.
 #
 # TO SKIP A STEP, DELETE ITS LINE. Do not comment it out: `#` inside a
 # backslash-continued command does not start a comment line — the continuation
@@ -216,8 +218,10 @@ nextflow run "${PIPELINE}" \
     --reconstruct_config   "${CONFIGS}/reconstruct.yml" \
     --virtual_stain_config "${CONFIGS}/virtual_stain.yml" \
     --concatenate_config   "${CONFIGS}/concatenate.yml" \
+    --project_config       "${CONFIGS}/project.yml" \
     --track_config         "${CONFIGS}/track.yml" \
     --qc_config            "${CONFIGS}/qc.yaml" \
+    --qc_project_config    "${CONFIGS}/qc_project.yaml" \
     --cleanup_intermediates "${CLEANUP_INTERMEDIATES}" \
     -resume \
     "$@"

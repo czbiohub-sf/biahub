@@ -10,16 +10,8 @@ from click.testing import CliRunner
 from iohub.ngff import open_ome_zarr
 
 from biahub.cli.main import cli
-from biahub.settings import TrackingSettings, ZSlicing
-from biahub.track import (
-    _init_labels,
-    _tracked_shape,
-    label_chunks_and_shards,
-    resolve_z_slice,
-    track,
-    tracked_z_window,
-    write_tracking_labels,
-)
+from biahub.settings import TrackingSettings
+from biahub.track import _init_labels, label_chunks_and_shards, track, write_tracking_labels
 
 LABEL = "nuclei_prediction"
 
@@ -44,21 +36,26 @@ def example_tracking_plate(tmp_path):
         channel_names=["nuclei_prediction", "membrane_prediction"],
     )
 
+    # Deterministic spots: on random data ultrack occasionally finds no solution, and
+    # the failing in-process job drops submitit into pdb (which pytest reports as a
+    # read from stdin).
+    np.random.seed(0)
     for row, col, fov in position_list:
         position = plate_dataset.create_position(row, col, fov)
-        # Shape: (T, C, Z, Y, X) = (5, 2, 3, 64, 64)
-        data = np.random.uniform(0.1, 0.3, size=(5, 2, 3, 64, 64)).astype(np.float32)
+        # A projected (Z=1) plate, what 2D tracking reads: (T, C, Z, Y, X) = (5, 2, 1, 64, 64)
+        data = np.random.uniform(0.1, 0.3, size=(5, 2, 1, 64, 64)).astype(np.float32)
 
-        # Add some bright nuclei spots to channel 0
+        # Add some bright nuclei spots to channel 0 (11 x 11 px, above the configs'
+        # min_area of 100; a single plane no longer merges spots across Z)
         for t in range(5):
-            for z in range(3):
+            for z in range(1):
                 for _ in range(np.random.randint(3, 6)):
                     y, x = np.random.randint(10, 54, 2)
-                    data[t, 0, z, y - 3 : y + 4, x - 3 : x + 4] = np.random.uniform(0.7, 1.0)
+                    data[t, 0, z, y - 5 : y + 6, x - 5 : x + 6] = np.random.uniform(0.7, 1.0)
 
         # Add some membrane boundaries to channel 1
         for t in range(5):
-            for z in range(3):
+            for z in range(1):
                 for _ in range(np.random.randint(2, 4)):
                     y, x = np.random.randint(15, 49, 2)
                     yy, xx = np.ogrid[:64, :64]
@@ -92,15 +89,15 @@ def example_blank_frames_csv(tmp_path):
     yield csv_path
 
 
-def _assert_tracking_outputs(position_path, z_index):
-    """Labels at z_index only, a valid GEFF linked to them, and the CSV."""
+def _assert_tracking_outputs(position_path):
+    """Labels in the plate's one plane, a valid GEFF linked to them, and the CSV."""
     import geff
 
     with open_ome_zarr(str(position_path), mode="r") as pos:
         labels = pos.get_label(LABEL)["0"][:]
     assert labels.dtype == np.uint32
-    assert labels[:, z_index].any()
-    assert not np.delete(labels, z_index, axis=1).any()
+    assert labels.shape[1] == 1  # the projected (Z=1) plate's Z
+    assert labels.any()
 
     geff_path = position_path / "tracks.geff"
     geff.validate_structure(str(geff_path))
@@ -126,28 +123,13 @@ def _make_tracking_config(plate_path, tmp_path):
     config = {
         "output_mode": "2D",
         "fov": "*/*/*",
-        "z_slicing": {"method": "central"},
         "target_channel": "nuclei_prediction",
         "input_images": [
             {
                 # Primary data source left null -> resolved from the -i input plate.
+                # The plate is projected (Z=1), so the channels need no processing.
                 "path": None,
-                "channels": {
-                    "nuclei_prediction": [
-                        {
-                            "function": "np.mean",
-                            "kwargs": {"axis": 1},
-                            "per_timepoint": False,
-                        },
-                    ],
-                    "membrane_prediction": [
-                        {
-                            "function": "np.mean",
-                            "kwargs": {"axis": 1},
-                            "per_timepoint": False,
-                        },
-                    ],
-                },
+                "channels": {"nuclei_prediction": [], "membrane_prediction": []},
             },
             {
                 "path": None,
@@ -228,9 +210,8 @@ def test_track_cli_local(
         cluster="local",
     )
 
-    # central z_slicing on Z=3 tracks planes [0, 3), so the 2D labels sit at z=1.
     for position in ["A/1/0", "B/1/0", "B/2/0"]:
-        _assert_tracking_outputs(plate_path / position, z_index=1)
+        _assert_tracking_outputs(plate_path / position)
         assert (output_path / position.replace("/", "_")).is_dir()  # Ultrack database
 
 
@@ -267,7 +248,7 @@ def test_track_cli_with_blank_frames(
         cluster="local",
     )
 
-    _assert_tracking_outputs(plate_path / "A" / "1" / "0", z_index=1)
+    _assert_tracking_outputs(plate_path / "A" / "1" / "0")
 
 
 def test_track_cli_invalid_config(tmp_path, monkeypatch):
@@ -305,7 +286,7 @@ def test_track_cli_missing_input_path(tmp_path, example_track_settings, monkeypa
 
 
 def test_track_cli_init_only(tmp_path, example_tracking_plate):
-    """--init creates empty full-Z label images in the -i positions and emits RESOURCES."""
+    """--init creates empty label images (the plate's Z) in the -i positions and emits RESOURCES."""
     plate_path, _ = example_tracking_plate
     config_path = _make_tracking_config(plate_path, tmp_path)
 
@@ -332,7 +313,7 @@ def test_track_cli_init_only(tmp_path, example_tracking_plate):
             assert pos.label_names() == [LABEL]
             assert pos.channel_names == ["nuclei_prediction", "membrane_prediction"]
             label = pos.get_label(LABEL)
-            assert label["0"].shape == (5, 3, 64, 64)
+            assert label["0"].shape == (5, 1, 64, 64)  # the plate's Z
             assert label["0"].dtype == np.uint32
             assert not label["0"][:].any()
             assert [ax.name.lower() for ax in label.axes] == ["t", "z", "y", "x"]
@@ -376,7 +357,7 @@ def test_track_cli_debug_single_position(tmp_path, example_tracking_plate, monke
     result = run()
     assert result.exit_code == 0, result.output
     assert "Tracking complete:" in result.output
-    _assert_tracking_outputs(plate_path / "A" / "1" / "0", z_index=1)
+    _assert_tracking_outputs(plate_path / "A" / "1" / "0")
     # The temporary database was deleted. (ultrack's own temporary arrays go when
     # they are garbage collected, at the latest when the worker process exits.)
     assert not list(temp_dir.glob("biahub-track-*"))
@@ -385,145 +366,53 @@ def test_track_cli_debug_single_position(tmp_path, example_tracking_plate, monke
     # A retry overwrites the same outputs.
     result = run()
     assert result.exit_code == 0, result.output
-    _assert_tracking_outputs(plate_path / "A" / "1" / "0", z_index=1)
+    _assert_tracking_outputs(plate_path / "A" / "1" / "0")
 
 
 # ---------------------------------------------------------------------------
-# Z-slicing resolution
-# ---------------------------------------------------------------------------
-
-
-def test_resolve_z_slice_all():
-    z_slices, n = resolve_z_slice(ZSlicing(method="all"), z_shape=30)
-    assert z_slices == slice(None)
-    assert n == 30
-
-
-def test_resolve_z_slice_central():
-    z_slices, n = resolve_z_slice(ZSlicing(method="central"), z_shape=21)
-    assert n == z_slices.stop - z_slices.start
-    assert n >= 3
-
-
-def test_resolve_z_slice_range():
-    z_slices, n = resolve_z_slice(ZSlicing(method="range", range=(5, 10)), z_shape=30)
-    assert z_slices == slice(5, 10)
-    assert n == 5
-
-
-def test_resolve_z_slice_range_invalid():
-    with pytest.raises(ValueError):
-        resolve_z_slice(ZSlicing(method="range", range=(10, 5)), z_shape=30)
-
-
-def test_resolve_z_slice_focus_loads_full_reports_window():
-    # focus loads the full stack at read time; the count is the fixed window size.
-    z_slices, n = resolve_z_slice(ZSlicing(method="focus", window_size=15), z_shape=30)
-    assert z_slices == slice(None)
-    assert n == 15
-    # window larger than the stack collapses the count to the full depth.
-    _, n = resolve_z_slice(ZSlicing(method="focus", window_size=50), z_shape=30)
-    assert n == 30
-
-
-def test_focus_window_fixed_size_and_shifts_at_edges():
-    from biahub.track import _focus_window
-
-    # centred window of the requested size.
-    assert _focus_window(15, 6, 30, 1 / 3) == (slice(13, 19), 6)
-    # window bigger than the stack collapses to the full range.
-    assert _focus_window(15, 50, 30, 1 / 3) == (slice(0, 30), 30)
-    # a window that would spill past an edge is shifted, not clipped.
-    z_slices, n = _focus_window(29, 6, 30, 0.0)
-    assert n == 6
-    assert 0 <= z_slices.start and z_slices.stop <= 30
-
-
-def test_apply_focus_slicing_uniform_window(monkeypatch):
-    from biahub import track as track_mod
-
-    # Deterministic focus centre so the test doesn't depend on waveorder.
-    monkeypatch.setattr(track_mod, "_median_focus_plane", lambda stack, pixel_size: 15)
-
-    T, Z, Y, X = 4, 30, 8, 8
-    data_dict = {
-        "a": np.arange(T * Z * Y * X).reshape(T, Z, Y, X).astype(float),
-        "b": np.zeros((T, Z, Y, X)),
-    }
-    z = ZSlicing(method="focus", window_size=6, frac_below=1 / 3)
-    out, window = track_mod.apply_focus_slicing(data_dict, z, pixel_size=0.5)
-
-    # Same fixed window applied to every channel (center=15 -> slice(13, 19)).
-    assert window == slice(13, 19)
-    assert out["a"].shape == (T, 6, Y, X)
-    assert out["b"].shape == (T, 6, Y, X)
-    assert np.array_equal(out["a"], data_dict["a"][:, 13:19])
-
-
-def test_zslicing_focus_defaults_window_size():
-    # focus works without an explicit window_size (defaults to 48).
-    z = ZSlicing(method="focus")
-    assert z.window_size == 48
-
-
-def test_zslicing_ignores_irrelevant_fields():
-    # method decides which fields are used; the rest are ignored, not rejected.
-    z_slices, n = resolve_z_slice(
-        ZSlicing(method="all", range=(0, 5), window_size=10), z_shape=30
-    )
-    assert z_slices == slice(None)
-    assert n == 30
-
-
-def test_resolve_z_slice_range_unset_falls_back_to_all():
-    z_slices, n = resolve_z_slice(ZSlicing(method="range"), z_shape=30)
-    assert z_slices == slice(None)
-    assert n == 30
-
-
-# ---------------------------------------------------------------------------
-# Output plate shape matches tracked Z
+# Labels and dimensionality: track neither projects nor selects Z (that is
+# `biahub project`); the label image takes the plate's Z
 # ---------------------------------------------------------------------------
 
 
 def _minimal_settings(**overrides):
     base = {
         "target_channel": "nuclei_prediction",
-        "input_images": [
-            {
-                "path": None,
-                "channels": {
-                    "nuclei_prediction": [{"function": "np.mean", "kwargs": {"axis": 1}}]
-                },
-            }
-        ],
+        "input_images": [{"path": None, "channels": {"nuclei_prediction": []}}],
     }
     base.update(overrides)
     return TrackingSettings(**base)
 
 
-@pytest.mark.parametrize(
-    "output_mode, z_slicing, expected_z",
-    [
-        ("2D", {"method": "central"}, 1),
-        ("3D", {"method": "range", "range": (0, 2)}, 2),
-        # Regression: focus + 3D tracked Z equals the fixed focus window, not the
-        # full stack.
-        ("3D", {"method": "focus", "window_size": 2}, 2),
-    ],
-)
-def test_init_labels_shape(
-    tmp_path, example_tracking_plate, output_mode, z_slicing, expected_z
-):
-    plate_path, _ = example_tracking_plate
-    position_path = plate_path / "A" / "1" / "0"
-    settings = _minimal_settings(output_mode=output_mode, z_slicing=z_slicing)
-
-    assert _tracked_shape(position_path, settings)[2] == expected_z
-    # The label image always spans the image's full Z.
-    _init_labels([position_path], settings)
+def test_init_labels_take_the_input_z(tmp_path, example_tracking_plate, create_custom_plate):
+    """The label image has the plate's Z: one plane for a projected plate, the stack in 3D."""
+    flat_path, _ = example_tracking_plate  # Z=1
+    position_path = flat_path / "A" / "1" / "0"
+    shape = _init_labels([position_path], _minimal_settings())
+    assert shape[2] == 1
     with open_ome_zarr(str(position_path), mode="r") as pos:
-        assert pos.get_label(LABEL)["0"].shape == (5, 3, 64, 64)
+        assert pos.get_label(LABEL)["0"].shape == (5, 1, 64, 64)
+
+    stack_path, _ = create_custom_plate(tmp_path, z_size=3)
+    position_path = stack_path / "A" / "1" / "0"
+    shape = _init_labels([position_path], _minimal_settings(output_mode="3D"))
+    assert shape[2] == 3
+    with open_ome_zarr(str(position_path), mode="r") as pos:
+        assert pos.get_label(LABEL)["0"].shape == (3, 3, 5, 6)
+
+
+@pytest.mark.parametrize(
+    "output_mode, z_size, message",
+    [("2D", 3, "input is 3D.*biahub project"), ("3D", 1, "one Z-plane")],
+)
+def test_init_labels_refuses_a_dimensionality_mismatch(
+    tmp_path, create_custom_plate, output_mode, z_size, message
+):
+    plate_path, _ = create_custom_plate(tmp_path, z_size=z_size)
+    position_path = plate_path / "A" / "1" / "0"
+    with pytest.raises(ValueError, match=message):
+        _init_labels([position_path], _minimal_settings(output_mode=output_mode))
+    assert not (position_path / "labels").exists()
 
 
 def test_init_labels_leaves_existing_labels(tmp_path, example_tracking_plate):
@@ -533,11 +422,11 @@ def test_init_labels_leaves_existing_labels(tmp_path, example_tracking_plate):
 
     _init_labels([position_path], settings)
     with open_ome_zarr(str(position_path), mode="r+") as pos:
-        pos.get_label(LABEL)["0"][0, 1, 0, 0] = 7
+        pos.get_label(LABEL)["0"][0, 0, 0, 0] = 7
         image = pos["0"][:]
     _init_labels([position_path], settings)
     with open_ome_zarr(str(position_path), mode="r") as pos:
-        assert pos.get_label(LABEL)["0"][0, 1, 0, 0] == 7
+        assert pos.get_label(LABEL)["0"][0, 0, 0, 0] == 7
         assert np.array_equal(pos["0"][:], image)
 
 
@@ -548,54 +437,55 @@ def test_label_chunks_and_shards():
     assert shards == (1, 1, 13, 10)
     assert label_chunks_and_shards((67, 86, 4096, 300))[1] == (1, 1, 16, 3)
     # Clamped to small arrays.
-    assert label_chunks_and_shards((5, 3, 64, 64))[0] == (5, 1, 64, 64)
+    assert label_chunks_and_shards((5, 1, 64, 64))[0] == (5, 1, 64, 64)
 
 
-@pytest.mark.parametrize(
-    "read_slice, focus_slice, z_shape, expected",
-    [
-        (slice(None), None, 30, (0, 30)),  # all
-        (slice(9, 12), None, 21, (9, 12)),  # central / range
-        (slice(10, 11), None, 30, (10, 11)),  # one plane
-        (slice(None), slice(13, 19), 30, (13, 19)),  # focus window
-    ],
-)
-def test_tracked_z_window(read_slice, focus_slice, z_shape, expected):
-    assert tracked_z_window(read_slice, focus_slice, z_shape) == expected
+def test_write_tracking_labels_2d_fills_the_single_plane():
+    label_array = np.zeros((2, 1, 4, 4), dtype=np.uint32)
+
+    write_tracking_labels(label_array, np.ones((2, 4, 4), dtype=np.int64), "2D")
+    assert label_array.all()
+    # A single-plane series that kept its Z axis.
+    write_tracking_labels(label_array, 2 * np.ones((2, 1, 4, 4)), "2D")
+    assert (label_array == 2).all()
+    with pytest.raises(ValueError, match="2D"):
+        write_tracking_labels(label_array, np.ones((2, 3, 4, 4)), "2D")
 
 
-@pytest.mark.parametrize(
-    "z_window, expected_z",
-    [
-        ((0, 30), 15),  # projection of the whole volume -> middle of the volume
-        ((10, 11), 10),  # one plane -> that plane
-        ((13, 19), 16),  # projected section -> middle of the section
-    ],
-)
-def test_write_tracking_labels_2d_placement(z_window, expected_z):
-    label_array = np.zeros((2, 30, 4, 4), dtype=np.uint32)
-    labels = np.ones((2, 4, 4), dtype=np.int64)
+def test_write_tracking_labels_3d_fills_the_stack():
+    label_array = np.zeros((2, 6, 4, 4), dtype=np.uint32)
 
-    assert write_tracking_labels(label_array, labels, z_window, "2D") == expected_z
-    assert label_array[:, expected_z].all()
-    assert label_array.sum() == labels.sum()
-
-
-def test_write_tracking_labels_2d_unprojected_single_plane():
-    label_array = np.zeros((2, 30, 4, 4), dtype=np.uint32)
-    write_tracking_labels(label_array, np.ones((2, 1, 4, 4)), (10, 11), "2D")
-    assert label_array[:, 10].all()
-
-
-def test_write_tracking_labels_3d_fills_window():
-    label_array = np.zeros((2, 30, 4, 4), dtype=np.uint32)
-    labels = np.ones((2, 6, 4, 4), dtype=np.int64)
-
-    assert write_tracking_labels(label_array, labels, (13, 19), "3D") == slice(13, 19)
-    assert label_array[:, 13:19].all()
-    assert label_array.sum() == labels.sum()
+    write_tracking_labels(label_array, np.ones((2, 6, 4, 4), dtype=np.int64), "3D")
+    assert label_array.all()
     with pytest.raises(ValueError, match="3D"):
-        write_tracking_labels(label_array, np.ones((2, 5, 4, 4)), (13, 19), "3D")
+        write_tracking_labels(label_array, np.ones((2, 5, 4, 4)), "3D")
+
+
+def test_track_cli_refuses_a_3d_input_for_2d_tracking(tmp_path, create_custom_plate):
+    plate_path, _ = create_custom_plate(tmp_path, z_size=3)
+    config_path = _make_tracking_config(plate_path, tmp_path)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "track",
+            "-i",
+            str(plate_path / "A/1/0"),
+            "-o",
+            str(tmp_path / "o.zarr"),
+            "-c",
+            str(config_path),
+            "--init",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "biahub project" in str(result.exception)
+
+
+def test_z_slicing_is_rejected_with_a_pointer_to_project():
+    with pytest.raises(ValueError, match="z_slicing was removed.*biahub project"):
+        _minimal_settings(z_slicing={"method": "focus"})
 
 
 # ---------------------------------------------------------------------------
@@ -630,7 +520,7 @@ def test_input_images_path_override(tmp_path, example_tracking_plate, monkeypatc
     )
 
     assert result.exit_code == 0, result.output
-    _assert_tracking_outputs(plate_path / "A" / "1" / "0", z_index=1)
+    _assert_tracking_outputs(plate_path / "A" / "1" / "0")
 
 
 def test_track_init_rejects_an_unknown_cellpose_model(
@@ -680,3 +570,365 @@ def test_track_init_rejects_an_unknown_cellpose_model(
 
     assert result.exit_code != 0
     assert "Unknown cellpose model 'nuclei'" in str(result.exception) + result.output
+
+
+def test_filter_short_siblings_merges_a_one_frame_daughter():
+    """A daughter that lives 1 frame (e.g. a VS hallucination linked as a division) is
+    removed and its sibling continues the parent track, in the tracks and the labels."""
+    from biahub.track import filter_short_siblings
+
+    labels = np.zeros((6, 8, 8), dtype=np.int32)
+    rows = []
+    for t in range(3):  # parent, track 1
+        labels[t, 1:3, 1:3] = 1
+        rows.append((1, t, 2.0, 2.0, -1))
+    for t in range(3, 6):  # long daughter, track 2
+        labels[t, 1:3, 1:3] = 2
+        rows.append((2, t, 2.0, 2.0, 1))
+    labels[3, 5:7, 5:7] = 3  # one-frame daughter, track 3
+    rows.append((3, 3, 6.0, 6.0, 1))
+    tracks = pd.DataFrame(rows, columns=["track_id", "t", "y", "x", "parent_track_id"])
+
+    new_tracks, new_labels = filter_short_siblings(tracks, labels, min_length=2)
+
+    assert set(new_tracks.track_id) == {1}
+    assert (new_tracks.parent_track_id == -1).all()
+    assert not (new_labels == 3).any()
+    assert (new_labels[:, 1:3, 1:3] == 1).all()  # the parent continues through t=5
+
+
+def test_min_sibling_length_is_off_by_default(example_track_settings):
+    _, settings = example_track_settings
+    settings.pop("min_sibling_length", None)
+    assert TrackingSettings(**settings).min_sibling_length is None
+
+
+def test_track_passes_min_sibling_length_to_each_position(
+    tmp_path, example_tracking_plate, monkeypatch
+):
+    import contextlib
+    import types
+
+    submitted = {}
+
+    class Executor:
+        def __init__(self, folder, cluster):
+            pass
+
+        def update_parameters(self, **kwargs):
+            pass
+
+        def batch(self):
+            return contextlib.nullcontext()
+
+        def submit(self, fn, **kwargs):
+            submitted.update(kwargs)
+            return types.SimpleNamespace(job_id="0", wait=lambda: None)
+
+    monkeypatch.setattr("biahub.track.submitit.AutoExecutor", Executor)
+    plate_path, _ = example_tracking_plate
+    config_path = _make_tracking_config(plate_path, tmp_path)
+    config = yaml.safe_load(config_path.read_text())
+    config["min_sibling_length"] = 3
+    config_path.write_text(yaml.safe_dump(config))
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "track",
+            "--cluster",
+            "debug",
+            "-i",
+            str(plate_path / "A" / "1" / "0"),
+            "-o",
+            str(tmp_path / "out.zarr"),
+            "-c",
+            str(config_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert submitted["min_sibling_length"] == 3
+
+
+def _lineage(short_len, long_len=3, parent_len=3):
+    """Parent track 1, daughters 2 (long_len frames) and 3 (short_len frames)."""
+    T = parent_len + max(long_len, short_len)
+    labels = np.zeros((T, 8, 8), dtype=np.int32)
+    rows = []
+    for t in range(parent_len):
+        labels[t, 1:3, 1:3] = 1
+        rows.append((1, t, 2.0, 2.0, -1))
+    for t in range(parent_len, parent_len + long_len):
+        labels[t, 1:3, 1:3] = 2
+        rows.append((2, t, 2.0, 2.0, 1))
+    for t in range(parent_len, parent_len + short_len):
+        labels[t, 5:7, 5:7] = 3
+        rows.append((3, t, 6.0, 6.0, 1))
+    return pd.DataFrame(rows, columns=["track_id", "t", "y", "x", "parent_track_id"]), labels
+
+
+def test_filter_removes_daughters_of_min_length_or_fewer():
+    """Same meaning as ultrack: a daughter of exactly ``min_length`` frames is removed."""
+    from biahub.track import filter_short_siblings
+
+    tracks, labels = _lineage(short_len=3, long_len=5)
+    new_tracks, new_labels = filter_short_siblings(tracks, labels, min_length=3)
+    assert set(new_tracks.track_id) == {1}
+    assert not (new_labels == 3).any()
+
+    tracks, labels = _lineage(short_len=4, long_len=5)
+    new_tracks, _ = filter_short_siblings(tracks, labels, min_length=3)
+    assert set(new_tracks.track_id) == {1, 2, 3}
+
+
+def test_filter_keeps_a_division_when_both_daughters_are_short():
+    from biahub.track import filter_short_siblings
+
+    tracks, labels = _lineage(short_len=2, long_len=2)
+    new_tracks, _ = filter_short_siblings(tracks, labels, min_length=3)
+    assert set(new_tracks.track_id) == {1, 2, 3}
+
+
+def test_filter_leaves_no_temporary_files_and_sorts_rows(tmp_path, monkeypatch):
+    import tempfile
+
+    from biahub.track import filter_short_siblings
+
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setattr(tempfile, "tempdir", None)  # re-read TMPDIR
+    tracks, labels = _lineage(short_len=1, long_len=4)
+
+    new_tracks, _ = filter_short_siblings(tracks, labels, min_length=2)
+
+    assert list(tmp_path.iterdir()) == []
+    assert new_tracks[["track_id", "t"]].equals(
+        new_tracks[["track_id", "t"]].sort_values(["track_id", "t"]).reset_index(drop=True)
+    )
+
+
+def test_track_debug_run_applies_the_sibling_filter(tmp_path, example_tracking_plate):
+    plate_path, _ = example_tracking_plate
+    config_path = _make_tracking_config(plate_path, tmp_path)
+    config = yaml.safe_load(config_path.read_text())
+    config["min_sibling_length"] = 3
+    config_path.write_text(yaml.safe_dump(config))
+    position = str(plate_path / "A" / "1" / "0")
+    out = str(tmp_path / "out.zarr")
+
+    assert (
+        CliRunner()
+        .invoke(cli, ["track", "--init", "-i", position, "-o", out, "-c", str(config_path)])
+        .exit_code
+        == 0
+    )
+    result = CliRunner().invoke(
+        cli, ["track", "--cluster", "debug", "-i", position, "-o", out, "-c", str(config_path)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Sibling filter (min_length=3)" in result.output
+
+
+def test_track_gives_local_jobs_a_gpu(tmp_path, example_tracking_plate, monkeypatch):
+    """Same as segment: submitit's local executor hides GPUs without gpus_per_node."""
+    import contextlib
+
+    recorded = {}
+
+    class Executor:
+        def __init__(self, folder, cluster):
+            recorded["cluster"] = cluster
+
+        def update_parameters(self, **kwargs):
+            recorded.update(kwargs)
+
+        def batch(self):
+            return contextlib.nullcontext()
+
+        def submit(self, *args, **kwargs):
+            return types.SimpleNamespace(job_id="0", wait=lambda: None)
+
+    import types
+
+    monkeypatch.setattr("biahub.track.submitit.AutoExecutor", Executor)
+    monkeypatch.delenv("CI", raising=False)
+    plate_path, _ = example_tracking_plate
+    config_path = _make_tracking_config(plate_path, tmp_path)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "track",
+            "--cluster",
+            "local",
+            "-i",
+            str(plate_path / "A" / "1" / "0"),
+            "-o",
+            str(tmp_path / "out.zarr"),
+            "-c",
+            str(config_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert recorded["cluster"] == "local"
+    assert recorded.get("gpus_per_node") == 1
+    assert (
+        recorded.get("timeout_min") == recorded["slurm_time"]
+    )  # local default kills at 2 min
+
+
+def test_track_local_sbatch_file_overrides_computed_parameters(
+    tmp_path, example_tracking_plate, monkeypatch
+):
+    """'#LOCAL --timeout-min' must win over the computed local timeout, not collide
+    (TypeError: multiple values for keyword argument 'timeout_min')."""
+    import contextlib
+    import types
+
+    recorded = {}
+
+    class Executor:
+        def __init__(self, folder, cluster):
+            recorded["cluster"] = cluster
+
+        def update_parameters(self, **kwargs):
+            recorded.update(kwargs)
+
+        def batch(self):
+            return contextlib.nullcontext()
+
+        def submit(self, *args, **kwargs):
+            return types.SimpleNamespace(job_id="0", wait=lambda: None)
+
+    monkeypatch.setattr("biahub.track.submitit.AutoExecutor", Executor)
+    monkeypatch.delenv("CI", raising=False)  # conftest forces CI (debug) otherwise
+    plate_path, _ = example_tracking_plate
+    config_path = _make_tracking_config(plate_path, tmp_path)
+    sbatch = tmp_path / "local.sbatch"
+    sbatch.write_text("#LOCAL --timeout-min=5\n")
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "track",
+            "--cluster",
+            "local",
+            "-i",
+            str(plate_path / "A" / "1" / "0"),
+            "-o",
+            str(tmp_path / "out.zarr"),
+            "-c",
+            str(config_path),
+            "-sb",
+            str(sbatch),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert recorded["timeout_min"] == 5
+    assert recorded["gpus_per_node"] == 1
+
+
+def test_track_local_timeout_ignores_a_slurm_time_string(
+    tmp_path, example_tracking_plate, monkeypatch
+):
+    """'#SBATCH --time=3:00:00' sets slurm_time to a string; the local timeout_min must
+    stay the computed number of minutes."""
+    import contextlib
+    import types
+
+    recorded = {}
+
+    class Executor:
+        def __init__(self, folder, cluster):
+            recorded["cluster"] = cluster
+
+        def update_parameters(self, **kwargs):
+            recorded.update(kwargs)
+
+        def batch(self):
+            return contextlib.nullcontext()
+
+        def submit(self, *args, **kwargs):
+            return types.SimpleNamespace(job_id="0", wait=lambda: None)
+
+    monkeypatch.setattr("biahub.track.submitit.AutoExecutor", Executor)
+    monkeypatch.delenv("CI", raising=False)  # conftest forces CI (debug) otherwise
+    plate_path, _ = example_tracking_plate
+    config_path = _make_tracking_config(plate_path, tmp_path)
+    sbatch = tmp_path / "slurm.sbatch"
+    sbatch.write_text("#SBATCH --time=3:00:00\n")
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "track",
+            "--cluster",
+            "local",
+            "-i",
+            str(plate_path / "A" / "1" / "0"),
+            "-o",
+            str(tmp_path / "out.zarr"),
+            "-c",
+            str(config_path),
+            "-sb",
+            str(sbatch),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert recorded["slurm_time"] == "3:00:00"
+    assert recorded["timeout_min"] == 60  # track's computed time, in minutes
+
+
+def test_track_mem_per_cpu_override_drops_the_computed_total(
+    tmp_path, example_tracking_plate, monkeypatch
+):
+    """'#SBATCH --mem-per-cpu=16G' left --mem set too, and SLURM rejects both."""
+    import contextlib
+    import types
+
+    recorded = {}
+
+    class Executor:
+        def __init__(self, folder, cluster):
+            recorded["cluster"] = cluster
+
+        def update_parameters(self, **kwargs):
+            recorded.update(kwargs)
+
+        def batch(self):
+            return contextlib.nullcontext()
+
+        def submit(self, *args, **kwargs):
+            return types.SimpleNamespace(job_id="0", wait=lambda: None)
+
+    monkeypatch.setattr("biahub.track.submitit.AutoExecutor", Executor)
+    monkeypatch.delenv("CI", raising=False)  # conftest forces CI (debug) otherwise
+    plate_path, _ = example_tracking_plate
+    config_path = _make_tracking_config(plate_path, tmp_path)
+    sbatch = tmp_path / "mem.sbatch"
+    sbatch.write_text("#SBATCH --mem-per-cpu=16G\n")
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "track",
+            "--cluster",
+            "slurm",
+            "-i",
+            str(plate_path / "A" / "1" / "0"),
+            "-o",
+            str(tmp_path / "out.zarr"),
+            "-c",
+            str(config_path),
+            "-sb",
+            str(sbatch),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert recorded["slurm_mem_per_cpu"] == "16G"
+    assert "slurm_mem" not in recorded

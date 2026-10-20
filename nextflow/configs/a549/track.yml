@@ -1,33 +1,34 @@
 # Tracking config for the mantis-v2 pipeline (`biahub track`). A549.
 #
-# Track reads the ASSEMBLED plate (<N>-assemble/<dataset>.zarr), so target_channel
-# and cellpose_config.input_channel must name channels that exist THERE. If you
-# rename channels before tracking, update these to match.
+# Track reads the PROJECTED plate (<N>-assemble/<dataset>_proj.zarr, Z=1), so target_channel
+# and cellpose_config.input_channel must name channels that `biahub project` wrote
+# (project.yml's `channels`). If you rename channels before tracking, update these.
 #
 # CURRENT SCHEMA. TrackingSettings forbids extra keys; the old fields `mode`,
-# `z_range` and `focus_config` are rejected. Mapping from the old schema:
-#   mode                            -> output_mode
-#   z_range + focus_config.z_window -> z_slicing.{method, window_size, focus_channel}
-# focus_config's NA_det / lambda_ill / pixel_size have no equivalent — focus
-# detection now runs waveorder's focus_from_transverse_band on
-# z_slicing.focus_channel internally.
+# `z_range`, `focus_config` and `z_slicing` are rejected. Z-plane selection and
+# projection moved to `biahub project` (project.yml): the 60-plane focus window and
+# the mean projection that used to be here live there now. Mapping from the old schema:
+#   mode                              -> output_mode
+#   z_slicing / z_range / focus_config -> project.yml: channels.<name>.z, focus
+#   input_images np.mean step          -> project.yml: channels.<name>.method: mean
 
-# 2D writes an output plate with Z=1; input_images below projects Z with np.mean.
+# 2D tracks the Z=1 projected plate and writes a Z=1 label plate. Track does not
+# project; a 3D input with output_mode 2D is an error.
 output_mode: "2D"
 fov: "*/*/*"
 target_channel: nuclei_prediction
 
-# Use every Z plane — no focus detection, no window. The other ZSlicing fields
-# (window_size / frac_below / frac_above / focus_channel) apply only to
-# method: focus and are omitted here.
-#
-# NOTE: input_images projects Z with np.mean, so this averages ALL planes rather
-# than an in-focus window — more out-of-focus signal in what cellpose segments.
-# Switch to `method: focus` with a window_size if that hurts segmentation.
-z_slicing:
-  method: all
-
 segmentation_method: cellpose
+
+# Sibling filter (ultrack filter_short_sibling_tracks, same meaning): at a division
+# where exactly one daughter lives 3 frames or fewer and does not divide again, drop
+# that daughter and merge the other into the parent; a division whose two daughters
+# are both that short is kept. Most false divisions in the A549 benchmark against
+# TrackEdit annotations were 1-2-frame "daughters" (virtual-staining hallucinations,
+# a neighbour linked as a daughter). Division F1 rose by ~0.08-0.10 in the benchmark,
+# and from 0.58 to 0.63-0.64 with this config on the annotated 2026_04_28 FOVs.
+# Remove the line to keep every division.
+min_sibling_length: 3
 cellpose_config:
   pretrained_model: cpsam_v2
   diameter: 80
@@ -38,14 +39,11 @@ cellpose_config:
   input_channel: nuclei_prediction
   labels_sigma: 5.0
 
+# The projected plate holds the nuclei already reduced to one plane; nothing to process.
 input_images:
   - path: null
     channels:
-      nuclei_prediction:
-        - function: np.mean
-          kwargs:
-            axis: 1
-          per_timepoint: false
+      nuclei_prediction: []
 
 tracking_config:
   segmentation_config:
