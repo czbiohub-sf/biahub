@@ -473,7 +473,12 @@ class Evaluation:
     holds the same measures for the unregistered pair (identity), so each number reads
     against doing nothing. `z_um` is the residual z shift (reference minus mapped moving)
     and `z_from` the measure it came from: points when there are any, since the image
-    crops can be biased (cross-modal pairs), else the median of the z crops.
+    crops can be biased (cross-modal pairs), else the median of the z crops. Tiles see yx
+    only (max projections); a z error shows in points and z crops alone.
+
+    The baseline's points can match few: a large scale or shift error moves landmarks
+    beyond the matching radius (DragonFly unregistered: 5-7 of ~18 nuclei), so read the
+    unregistered pair from its tiles too.
     """
 
     geometry: dict
