@@ -276,3 +276,60 @@ def test_tiles_and_z_share_one_prepared_pair(monkeypatch):
     assert shared == alone
     with pytest.raises(ValueError, match="prepared for 'edges'"):
         tile_residuals(transform, mov, ref, VOX3, compare="intensity", pair=pair)
+
+
+# --- layer 4: one record per position and timepoint ---------------------------------------
+
+
+def _clicked(points_ref, shift_zyx, voxel_um):
+    """Clicked pairs: the same structures in both channels, the moving ones at p + shift."""
+    from biahub.registration.evaluate import Landmarks
+
+    ids = list(range(len(points_ref)))
+    mov = Landmarks(np.asarray(points_ref) + shift_zyx, voxel_um, "manual", ids)
+    ref = Landmarks(points_ref, voxel_um, "manual", ids)
+    return mov, ref
+
+
+def test_evaluate_reads_every_layer_against_the_unregistered_pair():
+    import json
+
+    from biahub.registration.evaluate import evaluate
+
+    ref = _cells(6, shape=(32, 256, 256))
+    shift_zyx = (2.0, 3.0, -2.0)
+    mov = _ndi_shift(ref, shift_zyx, order=1, mode="nearest")
+    exact = Transform.from_translation([-s for s in shift_zyx])
+    grid = np.stack(np.meshgrid([8, 16, 24], [40, 128, 216], [40, 128, 216], indexing="ij"))
+    landmarks = _clicked(grid.reshape(3, -1).T.astype(float), shift_zyx, VOX3)
+
+    record = evaluate(exact, mov, ref, VOX3, VOX3, landmarks=landmarks, tile_px=64, crop_px=96)
+    assert record.geometry["translation_um"] == pytest.approx([-0.4, -0.309, 0.206])
+    assert record.points["stats"]["median_um"] < 1e-6
+    assert record.tiles["stats"]["median_um"] < 0.05
+    assert (record.z_from, record.z_um) == ("points (manual)", pytest.approx(0.0, abs=1e-6))
+    # doing nothing leaves the full shift, in every measure
+    shift_um = np.linalg.norm(np.multiply(shift_zyx, VOX3))
+    assert record.baseline["points"]["stats"]["median_um"] == pytest.approx(shift_um)
+    assert record.baseline["z_um"] == pytest.approx(-2 * 0.2)
+    assert record.baseline["tiles"]["stats"]["median_um"] > 0.3
+    json.dumps(record.to_dict())  # a record is plain data, ready to store
+
+
+def test_without_landmarks_z_comes_from_the_crops_and_says_so():
+    from biahub.registration.evaluate import evaluate
+
+    ref = _cells(7, shape=(40, 256, 256))
+    mov = _ndi_shift(ref, (2.0, 0.0, 0.0), order=1, mode="nearest")
+    record = evaluate(Transform.identity(3), mov, ref, VOX3, VOX3, tile_px=64, crop_px=96)
+    assert record.points is None
+    assert record.z_from == "z crops (edges)"
+    assert record.z_um == pytest.approx(-2 * 0.2, abs=0.05)
+
+
+def test_evaluate_refuses_an_unknown_landmark_source():
+    from biahub.registration.evaluate import evaluate
+
+    ref = _cells(8)
+    with pytest.raises(ValueError, match="landmarks"):
+        evaluate(Transform.identity(3), ref, ref, VOX3, VOX3, landmarks="cells", images=False)

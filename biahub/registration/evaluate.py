@@ -1,13 +1,15 @@
 """Registration evaluation: how well a transform registers, in µm, independent of the score.
 
-Layer 1 (here): geometry -- the plausibility of a transform, and statistics of matched
-residual displacements. Distances are in µm from the stores' voxel sizes (z, y, x); voxel
-values are reported alongside where useful.
+Layer 1: geometry -- the plausibility of a transform, and statistics of matched residual
+displacements. Layer 2: residuals of landmarks (beads, nuclei, clicked points). Layer 3:
+image-based residuals (tiles and z crops) for data without landmarks. Layer 4: `evaluate`,
+every layer for one transform next to the unregistered pair. Distances are in µm from the
+stores' voxel sizes (z, y, x); voxel values are reported alongside where useful.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 import numpy as np
 
@@ -453,3 +455,108 @@ def z_residuals(
         "crops_um": crops,
         "tilt_dz_um": float(max(corner_dz) - min(corner_dz)) if len(corner_dz) > 1 else None,
     }
+
+
+# --- layer 4: one record per position and timepoint -------------------------------------
+# Every layer for one transform, next to the same measures for doing nothing (identity).
+
+
+@dataclass
+class Evaluation:
+    """How well one transform registers one position and timepoint, in µm.
+
+    `geometry` is layer 1 (`decompose`); `points` layer 2 (`point_residuals`, None without
+    landmarks); `tiles` and `z_crops` layer 3 (None when images are skipped). `baseline`
+    holds the same measures for the unregistered pair (identity), so each number reads
+    against doing nothing. `z_um` is the residual z shift (reference minus mapped moving)
+    and `z_from` the measure it came from: points when there are any, since the image
+    crops can be biased (cross-modal pairs), else the median of the z crops.
+    """
+
+    geometry: dict
+    points: dict | None
+    tiles: dict | None
+    z_crops: dict | None
+    z_um: float | None
+    z_from: str | None
+    baseline: dict
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+LANDMARK_DETECTORS = {"nuclei": detect_nuclei, "beads": detect_beads}
+
+
+def _landmarks(landmarks, mov, ref, mov_um, ref_um, detect_kwargs) -> tuple | None:
+    if landmarks is None or isinstance(landmarks, tuple):
+        return landmarks
+    if landmarks not in LANDMARK_DETECTORS:
+        raise ValueError(
+            f"landmarks must be one of {sorted(LANDMARK_DETECTORS)}, a (moving, reference) "
+            f"pair of Landmarks or None, got {landmarks!r}"
+        )
+    detect = LANDMARK_DETECTORS[landmarks]
+    kwargs = detect_kwargs or {}
+    return detect(mov, mov_um, **kwargs), detect(ref, ref_um, **kwargs)
+
+
+def _z(points: dict | None, z_crops: dict | None, points_source: str | None) -> tuple:
+    """Return (z residual in µm, the measure it came from)."""
+    if points is not None and points["stats"]["n"] > 0:
+        return points["stats"]["median_zyx_um"][0], f"points ({points_source})"
+    if z_crops is not None:
+        dz = [v[0] for v in z_crops["crops_um"].values() if v is not None]
+        if dz:
+            return float(np.median(dz)), f"z crops ({z_crops['compare']})"
+    return None, None
+
+
+def _measures(transform, mov, ref, ref_um, marks, images, compare, image_kwargs) -> dict:
+    """Return layers 2-3 and the z residual for one transform."""
+    points = point_residuals(transform, *marks) if marks is not None else None
+    tiles = z_crops = None
+    if images:
+        tile_kwargs = {k: v for k, v in image_kwargs.items() if k in ("tile_px", "grid")}
+        crop_kwargs = {k: v for k, v in image_kwargs.items() if k in ("crop_px",)}
+        pair = prepare_pair(transform, mov, ref, compare)
+        tiles = tile_residuals(transform, mov, ref, ref_um, compare, pair=pair, **tile_kwargs)
+        z_crops = z_residuals(transform, mov, ref, ref_um, compare, pair=pair, **crop_kwargs)
+    z_um, z_from = _z(points, z_crops, marks[1].source if marks is not None else None)
+    return {
+        "points": points,
+        "tiles": tiles,
+        "z_crops": z_crops,
+        "z_um": z_um,
+        "z_from": z_from,
+    }
+
+
+def evaluate(
+    transform: Transform,
+    mov: ArrayLike,
+    ref: ArrayLike,
+    mov_um: tuple,
+    ref_um: tuple,
+    landmarks: str | tuple | None = None,
+    images: bool = True,
+    compare: str = "edges",
+    detect_kwargs: dict | None = None,
+    **image_kwargs,
+) -> Evaluation:
+    """Evaluate a forward transform on one moving / reference pair (ZYX volumes).
+
+    `landmarks`: "nuclei" or "beads" (detected in both volumes; `detect_kwargs` go to the
+    detector, e.g. beads' `threshold_abs`), a (moving, reference) pair of `Landmarks`
+    (detected elsewhere or clicked), or None. `images` adds layer 3 (`compare`: "edges" or
+    "intensity"; `tile_px`, `grid`, `crop_px` pass through), the slow part: one warp of
+    the moving volume per transform. Thresholds for a verdict are left to the caller.
+    """
+    marks = _landmarks(landmarks, mov, ref, mov_um, ref_um, detect_kwargs)
+    measures = _measures(transform, mov, ref, ref_um, marks, images, compare, image_kwargs)
+    baseline = _measures(
+        Transform.identity(3), mov, ref, ref_um, marks, images, compare, image_kwargs
+    )
+    return Evaluation(
+        geometry=decompose(transform, mov_um, ref_um), baseline=baseline, **measures
+    )
