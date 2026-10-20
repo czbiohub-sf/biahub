@@ -31,19 +31,26 @@ pixel settings at 0.1133 um/px (mantis v2).
   `min_frontier`), `linking_config` (`max_distance` in um, `distance_weight`, `max_neighbors`)
   and `tracking_config` (appear / disappear / division weights).
 
-## What the A549 benchmark found (2026_04_28, 4 TrackEdit FOVs, 78 divisions)
+## What the A549 benchmark found
 
 Same cellpose labels and config (60-plane window, `min_sibling_length: 3`), untuned defaults
-for the three new trackers:
+for the three new trackers. 2026_04_28: 4 TrackEdit FOVs, 78 divisions (division F1, with
+precision / recall). 2026_04_21: 5 DENV FOVs, 38 divisions from mitosis labels.
 
-| tracker | division F1 | precision | recall | tracks (GT 287) |
-|---|---|---|---|---|
-| ultrack | 0.68 | 0.60 | 0.79 | 376 |
-| tracksdata | 0.52 | 0.47 | 0.57 | 331 |
+| tracker | 04_28 F1 | precision | recall | mock F1 | DENV F1 | tracks (GT 287) | 04_21 divisions found |
+|---|---|---|---|---|---|---|---|
+| ultrack | 0.68 | 0.60 | 0.79 | 0.70 | 0.63 | 376 | 19 |
+| trackastra | 0.63 | 0.71 | 0.57 | 0.65 | 0.60 | 355 | 14 |
+| hoct | 0.53 | 0.68 | 0.43 | 0.59 | 0.47 | 311 | 7 |
+| tracksdata | 0.52 | 0.47 | 0.57 | 0.48 | 0.55 | 331 | 17 |
 
-(HOCT and Trackastra: see the PR's results; Trackastra showed the highest precision on its
-first FOVs.) ultrack is the default because it is the best tuned; the others are worth trying
-per dataset, and as independent opinions on divisions.
+- ultrack is the default: best F1 and recall, and the best tuned.
+- Trackastra and HOCT call fewer divisions with higher precision (Trackastra 0.82 in mock
+  wells): good when false divisions cost more than missed ones, and as independent opinions.
+- tracksdata is the least accurate with these defaults and needs tuning (`division_weight`,
+  `appearance_weight`); HOCT fragments least (311 tracks).
+- Each new tracker takes ~13-16 min for 4-5 A549 FOVs on one GPU node (cellpose included),
+  ~11 GB peak.
 
 ## Known pitfalls
 
