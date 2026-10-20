@@ -315,8 +315,7 @@ def _project_position(
         with open_ome_zarr(str(output_position_path), mode="r+") as output_dataset:
             record = dict(output_dataset.zattrs.get(PROVENANCE_KEY, {}))
             record["focus"] = {
-                "channel": settings.focus.channel,
-                "per": settings.focus.per,
+                **settings.focus.model_dump(mode="json", exclude={"axes"}),
                 "z": focus_z if settings.focus.per == "fov" else None,
                 "z_per_t": focus_per_t.tolist(),
             }
