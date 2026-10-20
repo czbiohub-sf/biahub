@@ -248,3 +248,31 @@ def test_coverage_from_geometry_matches_warping_a_volume_of_ones(ndim):
             np.ones(mov_shape, np.float32), reference=np.zeros(ref_shape, np.float32)
         )
         np.testing.assert_array_equal(coverage(transform, mov_shape, ref_shape), ones > 0.5)
+
+
+def test_tiles_and_z_share_one_prepared_pair(monkeypatch):
+    # Each function prepared (Sobel + warp, ~240 s on a 2048 x 2048 stack) on its own; a
+    # pair prepared once serves both, with the same results.
+    from biahub.registration.evaluate import prepare_pair
+
+    ref = _cells(5, shape=(32, 256, 256))
+    mov = _ndi_shift(ref, (1.0, 2.0, -1.0), order=1, mode="nearest")
+    transform = Transform.from_translation([-0.5, -1.0, 0.5])
+    alone = (
+        tile_residuals(transform, mov, ref, VOX3, tile_px=64),
+        z_residuals(transform, mov, ref, VOX3, crop_px=96),
+    )
+    warps = []
+    real = Transform.apply
+    monkeypatch.setattr(
+        Transform, "apply", lambda self, *a, **k: warps.append(1) or real(self, *a, **k)
+    )
+    pair = prepare_pair(transform, mov, ref)
+    shared = (
+        tile_residuals(transform, mov, ref, VOX3, tile_px=64, pair=pair),
+        z_residuals(transform, mov, ref, VOX3, crop_px=96, pair=pair),
+    )
+    assert len(warps) == 1
+    assert shared == alone
+    with pytest.raises(ValueError, match="prepared for 'edges'"):
+        tile_residuals(transform, mov, ref, VOX3, compare="intensity", pair=pair)
