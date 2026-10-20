@@ -346,7 +346,12 @@ def _project_position(
         output_channel_indices=[list(range(len(plans)))],
         num_workers=num_workers,
         resume=resume,
-        resume_token=settings_fingerprint(settings),
+        resume_token=settings_fingerprint(
+            {
+                "settings": settings.model_dump(mode="json"),
+                "channel_order": list(settings.channels),
+            }
+        ),
         plans=plans,
         focus_z=focus_z,
     )
