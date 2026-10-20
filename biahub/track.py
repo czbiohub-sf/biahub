@@ -29,8 +29,10 @@ from biahub.cli.parsing import (
 from biahub.cli.resolve_function import resolve_function
 from biahub.settings import (
     CellposeConfig,
+    HoctConfig,
     ProcessingInputChannel,
     TrackingSettings,
+    TracksdataConfig,
     ZSlicing,
 )
 from biahub.utils.cellpose import (
@@ -433,6 +435,132 @@ def filter_short_siblings(
     return tracks_df, np.asarray(labels)
 
 
+def _num_threads() -> int:
+    return len(os.sched_getaffinity(0))
+
+
+def _solve_tracksdata(labels: np.ndarray, config: TracksdataConfig, pixel_size: float):
+    """Build the tracksdata graph of (T, Y, X) ``labels`` and solve its ILP.
+
+    Returns the solved graph (nodes and edges carry the ``solution`` attribute).
+    """
+    import polars as pl
+    import tracksdata as td
+
+    _, Y, X = labels.shape
+    graph = td.graph.InMemoryGraph()
+    td.nodes.RegionPropsNodes().add_nodes(graph, labels=labels)
+    margin = config.border_margin_um / pixel_size
+    appearance = config.appearance_weight
+    if margin > 0:
+        nodes = graph.node_attrs(attr_keys=[td.DEFAULT_ATTR_KEYS.NODE_ID, "y", "x"])
+        y, x = nodes["y"].to_numpy(), nodes["x"].to_numpy()
+        is_border = ((y < margin) | (y > Y - margin) | (x < margin) | (x > X - margin)).astype(
+            float
+        )
+        graph.add_node_attr_key("is_border", pl.Float64, default_value=0.0)
+        graph.update_node_attrs(
+            attrs={"is_border": is_border.tolist()},
+            node_ids=nodes[td.DEFAULT_ATTR_KEYS.NODE_ID].to_list(),
+        )
+        border = td.NodeAttr("is_border")
+        appearance = appearance * (1 - border) + config.border_appearance_weight * border
+    td.edges.DistanceEdges(
+        distance_threshold=config.distance_threshold_um / pixel_size,
+        n_neighbors=config.n_neighbors,
+    ).add_edges(graph)
+    td.edges.IoUEdgeAttr(output_key="iou").add_edge_attrs(graph)
+    edge_weight = (
+        -td.EdgeAttr("iou")
+        * (td.EdgeAttr("distance") * (pixel_size / config.distance_norm_um)).exp()
+    )
+    td.solvers.ILPSolver(
+        edge_weight=edge_weight,
+        node_weight=config.node_weight,
+        appearance_weight=appearance,
+        disappearance_weight=config.disappearance_weight,
+        division_weight=config.division_weight,
+        num_threads=_num_threads(),
+        return_solution=False,
+    ).solve(graph)
+    return graph
+
+
+def _solution_to_tracks(graph, shape: tuple[int, ...]) -> tuple[np.ndarray, pd.DataFrame]:
+    """Convert a solved tracksdata graph to labels (value = track_id) and ultrack-like tracks.
+
+    The tracks have ``track_id, t, y, x, parent_track_id`` (-1 for roots), the columns
+    the sibling filter and the tracks CSV use. HOCT promotes 2D movies to (T, 1, Y, X)
+    and records that shape in the graph metadata, so labels are rendered in the graph's
+    own shape and reshaped to ``shape``.
+    """
+    import tracksdata as td
+
+    metadata = getattr(graph, "metadata", None) or {}
+    render_shape = tuple(metadata.get("shape", shape))
+    tracks, parents, labels_view = td.functional.to_napari_format(
+        graph, shape=render_shape, mask_key=td.DEFAULT_ATTR_KEYS.MASK
+    )
+    tracks = tracks.to_pandas().rename(columns={"tracklet_id": "track_id"})
+    tracks = tracks[["track_id", "t", "y", "x"]].copy()
+
+    def parent_of(track_id):
+        parent = parents.get(int(track_id), -1)
+        return int(parent[0]) if isinstance(parent, (list, tuple)) else int(parent)
+
+    tracks["parent_track_id"] = tracks.track_id.map(parent_of)
+    tracks = tracks.sort_values(["track_id", "t"]).reset_index(drop=True)
+    labels = np.stack([np.asarray(labels_view[t]) for t in range(shape[0])])
+    return labels.reshape(shape).astype(np.int32), tracks
+
+
+def run_tracksdata(
+    labels: np.ndarray, config: TracksdataConfig, pixel_size: float
+) -> tuple[np.ndarray, pd.DataFrame]:
+    """Link fixed (T, Y, X) instance labels with tracksdata's ILP."""
+    graph = _solve_tracksdata(labels, config, pixel_size)
+    return _solution_to_tracks(graph, labels.shape)
+
+
+def warm_hoct_weights(model: str) -> None:
+    """Download HOCT weights into the shared cache once (from --init, on the head node)."""
+    import hoct
+
+    hoct.load_model(model, device="cpu")
+    click.echo(f"HOCT weights ready: {model}")
+
+
+def run_hoct(
+    labels: np.ndarray, images: np.ndarray, config: HoctConfig, pixel_size: float
+) -> tuple[np.ndarray, pd.DataFrame]:
+    """Link fixed (T, Y, X) instance labels with HOCT's edge model and ILP.
+
+    ``images`` is the (T, Y, X) image the labels were segmented from. HOCT runs in pixel
+    space, as its models were trained, so distances are converted to pixels.
+    """
+    import hoct
+    import torch
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = hoct.load_model(config.model, device=device)
+    kwargs = {}
+    if config.solver:
+        from hoct.tracking import ILPSolverConfig
+
+        kwargs["solver_config"] = ILPSolverConfig(**config.solver)
+    solution = hoct.predict(
+        model,
+        labels=labels,
+        images=images,
+        distance_threshold=config.distance_threshold_um / pixel_size,
+        n_neighbors=config.n_neighbors,
+        max_delta_t=config.max_delta_t,
+        return_solution=True,
+        **kwargs,
+    )
+    return _solution_to_tracks(solution, labels.shape)
+
+
 def run_ultrack(
     tracking_config,
     database_path,
@@ -766,15 +894,10 @@ def run_cellpose_per_frame(
     return labels
 
 
-def cellpose_segmentation(
+def cellpose_input(
     data_dict: dict[str, ArrayLike], cellpose_config: CellposeConfig
 ) -> np.ndarray:
-    """Run cellpose on a preprocessed ``data_dict`` channel.
-
-    Selects ``cellpose_config.input_channel``, mean-projects Z if needed, and returns an
-    integer label array of shape (T, Y, X) ready for ``run_ultrack(..., labels=...)``.
-    """
-    # Get the channel to segment
+    """Return the (T, Y, X) image cellpose segments (the input channel, Z mean-projected)."""
     channel_name = cellpose_config.input_channel
     if channel_name not in data_dict:
         raise ValueError(
@@ -792,8 +915,22 @@ def cellpose_segmentation(
 
     if isinstance(images, da.Array):
         images = images.compute()
-    images = np.asarray(images)
+    return np.asarray(images)
 
+
+def cellpose_segmentation(
+    data_dict: dict[str, ArrayLike],
+    cellpose_config: CellposeConfig,
+    images: np.ndarray | None = None,
+) -> np.ndarray:
+    """Run cellpose on a preprocessed ``data_dict`` channel.
+
+    Segments ``cellpose_input`` (or ``images``, when the caller already has it) and
+    returns an integer label array of shape (T, Y, X) ready for a tracker.
+    """
+    if images is None:
+        images = cellpose_input(data_dict, cellpose_config)
+    channel_name = cellpose_config.input_channel
     click.echo(
         f"Running cellpose ({cellpose_config.pretrained_model}, "
         f"diameter={cellpose_config.diameter}) on channel '{channel_name}'..."
@@ -828,6 +965,9 @@ def track_one_position(
     z_slicing: ZSlicing | None = None,
     output_mode: str = "2D",
     min_sibling_length: int | None = None,
+    tracker: str = "ultrack",
+    tracksdata_config: TracksdataConfig | None = None,
+    hoct_config: HoctConfig | None = None,
 ) -> None:
     """
     Run tracking on a single field of view.
@@ -902,7 +1042,19 @@ def track_one_position(
         position_key, input_images, z_slices, blank_frames_path, z_slicing, pixel_size
     )
 
-    if cellpose_config is not None:
+    if cellpose_config is not None and tracker in ("tracksdata", "hoct"):
+        images = cellpose_input(data_dict, cellpose_config)
+        cellpose_labels = cellpose_segmentation(data_dict, cellpose_config, images=images)
+        click.echo(f"Tracking with {tracker} (cellpose labels)...")
+        if tracker == "tracksdata":
+            tracking_labels, tracks_df = run_tracksdata(
+                cellpose_labels, tracksdata_config or TracksdataConfig(), pixel_size
+            )
+        else:
+            tracking_labels, tracks_df = run_hoct(
+                cellpose_labels, images, hoct_config or HoctConfig(), pixel_size
+            )
+    elif cellpose_config is not None:
         cellpose_labels = cellpose_segmentation(data_dict, cellpose_config)
 
         click.echo("Tracking with cellpose labels...")
@@ -1084,6 +1236,8 @@ def track(
             # Fail here, once, rather than in every worker of the fan-out.
             check_cellpose_model_name(settings.cellpose_config.pretrained_model)
             warm_cellpose_weights(settings.cellpose_config.pretrained_model)
+        if settings.tracker == "hoct":
+            warm_hoct_weights(settings.hoct_config.model)
         click.echo(f"Initialized {output_dirpath} ({len(input_position_dirpaths)} positions)")
         return
 
@@ -1096,11 +1250,13 @@ def track(
     z_slices, _ = resolve_z_slice(settings.z_slicing, Z)
     track_scale = scale[-2:] if settings.output_mode == "2D" else scale[-3:]
 
-    tracking_cfg = settings.tracking_config
-    tracking_cfg["segmentation_config"]["n_workers"] = num_cpus
-    tracking_cfg["linking_config"]["n_workers"] = num_cpus
-    default_config = MainConfig()
-    tracking_cfg = update_model(default_config, tracking_cfg)
+    tracking_cfg = None
+    if settings.tracker == "ultrack":
+        tracking_cfg = settings.tracking_config
+        tracking_cfg["segmentation_config"]["n_workers"] = num_cpus
+        tracking_cfg["linking_config"]["n_workers"] = num_cpus
+        default_config = MainConfig()
+        tracking_cfg = update_model(default_config, tracking_cfg)
 
     position_keys = [Path(p).parts[-3:] for p in input_position_dirpaths]
 
@@ -1151,6 +1307,9 @@ def track(
                 z_slicing=settings.z_slicing,
                 output_mode=settings.output_mode,
                 min_sibling_length=settings.min_sibling_length,
+                tracker=settings.tracker,
+                tracksdata_config=settings.tracksdata_config,
+                hoct_config=settings.hoct_config,
             )
             jobs.append(job)
 
