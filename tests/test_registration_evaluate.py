@@ -217,3 +217,34 @@ def test_edges_register_inverted_contrast_where_intensities_do_not():
     assert edges["stats"]["n"] >= 6
     np.testing.assert_allclose(edges["stats"]["median_zyx_um"][1], -2 * 0.103, atol=0.05)
     assert intensity["stats"]["n"] < edges["stats"]["n"]
+
+
+def _random_affine(rng, ndim=3):
+    matrix = np.eye(ndim + 1)
+    angle = np.deg2rad(rng.uniform(-10, 10))
+    matrix[-3:-1, -3:-1] = [[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]]
+    matrix[:ndim, :ndim] = matrix[:ndim, :ndim] @ (
+        np.eye(ndim) + rng.uniform(-0.05, 0.05, (ndim, ndim))
+    )
+    matrix[:ndim, ndim] = rng.uniform(-6, 6, ndim)
+    return Transform(matrix)
+
+
+@pytest.mark.parametrize("ndim", [3, 2])
+def test_coverage_from_geometry_matches_warping_a_volume_of_ones(ndim):
+    # Coverage used to be a second full warp (a volume of ones; ~190 s on a 2048 x 2048
+    # stack); it is where the inverse-mapped reference grid falls inside the moving volume,
+    # with the edge each backend uses (ANTs half a voxel beyond the centres, scipy at them).
+    from biahub.registration.evaluate import coverage
+
+    rng = np.random.default_rng(4)
+    for trial in range(12):
+        transform = _random_affine(rng, ndim)
+        if trial % 3 == 0:  # half-voxel shifts put sample points exactly on the edges
+            transform = Transform.from_translation(np.round(rng.uniform(-6, 6, ndim) * 2) / 2)
+        mov_shape = tuple(int(s) for s in rng.integers(16, 40, ndim))
+        ref_shape = tuple(int(s) for s in rng.integers(16, 40, ndim))
+        ones = transform.apply(
+            np.ones(mov_shape, np.float32), reference=np.zeros(ref_shape, np.float32)
+        )
+        np.testing.assert_array_equal(coverage(transform, mov_shape, ref_shape), ones > 0.5)
