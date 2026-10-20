@@ -1,5 +1,7 @@
 """biahub track with the tracksdata and HOCT trackers (``tracker:`` in the config)."""
 
+import pathlib
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -10,7 +12,7 @@ from iohub.ngff import open_ome_zarr
 from pydantic import ValidationError
 
 from biahub.cli.main import cli
-from biahub.settings import HoctConfig, TrackingSettings, TracksdataConfig
+from biahub.settings import HoctConfig, TrackastraConfig, TrackingSettings, TracksdataConfig
 
 INPUT_IMAGES = [{"path": None, "channels": {"nuclei_prediction": []}}]
 
@@ -63,7 +65,7 @@ def test_ultrack_stays_the_default_tracker():
     assert isinstance(s.hoct_config, HoctConfig)
 
 
-@pytest.mark.parametrize("tracker", ["tracksdata", "hoct"])
+@pytest.mark.parametrize("tracker", ["tracksdata", "hoct", "trackastra"])
 def test_label_trackers_need_cellpose_labels(tracker):
     with pytest.raises(ValidationError, match="segmentation_method: cellpose"):
         TrackingSettings(
@@ -73,7 +75,7 @@ def test_label_trackers_need_cellpose_labels(tracker):
         )
 
 
-@pytest.mark.parametrize("tracker", ["tracksdata", "hoct"])
+@pytest.mark.parametrize("tracker", ["tracksdata", "hoct", "trackastra"])
 def test_label_trackers_are_2d_only(tracker):
     with pytest.raises(ValidationError, match="2D"):
         _settings(tracker=tracker, output_mode="3D")
@@ -88,6 +90,13 @@ def test_tracker_defaults_are_the_benchmark_settings_in_um():
     assert (td.division_weight, td.appearance_weight) == (1.0, 5.0)
     assert HoctConfig().distance_threshold_um == pytest.approx(300 * 0.1133, abs=0.05)
     assert HoctConfig().model == "general_v1"
+
+
+def test_trackastra_defaults():
+    t = TrackastraConfig()
+    assert (t.model, t.mode) == ("general_2d", "greedy")
+    with pytest.raises(ValidationError):
+        TrackastraConfig(mode="hungarian")
 
 
 def test_unknown_tracker_settings_are_refused():
@@ -144,6 +153,70 @@ def test_hoct_gets_pixel_settings_and_the_image(monkeypatch):
     _check_one_division(tracks, tracked)
 
 
+def _trackastra_graph(labels):
+    """The graph Trackastra returns for the dividing movie: nodes (time, label), edges in time."""
+    import networkx as nx
+
+    graph = nx.DiGraph()
+    for t in range(labels.shape[0]):
+        for label in np.unique(labels[t])[1:]:
+            graph.add_node((t, int(label)), time=t, label=int(label))
+    for t in range(labels.shape[0] - 1):
+        for a in np.unique(labels[t])[1:]:
+            for b in np.unique(labels[t + 1])[1:]:
+                if np.any((labels[t] == a) & (labels[t + 1] == b)):
+                    graph.add_edge((t, int(a)), (t + 1, int(b)))
+    return graph
+
+
+def test_trackastra_gets_the_image_and_mode(monkeypatch):
+    """Trackastra's model is stubbed (no download); its own graph_to_ctc converts."""
+    import trackastra.model
+
+    calls = {}
+
+    class Model:
+        def track(self, imgs, masks, mode="greedy", **kw):
+            calls.update(imgs=imgs, masks=masks, mode=mode)
+            return _trackastra_graph(masks), masks
+
+    def from_pretrained(name, device=None, **kw):
+        calls["name"] = name
+        return Model()
+
+    monkeypatch.setattr(
+        trackastra.model.Trackastra, "from_pretrained", staticmethod(from_pretrained)
+    )
+    from biahub.track import run_trackastra
+
+    labels, image = _dividing_movie()
+
+    tracked, tracks = run_trackastra(labels, image, TrackastraConfig(mode="ilp"))
+
+    assert calls["name"] == "general_2d" and calls["mode"] == "ilp"
+    assert np.array_equal(calls["imgs"], image)
+    assert tracked.shape == labels.shape
+    _check_one_division(tracks, tracked)
+
+
+def _trackastra_weights_cached():
+    from platformdirs import user_data_dir
+
+    return (pathlib.Path(user_data_dir("trackastra")) / "models" / "general_2d").exists()
+
+
+@pytest.mark.skipif(
+    not _trackastra_weights_cached(), reason="Trackastra weights not downloaded"
+)
+def test_trackastra_real_model_tracks_a_division():
+    from biahub.track import run_trackastra
+
+    labels, image = _dividing_movie()
+    tracked, tracks = run_trackastra(labels, image, TrackastraConfig())
+    assert tracked.shape == labels.shape
+    _check_one_division(tracks, tracked)
+
+
 def _hoct_weights_cached():
     try:
         import hoct._models as models
@@ -178,7 +251,7 @@ def dividing_plate(tmp_path):
     return plate_path, labels
 
 
-@pytest.mark.parametrize("tracker", ["tracksdata", "hoct"])
+@pytest.mark.parametrize("tracker", ["tracksdata", "hoct", "trackastra"])
 def test_track_debug_run_with_a_label_tracker(tracker, dividing_plate, tmp_path, monkeypatch):
     import hoct
 
@@ -192,6 +265,20 @@ def test_track_debug_run_with_a_label_tracker(tracker, dividing_plate, tmp_path,
     monkeypatch.setattr(track_mod, "warm_cellpose_weights", lambda name: None)
     warmed = []
     monkeypatch.setattr(track_mod, "warm_hoct_weights", lambda model: warmed.append(model))
+    monkeypatch.setattr(
+        track_mod, "warm_trackastra_weights", lambda model: warmed.append(model)
+    )
+    import trackastra.model
+
+    class Model:
+        def track(self, imgs, masks, mode="greedy", **kw):
+            return _trackastra_graph(masks), masks
+
+    monkeypatch.setattr(
+        trackastra.model.Trackastra,
+        "from_pretrained",
+        staticmethod(lambda name, **kw: Model()),
+    )
     monkeypatch.setattr(hoct, "load_model", lambda model, device="cpu": "model")
     monkeypatch.setattr(
         hoct,
@@ -220,7 +307,7 @@ def test_track_debug_run_with_a_label_tracker(tracker, dividing_plate, tmp_path,
         cli, ["track", "--init", "-i", position, "-o", out, "-c", str(config)]
     )
     assert init.exit_code == 0, init.output
-    assert warmed == (["general_v1"] if tracker == "hoct" else [])
+    assert warmed == {"hoct": ["general_v1"], "trackastra": ["general_2d"]}.get(tracker, [])
 
     result = CliRunner().invoke(
         cli, ["track", "--cluster", "debug", "-i", position, "-o", out, "-c", str(config)]

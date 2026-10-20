@@ -31,6 +31,7 @@ from biahub.settings import (
     CellposeConfig,
     HoctConfig,
     ProcessingInputChannel,
+    TrackastraConfig,
     TrackingSettings,
     TracksdataConfig,
     ZSlicing,
@@ -561,6 +562,60 @@ def run_hoct(
     return _solution_to_tracks(solution, labels.shape)
 
 
+def warm_trackastra_weights(model: str) -> None:
+    """Download Trackastra weights into the shared cache once (from --init)."""
+    from trackastra.model import Trackastra
+
+    Trackastra.from_pretrained(model, device="cpu")
+    click.echo(f"Trackastra weights ready: {model}")
+
+
+def run_trackastra(
+    labels: np.ndarray, images: np.ndarray, config: TrackastraConfig
+) -> tuple[np.ndarray, pd.DataFrame]:
+    """Link fixed (T, Y, X) instance labels with Trackastra.
+
+    ``images`` is the (T, Y, X) image the labels were segmented from. Trackastra's
+    ``graph_to_ctc`` relabels the masks by track and gives each track's parent; the
+    tracks table takes each track's centroid per frame.
+    """
+    import torch
+
+    from skimage.measure import regionprops_table
+    from trackastra.model import Trackastra
+    from trackastra.tracking import graph_to_ctc
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if Path(config.model).exists():
+        model = Trackastra.from_folder(Path(config.model), device=device)
+    else:
+        model = Trackastra.from_pretrained(config.model, device=device)
+    graph, _ = model.track(images, labels, mode=config.mode)
+    ctc, tracked = graph_to_ctc(graph, labels)
+    tracked = np.asarray(tracked).astype(np.int32)
+
+    rows = []
+    for t in range(tracked.shape[0]):
+        props = regionprops_table(tracked[t], properties=("label", "centroid"))
+        rows.append(
+            pd.DataFrame(
+                {
+                    "track_id": props["label"],
+                    "t": t,
+                    "y": props["centroid-0"],
+                    "x": props["centroid-1"],
+                }
+            )
+        )
+    tracks = pd.concat(rows, ignore_index=True)
+    # CTC marks roots with parent 0; ultrack's tables use -1.
+    # graph_to_ctc's table is CTC's res_track.txt: label, t1, t2, parent.
+    parent = dict(zip(ctc["label"].astype(int), ctc["parent"].astype(int), strict=True))
+    tracks["parent_track_id"] = tracks.track_id.map(lambda k: parent.get(int(k), 0) or -1)
+    tracks = tracks.sort_values(["track_id", "t"]).reset_index(drop=True)
+    return tracked, tracks
+
+
 def run_ultrack(
     tracking_config,
     database_path,
@@ -968,6 +1023,7 @@ def track_one_position(
     tracker: str = "ultrack",
     tracksdata_config: TracksdataConfig | None = None,
     hoct_config: HoctConfig | None = None,
+    trackastra_config: TrackastraConfig | None = None,
 ) -> None:
     """
     Run tracking on a single field of view.
@@ -1042,7 +1098,7 @@ def track_one_position(
         position_key, input_images, z_slices, blank_frames_path, z_slicing, pixel_size
     )
 
-    if cellpose_config is not None and tracker in ("tracksdata", "hoct"):
+    if cellpose_config is not None and tracker in ("tracksdata", "hoct", "trackastra"):
         images = cellpose_input(data_dict, cellpose_config)
         cellpose_labels = cellpose_segmentation(data_dict, cellpose_config, images=images)
         click.echo(f"Tracking with {tracker} (cellpose labels)...")
@@ -1050,9 +1106,13 @@ def track_one_position(
             tracking_labels, tracks_df = run_tracksdata(
                 cellpose_labels, tracksdata_config or TracksdataConfig(), pixel_size
             )
-        else:
+        elif tracker == "hoct":
             tracking_labels, tracks_df = run_hoct(
                 cellpose_labels, images, hoct_config or HoctConfig(), pixel_size
+            )
+        else:
+            tracking_labels, tracks_df = run_trackastra(
+                cellpose_labels, images, trackastra_config or TrackastraConfig()
             )
     elif cellpose_config is not None:
         cellpose_labels = cellpose_segmentation(data_dict, cellpose_config)
@@ -1238,6 +1298,11 @@ def track(
             warm_cellpose_weights(settings.cellpose_config.pretrained_model)
         if settings.tracker == "hoct":
             warm_hoct_weights(settings.hoct_config.model)
+        if (
+            settings.tracker == "trackastra"
+            and not Path(settings.trackastra_config.model).exists()
+        ):
+            warm_trackastra_weights(settings.trackastra_config.model)
         click.echo(f"Initialized {output_dirpath} ({len(input_position_dirpaths)} positions)")
         return
 
@@ -1310,6 +1375,7 @@ def track(
                 tracker=settings.tracker,
                 tracksdata_config=settings.tracksdata_config,
                 hoct_config=settings.hoct_config,
+                trackastra_config=settings.trackastra_config,
             )
             jobs.append(job)
 

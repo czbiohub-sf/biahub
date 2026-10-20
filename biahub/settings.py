@@ -167,6 +167,19 @@ class HoctConfig(MyBaseModel):
     solver: dict[str, Any] = {}
 
 
+class TrackastraConfig(MyBaseModel):
+    """Trackastra: a transformer predicts the links of fixed labels (``tracker: trackastra``).
+
+    ``model`` is a pretrained name (``general_2d``, ``ctc``) or a path to a trained
+    model folder. ``mode`` links greedily (``greedy``, or ``greedy_nodiv`` without
+    divisions) or with an ILP (``ilp``, via motile: Gurobi when licensed, else SCIP).
+    The model predicts in pixel space and needs no distance settings.
+    """
+
+    model: str = "general_2d"
+    mode: Literal["greedy", "greedy_nodiv", "ilp"] = "greedy"
+
+
 class TrackingSettings(MyBaseModel):
     target_channel: str = "nuclei_prediction"
     fov: str = "*/*/*"
@@ -180,10 +193,12 @@ class TrackingSettings(MyBaseModel):
     tracking_config: dict[str, Any] = {}
     segmentation_method: Literal["foreground_contour", "cellpose"] = "foreground_contour"
     # The linker. ultrack (re-segments from labels or foreground/contour, configured by
-    # tracking_config); tracksdata and hoct link the cellpose labels as they are.
-    tracker: Literal["ultrack", "tracksdata", "hoct"] = "ultrack"
+    # tracking_config); tracksdata, hoct and trackastra link the cellpose labels as they
+    # are.
+    tracker: Literal["ultrack", "tracksdata", "hoct", "trackastra"] = "ultrack"
     tracksdata_config: TracksdataConfig = TracksdataConfig()
     hoct_config: HoctConfig = HoctConfig()
+    trackastra_config: TrackastraConfig = TrackastraConfig()
     # Post-processing (ultrack's filter_short_sibling_tracks, same meaning): at a division
     # where exactly one daughter lives this many frames or fewer and does not divide
     # again, drop that daughter and merge the other into the parent. A division whose two

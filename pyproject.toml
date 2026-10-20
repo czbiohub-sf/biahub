@@ -52,11 +52,11 @@ dependencies = [
 segment = ["cellpose>=4.0.1"]
 
 # The trackers `biahub track` can select with `tracker:`: ultrack (default),
-# tracksdata (ILP on fixed labels) and HOCT (learned edge scores + ILP). ultrack is
-# deliberately CPU-only: its optional cupy/cucim GPU path offers no speedup in our use
-# cases. HOCT brings torch and pins gurobipy<13; the ILPs use Gurobi when licensed,
-# otherwise SCIP.
-track = ["ultrack>=0.8", "tracksdata", "hoct>=0.3"]
+# tracksdata (ILP on fixed labels), HOCT (learned edge scores + ILP) and Trackastra
+# (transformer links; greedy, or ILP via motile). ultrack is deliberately CPU-only: its
+# optional cupy/cucim GPU path offers no speedup in our use cases. HOCT pins
+# gurobipy<13; the ILPs use Gurobi when licensed, otherwise SCIP.
+track = ["ultrack>=0.8", "tracksdata", "hoct>=0.3", "trackastra[ilp]"]
 
 # PyQt6>=6.10 does not provide wheels
 gui = ["napari[pyqt6]", "PyQt6<6.10", "napari-animation"]

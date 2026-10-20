@@ -31,9 +31,10 @@ blank_frames_path: blank_frames.csv
 segmentation_method: cellpose
 
 # The linker: ultrack (default; re-segments and links, configured by tracking_config
-# below), tracksdata (ILP) or hoct (learned edge scores + ILP). tracksdata and hoct link
-# the cellpose labels as they are, so they need segmentation_method: cellpose and
-# output_mode: 2D. Distances are in um; the defaults below are the A549 benchmark's.
+# below), tracksdata (ILP), hoct (learned edge scores + ILP) or trackastra (transformer
+# links). tracksdata, hoct and trackastra link the cellpose labels as they are, so they
+# need segmentation_method: cellpose and output_mode: 2D. Distances are in um; the
+# defaults below are the A549 benchmark's.
 # tracker: ultrack
 # tracksdata_config:
 #   distance_threshold_um: 22.66   # candidate edges to the next frame
@@ -51,6 +52,9 @@ segmentation_method: cellpose
 #   n_neighbors: 5
 #   max_delta_t: 3                 # frames an edge may skip
 #   solver: {}                     # HOCT ILPSolverConfig overrides
+# trackastra_config:
+#   model: general_2d              # pretrained name (general_2d, ctc) or a model folder
+#   mode: greedy                   # greedy | greedy_nodiv | ilp
 
 # Optional post-processing (ultrack filter_short_sibling_tracks): at a division where
 # exactly one daughter lives N frames or fewer and does not divide again, drop that
