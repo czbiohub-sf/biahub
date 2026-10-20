@@ -190,12 +190,29 @@ def _init_output_plate(
     methods = {projection.method for projection in settings.channels.values()}
     dtype = np.dtype(np.float32) if methods & set(_FLOAT_METHODS) else np.dtype(input_dtype)
 
+    output_shape = (T, len(settings.channels), 1, Y, X)
+    output_channels = list(settings.channels)
+    for input_path in input_position_dirpaths:
+        output_position = Path(output_dirpath, *Path(input_path).parts[-3:])
+        if not output_position.exists():
+            continue
+        with open_ome_zarr(str(output_position), mode="r") as existing:
+            if (
+                existing.channel_names != output_channels
+                or tuple(existing.data.shape) != output_shape
+                or np.dtype(existing.data.dtype) != dtype
+            ):
+                raise ValueError(
+                    f"{output_position} has incompatible channels, shape or dtype; "
+                    "project into a new output store."
+                )
+
     input_plate = Path(input_position_dirpaths[0]).parents[2]
     create_empty_plate(
         store_path=output_dirpath,
         position_keys=[Path(p).parts[-3:] for p in input_position_dirpaths],
-        channel_names=list(settings.channels),
-        shape=(T, len(settings.channels), 1, Y, X),
+        channel_names=output_channels,
+        shape=output_shape,
         scale=scale,
         version=resolve_ome_zarr_version(
             input_position_dirpaths[0], settings.output_ome_zarr_version
