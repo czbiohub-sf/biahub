@@ -400,18 +400,20 @@ def project(
     )
     plans, read_indices, focus_index = _resolve_channels(settings, channel_names, Z)
 
-    # Not yet calibrated on a completed run. RAM per worker: iohub reads one timepoint's
-    # (C_read, Z, Y, X) block at once, so one ZYX volume per channel read (the listed
-    # channels plus the focus channel), plus the window copy a reduction makes and the
-    # shard's output buffer; +2 volumes covers those (6 channels of an A549 position:
-    # 3.8 GiB read, ~5-6 GiB peak, 6 GB/CPU requested). The focus pre-pass holds one
-    # volume and its crop per worker, less than that. Time per (t, c) volume: a
-    # reduction is cheap, so 0.1 min carries a wide margin; the focus pre-pass reads
-    # the focus channel once more per position (~40% on top of track's old window
-    # selection, #418), hence the higher rate.
+    # RAM per worker: iohub reads one timepoint's (C_read, Z, Y, X) block at once, so
+    # one ZYX volume per channel read (the listed channels plus the focus channel), plus
+    # the window copy a reduction makes and the shard's output buffer. Measured on an
+    # A549 position (2026_08_11 SEC61B v8, 6 channels of 86 x 1664 x 1193 float32, 5
+    # shard units busy): 22 GB max RSS, 28 GB peak over the process tree, i.e. ~5-6 GiB
+    # per worker against a 3.8 GiB read. +4 volumes requests 7 GB/CPU there, a margin
+    # for a longer timelapse that keeps all 8 workers busy. The focus pre-pass holds
+    # one volume and its crop per worker, less than that. Time per (t, c) volume: the
+    # same position took 3.6 min against 70 requested, so 0.1 min carries a wide
+    # margin; the focus pre-pass reads the focus channel once more per position (~40%
+    # on top of track's old window selection, #418), hence the higher rate.
     time_minutes, num_cpus, gb_ram_per_cpu = estimate_resources(
         shape=(T, len(read_indices), Z, Y, X),
-        ram_multiplier=len(read_indices) + 2,
+        ram_multiplier=len(read_indices) + 4,
         time_multiplier=0.15 if settings.uses_focus else 0.1,
         max_num_cpus=8,
     )
