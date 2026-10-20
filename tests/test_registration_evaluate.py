@@ -333,3 +333,19 @@ def test_evaluate_refuses_an_unknown_landmark_source():
     ref = _cells(8)
     with pytest.raises(ValueError, match="landmarks"):
         evaluate(Transform.identity(3), ref, ref, VOX3, VOX3, landmarks="cells", images=False)
+
+
+def test_an_identity_pair_of_equal_shapes_skips_the_warp(monkeypatch):
+    # The baseline's identity warp returns the volume unchanged (~200 s on a 2048 x 2048
+    # stack for nothing); a pair of equal shapes uses the volume as it is.
+    from biahub.registration.evaluate import prepare_pair
+
+    ref = _cells(9)
+    mov = _ndi_shift(ref, (0.0, 2.0, 1.0), order=1, mode="nearest")
+    warped = prepare_pair(Transform.identity(3), mov, ref).warped
+    calls = []
+    monkeypatch.setattr(Transform, "apply", lambda self, *a, **k: calls.append(1))
+    pair = prepare_pair(Transform.identity(3), mov, ref)
+    assert calls == []
+    np.testing.assert_array_equal(pair.warped, warped)
+    assert pair.has_data.all()
