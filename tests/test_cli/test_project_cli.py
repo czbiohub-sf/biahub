@@ -135,9 +135,13 @@ def test_project_focus_per_fov_takes_the_median_plane(plate, tmp_path, monkeypat
     data, _, zattrs = _read(out / "A" / "1" / "0")
     np.testing.assert_allclose(data[:, 0, 0], source[:, 0, 1:4].mean(axis=1, dtype=np.float64))
     assert np.array_equal(data[:, 1, 0], source[:, 2, 2])
+    # The record carries the focus settings (minus the engine's `axes`) plus the result.
     assert zattrs["biahub-project"]["focus"] == {
         "channel": "Phase3D",
         "per": "fov",
+        "center_crop_xy": [800, 800],
+        "na_det": 1.35,
+        "lambda_ill": 0.5,
         "z": 2,
         "z_per_t": [1, 6, 2],
     }
