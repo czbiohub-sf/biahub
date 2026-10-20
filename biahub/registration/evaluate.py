@@ -307,12 +307,22 @@ def coverage(transform: Transform, mov_shape: tuple, ref_shape: tuple) -> np.nda
     return ((x >= first[:, None]) & (x <= last[:, None])).reshape(ref_shape)
 
 
-def _comparable_pair(transform, mov, ref, compare: str):
-    """Return (warped moving, reference, coverage) prepared for `compare`.
+@dataclass
+class ComparablePair:
+    """The warped moving volume and the reference, prepared once for layer 3's measures."""
+
+    warped: np.ndarray
+    ref: np.ndarray
+    has_data: np.ndarray  # where the warped moving volume has data
+    compare: str
+
+
+def prepare_pair(transform: Transform, mov: ArrayLike, ref: ArrayLike, compare: str = "edges"):
+    """Return the pair `tile_residuals` and `z_residuals` compare, to share between them.
 
     `edges` takes the Sobel magnitude in each volume's own grid before warping, so the
     empty padding carries no edges and cross-modal pairs compare structure; `intensity`
-    compares the volumes as they are. `coverage` marks where the moving volume has data.
+    compares the volumes as they are.
     """
     if compare not in ("edges", "intensity"):
         raise ValueError(f"compare must be 'edges' or 'intensity', got {compare!r}")
@@ -321,7 +331,15 @@ def _comparable_pair(transform, mov, ref, compare: str):
     if compare == "edges":
         mov, ref = filters.sobel(mov).astype(np.float32), filters.sobel(ref).astype(np.float32)
     warped = transform.apply(mov, reference=ref)
-    return warped, ref, coverage(transform, mov.shape, ref.shape)
+    return ComparablePair(warped, ref, coverage(transform, mov.shape, ref.shape), compare)
+
+
+def _pair(transform, mov, ref, compare: str, pair: ComparablePair | None) -> ComparablePair:
+    if pair is None:
+        return prepare_pair(transform, mov, ref, compare)
+    if pair.compare != compare:
+        raise ValueError(f"the pair was prepared for {pair.compare!r}, not {compare!r}")
+    return pair
 
 
 def _zscore(a: np.ndarray) -> np.ndarray:
@@ -339,6 +357,7 @@ def tile_residuals(
     min_ncc: float = 0.5,
     max_shift_px: float | None = None,
     min_coverage: float = 0.95,
+    pair: ComparablePair | None = None,
 ) -> dict:
     """Return local yx residuals over a grid of tiles of the max projections, in µm.
 
@@ -347,8 +366,10 @@ def tile_residuals(
     default a quarter tile) and its shifted copy correlates above `min_ncc`. Displacements
     follow `point_residuals`' convention (reference minus mapped moving) and are summarised
     by `displacement_stats` and `residual_affine` (a radial pattern = a scale error).
+    `pair` (from `prepare_pair`) skips preparing the volumes again.
     """
-    warped, ref_p, has_data = _comparable_pair(transform, mov, ref, compare)
+    pair = _pair(transform, mov, ref, compare, pair)
+    warped, ref_p, has_data = pair.warped, pair.ref, pair.has_data
     w_mip, r_mip = warped.max(axis=0), ref_p.max(axis=0)
     covered = has_data.mean(axis=0) >= 0.5
     max_shift = tile_px / 4 if max_shift_px is None else max_shift_px
@@ -392,14 +413,17 @@ def z_residuals(
     compare: str = "edges",
     crop_px: int = 768,
     min_coverage: float = 0.5,
+    pair: ComparablePair | None = None,
 ) -> dict:
     """Return the residual shift in the centre and 4 corner crops (3D phase correlation), µm.
 
     Different corners show a tilt (`tilt_dz_um`: the spread of their z residuals). A crop
     that is mostly padding is skipped; in intensity mode the padding is filled with the
-    crop's median so its edge does not dominate the correlation.
+    crop's median so its edge does not dominate the correlation. `pair` (from
+    `prepare_pair`) skips preparing the volumes again.
     """
-    warped, ref_p, has_data = _comparable_pair(transform, mov, ref, compare)
+    pair = _pair(transform, mov, ref, compare, pair)
+    warped, ref_p, has_data = pair.warped, pair.ref, pair.has_data
     _, ny, nx = ref_p.shape
     cy, cx = min(crop_px, ny), min(crop_px, nx)
     starts = {
