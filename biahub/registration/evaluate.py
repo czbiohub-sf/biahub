@@ -332,6 +332,9 @@ def prepare_pair(transform: Transform, mov: ArrayLike, ref: ArrayLike, compare: 
     ref = np.nan_to_num(np.asarray(ref, dtype=np.float32))
     if compare == "edges":
         mov, ref = filters.sobel(mov).astype(np.float32), filters.sobel(ref).astype(np.float32)
+    if transform.is_identity and mov.shape == ref.shape:
+        # the unregistered pair: an identity warp returns the volume unchanged
+        return ComparablePair(mov, ref, np.ones(ref.shape, dtype=bool), compare)
     warped = transform.apply(mov, reference=ref)
     return ComparablePair(warped, ref, coverage(transform, mov.shape, ref.shape), compare)
 
