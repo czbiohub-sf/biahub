@@ -7,7 +7,7 @@
 //
 // Tracking reads the label image `biahub segment` wrote into `input_zarr`
 // (`labels/<labels>`) and writes INTO the same positions — the tracked labels as
-// `labels/<labels>_tracked`, `tracks.geff` and a tracks CSV — and nothing else
+// `labels/tracks_<labels>`, `tracks.geff` and a tracks CSV — and nothing else
 // is kept: each worker builds its Ultrack database in the node's $TMPDIR and
 // deletes it after export (no -o), so tracking has no step directory. Its real
 // logs are in nextflow/slurm_output/track/, like every step's; submitit's

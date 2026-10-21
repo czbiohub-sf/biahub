@@ -162,7 +162,7 @@ image, which also renames the GEFF and CSV to `tracks_<output_label>.*`),
 `input_images` on the legacy path). Track neither segments nor selects or
 projects Z-planes: it reads the label image `biahub segment` wrote into the
 **projected** plate (`labels: <segment.yml model name>`), writes the tracked
-labels beside it as `labels/<labels>_tracked` with `tracks.geff` and a tracks
+labels beside it as `labels/tracks_<labels>` with `tracks.geff` and a tracks
 CSV, and a 3D input with `output_mode: 2D` is an error. Old configs under
 `/hpc/projects/tlg2_mantis/` still carry rejected fields — migrate:
 
@@ -181,7 +181,7 @@ output_ome_zarr_version               -> (delete: labels take the projected plat
 `focus.lambda_ill`; the pixel size comes from the store.) `segment.yml`'s model
 `channels` must match channels `project.yml` writes, which carry the
 **pre-rename** names of the **assembled** plate (§2, §5). `qc_project.yaml`'s
-`instance_count.label` must be `<track.yml labels>_tracked` and its anchor
+`instance_count.label` must be `tracks_<track.yml labels>` and its anchor
 `channels:` entry the segment model's channel — SKILL.md §5a checks these
 couplings before launch.
 

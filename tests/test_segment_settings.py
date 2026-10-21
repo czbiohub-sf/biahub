@@ -190,7 +190,7 @@ def test_nextflow_a549_segment_config_carries_the_validated_cellpose_settings():
         settings = SegmentationSettings(**yaml.safe_load(f))
     (name,) = settings.models
     model = settings.models[name]
-    assert name == "nuclei"  # track.yml's `labels: nuclei`; QC counts labels/nuclei_tracked
+    assert name == "nuclei"  # track.yml's `labels: nuclei`; QC counts labels/tracks_nuclei
     assert model.pretrained_model == "cpsam_v2"
     assert model.channels == ["nuclei_prediction"]
     assert model.eval_args == {

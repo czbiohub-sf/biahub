@@ -62,9 +62,10 @@ class ProcessingInputChannel(MyBaseModel):
         return v
 
 
-#: Suffix of the label image tracking writes next to the one it reads:
-#: ``labels/<labels>`` (from `biahub segment`) -> ``labels/<labels>_tracked``.
-TRACKED_LABEL_SUFFIX = "_tracked"
+#: Prefix of the label image tracking writes next to the one it reads:
+#: ``labels/<labels>`` (from `biahub segment`) -> ``labels/tracks_<labels>``, matching
+#: the ``tracks.geff`` / ``tracks_<fov>.csv`` beside it.
+TRACKED_LABEL_PREFIX = "tracks_"
 
 
 class TrackingSettings(MyBaseModel):
@@ -82,13 +83,13 @@ class TrackingSettings(MyBaseModel):
     segmentation_method: Literal["labels", "foreground_contour"] = "labels"
     # segmentation_method: labels -- the label image, `labels/<labels>` in each -i
     # position, named after the segment config's model. The tracked labels go to
-    # `labels/<labels>_tracked`.
+    # `labels/tracks_<labels>`.
     labels: str | None = None
     # Smoothing (pixels) ultrack applies to the labels' contours before it builds its
     # own segmentation hypotheses from them (ultrack `labels_to_contours`).
     labels_sigma: float = 5.0
     # segmentation_method: labels -- the name of the tracked label image, when the
-    # default `<labels>_tracked` is not wanted, e.g. to keep several tracking runs of
+    # default `tracks_<labels>` is not wanted, e.g. to keep several tracking runs of
     # one segmentation side by side. Then the tracks go to `tracks_<output_label>.geff`
     # and `tracks_<output_label>_<fov>.csv` instead of `tracks.geff` / `tracks_<fov>.csv`.
     output_label: str | None = None
@@ -148,8 +149,8 @@ class TrackingSettings(MyBaseModel):
             if self.target_channel is not None:
                 raise ValueError(
                     "target_channel is for segmentation_method: foreground_contour; with "
-                    f"labels the tracks are written to labels/{self.labels}"
-                    f"{TRACKED_LABEL_SUFFIX}, or to labels/<output_label> if set."
+                    f"labels the tracks are written to labels/{TRACKED_LABEL_PREFIX}{self.labels}"
+                    ", or to labels/<output_label> if set."
                 )
             if self.output_label == self.labels:
                 raise ValueError(
@@ -178,7 +179,7 @@ class TrackingSettings(MyBaseModel):
     def tracked_label(self) -> str:
         """Name of the label image tracking writes, ``labels/<tracked_label>``."""
         if self.segmentation_method == "labels":
-            return self.output_label or f"{self.labels}{TRACKED_LABEL_SUFFIX}"
+            return self.output_label or f"{TRACKED_LABEL_PREFIX}{self.labels}"
         return self.target_channel
 
     @property

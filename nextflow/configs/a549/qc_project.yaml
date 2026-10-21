@@ -1,7 +1,7 @@
 # QC of the PROJECTED plate (`4-assemble/<dataset>_proj.zarr`, Z=1): the plate
 # `biahub project` writes beside the assembled one and tracking reads and writes
 # into. It holds the projected channels and, after tracking, each position's
-# `labels/<labels>` (segment) and `labels/<labels>_tracked` (track) label images,
+# `labels/<labels>` (segment) and `labels/tracks_<labels>` (track) label images,
 # so this is where the cell counts live:
 # `instance_count` reads the TRACKED label image (imaging-qc#243); segment writes
 # `labels/<model>` beside it. The pipeline plans
@@ -42,11 +42,11 @@ blank:
     granularity: channel
 
 # Cells per frame, from the label image tracking writes (`label:`, the track config's
-# `labels` plus `_tracked`). `channels:` is the ONE anchor channel the labels
+# `labels` with a `tracks_` prefix). `channels:` is the ONE anchor channel the labels
 # were segmented from: the count rows carry its C. The plate has one Z-plane, so
 # `slice` and `volume` count the same thing; `slice` keeps per-(T, Z) rows.
 instance_count:
-  label: nuclei_tracked
+  label: tracks_nuclei
   channels:
     - nuclei_prediction
   granularity: slice

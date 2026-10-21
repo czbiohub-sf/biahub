@@ -2,7 +2,7 @@
 #
 # Track reads the PROJECTED plate (<N>-assemble/<dataset>_proj.zarr, Z=1) and the label
 # image `biahub segment` (segment.yml) wrote into it, `labels/<labels>`; it writes the
-# tracked labels next to it as `labels/<labels>_tracked`, plus tracks.geff and a tracks
+# tracked labels next to it as `labels/tracks_<labels>`, plus tracks.geff and a tracks
 # CSV, into every position. Track neither segments nor projects.
 #
 # CURRENT SCHEMA. TrackingSettings forbids extra keys; the old fields `mode`,
@@ -15,14 +15,14 @@
 #                                      -> segment.yml: models.<name>
 #   cellpose_config.labels_sigma       -> labels_sigma
 #   target_channel                     -> labels (the segment.yml model name); the
-#                                         output is named <labels>_tracked
+#                                         output is named tracks_<labels>
 
 # 2D tracks the Z=1 projected plate and writes a Z=1 label image. Track does not
 # project; a 3D input with output_mode 2D is an error.
 output_mode: "2D"
 fov: "*/*/*"
 
-# The label image to track: segment.yml's model name. Tracks go to labels/nuclei_tracked.
+# The label image to track: segment.yml's model name. Tracks go to labels/tracks_nuclei.
 labels: nuclei
 # Smoothing (px) of the labels' contours before ultrack builds its own segmentation
 # hypotheses from them.

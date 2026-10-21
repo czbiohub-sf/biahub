@@ -914,7 +914,7 @@ def track(
 
     Notes
     -----
-    Outputs go into each ``-i`` position: ``labels/<labels>_tracked`` (OME-NGFF label
+    Outputs go into each ``-i`` position: ``labels/tracks_<labels>`` (OME-NGFF label
     image; ``labels/<target_channel>`` on the foreground+contour path),
     ``tracks.geff`` and ``tracks_<row>_<col>_<fov>.csv``. The ``-i`` plate is the plate
     track reads, so 2D tracking writes into the projected (Z=1) plate, next to the
@@ -1079,7 +1079,7 @@ def track_cli(
     """Track the instance labels of a label image (`biahub segment`) with ultrack.
 
     Reads labels/<labels> from each -i position and writes into it: the tracked labels
-    as an OME-NGFF label image (labels/<labels>_tracked), the tracks as tracks.geff,
+    as an OME-NGFF label image (labels/tracks_<labels>), the tracks as tracks.geff,
     and a tracks CSV. 2D tracking reads (and writes into) the projected Z=1 plate
     `biahub project` makes; the Ultrack databases are temporary unless -o names a
     directory to keep them in. Track does not segment or project.

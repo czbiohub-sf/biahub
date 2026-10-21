@@ -27,11 +27,11 @@ which is exactly the coupling that goes wrong:
                 so they are read from the settings model, not the YAML text)
               + virtual-stain's data.init_args.target_channel
     labels    = <segment.yml model>           (<fov>/labels/<model>)
-              + <track.yml labels>_tracked    (<fov>/labels/<model>_tracked)
+              + tracks_<track.yml labels>    (<fov>/labels/tracks_<model>)
 
 Segment and track write their labels INTO the plate they read, so
 `qc_project.yaml`'s `instance_count.label` only resolves if it is
-`<track.yml labels>_tracked` (or a `segment.yml` model name), and its one anchor
+`tracks_<track.yml labels>` (or a `segment.yml` model name), and its one anchor
 channel, the channel the labels were segmented from, must be that model's
 channel. Four files, no shared source of truth. Checked when `qc_project.yaml`
 has an `instance_count` block and `track.yml` exists.
@@ -115,7 +115,7 @@ def tracked_label(track_cfg):
     t = yaml.safe_load(Path(track_cfg).read_text())
     if t.get("segmentation_method", "labels") != "labels":
         return None
-    return t["labels"], t.get("output_label") or f"{t['labels']}_tracked"
+    return t["labels"], t.get("output_label") or f"tracks_{t['labels']}"
 
 
 if __name__ == "__main__":
@@ -161,7 +161,7 @@ if __name__ == "__main__":
                 bad += not ok
                 print(f"   {'ok  ' if ok else 'MISS'} models.{name}.channels: {ch!r}")
 
-    # track.yml reads labels/<labels> of that plate and writes labels/<labels>_tracked.
+    # track.yml reads labels/<labels> of that plate and writes labels/tracks_<labels>.
     tracked = None
     if (cfgs / "track.yml").exists():
         tracked = tracked_label(cfgs / "track.yml")
@@ -173,7 +173,7 @@ if __name__ == "__main__":
 
     # qc_project.yaml QCs the plate segment and track write into: its `channels:`
     # against that plate, and its `instance_count` against the label images there
-    # (the tracked one, labels/<track.yml labels>_tracked, or a segment model's) with
+    # (the tracked one, labels/tracks_<track.yml labels>, or a segment model's) with
     # the anchor channel being the one the model segmented.
     if (cfgs / "qc_project.yaml").exists():
         print(f"qc_project.yaml: {source} plate will have {track_reads}")

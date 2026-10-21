@@ -19,7 +19,7 @@ from biahub.utils.ngff import label_chunks_and_shards
 
 # The label image `biahub segment` would write (its model name) and the one track writes.
 INPUT_LABEL = "nuclei"
-LABEL = "nuclei_tracked"
+LABEL = "tracks_nuclei"
 
 
 @pytest.fixture(scope="function")
@@ -474,7 +474,7 @@ def test_labels_is_the_default_and_names_the_output():
         TrackingSettings()
     settings = TrackingSettings(labels="nuclei")
     assert settings.segmentation_method == "labels"
-    assert settings.tracked_label == "nuclei_tracked"
+    assert settings.tracked_label == "tracks_nuclei"
     assert settings.input_images == []
     with pytest.raises(ValueError, match="target_channel is for"):
         TrackingSettings(labels="nuclei", target_channel="x")
@@ -490,7 +490,7 @@ def test_foreground_contour_needs_a_target_channel_and_input_images():
 
 def test_output_label_names_the_tracked_image_and_the_tracks_files():
     default = TrackingSettings(labels="nuclei")
-    assert (default.tracked_label, default.tracks_stem) == ("nuclei_tracked", "tracks")
+    assert (default.tracked_label, default.tracks_stem) == ("tracks_nuclei", "tracks")
     custom = TrackingSettings(labels="nuclei", output_label="nuclei_sigma3")
     assert (custom.tracked_label, custom.tracks_stem) == (
         "nuclei_sigma3",
