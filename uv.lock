@@ -440,8 +440,8 @@ requires-dist = [
     { name = "cytoland", marker = "extra == 'all'" },
     { name = "cytoland", marker = "extra == 'stain'" },
     { name = "dask", extras = ["array"] },
-    { name = "dca-helpers", marker = "extra == 'all'", git = "https://github.com/chanzuckerberg/dynamic-cell-atlas-specs.git?rev=75813b64b5d2af156714d3e7907da6d15c09c473" },
-    { name = "dca-helpers", marker = "extra == 'dca'", git = "https://github.com/chanzuckerberg/dynamic-cell-atlas-specs.git?rev=75813b64b5d2af156714d3e7907da6d15c09c473" },
+    { name = "dca-helpers", marker = "extra == 'all'", git = "https://github.com/chanzuckerberg/dynamic-cell-atlas-specs.git?rev=1a72c28d3592ae7caf690efa4c8b7edfbc38a920" },
+    { name = "dca-helpers", marker = "extra == 'dca'", git = "https://github.com/chanzuckerberg/dynamic-cell-atlas-specs.git?rev=1a72c28d3592ae7caf690efa4c8b7edfbc38a920" },
     { name = "humanize" },
     { name = "imageio-ffmpeg" },
     { name = "imaging-qc-pipeline", extras = ["interactive"], marker = "extra == 'qc'", git = "https://github.com/czbiohub-sf/imaging-qc-pipeline?rev=c5c51dc700d0aa52388d6f6a08eec5bfe16a5766" },
@@ -1174,7 +1174,7 @@ array = [
 [[package]]
 name = "dca-helpers"
 version = "0.2.10"
-source = { git = "https://github.com/chanzuckerberg/dynamic-cell-atlas-specs.git?rev=75813b64b5d2af156714d3e7907da6d15c09c473#75813b64b5d2af156714d3e7907da6d15c09c473" }
+source = { git = "https://github.com/chanzuckerberg/dynamic-cell-atlas-specs.git?rev=1a72c28d3592ae7caf690efa4c8b7edfbc38a920#1a72c28d3592ae7caf690efa4c8b7edfbc38a920" }
 dependencies = [
     { name = "acquire-zarr" },
     { name = "boto3" },

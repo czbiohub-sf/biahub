@@ -124,7 +124,7 @@ imaging_qc_pipeline = { git = "https://github.com/czbiohub-sf/imaging-qc-pipelin
 
 # Pinned at the head of the dynamic-cell-atlas-specs metadata engine PR (#29).
 # Move this to `tag = "<first release containing the engine>"` before merge.
-dca_helpers = { git = "https://github.com/chanzuckerberg/dynamic-cell-atlas-specs.git", rev = "75813b64b5d2af156714d3e7907da6d15c09c473" }
+dca_helpers = { git = "https://github.com/chanzuckerberg/dynamic-cell-atlas-specs.git", rev = "1a72c28d3592ae7caf690efa4c8b7edfbc38a920" }
 
 # Pin iohub to main at the czbiohub-sf/iohub#476 merge, which syncs a write
 # unit's shards before recording it as done. Without it a preemption or a
