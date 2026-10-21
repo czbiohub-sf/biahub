@@ -38,7 +38,7 @@ intensity_stats:
   quantiles: [0.01, 0.05, 0.25, 0.5, 0.75, 0.95, 0.99]
 
 # Per-channel SNR floors rather than one scalar. Brightfield SNR is not comparable
-# to fluorescence, so "BF - Oblique" is left out of the mapping (an unlisted
+# to fluorescence, so "BF" is left out of the mapping (an unlisted
 # channel gets no hard floor), and the derived channels — Phase3D,
 # nuclei_prediction, membrane_prediction — are left out for the same reason: a
 # near-binary prediction reads an SNR in the hundreds. The fluorescence values

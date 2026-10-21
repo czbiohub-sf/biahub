@@ -97,7 +97,7 @@ model silently stalls. Top level may contain **only** `model`, `data`,
 `output_ome_zarr_version`); old `viscy predict` blocks `trainer:` and
 `return_predictions:` are rejected. `data.init_args.data_path` is injected
 per-position — leave it out. `target_channel` carries the `_prediction` suffix
-deliberately (§2).
+deliberately (see `biahub/channel_names.py`).
 
 **`track.yml` — schema.** `TrackingSettings` forbids extra keys. Current
 fields: `output_mode`, `z_slicing`, `target_channel`, `fov`, `input_images`,
