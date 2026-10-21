@@ -941,3 +941,58 @@ def test_rerun_max_clears_after_source_shrinks(tmp_path, sbatch_file):
     output = open_ome_zarr(output_path)["A/1/0"].data[:]
     np.testing.assert_array_equal(output[:4, 1], shrunk["A/1/0"].data[:, 0])
     assert not output[4, 1].any()
+
+
+def _concat_single_plate(create_custom_plate, tmp_path, sbatch_file, channels, **settings_kw):
+    plate_path, plate = create_custom_plate(
+        tmp_path / "zarr1", position_list=_ONE_POS, channel_names=channels
+    )
+    settings = ConcatenateSettings(
+        concat_data_paths=[str(plate_path) + "/*/*/*"], channel_names=["all"], **settings_kw
+    )
+    output_path = tmp_path / "output.zarr"
+    config_path = tmp_path / "concat.yml"
+    model_to_yaml(settings, config_path)
+    concatenate(
+        input_position_dirpaths=None,
+        config_filepath=config_path,
+        output_dirpath=output_path,
+        sbatch_filepath=sbatch_file,
+        cluster="debug",
+        monitor=False,
+    )
+    return plate, output_path
+
+
+def test_concatenate_renames_output_channels(create_custom_plate, tmp_path, sbatch_file):
+    channels = ["BF - Oblique", "GFP EX488 EM525-45"]
+    plate, output_path = _concat_single_plate(
+        create_custom_plate, tmp_path, sbatch_file, channels, rename_channels=True
+    )
+    with open_ome_zarr(output_path) as out:
+        assert out.channel_names == ["BF", "raw GFP EX488 EM525-45"]
+        for pos_name, out_pos in out.positions():
+            src_pos = plate[pos_name]
+            for new, old in zip(out.channel_names, channels, strict=True):
+                np.testing.assert_array_equal(
+                    out_pos[0][:, out_pos.get_channel_index(new)],
+                    src_pos[0][:, src_pos.get_channel_index(old)],
+                )
+
+
+def test_concatenate_keeps_names_by_default(create_custom_plate, tmp_path, sbatch_file):
+    channels = ["BF - Oblique", "GFP EX488 EM525-45"]
+    _, output_path = _concat_single_plate(create_custom_plate, tmp_path, sbatch_file, channels)
+    with open_ome_zarr(output_path) as out:
+        assert out.channel_names == channels
+
+
+def test_rename_collision_raises(create_custom_plate, tmp_path, sbatch_file):
+    with pytest.raises(ValueError, match=r"Phase3D.*Phase3D_v2|Phase3D_v2.*Phase3D"):
+        _concat_single_plate(
+            create_custom_plate,
+            tmp_path,
+            sbatch_file,
+            ["Phase3D", "Phase3D_v2"],
+            rename_channels=True,
+        )

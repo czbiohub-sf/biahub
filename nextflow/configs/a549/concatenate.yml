@@ -17,6 +17,10 @@ channel_names: all
 chunks_czyx: [1, 16, 256, 256]
 output_ome_zarr_version: "0.5"
 
+# Write final channel names (BF, Phase3D, nuclei_prediction, "raw <name>" for
+# detector channels; see biahub/channel_names.py), so every later step reads them.
+rename_channels: true
+
 # shards_ratio is a ratio over the CHUNK shape (shards = chunks * ratio,
 # elementwise TCZYX), not an absolute shard shape. Leave unset unless you have a
 # measured reason: raising the T entry multiplies the shard buffer and the RAM

@@ -78,6 +78,15 @@ shards_ratio: null
 #   - "0.5"
 output_ome_zarr_version: "0.4"
 
+# Write the output channels under their final names (BF - Oblique -> BF,
+# Phase3D* -> Phase3D, nuclei -> nuclei_prediction, membrane -> membrane_prediction,
+# anything else -> "raw <name>"). channel_names above still selects by source
+# name. Errors if two source channels map to the same final name.
+# Options:
+#   - false (default): keep the source names
+#   - true: rename
+rename_channels: false
+
 # Whether to ensure unique position names in the output
 # Options:
 #   - false or null: Positions with the same name are merged into one output

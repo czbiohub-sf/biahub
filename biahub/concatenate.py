@@ -12,6 +12,7 @@ from iohub.ngff import Plate
 from iohub.ngff.utils import create_empty_plate, process_single_position
 from natsort import natsorted
 
+from biahub.channel_names import canonical_channel_names
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.option_eat_all import OptionEatAll
 from biahub.cli.parsing import (
@@ -656,7 +657,11 @@ def _resolve_concatenate_inputs(
             all_data_paths[0], settings.output_ome_zarr_version
         ),
         "scale": (1,) * 2 + tuple(output_voxel_size),
-        "channel_names": all_channel_names,
+        "channel_names": (
+            canonical_channel_names(all_channel_names)
+            if settings.rename_channels
+            else all_channel_names
+        ),
         "dtype": dtype,
     }
 

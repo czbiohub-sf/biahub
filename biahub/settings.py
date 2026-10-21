@@ -528,6 +528,10 @@ class ConcatenateSettings(MyBaseModel):
     # "0.5". Set to None to preserve the input store's OME-Zarr version, or
     # to "0.4" / "0.5" to force a specific output version.
     output_ome_zarr_version: Literal["0.4", "0.5"] | None = "0.5"
+    # Write the output channels under their final names (see
+    # biahub.channel_names). Source channels are still selected by their
+    # source names.
+    rename_channels: bool = False
 
     @field_validator("concat_data_paths")
     @classmethod
