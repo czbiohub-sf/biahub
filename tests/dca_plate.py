@@ -1,5 +1,6 @@
 """Synthetic assembled plates with a sample sheet, QC table and confirmed file for dca-finalize."""
 
+import hashlib
 import shutil
 
 from collections.abc import Callable
@@ -7,8 +8,10 @@ from pathlib import Path
 
 import pandas as pd
 
+from click.testing import CliRunner, Result
 from iohub.ngff import open_ome_zarr
 
+from biahub.cli.main import cli
 from biahub.dca_metadata import TABLE_COLUMNS
 
 BASE_CONFIG = Path(__file__).parents[1] / "nextflow" / "configs" / "a549" / "dca_base.toml"
@@ -146,3 +149,31 @@ def build_plate(tmp_path: Path, create_custom_plate: Callable, stem: str = STEM)
     write_qc(plate)
     confirmed_path(plate).write_text(CONFIRMED)
     return plate
+
+
+def write_config(tmp_path: Path) -> Path:
+    """Write ``configs/dca_finalize.yml`` next to a copy of the base config it names."""
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    shutil.copy(BASE_CONFIG, config_dir / "dca_base.toml")
+    path = config_dir / "dca_finalize.yml"
+    path.write_text("base_config: dca_base.toml\n")
+    return path
+
+
+def positions(plate: Path) -> list[str]:
+    return [str(plate / well / "0") for well in WELLS]
+
+
+def run(plate: Path, config: Path, *more_plates: Path) -> Result:
+    dirpaths = [d for p in (plate, *more_plates) for d in positions(p)]
+    return CliRunner().invoke(cli, ["dca-finalize", "-i", *dirpaths, "-c", str(config)])
+
+
+def attributes(plate: Path, well: str) -> dict:
+    with open_ome_zarr(plate / well / "0", mode="r") as position:
+        return dict(position.zattrs)
+
+
+def file_record(path: Path) -> dict[str, str]:
+    return {"name": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}

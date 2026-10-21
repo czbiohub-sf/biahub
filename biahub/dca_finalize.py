@@ -10,9 +10,9 @@ two-pass: if any FOV has an error, nothing is written and every error is listed.
 """
 
 import hashlib
-import tomllib
+import logging
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -30,6 +30,7 @@ from dca_helpers.metadata import (
 )
 from iohub.ngff import open_ome_zarr
 
+from biahub import __version__ as biahub_version
 from biahub.cli.parsing import config_filepath, input_position_dirpaths, position_key
 from biahub.dca_metadata import AirtableClient, metadata_rows
 from biahub.dca_stats import (
@@ -43,6 +44,8 @@ from biahub.dca_stats import (
 from biahub.settings import DcaFinalizeSettings
 
 PROVENANCE_KEY = "biahub-dca-finalize"
+
+logger = logging.getLogger(__name__)
 
 
 class DcaFinalizeError(Exception):
@@ -87,6 +90,7 @@ def _provenance(plate: Path, settings: DcaFinalizeSettings) -> dict[str, Any]:
         "confirmed_config": _file_record(confirmed) if confirmed.exists() else None,
         "metadata_source": source,
         "qc_stage": settings.qc_stage,
+        "biahub_version": biahub_version,
     }
 
 
@@ -97,23 +101,14 @@ def _group_by_plate(position_dirpaths: list[Path]) -> dict[Path, list[Path]]:
     return dict(plates)
 
 
-def _load_block(paths: list[Path]) -> dict[str, Any]:
-    for path in paths:
-        try:
-            tomllib.loads(path.read_text())
-        except tomllib.TOMLDecodeError as error:
-            raise ValueError(f"{path}: {error}") from error
-    return load_dca_config(*paths)
-
-
 def _load_plate_sources(
     plate: Path, settings: DcaFinalizeSettings, client: AirtableClient | None
 ) -> tuple[_PlateSources, list[str]]:
     issues = []
     confirmed = settings.confirmed_path(plate)
     try:
-        block = _load_block(
-            [settings.base_config, *([confirmed] if confirmed.exists() else [])]
+        block = load_dca_config(
+            settings.base_config, *([confirmed] if confirmed.exists() else [])
         )
     except ValueError as error:
         issues.append(f"{plate}: {error}")
@@ -131,19 +126,27 @@ def _load_plate_sources(
     return _PlateSources(block, rows, qc, derived_columns(plate)), issues
 
 
-def _dca_block(payload: dict[str, Any], stats: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _new_attributes(
+    payload: dict[str, Any], stats: dict[str, dict[str, Any]], record: dict[str, Any]
+) -> dict[str, Any]:
+    """Return the attributes finalize owns: a fresh ``dca`` block and the run record."""
     attrs: dict[str, Any] = {}
     merge_dca_attributes(
         attrs,
         {k: v for k, v in payload.items() if k != "channels"},
         payload.get("channels"),
+        run_attrs={PROVENANCE_KEY: record},
     )
     write_normalization_statistics(attrs, stats, metadata=STATS_METADATA)
-    return attrs["dca"]
+    return attrs
 
 
 def _check_position(
-    dirpath: Path, plate: Path, sources: _PlateSources
+    dirpath: Path,
+    plate: Path,
+    sources: _PlateSources,
+    record: dict[str, Any],
+    warnings: list[str],
 ) -> tuple[dict[str, Any] | None, list[str]]:
     where = str(dirpath)
     key = position_key(dirpath)
@@ -161,7 +164,7 @@ def _check_position(
         row = table_row | facts | sources.derived
         try:
             resolved = resolve_dca(sources.block, row, channel_keys=channel_names, where=where)
-            payload = validate_dca(resolved, where=where)
+            payload = validate_dca(resolved, where=where, warnings=warnings)
         except DcaValidationError as error:
             issues.extend(f"{where}: {issue}" for issue in error.issues)
         except ValueError as error:
@@ -181,7 +184,7 @@ def _check_position(
     if issues or payload is None or stats is None:
         return None, issues
     try:
-        return _dca_block(payload, stats), []
+        return _new_attributes(payload, stats, record), []
     except ValueError as error:
         return None, [f"{where}: {error}"]
 
@@ -213,17 +216,18 @@ def dca_finalize(
 
     issues: list[str] = []
     failing_plates: list[Path] = []
-    blocks: dict[Path, dict[str, Any]] = {}
-    provenance: dict[Path, dict[str, Any]] = {}
+    new_attributes: dict[Path, dict[str, Any]] = {}
     for plate, dirpaths in plates.items():
         sources, plate_issues = _load_plate_sources(plate, settings, airtable_client)
         record = _provenance(plate, settings)
+        warnings: list[str] = []
         for dirpath in dirpaths:
-            block, position_issues = _check_position(dirpath, plate, sources)
+            attrs, position_issues = _check_position(dirpath, plate, sources, record, warnings)
             plate_issues.extend(position_issues)
-            if block is not None:
-                blocks[dirpath] = block
-                provenance[dirpath] = record
+            if attrs is not None:
+                new_attributes[dirpath] = attrs
+        for warning, count in Counter(warnings).items():
+            logger.warning("%s: %s (%d of %d positions)", plate, warning, count, len(dirpaths))
         if plate_issues:
             issues.extend(plate_issues)
             failing_plates.append(plate)
@@ -231,10 +235,10 @@ def dca_finalize(
         confirmed = dict.fromkeys(settings.confirmed_path(plate) for plate in failing_plates)
         raise DcaFinalizeError(issues, list(confirmed))
 
-    for dirpath, block in blocks.items():
+    for dirpath, attrs in new_attributes.items():
         with open_ome_zarr(dirpath, mode="r+") as position:
-            position.zattrs.update({"dca": block, PROVENANCE_KEY: provenance[dirpath]})
-    click.echo(f"Wrote attributes.dca to {len(blocks)} positions")
+            position.zattrs.update(attrs)
+    click.echo(f"Wrote attributes.dca to {len(new_attributes)} positions")
 
 
 @click.command("dca-finalize")

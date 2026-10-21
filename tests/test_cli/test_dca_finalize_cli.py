@@ -1,32 +1,28 @@
-import hashlib
-import json
 import logging
-import shutil
 
 from pathlib import Path
-from typing import Any
 
 import pytest
 
-from click.testing import CliRunner
 from dca_helpers.validation.runner import validate
-from iohub.ngff import open_ome_zarr
 
-from biahub.cli.main import cli
-from biahub.dca_finalize import dca_finalize
-from biahub.dca_metadata import AIRTABLE_FIELDS
+import biahub
+
 from tests.dca_plate import (
-    BASE_CONFIG,
     CHANNELS,
     CONFIRMED,
     STEM,
     TIME_INCREMENT_S,
     WELLS,
+    attributes,
     build_plate,
     confirmed_path,
+    file_record,
     p1_value,
+    run,
     sheet_path,
     table_row,
+    write_config,
     write_qc,
 )
 from tests.dca_plate import write_table as write_sheet
@@ -45,34 +41,11 @@ def plate(tmp_path, create_custom_plate) -> Path:
 
 @pytest.fixture
 def config(tmp_path) -> Path:
-    config_dir = tmp_path / "configs"
-    config_dir.mkdir()
-    shutil.copy(BASE_CONFIG, config_dir / "dca_base.toml")
-    path = config_dir / "dca_finalize.yml"
-    path.write_text("base_config: dca_base.toml\n")
-    return path
-
-
-def positions(plate: Path) -> list[str]:
-    return [str(plate / well / "0") for well in WELLS]
-
-
-def run(plate: Path, config: Path, *more_plates: Path):
-    dirpaths = [d for p in (plate, *more_plates) for d in positions(p)]
-    return CliRunner().invoke(cli, ["dca-finalize", "-i", *dirpaths, "-c", str(config)])
-
-
-def file_record(path: Path) -> dict[str, str]:
-    return {"name": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+    return write_config(tmp_path)
 
 
 def error_lines(result) -> list[str]:
     return result.output.strip().removeprefix("Error: ").splitlines()
-
-
-def attributes(plate: Path, well: str) -> dict:
-    with open_ome_zarr(plate / well / "0", mode="r") as position:
-        return dict(position.zattrs)
 
 
 def test_dca_finalize_writes_block(plate, config, caplog):
@@ -95,6 +68,7 @@ def test_dca_finalize_writes_block(plate, config, caplog):
             "confirmed_config": file_record(confirmed_path(plate)),
             "metadata_source": {"kind": "csv", "name": sheet_path(plate).name},
             "qc_stage": 5,
+            "biahub_version": biahub.__version__,
         }
 
 
@@ -267,32 +241,3 @@ def test_shared_sheet_serves_each_plate_its_own_rows(
         for p in (plate, other)
     }
     assert markers == {STEM: "TOMM20", OTHER_STEM: "SEC61B"}
-
-
-class SheetClient:
-    """AirTable client serving each sample-sheet row as a well-level record."""
-
-    def __init__(self, rows: list[dict[str, str]]):
-        self._rows = rows
-
-    def records(self, dataset: str) -> list[dict[str, Any]]:
-        return [
-            {"id": f"rec{i}", "fields": {AIRTABLE_FIELDS[k]: v for k, v in row.items()}}
-            for i, row in enumerate(self._rows)
-            if row["dataset"] == dataset
-        ]
-
-
-def test_provenance_has_no_local_paths_or_airtable_ids(plate, config, tmp_path):
-    sheet_path(plate).unlink()
-    config.write_text(
-        "base_config: dca_base.toml\n"
-        "airtable:\n  base_id: appPRIVATEBASE0001\n  table: tblPRIVATETABLE001\n"
-    )
-    client = SheetClient([table_row(well) for well in WELLS])
-    dca_finalize([plate / well / "0" for well in WELLS], config, airtable_client=client)
-    provenance = attributes(plate, "A/1")["biahub-dca-finalize"]
-    assert provenance["metadata_source"] == {"kind": "airtable"}
-    text = json.dumps(provenance)
-    for private in (str(tmp_path), "appPRIVATEBASE0001", "tblPRIVATETABLE001"):
-        assert private not in text
