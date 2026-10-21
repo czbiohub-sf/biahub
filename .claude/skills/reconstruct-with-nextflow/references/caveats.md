@@ -434,15 +434,17 @@ Consequences worth knowing:
   real virtual-stain regression moves the distribution, not the last bit. Deskew,
   reconstruct and assemble are fully deterministic.
 
-## 15. Pyramids follow tracking and precede QC, and are not a resume unit
+## 15. Pyramids follow tracking and precede QC, and resume per shard
 
 `biahub pyramid` rewrites each position's `zarr.json` (the multiscales list and
 its `biahub-pyramid` record), as do tracking and imaging-qc, so the pipeline
-runs it after tracking and holds QC, the very last step, until it has finished. A run that fails after the pyramid step
-left the plates with 3 levels; a relaunch with `-resume` reuses the cached
-pyramid tasks, and a relaunch that recomputes earlier steps rewrites level 0
-only — rerun `biahub pyramid -i <plate>/*/*/* --levels 3` by hand in that
-case, since the coarser levels are not recomputed by anything else. A plate
+runs it after tracking and holds QC, the very last step, until it has finished.
+The module passes `--resume`: each shard of each level is a unit recorded under
+`.iohub-progress/` beside the plate, so a preempted task's retry recomputes only
+the shards it had not finished. A relaunch that recomputes earlier steps
+rewrites level 0 only, and the pyramid tasks are then cached by Nextflow: run
+`biahub pyramid --no-resume -i <plate>/*/*/* --levels 3` by hand in that case,
+since nothing else recomputes the coarser levels from the new level 0. A plate
 that already carries a pyramid of another depth is refused at init
 (`already has a pyramid of a different depth`); the fix is iohub's
 `delete_pyramid` on each position or matching `--pyramid_levels`.

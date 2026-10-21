@@ -114,6 +114,37 @@ def test_pyramid_rerun_recomputes_and_different_depth_is_refused(plate):
     assert "'image': 3" in str(deeper.exception)
 
 
+def test_pyramid_resume_skips_finished_shards(plate, tmp_path):
+    """Markers beside the plate let a rerun with --resume skip the finished shards."""
+    position_path = plate.joinpath(*POSITIONS[0])
+    assert _run("--cluster", "debug", "--resume", "-i", position_path).exit_code == 0
+    progress = tmp_path / ".iohub-progress" / plate.name
+    markers = list(progress.rglob("*.done"))
+    assert markers and {m.parent.name for m in markers} == {"1", "2"}
+    assert (progress / "A" / "1" / "0" / "labels" / "nuclei" / "1").is_dir()
+    before = {m: m.stat().st_mtime_ns for m in markers}
+    shards = {p: p.stat().st_mtime_ns for p in (position_path / "1").rglob("*") if p.is_file()}
+
+    result = _run("--cluster", "debug", "--resume", "-i", position_path)
+
+    assert result.exit_code == 0, result.output
+    assert {m: m.stat().st_mtime_ns for m in markers} == before  # nothing re-recorded
+    assert {
+        p: p.stat().st_mtime_ns for p in (position_path / "1").rglob("*") if p.is_file()
+    } == shards
+
+    # Other settings do not match those markers: the levels are recomputed and
+    # recorded under the new fingerprint.
+    assert (
+        _run(
+            "--cluster", "debug", "--resume", "-i", position_path, "--method", "max"
+        ).exit_code
+        == 0
+    )
+    assert len(list(progress.rglob("*.done"))) == len(markers)  # same units, new names
+    assert not any(m.exists() for m in markers)  # the old records are retired
+
+
 def test_pyramid_init_validates_and_reports_resources(plate):
     positions = [plate.joinpath(*key) for key in POSITIONS]
 

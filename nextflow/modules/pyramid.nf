@@ -9,8 +9,8 @@
 // resolution levels (level 0 is the existing array), on its image and on every
 // label image under `labels/`, so it must run after the LAST step that writes
 // pixels or labels into that plate, and before QC, which stamps the same
-// position attrs it rewrites. Level 0 is never touched. Rerunning recomputes
-// the same levels, which is what a retried task wants.
+// position attrs it rewrites. Level 0 is never touched. A rerun with
+// --resume recomputes only the shards an interrupted attempt did not finish.
 //
 // INIT AND RUN ARE SEPARATE SUBWORKFLOWS, like every step's (see the INIT PHASE
 // comment in mantis-v2.nf). The init here scaffolds nothing: it checks the first
@@ -20,7 +20,10 @@
 //
 // run_pyramid uses `--cluster debug` so that submitit's DebugExecutor runs the
 // work in-process; Nextflow owns the per-position fan-out. See modules/project.nf,
-// the template this follows.
+// the template this follows. `--resume` is passed unconditionally, as every
+// resumable step's module does: a preempted task's retry (or a later
+// `nextflow -resume`) recomputes only the shards it had not finished, and the
+// markers are keyed by the levels and methods, so a changed request recomputes.
 
 include { parse_resources; slurm_logs; slurm_log_dir; retry_time } from './common'
 
@@ -65,7 +68,7 @@ process run_pyramid {
 
     script:
     """
-    biahub pyramid --cluster debug \
+    biahub pyramid --cluster debug --resume \
         -i "${input_zarr}/${position}" \
         --levels ${levels}
     """
