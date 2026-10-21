@@ -116,15 +116,15 @@ source_kind = "original_data"
 [dca.provenance.study.source]
 source_kind = "agent"
 [dca.provenance.study.source.citation]
-source_url = "https://github.com/czbiohub-sf/biahub"
-quote = "Mantis v2 A549 timelapse plates processed by the biahub pipeline"
-match_status = "fuzzy"
+source_url = "https://raw.githubusercontent.com/czbiohub-sf/biahub/0f14f45d2f045a53cbf041a4e16682bd0f14c321/LICENSE"
+quote = "Copyright (c) 2023 Chan Zuckerberg Biohub"
+match_status = "exact"
 [dca.provenance.study.description]
 source_kind = "agent"
 [dca.provenance.study.description.citation]
-source_url = "https://github.com/czbiohub-sf/biahub"
-quote = "Mantis v2 A549 timelapse plates processed by the biahub pipeline"
-match_status = "fuzzy"
+source_url = "https://raw.githubusercontent.com/czbiohub-sf/biahub/0f14f45d2f045a53cbf041a4e16682bd0f14c321/README.md"
+quote = "`biahub` was originally developed to reconstruct data acquired on the [mantis](https://doi.org/10.1093/pnasnexus/pgae323) microscope"
+match_status = "exact"
 [dca.provenance.study.study_type]
 source_kind = "human"
 [dca.provenance.study.license]
@@ -189,23 +189,23 @@ source_kind = "human"
 [dca.provenance.study_component.imaging_method]
 source_kind = "agent"
 [dca.provenance.study_component.imaging_method.citation]
-source_url = "https://github.com/czbiohub-sf/biahub"
-quote = "Mantis v2 A549 timelapse plates processed by the biahub pipeline"
-match_status = "fuzzy"
+source_url = "https://raw.githubusercontent.com/czbiohub-sf/biahub/0f14f45d2f045a53cbf041a4e16682bd0f14c321/README.md"
+quote = "moving light-sheet onto the label-free reference"
+match_status = "exact"
 [dca.provenance.acquisition.time_increment_s]
 source_kind = "original_data"
 [dca.provenance.acquisition.microscope]
 source_kind = "agent"
 [dca.provenance.acquisition.microscope.citation]
-source_url = "https://github.com/czbiohub-sf/biahub"
-quote = "Mantis v2 A549 timelapse plates processed by the biahub pipeline"
-match_status = "fuzzy"
+source_url = "https://raw.githubusercontent.com/czbiohub-sf/biahub/0f14f45d2f045a53cbf041a4e16682bd0f14c321/README.md"
+quote = "`biahub` was originally developed to reconstruct data acquired on the [mantis](https://doi.org/10.1093/pnasnexus/pgae323) microscope"
+match_status = "exact"
 [dca.provenance.image_data.processing_variant]
 source_kind = "agent"
 [dca.provenance.image_data.processing_variant.citation]
-source_url = "https://github.com/czbiohub-sf/biahub"
-quote = "Mantis v2 A549 timelapse plates processed by the biahub pipeline"
-match_status = "fuzzy"
+source_url = "https://raw.githubusercontent.com/czbiohub-sf/biahub/0f14f45d2f045a53cbf041a4e16682bd0f14c321/README.md"
+quote = "`5-assemble` concatenates the deskew, reconstruct, and virtual-stain channels into one plate"
+match_status = "exact"
 [dca.provenance.study.year_imaged]
 source_kind = "original_data"
 [dca.provenance.acquisition.acquisition_date]

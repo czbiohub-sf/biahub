@@ -1,4 +1,6 @@
 import logging
+import subprocess
+import tomllib
 
 from pathlib import Path
 
@@ -160,3 +162,48 @@ def test_a549_base_config_passes_repo_validator(tmp_path):
     assert all(r.passed for r in run.results)
     assert any(r.parent_path is not None for r in run.results)
     assert not failures
+
+
+RAW_BIAHUB = "https://raw.githubusercontent.com/czbiohub-sf/biahub/"
+BIAHUB_GROUNDED = (
+    "study.source",
+    "study.description",
+    "study_component.imaging_method",
+    "acquisition.microscope",
+    "image_data.processing_variant",
+)
+
+
+def agent_citations() -> dict[str, dict]:
+    with BASE_CONFIG.open("rb") as handle:
+        provenance = tomllib.load(handle)["dca"]["provenance"]
+    records = {}
+
+    def walk(node: dict, path: str) -> None:
+        if "source_kind" in node:
+            if node["source_kind"] == "agent":
+                records[path] = node.get("citation", {})
+            return
+        for key, child in node.items():
+            walk(child, f"{path}.{key}" if path else key)
+
+    walk(provenance, "")
+    return records
+
+
+def test_biahub_agent_citations_quote_the_pinned_file():
+    citations = agent_citations()
+    cited = {path: citations[path] for path in BIAHUB_GROUNDED}
+    repo = BASE_CONFIG.parents[3]
+    for path, citation in cited.items():
+        assert citation["source_url"].startswith(RAW_BIAHUB), path
+        sha, filename = citation["source_url"].removeprefix(RAW_BIAHUB).split("/", 1)
+        shown = subprocess.run(
+            ["git", "-C", str(repo), "show", f"{sha}:{filename}"],
+            capture_output=True,
+            text=True,
+        )
+        if shown.returncode != 0:
+            pytest.skip(f"commit {sha} is not in this checkout")
+        assert citation["quote"] in shown.stdout, path
+        assert citation["match_status"] == "exact", path
