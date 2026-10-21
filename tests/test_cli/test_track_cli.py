@@ -124,6 +124,8 @@ def _make_tracking_config(plate_path, tmp_path):
         "output_mode": "2D",
         "fov": "*/*/*",
         "target_channel": "nuclei_prediction",
+        # The foreground/contour path needs no cellpose weights or GPU in the tests.
+        "segmentation_method": "foreground_contour",
         "input_images": [
             {
                 # Primary data source left null -> resolved from the -i input plate.
@@ -378,10 +380,22 @@ def test_track_cli_debug_single_position(tmp_path, example_tracking_plate, monke
 def _minimal_settings(**overrides):
     base = {
         "target_channel": "nuclei_prediction",
+        "segmentation_method": "foreground_contour",
         "input_images": [{"path": None, "channels": {"nuclei_prediction": []}}],
     }
     base.update(overrides)
     return TrackingSettings(**base)
+
+
+def test_cellpose_is_the_default_and_needs_its_config():
+    base = {
+        "target_channel": "nuclei_prediction",
+        "input_images": [{"path": None, "channels": {"nuclei_prediction": []}}],
+    }
+    with pytest.raises(ValueError, match="cellpose_config is not set"):
+        TrackingSettings(**base)
+    settings = TrackingSettings(**base, cellpose_config={"input_channel": "nuclei_prediction"})
+    assert settings.segmentation_method == "cellpose"
 
 
 def test_init_labels_take_the_input_z(tmp_path, example_tracking_plate, create_custom_plate):

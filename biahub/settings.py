@@ -103,7 +103,10 @@ class TrackingSettings(MyBaseModel):
     output_mode: Literal["2D", "3D"] = "2D"
     input_images: list[ProcessingInputChannel]
     tracking_config: dict[str, Any] = {}
-    segmentation_method: Literal["foreground_contour", "cellpose"] = "foreground_contour"
+    # What feeds ultrack: cellpose labels (the default, with `cellpose_config`), or a
+    # foreground mask and contour map computed by the `input_images` processing
+    # functions (the legacy path; see settings/example_track_settings.yml).
+    segmentation_method: Literal["foreground_contour", "cellpose"] = "cellpose"
     # Post-processing (ultrack's filter_short_sibling_tracks, same meaning): at a division
     # where exactly one daughter lives this many frames or fewer and does not divide
     # again, drop that daughter and merge the other into the parent. A division whose two
@@ -129,6 +132,18 @@ class TrackingSettings(MyBaseModel):
         if v is None:
             return v
         return Path(v)
+
+    @model_validator(mode="after")
+    def check_segmentation_method(self):
+        # Without this a config that omits cellpose_config would silently fall back to
+        # the foreground/contour path at tracking time.
+        if self.segmentation_method == "cellpose" and self.cellpose_config is None:
+            raise ValueError(
+                "segmentation_method is cellpose (the default) but cellpose_config is not "
+                "set; add a cellpose_config, or set segmentation_method: foreground_contour "
+                "to track a foreground mask and contour map from input_images."
+            )
+        return self
 
 
 class EdgeGraphSettings(BaseModel):

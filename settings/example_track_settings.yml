@@ -11,7 +11,8 @@ fov: "*/*/*"
 target_channel: nuclei_prediction
 blank_frames_path: blank_frames.csv
 
-# Segmentation method used to feed ultrack: "cellpose" or "foreground_contour".
+# Segmentation method used to feed ultrack: "cellpose" (the default; needs
+# cellpose_config) or "foreground_contour" (the legacy path).
 # - cellpose: run a Cellpose model per frame to produce instance labels.
 # - foreground_contour: derive a foreground mask + contour map (ultrack segments).
 segmentation_method: cellpose
