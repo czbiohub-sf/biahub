@@ -8,9 +8,9 @@
 // `biahub pyramid` writes IN PLACE: every position of the plate gets `levels`
 // resolution levels (level 0 is the existing array), on its image and on every
 // label image under `labels/`, so it must run after the LAST step that writes
-// pixels or labels into that plate. Level 0 is never touched, so QC of the same
-// plate can run concurrently with it. Rerunning recomputes the same levels,
-// which is what a retried task wants.
+// pixels or labels into that plate, and before QC, which stamps the same
+// position attrs it rewrites. Level 0 is never touched. Rerunning recomputes
+// the same levels, which is what a retried task wants.
 //
 // INIT AND RUN ARE SEPARATE SUBWORKFLOWS, like every step's (see the INIT PHASE
 // comment in mantis-v2.nf). The init here scaffolds nothing: it checks the first

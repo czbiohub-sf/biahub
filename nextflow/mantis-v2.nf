@@ -23,12 +23,13 @@ nextflow.enable.dsl = 2
 //  workflow body for why that is possible and what it buys.
 //
 //  Flat-field → deskew → reconstruct → virtual-stain → assemble → project →
-//  track → QC → pyramid is the full chain: assemble concatenates the
+//  track → pyramid → QC is the full chain: assemble concatenates the
 //  deskew/reconstruct/virtual-stain channels into one plate, project reduces
 //  that 3D plate to the 2D (Z=1) plate 2D tracking needs, track reads it as its
-//  single input, QC reads the finished stores, and pyramid adds the coarser
-//  resolution levels to the assembled and projected plates once nothing else
-//  writes into them. Follow the chaining below for the pattern.
+//  single input, pyramid adds the coarser resolution levels to the assembled
+//  and projected plates once nothing else writes pixels or labels into them,
+//  and QC, the very last step, reads the finished stores. Follow the chaining
+//  below for the pattern.
 //
 //  Assemble, project, track and QC are OPTIONAL and selected by whether their
 //  config is given, so a run performs the prefix it asks for: A549 wants
@@ -451,12 +452,35 @@ workflow {
                                   project_on ? project_done.done : assemble_done.done)
     }
 
+    // ----- Pyramids ---------------------------------------------------------
+    // After the LAST step that writes pixels or labels into each plate: the
+    // assembled plate's tracking when it writes there (track without project),
+    // else assemble; the projected plate's tracking, else project. `biahub
+    // pyramid` rewrites a position's multiscales metadata and adds its own
+    // record to the position's zarr.json, so it must not overlap another writer
+    // of that file, and QC (which stamps the tables it wrote into the same
+    // attrs) is held until it has finished. Level 0 is never touched.
+    if (pyramid_on) {
+        def assembled_written = (track_on && !project_on) ? track_done.done : assemble_done.done
+        pyramid_assembled_done = pyramid_assembled_run_wf(all_positions, assemble_output,
+                                                          pyramid_levels, pya_init.resources,
+                                                          assembled_written)
+        if (project_on) {
+            def projected_written = track_on ? track_done.done : project_done.done
+            pyramid_projected_done = pyramid_projected_run_wf(all_positions, project_output,
+                                                              pyramid_levels, pyp_init.resources,
+                                                              projected_written)
+        }
+    }
+
     // ----- QC compute -------------------------------------------------------
-    // Planned in the init phase; the compute it planned is gated on the last
-    // step that writes each store: the ASSEMBLED plate on assemble_done (so its
-    // pixel QC runs concurrently with projection and tracking), and the
-    // PROJECTED plate on track_done when tracking is on (its labels are counted
-    // there), else project_done.
+    // THE VERY LAST STEP. Planned in the init phase; the compute it planned is
+    // gated on the last writer of each store: its pyramid when pyramids are on,
+    // else tracking where it writes into that store (the projected plate, or the
+    // assembled one for 3D tracking), else the step that created it. QC used to
+    // run concurrently with projection and tracking; it now waits, so that
+    // imaging-qc's stamps on the position attrs never race another writer of the
+    // same zarr.json and the report describes the finished plates.
     //
     // A QC verdict cannot fail the pipeline: `imaging-qc gate` exits 0 whether
     // positions pass or fail, recording the verdict in each store's own
@@ -475,43 +499,20 @@ workflow {
         // combined, for the reason spelled out at qc_plan_inputs above.
         qc_compute_ready = channel.empty()
         if (qc_image_on) {
+            def assembled_final = pyramid_on ? pyramid_assembled_done.done
+                : (track_on && !project_on) ? track_done.done : assemble_done.done
             qc_compute_ready = qc_compute_ready.mix(
-                assemble_done.done.map { tuple(assemble_output, params.qc_config) } )
+                assembled_final.map { tuple(assemble_output, params.qc_config) } )
         }
         if (qc_project_on) {
-            def proj_written = track_on ? track_done.done : project_done.done
+            def projected_final = pyramid_on ? pyramid_projected_done.done
+                : track_on ? track_done.done : project_done.done
             qc_compute_ready = qc_compute_ready.mix(
-                proj_written.map { tuple(project_output, params.qc_project_config) } )
+                projected_final.map { tuple(project_output, params.qc_project_config) } )
         }
 
         qc = qc_compute_wf(qc_plan.items, qc_plan.stores, qc_compute_ready)
         qc_report = qc_report_wf(qc.done, spec, qc_report_dir)
-    }
-
-    // ----- Pyramids ---------------------------------------------------------
-    // The LAST writer of each plate. `biahub pyramid` rewrites a position's
-    // multiscales metadata and adds its own provenance record to the position's
-    // zarr.json, and so does everything else that writes into the plate after
-    // assemble: tracking (labels/, tracks.geff) and imaging-qc, which stamps the
-    // tables it wrote into the same position attrs. Two writers of one zarr.json
-    // lose updates, so pyramids wait for all of them: the assembled plate's for
-    // tracking when it writes there (track without project), the projected
-    // plate's for tracking, and both for QC's compute when QC is on. The QC
-    // report only reads the tables, so it is not waited for. Level 0 is never
-    // touched, so no downstream reader sees a different image.
-    if (pyramid_on) {
-        def assembled_written = (track_on && !project_on) ? track_done.done : assemble_done.done
-        def assembled_ready   = qc_on ? qc.done : assembled_written
-        pyramid_assembled_done = pyramid_assembled_run_wf(all_positions, assemble_output,
-                                                          pyramid_levels, pya_init.resources,
-                                                          assembled_ready)
-        if (project_on) {
-            def projected_written = track_on ? track_done.done : project_done.done
-            def projected_ready   = qc_on ? qc.done : projected_written
-            pyramid_projected_done = pyramid_projected_run_wf(all_positions, project_output,
-                                                              pyramid_levels, pyp_init.resources,
-                                                              projected_ready)
-        }
     }
 
     // ----- Cleanup of intermediates (--cleanup_intermediates) ---------------
@@ -549,11 +550,11 @@ workflow {
         def final_signals = [assemble_done.done]
         if (project_on) final_signals << project_done.done
         if (track_on) final_signals << track_done.done
-        if (qc_on)    final_signals << qc_report.done
         if (pyramid_on) {
             final_signals << pyramid_assembled_done.done
             if (project_on) final_signals << pyramid_projected_done.done
         }
+        if (qc_on)    final_signals << qc_report.done
         final_gate = channel.empty()
         final_signals.each { signal -> final_gate = final_gate.mix(signal) }
 
@@ -599,13 +600,13 @@ workflow {
     if (assemble_on) step_events << [label: 'assemble', done: assemble_done.done, output: assemble_output]
     if (project_on)  step_events << [label: 'project',  done: project_done.done,  output: project_output]
     if (track_on)    step_events << [label: 'track',    done: track_done.done,    output: track_input]
-    if (qc_on)       step_events << [label: 'QC',       done: qc_report.done,     output: qc_report_dir]
     if (pyramid_on) {
         step_events << [label: 'pyramid (assembled)', done: pyramid_assembled_done.done, output: assemble_output]
         if (project_on) {
             step_events << [label: 'pyramid (projected)', done: pyramid_projected_done.done, output: project_output]
         }
     }
+    if (qc_on)       step_events << [label: 'QC',       done: qc_report.done,     output: qc_report_dir]
     if (cleanup_on)  step_events << [label: 'cleanup intermediates', done: cleanup_run.done, output: cleanup_record]
 
     steps = step_events.collect { event -> event.label }

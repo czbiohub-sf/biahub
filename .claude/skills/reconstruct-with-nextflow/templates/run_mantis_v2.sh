@@ -204,7 +204,8 @@ unset CLAUDECODE
 #
 # Pyramids are not a flag here: the assembled and projected plates get 3
 # resolution levels (images mean-pooled, labels max-pooled; DCA v0.2, biahub#359)
-# after tracking and QC by default. Add `--pyramid_levels 1` to skip them.
+# after tracking by default, and QC runs last, after them. Add
+# `--pyramid_levels 1` to skip them.
 #
 # TO SKIP A STEP, DELETE ITS LINE. Do not comment it out: `#` inside a
 # backslash-continued command does not start a comment line — the continuation

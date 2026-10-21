@@ -417,11 +417,11 @@ Consequences worth knowing:
   real virtual-stain regression moves the distribution, not the last bit. Deskew,
   reconstruct and assemble are fully deterministic.
 
-## 15. Pyramids are written last, and are not a resume unit
+## 15. Pyramids follow tracking and precede QC, and are not a resume unit
 
 `biahub pyramid` rewrites each position's `zarr.json` (the multiscales list and
 its `biahub-pyramid` record), as do tracking and imaging-qc, so the pipeline
-runs it after both for each plate. A run that fails after the pyramid step
+runs it after tracking and holds QC, the very last step, until it has finished. A run that fails after the pyramid step
 left the plates with 3 levels; a relaunch with `-resume` reuses the cached
 pyramid tasks, and a relaunch that recomputes earlier steps rewrites level 0
 only — rerun `biahub pyramid -i <plate>/*/*/* --levels 3` by hand in that

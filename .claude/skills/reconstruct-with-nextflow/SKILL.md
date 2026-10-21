@@ -3,7 +3,7 @@ name: reconstruct-with-nextflow
 description: >-
   Run a mantis-v2 microscope dataset through the biahub Nextflow reconstruction
   pipeline (nextflow/mantis-v2.nf: flat-field → deskew → reconstruct →
-  virtual-stain → assemble → project → track → QC → pyramid) on the Bruno HPC cluster. Assemble,
+  virtual-stain → assemble → project → track → pyramid → QC) on the Bruno HPC cluster. Assemble,
   track and QC are optional and selected per dataset family: A549 runs assemble
   + track + QC, neuromast runs assemble + QC and no tracking. Locates the raw
   acquisition under /hpc/instruments/cm.mantis, picks the output project
@@ -349,13 +349,14 @@ Do not run anything yet. Show the user:
 
    | family | steps |
    |---|---|
-   | A549 / cell-line / organelle | flat-field → deskew → reconstruct → virtual-stain → **assemble → project → track → QC → pyramid** |
-   | neuromast / zebrafish / dynatrack | flat-field → deskew → reconstruct → virtual-stain → **assemble → QC → pyramid** (no projection or tracking) |
+   | A549 / cell-line / organelle | flat-field → deskew → reconstruct → virtual-stain → **assemble → project → track → pyramid → QC** |
+   | neuromast / zebrafish / dynatrack | flat-field → deskew → reconstruct → virtual-stain → **assemble → pyramid → QC** (no projection or tracking) |
 
    Pyramid is on by default whenever assemble runs: it adds two coarser levels
    (3 in total, DCA v0.2) to every image and label image of the assembled and
-   projected plates, in place, once tracking and QC have finished writing into
-   them. `--pyramid_levels 1` skips it.
+   projected plates, in place, once tracking has finished writing into them.
+   QC is the very last step and waits for the pyramids. `--pyramid_levels 1`
+   skips them.
 
    Write the list out in the plan rather than naming the family, and say which
    optional steps are being skipped and why. If the user asks to skip anything
