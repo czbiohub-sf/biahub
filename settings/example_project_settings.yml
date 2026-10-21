@@ -57,14 +57,15 @@ focus:
   na_det: 1.35
   lambda_ill: 0.5
 
-# Output chunk shape [C, Z, Y, X] and shards ratio [T, C, Z, Y, X], as in concatenate: a
-# shard is chunks * ratio, elementwise (the C entry must be 1). null takes iohub's
-# defaults: one-frame 256 x 256 chunks, one (t, c) frame per shard. For a timelapse
-# consider shards spanning 16 timepoints and the full frame, e.g. [16, 1, 1, 7, 5] for
-# 1664 x 1193 frames (ceil(Y/256), ceil(X/256)); see nextflow/configs/a549/project.yml.
+# Output chunk shape [C, Z, Y, X] and shard geometry, as in concatenate. null takes
+# iohub's defaults: one-frame 256 x 256 chunks, one (t, c) frame per shard. shards is a
+# size target such as "200MB" (the largest chunk-aligned shard under it, filling the
+# frame and then timepoints; C is never sharded), "XY" / "XYZ" (one shard per plane /
+# volume), or an explicit TCZYX shape in array elements. For a timelapse a size target
+# gives shards of many timepoints by the full frame; see nextflow/configs/a549/project.yml.
 # Sharding needs OME-Zarr 0.5.
 chunks_czyx: null
-shards_ratio: null
+shards: null
 
 # When null, keep the OME-Zarr version of the input store.
 output_ome_zarr_version: null

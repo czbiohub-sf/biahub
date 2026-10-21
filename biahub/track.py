@@ -704,20 +704,17 @@ def cellpose_segmentation(
 # is the MUST) and its "2D+time" example; growing T keeps per-plane reads cheap.
 LABEL_CHUNKS = (16, 1, 128, 128)
 # Shards span one time chunk (16 timepoints, the DCA SHOULD) and the whole YX plane,
-# capped at 16 chunks (2048 px, the DCA spatial-shard SHOULD).
-MAX_LABEL_SHARD_CHUNKS = 16
+# capped at 2048 px (the DCA spatial-shard SHOULD).
+MAX_LABEL_SHARD_PX = 2048
 
 
 def label_chunks_and_shards(
     shape: tuple[int, int, int, int],
 ) -> tuple[tuple[int, ...], tuple[int, ...]]:
-    """Chunks and shards ratio for a (T, Z, Y, X) label array of ``shape``."""
+    """Chunks and shard shape (elements, rounded up to chunks by iohub) for a (T, Z, Y, X) label."""
     chunks = tuple(min(c, s) for c, s in zip(LABEL_CHUNKS, shape, strict=True))
-    shards_ratio = (1, 1) + tuple(
-        min(-(-s // c), MAX_LABEL_SHARD_CHUNKS)
-        for c, s in zip(chunks[2:], shape[2:], strict=True)
-    )
-    return chunks, shards_ratio
+    shards = chunks[:2] + tuple(min(s, MAX_LABEL_SHARD_PX) for s in shape[2:])
+    return chunks, shards
 
 
 def write_tracking_labels(label_array, labels: ArrayLike, output_mode: str) -> None:
@@ -940,7 +937,7 @@ def _init_labels(
 
     input_plate = Path(input_position_dirpaths[0]).parents[2]
     position_keys = [Path(p).parts[-3:] for p in input_position_dirpaths]
-    label_chunks, label_shards_ratio = label_chunks_and_shards((T, Z, Y, X))
+    label_chunks, label_shards = label_chunks_and_shards((T, Z, Y, X))
 
     create_empty_plate(
         store_path=input_plate,
@@ -953,7 +950,7 @@ def _init_labels(
         label_names=[settings.target_channel],
         label_dtype=np.uint32,
         label_chunks=label_chunks,
-        label_shards_ratio=label_shards_ratio if version == "0.5" else None,
+        label_shards=label_shards if version == "0.5" else None,
     )
 
     provenance = settings.model_dump(mode="json")

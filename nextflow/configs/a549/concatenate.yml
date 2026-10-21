@@ -17,8 +17,11 @@ channel_names: all
 chunks_czyx: [1, 16, 256, 256]
 output_ome_zarr_version: "0.5"
 
-# shards_ratio is a ratio over the CHUNK shape (shards = chunks * ratio,
-# elementwise TCZYX), not an absolute shard shape. Leave unset unless you have a
-# measured reason: raising the T entry multiplies the shard buffer and the RAM
-# request, and one torn shard then loses every timepoint in it.
-shards_ratio: [5, 1, 6, 7, 5]   # ZYX entries recomputed for THIS output shape: ceil(Z/16), ceil(Y/256), ceil(X/256)
+# shards is a size target: iohub builds the largest chunk-aligned shard under it,
+# filling X, Y, Z first and then timepoints (C is never sharded). 5GB on this
+# plate's 86 x 1664 x 1193 float32 volumes gives shards of 5 timepoints by the
+# full volume (4.1 GiB), the same geometry a run before this key produced. Do
+# not raise it without a measured reason: the T extent multiplies the shard
+# buffer and the RAM request, and one torn shard loses every timepoint in it.
+# Also accepts "XY" / "XYZ" (one shard per plane / volume) or a TCZYX shape.
+shards: 5GB

@@ -431,11 +431,12 @@ def test_init_labels_leaves_existing_labels(tmp_path, example_tracking_plate):
 
 
 def test_label_chunks_and_shards():
-    # 1 MB uint32 chunks (DCA SHOULD); shards cover YX up to 16 chunks.
+    # 1 MB uint32 chunks (DCA SHOULD); shards are one time chunk by the YX plane, up to
+    # 2048 px (iohub rounds the elements up to whole chunks).
     chunks, shards = label_chunks_and_shards((67, 86, 1664, 1193))
     assert chunks == (16, 1, 128, 128)
-    assert shards == (1, 1, 13, 10)
-    assert label_chunks_and_shards((67, 86, 4096, 300))[1] == (1, 1, 16, 3)
+    assert shards == (16, 1, 1664, 1193)
+    assert label_chunks_and_shards((67, 86, 4096, 300))[1] == (16, 1, 2048, 300)
     # Clamped to small arrays.
     assert label_chunks_and_shards((5, 1, 64, 64))[0] == (5, 1, 64, 64)
 
