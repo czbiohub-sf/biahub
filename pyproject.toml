@@ -149,7 +149,7 @@ ultrack = { git = "https://github.com/ieivanov/ultrack", rev = "69e7589a050b0aa5
 #   #461 feat/auto-size-shards (on #488): `shards=` / `label_shards=` as a size
 #        target, extent or shape, and pyramid levels whose shards keep the level-0
 #        shard's byte size;
-#   #490 feat/pyramid-resume (on #461): compute_pyramid(resume=, resume_token=),
+#   #491 feat/pyramid-resume (on #461): compute_pyramid(resume=, resume_token=),
 #        one shard-aligned region per unit, with which `biahub pyramid --resume`
 #        recomputes only what an interrupted attempt did not finish;
 #   #489 feat/process-single-position-output-label: process_single_position(
