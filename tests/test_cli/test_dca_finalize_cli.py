@@ -1,6 +1,9 @@
+import hashlib
+import json
 import shutil
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -9,6 +12,8 @@ from dca_helpers.validation.runner import validate
 from iohub.ngff import open_ome_zarr
 
 from biahub.cli.main import cli
+from biahub.dca_finalize import dca_finalize
+from biahub.dca_metadata import AIRTABLE_FIELDS
 from tests.dca_plate import (
     BASE_CONFIG,
     CHANNELS,
@@ -56,6 +61,10 @@ def run(plate: Path, config: Path, *more_plates: Path):
     return CliRunner().invoke(cli, ["dca-finalize", "-i", *dirpaths, "-c", str(config)])
 
 
+def file_record(path: Path) -> dict[str, str]:
+    return {"name": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+
+
 def error_lines(result) -> list[str]:
     return result.output.strip().removeprefix("Error: ").splitlines()
 
@@ -78,8 +87,12 @@ def test_dca_finalize_writes_block(plate, config):
         assert stats["metadata"]["source"] == "imaging-qc intensity_stats"
         assert dca["biosample"]["group_id"] == f"{STEM}/{well}"
         assert dca["acquisition"]["time_increment_s"] == TIME_INCREMENT_S
-        assert Path(attrs["biahub-dca-finalize"]["base_config"]).is_absolute()
-        assert attrs["biahub-dca-finalize"]["qc_stage"] == 5
+        assert attrs["biahub-dca-finalize"] == {
+            "base_config": file_record(config.parent / "dca_base.toml"),
+            "confirmed_config": file_record(confirmed_path(plate)),
+            "metadata_source": {"kind": "csv", "name": sheet_path(plate).name},
+            "qc_stage": 5,
+        }
 
 
 def test_relative_config_paths_resolve_outside_cwd(plate, config, tmp_path, monkeypatch):
@@ -89,7 +102,7 @@ def test_relative_config_paths_resolve_outside_cwd(plate, config, tmp_path, monk
     result = run(plate, config)
     assert result.exit_code == 0, result.output
     written = attributes(plate, "A/1")["biahub-dca-finalize"]["base_config"]
-    assert Path(written) == config.parent / "dca_base.toml"
+    assert written == file_record(config.parent / "dca_base.toml")
 
 
 def test_finalized_plate_passes_validator(plate, config):
@@ -251,3 +264,32 @@ def test_shared_sheet_serves_each_plate_its_own_rows(
         for p in (plate, other)
     }
     assert markers == {STEM: "TOMM20", OTHER_STEM: "SEC61B"}
+
+
+class SheetClient:
+    """AirTable client serving each sample-sheet row as a well-level record."""
+
+    def __init__(self, rows: list[dict[str, str]]):
+        self._rows = rows
+
+    def records(self, dataset: str) -> list[dict[str, Any]]:
+        return [
+            {"id": f"rec{i}", "fields": {AIRTABLE_FIELDS[k]: v for k, v in row.items()}}
+            for i, row in enumerate(self._rows)
+            if row["dataset"] == dataset
+        ]
+
+
+def test_provenance_has_no_local_paths_or_airtable_ids(plate, config, tmp_path):
+    sheet_path(plate).unlink()
+    config.write_text(
+        "base_config: dca_base.toml\n"
+        "airtable:\n  base_id: appPRIVATEBASE0001\n  table: tblPRIVATETABLE001\n"
+    )
+    client = SheetClient([table_row(well) for well in WELLS])
+    dca_finalize([plate / well / "0" for well in WELLS], config, airtable_client=client)
+    provenance = attributes(plate, "A/1")["biahub-dca-finalize"]
+    assert provenance["metadata_source"] == {"kind": "airtable"}
+    text = json.dumps(provenance)
+    for private in (str(tmp_path), "appPRIVATEBASE0001", "tblPRIVATETABLE001"):
+        assert private not in text

@@ -9,6 +9,7 @@ plate's confirmed file. Normalization statistics come from the plate QC table. T
 two-pass: if any FOV has an error, nothing is written and every error is listed.
 """
 
+import hashlib
 import tomllib
 
 from collections import defaultdict
@@ -67,6 +68,26 @@ class _PlateSources:
     rows: dict[str, dict[str, str]] | None
     qc: pd.DataFrame | None
     derived: dict[str, str]
+
+
+def _file_record(path: Path) -> dict[str, str]:
+    return {"name": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+
+
+def _provenance(plate: Path, settings: DcaFinalizeSettings) -> dict[str, Any]:
+    """Return the published run record: file names and hashes, no paths or AirTable IDs."""
+    confirmed = settings.confirmed_path(plate)
+    table = settings.metadata_table_path(plate)
+    if table is not None:
+        source = {"kind": table.suffix.lstrip("."), "name": table.name}
+    else:
+        source = {"kind": "airtable"}
+    return {
+        "base_config": _file_record(settings.base_config),
+        "confirmed_config": _file_record(confirmed) if confirmed.exists() else None,
+        "metadata_source": source,
+        "qc_stage": settings.qc_stage,
+    }
 
 
 def _group_by_plate(position_dirpaths: list[Path]) -> dict[Path, list[Path]]:
@@ -193,13 +214,16 @@ def dca_finalize(
     issues: list[str] = []
     failing_plates: list[Path] = []
     blocks: dict[Path, dict[str, Any]] = {}
+    provenance: dict[Path, dict[str, Any]] = {}
     for plate, dirpaths in plates.items():
         sources, plate_issues = _load_plate_sources(plate, settings, airtable_client)
+        record = _provenance(plate, settings)
         for dirpath in dirpaths:
             block, position_issues = _check_position(dirpath, plate, sources)
             plate_issues.extend(position_issues)
             if block is not None:
                 blocks[dirpath] = block
+                provenance[dirpath] = record
         if plate_issues:
             issues.extend(plate_issues)
             failing_plates.append(plate)
@@ -207,10 +231,9 @@ def dca_finalize(
         confirmed = dict.fromkeys(settings.confirmed_path(plate) for plate in failing_plates)
         raise DcaFinalizeError(issues, list(confirmed))
 
-    provenance = settings.model_dump(mode="json")
     for dirpath, block in blocks.items():
         with open_ome_zarr(dirpath, mode="r+") as position:
-            position.zattrs.update({"dca": block, PROVENANCE_KEY: provenance})
+            position.zattrs.update({"dca": block, PROVENANCE_KEY: provenance[dirpath]})
     click.echo(f"Wrote attributes.dca to {len(blocks)} positions")
 
 
