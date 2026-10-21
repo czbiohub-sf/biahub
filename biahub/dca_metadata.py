@@ -7,9 +7,6 @@ from typing import Any, Protocol
 
 import pandas as pd
 
-from pyairtable import Api
-from pyairtable.formulas import match
-
 from biahub.settings import AirtableSettings, DcaFinalizeSettings
 
 TABLE_COLUMNS: tuple[str, ...] = (
@@ -23,6 +20,8 @@ TABLE_COLUMNS: tuple[str, ...] = (
     "time_interval_min",
     "hours_post_perturbation",
 )
+
+AIRTABLE_FOV_FIELD = "fov"
 
 AIRTABLE_FIELDS: dict[str, str] = {
     "dataset": "dataset",
@@ -47,16 +46,24 @@ class PyairtableClient:
     """Default client wrapping ``pyairtable``; reads the token from an env var."""
 
     def __init__(self, settings: AirtableSettings):
+        try:
+            from pyairtable import Api
+            from pyairtable.formulas import match
+        except ImportError as error:
+            raise ImportError(
+                "AirTable lookup needs the dca extra: pip install 'biahub[dca]'"
+            ) from error
         token = os.environ.get(settings.token_env)
         if not token:
             raise RuntimeError(
                 f"AirTable token not found: set the environment variable {settings.token_env}"
             )
         self._table = Api(token).table(settings.base_id, settings.table)
+        self._match = match
         self._dataset_field = AIRTABLE_FIELDS["dataset"]
 
     def records(self, dataset: str) -> list[dict[str, Any]]:
-        return self._table.all(formula=match({self._dataset_field: dataset}))
+        return self._table.all(formula=self._match({self._dataset_field: dataset}))
 
 
 def blank_row() -> dict[str, str]:
@@ -83,6 +90,9 @@ def read_metadata_table(path: Path) -> dict[str, dict[str, str]]:
     if missing:
         raise ValueError(f"{path} is missing required column(s): {', '.join(missing)}")
     rows = frame[list(TABLE_COLUMNS)].to_dict(orient="records")
+    for number, row in enumerate(rows, start=2):
+        if not row["well"].strip():
+            raise ValueError(f"{path} row {number} has a blank well")
     return _index_by_well(rows, str(path))
 
 
@@ -108,10 +118,39 @@ def _record_to_row(record: dict[str, Any]) -> dict[str, str]:
     return row
 
 
+def _collapse_fov_rows(well: str, rows: list[dict[str, str]]) -> dict[str, str]:
+    differing = [c for c in TABLE_COLUMNS if len({row[c] for row in rows}) > 1]
+    if differing:
+        raise ValueError(
+            f"Well {well} has FOV-level AirTable records that disagree on: "
+            f"{', '.join(differing)}"
+        )
+    return rows[0]
+
+
 def airtable_rows(client: AirtableClient, dataset: str) -> dict[str, dict[str, str]]:
-    """Map AirTable records for ``dataset`` to rows keyed by well."""
-    rows = [_record_to_row(record) for record in client.records(dataset)]
-    return _index_by_well(rows, f"AirTable dataset {dataset}")
+    """Map AirTable records for ``dataset`` to rows keyed by well.
+
+    A well-level record (blank or absent ``fov``) is the template and wins. A well with
+    only FOV-level records is collapsed when all table columns agree, else ValueError.
+    """
+    templates: dict[str, list[dict[str, str]]] = {}
+    per_fov: dict[str, list[dict[str, str]]] = {}
+    for record in client.records(dataset):
+        row = _record_to_row(record)
+        fov = _field_to_str(record.get("fields", {}).get(AIRTABLE_FOV_FIELD)).strip()
+        target = per_fov if fov else templates
+        target.setdefault(row["well"], []).append(row)
+
+    rows: dict[str, dict[str, str]] = {}
+    for well, candidates in templates.items():
+        if len(candidates) > 1:
+            raise ValueError(f"Duplicate well {well} in AirTable dataset {dataset}")
+        rows[well] = candidates[0]
+    for well, candidates in per_fov.items():
+        if well not in rows:
+            rows[well] = _collapse_fov_rows(well, candidates)
+    return rows
 
 
 def metadata_rows(

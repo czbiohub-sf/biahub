@@ -1,3 +1,5 @@
+import sys
+
 from pathlib import Path
 from typing import Any
 
@@ -116,7 +118,7 @@ def test_airtable_multi_select_cell_line_joined():
     assert rows["C/2"]["cell_line"] == "A549,HEK293T"
 
 
-def test_airtable_duplicate_well_raises():
+def test_airtable_duplicate_template_raises():
     client = FakeClient([pyairtable_record("C/2"), pyairtable_record("C/2")])
     with pytest.raises(ValueError, match="C/2"):
         airtable_rows(client, "ds")
@@ -165,3 +167,53 @@ def test_default_client_missing_token_names_variable(monkeypatch):
     settings = AirtableSettings(base_id="b", table="t", token_env="BIAHUB_TEST_AIRTABLE_TOKEN")
     with pytest.raises(RuntimeError, match="BIAHUB_TEST_AIRTABLE_TOKEN"):
         PyairtableClient(settings)
+
+
+def test_airtable_template_wins_over_fov_records():
+    template = pyairtable_record("C/2", **{AIRTABLE_FIELDS["marker"]: "TOMM20"})
+    fov = pyairtable_record("C/2", fov="000000", **{AIRTABLE_FIELDS["marker"]: "OTHER"})
+    rows = airtable_rows(FakeClient([fov, template]), "ds")
+    assert rows["C/2"]["marker"] == "TOMM20"
+
+
+def test_airtable_agreeing_fov_records_collapse():
+    records = [pyairtable_record("C/2", fov="000000"), pyairtable_record("C/2", fov="000001")]
+    rows = airtable_rows(FakeClient(records), "ds")
+    assert list(rows) == ["C/2"]
+    assert rows["C/2"]["marker"] == "TOMM20"
+
+
+def test_airtable_disagreeing_fov_records_raise():
+    records = [
+        pyairtable_record("C/2", fov="000000"),
+        pyairtable_record("C/2", fov="000001", **{AIRTABLE_FIELDS["moi"]: 1}),
+    ]
+    with pytest.raises(ValueError, match="C/2.*moi"):
+        airtable_rows(FakeClient(records), "ds")
+
+
+def test_blank_well_cell_raises_with_row_number(tmp_path):
+    blank = ["ds", "", "A549", "TOMM20", "mitochondria", "ZIKV", "5", "30", "24"]
+    path = write_table(tmp_path / "t.csv", [ROW_C2, blank], ",")
+    with pytest.raises(ValueError, match="row 3"):
+        read_metadata_table(path)
+
+
+@pytest.fixture
+def no_pyairtable(monkeypatch):
+    monkeypatch.setitem(sys.modules, "pyairtable", None)
+    monkeypatch.setitem(sys.modules, "pyairtable.formulas", None)
+
+
+def test_csv_path_works_and_default_client_explains_missing_extra(
+    no_pyairtable, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("BIAHUB_TEST_AIRTABLE_TOKEN", "x")
+    plate = tmp_path / "plate.zarr"
+    write_table(tmp_path / "plate.dca-metadata.csv", [ROW_C2], ",")
+    settings = DcaFinalizeSettings(base_config="b.toml")
+    assert set(metadata_rows(plate, settings)) == {"C/2"}
+    with pytest.raises(ImportError, match=r"biahub\[dca\]"):
+        PyairtableClient(
+            AirtableSettings(base_id="b", table="t", token_env="BIAHUB_TEST_AIRTABLE_TOKEN")
+        )
