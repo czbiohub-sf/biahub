@@ -56,6 +56,10 @@ def run(plate: Path, config: Path, *more_plates: Path):
     return CliRunner().invoke(cli, ["dca-finalize", "-i", *dirpaths, "-c", str(config)])
 
 
+def error_lines(result) -> list[str]:
+    return result.output.strip().removeprefix("Error: ").splitlines()
+
+
 def attributes(plate: Path, well: str) -> dict:
     with open_ome_zarr(plate / well / "0", mode="r") as position:
         return dict(position.zattrs)
@@ -98,17 +102,17 @@ def test_finalized_plate_passes_validator(plate, config):
         if not r.passed
     ]
     assert validation.results
-    assert not failures
+    assert all(r.passed for r in validation.results), failures
 
 
 def test_missing_well_row_reports_fields(plate, config):
     write_table(plate, [table_row("A/1")])
     result = run(plate, config)
     assert result.exit_code != 0
-    assert "no metadata row for well B/1" in result.output
-    assert str(plate / "B" / "1" / "0") in result.output
-    last_line = result.output.strip().splitlines()[-1]
-    assert last_line == f"fill the missing values in {confirmed_path(plate)}"
+    assert error_lines(result) == [
+        f"{plate / 'B' / '1' / '0'}: no metadata row for well B/1",
+        f"fill the missing values in {confirmed_path(plate)}",
+    ]
     for well in WELLS:
         assert "dca" not in attributes(plate, well)
 
@@ -150,15 +154,49 @@ def test_confirmed_file_overrides_table(plate, config):
 
 
 def test_missing_stats_reported_with_metadata_gaps(plate, config):
-    write_qc(plate, skip={"A/1/0": "p1"})
+    write_qc(plate, skip={"A/1/0": "p1", "B/1/0": "p99"})
     write_table(plate, [table_row("A/1")])
     result = run(plate, config)
     assert result.exit_code != 0
-    assert "intensity_stats rows for p1" in result.output
-    assert str(plate / "A" / "1" / "0") in result.output
-    assert "no metadata row for well B/1" in result.output
+    assert error_lines(result) == [
+        f"{plate / 'A' / '1' / '0'}: channel 'BF' has no intensity_stats rows for p1",
+        f"{plate / 'B' / '1' / '0'}: no metadata row for well B/1",
+        f"{plate / 'B' / '1' / '0'}: channel 'BF' has no intensity_stats rows for p99",
+        f"fill the missing values in {confirmed_path(plate)}",
+    ]
     for well in WELLS:
         assert "dca" not in attributes(plate, well)
+
+
+def test_non_finite_statistics_write_nothing(plate, config):
+    write_qc(plate, p1={"B/1/0": float("inf")})
+    result = run(plate, config)
+    assert result.exit_code != 0
+    assert f"{plate / 'B' / '1' / '0'}: " in result.output
+    assert "not finite" in result.output
+    for well in WELLS:
+        assert "dca" not in attributes(plate, well)
+
+
+def test_unreadable_confirmed_file_named_in_error(plate, config):
+    confirmed_path(plate).write_text("[dca.study\n")
+    result = run(plate, config)
+    assert isinstance(result.exception, SystemExit), result.exception
+    assert result.exit_code == 1
+    assert error_lines(result)[0].startswith(f"{plate}: {confirmed_path(plate)}: ")
+    for well in WELLS:
+        assert "dca" not in attributes(plate, well)
+
+
+def test_confirmed_hint_lists_each_failing_plate_once(
+    plate, config, tmp_path, create_custom_plate
+):
+    other = build_plate(tmp_path, create_custom_plate, OTHER_STEM)
+    write_table(plate, [])
+    result = run(plate, config, other)
+    assert result.exit_code != 0
+    hints = [line for line in error_lines(result) if line.startswith("fill the missing")]
+    assert hints == [f"fill the missing values in {confirmed_path(plate)}"]
 
 
 def test_dca_finalize_is_idempotent(plate, config):

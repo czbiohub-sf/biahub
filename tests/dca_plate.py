@@ -88,12 +88,18 @@ def _qc_row(stem: str, position_key: str, t: int, c: int, key: str, value: float
     }
 
 
-def write_qc(plate: Path, skip: dict[str, str] | None = None) -> None:
+def write_qc(
+    plate: Path,
+    skip: dict[str, str] | None = None,
+    p1: dict[str, float] | None = None,
+) -> None:
     """Write ``tables/qc/stage5_position.parquet``.
 
-    ``skip`` maps a position key to a metric left out for every channel.
+    ``skip`` maps a position key to a metric left out for every channel. ``p1`` maps a
+    position key to the p1 value written for every channel and T.
     """
     skip = skip or {}
+    p1 = p1 or {}
     rows = []
     for well in WELLS:
         key = f"{well}/0"
@@ -102,7 +108,9 @@ def write_qc(plate: Path, skip: dict[str, str] | None = None) -> None:
                 for stat in STAT_KEYS:
                     if stat == skip.get(key):
                         continue
-                    value = p1_value(key, c) if stat == "p1" else 1.0 + STAT_KEYS.index(stat)
+                    value = 1.0 + STAT_KEYS.index(stat)
+                    if stat == "p1":
+                        value = p1.get(key, p1_value(key, c))
                     rows.append(_qc_row(plate.stem, key, t, c, stat, value))
     frame = pd.DataFrame(rows)
     frame["T"] = frame["T"].astype("Int64")

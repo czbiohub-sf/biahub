@@ -9,6 +9,8 @@ plate's confirmed file. Normalization statistics come from the plate QC table. T
 two-pass: if any FOV has an error, nothing is written and every error is listed.
 """
 
+import tomllib
+
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,7 +30,7 @@ from dca_helpers.metadata import (
 from iohub.ngff import open_ome_zarr
 
 from biahub.cli.parsing import config_filepath, input_position_dirpaths, position_key
-from biahub.dca_metadata import AirtableClient, blank_row, metadata_rows
+from biahub.dca_metadata import AirtableClient, metadata_rows
 from biahub.dca_stats import (
     STATS_METADATA,
     derived_columns,
@@ -50,7 +52,7 @@ class DcaFinalizeError(Exception):
     issues
         One message per problem, each prefixed with the position (or plate) path.
     confirmed_paths
-        The confirmed file of each plate involved, where missing values are filled.
+        The confirmed file of each plate that had an issue, where missing values are filled.
     """
 
     def __init__(self, issues: list[str], confirmed_paths: list[Path] | None = None):
@@ -61,7 +63,7 @@ class DcaFinalizeError(Exception):
 
 @dataclass(frozen=True)
 class _PlateSources:
-    block: dict[str, Any]
+    block: dict[str, Any] | None
     rows: dict[str, dict[str, str]] | None
     qc: pd.DataFrame | None
     derived: dict[str, str]
@@ -74,12 +76,27 @@ def _group_by_plate(position_dirpaths: list[Path]) -> dict[Path, list[Path]]:
     return dict(plates)
 
 
+def _load_block(paths: list[Path]) -> dict[str, Any]:
+    for path in paths:
+        try:
+            tomllib.loads(path.read_text())
+        except tomllib.TOMLDecodeError as error:
+            raise ValueError(f"{path}: {error}") from error
+    return load_dca_config(*paths)
+
+
 def _load_plate_sources(
     plate: Path, settings: DcaFinalizeSettings, client: AirtableClient | None
 ) -> tuple[_PlateSources, list[str]]:
     issues = []
     confirmed = settings.confirmed_path(plate)
-    block = load_dca_config(settings.base_config, *([confirmed] if confirmed.exists() else []))
+    try:
+        block = _load_block(
+            [settings.base_config, *([confirmed] if confirmed.exists() else [])]
+        )
+    except ValueError as error:
+        issues.append(f"{plate}: {error}")
+        block = None
     try:
         rows = metadata_rows(plate, settings, client=client)
     except (ValueError, FileNotFoundError) as error:
@@ -116,11 +133,10 @@ def _check_position(
 
     issues = []
     payload = stats = None
-    if sources.rows is not None:
-        table_row = sources.rows.get(well)
-        if table_row is None:
-            issues.append(f"{where}: no metadata row for well {well}")
-            table_row = blank_row()
+    table_row = None if sources.rows is None else sources.rows.get(well)
+    if sources.rows is not None and table_row is None:
+        issues.append(f"{where}: no metadata row for well {well}")
+    if sources.block is not None and table_row is not None:
         row = table_row | facts | sources.derived
         try:
             resolved = resolve_dca(sources.block, row, channel_keys=channel_names, where=where)
@@ -175,17 +191,21 @@ def dca_finalize(
     plates = _group_by_plate(input_position_dirpaths)
 
     issues: list[str] = []
+    failing_plates: list[Path] = []
     blocks: dict[Path, dict[str, Any]] = {}
     for plate, dirpaths in plates.items():
         sources, plate_issues = _load_plate_sources(plate, settings, airtable_client)
-        issues.extend(plate_issues)
         for dirpath in dirpaths:
             block, position_issues = _check_position(dirpath, plate, sources)
-            issues.extend(position_issues)
+            plate_issues.extend(position_issues)
             if block is not None:
                 blocks[dirpath] = block
+        if plate_issues:
+            issues.extend(plate_issues)
+            failing_plates.append(plate)
     if issues:
-        raise DcaFinalizeError(issues, [settings.confirmed_path(plate) for plate in plates])
+        confirmed = dict.fromkeys(settings.confirmed_path(plate) for plate in failing_plates)
+        raise DcaFinalizeError(issues, list(confirmed))
 
     provenance = settings.model_dump(mode="json")
     for dirpath, block in blocks.items():
