@@ -17,6 +17,7 @@ from tests.dca_plate import (
     sheet_path,
     table_row,
     write_config,
+    write_table,
 )
 
 UNSOURCED_EXPERIMENTER = (
@@ -75,3 +76,40 @@ def test_shared_should_gap_logged_once_per_plate(plate, config, caplog):
     assert gaps[0].startswith(f"{plate}: ")
     assert f"({len(WELLS)} of {len(WELLS)} positions)" in gaps[0]
     assert not [r for r in caplog.records if r.name.startswith("dca_helpers")]
+
+
+def error_lines(result) -> list[str]:
+    return result.output.strip().removeprefix("Error: ").splitlines()
+
+
+def test_missing_base_config_is_a_plate_issue(plate, config):
+    missing = config.parent / "missing.toml"
+    config.write_text("base_config: missing.toml\n")
+    result = run(plate, config)
+    assert isinstance(result.exception, SystemExit), result.exception
+    assert result.exit_code == 1
+    assert error_lines(result)[0].startswith(f"{plate}: ")
+    assert str(missing) in error_lines(result)[0]
+    for well in WELLS:
+        assert "dca" not in attributes(plate, well)
+
+
+def test_airtable_client_error_does_not_abort_other_plates(
+    plate, config, tmp_path, create_custom_plate, monkeypatch
+):
+    monkeypatch.delenv("BIAHUB_TEST_AIRTABLE_TOKEN", raising=False)
+    other = build_plate(tmp_path, create_custom_plate, "2026_01_03_other_plate")
+    sheet_path(plate).unlink()
+    write_table(sheet_path(other), [table_row("A/1", dataset=other.stem)])
+    config.write_text(
+        "base_config: dca_base.toml\n"
+        "airtable:\n  base_id: b\n  table: t\n  token_env: BIAHUB_TEST_AIRTABLE_TOKEN\n"
+    )
+    result = run(plate, config, other)
+    assert isinstance(result.exception, SystemExit), result.exception
+    lines = error_lines(result)
+    assert any(
+        line.startswith(f"{plate}: ") and "BIAHUB_TEST_AIRTABLE_TOKEN" in line
+        for line in lines
+    )
+    assert f"{other / 'B' / '1' / '0'}: no metadata row for well B/1" in lines

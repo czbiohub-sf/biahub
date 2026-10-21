@@ -110,12 +110,12 @@ def _load_plate_sources(
         block = load_dca_config(
             settings.base_config, *([confirmed] if confirmed.exists() else [])
         )
-    except ValueError as error:
+    except (ValueError, OSError) as error:
         issues.append(f"{plate}: {error}")
         block = None
     try:
         rows = metadata_rows(plate, settings, client=client)
-    except (ValueError, FileNotFoundError) as error:
+    except (ValueError, FileNotFoundError, RuntimeError, ImportError) as error:
         issues.append(f"{plate}: {error}")
         rows = None
     try:
@@ -219,7 +219,7 @@ def dca_finalize(
     new_attributes: dict[Path, dict[str, Any]] = {}
     for plate, dirpaths in plates.items():
         sources, plate_issues = _load_plate_sources(plate, settings, airtable_client)
-        record = _provenance(plate, settings)
+        record = _provenance(plate, settings) if sources.block is not None else {}
         warnings: list[str] = []
         for dirpath in dirpaths:
             attrs, position_issues = _check_position(dirpath, plate, sources, record, warnings)
