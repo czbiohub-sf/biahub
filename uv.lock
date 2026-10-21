@@ -21,7 +21,7 @@ resolution-markers = [
 ]
 
 [manifest]
-overrides = [{ name = "iohub", git = "https://github.com/czbiohub-sf/iohub?rev=6862b10b1aa83426495c264f2a879730f0488103" }]
+overrides = [{ name = "iohub", git = "https://github.com/czbiohub-sf/iohub?rev=876b50eeef29b41a19e88832b3aea8019993d978" }]
 
 [[package]]
 name = "absl-py"
@@ -423,7 +423,7 @@ requires-dist = [
     { name = "humanize" },
     { name = "imageio-ffmpeg" },
     { name = "imaging-qc-pipeline", extras = ["interactive"], marker = "extra == 'qc'", git = "https://github.com/czbiohub-sf/imaging-qc-pipeline?rev=f5ae656e0e37320ead74f7c1f95ab1ed304c1829" },
-    { name = "iohub", git = "https://github.com/czbiohub-sf/iohub?rev=6862b10b1aa83426495c264f2a879730f0488103" },
+    { name = "iohub", git = "https://github.com/czbiohub-sf/iohub?rev=876b50eeef29b41a19e88832b3aea8019993d978" },
     { name = "largestinteriorrectangle" },
     { name = "llvmlite", specifier = ">=0.41.0" },
     { name = "markdown" },
@@ -2153,8 +2153,8 @@ wheels = [
 
 [[package]]
 name = "iohub"
-version = "0.3.12.dev19+6862b10"
-source = { git = "https://github.com/czbiohub-sf/iohub?rev=6862b10b1aa83426495c264f2a879730f0488103#6862b10b1aa83426495c264f2a879730f0488103" }
+version = "0.3.12.dev20+876b50e"
+source = { git = "https://github.com/czbiohub-sf/iohub?rev=876b50eeef29b41a19e88832b3aea8019993d978#876b50eeef29b41a19e88832b3aea8019993d978" }
 dependencies = [
     { name = "blosc2" },
     { name = "dask", extra = ["array"] },
