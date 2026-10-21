@@ -69,7 +69,8 @@ def test_from_yaml_keeps_absolute_paths(tmp_path):
 
 
 def test_a549_config_validates():
-    config = Path("nextflow/configs/a549/dca_finalize.yml")
+    config = Path(__file__).parents[1] / "nextflow" / "configs" / "a549" / "dca_finalize.yml"
     settings = DcaFinalizeSettings.from_yaml(config)
     assert settings.base_config == config.parent / "dca_base.toml"
+    assert settings.base_config.is_file()
     assert settings.airtable is None
