@@ -8,7 +8,7 @@ import numpy as np
 import submitit
 
 from iohub.ngff import open_ome_zarr
-from iohub.ngff.utils import create_empty_plate, process_single_position
+from iohub.ngff.utils import create_empty_labels, create_empty_plate, process_single_position
 
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
@@ -40,8 +40,8 @@ from biahub.utils.cluster import (
 from biahub.utils.config import settings_fingerprint, yaml_to_model
 from biahub.utils.ngff import (
     PROVENANCE_METADATA_KEYS,
-    create_label_images,
     get_output_paths,
+    label_layout,
     resolve_ome_zarr_version,
 )
 
@@ -219,11 +219,13 @@ def _init_label_images(
                         "Rename the model or remove the old label image."
                     )
 
-    create_label_images(
-        input_position_dirpaths,
+    _, layout = label_layout(input_position_dirpaths[0])
+    create_empty_labels(
+        Path(input_position_dirpaths[0]).parents[2],
+        [Path(p).parts[-3:] for p in input_position_dirpaths],
         label_names,
-        PROVENANCE_KEY,
-        settings.model_dump(mode="json"),
+        label_metadata={PROVENANCE_KEY: settings.model_dump(mode="json")},
+        **layout,
     )
     return (T, C, Z, Y, X), models
 

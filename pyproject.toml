@@ -141,9 +141,9 @@ ultrack = { git = "https://github.com/ieivanov/ultrack", rev = "69e7589a050b0aa5
 
 # Pin iohub to the czbiohub-sf/iohub#489 branch (on main at the #486 merge):
 # process_single_position(output_label=...), with which `biahub segment` writes its
-# labels into the plate's label images with --resume. Main's #486 adds
-# create_empty_plate(label_names=...), with which segment --init and track --init
-# scaffold the empty label images (#360), and #485 puts the labels list on
+# labels into the plate's label images with --resume, and create_empty_labels, with
+# which segment --init and track --init scaffold those label images. Main's #486 adds
+# create_empty_plate(label_names=...) (#360), and #485 puts the labels list on
 # <fov>/labels/zarr.json so ome-zarr-models and dca-validate can open a field that
 # has labels. Repoint at main once #489 merges, and at a PyPI release once one
 # contains them.
@@ -154,7 +154,7 @@ ultrack = { git = "https://github.com/ieivanov/ultrack", rev = "69e7589a050b0aa5
 # 2026_08_14_dynatrack); #472 adds create_empty_plate(extra_metadata=...); #479
 # creates a plate's positions in one batch instead of rewriting the well's
 # metadata per position (hours for a ~40k-FOV plate's init).
-iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "8c85656" }
+iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "16cdc4f" }
 
 # Pin waveorder to the main commit that merged mehta-lab/waveorder#583, which
 # runs apply-inv-tf through iohub's process_single_position with resume (on top

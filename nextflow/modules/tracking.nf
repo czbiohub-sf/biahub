@@ -24,8 +24,9 @@
 // label image in each position.
 //
 // Tracking is CPU work: ultrack re-segments from the labels' contours and solves
-// an ILP; the GPU segmentation is `biahub segment`'s. It cannot resume, so it
-// runs on the non-preemptible `cpu` partition.
+// an ILP; the GPU segmentation is `biahub segment`'s. It cannot resume, but a
+// position now tracks in a minute or two, so it runs on the `preempted`
+// partition like the other per-position steps and a reclaimed task is retried.
 
 include { parse_resources; slurm_logs; slurm_log_dir } from './common'
 
@@ -53,7 +54,7 @@ process init_track {
 
 process run_track {
     tag "${position}"
-    label 'cpu_reserved'
+    label 'cpu'
     clusterOptions { slurm_logs('track') }
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }

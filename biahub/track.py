@@ -15,6 +15,7 @@ import submitit
 import zarr
 
 from iohub import open_ome_zarr
+from iohub.ngff.utils import create_empty_labels
 from numpy.typing import ArrayLike
 
 from biahub.cli.monitor import monitor_jobs
@@ -38,7 +39,7 @@ from biahub.utils.cluster import (
     local_executor_parameters,
 )
 from biahub.utils.config import update_model, yaml_to_model
-from biahub.utils.ngff import create_label_images, labels_exist
+from biahub.utils.ngff import label_layout, labels_exist
 
 logger = logging.getLogger(__name__)
 
@@ -852,11 +853,15 @@ def _init_labels(
                 "`biahub segment` on the plate first (its model name is the label name)."
             )
 
-    shape = create_label_images(
-        input_position_dirpaths,
+    shape, layout = label_layout(input_position_dirpaths[0])
+    create_empty_labels(
+        Path(input_position_dirpaths[0]).parents[2],
+        [Path(p).parts[-3:] for p in input_position_dirpaths],
         [settings.output_label],
-        PROVENANCE_KEY,
-        settings.model_dump(mode="json"),
+        # The settings as written; the worker adds the resolved Ultrack config under
+        # the same key once it has tracked (track_one_position).
+        label_metadata={PROVENANCE_KEY: settings.model_dump(mode="json")},
+        **layout,
     )
     click.echo(
         f"Created labels/{settings.output_label} in "
@@ -974,10 +979,10 @@ def track(
         "slurm_cpus_per_task": num_cpus,
         "slurm_array_parallelism": 100,  # process up to 100 positions at a time
         "slurm_time": time_minutes,
-        # Ultrack is CPU-bound (segmentation is `biahub segment`'s, on the GPU) and
-        # cannot resume, so the non-preemptible `cpu` partition rather than
-        # `preempted`. Override via --sbatch-filepath if a different partition is needed.
-        "slurm_partition": "cpu",
+        # Ultrack is CPU-bound (segmentation is `biahub segment`'s, on the GPU); it
+        # cannot resume, but a position tracks in minutes, so a preemption costs little.
+        # Override via --sbatch-filepath if a different partition is needed.
+        "slurm_partition": "preempted",
         "slurm_use_srun": False,
     }
 

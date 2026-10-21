@@ -224,7 +224,7 @@ With `--biahub_project`, each task runs as `uv run --project <path> biahub ...`;
 Profiles select *where* work runs:
 
 - `-profile local` — everything on the current machine. Good for debugging and single-node runs.
-- `-profile slurm` — per-position work goes to the `preempted` partition, virtual-stain prediction and segmentation to the `preempted` partition on GPU nodes (both resume where a reclaimed task stopped), tracking to the `cpu` partition (ultrack cannot resume), and lightweight init steps stay local. Preempted, timed-out, and OOM-killed tasks are retried automatically (up to 5 times, with escalating time/memory); genuine errors fail fast instead of burning retries.
+- `-profile slurm` — per-position work goes to the `preempted` partition, virtual-stain prediction and segmentation to the `preempted` partition on GPU nodes (both resume where a reclaimed task stopped), tracking to the `preempted` partition as well (ultrack cannot resume, but a position tracks in minutes), and lightweight init steps stay local. Preempted, timed-out, and OOM-killed tasks are retried automatically (up to 5 times, with escalating time/memory); genuine errors fail fast instead of burning retries.
 
 Nextflow's own flags still apply — most usefully `-resume` to reuse completed tasks after a failure or a config tweak, and `-w /fast/scratch` to move the work directory off the output filesystem.
 

@@ -10,11 +10,12 @@ import yaml
 
 from click.testing import CliRunner
 from iohub.ngff import open_ome_zarr
+from iohub.ngff.utils import create_empty_labels
 
 from biahub.cli.main import cli
 from biahub.settings import TrackingSettings
 from biahub.track import _init_labels, track, write_tracking_labels
-from biahub.utils.ngff import create_label_images, label_chunks_and_shards
+from biahub.utils.ngff import label_chunks_and_shards
 
 # The label image `biahub segment` would write (its model name) and the one track writes.
 INPUT_LABEL = "nuclei"
@@ -74,7 +75,9 @@ def example_tracking_plate(tmp_path):
 
     plate_dataset.close()
     positions = [plate_path / Path(*key) for key in position_list]
-    create_label_images(positions, [INPUT_LABEL], "biahub-segment", {"models": {}})
+    create_empty_labels(
+        plate_path, list(position_list), [INPUT_LABEL], label_metadata={"biahub-segment": {}}
+    )
     for position_path in positions:
         with open_ome_zarr(str(position_path), mode="r+") as position:
             nuclei = np.asarray(position["0"][:, 0])  # (T, Z, Y, X)
@@ -852,7 +855,7 @@ def test_track_jobs_ask_for_no_gpu(tmp_path, example_tracking_plate, monkeypatch
     assert result.exit_code == 0, result.output
     assert recorded["cluster"] == "local"
     assert "gpus_per_node" not in recorded
-    assert recorded["slurm_partition"] == "cpu"
+    assert recorded["slurm_partition"] == "preempted"
     assert (
         recorded.get("timeout_min") == recorded["slurm_time"]
     )  # local default kills at 2 min
