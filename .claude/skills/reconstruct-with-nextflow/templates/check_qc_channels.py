@@ -12,9 +12,10 @@ Exits 1 and names every miss, 0 if every filter resolves. Three couplings:
    channel with a warning -- but the pipeline's intention is that every
    assembled channel is projected unless the user decided otherwise, so the
    skill carries these lines into the pre-run plan for the user to decide.
-3. `track.yml`'s `target_channel` and `cellpose_config.input_channel` against
-   the plate track reads: the projected plate when `project.yml` exists, else
-   the assembled plate.
+3. `segment.yml`'s model channels against the plate segment reads (the
+   projected plate when `project.yml` exists, else the assembled plate), and
+   `track.yml`'s `labels` against `segment.yml`'s model names, since track reads
+   the label image segment wrote (`labels/<model>`).
 
 WHY PREDICT RATHER THAN READ. The store QC runs over — the assembled plate —
 does not exist when configs are scaffolded; the pipeline's init phase creates
@@ -25,12 +26,14 @@ which is exactly the coupling that goes wrong:
               + reconstruct's output_channel_names (waveorder derives these,
                 so they are read from the settings model, not the YAML text)
               + virtual-stain's data.init_args.target_channel
-    labels    = <track.yml target_channel>   (<fov>/labels/<target_channel>)
+    labels    = <segment.yml model>           (<fov>/labels/<model>)
+              + <track.yml labels>_tracked    (<fov>/labels/<model>_tracked)
 
-Tracking writes its labels INTO the assembled plate, so `qc.yaml`'s
-`instance_count.label` — and its one anchor channel, the channel the labels
-were segmented from — only resolve if both equal `track.yml`'s
-`target_channel`. Two files, no shared source of truth. Checked when `qc.yaml`
+Segment and track write their labels INTO the plate they read, so
+`qc_project.yaml`'s `instance_count.label` only resolves if it is
+`<track.yml labels>_tracked` (or a `segment.yml` model name), and its one anchor
+channel, the channel the labels were segmented from, must be that model's
+channel. Four files, no shared source of truth. Checked when `qc_project.yaml`
 has an `instance_count` block and `track.yml` exists.
 
 RELATIONSHIP TO imaging-qc#226. Since that landed, `plan-stage` refuses an
@@ -86,18 +89,14 @@ def assembled_channels(raw_zarr, reconstruct_cfg, virtual_stain_cfg):
     return raw + list(rc.output_channel_names) + tgt
 
 
-def tracking_entries(qc_cfg, track_cfg):
-    """`instance_count`'s label and anchor channels, and track's target_channel.
-
-    None when there is nothing to compare: no `instance_count` block, or no track.yml.
-    """
+def instance_count_entries(qc_cfg):
+    """`instance_count`'s label and anchor channels, or None without such a block."""
     ic = (yaml.safe_load(Path(qc_cfg).read_text()) or {}).get("instance_count")
-    if not isinstance(ic, dict) or not Path(track_cfg).exists():
+    if not isinstance(ic, dict):
         return None
-    target = yaml.safe_load(Path(track_cfg).read_text())["target_channel"]
     entries = [("instance_count.label", ic.get("label"))]
     entries += [("instance_count.channels", c) for c in ic.get("channels") or []]
-    return target, entries
+    return entries
 
 
 def projected_channels(project_cfg):
@@ -105,14 +104,18 @@ def projected_channels(project_cfg):
     return list(yaml.safe_load(Path(project_cfg).read_text())["channels"])
 
 
-def track_inputs(track_cfg):
-    """Return the channel names track reads from its input plate, keyed by the setting."""
+def segment_models(segment_cfg):
+    """Return {model name: [channels]} of a segment config: the label images it writes."""
+    models = yaml.safe_load(Path(segment_cfg).read_text())["models"]
+    return {name: list(model["channels"]) for name, model in models.items()}
+
+
+def tracked_label(track_cfg):
+    """Return (input label, output label) of a track config, or None on the legacy path."""
     t = yaml.safe_load(Path(track_cfg).read_text())
-    inputs = [("target_channel", t["target_channel"])]
-    cellpose = t.get("cellpose_config") or {}
-    if t.get("segmentation_method") == "cellpose" and "input_channel" in cellpose:
-        inputs.append(("cellpose_config.input_channel", cellpose["input_channel"]))
-    return inputs
+    if t.get("segmentation_method", "labels") != "labels":
+        return None
+    return t["labels"], f"{t['labels']}_tracked"
 
 
 if __name__ == "__main__":
@@ -145,29 +148,51 @@ if __name__ == "__main__":
                 # Not a failure: the CLI drops it with a warning. The skill asks the
                 # user about every such channel in the pre-run plan.
                 print(f"   NOT PROJECTED {ch!r}: not in project.yml, will be dropped")
-    if (cfgs / "track.yml").exists():
-        source = "projected" if (cfgs / "project.yml").exists() else "assembled"
-        print(f"track.yml: {source} plate will have {track_reads}")
-        for key, ch in track_inputs(cfgs / "track.yml"):
-            ok = ch in track_reads
-            bad += not ok
-            print(f"   {'ok  ' if ok else 'MISS'} {key}: {ch!r}")
+    source = "projected" if (cfgs / "project.yml").exists() else "assembled"
 
-    # qc_project.yaml QCs the plate track reads and writes its labels into: its
-    # `channels:` against that plate, and its `instance_count` against the label
-    # image `labels/<track.yml target_channel>`.
+    # segment.yml reads the plate project (or assemble) writes and adds labels/<model>.
+    models = {}
+    if (cfgs / "segment.yml").exists():
+        models = segment_models(cfgs / "segment.yml")
+        print(f"segment.yml: {source} plate will have {track_reads}")
+        for name, channels in models.items():
+            for ch in channels:
+                ok = ch in track_reads
+                bad += not ok
+                print(f"   {'ok  ' if ok else 'MISS'} models.{name}.channels: {ch!r}")
+
+    # track.yml reads labels/<labels> of that plate and writes labels/<labels>_tracked.
+    tracked = None
+    if (cfgs / "track.yml").exists():
+        tracked = tracked_label(cfgs / "track.yml")
+        if tracked:
+            print(f"track.yml: segment.yml writes labels/{{{', '.join(models) or '-'}}}")
+            ok = tracked[0] in models
+            bad += not ok
+            print(f"   {'ok  ' if ok else 'MISS'} labels: {tracked[0]!r}")
+
+    # qc_project.yaml QCs the plate segment and track write into: its `channels:`
+    # against that plate, and its `instance_count` against the label images there
+    # (the tracked one, labels/<track.yml labels>_tracked, or a segment model's) with
+    # the anchor channel being the one the model segmented.
     if (cfgs / "qc_project.yaml").exists():
-        print(f"qc_project.yaml: projected plate will have {track_reads}")
+        print(f"qc_project.yaml: {source} plate will have {track_reads}")
         for owner, ch in qc_filters(cfgs / "qc_project.yaml"):
             ok = ch in track_reads
             bad += not ok
             print(f"   {'ok  ' if ok else 'MISS'} {owner}.channels: {ch!r}")
-        tracking = tracking_entries(cfgs / "qc_project.yaml", cfgs / "track.yml")
-        if tracking:
-            target, entries = tracking
-            print(f"qc_project.yaml vs track.yml: tracking writes labels/{target}")
+        entries = instance_count_entries(cfgs / "qc_project.yaml")
+        if entries and (models or tracked):
+            label_images = dict(models)
+            if tracked and tracked[0] in models:
+                label_images[tracked[1]] = models[tracked[0]]
+            print(f"qc_project.yaml vs segment.yml/track.yml: label images {sorted(label_images)}")
+            label = dict(entries).get("instance_count.label")
             for key, value in entries:
-                ok = value == target
+                if key == "instance_count.label":
+                    ok = value in label_images
+                else:
+                    ok = value in label_images.get(label, [])
                 bad += not ok
                 print(f"   {'ok  ' if ok else 'MISS'} {key}: {value!r}")
     sys.exit(1 if bad else 0)

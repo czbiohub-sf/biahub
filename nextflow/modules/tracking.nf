@@ -1,27 +1,31 @@
-// Tracking subworkflows: init (label scaffold + resources + weights cache) and
-// run (fan-out × N positions).
+// Tracking subworkflows: init (label scaffold + resources) and run (fan-out × N
+// positions).
 //
-// This module is PATH-AGNOSTIC. Callers pass the input zarr (plate structure),
-// input images zarr (image data for tracking), and config explicitly.
+// This module is PATH-AGNOSTIC. Callers pass the input zarr (plate structure and
+// the label image to track), input images zarr (image data, for the legacy
+// foreground+contour path), and config explicitly.
 //
-// Tracking is a 2-input step: `input_zarr` supplies the plate structure and
-// `input_images_zarr` the pixels. mantis-v2.nf passes the assembled plate for
-// both. The outputs go INTO `input_zarr`'s positions — `labels/<target_channel>`,
-// `tracks.geff` and a tracks CSV — and nothing else is kept: each worker builds
-// its Ultrack database in the node's $TMPDIR and deletes it after export (no
-// -o), so tracking has no step directory. Its real logs are in
-// nextflow/slurm_output/track/, like every step's; submitit's debug-mode
-// placeholders land in the task's work directory.
+// Tracking reads the label image `biahub segment` wrote into `input_zarr`
+// (`labels/<labels>`) and writes INTO the same positions — the tracked labels as
+// `labels/<labels>_tracked`, `tracks.geff` and a tracks CSV — and nothing else
+// is kept: each worker builds its Ultrack database in the node's $TMPDIR and
+// deletes it after export (no -o), so tracking has no step directory. Its real
+// logs are in nextflow/slurm_output/track/, like every step's; submitit's
+// debug-mode placeholders land in the task's work directory. `input_images_zarr`
+// only matters to a foreground+contour config; mantis-v2.nf passes the same
+// plate for both.
 //
 // INIT AND RUN ARE SEPARATE SUBWORKFLOWS, and hoisting init is worth more here
 // than anywhere else: the tracking config is the LAST one a run would otherwise
 // parse, so a typo in it used to surface after every reconstruction step and
 // the assembly had finished. `biahub track --init` reads only the input plate's
-// shape and scale (z-slice resolution is data-free) and creates an empty label
-// image in each position, so it runs against the assembled plate as soon as
-// `concatenate --init` has scaffolded it. It also
-// warms the shared cellpose weights cache, which is strictly better done before
-// any GPU worker exists to race for it.
+// shape and scale, checks that the label image it will track exists (segment's
+// init creates it, so it runs after that one) and creates the empty tracked
+// label image in each position.
+//
+// Tracking is CPU work: ultrack re-segments from the labels' contours and solves
+// an ILP; the GPU segmentation is `biahub segment`'s. It cannot resume, so it
+// runs on the non-preemptible `cpu` partition.
 
 include { parse_resources; slurm_logs; slurm_log_dir } from './common'
 
@@ -49,8 +53,8 @@ process init_track {
 
 process run_track {
     tag "${position}"
-    label 'gpu'
-    clusterOptions { "--gres=gpu:1 " + slurm_logs('track') }
+    label 'cpu_reserved'
+    clusterOptions { slurm_logs('track') }
     cpus { meta.cpus }
     memory { "${meta.mem_gb} GB" }
     time '2h'
@@ -77,11 +81,12 @@ process run_track {
 }
 
 
-// Validate the config, create the empty label images, warm the cellpose weights.
+// Validate the config and create the empty tracked label images.
 // Metadata-only and cheap, so it belongs in the pipeline's up-front init phase.
 //
 // take:
-//   input_zarr   path to the input plate.zarr (plate structure; receives the labels)
+//   input_zarr   path to the input plate.zarr (plate structure and the label image
+//                to track; receives the tracked labels)
 //   config       path to the track settings YAML
 //   trigger      gating channel — init starts once this emits
 // emit:

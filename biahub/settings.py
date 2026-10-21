@@ -62,38 +62,12 @@ class ProcessingInputChannel(MyBaseModel):
         return v
 
 
-class CellposeConfig(MyBaseModel):
-    """Configuration for Cellpose segmentation used as input to tracking."""
-
-    # cellpose 4 model: cpsam_v2, cpsam, cpdino, cpdino-vitb, or a path to weights.
-    pretrained_model: str = "cpsam_v2"
-    # Deprecated: cellpose 4 ignores it (``model_type: nuclei`` always ran cpsam_v2).
-    model_type: str | None = None
-    # Cellpose 4 resizes each frame by 30 / diameter before inference (80 -> 37.5%),
-    # which shrinks small objects such as rounded mitotic nuclei. None = native size.
-    diameter: float | None = 80
-    cellprob_threshold: float = 0.0
-    flow_threshold: float = 0.4
-    gpu: bool = True
-    min_size: int = 500
-    input_channel: str = "nuclei_prediction"
-    labels_sigma: float = 5.0
-
-    @field_validator("model_type")
-    @classmethod
-    def warn_model_type_ignored(cls, v):
-        if v is not None:
-            warnings.warn(
-                f"cellpose_config.model_type={v!r} is ignored by cellpose 4, which runs "
-                "pretrained_model (default cpsam_v2). Remove model_type from the config.",
-                UserWarning,
-                stacklevel=2,
-            )
-        return v
+#: Suffix of the label image tracking writes next to the one it reads:
+#: ``labels/<labels>`` (from `biahub segment`) -> ``labels/<labels>_tracked``.
+TRACKED_LABEL_SUFFIX = "_tracked"
 
 
 class TrackingSettings(MyBaseModel):
-    target_channel: str = "nuclei_prediction"
     fov: str = "*/*/*"
     blank_frames_path: Path | None = None
     # The dimensionality of the tracking. Track neither projects nor selects Z-planes:
@@ -101,28 +75,51 @@ class TrackingSettings(MyBaseModel):
     # a Z>1 input; a mismatch is an error. The labels are written into the plate track
     # reads, with its Z, so they take that store's OME-Zarr version.
     output_mode: Literal["2D", "3D"] = "2D"
-    input_images: list[ProcessingInputChannel]
+    # What feeds ultrack: the instance labels of a label image of the plate track reads
+    # (`labels`, written by `biahub segment`; the default), or a foreground mask and
+    # contour map computed by the `input_images` processing functions (the legacy
+    # path; see settings/example_track_settings.yml). Track does not segment.
+    segmentation_method: Literal["labels", "foreground_contour"] = "labels"
+    # segmentation_method: labels -- the label image, `labels/<labels>` in each -i
+    # position, named after the segment config's model. The tracked labels go to
+    # `labels/<labels>_tracked`.
+    labels: str | None = None
+    # Smoothing (pixels) ultrack applies to the labels' contours before it builds its
+    # own segmentation hypotheses from them (ultrack `labels_to_contours`).
+    labels_sigma: float = 5.0
+    # segmentation_method: foreground_contour only -- the name of the label image the
+    # tracks are written to. With `labels` the name is derived (<labels>_tracked).
+    target_channel: str | None = None
+    # Image channels to load and process per FOV; needed by foreground_contour (its
+    # processing functions compute the mask and contour) and optional otherwise.
+    input_images: list[ProcessingInputChannel] = []
     tracking_config: dict[str, Any] = {}
-    # What feeds ultrack: cellpose labels (the default, with `cellpose_config`), or a
-    # foreground mask and contour map computed by the `input_images` processing
-    # functions (the legacy path; see settings/example_track_settings.yml).
-    segmentation_method: Literal["foreground_contour", "cellpose"] = "cellpose"
     # Post-processing (ultrack's filter_short_sibling_tracks, same meaning): at a division
     # where exactly one daughter lives this many frames or fewer and does not divide
     # again, drop that daughter and merge the other into the parent. A division whose two
     # daughters are both that short is kept. Removes short false divisions, e.g. a
     # virtual-staining hallucination linked as a daughter. None (default) keeps all.
     min_sibling_length: PositiveInt | None = None
-    cellpose_config: CellposeConfig | None = None
 
     @model_validator(mode="before")
     @classmethod
-    def reject_z_slicing(cls, data):
+    def reject_removed_keys(cls, data):
+        if not isinstance(data, dict):
+            return data
         # Z-plane selection moved out of track into `biahub project`.
-        if isinstance(data, dict) and "z_slicing" in data:
+        if "z_slicing" in data:
             raise ValueError(
                 "z_slicing was removed from track: select and project the Z-planes with "
                 "`biahub project` and track the projected (Z=1) plate."
+            )
+        # Segmentation moved out of track into `biahub segment`.
+        if "cellpose_config" in data or data.get("segmentation_method") == "cellpose":
+            raise ValueError(
+                "Track no longer runs cellpose (cellpose_config, segmentation_method: "
+                "cellpose): segment the plate with `biahub segment` (its config takes the "
+                "cellpose settings; see settings/example_segmentation_settings.yml), which "
+                "writes labels/<model> into the plate, then set `labels: <model>` here "
+                "(and `labels_sigma` for the contour smoothing)."
             )
         return data
 
@@ -135,15 +132,39 @@ class TrackingSettings(MyBaseModel):
 
     @model_validator(mode="after")
     def check_segmentation_method(self):
-        # Without this a config that omits cellpose_config would silently fall back to
-        # the foreground/contour path at tracking time.
-        if self.segmentation_method == "cellpose" and self.cellpose_config is None:
-            raise ValueError(
-                "segmentation_method is cellpose (the default) but cellpose_config is not "
-                "set; add a cellpose_config, or set segmentation_method: foreground_contour "
-                "to track a foreground mask and contour map from input_images."
-            )
+        if self.segmentation_method == "labels":
+            if self.labels is None:
+                raise ValueError(
+                    "segmentation_method is labels (the default) but `labels` is not set: "
+                    "name the label image `biahub segment` wrote (its model name), or set "
+                    "segmentation_method: foreground_contour to track a foreground mask "
+                    "and contour map from input_images."
+                )
+            if self.target_channel is not None:
+                raise ValueError(
+                    "target_channel is for segmentation_method: foreground_contour; with "
+                    f"labels the tracks are written to labels/{self.labels}"
+                    f"{TRACKED_LABEL_SUFFIX}."
+                )
+        else:
+            if self.target_channel is None:
+                raise ValueError(
+                    "segmentation_method: foreground_contour needs target_channel, the name "
+                    "of the label image the tracks are written to."
+                )
+            if not self.input_images:
+                raise ValueError(
+                    "segmentation_method: foreground_contour needs input_images whose "
+                    "processing functions produce the foreground mask and contour map."
+                )
         return self
+
+    @property
+    def output_label(self) -> str:
+        """Name of the label image tracking writes, ``labels/<output_label>``."""
+        if self.segmentation_method == "labels":
+            return f"{self.labels}{TRACKED_LABEL_SUFFIX}"
+        return self.target_channel
 
 
 class EdgeGraphSettings(BaseModel):

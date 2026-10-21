@@ -1,6 +1,8 @@
 import os
 import tempfile
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -11,16 +13,22 @@ from iohub.ngff import open_ome_zarr
 
 from biahub.cli.main import cli
 from biahub.settings import TrackingSettings
-from biahub.track import _init_labels, label_chunks_and_shards, track, write_tracking_labels
+from biahub.track import _init_labels, track, write_tracking_labels
+from biahub.utils.ngff import create_label_images, label_chunks_and_shards
 
-LABEL = "nuclei_prediction"
+# The label image `biahub segment` would write (its model name) and the one track writes.
+INPUT_LABEL = "nuclei"
+LABEL = "nuclei_tracked"
 
 
 @pytest.fixture(scope="function")
 def example_tracking_plate(tmp_path):
     """
-    Create a test plate with nuclei and membrane prediction channels for tracking
+    Create a test plate with nuclei and membrane prediction channels for tracking, and
+    the instance labels of the nuclei spots in ``labels/nuclei`` as segment would write.
     """
+    from skimage.measure import label as connected_components
+
     plate_path = tmp_path / "tracking_plate.zarr"
 
     position_list = (
@@ -63,6 +71,16 @@ def example_tracking_plate(tmp_path):
                     data[t, 1, z][mask] = np.random.uniform(0.6, 0.9)
 
         position["0"] = data
+
+    plate_dataset.close()
+    positions = [plate_path / Path(*key) for key in position_list]
+    create_label_images(positions, [INPUT_LABEL], "biahub-segment", {"models": {}})
+    for position_path in positions:
+        with open_ome_zarr(str(position_path), mode="r+") as position:
+            nuclei = np.asarray(position["0"][:, 0])  # (T, Z, Y, X)
+            labels = np.stack([connected_components(frame > 0.5) for frame in nuclei])
+            position.get_label(INPUT_LABEL)["0"][:] = labels.astype(np.uint32)
+    plate_dataset = open_ome_zarr(plate_path, mode="r")
 
     yield plate_path, plate_dataset
 
@@ -117,14 +135,50 @@ def _assert_tracking_outputs(position_path):
     assert "working_dir" not in ultrack_config["data"]
 
 
+_ULTRACK_CONFIG = {
+    "segmentation_config": {
+        "min_area": 100,
+        "max_area": 80000,
+        "n_workers": 1,
+        "min_frontier": 0.4,
+        "max_noise": 0.05,
+    },
+    "linking_config": {
+        "n_workers": 1,
+        "max_distance": 15,
+        "distance_weight": -0.0001,
+        "max_neighbors": 3,
+    },
+    "tracking_config": {
+        "n_threads": 1,
+        "disappear_weight": -0.0001,
+        "appear_weight": -0.001,
+        "division_weight": -0.0001,
+    },
+}
+
+
 def _make_tracking_config(plate_path, tmp_path):
-    """Create a minimal tracking config pointing at the test plate."""
+    """A minimal config tracking the plate's `labels/nuclei` image (the default path)."""
     config_path = tmp_path / "track_config.yml"
     config = {
         "output_mode": "2D",
         "fov": "*/*/*",
-        "target_channel": "nuclei_prediction",
-        # The foreground/contour path needs no cellpose weights or GPU in the tests.
+        "labels": INPUT_LABEL,
+        "labels_sigma": 1.0,
+        "tracking_config": _ULTRACK_CONFIG,
+    }
+    config_path.write_text(yaml.dump(config))
+    return config_path
+
+
+def _make_foreground_contour_config(plate_path, tmp_path):
+    """A config on the legacy foreground+contour path, which processes image channels."""
+    config_path = tmp_path / "track_config.yml"
+    config = {
+        "output_mode": "2D",
+        "fov": "*/*/*",
+        "target_channel": LABEL,
         "segmentation_method": "foreground_contour",
         "input_images": [
             {
@@ -156,27 +210,7 @@ def _make_tracking_config(plate_path, tmp_path):
                 },
             },
         ],
-        "tracking_config": {
-            "segmentation_config": {
-                "min_area": 100,
-                "max_area": 80000,
-                "n_workers": 1,
-                "min_frontier": 0.4,
-                "max_noise": 0.05,
-            },
-            "linking_config": {
-                "n_workers": 1,
-                "max_distance": 15,
-                "distance_weight": -0.0001,
-                "max_neighbors": 3,
-            },
-            "tracking_config": {
-                "n_threads": 1,
-                "disappear_weight": -0.0001,
-                "appear_weight": -0.001,
-                "division_weight": -0.0001,
-            },
-        },
+        "tracking_config": _ULTRACK_CONFIG,
     }
     config_path.write_text(yaml.dump(config))
     return config_path
@@ -215,6 +249,36 @@ def test_track_cli_local(
     for position in ["A/1/0", "B/1/0", "B/2/0"]:
         _assert_tracking_outputs(plate_path / position)
         assert (output_path / position.replace("/", "_")).is_dir()  # Ultrack database
+        with open_ome_zarr(str(plate_path / position), mode="r") as pos:
+            # The segmentation labels are left as they were, beside the tracked ones.
+            assert pos.label_names() == [INPUT_LABEL, LABEL]
+            assert pos.get_label(INPUT_LABEL)["0"][:].any()
+
+
+def test_track_cli_foreground_contour_path(tmp_path, example_tracking_plate, monkeypatch):
+    """The legacy path processes image channels into a mask and contour map."""
+    monkeypatch.setenv("ULTRACK_ARRAY_MODULE", "numpy")
+    plate_path, _ = example_tracking_plate
+    config_path = _make_foreground_contour_config(plate_path, tmp_path)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "track",
+            "-i",
+            str(plate_path / "A" / "1" / "0"),
+            "-o",
+            str(tmp_path / "out"),
+            "-c",
+            str(config_path),
+            "--cluster",
+            "debug",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Tracking with foreground + contour" in result.output
+    _assert_tracking_outputs(plate_path / "A" / "1" / "0")
 
 
 def test_track_cli_with_blank_frames(
@@ -312,7 +376,7 @@ def test_track_cli_init_only(tmp_path, example_tracking_plate):
 
     for position in ["A/1/0", "B/1/0", "B/2/0"]:
         with open_ome_zarr(str(plate_path / position), mode="r") as pos:
-            assert pos.label_names() == [LABEL]
+            assert pos.label_names() == [INPUT_LABEL, LABEL]
             assert pos.channel_names == ["nuclei_prediction", "membrane_prediction"]
             label = pos.get_label(LABEL)
             assert label["0"].shape == (5, 1, 64, 64)  # the plate's Z
@@ -322,12 +386,26 @@ def test_track_cli_init_only(tmp_path, example_tracking_plate):
         label_attrs = yaml.safe_load(
             (plate_path / position / "labels" / LABEL / "zarr.json").read_text()
         )["attributes"]
-        assert label_attrs["biahub-track"]["target_channel"] == LABEL
+        assert label_attrs["biahub-track"]["labels"] == INPUT_LABEL
         # The labels listing lives on the labels group (OME-NGFF 0.5).
         labels_attrs = yaml.safe_load(
             (plate_path / position / "labels" / "zarr.json").read_text()
         )["attributes"]
-        assert labels_attrs["ome"]["labels"] == [LABEL]
+        assert labels_attrs["ome"]["labels"] == [INPUT_LABEL, LABEL]
+
+
+def test_track_init_requires_the_input_label_image(tmp_path, create_custom_plate):
+    """A plate segment has not run on fails at --init, naming `biahub segment`."""
+    plate_path, _ = create_custom_plate(tmp_path, z_size=1)
+    config_path = _make_tracking_config(plate_path, tmp_path)
+
+    result = CliRunner().invoke(
+        cli, ["track", "--init", "-i", str(plate_path / "A/1/0"), "-c", str(config_path)]
+    )
+
+    assert result.exit_code != 0
+    assert "biahub segment" in str(result.exception)
+    assert not (plate_path / "A/1/0" / "labels").exists()
 
 
 def test_track_cli_debug_single_position(tmp_path, example_tracking_plate, monkeypatch):
@@ -378,8 +456,9 @@ def test_track_cli_debug_single_position(tmp_path, example_tracking_plate, monke
 
 
 def _minimal_settings(**overrides):
+    """Legacy-path settings: they need no input label image, only the plate."""
     base = {
-        "target_channel": "nuclei_prediction",
+        "target_channel": LABEL,
         "segmentation_method": "foreground_contour",
         "input_images": [{"path": None, "channels": {"nuclei_prediction": []}}],
     }
@@ -387,15 +466,30 @@ def _minimal_settings(**overrides):
     return TrackingSettings(**base)
 
 
-def test_cellpose_is_the_default_and_needs_its_config():
-    base = {
-        "target_channel": "nuclei_prediction",
-        "input_images": [{"path": None, "channels": {"nuclei_prediction": []}}],
-    }
-    with pytest.raises(ValueError, match="cellpose_config is not set"):
-        TrackingSettings(**base)
-    settings = TrackingSettings(**base, cellpose_config={"input_channel": "nuclei_prediction"})
-    assert settings.segmentation_method == "cellpose"
+def test_labels_is_the_default_and_names_the_output():
+    with pytest.raises(ValueError, match="`labels` is not set"):
+        TrackingSettings()
+    settings = TrackingSettings(labels="nuclei")
+    assert settings.segmentation_method == "labels"
+    assert settings.output_label == "nuclei_tracked"
+    assert settings.input_images == []
+    with pytest.raises(ValueError, match="target_channel is for"):
+        TrackingSettings(labels="nuclei", target_channel="x")
+
+
+def test_foreground_contour_needs_a_target_channel_and_input_images():
+    with pytest.raises(ValueError, match="needs target_channel"):
+        TrackingSettings(segmentation_method="foreground_contour")
+    with pytest.raises(ValueError, match="needs input_images"):
+        TrackingSettings(segmentation_method="foreground_contour", target_channel="x")
+    assert _minimal_settings().output_label == LABEL
+
+
+def test_cellpose_config_is_rejected_with_a_pointer_to_segment():
+    with pytest.raises(ValueError, match="biahub segment.*labels"):
+        TrackingSettings(labels="nuclei", cellpose_config={"diameter": 80})
+    with pytest.raises(ValueError, match="biahub segment"):
+        TrackingSettings(segmentation_method="cellpose")
 
 
 def test_init_labels_take_the_input_z(tmp_path, example_tracking_plate, create_custom_plate):
@@ -513,7 +607,7 @@ def test_input_images_path_override(tmp_path, example_tracking_plate, monkeypatc
 
     plate_path, _ = example_tracking_plate
     output_path = tmp_path / "override_output"
-    config_path = _make_tracking_config(plate_path, tmp_path)
+    config_path = _make_foreground_contour_config(plate_path, tmp_path)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -537,53 +631,23 @@ def test_input_images_path_override(tmp_path, example_tracking_plate, monkeypatc
     _assert_tracking_outputs(plate_path / "A" / "1" / "0")
 
 
-def test_track_init_rejects_an_unknown_cellpose_model(
-    tmp_path, example_tracking_plate, monkeypatch
-):
-    """A bad model name must fail once at --init, not later in every worker."""
-    import sys
-    import types
-
-    class Model:
-        def __init__(self, gpu=False, pretrained_model="cpsam_v2", device=None):
-            # Cellpose 4 would silently substitute cpsam_v2 here.
-            self.pretrained_model = str(tmp_path / "cpsam_v2")
-
-    models = types.ModuleType("cellpose.models")
-    models.CellposeModel = Model
-    models.MODEL_NAMES = ["cpsam_v2", "cpsam", "cpdino", "cpdino-vitb"]
-    models.get_user_models = lambda: []
-    package = types.ModuleType("cellpose")
-    package.models = models
-    monkeypatch.setitem(sys.modules, "cellpose", package)
-    monkeypatch.setitem(sys.modules, "cellpose.models", models)
+def test_load_labels_fills_blank_frames(tmp_path, example_tracking_plate):
+    from biahub.track import load_labels
 
     plate_path, _ = example_tracking_plate
-    config_path = _make_tracking_config(plate_path, tmp_path)
-    config = yaml.safe_load(config_path.read_text())
-    config["segmentation_method"] = "cellpose"
-    config["cellpose_config"] = {
-        "pretrained_model": "nuclei",
-        "input_channel": "nuclei_prediction",
-    }
-    config_path.write_text(yaml.safe_dump(config))
+    position_path = plate_path / "A" / "1" / "0"
+    with open_ome_zarr(str(position_path), mode="r+") as pos:
+        pos.get_label(INPUT_LABEL)["0"][2] = 0  # a dropped timepoint: nothing segmented
+    csv_path = tmp_path / "blank.csv"
+    pd.DataFrame({"FOV": ["A/1/0"], "t": ["[2]"]}).to_csv(csv_path, index=False)
 
-    result = CliRunner().invoke(
-        cli,
-        [
-            "track",
-            "-i",
-            str(plate_path / "A" / "1" / "0"),
-            "-o",
-            str(tmp_path / "out"),
-            "-c",
-            str(config_path),
-            "--init",
-        ],
-    )
+    labels = load_labels(position_path, INPUT_LABEL, "2D", csv_path)
 
-    assert result.exit_code != 0
-    assert "Unknown cellpose model 'nuclei'" in str(result.exception) + result.output
+    assert labels.shape == (5, 64, 64)
+    assert np.array_equal(labels[2], labels[1])  # filled from the previous frame
+    assert not load_labels(position_path, INPUT_LABEL, "2D")[2].any()
+    with pytest.raises(ValueError, match="biahub segment"):
+        load_labels(position_path, "missing", "2D")
 
 
 def test_filter_short_siblings_merges_a_one_frame_daughter():
@@ -744,8 +808,8 @@ def test_track_debug_run_applies_the_sibling_filter(tmp_path, example_tracking_p
     assert "Sibling filter (min_length=3)" in result.output
 
 
-def test_track_gives_local_jobs_a_gpu(tmp_path, example_tracking_plate, monkeypatch):
-    """Same as segment: submitit's local executor hides GPUs without gpus_per_node."""
+def test_track_jobs_ask_for_no_gpu(tmp_path, example_tracking_plate, monkeypatch):
+    """Ultrack is CPU work (segmentation is `biahub segment`'s): the cpu partition."""
     import contextlib
 
     recorded = {}
@@ -787,7 +851,8 @@ def test_track_gives_local_jobs_a_gpu(tmp_path, example_tracking_plate, monkeypa
 
     assert result.exit_code == 0, result.output
     assert recorded["cluster"] == "local"
-    assert recorded.get("gpus_per_node") == 1
+    assert "gpus_per_node" not in recorded
+    assert recorded["slurm_partition"] == "cpu"
     assert (
         recorded.get("timeout_min") == recorded["slurm_time"]
     )  # local default kills at 2 min
@@ -842,7 +907,6 @@ def test_track_local_sbatch_file_overrides_computed_parameters(
 
     assert result.exit_code == 0, result.output
     assert recorded["timeout_min"] == 5
-    assert recorded["gpus_per_node"] == 1
 
 
 def test_track_local_timeout_ignores_a_slurm_time_string(

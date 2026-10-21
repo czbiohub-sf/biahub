@@ -3,9 +3,10 @@ name: reconstruct-with-nextflow
 description: >-
   Run a mantis-v2 microscope dataset through the biahub Nextflow reconstruction
   pipeline (nextflow/mantis-v2.nf: flat-field → deskew → reconstruct →
-  virtual-stain → assemble → project → track → QC) on the Bruno HPC cluster. Assemble,
-  track and QC are optional and selected per dataset family: A549 runs assemble
-  + track + QC, neuromast runs assemble + QC and no tracking. Locates the raw
+  virtual-stain → assemble → project → segment → track → QC) on the Bruno HPC
+  cluster. Assemble, project, segment, track and QC are optional and selected per
+  dataset family: A549 runs all of them, neuromast runs assemble + QC and no
+  segmentation or tracking. Locates the raw
   acquisition under /hpc/instruments/cm.mantis, picks the output project
   directory, scaffolds configs, launches the run in a tmux session in the
   foreground so it can be watched, recovers from Lustre/torn-shard I/O errors,
@@ -174,8 +175,9 @@ say which you think it is and let the user decide. A fresh reprocess goes to a
 
 The templates in `<BIAHUB>/nextflow/configs/{a549,zebrafish}/` are the source
 of truth — they version with the pipeline and are reviewed. The QC config sits with
-them, one self-contained `qc.yaml` for the assembled store; A549's also counts
-cells in the label image tracking writes into that store. It carries `.yaml`
+them, one self-contained `qc.yaml` for the assembled store; A549's
+`qc_project.yaml` also counts cells in the tracked label image tracking writes
+into the projected plate. It carries `.yaml`
 rather than `.yml` because imaging-qc loads a stage config through Hydra, which strips the
 extension and looks for `<stem>.yaml`. A previous run's
 `configs/` directory is a fallback only: an unreviewed snapshot that drifts
@@ -191,7 +193,7 @@ the next dataset in the family would also need), fix it in a PR against
 `nextflow/configs/<family>/`, stating which dataset exposed it. Genuinely
 per-dataset values stay in the run directory.
 
-### 5a. Check the channel couplings: QC filters, project.yml, track.yml
+### 5a. Check the channel couplings: QC filters, project.yml, segment.yml, track.yml
 
 Once the configs are edited, run this from the biahub checkout:
 
@@ -218,17 +220,19 @@ warning, not a failure (`biahub project` drops it with a warning), **but the
 intention of the pipeline is that every assembled channel is projected unless
 the user decided otherwise**, so carry the list into the pre-run plan (step 6
 of §7) and ask the user whether to add each one or leave it out on purpose.
-The script also checks that `track.yml`'s `target_channel` and
-`cellpose_config.input_channel` are channels `project.yml` writes, since track
-reads the projected plate.
+The script also checks that `segment.yml`'s model `channels` are channels
+`project.yml` writes, since segment reads the projected plate, and that
+`track.yml`'s `labels` is a `segment.yml` model name, since track reads the
+label image segment wrote (`labels/<model>`).
 
-**`qc_project.yaml` against the projected plate and `track.yml` — the coupling
-that actually breaks.** Tracking writes its labels into each position of the
-plate it reads, at `labels/<track.yml target_channel>`, and `qc_project.yaml`'s
-`instance_count` names them twice: `label: nuclei_prediction` and its anchor
-`channels: [nuclei_prediction]`, the channel they were segmented from. Both only
-resolve if `track.yml` says `target_channel: nuclei_prediction`, and the anchor
-must be a channel `project.yml` writes — three files with no shared source of
+**`qc_project.yaml` against the projected plate, `segment.yml` and `track.yml`
+— the coupling that actually breaks.** Segment writes `labels/<model>` into each
+position of the plate it reads and tracking writes `labels/<model>_tracked`
+beside it. `qc_project.yaml`'s `instance_count` names the tracked one, `label:
+nuclei_tracked`, and its anchor `channels: [nuclei_prediction]`, the channel the
+labels were segmented from. The label only resolves if `track.yml` says `labels:
+nuclei` and `segment.yml` has a model `nuclei`; the anchor must be that model's
+channel and a channel `project.yml` writes — four files with no shared source of
 truth, and changing one is the ordinary way to desynchronise them. The script
 checks all of it when `qc_project.yaml` exists.
 
@@ -341,16 +345,18 @@ Do not run anything yet. Show the user:
    what was mismatched and how it was resolved.
 6. **The steps this run will perform, listed in order.** Reconstruction proper —
    flat-field → deskew → reconstruct → virtual-stain — always runs; assemble,
-   project, track and QC run only if their config is passed (biahub#306).
-   Project turns the assembled 3D plate into the 2D (Z=1) plate that 2D
-   tracking reads (`biahub track` no longer selects or projects Z-planes), so
-   `--track_config` goes with `--project_config`. Defaults by family, which is
+   project, segment, track and QC run only if their config is passed
+   (biahub#306). Project turns the assembled 3D plate into the 2D (Z=1) plate
+   that 2D segmentation and tracking read (neither selects or projects
+   Z-planes); segment writes the cellpose labels into that plate and track
+   links them (`biahub track` no longer segments), so `--segment_config` and
+   `--track_config` go with `--project_config`. Defaults by family, which is
    what to present unless the user says otherwise:
 
    | family | steps |
    |---|---|
-   | A549 / cell-line / organelle | flat-field → deskew → reconstruct → virtual-stain → **assemble → project → track → QC** |
-   | neuromast / zebrafish / dynatrack | flat-field → deskew → reconstruct → virtual-stain → **assemble → QC** (no projection or tracking) |
+   | A549 / cell-line / organelle | flat-field → deskew → reconstruct → virtual-stain → **assemble → project → segment → track → QC** |
+   | neuromast / zebrafish / dynatrack | flat-field → deskew → reconstruct → virtual-stain → **assemble → QC** (no projection, segmentation or tracking) |
 
    Write the list out in the plan rather than naming the family, and say which
    optional steps are being skipped and why. If the user asks to skip anything
@@ -371,9 +377,10 @@ Do not run anything yet. Show the user:
    **State the directory numbers this run will produce.** The number is the
    step's position among the steps performed, not a fixed label, so a neuromast
    run and an A549 run both end at `4-assemble`: project writes its plate
-   beside the assembled one as `4-assemble/<DATASET>_proj.zarr`, and tracking
-   writes its labels and tracks into that plate; neither has a directory of
-   its own. Older A549 runs on disk also have `5-track` (or `5-assemble` /
+   beside the assembled one as `4-assemble/<DATASET>_proj.zarr`, segment
+   writes its label images into that plate and tracking its tracked labels and
+   tracks; none of the three has a directory of its own. Older A549 runs on
+   disk also have `5-track` (or `5-assemble` /
    `4-track`, from when the numbers were fixed) — say so if the user is
    comparing against one.
 7. Known caveats that apply to this dataset.
@@ -390,7 +397,8 @@ Do not run anything yet. Show the user:
     pipeline deletes the flat-field, deskew, reconstruct and virtual-stain
     directories, the `slurm_output/` placeholders and `.iohub-progress/` resume
     markers beside the final stores, and the Nextflow work directory. Only the
-    assembled store (with tracking's labels and tracks inside it), the QC report
+    assembled and projected stores (with the segmentation and tracking labels
+    and the tracks inside the latter), the QC report
     and the logs under `nextflow/` remain, and the run is final: any rerun
     recomputes from raw. The template's `CLEANUP_INTERMEDIATES="auto"` lets the
     pipeline decide at launch (`cleanup_decision` in
@@ -427,15 +435,16 @@ copied file's group bits follow the *source* file's mode — `cp` from the repo
 (644) yields `rw-r--r--`. Hence the `chmod` after every copy. Plain `cp` only:
 `cp -p`/`-a` would also carry over the checkout's group.
 
-The run script passes all five optional configs — `--concatenate_config`,
-`--project_config`, `--track_config`, `--qc_config` (`qc.yaml`),
-`--qc_project_config` (`qc_project.yaml`) — so an A549 run needs no edit. **For a
-neuromast/zebrafish run, or any step the user asked to skip, DELETE that flag's
-line** from the `nextflow run` call and note the skip in a comment above it, so
-the script still records what this run did. A neuromast run deletes
-`--project_config`, `--track_config` and `--qc_project_config`; none of
-`project.yml`, `track.yml` or `qc_project.yaml` need exist for that family, and
-none does for zebrafish. `--qc_track_config` is gone: passing it errors at launch.
+The run script passes all six optional configs — `--concatenate_config`,
+`--project_config`, `--segment_config`, `--track_config`, `--qc_config`
+(`qc.yaml`), `--qc_project_config` (`qc_project.yaml`) — so an A549 run needs no
+edit. **For a neuromast/zebrafish run, or any step the user asked to skip,
+DELETE that flag's line** from the `nextflow run` call and note the skip in a
+comment above it, so the script still records what this run did. A neuromast
+run deletes `--project_config`, `--segment_config`, `--track_config` and
+`--qc_project_config`; none of `project.yml`, `segment.yml`, `track.yml` or
+`qc_project.yaml` need exist for that family, and none does for zebrafish.
+`--qc_track_config` is gone: passing it errors at launch.
 
 Delete rather than comment: a `#` inside a backslash-continued command does not
 start a comment line — the continuation swallows it, every flag below is dropped
@@ -555,11 +564,12 @@ directory (`<DATASET>_rerun`) over relaunching in place.
    whether a `rename-channels` CLI has landed on main, making this obsolete).
 2. Verify the assembled store (`<N>-assemble/<DATASET>.zarr`, `4-assemble`
    unless earlier steps were skipped) opens with iohub; report shape, channels,
-   size on disk. This is the deliverable for every family. When tracking ran,
-   its output is inside it: check a position has `labels/nuclei_prediction`
-   (the track config's `target_channel`; uint32 TZYX at the image's full Z),
-   `tracks.geff` and `tracks_<row>_<col>_<fov>.csv`, and report them beside
-   the image data.
+   size on disk. This is the deliverable for every family. When segmentation
+   and tracking ran, their output is inside the projected plate: check a
+   position has `labels/nuclei` (the segment config's model name) and
+   `labels/nuclei_tracked` (the track config's `labels` plus `_tracked`; both
+   uint32 TZYX at the image's full Z), `tracks.geff` and
+   `tracks_<row>_<col>_<fov>.csv`, and report them beside the image data.
 3. If QC ran, report its verdict: the `QC_SUMMARY` line from the
    pipeline log (`pass=`/`fail=`/`gates_fail=`), and point at the report at
    `<OUTPUT>/qc/report/index.html` — one page, one tab: the assembled store

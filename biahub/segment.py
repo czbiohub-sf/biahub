@@ -40,12 +40,16 @@ from biahub.utils.cluster import (
 from biahub.utils.config import settings_fingerprint, yaml_to_model
 from biahub.utils.ngff import (
     PROVENANCE_METADATA_KEYS,
+    create_label_images,
     get_output_paths,
     resolve_ome_zarr_version,
 )
 
 if TYPE_CHECKING:
     import torch
+
+# Provenance key: on each label image (no -o) or on each output position (-o).
+PROVENANCE_KEY = "biahub-segment"
 
 
 @dataclass(frozen=True)
@@ -180,12 +184,56 @@ def _segment_czyx(
     return np.stack(czyx_segmentation, axis=0)
 
 
+def _init_label_images(
+    input_position_dirpaths: list[Path],
+    settings: SegmentationSettings,
+) -> tuple[tuple[int, int, int, int, int], list[ResolvedModel]]:
+    """Create the empty ``labels/<model>`` images in the input positions (no ``-o``).
+
+    One label image per model, named after it, with the image's shape (its Z: one
+    plane for a projected plate). Existing label images are left untouched, so both
+    --init and per-position workers can call this; one whose shape differs from the
+    image's (a model renamed from 3D to 2D, say) is refused. The settings are recorded
+    on each label image exactly as written (names, not indices).
+
+    Returns the input (T, C, Z, Y, X) shape and the resolved models.
+    """
+    with open_ome_zarr(str(input_position_dirpaths[0]), mode="r") as input_dataset:
+        T, C, Z, Y, X = input_dataset.data.shape
+        scale = input_dataset.scale
+        channel_names = input_dataset.channel_names
+
+    models = resolve_models(settings, channel_names, scale, Z)
+    label_names = [m.name for m in models]
+
+    for position_dirpath in input_position_dirpaths:
+        with open_ome_zarr(str(position_dirpath), mode="r") as position:
+            for name in label_names:
+                if name not in position.label_names():
+                    continue
+                existing_shape = tuple(position.get_label(name)["0"].shape)
+                if existing_shape != (T, Z, Y, X):
+                    raise ValueError(
+                        f"{position_dirpath} already has a label image {name!r} of shape "
+                        f"{existing_shape}, but the image is {(T, Z, Y, X)} (T, Z, Y, X). "
+                        "Rename the model or remove the old label image."
+                    )
+
+    create_label_images(
+        input_position_dirpaths,
+        label_names,
+        PROVENANCE_KEY,
+        settings.model_dump(mode="json"),
+    )
+    return (T, C, Z, Y, X), models
+
+
 def _init_output_plate(
     input_position_dirpaths: list[Path],
     output_dirpath: Path,
     settings: SegmentationSettings,
 ) -> tuple[tuple[int, int, int, int, int], list[ResolvedModel]]:
-    """Create (or extend) the empty label plate and resolve the models against the input.
+    """Create (or extend) a separate label plate (``-o``) and resolve the models.
 
     create_empty_plate is idempotent: re-running with the same positions is a no-op and
     new positions are appended, so both --init and per-position workers can call it.
@@ -234,26 +282,76 @@ def _init_output_plate(
         ),
         metadata_sources=input_plate,
         metadata_keys=PROVENANCE_METADATA_KEYS,
-        extra_metadata={"biahub-segment": settings.model_dump(mode="json")},
+        extra_metadata={PROVENANCE_KEY: settings.model_dump(mode="json")},
     )
     return (T, C, Z, Y, X), models
 
 
-def _resume_token(settings: SegmentationSettings) -> str:
+def _resume_token(settings: SegmentationSettings, model: str | None = None) -> str:
     """Fingerprint the settings, including the order of the models.
 
-    settings_fingerprint sorts keys, but model order decides which label channel each
-    model writes, so finished work from another order must not be skipped.
+    settings_fingerprint sorts keys, but in a separate label plate (``-o``) the model
+    order decides which label channel each model writes, so finished work from another
+    order must not be skipped. In the input plate each model has its own label image,
+    so the token names the model instead and the order does not matter.
     """
+    if model is not None:
+        return settings_fingerprint(
+            {"settings": settings.model_dump(mode="json"), "model": model}
+        )
     return settings_fingerprint(
         {"settings": settings.model_dump(mode="json"), "model_order": list(settings.models)}
+    )
+
+
+def _segment_position(
+    input_position_path: Path,
+    output_position_path: Path | None,
+    models: list[ResolvedModel],
+    n_channels: int,
+    settings: SegmentationSettings,
+    resume: bool,
+) -> None:
+    """Segment one position: into its own label images, or into the ``-o`` plate.
+
+    Without ``-o`` each model gets one ``process_single_position`` call writing the
+    label image named after it (iohub's ``output_label``); the cellpose model cache
+    makes the repeated calls free. With ``-o`` one call writes all the models as
+    channels of the output position.
+    """
+    if output_position_path is None:
+        for model in models:
+            process_single_position(
+                _segment_czyx,
+                input_position_path,
+                input_position_path,
+                input_channel_indices=[list(range(n_channels))],
+                output_label=model.name,
+                # One process per position: timepoints share the loaded model and
+                # the GPU, which is the bottleneck.
+                num_workers=1,
+                resume=resume,
+                resume_token=_resume_token(settings, model.name),
+                models=[model],
+            )
+        return
+    process_single_position(
+        _segment_czyx,
+        input_position_path,
+        output_position_path,
+        input_channel_indices=[list(range(n_channels))],
+        output_channel_indices=[list(range(len(models)))],
+        num_workers=1,
+        resume=resume,
+        resume_token=_resume_token(settings),
+        models=models,
     )
 
 
 def segment(
     input_position_dirpaths: list[Path],
     config_filepath: Path,
-    output_dirpath: Path,
+    output_dirpath: Path | None = None,
     sbatch_filepath: str | None = None,
     cluster: str = "slurm",
     monitor: bool = True,
@@ -269,8 +367,11 @@ def segment(
         or "input.zarr/*/*/*".
     config_filepath : Path
         Path to the segmentation YAML configuration file.
-    output_dirpath : Path
-        Path to the "output.zarr" label plate.
+    output_dirpath : Path, optional
+        Path to a separate "output.zarr" label plate, with one channel per model
+        (``<model>_labels``). If None (the default), the labels are written into the
+        ``-i`` positions as OME-NGFF label images, ``labels/<model>``, which is what
+        `biahub track` reads, and the SLURM logs go to ``./slurm_output``.
     sbatch_filepath : str, optional
         SBATCH filepath that contains slurm parameters to overwrite defaults.
     cluster : str, optional
@@ -284,8 +385,12 @@ def segment(
         Skip the (time, channel) units a previous attempt already finished; see
         ``iohub.ngff.utils.process_single_position``.
     """
-    output_dirpath = Path(output_dirpath)
-    slurm_out_path = output_dirpath.parent / "slurm_output"
+    if output_dirpath is not None:
+        output_dirpath = Path(output_dirpath)
+        slurm_out_path = output_dirpath.parent / "slurm_output"
+    else:
+        # Not $TMPDIR: submitit's folder must be visible from the compute nodes.
+        slurm_out_path = Path("slurm_output").absolute()
 
     resolved_cluster = get_submitit_cluster(cluster=cluster)
     if not init_only and resolved_cluster == "debug":
@@ -300,9 +405,12 @@ def segment(
         # Fail on a bad model name before scaffolding anything.
         for name in dict.fromkeys(m.pretrained_model for m in settings.models.values()):
             check_cellpose_model_name(name)
-    (T, C, Z, Y, X), models = _init_output_plate(
-        input_position_dirpaths, output_dirpath, settings
-    )
+    if output_dirpath is None:
+        (T, C, Z, Y, X), models = _init_label_images(input_position_dirpaths, settings)
+    else:
+        (T, C, Z, Y, X), models = _init_output_plate(
+            input_position_dirpaths, output_dirpath, settings
+        )
 
     # Calibrated on a real 2D run (2026_04_28 SEC61B, 67 x 1664 x 1193, 6 input channels,
     # cpsam_v2 on one GPU): ~5 s per frame (6-10 min per position, incl. weight staging) and
@@ -327,10 +435,22 @@ def segment(
         # than N workers racing for it. Workers must not (staging needs cellpose unimported).
         for name in dict.fromkeys(m.pretrained_model for m in models):
             warm_cellpose_weights(name)
-        click.echo(f"Initialized {output_dirpath} ({len(input_position_dirpaths)} positions)")
+        if output_dirpath is None:
+            click.echo(
+                f"Created labels/{{{', '.join(m.name for m in models)}}} in "
+                f"{Path(input_position_dirpaths[0]).parents[2]} "
+                f"({len(input_position_dirpaths)} positions)"
+            )
+        else:
+            click.echo(
+                f"Initialized {output_dirpath} ({len(input_position_dirpaths)} positions)"
+            )
         return
 
-    output_position_paths = get_output_paths(input_position_dirpaths, output_dirpath)
+    if output_dirpath is None:
+        output_position_paths = [None] * len(input_position_dirpaths)
+    else:
+        output_position_paths = get_output_paths(input_position_dirpaths, output_dirpath)
 
     slurm_args = {
         "slurm_job_name": "segment",
@@ -363,18 +483,13 @@ def segment(
         ):
             jobs.append(
                 executor.submit(
-                    process_single_position,
-                    _segment_czyx,
+                    _segment_position,
                     input_position_path,
                     output_position_path,
-                    input_channel_indices=[list(range(C))],
-                    output_channel_indices=[list(range(len(models)))],
-                    # One process per position: timepoints share the loaded model and
-                    # the GPU, which is the bottleneck.
-                    num_workers=1,
-                    resume=resume,
-                    resume_token=_resume_token(settings),
                     models=models,
+                    n_channels=C,
+                    settings=settings,
+                    resume=resume,
                 )
             )
 
@@ -399,7 +514,13 @@ def segment(
 @click.command("segment")
 @input_position_dirpaths()
 @config_filepath()
-@output_dirpath()
+@output_dirpath(
+    required=False,
+    help="Separate label plate to write, one channel per model (<model>_labels). "
+    "If omitted, the labels are written into the -i positions as label images, "
+    "labels/<model>, which `biahub track` reads, and the SLURM logs go to "
+    "./slurm_output.",
+)
 @sbatch_filepath()
 @cluster()
 @monitor()
@@ -408,7 +529,7 @@ def segment(
 def segment_cli(
     input_position_dirpaths: list[Path],
     config_filepath: Path,
-    output_dirpath: Path,
+    output_dirpath: Path | None = None,
     sbatch_filepath: str | None = None,
     cluster: str = "slurm",
     monitor: bool = False,
@@ -417,18 +538,24 @@ def segment_cli(
 ):
     """Segment positions with cellpose 4 models configured in a YAML file.
 
-    \b
-    SLURM fan-out of positions across a whole plate:
-    >>> biahub segment -i ./input.zarr/*/*/* -c ./segment.yml -o ./segment.zarr
+    Writes one label image per model into each -i position (labels/<model>), where
+    `biahub track` reads them; -o writes a separate label plate instead.
 
     \b
-    Initialize the output plate only (Nextflow init step):
-    >>> biahub segment --init -i ./input.zarr/*/*/* -c ./segment.yml -o ./segment.zarr
+    SLURM fan-out of positions across a whole plate:
+    >>> biahub segment -i ./input.zarr/*/*/* -c ./segment.yml
+
+    \b
+    Create the empty label images only (Nextflow init step):
+    >>> biahub segment --init -i ./input.zarr/*/*/* -c ./segment.yml
 
     \b
     In-process run of a single position (Nextflow per-position worker):
-    >>> biahub segment --cluster debug -i ./input.zarr/B/3/000000 -c ./segment.yml \\
-        -o ./segment.zarr --resume
+    >>> biahub segment --cluster debug -i ./input.zarr/B/3/000000 -c ./segment.yml --resume
+
+    \b
+    Into a separate label plate:
+    >>> biahub segment -i ./input.zarr/*/*/* -c ./segment.yml -o ./segment.zarr
     """  # noqa: D301
     segment(
         input_position_dirpaths=input_position_dirpaths,

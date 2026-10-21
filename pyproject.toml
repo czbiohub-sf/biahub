@@ -139,11 +139,14 @@ imaging_qc_pipeline = { git = "https://github.com/czbiohub-sf/imaging-qc-pipelin
 # royerlab/ultrack main once #290 merges, and at a release once one contains them.
 ultrack = { git = "https://github.com/ieivanov/ultrack", rev = "69e7589a050b0aa5f84ccda3bdf072f5289f939c" }
 
-# Pin iohub to main at the czbiohub-sf/iohub#486 merge, for
-# create_empty_plate(label_names=...), with which track --init scaffolds the empty
-# label images (#360), and czbiohub-sf/iohub#485, which puts the labels list on
-# <fov>/labels/zarr.json so ome-zarr-models and dca-validate can open a field
-# that has labels. Repoint at a PyPI release once one contains them.
+# Pin iohub to the czbiohub-sf/iohub#489 branch (on main at the #486 merge):
+# process_single_position(output_label=...), with which `biahub segment` writes its
+# labels into the plate's label images with --resume. Main's #486 adds
+# create_empty_plate(label_names=...), with which segment --init and track --init
+# scaffold the empty label images (#360), and #485 puts the labels list on
+# <fov>/labels/zarr.json so ome-zarr-models and dca-validate can open a field that
+# has labels. Repoint at main once #489 merges, and at a PyPI release once one
+# contains them.
 #
 # Main's own reasons: #476 syncs a write unit's shards before recording it as
 # done (without it a preemption between the write and the marker leaves a `.done`
@@ -151,7 +154,7 @@ ultrack = { git = "https://github.com/ieivanov/ultrack", rev = "69e7589a050b0aa5
 # 2026_08_14_dynatrack); #472 adds create_empty_plate(extra_metadata=...); #479
 # creates a plate's positions in one batch instead of rewriting the well's
 # metadata per position (hours for a ~40k-FOV plate's init).
-iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "c9832a7675e0fb997a27db2796623d19b7dc9f1a" }
+iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "8c85656" }
 
 # Pin waveorder to the main commit that merged mehta-lab/waveorder#583, which
 # runs apply-inv-tf through iohub's process_single_position with resume (on top

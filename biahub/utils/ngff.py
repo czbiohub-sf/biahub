@@ -1,9 +1,13 @@
-"""OME-Zarr store helpers: output paths, version, provenance, channels."""
+"""OME-Zarr store helpers: output paths, version, provenance, channels, label images."""
 
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
+
+import numpy as np
+import zarr
 
 from iohub.ngff import open_ome_zarr
+from iohub.ngff.utils import create_empty_plate
 from tqdm import tqdm
 
 #: ``fnmatch`` patterns for the per-position zattrs keys that steps carry
@@ -129,3 +133,84 @@ def append_channels(input_data_path: Path, target_data_path: Path) -> None:
                 position["0"][:, num_channels + i + 1] = appending_dataset[str(name)][0][:, i]
         dataset.print_tree()
     appending_dataset.close()
+
+
+# Label chunks, TZYX. 16 x 1 x 128 x 128 uint32 is 1 MB, the DCA v0.2 SHOULD (512 KB
+# is the MUST) and its "2D+time" example; growing T keeps per-plane reads cheap.
+LABEL_CHUNKS = (16, 1, 128, 128)
+# Shards span one time chunk (16 timepoints, the DCA SHOULD) and the whole YX plane,
+# capped at 16 chunks (2048 px, the DCA spatial-shard SHOULD).
+MAX_LABEL_SHARD_CHUNKS = 16
+
+
+def label_chunks_and_shards(
+    shape: tuple[int, int, int, int],
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    """Chunks and shards ratio for a (T, Z, Y, X) label array of ``shape``."""
+    chunks = tuple(min(c, s) for c, s in zip(LABEL_CHUNKS, shape, strict=True))
+    shards_ratio = (1, 1) + tuple(
+        min(-(-s // c), MAX_LABEL_SHARD_CHUNKS)
+        for c, s in zip(chunks[2:], shape[2:], strict=True)
+    )
+    return chunks, shards_ratio
+
+
+def labels_exist(position_dirpaths: list[Path], label_name: str) -> bool:
+    """Whether every position has the label image ``labels/<label_name>``."""
+    return all(
+        (Path(p) / "labels" / label_name / "zarr.json").exists()
+        or (Path(p) / "labels" / label_name / ".zattrs").exists()
+        for p in position_dirpaths
+    )
+
+
+def create_label_images(
+    position_dirpaths: list[Path],
+    label_names: list[str],
+    provenance_key: str,
+    provenance: dict[str, Any],
+) -> tuple[int, int, int, int, int]:
+    """Create empty ``labels/<name>`` images in every position of one plate.
+
+    The labels are uint32 TZYX with the image's shape (its Z: one plane for a
+    projected plate, the stack for a 3D one), chunked per ``label_chunks_and_shards``,
+    and take the plate's OME-Zarr version. Existing label images are left untouched,
+    so ``--init`` and per-position workers can both call this. ``provenance`` is
+    merged into each label group's attributes under ``provenance_key``, keeping what
+    a worker recorded there before.
+
+    Returns the image's (T, C, Z, Y, X) shape.
+    """
+    position_dirpaths = [Path(p) for p in position_dirpaths]
+    with open_ome_zarr(str(position_dirpaths[0]), mode="r") as dataset:
+        T, C, Z, Y, X = dataset.data.shape
+        scale = dataset.scale
+        channel_names = dataset.channel_names
+        dtype = dataset.data.dtype
+        version = dataset.version
+
+    plate = position_dirpaths[0].parents[2]
+    position_keys = [p.parts[-3:] for p in position_dirpaths]
+    label_chunks, label_shards_ratio = label_chunks_and_shards((T, Z, Y, X))
+    create_empty_plate(
+        store_path=plate,
+        position_keys=position_keys,
+        channel_names=channel_names,
+        shape=(T, C, Z, Y, X),
+        scale=scale,
+        version=version,
+        dtype=dtype,
+        label_names=label_names,
+        label_dtype=np.uint32,
+        label_chunks=label_chunks,
+        label_shards_ratio=label_shards_ratio if version == "0.5" else None,
+    )
+
+    for position_dirpath in position_dirpaths:
+        for name in label_names:
+            label_group = zarr.open_group(position_dirpath / "labels" / name, mode="r+")
+            label_group.attrs[provenance_key] = {
+                **label_group.attrs.get(provenance_key, {}),
+                **provenance,
+            }
+    return (T, C, Z, Y, X)

@@ -23,16 +23,18 @@ nextflow.enable.dsl = 2
 //  workflow body for why that is possible and what it buys.
 //
 //  Flat-field → deskew → reconstruct → virtual-stain → assemble → project →
-//  track → QC is the full chain: assemble concatenates the
+//  segment → track → QC is the full chain: assemble concatenates the
 //  deskew/reconstruct/virtual-stain channels into one plate, project reduces
-//  that 3D plate to the 2D (Z=1) plate 2D tracking needs, track reads it as its
-//  single input, and QC reads the finished stores. Follow the chaining below for
-//  the pattern.
+//  that 3D plate to the 2D (Z=1) plate 2D segmentation needs, segment writes
+//  cellpose labels into it, track links those labels and writes the tracked
+//  labels beside them, and QC reads the finished stores. Follow the chaining
+//  below for the pattern.
 //
-//  The last four are OPTIONAL and selected by whether their config is given, so
-//  a run performs the prefix it asks for: A549 wants assemble + project + track
-//  + QC, a neuromast run wants assemble + QC and no tracking (issue #306). A
-//  skipped step never renumbers the directories of the ones around it.
+//  The last five are OPTIONAL and selected by whether their config is given, so
+//  a run performs the prefix it asks for: A549 wants assemble + project +
+//  segment + track + QC, a neuromast run wants assemble + QC and no tracking
+//  (issue #306). A skipped step never renumbers the directories of the ones
+//  around it.
 // ---------------------------------------------------------------------------
 
 params.input = null   // raw source — may not be a zarr store
@@ -42,6 +44,7 @@ params.flat_field_config = null
 params.reconstruct_config = null
 params.virtual_stain_config = null
 params.project_config = null
+params.segment_config = null
 params.track_config = null
 params.concatenate_config = null
 params.max_positions = 0
@@ -49,7 +52,8 @@ params.max_positions = 0
 // either, both, or neither. Both QC'd stores become tabs of ONE report.
 //   --qc_config         nextflow/configs/<family>/qc.yaml          (assembled store)
 //   --qc_project_config nextflow/configs/<family>/qc_project.yaml  (projected plate,
-//                       which holds the labels tracking writes; counts them)
+//                       which holds the labels segment and track write; counts
+//                       the tracked ones)
 // One self-contained file per store, beside that family's other step configs.
 params.qc_config = null
 params.qc_project_config = null
@@ -62,6 +66,7 @@ include { reconstruct_init_wf; reconstruct_tf_wf; reconstruct_run_wf } from './m
 include { virtual_stain_init_wf; virtual_stain_run_wf } from './modules/virtual_stain'
 include { assemble_init_wf; assemble_run_wf } from './modules/assembly'
 include { project_init_wf; project_run_wf } from './modules/project'
+include { segment_init_wf; segment_run_wf } from './modules/segment'
 include { track_init_wf; track_run_wf } from './modules/tracking'
 include { qc_plan_wf; qc_compute_wf; qc_report_wf; qc_report_spec } from './modules/qc'
 include { notify_step; notify_run_start; notify_run_end } from './modules/notify'
@@ -102,8 +107,8 @@ def step_directories(performed) {
         virtual_stain : 'virtual-stain',
         assemble      : 'assemble',
         // project writes beside the assembled plate (<assemble>/<ds>_proj.zarr)
-        // and track writes into the plate it reads; neither has a directory of
-        // its own or takes a number.
+        // and segment and track write into the plate they read; none has a
+        // directory of its own or takes a number.
     ]
     def layout = [:]
     order.each { key, name ->
@@ -135,14 +140,17 @@ workflow {
     // end at `4-assemble`.
     //
     // Project turns the assembled 3D plate into the 2D (Z=1) plate that 2D
-    // tracking reads: `biahub track` no longer selects or projects Z-planes, so
-    // an A549 run names --project_config as well as --track_config. Tracking
-    // without it reads the assembled plate itself, which suits 3D tracking.
-    // The projected plate is a companion of the assembled one and lives beside
-    // it as `<N>-assemble/<ds>_proj.zarr`; track writes its labels and tracks
-    // into the plate it reads. Neither has a step directory.
+    // segmentation and tracking read: neither `biahub segment` nor `biahub track`
+    // selects or projects Z-planes, so an A549 run names --project_config as
+    // well as --segment_config and --track_config. Without it they read the
+    // assembled plate itself, which suits 3D work. The projected plate is a
+    // companion of the assembled one and lives beside it as
+    // `<N>-assemble/<ds>_proj.zarr`; segment writes its label images into the
+    // plate it reads and track writes the tracked labels and tracks beside
+    // them. None of the three has a step directory.
     def assemble_on   = params.concatenate_config as boolean
     def project_on    = params.project_config as boolean
+    def segment_on    = params.segment_config as boolean
     def track_on      = params.track_config as boolean
     def qc_image_on   = params.qc_config as boolean
     def qc_project_on = params.qc_project_config as boolean
@@ -154,9 +162,15 @@ workflow {
     if (project_on && !assemble_on) {
         error "--project_config needs --concatenate_config: project reads the assembled plate."
     }
+    if (segment_on && !assemble_on) {
+        error "--segment_config needs --concatenate_config: segment reads the assembled (or projected) plate."
+    }
     if (track_on && !assemble_on) {
         error "--track_config needs --concatenate_config: tracking reads the assembled (or projected) plate."
     }
+    // Track's `labels:` must name a label image segment wrote; `biahub track
+    // --init` refuses a plate without it, so a run naming --track_config but
+    // not --segment_config fails in the init phase with that message.
     if (qc_image_on && !assemble_on) {
         error "--qc_config needs --concatenate_config: it QCs the assembled store."
     }
@@ -214,9 +228,9 @@ workflow {
     // Beside the assembled plate, with a `_proj` suffix: the 2D companion of
     // that store, not a step of its own.
     project_output       = project_on  ? "${out}/${layout.assemble}/${ds}_proj.zarr" : null
-    // What tracking reads AND writes into (labels/, tracks.geff, the tracks CSV):
-    // the projected (Z=1) plate when project runs, else the assembled plate.
-    // Both the plate structure and the pixels come from it.
+    // What segment and track read AND write into (labels/, tracks.geff, the
+    // tracks CSV): the projected (Z=1) plate when project runs, else the
+    // assembled plate. Both the plate structure and the pixels come from it.
     track_input          = project_on  ? project_output : assemble_output
 
     // ========================================================================
@@ -289,16 +303,30 @@ workflow {
         init_signals << pj_init.done
     }
 
+    // The plate segment and track work in is scaffolded by project's init when
+    // project runs, else by assemble's.
+    def plate_scaffolded = project_on ? pj_init.done : as_init.done
+
+    if (segment_on) {
+        // Segment reads the projected plate (or the assembled one): its init
+        // checks that the models' channels exist and that their dimensionality
+        // matches the plate's Z, creates the empty label image per model in every
+        // position, and warms the shared cellpose weights cache, which is better
+        // done here than with N GPU workers racing for it.
+        sg_init = segment_init_wf(track_input, params.segment_config, plate_scaffolded)
+        init_signals << sg_init.done
+    }
+
     if (track_on) {
-        // Track reads ONE plate for both of its inputs (plate structure and image
-        // data): the projected plate when project runs, else the assembled plate
-        // (concatenate preserves channel names, so the track config's channel
-        // names resolve unchanged). Its init checks that the plate's Z matches
-        // output_mode, creates the empty label image tracking fills in every
-        // position of that plate, and warms the shared cellpose weights cache,
-        // which is better done here than with N GPU workers racing for it.
+        // Track reads ONE plate for both of its inputs (plate structure and the
+        // label image to track; image data for a legacy foreground+contour
+        // config): the projected plate when project runs, else the assembled
+        // plate. Its init checks that the plate's Z matches output_mode and that
+        // the label image `labels:` names exists — segment's init created it,
+        // which is why this init follows that one — and creates the empty
+        // tracked label image in every position.
         tk_init = track_init_wf(track_input, params.track_config,
-                                project_on ? pj_init.done : as_init.done)
+                                segment_on ? sg_init.done : plate_scaffolded)
         init_signals << tk_init.done
     }
 
@@ -306,10 +334,11 @@ workflow {
     // inits do — `plan-stage` and `estimate-resources` read the store's
     // structure and validate the config, and read no pixels. Each store's plan
     // is gated on the init that scaffolded what it reads: for the projected
-    // plate with tracking on that is track's init, because a config counting
-    // instances in `labels/` is refused at plan time until the label image
-    // exists. The tab label is the step directory, plus the store name for the
-    // projected plate, which shares the assemble directory.
+    // plate that is the last of project's, segment's and track's inits that
+    // runs, because a config counting instances in `labels/` is refused at plan
+    // time until the label image exists. The tab label is the step directory,
+    // plus the store name for the projected plate, which shares the assemble
+    // directory.
     def qc_stores = []
     if (qc_on) {
         if (qc_image_on) {
@@ -317,9 +346,9 @@ workflow {
                           config: params.qc_config, scaffolded: as_init.done]
         }
         if (qc_project_on) {
+            def proj_scaffolded = track_on ? tk_init.done : (segment_on ? sg_init.done : pj_init.done)
             qc_stores << [label: "${layout.assemble}/${ds}_proj", zarr: project_output,
-                          config: params.qc_project_config,
-                          scaffolded: track_on ? tk_init.done : pj_init.done]
+                          config: params.qc_project_config, scaffolded: proj_scaffolded]
         }
 
         // The trigger is mapped, NOT combined. `combine` concatenates the two
@@ -397,32 +426,41 @@ workflow {
     }
 
     // Projection reads the assembled plate, one task per position, and writes the
-    // 2D plate tracking reads.
+    // 2D plate segmentation and tracking read.
     if (project_on) {
         project_done = project_run_wf(all_positions, assemble_output, project_output,
                                       params.project_config, pj_init.resources,
                                       assemble_done.done)
     }
+    def plate_written = project_on ? project_done.done : assemble_done.done
 
-    // Tracking runs AFTER assemble (and project) rather than in parallel with it —
-    // the tradeoff for reading one store instead of two is that the whole plate
-    // must be assembled first. Two consequences: any Z/Y/X crop or time_indices
-    // subset in the concatenate config is what tracking sees, and the
-    // intermediate stores are no longer needed once assemble is verified. To go
-    // back to the parallel wiring, point the first input at reconstruct_output,
-    // the second at virtual_stain_output, and gate on virtual_stain_done.
+    // Segmentation (cellpose, GPU) writes its label images into the plate, one
+    // task per position, once that plate holds data.
+    if (segment_on) {
+        segment_done = segment_run_wf(all_positions, track_input, params.segment_config,
+                                      sg_init.resources, plate_written)
+    }
+
+    // Tracking runs AFTER assemble, project and segment rather than in parallel
+    // with them — the tradeoff for reading one store instead of two is that the
+    // whole plate must be assembled first. Two consequences: any Z/Y/X crop or
+    // time_indices subset in the concatenate config is what tracking sees, and
+    // the intermediate stores are no longer needed once assemble is verified. To
+    // go back to the parallel wiring, point the first input at
+    // reconstruct_output, the second at virtual_stain_output, and gate on
+    // virtual_stain_done.
     if (track_on) {
         track_done = track_run_wf(all_positions, track_input, track_input,
                                   params.track_config, tk_init.resources,
-                                  project_on ? project_done.done : assemble_done.done)
+                                  segment_on ? segment_done.done : plate_written)
     }
 
     // ----- QC compute -------------------------------------------------------
     // Planned in the init phase; the compute it planned is gated on the last
     // step that writes each store: the ASSEMBLED plate on assemble_done (so its
-    // pixel QC runs concurrently with projection and tracking), and the
-    // PROJECTED plate on track_done when tracking is on (its labels are counted
-    // there), else project_done.
+    // pixel QC runs concurrently with projection, segmentation and tracking),
+    // and the PROJECTED plate on the last of project, segment and track that
+    // runs (the tracked labels are counted there).
     //
     // A QC verdict cannot fail the pipeline: `imaging-qc gate` exits 0 whether
     // positions pass or fail, recording the verdict in each store's own
@@ -445,7 +483,7 @@ workflow {
                 assemble_done.done.map { tuple(assemble_output, params.qc_config) } )
         }
         if (qc_project_on) {
-            def proj_written = track_on ? track_done.done : project_done.done
+            def proj_written = track_on ? track_done.done : (segment_on ? segment_done.done : project_done.done)
             qc_compute_ready = qc_compute_ready.mix(
                 proj_written.map { tuple(project_output, params.qc_project_config) } )
         }
@@ -458,14 +496,15 @@ workflow {
     // Once the LAST step has finished, delete what only existed to feed the
     // assembled plate: the flat-field, deskew, reconstruct and virtual-stain step
     // directories (store, slurm_output/ and .iohub-progress/ alike). The
-    // assembled and projected plates and the tracking store are DELIVERABLES and
+    // assembled and projected plates (with the labels and tracks inside) are DELIVERABLES and
     // are never targets. Beside them, delete only what served the run:
     // slurm_output/ (submitit placeholders and a pointer README; the real logs
     // are in nextflow/slurm_output/) and the assembled and projected stores'
     // .iohub-progress/ resume markers, which left behind would make concatenate
     // or project skip every write unit of a later run into this directory,
-    // keeping data built from the old intermediates. Tracking writes no resume
-    // markers.
+    // keeping data built from the old intermediates. Segment's resume markers
+    // (for its label images) live under the projected plate's entry in the same
+    // .iohub-progress/; tracking writes none.
     //
     // What was removed is appended to nextflow/intermediates_cleaned.txt rather
     // than logged. Nextflow's `cleanup`, switched on above, empties the work
@@ -488,6 +527,7 @@ workflow {
 
         def final_signals = [assemble_done.done]
         if (project_on) final_signals << project_done.done
+        if (segment_on) final_signals << segment_done.done
         if (track_on) final_signals << track_done.done
         if (qc_on)    final_signals << qc_report.done
         final_gate = channel.empty()
@@ -534,6 +574,7 @@ workflow {
     ]
     if (assemble_on) step_events << [label: 'assemble', done: assemble_done.done, output: assemble_output]
     if (project_on)  step_events << [label: 'project',  done: project_done.done,  output: project_output]
+    if (segment_on)  step_events << [label: 'segment',  done: segment_done.done,  output: track_input]
     if (track_on)    step_events << [label: 'track',    done: track_done.done,    output: track_input]
     if (qc_on)       step_events << [label: 'QC',       done: qc_report.done,     output: qc_report_dir]
     if (cleanup_on)  step_events << [label: 'cleanup intermediates', done: cleanup_run.done, output: cleanup_record]
