@@ -13,6 +13,7 @@ phase volume reconstructed with waveorder, plus brightfield) with the acquired f
 reporter and virtual-stain predictions of the nucleus and cell membrane. Processed with the \
 biahub pipeline."""
 study_type = ["TimeLapse", "FourDPlus", "SPIM"]
+year_imaged = { column = "dataset_year" }
 license = "CC-BY-4.0"
 release_date = { column = "store_name_date" }
 
@@ -63,6 +64,7 @@ modality = "biological"
 text = { column = "moi" }
 
 [dca.acquisition]
+acquisition_date = { column = "store_name_date" }
 time_increment_s = { column = "store_time_increment_s" }
 
 [dca.acquisition.microscope]
@@ -82,13 +84,15 @@ description = "Transmitted-light brightfield volume."
 name = "raw GFP EX488 EM525-45"
 channel_type = "fluorescence"
 description = "Acquired GFP fluorescence of the per-experiment reporter."
-biological_annotation = { marker = { column = "marker" }, marker_type = "endogenous_tag" }
+biological_annotation = { marker = { column = "marker" } }
 
+# The literal target applies to infection-sensor plates. A plate whose 561 nm channel carries
+# another reporter overrides it in the confirmed file.
 [dca.channels."raw mCherry EX561 EM600-37"]
 name = "raw mCherry EX561 EM600-37"
 channel_type = "fluorescence"
 description = "Acquired mCherry fluorescence of the viral-infection biosensor."
-biological_annotation = { biological_target = "viral infection reporter", marker_type = "endogenous_tag" }
+biological_annotation = { biological_target = "viral infection reporter" }
 
 [dca.channels.Phase3D]
 name = "Phase3D"
@@ -110,9 +114,17 @@ biological_annotation = { biological_target = "plasma membrane" }
 [dca.provenance.study.dataset_name]
 source_kind = "original_data"
 [dca.provenance.study.source]
-source_kind = "human"
+source_kind = "agent"
+[dca.provenance.study.source.citation]
+source_url = "https://github.com/czbiohub-sf/biahub"
+quote = "Mantis v2 A549 timelapse plates processed by the biahub pipeline"
+match_status = "fuzzy"
 [dca.provenance.study.description]
-source_kind = "human"
+source_kind = "agent"
+[dca.provenance.study.description.citation]
+source_url = "https://github.com/czbiohub-sf/biahub"
+quote = "Mantis v2 A549 timelapse plates processed by the biahub pipeline"
+match_status = "fuzzy"
 [dca.provenance.study.study_type]
 source_kind = "human"
 [dca.provenance.study.license]
@@ -122,8 +134,6 @@ source_kind = "agent"
 [dca.provenance.study.release_date.citation]
 source_url = "https://github.com/czbiohub-sf/biahub"
 quote = "Placeholder release date taken from the YYYY_MM_DD prefix of the dataset name"
-[dca.provenance."study.additional_metadata.Infection condition"]
-source_kind = "original_data"
 [dca.provenance.biosample.group_id]
 source_kind = "original_data"
 [dca.provenance.biosample.tissue_type]
@@ -177,14 +187,26 @@ source_kind = "human"
 [dca.provenance.study_component.assay]
 source_kind = "human"
 [dca.provenance.study_component.imaging_method]
-source_kind = "human"
-[dca.provenance.perturbation.control_class]
-source_kind = "original_data"
-[dca.provenance.perturbation.definition]
-source_kind = "original_data"
+source_kind = "agent"
+[dca.provenance.study_component.imaging_method.citation]
+source_url = "https://github.com/czbiohub-sf/biahub"
+quote = "Mantis v2 A549 timelapse plates processed by the biahub pipeline"
+match_status = "fuzzy"
 [dca.provenance.acquisition.time_increment_s]
 source_kind = "original_data"
 [dca.provenance.acquisition.microscope]
-source_kind = "human"
+source_kind = "agent"
+[dca.provenance.acquisition.microscope.citation]
+source_url = "https://github.com/czbiohub-sf/biahub"
+quote = "Mantis v2 A549 timelapse plates processed by the biahub pipeline"
+match_status = "fuzzy"
 [dca.provenance.image_data.processing_variant]
-source_kind = "human"
+source_kind = "agent"
+[dca.provenance.image_data.processing_variant.citation]
+source_url = "https://github.com/czbiohub-sf/biahub"
+quote = "Mantis v2 A549 timelapse plates processed by the biahub pipeline"
+match_status = "fuzzy"
+[dca.provenance.study.year_imaged]
+source_kind = "original_data"
+[dca.provenance.acquisition.acquisition_date]
+source_kind = "original_data"

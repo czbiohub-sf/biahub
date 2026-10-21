@@ -15,6 +15,7 @@ from dca_helpers.validation.runner import validate
 from iohub.ngff import open_ome_zarr
 
 from biahub.dca_metadata import TABLE_COLUMNS
+from biahub.dca_stats import DERIVED_COLUMNS
 
 BASE_CONFIG = Path(__file__).parents[1] / "nextflow" / "configs" / "a549" / "dca_base.toml"
 SIX = [
@@ -26,7 +27,7 @@ SIX = [
     "membrane_prediction",
 ]
 FIVE = [name for name in SIX if "mCherry" not in name]
-UNSOURCED = ["study.experimenter", "study.year_imaged"]
+UNSOURCED = ["study.experimenter"]
 STATS = {"p1": 0.0, "p5": 1.0, "p95": 9.0, "p99": 10.0, "mean": 5.0, "std": 2.0}
 
 
@@ -45,9 +46,10 @@ def full_row(**overrides: str) -> dict[str, str]:
         "store_group_id": "2026_01_02_synthetic_plate/A/1",
         "store_name_date": "2026-01-02",
         "store_time_increment_s": "1800.0",
+        "dataset_year": "2026",
     }
     row.update(overrides)
-    assert set(row) == set(TABLE_COLUMNS) | STORE_COLUMNS
+    assert set(row) == set(TABLE_COLUMNS) | STORE_COLUMNS | set(DERIVED_COLUMNS)
     return row
 
 
@@ -55,7 +57,6 @@ def confirmed_file(tmp_path: Path) -> Path:
     path = tmp_path / "plate.dca-confirmed.toml"
     path.write_text(
         "[dca.study]\n"
-        'year_imaged = "2026"\n'
         'experimenter = [{ first_name = "Ada", last_name = "Example", institution = "Example Lab" }]\n'
     )
     return path
@@ -73,7 +74,7 @@ def test_a549_base_config_validates(tmp_path):
 
 def test_a549_base_config_five_channel_plate(tmp_path):
     out = validate_dca(resolved(FIVE, full_row(), confirmed_file(tmp_path)), where="t")
-    assert len(out["channels"]) == 5
+    assert [(c["index"], c["name"]) for c in out["channels"]] == list(enumerate(FIVE))
 
 
 def test_mock_well_without_dose_validates(tmp_path):
@@ -83,6 +84,17 @@ def test_mock_well_without_dose_validates(tmp_path):
     assert "concentration" not in out["perturbation"]
 
 
+def test_blank_marker_names_the_channel(tmp_path):
+    with pytest.raises(ValueError, match="raw GFP EX488 EM525-45"):
+        resolved(SIX, full_row(marker=""), confirmed_file(tmp_path))
+
+
+def test_blank_perturbation_has_no_orphaned_provenance(tmp_path):
+    row = full_row(perturbation="", moi="", hours_post_perturbation="")
+    out = validate_dca(resolved(SIX, row, confirmed_file(tmp_path)), where="t")
+    assert "perturbation" not in out
+
+
 def test_base_config_alone_reports_unsourced_fields():
     with pytest.raises(DcaValidationError) as error:
         validate_dca(resolved(SIX, full_row()), where="t")
@@ -90,10 +102,12 @@ def test_base_config_alone_reports_unsourced_fields():
 
 
 def test_dateless_name_reports_release_date(tmp_path):
-    row = full_row(store_name_date="")
+    row = full_row(store_name_date="", dataset_year="")
     with pytest.raises(DcaValidationError) as error:
         validate_dca(resolved(SIX, row, confirmed_file(tmp_path)), where="t")
-    assert "study.release_date" in error.value.fields
+    for field in ("study.release_date", "study.year_imaged"):
+        assert field in error.value.fields
+    assert any("acquisition.acquisition_date" in issue for issue in error.value.issues)
 
 
 def test_base_config_has_no_internal_paths():
@@ -126,4 +140,6 @@ def test_a549_base_config_passes_repo_validator(tmp_path):
         if not result.passed
     ]
     assert run.results, "validator found no nodes"
+    assert all(r.passed for r in run.results)
+    assert any(r.parent_path is not None for r in run.results)
     assert not failures

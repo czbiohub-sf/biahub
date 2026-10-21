@@ -8,8 +8,10 @@ from dca_helpers.metadata import STORE_COLUMNS
 from iohub.ngff import open_ome_zarr
 
 from biahub.dca_stats import (
+    DERIVED_COLUMNS,
     MissingStatisticsError,
     dataset_date,
+    derived_columns,
     load_qc_statistics,
     position_statistics,
     store_facts,
@@ -218,3 +220,10 @@ def test_store_facts_without_time_unit(tmp_path):
         facts = store_facts(plate, POSITION, position)
     assert facts["store_time_increment_s"] == ""
     assert facts["store_name_date"] == ""
+
+
+@pytest.mark.parametrize(("stem", "year"), [("2026_09_25_example", "2026"), ("example", "")])
+def test_derived_columns(stem, year):
+    derived = derived_columns(Path(f"{stem}.zarr"))
+    assert set(derived) == set(DERIVED_COLUMNS)
+    assert derived["dataset_year"] == year

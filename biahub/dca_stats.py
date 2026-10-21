@@ -25,6 +25,8 @@ METRIC_PREFIX = "intensity_stats_"
 SECONDS_PER_UNIT = {"second": 1.0, "minute": 60.0, "hour": 3600.0}
 TIME_INCREMENT_TOLERANCE_S = 1.0
 DATE_PREFIX_LENGTH = len("YYYY_MM_DD")
+DERIVED_COLUMNS: tuple[str, ...] = ("dataset_year",)
+YEAR_LENGTH = len("YYYY")
 
 
 class MissingStatisticsError(ValueError):
@@ -40,6 +42,11 @@ def dataset_date(stem: str) -> str | None:
         return datetime.strptime(prefix, "%Y_%m_%d").date().isoformat()
     except ValueError:
         return None
+
+
+def derived_columns(plate: Path) -> dict[str, str]:
+    """Return the ``DERIVED_COLUMNS`` values for ``plate``, blank when its name has no date."""
+    return {"dataset_year": (dataset_date(plate.stem) or "")[:YEAR_LENGTH]}
 
 
 def _time_increment_s(position: Position) -> float | str:
