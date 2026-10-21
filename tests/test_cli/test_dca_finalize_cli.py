@@ -30,6 +30,10 @@ from tests.dca_plate import write_table as write_sheet
 OTHER_STEM = "2026_01_03_other_plate"
 
 
+def missing(stat: str) -> str:
+    return "; ".join(f"channel {name!r}: {stat}" for name in CHANNELS)
+
+
 def write_table(plate: Path, rows: list[dict[str, str]]) -> None:
     write_sheet(sheet_path(plate), rows)
 
@@ -149,9 +153,9 @@ def test_missing_stats_reported_with_metadata_gaps(plate, config):
     result = run(plate, config)
     assert result.exit_code != 0
     assert error_lines(result) == [
-        f"{plate / 'A' / '1' / '0'}: channel 'BF' has no intensity_stats rows for p1",
+        f"{plate / 'A' / '1' / '0'}: no intensity_stats rows for {missing('p1')}",
         f"{plate / 'B' / '1' / '0'}: no metadata row for well B/1",
-        f"{plate / 'B' / '1' / '0'}: channel 'BF' has no intensity_stats rows for p99",
+        f"{plate / 'B' / '1' / '0'}: no intensity_stats rows for {missing('p99')}",
         f"fill the missing values in {confirmed_path(plate)}",
     ]
     for well in WELLS:

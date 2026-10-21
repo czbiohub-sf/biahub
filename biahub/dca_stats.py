@@ -113,17 +113,20 @@ def position_statistics(
     rows = qc[(qc["position"] == position_key) & qc["T"].notna()].copy()
     rows["stat"] = rows["metric_name"].str.removeprefix(METRIC_PREFIX)
     result: dict[str, dict[str, Any]] = {}
+    gaps: list[str] = []
     for index, name in enumerate(channel_names):
         channel_rows = rows[rows["channel_name"] == name]
         statistics = _channel_statistics(channel_rows) if len(channel_rows) else None
         if statistics is None:
             present = set(channel_rows["stat"])
             missing = [key for key in DCA_STAT_KEYS if key not in present]
-            raise MissingStatisticsError(
-                f"{position_key}: channel {name!r} has no intensity_stats rows for "
-                f"{', '.join(missing)}"
-            )
-        result[str(index)] = statistics
+            gaps.append(f"channel {name!r}: {', '.join(missing)}")
+        else:
+            result[str(index)] = statistics
+    if gaps:
+        raise MissingStatisticsError(
+            f"{position_key}: no intensity_stats rows for {'; '.join(gaps)}"
+        )
     return result
 
 

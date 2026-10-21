@@ -141,17 +141,23 @@ def test_non_volume_rows_not_loaded(tmp_path):
     assert set(qc["metric_name"]) <= {f"intensity_stats_{k}" for k in _stats()}
 
 
-def test_missing_percentile_names_channel(tmp_path):
-    rows = _full_rows("Phase3D", {0: _stats()})
+def test_missing_statistics_listed_for_every_channel(tmp_path):
+    rows = [
+        r
+        for r in _full_rows("Phase3D", {0: _stats()})
+        if r["metric_name"] != "intensity_stats_p5"
+    ]
     rows += [
         r
         for r in _full_rows("nuclei_prediction", {0: _stats()})
-        if r["metric_name"] != "intensity_stats_p1"
+        if r["metric_name"] not in ("intensity_stats_p1", "intensity_stats_std")
     ]
     with pytest.raises(MissingStatisticsError) as error:
         position_statistics(_qc(tmp_path, rows), POSITION, CHANNELS)
-    message = str(error.value)
-    assert POSITION in message and "nuclei_prediction" in message and "p1" in message
+    assert str(error.value) == (
+        f"{POSITION}: no intensity_stats rows for channel 'Phase3D': p5; "
+        "channel 'nuclei_prediction': p1, std"
+    )
 
 
 def test_missing_parquet_raises(tmp_path):
