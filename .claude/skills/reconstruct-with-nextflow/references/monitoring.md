@@ -284,7 +284,7 @@ only durable record. Silence there means every message was delivered.
   This is the early warning for a torn shard. Do **not** use a retry-rate
   percentage: retries measure preemption pressure on the `preempted` partition,
   not dataset health, and a busy day crosses any such threshold routinely.
-- **The wrap-up** — channel rename result, iohub verification, shape/channels and
+- **The wrap-up** — iohub verification, shape/channels and
   size on disk. The pipeline knows none of this.
 
 ```bash

@@ -9,7 +9,8 @@ the tracking plate — do not exist when configs are scaffolded; the pipeline's
 init phase creates them. So this derives their channel lists from the configs
 that will produce them, which is exactly the coupling that goes wrong:
 
-    assembled = raw channels (flat-field and deskew preserve names)
+    assembled = canonical_channel_name of each of:
+                raw channels (flat-field and deskew preserve names)
               + reconstruct's output_channel_names (waveorder derives these,
                 so they are read from the settings model, not the YAML text)
               + virtual-stain's data.init_args.target_channel
@@ -36,6 +37,8 @@ from pathlib import Path
 import yaml
 
 from iohub import open_ome_zarr
+
+from biahub.channel_names import canonical_channel_name
 
 
 def qc_filters(cfg_path):
@@ -68,7 +71,7 @@ def assembled_channels(raw_zarr, reconstruct_cfg, virtual_stain_cfg):
     vs = yaml.safe_load(Path(virtual_stain_cfg).read_text())
     tgt = vs["data"]["init_args"]["target_channel"]
     tgt = [tgt] if isinstance(tgt, str) else list(tgt)
-    return raw + list(rc.output_channel_names) + tgt
+    return [canonical_channel_name(c) for c in raw + list(rc.output_channel_names) + tgt]
 
 
 def tracking_channels(track_cfg):

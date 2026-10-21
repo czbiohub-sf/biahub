@@ -516,20 +516,17 @@ directory (`<DATASET>_rerun`) over relaunching in place.
 
 ## 11. Wrap up
 
-1. Normalize channel names on the assembled plate with
-   `templates/rename_channels.py` (idempotent; `caveats.md` §2 — check first
-   whether a `rename-channels` CLI has landed on main, making this obsolete).
-2. Verify the assembled store (`<N>-assemble/<DATASET>.zarr`, `4-assemble`
+1. Verify the assembled store (`<N>-assemble/<DATASET>.zarr`, `4-assemble`
    unless earlier steps were skipped) opens with iohub; report shape, channels,
    size on disk. This is the deliverable for every family; tracking, when it
    ran, is reported beside it rather than as a by-product.
-3. If QC ran, report its verdict: the `QC_SUMMARY` line per store from the
+2. If QC ran, report its verdict: the `QC_SUMMARY` line per store from the
    pipeline log (`pass=`/`fail=`/`gates_fail=`), and point at the report at
    `<OUTPUT>/qc/report/index.html` — one page, one tab per QC'd store. A gate
    failure does NOT fail the run: `imaging-qc gate` exits 0 either way, so a
    failing verdict is only visible in the summary line, the report, and the
    `tables/qc/` parquet inside each store.
-4. Report per-step task counts, failures, retries, and wall time from
+3. Report per-step task counts, failures, retries, and wall time from
    `<OUTPUT>/nextflow/trace.txt`; point at `report.html` and `timeline.html`.
    If cleanup was on, report what `<OUTPUT>/nextflow/intermediates_cleaned.txt`
    records — the decision and one `removed`/`absent` line per target — and
@@ -538,8 +535,8 @@ directory (`<DATASET>_rerun`) over relaunching in place.
    not `du` the run directory to report
    space freed — it runs to terabytes; use `df` on the filesystem if a number
    is wanted.
-5. Confirm the pipeline's automatic run-end message landed, then send a wrap-up
-   only for what the pipeline cannot know: the channel-rename result, the iohub
-   verification, and size on disk.
-6. Flag anything needing a human eye: positions that passed only after many
+4. Confirm the pipeline's automatic run-end message landed, then send a wrap-up
+   only for what the pipeline cannot know: the iohub verification and size on
+   disk.
+5. Flag anything needing a human eye: positions that passed only after many
    retries, steps far slower than the reference run, unexpected channel counts.

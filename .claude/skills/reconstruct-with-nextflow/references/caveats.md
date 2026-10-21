@@ -46,47 +46,12 @@ with open_ome_zarr('<OUTPUT>/0-convert/<DATASET>.zarr', mode='r') as p:
 
 ---
 
-## 2. Channel renaming after assemble
+## 2. Channel names are final at assemble
 
-The assembled plate inherits its sources' names (`BF - Oblique`, `Phase3D*`,
-`nuclei`/`membrane`, camera strings like `mCherry EX561 EM600-37`). The
-convention in [biahub#291](https://github.com/czbiohub-sf/biahub/issues/291) is
-implemented by `templates/rename_channels.py` — first match wins, idempotent:
-
-| incoming | renamed to |
-|---|---|
-| `BF - Oblique` | `BF` |
-| `Phase3D*` | `Phase3D` |
-| `nuclei` | `nuclei_prediction` |
-| `membrane` | `membrane_prediction` |
-| already canonical, or already `raw `-prefixed | left alone |
-| anything else | `raw <original>` |
-
-Run once after assemble, from the directory holding the store:
-
-```bash
-cd <OUTPUT>/<N>-assemble        # 4-assemble on a standard run
-DATASET=<DATASET> <BIAHUB>/.venv/bin/python rename_channels.py
-```
-
-Copy the template in with `cp` then `chmod 664 rename_channels.py`, so the
-copy is group-writable like every other file the skill places in `<OUTPUT>`
-(SKILL.md §7).
-
-`nuclei` → `nuclei_prediction` bridges [biahub#288](https://github.com/czbiohub-sf/biahub/issues/288):
-`biahub virtual-stain` names outputs verbatim from `target_channel`, but the
-rest of biahub keys off the `_prediction` suffix.
-
-**⚠ Ordering.** tracking runs *inside* the pipeline and reads the assembled
-plate, so **track sees the pre-rename names**. The shipped templates avoid the
-trap by putting the suffix directly in the VS `target_channel`
-(`nuclei_prediction`/`membrane_prediction`), making the rename a no-op for
-those channels.
-
-**Stopgap:** PRs [#260](https://github.com/czbiohub-sf/biahub/pull/260) and
-[#250](https://github.com/czbiohub-sf/biahub/pull/250) carry a `rename-channels`
-CLI/subworkflow. Neither has landed — check before running by hand, and drop
-the manual step once one merges.
+`concatenate.yml` sets `rename_channels: true`, so the assembled plate carries the
+final names (`BF`, `Phase3D`, `nuclei_prediction`, `membrane_prediction`, and
+`raw <name>` for detector channels). The mapping is in `biahub/channel_names.py`.
+QC, track and later steps read those names; no manual step follows the pipeline.
 
 ---
 
@@ -145,7 +110,7 @@ z_range + focus_config.z_window -> z_slicing.{method, window_size, focus_channel
 ```
 
 (`focus_config`'s `NA_det`/`lambda_ill`/`pixel_size` have no equivalent.)
-`target_channel` and `cellpose_config.input_channel` must match **pre-rename**
+`target_channel` and `cellpose_config.input_channel` must match the final
 names in the **assembled** plate (§2, §5). `qc_track.yaml`'s `channels:` must
 then match `<target_channel>_labels`, which is what the tracking store actually
 holds — SKILL.md §5a checks both couplings before launch.
