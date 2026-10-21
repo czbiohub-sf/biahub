@@ -46,12 +46,11 @@ intensity_stats:
 # calibrated from any dataset — set each from the channel's healthy SNR for the
 # experiment at hand.
 signal_to_noise:
-  granularity: slice
   gate:
-    # `granularity: channel` evaluates the gate per channel, which is what lets the
+    # `per_channel: true` evaluates the gate per channel, which is what lets the
     # {channel: value} hard_floor key by name (a channel-pooled gate has no channel
     # to key by and refuses the mapping).
-    granularity: channel
+    per_channel: true
     # PRE-rename channel names, deliberately. QC runs INSIDE the pipeline, on the
     # store assemble just wrote, so it sees the acquisition's own channel names —
     # the `raw ` prefix only appears after the manual rename_channels.py step that
@@ -70,10 +69,9 @@ signal_to_noise:
 blank:
   intensity_threshold: 0.01
   variance_threshold: 1.0e-6
-  granularity: slice
   channels: null
   gate:
-    granularity: channel
+    per_channel: true
 
 # NORMALIZE OFF, measured rather than preferred. With `normalize: true` this
 # metric divides gradient energy by an intensity scale, and in the empty planes
@@ -92,7 +90,6 @@ blank:
 tenengrad:
   threshold: 0.0
   normalize: false
-  granularity: slice
   gate:
     hard_floor: 0.001
     hard_ceiling: null

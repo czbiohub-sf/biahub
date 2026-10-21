@@ -118,10 +118,12 @@ override-dependencies = [
 #
 #     git config --global url."ssh://git@github.com/".insteadOf "https://github.com/"
 #
-# Pinned at #243: feat: instance_count reads a label image inside the intensity
-# store (label:), which counts the labels track writes into the projected plate.
-# Its #235 removed the `upstream_qc_dir` config key, so configs must not carry it.
-imaging_qc_pipeline = { git = "https://github.com/czbiohub-sf/imaging-qc-pipeline", rev = "f5ae656e0e37320ead74f7c1f95ab1ed304c1829" }
+# Pinned at v0.6.0: metric `granularity:` is `split_by:` and gate
+# `granularity: channel` is `per_channel: true`; the old spellings exit 2.
+# v0.6.0 includes #243 (instance_count reads a label image inside the intensity
+# store, `label:`, which counts the labels track writes into the projected plate)
+# and #235, which removed the `upstream_qc_dir` config key.
+imaging_qc_pipeline = { git = "https://github.com/czbiohub-sf/imaging-qc-pipeline", tag = "v0.6.0" }
 
 # Pin ultrack to royerlab/ultrack main at the #289 merge. #288 gives
 # Tracker.to_geff track_id/lineage_id/seg_id node props, related_objects pointing
