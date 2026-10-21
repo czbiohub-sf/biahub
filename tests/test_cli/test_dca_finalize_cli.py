@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import shutil
 
 from pathlib import Path
@@ -74,9 +75,11 @@ def attributes(plate: Path, well: str) -> dict:
         return dict(position.zattrs)
 
 
-def test_dca_finalize_writes_block(plate, config):
-    result = run(plate, config)
+def test_dca_finalize_writes_block(plate, config, caplog):
+    with caplog.at_level(logging.WARNING, logger="dca_helpers"):
+        result = run(plate, config)
     assert result.exit_code == 0, result.output
+    assert [r.getMessage() for r in caplog.records] == []
     for well in WELLS:
         attrs = attributes(plate, well)
         dca = attrs["dca"]

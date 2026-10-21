@@ -210,3 +210,33 @@ match_status = "fuzzy"
 source_kind = "original_data"
 [dca.provenance.acquisition.acquisition_date]
 source_kind = "original_data"
+
+# Column-fed values from the plate's sample sheet. Each citation quotes the sheet cell, so
+# a record declines with its column: a mock well with no dose drops the concentration
+# record, and a well with a blank perturbation drops all five. The sheet has no public
+# URL, so source_url names the pipeline that reads it.
+[dca.provenance.perturbation.control_class]
+source_kind = "original_data"
+[dca.provenance.perturbation.control_class.citation]
+source_url = "https://github.com/czbiohub-sf/biahub"
+quote = { column = "perturbation" }
+[dca.provenance.perturbation.definition]
+source_kind = "original_data"
+[dca.provenance.perturbation.definition.citation]
+source_url = "https://github.com/czbiohub-sf/biahub"
+quote = { column = "perturbation" }
+[dca.provenance.perturbation.concentration]
+source_kind = "original_data"
+[dca.provenance.perturbation.concentration.citation]
+source_url = "https://github.com/czbiohub-sf/biahub"
+quote = { column = "moi" }
+[dca.provenance."study.additional_metadata.Infection condition"]
+source_kind = "original_data"
+[dca.provenance."study.additional_metadata.Infection condition".citation]
+source_url = "https://github.com/czbiohub-sf/biahub"
+quote = { column = "perturbation" }
+[dca.provenance."study.additional_metadata.Hours post perturbation"]
+source_kind = "original_data"
+[dca.provenance."study.additional_metadata.Hours post perturbation".citation]
+source_url = "https://github.com/czbiohub-sf/biahub"
+quote = { column = "hours_post_perturbation" }

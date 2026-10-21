@@ -1,3 +1,5 @@
+import logging
+
 from pathlib import Path
 
 import pytest
@@ -65,6 +67,21 @@ def confirmed_file(tmp_path: Path) -> Path:
 def resolved(channels: list[str], row: dict[str, str], *overlays: Path) -> dict:
     block = load_dca_config(BASE_CONFIG, *overlays)
     return resolve_dca(block, row, channel_keys=channels, where="t")
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [{}, {"perturbation": "mock", "moi": "", "hours_post_perturbation": ""}],
+)
+def test_column_fed_fields_carry_provenance(tmp_path, caplog, overrides):
+    confirmed = confirmed_file(tmp_path)
+    confirmed.write_text(
+        confirmed.read_text() + '[dca.provenance.study.experimenter]\nsource_kind = "human"\n'
+    )
+    with caplog.at_level(logging.WARNING, logger="dca_helpers"):
+        out = validate_dca(resolved(SIX, full_row(**overrides), confirmed), where="t")
+    assert [r.getMessage() for r in caplog.records] == []
+    assert out["provenance"]["perturbation.control_class"]["source_kind"] == "original_data"
 
 
 def test_a549_base_config_validates(tmp_path):
