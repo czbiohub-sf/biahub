@@ -53,10 +53,14 @@ def error_lines(result) -> list[str]:
 
 
 def test_dca_finalize_writes_block(plate, config, caplog):
-    with caplog.at_level(logging.WARNING, logger="dca_helpers"):
+    with caplog.at_level(logging.WARNING):
         result = run(plate, config)
     assert result.exit_code == 0, result.output
-    assert [r.getMessage() for r in caplog.records] == []
+    assert not [r for r in caplog.records if r.name.startswith("dca_helpers")]
+    logged = [r.getMessage() for r in caplog.records if r.name == "biahub.dca_finalize"]
+    assert len(logged) == 5
+    assert all(m.startswith(f"{plate}: provenance: field ") for m in logged)
+    assert all(m.endswith("(2 of 2 positions)") for m in logged)
     for well in WELLS:
         attrs = attributes(plate, well)
         dca = attrs["dca"]

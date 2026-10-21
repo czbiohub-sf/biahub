@@ -129,11 +129,10 @@ match_status = "exact"
 source_kind = "human"
 [dca.provenance.study.license]
 source_kind = "human"
+# placeholder: date parsed from the plate name; confirm the real release date
+# (override in the confirmed file with source_kind = "human").
 [dca.provenance.study.release_date]
-source_kind = "agent"
-[dca.provenance.study.release_date.citation]
-source_url = "https://github.com/czbiohub-sf/biahub"
-quote = "Placeholder release date taken from the YYYY_MM_DD prefix of the dataset name"
+source_kind = "original_data"
 [dca.provenance.biosample.group_id]
 source_kind = "original_data"
 [dca.provenance.biosample.tissue_type]
@@ -210,33 +209,3 @@ match_status = "exact"
 source_kind = "original_data"
 [dca.provenance.acquisition.acquisition_date]
 source_kind = "original_data"
-
-# Column-fed values from the plate's sample sheet. Each citation quotes the sheet cell, so
-# a record declines with its column: a mock well with no dose drops the concentration
-# record, and a well with a blank perturbation drops all five. The sheet has no public
-# URL, so source_url names the pipeline that reads it.
-[dca.provenance.perturbation.control_class]
-source_kind = "original_data"
-[dca.provenance.perturbation.control_class.citation]
-source_url = "https://github.com/czbiohub-sf/biahub"
-quote = { column = "perturbation" }
-[dca.provenance.perturbation.definition]
-source_kind = "original_data"
-[dca.provenance.perturbation.definition.citation]
-source_url = "https://github.com/czbiohub-sf/biahub"
-quote = { column = "perturbation" }
-[dca.provenance.perturbation.concentration]
-source_kind = "original_data"
-[dca.provenance.perturbation.concentration.citation]
-source_url = "https://github.com/czbiohub-sf/biahub"
-quote = { column = "moi" }
-[dca.provenance."study.additional_metadata.Infection condition"]
-source_kind = "original_data"
-[dca.provenance."study.additional_metadata.Infection condition".citation]
-source_url = "https://github.com/czbiohub-sf/biahub"
-quote = { column = "perturbation" }
-[dca.provenance."study.additional_metadata.Hours post perturbation"]
-source_kind = "original_data"
-[dca.provenance."study.additional_metadata.Hours post perturbation".citation]
-source_url = "https://github.com/czbiohub-sf/biahub"
-quote = { column = "hours_post_perturbation" }

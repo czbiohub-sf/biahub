@@ -1,4 +1,3 @@
-import logging
 import subprocess
 import tomllib
 
@@ -71,19 +70,48 @@ def resolved(channels: list[str], row: dict[str, str], *overlays: Path) -> dict:
     return resolve_dca(block, row, channel_keys=channels, where="t")
 
 
+COLUMN_FED = [
+    "perturbation.concentration",
+    "perturbation.control_class",
+    "perturbation.definition",
+    "study.additional_metadata.Hours post perturbation",
+    "study.additional_metadata.Infection condition",
+]
+
+
+def provenance_gap(field: str) -> str:
+    return (
+        f"provenance: field '{field}' has no provenance record; every curated value should "
+        "carry its provenance (required for agent-curated values)"
+    )
+
+
 @pytest.mark.parametrize(
-    "overrides",
-    [{}, {"perturbation": "mock", "moi": "", "hours_post_perturbation": ""}],
+    ("overrides", "gaps"),
+    [
+        ({}, COLUMN_FED),
+        (
+            {"perturbation": "mock", "moi": "", "hours_post_perturbation": ""},
+            [f for f in COLUMN_FED if "concentration" not in f and "Hours" not in f],
+        ),
+    ],
 )
-def test_column_fed_fields_carry_provenance(tmp_path, caplog, overrides):
+def test_column_fed_fields_warn_without_provenance(tmp_path, overrides, gaps):
     confirmed = confirmed_file(tmp_path)
     confirmed.write_text(
         confirmed.read_text() + '[dca.provenance.study.experimenter]\nsource_kind = "human"\n'
     )
-    with caplog.at_level(logging.WARNING, logger="dca_helpers"):
-        out = validate_dca(resolved(SIX, full_row(**overrides), confirmed), where="t")
-    assert [r.getMessage() for r in caplog.records] == []
-    assert out["provenance"]["perturbation.control_class"]["source_kind"] == "original_data"
+    warnings: list[str] = []
+    validate_dca(resolved(SIX, full_row(**overrides), confirmed), where="t", warnings=warnings)
+    assert sorted(warnings) == [provenance_gap(field) for field in sorted(gaps)]
+
+
+def test_release_date_is_original_data_without_citation(tmp_path):
+    out = validate_dca(resolved(SIX, full_row(), confirmed_file(tmp_path)), where="t")
+    assert out["provenance"]["study.release_date"] == {
+        "source_kind": "original_data",
+        "field_path": "study.release_date",
+    }
 
 
 def test_a549_base_config_validates(tmp_path):
