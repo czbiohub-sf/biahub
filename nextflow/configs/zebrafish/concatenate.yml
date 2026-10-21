@@ -14,7 +14,7 @@
 # A range past the end of the shorter positions pads them the same way.
 time_indices: all
 channel_names: all
-chunks_czyx: [1, 16, 256, 256]
+chunks_czyx: [1, 8, 256, 256]   # 2 MiB float32 chunks; the pyramid levels keep this shape
 output_ome_zarr_version: "0.5"
 
 # shards is a size target: iohub builds the largest chunk-aligned shard under it,

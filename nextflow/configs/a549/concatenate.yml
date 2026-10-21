@@ -14,13 +14,13 @@
 # A range past the end of the shorter positions pads them the same way.
 time_indices: all
 channel_names: all
-chunks_czyx: [1, 16, 256, 256]
+chunks_czyx: [1, 8, 256, 256]   # 2 MiB float32 chunks; the pyramid levels keep this shape
 output_ome_zarr_version: "0.5"
 
 # shards is a size target: iohub builds the largest chunk-aligned shard under it,
 # filling X, Y, Z first and then timepoints (C is never sharded). 5GB on this
-# plate's 86 x 1664 x 1193 float32 volumes gives shards of 5 timepoints by the
-# full volume (4.1 GiB), the same geometry a run before this key produced. Do
+# plate's 86 x 1664 x 1193 float32 volumes gives shards of 6 timepoints by the
+# full volume (88 x 1792 x 1280 in chunks, 4.5 GiB). Do
 # not raise it without a measured reason: the T extent multiplies the shard
 # buffer and the RAM request, and one torn shard loses every timepoint in it.
 # Also accepts "XY" / "XYZ" (one shard per plane / volume) or a TCZYX shape.
