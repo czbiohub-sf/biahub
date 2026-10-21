@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from biahub.settings import (
     CharacterizeSettings,
     ConcatenateSettings,
+    DcaFinalizeSettings,
     DeskewSettings,
     EstimateTransformSettings,
     FlatFieldCorrectionSettings,
@@ -45,6 +46,7 @@ example_settings_params = [
     ("example_stitch_settings.yml", StitchSettings),
     ("example_track_settings.yml", TrackingSettings),
     ("example_flat_field_settings.yml", FlatFieldCorrectionSettings),
+    ("example_dca_finalize_settings.yml", DcaFinalizeSettings),
 ]
 
 # Example configs validated against VisCy's own classes via jsonargparse rather

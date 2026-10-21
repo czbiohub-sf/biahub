@@ -1,0 +1,19 @@
+# Settings for `biahub dca-finalize`. Relative paths resolve against this file's directory.
+
+# Shared DCA TOML with experiment-wide defaults (must end in .toml).
+base_config: dca_base.toml
+
+# Human-confirmed TOML. Null uses <plate parent>/<plate stem>.dca-confirmed.toml.
+confirmed_config: null
+
+# Per-well sample sheet. Null uses <plate parent>/<plate stem>.dca-metadata.{csv,tsv} if present.
+metadata_table: null
+
+# Optional AirTable source, e.g.
+#   base_id: appXXXXXXXXXXXXXX
+#   table: samples
+#   token_env: AIRTABLE_API_KEY
+airtable: null
+
+# Reads <plate>/tables/qc/stage{qc_stage}_position.parquet.
+qc_stage: 5

@@ -1364,3 +1364,68 @@ def load_estimate_transform_settings(path) -> EstimateTransformSettings:
 def load_transform_settings(path) -> TransformSettings:
     """Read an `apply-transform` config."""
     return _load_unified(path, TransformSettings)
+
+
+class AirtableSettings(MyBaseModel):
+    base_id: str
+    table: str
+    token_env: str = "AIRTABLE_API_KEY"
+
+
+class DcaFinalizeSettings(MyBaseModel):
+    """Settings for `biahub dca-finalize`.
+
+    Parameters
+    ----------
+    base_config
+        Shared DCA TOML (``.toml``) with the experiment-wide defaults.
+    confirmed_config
+        Human-confirmed TOML. Defaults to ``<plate parent>/<plate stem>.dca-confirmed.toml``.
+    metadata_table
+        Per-well sample sheet. Defaults to ``<plate parent>/<plate stem>.dca-metadata.csv``
+        or ``.tsv`` when one exists.
+    airtable
+        Optional AirTable source for the sample sheet.
+    qc_stage
+        Reads ``<plate>/tables/qc/stage{qc_stage}_position.parquet``.
+    """
+
+    base_config: Path
+    confirmed_config: Path | None = None
+    metadata_table: Path | None = None
+    airtable: AirtableSettings | None = None
+    qc_stage: int = 5
+
+    @field_validator("base_config")
+    @classmethod
+    def check_base_config_is_toml(cls, v: Path) -> Path:
+        if v.suffix != ".toml":
+            raise ValueError(f"base_config must be a .toml file, got {v}")
+        return v
+
+    @classmethod
+    def from_yaml(cls, path: Path) -> "DcaFinalizeSettings":
+        """Load a YAML config, resolving relative paths against the YAML's directory."""
+        path = Path(path)
+        with open(path) as file:
+            data = yaml.safe_load(file) or {}
+        for key in ("base_config", "confirmed_config", "metadata_table"):
+            value = data.get(key)
+            if value is not None and not Path(value).is_absolute():
+                data[key] = path.parent / value
+        return cls(**data)
+
+    def confirmed_path(self, plate: Path) -> Path:
+        if self.confirmed_config is not None:
+            return self.confirmed_config
+        return plate.parent / f"{plate.stem}.dca-confirmed.toml"
+
+    def metadata_table_path(self, plate: Path) -> Path | None:
+        """Return the configured sample sheet, else an existing default next to the plate."""
+        if self.metadata_table is not None:
+            return self.metadata_table
+        for suffix in ("csv", "tsv"):
+            candidate = plate.parent / f"{plate.stem}.dca-metadata.{suffix}"
+            if candidate.exists():
+                return candidate
+        return None
