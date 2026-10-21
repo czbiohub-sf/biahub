@@ -81,8 +81,12 @@ def _index_by_well(rows: list[dict[str, str]], origin: str) -> dict[str, dict[st
     return indexed
 
 
-def read_metadata_table(path: Path) -> dict[str, dict[str, str]]:
-    """Read a CSV or TSV sample sheet into rows keyed by well (e.g. ``"C/2"``)."""
+def read_metadata_table(path: Path, dataset: str | None = None) -> dict[str, dict[str, str]]:
+    """Read a CSV or TSV sample sheet into rows keyed by well (e.g. ``"C/2"``).
+
+    With ``dataset`` set, keep only rows whose ``dataset`` cell equals it or is blank, so
+    one sheet can serve several plates.
+    """
     path = Path(path)
     sep = "\t" if path.suffix == ".tsv" else ","
     frame = pd.read_csv(path, sep=sep, dtype=str, keep_default_na=False)
@@ -93,6 +97,8 @@ def read_metadata_table(path: Path) -> dict[str, dict[str, str]]:
     for number, row in enumerate(rows, start=2):
         if not row["well"].strip():
             raise ValueError(f"{path} row {number} has a blank well")
+    if dataset is not None:
+        rows = [row for row in rows if row["dataset"].strip() in ("", dataset)]
     return _index_by_well(rows, str(path))
 
 
@@ -158,13 +164,16 @@ def metadata_rows(
 ) -> dict[str, dict[str, str]]:
     """Return one metadata row per well, from a sample sheet if present, else AirTable.
 
+    Both sources keep only rows for ``plate.stem``; a sheet row with a blank ``dataset``
+    matches any plate.
+
     ``client`` overrides the default pyairtable client, which is built only when
     no sample sheet exists and ``settings.airtable`` is set.
     """
     plate = Path(plate)
     table = settings.metadata_table_path(plate)
     if table is not None:
-        return read_metadata_table(table)
+        return read_metadata_table(table, dataset=plate.stem)
     if settings.airtable is not None:
         client = client or PyairtableClient(settings.airtable)
         return airtable_rows(client, plate.stem)

@@ -2,7 +2,6 @@ import shutil
 
 from pathlib import Path
 
-import pandas as pd
 import pytest
 
 from click.testing import CliRunner
@@ -10,127 +9,32 @@ from dca_helpers.validation.runner import validate
 from iohub.ngff import open_ome_zarr
 
 from biahub.cli.main import cli
-from biahub.dca_metadata import TABLE_COLUMNS
-
-BASE_CONFIG = Path(__file__).parents[2] / "nextflow" / "configs" / "a549" / "dca_base.toml"
-CHANNELS = (
-    "BF",
-    "raw GFP EX488 EM525-45",
-    "raw mCherry EX561 EM600-37",
-    "Phase3D",
-    "nuclei_prediction",
-    "membrane_prediction",
+from tests.dca_plate import (
+    BASE_CONFIG,
+    CHANNELS,
+    CONFIRMED,
+    STEM,
+    TIME_INCREMENT_S,
+    WELLS,
+    build_plate,
+    confirmed_path,
+    p1_value,
+    sheet_path,
+    table_row,
+    write_qc,
 )
-STEM = "2026_01_02_synthetic_plate"
-WELLS = ("A/1", "B/1")
-TIME_POINTS = 2
-TIME_INCREMENT_S = 1800.0
-STAT_KEYS = ("p1", "p5", "p95", "p99", "mean", "std", "median", "iqr", "p95_p5", "p99_p1")
-CONFIRMED = (
-    "[dca.study]\n"
-    'experimenter = [{ first_name = "Ada", last_name = "Example", institution = "Example Lab" }]\n'
-    "[dca.provenance.study.experimenter]\n"
-    'source_kind = "human"\n'
-)
+from tests.dca_plate import write_table as write_sheet
 
-
-def p1_value(position_key: str, channel_index: int) -> float:
-    return float(10 * WELLS.index(position_key.rsplit("/", 1)[0]) + channel_index)
-
-
-def table_row(well: str, **overrides: str) -> dict[str, str]:
-    row = {
-        "dataset": STEM,
-        "well": well,
-        "cell_line": "A549",
-        "marker": "TOMM20",
-        "organelle": "mitochondria",
-        "perturbation": "DENV",
-        "moi": "1.5",
-        "time_interval_min": "30",
-        "hours_post_perturbation": "3",
-    }
-    row.update(overrides)
-    return row
+OTHER_STEM = "2026_01_03_other_plate"
 
 
 def write_table(plate: Path, rows: list[dict[str, str]]) -> None:
-    frame = pd.DataFrame(rows, columns=list(TABLE_COLUMNS))
-    frame.to_csv(plate.parent / f"{STEM}.dca-metadata.csv", index=False)
-
-
-def qc_rows(position_key: str, skip_metric: str | None = None) -> list[dict]:
-    rows = []
-    for c, name in enumerate(CHANNELS):
-        for t in range(TIME_POINTS):
-            for key in STAT_KEYS:
-                if key == skip_metric:
-                    continue
-                value = (
-                    p1_value(position_key, c) if key == "p1" else 1.0 + STAT_KEYS.index(key)
-                )
-                rows.append(
-                    {
-                        "store_path": f"{STEM}.zarr",
-                        "dataset": STEM,
-                        "batch": "b",
-                        "plate": STEM,
-                        "well": position_key.rsplit("/", 1)[0],
-                        "position": position_key,
-                        "field": position_key.rsplit("/", 1)[1],
-                        "T": t,
-                        "Z": None,
-                        "C": c,
-                        "channel_name": name,
-                        "channel_type": "labelfree",
-                        "metric_name": f"intensity_stats_{key}",
-                        "value": value,
-                        "granularity": "volume",
-                        "stage": 5,
-                        "source": "imaging-qc",
-                        "timestamp": "2026-09-25T00:00:00",
-                    }
-                )
-    return rows
-
-
-def write_qc(plate: Path, skip: dict[str, str] | None = None) -> None:
-    skip = skip or {}
-    rows = [row for well in WELLS for row in qc_rows(f"{well}/0", skip.get(f"{well}/0"))]
-    frame = pd.DataFrame(rows)
-    frame["T"] = frame["T"].astype("Int64")
-    frame["Z"] = frame["Z"].astype("Int64")
-    frame["stage"] = frame["stage"].astype("int64")
-    qc_dir = plate / "tables" / "qc"
-    qc_dir.mkdir(parents=True, exist_ok=True)
-    frame.to_parquet(qc_dir / "stage5_position.parquet")
+    write_sheet(sheet_path(plate), rows)
 
 
 @pytest.fixture
 def plate(tmp_path, create_custom_plate) -> Path:
-    build = tmp_path / "build"
-    build.mkdir()
-    built_path, dataset = create_custom_plate(
-        build,
-        position_list=[(*well.split("/"), "0") for well in WELLS],
-        channel_names=CHANNELS,
-        time_points=TIME_POINTS,
-        z_size=16,
-        y_size=128,
-        x_size=128,
-    )
-    dataset.close()
-    plate_path = tmp_path / "data" / f"{STEM}.zarr"
-    plate_path.parent.mkdir()
-    shutil.move(built_path, plate_path)
-    for well in WELLS:
-        with open_ome_zarr(plate_path / well / "0", mode="r+") as position:
-            position.set_scale("0", "t", TIME_INCREMENT_S)
-            position.zattrs["biahub-concatenate"] = {"marker": "kept"}
-    write_table(plate_path, [table_row(well) for well in WELLS])
-    write_qc(plate_path)
-    (plate_path.parent / f"{STEM}.dca-confirmed.toml").write_text(CONFIRMED)
-    return plate_path
+    return build_plate(tmp_path, create_custom_plate)
 
 
 @pytest.fixture
@@ -147,10 +51,9 @@ def positions(plate: Path) -> list[str]:
     return [str(plate / well / "0") for well in WELLS]
 
 
-def run(plate: Path, config: Path):
-    return CliRunner().invoke(
-        cli, ["dca-finalize", "-i", *positions(plate), "-c", str(config)]
-    )
+def run(plate: Path, config: Path, *more_plates: Path):
+    dirpaths = [d for p in (plate, *more_plates) for d in positions(p)]
+    return CliRunner().invoke(cli, ["dca-finalize", "-i", *dirpaths, "-c", str(config)])
 
 
 def attributes(plate: Path, well: str) -> dict:
@@ -205,16 +108,13 @@ def test_missing_well_row_reports_fields(plate, config):
     assert "no metadata row for well B/1" in result.output
     assert str(plate / "B" / "1" / "0") in result.output
     last_line = result.output.strip().splitlines()[-1]
-    assert (
-        last_line
-        == f"fill the missing values in {plate.parent / f'{STEM}.dca-confirmed.toml'}"
-    )
+    assert last_line == f"fill the missing values in {confirmed_path(plate)}"
     for well in WELLS:
         assert "dca" not in attributes(plate, well)
 
 
 def test_unresolved_field_lists_position_and_field(plate, config):
-    (plate.parent / f"{STEM}.dca-confirmed.toml").unlink()
+    confirmed_path(plate).unlink()
     result = run(plate, config)
     assert result.exit_code != 0
     for well in WELLS:
@@ -239,7 +139,7 @@ def test_time_increment_mismatch_reported(plate, config):
 
 
 def test_confirmed_file_overrides_table(plate, config):
-    (plate.parent / f"{STEM}.dca-confirmed.toml").write_text(
+    confirmed_path(plate).write_text(
         CONFIRMED
         + '[dca.biosample]\ncell_line_name = "A549 (confirmed)"\n'
         + '[dca.provenance.biosample.cell_line_name]\nsource_kind = "human"\n'
@@ -283,3 +183,33 @@ def test_rerun_drops_fields_no_longer_resolved(plate, config):
     )
     assert run(plate, config).exit_code == 0
     assert "perturbation" not in attributes(plate, "A/1")["dca"]
+
+
+def test_shared_sheet_serves_each_plate_its_own_rows(
+    plate, config, tmp_path, create_custom_plate
+):
+    other = build_plate(tmp_path, create_custom_plate, OTHER_STEM)
+    shared = tmp_path / "shared.dca-metadata.csv"
+    for p in (plate, other):
+        sheet_path(p).unlink()
+    write_sheet(shared, [table_row(well) for well in WELLS])
+    config.write_text(f"base_config: dca_base.toml\nmetadata_table: {shared}\n")
+
+    result = run(plate, config, other)
+    assert result.exit_code != 0
+    for well in WELLS:
+        assert f"{other / well / '0'}: no metadata row for well {well}" in result.output
+        assert f"{plate / well / '0'}:" not in result.output
+        for p in (plate, other):
+            assert "dca" not in attributes(p, well)
+
+    rows = [table_row(well) for well in WELLS]
+    rows += [table_row(well, dataset=OTHER_STEM, marker="SEC61B") for well in WELLS]
+    write_sheet(shared, rows)
+    result = run(plate, config, other)
+    assert result.exit_code == 0, result.output
+    markers = {
+        p.stem: attributes(p, "A/1")["dca"]["channels"][1]["biological_annotation"]["marker"]
+        for p in (plate, other)
+    }
+    assert markers == {STEM: "TOMM20", OTHER_STEM: "SEC61B"}

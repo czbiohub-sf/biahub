@@ -133,7 +133,7 @@ def test_airtable_record_without_well_raises():
 
 def test_table_next_to_plate_wins_over_airtable(tmp_path):
     plate = tmp_path / "plate.zarr"
-    write_table(tmp_path / "plate.dca-metadata.csv", [ROW_C2], ",")
+    write_table(tmp_path / "plate.dca-metadata.csv", [["plate", *ROW_C2[1:]]], ",")
     client = FakeClient([pyairtable_record("B/1")])
     settings = DcaFinalizeSettings(
         base_config="b.toml", airtable=AirtableSettings(base_id="b", table="t")
@@ -210,10 +210,35 @@ def test_csv_path_works_and_default_client_explains_missing_extra(
 ):
     monkeypatch.setenv("BIAHUB_TEST_AIRTABLE_TOKEN", "x")
     plate = tmp_path / "plate.zarr"
-    write_table(tmp_path / "plate.dca-metadata.csv", [ROW_C2], ",")
+    write_table(tmp_path / "plate.dca-metadata.csv", [["plate", *ROW_C2[1:]]], ",")
     settings = DcaFinalizeSettings(base_config="b.toml")
     assert set(metadata_rows(plate, settings)) == {"C/2"}
     with pytest.raises(ImportError, match=r"biahub\[dca\]"):
         PyairtableClient(
             AirtableSettings(base_id="b", table="t", token_env="BIAHUB_TEST_AIRTABLE_TOKEN")
         )
+
+
+def test_shared_sheet_rows_filtered_by_plate_stem(tmp_path):
+    shared = write_table(
+        tmp_path / "shared.csv",
+        [
+            ["plate_a", *ROW_C2[1:]],
+            ["plate_b", "C/2", *["other"] * 7],
+            ["", *ROW_B1[1:]],
+        ],
+        ",",
+    )
+    settings = DcaFinalizeSettings(base_config="b.toml", metadata_table=shared)
+    rows_a = metadata_rows(tmp_path / "plate_a.zarr", settings)
+    rows_b = metadata_rows(tmp_path / "plate_b.zarr", settings)
+    assert set(rows_a) == {"C/2", "B/1"}
+    assert rows_a["C/2"]["marker"] == "TOMM20"
+    assert rows_b["C/2"]["marker"] == "other"
+    assert metadata_rows(tmp_path / "plate_c.zarr", settings) == {"B/1": rows_a["B/1"]}
+
+
+def test_sheet_without_matching_dataset_gives_no_rows(tmp_path):
+    write_table(tmp_path / "plate.dca-metadata.csv", [ROW_C2], ",")
+    settings = DcaFinalizeSettings(base_config="b.toml")
+    assert metadata_rows(tmp_path / "plate.zarr", settings) == {}
