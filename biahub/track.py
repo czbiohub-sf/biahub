@@ -638,9 +638,18 @@ def write_tracking_labels(label_array, labels: ArrayLike, output_mode: str) -> N
 
     The label image has the plate's Z: one plane for a projected plate, where 2D
     tracking writes its (T, Y, X) labels; the full stack for 3D tracking, whose
-    (T, Z, Y, X) labels fill it.
+    (T, Z, Y, X) labels fill it. The labels are stored in the label image's dtype
+    (the source label's, see ``label_layout``); track ids beyond it are refused
+    rather than wrapped.
     """
-    labels = np.asarray(labels, dtype=np.uint32)
+    labels = np.asarray(labels)
+    dtype = np.dtype(label_array.dtype)
+    if labels.size and labels.max() > np.iinfo(dtype).max:
+        raise ValueError(
+            f"Track ids reach {int(labels.max())}, more than the label image's {dtype} holds "
+            f"({np.iinfo(dtype).max}); segment with a wider label dtype."
+        )
+    labels = labels.astype(dtype, copy=False)
     if output_mode == "2D":
         # A single-plane series that kept its Z axis.
         if labels.ndim == 4 and labels.shape[1] == 1:

@@ -556,7 +556,7 @@ def test_label_chunks_and_layout(create_custom_plate, tmp_path):
         "label_chunks": (3, 1, 5, 6),
         "label_shards": LABEL_SHARDS,
     }
-    # A source label: its level-0 chunks and shards, whatever they are.
+    # A source label: its level-0 dtype, chunks and shards, whatever they are.
     with open_ome_zarr(str(position), mode="r+") as dataset:
         dataset.create_label_zeros(
             "cells",
@@ -567,10 +567,18 @@ def test_label_chunks_and_layout(create_custom_plate, tmp_path):
         )
     _, layout = label_layout(position, source_label="cells")
     assert layout == {
-        "label_dtype": np.uint32,
+        "label_dtype": np.uint16,
         "label_chunks": (1, 1, 5, 3),
         "label_shards": (3, 1, 5, 6),
     }
+
+
+def test_write_tracking_labels_keeps_the_label_dtype_and_refuses_overflow():
+    label_array = np.zeros((2, 1, 4, 4), dtype=np.uint16)
+    write_tracking_labels(label_array, np.full((2, 4, 4), 65535, dtype=np.int64), "2D")
+    assert label_array.dtype == np.uint16 and label_array.max() == 65535
+    with pytest.raises(ValueError, match="more than the label image's uint16"):
+        write_tracking_labels(label_array, np.full((2, 4, 4), 65536, dtype=np.int64), "2D")
 
 
 def test_write_tracking_labels_2d_fills_the_single_plane():

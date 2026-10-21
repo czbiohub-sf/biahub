@@ -163,21 +163,21 @@ def label_layout(
     """Return the image's (T, C, Z, Y, X) shape and the label-image layout for its plate.
 
     The layout is the ``label_dtype`` / ``label_chunks`` / ``label_shards`` keyword
-    arguments of iohub's ``create_empty_labels``. With ``source_label``, the chunks and
-    shards are those of the position's ``labels/<source_label>`` level 0, so a label
-    derived from another (track's from segment's) reads like it; otherwise
-    :data:`LABEL_CHUNKS` and the :data:`LABEL_SHARDS` size target (no shards on an
-    OME-Zarr 0.4 plate). The dtype is uint32 either way.
+    arguments of iohub's ``create_empty_labels``. With ``source_label``, the dtype,
+    chunks and shards are those of the position's ``labels/<source_label>`` level 0, so
+    a label derived from another (track's from segment's) is stored like it; otherwise
+    uint32, :data:`LABEL_CHUNKS` and the :data:`LABEL_SHARDS` size target (no shards on
+    an OME-Zarr 0.4 plate).
     """
     with open_ome_zarr(str(position_dirpath), mode="r") as dataset:
         T, C, Z, Y, X = dataset.data.shape
         version = dataset.version
         if source_label is not None:
             source = dataset.get_label(source_label).data
-            chunks, shards = tuple(source.chunks), source.shards
+            dtype, chunks, shards = np.dtype(source.dtype), tuple(source.chunks), source.shards
             shards = tuple(shards) if shards is not None else None
         else:
-            chunks = label_chunks((T, Z, Y, X))
+            dtype, chunks = np.dtype(np.uint32), label_chunks((T, Z, Y, X))
             shards = LABEL_SHARDS if version == "0.5" else None
-    layout = {"label_dtype": np.uint32, "label_chunks": chunks, "label_shards": shards}
+    layout = {"label_dtype": dtype, "label_chunks": chunks, "label_shards": shards}
     return (T, C, Z, Y, X), layout
