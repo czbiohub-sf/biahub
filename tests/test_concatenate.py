@@ -988,7 +988,7 @@ def test_concatenate_keeps_names_by_default(create_custom_plate, tmp_path, sbatc
 
 
 def test_rename_collision_raises(create_custom_plate, tmp_path, sbatch_file):
-    with pytest.raises(ValueError, match=r"Phase3D.*Phase3D_v2|Phase3D_v2.*Phase3D"):
+    with pytest.raises(ValueError) as excinfo:
         _concat_single_plate(
             create_custom_plate,
             tmp_path,
@@ -996,3 +996,63 @@ def test_rename_collision_raises(create_custom_plate, tmp_path, sbatch_file):
             ["Phase3D", "Phase3D_v2"],
             rename_channels=True,
         )
+    assert "['Phase3D', 'Phase3D_v2']" in str(excinfo.value)
+    assert not (tmp_path / "output.zarr").exists()
+
+
+def _run_concat(plate_path, output_path, tmp_path, sbatch_file, paths, rename):
+    settings = ConcatenateSettings(
+        concat_data_paths=paths, channel_names=["all"], rename_channels=rename
+    )
+    config_path = tmp_path / f"concat_{rename}.yml"
+    model_to_yaml(settings, config_path)
+    concatenate(
+        input_position_dirpaths=None,
+        config_filepath=config_path,
+        output_dirpath=output_path,
+        sbatch_filepath=sbatch_file,
+        cluster="debug",
+        monitor=False,
+    )
+
+
+def test_rename_refuses_fully_existing_plate_with_source_names(
+    create_custom_plate, tmp_path, sbatch_file
+):
+    plate_path, _ = create_custom_plate(
+        tmp_path / "zarr1",
+        position_list=[("A", "1", "0"), ("B", "1", "0")],
+        channel_names=["BF - Oblique", "GFP EX488 EM525-45"],
+    )
+    output_path = tmp_path / "output.zarr"
+    paths = [str(plate_path) + "/*/*/*"]
+    _run_concat(plate_path, output_path, tmp_path, sbatch_file, paths, rename=False)
+    with pytest.raises(ValueError, match="fresh output directory") as excinfo:
+        _run_concat(plate_path, output_path, tmp_path, sbatch_file, paths, rename=True)
+    assert "BF - Oblique" in str(excinfo.value)
+    assert "BF" in str(excinfo.value)
+    with open_ome_zarr(output_path) as out:
+        assert out.channel_names == ["BF - Oblique", "GFP EX488 EM525-45"]
+
+
+def test_rename_refuses_partially_existing_plate(create_custom_plate, tmp_path, sbatch_file):
+    plate_path, _ = create_custom_plate(
+        tmp_path / "zarr1",
+        position_list=[("A", "1", "0"), ("B", "1", "0")],
+        channel_names=["BF - Oblique", "GFP EX488 EM525-45"],
+    )
+    output_path = tmp_path / "output.zarr"
+    _run_concat(
+        plate_path, output_path, tmp_path, sbatch_file, [str(plate_path) + "/A/1/0"], False
+    )
+    with pytest.raises(ValueError, match="A/1/0"):
+        _run_concat(
+            plate_path,
+            output_path,
+            tmp_path,
+            sbatch_file,
+            [str(plate_path) + "/*/*/*"],
+            rename=True,
+        )
+    with open_ome_zarr(output_path) as out:
+        assert [name for name, _ in out.positions()] == ["A/1/0"]
