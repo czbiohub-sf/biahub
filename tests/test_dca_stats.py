@@ -198,7 +198,8 @@ def test_store_facts(tmp_path, unit, scale):
         position = dataset.create_position("C", "2", "0001")
         position["0"] = np.zeros((2, 1, 1, 2, 2), dtype=np.uint16)
         position.set_scale("0", "t", scale)
-        position.metadata.multiscales[0].axes[0].unit = unit
+        axes = position.metadata.multiscales[0].axes
+        axes[0] = axes[0].model_copy(update={"unit": unit})
         position.dump_meta()
     with open_ome_zarr(plate / POSITION, mode="r") as position:
         facts = store_facts(plate, POSITION, position)
@@ -214,7 +215,8 @@ def test_store_facts_without_time_unit(tmp_path):
     with open_ome_zarr(plate, layout="hcs", mode="w", channel_names=["a"]) as dataset:
         position = dataset.create_position("C", "2", "0001")
         position["0"] = np.zeros((2, 1, 1, 2, 2), dtype=np.uint16)
-        position.metadata.multiscales[0].axes[0].unit = None
+        axes = position.metadata.multiscales[0].axes
+        axes[0] = axes[0].model_copy(update={"unit": None})
         position.dump_meta()
     with open_ome_zarr(plate / POSITION, mode="r") as position:
         facts = store_facts(plate, POSITION, position)
