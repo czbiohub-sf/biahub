@@ -140,44 +140,44 @@ source_kind = "human"
 [dca.provenance.biosample.organism]
 source_kind = "agent"
 [dca.provenance.biosample.organism.citation]
-source_url = "https://www.cellosaurus.org/CVCL_0023"
-quote = "Homo sapiens (Human)"
+source_url = "https://www.cellosaurus.org/CVCL_0023.txt"
+quote = "OX   NCBI_TaxID=9606; ! Homo sapiens (Human)"
 match_status = "exact"
 [dca.provenance.biosample.tissue]
 source_kind = "agent"
 [dca.provenance.biosample.tissue.citation]
-source_url = "https://www.cellosaurus.org/CVCL_0023"
-quote = "A549"
+source_url = "https://www.cellosaurus.org/CVCL_0023.txt"
+quote = "SY   A 549; A549; NCI-A549; A549/ATCC; A549 ATCC; A549ATCC; hA549"
 match_status = "exact"
 [dca.provenance.biosample.disease]
 source_kind = "agent"
 [dca.provenance.biosample.disease.citation]
-source_url = "https://www.cellosaurus.org/CVCL_0023"
-quote = "Derived from: lung adenocarcinoma"
-match_status = "fuzzy"
+source_url = "https://www.cellosaurus.org/CVCL_0023.txt"
+quote = "DI   NCIt; C3512; Lung adenocarcinoma"
+match_status = "exact"
 [dca.provenance.biosample.development_stage]
 source_kind = "agent"
 [dca.provenance.biosample.development_stage.citation]
-source_url = "https://www.cellosaurus.org/CVCL_0023"
-quote = "Age at sampling: 58Y"
-match_status = "fuzzy"
+source_url = "https://www.cellosaurus.org/CVCL_0023.txt"
+quote = "AG   58Y"
+match_status = "exact"
 [dca.provenance.biosample.cell_line_name]
 source_kind = "agent"
 [dca.provenance.biosample.cell_line_name.citation]
-source_url = "https://www.cellosaurus.org/CVCL_0023"
-quote = "A549"
+source_url = "https://www.cellosaurus.org/CVCL_0023.txt"
+quote = "SY   A 549; A549; NCI-A549; A549/ATCC; A549 ATCC; A549ATCC; hA549"
 match_status = "exact"
 [dca.provenance.biosample.cell_line_id]
 source_kind = "agent"
 [dca.provenance.biosample.cell_line_id.citation]
-source_url = "https://www.cellosaurus.org/CVCL_0023"
-quote = "CVCL_0023"
-match_status = "fuzzy"
+source_url = "https://www.cellosaurus.org/CVCL_0023.txt"
+quote = "AC   CVCL_0023"
+match_status = "exact"
 [dca.provenance."biosample.additional_metadata.Parental line catalogue number"]
 source_kind = "agent"
 [dca.provenance."biosample.additional_metadata.Parental line catalogue number".citation]
-source_url = "https://www.cellosaurus.org/CVCL_0023"
-quote = "ATCC; CCL-185"
+source_url = "https://www.cellosaurus.org/CVCL_0023.txt"
+quote = "DR   ATCC; CCL-185"
 match_status = "exact"
 [dca.provenance.specimen.specimen_state]
 source_kind = "human"

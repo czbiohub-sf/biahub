@@ -235,3 +235,22 @@ def test_biahub_agent_citations_quote_the_pinned_file():
             pytest.skip(f"commit {sha} is not in this checkout")
         assert citation["quote"] in shown.stdout, path
         assert citation["match_status"] == "exact", path
+
+
+CELLOSAURUS_TXT = "https://www.cellosaurus.org/CVCL_0023.txt"
+# Copy of CELLOSAURUS_TXT fetched with curl on 2026-10-21.
+CELLOSAURUS_RECORD = Path(__file__).parent / "fixtures" / "cellosaurus_CVCL_0023.txt"
+
+
+def test_cellosaurus_citations_quote_whole_lines_of_the_text_record():
+    cited = {
+        path: citation
+        for path, citation in agent_citations().items()
+        if "cellosaurus.org" in citation.get("source_url", "")
+    }
+    assert len(cited) == 7
+    lines = CELLOSAURUS_RECORD.read_text().splitlines()
+    for path, citation in cited.items():
+        assert citation["source_url"] == CELLOSAURUS_TXT, path
+        assert citation["quote"] in lines, path
+        assert citation["match_status"] == "exact", path
