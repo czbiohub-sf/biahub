@@ -8,9 +8,12 @@ never invents a label id. The work is iohub's ``compute_pyramid``, run once per
 position; this module fans it out and records what it did.
 """
 
+import math
+
 from pathlib import Path
 
 import click
+import numpy as np
 import submitit
 
 from iohub.ngff import open_ome_zarr
@@ -121,16 +124,23 @@ def pyramid(
     with open_ome_zarr(input_position_dirpaths[0], mode="r") as position:
         T, C, Z, Y, X = position.data.shape
         dtype = position.data.dtype
+        shards = position.data.shards or position.data.chunks
 
-    # iohub downsamples one target shard at a time from the matching source region
-    # (16 timepoints by the full frame on a projected plate), single-threaded, so the
-    # working set is a few volumes, not the position. Time per (t, c) volume is well
-    # under the 0.05 min requested here.
+    # RAM follows the SHARD, not the volume: iohub writes a pyramid level one target
+    # shard at a time and reads the source region feeding it, 8x the target in 3D.
+    # Measured on one A549 position (67 x 6 x 86 x 1664 x 1193 float32, level-0
+    # shards 5 x 1 x 96 x 1792 x 1280 = 4.1 GiB, levels sized to the same bytes):
+    # 44 GB peak RSS and 41.5 min single-threaded, i.e. ~10x the shard and ~0.1 min
+    # per (t, c) volume; the projected plate's 0.14 GiB shards peaked at 1.7 GB in 27 s.
+    # 12x the shard and 0.15 min/volume leave a margin on both.
+    itemsize = np.dtype(dtype).itemsize
+    shard_gb = math.prod(shards) * itemsize / 2**30
+    volume_gb = Z * Y * X * itemsize / 2**30
     time_minutes, num_cpus, gb_ram_per_cpu = estimate_resources(
         shape=(T, C, Z, Y, X),
         dtype=dtype,
-        ram_multiplier=4,
-        time_multiplier=0.05,
+        ram_multiplier=max(4.0, 12 * shard_gb / volume_gb / 4),  # per CPU, 4 CPUs share it
+        time_multiplier=0.15,
         max_num_cpus=4,
     )
     mem_gb = num_cpus * gb_ram_per_cpu
