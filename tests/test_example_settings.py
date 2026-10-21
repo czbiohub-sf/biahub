@@ -218,7 +218,7 @@ def test_nextflow_a549_track_config_validates():
     assert settings.output_mode == "2D"
     assert settings.segmentation_method == "labels"
     assert settings.labels == "nuclei"
-    assert settings.output_label == "nuclei_tracked"
+    assert settings.tracked_label == "nuclei_tracked"
     assert settings.input_images == []
     assert settings.min_sibling_length == 3
 

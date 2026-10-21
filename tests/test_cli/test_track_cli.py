@@ -474,7 +474,7 @@ def test_labels_is_the_default_and_names_the_output():
         TrackingSettings()
     settings = TrackingSettings(labels="nuclei")
     assert settings.segmentation_method == "labels"
-    assert settings.output_label == "nuclei_tracked"
+    assert settings.tracked_label == "nuclei_tracked"
     assert settings.input_images == []
     with pytest.raises(ValueError, match="target_channel is for"):
         TrackingSettings(labels="nuclei", target_channel="x")
@@ -485,7 +485,59 @@ def test_foreground_contour_needs_a_target_channel_and_input_images():
         TrackingSettings(segmentation_method="foreground_contour")
     with pytest.raises(ValueError, match="needs input_images"):
         TrackingSettings(segmentation_method="foreground_contour", target_channel="x")
-    assert _minimal_settings().output_label == LABEL
+    assert _minimal_settings().tracked_label == LABEL
+
+
+def test_output_label_names_the_tracked_image_and_the_tracks_files():
+    default = TrackingSettings(labels="nuclei")
+    assert (default.tracked_label, default.tracks_stem) == ("nuclei_tracked", "tracks")
+    custom = TrackingSettings(labels="nuclei", output_label="nuclei_sigma3")
+    assert (custom.tracked_label, custom.tracks_stem) == (
+        "nuclei_sigma3",
+        "tracks_nuclei_sigma3",
+    )
+    with pytest.raises(ValueError, match="is the label image being tracked"):
+        TrackingSettings(labels="nuclei", output_label="nuclei")
+    with pytest.raises(ValueError, match="output_label is for"):
+        _minimal_settings(output_label="x")
+
+
+def test_track_debug_run_with_an_output_label(tmp_path, example_tracking_plate, monkeypatch):
+    """Two tracking runs of one segmentation keep their labels, GEFFs and CSVs apart."""
+    monkeypatch.setenv("ULTRACK_ARRAY_MODULE", "numpy")
+    plate_path, _ = example_tracking_plate
+    config_path = _make_tracking_config(plate_path, tmp_path)
+    config = yaml.safe_load(config_path.read_text())
+    config["output_label"] = "nuclei_run2"
+    config_path.write_text(yaml.safe_dump(config))
+    position_path = plate_path / "A" / "1" / "0"
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "track",
+            "--cluster",
+            "debug",
+            "-i",
+            str(position_path),
+            "-o",
+            str(tmp_path / "o"),
+            "-c",
+            str(config_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    with open_ome_zarr(str(position_path), mode="r") as pos:
+        assert pos.label_names() == [INPUT_LABEL, "nuclei_run2"]
+        assert pos.get_label("nuclei_run2")["0"][:].any()
+    assert (position_path / "tracks_nuclei_run2.geff").is_dir()
+    assert (position_path / "tracks_nuclei_run2_A_1_0.csv").is_file()
+    assert not (position_path / "tracks.geff").exists()
+    import geff
+
+    _, metadata = geff.read(str(position_path / "tracks_nuclei_run2.geff"), backend="networkx")
+    assert metadata.related_objects[0].path == "../labels/nuclei_run2"
 
 
 def test_cellpose_config_is_rejected_with_a_pointer_to_segment():

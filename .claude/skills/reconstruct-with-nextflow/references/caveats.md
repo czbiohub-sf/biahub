@@ -156,8 +156,10 @@ with (cpsam_v2, diameter 80, min_size 2500) — they used to live in `track.yml`
 **`track.yml` — schema.** `TrackingSettings` forbids extra keys. Current
 fields: `output_mode`, `fov`, `blank_frames_path`, `segmentation_method`
 (`labels`, the default, or the legacy `foreground_contour`), `labels`,
-`labels_sigma`, `min_sibling_length`, `tracking_config` (plus `target_channel`
-and `input_images` on the legacy path). Track neither segments nor selects or
+`labels_sigma`, `output_label` (optional; another name for the tracked label
+image, which also renames the GEFF and CSV to `tracks_<output_label>.*`),
+`min_sibling_length`, `tracking_config` (plus `target_channel` and
+`input_images` on the legacy path). Track neither segments nor selects or
 projects Z-planes: it reads the label image `biahub segment` wrote into the
 **projected** plate (`labels: <segment.yml model name>`), writes the tracked
 labels beside it as `labels/<labels>_tracked` with `tracks.geff` and a tracks

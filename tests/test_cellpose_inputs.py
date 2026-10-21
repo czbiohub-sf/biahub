@@ -112,8 +112,6 @@ def test_segment_cli_rejects_a_stack_for_a_2d_model(fake_cellpose, example_plate
             "segment",
             "-i",
             str(plate_path / "A" / "1" / "0"),
-            "-o",
-            str(tmp_path / "out.zarr"),
             "-c",
             str(config),
             "--init",

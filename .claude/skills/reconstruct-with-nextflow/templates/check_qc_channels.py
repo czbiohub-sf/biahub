@@ -115,7 +115,7 @@ def tracked_label(track_cfg):
     t = yaml.safe_load(Path(track_cfg).read_text())
     if t.get("segmentation_method", "labels") != "labels":
         return None
-    return t["labels"], f"{t['labels']}_tracked"
+    return t["labels"], t.get("output_label") or f"{t['labels']}_tracked"
 
 
 if __name__ == "__main__":

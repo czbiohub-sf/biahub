@@ -1,7 +1,7 @@
 # Segmentation settings for cellpose 4 (`biahub segment`).
 # Model names become the label image names in each -i position (e.g. membrane ->
-# labels/membrane), which `biahub track` reads; with -o they become the channels of a
-# separate label plate (membrane -> membrane_labels).
+# labels/membrane), which `biahub track` reads. Strategies accumulate as differently
+# named models; a name is only rewritten by the model that made it.
 # A model segments in 2D unless eval_args.do_3D (or a stitch_threshold) is set. Segment
 # does not project: 2D models need a Z=1 input plate (make one from a stack with
 # `biahub project`), 3D models a stack; a mismatch is an error. All models in one config
