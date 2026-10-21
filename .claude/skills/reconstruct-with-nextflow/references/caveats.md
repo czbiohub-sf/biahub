@@ -143,30 +143,45 @@ model silently stalls. Top level may contain **only** `model`, `data`,
 per-position — leave it out. `target_channel` carries the `_prediction` suffix
 deliberately (§2).
 
+**`segment.yml` — schema.** `SegmentationSettings`: `models.<name>` with
+`pretrained_model`, `channels` (projected-plate channel names, at most 3) and
+`eval_args` (cellpose `CellposeModel.eval` arguments: `diameter`,
+`cellprob_threshold`, `flow_threshold`, `min_size`, ...). Segment reads the
+**projected** (Z=1) plate and writes one label image per model INTO it,
+`labels/<name>`; it does not project (a model without `eval_args.do_3D` needs a
+Z=1 input). The A549 template carries the cellpose values tracking was validated
+with (cpsam_v2, diameter 80, min_size 2500) — they used to live in `track.yml`'s
+`cellpose_config`.
+
 **`track.yml` — schema.** `TrackingSettings` forbids extra keys. Current
-fields: `output_mode`, `target_channel`, `fov`, `input_images`,
-`blank_frames_path`, `segmentation_method`, `min_sibling_length`,
-`cellpose_config`, `tracking_config`. Track no longer selects or projects
-Z-planes: it reads the **projected** (Z=1) plate that `biahub project` writes
-from `project.yml`, writes its labels and tracks into that plate, and a 3D input
-with `output_mode: 2D` is an error. Old configs under
+fields: `output_mode`, `fov`, `blank_frames_path`, `segmentation_method`
+(`labels`, the default, or the legacy `foreground_contour`), `labels`,
+`labels_sigma`, `min_sibling_length`, `tracking_config` (plus `target_channel`
+and `input_images` on the legacy path). Track neither segments nor selects or
+projects Z-planes: it reads the label image `biahub segment` wrote into the
+**projected** plate (`labels: <segment.yml model name>`), writes the tracked
+labels beside it as `labels/<labels>_tracked` with `tracks.geff` and a tracks
+CSV, and a 3D input with `output_mode: 2D` is an error. Old configs under
 `/hpc/projects/tlg2_mantis/` still carry rejected fields — migrate:
 
 ```
 mode                                  -> output_mode
 z_slicing / z_range / focus_config    -> project.yml: channels.<name>.z {center: focus, below, above}, focus.channel
 input_images np.mean step             -> project.yml: channels.<name>.method: mean
+cellpose_config (model, diameter, thresholds, min_size, input_channel)
+                                      -> segment.yml: models.<name>
+cellpose_config.labels_sigma          -> labels_sigma
+target_channel                        -> labels: <segment.yml model name>
 output_ome_zarr_version               -> (delete: labels take the projected plate's version)
 ```
 
 (`focus_config`'s `NA_det`/`lambda_ill` are `project.yml`'s `focus.na_det` /
-`focus.lambda_ill`; the pixel size comes from the store.) `target_channel` and
-`cellpose_config.input_channel` must match channels `project.yml` writes, which
-carry the **pre-rename** names of the **assembled** plate (§2, §5).
-`target_channel` also names the label image tracking writes into each position
-of the projected plate, `labels/<target_channel>` (no `_labels` suffix), so
-`qc_project.yaml`'s `instance_count.label` and its anchor `channels:` entry must
-equal it — SKILL.md §5a checks these couplings before launch.
+`focus.lambda_ill`; the pixel size comes from the store.) `segment.yml`'s model
+`channels` must match channels `project.yml` writes, which carry the
+**pre-rename** names of the **assembled** plate (§2, §5). `qc_project.yaml`'s
+`instance_count.label` must be `<track.yml labels>_tracked` and its anchor
+`channels:` entry the segment model's channel — SKILL.md §5a checks these
+couplings before launch.
 
 **QC configs reject `upstream_qc_dir`.** The imaging-qc pin (f5ae656) dropped
 the key; a `qc.yaml` copied from an older run that still carries
