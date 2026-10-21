@@ -72,7 +72,7 @@ def test_dca_finalize_writes_block(plate, config, caplog):
             "confirmed_config": file_record(confirmed_path(plate)),
             "metadata_source": {"kind": "csv", "name": sheet_path(plate).name},
             "qc_stage": 5,
-            "biahub_version": biahub.__version__,
+            "version": biahub.__version__,
         }
 
 

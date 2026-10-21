@@ -90,7 +90,7 @@ def _provenance(plate: Path, settings: DcaFinalizeSettings) -> dict[str, Any]:
         "confirmed_config": _file_record(confirmed) if confirmed.exists() else None,
         "metadata_source": source,
         "qc_stage": settings.qc_stage,
-        "biahub_version": biahub_version,
+        "version": biahub_version,
     }
 
 
