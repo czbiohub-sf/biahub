@@ -473,6 +473,27 @@ class ProjectionSettings(MyBaseModel):
         return any(c.uses_focus for c in self.channels.values())
 
 
+PYRAMID_METHODS = ("mean", "median", "mode", "min", "max", "stride")
+# Methods that only ever pick a value present in the window, so no level of a
+# label pyramid holds an id that level 0 does not (DCA v0.2: "maximum filter or
+# decimation filter for label arrays").
+LABEL_PYRAMID_METHODS = ("max", "stride", "mode")
+
+
+class PyramidSettings(MyBaseModel):
+    """`biahub pyramid`: the pyramid every image and label image of a position gets.
+
+    ``levels`` counts level 0, so ``3`` adds two downsampled levels, each 2x coarser
+    than the previous along the spatial axes longer than one voxel (Z is left alone
+    on a Z=1 plate). ``method`` pools the images and ``label_method`` the label
+    images under ``labels/``.
+    """
+
+    levels: Annotated[int, Field(ge=2)] = 3
+    method: Literal[PYRAMID_METHODS] = "mean"
+    label_method: Literal[LABEL_PYRAMID_METHODS] = "max"
+
+
 class AffineTransformSettings(MyBaseModel):
     t_reference: Literal["first", "previous"] = "first"
     transform_type: Literal["euclidean", "similarity", "affine"] = "euclidean"

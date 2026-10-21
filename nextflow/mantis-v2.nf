@@ -23,16 +23,19 @@ nextflow.enable.dsl = 2
 //  workflow body for why that is possible and what it buys.
 //
 //  Flat-field → deskew → reconstruct → virtual-stain → assemble → project →
-//  track → QC is the full chain: assemble concatenates the
+//  track → QC → pyramid is the full chain: assemble concatenates the
 //  deskew/reconstruct/virtual-stain channels into one plate, project reduces
 //  that 3D plate to the 2D (Z=1) plate 2D tracking needs, track reads it as its
-//  single input, and QC reads the finished stores. Follow the chaining below for
-//  the pattern.
+//  single input, QC reads the finished stores, and pyramid adds the coarser
+//  resolution levels to the assembled and projected plates once nothing else
+//  writes into them. Follow the chaining below for the pattern.
 //
-//  The last four are OPTIONAL and selected by whether their config is given, so
-//  a run performs the prefix it asks for: A549 wants assemble + project + track
-//  + QC, a neuromast run wants assemble + QC and no tracking (issue #306). A
-//  skipped step never renumbers the directories of the ones around it.
+//  Assemble, project, track and QC are OPTIONAL and selected by whether their
+//  config is given, so a run performs the prefix it asks for: A549 wants
+//  assemble + project + track + QC, a neuromast run wants assemble + QC and no
+//  tracking (issue #306). Pyramids are on by default for whichever of the two
+//  plates exist (--pyramid_levels 1 turns them off). A skipped step never
+//  renumbers the directories of the ones around it.
 // ---------------------------------------------------------------------------
 
 params.input = null   // raw source — may not be a zarr store
@@ -54,6 +57,11 @@ params.max_positions = 0
 params.qc_config = null
 params.qc_project_config = null
 params.qc_track_config = null  // removed; refused below
+// Resolution levels of the assembled and projected plates, counting level 0:
+// 3 is the DCA v0.2 target (issue #359) and adds a 2x and a 4x level, in Y and X
+// (and Z when the plate has more than one plane), to every image and label
+// image. 1 turns the step off. Images are mean-pooled, labels max-pooled.
+params.pyramid_levels = 3
 
 include { collect_positions; dataset_name; check_environment } from './modules/common'
 include { flat_field_init_wf; flat_field_run_wf } from './modules/flat_field'
@@ -64,6 +72,12 @@ include { assemble_init_wf; assemble_run_wf } from './modules/assembly'
 include { project_init_wf; project_run_wf } from './modules/project'
 include { track_init_wf; track_run_wf } from './modules/tracking'
 include { qc_plan_wf; qc_compute_wf; qc_report_wf; qc_report_spec } from './modules/qc'
+// One module, two plates: a process can only be invoked once per workflow
+// context, so the assembled and projected plates get their own aliases.
+include { pyramid_init_wf as pyramid_assembled_init_wf;
+          pyramid_run_wf as pyramid_assembled_run_wf } from './modules/pyramid'
+include { pyramid_init_wf as pyramid_projected_init_wf;
+          pyramid_run_wf as pyramid_projected_run_wf } from './modules/pyramid'
 include { notify_step; notify_run_start; notify_run_end } from './modules/notify'
 include { cleanup_decision; cleanup_targets; cleanup_intermediates_wf } from './modules/cleanup'
 
@@ -101,9 +115,9 @@ def step_directories(performed) {
         reconstruct   : 'reconstruct',
         virtual_stain : 'virtual-stain',
         assemble      : 'assemble',
-        // project writes beside the assembled plate (<assemble>/<ds>_proj.zarr)
-        // and track writes into the plate it reads; neither has a directory of
-        // its own or takes a number.
+        // project writes beside the assembled plate (<assemble>/<ds>_proj.zarr),
+        // and track and pyramid write into the plates they read; none has a
+        // directory of its own or takes a number.
     ]
     def layout = [:]
     order.each { key, name ->
@@ -147,6 +161,13 @@ workflow {
     def qc_image_on   = params.qc_config as boolean
     def qc_project_on = params.qc_project_config as boolean
     def qc_on         = qc_image_on || qc_project_on
+    // Pyramids go on the deliverable plates, so without assemble there is
+    // nothing to pyramid and the default is silently moot rather than an error.
+    def pyramid_levels = params.pyramid_levels as int
+    if (pyramid_levels < 1) {
+        error "--pyramid_levels must be at least 1 (1 = no pyramid), got ${params.pyramid_levels}."
+    }
+    def pyramid_on    = pyramid_levels > 1 && assemble_on
 
     // A step cannot outlive the step whose output it reads. Refuse the
     // combination at launch, naming the config to add or the one to drop, rather
@@ -302,6 +323,19 @@ workflow {
         init_signals << tk_init.done
     }
 
+    if (pyramid_on) {
+        // Pyramid's init scaffolds nothing: it checks the plate's first position
+        // against the requested depth and sizes the task. Gated on the init that
+        // scaffolded each plate; the label images tracking adds later get their
+        // levels at compute time, from the same depth.
+        pya_init = pyramid_assembled_init_wf(assemble_output, pyramid_levels, as_init.done)
+        init_signals << pya_init.done
+        if (project_on) {
+            pyp_init = pyramid_projected_init_wf(project_output, pyramid_levels, pj_init.done)
+            init_signals << pyp_init.done
+        }
+    }
+
     // QC's planning verbs belong in this phase for the same reason the step
     // inits do — `plan-stage` and `estimate-resources` read the store's
     // structure and validate the config, and read no pixels. Each store's plan
@@ -454,6 +488,32 @@ workflow {
         qc_report = qc_report_wf(qc.done, spec, qc_report_dir)
     }
 
+    // ----- Pyramids ---------------------------------------------------------
+    // The LAST writer of each plate. `biahub pyramid` rewrites a position's
+    // multiscales metadata and adds its own provenance record to the position's
+    // zarr.json, and so does everything else that writes into the plate after
+    // assemble: tracking (labels/, tracks.geff) and imaging-qc, which stamps the
+    // tables it wrote into the same position attrs. Two writers of one zarr.json
+    // lose updates, so pyramids wait for all of them: the assembled plate's for
+    // tracking when it writes there (track without project), the projected
+    // plate's for tracking, and both for QC's compute when QC is on. The QC
+    // report only reads the tables, so it is not waited for. Level 0 is never
+    // touched, so no downstream reader sees a different image.
+    if (pyramid_on) {
+        def assembled_written = (track_on && !project_on) ? track_done.done : assemble_done.done
+        def assembled_ready   = qc_on ? qc.done : assembled_written
+        pyramid_assembled_done = pyramid_assembled_run_wf(all_positions, assemble_output,
+                                                          pyramid_levels, pya_init.resources,
+                                                          assembled_ready)
+        if (project_on) {
+            def projected_written = track_on ? track_done.done : project_done.done
+            def projected_ready   = qc_on ? qc.done : projected_written
+            pyramid_projected_done = pyramid_projected_run_wf(all_positions, project_output,
+                                                              pyramid_levels, pyp_init.resources,
+                                                              projected_ready)
+        }
+    }
+
     // ----- Cleanup of intermediates (--cleanup_intermediates) ---------------
     // Once the LAST step has finished, delete what only existed to feed the
     // assembled plate: the flat-field, deskew, reconstruct and virtual-stain step
@@ -490,6 +550,10 @@ workflow {
         if (project_on) final_signals << project_done.done
         if (track_on) final_signals << track_done.done
         if (qc_on)    final_signals << qc_report.done
+        if (pyramid_on) {
+            final_signals << pyramid_assembled_done.done
+            if (project_on) final_signals << pyramid_projected_done.done
+        }
         final_gate = channel.empty()
         final_signals.each { signal -> final_gate = final_gate.mix(signal) }
 
@@ -536,6 +600,12 @@ workflow {
     if (project_on)  step_events << [label: 'project',  done: project_done.done,  output: project_output]
     if (track_on)    step_events << [label: 'track',    done: track_done.done,    output: track_input]
     if (qc_on)       step_events << [label: 'QC',       done: qc_report.done,     output: qc_report_dir]
+    if (pyramid_on) {
+        step_events << [label: 'pyramid (assembled)', done: pyramid_assembled_done.done, output: assemble_output]
+        if (project_on) {
+            step_events << [label: 'pyramid (projected)', done: pyramid_projected_done.done, output: project_output]
+        }
+    }
     if (cleanup_on)  step_events << [label: 'cleanup intermediates', done: cleanup_run.done, output: cleanup_record]
 
     steps = step_events.collect { event -> event.label }

@@ -93,7 +93,7 @@ COMMANDS = [
     {
         "name": "pyramid",
         "import_path": "biahub.pyramid.pyramid_cli",
-        "help": "Create pyramid levels for a dataset",
+        "help": "Compute multiscale pyramids of a plate's images and label images, in place",
     },
     {
         "name": "apply-transform",
