@@ -2072,7 +2072,7 @@ wheels = [
 [[package]]
 name = "imaging-qc-pipeline"
 version = "0.6.0"
-source = { git = "https://github.com/czbiohub-sf/imaging-qc-pipeline?tag=v0.6.0#ab0081f52b4982a1fcaac5327c6ef22398644c39" }
+source = { git = "https://github.com/czbiohub-sf/imaging-qc-pipeline?tag=v0.6.0#ba470fea3836826dde1bc248878c99292f9aa8b7" }
 dependencies = [
     { name = "dask", extra = ["array"] },
     { name = "hydra-core" },
