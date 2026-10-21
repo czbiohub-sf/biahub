@@ -214,11 +214,11 @@ def test_nextflow_a549_track_config_validates():
     with open("nextflow/configs/a549/track.yml") as f:
         settings = TrackingSettings(**yaml.safe_load(f))
     # Track reads the projected plate's `labels/nuclei` (segment.yml's model) and writes
-    # `labels/nuclei_tracked`; no image channel is processed.
+    # `labels/tracks_nuclei`; no image channel is processed.
     assert settings.output_mode == "2D"
     assert settings.segmentation_method == "labels"
     assert settings.labels == "nuclei"
-    assert settings.output_label == "nuclei_tracked"
+    assert settings.tracked_label == "tracks_nuclei"
     assert settings.input_images == []
     assert settings.min_sibling_length == 3
 

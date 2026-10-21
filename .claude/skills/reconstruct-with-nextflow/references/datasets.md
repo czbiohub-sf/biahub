@@ -74,7 +74,7 @@ layout is defined once in `nextflow/mantis-v2.nf` (`directory_layout()`):
 ├── 4-assemble/<DATASET>_proj.zarr  # A549 only — the 2D (Z=1) companion plate; with
 │                                   #   segmentation and tracking, each position also
 │                                   #   holds labels/<model> (segment),
-│                                   #   labels/<model>_tracked, tracks.geff and
+│                                   #   labels/tracks_<model>, tracks.geff and
 │                                   #   tracks_<row>_<col>_<fov>.csv (track)
 ├── qc/
 │   ├── report/index.html           # one report, one tab per QC'd store

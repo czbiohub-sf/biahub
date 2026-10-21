@@ -15,7 +15,7 @@
 #   0-flatfield/ 1-deskew/ 2-reconstruct/ 3-virtual-stain/ 4-assemble/
 # Project writes its plate beside the assembled one as 4-assemble/<DATASET>_proj.zarr;
 # segment writes labels/<model> into each position of that plate and tracking
-# labels/<model>_tracked, tracks.geff and a tracks CSV; none has a directory of its own.
+# labels/tracks_<model>, tracks.geff and a tracks CSV; none has a directory of its own.
 # The number is the step's POSITION among the steps this run performs that
 # write a directory, so a run that skips a step shifts everything after it down.
 # The work dir defaults to <output>/nextflow/work; override with `-work-dir`.

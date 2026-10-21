@@ -17,8 +17,12 @@ segmentation_method: labels
 
 # The label image to track, `labels/<labels>` in every -i position: the segment
 # config's model name. The tracked labels are written next to it as
-# `labels/<labels>_tracked`, with tracks.geff and a tracks CSV.
+# `labels/tracks_<labels>`, with tracks.geff and a tracks CSV.
 labels: nuclei
+# Optional: another name for the tracked label image, to keep several tracking runs of
+# one segmentation side by side. The tracks then go to tracks_<output_label>.geff and
+# tracks_<output_label>_<fov>.csv rather than tracks.geff / tracks_<fov>.csv.
+# output_label: tracks_nuclei_sigma3
 # Smoothing (pixels) ultrack applies to the labels' contours before it builds its own
 # segmentation hypotheses from them.
 labels_sigma: 5.0

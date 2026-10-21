@@ -1,7 +1,7 @@
 # QC of the PROJECTED plate (`4-assemble/<dataset>_proj.zarr`, Z=1): the plate
 # `biahub project` writes beside the assembled one and tracking reads and writes
 # into. It holds the projected channels and, after tracking, each position's
-# `labels/<labels>` (segment) and `labels/<labels>_tracked` (track) label images,
+# `labels/<labels>` (segment) and `labels/tracks_<labels>` (track) label images,
 # so this is where the cell counts live:
 # `instance_count` reads the TRACKED label image (imaging-qc#243); segment writes
 # `labels/<model>` beside it. The pipeline plans
@@ -35,28 +35,26 @@ metric_groups:
 blank:
   intensity_threshold: 0.01
   variance_threshold: 1.0e-6
-  granularity: slice
   channels:
     - nuclei_prediction
   gate:
-    granularity: channel
+    per_channel: true
 
 # Cells per frame, from the label image tracking writes (`label:`, the track config's
-# `labels` plus `_tracked`). `channels:` is the ONE anchor channel the labels
+# `labels` with a `tracks_` prefix). `channels:` is the ONE anchor channel the labels
 # were segmented from: the count rows carry its C. The plate has one Z-plane, so
-# `slice` and `volume` count the same thing; `slice` keeps per-(T, Z) rows.
+# the default `split_by: [T, C, Z]` keeps per-(T, Z) rows and counts each instance once.
 instance_count:
-  label: nuclei_tracked
+  label: tracks_nuclei
   channels:
     - nuclei_prediction
-  granularity: slice
   gate:
     # A count of zero on a frame that is not blank: the segmentation found nothing.
     # The degenerate structural boundary, not a constant calibrated from a dataset.
     hard_floor: 1
     # Put the verdict on the anchor channel (`low_instance_count__nuclei_prediction`)
     # rather than repeating a channel-averaged flag on every channel.
-    granularity: channel
+    per_channel: true
 
 report:
   max_timepoints: 5

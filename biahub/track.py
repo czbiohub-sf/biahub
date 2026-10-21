@@ -710,6 +710,7 @@ def track_one_position(
     labels_sigma: float = 5.0,
     output_mode: str = "2D",
     min_sibling_length: int | None = None,
+    tracks_stem: str = "tracks",
 ) -> None:
     """
     Run tracking on a single field of view.
@@ -760,14 +761,18 @@ def track_one_position(
         If set, remove daughter tracks of this many frames or fewer before writing
         (see :func:`filter_short_siblings`); the labels, the GEFF and the CSV all
         come from the filtered tracks. Default None keeps every division.
+    tracks_stem : str, optional
+        Stem of the GEFF and CSV file names. Default ``"tracks"``.
 
     Returns
     -------
     None
         Outputs are saved into ``position_dirpath``:
         - ``labels/<label_name>``: the tracked labels, painted with ``track_id``
-        - ``tracks.geff``: the track graph, linked to the labels by ``seg_id``
-        - ``tracks_<row>_<col>_<fov>.csv``: the same tracks as a CSV, kept for now
+        - ``<tracks_stem>.geff``: the track graph, linked to the labels by ``seg_id``
+        - ``<tracks_stem>_<row>_<col>_<fov>.csv``: the same tracks as a CSV, kept for now
+        ``tracks_stem`` is ``tracks`` unless the config names the tracked label itself
+        (``output_label``), when it is ``tracks_<output_label>``.
 
     Notes
     -----
@@ -806,7 +811,7 @@ def track_one_position(
         tracking_labels, tracks_df, _ = run_ultrack(
             tracking_config=tracking_config,
             database_path=database_path,
-            geff_path=position_dirpath / "tracks.geff",
+            geff_path=position_dirpath / f"{tracks_stem}.geff",
             geff_kwargs=geff_kwargs,
             min_sibling_length=min_sibling_length,
             scale=scale,
@@ -814,8 +819,8 @@ def track_one_position(
             **detection_kwargs,
         )
 
-        # Kept alongside tracks.geff for downstream readers that still expect a CSV.
-        tracks_df.to_csv(position_dirpath / f"tracks_{fov}.csv", index=False)
+        # Kept alongside the GEFF for downstream readers that still expect a CSV.
+        tracks_df.to_csv(position_dirpath / f"{tracks_stem}_{fov}.csv", index=False)
 
         with open_ome_zarr(position_dirpath, mode="r+") as position:
             label_image = position.get_label(label_name)
@@ -835,7 +840,7 @@ def _init_labels(
     input_position_dirpaths: list[Path],
     settings: TrackingSettings,
 ) -> tuple[int, int, int, int, int]:
-    """Create the empty ``labels/<output_label>`` image in every input position.
+    """Create the empty ``labels/<tracked_label>`` image in every input position.
 
     The input's dimensionality must match ``settings.output_mode`` (see
     :func:`check_input_dimensionality`), and with ``settings.labels`` every position
@@ -869,14 +874,14 @@ def _init_labels(
     create_empty_labels(
         Path(input_position_dirpaths[0]).parents[2],
         [Path(p).parts[-3:] for p in input_position_dirpaths],
-        [settings.output_label],
+        [settings.tracked_label],
         # The settings as written; the worker adds the resolved Ultrack config under
         # the same key once it has tracked (track_one_position).
         label_metadata={PROVENANCE_KEY: settings.model_dump(mode="json")},
         **layout,
     )
     click.echo(
-        f"Created labels/{settings.output_label} in "
+        f"Created labels/{settings.tracked_label} in "
         f"{Path(input_position_dirpaths[0]).parents[2]} "
         f"({len(input_position_dirpaths)} positions)"
     )
@@ -921,7 +926,7 @@ def track(
 
     Notes
     -----
-    Outputs go into each ``-i`` position: ``labels/<labels>_tracked`` (OME-NGFF label
+    Outputs go into each ``-i`` position: ``labels/tracks_<labels>`` (OME-NGFF label
     image; ``labels/<target_channel>`` on the foreground+contour path),
     ``tracks.geff`` and ``tracks_<row>_<col>_<fov>.csv``. The ``-i`` plate is the plate
     track reads, so 2D tracking writes into the projected (Z=1) plate, next to the
@@ -955,7 +960,7 @@ def track(
             break
 
     # Workers skip the scaffold --init already made: they all share the -i plate.
-    if init_only or not labels_exist(input_position_dirpaths, settings.output_label):
+    if init_only or not labels_exist(input_position_dirpaths, settings.tracked_label):
         _init_labels(input_position_dirpaths, settings)
     with open_ome_zarr(str(input_position_dirpaths[0]), mode="r") as dataset:
         T, C, Z, Y, X = dataset.data.shape
@@ -1022,7 +1027,7 @@ def track(
                 position_dirpath=Path(position_dirpath),
                 output_dirpath=output_dirpath,
                 tracking_config=tracking_cfg,
-                label_name=settings.output_label,
+                label_name=settings.tracked_label,
                 input_images=settings.input_images,
                 blank_frames_path=settings.blank_frames_path,
                 scale=track_scale,
@@ -1030,6 +1035,7 @@ def track(
                 labels_sigma=settings.labels_sigma,
                 output_mode=settings.output_mode,
                 min_sibling_length=settings.min_sibling_length,
+                tracks_stem=settings.tracks_stem,
             )
             jobs.append(job)
 
@@ -1085,7 +1091,7 @@ def track_cli(
     """Track the instance labels of a label image (`biahub segment`) with ultrack.
 
     Reads labels/<labels> from each -i position and writes into it: the tracked labels
-    as an OME-NGFF label image (labels/<labels>_tracked), the tracks as tracks.geff,
+    as an OME-NGFF label image (labels/tracks_<labels>), the tracks as tracks.geff,
     and a tracks CSV. 2D tracking reads (and writes into) the projected Z=1 plate
     `biahub project` makes; the Ultrack databases are temporary unless -o names a
     directory to keep them in. Track does not segment or project.

@@ -121,7 +121,7 @@ Some steps include an `estimate-*` command that writes a YAML of parameters you 
 | `concatenate` | Concatenate datasets channel-wise, with optional cropping |
 | | |
 | `project` | Project a 3D plate to 2D: max, mean, sum or one plane per channel, optionally around the in-focus plane |
-| `segment` | Segment positions with cellpose 4; writes label images into the plate (or a separate label plate with `-o`) |
+| `segment` | Segment positions with cellpose 4; writes one label image per model into the plate |
 | `virtual-stain` | Run VisCy/cytoland virtual staining |
 | `track` | Track the instance labels of a label image (ultrack); writes tracked labels and tracks.geff into the plate |
 | | |

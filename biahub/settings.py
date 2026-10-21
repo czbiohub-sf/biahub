@@ -101,9 +101,10 @@ class ProcessingInputChannel(MyBaseModel):
         return v
 
 
-#: Suffix of the label image tracking writes next to the one it reads:
-#: ``labels/<labels>`` (from `biahub segment`) -> ``labels/<labels>_tracked``.
-TRACKED_LABEL_SUFFIX = "_tracked"
+#: Prefix of the label image tracking writes next to the one it reads:
+#: ``labels/<labels>`` (from `biahub segment`) -> ``labels/tracks_<labels>``, matching
+#: the ``tracks.geff`` / ``tracks_<fov>.csv`` beside it.
+TRACKED_LABEL_PREFIX = "tracks_"
 
 
 class TrackingSettings(MyBaseModel):
@@ -121,13 +122,18 @@ class TrackingSettings(MyBaseModel):
     segmentation_method: Literal["labels", "foreground_contour"] = "labels"
     # segmentation_method: labels -- the label image, `labels/<labels>` in each -i
     # position, named after the segment config's model. The tracked labels go to
-    # `labels/<labels>_tracked`.
+    # `labels/tracks_<labels>`.
     labels: str | None = None
     # Smoothing (pixels) ultrack applies to the labels' contours before it builds its
     # own segmentation hypotheses from them (ultrack `labels_to_contours`).
     labels_sigma: float = 5.0
+    # segmentation_method: labels -- the name of the tracked label image, when the
+    # default `tracks_<labels>` is not wanted, e.g. to keep several tracking runs of
+    # one segmentation side by side. Then the tracks go to `tracks_<output_label>.geff`
+    # and `tracks_<output_label>_<fov>.csv` instead of `tracks.geff` / `tracks_<fov>.csv`.
+    output_label: str | None = None
     # segmentation_method: foreground_contour only -- the name of the label image the
-    # tracks are written to. With `labels` the name is derived (<labels>_tracked).
+    # tracks are written to.
     target_channel: str | None = None
     # Image channels to load and process per FOV; needed by foreground_contour (its
     # processing functions compute the mask and contour) and optional otherwise.
@@ -182,14 +188,24 @@ class TrackingSettings(MyBaseModel):
             if self.target_channel is not None:
                 raise ValueError(
                     "target_channel is for segmentation_method: foreground_contour; with "
-                    f"labels the tracks are written to labels/{self.labels}"
-                    f"{TRACKED_LABEL_SUFFIX}."
+                    f"labels the tracks are written to labels/{TRACKED_LABEL_PREFIX}{self.labels}"
+                    ", or to labels/<output_label> if set."
+                )
+            if self.output_label == self.labels:
+                raise ValueError(
+                    f"output_label {self.labels!r} is the label image being tracked; name "
+                    "the tracked one differently."
                 )
         else:
             if self.target_channel is None:
                 raise ValueError(
                     "segmentation_method: foreground_contour needs target_channel, the name "
                     "of the label image the tracks are written to."
+                )
+            if self.output_label is not None:
+                raise ValueError(
+                    "output_label is for segmentation_method: labels; foreground_contour "
+                    "names its label image with target_channel."
                 )
             if not self.input_images:
                 raise ValueError(
@@ -199,11 +215,20 @@ class TrackingSettings(MyBaseModel):
         return self
 
     @property
-    def output_label(self) -> str:
-        """Name of the label image tracking writes, ``labels/<output_label>``."""
+    def tracked_label(self) -> str:
+        """Name of the label image tracking writes, ``labels/<tracked_label>``."""
         if self.segmentation_method == "labels":
-            return f"{self.labels}{TRACKED_LABEL_SUFFIX}"
+            return self.output_label or f"{TRACKED_LABEL_PREFIX}{self.labels}"
         return self.target_channel
+
+    @property
+    def tracks_stem(self) -> str:
+        """Stem of the tracks files: ``tracks`` (``tracks.geff``, ``tracks_<fov>.csv``).
+
+        With an explicit ``output_label`` the stem carries it, so several tracking runs
+        of one plate keep their GEFFs and CSVs apart: ``tracks_<output_label>``.
+        """
+        return "tracks" if self.output_label is None else f"tracks_{self.output_label}"
 
 
 class EdgeGraphSettings(BaseModel):
@@ -1071,10 +1096,20 @@ class SegmentationModel(BaseModel):
 
 
 class SegmentationSettings(BaseModel):
+    # One label image per model, `labels/<name>`, written into the plate segment reads.
+    # The name is the strategy's: strategies accumulate as differently named models.
     models: dict[str, SegmentationModel] = Field(min_length=1)
-    # When None, preserve the OME-Zarr version of the input store.
-    output_ome_zarr_version: Literal["0.4", "0.5"] | None = None
     model_config = {"extra": "forbid", "protected_namespaces": ()}
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_output_version(cls, data):
+        if isinstance(data, dict) and "output_ome_zarr_version" in data:
+            raise ValueError(
+                "output_ome_zarr_version was removed: segment writes its label images into "
+                "the plate it reads, so they take that plate's OME-Zarr version."
+            )
+        return data
 
     @model_validator(mode="after")
     def check_models_share_dimensionality(self):

@@ -227,9 +227,9 @@ label image segment wrote (`labels/<model>`).
 
 **`qc_project.yaml` against the projected plate, `segment.yml` and `track.yml`
 — the coupling that actually breaks.** Segment writes `labels/<model>` into each
-position of the plate it reads and tracking writes `labels/<model>_tracked`
+position of the plate it reads and tracking writes `labels/tracks_<model>`
 beside it. `qc_project.yaml`'s `instance_count` names the tracked one, `label:
-nuclei_tracked`, and its anchor `channels: [nuclei_prediction]`, the channel the
+tracks_nuclei`, and its anchor `channels: [nuclei_prediction]`, the channel the
 labels were segmented from. The label only resolves if `track.yml` says `labels:
 nuclei` and `segment.yml` has a model `nuclei`; the anchor must be that model's
 channel and a channel `project.yml` writes — four files with no shared source of
@@ -573,7 +573,7 @@ directory (`<DATASET>_rerun`) over relaunching in place.
    size on disk. This is the deliverable for every family. When segmentation
    and tracking ran, their output is inside the projected plate: check a
    position has `labels/nuclei` (the segment config's model name) and
-   `labels/nuclei_tracked` (the track config's `labels` plus `_tracked`; both
+   `labels/tracks_nuclei` (`tracks_` plus the track config's `labels`; both
    uint32 TZYX at the image's full Z), `tracks.geff` and
    `tracks_<row>_<col>_<fov>.csv`, and report them beside the image data.
 3. If QC ran, report its verdict: the `QC_SUMMARY` line from the
