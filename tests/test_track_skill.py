@@ -32,3 +32,10 @@ def test_latest_annotation_version_is_numeric(compare):
 def test_division_f1(compare, matched, predicted, annotated, f1):
     result = compare.division_f1(matched, predicted, annotated)
     assert result == pytest.approx(f1, nan_ok=True)
+
+
+def test_cells_per_frame_counts_empty_frames(compare):
+    import pandas as pd
+
+    tracks = pd.DataFrame({"track_id": [1], "t": [2], "y": [0.0], "x": [0.0]})
+    assert compare.cells_per_frame(tracks, n_frames=6) == pytest.approx(1 / 6)

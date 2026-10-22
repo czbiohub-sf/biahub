@@ -394,3 +394,27 @@ def test_thread_count_without_cpu_affinity(monkeypatch):
     assert _num_threads() == (os.cpu_count() or 1)
     monkeypatch.setenv("SLURM_CPUS_PER_TASK", "3")
     assert _num_threads() == 3
+
+
+@pytest.mark.parametrize("frames", [1, 2])
+def test_tracksdata_without_candidate_links_keeps_each_detection(frames):
+    """No edges (one frame, or objects beyond distance_threshold_um): the solver has
+    nothing to solve; each detection becomes its own track instead of an error."""
+    from biahub.track import run_tracksdata
+
+    labels = np.zeros((frames, 64, 64), dtype=np.int32)
+    labels[0, 5:10, 5:10] = 1
+    labels[0, 50:55, 50:55] = 2
+    if frames == 2:
+        labels[1, 30:35, 5:10] = 1  # 25 px away; threshold below is 5 px
+    config = TracksdataConfig(distance_threshold_um=5.0)
+
+    tracked, tracks = run_tracksdata(labels, config, pixel_size=1.0)
+
+    assert tracked.shape == labels.shape
+    assert len(tracks) == int((labels > 0).any(axis=(1, 2)).sum() + 1)  # one row per detection
+    assert tracks.track_id.is_unique
+    assert (tracks.parent_track_id == -1).all()
+    assert {"track_id", "t", "y", "x", "parent_track_id"} <= set(tracks.columns)
+    for row in tracks.itertuples():
+        assert tracked[row.t, int(round(row.y)), int(round(row.x))] == row.track_id

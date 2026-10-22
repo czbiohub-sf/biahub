@@ -39,6 +39,22 @@ def division_events(tracks: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["t", "y", "x"])
 
 
+def cells_per_frame(tracks: pd.DataFrame, n_frames: int) -> float:
+    """Return detections per frame over the whole movie, empty frames included."""
+    return len(tracks) / n_frames
+
+
+def n_frames(position: Path, tracks: pd.DataFrame) -> int:
+    """Return the movie length from the output position's labels, else from the tracks."""
+    try:
+        from iohub import open_ome_zarr
+
+        with open_ome_zarr(position, mode="r") as ds:
+            return int(ds.data.shape[0])
+    except Exception:
+        return int(tracks.t.max()) + 1
+
+
 def latest(paths: list[str]) -> str:
     """Return the newest annotation version (natural order: v10 after v9)."""
     return natsorted(paths)[-1]
@@ -92,7 +108,7 @@ def main():
                 "fov": fov,
                 "tracks": tracks.track_id.nunique(),
                 "divisions": len(events),
-                "cells_per_frame": tracks.groupby("t").size().mean(),
+                "cells_per_frame": cells_per_frame(tracks, n_frames(csv.parent, tracks)),
                 "track_length": tracks.groupby("track_id").size().mean(),
             }
             if args.gt:

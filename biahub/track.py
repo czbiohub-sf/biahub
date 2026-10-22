@@ -475,6 +475,13 @@ def _solve_tracksdata(labels: np.ndarray, config: TracksdataConfig, pixel_size: 
         distance_threshold=config.distance_threshold_um / pixel_size,
         n_neighbors=config.n_neighbors,
     ).add_edges(graph)
+    if graph.num_edges() == 0:
+        # No candidate links (one frame, or objects beyond distance_threshold_um): the
+        # solver refuses an edgeless graph, so keep each detection as its own track.
+        solution = td.DEFAULT_ATTR_KEYS.SOLUTION
+        graph.add_node_attr_key(solution, pl.Boolean, default_value=True)
+        graph.add_edge_attr_key(solution, pl.Boolean, default_value=False)
+        return graph
     td.edges.IoUEdgeAttr(output_key="iou").add_edge_attrs(graph)
     edge_weight = (
         -td.EdgeAttr("iou")
