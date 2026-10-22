@@ -634,3 +634,41 @@ def test_hoct_real_solver_path_with_an_override():
         labels, image, HoctConfig(solver={"timeout": 600.0}), pixel_size=0.1133
     )
     _check_one_division(tracks, tracked)
+
+
+def _one_link_movie():
+    labels = np.zeros((2, 64, 64), dtype=np.int32)
+    labels[0, 28:36, 28:36] = 1
+    labels[1, 29:37, 29:37] = 1
+    return labels
+
+
+def test_hoct_with_a_single_candidate_link_skips_inference(monkeypatch):
+    """HOCT 0.3.0's inference skips batches with <= 1 edge and then fails on none."""
+    import hoct
+
+    from biahub.track import run_hoct
+
+    def no_model(*args, **kw):
+        raise AssertionError("HOCT inference must not run on a single-edge graph")
+
+    monkeypatch.setattr(hoct, "load_model", no_model)
+    monkeypatch.setattr(hoct, "predict", no_model)
+    labels = _one_link_movie()
+
+    tracked, tracks = run_hoct(labels, labels.astype(np.float32), HoctConfig(), pixel_size=1.0)
+
+    assert tracks.track_id.nunique() == 1 and tracks.t.tolist() == [0, 1]
+    assert (tracks.parent_track_id == -1).all()
+    assert set(np.unique(tracked[labels > 0])) == {tracks.track_id.iloc[0]}
+
+
+@pytest.mark.skipif(not _hoct_weights_cached(), reason="HOCT weights not downloaded")
+def test_hoct_real_model_on_a_single_candidate_link():
+    from biahub.track import run_hoct
+
+    labels = _one_link_movie()
+    tracked, tracks = run_hoct(
+        labels, labels.astype(np.float32), HoctConfig(), pixel_size=0.1133
+    )
+    assert tracks.track_id.nunique() == 1 and len(tracks) == 2

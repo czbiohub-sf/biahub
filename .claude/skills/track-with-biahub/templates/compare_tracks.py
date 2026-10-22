@@ -107,6 +107,7 @@ def main():
                 "run": run.parent.name if run.name == "track.zarr" else run.name,
                 "fov": fov,
                 "tracks": tracks.track_id.nunique(),
+                "detections": len(tracks),
                 "divisions": len(events),
                 "cells_per_frame": cells_per_frame(tracks, n_frames(csv.parent, tracks)),
                 "track_length": tracks.groupby("track_id").size().mean(),
@@ -134,9 +135,11 @@ def summarize(d: pd.DataFrame) -> pd.DataFrame:
         fovs=("fov", "size"),
         tracks=("tracks", "sum"),
         divisions=("divisions", "sum"),
+        detections=("detections", "sum"),
         cells_per_frame=("cells_per_frame", "mean"),
-        track_length=("track_length", "mean"),
     )
+    # Mean length of the run's tracks: weighted by each FOV's track count.
+    out["track_length"] = out.detections / out.tracks
     if "matched" in d:
         scored = d.dropna(subset=["matched"]).groupby("run", sort=False)
         matched, predicted = scored.matched.sum(), scored.divisions.sum()

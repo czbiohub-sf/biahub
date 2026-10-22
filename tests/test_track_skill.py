@@ -50,6 +50,7 @@ def test_summary_with_scored_and_unscored_runs(compare):
                 "run": "a",
                 "fov": "A_1_0",
                 "tracks": 5,
+                "detections": 10,
                 "divisions": 4,
                 "cells_per_frame": 3.0,
                 "track_length": 2.0,
@@ -60,6 +61,7 @@ def test_summary_with_scored_and_unscored_runs(compare):
                 "run": "b",
                 "fov": "B_1_0",
                 "tracks": 5,
+                "detections": 10,
                 "divisions": 2,
                 "cells_per_frame": 3.0,
                 "track_length": 2.0,
@@ -120,3 +122,29 @@ def test_view_runs_gives_every_run_four_layers():
     assert len(layers_empty) == len(layers_full) == module.LAYERS_PER_RUN == 4
     assert [kind for kind, _, _ in layers_full] == ["image", "labels", "tracks", "points"]
     assert [kind for kind, _, _ in layers_empty] == ["image", "labels", "points", "points"]
+
+
+def test_track_length_is_weighted_by_track_count(compare):
+    import pandas as pd
+
+    rows = pd.DataFrame(
+        [
+            {
+                "run": "a",
+                "fov": "1",
+                "tracks": 1,
+                "detections": 100,
+                "divisions": 0,
+                "cells_per_frame": 1.0,
+            },
+            {
+                "run": "a",
+                "fov": "2",
+                "tracks": 9,
+                "detections": 90,
+                "divisions": 0,
+                "cells_per_frame": 1.0,
+            },
+        ]
+    )
+    assert compare.summarize(rows).loc["a", "track_length"] == pytest.approx(19.0)

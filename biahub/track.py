@@ -462,18 +462,19 @@ def _num_threads() -> int:
     return os.cpu_count() or 1
 
 
-def _select_every_detection(graph):
-    """Mark every node selected and no edge: each detection becomes its own track.
+def _select_every_detection(graph, keep_edges: bool = False):
+    """Mark every node selected: each detection becomes its own track.
 
     Used when a candidate graph has no edges (one frame, or objects farther apart than
-    the distance threshold), which the ILP solvers refuse.
+    the distance threshold), which the ILP solvers refuse. ``keep_edges`` also selects
+    the edges, for a graph whose single edge is the only possible link.
     """
     import polars as pl
     import tracksdata as td
 
     solution = td.DEFAULT_ATTR_KEYS.SOLUTION
     graph.add_node_attr_key(solution, pl.Boolean, default_value=True)
-    graph.add_edge_attr_key(solution, pl.Boolean, default_value=False)
+    graph.add_edge_attr_key(solution, pl.Boolean, default_value=keep_edges)
     return graph
 
 
@@ -672,8 +673,12 @@ def run_hoct(
         n_neighbors=config.n_neighbors,
         delta_t=config.max_delta_t,
     )
-    if graph.num_edges() == 0:
-        return _solution_to_tracks(_select_every_detection(graph), labels.shape)
+    # HOCT 0.3.0's inference skips batches with at most one edge and then fails on an
+    # empty prediction list, so sparse graphs are resolved here: no edge leaves each
+    # detection on its own, a single edge is the only possible link.
+    if graph.num_edges() <= 1:
+        selected = _select_every_detection(graph, keep_edges=graph.num_edges() == 1)
+        return _solution_to_tracks(selected, labels.shape)
 
     solver_config = hoct_solver_config(config)
     device = "cuda" if torch.cuda.is_available() else "cpu"
