@@ -1,0 +1,245 @@
+# Base [dca.*] block for A549 live-cell timelapse plates imaged on Mantis v2 and processed by
+# biahub. `biahub dca-finalize` resolves it against one metadata row per FOV: the per-well
+# columns of the metadata table plus the `store_*` facts read from the store.
+
+[dca.study]
+source = "Chan Zuckerberg Biohub San Francisco"
+dataset_name = { column = "store_dataset_name" }
+description = """
+Live A549 human lung adenocarcinoma cells (ATCC CCL-185) carrying a fluorescent reporter, \
+imaged in 3D over time on Mantis, the correlative label-free and light-sheet fluorescence \
+microscope at CZ Biohub San Francisco. Each field of view pairs label-free channels (a 3D \
+phase volume reconstructed with waveorder, plus brightfield) with the acquired fluorescence \
+reporter and virtual-stain predictions of the nucleus and cell membrane. Processed with the \
+biahub pipeline."""
+study_type = ["TimeLapse", "FourDPlus", "SPIM"]
+year_imaged = { column = "dataset_year" }
+license = "CC-BY-4.0"
+release_date = { column = "store_name_date" }
+
+[[dca.study.additional_metadata]]
+name = "Infection condition"
+value = { column = "perturbation" }
+
+[[dca.study.additional_metadata]]
+name = "Hours post perturbation"
+value = { column = "hours_post_perturbation" }
+
+[dca.biosample]
+group_id = { column = "store_group_id" }
+tissue_type = "cell line"
+organism = [{ ontology_term_id = "NCBITaxon:9606", label = "Homo sapiens" }]
+tissue = [{ ontology_term_id = "CVCL:0023", label = "A549" }]
+disease = [{ ontology_term_id = "MONDO:0005061", label = "lung adenocarcinoma" }]
+development_stage = [{ ontology_term_id = "HsapDv:0000258", label = "adult stage" }]
+cell_line_name = "A549"
+cell_line_id = "CVCL:0023"
+
+[[dca.biosample.additional_metadata]]
+name = "Parental line catalogue number"
+value = "ATCC CCL-185"
+
+[dca.specimen]
+specimen_state = "live"
+preparation_method = [
+  { ontology_term_id = "FBbi:00100027", label = "adherent live cells" },
+]
+
+[dca.study_component]
+assay = [{ ontology_term_id = "EFO:0002909", label = "microscopy assay" }]
+imaging_method = [
+  { ontology_term_id = "FBbi:00000369", label = "selective plane illumination fluorescence microscopy" },
+  { ontology_term_id = "FBbi:00000243", label = "bright-field microscopy" },
+]
+
+[dca.perturbation]
+control_class = { column = "perturbation", map = { mock = "negcon", uninfected = "negcon", DENV = "treatment", ZIKV = "treatment" } }
+
+[dca.perturbation.definition]
+perturbation_id = { column = "perturbation" }
+name = { column = "perturbation" }
+modality = "biological"
+
+[dca.perturbation.concentration]
+text = { column = "moi" }
+
+[dca.acquisition]
+acquisition_date = { column = "store_name_date" }
+time_increment_s = { column = "store_time_increment_s" }
+
+[dca.acquisition.microscope]
+model = "Mantis v2"
+manufacturer = "Chan Zuckerberg Biohub San Francisco"
+modality = "correlative label-free and light-sheet fluorescence microscopy"
+
+[dca.image_data]
+processing_variant = "phase-reconstructed, virtual-stained and assembled"
+
+# The catalogue is keyed by each channel's label in the plate, and `name` repeats that label:
+# biahub does not rename channels. Assembled plates carry the names the reconstruct skill's
+# rename step gives (BF, raw ..., *_prediction); a plate assembled without it keeps the
+# acquisition and virtual-stain names (BF - Oblique, nuclei, membrane), and channels named at
+# the microscope may drop the "raw " prefix. Entries for channels a plate lacks are unused.
+[dca.channels.BF]
+name = "BF"
+channel_type = "labelfree"
+description = "Transmitted-light brightfield volume."
+
+[dca.channels."raw GFP EX488 EM525-45"]
+name = "raw GFP EX488 EM525-45"
+channel_type = "fluorescence"
+description = "Acquired GFP fluorescence of the per-experiment reporter."
+biological_annotation = { marker = { column = "marker" } }
+
+# The literal target applies to infection-sensor plates. A plate whose 561 nm channel carries
+# another reporter overrides it in the confirmed file.
+[dca.channels."raw mCherry EX561 EM600-37"]
+name = "raw mCherry EX561 EM600-37"
+channel_type = "fluorescence"
+description = "Acquired mCherry fluorescence of the viral-infection biosensor."
+biological_annotation = { biological_target = "viral infection reporter" }
+
+[dca.channels.Phase3D]
+name = "Phase3D"
+channel_type = "labelfree"
+description = "3D phase volume reconstructed from transmitted light with waveorder."
+
+[dca.channels.nuclei_prediction]
+name = "nuclei_prediction"
+channel_type = "predicted"
+description = "Virtual-stain prediction of the nucleus (ML, not acquired)."
+biological_annotation = { biological_target = "nucleus" }
+
+[dca.channels.membrane_prediction]
+name = "membrane_prediction"
+channel_type = "predicted"
+description = "Virtual-stain prediction of the plasma membrane (ML, not acquired)."
+biological_annotation = { biological_target = "plasma membrane" }
+
+[dca.channels."BF - Oblique"]
+name = "BF - Oblique"
+channel_type = "labelfree"
+description = "Transmitted-light brightfield volume."
+
+[dca.channels."GFP EX488 EM525-45"]
+name = "GFP EX488 EM525-45"
+channel_type = "fluorescence"
+description = "Acquired GFP fluorescence of the per-experiment reporter."
+biological_annotation = { marker = { column = "marker" } }
+
+[dca.channels."mCherry EX561 EM600-37"]
+name = "mCherry EX561 EM600-37"
+channel_type = "fluorescence"
+description = "Acquired mCherry fluorescence of the viral-infection biosensor."
+biological_annotation = { biological_target = "viral infection reporter" }
+
+[dca.channels.nuclei]
+name = "nuclei"
+channel_type = "predicted"
+description = "Virtual-stain prediction of the nucleus (ML, not acquired)."
+biological_annotation = { biological_target = "nucleus" }
+
+[dca.channels.membrane]
+name = "membrane"
+channel_type = "predicted"
+description = "Virtual-stain prediction of the plasma membrane (ML, not acquired)."
+biological_annotation = { biological_target = "plasma membrane" }
+
+[dca.provenance.study.dataset_name]
+source_kind = "original_data"
+[dca.provenance.study.source]
+source_kind = "agent"
+[dca.provenance.study.source.citation]
+source_url = "https://raw.githubusercontent.com/czbiohub-sf/biahub/0f14f45d2f045a53cbf041a4e16682bd0f14c321/LICENSE"
+quote = "Copyright (c) 2023 Chan Zuckerberg Biohub"
+match_status = "exact"
+[dca.provenance.study.description]
+source_kind = "agent"
+[dca.provenance.study.description.citation]
+source_url = "https://raw.githubusercontent.com/czbiohub-sf/biahub/0f14f45d2f045a53cbf041a4e16682bd0f14c321/README.md"
+quote = "`biahub` was originally developed to reconstruct data acquired on the [mantis](https://doi.org/10.1093/pnasnexus/pgae323) microscope"
+match_status = "exact"
+[dca.provenance.study.study_type]
+source_kind = "human"
+[dca.provenance.study.license]
+source_kind = "human"
+# placeholder: date parsed from the plate name; confirm the real release date
+# (override in the confirmed file with source_kind = "human").
+[dca.provenance.study.release_date]
+source_kind = "original_data"
+[dca.provenance.biosample.group_id]
+source_kind = "original_data"
+[dca.provenance.biosample.tissue_type]
+source_kind = "human"
+[dca.provenance.biosample.organism]
+source_kind = "agent"
+[dca.provenance.biosample.organism.citation]
+source_url = "https://www.cellosaurus.org/CVCL_0023.txt"
+quote = "OX   NCBI_TaxID=9606; ! Homo sapiens (Human)"
+match_status = "exact"
+[dca.provenance.biosample.tissue]
+source_kind = "agent"
+[dca.provenance.biosample.tissue.citation]
+source_url = "https://www.cellosaurus.org/CVCL_0023.txt"
+quote = "SY   A 549; A549; NCI-A549; A549/ATCC; A549 ATCC; A549ATCC; hA549"
+match_status = "exact"
+[dca.provenance.biosample.disease]
+source_kind = "agent"
+[dca.provenance.biosample.disease.citation]
+source_url = "https://www.cellosaurus.org/CVCL_0023.txt"
+quote = "DI   NCIt; C3512; Lung adenocarcinoma"
+match_status = "exact"
+[dca.provenance.biosample.development_stage]
+source_kind = "agent"
+[dca.provenance.biosample.development_stage.citation]
+source_url = "https://www.cellosaurus.org/CVCL_0023.txt"
+quote = "AG   58Y"
+match_status = "exact"
+[dca.provenance.biosample.cell_line_name]
+source_kind = "agent"
+[dca.provenance.biosample.cell_line_name.citation]
+source_url = "https://www.cellosaurus.org/CVCL_0023.txt"
+quote = "SY   A 549; A549; NCI-A549; A549/ATCC; A549 ATCC; A549ATCC; hA549"
+match_status = "exact"
+[dca.provenance.biosample.cell_line_id]
+source_kind = "agent"
+[dca.provenance.biosample.cell_line_id.citation]
+source_url = "https://www.cellosaurus.org/CVCL_0023.txt"
+quote = "AC   CVCL_0023"
+match_status = "exact"
+[dca.provenance."biosample.additional_metadata.Parental line catalogue number"]
+source_kind = "agent"
+[dca.provenance."biosample.additional_metadata.Parental line catalogue number".citation]
+source_url = "https://www.cellosaurus.org/CVCL_0023.txt"
+quote = "DR   ATCC; CCL-185"
+match_status = "exact"
+[dca.provenance.specimen.specimen_state]
+source_kind = "human"
+[dca.provenance.specimen.preparation_method]
+source_kind = "human"
+[dca.provenance.study_component.assay]
+source_kind = "human"
+[dca.provenance.study_component.imaging_method]
+source_kind = "agent"
+[dca.provenance.study_component.imaging_method.citation]
+source_url = "https://raw.githubusercontent.com/czbiohub-sf/biahub/0f14f45d2f045a53cbf041a4e16682bd0f14c321/README.md"
+quote = "moving light-sheet onto the label-free reference"
+match_status = "exact"
+[dca.provenance.acquisition.time_increment_s]
+source_kind = "original_data"
+[dca.provenance.acquisition.microscope]
+source_kind = "agent"
+[dca.provenance.acquisition.microscope.citation]
+source_url = "https://raw.githubusercontent.com/czbiohub-sf/biahub/0f14f45d2f045a53cbf041a4e16682bd0f14c321/README.md"
+quote = "`biahub` was originally developed to reconstruct data acquired on the [mantis](https://doi.org/10.1093/pnasnexus/pgae323) microscope"
+match_status = "exact"
+[dca.provenance.image_data.processing_variant]
+source_kind = "agent"
+[dca.provenance.image_data.processing_variant.citation]
+source_url = "https://raw.githubusercontent.com/czbiohub-sf/biahub/0f14f45d2f045a53cbf041a4e16682bd0f14c321/README.md"
+quote = "`5-assemble` concatenates the deskew, reconstruct, and virtual-stain channels into one plate"
+match_status = "exact"
+[dca.provenance.study.year_imaged]
+source_kind = "original_data"
+[dca.provenance.acquisition.acquisition_date]
+source_kind = "original_data"
