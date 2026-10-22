@@ -22,13 +22,14 @@ nextflow.enable.dsl = 2
 //  all the inits before any of the runs. See the INIT PHASE comment in the
 //  workflow body for why that is possible and what it buys.
 //
-//  Flat-field → deskew → reconstruct → virtual-stain → assemble → track → QC is
-//  the full chain: assemble concatenates the deskew/reconstruct/virtual-stain
-//  channels into one plate, track reads that assembled plate as its single
-//  input, and QC reads the finished stores. Follow the chaining below for the
-//  pattern.
+//  Flat-field → deskew → reconstruct → virtual-stain → assemble → track → QC →
+//  DCA finalize is the full chain: assemble concatenates the deskew/reconstruct/
+//  virtual-stain channels into one plate, track reads that assembled plate as its
+//  single input, QC reads the finished stores, and DCA finalize writes the DCA
+//  metadata onto the assembled plate from its QC statistics. Follow the chaining
+//  below for the pattern.
 //
-//  The last three are OPTIONAL and selected by whether their config is given, so
+//  The last four are OPTIONAL and selected by whether their config is given, so
 //  a run performs the prefix it asks for: A549 wants assemble + track + QC, a
 //  neuromast run wants assemble + QC and no tracking (issue #306). A skipped step
 //  never renumbers the directories of the ones around it.
@@ -50,6 +51,9 @@ params.max_positions = 0
 // One self-contained file per store, beside that family's other step configs.
 params.qc_config = null
 params.qc_track_config = null
+// DCA finalize, off by default: --dca_config nextflow/configs/<family>/dca_finalize.yml
+// writes the DCA metadata onto the assembled store and validates it, after QC.
+params.dca_config = null
 
 include { collect_positions; dataset_name; check_environment } from './modules/common'
 include { flat_field_init_wf; flat_field_run_wf } from './modules/flat_field'
@@ -59,6 +63,7 @@ include { virtual_stain_init_wf; virtual_stain_run_wf } from './modules/virtual_
 include { assemble_init_wf; assemble_run_wf } from './modules/assembly'
 include { track_init_wf; track_run_wf } from './modules/tracking'
 include { qc_plan_wf; qc_compute_wf; qc_report_wf; qc_report_spec } from './modules/qc'
+include { dca_finalize_wf } from './modules/dca'
 include { notify_step; notify_run_start; notify_run_end } from './modules/notify'
 include { cleanup_decision; cleanup_targets; cleanup_intermediates_wf } from './modules/cleanup'
 
@@ -131,6 +136,7 @@ workflow {
     def qc_image_on = params.qc_config as boolean
     def qc_track_on = params.qc_track_config as boolean
     def qc_on       = qc_image_on || qc_track_on
+    def dca_on      = params.dca_config as boolean
 
     // A step cannot outlive the step whose output it reads. Refuse the
     // combination at launch, naming the config to add or the one to drop, rather
@@ -143,6 +149,9 @@ workflow {
     }
     if (qc_track_on && !track_on) {
         error "--qc_track_config needs --track_config: it QCs the tracking store."
+    }
+    if (dca_on && !qc_image_on) {
+        error "--dca_config needs --qc_config: finalize reads the QC stage-5 statistics."
     }
 
     // Whether this run deletes its intermediates once it finishes. Resolved now
@@ -159,9 +168,13 @@ workflow {
         workflow.session.config.cleanup = true
     }
 
-    // Tasks call `biahub`/`viscy`/`imaging-qc` bare, so fail now if the env isn't
-    // activated. `imaging-qc` is only required when QC is actually wired in.
-    check_environment(qc_on ? ['biahub', 'viscy', 'imaging-qc'] : ['biahub', 'viscy'])
+    // Tasks call `biahub`/`viscy`/`imaging-qc`/`dca-validate` bare, so fail now if
+    // the env isn't activated. `imaging-qc` and `dca-validate` are only required
+    // when their step is actually wired in.
+    def tools = ['biahub', 'viscy']
+    if (qc_on)  tools << 'imaging-qc'
+    if (dca_on) tools << 'dca-validate'
+    check_environment(tools)
 
     def ds  = dataset_name()
     def out = params.output
@@ -401,6 +414,18 @@ workflow {
         qc_report = qc_report_wf(qc.done, spec, qc_report_dir)
     }
 
+    // ----- DCA finalize -----------------------------------------------------
+    // Gated on the QC report, the one signal that says every QC'd store's stage
+    // tables are final; finalize reads the assembled store's. Also gated on
+    // tracking, which reads the assembled plate while image QC runs: without
+    // --qc_track_config the report does not wait for it, and finalize rewrites
+    // every position's zarr.json. The validator's report lands next to the
+    // plate as <stem>.dca-validate.json.
+    if (dca_on) {
+        def dca_gate = track_on ? qc_report.done.mix(track_done.done) : qc_report.done
+        dca = dca_finalize_wf([assemble_output], params.dca_config, dca_gate)
+    }
+
     // ----- Cleanup of intermediates (--cleanup_intermediates) ---------------
     // Once the LAST step has finished, delete what only existed to feed the
     // assembled plate: the flat-field, deskew, reconstruct and virtual-stain step
@@ -433,6 +458,7 @@ workflow {
         def final_signals = [assemble_done.done]
         if (track_on) final_signals << track_done.done
         if (qc_on)    final_signals << qc_report.done
+        if (dca_on)   final_signals << dca.done
         final_gate = channel.empty()
         final_signals.each { signal -> final_gate = final_gate.mix(signal) }
 
@@ -478,6 +504,7 @@ workflow {
     if (assemble_on) step_events << [label: 'assemble', done: assemble_done.done, output: assemble_output]
     if (track_on)    step_events << [label: 'track',    done: track_done.done,    output: track_output]
     if (qc_on)       step_events << [label: 'QC',       done: qc_report.done,     output: qc_report_dir]
+    if (dca_on)      step_events << [label: 'DCA finalize', done: dca.done,       output: assemble_output]
     if (cleanup_on)  step_events << [label: 'cleanup intermediates', done: cleanup_run.done, output: cleanup_record]
 
     steps = step_events.collect { event -> event.label }
