@@ -44,6 +44,6 @@ tracksdata_config:
   node_weight: -2.0
   appearance_weight: 5.0
   disappearance_weight: 5.0
-  division_weight: 1.0             # raise to allow more divisions
+  division_weight: 1.0             # a cost: lower it to allow more divisions
   border_margin_um: 6.80
   border_appearance_weight: -1.0

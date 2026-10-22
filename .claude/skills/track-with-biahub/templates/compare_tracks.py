@@ -121,7 +121,14 @@ def main():
     if not rows:
         raise SystemExit("No tracks_*.csv found under the given runs.")
 
-    d = pd.DataFrame(rows)
+    out = summarize(pd.DataFrame(rows))
+    print(out.round(3).to_string())
+    print("\nper FOV:")
+    print(pd.DataFrame(rows).round(2).to_string(index=False))
+
+
+def summarize(d: pd.DataFrame) -> pd.DataFrame:
+    """Return per-run totals; division scores for runs with annotated FOVs (NaN otherwise)."""
     g = d.groupby("run", sort=False)
     out = g.agg(
         fovs=("fov", "size"),
@@ -132,21 +139,18 @@ def main():
     )
     if "matched" in d:
         scored = d.dropna(subset=["matched"]).groupby("run", sort=False)
+        matched, predicted = scored.matched.sum(), scored.divisions.sum()
+        annotated = scored.gt_divisions.sum()
         out["gt_fovs"] = scored.size()
-        out["div_precision"] = scored.matched.sum() / scored.divisions.sum()
-        out["div_recall"] = scored.matched.sum() / scored.gt_divisions.sum()
-        out["div_f1"] = [
-            division_f1(m, p, a)
-            for m, p, a in zip(
-                scored.matched.sum(),
-                scored.divisions.sum(),
-                scored.gt_divisions.sum(),
-                strict=True,
-            )
-        ]
-    print(out.round(3).to_string())
-    print("\nper FOV:")
-    print(d.round(2).to_string(index=False))
+        out["div_precision"] = matched / predicted
+        out["div_recall"] = matched / annotated
+        out["div_f1"] = pd.Series(
+            {
+                run: division_f1(matched[run], predicted[run], annotated[run])
+                for run in matched.index
+            }
+        )
+    return out
 
 
 if __name__ == "__main__":
