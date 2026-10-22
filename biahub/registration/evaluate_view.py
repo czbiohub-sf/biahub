@@ -5,7 +5,6 @@ The reference shows green and the moving volume magenta, so where they agree is 
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -294,195 +293,68 @@ def animate_evaluation(
 
 # --- the visual check in napari --------------------------------------------------------
 
-VERDICTS = ("good", "needs work", "bad")
 
-# Residual vectors in napari are drawn this many times their length.
-VECTOR_EXAGGERATION = 10
-
-
-@dataclass
-class ManualCheck:
-    """A person's judgement of a registration in napari, with any pairs they clicked.
-
-    `transform` names the transform judged (and the view the moving clicks were made on);
-    `landmarks` (moving, reference) are clicked pairs, ground truth for `point_residuals`.
-    """
-
-    verdict: str | None
-    transform: str | None
-    notes: str = ""
-    landmarks: tuple | None = None
-
-    def to_dict(self) -> dict:
-        marks = None
-        if self.landmarks is not None:
-            mov, ref = self.landmarks
-            marks = {
-                "moving_vox": mov.points_vox.tolist(),
-                "reference_vox": ref.points_vox.tolist(),
-                "moving_um": list(mov.voxel_um),
-                "reference_um": list(ref.voxel_um),
-                "pair_ids": list(mov.pair_ids),
-            }
-        return {
-            "verdict": self.verdict,
-            "transform": self.transform,
-            "notes": self.notes,
-            "landmarks": marks,
-        }
-
-
-def clicked_landmarks(
-    moving_clicks, reference_clicks, transform, mov_um, ref_um, downsample: int
-) -> tuple:
-    """Return (moving, reference) `Landmarks` from pairs clicked on the views.
-
-    Both sets were clicked on the reference grid as displayed (yx shrunk by
-    `downsample`); click k in one set is the partner of click k in the other. The moving
-    clicks were made on the moving volume warped by `transform`, so they map back through
-    its inverse to where the structures are in the moving volume.
-    """
-    from biahub.registration.evaluate import Landmarks
-
-    moving_clicks = np.asarray(moving_clicks, float).reshape(-1, 3)
-    reference_clicks = np.asarray(reference_clicks, float).reshape(-1, 3)
-    if len(moving_clicks) != len(reference_clicks):
-        raise ValueError(
-            f"clicks come in pairs: {len(moving_clicks)} on the moving view, "
-            f"{len(reference_clicks)} on the reference"
-        )
-
-    def to_full(points):
-        full = points.copy()
-        full[:, 1:] = downsample * full[:, 1:] + (downsample - 1) / 2
-        return full
-
-    mov_points = transform.invert().apply_points(to_full(moving_clicks))
-    ids = list(range(len(moving_clicks)))
-    return (
-        Landmarks(mov_points, tuple(mov_um), "manual", ids),
-        Landmarks(to_full(reference_clicks), tuple(ref_um), "manual", list(ids)),
-    )
-
-
-def _residual_vectors(measure: dict | None, ref_um, downsample: int) -> np.ndarray:
-    """Return napari vectors (N, 2, 3) in view pixels: position and exaggerated residual."""
-    if measure is None or not measure.get("residuals", {}).get("position_um"):
-        return np.zeros((0, 2, 3))
-    um = np.asarray(ref_um, float)
-    position = np.asarray(measure["residuals"]["position_um"]) / um
-    position[:, 1:] = (position[:, 1:] - (downsample - 1) / 2) / downsample
-    step = np.asarray(measure["residuals"]["diff_um"]) / um
-    step[:, 1:] /= downsample
-    return np.stack([position, step * VECTOR_EXAGGERATION], axis=1)
-
-
-def _build_check(
-    mov, ref, transforms: dict, ref_um, record=None, full_resolution=False, show=True
-):
-    """Return (viewer, state) for `visual_check`; `state` fills in as the person answers."""
+def _build_check(mov, ref, transform, ref_um, phase=None, full_resolution=False, show=True):
+    """Return the napari viewer `visual_check` opens."""
     try:
         import napari
-
-        from magicgui import magicgui
     except ImportError as error:
         raise ImportError(
             "the visual check needs napari: pip install 'biahub[gui]'"
         ) from error
-    from biahub.registration.evaluate import display_volumes
+    from biahub.registration.evaluate import _shrink_yx, display_volumes
+
+    if full_resolution:
+        reference = np.nan_to_num(np.asarray(ref, np.float32))
+        moving = np.nan_to_num(np.asarray(mov, np.float32))
+        registered = transform.apply(moving, reference=reference)
+        original = Transform.identity(3).apply(moving, reference=reference)
+        downsample = 1
+    else:
+        registered, reference, downsample = display_volumes(transform, mov, ref)
+        original, _ref, _factor = display_volumes(Transform.identity(3), mov, ref)
+    scale = (ref_um[0], ref_um[1] * downsample, ref_um[2] * downsample)
 
     viewer = napari.Viewer(title="registration check", show=show)
-    names = list(transforms)
-    downsample = 1
-    for k, (name, transform) in enumerate(transforms.items()):
-        if full_resolution:
-            warped = transform.apply(
-                np.asarray(mov, np.float32), reference=np.asarray(ref, np.float32)
-            )
-            reference = np.asarray(ref, np.float32)
-        else:
-            warped, reference, downsample = display_volumes(transform, mov, ref)
-        if k == 0:
-            scale = (ref_um[0], ref_um[1] * downsample, ref_um[2] * downsample)
-            viewer.add_image(
-                reference, name="reference", colormap="green", blending="additive", scale=scale
-            )
+    if phase is not None:
+        phase = np.nan_to_num(np.asarray(phase, np.float32))
         viewer.add_image(
-            warped,
-            name=f"moving: {name}",
-            colormap="magenta",
-            blending="additive",
+            phase if downsample == 1 else _shrink_yx(phase, downsample),
+            name="phase",
+            colormap="gray",
             scale=scale,
-            visible=(k == len(names) - 1),
         )
-    if record is not None:
-        for key, color in (("tiles", "yellow"), ("points", "cyan")):
-            for label, measures in (
-                ("registered", record.__dict__),
-                ("unregistered", record.baseline),
-            ):
-                vectors = _residual_vectors(measures.get(key), ref_um, downsample)
-                if len(vectors):
-                    viewer.add_vectors(
-                        vectors,
-                        name=f"{key} residuals ({label}, x{VECTOR_EXAGGERATION})",
-                        edge_color=color,
-                        edge_width=2,
-                        scale=scale,
-                        visible=label == "registered",
-                    )
-    viewer.add_points(ndim=3, name="clicks: moving", face_color="magenta", size=8, scale=scale)
-    viewer.add_points(
-        ndim=3, name="clicks: reference", face_color="green", size=8, scale=scale
+    viewer.add_image(
+        reference, name="reference", colormap="green", blending="additive", scale=scale
     )
-
-    state = {"verdict": None, "transform": names[-1], "notes": "", "downsample": downsample}
-
-    @magicgui(
-        call_button="record verdict",
-        transform={"choices": names},
-        verdict={"choices": list(VERDICTS)},
+    viewer.add_image(
+        original,
+        name="moving (original)",
+        colormap="magenta",
+        blending="additive",
+        scale=scale,
+        visible=False,
     )
-    def verdict_panel(transform: str = names[-1], verdict: str = "good", notes: str = ""):
-        state.update(verdict=verdict, transform=transform, notes=notes)
-        viewer.status = f"recorded: {transform} -- {verdict}"
+    viewer.add_image(
+        registered,
+        name="moving (registered)",
+        colormap="magenta",
+        blending="additive",
+        scale=scale,
+    )
+    return viewer
 
-    viewer.window.add_dock_widget(verdict_panel, name="verdict", area="right")
-    return viewer, state
 
+def visual_check(mov, ref, transform, ref_um, phase=None, full_resolution=False) -> None:
+    """Open napari to look at a registration; returns when the window is closed.
 
-def visual_check(
-    mov,
-    ref,
-    transforms: dict,
-    mov_um: tuple,
-    ref_um: tuple,
-    record: Evaluation | None = None,
-    full_resolution: bool = False,
-) -> ManualCheck:
-    """Open napari for a person to judge a registration; return their `ManualCheck`.
-
-    The reference shows green and each transform's warped moving volume magenta (one at a
-    time; toggle the layers), with the record's residuals as vectors when given. In the
-    panel: which transform, a verdict, notes. To add ground truth, click the same
-    structure on "clicks: moving" (on the judged transform's view) and on "clicks:
-    reference", in the same order. Closing the window returns the check. Views are
-    averaged down in yx unless `full_resolution` (one full warp per transform).
+    The reference shows green and the moving volume magenta, as it was ("moving
+    (original)", hidden at first) and registered (white where they agree); `phase`, on the
+    reference grid, shows grey underneath when given. The judgement is asked afterwards
+    (the registration skill asks whether it is good). Views are averaged down in yx
+    unless `full_resolution` (one full warp).
     """
     import napari
 
-    viewer, state = _build_check(mov, ref, transforms, ref_um, record, full_resolution)
+    _build_check(mov, ref, transform, ref_um, phase, full_resolution)
     napari.run()
-    moving_clicks = viewer.layers["clicks: moving"].data
-    reference_clicks = viewer.layers["clicks: reference"].data
-    landmarks = None
-    if len(moving_clicks) or len(reference_clicks):
-        landmarks = clicked_landmarks(
-            moving_clicks,
-            reference_clicks,
-            transforms[state["transform"]],
-            mov_um,
-            ref_um,
-            state["downsample"],
-        )
-    return ManualCheck(state["verdict"], state["transform"], state["notes"], landmarks)

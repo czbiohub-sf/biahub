@@ -475,68 +475,26 @@ def test_the_zoom_warps_only_its_corner_and_matches_the_full_warp():
 # --- layer 6: the visual check in napari -------------------------------------------------
 
 
-@pytest.mark.parametrize("downsample", [1, 4])
-def test_clicks_on_the_warped_view_map_back_to_the_moving_volume(downsample):
-    # A person clicks a structure on the warped moving view (reference grid, maybe shrunk
-    # for display); as a landmark it must sit where that structure is in the moving volume.
-    from biahub.registration.evaluate_view import clicked_landmarks
-
-    transform = _similarity((1.0, 0.95, 0.95), 2.0, (1.0, -4.0, 6.0))
-    mov_true = np.array([[5.0, 40.0, 60.0], [9.0, 200.0, 130.0], [3.0, 120.0, 220.0]])
-    on_ref_grid = transform.apply_points(mov_true)
-    on_view = on_ref_grid.copy()
-    on_view[:, 1:] = (on_view[:, 1:] - (downsample - 1) / 2) / downsample
-    ref_clicks = on_view + 0.5  # the partner structure, clicked on the reference view
-
-    mov, ref = clicked_landmarks(on_view, ref_clicks, transform, VOX3, VOX3, downsample)
-    np.testing.assert_allclose(mov.points_vox, mov_true, atol=1e-9)
-    assert mov.source == ref.source == "manual"
-    assert mov.pair_ids == ref.pair_ids == [0, 1, 2]
-
-
-def test_unpaired_clicks_are_refused():
-    from biahub.registration.evaluate_view import clicked_landmarks
-
-    with pytest.raises(ValueError, match="pairs"):
-        clicked_landmarks(
-            np.zeros((3, 3)), np.zeros((2, 3)), Transform.identity(3), VOX3, VOX3, 1
-        )
-
-
-def test_a_manual_check_is_plain_data():
-    import json
-
-    from biahub.registration.evaluate import Landmarks
-    from biahub.registration.evaluate_view import ManualCheck
-
-    marks = Landmarks(np.ones((2, 3)), VOX3, "manual", [0, 1])
-    check = ManualCheck(
-        verdict="good", transform="skill", notes="corners fine", landmarks=(marks, marks)
-    )
-    stored = check.to_dict()
-    json.dumps(stored)
-    assert stored["landmarks"]["moving_vox"] == [[1.0, 1.0, 1.0]] * 2
-
-
-def test_the_visual_check_window_has_every_layer_and_the_verdict_panel(monkeypatch):
+@pytest.mark.parametrize("with_phase", [False, True])
+def test_the_visual_check_shows_the_reference_and_the_moving_volume_before_and_after(
+    monkeypatch, with_phase
+):
+    # Kept simple on purpose: the person looks, closes the window, and the skill asks
+    # whether it is good.
     pytest.importorskip("napari")
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     from biahub.registration.evaluate_view import _build_check
 
-    record = _record()
-    ref = _cells(11, shape=(24, 256, 256))
-    mov = _ndi_shift(ref, (1.0, 3.0, -2.0), order=1, mode="nearest")
-    transforms = {
-        "unregistered": Transform.identity(3),
-        "registered": Transform.from_translation([-1.0, -3.0, 2.0]),
-    }
-    viewer, state = _build_check(mov, ref, transforms, VOX3, record, show=False)
+    ref = _cells(14)
+    mov = _ndi_shift(ref, (0.0, 3.0, -2.0), order=1, mode="nearest")
+    phase = ref.max() - ref if with_phase else None
+    transform = Transform.from_translation([0.0, -3.0, 2.0])
+    viewer = _build_check(mov, ref, transform, VOX3, phase=phase, show=False)
     try:
         names = [layer.name for layer in viewer.layers]
-        assert names[:3] == ["reference", "moving: unregistered", "moving: registered"]
-        assert any(n.startswith("tiles residuals (registered") for n in names)
-        assert names[-2:] == ["clicks: moving", "clicks: reference"]
-        assert "verdict" in viewer.window._dock_widgets
-        assert state["verdict"] is None and state["transform"] == "registered"
+        expected = ["reference", "moving (original)", "moving (registered)"]
+        assert names == (["phase"] + expected if with_phase else expected)
+        assert viewer.layers["moving (registered)"].visible
+        assert not viewer.layers["moving (original)"].visible
     finally:
         viewer.close()
