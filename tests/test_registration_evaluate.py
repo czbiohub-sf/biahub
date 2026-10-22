@@ -520,3 +520,20 @@ def test_z_from_too_few_points_falls_back_to_the_crops_and_says_why():
     assert record.points["n_matched"] == 2
     assert record.z_from == "z crops (edges); 2 matched points are too few"
     assert record.z_um == pytest.approx(-2 * 0.2, abs=0.05)
+
+
+# --- review fixes ----------------------------------------------------------------------
+
+
+def test_a_plain_shift_on_points_at_one_depth_is_not_read_as_scale():
+    # Tile positions all sit at one z: the intercept and the z column were the same
+    # direction, and the fit moved part of a shift into a z gradient (a false scale).
+    yx = np.stack(np.meshgrid(np.linspace(100, 1900, 7), np.linspace(100, 1900, 7)), -1)
+    points = np.c_[np.full(49, 33.0), yx.reshape(-1, 2)]
+    shift = np.array([0.0, 2.5, -1.5])
+    r = residual_affine(points, np.tile(shift, (49, 1)), VOX)
+    np.testing.assert_allclose(r["scale_zyx"], [1.0, 1.0, 1.0], atol=1e-9)
+    assert r["rotation_yx_deg"] == pytest.approx(0.0, abs=1e-9)
+    np.testing.assert_allclose(r["shift_um"], shift * VOX, atol=1e-9)
+
+
