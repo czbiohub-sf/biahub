@@ -349,3 +349,30 @@ def test_an_identity_pair_of_equal_shapes_skips_the_warp(monkeypatch):
     assert calls == []
     np.testing.assert_array_equal(pair.warped, warped)
     assert pair.has_data.all()
+
+
+# --- layer 5: views ------------------------------------------------------------------------
+
+
+def test_records_keep_each_residual_where_it_was_measured():
+    # The overlays draw each residual at its place, so the records keep them (in µm, on
+    # the reference grid), not only their statistics.
+    from biahub.registration.evaluate import point_residuals
+
+    shift_zyx = (0.0, 3.0, -2.0)
+    grid = np.stack(np.meshgrid([8, 16], [40, 128, 216], [40, 128, 216], indexing="ij"))
+    mov_marks, ref_marks = _clicked(grid.reshape(3, -1).T.astype(float), shift_zyx, VOX3)
+    points = point_residuals(Transform.identity(3), mov_marks, ref_marks)
+    um = np.asarray(VOX3)
+    np.testing.assert_allclose(points["residuals"]["position_um"], ref_marks.points_vox * um)
+    np.testing.assert_allclose(
+        points["residuals"]["diff_um"], -np.multiply(shift_zyx, um)[None].repeat(18, 0)
+    )
+
+    ref = _cells()
+    mov = _ndi_shift(ref, shift_zyx, order=1, mode="nearest")
+    tiles = tile_residuals(Transform.identity(3), mov, ref, VOX3, tile_px=64)
+    assert len(tiles["residuals"]["position_um"]) == tiles["n_tiles"]
+    np.testing.assert_allclose(
+        np.median(tiles["residuals"]["diff_um"], axis=0), tiles["stats"]["median_zyx_um"]
+    )

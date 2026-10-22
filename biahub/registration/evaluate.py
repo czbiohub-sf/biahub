@@ -112,6 +112,15 @@ def residual_affine(points_vox: ArrayLike, diff_vox: ArrayLike, voxel_um: ArrayL
     }
 
 
+def _residuals(points_vox: ArrayLike, diff_vox: ArrayLike, voxel_um: ArrayLike) -> dict:
+    """Return each residual with where it was measured, in µm (for the overlays)."""
+    um = np.asarray(voxel_um, float)
+    return {
+        "position_um": (np.asarray(points_vox, float).reshape(-1, 3) * um).tolist(),
+        "diff_um": (np.asarray(diff_vox, float).reshape(-1, 3) * um).tolist(),
+    }
+
+
 # --- layer 2: point-based residuals -----------------------------------------------------
 # Landmarks seen in both channels (beads, nuclei, or points a person clicked), mapped through
 # the transform without warping any image, and compared where they pair up.
@@ -189,6 +198,7 @@ def point_residuals(
         "matched_by": matched_by,
         "stats": displacement_stats(diff, ref.voxel_um),
         "affine": residual_affine(ref.points_vox[j], diff, ref.voxel_um),
+        "residuals": _residuals(ref.points_vox[j], diff, ref.voxel_um),
     }
 
 
@@ -407,6 +417,7 @@ def tile_residuals(
         "n_tiles": int(len(points)),
         "stats": displacement_stats(diffs, voxel_um),
         "affine": residual_affine(points, diffs, voxel_um),
+        "residuals": _residuals(points, diffs, voxel_um),
     }
 
 
