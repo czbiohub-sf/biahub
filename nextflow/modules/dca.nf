@@ -24,7 +24,9 @@
 // `bash -e`, and a redirect, unlike a pipe, keeps the command's exit status. The
 // JSON report lands next to the plate as `<stem>.dca-validate.json` either way,
 // so a failing plate keeps the findings that failed it. The stem drops the last
-// suffix only, as finalize's own defaults do (`plate.zarr` -> `plate`).
+// suffix only, as finalize's own defaults do (`plate.zarr` -> `plate`). The task
+// deletes the previous run's report first, so a failed finalize cannot leave a
+// passing report beside the plate.
 
 include { slurm_logs; slurm_log_dir; retry_memory; retry_time } from './common'
 
@@ -45,10 +47,11 @@ process dca_finalize_store {
 
     script:
     def plate = file(zarr)
+    def report = "${plate.parent}/${plate.baseName}.dca-validate.json"
     """
+    rm -f "${report}"
     biahub dca-finalize -i "${zarr}"/*/*/* -c "${config}"
-    dca-validate --spec-version 0.2 --show-warnings --output json "${zarr}" \
-        > "${plate.parent}/${plate.baseName}.dca-validate.json"
+    dca-validate --spec-version 0.2 --show-warnings --output json "${zarr}" > "${report}"
     """
 }
 
@@ -58,7 +61,8 @@ process dca_finalize_store {
 // take:
 //   stores   Groovy list of plate.zarr paths to finalize
 //   config   path to the dca_finalize settings YAML
-//   gate     gating channel: the plates' QC statistics are final
+//   gate     gating channel: the plates' QC statistics are final and no other
+//            step still reads the plates; may mix several producers
 // emit:
 //   done     fires once every plate is finalized and valid
 workflow dca_finalize_wf {
@@ -68,8 +72,9 @@ workflow dca_finalize_wf {
     gate
 
     main:
-    // No init task creates this step's log directory, and SLURM cannot open a
-    // job's --output under a directory that does not exist.
+    // Created at launch on purpose, as qc_report_spec() does (qc.nf): no init
+    // task exists for this step, and SLURM cannot open a job's --output under a
+    // directory that does not exist.
     file(slurm_log_dir('dca')).mkdirs()
 
     def config_path = file(config).toString()

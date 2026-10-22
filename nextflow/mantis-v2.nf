@@ -416,10 +416,14 @@ workflow {
 
     // ----- DCA finalize -----------------------------------------------------
     // Gated on the QC report, the one signal that says every QC'd store's stage
-    // tables are final; finalize reads the assembled store's. The validator's
-    // report lands next to the plate as <stem>.dca-validate.json.
+    // tables are final; finalize reads the assembled store's. Also gated on
+    // tracking, which reads the assembled plate while image QC runs: without
+    // --qc_track_config the report does not wait for it, and finalize rewrites
+    // every position's zarr.json. The validator's report lands next to the
+    // plate as <stem>.dca-validate.json.
     if (dca_on) {
-        dca = dca_finalize_wf([assemble_output], params.dca_config, qc_report.done)
+        def dca_gate = track_on ? qc_report.done.mix(track_done.done) : qc_report.done
+        dca = dca_finalize_wf([assemble_output], params.dca_config, dca_gate)
     }
 
     // ----- Cleanup of intermediates (--cleanup_intermediates) ---------------
