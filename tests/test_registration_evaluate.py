@@ -400,3 +400,42 @@ def test_evaluate_keeps_small_projections_for_the_views_but_does_not_store_them(
         views["registered"], views["reference"]
     )
     assert "projections" not in record.to_dict()
+
+
+def _record(images=True, landmarks=True):
+    from biahub.registration.evaluate import evaluate
+
+    ref = _cells(11, shape=(24, 256, 256))
+    shift_zyx = (1.0, 3.0, -2.0)
+    mov = _ndi_shift(ref, shift_zyx, order=1, mode="nearest")
+    grid = np.stack(np.meshgrid([8, 16], [40, 128, 216], [40, 128, 216], indexing="ij"))
+    marks = (
+        _clicked(grid.reshape(3, -1).T.astype(float), shift_zyx, VOX3) if landmarks else None
+    )
+    exact = Transform.from_translation([-s for s in shift_zyx])
+    return evaluate(
+        exact, mov, ref, VOX3, VOX3, landmarks=marks, images=images, tile_px=64, crop_px=96
+    )
+
+
+@pytest.mark.parametrize("images, landmarks", [(True, True), (True, False), (False, True)])
+def test_the_evaluation_figure_shows_both_pairs_and_the_z_residual(
+    tmp_path, images, landmarks
+):
+    from biahub.registration.evaluate_view import plot_evaluation
+
+    path = tmp_path / "evaluation.png"
+    figure = plot_evaluation(_record(images, landmarks), path=path, title="A/1/0 t=0")
+    titles = [ax.get_title() for ax in figure.axes]
+    assert any("unregistered" in t for t in titles) and any("registered" in t for t in titles)
+    assert any("z" in t for t in titles)
+    assert path.stat().st_size > 10_000  # an image was written
+
+
+def test_a_stored_record_has_no_projections_to_plot():
+    from biahub.registration.evaluate import Evaluation
+    from biahub.registration.evaluate_view import plot_evaluation
+
+    stored = Evaluation(**_record(images=False).to_dict())
+    with pytest.raises(ValueError, match="projections"):
+        plot_evaluation(stored)
