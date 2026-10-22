@@ -518,13 +518,13 @@ def _shrink_yx(volume: np.ndarray, factor: int) -> np.ndarray:
     return blocks.mean(axis=(2, 4), dtype=np.float32)
 
 
-def display_projections(transform: Transform, mov: ArrayLike, ref: ArrayLike) -> dict:
-    """Return max projections of the reference and the moving volume, registered and not.
+def display_volumes(transform: Transform, mov: ArrayLike, ref: ArrayLike) -> tuple:
+    """Return (warped moving, reference, downsample) averaged down in yx for display.
 
-    For the views only: both volumes are averaged down in yx (at most `DISPLAY_PX` a side)
-    and the moving one is warped there, by the transform expressed on the small grid -- so
-    a tilt or z shift shows as it would at full size, for a fraction of the warp's cost.
-    `downsample` converts: full-size pixel = downsample * small pixel + (downsample - 1) / 2.
+    Both volumes shrink to at most `DISPLAY_PX` a side and the moving one is warped there
+    by the transform expressed on the small grid, so a tilt or z shift shows as it would at
+    full size, for a fraction of the warp's cost. Full-size pixel = downsample * small
+    pixel + (downsample - 1) / 2.
     """
     mov = np.nan_to_num(np.asarray(mov, dtype=np.float32))
     ref = np.nan_to_num(np.asarray(ref, dtype=np.float32))
@@ -534,11 +534,20 @@ def display_projections(transform: Transform, mov: ArrayLike, ref: ArrayLike) ->
     to_full = np.diag([1.0, factor, factor, 1.0])
     to_full[1:3, 3] = (factor - 1) / 2
     small = Transform(np.linalg.inv(to_full) @ np.asarray(transform.matrix) @ to_full)
-    unregistered = prepare_pair(Transform.identity(3), small_mov, small_ref, "intensity")
+    return prepare_pair(small, small_mov, small_ref, "intensity").warped, small_ref, factor
+
+
+def display_projections(transform: Transform, mov: ArrayLike, ref: ArrayLike) -> dict:
+    """Return max projections of the reference and the moving volume, registered and not.
+
+    For the views only, from `display_volumes` (`downsample` converts back to full size).
+    """
+    registered, small_ref, factor = display_volumes(transform, mov, ref)
+    unregistered, _ref, _factor = display_volumes(Transform.identity(3), mov, ref)
     return {
         "reference": small_ref.max(axis=0),
-        "registered": small.apply(small_mov, reference=small_ref).max(axis=0),
-        "unregistered": unregistered.warped.max(axis=0),
+        "registered": registered.max(axis=0),
+        "unregistered": unregistered.max(axis=0),
         "downsample": factor,
     }
 
