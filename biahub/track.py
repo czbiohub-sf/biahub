@@ -436,6 +436,23 @@ def filter_short_siblings(
     return tracks_df, np.asarray(labels)
 
 
+TRACK_COLUMNS = ["track_id", "t", "y", "x", "parent_track_id"]
+
+
+def _empty_result(shape: tuple[int, ...]) -> tuple[np.ndarray, pd.DataFrame]:
+    """Zero labels and a tracks table with no rows, for movies with nothing to track."""
+    tracks = pd.DataFrame(
+        {
+            "track_id": pd.Series(dtype="int64"),
+            "t": pd.Series(dtype="int64"),
+            "y": pd.Series(dtype="float64"),
+            "x": pd.Series(dtype="float64"),
+            "parent_track_id": pd.Series(dtype="int64"),
+        }
+    )
+    return np.zeros(shape, dtype=np.int32), tracks
+
+
 def _num_threads() -> int:
     """CPUs for the ILP solvers: the SLURM allocation, else this process's CPUs."""
     if os.environ.get("SLURM_CPUS_PER_TASK"):
@@ -544,6 +561,14 @@ def _solution_to_tracks(graph, shape: tuple[int, ...]) -> tuple[np.ndarray, pd.D
     """
     import tracksdata as td
 
+    solution_key = td.DEFAULT_ATTR_KEYS.SOLUTION
+    if graph.num_nodes() == 0 or (
+        solution_key in graph.node_attr_keys()
+        and not graph.node_attrs(attr_keys=[solution_key])[solution_key].any()
+    ):
+        # The solver selected nothing (an empty solution can be the cheapest one).
+        return _empty_result(shape)
+
     metadata = getattr(graph, "metadata", None) or {}
     render_shape = tuple(metadata.get("shape", shape))
     tracks, parents, labels_view = td.functional.to_napari_format(
@@ -567,6 +592,8 @@ def run_tracksdata(
     labels: np.ndarray, config: TracksdataConfig, pixel_size: float
 ) -> tuple[np.ndarray, pd.DataFrame]:
     """Link fixed (T, Y, X) instance labels with tracksdata's ILP."""
+    if not labels.any():
+        return _empty_result(labels.shape)
     graph = _solve_tracksdata(labels, config, pixel_size)
     return _solution_to_tracks(graph, labels.shape)
 
@@ -587,6 +614,9 @@ def run_hoct(
     ``images`` is the (T, Y, X) image the labels were segmented from. HOCT runs in pixel
     space, as its models were trained, so distances are converted to pixels.
     """
+    if not labels.any():
+        return _empty_result(labels.shape)
+
     import hoct
     import torch
 
@@ -627,6 +657,9 @@ def run_trackastra(
     ``graph_to_ctc`` relabels the masks by track and gives each track's parent; the
     tracks table takes each track's centroid per frame.
     """
+    if not labels.any():
+        return _empty_result(labels.shape)
+
     import torch
 
     from skimage.measure import regionprops_table
@@ -1187,7 +1220,7 @@ def track_one_position(
             overwrite=True,
         )
 
-    if min_sibling_length is not None:
+    if min_sibling_length is not None and len(tracks_df):
         tracks_df, tracking_labels = filter_short_siblings(
             tracks_df, tracking_labels, min_sibling_length
         )

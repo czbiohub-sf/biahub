@@ -418,3 +418,76 @@ def test_tracksdata_without_candidate_links_keeps_each_detection(frames):
     assert {"track_id", "t", "y", "x", "parent_track_id"} <= set(tracks.columns)
     for row in tracks.itertuples():
         assert tracked[row.t, int(round(row.y)), int(round(row.x))] == row.track_id
+
+
+def _check_empty(tracked, tracks, shape):
+    assert tracked.shape == shape and not tracked.any()
+    assert len(tracks) == 0
+    assert list(tracks.columns) == ["track_id", "t", "y", "x", "parent_track_id"]
+
+
+def test_tracksdata_on_an_empty_movie_returns_empty_outputs():
+    from biahub.track import run_tracksdata
+
+    labels = np.zeros((3, 32, 32), dtype=np.int32)
+    _check_empty(*run_tracksdata(labels, TracksdataConfig(), pixel_size=1.0), labels.shape)
+
+
+def test_tracksdata_selecting_nothing_returns_empty_outputs():
+    """With the defaults a still interior cell over two frames costs more than nothing."""
+    from biahub.track import run_tracksdata
+
+    labels = np.zeros((2, 64, 64), dtype=np.int32)
+    labels[:, 28:36, 28:36] = 1
+    config = TracksdataConfig(
+        node_weight=0.0, appearance_weight=50.0, disappearance_weight=50.0
+    )
+
+    _check_empty(*run_tracksdata(labels, config, pixel_size=1.0), labels.shape)
+
+
+@pytest.mark.parametrize("tracker", ["tracksdata", "hoct", "trackastra"])
+def test_an_empty_result_reaches_the_outputs(tracker, dividing_plate, tmp_path, monkeypatch):
+    """No cells at all: the run still writes an empty CSV and zero labels, sibling filter on."""
+    import biahub.track as track_mod
+
+    plate_path, labels = dividing_plate
+    monkeypatch.setattr(
+        track_mod, "run_cellpose_per_frame", lambda images, **kw: np.zeros_like(labels)
+    )
+    monkeypatch.setattr(track_mod, "cellpose_device", lambda gpu: "cpu")
+    monkeypatch.setattr(track_mod, "stage_cellpose_weights", lambda: None)
+    monkeypatch.setattr(track_mod, "warm_cellpose_weights", lambda name: None)
+    monkeypatch.setattr(track_mod, "warm_hoct_weights", lambda model: None)
+    monkeypatch.setattr(track_mod, "warm_trackastra_weights", lambda model: None)
+    config = tmp_path / "track.yml"
+    config.write_text(
+        yaml.safe_dump(
+            {
+                "output_mode": "2D",
+                "target_channel": "nuclei_prediction",
+                "input_images": INPUT_IMAGES,
+                "segmentation_method": "cellpose",
+                "cellpose_config": {"gpu": False},
+                "tracker": tracker,
+                "min_sibling_length": 3,
+            }
+        )
+    )
+    position, out = str(plate_path / "A" / "1" / "0"), str(tmp_path / "out.zarr")
+    assert (
+        CliRunner()
+        .invoke(cli, ["track", "--init", "-i", position, "-o", out, "-c", str(config)])
+        .exit_code
+        == 0
+    )
+
+    result = CliRunner().invoke(
+        cli, ["track", "--cluster", "debug", "-i", position, "-o", out, "-c", str(config)]
+    )
+
+    assert result.exit_code == 0, result.output
+    tracks = pd.read_csv(tmp_path / "out.zarr" / "A" / "1" / "0" / "tracks_A_1_0.csv")
+    assert len(tracks) == 0 and "track_id" in tracks.columns
+    with open_ome_zarr(tmp_path / "out.zarr" / "A" / "1" / "0", mode="r") as ds:
+        assert not np.asarray(ds.data).any()
