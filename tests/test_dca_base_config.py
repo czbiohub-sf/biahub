@@ -124,6 +124,31 @@ def test_a549_base_config_five_channel_plate(tmp_path):
     assert [(c["index"], c["name"]) for c in out["channels"]] == list(enumerate(FIVE))
 
 
+UNRENAMED = [
+    "BF - Oblique",
+    "GFP EX488 EM525-45",
+    "mCherry EX561 EM600-37",
+    "Phase3D",
+    "nuclei",
+    "membrane",
+]
+OBLIQUE_BF = ["BF - Oblique", *SIX[1:]]
+
+
+@pytest.mark.parametrize("channels", [UNRENAMED, OBLIQUE_BF], ids=["unrenamed", "oblique-bf"])
+def test_channels_keep_the_plate_labels(tmp_path, channels):
+    out = validate_dca(resolved(channels, full_row(), confirmed_file(tmp_path)), where="t")
+    assert [c["name"] for c in out["channels"]] == channels
+
+
+def test_unrenamed_channels_match_their_renamed_entries():
+    catalogue = load_dca_config(BASE_CONFIG)["channels"]
+    for unrenamed, renamed in zip(UNRENAMED, SIX, strict=True):
+        assert {k: v for k, v in catalogue[unrenamed].items() if k != "name"} == {
+            k: v for k, v in catalogue[renamed].items() if k != "name"
+        }
+
+
 def test_mock_well_without_dose_validates(tmp_path):
     row = full_row(perturbation="mock", moi="", hours_post_perturbation="")
     out = validate_dca(resolved(SIX, row, confirmed_file(tmp_path)), where="t")

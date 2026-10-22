@@ -75,6 +75,11 @@ modality = "correlative label-free and light-sheet fluorescence microscopy"
 [dca.image_data]
 processing_variant = "phase-reconstructed, virtual-stained and assembled"
 
+# The catalogue is keyed by each channel's label in the plate, and `name` repeats that label:
+# biahub does not rename channels. Assembled plates carry the names the reconstruct skill's
+# rename step gives (BF, raw ..., *_prediction); a plate assembled without it keeps the
+# acquisition and virtual-stain names (BF - Oblique, nuclei, membrane), and channels named at
+# the microscope may drop the "raw " prefix. Entries for channels a plate lacks are unused.
 [dca.channels.BF]
 name = "BF"
 channel_type = "labelfree"
@@ -107,6 +112,35 @@ biological_annotation = { biological_target = "nucleus" }
 
 [dca.channels.membrane_prediction]
 name = "membrane_prediction"
+channel_type = "predicted"
+description = "Virtual-stain prediction of the plasma membrane (ML, not acquired)."
+biological_annotation = { biological_target = "plasma membrane" }
+
+[dca.channels."BF - Oblique"]
+name = "BF - Oblique"
+channel_type = "labelfree"
+description = "Transmitted-light brightfield volume."
+
+[dca.channels."GFP EX488 EM525-45"]
+name = "GFP EX488 EM525-45"
+channel_type = "fluorescence"
+description = "Acquired GFP fluorescence of the per-experiment reporter."
+biological_annotation = { marker = { column = "marker" } }
+
+[dca.channels."mCherry EX561 EM600-37"]
+name = "mCherry EX561 EM600-37"
+channel_type = "fluorescence"
+description = "Acquired mCherry fluorescence of the viral-infection biosensor."
+biological_annotation = { biological_target = "viral infection reporter" }
+
+[dca.channels.nuclei]
+name = "nuclei"
+channel_type = "predicted"
+description = "Virtual-stain prediction of the nucleus (ML, not acquired)."
+biological_annotation = { biological_target = "nucleus" }
+
+[dca.channels.membrane]
+name = "membrane"
 channel_type = "predicted"
 description = "Virtual-stain prediction of the plasma membrane (ML, not acquired)."
 biological_annotation = { biological_target = "plasma membrane" }
