@@ -30,26 +30,28 @@ def overlay(moving: np.ndarray, reference: np.ndarray) -> np.ndarray:
 
 
 def _arrows(measure: dict | None, views: dict) -> tuple[np.ndarray, np.ndarray]:
-    """Return residual positions (small-image pixels, yx) and displacements (µm, yx)."""
+    """Return residual positions and displacements, yx, in small-image pixels.
+
+    Each axis converts with its own voxel size, so an anisotropic grid draws true lengths.
+    """
     if measure is None or not measure.get("residuals", {}).get("position_um"):
         return np.zeros((0, 2)), np.zeros((0, 2))
-    um = np.asarray(views["ref_um"], float)[1:]
     factor = views["downsample"]
-    full_px = np.asarray(measure["residuals"]["position_um"])[:, 1:] / um
-    small_px = (full_px - (factor - 1) / 2) / factor
-    return small_px, np.asarray(measure["residuals"]["diff_um"])[:, 1:]
+    px_um = np.asarray(views["ref_um"], float)[1:]  # one full-size pixel, y and x
+    full_px = np.asarray(measure["residuals"]["position_um"])[:, 1:] / px_um
+    step = np.asarray(measure["residuals"]["diff_um"])[:, 1:] / (px_um * factor)
+    return (full_px - (factor - 1) / 2) / factor, step
 
 
 def _arrow_scale(measures: list, views: dict) -> float:
     """Return one exaggeration for every panel: the longest arrow spans `ARROW_SHARE`."""
-    um_per_px = np.asarray(views["ref_um"], float)[1] * views["downsample"]
     longest = max(
         [np.linalg.norm(_arrows(m, views)[1], axis=1).max(initial=0.0) for m in measures],
         default=0.0,
     )
     if longest == 0:
         return 1.0
-    return ARROW_SHARE * max(views["reference"].shape) * um_per_px / longest
+    return ARROW_SHARE * max(views["reference"].shape) / longest
 
 
 def _summary(measures: dict) -> str:
@@ -67,15 +69,14 @@ def _summary(measures: dict) -> str:
 
 def _panel(ax, image, views, measures, scale, label):
     ax.imshow(image)
-    um_per_px = np.asarray(views["ref_um"], float)[1] * views["downsample"]
     for key, color in (("tiles", "yellow"), ("points", "cyan")):
-        where, diff = _arrows(measures[key], views)
+        where, step = _arrows(measures[key], views)
         if len(where):
             ax.quiver(
                 where[:, 1],
                 where[:, 0],
-                diff[:, 1] * scale / um_per_px,
-                -diff[:, 0] * scale / um_per_px,
+                step[:, 1] * scale,
+                -step[:, 0] * scale,
                 color=color,
                 angles="uv",
                 scale_units="xy",

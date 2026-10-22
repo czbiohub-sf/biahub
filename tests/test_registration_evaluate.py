@@ -557,3 +557,10 @@ def test_a_nucleus_with_a_flat_depth_profile_is_skipped_not_a_nan():
     assert len(marks.points_vox) == 1
 
 
+def test_arrows_use_each_axis_voxel_size():
+    from biahub.registration.evaluate_view import _arrows
+
+    views = {"ref_um": (0.2, 0.1, 0.2), "downsample": 1}
+    measure = {"residuals": {"position_um": [[1.0, 5.0, 10.0]], "diff_um": [[0.0, 0.1, 0.2]]}}
+    _where, step_px = _arrows(measure, views)
+    np.testing.assert_allclose(step_px, [[1.0, 1.0]])  # one voxel in y and one in x
