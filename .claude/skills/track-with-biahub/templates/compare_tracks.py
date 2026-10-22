@@ -21,6 +21,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from natsort import natsorted
+
 
 def division_events(tracks: pd.DataFrame) -> pd.DataFrame:
     """One row per division with two daughters: t (daughters' first frame), y, x."""
@@ -35,6 +37,17 @@ def division_events(tracks: pd.DataFrame) -> pd.DataFrame:
                 (int(daughters.t0.min()), last.loc[parent, "y"], last.loc[parent, "x"])
             )
     return pd.DataFrame(rows, columns=["t", "y", "x"])
+
+
+def latest(paths: list[str]) -> str:
+    """Return the newest annotation version (natural order: v10 after v9)."""
+    return natsorted(paths)[-1]
+
+
+def division_f1(matched: int, predicted: int, annotated: int) -> float:
+    """Return division F1 = 2 * matched / (predicted + annotated); 0 when nothing matches."""
+    total = predicted + annotated
+    return 2 * matched / total if total else float("nan")
 
 
 def match(pred: pd.DataFrame, gt: pd.DataFrame, max_frames: int, max_px: float) -> int:
@@ -85,7 +98,7 @@ def main():
             if args.gt:
                 matches = glob.glob(args.gt.format(fov=fov))
                 if matches:
-                    gt = division_events(pd.read_csv(sorted(matches)[-1]))
+                    gt = division_events(pd.read_csv(latest(matches)))
                     tp = match(events, gt, args.max_frames, args.max_um / args.pixel_size)
                     row.update(gt_divisions=len(gt), matched=tp)
             rows.append(row)
@@ -106,9 +119,15 @@ def main():
         out["gt_fovs"] = scored.size()
         out["div_precision"] = scored.matched.sum() / scored.divisions.sum()
         out["div_recall"] = scored.matched.sum() / scored.gt_divisions.sum()
-        out["div_f1"] = (
-            2 * out.div_precision * out.div_recall / (out.div_precision + out.div_recall)
-        )
+        out["div_f1"] = [
+            division_f1(m, p, a)
+            for m, p, a in zip(
+                scored.matched.sum(),
+                scored.divisions.sum(),
+                scored.gt_divisions.sum(),
+                strict=True,
+            )
+        ]
     print(out.round(3).to_string())
     print("\nper FOV:")
     print(d.round(2).to_string(index=False))
