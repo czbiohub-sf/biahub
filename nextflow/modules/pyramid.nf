@@ -22,7 +22,7 @@
 // work in-process; Nextflow owns the per-position fan-out. See modules/project.nf,
 // the template this follows.
 
-include { parse_resources; slurm_logs; slurm_log_dir; retry_time } from './common'
+include { parse_resources; slurm_logs; slurm_log_dir; retry_time; retry_memory } from './common'
 
 
 process init_pyramid {
@@ -52,7 +52,11 @@ process run_pyramid {
     label 'cpu'
     clusterOptions { slurm_logs('pyramid') }
     cpus { meta.cpus }
-    memory { "${meta.mem_gb} GB" }
+    // retry_memory, not a fixed request: an OOM kill (137) doubles the next
+    // attempt's memory. With the bare init estimate every retry asked for the same
+    // amount, so one low estimate failed all five attempts on every position and
+    // aborted the run (v9 of 2026_08_11_A549_SEC61B_DENV: 16 GB, 137 each time).
+    memory { retry_memory(meta.mem_gb, task) }
     time { retry_time(meta.time_minutes, task) }
 
     input:
