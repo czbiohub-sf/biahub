@@ -284,6 +284,8 @@ def detect_nuclei(
             continue  # cut by the frame: its centre is not its centre
         profile = vol[:, y0:y1, x0:x1][:, region.image].mean(axis=1) - background
         profile = profile - profile.min()
+        if not np.isfinite(profile).all() or profile.max() <= 0:
+            continue  # the same at every depth: no z to measure
         top = profile >= 0.5 * profile.max()
         z = float((np.arange(len(profile))[top] * profile[top]).sum() / profile[top].sum())
         points.append((z, *region.centroid))

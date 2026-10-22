@@ -545,3 +545,15 @@ def test_tiles_fit_the_image_whatever_their_size(tile_px, shape):
     assert r["n_tiles"] > 0
 
 
+def test_a_nucleus_with_a_flat_depth_profile_is_skipped_not_a_nan():
+    vol = np.zeros((12, 200, 200), np.float32)
+    yy, xx = np.ogrid[:200, :200]
+    disk = lambda cy, cx: ((yy - cy) ** 2 + (xx - cx) ** 2) <= 30**2  # noqa: E731
+    vol[:, disk(60, 60)] = 100.0  # the same in every slice: no depth to measure
+    profile = np.exp(-0.5 * ((np.arange(12) - 6) / 2.0) ** 2)[:, None]
+    vol[:, disk(140, 140)] += 100.0 * profile
+    marks = detect_nuclei(vol, VOX3)
+    assert np.isfinite(marks.points_vox).all()
+    assert len(marks.points_vox) == 1
+
+
