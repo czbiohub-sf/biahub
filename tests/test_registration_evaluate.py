@@ -537,3 +537,11 @@ def test_a_plain_shift_on_points_at_one_depth_is_not_read_as_scale():
     np.testing.assert_allclose(r["shift_um"], shift * VOX, atol=1e-9)
 
 
+@pytest.mark.parametrize("tile_px, shape", [(63, (24, 256, 256)), (256, (24, 160, 160))])
+def test_tiles_fit_the_image_whatever_their_size(tile_px, shape):
+    ref = _cells(17, shape=shape)
+    mov = _ndi_shift(ref, (0.0, 2.0, -1.0), order=1, mode="nearest")
+    r = tile_residuals(Transform.identity(3), mov, ref, VOX3, tile_px=tile_px, grid=3)
+    assert r["n_tiles"] > 0
+
+

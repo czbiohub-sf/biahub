@@ -395,14 +395,15 @@ def tile_residuals(
     warped, ref_p, has_data = pair.warped, pair.ref, pair.has_data
     w_mip, r_mip = warped.max(axis=0), ref_p.max(axis=0)
     covered = has_data.mean(axis=0) >= 0.5
-    max_shift = tile_px / 4 if max_shift_px is None else max_shift_px
-    h = tile_px // 2
     _, ny, nx = ref_p.shape
-    window = np.outer(np.hanning(tile_px), np.hanning(tile_px))
+    size = min(tile_px, ny, nx)  # a tile fits the image, and is exactly the window's size
+    max_shift = size / 4 if max_shift_px is None else max_shift_px
+    h = size // 2
+    window = np.outer(np.hanning(size), np.hanning(size))
     points, diffs = [], []
-    for cy in np.linspace(h, ny - h, grid).astype(int):
-        for cx in np.linspace(h, nx - h, grid).astype(int):
-            tile = (slice(cy - h, cy + h), slice(cx - h, cx + h))
+    for cy in np.linspace(h, ny - (size - h), grid).astype(int):
+        for cx in np.linspace(h, nx - (size - h), grid).astype(int):
+            tile = (slice(cy - h, cy - h + size), slice(cx - h, cx - h + size))
             if covered[tile].mean() < min_coverage:
                 continue
             r, w = r_mip[tile], w_mip[tile]
