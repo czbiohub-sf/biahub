@@ -183,6 +183,65 @@ the per-timepoint records `<run>/timepoints/<t>.json`:
   expected at the score's resolution (~1/N beads); a systematic difference above ~2 voxels
   on accepted timepoints needs a look.
 
+## 9b. Evaluate
+
+Scores rank candidates; they do not say how far off a registration is. Measure it in µm,
+independently of the score, with `biahub.registration.evaluate` (a library, no CLI), on
+one timepoint of the position it was estimated on and of one or two held-out positions
+(for a beads registration, sample wells: real structure, as the data will be used):
+
+```python
+import json
+from biahub.core.transform import Transform
+from biahub.registration.evaluate import evaluate
+from biahub.registration.evaluate_view import plot_evaluation
+from biahub.settings import load_transform_settings
+
+transform = Transform(load_transform_settings("<out>/transforms.yml").matrix_for(t, "forward"))
+# mov_zyx, ref_zyx: the moving and reference channels at t; *_um: each store's voxel size
+record = evaluate(transform, mov_zyx, ref_zyx, mov_um, ref_um, landmarks="nuclei")
+plot_evaluation(record, path="<out>/evaluation/<fov>_t<t>.png", title="<dataset> <fov> t=<t>")
+json.dump(record.to_dict(), open("<out>/evaluation/<fov>_t<t>.json", "w"), indent=1)
+```
+
+- `landmarks`: `"beads"` on a beads well (`detect_kwargs={"threshold_abs": ...}`, from the
+  config's peak settings), `"nuclei"` when the moving channel shows nuclei (DAPI, H2B onto
+  virtual-stained nuclei), `None` otherwise (images only).
+- Run it as a SLURM job (`cpu` partition, 4 CPUs, ~48 GB for a 2048 x 2048 stack): one warp
+  per position, a few minutes.
+
+Read every number against `record.baseline` (the unregistered pair) and across positions;
+these are not pass/fail thresholds:
+
+- `tiles` (yx, from max projections) and `points` medians: what is left. Well registered
+  cell data sits around a few tenths of a µm, against microns unregistered.
+- `points["affine"]`: a `scale_zyx` away from 1 or a `rotation_yx_deg` away from 0 is a
+  scale or rotation the transform did not take out (e.g. `euclidean` cannot hold a camera
+  scale: try `similarity` or `affine`). Reported only with enough matched points.
+- `z_um` and `z_from`: z from points; the image crops can be biased on cross-modal pairs,
+  and `z_from` says when there were too few points to trust.
+- A held-out position much worse than the estimated one: the transform does not carry
+  across the plate (estimate on another position, or one list per position).
+- Registered no better than the baseline: it failed; go back to the method and config.
+
+Look at the figure yourself (read the PNG): short arrows in random directions are a good
+registration; arrows all one way are a shift; pointing in or out, growing to the edges, a
+scale; turning around the centre, a rotation.
+
+Then offer the user a look in napari, on a node with a display (launch it with output to a
+file, not piped):
+
+```python
+from biahub.registration.evaluate_view import visual_check
+visual_check(mov_zyx, ref_zyx, transform, ref_um, phase=phase_zyx)  # phase: optional
+```
+
+It shows the reference, the moving volume as it was and registered, and phase underneath
+when given. When the window closes, ask whether the registration is good; record the
+answer. Never call a registration good without it. On request, a video comparing
+transforms (e.g. unregistered, a previous registration, this one):
+`evaluate_view.animate_evaluation(mov_zyx, ref_zyx, {name: transform}, "<out>/evaluation/<fov>.mp4")`.
+
 ## 10. Optional: apply
 
 `--apply`: with Nextflow, set `APPLY=true` (and `APPLY_POSITIONS`) in
@@ -229,5 +288,7 @@ memory): the file is written, but those timepoints hold the seed -- do not apply
 
 Report: beads well, T, wall time, score median/min, flagged and rescued counts (with the
 largest before -> after), unreliable timepoints and why, the comparison against any previous
-registration, and the output paths. Leave the tmux session for inspection; kill it only after
+registration, the evaluation (per position: tile and point medians against the unregistered
+pair, residual scale, z and where it came from) with the user's verdict, and the output
+paths. Leave the tmux session for inspection; kill it only after
 the summary.
