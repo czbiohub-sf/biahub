@@ -9,7 +9,7 @@ stores' voxel sizes (z, y, x); voxel values are reported alongside where useful.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass, field, fields
 
 import numpy as np
 
@@ -499,9 +499,48 @@ class Evaluation:
     z_um: float | None
     z_from: str | None
     baseline: dict
+    # Max projections for the views (`display_projections`); kept in memory, not stored.
+    projections: dict | None = field(default=None, repr=False)
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        return {f.name: getattr(self, f.name) for f in fields(self) if f.name != "projections"}
+
+
+# The views' projections are at most this many pixels on a side.
+DISPLAY_PX = 512
+
+
+def _shrink_yx(volume: np.ndarray, factor: int) -> np.ndarray:
+    """Return `volume` averaged over factor x factor blocks in yx (edges cropped)."""
+    z, y, x = volume.shape
+    y, x = y - y % factor, x - x % factor
+    blocks = volume[:, :y, :x].reshape(z, y // factor, factor, x // factor, factor)
+    return blocks.mean(axis=(2, 4), dtype=np.float32)
+
+
+def display_projections(transform: Transform, mov: ArrayLike, ref: ArrayLike) -> dict:
+    """Return max projections of the reference and the moving volume, registered and not.
+
+    For the views only: both volumes are averaged down in yx (at most `DISPLAY_PX` a side)
+    and the moving one is warped there, by the transform expressed on the small grid -- so
+    a tilt or z shift shows as it would at full size, for a fraction of the warp's cost.
+    `downsample` converts: full-size pixel = downsample * small pixel + (downsample - 1) / 2.
+    """
+    mov = np.nan_to_num(np.asarray(mov, dtype=np.float32))
+    ref = np.nan_to_num(np.asarray(ref, dtype=np.float32))
+    factor = max(1, int(np.ceil(max(ref.shape[1:]) / DISPLAY_PX)))
+    small_mov, small_ref = _shrink_yx(mov, factor), _shrink_yx(ref, factor)
+    # small index d sits at full index factor * d + (factor - 1) / 2 in y and x
+    to_full = np.diag([1.0, factor, factor, 1.0])
+    to_full[1:3, 3] = (factor - 1) / 2
+    small = Transform(np.linalg.inv(to_full) @ np.asarray(transform.matrix) @ to_full)
+    unregistered = prepare_pair(Transform.identity(3), small_mov, small_ref, "intensity")
+    return {
+        "reference": small_ref.max(axis=0),
+        "registered": small.apply(small_mov, reference=small_ref).max(axis=0),
+        "unregistered": unregistered.warped.max(axis=0),
+        "downsample": factor,
+    }
 
 
 LANDMARK_DETECTORS = {"nuclei": detect_nuclei, "beads": detect_beads}
@@ -577,5 +616,8 @@ def evaluate(
         Transform.identity(3), mov, ref, ref_um, marks, images, compare, image_kwargs
     )
     return Evaluation(
-        geometry=decompose(transform, mov_um, ref_um), baseline=baseline, **measures
+        geometry=decompose(transform, mov_um, ref_um),
+        baseline=baseline,
+        projections=display_projections(transform, mov, ref),
+        **measures,
     )

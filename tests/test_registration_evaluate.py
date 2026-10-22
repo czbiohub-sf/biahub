@@ -376,3 +376,27 @@ def test_records_keep_each_residual_where_it_was_measured():
     np.testing.assert_allclose(
         np.median(tiles["residuals"]["diff_um"], axis=0), tiles["stats"]["median_zyx_um"]
     )
+
+
+def test_evaluate_keeps_small_projections_for_the_views_but_does_not_store_them():
+    from biahub.registration.evaluate import evaluate
+
+    ref = _cells(10, shape=(24, 600, 600))
+    shift_zyx = (0.0, 6.0, -4.0)
+    mov = _ndi_shift(ref, shift_zyx, order=1, mode="nearest")
+    exact = Transform.from_translation([-s for s in shift_zyx])
+    record = evaluate(exact, mov, ref, VOX3, VOX3, images=False)
+
+    views = record.projections
+    assert max(views["reference"].shape) <= 512 and views["downsample"] == 2
+    assert views["reference"].shape == views["registered"].shape == views["unregistered"].shape
+
+    def corr(a, b):
+        inner = (slice(8, -8), slice(8, -8))  # away from the shifted-in border
+        return np.corrcoef(a[inner].ravel(), b[inner].ravel())[0, 1]
+
+    assert corr(views["registered"], views["reference"]) > 0.99
+    assert corr(views["unregistered"], views["reference"]) < corr(
+        views["registered"], views["reference"]
+    )
+    assert "projections" not in record.to_dict()
