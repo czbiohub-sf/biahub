@@ -556,3 +556,81 @@ def test_a_missing_hoct_says_how_to_get_it(monkeypatch):
     monkeypatch.setitem(sys.modules, "hoct", None)  # import hoct -> ImportError
     with pytest.raises(ImportError, match="Python < 3.14"):
         warm_hoct_weights("general_v1")
+
+
+def test_hoct_solver_preference_is_refused_in_the_settings():
+    """The pinned tracksdata solver has no solver_preference; it picks Gurobi or SCIP."""
+    with pytest.raises(ValidationError, match="solver_preference"):
+        HoctConfig(solver={"solver_preference": "scip"})
+
+
+def test_track_init_checks_the_hoct_solver_override(dividing_plate, tmp_path, monkeypatch):
+    """A bad solver key fails at --init, before any worker runs cellpose."""
+    import biahub.track as track_mod
+
+    plate_path, _ = dividing_plate
+    monkeypatch.setattr(track_mod, "warm_cellpose_weights", lambda name: None)
+    monkeypatch.setattr(track_mod, "warm_hoct_weights", lambda model: None)
+    config = tmp_path / "track.yml"
+    config.write_text(
+        yaml.safe_dump(
+            {
+                "output_mode": "2D",
+                "target_channel": "nuclei_prediction",
+                "input_images": INPUT_IMAGES,
+                "segmentation_method": "cellpose",
+                "cellpose_config": {"gpu": False},
+                "tracker": "hoct",
+                "hoct_config": {"solver": {"divison_weight": 1.0}},
+            }
+        )
+    )
+    result = CliRunner().invoke(
+        cli,
+        [
+            "track",
+            "--init",
+            "-i",
+            str(plate_path / "A" / "1" / "0"),
+            "-o",
+            str(tmp_path / "out.zarr"),
+            "-c",
+            str(config),
+        ],
+    )
+    assert result.exit_code != 0
+    assert "divison_weight" in str(result.exception) + result.output
+
+
+def test_trackastra_on_one_frame_keeps_each_detection(monkeypatch):
+    """Trackastra needs two frames; one frame gives isolated tracks without the model."""
+    import trackastra.model
+
+    from biahub.track import run_trackastra
+
+    def no_model(*args, **kw):
+        raise AssertionError("Trackastra must not run on one frame")
+
+    monkeypatch.setattr(trackastra.model.Trackastra, "from_pretrained", staticmethod(no_model))
+    labels = np.zeros((1, 32, 32), dtype=np.int32)
+    labels[0, 2:8, 2:8] = 1
+    labels[0, 20:26, 20:26] = 2
+
+    tracked, tracks = run_trackastra(labels, labels.astype(np.float32), TrackastraConfig())
+
+    assert tracked.shape == labels.shape
+    assert len(tracks) == 2 and tracks.track_id.is_unique
+    assert (tracks.parent_track_id == -1).all()
+    for row in tracks.itertuples():
+        assert tracked[row.t, int(round(row.y)), int(round(row.x))] == row.track_id
+
+
+@pytest.mark.skipif(not _hoct_weights_cached(), reason="HOCT weights not downloaded")
+def test_hoct_real_solver_path_with_an_override():
+    from biahub.track import run_hoct
+
+    labels, image = _dividing_movie()
+    tracked, tracks = run_hoct(
+        labels, image, HoctConfig(solver={"timeout": 600.0}), pixel_size=0.1133
+    )
+    _check_one_division(tracks, tracked)

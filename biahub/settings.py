@@ -166,6 +166,16 @@ class HoctConfig(MyBaseModel):
     max_delta_t: PositiveInt = 3
     solver: dict[str, Any] = {}
 
+    @field_validator("solver")
+    @classmethod
+    def refuse_solver_preference(cls, solver):
+        if solver.get("solver_preference") is not None:
+            raise ValueError(
+                "hoct_config.solver.solver_preference is not supported by the pinned "
+                "tracksdata, which uses Gurobi when licensed and SCIP otherwise."
+            )
+        return solver
+
 
 class TrackastraConfig(MyBaseModel):
     """Trackastra: a transformer predicts the links of fixed labels (``tracker: trackastra``).

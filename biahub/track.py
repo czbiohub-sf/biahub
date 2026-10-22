@@ -477,6 +477,15 @@ def _select_every_detection(graph):
     return graph
 
 
+def _isolated_tracks(labels: np.ndarray) -> tuple[np.ndarray, pd.DataFrame]:
+    """Each detection of (T, Y, X) ``labels`` as its own track, without linking."""
+    import tracksdata as td
+
+    graph = td.graph.InMemoryGraph()
+    td.nodes.RegionPropsNodes().add_nodes(graph, labels=labels)
+    return _solution_to_tracks(_select_every_detection(graph), labels.shape)
+
+
 def _solve_tracksdata(labels: np.ndarray, config: TracksdataConfig, pixel_size: float):
     """Build the tracksdata graph of (T, Y, X) ``labels`` and solve its ILP.
 
@@ -620,6 +629,19 @@ def _import_hoct():
     return hoct
 
 
+def hoct_solver_config(config: HoctConfig):
+    """HOCT's ILPSolverConfig: ``config.solver`` overrides on HOCT's tracking defaults.
+
+    ILPSolverConfig needs every field when built directly, and refuses unknown keys.
+    """
+    _import_hoct()
+    from hoct.tracking import ILPSolverConfig
+
+    return ILPSolverConfig.model_validate(
+        {**ILPSolverConfig.default().model_dump(), **config.solver}
+    )
+
+
 def warm_hoct_weights(model: str) -> None:
     """Download HOCT weights into the shared cache once (from --init, on the head node)."""
     hoct = _import_hoct()
@@ -641,7 +663,6 @@ def run_hoct(
     import torch
 
     hoct = _import_hoct()
-    from hoct.tracking import ILPSolverConfig
 
     # Build HOCT's candidate graph first: inference fails on a graph without edges.
     graph = hoct.features.create_graph(
@@ -654,11 +675,7 @@ def run_hoct(
     if graph.num_edges() == 0:
         return _solution_to_tracks(_select_every_detection(graph), labels.shape)
 
-    # ILPSolverConfig needs every field when built directly; overrides go onto
-    # HOCT's tracking defaults.
-    solver_config = ILPSolverConfig.model_validate(
-        {**ILPSolverConfig.default().model_dump(), **config.solver}
-    )
+    solver_config = hoct_solver_config(config)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = hoct.load_model(config.model, device=device)
     solution = hoct.predict(
@@ -686,6 +703,9 @@ def run_trackastra(
     """
     if not labels.any():
         return _empty_result(labels.shape)
+    if labels.shape[0] < 2:
+        # Trackastra needs two frames to link; one frame is its detections, unlinked.
+        return _isolated_tracks(labels)
 
     import torch
 
@@ -698,7 +718,8 @@ def run_trackastra(
         model = Trackastra.from_folder(Path(config.model), device=device)
     else:
         model = Trackastra.from_pretrained(config.model, device=device)
-    graph, _ = model.track(images, labels, mode=config.mode)
+    # track() also returns a rendered mask movie; keep only the graph so it is freed.
+    graph = model.track(images, labels, mode=config.mode)[0]
     ctc, tracked = graph_to_ctc(graph, labels)
     tracked = np.asarray(tracked).astype(np.int32)
 
@@ -1405,6 +1426,8 @@ def track(
             check_cellpose_model_name(settings.cellpose_config.pretrained_model)
             warm_cellpose_weights(settings.cellpose_config.pretrained_model)
         if settings.tracker == "hoct":
+            # Check the solver overrides here, before any worker runs cellpose.
+            hoct_solver_config(settings.hoct_config)
             warm_hoct_weights(settings.hoct_config.model)
         if (
             settings.tracker == "trackastra"
