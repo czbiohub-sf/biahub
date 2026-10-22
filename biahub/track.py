@@ -437,7 +437,12 @@ def filter_short_siblings(
 
 
 def _num_threads() -> int:
-    return len(os.sched_getaffinity(0))
+    """CPUs for the ILP solvers: the SLURM allocation, else this process's CPUs."""
+    if os.environ.get("SLURM_CPUS_PER_TASK"):
+        return int(os.environ["SLURM_CPUS_PER_TASK"])
+    if hasattr(os, "sched_getaffinity"):  # not on macOS or Windows
+        return len(os.sched_getaffinity(0))
+    return os.cpu_count() or 1
 
 
 def _solve_tracksdata(labels: np.ndarray, config: TracksdataConfig, pixel_size: float):

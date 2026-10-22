@@ -371,3 +371,26 @@ def test_merge_keeps_divisions_and_follows_chains():
     assert sorted(merged.track_id.unique()) == [1, 3, 4]
     assert parents[3] == 1 and parents[4] == 1  # the division survives, on the merged root
     assert merged[merged.track_id == 4].t.tolist() == [2, 3]
+
+
+def test_label_trackers_need_a_cellpose_config():
+    with pytest.raises(ValidationError, match="cellpose_config"):
+        TrackingSettings(
+            input_images=INPUT_IMAGES,
+            tracker="trackastra",
+            segmentation_method="cellpose",
+            cellpose_config=None,
+        )
+
+
+def test_thread_count_without_cpu_affinity(monkeypatch):
+    """os.sched_getaffinity does not exist on macOS or Windows."""
+    import os
+
+    from biahub.track import _num_threads
+
+    monkeypatch.delattr(os, "sched_getaffinity", raising=False)
+    monkeypatch.delenv("SLURM_CPUS_PER_TASK", raising=False)
+    assert _num_threads() == (os.cpu_count() or 1)
+    monkeypatch.setenv("SLURM_CPUS_PER_TASK", "3")
+    assert _num_threads() == 3

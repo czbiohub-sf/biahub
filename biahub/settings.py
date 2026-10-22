@@ -225,6 +225,11 @@ class TrackingSettings(MyBaseModel):
                 f"tracker: {self.tracker} links fixed labels; set segmentation_method: "
                 "cellpose (foreground_contour has no instance labels)."
             )
+        if self.cellpose_config is None:
+            raise ValueError(
+                f"tracker: {self.tracker} needs cellpose_config (cellpose_config: {{}} for the "
+                "defaults)."
+            )
         if self.output_mode != "2D":
             raise ValueError(f"tracker: {self.tracker} supports output_mode 2D only.")
         return self
