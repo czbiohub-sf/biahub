@@ -162,6 +162,7 @@ def check_environment(tools) {
     def provided_by = [
         'viscy'     : "`viscy` comes from biahub's `stain` extra, which the default `uv sync` installs via the dev dependency group.",
         'imaging-qc': "`imaging-qc` comes from biahub's `qc` extra, which is NOT in `all` — sync it explicitly with `uv sync --extra qc`.",
+        'dca-validate': "`dca-validate` comes from biahub's `dca` extra, which `all` includes and the default `uv sync` installs via the dev dependency group.",
     ]
     tools.each { tool ->
         def proc = ['bash', '-c', "command -v ${tool}"].execute()
