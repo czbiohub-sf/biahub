@@ -12,7 +12,6 @@ from iohub.ngff import Plate
 from iohub.ngff.utils import create_empty_plate, process_single_position
 from natsort import natsorted
 
-from biahub.channel_names import canonical_channel_names
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.option_eat_all import OptionEatAll
 from biahub.cli.parsing import (
@@ -657,11 +656,7 @@ def _resolve_concatenate_inputs(
             all_data_paths[0], settings.output_ome_zarr_version
         ),
         "scale": (1,) * 2 + tuple(output_voxel_size),
-        "channel_names": (
-            canonical_channel_names(all_channel_names)
-            if settings.rename_channels
-            else all_channel_names
-        ),
+        "channel_names": all_channel_names,
         "dtype": dtype,
     }
 
@@ -682,22 +677,6 @@ def _resolve_concatenate_inputs(
     }
 
 
-def _check_existing_channel_names(prep: dict) -> None:
-    """Refuse to continue on output positions whose channel names differ from this run's."""
-    expected = list(prep["output_metadata"]["channel_names"])
-    for path in prep["output_position_paths"]:
-        if not path.is_dir():
-            continue
-        with open_ome_zarr(path) as position:
-            existing = list(position.channel_names)
-        if existing != expected:
-            raise ValueError(
-                f"Output position {'/'.join(path.parts[-3:])} has channel names {existing} "
-                f"but this run writes {expected}. Delete the assembled store or use a "
-                "fresh output directory."
-            )
-
-
 def _init_output_plate(
     prep: dict, settings: ConcatenateSettings, output_dirpath: Path
 ) -> None:
@@ -710,7 +689,6 @@ def _init_output_plate(
     otherwise re-stamp every position it is handed on every call, and N
     workers re-stamping is N writes per position racing on the same zattrs.)
     """
-    _check_existing_channel_names(prep)
     missing = {p.parts[-3:] for p in prep["output_position_paths"] if not p.is_dir()}
     if not missing:
         return

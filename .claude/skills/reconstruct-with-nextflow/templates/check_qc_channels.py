@@ -13,8 +13,6 @@ that will produce them, which is exactly the coupling that goes wrong:
               + reconstruct's output_channel_names (waveorder derives these,
                 so they are read from the settings model, not the YAML text)
               + virtual-stain's data.init_args.target_channel
-    each passed through canonical_channel_name when concatenate.yml sets
-    `rename_channels: true`
     tracking  = ["<track.yml target_channel>_labels"]
 
 `qc_track.yaml` naming `nuclei_prediction_labels` only matches if `track.yml`
@@ -27,8 +25,7 @@ being edited — so the mistake is fixed instead of costing a launch. It is a
 convenience, not the safety net; the safety net is in the pipeline.
 
 Assumes `concatenate.yml` takes `all` from each source, which both shipped
-families do. Names are canonicalised only when that file sets `rename_channels:
-true` (a549 does, zebrafish does not). A config that selects a channel subset will over-predict, so a
+families do. A config that selects a channel subset will over-predict, so a
 `MISS` is authoritative but a pass is not a proof.
 """
 
@@ -39,8 +36,6 @@ from pathlib import Path
 import yaml
 
 from iohub import open_ome_zarr
-
-from biahub.channel_names import canonical_channel_name
 
 
 def qc_filters(cfg_path):
@@ -63,7 +58,7 @@ def qc_filters(cfg_path):
     return found
 
 
-def assembled_channels(raw_zarr, reconstruct_cfg, virtual_stain_cfg, concatenate_cfg):
+def assembled_channels(raw_zarr, reconstruct_cfg, virtual_stain_cfg):
     with open_ome_zarr(str(raw_zarr), mode="r") as s:
         _, fov = next(iter(s.positions()))
         raw = list(fov.channel_names)  # flat-field and deskew preserve names
@@ -73,9 +68,7 @@ def assembled_channels(raw_zarr, reconstruct_cfg, virtual_stain_cfg, concatenate
     vs = yaml.safe_load(Path(virtual_stain_cfg).read_text())
     tgt = vs["data"]["init_args"]["target_channel"]
     tgt = [tgt] if isinstance(tgt, str) else list(tgt)
-    channels = raw + list(rc.output_channel_names) + tgt
-    renames = yaml.safe_load(Path(concatenate_cfg).read_text()).get("rename_channels", False)
-    return [canonical_channel_name(c) for c in channels] if renames else channels
+    return raw + list(rc.output_channel_names) + tgt
 
 
 def tracking_channels(track_cfg):
@@ -88,12 +81,7 @@ if __name__ == "__main__":
     checks = [
         (
             "qc.yaml",
-            assembled_channels(
-                raw,
-                cfgs / "reconstruct.yml",
-                cfgs / "virtual_stain.yml",
-                cfgs / "concatenate.yml",
-            ),
+            assembled_channels(raw, cfgs / "reconstruct.yml", cfgs / "virtual_stain.yml"),
         )
     ]
     if (cfgs / "qc_track.yaml").exists():

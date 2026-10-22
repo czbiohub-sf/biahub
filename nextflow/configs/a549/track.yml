@@ -1,8 +1,8 @@
 # Tracking config for the mantis-v2 pipeline (`biahub track`). A549.
 #
 # Track reads the ASSEMBLED plate (<N>-assemble/<dataset>.zarr), so target_channel
-# and cellpose_config.input_channel must name channels that exist THERE. Assemble
-# writes final channel names (rename_channels in concatenate.yml), so use those.
+# and cellpose_config.input_channel must name channels that exist THERE. If you
+# rename channels before tracking, update these to match.
 #
 # CURRENT SCHEMA. TrackingSettings forbids extra keys; the old fields `mode`,
 # `z_range` and `focus_config` are rejected. Mapping from the old schema:
