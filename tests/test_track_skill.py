@@ -39,3 +39,34 @@ def test_cells_per_frame_counts_empty_frames(compare):
 
     tracks = pd.DataFrame({"track_id": [1], "t": [2], "y": [0.0], "x": [0.0]})
     assert compare.cells_per_frame(tracks, n_frames=6) == pytest.approx(1 / 6)
+
+
+def test_summary_with_scored_and_unscored_runs(compare):
+    import pandas as pd
+
+    rows = pd.DataFrame(
+        [
+            {
+                "run": "a",
+                "fov": "A_1_0",
+                "tracks": 5,
+                "divisions": 4,
+                "cells_per_frame": 3.0,
+                "track_length": 2.0,
+                "gt_divisions": 4,
+                "matched": 3,
+            },
+            {
+                "run": "b",
+                "fov": "B_1_0",
+                "tracks": 5,
+                "divisions": 2,
+                "cells_per_frame": 3.0,
+                "track_length": 2.0,
+            },
+        ]
+    )
+    out = compare.summarize(rows)
+
+    assert out.loc["a", "div_f1"] == pytest.approx(0.75)
+    assert pd.isna(out.loc["b", "div_f1"])
