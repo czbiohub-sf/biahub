@@ -101,9 +101,13 @@ def residual_affine(points_vox: ArrayLike, diff_vox: ArrayLike, voxel_um: ArrayL
     n = int(len(pts))
     if n < MIN_POINTS_FOR_AFFINE:
         return {"n": n, "scale_zyx": None, "rotation_yx_deg": None}
-    design = np.c_[np.ones(n), pts]
+    # positions about their centre: points at one depth (tiles) make a constant column,
+    # which would otherwise share the shift with a false z gradient
+    centre = pts.mean(axis=0)
+    design = np.c_[np.ones(n), pts - centre]
     coef, *_ = np.linalg.lstsq(design, diff, rcond=None)
-    shift, gradient = coef[0], coef[1:].T  # diff ~ shift + gradient @ pos
+    gradient = coef[1:].T  # diff ~ shift + gradient @ pos
+    shift = coef[0] - gradient @ centre
     rotation, stretch = _polar(np.eye(3) + gradient)
     _total, yx = _rotation_angles(rotation)
     extent = pts.max(axis=0) - pts.min(axis=0)
