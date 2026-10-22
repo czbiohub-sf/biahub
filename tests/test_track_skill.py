@@ -90,3 +90,33 @@ def test_view_runs_division_points(tmp_path):
         }
     )
     assert module.division_points(tracks).tolist() == [[2.0, 6.0, 6.0]]
+
+
+def test_view_runs_gives_every_run_four_layers():
+    """An empty run and a populated run must fill the same number of panel slots."""
+    import numpy as np
+    import pandas as pd
+
+    pytest.importorskip("napari")
+    spec = importlib.util.spec_from_file_location("view_runs", SCRIPT.parent / "view_runs.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    image = np.zeros((3, 8, 8), dtype=np.float32)
+    labels = np.zeros((3, 8, 8), dtype=np.int32)
+    empty = pd.DataFrame(columns=["track_id", "t", "y", "x", "parent_track_id"])
+    full = pd.DataFrame(
+        {
+            "track_id": [1, 1],
+            "t": [0, 1],
+            "y": [2.0, 2.0],
+            "x": [2.0, 2.0],
+            "parent_track_id": [-1, -1],
+        }
+    )
+
+    layers_empty = module.run_layers("empty", image, labels, empty)
+    layers_full = module.run_layers("full", image, labels, full)
+
+    assert len(layers_empty) == len(layers_full) == module.LAYERS_PER_RUN == 4
+    assert [kind for kind, _, _ in layers_full] == ["image", "labels", "tracks", "points"]
+    assert [kind for kind, _, _ in layers_empty] == ["image", "labels", "points", "points"]

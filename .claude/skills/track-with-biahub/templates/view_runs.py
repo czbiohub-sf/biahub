@@ -35,6 +35,57 @@ def division_points(tracks: pd.DataFrame) -> np.ndarray:
     return np.array(rows, dtype=float).reshape(-1, 3)
 
 
+LAYERS_PER_RUN = 4
+
+
+def run_layers(
+    name: str, image, labels, tracks: pd.DataFrame
+) -> list[tuple[str, object, dict]]:
+    """Return the run's panel as (layer type, data, kwargs): always four layers.
+
+    A run without tracks gets an empty points layer in the tracks slot, so every run fills
+    the same number of grid slots and panels never mix layers of different runs.
+    """
+    divisions = division_points(tracks)
+    layers = [
+        ("image", image, {"name": f"{name}: input", "colormap": "gray"}),
+        ("labels", labels, {"name": f"{name}: labels", "opacity": 0.35}),
+    ]
+    if len(tracks):
+        graph = {
+            int(k): [int(p)]
+            for k, p in tracks.groupby("track_id").parent_track_id.first().items()
+            if p > 0
+        }
+        layers.append(
+            (
+                "tracks",
+                tracks[["track_id", "t", "y", "x"]].to_numpy(dtype=float),
+                {
+                    "name": f"{name}: tracks ({tracks.track_id.nunique()})",
+                    "graph": graph,
+                    "tail_length": 10,
+                },
+            )
+        )
+    else:
+        layers.append(("points", np.empty((0, 3)), {"name": f"{name}: tracks (0)"}))
+    layers.append(
+        (
+            "points",
+            divisions,
+            {
+                "name": f"{name}: divisions ({len(divisions)})",
+                "size": 40,
+                "face_color": "transparent",
+                "border_color": "yellow",
+                "out_of_slice_display": False,
+            },
+        )
+    )
+    return layers
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -59,31 +110,10 @@ def main():
         with open_ome_zarr(run / args.fov, mode="r") as ds:
             labels = np.asarray(ds.data[:, 0, 0])
         tracks = pd.read_csv(next((run / args.fov).glob("tracks_*.csv")))
-        graph = {
-            int(k): [int(p)]
-            for k, p in tracks.groupby("track_id").parent_track_id.first().items()
-            if p > 0
-        }
-        divisions = division_points(tracks)
-        viewer.add_image(image, name=f"{name}: {args.channel}", colormap="gray")
-        viewer.add_labels(labels, name=f"{name}: labels", opacity=0.35)
-        if len(tracks):
-            viewer.add_tracks(
-                tracks[["track_id", "t", "y", "x"]].to_numpy(),
-                graph=graph,
-                name=f"{name}: tracks ({tracks.track_id.nunique()})",
-                tail_length=10,
-            )
-        viewer.add_points(
-            divisions,
-            name=f"{name}: divisions ({len(divisions)})",
-            size=40,
-            face_color="transparent",
-            border_color="yellow",
-            out_of_slice_display=False,
-        )
+        for kind, data, kwargs in run_layers(name, image, labels, tracks):
+            getattr(viewer, f"add_{kind}")(data, **kwargs)
     viewer.canvas.grid.enabled = True
-    viewer.canvas.grid.stride = 4 if len(viewer.layers) == 4 * len(args.runs) else 3
+    viewer.canvas.grid.stride = LAYERS_PER_RUN  # one panel per run
     viewer.canvas.grid.shape = (1, len(args.runs))
     napari.run()
 
