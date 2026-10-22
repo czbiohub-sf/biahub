@@ -496,5 +496,9 @@ def test_the_visual_check_shows_the_reference_and_the_moving_volume_before_and_a
         assert names == (["phase"] + expected if with_phase else expected)
         assert viewer.layers["moving (registered)"].visible
         assert not viewer.layers["moving (original)"].visible
+        if with_phase:  # auto contrast: its own percentiles, not min to max
+            shown = viewer.layers["phase"]
+            low, high = np.percentile(shown.data, [0.5, 99.5])
+            assert shown.contrast_limits == pytest.approx([low, high])
     finally:
         viewer.close()

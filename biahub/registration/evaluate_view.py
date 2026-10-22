@@ -318,11 +318,11 @@ def _build_check(mov, ref, transform, ref_um, phase=None, full_resolution=False,
     viewer = napari.Viewer(title="registration check", show=show)
     if phase is not None:
         phase = np.nan_to_num(np.asarray(phase, np.float32))
+        phase = phase if downsample == 1 else _shrink_yx(phase, downsample)
+        # auto contrast: a few bright or dark outliers would leave min-to-max flat grey
+        limits = np.percentile(phase, [0.5, 99.5]).tolist()
         viewer.add_image(
-            phase if downsample == 1 else _shrink_yx(phase, downsample),
-            name="phase",
-            colormap="gray",
-            scale=scale,
+            phase, name="phase", colormap="gray", scale=scale, contrast_limits=limits
         )
     viewer.add_image(
         reference, name="reference", colormap="green", blending="additive", scale=scale
