@@ -225,3 +225,13 @@ def test_skill_config_templates_load():
     assert templates
     for template in templates:
         load_estimate_transform_settings(template)
+
+
+def test_track_skill_templates_load_one_per_tracker():
+    # The track-with-biahub skill copies these into runs; keep them on the current schema.
+    from biahub.utils.config import yaml_to_model
+
+    root = Path(__file__).resolve().parents[1] / ".claude" / "skills" / "track-with-biahub"
+    templates = sorted((root / "templates").glob("track-*.yml"))
+    trackers = {yaml_to_model(t, TrackingSettings).tracker for t in templates}
+    assert trackers == {"ultrack", "tracksdata", "hoct", "trackastra"}

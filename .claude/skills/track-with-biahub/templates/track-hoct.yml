@@ -1,0 +1,45 @@
+# biahub track, tracker: hoct (learned edge scores + ILP on the cellpose labels).
+# HOCT's general model, its pixel defaults converted to um at 0.1133 um/px.
+
+output_mode: "2D"
+fov: "*/*/*"
+target_channel: nuclei_prediction
+
+# Z: a 60-plane window around the Phase3D focus, mean-projected (input_images below).
+z_slicing:
+  method: focus
+  window_size: 60
+  focus_channel: Phase3D
+
+# cellpose labels feed every tracker; tracksdata, hoct and trackastra link them as they are.
+segmentation_method: cellpose
+cellpose_config:
+  pretrained_model: cpsam_v2
+  diameter: 80
+  cellprob_threshold: 0.0
+  flow_threshold: 0.4
+  gpu: true
+  min_size: 2500
+  input_channel: nuclei_prediction
+  labels_sigma: 5.0
+
+# Drop a daughter that lives 3 frames or fewer (VS hallucinations, neighbours).
+min_sibling_length: 3
+
+input_images:
+  - path: null                     # null = the -i plate
+    channels:
+      nuclei_prediction:
+        - function: np.mean
+          kwargs:
+            axis: 1
+          per_timepoint: false
+      Phase3D: []                  # loaded only for focus finding
+
+tracker: hoct
+hoct_config:
+  model: general_v1                # HOCT registry name or a path to weights
+  distance_threshold_um: 33.99
+  n_neighbors: 5
+  max_delta_t: 3                   # frames an edge may skip
+  solver: {}                       # HOCT ILPSolverConfig overrides

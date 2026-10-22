@@ -25,10 +25,36 @@ z_slicing:
 target_channel: nuclei_prediction
 blank_frames_path: blank_frames.csv
 
-# Segmentation method used to feed ultrack: "cellpose" or "foreground_contour".
+# Segmentation method used to feed the tracker: "cellpose" or "foreground_contour".
 # - cellpose: run a Cellpose model per frame to produce instance labels.
 # - foreground_contour: derive a foreground mask + contour map (ultrack segments).
 segmentation_method: cellpose
+
+# The linker: ultrack (default; re-segments and links, configured by tracking_config
+# below), tracksdata (ILP), hoct (learned edge scores + ILP) or trackastra (transformer
+# links). tracksdata, hoct and trackastra link the cellpose labels as they are, so they
+# need segmentation_method: cellpose and output_mode: 2D. Distances are in um; the
+# defaults below are the A549 benchmark's.
+# tracker: ultrack
+# tracksdata_config:
+#   distance_threshold_um: 22.66   # candidate edges to the next frame
+#   n_neighbors: 3
+#   distance_norm_um: 11.33        # edge weight = -IoU * exp(distance / distance_norm_um)
+#   node_weight: -2.0
+#   appearance_weight: 5.0
+#   disappearance_weight: 5.0
+#   division_weight: 1.0
+#   border_margin_um: 6.80         # appearing within this distance of the edge ...
+#   border_appearance_weight: -1.0 # ... costs this instead of appearance_weight
+# hoct_config:
+#   model: general_v1              # HOCT registry name or a path to weights
+#   distance_threshold_um: 33.99
+#   n_neighbors: 5
+#   max_delta_t: 3                 # frames an edge may skip
+#   solver: {}                     # HOCT ILPSolverConfig overrides
+# trackastra_config:
+#   model: general_2d              # pretrained name (general_2d, ctc) or a model folder
+#   mode: greedy                   # greedy | greedy_nodiv | ilp
 
 # Optional post-processing (ultrack filter_short_sibling_tracks): at a division where
 # exactly one daughter lives N frames or fewer and does not divide again, drop that
@@ -112,7 +138,7 @@ input_images:
   #         kwargs: {}
   # ---------------------------------------------------------------------------
 
-# Configuration for Ultrack tracking algorithm.
+# Configuration for Ultrack tracking algorithm (used only when tracker: ultrack).
 # See: https://royerlab.github.io/ultrack/
 
 tracking_config:

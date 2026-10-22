@@ -1,0 +1,54 @@
+# biahub track, tracker: ultrack (the default; the mantis-v2 A549 config).
+# ultrack re-segments from the cellpose labels and links; tuned for A549 at 0.1133 um/px.
+
+output_mode: "2D"
+fov: "*/*/*"
+target_channel: nuclei_prediction
+
+# Z: a 60-plane window around the Phase3D focus, mean-projected (input_images below).
+z_slicing:
+  method: focus
+  window_size: 60
+  focus_channel: Phase3D
+
+# cellpose labels feed every tracker; tracksdata, hoct and trackastra link them as they are.
+segmentation_method: cellpose
+cellpose_config:
+  pretrained_model: cpsam_v2
+  diameter: 80
+  cellprob_threshold: 0.0
+  flow_threshold: 0.4
+  gpu: true
+  min_size: 2500
+  input_channel: nuclei_prediction
+  labels_sigma: 5.0
+
+# Drop a daughter that lives 3 frames or fewer (VS hallucinations, neighbours).
+min_sibling_length: 3
+
+input_images:
+  - path: null                     # null = the -i plate
+    channels:
+      nuclei_prediction:
+        - function: np.mean
+          kwargs:
+            axis: 1
+          per_timepoint: false
+      Phase3D: []                  # loaded only for focus finding
+
+tracker: ultrack
+tracking_config:
+  segmentation_config:
+    min_area: 2500
+    max_area: 80000
+    min_frontier: 0.5
+    max_noise: 0.00
+  linking_config:
+    max_distance: 15
+    distance_weight: -0.0001
+    max_neighbors: 3
+  tracking_config:
+    disappear_weight: -0.0001
+    appear_weight: -0.001
+    division_weight: -0.0001
+    bias: 0.0001

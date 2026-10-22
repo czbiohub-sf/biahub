@@ -1,0 +1,42 @@
+# biahub track, tracker: trackastra (transformer links on the cellpose labels).
+# Pretrained general_2d model; no distance settings (the model predicts the links).
+
+output_mode: "2D"
+fov: "*/*/*"
+target_channel: nuclei_prediction
+
+# Z: a 60-plane window around the Phase3D focus, mean-projected (input_images below).
+z_slicing:
+  method: focus
+  window_size: 60
+  focus_channel: Phase3D
+
+# cellpose labels feed every tracker; tracksdata, hoct and trackastra link them as they are.
+segmentation_method: cellpose
+cellpose_config:
+  pretrained_model: cpsam_v2
+  diameter: 80
+  cellprob_threshold: 0.0
+  flow_threshold: 0.4
+  gpu: true
+  min_size: 2500
+  input_channel: nuclei_prediction
+  labels_sigma: 5.0
+
+# Drop a daughter that lives 3 frames or fewer (VS hallucinations, neighbours).
+min_sibling_length: 3
+
+input_images:
+  - path: null                     # null = the -i plate
+    channels:
+      nuclei_prediction:
+        - function: np.mean
+          kwargs:
+            axis: 1
+          per_timepoint: false
+      Phase3D: []                  # loaded only for focus finding
+
+tracker: trackastra
+trackastra_config:
+  model: general_2d                # pretrained name (general_2d, ctc) or a trained model folder
+  mode: greedy                     # greedy | greedy_nodiv | ilp

@@ -29,8 +29,11 @@ from biahub.cli.parsing import (
 from biahub.cli.resolve_function import resolve_function
 from biahub.settings import (
     CellposeConfig,
+    HoctConfig,
     ProcessingInputChannel,
+    TrackastraConfig,
     TrackingSettings,
+    TracksdataConfig,
     ZSlicing,
 )
 from biahub.utils.cellpose import (
@@ -433,6 +436,351 @@ def filter_short_siblings(
     return tracks_df, np.asarray(labels)
 
 
+TRACK_COLUMNS = ["track_id", "t", "y", "x", "parent_track_id"]
+
+
+def _empty_result(shape: tuple[int, ...]) -> tuple[np.ndarray, pd.DataFrame]:
+    """Zero labels and a tracks table with no rows, for movies with nothing to track."""
+    tracks = pd.DataFrame(
+        {
+            "track_id": pd.Series(dtype="int64"),
+            "t": pd.Series(dtype="int64"),
+            "y": pd.Series(dtype="float64"),
+            "x": pd.Series(dtype="float64"),
+            "parent_track_id": pd.Series(dtype="int64"),
+        }
+    )
+    return np.zeros(shape, dtype=np.int32), tracks
+
+
+def _num_threads() -> int:
+    """CPUs for the ILP solvers: the SLURM allocation, else this process's CPUs."""
+    if os.environ.get("SLURM_CPUS_PER_TASK"):
+        return int(os.environ["SLURM_CPUS_PER_TASK"])
+    if hasattr(os, "sched_getaffinity"):  # not on macOS or Windows
+        return len(os.sched_getaffinity(0))
+    return os.cpu_count() or 1
+
+
+def _select_every_detection(graph, keep_edges: bool = False):
+    """Mark every node selected: each detection becomes its own track.
+
+    Used when a candidate graph has no edges (one frame, or objects farther apart than
+    the distance threshold), which the ILP solvers refuse. ``keep_edges`` also selects
+    the edges, for a graph whose single edge is the only possible link.
+    """
+    import polars as pl
+    import tracksdata as td
+
+    solution = td.DEFAULT_ATTR_KEYS.SOLUTION
+    graph.add_node_attr_key(solution, pl.Boolean, default_value=True)
+    graph.add_edge_attr_key(solution, pl.Boolean, default_value=keep_edges)
+    return graph
+
+
+def _isolated_tracks(labels: np.ndarray) -> tuple[np.ndarray, pd.DataFrame]:
+    """Each detection of (T, Y, X) ``labels`` as its own track, without linking."""
+    import tracksdata as td
+
+    graph = td.graph.InMemoryGraph()
+    td.nodes.RegionPropsNodes().add_nodes(graph, labels=labels)
+    return _solution_to_tracks(_select_every_detection(graph), labels.shape)
+
+
+def _select_sparse_links(graph):
+    """Select every detection and its candidate links, one incoming link per detection.
+
+    For graphs where HOCT could score no inference window (each holds at most one
+    candidate link, so each link is the only option where it is): every node is kept,
+    and each node keeps one incoming edge (the first), so no detection gets two parents.
+    """
+    import polars as pl
+    import tracksdata as td
+
+    keys = td.DEFAULT_ATTR_KEYS
+    graph.add_node_attr_key(keys.SOLUTION, pl.Boolean, default_value=True)
+    graph.add_edge_attr_key(keys.SOLUTION, pl.Boolean, default_value=False)
+    edges = graph.edge_attrs(attr_keys=[keys.EDGE_ID, keys.EDGE_SOURCE, keys.EDGE_TARGET])
+    keep = edges.unique(subset=[keys.EDGE_TARGET], keep="first")[keys.EDGE_ID].to_list()
+    if keep:
+        graph.update_edge_attrs(attrs={keys.SOLUTION: True}, edge_ids=keep)
+    return graph
+
+
+def _solve_tracksdata(labels: np.ndarray, config: TracksdataConfig, pixel_size: float):
+    """Build the tracksdata graph of (T, Y, X) ``labels`` and solve its ILP.
+
+    Returns the solved graph (nodes and edges carry the ``solution`` attribute).
+    """
+    import polars as pl
+    import tracksdata as td
+
+    _, Y, X = labels.shape
+    graph = td.graph.InMemoryGraph()
+    td.nodes.RegionPropsNodes().add_nodes(graph, labels=labels)
+    margin = config.border_margin_um / pixel_size
+    appearance = config.appearance_weight
+    if margin > 0:
+        nodes = graph.node_attrs(attr_keys=[td.DEFAULT_ATTR_KEYS.NODE_ID, "y", "x"])
+        y, x = nodes["y"].to_numpy(), nodes["x"].to_numpy()
+        is_border = ((y < margin) | (y > Y - margin) | (x < margin) | (x > X - margin)).astype(
+            float
+        )
+        graph.add_node_attr_key("is_border", pl.Float64, default_value=0.0)
+        graph.update_node_attrs(
+            attrs={"is_border": is_border.tolist()},
+            node_ids=nodes[td.DEFAULT_ATTR_KEYS.NODE_ID].to_list(),
+        )
+        border = td.NodeAttr("is_border")
+        appearance = appearance * (1 - border) + config.border_appearance_weight * border
+    td.edges.DistanceEdges(
+        distance_threshold=config.distance_threshold_um / pixel_size,
+        n_neighbors=config.n_neighbors,
+    ).add_edges(graph)
+    if graph.num_edges() == 0:
+        return _select_every_detection(graph)
+    td.edges.IoUEdgeAttr(output_key="iou").add_edge_attrs(graph)
+    edge_weight = (
+        -td.EdgeAttr("iou")
+        * (td.EdgeAttr("distance") * (pixel_size / config.distance_norm_um)).exp()
+    )
+    td.solvers.ILPSolver(
+        edge_weight=edge_weight,
+        node_weight=config.node_weight,
+        appearance_weight=appearance,
+        disappearance_weight=config.disappearance_weight,
+        division_weight=config.division_weight,
+        num_threads=_num_threads(),
+        return_solution=False,
+    ).solve(graph)
+    return graph
+
+
+def _merge_single_children(
+    tracks: pd.DataFrame, labels: np.ndarray
+) -> tuple[pd.DataFrame, np.ndarray]:
+    """Merge every track that is its parent's only child into the parent.
+
+    Linking across skipped frames (HOCT's ``max_delta_t``, CTC conversion at gaps)
+    splits one track into parent -> one child. ultrack's tables, and the sibling filter
+    built on them, allow only 0 or 2 children, so the child takes its parent's id in the
+    tracks and the labels; chains collapse to their first track.
+    """
+    linked = tracks[tracks.parent_track_id != -1]
+    kids = linked.groupby("parent_track_id").track_id.unique()
+    into = {int(k[0]): int(parent) for parent, k in kids.items() if len(k) == 1}
+    if not into:
+        return tracks, labels
+
+    def root(track_id: int) -> int:
+        while track_id in into:
+            track_id = into[track_id]
+        return track_id
+
+    original_parent = tracks.groupby("track_id").parent_track_id.first().astype(int)
+    tracks = tracks.copy()
+    tracks["track_id"] = tracks.track_id.map(lambda k: root(int(k)))
+    tracks["parent_track_id"] = tracks.track_id.map(
+        lambda k: -1 if original_parent[k] == -1 else root(int(original_parent[k]))
+    )
+    lut = np.arange(int(labels.max()) + 1, dtype=labels.dtype)
+    for child in into:
+        if child < len(lut):
+            lut[child] = root(child)
+    tracks = tracks.sort_values(["track_id", "t"]).reset_index(drop=True)
+    return tracks, lut[labels]
+
+
+def _solution_to_tracks(graph, shape: tuple[int, ...]) -> tuple[np.ndarray, pd.DataFrame]:
+    """Convert a solved tracksdata graph to labels (value = track_id) and ultrack-like tracks.
+
+    The tracks have ``track_id, t, y, x, parent_track_id`` (-1 for roots), the columns
+    the sibling filter and the tracks CSV use. HOCT promotes 2D movies to (T, 1, Y, X)
+    and records that shape in the graph metadata, so labels are rendered in the graph's
+    own shape and reshaped to ``shape``.
+    """
+    import tracksdata as td
+
+    solution_key = td.DEFAULT_ATTR_KEYS.SOLUTION
+    if graph.num_nodes() == 0 or (
+        solution_key in graph.node_attr_keys()
+        and not graph.node_attrs(attr_keys=[solution_key])[solution_key].any()
+    ):
+        # The solver selected nothing (an empty solution can be the cheapest one).
+        return _empty_result(shape)
+
+    metadata = getattr(graph, "metadata", None) or {}
+    render_shape = tuple(metadata.get("shape", shape))
+    tracks, parents, labels_view = td.functional.to_napari_format(
+        graph, shape=render_shape, mask_key=td.DEFAULT_ATTR_KEYS.MASK
+    )
+    tracks = tracks.to_pandas().rename(columns={"tracklet_id": "track_id"})
+    tracks = tracks[["track_id", "t", "y", "x"]].copy()
+
+    def parent_of(track_id):
+        parent = parents.get(int(track_id), -1)
+        return int(parent[0]) if isinstance(parent, (list, tuple)) else int(parent)
+
+    tracks["parent_track_id"] = tracks.track_id.map(parent_of)
+    tracks = tracks.sort_values(["track_id", "t"]).reset_index(drop=True)
+    labels = np.stack([np.asarray(labels_view[t]) for t in range(shape[0])])
+    tracks, labels = _merge_single_children(tracks, labels.reshape(shape).astype(np.int32))
+    return labels, tracks
+
+
+def run_tracksdata(
+    labels: np.ndarray, config: TracksdataConfig, pixel_size: float
+) -> tuple[np.ndarray, pd.DataFrame]:
+    """Link fixed (T, Y, X) instance labels with tracksdata's ILP."""
+    if not labels.any():
+        return _empty_result(labels.shape)
+    graph = _solve_tracksdata(labels, config, pixel_size)
+    return _solution_to_tracks(graph, labels.shape)
+
+
+def _import_hoct():
+    try:
+        import hoct
+        import hoct.features
+    except ImportError as e:
+        raise ImportError(
+            "tracker: hoct needs HOCT, which biahub[track] installs on Python < 3.14 only "
+            "(its gurobipy pin has no Python 3.14 wheels)."
+        ) from e
+    return hoct
+
+
+def hoct_solver_config(config: HoctConfig):
+    """HOCT's ILPSolverConfig: ``config.solver`` overrides on HOCT's tracking defaults.
+
+    ILPSolverConfig needs every field when built directly, and refuses unknown keys.
+    """
+    _import_hoct()
+    from hoct.tracking import ILPSolverConfig
+
+    return ILPSolverConfig.model_validate(
+        {**ILPSolverConfig.default().model_dump(), **config.solver}
+    )
+
+
+def warm_hoct_weights(model: str) -> None:
+    """Download HOCT weights into the shared cache once (from --init, on the head node)."""
+    hoct = _import_hoct()
+    hoct.load_model(model, device="cpu")
+    click.echo(f"HOCT weights ready: {model}")
+
+
+def run_hoct(
+    labels: np.ndarray, images: np.ndarray, config: HoctConfig, pixel_size: float
+) -> tuple[np.ndarray, pd.DataFrame]:
+    """Link fixed (T, Y, X) instance labels with HOCT's edge model and ILP.
+
+    ``images`` is the (T, Y, X) image the labels were segmented from. HOCT runs in pixel
+    space, as its models were trained, so distances are converted to pixels.
+    """
+    if not labels.any():
+        return _empty_result(labels.shape)
+
+    import torch
+
+    hoct = _import_hoct()
+
+    # Build HOCT's candidate graph first: inference fails on a graph without edges.
+    graph = hoct.features.create_graph(
+        labels,
+        images=images,
+        distance_threshold=config.distance_threshold_um / pixel_size,
+        n_neighbors=config.n_neighbors,
+        delta_t=config.max_delta_t,
+    )
+    # HOCT 0.3.0's inference skips batches with at most one edge and then fails on an
+    # empty prediction list, so sparse graphs are resolved here: no edge leaves each
+    # detection on its own, a single edge is the only possible link.
+    if graph.num_edges() <= 1:
+        selected = _select_every_detection(graph, keep_edges=graph.num_edges() == 1)
+        return _solution_to_tracks(selected, labels.shape)
+
+    solver_config = hoct_solver_config(config)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = hoct.load_model(config.model, device=device)
+    try:
+        solution = hoct.predict(
+            model, graph=graph, solver_config=solver_config, return_solution=True
+        )
+    except ValueError as e:
+        # Every inference window held at most one candidate link, so HOCT scored none
+        # (0.3.0 then fails on an empty prediction list); each link is the only option.
+        if "non-empty list of Tensors" not in str(e):
+            raise
+        click.echo(
+            "HOCT scored no inference window (each holds at most one candidate link); "
+            "keeping every detection and its candidate links."
+        )
+        return _solution_to_tracks(_select_sparse_links(graph), labels.shape)
+    return _solution_to_tracks(solution, labels.shape)
+
+
+def warm_trackastra_weights(model: str) -> None:
+    """Download Trackastra weights into the shared cache once (from --init)."""
+    from trackastra.model import Trackastra
+
+    Trackastra.from_pretrained(model, device="cpu")
+    click.echo(f"Trackastra weights ready: {model}")
+
+
+def run_trackastra(
+    labels: np.ndarray, images: np.ndarray, config: TrackastraConfig
+) -> tuple[np.ndarray, pd.DataFrame]:
+    """Link fixed (T, Y, X) instance labels with Trackastra.
+
+    ``images`` is the (T, Y, X) image the labels were segmented from. Trackastra's
+    ``graph_to_ctc`` relabels the masks by track and gives each track's parent; the
+    tracks table takes each track's centroid per frame.
+    """
+    if not labels.any():
+        return _empty_result(labels.shape)
+    if labels.shape[0] < 2:
+        # Trackastra needs two frames to link; one frame is its detections, unlinked.
+        return _isolated_tracks(labels)
+
+    import torch
+
+    from skimage.measure import regionprops_table
+    from trackastra.model import Trackastra
+    from trackastra.tracking import graph_to_ctc
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if Path(config.model).exists():
+        model = Trackastra.from_folder(Path(config.model), device=device)
+    else:
+        model = Trackastra.from_pretrained(config.model, device=device)
+    # track() also returns a rendered mask movie; keep only the graph so it is freed.
+    graph = model.track(images, labels, mode=config.mode)[0]
+    ctc, tracked = graph_to_ctc(graph, labels)
+    tracked = np.asarray(tracked).astype(np.int32)
+
+    rows = []
+    for t in range(tracked.shape[0]):
+        props = regionprops_table(tracked[t], properties=("label", "centroid"))
+        rows.append(
+            pd.DataFrame(
+                {
+                    "track_id": props["label"],
+                    "t": t,
+                    "y": props["centroid-0"],
+                    "x": props["centroid-1"],
+                }
+            )
+        )
+    tracks = pd.concat(rows, ignore_index=True)
+    # CTC marks roots with parent 0; ultrack's tables use -1.
+    # graph_to_ctc's table is CTC's res_track.txt: label, t1, t2, parent.
+    parent = dict(zip(ctc["label"].astype(int), ctc["parent"].astype(int), strict=True))
+    tracks["parent_track_id"] = tracks.track_id.map(lambda k: parent.get(int(k), 0) or -1)
+    tracks, tracked = _merge_single_children(tracks, tracked)
+    return tracked, tracks
+
+
 def run_ultrack(
     tracking_config,
     database_path,
@@ -766,15 +1114,10 @@ def run_cellpose_per_frame(
     return labels
 
 
-def cellpose_segmentation(
+def cellpose_input(
     data_dict: dict[str, ArrayLike], cellpose_config: CellposeConfig
 ) -> np.ndarray:
-    """Run cellpose on a preprocessed ``data_dict`` channel.
-
-    Selects ``cellpose_config.input_channel``, mean-projects Z if needed, and returns an
-    integer label array of shape (T, Y, X) ready for ``run_ultrack(..., labels=...)``.
-    """
-    # Get the channel to segment
+    """Return the (T, Y, X) image cellpose segments (the input channel, Z mean-projected)."""
     channel_name = cellpose_config.input_channel
     if channel_name not in data_dict:
         raise ValueError(
@@ -792,8 +1135,22 @@ def cellpose_segmentation(
 
     if isinstance(images, da.Array):
         images = images.compute()
-    images = np.asarray(images)
+    return np.asarray(images)
 
+
+def cellpose_segmentation(
+    data_dict: dict[str, ArrayLike],
+    cellpose_config: CellposeConfig,
+    images: np.ndarray | None = None,
+) -> np.ndarray:
+    """Run cellpose on a preprocessed ``data_dict`` channel.
+
+    Segments ``cellpose_input`` (or ``images``, when the caller already has it) and
+    returns an integer label array of shape (T, Y, X) ready for a tracker.
+    """
+    if images is None:
+        images = cellpose_input(data_dict, cellpose_config)
+    channel_name = cellpose_config.input_channel
     click.echo(
         f"Running cellpose ({cellpose_config.pretrained_model}, "
         f"diameter={cellpose_config.diameter}) on channel '{channel_name}'..."
@@ -828,6 +1185,10 @@ def track_one_position(
     z_slicing: ZSlicing | None = None,
     output_mode: str = "2D",
     min_sibling_length: int | None = None,
+    tracker: str = "ultrack",
+    tracksdata_config: TracksdataConfig | None = None,
+    hoct_config: HoctConfig | None = None,
+    trackastra_config: TrackastraConfig | None = None,
 ) -> None:
     """
     Run tracking on a single field of view.
@@ -902,7 +1263,23 @@ def track_one_position(
         position_key, input_images, z_slices, blank_frames_path, z_slicing, pixel_size
     )
 
-    if cellpose_config is not None:
+    if cellpose_config is not None and tracker in ("tracksdata", "hoct", "trackastra"):
+        images = cellpose_input(data_dict, cellpose_config)
+        cellpose_labels = cellpose_segmentation(data_dict, cellpose_config, images=images)
+        click.echo(f"Tracking with {tracker} (cellpose labels)...")
+        if tracker == "tracksdata":
+            tracking_labels, tracks_df = run_tracksdata(
+                cellpose_labels, tracksdata_config or TracksdataConfig(), pixel_size
+            )
+        elif tracker == "hoct":
+            tracking_labels, tracks_df = run_hoct(
+                cellpose_labels, images, hoct_config or HoctConfig(), pixel_size
+            )
+        else:
+            tracking_labels, tracks_df = run_trackastra(
+                cellpose_labels, images, trackastra_config or TrackastraConfig()
+            )
+    elif cellpose_config is not None:
         cellpose_labels = cellpose_segmentation(data_dict, cellpose_config)
 
         click.echo("Tracking with cellpose labels...")
@@ -927,7 +1304,7 @@ def track_one_position(
             overwrite=True,
         )
 
-    if min_sibling_length is not None:
+    if min_sibling_length is not None and len(tracks_df):
         tracks_df, tracking_labels = filter_short_siblings(
             tracks_df, tracking_labels, min_sibling_length
         )
@@ -1084,6 +1461,15 @@ def track(
             # Fail here, once, rather than in every worker of the fan-out.
             check_cellpose_model_name(settings.cellpose_config.pretrained_model)
             warm_cellpose_weights(settings.cellpose_config.pretrained_model)
+        if settings.tracker == "hoct":
+            # Check the solver overrides here, before any worker runs cellpose.
+            hoct_solver_config(settings.hoct_config)
+            warm_hoct_weights(settings.hoct_config.model)
+        if (
+            settings.tracker == "trackastra"
+            and not Path(settings.trackastra_config.model).exists()
+        ):
+            warm_trackastra_weights(settings.trackastra_config.model)
         click.echo(f"Initialized {output_dirpath} ({len(input_position_dirpaths)} positions)")
         return
 
@@ -1096,11 +1482,13 @@ def track(
     z_slices, _ = resolve_z_slice(settings.z_slicing, Z)
     track_scale = scale[-2:] if settings.output_mode == "2D" else scale[-3:]
 
-    tracking_cfg = settings.tracking_config
-    tracking_cfg["segmentation_config"]["n_workers"] = num_cpus
-    tracking_cfg["linking_config"]["n_workers"] = num_cpus
-    default_config = MainConfig()
-    tracking_cfg = update_model(default_config, tracking_cfg)
+    tracking_cfg = None
+    if settings.tracker == "ultrack":
+        tracking_cfg = settings.tracking_config
+        tracking_cfg["segmentation_config"]["n_workers"] = num_cpus
+        tracking_cfg["linking_config"]["n_workers"] = num_cpus
+        default_config = MainConfig()
+        tracking_cfg = update_model(default_config, tracking_cfg)
 
     position_keys = [Path(p).parts[-3:] for p in input_position_dirpaths]
 
@@ -1151,6 +1539,10 @@ def track(
                 z_slicing=settings.z_slicing,
                 output_mode=settings.output_mode,
                 min_sibling_length=settings.min_sibling_length,
+                tracker=settings.tracker,
+                tracksdata_config=settings.tracksdata_config,
+                hoct_config=settings.hoct_config,
+                trackastra_config=settings.trackastra_config,
             )
             jobs.append(job)
 
