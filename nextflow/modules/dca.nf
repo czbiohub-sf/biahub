@@ -6,19 +6,25 @@
 // attributes and reads no pixel), so one task per plate covers every position.
 // It is two-pass: if any FOV is missing a required value it writes nothing,
 // lists every gap and exits non-zero, which terminates the run. Fill the plate's
-// `<plate>.dca-confirmed.toml` and `-resume`; a failed task is never cached.
+// `<stem>.dca-confirmed.toml` and `-resume`.
+//
+// NEVER CACHED. What finalize reads (the base TOML, the confirmed TOML, the
+// sample sheet, the QC tables) is not in the task hash, so a cached task could
+// keep metadata built from files edited since. The step is metadata-only and
+// last, so `-resume` always reruns it.
 //
 // THE PLATE IS A `val`, NEVER A STAGED `path`. finalize finds the confirmed TOML
 // and the sample sheet NEXT TO the plate by default, so a plate staged as a
 // symlink under the work dir would send it looking there. The same holds for
 // the config: the CLI reads the absolute `val`, so the YAML's relative
-// `base_config` resolves against its own directory, and the staged copy only
-// keys the task hash (see common.nf, #397).
+// `base_config` resolves against its own directory. The staged copy follows the
+// common.nf convention (#397) and is never read.
 //
 // `dca-validate` exiting non-zero fails the task: Nextflow runs the script under
 // `bash -e`, and a redirect, unlike a pipe, keeps the command's exit status. The
-// JSON report lands next to the plate either way, so a failing plate keeps the
-// findings that failed it.
+// JSON report lands next to the plate as `<stem>.dca-validate.json` either way,
+// so a failing plate keeps the findings that failed it. The stem drops the last
+// suffix only, as finalize's own defaults do (`plate.zarr` -> `plate`).
 
 include { slurm_logs; slurm_log_dir; retry_memory; retry_time } from './common'
 
@@ -29,17 +35,20 @@ process dca_finalize_store {
     clusterOptions { slurm_logs('dca') }
     memory { retry_memory(8, task) }
     time { retry_time(30, task) }
+    cache false
 
     input:
-    tuple val(zarr), val(config), path(config_file)  // config_file: staged only for the task hash, see common.nf (#397)
+    tuple val(zarr), val(config), path(config_file)  // config_file: staged per common.nf (#397), never read
 
     output:
     val zarr
 
     script:
+    def plate = file(zarr)
     """
     biahub dca-finalize -i "${zarr}"/*/*/* -c "${config}"
-    dca-validate --spec-version 0.2 --show-warnings --output json "${zarr}" > "${zarr}.dca-validate.json"
+    dca-validate --spec-version 0.2 --show-warnings --output json "${zarr}" \
+        > "${plate.parent}/${plate.baseName}.dca-validate.json"
     """
 }
 

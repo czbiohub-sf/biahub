@@ -417,7 +417,7 @@ workflow {
     // ----- DCA finalize -----------------------------------------------------
     // Gated on the QC report, the one signal that says every QC'd store's stage
     // tables are final; finalize reads the assembled store's. The validator's
-    // report lands next to the plate as <plate>.zarr.dca-validate.json.
+    // report lands next to the plate as <stem>.dca-validate.json.
     if (dca_on) {
         dca = dca_finalize_wf([assemble_output], params.dca_config, qc_report.done)
     }
