@@ -177,7 +177,7 @@ def _check_position(
             issues.append(f"{where}: {increment}")
     if sources.qc is not None:
         try:
-            stats = position_statistics(sources.qc, key, channel_names)
+            stats = position_statistics(sources.qc, key, channel_names, warnings)
         except ValueError as error:
             issues.append(f"{where}: {str(error).removeprefix(f'{key}: ')}")
 
