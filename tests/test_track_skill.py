@@ -70,3 +70,23 @@ def test_summary_with_scored_and_unscored_runs(compare):
 
     assert out.loc["a", "div_f1"] == pytest.approx(0.75)
     assert pd.isna(out.loc["b", "div_f1"])
+
+
+def test_view_runs_division_points(tmp_path):
+    """The viewer template loads, and marks one point per division."""
+    import pandas as pd
+
+    pytest.importorskip("napari")
+    spec = importlib.util.spec_from_file_location("view_runs", SCRIPT.parent / "view_runs.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    tracks = pd.DataFrame(
+        {
+            "track_id": [1, 1, 2, 3],
+            "t": [0, 1, 2, 2],
+            "y": [5.0, 6.0, 4.0, 8.0],
+            "x": [5.0, 6.0, 4.0, 8.0],
+            "parent_track_id": [-1, -1, 1, 1],
+        }
+    )
+    assert module.division_points(tracks).tolist() == [[2.0, 6.0, 6.0]]

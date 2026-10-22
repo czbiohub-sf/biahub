@@ -33,7 +33,14 @@ Counts only, so say so in the report:
 
 ## Visual check
 
-On one FOV per condition, open the labels and tracks of two trackers side by side in napari
-(`scripts/debug_track.py` loads one FOV, runs a tracking config and shows the result), and
-look at the divisions one tracker calls and the other does not. Ten such divisions say more
-about which tracker to trust than the counts.
+On one FOV per condition, open the finished runs side by side:
+
+```bash
+python templates/view_runs.py --plate <plate> --fov <row/col/fov> track-*/track.zarr
+```
+
+One panel per run (the input channel, the run's labels, its tracks, and a yellow circle on
+every division it calls), with shared time and zoom. Look at the divisions one tracker calls
+and another does not: ten of those say more about which tracker to trust than the counts.
+To tune one tracker's settings interactively on a single FOV, `scripts/debug_track.py` runs a
+tracking config and shows its result.

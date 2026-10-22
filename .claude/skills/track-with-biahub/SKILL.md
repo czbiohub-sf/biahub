@@ -97,7 +97,8 @@ python templates/compare_tracks.py track-*/track.zarr \
 
 Per tracker: tracks, divisions, cells per frame, mean track length; with annotations,
 division precision / recall / F1 (`references/evaluation.md` for how to read them).
-Then check divisions visually on one FOV per condition (`references/evaluation.md`).
+Then check divisions visually on one FOV per condition with `templates/view_runs.py`
+(`references/evaluation.md`).
 
 ## 9. Report and recommend
 
