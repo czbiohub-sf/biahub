@@ -66,8 +66,11 @@ def test_residual_affine_recovers_a_scale_error_and_a_rotation():
 
 
 def test_residual_affine_needs_enough_points():
-    r = residual_affine(np.zeros((3, 3)), np.zeros((3, 3)), VOX)
-    assert r["n"] == 3 and r["scale_zyx"] is None
+    # DragonFly: 8 nuclei gave a residual scale of 0.86 (noise), 13-16 sensible values
+    rng = np.random.default_rng(0)
+    for n in (3, 8):
+        r = residual_affine(rng.random((n, 3)) * 100, rng.random((n, 3)), VOX)
+        assert r["n"] == n and r["scale_zyx"] is None
 
 
 # --- layer 2: point-based residuals -----------------------------------------------------
@@ -502,3 +505,18 @@ def test_the_visual_check_shows_the_reference_and_the_moving_volume_before_and_a
             assert shown.contrast_limits == pytest.approx([low, high])
     finally:
         viewer.close()
+
+
+def test_z_from_too_few_points_falls_back_to_the_crops_and_says_why():
+    # One matched nucleus gave z = -1.98 µm on a sparse DragonFly FOV: noise, not a measure.
+    from biahub.registration.evaluate import evaluate
+
+    ref = _cells(16, shape=(40, 256, 256))
+    mov = _ndi_shift(ref, (2.0, 0.0, 0.0), order=1, mode="nearest")
+    few = _clicked(np.array([[20.0, 60.0, 60.0], [20.0, 190.0, 190.0]]), (2.0, 0.0, 0.0), VOX3)
+    record = evaluate(
+        Transform.identity(3), mov, ref, VOX3, VOX3, landmarks=few, tile_px=64, crop_px=96
+    )
+    assert record.points["n_matched"] == 2
+    assert record.z_from == "z crops (edges); 2 matched points are too few"
+    assert record.z_um == pytest.approx(-2 * 0.2, abs=0.05)
