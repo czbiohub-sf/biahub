@@ -118,39 +118,92 @@ def test_tracksdata_tracks_a_division():
     _check_one_division(tracks, tracked)
 
 
-def test_hoct_gets_pixel_settings_and_the_image(monkeypatch):
-    """HOCT's model is stubbed (no download); the stub solves with tracksdata."""
+def _stub_hoct(monkeypatch, labels, calls):
+    """Real HOCT graph construction (recorded); the model and predict are stubbed."""
     import hoct
+    import hoct.features
 
-    from biahub.track import _solve_tracksdata, run_hoct
+    from biahub.track import _solve_tracksdata
 
-    calls = {}
-    monkeypatch.setattr(hoct, "load_model", lambda model, device="cpu": ("model", model))
+    real_create_graph = hoct.features.create_graph
 
-    def predict(model, *, labels, images, distance_threshold, n_neighbors, max_delta_t, **kw):
-        calls.update(
-            model=model,
-            images=images,
-            distance_threshold=distance_threshold,
-            n_neighbors=n_neighbors,
-            max_delta_t=max_delta_t,
-            **kw,
-        )
+    def create_graph(labels_, **kw):
+        calls["create_graph"] = kw
+        return real_create_graph(labels_, **kw)
+
+    def predict(model, *, graph, **kw):
+        calls.update(model=model, graph=graph, **kw)
         return _solve_tracksdata(labels, TracksdataConfig(), pixel_size=1.0)
 
+    monkeypatch.setattr(hoct.features, "create_graph", create_graph)
+    monkeypatch.setattr(hoct, "load_model", lambda model, device="cpu": ("model", model))
     monkeypatch.setattr(hoct, "predict", predict)
+
+
+def test_hoct_gets_pixel_settings_and_the_image(monkeypatch):
+    from biahub.track import run_hoct
+
     labels, image = _dividing_movie()
+    calls = {}
+    _stub_hoct(monkeypatch, labels, calls)
 
     tracked, tracks = run_hoct(
         labels, image, HoctConfig(distance_threshold_um=3.0), pixel_size=0.5
     )
 
+    graph_kw = calls["create_graph"]
     assert calls["model"] == ("model", "general_v1")
-    assert calls["distance_threshold"] == pytest.approx(6.0)  # 3 um at 0.5 um/px
-    assert calls["n_neighbors"] == 5 and calls["max_delta_t"] == 3
-    assert calls.get("scale") is None  # pixel space, as the model was trained
-    assert np.array_equal(calls["images"], image)
+    assert graph_kw["distance_threshold"] == pytest.approx(6.0)  # 3 um at 0.5 um/px
+    assert graph_kw["n_neighbors"] == 5 and graph_kw["delta_t"] == 3
+    assert graph_kw.get("scale") is None  # pixel space, as the model was trained
+    assert np.array_equal(graph_kw["images"], image)
     _check_one_division(tracks, tracked)
+
+
+def test_hoct_solver_overrides_merge_into_its_defaults(monkeypatch):
+    from hoct.tracking import ILPSolverConfig
+
+    from biahub.track import run_hoct
+
+    labels, image = _dividing_movie()
+    calls = {}
+    _stub_hoct(monkeypatch, labels, calls)
+
+    run_hoct(labels, image, HoctConfig(solver={"division_weight": 1.0}), pixel_size=1.0)
+
+    solver = calls["solver_config"]
+    assert solver.division_weight == 1.0
+    assert solver.node_weight == ILPSolverConfig.default().node_weight
+
+
+@pytest.mark.parametrize("frames", [1, 2])
+def test_hoct_without_candidate_links_keeps_each_detection(frames, monkeypatch):
+    """HOCT's real graph construction finds no edges: no inference, isolated tracks."""
+    import hoct
+
+    from biahub.track import run_hoct
+
+    def no_model(*args, **kw):
+        raise AssertionError("HOCT inference must not run on an edgeless graph")
+
+    monkeypatch.setattr(hoct, "load_model", no_model)
+    monkeypatch.setattr(hoct, "predict", no_model)
+    labels = np.zeros((frames, 64, 64), dtype=np.int32)
+    labels[0, 5:10, 5:10] = 1
+    labels[0, 50:55, 50:55] = 2
+    if frames == 2:
+        labels[1, 30:35, 5:10] = 1
+
+    tracked, tracks = run_hoct(
+        labels,
+        labels.astype(np.float32),
+        HoctConfig(distance_threshold_um=5.0),
+        pixel_size=1.0,
+    )
+
+    assert tracked.shape == labels.shape
+    assert len(tracks) == int((labels > 0).any(axis=(1, 2)).sum() + 1)
+    assert tracks.track_id.is_unique and (tracks.parent_track_id == -1).all()
 
 
 def _trackastra_graph(labels):
@@ -253,7 +306,6 @@ def dividing_plate(tmp_path):
 
 @pytest.mark.parametrize("tracker", ["tracksdata", "hoct", "trackastra"])
 def test_track_debug_run_with_a_label_tracker(tracker, dividing_plate, tmp_path, monkeypatch):
-    import hoct
 
     import biahub.track as track_mod
 
@@ -279,14 +331,7 @@ def test_track_debug_run_with_a_label_tracker(tracker, dividing_plate, tmp_path,
         "from_pretrained",
         staticmethod(lambda name, **kw: Model()),
     )
-    monkeypatch.setattr(hoct, "load_model", lambda model, device="cpu": "model")
-    monkeypatch.setattr(
-        hoct,
-        "predict",
-        lambda model, *, labels, **kw: track_mod._solve_tracksdata(
-            labels, TracksdataConfig(), pixel_size=1.0
-        ),
-    )
+    _stub_hoct(monkeypatch, labels, {})
     config = tmp_path / "track.yml"
     config.write_text(
         yaml.safe_dump(
@@ -491,3 +536,23 @@ def test_an_empty_result_reaches_the_outputs(tracker, dividing_plate, tmp_path, 
     assert len(tracks) == 0 and "track_id" in tracks.columns
     with open_ome_zarr(tmp_path / "out.zarr" / "A" / "1" / "0", mode="r") as ds:
         assert not np.asarray(ds.data).any()
+
+
+def test_hoct_solver_override_typos_are_refused(monkeypatch):
+    from biahub.track import run_hoct
+
+    labels, image = _dividing_movie()
+    _stub_hoct(monkeypatch, labels, {})
+    with pytest.raises(ValueError, match="divison_weight"):
+        run_hoct(labels, image, HoctConfig(solver={"divison_weight": 1.0}), pixel_size=1.0)
+
+
+def test_a_missing_hoct_says_how_to_get_it(monkeypatch):
+    """HOCT is installed only on Python < 3.14 (its gurobipy pin has no 3.14 wheels)."""
+    import sys
+
+    from biahub.track import warm_hoct_weights
+
+    monkeypatch.setitem(sys.modules, "hoct", None)  # import hoct -> ImportError
+    with pytest.raises(ImportError, match="Python < 3.14"):
+        warm_hoct_weights("general_v1")

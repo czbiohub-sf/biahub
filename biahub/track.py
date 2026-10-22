@@ -462,6 +462,21 @@ def _num_threads() -> int:
     return os.cpu_count() or 1
 
 
+def _select_every_detection(graph):
+    """Mark every node selected and no edge: each detection becomes its own track.
+
+    Used when a candidate graph has no edges (one frame, or objects farther apart than
+    the distance threshold), which the ILP solvers refuse.
+    """
+    import polars as pl
+    import tracksdata as td
+
+    solution = td.DEFAULT_ATTR_KEYS.SOLUTION
+    graph.add_node_attr_key(solution, pl.Boolean, default_value=True)
+    graph.add_edge_attr_key(solution, pl.Boolean, default_value=False)
+    return graph
+
+
 def _solve_tracksdata(labels: np.ndarray, config: TracksdataConfig, pixel_size: float):
     """Build the tracksdata graph of (T, Y, X) ``labels`` and solve its ILP.
 
@@ -493,12 +508,7 @@ def _solve_tracksdata(labels: np.ndarray, config: TracksdataConfig, pixel_size: 
         n_neighbors=config.n_neighbors,
     ).add_edges(graph)
     if graph.num_edges() == 0:
-        # No candidate links (one frame, or objects beyond distance_threshold_um): the
-        # solver refuses an edgeless graph, so keep each detection as its own track.
-        solution = td.DEFAULT_ATTR_KEYS.SOLUTION
-        graph.add_node_attr_key(solution, pl.Boolean, default_value=True)
-        graph.add_edge_attr_key(solution, pl.Boolean, default_value=False)
-        return graph
+        return _select_every_detection(graph)
     td.edges.IoUEdgeAttr(output_key="iou").add_edge_attrs(graph)
     edge_weight = (
         -td.EdgeAttr("iou")
@@ -598,10 +608,21 @@ def run_tracksdata(
     return _solution_to_tracks(graph, labels.shape)
 
 
+def _import_hoct():
+    try:
+        import hoct
+        import hoct.features
+    except ImportError as e:
+        raise ImportError(
+            "tracker: hoct needs HOCT, which biahub[track] installs on Python < 3.14 only "
+            "(its gurobipy pin has no Python 3.14 wheels)."
+        ) from e
+    return hoct
+
+
 def warm_hoct_weights(model: str) -> None:
     """Download HOCT weights into the shared cache once (from --init, on the head node)."""
-    import hoct
-
+    hoct = _import_hoct()
     hoct.load_model(model, device="cpu")
     click.echo(f"HOCT weights ready: {model}")
 
@@ -617,25 +638,31 @@ def run_hoct(
     if not labels.any():
         return _empty_result(labels.shape)
 
-    import hoct
     import torch
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = hoct.load_model(config.model, device=device)
-    kwargs = {}
-    if config.solver:
-        from hoct.tracking import ILPSolverConfig
+    hoct = _import_hoct()
+    from hoct.tracking import ILPSolverConfig
 
-        kwargs["solver_config"] = ILPSolverConfig(**config.solver)
-    solution = hoct.predict(
-        model,
-        labels=labels,
+    # Build HOCT's candidate graph first: inference fails on a graph without edges.
+    graph = hoct.features.create_graph(
+        labels,
         images=images,
         distance_threshold=config.distance_threshold_um / pixel_size,
         n_neighbors=config.n_neighbors,
-        max_delta_t=config.max_delta_t,
-        return_solution=True,
-        **kwargs,
+        delta_t=config.max_delta_t,
+    )
+    if graph.num_edges() == 0:
+        return _solution_to_tracks(_select_every_detection(graph), labels.shape)
+
+    # ILPSolverConfig needs every field when built directly; overrides go onto
+    # HOCT's tracking defaults.
+    solver_config = ILPSolverConfig.model_validate(
+        {**ILPSolverConfig.default().model_dump(), **config.solver}
+    )
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = hoct.load_model(config.model, device=device)
+    solution = hoct.predict(
+        model, graph=graph, solver_config=solver_config, return_solution=True
     )
     return _solution_to_tracks(solution, labels.shape)
 
