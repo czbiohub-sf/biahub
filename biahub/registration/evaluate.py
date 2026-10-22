@@ -22,8 +22,12 @@ from skimage.registration import phase_cross_correlation
 from biahub.characterize_psf import detect_peaks
 from biahub.core.transform import Transform
 
-# Fewer matched points than this do not constrain an affine residual (12 parameters).
-MIN_POINTS_FOR_AFFINE = 6
+# Fewer matched points than this do not constrain an affine residual (12 parameters,
+# fitted to noisy centres: DragonFly nuclei gave a scale of 0.86 from 8 points).
+MIN_POINTS_FOR_AFFINE = 10
+
+# Fewer matched points than this give no z residual (one nucleus read -1.98 µm).
+MIN_POINTS_FOR_Z = 5
 
 
 def _polar(linear: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -484,8 +488,11 @@ class Evaluation:
     holds the same measures for the unregistered pair (identity), so each number reads
     against doing nothing. `z_um` is the residual z shift (reference minus mapped moving)
     and `z_from` the measure it came from: points when there are any, since the image
-    crops can be biased (cross-modal pairs), else the median of the z crops. Tiles see yx
-    only (max projections); a z error shows in points and z crops alone.
+    crops can be biased (cross-modal pairs), else the median of the z crops; `z_from`
+    says when there were too few points (`MIN_POINTS_FOR_Z`). Tiles see yx only (max
+    projections); a z error shows in points and z crops alone. Point distances are 3D and
+    carry each landmark's centre error, so they read higher than tiles for the same
+    registration.
 
     The baseline's points can match few: a large scale or shift error moves landmarks
     beyond the matching radius (DragonFly unregistered: 5-7 of ~18 nuclei), so read the
@@ -570,13 +577,15 @@ def _landmarks(landmarks, mov, ref, mov_um, ref_um, detect_kwargs) -> tuple | No
 
 def _z(points: dict | None, z_crops: dict | None, points_source: str | None) -> tuple:
     """Return (z residual in µm, the measure it came from)."""
-    if points is not None and points["stats"]["n"] > 0:
+    n = 0 if points is None else points["stats"]["n"]
+    if n >= MIN_POINTS_FOR_Z:
         return points["stats"]["median_zyx_um"][0], f"points ({points_source})"
+    too_few = f"; {n} matched points are too few" if n else ""
     if z_crops is not None:
         dz = [v[0] for v in z_crops["crops_um"].values() if v is not None]
         if dz:
-            return float(np.median(dz)), f"z crops ({z_crops['compare']})"
-    return None, None
+            return float(np.median(dz)), f"z crops ({z_crops['compare']}){too_few}"
+    return None, (f"no z measure{too_few}" if too_few else None)
 
 
 def _measures(transform, mov, ref, ref_um, marks, images, compare, image_kwargs) -> dict:
