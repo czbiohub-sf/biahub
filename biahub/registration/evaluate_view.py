@@ -9,6 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
+from biahub.core.transform import Transform
 from biahub.registration.evaluate import Evaluation
 
 # Arrows are drawn this many times longer than the residual, up to this share of the image.
@@ -174,3 +175,117 @@ def plot_evaluation(record: Evaluation, path: str | Path | None = None, title: s
     if path is not None:
         figure.savefig(path, dpi=120)
     return figure
+
+
+# --- video -----------------------------------------------------------------------------
+
+# Frames the max projections are held for before the z scan (2 s at the default rate).
+HOLD_FRAMES = 16
+
+
+def _corner_pair(transform, mov, ref, size: int, origin_yx: tuple = (0, 0)) -> tuple:
+    """Return (warped moving, reference) at full resolution in one yx window of `ref`.
+
+    Only the window is warped: the transform is shifted so the window's corner is the
+    output's origin.
+    """
+    y0, x0 = origin_yx
+    ref_crop = np.asarray(ref, dtype=np.float32)[:, y0 : y0 + size, x0 : x0 + size]
+    to_window = Transform.from_translation([0.0, -y0, -x0])
+    warped = (to_window @ transform).apply(
+        np.asarray(mov, dtype=np.float32), reference=ref_crop
+    )
+    return warped, ref_crop
+
+
+def _limits(volume: np.ndarray) -> tuple[float, float]:
+    data = volume[volume != 0]
+    low, high = np.percentile(data if data.size else volume, [1, 99.8])
+    return float(low), float(high)
+
+
+def _rgb(moving, reference, mov_limits, ref_limits) -> np.ndarray:
+    def scale(image, limits):
+        return np.clip((image - limits[0]) / (limits[1] - limits[0] + 1e-9), 0, 1)
+
+    m, r = scale(moving, mov_limits), scale(reference, ref_limits)
+    return np.stack([m, r, m], axis=-1)
+
+
+def animate_evaluation(
+    mov,
+    ref,
+    transforms: dict,
+    path: str | Path,
+    title: str = "",
+    zoom_px: int = 384,
+    fps: int = 8,
+) -> Path:
+    """Write a video comparing transforms: max projections, then a scan through z.
+
+    One column per entry of `transforms` (name -> forward Transform, e.g. unregistered,
+    a hand registration, the skill's), moving magenta on reference green: the full field
+    (averaged down) and the top-left corner at full resolution, where a scale error shows
+    most. Brightness is fixed per volume across frames. Without ffmpeg the frames are
+    written as PNGs in a folder next to `path`.
+    """
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from biahub.registration.evaluate import display_volumes
+
+    path = Path(path)
+    columns = []
+    for name, transform in transforms.items():
+        warped, small_ref, _factor = display_volumes(transform, mov, ref)
+        corner, ref_corner = _corner_pair(transform, mov, ref, zoom_px)
+        columns.append((name, warped, small_ref, corner, ref_corner))
+    mov_limits = _limits(columns[0][1].max(axis=0))
+    ref_limits = _limits(columns[0][2].max(axis=0))
+    n_z = columns[0][2].shape[0]
+    steps = [("max projection", None)] * HOLD_FRAMES + [(f"z = {z}", z) for z in range(n_z)]
+
+    def frame(label, z):
+        # 400 px per column by 832: already multiples of 16, so no padding shows
+        figure, axes = plt.subplots(
+            2, len(columns), figsize=(4 * len(columns), 8.32), dpi=100, squeeze=False
+        )
+        for k, (name, warped, small_ref, corner, ref_corner) in enumerate(columns):
+            for row, (m, r, what) in enumerate(
+                ((warped, small_ref, "full field"), (corner, ref_corner, "top-left corner"))
+            ):
+                pick = (lambda v: v.max(axis=0)) if z is None else (lambda v: v[z])
+                axes[row, k].imshow(_rgb(pick(m), pick(r), mov_limits, ref_limits))
+                axes[row, k].set_title(f"{name}: {what}", fontsize=10)
+                axes[row, k].set_axis_off()
+        figure.suptitle(f"{title}  {label}  (moving magenta, reference green)", fontsize=11)
+        figure.tight_layout()
+        figure.canvas.draw()
+        image = np.asarray(figure.canvas.buffer_rgba())[..., :3].copy()
+        plt.close(figure)
+        # the encoder wants sides in multiples of 16
+        pad = [(0, -image.shape[0] % 16), (0, -image.shape[1] % 16), (0, 0)]
+        return np.pad(image, pad)
+
+    try:
+        import imageio_ffmpeg
+
+        first = frame(*steps[0])
+        writer = imageio_ffmpeg.write_frames(
+            str(path), (first.shape[1], first.shape[0]), fps=fps, macro_block_size=16
+        )
+        writer.send(None)
+        writer.send(first.tobytes())
+        for label, z in steps[1:]:
+            writer.send(frame(label, z).tobytes())
+        writer.close()
+        return path
+    except (ImportError, RuntimeError) as error:
+        frames_dir = path.with_suffix("")
+        frames_dir.mkdir(parents=True, exist_ok=True)
+        for k, (label, z) in enumerate(steps):
+            plt.imsave(frames_dir / f"{k:04d}.png", frame(label, z))
+        print(f"no video encoder ({error}): frames written to {frames_dir}")
+        return frames_dir

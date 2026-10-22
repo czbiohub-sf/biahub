@@ -439,3 +439,34 @@ def test_a_stored_record_has_no_projections_to_plot():
     stored = Evaluation(**_record(images=False).to_dict())
     with pytest.raises(ValueError, match="projections"):
         plot_evaluation(stored)
+
+
+def test_the_video_holds_the_projections_then_scans_through_z(tmp_path):
+    import imageio_ffmpeg
+
+    from biahub.registration.evaluate_view import HOLD_FRAMES, animate_evaluation
+
+    ref = _cells(12, shape=(20, 160, 160))
+    mov = _ndi_shift(ref, (0.0, 3.0, -2.0), order=1, mode="nearest")
+    transforms = {
+        "unregistered": Transform.identity(3),
+        "registered": Transform.from_translation([0.0, -3.0, 2.0]),
+    }
+    path = animate_evaluation(mov, ref, transforms, tmp_path / "check.mp4", zoom_px=64)
+    reader = imageio_ffmpeg.read_frames(str(path))
+    meta = next(reader)
+    n_frames = sum(1 for _ in reader)
+    assert n_frames == HOLD_FRAMES + ref.shape[0]
+    assert meta["size"][0] % 16 == 0 and meta["size"][1] % 16 == 0  # as the encoder wants
+
+
+def test_the_zoom_warps_only_its_corner_and_matches_the_full_warp():
+    from biahub.registration.evaluate_view import _corner_pair
+
+    ref = _cells(13, shape=(20, 160, 160))
+    mov = _ndi_shift(ref, (0.0, 3.0, -2.0), order=1, mode="nearest")
+    transform = Transform.from_translation([0.0, -3.0, 2.0])
+    warped, ref_crop = _corner_pair(transform, mov, ref, size=64)
+    full = transform.apply(mov, reference=ref)
+    np.testing.assert_allclose(warped, full[:, :64, :64], atol=1e-3)
+    np.testing.assert_array_equal(ref_crop, ref[:, :64, :64])
