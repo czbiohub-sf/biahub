@@ -487,6 +487,26 @@ def _isolated_tracks(labels: np.ndarray) -> tuple[np.ndarray, pd.DataFrame]:
     return _solution_to_tracks(_select_every_detection(graph), labels.shape)
 
 
+def _select_sparse_links(graph):
+    """Select every detection and its candidate links, one incoming link per detection.
+
+    For graphs where HOCT could score no inference window (each holds at most one
+    candidate link, so each link is the only option where it is): every node is kept,
+    and each node keeps one incoming edge (the first), so no detection gets two parents.
+    """
+    import polars as pl
+    import tracksdata as td
+
+    keys = td.DEFAULT_ATTR_KEYS
+    graph.add_node_attr_key(keys.SOLUTION, pl.Boolean, default_value=True)
+    graph.add_edge_attr_key(keys.SOLUTION, pl.Boolean, default_value=False)
+    edges = graph.edge_attrs(attr_keys=[keys.EDGE_ID, keys.EDGE_SOURCE, keys.EDGE_TARGET])
+    keep = edges.unique(subset=[keys.EDGE_TARGET], keep="first")[keys.EDGE_ID].to_list()
+    if keep:
+        graph.update_edge_attrs(attrs={keys.SOLUTION: True}, edge_ids=keep)
+    return graph
+
+
 def _solve_tracksdata(labels: np.ndarray, config: TracksdataConfig, pixel_size: float):
     """Build the tracksdata graph of (T, Y, X) ``labels`` and solve its ILP.
 
@@ -683,9 +703,20 @@ def run_hoct(
     solver_config = hoct_solver_config(config)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = hoct.load_model(config.model, device=device)
-    solution = hoct.predict(
-        model, graph=graph, solver_config=solver_config, return_solution=True
-    )
+    try:
+        solution = hoct.predict(
+            model, graph=graph, solver_config=solver_config, return_solution=True
+        )
+    except ValueError as e:
+        # Every inference window held at most one candidate link, so HOCT scored none
+        # (0.3.0 then fails on an empty prediction list); each link is the only option.
+        if "non-empty list of Tensors" not in str(e):
+            raise
+        click.echo(
+            "HOCT scored no inference window (each holds at most one candidate link); "
+            "keeping every detection and its candidate links."
+        )
+        return _solution_to_tracks(_select_sparse_links(graph), labels.shape)
     return _solution_to_tracks(solution, labels.shape)
 
 

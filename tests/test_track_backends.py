@@ -672,3 +672,40 @@ def test_hoct_real_model_on_a_single_candidate_link():
         labels, labels.astype(np.float32), HoctConfig(), pixel_size=0.1133
     )
     assert tracks.track_id.nunique() == 1 and len(tracks) == 2
+
+
+def _separated_links_movie():
+    """20 frames, candidate links only at 0->1 and 18->19: every HOCT window is sparse."""
+    labels = np.zeros((20, 64, 64), dtype=np.int32)
+    labels[0:2, 10:18, 10:18] = 1
+    labels[18:20, 40:48, 40:48] = 1
+    return labels
+
+
+def test_hoct_with_only_sparse_windows_links_the_candidates(monkeypatch, capsys):
+    import hoct
+
+    from biahub.track import run_hoct
+
+    def empty_predictions(*args, **kw):
+        raise ValueError("torch.cat(): expected a non-empty list of Tensors")
+
+    monkeypatch.setattr(hoct, "load_model", lambda model, device="cpu": "model")
+    monkeypatch.setattr(hoct, "predict", empty_predictions)
+    labels = _separated_links_movie()
+
+    tracked, tracks = run_hoct(labels, labels.astype(np.float32), HoctConfig(), pixel_size=1.0)
+
+    assert sorted(tracks.groupby("track_id").t.apply(list).tolist()) == [[0, 1], [18, 19]]
+    assert "no inference window" in capsys.readouterr().out
+
+
+@pytest.mark.skipif(not _hoct_weights_cached(), reason="HOCT weights not downloaded")
+def test_hoct_real_model_on_temporally_separated_links():
+    from biahub.track import run_hoct
+
+    labels = _separated_links_movie()
+    tracked, tracks = run_hoct(
+        labels, labels.astype(np.float32), HoctConfig(), pixel_size=0.1133
+    )
+    assert len(tracks) == 4 and tracked.shape == labels.shape
