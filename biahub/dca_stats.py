@@ -20,7 +20,7 @@ STATS_METADATA = {
     "dataset_statistics": "median across T; mean and std pooled",
 }
 
-QC_COLUMNS = ["position", "T", "channel_name", "metric_name", "value", "granularity"]
+QC_COLUMNS = ["position", "T", "C", "channel_name", "metric_name", "value", "granularity"]
 METRIC_PREFIX = "intensity_stats_"
 SECONDS_PER_UNIT = {"second": 1.0, "minute": 60.0, "hour": 3600.0}
 TIME_INCREMENT_TOLERANCE_S = 1.0
@@ -107,15 +107,29 @@ def _channel_statistics(frame: pd.DataFrame) -> dict[str, Any] | None:
 
 
 def position_statistics(
-    qc: pd.DataFrame, position_key: str, channel_names: Sequence[str]
+    qc: pd.DataFrame,
+    position_key: str,
+    channel_names: Sequence[str],
+    warnings: list[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """Return per-channel DCA statistics for one position, keyed by omero channel index."""
+    """Return per-channel DCA statistics for one position, keyed by omero channel index.
+
+    Rows are matched by the QC table's channel index ``C``, so a channel renamed after
+    QC ran still finds its statistics. Each channel whose QC name differs from its
+    plate name appends a note to ``warnings``.
+    """
     rows = qc[(qc["position"] == position_key) & qc["T"].notna()].copy()
     rows["stat"] = rows["metric_name"].str.removeprefix(METRIC_PREFIX)
     result: dict[str, dict[str, Any]] = {}
     gaps: list[str] = []
     for index, name in enumerate(channel_names):
-        channel_rows = rows[rows["channel_name"] == name]
+        channel_rows = rows[rows["C"] == index]
+        qc_names = sorted(set(channel_rows["channel_name"]) - {name})
+        if qc_names and warnings is not None:
+            warnings.append(
+                f"channel {index} is {name!r} in the plate and {qc_names[0]!r} in the QC "
+                "table; statistics matched by channel index"
+            )
         statistics = _channel_statistics(channel_rows) if len(channel_rows) else None
         if statistics is None:
             present = set(channel_rows["stat"])

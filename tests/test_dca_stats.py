@@ -96,15 +96,29 @@ def test_pooled_mean_and_std_exact(tmp_path):
     assert result["0"]["dataset_statistics"]["std"] == pytest.approx(2**0.5)
 
 
-def test_channel_index_follows_omero_order(tmp_path):
-    rows = _full_rows("nuclei_prediction", {0: _stats(p1=4)}) + _full_rows(
-        "Phase3D", {0: _stats(p1=8)}
+def test_channels_match_by_index_when_renamed_after_qc(tmp_path):
+    rows = _full_rows("Phase3D", {0: _stats(p1=8)}) + _full_rows(
+        "nuclei_prediction", {0: _stats(p1=4)}
     )
+    warnings: list[str] = []
     result = position_statistics(
-        _qc(tmp_path, rows), POSITION, ["nuclei_prediction", "Phase3D"]
+        _qc(tmp_path, rows), POSITION, ["Phase3D", "raw nuclei"], warnings=warnings
     )
-    assert result["0"]["dataset_statistics"]["p1"] == 4
-    assert result["1"]["dataset_statistics"]["p1"] == 8
+    assert result["0"]["dataset_statistics"]["p1"] == 8
+    assert result["1"]["dataset_statistics"]["p1"] == 4
+    assert warnings == [
+        "channel 1 is 'raw nuclei' in the plate and 'nuclei_prediction' in the QC table; "
+        "statistics matched by channel index"
+    ]
+
+
+def test_matching_names_add_no_warning(tmp_path):
+    rows = _full_rows("Phase3D", {0: _stats()}) + _full_rows(
+        "nuclei_prediction", {0: _stats()}
+    )
+    warnings: list[str] = []
+    position_statistics(_qc(tmp_path, rows), POSITION, CHANNELS, warnings=warnings)
+    assert warnings == []
 
 
 def test_rows_with_null_t_ignored(tmp_path):
@@ -132,6 +146,7 @@ def test_non_volume_rows_not_loaded(tmp_path):
     assert set(qc.columns) == {
         "position",
         "T",
+        "C",
         "channel_name",
         "metric_name",
         "value",
