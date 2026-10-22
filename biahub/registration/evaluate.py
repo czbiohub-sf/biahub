@@ -618,6 +618,6 @@ def evaluate(
     return Evaluation(
         geometry=decompose(transform, mov_um, ref_um),
         baseline=baseline,
-        projections=display_projections(transform, mov, ref),
+        projections={**display_projections(transform, mov, ref), "ref_um": tuple(ref_um)},
         **measures,
     )
