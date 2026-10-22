@@ -266,7 +266,7 @@ than skip.
 Add an entry to `COMMANDS`:
 
 ```python
-{"name": "<verb>", "import_path": "biahub.<module>.<verb>_cli", "help": "..."},
+({"name": "<verb>", "import_path": "biahub.<module>.<verb>_cli", "help": "..."},)
 ```
 
 ## Composition CLI (reconstruct)

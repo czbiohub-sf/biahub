@@ -33,7 +33,8 @@ compare directly.
 ## 1. Confirm the environment
 
 - On Bruno (`squeue` works); the biahub checkout on `main`, `source .venv/bin/activate`,
-  installed with the `track` extra (`uv sync --extra track`): `python -c "import ultrack,
+  installed with the `segment` (cellpose) and `track` (trackers) extras
+  (`uv sync --extra segment --extra track`): `python -c "import cellpose, ultrack,
   tracksdata, hoct, trackastra"` succeeds.
 - Run launches from tmux or as `sbatch` jobs, never in a login shell that may drop.
 

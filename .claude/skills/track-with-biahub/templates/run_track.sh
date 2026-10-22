@@ -18,7 +18,7 @@
 # For a whole plate, drop --cluster debug and let biahub track submit one job per position.
 set -euo pipefail
 
-BIAHUB=/path/to/biahub                     # checkout on main (track extra installed)
+BIAHUB=/path/to/biahub                     # checkout on main (segment + track extras)
 PLATE=/path/to/<dataset>.zarr              # the assembled plate track reads
 POSITIONS="A/1/000000 A/2/000000"          # a few FOVs per condition
 CONFIG=${1:?usage: run_track.sh track-<tracker>.yml}
