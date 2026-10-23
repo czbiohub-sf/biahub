@@ -120,6 +120,7 @@ Some steps include an `estimate-*` command that writes a YAML of parameters you 
 | `stitch` | Stitch positions within wells |
 | `concatenate` | Concatenate datasets channel-wise, with optional cropping |
 | | |
+| `project` | Project a 3D plate to 2D: max, mean, sum or one plane per channel, optionally around the in-focus plane |
 | `segment` | Segment positions with a pretrained model or pipeline |
 | `virtual-stain` | Run VisCy/cytoland virtual staining |
 | `track` | Track objects in 2D/3D time-lapse data |

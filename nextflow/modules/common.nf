@@ -102,7 +102,9 @@ The real per-task logs are in:
 
     ${log_dir}/
 
-one `<job-name>_<slurm-job-id>.out` / `.err` pair per task.
+one `<job-name>_<slurm-job-id>.out` / `.err` pair per task. A directory that
+holds more than one step's store (assemble and project) shares this
+slurm_output/; each step's logs are in its own directory beside the one above.
 EOF"""
 }
 

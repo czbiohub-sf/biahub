@@ -30,7 +30,6 @@ def test_segment_uses_the_requested_model(fake_cellpose):
         channels=[0],
         pretrained_model="cpdino",
         eval_args={"diameter": None, "do_3D": False},
-        z_slice_2D=0,
     )
 
     assert fake_cellpose.built == ["cpdino"]
@@ -46,7 +45,6 @@ def test_segment_passes_only_the_configured_channel(fake_cellpose):
         channels=[2],
         pretrained_model="cpsam_v2",
         eval_args={"diameter": None, "do_3D": False},
-        z_slice_2D=0,
     )
 
     (seen,) = fake_cellpose.evaluated
@@ -77,16 +75,14 @@ def test_model_type_in_a_track_config_warns():
         CellposeConfig()
 
 
-def test_segment_slices_the_configured_plane(fake_cellpose):
-    # Channel 0 holds the plane index (x10) so the plane cellpose receives is visible.
-    czyx = np.stack([np.full((1, 8, 8), 10 * z, dtype=np.float32) for z in range(6)], axis=1)
+def test_segment_2d_passes_the_single_plane_without_a_z_axis(fake_cellpose):
+    czyx = np.full((1, 1, 8, 8), 30, dtype=np.float32)
 
     _segment(
         czyx,
         channels=[0],
         pretrained_model="cpsam_v2",
         eval_args={"diameter": None, "do_3D": False},
-        z_slice_2D=3,
     )
 
     (seen,) = fake_cellpose.evaluated
@@ -100,11 +96,7 @@ def test_mixing_2d_and_3d_models_is_refused(fake_cellpose):
     with pytest.raises(ValueError, match="2D and 3D"):
         SegmentationSettings(
             models={
-                "flat": {
-                    "pretrained_model": "cpsam_v2",
-                    "channels": ["GFP"],
-                    "z_slice_2D": 1,
-                },
+                "flat": {"pretrained_model": "cpsam_v2", "channels": ["GFP"]},
                 "volume": {
                     "pretrained_model": "cpsam_v2",
                     "channels": ["RFP"],
@@ -114,7 +106,8 @@ def test_mixing_2d_and_3d_models_is_refused(fake_cellpose):
         )
 
 
-def test_segment_cli_rejects_a_plane_outside_the_stack(fake_cellpose, example_plate, tmp_path):
+def test_segment_cli_rejects_a_stack_for_a_2d_model(fake_cellpose, example_plate, tmp_path):
+    """Segment does not project: a 2D model needs the Z=1 plate `biahub project` writes."""
     import yaml
 
     from click.testing import CliRunner
@@ -131,7 +124,6 @@ def test_segment_cli_rejects_a_plane_outside_the_stack(fake_cellpose, example_pl
                         "pretrained_model": "cpsam_v2",
                         "channels": ["GFP"],
                         "eval_args": {"do_3D": False},
-                        "z_slice_2D": 10,
                     }
                 }
             }
@@ -140,7 +132,7 @@ def test_segment_cli_rejects_a_plane_outside_the_stack(fake_cellpose, example_pl
 
     result = CliRunner().invoke(
         cli,
-        # --init: the range check runs while creating the plate, before any job.
+        # --init: the dimensionality check runs while creating the plate, before any job.
         [
             "segment",
             "-i",
@@ -154,7 +146,7 @@ def test_segment_cli_rejects_a_plane_outside_the_stack(fake_cellpose, example_pl
     )
 
     assert result.exit_code != 0
-    assert "z_slice_2D" in str(result.exception) + result.output
+    assert "biahub project" in str(result.exception) + result.output
     assert not (tmp_path / "out.zarr").exists()
 
 
@@ -167,12 +159,16 @@ def test_segment_3d_passes_the_z_stack(fake_cellpose):
     assert seen.shape == (1, 5, 8, 8)
 
 
-def test_3d_model_without_do_3d_is_refused(fake_cellpose):
-    """Cellpose 4 would raise on a z stack with do_3D False and no stitching."""
-    from biahub.settings import SegmentationModel
-
-    with pytest.raises(ValueError, match="do_3D"):
-        SegmentationModel(pretrained_model="cpsam_v2", channels=["GFP"])
+def test_a_2d_model_is_refused_a_z_stack(fake_cellpose):
+    """Cellpose 4 would raise on a z stack with do_3D False and no stitching, so
+    resolve_models refuses it first (segment does not pick a plane; project does)."""
+    with pytest.raises(ValueError, match="input is 3D.*biahub project"):
+        _segment(
+            np.zeros((1, 5, 8, 8), dtype=np.float32),
+            channels=[0],
+            pretrained_model="cpsam_v2",
+            eval_args={"do_3D": False},
+        )
 
 
 def test_segment_loads_each_model_once_across_timepoints(fake_cellpose):
@@ -182,7 +178,7 @@ def test_segment_loads_each_model_once_across_timepoints(fake_cellpose):
     from biahub.settings import SegmentationSettings
 
     settings = SegmentationSettings(
-        models={"nuc": {"pretrained_model": "cpdino", "channels": ["c0"], "z_slice_2D": 0}}
+        models={"nuc": {"pretrained_model": "cpdino", "channels": ["c0"]}}
     )
     models = resolve_models(settings, ["c0"], scale=(1,) * 5, z_size=1)
     for _ in range(3):
@@ -192,12 +188,22 @@ def test_segment_loads_each_model_once_across_timepoints(fake_cellpose):
     assert len(fake_cellpose.evaluated) == 3
 
 
-def test_segment_3d_keeps_z_on_a_single_plane_input(fake_cellpose):
-    """Cellpose squeezes singleton axes, so a 3D model on Z=1 returned (Y, X)."""
+def test_segment_2d_restores_the_singleton_z(fake_cellpose):
+    """Cellpose returns (Y, X) for a 2D model; the label plate expects (1, Y, X)."""
     out = _segment(
         np.zeros((1, 1, 8, 8), dtype=np.float32),
         channels=[0],
         pretrained_model="cpsam_v2",
-        eval_args={"do_3D": True},
+        eval_args={"do_3D": False},
     )
     assert out.shape == (1, 1, 8, 8)
+
+
+def test_a_3d_model_is_refused_a_single_plane(fake_cellpose):
+    with pytest.raises(ValueError, match="one Z-plane but the models segment in 3D"):
+        _segment(
+            np.zeros((1, 1, 8, 8), dtype=np.float32),
+            channels=[0],
+            pretrained_model="cpsam_v2",
+            eval_args={"do_3D": True},
+        )

@@ -1,34 +1,22 @@
 # Tracking config for the mantis-v2 pipeline (`biahub track`). A549.
 #
-# Track reads the ASSEMBLED plate (<N>-assemble/<dataset>.zarr), so target_channel
-# and cellpose_config.input_channel must name channels that exist THERE. If you
-# rename channels before tracking, update these to match.
+# Track reads the PROJECTED plate (<N>-assemble/<dataset>_proj.zarr, Z=1), so target_channel
+# and cellpose_config.input_channel must name channels that `biahub project` wrote
+# (project.yml's `channels`). If you rename channels before tracking, update these.
 #
 # CURRENT SCHEMA. TrackingSettings forbids extra keys; the old fields `mode`,
-# `z_range` and `focus_config` are rejected. Mapping from the old schema:
-#   mode                            -> output_mode
-#   z_range + focus_config.z_window -> z_slicing.{method, window_size, focus_channel}
-# focus_config's NA_det / lambda_ill / pixel_size have no equivalent — focus
-# detection now runs waveorder's focus_from_transverse_band on
-# z_slicing.focus_channel internally.
+# `z_range`, `focus_config` and `z_slicing` are rejected. Z-plane selection and
+# projection moved to `biahub project` (project.yml): the 60-plane focus window and
+# the mean projection that used to be here live there now. Mapping from the old schema:
+#   mode                              -> output_mode
+#   z_slicing / z_range / focus_config -> project.yml: channels.<name>.z, focus
+#   input_images np.mean step          -> project.yml: channels.<name>.method: mean
 
-# 2D writes an output plate with Z=1; input_images below projects Z with np.mean.
+# 2D tracks the Z=1 projected plate and writes a Z=1 label plate. Track does not
+# project; a 3D input with output_mode 2D is an error.
 output_mode: "2D"
 fov: "*/*/*"
 target_channel: nuclei_prediction
-
-# Segment a window of 60 planes around the in-focus plane rather than all planes:
-# focus is found on the phase channel (median over timepoints), and the window is
-# split 1/3 below / 2/3 above it (frac_below default). input_images below mean-
-# projects the virtual-stain nuclei over that window. Against TrackEdit annotations
-# (with min_sibling_length 3): division F1 0.63 -> 0.68 on 2026_04_28, with fewer
-# false divisions and fragmented tracks on 2026_04_21 at the same mitotic-cell
-# detection as all planes (0.95). A narrower 40-plane window lost mitotic cells
-# that drift in Z (0.89).
-z_slicing:
-  method: focus
-  window_size: 60
-  focus_channel: Phase3D
 
 segmentation_method: cellpose
 
@@ -51,16 +39,11 @@ cellpose_config:
   input_channel: nuclei_prediction
   labels_sigma: 5.0
 
+# The projected plate holds the nuclei already reduced to one plane; nothing to process.
 input_images:
   - path: null
     channels:
-      nuclei_prediction:
-        - function: np.mean
-          kwargs:
-            axis: 1
-          per_timepoint: false
-      # Loaded only for focus finding (z_slicing.focus_channel); not processed.
-      Phase3D: []
+      nuclei_prediction: []
 
 tracking_config:
   segmentation_config:

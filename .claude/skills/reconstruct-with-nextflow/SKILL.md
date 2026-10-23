@@ -3,7 +3,7 @@ name: reconstruct-with-nextflow
 description: >-
   Run a mantis-v2 microscope dataset through the biahub Nextflow reconstruction
   pipeline (nextflow/mantis-v2.nf: flat-field → deskew → reconstruct →
-  virtual-stain → assemble → track → QC) on the Bruno HPC cluster. Assemble,
+  virtual-stain → assemble → project → track → QC) on the Bruno HPC cluster. Assemble,
   track and QC are optional and selected per dataset family: A549 runs assemble
   + track + QC, neuromast runs assemble + QC and no tracking. Locates the raw
   acquisition under /hpc/instruments/cm.mantis, picks the output project
@@ -194,7 +194,7 @@ the next dataset in the family would also need), fix it in a PR against
 `nextflow/configs/<family>/`, stating which dataset exposed it. Genuinely
 per-dataset values stay in the run directory.
 
-### 5a. Check the QC channel filters against the stores they will QC
+### 5a. Check the channel couplings: QC filters, project.yml, track.yml
 
 Once the configs are edited, run this from the biahub checkout:
 
@@ -211,6 +211,20 @@ them: raw channel names for the deskewed data, waveorder's
 `output_channel_names` for the phase channel, virtual-stain's `target_channel`
 for the predictions, and `<track.yml target_channel>_labels` for the tracking
 store.
+
+**`project.yml` against the assembled plate.** When `configs/project.yml`
+exists the script also checks it both ways. A channel in `project.yml` that the
+assembled plate will not have is a `MISS` (exit 1): `biahub project --init`
+refuses it, so fix the name now — the raw fluorescence names are the camera
+strings of this acquisition and are the usual mismatch. An assembled channel
+that `project.yml` does not list is printed as `NOT PROJECTED`; that is a
+warning, not a failure (`biahub project` drops it with a warning), **but the
+intention of the pipeline is that every assembled channel is projected unless
+the user decided otherwise**, so carry the list into the pre-run plan (step 6
+of §7) and ask the user whether to add each one or leave it out on purpose.
+The script also checks that `track.yml`'s `target_channel` and
+`cellpose_config.input_channel` are channels `project.yml` writes, since track
+reads the projected plate.
 
 **That last one is the coupling that actually breaks.** `qc_track.yaml` names
 `nuclei_prediction_labels`, which only resolves if `track.yml` says
@@ -326,13 +340,16 @@ Do not run anything yet. Show the user:
    what was mismatched and how it was resolved.
 6. **The steps this run will perform, listed in order.** Reconstruction proper —
    flat-field → deskew → reconstruct → virtual-stain — always runs; assemble,
-   track and QC run only if their config is passed (biahub#306). Defaults by
-   family, which is what to present unless the user says otherwise:
+   project, track and QC run only if their config is passed (biahub#306).
+   Project turns the assembled 3D plate into the 2D (Z=1) plate that 2D
+   tracking reads (`biahub track` no longer selects or projects Z-planes), so
+   `--track_config` goes with `--project_config`. Defaults by family, which is
+   what to present unless the user says otherwise:
 
    | family | steps |
    |---|---|
-   | A549 / cell-line / organelle | flat-field → deskew → reconstruct → virtual-stain → **assemble → track → QC** |
-   | neuromast / zebrafish / dynatrack | flat-field → deskew → reconstruct → virtual-stain → **assemble → QC** (no tracking) |
+   | A549 / cell-line / organelle | flat-field → deskew → reconstruct → virtual-stain → **assemble → project → track → QC** |
+   | neuromast / zebrafish / dynatrack | flat-field → deskew → reconstruct → virtual-stain → **assemble → QC** (no projection or tracking) |
 
    Write the list out in the plan rather than naming the family, and say which
    optional steps are being skipped and why. If the user asks to skip anything
@@ -342,12 +359,21 @@ Do not run anything yet. Show the user:
    that tracking is simply not run — there is no tracking by-product any more
    (`caveats.md` §4).
 
+   **When project runs, list what it projects.** State each assembled channel
+   with its `project.yml` method, and name any assembled channel the config
+   does not list (§5a's `NOT PROJECTED` lines). Those need a decision from the
+   user before launch: add the channel to `project.yml`, or confirm it is left
+   out on purpose. Do not launch with an unprojected channel the user has not
+   seen — the pipeline's intention is that every assembled channel is
+   projected unless the user explicitly decided otherwise.
+
    **State the directory numbers this run will produce.** The number is the
    step's position among the steps performed, not a fixed label, so a neuromast
    run writes `4-assemble` as its last directory and an A549 run writes
-   `4-assemble` then `5-track`. Older A549 runs on disk say `5-assemble` /
-   `4-track`, from when the numbers were fixed — say so if the user is comparing
-   against one.
+   `4-assemble` then `5-track`. Project has no directory of its own: its plate
+   is `4-assemble/<DATASET>_proj.zarr`, beside the assembled plate. Older A549
+   runs on disk say `5-assemble` / `4-track`, from when the numbers were fixed
+   — say so if the user is comparing against one.
 7. Known caveats that apply to this dataset.
 8. Rough wall-time and that `-resume` is on.
 9. Whether Slack notifications are on, and who will be @-mentioned at run end.
@@ -399,13 +425,15 @@ copied file's group bits follow the *source* file's mode — `cp` from the repo
 (644) yields `rw-r--r--`. Hence the `chmod` after every copy. Plain `cp` only:
 `cp -p`/`-a` would also carry over the checkout's group.
 
-The run script passes all four optional configs — `--concatenate_config`,
-`--track_config`, `--qc_config` (`qc.yaml`), `--qc_track_config`
-(`qc_track.yaml`) — so an A549 run needs no edit. **For a neuromast/zebrafish run, or any step the user asked to skip,
-DELETE that flag's line** from the `nextflow run` call and note the skip in a
-comment above it, so the script still records what this run did. A neuromast run
-deletes `--track_config` and `--qc_track_config`; neither `track.yml` nor
-`qc_track.yaml` need exist for that family, and neither does for zebrafish.
+The run script passes all five optional configs — `--concatenate_config`,
+`--project_config`, `--track_config`, `--qc_config` (`qc.yaml`),
+`--qc_track_config` (`qc_track.yaml`) — so an A549 run needs no edit. **For a
+neuromast/zebrafish run, or any step the user asked to skip, DELETE that flag's
+line** from the `nextflow run` call and note the skip in a comment above it, so
+the script still records what this run did. A neuromast run deletes
+`--project_config`, `--track_config` and `--qc_track_config`; none of
+`project.yml`, `track.yml` or `qc_track.yaml` need exist for that family, and
+none does for zebrafish.
 
 Delete rather than comment: a `#` inside a backslash-continued command does not
 start a comment line — the continuation swallows it, every flag below is dropped
@@ -599,7 +627,8 @@ directory (`<DATASET>_rerun`) over relaunching in place.
 
 ## 11. Wrap up
 
-1. Normalize channel names on the assembled plate with
+1. Normalize channel names on the assembled plate, and on the projected plate
+   beside it when project ran (`DATASET=<DATASET>_proj`, same directory), with
    `templates/rename_channels.py` (idempotent; `caveats.md` §2 — check first
    whether a `rename-channels` CLI has landed on main, making this obsolete).
 2. Verify the assembled store (`<N>-assemble/<DATASET>.zarr`, `4-assemble`
