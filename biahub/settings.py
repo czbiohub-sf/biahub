@@ -1089,8 +1089,25 @@ class NucleiSettings(MyBaseModel):
         return v
 
 
+class TilesSettings(MyBaseModel):
+    """Settings for the tiles method: tile shifts on max projections, fitted in yx.
+
+    As `biahub.registration.evaluate.tile_residuals`: `compare` edges (Sobel in each
+    volume's grid) or intensity, tiles of `tile_px` on a `grid` x `grid` layout, kept
+    when their shifted copy correlates above `min_ncc`. `rounds` re-measures with the
+    corrected transform (one warp each).
+    """
+
+    compare: Literal["edges", "intensity"] = "edges"
+    tile_px: PositiveInt = 256
+    grid: PositiveInt = 7
+    min_ncc: float = Field(0.5, ge=-1, le=1)
+    min_tiles: PositiveInt = 6
+    rounds: PositiveInt = 2
+
+
 EstimationMethod = Literal[
-    "beads", "ants", "phase-cross-corr", "manual", "focus-finding", "nuclei"
+    "beads", "ants", "phase-cross-corr", "manual", "focus-finding", "nuclei", "tiles"
 ]
 # The settings block each method reads.
 METHOD_BLOCKS: dict[str, str] = {
@@ -1100,6 +1117,7 @@ METHOD_BLOCKS: dict[str, str] = {
     "manual": "manual",
     "focus-finding": "focus_finding",
     "nuclei": "nuclei",
+    "tiles": "tiles",
 }
 TransformType = Literal["euclidean", "similarity", "affine"]
 
@@ -1196,6 +1214,7 @@ DEFAULT_SCORE_METRIC: dict[str, str] = {
     "manual": "gradient_correlation",
     "focus-finding": "correlation",
     "nuclei": "correlation",
+    "tiles": "correlation",
 }
 
 
@@ -1248,6 +1267,7 @@ class EstimateTransformSettings(MyBaseModel):
     manual: ManualSettings | None = None
     focus_finding: FocusSettings | None = None
     nuclei: NucleiSettings | None = None
+    tiles: TilesSettings | None = None
     transform: TransformFitSettings = TransformFitSettings()
     time_indices: NonNegativeInt | list[NonNegativeInt] | Literal["all"] = "all"
     score: ScoreSettings = ScoreSettings()
@@ -1314,6 +1334,7 @@ class EstimateTransformSettings(MyBaseModel):
             "manual": ("manual", ManualSettings),
             "focus-finding": ("focus_finding", FocusSettings),
             "nuclei": ("nuclei", NucleiSettings),
+            "tiles": ("tiles", TilesSettings),
         }
         if self.is_stack:  # each block brings its own settings
             return self
