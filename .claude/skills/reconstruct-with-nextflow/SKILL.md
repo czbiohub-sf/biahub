@@ -651,7 +651,7 @@ directory (`<DATASET>_rerun`) over relaunching in place.
    and tracking ran, their output is inside the projected plate: check a
    position has `labels/nuclei` (the segment config's model name) and
    `labels/tracks_nuclei` (`tracks_` plus the track config's `labels`; both
-   uint32 TZYX at the image's full Z), `tracks.geff` and
+   uint32 (T, 1, Z, Y, X) at the image's full Z), `tracks.geff` and
    `tracks_<row>_<col>_<fov>.csv`, and report them beside the image data.
 3. If QC ran, report its verdict: the `QC_SUMMARY` line from the
    pipeline log (`pass=`/`fail=`/`gates_fail=`), and point at the report at

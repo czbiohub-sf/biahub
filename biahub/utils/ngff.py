@@ -133,22 +133,23 @@ def append_channels(input_data_path: Path, target_data_path: Path) -> None:
     appending_dataset.close()
 
 
-# Label chunks, TZYX. 16 x 1 x 128 x 128 uint32 is 1 MB, the DCA v0.2 SHOULD (512 KB
+# Label chunks, TCZYX: a label image has the image's axes with one channel,
+# (T, 1, Z, Y, X). 16 x 1 x 1 x 128 x 128 uint32 is 1 MB, the DCA v0.2 SHOULD (512 KB
 # is the MUST) and its "2D+time" example; growing T keeps per-plane reads cheap.
-LABEL_CHUNKS = (16, 1, 128, 128)
+LABEL_CHUNKS = (16, 1, 1, 128, 128)
 # Shards span one time chunk (16 timepoints, the DCA SHOULD) and the whole YX plane,
 # capped at 16 chunks (2048 px, the DCA spatial-shard SHOULD).
 MAX_LABEL_SHARD_CHUNKS = 16
 
 
 def label_chunks_and_shards(
-    shape: tuple[int, int, int, int],
+    shape: tuple[int, int, int, int, int],
 ) -> tuple[tuple[int, ...], tuple[int, ...]]:
-    """Chunks and shards ratio for a (T, Z, Y, X) label array of ``shape``."""
+    """Chunks and shards ratio for a (T, 1, Z, Y, X) label array of ``shape``."""
     chunks = tuple(min(c, s) for c, s in zip(LABEL_CHUNKS, shape, strict=True))
-    shards_ratio = (1, 1) + tuple(
+    shards_ratio = (1, 1, 1) + tuple(
         min(-(-s // c), MAX_LABEL_SHARD_CHUNKS)
-        for c, s in zip(chunks[2:], shape[2:], strict=True)
+        for c, s in zip(chunks[3:], shape[3:], strict=True)
     )
     return chunks, shards_ratio
 
@@ -169,12 +170,13 @@ def label_layout(
 
     The layout is the ``label_chunks`` / ``label_shards_ratio`` keyword arguments of
     iohub's ``create_empty_labels`` per :func:`label_chunks_and_shards` (no shards for
-    an OME-Zarr 0.4 plate), for a uint32 label with the image's TZYX shape.
+    an OME-Zarr 0.4 plate), for a uint32 label of shape (T, 1, Z, Y, X): the image's
+    axes with one channel.
     """
     with open_ome_zarr(str(position_dirpath), mode="r") as dataset:
         T, C, Z, Y, X = dataset.data.shape
         version = dataset.version
-    label_chunks, label_shards_ratio = label_chunks_and_shards((T, Z, Y, X))
+    label_chunks, label_shards_ratio = label_chunks_and_shards((T, 1, Z, Y, X))
     layout = {
         "label_dtype": np.uint32,
         "label_chunks": label_chunks,

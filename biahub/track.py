@@ -605,11 +605,12 @@ def load_labels(
 ) -> np.ndarray:
     """Read the instance labels ``labels/<label_name>`` of one position.
 
-    Returns (T, Y, X) labels for 2D tracking (the single plane of a projected plate)
-    and (T, Z, Y, X) for 3D. Frames listed as blank for this FOV in
-    ``blank_frames_path`` are filled with the nearest non-blank frame's labels, as
-    the images used to be before segmentation moved out of track, so a dropped
-    timepoint does not break every track.
+    The label image is (T, 1, Z, Y, X), the image's axes with one channel. Returns
+    (T, Y, X) labels for 2D tracking (the single plane of a projected plate) and
+    (T, Z, Y, X) for 3D. Frames listed as blank for this FOV in ``blank_frames_path``
+    are filled with the nearest non-blank frame's labels, as the images used to be
+    before segmentation moved out of track, so a dropped timepoint does not break
+    every track.
     """
     with open_ome_zarr(str(position_dirpath), mode="r") as position:
         if label_name not in position.label_names():
@@ -617,7 +618,7 @@ def load_labels(
                 f"{position_dirpath} has no label image {label_name!r} (labels: "
                 f"{position.label_names()}); segment the plate with `biahub segment` first."
             )
-        labels = np.asarray(position.get_label(label_name)["0"][:])
+        labels = np.asarray(position.get_label(label_name)["0"][:, 0])  # (T, Z, Y, X)
     if output_mode == "2D":
         labels = labels[:, 0]
     if blank_frames_path:
@@ -634,11 +635,11 @@ def load_labels(
 
 
 def write_tracking_labels(label_array, labels: ArrayLike, output_mode: str) -> None:
-    """Write tracked labels into the (T, Z, Y, X) label array of the plate track read.
+    """Write tracked labels into the (T, 1, Z, Y, X) label array of the plate track read.
 
-    The label image has the plate's Z: one plane for a projected plate, where 2D
-    tracking writes its (T, Y, X) labels; the full stack for 3D tracking, whose
-    (T, Z, Y, X) labels fill it.
+    The label image has the image's axes with one channel and the plate's Z: one
+    plane for a projected plate, where 2D tracking writes its (T, Y, X) labels; the
+    full stack for 3D tracking, whose (T, Z, Y, X) labels fill it.
     """
     labels = np.asarray(labels, dtype=np.uint32)
     if output_mode == "2D":
@@ -650,14 +651,14 @@ def write_tracking_labels(label_array, labels: ArrayLike, output_mode: str) -> N
                 f"output_mode='2D' expects (T, Y, X) labels but tracking produced "
                 f"shape {labels.shape}."
             )
-        label_array[:, 0] = labels
+        label_array[:, 0, 0] = labels
         return
-    if labels.ndim != 4 or labels.shape[1] != label_array.shape[1]:
+    if labels.ndim != 4 or labels.shape[1] != label_array.shape[2]:
         raise ValueError(
-            f"output_mode='3D' expects (T, {label_array.shape[1]}, Y, X) labels but "
+            f"output_mode='3D' expects (T, {label_array.shape[2]}, Y, X) labels but "
             f"tracking produced shape {labels.shape}."
         )
-    label_array[:] = labels
+    label_array[:, 0] = labels
 
 
 @contextmanager

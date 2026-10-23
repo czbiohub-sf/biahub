@@ -82,7 +82,9 @@ def example_tracking_plate(tmp_path):
         with open_ome_zarr(str(position_path), mode="r+") as position:
             nuclei = np.asarray(position["0"][:, 0])  # (T, Z, Y, X)
             labels = np.stack([connected_components(frame > 0.5) for frame in nuclei])
-            position.get_label(INPUT_LABEL)["0"][:] = labels.astype(np.uint32)
+            position.get_label(INPUT_LABEL)["0"][:] = labels[:, None].astype(
+                np.uint32
+            )  # (T, 1, Z, Y, X)
     plate_dataset = open_ome_zarr(plate_path, mode="r")
 
     yield plate_path, plate_dataset
@@ -117,7 +119,7 @@ def _assert_tracking_outputs(position_path):
     with open_ome_zarr(str(position_path), mode="r") as pos:
         labels = pos.get_label(LABEL)["0"][:]
     assert labels.dtype == np.uint32
-    assert labels.shape[1] == 1  # the projected (Z=1) plate's Z
+    assert labels.shape[1:3] == (1, 1)  # one channel; the projected (Z=1) plate's Z
     assert labels.any()
 
     geff_path = position_path / "tracks.geff"
@@ -382,10 +384,10 @@ def test_track_cli_init_only(tmp_path, example_tracking_plate):
             assert pos.label_names() == [INPUT_LABEL, LABEL]
             assert pos.channel_names == ["nuclei_prediction", "membrane_prediction"]
             label = pos.get_label(LABEL)
-            assert label["0"].shape == (5, 1, 64, 64)  # the plate's Z
+            assert label["0"].shape == (5, 1, 1, 64, 64)  # one channel, the plate's Z
             assert label["0"].dtype == np.uint32
             assert not label["0"][:].any()
-            assert [ax.name.lower() for ax in label.axes] == ["t", "z", "y", "x"]
+            assert [ax.name.lower() for ax in label.axes] == ["t", "c", "z", "y", "x"]
         label_attrs = yaml.safe_load(
             (plate_path / position / "labels" / LABEL / "zarr.json").read_text()
         )["attributes"]
@@ -554,14 +556,14 @@ def test_init_labels_take_the_input_z(tmp_path, example_tracking_plate, create_c
     shape = _init_labels([position_path], _minimal_settings())
     assert shape[2] == 1
     with open_ome_zarr(str(position_path), mode="r") as pos:
-        assert pos.get_label(LABEL)["0"].shape == (5, 1, 64, 64)
+        assert pos.get_label(LABEL)["0"].shape == (5, 1, 1, 64, 64)
 
     stack_path, _ = create_custom_plate(tmp_path, z_size=3)
     position_path = stack_path / "A" / "1" / "0"
     shape = _init_labels([position_path], _minimal_settings(output_mode="3D"))
     assert shape[2] == 3
     with open_ome_zarr(str(position_path), mode="r") as pos:
-        assert pos.get_label(LABEL)["0"].shape == (3, 3, 5, 6)
+        assert pos.get_label(LABEL)["0"].shape == (3, 1, 3, 5, 6)
 
 
 @pytest.mark.parametrize(
@@ -585,26 +587,26 @@ def test_init_labels_leaves_existing_labels(tmp_path, example_tracking_plate):
 
     _init_labels([position_path], settings)
     with open_ome_zarr(str(position_path), mode="r+") as pos:
-        pos.get_label(LABEL)["0"][0, 0, 0, 0] = 7
+        pos.get_label(LABEL)["0"][0, 0, 0, 0, 0] = 7
         image = pos["0"][:]
     _init_labels([position_path], settings)
     with open_ome_zarr(str(position_path), mode="r") as pos:
-        assert pos.get_label(LABEL)["0"][0, 0, 0, 0] == 7
+        assert pos.get_label(LABEL)["0"][0, 0, 0, 0, 0] == 7
         assert np.array_equal(pos["0"][:], image)
 
 
 def test_label_chunks_and_shards():
     # 1 MB uint32 chunks (DCA SHOULD); shards cover YX up to 16 chunks.
-    chunks, shards = label_chunks_and_shards((67, 86, 1664, 1193))
-    assert chunks == (16, 1, 128, 128)
-    assert shards == (1, 1, 13, 10)
-    assert label_chunks_and_shards((67, 86, 4096, 300))[1] == (1, 1, 16, 3)
+    chunks, shards = label_chunks_and_shards((67, 1, 86, 1664, 1193))
+    assert chunks == (16, 1, 1, 128, 128)
+    assert shards == (1, 1, 1, 13, 10)
+    assert label_chunks_and_shards((67, 1, 86, 4096, 300))[1] == (1, 1, 1, 16, 3)
     # Clamped to small arrays.
-    assert label_chunks_and_shards((5, 1, 64, 64))[0] == (5, 1, 64, 64)
+    assert label_chunks_and_shards((5, 1, 1, 64, 64))[0] == (5, 1, 1, 64, 64)
 
 
 def test_write_tracking_labels_2d_fills_the_single_plane():
-    label_array = np.zeros((2, 1, 4, 4), dtype=np.uint32)
+    label_array = np.zeros((2, 1, 1, 4, 4), dtype=np.uint32)
 
     write_tracking_labels(label_array, np.ones((2, 4, 4), dtype=np.int64), "2D")
     assert label_array.all()
@@ -616,7 +618,7 @@ def test_write_tracking_labels_2d_fills_the_single_plane():
 
 
 def test_write_tracking_labels_3d_fills_the_stack():
-    label_array = np.zeros((2, 6, 4, 4), dtype=np.uint32)
+    label_array = np.zeros((2, 1, 6, 4, 4), dtype=np.uint32)
 
     write_tracking_labels(label_array, np.ones((2, 6, 4, 4), dtype=np.int64), "3D")
     assert label_array.all()

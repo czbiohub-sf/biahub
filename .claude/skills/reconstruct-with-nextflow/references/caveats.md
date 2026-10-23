@@ -244,7 +244,7 @@ transfer. So simply do not run it:
 ## 5. Track reads the assembled plate, not the intermediates
 
 `track_wf` takes the assembled `<DATASET>.zarr` for *both* inputs, and writes
-its output back INTO it: per position, `labels/<target_channel>` (uint32, TZYX
+its output back INTO it: per position, `labels/<target_channel>` (uint32, (T, 1, Z, Y, X)
 at the image's full Z; 2D-tracking masks sit in the middle plane of the tracked
 z-window), `tracks.geff`, and `tracks_<row>_<col>_<fov>.csv`. Nothing else is
 kept: the pipeline passes no `-o`, so each worker builds its Ultrack database in
