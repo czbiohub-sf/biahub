@@ -204,6 +204,9 @@ plot_evaluation(record, path="<out>/evaluation/<fov>_t<t>.png", title="<dataset>
 json.dump(record.to_dict(), open("<out>/evaluation/<fov>_t<t>.json", "w"), indent=1)
 ```
 
+Landmarks detected or given are `Landmarks` (`.points_vox`: N x 3 voxel z, y, x, plus
+`.voxel_um`); `evaluate(..., landmarks=(moving, reference))` takes a pair you built.
+
 - `landmarks`: `"beads"` on a beads well (`detect_kwargs={"threshold_abs": ...}`, from the
   config's peak settings), `"nuclei"` when the moving channel shows nuclei (DAPI, H2B onto
   virtual-stained nuclei), `None` otherwise (images only).
@@ -215,9 +218,11 @@ these are not pass/fail thresholds:
 
 - `tiles` (yx, from max projections) and `points` medians: what is left. Well registered
   cell data sits around a few tenths of a µm, against microns unregistered.
-- `points["affine"]`: a `scale_zyx` away from 1 or a `rotation_yx_deg` away from 0 is a
-  scale or rotation the transform did not take out (e.g. `euclidean` cannot hold a camera
-  scale: try `similarity` or `affine`). Reported only with enough matched points.
+- `points["affine"]`: a yx scale (`scale_zyx[1:]`) away from 1 or a `rotation_yx_deg`
+  away from 0 is a scale or rotation the transform did not take out (e.g. `euclidean`
+  cannot hold a camera scale: try `similarity` or `affine`). Reported only with enough
+  matched points. Ignore its z scale when the landmarks lie in one thin layer (a cell
+  monolayer): nothing constrains it there.
 - `z_um` and `z_from`: z from points; the image crops can be biased on cross-modal pairs,
   and `z_from` says when there were too few points to trust.
 - A held-out position much worse than the estimated one: the transform does not carry
