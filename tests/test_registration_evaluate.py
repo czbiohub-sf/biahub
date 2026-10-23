@@ -616,3 +616,15 @@ def test_the_residual_affine_is_the_map_left_on_the_mapped_points():
         affine = point_residuals(Transform.identity(3), mov, ref)["affine"]
         np.testing.assert_allclose(affine["scale_zyx"][1:], [scale, scale], atol=1e-6)
         assert affine["rotation_yx_deg"] == pytest.approx(angle, abs=1e-6)
+
+
+def test_one_tile_that_fits_the_image_counts_once():
+    # A 160 x 160 field with 256 px tiles is one tile: measuring it 49 times passed the
+    # minimum for a residual affine with a single place measured.
+    ref = _cells(19, shape=(24, 160, 160))
+    mov = _ndi_shift(ref, (0.0, 2.0, -1.0), order=1, mode="nearest")
+    r = tile_residuals(Transform.identity(3), mov, ref, VOX3, tile_px=256, grid=7)
+    assert r["n_tiles"] == 1
+    assert r["affine"]["scale_zyx"] is None
+
+

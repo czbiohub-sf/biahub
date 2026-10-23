@@ -408,8 +408,9 @@ def tile_residuals(
     h = size // 2
     window = np.outer(np.hanning(size), np.hanning(size))
     points, diffs = [], []
-    for cy in np.linspace(h, ny - (size - h), grid).astype(int):
-        for cx in np.linspace(h, nx - (size - h), grid).astype(int):
+    # distinct centres only: a tile that fits the image once is one measurement
+    for cy in np.unique(np.linspace(h, ny - (size - h), grid).astype(int)):
+        for cx in np.unique(np.linspace(h, nx - (size - h), grid).astype(int)):
             tile = (slice(cy - h, cy - h + size), slice(cx - h, cx - h + size))
             if covered[tile].mean() < min_coverage:
                 continue
