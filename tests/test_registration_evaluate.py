@@ -564,3 +564,27 @@ def test_arrows_use_each_axis_voxel_size():
     measure = {"residuals": {"position_um": [[1.0, 5.0, 10.0]], "diff_um": [[0.0, 0.1, 0.2]]}}
     _where, step_px = _arrows(measure, views)
     np.testing.assert_allclose(step_px, [[1.0, 1.0]])  # one voxel in y and one in x
+
+
+def _disk_nuclei(n=20, seed=1, shape=(16, 768, 768)):
+    """Flat nucleus-sized disks (radius 30 px), as DAPI or VS nuclei."""
+    from scipy.ndimage import gaussian_filter
+
+    rng = np.random.default_rng(seed)
+    vol = np.zeros(shape, np.float32)
+    yy, xx = np.ogrid[: shape[1], : shape[2]]
+    for cy, cx in rng.uniform(40, shape[1] - 40, (n, 2)):
+        vol[4:12][:, ((yy - cy) ** 2 + (xx - cx) ** 2) <= 30**2] += 100
+    noise = rng.normal(0, 1, shape).astype(np.float32)
+    return gaussian_filter(vol, (1, 3, 3)) + noise + 10
+
+
+def test_tiles_recover_a_known_shift_in_full():
+    # The window both tiles are multiplied by pulls the correlation peak toward zero shift
+    # (95% of the shift on nucleus-like disks); a second pass on the remainder removes it.
+    ref = _disk_nuclei()
+    shift_px = 6.0
+    mov = _ndi_shift(ref, (0.0, shift_px, -shift_px), order=1, mode="nearest")
+    r = tile_residuals(Transform.identity(3), mov, ref, VOX3, tile_px=256, grid=5)
+    recovered = -np.median(np.asarray(r["residuals"]["diff_um"])[:, 1:], axis=0) / VOX3[1]
+    np.testing.assert_allclose(recovered, [shift_px, -shift_px], rtol=0.01)

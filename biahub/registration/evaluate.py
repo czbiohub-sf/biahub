@@ -417,6 +417,13 @@ def tile_residuals(
             )
             if np.abs(shift).max() > max_shift:
                 continue
+            # the shared window pulls the peak toward zero shift (~5% short on nuclei):
+            # measure the remainder once more, where that pull is a share of almost nothing
+            moved = ndi_shift(w, shift, order=1, mode="nearest")
+            remainder, _error, _phase = phase_cross_correlation(
+                r * window, moved * window, upsample_factor=10, normalization=None
+            )
+            shift = shift + remainder
             moved = ndi_shift(w, shift, order=1, mode="nearest")
             if np.corrcoef(r.ravel(), moved.ravel())[0, 1] < min_ncc:
                 continue
