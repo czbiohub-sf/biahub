@@ -15,6 +15,8 @@ from biahub.settings import (
     DeskewSettings,
     EstimateTransformSettings,
     FlatFieldCorrectionSettings,
+    GridMoviesSettings,
+    GridPerWellSettings,
     ProcessingImportFuncSettings,
     SegmentationSettings,
     StitchSettings,
@@ -45,6 +47,8 @@ example_settings_params = [
     ("example_stitch_settings.yml", StitchSettings),
     ("example_track_settings.yml", TrackingSettings),
     ("example_flat_field_settings.yml", FlatFieldCorrectionSettings),
+    ("example_grid_per_well_settings.yml", GridPerWellSettings),
+    ("example_grid_movies_settings.yml", GridMoviesSettings),
 ]
 
 # Example configs validated against VisCy's own classes via jsonargparse rather
