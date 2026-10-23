@@ -1005,6 +1005,8 @@ def build_estimator(
     ref_voxel_size: tuple[float, float, float] | None = None,
 ) -> tuple[TransformEstimator, ScoreFn, Transform]:
     """Estimator, score function and forward seed for the settings' method."""
+    if settings.is_stack:
+        raise click.UsageError("stacked methods (a list under method:) are not run yet")
     score_fn = _score_fn(settings)
     # the bead estimators' own choices score the raw volumes, not the prepared ones
     method_score = RawVolumeScore(score_fn) if settings.preprocess else score_fn

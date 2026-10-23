@@ -1,3 +1,4 @@
+import copy
 import warnings
 
 from itertools import product
@@ -17,6 +18,8 @@ from pydantic import (
     NonNegativeInt,
     PositiveFloat,
     PositiveInt,
+    TypeAdapter,
+    ValidationError,
     ValidationInfo,
     field_validator,
     model_serializer,
@@ -1069,6 +1072,62 @@ METHOD_BLOCKS: dict[str, str] = {
     "manual": "manual",
     "focus-finding": "focus_finding",
 }
+TransformType = Literal["euclidean", "similarity", "affine"]
+
+
+def _named_method_block(item):
+    """Turn `{<method>: {preprocess, transform: {type}, <settings>}}` into a block's fields."""
+    if isinstance(item, MethodBlock):
+        return item
+    if not isinstance(item, dict) or len(item) != 1:
+        raise ValueError(
+            f"each block of a stack names one method, `- <method>: {{...}}`; got {item}"
+        )
+    ((method, body),) = item.items()
+    body = dict(body or {})
+    transform = body.pop("transform", None) or {}
+    if set(transform) - {"type"}:
+        raise ValueError(
+            f"a block's transform sets only its type; {sorted(set(transform) - {'type'})} "
+            "belong to the run's transform"
+        )
+    return {
+        "method": method,
+        "preprocess": body.pop("preprocess", []),
+        "type": transform.get("type"),
+        "settings": body,
+    }
+
+
+class MethodBlock(MyBaseModel):
+    """One block of a stack: a method with its own preparation, transform type and settings.
+
+    Written `- <method>: {preprocess: [...], transform: {type: ...}, <the method's
+    settings>}`; `type` unset takes the run's `transform.type`. The settings are checked
+    when the run's settings build each block (`EstimateTransformSettings.stack_settings`).
+    """
+
+    method: EstimationMethod
+    preprocess: PreprocessBlocks = []
+    type: TransformType | None = None
+    settings: dict[str, Any] = {}
+
+    @model_serializer(mode="wrap")
+    def _as_named(self, handler):
+        fields = handler(self)
+        body = dict(fields["settings"])
+        if fields["preprocess"]:
+            body["preprocess"] = fields["preprocess"]
+        if fields["type"] is not None:
+            body["transform"] = {"type": fields["type"]}
+        return {fields["method"]: body}
+
+
+MethodStack = list[Annotated[MethodBlock, BeforeValidator(_named_method_block)]]
+_METHOD_NAME = TypeAdapter(EstimationMethod)
+_METHOD_STACK = TypeAdapter(MethodStack)
+
+
 ScoreMetric = Literal[
     "overlap", "residual", "mutual_information", "correlation", "gradient_correlation"
 ]
@@ -1150,7 +1209,9 @@ class EstimateTransformSettings(MyBaseModel):
     reference: ReferenceSettings
     # Applied, in order, before the method (see the preprocessing blocks above).
     preprocess: PreprocessBlocks = []
-    method: EstimationMethod
+    # One method by name, or a stack of blocks run coarse to fine (each seeded by the one
+    # before; the run's score judges every block's result).
+    method: EstimationMethod | MethodStack
     beads: BeadsMatchSettings | None = None
     ants: AntsRegistrationSettings | None = None
     phase_cross_corr: PhaseCrossCorrSettings | None = None
@@ -1161,6 +1222,18 @@ class EstimateTransformSettings(MyBaseModel):
     score: ScoreSettings = ScoreSettings()
     fallback: FallbackSettings = FallbackSettings()
     verbose: bool = False
+
+    @field_validator("method", mode="wrap")
+    @classmethod
+    def check_the_written_form(cls, value, handler):
+        # a name or a stack: check only the form given, so its errors are the only ones
+        if isinstance(value, list) and not value:
+            raise ValueError("a stack needs at least one block under method:")
+        adapter = _METHOD_STACK if isinstance(value, list) else _METHOD_NAME
+        try:
+            return adapter.validate_python(value)
+        except ValidationError as error:
+            raise ValueError(str(error)) from None
 
     @model_validator(mode="before")
     @classmethod
@@ -1185,7 +1258,7 @@ class EstimateTransformSettings(MyBaseModel):
     @model_validator(mode="after")
     def check_bead_report_metrics_have_beads(self) -> "EstimateTransformSettings":
         bead_metrics = [m for m in self.score.report if m not in INTENSITY_METRICS]
-        if bead_metrics and self.method != "beads":
+        if bead_metrics and self.final_method != "beads":
             raise ValueError(
                 f"report metrics {bead_metrics} detect beads: they need method beads"
             )
@@ -1194,7 +1267,7 @@ class EstimateTransformSettings(MyBaseModel):
     @model_validator(mode="after")
     def check_masks_have_a_method_that_uses_them(self) -> "EstimateTransformSettings":
         masks = [b.kind for b in self.preprocess if isinstance(b, MASK_BLOCKS)]
-        if masks and self.method not in MASK_METHODS:
+        if masks and not self.is_stack and self.method not in MASK_METHODS:
             raise ValueError(
                 f"mask blocks need a method that can use them ({sorted(MASK_METHODS)}); "
                 f"method {self.method!r} cannot use {masks}"
@@ -1210,6 +1283,8 @@ class EstimateTransformSettings(MyBaseModel):
             "manual": ("manual", ManualSettings),
             "focus-finding": ("focus_finding", FocusSettings),
         }
+        if self.is_stack:  # each block brings its own settings
+            return self
         field, model = defaults[self.method]
         if getattr(self, field) is None:
             setattr(self, field, model())
@@ -1217,7 +1292,7 @@ class EstimateTransformSettings(MyBaseModel):
 
     @model_validator(mode="after")
     def check_manual_is_one_timepoint(self) -> "EstimateTransformSettings":
-        if self.method == "manual" and not isinstance(self.time_indices, int):
+        if "manual" in self.method_names and not isinstance(self.time_indices, int):
             raise ValueError(
                 "manual registers one timepoint (in napari): set time_indices to it, e.g. "
                 f"time_indices: 0; got {self.time_indices!r}"
@@ -1282,7 +1357,7 @@ class EstimateTransformSettings(MyBaseModel):
 
     @model_validator(mode="after")
     def check_sweep_paths(self) -> "EstimateTransformSettings":
-        if self.fallback.sweep is None:
+        if self.fallback.sweep is None or self.is_stack:  # (a stack refuses sweeps)
             return self
         # A sweep trial only rebuilds the estimator: the score, seed and reference come
         # from these settings, so only the method's own block and the fit type can change.
@@ -1297,6 +1372,58 @@ class EstimateTransformSettings(MyBaseModel):
                     )
         self.sweep_trials()
         return self
+
+    @model_validator(mode="after")
+    def check_stack(self) -> "EstimateTransformSettings":
+        if not self.is_stack:
+            return self
+        sections = [f for f in METHOD_BLOCKS.values() if getattr(self, f) is not None]
+        if sections or self.preprocess:
+            given = sections + (["preprocess"] if self.preprocess else [])
+            raise ValueError(
+                f"with a stack, {given} belong in the blocks: "
+                "`- <method>: {preprocess: [...], <its settings>}`"
+            )
+        if self.fallback.sweep is not None:
+            raise ValueError("fallback.sweep cannot say which block of a stack it varies yet")
+        self.stack_settings()  # every block is checked as its own config
+        return self
+
+    @property
+    def is_stack(self) -> bool:
+        return isinstance(self.method, list)
+
+    @property
+    def method_names(self) -> list[str]:
+        return [b.method for b in self.method] if self.is_stack else [self.method]
+
+    @property
+    def final_method(self) -> str:
+        """The method that has the last word: the only one, or a stack's last block."""
+        return self.method_names[-1]
+
+    def stack_settings(self) -> list["EstimateTransformSettings"]:
+        """Return one single-method config per block (these settings alone if not a stack).
+
+        Each block's method, settings, preprocess and transform type; the reference, seed,
+        score, fallback and time indices are the run's.
+        """
+        if not self.is_stack:
+            return [self]
+        run = self.model_dump()
+        configs = []
+        for k, block in enumerate(self.method, start=1):
+            data = copy.deepcopy(run)
+            data["method"] = block.method
+            data["preprocess"] = [b.model_dump() for b in block.preprocess]
+            data[METHOD_BLOCKS[block.method]] = block.settings
+            if block.type is not None:
+                data["transform"]["type"] = block.type
+            try:
+                configs.append(EstimateTransformSettings.model_validate(data))
+            except ValidationError as error:
+                raise ValueError(f"block {k} ({block.method}): {error}") from None
+        return configs
 
     def sweep_trials(self) -> dict[str, "EstimateTransformSettings"]:
         """Build each sweep trial's config, by name: these settings plus its overrides."""
@@ -1316,7 +1443,7 @@ class EstimateTransformSettings(MyBaseModel):
 
     @property
     def effective_score_metric(self) -> str:
-        return self.score.metric or DEFAULT_SCORE_METRIC[self.method]
+        return self.score.metric or DEFAULT_SCORE_METRIC[self.final_method]
 
 
 EntryStatus = Literal["accepted", "unreliable", "rejected"]
