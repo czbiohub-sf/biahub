@@ -18,7 +18,7 @@
 // warms the shared cellpose weights cache, which is strictly better done before
 // any GPU worker exists to race for it.
 
-include { parse_resources; slurm_logs; slurm_log_dir; slurm_output_readme } from './common'
+include { parse_resources; slurm_logs; slurm_log_dir; slurm_output_readme; retry_time; retry_memory } from './common'
 
 
 process init_track {
@@ -50,8 +50,8 @@ process run_track {
     label 'gpu'
     clusterOptions { "--gres=gpu:1 " + slurm_logs('track') }
     cpus { meta.cpus }
-    memory { "${meta.mem_gb} GB" }
-    time '2h'
+    memory { retry_memory(meta.mem_gb, task) }
+    time { retry_time(120, task) }
     maxRetries 1
     errorStrategy 'retry'
 

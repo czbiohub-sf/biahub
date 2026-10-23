@@ -274,6 +274,13 @@ routinely (exit 143) and Nextflow resubmits (retry on exit 130–145,
 when retries are exhausted or the same position fails *identically* every time
 — the torn-shard signature, see `recovery.md`.
 
+A transient storage error is retried the same way, after a wait. A task that
+exits 1 with a traceback ending in a bare `OSError` (Lustre EIO, `[Errno 71]
+Protocol error` from `os.fsync`) is resubmitted after
+`params.oserror_retry_delay_minutes` (10) instead of terminating the run. An
+`OSError` subclass such as `FileNotFoundError` still terminates. The run-end
+message counts those attempts as "retried after an error", not as failures.
+
 ## 9. SLURM log files look inverted
 
 `slurm_logs()` in `nextflow/modules/common.nf` deliberately crosses
