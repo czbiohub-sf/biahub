@@ -141,23 +141,19 @@ imaging_qc_pipeline = { git = "https://github.com/czbiohub-sf/imaging-qc-pipelin
 # royerlab/ultrack main once #290 merges, and at a release once one contains them.
 ultrack = { git = "https://github.com/ieivanov/ultrack", rev = "69e7589a050b0aa5f84ccda3bdf072f5289f939c" }
 
-# Pin iohub to main at the czbiohub-sf/iohub#491 merge, which carries #489:
-# process_single_position(output_label=...), with which `biahub segment` writes its
-# labels into the plate's label images with --resume, and create_empty_labels, with
-# which segment --init and track --init scaffold those label images. Main's #486 adds
-# create_empty_plate(label_names=...) (#360), and #485 puts the labels list on
-# <fov>/labels/zarr.json so ome-zarr-models and dca-validate can open a field that
-# has labels. #488/#461/#491 (label pyramids, shard size targets, resumable
-# pyramids) ride along for the pyramid step. Drop to a PyPI release once one
-# contains them.
+# Pin iohub to the czbiohub-sf/iohub#496 branch (on main at the #491 merge, 80b20a6):
+# label images are (T, 1, Z, Y, X), the image's axes with one channel (the DCA array
+# standard wants every array 5D), and a label with more than one channel is refused.
+# Main carries #489 (process_single_position(output_label=...), with which `biahub
+# segment` writes its labels into the plate's label images with --resume, and
+# create_empty_labels, with which segment --init and track --init scaffold those
+# label images), #486 (create_empty_plate(label_names=...), #360), #485 (the labels
+# list on <fov>/labels/zarr.json, so ome-zarr-models and dca-validate can open a
+# field that has labels) and #488/#461/#491 (label pyramids, shard size targets,
+# resumable pyramids) for the pyramid step. Repoint at main once #496 merges, and at
+# a PyPI release once one contains them.
 #
-# Main's own reasons: #476 syncs a write unit's shards before recording it as
-# done (without it a preemption between the write and the marker leaves a `.done`
-# beside a shard whose bytes never landed, which silently cost several runs on
-# 2026_08_14_dynatrack); #472 adds create_empty_plate(extra_metadata=...); #479
-# creates a plate's positions in one batch instead of rewriting the well's
-# metadata per position (hours for a ~40k-FOV plate's init).
-iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "80b20a693d7dd11d5a14d667001bcf1972a2be23" }
+iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "c8a5ab60d90bae6db65e4d47fe4f4c91c29676ef" }
 
 # Pin waveorder to the main commit that merged mehta-lab/waveorder#583, which
 # runs apply-inv-tf through iohub's process_single_position with resume (on top
