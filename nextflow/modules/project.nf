@@ -16,7 +16,7 @@
 // scheduling, so the CLI must NOT submit its own SLURM jobs. See
 // modules/flat_field.nf, the template this follows.
 
-include { parse_resources; slurm_logs; slurm_log_dir; slurm_output_readme; retry_time } from './common'
+include { parse_resources; slurm_logs; slurm_log_dir; slurm_output_readme; retry_time; retry_memory } from './common'
 
 
 process init_project {
@@ -48,7 +48,7 @@ process run_project {
     label 'cpu'
     clusterOptions { slurm_logs('project') }
     cpus { meta.cpus }
-    memory { "${meta.mem_gb} GB" }
+    memory { retry_memory(meta.mem_gb, task) }
     time { retry_time(meta.time_minutes, task) }
 
     input:

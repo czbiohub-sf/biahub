@@ -21,7 +21,7 @@
 // Nextflow task.  See also:
 // examples/submitit_debug_nextflow/2026-05-27-submitit-debug-nextflow-concerns.md
 
-include { parse_resources; slurm_logs; slurm_log_dir; slurm_output_readme; retry_time } from './common'
+include { parse_resources; slurm_logs; slurm_log_dir; slurm_output_readme; retry_time; retry_memory } from './common'
 
 
 process init_deskew {
@@ -53,7 +53,7 @@ process run_deskew {
     label 'cpu'
     clusterOptions { slurm_logs('deskew') }
     cpus { meta.cpus }
-    memory { "${meta.mem_gb} GB" }
+    memory { retry_memory(meta.mem_gb, task) }
     time { retry_time(meta.time_minutes, task) }
 
     input:

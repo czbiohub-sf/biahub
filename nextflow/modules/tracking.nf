@@ -28,7 +28,7 @@
 // position now tracks in a minute or two, so it runs on the `preempted`
 // partition like the other per-position steps and a reclaimed task is retried.
 
-include { parse_resources; slurm_logs; slurm_log_dir } from './common'
+include { parse_resources; slurm_logs; slurm_log_dir; slurm_output_readme; retry_time; retry_memory } from './common'
 
 
 process init_track {
@@ -57,8 +57,8 @@ process run_track {
     label 'cpu'
     clusterOptions { slurm_logs('track') }
     cpus { meta.cpus }
-    memory { "${meta.mem_gb} GB" }
-    time '2h'
+    memory { retry_memory(meta.mem_gb, task) }
+    time { retry_time(120, task) }
     maxRetries 1
     errorStrategy 'retry'
 

@@ -68,6 +68,27 @@ tmux list-sessions
 pgrep -fa "nextflow run .*mantis-v2.nf"
 ```
 
+## The unattended loop
+
+SKILL.md §9 starts `/loop 30m /reconstruct-with-nextflow monitor <OUTPUT>` right
+after launch, and each firing runs one monitoring pass (SKILL.md §9a). A pass
+begins with `templates/run_status.sh <OUTPUT>`. It is read-only and prints the
+run's `state` (`running`, `completed`, `aborted`, `head-lost`, `not-started`).
+For an aborted run it also prints the task that ended it, its exit code, the
+last exception line of its `.command.err` and its work directory. It ends with
+per-process counts from `trace.txt` and any position on attempt 4 or later. Use
+the polling commands below when a pass needs more than the summary.
+
+What each pass did is appended to `<OUTPUT>/nextflow/monitor.log`. That file is
+how a later pass, or a later session, knows a failure was already relaunched
+once, so read it before acting. It survives `-resume` relaunches.
+
+The loop belongs to the Claude Code session that started it. When that session
+exits, monitoring stops; re-arm it from any session on Bruno with the same
+`/loop` line. `run_status.sh` decides liveness with a process check on the
+launching host, and by the log's 5-minute heartbeat from anywhere else, so the
+new session need not run on the head's node.
+
 ## What to poll
 
 Poll every few minutes, not seconds — these runs take hours to days, and each

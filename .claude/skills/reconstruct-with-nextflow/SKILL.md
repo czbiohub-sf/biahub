@@ -9,8 +9,9 @@ description: >-
   segmentation or tracking; pyramids are on whenever assemble runs. Locates the raw
   acquisition under /hpc/instruments/cm.mantis, picks the output project
   directory, scaffolds configs, launches the run in a tmux session in the
-  foreground so it can be watched, recovers from Lustre/torn-shard I/O errors,
-  and reports a summary including the QC verdict. Use when asked to "reconstruct", "run the pipeline
+  foreground so it can be watched, monitors it unattended every 30 minutes
+  (relaunching on transient Lustre/torn-shard I/O errors), and reports a
+  summary including the QC verdict. Use when asked to "reconstruct", "run the pipeline
   on", or "process" a named mantis-v2 dataset.
 ---
 
@@ -18,6 +19,8 @@ description: >-
 
 Invocation: `/reconstruct-with-nextflow <DATASET_NAME>`, or any request to
 run/reconstruct/process a mantis-v2 dataset by name.
+`/reconstruct-with-nextflow monitor <OUTPUT>` runs one monitoring pass over a
+launched run and nothing else (§9a); the 30-minute loop of §9 fires it.
 
 **Never launch before the user approves a plan.** Steps 1–5 are read-only
 investigation; step 6 presents the plan; nothing is written to disk until the
@@ -526,19 +529,96 @@ call `biahub`/`viscy` bare (ENVIRONMENT CONTRACT in
 `nextflow run`; `check_environment()` aborts at launch if the tools are
 missing. Before syncing, run the out-of-band-package check in `caveats.md` §11.
 
-## 9. Monitor
+## 9. Monitor — unattended, every 30 minutes
 
-Follow `references/monitoring.md`: poll `squeue -u $USER`, the tail of
-`<OUTPUT>/.nextflow.log`, and `<OUTPUT>/nextflow/slurm_output/<step>/*_<jobid>.out`
-at a few minutes' interval — these runs take hours to days.
+As soon as §8's launch check passes, start the monitoring loop yourself, without
+waiting to be asked (Skill tool, skill `loop`):
+
+```
+/loop 30m /reconstruct-with-nextflow monitor <OUTPUT>
+```
+
+Each firing runs one monitoring pass (§9a) and ends. A run is never left
+unwatched: a run that dies at 3 a.m. on a transient storage error is relaunched
+by the next pass instead of waiting for someone to notice it. Tell the user the
+loop is running and how to stop it. **The loop lives in this Claude Code
+session.** If the session exits, monitoring stops; re-arm it from a new session
+with the same `/loop` line. The pass is cheap: one status script, one line of
+output when nothing is wrong.
 
 **The pipeline notifies Slack itself** — run start, each step's completion, and
 run end (`nextflow/modules/notify.nf`), so do not re-send those. What is left for
-you is a terminating error you have diagnosed, a position on attempt 4 of 5, and
-the wrap-up; send those with `templates/notify.sh`. Notifications need
-`$BIAHUB_SLACK_WEBHOOK` and `$BIAHUB_SLACK_ID`; without them messages print
-instead of posting and nothing fails. For a `--max_positions 1` smoke test,
-launch with `env -u BIAHUB_SLACK_WEBHOOK` to keep the channel quiet.
+you is a relaunch or a terminating error the pass has diagnosed, a position on
+attempt 4 of 5, and the wrap-up; send those with `templates/notify.sh`.
+Notifications need `$BIAHUB_SLACK_WEBHOOK` and `$BIAHUB_SLACK_ID`; without them
+messages print instead of posting and nothing fails. For a `--max_positions 1`
+smoke test, launch with `env -u BIAHUB_SLACK_WEBHOOK` to keep the channel quiet.
+
+### 9a. Monitoring pass
+
+Invoked as `/reconstruct-with-nextflow monitor <OUTPUT>`. Skip §1–8 and do only
+this:
+
+1. Run the read-only status script and read its output:
+
+   ```bash
+   bash <SKILL_DIR>/templates/run_status.sh <OUTPUT>
+   ```
+
+   On the first pass of a session, also read `references/monitoring.md` and
+   `references/recovery.md`.
+2. Read `<OUTPUT>/nextflow/monitor.log` (absent until the first action). It
+   records what earlier passes did, so a pass never repeats a relaunch or a
+   notification.
+3. Act on the `state` line:
+
+   | state | action |
+   |---|---|
+   | `running` | Nothing. Notify once per position about any `attempt4` line not yet in `monitor.log`. Print one line of progress. |
+   | `completed` | §11 wrap-up, then stop the loop. |
+   | `aborted`, `head-lost` | Relaunch or escalate, by the rules below. |
+   | `not-started` | Nothing if the launch is under 10 minutes old; otherwise tell the user. |
+
+4. Append one line per action to `<OUTPUT>/nextflow/monitor.log`, as
+   `<ISO time> <state> <relaunched|escalated|notified> <signature>`, and
+   `chmod g+w` it. The signature is `<failed task> | <error line>` from the
+   status output, or `head-lost`.
+
+**Relaunch automatically** only when all of these hold:
+
+- there is no `cleaned yes` line, since a cleaned run is final (§10);
+- the cause is transient: the `error` line is an `OSError`, `IOError` or
+  "Input/output error", or a torn-shard signature (`the checksum is invalid`,
+  `encoded shard is smaller than`, `blosc encoded value is invalid`), or the
+  state is `head-lost` (the head was killed: allocation ended, node lost);
+- `monitor.log` has no `relaunched` line with the same signature. One automatic
+  relaunch per signature: the same failure twice is persistent, not transient.
+
+Relaunch exactly as §10 does, in the run's tmux session. Recreate the session
+first if it is gone (`tmux new-session -d -s nf_<DATASET> -c <OUTPUT>`), then:
+
+```bash
+tmux send-keys -t nf_<DATASET> "bash ./run_mantis_v2.sh" Enter
+```
+
+Send `notify.sh "🔁 <DATASET>: relaunched with -resume after <error> on <task>"`
+without `--ping`, and confirm on the next pass that the state is `running`.
+
+nextflow.config already retries a bare `OSError` inside the run, after
+`params.oserror_retry_delay_minutes` (10), sharing the 5 retries with
+preemption. An `OSError` that still reaches `aborted` has failed every one of
+those retries, so the pass's relaunch is the last automatic attempt.
+
+**Escalate everything else** without relaunching. That covers any other
+traceback, including `FileNotFoundError` and other `OSError` subclasses, a config
+error, retries exhausted on exits 130–145, a repeated signature, and a cleaned
+run. Diagnose with `references/recovery.md`, send
+`notify.sh --level error --ping` with the cause, the error line and the work
+directory, record it in `monitor.log`, stop the loop, and give the user the
+diagnosis. Never delete data from a pass.
+
+To stop the loop, delete its scheduled job: `CronList` to find it, then
+`CronDelete`. If it runs self-paced, use `ScheduleWakeup` with `stop: true`.
 
 ## 10. Handle errors
 
@@ -546,6 +626,9 @@ Classify before acting — `references/recovery.md` has the decision table:
 
 - **Exit 130–145** (preemption, timeout, OOM): Nextflow retries up to 5 times.
   Do nothing unless retries are exhausted.
+- **Exit 1 ending in a bare `OSError`** (Lustre EIO, `[Errno 71] Protocol
+  error` from fsync): Nextflow retries it itself after 10 minutes. A run that
+  still aborts on one is relaunched once by the monitoring pass (§9a).
 - **Checksum / Lustre EIO / torn shard**: rerun with `-resume` first — iohub
   replaces torn shards and resumes per unit. Only if it fails
   identically again, write a repair proposal for the user or hand it to the

@@ -19,7 +19,7 @@
 // init phase) and warms the shared cellpose weights cache, better done once here
 // than by N GPU workers racing for it.
 
-include { parse_resources; slurm_logs; slurm_log_dir; retry_time } from './common'
+include { parse_resources; slurm_logs; slurm_log_dir; slurm_output_readme; retry_time; retry_memory } from './common'
 
 
 process init_segment {
@@ -53,7 +53,7 @@ process run_segment {
     label 'gpu_preempted'
     clusterOptions { "--gres=gpu:1 " + slurm_logs('segment') }
     cpus { meta.cpus }
-    memory { "${meta.mem_gb} GB" }
+    memory { retry_memory(meta.mem_gb, task) }
     time { retry_time(meta.time_minutes, task) }
 
     input:
