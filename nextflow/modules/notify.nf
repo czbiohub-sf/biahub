@@ -192,6 +192,12 @@ def sacct_label(state) {
 // nextflow.config): 130..145 is "128 + signal", i.e. the job was killed rather
 // than the code failing. Those attempts were restarted, so they are not failures.
 //
+// An attempt with any other exit code that has a LATER attempt of the same task
+// in the trace was restarted too: nextflow.config retries a storage error (a
+// bare OSError, exit 1) after a wait, and the tracking process retries any exit
+// once. Counted as restarted, under "retried after an error", rather than as a
+// failure that did not happen.
+//
 // trace.txt is complete and readable by the time onComplete runs (verified); its
 // path comes from `trace.file` in nextflow.config. Returns null if it cannot be
 // read, and the caller then reports the raw counts instead.
@@ -201,9 +207,16 @@ def failed_attempts() {
         if (!trace.exists()) {
             return null
         }
-        def outcome = [restarted: 0, failed: 0, exits: [:], unknown: 0, job_ids: []]
-        trace.readLines().drop(1).each { line ->
-            def field = line.split('\\t')
+        def outcome = [restarted: 0, failed: 0, exits: [:], unknown: 0, job_ids: [], retried_errors: 0]
+        def rows = trace.readLines().drop(1).collect { line -> line.split('\\t') }
+        // Highest attempt seen per task name (column 15, `attempt` in trace.fields).
+        def last_attempt = [:]
+        rows.each { field ->
+            if (field.size() > 14 && field[14].isInteger()) {
+                last_attempt[field[3]] = Math.max(last_attempt[field[3]] ?: 0, field[14] as int)
+            }
+        }
+        rows.each { field ->
             if (field.size() > 5 && field[4] == 'FAILED') {
                 // An exit column of '-' is an attempt whose exit code Nextflow
                 // could NOT read, which on the `preempted` partition means SLURM
@@ -237,6 +250,11 @@ def failed_attempts() {
                         outcome.job_ids += field[2]
                     }
                 }
+                else if (field.size() > 14 && field[14].isInteger()
+                         && (field[14] as int) < (last_attempt[field[3]] ?: 0)) {
+                    outcome.restarted = outcome.restarted + 1
+                    outcome.retried_errors = outcome.retried_errors + 1
+                }
                 else {
                     outcome.failed = outcome.failed + 1
                 }
@@ -265,9 +283,14 @@ def restarted_line(outcome) {
     if (outcome.unknown) {
         by_exit += "no exit code×${outcome.unknown}"
     }
-    def detail = causes
-        ? causes.sort { entry -> -entry.value }.collect { label, n -> "${n} ${label}" }.join(', ')
-        : by_exit.join(', ')
+    def parts = causes
+        ? causes.sort { entry -> -entry.value }.collect { label, n -> "${n} ${label}" }
+        : by_exit
+    // Not sent to sacct: its state for these is plain FAILED, which says less.
+    if (outcome.retried_errors) {
+        parts += "${outcome.retried_errors} retried after an error".toString()
+    }
+    def detail = parts.join(', ')
     return "restarted: ${outcome.restarted} (${detail})".toString()
 }
 
@@ -455,4 +478,3 @@ def notify_send(args) {
         log.debug "notify: ${t.class.simpleName}: ${t.message}"
     }
 }
-

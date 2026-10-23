@@ -157,15 +157,20 @@ def pyramid(
     # shards 5 x 1 x 96 x 1792 x 1280 = 4.1 GiB, levels sized to the same bytes):
     # 44 GB peak RSS and 41.5 min single-threaded, i.e. ~10x the shard and ~0.1 min
     # per (t, c) volume; the projected plate's 0.14 GiB shards peaked at 1.7 GB in 27 s.
-    # 12x the shard and 0.15 min/volume leave a margin on both.
+    # All 54 positions of that plate in the v9 debug run (shards 6 x 1 x 88 x 1792 x
+    # 1280 = 4.51 GiB): 46.5 GB peak RSS on every position (10.3x the shard), and
+    # 45.6 / 54.5 / 67.3 min min / median / max, i.e. up to 0.17 min per volume, the
+    # slowest on the 120 GB cpu-c nodes. The old 12x / 0.15 asked 56 GB / 70 min,
+    # 4% above the slowest position. 14x the shard (~36% over the peak) and
+    # 0.3 min/volume (~1.8x the slowest) leave room for slower nodes.
     itemsize = np.dtype(dtype).itemsize
     shard_gb = math.prod(shards) * itemsize / 2**30
     volume_gb = Z * Y * X * itemsize / 2**30
     time_minutes, num_cpus, gb_ram_per_cpu = estimate_resources(
         shape=(T, C, Z, Y, X),
         dtype=dtype,
-        ram_multiplier=max(4.0, 12 * shard_gb / volume_gb / 4),  # per CPU, 4 CPUs share it
-        time_multiplier=0.15,
+        ram_multiplier=max(4.0, 14 * shard_gb / volume_gb / 4),  # per CPU, 4 CPUs share it
+        time_multiplier=0.3,
         max_num_cpus=4,
     )
     mem_gb = num_cpus * gb_ram_per_cpu

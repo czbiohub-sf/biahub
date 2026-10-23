@@ -102,7 +102,7 @@ index-strategy = "unsafe-best-match"
 # (the dev/pyramid-shards branch). uv refuses two git URLs for one package,
 # so force the whole graph onto biahub's rev. Drop together with the iohub pin.
 override-dependencies = [
-  "iohub @ git+https://github.com/czbiohub-sf/iohub@29b9d8b560e02eefe5636e2bf89b6153bea65847",
+  "iohub @ git+https://github.com/czbiohub-sf/iohub@80b20a693d7dd11d5a14d667001bcf1972a2be23",
 ]
 
 [tool.uv.sources]
@@ -141,25 +141,15 @@ imaging_qc_pipeline = { git = "https://github.com/czbiohub-sf/imaging-qc-pipelin
 # royerlab/ultrack main once #290 merges, and at a release once one contains them.
 ultrack = { git = "https://github.com/ieivanov/ultrack", rev = "69e7589a050b0aa5f84ccda3bdf072f5289f939c" }
 
-# Pin iohub to dev/pyramid-shards, a combination branch of three open PRs (one
-# installable revision while they are reviewed; see each PR for the feature):
-#   #488 feat/label-pyramid: PositionLabel.compute_pyramid, with which `biahub
-#        pyramid` gives the label images the same levels as the image (#359), and
-#        a fix for the "mode" downsampler;
-#   #461 feat/auto-size-shards (on #488): `shards=` / `label_shards=` as a size
-#        target, extent or shape, and pyramid levels whose shards keep the level-0
-#        shard's byte size;
-#   #491 feat/pyramid-resume (on #461): compute_pyramid(resume=, resume_token=),
-#        one shard-aligned region per unit, with which `biahub pyramid --resume`
-#        recomputes only what an interrupted attempt did not finish;
-#   #489 feat/process-single-position-output-label: process_single_position(
-#        output_label=...), with which `biahub segment` writes its labels into the
-#        plate's label images with --resume, and create_empty_labels, with which
-#        segment --init and track --init scaffold those label images.
-# Main's #486 adds create_empty_plate(label_names=...) (#360), and #485 puts the
-# labels list on <fov>/labels/zarr.json so ome-zarr-models and dca-validate can
-# open a field that has labels. Repoint at main as they merge (#489, #488, then
-# #461 rebased), and at a PyPI release once one contains them.
+# Pin iohub to main at the czbiohub-sf/iohub#491 merge, which carries #489:
+# process_single_position(output_label=...), with which `biahub segment` writes its
+# labels into the plate's label images with --resume, and create_empty_labels, with
+# which segment --init and track --init scaffold those label images. Main's #486 adds
+# create_empty_plate(label_names=...) (#360), and #485 puts the labels list on
+# <fov>/labels/zarr.json so ome-zarr-models and dca-validate can open a field that
+# has labels. #488/#461/#491 (label pyramids, shard size targets, resumable
+# pyramids) ride along for the pyramid step. Drop to a PyPI release once one
+# contains them.
 #
 # Main's own reasons: #476 syncs a write unit's shards before recording it as
 # done (without it a preemption between the write and the marker leaves a `.done`
@@ -167,7 +157,7 @@ ultrack = { git = "https://github.com/ieivanov/ultrack", rev = "69e7589a050b0aa5
 # 2026_08_14_dynatrack); #472 adds create_empty_plate(extra_metadata=...); #479
 # creates a plate's positions in one batch instead of rewriting the well's
 # metadata per position (hours for a ~40k-FOV plate's init).
-iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "29b9d8b560e02eefe5636e2bf89b6153bea65847" }
+iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "80b20a693d7dd11d5a14d667001bcf1972a2be23" }
 
 # Pin waveorder to the main commit that merged mehta-lab/waveorder#583, which
 # runs apply-inv-tf through iohub's process_single_position with resume (on top

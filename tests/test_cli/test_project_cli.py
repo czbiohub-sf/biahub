@@ -66,7 +66,7 @@ def test_project_init_scaffolds_a_z1_plate_and_names_dropped_channels(plate, tmp
     data, channel_names, zattrs = _read(out / "A" / "1" / "0")
     assert channel_names == ["RFP", "GFP"]  # config order, not input order
     assert data.shape == (3, 2, 1, 5, 6)
-    assert data.dtype == np.float32  # any max/mean/sum channel makes the plate float32
+    assert data.dtype == np.uint16  # max and slice keep the input dtype
     assert zattrs["biahub-project"]["channels"]["GFP"]["z"]["center"] == 2
     assert np.all(data == 0)  # --init projects nothing
 
