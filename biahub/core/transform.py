@@ -332,6 +332,31 @@ class Transform:
         # Convert back from homogeneous
         return transformed[:, :-1]
 
+    def displacement_to(
+        self, other: Transform, shape_zyx: tuple, voxel_um: tuple, samples: int = 9
+    ) -> dict:
+        """Return how far apart this and `other` put a volume of `shape_zyx`, in µm.
+
+        `max_um` is exact (the difference of two affine maps is largest at a corner);
+        `mean_um` is the mean over a `samples`-per-axis grid. Both on the output grid in
+        the transforms' own direction, scaled by `voxel_um` (z, y, x).
+        """
+        axes = [np.linspace(0, n - 1, samples) for n in shape_zyx]
+        grid = np.stack(np.meshgrid(*axes, indexing="ij"), -1).reshape(-1, len(shape_zyx))
+        corners = np.stack(
+            np.meshgrid(*[[0, n - 1] for n in shape_zyx], indexing="ij"), -1
+        ).reshape(-1, len(shape_zyx))
+        um = np.asarray(voxel_um, dtype=float)
+
+        def distance(points):
+            gap = self.apply_points(points) - other.apply_points(points)
+            return np.linalg.norm(gap * um, axis=1)
+
+        return {
+            "max_um": float(distance(corners).max()),
+            "mean_um": float(distance(grid).mean()),
+        }
+
     def apply(
         self,
         moving: NDArray,

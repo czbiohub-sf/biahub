@@ -1656,6 +1656,36 @@ class TransformSettings(MyBaseModel):
         """Matrix for timepoint `t` of `position` in `direction`: its own, else the nearest earlier."""
         return self._as(self.entry_for(t, position).matrix, direction)
 
+    def transform_for(self, t: int, position: str | None = None):
+        """Return timepoint `t`'s transform as a forward `Transform`, however it is stored."""
+        from biahub.core.transform import Transform
+
+        return Transform(self.matrix_for(t, "forward", position))
+
+    def set_entry(
+        self,
+        t: int,
+        *,
+        position: str | None = None,
+        status: EntryStatus | None = None,
+        note: str | None = None,
+    ) -> None:
+        """Change timepoint `t`'s own entry (its status, its note); a status change says why.
+
+        The entry for the whole series (no `t`) is the one changed when there is one.
+        """
+        if status is not None and not note:
+            raise ValueError("a change of status needs a note saying why")
+        entries = self.entries_for(position)
+        own = [k for k, e in enumerate(entries) if e.t is None or e.t == t]
+        if not own:
+            raise ValueError(f"no entry for t={t}" + (f" of {position}" if position else ""))
+        k = own[0]
+        update = {"note": note} if note is not None else {}
+        if status is not None:
+            update["status"] = status
+        entries[k] = TransformEntry.model_validate({**entries[k].model_dump(), **update})
+
     def unique_matrices(self, direction: TransformDirection) -> list[np.ndarray]:
         lists = [self.transforms] if self.transforms is not None else self.positions.values()
         seen, out = set(), []
