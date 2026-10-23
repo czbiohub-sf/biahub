@@ -89,15 +89,20 @@ def displacement_stats(diff_vox: ArrayLike, voxel_um: ArrayLike) -> dict:
 
 
 def residual_affine(points_vox: ArrayLike, diff_vox: ArrayLike, voxel_um: ArrayLike) -> dict:
-    """Fit residual displacement = a + B @ position over matched points, in µm.
+    """Fit residual displacement = a + B @ mapped position over matched points, in µm.
+
+    `points_vox` are the reference positions and `diff_vox` reference minus mapped moving,
+    so what is left is a map acting on the mapped positions (`points - diff`): fitted
+    there, a moving set at 0.8 x the reference reads a scale of 1.25.
 
     A residual that grows across the field is a scale or rotation error of the transform,
     which median distances alone hide; a constant residual is a shift. Returns the residual
     map's per-axis scale and rotation (1 and 0 for no such error), its shift in µm, and the
     displacement it accumulates across the extent of the points (`trend_um`, per axis).
     """
-    pts = np.asarray(points_vox, dtype=float).reshape(-1, 3) * np.asarray(voxel_um, float)
     diff = np.asarray(diff_vox, dtype=float).reshape(-1, 3) * np.asarray(voxel_um, float)
+    ref = np.asarray(points_vox, dtype=float).reshape(-1, 3) * np.asarray(voxel_um, float)
+    pts = ref - diff  # the mapped positions, where the residual map acts
     n = int(len(pts))
     if n < MIN_POINTS_FOR_AFFINE:
         return {"n": n, "scale_zyx": None, "rotation_yx_deg": None}

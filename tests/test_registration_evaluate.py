@@ -53,9 +53,9 @@ def test_residual_affine_recovers_a_scale_error_and_a_rotation():
     rng = np.random.default_rng(0)
     pts = np.c_[rng.uniform(0, 60, 400), rng.uniform(0, 2048, 400), rng.uniform(0, 2048, 400)]
     error = _similarity((1.0, 1.002, 1.002), 0.1, (0.5, 3.0, -2.0))
-    moved = error.apply_points(pts)
+    moved = error.apply_points(pts)  # the reference positions; pts are where they map from
     diff = moved - pts + rng.normal(0, 0.3, pts.shape)
-    r = residual_affine(pts, diff, VOX)
+    r = residual_affine(moved, diff, VOX)
     np.testing.assert_allclose(r["scale_zyx"][1:], [1.002, 1.002], atol=2e-4)
     assert r["rotation_yx_deg"] == pytest.approx(0.1, abs=0.01)
     assert r["n"] == 400
@@ -588,3 +588,31 @@ def test_tiles_recover_a_known_shift_in_full():
     r = tile_residuals(Transform.identity(3), mov, ref, VOX3, tile_px=256, grid=5)
     recovered = -np.median(np.asarray(r["residuals"]["diff_um"])[:, 1:], axis=0) / VOX3[1]
     np.testing.assert_allclose(recovered, [shift_px, -shift_px], rtol=0.01)
+
+
+def test_the_residual_affine_is_the_map_left_on_the_mapped_points():
+    # Clicked pairs with the moving points at 0.8 x the reference, under identity: what is
+    # left is a scale of 1.25 acting on the mapped points (fitting at the reference
+    # positions read 1.2), and a pure rotation leaves no scale.
+    from biahub.registration.evaluate import point_residuals
+
+    grid = np.stack(
+        np.meshgrid([10.0, 30.0], np.linspace(100, 1900, 5), np.linspace(100, 1900, 5))
+    )
+    ref_pts = grid.reshape(3, -1).T
+    centre = np.array([20.0, 1000.0, 1000.0])
+    ids = list(range(len(ref_pts)))
+    for moving, scale, angle in (
+        (centre + 0.8 * (ref_pts - centre), 1.25, 0.0),
+        (
+            _similarity((1.0, 1.0, 1.0), -2.0, (0, 0, 0)).apply_points(ref_pts - centre)
+            + centre,
+            1.0,
+            2.0,
+        ),
+    ):
+        mov = Landmarks(moving, VOX, "manual", ids)
+        ref = Landmarks(ref_pts, VOX, "manual", ids)
+        affine = point_residuals(Transform.identity(3), mov, ref)["affine"]
+        np.testing.assert_allclose(affine["scale_zyx"][1:], [scale, scale], atol=1e-6)
+        assert affine["rotation_yx_deg"] == pytest.approx(angle, abs=1e-6)
