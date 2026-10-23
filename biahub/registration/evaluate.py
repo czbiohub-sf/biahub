@@ -644,6 +644,7 @@ def evaluate(
     images: bool = True,
     compare: str = "edges",
     detect_kwargs: dict | None = None,
+    baseline: bool = True,
     **image_kwargs,
 ) -> Evaluation:
     """Evaluate a forward transform on one moving / reference pair (ZYX volumes).
@@ -653,11 +654,17 @@ def evaluate(
     (detected elsewhere or clicked), or None. `images` adds layer 3 (`compare`: "edges" or
     "intensity"; `tile_px`, `grid`, `crop_px` pass through), the slow part: one warp of
     the moving volume per transform. Thresholds for a verdict are left to the caller.
+    `baseline=False` skips the unregistered pair (one warp less).
     """
     marks = _landmarks(landmarks, mov, ref, mov_um, ref_um, detect_kwargs)
     measures = _measures(transform, mov, ref, ref_um, marks, images, compare, image_kwargs)
-    baseline = _measures(
-        Transform.identity(3), mov, ref, ref_um, marks, images, compare, image_kwargs
+    # the unregistered pair; `baseline=False` leaves it out (e.g. measured once, apart)
+    baseline = (
+        _measures(
+            Transform.identity(3), mov, ref, ref_um, marks, images, compare, image_kwargs
+        )
+        if baseline
+        else {}
     )
     return Evaluation(
         geometry=decompose(transform, mov_um, ref_um),
@@ -798,3 +805,110 @@ def survey_positions(
             row["n_nuclei"] = int(len(detect_nuclei(first, voxel_um).points_vox))
         rows.append(row)
     return rows
+
+
+# --- many candidates on many positions (the benchmark's core) ------------------------------
+
+
+def _row(record: Evaluation, candidate: str, position: str, t: int) -> dict:
+    """Flatten one evaluation into a table row."""
+    points, tiles = record.points or {}, record.tiles or {}
+    affine = points.get("affine") or {}
+    scale = affine.get("scale_zyx")
+    return {
+        "candidate": candidate,
+        "position": position,
+        "t": t,
+        "tiles_n": tiles.get("n_tiles"),
+        "tiles_median_um": (tiles.get("stats") or {}).get("median_um"),
+        "points_n": points.get("n_matched"),
+        "points_median_um": (points.get("stats") or {}).get("median_um"),
+        "scale_yx": None if scale is None else list(scale[1:]),
+        "rotation_yx_deg": affine.get("rotation_yx_deg"),
+        "z_um": record.z_um,
+        "z_from": record.z_from,
+        "transform_scale_zyx": record.geometry["scale_zyx"],
+        "transform_rotation_yx_deg": record.geometry["rotation_yx_deg"],
+    }
+
+
+def evaluate_candidates(
+    candidates: dict,
+    position_pairs: list,
+    moving_channel: str,
+    reference_channel: str,
+    t: int = 0,
+    landmarks: str | None = None,
+    images: bool = True,
+    compare: str = "edges",
+    detect_kwargs: dict | None = None,
+    **image_kwargs,
+) -> list[dict]:
+    """Evaluate every candidate on every position at `t`: one row each (`_row`).
+
+    `candidates` maps a name to a forward `Transform` for every position, or to a dict
+    keyed by `t` or by (position, t) (e.g. `block_candidates`); a candidate with no
+    transform for a position is left out there. `position_pairs` are (moving, reference)
+    position paths. Each position also gets an "unregistered" row (identity), measured
+    once; landmarks are detected once per position.
+    """
+    from iohub import open_ome_zarr
+
+    rows = []
+    for mov_path, ref_path in position_pairs:
+        key = "/".join(Path(mov_path).parts[-3:])
+        with open_ome_zarr(mov_path, mode="r") as m, open_ome_zarr(ref_path, mode="r") as r:
+            mov = np.asarray(m.data[t, m.channel_names.index(moving_channel)], np.float32)
+            ref = np.asarray(r.data[t, r.channel_names.index(reference_channel)], np.float32)
+            mov_um, ref_um = tuple(m.scale[-3:]), tuple(r.scale[-3:])
+        marks = _landmarks(landmarks, mov, ref, mov_um, ref_um, detect_kwargs)
+        named = {"unregistered": Transform.identity(3), **candidates}
+        for name, candidate in named.items():
+            transform = (
+                candidate
+                if isinstance(candidate, Transform)
+                else candidate.get((key, t), candidate.get(t))
+            )
+            if transform is None:
+                continue
+            record = evaluate(
+                transform,
+                mov,
+                ref,
+                mov_um,
+                ref_um,
+                landmarks=marks,
+                images=images,
+                compare=compare,
+                baseline=False,
+                **image_kwargs,
+            )
+            rows.append(_row(record, name, key, t))
+    return rows
+
+
+def block_candidates(run_dir) -> dict:
+    """Return each block of a stack run as a candidate: {block: {t or (position, t): T}}.
+
+    From the per-timepoint records the run wrote (`blocks`: every block's transform),
+    under `<run>/timepoints/` or, one list per position, `<run>/positions/<r/c/f>/...`.
+    """
+    import json
+
+    run_dir = Path(run_dir)
+    record_dirs = [(None, run_dir / "timepoints")] + [
+        ("/".join(d.parent.relative_to(run_dir / "positions").parts), d)
+        for d in sorted((run_dir / "positions").glob("*/*/*/timepoints"))
+    ]
+    candidates: dict = {}
+    for position, directory in record_dirs:
+        for path in sorted(directory.glob("*.json")) if directory.is_dir() else []:
+            record = json.loads(path.read_text())
+            for block in record.get("blocks") or []:
+                if block["matrix"] is None:
+                    continue
+                key = record["t"] if position is None else (position, record["t"])
+                candidates.setdefault(block["block"], {})[key] = Transform(
+                    np.asarray(block["matrix"], dtype=float)
+                )
+    return candidates
