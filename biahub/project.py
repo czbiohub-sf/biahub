@@ -49,9 +49,11 @@ from biahub.utils.ngff import (
 
 PROVENANCE_KEY = "biahub-project"
 
-# Methods that compute a new value; a plate with any of them is float32 (the common
-# case is float32 in and out). Only an all-`slice` plate keeps the input dtype.
-_FLOAT_METHODS = ("max", "mean", "sum")
+# Methods whose result is not one of the input values, so they need float32. `max` and
+# `slice` pick an existing voxel and keep the input dtype. A store has one dtype, so a
+# plate with any mean/sum channel is float32 throughout and its max/slice channels are
+# widened on write (lossless for the integer camera dtypes).
+_FLOAT_METHODS = ("mean", "sum")
 
 
 def resolve_z_indices(

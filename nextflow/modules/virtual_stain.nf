@@ -69,7 +69,7 @@ process run_virtual_stain_preprocess {
     clusterOptions { slurm_logs('virtual_stain') }
     cpus 16
     memory { retry_memory(64, task) }
-    time '1h'
+    time { retry_time(60, task) }
 
     input:
     val input_zarr
@@ -111,7 +111,7 @@ process run_virtual_stain {
     // ran on). Add `--constraint=gpu` to stay on the `gpu` partition's nodes.
     clusterOptions { "--gres=gpu:1 " + slurm_logs('virtual_stain') }
     cpus { meta.cpus }
-    memory { "${meta.mem_gb} GB" }
+    memory { retry_memory(meta.mem_gb, task) }
     time { retry_time(meta.time_minutes, task) }
 
     input:

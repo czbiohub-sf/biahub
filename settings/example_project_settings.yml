@@ -3,8 +3,8 @@
 # (the command prints which).
 #
 # method: max | mean | sum | slice
-#   max/mean/sum reduce the selected planes; slice keeps one plane. The output plate is
-#   float32 unless every channel is a slice, in which case it keeps the input dtype.
+#   max/mean/sum reduce the selected planes; slice keeps one plane. The output plate
+#   keeps the input dtype unless a channel uses mean or sum, which make it float32.
 # z: which planes feed the projection. Omit it for max/mean/sum over the whole stack.
 #   start, stop:   absolute planes, half-open [start, stop) like time_indices in concatenate
 #   center:        a plane index, or "focus" for the in-focus plane found on focus.channel.
