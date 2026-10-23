@@ -46,6 +46,7 @@ from biahub.registration.methods.ants import AntsEstimator, use_task_threads
 from biahub.registration.methods.beads import NodeGraphEstimator
 from biahub.registration.methods.focus import FocusEstimator
 from biahub.registration.methods.manual import ManualEstimator
+from biahub.registration.methods.nuclei import NucleiEstimator
 from biahub.registration.methods.pcc import PCCEstimator
 from biahub.registration.methods.vote_icp import VoteIcpEstimator, VoteSeedCorrection
 from biahub.registration.metrics import (
@@ -1042,6 +1043,13 @@ def build_estimator(
     elif settings.method == "focus-finding":
         estimator = FocusEstimator.from_settings(
             settings.focus_finding, pixel_size=(mov_voxel_size or (1.0, 1.0, 1.0))[-1]
+        )
+    elif settings.method == "nuclei":
+        estimator = NucleiEstimator(
+            settings.nuclei,
+            settings.transform.type,
+            mov_voxel_size or (1.0, 1.0, 1.0),
+            ref_voxel_size or (1.0, 1.0, 1.0),
         )
     elif settings.method == "manual":
         manual = settings.manual

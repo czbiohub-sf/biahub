@@ -1063,7 +1063,35 @@ class FallbackSettings(MyBaseModel):
     sweep: SweepSettings | None = None
 
 
-EstimationMethod = Literal["beads", "ants", "phase-cross-corr", "manual", "focus-finding"]
+class NucleiSettings(MyBaseModel):
+    """Settings for the nuclei method: detect nucleus centres, pair them, fit.
+
+    Detection as `biahub.registration.evaluate.detect_nuclei` (areas in µm², so they
+    hold across instruments). Pairs are mutual nearest neighbours in yx within each
+    radius of `match_radii_um` in turn, refitting after each; the first must exceed how
+    far off the seed may be (put a coarse block before this one when it is more).
+    """
+
+    min_area_um2: PositiveFloat = 8.0
+    max_area_um2: PositiveFloat = 320.0
+    min_solidity: float = Field(0.9, gt=0, le=1)
+    smooth_um: float = Field(0.2, ge=0)
+    match_radii_um: list[PositiveFloat] = [5.0, 2.0]
+    min_matches: PositiveInt = 6
+
+    @field_validator("match_radii_um")
+    @classmethod
+    def check_radii(cls, v):
+        if not v or any(b > a for a, b in zip(v, v[1:], strict=False)):
+            raise ValueError(
+                f"match_radii_um must be one or more radii, not increasing; got {v}"
+            )
+        return v
+
+
+EstimationMethod = Literal[
+    "beads", "ants", "phase-cross-corr", "manual", "focus-finding", "nuclei"
+]
 # The settings block each method reads.
 METHOD_BLOCKS: dict[str, str] = {
     "beads": "beads",
@@ -1071,6 +1099,7 @@ METHOD_BLOCKS: dict[str, str] = {
     "phase-cross-corr": "phase_cross_corr",
     "manual": "manual",
     "focus-finding": "focus_finding",
+    "nuclei": "nuclei",
 }
 TransformType = Literal["euclidean", "similarity", "affine"]
 
@@ -1166,6 +1195,7 @@ DEFAULT_SCORE_METRIC: dict[str, str] = {
     "phase-cross-corr": "correlation",
     "manual": "gradient_correlation",
     "focus-finding": "correlation",
+    "nuclei": "correlation",
 }
 
 
@@ -1217,6 +1247,7 @@ class EstimateTransformSettings(MyBaseModel):
     phase_cross_corr: PhaseCrossCorrSettings | None = None
     manual: ManualSettings | None = None
     focus_finding: FocusSettings | None = None
+    nuclei: NucleiSettings | None = None
     transform: TransformFitSettings = TransformFitSettings()
     time_indices: NonNegativeInt | list[NonNegativeInt] | Literal["all"] = "all"
     score: ScoreSettings = ScoreSettings()
@@ -1282,6 +1313,7 @@ class EstimateTransformSettings(MyBaseModel):
             "phase-cross-corr": ("phase_cross_corr", PhaseCrossCorrSettings),
             "manual": ("manual", ManualSettings),
             "focus-finding": ("focus_finding", FocusSettings),
+            "nuclei": ("nuclei", NucleiSettings),
         }
         if self.is_stack:  # each block brings its own settings
             return self
