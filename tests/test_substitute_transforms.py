@@ -65,6 +65,18 @@ def test_a_substituted_entry_keeps_its_status():
     )
 
 
+def test_a_substituted_entry_keeps_its_report():
+    # The donor's score.report (raw-pair and unregistered-pair metrics) belongs to its
+    # transform; the combined file must not lose it.
+    donor = _single(2, 50.0, method="ants")
+    report = {"correlation": 0.71, "unregistered_correlation": 0.32, "unregistered_score": 0.4}
+    donor.transforms[0] = donor.transforms[0].model_copy(
+        update={"score": 0.7, "report": report}
+    )
+    combined, _ = substitute_transforms(_beads(), [("ants.yml", donor)])
+    assert combined.transforms[2].report == report
+
+
 def test_substitutes_are_converted_to_the_base_direction_and_applied_in_order():
     inverse = _single(1, -7.0, method="ants", direction="inverse")  # inverse -7 == forward +7
     later = _single(1, 9.0, method="manual")

@@ -63,6 +63,7 @@ def _substitute_list(
             t=t,
             matrix=sub._as(entry.matrix, base.direction).tolist(),  # in the base's direction
             score=entry.score,
+            report=entry.report,
             repaired_from=entry.repaired_from,
             method=method if method != base.method else None,
             # a stand-in stays one, so apply-transform still reports it

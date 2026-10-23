@@ -79,6 +79,15 @@ class EvalTransformSettings(MyBaseModel):
     interpolation_type: Literal["linear", "cubic"] = "linear"
 
 
+class LegacyAntsRegistrationSettings(MyBaseModel):
+    """The retired ANTs block; its preparation fields become preprocess blocks."""
+
+    sobel_filter: bool = False
+    crop: bool = False
+    ref_mask_radius: float | None = None
+    clip: bool = False
+
+
 class EstimateRegistrationSettings(MyBaseModel):
     target_channel_name: str
     source_channel_name: str
@@ -90,7 +99,7 @@ class EstimateRegistrationSettings(MyBaseModel):
         default_factory=AffineTransformSettings
     )
     eval_transform_settings: EvalTransformSettings | None = None
-    ants_registration_settings: AntsRegistrationSettings | None = None
+    ants_registration_settings: LegacyAntsRegistrationSettings | None = None
     manual_registration_settings: ManualRegistrationSettings | None = None
     time_indices: NonNegativeInt | list[NonNegativeInt] | Literal["all"] = "all"
     verbose: bool = False
@@ -102,7 +111,7 @@ class EstimateRegistrationSettings(MyBaseModel):
         elif self.estimation_method == "beads" and self.beads_match_settings is None:
             self.beads_match_settings = BeadsMatchSettings()
         elif self.estimation_method == "ants" and self.ants_registration_settings is None:
-            self.ants_registration_settings = AntsRegistrationSettings()
+            self.ants_registration_settings = LegacyAntsRegistrationSettings()
         elif (
             self.estimation_method == "phase-cross-corr"
             and self.phase_cross_corr_settings is None
@@ -204,6 +213,36 @@ LegacySettings = (
 # --------------------------------------------------------------------------------------
 
 
+def _ants_blocks(legacy, notes: list[str]) -> list[dict]:
+    """Return the retired ANTs preparation fields as preprocess blocks."""
+    if legacy.estimation_method != "ants":
+        return []
+    ants = legacy.ants_registration_settings
+    blocks = []
+    if ants.clip:
+        blocks.append({"clip_percentiles": {}})
+        notes.append(
+            "ants clip: its fixed limits (phase 0-0.5, fluorescence 110 to the 99th "
+            "percentile) became clip_percentiles, each volume clipped to its own 1st-99.5th "
+            "percentiles"
+        )
+    if ants.sobel_filter:
+        blocks.append({"sobel": {}})
+    # the old pipeline used ref_mask_radius only to choose its crop
+    if ants.ref_mask_radius is not None and ants.crop:
+        blocks.append(
+            {"mask_circle": {"target": ["reference"], "radius": ants.ref_mask_radius}}
+        )
+    elif ants.ref_mask_radius is not None:
+        notes.append("ants ref_mask_radius dropped: without crop it was never applied")
+    if ants.crop:
+        notes.append(
+            "ants crop dropped: ANTs no longer warps the moving volume first, so there is no "
+            "empty border to crop; to use only part of the field, add a mask_box block"
+        )
+    return blocks
+
+
 def estimate_settings_from_legacy(
     legacy: EstimateRegistrationSettings | EstimateStabilizationSettings,
 ) -> tuple[EstimateTransformSettings, list[str]]:
@@ -247,7 +286,13 @@ def estimate_settings_from_legacy(
             reference=ReferenceSettings(frame="cross", channel=legacy.target_channel_name),
             method=legacy.estimation_method,
             beads=legacy.beads_match_settings,
-            ants=legacy.ants_registration_settings,
+            ants=AntsRegistrationSettings() if legacy.estimation_method == "ants" else None,
+            preprocess=_ants_blocks(legacy, notes),
+            # the legacy ANTs score compared Sobel edges when sobel_filter was on
+            score={"preprocess": [{"sobel": {}}]}
+            if legacy.estimation_method == "ants"
+            and legacy.ants_registration_settings.sobel_filter
+            else {},
             phase_cross_corr=_unified_pcc(legacy.phase_cross_corr_settings, notes),
             manual=None
             if manual is None

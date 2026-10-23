@@ -314,42 +314,66 @@ def test_ants_estimator_satisfies_protocol():
     assert isinstance(AntsEstimator(), TransformEstimator)
 
 
-def test_ants_estimator_from_settings_maps_transform_type_and_preprocessing():
+def test_ants_estimator_from_settings_maps_the_transform_type():
+    # Preparation (Sobel, clipping, masks) is the preprocess blocks', not the estimator's.
     estimator = AntsEstimator.from_settings(
-        AntsRegistrationSettings(sobel_filter=True, crop=True, ref_mask_radius=0.9),
-        AffineTransformSettings(transform_type="affine"),
+        AntsRegistrationSettings(), AffineTransformSettings(transform_type="affine")
     )
     assert estimator.ants_kwargs["type_of_transform"] == "Affine"
     assert estimator.ants_kwargs["aff_iterations"] == DEFAULT_ANTS_KWARGS["aff_iterations"]
-    assert (
-        estimator.sobel_filter,
-        estimator.crop,
-        estimator.ref_mask_radius,
-        estimator.clip,
-    ) == (
-        True,
-        True,
-        0.9,
-        False,
-    )
+    assert not any(hasattr(estimator, a) for a in ("sobel_filter", "crop", "clip"))
     assert isinstance(estimator, TransformEstimator)
 
 
-def test_ants_estimator_composes_the_crop_offset_back_into_full_volume_coordinates():
-    """With `crop`, ANTs sees a sub-volume; the correction it returns is in that
-    sub-volume's coordinates and must be shifted back, or the result is off by the crop
-    origin."""
-    rng = np.random.default_rng(7)
-    shape = (24, 48, 48)
-    ref = _synthetic_blob_volume(rng, shape)
-    applied_zyx = (2, -3, 4)
-    mov = ndi_shift(ref, shift=applied_zyx, order=1, mode="constant", cval=0.0)
-    # Zero out a border so the overlap crop has a non-zero origin.
-    ref[:, :8, :] = 0
-    mov[:, :8, :] = 0
+def test_ants_never_warps_the_moving_volume(monkeypatch):
+    # The seed goes to ANTs as its initial transform: no pre-warp, so no zero-filled border
+    # for a filter to turn into an edge, and one interpolation instead of two.
+    def no_warp(*args, **kwargs):
+        raise AssertionError("the moving volume was warped before ANTs")
 
-    transform = AntsEstimator(crop=True).estimate(mov, ref)
-    np.testing.assert_allclose(transform.matrix[:3, 3], [-a for a in applied_zyx], atol=0.5)
+    monkeypatch.setattr(Transform, "apply", no_warp)
+    rng = np.random.default_rng(7)
+    ref = _synthetic_blob_volume(rng, (24, 48, 48))
+    seed = Transform.from_translation([0.0, 1.0, -1.0])
+    AntsEstimator(ants_kwargs=_FEW_ITERATIONS).estimate(ref, ref, seed=seed)
+
+
+def test_ants_refines_from_a_far_seed_without_cropping():
+    # A large offset, an exact seed and Sobel on both volumes, no crop: ANTs keeps the
+    # seed's answer (test_ants_never_warps_the_moving_volume pins the no-warp behaviour).
+    from biahub.registration.preprocess import PreprocessedEstimator
+    from biahub.settings import Sobel
+
+    rng = np.random.default_rng(7)
+    ref = _synthetic_blob_volume(rng, (24, 64, 64))
+    applied_zyx = (0, 12, -10)
+    mov = ndi_shift(ref, shift=applied_zyx, order=1, mode="constant", cval=0.0)
+    truth = Transform.from_translation([-a for a in applied_zyx])
+    estimator = PreprocessedEstimator(AntsEstimator(), [Sobel()])
+    result = estimator.estimate(mov, ref, seed=truth)
+    np.testing.assert_allclose(result.matrix[:3, 3], truth.matrix[:3, 3], atol=0.5)
+
+
+def test_ants_estimator_passes_its_masks_to_ants(monkeypatch):
+    import ants
+
+    from biahub.registration.methods import ants as ants_method
+
+    seen = {}
+    real = ants.registration
+
+    def recording(**kwargs):
+        seen.update(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr(ants_method.ants, "registration", recording)
+    rng = np.random.default_rng(5)
+    ref = _synthetic_blob_volume(rng, (24, 48, 48))
+    ref_mask = np.zeros(ref.shape, dtype=bool)
+    ref_mask[4:20, 8:40, 8:40] = True
+    AntsEstimator(ants_kwargs=_FEW_ITERATIONS).estimate(ref, ref, ref_mask=ref_mask)
+    np.testing.assert_array_equal(seen["mask"].numpy() > 0, ref_mask)
+    assert seen["moving_mask"] is None
 
 
 def test_correlation_score_prefers_the_correct_transform():
@@ -396,6 +420,36 @@ def test_ants_estimator_seed_is_mechanically_used():
 
     huge_seed = Transform.from_translation([15.0, -10.0, 8.0])
     assert np.all(np.isfinite(estimator.estimate(mov, ref, seed=huge_seed).matrix))
+
+
+def test_ants_keeps_a_seed_with_rotation_scale_and_shear():
+    # With no iterations ANTs returns its initial transform, so the result must be the seed
+    # itself: a seed with every linear part pins the direction and axis order at the ANTs
+    # boundary, which translation-only seeds cannot (a translation inverts to its negative).
+    rng = np.random.default_rng(12)
+    ref = _synthetic_blob_volume(rng, (24, 48, 48))
+    angle = np.deg2rad(4)
+    linear = np.array(
+        [
+            [1.03, 0.0, 0.05],  # z scale and a z-x shear
+            [0.0, np.cos(angle), -np.sin(angle)],
+            [0.0, np.sin(angle), np.cos(angle)],
+        ]
+    ) @ np.diag([1.0, 0.97, 0.97])
+    matrix = np.eye(4)
+    matrix[:3, :3] = linear
+    matrix[:3, 3] = [1.5, -2.0, 3.0]
+    seed = Transform(matrix)
+    estimator = AntsEstimator(
+        ants_kwargs={
+            "type_of_transform": "Affine",
+            "aff_iterations": (0, 0, 0),
+            "aff_shrink_factors": (4, 2, 1),
+            "aff_smoothing_sigmas": (2, 1, 0),
+        }
+    )
+    result = estimator.estimate(ref, ref, seed=seed)
+    np.testing.assert_allclose(result.matrix, seed.matrix, atol=1e-5)
 
 
 def test_ants_estimator_with_seed_still_recovers_translation():
@@ -650,18 +704,6 @@ def test_ants_threads_follow_the_task_cpus_unless_set(monkeypatch):
     assert _itk_threads() == "3"  # set by the user: kept
 
 
-def test_ants_reference_mask_is_centred_on_a_non_square_volume():
-    # The circular reference mask must sit at the volume's centre (Y, X), whatever its
-    # aspect: a swapped centre puts it off the volume and leaves nothing to register.
-    from biahub.registration.methods.ants import preprocess_zyx
-
-    vol = np.ones((4, 40, 100), dtype=np.float32)
-    ref, _mov, offset = preprocess_zyx(vol, vol, crop=True, ref_mask_radius=0.5)
-    centre_y = offset[1] + ref.shape[1] / 2
-    centre_x = offset[2] + ref.shape[2] / 2
-    assert abs(centre_y - 20) <= 1 and abs(centre_x - 50) <= 1
-
-
 @pytest.mark.parametrize("padding", [False, True])
 def test_classic_pcc_normalization_stays_finite_where_the_spectrum_is_zero(padding):
     # A volume with zero-magnitude frequencies (here: constant) must not turn the
@@ -714,12 +756,77 @@ def test_ants_starts_from_the_seed_not_the_centres_of_mass():
     from_seed = AntsEstimator(ants_kwargs=few_iterations).estimate(mov, ref, seed=true_seed)
     np.testing.assert_allclose(from_seed.matrix[:3, 3], true_seed.matrix[:3, 3], atol=1.0)
 
-    # ANTsPy's own default (no initial transform) is what used to replace the seed's shift
-    com_start = AntsEstimator(ants_kwargs={**few_iterations, "initial_transform": None})
-    moved = (
-        com_start.estimate(mov, ref, seed=true_seed).matrix[:3, 3] - true_seed.matrix[:3, 3]
+
+# --- ants.estimate: the wrapper around ants.registration --------------------------------
+
+_FEW_ITERATIONS = {
+    "type_of_transform": "Similarity",
+    "aff_iterations": (1, 1, 1),
+    "aff_shrink_factors": (6, 3, 1),
+    "aff_smoothing_sigmas": (2, 1, 0),
+}
+
+
+def test_ants_estimate_starts_from_initial_and_returns_the_full_forward_transform():
+    # With near-zero iterations the result is where ANTs started: `initial` itself (used
+    # once, not twice), even with a bright blob that moves the moving volume's centre of
+    # mass (ANTsPy's own default start).
+    from biahub.registration.methods.ants import estimate
+
+    rng = np.random.default_rng(10)
+    ref = _synthetic_blob_volume(rng, (24, 48, 48))
+    applied_zyx = (2, -3, 4)
+    mov = _off_centre_blob(ndi_shift(ref, shift=applied_zyx, order=1, mode="constant"))
+    initial = Transform.from_translation([-a for a in applied_zyx])  # forward: mov -> ref
+
+    result = estimate(ref, mov, initial=initial, ants_kwargs=_FEW_ITERATIONS)
+    # one iteration per pyramid level still nudges it (~0.2 voxel); a centre-of-mass
+    # start would be off by more than a voxel
+    np.testing.assert_allclose(result.matrix[:3, 3], initial.matrix[:3, 3], atol=0.5)
+    np.testing.assert_allclose(result.matrix[:3, :3], initial.matrix[:3, :3], atol=0.02)
+
+
+def test_ants_estimate_returns_the_forward_direction():
+    from biahub.registration.methods.ants import estimate
+
+    rng = np.random.default_rng(5)
+    ref = _synthetic_blob_volume(rng, (24, 48, 48))
+    applied_zyx = (2, -3, 4)
+    mov = ndi_shift(ref, shift=applied_zyx, order=1, mode="constant")
+
+    result = estimate(ref, mov, initial=Transform.identity(3))
+    # forward (mov -> ref) undoes the shift that made mov
+    np.testing.assert_allclose(result.matrix[:3, 3], [-a for a in applied_zyx], atol=0.5)
+
+
+def test_ants_estimate_passes_the_masks_to_ants(monkeypatch):
+    import ants
+
+    from biahub.registration.methods import ants as ants_method
+
+    seen = {}
+    real = ants.registration
+
+    def recording(**kwargs):
+        seen.update(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr(ants_method.ants, "registration", recording)
+    rng = np.random.default_rng(5)
+    ref = _synthetic_blob_volume(rng, (24, 48, 48))
+    ref_mask = np.zeros(ref.shape, dtype=bool)
+    ref_mask[4:20, 8:40, 8:40] = True
+    mov_mask = np.ones(ref.shape, dtype=bool)
+    ants_method.estimate(
+        ref,
+        ref,
+        initial=Transform.identity(3),
+        ref_mask=ref_mask,
+        mov_mask=mov_mask,
+        ants_kwargs=_FEW_ITERATIONS,
     )
-    assert np.abs(moved).max() > 1.0
+    np.testing.assert_array_equal(seen["mask"].numpy() > 0, ref_mask)
+    np.testing.assert_array_equal(seen["moving_mask"].numpy() > 0, mov_mask)
 
 
 @pytest.mark.parametrize("x", [24, 21])

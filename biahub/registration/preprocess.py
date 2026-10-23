@@ -1,0 +1,166 @@
+"""Preprocessing blocks: what a config's `preprocess:` list does to the volumes.
+
+Image blocks change a volume's pixels, in order; mask blocks say where to compare. Each
+block applies to the volumes in its `target`, in that volume's own grid (see the block
+models in `biahub.settings`).
+"""
+
+from __future__ import annotations
+
+import functools
+
+import numpy as np
+
+from skimage import filters
+
+from biahub.registration.metrics import SOBEL_FOOTPRINT, _away_from_padding
+from biahub.settings import (
+    MASK_BLOCKS,
+    ClipPercentiles,
+    MaskBox,
+    MaskCircle,
+    PreprocessBlocks,
+    Sobel,
+)
+
+
+def apply_image_blocks(
+    volume: np.ndarray, blocks: PreprocessBlocks, which: str, where: np.ndarray | None = None
+) -> np.ndarray:
+    """Return `volume` (the `which` one: "moving" or "reference") after its image blocks.
+
+    `where` (the score's overlap) limits the voxels a block measures, e.g. the clip
+    percentiles, so empty padding does not count -- nor the band an earlier filter drew
+    along its edge; the whole volume is still changed.
+    """
+    out = np.asarray(volume, dtype=np.float32)
+    reach = 0  # how far the filters so far reach from outside `where`
+    for block in blocks:
+        if which not in block.target or isinstance(block, MASK_BLOCKS):
+            continue
+        if isinstance(block, ClipPercentiles):
+            sample = out
+            if where is not None:
+                inside = _away_from_padding(where, reach)
+                # a thin overlap left with nothing: measure the whole overlap
+                sample = out[inside if inside.any() else where]
+            low, high = np.nanpercentile(sample, [block.low, block.high])
+            out = np.clip(out, low, high)
+        elif isinstance(block, Sobel):
+            out = filters.sobel(out).astype(np.float32)
+            reach += SOBEL_FOOTPRINT
+        else:
+            raise TypeError(f"no image operation for {type(block).__name__}")
+    return out
+
+
+def blocks_footprint(blocks: PreprocessBlocks) -> int:
+    """Return how far `blocks` reach on the most filtered volume, in voxels.
+
+    Each volume is filtered only by the blocks that target it, so filters on different
+    volumes do not add up.
+    """
+    return max(
+        SOBEL_FOOTPRINT * sum(isinstance(b, Sobel) and which in b.target for b in blocks)
+        for which in ("moving", "reference")
+    )
+
+
+def build_mask(shape_zyx: tuple, blocks: PreprocessBlocks, which: str) -> np.ndarray | None:
+    """Return where to compare in the `which` volume (its mask blocks combined), or None."""
+    masks = [
+        _mask(block, tuple(shape_zyx))
+        for block in blocks
+        if isinstance(block, MASK_BLOCKS) and which in block.target
+    ]
+    if not masks:
+        return None
+    return np.logical_and.reduce(masks)
+
+
+def _mask(block, shape_zyx: tuple) -> np.ndarray:
+    Z, Y, X = shape_zyx
+    if isinstance(block, MaskCircle):
+        center_y, center_x = Y // 2, X // 2
+        radius = int(block.radius * min(center_y, center_x))
+        y, x = np.ogrid[:Y, :X]
+        disk = (y - center_y) ** 2 + (x - center_x) ** 2 <= radius**2
+        return np.broadcast_to(disk, shape_zyx).copy()
+    if isinstance(block, MaskBox):
+        slices = []
+        for axis, size, r in zip("zyx", shape_zyx, block.box, strict=True):
+            if r == "all":
+                slices.append(slice(0, size))
+                continue
+            if r[1] > size:
+                raise ValueError(
+                    f"mask_box {axis} range {r} is outside the {block.target[0]} volume "
+                    f"({axis} size {size})"
+                )
+            slices.append(slice(r[0], r[1]))
+        mask = np.zeros(shape_zyx, dtype=bool)
+        mask[tuple(slices)] = True
+        return mask
+    raise TypeError(f"no mask for {type(block).__name__}")
+
+
+class RawVolumeScore:
+    """A method's own score function, held to the raw volumes while its input is prepared.
+
+    Blocks change what a method estimates from, not what it is judged on: during a
+    `PreprocessedEstimator` estimate, every internal choice (which arm, which pass) scores
+    the raw volumes, as the engine's decision does.
+    """
+
+    def __init__(self, score_fn):
+        self.score_fn = score_fn
+        self.raw = None  # (mov, ref) of the estimate in progress
+
+    def __call__(self, transform, mov, ref):
+        if self.raw is not None:
+            mov, ref = self.raw
+        return self.score_fn(transform, mov, ref)
+
+
+class PreprocessedEstimator:
+    """A method with a config's `preprocess:` blocks in front of it.
+
+    Every estimate (timepoint jobs, repair, sweeps) goes through here, so the method always
+    sees the same prepared volumes, and the reference / moving masks when there are any.
+    `estimate` keeps the method's signature, and its attributes (`uses_seed`, ...) read
+    through, so the engine treats it as the method itself. A method that scores its own
+    candidates gets `raw_score`, so those scores see the raw volumes.
+    """
+
+    def __init__(
+        self, method, blocks: PreprocessBlocks, raw_score: RawVolumeScore | None = None
+    ):
+        self.method = method
+        self.blocks = list(blocks)
+        # the score the method was built with, if it scores internally (beads)
+        self.raw_score = raw_score
+
+        @functools.wraps(method.estimate)
+        def estimate(mov, ref, seed=None, **kwargs):
+            masks = {
+                "ref_mask": build_mask(np.shape(ref), self.blocks, "reference"),
+                "mov_mask": build_mask(np.shape(mov), self.blocks, "moving"),
+            }
+            if self.raw_score is not None:
+                self.raw_score.raw = (mov, ref)
+            try:
+                return self.method.estimate(
+                    apply_image_blocks(mov, self.blocks, "moving"),
+                    apply_image_blocks(ref, self.blocks, "reference"),
+                    seed=seed,
+                    **{k: m for k, m in masks.items() if m is not None},
+                    **kwargs,
+                )
+            finally:
+                if self.raw_score is not None:
+                    self.raw_score.raw = None
+
+        self.estimate = estimate
+
+    def __getattr__(self, name):
+        return getattr(self.method, name)

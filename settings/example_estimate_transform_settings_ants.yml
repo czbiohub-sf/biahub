@@ -3,12 +3,19 @@ moving:
 reference:
   frame: cross
   channel: Phase3D
+preprocess:
+- sobel:
+    target:
+    - moving
+    - reference
 method: ants
-ants:
-  sobel_filter: true
-  crop: false
-  ref_mask_radius: null
-  clip: false
+ants: {}
+score:
+  preprocess:
+  - sobel:
+      target:
+      - moving
+      - reference
 transform:
   type: affine
   seed:

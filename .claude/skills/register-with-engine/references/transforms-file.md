@@ -40,6 +40,11 @@ transforms:                                  # one list shared by every position
   never dropped; `apply-transform` writes every one and records the non-accepted ones in
   the output metadata.
 - `repaired_from`: which repair candidate won (e.g. `consensus_full+polish1`).
+- `report`: the config's `score.report` metrics for this transform, on the raw warped pair,
+  and the unregistered pair's (identity) next to them: each metric as `unregistered_<name>`
+  and the score as `unregistered_score`, e.g. `{correlation: 0.72, unregistered_correlation:
+  0.31, unregistered_score: 0.40}`. A metric with no value (no overlap, no beads) is `null`;
+  no report for a stand-in.
 - `method` on an entry: set when it came from another method's run
   (`substitute-transforms`).
 

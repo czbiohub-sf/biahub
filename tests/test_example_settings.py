@@ -170,29 +170,6 @@ def test_ants_settings_are_all_consumed_by_the_engine():
     assert not missing, f"AntsRegistrationSettings fields nothing reads: {missing}"
 
 
-def test_ants_settings_defaults_match_preprocess_zyx():
-    """Preprocessing defaults must agree with ``preprocess_zyx``, which consumes them."""
-    from biahub.registration.methods.ants import preprocess_zyx
-    from biahub.settings import AntsRegistrationSettings
-
-    settings = AntsRegistrationSettings()
-    params = inspect.signature(preprocess_zyx).parameters
-    for field in AntsRegistrationSettings.model_fields:
-        assert field in params, f"{field} is not a preprocess_zyx parameter"
-        assert getattr(settings, field) == params[field].default, (
-            f"default mismatch for {field}: settings={getattr(settings, field)} "
-            f"preprocess_zyx={params[field].default}"
-        )
-
-
-@pytest.mark.parametrize("radius", [0, -0.2, 1.5])
-def test_ants_ref_mask_radius_rejects_out_of_range(radius):
-    from biahub.settings import AntsRegistrationSettings
-
-    with pytest.raises(ValidationError):
-        AntsRegistrationSettings(ref_mask_radius=radius)
-
-
 def test_example_stitch_settings(example_stitch_settings):
     _, settings = example_stitch_settings
     validated_settings = StitchSettings(**settings)
