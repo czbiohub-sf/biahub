@@ -664,3 +664,75 @@ def evaluate(
         projections={**display_projections(transform, mov, ref), "ref_um": tuple(ref_um)},
         **measures,
     )
+
+
+# --- how many transforms ------------------------------------------------------------------
+# Estimates on a sample of positions and timepoints, compared: does the plate need one
+# transform, one per position, one per timepoint, or one per position and timepoint?
+
+
+def _widest_pair(transforms: dict, shape_zyx: tuple, voxel_um: tuple) -> tuple[float, tuple]:
+    """Return the largest `max_um` between any two of `transforms` (by key), and the pair."""
+    keys = list(transforms)
+    best, pair = 0.0, ()
+    for a in range(len(keys)):
+        for b in range(a + 1, len(keys)):
+            gap = transforms[keys[a]].displacement_to(transforms[keys[b]], shape_zyx, voxel_um)
+            if gap["max_um"] > best or not pair:
+                best, pair = gap["max_um"], (keys[a], keys[b])
+    return best, pair
+
+
+def transform_spread(
+    estimates: dict,
+    shape_zyx: tuple,
+    voxel_um: tuple,
+    tolerance_um: float | None = None,
+) -> dict:
+    """Say how many transforms a dataset needs, from estimates on a sample.
+
+    `estimates` maps (position, t) to a forward `Transform`. The spread across positions
+    is the largest gap (`Transform.displacement_to`, max over the volume, µm) between two
+    positions at one timepoint; across timepoints, between two timepoints at one position.
+    Each is compared with `tolerance_um` (default half a voxel in yx): `choice` is "one",
+    "per position", "per timepoint" or "per position and timepoint". An axis with one
+    sample shows no spread (None).
+    """
+    tolerance = 0.5 * min(voxel_um[1:]) if tolerance_um is None else tolerance_um
+    positions = sorted({p for p, _ in estimates})
+    times = sorted({t for _, t in estimates})
+
+    def widest(groups):
+        best, worst = None, ()
+        for group in groups:
+            if len(group) < 2:
+                continue
+            gap, pair = _widest_pair(group, shape_zyx, voxel_um)
+            if best is None or gap > best:
+                best, worst = gap, pair
+        return best, worst
+
+    across_p, worst_p = widest(
+        [{p: estimates[p, t] for p in positions if (p, t) in estimates} for t in times]
+    )
+    across_t, worst_t = widest(
+        [{(p, t): estimates[p, t] for t in times if (p, t) in estimates} for p in positions]
+    )
+    by_position = across_p is not None and across_p > tolerance
+    by_time = across_t is not None and across_t > tolerance
+    choice = {
+        (False, False): "one",
+        (True, False): "per position",
+        (False, True): "per timepoint",
+        (True, True): "per position and timepoint",
+    }[by_position, by_time]
+    return {
+        "choice": choice,
+        "tolerance_um": tolerance,
+        "across_positions_um": across_p,
+        "across_timepoints_um": across_t,
+        "worst_positions": list(worst_p),
+        "worst_timepoints": [list(k) for k in worst_t],
+        "n_positions": len(positions),
+        "n_timepoints": len(times),
+    }
