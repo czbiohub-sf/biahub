@@ -181,7 +181,7 @@ class _Run:
             direction="forward",
             moving_channels=[self.settings.moving.channel],
             reference_channel=self.settings.reference.channel,
-            method=self.settings.method,
+            method=self.settings.method_label,
             reference_frame=self.settings.reference.frame,
             voxel_size=voxel_size,
         )

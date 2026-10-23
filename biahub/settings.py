@@ -1398,6 +1398,11 @@ class EstimateTransformSettings(MyBaseModel):
         return [b.method for b in self.method] if self.is_stack else [self.method]
 
     @property
+    def method_label(self) -> str:
+        """The method as written in a transforms file: its name, or a stack's `a > b`."""
+        return " > ".join(self.method_names)
+
+    @property
     def final_method(self) -> str:
         """The method that has the last word: the only one, or a stack's last block."""
         return self.method_names[-1]

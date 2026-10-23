@@ -96,10 +96,97 @@ def test_a_stack_refuses_what_cannot_work(method, extra, message):
     assert "method.literal[" not in str(error.value)
 
 
-def test_the_engine_says_stacks_are_not_run_yet():
-    import click
+# --- running a stack ---------------------------------------------------------------------
 
+
+@pytest.fixture
+def beads_plate(tmp_path):
+    """Two timepoints; GFP is Phase3D shifted (as in test_estimate_transform)."""
+    import numpy as np
+
+    from scipy.ndimage import shift as ndi_shift
+
+    from tests.test_estimate_transform import (
+        APPLIED_SHIFT_ZYX,
+        SHAPE,
+        _synthetic_bead_volume,
+        _write_plate,
+    )
+
+    ref = _synthetic_bead_volume(np.random.default_rng(11), SHAPE)
+    mov = ndi_shift(ref, shift=APPLIED_SHIFT_ZYX, order=1, mode="constant", cval=0.0)
+    return _write_plate(tmp_path / "beads.zarr", [(ref, mov), (ref, mov)])
+
+
+PEAKS = {"threshold_abs": 100, "nms_distance": 4, "min_distance": 0, "block_size": [8, 8, 8]}
+BEADS_BLOCK = {"beads": {"source_peaks_settings": PEAKS, "target_peaks_settings": PEAKS}}
+
+
+def test_a_stack_runs_its_blocks_in_order_each_from_the_one_before(monkeypatch):
+    import numpy as np
+
+    from biahub.core.transform import Transform
+    from biahub.registration.engine import build_estimator
+    from biahub.registration.estimators import ChainedEstimator
+
+    settings = _settings(PCC_THEN_ANTS)
+    estimator, score_fn, seed = build_estimator(settings, (16, 64, 64))
+    assert isinstance(estimator, ChainedEstimator) and len(estimator.stages) == 2
+    pcc, ants = estimator.stages
+    assert type(pcc.method).__name__ == "PCCEstimator"  # wrapped by its block's preprocess
+    assert type(ants.method).__name__ == "AntsEstimator"
+
+    first = Transform.from_translation([1.0, 2.0, 3.0])
+    second = Transform.from_translation([1.0, 2.5, 3.0])
+    seen = []
+    monkeypatch.setattr(pcc, "estimate", lambda m, r, seed=None: seen.append(seed) or first)
+    monkeypatch.setattr(ants, "estimate", lambda m, r, seed=None: seen.append(seed) or second)
+    monkeypatch.setattr(estimator, "score_fn", lambda t, m, r: 0.9 if t is second else 0.5)
+    vol = np.zeros((16, 64, 64), np.float32)
+    assert estimator.estimate(vol, vol, seed=seed) is second
+    assert seen[0] is seed and seen[1] is first
+
+
+def test_the_stack_uses_the_seed_when_its_first_block_does():
     from biahub.registration.engine import build_estimator
 
-    with pytest.raises(click.UsageError, match="stack"):
-        build_estimator(_settings(PCC_THEN_ANTS))
+    assert not build_estimator(_settings(PCC_THEN_ANTS), (16, 64, 64))[0].uses_seed
+    assert build_estimator(_settings([{"ants": {}}, BEADS_BLOCK]), (16, 64, 64))[0].uses_seed
+
+
+def test_a_stack_estimates_end_to_end_and_names_its_blocks(beads_plate, tmp_path):
+    import numpy as np
+
+    from tests.test_estimate_transform import APPLIED_SHIFT_ZYX, _inverse_translations, _run
+
+    settings = _settings([{"phase-cross-corr": {}}, BEADS_BLOCK])
+    assert settings.effective_score_metric == "overlap"  # the final block's, beads
+    config = tmp_path / "stack.yml"
+    model_to_yaml(settings, config)
+    output = tmp_path / "out" / "transforms.yml"
+    _run(beads_plate, config, output)
+
+    for row in _inverse_translations(output):
+        np.testing.assert_allclose(row, APPLIED_SHIFT_ZYX, atol=0.5)
+    from biahub.settings import load_transform_settings
+
+    assert load_transform_settings(output).method == "phase-cross-corr > beads"
+
+
+def test_a_stack_plans_for_its_heaviest_and_interactive_blocks(beads_plate, tmp_path):
+    from biahub.registration import engine
+
+    ants_alone = engine.init_run(
+        beads_plate, beads_plate, _settings([{"ants": {}}]), tmp_path / "a"
+    )
+    stack = engine.init_run(
+        beads_plate, beads_plate, _settings([BEADS_BLOCK, {"ants": {}}]), tmp_path / "b"
+    )
+    assert stack["resources"] == ants_alone["resources"]  # ANTs needs the most
+    manual = engine.init_run(
+        beads_plate,
+        beads_plate,
+        _settings([{"manual": {}}, {"ants": {}}], time_indices=0),
+        tmp_path / "c",
+    )
+    assert manual["interactive"]

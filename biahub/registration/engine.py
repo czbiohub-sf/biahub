@@ -916,12 +916,18 @@ _INTENSITY_METRIC_FNS = {
 }
 
 
+def _final(settings: EstimateTransformSettings) -> EstimateTransformSettings:
+    """Return the config of the method with the last word (a stack's final block)."""
+    return settings.stack_settings()[-1] if settings.is_stack else settings
+
+
 def _metric_fn(settings: EstimateTransformSettings, metric: str, prepare=None) -> ScoreFn:
     """Return one metric as a score function; `prepare` runs after the warp (intensity only)."""
+    beads = _final(settings).beads  # a stack's bead settings are its final block's
     if metric == "overlap":
-        return lambda transform, mov, ref: score_transform(transform, mov, ref, settings.beads)
+        return lambda transform, mov, ref: score_transform(transform, mov, ref, beads)
     if metric == "residual":
-        return lambda transform, mov, ref: residual_score(transform, mov, ref, settings.beads)
+        return lambda transform, mov, ref: residual_score(transform, mov, ref, beads)
     if metric not in _INTENSITY_METRIC_FNS:
         raise ValueError(f"unknown score metric {metric!r}")
     fn = _INTENSITY_METRIC_FNS[metric]
@@ -1006,7 +1012,14 @@ def build_estimator(
 ) -> tuple[TransformEstimator, ScoreFn, Transform]:
     """Estimator, score function and forward seed for the settings' method."""
     if settings.is_stack:
-        raise click.UsageError("stacked methods (a list under method:) are not run yet")
+        # each block is the estimator its own config builds (its preprocess, transform
+        # type, settings), seeded by the block before; the run's score keeps the best
+        blocks = [
+            build_estimator(block, shape_zyx, mov_voxel_size, ref_voxel_size)[0]
+            for block in settings.stack_settings()
+        ]
+        score_fn = _score_fn(settings)
+        return ChainedEstimator(blocks, score_fn=score_fn), score_fn, _seed(settings)
     score_fn = _score_fn(settings)
     # the bead estimators' own choices score the raw volumes, not the prepared ones
     method_score = RawVolumeScore(score_fn) if settings.preprocess else score_fn
@@ -1050,11 +1063,12 @@ def _finite_or_none(value: float | None) -> float | None:
 
 def _bead_metrics(settings, result, t, mov, ref) -> dict | None:
     """Continuous bead residuals next to the score, for the beads method."""
-    if settings.method != "beads" or t not in result.transforms:
+    final = _final(settings)
+    if final.method != "beads" or t not in result.transforms:
         return None
     ref_t = np.asarray(_reference_policy(settings, ref).reference_for(mov, t))
     metrics = bead_alignment_metrics(
-        result.transforms[t], np.asarray(mov[t]), ref_t, settings.beads
+        result.transforms[t], np.asarray(mov[t]), ref_t, final.beads
     )
     return None if metrics is None else metrics.to_dict()
 
@@ -1719,7 +1733,11 @@ def init_run(
     model_to_yaml(settings, output_dir / ENGINE_SETTINGS_FILENAME)
 
     propagated = settings.transform.seed_from == "previous_timepoint"
-    num_cpus, gb_ram_per_cpu = _estimate_job_resources(settings.method, (Z, Y, X))
+    # a stack's jobs run every block: plan for the heaviest
+    num_cpus, gb_ram_per_cpu = max(
+        (_estimate_job_resources(m, (Z, Y, X)) for m in settings.method_names),
+        key=lambda r: r[0] * r[1],
+    )
     n_trials = len(settings.sweep_trials()) if settings.fallback.sweep is not None else 0
     estimate_minutes = (
         _propagation_minutes(len(time_indices)) if propagated else ESTIMATE_MINUTES
@@ -1737,7 +1755,7 @@ def init_run(
         "time_indices": time_indices,
         "propagated": propagated,
         "uses_seed": bool(getattr(estimator, "uses_seed", True)),
-        "interactive": settings.method == "manual",
+        "interactive": "manual" in settings.method_names,
         "resources": {
             "estimate": resources(estimate_minutes),
             "repair": resources(REPAIR_MINUTES),
@@ -1806,7 +1824,7 @@ def flag_run(
     )
     if repair_ts and not plan["uses_seed"]:
         click.echo(
-            f"repair skipped: method {settings.method!r} ignores seeds, so re-seeding "
+            f"repair skipped: method {settings.method_label!r} ignores seeds, so re-seeding "
             f"would return the same transforms ({len(repair_ts)} flagged timepoint(s) stay flagged)"
         )
         repair_ts = []

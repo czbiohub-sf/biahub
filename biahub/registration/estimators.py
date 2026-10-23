@@ -71,6 +71,11 @@ class ChainedEstimator:
         self.stages = list(stages)
         self.score_fn = score_fn
 
+    @property
+    def uses_seed(self) -> bool:
+        """Only the first stage starts from the seed; the others from the stage before."""
+        return bool(getattr(self.stages[0], "uses_seed", True))
+
     def estimate(
         self, mov: ArrayLike, ref: ArrayLike, seed: Transform | None = None
     ) -> Transform:
