@@ -641,3 +641,10 @@ def test_the_shift_limit_holds_for_the_refined_shift():
     assert kept_px.max(initial=0.0) <= limit + 1e-9
 
 
+def test_corner_crops_of_the_same_place_give_no_tilt():
+    # When the image is no bigger than a crop, every corner is the whole volume: the z
+    # spread across them is not a tilt measured.
+    ref = _cells(20, shape=(40, 256, 256))
+    mov = _ndi_shift(ref, (2.0, 0.0, 0.0), order=1, mode="nearest")
+    r = z_residuals(Transform.identity(3), mov, ref, VOX3, crop_px=768)
+    assert r["tilt_dz_um"] is None

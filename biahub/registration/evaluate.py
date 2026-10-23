@@ -489,7 +489,10 @@ def z_residuals(
             _zscore(r), _zscore(w), upsample_factor=10, normalization=None
         )
         crops[name] = (np.asarray(shift) * um).tolist()
-    corner_dz = [v[0] for k, v in crops.items() if k != "centre" and v is not None]
+    # one value per distinct place: corners of a crop as big as the image are one place
+    corner_dz = list(
+        {starts[k]: v[0] for k, v in crops.items() if k != "centre" and v is not None}.values()
+    )
     return {
         "compare": compare,
         "crops_um": crops,
