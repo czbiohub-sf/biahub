@@ -310,6 +310,16 @@ def apply_transform(
                 f"{key}: written with transforms that are not accepted -- "
                 + "; ".join(f"{s} t={ts}" for s, ts in by_status.items())
             )
+    # Moving positions never written upstream (no stored chunks): they would be written
+    # as zeros with nothing said but a line in each job's log. Metadata only, no reads.
+    empty_inputs = set()
+    for key, moving_path in zip(position_keys, moving_position_dirpaths, strict=True):
+        with open_ome_zarr(moving_path, mode="r") as moving:
+            if moving.data.native.nchunks_initialized == 0:
+                empty_inputs.add(key)
+                click.echo(
+                    f"{key}: the moving input is empty (never written): written as zeros"
+                )
     file_first_key = next(iter(settings.positions)) if settings.per_position else None
     applied_first = settings.matrix_for(time_indices[0], "inverse", file_first_key)
 
@@ -412,6 +422,7 @@ def apply_transform(
                 "biahub-apply-transform": {
                     **record,
                     "timepoints_not_accepted": not_accepted.get(key, {}),
+                    "input_empty": key in empty_inputs,
                 }
             },
         )

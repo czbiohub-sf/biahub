@@ -940,3 +940,33 @@ def test_copying_from_a_reference_with_fewer_timepoints_is_refused_up_front(
             cluster="debug",
         )
     assert not output.exists()
+
+
+def test_an_empty_input_position_is_named_and_recorded(tmp_path, capsys):
+    # A position never written upstream (no stored chunks) was copied out as zeros with no
+    # word; it is now named when applying and recorded in the output's metadata.
+    data = np.random.default_rng(2).random((1, 1, 8, 16, 16)).astype(np.float32)
+    path = tmp_path / "plate.zarr"
+    with open_ome_zarr(path, layout="hcs", mode="w", channel_names=["GFP"]) as plate:
+        plate.create_position("A", "1", "0")["0"] = data
+        plate.create_position("A", "1", "1").create_zeros(
+            "0", shape=data.shape, dtype=data.dtype
+        )
+    config = tmp_path / "transforms.yml"
+    model_to_yaml(
+        TransformSettings(
+            direction="forward",
+            moving_channels=["GFP"],
+            transforms=[TransformEntry(matrix=_translation(0, 0, 0))],
+        ),
+        config,
+    )
+    output = tmp_path / "out.zarr"
+    positions = [path / "A" / "1" / fov for fov in ("0", "1")]
+
+    apply_transform(positions, config, output, keep_overhang=True, cluster="debug")
+
+    assert "A/1/1: the moving input is empty" in capsys.readouterr().out
+    for fov, empty in (("0", False), ("1", True)):
+        with open_ome_zarr(output / "A" / "1" / fov, mode="r") as out:
+            assert out.zattrs["biahub-apply-transform"]["input_empty"] is empty
