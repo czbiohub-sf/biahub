@@ -628,3 +628,16 @@ def test_one_tile_that_fits_the_image_counts_once():
     assert r["affine"]["scale_zyx"] is None
 
 
+def test_the_shift_limit_holds_for_the_refined_shift():
+    # The limit was checked before the second pass, which lengthens the shift: no tile
+    # kept may be further off than the limit.
+    ref = _disk_nuclei()
+    mov = _ndi_shift(ref, (0.0, 6.0, -6.0), order=1, mode="nearest")
+    limit = 5.9
+    r = tile_residuals(
+        Transform.identity(3), mov, ref, VOX3, tile_px=256, grid=5, max_shift_px=limit
+    )
+    kept_px = np.abs(np.asarray(r["residuals"]["diff_um"]).reshape(-1, 3)[:, 1:]) / VOX3[1]
+    assert kept_px.max(initial=0.0) <= limit + 1e-9
+
+

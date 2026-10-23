@@ -430,6 +430,8 @@ def tile_residuals(
                 r * window, moved * window, upsample_factor=10, normalization=None
             )
             shift = shift + remainder
+            if np.abs(shift).max() > max_shift:
+                continue
             moved = ndi_shift(w, shift, order=1, mode="nearest")
             if np.corrcoef(r.ravel(), moved.ravel())[0, 1] < min_ncc:
                 continue
